@@ -1,0 +1,119 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+{{/*
+Validation template for configuration requirements
+This template will fail the deployment if required configurations are missing
+*/}}
+
+{{/* Validate metrics configuration */}}
+
+{{- if .Values.metrics.enabled }}
+  {{- if not .Values.metrics.port }}
+    {{- fail "When metrics.enabled is true, metrics.port must be specified" }}
+  {{- end }}
+{{- end }}
+
+{{/* Validate ServiceMonitor configuration */}}
+
+{{- if and (not .Values.metrics.enabled) .Values.metrics.serviceMonitor.enabled }}
+  {{- fail "When metrics.enabled is false, metrics.serviceMonitor.enabled cannot be true. ServiceMonitor requires metrics to be enabled." }}
+{{- end }}
+
+{{/* Validate dashboard configuration */}}
+
+{{- if and (not .Values.metrics.enabled) .Values.dashboard.enabled }}
+  {{- fail "When metrics.enabled is false, dashboard.enabled cannot be true. Dashboard requires metrics to be enabled." }}
+{{- end }}
+
+{{/* Validate tracing configuration */}}
+
+{{- if .Values.tracing.enabled }}
+  {{/* Validate provider is specified */}}
+
+  {{- if not .Values.serviceConfig.tracing.provider }}
+    {{- fail "When tracing.enabled is true, serviceConfig.tracing.provider must be specified (otel or lightstep)" }}
+  {{- end }}
+  
+  {{/* Validate supported providers */}}
+
+  {{- $supportedTracingProviders := list "otel" "opentelemetry" "lightstep" }}
+  {{- if not (has .Values.serviceConfig.tracing.provider $supportedTracingProviders) }}
+    {{- fail (printf "Unsupported tracing provider '%s'. Supported providers are: %s" .Values.serviceConfig.tracing.provider (join ", " $supportedTracingProviders)) }}
+  {{- end }}
+  
+  {{/* Validate OTEL provider configuration */}}
+
+  {{- if or (eq .Values.serviceConfig.tracing.provider "otel") (eq .Values.serviceConfig.tracing.provider "opentelemetry") }}
+    {{- if and (not .Values.serviceConfig.tracing.otel.endpoint) (not .Values.serviceConfig.tracing.otel.http_endpoint) }}
+      {{- fail "When tracing.provider is 'otel', either serviceConfig.tracing.otel.endpoint or serviceConfig.tracing.otel.http_endpoint must be specified" }}
+    {{- end }}
+    
+    {{/* Validate OTEL endpoints don't contain http:// or https:// */}}
+
+    {{- if .Values.serviceConfig.tracing.otel.endpoint }}
+      {{- if or (hasPrefix "http://" .Values.serviceConfig.tracing.otel.endpoint) (hasPrefix "https://" .Values.serviceConfig.tracing.otel.endpoint) }}
+        {{- fail "serviceConfig.tracing.otel.endpoint should not include 'http://' or 'https://' prefix. Use just hostname:port (e.g., 'localhost:4317'). The OTLP exporter will handle the protocol based on the 'insecure' setting." }}
+      {{- end }}
+    {{- end }}
+    {{- if .Values.serviceConfig.tracing.otel.http_endpoint }}
+      {{- if or (hasPrefix "http://" .Values.serviceConfig.tracing.otel.http_endpoint) (hasPrefix "https://" .Values.serviceConfig.tracing.otel.http_endpoint) }}
+        {{- fail "serviceConfig.tracing.otel.http_endpoint should not include 'http://' or 'https://' prefix. Use just hostname:port/path (e.g., 'localhost:4318/v1/traces'). The OTLP exporter will handle the protocol based on the 'insecure' setting." }}
+      {{- end }}
+    {{- end }}
+  {{- end }}
+  
+  {{/* Validate Lightstep provider configuration */}}
+
+  {{- if eq .Values.serviceConfig.tracing.provider "lightstep" }}
+    {{- if not .Values.serviceConfig.tracing.lightstep.endpoint }}
+      {{- fail "When tracing.provider is 'lightstep', serviceConfig.tracing.lightstep.endpoint must be specified" }}
+    {{- end }}
+    
+    {{/* Validate Lightstep endpoint doesn't contain http:// or https:// */}}
+
+    {{- if or (hasPrefix "http://" .Values.serviceConfig.tracing.lightstep.endpoint) (hasPrefix "https://" .Values.serviceConfig.tracing.lightstep.endpoint) }}
+      {{- fail "serviceConfig.tracing.lightstep.endpoint should not include 'http://' or 'https://' prefix. Use just hostname:port/path (e.g., 'ingest.lightstep.com:443/traces/otel/v1'). The OTLP exporter will handle the protocol based on the 'insecure' setting." }}
+    {{- end }}
+  {{- end }}
+{{- end }}
+
+{{/* Validate tracing secrets configuration */}}
+
+{{/* Validate OTEL secrets configuration */}}
+
+{{- if and .Values.tracing.otel.existingSecret .Values.tracing.otel.secretName }}
+  {{- fail "tracing.otel.existingSecret and tracing.otel.secretName cannot both be set. Use existingSecret to reference an existing secret, or secretName to create a new one." }}
+{{- end }}
+{{- if and (not .Values.tracing.otel.existingSecret) .Values.tracing.otel.secretName (ne .Values.tracing.otel.secretName "") (not (or .Values.tracing.otel.secretHeaders.authorization .Values.tracing.otel.secretHeaders.x_api_key)) }}
+  {{- fail "When tracing.otel.secretName is set without tracing.otel.existingSecret, at least one of tracing.otel.secretHeaders.authorization or tracing.otel.secretHeaders.x_api_key must be provided" }}
+{{- end }}
+
+{{/* Validate Lightstep secrets configuration */}}
+
+{{- if and .Values.tracing.enabled (eq .Values.serviceConfig.tracing.provider "lightstep") }}
+  {{- if and .Values.tracing.lightstep.existingSecret .Values.tracing.lightstep.secretName }}
+    {{- fail "tracing.lightstep.existingSecret and tracing.lightstep.secretName cannot both be set. Use existingSecret to reference an existing secret, or secretName to create a new one." }}
+  {{- end }}
+  {{- if and (not .Values.tracing.lightstep.existingSecret) (not .Values.tracing.lightstep.secretAccessToken) }}
+    {{- fail "When tracing.provider is 'lightstep', either tracing.lightstep.existingSecret must be set OR tracing.lightstep.secretAccessToken must be provided" }}
+  {{- end }}
+{{- end }}
+
+{{/* This template doesn't produce any output - it's just for validation */}}
+
+{{- if false }}
+# This template is used only for validation and produces no output
+{{- end }} 

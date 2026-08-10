@@ -32,13 +32,13 @@ for high-throughput benchmarking and includes:
 - Built-in OpenTelemetry tracing
 
 The source, build instructions, and registry push examples are in the
-[nv-cloud-function-helpers](https://github.com/NVIDIA/nv-cloud-function-helpers/tree/main/examples/function_samples/load_tester_supreme)
+[NVCF examples](https://github.com/NVIDIA/nvcf/tree/main/examples/function-samples/load-tester-supreme)
 repository. Build and push the image to whichever container registry your
 cluster has credentials for:
 
 ```bash
-git clone https://github.com/NVIDIA/nv-cloud-function-helpers.git
-cd nv-cloud-function-helpers/examples/function_samples/load_tester_supreme
+git clone https://github.com/NVIDIA/nvcf.git
+cd nvcf/examples/function-samples/load-tester-supreme
 
 # Build (multi-arch)
 docker buildx build --platform linux/amd64,linux/arm64 -t load_tester_supreme .
@@ -95,8 +95,7 @@ endpoints.
 Once deployed, note the following -- you will need them for the k6 script:
 
 - **Function ID** -- the UUID returned by `function create`
-- **Function Version ID** -- the UUID of the specific deployed version
-- **Invocation host** -- the `Host` header used for invocation routing
+- **Invocation domain** -- the domain after `invocation.` in the function invocation hostname
 - **API key** -- from `./nvcf-cli api-key generate` (begins with `nvapi-`); export it as `$API_KEY`
 
 #### Obtain the gateway address
@@ -114,18 +113,18 @@ On **AWS EKS** this is an ELB hostname (e.g.
 `a1b2c3d4.us-east-1.elb.amazonaws.com`). For a **local** deployment (Kind,
 k3d, Docker Desktop) it is typically `localhost` or `127.0.0.1`.
 
-The gateway uses `Host` header routing to direct traffic:
+The gateway routes invocation traffic through function-specific hostnames:
 
 | Host prefix | Routes to |
 | --- | --- |
 | `api.$GATEWAY_ADDR` | NVCF management API (function CRUD) |
-| `invocation.$GATEWAY_ADDR` | Invocation / inference service |
+| `<function-id>.invocation.$GATEWAY_ADDR` | Invocation / inference service |
 | `api-keys.$GATEWAY_ADDR` | API Keys service |
 
-For the soak test, set:
-
-- **BASE_URL** = `http://$GATEWAY_ADDR`
-- **INVOKE_HOST** = `invocation.$GATEWAY_ADDR`
+For the soak test, set **INVOKE_DOMAIN** to the domain after `invocation.`
+in the function invocation hostname. For a self-managed gateway that uses
+`<function-id>.invocation.$GATEWAY_ADDR`, set **INVOKE_DOMAIN** to
+`$GATEWAY_ADDR`.
 
 <Tip>
 The CLI saves the function and version IDs automatically. Run
@@ -163,7 +162,7 @@ you want a steady, predictable load.
 
 <Note>
 The latest version of this script is maintained in the
-[nv-cloud-function-helpers](https://github.com/NVIDIA/nv-cloud-function-helpers)
+[NVCF examples](https://github.com/NVIDIA/nvcf/tree/main/examples)
 repository.
 
 </Note>
@@ -179,13 +178,12 @@ repository.
  *
  * Total TPS = TPS_PER_FUNC × number of functions.
  *
- * Required env vars: BASE_URL, INVOKE_HOST, FUNCTIONS
- * Optional: API_KEY, TPS_PER_FUNC, PRE_VUS, MAX_VUS, REPEATS, DURATION
+ * Required env vars: INVOKE_DOMAIN, FUNCTIONS
+ * Optional: API_KEY, INVOKE_SCHEME, TPS_PER_FUNC, PRE_VUS, MAX_VUS, REPEATS, DURATION
  *
  * Example:
- *   k6 run -e BASE_URL=http://$GATEWAY_ADDR \
- *          -e INVOKE_HOST=invocation.$GATEWAY_ADDR \
- *          -e 'FUNCTIONS=[{"funcId":"uuid1","verId":"uuid2"}]' \
+ *   k6 run -e INVOKE_DOMAIN=$GATEWAY_ADDR \
+ *          -e 'FUNCTIONS=[{"funcId":"uuid1"}]' \
  *          -e DURATION=48h \
  *          -e API_KEY=$API_KEY \
  *          k6-nvcf-http-soak.js
@@ -199,9 +197,8 @@ const invokeLatency = new Trend('invoke_latency_ms');
 const totalRequests = new Counter('total_requests');
 
 // ---------- Required config ----------
-const DURATION    = __ENV.DURATION    || '48h';
-const BASE_URL    = __ENV.BASE_URL    || '';
-const INVOKE_HOST = __ENV.INVOKE_HOST || '';
+const DURATION      = __ENV.DURATION      || '48h';
+const INVOKE_DOMAIN = __ENV.INVOKE_DOMAIN || '';
 
 const FUNCTIONS = (() => {
   const raw = __ENV.FUNCTIONS || '';
@@ -217,11 +214,12 @@ const FUNCTIONS = (() => {
 })();
 
 // ---------- Optional parameters ----------
-const API_KEY      = __ENV.API_KEY      || '';
-const REPEATS      = parseInt(__ENV.REPEATS      || '100', 10);
-const TPS_PER_FUNC = parseInt(__ENV.TPS_PER_FUNC || '125', 10);
-const PRE_VUS      = parseInt(__ENV.PRE_VUS      || '250', 10);
-const MAX_VUS      = parseInt(__ENV.MAX_VUS      || '500', 10);
+const API_KEY       = __ENV.API_KEY       || '';
+const INVOKE_SCHEME = __ENV.INVOKE_SCHEME || 'https';
+const REPEATS       = parseInt(__ENV.REPEATS      || '100', 10);
+const TPS_PER_FUNC  = parseInt(__ENV.TPS_PER_FUNC || '125', 10);
+const PRE_VUS       = parseInt(__ENV.PRE_VUS      || '250', 10);
+const MAX_VUS       = parseInt(__ENV.MAX_VUS      || '500', 10);
 
 export const options = {
   scenarios: {
@@ -246,16 +244,13 @@ export function invoke_all_functions() {
 
   const requests = FUNCTIONS.map((f, i) => ({
     method: 'POST',
-    url: `${BASE_URL}/echo`,
+    url: `${INVOKE_SCHEME}://${f.funcId}.invocation.${INVOKE_DOMAIN}/echo`,
     body: payload,
     params: {
       headers: {
-        'Host':                INVOKE_HOST,
-        'Content-Type':        'application/json',
-        'Authorization':       `Bearer ${API_KEY}`,
-        'Function-Id':         f.funcId,
-        'Function-Version-Id': f.verId,
-        'Nvcf-Poll-Seconds':   '5',
+        'Content-Type':      'application/json',
+        'Authorization':     `Bearer ${API_KEY}`,
+        'Nvcf-Poll-Seconds': '5',
       },
       tags: { func: `func_${i}` },
     },
@@ -283,9 +278,9 @@ period. For example, multiple functions at 125 TPS each for 48 hours:
 
 ```bash
 k6 run k6-nvcf-http-soak.js \
-  -e BASE_URL=http://$GATEWAY_ADDR \
-  -e INVOKE_HOST=invocation.$GATEWAY_ADDR \
-  -e 'FUNCTIONS=[{"funcId":"<id-1>","verId":"<ver-1>"},{"funcId":"<id-2>","verId":"<ver-2>"},{"funcId":"<id-3>","verId":"<ver-3>"},{"funcId":"<id-4>","verId":"<ver-4>"}]' \
+  -e INVOKE_SCHEME=https \
+  -e INVOKE_DOMAIN=$GATEWAY_ADDR \
+  -e 'FUNCTIONS=[{"funcId":"<id-1>"},{"funcId":"<id-2>"},{"funcId":"<id-3>"},{"funcId":"<id-4>"}]' \
   -e DURATION=48h \
   -e TPS_PER_FUNC=125 \
   -e API_KEY=$API_KEY
@@ -342,11 +337,11 @@ A good rule of thumb: `PRE_VUS ≈ TPS_PER_FUNC × avg_latency_seconds × 2`.
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `BASE_URL` | HTTP base URL of the gateway / load balancer (`http://$GATEWAY_ADDR`) | *(required)* |
-| `INVOKE_HOST` | `Host` header for invocation routing (`invocation.$GATEWAY_ADDR`) | *(required)* |
-| `FUNCTIONS` | JSON array of function objects: `[{"funcId":"…","verId":"…"}, ...]` | *(required)* |
+| `INVOKE_DOMAIN` | Domain after `invocation.` in the function invocation hostname | *(required)* |
+| `FUNCTIONS` | JSON array of function objects: `[{"funcId":"…"}, ...]` | *(required)* |
 | `DURATION` | Test duration (e.g. `30s`, `1h`, `48h`) | `48h` |
 | `API_KEY` | `nvapi-*` bearer token (exported from `./nvcf-cli api-key generate`, see above) | *(required)* |
+| `INVOKE_SCHEME` | Invocation URL scheme (`https` for a TLS endpoint, `http` for local) | `https` |
 | `TPS_PER_FUNC` | Requests per second per function | `125` |
 | `PRE_VUS` | Pre-allocated virtual users per function scenario | `250` |
 | `MAX_VUS` | Maximum virtual users per function scenario | `500` |
@@ -380,13 +375,13 @@ k6 run --out json=soak-results.json k6-nvcf-http-soak.js ...
 Before running the soak test, verify the endpoint works with `curl`:
 
 ```bash
-curl -X POST http://$GATEWAY_ADDR/echo \
-  -H "Host: invocation.$GATEWAY_ADDR" \
-  -H "Content-Type: application/json" \
-  -H "Function-Id: <your-function-id>" \
-  -H "Function-Version-Id: <your-function-version-id>" \
-  -H "Authorization: Bearer $API_KEY" \
-  -d '{"message": "hello", "repeats": 3}'
+export FUNCTION_ID=<your-function-id>
+
+curl --request POST \
+  --url "https://${FUNCTION_ID}.invocation.${GATEWAY_ADDR}/echo" \
+  --header "Authorization: Bearer ${API_KEY}" \
+  --header "Content-Type: application/json" \
+  --data '{"message": "hello"}'
 ```
 
 You should receive a `200 OK` response with the `Nvcf-Status: fulfilled`

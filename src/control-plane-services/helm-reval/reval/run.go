@@ -37,8 +37,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/image-credential-helper/credhelper"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	credhelper "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/imagecredential"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/zapotelspan"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -83,7 +83,7 @@ type HandlerOptions struct {
 	// Skip validation of objects.
 	SkipValidateObjects bool
 	// Skip validation of images.
-	SkipValidateImages bool
+	SkipValidateImages *bool
 	// Skip sanitization of object metadata (labels and annotations).
 	SkipSanitizeObjectMetadata bool
 	// Configured labels to preserve
@@ -121,6 +121,8 @@ type Config struct {
 	RenderPolicy ValidationPolicy
 	// ValidatePolicies defines multiple sets validation rules and types are applied to a helm chart.
 	ValidatePolicies []ValidationPolicy
+	// ValidateImages configures whether to validate images, overriding the handler's default SkipValidateImages setting.
+	ValidateImages *bool
 }
 
 type ValidationPolicy struct {
@@ -634,7 +636,7 @@ func (h *Handler) validateRenderedRelease(
 	verrs := h.validateReleaseObjects(vTraceCtx, logger, cfg, vp, targetService, matcherSet, matchTargetSet, objs)
 	if h.SkipValidateObjects {
 		if len(verrs) != 0 {
-			logger.Info("Release is sanitized and image validation errors found but validation is skipped")
+			logger.Info("Release is sanitized and validation errors found but validation is skipped")
 		}
 		for _, err := range verrs {
 			logger.Error("Object validation error", zap.Error(err))
@@ -644,23 +646,20 @@ func (h *Handler) validateRenderedRelease(
 		valErrs = append(valErrs, verrs...)
 	}
 
-	logger.Info("Validating object images")
-	extraObjs, ierrs := h.validateReleaseImages(vTraceCtx, logger, cfg, objs)
-	objs = append(objs, extraObjs...)
-	if h.SkipValidateImages {
-		if len(ierrs) != 0 {
-			logger.Info("Release is sanitized and image validation errors found but validation is skipped")
-		}
-		for _, err := range ierrs {
-			logger.Error("Image validation error", zap.Error(err))
-			validateSpan.RecordError(err)
-		}
+	// Validating images adds a lot of network overhead (extra latency for the caller)
+	// so if image skipping is configured, either by reval's config or the request,
+	// skip image validation completely.
+	if h.shouldSkipValidateImages(cfg) {
+		logger.Info("Image validation is skipped")
 	} else {
+		logger.Info("Validating object images")
+		extraObjs, ierrs := h.validateReleaseImages(vTraceCtx, logger, cfg, objs)
+		objs = append(objs, extraObjs...)
 		valErrs = append(valErrs, ierrs...)
 	}
 
 	// For span filtering.
-	validateSpan.SetAttributes(attribute.Bool("isValid", len(verrs) == 0 && len(ierrs) == 0))
+	validateSpan.SetAttributes(attribute.Bool("isValid", len(valErrs) == 0))
 
 	return objs, valErrs, nil
 }
@@ -679,6 +678,16 @@ func createTypeString(obj runtime.Object) string {
 		return fmt.Sprintf("%s/%s.%s", gvk.Group, gvk.Version, gvk.Kind)
 	}
 	return fmt.Sprintf("%T", obj)
+}
+
+func (h *Handler) shouldSkipValidateImages(cfg Config) bool {
+	if cfg.ValidateImages != nil {
+		return !*cfg.ValidateImages
+	}
+	if h.SkipValidateImages != nil {
+		return *h.SkipValidateImages
+	}
+	return false
 }
 
 func (h *Handler) validateReleaseObjects(

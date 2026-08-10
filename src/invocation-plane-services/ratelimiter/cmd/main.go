@@ -36,9 +36,10 @@ import (
 	"github.com/spf13/pflag"
 	"go.uber.org/zap"
 
-	"github.com/NVIDIA/nvcf-go/pkg/nvkit/config"
-	"github.com/NVIDIA/nvcf-go/pkg/nvkit/logs"
-	"github.com/NVIDIA/nvcf-go/pkg/nvkit/tracing"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/config"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
+	golibversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 
 	"ratelimiter"
 )
@@ -139,6 +140,22 @@ func InterceptorLogger(l *zap.Logger) logging.Logger {
 	})
 }
 
+// newHealthServeMux builds the management HTTP mux serving /health and the
+// GET /info build-version endpoint.
+func newHealthServeMux(rateLimiter *ratelimiter.RateLimiter) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		if err := rateLimiter.Health(); err != nil {
+			zap.L().Error("rate limiter error", zap.Error(err))
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/info", golibversion.Handler().ServeHTTP)
+	return mux
+}
+
 func NewRootCommand() *cobra.Command {
 	var cfgFile string
 	var rateLimiterConfig *ratelimiter.Config
@@ -164,7 +181,10 @@ func NewRootCommand() *cobra.Command {
 				c.SecretsPath = "vault/secrets.json"
 			}
 			if c.OAuth2Issuer == "" {
-				return fmt.Errorf("missing required OAUTH2_ISSUER (OAuth2 issuer URL for inbound JWT validation)")
+				return fmt.Errorf("missing required OAUTH2_ISSUER (expected JWT iss claim on inbound gRPC calls)")
+			}
+			if c.OAuth2JwksURL == "" {
+				return fmt.Errorf("missing required OAUTH2_JWKS_URL (URL the validator fetches signing keys from)")
 			}
 			if c.Audience == "" {
 				return fmt.Errorf("missing required audience")
@@ -211,16 +231,7 @@ func NewRootCommand() *cobra.Command {
 			// Setup Olric stats endpoint for debugging
 			setupOlricStats(rateLimiter)
 			// make a http health endpoint since astro doesn't support gRPC health endpoint
-			healthServer := http.NewServeMux()
-			healthServer.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-				err := rateLimiter.Health()
-				if err != nil {
-					zap.L().Error("rate limiter error", zap.Error(err))
-					w.WriteHeader(http.StatusInternalServerError)
-					return
-				}
-				w.WriteHeader(http.StatusOK)
-			})
+			healthServer := newHealthServeMux(rateLimiter)
 			healthErrChan := make(chan error, 1)
 			go func() {
 				if err := http.ListenAndServe(":8080", healthServer); err != nil {

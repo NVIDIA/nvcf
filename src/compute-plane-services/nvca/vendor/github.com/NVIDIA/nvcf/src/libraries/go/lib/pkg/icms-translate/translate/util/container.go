@@ -15,7 +15,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// TODO(NVCF-9201): unit-test coverage is below the lib module threshold; add tests for this package.
 package translateutil
 
 func NewBoolPtr(b bool) *bool { return &b }

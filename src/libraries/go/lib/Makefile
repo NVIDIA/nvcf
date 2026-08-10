@@ -12,13 +12,6 @@ endif
 export CGO_ENABLED=0
 export GO_BUILD_FLAGS=-a -ldflags '-extldflags "-static"' -mod=vendor
 
-# Include toolbox-specific targets if Makefile.toolbox exists
-# Must be included early so MAKEFILE_TOOLBOX_INCLUDED is set before ifndef check
--include Makefile.toolbox
-
-# Fallback targets - only defined if Makefile.toolbox is not included
-ifndef MAKEFILE_TOOLBOX_INCLUDED
-
 .PHONY: vendor-update
 vendor-update:
 	@echo "Updating vendor directory using go mod vendor..."
@@ -34,11 +27,19 @@ test:
 	@go tool cover -html=_output/cover/cover.txt -o _output/cover/coverage.html
 	@echo "Coverage report generated at _output/cover/coverage.html"
 
-endif
-
 .PHONY: codegen-update
 codegen-update:
-	./scripts/codegen_update
+	../../../../tools/scripts/update-go-deepcopy \
+		--module . \
+		--header tools/scripts/boilerplate.go.txt \
+		--bounding pkg/types \
+		--packages ./pkg/types/nvca/config \
+		--replace 'pkg/types/nvca/config/zz_generated.deepcopy.go:package config:package nvcaconfig'
+	../../../../tools/scripts/update-go-deepcopy \
+		--module . \
+		--header tools/scripts/boilerplate.go.txt \
+		--bounding pkg/icms-translate/translate \
+		--packages './pkg/icms-translate/translate/common ./pkg/icms-translate/translate/function ./pkg/icms-translate/translate/task'
 
 .PHONY: update-testdata
 update-testdata:
@@ -47,14 +48,6 @@ update-testdata:
 .PHONY: check-testdata
 check-testdata:
 	./testdata/icms-translate/update-testdata.sh --check
-
-.PHONY: license-update
-license-update:
-	./scripts/license_update
-
-.PHONY: check-license
-check-license:
-	./scripts/ci_check_license
 
 .PHONY: lint
 # Run via `go run` so the linter is built with the active Go toolchain (>= go.mod).

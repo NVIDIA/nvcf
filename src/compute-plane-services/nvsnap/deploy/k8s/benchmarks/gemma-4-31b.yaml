@@ -1,0 +1,80 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# PDF Testing Matrix — LLM (small) workload row.
+# google/gemma-4-31B-it on sglang:v0.5.12.post1 TP=1 (single H100, fp8).
+#
+# Capture path = cachedir ("ember"). The agent runs with --pod-cache-dir
+# (default /opt/nvsnap), so the webhook injects that emptyDir + redirects
+# every JIT/gemm cache + the model (HOME, HF_HOME, TORCHINDUCTOR_CACHE_DIR,
+# NIM_CACHE_PATH, …) into it, captures just that dir as the rox root, and
+# restore page-cache-prewarms it. Therefore this manifest is a PLAIN sglang
+# pod — it must NOT set HF_HOME or mount its own cache volume (that would
+# shadow the webhook's /opt/nvsnap and the gemm/JIT caches would not be
+# captured).
+#
+# sglang args verbatim from the PDF Testing Matrix doc. HF gated model.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bench-gemma-4-31b
+  namespace: nvsnap-system
+  labels:
+    app: bench-gemma-4-31b
+    nvsnap.io/bench: "pdf-matrix"
+    nvsnap.io/bench-row: "llm-small"
+    nvsnap.io/capture: "true"
+  annotations:
+    nvsnap.io/desc: "PDF bench: google/gemma-4-31B-it on sglang v0.5.12.post1"
+spec:
+  tolerations:
+    - key: "nvidia.com/gpu"
+      operator: "Exists"
+      effect: "NoSchedule"
+  containers:
+    - name: sglang
+      image: lmsysorg/sglang:v0.5.12.post1
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/bash", "-lc"]
+      args:
+        - |
+          exec python3 -m sglang.launch_server \
+            --model-path google/gemma-4-31B-it \
+            --host 0.0.0.0 \
+            --port 30000 \
+            --tp-size 1 \
+            --mem-fraction-static 0.85 \
+            --quantization fp8
+      env:
+        # HF_HOME is injected by the webhook (cachedir) → /opt/nvsnap/model;
+        # do NOT set it here.
+        - { name: HF_HUB_DISABLE_XET,        value: "1" }
+        - { name: HF_HUB_ENABLE_HF_TRANSFER, value: "0" }
+        - { name: CUDA_VISIBLE_DEVICES,      value: "0" }
+        - { name: USE_LIBUV,                 value: "0" }
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: token
+      ports:
+        - { containerPort: 30000, name: http }
+      readinessProbe:
+        httpGet: { path: /v1/models, port: 30000 }
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 120
+      resources:
+        limits:   { nvidia.com/gpu: "1" }
+        requests: { nvidia.com/gpu: "1" }
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - { name: shm, mountPath: /dev/shm }
+
+  volumes:
+    - name: shm
+      emptyDir: { medium: Memory, sizeLimit: 32Gi }
+
+  restartPolicy: Never

@@ -274,7 +274,7 @@ Or use the `--debug` flag or `NVCF_DEBUG=true` environment variable per-command.
 ```
 
 <Note>
-For immediate testing, you can use `load_tester_supreme` from `nvcf-onprem` (see [self-hosted-artifact-manifest](./manifest.md)), which supports the `{"message": "hello world"}` request body above. For more function samples, see the [nv-cloud-function-helpers](https://github.com/NVIDIA/nv-cloud-function-helpers) repository and [function-creation](./function-creation.md) for function creation documentation.
+For immediate testing, you can use `load_tester_supreme` from `nvcf-onprem` (see [self-hosted-artifact-manifest](./manifest.md)), which supports the `{"message": "hello world"}` request body above. For more function samples, see the [NVCF examples](https://github.com/NVIDIA/nvcf/tree/main/examples) repository and [function-creation](./function-creation.md) for function creation documentation.
 
 </Note>
 
@@ -331,7 +331,7 @@ Refresh your token while preserving function context:
 ./nvcf-cli api-key generate --validate
 ```
 
-Available scopes for API keys (all included by default):
+Default API key scopes:
 
 | Scope | Description |
 | --- | --- |
@@ -339,7 +339,6 @@ Available scopes for API keys (all included by default):
 | `list_functions` | View available functions |
 | `list_functions_details` | View detailed function metadata |
 | `queue_details` | Monitor function execution queues |
-| `manage_registries` | Manage registry credentials |
 
 ## Command Reference
 

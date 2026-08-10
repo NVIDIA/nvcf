@@ -49,6 +49,7 @@ type RevalRequest struct {
 	ImageRegistryAuthConfig     common.RegistryAuthConfig `json:"imageRegistryAuthConfig,omitempty"`
 	RenderPolicy                *ValidationPolicy         `json:"validationPolicy,omitempty"`
 	ValidatePolicies            []ValidationPolicy        `json:"validationPolicies,omitempty"`
+	ValidateImages              *bool                     `json:"validateImages,omitempty"`
 }
 
 type ValidationPolicy struct {

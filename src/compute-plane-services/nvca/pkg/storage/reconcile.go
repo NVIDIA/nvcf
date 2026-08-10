@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"sync/atomic"
 	"time"
 
 	cmnotel "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/otel"
@@ -62,10 +63,20 @@ var (
 
 const (
 	defaultRequeueDelay                       = 100 * time.Millisecond
+	deletingStorageRequestRequeueDelay        = 5 * time.Second
 	ConditionTypeSMBCSIDriverInstalled        = "SMBCSIDriverInstalled"
 	ConditionTypeCleanupSuccessful            = "CleanupSuccessful"
 	ConditionReasonSomeObjectsPendingDeletion = "SomeObjectsPendingDeletion"
 	ConditionReasonAllObjectsDeleted          = "AllObjectsDeleted"
+
+	// DefaultModelCacheStorageClassName is the storage class whose provisioner
+	// decides which mount option defaults model cache volumes need.
+	DefaultModelCacheStorageClassName = "nvcf-sc"
+
+	// DefaultCacheMountOptionsConfigMapName maps a CSI provisioner to the mount
+	// options its model cache volumes require, as comma separated values. It
+	// lives in ModelCacheInitNamespace and ships seeded with the NVMesh entry.
+	DefaultCacheMountOptionsConfigMapName = "nvca-cache-mount-options"
 )
 
 var (
@@ -100,6 +111,28 @@ func WithCSIVolumeMountOptions(mntOptions []string) ReconcilerOption {
 	return func(r *Reconciler) {
 		if len(mntOptions) > 0 {
 			r.csiVolumeMountOptions = mntOptions
+		}
+	}
+}
+
+// WithModelCacheStorageClass overrides the storage class whose provisioner
+// decides which mount option defaults model cache volumes get. Defaults to
+// DefaultModelCacheStorageClassName when unset.
+func WithModelCacheStorageClass(name string) ReconcilerOption {
+	return func(r *Reconciler) {
+		if name != "" {
+			r.modelCacheStorageClass = name
+		}
+	}
+}
+
+// WithCacheMountOptionsConfigMap overrides the ConfigMap holding the per
+// provisioner mount option defaults. Defaults to
+// DefaultCacheMountOptionsConfigMapName when unset.
+func WithCacheMountOptionsConfigMap(name string) ReconcilerOption {
+	return func(r *Reconciler) {
+		if name != "" {
+			r.cacheMountOptionsConfigMap = name
 		}
 	}
 }
@@ -180,6 +213,15 @@ type Reconciler struct {
 	// eventRecorder                record.EventRecorder
 	k8sTimeConfig         *k8sutil.TimeConfig
 	csiVolumeMountOptions []string
+
+	// modelCacheStorageClass is the storage class whose provisioner selects the
+	// mount option defaults, and cacheMountOptionsConfigMap holds those defaults
+	// per provisioner. modelCacheProvisioner is the one time init: a
+	// StorageClass provisioner is immutable, so it is read once and kept. The
+	// ConfigMap is read on each use so operator edits take effect.
+	modelCacheStorageClass     string
+	cacheMountOptionsConfigMap string
+	modelCacheProvisioner      atomic.Pointer[string]
 
 	tracer            oteltrace.Tracer
 	nowFunc           func() time.Time
@@ -489,7 +531,29 @@ func (r *Reconciler) doReconcile(
 		}
 	}
 
+	nextRes := requeueDeletingStorageRequestWithFinalizer(res, rerr, stCopy)
+	if nextRes != res {
+		log.V(1).Info("StorageRequest is deleting with finalizer still present, will requeue")
+		res = nextRes
+	}
+
 	return res, rerr
+}
+
+func requeueDeletingStorageRequestWithFinalizer(
+	res reconcile.Result,
+	err error,
+	st *nvcav1new.StorageRequest,
+) reconcile.Result {
+	// Keep deletion-pending StorageRequests level-triggered so a later namespace
+	// cache update can run the terminating-namespace finalizer escape hatch.
+	if err != nil || res != (reconcile.Result{}) || st.DeletionTimestamp == nil {
+		return res
+	}
+	if !controllerutil.ContainsFinalizer(st, StorageRequestFinalizer) {
+		return res
+	}
+	return reconcile.Result{RequeueAfter: deletingStorageRequestRequeueDelay}
 }
 
 func (r *Reconciler) patchStorageRequest(ctx context.Context, oldObj, newObj *nvcav1new.StorageRequest) error {
@@ -510,7 +574,7 @@ func (r *Reconciler) patchStorageRequest(ctx context.Context, oldObj, newObj *nv
 func (r *Reconciler) doCleanup(ctx context.Context, st *nvcav1new.StorageRequest) (res reconcile.Result, err error) {
 	switch st.Spec.Type {
 	case nvcav1new.ModelCacheRequest:
-		err = r.doCleanupModelCacheNVMesh(ctx, st)
+		res, err = r.doCleanupModelCacheNVMesh(ctx, st)
 		// Do not clean up primary PV. The periodic runner that invokes cleanupIdleModelCaches
 		// will handle those.
 	default:

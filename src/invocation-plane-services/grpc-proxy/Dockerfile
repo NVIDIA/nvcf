@@ -43,7 +43,7 @@ RUN GOOS=$TARGETOS GOARCH=$TARGETARCH \
 # Final runtime image – one per requested TARGETPLATFORM
 # BuildKit will create a final image per platform and copy the pre-built
 # binary that matches the platform's architecture.
-FROM urm.nvidia.com/sw-gpu-ucs-hardened-docker/distroless/go:v3.1.10
+FROM nvcr.io/nvidia/distroless/go:v4.0.6
 
 # The following build arg is automatically populated by BuildKit.
 ARG TARGETARCH

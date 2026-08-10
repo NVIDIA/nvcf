@@ -1,0 +1,6 @@
+dependencies:
+- name: cert-manager
+  repository: file://charts/cert-manager
+  version: v1.20.2
+digest: sha256:70669f458e125426d256ce8d8d0fa517babf5eec52706b1dfc651acd4cb1e744
+generated: "2026-04-20T21:01:14.567928669+02:00"

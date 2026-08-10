@@ -1,0 +1,116 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# This file is for local testing only and does not affect deployed mappings.
+
+# Map keys must not contain periods.
+v2config:
+  openai:
+    chatCompletions:
+      facebook/opt-125m: #user defined name. Cannot have period. If this name is different from existing config, this will be merged with existing config. Otherwise, this new one will replace existing config
+        modelName: facebook/opt-125m
+        functionID: eb69df99-3fc9-4272-a1ce-1be218deef3a
+        functionVersionID: eb69df99-3fc9-4272-a1ce-1be218deef3a
+        tooManyRequestsMessage: "Check out this model at a partner!"
+        shadowModelName: private/facebook/opt-125m-shadow
+        shadowPercentage: 100
+      private/facebook/opt-125m-shadow:
+        modelName: private/facebook/opt-125m-shadow
+        functionID: shadow-func-0001
+        functionVersionID: shadow-ver-0001
+      private/test/cancel-on-disconnect:
+        modelName: private/test/cancel-on-disconnect
+        functionID: cancel-primary-func
+        functionVersionID: cancel-primary-ver
+        shadowModelName: private/test/cancel-on-disconnect-shadow
+        shadowPercentage: 100
+        shadowCancelOnClientDisconnect: true
+      private/test/cancel-on-disconnect-shadow:
+        modelName: private/test/cancel-on-disconnect-shadow
+        functionID: cancel-shadow-func
+        functionVersionID: cancel-shadow-ver
+      test/model-with-future-eol:
+        modelName: test/model-with-future-eol
+        functionID: eb69df99-3fc9-4272-a1ce-1be218deef3a
+        functionVersionID: eb69df99-3fc9-4272-a1ce-1be218deef3a
+        eol: "2099-12-31T23:59:59Z"
+      test/model-with-past-eol:
+        modelName: test/model-with-past-eol
+        functionID: eb69df99-3fc9-4272-a1ce-1be218deef3a
+        functionVersionID: eb69df99-3fc9-4272-a1ce-1be218deef3a
+        eol: "2020-01-01T00:00:00Z"
+      deepseek-ai/deepseek-r1:
+        modelName: deepseek-ai/deepseek-r1
+        functionID: 854db4e5-9be7-45a0-a730-183cadf87e50
+    completions:
+      microsoft/phi-2:
+        modelName: microsoft/phi-2
+        functionID: 77c5acaf-b4a3-4794-b469-dce523cf4b51
+      microsoft/phi-2-override:
+        modelName: microsoft/phi-2-override
+        functionID: 77c5acaf-b4a3-4794-b469-dce523cf4b51
+        outgoingPathOverride: /infer
+    embeddings:
+      thenlper/gte-base:
+        modelName: thenlper/gte-base
+        functionID: 23b31377-fa3b-4658-bc4e-f99ad02e91ef
+    responses:
+      deepseek-ai/deepseek-r1:
+        modelName: deepseek-ai/deepseek-r1
+        functionID: 854db4e5-9be7-45a0-a730-183cadf87e50
+    imageGenerations:
+      qwen/qwen-image-gen:
+        modelName: qwen/qwen-image-gen
+        functionID: aaaa1111-0000-0000-0000-000000000001
+    imageEdits:
+      qwen/qwen-image-edit-2511:
+        modelName: qwen/qwen-image-edit-2511
+        functionID: aaaa1111-0000-0000-0000-000000000002
+        outgoingPathOverride: /v1/images/edits
+    imageVariations:
+      qwen/qwen-image-var:
+        modelName: qwen/qwen-image-var
+        functionID: aaaa1111-0000-0000-0000-000000000003
+    host: stg.integrate.api.nvidia.com
+  vanity:
+    stg_ai:
+      host: stg.ai.api.nvidia.com
+      paths:
+        sre_synthetic: #user defined name. Cannot have period. If this name is different from existing config, this will be merged with existing config. Otherwise, this new one will replace existing config
+          path: /v1/internal/sre/simple_int8/synthetic
+          functionID: 7d199eeb-8af6-4588-ba60-3009773cd29d
+          functionVersionID: 7d199eeb-8af6-4588-ba60-3009773cd29d
+        sre_synthetic_with_override:
+          path: /v1/internal/sre/simple_int8/synthetic_override
+          outgoingPathOverride: /v1/internal/sre/simple_int8/synthetic
+          functionID: 7d199eeb-8af6-4588-ba60-3009773cd29d
+          functionVersionID: 7d199eeb-8af6-4588-ba60-3009773cd29d
+        test_with_future_eol:
+          path: /v1/test/with-future-eol
+          functionID: 7d199eeb-8af6-4588-ba60-3009773cd29d
+          functionVersionID: 7d199eeb-8af6-4588-ba60-3009773cd29d
+          eol: "2099-12-31T23:59:59Z"
+        test_with_past_eol:
+          path: /v1/test/with-past-eol
+          functionID: 7d199eeb-8af6-4588-ba60-3009773cd29d
+          functionVersionID: 7d199eeb-8af6-4588-ba60-3009773cd29d
+          eol: "2020-01-01T00:00:00Z"
+    stg_health:
+      host: stg.health.api.nvidia.com
+      paths:
+        sre_synthetic:
+          path: /v1/internal/sre/simple_int8/synthetic
+          functionID: 4ffd8c1e-7bbb-4021-8317-a3e92b318a8a
+    stg_climate:
+      host: stg.climate.api.nvidia.com
+      paths:
+        sre_synthetic:
+          path: /v1/internal/sre/simple_int8/synthetic
+          functionID: 4ffd8c1e-7bbb-4021-8317-a3e92b318a8a
+
+    stg_optimize:
+      host: stg.optimize.api.nvidia.com
+      paths:
+        sre_synthetic:
+          path: /v1/internal/sre/simple_int8/synthetic
+          functionID: 4ffd8c1e-7bbb-4021-8317-a3e92b318a8a

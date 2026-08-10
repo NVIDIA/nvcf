@@ -1,7 +1,7 @@
 # NVCA Operator Helm chart
 
-NVCA Operator installs and manages reconfiguration, upgrade and health check of NVCF ClusterAgent Service
-used in DGX Cloud and other K8s Clusters to run NVCF Workloads.
+NVCF Cluster Agent (NVCA) Operator installs and manages reconfiguration, upgrades, and health checks of NVCA
+used in Kubernetes Clusters to run NVCF Workloads.
 
 ## Parameters
 
@@ -44,6 +44,10 @@ used in DGX Cloud and other K8s Clusters to run NVCF Workloads.
 | `enableGXCache`                           | Enables GXCache Support in NVCA                                                                                                                                                                       | `true`                     |
 | `ddcsIPAllowList`                         | provides comma separated CIDR ranges to allowList                                                                                                                                                     | `""`                       |
 | `agentConfig.mergeConfig`                 | Merge fields into the generated NVCA config. Must be a string.                                                                                                                                        | `""`                       |
+| `operatorConfig.workload.transportTLS.trustBundle.secretKeyRef.name` | Secret containing the workload transport trust bundle; empty disables the source. Example: `nvcf-trust`. | `""` |
+| `operatorConfig.workload.transportTLS.trustBundle.secretKeyRef.key` | Secret data key containing certificate-only PEM. | `ca.crt` |
+| `operatorConfig.workload.transportTLS.fingerprint` | Optional SHA-256 pin; empty computes the Secret data fingerprint. | `""` |
+| `operatorConfig.workload.transportTLS.installedBundleMountPath` | Optional `llm-worker` mount path for the installed transport trust bundle; empty uses `/etc/ssl/certs`. | `""` |
 
 ### resources Resource requests and limits for the nvca-operator container
 
@@ -68,9 +72,13 @@ used in DGX Cloud and other K8s Clusters to run NVCF Workloads.
 | `agent.secretMirrorNamespace`        | Default namespace to mirror custom secrets for nvcf workloads                                                                                                              | `nvca-operator`        |
 | `agent.secretMirrorLabelSelector`    | Label selector on the secrets in the sourceNamespace                                                                                                                       | `""`                   |
 | `agent.customAnnotations`            | Map of custom annotations to add to the agent pod                                                                                                                          | `{}`                   |
+| `agent.gpuProfiling.functionIds`     | Comma/space/newline-separated NVCF function IDs (or "*" for all) whose pods NVCA labels for NVIDIA Nsight GPU profiling. Empty disables profiling.                          | `""`                   |
+| `agent.gpuProfiling.labelKey`        | Pod label key NVCA applies to profiled function pods (the label the Nsight Operator watches for). Empty uses the built-in default "nvidia-nsight-profile".                 | `""`                   |
+| `agent.gpuProfiling.labelValue`      | Pod label value NVCA applies to profiled function pods. Empty uses the built-in default "enabled".                                                                         | `""`                   |
 | `agent.functionEnvOverrides`         | Map of environment variable overrides for function workloads (e.g., {"INIT_CONTAINER": "nvcr.io/custom/init:v1.0", "UTILS_CONTAINER": "nvcr.io/custom/utils:v1.0"})        | `{}`                   |
 | `agent.taskEnvOverrides`             | Map of environment variable overrides for task workloads (e.g., {"INIT_CONTAINER": "nvcr.io/custom/init:v1.0", "ESS_AGENT_CONTAINER": "nvcr.io/custom/ess:v1.0"})          | `{}`                   |
 | `agent.overrideEnvironmentVariables` | Map of environment variables to override on the NVCA agent container. These take precedence over default values. Example: {"LOG_LEVEL": "debug", "CUSTOM_FLAG": "enabled"} | `{}`                   |
+| `agent.llm.requestRouterAddress`     | Default LLM request-router worker address rendered as STARGATE_ADDRESS for LLM workers                                                                                      | `""`                   |
 | `agent.serviceOAuth`                 | OAuth token and JWKS endpoints used by dependent services                                                                                                                   | See `values.yaml`      |
 
 ### Webhook Container Resource configuration
@@ -116,7 +124,7 @@ used in DGX Cloud and other K8s Clusters to run NVCF Workloads.
 | `helmManaged.gpuManualInstanceConfigB64`      | (Optional) Base64 encoded GPU manual instance configuration. Leave blank if not required.                                                                                            | `""`      |
 | `helmManaged.clusterAttributes`               | (Optional) List of attributes for the cluster. Defaults to an empty array.                                                                                                           | `[]`      |
 | `helmManaged.imageCredHelper.imageRepository` | (OPTIONAL) Image repository of "nvcf-image-credential-helper". Only override this if you know what you are doing. If not specified, it will be calculated based on image.repository. | `""`      |
-| `helmManaged.imageCredHelper.imageTag`        | (REQUIRED) Image tag of "nvcf-image-credential-helper". Only override this if you know what you are doing.                                                                           | `0.5.1`   |
+| `helmManaged.imageCredHelper.imageTag`        | (REQUIRED) Image tag of "nvcf-image-credential-helper". Only override this if you know what you are doing.                                                                           | `0.10.2`   |
 | `helmManaged.otelCollector.enabled`           | Enable OTel collector sidecar for helm-managed clusters                                                                                                                              | `false`   |
 | `helmManaged.otelCollector.imageRepository`   | (OPTIONAL) Image repository of "otel-collector". Only override this if you know what you are doing. If not specified, it will be calculated based on image.repository.               | `""`      |
 | `helmManaged.otelCollector.imageTag`          | (REQUIRED) Image tag of "otel-collector". Only override this if you know what you are doing.                                                                                         | `0.143.2` |
@@ -130,13 +138,16 @@ used in DGX Cloud and other K8s Clusters to run NVCF Workloads.
 | `selfManaged.gpuManualInstanceConfigB64`      | (Optional) Base64 encoded GPU manual instance configuration. Leave blank if not required.                                                                                            | `""`                                       |
 | `selfManaged.clusterAttributes`               | (Optional) List of attributes for the cluster. Defaults to an empty array.                                                                                                           | `[]`                                       |
 | `selfManaged.imageCredHelper.imageRepository` | (OPTIONAL) Image repository of "nvcf-image-credential-helper". Only override this if you know what you are doing. If not specified, it will be calculated based on image.repository. | `""`                                       |
-| `selfManaged.imageCredHelper.imageTag`        | (REQUIRED) Image tag of "nvcf-image-credential-helper". Only override this if you know what you are doing.                                                                           | `0.5.1`                                    |
+| `selfManaged.imageCredHelper.imageTag`        | (REQUIRED) Image tag of "nvcf-image-credential-helper". Only override this if you know what you are doing.                                                                           | `0.10.2`                                    |
 | `selfManaged.otelCollector.enabled`           | Enable OTel collector sidecar for self-managed clusters                                                                                                                              | `false`                                    |
 | `selfManaged.otelCollector.imageRepository`   | (OPTIONAL) Image repository of "otel-collector". Only override this if you know what you are doing. If not specified, it will be calculated based on image.repository.               | `""`                                       |
 | `selfManaged.otelCollector.imageTag`          | (REQUIRED) Image tag of "otel-collector". Only override this if you know what you are doing.                                                                                         | `0.143.2`                                  |
 | `selfManaged.icmsServiceURL`                  | URL of the ICMS service for self-managed clusters. Override with the endpoint generated during cluster registration.                                                                 | `http://icms.example.invalid:8080`        |
+| `selfManaged.icmsServiceHostHeaderOverride`                 | Optional Host header override for selfManaged.icmsServiceURL.                                                                                                                       | `""`                                      |
 | `selfManaged.revalServiceURL`                 | URL of the ReVal service for self-managed clusters. Override with the endpoint generated during cluster registration.                                                                | `http://reval.example.invalid:8080`       |
+| `selfManaged.revalServiceHostHeaderOverride`                | Optional Host header override for selfManaged.revalServiceURL.                                                                                                                      | `""`                                      |
 | `selfManaged.natsURL`                         | URL of the NATS service for self-managed clusters. Override with the endpoint generated during cluster registration.                                                                 | `nats://nats.example.invalid:4222`        |
+| `selfManaged.natsHostOverride`                        | Optional TLS SNI host override for selfManaged.natsURL when using a tls or wss NATS URL.                                                                                            | `""`                                      |
 
 ### Node Selector Configuration
 

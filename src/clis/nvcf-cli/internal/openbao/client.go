@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os/exec"
@@ -48,10 +49,16 @@ type Config struct {
 	OpenBaoContainer      string
 	OpenBaoSecretName     string
 	KubeconfigPath        string
+	KubeContext           string
 	ClusterNamespace      string
 	UtilityImage          string
 	Debug                 bool
 }
+
+// ErrPKICertificateNotFound means the requested OpenBao PKI mount/certificate
+// is not present. Control-plane profiles treat this as "PKI not enabled yet"
+// instead of a hard failure.
+var ErrPKICertificateNotFound = errors.New("openbao: pki certificate not found")
 
 // JWTAuthRequest represents the JWT authentication request to OpenBao
 type JWTAuthRequest struct {
@@ -71,6 +78,13 @@ type JWTSignResponse struct {
 	Data struct {
 		Token string `json:"token"`
 	} `json:"data"`
+}
+
+type pkiCertificateResponse struct {
+	Data struct {
+		Certificate string `json:"certificate"`
+	} `json:"data"`
+	Errors []string `json:"errors"`
 }
 
 // NewClient creates a new OpenBao client
@@ -185,17 +199,9 @@ func (c *Client) getServiceAccountToken() (string, error) {
 // getOpenBaoRootToken retrieves the OpenBao root token from Kubernetes secret via kubectl
 func (c *Client) getOpenBaoRootToken() (string, error) {
 	// Use kubectl to get the secret directly
-	kubectlArgs := []string{"kubectl", "get", "secret", c.config.OpenBaoSecretName,
+	kubectlArgs := append(c.kubectlBaseArgs(), "get", "secret", c.config.OpenBaoSecretName,
 		"-n", c.config.OpenBaoNamespace,
-		"-o", "jsonpath={.data.root_token}"}
-
-	// Add kubeconfig if specified
-	if c.config.KubeconfigPath != "" {
-		kubectlArgs = []string{"kubectl", "--kubeconfig", c.config.KubeconfigPath}
-		kubectlArgs = append(kubectlArgs, "get", "secret", c.config.OpenBaoSecretName,
-			"-n", c.config.OpenBaoNamespace,
-			"-o", "jsonpath={.data.root_token}")
-	}
+		"-o", "jsonpath={.data.root_token}")
 
 	if c.config.Debug {
 		logging.Debug("Retrieving OpenBao root token from secret %s/%s via kubectl", c.config.OpenBaoNamespace, c.config.OpenBaoSecretName)
@@ -257,7 +263,7 @@ func (c *Client) authenticateWithOpenBao(ctx context.Context, saToken string) (s
 	}
 
 	// Execute via kubectl run
-	output, err := c.executeKubectlRun("openbao-auth", curlArgs)
+	output, err := c.executeKubectlRun(ctx, "openbao-auth", curlArgs)
 	if err != nil {
 		return "", fmt.Errorf("failed to authenticate with OpenBao via kubectl: %w", err)
 	}
@@ -300,7 +306,7 @@ func (c *Client) generateJWTToken(ctx context.Context, vaultToken string) (strin
 	}
 
 	// Execute via kubectl run
-	output, err := c.executeKubectlRun("openbao-jwt-sign", curlArgs)
+	output, err := c.executeKubectlRun(ctx, "openbao-jwt-sign", curlArgs)
 	if err != nil {
 		return "", fmt.Errorf("failed to sign JWT token via kubectl: %w", err)
 	}
@@ -357,7 +363,7 @@ func (c *Client) generateUserJWTTokenWithSubject(ctx context.Context, vaultToken
 	}
 
 	// Execute via kubectl run
-	output, err := c.executeKubectlRun("openbao-user-jwt-sign", curlArgs)
+	output, err := c.executeKubectlRun(ctx, "openbao-user-jwt-sign", curlArgs)
 	if err != nil {
 		return "", fmt.Errorf("failed to sign user JWT token via kubectl: %w", err)
 	}
@@ -386,18 +392,78 @@ func (c *Client) generateUserJWTTokenWithSubject(ctx context.Context, vaultToken
 	return signResponse.Data.Token, nil
 }
 
-// executeKubectlRun executes a kubectl run command with the utility image
-func (c *Client) executeKubectlRun(name string, args []string) (string, error) {
-	// Build kubectl run command
-	cmdArgs := []string{"kubectl", "run", name,
-		"--image=" + c.config.UtilityImage,
-		"--rm", "-i", "--restart=Never", "--timeout=60s"}
-
-	// Add kubeconfig if specified
-	if c.config.KubeconfigPath != "" {
-		cmdArgs = []string{"kubectl", "--kubeconfig", c.config.KubeconfigPath}
-		cmdArgs = append(cmdArgs, "run", name, "--image="+c.config.UtilityImage, "--rm", "-i", "--restart=Never", "--timeout=60s")
+// ReadPKICertificatePEM reads the public CA certificate from an OpenBao PKI
+// mount, for example services/all/pki/root/cert/ca. The returned value is PEM
+// text suitable for a public trust bundle.
+func (c *Client) ReadPKICertificatePEM(ctx context.Context, pkiPath string) (string, error) {
+	rootToken, err := c.getOpenBaoRootToken()
+	if err != nil {
+		return "", fmt.Errorf("retrieving OpenBao root token: %w", err)
 	}
+	readURL := strings.TrimRight(c.config.OpenBaoURL, "/") + "/v1/" + strings.Trim(pkiPath, "/") + "/cert/ca"
+	curlArgs := []string{
+		"curl", "-sS", readURL,
+		"-H", "X-Vault-Token: " + rootToken,
+	}
+	output, err := c.executeKubectlRun(ctx, "openbao-pki-root-ca", curlArgs)
+	if err != nil {
+		return "", fmt.Errorf("reading OpenBao PKI certificate: %w", err)
+	}
+	pem, err := rootCAPEMFromOpenBaoResponse(output)
+	if err != nil {
+		return "", err
+	}
+	return pem, nil
+}
+
+func rootCAPEMFromOpenBaoResponse(output string) (string, error) {
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		return "", fmt.Errorf("empty OpenBao PKI certificate response")
+	}
+	if strings.HasPrefix(trimmed, "-----BEGIN CERTIFICATE-----") {
+		return trimmed + "\n", nil
+	}
+
+	var resp pkiCertificateResponse
+	if err := json.Unmarshal([]byte(trimmed), &resp); err != nil {
+		return "", fmt.Errorf("parse OpenBao PKI certificate response: %w", err)
+	}
+	if cert := strings.TrimSpace(resp.Data.Certificate); cert != "" {
+		return cert + "\n", nil
+	}
+	if len(resp.Errors) > 0 {
+		errText := strings.Join(resp.Errors, "; ")
+		if strings.Contains(errText, "no handler for route") ||
+			strings.Contains(errText, "unsupported path") ||
+			strings.Contains(errText, "no value found") {
+			return "", fmt.Errorf("%w: %s", ErrPKICertificateNotFound, errText)
+		}
+		return "", fmt.Errorf("OpenBao PKI certificate read failed: %s", errText)
+	}
+	return "", fmt.Errorf("OpenBao PKI certificate response missing data.certificate")
+}
+
+func (c *Client) kubectlBaseArgs() []string {
+	args := []string{"kubectl"}
+	if c.config.KubeconfigPath != "" {
+		args = append(args, "--kubeconfig", c.config.KubeconfigPath)
+	}
+	if c.config.KubeContext != "" {
+		args = append(args, "--context", c.config.KubeContext)
+	}
+	return args
+}
+
+// executeKubectlRun executes a kubectl run command with the utility image
+func (c *Client) executeKubectlRun(ctx context.Context, name string, args []string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// Build kubectl run command
+	cmdArgs := append(c.kubectlBaseArgs(), "run", name,
+		"--image="+c.config.UtilityImage,
+		"--rm", "-i", "--restart=Never", "--timeout=60s")
 
 	// Add namespace
 	cmdArgs = append(cmdArgs, "-n", c.config.ClusterNamespace)
@@ -419,7 +485,7 @@ func (c *Client) executeKubectlRun(name string, args []string) (string, error) {
 	}
 
 	// Execute the command
-	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
+	cmd := exec.CommandContext(ctx, cmdArgs[0], cmdArgs[1:]...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		if c.config.Debug {
@@ -448,7 +514,9 @@ func (c *Client) filterKubectlOutput(output string) string {
 	// Find the first line that looks like JSON (starts with { or [)
 	lines := strings.Split(output, "\n")
 	var jsonLines []string
+	var pemLines []string
 	foundJSON := false
+	foundPEM := false
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -483,9 +551,24 @@ func (c *Client) filterKubectlOutput(output string) string {
 			foundJSON = true
 		}
 
+		if strings.HasPrefix(line, "-----BEGIN ") {
+			foundPEM = true
+		}
+		if foundPEM {
+			pemLines = append(pemLines, line)
+			if strings.HasPrefix(line, "-----END ") {
+				foundPEM = false
+			}
+			continue
+		}
+
 		if foundJSON {
 			jsonLines = append(jsonLines, line)
 		}
+	}
+
+	if len(pemLines) > 0 {
+		return strings.Join(pemLines, "\n")
 	}
 
 	// If no JSON found, try to return the last non-empty line

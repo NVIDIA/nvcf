@@ -1,0 +1,167 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("@gazelle//:def.bzl", "gazelle")
+load("//rules/oci:defs.bzl", "go_oci_image")
+
+# gazelle:prefix github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector
+# gazelle:proto disable_global
+# gazelle:go_naming_convention import_alias
+
+# Non-Go top-level dirs (or Go dirs with their own BUILD.bazel that
+# gazelle should leave alone).
+# gazelle:exclude docs
+# gazelle:exclude examples
+# gazelle:exclude generator
+# gazelle:exclude scripts
+# gazelle:exclude test
+# gazelle:exclude testdata
+# gazelle:exclude validator
+# Otelcol is its own go module under ./otelcol with its own prefix and
+# is NOT Bazel-built in this MR (see the FUTURE WORK note below).
+# Exclude it from gazelle so the checked-in collector tree does not
+# get treated as a Bazel package.
+# gazelle:exclude otelcol
+
+gazelle(
+    name = "gazelle",
+)
+
+# ============================================================================
+# Two multi-arch OCI images:
+#
+#   //:byoo-otel-collector-image
+#     Wrapper Go binary + collector binary. ENTRYPOINT is the wrapper
+#     (/app/byoo-otel-collector), which exec's the collector at
+#     /app/otelcol-contrib. Drop-in replacement for the existing
+#     Dockerfile.
+#
+#   //:nvcf-otel-collector-image
+#     Collector only. ENTRYPOINT is the collector at /otelcol-contrib.
+#     Used by the NVCA agent OTel sidecar. Drop-in replacement for
+#     Dockerfile.nvcf-otel-collector.
+#
+# The wrapper goes through `rules_go`'s `go_binary` (//cmd/byoo-otel-
+# collector). The collector binary comes from a genrule shim in
+# //otelcol because the collector module's 250+ transitive Go deps
+# include packages whose Gazelle-generated BUILD.bazel files reference
+# @rules_go from a context where it is not visible (Datadog OTLP
+# attribute mapping and several internal contrib helpers). The genrule
+# trades hermeticity for forward progress -- see the rationale comment
+# in //otelcol:BUILD.bazel. Both images compose via rules_pkg.pkg_tar
+# so the genrule output flows through unchanged.
+#
+# Release publishing is split: source CI builds these public image
+# indexes and emits release-manifest.json; nvcf-internal owns NVCR
+# destination config and promotion.
+# ============================================================================
+
+load("@aspect_bazel_lib//lib:transitions.bzl", "platform_transition_filegroup")
+load("@rules_oci//oci:defs.bzl", "oci_image", "oci_image_index")
+load("@rules_pkg//pkg:mappings.bzl", "pkg_attributes", "pkg_files", "strip_prefix")
+load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
+load("//rules/oci:transition.bzl", "multi_arch")
+
+# Wrapper-only image. Built via the standard go_oci_image macro.
+go_oci_image(
+    name = "nvcf-otel-collector-image",
+    base = "@distroless_go",
+    binary = "//src/compute-plane-services/byoo-otel-collector/otelcol:otelcol-contrib-bin",
+    binary_path = "/otelcol-contrib",
+    tags = ["nvcf-otel-collector"],
+    visibility = ["//visibility:public"],
+)
+
+# byoo-otel-collector image: wrapper + collector. Two binaries in one
+# image, wrapper as ENTRYPOINT. Both pkg_files calls set mode 0755
+# explicitly; without it the container fails to start with permission
+# denied on /app/byoo-otel-collector. Same fix pattern as helm-reval
+# !365 and rules/oci/private/go.bzl.
+pkg_files(
+    name = "byoo_wrapper_files",
+    srcs = ["//src/compute-plane-services/byoo-otel-collector/cmd/byoo-otel-collector:byoo-otel-collector"],
+    prefix = "/app",
+    renames = {"//src/compute-plane-services/byoo-otel-collector/cmd/byoo-otel-collector:byoo-otel-collector": "byoo-otel-collector"},
+    attributes = pkg_attributes(mode = "0755"),
+    visibility = ["//visibility:private"],
+)
+
+pkg_files(
+    name = "byoo_collector_files",
+    srcs = ["//src/compute-plane-services/byoo-otel-collector/otelcol:otelcol-contrib-bin"],
+    prefix = "/app",
+    renames = {"//src/compute-plane-services/byoo-otel-collector/otelcol:otelcol-contrib-bin": "otelcol-contrib"},
+    attributes = pkg_attributes(mode = "0755"),
+    visibility = ["//visibility:private"],
+)
+
+pkg_tar(
+    name = "byoo_combined_layer",
+    srcs = [
+        ":byoo_collector_files",
+        ":byoo_wrapper_files",
+    ],
+    visibility = ["//visibility:private"],
+)
+
+oci_image(
+    name = "byoo-otel-collector-image_pre_transitioned",
+    base = "@distroless_go",
+    entrypoint = ["/app/byoo-otel-collector"],
+    tars = [":byoo_combined_layer"],
+    visibility = ["//visibility:private"],
+)
+
+platform_transition_filegroup(
+    name = "byoo-otel-collector-image",
+    srcs = [":byoo-otel-collector-image_pre_transitioned"],
+    target_platform = select({
+        "@platforms//cpu:arm64": "//platforms:linux_arm64",
+        "@platforms//cpu:x86_64": "//platforms:linux_x86_64",
+    }),
+    tags = ["byoo-otel-collector"],
+    visibility = ["//visibility:public"],
+)
+
+multi_arch(
+    name = "byoo-otel-collector-image_multi_arch",
+    image = ":byoo-otel-collector-image_pre_transitioned",
+    platforms = [
+        "//platforms:linux_arm64",
+        "//platforms:linux_x86_64",
+    ],
+    visibility = ["//visibility:private"],
+    tags = ["byoo-otel-collector"],
+)
+
+oci_image_index(
+    name = "byoo-otel-collector-image_index",
+    images = [":byoo-otel-collector-image_multi_arch"],
+    tags = ["byoo-otel-collector"],
+    visibility = ["//visibility:public"],
+)
+
+# Regression tests for the rules_pkg pkg_files 0644 default-mode bug
+# that bit nvcf/nvcf!365 (helm-reval 0.2.1 failed to start because the
+# entrypoint was packaged non-executable). Inspect each image's
+# pkg_tar layer and assert the entrypoint exists and is executable.
+sh_test(
+    name = "nvcf-otel-collector-image_entrypoint_mode_test",
+    srcs = ["//src/compute-plane-services/byoo-otel-collector/tools/ci:image_entrypoint_mode_test.sh"],
+    args = [
+        "$(location :nvcf-otel-collector-image_layer)",
+        "/otelcol-contrib",
+    ],
+    data = [":nvcf-otel-collector-image_layer"],
+)
+
+sh_test(
+    name = "byoo-otel-collector-image_entrypoint_mode_test",
+    srcs = ["//src/compute-plane-services/byoo-otel-collector/tools/ci:image_entrypoint_mode_test.sh"],
+    args = [
+        "$(location :byoo_combined_layer)",
+        "/app/byoo-otel-collector",
+    ],
+    data = [":byoo_combined_layer"],
+)

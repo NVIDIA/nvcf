@@ -1,0 +1,55 @@
+// SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Bazel-scope go workspace.
+//
+// The use() block below is the list, and is the only place it is written down.
+// An enumeration in this comment was tried first and went stale within a
+// release, which is the same failure mode tools/ci/nested-modules.txt warns
+// about: a second copy of a list drifts into describing a repository that no
+// longer exists.
+//
+// Every Go subtree the root Bazel module builds appears here. A subtree is
+// added as part of migrating it out of its own nested MODULE.bazel; see
+// tools/ci/nested-modules.txt for what has not migrated yet.
+//
+// The repo also has a generated go.work (gitignored) used by the non-Bazel CI
+// for license and dependency checks across every go.mod. That one is wider on
+// purpose: it covers upstream-owned subtrees Bazel does not build.
+go 1.26.5
+
+use (
+	./src/clis/nvcf-cli
+	./src/uis/nvcf-ui/backend
+	./src/libraries/go/lib
+	./src/libraries/go/worker
+	./src/compute-plane-services/nvsnap
+	./src/compute-plane-services/image-credential-helper
+	./src/compute-plane-services/nvcf-unbound
+	./src/compute-plane-services/worker-init
+	./src/compute-plane-services/worker-llm-credentials
+	./src/compute-plane-services/worker-task
+	./src/compute-plane-services/worker-utils
+	./src/invocation-plane-services/grpc-proxy
+	./src/invocation-plane-services/llm-api-gateway
+	./src/invocation-plane-services/ratelimiter
+	./src/invocation-plane-services/vanity-gateway
+	./src/control-plane-services/nats-auth-callout
+	./src/compute-plane-services/ess-agent
+	./src/compute-plane-services/ess-agent/api
+	./src/compute-plane-services/ess-agent/sdk
+	./src/control-plane-services/helm-reval
+	./src/compute-plane-services/byoo-otel-collector
+)

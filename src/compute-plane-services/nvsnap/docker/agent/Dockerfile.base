@@ -1,0 +1,175 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# NVSNAP Agent Base Image
+# Contains: CRIU, system dependencies, static tools
+# This image changes rarely and should be cached/pushed to registry
+#
+# Build: docker build -t nvsnap-agent-base:latest -f Dockerfile.base .
+# Usage: FROM nvsnap-agent-base:latest in Dockerfile.app
+
+# nvsnap-cuda-checkpoint: our own cuda-checkpoint CLI, built from source on
+# the public CUDA driver checkpoint API (cuCheckpointProcess*). Replaces the
+# previously committed NVIDIA prebuilt binary: buildable for x86-64 AND arm64
+# (NVIDIA publishes x86-64 only), and extensible (r580 gpuPairs migration,
+# lock timeouts). Requires driver 570+ on the node at runtime. The CUDA devel
+# image supplies cuda.h and the libcuda link stub; at runtime the wrapper
+# points LD_LIBRARY_PATH at the node's real driver libcuda.
+FROM nvidia/cuda:12.8.1-devel-ubuntu22.04 AS cuda-cli-builder
+COPY nvsnap-cuda-checkpoint.c /src/nvsnap-cuda-checkpoint.c
+RUN gcc -O2 -o /src/nvsnap-cuda-checkpoint /src/nvsnap-cuda-checkpoint.c \
+        -I/usr/local/cuda/include -L/usr/local/cuda/lib64/stubs -lcuda && \
+    strings /src/nvsnap-cuda-checkpoint | grep -q "nvsnap-cuda-checkpoint" \
+        || (echo "provenance marker missing" && exit 1)
+
+FROM ubuntu:22.04 AS criu-builder
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    pkg-config \
+    python3 \
+    python3-pip \
+    python3-protobuf \
+    libprotobuf-dev \
+    libprotobuf-c-dev \
+    protobuf-c-compiler \
+    protobuf-compiler \
+    libnet1-dev \
+    libnl-3-dev \
+    libnl-genl-3-dev \
+    libcap-dev \
+    libgnutls28-dev \
+    libselinux1-dev \
+    libnftables-dev \
+    libdrm-dev \
+    uuid-dev \
+    asciidoctor \
+    xmlto \
+    libbsd-dev \
+    liblz4-dev \
+    git \
+    patchelf \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy and build CRIU with io_uring fixes
+COPY criu-src /criu-src
+WORKDIR /criu-src
+RUN make -j$(nproc)
+# Install CRIU binary and crit/pycriu tools
+RUN mkdir -p /criu-install/usr/local/sbin /criu-install/usr/local/lib/criu && \
+    cp criu/criu /criu-install/usr/local/sbin/criu && \
+    cp plugins/cuda/cuda_plugin.so /criu-install/usr/local/lib/criu/ 2>/dev/null || true
+# Package pycriu + crit source for installation in final image
+RUN cp -r lib crit /criu-install/
+
+# Create portable bundle
+RUN mkdir -p /criu-bundle/lib /criu-bundle/plugins && \
+    cp /criu-install/usr/local/sbin/criu /criu-bundle/criu && \
+    strip /criu-bundle/criu && \
+    # Copy required shared libraries
+    ldd /criu-bundle/criu | grep "=> /" | awk '{print $3}' | xargs -I {} cp {} /criu-bundle/lib/ && \
+    cp /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 /criu-bundle/lib/ && \
+    # Copy CRIU plugins
+    cp -r /criu-install/usr/local/lib/criu/* /criu-bundle/plugins/ 2>/dev/null || true && \
+    # Make CRIU self-contained: pin its dynamic loader and rpath to the bundle.
+    # Without this, CRIU exec'd inside a placeholder mntns picks up the
+    # placeholder image's /lib64/ld-linux-x86-64.so.2, whose glibc ABI may
+    # not match /criu-bundle/lib/libc.so.6 — leading to silent segfaults.
+    # Patching PT_INTERP + RUNPATH in the criu binary makes it use the
+    # bundle's loader/libs regardless of the surrounding container's libc.
+    patchelf --set-interpreter /criu-bundle/lib/ld-linux-x86-64.so.2 \
+             --set-rpath /criu-bundle/lib /criu-bundle/criu
+
+# Make the bundle fully self-contained via per-library RPATH. DT_RUNPATH on
+# the criu binary is NOT inherited by its libraries' own dependencies, so a
+# transitive dep (e.g. libnftables -> libmnl) would not resolve from the bundle
+# without an external LD_LIBRARY_PATH=/criu-bundle/lib. That env var is then
+# inherited by every child criu spawns -- including cuda-checkpoint, which must
+# use the *target container's* glibc; on a newer-glibc image it aborts with
+# "GLIBC_2.xx not found". Setting RPATH=$ORIGIN on each bundled library lets the
+# loader find siblings in the same dir, so criu runs with no LD_LIBRARY_PATH at
+# all and nothing leaks into cuda-checkpoint. Plugins live one dir over.
+RUN set -e; \
+    for so in /criu-bundle/lib/*.so*; do \
+        [ -f "$so" ] || continue; \
+        case "$so" in */ld-linux*) continue;; esac; \
+        patchelf --set-rpath '$ORIGIN' "$so"; \
+    done; \
+    for so in /criu-bundle/plugins/*.so; do \
+        [ -f "$so" ] || continue; \
+        patchelf --set-rpath '$ORIGIN/../lib' "$so"; \
+    done
+
+# Create CRIU wrapper for portable execution
+RUN echo '#!/bin/bash' > /criu-bundle/criu-wrapper && \
+    echo 'DIR="$(dirname "$(readlink -f "$0")")"' >> /criu-bundle/criu-wrapper && \
+    echo 'exec "$DIR/lib/ld-linux-x86-64.so.2" --library-path "$DIR/lib" "$DIR/criu" "$@" 2>/dev/null || exec "$DIR/criu" "$@"' >> /criu-bundle/criu-wrapper && \
+    chmod +x /criu-bundle/criu-wrapper
+
+# Create static no-op iptables-restore shims (CRIU calls these during network restore)
+RUN printf '#include <stdlib.h>\nint main(){return 0;}\n' > /tmp/true.c && \
+    gcc -static -O2 -s -o /criu-bundle/iptables-restore /tmp/true.c && \
+    cp /criu-bundle/iptables-restore /criu-bundle/ip6tables-restore && \
+    chmod +x /criu-bundle/iptables-restore /criu-bundle/ip6tables-restore
+
+# Final base image
+FROM ubuntu:22.04
+
+# Install runtime dependencies only
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    util-linux \
+    procps \
+    iproute2 \
+    iptables \
+    libnftables1 \
+    libnet1 \
+    libnl-3-200 \
+    libprotobuf-c1 \
+    libbsd0 \
+    python3 \
+    python3-pip \
+    python3-protobuf \
+    strace \
+    lz4 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create directories
+RUN mkdir -p /var/lib/nvsnap/checkpoints /criu-bundle
+
+# Copy CRIU bundle from builder
+COPY --from=criu-builder /criu-bundle/ /criu-bundle/
+
+# Install pycriu + crit (CRIU image inspection tools)
+COPY --from=criu-builder /criu-install/lib /tmp/criu-lib
+COPY --from=criu-builder /criu-install/crit /tmp/criu-crit
+RUN pip3 install --no-cache-dir /tmp/criu-lib /tmp/criu-crit && \
+    rm -rf /tmp/criu-lib /tmp/criu-crit
+
+# Copy lz4 into bundle so restore pods get it via get-criu init container
+RUN cp /usr/bin/lz4 /criu-bundle/lz4
+
+# cuda-checkpoint: our source-built CLI (see cuda-cli-builder stage above);
+# the wrapper below execs it as /criu-bundle/cuda-checkpoint.real.
+COPY --from=cuda-cli-builder /src/nvsnap-cuda-checkpoint /criu-bundle/cuda-checkpoint.real
+# Wrapper is checked into the repo (single source of truth — see CLAUDE.md
+# rule 13). Composes LD_LIBRARY_PATH from runtime-discovered $NVSNAP_CUDA_LIB_DIR
+# (set by the nvsnap-agent) + a fallback list of known driver layouts.
+COPY cuda-checkpoint-wrapper.sh /criu-bundle/cuda-checkpoint
+RUN chmod +x /criu-bundle/cuda-checkpoint
+
+# Make everything executable
+RUN chmod +x /criu-bundle/*
+
+# Configure library path
+RUN echo "/criu-bundle/lib" > /etc/ld.so.conf.d/criu.conf && ldconfig
+
+# Verify CRIU and crit work
+RUN echo "=== CRIU version ===" && /criu-bundle/criu --version && \
+    echo "=== crit version ===" && python3 -m crit --version
+
+# Labels
+LABEL org.opencontainers.image.title="NVSNAP Agent Base"
+LABEL org.opencontainers.image.description="Base image with CRIU and system dependencies"

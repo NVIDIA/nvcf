@@ -77,6 +77,27 @@ func TestRenderOtelConfig(t *testing.T) {
 			backendType:  backendconfig.VM,
 			expectError:  false,
 		},
+		{
+			name:         "Valid Input Grafana Logs Metrics Traces",
+			inputData:    []byte(`{"telemetries": {"logsTelemetry": {"protocol": "HTTP", "provider": "GRAFANA_CLOUD", "endpoint": "https://logs.example.com", "name": "grafana-logs"}, "metricsTelemetry": {"protocol": "HTTP", "provider": "GRAFANA_CLOUD", "endpoint": "https://metrics.example.com", "name": "grafana-metrics"}, "tracesTelemetry": {"protocol": "HTTP", "provider": "GRAFANA_CLOUD", "endpoint": "https://traces.example.com", "name": "grafana-traces"}}}`),
+			workloadType: backendconfig.Container,
+			backendType:  backendconfig.VM,
+			expectError:  false,
+		},
+		{
+			name:         "Valid Input Datadog Logs Metrics Traces",
+			inputData:    []byte(`{"telemetries": {"logsTelemetry": {"protocol": "HTTP", "provider": "DATADOG", "endpoint": "datadoghq.com", "name": "datadog-logs"}, "metricsTelemetry": {"protocol": "HTTP", "provider": "DATADOG", "endpoint": "datadoghq.com", "name": "datadog-metrics"}, "tracesTelemetry": {"protocol": "HTTP", "provider": "DATADOG", "endpoint": "datadoghq.com", "name": "datadog-traces"}}}`),
+			workloadType: backendconfig.Container,
+			backendType:  backendconfig.VM,
+			expectError:  false,
+		},
+		{
+			name:         "Valid Input Azure Monitor Logs Metrics Traces",
+			inputData:    []byte(`{"telemetries": {"logsTelemetry": {"protocol": "HTTP", "provider": "AZURE_MONITOR", "endpoint": "https://azure.example.com", "name": "azure-logs"}, "metricsTelemetry": {"protocol": "HTTP", "provider": "AZURE_MONITOR", "endpoint": "https://azure.example.com", "name": "azure-metrics"}, "tracesTelemetry": {"protocol": "HTTP", "provider": "AZURE_MONITOR", "endpoint": "https://azure.example.com", "name": "azure-traces"}}}`),
+			workloadType: backendconfig.Container,
+			backendType:  backendconfig.VM,
+			expectError:  false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -115,7 +136,7 @@ service:
       initial_fields:
         public: "true"
     metrics:
-      level: normal
+      level: detailed
       readers:
         - pull:
             exporter:

@@ -221,7 +221,7 @@ First, ensure you have the [NGC CLI installed and configured](https://org.ngc.nv
 ```bash
 # Download a specific version
 ngc registry resource download-version \
-  "0833294136851237/nvcf-ncp-staging/nvcf-self-managed-stack:0.5.0"
+  "0833294136851237/nvcf-ncp-staging/nvcf-self-managed-stack:0.5.1"
 
 # List all versions
 ngc registry resource list \

@@ -1,0 +1,51 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "nats",
+    srcs = [
+        "client.go",
+        "client_psat.go",
+        "host.go",
+        "nats.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/queue/nats",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/internal/auth",
+        "//src/compute-plane-services/nvca/pkg/queue",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//src/compute-plane-services/nvca/vendor/github.com/nats-io/nats.go:nats_go",
+        "//src/compute-plane-services/nvca/vendor/github.com/nats-io/nats.go/jetstream",
+        "//src/compute-plane-services/nvca/vendor/github.com/nats-io/nkeys",
+        "//src/compute-plane-services/nvca/vendor/github.com/sirupsen/logrus",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":nats",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "nats_test",
+    srcs = [
+        "client_psat_test.go",
+        "client_test.go",
+        "host_test.go",
+    ],
+    embed = [":nats"],
+    deps = [
+        "//src/compute-plane-services/nvca/internal/auth",
+        "//src/compute-plane-services/nvca/pkg/queue",
+        "//src/compute-plane-services/nvca/vendor/github.com/nats-io/nats.go:nats_go",
+        "//src/compute-plane-services/nvca/vendor/github.com/nats-io/nats-server/v2/server",
+        "//src/compute-plane-services/nvca/vendor/github.com/nats-io/nats-server/v2/test",
+        "//src/compute-plane-services/nvca/vendor/github.com/nats-io/nkeys",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/require",
+    ],
+)

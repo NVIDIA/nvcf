@@ -1,0 +1,266 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# ============================================================================
+# NVCF monorepo Bazel configuration
+# ============================================================================
+
+# Optional per-user overrides (not checked in). Useful for opting out
+# of the remote cache while on a flaky network or pointing at a
+# personal cache:
+#   echo 'build --remote_cache=' >> ~/.bazelrc.user
+# user.bazelrc in the workspace also works (gitignored by convention).
+try-import %workspace%/user.bazelrc
+try-import %user.home%/.bazelrc.user
+
+build --compilation_mode=fastbuild
+common --enable_bzlmod
+build --incompatible_strict_action_env
+common --enable_platform_specific_config
+
+# Route public Maven Central through the internal Artifactory mirror for every
+# download (coursier, http_file, http_archive). Public Central rate-limits the
+# shared CI runner IP (429), which failed the Bazel validate jobs. This also
+# covers transitive module maven installs (e.g. contrib_rules_jvm_deps) that our
+# own maven.install repositories cannot repoint.
+#
+# The reroute targets an internal Artifactory host, so it lives in an
+# un-mirrored internal bazelrc rather than here: the public GitHub mirror never
+# ships that host, and GitHub-hosted runners cannot reach it (and do not share
+# the rate-limited runner IP). try-import is a no-op when the file is absent, so
+# public builds go straight to Maven Central and internal builds get the mirror.
+try-import %workspace%/tools/bazel/internal.bazelrc
+
+# Remote cache is opt-in, not a default. This matches the per-service Bazel
+# modules, whose .bazelrc carries no cache config at all: the caller supplies
+# the endpoint, credentials, and upload policy. That keeps a single source of
+# truth per environment and avoids a baked-in default that points at a cache
+# the caller cannot reach.
+#   - GitHub mirror CI: the bazel workflow sets --remote_cache to the public
+#     EC2 Buildbarn (with a bearer token and CA cert) and controls upload per
+#     trigger (read-only on PRs, read-write on main).
+#   - Internal GitLab CI / on-VPN devs: opt in with --config=remote (read-only)
+#     or --config=remote-write (read+write) and supply the cache endpoint with
+#     --remote_cache, e.g. `bazel build --config=remote-write //...` or a
+#     persistent `build --config=remote` plus `--remote_cache=...` in
+#     ~/.bazelrc.user (try-imported at the bottom of this file).
+
+# Required for toolchains_protoc to register a prebuilt protoc instead
+# of falling back to the C++ protoc baked into @@protobuf+. Default
+# true in Bazel 8 but pinned explicitly so a Bazel downgrade does not
+# silently reintroduce the multi-thousand-action C++ protobuf compile.
+common --incompatible_enable_proto_toolchain_resolution
+
+# Stamping for OCI image tags. Default off; CI opts in with --stamp.
+build --workspace_status_command=./tools/workspace_status.sh
+build --nostamp
+
+# Java baseline: Java 25 for the whole monorepo (nv-boot-parent and the Java
+# control-plane services). local_jdk is the approved runtime. The pinned
+# bazel-ci image supplies Temurin 25 through JAVA_HOME; the bare
+# Docker-integration lane supplies it through actions/setup-java. The Java
+# build and test jobs prove that both environments satisfy this contract.
+# Full javac (header compilation off) is required because Lombok-generated APIs
+# in the imported projects are not compatible with Bazel's Turbine header
+# compiler.
+build --java_language_version=25
+build --tool_java_language_version=25
+build --java_runtime_version=local_jdk
+build --tool_java_runtime_version=local_jdk
+build --java_header_compilation=false
+
+# rules_spring 2.6.3 (cloud-tasks Spring Boot packaging) still uses bare Java
+# rules/providers in its own BUILD and .bzl files; Bazel 9 requires these
+# symbols to be autoloaded for that external repo.
+common --incompatible_autoload_externally=+@rules_java
+
+# Downloader rewrites for repository-rule downloads (e.g. rules that hardcode
+# repo1.maven.org). Coursier maven.install still uses the repositories declared
+# in MODULE.bazel. Public, credentials-free mappings only.
+common --downloader_config=.bazel_downloader_config
+
+test --test_output=errors
+# Bazel's sandbox strips HOME, but a lot of Go code (cobra/viper config,
+# user state files, git cache lookups) blows up without it. Point HOME at
+# /tmp; tests should never touch the developer's real home anyway.
+test --test_env=HOME=/tmp
+test --test_env=XDG_CACHE_HOME=/tmp/.cache
+
+startup --host_jvm_args=-Xmx4g
+
+# ---- Go ----
+build --@rules_go//go/config:pure
+
+# ---- CI profile ----
+build:ci --jobs=32
+build:ci --stamp
+
+# ---- Remote cache profile ----
+# Two configs:
+#
+#   --config=remote        Read-only. Default for everyone (devs + ad-hoc
+#                          builds). Pulls hits from the remote cache but does
+#                          not upload local results. This avoids cache
+#                          poisoning from non-hermetic local environments
+#                          (a dev with a modified toolchain or unreviewed
+#                          source can otherwise replace good entries with
+#                          bad ones; the next CI run downloads the bad
+#                          entry and gets a wrong result, with no clear
+#                          attribution).
+#
+#   --config=remote-write  Read+write. Layered on top of --config=remote.
+#                          ONLY CI should use this; the per-job CI
+#                          before_script in .gitlab-ci.yml exports
+#                          BAZEL_REMOTE_FLAGS=--config=remote-write
+#                          when the cache probe succeeds.
+#
+# This profile carries the read-only cache policy and tuning flags only; the
+# caller supplies the endpoint (and credentials) via --remote_cache. CI points
+# it at the public EC2 Buildbarn and writes through on every default-branch and
+# MR build, so its hit rate climbs as commits land. Devs can point at a closer
+# cache via ~/.bazelrc.user (see try-import at the top of this file), or run
+# fully local with --remote_cache= to disable the cache for a build.
+build:remote --remote_upload_local_results=false
+
+# zstd compression for cache blobs. Cuts upload bandwidth ~5-10x for
+# Go object files and cross-compiled binaries (the bulk of our cache
+# traffic), and reduces server-side flow-control pressure. The cache backend
+# advertises ZSTD; clients without compression transparently fall back to
+# uncompressed.
+build:remote --remote_cache_compression
+# Server-side enforcement so Bazel does not silently downgrade if the
+# server advertises compression unavailable. The team cache supports
+# this; the flag is here to fail fast if a misconfigured replacement
+# server gets dropped in.
+build:remote --experimental_remote_cache_compression_threshold=100
+
+# In-memory Merkle tree cache. Subsequent action lookups for inputs we
+# have already hashed reuse the result instead of recomputing. Pure
+# latency win on warm Bazel servers; no correctness impact.
+# Default size is 1000 entries, which we blow through on cold protobuf
+# / cross-compiled-Go builds (~1100 actions per arch). 10000 keeps the
+# whole graph resident; cost is a few MB of JVM heap (well under our
+# -Xmx4g budget).
+
+# Re-lease cache entries Bazel has already seen during a long build.
+# bb-storage evicts blobs by LRU/TTL; without this flag a build that
+# takes longer than the eviction window can hit "blob not found" mid-run
+# for inputs already validated at analysis time. Default is off; we turn
+# it on because our GitLab CI jobs (cold protobuf compile, multi-arch
+# CLI fanout) routinely run 5-10+ minutes against a shared cache where
+# other tenants' uploads can pressure eviction.
+build:remote --experimental_remote_cache_lease_extension
+
+# How long Bazel trusts a cache lookup before re-validating. Default
+# is 3h. Bump to 12h: a developer leaving a Bazel server warm overnight
+# (sandbox CI box, dev laptop) re-uses lookups across the workday
+# instead of paying the round-trip again. Safe because the cache is
+# content-addressed; stale entries can only miss, not return stale data.
+build:remote --experimental_remote_cache_ttl=12h
+
+# Per-RPC timeout. 120s gives cold-cache big-blob reads (Kubernetes
+# generated packages, multi-MB Go object files) headroom on a healthy
+# backend without inviting the half-open-stream wedge a too-short
+# timeout used to cause (--remote_local_fallback covers per-action
+# failures only, not stranded queue entries on a cancelled stream).
+build:remote --remote_timeout=120
+# 5 retries (was 2). Each retry rebuilds the gRPC channel, so this is
+# our path back from a half-open / GOAWAY'd connection. Cost is at
+# most 5*120s on a fully dead backend; in practice the first retry
+# succeeds because the new channel skips whatever wedge the previous
+# stream hit.
+build:remote --remote_retries=5
+
+# Client gRPC keepalive PINGs at 30s. The remote-cache frontend
+# (bazel-remote-cache/config/common.libsonnet) is configured with
+# keepaliveEnforcementPolicy.minTime=10s, so 30s is well inside what
+# the server accepts and does NOT trigger ENHANCE_YOUR_CALM/GOAWAY.
+# (The upstream bb-storage default is 5min; we override it to 10s in
+# our deployment, so the upstream-default rationale for removing
+# these flags does not apply to our cache.)
+#
+# Why we need them: long local actions (rules_go's GoToolchainBinaryBuild
+# "for tool" runs ~10min on a cold runner) leave the gRPC channel
+# idle. Without client PINGs, intermediate stateful equipment (k8s
+# pod NAT on the runner, IT firewall between the runner subnet and
+# the cache) silently drops the conntrack entry; the next remote-cache
+# RPC redials and fails GetCapabilities with "Network closed for
+# unknown reason", which --remote_local_fallback does NOT cover, so
+# the build hard-fails. Server-side keepalives alone cannot rescue
+# this: once the client->server NAT entry is gone, the server's PING
+# acks vanish too. If you bump these, also bump the server's minTime
+# in bazel-remote-cache/config/common.libsonnet in lockstep.
+build:remote --grpc_keepalive_time=30s
+build:remote --grpc_keepalive_timeout=20s
+
+# Concurrent gRPC streams to the remote cache. We were at 10 while debugging
+# cache instability; with compression in place each stream is much
+# smaller, so 50 is comfortably below the frontend's default 100-stream
+# cap and lets parallel reads keep up with bazel --jobs settings.
+build:remote --remote_max_connections=50
+
+# --remote_download_outputs=toplevel was deliberately removed from
+# the read-only profile. It traded a real bandwidth saving for "lost
+# inputs" build failures whenever an upstream action's output was
+# async-uploaded but the upload failed to commit: the next action,
+# with no local copy, would refetch from CAS and get NotFound, and
+# the whole build aborted. The default ("all") materializes
+# intermediate outputs locally, so a cache miss becomes a slow build
+# instead of a hard failure. Re-add this flag on build:ci only once
+# we have evidence the cache is reliable enough to trust under load.
+
+# Soft-fail: if the remote cache is unreachable or misbehaving (transient
+# network, individual action timeout), fall back to local execution
+# rather than abort the whole build. Prints a warning so cache outages
+# are still visible. Note: this only covers remote *action* failures,
+# not the initial Capabilities RPC; a frontend that returns UNAVAILABLE
+# on Capabilities still hard-fails (e.g., backend storage shards down).
+# CI before_script's TCP probe handles the Capabilities case; locally
+# you'll see a single Bazel error and can drop --config=remote.
+build:remote --remote_local_fallback
+
+# CI overlay. Inherits the read-only profile and turns uploads back on.
+# Devs who really want to seed the cache from a personal box can use
+# this too, but the default read-only path is the safe one.
+build:remote-write --config=remote
+build:remote-write --remote_upload_local_results=true
+# Pin async uploads on. Default in Bazel 8 but explicit so a downgrade
+# does not silently make CI block on every cache write at end-of-build.
+# With async, Bazel returns success as soon as the build's actions
+# complete; outstanding uploads continue in the background and a small
+# tail of misses gets absorbed by --build_event_upload_max_retries.
+build:remote-write --remote_cache_async=true
+
+# ---- Debug profile ----
+build:debug --compilation_mode=dbg
+build:debug -s
+
+# ---- Release profile ----
+build:release --compilation_mode=opt
+build:release --strip=always
+
+# Per-user overrides, end-of-file edition. The top-of-file try-import
+# (lines 10-11) lets users SET defaults that workspace lines may then
+# refine; this end-of-file try-import lets users OVERRIDE defaults that
+# workspace lines establish. Same files, processed twice, last-write-wins.
+# Useful for opting out of remote caching, pinning a personal cache
+# endpoint, etc.
+try-import %workspace%/user.bazelrc
+try-import %user.home%/.bazelrc.user
+
+# Bazel 9.1.1 bumps the protobuf module to 33.x while toolchains_protoc 0.6.1
+# only ships up to v29 protoc; allow the version-skew (descriptor gen is
+# wire-compatible). Revisit when toolchains_protoc ships a v33 protoc.
+common --@com_google_protobuf//bazel/toolchains:allow_nonstandard_protoc

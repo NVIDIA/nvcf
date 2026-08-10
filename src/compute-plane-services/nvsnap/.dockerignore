@@ -1,0 +1,33 @@
+# Ignore large directories not needed for agent build
+bin/
+.git/
+vendor/
+
+# Ignore build artifacts
+*.o
+*.d
+*.a
+
+# Ignore test files
+*_test.go
+test/
+
+# Ignore docs
+docs/
+*.md
+!README.md
+
+# Ignore placeholder (large CRIU source copy)
+placeholder/
+
+# Ignore UI build artifacts (but keep source for server build)
+ui/node_modules/
+ui/dist/
+
+# Ignore local config
+*.local
+*.env
+credentials*
+
+# Keep docker/phase2/criu-src/ for CRIU build
+# Keep docker/agent/cuda-checkpoint

@@ -17,6 +17,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "admin-issuer-proxy.fullname" . }}
+  namespace: {{ include "admin-issuer-proxy.namespace" . }}
   labels:
     {{- include "admin-issuer-proxy.labels" . | nindent 4 }}
 spec:
@@ -94,4 +95,3 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-

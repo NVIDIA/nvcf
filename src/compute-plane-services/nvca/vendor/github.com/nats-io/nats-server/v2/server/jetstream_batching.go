@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"math/big"
 	"path/filepath"
@@ -47,8 +48,8 @@ type batchGroup struct {
 }
 
 // Lock should be held.
-func (batches *batching) newBatchGroup(mset *stream, batchId string) (*batchGroup, error) {
-	store, err := newBatchStore(mset, batchId)
+func (batches *batching) newBatchGroup(mset *stream, batchId string, replicas int, storage StorageType, storeDir, streamName string) (*batchGroup, error) {
+	store, err := newBatchStore(mset, batchId, replicas, storage, storeDir, streamName)
 	if err != nil {
 		return nil, err
 	}
@@ -66,26 +67,14 @@ func (batches *batching) newBatchGroup(mset *stream, batchId string) (*batchGrou
 	return b, nil
 }
 
-func getBatchStoreDir(mset *stream, batchId string) (string, string) {
-	mset.mu.RLock()
-	jsa, name := mset.jsa, mset.cfg.Name
-	mset.mu.RUnlock()
-
-	jsa.mu.RLock()
-	sd := jsa.storeDir
-	jsa.mu.RUnlock()
-
+func getBatchStoreDir(storeDir, streamName, batchId string) (string, string) {
 	bname := getHash(batchId)
-	return bname, filepath.Join(sd, streamsDir, name, batchesDir, bname)
+	return bname, filepath.Join(storeDir, streamsDir, streamName, batchesDir, bname)
 }
 
-func newBatchStore(mset *stream, batchId string) (StreamStore, error) {
-	mset.mu.RLock()
-	replicas, storage := mset.cfg.Replicas, mset.cfg.Storage
-	mset.mu.RUnlock()
-
+func newBatchStore(mset *stream, batchId string, replicas int, storage StorageType, storeDir, streamName string) (StreamStore, error) {
 	if replicas == 1 && storage == FileStorage {
-		bname, storeDir := getBatchStoreDir(mset, batchId)
+		bname, storeDir := getBatchStoreDir(storeDir, streamName, batchId)
 		fcfg := FileStoreConfig{AsyncFlush: true, BlockSize: defaultLargeBlockSize, StoreDir: storeDir}
 		s := mset.srv
 		prf := s.jsKeyGen(s.getOpts().JetStreamKey, mset.acc.Name)
@@ -139,12 +128,25 @@ type batchStagedDiff struct {
 	msgIds             map[string]struct{}
 	counter            map[string]*msgCounterRunningTotal
 	inflight           map[string]*inflightSubjectRunningTotal
+	inflightTransform  map[uint64]string
 	expectedPerSubject map[string]*batchExpectedPerSubject
 }
 
 type batchExpectedPerSubject struct {
 	sseq  uint64 // Stream sequence.
 	clseq uint64 // Clustered proposal sequence.
+}
+
+// copyCounterSources returns a deep copy of the given counter sources.
+func copyCounterSources(src CounterSources) CounterSources {
+	if src == nil {
+		return nil
+	}
+	dst := make(CounterSources, len(src))
+	for stream, subjects := range src {
+		dst[stream] = maps.Clone(subjects)
+	}
+	return dst
 }
 
 func (diff *batchStagedDiff) commit(mset *stream) {
@@ -180,6 +182,16 @@ func (diff *batchStagedDiff) commit(mset *stream) {
 			} else {
 				mset.inflight[subj] = i
 			}
+		}
+	}
+
+	// Track inflight subject transforms.
+	if len(diff.inflightTransform) > 0 {
+		if mset.inflightTransform == nil {
+			mset.inflightTransform = make(map[uint64]string, len(diff.inflightTransform))
+		}
+		for clseq, subj := range diff.inflightTransform {
+			mset.inflightTransform[clseq] = subj
 		}
 	}
 
@@ -241,7 +253,7 @@ func (batch *batchApply) rejectBatchState(mset *stream) {
 // mset.mu lock must NOT be held or used.
 // mset.clMu lock must be held.
 func checkMsgHeadersPreClusteredProposal(
-	diff *batchStagedDiff, mset *stream, subject string, hdr []byte, msg []byte, sourced bool, name string,
+	diff *batchStagedDiff, mset *stream, subject, rsubject string, hdr []byte, msg []byte, sourced bool, name string,
 	jsa *jsAccount, allowRollup, denyPurge, allowTTL, allowMsgCounter, allowMsgSchedules bool,
 	discard DiscardPolicy, discardNewPer bool, maxMsgSize int, maxMsgs int64, maxMsgsPer int64, maxBytes int64,
 ) ([]byte, []byte, uint64, *ApiError, error) {
@@ -252,7 +264,7 @@ func checkMsgHeadersPreClusteredProposal(
 		// Since we encode header len as u16 make sure we do not exceed.
 		// Again this works if it goes through but better to be pre-emptive.
 		if len(hdr) > math.MaxUint16 {
-			err := fmt.Errorf("JetStream header size exceeds limits for '%s > %s'", jsa.acc().Name, mset.cfg.Name)
+			err := fmt.Errorf("JetStream header size exceeds limits for '%s > %s'", jsa.acc().Name, name)
 			return hdr, msg, 0, NewJSStreamHeaderExceedsMaximumError(), err
 		}
 		// Counter increments.
@@ -345,9 +357,9 @@ func checkMsgHeadersPreClusteredProposal(
 			initial = *counter.total
 			sources = counter.sources
 		} else if counter, ok = mset.clusteredCounterTotal[subject]; ok {
-			initial = *counter.total
-			sources = counter.sources
 			// Make an explicit copy to separate the staged data from what's committed.
+			initial.Set(counter.total)
+			sources = copyCounterSources(counter.sources)
 			// Don't need to initialize all values, they'll be overwritten later.
 			counter = &msgCounterRunningTotal{ops: counter.ops}
 		} else {
@@ -558,6 +570,12 @@ func checkMsgHeadersPreClusteredProposal(
 				}
 			}
 		}
+		if scheduleNext := sliceHeader(JSScheduleNext, hdr); len(scheduleNext) > 0 {
+			if bytesToString(scheduleNext) == JSScheduleNextPurge && !allowMsgSchedules {
+				apiErr := NewJSMessageSchedulesDisabledError()
+				return hdr, msg, 0, apiErr, apiErr
+			}
+		}
 
 		// Check for any rollups.
 		if rollup := getRollup(hdr); rollup != _EMPTY_ {
@@ -610,45 +628,63 @@ func checkMsgHeadersPreClusteredProposal(
 		diff.inflight[subject] = i
 	}
 
+	// Subject transform.
+	if subject != rsubject {
+		// The 'subject' is a transformed subject used for consistency checks.
+		// But since we propose the original (raw) subject to our peers, we need
+		// to store the transformed subject separately for when we apply.
+		// TODO(mvv): since subject transforms are handled by each replica individually, this has a
+		//  potential for desync given out-of-order stream subject transform updates.
+		if diff.inflightTransform == nil {
+			diff.inflightTransform = make(map[uint64]string, 1)
+		}
+		diff.inflightTransform[mset.clseq] = subject
+	}
+
 	// Check if we have discard new with max msgs or bytes.
 	// We need to deny here otherwise we'd need to bump CLFS, and it could succeed on some
 	// peers and not others depending on consumer ack state (if interest policy).
 	// So we deny here, if we allow that means we know it would succeed on every peer.
-	if discard == DiscardNew && (maxMsgs > 0 || maxBytes > 0) {
-		// Error if over DiscardNew per subject threshold.
-		if discardNewPer {
-			totalMsgsForSubject := i.ops
-			if i, ok = mset.inflight[subject]; ok {
-				totalMsgsForSubject += i.ops
+	if discard == DiscardNew {
+		if maxMsgs > 0 || maxBytes > 0 {
+			// Track usual max msgs/bytes thresholds for DiscardNew.
+			var state StreamState
+			mset.store.FastState(&state)
+
+			totalMsgs := state.Msgs
+			totalBytes := state.Bytes
+			for _, i = range mset.inflight {
+				totalMsgs += i.ops
+				totalBytes += i.bytes
 			}
-			if maxMsgsPer > 0 && totalMsgsForSubject > uint64(maxMsgsPer) {
-				err = ErrMaxMsgsPerSubject
+			for _, i = range diff.inflight {
+				totalMsgs += i.ops
+				totalBytes += i.bytes
+			}
+
+			if maxMsgs > 0 && totalMsgs > uint64(maxMsgs) {
+				err = ErrMaxMsgs
+			} else if maxBytes > 0 && totalBytes > uint64(maxBytes) {
+				err = ErrMaxBytes
+			}
+			if err != nil {
 				return hdr, msg, 0, NewJSStreamStoreFailedError(err, Unless(err)), err
 			}
 		}
 
-		// Track usual max msgs/bytes thresholds for DiscardNew.
-		var state StreamState
-		mset.store.FastState(&state)
-
-		totalMsgs := state.Msgs
-		totalBytes := state.Bytes
-		for _, i = range mset.inflight {
-			totalMsgs += i.ops
-			totalBytes += i.bytes
-		}
-		for _, i = range diff.inflight {
-			totalMsgs += i.ops
-			totalBytes += i.bytes
-		}
-
-		if maxMsgs > 0 && totalMsgs > uint64(maxMsgs) {
-			err = ErrMaxMsgs
-		} else if maxBytes > 0 && totalBytes > uint64(maxBytes) {
-			err = ErrMaxBytes
-		}
-		if err != nil {
-			return hdr, msg, 0, NewJSStreamStoreFailedError(err, Unless(err)), err
+		// Similarly, check DiscardNew per-subject threshold to not need to bump CLFS.
+		if discardNewPer && maxMsgsPer > 0 {
+			// Get the current total for this subject.
+			totalMsgsForSubject := mset.store.SubjectsTotals(subject)[subject]
+			// Add inflight count in this batch and for this stream.
+			totalMsgsForSubject += i.ops
+			if i, ok = mset.inflight[subject]; ok {
+				totalMsgsForSubject += i.ops
+			}
+			if totalMsgsForSubject > uint64(maxMsgsPer) {
+				err = ErrMaxMsgsPerSubject
+				return hdr, msg, 0, NewJSStreamStoreFailedError(err, Unless(err)), err
+			}
 		}
 	}
 

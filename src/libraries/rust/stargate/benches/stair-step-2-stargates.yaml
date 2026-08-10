@@ -1,0 +1,79 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: stair-step-2-stargates
+metadata:
+  description: Two-stargate service-load-balanced run with gradually increasing request rate.
+  tags: [multi-stargate, ramp, cache, pulsar]
+  expected_runtime: medium
+  expected_signal: Service path should remain routable while load ramps across two stargate pods.
+model: dummy-model
+seed: 404
+request_count: 100
+max_concurrency: 40
+
+stargates:
+  count: 2
+
+backends:
+  count: 6
+  profile:
+    name: ramp-target
+    weight: 1.0
+    max_concurrent_requests: 4
+    kv_cache_capacity_tokens: 120000
+    service_time_ms:
+      ttft_mean: 160
+      ttft_jitter_ms: 25
+      decode_jitter_ms: 4
+      prefill_tokens_per_s: 4500
+      decode_tokens_per_s: 95
+    registration:
+      last_mean_input_tps: 130
+
+traffic_pattern:
+  kind: stair_step
+  routing_keys: 0
+  cache_affinity_keys: 100
+  input_tokens:
+    distribution: lognormal
+    mean: 1100
+    sigma: 0.55
+    p99_cap: 6000
+  output_tokens:
+    distribution: lognormal
+    mean: 180
+    sigma: 0.5
+    p99_cap: 1024
+  start_rps: 4
+  step_rps: 4
+  step_requests: 20
+
+algorithms:
+  - name: power-of-two
+    config:
+      default: power-of-two
+  - name: round-robin
+    config:
+      default: round-robin
+  - name: pulsar
+    config:
+      default: power-of-two
+      models:
+        dummy-model:
+          algorithm: pulsar
+          seed: stair-step-v1
+          require_cache_affinity_key: true
+          require_input_tokens: true

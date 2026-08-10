@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "leaderelection",
+    srcs = [
+        "doc.go",
+        "leader_election.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/leaderelection",
+    importpath = "sigs.k8s.io/controller-runtime/pkg/leaderelection",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/uuid",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/typed/coordination/v1:coordination",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/typed/core/v1:core",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/rest",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/leaderelection/resourcelock",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/recorder",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":leaderelection",
+    visibility = ["//visibility:public"],
+)

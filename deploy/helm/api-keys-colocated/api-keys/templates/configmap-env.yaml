@@ -33,6 +33,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ include "nv_api_keys.fullname" . }}-env
+  namespace: {{ include "nv_api_keys.namespace" . }}
   labels:
     {{- include "nv_api_keys.labels" . | nindent 4 }}
 data:

@@ -1,0 +1,87 @@
+---
+# Source: helm-nvca-operator/templates/agent-config-merge-cm.yaml
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-config-merge
+  namespace: nvca-operator
+  labels:
+    helm.sh/chart: helm-nvca-operator-1.14.0
+    app.kubernetes.io/name: nvca-operator
+    app.kubernetes.io/instance: nvca-operator
+    app.kubernetes.io/version: "3.0.4"
+    app.kubernetes.io/managed-by: Helm
+data:
+  config.yaml:  |2
+  
+    cluster:
+      validationPolicy:
+        allowedExtraKubernetesTypes:
+          - group: foo.com
+            kind: FooType
+            resource: footypes
+            version: v1
+          - group: scheduling.run.ai
+            kind: PodGroup
+            resource: podgroups
+            version: v2alpha2
+          - group: grove.io
+            kind: PodCliqueSet
+            resource: podcliquesets
+            version: v1alpha1
+          - group: grove.io
+            kind: PodClique
+            resource: podcliques
+            version: v1alpha1
+          - group: grove.io
+            kind: PodCliqueScalingGroup
+            resource: podcliquescalinggroups
+            version: v1alpha1
+          - group: scheduler.grove.io
+            kind: PodGang
+            resource: podgangs
+            version: v1alpha1
+          - group: nvidia.com
+            kind: DynamoCheckpoint
+            resource: dynamocheckpoints
+            version: v1alpha1
+          - group: nvidia.com
+            kind: DynamoComponentDeployment
+            resource: dynamocomponentdeployments
+            version: v1alpha1
+          - group: nvidia.com
+            kind: DynamoGraphDeployment
+            resource: dynamographdeployments
+            version: v1alpha1
+          - group: nvidia.com
+            kind: DynamoGraphDeploymentRequest
+            resource: dynamographdeploymentrequests
+            version: v1alpha1
+          - group: nvidia.com
+            kind: DynamoGraphDeploymentScalingAdapter
+            resource: dynamographdeploymentscalingadapters
+            version: v1alpha1
+          - group: nvidia.com
+            kind: DynamoModel
+            resource: dynamomodels
+            version: v1alpha1
+          - group: nvidia.com
+            kind: DynamoWorkerMetadata
+            resource: dynamoworkermetadatas
+            version: v1alpha1
+        name: Unrestricted

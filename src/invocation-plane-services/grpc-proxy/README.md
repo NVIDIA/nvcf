@@ -18,6 +18,38 @@ limitations under the License.
 
 A proxy service that facilitates communication between clients and NVIDIA Cloud Functions (NVCF) workers. This service handles HTTP/3 CONNECT endpoints, HTTP/1 CONNECT endpoints, and HTTP/1-2 forwarding for GRPC requests.
 
+## Build with Bazel
+
+Bazel is the canonical build path. The legacy Dockerfile + `go build`
+flow stays available for dev iteration outside Bazel.
+
+```shell
+# Build everything Bazel knows about.
+bazel build //...
+
+# Run all tests with auto-retry on timing-sensitive failures.
+bazel test //... --flaky_test_attempts=3
+
+# Build the multi-arch OCI image index (linux/amd64 + linux/arm64).
+bazel build //:image_index
+
+# Push to the internal NGC registries (kaze / nv-ngc-devops / ncp-dev).
+# Targets live under //nvidia-internal:image_push_<destination> per the
+# catalog in nvidia-internal/destinations.bzl.
+bazel run //nvidia-internal:image_push_kaze
+bazel run //nvidia-internal:image_push_devops
+bazel run //nvidia-internal:image_push_ncp_dev
+
+# Regenerate per-package BUILD files after Go source changes.
+bazel run //:gazelle
+
+# Refresh module graph after go.mod changes.
+bazel mod tidy
+```
+
+The image is published from CI on the default branch. Local pushes
+need an `nvcr.io` docker login in the active `DOCKER_CONFIG`.
+
 ## Overview
 
 The NVCF GRPC Proxy runs the following endpoints:
@@ -368,7 +400,61 @@ def test_worker_http():
 
 ### Prerequisites
 
-- Go 1.24 or higher
+- Bazel 8.6.0 via Bazelisk (Bazel is the only build path; see "Building with Bazel" below)
+- Go 1.25 is downloaded hermetically by Bazel; no system Go is required.
+
+### Building with Bazel
+
+This repo carries the same Bazel toolchain conventions as the NVCF
+monorepo. The root setup script drops Bazelisk into `~/.local/bin`
+and prints exactly what to install for Go + OCI + cross-compile
+toolchains; reuse it instead of duplicating the setup here:
+
+```bash
+# From this service checkout inside the monorepo:
+../../../setup.sh
+
+# Pinned Bazel version is read from this repo's .bazelversion (8.6.0).
+bazel version
+```
+
+Day-to-day commands:
+
+```bash
+# Build the grpc-proxy binary.
+bazel build //...
+
+# Run all tests. Tests tagged `requires-docker` (proxy/geo:geo_test
+# spins up testcontainers + localstack) need a reachable Docker
+# daemon; either run on a host with Docker installed or skip them
+# with --test_tag_filters=-requires-docker.
+bazel test //...
+
+# Just the proxy binary.
+bazel build //:nvcf-grpc-proxy
+./bazel-bin/nvcf-grpc-proxy_/nvcf-grpc-proxy --help
+
+# Build the multi-arch OCI image index (amd64 + arm64), matching the
+# image the CI publishes to nvcr.io/nv-ngc-devops/nvcf-grpc-proxy.
+bazel build //:image_index
+
+# Push the image to the registry. Requires nvcr.io credentials in
+# ~/.docker/config.json (`docker login nvcr.io -u \$oauthtoken ...`).
+bazel run --stamp //nvidia-internal:image_push_kaze
+
+# Regenerate BUILD files after adding a Go file or import.
+bazel run //:gazelle
+
+# Refresh use_repo entries when go.mod changes.
+bazel mod tidy
+```
+
+CI runs the Bazel lane as the single source of truth for build, test,
+and image publication. The included `nvcf-golang-ci-pipeline.yml`
+template's Go-build / Go-test / docker-build / docker-push jobs are
+explicitly disabled in `.gitlab-ci.yml`. See the rollout tracker at
+[docs/dev/bazel-rollout.md](../../../docs/dev/bazel-rollout.md) for
+the broader Phase B context.
 
 ### Environment Setup
 
@@ -379,6 +465,7 @@ Configuration is primarily handled through environment variables or command-line
 - `NVCF_FQDN_GRPC`: FQDN for the NVCF API
 - `ENABLE_HTTP1_CONNECT`: Enable HTTP/1 CONNECT endpoints
 - `ENABLE_HTTP3_CONNECT`: Enable HTTP/3 CONNECT endpoints
+- `SELF_WORKER_FQDN`: Optional worker callback endpoint advertised for CONNECT traffic
 
 See the `Config` struct in the code for a complete list of configuration options.
 

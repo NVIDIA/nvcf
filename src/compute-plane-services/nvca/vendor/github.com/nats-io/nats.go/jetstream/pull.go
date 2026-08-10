@@ -197,13 +197,6 @@ const (
 	unset                    = -1
 )
 
-func min(x, y int) int {
-	if x < y {
-		return x
-	}
-	return y
-}
-
 // Consume can be used to continuously receive messages and handle them
 // with the provided callback function. Consume cannot be used concurrently
 // when using ordered consumer.
@@ -261,14 +254,6 @@ func (p *pullConsumer) Consume(handler MessageHandler, opts ...PullConsumeOpt) (
 			}
 			return
 		}
-		defer func() {
-			sub.Lock()
-			sub.checkPending()
-			if sub.hbMonitor != nil {
-				sub.hbMonitor.Reset(2 * consumeOpts.Heartbeat)
-			}
-			sub.Unlock()
-		}()
 		if !userMsg {
 			// heartbeat message
 			if msgErr == nil {
@@ -276,15 +261,24 @@ func (p *pullConsumer) Consume(handler MessageHandler, opts ...PullConsumeOpt) (
 			}
 
 			sub.Lock()
-			err := sub.handleStatusMsg(msg, msgErr)
+			termErr, notifyErr := sub.handleStatusMsg(msg, msgErr)
+			if termErr == nil {
+				sub.checkPending()
+				if sub.hbMonitor != nil {
+					sub.hbMonitor.Reset(2 * consumeOpts.Heartbeat)
+				}
+			}
 			sub.Unlock()
 
-			if err != nil {
+			if sub.consumeOpts.ErrHandler != nil && notifyErr != nil {
+				sub.consumeOpts.ErrHandler(sub, notifyErr)
+			}
+			if termErr != nil {
 				if sub.closed.Load() == 1 {
 					return
 				}
 				if sub.consumeOpts.ErrHandler != nil {
-					sub.consumeOpts.ErrHandler(sub, err)
+					sub.consumeOpts.ErrHandler(sub, termErr)
 				}
 				sub.Stop()
 			}
@@ -297,6 +291,10 @@ func (p *pullConsumer) Consume(handler MessageHandler, opts ...PullConsumeOpt) (
 		sub.Lock()
 		sub.decrementPendingMsgs(msg)
 		sub.incrementDeliveredMsgs()
+		sub.checkPending()
+		if sub.hbMonitor != nil {
+			sub.hbMonitor.Reset(2 * consumeOpts.Heartbeat)
+		}
 		sub.Unlock()
 
 		if sub.consumeOpts.StopAfter > 0 && sub.consumeOpts.StopAfter == sub.delivered {
@@ -391,9 +389,6 @@ func (p *pullConsumer) Consume(handler MessageHandler, opts ...PullConsumeOpt) (
 				}
 			case err := <-sub.errs:
 				sub.Lock()
-				if sub.consumeOpts.ErrHandler != nil {
-					sub.consumeOpts.ErrHandler(sub, err)
-				}
 				if errors.Is(err, ErrNoHeartbeat) {
 					batchSize := sub.consumeOpts.MaxMessages
 					if sub.consumeOpts.StopAfter > 0 {
@@ -416,6 +411,9 @@ func (p *pullConsumer) Consume(handler MessageHandler, opts ...PullConsumeOpt) (
 					sub.resetPendingMsgs()
 				}
 				sub.Unlock()
+				if sub.consumeOpts.ErrHandler != nil {
+					sub.consumeOpts.ErrHandler(sub, err)
+				}
 				if errors.Is(err, ErrConnectionClosed) {
 					sub.Stop()
 				}
@@ -667,9 +665,9 @@ func (s *pullSubscription) Next(opts ...NextOpt) (Msg, error) {
 				if msgErr == nil {
 					continue
 				}
-				if err := s.handleStatusMsg(msg, msgErr); err != nil {
+				if termErr, _ := s.handleStatusMsg(msg, msgErr); termErr != nil {
 					s.Stop()
-					return nil, err
+					return nil, termErr
 				}
 				continue
 			}
@@ -718,28 +716,29 @@ func (s *pullSubscription) Next(opts ...NextOpt) (Msg, error) {
 	}
 }
 
-func (s *pullSubscription) handleStatusMsg(msg *nats.Msg, msgErr error) error {
+// handleStatusMsg processes a status message from the server.
+// It returns a terminal error (caller should stop) and a non-terminal
+// error to notify the user about via ErrHandler. The caller should invoke
+// ErrHandler outside the lock to avoid deadlocks.
+func (s *pullSubscription) handleStatusMsg(msg *nats.Msg, msgErr error) (error, error) {
 	if !errors.Is(msgErr, nats.ErrTimeout) && !errors.Is(msgErr, ErrMaxBytesExceeded) && !errors.Is(msgErr, ErrBatchCompleted) {
 		if errors.Is(msgErr, ErrConsumerDeleted) || errors.Is(msgErr, ErrBadRequest) {
-			return msgErr
+			return msgErr, nil
 		}
 		if errors.Is(msgErr, ErrPinIDMismatch) {
 			s.consumer.setPinID("")
 			s.pending.msgCount = 0
 			s.pending.byteCount = 0
 		}
-		if s.consumeOpts.ErrHandler != nil {
-			s.consumeOpts.ErrHandler(s, msgErr)
-		}
 		if errors.Is(msgErr, ErrConsumerLeadershipChanged) {
 			s.pending.msgCount = 0
 			s.pending.byteCount = 0
 		}
-		return nil
+		return nil, msgErr
 	}
 	msgsLeft, bytesLeft, err := parsePending(msg)
 	if err != nil {
-		return err
+		return err, nil
 	}
 	s.pending.msgCount -= msgsLeft
 	if s.pending.msgCount < 0 {
@@ -751,7 +750,7 @@ func (s *pullSubscription) handleStatusMsg(msg *nats.Msg, msgErr error) error {
 			s.pending.byteCount = 0
 		}
 	}
-	return nil
+	return nil, nil
 }
 
 func (hb *hbMonitor) Stop() {
@@ -1087,6 +1086,10 @@ func (s *pullSubscription) cleanup() {
 	// are read only (Only written on creation of pullSubscription).
 	if s.subscription == nil || !s.subscription.IsValid() {
 		return
+	}
+	if s.consumer != nil {
+		nc := s.consumer.js.conn
+		nc.RemoveStatusListener(s.connStatusChanged)
 	}
 	if s.hbMonitor != nil {
 		s.hbMonitor.Stop()

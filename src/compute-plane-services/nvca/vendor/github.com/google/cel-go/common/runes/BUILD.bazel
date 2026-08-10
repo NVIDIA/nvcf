@@ -1,25 +1,15 @@
-load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
-
-package(
-    default_visibility = ["//visibility:public"],
-    licenses = ["notice"],  # Apache 2.0
-)
+load("@rules_go//go:def.bzl", "go_library")
 
 go_library(
-    name = "go_default_library",
-    srcs = [
-        "buffer.go",
-    ],
+    name = "runes",
+    srcs = ["buffer.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/runes",
     importpath = "github.com/google/cel-go/common/runes",
+    visibility = ["//visibility:public"],
 )
 
-go_test(
-    name = "go_default_test",
-    size = "small",
-    srcs = [
-        "buffer_test.go",
-    ],
-    embed = [
-        ":go_default_library",
-    ],
+alias(
+    name = "go_default_library",
+    actual = ":runes",
+    visibility = ["//visibility:public"],
 )

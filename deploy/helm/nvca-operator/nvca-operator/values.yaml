@@ -12,14 +12,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 ## @section NVCA Operator parameters
+
 ## @param image.repository NVCA Operator container registry path, without tag
 ## @param image.tag NVCA Operator container image tag. This defaults to the chart version
 ## @param image.pullPolicy K8s ImagePullPolicy
 image:
   repository: ""
-  tag: "3.0.0-rc.13"
+  tag: "3.0.4"
   pullPolicy: IfNotPresent
 ## @param nvcaImage.repositoryOverride (Optional) Full NVCA container registry path, without tag. Only set this if the default needs to be overridden, for example "stg.nvcr.io/nvidia/nvcf-byoc/nvca". The tag is set in the cluster config
 ## @param nvcaImage.pullPolicy K8s ImagePullPolicy
@@ -100,6 +100,46 @@ agentConfig:
   # mergeConfig: |
   #   agent:
   #     logLevel: debug
+  #
+  # BYOO metric subset example:
+  #
+  # mergeConfig: |
+  #   agent:
+  #     byooMetricSubset:
+  #       enabled: true
+  #       filterConfig: |
+  #         error_mode: ignore
+  #         metric_conditions:
+  #           - 'metric.name != "BpsInstrument"'
+  #     byooWorkloadMetrics:
+  #       dropLabels:
+  #         - metric_subset_enabled
+  #         - custom_label
+  #     byooOtelCollector:
+  #       logSampling:
+  #         samplingPercentage: 10
+  #         mode: hash_seed
+  #         hashSeed: 1234
+  #         failClosed: true
+  #       traceSampling:
+  #         samplingPercentage: 1
+  #         mode: hash_seed
+  #         hashSeed: 1234
+  #         failClosed: true
+## @section Workload transport trust configuration
+## @param operatorConfig.workload.transportTLS.trustBundle.secretKeyRef.name Secret containing the workload transport trust bundle. Empty disables Secret-backed transport trust. Example: nvcf-trust.
+## @param operatorConfig.workload.transportTLS.trustBundle.secretKeyRef.key Secret data key containing certificate-only PEM.
+## @param operatorConfig.workload.transportTLS.fingerprint Optional sha256 fingerprint pin for the trust bundle. Empty computes the fingerprint from the selected Secret data.
+## @param operatorConfig.workload.transportTLS.installedBundleMountPath Optional llm-worker mount path for the installed transport trust bundle. Empty uses /etc/ssl/certs.
+operatorConfig:
+  workload:
+    transportTLS:
+      trustBundle:
+        secretKeyRef:
+          name: ""
+          key: ca.crt
+      fingerprint: ""
+      installedBundleMountPath: ""
 ## @section resources Resource requests and limits for the nvca-operator container
 ## @param resources.limits.cpu CPU limit for the nvca-operator container
 ## @param resources.limits.memory Memory limit for the nvca-operator container
@@ -123,11 +163,15 @@ resources:
 ## @param agent.secretMirrorNamespace Default namespace to mirror custom secrets for nvcf workloads
 ## @param agent.secretMirrorLabelSelector Label selector on the secrets in the sourceNamespace
 ## @param agent.customAnnotations Map of custom annotations to add to the agent pod
+## @param agent.gpuProfiling.functionIds Comma/space/newline-separated NVCF function IDs (or "*" for all) whose pods NVCA labels for NVIDIA Nsight GPU profiling. Empty disables profiling. The operator creates and mirrors the nvca-gpu-profiling-config ConfigMap from this value at deploy/upgrade time.
+## @param agent.gpuProfiling.labelKey Pod label key NVCA applies to profiled function pods (the label the Nsight Operator watches for). Empty uses the built-in default "nvidia-nsight-profile".
+## @param agent.gpuProfiling.labelValue Pod label value NVCA applies to profiled function pods. Empty uses the built-in default "enabled".
 ## @param agent.workload.tolerations K8s tolerations for NVCA-created workload pods
 ## @param agent.functionEnvOverrides Map of environment variable overrides for function workloads (e.g., {"INIT_CONTAINER": "nvcr.io/custom/init:v1.0", "UTILS_CONTAINER": "nvcr.io/custom/utils:v1.0"})
 ## @param agent.taskEnvOverrides Map of environment variable overrides for task workloads (e.g., {"INIT_CONTAINER": "nvcr.io/custom/init:v1.0", "ESS_AGENT_CONTAINER": "nvcr.io/custom/ess:v1.0"})
 ## @param agent.overrideEnvironmentVariables Map of environment variables to override on the NVCA agent container. These take precedence over default values. Example: {"LOG_LEVEL": "debug", "CUSTOM_FLAG": "enabled"}
 ## @param agent.tolerations K8s tolerations for the NVCA agent pod
+## @param agent.llm.requestRouterAddress Default LLM request-router worker address rendered as STARGATE_ADDRESS for LLM workers
 ## @param agent.serviceOAuth OAuth token and JWKS endpoints used by dependent services
 agent:
   cacheMountOptionsEnabled: true
@@ -136,7 +180,16 @@ agent:
   secretMirrorNamespace: nvca-operator
   secretMirrorLabelSelector: ""
   customAnnotations: {}
+  ## GPU (Nsight) profiling opt-in: NVCF function IDs to profile ("*" = all) and an optional
+  ## label override (defaults to nvidia-nsight-profile=enabled). Drives the
+  ## nvca-gpu-profiling-config ConfigMap the operator mirrors into the agent namespace.
+  gpuProfiling:
+    functionIds: ""
+    labelKey: ""
+    labelValue: ""
   tolerations: []
+  llm:
+    requestRouterAddress: ""
   workload:
     tolerations: []
   ## Environment variable overrides for function workloads.
@@ -147,7 +200,8 @@ agent:
   ##     INIT_CONTAINER: "nvcr.io/qtfpt1h0bieu/nvcf-core/nvcf_worker_init:2.97.2"
   ##     UTILS_CONTAINER: "nvcr.io/qtfpt1h0bieu/nvcf-core/nvcf_worker_utils:2.94.0"
   ##     ESS_AGENT_CONTAINER: "nvcr.io/qtfpt1h0bieu/nvcf-core/ess-agent:1.0.5"
-  functionEnvOverrides: {}
+  functionEnvOverrides:
+    BYOO_OTEL_COLLECTOR_CONTAINER: nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector:0.157.11
   ## Environment variable overrides for task workloads.
   ## Available keys: INIT_CONTAINER, UTILS_CONTAINER, OTEL_CONTAINER, BYOO_OTEL_COLLECTOR_CONTAINER,
   ##                 ESS_AGENT_CONTAINER, TASK_CONTAINER
@@ -155,7 +209,8 @@ agent:
   ##   taskEnvOverrides:
   ##     INIT_CONTAINER: "nvcr.io/qtfpt1h0bieu/nvcf-core/nvcf_worker_init:2.97.2"
   ##     UTILS_CONTAINER: "nvcr.io/qtfpt1h0bieu/nvcf-core/nvcf_worker_utils:2.94.0"
-  taskEnvOverrides: {}
+  taskEnvOverrides:
+    BYOO_OTEL_COLLECTOR_CONTAINER: nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector:0.157.11
   overrideEnvironmentVariables: {}
   serviceOAuth:
     helmReVal:
@@ -166,13 +221,6 @@ agent:
         tokenURL: ""
         publicKeysetEndpoint: ""
     functionDeploymentStages:
-      stage:
-        tokenURL: ""
-        publicKeysetEndpoint: ""
-      prod:
-        tokenURL: ""
-        publicKeysetEndpoint: ""
-    rolloverService:
       stage:
         tokenURL: ""
         publicKeysetEndpoint: ""
@@ -207,15 +255,16 @@ webhook:
 ## @param ngcConfig.serviceKeySecretKeyName Key in the secret ngcConfig.serviceKeySecretName containing the NGC ServiceKey (password).
 ## @param ngcConfig.apiURL NGC API URL for requesting auth tokens
 ## @param ngcConfig.clusterSource Source of the cluster configuration:
-##     - "helm-managed": Cluster configuration managed by the helm chart
-##     - "ngc-managed": Cluster configuration managed by NGC
+##     - "ngc-managed": Cluster configuration managed by NGC (default)
+##     - "helm-managed": Cluster configuration managed by the Helm chart
+##     - "self-managed": Cluster configuration managed by the self-hosted compute plane
 ngcConfig:
   username: '$oauthtoken'
   serviceKey: "dummy-api-key"
   serviceKeySecretName: "ngc-service-key"
   serviceKeySecretKeyName: "ngcServiceKey"
   apiURL: https://api.ngc.nvidia.com
-  clusterSource: self-managed
+  clusterSource: ngc-managed
 ## @section Vault Configuration
 ## @param vaultConfig.oAuthClientMountPathTemplate Template for constructing the OAuth client mount path in Vault. Use %s as placeholder for clientID. Example: "nvidia/services/oauth/clients/%s/kv/secret"
 ## @param vaultConfig.oAuthClientMountPath (Optional) Full OAuth client mount path. If set, overrides the computed path from template.
@@ -252,7 +301,7 @@ helmManaged:
   ## @param helmManaged.imageCredHelper.imageTag (REQUIRED) Image tag of "nvcf-image-credential-helper". Only override this if you know what you are doing.
   imageCredHelper:
     imageRepository: ""
-    imageTag: 0.5.1
+    imageTag: 0.10.2
   ## @param helmManaged.otelCollector.enabled Enable OTel collector sidecar for helm-managed clusters
   ## @param helmManaged.otelCollector.imageRepository (OPTIONAL) Image repository of "otel-collector". Only override this if you know what you are doing. If not specified, it will be calculated based on image.repository.
   ## @param helmManaged.otelCollector.imageTag (REQUIRED) Image tag of "otel-collector". Only override this if you know what you are doing.
@@ -265,7 +314,7 @@ helmManaged:
 ## All values below are under the 'selfManaged:' key, e.g. 'selfManaged.nvcaVersion'
 selfManaged:
   ## @param selfManaged.nvcaVersion (REQUIRED) Version of the NVCFBackend to use
-  nvcaVersion: "3.0.0-rc.13"
+  nvcaVersion: "3.0.4"
   ## @param selfManaged.featureGateValues (Optional) List of feature gates to enable. Defaults to ["DynamicGPUDiscovery"] if not specified.
   featureGateValues: ["DynamicGPUDiscovery"]
   ## @param selfManaged.gpuManualInstanceConfigB64 (Optional) Base64 encoded GPU manual instance configuration. Leave blank if not required.
@@ -276,7 +325,7 @@ selfManaged:
   ## @param selfManaged.imageCredHelper.imageTag (REQUIRED) Image tag of "nvcf-image-credential-helper". Only override this if you know what you are doing.
   imageCredHelper:
     imageRepository: ""
-    imageTag: 0.5.1
+    imageTag: 0.10.2
   ## @param selfManaged.otelCollector.enabled Enable OTel collector sidecar for self-managed clusters
   ## @param selfManaged.otelCollector.imageRepository (OPTIONAL) Image repository of "otel-collector". Only override this if you know what you are doing. If not specified, it will be calculated based on image.repository.
   ## @param selfManaged.otelCollector.imageTag (REQUIRED) Image tag of "otel-collector". Only override this if you know what you are doing.
@@ -286,10 +335,16 @@ selfManaged:
     imageTag: 0.143.2
   ## @param selfManaged.icmsServiceURL URL of the ICMS service for self-managed clusters. Override with the endpoint generated during cluster registration.
   icmsServiceURL: "http://icms.example.invalid:8080"
+  ## @param selfManaged.icmsServiceHostHeaderOverride Optional Host header override for selfManaged.icmsServiceURL.
+  icmsServiceHostHeaderOverride: ""
   ## @param selfManaged.revalServiceURL URL of the ReVal service for self-managed clusters. Override with the endpoint generated during cluster registration.
   revalServiceURL: "http://reval.example.invalid:8080"
+  ## @param selfManaged.revalServiceHostHeaderOverride Optional Host header override for selfManaged.revalServiceURL.
+  revalServiceHostHeaderOverride: ""
   ## @param selfManaged.natsURL URL of the NATS service for self-managed clusters. Override with the endpoint generated during cluster registration.
   natsURL: "nats://nats.example.invalid:4222"
+  ## @param selfManaged.natsHostOverride Optional TLS SNI host override for selfManaged.natsURL when using a tls or wss NATS URL.
+  natsHostOverride: ""
   sharedStorage:
     imageTag: 1.0.5
 ## @section Node Selector Configuration

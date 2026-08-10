@@ -1,0 +1,39 @@
+spring:
+  application:
+    name: test-registries
+    version: 1.0.0
+
+# Minimal registry config for integration test - all maps must be non-null
+test:
+  registries:
+    recognized:
+      container:
+        ngc-private:
+          name: ngc-private
+          hostname: nvcr.io
+          call-timeout: 30s
+          read-timeout: 30s
+          write-timeout: 30s
+          connection-timeout: 10s
+      helm:
+        ngc-private:
+          name: ngc-private
+          hostname: nvcr.io
+          call-timeout: 30s
+          read-timeout: 30s
+          write-timeout: 30s
+          connection-timeout: 10s
+      model:
+        ngc-private:
+          name: ngc-private
+          hostname: api.ngc.nvidia.com
+          oauth2:
+            base-url: https://authn.nvidia.com/token
+            group-scope: org-id
+      resource:
+        ngc-private:
+          name: ngc-private
+          hostname: api.ngc.nvidia.com
+          oauth2:
+            base-url: https://authn.nvidia.com/token
+            group-scope: org-id

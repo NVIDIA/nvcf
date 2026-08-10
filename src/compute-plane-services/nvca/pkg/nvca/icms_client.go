@@ -34,6 +34,7 @@ import (
 	oteltrace "go.opentelemetry.io/otel/trace"
 
 	nvcaauth "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/auth"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/clientmetrics"
 	nvcaotel "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/otel"
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
 	nvcaerrors "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/errors"
@@ -46,6 +47,7 @@ type ICMSClient struct {
 	// endpoint is the base URL of ICMS service, e.g.,
 	// ICMS service endpoint
 	endpoint         string
+	host             string
 	clusterID        string
 	maxResponseBytes int64
 	tokenFetcher     nvcaauth.TokenFetcher
@@ -97,11 +99,24 @@ const (
 	defaultPathSIRsPrefix     = "v1/sirs"
 )
 
-func NewICMSClient(ctx context.Context, clusterID, endpoint string, tokenFetcher nvcaauth.TokenFetcher, tracer oteltrace.Tracer) *ICMSClient {
-	return newICMSClient(ctx, clusterID, strings.TrimSuffix(endpoint, "/"), tokenFetcher, tracer)
+func NewICMSClient(ctx context.Context, clusterID, endpoint string, tokenFetcher nvcaauth.TokenFetcher, tracer oteltrace.Tracer, httpOpts ...cmnhttp.Option) *ICMSClient {
+	return NewICMSClientWithHostHeaderOverride(ctx, clusterID, endpoint, "", tokenFetcher, tracer, httpOpts...)
 }
 
-func newICMSClient(ctx context.Context, clusterID, endpoint string, tokenFetcher nvcaauth.TokenFetcher, tracer oteltrace.Tracer) *ICMSClient {
+// NewICMSClientWithHostHeaderOverride creates an ICMS client with an optional HTTP Host header override.
+// httpOpts are forwarded to the underlying shared HTTP client (for example to add
+// a metrics transport wrapper).
+func NewICMSClientWithHostHeaderOverride(
+	ctx context.Context,
+	clusterID, endpoint, host string,
+	tokenFetcher nvcaauth.TokenFetcher,
+	tracer oteltrace.Tracer,
+	httpOpts ...cmnhttp.Option,
+) *ICMSClient {
+	return newICMSClient(ctx, clusterID, strings.TrimSuffix(endpoint, "/"), host, tokenFetcher, tracer, httpOpts...)
+}
+
+func newICMSClient(ctx context.Context, clusterID, endpoint, host string, tokenFetcher nvcaauth.TokenFetcher, tracer oteltrace.Tracer, httpOpts ...cmnhttp.Option) *ICMSClient {
 	// If the tracer is nil grab the default nvcaotel tracer
 	if tracer == nil {
 		tracer = nvcaotel.NewTracer()
@@ -110,6 +125,7 @@ func newICMSClient(ctx context.Context, clusterID, endpoint string, tokenFetcher
 	return &ICMSClient{
 		clusterID:          clusterID,
 		endpoint:           endpoint,
+		host:               host,
 		maxResponseBytes:   250 * int64(1<<10), // Limit response payload to 250K
 		pathInstanceStatus: icmsPathConfig(envICMSPathInstanceStatus, defaultPathInstanceStatus),
 		pathNVCAPrefix:     icmsPathConfig(envICMSPathNVCAPrefix, defaultPathNVCAPrefix),
@@ -118,16 +134,41 @@ func newICMSClient(ctx context.Context, clusterID, endpoint string, tokenFetcher
 		pathHeartbeat:      strings.TrimPrefix(os.Getenv(envICMSPathHeartbeat), "/"),
 		pathSIRsPrefix:     icmsPathConfig(envICMSPathSIRsPrefix, defaultPathSIRsPrefix),
 		client: cmnhttp.NewRetryableClient(ctx,
-			cmnhttp.WithAppVersionUserAgent(types.AppName),
-			cmnhttp.WithRequestHeader(types.HeaderNVClusterID, clusterID),
-			cmnhttp.WithClientOptions(cmnhttp.ClientOptions{
-				RetryWaitMin: 3 * time.Second,
-				RetryWaitMax: 1 * time.Minute,
-			}),
+			append([]cmnhttp.Option{
+				cmnhttp.WithAppVersionUserAgent(types.AppName),
+				cmnhttp.WithRequestHeader(types.HeaderNVClusterID, clusterID),
+				cmnhttp.WithClientOptions(cmnhttp.ClientOptions{
+					RetryWaitMin: 3 * time.Second,
+					RetryWaitMax: 1 * time.Minute,
+				}),
+			}, httpOpts...)...,
 		),
 		tokenFetcher: tokenFetcher,
 		tracer:       tracer,
 	}
+}
+
+// newRequest builds an ICMS request. urlTemplate is the semconv url.template for
+// this route and is bound to the request's own context, never to the caller's.
+// Binding it to the caller context would leak the ICMS route onto any other
+// instrumented client reached with that context, most notably the OAuth token
+// fetcher, which would then report an ICMS route it never called.
+func (c *ICMSClient) newRequest(
+	ctx context.Context,
+	method, requestURL, urlTemplate string,
+	body io.Reader,
+) (*http.Request, error) {
+	if urlTemplate != "" {
+		ctx = clientmetrics.ContextWithURLTemplate(ctx, urlTemplate)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, requestURL, body)
+	if err != nil {
+		return nil, err
+	}
+	if c.host != "" {
+		req.Host = c.host
+	}
+	return req, nil
 }
 
 // Endpoint returns the ICMS service endpoint URL
@@ -162,6 +203,22 @@ func (c *ICMSClient) nvcaPath(custom, suffix string) string {
 	}
 	return fmt.Sprintf("%s/clusters/%s/%s", c.pathNVCAPrefix, c.clusterID, suffix)
 }
+
+// nvcaTemplate mirrors nvcaPath but substitutes the cluster ID with a stable
+// placeholder, yielding a low-cardinality url.template for client metrics.
+func (c *ICMSClient) nvcaTemplate(custom, suffix string) string {
+	if custom != "" {
+		return fmt.Sprintf(custom, icmsClusterIDPlaceholder)
+	}
+	return fmt.Sprintf("%s/clusters/%s/%s", c.pathNVCAPrefix, icmsClusterIDPlaceholder, suffix)
+}
+
+// Placeholders replace high-cardinality path segments in url.template values.
+const (
+	icmsClusterIDPlaceholder  = "{clusterId}"
+	icmsRequestIDPlaceholder  = "{requestId}"
+	icmsInstanceIDPlaceholder = "{instanceId}"
+)
 
 func (c *ICMSClient) checkResponse(log logrus.FieldLogger, resp *http.Response, respBody []byte) error {
 	if resp.StatusCode == http.StatusOK {
@@ -203,7 +260,10 @@ func (c *ICMSClient) GetICMSServerInstanceStatuses(ctx context.Context) (types.I
 		return types.ICMSInstanceStatusResponse{}, err
 	}
 
-	req, _ := http.NewRequestWithContext(ctx, "GET", requestURL, nil)
+	req, err := c.newRequest(ctx, "GET", requestURL, fmt.Sprintf(c.pathInstanceStatus, icmsClusterIDPlaceholder), nil)
+	if err != nil {
+		return types.ICMSInstanceStatusResponse{}, err
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	if jwt != "" {
@@ -265,7 +325,10 @@ func (c *ICMSClient) Register(ctx context.Context, rreq *types.ICMSRegistrationR
 	}
 
 	body := bytes.NewReader(data)
-	req, _ := http.NewRequestWithContext(ctx, "PUT", requestURL, body)
+	req, err := c.newRequest(ctx, "PUT", requestURL, c.nvcaTemplate(c.pathRegister, "register"), body)
+	if err != nil {
+		return nil, err
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	if jwt != "" {
@@ -316,7 +379,10 @@ func (c *ICMSClient) GetCreds(ctx context.Context) (*types.ICMSCredentialRespons
 		return nil, err
 	}
 
-	req, _ := http.NewRequestWithContext(ctx, "GET", requestURL, nil)
+	req, err := c.newRequest(ctx, "GET", requestURL, c.nvcaTemplate(c.pathCredentials, "credentials"), nil)
+	if err != nil {
+		return nil, err
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	if jwt != "" {
@@ -371,7 +437,10 @@ func (c *ICMSClient) PutHealthStatus(ctx context.Context, hsr *types.HealthStatu
 	}
 
 	body := bytes.NewReader(data)
-	req, _ := http.NewRequestWithContext(ctx, "POST", requestURL, body)
+	req, err := c.newRequest(ctx, "POST", requestURL, c.nvcaTemplate(c.pathHeartbeat, "heartbeat"), body)
+	if err != nil {
+		return nil, err
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	if jwt != "" {
@@ -467,7 +536,10 @@ func (c *ICMSClient) putRequestAcknowledgement(ctx context.Context, requestID st
 	}
 
 	body := bytes.NewReader(data)
-	req, _ := http.NewRequestWithContext(ctx, "PUT", requestURL, body)
+	req, err := c.newRequest(ctx, "PUT", requestURL, fmt.Sprintf("%s/%s", c.pathSIRsPrefix, icmsRequestIDPlaceholder), body)
+	if err != nil {
+		return err
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	if jwt != "" {
@@ -544,7 +616,11 @@ func (c *ICMSClient) PostInstanceStatusUpdate(ctx context.Context, requestID, in
 	}
 
 	body := bytes.NewReader(data)
-	req, _ := http.NewRequestWithContext(ctx, "POST", requestURL, body)
+	req, err := c.newRequest(ctx, "POST", requestURL,
+		fmt.Sprintf("%s/%s/%s", c.pathSIRsPrefix, icmsRequestIDPlaceholder, icmsInstanceIDPlaceholder), body)
+	if err != nil {
+		return err
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	if jwt != "" {

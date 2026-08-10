@@ -69,7 +69,7 @@ cargo run --bin server -- -c settings.toml
 
 ## 1.2. Environment variables
 
-Any setting can be overriden by an environment variable with the same path name.  In this
+Any setting can be overridden by an environment variable with the same path name.  In this
 example,
 ```
 SERVER__TONIC__INITIAL_STREAM_WINDOW_SIZE=1234 cargo run --bin server
@@ -103,7 +103,7 @@ We use the standard `clap` crate to parse the command line.  Thus, you can use t
 decorator to interpret the struct attributes as cli args.  See [docs](https://docs.rs/clap/latest/clap/#macros).
 
 ```
-Any setting can be overriden on the command line by passing it as an override at the end of the command:
+Any setting can be overridden on the command line by passing it as an override at the end of the command:
 ```
 cargo run --bin server -- --port 50002 -c settings.toml -- tonic_settings.request_timeout=100
 ```

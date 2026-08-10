@@ -1,0 +1,27 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "criu",
+    srcs = [
+        "manager.go",
+        "rpc_dump.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/criu",
+    visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
+    deps = [
+        "@com_github_balajinvda_go_criu_v8//:go-criu",
+        "@com_github_balajinvda_go_criu_v8//rpc",
+        "@com_github_sirupsen_logrus//:logrus",
+        "@org_golang_google_protobuf//proto",
+        "@org_golang_x_sys//unix",
+    ],
+)
+
+go_test(
+    name = "criu_test",
+    srcs = [
+        "rpc_dump_json_test.go",
+        "rpc_dump_stream_test.go",
+    ],
+    embed = [":criu"],
+)

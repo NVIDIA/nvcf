@@ -109,8 +109,8 @@ Components that run on GPU nodes to manage function execution, including the NVC
 
 | Type | Component Name | Full Path |
 | --- | --- | --- |
-| Image | nvca | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvca:2.52.0-rc.5` |
-| Image | nvca-operator | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvca-operator:2.52.0-rc.5` |
+| Image | nvca | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvca:2.52.1` |
+| Image | nvca-operator | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvca-operator:2.52.1` |
 | Chart (OCI) | helm-nvca-operator | `nvcr.io/0833294136851237/nvcf-ncp-staging/helm-nvca-operator:1.6.6` |
 | Image | nvcf_worker_utils | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf_worker_utils:2.101.0` |
 | Image | nvcf_worker_init | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf_worker_init:2.102.0` |
@@ -204,7 +204,7 @@ Terraform and Helmfile resources for automated deployment.
 | Type | Component Name | Full Path |
 | --- | --- | --- |
 | Resource | nvcf-base | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-base:0.1.4` |
-| Resource | nvcf-self-managed-stack | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-self-managed-stack:0.5.0` |
+| Resource | nvcf-self-managed-stack | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-self-managed-stack:0.5.1` |
 | Resource | nvcf-cli | `nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-cli:0.0.24` |
 
 ### Component Descriptions

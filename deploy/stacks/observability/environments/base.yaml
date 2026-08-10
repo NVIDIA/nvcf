@@ -1,0 +1,183 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+global:
+  helm:
+    sources:
+      registry: nvcr.io
+      repository: YOUR_ORG/YOUR_TEAM
+
+  imagePullSecrets: []
+
+observability:
+  profile: disabled
+  namespace: monitoring
+
+metricsBackend:
+  type: victoriaMetrics
+  # Used only with mode: existing. The bundled VictoriaMetrics endpoints are
+  # derived automatically when the selected profile installs the backend.
+  remoteWriteEndpoint: ""
+  promqlEndpoint: ""
+  authentication:
+    # Autoscaler PromQL authentication. Supported modes are none, token, and
+    # mtls. The bundled VictoriaMetrics backend always resolves to none.
+    mode: none
+    authnEndpoint: ""
+    clientCertificatePath: ""
+    clientPrivateKeyPath: ""
+
+prometheusOperatorCrds:
+  version: "30.0.0"
+  values:
+    crds:
+      alertmanagerconfigs:
+        enabled: false
+      alertmanagers:
+        enabled: false
+      podmonitors:
+        enabled: true
+      probes:
+        enabled: false
+      prometheusagents:
+        enabled: false
+      prometheuses:
+        enabled: false
+      prometheusrules:
+        enabled: false
+      scrapeconfigs:
+        enabled: false
+      servicemonitors:
+        enabled: true
+      thanosrulers:
+        enabled: false
+
+opentelemetryOperator:
+  version: "0.114.1"
+  admissionWebhooks:
+    certManager:
+      enabled: false
+    autoGenerateCert:
+      recreate: false
+  manager:
+    collectorImage:
+      repository: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib
+      tag: "0.129.1"
+
+collector:
+  collectorName: nvcf-observability
+  image: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib:0.129.1
+  targetAllocator:
+    allocationStrategy: consistent-hashing
+    prometheusCR:
+      enabled: true
+      serviceMonitorSelector:
+        matchLabels:
+          nvcf.nvidia.com/observability-target: "true"
+      podMonitorSelector:
+        matchLabels:
+          nvcf.nvidia.com/observability-target: "true"
+      serviceMonitorNamespaceSelector: {}
+      podMonitorNamespaceSelector: {}
+  config:
+    receivers:
+      prometheus:
+        config:
+          scrape_configs: []
+    processors:
+      batch: {}
+    exporters:
+      prometheusremotewrite:
+        # Filled from metricsBackend after profile defaults are resolved.
+        endpoint: ""
+    service:
+      pipelines:
+        metrics:
+          receivers:
+            - prometheus
+          processors:
+            - batch
+          exporters:
+            - prometheusremotewrite
+
+victoriaMetrics:
+  version: "0.38.0"
+  server:
+    retentionPeriod: "1"
+    persistentVolume:
+      enabled: true
+      size: 16Gi
+      storageClass: ""
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+  serviceMonitor:
+    enabled: true
+
+defaultMonitors:
+  commonLabels:
+    nvcf.nvidia.com/observability-target: "true"
+  controlPlane:
+    interval: 30s
+    path: /metrics
+    port: metrics
+    namespaces:
+      - nvcf
+    services:
+      - name: state-metrics
+        enabled: true
+        selector:
+          app.kubernetes.io/instance: state-metrics
+          app.kubernetes.io/name: helm-nvcf-state-metrics
+      - name: invocation-service
+        enabled: true
+        selector:
+          app.kubernetes.io/instance: invocation-service
+      - name: grpc-proxy
+        enabled: true
+        selector:
+          app.kubernetes.io/instance: grpc-proxy
+      - name: llm-api-gateway
+        enabled: true
+        selector:
+          app.kubernetes.io/instance: llm-api-gateway
+  computePlane:
+    interval: 30s
+    path: /metrics
+    services:
+      - name: nvca
+        enabled: true
+        namespaces:
+          - nvca-system
+        port: nvca
+        selector:
+          app.kubernetes.io/name: nvca
+        labels: {}
+    dcgm:
+      enabled: true
+    namespaceSelector:
+      any: true
+    selector:
+      matchLabels:
+        nvca.nvcf.nvidia.io/dcgm-metrics-present: "true"
+      interval: 30s
+      path: /metrics
+      port: dcgm-metrics
+      labels: {}
+    worker:
+      enabled: true
+      namespace: ""
+      namespaceSelector:
+        any: true
+      selector:
+        matchExpressions:
+          - key: icms-request-id
+            operator: Exists
+      interval: 30s
+      path: /metrics
+      port: metrics
+      labels: {}

@@ -39,9 +39,8 @@ func TestFeatureFlags(t *testing.T) {
 	assert.True(t, AutoPurgeDegradedWorkers.Enabled())
 	assert.True(t, ClusterTargeting.Enabled())
 	assert.True(t, HelmSharedStorage.Enabled())
-	assert.False(t, RolloverServiceSupport.Enabled())
 
-	// Disable/Enable cluster targetting
+	// Disable/Enable cluster targeting
 	_ = parseFlags(fmt.Sprintf("-%s", ClusterTargeting.Key))
 	assert.False(t, ClusterTargeting.Enabled())
 	_ = parseFlags(fmt.Sprintf("+%s", ClusterTargeting.Key))

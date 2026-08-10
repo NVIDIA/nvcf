@@ -15,7 +15,7 @@ See below for descriptions of all available configuration options.
 | Configuration                             | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Cluster Agent Version                     | Version of the cluster agent to be installed on the cluster. Defaults to the latest available. Recommended to use the latest version available at the time of registration unless there are business reasons to pick another version.                                                                                                                                                                                                                                                                                                                                     |
-| Node Selector Key and Node Selector Value | This Key-Value pair is the label selector key to control the placement of the cluster agent and the cluster agent operator pods to specic nodes on the cluster. Not providing a value will allow these infrastructure components to be placed anywhere on the cluster. Ensure there are matching nodes in the cluster using `kubectl get node -l key=value` before registration as incorrect value will cause operational issues. For additional details: [Labels & Selectors](https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#label-selectors) |
+| Node Selector Key and Node Selector Value | This Key-Value pair is the label selector key to control the placement of the cluster agent and the cluster agent operator pods to specific nodes on the cluster. Not providing a value will allow these infrastructure components to be placed anywhere on the cluster. Ensure there are matching nodes in the cluster using `kubectl get node -l key=value` before registration as incorrect value will cause operational issues. For additional details: [Labels & Selectors](https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#label-selectors) |
 | Priority Class                            | Set appropriate kubernetes priority class name for cluster agent and the operator pod. Additional details: [Priority Class](https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/#priorityclass)                                                                                                                                                                                                                                                                                                                                               |
 | Model Cache Volume Mount Options          | Configure the model cache volume mount options based on the CSI Driver capabilities on the cluster. Refer to the CSI Driver documentation. Defaults to `Enabled` and `ro,norecovery,nouuid` on an upgrade. Requires cluster reconfiguration after upgrade to prevent disruption.Additional details: [Mount options](https://man7.org/linux/man-pages/man8/mount.8.html)                                                                                                                                                                                                   |
 | Network CIDR Range                        | Quoted & comma separated list of CIDR range for outbound network access for the infrastructure components & workloads on the cluster.                                                                                                                                                                                                                                                                                                                                                                                                                                     |
@@ -31,7 +31,8 @@ See below for descriptions of all cluster features.
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Dynamic GPU Discovery            | Enables automatic detection and management of allocatable GPU capacity within the cluster via the NVIDIA GPU Operator. This capability is **strongly recommended** and would only be disabled in cases where [Manual Instance Configuration](./configuration.md) is required. |
 | Caching Support                  | Enhances application performance by storing frequently accessed data (models, resources and containers) in a cache. See [cluster-caching](./configuration.md).                                                                                                                                |
-| Optimized AI Workload Scheduling | Enable support for optimized AI workload scheduling using [KAI Scheduler](https://github.com/kai-scheduler/KAI-Scheduler). Additional setup details: [KAI Scheduler](./kai-scheduler.md)                                                                                        |
+| Optimized AI Workload Scheduling | Enables KAI Scheduler for GPU bin-packing and queues. See [KAI Scheduler](./kai-scheduler.md), [Gang Scheduling](./gang-scheduling.md), and [Topology-Aware Scheduling](./topology-aware-scheduling.md). |
+| Shared Cluster mode | Partitions the Kubernetes cluster's nodes into NVCF and non-NVCF pools. Set the label `nvca.nvcf.nvidia.io/schedule=true` on all nodes that can receive NVCF workload Pods. **Note**: this is an advanced use case and should not be used unless absolutely necessary                        |
 
 <Note>
 Removing the Dynamic GPU Discovery will require manual instance configuration. See [Manual Instance Configuration](./configuration.md).
@@ -200,6 +201,15 @@ Once maintenance mode is configured, it can take up to 10 minutes for the agent 
 
 </Note>
 
+### Host-Isolated Clusters
+
+Clusters with the `HostIsolation` attribute ensure that no two function or task instances run on the same node at the same time. Each node is dedicated to a single active workload instance.
+
+<Warning>
+`HostIsolation` and `AccountIsolation` are mutually exclusive. Enabling both attributes on the same cluster is not supported. Use `AccountIsolation` if you need isolation at the NCA account boundary; use `HostIsolation` if you need isolation at the individual function boundary.
+
+</Warning>
+
 ### Account-Isolated Clusters
 
 <Note>
@@ -223,6 +233,11 @@ The Cluster Agent can be directed to configure multi-node workloads with their o
 Additional prerequisites:
 \- The [NVIDIA GPU DRA driver](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/dra-intro-install.html) must be installed.
 \- The `NVLinkOptimized` cluster attribute must be added during cluster registration.
+
+See [Topology-Aware Scheduling](./topology-aware-scheduling.md) to place
+multi-node workloads in one GPU clique. Use
+[Gang Scheduling](./gang-scheduling.md) when every Pod must be placed
+atomically.
 
 <Warning>
 In NVLink-optimized mode, the NVIDIA GPU DRA driver currently limits one GPU-enabled Pod to a node. To optimally utilize these clusters, GPU-enabled Pods _should_ request a full node's worth of GPUs. For example, nodes in GB200 clusters have 4 GPUs each so all containers and all GPU-enabled Pods in a workload must request `nvidia.com/gpu` values that sum to 4.
@@ -820,7 +835,7 @@ When `agentConfig.mergeConfig` is set, the Helm chart creates a ConfigMap called
 `agent-config-merge` containing the provided YAML. This ConfigMap is mounted into the NVCA
 pod and merged with the generated config at runtime.
 
-**Example values.yaml:**
+Example values:
 
 ```yaml
 agentConfig:
@@ -829,7 +844,85 @@ agentConfig:
       logLevel: debug
 ```
 
-**Apply via Helm:**
+Local LLM worker transport example:
+
+```yaml
+agentConfig:
+  mergeConfig: |
+    workload:
+      stargateQUICInsecure: true
+```
+
+`workload.stargateQUICInsecure: true` makes generated LLM workers pass
+`--quic-insecure` to the `pylon` sidecar. Use it only for local or
+isolated test clusters that run the LLM request router tunnel without TLS. For
+the full LLM addon setup, see
+[LLM Function Enablement](../llm-function-enablement.md).
+
+BYOO collector debug and log chunking example:
+
+```yaml
+agentConfig:
+  mergeConfig: |
+    agent:
+      byooLogChunking:
+        enabled: true
+        maxPayloadBytes: 262144
+      byooDebugMode:
+        enabled: true
+      byooOtelCollector:
+        exporterHelper:
+          timeout: 30s
+          sendingQueue:
+            batch:
+              flushTimeout: 200ms
+              sizer: bytes
+              minSize: 1000000
+              maxSize: 1000000
+        logSampling:
+          samplingPercentage: 10
+          mode: hash_seed
+          hashSeed: 1234
+          failClosed: true
+        traceSampling:
+          samplingPercentage: 1
+          mode: hash_seed
+          hashSeed: 1234
+          failClosed: true
+```
+
+`logSampling` and `traceSampling` configure separate probabilistic samplers.
+Both support `samplingPercentage`, `mode`, `hashSeed`, and `failClosed`.
+`logSampling` also supports `attributeSource`, `fromAttribute`, and
+`samplingPriority`. An unset `mode` uses `hash_seed`. Leave either sampling
+percentage unset to keep that signal unsampled.
+
+For `hash_seed`, use `0` or a percentage of at least `0.006103515625`.
+`proportional` and `equalizing` log sampling require a TraceID or
+`sampling.randomness`; they do not support `attributeSource` or
+`fromAttribute`. Set `failClosed: true` to reject log records without usable
+randomness. If you configure `samplingPriority`, record values must be greater
+than `0`; zero is not supported by the pinned collector version.
+
+BYOO metric subset example:
+
+```yaml
+agentConfig:
+  mergeConfig: |
+    agent:
+      byooMetricSubset:
+        enabled: true
+        filterConfig: |
+          error_mode: ignore
+          metric_conditions:
+            - 'metric.name != "BpsInstrument"'
+      byooWorkloadMetrics:
+        dropLabels:
+          - metric_subset_enabled
+          - custom_label
+```
+
+Apply via Helm:
 
 ```bash
 helm upgrade nvca-operator -n nvca-operator --create-namespace -i \

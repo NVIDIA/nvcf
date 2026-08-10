@@ -1,12 +1,16 @@
-FROM bitnami/cassandra:5.0.6
+FROM cassandra:5.0.8
 
 ARG TARGETARCH
-ARG KUBECTL_VERSION="1.31.0"
+ARG KUBECTL_VERSION="1.36.1"
 ARG GIT_SHA
 
 USER root
 
-RUN apt-get update && apt-get install -y curl gettext-base && \
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get upgrade -y && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates curl gettext-base && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* && \
     if [ -n "$KUBECTL_VERSION" ]; then \
         curl -Lo /usr/local/bin/kubectl "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl"; \
     else \

@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "tracing",
+    srcs = [
+        "currentfunction.go",
+        "middleware.go",
+        "setup.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/telemetry/tracing",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/control-plane-services/helm-reval/pkg/reval/config",
+        "//src/control-plane-services/helm-reval/pkg/telemetry",
+        "@io_opentelemetry_go_otel//:otel",
+        "@io_opentelemetry_go_otel//propagation",
+        "@io_opentelemetry_go_otel//semconv/v1.32.0:v1_32_0",
+        "@io_opentelemetry_go_otel_exporters_otlp_otlptrace//:otlptrace",
+        "@io_opentelemetry_go_otel_exporters_otlp_otlptrace_otlptracegrpc//:otlptracegrpc",
+        "@io_opentelemetry_go_otel_sdk//resource",
+        "@io_opentelemetry_go_otel_sdk//trace",
+        "@io_opentelemetry_go_otel_trace//:trace",
+        "@org_golang_google_grpc//credentials",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":tracing",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "tracing_test",
+    srcs = [
+        "currentfunction_test.go",
+        "setup_test.go",
+    ],
+    deps = [
+        ":tracing",
+        "//src/control-plane-services/helm-reval/pkg/reval/config",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@io_opentelemetry_go_otel//:otel",
+        "@io_opentelemetry_go_otel_sdk//trace",
+        "@org_uber_go_zap//:zap",
+    ],
+)

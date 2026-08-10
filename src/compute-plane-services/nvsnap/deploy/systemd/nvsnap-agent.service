@@ -1,0 +1,39 @@
+[Unit]
+Description=GPUCR Agent - GPU Checkpoint/Restore Service
+Documentation=https://github.com/balaji/gpucr
+After=network.target containerd.service nvidia-persistenced.service
+Wants=containerd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/gpucr-agent \
+    --checkpoint-dir=/var/lib/gpucr/checkpoints \
+    --criu-path=/usr/local/sbin/criu \
+    --cuda-checkpoint-path=/usr/local/bin/cuda-checkpoint \
+    --listen=:8081 \
+    --log-level=info
+
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+# Environment
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=32768
+LimitCORE=infinity
+
+# Security
+NoNewPrivileges=false
+# Required for CRIU operations
+# CapabilityBoundingSet=CAP_SYS_PTRACE CAP_SYS_ADMIN CAP_NET_ADMIN
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gpucr-agent
+
+[Install]
+WantedBy=multi-user.target

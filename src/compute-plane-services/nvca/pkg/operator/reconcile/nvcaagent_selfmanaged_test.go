@@ -75,43 +75,6 @@ func agentDeployment() *appsv1.Deployment {
 	}
 }
 
-func envValue(envs []corev1.EnvVar, name string) (string, bool) {
-	for _, e := range envs {
-		if e.Name == name {
-			return e.Value, true
-		}
-	}
-	return "", false
-}
-
-func TestApplyPSATIdentity_SetsIdentitySourceEnv(t *testing.T) {
-	dep := agentDeployment()
-	applyPSATIdentity(context.Background(), dep, "cluster-abc")
-
-	got, ok := envValue(dep.Spec.Template.Spec.Containers[0].Env, "NVCF_IDENTITY_SOURCE")
-	require.True(t, ok, "agent must receive NVCF_IDENTITY_SOURCE so the JWKS-pusher branch can gate on it")
-	assert.Equal(t, IdentitySourcePSAT, got)
-
-	tokenPath, ok := envValue(dep.Spec.Template.Spec.Containers[0].Env, "NVCF_TOKEN_FILE_PATH")
-	require.True(t, ok)
-	assert.Equal(t, "/var/run/secrets/tokens/token", tokenPath)
-}
-
-func TestApplySPIREIdentity_SetsIdentitySourceEnv(t *testing.T) {
-	dep := agentDeployment()
-	applySPIREIdentity(context.Background(), dep, "registry/nvca:v1", "cluster-abc")
-
-	got, ok := envValue(dep.Spec.Template.Spec.Containers[0].Env, "NVCF_IDENTITY_SOURCE")
-	require.True(t, ok, "agent must receive NVCF_IDENTITY_SOURCE so the JWKS-pusher branch can gate on it")
-	assert.Equal(t, IdentitySourceSPIRE, got)
-
-	// Both PSAT and SPIRE share the same token file path; the IDENTITY_SOURCE
-	// env is the only thing that disambiguates them at runtime.
-	tokenPath, ok := envValue(dep.Spec.Template.Spec.Containers[0].Env, "NVCF_TOKEN_FILE_PATH")
-	require.True(t, ok)
-	assert.Equal(t, "/var/run/secrets/tokens/token", tokenPath)
-}
-
 func TestApplySelfManagedNVCADeployment_RejectsInvalidSource(t *testing.T) {
 	nb := &nvidiaiov1.NVCFBackend{
 		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "test"},

@@ -4,7 +4,7 @@ dario.cat/mergo
 # github.com/Masterminds/semver/v3 v3.4.0
 ## explicit; go 1.21
 github.com/Masterminds/semver/v3
-# github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260429212700-acf8e2b672a4
+# github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260514233945-67568a2d4f00
 ## explicit; go 1.25.0
 github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common
 github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/util
@@ -723,13 +723,6 @@ sigs.k8s.io/structured-merge-diff/v6/value
 # sigs.k8s.io/yaml v1.6.0
 ## explicit; go 1.22
 sigs.k8s.io/yaml
-# cloud.google.com/go => cloud.google.com/go v0.112.2
-# github.com/Masterminds/vcs => github.com/Masterminds/vcs v1.13.3
-# github.com/google/cel-go => github.com/google/cel-go v0.17.8
 # k8s.io/api => k8s.io/api v0.35.3
-# k8s.io/apiextensions-apiserver => k8s.io/apiextensions-apiserver v0.35.3
 # k8s.io/apimachinery => k8s.io/apimachinery v0.35.3
-# k8s.io/apiserver => k8s.io/apiserver v0.35.3
 # k8s.io/client-go => k8s.io/client-go v0.35.3
-# k8s.io/cluster-bootstrap => k8s.io/cluster-bootstrap v0.35.3
-# k8s.io/component-base => k8s.io/component-base v0.35.3

@@ -36,7 +36,16 @@ clientgen_all() {
 
   cd "${repo_root}"
 
-  rm -fr "${repo_root}/pkg/client"
+  # Clear generated Go content under pkg/client but preserve BUILD.bazel
+  # files so the Phase B Bazel scaffold (feat/bazel-build) survives
+  # codegen runs. The generated file set is stable across runs against
+  # the same pkg/apis layout; Gazelle's srcs lists track that set. When
+  # new types land in pkg/apis, re-run `bazel run //:gazelle` after
+  # codegen-update to refresh the srcs lists.
+  if [ -d "${repo_root}/pkg/client" ]; then
+    find "${repo_root}/pkg/client" -mindepth 1 -type f -not -name 'BUILD.bazel' -delete
+    find "${repo_root}/pkg/client" -mindepth 1 -type d -empty -delete
+  fi
   mkdir -p "${repo_root}/pkg/client"
 
   echo "Generating pkg/client/clientset"

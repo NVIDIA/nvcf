@@ -1,0 +1,45 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+load("//rules/oci:defs.bzl", "go_oci_image")
+
+go_library(
+    name = "cluster-validator_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/cmd/cluster-validator",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//src/compute-plane-services/nvca/cmd/internal",
+        "//src/compute-plane-services/nvca/internal/clustervalidator",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+    ],
+)
+
+go_binary(
+    name = "cluster-validator",
+    embed = [":cluster-validator_lib"],
+    visibility = ["//visibility:public"],
+)
+
+# Distroless/go base, binary at /usr/bin/cluster-validator, ENTRYPOINT set to that path.
+go_oci_image(
+    name = "image",
+    base = "@distroless_go",
+    binary = ":cluster-validator",
+    binary_path = "/usr/bin/cluster-validator",
+    entrypoint = ["/usr/bin/cluster-validator"],
+    extra_registries = {
+        "devops": "nvcr.io/nv-ngc-devops/nvca-cluster-validator",
+        "ncp_dev": "nvcr.io/0651155215864979/ncp-dev/nvca-cluster-validator",
+    },
+    registry = "nvcr.io/qtfpt1h0bieu/byocdev/cluster-validator",
+    tags = ["nvca-cluster-validator"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "cluster-validator_test",
+    srcs = ["main_test.go"],
+    embed = [":cluster-validator_lib"],
+)

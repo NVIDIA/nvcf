@@ -1,0 +1,104 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+load("//rules/oci:defs.bzl", "go_oci_image")
+
+go_library(
+    name = "cmd_lib",
+    srcs = [
+        "main.go",
+        "mock_oauth2_token.go",
+        "nvcf_api_server_mock.go",
+    ],
+    importpath = "ratelimiter/cmd",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//src/invocation-plane-services/ratelimiter:ratelimiter",
+        "//src/invocation-plane-services/ratelimiter/nvcf/pb",
+        "@com_github_golang_jwt_jwt_v4//:jwt",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_grpc_ecosystem_go_grpc_middleware_v2//interceptors/logging",
+        "@com_github_lestrrat_go_jwx//jwk",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/config",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/logs",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/tracing",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/version",
+        "@com_github_olric_data_olric//config",
+        "@com_github_prometheus_client_golang//prometheus/promhttp",
+        "@com_github_spf13_cobra//:cobra",
+        "@com_github_spf13_pflag//:pflag",
+        "@org_golang_google_grpc//:grpc",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+go_binary(
+    name = "cmd",
+    embed = [":cmd_lib"],
+    visibility = ["//visibility:public"],
+    x_defs = {
+        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Service": "nvcf-ratelimiter",
+        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Version": "{STABLE_VERSION}",
+        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.GitHash": "{STABLE_GIT_COMMIT_FULL}",
+    },
+)
+
+# Multi-arch OCI image. Build-side targets (image, image_index,
+# image_load, image.tar) live here. The internal NGC publish lanes
+# (kaze, nv-ngc-devops, ncp-dev) are defined under //nvidia-internal:*
+# so the registry coordinates stay out of the public OSS snapshot.
+# The distroless/go base ships ENTRYPOINT ["/usr/bin/shelless_ulimit"], a shim
+# that raises RLIMIT_NOFILE (soft -> hard) when ULIMIT_FLAG=1 before exec'ing
+# its arguments. The legacy Dockerfile relied on that base entrypoint plus
+# ENV ULIMIT_FLAG=1; go_oci_image otherwise overrides the entrypoint with just
+# [binary_path], bypassing the shim and leaving the default 1024 soft fd limit.
+# Restore the shim + flag so the Bazel image matches the Dockerfile.
+go_oci_image(
+    name = "image",
+    base = "@distroless_go",
+    binary = ":cmd",
+    binary_path = "/usr/bin/app",
+    entrypoint = [
+        "/usr/bin/shelless_ulimit",
+        "/usr/bin/app",
+    ],
+    env = {"ULIMIT_FLAG": "1"},
+    tags = ["nvcf-ratelimiter"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "cmd_test",
+    srcs = [
+        "info_test.go",
+        "main_test.go",
+    ],
+    embed = [":cmd_lib"],
+    deps = [
+        "//src/invocation-plane-services/ratelimiter:ratelimiter",
+        "//src/invocation-plane-services/ratelimiter/pb",
+        "@com_github_olric_data_olric//config",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/version",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_golang_google_grpc//:grpc",
+        "@org_golang_google_grpc//codes",
+        "@org_golang_google_grpc//credentials/insecure",
+        "@org_golang_google_grpc//status",
+        "@org_golang_x_exp//rand",
+        "@org_uber_go_zap//:zap",
+    ],
+)

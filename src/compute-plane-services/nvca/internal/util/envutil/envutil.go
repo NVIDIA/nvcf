@@ -33,6 +33,7 @@ func ApplyEnvOverrides(envB64 string, overrides map[string]string) (string, erro
 	if len(overrides) == 0 {
 		return envB64, nil
 	}
+	overrides = NormalizeEnvOverrides(overrides)
 
 	// Decode the existing environment using the translate library's decoder.
 	envs, err := common.DecodeEnvironmentB64(envB64, common.EnvDecoderText)
@@ -47,6 +48,26 @@ func ApplyEnvOverrides(envB64 string, overrides map[string]string) (string, erro
 
 	// Re-encode to text format
 	return EncodeEnvB64(envs), nil
+}
+
+// NormalizeEnvOverrides normalizes configured environment override names.
+// NVCA config rendering lowercases map keys, while the launch specs expect
+// conventional upper-case environment variable names.
+func NormalizeEnvOverrides(overrides map[string]string) map[string]string {
+	if len(overrides) == 0 {
+		return overrides
+	}
+
+	normalized := make(map[string]string, len(overrides))
+	for k, v := range overrides {
+		normalized[NormalizeEnvOverrideName(k)] = v
+	}
+	return normalized
+}
+
+// NormalizeEnvOverrideName returns the canonical name for an environment override.
+func NormalizeEnvOverrideName(name string) string {
+	return strings.ToUpper(name)
 }
 
 // EncodeEnvB64 encodes a map of environment variables to a base64 text string.

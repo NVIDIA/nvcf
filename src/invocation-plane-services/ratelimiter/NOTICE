@@ -20,9 +20,9 @@ Third-Party Dependencies and Licenses
 This project includes the following third-party direct dependencies:
 
 ------------------------------------------------------------------------
-github.com/NVIDIA/nvcf-go v1.0.11
+github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260513170923-714a7c905aa0
 License: Apache License 2.0
-https://github.com/NVIDIA/nvcf-go
+https://github.com/NVIDIA/nvcf
 
 ------------------------------------------------------------------------
 github.com/auth0/go-jwt-middleware/v2 v2.3.0

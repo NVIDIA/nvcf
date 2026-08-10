@@ -23,14 +23,14 @@ case "$install_method" in
     ;;
 esac
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DEPLOY_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-if [ ! -f "${SCRIPT_DIR}/utils/utils.sh" ]; then
-    echo "Error: utils.sh not found in ${SCRIPT_DIR}/utils"
+if [ ! -f "${DEPLOY_SCRIPT_DIR}/utils/utils.sh" ]; then
+    echo "Error: utils.sh not found in ${DEPLOY_SCRIPT_DIR}/utils"
     exit 1
 fi
 
-source "$SCRIPT_DIR/utils/utils.sh"
+source "$DEPLOY_SCRIPT_DIR/utils/utils.sh"
 
 if ! check_kubernetes; then
     log_error "kubernetes check failed"
@@ -43,12 +43,13 @@ if ! check_helm; then
 fi
 
 if [ "${install_method}" = "$INSTALL_METHOD_HELM" ]; then
-    log_info "Installing jwker for helm deployment..."
-    if ! "${SCRIPT_DIR}/install_deps.sh"; then
-        log_error "Failed to install jwker"
+    log_info "Checking jwker availability for helm deployment..."
+    jwker_path="$(command -v jwker)"
+    if [ -z "$jwker_path" ]; then
+        log_error "jwker is not available in the init image. Use an nvcf-openbao-migrations image that includes jwker."
         exit 1
     fi
-    log_success "Successfully installed jwker"
+    log_success "jwker available at $jwker_path"
 fi
 
 # Helper function to get root token
@@ -56,6 +57,59 @@ get_root_token() {
     local namespace=$1
     local statefulset=$2
     kubectl get secret ${statefulset}-root-token -n ${namespace} -o jsonpath='{.data.root_token}' | base64 -d
+}
+
+# Runtime version-skew check: verify that the auto-unseal-sidecar container's
+# image tag matches the openbao server container's image tag in the live
+# StatefulSet spec. This complements the template-time guard in
+# helm/templates/validate-sidecar-version.yaml: the template guard catches
+# misconfigured values; this runtime check catches drift introduced by
+# mutating webhooks, manual kubectl edits, or partial upgrades.
+check_sidecar_version() {
+    local namespace=$1
+    local statefulset=$2
+
+    log_section "Validating openbao server / auto-unseal-sidecar image version match"
+
+    local sts_path='{.spec.template.spec.containers'
+    local server_image
+    server_image=$(kubectl get statefulset "${statefulset}" -n "${namespace}" \
+        -o jsonpath="${sts_path}"'[?(@.name=="openbao")].image}' 2>/dev/null)
+    local sidecar_image
+    sidecar_image=$(kubectl get statefulset "${statefulset}" -n "${namespace}" \
+        -o jsonpath="${sts_path}"'[?(@.name=="auto-unseal-sidecar")].image}' 2>/dev/null)
+
+    if [ -z "${server_image}" ]; then
+        log_error "could not read 'openbao' container image from StatefulSet '${statefulset}'"
+        return 1
+    fi
+    if [ -z "${sidecar_image}" ]; then
+        log_warn "no 'auto-unseal-sidecar' container in StatefulSet '${statefulset}'; skipping version check"
+        return 0
+    fi
+
+    local server_tag="${server_image##*:}"
+    local sidecar_tag="${sidecar_image##*:}"
+
+    if [ "${server_tag}" != "${sidecar_tag}" ]; then
+        log_error "openbao server / auto-unseal-sidecar image tag mismatch:"
+        log_error "  server  image : ${server_image}"
+        log_error "  sidecar image : ${sidecar_image}"
+        log_error "  server  tag   : ${server_tag}"
+        log_error "  sidecar tag   : ${sidecar_tag}"
+        log_error ""
+        log_error "A bao client/server version skew here silently corrupts bao state during"
+        log_error "the post-install raft bootstrap. See helm/templates/validate-sidecar-version.yaml"
+        log_error "for the upstream OpenBao change refs that explain why"
+        log_error "(openbao/openbao#1986, #2331, #2574, #1518, #1433)."
+        log_error ""
+        log_error "Update the auto-unseal-sidecar image tag in your values overlay to match"
+        log_error "the server tag '${server_tag}' and reinstall."
+        return 1
+    fi
+
+    log_success "server and sidecar images both at tag '${server_tag}'"
+    return 0
 }
 
 # Step 0: Pre-checks
@@ -223,7 +277,7 @@ get_and_save_jwt_signing_key() {
         printenv KUBERNETES_SERVICE_HOST)
 
     # get svc account token to access kubernetes api
-    local svc_token=$(kubectl exec openbao-server-0 -c openbao -n ${namespace} -- \
+    local svc_token=$(kubectl exec ${statefulset}-0 -c openbao -n ${namespace} -- \
         cat /var/run/secrets/kubernetes.io/serviceaccount/token)
 
     # call kubernetes api to get the jwt signing key and decode it to a pem
@@ -346,6 +400,11 @@ if [ "${install_method}" = "script" ]; then
     fi
 else
     log_info "Skipping local installation as install_method is not 'script'"
+fi
+
+if ! check_sidecar_version ${namespace} ${statefulset}; then
+    log_error "Aborting before any bao operations due to sidecar/server version skew"
+    exit 1
 fi
 
 if ! initialize_cluster ${namespace} ${statefulset}; then

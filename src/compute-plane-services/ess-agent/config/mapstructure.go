@@ -61,7 +61,7 @@ func StringToWaitDurationHookFunc() mapstructure.DecodeHookFunc {
 
 // ConsulStringToStructFunc checks if the value set for the key should actually
 // be a struct and sets the appropriate value in the struct. This is for
-// backwards-compatability with older versions of Consul Template.
+// backwards-compatibility with older versions of Consul Template.
 func ConsulStringToStructFunc() mapstructure.DecodeHookFunc {
 	return func(
 		f reflect.Type,

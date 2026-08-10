@@ -1,0 +1,138 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# PDF Testing Matrix — LLM (small) workload row
+# Source: NVCFCheckpoint_RestoreBenchmarks.pdf (2026-06-03)
+#
+# PDF spec: lmsysorg/sglang:v0.5.12.post1 serving google/gemma-4-31B-it
+# Adapted: use the NIM-published variant since NGC has it (the NIM
+# image is what the customer would actually deploy via NVCF). Both
+# images serve the OpenAI-compatible /v1 API; nvsnap measures the same
+# Container-DL / Model-DL / Model-Init buckets regardless of the
+# inference engine inside.
+#
+# Per-NIM settings:
+#   Image       : nvcr.io/nim/google/gemma-4-31b-it:1.7.1-variant
+#   Runtime env : NIM_TAGS_SELECTOR (NIM model selection)
+#   Hardware    : 1x H100
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bench-gemma-4-31b
+  namespace: nvsnap-system
+  labels:
+    app: bench-gemma-4-31b
+    nvsnap.io/bench: "pdf-matrix"
+    nvsnap.io/bench-row: "llm-small"
+  annotations:
+    nvsnap.io/desc: "PDF bench: google/gemma-4-31b-it on NIM 1.7.1-variant"
+spec:
+  nodeSelector:
+    nvidia.com/gpu.present: "true"   # any GPU node (GFD label), not a pinned host
+  tolerations:
+    - key: "nvidia.com/gpu"
+      operator: "Exists"
+      effect: "NoSchedule"
+  imagePullSecrets:
+    - name: nvsnap-pull-secret
+
+  initContainers:
+    - name: get-uvloop
+      image: nvcr.io/0651155215864979/ncp-dev/uvloop-builder:v0.0.1
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          set -eu
+          for whl in /wheels/uvloop-*.whl; do
+              tag=$(echo "$whl" | grep -oE 'cp3[0-9]+' | head -1)
+              mkdir -p "/nvsnap-lib/site-packages-${tag}"
+              python3 -m zipfile -e "$whl" "/nvsnap-lib/site-packages-${tag}/"
+          done
+      volumeMounts:
+        - { name: nvsnap-lib, mountPath: /nvsnap-lib }
+
+    - name: get-libuv
+      image: nvcr.io/0651155215864979/ncp-dev/libuv-builder:v0.0.1
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c"]
+      args: ["cp /usr/local/lib/libuv.so* /nvsnap-lib/"]
+      volumeMounts:
+        - { name: nvsnap-lib, mountPath: /nvsnap-lib }
+
+    - name: get-libzmq
+      image: nvcr.io/0651155215864979/ncp-dev/libzmq-builder:v0.0.1
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c"]
+      args: ["cp /usr/local/lib/libzmq.so* /nvsnap-lib/"]
+      volumeMounts:
+        - { name: nvsnap-lib, mountPath: /nvsnap-lib }
+
+    - name: get-nvsnap
+      image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.32
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          set -eu
+          cp /criu-bundle/lib/libnvsnap_intercept.so /nvsnap-lib/
+          cp -r /criu-bundle/sitecustomize /nvsnap-lib/
+      volumeMounts:
+        - { name: nvsnap-lib, mountPath: /nvsnap-lib }
+
+  containers:
+    - name: nim
+      image: nvcr.io/nim/google/gemma-4-31b-it:1.7.1-variant
+      imagePullPolicy: IfNotPresent
+      env:
+        - name: NGC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: ngc-api-key
+              key: NGC_API_KEY
+        - { name: NIM_CACHE_PATH, value: "/opt/nim/.cache" }
+        # Pin profile: NIM has 2 H100-compatible profiles for this image
+        # — nvfp4/34GiB (this one, fits H100 80GB) and bf16/105GiB (OOM).
+        # tp:1 selector alone matches both and NIM errors out.
+        - { name: NIM_MODEL_PROFILE, value: "161f84390660c5287ce5439a4504827bd0b8552ab0adf218c737eacc05d44df1" }
+        # NVSNAP interception
+        - { name: PYTHONPATH,           value: "/nvsnap-lib/sitecustomize" }
+        - { name: LD_LIBRARY_PATH,      value: "/nvsnap-lib:/usr/local/nvidia/lib64:/usr/local/cuda/lib64" }
+        - { name: LD_PRELOAD,           value: "/nvsnap-lib/libnvsnap_intercept.so" }
+        - { name: PYTHONFAULTHANDLER,   value: "1" }
+        - { name: PYTHONUNBUFFERED,     value: "1" }
+        - { name: NVSNAP_LOG_LEVEL,       value: "3" }
+        - { name: NVSNAP_ZMQ_INTERCEPT,   value: "0" }
+        - { name: NVSNAP_QUIESCE_SIGNALS, value: "1" }
+        - { name: NVSNAP_QUIESCE_METADATA_ONLY, value: "1" }
+        - { name: NVSNAP_SECCOMP_ENABLED, value: "0" }
+        - { name: CUDA_VISIBLE_DEVICES, value: "0" }
+      ports:
+        - { containerPort: 8000, name: http }
+      readinessProbe:
+        httpGet: { path: /v1/health/ready, port: 8000 }
+        initialDelaySeconds: 120
+        periodSeconds: 15
+        timeoutSeconds: 5
+        failureThreshold: 80
+      resources:
+        limits:   { nvidia.com/gpu: "1" }
+        requests: { nvidia.com/gpu: "1" }
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - { name: shm,       mountPath: /dev/shm }
+        - { name: nvsnap-lib,  mountPath: /nvsnap-lib }
+        - { name: nim-cache, mountPath: /opt/nim/.cache }
+
+  volumes:
+    - name: shm
+      emptyDir: { medium: Memory, sizeLimit: 32Gi }
+    - name: nvsnap-lib
+      emptyDir: {}
+    # See whisper-large-v3.yaml for why this is emptyDir (NIM non-root
+    # vs hostPath root-owned). warm=cold for NIM benches.
+    - name: nim-cache
+      emptyDir: {}
+
+  restartPolicy: Never

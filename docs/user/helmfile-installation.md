@@ -1,11 +1,27 @@
 # Helmfile Installation
 
-This section covers manual Helmfile installation of the NVCF control plane components, which are required for all self-hosted NVCF deployments.
+This section covers manual Helmfile installation of the NVCF control plane and
+GPU cluster components for self-hosted NVCF deployments.
 
-For a fresh install, start with the [Quickstart](./quickstart.md). Use this Helmfile guide when you need explicit release control, partial recovery, upgrades, or direct access to Helmfile values. You can also install each Helm chart individually using `helm install` or `helm upgrade` (see [Standalone Deployment](./standalone-deployment.md)).
+For a fresh install, start with the [Quickstart](./quickstart.md). Use this Helmfile guide when you need explicit release control, partial recovery, upgrades, or direct access to Helmfile values.
 
 <Info>
-This guide assumes you have already downloaded and extracted the `nvcf-self-managed-stack` helmfile bundle (see [download-nvcf-self-managed-stack](./image-mirroring.md)). All commands in this guide are run from inside the extracted `nvcf-self-managed-stack/` directory unless otherwise noted. The directory contains the helmfile definitions, environment templates, and sample configurations referenced throughout.
+This guide assumes you have already downloaded and extracted the
+`nvcf-self-managed-stack` Helmfile bundle (see
+[download-nvcf-self-managed-stack](./image-mirroring.md)). Control-plane
+commands run from inside that directory unless otherwise noted. The directory
+contains the control-plane Helmfile definitions, environment templates, and
+sample configurations referenced throughout.
+
+GPU clusters use the compute-plane Makefile in
+`deploy/stacks/nvcf-compute-plane`. It registers one GPU cluster at a time and
+installs the NVCA operator into that cluster.
+
+Clone the public repository before the GPU cluster steps:
+
+```bash
+git clone https://github.com/nvidia/nvcf.git
+```
 
 ```bash
 cd path/to/nvcf-self-managed-stack
@@ -17,9 +33,10 @@ ls
 
 ## Namespace Requirements
 
-Each Helm chart in the NVCF stack must be installed into a specific namespace. These namespace
-assignments are **fixed** and must not be changed because service-to-service cluster DNS addressing
-and Vault (OpenBao) authentication claims depend on this layout.
+Each control-plane Helm chart must be installed into a specific namespace. These
+namespace assignments are fixed and must not be changed because
+service-to-service cluster DNS addressing and Vault (OpenBao) authentication
+claims depend on this layout.
 
 | Namespace | Services |
 | --- | --- |
@@ -30,6 +47,7 @@ and Vault (OpenBao) authentication claims depend on this layout.
 | `vault-system` | openbao-server |
 | `cassandra-system` | cassandra |
 | `nats-system` | nats |
+| `cert-manager` | cert-manager |
 | `envoy-gateway-system` | ingress (nvcf-gateway-routes) |
 
 <Warning>
@@ -45,13 +63,15 @@ If you see this error, verify that every release is deployed in the namespace sh
 
 The following tools must be installed on your deployment machine:
 
-- **kubectl**
-- **helm** >= 3.12
-- **helmfile** >= 1.1.0 (recommended: `1.1.x`)
-- **helm-diff** plugin >=3.11
+- `kubectl`
+- `helm` >= 3.12
+- `helmfile` >= 1.1.0 (recommended: `1.1.x`)
+- `helm-diff` plugin >=3.11
 
 <Warning>
-**Avoid Helmfile 1.2.x.** Helmfile 1.2.0 removed sequential execution mode, which the NVCF stack requires for ordered deployments. Use version `1.1.x` for compatibility with the commands in this guide.
+Avoid Helmfile 1.2.x. Helmfile 1.2.0 removed sequential execution mode, which
+the NVCF stack requires for ordered deployments. Use version `1.1.x` for
+compatibility with the commands in this guide.
 
 Helmfile `1.3.0+` re-introduced sequential execution via the `--sequential-helmfiles` flag, but the command syntax differs from the `1.1.x` examples shown here. If you choose to use `1.3.0+`, add `--sequential-helmfiles` to every `helmfile apply` and `helmfile sync` command.
 
@@ -70,9 +90,14 @@ helm plugin install https://github.com/databus23/helm-diff
 </Accordion>
 
 <Warning>
-**kubectl version must match your cluster (within one minor version).** Using a kubectl version that is more than one minor version ahead of your Kubernetes cluster will cause `kubectl apply` and `kubectl patch` commands to **fail** -- not just warn -- due to stricter server-side field validation in newer clients.
+kubectl version must match your cluster within one minor version. Using a
+kubectl version that is more than one minor version ahead of your Kubernetes
+cluster will cause `kubectl apply` and `kubectl patch` commands to fail, not
+just warn, due to stricter server-side field validation in newer clients.
 
-This is especially common on **macOS with Homebrew**, where `brew install kubectl` or `brew upgrade` can silently install a version much newer than your cluster. Verify before proceeding:
+This is especially common on macOS with Homebrew, where `brew install kubectl`
+or `brew upgrade` can silently install a version much newer than your cluster.
+Verify before proceeding:
 
 ```bash
 kubectl version
@@ -87,17 +112,23 @@ If your client is too new, install a matching version directly from the [Kuberne
 
 ### Access Requirements
 
-- **kubectl** configured to the kubernetes cluster you are deploying to
+- `kubectl` configured to the kubernetes cluster you are deploying to
 
-- Personal **NGC API Key** from [ngc.nvidia.com](https://ngc.nvidia.com) authenticated with `nvcf-onprem` organization **only if** you pull artifacts directly from NGC or use NGC as your registry
+- Personal NGC API Key from [ngc.nvidia.com](https://ngc.nvidia.com)
+  authenticated with `nvcf-onprem` organization only if you pull artifacts
+  directly from NGC or use NGC as your registry
 
-- **Registry credentials** for your container registry (ECR, NGC, etc.) - see [third-party-registries-self-hosted](./third-party-registries.md) for setup instructions
+- Registry credentials for your container registry (ECR, NGC, etc.). See
+  [third-party-registries-self-hosted](./third-party-registries.md) for setup
+  instructions
 
-- **Local Helm/Docker authentication** to your container registry where NVCF charts are stored. Helmfile pulls OCI charts during deployment, so your local environment must be authenticated. Examples:
+- Local Helm/Docker authentication to your container registry where NVCF charts
+  are stored. Helmfile pulls OCI charts during deployment, so your local
+  environment must be authenticated. Examples:
 
-  - **AWS ECR**: `aws ecr get-login-password --region <region> | helm registry login --username AWS --password-stdin <account-id>.dkr.ecr.<region>.amazonaws.com`
-  - **NGC**: `docker login nvcr.io -u '$oauthtoken' -p <NGC_API_KEY>`
-  - **Other registries**: Use `docker login` or `helm registry login` as appropriate for your registry
+  - AWS ECR: `aws ecr get-login-password --region <region> | helm registry login --username AWS --password-stdin <account-id>.dkr.ecr.<region>.amazonaws.com`
+  - NGC: `docker login nvcr.io -u '$oauthtoken' -p <NGC_API_KEY>`
+  - Other registries: Use `docker login` or `helm registry login` as appropriate for your registry
 
 <Note>
 If you are using NGC as your registry, you will use your NGC API key when generating the base64 registry credential in Step 3. Exporting `NGC_API_KEY` is optional and only needed if you prefer to reuse it in commands.
@@ -113,7 +144,9 @@ The installation flow is as follows.
 3. Configure your secrets file (`secrets/<environment-name>-secrets.yaml`)
 4. Configure image pull secrets (skip if using a CSP registry with built-in credential helpers)
 5. Deploy the NVCF control plane components
-6. Verify the installation
+6. Verify the control plane
+7. Register each GPU cluster with the control plane
+8. Install the NVCA operator on each GPU cluster
 
 ### Step 1. Prepare Gateway API ingress
 
@@ -132,10 +165,22 @@ Use `GATEWAY_ADDR` as `global.domain` in your environment file. Use the Gateway
 names, namespaces, and listener names from Gateway quickstart in
 `ingress.gatewayApi.gateways`.
 
-<Warning>
-**The Gateway address is embedded throughout your deployment.** The `domain` value in your environment file, the Gateway API HTTPRoutes/TCPRoutes, and service discovery all depend on this address. If the Gateway or its underlying load balancer is deleted and recreated (e.g., due to a TCPRoute misconfiguration), a **new address** will be assigned.
+Split or multi-cluster gRPC invocation is not enabled by default. If you need
+workers in a compute cluster to reach grpc-proxy in the control-plane cluster,
+complete [gRPC Invocation Enablement](./grpc-invocation-enablement.md) before
+you deploy or sync the control plane.
 
-If the address changes after deployment, you must update the `domain` in your environment file and re-sync the affected releases. See [Recovering from Gateway Address Changes] for the procedure.
+<Warning>
+The Gateway address is embedded throughout your deployment. The `domain` value
+in your environment file, the Gateway API HTTPRoutes/TCPRoutes, and service
+discovery all depend on this address. If the Gateway or its underlying load
+balancer is deleted and recreated (e.g., due to a TCPRoute misconfiguration), a
+new address will be assigned.
+
+If the address changes after deployment, you must update the `domain` in your
+environment file and re-sync the affected releases. See
+[Recovering from Gateway Address Changes](#recovering-from-gateway-address-changes)
+for the procedure.
 
 </Warning>
 
@@ -143,12 +188,15 @@ If the address changes after deployment, you must update the `domain` in your en
 
 Environment configuration files define how NVCF is deployed in your specific environment. They are YAML files that provide values to the Helm charts.
 
-Create your environment file from the template below ([cp-env-eks-example.yaml](samples/configs/cp-env-eks-example.yaml)).
+Set `HELMFILE_ENV` to your environment name and copy the base configuration.
+The filename must match `HELMFILE_ENV` because Helmfile uses it to select the
+environment file. The template below shows the values to configure for Amazon
+EKS ([cp-env-eks-example.yaml](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/user/samples/configs/cp-env-eks-example.yaml)).
 
 ```bash
 cd path/to/nvcf-self-managed-stack
-touch environments/<environment-name>.yaml
-# Copy the template into the file
+export HELMFILE_ENV="<environment-name>"
+cp environments/base.yaml "environments/${HELMFILE_ENV}.yaml"
 ```
 
 <Accordion title="Configuration Template (Amazon EKS Environment)">
@@ -194,6 +242,11 @@ global:
     # registry: <your-account-id>.dkr.ecr.<your-region>.amazonaws.com
     # repository: <your-ecr-repository-name>
 
+  workerEndpoints:
+    # Optional. Empty uses the cluster-local request-router service. Set a
+    # worker-reachable host and port for a split-cluster deployment.
+    llmRequestRouterAddress: ""
+
   nodeSelectors:
     enabled: true # Set true when using dedicated node labels for NVCF workloads
     vault:
@@ -212,7 +265,7 @@ global:
   # =============================================================================
   # Observability Configuration
   # =============================================================================
-  # Enable distributed tracing via OTLP (dsiabled by default).
+  # Enable distributed tracing via OTLP (disabled by default).
   # This must point to an OTLP-compatible collector.
   # =============================================================================
   observability:
@@ -278,6 +331,13 @@ ingress:
         listenerName: tcp
 ```
 
+When `addons.llm` is enabled, the stack defaults
+`global.workerEndpoints.llmRequestRouterAddress` to
+`llm-request-router.nvcf.svc.cluster.local:50071`. Colocated workers require no
+additional configuration. For a split deployment, override this value with a
+request-router host and port that worker pods can reach. See
+[LLM Function Enablement](./llm-function-enablement.md) for the complete addon
+configuration.
 
 #### `domain` and `ingress` Configuration
 
@@ -338,27 +398,24 @@ nodeSelectors:
 
 #### `cassandra` Resource Tuning
 
-The default Cassandra resource limits may be insufficient for clusters with large instance types (e.g., `p5.48xlarge`), causing Cassandra pods to be OOM-killed during initialization. If you observe Cassandra pods restarting with `OOMKilled` status, increase the Cassandra resource requests and limits using a Helmfile release values override (see [overriding-helm-chart-values](./helmfile-installation.md)).
+Cassandra needs enough memory to complete first boot, commit-log replay, and the schema migration hooks. The default self-managed stack uses `cassandra.resourcesPreset: xlarge`, which maps to a Bitnami Cassandra preset with a 3 GiB memory request and a 6 GiB memory limit. Do not use the `small` preset for cloud installs. It can OOM-kill Cassandra during initialization and cause migration failures.
 
-Add a `values` block to the cassandra release in `helmfile.d/01-dependencies.yaml.gotmpl`:
+Common preset values:
+
+| Preset | Requests | Limits |
+| --- | --- | --- |
+| `small` | 500m CPU, 512Mi memory | 750m CPU, 768Mi memory |
+| `large` | 1 CPU, 2048Mi memory | 1.5 CPU, 3072Mi memory |
+| `xlarge` | 1 CPU, 3072Mi memory | 3 CPU, 6144Mi memory |
+| `2xlarge` | 1 CPU, 3072Mi memory | 6 CPU, 12288Mi memory |
+
+All listed presets include a 50Mi ephemeral-storage request and 2Gi ephemeral-storage limit.
+
+If Cassandra pods restart with `OOMKilled`, or the `cassandra-migrations` job fails with a consistency-level error while Cassandra pods are restarting, increase the preset in your environment file:
 
 ```yaml
-- name: cassandra
-  version: 0.9.0
-  condition: cassandra.enabled
-  namespace: cassandra-system
-  <<: *dependency
-  values:
-    - ../global.yaml.gotmpl
-    - ../secrets/{{ requiredEnv "HELMFILE_ENV" }}-secrets.yaml
-    - cassandra:
-        resources:
-          limits:
-            cpu: "8"
-            memory: 8192Mi
-          requests:
-            cpu: "2"
-            memory: 4096Mi
+cassandra:
+  resourcesPreset: "2xlarge"
 ```
 
 Then apply the change to just Cassandra:
@@ -368,7 +425,7 @@ HELMFILE_ENV=<environment-name> helmfile --selector name=cassandra sync
 ```
 
 <Note>
-When overriding `values` on a release that uses `<<: *dependency`, you must re-include `global.yaml.gotmpl` and the secrets file in your `values` list because YAML merge replaces lists entirely. Adjust CPU and memory values to suit your workload.
+For local development, a lower preset may be acceptable when the environment also reduces Cassandra to one replica. For cloud installs, start with `xlarge` or higher and tune from there.
 
 </Note>
 
@@ -376,7 +433,7 @@ When overriding `values` on a release that uses `<<: *dependency`, you must re-i
 
 The `helm` and `image` sections tell NVCF which registries to pull Helm charts and container images from.
 
-- `helm.sources`: The OCI registry where NVCF Helm charts are stored. Helmfile pulls charts from here at deploy time (requires local authentication -- see [Access Requirements]).
+- `helm.sources`: The OCI registry where NVCF Helm charts are stored. Helmfile pulls charts from here at deploy time (requires local authentication. See [Access Requirements](#access-requirements)).
 - `image`: The container registry where NVCF service images are stored. Kubernetes pulls images from here at runtime.
 
 ```yaml
@@ -407,12 +464,16 @@ image:
 <Warning>
 If you have mirrored NVCF artifacts to your own registry (e.g., ECR), update both `helm.sources` and `image` to point to your mirror. See [self-hosted-image-mirroring](./image-mirroring.md) for details on mirroring artifacts.
 
-**When upgrading to a new** `nvcf-self-managed-stack` **version**, you must re-mirror all artifacts before running `helmfile sync`. Each stack release may introduce new or updated container images and Helm charts. If these are not present in your private registry, pods will fail with `ImagePullBackOff`. Check the [self-hosted-artifact-manifest](./manifest.md) for the complete list of required artifacts and versions.
+When upgrading to a new `nvcf-self-managed-stack` version, re-mirror all artifacts before running `helmfile sync`. Each stack release may introduce new or updated container images and Helm charts. If these are not present in your private registry, pods will fail with `ImagePullBackOff`. For split installs, mirror both the control-plane and compute-plane stack resources listed in the [self-hosted-artifact-manifest](./manifest.md).
 
 </Warning>
 
 <Note>
-**Pulling directly from NGC is the recommended approach** and avoids the need to manually mirror artifacts on every upgrade. If your environment permits it, configure `helm.sources` and `image` to point to the NGC registry (`nvcr.io`) and use your NGC API key for authentication. This ensures you always have access to the latest artifacts without additional mirroring steps.
+Pulling directly from NGC is the recommended approach and avoids the need to
+manually mirror artifacts on every upgrade. If your environment permits it,
+configure `helm.sources` and `image` to point to the NGC registry (`nvcr.io`)
+and use your NGC API key for authentication. This ensures you always have access
+to the latest artifacts without additional mirroring steps.
 
 </Note>
 
@@ -422,7 +483,9 @@ These settings control *where* images are pulled from, not *how* Kubernetes auth
 </Note>
 
 <Tip>
-**Quick Start Summary:** If you are using the example EKS environment YAML directly and followed [Gateway quickstart](./gateway-routing.md#gateway-quickstart), you only need to change:
+Quick start summary: If you are using the example EKS environment YAML directly
+and followed [Gateway quickstart](./gateway-routing.md#gateway-quickstart), you
+only need to change:
 
 1. `domain`: Replace `GATEWAY_ADDR` with the Gateway load balancer address
 2. `helm.sources.registry` and `helm.sources.repository`: Point to your Helm chart registry
@@ -433,7 +496,10 @@ These settings control *where* images are pulled from, not *how* Kubernetes auth
 #### Overriding Helm Chart Values
 
 <Accordion title="Overriding Helm Chart Values">
-The environment file (`environments/<environment-name>.yaml`) controls global settings like `domain`, `image`, and `nodeSelectors`. However, you may need to override values for a **specific Helm chart** -- for example, to increase Cassandra memory limits or change an image tag for one service.
+The environment file (`environments/<environment-name>.yaml`) controls global
+settings like `domain`, `image`, and `nodeSelectors`. However, you may need to
+override values for a specific Helm chart, for example to increase Cassandra
+memory limits or change an image tag for one service.
 
 Helmfile releases support a `values` property that passes values through to the underlying `helm install`/`helm upgrade` command. To add chart-specific overrides, edit the release definition in the appropriate file under `helmfile.d/` and add a `values` block:
 
@@ -458,7 +524,9 @@ Helmfile releases support a `values` property that passes values through to the 
 ```
 
 <Note>
-When a release inherits from a template (`<<: *dependency`), specifying `values` on the release **replaces** the template's `values` list (YAML merge does not append lists). You must re-include `global.yaml.gotmpl` and the secrets file.
+When a release inherits from a template (`<<: *dependency`), specifying `values`
+on the release replaces the template's `values` list. YAML merge does not append
+lists. You must re-include `global.yaml.gotmpl` and the secrets file.
 
 </Note>
 
@@ -473,7 +541,9 @@ values:
         NVCF_REGISTRIES_ACCOUNT_PROVISIONING_ARTIFACT_TYPES: "CONTAINER,HELM"
 ```
 
-Values defined here take the **highest precedence**, overriding both the environment file and `global.yaml.gotmpl`. Use `helmfile template` to preview the rendered manifests after adding overrides, then apply to a single release:
+Values defined here take the highest precedence, overriding both the environment
+file and `global.yaml.gotmpl`. Use `helmfile template` to preview the rendered
+manifests after adding overrides, then apply to a single release:
 
 ```bash
 # Preview changes
@@ -484,18 +554,57 @@ HELMFILE_ENV=<environment-name> helmfile --selector name=cassandra sync
 ```
 </Accordion>
 
+#### Worker Image Version Overrides
+
+The NVCF API uses the worker image versions in its `nvcf.sidecars.*`
+configuration. To pin worker sidecars for one Helmfile deployment, add an inline
+remote-config override to the `api` release in `helmfile.d/02-core.yaml.gotmpl`:
+
+```yaml
+- name: api
+  version: 1.19.3
+  namespace: nvcf
+  inherit:
+    - template: service
+  values:
+    - ../global.yaml.gotmpl
+    - ../secrets/{{ requiredEnv "HELMFILE_ENV" }}-secrets.yaml
+    - api:
+        remoteConfig:
+          enabled: true
+          configData:
+            nvcf:
+              sidecars:
+                init-container: "${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf_worker_init:<tag>"
+                utils-container-image:
+                  go: "${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf_worker_utils:<tag>"
+                niclls-container: "${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf_worker_niclls:<tag>"
+  needs:
+    - ess/ess-api
+```
+
+The `${nvcf.sidecars.hostname}` and `${nvcf.sidecars.repository}` placeholders
+resolve from the stack image registry and repository settings. Re-include
+`global.yaml.gotmpl` and the secrets file because defining `values` on the
+release replaces the inherited `values` list. Keep the existing `needs` entry on
+the release.
+
 ### Step 3. Configure your secrets file (`secrets/<environment-name>-secrets.yaml`)
 
 Secrets configuration contains any sensitive data required for NVCF operation. The image pull secret credentials you insert here will be used to bootstrap the NVCF API with registry credentials for all worker components (function sidecars), function containers and helm charts.
 
 These credentials will then be used for function deployments. Note that if the registry credentials are not correct you can always update them using the steps in [third-party-registries-self-hosted](./third-party-registries.md).
 
-Create your secrets file from the template below ([example-secrets.yaml](samples/configs/cp-example-secrets.yaml)). You must replace all instances of `REPLACE_WITH_BASE64_DOCKER_CREDENTIAL` with your actual base64-encoded registry credentials.
+Copy the secrets template using the same `HELMFILE_ENV` value from Step 2. The
+filename must match `HELMFILE_ENV` because Helmfile loads the corresponding
+secrets file. The example below shows the required structure
+([example-secrets.yaml](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/user/samples/configs/cp-example-secrets.yaml)). You must
+replace all instances of `REPLACE_WITH_BASE64_DOCKER_CREDENTIAL` with your
+actual base64-encoded registry credentials.
 
 ```bash
 cd path/to/nvcf-self-managed-stack
-touch secrets/<environment-name>-secrets.yaml
-# Copy the template into the file
+cp secrets/secrets.yaml.template "secrets/${HELMFILE_ENV}-secrets.yaml"
 ```
 
 <Accordion title="Configuration Template">
@@ -549,8 +658,9 @@ api:
 
 
 <Note>
-NVCF supports these registries for function containers (set in api.accountBootstrap.registryCredentials): **ACR** (Azure), **ECR** (AWS), **NVCR** (NVIDIA),
-**VolcEngine CR**, **JFrog/Artifactory**, and **Harbor**.
+NVCF supports these registries for function containers (set in
+api.accountBootstrap.registryCredentials): ACR (Azure), ECR (AWS), NVCR
+(NVIDIA), VolcEngine CR, JFrog/Artifactory, and Harbor.
 
 </Note>
 
@@ -563,14 +673,17 @@ Registry credentials must be base64-encoded in the format `username:password`. F
 
 ```bash
 # Replace YOUR_NGC_API_KEY with your actual personal NGC API key from ngc.nvidia.com
-echo -n '$oauthtoken:YOUR_NGC_API_KEY' | base64 -w 0
+printf '%s' '$oauthtoken:YOUR_NGC_API_KEY' | base64 | tr -d '\n'
 ```
 
 </Tab>
 
 <Tab title="Amazon ECR">
 
-For AWS ECR, NVCF requires **permanent IAM credentials**. You must first create a dedicated IAM user with ECR permissions. See [ecr-registry-setup](./third-party-registries.md) for complete setup instructions.
+For AWS ECR, NVCF requires permanent IAM credentials. You must first create a
+dedicated IAM user with ECR permissions. See
+[ecr-registry-setup](./third-party-registries.md) for complete setup
+instructions.
 
 Once you have created the IAM user and obtained the access keys:
 
@@ -579,7 +692,7 @@ Once you have created the IAM user and obtained the access keys:
 ACCESS_KEY_ID="<access-key-id>"
 SECRET_ACCESS_KEY="<secret-access-key>"
 
-echo -n "${ACCESS_KEY_ID}:${SECRET_ACCESS_KEY}" | base64 -w 0
+printf '%s' "${ACCESS_KEY_ID}:${SECRET_ACCESS_KEY}" | base64 | tr -d '\n'
 ```
 
 </Tab>
@@ -593,34 +706,55 @@ Once you have your VolcEngine Access Key ID and Secret Access Key (see [vcr-regi
 ACCESS_KEY_ID="<access-key-id>"
 SECRET_ACCESS_KEY="<secret-access-key>"
 
-echo -n "${ACCESS_KEY_ID}:${SECRET_ACCESS_KEY}" | base64 -w 0
+printf '%s' "${ACCESS_KEY_ID}:${SECRET_ACCESS_KEY}" | base64 | tr -d '\n'
 ```
 
 </Tab>
 
 </Tabs>
 
+Set kubectl to the control-plane cluster context before proceeding. Steps 4
+and 5 run kubectl and helmfile commands that target the current context. In a
+multi-cluster setup, verify the context is the control-plane cluster to avoid
+installing to the wrong cluster.
+
+```bash
+kubectl config use-context <control-plane-context>
+kubectl config current-context
+```
+
 ### Step 4. Configure image pull secrets (conditional)
 
 <Note>
-**Skip this step** if you have mirrored NVCF artifacts to a CSP-managed registry (e.g., ECR) and are using a CSP-managed registry with built-in credential helpers (e.g., AWS ECR with IAM node roles, GKE Artifact Registry with Workload Identity, Azure ACR with managed identity). Kubernetes can pull images automatically in those environments.
+Skip this step if you have mirrored NVCF artifacts to a CSP-managed registry
+(e.g., ECR) and are using a CSP-managed registry with built-in credential
+helpers (e.g., AWS ECR with IAM node roles, GKE Artifact Registry with Workload
+Identity, Azure ACR with managed identity). Kubernetes can pull images
+automatically in those environments.
 
 </Note>
 
-The secrets file you configured in Step 3 handles **API bootstrap registry credentials** -- these allow the NVCF API service to pull user function containers at runtime. Separately, Kubernetes itself needs **image pull secrets** to pull the NVCF control plane service images (API, SIS, Cassandra, etc.) from your registry.
+The secrets file you configured in Step 3 handles API bootstrap registry
+credentials. These allow the NVCF API service to pull user function containers
+at runtime. Separately, Kubernetes itself needs image pull secrets to pull the
+NVCF control plane service images (API, SIS, Cassandra, etc.) from your
+registry.
 
 If your `image` registry is private and your cluster nodes do not have built-in credential helpers, you must create Kubernetes `docker-registry` secrets in each NVCF namespace and configure the helmfile to reference them.
 
-**1. Create the pull secret** in each NVCF namespace ([create-nvcr-pull-secrets.sh](samples/scripts/create-nvcr-pull-secrets.sh)):
+1. Create the pull secret in each NVCF namespace
+   ([create-nvcr-pull-secrets.sh](https://raw.githubusercontent.com/NVIDIA/nvcf/main/docs/user/samples/scripts/create-nvcr-pull-secrets.sh)):
 
 ```bash
 export NGC_API_KEY="<your-ngc-api-key>"
 
-for ns in cassandra-system nats-system nvcf api-keys ess sis vault-system; do
+for ns in cassandra-system nats-system nvcf api-keys ess sis \
+          vault-system cert-manager; do
   kubectl create namespace "$ns" --dry-run=client -o yaml | kubectl apply -f -
 done
 
-for ns in cassandra-system nats-system nvcf api-keys ess sis vault-system; do
+for ns in cassandra-system nats-system nvcf api-keys ess sis \
+          vault-system cert-manager; do
   kubectl create secret docker-registry nvcr-pull-secret \
     --docker-server=nvcr.io \
     --docker-username='$oauthtoken' \
@@ -632,21 +766,28 @@ done
 
 For registries other than NGC, replace `--docker-server`, `--docker-username`, and `--docker-password` with your registry credentials.
 
-**2. Reference the secret in your helmfile environment.** The helmfile propagates `imagePullSecrets` to all NVCF charts automatically. Add the secret name to your environment YAML (e.g. `environments/<your-env>.yaml`):
+2. Reference the secret in your Helmfile environment. The Helmfile propagates
+   `imagePullSecrets` to all NVCF charts automatically. Add the secret name to
+   your environment YAML (e.g. `environments/<your-env>.yaml`):
 
 ```yaml
-imagePullSecrets:
-  - name: nvcr-pull-secret
+global:
+  imagePullSecrets:
+    - name: nvcr-pull-secret
 ```
 
 This replaces any need for a separate admission controller or policy engine to inject pull secrets.
 
 ### Step 5. Deploy the NVCF control plane components
 
-Set kubectl context to your cluster.
+Confirm your kubectl context is still set to the control-plane cluster (see
+above).
 
 <Info>
-Ensure your local environment is authenticated to the container registry where your NVCF Helm charts are stored (see [Access Requirements]). Helmfile pulls OCI charts during deployment and will fail if not authenticated.
+Ensure your local environment is authenticated to the container registry where
+your NVCF Helm charts are stored (see
+[Access Requirements](#access-requirements)). Helmfile pulls OCI charts during
+deployment and will fail if not authenticated.
 
 </Info>
 
@@ -678,22 +819,23 @@ HELMFILE_ENV=<environment-name> helmfile sync
 ```
 
 <Note>
-The initial deployment takes approximately **5-10 minutes** for local development and **10-20 minutes** for cloud deployments.
+The initial deployment takes approximately 5-10 minutes for local development
+and 10-20 minutes for cloud deployments.
 
 </Note>
 
-#### Deployment Progresssion and Monitoring
+#### Deployment Progression and Monitoring
 
 Helmfile will deploy services in the correct order with dependencies:
 
-**Phase 1: Dependency Layer (5-10 minutes)**
+Phase 1: dependency layer (5-10 minutes)
 
 - NATS messaging service
 - OpenBao (secrets management)
 - Cassandra (database)
-- **Helmfile Selector:** `release-group=dependencies`
+- Helmfile selector: `release-group=dependencies`
 
-**Phase 2: Control Plane Services (5-10 minutes)**
+Phase 2: control-plane services (5-10 minutes)
 
 - NVCF API Service
 - SIS (Spot Instance Service)
@@ -703,32 +845,37 @@ Helmfile will deploy services in the correct order with dependencies:
 - ESS API
 - Notary Service
 - Admin Issuer Proxy
-- **Helmfile Selector:** `release-group=services`
+- Helmfile selector: `release-group=services`
 
 <Info>
-**Monitor for account bootstrap failures:** Once helmfile reaches Phase 3, open a separate terminal and watch events in the `nvcf` namespace:
+Monitor for account bootstrap failures. Once Helmfile reaches Phase 3, open a
+separate terminal and watch events in the `nvcf` namespace:
 
 ```bash
 kubectl get events -n nvcf -w
 ```
 
-The account bootstrap job runs as a post-install hook and is the most common failure point (usually due to environment or secrets misconfiguration). If it fails, see [Recovering from Partial Deployments] for recovery steps.
+The account bootstrap job runs as a post-install hook and is the most common
+failure point, usually due to environment or secrets misconfiguration. If it
+fails, see
+[Recovering from Partial Deployments](#recovering-from-partial-deployments) for
+recovery steps.
 
 </Info>
 
-**Phase 3: Ingress Configuration (1-2 minutes)**
+Phase 3: ingress configuration (1-2 minutes)
 
 - Gateway API Routes (if enabled)
-- **Helmfile Selector:** `release-group=ingress`
+- Helmfile selector: `release-group=ingress`
 
-**Phase 4: (Optional) GPU Operator (1-2 minutes)**
-
-- Fake GPU Operator (optional, for development environments)
-- **Helmfile Selector:** `release-group=workers`
+GPU clusters are installed after the control plane succeeds. Use
+[Step 7. Configure the compute-plane Helmfile environment](#step-7-configure-the-compute-plane-helmfile-environment)
+and [Step 8. Register and install each GPU cluster](#step-8-register-and-install-each-gpu-cluster)
+for the split compute-plane bundle.
 
 Open a separate terminal to monitor the deployment progress:
 
-**Monitor Each Deployment Phase:**
+Monitor each deployment phase:
 
 ```bash
 # Check namespace creation and preparation
@@ -754,10 +901,11 @@ kubectl get httproutes -A          # Gateway API routes (if enabled)
 ```
 
 <Note>
-**Cassandra initialization pods showing "Error" is expected.** The `cassandra-initialize-cluster`
-job runs multiple pods in parallel and retries on failure. It is normal to see one or more pods
-with `Error` status. The deployment is healthy as long as at least one initialization pod
-reaches `Completed` and the `cassandra-migrations` job completes successfully.
+Cassandra initialization pods showing `Error` is expected. The
+`cassandra-initialize-cluster` job runs multiple pods in parallel and retries
+on failure. It is normal to see one or more pods with `Error` status. The
+deployment is healthy as long as at least one initialization pod reaches
+`Completed` and the `cassandra-migrations` job completes successfully.
 
 </Note>
 
@@ -773,9 +921,10 @@ Do not attempt to fix a partially failed deployment by re-running `helmfile sync
 
 </Warning>
 
-**Redeploying Dependencies (if needed):**
+Redeploying dependencies if needed:
 
-If a **dependency service** (Cassandra, NATS, OpenBao) fails or gets stuck, you can safely redeploy it individually:
+If a dependency service (Cassandra, NATS, OpenBao) fails or gets stuck, you can
+safely redeploy it individually:
 
 ```bash
 # Redeploy only Cassandra
@@ -785,11 +934,11 @@ HELMFILE_ENV=<environment-name> helmfile --selector name=cassandra apply
 HELMFILE_ENV=<environment-name> helmfile --selector release-group=dependencies apply
 ```
 
-**Recovering from Services Failures (without destroying dependencies):**
+Recovering from services failures without destroying dependencies:
 
 If the `release-group=services` deployment hangs or fails (for example, account bootstrap failure due to secrets misconfiguration), you can recover without destroying your dependencies.
 
-**1. Monitor for failures:**
+1. Monitor for failures:
 
 In a separate terminal, watch events in the nvcf namespace:
 
@@ -797,7 +946,7 @@ In a separate terminal, watch events in the nvcf namespace:
 kubectl get events -n nvcf -w
 ```
 
-**2. Check the account bootstrap logs** (if it failed):
+2. Check the account bootstrap logs if it failed:
 
 ```bash
 kubectl logs job/nvcf-api-account-bootstrap -n nvcf
@@ -808,33 +957,33 @@ The bootstrap job auto-deletes after ~5 minutes. Monitor events to catch failure
 
 </Note>
 
-**3. Check the NVCF API logs** for detailed error messages:
+3. Check the NVCF API logs for detailed error messages:
 
 ```bash
 kubectl logs -n nvcf -l app.kubernetes.io/name=nvcf-api --tail=100
 ```
 
-**4. Fix the root cause** (e.g., correct your `secrets/<environment-name>-secrets.yaml` file).
+4. Fix the root cause, for example correct your
+   `secrets/<environment-name>-secrets.yaml` file.
 
-**5. Destroy the services and downstream releases:**
+5. Destroy the services and downstream releases:
 
 ```bash
 # Destroy services release group
 HELMFILE_ENV=<environment-name> helmfile --selector release-group=services destroy
 
-# Destroy downstream releases (ingress, workers, admin-issuer-proxy)
+# Destroy downstream releases (ingress, admin-issuer-proxy)
 HELMFILE_ENV=<environment-name> helmfile --selector release-group=ingress destroy
-HELMFILE_ENV=<environment-name> helmfile --selector release-group=workers destroy
 HELMFILE_ENV=<environment-name> helmfile --selector name=admin-issuer-proxy destroy
 ```
 
-**6. Clean up the service namespaces:**
+6. Clean up the service namespaces:
 
 ```bash
 kubectl delete namespace nvcf api-keys ess sis --ignore-not-found
 ```
 
-**7. Recreate namespaces and labels** (required for Gateway API routing):
+7. Recreate namespaces and labels. Gateway API routing requires these labels:
 
 ```bash
 kubectl create namespace api-keys && \
@@ -848,36 +997,146 @@ kubectl label namespace ess nvcf/platform=true && \
 kubectl label namespace nvcf nvcf/platform=true
 ```
 
-**8. Re-sync services** (this triggers fresh post-install hooks):
+8. Re-sync services. This triggers fresh post-install hooks:
 
 ```bash
 HELMFILE_ENV=<environment-name> helmfile --selector release-group=services sync
 ```
 
-**9. Sync remaining releases** after services succeed:
+9. Sync remaining releases after services succeed:
 
 ```bash
 HELMFILE_ENV=<environment-name> helmfile --selector name=admin-issuer-proxy sync
 HELMFILE_ENV=<environment-name> helmfile --selector release-group=ingress sync
-HELMFILE_ENV=<environment-name> helmfile --selector release-group=workers sync
 ```
 
-**Full Restart (if dependencies are also broken):**
+Full restart if dependencies are also broken:
 
-If dependencies are corrupted or you prefer a clean slate, follow the complete [Uninstalling] steps, fix your configuration, then redeploy from Step 1.
+If dependencies are corrupted or you prefer a clean slate, follow the complete
+[Uninstalling](#uninstalling) steps, fix your configuration, then redeploy from
+Step 1.
+
+#### Enabling Vanity Gateway
+
+Vanity Gateway is optional and disabled by default. It is available only in
+stack packages that include the Vanity Gateway addon. If your extracted stack
+package does not contain a `vanity-gateway` release and `vanityGateway` route
+values, skip this section until you use a stack package that includes them.
+
+Enable it only when you need a customer-facing hostname or path mapping layer in
+front of the standard NVCF service routes.
+
+In stack packages that include the addon, set the value shape in your
+environment file:
+
+```yaml
+addons:
+  vanityGateway:
+    enabled: true
+    mappingConfig: {}
+```
+
+By default, the route host is `vanity.<domain>` and the backend is
+`vanity-gateway.nvcf:8080`. Put deployment-specific host and path mappings under
+`addons.vanityGateway.mappingConfig`. If your deployment needs custom vanity
+hosts, use the route hostname overrides supported by your stack package and
+create matching DNS records.
+
+After confirming your stack package includes the `vanity-gateway` release,
+preview and apply the service plus gateway routes:
+
+```bash
+HELMFILE_ENV=<environment-name> helmfile --selector name=vanity-gateway template
+HELMFILE_ENV=<environment-name> helmfile --selector name=vanity-gateway sync
+HELMFILE_ENV=<environment-name> helmfile --selector release-group=ingress sync
+```
+
+Verify only when the addon is present and enabled:
+
+```bash
+kubectl get deploy,svc -n nvcf -l app.kubernetes.io/name=vanity-gateway
+kubectl get httproute -A | grep -i vanity
+curl -H "Host: vanity.<domain>" "http://<gateway-address>/health"
+```
+
+#### Enabling NVCF UI
+
+NVCF UI is optional and disabled by default. It is available only in
+stack packages that include the NVCF UI addon. If your extracted stack
+package does not contain a `nvcf-ui` release and `nvcfUi` route
+values, skip this section until you use a stack package that includes them.
+
+Enable it only when you need a customer-facing NVCF admin-panel UI
+
+<Warning>
+The NVCF UI admin panel is currently unauthenticated. Do not expose it to the
+public internet. Restrict access to a trusted network, VPN, or an
+authenticating proxy in front of the `nvcf-ui` route.
+</Warning>
+
+In stack packages that include the addon, set the value shape in your
+environment file:
+
+```yaml
+addons:
+  nvcfUi:
+    enabled: true
+```
+
+Configure the conditional image pull secret. nvcf-ui runs in its own
+`nvcf-ui` namespace, which is separate from the other namespaces
+covered in
+[Step 4. Configure image pull secrets (conditional)](#step-4-configure-image-pull-secrets-conditional).
+If your `image` registry is private and your cluster nodes do not have
+built-in credential helpers, Kubernetes needs a `docker-registry` type secret in
+the `nvcf-ui` namespace to pull the nvcf-ui image. Skip this step if you
+mirrored NVCF artifacts to a CSP-managed registry with built-in credential
+helpers, as described in [Step 4](#step-4-configure-image-pull-secrets-conditional).
+
+```bash
+export NGC_API_KEY="<your-ngc-api-key>"
+
+kubectl create namespace nvcf-ui --dry-run=client -o yaml | kubectl apply -f -
+kubectl create secret docker-registry nvcr-pull-secret \
+  --docker-server=nvcr.io \
+  --docker-username='$oauthtoken' \
+  --docker-password="$NGC_API_KEY" \
+  --namespace=nvcf-ui \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+By default, the route host is `nvcf-ui.<domain>` and the backend is
+`nvcf-ui.nvcf-ui:8300`.
+
+After confirming your stack package includes the `nvcf-ui` release,
+preview and apply the service plus gateway routes:
+
+```bash
+HELMFILE_ENV=<environment-name> helmfile --selector name=nvcf-ui template
+HELMFILE_ENV=<environment-name> helmfile --selector name=nvcf-ui sync
+HELMFILE_ENV=<environment-name> helmfile --selector release-group=ingress sync
+```
+
+Verify only when the addon is present and enabled:
+
+```bash
+kubectl get deploy,svc -n nvcf-ui
+kubectl get httproute -A | grep -i nvcf-ui
+curl -i -H "Host: nvcf-ui.<domain>" "http://<gateway-address>/status"
+```
 
 #### Recovering from Gateway Address Changes
 
-If your Gateway or its underlying load balancer was deleted and recreated (e.g., due to a TCPRoute misconfiguration or infrastructure change), the external address will change. Services that depend on the `domain` value -- including Gateway API routes, SIS cluster registration, and API hostname resolution -- will break until the new address is propagated.
+If your Gateway or its underlying load balancer was deleted and recreated (e.g., due to a TCPRoute misconfiguration or infrastructure change), the external address will change. Services that depend on the `domain` value -- including Gateway API routes, SIS cluster registration, API hostname resolution, and the optional Vanity Gateway route -- will break until the new address is propagated.
 
-**1. Get the new Gateway address:**
+1. Get the new Gateway address:
 
 ```bash
 GATEWAY_ADDR=$(kubectl get gateway nvcf-gateway -n envoy-gateway -o jsonpath='{.status.addresses[0].value}')
 echo "$GATEWAY_ADDR"
 ```
 
-**2. Update your environment file** with the new address:
+2. Update your environment file with the new address:
 
 ```bash
 # Edit environments/<environment-name>.yaml
@@ -885,7 +1144,7 @@ echo "$GATEWAY_ADDR"
 # To:     domain: "NEW_GATEWAY_ADDR"
 ```
 
-**3. Re-sync ingress and services** that depend on the domain:
+3. Re-sync ingress and services that depend on the domain:
 
 ```bash
 # Re-sync gateway routes (picks up new domain)
@@ -896,7 +1155,7 @@ HELMFILE_ENV=<environment-name> helmfile --selector release-group=services sync
 HELMFILE_ENV=<environment-name> helmfile --selector name=admin-issuer-proxy sync
 ```
 
-**4. Verify** routes are using the new address:
+4. Verify routes are using the new address:
 
 ```bash
 kubectl get httproutes -A
@@ -924,7 +1183,7 @@ helm list -A
 
 If you configured Gateway API ingress, you can verify the NVCF API is accessible by running the following commands.
 
-**1. Set up environment variables:**
+1. Set up environment variables:
 
 ```bash
 # Get the Gateway address from Gateway quickstart
@@ -932,7 +1191,7 @@ export GATEWAY_ADDR=$(kubectl get gateway nvcf-gateway -n envoy-gateway -o jsonp
 echo "Gateway Address: $GATEWAY_ADDR"
 ```
 
-**2. Generate an admin token:**
+2. Generate an admin token:
 
 ```bash
 # Generate an admin API token
@@ -943,7 +1202,7 @@ export NVCF_TOKEN=$(curl -s -X POST "http://${GATEWAY_ADDR}/v1/admin/keys" \
 echo "Token generated: ${NVCF_TOKEN:0:20}..."
 ```
 
-**3. List functions (should be empty initially):**
+3. List functions. The list should be empty initially:
 
 ```bash
 # List all functions
@@ -952,9 +1211,158 @@ curl -s -X GET "http://${GATEWAY_ADDR}/v2/nvcf/functions" \
   -H "Authorization: Bearer ${NVCF_TOKEN}" | jq .
 ```
 
+### Step 7. Configure the compute-plane Helmfile environment
+
+Use `deploy/stacks/nvcf-compute-plane` from the source repository for each GPU
+cluster. The compute-plane Helmfile installs `helm-nvca-operator` and wires it
+to the control plane values returned by cluster registration.
+
+Create an environment file in the compute-plane directory. Use the same Helm
+chart and image registry mirror as the control plane. Set the service URLs to
+addresses reachable from the GPU cluster. If the GPU cluster reaches the
+control plane through one load balancer with hostname-based Gateway routing,
+keep the URL pointed at the load balancer and set the host-header overrides to
+the route hostnames.
+
+```bash
+cd path/to/nvcf
+touch deploy/stacks/nvcf-compute-plane/environments/<environment-name>.yaml
+```
+
+```yaml title="deploy/stacks/nvcf-compute-plane/environments/<environment-name>.yaml"
+global:
+  helm:
+    sources:
+      registry: <your-chart-registry>
+      repository: <your-chart-repository>
+
+  image:
+    registry: <your-image-registry>
+    repository: <your-image-repository>
+
+  imagePullSecrets:
+    - name: nvcr-pull-secret
+
+  nvcaOperator:
+    selfManaged:
+      icmsServiceURL: "http://<GATEWAY_ADDR>"
+      icmsServiceHostHeaderOverride: "sis.<STACK_DOMAIN>"
+      revalServiceURL: "http://<GATEWAY_ADDR>"
+      revalServiceHostHeaderOverride: "reval.<STACK_DOMAIN>"
+      natsURL: "nats://<GATEWAY_ADDR>:4222"
+      natsHostOverride: "nats.<STACK_DOMAIN>"
+```
+
+If your GPU cluster can resolve per-service DNS names directly, set the service
+URLs to those names and omit the host-header override fields.
+
+Create the pull secret in `nvca-operator` on the GPU cluster before installing
+NVCA. Helmfile references the secret from `global.imagePullSecrets`, and the
+operator propagates it to the managed namespaces after installation.
+
+```bash
+kubectl --kubeconfig <gpu-cluster-kubeconfig> \
+  create namespace nvca-operator --dry-run=client -o yaml | \
+  kubectl --kubeconfig <gpu-cluster-kubeconfig> apply -f -
+kubectl --kubeconfig <gpu-cluster-kubeconfig> \
+  create secret docker-registry nvcr-pull-secret \
+  --docker-server=nvcr.io \
+  --docker-username='$oauthtoken' \
+  --docker-password="<registry-password>" \
+  --namespace=nvca-operator \
+  --dry-run=client -o yaml | kubectl --kubeconfig <gpu-cluster-kubeconfig> apply -f -
+```
+
+### Step 8. Register and install each GPU cluster
+
+Register each GPU cluster before installing NVCA. Registration discovers the
+GPU cluster's OIDC issuer and JWKS, records them with SIS/ICMS, and writes the
+cluster identity values that the operator chart consumes.
+
+Use `KUBECONFIG_FILE` for multi-cluster installs. It makes both registration and
+Helmfile target the GPU cluster instead of the control-plane cluster.
+For a complete Amazon EKS example, see the
+[CSP End-to-End Example](./csp-end-to-end-example-installation.md).
+
+The compute-plane Makefile runs `nvcf-cli init` before `cluster register`. Point
+`NVCF_CLI_CONFIG` at a CLI config that can reach the control-plane gateway.
+
+```yaml title="nvcf-cli-gpu-register.yaml"
+base_http_url: "http://<GATEWAY_ADDR>"
+invoke_url: "http://<GATEWAY_ADDR>"
+api_keys_service_url: "http://<GATEWAY_ADDR>"
+icms_url: "http://<GATEWAY_ADDR>"
+
+api_keys_host: "api-keys.<STACK_DOMAIN>"
+api_host: "api.<STACK_DOMAIN>"
+icms_host: "sis.<STACK_DOMAIN>"
+invoke_host: "invocation.<STACK_DOMAIN>"
+
+api_keys_service_id: "nvidia-cloud-functions-ncp-service-id-aketm"
+api_keys_issuer_service: "nvcf-api"
+api_keys_owner_id: "svc@nvcf-api.local"
+client_id: "<nca-id>"
+```
+
+Run the compute-plane target from the repository root. The target writes
+`deploy/stacks/nvcf-compute-plane/registration/<gpu-cluster-name>-register-values.yaml`.
+
+```bash
+make -C deploy/stacks/nvcf-compute-plane register-cluster \
+  CLUSTER_NAME=<gpu-cluster-name> \
+  NCA_ID=<nca-id> \
+  CLUSTER_REGION=<region> \
+  ICMS_URL="http://<GATEWAY_ADDR>" \
+  KUBECONFIG_FILE=<gpu-cluster-kubeconfig> \
+  NVCF_CLI=<path-to-nvcf-cli> \
+  NVCF_CLI_CONFIG=<path-to-nvcf-cli-gpu-register.yaml>
+```
+
+Install the NVCA operator on that GPU cluster. The `install` target copies the
+registration file into `out/` and runs Helmfile with
+`HELMFILE_ENV=<environment-name>`.
+
+```bash
+make -C deploy/stacks/nvcf-compute-plane install \
+  CLUSTER_NAME=<gpu-cluster-name> \
+  HELMFILE_ENV=<environment-name> \
+  NCA_ID=<nca-id> \
+  KUBECONFIG_FILE=<gpu-cluster-kubeconfig>
+```
+
+Verify the operator and backend on the GPU cluster:
+
+```bash
+kubectl --kubeconfig <gpu-cluster-kubeconfig> \
+  rollout status deployment/nvca-operator -n nvca-operator --timeout=10m
+
+kubectl --kubeconfig <gpu-cluster-kubeconfig> \
+  get nvcfbackends -n nvca-operator
+
+kubectl --kubeconfig <gpu-cluster-kubeconfig> \
+  get secret nvcr-pull-secret -n nvca-system
+
+kubectl --kubeconfig <gpu-cluster-kubeconfig> \
+  get pods -n nvca-system
+```
+
+For a multi-cluster EKS install, this is the expected GPU cluster validation:
+the control plane is installed, each GPU cluster is registered with its own
+kubeconfig, the NVCA Operator is installed on that GPU cluster, and the
+`NVCFBackend` reports a healthy agent. Repeat registration, install, and health
+checks for each GPU cluster. Function execution also requires worker pods on the
+GPU cluster to reach the control-plane worker endpoints. Do not use function
+deployment or invocation as the acceptance check until those endpoints are
+reachable from the GPU cluster.
+
+Repeat Step 8 for each additional GPU cluster. Use a unique `CLUSTER_NAME` for
+each cluster.
+
 ## Next Steps
 
-After the control plane installation is successfully complete, proceed to [Self-Managed Clusters](./cluster-management/self-managed.md) to set up GPU cluster operations.
+After the control plane and GPU clusters are installed, proceed to
+[Self-Managed Clusters](./cluster-management/self-managed.md) for NVCA
+operations and troubleshooting.
 
 ## Uninstalling
 
@@ -974,7 +1382,7 @@ After `helmfile destroy` completes, clean up the namespaces:
 ```bash
 # Delete NVCF namespaces
 kubectl delete namespace cassandra-system nats-system vault-system \
-  nvcf api-keys ess sis \
+  nvcf api-keys ess sis nvcf-ui \
   --ignore-not-found
 ```
 

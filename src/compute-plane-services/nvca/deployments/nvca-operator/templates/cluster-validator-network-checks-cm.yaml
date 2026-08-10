@@ -5,7 +5,7 @@
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+#     https://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,16 +14,17 @@
 # limitations under the License.
 
 {{- if (include "nvcaop.clusterValidatorEnabled" .) }}
+{{- $cv := include "nvcaop.clusterValidatorConfig" . | fromYaml }}
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ .Values.clusterValidator.configMapName | default "cluster-validator-network-checks" }}
+  name: {{ $cv.configMapName }}
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "nvcaop.labels" . | nindent 4 }}
     app.kubernetes.io/component: validation
 data:
   config.yaml: |
-    {{- .Values.clusterValidator.networkChecks | default dict | toYaml | nindent 4 }}
+    {{- $cv.networkChecks | toYaml | nindent 4 }}
 {{- end }}

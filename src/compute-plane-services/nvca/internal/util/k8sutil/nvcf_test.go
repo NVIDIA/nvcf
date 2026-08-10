@@ -18,7 +18,9 @@ limitations under the License.
 package k8sutil
 
 import (
+	"math"
 	"testing"
+	"time"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 	"github.com/stretchr/testify/assert"
@@ -26,6 +28,36 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+func TestAddTaskCleanupGracePeriod(t *testing.T) {
+	tests := []struct {
+		name               string
+		maxRuntimeDuration time.Duration
+		expected           time.Duration
+	}{
+		{
+			name:               "adds cleanup grace period",
+			maxRuntimeDuration: time.Hour,
+			expected:           time.Hour + TaskCleanupExtraGracePeriod,
+		},
+		{
+			name:               "saturates unbounded max runtime duration",
+			maxRuntimeDuration: time.Duration(math.MaxInt64),
+			expected:           time.Duration(math.MaxInt64),
+		},
+		{
+			name:               "saturates near max runtime duration",
+			maxRuntimeDuration: time.Duration(math.MaxInt64) - time.Minute,
+			expected:           time.Duration(math.MaxInt64),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, AddTaskCleanupGracePeriod(tt.maxRuntimeDuration))
+		})
+	}
+}
 
 func TestFindNVCFWorkerImagePullSecretObjects(t *testing.T) {
 	type spec struct {

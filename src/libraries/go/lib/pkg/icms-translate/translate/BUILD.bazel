@@ -1,0 +1,54 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "translate",
+    srcs = ["translate.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/libraries/go/lib/pkg/icms-translate/translate/common",
+        "//src/libraries/go/lib/pkg/icms-translate/translate/function",
+        "//src/libraries/go/lib/pkg/icms-translate/translate/task",
+    ],
+)
+
+go_test(
+    name = "translate_test",
+    srcs = ["translate_test.go"],
+    data = glob(["testdata/**"]),
+    embed = [":translate"],
+    embedsrcs = [
+        "testdata/1.function-queue-message.json",
+        "testdata/1.task-queue-message.json",
+        "testdata/2.function-queue-message.json",
+        "testdata/2.task-queue-message-telemetries.json",
+        "testdata/3.function-queue-message-container.json",
+        "testdata/3.task-queue-message-merge.json",
+        "testdata/4.function-queue-message-helm.json",
+        "testdata/4.task-queue-message-icms-action.json",
+        "testdata/5.function-queue-message-telemetries.json",
+        "testdata/6.function-queue-message-merge.json",
+        "testdata/7.function-queue-message-icms-action.json",
+    ],
+    deps = [
+        "//src/libraries/go/lib/pkg/icms-translate/translate/common",
+        "//src/libraries/go/lib/pkg/icms-translate/translate/function",
+        "//src/libraries/go/lib/pkg/icms-translate/translate/task",
+        "@com_github_stretchr_testify//assert",
+    ],
+)

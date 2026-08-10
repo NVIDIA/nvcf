@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: sample
+
+resources:
+  - namespace.yaml
+  - deployment.yaml
+  - service.yaml
+  - referencegrant.yaml
+  - httproute.yaml
+
+images:
+  - name: nginx
+    newName: docker.io/library/nginx
+    newTag: latest
+
+# custom configuration of the namespace transformer - `unsetOnly: true`
+transformers:
+  - kconfig/namespace.yaml

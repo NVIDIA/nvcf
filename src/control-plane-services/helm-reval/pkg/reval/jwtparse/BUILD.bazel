@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "jwtparse",
+    srcs = ["parser.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/reval/jwtparse",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_golang_jwt_jwt_v5//:jwt",
+        "@com_github_lestrrat_go_jwx_v2//jwk",
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
+        "@io_opentelemetry_go_otel//:otel",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":jwtparse",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "jwtparse_test",
+    srcs = ["parser_test.go"],
+    deps = [
+        ":jwtparse",
+        "@com_github_golang_jwt_jwt_v5//:jwt",
+        "@com_github_lestrrat_go_jwx_v2//jwk",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

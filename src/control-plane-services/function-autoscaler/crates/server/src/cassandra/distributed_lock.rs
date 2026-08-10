@@ -61,16 +61,21 @@ impl DistributedLockManager {
         lock_name: String,
         lock_duration_seconds: i32,
     ) -> Result<bool> {
-        self.cassandra_service
+        let acquired = self
+            .cassandra_service
             .put_lock(
                 &DistributedLock {
-                    lock_name,
+                    lock_name: lock_name.clone(),
                     node_id: self.node_id.clone(),
                     acquired_at: Utc::now(),
                 },
                 lock_duration_seconds,
             )
-            .await
+            .await?;
+        if !acquired {
+            metrics::record_distributed_lock_acquisition_failure(&lock_name);
+        }
+        Ok(acquired)
     }
 
     pub async fn get_lock(&self, lock_name: &str) -> Result<Option<DistributedLock>> {

@@ -1,0 +1,49 @@
+flowchart LR
+    subgraph User["User"]
+        CLI["nvsnap CLI<br/>kubectl plugin"]
+        UI["Demo UI<br/>(Web)"]
+    end
+
+    subgraph K8sCP["Kubernetes Control Plane"]
+        APISrv["kube-apiserver"]
+    end
+
+    subgraph NvSnapSvc["NvSnap Services"]
+        Server["nvsnap-server<br/>(catalog, API)"]
+        Blob["nvsnap-blobstore<br/>(content-addressed)"]
+    end
+
+    subgraph Node1["GPU Node 1 (H100 x8)"]
+        Agent1["nvsnap-agent<br/>(DaemonSet pod)"]
+        WL1["workload pod<br/>(vLLM, NIM, SGLang, ...)"]
+        HP1["hostPath:<br/>/var/lib/containerd/<br/>nvsnap-checkpoints"]
+        Agent1 -.->|"CRIU dump<br/>cuda-checkpoint"| WL1
+        Agent1 --> HP1
+    end
+
+    subgraph Node2["GPU Node 2 (H100 x8)"]
+        Agent2["nvsnap-agent"]
+        WL2["restored workload"]
+        HP2["hostPath checkpoints"]
+        Agent2 -.->|"CRIU restore"| WL2
+        Agent2 --> HP2
+    end
+
+    CLI --> APISrv
+    UI --> Server
+    Server --> APISrv
+    APISrv --> Agent1
+    APISrv --> Agent2
+    Agent1 -->|"upload chunks"| Blob
+    Agent2 -->|"peer fetch"| Agent1
+    Agent2 -->|"fallback fetch"| Blob
+    Server -->|"catalog read"| Agent2
+
+    classDef control  fill:#1976D2,stroke:#0D47A1,stroke-width:3px,color:#FFFFFF
+    classDef storage  fill:#F57C00,stroke:#E65100,stroke-width:3px,color:#FFFFFF
+    classDef workload fill:#388E3C,stroke:#1B5E20,stroke-width:3px,color:#FFFFFF
+    classDef agent    fill:#5E35B1,stroke:#311B92,stroke-width:3px,color:#FFFFFF
+    class CLI,UI,APISrv control
+    class HP1,HP2,Blob storage
+    class WL1,WL2 workload
+    class Agent1,Agent2,Server agent

@@ -1,0 +1,88 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# vLLM Test Pod
+# Runs vLLM with a small model for checkpoint/restore testing
+#
+# Usage:
+#   kubectl apply -f 03-vllm-test.yaml
+#   # Wait for "Uvicorn running" message in logs (model loading takes a few minutes)
+#   # Test with: curl http://<node-ip>:8000/v1/models
+#   # Then checkpoint via agent API
+#
+# Models by size (choose based on your GPU memory):
+#   - facebook/opt-125m     (~500MB, fast load)
+#   - facebook/opt-350m     (~1GB)
+#   - Qwen/Qwen2-0.5B       (~1GB)
+#   - Qwen/Qwen2-1.5B       (~3GB)
+#   - Qwen/Qwen3-6B         (~12GB)
+#
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vllm-test
+  namespace: nvsnap-test
+  labels:
+    app: nvsnap-test
+    test: vllm
+spec:
+  # Update this to your GPU node
+  # nodeName: your-gpu-node
+  restartPolicy: Never
+  containers:
+  - name: vllm
+    image: vllm/vllm-openai:v0.8.0
+    args:
+    - --model
+    - facebook/opt-125m
+    - --host
+    - 0.0.0.0
+    - --port
+    - "8000"
+    - --dtype
+    - float16
+    ports:
+    - containerPort: 8000
+      hostPort: 8000
+    env:
+    - name: HF_HOME
+      value: /root/.cache/huggingface
+    resources:
+      limits:
+        nvidia.com/gpu: 1
+      requests:
+        memory: "16Gi"
+        cpu: "4"
+---
+# Optional: vLLM with larger model (Qwen3-6B)
+# Uncomment and use this instead for production-like testing
+#
+# apiVersion: v1
+# kind: Pod
+# metadata:
+#   name: vllm-qwen
+#   labels:
+#     app: nvsnap-test
+#     test: vllm-qwen
+# spec:
+#   nodeName: your-gpu-node
+#   restartPolicy: Never
+#   containers:
+#   - name: vllm
+#     image: vllm/vllm-openai:v0.11.2
+#     args:
+#     - --model
+#     - Qwen/Qwen3-6B
+#     - --host
+#     - 0.0.0.0
+#     - --port
+#     - "8000"
+#     ports:
+#     - containerPort: 8000
+#       hostPort: 8000
+#     resources:
+#       limits:
+#         nvidia.com/gpu: 1
+#       requests:
+#         memory: "32Gi"
+#         cpu: "8"

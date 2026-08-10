@@ -1,24 +1,25 @@
-load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
-
-package(
-    default_visibility = ["//visibility:public"],
-    licenses = ["notice"],  # Apache 2.0
-)
+load("@rules_go//go:def.bzl", "go_library")
 
 go_library(
-    name = "go_default_library",
-    srcs = [
-        "standard.go",
-    ],
+    name = "stdlib",
+    srcs = ["standard.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/stdlib",
     importpath = "github.com/google/cel-go/common/stdlib",
+    visibility = ["//visibility:public"],
     deps = [
-        "//common:go_default_library",
-        "//common/decls:go_default_library",
-        "//common/functions:go_default_library",
-        "//common/operators:go_default_library",
-        "//common/overloads:go_default_library",
-        "//common/types:go_default_library",
-        "//common/types/ref:go_default_library",
-        "//common/types/traits:go_default_library",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/decls",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/functions",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/operators",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/overloads",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/types",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/types/ref",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/types/traits",
     ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":stdlib",
+    visibility = ["//visibility:public"],
 )

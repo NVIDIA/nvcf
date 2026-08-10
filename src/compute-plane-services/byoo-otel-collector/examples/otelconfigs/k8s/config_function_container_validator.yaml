@@ -78,7 +78,7 @@ receivers:
             - targets:
                 - ${env:OTEL_POD_IP:-0.0.0.0}:18888
 exporters:
-  otlphttp/GRAFANA_CLOUD-Grafana_prd-metrics:
+  otlp_http/GRAFANA_CLOUD-Grafana_prd-metrics:
     auth:
       authenticator: basicauth/GRAFANA_CLOUD-Grafana_prd-metrics
     endpoint: https://otlp-gateway-prod-us-west-0.grafana.net/otlp
@@ -123,7 +123,7 @@ processors:
     check_interval: 1s
     limit_percentage: 80
     spike_limit_percentage: 10
-  metricstransform:
+  metrics_transform:
     transforms:
       - action: update
         include: ^.*$
@@ -159,7 +159,7 @@ extensions:
     client_auth:
       password: ${file:/etc/byoo-otel-collector/secrets/Grafana_prd-apiKey}
       username: ${file:/etc/byoo-otel-collector/secrets/Grafana_prd-instanceId}
-  cgroupruntime:
+  cgroup_runtime:
     gomaxprocs:
       enabled: true
     gomemlimit:
@@ -185,7 +185,7 @@ service:
         public: "true"
       level: warn
     metrics:
-      level: normal
+      level: detailed
       readers:
         - pull:
             exporter:
@@ -197,9 +197,10 @@ service:
         - batch:
             exporter:
               otlp:
-                endpoint: ${env:OTEL_EXPORTER_OTLP_ENDPOINT}
+                endpoint: ${env:OTEL_EXPORTER_OTLP_ENDPOINT:-http://localhost:4317}
                 headers:
-                  lightstep-access-token: ${env:OTEL_TRACING_ACCESS_TOKEN}
+                  - name: lightstep-access-token
+                    value: ${env:OTEL_TRACING_ACCESS_TOKEN}
                 protocol: grpc
   pipelines:
     metrics:
@@ -207,14 +208,14 @@ service:
         - otlp
         - prometheus
       exporters:
-        - otlphttp/GRAFANA_CLOUD-Grafana_prd-metrics
+        - otlp_http/GRAFANA_CLOUD-Grafana_prd-metrics
       processors:
         - memory_limiter
         - filter/metrics
         - resource
-        - metricstransform
+        - metrics_transform
         - batch
   extensions:
     - healthcheckv2
-    - cgroupruntime
+    - cgroup_runtime
     - basicauth/GRAFANA_CLOUD-Grafana_prd-metrics

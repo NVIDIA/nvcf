@@ -28,7 +28,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 
-	"github.com/NVIDIA/nvcf-go/pkg/nvkit/logs"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
 
 	"ratelimiter/nvcf/pb"
 )
@@ -72,6 +72,11 @@ type MockNVCFAPIServer struct {
 	transitionSingleToMulti      bool // Transition test: single rate -> multi rate
 	transitionMultiToSingle      bool // Transition test: multi rate -> single rate
 	transitionMultiToMulti       bool // Transition test: multi rate -> different multi rate
+	withPerUserRate              bool // Per-user rate only (no global, no per-NCA)
+	withPerUserAndGlobalRate     bool // Per-user rate alongside a global rate
+	withPerUserAndPerNcaIdRate   bool // Per-user rate alongside a per-NCA-ID rate (no global)
+	withAllThreeTiers            bool // Per-user + per-NCA-ID + global all configured
+	withPerUserAndExcludedNcaId  bool // Per-user rate + global rate + excludedNcaIds
 
 	// Counter for tracking gRPC calls (for testing optimization)
 	callCountMu sync.Mutex
@@ -341,6 +346,59 @@ func (s *MockNVCFAPIServer) RateLimitPolicy(ctx context.Context, req *pb.RateLim
 				Config: &pb.RateLimitPolicyResponse_RateLimitConfig{
 					Rate:           &rate,
 					ExcludedNcaIds: []string{"test_nca_id_exclude1", "test_nca_id_exclude2"},
+				},
+			}, nil
+		}
+		if s.withPerUserRate {
+			perUserRate := "2-M"
+			return &pb.RateLimitPolicyResponse{
+				Config: &pb.RateLimitPolicyResponse_RateLimitConfig{
+					PerUserRate: &perUserRate,
+				},
+			}, nil
+		}
+		if s.withPerUserAndGlobalRate {
+			rate := "5-M"
+			perUserRate := "2-M"
+			return &pb.RateLimitPolicyResponse{
+				Config: &pb.RateLimitPolicyResponse_RateLimitConfig{
+					Rate:        &rate,
+					PerUserRate: &perUserRate,
+				},
+			}, nil
+		}
+		if s.withPerUserAndPerNcaIdRate {
+			perUserRate := "2-M"
+			return &pb.RateLimitPolicyResponse{
+				Config: &pb.RateLimitPolicyResponse_RateLimitConfig{
+					PerNcaIdConfigs: []*pb.RateLimitPolicyResponse_RateLimitConfig_PerNcaIdConfigs{
+						{NcaId: "nca_with_pernca", Rate: "5-M"},
+					},
+					PerUserRate: &perUserRate,
+				},
+			}, nil
+		}
+		if s.withAllThreeTiers {
+			rate := "100-M" // global generous so per-NCA tier dominates the NCA-tier check
+			perUserRate := "2-M"
+			return &pb.RateLimitPolicyResponse{
+				Config: &pb.RateLimitPolicyResponse_RateLimitConfig{
+					Rate: &rate,
+					PerNcaIdConfigs: []*pb.RateLimitPolicyResponse_RateLimitConfig_PerNcaIdConfigs{
+						{NcaId: "nca_pernca", Rate: "3-M"},
+					},
+					PerUserRate: &perUserRate,
+				},
+			}, nil
+		}
+		if s.withPerUserAndExcludedNcaId {
+			rate := "5-M"
+			perUserRate := "2-M"
+			return &pb.RateLimitPolicyResponse{
+				Config: &pb.RateLimitPolicyResponse_RateLimitConfig{
+					Rate:           &rate,
+					ExcludedNcaIds: []string{"nca_excluded_user_tier"},
+					PerUserRate:    &perUserRate,
 				},
 			}, nil
 		}

@@ -46,6 +46,10 @@ spec:
               value: ""
             - name: ADMIN_CLIENT_ID
               value: "ncp"
+            # Optional: overrides the derived in-cluster issuer stamped into the
+            # generated JWT secret roles. Empty keeps the default per-service issuer.
+            - name: JWT_ISSUER_OVERRIDE
+              value: ""
           volumeMounts:
             - name: openbao-secrets-root-token
               mountPath: "/secrets/root_token"

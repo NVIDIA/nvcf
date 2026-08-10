@@ -1,0 +1,74 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//rules/oci:defs.bzl", "go_oci_multi_binary_image")
+
+go_library(
+    name = "cmd_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-init/cmd",
+    visibility = ["//visibility:private"],
+    # Build-time stamping into the shared worker utils version variable,
+    # resolved by tools/workspace_status.sh when bazel is invoked with
+    # --stamp (the CI release jobs pass it). utils.Version feeds the
+    # service.version tracing attribute; its init() fallbacks read Go VCS
+    # build info, which rules_go binaries never carry, so without this the
+    # value stays "unknown". STABLE_VERSION is the release semver, which is
+    # also the primary container tag. The init() fallbacks only overwrite
+    # the linker-set value when VCS build info is present, so stamping is
+    # safe under Bazel.
+    x_defs = {
+        "github.com/NVIDIA/nvcf/src/libraries/go/worker/utils.Version": "{STABLE_VERSION}",
+    },
+    deps = ["//src/compute-plane-services/worker-init/service"],
+)
+
+go_binary(
+    name = "worker-init",
+    embed = [":cmd_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_oci_multi_binary_image(
+    name = "image",
+    base = "@distroless_go",
+    binaries = {
+        ":worker-init": "/worker-init",
+        "//src/compute-plane-services/worker-init/cmd/nvcf-trust-bundle-install:nvcf-trust-bundle-install": "/usr/bin/nvcf-trust-bundle-install",
+    },
+    entrypoint = ["/worker-init"],
+    # SetupEssAgent reads these files when a function uses secrets.
+    extra_layers = ["//src/compute-plane-services/worker-init/pkg/ess:ess_config_layer"],
+    tags = ["nvcf-worker-init"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "image_ess_config_test",
+    srcs = ["image_ess_config_test.go"],
+    args = ["-image_tar=$(location :image.tar)"],
+    data = [":image.tar"],
+)
+
+# Keep the worker-init entrypoint stable while ensuring the transport trust
+# installer is present in the same OCI image at the path NVCA invokes.
+sh_test(
+    name = "image_contents_test",
+    srcs = ["image_contents_test.sh"],
+    args = ["$(location :image.tar)"],
+    data = [":image.tar"],
+)

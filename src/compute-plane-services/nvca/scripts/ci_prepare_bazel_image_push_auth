@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Prepare the per-registry Docker configs consumed by bazel-image-push.
+
+set -euo pipefail
+umask 077
+
+vault_addr="${VAULT_ADDR:-https://}"
+vault_namespace="${VAULT_NAMESPACE:-ngc}"
+vault_kv_mount="${VAULT_KV_MOUNT:-secrets}"
+vault_auth_path="${VAULT_GITLAB_AUTH_PATH:-auth/gitlab/login}"
+vault_auth_role="${VAULT_GITLAB_AUTH_ROLE:-egx-ci}"
+secret_root="${EGX_VAULT_SECRET_ROOT_PATH:-nsv-egx/dev}"
+vault_token=""
+
+ensure_vault_token() {
+  if [[ -n "${vault_token}" ]]; then
+    return
+  fi
+
+  : "${VAULT_JWT_TOKEN:?VAULT_JWT_TOKEN must be provided by the GitLab id_tokens block}"
+
+  local vault_login_body
+  vault_login_body="$(
+    jq -nc \
+      --arg role "${vault_auth_role}" \
+      --arg jwt "${VAULT_JWT_TOKEN}" \
+      '{role: $role, jwt: $jwt}'
+  )"
+
+  vault_token="$(
+    curl --silent --show-error --fail-with-body \
+      --request POST \
+      --header "X-Vault-Namespace: ${vault_namespace}" \
+      --data "${vault_login_body}" \
+      "${vault_addr}/v1/${vault_auth_path}" \
+      | jq -er '.auth.client_token'
+  )"
+}
+
+vault_secret_value() {
+  local secret_path="$1"
+  local key="$2"
+
+  ensure_vault_token
+
+  curl --silent --show-error --fail-with-body \
+    --request GET \
+    --header "X-Vault-Namespace: ${vault_namespace}" \
+    --header "X-Vault-Token: ${vault_token}" \
+    "${vault_addr}/v1/${vault_kv_mount}/data/${secret_root}/${secret_path}" \
+    | jq -er --arg key "${key}" '.data.data[$key]'
+}
+
+write_token_config() {
+  local token="$1"
+  local docker_config_dir="$2"
+  local auth
+
+  auth="$(printf '$oauthtoken:%s' "${token}" | base64 | tr -d '\n')"
+  mkdir -p "${docker_config_dir}"
+  printf '{"auths":{"nvcr.io":{"auth":"%s"}}}\n' "${auth}" >"${docker_config_dir}/config.json"
+  chmod 600 "${docker_config_dir}/config.json"
+}
+
+write_basic_config() {
+  local registry="$1"
+  local username="$2"
+  local password="$3"
+  local docker_config_dir="$4"
+  local auth
+
+  auth="$(printf '%s:%s' "${username}" "${password}" | base64 | tr -d '\n')"
+  mkdir -p "${docker_config_dir}"
+  jq -nc --arg registry "${registry}" --arg auth "${auth}" '{auths: {($registry): {auth: $auth}}}' >"${docker_config_dir}/config.json"
+  chmod 600 "${docker_config_dir}/config.json"
+}
+
+write_vault_config() {
+  local secret_path="$1"
+  local docker_config_dir="$2"
+
+  mkdir -p "${docker_config_dir}"
+  vault_secret_value "${secret_path}" value | base64 -d >"${docker_config_dir}/config.json"
+  jq -e '.auths["nvcr.io"].auth' "${docker_config_dir}/config.json" >/dev/null
+  chmod 600 "${docker_config_dir}/config.json"
+}
+
+if [[ -n "${NGC_REGISTRY_TOKEN:-}" ]]; then
+  write_token_config "${NGC_REGISTRY_TOKEN}" "${HOME}/.docker-byocdev"
+else
+  write_vault_config "${NGC_REGISTRY_DOCKERCONFIG_SECRET:-dockerconfigjson-base64}" "${HOME}/.docker-byocdev"
+fi
+
+if [[ -n "${NGC_DEVOPS_API_KEY:-}" ]]; then
+  write_token_config "${NGC_DEVOPS_API_KEY}" "${HOME}/.docker-devops"
+elif [[ -n "${NGC_DEVOPS_DOCKERCONFIG_SECRET:-}" ]]; then
+  write_vault_config "${NGC_DEVOPS_DOCKERCONFIG_SECRET}" "${HOME}/.docker-devops"
+else
+  echo "NGC_DEVOPS_API_KEY or NGC_DEVOPS_DOCKERCONFIG_SECRET must be set for devops/ncp-dev pushes" >&2
+  exit 1
+fi
+
+write_basic_config \
+  "${CI_REGISTRY:?CI_REGISTRY must be set for GitLab image pushes}" \
+  "${CI_REGISTRY_USER:?CI_REGISTRY_USER must be set for GitLab image pushes}" \
+  "${CI_REGISTRY_PASSWORD:?CI_REGISTRY_PASSWORD must be set for GitLab image pushes}" \
+  "${HOME}/.docker-gitlab"

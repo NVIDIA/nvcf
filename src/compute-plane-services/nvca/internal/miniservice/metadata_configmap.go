@@ -47,7 +47,9 @@ type MetadataInput struct {
 	PodAnnotations                map[string]string
 	PodLabels                     map[string]string
 	EnvVars                       []corev1.EnvVar
+	OTelCollectorEnvVars          []corev1.EnvVar
 	TerminationGracePeriodSeconds *int64
+	ModelCacheInitEnv             map[string]string
 }
 
 // buildMiniserviceMetadata constructs a MiniserviceMetadata from the controller's
@@ -76,12 +78,14 @@ func (r *Reconciler) buildMiniserviceMetadata(
 		PodAnnotations:                in.PodAnnotations,
 		PodLabels:                     in.PodLabels,
 		EnvVars:                       envVars,
+		OTelCollectorEnvVars:          in.OTelCollectorEnvVars,
 		NodeAffinityKey:               nodefeatures.UniformInstanceTypeLabelKey,
 		NodeAffinityValue:             icmsReq.Spec.CreationMsgInfo.GetInstanceTypeLabelSelValue(),
 		ServiceAccountName:            serviceAccountName,
 		Tolerations:                   r.cfg.Workload.Tolerations,
 		ImagePullSecretNames:          secretNames,
 		TerminationGracePeriodSeconds: in.TerminationGracePeriodSeconds,
+		ModelCacheInitEnv:             in.ModelCacheInitEnv,
 	}
 
 	meta.Labels, meta.Annotations = newGeneralObjectLabelsAndAnnotations(
@@ -91,11 +95,10 @@ func (r *Reconciler) buildMiniserviceMetadata(
 
 	if r.FeatureFlagFetcher.IsFeatureFlagEnabled(featureflag.KAIScheduler) {
 		meta.SchedulerName = kaischeduler.SchedulerName
-		kaiSchedulerQueueName := kaischeduler.GetQName()
 		if meta.PodLabels == nil {
 			meta.PodLabels = make(map[string]string)
 		}
-		meta.PodLabels[kaischeduler.SchedulerQueueLabel] = kaiSchedulerQueueName
+		meta.PodLabels[kaischeduler.SchedulerQueueLabel] = kaischeduler.DefaultQueue
 	}
 
 	return meta, nil

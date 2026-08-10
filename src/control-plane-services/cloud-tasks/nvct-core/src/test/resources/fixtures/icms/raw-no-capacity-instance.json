@@ -1,0 +1,31 @@
+{
+  "CreateTime": "2024-05-02T19:37:41.687Z",
+  "InstanceId": "%s",
+  "LaunchSpecification": {
+    "InstanceType": "%s",
+    "ContainerImage": "nvcr.io/whw3rcpsilnj/playground/maxine_vf_server_optimized:0.3",
+    "Placement": {
+      "AvailabilityZone": "NP-LAX-03"
+    },
+    "Gpu": "%s",
+    "Backend": "GFN",
+    "NcaId": "NVVppkDl81nJZ0GtZORXNeeOoY8h1p1Tfd8vuIPFV18"
+  },
+  "LaunchedAvailabilityZone": "NP-LAX-03",
+  "InstanceRequestId": "%s",
+  "CloudProvider": "GFN",
+  "State": "closed",
+  "Status": {
+    "Code": "instance-terminated-no-capacity",
+    "Message": "Instance status updated to instance-terminated-no-capacity",
+    "UpdateTime": "2024-05-03T17:23:15.492Z"
+  },
+  "InstanceState": {
+    "Code": 48,
+    "Name": "terminated"
+  },
+  "HealthInfo": {
+    "ErrorLog": "Instance terminated due to to capacity constraint"
+  },
+  "InstanceInterruptionBehavior": "terminate"
+}

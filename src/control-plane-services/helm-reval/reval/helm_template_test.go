@@ -30,7 +30,7 @@ func Test_isErrHTTPAuthIssue(t *testing.T) {
 	assert.False(t, isErrHTTPAuthIssue(fmt.Errorf("failed to fetch blah")))
 	assert.False(t, isErrHTTPAuthIssue(fmt.Errorf("failed to fetch blah : 400 bad request")))
 	assert.True(t, isErrHTTPAuthIssue(fmt.Errorf("failed to fetch blah : 401 invalid creds")))
-	assert.True(t, isErrHTTPAuthIssue(fmt.Errorf("failed to fetch blah : 403 unathorized")))
+	assert.True(t, isErrHTTPAuthIssue(fmt.Errorf("failed to fetch blah : 403 unauthorized")))
 }
 
 func Test_ngcHostRe(t *testing.T) {

@@ -1,0 +1,130 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: lb-balance-bursty-4c2p-2s
+metadata:
+  description: Heterogeneous grouped-pylon burst workload through a two-stargate local proxy pool.
+  tags: [load-balance, grouped-pylons, multi-stargate, bursty, heterogeneous]
+  expected_runtime: medium
+  expected_signal: Stats-aware algorithms should track aggregate cluster capacity and control latency tails during bursts better than static baselines.
+model: dummy-model
+seed: 702
+request_count: 320
+max_concurrency: 64
+
+stargates:
+  count: 2
+
+backends:
+  count: 8
+  pylons_per_cluster: 2
+  cluster_id_template: cluster-{cluster_index}
+  profile:
+    name: balanced
+    weight: 1.0
+    max_concurrent_requests: 6
+    kv_cache_capacity_tokens: 150000
+    service_time_ms:
+      ttft_mean: 60
+      ttft_jitter_ms: 10
+      decode_jitter_ms: 3
+      prefill_tokens_per_s: 7000
+      decode_tokens_per_s: 170
+    registration:
+      last_mean_input_tps: 160
+  profiles:
+    - count: 2
+      profile:
+        name: fast-cluster
+        weight: 1.0
+        max_concurrent_requests: 10
+        kv_cache_capacity_tokens: 240000
+        service_time_ms:
+          ttft_mean: 35
+          ttft_jitter_ms: 5
+          decode_jitter_ms: 2
+          prefill_tokens_per_s: 12000
+          decode_tokens_per_s: 260
+        registration:
+          last_mean_input_tps: 280
+    - count: 4
+      profile:
+        name: balanced-cluster
+        weight: 1.0
+        max_concurrent_requests: 6
+        kv_cache_capacity_tokens: 150000
+        service_time_ms:
+          ttft_mean: 60
+          ttft_jitter_ms: 10
+          decode_jitter_ms: 3
+          prefill_tokens_per_s: 7000
+          decode_tokens_per_s: 170
+        registration:
+          last_mean_input_tps: 160
+    - count: 2
+      profile:
+        name: constrained-cluster
+        weight: 1.0
+        max_concurrent_requests: 3
+        kv_cache_capacity_tokens: 80000
+        service_time_ms:
+          ttft_mean: 110
+          ttft_jitter_ms: 20
+          decode_jitter_ms: 7
+          prefill_tokens_per_s: 3400
+          decode_tokens_per_s: 85
+        registration:
+          last_mean_input_tps: 80
+
+traffic_pattern:
+  kind: bursty
+  routing_keys: 0
+  cache_affinity_keys: 128
+  input_tokens:
+    distribution: lognormal
+    mean: 600
+    sigma: 0.5
+    p99_cap: 3000
+  output_tokens:
+    distribution: lognormal
+    mean: 72
+    sigma: 0.45
+    p99_cap: 320
+  quiet_rps: 20
+  burst_rps: 100
+  burst_period_requests: 40
+
+algorithms:
+  - name: power-of-two
+    config:
+      default: power-of-two
+  - name: round-robin
+    config:
+      default: round-robin
+  - name: random
+    config:
+      default: random
+  - name: groq-multiregion
+    config:
+      default: groq-multiregion
+  - name: pulsar
+    config:
+      default: power-of-two
+      models:
+        dummy-model:
+          algorithm: pulsar
+          seed: grouped-bursty-v1
+          require_cache_affinity_key: true
+          require_input_tokens: true

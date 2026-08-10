@@ -21,9 +21,7 @@ use crate::cassandra::statements::ActiveFunctionTable;
 use crate::metrics;
 use crate::models::ActiveFunctionDetails;
 use crate::nvcf_api::oauth2_client;
-use crate::nvcf_api::{
-    AutoscalerRequest, AutoscalerResponse, DeploymentInfo, FunctionStatus, NvcfApiError,
-};
+use crate::nvcf_api::{AutoscalerResponse, DeploymentInfo, FunctionStatus, NvcfApiError};
 use crate::secrets::secrets_file_watcher::SecretFileWatcher;
 use crate::work::bucket::{NodeBucketManager, BUCKET_COUNT};
 use crate::work::{FunctionCachedState, FunctionStateCache};
@@ -36,19 +34,45 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_util::sync::{CancellationToken, DropGuard};
+use tonic::metadata::MetadataValue;
+use tonic::transport::Channel;
 use tracing;
 use uuid::Uuid;
 
-const SCALE_FUNCTION_URL: &str = "/v2/nvcf/predictions/functions/{funcId}/versions/{versionId}";
+// Include the generated proto code from nvcf.proto (client-side Autoscaler stub).
+pub mod nvcf_proto {
+    tonic::include_proto!("nvcf");
+}
+use nvcf_proto::{autoscaler_client::AutoscalerClient, AutoscalerRequest as GrpcAutoscalerRequest};
+
 const NVCF_API_BUCKET_LOCK_TTL_SECONDS: Duration = Duration::from_secs(15);
 pub const NVCF_API_BUCKET_LOCK_PREFIX: &str = "nvcf_api_bucket";
+
+/// Map the gRPC response's `functionStatus` string to our internal enum.
+/// Returns `None` for anything we don't explicitly recognize (including an
+/// empty string) so callers treat unrecognized statuses as an error rather
+/// than silently assuming the function is healthy and proceeding to scale.
+fn parse_function_status(status: &str) -> Option<FunctionStatus> {
+    match status {
+        "ACTIVE" => Some(FunctionStatus::ACTIVE),
+        "DEPLOYING" => Some(FunctionStatus::DEPLOYING),
+        "DELETED" => Some(FunctionStatus::DELETED),
+        "ERRORED" => Some(FunctionStatus::ERRORED),
+        "INACTIVE" => Some(FunctionStatus::INACTIVE),
+        _ => None,
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NvcfApiSettings {
     /// Base URL for the OAuth2 client API used for authentication
+    #[serde(default)]
     pub oauth2_token_api_address: String,
-    /// Base URL for the NVCF API
-    pub nvcf_api_address: String,
+    /// Space-delimited OAuth2 scopes requested for NVCF API gRPC calls
+    #[serde(default = "default_oauth2_token_scope")]
+    pub oauth2_token_scope: String,
+    /// gRPC endpoint for the NVCF API's Autoscaler service
+    pub nvcf_api_grpc_address: String,
     #[serde(default)]
     pub disable_auth: bool,
     pub dry_run: bool,
@@ -65,6 +89,9 @@ fn default_auth_http_timeout() -> u64 {
 }
 fn default_token_refresh_interval() -> u64 {
     180
+}
+fn default_oauth2_token_scope() -> String {
+    "autoscaler:auth".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,7 +118,8 @@ impl Default for NvcfApiSettings {
     fn default() -> Self {
         Self {
             oauth2_token_api_address: "".to_string(),
-            nvcf_api_address: "http://localhost:8082".to_string(),
+            oauth2_token_scope: default_oauth2_token_scope(),
+            nvcf_api_grpc_address: "http://localhost:50051".to_string(),
             disable_auth: true,
             dry_run: false,
             auth_http_timeout_seconds: default_auth_http_timeout(),
@@ -133,8 +161,7 @@ impl From<RateLimiterSettings> for NvcfApiServiceSettings {
 
 struct ProcessRequestCtx<'a> {
     rate_limiter: &'a Arc<RateLimiter>,
-    nvcf_api_url: &'a str,
-    nvcf_api_client: &'a reqwest_middleware::ClientWithMiddleware,
+    nvcf_api_channel: &'a Channel,
     oauth2_client: Option<&'a oauth2_client::OAuth2Client>,
     cassandra_service: Option<&'a CassandraServiceManager>,
     function_state_cache: Option<&'a FunctionStateCache>,
@@ -142,8 +169,8 @@ struct ProcessRequestCtx<'a> {
 }
 
 pub struct NvcfApiService {
-    pub nvcf_api_url: String,
-    pub nvcf_api_client: reqwest_middleware::ClientWithMiddleware,
+    pub nvcf_api_grpc_address: String,
+    nvcf_api_channel: Channel,
     cassandra_service: Option<Arc<CassandraServiceManager>>,
     function_state_cache: Option<Arc<FunctionStateCache>>,
     oauth2_client: Option<oauth2_client::OAuth2Client>,
@@ -174,6 +201,11 @@ impl NvcfApiService {
         )
     }
 
+    /// Build a lazily-connecting gRPC channel to the NVCF API's Autoscaler service.
+    fn build_grpc_channel(endpoint: &str) -> Channel {
+        crate::nvcf_api::lazy_grpc_channel(endpoint).expect("invalid NVCF API gRPC endpoint")
+    }
+
     pub(crate) fn with_capacity_and_rate_limit(
         nvcf_api_settings: NvcfApiSettings,
         cassandra_service: Option<Arc<CassandraServiceManager>>,
@@ -187,6 +219,7 @@ impl NvcfApiService {
             Some(
                 oauth2_client::OAuth2Client::with_timeouts(
                     nvcf_api_settings.oauth2_token_api_address,
+                    nvcf_api_settings.oauth2_token_scope,
                     secrets_watcher,
                     Duration::from_secs(nvcf_api_settings.auth_http_timeout_seconds),
                     Duration::from_secs(nvcf_api_settings.token_refresh_interval_seconds),
@@ -210,10 +243,8 @@ impl NvcfApiService {
         let drop_guard = cancellation_token.clone().drop_guard();
 
         let mut service = Self {
-            nvcf_api_url: nvcf_api_settings.nvcf_api_address,
-            nvcf_api_client: reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
-                .with(reqwest_tracing::TracingMiddleware::default())
-                .build(),
+            nvcf_api_channel: Self::build_grpc_channel(&nvcf_api_settings.nvcf_api_grpc_address),
+            nvcf_api_grpc_address: nvcf_api_settings.nvcf_api_grpc_address,
             cassandra_service,
             function_state_cache,
             oauth2_client,
@@ -250,16 +281,14 @@ impl NvcfApiService {
         cancellation_token: CancellationToken,
     ) {
         let rate_limiter = self.rate_limiter.clone();
-        let nvcf_api_url = self.nvcf_api_url.clone();
-        let nvcf_api_client = self.nvcf_api_client.clone();
+        let nvcf_api_channel = self.nvcf_api_channel.clone();
         let oauth2_client = self.oauth2_client.clone();
         let cassandra_service = self.cassandra_service.clone();
         let function_state_cache = self.function_state_cache.clone();
 
         for (bucket_index, mut receiver) in bucket_receivers {
             let rate_limiter = rate_limiter.clone();
-            let nvcf_api_url = nvcf_api_url.clone();
-            let nvcf_api_client = nvcf_api_client.clone();
+            let nvcf_api_channel = nvcf_api_channel.clone();
             let oauth2_client = oauth2_client.clone();
             let cassandra_service = cassandra_service.clone();
             let function_state_cache = function_state_cache.clone();
@@ -315,8 +344,7 @@ impl NvcfApiService {
                                                 info,
                                                 &ProcessRequestCtx {
                                                     rate_limiter: &rate_limiter,
-                                                    nvcf_api_url: &nvcf_api_url,
-                                                    nvcf_api_client: &nvcf_api_client,
+                                                    nvcf_api_channel: &nvcf_api_channel,
                                                     oauth2_client: oauth2_client.as_ref(),
                                                     cassandra_service: Some(cassandra_service.as_ref()),
                                                     function_state_cache: function_state_cache.as_deref(),
@@ -416,8 +444,7 @@ impl NvcfApiService {
         };
 
         Self::scale_function_internal_static(
-            &self.nvcf_api_url,
-            &self.nvcf_api_client,
+            &self.nvcf_api_channel,
             self.oauth2_client.as_ref(),
             deployment_info,
         )
@@ -426,34 +453,17 @@ impl NvcfApiService {
 
     #[tracing::instrument(
         name = "scale_function_nvcf_api_call",
-        skip(nvcf_api_client, oauth2_client)
+        skip(nvcf_api_channel, oauth2_client)
     )]
     async fn scale_function_internal_static(
-        nvcf_api_url: &str,
-        nvcf_api_client: &reqwest_middleware::ClientWithMiddleware,
+        nvcf_api_channel: &Channel,
         oauth2_client: Option<&oauth2_client::OAuth2Client>,
         deployment_info: DeploymentInfo,
     ) -> Result<AutoscalerResponse, NvcfApiError> {
         let start_time = std::time::Instant::now();
-        let url = format!(
-            "{}{}",
-            nvcf_api_url,
-            SCALE_FUNCTION_URL
-                .replace("{funcId}", &deployment_info.function_id.to_string())
-                .replace(
-                    "{versionId}",
-                    &deployment_info.function_version_id.to_string()
-                )
-        );
 
-        let request = AutoscalerRequest {
-            required_number_of_instances: deployment_info.required_number_of_instances,
-            predicted_at: Utc::now(),
-        };
-
-        let mut request_builder = nvcf_api_client.put(&url);
-        if let Some(oauth2_client) = oauth2_client {
-            let jwt_token = oauth2_client.get_jwt_token().await.map_err(|e| {
+        let jwt_token = if let Some(oauth2_client) = oauth2_client {
+            let token = oauth2_client.get_jwt_token().await.map_err(|e| {
                 tracing::error!(
                     "Failed to get JWT token for function {} version {}: {}",
                     deployment_info.function_id,
@@ -462,180 +472,102 @@ impl NvcfApiService {
                 );
                 NvcfApiError::InternalError
             })?;
-            request_builder =
-                request_builder.header("Authorization", format!("Bearer {}", jwt_token));
-        }
-        request_builder = request_builder.header("Content-Type", "application/json");
-        let body = serde_json::to_vec(&request).map_err(|e| {
-            tracing::error!("Failed to serialize scale request: {}", e);
-            NvcfApiError::InternalError
-        })?;
-        request_builder = request_builder.body(body);
-        let response = request_builder.send().await.map_err(|e| {
-            let duration = start_time.elapsed().as_secs_f64() * 1000.0;
-            let error = NvcfApiError::InternalError;
-            metrics::record_nvcf_api_request("scale_function", &error.to_short_string(), duration);
-            tracing::error!(
-                "HTTP request failed for function {} version {}: {}",
-                deployment_info.function_id,
-                deployment_info.function_version_id,
-                e
-            );
-            error
-        })?;
-        if !response.status().is_success() {
-            let status_code = response.status().as_u16();
-            let error_body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unable to read error response".to_string());
-            tracing::error!(
-                "Error response: {} for functionID {} and versionID {}",
-                error_body,
-                deployment_info.function_id,
-                deployment_info.function_version_id
-            );
-            match status_code {
-                // This means autoscaler gave a prediction that is beyond limits, utilization is high
-                400 => {
-                    let duration = start_time.elapsed().as_secs_f64() * 1000.0;
-                    let error = NvcfApiError::InstanceRequestBeyondLimits;
-                    metrics::record_nvcf_api_request(
-                        "scale_function",
-                        &error.to_short_string(),
-                        duration,
-                    );
-                    return Err(error);
-                }
-                404 => {
-                    let duration = start_time.elapsed().as_secs_f64() * 1000.0;
-                    let error = NvcfApiError::FunctionNotFound;
-                    metrics::record_nvcf_api_request(
-                        "scale_function",
-                        &error.to_short_string(),
-                        duration,
-                    );
-                    return Err(error);
-                }
-                _ => {
-                    let duration = start_time.elapsed().as_secs_f64() * 1000.0;
-                    let error = NvcfApiError::UnknownError;
-                    metrics::record_nvcf_api_request(
-                        "scale_function",
-                        &error.to_short_string(),
-                        duration,
-                    );
-                    return Err(error);
-                }
-            }
-        }
-        // Get response text first to avoid borrow checker issues
-        let response_text = response.text().await.map_err(|e| {
-            let duration = start_time.elapsed().as_secs_f64() * 1000.0;
-            let error = NvcfApiError::InternalError;
-            metrics::record_nvcf_api_request("scale_function", &error.to_short_string(), duration);
-            tracing::error!(
-                "Failed to read response text for function {} version {}: {}",
-                deployment_info.function_id,
-                deployment_info.function_version_id,
-                e
-            );
-            error
-        })?;
-
-        if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&response_text) {
-            let function_status = if let Some(status_str) =
-                json_value.get("functionStatus").and_then(|v| v.as_str())
-            {
-                match status_str {
-                    "DEPLOYING" => FunctionStatus::DEPLOYING,
-                    "DELETED" => FunctionStatus::DELETED,
-                    "ERRORED" => FunctionStatus::ERRORED,
-                    "INACTIVE" => FunctionStatus::INACTIVE,
-                    _ => FunctionStatus::ACTIVE,
-                }
-            } else {
-                FunctionStatus::ACTIVE
-            };
-
-            match function_status {
-                FunctionStatus::DEPLOYING => {
-                    let duration = start_time.elapsed().as_secs_f64() * 1000.0;
-                    metrics::record_nvcf_api_request(
-                        "scale_function",
-                        "function_deploying",
-                        duration,
-                    );
-                    Err(NvcfApiError::FunctionDeploying)
-                }
-                FunctionStatus::DELETED => {
-                    let duration = start_time.elapsed().as_secs_f64() * 1000.0;
-                    metrics::record_nvcf_api_request(
-                        "scale_function",
-                        "function_deleted",
-                        duration,
-                    );
-                    Err(NvcfApiError::FunctionDeleted)
-                }
-                FunctionStatus::ERRORED => {
-                    let duration = start_time.elapsed().as_secs_f64() * 1000.0;
-                    metrics::record_nvcf_api_request(
-                        "scale_function",
-                        "function_errored",
-                        duration,
-                    );
-                    Err(NvcfApiError::FunctionError)
-                }
-                FunctionStatus::INACTIVE => {
-                    let duration = start_time.elapsed().as_secs_f64() * 1000.0;
-                    metrics::record_nvcf_api_request(
-                        "scale_function",
-                        "function_inactive",
-                        duration,
-                    );
-                    Err(NvcfApiError::FunctionNotActive)
-                }
-                FunctionStatus::ACTIVE => {
-                    let active_instances: i32 = json_value
-                        .get("activeInstances")
-                        .and_then(|v| v.as_i64())
-                        .map(|v| v as i32)
-                        .unwrap_or(0);
-
-                    let pending_instances = json_value
-                        .get("pendingInstances")
-                        .and_then(|v| v.as_i64())
-                        .map(|v| v as i32)
-                        .unwrap_or(0);
-
-                    let allocating_instances = json_value
-                        .get("allocatingInstances")
-                        .and_then(|v| v.as_i64())
-                        .map(|v| v as i32)
-                        .unwrap_or(0);
-
-                    let terminating_instances = json_value
-                        .get("terminatingInstances")
-                        .and_then(|v| v.as_i64())
-                        .map(|v| v as i32)
-                        .unwrap_or(0);
-                    let duration = start_time.elapsed().as_secs_f64() * 1000.0;
-                    metrics::record_nvcf_api_request("scale_function", "SUCCESS", duration);
-                    Ok(AutoscalerResponse {
-                        active_instances,
-                        pending_instances,
-                        allocating_instances,
-                        terminating_instances,
-                        function_status,
-                    })
-                }
-            }
+            Some(token)
         } else {
-            let duration = start_time.elapsed().as_secs_f64() * 1000.0;
-            let error = NvcfApiError::UnknownError;
-            metrics::record_nvcf_api_request("scale_function", &error.to_short_string(), duration);
-            Err(error)
-        }
+            None
+        };
+        let auth_header: Option<MetadataValue<_>> = jwt_token
+            .map(|token| format!("Bearer {}", token).parse())
+            .transpose()
+            .map_err(|e| {
+                tracing::error!("Failed to parse bearer token as gRPC metadata value: {}", e);
+                NvcfApiError::InternalError
+            })?;
+
+        let mut client = AutoscalerClient::with_interceptor(
+            nvcf_api_channel.clone(),
+            move |mut req: tonic::Request<()>| {
+                if let Some(auth_header) = &auth_header {
+                    req.metadata_mut()
+                        .insert("authorization", auth_header.clone());
+                }
+                Ok(req)
+            },
+        );
+
+        let request = tonic::Request::new(GrpcAutoscalerRequest {
+            function_id: deployment_info.function_id.to_string(),
+            function_version_id: deployment_info.function_version_id.to_string(),
+            deployment_id: None,
+            gpu_specification_id: None,
+            required_number_of_instances: deployment_info.required_number_of_instances,
+        });
+
+        let response = match client.autoscale_function(request).await {
+            Ok(response) => response.into_inner(),
+            Err(status) => {
+                let duration = start_time.elapsed().as_secs_f64() * 1000.0;
+                let error = match status.code() {
+                    tonic::Code::InvalidArgument => NvcfApiError::InstanceRequestBeyondLimits,
+                    tonic::Code::NotFound => NvcfApiError::FunctionNotFound,
+                    _ => NvcfApiError::UnknownError,
+                };
+                metrics::record_nvcf_api_request(
+                    "scale_function",
+                    &error.to_short_string(),
+                    duration,
+                );
+                tracing::error!(
+                    "gRPC AutoscaleFunction call failed for function {} version {}: {}",
+                    deployment_info.function_id,
+                    deployment_info.function_version_id,
+                    status
+                );
+                return Err(error);
+            }
+        };
+
+        let function_status = match parse_function_status(&response.function_status) {
+            Some(status) => status,
+            None => {
+                let duration = start_time.elapsed().as_secs_f64() * 1000.0;
+                let error = NvcfApiError::UnknownError;
+                metrics::record_nvcf_api_request(
+                    "scale_function",
+                    &error.to_short_string(),
+                    duration,
+                );
+                tracing::error!(
+                    "gRPC AutoscaleFunction call for function {} version {} returned unrecognized functionStatus '{}'",
+                    deployment_info.function_id,
+                    deployment_info.function_version_id,
+                    response.function_status
+                );
+                return Err(error);
+            }
+        };
+
+        let (metric_label, result) = match function_status {
+            FunctionStatus::DEPLOYING => {
+                ("function_deploying", Err(NvcfApiError::FunctionDeploying))
+            }
+            FunctionStatus::DELETED => ("function_deleted", Err(NvcfApiError::FunctionDeleted)),
+            FunctionStatus::ERRORED => ("function_errored", Err(NvcfApiError::FunctionError)),
+            FunctionStatus::INACTIVE => ("function_inactive", Err(NvcfApiError::FunctionNotActive)),
+            FunctionStatus::ACTIVE => (
+                "SUCCESS",
+                Ok(AutoscalerResponse {
+                    active_instances: response.active_instances,
+                    pending_instances: response.pending_instances,
+                    allocating_instances: response.allocating_instances,
+                    terminating_instances: response.terminating_instances,
+                    function_status,
+                }),
+            ),
+        };
+        let duration = start_time.elapsed().as_secs_f64() * 1000.0;
+        metrics::record_nvcf_api_request("scale_function", metric_label, duration);
+        result
     }
 
     async fn process_single_request(
@@ -643,8 +575,7 @@ impl NvcfApiService {
         ctx: &ProcessRequestCtx<'_>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let rate_limiter = ctx.rate_limiter;
-        let nvcf_api_url = ctx.nvcf_api_url;
-        let nvcf_api_client = ctx.nvcf_api_client;
+        let nvcf_api_channel = ctx.nvcf_api_channel;
         let oauth2_client = ctx.oauth2_client;
         let cassandra_service = ctx.cassandra_service;
         let function_state_cache = ctx.function_state_cache;
@@ -678,13 +609,9 @@ impl NvcfApiService {
                 info.required_number_of_instances
             );
             // Process the request
-            let result = Self::scale_function_internal_static(
-                nvcf_api_url,
-                nvcf_api_client,
-                oauth2_client,
-                info.clone(),
-            )
-            .await;
+            let result =
+                Self::scale_function_internal_static(nvcf_api_channel, oauth2_client, info.clone())
+                    .await;
 
             // Log result and record metrics
             let mut num_workers_from_api: Option<i32> = None;
@@ -776,6 +703,7 @@ impl NvcfApiService {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
     use uuid::Uuid;
 
     use super::*;
@@ -786,49 +714,88 @@ mod tests {
         assert_eq!(FunctionStatus::DEPLOYING.to_string(), "DEPLOYING");
     }
 
-    #[tokio::test]
-    async fn test_autoscaler_request_serialization() {
-        let request = AutoscalerRequest {
-            required_number_of_instances: 5,
-            predicted_at: Utc::now(),
-        };
-
-        let json = serde_json::to_string(&request).unwrap();
-        assert!(json.contains("requiredNumberOfInstances"));
+    #[test]
+    fn test_parse_function_status_recognizes_known_values() {
+        assert_eq!(
+            parse_function_status("ACTIVE"),
+            Some(FunctionStatus::ACTIVE)
+        );
+        assert_eq!(
+            parse_function_status("DEPLOYING"),
+            Some(FunctionStatus::DEPLOYING)
+        );
+        assert_eq!(
+            parse_function_status("DELETED"),
+            Some(FunctionStatus::DELETED)
+        );
+        assert_eq!(
+            parse_function_status("ERRORED"),
+            Some(FunctionStatus::ERRORED)
+        );
+        assert_eq!(
+            parse_function_status("INACTIVE"),
+            Some(FunctionStatus::INACTIVE)
+        );
     }
 
-    #[tokio::test]
-    async fn test_autoscaler_response_parsing() {
-        let response_str = r#"
-        {
-            "activeInstances": 1,
-            "pendingInstances": 0,
-            "allocatingInstances": 0,
-            "terminatingInstances": 0,
-            "functionStatus": "ACTIVE"
-        }"#;
-        let response = AutoscalerResponse {
-            active_instances: 1,
-            pending_instances: 0,
-            allocating_instances: 0,
-            terminating_instances: 0,
-            function_status: FunctionStatus::ACTIVE,
-        };
-        let parsed_response: AutoscalerResponse = serde_json::from_str(response_str).unwrap();
-        assert_eq!(parsed_response.active_instances, response.active_instances);
-        assert_eq!(
-            parsed_response.pending_instances,
-            response.pending_instances
-        );
-        assert_eq!(
-            parsed_response.allocating_instances,
-            response.allocating_instances
-        );
-        assert_eq!(
-            parsed_response.terminating_instances,
-            response.terminating_instances
-        );
-        assert_eq!(parsed_response.function_status, response.function_status);
+    #[test]
+    fn test_parse_function_status_rejects_unrecognized_values() {
+        // An empty string is the proto3 zero-value for an unset field --
+        // it must not be silently treated as ACTIVE.
+        assert_eq!(parse_function_status(""), None);
+        assert_eq!(parse_function_status("SOME_NEW_STATUS"), None);
+        assert_eq!(parse_function_status("active"), None);
+    }
+
+    #[test]
+    fn test_nvcf_api_settings_default_uses_grpc_autoscaler_scope() {
+        let settings = NvcfApiSettings::default();
+
+        assert_eq!(settings.oauth2_token_scope, "autoscaler:auth");
+        assert!(!settings.oauth2_token_scope.contains("admin:scale_function"));
+        assert!(!settings
+            .oauth2_token_scope
+            .contains("autoscaler:fetch_config"));
+    }
+
+    #[test]
+    fn test_nvcf_api_settings_deserialization_defaults_token_api_address_when_missing() {
+        let settings: NvcfApiSettings = serde_json::from_value(json!({
+            "nvcf_api_grpc_address": "https://grpc.example.test",
+            "disable_auth": false,
+            "dry_run": false
+        }))
+        .unwrap();
+
+        assert_eq!(settings.oauth2_token_api_address, "");
+        assert_eq!(settings.oauth2_token_scope, default_oauth2_token_scope());
+    }
+
+    #[test]
+    fn test_nvcf_api_settings_deserialization_defaults_scope_when_missing() {
+        let settings: NvcfApiSettings = serde_json::from_value(json!({
+            "oauth2_token_api_address": "https://oauth.example.test",
+            "nvcf_api_grpc_address": "https://grpc.example.test",
+            "disable_auth": false,
+            "dry_run": false
+        }))
+        .unwrap();
+
+        assert_eq!(settings.oauth2_token_scope, default_oauth2_token_scope());
+    }
+
+    #[test]
+    fn test_nvcf_api_settings_deserialization_preserves_configured_scope() {
+        let settings: NvcfApiSettings = serde_json::from_value(json!({
+            "oauth2_token_api_address": "https://oauth.example.test",
+            "oauth2_token_scope": "custom:scale custom:fetch",
+            "nvcf_api_grpc_address": "https://grpc.example.test",
+            "disable_auth": false,
+            "dry_run": false
+        }))
+        .unwrap();
+
+        assert_eq!(settings.oauth2_token_scope, "custom:scale custom:fetch");
     }
 
     #[tokio::test]
@@ -887,10 +854,10 @@ mod tests {
         let cancellation_token = CancellationToken::new();
         let drop_guard = cancellation_token.clone().drop_guard();
         let service = NvcfApiService {
-            nvcf_api_url: nvcf_settings.nvcf_api_address,
-            nvcf_api_client: reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
-                .with(reqwest_tracing::TracingMiddleware::default())
-                .build(),
+            nvcf_api_channel: NvcfApiService::build_grpc_channel(
+                &nvcf_settings.nvcf_api_grpc_address,
+            ),
+            nvcf_api_grpc_address: nvcf_settings.nvcf_api_grpc_address,
             cassandra_service: None,
             function_state_cache: None,
             oauth2_client: None,
@@ -909,7 +876,7 @@ mod tests {
 
         // Test that the service was created successfully
         assert!(!service.per_bucket_request_queue.is_empty());
-        assert!(service.nvcf_api_url.contains("localhost"));
+        assert!(service.nvcf_api_grpc_address.contains("localhost"));
 
         // Service will shutdown automatically when dropped
     }
@@ -1152,10 +1119,10 @@ mod tests {
         let drop_guard = cancellation_token.clone().drop_guard();
 
         let service = NvcfApiService {
-            nvcf_api_url: nvcf_settings.nvcf_api_address,
-            nvcf_api_client: reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
-                .with(reqwest_tracing::TracingMiddleware::default())
-                .build(),
+            nvcf_api_channel: NvcfApiService::build_grpc_channel(
+                &nvcf_settings.nvcf_api_grpc_address,
+            ),
+            nvcf_api_grpc_address: nvcf_settings.nvcf_api_grpc_address,
             cassandra_service: None,
             function_state_cache: None,
             oauth2_client: None,

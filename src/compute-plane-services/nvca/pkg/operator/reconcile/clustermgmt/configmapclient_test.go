@@ -85,6 +85,49 @@ func TestConfigMapClient_GetCluster_InvalidYAML(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to convert CR")
 }
 
+func TestAgentConfigFromClusterDTO(t *testing.T) {
+	t.Run("maps agent service oauth endpoints", func(t *testing.T) {
+		raw := `
+agent:
+  helmReValStageOAuthTokenURL: "https://chart-stage-reval-oauth.example.test/token"
+  helmReValStageOAuthPublicKeysetEndpoint: "https://chart-stage-reval-oauth.example.test/.well-known/jwks.json"
+  helmReValProdOAuthTokenURL: "https://chart-prod-reval-oauth.example.test/token"
+  helmReValProdOAuthPublicKeysetEndpoint: "https://chart-prod-reval-oauth.example.test/.well-known/jwks.json"
+  functionDeploymentStagesStageOAuthTokenURL: "https://chart-stage-fnds-oauth.example.test/token"
+  functionDeploymentStagesStageOAuthPublicKeysetEndpoint: "https://chart-stage-fnds-oauth.example.test/.well-known/jwks.json"
+  functionDeploymentStagesProdOAuthTokenURL: "https://chart-prod-fnds-oauth.example.test/token"
+  functionDeploymentStagesProdOAuthPublicKeysetEndpoint: "https://chart-prod-fnds-oauth.example.test/.well-known/jwks.json"
+`
+
+		cfg, found, err := AgentConfigFromClusterDTO(context.Background(), raw)
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, "https://chart-stage-reval-oauth.example.test/token", cfg.HelmReValStageOAuthTokenURL)
+		assert.Equal(t, "https://chart-stage-reval-oauth.example.test/.well-known/jwks.json", cfg.HelmReValStageOAuthPublicKeysetEndpoint)
+		assert.Equal(t, "https://chart-prod-reval-oauth.example.test/token", cfg.HelmReValProdOAuthTokenURL)
+		assert.Equal(t, "https://chart-prod-reval-oauth.example.test/.well-known/jwks.json", cfg.HelmReValProdOAuthPublicKeysetEndpoint)
+		assert.Equal(t, "https://chart-stage-fnds-oauth.example.test/token", cfg.FunctionDeploymentStagesStageOAuthTokenURL)
+		assert.Equal(t, "https://chart-stage-fnds-oauth.example.test/.well-known/jwks.json", cfg.FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint)
+		assert.Equal(t, "https://chart-prod-fnds-oauth.example.test/token", cfg.FunctionDeploymentStagesProdOAuthTokenURL)
+		assert.Equal(t, "https://chart-prod-fnds-oauth.example.test/.well-known/jwks.json", cfg.FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint)
+	})
+
+	t.Run("empty service oauth endpoints are not defaults", func(t *testing.T) {
+		cfg, found, err := AgentConfigFromClusterDTO(context.Background(), `agent:
+  helmReValStageOAuthTokenURL: ""
+`)
+		require.NoError(t, err)
+		assert.False(t, found)
+		assert.Empty(t, cfg.HelmReValStageOAuthTokenURL)
+	})
+
+	t.Run("invalid yaml returns an error", func(t *testing.T) {
+		_, found, err := AgentConfigFromClusterDTO(context.Background(), "agent: [")
+		require.Error(t, err)
+		assert.False(t, found)
+	})
+}
+
 func TestConfigMapClient_GetCluster_OTelCollectorConfig(t *testing.T) {
 	t.Run("maps OTel collector config when present in ConfigMap", func(t *testing.T) {
 		yamlWithOTel := `
@@ -178,6 +221,7 @@ clusterId: test-cluster-id
 clusterName: test-cluster
 miniService:
   helmReValServiceURL: "http://reval.nvcf.svc.cluster.local:8080"
+  helmReValServiceHostHeaderOverride: "reval.gateway.example.test"
 `
 		c := newConfigMapClient(nvidiaiov1.EnvTypeProd, dummyFetcher(yamlWithMiniService, nil), DefaultVaultOAuthClientMountPathTemplate)
 		cluster, err := c.GetCluster(context.Background(), "")
@@ -186,6 +230,7 @@ miniService:
 
 		require.NotNil(t, cluster.NVCFBackend.Spec.ClusterConfig.MiniService)
 		assert.Equal(t, "http://reval.nvcf.svc.cluster.local:8080", cluster.NVCFBackend.Spec.ClusterConfig.MiniService.HelmReValServiceURL)
+		assert.Equal(t, "reval.gateway.example.test", cluster.NVCFBackend.Spec.ClusterConfig.MiniService.HelmReValServiceHostHeaderOverride)
 	})
 
 	t.Run("leaves MiniService nil when not present in DTO", func(t *testing.T) {
@@ -246,6 +291,7 @@ clusterId: test-cluster-id
 clusterName: test-cluster
 agent:
   natsURL: "nats://nats.localhost:14222"
+  natsHostOverride: "nats.gateway.example.test"
 `
 
 	c := newConfigMapClient(nvidiaiov1.EnvTypeProd, dummyFetcher(yamlWithAgentNATSURL, nil), DefaultVaultOAuthClientMountPathTemplate)
@@ -255,4 +301,23 @@ agent:
 
 	require.NotNil(t, cluster.NVCFBackend.Spec.AgentConfig.NATSURL)
 	assert.Equal(t, "nats://nats.localhost:14222", *cluster.NVCFBackend.Spec.AgentConfig.NATSURL)
+	require.NotNil(t, cluster.NVCFBackend.Spec.AgentConfig.NATSHostOverride)
+	assert.Equal(t, "nats.gateway.example.test", *cluster.NVCFBackend.Spec.AgentConfig.NATSHostOverride)
+}
+
+func TestConfigMapClient_GetCluster_LLMRequestRouterAddress(t *testing.T) {
+	yamlWithLLMRequestRouter := `
+clusterId: test-cluster-id
+clusterName: test-cluster
+agent:
+  llmRequestRouterAddress: llm-request-router.nvcf.svc.cluster.local:50071
+`
+
+	c := newConfigMapClient(nvidiaiov1.EnvTypeProd, dummyFetcher(yamlWithLLMRequestRouter, nil), DefaultVaultOAuthClientMountPathTemplate)
+	cluster, err := c.GetCluster(context.Background(), "")
+	require.NoError(t, err)
+	require.NotNil(t, cluster)
+
+	assert.Equal(t, "llm-request-router.nvcf.svc.cluster.local:50071",
+		cluster.NVCFBackend.Spec.AgentConfig.LLMRequestRouterAddress)
 }

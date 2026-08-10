@@ -70,3 +70,9 @@ temp/
 dist/
 build/
 out/
+
+# Local CLI config files. The CLI accepts api_key/token in YAML config, so
+# stray local.yaml / local-secrets.yaml on disk is a credential-leak hazard.
+local.yaml
+local-*.yaml
+*-local.yaml

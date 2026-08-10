@@ -1,0 +1,165 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package stargate;
+
+service StargateControlPlane {
+  rpc WatchStargates(WatchStargatesRequest) returns (stream WatchStargatesResponse);
+  rpc RegisterInferenceServer(stream InferenceServerRegistration) returns (stream InferenceServerAck);
+}
+
+// Frontend-facing model discovery service. Stargate serves this on a dedicated
+// gRPC listener, separate from backend-facing WatchStargates and registration.
+service StargateModelDiscovery {
+  rpc ListModels(ListModelsRequest) returns (ListModelsResponse);
+}
+
+message WatchStargatesRequest {}
+
+message StargateInfo {
+  string stargate_id = 1;
+  string advertise_addr = 2;
+  string http_advertise_addr = 3;
+  // Optional backend-facing gRPC dial target for pylons. When set, pylons dial
+  // this address but keep `advertise_addr` as the gRPC authority/SNI routing
+  // identity so a load balancer can route to the selected Stargate pod.
+  string grpc_pylon_dial_addr = 4;
+}
+
+message WatchStargatesResponse {
+  // Set semantics; duplicates are deduplicated by serde helpers in stargate-proto.
+  repeated StargateInfo stargates = 1;
+  // Additional WatchStargates endpoints to watch for remote regions. These are
+  // discovery seeds, not registration targets; clients register only with
+  // concrete entries from `stargates`.
+  repeated string watch_stargate_urls = 2;
+}
+
+// ListModels is an eventually consistent discovery hint, not a routing
+// reservation. Results come from a periodically refreshed local snapshot. A
+// model returned here can disappear before a later proxy request, and other
+// stargate pods may not have converged to the same registration state yet. API
+// frontends can distinguish that case by the proxy's 404 NOT_FOUND response
+// with x-stargate-error-code: no_eligible_candidates. After a recent positive
+// ListModels result, frontends may treat that response as transient and retry
+// after their configured discovery-convergence delay before reporting the model
+// as unavailable.
+message ListModelsRequest {
+  // Optional model filter. When empty, all active and healthy local models for
+  // the requested routing key on this stargate are returned.
+  repeated string model_ids = 1;
+
+  // Optional routing-key filter. When omitted or blank, only models registered
+  // without a routing key are returned.
+  optional string routing_key = 2;
+}
+
+message ListModelsResponse {
+  repeated string model_ids = 1;
+}
+
+message ModelStats {
+  // Aggregation note for multi-backend clusters: Stargate currently aggregates
+  // backend-scoped fields below across active backends that share a
+  // `cluster_id` according to each field's semantics, and takes the latest
+  // active backend snapshot for the cluster-scoped fields below. This is
+  // routing policy, not a permanent API contract; individual fields may move
+  // between sections if the reported semantics change.
+
+  // Sticky last valid mean input TPS for this backend observation. Stargate
+  // never receives live/raw input TPS. For shared clusters, active backend
+  // reports are summed as runtime capacity.
+  double last_mean_input_tps = 1;
+  double output_tps = 2;
+  // Number of live requests that have not produced first output yet. For pylon
+  // observations this includes actively-prefilling requests, so routers should
+  // treat it as pending prompt work rather than a strict scheduler queue depth.
+  uint64 queue_size = 3;
+  // Current proxy for prompt-token admission pressure. If the backend later
+  // exposes a distinct admission-stage metric that diverges materially from this
+  // value, add a new field rather than overloading `queued_input_size`.
+  uint64 queued_input_size = 4;
+
+  // Cluster-scoped shared-hardware/scheduler state.
+  double max_output_tps = 5;
+  uint64 kv_cache_capacity_tokens = 6;
+  uint64 kv_cache_used_tokens = 7;
+  uint64 kv_cache_free_tokens = 8;
+  // Current number of model requests consuming scheduling capacity in the
+  // underlying cluster. Stargate currently treats this as latest-wins across
+  // active backends that share a `cluster_id`.
+  uint64 num_running_queries = 9;
+  // Cluster scheduler concurrency capacity. A value of 0 means the backend did
+  // not report this metric; routers should not apply the full-backend admission
+  // filter.
+  uint64 max_engine_concurrency = 10;
+  // Sum of input tokens across active/queued requests for this model in the
+  // underlying cluster.
+  uint64 total_query_input_size = 11;
+  // Cluster queue-time estimates keyed by request priority. When populated,
+  // priority-aware routers should prefer this over aggregate queue work.
+  map<uint32, uint64> queue_time_estimate_ms_by_priority = 12;
+  // Number of live requests still in input/prefill processing.
+  uint64 input_processing_queries = 13;
+  // Number of live requests in output/decode generation.
+  uint64 output_generation_queries = 14;
+  // Pylon observation time in Unix milliseconds. A value of 0
+  // means the backend did not report freshness.
+  uint64 stats_observed_at_unix_ms = 15;
+  // Sticky capability labels for stat surfaces observed by this backend since
+  // the model metrics state was initialized.
+  repeated string stats_capabilities = 16;
+  // Sticky source labels for stat observations seen by this backend since the
+  // model metrics state was initialized.
+  repeated string stats_sources = 17;
+}
+
+enum InferenceServerStatus {
+  INFERENCE_SERVER_STATUS_UNKNOWN = 0;
+  INFERENCE_SERVER_STATUS_ACTIVE = 1;
+  INFERENCE_SERVER_STATUS_INACTIVE = 2;
+}
+
+message InferenceServerRegistration {
+  string inference_server_id = 1;
+  string inference_server_url = 2;
+  map<string, InferenceServerModelRegistration> models = 3;
+  bool reverse_tunnel = 4;
+  string cluster_id = 5;
+  reserved 6;
+  reserved "coordinated_calibration";
+}
+
+message InferenceServerModelRegistration {
+  ModelStats stats = 1;
+  InferenceServerStatus status = 2;
+  reserved 3;
+  reserved "calibration";
+}
+
+message InferenceServerAck {
+  // Stable Stargate routing identity for this registration stream's reverse
+  // tunnel. Pylons use this as QUIC SNI when the dial address differs from the
+  // routing target.
+  string reverse_tunnel_target = 1;
+  reserved 2;
+  reserved "model_calibration_directives";
+  // Non-empty address pylons should dial for reverse QUIC tunnels. This equals
+  // `reverse_tunnel_target` unless Stargate is configured to preserve a per-pod
+  // routing/SNI identity while routing UDP through a separate load balancer.
+  string reverse_tunnel_pylon_dial_addr = 3;
+}

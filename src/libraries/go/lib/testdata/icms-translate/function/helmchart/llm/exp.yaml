@@ -145,10 +145,11 @@ spec:
   containers:
   - args:
     - --upstream-http-base-url=http://myservice.sr-887518b9-0ae0-4481-a273-56c86638bd71.svc.cluster.local:50051
-    - --stargate-address=stargate.nvcf.svc.cluster.local:50071
+    - --stargate-address=llm-request-router.nvcf.svc.cluster.local:50071
     - --inference-server-id=sr-887518b9-0ae0-4481-a273-56c86638bd71-miniservice
     - --auth-token-file=/var/run/llm/worker-token
-    - --reverse-tunnel
+    - --backend-connectivity=reverse
+    - --initial-input-tps=100
     - --quic-insecure
     - --model-name=model-gamma
     - --model-name=model-epsilon
@@ -199,8 +200,10 @@ spec:
       value: DGX-CLOUD.GPU.L40
     - name: LLM_CREDENTIAL_MANAGER_IMAGE
       value: nvcr.io/nvcf-core/llm-credential-manager:0.1.0
+    - name: LLM_REQUEST_ROUTER_ADDRESS
+      value: llm-request-router.nvcf.svc.cluster.local:50071
     - name: LLM_ROUTER_CLIENT_IMAGE
-      value: nvcr.io/nvcf-core/llm-worker:0.1.0
+      value: nvcr.io/nvcf-core/stargate-client:0.4.0
     - name: MAX_REQUEST_CONCURRENCY
       value: "1"
     - name: NCA_ID
@@ -224,14 +227,14 @@ spec:
     - name: SIDECAR_REGISTRY_CREDENTIAL
       value: eyJhdXRocyI6eyJudmNyLmlvIjp7ImF1dGgiOiJKRzloZFhSb2RHOXJaVzQ2Ym5aaGNHa3RjM1JuTFdGaVl6RXlNdz09In19fQ==
     - name: STARGATE_ADDRESS
-      value: stargate.nvcf.svc.cluster.local:50071
+      value: llm-request-router.nvcf.svc.cluster.local:50071
     - name: TRACING_ACCESS_TOKEN
       value: trace-tok-1
     - name: UTILS_CONTAINER
       value: nvcr.io/org/worker-utils:2.21.4
     - name: WORKER_TOKEN_PATH
       value: /var/run/llm/worker-token
-    image: nvcr.io/nvcf-core/llm-worker:0.1.0
+    image: nvcr.io/nvcf-core/stargate-client:0.4.0
     imagePullPolicy: IfNotPresent
     name: llm-worker
     resources:
@@ -244,6 +247,8 @@ spec:
     volumeMounts:
     - mountPath: /var/run/llm
       name: llm
+    - mountPath: /config/shared
+      name: config-data
   - env:
     - name: FUNCTION_ID
       value: 5a3d4a7e-9ee3-4762-8d37-d3b40a6f84c6
@@ -308,6 +313,8 @@ spec:
     volumeMounts:
     - mountPath: /var/run/llm
       name: llm
+    - mountPath: /config/shared
+      name: config-data
   imagePullSecrets:
   - name: worker-sr-887518b9-0ae0-4481-a273-56c86638bd71-regcred-0
   initContainers:
@@ -358,8 +365,10 @@ spec:
       value: DGX-CLOUD.GPU.L40
     - name: LLM_CREDENTIAL_MANAGER_IMAGE
       value: nvcr.io/nvcf-core/llm-credential-manager:0.1.0
+    - name: LLM_REQUEST_ROUTER_ADDRESS
+      value: llm-request-router.nvcf.svc.cluster.local:50071
     - name: LLM_ROUTER_CLIENT_IMAGE
-      value: nvcr.io/nvcf-core/llm-worker:0.1.0
+      value: nvcr.io/nvcf-core/stargate-client:0.4.0
     - name: MAX_REQUEST_CONCURRENCY
       value: "1"
     - name: NCA_ID
@@ -381,7 +390,7 @@ spec:
     - name: SIDECAR_REGISTRY_CREDENTIAL
       value: eyJhdXRocyI6eyJudmNyLmlvIjp7ImF1dGgiOiJKRzloZFhSb2RHOXJaVzQ2Ym5aaGNHa3RjM1JuTFdGaVl6RXlNdz09In19fQ==
     - name: STARGATE_ADDRESS
-      value: stargate.nvcf.svc.cluster.local:50071
+      value: llm-request-router.nvcf.svc.cluster.local:50071
     - name: TRACING_ACCESS_TOKEN
       value: trace-tok-1
     - name: UTILS_CONTAINER

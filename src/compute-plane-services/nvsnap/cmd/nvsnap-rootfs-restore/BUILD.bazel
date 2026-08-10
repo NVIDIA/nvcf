@@ -1,0 +1,24 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+go_library(
+    name = "nvsnap-rootfs-restore_lib",
+    srcs = [
+        "main.go",
+        "prewarm.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/cmd/nvsnap-rootfs-restore",
+    visibility = ["//visibility:private"],
+    deps = ["@org_golang_x_sys//unix"],
+)
+
+go_binary(
+    name = "nvsnap-rootfs-restore",
+    embed = [":nvsnap-rootfs-restore_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "nvsnap-rootfs-restore_test",
+    srcs = ["main_test.go"],
+    embed = [":nvsnap-rootfs-restore_lib"],
+)

@@ -67,7 +67,7 @@ func TestResolveStack_DefaultsToBuiltIn(t *testing.T) {
 
 func TestResolveStack_ErrorWhenNoSourceAndNoDefault(t *testing.T) {
 	_, err := ResolveStack(context.Background(), StackOptions{})
-	assert.ErrorContains(t, err, "no --stack")
+	assert.ErrorContains(t, err, "no stack provided")
 }
 
 // TestResolveOCI_FetchesArtifactToCacheDir is an integration test that requires

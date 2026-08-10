@@ -1,0 +1,20 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+go_library(
+    name = "validate-release-tag_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/ci/validate-release-tag",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "validate-release-tag",
+    embed = [":validate-release-tag_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "validate-release-tag_test",
+    srcs = ["main_test.go"],
+    embed = [":validate-release-tag_lib"],
+)

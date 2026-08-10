@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Copyright 2019 The Prometheus Authors
+// Copyright The Prometheus Authors
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -15,7 +15,6 @@
 // limitations under the License.
 
 //go:build !windows
-// +build !windows
 
 package procfs
 
@@ -91,11 +90,9 @@ func parseZoneinfo(zoneinfoData []byte) ([]Zoneinfo, error) {
 
 	zoneinfo := []Zoneinfo{}
 
-	zoneinfoBlocks := bytes.Split(zoneinfoData, []byte("\nNode"))
-	for _, block := range zoneinfoBlocks {
+	for block := range bytes.SplitSeq(zoneinfoData, []byte("\nNode")) {
 		var zoneinfoElement Zoneinfo
-		lines := strings.Split(string(block), "\n")
-		for _, line := range lines {
+		for line := range strings.SplitSeq(string(block), "\n") {
 
 			if nodeZone := nodeZoneRE.FindStringSubmatch(line); nodeZone != nil {
 				zoneinfoElement.Node = nodeZone[1]

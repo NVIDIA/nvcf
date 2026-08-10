@@ -263,6 +263,24 @@ test_accepts_valid_headers() {
     assert_equals "" "${RUN_STDERR}" "success should not write to stderr"
 }
 
+test_accepts_python_shebang_before_header() {
+    local repo_root
+    repo_root="$(make_tempdir)"
+
+    write_file "${repo_root}/imports.yaml" 'imports:
+'
+    write_file "${repo_root}/.oss-allowlist" 'tools/**
+'
+    write_file "${repo_root}/tools/helper.py" "#!/usr/bin/env python3
+${PYTHON_HEADER}print('ok')"$'\n'
+
+    run_checker "${repo_root}"
+
+    assert_status 0 "${RUN_STATUS}" "valid Python header after shebang should pass"
+    assert_equals "All checked files have Apache 2.0 SPDX headers (1 files checked)." "${RUN_STDOUT}" "success message should match"
+    assert_equals "" "${RUN_STDERR}" "success should not write to stderr"
+}
+
 test_accepts_allowlisted_spdx_headers_only_in_matching_dir() {
     local repo_root
     repo_root="$(make_tempdir)"
@@ -316,27 +334,6 @@ test_warns_and_skips_missing_allowlisted_dir() {
     assert_status 0 "${RUN_STATUS}" "missing allowlisted dir should warn and continue"
     assert_equals "All checked files have Apache 2.0 SPDX headers (1 files checked)." "${RUN_STDOUT}" "missing allowlist should not switch success wording"
     assert_contains "WARN: allowlisted directory does not exist, skipping: src/compute-plane-services/ess-agent" "${RUN_STDERR}" "missing allowlisted dir should warn"
-}
-
-test_skips_sonar_project_properties() {
-    local repo_root
-    repo_root="$(make_tempdir)"
-
-    write_file "${repo_root}/imports.yaml" 'imports:
-'
-    write_file "${repo_root}/.oss-allowlist" 'tools/**
-'
-    write_file "${repo_root}/tools/sonar-project.properties" 'sonar.projectKey=test
-'
-    write_file "${repo_root}/tools/application.properties" 'app.name=test
-'
-
-    run_checker "${repo_root}"
-
-    assert_status 1 "${RUN_STATUS}" "missing properties header should fail"
-    assert_contains "Checked 1 files." "${RUN_STDERR}" "sonar-project.properties should be skipped"
-    assert_contains "  - tools/application.properties" "${RUN_STDERR}" "application.properties should be reported"
-    assert_not_contains "sonar-project.properties" "${RUN_STDERR}" "sonar-project.properties should not be reported"
 }
 
 test_sorts_reported_paths_with_c_locale_order() {
@@ -431,6 +428,8 @@ test_allowlist_root_file_patterns_do_not_match_nested_basenames() {
 test_warns_for_unsupported_oss_allowlist_negation_patterns() {
     local repo_root
     repo_root="$(make_tempdir)"
+    local real_repo_root
+    real_repo_root="$(realpath "${repo_root}")"
 
     write_file "${repo_root}/imports.yaml" 'imports:
 '
@@ -443,7 +442,7 @@ test_warns_for_unsupported_oss_allowlist_negation_patterns() {
     run_checker "${repo_root}"
 
     assert_status 1 "${RUN_STATUS}" "negation pattern should not suppress an included file"
-    assert_contains "WARNING: negation patterns are not supported in .oss-allowlist (${repo_root}/.oss-allowlist: !tools/excluded.go)" "${RUN_STDERR}" "unsupported negation should warn"
+    assert_contains "WARNING: negation patterns are not supported in .oss-allowlist (${real_repo_root}/.oss-allowlist: !tools/excluded.go)" "${RUN_STDERR}" "unsupported negation should warn"
     assert_contains "  - tools/excluded.go" "${RUN_STDERR}" "file matched by positive pattern should still be reported"
 }
 
@@ -452,10 +451,10 @@ main() {
     test_lists_only_repo_groups_when_requested
     test_skips_vendor_go_files_and_detects_helm_files_under_chart_roots
     test_accepts_valid_headers
+    test_accepts_python_shebang_before_header
     test_accepts_allowlisted_spdx_headers_only_in_matching_dir
     test_accepts_allowlisted_spdx_headers
     test_warns_and_skips_missing_allowlisted_dir
-    test_skips_sonar_project_properties
     test_sorts_reported_paths_with_c_locale_order
     test_skips_files_outside_oss_allowlists
     test_nested_oss_allowlists_are_relative_to_their_directory

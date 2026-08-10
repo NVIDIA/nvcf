@@ -1,0 +1,37 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "progress",
+    srcs = ["progress.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-utils/worker/progress",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_fsnotify_fsnotify//:fsnotify",
+        "@com_github_goccy_go_json//:go-json",
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//metering",
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//metrics/nvcf",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+go_test(
+    name = "progress_test",
+    srcs = [
+        "coverage_test.go",
+        "progress_test.go",
+    ],
+    embed = [":progress"],
+    deps = [
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/logs",
+        "@com_github_nvidia_nvcf_src_libraries_go_worker//metering",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":progress",
+    visibility = ["//visibility:public"],
+)

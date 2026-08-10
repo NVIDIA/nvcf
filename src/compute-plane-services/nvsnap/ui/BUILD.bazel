@@ -1,0 +1,16 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+# `embed.go` uses `//go:embed all:dist` to bake the Vite/Tailwind UI
+# into the binary. The full UI build (npm run build) is not yet wired
+# into Bazel; we ship a placeholder dist/ so the package compiles and
+# the binary builds. Real UI integration is a follow-up.
+go_library(
+    name = "ui",
+    srcs = ["embed.go"],
+    embedsrcs = glob(
+        ["dist/**"],
+        allow_empty = False,
+    ),
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/ui",
+    visibility = ["//visibility:public"],
+)

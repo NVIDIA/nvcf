@@ -1,28 +1,43 @@
 .worktrees/
 
+# Bazel symlinks (point into ~/.cache/bazel)
+/bazel-*
+
 # IDE / editor
 .idea/
 .vscode/
 *.swp
+# Per-user IntelliJ Bazel plugin project view and its generated project dir
+.bazelproject
+.ijwb/
 
 # AI agent local config (per-user settings, ephemeral plans)
 .claude/settings.local.json
 .claude/plans/
+.claude/scheduled_tasks.lock
 .codex/settings.local.json
 .cursor/settings.local.json
+**/superpowers/plans/
+*.plan.md
 
 # Local overrides
 .secrets
 .env
 /go.work
 /go.work.sum
+# Per-user Bazel overrides imported via try-import in .bazelrc
+/user.bazelrc
 
 # Local CI/test artifacts.
 /public/
+/tests/bdd/out/
+
+# Maven build output. Bazel is the build path; target/ trees are transient.
+target/
 
 # Transient symlink created by root Makefile's link-secrets target;
 # points at ../../../../secrets/<env>-secrets.yaml (root-level user file).
-deploy/stacks/nvcf-self-managed-stack/secrets/*-secrets.yaml
+deploy/stacks/**/secrets/*-secrets.yaml
 
 # OS
 .DS_Store
@@ -34,10 +49,8 @@ examples/**/*.tgz
 __pycache__/
 *.py[cod]
 
-# Built from tools/sync-synthetic-imports/
-/tools/scripts/sync-synthetic-imports
-# Wrong -o path: with `go build -C tools/sync-synthetic-imports`, `-o scripts/...` is under the module.
-/tools/sync-synthetic-imports/scripts/sync-synthetic-imports
+# Checked-in BYOO otelconfig test binary output.
+/tools/byoo/testdata/otelconfig/create/main
 # Built from tools/collect-dependencies/
 /tools/collect-dependencies/collect-dependencies
 # Built from tools/generate-subproject-ci/
@@ -62,4 +75,3 @@ nvcf-grpc-proxy-go/vendor/
 nvcf-nats-auth-callout-service-go/vendor/
 otelconfig-go/vendor/
 nvcf-ratelimiter-go/vendor/
-tools/sync-synthetic-imports/vendor/

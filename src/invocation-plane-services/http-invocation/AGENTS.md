@@ -1,33 +1,56 @@
-# AGENTS.md
+# AGENTS.md - http-invocation
 
-## Repo Role
-- Repo: `nvcf-invocation-service`
-- Workspace(s): `self-hosted-nvcf`
-- Tier: `image-source`
-- Team: `@NVIDIA/nvcf-dev`
-- Default owner: `@NVIDIA/nvcf-dev`.
-- Manifest description: Invocation service application source
+Native Rust image-source subtree for the NVCF invocation service.
 
-## Use `nvcf-agentic-dev` As The Routing Layer
-Before making changes, use the `nvcf-agentic-dev` workspace repo to confirm whether this repo is actually the right place for the task. Treat that repo as the source of truth for workspace membership, repo ownership, deployment dependencies, and available agent skills.
+## Build and Test
 
-Check these files first when they exist in your local workspace:
-- `nvcf-agentic-dev/workspaces/self-hosted-nvcf/repos.yaml`: repo ownership and workspace membership
-- `nvcf-agentic-dev/workspaces/self-hosted-nvcf/skills.yaml`: related agent skills and sourced commands
-- `nvcf-agentic-dev/workspaces/self-hosted-nvcf/docs/deployment-sequence.md`: deployment order and stage gates
-- `nvcf-agentic-dev/workspaces/self-hosted-nvcf/docs/deployment-dependencies-with-links.yaml`: release dependencies and upstream/downstream links
+Bazel is the canonical CI path. The retired standalone Rust CI template from
+`cds/cicd-pipelines` is not used here.
 
-## Routing Rules
-- Stay in this repo for application logic, APIs, migrations, worker behavior, container build logic, and tests for the shipped image.
-- If the request is only about Helm values, templates, hook jobs, or Kubernetes manifests, route to the colocated chart repo.
-- If the request is about environment composition or multi-service rollout ordering, route to `nvcf-self-managed-stack`.
+```bash
+bazel build //...
+bazel test //... --flaky_test_attempts=3
+bazel build //crates/server:image_index
+bazel run //crates/server:image_load
+```
 
-## Working In This Repo
-- Read this repo’s top-level `README*`, build files, and CI config before making assumptions about language or tooling.
-- Search for existing patterns with `rg` before adding new structure.
-- Keep changes scoped to the owning repo once routing is confirmed; only fan out when the workspace docs show an explicit dependency.
+Push targets are declared under `//nvidia-internal`. Use them only with the
+right `DOCKER_CONFIG` credentials:
 
-## Completion Expectations
-- Validate with the repo-native command set if one exists (`make`, Maven, Helm, npm, etc.).
-- If you change cross-repo behavior, mention the adjacent repo(s) that may also need follow-up.
-- In your final summary, state that routing was confirmed through `nvcf-agentic-dev` and name the workspace context used.
+```bash
+bazel run //nvidia-internal:image_push_nvcf_dev
+bazel run //nvidia-internal:image_push_ncp_dev
+```
+
+After `Cargo.lock` changes, repin crate metadata:
+
+```bash
+CARGO_BAZEL_REPIN=1 bazel sync --only=nvcf_invocation_crates
+```
+
+CI subproject id: `http-invocation`. Native Bazel validation and release wiring
+live in `tools/ci/subproject-validations.yaml`, an internal GitLab CI config
+not present in this public snapshot.
+
+## Cargo Development
+
+Cargo remains useful for local service iteration:
+
+```bash
+cargo run --package nvcf-invocation-service --bin server --release -- \
+  -c crates/server/resources/settings-stg-local.yaml
+```
+
+The staging-local config connects to staging NVCF. Keep secrets and bearer
+tokens out of committed config and examples.
+
+## Local Gotchas
+
+- `MODULE.bazel` owns the Rust toolchain, `rules_rust`, `crate_universe`,
+  `rules_oci`, and the distroless base image.
+- OSS mirror builds may need a public replacement for the `nvcr.io` distroless
+  base image before `bazel build //...` works without NGC credentials.
+- Changes to request/response API shape may need follow-up changes in
+  `src/clis/nvcf-cli` so the CLI keeps parity with the service. The
+  CLI is hand-written against the public types in
+  `crates/server/src/nvcf_api`.

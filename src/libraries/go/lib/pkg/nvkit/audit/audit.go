@@ -43,7 +43,7 @@ type AuditLog struct {
 	Hmac    string       `json:"hmac"`
 }
 
-// AuditPayload contains the actual information provided by the component generting the audit event
+// AuditPayload contains the actual information provided by the component generating the audit event
 type AuditPayload struct {
 	Timestamp       time.Time        `json:"timestamp"`
 	ParentAuditID   string           `json:"parentAuditId"`

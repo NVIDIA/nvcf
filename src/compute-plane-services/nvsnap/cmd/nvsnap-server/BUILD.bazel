@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "nvsnap-server_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/cmd/nvsnap-server",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//src/compute-plane-services/nvsnap/internal/db",
+        "//src/compute-plane-services/nvsnap/internal/server",
+        "//src/compute-plane-services/nvsnap/internal/tracing",
+        "//src/compute-plane-services/nvsnap/ui",
+        "@com_github_sirupsen_logrus//:logrus",
+        "@com_github_spf13_cobra//:cobra",
+        "@io_k8s_client_go//dynamic",
+        "@io_k8s_client_go//kubernetes",
+        "@io_k8s_client_go//rest",
+        "@io_k8s_client_go//tools/clientcmd",
+    ],
+)
+
+go_binary(
+    name = "nvsnap-server",
+    embed = [":nvsnap-server_lib"],
+    visibility = ["//visibility:public"],
+)

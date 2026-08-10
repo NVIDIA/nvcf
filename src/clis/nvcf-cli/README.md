@@ -27,6 +27,8 @@ limitations under the License.
 - **Advanced gRPC Support**: Native gRPC invocation with `--grpc` flag
 - **Comprehensive Authentication**: Multi-token support with automatic scope management
 - **Simple Architecture**: Everything works via direct HTTPS - no cluster access required
+- **NVCT Task Support**: First-class commands for NVIDIA Cloud Tasks (`nvcf-cli task ...`)
+- **Cluster Diagnostics**: One-command health report and support bundle for self-managed deployments (`nvcf-cli cluster-dump`)
 
 **[Jump to Token Generation Guide](#automatic-token-generation-)**
 
@@ -34,7 +36,7 @@ limitations under the License.
 
 ## Prerequisites
 
-- Go 1.21 or later
+- Bazel (managed via Bazelisk; see `BAZEL.md` at the repo root for setup)
 - Git
 - Valid NVIDIA Cloud Functions credentials
 
@@ -45,17 +47,28 @@ limitations under the License.
 1. Clone the repository:
 ```bash
 git clone <repository-url>
-cd nvcf-cli
+cd nvcf
 ```
 
-2. Build the binary:
+2. Build the binary (host platform):
 ```bash
-make build
+bazel build //src/clis/nvcf-cli:nvcf-cli
 ```
 
-3. (Optional) Install globally:
+The monorepo reads from the configured remote cache by default. If you are off
+the network path that can reach that cache and Bazel fails before local
+execution starts, disable the remote cache for this build:
 ```bash
-make install
+bazel build --remote_cache= //src/clis/nvcf-cli:nvcf-cli
+```
+
+The binary is at `bazel-bin/src/clis/nvcf-cli/nvcf-cli_/nvcf-cli`.
+
+3. (Optional) Install globally by copying it onto your `PATH`:
+```bash
+install -m 0755 \
+  bazel-bin/src/clis/nvcf-cli/nvcf-cli_/nvcf-cli \
+  /usr/local/bin/nvcf-cli
 ```
 
 ### Option 2: Download Pre-built Binary
@@ -359,7 +372,7 @@ debug: false
 # Direct API endpoints for production
 NVCF_BASE_HTTP_URL: "https://api.nvcf.nvidia.com"
 NVCF_BASE_GRPC_URL: "grpc.nvcf.nvidia.com:443"
-NVCF_INVOKE: "https://invoke.nvcf.nvidia.com"
+NVCF_INVOKE_URL: "https://invocation.nvcf.nvidia.com"
 
 # Set your production credentials
 NVCF_API_KEY: "nvapi-your-production-key-here"
@@ -597,6 +610,15 @@ export NVCF_TOKEN="nvapi-your-function-creation-token"
 
 # Or create with JSON configuration
 ./nvcf-cli create --input-file examples/create-function.json
+
+# Create an LLM function model with a routing method override
+./nvcf-cli function create \
+  --name "my-llm-function" \
+  --image "nvcr.io/example/openai-compatible:latest" \
+  --inference-url "/" \
+  --inference-port 8000 \
+  --function-type "LLM" \
+  --llm-model "name=dummy-model,uris=/v1/chat/completions|/v1/responses|/v1/embeddings,routingMethod=round_robin,tokenRateLimit=1000-S"
 ```
 
 **Required flags:**
@@ -608,11 +630,12 @@ export NVCF_TOKEN="nvapi-your-function-creation-token"
 **Example JSON file (`create-function.json`):**
 ```json
 {
-  "name": "example-function",
-  "containerImage": "nvcr.io/0651155215864979/ncp-dev/load_tester_supreme:0.0.8",
-  "inferenceUrl": "/echo",
+  "name": "sample-llm-function",
+  "containerImage": "nvcr.io/example/openai-compatible:latest",
+  "inferenceUrl": "/",
   "inferencePort": 8000,
-  "description": "Example function from JSON config",
+  "functionType": "LLM",
+  "description": "Example LLM function from JSON config",
   "tags": ["example", "demo"],
   "health": {
     "protocol": "HTTP",
@@ -625,12 +648,31 @@ export NVCF_TOKEN="nvapi-your-function-creation-token"
     {"key": "MODEL_PATH", "value": "/models"},
     {"key": "BATCH_SIZE", "value": "32"}
   ],
+  "models": [
+    {
+      "name": "dummy-model",
+      "llmConfig": {
+        "uris": ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"],
+        "routingMethod": "round_robin",
+        "tokenRateLimit": "1000-S"
+      }
+    }
+  ],
   "secrets": [
     {"name": "api-key", "value": "sk-12345"},
     {"name": "db-password", "value": "mypassword"}
   ]
 }
 ```
+
+`--llm-model` accepts `name`, `uris`, `routingMethod`, and `tokenRateLimit`
+key/value fields. Separate multiple URIs with `|`. Valid routing
+methods are `round_robin`, `power_of_two`, `groq_multiregion`, `pulsar`, and
+`random`; the CLI validates and sends these API/auth spellings in the create
+request.
+`tokenRateLimit` supports positive integer token limits for `S`, `M`, `H`, `D`, and `W`.
+Use `1000-S` for a single inline CLI limit. Use JSON input for combined limits, such as `1000-S,5000-M,100000-H,500000-D,1000000-W`, because inline model specs use commas as field separators.
+Supported LLM paths are `/v1/chat/completions`, `/v1/responses`, and `/v1/embeddings`.
 
 #### **Deploy a Function** *Uses `NVCF_TOKEN` (with `NVCF_API_KEY` fallback)*
 
@@ -692,15 +734,20 @@ Update various aspects of an existing function:
 export NVCF_TOKEN="nvapi-your-function-creation-token"
 export NVCF_API_KEY="nvapi-your-general-operations-token"  # optional fallback
 
-# Update function metadata (tags, description)
-./nvcf-cli update metadata \
+# Update function tags
+./nvcf-cli function update \
   --function-id "func-12345678-1234-1234-1234-123456789abc" \
   --version-id "ver-12345678-1234-1234-1234-123456789abc" \
-  --description "Updated function description" \
   --tags "production,ml-model,updated"
 
+# Update LLM model routing config
+./nvcf-cli function update \
+  --function-id "func-12345678-1234-1234-1234-123456789abc" \
+  --version-id "ver-12345678-1234-1234-1234-123456789abc" \
+  --llm-model-update "name=dummy-model,routingMethod=round_robin,tokenRateLimit=1000-S"
+
 # Update function deployment specifications
-./nvcf-cli update deployment \
+./nvcf-cli function deploy update \
   --function-id "func-12345678-1234-1234-1234-123456789abc" \
   --version-id "ver-12345678-1234-1234-1234-123456789abc" \
   --min-instances 2 \
@@ -708,17 +755,25 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"  # optional fallback
   --max-request-concurrency 20
 
 # Or update with JSON configuration
-./nvcf-cli update metadata --input-file update-metadata.json
-./nvcf-cli update deployment --input-file update-deployment.json
+./nvcf-cli function update --input-file update-metadata.json
+./nvcf-cli function deploy update --input-file update-deployment.json
 ```
 
-**Update Metadata JSON format (`update-metadata.json`):**
+**Update Function JSON format (`update-metadata.json`):**
 ```json
 {
   "functionId": "func-12345678-1234-1234-1234-123456789abc",
   "versionId": "ver-12345678-1234-1234-1234-123456789abc",
-  "description": "Updated function description",
-  "tags": ["production", "ml-model", "updated"]
+  "tags": ["production", "ml-model", "updated"],
+  "modelUpdates": [
+    {
+      "modelName": "dummy-model",
+      "llmConfig": {
+        "routingMethod": "round_robin",
+        "tokenRateLimit": "1000-S,5000-M,100000-H,500000-D,1000000-W"
+      }
+    }
+  ]
 }
 ```
 
@@ -736,7 +791,7 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"  # optional fallback
 ```
 
 **Update Command Features:**
-- **Metadata Updates**: Change function description and tags without affecting code or deployment
+- **Function Updates**: Change function tags and LLM model routing config without affecting code or deployment
 - **Deployment Updates**: Modify instance counts, concurrency, clusters, and other deployment settings
 - **Non-destructive**: Updates preserve existing function code and configuration
 - **Note**: GPU type and backend configurations cannot be modified through update operations
@@ -758,12 +813,41 @@ nvcf-cli invoke --grpc --request-body '{"input": "test"}'
   --version-id "ver-12345678-1234-1234-1234-123456789abc" \
   --request-body '{"input": "Hello, World!", "parameters": {"temperature": 0.7}}' \
   --timeout 60 \
-  --poll-rate 3 \
-  --asset-references "asset-123"
+  --poll-duration 5
 
 # Or invoke with JSON configuration
 ./nvcf-cli invoke --input-file invoke.json
 ```
+
+Direct HTTP invocation routes through the function-specific invocation host, not function routing headers:
+
+```bash
+curl --request POST \
+  --url "https://${FUNCTION_ID}.invocation.${INVOCATION_DOMAIN}/echo" \
+  --header "Authorization: Bearer ${API_KEY}" \
+  --header "Content-Type: application/json" \
+  --data '{"message": "hello"}'
+```
+
+For LLM functions, send OpenAI-compatible requests to the LLM invocation host:
+
+```bash
+curl -sS -X POST "https://llm.invocation.${INVOCATION_DOMAIN}/v1/chat/completions" \
+  -H "Authorization: Bearer ${NVCF_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d "{\"model\":\"${FUNCTION_ID}/${MODEL_NAME}\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}"
+```
+
+The OpenAI `model` value must use `${FUNCTION_ID}/${MODEL_NAME}`.
+
+```bash
+curl -sS -X POST "https://llm.invocation.${INVOCATION_DOMAIN}/v1/embeddings" \
+  -H "Authorization: Bearer ${NVCF_API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d "{\"model\":\"${FUNCTION_ID}/${MODEL_NAME}\",\"input\":\"NVCF embeddings check\"}"
+```
+
+For LLM Gateway endpoint behavior, routing, and session stickiness details, see [LLM Gateway](../../../docs/user/llm-gateway.md).
 
 **New Features:**
 - **Smart Context**: Uses saved function ID/version automatically
@@ -784,10 +868,11 @@ nvcf-cli invoke --grpc --request-body '{"input": "test"}'
     }
   },
   "timeout": 120,
-  "pollDurationSeconds": 2,
-  "inputAssetReferences": ["asset-123", "asset-456"]
+  "pollDurationSeconds": 2
 }
 ```
+
+`pollDurationSeconds` maps to the `NVCF-POLL-SECONDS` hold-open hint. The service may keep the invocation connection open for that duration before returning pending request metadata.
 
 #### **Delete a Function** *Uses `NVCF_TOKEN` ONLY*
 
@@ -851,9 +936,6 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"
 
 # List all versions of a specific function
 ./nvcf-cli list versions func-12345678-1234-1234-1234-123456789abc
-
-# List all assets in your account
-./nvcf-cli list assets
 
 # List available cluster groups and GPUs
 ./nvcf-cli list clusters
@@ -927,67 +1009,6 @@ Deployment:
 
 ---
 
-### **Asset Management Commands** *Uses `NVCF_API_KEY`*
-
-Manage files and assets for function inputs/outputs:
-
-```bash
-# Set the required token
-export NVCF_API_KEY="nvapi-your-general-operations-token"
-
-# Create a new asset and get upload URL
-./nvcf-cli assets create --content-type "image/png" --description "Profile image"
-
-# Upload a file in one step (create asset + upload)
-./nvcf-cli assets upload /path/to/file.png --description "My image"
-
-# Get details of a specific asset
-./nvcf-cli assets get asset-12345678-1234-1234-1234-123456789abc
-
-# Delete an asset
-./nvcf-cli assets delete asset-12345678-1234-1234-1234-123456789abc
-```
-
-**Example asset workflow:**
-```bash
-# 1. Upload an image
-$ ./nvcf-cli assets upload /path/to/input.png --description "Input image"
-Uploading asset: input.png (1.2 MB)
-Asset uploaded successfully!
-Asset ID: asset-12345678-1234-1234-1234-123456789abc
-Upload URL: https://api.nvcf.nvidia.com/v2/nvcf/assets/asset-12345678/upload
-
-# 2. List all assets
-$ ./nvcf-cli list assets
-Assets:
-- ID: asset-12345678, Description: Input image, Type: image/png, Size: 1.2MB, Created: 2023-12-01T10:00:00Z
-
-# 3. Use asset in function invocation
-$ ./nvcf-cli invoke func-abc123 ver-def456 '{"image_asset": "asset-12345678-1234-1234-1234-123456789abc"}' --asset-references asset-12345678-1234-1234-1234-123456789abc
-
-# 4. Get asset details
-$ ./nvcf-cli assets get asset-12345678-1234-1234-1234-123456789abc
-Asset Details:
-  ID: asset-12345678-1234-1234-1234-123456789abc
-  Description: Input image
-  Content Type: image/png
-  Size: 1.2 MB
-  Status: READY
-  Created: 2023-12-01T10:00:00Z
-
-# 5. Clean up
-$ ./nvcf-cli assets delete asset-12345678-1234-1234-1234-123456789abc
-Asset deleted successfully!
-```
-
-**Supported file types:**
-- Images: `.jpg`, `.jpeg`, `.png`, `.gif`
-- Documents: `.pdf`, `.txt`, `.csv`, `.json`
-- Archives: `.zip`, `.tar`, `.gz`
-- Generic: `application/octet-stream` (fallback)
-
----
-
 ### **Queue Management Commands** *Uses `NVCF_API_KEY`*
 
 Monitor function execution and queue status:
@@ -1047,7 +1068,7 @@ Request Position:
 ```bash
 # Step 1: Set up authentication tokens
 export NVCF_TOKEN="nvapi-your-function-creation-token"        # For create, deploy, delete
-export NVCF_API_KEY="nvapi-your-general-operations-token"    # For invoke, list, assets, queue
+export NVCF_API_KEY="nvapi-your-general-operations-token"    # For invoke, list, queue
 
 # Step 2: Discover available GPU resources (uses NVCF_API_KEY)
 ./nvcf-cli list clusters
@@ -1079,37 +1100,30 @@ echo '{
 }' > deploy.json
 ./nvcf-cli deploy --function-id func-12345678-1234-1234-1234-123456789abc --version-id ver-87654321-4321-4321-4321-123456789abc --input-file deploy.json
 
-# Step 5: Update function metadata (uses NVCF_TOKEN)
-./nvcf-cli update metadata \
+# Step 5: Update function tags (uses NVCF_TOKEN)
+./nvcf-cli function update \
   --function-id func-12345678-1234-1234-1234-123456789abc \
   --version-id ver-87654321-4321-4321-4321-123456789abc \
-  --description "Updated production function" \
   --tags "production,v2,optimized"
 
 # Step 6: Update deployment (scale up) (uses NVCF_TOKEN)
-./nvcf-cli update deployment \
+./nvcf-cli function deploy update \
   --function-id func-12345678-1234-1234-1234-123456789abc \
   --version-id ver-87654321-4321-4321-4321-123456789abc \
   --min-instances 2 \
   --max-instances 4 \
   --max-request-concurrency 20
 
-# Step 7: Upload an asset (uses NVCF_API_KEY)
-./nvcf-cli assets upload input.jpg --description "Test image"
-# Returns: Asset ID: asset-12345678-1234-1234-1234-123456789abc
-
-# Step 8: Invoke with asset (uses NVCF_API_KEY)
+# Step 7: Invoke the function (uses NVCF_API_KEY)
 ./nvcf-cli invoke \
   func-12345678-1234-1234-1234-123456789abc \
   ver-87654321-4321-4321-4321-123456789abc \
-  '{"input": "Hello from CLI!", "image_asset": "asset-12345678-1234-1234-1234-123456789abc"}' \
-  --asset-references asset-12345678-1234-1234-1234-123456789abc
+  '{"input": "Hello from CLI!"}'
 
-# Step 9: Monitor queue status (uses NVCF_API_KEY)
+# Step 8: Monitor queue status (uses NVCF_API_KEY)
 ./nvcf-cli queue status func-12345678-1234-1234-1234-123456789abc ver-87654321-4321-4321-4321-123456789abc
 
-# Step 10: Clean up (uses respective tokens)
-./nvcf-cli assets delete asset-12345678-1234-1234-1234-123456789abc    # uses NVCF_API_KEY
+# Step 9: Clean up (uses NVCF_TOKEN)
 ./nvcf-cli delete func-12345678-1234-1234-1234-123456789abc ver-87654321-4321-4321-4321-123456789abc  # uses NVCF_TOKEN only
 ```
 
@@ -1131,13 +1145,10 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"
 # 4. Check deployment queue status
 ./nvcf-cli queue status func-12345678-1234-1234-1234-123456789abc ver-87654321-4321-4321-4321-123456789abc
 
-# 5. List all available assets
-./nvcf-cli list assets
-
-# 6. List available GPU cluster groups
+# 5. List available GPU cluster groups
 ./nvcf-cli list clusters
 
-# 7. Export function details as JSON for automation
+# 6. Export function details as JSON for automation
 ./nvcf-cli get function --function-id func-12345678-1234-1234-1234-123456789abc --version-id ver-87654321-4321-4321-4321-123456789abc --json > function-details.json
 ```
 
@@ -1146,7 +1157,7 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"
 ```bash
 # Set up both tokens for full functionality
 export NVCF_TOKEN="nvapi-your-function-creation-token"      # Create, deploy, delete
-export NVCF_API_KEY="nvapi-your-general-operations-token"  # Invoke, list, assets
+export NVCF_API_KEY="nvapi-your-general-operations-token"  # Invoke, list, queue
 
 # 1. Enable debug mode to see token selection
 export NVCF_CLI_DEBUG=true
@@ -1252,9 +1263,6 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"  # fallback
 ./nvcf-cli invoke --debug func-123 ver-456 '{"input": "test"}'
 # Output: DEBUG: Using API KEY for POST /v2/nvcf/functions/func-123/versions/ver-456/invocations
 
-# Asset management (uses NVCF_API_KEY)
-./nvcf-cli assets --debug upload file.jpg
-# Output: DEBUG: Using API KEY for POST /v2/nvcf/assets
 ```
 
 ### **Authentication Token Summary**
@@ -1265,7 +1273,7 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"  # fallback
 | `deploy` | `NVCF_TOKEN` | `NVCF_API_KEY` | `./nvcf-cli deploy --debug ...` |
 | `delete` | `NVCF_TOKEN` | **None** | `./nvcf-cli delete --debug ...` |
 | `invoke` | `NVCF_API_KEY` | `NVCF_TOKEN` | `./nvcf-cli invoke --debug ...` |
-| `list`, `get`, `assets`, `queue` | `NVCF_API_KEY` | `NVCF_TOKEN` | `./nvcf-cli list --debug ...` |
+| `list`, `get`, `queue` | `NVCF_API_KEY` | `NVCF_TOKEN` | `./nvcf-cli list --debug ...` |
 
 ### **Configuration Issues**
 
@@ -1291,7 +1299,6 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"  # fallback
 │   ├── invoke.go          # Invoke function command
 │   ├── list.go            # List resources command
 │   ├── get.go             # Get detailed information
-│   ├── assets.go          # Asset management commands
 │   └── queue.go           # Queue management commands
 ├── internal/
 │   └── client/            # NVCF client implementation
@@ -1301,75 +1308,77 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"  # fallback
 │       └── multi_token_transport.go  # Multi-token auth
 ├── examples/              # JSON configuration examples
 ├── main.go                # Application entry point
-├── go.mod                 # Go module definition
+├── go.mod                 # Go module definition (consumed by Bazel via go.work.bazel)
 ├── go.sum                 # Go module checksums
-├── Makefile              # Build automation
+├── BUILD.bazel            # Bazel targets: nvcf-cli binary, dist matrix, OCI image
 └── README.md             # This file
 ```
 
-### **Building**
+### Building
+
+All build, test, and packaging operations go through Bazel. See `BAZEL.md` at the repo root for one-time setup.
 
 ```bash
 # Build for current platform
-make build
+bazel build //src/clis/nvcf-cli:nvcf-cli
 
-# Build for all supported platforms
-make build-all
+# Build for all supported platforms (linux/darwin/windows x amd64/arm64)
+bazel build //src/clis/nvcf-cli:dist
 
-# Install dependencies
-make deps
+# Stamp the binary with full version metadata (Version, GitCommit, BuildDate, ...)
+bazel build --stamp //src/clis/nvcf-cli:nvcf-cli
 
-# Format code
-make fmt
+# Build the multi-arch OCI image
+bazel build //src/clis/nvcf-cli:image_index
 
-# Run linter
-make lint
+# Load the host-arch image into your local docker daemon
+bazel run //src/clis/nvcf-cli:image_load
 
-# Run tests
-make test
+# Format Go and Bazel files (gofmt + buildifier)
+gofmt -w .
+bazel run @rules_go//go -- fmt ./...
 
-# Run tests with coverage
-make test-coverage
-
-# Run all checks
-make check
+# Run linter (still go-tooling; not yet wired into Bazel)
+golangci-lint run ./...
 ```
 
-### **Running Tests**
+### Running Tests
 
-The project includes comprehensive tests with mocked HTTP servers:
+The CLI test suite runs under the Bazel sandbox. Tests that need real
+infrastructure (k3d clusters, helmfile, NVCF backends) are tagged `e2e` and
+live under `test/e2e/`; see that directory's README.
 
 ```bash
-# Run all tests
-make test
+# Run all unit tests
+bazel test //src/clis/nvcf-cli/...
 
-# Run tests with coverage report
-make test-coverage
+# Run a single package's tests
+bazel test //src/clis/nvcf-cli/internal/client:client_test
 
-# Run tests with verbose output
-go test -v ./...
+# Stream test output even on success
+bazel test //src/clis/nvcf-cli/... --test_output=streamed
 
-# Run specific test
-go test -v ./internal/client -run TestClient_CreateFunction
+# Coverage (requires lcov on PATH; html report generation is a follow-up)
+bazel coverage //src/clis/nvcf-cli/...
 ```
 
-### **Contributing**
+### Contributing
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
 3. Make your changes
-4. Run tests and linting (`make check`)
-5. Commit your changes (`git commit -m 'Add amazing feature'`)
-6. Push to the branch (`git push origin feature/amazing-feature`)  
+4. Run `bazel test //src/clis/nvcf-cli/...` to verify tests pass
+5. Commit your changes with DCO sign-off (`git commit -s -m 'Add amazing feature'`)
+6. Push to the branch (`git push origin feature/amazing-feature`)
 7. Open a Pull Request
 
-### **Development Guidelines**
+### Development Guidelines
 
 - Follow Go coding standards and conventions
 - Write comprehensive tests for new features
 - Update documentation for any API changes
-- Ensure all tests pass before submitting PRs
-- Use `make check` to run all quality checks
+- Ensure `bazel test //src/clis/nvcf-cli/...` is green before submitting PRs
+- After adding a new Go import, run `bazel run //:gazelle` to refresh BUILD files
 
 ---
 
@@ -1380,19 +1389,12 @@ The CLI now provides comprehensive coverage of NVIDIA Cloud Function APIs:
 | **API Category** | **Status** | **Endpoints** |
 |------------------|------------|---------------|
 | **Function Management** | Complete | Create, Deploy, Update, Delete, List, Get Details |
-| **Function Invocation** | Complete | Invoke with polling, Asset references |
-| **Asset Management** | Complete | Create, Upload, List, Get, Delete (Hidden CLI) |
+| **Function Invocation** | Complete | Invoke with hold-open hint |
 | **Cluster Groups** | Complete | List available GPU resources |
 | **Queue Management** | Complete | Position, Details, Status |
 | **Function Sharing** | ⏳ Planned | Authorization management |
 
-**Total API Methods Supported**: 17+ endpoints across all major functional areas
-
-### **Hidden Commands**
-
-Some CLI commands are available but hidden from the main help menu for advanced users:
-
-- **Asset Management** (`./nvcf-cli assets`): Full asset upload, management, and deletion functionality is available but hidden from the main CLI menu. Use `./nvcf-cli assets --help` to access these features.
+**Total API Methods Supported**: Core function, invocation, cluster group, and queue endpoints
 
 ---
 
@@ -1469,6 +1471,393 @@ export NVCF_TOKEN="your-existing-token"
 - **Automatic Context**: No more copying/pasting function IDs
 - **Enhanced Output**: Colored success/warning/error messages
 - **State Persistence**: CLI remembers your current function across commands
+
+---
+
+## **Cloud Tasks (NVCT)**
+
+The CLI also speaks to the NVIDIA Cloud Tasks (NVCT) service for managing
+GPU-backed batch jobs. NVCT commands live under `nvcf-cli task` and reuse the
+same authentication, state, and config conventions as the function commands.
+
+### **Configuration**
+
+NVCT requests are sent to a dedicated base URL, configurable via:
+
+| Source | Key |
+| --- | --- |
+| Environment variable | `NVCF_BASE_NVCT_URL` |
+| Config file (`~/.nvcf-cli.yaml`) | `base_nvct_url` |
+| Default | `https://api.nvct.nvidia.com` |
+
+Task commands authenticate with an NVCT-scoped API key, separate from the
+function key. `nvcf-cli api-key generate` mints both keys by default:
+
+```bash
+nvcf-cli api-key generate
+```
+
+The task key is saved as `NVCF_NVCT_API_KEY` and used automatically for all
+`nvcf-cli task` subcommands. Use `--for task` if you only want the task key.
+
+### **Command Surface**
+
+| Command | Endpoint | Notes |
+| --- | --- | --- |
+| `task create` | `POST /v1/nvct/tasks` | Launches a task. Saves Task ID to state. |
+| `task list` | `GET /v1/nvct/tasks` | Optional `--status`, `--limit`, `--cursor`. |
+| `task bulk` | `POST /v1/nvct/tasks/bulk` | Basic details for an explicit ID set. |
+| `task get [id]` | `GET /v1/nvct/tasks/{id}` | Falls back to saved task. `--include-secrets`. |
+| `task delete [id]` | `DELETE /v1/nvct/tasks/{id}` | Falls back to saved task. |
+| `task cancel [id]` | `POST /v1/nvct/tasks/{id}/cancel` | Falls back to saved task. |
+| `task events [id]` | `GET /v1/nvct/tasks/{id}/events` | Paginated. |
+| `task results [id]` | `GET /v1/nvct/tasks/{id}/results` | Paginated. |
+| `task update-secrets [id]` | `PUT /v1/nvct/secrets/tasks/{id}` | Replace user secrets. |
+
+### **Quickstart**
+
+```bash
+# Launch a task from a JSON spec (saves taskId to state)
+nvcf-cli task create --input-file examples/create-task.json
+
+# Inline alternative
+nvcf-cli task create \
+  --name my-job \
+  --gpu H100 --instance-type GPU.H100_1x --backend GFN \
+  --image nvcr.io/.../my-image:latest \
+  --container-args "--epochs 10" \
+  --container-env LOG_LEVEL=INFO \
+  --max-runtime PT4H
+
+# List, watch, and inspect using saved task context
+nvcf-cli task list --status RUNNING
+nvcf-cli task get
+nvcf-cli task events
+nvcf-cli task results
+
+# Rotate task secrets
+nvcf-cli task update-secrets --secrets NGC_API_KEY=nvapi-... HF_TOKEN=hf_...
+
+# Cancel and delete
+nvcf-cli task cancel
+nvcf-cli task delete
+
+# JSON automation output
+nvcf-cli --json task list --status RUNNING
+```
+
+### **JSON Input Files**
+
+Sample configs live under [`examples/`](./examples):
+
+- [`examples/create-task.json`](./examples/create-task.json) — minimal create
+- [`examples/create-task-with-results.json`](./examples/create-task-with-results.json) — UPLOAD strategy with NGC secret
+- [`examples/create-task-helm.json`](./examples/create-task-helm.json) — Helm chart based task
+- [`examples/update-task-secrets.json`](./examples/update-task-secrets.json) — secret rotation payload
+- [`examples/bulk-tasks.json`](./examples/bulk-tasks.json) — bulk task ID lookup payload
+
+### **Required vs Optional Fields**
+
+`task create` requires `name`, `gpuSpecification.gpu`, and
+`gpuSpecification.instanceType`. When `resultHandlingStrategy=UPLOAD`,
+`resultsLocation` becomes required and the user must supply an `NGC_API_KEY`
+secret with write privileges to that location. See the
+[OpenAPI specification](../../../docs/user/api.md#openapi-specification) for
+the full field reference.
+
+---
+
+## Admin Commands
+
+The CLI ships with a set of super-admin commands for operators of the
+self-managed NVCF stack. They operate across NVIDIA Cloud Accounts and
+require elevated privileges, so they are hidden from the default CLI menu.
+
+### Enabling
+
+Admin commands appear in the CLI menu only when the `NVCF_CLI_ENABLE_ADMIN`
+environment variable is set to a non-empty value:
+
+```bash
+export NVCF_CLI_ENABLE_ADMIN=1
+nvcf-cli admin --help
+```
+
+### Authentication
+
+All admin commands require `NVCF_TOKEN` with the appropriate admin scope.
+`NVCF_API_KEY` is not accepted; the CLI fails fast with a clear error if only
+an API key is configured.
+
+| Command group | Required scope |
+| :---- | :---- |
+| `admin accounts` | `account_setup` |
+| `admin secrets` | `admin:update_secrets` |
+| `admin queues` | `admin:queue_details` |
+
+### Commands
+
+| Command | What it does |
+| :---- | :---- |
+| `admin accounts list` | List all NVIDIA Cloud Accounts onboarded with Cloud Functions. |
+| `admin accounts update` | Update limits and name for one NCA. |
+| `admin secrets update-function` | Update secrets for a specific function version cross-account. |
+| `admin secrets update-telemetry` | Update secrets for a telemetry endpoint cross-account. |
+| `admin queues function` | Get cross-account queue details for all versions of a function. |
+| `admin queues version` | Get cross-account queue details for one specific function version. |
+
+All commands support `--json` for automation. Read commands emit the full
+response body; secret update commands emit a small status envelope since the
+backend returns 204 with no body.
+
+### Example
+
+```bash
+export NVCF_CLI_ENABLE_ADMIN=1
+export NVCF_TOKEN=${YOUR_ADMIN_JWT}
+
+# List all NCAs as a table
+nvcf-cli admin accounts list
+
+# List as JSON for piping into jq
+nvcf-cli admin accounts list --json | jq '.cloudAccounts[].ncaId'
+
+# Update an NCA's function limit
+nvcf-cli admin accounts update --nca-id nca-123 --max-functions 50
+```
+
+### Testing locally without a real backend
+
+`scripts/admin-mock/` is a small Go program that serves canned responses for
+the six admin endpoints so the commands can be exercised end to end without
+an NVCF backend or an admin token against a real environment:
+
+```bash
+# In one shell, start the mock
+go run ./scripts/admin-mock 9999
+
+# In another shell, point the CLI at it
+export NVCF_BASE_HTTP_URL=http://localhost:9999
+export NVCF_TOKEN=fake-admin-jwt
+export NVCF_CLI_ENABLE_ADMIN=1
+nvcf-cli admin accounts list --json
+```
+
+---
+
+## Cluster Agent Inspection
+
+The `cluster agent` commands let operators inspect the NVCF cluster agent (NVCA)
+running on a compute-plane cluster. They are read-only and read the
+`NVCFBackend` and `ICMSRequest` custom resources directly from the target
+cluster, so they work like `kubectl`: select the cluster with a kube context.
+
+### Selecting the cluster
+
+Use `--compute-plane-context` to choose the kube context for the target cluster.
+Standard kubeconfig resolution applies: `--kubeconfig`, then `KUBECONFIG`, then
+`~/.kube/config`.
+
+```bash
+nvcf-cli cluster agent status --compute-plane-context edge-cluster-1
+```
+
+### Commands
+
+| Command | What it does |
+| :---- | :---- |
+| `cluster agent status` | NVCA version, agent health, and GPU usage for the cluster, with optional control-plane (SIS) enrichment. |
+| `cluster agent list-functions` | Function versions scheduled on the cluster, with instance counts and a phase. |
+| `cluster agent get-function <function-id> [version-id]` | Detailed state for one scheduled function version, including its instances. |
+
+All commands support `--json` for automation.
+
+### Function phases
+
+The NVCA tracks eight granular request statuses. `list-functions` collapses them
+into three user-facing phases:
+
+| Phase | Meaning |
+| :---- | :---- |
+| `DEPLOYING` | Request pending or in progress (caching, instance creation). |
+| `ACTIVE` | Request completed and acknowledged. |
+| `DRAINING` | Cluster draining, a termination request, or instances winding down. |
+| `FAILED` | Request failed or failure acknowledged. |
+
+Use `--phase` to filter to one of `ACTIVE`, `DEPLOYING`, `DRAINING`, or `FAILED`.
+
+### Authentication
+
+`status`, `list-functions`, and `get-function` read from the cluster's
+Kubernetes API and rely on the kube context's RBAC; no NVCF token is required.
+
+`status` can additionally enrich its output with the control-plane (SIS) view of
+the cluster. That enrichment requires `--nca-id` and `NVCF_TOKEN` with the
+`cluster-management` scope. It is strictly additive: when the token or `--nca-id`
+is missing, or SIS has no data, `status` prints the cluster-derived fields and
+notes that the control-plane view was skipped, rather than failing.
+
+### Examples
+
+```bash
+# NVCA status as a table
+nvcf-cli cluster agent status --compute-plane-context edge-1
+
+# Status with control-plane enrichment
+export NVCF_TOKEN=${YOUR_ADMIN_JWT}
+nvcf-cli cluster agent status --compute-plane-context edge-1 --nca-id nca-123
+
+# Show only functions still draining during maintenance
+nvcf-cli cluster agent list-functions --compute-plane-context edge-1 --phase DRAINING
+
+# Detailed state for one function version, as JSON
+nvcf-cli cluster agent get-function func-abc ver-def --compute-plane-context edge-1 --json
+```
+
+## Cluster Agent Maintenance
+
+The maintenance commands mutate the cluster. They select the cluster the same way
+as the inspection commands (`--compute-plane-context`, then `--kubeconfig` /
+`KUBECONFIG` / `~/.kube/config`) and read the `NVCFBackend` CR to discover the
+cluster identity and the system and requests namespaces.
+
+| Command | What it does |
+| :---- | :---- |
+| `cluster agent cordon-and-drain` (alias `drain`) | Put the cluster into CordonAndDrain maintenance: stop new deployments, let in-flight requests finish, and drain instances to zero. |
+| `cluster agent uncordon` (alias `undrain`) | Reverse a drain and re-enable the cluster. |
+| `cluster agent kill-function <function-id> [version-id]` | Force-terminate one function version (all versions when version-id is omitted). |
+| `cluster agent kill-all` | Force-terminate every function on the cluster. |
+
+### How drain works
+
+`cordon-and-drain` adds the `CordonAndDrainMaintenance` feature flag and sets
+`maintenanceMode: CordonAndDrain` on the NVCA `agent-config` ConfigMap, then
+restarts the NVCA deployment so the change takes effect. `uncordon` reverses
+both. The command returns once NVCA has been told to drain and (unless `--force`)
+the restart has rolled out; it does not wait for every instance to reach zero.
+Watch progress with `cluster agent list-functions --phase DRAINING`. `--timeout`
+bounds the rollout wait (default 5m); a timeout is reported as a warning because
+the config change is already persisted and re-running is a no-op.
+
+### How kill works
+
+`kill-function` and `kill-all` delete the matching `ICMSRequest` CRs; the NVCA
+reconciler detects the deletion and evicts the workloads. Deletion is
+asynchronous, so the command returns once the delete is accepted. `--force`
+additionally strips finalizers so a request stuck `Terminating` is removed even
+when NVCA is not running to process its finalizer.
+
+### Confirmation and safety
+
+`cordon-and-drain`, `uncordon`, and `kill-function` prompt for a `y/N`
+confirmation; pass `--yes` to skip it in automation.
+
+`kill-all` is higher impact. It prints the affected function ids first and then
+requires you to type the cluster name to confirm; there is no plain `--yes` bypass.
+For automation, pass both `--yes` and `--confirm <cluster-name>` matching the
+connected cluster. When the cluster has no name, it falls back to the cluster id.
+
+All maintenance commands accept `--dry-run` to preview without mutating, and
+`--expect-cluster-id <id>` to refuse to act unless the connected cluster's id or
+name matches (guards against a wrong `--compute-plane-context`). `kill-function`
+and `kill-all` accept `--reason` for an audit note, and `--json` for automation.
+
+These commands need write access to the target cluster: get/update on the
+`agent-config` ConfigMap and the `nvca` Deployment for drain, and list/delete
+(and update, with `--force`) on `ICMSRequest` CRs for kill.
+
+### Examples
+
+```bash
+# Preview a drain, then drain for real
+nvcf-cli cluster agent cordon-and-drain --compute-plane-context edge-1 --dry-run
+nvcf-cli cluster agent cordon-and-drain --compute-plane-context edge-1
+
+# Re-enable the cluster
+nvcf-cli cluster agent uncordon --compute-plane-context edge-1
+
+# Force-terminate one function version
+nvcf-cli cluster agent kill-function func-abc ver-def --compute-plane-context edge-1 --yes
+
+# Wipe every function on the cluster (CI/automation form)
+nvcf-cli cluster agent kill-all --compute-plane-context edge-1 --yes --confirm <cluster-name>
+```
+
+---
+
+## Cluster Diagnostics (`cluster-dump`)
+
+`nvcf-cli cluster-dump` collects a diagnostic snapshot of a self-managed NVCF
+deployment across the control-plane and compute-plane clusters in one command.
+It is the operator equivalent of a must-gather: run it to triage an issue, or to
+produce a support bundle to share with NVIDIA.
+
+The default report prints to stdout and covers, per plane:
+
+- Kubernetes version and a per-node table (ready, cordoned, Memory/Disk/PID
+  pressure, roles, GPU count, version, age)
+- Helm releases, flagging any not in the `deployed` state
+- Every pod with its ready state, status, restart count, and age
+- Recent warning events
+- Compute plane only: the NVCFBackend custom resource, GPU reconciliation
+  (NVCFBackend reported capacity/allocated vs node capacity and MiniService
+  reservations), ICMSRequest triage (with failed requests flagged), and any
+  namespaces stuck Terminating (read-only finalizer diagnosis)
+
+Every probe degrades to a per-plane warning rather than aborting, so a partially
+broken cluster still produces a useful report.
+
+### Selecting clusters
+
+```bash
+# Both planes
+nvcf-cli cluster-dump --control-plane-context k3d-ncp-local-cp \
+  --compute-plane-context k3d-ncp-local-compute-1
+
+# Control plane only (single-cluster); defaults to the current kube context
+nvcf-cli cluster-dump --control-plane-context k3d-ncp-local-cp
+
+# Compute plane only
+nvcf-cli cluster-dump --compute-only --compute-plane-context k3d-ncp-local-compute-1
+```
+
+### Support bundle
+
+Add `--bundle <path>` to also write a full bundle. A path ending in `.tar.gz` or
+`.tgz` writes a single archive; any other path writes a directory tree. On top of
+the report, the bundle adds raw artifacts: per-namespace resource manifests,
+bounded pod logs (current and previous), and helm manifest/values. It also
+writes `dump.json`, a `summary.txt`, and a collated `upload.txt` you can attach
+to a support ticket.
+
+```bash
+# Archive (best for sharing)
+nvcf-cli cluster-dump --control-plane-context cp --compute-plane-context co \
+  --bundle ./nvcf-support.tar.gz
+
+# Directory tree
+nvcf-cli cluster-dump --control-plane-context cp --compute-plane-context co \
+  --bundle ./nvcf-dump
+```
+
+### Redaction and tuning
+
+Secret values are masked by default. Captured Secret data, Secret documents in
+rendered helm manifests, and helm values under sensitive keys are masked before
+anything is written to disk.
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--bundle <path>` | (off) | Write a support bundle (`.tar.gz`/`.tgz` archive, else a directory) |
+| `--compute-only` | `false` | Collect only the compute plane |
+| `--redact` | `secrets` | Redaction level: `secrets`, `none`, or `all` |
+| `--include` | all | Limit heavy bundle artifacts (advanced): `resources,logs,helm` |
+| `--log-tail` | `2000` | Max log lines per container in the bundle |
+| `--max-log-bytes` | `1048576` | Max log bytes per container in the bundle |
+| `--output` / `--json` | stdout text | Write the report to a file / emit JSON |
+
+The report is also available as JSON (`--json` or a `.json --output` extension),
+which carries `nodeDetails`, `gpu`, `icmsRequests`, and `stuckNamespaces`.
 
 ---
 

@@ -1,0 +1,116 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: bursty-8-backends
+metadata:
+  description: Alternating quiet and spike periods against mixed backend capacity.
+  tags: [bursty, heterogeneous, stress]
+  expected_runtime: short
+  expected_signal: Adaptive algorithms should avoid concentrating burst load on constrained backends.
+model: dummy-model
+seed: 202
+request_count: 96
+max_concurrency: 48
+
+stargates:
+  count: 1
+
+backends:
+  count: 8
+  profile:
+    name: balanced
+    weight: 1.0
+    max_concurrent_requests: 4
+    kv_cache_capacity_tokens: 120000
+    service_time_ms:
+      ttft_mean: 180
+      ttft_jitter_ms: 25
+      decode_jitter_ms: 4
+      prefill_tokens_per_s: 4200
+      decode_tokens_per_s: 90
+    registration:
+      last_mean_input_tps: 120
+  profiles:
+    - count: 2
+      profile:
+        name: fast
+        weight: 1.5
+        max_concurrent_requests: 6
+        kv_cache_capacity_tokens: 200000
+        service_time_ms:
+          ttft_mean: 110
+          ttft_jitter_ms: 15
+          decode_jitter_ms: 2
+          prefill_tokens_per_s: 7200
+          decode_tokens_per_s: 150
+        registration:
+          last_mean_input_tps: 220
+    - count: 4
+      profile:
+        name: balanced
+        weight: 1.0
+        max_concurrent_requests: 4
+        kv_cache_capacity_tokens: 120000
+        service_time_ms:
+          ttft_mean: 180
+          ttft_jitter_ms: 25
+          decode_jitter_ms: 4
+          prefill_tokens_per_s: 4200
+          decode_tokens_per_s: 90
+        registration:
+          last_mean_input_tps: 120
+    - count: 2
+      profile:
+        name: constrained
+        weight: 0.5
+        max_concurrent_requests: 2
+        kv_cache_capacity_tokens: 80000
+        service_time_ms:
+          ttft_mean: 280
+          ttft_jitter_ms: 50
+          decode_jitter_ms: 10
+          prefill_tokens_per_s: 2200
+          decode_tokens_per_s: 50
+        registration:
+          last_mean_input_tps: 60
+
+traffic_pattern:
+  kind: bursty
+  routing_keys: 0
+  cache_affinity_keys: 160
+  input_tokens:
+    distribution: lognormal
+    mean: 900
+    sigma: 0.5
+    p99_cap: 5000
+  output_tokens:
+    distribution: lognormal
+    mean: 160
+    sigma: 0.45
+    p99_cap: 1024
+  quiet_rps: 4
+  burst_rps: 45
+  burst_period_requests: 16
+
+algorithms:
+  - name: power-of-two
+    config:
+      default: power-of-two
+  - name: random
+    config:
+      default: random
+  - name: groq-multiregion
+    config:
+      default: groq-multiregion

@@ -15,6 +15,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */}}
 
+{{/*
+Resolve the namespace where the wrapped NATS chart renders runtime resources.
+*/}}
+{{- define "nvcf-nats.namespace" -}}
+{{- $natsValues := default dict (get .Values "nats") -}}
+{{- $namespace := default .Release.Namespace (get $natsValues "namespace") -}}
+{{- default $namespace (get $natsValues "namespaceOverride") -}}
+{{- end -}}
+
 {{- define "nvcf-nats.authCalloutSecretName" -}}
 {{- $natsValues := default dict (get .Values "nats") -}}
 {{- $authCallout := default dict (get $natsValues "authCallout") -}}

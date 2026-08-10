@@ -10,9 +10,11 @@ Top-level groups:
 
 - `function-samples/`: long-running services (FastAPI echo, streaming, multi-endpoint, gRPC echo, secrets, vLLM with OTLP, load tester).
 - `function-samples/helmchart-samples/`: Helm charts that wrap the FastAPI and multi-node samples.
-- `load-tests/`: k6 scripts for `functions/` (HTTP, gRPC, SSE, streaming).
+- `task-samples/`: one-shot NVCT task containers and Helm charts (simple, BYOO, Helm, multi-node).
+- `load-tests/`: k6 scripts for `functions/` (HTTP, gRPC, SSE, streaming) and `tasks/` (health, create, list tasks/events/results).
 - `cluster-monitoring-sample/`: Prometheus ServiceMonitor and OTEL collector configs for NVCA.
-- `self-hosted-local-development/`: k3d config and setup/teardown scripts for local self-hosted NVCF.
+
+Local development tooling for self-hosted NVCF lives in `tools/ncp-local-cluster/`, not under `examples/`.
 
 Per-example `README.md` files hold the run instructions. Read them before modifying a sample.
 
@@ -29,6 +31,18 @@ docker run --rm -p 8000:8000 <sample>
 ```
 
 Smoke-test with `curl`. See each sample's `README.md` for endpoint paths and payloads.
+
+### Python task containers
+
+```
+cd examples/task-samples/<sample>
+docker build -t <sample> .
+docker run --rm -v ${PWD}:/tmp/output -e NVCT_RESULTS_DIR=/tmp/output <sample>
+```
+
+The container should write progress JSON to `${NVCT_PROGRESS_FILE_PATH}` or
+`${NVCT_RESULTS_DIR}/progress`. See each sample's `README.md` for task-specific
+environment variables.
 
 ### Helm charts
 
@@ -54,19 +68,19 @@ Stay on Go versions listed in each `go.mod`. Do not tie load-tester build config
 ```
 cd examples/load-tests
 k6 run functions/<test>.js
+k6 run tasks/<test>.js
 ```
 
 k6 scripts accept endpoint URLs and keys through environment variables. Do not hardcode NGC keys, auth tokens, or customer-facing endpoints. Every test must read credentials from env.
 
-### Local self-hosted NVCF
+### NVCT task samples
 
 ```
-cd examples/self-hosted-local-development
-./setup.sh
-./teardown.sh
+cd examples/task-samples/<sample>
+docker build -t <sample> .
 ```
 
-Follow `README.md` for prerequisites (k3d, Docker, Helm). This script targets a developer laptop, not CI.
+Each task sample README documents the self-hosted NVCT launch flow (registry credentials, API key, and `POST /v2/orgs/<org>/nvct/tasks`). Helm variants package a chart and reference it by OCI URL on task submission.
 
 ## Code style
 
@@ -88,7 +102,7 @@ If a change does not lend itself to an automated test (docs only, configuration-
 
 ## Adding a new example
 
-1. Pick a directory under the matching group (`function-samples/`, etc.) or create a new group if none fits.
+1. Pick a directory under the matching group (`function-samples/`, `task-samples/`, etc.) or create a new group if none fits.
 2. Write a `README.md` describing what the sample does, its prerequisites, and how to run it.
 3. Add SPDX headers to every source file.
 4. Update the top-level `examples/README.md` table for the new sample.

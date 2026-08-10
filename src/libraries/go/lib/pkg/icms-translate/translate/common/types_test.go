@@ -149,6 +149,16 @@ func TestMessageAction_Normalize(t *testing.T) {
 			expected: TaskCreationAction,
 		},
 		{
+			name:     "legacy RequestInstances action normalizes",
+			input:    MessageAction("RequestInstances"),
+			expected: FunctionCreationAction,
+		},
+		{
+			name:     "legacy RequestInstances task action normalizes",
+			input:    MessageAction("RequestInstancesForTask"),
+			expected: TaskCreationAction,
+		},
+		{
 			name:     "already normalized function action unchanged",
 			input:    FunctionCreationAction,
 			expected: FunctionCreationAction,
@@ -224,6 +234,16 @@ func TestMessageAction_UnmarshalJSON(t *testing.T) {
 		{
 			name:     "legacy RequestSparInstancesForTask normalizes to RequestICMSInstancesForTask",
 			json:     `"RequestSparInstancesForTask"`,
+			expected: RequestICMSInstancesForTask,
+		},
+		{
+			name:     "legacy RequestInstances normalizes to RequestICMSInstances",
+			json:     `"RequestInstances"`,
+			expected: RequestICMSInstances,
+		},
+		{
+			name:     "legacy RequestInstancesForTask normalizes to RequestICMSInstancesForTask",
+			json:     `"RequestInstancesForTask"`,
 			expected: RequestICMSInstancesForTask,
 		},
 		{

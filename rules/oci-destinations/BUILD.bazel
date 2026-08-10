@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Empty package; the module's only content is pushes.bzl loaded from
+# services as `@nvcf_nvcr_destinations//:pushes.bzl`. The
+# `exports_files` makes the .bzl resolvable across module boundaries.
+
+exports_files(["pushes.bzl"])

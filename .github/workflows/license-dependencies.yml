@@ -1,0 +1,117 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+name: license-dependencies
+
+on:
+  push:
+    branches: [main, 'release-**']
+  pull_request:
+    branches: [main, 'release-**']
+  merge_group:
+    types: [checks_requested]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: license-dependencies-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-license:
+    name: license headers + NOTICE + MPL audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/go-toolchain/go.mod
+
+      - name: Run check-license
+        run: ./tools/ci/check-license
+
+  check-dependency-licenses:
+    name: dependency licenses
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/go-toolchain/go.mod
+
+      - name: Run check-dependency-licenses
+        run: ./tools/ci/check-dependency-licenses
+
+  check-dependency-docs:
+    name: generated dependency docs
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/go-toolchain/go.mod
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      # The dependency collector builds each registered Java component's
+      # runtime inventory. Bazelisk honors the repository's .bazelversion.
+      - name: Install Bazelisk
+        run: |
+          mkdir -p "${RUNNER_TEMP}/bin"
+          curl -fsSLo "${RUNNER_TEMP}/bin/bazel" \
+            https://github.com/bazelbuild/bazelisk/releases/download/v1.20.0/bazelisk-linux-amd64
+          echo "d9af1fa808c0529753c3befda75123236a711d971d3485a390507122148773a3  ${RUNNER_TEMP}/bin/bazel" \
+            | sha256sum --check --status
+          chmod +x "${RUNNER_TEMP}/bin/bazel"
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+
+      # Restore on every event, but save only from main.
+      #
+      # GitHub scopes a cache entry to the ref that wrote it. A pull_request or
+      # merge_group run writes an entry only that one ref can ever read, so the
+      # copy is used once and then occupies quota until it is evicted. This
+      # cache is ~1.4 GB, and three such copies (main, a PR, a merge-queue ref)
+      # were holding 4.2 GB of the repository's 10 GB limit, evicting the Bazel
+      # build caches that actually make CI fast. Runs on any ref can restore
+      # from the default branch, so saving only on main loses no reuse.
+      #
+      # This mirrors the remote-cache policy in tools/ci/bazel-cache-upload-mode:
+      # untrusted refs read, they do not write.
+      - name: Restore Bazel repository and disk caches
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cache/bazel/*/install
+            ~/.cache/bazel/*/cache
+          key: dependency-docs-bazel-${{ hashFiles('.bazelversion', 'MODULE.bazel.lock', 'maven_install.json') }}
+          # Without a prefix fallback, any lock bump means a cold build. A
+          # partially stale Bazel disk cache is safe: entries are content
+          # addressed, so Bazel revalidates rather than trusting them blindly.
+          restore-keys: |
+            dependency-docs-bazel-
+
+      - name: Run dependency docs freshness check
+        run: ./tools/ci/check-dependency-docs
+
+      - name: Save Bazel repository and disk caches
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/bazel/*/install
+            ~/.cache/bazel/*/cache
+          key: dependency-docs-bazel-${{ hashFiles('.bazelversion', 'MODULE.bazel.lock', 'maven_install.json') }}

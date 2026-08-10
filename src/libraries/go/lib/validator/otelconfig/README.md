@@ -60,15 +60,14 @@ helm upgrade --create-namespace --install --wait --timeout=60s \
   * 1 for GFN (VM) Instance
   * 1 for Non-GFN (k8s) Instance
 * Install MicroK8s Environment on Instance
-  * Use submodule to get packer and byoo-prometheus latest version
-    * https://github.com/NVIDIA/nvcf/monitoring/nvcf-otelconfig/-/blob/main/.gitlab-ci-validator.yml?ref_type=heads#L14-15. Refer [doc](https://docs.gitlab.com/ci/runners/git_submodules/#use-git-submodules-in-cicd-jobs)
+  * Use submodules to pin the packer and byoo-prometheus sources used by the validator job. Refer to the [GitLab submodules documentation](https://docs.gitlab.com/ci/runners/git_submodules/#use-git-submodules-in-cicd-jobs).
   * For Non-GFN (k8s)
     * Enable MicroK8s addons (DNS, Storage, GPU, Prometheus)
     * Deploy kube-state-metrics with helm chart
   * For GFN (VM)
     * Enable MicroK8s addons (DNS, Storage, GPU)
-    * Install [byoo-prometheus](https://github.com/NVIDIA/nvcf/monitoring/byoo-prometheus)
-    * Deploy kube-state-metrics, fetch [kube-state-metrics-overrides.yml](https://github.com/NVIDIA/devops/packer/-/blob/master/ubuntu22/ansible/roles/microk8s/templates/kube-state-metrics-overrides.yml.j2?ref_type=heads) from packer
+    * Install byoo-prometheus from the version pinned by the validator job
+    * Deploy kube-state-metrics using the override template from the pinned packer configuration
 * Deploy Otel Collector
   * GFN with vm-helm/vm-container values file
   * Non-GFN with k8s-helm/k8s-container values file

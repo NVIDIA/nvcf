@@ -1,0 +1,33 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "db",
+    srcs = [
+        "audit.go",
+        "checkpoint.go",
+        "db.go",
+        "dedupe.go",
+        "demo.go",
+        "migrations.go",
+        "models.go",
+        "peers.go",
+        "restore.go",
+        "retention.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/db",
+    visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
+    deps = ["@org_modernc_sqlite//:sqlite"],
+)
+
+go_test(
+    name = "db_test",
+    srcs = [
+        "db_test.go",
+        "dedup_hash_test.go",
+        "dedupe_test.go",
+        "lookup_test.go",
+        "peers_test.go",
+        "pvc_promote_state_test.go",
+    ],
+    embed = [":db"],
+)

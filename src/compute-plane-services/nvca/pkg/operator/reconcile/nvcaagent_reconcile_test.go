@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -43,6 +44,7 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/yaml"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
@@ -56,6 +58,28 @@ func readTestdataFile(t *testing.T, fileName string) string {
 	b, err := testdataFiles.ReadFile(fileName)
 	require.NoError(t, err)
 	return string(b)
+}
+
+// stripSPDXHeaders removes the SPDX license header comment blocks that repo
+// license stamping adds to rendered template assets and testdata goldens. The
+// headers carry no semantic content (Kubernetes ignores YAML comments), appear
+// a different number of times on each side of a golden comparison (once per
+// stamped source file), and would otherwise churn every golden assertion each
+// time stamping changes.
+func stripSPDXHeaders(s string) string {
+	lines := strings.Split(s, "\n")
+	out := make([]string, 0, len(lines))
+	for i := 0; i < len(lines); i++ {
+		if strings.HasPrefix(lines[i], "# SPDX-") {
+			// Swallow the blank line that closes a header block.
+			if i+1 < len(lines) && strings.TrimSpace(lines[i+1]) == "" {
+				i++
+			}
+			continue
+		}
+		out = append(out, lines[i])
+	}
+	return strings.Join(out, "\n")
 }
 
 func TestValidateNVCFBackendParams(t *testing.T) {
@@ -227,6 +251,7 @@ func TestSetupNVCADeployment(t *testing.T) {
 		clients:              clients,
 		ngcServiceKeyFetcher: &mockTokenFetcher{token: "randomkey"},
 		envType:              nvidiaiov1.EnvTypeStage,
+		identitySource:       IdentitySourcePSAT,
 	}
 
 	inNVCFBackend := &nvidiaiov1.NVCFBackend{
@@ -326,9 +351,11 @@ func TestSetupNVCADeployment(t *testing.T) {
 			TLSSecretName: "nvca-webhook-tls-server-certs",
 		},
 		Authz: nvcaconfig.AuthzConfig{
-			PublicKeysetEndpoint: "https://stage-oauth.example.test/.well-known/jwks.json",
-			TokenURL:             "https://stg.icms.nvcf.nvidia.com/token",
-			NGCServiceAPIKeyFile: "/var/run/secrets/ngc-service-api-key/ngc-service-api-key",
+			PublicKeysetEndpoint:       "https://stage-oauth.example.test/.well-known/jwks.json",
+			TokenURL:                   "https://stg.icms.nvcf.nvidia.com/token",
+			NGCServiceAPIKeyFile:       "/var/run/secrets/ngc-service-api-key/ngc-service-api-key",
+			ClusterIssuedTokenSource:   nvcaconfig.ClusterIssuedTokenSourcePSAT,
+			ClusterIssuedTokenFilePath: clusterIssuedTokenFilePath,
 		},
 		Tracing: nvcaconfig.TracingConfig{
 			Exporter: nvcaconfig.LightstepExporter,
@@ -412,6 +439,12 @@ func TestSetupNVCADeployment(t *testing.T) {
 	assert.Empty(t, nvcaContainer.Command)
 	assert.Equal(t, []string{"/usr/bin/nvca", "--config", "/var/run/nvca/config.yaml"}, nvcaContainer.Args)
 	assert.Equal(t, []corev1.EnvVar{
+		{
+			// Injected first so the agent's metrics reconciler watches the
+			// operator/validator namespace for the cluster-validator summary.
+			Name:  clustervalidator.SummaryConfigMapNamespaceEnv,
+			Value: bc.operatorNamespace,
+		},
 		{
 			Name: auth.ClientIDEnv,
 			ValueFrom: &corev1.EnvVarSource{
@@ -837,7 +870,13 @@ func TestSetupNVCADeployment_Vault(t *testing.T) {
 	assert.Equal(t, []string{"/usr/bin/nvca", "--config", "/var/run/nvca/config.yaml"}, nvcaContainer.Args)
 	// When Vault is enabled, OAuth credentials come from ClientSecretsEnvFile (Vault agent output),
 	// not from SecretKeyRef - so no OAUTH_CLIENT_ID env var is added (fixes "secret oauth-client-id not found").
-	assert.Empty(t, nvcaContainer.Env)
+	// The only env var present is the always-injected validator-summary namespace.
+	assert.Equal(t, []corev1.EnvVar{
+		{
+			Name:  clustervalidator.SummaryConfigMapNamespaceEnv,
+			Value: bc.operatorNamespace,
+		},
+	}, nvcaContainer.Env)
 	assert.Equal(t, []corev1.VolumeMount{
 		{
 			Name:      NGCServiceAPIKeySecretName,
@@ -1161,13 +1200,6 @@ func TestSetupNVCADeployment_SelfHosted(t *testing.T) {
 	// Check feature flags.
 	assert.Empty(t, nvcaContainer.Command)
 	assert.Equal(t, []string{"/usr/bin/nvca", "--config", "/var/run/nvca/config.yaml"}, nvcaContainer.Args)
-	// PSAT identity threads NVCF_TOKEN_FILE_PATH + NVCF_IDENTITY_SOURCE so the
-	// agent reads its bearer token from the projected SA volume and knows which
-	// code paths apply (e.g. JWKS-pusher is PSAT-only).
-	assert.Equal(t, []corev1.EnvVar{
-		{Name: "NVCF_TOKEN_FILE_PATH", Value: "/var/run/secrets/tokens/token"},
-		{Name: "NVCF_IDENTITY_SOURCE", Value: IdentitySourcePSAT},
-	}, nvcaContainer.Env)
 	assert.Equal(t, []corev1.VolumeMount{
 		{
 			Name:      NGCServiceAPIKeySecretName,
@@ -1654,6 +1686,11 @@ func Test_setupNVCARBAC(t *testing.T) {
 				},
 				Verbs: []string{"get", "list", "watch", "create", "update", "delete", "patch"},
 			},
+			{
+				APIGroups: []string{"run.ai"},
+				Resources: []string{"kartas"},
+				Verbs:     []string{"get", "list", "watch"},
+			},
 		},
 	}
 	gotCRole, err := clients.K8s.RbacV1().ClusterRoles().Get(ctx, nvcaoptypes.NVCAModuleName, metav1.GetOptions{})
@@ -2069,6 +2106,11 @@ func Test_setupNVCARBAC_ValidationPolicy(t *testing.T) {
 				Verbs: []string{"get", "list", "watch", "create", "update", "delete", "patch"},
 			},
 			{
+				APIGroups: []string{"run.ai"},
+				Resources: []string{"kartas"},
+				Verbs:     []string{"get", "list", "watch"},
+			},
+			{
 				APIGroups: []string{"foo.com"},
 				Resources: []string{"foos"},
 				Verbs:     []string{"get", "list", "watch", "create", "update", "delete", "patch"},
@@ -2288,6 +2330,11 @@ func Test_NVLinkOptimized(t *testing.T) {
 				Verbs:     []string{"get", "list", "watch", "create", "update", "delete", "patch"},
 			},
 			{
+				APIGroups: []string{"run.ai"},
+				Resources: []string{"kartas"},
+				Verbs:     []string{"get", "list", "watch"},
+			},
+			{
 				APIGroups: []string{"resource.nvidia.com"},
 				Resources: []string{"computedomains"},
 				Verbs:     []string{"get", "list", "watch", "create", "update", "delete", "deletecollection", "patch"},
@@ -2429,13 +2476,14 @@ func TestGetNetworkPoliciesDataEmptyDDCSIPList(t *testing.T) {
 	got, err := bc.getNetworkPoliciesData(newTestContext(), nb)
 	require.NoError(t, err)
 	assert.Len(t, got, len(expNPNames))
+	assertNetworkPolicyAllowsTCPPort(t, got[IngressNetworkPolicyNameKey], IngressNetworkPolicyNameKey, 8888)
 	b := &bytes.Buffer{}
 	require.NoError(t, err)
 	for _, k := range expNPNames {
 		io.WriteString(b, "---\n")
 		io.WriteString(b, got[k])
 	}
-	assert.Equal(t, readTestdataFile(t, filepath.Join("testdata", "netpols.yaml")), b.String())
+	assert.Equal(t, stripSPDXHeaders(readTestdataFile(t, filepath.Join("testdata", "netpols.yaml"))), stripSPDXHeaders(b.String()))
 }
 
 func TestGetNetworkPoliciesDataWithDDCSIPList(t *testing.T) {
@@ -2461,13 +2509,35 @@ func TestGetNetworkPoliciesDataWithDDCSIPList(t *testing.T) {
 	got, err := bc.getNetworkPoliciesData(newTestContext(), nb)
 	require.NoError(t, err)
 	assert.Len(t, got, len(expNPNames))
+	assertNetworkPolicyAllowsTCPPort(t, got[IngressNetworkPolicyNameKey], IngressNetworkPolicyNameKey, 8888)
 	b := &bytes.Buffer{}
 	require.NoError(t, err)
 	for _, k := range expNPNames {
 		io.WriteString(b, "---\n")
 		io.WriteString(b, got[k])
 	}
-	assert.Equal(t, readTestdataFile(t, filepath.Join("testdata", "netpols_with_ddcs.yaml")), b.String())
+	assert.Equal(t, stripSPDXHeaders(readTestdataFile(t, filepath.Join("testdata", "netpols_with_ddcs.yaml"))), stripSPDXHeaders(b.String()))
+}
+
+func assertNetworkPolicyAllowsTCPPort(t *testing.T, policyYAML, policyName string, port int32) {
+	t.Helper()
+
+	var policy netv1.NetworkPolicy
+	require.NoError(t, yaml.Unmarshal([]byte(policyYAML), &policy))
+	require.Equal(t, policyName, policy.Name)
+
+	for _, ingressRule := range policy.Spec.Ingress {
+		for _, networkPolicyPort := range ingressRule.Ports {
+			if networkPolicyPort.Port == nil || networkPolicyPort.Protocol == nil {
+				continue
+			}
+			if networkPolicyPort.Port.IntVal == port && *networkPolicyPort.Protocol == corev1.ProtocolTCP {
+				return
+			}
+		}
+	}
+
+	assert.Failf(t, "missing TCP port", "%s should allow TCP port %d", policyName, port)
 }
 
 func TestGetEffectiveK8sNetworkCIDRs(t *testing.T) {
@@ -2709,22 +2779,174 @@ func TestEncodeAgentConfig_ConfiguresSelfHostedControlPlaneEndpoints(t *testing.
 		},
 	}
 
-	data, err := encodeAgentConfig(cfg, nvcaconfig.Config{}, ptr.To("nats://nats.nats-system.svc.cluster.local:4222"))
+	data, err := encodeAgentConfig(
+		cfg,
+		nvcaconfig.Config{},
+		ptr.To("nats://nats.nats-system.svc.cluster.local:4222"),
+		agentHostOverrides{
+			ICMSHostHeaderOverride:             "sis.gateway.example.test",
+			HelmReValServiceHostHeaderOverride: "reval.gateway.example.test",
+			NATSHostOverride:                   ptr.To("nats.gateway.example.test"),
+		},
+	)
 	require.NoError(t, err)
 	assert.Contains(t, string(data), "NATSURL: nats://nats.nats-system.svc.cluster.local:4222")
+	assert.Contains(t, string(data), "NATSHostOverride: nats.gateway.example.test")
 	assert.NotContains(t, string(data), "natsURL:")
 
 	var got struct {
 		Agent struct {
-			ICMSURL             string `json:"icmsURL" yaml:"icmsURL"`
-			HelmReValServiceURL string `json:"helmReValServiceURL" yaml:"helmReValServiceURL"`
-			NATSURL             string `json:"NATSURL" yaml:"NATSURL"`
+			ICMSURL                            string `json:"icmsURL" yaml:"icmsURL"`
+			ICMSHostHeaderOverride             string `json:"icmsHostHeaderOverride" yaml:"icmsHostHeaderOverride"`
+			HelmReValServiceURL                string `json:"helmReValServiceURL" yaml:"helmReValServiceURL"`
+			HelmReValServiceHostHeaderOverride string `json:"helmReValServiceHostHeaderOverride" yaml:"helmReValServiceHostHeaderOverride"`
+			NATSURL                            string `json:"NATSURL" yaml:"NATSURL"`
+			NATSHostOverride                   string `json:"NATSHostOverride" yaml:"NATSHostOverride"`
 		} `json:"agent" yaml:"agent"`
 	}
 	require.NoError(t, yaml.Unmarshal(data, &got))
 	assert.Equal(t, "http://api.icms.svc.cluster.local:8080", got.Agent.ICMSURL)
+	assert.Equal(t, "sis.gateway.example.test", got.Agent.ICMSHostHeaderOverride)
 	assert.Equal(t, "http://reval.nvcf.svc.cluster.local:8080", got.Agent.HelmReValServiceURL)
+	assert.Equal(t, "reval.gateway.example.test", got.Agent.HelmReValServiceHostHeaderOverride)
 	assert.Equal(t, "nats://nats.nats-system.svc.cluster.local:4222", got.Agent.NATSURL)
+	assert.Equal(t, "nats.gateway.example.test", got.Agent.NATSHostOverride)
+}
+
+func TestEncodeAgentConfig_MergesBYOOConfig(t *testing.T) {
+	mergeCfg := nvcaconfig.Config{
+		Agent: nvcaconfig.AgentConfig{
+			BYOOResources: nvcaconfig.ResourceRequirements{
+				Limits: nvcaconfig.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("500m"),
+					corev1.ResourceMemory: resource.MustParse("2Gi"),
+				},
+				Requests: nvcaconfig.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("500m"),
+					corev1.ResourceMemory: resource.MustParse("2Gi"),
+				},
+			},
+			BYOOFluentBitResources: nvcaconfig.ResourceRequirements{
+				Limits: nvcaconfig.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("200m"),
+					corev1.ResourceMemory: resource.MustParse("256Mi"),
+				},
+				Requests: nvcaconfig.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("100m"),
+					corev1.ResourceMemory: resource.MustParse("128Mi"),
+				},
+			},
+			BYOOLogChunking: nvcaconfig.BYOOLogChunkingConfig{
+				Enabled:         true,
+				MaxPayloadBytes: 983040,
+				DryRun:          true,
+			},
+			BYOOOTelCollector: nvcaconfig.BYOOOTelCollectorConfig{
+				ExporterHelper: nvcaconfig.BYOOOTelExporterHelperConfig{
+					Timeout: "30s",
+					SendingQueue: nvcaconfig.BYOOOTelSendingQueueConfig{
+						Batch: nvcaconfig.BYOOOTelSendingQueueBatchConfig{
+							Sizer:   "bytes",
+							MinSize: ptr.To[int64](1000000),
+							MaxSize: ptr.To[int64](1000000),
+						},
+					},
+				},
+				LogSampling: nvcaconfig.BYOOOTelLogSamplingConfig{
+					SamplingPercentage: ptr.To(10.0),
+					Mode:               "hash_seed",
+					HashSeed:           ptr.To(uint32(1234)),
+					FailClosed:         ptr.To(false),
+					AttributeSource:    "record",
+					FromAttribute:      "log.id",
+					SamplingPriority:   "sampling.priority",
+				},
+				TraceSampling: nvcaconfig.BYOOOTelSamplingConfig{
+					SamplingPercentage: ptr.To(1.0),
+					Mode:               "hash_seed",
+					HashSeed:           ptr.To(uint32(1234)),
+					FailClosed:         ptr.To(false),
+				},
+			},
+			BYOODebugMode: nvcaconfig.BYOODebugModeConfig{
+				Enabled: true,
+			},
+			BYOOMetricSubset: nvcaconfig.BYOOMetricSubsetConfig{
+				Enabled:      true,
+				FilterConfig: "error_mode: ignore\nmetric_conditions:\n  - 'metric.name == \"drop\"'\n",
+			},
+			BYOOWorkloadMetrics: nvcaconfig.BYOOWorkloadMetricsConfig{
+				DropLabels: []string{"metric_subset_enabled", "custom_label"},
+			},
+		},
+	}
+
+	data, err := encodeAgentConfig(nvcaconfig.Config{}, mergeCfg, nil, agentHostOverrides{})
+	require.NoError(t, err)
+
+	got, err := nvcaconfig.DecodeConfig(data)
+	require.NoError(t, err)
+	byooLimits := corev1.ResourceList(got.Agent.BYOOResources.Limits)
+	fluentBitRequests := corev1.ResourceList(got.Agent.BYOOFluentBitResources.Requests)
+	assert.True(t, byooLimits.Memory().Equal(resource.MustParse("2Gi")))
+	assert.True(t, fluentBitRequests.Cpu().Equal(resource.MustParse("100m")))
+	assert.True(t, got.Agent.BYOOLogChunking.Enabled)
+	assert.Equal(t, int64(983040), got.Agent.BYOOLogChunking.MaxPayloadBytes)
+	assert.True(t, got.Agent.BYOOLogChunking.DryRun)
+	assert.Equal(t, "30s", got.Agent.BYOOOTelCollector.ExporterHelper.Timeout)
+	require.NotNil(t, got.Agent.BYOOOTelCollector.ExporterHelper.SendingQueue.Batch.MinSize)
+	require.NotNil(t, got.Agent.BYOOOTelCollector.ExporterHelper.SendingQueue.Batch.MaxSize)
+	assert.Equal(t, int64(1000000), *got.Agent.BYOOOTelCollector.ExporterHelper.SendingQueue.Batch.MinSize)
+	assert.Equal(t, int64(1000000), *got.Agent.BYOOOTelCollector.ExporterHelper.SendingQueue.Batch.MaxSize)
+	require.NotNil(t, got.Agent.BYOOOTelCollector.LogSampling.SamplingPercentage)
+	assert.Equal(t, 10.0, *got.Agent.BYOOOTelCollector.LogSampling.SamplingPercentage)
+	assert.Equal(t, "hash_seed", got.Agent.BYOOOTelCollector.LogSampling.Mode)
+	require.NotNil(t, got.Agent.BYOOOTelCollector.LogSampling.HashSeed)
+	assert.Equal(t, uint32(1234), *got.Agent.BYOOOTelCollector.LogSampling.HashSeed)
+	require.NotNil(t, got.Agent.BYOOOTelCollector.LogSampling.FailClosed)
+	assert.False(t, *got.Agent.BYOOOTelCollector.LogSampling.FailClosed)
+	assert.Equal(t, "record", got.Agent.BYOOOTelCollector.LogSampling.AttributeSource)
+	assert.Equal(t, "log.id", got.Agent.BYOOOTelCollector.LogSampling.FromAttribute)
+	assert.Equal(t, "sampling.priority", got.Agent.BYOOOTelCollector.LogSampling.SamplingPriority)
+	require.NotNil(t, got.Agent.BYOOOTelCollector.TraceSampling.SamplingPercentage)
+	assert.Equal(t, 1.0, *got.Agent.BYOOOTelCollector.TraceSampling.SamplingPercentage)
+	assert.Equal(t, "hash_seed", got.Agent.BYOOOTelCollector.TraceSampling.Mode)
+	require.NotNil(t, got.Agent.BYOOOTelCollector.TraceSampling.HashSeed)
+	assert.Equal(t, uint32(1234), *got.Agent.BYOOOTelCollector.TraceSampling.HashSeed)
+	require.NotNil(t, got.Agent.BYOOOTelCollector.TraceSampling.FailClosed)
+	assert.False(t, *got.Agent.BYOOOTelCollector.TraceSampling.FailClosed)
+	assert.True(t, got.Agent.BYOODebugMode.Enabled)
+	assert.True(t, got.Agent.BYOOMetricSubset.Enabled)
+	assert.Contains(t, got.Agent.BYOOMetricSubset.FilterConfig, "metric.name")
+	assert.Equal(t, []string{"metric_subset_enabled", "custom_label"}, got.Agent.BYOOWorkloadMetrics.DropLabels)
+}
+
+func TestAgentHostOverrideConfig_ClearsReValHostForSelfHostedColocatedService(t *testing.T) {
+	natsHostOverride := "nats.gateway.example.test"
+	nb := &nvidiaiov1.NVCFBackend{
+		Spec: nvidiaiov1.NVCFBackendSpec{
+			NVCFBackendSpecT: nvidiaiov1.NVCFBackendSpecT{
+				ClusterSource: nvidiaiov1.ClusterSourceSelfHosted,
+				ICMSConfig: nvidiaiov1.ICMSConfig{
+					ICMSServiceHostHeaderOverride: "sis.gateway.example.test",
+				},
+				ClusterConfig: nvidiaiov1.ClusterConfig{
+					MiniService: &nvidiaiov1.MiniServiceConfig{
+						HelmReValServiceHostHeaderOverride: "reval.gateway.example.test",
+					},
+				},
+				AgentConfig: nvidiaiov1.AgentConfig{
+					NATSHostOverride: &natsHostOverride,
+				},
+			},
+		},
+	}
+
+	got := agentHostOverrideConfig(nb, nvidiaiov1.EnvTypeStage)
+	assert.Equal(t, "sis.gateway.example.test", got.ICMSHostHeaderOverride)
+	assert.Empty(t, got.HelmReValServiceHostHeaderOverride)
+	require.NotNil(t, got.NATSHostOverride)
+	assert.Equal(t, "nats.gateway.example.test", *got.NATSHostOverride)
 }
 
 func TestSetupNVCADeployment_OTELConfig(t *testing.T) {
@@ -4489,7 +4711,7 @@ func TestGetOTelCollectorContainerCommandArgsAndEnv_OAuthAuth(t *testing.T) {
 			expectedAuthenticator:   NVCAOTelCollectorAuthenticatorOAuth2Client,
 		},
 		{
-			name: "Vault disabled - service API key bearer token authentication with placeholder OAuth env vars",
+			name: "Vault disabled - service API key bearer token authentication with empty OAuth client ID",
 			nb: &nvidiaiov1.NVCFBackend{
 				Spec: nvidiaiov1.NVCFBackendSpec{
 					NVCFBackendSpecT: nvidiaiov1.NVCFBackendSpecT{
@@ -4505,7 +4727,7 @@ func TestGetOTelCollectorContainerCommandArgsAndEnv_OAuthAuth(t *testing.T) {
 				},
 			},
 			envType:                 nvidiaiov1.EnvTypeProd,
-			expectedOAuthClientID:   NVCAOTelCollectorOAuthPlaceholderClientID,
+			expectedOAuthClientID:   "",
 			expectedOAuthSecretFile: "/home/nvca/vault-agent/secrets/oauth-client-secrets.env",
 			expectedOAuthTokenURL:   "",
 			expectedAuthenticator:   NVCAOTelCollectorAuthenticatorBearerTokenAuth,
@@ -4816,10 +5038,10 @@ func Test_setupAgentConfigConfigMap(t *testing.T) {
 		},
 	}
 
-	agentCfg, err := bc.newAgentConfig(ctx, inNVCFBackend)
+	desiredConfigMap, err := bc.newAgentConfigConfigMap(ctx, inNVCFBackend)
 	require.NoError(t, err)
 
-	err = bc.setupAgentConfigConfigMap(ctx, inNVCFBackend, agentCfg)
+	err = bc.setupAgentConfigConfigMap(ctx, desiredConfigMap)
 	require.NoError(t, err)
 
 	gotCM, err := clients.K8s.CoreV1().ConfigMaps(DefaultNVCASystemNamespace).Get(ctx, agentConfigConfigMapName, metav1.GetOptions{})
@@ -4893,10 +5115,6 @@ func TestNewAgentConfigIncludesServiceOAuthEndpoints(t *testing.T) {
 					FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint: "https://stage-fnds-oauth.example.test/.well-known/jwks.json",
 					FunctionDeploymentStagesProdOAuthTokenURL:              "https://prod-fnds-oauth.example.test/token",
 					FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint:  "https://prod-fnds-oauth.example.test/.well-known/jwks.json",
-					RolloverServiceStageOAuthTokenURL:                      "https://stage-ros-oauth.example.test/token",
-					RolloverServiceStageOAuthPublicKeysetEndpoint:          "https://stage-ros-oauth.example.test/.well-known/jwks.json",
-					RolloverServiceProdOAuthTokenURL:                       "https://prod-ros-oauth.example.test/token",
-					RolloverServiceProdOAuthPublicKeysetEndpoint:           "https://prod-ros-oauth.example.test/.well-known/jwks.json",
 				},
 			},
 		},
@@ -4913,10 +5131,289 @@ func TestNewAgentConfigIncludesServiceOAuthEndpoints(t *testing.T) {
 	assert.Equal(t, "https://stage-fnds-oauth.example.test/.well-known/jwks.json", cfg.Agent.FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint)
 	assert.Equal(t, "https://prod-fnds-oauth.example.test/token", cfg.Agent.FunctionDeploymentStagesProdOAuthTokenURL)
 	assert.Equal(t, "https://prod-fnds-oauth.example.test/.well-known/jwks.json", cfg.Agent.FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint)
-	assert.Equal(t, "https://stage-ros-oauth.example.test/token", cfg.Agent.RolloverServiceStageOAuthTokenURL)
-	assert.Equal(t, "https://stage-ros-oauth.example.test/.well-known/jwks.json", cfg.Agent.RolloverServiceStageOAuthPublicKeysetEndpoint)
-	assert.Equal(t, "https://prod-ros-oauth.example.test/token", cfg.Agent.RolloverServiceProdOAuthTokenURL)
-	assert.Equal(t, "https://prod-ros-oauth.example.test/.well-known/jwks.json", cfg.Agent.RolloverServiceProdOAuthPublicKeysetEndpoint)
+}
+
+func TestNewAgentConfigIncludesLLMRequestRouterAddress(t *testing.T) {
+	ctx := newTestContext()
+	bc := &BackendK8sCache{envType: nvidiaiov1.EnvTypeStage}
+	nb := ngcManagedBackendWithAgentConfig(nvidiaiov1.AgentConfig{
+		LLMRequestRouterAddress: "llm-request-router.nvcf.svc.cluster.local:50071",
+	})
+
+	cfg, err := bc.newAgentConfig(ctx, nb)
+	require.NoError(t, err)
+
+	assert.Equal(t, "llm-request-router.nvcf.svc.cluster.local:50071", cfg.Workload.DefaultStargateAddress)
+	assert.Nil(t, cfg.Workload.TransportTLS)
+}
+
+func TestSetupAgentConfigConfigMapMergesTransportTLSFromAgentConfigMergeConfigMap(t *testing.T) {
+	ctx := newTestContext()
+	clients := mockKubeClientsForIntegrationTests()
+	bc := &BackendK8sCache{
+		clients:           clients,
+		envType:           nvidiaiov1.EnvTypeStage,
+		operatorNamespace: NVCAOperatorNamespace,
+	}
+
+	mergeCfg := nvcaconfig.Config{
+		Workload: nvcaconfig.WorkloadConfig{
+			TransportTLS: &nvcaconfig.TransportTLSConfig{
+				TrustMode:                nvcaconfig.TrustModeBundle,
+				TrustBundleConfigMapName: "nvcf-transport-trust-bundle",
+				TrustBundleKey:           "nvcf-ca-bundle.pem",
+				TrustBundleFingerprint:   "sha256:9a7814909424061a68756ee5c26aa1a1491b8d20a7b813fb24fa7e73b2fa1c93",
+				TrustBundlePEM:           "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n",
+			},
+		},
+	}
+	mergeCfgBytes, err := nvcaconfig.EncodeConfig(mergeCfg)
+	require.NoError(t, err)
+
+	_, err = clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(ctx, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      agentConfigMergeConfigMapName,
+			Namespace: NVCAOperatorNamespace,
+		},
+		Data: map[string]string{
+			agentConfigFile: string(mergeCfgBytes),
+		},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	nb := ngcManagedBackendWithAgentConfig(nvidiaiov1.AgentConfig{
+		LLMRequestRouterAddress: "llm-request-router.nvcf.svc.cluster.local:50071",
+	})
+	cfg, err := bc.newAgentConfig(ctx, nb)
+	require.NoError(t, err)
+	assert.Nil(t, cfg.Workload.TransportTLS)
+
+	desiredConfigMap, err := bc.newAgentConfigConfigMap(ctx, nb)
+	require.NoError(t, err)
+	err = bc.setupAgentConfigConfigMap(ctx, desiredConfigMap)
+	require.NoError(t, err)
+
+	gotCM, err := clients.K8s.CoreV1().ConfigMaps(DefaultNVCASystemNamespace).Get(ctx, agentConfigConfigMapName, metav1.GetOptions{})
+	require.NoError(t, err)
+
+	gotCfg, err := nvcaconfig.DecodeConfig([]byte(gotCM.Data[agentConfigFile]))
+	require.NoError(t, err)
+
+	assert.Equal(t, "llm-request-router.nvcf.svc.cluster.local:50071", gotCfg.Workload.DefaultStargateAddress)
+	require.NotNil(t, gotCfg.Workload.TransportTLS)
+	assert.Equal(t, nvcaconfig.TrustModeBundle, gotCfg.Workload.TransportTLS.TrustMode)
+	assert.Equal(t, "nvcf-transport-trust-bundle", gotCfg.Workload.TransportTLS.TrustBundleConfigMapName)
+	assert.Equal(t, "nvcf-ca-bundle.pem", gotCfg.Workload.TransportTLS.TrustBundleKey)
+	assert.Equal(t, "sha256:9a7814909424061a68756ee5c26aa1a1491b8d20a7b813fb24fa7e73b2fa1c93",
+		gotCfg.Workload.TransportTLS.TrustBundleFingerprint)
+	assert.Equal(t, "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n",
+		gotCfg.Workload.TransportTLS.TrustBundlePEM)
+}
+
+func TestGetChartDefaultAgentConfig(t *testing.T) {
+	ctx := newTestContext()
+
+	t.Run("parses service oauth endpoints", func(t *testing.T) {
+		clients := mockKubeClientsForIntegrationTests()
+		bc := &BackendK8sCache{
+			clients:           clients,
+			operatorNamespace: NVCAOperatorNamespace,
+		}
+		_, err := clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(ctx, chartDefaultsConfigMap(chartDefaultsClusterDTO()), metav1.CreateOptions{})
+		require.NoError(t, err)
+
+		cfg, found, err := bc.getChartDefaultAgentConfig(ctx, clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Get)
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, "https://chart-stage-reval-oauth.example.test/token", cfg.HelmReValStageOAuthTokenURL)
+		assert.Equal(t, "https://chart-stage-reval-oauth.example.test/.well-known/jwks.json", cfg.HelmReValStageOAuthPublicKeysetEndpoint)
+		assert.Equal(t, "https://chart-prod-reval-oauth.example.test/token", cfg.HelmReValProdOAuthTokenURL)
+		assert.Equal(t, "https://chart-prod-reval-oauth.example.test/.well-known/jwks.json", cfg.HelmReValProdOAuthPublicKeysetEndpoint)
+		assert.Equal(t, "https://chart-stage-fnds-oauth.example.test/token", cfg.FunctionDeploymentStagesStageOAuthTokenURL)
+		assert.Equal(t, "https://chart-stage-fnds-oauth.example.test/.well-known/jwks.json", cfg.FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint)
+		assert.Equal(t, "https://chart-prod-fnds-oauth.example.test/token", cfg.FunctionDeploymentStagesProdOAuthTokenURL)
+		assert.Equal(t, "https://chart-prod-fnds-oauth.example.test/.well-known/jwks.json", cfg.FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint)
+	})
+
+	t.Run("missing configmap is non fatal", func(t *testing.T) {
+		bc := &BackendK8sCache{
+			clients:           mockKubeClientsForIntegrationTests(),
+			operatorNamespace: NVCAOperatorNamespace,
+		}
+
+		cfg, found, err := bc.getChartDefaultAgentConfig(ctx, bc.clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Get)
+		require.NoError(t, err)
+		assert.False(t, found)
+		assert.Empty(t, cfg.HelmReValStageOAuthTokenURL)
+	})
+
+	t.Run("empty cluster dto is treated as no defaults", func(t *testing.T) {
+		clients := mockKubeClientsForIntegrationTests()
+		bc := &BackendK8sCache{
+			clients:           clients,
+			operatorNamespace: NVCAOperatorNamespace,
+		}
+		_, err := clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(ctx, chartDefaultsConfigMap(""), metav1.CreateOptions{})
+		require.NoError(t, err)
+
+		cfg, found, err := bc.getChartDefaultAgentConfig(ctx, clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Get)
+		require.NoError(t, err)
+		assert.False(t, found)
+		assert.Empty(t, cfg.HelmReValStageOAuthTokenURL)
+	})
+
+	t.Run("empty endpoint values are treated as no defaults", func(t *testing.T) {
+		clients := mockKubeClientsForIntegrationTests()
+		bc := &BackendK8sCache{
+			clients:           clients,
+			operatorNamespace: NVCAOperatorNamespace,
+		}
+		_, err := clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(ctx, chartDefaultsConfigMap(`agent:
+  helmReValStageOAuthTokenURL: ""
+  helmReValStageOAuthPublicKeysetEndpoint: ""
+  helmReValProdOAuthTokenURL: ""
+  helmReValProdOAuthPublicKeysetEndpoint: ""
+  functionDeploymentStagesStageOAuthTokenURL: ""
+  functionDeploymentStagesStageOAuthPublicKeysetEndpoint: ""
+  functionDeploymentStagesProdOAuthTokenURL: ""
+  functionDeploymentStagesProdOAuthPublicKeysetEndpoint: ""
+`), metav1.CreateOptions{})
+		require.NoError(t, err)
+
+		cfg, found, err := bc.getChartDefaultAgentConfig(ctx, clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Get)
+		require.NoError(t, err)
+		assert.False(t, found)
+		assert.Empty(t, cfg.HelmReValStageOAuthTokenURL)
+	})
+
+	t.Run("nil getter is treated as no defaults", func(t *testing.T) {
+		bc := &BackendK8sCache{}
+
+		cfg, found, err := bc.getChartDefaultAgentConfig(ctx, nil)
+		require.NoError(t, err)
+		assert.False(t, found)
+		assert.Empty(t, cfg.HelmReValStageOAuthTokenURL)
+	})
+}
+
+func TestNewAgentConfigFallsBackToChartDefaultServiceOAuthForNGCManaged(t *testing.T) {
+	ctx := newTestContext()
+	clients := mockKubeClientsForIntegrationTests()
+	bc := &BackendK8sCache{
+		clients:           clients,
+		operatorNamespace: NVCAOperatorNamespace,
+		envType:           nvidiaiov1.EnvTypeStage,
+	}
+	_, err := clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(ctx, chartDefaultsConfigMap(chartDefaultsClusterDTO()), metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	cfg, err := bc.newAgentConfig(ctx, ngcManagedBackendWithAgentConfig(nvidiaiov1.AgentConfig{}))
+	require.NoError(t, err)
+
+	assert.Equal(t, "https://chart-stage-reval-oauth.example.test/token", cfg.Agent.HelmReValStageOAuthTokenURL)
+	assert.Equal(t, "https://chart-stage-reval-oauth.example.test/.well-known/jwks.json", cfg.Agent.HelmReValStageOAuthPublicKeysetEndpoint)
+	assert.Equal(t, "https://chart-prod-reval-oauth.example.test/token", cfg.Agent.HelmReValProdOAuthTokenURL)
+	assert.Equal(t, "https://chart-prod-reval-oauth.example.test/.well-known/jwks.json", cfg.Agent.HelmReValProdOAuthPublicKeysetEndpoint)
+	assert.Equal(t, "https://chart-stage-fnds-oauth.example.test/token", cfg.Agent.FunctionDeploymentStagesStageOAuthTokenURL)
+	assert.Equal(t, "https://chart-stage-fnds-oauth.example.test/.well-known/jwks.json", cfg.Agent.FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint)
+	assert.Equal(t, "https://chart-prod-fnds-oauth.example.test/token", cfg.Agent.FunctionDeploymentStagesProdOAuthTokenURL)
+	assert.Equal(t, "https://chart-prod-fnds-oauth.example.test/.well-known/jwks.json", cfg.Agent.FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint)
+}
+
+func TestNewAgentConfigMissingChartDefaultsIsNonFatal(t *testing.T) {
+	ctx := newTestContext()
+	bc := &BackendK8sCache{
+		clients:           mockKubeClientsForIntegrationTests(),
+		operatorNamespace: NVCAOperatorNamespace,
+		envType:           nvidiaiov1.EnvTypeStage,
+	}
+
+	cfg, err := bc.newAgentConfig(ctx, ngcManagedBackendWithAgentConfig(nvidiaiov1.AgentConfig{}))
+	require.NoError(t, err)
+
+	assert.Empty(t, cfg.Agent.HelmReValStageOAuthTokenURL)
+	assert.Empty(t, cfg.Agent.HelmReValStageOAuthPublicKeysetEndpoint)
+	assert.Empty(t, cfg.Agent.FunctionDeploymentStagesProdOAuthTokenURL)
+	assert.Empty(t, cfg.Agent.FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint)
+}
+
+func TestNewAgentConfigPreservesNGCServiceOAuthOverChartDefaults(t *testing.T) {
+	ctx := newTestContext()
+	clients := mockKubeClientsForIntegrationTests()
+	bc := &BackendK8sCache{
+		clients:           clients,
+		operatorNamespace: NVCAOperatorNamespace,
+		envType:           nvidiaiov1.EnvTypeStage,
+	}
+	_, err := clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(ctx, chartDefaultsConfigMap(chartDefaultsClusterDTO()), metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	cfg, err := bc.newAgentConfig(ctx, ngcManagedBackendWithAgentConfig(nvidiaiov1.AgentConfig{
+		HelmReValStageOAuthTokenURL:                            "https://ngc-stage-reval-oauth.example.test/token",
+		HelmReValStageOAuthPublicKeysetEndpoint:                "https://ngc-stage-reval-oauth.example.test/.well-known/jwks.json",
+		HelmReValProdOAuthTokenURL:                             "https://ngc-prod-reval-oauth.example.test/token",
+		HelmReValProdOAuthPublicKeysetEndpoint:                 "https://ngc-prod-reval-oauth.example.test/.well-known/jwks.json",
+		FunctionDeploymentStagesStageOAuthTokenURL:             "https://ngc-stage-fnds-oauth.example.test/token",
+		FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint: "https://ngc-stage-fnds-oauth.example.test/.well-known/jwks.json",
+		FunctionDeploymentStagesProdOAuthTokenURL:              "https://ngc-prod-fnds-oauth.example.test/token",
+		FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint:  "https://ngc-prod-fnds-oauth.example.test/.well-known/jwks.json",
+	}))
+	require.NoError(t, err)
+
+	assert.Equal(t, "https://ngc-stage-reval-oauth.example.test/token", cfg.Agent.HelmReValStageOAuthTokenURL)
+	assert.Equal(t, "https://ngc-stage-reval-oauth.example.test/.well-known/jwks.json", cfg.Agent.HelmReValStageOAuthPublicKeysetEndpoint)
+	assert.Equal(t, "https://ngc-prod-reval-oauth.example.test/token", cfg.Agent.HelmReValProdOAuthTokenURL)
+	assert.Equal(t, "https://ngc-prod-reval-oauth.example.test/.well-known/jwks.json", cfg.Agent.HelmReValProdOAuthPublicKeysetEndpoint)
+	assert.Equal(t, "https://ngc-stage-fnds-oauth.example.test/token", cfg.Agent.FunctionDeploymentStagesStageOAuthTokenURL)
+	assert.Equal(t, "https://ngc-stage-fnds-oauth.example.test/.well-known/jwks.json", cfg.Agent.FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint)
+	assert.Equal(t, "https://ngc-prod-fnds-oauth.example.test/token", cfg.Agent.FunctionDeploymentStagesProdOAuthTokenURL)
+	assert.Equal(t, "https://ngc-prod-fnds-oauth.example.test/.well-known/jwks.json", cfg.Agent.FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint)
+}
+
+func chartDefaultsConfigMap(clusterDTO string) *corev1.ConfigMap {
+	return &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      nvcfBackendChartDefaultsConfigMapName,
+			Namespace: NVCAOperatorNamespace,
+		},
+		Data: map[string]string{
+			"cluster-dto.yaml": clusterDTO,
+		},
+	}
+}
+
+func chartDefaultsClusterDTO() string {
+	return `agent:
+  helmReValStageOAuthTokenURL: "https://chart-stage-reval-oauth.example.test/token"
+  helmReValStageOAuthPublicKeysetEndpoint: "https://chart-stage-reval-oauth.example.test/.well-known/jwks.json"
+  helmReValProdOAuthTokenURL: "https://chart-prod-reval-oauth.example.test/token"
+  helmReValProdOAuthPublicKeysetEndpoint: "https://chart-prod-reval-oauth.example.test/.well-known/jwks.json"
+  functionDeploymentStagesStageOAuthTokenURL: "https://chart-stage-fnds-oauth.example.test/token"
+  functionDeploymentStagesStageOAuthPublicKeysetEndpoint: "https://chart-stage-fnds-oauth.example.test/.well-known/jwks.json"
+  functionDeploymentStagesProdOAuthTokenURL: "https://chart-prod-fnds-oauth.example.test/token"
+  functionDeploymentStagesProdOAuthPublicKeysetEndpoint: "https://chart-prod-fnds-oauth.example.test/.well-known/jwks.json"
+`
+}
+
+func ngcManagedBackendWithAgentConfig(agentConfig nvidiaiov1.AgentConfig) *nvidiaiov1.NVCFBackend {
+	return &nvidiaiov1.NVCFBackend{
+		Spec: nvidiaiov1.NVCFBackendSpec{
+			NVCFBackendSpecT: nvidiaiov1.NVCFBackendSpecT{
+				AccountConfig: nvidiaiov1.AccountConfig{NCAID: "ncaid1"},
+				ClusterConfig: nvidiaiov1.ClusterConfig{
+					ClusterID:        "cluster-id",
+					ClusterName:      "cluster-name",
+					ClusterGroupName: "cluster-group",
+					CloudProvider:    "ON-PREM",
+				},
+				ClusterSource: nvcaoptypes.ClusterSourceNGCManaged,
+				ICMSConfig: nvidiaiov1.ICMSConfig{
+					ICMSServiceURL: "https://icms.example.test",
+				},
+				AgentConfig: agentConfig,
+			},
+		},
+	}
 }
 
 func TestGetEffectiveOTelCollectorConfig(t *testing.T) {

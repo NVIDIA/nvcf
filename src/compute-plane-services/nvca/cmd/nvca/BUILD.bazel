@@ -1,0 +1,51 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//rules/oci:defs.bzl", "go_oci_multi_binary_image")
+
+MODULE_PATH = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca"
+
+go_library(
+    name = "nvca_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/cmd/nvca",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//src/compute-plane-services/nvca/pkg/nvca",
+        "//src/compute-plane-services/nvca/pkg/nvca/errors",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+    ],
+)
+
+go_binary(
+    name = "nvca",
+    embed = [":nvca_lib"],
+    visibility = ["//visibility:public"],
+    # Mirrors ldflags.
+    x_defs = {
+        MODULE_PATH + "/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Version": "{STABLE_VERSION}",
+        MODULE_PATH + "/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.GitHash": "{STABLE_GIT_COMMIT}",
+        MODULE_PATH + "/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.ReleaseTag": "{STABLE_OCI_TAG}",
+        "github.com/NVIDIA/k8s-dra-driver-gpu/internal/info.version": "{STABLE_DRA_DRIVER_GPU_VERSION}",
+    },
+)
+
+# Multi-binary OCI image: copies three binaries (nvca + webhook-server +
+# spiffe-token-fetcher) into a single image.
+go_oci_multi_binary_image(
+    name = "image",
+    base = "@distroless_go",
+    binaries = {
+        ":nvca": "/usr/bin/nvca",
+        "//src/compute-plane-services/nvca/cmd/webhook-server:webhook-server": "/usr/bin/webhook-server",
+        "//src/compute-plane-services/nvca/cmd/spiffe-token-fetcher:spiffe-token-fetcher": "/usr/bin/spiffe-token-fetcher",
+    },
+    extra_registries = {
+        "devops": "nvcr.io/nv-ngc-devops/nvca",
+        "ncp_dev": "nvcr.io/0651155215864979/ncp-dev/nvca",
+    },
+    registry = "nvcr.io/qtfpt1h0bieu/byocdev/nvca",
+    tags = ["nvca"],
+    visibility = ["//visibility:public"],
+)

@@ -1,9 +1,0 @@
-#! /usr/bin/env bash
-#
-# This script exit non-zero if vendor/ has uncommitted changes.
-set -eu -o pipefail
-repo_root="$(cd "$(dirname "$0")/.." && pwd)"
-cd "${repo_root}"
-make vendor-update
-git status
-git diff --ignore-space-at-eol --exit-code

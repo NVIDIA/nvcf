@@ -1,6 +1,53 @@
 # NVCF Autoscaler
 
-A high-performance, distributed autoscaling service for NVIDIA Cloud Functions (NVCF) built in Rust. This service periodically monitors function invocation and usage patterns and horizontally scales NVCF functions.
+The Function Autoscaler's documentation is available [here](https://docs.nvidia.com/nvcf/function-autoscaling-overview).
+
+The NVCF Function Autoscaler is a distributed Rust service that monitors function utilization and uses it to determine the ideal instance count per function on the NVCF control plane. It runs as a horizontally scaled deployment on the same Kubernetes cluster as the rest of the control plane.
+
+## Build with Bazel
+
+CI runs `bazel test //...` and publishes the image via
+`bazel run //nvidia-internal:image_push_nvcf_autoscaling` to
+`nvcr.io/ema5hzr4ziav/nvcf_autoscaling`, the legacy NGC tenant the
+pre-Bazel CI used (`NGC_IMAGE_PATH=nvcr.io/ema5hzr4ziav` +
+`DOCKER_IMAGE_NAME=nvcf_autoscaling`). Tracks the canonical Phase B
+scaffold from nvcf-invocation-service !313.
+
+Requires [bazelisk](https://github.com/bazelbuild/bazelisk) and
+`libssl-dev` installed (Ubuntu / Debian). The bazel-ci image ships
+both; dev machines with `build-essential` + `libssl-dev` work.
+
+```shell
+# Build everything Bazel knows about.
+bazel build //...
+
+# Run all tests with auto-retry on timing-sensitive failures.
+bazel test //... --flaky_test_attempts=3
+
+# Build the (single-arch, linux/amd64) OCI image index.
+bazel build //crates/server:image_index
+
+# Load the host-arch image into the local docker daemon.
+bazel run //crates/server:image_load
+
+# Push the single-arch image to the legacy NGC tenant. The push target
+# lives under //nvidia-internal:image_push_nvcf_autoscaling (see
+# nvidia-internal/BUILD.bazel); the registry coordinates are
+# NVIDIA-internal and intentionally kept out of the public mirror.
+bazel run //nvidia-internal:image_push_nvcf_autoscaling
+
+# Repin crate_universe after Cargo.lock changes.
+CARGO_BAZEL_REPIN=1 bazel mod tidy
+```
+
+The image is linux/amd64-only for now. The arm64 leg's cross-compile
+trips openssl-sys (the system libssl path differs per architecture and
+the crate.annotation in `MODULE.bazel` points at the amd64 path). A
+follow-up either vendors libssl via http_archive with per-platform
+crate.annotation entries, or switches the scylla driver's TLS feature
+to rustls.
+
+Local Bazel cache setup is documented in the `nvcf/nvcf-internal` docs.
 
 ```mermaid
 sequenceDiagram
@@ -223,7 +270,7 @@ The service automatically handles:
    - Verify SSL certificates are properly configured
    - Check network connectivity to Cassandra cluster
    - Validate credentials in secrets file
-   - Create `/etc/app/config` directory if it does not exist
+   - Create `/etc/server/config` directory if it does not exist
 
 2. **TSDB Query Failures**:
    - Confirm TSDB endpoint accessibility

@@ -1,0 +1,24 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "dns",
+    srcs = ["dns_resolver.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/internal/resolver/dns",
+    importpath = "google.golang.org/grpc/internal/resolver/dns",
+    visibility = ["//src/compute-plane-services/nvca/vendor/google.golang.org/grpc:__subpackages__"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/balancer/grpclb/state",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/grpclog",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/internal/backoff",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/internal/envconfig",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/internal/resolver/dns/internal",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/resolver",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/serviceconfig",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":dns",
+    visibility = ["//src/compute-plane-services/nvca/vendor/google.golang.org/grpc:__subpackages__"],
+)

@@ -1,0 +1,93 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+load("@gazelle//:def.bzl", "gazelle")
+
+exports_files(
+    ["BUILD.bazel"],
+    visibility = ["//src/libraries/go/lib:__pkg__"],
+)
+
+package_group(
+    name = "java_notice_consumers",
+    packages = [
+        "//src/control-plane-services/...",
+        "//src/libraries/java/...",
+    ],
+)
+
+# Root module identity, third-party lock, and NOTICE index consumed by Java
+# NOTICE generation and verification under the stable Java component paths.
+exports_files(
+    [
+        "MODULE.bazel",
+        "NOTICE",
+        "maven_install.json",
+    ],
+    visibility = [":java_notice_consumers"],
+)
+
+# Gazelle manages only the native Go subtrees listed in go.work.bazel.
+# nv-boot-parent and Cloud Tasks are also owned by the root Bazel module, but
+# their checked-in Java BUILD files are maintained manually and remain outside
+# Gazelle's scope. Other upstream-owned subtrees stay excluded so Gazelle does
+# not descend into vendored directories.
+#
+# When onboarding another subtree, remove only the exclusions needed by its
+# language-specific build integration.
+# gazelle:exclude .bazel-cache
+# gazelle:exclude .worktrees
+# gazelle:exclude .cursor
+# gazelle:exclude .claude
+# gazelle:exclude .codex
+# gazelle:exclude ai-tooling
+# gazelle:exclude bazel-bin
+# gazelle:exclude bazel-nvcf
+# gazelle:exclude bazel-out
+# gazelle:exclude bazel-testlogs
+# gazelle:exclude ci
+# gazelle:exclude deploy
+# gazelle:exclude docs
+# gazelle:exclude examples
+# gazelle:exclude fern
+# gazelle:exclude infra
+# gazelle:exclude migrations
+# gazelle:exclude platforms
+# gazelle:exclude rules
+# src/compute-plane-services is excluded per-subtree rather than wholesale:
+# nvsnap is part of the root module and Gazelle must manage its BUILD files.
+# gazelle:exclude src/compute-plane-services/byoo-otel-collector
+# gazelle:exclude src/compute-plane-services/ess-agent
+# gazelle:exclude src/compute-plane-services/image-credential-helper
+# gazelle:exclude src/compute-plane-services/nvca
+# gazelle:exclude src/compute-plane-services/nvcf-unbound
+# gazelle:exclude src/compute-plane-services/worker-init
+# gazelle:exclude src/compute-plane-services/worker-llm-credentials
+# gazelle:exclude src/compute-plane-services/worker-task
+# gazelle:exclude src/compute-plane-services/worker-utils
+# gazelle:exclude src/control-plane-services
+# gazelle:exclude src/invocation-plane-services
+# gazelle:exclude src/libraries/python
+# gazelle:exclude src/libraries/ts
+# gazelle:exclude tools
+
+# Gazelle: auto-generate BUILD files for Go packages.
+# Usage:
+#   bazel run //:gazelle                     - generate or update BUILD files
+#   bazel run //:gazelle -- update-repos     - sync go.mod deps into MODULE.bazel
+gazelle(
+    name = "gazelle",
+    prefix = "github.com/NVIDIA/nvcf",
+)

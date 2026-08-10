@@ -1,0 +1,36 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "global",
+    srcs = [
+        "handler.go",
+        "instruments.go",
+        "internal_logging.go",
+        "meter.go",
+        "propagator.go",
+        "state.go",
+        "trace.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/internal/global",
+    importpath = "go.opentelemetry.io/otel/internal/global",
+    visibility = ["//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel:__subpackages__"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/go-logr/logr",
+        "//src/compute-plane-services/nvca/vendor/github.com/go-logr/stdr",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/auto/sdk",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/attribute",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/codes",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/internal/errorhandler",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/metric",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/metric/embedded",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/propagation",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/trace",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/trace/embedded",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":global",
+    visibility = ["//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel:__subpackages__"],
+)

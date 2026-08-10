@@ -1,0 +1,18 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "netutils",
+    srcs = [
+        "doc.go",
+        "net.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/go-openapi/swag/netutils",
+    importpath = "github.com/go-openapi/swag/netutils",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":netutils",
+    visibility = ["//visibility:public"],
+)

@@ -90,8 +90,10 @@ func (a *storageRequestAPI) Get(ctx context.Context, namespace, name string) (*S
 // Update applies the v1 updated object to the ref's resource and performs status then spec update.
 // On 409 Conflict (object modified), retries with the latest version.
 func (a *storageRequestAPI) Update(ctx context.Context, ref *StorageRequestRef, updated *nvcav1.StorageRequest) error {
-	namespace, name := ref.v2Beta1Obj.Namespace, ref.v2Beta1Obj.Name
-	if ref.v2Beta1Obj == nil {
+	var namespace, name string
+	if ref.v2Beta1Obj != nil {
+		namespace, name = ref.v2Beta1Obj.Namespace, ref.v2Beta1Obj.Name
+	} else {
 		namespace, name = ref.v1Obj.Namespace, ref.v1Obj.Name
 	}
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -101,29 +103,39 @@ func (a *storageRequestAPI) Update(ctx context.Context, ref *StorageRequestRef, 
 		}
 		if freshRef.v2Beta1Obj != nil {
 			nvcav2beta1.ApplyV1SpecAndStatus(freshRef.v2Beta1Obj, &updated.Spec, &updated.Status)
-			if _, err := a.clientset.NvcaV2beta1().StorageRequests(freshRef.v2Beta1Obj.Namespace).
-				UpdateStatus(ctx, freshRef.v2Beta1Obj, metav1.UpdateOptions{}); err != nil {
+			afterStatus, err := a.clientset.NvcaV2beta1().StorageRequests(freshRef.v2Beta1Obj.Namespace).
+				UpdateStatus(ctx, freshRef.v2Beta1Obj, metav1.UpdateOptions{})
+			if err != nil {
 				return err
 			}
-			if _, err := a.clientset.NvcaV2beta1().StorageRequests(freshRef.v2Beta1Obj.Namespace).
-				Update(ctx, freshRef.v2Beta1Obj, metav1.UpdateOptions{}); err != nil {
+			// Finalizers are metadata — UpdateStatus ignores them; propagate via Update only.
+			freshRef.v2Beta1Obj.ResourceVersion = afterStatus.ResourceVersion
+			freshRef.v2Beta1Obj.Finalizers = updated.Finalizers
+			st, err := a.clientset.NvcaV2beta1().StorageRequests(freshRef.v2Beta1Obj.Namespace).
+				Update(ctx, freshRef.v2Beta1Obj, metav1.UpdateOptions{})
+			if err != nil {
 				return err
 			}
-			ref.v2Beta1Obj = freshRef.v2Beta1Obj
+			ref.v2Beta1Obj = st
 			ref.v1Obj = nil
 			return nil
 		}
 		freshRef.v1Obj.Spec = updated.Spec
 		freshRef.v1Obj.Status = updated.Status
-		if _, err := a.clientset.NvcaV1().StorageRequests(freshRef.v1Obj.Namespace).
-			UpdateStatus(ctx, freshRef.v1Obj, metav1.UpdateOptions{}); err != nil {
+		afterStatus, err := a.clientset.NvcaV1().StorageRequests(freshRef.v1Obj.Namespace).
+			UpdateStatus(ctx, freshRef.v1Obj, metav1.UpdateOptions{})
+		if err != nil {
 			return err
 		}
-		if _, err := a.clientset.NvcaV1().StorageRequests(freshRef.v1Obj.Namespace).
-			Update(ctx, freshRef.v1Obj, metav1.UpdateOptions{}); err != nil {
+		// Finalizers are metadata — UpdateStatus ignores them; propagate via Update only.
+		freshRef.v1Obj.ResourceVersion = afterStatus.ResourceVersion
+		freshRef.v1Obj.Finalizers = updated.Finalizers
+		st, err := a.clientset.NvcaV1().StorageRequests(freshRef.v1Obj.Namespace).
+			Update(ctx, freshRef.v1Obj, metav1.UpdateOptions{})
+		if err != nil {
 			return err
 		}
-		ref.v1Obj = freshRef.v1Obj
+		ref.v1Obj = st
 		ref.v2Beta1Obj = nil
 		return nil
 	})

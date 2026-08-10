@@ -1,0 +1,49 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+version: "2"
+run:
+  modules-download-mode: mod
+  issues-exit-code: 1
+  # tests/bdd is mostly test code; lint test files too.
+  tests: true
+  allow-parallel-runners: false
+linters:
+  enable:
+    - gocritic
+    - gocyclo
+    - goheader
+    - misspell
+    - revive
+    - unconvert
+    - whitespace
+  settings:
+    gocritic:
+      disabled-checks:
+        - ifElseChain
+    goheader:
+      template-path: .goheader.tmpl
+    revive:
+      rules:
+        - name: exported
+          disabled: true
+        # BDD tests have table-driven setups (one entry per Makefile target,
+        # one entry per Gherkin step) where breaking the line hurts
+        # readability more than it helps. 250 covers the existing tables
+        # without inviting unbounded growth.
+        - name: line-length-limit
+          arguments: [250]
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

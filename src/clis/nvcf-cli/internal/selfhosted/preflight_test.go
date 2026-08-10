@@ -90,6 +90,92 @@ func TestCheckBinary_VersionTooHigh(t *testing.T) {
 	assert.Contains(t, r.Message, ">= 3.14.0 and < 4.0.0 required")
 }
 
+func TestDefaultTools_AllowsHelm4IndividualVersionCheck(t *testing.T) {
+	var helm BinarySpec
+	for _, tool := range DefaultTools() {
+		if tool.Name == "helm" {
+			helm = tool
+			break
+		}
+	}
+	require.Equal(t, "helm", helm.Name)
+	helm.LookPath = func(string) (string, error) { return "/usr/local/bin/helm", nil }
+	helm.Version = func(_ context.Context, _ string) (*semver.Version, error) {
+		return semver.MustParse("4.0.5"), nil
+	}
+
+	r := checkBinary(context.Background(), helm)
+
+	require.NoError(t, r.Err)
+	assert.True(t, r.Passed)
+	assert.Contains(t, r.Message, "helm 4.0.5")
+}
+
+func TestRunPreflight_Helm4RequiresCompatibleHelmfile(t *testing.T) {
+	cfg := PreflightConfig{Tools: []BinarySpec{
+		{
+			Name: "helmfile", MinVer: semver.MustParse("1.0.0"),
+			LookPath: func(string) (string, error) { return "/usr/local/bin/helmfile", nil },
+			Version: func(_ context.Context, _ string) (*semver.Version, error) {
+				return semver.MustParse("1.1.9"), nil
+			},
+		},
+		{
+			Name: "helm", MinVer: semver.MustParse("3.14.0"),
+			LookPath: func(string) (string, error) { return "/usr/local/bin/helm", nil },
+			Version: func(_ context.Context, _ string) (*semver.Version, error) {
+				return semver.MustParse("4.0.5"), nil
+			},
+		},
+	}}
+
+	results := RunPreflight(context.Background(), cfg)
+
+	var compat *CheckResult
+	for i := range results {
+		if results[i].ID == "local-host-tools-helm-runtime" {
+			compat = &results[i]
+			break
+		}
+	}
+	require.NotNil(t, compat)
+	assert.False(t, compat.Passed)
+	require.Error(t, compat.Err)
+	assert.Contains(t, compat.Message, "Helm 4.0.5 requires helmfile >= 1.5.0")
+}
+
+func TestRunPreflight_Helm4WithCompatibleHelmfilePasses(t *testing.T) {
+	cfg := PreflightConfig{Tools: []BinarySpec{
+		{
+			Name: "helmfile", MinVer: semver.MustParse("1.0.0"),
+			LookPath: func(string) (string, error) { return "/usr/local/bin/helmfile", nil },
+			Version: func(_ context.Context, _ string) (*semver.Version, error) {
+				return semver.MustParse("1.5.1"), nil
+			},
+		},
+		{
+			Name: "helm", MinVer: semver.MustParse("3.14.0"),
+			LookPath: func(string) (string, error) { return "/usr/local/bin/helm", nil },
+			Version: func(_ context.Context, _ string) (*semver.Version, error) {
+				return semver.MustParse("4.0.5"), nil
+			},
+		},
+	}}
+
+	results := RunPreflight(context.Background(), cfg)
+
+	var compat *CheckResult
+	for i := range results {
+		if results[i].ID == "local-host-tools-helm-runtime" {
+			compat = &results[i]
+			break
+		}
+	}
+	require.NotNil(t, compat)
+	assert.True(t, compat.Passed)
+	assert.Equal(t, "helm4-compat", compat.Detail)
+}
+
 func TestCheckBinary_RetriesTransientVersionProbeFailure(t *testing.T) {
 	attempts := 0
 	r := checkBinary(context.Background(), BinarySpec{
@@ -110,6 +196,25 @@ func TestCheckBinary_RetriesTransientVersionProbeFailure(t *testing.T) {
 	assert.True(t, r.Passed)
 	assert.Equal(t, 2, attempts)
 	assert.Equal(t, "1.5.0", r.Detail)
+}
+
+func TestDefaultToolsWithPreferredDirUsesPinnedBinary(t *testing.T) {
+	binDir := t.TempDir()
+	pinnedHelm := filepath.Join(binDir, "helm")
+	require.NoError(t, os.WriteFile(pinnedHelm, []byte("#!/bin/sh\n"), 0o755))
+
+	tools := DefaultToolsWithPreferredDir(binDir)
+	var helm BinarySpec
+	for _, tool := range tools {
+		if tool.Name == "helm" {
+			helm = tool
+			break
+		}
+	}
+	require.NotNil(t, helm.LookPath)
+	path, err := helm.LookPath("helm")
+	require.NoError(t, err)
+	assert.Equal(t, pinnedHelm, path)
 }
 
 // captureSink records all emitted events for assertion in tests.
@@ -291,13 +396,13 @@ func TestRunPreflightForRole_LocalOnly(t *testing.T) {
 	}}
 	res := RunPreflightForRole(context.Background(), cfg, RoleLocalOnly, RoleConfig{}, sink)
 
-	// Only local-host-tools category emitted; 3 checks (kubectl/helmfile/helm).
+	// Only local-host-tools category emitted; 3 tools plus the helm runtime compatibility check.
 	for _, e := range sink.events {
 		if cs, ok := e.(progress.CheckStarted); ok {
 			assert.Equal(t, "local-host-tools", cs.Category, "unexpected category for check %s", cs.ID)
 		}
 	}
-	assert.Len(t, res, 3, "expected 3 results (one per tool)")
+	assert.Len(t, res, 4, "expected 3 tool results plus helm runtime compatibility")
 }
 
 func TestRunPreflightForRole_ControlPlaneAddsClusterCategory(t *testing.T) {
@@ -388,4 +493,164 @@ func TestRunPreflightForRole_LocalOnlyConfigSuppressesClusterChecks(t *testing.T
 	}
 	assert.NotContains(t, gotIDs, "gateway-api-crds", "LocalOnly must suppress control-plane cluster checks")
 	assert.Contains(t, gotIDs, "local-host-tools-kubectl", "local-host tools must still run")
+}
+
+// findResult returns a pointer to the first CheckResult with the given ID, or
+// nil if not present. Callers use require.NotNil to assert presence.
+func findResult(res []CheckResult, id string) *CheckResult {
+	for i := range res {
+		if res[i].ID == id {
+			return &res[i]
+		}
+	}
+	return nil
+}
+
+func TestNodeInotifyCheck_AllNodesPass(t *testing.T) {
+	prober := func(_ context.Context, _ string) ([]NodeInotifyLimits, error) {
+		return []NodeInotifyLimits{
+			{NodeName: "node-a", MaxUserInstances: 8192, MaxUserWatches: 524288},
+			{NodeName: "node-b", MaxUserInstances: 16384, MaxUserWatches: 1048576},
+		}, nil
+	}
+	sink := &captureSink{}
+	cfg := PreflightConfig{Tools: []BinarySpec{passingToolSpec("kubectl", "1.30.0")}}
+	res := RunPreflightForRole(context.Background(), cfg, RoleComputePlane, RoleConfig{InotifyProber: prober}, sink)
+
+	got := findResult(res, "node-inotify-limits")
+	require.NotNil(t, got, "expected node-inotify-limits result")
+	assert.True(t, got.Passed, "all nodes meeting minimums should pass")
+	assert.Contains(t, got.Message, "2 node(s)")
+}
+
+func TestNodeInotifyCheck_OneNodeBelowMinimum(t *testing.T) {
+	prober := func(_ context.Context, _ string) ([]NodeInotifyLimits, error) {
+		return []NodeInotifyLimits{
+			{NodeName: "node-a", MaxUserInstances: 8192, MaxUserWatches: 524288},
+			{NodeName: "node-b", MaxUserInstances: 128, MaxUserWatches: 524288},
+		}, nil
+	}
+	sink := &captureSink{}
+	cfg := PreflightConfig{Tools: []BinarySpec{passingToolSpec("kubectl", "1.30.0")}}
+	res := RunPreflightForRole(context.Background(), cfg, RoleComputePlane, RoleConfig{InotifyProber: prober}, sink)
+
+	got := findResult(res, "node-inotify-limits")
+	require.NotNil(t, got)
+	assert.False(t, got.Passed, "below-minimum node must fail the check")
+	assert.Equal(t, "error", got.Severity)
+	assert.Contains(t, got.Message, "node-b")
+	assert.Contains(t, got.Message, "max_user_instances=128/8192")
+	assert.NotContains(t, got.Message, "node-a", "node above minimum should not be listed")
+	assert.Equal(t, inotifyHintURL, got.HintURL)
+}
+
+func TestNodeInotifyCheck_BothLimitsBelowMinimum(t *testing.T) {
+	prober := func(_ context.Context, _ string) ([]NodeInotifyLimits, error) {
+		return []NodeInotifyLimits{
+			{NodeName: "node-a", MaxUserInstances: 128, MaxUserWatches: 8192},
+		}, nil
+	}
+	sink := &captureSink{}
+	cfg := PreflightConfig{Tools: []BinarySpec{passingToolSpec("kubectl", "1.30.0")}}
+	res := RunPreflightForRole(context.Background(), cfg, RoleComputePlane, RoleConfig{InotifyProber: prober}, sink)
+
+	got := findResult(res, "node-inotify-limits")
+	require.NotNil(t, got)
+	assert.False(t, got.Passed)
+	assert.Contains(t, got.Message, "max_user_instances=128/8192")
+	assert.Contains(t, got.Message, "max_user_watches=8192/524288")
+}
+
+func TestNodeInotifyCheck_LimitViolationsBeatProbeErrors(t *testing.T) {
+	// Mixed result: one node we couldn't probe (RBAC denial), one node that
+	// is non-compliant. The check must surface the limit violation as
+	// "error" so the operator sees the actionable problem, and still mention
+	// the unprobed node so they aren't surprised.
+	prober := func(_ context.Context, _ string) ([]NodeInotifyLimits, error) {
+		return []NodeInotifyLimits{
+			{NodeName: "node-a", Err: fmt.Errorf(`create probe pod on node node-a: pods is forbidden: User "cli" cannot create resource "pods"`)},
+			{NodeName: "node-b", MaxUserInstances: 128, MaxUserWatches: 524288},
+		}, nil
+	}
+	sink := &captureSink{}
+	cfg := PreflightConfig{Tools: []BinarySpec{passingToolSpec("kubectl", "1.30.0")}}
+	res := RunPreflightForRole(context.Background(), cfg, RoleComputePlane, RoleConfig{InotifyProber: prober}, sink)
+
+	got := findResult(res, "node-inotify-limits")
+	require.NotNil(t, got)
+	assert.False(t, got.Passed, "limit violation must fail the check")
+	assert.Equal(t, "error", got.Severity,
+		"limit violations outrank probe errors and must surface as error, not warning")
+	assert.Contains(t, got.Message, "node-b", "non-compliant node must appear in message")
+	assert.Contains(t, got.Message, "max_user_instances=128/8192")
+	assert.Contains(t, got.Message, "node-a", "unprobed node must still be reported")
+	assert.Contains(t, got.Message, "additionally could not probe",
+		"probe errors should be appended, not replace the violation message")
+}
+
+func TestNodeInotifyCheck_PerNodeProbeError(t *testing.T) {
+	prober := func(_ context.Context, _ string) ([]NodeInotifyLimits, error) {
+		return []NodeInotifyLimits{
+			{NodeName: "node-a", MaxUserInstances: 8192, MaxUserWatches: 524288},
+			{NodeName: "node-b", Err: fmt.Errorf(`create probe pod on node node-b: pods is forbidden: User "cli" cannot create resource "pods"`)},
+		}, nil
+	}
+	sink := &captureSink{}
+	cfg := PreflightConfig{Tools: []BinarySpec{passingToolSpec("kubectl", "1.30.0")}}
+	res := RunPreflightForRole(context.Background(), cfg, RoleComputePlane, RoleConfig{InotifyProber: prober}, sink)
+
+	got := findResult(res, "node-inotify-limits")
+	require.NotNil(t, got)
+	assert.False(t, got.Passed, "per-node probe error must not silently pass")
+	assert.Equal(t, "warning", got.Severity, "probe failures degrade to warning, not error")
+	assert.Contains(t, got.Message, "node-b")
+	assert.Contains(t, got.Message, "forbidden")
+}
+
+func TestNodeInotifyCheck_ClusterWideProbeError(t *testing.T) {
+	probeErr := fmt.Errorf("kubectl get nodes: connection refused")
+	prober := func(_ context.Context, _ string) ([]NodeInotifyLimits, error) {
+		return nil, probeErr
+	}
+	sink := &captureSink{}
+	cfg := PreflightConfig{Tools: []BinarySpec{passingToolSpec("kubectl", "1.30.0")}}
+	res := RunPreflightForRole(context.Background(), cfg, RoleComputePlane, RoleConfig{InotifyProber: prober}, sink)
+
+	got := findResult(res, "node-inotify-limits")
+	require.NotNil(t, got)
+	assert.False(t, got.Passed)
+	assert.Equal(t, "warning", got.Severity)
+	assert.ErrorIs(t, got.Err, probeErr)
+}
+
+func TestNodeInotifyCheck_NotInjectedWhenProberNil(t *testing.T) {
+	sink := &captureSink{}
+	cfg := PreflightConfig{Tools: []BinarySpec{passingToolSpec("kubectl", "1.30.0")}}
+	// No InotifyProber → check must not appear.
+	res := RunPreflightForRole(context.Background(), cfg, RoleComputePlane, RoleConfig{}, sink)
+	assert.Nil(t, findResult(res, "node-inotify-limits"),
+		"inotify check must be skipped when no prober is configured")
+}
+
+func TestParseInotifyOutput(t *testing.T) {
+	t.Run("two clean lines", func(t *testing.T) {
+		instances, watches, err := parseInotifyOutput("8192\n524288\n")
+		require.NoError(t, err)
+		assert.Equal(t, int64(8192), instances)
+		assert.Equal(t, int64(524288), watches)
+	})
+	t.Run("ignores non-numeric prefix lines", func(t *testing.T) {
+		instances, watches, err := parseInotifyOutput("If you don't see a command prompt, try pressing enter.\n8192\n524288\n")
+		require.NoError(t, err)
+		assert.Equal(t, int64(8192), instances)
+		assert.Equal(t, int64(524288), watches)
+	})
+	t.Run("missing second value errors", func(t *testing.T) {
+		_, _, err := parseInotifyOutput("8192\n")
+		require.Error(t, err)
+	})
+	t.Run("empty output errors", func(t *testing.T) {
+		_, _, err := parseInotifyOutput("")
+		require.Error(t, err)
+	})
 }

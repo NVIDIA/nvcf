@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "metrics",
+    srcs = ["metrics.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/internal/metrics",
+    visibility = ["//src/compute-plane-services/byoo-otel-collector:__subpackages__"],
+    deps = [
+        "//src/compute-plane-services/byoo-otel-collector/internal/logger",
+        "@com_github_prometheus_client_golang//prometheus",
+        "@com_github_prometheus_client_golang//prometheus/promhttp",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":metrics",
+    visibility = ["//src/compute-plane-services/byoo-otel-collector:__subpackages__"],
+)

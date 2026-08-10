@@ -1,0 +1,98 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# vLLM with Llama-3.1-8B-Instruct (single GPU) — criu-v2 checkpoint/restore.
+#
+# criu-v2 convention (mirrors vllm-small.yaml): no nvsnap injection stack.
+# via setsid so the agent dumps the GPU leader's session in-namespace and
+# restores it into a dumb placeholder. See checkpoint_v2.go.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vllm-8b
+  namespace: nvsnap-system
+  labels:
+    app: vllm-8b
+    nvsnap.io/demo: "true"
+  annotations:
+    nvsnap.io/demo-name: "vLLM"
+    nvsnap.io/desc: "Llama-3.1-8B on vLLM (single GPU)"
+    nvsnap.io/model: "meta-llama/Llama-3.1-8B-Instruct"
+    nvsnap.io/port: "8000"
+    nvsnap.io/gpus: "1"
+    nvsnap.io/path: "criu"
+spec:
+  tolerations:
+    - key: "nvidia.com/gpu"
+      operator: "Exists"
+      effect: "NoSchedule"
+
+  imagePullSecrets:
+    - name: nvsnap-pull-secret
+
+  containers:
+    - name: vllm
+      image: vllm/vllm-openai:v0.20.0
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/bash", "-lc"]
+      args:
+        - |
+          set -e
+          ulimit -c unlimited
+          mkdir -p /var/run/vllm
+          nohup setsid vllm serve \
+            --model meta-llama/Llama-3.1-8B-Instruct \
+            --host 0.0.0.0 \
+            --port 8000 \
+            --max-model-len 4096 \
+            --tensor-parallel-size 1 \
+            --gpu-memory-utilization 0.6 > /vllm.out 2>&1 < /dev/null &
+          tail -F /vllm.out &
+          while true; do sleep 30; done
+      env:
+        - { name: LD_LIBRARY_PATH, value: "/usr/local/nvidia/lib64:/usr/local/cuda/lib64" }
+        - { name: PYTHONFAULTHANDLER, value: "1" }
+        - { name: PYTHONUNBUFFERED,   value: "1" }
+        - { name: NVSNAP_LOG_LEVEL,     value: "3" }
+        - { name: NVSNAP_SECCOMP_ENABLED, value: "0" }
+        - { name: CUDA_VISIBLE_DEVICES, value: "0" }
+        - { name: HF_HOME,            value: "/root/.cache/huggingface" }
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: token
+        # In-process v1 engine: no separate EngineCore process => no cross-process
+        # RPC unix socket (what upstream CRIU couldn't restore). Must match restore.
+        - { name: VLLM_ENABLE_V1_MULTIPROCESSING, value: "0" }
+        - { name: USE_LIBUV, value: "1" }
+        # io_uring is C/R-safe now (CRIU fork io-uring-cr restores the SQPOLL
+        # ring's SQ-array identity map). See vllm-small for detail. nvsnap#107.
+        - { name: UV_USE_IO_URING, value: "1" }
+        - { name: HF_HUB_DISABLE_XET, value: "1" }
+        - { name: HF_HUB_ENABLE_HF_TRANSFER, value: "0" }
+        - { name: VLLM_LOGGING_LEVEL, value: "INFO" }
+      ports:
+        - containerPort: 8000
+          name: http
+      readinessProbe:
+        httpGet: { path: /v1/models, port: 8000 }
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 90
+      resources:
+        limits:
+          nvidia.com/gpu: "1"
+        requests:
+          nvidia.com/gpu: "1"
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - { name: shm, mountPath: /dev/shm }
+
+  volumes:
+    - name: shm
+      emptyDir: { medium: Memory, sizeLimit: 16Gi }
+
+  restartPolicy: Never

@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "pointerutil",
+    srcs = ["pointer.go"],
+    importpath = "github.com/hashicorp/vault/sdk/helper/pointerutil",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":pointerutil",
+    visibility = ["//visibility:public"],
+)

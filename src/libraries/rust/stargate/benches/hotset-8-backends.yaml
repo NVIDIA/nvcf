@@ -1,0 +1,130 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: hotset-8-backends
+metadata:
+  description: Short cache-affinity hotset sanity check across heterogeneous backend capacity.
+  tags: [smoke, heterogeneous, cache, pulsar]
+  expected_runtime: short
+  expected_signal: Cache-aware algorithms should preserve locality while avoiding overloaded slow backends.
+model: dummy-model
+seed: 42
+request_count: 48
+max_concurrency: 32
+
+stargates:
+  count: 1
+
+backends:
+  count: 8
+  profile:
+    name: balanced
+    weight: 1.0
+    max_concurrent_requests: 4
+    kv_cache_capacity_tokens: 150000
+    service_time_ms:
+      ttft_mean: 180
+      ttft_jitter_ms: 20
+      decode_jitter_ms: 3
+      prefill_tokens_per_s: 4000
+      decode_tokens_per_s: 90
+    registration:
+      last_mean_input_tps: 120
+  profiles:
+    - count: 2
+      profile:
+        name: fast
+        weight: 1.5
+        max_concurrent_requests: 6
+        kv_cache_capacity_tokens: 250000
+        service_time_ms:
+          ttft_mean: 120
+          ttft_jitter_ms: 15
+          decode_jitter_ms: 2
+          prefill_tokens_per_s: 7000
+          decode_tokens_per_s: 140
+        registration:
+          last_mean_input_tps: 220
+    - count: 4
+      profile:
+        name: balanced
+        weight: 1.0
+        max_concurrent_requests: 4
+        kv_cache_capacity_tokens: 150000
+        service_time_ms:
+          ttft_mean: 180
+          ttft_jitter_ms: 25
+          decode_jitter_ms: 4
+          prefill_tokens_per_s: 4000
+          decode_tokens_per_s: 90
+        registration:
+          last_mean_input_tps: 120
+    - count: 2
+      profile:
+        name: slow
+        weight: 0.6
+        max_concurrent_requests: 2
+        kv_cache_capacity_tokens: 100000
+        service_time_ms:
+          ttft_mean: 260
+          ttft_jitter_ms: 40
+          decode_jitter_ms: 8
+          prefill_tokens_per_s: 2200
+          decode_tokens_per_s: 55
+        registration:
+          last_mean_input_tps: 70
+
+traffic_pattern:
+  kind: zipf_hotset
+  routing_keys: 0
+  cache_affinity_keys: 200
+  hotset_fraction: 0.2
+  hotset_share: 0.8
+  input_tokens:
+    distribution: lognormal
+    mean: 1200
+    sigma: 0.6
+    p99_cap: 8000
+  output_tokens:
+    distribution: lognormal
+    mean: 300
+    sigma: 0.5
+    p99_cap: 2000
+  arrival:
+    distribution: poisson
+    target_rps: 40
+
+algorithms:
+  - name: power-of-two
+    config:
+      default: power-of-two
+  - name: round-robin
+    config:
+      default: round-robin
+  - name: random
+    config:
+      default: random
+  - name: groq-multiregion
+    config:
+      default: groq-multiregion
+  - name: pulsar
+    config:
+      default: power-of-two
+      models:
+        dummy-model:
+          algorithm: pulsar
+          seed: benchmark-v1
+          require_cache_affinity_key: true
+          require_input_tokens: true

@@ -1,0 +1,24 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "logger",
+    srcs = ["logger.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/internal/logger",
+    visibility = ["//src/compute-plane-services/byoo-otel-collector:__subpackages__"],
+    deps = [
+        "@org_uber_go_zap//:zap",
+        "@org_uber_go_zap//zapcore",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":logger",
+    visibility = ["//src/compute-plane-services/byoo-otel-collector:__subpackages__"],
+)
+
+go_test(
+    name = "logger_test",
+    srcs = ["logger_test.go"],
+    embed = [":logger"],
+)

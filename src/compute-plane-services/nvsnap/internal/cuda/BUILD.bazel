@@ -1,0 +1,18 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "cuda",
+    srcs = [
+        "checkpoint.go",
+        "discover.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/cuda",
+    visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
+    deps = ["@com_github_sirupsen_logrus//:logrus"],
+)
+
+go_test(
+    name = "cuda_test",
+    srcs = ["discover_test.go"],
+    embed = [":cuda"],
+)

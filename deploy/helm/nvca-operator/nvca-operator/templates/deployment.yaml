@@ -59,24 +59,38 @@ spec:
       {{- end }}
       terminationGracePeriodSeconds: {{ ((.Values.gracefulShutdown).terminationGracePeriodSeconds) | default 600 }}
       {{- if (include "nvcaop.clusterValidatorEnabled" .) }}
+      {{- $cv := include "nvcaop.clusterValidatorConfig" . | fromYaml }}
+      # This init container runs under the operator ServiceAccount
+      # (serviceAccountName above), which already has configmaps
+      # get/create/update in this namespace via role.yaml, so its summary
+      # write succeeds. The separate cluster-validator ServiceAccount and
+      # ClusterRole in rbac.yaml grant the same configmaps verbs for the
+      # CronJob, which runs as that SA.
       initContainers:
       - name: cluster-validator
-        image: {{ include "nvcaop.clusterValidatorRepository" (dict "imageRepository" .Values.clusterValidator.image.repository "defaultRepository" .Values.image.repository) }}:{{ default .Chart.Version .Values.clusterValidator.image.tag }}
-        imagePullPolicy: {{ .Values.clusterValidator.image.pullPolicy }}
+        image: {{ include "nvcaop.clusterValidatorRepository" (dict "imageRepository" $cv.image.repository "defaultRepository" .Values.image.repository) }}:{{ default .Chart.Version $cv.image.tag }}
+        imagePullPolicy: {{ $cv.image.pullPolicy }}
         env:
         - name: VALIDATOR_CONFIG_NAMESPACE
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
         - name: VALIDATOR_CONFIG_NAME
-          value: {{ .Values.clusterValidator.configMapName | default "cluster-validator-network-checks" | quote }}
+          value: {{ $cv.configMapName | quote }}
+        # Namespace the NVCA agent watches for the metrics summary; kept
+        # separate from the config namespace so a config-namespace override
+        # can't redirect metrics.
+        - name: VALIDATOR_SUMMARY_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
         resources:
           requests:
-            cpu: {{ .Values.clusterValidator.resources.requests.cpu | quote }}
-            memory: {{ .Values.clusterValidator.resources.requests.memory | quote }}
+            cpu: {{ $cv.resources.requests.cpu | quote }}
+            memory: {{ $cv.resources.requests.memory | quote }}
           limits:
-            cpu: {{ .Values.clusterValidator.resources.limits.cpu | quote }}
-            memory: {{ .Values.clusterValidator.resources.limits.memory | quote }}
+            cpu: {{ $cv.resources.limits.cpu | quote }}
+            memory: {{ $cv.resources.limits.memory | quote }}
         securityContext:
           runAsNonRoot: true
           readOnlyRootFilesystem: true
@@ -168,8 +182,6 @@ spec:
             name: otel-{{ include "nvcaop.fullname" . }}-config
         {{- end}}
         args:
-          - /tini
-          - --
           - /usr/bin/nvca-operator
           - --nca-id
           - "{{ .Values.ncaID }}"
@@ -279,8 +291,6 @@ spec:
             drop:
               - "ALL"
         args:
-          - /tini
-          - --
           - /usr/bin/nvca-mirror
           - run
           - --target-namespace

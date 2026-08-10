@@ -1,0 +1,4 @@
+reload:
+  propertiesFile: src/main/resources/lofn.json
+  delayInSeconds: 10
+  invalidField=10

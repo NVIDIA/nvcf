@@ -1,0 +1,60 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "manager",
+    srcs = [
+        "dedup.go",
+        "errors.go",
+        "runner.go",
+    ],
+    importpath = "github.com/hashicorp/consul-template/manager",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/ess-agent/child",
+        "//src/compute-plane-services/ess-agent/config",
+        "//src/compute-plane-services/ess-agent/dependency",
+        "//src/compute-plane-services/ess-agent/nv",
+        "//src/compute-plane-services/ess-agent/nv/telemetry",
+        "//src/compute-plane-services/ess-agent/renderer",
+        "//src/compute-plane-services/ess-agent/template",
+        "//src/compute-plane-services/ess-agent/version",
+        "//src/compute-plane-services/ess-agent/watch",
+        "@com_github_hashicorp_consul_api//:api",
+        "@com_github_hashicorp_go_multierror//:go-multierror",
+        "@com_github_mitchellh_hashstructure//:hashstructure",
+        "@com_github_pkg_errors//:errors",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":manager",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "manager_test",
+    srcs = [
+        "dedup_test.go",
+        "example_extfuncmap_test.go",
+        "example_manager_test.go",
+        "manager_test.go",
+        "runner_test.go",
+    ],
+    embed = [":manager"],
+    # Integration test. Uses consul-sdk testutil which spawns real
+    # `consul` and `vault` subprocesses; fails without those on PATH.
+    # See //dependency:dependency_test for the full rationale.
+    tags = ["manual"],
+    deps = [
+        "//src/compute-plane-services/ess-agent/child",
+        "//src/compute-plane-services/ess-agent/config",
+        "//src/compute-plane-services/ess-agent/dependency",
+        "//src/compute-plane-services/ess-agent/template",
+        "//src/compute-plane-services/ess-agent/test",
+        "@com_github_hashicorp_consul_sdk//testutil",
+    ],
+)

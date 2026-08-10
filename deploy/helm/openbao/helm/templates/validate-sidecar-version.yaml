@@ -1,0 +1,88 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+{{- /*
+Install-time guard: refuse to install if an OpenBao client image tag does not
+match the openbao server's image tag.
+
+WHY
+   A bao client/server version skew between the sidecar (which runs
+   `bao operator unseal $KEY` against the pod's local server) and the
+   openbao server StatefulSet silently corrupts the post-install init
+   handshake. The sidecar's older client interacts with the newer server
+   in ways the chart's deploy.sh init logic does not expect: the manual
+   `bao operator raft join` returns "failed to get raft challenge" and
+   `bao operator unseal` returns "Vault is not initialized". Helm marks
+   the release `failed`, the migrations Job hook never runs, and every
+   downstream service hangs in `Init:0/1` because no JWT auth method
+   was ever configured.
+
+   Upstream OpenBao changes that make a 2.2.2 client incompatible with
+   a 2.5.x server:
+
+   - openbao/openbao#1986 (2.5.0, Feb 2026): "Horizontal Read Scalability".
+     Standby nodes serve reads locally with eventual consistency instead
+     of forwarding to the active leader. A pre-2.5.0 client's unseal-flow
+     assumes always-leader semantics; the 2.5.x server gives it a stale
+     read view from the standby.
+
+   - openbao/openbao#2331 + openbao/openbao#2574 (2.5.0): raft request
+     propagation fixes. raft leader-id reporting and peer
+     join/promote/demote propagation were buggy in 2.3-2.4 and corrected
+     in 2.5. A 2.2.2 client has none of those corrections.
+
+   - openbao/openbao#1518 (2.4.0, Aug 2025): "Delay recovery key
+     generation for auto-unseal mechanisms and make rotation
+     authenticated". Reworked when/how recovery and unseal keys are
+     generated and the endpoints involved.
+
+   - openbao/openbao#1433 (2.4.0): "Inline, Write-less Authentication".
+     Changed how auth requests are processed, affecting unseal which
+     authenticates locally.
+
+   This chart's helm/values.yaml already sets `disable_standby_reads = true`
+   (commit 8c26c7f, "fix: disable standby reads to resolve JWT plugin
+   lease regression") to protect the server side from #1986. That fix
+   does not help the sidecar's client; this guard catches that.
+
+HOW TO FIX A FAILED INSTALL
+   Remove stale image tag overrides so the chart defaults inherit the server
+   tag, or update every OpenBao client image override to match the server tag.
+
+OUTPUT
+   None on success. fail() halts install on mismatch.
+*/}}
+{{- $serverTag := .Values.openbao.server.image.tag -}}
+{{- if .Values.openbao.injector.enabled -}}
+{{- $agentTag := .Values.openbao.injector.agentImage.tag -}}
+{{- if ne $agentTag $serverTag -}}
+  {{- $msg := printf "OpenBao image tag mismatch.\n\n  server         openbao.server.image.tag: %s\n  injected agent openbao.injector.agentImage.tag: %s\n\nThe server, injected agent, and auto-unseal sidecar must use the same nvcf-openbao tag.\nRemove the stale openbao.injector.agentImage.tag override so the chart default is used, or set it to '%s'." $serverTag $agentTag $serverTag -}}
+  {{- fail $msg -}}
+{{- end -}}
+{{- end -}}
+{{- range $idx, $c := .Values.openbao.server.extraContainers -}}
+  {{- if eq $c.name "auto-unseal-sidecar" -}}
+    {{- $subchartContext := dict "Values" (dict "server" $.Values.openbao.server) "Chart" $.Chart -}}
+    {{- $sidecarImage := tpl ($c.image | default "") $subchartContext -}}
+    {{- $parts := splitList ":" $sidecarImage -}}
+    {{- if gt (len $parts) 1 -}}
+      {{- $sidecarTag := last $parts -}}
+      {{- if ne $sidecarTag $serverTag -}}
+        {{- $msg := printf "OpenBao image tag mismatch.\n\n  server              openbao.server.image.tag: %s\n  auto-unseal sidecar openbao.server.extraContainers[%d].image tag: %s\n\nThe server, injected agent, and auto-unseal sidecar must use the same nvcf-openbao tag.\nRemove the stale openbao.server.extraContainers override so the chart default sidecar is used, or set the sidecar image tag to '%s'." $serverTag $idx $sidecarTag $serverTag -}}
+        {{- fail $msg -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}

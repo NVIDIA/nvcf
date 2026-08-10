@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Copyright 2013-2025 The NATS Authors
+// Copyright 2013-2026 The NATS Authors
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -192,6 +192,17 @@ func newSubsList(client *client) []string {
 	return subs
 }
 
+func redactBearerJWT(userJWT string) string {
+	if userJWT == _EMPTY_ {
+		return _EMPTY_
+	}
+	uc, err := jwt.DecodeUserClaims(userJWT)
+	if err == nil && uc != nil && uc.BearerToken {
+		return _EMPTY_
+	}
+	return userJWT
+}
+
 // Connz returns a Connz struct containing information about connections.
 func (s *Server) Connz(opts *ConnzOptions) (*Connz, error) {
 	var (
@@ -377,16 +388,26 @@ func (s *Server) Connz(opts *ConnzOptions) (*Connz, error) {
 		// Gather all open clients.
 		if state == ConnOpen || state == ConnAll {
 			for _, client := range clist {
+				// Snapshot each under the client lock.
+				client.mu.RLock()
+				var cAccName string
+				if client.acc != nil {
+					cAccName = client.acc.Name
+				}
+				cAuthUser := client.getRawAuthUser()
+				cMQTTID := client.getMQTTClientID()
+				client.mu.RUnlock()
+
 				// If we have an account specified we need to filter.
-				if acc != _EMPTY_ && (client.acc == nil || client.acc.Name != acc) {
+				if acc != _EMPTY_ && cAccName != acc {
 					continue
 				}
 				// Do user filtering second
-				if user != _EMPTY_ && client.getRawAuthUserLock() != user {
+				if user != _EMPTY_ && cAuthUser != user {
 					continue
 				}
 				// Do mqtt client ID filtering next
-				if mqttCID != _EMPTY_ && client.getMQTTClientID() != mqttCID {
+				if mqttCID != _EMPTY_ && cMQTTID != mqttCID {
 					continue
 				}
 				openClients = append(openClients, client)
@@ -444,12 +465,13 @@ func (s *Server) Connz(opts *ConnzOptions) (*Connz, error) {
 			ci.NameTag = client.acc.getNameTag()
 		}
 		client.mu.Unlock()
+		ci.JWT = redactBearerJWT(ci.JWT)
 		pconns[i] = ci
 		i++
 	}
 	// Closed Clients
 	var needCopy bool
-	if subs || auth {
+	if subs || subsDet || auth {
 		needCopy = true
 	}
 	for _, cc := range closedClients {
@@ -490,6 +512,7 @@ func (s *Server) Connz(opts *ConnzOptions) (*Connz, error) {
 					cc.NameTag = acc.getNameTag()
 				}
 			}
+			cc.JWT = redactBearerJWT(cc.JWT)
 		}
 		pconns[i] = &cc.ConnInfo
 		i++
@@ -503,45 +526,37 @@ func (s *Server) Connz(opts *ConnzOptions) (*Connz, error) {
 
 	switch sortOpt {
 	case ByCid, ByStart:
-		sort.Sort(byCid{pconns})
+		sort.Sort(SortByCid{pconns})
 	case BySubs:
-		sort.Sort(sort.Reverse(bySubs{pconns}))
+		sort.Sort(sort.Reverse(SortBySubs{pconns}))
 	case ByPending:
-		sort.Sort(sort.Reverse(byPending{pconns}))
+		sort.Sort(sort.Reverse(SortByPending{pconns}))
 	case ByOutMsgs:
-		sort.Sort(sort.Reverse(byOutMsgs{pconns}))
+		sort.Sort(sort.Reverse(SortByOutMsgs{pconns}))
 	case ByInMsgs:
-		sort.Sort(sort.Reverse(byInMsgs{pconns}))
+		sort.Sort(sort.Reverse(SortByInMsgs{pconns}))
 	case ByOutBytes:
-		sort.Sort(sort.Reverse(byOutBytes{pconns}))
+		sort.Sort(sort.Reverse(SortByOutBytes{pconns}))
 	case ByInBytes:
-		sort.Sort(sort.Reverse(byInBytes{pconns}))
+		sort.Sort(sort.Reverse(SortByInBytes{pconns}))
 	case ByLast:
-		sort.Sort(sort.Reverse(byLast{pconns}))
+		sort.Sort(sort.Reverse(SortByLast{pconns}))
 	case ByIdle:
-		sort.Sort(sort.Reverse(byIdle{pconns, c.Now}))
+		sort.Sort(sort.Reverse(SortByIdle{pconns, c.Now}))
 	case ByUptime:
-		sort.Sort(byUptime{pconns, time.Now()})
+		sort.Sort(SortByUptime{pconns, time.Now()})
 	case ByStop:
-		sort.Sort(sort.Reverse(byStop{pconns}))
+		sort.Sort(sort.Reverse(SortByStop{pconns}))
 	case ByReason:
-		sort.Sort(byReason{pconns})
+		sort.Sort(SortByReason{pconns})
 	case ByRTT:
-		sort.Sort(sort.Reverse(byRTT{pconns}))
+		sort.Sort(sort.Reverse(SortByRTT{pconns}))
 	}
-
-	minoff := c.Offset
-	maxoff := c.Offset + c.Limit
-
-	maxIndex := totalClients
 
 	// Make sure these are sane.
-	if minoff > maxIndex {
-		minoff = maxIndex
-	}
-	if maxoff > maxIndex {
-		maxoff = maxIndex
-	}
+	maxIndex := totalClients
+	minoff := min(max(c.Offset, 0), maxIndex)
+	maxoff := minoff + min(c.Limit, maxIndex-minoff)
 
 	// Now pare down to the requested size.
 	// TODO(dlc) - for very large number of connections we
@@ -1067,18 +1082,10 @@ func (s *Server) Subsz(opts *SubszOptions) (*Subsz, error) {
 			sub.client.mu.Unlock()
 			i++
 		}
-		minoff := sz.Offset
-		maxoff := sz.Offset + sz.Limit
-
-		maxIndex := i
-
 		// Make sure these are sane.
-		if minoff > maxIndex {
-			minoff = maxIndex
-		}
-		if maxoff > maxIndex {
-			maxoff = maxIndex
-		}
+		maxIndex := i
+		minoff := min(max(sz.Offset, 0), maxIndex)
+		maxoff := minoff + min(sz.Limit, maxIndex-minoff)
 		sz.Subs = details[minoff:maxoff]
 		sz.Total = len(details)
 	} else {
@@ -1261,10 +1268,14 @@ type Varz struct {
 	Routes                int                    `json:"routes"`                            // Routes is the number of connected route servers
 	Remotes               int                    `json:"remotes"`                           // Remotes is the configured route remote endpoints
 	Leafs                 int                    `json:"leafnodes"`                         // Leafs is the number connected leafnode clients
-	InMsgs                int64                  `json:"in_msgs"`                           // InMsgs is the number of messages this server received
-	OutMsgs               int64                  `json:"out_msgs"`                          // OutMsgs is the number of message this server sent
-	InBytes               int64                  `json:"in_bytes"`                          // InBytes is the number of bytes this server received
-	OutBytes              int64                  `json:"out_bytes"`                         // OutMsgs is the number of bytes this server sent
+	InMsgs                int64                  `json:"in_msgs"`                           // InMsgs is the total number of messages this server received. This includes messages from the clients, routers, gateways and leaf nodes
+	InBytes               int64                  `json:"in_bytes"`                          // InBytes is the total number of bytes this server received. This includes messages from the clients, routers, gateways and leaf nodes
+	InClientMsgs          int64                  `json:"in_client_msgs"`                    // InClientMsgs is the number of messages this server received from the clients
+	InClientBytes         int64                  `json:"in_client_bytes"`                   // InClientBytes is the number of bytes this server received from the clients
+	OutMsgs               int64                  `json:"out_msgs"`                          // OutMsgs is the total number of message this server sent. This includes messages sent to the clients, routers, gateways and leaf nodes
+	OutBytes              int64                  `json:"out_bytes"`                         // OutBytes is the total number of bytes this server sent. This includes messages sent to the clients, routers, gateways and leaf nodes
+	OutClientMsgs         int64                  `json:"out_client_msgs"`                   // OutClientMsgs is the number of messages this server sent to the clients
+	OutClientBytes        int64                  `json:"out_client_bytes"`                  // OutClientBytes is the number of bytes this server sent to the clients
 	SlowConsumers         int64                  `json:"slow_consumers"`                    // SlowConsumers is the total count of clients that were disconnected since start due to being slow consumers
 	StaleConnections      int64                  `json:"stale_connections"`                 // StaleConnections is the total count of stale connections that were detected
 	StalledClients        int64                  `json:"stalled_clients"`                   // StalledClients is the total number of times that clients have been stalled.
@@ -1282,6 +1293,7 @@ type Varz struct {
 	SlowConsumersStats    *SlowConsumersStats    `json:"slow_consumer_stats"`               // SlowConsumersStats are statistics about all detected Slow Consumer
 	StaleConnectionStats  *StaleConnectionStats  `json:"stale_connection_stats,omitempty"`  // StaleConnectionStats are statistics about all detected Stale Connections
 	Proxies               *ProxiesOptsVarz       `json:"proxies,omitempty"`                 // Proxies hold information about network proxy devices
+	TLSCertNotAfter       time.Time              `json:"tls_cert_not_after,omitzero"`       // TLSCertNotAfter is the expiration date of the TLS certificate of this server
 }
 
 // JetStreamVarz contains basic runtime information about jetstream
@@ -1294,34 +1306,36 @@ type JetStreamVarz struct {
 
 // ClusterOptsVarz contains monitoring cluster information
 type ClusterOptsVarz struct {
-	Name          string        `json:"name,omitempty"`           // Name is the configured cluster name
-	Host          string        `json:"addr,omitempty"`           // Host is the host the cluster listens on for connections
-	Port          int           `json:"cluster_port,omitempty"`   // Port is the port the cluster listens on for connections
-	AuthTimeout   float64       `json:"auth_timeout,omitempty"`   // AuthTimeout is the time cluster connections have to complete authentication
-	URLs          []string      `json:"urls,omitempty"`           // URLs is the list of cluster URLs
-	TLSTimeout    float64       `json:"tls_timeout,omitempty"`    // TLSTimeout is how long TLS operations have to complete
-	TLSRequired   bool          `json:"tls_required,omitempty"`   // TLSRequired indicates if TLS is required for connections
-	TLSVerify     bool          `json:"tls_verify,omitempty"`     // TLSVerify indicates if full verification of TLS connections is performed
-	PoolSize      int           `json:"pool_size,omitempty"`      // PoolSize is the configured route connection pool size
-	WriteDeadline time.Duration `json:"write_deadline,omitempty"` // WriteDeadline is the maximum time writes to sockets have to complete
-	WriteTimeout  string        `json:"write_timeout,omitempty"`  // WriteTimeout is the closure policy for write deadline errors
+	Name            string        `json:"name,omitempty"`              // Name is the configured cluster name
+	Host            string        `json:"addr,omitempty"`              // Host is the host the cluster listens on for connections
+	Port            int           `json:"cluster_port,omitempty"`      // Port is the port the cluster listens on for connections
+	AuthTimeout     float64       `json:"auth_timeout,omitempty"`      // AuthTimeout is the time cluster connections have to complete authentication
+	URLs            []string      `json:"urls,omitempty"`              // URLs is the list of cluster URLs
+	TLSTimeout      float64       `json:"tls_timeout,omitempty"`       // TLSTimeout is how long TLS operations have to complete
+	TLSRequired     bool          `json:"tls_required,omitempty"`      // TLSRequired indicates if TLS is required for connections
+	TLSVerify       bool          `json:"tls_verify,omitempty"`        // TLSVerify indicates if full verification of TLS connections is performed
+	PoolSize        int           `json:"pool_size,omitempty"`         // PoolSize is the configured route connection pool size
+	WriteDeadline   time.Duration `json:"write_deadline,omitempty"`    // WriteDeadline is the maximum time writes to sockets have to complete
+	WriteTimeout    string        `json:"write_timeout,omitempty"`     // WriteTimeout is the closure policy for write deadline errors
+	TLSCertNotAfter time.Time     `json:"tls_cert_not_after,omitzero"` // TLSCertNotAfter is the expiration date of the TLS certificate
 }
 
 // GatewayOptsVarz contains monitoring gateway information
 type GatewayOptsVarz struct {
-	Name           string                  `json:"name,omitempty"`            // Name is the configured cluster name
-	Host           string                  `json:"host,omitempty"`            // Host is the host the gateway listens on for connections
-	Port           int                     `json:"port,omitempty"`            // Port is the post gateway connections listens on
-	AuthTimeout    float64                 `json:"auth_timeout,omitempty"`    // AuthTimeout is the time cluster connections have to complete authentication
-	TLSTimeout     float64                 `json:"tls_timeout,omitempty"`     // TLSTimeout is how long TLS operations have to complete
-	TLSRequired    bool                    `json:"tls_required,omitempty"`    // TLSRequired indicates if TLS is required for connections
-	TLSVerify      bool                    `json:"tls_verify,omitempty"`      // TLSVerify indicates if full verification of TLS connections is performed
-	Advertise      string                  `json:"advertise,omitempty"`       // Advertise is the URL advertised to remote gateway clients
-	ConnectRetries int                     `json:"connect_retries,omitempty"` // ConnectRetries is how many connection attempts the route will make
-	Gateways       []RemoteGatewayOptsVarz `json:"gateways,omitempty"`        // Gateways is state of configured gateway remotes
-	RejectUnknown  bool                    `json:"reject_unknown,omitempty"`  // RejectUnknown indicates if unknown cluster connections will be rejected
-	WriteDeadline  time.Duration           `json:"write_deadline,omitempty"`  // WriteDeadline is the maximum time writes to sockets have to complete
-	WriteTimeout   string                  `json:"write_timeout,omitempty"`   // WriteTimeout is the closure policy for write deadline errors
+	Name            string                  `json:"name,omitempty"`              // Name is the configured cluster name
+	Host            string                  `json:"host,omitempty"`              // Host is the host the gateway listens on for connections
+	Port            int                     `json:"port,omitempty"`              // Port is the post gateway connections listens on
+	AuthTimeout     float64                 `json:"auth_timeout,omitempty"`      // AuthTimeout is the time cluster connections have to complete authentication
+	TLSTimeout      float64                 `json:"tls_timeout,omitempty"`       // TLSTimeout is how long TLS operations have to complete
+	TLSRequired     bool                    `json:"tls_required,omitempty"`      // TLSRequired indicates if TLS is required for connections
+	TLSVerify       bool                    `json:"tls_verify,omitempty"`        // TLSVerify indicates if full verification of TLS connections is performed
+	Advertise       string                  `json:"advertise,omitempty"`         // Advertise is the URL advertised to remote gateway clients
+	ConnectRetries  int                     `json:"connect_retries,omitempty"`   // ConnectRetries is how many connection attempts the route will make
+	Gateways        []RemoteGatewayOptsVarz `json:"gateways,omitempty"`          // Gateways is state of configured gateway remotes
+	RejectUnknown   bool                    `json:"reject_unknown,omitempty"`    // RejectUnknown indicates if unknown cluster connections will be rejected
+	WriteDeadline   time.Duration           `json:"write_deadline,omitempty"`    // WriteDeadline is the maximum time writes to sockets have to complete
+	WriteTimeout    string                  `json:"write_timeout,omitempty"`     // WriteTimeout is the closure policy for write deadline errors
+	TLSCertNotAfter time.Time               `json:"tls_cert_not_after,omitzero"` // TLSCertNotAfter is the expiration date of the TLS certificaet
 }
 
 // RemoteGatewayOptsVarz contains monitoring remote gateway information
@@ -1343,6 +1357,7 @@ type LeafNodeOptsVarz struct {
 	TLSOCSPPeerVerify bool                 `json:"tls_ocsp_peer_verify,omitempty"` // TLSOCSPPeerVerify indicates if OCSP verification will be performed
 	WriteDeadline     time.Duration        `json:"write_deadline,omitempty"`       // WriteDeadline is the maximum time writes to sockets have to complete
 	WriteTimeout      string               `json:"write_timeout,omitempty"`        // WriteTimeout is the closure policy for write deadline errors
+	TLSCertNotAfter   time.Time            `json:"tls_cert_not_after,omitzero"`    // TLSCertNotAfter is the expiration date of the TLS certificate
 }
 
 // DenyRules Contains lists of subjects not allowed to be imported/exported
@@ -1373,6 +1388,7 @@ type MQTTOptsVarz struct {
 	AckWait           time.Duration `json:"ack_wait,omitempty"`             // AckWait is how long the internal JetStream state store will allow acks to complete
 	MaxAckPending     uint16        `json:"max_ack_pending,omitempty"`      // MaxAckPending is how many outstanding acks the internal JetStream state store will allow
 	TLSOCSPPeerVerify bool          `json:"tls_ocsp_peer_verify,omitempty"` // TLSOCSPPeerVerify indicates if OCSP verification will be done
+	TLSCertNotAfter   time.Time     `json:"tls_cert_not_after,omitzero"`    // TLSCertNotAfter is the expiration date of the TLS certificate
 }
 
 // WebsocketOptsVarz contains monitoring websocket information
@@ -1391,6 +1407,7 @@ type WebsocketOptsVarz struct {
 	AllowedOrigins    []string      `json:"allowed_origins,omitempty"`      // AllowedOrigins list of configured trusted origins
 	Compression       bool          `json:"compression,omitempty"`          // Compression indicates if compression is supported
 	TLSOCSPPeerVerify bool          `json:"tls_ocsp_peer_verify,omitempty"` // TLSOCSPPeerVerify indicates if OCSP verification will be done
+	TLSCertNotAfter   time.Time     `json:"tls_cert_not_after,omitzero"`    // TLSCertNotAfter is the expiration date of the TLS certificate
 }
 
 // OCSPResponseCacheVarz contains OCSP response cache information
@@ -1455,6 +1472,22 @@ func myUptime(d time.Duration) string {
 		return fmt.Sprintf("%dm%ds", tmins, tsecs%60)
 	}
 	return fmt.Sprintf("%ds", tsecs)
+}
+
+func tlsCertNotAfter(config *tls.Config) time.Time {
+	if config == nil || len(config.Certificates) == 0 {
+		return time.Time{}
+	}
+	cert := config.Certificates[0]
+	leaf := cert.Leaf
+	if leaf == nil {
+		var err error
+		leaf, err = x509.ParseCertificate(cert.Certificate[0])
+		if err != nil {
+			return time.Time{}
+		}
+	}
+	return leaf.NotAfter
 }
 
 // HandleRoot will show basic info and links to others handlers.
@@ -1782,6 +1815,13 @@ func (s *Server) updateVarzConfigReloadableFields(v *Varz) {
 
 	v.TLSOCSPPeerVerify = s.ocspPeerVerify && v.TLSRequired && s.opts.tlsConfigOpts != nil && s.opts.tlsConfigOpts.OCSPPeerConfig != nil && s.opts.tlsConfigOpts.OCSPPeerConfig.Verify
 
+	v.TLSCertNotAfter = tlsCertNotAfter(opts.TLSConfig)
+	v.Cluster.TLSCertNotAfter = tlsCertNotAfter(opts.Cluster.TLSConfig)
+	v.Gateway.TLSCertNotAfter = tlsCertNotAfter(opts.Gateway.TLSConfig)
+	v.LeafNode.TLSCertNotAfter = tlsCertNotAfter(opts.LeafNode.TLSConfig)
+	v.MQTT.TLSCertNotAfter = tlsCertNotAfter(opts.MQTT.TLSConfig)
+	v.Websocket.TLSCertNotAfter = tlsCertNotAfter(opts.Websocket.TLSConfig)
+
 	if opts.Proxies != nil {
 		if v.Proxies == nil {
 			v.Proxies = &ProxiesOptsVarz{}
@@ -1831,6 +1871,10 @@ func (s *Server) updateVarzRuntimeFields(v *Varz, forceUpdate bool, pcpu float64
 	v.InBytes = atomic.LoadInt64(&s.inBytes)
 	v.OutMsgs = atomic.LoadInt64(&s.outMsgs)
 	v.OutBytes = atomic.LoadInt64(&s.outBytes)
+	v.InClientMsgs = atomic.LoadInt64(&s.inClientMsgs)
+	v.InClientBytes = atomic.LoadInt64(&s.inClientBytes)
+	v.OutClientMsgs = atomic.LoadInt64(&s.outClientMsgs)
+	v.OutClientBytes = atomic.LoadInt64(&s.outClientBytes)
 	v.SlowConsumers = atomic.LoadInt64(&s.slowConsumers)
 	v.StalledClients = atomic.LoadInt64(&s.stalls)
 	v.SlowConsumersStats = &SlowConsumersStats{
@@ -2465,7 +2509,7 @@ func (s *Server) AccountStatz(opts *AccountStatzOptions) (*AccountStatz, error) 
 		s.accounts.Range(func(key, a any) bool {
 			acc := a.(*Account)
 			acc.mu.RLock()
-			if (opts != nil && opts.IncludeUnused) || acc.numLocalConnections() != 0 {
+			if (opts != nil && opts.IncludeUnused) || acc.numLocalConnections() != 0 || acc.numLocalLeafNodes() != 0 {
 				stz.Accounts = append(stz.Accounts, acc.statz())
 			}
 			acc.mu.RUnlock()
@@ -2476,7 +2520,7 @@ func (s *Server) AccountStatz(opts *AccountStatzOptions) (*AccountStatz, error) 
 			if acc, ok := s.accounts.Load(a); ok {
 				acc := acc.(*Account)
 				acc.mu.RLock()
-				if opts.IncludeUnused || acc.numLocalConnections() != 0 {
+				if opts.IncludeUnused || acc.numLocalConnections() != 0 || acc.numLocalLeafNodes() != 0 {
 					stz.Accounts = append(stz.Accounts, acc.statz())
 				}
 				acc.mu.RUnlock()
@@ -2519,21 +2563,11 @@ func ResponseHandler(w http.ResponseWriter, r *http.Request, data []byte) {
 }
 
 // handleResponse handles responses for monitoring routes with a specific HTTP status code.
-func handleResponse(code int, w http.ResponseWriter, r *http.Request, data []byte) {
-	// Get callback from request
-	callback := r.URL.Query().Get("callback")
-	if callback != _EMPTY_ {
-		// Response for JSONP
-		w.Header().Set("Content-Type", "application/javascript")
-		w.WriteHeader(code)
-		fmt.Fprintf(w, "%s(%s)", callback, data)
-	} else {
-		// Otherwise JSON
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.WriteHeader(code)
-		w.Write(data)
-	}
+func handleResponse(code int, w http.ResponseWriter, _ *http.Request, data []byte) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.WriteHeader(code)
+	w.Write(data)
 }
 
 func (reason ClosedState) String() string {
@@ -3103,7 +3137,7 @@ func (s *Server) accountDetail(jsa *jsAccount, optStreams, optConsumers, optDire
 						if !optCfg {
 							cInfo.Config = nil
 						}
-						sdet.DirectConsumer = append(sdet.Consumer, cInfo)
+						sdet.DirectConsumer = append(sdet.DirectConsumer, cInfo)
 					}
 				}
 			}
@@ -3672,11 +3706,8 @@ func (s *Server) healthz(opts *HealthzOptions) *HealthStatus {
 				if streamFound {
 					// if consumer option is passed, verify that the consumer exists on stream
 					if opts.Consumer != _EMPTY_ {
-						for _, cons := range s.consumers {
-							if cons.name == opts.Consumer {
-								consumerFound = true
-								break
-							}
+						if s.lookupConsumer(opts.Consumer) != nil {
+							consumerFound = true
 						}
 					}
 					break
@@ -3985,6 +4016,11 @@ func (s *Server) healthz(opts *HealthzOptions) *HealthStatus {
 	return health
 }
 
+// Healthz returns the health status of the server.
+func (s *Server) Healthz(opts *HealthzOptions) *HealthStatus {
+	return s.healthz(opts)
+}
+
 type ExpvarzStatus struct {
 	Memstats json.RawMessage `json:"memstats"`
 	Cmdline  json.RawMessage `json:"cmdline"`
@@ -4191,9 +4227,10 @@ func (s *Server) Raftz(opts *RaftzOptions) *RaftzStatus {
 			if id == n.id {
 				continue
 			}
+			kp := n.membChange == nil || n.membChange.peer != id
 			peer := RaftzGroupPeer{
 				Name:                s.serverNameForNode(id),
-				Known:               p.kp,
+				Known:               kp,
 				LastReplicatedIndex: p.li,
 			}
 			if !p.ts.IsZero() {

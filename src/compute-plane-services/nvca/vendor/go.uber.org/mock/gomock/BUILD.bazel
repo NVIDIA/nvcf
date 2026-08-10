@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "gomock",
+    srcs = [
+        "call.go",
+        "callset.go",
+        "controller.go",
+        "doc.go",
+        "matchers.go",
+        "string.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/go.uber.org/mock/gomock",
+    importpath = "go.uber.org/mock/gomock",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":gomock",
+    visibility = ["//visibility:public"],
+)

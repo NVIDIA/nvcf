@@ -1,0 +1,72 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@gazelle//:def.bzl", "gazelle")
+load("//rules/oci:defs.bzl", "go_oci_image")
+
+# Gazelle directives -- Go import prefix matches go.mod.
+# gazelle:prefix github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap
+# Skip non-Go subtrees so Gazelle does not try to generate BUILD files
+# in vendored or unrelated directories.
+# gazelle:exclude .bazel-cache
+# gazelle:exclude bazel-bin
+# gazelle:exclude bazel-out
+# gazelle:exclude bazel-testlogs
+# gazelle:exclude bazel-nvsnap
+# gazelle:exclude docker
+# gazelle:exclude docs
+# gazelle:exclude deploy
+# gazelle:exclude terraform
+# gazelle:exclude placeholder
+# gazelle:exclude python3.12
+# gazelle:exclude scripts
+# gazelle:exclude patches
+# gazelle:exclude cuda-checkpoint
+# gazelle:exclude .github
+# gazelle:exclude ui/src
+# gazelle:exclude ui/dist
+# gazelle:exclude ui/node_modules
+# gazelle:exclude lib/nvsnap_intercept
+# gazelle:exclude lib/nvsnap_restore_helper
+# Make Gazelle resolve external Go module deps via the go_deps extension
+# in MODULE.bazel rather than http_archive workspace rules.
+# gazelle:resolve go github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap //:go_default_library
+
+gazelle(
+    name = "gazelle",
+)
+
+gazelle(
+    name = "gazelle_update_repos",
+    args = [
+        "-from_file=go.mod",
+        "-to_macro=deps.bzl%go_dependencies",
+        "-prune",
+    ],
+    command = "update-repos",
+)
+
+# ============================================================================
+# Image lanes
+# ============================================================================
+# nvsnap-agent: packages the Go binary plus restore-entrypoint helper.
+# Today's image is binary-only on distroless/static; criu integration
+# (the criu-builder stage in docker/Dockerfile.agent) is a follow-up.
+go_oci_image(
+    name = "nvsnap_agent_image",
+    base = "@distroless_static",
+    binary = "//src/compute-plane-services/nvsnap/cmd/agent",
+    entrypoint = ["/agent"],
+    registry = "nvcr.io/0651155215864979/ncp-dev/nvsnap-agent",
+)
+
+# nvsnap-server: packages nvsnap-server. UI build (Vite/Tailwind in ui/)
+# is a follow-up; today's image serves the binary without embedded UI
+# assets.
+go_oci_image(
+    name = "nvsnap_server_image",
+    base = "@distroless_static",
+    binary = "//src/compute-plane-services/nvsnap/cmd/nvsnap-server",
+    entrypoint = ["/nvsnap-server"],
+    registry = "nvcr.io/0651155215864979/ncp-dev/nvsnap-server",
+)

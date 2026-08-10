@@ -21,7 +21,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -42,8 +44,9 @@ const (
 	binaryVersionMessage = "%s %s on PATH (%s required)"
 )
 
-// CheckResult is the outcome of one pre-flight check (one row in the linkerd-style
-// output). Mirrors the JSON schema from spec §6.2.
+// One row in the linkerd-style output. Logs is internal-only and is not
+// forwarded into the CheckCompleted JSONL wire event, so it never leaks
+// into the stable JSON contract.
 type CheckResult struct {
 	ID       string
 	Category string
@@ -53,6 +56,7 @@ type CheckResult struct {
 	Detail   string // optional: short version string or extra context (M+8.11)
 	HintURL  string
 	Err      error // populated only when the check itself failed to execute
+	Logs     string // optional: full check transcript for --show-logs; not emitted to JSON
 }
 
 // BinarySpec defines a tool that must be on PATH and a version constraint.
@@ -209,10 +213,35 @@ func DefaultTools() []BinarySpec {
 			LookPath: exec.LookPath, Version: probeHelmfileVersion,
 		},
 		{
-			Name: "helm", MinVer: semver.MustParse("3.14.0"), MaxVerExclusive: semver.MustParse("4.0.0"),
+			Name: "helm", MinVer: semver.MustParse("3.14.0"),
 			HintURL:  "https://helm.sh/docs/intro/install/",
 			LookPath: exec.LookPath, Version: probeHelmVersion,
 		},
+	}
+}
+
+// DefaultToolsWithPreferredDir returns the default tool specs, but prefers
+// binaries from preferredDir when they exist. This lets local stack workflows
+// use the stack-pinned bin/ tools before falling back to the host PATH.
+func DefaultToolsWithPreferredDir(preferredDir string) []BinarySpec {
+	tools := DefaultTools()
+	if preferredDir == "" {
+		return tools
+	}
+	for i := range tools {
+		fallback := tools[i].LookPath
+		tools[i].LookPath = preferredDirLookPath(preferredDir, fallback)
+	}
+	return tools
+}
+
+func preferredDirLookPath(preferredDir string, fallback func(string) (string, error)) func(string) (string, error) {
+	return func(name string) (string, error) {
+		candidate := filepath.Join(preferredDir, name)
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+			return candidate, nil
+		}
+		return fallback(name)
 	}
 }
 
@@ -245,6 +274,21 @@ func (r Role) String() string {
 type RoleConfig struct {
 	KubeContext string // used for the kubectl-check probes (passed to subprocesses)
 	SISURL      string // when non-empty, RoleComputePlane adds an HTTP-reachability probe
+
+	// InotifyProber probes node-level inotify limits on the compute-plane
+	// cluster. When nil, the inotify check is skipped (e.g. callers that opted
+	// out via --skip-inotify-check or environments where the prober cannot be
+	// constructed). Production wires NewInotifyProber; tests pass fakes.
+	InotifyProber NodeInotifyProber
+
+	// Nil skips the cluster-validator check. The cmd layer emits a stderr
+	// notice when the operator explicitly opted out; the check schema
+	// stays clean so JSON consumers don't see a misleading "passed=true"
+	// row for a probe that never actually ran.
+	ClusterValidator           ClusterValidator
+	ClusterValidatorImage      string
+	ClusterValidatorPullSecret string
+	ClusterValidatorNoCleanup  bool
 }
 
 // categorySpec groups a set of checks under a named category. Categories run
@@ -301,6 +345,9 @@ func buildLocalHostCategory(cfg PreflightConfig) *categorySpec {
 			},
 		})
 	}
+	if compat := helmRuntimeCompatibilityCheck(cfg.Tools); compat != nil {
+		checks = append(checks, *compat)
+	}
 	if len(checks) == 0 {
 		return nil
 	}
@@ -323,7 +370,12 @@ func controlPlaneCheckCategory(_ RoleConfig) categorySpec {
 }
 
 // computePlaneCheckCategory returns the placeholder compute-plane checks.
-// Conditionally adds an SIS reachability probe when RoleConfig.SISURL is set.
+// Conditionally adds an SIS reachability probe when RoleConfig.SISURL is set,
+// a node-inotify-limits probe when RoleConfig.InotifyProber is set, and a
+// containerized cluster-validator probe when RoleConfig.ClusterValidator is
+// set. Each conditional probe is opt-in via its own RoleConfig field so
+// callers that opted out via a --skip-* flag simply leave the corresponding
+// field nil/empty and the check is omitted from the category entirely.
 func computePlaneCheckCategory(rc RoleConfig) categorySpec {
 	cat := categorySpec{
 		name: "compute-plane-cluster",
@@ -336,7 +388,168 @@ func computePlaneCheckCategory(rc RoleConfig) categorySpec {
 	if rc.SISURL != "" {
 		cat.checks = append(cat.checks, sisReachabilityCheck(rc.SISURL))
 	}
+	if rc.InotifyProber != nil {
+		cat.checks = append(cat.checks, nodeInotifyCheck(rc.InotifyProber, rc.KubeContext))
+	}
+	if rc.ClusterValidator != nil {
+		cat.checks = append(cat.checks, clusterValidatorCheck(
+			rc.ClusterValidator,
+			rc.KubeContext,
+			rc.ClusterValidatorImage,
+			rc.ClusterValidatorPullSecret,
+			rc.ClusterValidatorNoCleanup,
+		))
+	}
 	return cat
+}
+
+// Required minimum inotify limits per
+// docs/user/cluster-management/self-managed.md#node-inotify-limits.
+// NVCA bootstrap fails with "too many open files" when these are too low,
+// which surfaces downstream as opaque errors like empty clusterGroups or
+// "Invalid GPU specified" on function deploy.
+const (
+	minInotifyMaxUserInstances = 8192
+	minInotifyMaxUserWatches   = 524288
+	inotifyHintURL             = "https://docs.nvidia.com/nvcf/self-managed-clusters#node-inotify-limits"
+)
+
+// NodeInotifyLimits captures one node's observed inotify sysctls. Err is
+// populated only on per-node probe failure; cluster-wide failures surface as
+// the prober's returned error instead.
+type NodeInotifyLimits struct {
+	NodeName         string
+	MaxUserInstances int64
+	MaxUserWatches   int64
+	Err              error
+}
+
+// NodeInotifyProber returns one NodeInotifyLimits per cluster node, or a
+// non-nil error if probing the cluster failed before any per-node result
+// could be collected.
+type NodeInotifyProber func(ctx context.Context, kubeContext string) ([]NodeInotifyLimits, error)
+
+// nodeInotifyCheck verifies fs.inotify.max_user_instances and
+// fs.inotify.max_user_watches on every compute-plane node meet NVCA's
+// minimums. On failure it lists the offending nodes with observed-vs-required
+// values and a link to the documented remediation DaemonSet.
+func nodeInotifyCheck(prober NodeInotifyProber, kubeContext string) binaryCheckSpec {
+	const id = "node-inotify-limits"
+	return binaryCheckSpec{
+		ID:         id,
+		HumanLabel: "checking node inotify limits…",
+		Run: func(ctx context.Context) CheckResult {
+			r := CheckResult{
+				ID:       id,
+				Severity: "error",
+				HintURL:  inotifyHintURL,
+			}
+			limits, err := prober(ctx, kubeContext)
+			if err != nil {
+				r.Severity = "warning"
+				r.Message = "node inotify probe failed: " + err.Error()
+				r.Err = err
+				return r
+			}
+			if len(limits) == 0 {
+				r.Severity = "warning"
+				r.Passed = true
+				r.Message = "no nodes returned by inotify probe; skipping"
+				return r
+			}
+			var failing, probeErrs []string
+			for _, l := range limits {
+				if l.Err != nil {
+					probeErrs = append(probeErrs, fmt.Sprintf("%s: %v", l.NodeName, l.Err))
+					continue
+				}
+				if l.MaxUserInstances < minInotifyMaxUserInstances || l.MaxUserWatches < minInotifyMaxUserWatches {
+					failing = append(failing, fmt.Sprintf(
+						"%s (max_user_instances=%d/%d, max_user_watches=%d/%d)",
+						l.NodeName,
+						l.MaxUserInstances, minInotifyMaxUserInstances,
+						l.MaxUserWatches, minInotifyMaxUserWatches,
+					))
+				}
+			}
+			// Limit violations take priority over probe errors. If both are
+			// present, surface the violations as error and append the probe
+			// errors so non-compliant nodes are never hidden behind warning
+			// noise from an unrelated RBAC/scheduling failure.
+			if len(failing) > 0 {
+				msg := fmt.Sprintf(
+					"node inotify limits below NVCA minimums (max_user_instances >= %d, max_user_watches >= %d) on %d node(s): %s",
+					minInotifyMaxUserInstances, minInotifyMaxUserWatches, len(failing), strings.Join(failing, "; "),
+				)
+				if len(probeErrs) > 0 {
+					msg += fmt.Sprintf("; additionally could not probe %d node(s): %s",
+						len(probeErrs), strings.Join(probeErrs, "; "))
+				}
+				r.Message = msg
+				return r
+			}
+			if len(probeErrs) > 0 {
+				r.Severity = "warning"
+				r.Message = fmt.Sprintf(
+					"could not probe inotify limits on %d node(s): %s",
+					len(probeErrs), strings.Join(probeErrs, "; "),
+				)
+				return r
+			}
+			r.Passed = true
+			r.Message = fmt.Sprintf("inotify limits meet NVCA minimums on %d node(s)", len(limits))
+			return r
+		},
+	}
+}
+
+// Severity mapping: runner errors (RBAC/pull/timeout) -> warning, since
+// they're operator-fixable infra issues; validator Passed=false ->
+// error (real check failures); Passed=true -> info.
+func clusterValidatorCheck(cv ClusterValidator, kubeContext, image, pullSecret string, noCleanup bool) binaryCheckSpec {
+	const id = "cluster-validator"
+	return binaryCheckSpec{
+		ID:         id,
+		HumanLabel: "running cluster-validator probe…",
+		Run: func(ctx context.Context) CheckResult {
+			r := CheckResult{
+				ID:      id,
+				HintURL: clusterValidatorHintURL,
+			}
+			result := cv(ctx, ClusterValidatorParams{
+				KubeContext: kubeContext,
+				Image:       image,
+				PullSecret:  pullSecret,
+				NoCleanup:   noCleanup,
+			})
+			r.Logs = result.Logs
+			r.Detail = clusterValidatorDetail(result.JobName)
+
+			if result.Err != nil {
+				r.Severity = "warning"
+				r.Message = "cluster-validator did not complete: " + result.Err.Error()
+				r.Err = result.Err
+				return r
+			}
+			r.Passed = result.Passed
+			if result.Passed {
+				r.Severity = "info"
+				r.Message = "cluster passed cluster-validator built-in checks"
+				return r
+			}
+			r.Severity = "error"
+			r.Message = fmt.Sprintf("cluster-validator reported failures (exit code %d)", result.ExitCode)
+			return r
+		},
+	}
+}
+
+func clusterValidatorDetail(jobName string) string {
+	hint := kubectlLogsHint(jobName)
+	if hint == "" {
+		return ""
+	}
+	return "logs: " + hint
 }
 
 // placeholderCheck returns a binaryCheckSpec that emits a passing "info"

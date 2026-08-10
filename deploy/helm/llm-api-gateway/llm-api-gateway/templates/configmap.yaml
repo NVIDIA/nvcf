@@ -1,0 +1,70 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+{{- $cfg := .Values.llmApiGateway.config }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "llm-api-gateway.fullname" . }}
+  namespace: {{ include "llm-api-gateway.namespace" . }}
+  labels:
+    {{- include "llm-api-gateway.labels" . | nindent 4 }}
+data:
+  PORT: "8080"
+  NVCF_REGION: {{ $cfg.region | quote }}
+  STARGATE_URL: {{ required "llmApiGateway.config.requestRouterUrl is required" $cfg.requestRouterUrl | quote }}
+  STARGATE_CONNECT_TIMEOUT: {{ $cfg.requestRouterConnectTimeout | quote }}
+  STARGATE_REQUEST_TIMEOUT: {{ $cfg.requestRouterRequestTimeout | quote }}
+  NVCF_GRPC_ADDR: {{ $cfg.nvcfGrpcAddr | quote }}
+  NVCF_GRPC_INSECURE: {{ $cfg.nvcfGrpcInsecure | toString | quote }}
+  NVCF_GRPC_TIMEOUT: {{ $cfg.nvcfGrpcTimeout | quote }}
+  SECRETS_PATH: "/vault/secrets/secrets.json"
+  RATE_LIMIT_ENABLED: {{ $cfg.rateLimitEnabled | toString | quote }}
+  RATE_LIMIT_FAIL_OPEN: {{ $cfg.rateLimitFailOpen | toString | quote }}
+  {{- with .Values.llmApiGateway.olric }}
+  {{- if .enabled }}
+  OLRIC_ENABLED: "true"
+  OLRIC_ENV: {{ .env | quote }}
+  OLRIC_BIND_PORT: {{ .bindPort | toString | quote }}
+  OLRIC_MEMBERLIST_BIND_PORT: {{ .memberlistPort | toString | quote }}
+  OLRIC_K8S_LABEL_SELECTOR: {{ include "llm-api-gateway.olric.labelSelector" $ | quote }}
+  OLRIC_REPLICA_COUNT: {{ .replicaCount | toString | quote }}
+  OLRIC_PARTITION_COUNT: {{ .partitionCount | toString | quote }}
+  OLRIC_DMAP_NAME: {{ .dmapName | quote }}
+  OLRIC_STARTUP_TIMEOUT: {{ .startupTimeout | quote }}
+  OLRIC_LOG_LEVEL: {{ .logLevel | quote }}
+  {{- end }}
+  {{- end }}
+  {{- with $cfg.localFunctionId }}
+  LOCAL_FUNCTION_ID: {{ . | quote }}
+  {{- end }}
+  {{- with $cfg.defaultModel }}
+  NVCF_DEFAULT_MODEL: {{ . | quote }}
+  {{- end }}
+  NVCF_DEFAULT_RPM: {{ $cfg.defaultRpm | toString | quote }}
+  NVCF_DEFAULT_TPM: {{ $cfg.defaultTpm | toString | quote }}
+  {{- with .Values.llmApiGateway.metrics }}
+  {{- if .enabled }}
+  METRICS_PORT: {{ .port | toString | quote }}
+  {{- end }}
+  {{- end }}
+  OTEL_SERVICE_NAME: {{ include "llm-api-gateway.fullname" . | quote }}
+  {{- with .Values.llmApiGateway.observability.tracing }}
+  {{- if .enabled }}
+  OTEL_TRACES_EXPORTER: otlp
+  OTEL_EXPORTER_OTLP_ENDPOINT: {{ .endpoint | quote }}
+  OTEL_EXPORTER_OTLP_PROTOCOL: {{ default "grpc" .protocol | quote }}
+  {{- end }}
+  {{- end }}

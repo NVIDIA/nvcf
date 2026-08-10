@@ -177,6 +177,32 @@ sum(nvca_instance_type_unschedulable)
 
 ---
 
+### `nvca_gpu_node_unclassified_count`
+
+**Type:** Gauge
+
+**Description:** Count of nodes that have GPU resources present in `status.allocatable` but no recognized `nvca.nvcf.nvidia.io/instance-type` label (missing entirely, or set to a value NVCA does not know about). These nodes' GPUs are excluded from `nvca_instance_type_capacity`, `nvca_instance_type_allocatable`, and `nvca_instance_type_unschedulable`, since those metrics are bucketed per instance type. A nonzero value indicates a GPU discovery/labeling gap independent of the per-instance-type numbers.
+
+**Labels:**
+
+- `gpu_family` - Value of the `nvidia.com/gpu.family` node label (e.g. `blackwell`)
+- `gpu_machine` - Value of the `nvidia.com/gpu.machine` node label (e.g. `GB200-NVL`)
+
+---
+
+### `nvca_gpu_node_total_count`
+
+**Type:** Gauge
+
+**Description:** Total count of GPU nodes that are part of the cluster, both classified (attributed to a known instance type) and unclassified (`nvca_gpu_node_unclassified_count`). Use alongside the unclassified count to gauge the proportion of GPU capacity NVCA is failing to classify.
+
+**Labels:**
+
+- `gpu_family` - Value of the `nvidia.com/gpu.family` node label (e.g. `blackwell`)
+- `gpu_machine` - Value of the `nvidia.com/gpu.machine` node label (e.g. `GB200-NVL`)
+
+---
+
 ## Event Metrics
 
 ### `nvca_event_error_total`
@@ -340,9 +366,15 @@ sum by (image_registry) (nvca_image_pull_issue_total)
 - `workload_type` - Kubernetes workload type: `container` or `helm`
 - `workload_kind` - NVCF request kind, derived from `req.Spec.Action`: `function` or `task`
 - `workload_status` - Terminal status: `success` or `failure`
-- `failure_category` - Failure root cause (empty string for success). See table below.
+- `failure_category` - Failure root cause (empty string for success). See tables below.
 
 **Failure Categories:**
+
+Each `failure_category` value is derived from the workload's terminal `ICMSInstanceState`
+by `ICMSInstanceStateToFailureCategory` in `metrics.go`. The state itself is set by the
+pod/miniservice reconcilers in `pkg/nvca/`. The mapping table below is the quick reference;
+the detailed table that follows tells a cluster manager what each value means, what
+condition in NVCA raises it, and where to look first.
 
 | Category | Description | Mapped from ICMSInstanceState |
 |----------|-------------|-------------------------------|
@@ -350,6 +382,7 @@ sum by (image_registry) (nvca_image_pull_issue_total)
 | `init_stuck` | Init container stuck | `ICMSInstanceFailedInitContainerStuck` |
 | `init_restart_loop` | Init container restart loop | `ICMSInstanceFailedInitContainerRestartLoop` |
 | `container_restart_loop` | Application container restart loop | `ICMSInstanceFailedContainerRestartLoop` |
+| `create_container_error` | Kubelet cannot create the container | `ICMSInstanceFailedCreateContainerError` |
 | `no_capacity` | No GPU/node capacity available | `ICMSInstanceKilledNoCapacity` |
 | `admission_error` | Pod admission rejected | `ICMSInstanceKilledAdmissionError` |
 | `shared_storage` | Shared storage failure | `ICMSInstanceSharedStorageFailure` |
@@ -362,9 +395,38 @@ sum by (image_registry) (nvca_image_pull_issue_total)
 | `precondition_failure` | Precondition check failed | `ICMSInstanceTerminatedPreconditionFailure` |
 | `unknown` | Generic failure (fallback) | `ICMSInstanceFailed` |
 
-**Cardinality:** 64 series (2 workload types × 2 workload kinds × 16 status/category combinations)
+Triage guide. Use this table to deduce the cause of a workload-deployment
+failure from the `failure_category` label. "When it fires" describes the
+condition NVCA detects; "Owner" is the party who usually has to act; "Where to
+look / recommended action" is the first debugging step for a cluster manager.
 
-**Zero-initialized:** Yes — all 64 label combinations are pre-initialized to 0 on startup.
+| Category | When it fires | Owner | Where to look / recommended action |
+|----------|---------------|-------|-------------------------------------|
+| `image_pull` | Pod scheduled but the kubelet cannot pull the container image past `MaxImagePullErrorThreshold` (ImagePull/ErrImagePull/ImagePullBackOff). | Function owner / registry | Check image tag exists and the pull secret is valid. `nvca_image_pull_issue_total{image_registry=...}` shows the registry. Verify registry reachability and rate limits from the node. |
+| `init_stuck` | An init container has not completed within `PodLaunchThresholdMinutesOnInitFailure` (or `IsPodStuckInitializing` trips). | Function owner | Inspect init container logs and events. Common causes: model/asset download hanging, a dependency service unreachable, or an init command that never exits. |
+| `init_restart_loop` | An init container keeps restarting (crash on start, repeated non-zero exit). | Function owner | Read init container logs from the last few restarts. Usually a bad entrypoint, missing config, or a failing readiness precondition inside the init step. |
+| `container_restart_loop` | The application container keeps restarting after start (CrashLoopBackOff). | Function owner | Read application logs across restarts. Look for OOMKilled (raise memory request/limit), missing env/secret, or an application-level panic on startup. |
+| `create_container_error` | Kubelet reports CreateContainerError / CreateContainerConfigError; the container spec cannot be realized. Not zero-initialized, so it only appears once observed. | Cluster manager | Check pod events for the exact message. Typical causes: a referenced ConfigMap/Secret or volume mount is missing, or an invalid device/runtime request on the node. |
+| `no_capacity` | Pod stays Pending and unscheduled past `PodScheduledThreshold` (no node with the requested GPU/resources). | Cluster manager | Confirm GPU nodes of the requested type are Ready and have free capacity. Check taints, node selectors, and the scheduler (`SchedulerWorkloadCount`). Scale the node pool or free workers. |
+| `admission_error` | The API server rejects the pod at admission (webhook/quota/policy denial). | Cluster manager | Read the admission rejection in pod events. Check admission webhooks, ResourceQuota, LimitRange, and PodSecurity/network policies in the target namespace. |
+| `shared_storage` | The miniservice/helm workload fails provisioning or mounting shared (SMB/read) storage. | Cluster manager | Verify the SMB CSI driver is healthy and the share/credentials are valid. Check PVC and pod events for mount errors. |
+| `persistent_storage` | Internal persistent-storage (PVC) provisioning or attach fails. | Cluster manager | Check the storage class, provisioner health, and PVC binding state. Look for attach/detach errors in pod and PV events. |
+| `degraded_worker` | A Running pod is detected unhealthy/degraded by `IsPodDegraded` (for example a GPU/node fault) after start. | Cluster manager | Inspect node health and GPU state (XID errors, NVLink). Cordon and remediate the node. If `autoPurgeDegradedWorkers` is off, the workload is left for manual handling. |
+| `not_found` | The expected pod/miniservice for an active request no longer exists (deleted out from under NVCA). | Cluster manager | Usually a manual delete or an external controller/GC removed the workload. Correlate with `nvca_orphaned_resource_cleanup_total` and cluster audit logs. |
+| `terminal_error` | NVCA classifies the failure as unrecoverable and terminates the request with a terminal error. | Function owner / cluster manager | Read `SystemFailure` on the termination update for the specific reason. This is a hard stop; the request will not be retried as-is. |
+| `sync_action` | The workload is terminated by a sync/reconcile action (a newer desired state supersedes it). | Expected / control plane | Normally benign: the control plane replaced or scaled down the request. Only investigate if it correlates with unexpected churn. |
+| `service_maintenance` | The workload is terminated for planned service maintenance. | Expected / cluster manager | Expected during maintenance windows. Confirm the maintenance was intended; workloads should reschedule afterward. |
+| `precondition_failure` | A precondition check fails before or during deployment, so the request is terminated. | Cluster manager | Read `SystemFailure` for the failed precondition. Verify the cluster meets the workload's requirements (features, capabilities, config). |
+| `unknown` | Generic `ICMSInstanceFailed` with no more specific mapping (fallback bucket). | Cluster manager | A rising `unknown` rate means a failure mode is not yet categorized. Inspect pod/miniservice events and file an issue so the state can be mapped to a specific category. |
+
+**Cardinality:** 64 zero-initialized series (2 workload types × 2 workload kinds × 16
+status/category combinations: 15 zero-initialized failure categories plus the empty
+success category). `create_container_error` is not zero-initialized, so it appears as an
+additional series only after it is first observed.
+
+**Zero-initialized:** Yes. The 64 combinations listed above are pre-initialized to 0 on
+startup. `create_container_error` is intentionally excluded from `AllFailureCategories`
+and shows up only when the condition occurs.
 
 **Usage:**
 
@@ -512,8 +574,9 @@ rate(nvca_k8s_api_failure_total[5m]) > 0.1
 - `nvca_version` - NVCA version
 - `result` - Operation result: `success` or `failure`
 - `failure_reason` - Specific failure reason (empty string for success)
+- `backend` - Model cache backend: `nvmesh`, `sharedfs`, `samba`, `ephemeral` (empty when not yet known, e.g. early validation failures)
 
-**Note:** This metric uses 3 labels (excluding `nvca_nca_id`) for backwards compatibility with storage metrics.
+**Note:** This metric uses the storage labels (excluding `nvca_nca_id`) for backwards compatibility with storage metrics.
 
 **Failure Reasons:**
 | Reason | Description |
@@ -549,13 +612,69 @@ sum(rate(nvca_model_cache_result_total{result="failure"}[5m])) /
 sum(rate(nvca_model_cache_result_total[5m])) > 0.1
 ```
 
+### `nvca_model_cache_backends`
+
+**Type:** Gauge
+
+**Description:** Number of model caches currently provisioned, by backend. For Samba this is the count of per-handle backing PVCs / servers ("how many Samba caches exist"); for NVMesh it is the count of retained primary PVs. Refreshed by the periodic idle-cleanup sweep.
+
+**Labels:** storage labels + `backend`.
+
+### `nvca_model_cache_backend_selected_total`
+
+**Type:** Counter
+
+**Description:** Total model cache requests by the backend selected for them (recorded once per request). Shows the backend mix across the fleet.
+
+**Labels:** storage labels + `backend`.
+
+### `nvca_model_cache_populate_total`
+
+**Type:** Counter
+
+**Description:** Total model cache populates, i.e. the single-writer download actually ran, by backend.
+
+**Labels:** storage labels + `backend`.
+
+### `nvca_model_cache_reuse_total`
+
+**Type:** Counter
+
+**Description:** Total model cache reuses, i.e. an already-populated cache was attached without a download (cache effectiveness), by backend.
+
+**Labels:** storage labels + `backend`.
+
+### `nvca_model_cache_reclaimed_total`
+
+**Type:** Counter
+
+**Description:** Total idle model caches reclaimed by garbage collection, by backend.
+
+**Labels:** storage labels + `backend`.
+
+**Usage:**
+
+```promql
+# How many Samba caches are currently provisioned
+nvca_model_cache_backends{backend="samba"}
+
+# Cache reuse ratio (effectiveness)
+sum(rate(nvca_model_cache_reuse_total[1h])) /
+(sum(rate(nvca_model_cache_reuse_total[1h])) + sum(rate(nvca_model_cache_populate_total[1h])))
+
+# Backend mix
+sum by (backend) (increase(nvca_model_cache_backend_selected_total[1h]))
+```
+
+**Tracing:** model cache reconciliation emits a `nvca.modelcache.reconcile` span per request (with a `nvcf.modelcache.backend` attribute), and a `nvca.modelcache.samba.ensure_infra` child span around per-handle Samba server provisioning.
+
 ---
 
 ### `nvca_storage_controller_request_duration`
 
-**Type:** Summary
+**Type:** Histogram
 
-**Description:** Duration of NVCA Storage Controller request to terminal state in **seconds**. Tracks how long it takes for storage requests to reach completion or failure.
+**Description:** Duration of NVCA Storage Controller request to terminal state in seconds. Tracks how long it takes for storage requests to reach completion or failure. Storage provisioning is a long-running operation with a 4-minute (240s) SLO, so the buckets are coarse and minutes-scale rather than the default sub-second Prometheus buckets, following OpenTelemetry explicit-bucket guidance for long-running operations.
 
 **Labels:**
 
@@ -566,22 +685,26 @@ sum(rate(nvca_model_cache_result_total[5m])) > 0.1
 
 **Note:** This metric uses 3 labels (excluding `nvca_nca_id`) for backwards compatibility.
 
-**Quantiles:** 50th, 90th, 99th percentiles
+**Buckets (seconds):** `[10, 30, 60, 120, 180, 240, 300, 600, 1200, 1800]`. The 240s boundary is the "Storage Provisioner Latency" panel SLO threshold.
 
 **Usage:**
 
 ```promql
-# Median storage request duration by phase
-nvca_storage_controller_request_duration{quantile="0.5"}
+# Fraction of storage requests within the 4-minute SLO (per phase)
+sum by (storage_request_phase) (rate(nvca_storage_controller_request_duration_bucket{le="240"}[5m]))
+  / sum by (storage_request_phase) (rate(nvca_storage_controller_request_duration_count[5m]))
 
-# 99th percentile storage request duration
-nvca_storage_controller_request_duration{quantile="0.99"}
+# 99th percentile storage request duration by phase
+histogram_quantile(0.99, sum by (storage_request_phase, le) (rate(nvca_storage_controller_request_duration_bucket[5m])))
+
+# Median (p50) storage request duration
+histogram_quantile(0.5, sum by (le) (rate(nvca_storage_controller_request_duration_bucket[5m])))
 
 # Average storage request duration by phase
 rate(nvca_storage_controller_request_duration_sum[5m]) / rate(nvca_storage_controller_request_duration_count[5m])
 
-# Alert on slow storage requests
-nvca_storage_controller_request_duration{quantile="0.99"} > 300
+# Alert on slow storage requests (p99 over the 4-minute SLO)
+histogram_quantile(0.99, sum by (le) (rate(nvca_storage_controller_request_duration_bucket[5m]))) > 240
 ```
 
 ---
@@ -885,6 +1008,46 @@ changes(nvca_kata_runtime_isolation_enabled[1h]) > 0
 
 ---
 
+### `nvca_maintenance_mode_state`
+
+**Type:** Gauge
+
+**Description:** Whether NVCA is in a maintenance mode on this cluster. The series whose `mode` label matches the active maintenance mode is 1, and every other `mode` series is 0 (one-hot encoding). Set at agent startup from the configured maintenance mode (config or feature flags). Backs the informational "NVCA Desired State Signal" panel and lets workload-deployment failures be correlated with cluster maintenance windows.
+
+**Labels:**
+
+- `mode` - Maintenance mode. One of:
+  - `None` - normal operation; workloads deploy as usual
+  - `CordonOnly` - creation of new functions/tasks is paused (cordoned); existing workloads keep running
+  - `CordonAndDrain` - creation is cordoned and existing workloads are drained
+- `nvca_nca_id` - NVCA instance identifier
+- `nvca_cluster_name` - Kubernetes cluster name
+- `nvca_cluster_group` - Cluster group identifier
+- `nvca_version` - NVCA version
+
+**Cardinality:** 3 series per NVCA instance (one per mode).
+
+**Zero-initialized:** Yes. All three `mode` series are pre-initialized to 0 on startup, then the active mode is set to 1.
+
+**Usage:**
+
+```promql
+# Active maintenance mode per cluster (returns the mode label of the active series)
+nvca_maintenance_mode_state == 1
+
+# Is this cluster draining?
+nvca_maintenance_mode_state{mode="CordonAndDrain"} == 1
+
+# Clusters not in normal operation
+nvca_maintenance_mode_state{mode="None"} == 0
+
+# Correlate deployment failures with maintenance windows
+sum by (failure_category) (rate(nvca_workload_result_total{workload_status="failure"}[5m]))
+  and on(nvca_cluster_name) (nvca_maintenance_mode_state{mode="None"} == 0)
+```
+
+---
+
 ## Scheduler Workload Metrics
 
 ### `nvca_scheduler_workload_count`
@@ -1180,10 +1343,10 @@ sum by (http_status) (rate(nvca_upstream_request_total{operation="heartbeat", st
 # Slow storage requests
 - alert: SlowStorageRequests
   expr: |
-    nvca_storage_controller_request_duration{quantile="0.99"} > 300
+    histogram_quantile(0.99, sum by (le) (rate(nvca_storage_controller_request_duration_bucket[5m]))) > 240
   for: 15m
   annotations:
-    summary: Storage requests are taking longer than expected (>5 minutes at p99)
+    summary: Storage requests are taking longer than the 4-minute SLO (p99 > 240s)
 
 # High model cache failure rate
 - alert: HighModelCacheFailureRate
@@ -1229,6 +1392,115 @@ sum by (http_status) (rate(nvca_upstream_request_total{operation="heartbeat", st
 
 ---
 
+## Cluster-Validator Metrics
+
+The cluster-validator runs as a short-lived process (init container + CronJob) so it cannot serve a `/metrics` endpoint directly. Instead, it writes a structured summary to a well-known ConfigMap at the end of every run, and the NVCA agent's long-lived `/metrics` endpoint republishes the values as gauges. The fixed-cardinality gauges are updated in place on each new ConfigMap update, so a run does not mint a fresh series set (no TSDB churn). Config-driven series (per-endpoint and per-netpol-pair) can come and go as the customer changes their network checks; the agent prunes any such series that the latest run no longer reports. The run time itself is exposed as the value of `nvca_cluster_validator_last_run_timestamp_seconds`, not as a label.
+
+### `nvca_cluster_validator_ready`
+
+Overall verdict for the latest cluster-validator run. **This is the load-bearing SLI metric** for cluster-readiness alerting.
+
+- **Type**: Gauge
+- **Value**: 1 if the run passed all critical checks (NVCF-Ready), 0 otherwise (NVCF-Not-Ready)
+- **Labels**: default labels only (initialized to 0 until the first run completes)
+
+### `nvca_cluster_validator_check_status`
+
+Per-check status from the latest run. The check set is fixed (~10 entries; see `CheckKey*` constants in `internal/clustervalidator/summary.go`).
+
+- **Type**: Gauge
+- **Value**: 1 = passed, 0 = failed (or not-run; the `check` label is omitted entirely when a check was skipped)
+- **Labels**: default labels + `check`
+
+> **Alerting caveat — absent vs. zero for optional checks.** Three checks are
+> *conditional*: `endpoint_reachability`, `configurable_netpol`, and
+> `netpol_enforcement` only run when a network-checks ConfigMap is configured.
+> They are pre-initialized to `0` in the init-to-zero baseline so they
+> appear on the first scrape, but on the **first real run of a cluster that has
+> no network-checks config** they are pruned and **not re-emitted** — they go
+> *absent*, not `0` (the validator omits a check it didn't run so "not run" is
+> distinguishable from "ran and failed"). Write alerts on these three with an
+> `absent()` guard, not a bare `== 0`, e.g.
+> `absent(nvca_cluster_validator_check_status{check="endpoint_reachability"}) or nvca_cluster_validator_check_status{check="endpoint_reachability"} == 0`.
+> The seven always-run checks (control_plane, worker_nodes_all_ready, webhooks,
+> network_policies_supported, smb_csi, gpu_resources, gpu_operator) are always
+> present and safe to alert on with `== 0`.
+
+### `nvca_cluster_validator_endpoint_reachable`
+
+Per-endpoint reachability for the user-configured `reachability.endpoints` list. Variable cardinality, but pruned on each new run.
+
+- **Type**: Gauge
+- **Value**: 1 if reachable, 0 otherwise
+- **Labels**: default labels + `endpoint` (user-supplied name) + `critical` (`"true"`/`"false"`)
+
+### `nvca_cluster_validator_netpol_pair_passed`
+
+Directional NetworkPolicy coverage for the user-configured `networkPolicies.pairs` list. Each pair emits up to four series — one per `direction` × `policy_side` — so an operator can see exactly which side is blocked rather than just "the pair failed".
+
+- **Type**: Gauge
+- **Value**: 1 if that side allows the traffic, 0 if blocked
+- **Labels**: default labels + `pair` (user-supplied name) + `direction` (`a_to_b`/`b_to_a`) + `policy_side` (`egress` = the source namespace's egress, `ingress` = the destination namespace's ingress) + `critical`
+- **Overall pair coverage**: `min by (pair) (nvca_cluster_validator_netpol_pair_passed)` (1 only when all four sides allow)
+
+> A `0` always means a real policy block. When a direction cannot be evaluated before reaching policy rules (a namespace in the pair does not exist, or an API error occurs), that direction's series are omitted rather than emitted as `0`, so they never misreport a policy block. The pair still fails (`nvca_cluster_validator_check_status{check="configurable_netpol"}` is `0`) and the validator's recommendation names the real cause.
+
+```promql
+# Which side of a pair is blocked?
+nvca_cluster_validator_netpol_pair_passed == 0
+
+# Overall: did each pair pass end-to-end on the latest run?
+min by (pair) (nvca_cluster_validator_netpol_pair_passed)
+```
+
+### `nvca_cluster_validator_last_run_timestamp_seconds`
+
+Unix timestamp (seconds) of the latest cluster-validator run. The canonical staleness signal — alert on `time() - <metric> > <threshold>` to catch a validator pod that has stopped running entirely.
+
+- **Type**: Gauge
+- **Labels**: default labels only
+
+### `nvca_cluster_validator_last_run_duration_seconds`
+
+Wall-clock duration of the latest run.
+
+- **Type**: Gauge
+- **Labels**: default labels only
+
+### Example PromQL
+
+```promql
+# Current SLI
+nvca_cluster_validator_ready
+
+# Which checks regressed between the last two runs?
+( nvca_cluster_validator_check_status offset 3h ) - nvca_cluster_validator_check_status
+
+# Alert: any critical endpoint unreachable on the latest run
+nvca_cluster_validator_endpoint_reachable{critical="true"} == 0
+
+# Alert: validator hasn't run in 6h (CronJob or pod stuck).
+# The `> 0` guard excludes the "never ran" baseline (the metric is 0 until the
+# first run); without it the alert fires immediately on a fresh deployment,
+# since time() - 0 is always far greater than the threshold.
+(time() - nvca_cluster_validator_last_run_timestamp_seconds > 21600)
+  and nvca_cluster_validator_last_run_timestamp_seconds > 0
+```
+
+### Edge cases
+
+| Scenario | Effect on metrics |
+|---|---|
+| Agent boots before any validator run | Fixed-cardinality gauges at 0. No config-driven (endpoint/netpol) series until first run. |
+| Agent restart after a successful run | Reconciler's initial List delivers an Add event; metrics populated immediately. |
+| Validator pod panics mid-run | ConfigMap not updated; last-good metrics retained. Operator detects via `_last_run_timestamp_seconds` staleness. |
+| Summary ConfigMap deleted | Last-good metrics **preserved** — an accidental delete (kubectl, GC sweep, reinstall) must not wipe the SLI. Genuine staleness is caught by the `_last_run_timestamp_seconds` alert. |
+| Explicit metrics reset requested | Create a ConfigMap named `cluster-validator-metrics-reset` in the summary namespace. The agent resets all fixed gauges to the zero baseline (and prunes config-driven series) and then deletes that ConfigMap (consumes the one-shot signal). |
+| Malformed JSON / unknown schemaVersion | Last-good metrics preserved (no transient blip surfaces as SLI failure). |
+| Endpoint removed from customer config | Its `_endpoint_reachable` series pruned on next run; new endpoints appear. |
+
+---
+
 ## Metric Cardinality
 
 The following metrics have dynamic cardinality based on cluster configuration:
@@ -1251,7 +1523,174 @@ The following metrics have dynamic cardinality based on cluster configuration:
   - Orphaned resource cleanup: number of resource types × status values (low, typically 2-4 series)
   - Cleaner runs: number of cleaner names × status values (low, typically 2-4 series)
 - **Cluster attribute metrics**: 1 series per cluster (Kata runtime isolation enabled/disabled)
+- **Cluster-validator metrics**: fixed-cardinality vectors (`nvca_cluster_validator_ready`, `_last_run_timestamp_seconds`, `_last_run_duration_seconds`) yield 1 series each and are updated in place on every run (no per-run churn). `_check_status` yields ~10 series (one per built-in check). `_endpoint_reachable` is bounded by the customer's `networkChecks` config (typically <20 entries); `_netpol_pair_passed` is bounded by 4 × the number of configured pairs (direction × policy_side). Config-driven series are pruned when the latest run no longer reports them.
 - **Upstream request metric** (`nvca_upstream_request_total`): 6 series fixed (3 operations × 2 statuses, pre-initialized)
 - **Scheduler workload count** (`nvca_scheduler_workload_count`): 4 series fixed (2 schedulers × 2 workload kinds, pre-initialized)
 
 Total expected cardinality per cluster: **159-254 time series** depending on configuration and active workload count.
+
+## Outbound Client Metrics (OpenTelemetry semconv)
+
+NVCA instruments its outbound dependency calls with OpenTelemetry metrics that
+follow the OpenTelemetry Semantic Conventions. These are produced by a shared
+metrics transport attached to the outbound HTTP clients, not by hand at each call
+site, and are exported through the same `/metrics` endpoint via the OTel to
+Prometheus bridge. They are gated by the `ClientMetrics` feature flag: when it is
+off, client instrumentation receives a no-op meter provider and no series are
+produced.
+
+### `http_client_request_duration_seconds`
+
+Histogram. Duration of an outbound HTTP client call, from which rate, error
+rate, and latency are all derived.
+
+Labels (in addition to the four default labels `nvca_nca_id`,
+`nvca_cluster_name`, `nvca_cluster_group`, `nvca_version`):
+
+| Label | Example | Notes |
+|-------|---------|-------|
+| `peer_service` | `icms`, `reval`, `fnds`, `auth`, `sqs`, `nats` | Which dependency was called. Bounded set. NGC is operator-side (separate pipeline) and not yet wired. |
+| `http_request_method` | `POST` | Request method. |
+| `http_response_status_code` | `200` | Present when a response was received; omitted on a transport failure. |
+| `server_address` | dependency host | Target host. |
+| `url_template` | `v1/nvca/clusters/{clusterId}/heartbeat` | Route shape, opt-in. The ICMS client sets it per operation via request context; high-cardinality path segments (cluster/request/instance IDs) are replaced with placeholders to keep cardinality bounded. Preserves the per-operation breakdown of the legacy `operation` label. |
+| `error_type` | `timeout` | Present only on transport failure (no response). |
+
+```promql
+# Request rate to ICMS
+sum(rate(http_client_request_duration_seconds_count{peer_service="icms"}[5m]))
+
+# Success rate to ICMS (2xx over all)
+sum(rate(http_client_request_duration_seconds_count{peer_service="icms", http_response_status_code=~"2.."}[5m]))
+  / sum(rate(http_client_request_duration_seconds_count{peer_service="icms"}[5m]))
+
+# p95 latency to ICMS
+histogram_quantile(0.95,
+  sum(rate(http_client_request_duration_seconds_bucket{peer_service="icms"}[5m])) by (le))
+```
+
+### `http_client_request_body_size_bytes` and `http_client_response_body_size_bytes`
+
+Histograms of outbound request and response body sizes in bytes, carrying the
+same labels as the duration metric. Sizes come from the declared `Content-Length`;
+a request or response with an unknown length (for example a chunked body) is not
+recorded. NVCA's HTTP dependencies send JSON with `Content-Length` set, so these
+are accurate in practice.
+
+### Before and after (label mapping)
+
+The OTel series are additive: the legacy counters below are unchanged and keep
+being emitted, so dashboards can migrate one panel at a time and be verified
+against both during the transition.
+
+| Dependency | Legacy series | OTel series |
+|---|---|---|
+| ICMS | `nvca_upstream_request_total{operation,status,http_status}`, with a transport failure encoded as `http_status="0"` | `http_client_request_duration_seconds{peer_service="icms",http_request_method,http_response_status_code,url_template,server_address,error_type}` |
+| ReVal | `nvca_miniservice_controller_reval_request_total{endpoint,http_code}` | same schema, `peer_service="reval"` |
+| FNDS | none | same schema, `peer_service="fnds"` |
+| Auth (OAuth token endpoint) | none | same schema, `peer_service="auth"`; covers the ICMS, ReVal and FNDS token fetchers, distinguished by `server_address` |
+| SQS / NATS | none | `messaging_client_operation_duration_seconds{peer_service,messaging_system,messaging_operation_name,messaging_destination_name,error_type}` |
+
+Query translation, using the ICMS success rate as the worked example:
+
+```promql
+# before
+sum(rate(nvca_upstream_request_total{status="success"}[5m]))
+  / sum(rate(nvca_upstream_request_total[5m]))
+
+# after
+sum(rate(http_client_request_duration_seconds_count{peer_service="icms",http_response_status_code=~"2.."}[5m]))
+  / sum(rate(http_client_request_duration_seconds_count{peer_service="icms"}[5m]))
+```
+
+Every legacy ICMS `operation` value has a `url_template` counterpart, including
+`jwks-push`, whose client is built separately from the shared retryable client
+and is instrumented explicitly for that reason. The new series are a superset:
+`v1/si/clusters/{clusterId}/instances` had no legacy counter at all.
+
+The legacy `operation` label maps to `url_template`, and the synthetic
+`http_status="0"` maps to `error_type` (`timeout`, `connection_refused`,
+`canceled`, `other`), which names the failure instead of overloading a status
+code.
+
+### Adding a new dependency
+
+Instrumentation lives in the shared transport and the shared recorder, so
+neither case below adds a meter provider, exporter, registry, or label plumbing.
+
+Case 1: a new HTTP dependency. Add its name to the peer-service constants in
+`internal/metrics/clientmetrics`, then build the client through the shared
+factory with the metrics transport wrapper. That is the whole change; the full
+RED metric set is emitted automatically.
+
+```go
+c := cmnhttp.NewRetryableClient(ctx,
+    cmnhttp.WithTransportWrapper(func(inner http.RoundTripper) http.RoundTripper {
+        return clientmetrics.NewTransport(inner, recorder, clientmetrics.PeerServiceNewDep)
+    }),
+)
+```
+
+Case 2: a new client type (messaging, RPC, or a future protocol). Declare a
+`Family` describing its instruments, resolve it once with `Recorder.Instruments`,
+and record through it. The recorder applies the NVCA default labels; the semconv
+helper builds the attribute set (`msgsemconv` for messaging, `rpcsemconv` for
+RPC).
+
+```go
+// 1. Declare the instrument family once (see MessagingClientFamily for a real one).
+var FooClientFamily = clientmetrics.Family{
+    Duration: clientmetrics.InstrumentSpec{
+        Name:        "foo.client.operation.duration",
+        Unit:        "s",
+        Description: "Duration of foo client operations.",
+        Buckets:     clientmetrics.DurationBucketsSeconds,
+    },
+}
+
+// 2. Resolve it once at construction.
+type instrumentedFooClient struct {
+    inner FooClient
+    insts *clientmetrics.Instruments
+}
+
+func NewInstrumentedFooClient(inner FooClient, rec *clientmetrics.Recorder) (FooClient, error) {
+    if rec == nil {
+        return inner, nil // meter-gated: no recorder, no overhead
+    }
+    insts, err := rec.Instruments(FooClientFamily)
+    if err != nil {
+        return nil, err
+    }
+    return &instrumentedFooClient{inner: inner, insts: insts}, nil
+}
+
+// 3. Record each call.
+func (c *instrumentedFooClient) Call(ctx context.Context, req Req) (Resp, error) {
+    start := time.Now()
+    resp, err := c.inner.Call(ctx, req)
+    c.insts.Record(ctx, clientmetrics.Observation{
+        Duration:     time.Since(start),
+        RequestSize:  -1, // negative means unknown and is not recorded
+        ResponseSize: -1,
+        Attrs:        fooAttrs(req, resp, semconv.ClassifyError(err)),
+    })
+    return resp, err
+}
+```
+
+`internal/metrics/clientmetrics/queueclient.go` is this pattern applied to
+`queue.Client`, and is the reference to copy.
+
+### Cardinality
+
+Bounded. Per dependency, series scale with the number of distinct
+method/status/error-type combinations actually observed, typically a handful.
+`url.template` is opt-in and only set where a safe, low-cardinality template is
+known; raw URLs are never used as labels. The same rule applies to messaging:
+`messaging.destination.name` carries the queue type, never the queue URL.
+
+Histogram buckets are declared explicitly (`DurationBucketsSeconds`,
+`SizeBucketsBytes`) rather than taking the OTel SDK defaults, which are shaped
+for milliseconds and would place every realistic latency in a single bucket of a
+seconds-valued instrument.

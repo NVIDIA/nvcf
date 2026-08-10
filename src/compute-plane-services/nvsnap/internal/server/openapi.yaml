@@ -1,0 +1,1304 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+openapi: 3.1.0
+info:
+  title: NvSnap API
+  summary: GPU checkpoint and restore for Kubernetes workloads.
+  description: |
+    The NvSnap REST API. Drives checkpoint and restore of GPU
+    workloads (CUDA, PyTorch, vLLM, SGLang, TRT-LLM) across nodes
+    and clusters without modifying the application.
+
+    ## API stability tiers
+
+    Endpoints in this document fall into three groups:
+
+    - **Public** — `Checkpoints`, `Restores`, `Retention`, `Audit`,
+      `Cluster`, `System`, `Storage`, `Observability`. Stable; semver
+      applies. Safe to integrate against from external tools and CI
+      pipelines.
+
+    - **Realtime** — the WebSocket stream at `/api/v1/ws`. Stable
+      transport (RFC 6455 WebSocket over HTTP/1.1) and stable envelope
+      shape (`{type, data}`). Topic names and message payloads may
+      evolve as new operations grow new event streams.
+
+    - **Internal** — endpoints tagged `Internal` are consumed by the
+      nvsnap-agent fleet (peer-fanout catalog routing, blob-upload
+      callbacks) or by the embedded UI (demo flow). They are
+      documented here for completeness and operator debugging. They
+      **may change without notice** between releases. Do not
+      integrate against them from external code.
+
+    ## Out of scope
+
+    - The `nvsnap-agent` HTTP API on each node (port 8081) — separate
+      internal cluster API, not in this spec.
+    - The `nvsnap-blobstore` HTTP API (port 9000) — internal CAS
+      service; aggregation views are surfaced under `/api/v1/blobstore/*`
+      via `nvsnap-server` proxy and ARE documented here.
+  version: "0.1.0"
+  contact:
+    name: NvSnap maintainers
+    url: https://github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+
+servers:
+  - url: http://nvsnap-server.nvsnap-system.svc.cluster.local:8080
+    description: In-cluster (Kubernetes Service DNS)
+  - url: http://localhost:8080
+    description: Local development (kubectl port-forward)
+
+tags:
+  - name: Checkpoints
+    description: Create, list, inspect, and delete checkpoints.
+  - name: Restores
+    description: Launch and inspect restores from existing checkpoints.
+  - name: Retention
+    description: Declarative retention policies for automatic cleanup.
+  - name: Audit
+    description: Audit trail for every checkpoint, restore, and policy operation.
+  - name: Cluster
+    description: Read-only cluster inventory — GPU nodes and pods.
+  - name: System
+    description: Liveness and readiness for the server itself.
+  - name: Storage
+    description: Read-only views of the cluster's content-addressed blob storage.
+  - name: Realtime
+    description: |
+      WebSocket stream for live log lines and state updates from
+      in-progress checkpoint and restore operations. Topic-based
+      subscription model — clients subscribe to specific topics
+      after upgrade.
+  - name: Observability
+    description: |
+      Prometheus scrape endpoint. Exposed on the standard `/metrics`
+      path (no `/api/v1` prefix) for compatibility with default
+      Prometheus scrape configs.
+  - name: Internal
+    description: |
+      **Internal — may change without notice.** Endpoints used by
+      nvsnap-agent for peer-fanout catalog routing and blob-upload
+      callbacks. Documented here for operator debugging only — do
+      not integrate from external code.
+
+paths:
+  # ─── Cluster inventory ─────────────────────────────────────────────
+  /api/v1/nodes:
+    get:
+      tags: [Cluster]
+      operationId: listGPUNodes
+      summary: List GPU nodes in the cluster
+      description: |
+        Returns every node carrying `nvidia.com/gpu.present=true`
+        along with the running `nvsnap-agent`'s readiness, GPU count,
+        and the pod-count this node is currently running.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NodeList' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/v1/nodes/{name}/pods:
+    get:
+      tags: [Cluster]
+      operationId: listNodePods
+      summary: List GPU pods scheduled to a node
+      parameters:
+        - $ref: '#/components/parameters/NodeName'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PodList' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/v1/pods:
+    get:
+      tags: [Cluster]
+      operationId: listGPUPods
+      summary: List all GPU pods (cluster-wide or per-namespace)
+      parameters:
+        - in: query
+          name: namespace
+          description: When omitted, returns pods across all namespaces.
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PodList' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  # ─── Checkpoints ───────────────────────────────────────────────────
+  /api/v1/checkpoints:
+    post:
+      tags: [Checkpoints]
+      operationId: createCheckpoint
+      summary: Checkpoint a running GPU pod
+      description: |
+        Initiates a checkpoint asynchronously. Returns `202 Accepted`
+        with an opaque ID; poll `GET /api/v1/checkpoints/{id}` for
+        progress.
+
+        Single-GPU pods are checkpointed via CRIU + cuda-checkpoint.
+        Multi-GPU pods automatically route to the rootfs-only capture
+        path — same API contract, no caller change required.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateCheckpointRequest' }
+      responses:
+        '202':
+          description: Checkpoint started
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OperationAccepted' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    get:
+      tags: [Checkpoints]
+      operationId: listCheckpoints
+      summary: List checkpoints
+      description: |
+        Lists checkpoints from one of three sources:
+
+        - `crd` *(default)* — Kubernetes `GPUCheckpoint` CRs visible
+          to the current ServiceAccount. Optionally scoped to a
+          namespace.
+        - `db` — durable SQLite catalog. Supports filtering by
+          namespace / pod / node / status / workload type, plus
+          cursor-based pagination.
+        - `agent` — live per-agent inventory aggregated across every
+          node's `nvsnap-agent`. Useful when the catalog is stale.
+      parameters:
+        - in: query
+          name: source
+          description: Which view to query.
+          schema: { type: string, enum: [crd, db, agent], default: crd }
+        - in: query
+          name: namespace
+          description: Filter by namespace.
+          schema: { type: string }
+        - in: query
+          name: podName
+          schema: { type: string }
+        - in: query
+          name: nodeName
+          schema: { type: string }
+        - in: query
+          name: status
+          schema: { type: string, enum: [InProgress, Completed, Failed] }
+        - in: query
+          name: workloadType
+          schema: { type: string }
+        - in: query
+          name: cursor
+          description: |
+            Pagination cursor (RFC3339Nano timestamp from `nextCursor`
+            of the previous response). Only honored for `source=db`.
+          schema: { type: string, format: date-time }
+        - in: query
+          name: limit
+          description: Max items per page. Default 100, max 1000.
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+        - in: query
+          name: sort
+          description: Sort by `createdAt`.
+          schema: { type: string, enum: [asc, desc], default: desc }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CheckpointList' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/v1/checkpoints/{id}:
+    get:
+      tags: [Checkpoints]
+      operationId: getCheckpoint
+      summary: Fetch a single checkpoint
+      parameters:
+        - $ref: '#/components/parameters/CheckpointId'
+        - in: query
+          name: namespace
+          description: Optional — required only when the same ID exists in multiple namespaces.
+          schema: { type: string }
+      responses:
+        '200':
+          description: |
+            Tries the live agent inventory first; falls back to the
+            Kubernetes CR. Returns `CheckpointAgent` when the agent
+            holds the dump, otherwise `CheckpointCR`.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/CheckpointAgent'
+                  - $ref: '#/components/schemas/CheckpointCR'
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [Checkpoints]
+      operationId: deleteCheckpoint
+      summary: Delete a checkpoint
+      description: |
+        Routes to the agent that holds the dump on disk and deletes
+        both the on-disk dump and the catalog row.
+      parameters:
+        - $ref: '#/components/parameters/CheckpointId'
+      responses:
+        '204':
+          description: Deleted
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/checkpoints/{id}/files:
+    get:
+      tags: [Checkpoints]
+      operationId: listCheckpointFiles
+      summary: List files inside a checkpoint dump
+      description: Proxied to the agent that stores the dump.
+      parameters:
+        - $ref: '#/components/parameters/CheckpointId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CheckpointFiles' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/checkpoints/{id}/file:
+    get:
+      tags: [Checkpoints]
+      operationId: readCheckpointFile
+      summary: Read a single file from inside a checkpoint dump
+      description: Streams the raw file bytes. For debugging / inspection.
+      parameters:
+        - $ref: '#/components/parameters/CheckpointId'
+        - in: query
+          name: path
+          required: true
+          description: Relative path inside the dump dir.
+          schema: { type: string }
+      responses:
+        '200':
+          description: File contents
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ─── Restores ──────────────────────────────────────────────────────
+  /api/v1/restores:
+    post:
+      tags: [Restores]
+      operationId: createRestore
+      summary: Restore a checkpoint
+      description: |
+        Launches a placeholder pod, fetches the checkpoint locally if
+        not already present (via the L1/L2/L3 cascade), then triggers
+        CRIU restore and cuda-checkpoint replay inside the placeholder.
+
+        Asynchronous: returns `202 Accepted`; poll
+        `GET /api/v1/restores/{id}` for progress.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateRestoreRequest' }
+      responses:
+        '202':
+          description: Restore started
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OperationAccepted' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+    get:
+      tags: [Restores]
+      operationId: listRestores
+      summary: List restores
+      parameters:
+        - in: query
+          name: namespace
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RestoreList' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/v1/restores/{id}:
+    get:
+      tags: [Restores]
+      operationId: getRestore
+      summary: Fetch a single restore
+      parameters:
+        - $ref: '#/components/parameters/RestoreId'
+        - in: query
+          name: namespace
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Restore' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ─── Retention policies ────────────────────────────────────────────
+  /api/v1/retention-policies:
+    get:
+      tags: [Retention]
+      operationId: listRetentionPolicies
+      summary: List retention policies
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RetentionPolicyList' }
+    post:
+      tags: [Retention]
+      operationId: createRetentionPolicy
+      summary: Create a retention policy
+      description: |
+        Each policy targets `namespace` × `workloadType` (use `*` for
+        all). Policies enforce one or more of `maxCount`, `maxAgeHours`,
+        `maxTotalBytes`. A background reconciler runs every 5 minutes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RetentionPolicy' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RetentionPolicy' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /api/v1/retention-policies/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PolicyId'
+    get:
+      tags: [Retention]
+      operationId: getRetentionPolicy
+      summary: Fetch a retention policy
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RetentionPolicy' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Retention]
+      operationId: updateRetentionPolicy
+      summary: Replace a retention policy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RetentionPolicy' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RetentionPolicy' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+    delete:
+      tags: [Retention]
+      operationId: deleteRetentionPolicy
+      summary: Delete a retention policy
+      responses:
+        '204':
+          description: Deleted
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/retention-policies/{id}/preview:
+    get:
+      tags: [Retention]
+      operationId: previewRetentionPolicy
+      summary: Dry-run a policy
+      description: |
+        Reports which checkpoints the policy WOULD delete if enforced
+        right now — useful before enabling a policy in production.
+      parameters:
+        - $ref: '#/components/parameters/PolicyId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RetentionPreview' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ─── Audit ─────────────────────────────────────────────────────────
+  /api/v1/audit:
+    get:
+      tags: [Audit]
+      operationId: listAuditLog
+      summary: Query the audit trail
+      description: |
+        Returns audit entries auto-recorded for every checkpoint,
+        restore, retention-policy, and retention-enforcement
+        operation, ordered most-recent first.
+      parameters:
+        - in: query
+          name: action
+          description: e.g. `checkpoint.create`, `restore.create`, `policy.update`.
+          schema: { type: string }
+        - in: query
+          name: resource
+          schema: { type: string, enum: [checkpoint, restore, policy] }
+        - in: query
+          name: resourceId
+          schema: { type: string }
+        - in: query
+          name: actor
+          schema: { type: string }
+        - in: query
+          name: since
+          description: Only entries strictly newer than this RFC3339 timestamp.
+          schema: { type: string, format: date-time }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuditEntryList' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  # ─── System ────────────────────────────────────────────────────────
+  /api/v1/health:
+    get:
+      tags: [System]
+      operationId: health
+      summary: Liveness check
+      responses:
+        '200':
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: healthy }
+                required: [status]
+
+  # ─── Storage ───────────────────────────────────────────────────────
+  /api/v1/blobstore/stats:
+    get:
+      tags: [Storage]
+      operationId: blobstoreStats
+      summary: Blob storage stats
+      description: |
+        Aggregate counts and disk usage for the cluster's
+        nvsnap-blobstore. Proxied verbatim from
+        `nvsnap-blobstore`'s `/v1/stats`.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BlobstoreStats' }
+        '502': { $ref: '#/components/responses/InternalError' }
+
+  /api/v1/blobstore/captures:
+    get:
+      tags: [Storage]
+      operationId: blobstoreListCaptures
+      summary: List captures in blob storage
+      description: |
+        One row per per-capture manifest currently held by the
+        blobstore. Proxied verbatim from `nvsnap-blobstore`'s
+        `/v1/captures`.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BlobstoreCaptureList' }
+        '502': { $ref: '#/components/responses/InternalError' }
+
+  # ─── Realtime ──────────────────────────────────────────────────────
+  /api/v1/ws:
+    get:
+      tags: [Realtime]
+      operationId: realtimeStream
+      summary: WebSocket log + state stream
+      description: |
+        Upgrades the HTTP connection to a WebSocket (RFC 6455). Once
+        upgraded, the client uses a small JSON sub-protocol on top:
+
+        **Client → server** (text frames):
+
+        ```json
+        { "type": "subscribe",   "topic": "<topic>" }
+        { "type": "unsubscribe", "topic": "<topic>" }
+        { "type": "ping" }
+        ```
+
+        **Server → client** (text frames):
+
+        ```json
+        { "type": "<topic>", "data": <any JSON value> }
+        { "type": "pong" }
+        ```
+
+        Every server broadcast is a `{type, data}` envelope where
+        `type` is the topic the client subscribed to and `data` is
+        the payload for that event.
+
+        ### Topics
+
+        - `demo:state` — full demo state snapshots when the demo flow
+          advances (`db.DemoState` shape).
+        - `demo:logs` — log lines from in-progress demo operations.
+        - `demo:pods` — periodic snapshots of pods owned by the demo.
+
+        ### Protocol details
+
+        - Max client message size: 4096 bytes.
+        - Server-initiated WebSocket Ping every 54s; client must respond
+          with Pong within 60s or the server closes the connection.
+        - Send buffer per client: 256 messages — slow consumers drop
+          excess broadcasts rather than block the hub.
+        - `CheckOrigin` is currently permissive (any origin). Do not
+          rely on this — production deployments may add an origin
+          allow-list without an API bump.
+      responses:
+        '101':
+          description: Switching protocols — connection upgraded to WebSocket.
+
+  # ─── Internal (agent ↔ catalog plumbing) ───────────────────────────
+  /api/v1/checkpoints/{id}/sources:
+    get:
+      tags: [Internal]
+      operationId: getCheckpointSources
+      summary: "Internal — peer + blob URI for cascade restore"
+      description: |
+        Read by `nvsnap-agent`'s restore-side cascade before pulling a
+        checkpoint. Returns the prioritized peer list (most-recently
+        -seen first) plus the optional blob-store URI as a tier-3
+        fallback.
+      parameters:
+        - $ref: '#/components/parameters/CheckpointId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CheckpointSources' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/checkpoints/{id}/peer-add:
+    post:
+      tags: [Internal]
+      operationId: peerAddCheckpoint
+      summary: "Internal — register a node as a peer"
+      description: |
+        Called by `nvsnap-agent` immediately after it lands a local copy
+        of the checkpoint (capture-source or successful cascade
+        fetch). Idempotent.
+      parameters:
+        - $ref: '#/components/parameters/CheckpointId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PeerRegisterRequest' }
+      responses:
+        '204':
+          description: Peer registered.
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/checkpoints/{id}/peer-remove:
+    post:
+      tags: [Internal]
+      operationId: peerRemoveCheckpoint
+      summary: "Internal — unregister a node as a peer"
+      description: |
+        Called by `nvsnap-agent` when it evicts a checkpoint from its
+        local cache. Idempotent.
+      parameters:
+        - $ref: '#/components/parameters/CheckpointId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [node_name]
+              properties:
+                node_name: { type: string }
+      responses:
+        '204':
+          description: Peer removed (or already absent).
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /api/v1/checkpoints/{id}/peers:
+    get:
+      tags: [Internal]
+      operationId: listCheckpointPeers
+      summary: "Internal — raw peer list for a checkpoint"
+      description: |
+        Diagnostic endpoint — returns the unfiltered peer rows for a
+        checkpoint. The cascade-routing view is at `/sources`; use
+        that for actual restore decisions.
+      parameters:
+        - $ref: '#/components/parameters/CheckpointId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  checkpoint_id: { type: string }
+                  peers:
+                    type: array
+                    items: { $ref: '#/components/schemas/CheckpointPeer' }
+
+  /api/v1/checkpoints/register:
+    post:
+      tags: [Internal]
+      operationId: registerCheckpoint
+      summary: "Internal — upsert a checkpoint row in the catalog"
+      description: |
+        Called by `nvsnap-agent` after a direct API-driven capture (one
+        that didn't go through `nvsnap-server`'s CRD flow) so the
+        catalog has a row to anchor peer-add / blob-uploaded /
+        sources routing on. Idempotent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterCheckpointRequest' }
+      responses:
+        '204':
+          description: Catalog row upserted.
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/v1/checkpoints/{id}/blob-uploaded:
+    post:
+      tags: [Internal]
+      operationId: blobUploadedCheckpoint
+      summary: "Internal — record successful blob-store upload"
+      description: |
+        Called by `nvsnap-agent`'s background uploader after every file
+        in the dump dir is durably stored in `nvsnap-blobstore`. Sets
+        the catalog's `blob_uri` so cascade restore can fall back to
+        the blob store when no peer is reachable.
+      parameters:
+        - $ref: '#/components/parameters/CheckpointId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [blob_uri]
+              properties:
+                blob_uri:
+                  type: string
+                  description: Base URL of the nvsnap-blobstore that received the upload.
+      responses:
+        '204':
+          description: Blob URI recorded.
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /api/v1/checkpoints/by-hash/{hash}/pvc-state:
+    parameters:
+      - in: path
+        name: hash
+        required: true
+        schema:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        description: Content-addressed hash of the checkpoint (64 hex chars, SHA-256).
+    get:
+      tags: [Internal]
+      operationId: getPVCPromoteState
+      summary: "Internal — L2 PVC promote state for nvsnap-init poll"
+      description: |
+        The `nvsnap-init` init container (nvsnap#147) injected by the
+        mutating webhook onto restore pods polls this endpoint until
+        `state == "ready"` before exec'ing the inference container.
+        This is how we block on the snap+clone of `rox-<short-hash>`
+        without giving customer pods K8s API credentials.
+
+        State transitions (set by the agent's L2 backend):
+
+          pending → writing → snapshotting → ready
+                                          → failed
+
+        Empty `state` means the catalog row exists but no L2 write
+        has happened yet — typically because L2 is disabled at the
+        agent or the writer Job hasn't started. nvsnap-init treats
+        empty as "no L2, fall back to peer cascade".
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PVCPromoteState' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404':
+          description: |
+            No catalog row carries this hash. Caller should retry
+            briefly (the agent's `/register` call may not have landed
+            yet) then give up to allow cold-start fallback.
+    post:
+      tags: [Internal]
+      operationId: updatePVCPromoteState
+      summary: "Internal — write L2 PVC promote state (agent only)"
+      description: |
+        The agent's `PerCapturePVCBackend` POSTs one transition per
+        state change. Fan-out across every catalog row sharing the
+        hash (re-captures of the same workload coalesce). Empty
+        `pvc_name` is preserved (COALESCE) so a later `failed` update
+        doesn't wipe a previously-written rox PVC name.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [state]
+              properties:
+                state:
+                  type: string
+                  enum: [pending, writing, snapshotting, ready, failed]
+                pvc_name:
+                  type: string
+                  description: |
+                    `rox-<short-hash>` PVC name, set only on the
+                    `ready` transition. Other transitions omit this.
+      responses:
+        '204':
+          description: State recorded; fanned out to all rows with this hash.
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ─── Observability ─────────────────────────────────────────────────
+  /metrics:
+    get:
+      tags: [Observability]
+      operationId: prometheusMetrics
+      summary: Prometheus scrape endpoint
+      description: |
+        Returns metrics in the [Prometheus text exposition format][1].
+        Path is `/metrics` (no `/api/v1` prefix) so default Prometheus
+        scrape configs work out of the box.
+
+        Series exposed by nvsnap-server (all prefixed `nvsnap_`):
+
+        - `nvsnap_api_requests_total{method,route,status_code}` — counter, per-route request count.
+        - `nvsnap_api_request_duration_seconds{method,route}` — histogram, request latency.
+        - `nvsnap_checkpoints_stored{namespace,node_name}` — gauge, checkpoints in catalog.
+        - `nvsnap_websocket_connections` — gauge, active log-stream WS connections.
+
+        Series exposed by nvsnap-agent (on each node's port 8081):
+
+        - `nvsnap_checkpoint_total{status,workload_type,namespace}` — counter.
+        - `nvsnap_checkpoint_duration_seconds{workload_type}` — histogram.
+        - `nvsnap_checkpoint_size_bytes{workload_type}` — histogram.
+        - `nvsnap_restore_total{status,workload_type,namespace}` — counter.
+        - `nvsnap_restore_duration_seconds{workload_type}` — histogram.
+        - `nvsnap_criu_dump_duration_seconds{workload_type}` — histogram, CRIU-only phase.
+        - `nvsnap_active_operations{operation}` — gauge.
+        - `nvsnap_gpu_processes_discovered` — gauge.
+
+        [1]: https://prometheus.io/docs/instrumenting/exposition_formats/#text-based-format
+      responses:
+        '200':
+          description: Metrics in Prometheus text-exposition format.
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: |
+                  # HELP nvsnap_api_requests_total Total API requests by method, path, and status code.
+                  # TYPE nvsnap_api_requests_total counter
+                  nvsnap_api_requests_total{method="GET",route="/api/v1/checkpoints",status_code="200"} 42
+
+components:
+  parameters:
+    CheckpointId:
+      in: path
+      name: id
+      required: true
+      description: Opaque checkpoint identifier returned by `createCheckpoint`.
+      schema: { type: string }
+    RestoreId:
+      in: path
+      name: id
+      required: true
+      description: Opaque restore identifier returned by `createRestore`.
+      schema: { type: string }
+    PolicyId:
+      in: path
+      name: id
+      required: true
+      description: Numeric retention-policy ID.
+      schema: { type: integer, format: int64 }
+    NodeName:
+      in: path
+      name: name
+      required: true
+      description: Kubernetes node name.
+      schema: { type: string }
+
+  responses:
+    BadRequest:
+      description: Malformed request
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    InternalError:
+      description: Server-side error
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error: { type: string }
+      required: [error]
+
+    OperationAccepted:
+      type: object
+      description: Async operation accepted; poll the matching `GET /…/{id}` for progress.
+      properties:
+        id:        { type: string }
+        namespace: { type: string }
+        phase:     { type: string, example: InProgress }
+        message:   { type: string }
+      required: [id, namespace, phase]
+
+    # ─── Cluster ─────────────────────────────────────────────────────
+    Node:
+      type: object
+      properties:
+        name:       { type: string }
+        status:     { type: string, example: Ready }
+        gpuCount:   { type: integer }
+        gpuModel:   { type: string, example: "NVIDIA-H100-80GB-HBM3" }
+        agentReady: { type: boolean }
+        podCount:   { type: integer }
+        internalIP: { type: string }
+        createdAt:  { type: string, format: date-time }
+    NodeList:
+      type: object
+      properties:
+        nodes: { type: array, items: { $ref: '#/components/schemas/Node' } }
+        count: { type: integer }
+
+    Pod:
+      type: object
+      description: A GPU-using pod surfaced by `nvsnap-server`. Fields are flattened from the K8s API.
+      properties:
+        name:      { type: string }
+        namespace: { type: string }
+        nodeName:  { type: string }
+        status:
+          type: string
+          description: "K8s pod phase (`Running`, `Pending`, …)."
+        gpuCount:  { type: integer }
+        image:
+          type: string
+          description: "First container's image."
+        createdAt: { type: string, format: date-time }
+      required: [name, namespace, nodeName, status, gpuCount, image, createdAt]
+    PodList:
+      type: object
+      properties:
+        pods:  { type: array, items: { $ref: '#/components/schemas/Pod' } }
+        count: { type: integer }
+
+    # ─── Checkpoints ─────────────────────────────────────────────────
+    CreateCheckpointRequest:
+      type: object
+      required: [podName, namespace]
+      properties:
+        podName:       { type: string }
+        namespace:     { type: string }
+        containerName:
+          type: string
+          description: When omitted, the pod's first container is used.
+        leaveRunning:
+          type: boolean
+          description: |
+            If true, the source process keeps running after the
+            checkpoint. Default false — the source is terminated to
+            release the GPU.
+
+    # Three distinct checkpoint shapes — `listCheckpoints` and
+    # `getCheckpoint` return one of these depending on `source`.
+    # `previewRetentionPolicy` always returns CheckpointDB.
+    CheckpointDB:
+      type: object
+      description: Catalog row returned for `source=db`.
+      properties:
+        id:             { type: string }
+        checkpointId:   { type: string }
+        namespace:      { type: string }
+        podName:        { type: string }
+        containerName:  { type: string }
+        containerImage: { type: string }
+        nodeName:       { type: string }
+        checkpointPath: { type: string }
+        checkpointSize: { type: integer, format: int64, description: Bytes. }
+        status:         { type: string, example: Completed }
+        message:        { type: string }
+        hasGpu:         { type: boolean }
+        modelName:      { type: string }
+        workloadType:   { type: string, example: vllm }
+        createdAt:      { type: string, format: date-time }
+        startedAt:      { type: string, format: date-time, nullable: true }
+        completedAt:    { type: string, format: date-time, nullable: true }
+        durationSecs:   { type: number, format: double }
+
+    CheckpointCR:
+      type: object
+      description: |
+        Flattened view of a `nvsnap.io/v1alpha1 GPUCheckpoint` Kubernetes
+        Custom Resource — `spec` and `status` merged into a single
+        object. Returned for `source=crd` (the default) and as a
+        fallback for `getCheckpoint`.
+      properties:
+        id:             { type: string, description: CR `metadata.name`. }
+        namespace:      { type: string }
+        createdAt:      { type: string, format: date-time, description: CR `metadata.creationTimestamp`. }
+        # spec
+        podName:        { type: string }
+        containerName:  { type: string }
+        leaveRunning:   { type: boolean }
+        storageClass:   { type: string }
+        retentionDays:  { type: integer }
+        # status — written by nvsnap-server's reconciler
+        phase:
+          type: string
+          description: |
+            Pipeline phase. Values currently written by nvsnap-server:
+            `InProgress`, `Completed`, `Failed`. The CRD schema also
+            allows `Pending`, `Running`, `Restoring`, `Restored` but
+            those aren't emitted by this build.
+        message:        { type: string }
+        startTime:      { type: string, format: date-time }
+        completionTime: { type: string, format: date-time }
+        checkpointPath: { type: string }
+        checkpointSize: { type: integer, format: int64 }
+        nodeName:       { type: string, description: Node the dump landed on. }
+
+    CheckpointAgent:
+      type: object
+      description: |
+        Per-node `metadata.json` returned by `nvsnap-agent` and aggregated
+        by `nvsnap-server` for `source=agent`. The agent reads each
+        checkpoint directory on disk; `nvsnap-server` adds `nodeName` and
+        `source: "agent"` before returning.
+      additionalProperties: true
+      properties:
+        # nvsnap-server-added fields
+        nodeName: { type: string }
+        source:   { type: string, enum: [agent] }
+        # CheckpointMetadata fields (subset — see internal/agent/checkpoint.go)
+        version:         { type: string, description: Metadata schema version, e.g. `v1.7`. }
+        id:              { type: string }
+        createdAt:       { type: string, format: date-time }
+        checkpointSize:  { type: integer, format: int64 }
+        durationSeconds: { type: number, format: double }
+        podName:         { type: string }
+        podNamespace:    { type: string }
+        containerName:   { type: string }
+        containerID:     { type: string }
+        containerImage:  { type: string }
+        containerPid:    { type: integer }
+        rootfs:          { type: string }
+        # Other fields (skipped, mappedFiles, openFiles, cuda, criuOptions,
+        # restoreHints, compression, integrity, replayMounts, …) are
+        # implementation detail — present but not contract.
+
+    CheckpointList:
+      type: object
+      description: |
+        Each item is one of `CheckpointDB`, `CheckpointCR`, or
+        `CheckpointAgent` depending on the `source` query parameter.
+      properties:
+        checkpoints:
+          type: array
+          items:
+            oneOf:
+              - $ref: '#/components/schemas/CheckpointDB'
+              - $ref: '#/components/schemas/CheckpointCR'
+              - $ref: '#/components/schemas/CheckpointAgent'
+        count:      { type: integer }
+        total:      { type: integer, description: Only populated for `source=db`. }
+        nextCursor: { type: string, description: Only populated for `source=db`. }
+        hasMore:    { type: boolean, description: Only populated for `source=db`. }
+        source:     { type: string, enum: [db], description: Only set for `source=db`. }
+
+    CheckpointFiles:
+      type: object
+      description: |
+        File inventory proxied from the owning agent. Returned as-is
+        from `nvsnap-agent`'s `GET /v1/checkpoints/{id}/files`. Shape is
+        agent-version dependent — consumers should treat it as
+        free-form.
+      additionalProperties: true
+
+    # ─── Restores ────────────────────────────────────────────────────
+    CreateRestoreRequest:
+      type: object
+      required: [checkpointName]
+      properties:
+        checkpointName:
+          type: string
+          description: Name of the `GPUCheckpoint` CRD to restore from.
+        checkpointId:
+          type: string
+          description: Agent-level checkpoint ID. Optional — derived from the CR's status when omitted.
+        newPodName:
+          type: string
+          description: |
+            Pod name for the restored workload. Defaults to
+            `<source-pod-name>-restored`.
+        nodeName:
+          type: string
+          description: |
+            Target node. Defaults to the node that holds the
+            checkpoint dump. Setting a different node forces a
+            cross-node restore via the L1/L2/L3 cascade.
+        namespace:
+          type: string
+          default: default
+
+    Restore:
+      type: object
+      description: |
+        Flattened view of a `nvsnap.io/v1alpha1 GPURestore` Custom
+        Resource — `spec` and `status` merged. Returned by both
+        `listRestores` and `getRestore`.
+      properties:
+        id:             { type: string, description: CR `metadata.name`. }
+        namespace:      { type: string }
+        createdAt:      { type: string, format: date-time, description: CR `metadata.creationTimestamp`. }
+        # spec
+        checkpointName: { type: string, description: Source `GPUCheckpoint` CR. }
+        checkpointPath: { type: string, description: Direct path, alternative to `checkpointName`. }
+        newPodName:     { type: string }
+        nodeName:       { type: string }
+        # status
+        phase:          { type: string, enum: [Pending, CreatingPod, Restoring, Completed, Failed] }
+        message:        { type: string }
+        startTime:      { type: string, format: date-time }
+        completionTime: { type: string, format: date-time }
+    RestoreList:
+      type: object
+      properties:
+        restores: { type: array, items: { $ref: '#/components/schemas/Restore' } }
+        count:    { type: integer }
+
+    # ─── Retention ───────────────────────────────────────────────────
+    RetentionPolicy:
+      type: object
+      required: [name]
+      properties:
+        id:
+          type: integer
+          format: int64
+          readOnly: true
+        name: { type: string }
+        namespace:
+          type: string
+          default: "*"
+          description: "`*` matches all namespaces."
+        workloadType:
+          type: string
+          default: "*"
+          description: "`*` matches all workload types."
+        maxCount:
+          type: integer
+          description: Retain at most N most-recent checkpoints. `0` = unlimited.
+        maxAgeHours:
+          type: integer
+          description: Delete checkpoints older than this many hours. `0` = unlimited.
+        maxTotalBytes:
+          type: integer
+          format: int64
+          description: Cap total bytes across matching checkpoints. `0` = unlimited.
+        enabled: { type: boolean }
+        createdAt: { type: string, format: date-time, readOnly: true }
+        updatedAt: { type: string, format: date-time, readOnly: true }
+    RetentionPolicyList:
+      type: object
+      properties:
+        policies: { type: array, items: { $ref: '#/components/schemas/RetentionPolicy' } }
+        count:    { type: integer }
+
+    RetentionPreview:
+      type: object
+      properties:
+        policy:      { $ref: '#/components/schemas/RetentionPolicy' }
+        wouldDelete: { type: integer, description: Number of checkpoints that match the policy. }
+        totalSize:   { type: integer, format: int64, description: Sum of `checkpointSize` across matches, in bytes. }
+        checkpoints:
+          type: array
+          description: db.Checkpoint rows that would be deleted.
+          items: { $ref: '#/components/schemas/CheckpointDB' }
+
+    # ─── Audit ───────────────────────────────────────────────────────
+    AuditEntry:
+      type: object
+      properties:
+        id:         { type: integer, format: int64 }
+        timestamp:  { type: string, format: date-time }
+        action:     { type: string, example: "checkpoint.create" }
+        resource:   { type: string, enum: [checkpoint, restore, policy] }
+        resourceId: { type: string }
+        actor:      { type: string, example: "api" }
+        details:    { type: string, description: JSON blob with extra context. }
+        status:     { type: string, enum: [success, failed] }
+        message:    { type: string }
+    AuditEntryList:
+      type: object
+      properties:
+        entries: { type: array, items: { $ref: '#/components/schemas/AuditEntry' } }
+        count:   { type: integer }
+
+    # ─── Storage ─────────────────────────────────────────────────────
+    DiskStats:
+      type: object
+      properties:
+        total_bytes: { type: integer, format: int64 }
+        free_bytes:  { type: integer, format: int64 }
+        used_bytes:  { type: integer, format: int64 }
+    BlobstoreStats:
+      type: object
+      description: Aggregate counts + disk usage for the cluster blobstore.
+      properties:
+        blob_count:     { type: integer, description: Distinct content-addressed blobs on disk. }
+        blob_bytes:     { type: integer, format: int64, description: Sum of blob sizes in bytes. }
+        capture_count:  { type: integer, description: Captures the blobstore is hosting. }
+        manifest_count: { type: integer, description: Per-capture manifests on disk. }
+        disk:           { $ref: '#/components/schemas/DiskStats' }
+    CaptureSummary:
+      type: object
+      properties:
+        hash:         { type: string }
+        file_count:   { type: integer }
+        total_bytes:  { type: integer, format: int64 }
+        has_manifest: { type: boolean }
+        modified_at:  { type: string, format: date-time }
+    BlobstoreCaptureList:
+      type: object
+      properties:
+        captures: { type: array, items: { $ref: '#/components/schemas/CaptureSummary' } }
+        total:    { type: integer }
+
+    # ─── Internal (catalog peer + register) ──────────────────────────
+    CheckpointSources:
+      type: object
+      properties:
+        checkpoint_id: { type: string }
+        peers:
+          type: array
+          items:
+            type: object
+            properties:
+              node_name:     { type: string }
+              agent_url:     { type: string }
+              registered_at: { type: string, format: date-time }
+              last_seen:     { type: string, format: date-time }
+        blob_uri:
+          type: string
+          description: Empty until the agent's background uploader fires `/blob-uploaded`.
+
+    CheckpointPeer:
+      type: object
+      properties:
+        checkpoint_id: { type: string }
+        node_name:     { type: string }
+        agent_url:     { type: string }
+        registered_at: { type: string, format: date-time }
+        last_seen:     { type: string, format: date-time }
+
+    PeerRegisterRequest:
+      type: object
+      required: [node_name, agent_url]
+      properties:
+        node_name: { type: string }
+        agent_url: { type: string, description: Base URL of the agent on the registering node (e.g. `http://<host-ip>:8081`). }
+
+    RegisterCheckpointRequest:
+      type: object
+      required: [checkpoint_id, namespace, pod_name, node_name]
+      properties:
+        checkpoint_id:   { type: string }
+        namespace:       { type: string }
+        pod_name:        { type: string }
+        container_name:  { type: string }
+        container_image: { type: string }
+        node_name:       { type: string }
+        checkpoint_path: { type: string }
+        checkpoint_size: { type: integer, format: int64 }
+        status:
+          type: string
+          default: Completed
+          description: "Defaults to `Completed`. Use `Failed` to record a known-failed capture."
+        has_gpu:         { type: boolean }
+        duration_secs:   { type: number, format: double }
+
+    PVCPromoteState:
+      type: object
+      required: [hash, state]
+      properties:
+        hash:
+          type: string
+          description: Echo of the requested hash (lets clients confirm they queried the right row).
+        state:
+          type: string
+          enum: ["", pending, writing, snapshotting, ready, failed]
+          description: |
+            L2 PVC promote state. Empty when the catalog row exists
+            but the agent's L2 backend never wrote any state (L2
+            disabled at agent startup, or agent died before the first
+            write). Otherwise one of the documented transitions.
+        pvc_name:
+          type: string
+          description: |
+            `rox-<short-hash>` PVC name, populated only on the
+            `ready` transition. Restore-side pods mount this PVC
+            once nvsnap-init observes `state == "ready"`.

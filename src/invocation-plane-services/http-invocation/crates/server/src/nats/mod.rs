@@ -456,6 +456,30 @@ impl NatsService {
         Ok(())
     }
 
+    /// Fire-and-forget cancel broadcast to every worker for this function
+    /// version. Missed messages are tolerated; the JetStream keepalive
+    /// path is the backstop.
+    #[tracing::instrument(level = Level::DEBUG, skip(self), err)]
+    pub async fn publish_cancel(
+        &self,
+        request_id: RequestId,
+        function_version_id: Uuid,
+    ) -> anyhow::Result<()> {
+        let subject = Self::cancel_subject(function_version_id);
+        self.client
+            .publish(subject, request_id.to_string().into_bytes().into())
+            .await
+            .inspect_err(|_err| {
+                record_nats_error_total();
+            })?;
+        Ok(())
+    }
+
+    /// nvcf.cancel.${function_version_id}
+    pub(crate) fn cancel_subject(function_version_id: Uuid) -> String {
+        format!("nvcf.cancel.{}", function_version_id)
+    }
+
     // Helper function to classify errors for retry behaviour
     fn classify_publish_error(
         err: &PublishError,

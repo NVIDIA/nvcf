@@ -425,3 +425,82 @@ func TestCheckNetworkPolicyEnforcement_SetupFailure(t *testing.T) {
 	assert.Nil(t, state.EnforcementOK, "should be nil when setup fails partway")
 	assert.NotEmpty(t, state.Warnings)
 }
+
+// ---------------------------------------------------------------------------
+// sweepOrphanTestNamespaces
+// ---------------------------------------------------------------------------
+
+func makeNetpolValidationNs(name string, age time.Duration) *corev1.Namespace {
+	return &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              name,
+			Labels:            map[string]string{"app": "netpol-validation", "purpose": "enforcement-test"},
+			CreationTimestamp: metav1.NewTime(time.Now().Add(-age)),
+		},
+	}
+}
+
+func TestSweepOrphanTestNamespaces_DeletesOldNamespaces(t *testing.T) {
+	// An orphan namespace older than the TTL should be deleted.
+	client := fake.NewSimpleClientset(
+		makeNetpolValidationNs("netpol-validation-12345", 2*time.Hour),
+	)
+	sweepOrphanTestNamespaces(context.Background(), testLog(), client, 1*time.Hour)
+
+	_, err := client.CoreV1().Namespaces().Get(
+		context.Background(), "netpol-validation-12345", metav1.GetOptions{})
+	assert.Error(t, err, "old namespace should have been deleted by the sweep")
+}
+
+func TestSweepOrphanTestNamespaces_KeepsRecentNamespaces(t *testing.T) {
+	// A namespace younger than the TTL might belong to a concurrent run —
+	// leave it alone.
+	client := fake.NewSimpleClientset(
+		makeNetpolValidationNs("netpol-validation-99999", 5*time.Minute),
+	)
+	sweepOrphanTestNamespaces(context.Background(), testLog(), client, 1*time.Hour)
+
+	_, err := client.CoreV1().Namespaces().Get(
+		context.Background(), "netpol-validation-99999", metav1.GetOptions{})
+	assert.NoError(t, err, "recent namespace should NOT have been deleted")
+}
+
+func TestSweepOrphanTestNamespaces_IgnoresUnrelatedNamespaces(t *testing.T) {
+	// Namespaces without the netpol-validation- prefix must be left alone
+	// even if they have the matching label (defensive).
+	client := fake.NewSimpleClientset(
+		&corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "kube-system",
+				Labels:            map[string]string{"app": "netpol-validation"},
+				CreationTimestamp: metav1.NewTime(time.Now().Add(-24 * time.Hour)),
+			},
+		},
+	)
+	sweepOrphanTestNamespaces(context.Background(), testLog(), client, 1*time.Hour)
+
+	_, err := client.CoreV1().Namespaces().Get(
+		context.Background(), "kube-system", metav1.GetOptions{})
+	assert.NoError(t, err, "non-netpol-validation namespace must not be deleted")
+}
+
+func TestSweepOrphanTestNamespaces_MixedAges(t *testing.T) {
+	// Multiple orphans of varying ages — only the old ones get deleted.
+	client := fake.NewSimpleClientset(
+		makeNetpolValidationNs("netpol-validation-old-1", 3*time.Hour),
+		makeNetpolValidationNs("netpol-validation-old-2", 90*time.Minute),
+		makeNetpolValidationNs("netpol-validation-new-1", 10*time.Minute),
+		makeNetpolValidationNs("netpol-validation-new-2", 30*time.Minute),
+	)
+	sweepOrphanTestNamespaces(context.Background(), testLog(), client, 1*time.Hour)
+
+	ctx := context.Background()
+	_, err1 := client.CoreV1().Namespaces().Get(ctx, "netpol-validation-old-1", metav1.GetOptions{})
+	_, err2 := client.CoreV1().Namespaces().Get(ctx, "netpol-validation-old-2", metav1.GetOptions{})
+	_, err3 := client.CoreV1().Namespaces().Get(ctx, "netpol-validation-new-1", metav1.GetOptions{})
+	_, err4 := client.CoreV1().Namespaces().Get(ctx, "netpol-validation-new-2", metav1.GetOptions{})
+	assert.Error(t, err1, "old-1 should be deleted")
+	assert.Error(t, err2, "old-2 should be deleted")
+	assert.NoError(t, err3, "new-1 should remain")
+	assert.NoError(t, err4, "new-2 should remain")
+}

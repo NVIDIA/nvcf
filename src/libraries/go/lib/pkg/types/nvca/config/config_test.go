@@ -170,11 +170,6 @@ func TestConfig_EncodeDecode_ServiceOAuthEndpoints(t *testing.T) {
 			FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint: "https://stage-fnds-oauth.example.test/.well-known/jwks.json",
 			FunctionDeploymentStagesProdOAuthTokenURL:              "https://prod-fnds-oauth.example.test/token",
 			FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint:  "https://prod-fnds-oauth.example.test/.well-known/jwks.json",
-			RolloverServiceURL:                                     "https://stg.api.ros.nvidia.com",
-			RolloverServiceStageOAuthTokenURL:                      "https://stage-ros-oauth.example.test/token",
-			RolloverServiceStageOAuthPublicKeysetEndpoint:          "https://stage-ros-oauth.example.test/.well-known/jwks.json",
-			RolloverServiceProdOAuthTokenURL:                       "https://prod-ros-oauth.example.test/token",
-			RolloverServiceProdOAuthPublicKeysetEndpoint:           "https://prod-ros-oauth.example.test/.well-known/jwks.json",
 		},
 	}
 
@@ -190,11 +185,6 @@ agent:
   helmReValServiceURL: http://reval.localhost:8080
   helmReValStageOAuthPublicKeysetEndpoint: https://stage-reval-oauth.example.test/.well-known/jwks.json
   helmReValStageOAuthTokenURL: https://stage-reval-oauth.example.test/token
-  rolloverServiceProdOAuthPublicKeysetEndpoint: https://prod-ros-oauth.example.test/.well-known/jwks.json
-  rolloverServiceProdOAuthTokenURL: https://prod-ros-oauth.example.test/token
-  rolloverServiceStageOAuthPublicKeysetEndpoint: https://stage-ros-oauth.example.test/.well-known/jwks.json
-  rolloverServiceStageOAuthTokenURL: https://stage-ros-oauth.example.test/token
-  rolloverServiceURL: https://stg.api.ros.nvidia.com
 `
 
 	gotConfigBytes, err := EncodeConfig(cfg)
@@ -204,6 +194,59 @@ agent:
 	gotDecodedCfg, err := DecodeConfig([]byte(expConfigStr))
 	require.NoError(t, err)
 	assert.Equal(t, cfg, gotDecodedCfg)
+}
+
+func TestConfig_EncodeDecode_BYOOConfigSwitches(t *testing.T) {
+	cfg, err := DecodeConfig([]byte(`
+agent:
+  byooLogChunking:
+    enabled: true
+    maxBodyBytes: 131072
+    maxPayloadBytes: 262144
+  byooDebugMode:
+    enabled: true
+  byooOtelCollector:
+    exporterHelper:
+      timeout: 30s
+    logSampling:
+      samplingPercentage: 10
+      mode: hash_seed
+      hashSeed: 1234
+      failClosed: false
+      attributeSource: record
+      fromAttribute: log.id
+      samplingPriority: sampling.priority
+    traceSampling:
+      samplingPercentage: 1
+      mode: hash_seed
+      hashSeed: 1234
+      failClosed: false
+`))
+	require.NoError(t, err)
+
+	completed := cfg.Complete()
+	assert.True(t, completed.Agent.BYOOLogChunking.Enabled)
+	assert.Equal(t, int64(262144), completed.Agent.BYOOLogChunking.MaxPayloadBytes)
+	assert.Equal(t, int64(131072), completed.Agent.BYOOLogChunking.MaxBodyBytes)
+	assert.True(t, completed.Agent.BYOODebugMode.Enabled)
+	assert.Equal(t, "30s", completed.Agent.BYOOOTelCollector.ExporterHelper.Timeout)
+	require.NotNil(t, completed.Agent.BYOOOTelCollector.LogSampling.SamplingPercentage)
+	assert.Equal(t, 10.0, *completed.Agent.BYOOOTelCollector.LogSampling.SamplingPercentage)
+	assert.Equal(t, "hash_seed", completed.Agent.BYOOOTelCollector.LogSampling.Mode)
+	require.NotNil(t, completed.Agent.BYOOOTelCollector.LogSampling.HashSeed)
+	assert.Equal(t, uint32(1234), *completed.Agent.BYOOOTelCollector.LogSampling.HashSeed)
+	require.NotNil(t, completed.Agent.BYOOOTelCollector.LogSampling.FailClosed)
+	assert.False(t, *completed.Agent.BYOOOTelCollector.LogSampling.FailClosed)
+	assert.Equal(t, "record", completed.Agent.BYOOOTelCollector.LogSampling.AttributeSource)
+	assert.Equal(t, "log.id", completed.Agent.BYOOOTelCollector.LogSampling.FromAttribute)
+	assert.Equal(t, "sampling.priority", completed.Agent.BYOOOTelCollector.LogSampling.SamplingPriority)
+	require.NotNil(t, completed.Agent.BYOOOTelCollector.TraceSampling.SamplingPercentage)
+	assert.Equal(t, 1.0, *completed.Agent.BYOOOTelCollector.TraceSampling.SamplingPercentage)
+	assert.Equal(t, "hash_seed", completed.Agent.BYOOOTelCollector.TraceSampling.Mode)
+	require.NotNil(t, completed.Agent.BYOOOTelCollector.TraceSampling.HashSeed)
+	assert.Equal(t, uint32(1234), *completed.Agent.BYOOOTelCollector.TraceSampling.HashSeed)
+	require.NotNil(t, completed.Agent.BYOOOTelCollector.TraceSampling.FailClosed)
+	assert.False(t, *completed.Agent.BYOOOTelCollector.TraceSampling.FailClosed)
 }
 
 func TestConfig_EncodeDecode_Tolerations(t *testing.T) {
@@ -407,6 +450,38 @@ agent:
 		assert.Equal(t, ":8080", cfg.Agent.SvcAddress)
 	})
 
+	t.Run("byoo_metric_subset", func(t *testing.T) {
+		data := []byte(`
+agent:
+  byooMetricSubset:
+    enabled: true
+    filterConfig: |
+      error_mode: ignore
+      metric_conditions:
+        - 'metric.name == "drop"'
+  byooWorkloadMetrics:
+    dropLabels:
+      - metric_subset_enabled
+      - custom_label
+`)
+		cfg, err := DecodeConfig(data)
+		require.NoError(t, err)
+		assert.True(t, cfg.Agent.BYOOMetricSubset.Enabled)
+		assert.Contains(t, cfg.Agent.BYOOMetricSubset.FilterConfig, "metric.name")
+		assert.Equal(t, []string{"metric_subset_enabled", "custom_label"}, cfg.Agent.BYOOWorkloadMetrics.DropLabels)
+	})
+
+	t.Run("rejects_invalid_byoo_sampling", func(t *testing.T) {
+		_, err := DecodeConfig([]byte(`
+agent:
+  byooOtelCollector:
+    logSampling:
+      samplingPercentage: 0.001
+      mode: hash_seed
+`))
+		require.ErrorContains(t, err, "validate merged config: agent.byooOtelCollector: log sampling: samplingPercentage must be 0 or at least")
+	})
+
 	t.Run("duration_parsing", func(t *testing.T) {
 		data := []byte(`
 agent:
@@ -421,6 +496,7 @@ workload:
 		assert.Equal(t, 5*time.Minute, cfg.Agent.HeartbeatInterval)
 		assert.Equal(t, 3*time.Hour, cfg.Workload.MaxRunningTimeout)
 	})
+
 }
 
 func TestEncodeConfig(t *testing.T) {
@@ -478,6 +554,23 @@ func TestEncodeConfig(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, string(data), "app: nvca")
 		assert.Contains(t, string(data), "env: prod")
+	})
+
+	t.Run("service_host_overrides", func(t *testing.T) {
+		cfg := Config{
+			Agent: AgentConfig{
+				ICMSHostHeaderOverride:             "sis.gateway.example.test",
+				HelmReValServiceHostHeaderOverride: "reval.gateway.example.test",
+				NATSHostOverride:                   "nats.gateway.example.test",
+			},
+		}
+		data, err := EncodeConfig(cfg)
+		require.NoError(t, err)
+		assert.Contains(t, string(data), "icmsHostHeaderOverride: sis.gateway.example.test")
+		assert.Contains(t, string(data), "helmReValServiceHostHeaderOverride: reval.gateway.example.test")
+		assert.Contains(t, string(data), "NATSHostOverride: nats.gateway.example.test")
+		assert.NotContains(t, string(data), "icmshost:")
+		assert.NotContains(t, string(data), "helmrevalservicehost:")
 	})
 }
 

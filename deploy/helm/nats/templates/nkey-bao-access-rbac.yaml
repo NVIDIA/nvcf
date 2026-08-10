@@ -27,6 +27,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: nkey-bao-access
+  namespace: {{ include "nvcf-nats.namespace" . }}
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
@@ -39,6 +40,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: nkey-bao-access
+  namespace: {{ include "nvcf-nats.namespace" . }}
 subjects:
   - kind: ServiceAccount
     name: {{ .Values.nats.rbac.openbao.serviceAccountName }}

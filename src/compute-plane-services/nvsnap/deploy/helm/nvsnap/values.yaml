@@ -1,0 +1,667 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# NvSnap Helm chart values.
+#
+# Top-level toggles let you turn whole components off (server-only,
+# agent-only, etc.). The same `imageRegistry` default applies to every
+# image unless overridden per-component.
+
+# ─── Subchart dependencies ─────────────────────────────────────────────
+#
+# Default-on so a fresh cluster needs only `helm install nvsnap …` for a
+# complete deployment. Operators with their own cert-manager / GPU
+# Operator should set `enabled: false` for the respective subchart.
+# ─── Global ────────────────────────────────────────────────────────────
+
+cert-manager:
+  enabled: true
+  # CRDs ship with the chart so we don't need a separate CRD install
+  # step. `keep: true` retains them on chart uninstall.
+  crds:
+    enabled: true
+    keep: true
+
+gpu-operator:
+  enabled: true
+  # NVIDIA driver version. Pin per-cluster as customer hardware /
+  # CUDA stack demands. R555+ required for cuda-checkpoint.
+  driver:
+    enabled: true
+    version: "580.95.05"
+  toolkit:
+    enabled: true
+
+# ─── Post-install smoke test ───────────────────────────────────────────
+#
+# Runs as a Helm post-install / post-upgrade Job that probes each
+# component's health endpoint and fails the install if anything is
+# broken. Gives `helm install` a clear PASS/FAIL signal beyond
+# "Pod Ready" — catches mis-configured webhooks, unreachable
+# blobstore, agent ↔ containerd plumbing issues, etc.
+postInstallSmoke:
+  enabled: true
+  # Timeout for the whole Job (each probe has its own short timeout).
+  # 5m covers slow first-time image pulls.
+  activeDeadlineSeconds: 300
+  image:
+    # alpine/k8s ships kubectl + curl + jq in a small image and has
+    # stable tags (Bitnami deprecated bare bitnami/kubectl:<minor>).
+    repository: alpine/k8s
+    tag: "1.31.13"
+    pullPolicy: IfNotPresent
+
+# ─── NvSnap-wide settings ────────────────────────────────────────────────
+#
+# Deliberately under `nvsnap:` rather than Helm's special `global:` key —
+# anything under `global:` is auto-merged into every subchart's
+# `.Values.global`, which would push our private nvcr.io path into
+# Jaeger / cert-manager / gpu-operator and break their image pulls.
+nvsnap:
+  # All NvSnap component images are pulled from
+  # <imageRegistry>/<repository>:<tag> by default. Override
+  # per-component if you mirror to another registry.
+  imageRegistry: nvcr.io/0651155215864979/ncp-dev
+
+  # Pull-secret name(s) referenced by every Pod's spec.imagePullSecrets.
+  # The secret itself must already exist in the target namespace — see
+  # docs/PULL-SECRET-SETUP.md for the setup walkthrough.
+  imagePullSecrets:
+    - nvsnap-pull-secret
+
+  # Tag used for dependency builder images (uvloop-builder, libuv-builder,
+  # libzmq-builder). The agent passes these to its in-process webhook so
+  # it can auto-inject the right init container into BYOC workload pods.
+  # Must match what's actually been built+pushed to imageRegistry —
+  # there's no AppVersion fallback (see _helpers.tpl).
+  builderTag: "v0.0.1"
+
+# ─── NvSnap Agent (DaemonSet on GPU nodes) ───────────────────────────────
+
+agent:
+  enabled: true
+
+  # cachedir (ember) mode. When set (e.g. "/opt/nvsnap"), the webhook
+  # redirects every JIT/compile cache + the model into this single in-pod
+  # path (HOME, TORCHINDUCTOR_CACHE_DIR, NIM_CACHE_PATH, HF_HOME, …) on
+  # BOTH capture and restore, the agent captures ONLY this dir as the rox
+  # root, and restore RO-mounts the rox back here directly (no overlayfs).
+  # Path consistency is what lets the engine reuse prebuilt kernels
+  # (graph capture 379s→38s).
+  #
+  # Default ON ("/opt/nvsnap"): cachedir (ember) is the blessed production
+  # flow — captures the JIT/gemm caches + model into one redirected dir
+  # (small, not the whole 178GB rootfs) and restore page-cache-prewarms
+  # via nvsnap-rootfs-restore. Set to "" to fall back to whole-rootfs
+  # capture (no gemm capture, no prewarm).
+  podCacheDir: "/opt/nvsnap"
+
+  # cacheEnvTemplate is the cachedir env set (nvsnap #244), rendered into
+  # the nvsnap-cachedir-env ConfigMap when podCacheDir is set. The agent
+  # webhook reads it on CAPTURE inject — edit it (helm value or
+  # `kubectl edit cm nvsnap-cachedir-env`) to add/remove cache env vars
+  # without an agent rebuild. NAME=value lines; {root}/{cache}/{model}
+  # placeholders ({cache}=<podCacheDir>/cache, {model}=<podCacheDir>/model).
+  # Restore replays the env stamped in each capture's manifest (the SoT),
+  # so edits only affect FUTURE captures. Mirrors the agent's built-in
+  # default; an unreadable/empty file falls back to that default.
+  cacheEnvTemplate: |
+    HOME={cache}
+    TORCHINDUCTOR_CACHE_DIR={cache}/torchinductor
+    TRITON_CACHE_DIR={cache}/.triton/cache
+    VLLM_CACHE_ROOT={cache}/.cache/vllm
+    CUDA_CACHE_PATH={cache}/.nv/ComputeCache
+    NIM_CACHE_PATH={model}
+    HF_HOME={model}
+
+  # Runtime variant. "containerd" or "crio". The CRI-O variant mounts the
+  # CRI-O socket and uses a different pidns path; everything else is the
+  # same.
+  runtime: containerd
+
+  image:
+    registry: ""              # falls back to nvsnap.imageRegistry
+    repository: nvsnap-agent
+    # MUST match an actually-built+pushed tag in imageRegistry. There
+    # is no AppVersion fallback (see _helpers.tpl) — empty tag fails
+    # the chart render with a clear error rather than templating a
+    # known-broken image ref.
+    tag: "v0.1.3"
+    pullPolicy: Always
+
+  # nodeSelector is intentionally empty — GPU detection runs through
+  # the nodeAffinity block below, which ORs across the labels each
+  # cluster flavor uses for GPU nodes.
+  nodeSelector: {}
+
+  # nodeAffinity with OR across known GPU-node label conventions:
+  # - nvidia.com/gpu.present     NVIDIA GPU Operator (bare-metal, EKS, AKS, KOps, etc.)
+  # - cloud.google.com/gke-gpu   GKE managed node pools
+  # - eks.amazonaws.com/nodegroup-image with gpu in name OR
+  #   nvidia.com/gpu resource at the kubelet (handled by the toleration only)
+  # Override completely by setting `nodeAffinityOverride` to a full
+  # affinity.nodeAffinity block.
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: nvidia.com/gpu.present
+              operator: In
+              values: ["true"]
+        - matchExpressions:
+            - key: cloud.google.com/gke-gpu
+              operator: In
+              values: ["true"]
+        - matchExpressions:
+            - key: feature.node.kubernetes.io/pci-10de.present
+              operator: In
+              values: ["true"]
+
+  # GKE-and-most-others taint pattern. Add more entries to tolerate
+  # additional node taints (e.g. dedicated.gpu-pool=true:NoSchedule).
+  tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
+
+  # The agent runs privileged with hostPID/hostNetwork — required to
+  # see host processes (for CRIU) and to expose hostPort 8081 reliably.
+  # Don't disable unless you know what you're trading away.
+  hostPID: true
+  hostNetwork: true
+
+  # Host paths the agent bind-mounts. Override if your nodes use
+  # non-standard layouts (e.g. K3s on a single laptop).
+  hostPaths:
+    checkpoints: /var/lib/containerd/nvsnap-checkpoints
+    containerdSock: /run/containerd/containerd.sock
+    containerdStorage: /var/lib/containerd
+    nvsnapCache: /var/lib/nvsnap/cache
+    nvsnapStaging: /var/lib/nvsnap/staging
+    nvidiaRun: /run/nvidia
+    hostUsr: /usr
+
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "2Gi"
+    limits:
+      cpu: "4"
+      # Two consumers govern this limit:
+      #  1. Agent-driven restore runs CRIU as a child of the agent; CRIU's
+      #     peak RSS during page restore counts against the agent's cgroup.
+      #  2. Page-cache prewarm (prewarm.go): the agent sequentially reads
+      #     the captured model tree into the page cache; those reclaimable
+      #     pages are charged to the agent cgroup. To keep the FULL warm
+      #     set resident this limit must be >= the captured tree size,
+      #     else the kernel LRU-evicts the early pages mid-read (prewarm
+      #     degrades gracefully — you still warm the last `limit` bytes).
+      # 96Gi covers every model we restore except DeepSeek-V4 (~160 GB).
+      # Clusters that restore >96 GB trees should raise this (H100 nodes
+      # have ~1.9 TB RAM); it is a LIMIT not a request, so it does not
+      # reserve node memory. Set NVSNAP_PREWARM=0 to disable prewarm.
+      memory: "96Gi"
+
+  # Extra env injected verbatim into the agent container. The chart
+  # auto-wires OTEL_EXPORTER_OTLP_ENDPOINT when .Values.jaeger.enabled
+  # is true (see daemonset.yaml); use this block for custom OTel
+  # config (sampling, resource attrs, etc.) or pointing at an existing
+  # external collector.
+  extraEnv: []
+
+  # ─── L2 per-capture PVC (nvsnap#63) ───
+  #
+  # When agent.l2.storageClass is set, the agent provisions a
+  # rwx-<hash> RWX PVC + writer Job + VolumeSnapshot + rox-<hash>
+  # reader PVC after every successful CRIU dump. The mutating webhook
+  # mounts rox-<hash> ReadOnly on restored pods so multi-node fan-out
+  # reads at storage-tier speed in parallel.
+  #
+  # Empty storageClass disables L2; CRIU dumps stay node-pinned on L1
+  # hostpath. Restore in that mode still works (peer cascade / L4
+  # blobstore) but fan-out doesn't scale across nodes.
+  l2:
+    # StorageClass for L2 per-capture PVCs. The backend creates a
+    # writer PVC (rwx-<hash>, mounted ReadWriteOnce by a single
+    # writer Job — lease-serialized one-per-hash) and after
+    # snapshot+clone a reader PVC (rox-<hash>, mounted ReadOnlyMany
+    # by N restored pods). Any standard CSI works — including
+    # Hyperdisk ML on GKE (pd.csi.storage.gke.io), which supports
+    # exactly the RWO/ROX pair the backend needs.
+    #
+    # Recommended:
+    #   GKE:        "hyperdisk-ml"      (pd.csi.storage.gke.io)
+    #   AWS:        gp3 / io2           (ebs.csi.aws.com)
+    #   Azure:      managed-disk        (disk.csi.azure.com)
+    #   Bare metal: Longhorn / Rook-CephFS / Filestore
+    #
+    # Empty disables L2; restore fan-out falls back to peer cascade.
+    # The reference Hyperdisk ML SC is in
+    # deploy/k8s/nvcf-cluster-prep/storage-classes.yaml.
+    storageClass: ""
+
+    # VolumeSnapshotClass for the rwx-<hash> → rox-<hash> transition.
+    # On GKE the default is "csi-gce-pd-snapshot-class". Required
+    # when storageClass is set.
+    snapshotClass: ""
+
+    # Namespace where per-capture PVCs, snapshots, Jobs, and Leases
+    # are created. nvsnap-system matches the agent ServiceAccount's
+    # RBAC scope.
+    namespace: nvsnap-system
+
+    # Namespaces where restore pods live (NVCA function pods admit
+    # into nvcf-backend; user-managed restores may land elsewhere).
+    # For each entry, the chart installs a NetworkPolicy permitting
+    # egress from that namespace to nvsnap-server on port 8080 — the
+    # nvsnap-l2-wait init container's poll target (nvsnap#147).
+    #
+    # Without this, restore pods in restrictive-egress namespaces
+    # (like nvcf-backend's default deny-internal-traffic policy)
+    # stall in Init:N/M because nvsnap-l2-wait's HTTP GET to
+    # nvsnap-server times out.
+    #
+    # Empty list disables the NetworkPolicy install. Same-namespace
+    # restores (i.e. restore pods in this chart's Release namespace)
+    # don't need this — cross-namespace egress is what's blocked.
+    restoreNamespaces: []
+
+    # Image for the writer Job. Defaults to the agent's own image via
+    # the chart template (the capture-write subcommand lives in
+    # cmd/agent — same binary, different subcommand). Override only
+    # if shipping a separate writer image.
+    writerImage: ""
+
+    # nvsnap#147: nvsnap-l2-wait init-container image. The mutating
+    # webhook prepends this onto restore pods (annotated with
+    # nvsnap.io/restore-from). The container polls nvsnap-server's
+    # GET pvc-state endpoint until the L2 promote is ready (or
+    # failed), then exits — gating the inference container on
+    # PVC readiness without giving customer pods K8s credentials.
+    #
+    # Empty disables the inject (back-compat for clusters that
+    # haven't built/pushed the image yet). When disabled, the rox
+    # PVC is still mounted but kubelet may stall in
+    # ContainerCreating until the agent's snap+clone finishes
+    # and kubelet's WFC binder retries successfully.
+    waitImage:
+      registry: ""              # falls back to nvsnap.imageRegistry
+      repository: nvsnap-l2-wait
+      tag: "v0.0.1"
+      pullPolicy: IfNotPresent
+
+    # nvsnap#147 / nvsnap#184: on-host directory the nvsnap-agent
+    # DaemonSet stages the restore bundle into. Function pods
+    # mount {root}/nvsnap + {root}/nvsnap-lib via hostPath (injected
+    # by the mutating webhook on nvsnap.io/restore-from). Empty =
+    # default "/var/lib/nvsnap/bundle" — operators only override for
+    # tests or unusual node-FS layouts. Changing it here must be
+    # mirrored by the nvsnap-bundle-stage initContainer + the
+    # host-bundle hostPath volume in the DaemonSet template (Helm
+    # threads the same value into all three).
+    hostBundleRoot: ""
+
+  # Opt-in cross-cluster replication to a managed object store (provider:
+  # gcs today, s3 planned). Empty provider/homeBucket disables it entirely.
+  # See docs/design/cross-cluster-replication.md.
+  replication:
+    objectStore:
+      provider: ""        # gcs | s3
+      homeBucket: ""      # this cluster's bucket (bare name, no gs://)
+      peerBuckets: []     # other clusters' buckets, probed on pull miss
+      pollInterval: 30s   # auto-pull poller cadence; 0 disables the poller
+      serviceAccount: ""  # GCP Workload-Identity SA email (gcs provider)
+
+# ─── NvSnap Server (REST API + UI) ───────────────────────────────────────
+
+server:
+  enabled: true
+
+  image:
+    registry: ""
+    repository: nvsnap-server
+    # MUST match an actually-built+pushed tag (see _helpers.tpl —
+    # empty fails the chart render).
+    tag: "v0.0.31"
+    pullPolicy: Always
+
+  replicaCount: 1               # SQLite-backed; >1 needs an external DB
+
+  # SQLite DB persistence.
+  persistence:
+    enabled: true
+    size: 1Gi
+    # Storage class. Leave empty to use the cluster default.
+    storageClassName: ""
+    accessMode: ReadWriteOnce
+
+  service:
+    # ClusterIP, NodePort, or LoadBalancer. LoadBalancer is the only
+    # type that gets you a stable external IP on managed K8s, at the
+    # cost of needing a cloud-provider LB.
+    type: LoadBalancer
+    port: 8080
+
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "256Mi"
+
+# ─── NvSnap Blobstore (Phase 5d.2 durable backstop) ──────────────────────
+
+blobstore:
+  enabled: true
+
+  image:
+    registry: ""
+    repository: nvsnap-blobstore
+    # MUST match an actually-built+pushed tag (see _helpers.tpl —
+    # empty fails the chart render). Blobstore is rebuilt
+    # independently of agent/server; bump only when the blobstore
+    # binary changes.
+    tag: "v0.0.1"
+    pullPolicy: Always
+
+  persistence:
+    enabled: true
+    # 1 TiB holds ~30 captures of vllm-small (28 GB each). Scale to your
+    # retention policy. Same storage class as the server PVC by default;
+    # override here if you want them on different backends.
+    size: 1Ti
+    storageClassName: ""
+    accessMode: ReadWriteOnce
+
+  service:
+    # ClusterIP only — agents and the server reach this internally.
+    # External admin access goes through `kubectl port-forward`.
+    type: ClusterIP
+    port: 9000
+
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "256Mi"
+    limits:
+      cpu: "2"
+      memory: "1Gi"
+
+# ─── Admission webhook (mutating, in-agent) ────────────────────────────
+
+webhook:
+  # The webhook is served BY the agent DaemonSet, not by a separate Pod.
+  # This block controls only the Service + MutatingWebhookConfiguration +
+  # cert-manager Certificate that point the apiserver at the agent's
+  # webhook port.
+  #
+  # Requires cert-manager installed in the cluster. Set to false if
+  # you don't have cert-manager or don't want the auto-inject webhook.
+  enabled: true
+
+  # The dnsName the cert SAN matches and the apiserver dials.
+  # Format: <service-name>.<namespace>.svc.cluster.local
+  serviceName: nvsnap-webhook
+
+  # failurePolicy. "Ignore" means apiserver lets the pod through even
+  # if the webhook is down — the webhook is an optimization, never a
+  # gate. "Fail" turns it into a hard dependency. Don't change unless
+  # you're sure.
+  failurePolicy: Ignore
+
+  # Cert duration / renewal. 1y / 30d is the conventional pair.
+  cert:
+    duration: 8760h
+    renewBefore: 720h
+
+  # nvsnap#202: where the OverlayFS mount syscalls happen.
+  #   "inline"         (default) — Mutate() does the mounts during
+  #                    admission. Fine for captures with a handful of
+  #                    mounts; blows past the 10–30s webhook timeout
+  #                    for ones with hundreds (DeepSeek-V4-Flash has 355).
+  #   "init-container" — the webhook emits a nvsnap-mount-prep init
+  #                    container on the restored pod; it POSTs the
+  #                    work to the agent's async prep manager and
+  #                    polls until ready. Mountpoints are deterministic
+  #                    so admission only emits patches, no kernel work.
+  restorePrepStrategy: inline
+
+  # Image ref for the nvsnap-mount-prep init container. Only consulted
+  # when restorePrepStrategy=init-container. Empty (default) falls back
+  # to the running agent image, which already bundles /nvsnap-mount-prep.
+  # Override to point at a smaller image if you build one separately.
+  mountPrepInitImage: ""
+
+  # Port the nvsnap-mount-prep init container reaches the agent on.
+  # Matches the agent DaemonSet's --listen=:8081 / hostPort. Override
+  # only if you've remapped the agent's listen port.
+  agentHostPort: 8081
+
+  # Node-IP CIDR for the egress NetworkPolicy that lets restore pods
+  # reach the node-local nvsnap-agent under restorePrepStrategy=init-container.
+  # The agent runs hostNetwork:true, so it has the node identity, not a
+  # pod identity — a podSelector egress rule won't match it (Cilium /
+  # GKE Dataplane V2). We therefore allow egress by node CIDR. Empty =
+  # don't render the policy (use the default inline strategy, which needs
+  # no pod->agent egress). Example: "10.40.0.0/16".
+  agentHostCIDR: ""
+
+# ─── Jaeger (distributed tracing showcase) ─────────────────────────────
+#
+# Bundled all-in-one Jaeger for the "show me where time goes" demo.
+# When enabled, the agent sets OTEL_EXPORTER_OTLP_ENDPOINT to the
+# in-cluster jaeger-collector and emits OTLP spans for checkpoint /
+# restore phases (cascade fetch tiers, CRIU dump/restore, CUDA replay,
+# blobstore upload). Open the Jaeger UI to see end-to-end timing.
+#
+# All-in-one mode bundles collector + query + UI in one Pod with
+# in-memory storage. Fine for demos and short-lived investigations;
+# NOT suitable for production retention. Point at an external Jaeger
+# (or any OTLP-compatible backend) by leaving this disabled and
+# setting agent.extraEnv directly.
+jaeger:
+  enabled: false
+
+  # All-in-one mode: single Pod for collector + query + UI.
+  allInOne:
+    enabled: true
+    extraEnv:
+      # Bind the OTLP gRPC receiver so the NvSnap agent can ship spans.
+      - name: COLLECTOR_OTLP_ENABLED
+        value: "true"
+      # Mount the Jaeger UI under /observability/jaeger/ so it works
+      # behind the nvsnap-server single-pane proxy. Empty / "/" still
+      # works for direct port-forward access.
+      - name: QUERY_BASE_PATH
+        value: "/observability/jaeger"
+
+  # Disable the separate components — all-in-one covers them.
+  agent:
+    enabled: false
+  collector:
+    enabled: false
+  query:
+    enabled: false
+
+  # In-memory storage (no PVC required). For a longer-running showcase
+  # swap to `cassandra` / `elasticsearch` and provide a PVC.
+  storage:
+    type: memory
+
+  # Query/UI service. ClusterIP by default — operators expose via
+  # `kubectl port-forward svc/nvsnap-jaeger-query 16686:16686` or
+  # bump this to LoadBalancer for a public-IP demo.
+  provisionDataStore:
+    cassandra: false
+    elasticsearch: false
+    kafka: false
+
+# ─── Prometheus subchart (showcase / demo) ─────────────────────────────
+#
+# Bundled Prometheus for showcase clusters. Off by default. Opt in
+# with `--set prometheus.enabled=true`. For production, point an
+# existing Prometheus at NVCA + nvsnap's `/metrics` endpoints and leave
+# this off — kube-prometheus-stack and Google Cloud Managed Prometheus
+# both scrape via the standard `prometheus.io/scrape` pod annotation
+# that the NvSnap workloads already carry.
+prometheus:
+  enabled: false
+
+  # Trimmed install — no AlertManager, no PushGateway, no
+  # NodeExporter. Showcase wants the scrape engine + the UI, nothing
+  # else. Operators with full observability stacks already have
+  # those components elsewhere.
+  alertmanager:
+    enabled: false
+  prometheus-pushgateway:
+    enabled: false
+  prometheus-node-exporter:
+    enabled: false
+  kube-state-metrics:
+    enabled: false
+
+  server:
+    # In-memory retention sized for showcase scrapes — bump if you're
+    # running a multi-hour benchmark.
+    retention: 6h
+    persistentVolume:
+      enabled: false
+    # ClusterIP by default; reach via the nvsnap-server single-pane
+    # proxy at /observability/prometheus/, or kubectl port-forward
+    # svc/nvsnap-prometheus-server 9090 for direct access.
+    service:
+      type: ClusterIP
+    # External URL Prometheus generates links under (alerts, redirects).
+    # Match the nvsnap-server proxy mount so links don't 404.
+    extraArgs:
+      web.external-url: "/observability/prometheus/"
+      web.route-prefix: "/"
+    resources:
+      requests:
+        cpu: "100m"
+        memory: "256Mi"
+      limits:
+        cpu: "500m"
+        memory: "1Gi"
+
+  # Static scrape jobs for NVCA + nvsnap's /metrics endpoints. Targets
+  # use the in-cluster DNS names matching the components' Services.
+  # Adjust if you renamed/moved any of them.
+  serverFiles:
+    prometheus.yml:
+      scrape_configs:
+        - job_name: prometheus
+          static_configs:
+            - targets: [localhost:9090]
+        - job_name: nvsnap-server
+          scrape_interval: 15s
+          static_configs:
+            - targets: [nvsnap-server.nvsnap-system.svc.cluster.local:8080]
+        - job_name: nvsnap-agent
+          scrape_interval: 15s
+          # The NvSnap agent runs as a DaemonSet on every GPU node with
+          # hostPort 8081; let Prometheus discover via the K8s API.
+          kubernetes_sd_configs:
+            - role: pod
+              namespaces:
+                names: [nvsnap-system]
+          relabel_configs:
+            - source_labels: [__meta_kubernetes_pod_label_app]
+              action: keep
+              regex: nvsnap-agent
+            - source_labels: [__meta_kubernetes_pod_ip]
+              target_label: __address__
+              replacement: $1:8081
+        - job_name: nvca
+          scrape_interval: 15s
+          kubernetes_sd_configs:
+            - role: service
+              namespaces:
+                names: [nvca-system]
+          relabel_configs:
+            # NVCA exports /metrics on the agent service; the cluster
+            # ships it on port 9402 in the standard NVCA chart.
+            - source_labels: [__meta_kubernetes_service_name]
+              action: keep
+              regex: nvca-agent-metrics
+
+# ─── Grafana subchart (showcase / demo) ────────────────────────────────
+#
+# Bundled Grafana, pre-loaded with the NvSnap dashboard so the headline
+# panel (cold-start vs NvSnap-restored pod ready time) is one click away
+# from a fresh install. Off by default; opt in with
+# `--set grafana.enabled=true prometheus.enabled=true`.
+#
+# Reachable two ways:
+#   - via the NvSnap single-pane proxy (recommended): the nvsnap-server
+#     UI's "Observability → Dashboards" link points at
+#     /observability/grafana/, which proxies to this service. One
+#     external IP for everything. grafana.ini below tells Grafana to
+#     serve under the sub-path so its own internal URLs resolve.
+#   - directly: kubectl port-forward svc/nvsnap-grafana 3000:80
+grafana:
+  enabled: false
+
+  # Tell Grafana it's mounted under /observability/grafana on the
+  # nvsnap-server proxy. Without these, Grafana generates absolute
+  # /api/... URLs that 404 against nvsnap-server. See
+  # internal/server/observability_proxy.go for the proxy contract.
+  grafana.ini:
+    server:
+      root_url: "%(protocol)s://%(domain)s/observability/grafana/"
+      serve_from_sub_path: true
+
+  # No external auth for a showcase — admin/admin. Override
+  # `adminPassword` for any cluster that's not a throwaway.
+  adminUser: admin
+  adminPassword: admin
+
+  # Default datasource points at the bundled Prometheus. Subchart
+  # service names are <release>-<chart>-server style; assumes the
+  # parent chart is installed as release "nvsnap".
+  datasources:
+    datasources.yaml:
+      apiVersion: 1
+      datasources:
+        - name: Prometheus
+          type: prometheus
+          url: http://nvsnap-prometheus-server.nvsnap-system.svc.cluster.local
+          access: proxy
+          isDefault: true
+
+  # Dashboard auto-discovery: the Grafana sidecar watches for
+  # ConfigMaps labeled grafana_dashboard=1 and loads them. The NvSnap
+  # dashboard ConfigMap (templates/grafana-dashboard.yaml) is
+  # rendered alongside this chart with that label.
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: ALL
+
+  service:
+    type: ClusterIP
+
+  persistence:
+    enabled: false
+
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "128Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"

@@ -42,7 +42,6 @@ import (
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/urfave/cli/v2"
 	admissionv1 "k8s.io/api/admission/v1"
 	v1 "k8s.io/api/core/v1"
 	nodev1 "k8s.io/api/node/v1"
@@ -129,12 +128,6 @@ func generateTestCertificates(t *testing.T) (caCert, caKey, cert, key []byte) {
 
 func TestCmd(t *testing.T) {
 	cmd := NewCommand()
-	app := &cli.App{
-		Name:   cmd.Name,
-		Usage:  cmd.Usage,
-		Flags:  cmd.Flags,
-		Action: cmd.Action,
-	}
 
 	ctx := context.Background()
 
@@ -160,12 +153,24 @@ func TestCmd(t *testing.T) {
 		Transport: trpt1,
 	}
 
-	args := []string{
-		"webhook-server",
-		"--listen", addr,
-		"--tls-key-file", keyFilePath,
-		"--tls-cert-file", certFilePath,
+	cfg := nvcaconfig.Config{
+		Webhook: nvcaconfig.WebhookConfig{
+			SvcAddress:  addr,
+			TLSCertFile: certFilePath,
+			TLSKeyFile:  keyFilePath,
+		},
 	}
+	cfgBytes, err := nvcaconfig.EncodeConfig(cfg)
+	require.NoError(t, err)
+	cfgFilePath := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(cfgFilePath, cfgBytes, 0600))
+
+	// Workaround to force test arg usage
+	cmd.Use = "cobra.test"
+	cmd.SetArgs([]string{
+		cmd.Use,
+		"--config", cfgFilePath,
+	})
 
 	var runErr error
 	runReturned := make(chan struct{})
@@ -175,7 +180,7 @@ func TestCmd(t *testing.T) {
 		newK8sClient = func(ctx context.Context, path string) (kubernetes.Interface, error) {
 			return k8sfake.NewSimpleClientset(), nil
 		}
-		runErr = app.RunContext(ctx, args)
+		runErr = cmd.ExecuteContext(ctx)
 		runReturned <- struct{}{}
 		newK8sClient = tmpFunc
 	}()
@@ -200,7 +205,7 @@ func TestCmd(t *testing.T) {
 	cmData := &bytes.Buffer{}
 
 	// Test with len(body) < 7MB.
-	_, err := io.Copy(cmData, io.LimitReader(rand.Reader, bodySize))
+	_, err = io.Copy(cmData, io.LimitReader(rand.Reader, bodySize))
 	require.NoError(t, err)
 	cm.Data = map[string]string{"key": base64.StdEncoding.EncodeToString(cmData.Bytes())}
 	assert.EventuallyWithT(t, func(ct *assert.CollectT) {

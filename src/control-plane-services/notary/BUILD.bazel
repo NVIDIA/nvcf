@@ -1,0 +1,26 @@
+load("//rules/java:notice.bzl", "nvcf_notice", "nvcf_notice_delta")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "NOTICE",
+    "notice_metadata.json",
+])
+
+nvcf_notice(
+    checked_notice = ":NOTICE",
+    first_party_groups = ["com.nvidia.notary"],
+    inventory_name = "notary_runtime_inventory",
+    metadata = ":notice_metadata.json",
+    runtime_target = "//src/control-plane-services/notary/notary-service:app",
+    shared_metadata = [
+        "//src/libraries/java/nv-boot-parent:notice_metadata.json",
+    ],
+)
+
+nvcf_notice_delta(
+    baseline_inventories = [
+        "//src/libraries/java/nv-boot-parent:runtime_inventory.json",
+    ],
+    inventory = ":runtime_inventory.json",
+)

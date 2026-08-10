@@ -20,7 +20,7 @@ Resolve the cluster gateway and generate an invocation API key via `nvcf-cli`:
 
 ```bash
 export GATEWAY_ADDR=$(kubectl get gateway nvcf-gateway -n envoy-gateway -o jsonpath='{.status.addresses[0].value}')
-export NVCF_API_KEY=$(nvcf-cli api-key generate --description "fastapi-streaming-sample" --json | jq -r .apiKey)
+export NVCF_API_KEY=$(nvcf-cli api-key generate --description "fastapi-streaming-sample" --json | jq -r '.keys[] | select(.service=="function") | .apiKey')
 ```
 
 Request an SSE stream through the gateway, routing with the `Host` header:

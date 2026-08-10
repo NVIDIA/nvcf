@@ -1,0 +1,87 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# PDF Testing Matrix — ASR/TTS workload row
+# Source: NVCFCheckpoint_RestoreBenchmarks.pdf (2026-06-03)
+#
+# Per-doc settings (do not deviate without updating the doc):
+#   Image       : nvcr.io/nim/nvidia/whisper-large-v3:1.5.1
+#   Runtime env : NIM_TAGS_SELECTOR=name=whisper-large-v3
+#   Hardware    : 1x H100
+#
+# NIM speech-recognition pattern (Riva-based, OpenAI-compatible):
+#   port 9000 = HTTP API ; /v1/health/ready = readiness ; /v1/audio/transcriptions = inference.
+# NGC_API_KEY is read from the `ngc-api-key` secret in nvsnap-system.
+#
+# Capture path = ROOTFS (Riva/Triton NIM, CLAUDE.md rule 20). The
+# nvsnap quiesce intercept (LD_PRELOAD libnvsnap_intercept.so) is
+# deliberately NOT injected: it hijacks SIGUSR1/SIGUSR2 for the CRIU
+# quiesce protocol, which blocks Riva/Triton from installing their own
+# handlers and kills Triton at startup. The rootfs path snapshots the
+# container filesystem and needs no in-process intercept.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bench-whisper
+  namespace: nvsnap-system
+  labels:
+    app: bench-whisper
+    nvsnap.io/bench: "pdf-matrix"
+    nvsnap.io/bench-row: "asr-tts"
+    nvsnap.io/capture: "true"
+  annotations:
+    nvsnap.io/desc: "PDF bench: whisper-large-v3 NIM (1.5.1) ASR"
+spec:
+  nodeSelector:
+    nvidia.com/gpu.present: "true"   # any GPU node (GFD label), not a pinned host
+  tolerations:
+    - key: "nvidia.com/gpu"
+      operator: "Exists"
+      effect: "NoSchedule"
+  imagePullSecrets:
+    - name: nvsnap-pull-secret
+
+  containers:
+    - name: whisper
+      image: nvcr.io/nim/nvidia/whisper-large-v3:1.5.1
+      imagePullPolicy: IfNotPresent
+      env:
+        # PDF-mandated
+        - { name: NIM_TAGS_SELECTOR, value: "name=whisper-large-v3" }
+        # NGC auth for model fetch (uses nvsnap-system/ngc-api-key)
+        - name: NGC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: ngc-api-key
+              key: NGC_API_KEY
+        # NIM_CACHE_PATH is injected by the webhook (cachedir mode) →
+        # /opt/nvsnap/model; do NOT set it here.
+        # Riva/Triton default LD_LIBRARY_PATH (from `docker inspect` of
+        # nvcr.io/nim/nvidia/whisper-large-v3:1.5.1). libmkl_intel_lp64
+        # ships in /opt/tritonserver/backends/pytorch; without that path
+        # the Riva/Triton stack fails to load at startup.
+        - { name: LD_LIBRARY_PATH, value: "/opt/tritonserver/backends/pytorch:/opt/tritonserver/lib:/opt/riva/lib:/usr/local/cuda-13.0/lib64:/usr/local/cuda/compat/lib:/usr/local/nvidia/lib:/usr/local/nvidia/lib64:/usr/local/cuda/lib64" }
+        - { name: PYTHONFAULTHANDLER,   value: "1" }
+        - { name: PYTHONUNBUFFERED,     value: "1" }
+        - { name: CUDA_VISIBLE_DEVICES, value: "0" }
+      ports:
+        - { containerPort: 9000, name: http }
+      readinessProbe:
+        httpGet: { path: /v1/health/ready, port: 9000 }
+        initialDelaySeconds: 120  # NIM speech models take ~1-3 min to load
+        periodSeconds: 15
+        timeoutSeconds: 5
+        failureThreshold: 60
+      resources:
+        limits:   { nvidia.com/gpu: "1" }
+        requests: { nvidia.com/gpu: "1" }
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - { name: shm, mountPath: /dev/shm }
+
+  volumes:
+    - name: shm
+      emptyDir: { medium: Memory, sizeLimit: 16Gi }
+
+  restartPolicy: Never

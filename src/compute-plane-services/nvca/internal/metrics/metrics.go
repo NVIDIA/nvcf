@@ -20,6 +20,8 @@ package metrics
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -39,6 +41,8 @@ import (
 const (
 	InstanceTypeAllocatableMetricName          = "nvca_instance_type_allocatable"
 	InstanceTypeCapacityMetricName             = "nvca_instance_type_capacity"
+	GPUNodeUnclassifiedCountMetricName         = "nvca_gpu_node_unclassified_count"
+	GPUNodeTotalCountMetricName                = "nvca_gpu_node_total_count"
 	ContainerCrashTotalMetricName              = "nvca_container_crash_total"
 	ContainerRestartTotalMetricName            = "nvca_container_restart_total"
 	EventErrorTotalMetricName                  = "nvca_event_error_total"
@@ -67,10 +71,41 @@ const (
 	GCCleanerRunTotalMetricName            = "nvca_gc_cleaner_run_total"
 
 	// Model cache metrics
-	ModelCacheResultTotalMetricName = "nvca_model_cache_result_total"
+	ModelCacheResultTotalMetricName          = "nvca_model_cache_result_total"
+	ModelCacheBackendsMetricName             = "nvca_model_cache_backends"
+	ModelCacheBackendSelectedTotalMetricName = "nvca_model_cache_backend_selected_total"
+	ModelCachePopulateTotalMetricName        = "nvca_model_cache_populate_total"
+	ModelCacheReuseTotalMetricName           = "nvca_model_cache_reuse_total"
+	ModelCacheReclaimedTotalMetricName       = "nvca_model_cache_reclaimed_total"
 
 	// Cluster attribute metrics
 	KataRuntimeIsolationEnabledMetricName = "nvca_kata_runtime_isolation_enabled"
+	MaintenanceModeStateMetricName        = "nvca_maintenance_mode_state"
+
+	// Cluster-validator metrics — populated by a SharedInformer that
+	// watches the cluster-validator-summary ConfigMap. The dynamic-cardinality
+	// metrics (per endpoint / per netpol pair) are prune-on-update so only
+	// the latest run's labels are exposed at any moment.
+	ClusterValidatorReadyMetricName             = "nvca_cluster_validator_ready"
+	ClusterValidatorCheckStatusMetricName       = "nvca_cluster_validator_check_status"
+	ClusterValidatorEndpointReachableMetricName = "nvca_cluster_validator_endpoint_reachable"
+	ClusterValidatorNetpolPairPassedMetricName  = "nvca_cluster_validator_netpol_pair_passed" //nolint:gosec // metric name literal, not a credential
+	ClusterValidatorLastRunTimestampMetricName  = "nvca_cluster_validator_last_run_timestamp_seconds"
+	ClusterValidatorLastRunDurationMetricName   = "nvca_cluster_validator_last_run_duration_seconds"
+
+	// Cluster-validator label keys
+	ClusterValidatorCheckLabel      = "check"
+	ClusterValidatorEndpointLabel   = "endpoint"
+	ClusterValidatorNetpolPairLabel = "pair"
+	ClusterValidatorDirectionLabel  = "direction"
+	ClusterValidatorPolicySideLabel = "policy_side"
+	ClusterValidatorCriticalLabel   = "critical"
+
+	// Cluster-validator netpol policy-side label values. The direction
+	// label values ("a_to_b"/"b_to_a") originate from the summary wire
+	// format and flow through as map keys.
+	clusterValidatorPolicySideEgress  = "egress"
+	clusterValidatorPolicySideIngress = "ingress"
 
 	// Workload result metrics
 	WorkloadResultTotalMetricName = "nvca_workload_result_total"
@@ -98,6 +133,8 @@ const (
 	K8sResourceLabel         = "resource"
 	QueueTypeLabel           = "queue_type"
 	GPUNameLabel             = "gpu_name"
+	GPUFamilyLabel           = "gpu_family"
+	GPUMachineLabel          = "gpu_machine"
 	MiniServicePhaseLabel    = "miniservice_phase"
 	FromPhaseLabel           = "from_phase"
 	ToPhaseLabel             = "to_phase"
@@ -116,6 +153,7 @@ const (
 	// Model cache labels
 	ResultLabel        = "result"
 	FailureReasonLabel = "failure_reason"
+	BackendLabel       = "backend"
 
 	// Workload result labels
 	WorkloadTypeLabel    = "workload_type"
@@ -129,6 +167,9 @@ const (
 
 	// Scheduler workload count labels
 	SchedulerNameLabel = "scheduler_name"
+
+	// Maintenance-mode label
+	MaintenanceModeLabel = "mode"
 
 	// UpstreamOperation values for use with RecordUpstreamRequest.
 	UpstreamOperationHeartbeat   = "heartbeat"
@@ -144,6 +185,16 @@ var AllUpstreamOperations = []string{
 	UpstreamOperationCredentials,
 	UpstreamOperationJWKSPush,
 }
+
+// storageRequestDurationBucketsSeconds are the explicit histogram buckets (in
+// seconds) for nvca_storage_controller_request_duration. Storage provisioning
+// is a long-running operation with a 4-minute (240s) SLO, so the buckets are
+// coarse and spread across minutes rather than using the default sub-second
+// Prometheus buckets. The 240s boundary is included so the "Storage Provisioner
+// Latency" panel can report the fraction of requests within SLO directly. This
+// follows OpenTelemetry explicit-bucket guidance for long-running operations:
+// https://opentelemetry.io/docs/specs/otel/metrics/data-model/#histogram
+var storageRequestDurationBucketsSeconds = []float64{10, 30, 60, 120, 180, 240, 300, 600, 1200, 1800}
 
 func getDefaultLabels() []string {
 	return []string{
@@ -213,9 +264,11 @@ type Metrics struct {
 	InstanceTypeAllocatable   *prometheus.GaugeVec // node must be schedulable to be allocatable
 	InstanceTypeCapacity      *prometheus.GaugeVec
 	InstanceTypeUnschedulable *prometheus.GaugeVec // amount where node is schedule=false according to NVCA
+	GPUNodeUnclassifiedCount  *prometheus.GaugeVec // count of GPU-bearing nodes with no recognized instance-type label
+	GPUNodeTotalCount         *prometheus.GaugeVec // total count of GPU-bearing nodes seen, classified and unclassified
 
 	// Storage controller metrics
-	StorageRequestDuration *prometheus.SummaryVec
+	StorageRequestDuration *prometheus.HistogramVec
 
 	// MiniService controller metrics
 	MiniServiceReconcilePhaseTotal   *prometheus.CounterVec
@@ -235,10 +288,38 @@ type Metrics struct {
 	GCCleanerRunTotal            *prometheus.CounterVec
 
 	// Model cache metrics
-	ModelCacheResultTotal *prometheus.CounterVec
+	ModelCacheResultTotal          *prometheus.CounterVec
+	ModelCacheBackends             *prometheus.GaugeVec
+	ModelCacheBackendSelectedTotal *prometheus.CounterVec
+	ModelCachePopulateTotal        *prometheus.CounterVec
+	ModelCacheReuseTotal           *prometheus.CounterVec
+	ModelCacheReclaimedTotal       *prometheus.CounterVec
 
 	// Cluster attribute metrics
 	KataRuntimeIsolationEnabled *prometheus.GaugeVec
+
+	// MaintenanceModeState reports the active maintenance mode: the series
+	// whose mode label matches the active mode is set to 1 and every other
+	// mode series is 0 (one-hot encoding). See SetMaintenanceModeState() for
+	// the update protocol.
+	MaintenanceModeState *prometheus.GaugeVec
+
+	// Cluster-validator metrics — see SetClusterValidatorSummary() for the
+	// update protocol. The dynamic-cardinality vectors (Endpoint, NetpolPair)
+	// are prune-on-update so only the current run's label values are
+	// exposed; Prometheus's TSDB retains historical points via normal scrape
+	// history.
+	ClusterValidatorReady             *prometheus.GaugeVec
+	ClusterValidatorCheckStatus       *prometheus.GaugeVec
+	ClusterValidatorEndpointReachable *prometheus.GaugeVec
+	ClusterValidatorNetpolPairPassed  *prometheus.GaugeVec
+	ClusterValidatorLastRunTimestamp  *prometheus.GaugeVec
+	ClusterValidatorLastRunDuration   *prometheus.GaugeVec
+	// clusterValidatorLastEmitted tracks label tuples emitted by the last
+	// reconcile so the next update can prune stale series. Guarded by
+	// clusterValidatorMu.
+	clusterValidatorLastEmitted *clusterValidatorEmittedSet
+	clusterValidatorMu          sync.Mutex
 
 	// Workload result metrics
 	WorkloadResultTotal *prometheus.CounterVec
@@ -276,6 +357,8 @@ func (m *Metrics) Destroy() {
 	prometheus.Unregister(m.InstanceTypeCapacity)
 	prometheus.Unregister(m.InstanceTypeAllocatable)
 	prometheus.Unregister(m.InstanceTypeUnschedulable)
+	prometheus.Unregister(m.GPUNodeUnclassifiedCount)
+	prometheus.Unregister(m.GPUNodeTotalCount)
 	prometheus.Unregister(m.StorageRequestDuration)
 	prometheus.Unregister(m.MiniServiceReconcilePhaseTotal)
 	prometheus.Unregister(m.MiniServicePhaseTransitionsTotal)
@@ -289,7 +372,19 @@ func (m *Metrics) Destroy() {
 	prometheus.Unregister(m.OrphanedResourceCleanupTotal)
 	prometheus.Unregister(m.GCCleanerRunTotal)
 	prometheus.Unregister(m.ModelCacheResultTotal)
+	prometheus.Unregister(m.ModelCacheBackends)
+	prometheus.Unregister(m.ModelCacheBackendSelectedTotal)
+	prometheus.Unregister(m.ModelCachePopulateTotal)
+	prometheus.Unregister(m.ModelCacheReuseTotal)
+	prometheus.Unregister(m.ModelCacheReclaimedTotal)
 	prometheus.Unregister(m.KataRuntimeIsolationEnabled)
+	prometheus.Unregister(m.MaintenanceModeState)
+	prometheus.Unregister(m.ClusterValidatorReady)
+	prometheus.Unregister(m.ClusterValidatorCheckStatus)
+	prometheus.Unregister(m.ClusterValidatorEndpointReachable)
+	prometheus.Unregister(m.ClusterValidatorNetpolPairPassed)
+	prometheus.Unregister(m.ClusterValidatorLastRunTimestamp)
+	prometheus.Unregister(m.ClusterValidatorLastRunDuration)
 	prometheus.Unregister(m.WorkloadResultTotal)
 	prometheus.Unregister(m.UpstreamRequestTotal)
 	prometheus.Unregister(m.SchedulerWorkloadCount)
@@ -325,6 +420,14 @@ func WithKataRuntimeIsolationEnabled(enabled bool) DefaultMetricsOption {
 			}
 			m.KataRuntimeIsolationEnabled.WithLabelValues(m.WithDefaultLabelValues()...).Set(val)
 		}
+	}
+}
+
+// WithMaintenanceMode sets the initial value of the maintenance-mode gauge.
+// This should be called once at agent startup with the configured mode.
+func WithMaintenanceMode(mode types.MaintenanceMode) DefaultMetricsOption {
+	return func(m *Metrics) {
+		m.SetMaintenanceModeState(mode)
 	}
 }
 
@@ -438,6 +541,7 @@ func NewDefaultMetrics(ncaID, clusterName, clusterGroup, version string, opts ..
 	// Initialize K8s API metrics to zero for known resource types
 	for _, resource := range []string{
 		"csidriver",
+		"deployment",
 		"namespace",
 		"node",
 		"pod",
@@ -465,15 +569,30 @@ func NewDefaultMetrics(ncaID, clusterName, clusterGroup, version string, opts ..
 		Name: InstanceTypeUnschedulableMetricName,
 		Help: "Count of instances that could be deployed on unschedulable node resources by instance type",
 	}, withDefaultLabels(InstanceTypeLabel))
+	m.GPUNodeUnclassifiedCount = promFactory.NewGaugeVec(prometheus.GaugeOpts{
+		Name: GPUNodeUnclassifiedCountMetricName,
+		Help: "Count of nodes with GPU resources present but no recognized instance-type label, " +
+			"indicating a GPU discovery or labeling gap, bucketed by GPU family and machine type",
+	}, withDefaultLabels(GPUFamilyLabel, GPUMachineLabel))
+	m.GPUNodeTotalCount = promFactory.NewGaugeVec(prometheus.GaugeOpts{
+		Name: GPUNodeTotalCountMetricName,
+		Help: "Total count of GPU-bearing nodes seen, classified and unclassified, bucketed by GPU family and machine type",
+	}, withDefaultLabels(GPUFamilyLabel, GPUMachineLabel))
 
-	// Storage controller metrics (uses storage labels for backwards compatibility)
-	m.StorageRequestDuration = promFactory.NewSummaryVec(prometheus.SummaryOpts{
+	// Storage controller metrics (uses storage labels for backwards compatibility).
+	// Histogram (not summary) so latency SLO panels can be built from _bucket{le=...}
+	// series; buckets are tuned for the long-running 4-minute provisioning SLO.
+	m.StorageRequestDuration = promFactory.NewHistogramVec(prometheus.HistogramOpts{
 		Name: StorageRequestDurationMetricName,
-		Help: "Duration of NVCA Storage Controller request to terminal state. " +
+		Help: "Duration (seconds) of NVCA Storage Controller request to terminal state. " +
 			"storage_request_phase is the terminal phase of the request.",
-		MaxAge:     1 * time.Hour,
-		Objectives: map[float64]float64{0.5: 0.05, 0.9: 0.01, 0.99: 0.001},
+		Buckets: storageRequestDurationBucketsSeconds,
 	}, withStorageLabels(StorageRequestPhaseLabel))
+	// Pre-register all known storage phases so the series appear on the first Prometheus scrape
+	// even before any StorageRequest reaches a terminal state.
+	for _, phase := range []string{"Pending", "InitRunning", "Creating", "Ready", "Failed", "RuntimeError"} {
+		m.StorageRequestDuration.WithLabelValues(m.withStorageLabelValues(phase)...)
+	}
 
 	// MiniService controller metrics (use getMiniServiceLabels for backwards compatibility)
 	m.MiniServiceReconcilePhaseTotal = promFactory.NewCounterVec(prometheus.CounterOpts{
@@ -572,14 +691,56 @@ func NewDefaultMetrics(ncaID, clusterName, clusterGroup, version string, opts ..
 	// Model cache metrics (uses storage labels for backwards compatibility)
 	m.ModelCacheResultTotal = promFactory.NewCounterVec(prometheus.CounterOpts{
 		Name: ModelCacheResultTotalMetricName,
-		Help: "Total number of model cache operations by result. " +
+		Help: "Total number of model cache operations by result and backend. " +
 			"result is 'success' or 'failure', failure_reason is set only on failure.",
-	}, withStorageLabels(ResultLabel, FailureReasonLabel))
+	}, withStorageLabels(ResultLabel, FailureReasonLabel, BackendLabel))
 
-	// Initialize model cache metrics to zero for known result/failure_reason combinations
-	m.ModelCacheResultTotal.WithLabelValues(m.withStorageLabelValues(modelcachetypes.ResultSuccess, "")...)
+	// nvca_model_cache_backends: a gauge of how many distinct caches are
+	// currently provisioned per backend (e.g. how many Samba backing PVCs/servers
+	// exist). Refreshed by the periodic idle-cleanup sweep.
+	m.ModelCacheBackends = promFactory.NewGaugeVec(prometheus.GaugeOpts{
+		Name: ModelCacheBackendsMetricName,
+		Help: "Number of model caches currently provisioned, by backend.",
+	}, withStorageLabels(BackendLabel))
+
+	m.ModelCacheBackendSelectedTotal = promFactory.NewCounterVec(prometheus.CounterOpts{
+		Name: ModelCacheBackendSelectedTotalMetricName,
+		Help: "Total model cache requests by selected backend.",
+	}, withStorageLabels(BackendLabel))
+
+	m.ModelCachePopulateTotal = promFactory.NewCounterVec(prometheus.CounterOpts{
+		Name: ModelCachePopulateTotalMetricName,
+		Help: "Total model cache populates (the single-writer download ran), by backend.",
+	}, withStorageLabels(BackendLabel))
+
+	m.ModelCacheReuseTotal = promFactory.NewCounterVec(prometheus.CounterOpts{
+		Name: ModelCacheReuseTotalMetricName,
+		Help: "Total model cache reuses (an already-populated cache was attached without a download), by backend.",
+	}, withStorageLabels(BackendLabel))
+
+	m.ModelCacheReclaimedTotal = promFactory.NewCounterVec(prometheus.CounterOpts{
+		Name: ModelCacheReclaimedTotalMetricName,
+		Help: "Total idle model caches reclaimed by garbage collection, by backend.",
+	}, withStorageLabels(BackendLabel))
+
+	// Initialize model cache metrics to zero for known label combinations.
+	m.ModelCacheResultTotal.WithLabelValues(m.withStorageLabelValues(modelcachetypes.ResultSuccess, "", "")...)
+	for _, b := range types.AllSelectableHelmCacheBackends {
+		backend := string(b)
+		m.ModelCacheResultTotal.WithLabelValues(m.withStorageLabelValues(modelcachetypes.ResultSuccess, "", backend)...)
+		for _, reason := range modelcachetypes.AllFailureReasons {
+			m.ModelCacheResultTotal.WithLabelValues(m.withStorageLabelValues(modelcachetypes.ResultFailure, reason, backend)...)
+		}
+		m.ModelCacheBackends.WithLabelValues(m.withStorageLabelValues(backend)...).Set(0)
+		m.ModelCacheBackendSelectedTotal.WithLabelValues(m.withStorageLabelValues(backend)...)
+		m.ModelCachePopulateTotal.WithLabelValues(m.withStorageLabelValues(backend)...)
+		m.ModelCacheReuseTotal.WithLabelValues(m.withStorageLabelValues(backend)...)
+		m.ModelCacheReclaimedTotal.WithLabelValues(m.withStorageLabelValues(backend)...)
+	}
+	// Also keep the no-backend failure series (validation failures before a
+	// backend is known).
 	for _, reason := range modelcachetypes.AllFailureReasons {
-		m.ModelCacheResultTotal.WithLabelValues(m.withStorageLabelValues(modelcachetypes.ResultFailure, reason)...)
+		m.ModelCacheResultTotal.WithLabelValues(m.withStorageLabelValues(modelcachetypes.ResultFailure, reason, "")...)
 	}
 
 	// Cluster attribute metrics
@@ -589,6 +750,69 @@ func NewDefaultMetrics(ncaID, clusterName, clusterGroup, version string, opts ..
 	}, withDefaultLabels())
 	// Initialize to 0 (disabled) so it appears on first Prometheus scrape
 	m.KataRuntimeIsolationEnabled.WithLabelValues(m.WithDefaultLabelValues()...).Set(0)
+
+	m.MaintenanceModeState = promFactory.NewGaugeVec(prometheus.GaugeOpts{
+		Name: MaintenanceModeStateMetricName,
+		Help: "Whether NVCA is in a maintenance mode on this cluster. The series whose " +
+			"mode label matches the active mode is 1 and every other mode series is 0 " +
+			"(one-hot encoding). mode is one of None, CordonOnly, CordonAndDrain.",
+	}, withDefaultLabels(MaintenanceModeLabel))
+	// Initialize every mode to 0 so all series appear on the first Prometheus scrape.
+	for _, mode := range types.AllMaintenanceModes {
+		m.MaintenanceModeState.WithLabelValues(m.WithDefaultLabelValues(mode.String())...).Set(0)
+	}
+
+	// Cluster-validator metrics. Fixed-cardinality vectors (Ready,
+	// LastRun*, CheckStatus per known check) are initialized to zero so
+	// they appear on the first Prometheus scrape — same pattern as
+	// KataRuntimeIsolationEnabled above. Dynamic-cardinality vectors
+	// (EndpointReachable, NetpolPairPassed) only appear after the first
+	// reconcile fires from a real ConfigMap update.
+	m.ClusterValidatorReady = promFactory.NewGaugeVec(prometheus.GaugeOpts{
+		Name: ClusterValidatorReadyMetricName,
+		Help: "Cluster-validator overall verdict (1=NVCF-Ready, 0=NVCF-Not-Ready). " +
+			"Driven by the most recent run's verdictReady field.",
+	}, withDefaultLabels())
+	m.ClusterValidatorCheckStatus = promFactory.NewGaugeVec(prometheus.GaugeOpts{
+		Name: ClusterValidatorCheckStatusMetricName,
+		Help: "Per-check status from the latest cluster-validator run " +
+			"(1=passed, 0=failed/skipped). The set of check names is fixed; see CheckKey* constants.",
+	}, withDefaultLabels(ClusterValidatorCheckLabel))
+	m.ClusterValidatorEndpointReachable = promFactory.NewGaugeVec(prometheus.GaugeOpts{
+		Name: ClusterValidatorEndpointReachableMetricName,
+		Help: "Reachability of each user-configured endpoint from the latest cluster-validator run " +
+			"(1=reachable, 0=not reachable). Label value `endpoint` is the user-supplied name; " +
+			"`critical=true` means the endpoint failure flips the cluster verdict. " +
+			"Series are pruned when an endpoint is removed from config.",
+	}, withDefaultLabels(ClusterValidatorEndpointLabel, ClusterValidatorCriticalLabel))
+	m.ClusterValidatorNetpolPairPassed = promFactory.NewGaugeVec(prometheus.GaugeOpts{
+		Name: ClusterValidatorNetpolPairPassedMetricName,
+		Help: "Directional NetworkPolicy coverage from the latest cluster-validator run " +
+			"(1=allowed, 0=blocked). Label `pair` is the user-supplied name; `direction` is " +
+			"`a_to_b` or `b_to_a`; `policy_side` is `egress` (the source namespace's egress) or " +
+			"`ingress` (the destination namespace's ingress); `critical=true` means the pair " +
+			"failure flips the cluster verdict. Overall pair coverage is `min by (pair) (...)`. " +
+			"Series are pruned when a pair is removed from config.",
+	}, withDefaultLabels(
+		ClusterValidatorNetpolPairLabel,
+		ClusterValidatorCriticalLabel,
+		ClusterValidatorDirectionLabel,
+		ClusterValidatorPolicySideLabel,
+	))
+	m.ClusterValidatorLastRunTimestamp = promFactory.NewGaugeVec(prometheus.GaugeOpts{
+		Name: ClusterValidatorLastRunTimestampMetricName,
+		Help: "Unix timestamp (seconds) of the latest cluster-validator run. " +
+			"Operators alert on staleness via `time() - <metric> > <threshold>`.",
+	}, withDefaultLabels())
+	m.ClusterValidatorLastRunDuration = promFactory.NewGaugeVec(prometheus.GaugeOpts{
+		Name: ClusterValidatorLastRunDurationMetricName,
+		Help: "Wall-clock duration (seconds) of the latest cluster-validator run.",
+	}, withDefaultLabels())
+
+	// Initialize the fixed-cardinality cluster-validator gauges to 0 so they
+	// appear on the first Prometheus scrape — same "absent metric" pattern as
+	// KataRuntimeIsolationEnabled. Each run updates these series in place.
+	m.emitClusterValidatorBaseline()
 
 	// Workload result metric (uses default labels)
 	m.WorkloadResultTotal = promFactory.NewCounterVec(prometheus.CounterOpts{
@@ -739,6 +963,19 @@ func (m *Metrics) SetInstanceTypeMetrics(instanceType string, capacity, allocata
 	m.InstanceTypeUnschedulable.WithLabelValues(m.WithDefaultLabelValues(instanceType)...).Set(unschedulable)
 }
 
+// SetUnclassifiedGPUNodeCount sets the count of GPU-bearing nodes, for the given GPU family and
+// machine type, that could not be attributed to any known instance type due to a missing or
+// unrecognized instance-type label.
+func (m *Metrics) SetUnclassifiedGPUNodeCount(gpuFamily, gpuMachine string, count float64) {
+	m.GPUNodeUnclassifiedCount.WithLabelValues(m.WithDefaultLabelValues(gpuFamily, gpuMachine)...).Set(count)
+}
+
+// SetTotalGPUNodeCount sets the total count of GPU-bearing nodes seen, classified and
+// unclassified, for the given GPU family and machine type.
+func (m *Metrics) SetTotalGPUNodeCount(gpuFamily, gpuMachine string, count float64) {
+	m.GPUNodeTotalCount.WithLabelValues(m.WithDefaultLabelValues(gpuFamily, gpuMachine)...).Set(count)
+}
+
 // RecordK8sAPISuccess increments the K8s API success counter
 func (m *Metrics) RecordK8sAPISuccess(resource string) {
 	if m == nil {
@@ -826,6 +1063,7 @@ func (m *Metrics) RecordMiniServiceFailure(ncaID, reason string) {
 }
 
 // SetMiniServiceReadyStatus sets the ready status gauge for a MiniService.
+//
 // Deprecated: use RecordMiniServicePhaseTransition and RecordMiniServiceFailure instead.
 func (m *Metrics) SetMiniServiceReadyStatus(ncaID string, value float64) {
 	if m == nil {
@@ -869,11 +1107,56 @@ func (m *Metrics) RecordGCCleanerRun(cleanerName, status string) {
 // RecordModelCacheResult records a model cache operation result.
 // result should be "success" or "failure".
 // failureReason should be empty string for success, or one of the defined failure reasons for failure.
-func (m *Metrics) RecordModelCacheResult(result, failureReason string) {
+// backend is the model cache backend (nvmesh/sharedfs/samba/ephemeral) or "" when not yet known.
+func (m *Metrics) RecordModelCacheResult(result, failureReason, backend string) {
 	if m == nil {
 		return
 	}
-	m.ModelCacheResultTotal.WithLabelValues(m.withStorageLabelValues(result, failureReason)...).Inc()
+	m.ModelCacheResultTotal.WithLabelValues(m.withStorageLabelValues(result, failureReason, backend)...).Inc()
+}
+
+// RecordModelCacheBackendSelected increments the per-backend selection counter.
+func (m *Metrics) RecordModelCacheBackendSelected(backend string) {
+	if m == nil {
+		return
+	}
+	m.ModelCacheBackendSelectedTotal.WithLabelValues(m.withStorageLabelValues(backend)...).Inc()
+}
+
+// RecordModelCachePopulate increments the per-backend populate counter (a
+// single-writer download actually ran).
+func (m *Metrics) RecordModelCachePopulate(backend string) {
+	if m == nil {
+		return
+	}
+	m.ModelCachePopulateTotal.WithLabelValues(m.withStorageLabelValues(backend)...).Inc()
+}
+
+// RecordModelCacheReuse increments the per-backend reuse counter (a consumer
+// attached an already-populated cache without downloading).
+func (m *Metrics) RecordModelCacheReuse(backend string) {
+	if m == nil {
+		return
+	}
+	m.ModelCacheReuseTotal.WithLabelValues(m.withStorageLabelValues(backend)...).Inc()
+}
+
+// RecordModelCacheReclaimed increments the per-backend GC reclaim counter.
+func (m *Metrics) RecordModelCacheReclaimed(backend string) {
+	if m == nil {
+		return
+	}
+	m.ModelCacheReclaimedTotal.WithLabelValues(m.withStorageLabelValues(backend)...).Inc()
+}
+
+// SetModelCacheBackendCount sets the gauge of currently-provisioned caches for a
+// backend. Called from the periodic idle-cleanup sweep, which already lists the
+// relevant objects.
+func (m *Metrics) SetModelCacheBackendCount(backend string, count int) {
+	if m == nil {
+		return
+	}
+	m.ModelCacheBackends.WithLabelValues(m.withStorageLabelValues(backend)...).Set(float64(count))
 }
 
 // SetKataRuntimeIsolationEnabled sets the Kata runtime isolation gauge.
@@ -887,6 +1170,22 @@ func (m *Metrics) SetKataRuntimeIsolationEnabled(enabled bool) {
 		val = 1.0
 	}
 	m.KataRuntimeIsolationEnabled.WithLabelValues(m.WithDefaultLabelValues()...).Set(val)
+}
+
+// SetMaintenanceModeState updates the maintenance-mode gauge: the series for
+// the given mode is set to 1 and every other known mode is set to 0 (one-hot
+// encoding). Safe to call repeatedly; unknown modes leave all series at 0.
+func (m *Metrics) SetMaintenanceModeState(mode types.MaintenanceMode) {
+	if m == nil || m.MaintenanceModeState == nil {
+		return
+	}
+	for _, mm := range types.AllMaintenanceModes {
+		val := 0.0
+		if mm == mode {
+			val = 1.0
+		}
+		m.MaintenanceModeState.WithLabelValues(m.WithDefaultLabelValues(mm.String())...).Set(val)
+	}
 }
 
 // RecordWorkloadStatus records the terminal outcome of a workload.
@@ -989,4 +1288,253 @@ func (m *Metrics) RecordUpstreamRequest(operation string, err error) {
 		httpCode = fmt.Sprintf("%d", code)
 	}
 	m.UpstreamRequestTotal.WithLabelValues(m.WithDefaultLabelValues(operation, "failure", httpCode)...).Inc()
+}
+
+// -----------------------------------------------------------------------------
+// Cluster-validator metric helpers
+// -----------------------------------------------------------------------------
+
+// clusterValidatorCheckKeys returns the canonical list of CheckStatus
+// label values for init-to-zero. MUST stay in sync with
+// internal/clustervalidator/summary.go's AllCheckKeys. Drift is caught
+// by TestClusterValidatorCheckKeysSync.
+func clusterValidatorCheckKeys() []string {
+	return []string{
+		"control_plane",
+		"worker_nodes_all_ready",
+		"webhooks",
+		"network_policies_supported",
+		"smb_csi",
+		"endpoint_reachability",
+		"gpu_resources",
+		"gpu_operator",
+		"configurable_netpol",
+		"netpol_enforcement",
+	}
+}
+
+// ClusterValidatorSummary is the agent-facing view of one cluster-validator
+// run. The reconciler in pkg/nvca builds this from the ConfigMap payload
+// (via clustervalidator.ParseSummary) and hands it to
+// Metrics.SetClusterValidatorSummary.
+type ClusterValidatorSummary struct {
+	RanAtUnixSec    int64   // epoch seconds; the LastRunTimestamp metric value
+	DurationSeconds float64 // the LastRunDuration metric value
+	VerdictReady    bool
+	Checks          map[string]bool
+	Endpoints       map[string]ClusterValidatorEndpoint
+	NetpolPairs     map[string]ClusterValidatorNetpolPair
+}
+
+// ClusterValidatorEndpoint mirrors clustervalidator.EndpointStatus but
+// kept here so the metrics package has no upward dependency on
+// clustervalidator.
+type ClusterValidatorEndpoint struct {
+	Reachable bool
+	Critical  bool
+}
+
+// ClusterValidatorNetpolPair mirrors clustervalidator.PairStatus. Directions
+// is keyed by direction ("a_to_b"/"b_to_a"); each entry yields two metric
+// series (egress and ingress policy sides).
+type ClusterValidatorNetpolPair struct {
+	Passed     bool
+	Critical   bool
+	Directions map[string]ClusterValidatorNetpolDirection
+}
+
+// ClusterValidatorNetpolDirection mirrors clustervalidator.DirectionStatus.
+type ClusterValidatorNetpolDirection struct {
+	EgressAllowed  bool
+	IngressAllowed bool
+}
+
+// clusterValidatorEmittedSet records every label tuple the last reconcile
+// emitted, so the next update can DeleteLabelValues() series that aren't
+// present in the new summary. Bounded cardinality at /metrics is the
+// whole point of this struct.
+type clusterValidatorEmittedSet struct {
+	checks      map[string]struct{}                  // set of check keys
+	endpoints   map[string]clusterValidatorRow       // endpoint name → (critical) for prune
+	netpolPairs map[string]clusterValidatorNetpolRow // pair name → (critical, emitted sides) for prune
+}
+
+type clusterValidatorRow struct{ critical string }
+
+// clusterValidatorNetpolRow records, per pair, the critical flag plus every
+// (direction, policy_side) tuple emitted for it, so the next run can prune
+// the exact series it created.
+type clusterValidatorNetpolRow struct {
+	critical string
+	sides    []clusterValidatorNetpolSide
+}
+
+type clusterValidatorNetpolSide struct{ direction, policySide string }
+
+func newClusterValidatorEmittedSet() *clusterValidatorEmittedSet {
+	return &clusterValidatorEmittedSet{
+		checks:      make(map[string]struct{}),
+		endpoints:   make(map[string]clusterValidatorRow),
+		netpolPairs: make(map[string]clusterValidatorNetpolRow),
+	}
+}
+
+// SetClusterValidatorSummary atomically updates every cluster-validator
+// metric from a single run's summary. The protocol:
+//  1. Compute the new label tuples we're about to emit.
+//  2. For every label tuple from the previous run that is NOT in the
+//     new set, DeleteLabelValues() so stale series stop appearing at
+//     /metrics. (Prometheus's TSDB retains historical scrapes — the
+//     data isn't lost; it just stops being re-emitted.)
+//  3. Set the new gauges with the new label values.
+//  4. Remember the new tuples so the next reconcile can prune them.
+//
+// Nil-safe: if m is nil OR the summary is nil, this returns silently.
+// Safe for concurrent use: it acquires m.clusterValidatorMu itself, so
+// callers must NOT hold the lock when calling it.
+func (m *Metrics) SetClusterValidatorSummary(s *ClusterValidatorSummary) {
+	if m == nil || s == nil {
+		return
+	}
+	m.clusterValidatorMu.Lock()
+	defer m.clusterValidatorMu.Unlock()
+
+	if m.clusterValidatorLastEmitted == nil {
+		m.clusterValidatorLastEmitted = newClusterValidatorEmittedSet()
+	}
+	prior := m.clusterValidatorLastEmitted
+	current := newClusterValidatorEmittedSet()
+
+	// Cluster-level gauges carry only the default labels, so each run updates
+	// the same series in place — no per-run series churn.
+	m.ClusterValidatorReady.WithLabelValues(m.WithDefaultLabelValues()...).Set(boolToFloat(s.VerdictReady))
+	m.ClusterValidatorLastRunTimestamp.WithLabelValues(m.WithDefaultLabelValues()...).Set(float64(s.RanAtUnixSec))
+	m.ClusterValidatorLastRunDuration.WithLabelValues(m.WithDefaultLabelValues()...).Set(s.DurationSeconds)
+
+	// CheckStatus: prune the prior run's checks, then emit the current set. A
+	// conditional check that did not run this time is left absent rather than
+	// reporting a stale value.
+	for check := range prior.checks {
+		m.ClusterValidatorCheckStatus.DeleteLabelValues(m.WithDefaultLabelValues(check)...)
+	}
+	for check, passed := range s.Checks {
+		m.ClusterValidatorCheckStatus.WithLabelValues(m.WithDefaultLabelValues(check)...).Set(boolToFloat(passed))
+		current.checks[check] = struct{}{}
+	}
+
+	// EndpointReachable: prune the prior endpoints, then emit the current set
+	// so an endpoint removed from config stops appearing.
+	for name, row := range prior.endpoints {
+		m.ClusterValidatorEndpointReachable.DeleteLabelValues(
+			m.WithDefaultLabelValues(name, row.critical)...)
+	}
+	for name, ep := range s.Endpoints {
+		crit := strconv.FormatBool(ep.Critical)
+		m.ClusterValidatorEndpointReachable.
+			WithLabelValues(m.WithDefaultLabelValues(name, crit)...).
+			Set(boolToFloat(ep.Reachable))
+		current.endpoints[name] = clusterValidatorRow{critical: crit}
+	}
+
+	// NetpolPairPassed: directional — up to 4 series per pair
+	// (direction × policy_side). Prune the prior run's tuples, then emit and
+	// record the current ones so a pair removed from config stops appearing.
+	for name, row := range prior.netpolPairs {
+		for _, side := range row.sides {
+			m.ClusterValidatorNetpolPairPassed.DeleteLabelValues(
+				m.WithDefaultLabelValues(name, row.critical, side.direction, side.policySide)...)
+		}
+	}
+	for name, pair := range s.NetpolPairs {
+		crit := strconv.FormatBool(pair.Critical)
+		sides := make([]clusterValidatorNetpolSide, 0, len(pair.Directions)*2)
+		for direction, d := range pair.Directions {
+			m.ClusterValidatorNetpolPairPassed.
+				WithLabelValues(m.WithDefaultLabelValues(
+					name, crit, direction, clusterValidatorPolicySideEgress)...).
+				Set(boolToFloat(d.EgressAllowed))
+			m.ClusterValidatorNetpolPairPassed.
+				WithLabelValues(m.WithDefaultLabelValues(
+					name, crit, direction, clusterValidatorPolicySideIngress)...).
+				Set(boolToFloat(d.IngressAllowed))
+			sides = append(sides,
+				clusterValidatorNetpolSide{direction: direction, policySide: clusterValidatorPolicySideEgress},
+				clusterValidatorNetpolSide{direction: direction, policySide: clusterValidatorPolicySideIngress})
+		}
+		current.netpolPairs[name] = clusterValidatorNetpolRow{critical: crit, sides: sides}
+	}
+
+	m.clusterValidatorLastEmitted = current
+}
+
+// ResetClusterValidatorMetrics drops every emitted cluster-validator
+// series and resets the cluster-level gauges to zero. Called by the agent when
+// it observes the explicit cluster-validator-metrics-reset ConfigMap — an
+// operator-initiated one-shot signal to clear the metrics to baseline.
+// Deleting the summary ConfigMap does NOT trigger this: last-known-good is
+// preserved on delete.
+func (m *Metrics) ResetClusterValidatorMetrics() {
+	if m == nil {
+		return
+	}
+	m.clusterValidatorMu.Lock()
+	defer m.clusterValidatorMu.Unlock()
+
+	m.pruneClusterValidatorEmitted()
+
+	// Re-emit the init-to-zero baseline so /metrics doesn't go quiet on the
+	// cluster-validator gauges.
+	m.emitClusterValidatorBaseline()
+}
+
+// pruneClusterValidatorEmitted deletes every series recorded in
+// clusterValidatorLastEmitted (the prior run, or the init-to-zero
+// baseline). Caller must hold clusterValidatorMu.
+func (m *Metrics) pruneClusterValidatorEmitted() {
+	prior := m.clusterValidatorLastEmitted
+	if prior == nil {
+		return
+	}
+	m.ClusterValidatorReady.DeleteLabelValues(m.WithDefaultLabelValues()...)
+	m.ClusterValidatorLastRunTimestamp.DeleteLabelValues(m.WithDefaultLabelValues()...)
+	m.ClusterValidatorLastRunDuration.DeleteLabelValues(m.WithDefaultLabelValues()...)
+	for check := range prior.checks {
+		m.ClusterValidatorCheckStatus.DeleteLabelValues(m.WithDefaultLabelValues(check)...)
+	}
+	for name, row := range prior.endpoints {
+		m.ClusterValidatorEndpointReachable.DeleteLabelValues(
+			m.WithDefaultLabelValues(name, row.critical)...)
+	}
+	for name, row := range prior.netpolPairs {
+		for _, side := range row.sides {
+			m.ClusterValidatorNetpolPairPassed.DeleteLabelValues(
+				m.WithDefaultLabelValues(name, row.critical, side.direction, side.policySide)...)
+		}
+	}
+}
+
+// emitClusterValidatorBaseline sets the fixed-cardinality cluster-validator
+// gauges to 0 so they appear on the first Prometheus scrape (same "absent
+// metric" pattern as the other init-to-zero gauges), and records the emitted
+// check keys in clusterValidatorLastEmitted. Each real run updates these series
+// in place. Caller must hold clusterValidatorMu (NewDefaultMetrics runs
+// single-threaded at construction).
+func (m *Metrics) emitClusterValidatorBaseline() {
+	m.ClusterValidatorReady.WithLabelValues(m.WithDefaultLabelValues()...).Set(0)
+	m.ClusterValidatorLastRunTimestamp.WithLabelValues(m.WithDefaultLabelValues()...).Set(0)
+	m.ClusterValidatorLastRunDuration.WithLabelValues(m.WithDefaultLabelValues()...).Set(0)
+
+	baseline := newClusterValidatorEmittedSet()
+	for _, check := range clusterValidatorCheckKeys() {
+		m.ClusterValidatorCheckStatus.WithLabelValues(m.WithDefaultLabelValues(check)...).Set(0)
+		baseline.checks[check] = struct{}{}
+	}
+	m.clusterValidatorLastEmitted = baseline
+}
+
+func boolToFloat(b bool) float64 {
+	if b {
+		return 1
+	}
+	return 0
 }

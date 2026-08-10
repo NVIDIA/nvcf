@@ -1,9 +1,0 @@
-#! /usr/bin/env bash
-#
-# This script exits non-zero if K8s codegen generated code has uncommitted changes.
-set -eu -o pipefail
-repo_root="$(cd "$(dirname "$0")/.." && pwd)"
-cd "${repo_root}"
-make codegen-update
-git status
-git diff --ignore-space-at-eol --exit-code

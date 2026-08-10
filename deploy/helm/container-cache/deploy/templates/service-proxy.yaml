@@ -22,6 +22,9 @@ metadata:
     {{- include "nvcf-container-cache.labels" . | nindent 4 }}
 spec:
   type: ClusterIP
+  {{- if .Values.proxyService.clusterIP }}
+  clusterIP: {{ .Values.proxyService.clusterIP }}
+  {{- end }}
   ports:
     - port: 443
       targetPort: https-proxy

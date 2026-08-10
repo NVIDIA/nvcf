@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "types",
+    srcs = [
+        "errors.go",
+        "resultstrategy.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/internal/types",
+    visibility = ["//src/compute-plane-services/worker-task:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":types",
+    visibility = ["//src/compute-plane-services/worker-task:__subpackages__"],
+)
+
+go_test(
+    name = "types_test",
+    srcs = [
+        "errors_test.go",
+        "resultstrategy_test.go",
+    ],
+    embed = [":types"],
+)

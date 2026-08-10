@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"sort"
@@ -38,7 +39,9 @@ import (
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/task"
+	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	"github.com/bombsimon/logrusr/v4"
+	"github.com/google/go-cmp/cmp"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
@@ -53,6 +56,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	apischema "k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
@@ -175,6 +179,49 @@ func filterNVCFEnvVars(envs []corev1.EnvVar) []corev1.EnvVar {
 	return result
 }
 
+func envVarsByName(envs []corev1.EnvVar) map[string]string {
+	result := map[string]string{}
+	for _, env := range envs {
+		result[env.Name] = env.Value
+	}
+	return result
+}
+
+func assertBYOOOTelCollectorEnvVars(t *testing.T, envs []corev1.EnvVar) {
+	t.Helper()
+	envsByName := envVarsByName(envs)
+	assert.Equal(t, "true", envsByName[nvcaconfig.BYOOLogChunkingEnabledEnv])
+	assert.Equal(t, "262144", envsByName[nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv])
+	assert.Equal(t, "true", envsByName[nvcaconfig.BYOOLogChunkDryRunEnv])
+	encodedCollectorConfig, ok := envsByName[nvcaconfig.BYOOOTelCollectorConfigEnv]
+	require.True(t, ok)
+	decodedCollectorConfig, err := base64.StdEncoding.DecodeString(encodedCollectorConfig)
+	require.NoError(t, err)
+	var collectorConfig nvcaconfig.BYOOOTelCollectorConfig
+	require.NoError(t, json.Unmarshal(decodedCollectorConfig, &collectorConfig))
+	assert.Equal(t, "30s", collectorConfig.ExporterHelper.Timeout)
+	require.NotNil(t, collectorConfig.LogSampling.SamplingPercentage)
+	assert.Equal(t, 10.0, *collectorConfig.LogSampling.SamplingPercentage)
+	assert.Equal(t, "hash_seed", collectorConfig.LogSampling.Mode)
+	require.NotNil(t, collectorConfig.LogSampling.HashSeed)
+	assert.Equal(t, uint32(1234), *collectorConfig.LogSampling.HashSeed)
+	require.NotNil(t, collectorConfig.LogSampling.FailClosed)
+	assert.False(t, *collectorConfig.LogSampling.FailClosed)
+	assert.Equal(t, "record", collectorConfig.LogSampling.AttributeSource)
+	assert.Equal(t, "log.id", collectorConfig.LogSampling.FromAttribute)
+	assert.Equal(t, "sampling.priority", collectorConfig.LogSampling.SamplingPriority)
+	require.NotNil(t, collectorConfig.TraceSampling.SamplingPercentage)
+	assert.Equal(t, 1.0, *collectorConfig.TraceSampling.SamplingPercentage)
+	assert.Equal(t, "hash_seed", collectorConfig.TraceSampling.Mode)
+	require.NotNil(t, collectorConfig.TraceSampling.HashSeed)
+	assert.Equal(t, uint32(1234), *collectorConfig.TraceSampling.HashSeed)
+	require.NotNil(t, collectorConfig.TraceSampling.FailClosed)
+	assert.False(t, *collectorConfig.TraceSampling.FailClosed)
+	assert.Equal(t, "true", envsByName[nvcaconfig.BYOOMetricSubsetEnabledEnv])
+	assert.Contains(t, envsByName[nvcaconfig.BYOOMetricSubsetFilterConfigEnv], "metric.name")
+	assert.Equal(t, "metric_subset_enabled,custom_label", envsByName[nvcaconfig.BYOOWorkloadMetricsDropLabelsEnv])
+}
+
 func TestReconcile_Function(t *testing.T) {
 	ctx := newTestContext()
 	testScheme := mgrScheme
@@ -249,7 +296,43 @@ func TestReconcile_Function(t *testing.T) {
 		Operator: corev1.TolerationOpExists,
 		Effect:   corev1.TaintEffectNoSchedule,
 	}
+	logSamplingPercentage := 10.0
+	traceSamplingPercentage := 1.0
+	samplingHashSeed := uint32(1234)
+	samplingFailClosed := false
 	r.cfg.Agent.SharedStorage.Server.Image = "smb:latest"
+	r.cfg.Agent.BYOOLogChunking = nvcaconfig.BYOOLogChunkingConfig{
+		Enabled:         true,
+		MaxPayloadBytes: 262144,
+		DryRun:          true,
+	}
+	r.cfg.Agent.BYOOOTelCollector = nvcaconfig.BYOOOTelCollectorConfig{
+		ExporterHelper: nvcaconfig.BYOOOTelExporterHelperConfig{
+			Timeout: "30s",
+		},
+		LogSampling: nvcaconfig.BYOOOTelLogSamplingConfig{
+			SamplingPercentage: &logSamplingPercentage,
+			Mode:               "hash_seed",
+			HashSeed:           &samplingHashSeed,
+			FailClosed:         &samplingFailClosed,
+			AttributeSource:    "record",
+			FromAttribute:      "log.id",
+			SamplingPriority:   "sampling.priority",
+		},
+		TraceSampling: nvcaconfig.BYOOOTelSamplingConfig{
+			SamplingPercentage: &traceSamplingPercentage,
+			Mode:               "hash_seed",
+			HashSeed:           &samplingHashSeed,
+			FailClosed:         &samplingFailClosed,
+		},
+	}
+	r.cfg.Agent.BYOOMetricSubset = nvcaconfig.BYOOMetricSubsetConfig{
+		Enabled:      true,
+		FilterConfig: "error_mode: ignore\nmetric_conditions:\n  - 'metric.name == \"drop\"'\n",
+	}
+	r.cfg.Agent.BYOOWorkloadMetrics = nvcaconfig.BYOOWorkloadMetricsConfig{
+		DropLabels: []string{"metric_subset_enabled", "custom_label"},
+	}
 	err := k8sutil.SetConfigDefaultResources(&r.cfg)
 	require.NoError(t, err)
 	r.cfg.Workload.Tolerations = []corev1.Toleration{configuredToleration}
@@ -630,10 +713,27 @@ rules:
 	}
 	for _, c := range utilsPod.Spec.InitContainers {
 		assert.Subset(t, c.Env, expEnvs)
+		if c.Name == common.InitContainerName {
+			assert.Len(t, c.Resources.Limits, 2)
+			assert.Len(t, c.Resources.Requests, 2)
+		}
 	}
 	for _, c := range utilsPod.Spec.Containers {
 		assert.Subset(t, c.Env, expEnvs)
+		if c.Name == common.UtilsContainerName {
+			assert.Len(t, c.Resources.Limits, 2)
+			assert.Len(t, c.Resources.Requests, 2)
+		}
 	}
+	var byooCollector *corev1.Container
+	for i := range utilsPod.Spec.Containers {
+		if utilsPod.Spec.Containers[i].Name == common.ByooOTelCollectorPodNameBase {
+			byooCollector = &utilsPod.Spec.Containers[i]
+			break
+		}
+	}
+	require.NotNil(t, byooCollector, "utils pod should include BYOO collector sidecar")
+	assertBYOOOTelCollectorEnvVars(t, byooCollector.Env)
 	assert.Contains(t, utilsPod.Spec.Tolerations, configuredToleration)
 	assert.Equal(t, mergeMaps(translatedLabels, map[string]string{
 		common.BYOOMetricsEgressTargetLabelKey: common.BYOOMetricsEgressTargetLabelValue,
@@ -783,6 +883,14 @@ rules:
 	assert.Equal(t, common.FunctionCreationAction, msMeta.MessageAction)
 	assert.Equal(t, serviceAccountName, msMeta.ServiceAccountName)
 	assert.NotEmpty(t, msMeta.EnvVars, "metadata should include workload env vars")
+	metaEnv := map[string]string{}
+	for _, env := range msMeta.EnvVars {
+		metaEnv[env.Name] = env.Value
+	}
+	assert.NotContains(t, metaEnv, nvcaconfig.BYOOLogChunkingEnabledEnv)
+	assert.NotContains(t, metaEnv, nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv)
+	assert.NotContains(t, metaEnv, nvcaconfig.BYOOMetricSubsetEnabledEnv)
+	assertBYOOOTelCollectorEnvVars(t, msMeta.OTelCollectorEnvVars)
 	assert.Equal(t, nodefeatures.UniformInstanceTypeLabelKey, msMeta.NodeAffinityKey)
 	assert.Equal(t, []corev1.Toleration{configuredToleration}, msMeta.Tolerations)
 
@@ -879,10 +987,13 @@ rules:
 				Status: metav1.ConditionTrue,
 			},
 			{
-				Reason:  v1alpha1.MiniServiceStatusReasonWaitingObjectReadiness,
-				Type:    v1alpha1.MiniServiceConditionObjectsHealthy,
-				Status:  metav1.ConditionFalse,
-				Message: "Some Pods are not scheduled",
+				Reason: v1alpha1.MiniServiceStatusReasonWaitingObjectReadiness,
+				Type:   v1alpha1.MiniServiceConditionObjectsHealthy,
+				Status: metav1.ConditionFalse,
+				Message: `Some objects are not scheduled
+apps/v1.Deployment foo
+v1.Pod utils
+`,
 			},
 		}, sms.Status.Conditions)
 	}
@@ -941,10 +1052,15 @@ rules:
 				Status: metav1.ConditionTrue,
 			},
 			{
-				Reason:  v1alpha1.MiniServiceStatusReasonWaitingObjectReadiness,
-				Type:    v1alpha1.MiniServiceConditionObjectsHealthy,
-				Status:  metav1.ConditionFalse,
-				Message: "All Pods are scheduled, waiting on readiness",
+				Reason: v1alpha1.MiniServiceStatusReasonWaitingObjectReadiness,
+				Type:   v1alpha1.MiniServiceConditionObjectsHealthy,
+				Status: metav1.ConditionFalse,
+				Message: `All objects are scheduled, waiting on readiness
+apps/v1.Deployment foo
+apps/v1.ReplicaSet dep-rs
+v1.Pod dep-pod
+v1.Pod utils
+`,
 			},
 		}, sms.Status.Conditions)
 	}
@@ -2119,7 +2235,43 @@ func TestReconcile_Task(t *testing.T) {
 		return r.Client, nil
 	}
 
+	logSamplingPercentage := 10.0
+	traceSamplingPercentage := 1.0
+	samplingHashSeed := uint32(1234)
+	samplingFailClosed := false
 	r.cfg.Agent.SharedStorage.Server.Image = "smb:latest"
+	r.cfg.Agent.BYOOLogChunking = nvcaconfig.BYOOLogChunkingConfig{
+		Enabled:         true,
+		MaxPayloadBytes: 262144,
+		DryRun:          true,
+	}
+	r.cfg.Agent.BYOOOTelCollector = nvcaconfig.BYOOOTelCollectorConfig{
+		ExporterHelper: nvcaconfig.BYOOOTelExporterHelperConfig{
+			Timeout: "30s",
+		},
+		LogSampling: nvcaconfig.BYOOOTelLogSamplingConfig{
+			SamplingPercentage: &logSamplingPercentage,
+			Mode:               "hash_seed",
+			HashSeed:           &samplingHashSeed,
+			FailClosed:         &samplingFailClosed,
+			AttributeSource:    "record",
+			FromAttribute:      "log.id",
+			SamplingPriority:   "sampling.priority",
+		},
+		TraceSampling: nvcaconfig.BYOOOTelSamplingConfig{
+			SamplingPercentage: &traceSamplingPercentage,
+			Mode:               "hash_seed",
+			HashSeed:           &samplingHashSeed,
+			FailClosed:         &samplingFailClosed,
+		},
+	}
+	r.cfg.Agent.BYOOMetricSubset = nvcaconfig.BYOOMetricSubsetConfig{
+		Enabled:      true,
+		FilterConfig: "error_mode: ignore\nmetric_conditions:\n  - 'metric.name == \"drop\"'\n",
+	}
+	r.cfg.Agent.BYOOWorkloadMetrics = nvcaconfig.BYOOWorkloadMetricsConfig{
+		DropLabels: []string{"metric_subset_enabled", "custom_label"},
+	}
 	err := k8sutil.SetConfigDefaultResources(&r.cfg)
 	require.NoError(t, err)
 
@@ -2465,6 +2617,15 @@ rules:
 			})
 		}
 	}
+	var byooCollector *corev1.Container
+	for i := range utilsPod.Spec.Containers {
+		if utilsPod.Spec.Containers[i].Name == common.ByooOTelCollectorPodNameBase {
+			byooCollector = &utilsPod.Spec.Containers[i]
+			break
+		}
+	}
+	require.NotNil(t, byooCollector, "utils pod should include BYOO collector sidecar")
+	assertBYOOOTelCollectorEnvVars(t, byooCollector.Env)
 	assert.Equal(t, mergeMaps(translatedLabels, map[string]string{
 		common.BYOOMetricsEgressTargetLabelKey: common.BYOOMetricsEgressTargetLabelValue,
 	}), utilsPod.Labels)
@@ -2578,6 +2739,12 @@ rules:
 	assert.Equal(t, serviceAccountName, msMeta.ServiceAccountName)
 	assert.NotEmpty(t, msMeta.EnvVars, "metadata should include workload env vars")
 	assert.NotNil(t, msMeta.TerminationGracePeriodSeconds)
+	metaEnv := envVarsByName(msMeta.EnvVars)
+	assert.NotContains(t, metaEnv, nvcaconfig.BYOOLogChunkingEnabledEnv)
+	assert.NotContains(t, metaEnv, nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv)
+	assert.NotContains(t, metaEnv, nvcaconfig.BYOOMetricSubsetEnabledEnv)
+	assert.NotContains(t, metaEnv, nvcaconfig.BYOOOTelCollectorConfigEnv)
+	assertBYOOOTelCollectorEnvVars(t, msMeta.OTelCollectorEnvVars)
 
 	gotSecrets := &corev1.SecretList{}
 	err = r.Client.List(ctx, gotSecrets, client.InNamespace(ms.Spec.Namespace))
@@ -2719,6 +2886,40 @@ rules:
 	sms.Finalizers = []string{finalizer}
 	err = tracker.Update(v1alpha1.SchemeGroupVersion.WithResource("miniservices"), sms, "")
 	require.NoError(t, err)
+
+	gotRes, err = r.Reconcile(ctx, req)
+	assert.NoError(t, err)
+	assert.Equal(t, reconcile.Result{}, gotRes)
+
+	sms = &v1alpha1.MiniService{}
+	err = r.Client.Get(ctx, client.ObjectKeyFromObject(ms), sms)
+	require.NoError(t, err)
+	assert.Equal(t, []string{finalizer}, sms.Finalizers)
+
+	if assert.Len(t, sms.Status.Conditions, 3) {
+		cmpConditions(t, []metav1.Condition{
+			{
+				Reason: "AllObjectsApplied",
+				Type:   v1alpha1.MiniServiceConditionInstallSuccessful,
+				Status: metav1.ConditionTrue,
+			},
+			{
+				Reason: "ObjectsReady",
+				Type:   v1alpha1.MiniServiceConditionObjectsHealthy,
+				Status: metav1.ConditionTrue,
+			},
+			{
+				Type:    v1alpha1.MiniServiceConditionCleanupSuccessful,
+				Status:  metav1.ConditionFalse,
+				Reason:  "SomeObjectsPendingDeletion",
+				Message: `Objects: "/v1, Kind=Pod, job-pod;"`,
+			},
+		}, sms.Status.Conditions)
+	}
+
+	// Controller should have deleted the pod, even if listed in message condition.
+	err = r.Client.Delete(ctx, jobPod)
+	require.True(t, apierrors.IsNotFound(err))
 
 	gotRes, err = r.Reconcile(ctx, req)
 	assert.NoError(t, err)
@@ -3221,7 +3422,7 @@ rules:
 				Reason:  v1alpha1.MiniServiceStatusReasonWaitingObjectReadiness,
 				Type:    v1alpha1.MiniServiceConditionObjectsHealthy,
 				Status:  metav1.ConditionFalse,
-				Message: "Some Pods are not scheduled",
+				Message: "Some objects are not scheduled\nbatch/v1.Job foo\nv1.Pod job-pod\n",
 			},
 		}, ms.Status.Conditions)
 	}
@@ -3458,8 +3659,9 @@ rules:
 	podList := &corev1.PodList{}
 	err = r.Client.List(ctx, podList, client.InNamespace(ms.Spec.Namespace))
 	require.NoError(t, err)
-	gotTaskPodsToDelete := getTaskPodsToDelete(ms, podList)
-	assert.Len(t, gotTaskPodsToDelete, 0)
+	gotTaskPodsToDelete, gotForceDelete := getTaskPodsToDelete(ms, podList)
+	assert.Len(t, gotTaskPodsToDelete, 1)
+	assert.False(t, gotForceDelete)
 
 	// Mark utils pod as running over max runtime duration, ensure miniservice is marked failed.
 	ms.Status.Phase = v1alpha1.MiniServiceRunning
@@ -3548,13 +3750,10 @@ rules:
 	require.NoError(t, err)
 	// Ensure SMB pod is skipped.
 	podList.Items = append(podList.Items, corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: nvcastorage.SMBServerPodName}})
-	gotTaskPodsToDelete = getTaskPodsToDelete(ms, podList)
-	if assert.Len(t, gotTaskPodsToDelete, 2) {
-		sort.Slice(gotTaskPodsToDelete, func(i, j int) bool {
-			return gotTaskPodsToDelete[i].Name < gotTaskPodsToDelete[j].Name
-		})
+	gotTaskPodsToDelete, gotForceDelete = getTaskPodsToDelete(ms, podList)
+	assert.True(t, gotForceDelete)
+	if assert.Len(t, gotTaskPodsToDelete, 1) {
 		assert.Equal(t, jobPod.Name, gotTaskPodsToDelete[0].Name)
-		assert.Equal(t, common.UtilsPodName, gotTaskPodsToDelete[1].Name)
 	}
 
 	// Attempt cleanup on failed task with cleanup already run, expect explicit deletion.
@@ -3566,13 +3765,10 @@ rules:
 			Reason: "SomeObjectsPendingDeletion",
 		},
 	)
-	gotTaskPodsToDelete = getTaskPodsToDelete(cleanupMS, podList)
-	if assert.Len(t, gotTaskPodsToDelete, 2) {
-		sort.Slice(gotTaskPodsToDelete, func(i, j int) bool {
-			return gotTaskPodsToDelete[i].Name < gotTaskPodsToDelete[j].Name
-		})
+	gotTaskPodsToDelete, gotForceDelete = getTaskPodsToDelete(cleanupMS, podList)
+	assert.True(t, gotForceDelete)
+	if assert.Len(t, gotTaskPodsToDelete, 1) {
 		assert.Equal(t, jobPod.Name, gotTaskPodsToDelete[0].Name)
-		assert.Equal(t, common.UtilsPodName, gotTaskPodsToDelete[1].Name)
 	}
 
 	err = r.Client.Delete(ctx, ms)
@@ -3585,7 +3781,9 @@ rules:
 	podList = &corev1.PodList{}
 	err = r.Client.List(ctx, podList, client.InNamespace(ms.Spec.Namespace))
 	require.NoError(t, err)
-	assert.Len(t, podList.Items, 0)
+	// Utils pod is not included in taskPodsToDelete (handled by namespace deletion),
+	// so it may still be present until the namespace is fully deleted.
+	assert.LessOrEqual(t, len(podList.Items), 1)
 
 	gotRes, err = r.Reconcile(ctx, req)
 	require.NoError(t, err)
@@ -3661,7 +3859,7 @@ func createNamespaceDefaultSA(t *testing.T, ctx context.Context, r *Reconciler, 
 	require.NoError(t, err)
 }
 
-var newFakePermissionsChecker = func(map[apischema.GroupVersionKind]error) permissionCheckerFunc {
+var newFakePermissionsChecker = func(map[apischema.GroupVersionKind]error, []string) permissionCheckerFunc {
 	return func(context.Context, client.Client, apischema.GroupVersionKind, string) error {
 		return nil
 	}
@@ -3758,6 +3956,359 @@ func TestGetFunctionNameAndTaskName(t *testing.T) {
 			assert.Equal(t, tt.wantTaskName, gotTaskName)
 		})
 	}
+}
+
+func TestDoUpdateWorkload(t *testing.T) {
+	ctx := newTestContext()
+	testScheme := mgrScheme
+
+	const (
+		testNamespace      = "ms-update-ns"
+		workloadObjectName = "updated-workload-cm"
+	)
+
+	newMiniService := func() *v1alpha1.MiniService {
+		return &v1alpha1.MiniService{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "miniservice-update",
+				UID:  "miniservice-update-uid",
+			},
+			Spec: v1alpha1.MiniServiceSpec{
+				Namespace:       testNamespace,
+				ICMSRequestName: "icms-request-update",
+				HelmChartConfig: common.HelmConfig{
+					URL:    "https://helm.ngc.nvidia.com/myorg/charts/foo-1.0.0.tgz",
+					Values: []byte(`{"foo":"bar"}`),
+				},
+			},
+			Status: v1alpha1.MiniServiceStatus{
+				Phase:    v1alpha1.MiniServiceInstalling,
+				Revision: 2,
+			},
+		}
+	}
+
+	newICMSRequest := func() *nvcav2beta1.ICMSRequest {
+		return &nvcav2beta1.ICMSRequest{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "icms-request-update",
+				Namespace: "nvcf-backend",
+			},
+			Spec: nvcav2beta1.ICMSRequestSpec{
+				RequestID:      "request-1",
+				MessageBatchID: "batch-1",
+				NCAId:          "ncaid-1",
+				Action:         common.TaskCreationAction,
+				TaskDetails: task.Details{
+					TaskID: "task-1",
+				},
+				CreationMsgInfo: nvcav2beta1.ICMSCreationMessageInfo{
+					CreationQueueMessageMetadata: common.CreationQueueMessageMetadata{
+						Action:            common.TaskCreationAction,
+						RequestID:         "request-1",
+						MessageBatchID:    "batch-1",
+						NCAID:             "ncaid-1",
+						AccountName:       "acct",
+						GPUType:           "L40",
+						RequestedGPUCount: 1,
+						InstanceCount:     1,
+						InstanceTypeValue: "ON-PREM.GPU.L40",
+					},
+					TaskLaunchSpecification: &task.LaunchSpecification{
+						EnvironmentB64: encodeEnvsForLaunchSpec([]corev1.EnvVar{
+							{Name: common.TaskNameEncodedEnvKey, Value: "my-task"},
+						}),
+						ICMSEnvironment:   "prod",
+						MaxQueuedDuration: "PT2M",
+					},
+				},
+			},
+		}
+	}
+
+	newRenderedObjectsData := func(t *testing.T) []byte {
+		t.Helper()
+
+		obj := &corev1.ConfigMap{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: corev1.SchemeGroupVersion.String(),
+				Kind:       "ConfigMap",
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Name: workloadObjectName,
+			},
+			Data: map[string]string{"key": "value"},
+		}
+		rawObj, err := json.Marshal(obj)
+		require.NoError(t, err)
+
+		objsData, err := json.Marshal([]json.RawMessage{rawObj})
+		require.NoError(t, err)
+
+		return objsData
+	}
+
+	newReconciler := func(t *testing.T, c client.Client) *Reconciler {
+		t.Helper()
+
+		r := &Reconciler{
+			ControllerOptions: ControllerOptions{
+				FeatureFlagFetcher: &featureflagmock.Fetcher{},
+				K8sTimeConfig:      (&k8sutil.TimeConfig{}).Complete(),
+			},
+			Client:                c,
+			Decoder:               serializer.NewCodecFactory(testScheme).UniversalDeserializer(),
+			chartCache:            chartcache.New(t.TempDir()),
+			newPermissionsChecker: newFakePermissionsChecker,
+			now:                   time.Now,
+		}
+		require.NoError(t, r.chartCache.Start(ctx))
+		return r
+	}
+
+	setup := func(t *testing.T, c client.Client) (*Reconciler, *v1alpha1.MiniService, *nvcav2beta1.ICMSRequest) {
+		t.Helper()
+
+		r := newReconciler(t, c)
+		ms := newMiniService()
+		icmsReq := newICMSRequest()
+		require.NoError(t, r.saveRenderedData(ctx, ms, newRenderedObjectsData(t)))
+
+		return r, ms, icmsReq
+	}
+
+	t.Run("updates workload when utils pod is ready", func(t *testing.T) {
+		patchCalls := 0
+		utilsPod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      common.UtilsPodName,
+				Namespace: testNamespace,
+			},
+			Spec: corev1.PodSpec{
+				InitContainers: []corev1.Container{
+					{Name: common.InitContainerName},
+				},
+			},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				Conditions: []corev1.PodCondition{
+					{Type: corev1.PodScheduled, Status: corev1.ConditionTrue},
+					{Type: corev1.PodInitialized, Status: corev1.ConditionTrue},
+					{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+				},
+				InitContainerStatuses: []corev1.ContainerStatus{
+					{
+						Name: common.InitContainerName,
+						State: corev1.ContainerState{
+							Terminated: &corev1.ContainerStateTerminated{ExitCode: 0},
+						},
+					},
+				},
+				ContainerStatuses: []corev1.ContainerStatus{
+					{
+						Name: common.UtilsContainerName,
+						State: corev1.ContainerState{
+							Running: &corev1.ContainerStateRunning{},
+						},
+					},
+				},
+			},
+		}
+
+		c, _ := newFakeClientWithInterceptors(testScheme,
+			interceptor.Funcs{
+				Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+					if cm, ok := obj.(*corev1.ConfigMap); ok && cm.Name == workloadObjectName {
+						patchCalls++
+					}
+					return c.Patch(ctx, obj, patch, opts...)
+				},
+			},
+			&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}},
+			&corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      workloadObjectName,
+					Namespace: testNamespace,
+				},
+				Data: map[string]string{"key": "old"},
+			},
+			utilsPod,
+		)
+
+		r, ms, icmsReq := setup(t, c)
+
+		gotRes, err := r.doUpdateWorkload(ctx, ms, icmsReq)
+		require.NoError(t, err)
+		assert.Equal(t, reconcile.Result{}, gotRes)
+		assert.Equal(t, 1, patchCalls, "expected one server-side apply patch for rendered workload object")
+
+		assert.Equal(t, v1alpha1.MiniServiceInstalled, ms.Status.Phase)
+		cond := meta.FindStatusCondition(ms.Status.Conditions, v1alpha1.MiniServiceConditionInstallSuccessful)
+		if assert.NotNil(t, cond) {
+			assert.Equal(t, metav1.ConditionTrue, cond.Status)
+			assert.Equal(t, "WorkloadObjectsUpdated", cond.Reason)
+			assert.Equal(t, "Workload update to revision 2 completed successfully", cond.Message)
+		}
+
+		require.NotNil(t, ms.Status.RenderDetails)
+		if assert.Len(t, ms.Status.RenderDetails.Resources, 1) {
+			assert.Equal(t, 1, ms.Status.RenderDetails.Resources[0].Count)
+			assert.Equal(t, []string{workloadObjectName}, ms.Status.RenderDetails.Resources[0].Names)
+		}
+	})
+
+	t.Run("waits when utils pod init containers are incomplete", func(t *testing.T) {
+		patchCalls := 0
+		utilsPod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      common.UtilsPodName,
+				Namespace: testNamespace,
+			},
+			Spec: corev1.PodSpec{
+				InitContainers: []corev1.Container{
+					{Name: common.InitContainerName},
+				},
+			},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				Conditions: []corev1.PodCondition{
+					{Type: corev1.PodScheduled, Status: corev1.ConditionTrue},
+					{Type: corev1.PodInitialized, Status: corev1.ConditionTrue},
+					{Type: corev1.PodReady, Status: corev1.ConditionFalse},
+				},
+				InitContainerStatuses: []corev1.ContainerStatus{
+					{
+						Name: common.InitContainerName,
+						State: corev1.ContainerState{
+							Running: &corev1.ContainerStateRunning{},
+						},
+					},
+				},
+				ContainerStatuses: []corev1.ContainerStatus{
+					{
+						Name: common.UtilsContainerName,
+						State: corev1.ContainerState{
+							Running: &corev1.ContainerStateRunning{},
+						},
+					},
+				},
+			},
+		}
+
+		c, _ := newFakeClientWithInterceptors(testScheme,
+			interceptor.Funcs{
+				Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+					if cm, ok := obj.(*corev1.ConfigMap); ok && cm.Name == workloadObjectName {
+						patchCalls++
+					}
+					return c.Patch(ctx, obj, patch, opts...)
+				},
+			},
+			&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}},
+			utilsPod,
+		)
+
+		r, ms, icmsReq := setup(t, c)
+
+		gotRes, err := r.doUpdateWorkload(ctx, ms, icmsReq)
+		require.NoError(t, err)
+		assert.Equal(t, reconcile.Result{}, gotRes)
+		assert.Equal(t, v1alpha1.MiniServiceInstalling, ms.Status.Phase)
+		assert.Equal(t, 0, patchCalls, "expected no server-side apply patch while waiting on utils pod init containers")
+	})
+
+	t.Run("returns terminal error when utils pod is not found", func(t *testing.T) {
+		patchCalls := 0
+		c, _ := newFakeClientWithInterceptors(testScheme,
+			interceptor.Funcs{
+				Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+					if cm, ok := obj.(*corev1.ConfigMap); ok && cm.Name == workloadObjectName {
+						patchCalls++
+					}
+					return c.Patch(ctx, obj, patch, opts...)
+				},
+			},
+			&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}},
+		)
+
+		r, ms, icmsReq := setup(t, c)
+
+		gotRes, err := r.doUpdateWorkload(ctx, ms, icmsReq)
+		require.Error(t, err)
+		assert.Equal(t, reconcile.Result{}, gotRes)
+		assert.ErrorContains(t, err, "terminal error")
+		assert.ErrorContains(t, err, "pods \"utils\" not found")
+		assert.Equal(t, v1alpha1.MiniServiceInstalling, ms.Status.Phase)
+		assert.Equal(t, 0, patchCalls, "expected no server-side apply patch when utils pod is missing")
+	})
+
+	t.Run("returns terminal error when utils pod status is terminal bad", func(t *testing.T) {
+		patchCalls := 0
+		utilsPod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      common.UtilsPodName,
+				Namespace: testNamespace,
+			},
+			Status: corev1.PodStatus{
+				Phase:  corev1.PodFailed,
+				Reason: "boom",
+			},
+		}
+
+		c, _ := newFakeClientWithInterceptors(testScheme,
+			interceptor.Funcs{
+				Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+					if cm, ok := obj.(*corev1.ConfigMap); ok && cm.Name == workloadObjectName {
+						patchCalls++
+					}
+					return c.Patch(ctx, obj, patch, opts...)
+				},
+			},
+			&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}},
+			utilsPod,
+		)
+
+		r, ms, icmsReq := setup(t, c)
+
+		gotRes, err := r.doUpdateWorkload(ctx, ms, icmsReq)
+		require.Error(t, err)
+		assert.Equal(t, reconcile.Result{}, gotRes)
+		assert.ErrorContains(t, err, "terminal error")
+		assert.ErrorContains(t, err, "utils pod is failed: boom")
+		assert.Equal(t, v1alpha1.MiniServiceInstalling, ms.Status.Phase)
+		assert.Equal(t, 0, patchCalls, "expected no server-side apply patch when utils pod is terminal bad")
+	})
+
+	t.Run("requeues on transient utils pod get errors", func(t *testing.T) {
+		patchCalls := 0
+		c, _ := newFakeClientWithInterceptors(testScheme,
+			interceptor.Funcs{
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if key == (client.ObjectKey{Name: common.UtilsPodName, Namespace: testNamespace}) {
+						if _, ok := obj.(*corev1.Pod); ok {
+							return apierrors.NewTooManyRequests("try again later", 1)
+						}
+					}
+					return c.Get(ctx, key, obj, opts...)
+				},
+				Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+					if cm, ok := obj.(*corev1.ConfigMap); ok && cm.Name == workloadObjectName {
+						patchCalls++
+					}
+					return c.Patch(ctx, obj, patch, opts...)
+				},
+			},
+			&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}},
+		)
+
+		r, ms, icmsReq := setup(t, c)
+
+		gotRes, err := r.doUpdateWorkload(ctx, ms, icmsReq)
+		require.NoError(t, err)
+		assert.Equal(t, reconcile.Result{Requeue: true}, gotRes)
+		assert.Equal(t, v1alpha1.MiniServiceInstalling, ms.Status.Phase)
+		assert.Equal(t, 0, patchCalls, "expected no server-side apply patch when utils pod lookup is transiently failing")
+	})
 }
 
 func Test_dedupeWorkloadImagePullSecrets(t *testing.T) {
@@ -3892,7 +4443,7 @@ func TestDecodeObjects_Success(t *testing.T) {
 	data, err := json.Marshal(helmObjs)
 	require.NoError(t, err)
 
-	objs, resources, derr := decodeObjects(ctx, decoder, data)
+	objs, resources, _, derr := decodeObjects(ctx, decoder, data)
 	require.NoError(t, derr)
 	require.Len(t, objs, 2)
 	require.Len(t, resources, 2)
@@ -3918,6 +4469,57 @@ func TestDecodeObjects_Success(t *testing.T) {
 	})
 }
 
+func TestDecodeObjects_ExtractsWorkloadConfig(t *testing.T) {
+	ctx := newTestContext()
+	s := mgrScheme
+	decoder := serializer.NewCodecFactory(s).UniversalDeserializer()
+
+	helmObjs := []client.Object{
+		&corev1.ConfigMap{
+			TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "ConfigMap"},
+			ObjectMeta: metav1.ObjectMeta{
+				Name: featureflag.WorkloadConfigConfigMapName,
+			},
+			Data: map[string]string{
+				featureflag.WorkloadConfigDataKey: "featureFlags:\n" +
+					"  " + featureflag.StatusByWorkerReadiness + ": true\n" +
+					"  SOME_UNKNOWN_FLAG: true\n",
+			},
+		},
+		&appsv1.Deployment{
+			TypeMeta: metav1.TypeMeta{APIVersion: "apps/v1", Kind: "Deployment"},
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "dep-1",
+			},
+		},
+	}
+
+	data, err := json.Marshal(helmObjs)
+	require.NoError(t, err)
+
+	objs, resources, workloadConfig, derr := decodeObjects(ctx, decoder, data)
+	require.NoError(t, derr)
+
+	// The workload config ConfigMap must be stripped from the applied/status-checked objects
+	// and from the resource summary.
+	require.Len(t, objs, 1)
+	if dep, ok := objs[0].(*appsv1.Deployment); assert.True(t, ok) {
+		assert.Equal(t, "dep-1", dep.Name)
+	}
+	require.Len(t, resources, 1)
+	assert.Contains(t, resources, v1alpha1.ResourceStatus{
+		GVK:   "apps/v1, Kind=Deployment",
+		Names: []string{"dep-1"},
+		Count: 1,
+	})
+
+	// Recognized flags are decoded; unknown keys are dropped.
+	assert.Equal(t, &v1alpha1.WorkloadConfig{
+		FeatureFlags: map[string]bool{featureflag.StatusByWorkerReadiness: true},
+	}, workloadConfig)
+	assert.True(t, workloadConfig.IsFeatureFlagEnabled(featureflag.StatusByWorkerReadiness))
+}
+
 func TestDecodeObjects_JSONUnmarshalError(t *testing.T) {
 	ctx := newTestContext()
 	s := mgrScheme
@@ -3926,7 +4528,7 @@ func TestDecodeObjects_JSONUnmarshalError(t *testing.T) {
 	// Invalid JSON
 	data := []byte("not-json")
 
-	objs, resources, err := decodeObjects(ctx, decoder, data)
+	objs, resources, _, err := decodeObjects(ctx, decoder, data)
 	assert.Error(t, err)
 	assert.Nil(t, objs)
 	assert.Nil(t, resources)
@@ -3946,7 +4548,7 @@ func TestDecodeObjects_NonClientObject(t *testing.T) {
 	data, err := json.Marshal(objs)
 	require.NoError(t, err)
 
-	gotObjs, gotResources, derr := decodeObjects(ctx, decoder, data)
+	gotObjs, gotResources, _, derr := decodeObjects(ctx, decoder, data)
 	assert.EqualError(t, derr, "terminal error: bad object type")
 	assert.Nil(t, gotObjs)
 	assert.Nil(t, gotResources)
@@ -4239,7 +4841,7 @@ func Test_newSelfSubjectAccessReviewPermissionsChecker(t *testing.T) {
 		Build()
 
 	caniCache := map[apischema.GroupVersionKind]error{}
-	checkPerms := newSelfSubjectAccessReviewPermissionsChecker(caniCache)
+	checkPerms := newSelfSubjectAccessReviewPermissionsChecker(caniCache, requiredRBACVerbsWrite)
 
 	podGVK := apischema.GroupVersionKind{Version: "v1", Kind: "Pod"}
 	podTermErr := reconcile.TerminalError(resourceAccesssDeniedError{
@@ -4250,7 +4852,7 @@ func Test_newSelfSubjectAccessReviewPermissionsChecker(t *testing.T) {
 	if assert.Contains(t, caniCache, podGVK) {
 		assert.Equal(t, podTermErr, caniCache[podGVK])
 	}
-	for _, verb := range requiredRBACVerbs {
+	for _, verb := range requiredRBACVerbsWrite {
 		err = c.Delete(ctx, &authorizationv1.SelfSubjectAccessReview{ObjectMeta: metav1.ObjectMeta{Name: verb + "-pods"}})
 		require.NoError(t, err)
 	}
@@ -4268,12 +4870,12 @@ func Test_newSelfSubjectAccessReviewPermissionsChecker(t *testing.T) {
 	if assert.Contains(t, caniCache, podGVK) {
 		assert.Equal(t, podTermErr, caniCache[podGVK])
 	}
-	for _, verb := range requiredRBACVerbs {
+	for _, verb := range requiredRBACVerbsWrite {
 		err = c.Delete(ctx, &authorizationv1.SelfSubjectAccessReview{ObjectMeta: metav1.ObjectMeta{Name: verb + "-pods"}})
 		require.NoError(t, err)
 	}
 
-	for _, verb := range requiredRBACVerbs {
+	for _, verb := range requiredRBACVerbsWrite {
 		err := c.Create(ctx, &authorizationv1.SelfSubjectAccessReview{
 			ObjectMeta: metav1.ObjectMeta{Name: verb + "-pods"},
 			Status: authorizationv1.SubjectAccessReviewStatus{
@@ -4554,4 +5156,328 @@ func TestGVKCache(t *testing.T) {
 		_, err := cache.Get(pod)
 		assert.Error(t, err)
 	})
+}
+
+func TestReconciler_list(t *testing.T) {
+	ctx := newTestContext()
+	msName := "test-ms"
+	nsName := "test-ns"
+	ms := &v1alpha1.MiniService{
+		ObjectMeta: metav1.ObjectMeta{Name: msName},
+		Spec:       v1alpha1.MiniServiceSpec{Namespace: nsName},
+	}
+
+	configMapGVK := apischema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}
+	customGVK := apischema.GroupVersionKind{Group: "example.io", Version: "v1", Kind: "Widget"}
+
+	t.Run("structured namespaced objects are converted to typed", func(t *testing.T) {
+		cm1 := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "cm-1", Namespace: nsName},
+			Data:       map[string]string{"key": "val1"},
+		}
+		cm2 := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "cm-2", Namespace: nsName},
+			Data:       map[string]string{"key": "val2"},
+		}
+		otherNS := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "cm-other", Namespace: "other-ns"},
+		}
+		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: nsName}}
+		otherNSObj := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "other-ns"}}
+
+		c, _ := newFakeClient(mgrScheme, ns, otherNSObj, cm1, cm2, otherNS)
+		r := &Reconciler{Client: c}
+
+		objs, err := r.list(ctx, ms, configMapGVK)
+		require.NoError(t, err)
+		require.Len(t, objs, 2)
+
+		for _, obj := range objs {
+			typedCM, ok := obj.(*corev1.ConfigMap)
+			require.True(t, ok, "expected *corev1.ConfigMap, got %T", obj)
+			assert.Equal(t, nsName, typedCM.Namespace)
+			assert.Equal(t, configMapGVK, obj.GetObjectKind().GroupVersionKind())
+		}
+	})
+
+	t.Run("unstructured namespaced objects stay unstructured", func(t *testing.T) {
+		u1 := &unstructured.Unstructured{}
+		u1.SetGroupVersionKind(customGVK)
+		u1.SetName("widget-1")
+		u1.SetNamespace(nsName)
+		u2 := &unstructured.Unstructured{}
+		u2.SetGroupVersionKind(customGVK)
+		u2.SetName("widget-2")
+		u2.SetNamespace(nsName)
+
+		rm := meta.NewDefaultRESTMapper(mgrScheme.PreferredVersionAllGroups())
+		for gvk := range mgrScheme.AllKnownTypes() {
+			scope := meta.RESTScopeNamespace
+			if gvk.Kind == "MiniService" {
+				scope = meta.RESTScopeRoot
+			}
+			rm.Add(gvk, scope)
+		}
+		rm.Add(customGVK, meta.RESTScopeNamespace)
+
+		tracker := k8stesting.NewObjectTracker(mgrScheme, scheme.Codecs.UniversalDecoder())
+		c := clientfake.NewClientBuilder().
+			WithScheme(mgrScheme).
+			WithObjectTracker(tracker).
+			WithRESTMapper(rm).
+			WithObjects(u1, u2).
+			Build()
+
+		r := &Reconciler{Client: c}
+
+		objs, err := r.list(ctx, ms, customGVK)
+		require.NoError(t, err)
+		require.Len(t, objs, 2)
+
+		for _, obj := range objs {
+			_, ok := obj.(*unstructured.Unstructured)
+			require.True(t, ok, "expected *unstructured.Unstructured, got %T", obj)
+			assert.Equal(t, customGVK, obj.GetObjectKind().GroupVersionKind())
+			assert.Equal(t, nsName, obj.GetNamespace())
+		}
+	})
+
+	t.Run("cluster-scoped objects list by label selector", func(t *testing.T) {
+		matchingMS := &v1alpha1.MiniService{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "matching-ms",
+				Labels: map[string]string{
+					miniserviceNameLabel: msName,
+				},
+			},
+			Spec: v1alpha1.MiniServiceSpec{Namespace: "some-ns"},
+		}
+		nonMatchingMS := &v1alpha1.MiniService{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "non-matching-ms",
+				Labels: map[string]string{
+					miniserviceNameLabel: "other",
+				},
+			},
+			Spec: v1alpha1.MiniServiceSpec{Namespace: "some-ns"},
+		}
+
+		c, _ := newFakeClient(mgrScheme, matchingMS, nonMatchingMS)
+		r := &Reconciler{Client: c}
+
+		msGVK := apischema.GroupVersionKind{Group: v1alpha1.SchemeGroupVersion.Group, Version: v1alpha1.SchemeGroupVersion.Version, Kind: "MiniService"}
+		objs, err := r.list(ctx, ms, msGVK)
+		require.NoError(t, err)
+		require.Len(t, objs, 1)
+		assert.Equal(t, "matching-ms", objs[0].GetName())
+	})
+
+	t.Run("empty result returns nil slice", func(t *testing.T) {
+		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: nsName}}
+		c, _ := newFakeClient(mgrScheme, ns)
+		r := &Reconciler{Client: c}
+
+		objs, err := r.list(ctx, ms, configMapGVK)
+		require.NoError(t, err)
+		assert.Nil(t, objs)
+	})
+
+	t.Run("list error is propagated", func(t *testing.T) {
+		injectedErr := fmt.Errorf("synthetic list failure")
+		c, _ := newFakeClientWithInterceptors(mgrScheme,
+			interceptor.Funcs{
+				List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+					return injectedErr
+				},
+			},
+		)
+		r := &Reconciler{Client: c}
+
+		_, err := r.list(ctx, ms, configMapGVK)
+		require.ErrorIs(t, err, injectedErr)
+	})
+}
+
+func baseMiniServiceForPatchTest() *v1alpha1.MiniService {
+	return &v1alpha1.MiniService{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "patch-test-ms",
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "external-party",
+				"custom-label":                 "keep-me",
+			},
+			Annotations: map[string]string{
+				"external-party/annotation": "do-not-touch",
+			},
+		},
+		Spec: v1alpha1.MiniServiceSpec{
+			Namespace:       "workload-ns",
+			ICMSRequestName: "icms-req-1",
+			HelmChartConfig: testHelmConfig("https://example.com/chart.tgz", `{"replicas": 3}`),
+		},
+	}
+}
+
+func TestPatchMiniService(t *testing.T) {
+	ctx := newTestContext()
+
+	tests := []struct {
+		name            string
+		prepareStored   func(*v1alpha1.MiniService)
+		setupNew        func(*v1alpha1.MiniService)
+		wantFinalizers  []string
+		wantStatusPhase v1alpha1.MiniServicePhase
+	}{
+		{
+			name: "updates status without modifying spec or metadata",
+			setupNew: func(newObj *v1alpha1.MiniService) {
+				newObj.Status.Phase = v1alpha1.MiniServiceInstalling
+				newObj.Status.ObservedGeneration = 1
+			},
+			wantFinalizers:  nil,
+			wantStatusPhase: v1alpha1.MiniServiceInstalling,
+		},
+		{
+			name: "updates finalizers without modifying spec or metadata",
+			setupNew: func(newObj *v1alpha1.MiniService) {
+				newObj.Finalizers = []string{finalizer}
+				newObj.Status.Phase = v1alpha1.MiniServiceInstalled
+			},
+			wantFinalizers:  []string{finalizer},
+			wantStatusPhase: v1alpha1.MiniServiceInstalled,
+		},
+		{
+			name: "removes finalizers without modifying spec or metadata",
+			prepareStored: func(stored *v1alpha1.MiniService) {
+				stored.Finalizers = []string{finalizer}
+			},
+			setupNew: func(newObj *v1alpha1.MiniService) {
+				newObj.Finalizers = nil
+				newObj.Status.Phase = v1alpha1.MiniServiceCompleted
+			},
+			wantFinalizers:  nil,
+			wantStatusPhase: v1alpha1.MiniServiceCompleted,
+		},
+		{
+			name: "does not persist spec changes present in newObj",
+			setupNew: func(newObj *v1alpha1.MiniService) {
+				newObj.Spec.Namespace = "attacker-ns"
+				newObj.Spec.ICMSRequestName = "attacker-req"
+				newObj.Spec.HelmChartConfig = testHelmConfig("https://evil.example/chart.tgz", `{"replicas": 999}`)
+				newObj.Labels["custom-label"] = "changed"
+				newObj.Annotations["external-party/annotation"] = "changed"
+				newObj.Status.Phase = v1alpha1.MiniServiceInstallFailed
+			},
+			wantFinalizers:  nil,
+			wantStatusPhase: v1alpha1.MiniServiceInstallFailed,
+		},
+		{
+			name: "skips finalizer patch when unchanged",
+			prepareStored: func(stored *v1alpha1.MiniService) {
+				stored.Finalizers = []string{finalizer}
+			},
+			setupNew: func(newObj *v1alpha1.MiniService) {
+				newObj.Finalizers = []string{finalizer}
+				newObj.Status.Phase = v1alpha1.MiniServiceRunning
+			},
+			wantFinalizers:  []string{finalizer},
+			wantStatusPhase: v1alpha1.MiniServiceRunning,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stored := baseMiniServiceForPatchTest()
+			if tt.prepareStored != nil {
+				tt.prepareStored(stored)
+			}
+
+			crClient, _ := newFakeClient(mgrScheme, stored)
+			r := &Reconciler{Client: crClient}
+
+			oldObj := &v1alpha1.MiniService{}
+			require.NoError(t, crClient.Get(ctx, client.ObjectKeyFromObject(stored), oldObj))
+
+			wantSpec := oldObj.Spec
+			wantLabels := maps.Clone(oldObj.Labels)
+			wantAnnotations := maps.Clone(oldObj.Annotations)
+
+			newObj := oldObj.DeepCopy()
+			tt.setupNew(newObj)
+
+			require.NoError(t, r.patchMiniService(ctx, oldObj, newObj))
+
+			got := &v1alpha1.MiniService{}
+			require.NoError(t, crClient.Get(ctx, client.ObjectKeyFromObject(stored), got))
+
+			assert.Empty(t, cmp.Diff(wantSpec, got.Spec), "spec must not be modified by patchMiniService")
+			assert.Equal(t, wantLabels, got.Labels, "labels must not be modified by patchMiniService")
+			assert.Equal(t, wantAnnotations, got.Annotations, "annotations must not be modified by patchMiniService")
+			assert.Equal(t, tt.wantStatusPhase, got.Status.Phase)
+			assert.Equal(t, tt.wantFinalizers, got.Finalizers)
+		})
+	}
+}
+
+func TestSaveWorkloadConfigUsesTargetedSSA(t *testing.T) {
+	ctx := newTestContext()
+	stored := baseMiniServiceForPatchTest()
+	patchType := client.Merge.Type()
+	var patchData []byte
+	var patchOptions client.PatchOptions
+	crClient, _ := newFakeClientWithInterceptors(
+		mgrScheme,
+		interceptor.Funcs{
+			Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+				patchType = patch.Type()
+				for _, opt := range opts {
+					opt.ApplyToPatch(&patchOptions)
+				}
+				var err error
+				patchData, err = patch.Data(obj)
+				require.NoError(t, err)
+				return c.Patch(ctx, obj, patch, opts...)
+			},
+		},
+		stored,
+	)
+	r := &Reconciler{Client: crClient}
+
+	ms := &v1alpha1.MiniService{}
+	require.NoError(t, crClient.Get(ctx, client.ObjectKeyFromObject(stored), ms))
+	wantSpec := ms.Spec.DeepCopy()
+	desired := &v1alpha1.WorkloadConfig{
+		FeatureFlags: map[string]bool{featureflag.StatusByWorkerReadiness: true},
+	}
+
+	require.NoError(t, r.saveWorkloadConfig(ctx, ms, desired))
+
+	got := &v1alpha1.MiniService{}
+	require.NoError(t, crClient.Get(ctx, client.ObjectKeyFromObject(stored), got))
+	assert.Equal(t, client.Apply.Type(), patchType)
+	assert.Equal(t, managedByValue, patchOptions.FieldManager)
+	if assert.NotNil(t, patchOptions.Force) {
+		assert.True(t, *patchOptions.Force)
+	}
+
+	var gotPatch map[string]any
+	require.NoError(t, json.Unmarshal(patchData, &gotPatch))
+	assert.Equal(t, map[string]any{
+		"apiVersion": v1alpha1.SchemeGroupVersion.String(),
+		"kind":       "MiniService",
+		"metadata": map[string]any{
+			"name": stored.Name,
+		},
+		"spec": map[string]any{
+			"workloadConfig": map[string]any{
+				"featureFlags": map[string]any{
+					featureflag.StatusByWorkerReadiness: true,
+				},
+			},
+		},
+	}, gotPatch)
+	assert.Equal(t, wantSpec.Namespace, got.Spec.Namespace)
+	assert.Equal(t, wantSpec.ICMSRequestName, got.Spec.ICMSRequestName)
+	assert.Empty(t, cmp.Diff(wantSpec.HelmChartConfig, got.Spec.HelmChartConfig))
+	assert.Empty(t, cmp.Diff(desired, got.Spec.WorkloadConfig))
 }

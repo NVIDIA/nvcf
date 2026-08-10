@@ -1,0 +1,119 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@gazelle//:def.bzl", "gazelle")
+load("//rules/oci:defs.bzl", "go_oci_image")
+
+# gazelle:prefix ai-api-gateway-service
+# gazelle:proto disable_global
+# gazelle:go_naming_convention import_alias
+
+# Non-Go top-level dirs.
+# gazelle:exclude docs
+# gazelle:exclude examples
+# gazelle:exclude scripts
+
+gazelle(
+    name = "gazelle",
+)
+
+# Multi-arch OCI image. Distroless/go base, single-binary entrypoint.
+# Image push targets (kaze, ncp-dev) live under //nvidia-internal:* so
+# the NGC registry coordinates stay off the OSS mirror.
+# The distroless/go base ships ENTRYPOINT ["/usr/bin/shelless_ulimit"], a shim
+# that raises RLIMIT_NOFILE (soft -> hard) when ULIMIT_FLAG=1 before exec'ing
+# its arguments. The legacy Dockerfile relied on that base entrypoint plus
+# ENV ULIMIT_FLAG=1; go_oci_image otherwise overrides the entrypoint with just
+# [binary_path], bypassing the shim and leaving the default 1024 soft fd limit.
+# Restore the shim + flag so the Bazel image matches the Dockerfile.
+go_oci_image(
+    name = "image",
+    base = "@distroless_go",
+    binary = ":ai-api-gateway-service",
+    binary_path = "/usr/bin/nvcf-ai-api-gateway-service",
+    entrypoint = [
+        "/usr/bin/shelless_ulimit",
+        "/usr/bin/nvcf-ai-api-gateway-service",
+    ],
+    env = {"ULIMIT_FLAG": "1"},
+    tags = ["nvcf-ai-api-gateway-service"],
+    visibility = ["//visibility:public"],
+)
+
+# Regression guard for the rules_pkg default-0644 startup-failure pattern: if
+# rules_pkg ever stops applying mode 0755 to the entrypoint, this test
+# catches it before the image is pushed.
+sh_test(
+    name = "image_entrypoint_mode_test",
+    srcs = ["image_entrypoint_mode_test.sh"],
+    args = ["$(location :image.tar)"],
+    data = [":image.tar"],
+)
+
+go_library(
+    name = "ai-api-gateway-service_lib",
+    srcs = [
+        "generate.go",
+        "main.go",
+    ],
+    importpath = "ai-api-gateway-service",
+    visibility = ["//visibility:private"],
+    # Build-time stamping, resolved by tools/workspace_status.sh when bazel
+    # is invoked with --stamp (the CI release jobs pass it). STABLE_VERSION
+    # is the release semver, which is also the primary container tag, so the
+    # reported service.version matches the image tag. gateway.GetVersion()
+    # prefers the APP_VERSION env var, then this stamped value, then the Go
+    # VCS build info (absent under Bazel).
+    x_defs = {
+        "ai-api-gateway-service/gateway.version": "{STABLE_VERSION}",
+        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Service": "nvcf-ai-api-gateway-service",
+        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Version": "{STABLE_VERSION}",
+        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.GitHash": "{STABLE_GIT_COMMIT_FULL}",
+    },
+    deps = [
+        "//src/invocation-plane-services/vanity-gateway/gateway",
+        "@com_github_go_logr_zapr//:zapr",
+        "@com_github_nvidia_nvcf_go//pkg/nvkit/config",
+        "@com_github_nvidia_nvcf_go//pkg/nvkit/logs",
+        "@com_github_nvidia_nvcf_go//pkg/nvkit/tracing",
+        "@com_github_spf13_cobra//:cobra",
+        "@com_github_spf13_pflag//:pflag",
+        "@io_k8s_sigs_controller_runtime//:controller-runtime",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+go_binary(
+    name = "ai-api-gateway-service",
+    embed = [":ai-api-gateway-service_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "ai-api-gateway-service_test",
+    srcs = ["main_test.go"],
+    # TestGatewayService reads config.yaml from the working directory.
+    # Under `go test` from the repo root that resolves to ./config.yaml;
+    # under the Bazel sandbox the test runfiles directory does not
+    # contain it unless declared here. Adding it as data lets the test
+    # find it via os.Open("config.yaml") which is how the test calls.
+    data = ["config.yaml"],
+    embed = [":ai-api-gateway-service_lib"],
+    deps = [
+        "//src/invocation-plane-services/vanity-gateway/gateway",
+        "//src/invocation-plane-services/vanity-gateway/gateway_config",
+        "@com_github_go_logr_zapr//:zapr",
+        "@com_github_goccy_go_json//:go-json",
+        "@com_github_magiconair_properties//assert",
+        "@com_github_nvidia_nvcf_go//pkg/nvkit/logs",
+        "@in_gopkg_yaml_v3//:yaml_v3",
+        "@io_k8s_sigs_controller_runtime//:controller-runtime",
+        "@org_golang_x_net//http2",
+        "@org_golang_x_net//http2/h2c",
+        "@org_uber_go_zap//:zap",
+        "@org_uber_go_zap//zapcore",
+    ],
+)

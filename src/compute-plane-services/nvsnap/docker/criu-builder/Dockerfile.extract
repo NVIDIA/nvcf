@@ -1,0 +1,35 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+FROM ubuntu:22.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git build-essential pkg-config libbsd-dev libcap-dev libnet1-dev \
+    libnl-3-dev libnl-route-3-dev libprotobuf-dev libprotobuf-c-dev \
+    protobuf-c-compiler protobuf-compiler python3-protobuf \
+    libgnutls28-dev libnftables-dev libaio-dev uuid-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY criu-source/ /build/criu/
+
+RUN cd criu && make clean || true && make -j$(nproc) && strip criu/criu
+
+# Runtime stage
+FROM ubuntu:22.04
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libbsd0 libnet1 libnl-3-200 libnl-route-3-200 \
+    libprotobuf-c1 libgnutls30 libnftables1 libaio1 \
+    uuid-runtime \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /build/criu/criu/criu /criu
+COPY --from=builder /build/criu/plugins/cuda/cuda_plugin.so /cuda_plugin.so
+# Create full lib bundle with ldd dependencies
+RUN mkdir -p /libs && \
+    ldd /criu | grep "=>" | awk '{print $3}' | while read lib; do \
+      [ -f "$lib" ] && cp "$lib" /libs/ ; \
+    done && \
+    cp /lib64/ld-linux-x86-64.so.2 /libs/
+CMD ["sleep", "infinity"]

@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -129,10 +130,63 @@ func updateCatalogFromGitLab(stackVersion string, base *Catalog) (*Catalog, erro
 		return nil, err
 	}
 	catalog := BuildCatalogFromArtifactsWithBase(stackVersion, artifacts, base)
+	if err := syncComputeStackPackageVersion(client, catalog); err != nil {
+		return nil, err
+	}
 	if err := ValidateCatalog(catalog); err != nil {
 		return nil, err
 	}
 	return catalog, nil
+}
+
+func syncComputeStackPackageVersion(client *GitLabClient, catalog *Catalog) error {
+	if _, ok := catalog.findArtifact(computeStackResourceName); !ok {
+		return nil
+	}
+	projectID, err := computeStackProjectID()
+	if err != nil {
+		return err
+	}
+	version, err := client.LatestGenericPackageVersion(projectID, computeStackResourceName)
+	if err != nil {
+		return fmt.Errorf("discover latest compute-plane stack package: %w", err)
+	}
+	if !setArtifactVersion(catalog, computeStackResourceName, version) {
+		return fmt.Errorf("artifact %s is required", computeStackResourceName)
+	}
+	return nil
+}
+
+func computeStackProjectID() (int, error) {
+	for _, envName := range []string{"DOC_VERSION_SYNC_COMPUTE_GITLAB_PROJECT_ID", "CI_PROJECT_ID"} {
+		value := strings.TrimSpace(os.Getenv(envName))
+		if value == "" {
+			continue
+		}
+		projectID, err := strconv.Atoi(value)
+		if err != nil {
+			return 0, fmt.Errorf("parse %s: %w", envName, err)
+		}
+		return projectID, nil
+	}
+	return defaultComputeProjectID, nil
+}
+
+func setArtifactVersion(catalog *Catalog, name, version string) bool {
+	changed := false
+	for i := range catalog.Artifacts {
+		if catalog.Artifacts[i].Name == name {
+			catalog.Artifacts[i].Version = version
+			changed = true
+		}
+	}
+	for i := range catalog.SupplementalArtifacts {
+		if catalog.SupplementalArtifacts[i].Name == name {
+			catalog.SupplementalArtifacts[i].Version = version
+			changed = true
+		}
+	}
+	return changed
 }
 
 func loadCatalogIfPresent(path string) (*Catalog, error) {

@@ -295,6 +295,15 @@ func (m MaintenanceMode) String() string {
 	return string(m)
 }
 
+// AllMaintenanceModes lists every MaintenanceMode value, used to
+// zero-initialize the maintenance-mode metric so all series appear on the
+// first Prometheus scrape.
+var AllMaintenanceModes = []MaintenanceMode{
+	MaintenanceModeNone,
+	MaintenanceModeCordon,
+	MaintenanceModeCordonAndDrain,
+}
+
 // HealthStatusRequest is the payload type for reporting NVCA health to ICMS.
 type HealthStatusRequest struct {
 	Status              HealthStatus            `json:"status,omitempty"`
@@ -378,22 +387,4 @@ type ICMSTerminationMessage struct {
 	Action            common.MessageAction `json:"action,omitempty"`
 	//nolint:revive
 	InstanceIds []string `json:"instanceIds,omitempty"`
-}
-
-type InstanceUpdateStatusDTO struct {
-	InstanceID                    string            `json:"instanceId,omitempty"`
-	NCAID                         string            `json:"ncaId,omitempty"`
-	FunctionID                    string            `json:"functionId,omitempty"`
-	FunctionVersionID             string            `json:"functionVersionId,omitempty"`
-	ClusterID                     string            `json:"zoneId,omitempty"`
-	ContainerVersion              map[string]string `json:"containerVersion,omitempty"`
-	IsZoneGFN                     bool              `json:"isZoneGFN"`
-	ICMSRequestID                 string            `json:"icmsRequestId,omitempty"`
-	IsNvcaInplaceUpgradeSupported bool              `json:"isNvcaInplaceUpgradeSupported,omitempty"`
-}
-
-type ROSUpdateInfo struct {
-	RequestID  string                    `json:"requestID,omitempty"`
-	InstanceID string                    `json:"instanceID,string"`
-	Payload    []InstanceUpdateStatusDTO `json:"payload,omitempty"`
 }

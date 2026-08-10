@@ -353,6 +353,7 @@ CREATE TABLE IF NOT EXISTS sis_api.cluster_by_group_id_and_cluster_id (
     allow_cluster_targeting            boolean,
     allow_task_cluster_creation_queues boolean,
     cluster_key_id                     text,
+    auth_client_id                     text,
     PRIMARY KEY (cluster_group_id, cluster_id)
 ) WITH CLUSTERING ORDER BY (cluster_id ASC);
 
@@ -393,6 +394,10 @@ CREATE TABLE IF NOT EXISTS sis_api.cluster_by_cluster_id (
     allow_cluster_targeting            boolean,
     allow_task_cluster_creation_queues boolean,
     cluster_key_id                     text,
+    auth_client_id                     text,
+    jwks                               text,
+    oidc_issuer                        text,
+    jwks_fingerprint                   text,
     healthy_heartbeat_report_time      timestamp,
     PRIMARY KEY (cluster_id)
 );
@@ -461,6 +466,7 @@ CREATE TABLE IF NOT EXISTS sis_api.clusters_by_account (
     allow_cluster_targeting            boolean,
     allow_task_cluster_creation_queues boolean,
     cluster_key_id                     text,
+    auth_client_id                     text,
     PRIMARY KEY ((nca_id), cluster_name)
 ) WITH CLUSTERING ORDER BY (cluster_name ASC);
 

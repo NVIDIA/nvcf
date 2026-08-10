@@ -1,0 +1,58 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "webhook",
+    srcs = [
+        "admission.go",
+        "auto_inject.go",
+        "cachedir.go",
+        "cert.go",
+        "extract_coalesce.go",
+        "l2_mount.go",
+        "mount_prep_init.go",
+        "mutate.go",
+        "restore_entrypoint.go",
+        "rootfs_l2_mount.go",
+        "rootfs_l2_overlay.go",
+        "server.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/webhook",
+    visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
+    deps = [
+        "//src/compute-plane-services/nvsnap/internal/checkpointstore",
+        "//src/compute-plane-services/nvsnap/internal/rootfsonly",
+        "//src/compute-plane-services/nvsnap/internal/tracing",
+        "@com_github_sirupsen_logrus//:logrus",
+        "@io_k8s_api//admission/v1:admission",
+        "@io_k8s_api//core/v1:core",
+        "@io_k8s_apimachinery//pkg/api/resource",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@io_opentelemetry_go_otel//attribute",
+    ],
+)
+
+go_test(
+    name = "webhook_test",
+    srcs = [
+        "admission_test.go",
+        "cachedir_test.go",
+        "extract_coalesce_test.go",
+        "l2_mount_test.go",
+        "mergeplan_test.go",
+        "mutate_test.go",
+        "restore_entrypoint_test.go",
+        "rootfs_l2_mount_test.go",
+        "rootfs_l2_overlay_test.go",
+        "server_test.go",
+    ],
+    embed = [":webhook"],
+    deps = [
+        "//src/compute-plane-services/nvsnap/internal/checkpointstore",
+        "//src/compute-plane-services/nvsnap/internal/rootfsonly",
+        "@io_k8s_api//admission/v1:admission",
+        "@io_k8s_api//core/v1:core",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@io_k8s_apimachinery//pkg/runtime",
+        "@io_k8s_apimachinery//pkg/types",
+    ],
+)

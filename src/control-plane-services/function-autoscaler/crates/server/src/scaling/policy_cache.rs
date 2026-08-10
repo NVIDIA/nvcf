@@ -160,8 +160,12 @@ mod tests {
             .await
             .unwrap();
         let secrets_watcher = SecretFileWatcher::new(&secrets_file).await.unwrap();
-        let oauth2_client =
-            OAuth2Client::new("http://localhost:0".to_string(), Arc::new(secrets_watcher)).unwrap();
+        let oauth2_client = OAuth2Client::new(
+            "http://localhost:0".to_string(),
+            "autoscaler:auth".to_string(),
+            Arc::new(secrets_watcher),
+        )
+        .unwrap();
         (Arc::new(oauth2_client), temp_dir)
     }
 

@@ -43,7 +43,7 @@ exporters:
     api:
       key: ${file:/etc/byoo-otel-collector/secrets/datadog_sre}
       site: endpoint
-  otlphttp/GRAFANA_CLOUD-something-e2e-grafana-all-types-http-metrics:
+  otlp_http/GRAFANA_CLOUD-something-e2e-grafana-all-types-http-metrics:
     auth:
       authenticator: basicauth/GRAFANA_CLOUD-something-e2e-grafana-all-types-http-metrics
     endpoint: endpoint
@@ -103,7 +103,7 @@ processors:
     check_interval: 1s
     limit_percentage: 80
     spike_limit_percentage: 10
-  metricstransform:
+  metrics_transform:
     transforms:
       - action: update
         include: ^.*$
@@ -135,7 +135,7 @@ service:
     logs:
       level: warn
     metrics:
-      level: normal
+      level: detailed
       readers:
         - pull:
             exporter:
@@ -157,7 +157,7 @@ service:
         - otlp
         - prometheus
       exporters:
-        - otlphttp/GRAFANA_CLOUD-something-e2e-grafana-all-types-http-metrics
+        - otlp_http/GRAFANA_CLOUD-something-e2e-grafana-all-types-http-metrics
       processors:
         - filter/metrics
         - filter/infra_containers
@@ -166,7 +166,7 @@ service:
         - resource
         - batch
         - memory_limiter
-        - metricstransform
+        - metrics_transform
   extensions:
     - health_check
     - basicauth/GRAFANA_CLOUD-something-e2e-grafana-all-types-http-metrics

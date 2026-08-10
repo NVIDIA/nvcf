@@ -150,6 +150,7 @@ func makeReValConfig(req *RevalRequest) reval.Config {
 		NGCAPIKey:               req.ApiKey,
 		HelmRegistryAuthConfig:  req.HelmRegistryAuthConfig,
 		ImageRegistryAuthConfig: req.ImageRegistryAuthConfig,
+		ValidateImages:          req.ValidateImages,
 	}
 
 	// Only set these fields if service name and port are non-empty,

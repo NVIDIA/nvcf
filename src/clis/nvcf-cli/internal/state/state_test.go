@@ -78,6 +78,49 @@ func TestState_SelfHostedAuth_RoundTrip(t *testing.T) {
 	assert.Equal(t, "https://cp.example/api-keys", got.Fingerprint.APIKeysEndpoint)
 }
 
+func TestNVCTAPIKey_Methods(t *testing.T) {
+	sm := newTestStateManager(t)
+
+	assert.False(t, sm.HasNVCTAPIKey())
+
+	exp := time.Now().Add(24 * time.Hour).UTC().Round(time.Second)
+	sm.SetNVCTAPIKey("nvapi-task-key", exp)
+	assert.True(t, sm.HasNVCTAPIKey())
+	assert.Equal(t, "nvapi-task-key", sm.GetState().NVCTAPIKey)
+
+	sm.ClearNVCTAPIKey()
+	assert.False(t, sm.HasNVCTAPIKey())
+	assert.Empty(t, sm.GetState().NVCTAPIKey)
+	assert.True(t, sm.GetState().NVCTAPIKeyExpiration.IsZero())
+}
+
+func TestClearTokens_ClearsNVCTAPIKey(t *testing.T) {
+	sm := newTestStateManager(t)
+
+	exp := time.Now().Add(24 * time.Hour).UTC().Round(time.Second)
+	sm.SetTokens("admin-token", "nvapi-function-key", exp, exp)
+	sm.SetNVCTAPIKey("nvapi-task-key", exp)
+
+	sm.ClearTokens()
+
+	assert.Empty(t, sm.GetState().Token)
+	assert.Empty(t, sm.GetState().APIKey)
+	assert.Empty(t, sm.GetState().NVCTAPIKey, "init must clear the task API key too")
+	assert.True(t, sm.GetState().NVCTAPIKeyExpiration.IsZero())
+}
+
+func TestNVCTAPIKey_RoundTrip(t *testing.T) {
+	sm := newTestStateManager(t)
+	exp := time.Now().Add(24 * time.Hour).UTC().Round(time.Second)
+	sm.SetNVCTAPIKey("nvapi-task-key", exp)
+	require.NoError(t, sm.Save())
+
+	sm2 := &StateManager{statePath: sm.statePath, state: &State{}}
+	require.NoError(t, sm2.Load())
+	assert.Equal(t, "nvapi-task-key", sm2.GetState().NVCTAPIKey)
+	assert.Equal(t, exp, sm2.GetState().NVCTAPIKeyExpiration.UTC().Round(time.Second))
+}
+
 // TestState_LegacyFile_NoSelfHostedAuth verifies that loading a state file
 // written by an older CLI (without the selfHostedAuth field) produces
 // SelfHostedAuth == nil — no panic, no parse error.
@@ -158,4 +201,35 @@ func TestState_Load_MissingFile(t *testing.T) {
 	require.NoError(t, sm.Load())
 	// State is non-nil after load
 	assert.NotNil(t, sm.GetState())
+}
+
+// TestNewStateManagerForConfig_StatePath verifies that NewStateManagerForConfig
+// maps config names to the correct state file paths.
+func TestNewStateManagerForConfig_StatePath(t *testing.T) {
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	tests := []struct {
+		configName   string
+		wantStatPath string
+	}{
+		// Default cases — empty or "default" → ~/.nvcf-cli.state
+		{"", filepath.Join(home, ".nvcf-cli.state")},
+		{"default", filepath.Join(home, ".nvcf-cli.state")},
+		// Auto-discovered default config (the regression case) → ~/.nvcf-cli.state
+		{".nvcf-cli.yaml", filepath.Join(home, ".nvcf-cli.state")},
+		{filepath.Join(home, ".nvcf-cli.yaml"), filepath.Join(home, ".nvcf-cli.state")},
+		// Explicit named config → ~/.nvcf-cli.<name>.state
+		{"dev.yaml", filepath.Join(home, ".nvcf-cli.dev.state")},
+		{filepath.Join(home, "dev.yaml"), filepath.Join(home, ".nvcf-cli.dev.state")},
+		// A file literally named nvcf-cli.yaml (no leading dot) is a distinct named config
+		{"nvcf-cli.yaml", filepath.Join(home, ".nvcf-cli.nvcf-cli.state")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.configName, func(t *testing.T) {
+			sm := NewStateManagerForConfig(tt.configName)
+			assert.Equal(t, tt.wantStatPath, sm.statePath)
+		})
+	}
 }

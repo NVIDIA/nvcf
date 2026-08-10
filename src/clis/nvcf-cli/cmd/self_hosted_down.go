@@ -21,7 +21,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -108,7 +110,7 @@ func runDown(c *cobra.Command) error {
 		Plain:      selfHostedPlain,
 		Accessible: selfHostedAccessible,
 		Cluster:    downClusterName,
-		Stack:      selfHostedStack,
+		Stack:      selfHostedControlPlaneStack,
 	})
 	if err != nil {
 		return err
@@ -153,7 +155,7 @@ func runDownPlanOnly(ctx context.Context, sink progress.EventSink, started time.
 	}
 	_ = sink.Emit(ctx, progress.Planned{
 		Cluster:       downClusterName,
-		Stack:         selfHostedStack,
+		Stack:         selfHostedControlPlaneStack,
 		Phases:        phases,
 		TotalETASec:   plan.TotalEstSec,
 		WillUninstall: plan.WillUninstall,
@@ -178,24 +180,37 @@ func runDownPlanOnly(ctx context.Context, sink progress.EventSink, started time.
 // TODO(M+11.H/--keep-namespaces): skip namespace deletion when downKeepNamespaces
 // is true.
 func runDownPhases(c *cobra.Command, ctx context.Context, sink progress.EventSink, started time.Time) error {
-	var err error
-	if downClusterName != "" {
-		err = runDownNamedClusterPhases(c, ctx, sink)
-	} else if downAll {
-		err = runDownAllClustersPhases(c, ctx, sink)
-	}
+	helmRuntimeMode, err := resolveSelfHostedHelmRuntimeMode(ctx)
 	if err != nil {
 		emitDownFinal(ctx, sink, started, false)
-		return err
+		return fmt.Errorf("resolve Helm runtime mode: %w", err)
+	}
+
+	var phaseErr error
+	if downClusterName != "" {
+		phaseErr = runDownNamedClusterPhases(c, ctx, sink, helmRuntimeMode)
+	} else if downAll {
+		phaseErr = runDownAllClustersPhases(c, ctx, sink, helmRuntimeMode)
+	}
+	if phaseErr != nil {
+		emitDownFinal(ctx, sink, started, false)
+		return phaseErr
 	}
 
 	emitDownFinal(ctx, sink, started, true)
 	return nil
 }
 
-func runDownNamedClusterPhases(c *cobra.Command, ctx context.Context, sink progress.EventSink) error {
-	if err := runDownComputePlaneForCluster(c, ctx, sink, downClusterName); err != nil {
+func runDownNamedClusterPhases(c *cobra.Command, ctx context.Context, sink progress.EventSink, helmRuntimeMode selfhosted.HelmRuntimeMode) error {
+	skipClusterRows, err := skipClusterRowsForLocalAbsentControlPlane(ctx)
+	if err != nil {
 		return err
+	}
+	if err := runDownComputePlaneForCluster(c, ctx, sink, downClusterName, helmRuntimeMode, skipClusterRows); err != nil {
+		return err
+	}
+	if skipClusterRows {
+		return nil
 	}
 
 	remaining, err := listRegisteredClusters(ctx, resolveICMSURL(selfHostedICMSURL), downNCAID)
@@ -205,23 +220,81 @@ func runDownNamedClusterPhases(c *cobra.Command, ctx context.Context, sink progr
 	if len(remaining) > 0 {
 		return nil
 	}
-	return runDownControlPlane(c, ctx, sink)
+	return runDownControlPlane(c, ctx, sink, helmRuntimeMode)
 }
 
-func runDownAllClustersPhases(c *cobra.Command, ctx context.Context, sink progress.EventSink) error {
+func runDownAllClustersPhases(c *cobra.Command, ctx context.Context, sink progress.EventSink, helmRuntimeMode selfhosted.HelmRuntimeMode) error {
+	skipClusterRows, err := skipClusterRowsForLocalAbsentControlPlane(ctx)
+	if err != nil {
+		return err
+	}
+	if skipClusterRows {
+		clusters, err := localDownFallbackClusterNames(ctx)
+		if err != nil {
+			return err
+		}
+		for _, clusterName := range clusters {
+			if err := runDownComputePlaneForCluster(c, ctx, sink, clusterName, helmRuntimeMode, true); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	clusters, err := listRegisteredClusters(ctx, resolveICMSURL(selfHostedICMSURL), downNCAID)
 	if err != nil {
 		return fmt.Errorf("list registered clusters: %w", err)
 	}
 	for _, cl := range clusters {
-		if err := runDownComputePlaneForCluster(c, ctx, sink, registeredClusterName(cl)); err != nil {
+		if err := runDownComputePlaneForCluster(c, ctx, sink, registeredClusterName(cl), helmRuntimeMode, false); err != nil {
 			return err
 		}
 	}
-	return runDownControlPlane(c, ctx, sink)
+	return runDownControlPlane(c, ctx, sink, helmRuntimeMode)
 }
 
-func registeredClusterName(cl client.SISCluster) string {
+func localDownFallbackClusterNames(ctx context.Context) ([]string, error) {
+	resolved, err := selfhosted.ResolveStack(ctx, selfhosted.StackOptions{
+		Source:        selfHostedComputePlaneStack,
+		BuiltInOCIRef: builtInComputePlaneStackOCI(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("resolve stack: %w", err)
+	}
+	return clusterNamesFromStackOut(resolved.Path)
+}
+
+func clusterNamesFromStackOut(stackPath string) ([]string, error) {
+	outDir := filepath.Join(stackPath, "out")
+	suffixes := []string{
+		"-nvca-values.yaml",
+		"-nvca-values.yml",
+		"-register-values.yaml",
+		"-register-values.yml",
+	}
+	names := make(map[string]bool)
+	for _, suffix := range suffixes {
+		matches, err := filepath.Glob(filepath.Join(outDir, "*"+suffix))
+		if err != nil {
+			return nil, err
+		}
+		for _, match := range matches {
+			base := filepath.Base(match)
+			name := strings.TrimSuffix(base, suffix)
+			if name != "" && name != base {
+				names[name] = true
+			}
+		}
+	}
+	out := make([]string, 0, len(names))
+	for name := range names {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func registeredClusterName(cl client.ICMSCluster) string {
 	if cl.ClusterName != "" {
 		return cl.ClusterName
 	}
@@ -235,20 +308,18 @@ func emitDownFinal(ctx context.Context, sink progress.EventSink, started time.Ti
 	})
 }
 
-func runDownComputePlaneForCluster(c *cobra.Command, ctx context.Context, sink progress.EventSink, clusterName string) error {
+func runDownComputePlaneForCluster(c *cobra.Command, ctx context.Context, sink progress.EventSink, clusterName string, helmRuntimeMode selfhosted.HelmRuntimeMode, skipClusterRow bool) error {
 	// Phase 2: uninstall compute plane.
 	p2 := time.Now().UTC()
 	_ = sink.Emit(ctx, progress.PhaseStarted{Num: 2, Name: "uninstall-compute-plane", StartedAt: p2})
 
 	resolved, err := selfhosted.ResolveStack(ctx, selfhosted.StackOptions{
-		Source:        selfHostedStack,
-		BuiltInOCIRef: builtInStackOCI(),
+		Source:        selfHostedComputePlaneStack,
+		BuiltInOCIRef: builtInComputePlaneStackOCI(),
 	})
 	if err != nil {
 		return fmt.Errorf("resolve stack: %w", err)
 	}
-
-	helmfileFile, selector := computePlaneTarget(resolved.Path)
 
 	// The compute-plane helmfile (helmfile-nvca-operator.yaml.gotmpl) reads
 	// CLUSTER_ID/CLUSTER_GROUP_ID/IDENTITY_SOURCE/CLUSTER_REGION from env
@@ -261,7 +332,11 @@ func runDownComputePlaneForCluster(c *cobra.Command, ctx context.Context, sink p
 		"CLUSTER_NAME=" + clusterName,
 		"NCA_ID=" + downNCAID,
 	}
+	unregisterClusterID := clusterName
 	if rv, err := readRegisterValuesYAML(resolved.Path, clusterName); err == nil {
+		if rv.ClusterID != "" {
+			unregisterClusterID = rv.ClusterID
+		}
 		extra = append(extra,
 			"CLUSTER_ID="+rv.ClusterID,
 			"CLUSTER_GROUP_ID="+rv.ClusterGroupID,
@@ -271,17 +346,16 @@ func runDownComputePlaneForCluster(c *cobra.Command, ctx context.Context, sink p
 	}
 
 	if err := teardown.Destroy(teardown.DestroyOpts{
-		Plane:        downPlaneCompute,
-		ClusterName:  clusterName,
-		KubeContext:  selfHostedComputePlaneContext,
-		StackPath:    resolved.Path,
-		HelmfileFile: helmfileFile,
-		Selector:     selector,
-		Env:          selfHostedEnv,
-		Stdout:       c.OutOrStdout(),
-		Stderr:       c.ErrOrStderr(),
-		Ctx:          ctx,
-		ExtraEnv:     extra,
+		Plane:           downPlaneCompute,
+		ClusterName:     clusterName,
+		KubeContext:     selfHostedComputePlaneContext,
+		StackPath:       resolved.Path,
+		Env:             selfHostedEnv,
+		HelmRuntimeMode: helmRuntimeMode,
+		Stdout:          c.OutOrStdout(),
+		Stderr:          c.ErrOrStderr(),
+		Ctx:             ctx,
+		ExtraEnv:        extra,
 	}, sink); err != nil {
 		return fmt.Errorf("helmfile destroy compute-plane: %w", err)
 	}
@@ -294,6 +368,14 @@ func runDownComputePlaneForCluster(c *cobra.Command, ctx context.Context, sink p
 	// Phase 3: unregister cluster from ICMS.
 	p3 := time.Now().UTC()
 	_ = sink.Emit(ctx, progress.PhaseStarted{Num: 3, Name: "remove-cluster-row", StartedAt: p3})
+	if skipClusterRow {
+		_ = sink.Emit(ctx, progress.PhaseCompleted{
+			Num:      3,
+			Name:     "remove-cluster-row",
+			Duration: time.Since(p3),
+		})
+		return nil
+	}
 
 	icmsURL := resolveICMSURL(selfHostedICMSURL)
 	deleter, closeDeleter, err := newClusterDeleterForDown(icmsURL)
@@ -302,7 +384,7 @@ func runDownComputePlaneForCluster(c *cobra.Command, ctx context.Context, sink p
 	}
 	defer closeDeleter()
 
-	if err := teardown.Unregister(ctx, deleter, icmsURL, clusterName); err != nil {
+	if err := teardown.Unregister(ctx, deleter, icmsURL, downNCAID, unregisterClusterID); err != nil {
 		return fmt.Errorf("unregister cluster: %w", err)
 	}
 	_ = sink.Emit(ctx, progress.PhaseCompleted{
@@ -314,26 +396,73 @@ func runDownComputePlaneForCluster(c *cobra.Command, ctx context.Context, sink p
 	return nil
 }
 
-func runDownControlPlane(c *cobra.Command, ctx context.Context, sink progress.EventSink) error {
+func skipClusterRowsForLocalAbsentControlPlane(ctx context.Context) (bool, error) {
+	if !strings.EqualFold(selfHostedEnv, "local") {
+		return false, nil
+	}
+	installed, err := downControlPlaneInstalled(ctx, selfHostedControlPlaneContext)
+	if err != nil {
+		return false, fmt.Errorf("check local control-plane releases: %w", err)
+	}
+	return !installed, nil
+}
+
+var downControlPlaneInstalled = func(ctx context.Context, kubeContext string) (bool, error) {
+	args := []string{}
+	if kubeContext != "" {
+		args = append(args, "--kube-context", kubeContext)
+	}
+	args = append(args, "list", "-A", "-q")
+	cmd := exec.CommandContext(ctx, "helm", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return false, fmt.Errorf("helm list: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return downOutputHasControlPlaneRelease(string(out)), nil
+}
+
+func downOutputHasControlPlaneRelease(output string) bool {
+	names := downControlPlaneReleaseNames()
+	for _, line := range strings.Split(output, "\n") {
+		if names[strings.TrimSpace(line)] {
+			return true
+		}
+	}
+	return false
+}
+
+func downControlPlaneReleaseNames() map[string]bool {
+	names := make(map[string]bool)
+	for _, rel := range defaultDownReleases(downPlaneControl) {
+		if rel.Name == "eg" {
+			continue
+		}
+		names[rel.Name] = true
+	}
+	return names
+}
+
+func runDownControlPlane(c *cobra.Command, ctx context.Context, sink progress.EventSink, helmRuntimeMode selfhosted.HelmRuntimeMode) error {
 	p4 := time.Now().UTC()
 	_ = sink.Emit(ctx, progress.PhaseStarted{Num: 4, Name: "uninstall-control-plane", StartedAt: p4})
 
 	resolved, err := selfhosted.ResolveStack(ctx, selfhosted.StackOptions{
-		Source:        selfHostedStack,
-		BuiltInOCIRef: builtInStackOCI(),
+		Source:        selfHostedControlPlaneStack,
+		BuiltInOCIRef: builtInControlPlaneStackOCI(),
 	})
 	if err != nil {
 		return fmt.Errorf("resolve stack: %w", err)
 	}
 
 	if err := teardown.Destroy(teardown.DestroyOpts{
-		Plane:       downPlaneControl,
-		KubeContext: selfHostedControlPlaneContext,
-		StackPath:   resolved.Path,
-		Env:         selfHostedEnv,
-		Stdout:      c.OutOrStdout(),
-		Stderr:      c.ErrOrStderr(),
-		Ctx:         ctx,
+		Plane:           downPlaneControl,
+		KubeContext:     selfHostedControlPlaneContext,
+		StackPath:       resolved.Path,
+		Env:             selfHostedEnv,
+		HelmRuntimeMode: helmRuntimeMode,
+		Stdout:          c.OutOrStdout(),
+		Stderr:          c.ErrOrStderr(),
+		Ctx:             ctx,
 	}, sink); err != nil {
 		return fmt.Errorf("helmfile destroy control-plane: %w", err)
 	}
@@ -347,10 +476,10 @@ func runDownControlPlane(c *cobra.Command, ctx context.Context, sink progress.Ev
 }
 
 type registeredClusterLister interface {
-	ListClusters(ctx context.Context, sisURL, ncaID string) ([]client.SISCluster, error)
+	ListClusters(ctx context.Context, sisURL, ncaID string) ([]client.ICMSCluster, error)
 }
 
-func listRegisteredClusters(ctx context.Context, icmsURL, ncaID string) ([]client.SISCluster, error) {
+func listRegisteredClusters(ctx context.Context, icmsURL, ncaID string) ([]client.ICMSCluster, error) {
 	deleter, closeDeleter, err := newClusterDeleterForDown(icmsURL)
 	if err != nil {
 		return nil, fmt.Errorf("constructing cluster lister: %w", err)
@@ -443,8 +572,17 @@ type registerValuesYAML struct {
 // register-values files written by older `up` runs against an existing cluster
 // that hasn't been re-registered yet, so honoring both keeps the read forgiving.
 func readRegisterValuesYAML(stackPath, clusterName string) (*registerValuesYAML, error) {
-	path := filepath.Join(stackPath, "out", clusterName+"-register-values.yaml")
-	body, err := os.ReadFile(path)
+	var body []byte
+	var err error
+	for _, path := range []string{nvcaValuesPath(stackPath, clusterName), legacyRegisterValuesPath(stackPath, clusterName)} {
+		body, err = os.ReadFile(path)
+		if err == nil {
+			break
+		}
+		if !os.IsNotExist(err) {
+			return nil, err
+		}
+	}
 	if err != nil {
 		return nil, err
 	}

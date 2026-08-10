@@ -1,0 +1,261 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Manually build a service's multi-arch image (linux/amd64 + linux/arm64)
+# from the selected ref and push it to the internal NGC dev registry so it is
+# pullable by NVCF clusters for pre-merge testing -- the GitHub-side
+# counterpart to the GitLab "<svc>-image-push-mr-manual" jobs.
+#
+# Manual (workflow_dispatch) only; no image is pushed automatically.
+# Requires repo configuration (set in GitHub repo settings, not in source):
+#   - secret  NGC_NCP_DEV_KEY   : NGC key with push to the ncp-dev registry
+#   - secret NCP_DEV_REGISTRY   : the ncp-dev registry base (host/tenant/repo-prefix)
+# workflow_dispatch is restricted to users with write access; fork PRs cannot
+# read these, so the credential is not exposed to untrusted contributors.
+name: image-push (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      service_path:
+        description: >-
+          Service subtree to build and push, e.g.
+          src/invocation-plane-services/grpc-proxy. Any subtree with an
+          oci_image_index target works; the list is not maintained here.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  # Required to pull the private ghcr.io/nvidia/nvcf/bazel-ci job container.
+  packages: read
+
+concurrency:
+  group: image-push-${{ github.event.inputs.service_path }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  push:
+    name: push to ncp-dev
+    runs-on: ubuntu-latest
+    # Same public EC2 Buildbarn cache the matrix build uses. workflow_dispatch
+    # is restricted to users with write access, so the secret is available;
+    # fork PRs cannot reach this workflow at all.
+    env:
+      CACHE_TOKEN: ${{ secrets.BAZEL_REMOTE_CACHE_TOKEN }}
+      CACHE_ENDPOINT: ${{ vars.BAZEL_REMOTE_CACHE_ENDPOINT }}
+    container:
+      image: ${{ vars.BAZEL_CI_IMAGE || 'ghcr.io/nvidia/nvcf/bazel-ci:0.14.0' }}
+    defaults:
+      run:
+        # In container jobs Actions falls back to plain `sh` (dash), which
+        # rejects `set -o pipefail` and kills every script step at line 1.
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve service name for cache keys
+        id: svc
+        env:
+          SVC_PATH: ${{ github.event.inputs.service_path }}
+        run: |
+          set -euo pipefail
+          echo "name=$(basename "$SVC_PATH")" >> "$GITHUB_OUTPUT"
+
+      # Two caches, because the content has two different identities.
+      #
+      # The install base and repository cache are a pure function of the root
+      # MODULE.bazel.lock and .bazelversion: every service dispatched from this
+      # workflow produces byte-identical content. Storing that per service would
+      # keep N copies of the same multi-gigabyte entry inside GitHub's 10 GB
+      # per-repository budget, so they would evict one another and nothing would
+      # ever hit. It is shared, and shares the key the matrix build uses so a
+      # dispatch can restore what CI already populated.
+      #
+      # Compiled action outputs in the disk cache genuinely are service-specific
+      # and stay keyed per service.
+      #
+      # Both previously hashed a MODULE.bazel.lock inside the service subtree.
+      # Those files are gone now that every service builds from the root module,
+      # so hashFiles returned empty and the key degenerated to a constant: the
+      # entry never matched the dependency state it claimed to describe.
+      - name: Cache Bazel repository + install
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/bazel/_bazel_${{ env.USER || 'root' }}/install
+            ~/.cache/bazel/_bazel_${{ env.USER || 'root' }}/cache
+          key: bazel-rootmodule-${{ hashFiles('MODULE.bazel.lock', '.bazelversion') }}
+          restore-keys: |
+            bazel-rootmodule-
+
+      - name: Cache Bazel disk cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bazel-disk-cache
+          key: bazel-dispatch-${{ steps.svc.outputs.name }}-${{ hashFiles('MODULE.bazel.lock', '.bazelversion') }}
+          restore-keys: |
+            bazel-dispatch-${{ steps.svc.outputs.name }}-
+
+      # Read-only remote cache, same public Buildbarn the matrix build uses.
+      # This workflow previously passed --remote_cache= (empty, i.e. disabled)
+      # and relied only on a local disk cache, so every dispatch recompiled the
+      # service's entire dependency closure even though CI had already built
+      # those exact actions on main. Reusing tools/ci/bazel-cache-upload-mode
+      # keeps the upload policy in one place; a workflow_dispatch is neither a
+      # main push nor a merge_group, so it resolves to read-only and an ad-hoc
+      # push can never write to the shared cache.
+      - name: Prepare remote cache
+        id: rc
+        run: |
+          set -euo pipefail
+          if [ -n "${CACHE_TOKEN:-}" ] && [ -n "${CACHE_ENDPOINT:-}" ]; then
+            printf '%s\n' "${{ vars.BAZEL_REMOTE_CACHE_CA }}" > "$RUNNER_TEMP/cache-ca.pem"
+            upload="$(bash "$GITHUB_WORKSPACE/tools/ci/bazel-cache-upload-mode")"
+            echo "ready=1" >> "$GITHUB_OUTPUT"
+            echo "upload=$upload" >> "$GITHUB_OUTPUT"
+            echo "remote cache ready (upload=$upload)"
+          else
+            echo "ready=0" >> "$GITHUB_OUTPUT"
+            echo "remote cache unavailable (no token/endpoint): local disk cache only"
+          fi
+
+      - name: Compute snapshot tag
+        id: meta
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Tags are always machine-derived (never user input) so every
+          # published snapshot is deterministic and traceable to its run+commit.
+          tag="gh.${RUN_NUMBER}-$(printf '%s' "${SHA}" | cut -c1-8)"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Authenticate to the NGC dev registry
+        env:
+          NGC_KEY: ${{ secrets.NGC_NCP_DEV_KEY }}
+          REGISTRY: ${{ secrets.NCP_DEV_REGISTRY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NGC_KEY}" ] || [ -z "${REGISTRY}" ]; then
+            echo "ERROR: set secrets NGC_NCP_DEV_KEY and NCP_DEV_REGISTRY in repo settings" >&2
+            exit 1
+          fi
+          # Tolerate a trailing slash in the secret value: appending the
+          # image name to "host/tenant/prefix/" yields "prefix//name",
+          # which nvcr.io rejects with NAME_INVALID.
+          REGISTRY="${REGISTRY%/}"
+          mkdir -p "$HOME/.docker"
+          auth="$(printf '$oauthtoken:%s' "${NGC_KEY}" | base64 -w0)"
+          # Scope the auth key to the push repo prefix (NOT the bare host) so
+          # rules_oci does not apply this token to the public base-image pull
+          # (e.g. distroless), which would 403. Mirrors the NVCF-10337 fix.
+          printf '{"auths":{"%s":{"auth":"%s"}}}\n' "${REGISTRY}" "${auth}" > "$HOME/.docker/config.json"
+          chmod 600 "$HOME/.docker/config.json"
+
+      # Resolve where Bazel must run and how to scope the query. A subtree with
+      # its own MODULE.bazel is queried from inside itself; a service that
+      # lives in the repo-root module (the Java services) is queried from the
+      # root with a path-scoped pattern. Deriving this rather than hardcoding
+      # it means a new service needs no change to this workflow.
+      - name: Resolve Bazel module layout
+        id: layout
+        env:
+          SVC_PATH: ${{ github.event.inputs.service_path }}
+        run: |
+          set -euo pipefail
+          if [ ! -d "$SVC_PATH" ]; then
+            echo "ERROR: no such subtree: $SVC_PATH" >&2
+            echo "Subtrees owning a Bazel module:" >&2
+            find src -maxdepth 4 -name MODULE.bazel -printf '  %h\n' 2>/dev/null | sort >&2
+            exit 1
+          fi
+          if [ -f "$SVC_PATH/MODULE.bazel" ]; then
+            echo "workdir=$SVC_PATH" >> "$GITHUB_OUTPUT"
+            echo "scope=//..." >> "$GITHUB_OUTPUT"
+            echo "layout: standalone module rooted at $SVC_PATH"
+          else
+            echo "workdir=." >> "$GITHUB_OUTPUT"
+            echo "scope=//$SVC_PATH/..." >> "$GITHUB_OUTPUT"
+            echo "layout: root module, scoped to //$SVC_PATH/..."
+          fi
+
+      - name: Build and push multi-arch image(s)
+        working-directory: ${{ steps.layout.outputs.workdir }}
+        env:
+          SVC_PATH: ${{ github.event.inputs.service_path }}
+          SCOPE: ${{ steps.layout.outputs.scope }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          REGISTRY: ${{ secrets.NCP_DEV_REGISTRY }}
+          RC_READY: ${{ steps.rc.outputs.ready }}
+          RC_UPLOAD: ${{ steps.rc.outputs.upload }}
+        run: |
+          set -euo pipefail
+          REGISTRY="${REGISTRY%/}"
+          svc="$(basename "$SVC_PATH")"
+          export BAZEL_DISK_CACHE="${HOME}/.bazel-disk-cache"
+          # Run the query directly rather than inside process substitution.
+          # With `mapfile < <(bazel query ...)` only stdout reaches mapfile, so a
+          # failing query (BUILD error, unloadable package) yields an empty array
+          # and would be misreported below as "no image targets" instead of
+          # surfacing the real error.
+          if ! query_out="$(bazel query --remote_cache= "kind(\"oci_image_index\", ${SCOPE})")"; then
+            echo "ERROR: bazel query failed for scope ${SCOPE}" >&2
+            exit 1
+          fi
+          # Build the array by hand: a here-string of empty output would produce
+          # a single empty element rather than an empty array.
+          indexes=()
+          while IFS= read -r line; do
+            [ -n "$line" ] && indexes+=("$line")
+          done <<< "$query_out"
+          if [ "${#indexes[@]}" -eq 0 ]; then
+            echo "ERROR: no oci_image_index targets under ${SVC_PATH}" >&2
+            echo "The subtree must declare an image target (go_oci_image, java_oci_image, ...)." >&2
+            exit 1
+          fi
+          echo "discovered: ${indexes[*]}"
+          for tgt in "${indexes[@]}"; do
+            name="${tgt##*:}"; name="${name%_index}"
+            # Two naming conventions exist in the tree and they mean different
+            # things, distinguished by the separator:
+            #   image                 -> the service's sole image; repo is the service
+            #   <component>_image     -> a sub-component; repo is <service>-<component>
+            #                            (nvcf-unbound webhook, llm-api-gateway
+            #                            rate_limit_sync_worker, nvsnap agent/server)
+            #   <image-name>-image    -> the target already carries the full image
+            #                            name; use it as-is, do NOT prefix the
+            #                            service (byoo-otel-collector, cloud-tasks)
+            # Previously the hyphenated form fell through to the default and
+            # produced names like byoo-otel-collector-byoo-otel-collector-image.
+            case "$name" in
+              image)   repo="${svc}" ;;
+              *_image) sub="$(printf '%s' "${name%_image}" | tr '_' '-')"; repo="${svc}-${sub}" ;;
+              *-image) repo="${name%-image}" ;;
+              *)       sub="$(printf '%s' "$name" | tr '_' '-')"; repo="${svc}-${sub}" ;;
+            esac
+            dest="${REGISTRY}/${repo}"
+            echo "[push] ${tgt} -> ${dest}:${TAG} (+ latest-dispatch)"
+            mkdir -p ci-ghcr
+            printf 'load("@rules_oci//oci:defs.bzl", "oci_push")\n\noci_push(\n    name = "push",\n    image = "%s",\n    repository = "%s",\n    remote_tags = ["%s", "latest-dispatch"],\n)\n' \
+              "$tgt" "$dest" "$TAG" > ci-ghcr/BUILD.bazel
+            CACHE=(--remote_cache=)
+            if [ "${RC_READY:-0}" = "1" ]; then
+              CACHE=(--remote_cache="$CACHE_ENDPOINT"
+                     --tls_certificate="$RUNNER_TEMP/cache-ca.pem"
+                     --remote_header="authorization=Bearer $CACHE_TOKEN"
+                     --remote_cache_compression
+                     --remote_download_all
+                     --remote_timeout=600 --remote_retries=5)
+              if [ "$RC_UPLOAD" = "true" ]; then
+                CACHE+=(--remote_upload_local_results=true)
+              else
+                CACHE+=(--remote_upload_local_results=false)
+              fi
+            fi
+            bazel run "${CACHE[@]}" --disk_cache="${BAZEL_DISK_CACHE}" //ci-ghcr:push
+            rm -rf ci-ghcr
+          done
+          echo "Done: pushed ${#indexes[@]} image(s) under ${REGISTRY}/ at tag ${TAG}"

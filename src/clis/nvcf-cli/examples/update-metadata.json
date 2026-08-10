@@ -1,5 +1,14 @@
 {
   "functionId": "func-12345678-1234-1234-1234-123456789abc",
   "versionId": "ver-87654321-4321-4321-4321-123456789abc",
-  "tags": ["production", "ml-model", "v2-0", "optimized", "high-performance"]
+  "tags": ["production", "ml-model", "v2-0", "optimized", "high-performance"],
+  "modelUpdates": [
+    {
+      "modelName": "dummy-model",
+      "llmConfig": {
+        "routingMethod": "round_robin",
+        "tokenRateLimit": "1000-S,5000-M,100000-H,500000-D,1000000-W"
+      }
+    }
+  ]
 }

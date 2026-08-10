@@ -41,7 +41,6 @@ doc-src/proto
 
 # sensitive files
 kubeconfig.json
-settings-local.yaml
 local_env/vault/secrets.json
 local_env/vault/secrets_*_local.json
 
@@ -59,5 +58,8 @@ clippy-report.json
 codeql.zip
 results.sarif
 dependency-urls.txt
-sonar-project.properties
 
+# Bazel
+bazel-*
+.bazel-cache/
+user.bazelrc

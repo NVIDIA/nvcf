@@ -1,0 +1,13 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "discovery",
+    srcs = ["discovery.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/pkg/discovery",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@com_github_containerd_containerd//:containerd",
+        "@com_github_containerd_containerd//namespaces",
+        "@com_github_opencontainers_runtime_spec//specs-go",
+    ],
+)

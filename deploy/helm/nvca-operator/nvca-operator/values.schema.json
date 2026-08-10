@@ -206,6 +206,51 @@
                 }
             }
         },
+        "operatorConfig": {
+            "type": "object",
+            "properties": {
+                "workload": {
+                    "type": "object",
+                    "properties": {
+                        "transportTLS": {
+                            "type": "object",
+                            "properties": {
+                                "trustBundle": {
+                                    "type": "object",
+                                    "properties": {
+                                        "secretKeyRef": {
+                                            "type": "object",
+                                            "properties": {
+                                                "name": {
+                                                    "type": "string",
+                                                    "description": "Secret containing the workload transport trust bundle. Empty disables Secret-backed transport trust.",
+                                                    "default": ""
+                                                },
+                                                "key": {
+                                                    "type": "string",
+                                                    "description": "Secret data key containing certificate-only PEM.",
+                                                    "default": "ca.crt"
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
+                                "fingerprint": {
+                                    "type": "string",
+                                    "description": "Optional sha256 fingerprint pin for the trust bundle. Empty computes the fingerprint from the selected Secret data.",
+                                    "default": ""
+                                },
+                                "installedBundleMountPath": {
+                                    "type": "string",
+                                    "description": "Optional llm-worker mount path for the installed transport trust bundle. Empty uses /etc/ssl/certs.",
+                                    "default": ""
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "resources": {
             "type": "object",
             "properties": {
@@ -309,6 +354,27 @@
                     "description": "Map of custom annotations to add to the agent pod",
                     "default": {}
                 },
+                "gpuProfiling": {
+                    "type": "object",
+                    "description": "NVIDIA Nsight GPU profiling opt-in for NVCF function pods",
+                    "properties": {
+                        "functionIds": {
+                            "type": "string",
+                            "description": "Comma/space/newline-separated NVCF function IDs (or \"*\" for all) to enable Nsight GPU profiling for. Empty disables profiling.",
+                            "default": ""
+                        },
+                        "labelKey": {
+                            "type": "string",
+                            "description": "Pod label key NVCA applies to profiled function pods. Empty uses the built-in default \"nvidia-nsight-profile\".",
+                            "default": ""
+                        },
+                        "labelValue": {
+                            "type": "string",
+                            "description": "Pod label value NVCA applies to profiled function pods. Empty uses the built-in default \"enabled\".",
+                            "default": ""
+                        }
+                    }
+                },
                 "functionEnvOverrides": {
                     "type": "object",
                     "description": "Map of environment variable overrides for function workloads (e.g., {\"INIT_CONTAINER\": \"nvcr.io/custom/init:v1.0\", \"UTILS_CONTAINER\": \"nvcr.io/custom/utils:v1.0\"})",
@@ -331,6 +397,16 @@
                     "type": "object",
                     "description": "Map of environment variables to override on the NVCA agent container. These take precedence over default values. Example: {\"LOG_LEVEL\": \"debug\", \"CUSTOM_FLAG\": \"enabled\"}",
                     "default": {}
+                },
+                "llm": {
+                    "type": "object",
+                    "properties": {
+                        "requestRouterAddress": {
+                            "type": "string",
+                            "description": "Default LLM request-router worker address rendered as STARGATE_ADDRESS for LLM workers",
+                            "default": ""
+                        }
+                    }
                 },
                 "serviceOAuth": {
                     "type": "object",
@@ -368,37 +444,6 @@
                             }
                         },
                         "functionDeploymentStages": {
-                            "type": "object",
-                            "properties": {
-                                "stage": {
-                                    "type": "object",
-                                    "properties": {
-                                        "tokenURL": {
-                                            "type": "string",
-                                            "default": ""
-                                        },
-                                        "publicKeysetEndpoint": {
-                                            "type": "string",
-                                            "default": ""
-                                        }
-                                    }
-                                },
-                                "prod": {
-                                    "type": "object",
-                                    "properties": {
-                                        "tokenURL": {
-                                            "type": "string",
-                                            "default": ""
-                                        },
-                                        "publicKeysetEndpoint": {
-                                            "type": "string",
-                                            "default": ""
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                        "rolloverService": {
                             "type": "object",
                             "properties": {
                                 "stage": {
@@ -607,7 +652,7 @@
                         "imageTag": {
                             "type": "string",
                             "description": "(REQUIRED) Image tag of \"nvcf-image-credential-helper\". Only override this if you know what you are doing.",
-                            "default": "0.5.1"
+                            "default": "0.10.2"
                         }
                     }
                 },
@@ -673,7 +718,7 @@
                         "imageTag": {
                             "type": "string",
                             "description": "(REQUIRED) Image tag of \"nvcf-image-credential-helper\". Only override this if you know what you are doing.",
-                            "default": "0.5.1"
+                            "default": "0.10.2"
                         }
                     }
                 },
@@ -702,15 +747,30 @@
                     "description": "URL of the ICMS service for self-managed clusters. Override with the endpoint generated during cluster registration.",
                     "default": "http://icms.example.invalid:8080"
                 },
+                "icmsServiceHostHeaderOverride": {
+                    "type": "string",
+                    "description": "Optional Host header override for selfManaged.icmsServiceURL.",
+                    "default": ""
+                },
                 "revalServiceURL": {
                     "type": "string",
                     "description": "URL of the ReVal service for self-managed clusters. Override with the endpoint generated during cluster registration.",
                     "default": "http://reval.example.invalid:8080"
                 },
+                "revalServiceHostHeaderOverride": {
+                    "type": "string",
+                    "description": "Optional Host header override for selfManaged.revalServiceURL.",
+                    "default": ""
+                },
                 "natsURL": {
                     "type": "string",
                     "description": "URL of the NATS service for self-managed clusters. Override with the endpoint generated during cluster registration.",
                     "default": "nats://nats.example.invalid:4222"
+                },
+                "natsHostOverride": {
+                    "type": "string",
+                    "description": "Optional TLS SNI host override for selfManaged.natsURL when using a tls or wss NATS URL.",
+                    "default": ""
                 }
             }
         },

@@ -99,12 +99,12 @@ if [[ -f .env ]]; then
     source .env
     set +a
     if [[ "${coverage_threshold_explicit}" != true ]]; then
-        coverage_threshold="${EGX_GO_TEST_COVERAGE_THRESHOLD:-85}"
+        coverage_threshold="${GO_TEST_COVERAGE_THRESHOLD:-85}"
     fi
 fi
 
 if [[ -z "${coverage_threshold}" ]]; then
-    coverage_threshold="${EGX_GO_TEST_COVERAGE_THRESHOLD:-85}"
+    coverage_threshold="${GO_TEST_COVERAGE_THRESHOLD:-85}"
 fi
 
 mkdir -p "${results_dir}"
@@ -133,11 +133,11 @@ fi
 #   - /cmd/:          binary entrypoints
 #   - /examples/:     sample code shipped alongside the module
 #   - /test/mocks/:   test doubles used by other packages' tests
-# A module can extend this list by setting EGX_GO_TEST_COVERAGE_EXCLUDE_REGEX
+# A module can extend this list by setting GO_TEST_COVERAGE_EXCLUDE_REGEX
 # in its .env (a regex fragment joined with OR, e.g. "/jwe-utils/cli/").
 exclude_regex='zz_generated|/cmd/|/examples/|/test/mocks/'
-if [[ -n "${EGX_GO_TEST_COVERAGE_EXCLUDE_REGEX:-}" ]]; then
-    exclude_regex="${exclude_regex}|${EGX_GO_TEST_COVERAGE_EXCLUDE_REGEX}"
+if [[ -n "${GO_TEST_COVERAGE_EXCLUDE_REGEX:-}" ]]; then
+    exclude_regex="${exclude_regex}|${GO_TEST_COVERAGE_EXCLUDE_REGEX}"
 fi
 grep -vE "${exclude_regex}" "${results_dir}/cover.txt" > "${results_dir}/cover_filtered.txt"
 mv "${results_dir}/cover_filtered.txt" "${results_dir}/cover.txt"

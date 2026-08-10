@@ -1,0 +1,108 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: cache-thrash-6-backends
+metadata:
+  description: Cache-thrash scenario with more active cache keys than aggregate KV capacity can retain.
+  tags: [cache, kv-cache, thrash, pulsar]
+  expected_runtime: medium
+  expected_signal: Reports should show cache evictions, low hit rate, and cache-key movement under pressure.
+model: dummy-model
+seed: 606
+request_count: 180
+max_concurrency: 40
+
+stargates:
+  count: 1
+
+backends:
+  count: 6
+  profile:
+    name: small-cache
+    weight: 1.0
+    max_concurrent_requests: 4
+    kv_cache_capacity_tokens: 20000
+    service_time_ms:
+      ttft_mean: 180
+      ttft_jitter_ms: 25
+      decode_jitter_ms: 4
+      prefill_tokens_per_s: 3500
+      decode_tokens_per_s: 85
+    registration:
+      last_mean_input_tps: 100
+
+traffic_pattern:
+  kind: zipf_hotset
+  routing_keys: 0
+  cache_affinity_keys: 200
+  hotset_fraction: 0.7
+  hotset_share: 0.9
+  input_tokens:
+    distribution: lognormal
+    mean: 2500
+    sigma: 0.5
+    p99_cap: 10000
+  output_tokens:
+    distribution: lognormal
+    mean: 120
+    sigma: 0.4
+    p99_cap: 512
+  arrival:
+    distribution: poisson
+    target_rps: 8
+
+algorithms:
+  - name: power-of-two
+    config:
+      default: power-of-two
+  - name: groq-multiregion
+    config:
+      default: groq-multiregion
+  - name: pulsar
+    config:
+      default: power-of-two
+      models:
+        dummy-model:
+          algorithm: pulsar
+          seed: cache-thrash-v1
+          require_cache_affinity_key: true
+          require_input_tokens: true
+  - name: pulsar-consider-kv-free-tokens
+    config:
+      default: power-of-two
+      models:
+        dummy-model:
+          algorithm: pulsar
+          seed: cache-thrash-v1
+          require_cache_affinity_key: true
+          consider_kv_free_tokens: true
+  - name: pulsar-multiregion
+    config:
+      default: power-of-two
+      models:
+        dummy-model:
+          algorithm: pulsar-multiregion
+          seed: cache-thrash-v1
+          require_cache_affinity_key: true
+          require_input_tokens: true
+  - name: pulsar-multiregion-consider-kv-free-tokens
+    config:
+      default: power-of-two
+      models:
+        dummy-model:
+          algorithm: pulsar-multiregion
+          seed: cache-thrash-v1
+          require_cache_affinity_key: true
+          consider_kv_free_tokens: true

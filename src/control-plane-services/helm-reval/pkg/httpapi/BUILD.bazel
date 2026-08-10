@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "httpapi",
+    srcs = ["errors.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/httpapi",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/control-plane-services/helm-reval/pkg/telemetry/tracing",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/zapotelspan",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":httpapi",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "httpapi_test",
+    srcs = ["errors_test.go"],
+    deps = [
+        ":httpapi",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

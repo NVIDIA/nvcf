@@ -25,7 +25,6 @@
 .gitattributes
 .gitignore
 .nvcf-cli.yaml.template
-add-copyright.sh
 CONTRIBUTING.md
 LICENSE
 Makefile
@@ -41,6 +40,17 @@ test-requirements.txt
 # OSS prep metadata
 .oss-allowlist
 .allowed-licenses.txt
+
+# Bazel scaffold. nvcf-cli is a Phase 1 native subtree of the
+# umbrella; the umbrella's root MODULE.bazel provides the workspace,
+# so nvcf-cli only needs its own BUILD.bazel files mirrored (no
+# MODULE.bazel / .bazelrc / .bazelversion at this subtree level).
+# Required for the GitHub Actions umbrella-phase1 matrix entry:
+# `bazel build //...` from the umbrella root reaches
+# //src/clis/nvcf-cli/... and fails if these BUILD files are missing.
+BUILD.bazel
+**/BUILD.bazel
+**/*.bzl
 
 # First-party source and tests
 cmd/**

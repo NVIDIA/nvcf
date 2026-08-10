@@ -122,7 +122,7 @@ func TestRender_KubeContextFlag(t *testing.T) {
 		"--kube-context flag should appear before the verb in the argument list")
 }
 
-func TestRender_ProcessesHelmfileDirectorySequentially(t *testing.T) {
+func TestRender_HelmfileDirectoryDoesNotEmitSequentialFlag(t *testing.T) {
 	dir := t.TempDir()
 	fake := filepath.Join(dir, "helmfile")
 	require.NoError(t, os.WriteFile(fake,
@@ -141,11 +141,77 @@ func TestRender_ProcessesHelmfileDirectorySequentially(t *testing.T) {
 	})
 	require.NoError(t, err)
 	out := stdout.String()
-	assert.Contains(t, out, "--sequential-helmfiles")
-	sequentialPos := strings.Index(out, "--sequential-helmfiles")
-	verbPos := strings.Index(out, "template")
-	assert.Less(t, sequentialPos, verbPos,
-		"--sequential-helmfiles should appear before the helmfile verb")
+	assert.NotContains(t, out, "--sequential-helmfiles")
+}
+
+func TestRender_Helm4CompatDirectoryEmitsSequentialFlag(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "helmfile")
+	require.NoError(t, os.WriteFile(fake,
+		[]byte("#!/bin/sh\nprintf '%s\\n' \"$@\"\n"), 0o755))
+
+	stack := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(stack, "helmfile.d"), 0o755))
+
+	var stdout, stderr bytes.Buffer
+	err := Render(RenderOptions{
+		StackPath:       stack,
+		Env:             "local",
+		HelmfileBin:     fake,
+		HelmRuntimeMode: HelmRuntimeHelm4Compat,
+		Stdout:          &stdout,
+		Stderr:          &stderr,
+	})
+	require.NoError(t, err)
+	assert.Contains(t, stdout.String(), "--sequential-helmfiles")
+}
+
+func TestRender_Helm4CompatApplyUsesLegacyTrackMode(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "helmfile")
+	require.NoError(t, os.WriteFile(fake,
+		[]byte("#!/bin/sh\nprintf '%s\\n' \"$@\"\n"), 0o755))
+
+	stack := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(stack, "helmfile.d"), 0o755))
+
+	var stdout, stderr bytes.Buffer
+	err := Render(RenderOptions{
+		StackPath:       stack,
+		Env:             "local",
+		HelmfileBin:     fake,
+		HelmRuntimeMode: HelmRuntimeHelm4Compat,
+		Apply:           true,
+		Stdout:          &stdout,
+		Stderr:          &stderr,
+	})
+	require.NoError(t, err)
+	out := stdout.String()
+	assert.Contains(t, out, "--track-mode")
+	assert.Contains(t, out, "helm-legacy")
+}
+
+func TestRender_Helm4CompatSingleFileOmitsSequentialFlag(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "helmfile")
+	require.NoError(t, os.WriteFile(fake,
+		[]byte("#!/bin/sh\nprintf '%s\\n' \"$@\"\n"), 0o755))
+
+	stack := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(stack, "helmfile-nvca-operator.yaml.gotmpl"), []byte("releases: []\n"), 0o644))
+
+	var stdout, stderr bytes.Buffer
+	err := Render(RenderOptions{
+		StackPath:       stack,
+		HelmfileFile:    "helmfile-nvca-operator.yaml.gotmpl",
+		Env:             "local",
+		HelmfileBin:     fake,
+		HelmRuntimeMode: HelmRuntimeHelm4Compat,
+		Stdout:          &stdout,
+		Stderr:          &stderr,
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, stdout.String(), "--sequential-helmfiles")
 }
 
 // TestRender_NoKubeContextOmitsFlag asserts that when KubeContext is empty no

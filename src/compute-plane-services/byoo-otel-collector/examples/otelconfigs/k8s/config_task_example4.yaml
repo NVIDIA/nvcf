@@ -103,7 +103,7 @@ processors:
     check_interval: 1s
     limit_percentage: 80
     spike_limit_percentage: 10
-  metricstransform:
+  metrics_transform:
     transforms:
       - action: update
         include: ^.*$
@@ -131,7 +131,7 @@ service:
     logs:
       level: warn
     metrics:
-      level: normal
+      level: detailed
       readers:
         - pull:
             exporter:
@@ -153,7 +153,7 @@ service:
         - resource
         - batch
         - memory_limiter
-        - metricstransform
+        - metrics_transform
     traces:
       receivers:
         - otlp

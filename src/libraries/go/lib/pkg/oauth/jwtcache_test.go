@@ -211,7 +211,7 @@ func TestJWTCache(t *testing.T) {
 	assert.Contains(t, err.Error(), "rate limited")
 
 	mockTime = timeFromString("2020-12-09T22:00:03-07:00").Time
-	log.Infof("Test 3nd attempt at %v, server error", mockTime)
+	log.Infof("Test 3rd attempt at %v, server error", mockTime)
 	_, err = cache.FetchToken(ctx)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "server error")

@@ -1,0 +1,19 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+
+# nvsnap-restore-helper: small static C binary bundled with the
+# restore-entrypoint flow. Single main.c, statically linked so it
+# can drop into a container image without runtime libc deps.
+cc_binary(
+    name = "nvsnap-restore-helper",
+    srcs = ["main.c"],
+    copts = [
+        "-O2",
+        "-Wall",
+        "-Wextra",
+    ],
+    linkopts = ["-static"],
+    visibility = ["//visibility:public"],
+)

@@ -23,24 +23,25 @@ adminIssuerProxy:
 
   image:
     # Container image repository path. This field is required and must be set during installation.
-    # Example: "nvcf/admin-issuer-proxy"
     repository: ""
 
     # Container image registry URL. This field is required and must be set during installation.
-    # Example: "registry.example.com"
     registry: ""
 
     # Image pull policy for the container. Valid values: Always, IfNotPresent, Never
     pullPolicy: IfNotPresent
 
     # Image tag to use. Defaults to the appVersion from Chart.yaml if not specified.
-    tag: "1.0.1"
+    tag: "1.0.2"
 
   # List of image pull secrets for accessing private container registries.
   # Example:
   # imagePullSecrets:
   #   - name: registry-credentials
   imagePullSecrets: []
+
+  # Namespace to deploy namespaced resources. Defaults to the release namespace.
+  namespace: ""
 
   # Override the chart name used in resource names. Leave empty to use the chart name.
   nameOverride: ""
@@ -216,4 +217,3 @@ adminIssuerProxy:
   #                   - admin-issuer-proxy
   #           topologyKey: kubernetes.io/hostname
   affinity: {}
-

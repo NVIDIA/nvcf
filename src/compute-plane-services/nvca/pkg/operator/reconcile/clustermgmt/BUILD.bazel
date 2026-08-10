@@ -1,0 +1,61 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "clustermgmt",
+    srcs = [
+        "configmapclient.go",
+        "helmclient.go",
+        "ngcclient.go",
+        "reconciler.go",
+        "selfmanagedclient.go",
+        "types.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/reconcile/clustermgmt",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/pkg/apis/nvcf/v1:nvcf",
+        "//src/compute-plane-services/nvca/pkg/operator/types",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/http",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/secret",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/core/v1:core",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/errors",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/utils/ptr",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/yaml",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":clustermgmt",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "clustermgmt_test",
+    srcs = [
+        "configmapclient_test.go",
+        "helmclient_test.go",
+        "ngcclient_test.go",
+        "reconciler_test.go",
+        "selfmanagedclient_test.go",
+        "types_test.go",
+    ],
+    embed = [":clustermgmt"],
+    deps = [
+        "//src/compute-plane-services/nvca/pkg/apis/nvcf/v1:nvcf",
+        "//src/compute-plane-services/nvca/pkg/operator/types",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/uuid",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/require",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/core/v1:core",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/errors",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/schema",
+    ],
+)

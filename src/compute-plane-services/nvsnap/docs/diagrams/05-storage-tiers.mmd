@@ -1,0 +1,39 @@
+flowchart LR
+    subgraph Capture["Capture path"]
+        Agent1["nvsnap-agent (N1)"]
+        HP1["Tier-1: local hostPath<br/>/var/lib/containerd/nvsnap-checkpoints/<br/>(NVMe RAID0 on GKE)"]
+        PVC["Tier-2: per-capture PVC<br/>(block storage, gp3 maxed on AWS)"]
+        Blob["Tier-3: nvsnap-blobstore<br/>(content-addressed HTTP CAS)"]
+        Agent1 -->|"sync, primary"| HP1
+        Agent1 -->|"streaming write"| PVC
+        Agent1 -->|"async upload<br/>(chunked, dedup)"| Blob
+    end
+
+    subgraph Restore["Restore path (cascade fetch)"]
+        Agent2["nvsnap-agent (N2)"]
+        Check1{"local<br/>hostPath?"}
+        Check2{"peer agent<br/>has it?"}
+        Check3["fetch from blobstore"]
+        Out["restore proceeds"]
+        Agent2 --> Check1
+        Check1 -->|"yes"| Out
+        Check1 -->|"no"| Check2
+        Check2 -->|"yes"| Out
+        Check2 -->|"no"| Check3
+        Check3 --> Out
+    end
+
+    HP1 -.->|"hostPath survives node restart"| Agent1
+    PVC -.->|"cross-node mount<br/>via webhook"| Agent2
+    Blob -.->|"durable backstop"| Agent2
+
+    classDef tier1 fill:#43A047,stroke:#1B5E20,stroke-width:3px,color:#FFFFFF
+    classDef tier2 fill:#FB8C00,stroke:#E65100,stroke-width:3px,color:#FFFFFF
+    classDef tier3 fill:#1E88E5,stroke:#0D47A1,stroke-width:3px,color:#FFFFFF
+    classDef agent fill:#5E35B1,stroke:#311B92,stroke-width:3px,color:#FFFFFF
+    classDef ok    fill:#00897B,stroke:#004D40,stroke-width:3px,color:#FFFFFF
+    class HP1 tier1
+    class PVC tier2
+    class Blob tier3
+    class Agent1,Agent2 agent
+    class Out ok

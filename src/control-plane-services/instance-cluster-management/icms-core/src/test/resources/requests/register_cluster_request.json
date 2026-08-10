@@ -1,0 +1,47 @@
+{
+  "status": "READY",
+  "k8sVersion":"v1.29.2",
+  "allowClusterTargeting":true,
+  "gpus": [
+    {
+      "name": "B200",
+      "capacity":1,
+      "instanceTypes": [
+        {
+          "name": "Standard_ND96amsr_B200_v4_1x",
+          "value": "Standard_ND96amsr_B200_v4",
+          "description": "Single 80 GB B200 GPU",
+          "default": true,
+          "cpuCores": 4,
+          "systemMemory": "16G",
+          "gpuMemory": "80G",
+          "gpuCount": 1,
+          "cpuArch": "x86",
+          "os": "Linux 64 bit",
+          "driverVersion": "v.353.145.36",
+          "storage": "80G"
+        }
+      ]
+    },
+    {
+      "name": "B500",
+      "capacity":1,
+      "instanceTypes": [
+        {
+          "name": "Standard_ND96amsr_B500_v4_1x",
+          "value": "Standard_ND96amsr_B500_v4",
+          "description": "Single 80 GB B500 GPU",
+          "default": true,
+          "cpuCores": 4,
+          "systemMemory": "16G",
+          "gpuMemory": "80G",
+          "gpuCount": 1,
+          "cpuArch": "x86",
+          "os": "Linux 64 bit",
+          "driverVersion": "v.353.145.36",
+          "storage": "80G"
+        }
+      ]
+    }
+  ]
+}

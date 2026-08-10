@@ -1,66 +1,38 @@
-<!--
-SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-SPDX-License-Identifier: Apache-2.0
+# AGENTS.md - ratelimiter
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
+Native Go image-source subtree for the NVCF rate limiter service.
 
-    http://www.apache.org/licenses/LICENSE-2.0
+## Layout
 
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
--->
+- Go module: `ratelimiter`
+- Entrypoint: `cmd/main.go`
+- Protos: `pb/` and `nvcf/pb/`
 
-# AGENTS.md
+## Build and Test
 
-## Repo Role
+```bash
+go build ./...
+go test ./...
+gofmt -w <changed-go-files>
+```
 
-- Repo: `nvcf-ratelimiter`
-- Workspace(s): `self-hosted-nvcf`
-- Tier: `image-source`
-- Team: `@NVIDIA/nvcf-dev`
-- Default owner: `@NVIDIA/nvcf-dev`
-- Manifest description: NVCF rate limiter application source
+Bazel is the CI build path:
 
-## Use `nvcf-agentic-dev` As The Routing Layer
+```bash
+bazel test //... --flaky_test_attempts=3
+```
 
-Before making changes, use the `nvcf-agentic-dev` workspace repo to confirm whether this repo is actually the right place for the task. Treat that repo as the source of truth for workspace membership, repo ownership, deployment dependencies, and available agent skills.
+CI subproject id: `ratelimiter`. Native Bazel validation and release wiring
+live in `tools/ci/subproject-validations.yaml`, an internal GitLab CI config
+not present in this public snapshot.
 
-Check these files first when they exist in your local workspace:
+## Proto and Test Gotchas
 
-- `nvcf-agentic-dev/workspaces/self-hosted-nvcf/repos.yaml`: repo ownership and workspace membership
-- `nvcf-agentic-dev/workspaces/self-hosted-nvcf/skills.yaml`: related agent skills and sourced commands
-- `nvcf-agentic-dev/workspaces/self-hosted-nvcf/docs/deployment-sequence.md`: deployment order and stage gates
-- `nvcf-agentic-dev/workspaces/self-hosted-nvcf/docs/deployment-dependencies-with-links.yaml`: release dependencies and upstream/downstream links
-
-## Routing Rules
-
-- Stay in this repo for application logic, gRPC APIs and protos for this service, Olric/limiter behavior, container build logic, and tests for the shipped image.
-- If the request is only about Helm values, templates, hook jobs, or Kubernetes manifests, route to the colocated chart repo.
-- If the request is about environment composition or multi-service rollout ordering, route to `nvcf-self-managed-stack`.
-
-## Working In This Repo
-
-- Read this repo’s top-level `README*`, `go.mod`, `Dockerfile`, and `.gitlab-ci.yml` before making assumptions about language or tooling.
-- **Go module:** `ratelimiter`; **entrypoint:** `cmd/main.go`.
-- Search for existing patterns with `rg` before adding new structure.
-- Keep changes scoped to the owning repo once routing is confirmed; only fan out when the workspace docs show an explicit dependency.
-- Do not hand-edit generated `*.pb.go` / `*_grpc.pb.go`; change `.proto` files and regenerate via `go generate` in `pb/pb.go` and `nvcf/pb/pb.go` (`protoc` required). New hand-authored `.go` files should use the same SPDX Apache-2.0 block header as the rest of the tree (not on generated protobuf outputs).
-- Never commit real secrets; use placeholders in examples and templates.
-
-## Completion Expectations
-
-- Validate with the repo-native command set: `go build ./...`, `go test ./...`, and `gofmt` / `go fmt ./...` after substantive Go edits; `docker build` when changing the image.
-- Package `ratelimiter/cmd` tests bind fixed local ports (e.g. `127.0.0.1:3320`); “address already in use” is usually environmental—retry or free the port.
-- If you change cross-repo behavior, mention the adjacent repo(s) that may also need follow-up.
-- In your final summary, state that routing was confirmed through `nvcf-agentic-dev` and name the workspace context used (`self-hosted-nvcf`).
-
-## References
-
-- [CONTRIBUTING.md](CONTRIBUTING.md) — DCO (`git commit -s`)
-- [README.md](README.md) — behavior, configuration, diagrams
-- [LICENSE](LICENSE), [NOTICE](NOTICE) — Apache-2.0 and third-party attribution
+- Do not hand-edit generated `*.pb.go` or `*_grpc.pb.go` files.
+- Change `.proto` files, then run `go generate` from both `pb/` and
+  `nvcf/pb/` when those packages are affected.
+- `protoc` is required for proto regeneration.
+- Package tests under `ratelimiter/cmd` bind fixed local ports such as
+  `127.0.0.1:3320`; address conflicts are usually environmental.
+- New hand-authored Go files must use the existing SPDX Apache-2.0
+  header. `check-license` enforces this at CI time.

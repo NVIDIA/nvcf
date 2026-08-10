@@ -1,3 +1,0 @@
-<s>[INST]
-[IMAGE url=https://example.com/image1.png detail=]
-[/INST]

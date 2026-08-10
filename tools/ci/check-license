@@ -8,6 +8,7 @@ cd "${repo_root}"
 
 license_file="LICENSE"
 notice_file="NOTICE"
+changed_paths=()
 
 if [[ ! -s "${license_file}" ]]; then
     echo "ERROR: ${license_file} is missing or empty."
@@ -20,23 +21,124 @@ if [[ ! -f "${notice_file}" ]]; then
     exit 1
 fi
 
-tmp_notice="$(mktemp)"
-trap 'rm -f "${tmp_notice}"' EXIT
+is_all_zero_sha() {
+    [[ "${1:-}" =~ ^0{40}$ ]]
+}
 
-./tools/scripts/collect-notices --output "${tmp_notice}" >/dev/null
+load_mr_changed_paths() {
+    [[ -n "${CI_MERGE_REQUEST_IID:-}" ]] || return 1
 
-if ! diff -u "${notice_file}" "${tmp_notice}" >/dev/null; then
-    echo "ERROR: ${notice_file} is out of sync with repo notice / third-party license paths."
-    echo ""
-    diff -u "${notice_file}" "${tmp_notice}" || true
-    echo ""
-    echo "Run './tools/scripts/update-license' to fix this."
-    exit 1
+    local base="${CHECK_LICENSE_BASE_SHA:-${CI_MERGE_REQUEST_DIFF_BASE_SHA:-${CI_COMMIT_BEFORE_SHA:-}}}"
+    if [[ -z "${base}" ]] || is_all_zero_sha "${base}"; then
+        echo "check-license: MR base SHA is unavailable; running full license checks."
+        return 1
+    fi
+
+    if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+        echo "check-license: MR base ${base} is not present in this checkout; running full license checks."
+        return 1
+    fi
+
+    local path
+    while IFS= read -r path; do
+        [[ -n "${path}" ]] && changed_paths+=("${path}")
+    done < <(git diff --name-only "${base}"...HEAD --)
+
+    echo "check-license: MR changed-path mode (${#changed_paths[@]} changed paths)."
+    return 0
+}
+
+run_notice_check() {
+    local tmp_notice
+    tmp_notice="$(mktemp)"
+
+    ./tools/scripts/collect-notices --output "${tmp_notice}" >/dev/null
+
+    if ! diff -u "${notice_file}" "${tmp_notice}" >/dev/null; then
+        echo "ERROR: ${notice_file} is out of sync with repo notice / third-party license paths."
+        echo ""
+        diff -u "${notice_file}" "${tmp_notice}" || true
+        echo ""
+        echo "Run './tools/scripts/update-license' to fix this."
+        rm -f "${tmp_notice}"
+        exit 1
+    fi
+
+    rm -f "${tmp_notice}"
+}
+
+path_is_under() {
+    local parent="${1%/}"
+    local child="${2%/}"
+
+    [[ "${parent}" == "." ]] && return 0
+    [[ "${child}" == "${parent}" || "${child}" == "${parent}/"* ]]
+}
+
+select_header_scope_path() {
+    local -n selected="$1"
+    local candidate="$2"
+    local existing
+
+    for existing in "${selected[@]}"; do
+        if path_is_under "${existing}" "${candidate}"; then
+            return 0
+        fi
+    done
+
+    if [[ -d "${candidate}" ]]; then
+        local kept=()
+        for existing in "${selected[@]}"; do
+            if path_is_under "${candidate}" "${existing}"; then
+                continue
+            fi
+            kept+=("${existing}")
+        done
+        selected=("${kept[@]}")
+    fi
+
+    selected+=("${candidate}")
+}
+
+build_header_scope_paths() {
+    local -n output="$1"
+    local path scope
+
+    for path in "${changed_paths[@]}"; do
+        if [[ "${path}" == ".oss-allowlist" || "${path}" == */.oss-allowlist ]]; then
+            scope="$(dirname "${path}")"
+            [[ -e "${scope}" ]] || continue
+            select_header_scope_path output "${scope}"
+            continue
+        fi
+
+        [[ -e "${path}" ]] || continue
+        select_header_scope_path output "${path}"
+    done
+}
+
+run_header_check() {
+    ./tools/ci/check-license-headers \
+        --allow-spdx-dir "src/compute-plane-services/ess-agent:MPL-2.0" \
+        "$@"
+}
+
+if load_mr_changed_paths; then
+    run_notice_check
+
+    header_scope_paths=()
+    build_header_scope_paths header_scope_paths
+    if [[ ${#header_scope_paths[@]} -gt 0 ]]; then
+        run_header_check "${header_scope_paths[@]}"
+    else
+        echo "check-license: no existing changed paths require header scanning."
+    fi
+else
+    run_notice_check
+    run_header_check
 fi
 
-./tools/ci/check-license-headers \
-    --allow-spdx-dir "src/compute-plane-services/ess-agent:MPL-2.0"
-
+./tools/ci/check-mpl-audit
 ./tools/ci/check-private-go-module-paths
 
-echo "${license_file} is present, ${notice_file} is up to date, source headers passed, and native Go roots are free of private GitLab module paths."
+echo "${license_file} is present, ${notice_file} is up to date, source headers and MPL audit passed, and native Go roots are free of private GitLab module paths."

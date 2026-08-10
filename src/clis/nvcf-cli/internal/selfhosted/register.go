@@ -19,14 +19,28 @@ package selfhosted
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"strings"
 
 	"nvcf-cli/internal/client"
+	"nvcf-cli/internal/selfhosted/controlplaneprofile"
 
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
+
+type ControlPlaneProfileEndpointScopeName string
+
+const (
+	EndpointScopeInCluster        ControlPlaneProfileEndpointScopeName = "in-cluster"
+	EndpointScopeComputeReachable ControlPlaneProfileEndpointScopeName = "compute-reachable"
+)
+
+type ControlPlaneProfileEndpointScopeSelection struct {
+	Name      ControlPlaneProfileEndpointScopeName
+	Endpoints controlplaneprofile.EndpointScope
+}
 
 // RegisterRequest carries the fields needed to register a cluster with SIS.
 // NCAID defaults to the config's ClientID when empty.
@@ -51,10 +65,35 @@ type RegisterResponse struct {
 	ClusterGroupID string
 }
 
+func SelectControlPlaneProfileEndpointScope(doc controlplaneprofile.ControlPlaneProfile, targetClusterName string) (ControlPlaneProfileEndpointScopeSelection, error) {
+	if strings.TrimSpace(targetClusterName) == "" {
+		return ControlPlaneProfileEndpointScopeSelection{}, fmt.Errorf("cluster name is required")
+	}
+	if targetClusterName == doc.ControlPlane.ClusterName {
+		return ControlPlaneProfileEndpointScopeSelection{
+			Name:      EndpointScopeInCluster,
+			Endpoints: doc.ControlPlane.Endpoints.InCluster,
+		}, nil
+	}
+	return ControlPlaneProfileEndpointScopeSelection{
+		Name:      EndpointScopeComputeReachable,
+		Endpoints: doc.ControlPlane.Endpoints.ComputeReachable,
+	}, nil
+}
+
+func ControlPlaneProfileRequireModeForEndpointScope(scope ControlPlaneProfileEndpointScopeName) controlplaneprofile.RequireMode {
+	if scope == EndpointScopeInCluster {
+		return controlplaneprofile.RequireInCluster
+	}
+	return controlplaneprofile.RequireComputeReachable
+}
+
 // ClusterClient abstracts the existing nvcf-cli cluster register call.
 // Production callers wire in the real client from internal/client/clusters.go;
 // tests pass a fake.
 type ClusterClient interface {
+	DeleteCluster(ctx context.Context, clusterID string) error
+	DeleteClusterByName(ctx context.Context, ncaID, name string) (int, error)
 	RegisterCluster(ctx context.Context, req RegisterRequest) (*RegisterResponse, error)
 	Close() error
 }
@@ -62,7 +101,7 @@ type ClusterClient interface {
 // clusterLister is a narrow seam used by resolveExistingCluster so the
 // recovery-path logic can be unit-tested independently of the full adapter.
 type clusterLister interface {
-	ListClusters(ctx context.Context, sisURL, ncaID string) ([]client.SISCluster, error)
+	ListClusters(ctx context.Context, sisURL, ncaID string) ([]client.ICMSCluster, error)
 }
 
 // resolveExistingCluster handles the --ignore-existing recovery branch: the
@@ -93,12 +132,39 @@ type clusterClientAdapter struct {
 // NewClusterClient constructs a ClusterClient backed by the production
 // internal/client.Client. If sisURL is empty it falls back to
 // config.BaseHTTPURL loaded from the standard Viper sources (env vars, config
-// file, state file) — the same path used by every other CLI subcommand.
+// file, state file), the same path used by every other CLI subcommand.
 func NewClusterClient(sisURL string) (ClusterClient, error) {
+	return NewClusterClientWithToken(sisURL, "")
+}
+
+// NewClusterClientWithToken is like NewClusterClient but overrides the loaded
+// admin JWT with the supplied token when non-empty. Used by self-hosted up
+// and install when callers pass --token=<jwt> to skip nvcf-cli init in
+// CI/non-interactive flows. An empty token preserves the LoadConfig result so
+// existing behavior is unchanged.
+func NewClusterClientWithToken(sisURL, token string) (ClusterClient, error) {
+	return NewClusterClientWithTokenAndTrust(sisURL, token, nil)
+}
+
+// NewClusterClientWithTrust builds a cluster client whose management-API TLS
+// trust is set from tlsCfg (R-4: system/bundle built by managementtls).
+// Pass nil for default system trust. Trust is established before the client
+// makes any request to the management API (POR R-4).
+func NewClusterClientWithTrust(sisURL string, tlsCfg *tls.Config) (ClusterClient, error) {
+	return NewClusterClientWithTokenAndTrust(sisURL, "", tlsCfg)
+}
+
+// NewClusterClientWithTokenAndTrust combines the token override used by
+// non-interactive self-hosted flows with optional management-API TLS trust.
+func NewClusterClientWithTokenAndTrust(sisURL, token string, tlsCfg *tls.Config) (ClusterClient, error) {
 	cfg, err := client.LoadConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load client config: %w", err)
 	}
+	if token != "" {
+		cfg.Token = token
+	}
+	cfg.TLSConfig = tlsCfg
 	c, err := client.NewClient(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create client: %w", err)
@@ -145,7 +211,20 @@ func (a *clusterClientAdapter) RegisterCluster(ctx context.Context, req Register
 	if err != nil {
 		// Idempotent semantics: if cluster already exists, look it up.
 		if strings.Contains(err.Error(), "already exists") {
-			return resolveExistingCluster(ctx, a.inner, a.sisURL, ncaID, req.ClusterName)
+			existing, lookupErr := resolveExistingCluster(ctx, a.inner, a.sisURL, ncaID, req.ClusterName)
+			if lookupErr != nil {
+				return nil, lookupErr
+			}
+			if req.JWKS != "" {
+				updateReq := &client.UpdateClusterJWKSRequest{JWKS: req.JWKS}
+				if req.OIDCIssuer != "" {
+					updateReq.OIDCIssuer = &req.OIDCIssuer
+				}
+				if updateErr := a.inner.UpdateClusterJWKS(ctx, a.sisURL, existing.ClusterID, updateReq); updateErr != nil {
+					return nil, fmt.Errorf("failed to update existing cluster JWKS: %w", updateErr)
+				}
+			}
+			return existing, nil
 		}
 		return nil, fmt.Errorf("failed to register cluster: %w", err)
 	}
@@ -154,6 +233,64 @@ func (a *clusterClientAdapter) RegisterCluster(ctx context.Context, req Register
 		ClusterID:      resolveClusterID(resp),
 		ClusterGroupID: resolveClusterGroupID(resp),
 	}, nil
+}
+
+// DeleteClusterByName removes every SIS cluster row matching name. It is used
+// by one-click reruns, where the local GPU cluster must be registered from
+// scratch each time after the compute plane is torn down.
+func (a *clusterClientAdapter) DeleteClusterByName(ctx context.Context, ncaID, name string) (int, error) {
+	if ncaID == "" {
+		ncaID = a.cfg.ClientID
+	}
+	list, err := a.inner.ListClusters(ctx, a.sisURL, ncaID)
+	if err != nil {
+		return 0, fmt.Errorf("list clusters: %w", err)
+	}
+	deleted := 0
+	for _, cl := range list {
+		if cl.ClusterName != name && cl.ClusterID != name {
+			continue
+		}
+		if cl.ClusterID == "" {
+			return deleted, fmt.Errorf("cluster %q has empty cluster ID", name)
+		}
+		if err := a.inner.DeleteCluster(ctx, a.sisURL, ncaID, cl.ClusterID); err != nil {
+			if clusterDeleteNotFound(err) {
+				continue
+			}
+			return deleted, fmt.Errorf("delete cluster %q (%s): %w", name, cl.ClusterID, err)
+		}
+		deleted++
+	}
+	return deleted, nil
+}
+
+func (a *clusterClientAdapter) DeleteCluster(ctx context.Context, clusterID string) error {
+	if clusterID == "" {
+		return nil
+	}
+	// Reject empty NCA ID up front. An empty ClientID would build
+	// /v1/accounts//clusters/{id}, which SIS answers with 404, and
+	// clusterDeleteNotFound would then swallow that as "already gone"
+	// while the row is still live.
+	if a.cfg.ClientID == "" {
+		return fmt.Errorf("delete cluster %s: NCA ID (ClientID) is not configured", clusterID)
+	}
+	// The adapter routes DeleteCluster through the account-scoped SIS endpoint
+	// using cfg.ClientID as the NCA ID. Callers that need a different account
+	// (multi-tenant install scenarios) should add a ncaID arg to ClusterClient.
+	if err := a.inner.DeleteCluster(ctx, a.sisURL, a.cfg.ClientID, clusterID); err != nil {
+		if clusterDeleteNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("delete cluster %s: %w", clusterID, err)
+	}
+	return nil
+}
+
+func clusterDeleteNotFound(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "not found") || strings.Contains(msg, "404")
 }
 
 // resolveClusterGroupID extracts the cluster-group ID from whichever field the

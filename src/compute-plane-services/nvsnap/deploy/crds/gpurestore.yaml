@@ -1,0 +1,79 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: gpurestores.nvsnap.io
+spec:
+  group: nvsnap.io
+  names:
+    kind: GPURestore
+    listKind: GPURestoreList
+    plural: gpurestores
+    singular: gpurestore
+    shortNames:
+      - gpurs
+      - grs
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                checkpointName:
+                  type: string
+                  description: Reference to a GPUCheckpoint resource
+                checkpointPath:
+                  type: string
+                  description: Direct path to checkpoint (alternative to checkpointName)
+                newPodName:
+                  type: string
+                  description: Name for the restored pod
+                nodeName:
+                  type: string
+                  description: Target node for restore (optional)
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum:
+                    - Pending
+                    - CreatingPod
+                    - Restoring
+                    - Completed
+                    - Failed
+                newPodName:
+                  type: string
+                nodeName:
+                  type: string
+                startTime:
+                  type: string
+                  format: date-time
+                completionTime:
+                  type: string
+                  format: date-time
+                message:
+                  type: string
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Checkpoint
+          type: string
+          jsonPath: .spec.checkpointName
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Pod
+          type: string
+          jsonPath: .status.newPodName
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

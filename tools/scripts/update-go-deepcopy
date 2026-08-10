@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+set -euo pipefail
+
+usage() {
+    cat <<'EOF'
+Usage: ./tools/scripts/update-go-deepcopy --module <module-dir> --header <path> --bounding <dir> --packages <packages> [--replace <file:old-line:new-line>]...
+
+Run deepcopy-gen for one package group in a Go module.
+
+Paths are resolved as follows:
+- --module is absolute, relative to the current directory when it contains a
+  go.mod, or otherwise relative to the repository root.
+- --header is absolute, module-relative, or repository-root-relative.
+- --bounding and replacement file paths are module-relative.
+- --packages is a whitespace or comma separated package list passed to
+  deepcopy-gen from the module directory.
+EOF
+}
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+module_arg=""
+header_arg=""
+bounding_arg=""
+packages_arg=""
+declare -a packages=()
+declare -a replacements=()
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --module)
+            [[ $# -ge 2 ]] || { echo "missing value for --module" >&2; exit 1; }
+            module_arg="$2"
+            shift 2
+            ;;
+        --header)
+            [[ $# -ge 2 ]] || { echo "missing value for --header" >&2; exit 1; }
+            header_arg="$2"
+            shift 2
+            ;;
+        --bounding)
+            [[ $# -ge 2 ]] || { echo "missing value for --bounding" >&2; exit 1; }
+            bounding_arg="$2"
+            shift 2
+            ;;
+        --package)
+            [[ $# -ge 2 ]] || { echo "missing value for --package" >&2; exit 1; }
+            packages+=("$2")
+            shift 2
+            ;;
+        --packages)
+            [[ $# -ge 2 ]] || { echo "missing value for --packages" >&2; exit 1; }
+            packages_arg="$2"
+            shift 2
+            ;;
+        --replace)
+            [[ $# -ge 2 ]] || { echo "missing value for --replace" >&2; exit 1; }
+            replacements+=("$2")
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "unexpected argument: $1" >&2
+            usage >&2
+            exit 1
+            ;;
+    esac
+done
+
+[[ -n "${module_arg}" ]] || { echo "--module is required" >&2; exit 1; }
+[[ -n "${header_arg}" ]] || { echo "--header is required" >&2; exit 1; }
+[[ -n "${bounding_arg}" ]] || { echo "--bounding is required" >&2; exit 1; }
+
+resolve_module_dir() {
+    local input="$1"
+
+    if [[ "${input}" == /* ]]; then
+        printf '%s\n' "${input}"
+        return
+    fi
+    if [[ -f "${PWD}/${input}/go.mod" ]]; then
+        (cd "${PWD}/${input}" && pwd)
+        return
+    fi
+    if [[ -f "${repo_root}/${input}/go.mod" ]]; then
+        (cd "${repo_root}/${input}" && pwd)
+        return
+    fi
+
+    echo "could not resolve Go module: ${input}" >&2
+    exit 1
+}
+
+resolve_header_file() {
+    local input="$1"
+    local module_dir="$2"
+
+    if [[ "${input}" == /* && -f "${input}" ]]; then
+        printf '%s\n' "${input}"
+        return
+    fi
+    if [[ -f "${module_dir}/${input}" ]]; then
+        printf '%s\n' "${module_dir}/${input}"
+        return
+    fi
+    if [[ -f "${repo_root}/${input}" ]]; then
+        printf '%s\n' "${repo_root}/${input}"
+        return
+    fi
+
+    echo "could not resolve header file: ${input}" >&2
+    exit 1
+}
+
+module_dir="$(resolve_module_dir "${module_arg}")"
+header_file="$(resolve_header_file "${header_arg}" "${module_dir}")"
+module_path="$(
+    while IFS= read -r line; do
+        case "${line}" in
+            module\ *) printf '%s\n' "${line#module }"; break ;;
+        esac
+    done < "${module_dir}/go.mod"
+)"
+
+if [[ -z "${module_path}" ]]; then
+    echo "could not read module path from ${module_dir}/go.mod" >&2
+    exit 1
+fi
+
+bounding_path="${bounding_arg#./}"
+bounding_path="${bounding_path%/}"
+
+if [[ -n "${packages_arg}" ]]; then
+    packages_arg="${packages_arg//,/ }"
+    # shellcheck disable=SC2206
+    packages+=(${packages_arg})
+fi
+
+if [[ "${#packages[@]}" -eq 0 ]]; then
+    echo "at least one package is required via --package or --packages" >&2
+    exit 1
+fi
+
+echo "Generating deepcopy files under ${module_arg}/${bounding_path}"
+(
+    cd "${module_dir}"
+    deepcopy-gen \
+        --output-file zz_generated.deepcopy.go \
+        --bounding-dirs "${module_path}/${bounding_path}" \
+        --go-header-file "${header_file}" \
+        "${packages[@]}"
+)
+
+replace_line() {
+    local spec="$1"
+    local file="${spec%%:*}"
+    local rest="${spec#*:}"
+    local old_line="${rest%%:*}"
+    local new_line="${rest#*:}"
+    local target="${module_dir}/${file}"
+    local tmp
+
+    if [[ "${file}" == "${spec}" || "${old_line}" == "${rest}" ]]; then
+        echo "invalid --replace spec, expected file:old-line:new-line: ${spec}" >&2
+        exit 1
+    fi
+    if [[ ! -f "${target}" ]]; then
+        echo "replacement target does not exist: ${target}" >&2
+        exit 1
+    fi
+
+    tmp="$(mktemp)"
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        if [[ "${line}" == "${old_line}" ]]; then
+            printf '%s\n' "${new_line}"
+        else
+            printf '%s\n' "${line}"
+        fi
+    done < "${target}" > "${tmp}"
+    mv "${tmp}" "${target}"
+}
+
+for replacement in "${replacements[@]}"; do
+    replace_line "${replacement}"
+done

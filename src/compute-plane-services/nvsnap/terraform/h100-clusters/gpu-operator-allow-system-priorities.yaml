@@ -1,0 +1,34 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# ResourceQuota required for the NVIDIA GPU Operator on GKE.
+#
+# GKE only admits pods with the system-node-critical / system-cluster-critical
+# PriorityClasses in namespaces that have a ResourceQuota explicitly granting
+# those priority scopes. The GPU Operator's controller, NFD, driver, toolkit
+# and device-plugin pods all request a critical priority, so WITHOUT this
+# quota every Operator pod is rejected with:
+#   "insufficient quota to match these scopes:
+#    [{PriorityClass In [system-node-critical system-cluster-critical]}]"
+# and no GPUs ever become allocatable.
+#
+# Apply this to the gpu-operator namespace BEFORE (or right after) the helm
+# install — see the GPU-driver recipe in cluster_b.tf. Identical object runs
+# on cluster A (created 2026-05-26) and cluster B (2026-06-12).
+#
+#   kubectl apply -n gpu-operator -f gpu-operator-allow-system-priorities.yaml
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: allow-system-priorities
+  namespace: gpu-operator
+spec:
+  hard:
+    pods: "1000"
+  scopeSelector:
+    matchExpressions:
+      - operator: In
+        scopeName: PriorityClass
+        values:
+          - system-node-critical
+          - system-cluster-critical

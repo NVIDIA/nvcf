@@ -23,6 +23,7 @@ use crate::secrets::secrets_config::CassandraSslCertificates;
 use anyhow::Result;
 use async_trait::async_trait;
 use base64::Engine;
+use chrono::Utc;
 use futures::TryStreamExt as _;
 use openssl::ssl::{SslContextBuilder, SslMethod, SslVerifyMode};
 use scylla::client::session::Session;
@@ -911,12 +912,12 @@ impl CassandraServiceManager {
         let column_specs = rows.column_specs();
         if column_specs.get_by_name("lock_name").is_some() {
             if let Some(row) = rows.rows::<DistributedLockResult>()?.next() {
-                return Ok(row.unwrap().applied);
+                return Ok(row?.applied);
             }
         }
 
         if let Some(row) = rows.rows::<(bool,)>()?.next() {
-            return Ok(row.unwrap().0);
+            return Ok(row?.0);
         }
 
         Ok(false)
@@ -958,8 +959,12 @@ impl CassandraServiceManager {
             prepared.set_consistency(Consistency::LocalQuorum);
             prepared.set_serial_consistency(Some(SerialConsistency::Serial));
             prepared.set_is_idempotent(false);
+            let refreshed_at = Utc::now();
             let result = session
-                .execute_unpaged(&prepared, (ttl_seconds, node_id, lock_name, node_id))
+                .execute_unpaged(
+                    &prepared,
+                    (ttl_seconds, node_id, refreshed_at, lock_name, node_id),
+                )
                 .await?;
             let rows = result.into_rows_result()?;
             // On a CAS miss, Scylla returns [applied]=false + the IF-clause columns (node_id).
@@ -1478,6 +1483,45 @@ mod tests {
         // Test delete operation again- it should fail
         let delete_result = manager.delete_lock(&lock.lock_name).await;
         assert!(delete_result.is_ok());
+    }
+
+    #[tokio::test]
+    #[ignore = "Requires running Cassandra"]
+    async fn test_refresh_lock_renews_all_columns_for_contending_node() {
+        let settings = create_test_settings().await;
+        let secrets_path = get_test_secrets_path();
+        let secrets_watcher = Arc::new(
+            SecretFileWatcher::new(Path::new(&secrets_path))
+                .await
+                .unwrap(),
+        );
+        let manager = CassandraServiceManager::new(&settings, secrets_watcher)
+            .await
+            .unwrap();
+
+        let lock = create_test_lock();
+        let ttl_seconds = 3;
+        assert!(manager.put_lock(&lock, ttl_seconds).await.unwrap());
+
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert!(manager
+            .refresh_lock_ttl(&lock.lock_name, &lock.node_id, ttl_seconds)
+            .await
+            .unwrap());
+
+        // The original acquired_at TTL has expired, but the refresh must keep
+        // the complete row readable while the renewed lease remains active.
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert!(manager.get_lock(&lock.lock_name).await.unwrap().is_some());
+
+        let contender = DistributedLock {
+            lock_name: lock.lock_name.clone(),
+            node_id: "contending-node".to_string(),
+            acquired_at: Utc::now(),
+        };
+        assert!(!manager.put_lock(&contender, ttl_seconds).await.unwrap());
+
+        manager.delete_lock(&lock.lock_name).await.unwrap();
     }
 
     #[tokio::test]

@@ -1,0 +1,22 @@
+{
+  "namespace": "nvcfsis",
+  "rule_name": "apikey.allow",
+  "result": {
+    "allowed": true,
+    "ncaId": "ZP_Whumw18I0fCYSKpMTGIg1Hnlp4FZ2wtqugF93zK0",
+    "ownerId": "abc123",
+    "policy": {
+      "aud": "xpantoa8cpatlk8ejubim0mhimgxombwj5tkxzyukio",
+      "product": "nv-cloud-functions",
+      "resources": [
+        {
+          "id": "ea946155-893c-43b6-920d-3f4410534a80",
+          "type": "cluster"
+        }
+      ],
+      "scopes": [
+        "invoke_function"
+      ]
+    }
+  }
+}

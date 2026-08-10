@@ -1,0 +1,29 @@
+--- a/criu/io_uring.c
++++ b/criu/io_uring.c
+@@ -49,6 +49,26 @@ struct io_uring_fdinfo {
+ 	uint32_t cq_entries;	/* CQ ring size from CqSize field */
+ };
+ 
++/*
++ * Structure to track io_uring fd info for size-based VMA matching.
++ * 
++ * PROBLEM: Linux uses a shared anon_inode for all io_urings in a process,
++ * so we can't use inode to determine which VMA belongs to which fd.
++ * 
++ * SOLUTION: Match VMAs to fds by size. Each io_uring's SQE array has size:
++ *   sqe_size = sq_entries * 64 (sizeof(io_uring_sqe))
++ */
++struct io_uring_fd_info {
++	int fd;
++	uint32_t sq_entries;
++	uint32_t cq_entries;
++	size_t expected_sqe_size;  /* sq_entries * 64 */
++	unsigned long ino;
++	int sqe_vma_matched;       /* 1 if SQE VMA assigned */
++	IoUringEntry *entry;       /* Associated protobuf entry */
++};
++
++#define MAX_IO_URINGS_PER_PROCESS 16
+ 
+ /*
+  * Deferred epoll registrations for io_uring.

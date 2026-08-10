@@ -29,6 +29,15 @@ use testcontainers_modules as _;
 // Silence unused crate error when mimalloc is enabled but jemalloc takes precedence
 #[cfg(all(feature = "mimalloc", feature = "jemalloc"))]
 use mimalloc as _;
+// Bazel-built crate_universe links optional jemalloc deps through
+// `all_crate_deps()` even though the static GLOBAL and the malloc_conf
+// pub statics reference them via paths rather than `use` statements.
+// `#![deny(unused_crate_dependencies)]` does not trace usage through
+// submodules, so re-state usage here under the matching cfg guards.
+#[cfg(feature = "profiling")]
+use jemalloc_pprof as _;
+#[cfg(feature = "jemalloc")]
+use tikv_jemallocator as _;
 
 // Global allocator configuration based on features
 // jemalloc takes precedence over mimalloc if both are enabled

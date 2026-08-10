@@ -21,18 +21,21 @@
 
 # The serviceaccount (and therefore its permissions) are used in both
 # of the post-install jobs
+{{- $serverFullname := include "nvcf-openbao.serverFullname" . }}
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ .Release.Name }}-initialize-cluster
+  name: {{ $serverFullname }}-initialize-cluster
+  namespace: {{ include "nvcf-openbao.namespace" . }}
   annotations:
     helm.sh/hook: pre-install,pre-upgrade
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ .Release.Name }}-initialize-cluster
+  name: {{ $serverFullname }}-initialize-cluster
+  namespace: {{ include "nvcf-openbao.namespace" . }}
   annotations:
     helm.sh/hook: pre-install,pre-upgrade
 rules:
@@ -48,33 +51,41 @@ rules:
   - apiGroups: [""]
     resources: ["pods/exec"]
     verbs: ["create"]
+  # scripts/deploy.sh check_sidecar_version() reads the StatefulSet spec to
+  # verify openbao and auto-unseal-sidecar container images match at runtime
+  # (complements the template-time guard in validate-sidecar-version.yaml)
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ .Release.Name }}-initialize-cluster
+  name: {{ $serverFullname }}-initialize-cluster
+  namespace: {{ include "nvcf-openbao.namespace" . }}
   annotations:
     helm.sh/hook: pre-install,pre-upgrade
 subjects:
   - kind: ServiceAccount
-    namespace: {{ .Release.Namespace }}
-    name: {{ .Release.Name }}-initialize-cluster
+    namespace: {{ include "nvcf-openbao.namespace" . }}
+    name: {{ $serverFullname }}-initialize-cluster
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ .Release.Name }}-initialize-cluster
+  name: {{ $serverFullname }}-initialize-cluster
 ---
 # Allow job to access `openid/v1/jwks`
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ .Release.Name }}-openid-reader
+  name: {{ $serverFullname }}-openid-reader
+  namespace: {{ include "nvcf-openbao.namespace" . }}
   annotations:
     helm.sh/hook: pre-install,pre-upgrade
 subjects:
   - kind: ServiceAccount
-    namespace: {{ .Release.Namespace }}
-    name: {{ .Release.Name }}-initialize-cluster
+    namespace: {{ include "nvcf-openbao.namespace" . }}
+    name: {{ $serverFullname }}-initialize-cluster
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole

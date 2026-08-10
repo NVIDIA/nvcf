@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/../../.." && pwd)"
+checker="${repo_root}/tools/ci/check-doc-version-sync"
+
+workdir="$(mktemp -d)"
+trap 'rm -rf "${workdir}"' EXIT
+
+mkdir -p "${workdir}/bin"
+
+cat >"${workdir}/bin/go" <<'EOF'
+#!/usr/bin/env bash
+echo "simulated docs version drift" >&2
+exit 7
+EOF
+chmod +x "${workdir}/bin/go"
+
+set +e
+output="$(PATH="${workdir}/bin:${PATH}" "${checker}" 2>&1)"
+status=$?
+set -e
+
+if [ "${status}" -ne 0 ]; then
+  echo "expected docs version sync check to warn and exit zero, got ${status}" >&2
+  echo "${output}" >&2
+  exit 1
+fi
+
+if ! grep -q "WARNING: docs version sync check failed" <<<"${output}"; then
+  echo "expected advisory warning in output" >&2
+  echo "${output}" >&2
+  exit 1
+fi
+
+if ! grep -q "simulated docs version drift" <<<"${output}"; then
+  echo "expected original failure output to be preserved" >&2
+  echo "${output}" >&2
+  exit 1
+fi
+
+echo "test-check-doc-version-sync: PASS"

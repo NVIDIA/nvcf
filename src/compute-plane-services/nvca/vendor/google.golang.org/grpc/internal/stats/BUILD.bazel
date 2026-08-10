@@ -1,0 +1,24 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "stats",
+    srcs = [
+        "labels.go",
+        "metrics_recorder_list.go",
+        "stats.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/internal/stats",
+    importpath = "google.golang.org/grpc/internal/stats",
+    visibility = ["//src/compute-plane-services/nvca/vendor/google.golang.org/grpc:__subpackages__"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/experimental/stats",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/internal",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/stats",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":stats",
+    visibility = ["//src/compute-plane-services/nvca/vendor/google.golang.org/grpc:__subpackages__"],
+)

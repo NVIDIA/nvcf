@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Copyright 2022 The Prometheus Authors
+// Copyright The Prometheus Authors
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
@@ -45,7 +45,7 @@ type Interrupts map[string]Interrupt
 
 // Interrupts creates a new instance from a given Proc instance.
 func (p Proc) Interrupts() (Interrupts, error) {
-	data, err := util.ReadFileNoStat(p.path("interrupts"))
+	data, err := util.ReadFileNoStat(p.fs.proc.Path("interrupts"))
 	if err != nil {
 		return nil, err
 	}

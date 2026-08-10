@@ -1,0 +1,38 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# Integration tests only (nvct-core / nvct-service IntegrationTestConfiguration). Ephemeral host
+# port for CQL so nvct-core then nvct-service Surefire runs do not collide on localhost:9042.
+name: nvct-cloud-tasks-test
+
+services:
+  cassandra:
+    image: cassandra:5
+    ports:
+      - "9042"
+    environment:
+      - HEAP_NEWSIZE=128M
+      - MAX_HEAP_SIZE=256M
+      - DC=datacenter1
+      - LANG=C.UTF-8
+    volumes:
+      - ./cassandra/cassandra.yaml:/etc/cassandra/cassandra.yaml
+      - ./cassandra/keystore.node0:/etc/cassandra/keystore.node0
+      - ./cassandra/truststore.node0:/etc/cassandra/truststore.node0
+      - ./cassandra/schema:/docker-entrypoint-initdb.d
+      - ./cassandra/entrypoint.sh:/entrypoint.sh
+    command:
+      - /bin/bash
+      - -c
+      - nohup /entrypoint.sh & cassandra -f -R

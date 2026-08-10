@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "mlock",
+    srcs = ["mlock.go"],
+    importpath = "github.com/hashicorp/vault/sdk/helper/mlock",
+    visibility = ["//visibility:public"],
+    deps = ["@com_github_hashicorp_go_secure_stdlib_mlock//:mlock"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":mlock",
+    visibility = ["//visibility:public"],
+)

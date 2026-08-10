@@ -1,6 +1,4 @@
-load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
-
-package(default_visibility = ["//visibility:public"])
+load("@rules_go//go:def.bzl", "go_library")
 
 go_library(
     name = "utilities",
@@ -11,17 +9,9 @@ go_library(
         "string_array_flag.go",
         "trie.go",
     ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/grpc-ecosystem/grpc-gateway/v2/utilities",
     importpath = "github.com/grpc-ecosystem/grpc-gateway/v2/utilities",
-)
-
-go_test(
-    name = "utilities_test",
-    size = "small",
-    srcs = [
-        "string_array_flag_test.go",
-        "trie_test.go",
-    ],
-    deps = [":utilities"],
+    visibility = ["//visibility:public"],
 )
 
 alias(

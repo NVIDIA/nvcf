@@ -330,7 +330,7 @@ func Test_setKAISchedulerMutators(t *testing.T) {
 				"%s should have kai-scheduler set", tt.name)
 			queueLabel, ok := tt.getQueueLabel(tt.obj)
 			assert.True(t, ok, "%s should have queue label", tt.name)
-			assert.Equal(t, kaischeduler.GetQName(), queueLabel,
+			assert.Equal(t, kaischeduler.DefaultQueue, queueLabel,
 				"%s should have correct queue label value", tt.name)
 
 			// Ensure existing labels are preserved

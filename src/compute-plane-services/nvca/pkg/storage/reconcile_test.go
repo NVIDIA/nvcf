@@ -171,6 +171,78 @@ func TestCleanupDanglingStorageRequest(t *testing.T) {
 	}
 }
 
+func TestRequeueDeletingStorageRequestWithFinalizer(t *testing.T) {
+	deletionTime := metav1.Now()
+	existingResult := reconcile.Result{RequeueAfter: defaultRequeueDelay}
+
+	tests := []struct {
+		name     string
+		res      reconcile.Result
+		err      error
+		owner    *nvcav1new.StorageRequest
+		expected reconcile.Result
+	}{
+		{
+			name: "deleting storage request with finalizer requeues",
+			owner: &nvcav1new.StorageRequest{
+				ObjectMeta: metav1.ObjectMeta{
+					DeletionTimestamp: &deletionTime,
+					Finalizers:        []string{StorageRequestFinalizer},
+				},
+			},
+			expected: reconcile.Result{RequeueAfter: deletingStorageRequestRequeueDelay},
+		},
+		{
+			name: "deleting storage request without finalizer does not requeue",
+			owner: &nvcav1new.StorageRequest{
+				ObjectMeta: metav1.ObjectMeta{
+					DeletionTimestamp: &deletionTime,
+				},
+			},
+			expected: reconcile.Result{},
+		},
+		{
+			name: "active storage request with finalizer does not requeue",
+			owner: &nvcav1new.StorageRequest{
+				ObjectMeta: metav1.ObjectMeta{
+					Finalizers: []string{StorageRequestFinalizer},
+				},
+			},
+			expected: reconcile.Result{},
+		},
+		{
+			name: "existing result is preserved",
+			res:  existingResult,
+			owner: &nvcav1new.StorageRequest{
+				ObjectMeta: metav1.ObjectMeta{
+					DeletionTimestamp: &deletionTime,
+					Finalizers:        []string{StorageRequestFinalizer},
+				},
+			},
+			expected: existingResult,
+		},
+		{
+			name: "error result is preserved",
+			res:  existingResult,
+			err:  errors.New("cleanup failed"),
+			owner: &nvcav1new.StorageRequest{
+				ObjectMeta: metav1.ObjectMeta{
+					DeletionTimestamp: &deletionTime,
+					Finalizers:        []string{StorageRequestFinalizer},
+				},
+			},
+			expected: existingResult,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := requeueDeletingStorageRequestWithFinalizer(test.res, test.err, test.owner)
+			assert.Equal(t, test.expected, got)
+		})
+	}
+}
+
 func TestDoCleanupSharedStorage(t *testing.T) {
 	// Setup shared storage request, and perform a standard cleanup on happy path
 	tests := []struct {
@@ -702,4 +774,46 @@ func (c *mockCleanK8sClient) Delete(ctx context.Context, obj client.Object, opts
 
 func (c *mockCleanK8sClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
 	return c.patchFunc(ctx, obj, patch, opts...)
+}
+
+func TestWithModelCacheStorageClass(t *testing.T) {
+	tests := []struct {
+		name     string
+		existing string
+		option   string
+		want     string
+	}{
+		{name: "name overrides the default", existing: "", option: "custom-sc", want: "custom-sc"},
+		{name: "empty name leaves the value alone", existing: "custom-sc", option: "", want: "custom-sc"},
+		{name: "empty name leaves an unset value unset", existing: "", option: "", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &Reconciler{modelCacheStorageClass: tt.existing}
+			WithModelCacheStorageClass(tt.option)(r)
+			assert.Equal(t, tt.want, r.modelCacheStorageClass)
+		})
+	}
+}
+
+func TestWithCacheMountOptionsConfigMap(t *testing.T) {
+	tests := []struct {
+		name     string
+		existing string
+		option   string
+		want     string
+	}{
+		{name: "name overrides the default", existing: "", option: "custom-cm", want: "custom-cm"},
+		{name: "empty name leaves the value alone", existing: "custom-cm", option: "", want: "custom-cm"},
+		{name: "empty name leaves an unset value unset", existing: "", option: "", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &Reconciler{cacheMountOptionsConfigMap: tt.existing}
+			WithCacheMountOptionsConfigMap(tt.option)(r)
+			assert.Equal(t, tt.want, r.cacheMountOptionsConfigMap)
+		})
+	}
 }

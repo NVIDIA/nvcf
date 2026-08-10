@@ -41,7 +41,8 @@ and 'install --compute-plane' explicitly.`,
 
 // Persistent flags shared by all self-hosted subcommands.
 var (
-	selfHostedStack               string
+	selfHostedControlPlaneStack    string
+	selfHostedComputePlaneStack    string
 	selfHostedEnv                 string
 	selfHostedNoApply             bool
 	selfHostedNonInter            bool
@@ -59,22 +60,41 @@ var (
 )
 
 type registerEndpointValues struct {
-	ICMSServiceURL  string
-	ReValServiceURL string
-	NATSURL         string
+	ICMSServiceURL string
+	// Host overrides are populated by compute-plane registration from the
+	// ControlPlane profile. The self-hosted up/install helpers leave them empty.
+	ICMSServiceHostHeaderOverride  string
+	ReValServiceURL                string
+	ReValServiceHostHeaderOverride string
+	NATSURL                        string
+	NATSHostOverride               string
+}
+
+type localEndpointDefaults struct {
+	BaseHTTPURL string
+	InvokeURL   string
+	APIKeysURL  string
+	APIHost     string
+	InvokeHost  string
+	APIKeysHost string
 }
 
 const (
 	localControlPlaneDomainDefault = "nvcf-control-plane.test"
 	localControlPlaneHTTPPort      = "8080"
 	localControlPlaneNATSPort      = "4222"
+	localInClusterICMSURL          = "http://api.sis.svc.cluster.local:8080"
+	localInClusterReValURL         = "http://reval.nvcf.svc.cluster.local:8080"
+	localInClusterNATSURL          = "nats://nats.nats-system.svc.cluster.local:4222"
 )
 
 func init() {
 	rootCmd.AddCommand(selfHostedCmd)
 
-	selfHostedCmd.PersistentFlags().StringVar(&selfHostedStack, "stack", "",
-		"Bundle source: local path, git URL, or oci:// URL (default: built-in OCI URL pinned to this CLI version)")
+	selfHostedCmd.PersistentFlags().StringVar(&selfHostedControlPlaneStack, "control-plane-stack", "",
+		"Control-plane stack source: local path, git URL, or oci:// URL (default: built-in OCI URL pinned to this CLI version)")
+	selfHostedCmd.PersistentFlags().StringVar(&selfHostedComputePlaneStack, "compute-plane-stack", "",
+		"Compute-plane stack source: local path, git URL, or oci:// URL (default: built-in OCI URL pinned to this CLI version)")
 	selfHostedCmd.PersistentFlags().StringVar(&selfHostedEnv, "env", "local",
 		"Helmfile environment (e.g. local, prd)")
 	selfHostedCmd.PersistentFlags().BoolVar(&selfHostedNoApply, "no-apply", false,
@@ -86,9 +106,13 @@ func init() {
 	selfHostedCmd.PersistentFlags().StringVar(&selfHostedOutput, "output", "text",
 		"Output format for check: text or json")
 	selfHostedCmd.PersistentFlags().StringVar(&selfHostedWait, "wait", "",
-		"Block on check until pass or duration elapses (e.g. 5m)")
+		"Block on check until pass or duration elapses (e.g. 5m). "+
+			"With --pre --compute-plane the cluster-validator's 5m budget dominates the 5s poll; "+
+			"pair with --skip-cluster-validation for a tight retry cadence.")
 	selfHostedCmd.PersistentFlags().StringVar(&selfHostedICMSURL, "icms-url", "",
 		"ICMS endpoint for cluster register (default: derived from base_http_url; env: NVCF_ICMS_URL)")
+	selfHostedCmd.PersistentFlags().StringVar(&selfHostedICMSURL, "sis-url", "",
+		"Deprecated alias for --icms-url (env: NVCF_SIS_URL)")
 	selfHostedCmd.PersistentFlags().StringVar(&selfHostedNATSURL, "nats-url", "",
 		"NATS endpoint for the compute plane agent (default: derived from ICMS/API URL; env: NVCF_NATS_URL)")
 	selfHostedCmd.PersistentFlags().BoolVar(&selfHostedJSON, "json", false,
@@ -112,11 +136,13 @@ func init() {
 // resolveICMSURL picks the ICMS endpoint for cluster register, in priority order:
 //  1. --icms-url flag (explicit user override).
 //  2. NVCF_ICMS_URL env var.
-//  3. Derive from config.BaseHTTPURL by replacing the leading "api." host
+//  3. NVCF_SIS_URL env var (legacy local quickstart name).
+//  4. icms_url from the CLI config file.
+//  5. Derive from config.BaseHTTPURL by replacing the leading "api." host
 //     prefix with "sis." — e.g. http://api.localhost:8080 → http://sis.localhost:8080.
 //     This matches the multi-cluster gateway-routes layout where api/sis/invocation
 //     are sibling HTTPRoutes on the shared envoy gateway.
-//  4. Fallback to BaseHTTPURL unchanged (single-host deployments where the
+//  6. Fallback to BaseHTTPURL unchanged (single-host deployments where the
 //     gateway is fronted by one DNS name).
 func resolveICMSURL(flagValue string) string {
 	if flagValue != "" {
@@ -125,9 +151,15 @@ func resolveICMSURL(flagValue string) string {
 	if v := os.Getenv("NVCF_ICMS_URL"); v != "" {
 		return v
 	}
+	if v := os.Getenv("NVCF_SIS_URL"); v != "" {
+		return v
+	}
 	cfg, err := client.LoadConfigWithoutAuth()
 	if err != nil {
 		return ""
+	}
+	if cfg.ICMSURL != "" {
+		return cfg.ICMSURL
 	}
 	base := cfg.BaseHTTPURL
 	if base == "" {
@@ -176,6 +208,57 @@ func deriveNATSURL(rawURL string) string {
 	}).String()
 }
 
+func localEndpointDefaultsFromICMSURL(rawURL string) (localEndpointDefaults, bool) {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return localEndpointDefaults{}, false
+	}
+	domain, ok := controlPlaneSiblingDomain(u.Hostname())
+	if !ok || !isLocalhostDomain(domain) {
+		return localEndpointDefaults{}, false
+	}
+	urlFor := func(service string) string {
+		next := *u
+		next.Host = hostWithOptionalPort(service+"."+domain, u.Port())
+		return next.String()
+	}
+	return localEndpointDefaults{
+		BaseHTTPURL: urlFor("api"),
+		InvokeURL:   urlFor("invocation"),
+		APIKeysURL:  urlFor("api-keys"),
+		APIHost:     "api." + domain,
+		InvokeHost:  "invocation." + domain,
+		APIKeysHost: "api-keys." + domain,
+	}, true
+}
+
+func applyLocalEndpointDefaults(icmsURL string) {
+	if !strings.EqualFold(selfHostedEnv, "local") {
+		return
+	}
+	defaults, ok := localEndpointDefaultsFromICMSURL(icmsURL)
+	if !ok {
+		return
+	}
+	setEnvDefault("NVCF_BASE_HTTP_URL", defaults.BaseHTTPURL)
+	setEnvDefault("NVCF_INVOKE_URL", defaults.InvokeURL)
+	setEnvDefault("API_KEYS_SERVICE_URL", defaults.APIKeysURL)
+	setEnvDefault("API_KEYS_ADMIN_SERVICE_URL", defaults.APIKeysURL)
+	setEnvDefault("API_HOST", defaults.APIHost)
+	setEnvDefault("INVOKE_HOST", defaults.InvokeHost)
+	setEnvDefault("API_KEYS_HOST", defaults.APIKeysHost)
+}
+
+func setEnvDefault(name, value string) {
+	if value == "" {
+		return
+	}
+	if _, ok := os.LookupEnv(name); ok {
+		return
+	}
+	_ = os.Setenv(name, value)
+}
+
 func resolveNATSURL(flagValue, baseServiceURL string) string {
 	if flagValue != "" {
 		return flagValue
@@ -204,6 +287,21 @@ func resolveRegisterEndpointValues(env, controlCtx, computeCtx, icmsURL, natsURL
 		ReValServiceURL: deriveSiblingHTTPServiceURL(icmsURL, "reval"),
 		NATSURL:         resolveNATSURL(natsURLOverride, icmsURL),
 	}
+}
+
+func resolveNVCAEndpointValues(env, controlCtx, computeCtx, icmsURL, natsURLOverride string) registerEndpointValues {
+	if strings.EqualFold(env, "local") && kubectx.SelectMode(controlCtx, computeCtx) == kubectx.ModeSingle {
+		natsURL := localInClusterNATSURL
+		if natsURLOverride != "" || os.Getenv("NVCF_NATS_URL") != "" {
+			natsURL = resolveNATSURL(natsURLOverride, localInClusterICMSURL)
+		}
+		return registerEndpointValues{
+			ICMSServiceURL:  localInClusterICMSURL,
+			ReValServiceURL: localInClusterReValURL,
+			NATSURL:         natsURL,
+		}
+	}
+	return resolveRegisterEndpointValues(env, controlCtx, computeCtx, icmsURL, natsURLOverride)
 }
 
 func localSplitHTTPServiceURL(rawURL, service string) string {

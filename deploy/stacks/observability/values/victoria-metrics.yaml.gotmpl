@@ -1,0 +1,19 @@
+{{- $vm := .Values.victoriaMetrics | default dict }}
+server:
+  fullnameOverride: vmsingle
+  retentionPeriod: {{ dig "server" "retentionPeriod" "1" $vm | quote }}
+  persistentVolume:
+    enabled: {{ dig "server" "persistentVolume" "enabled" true $vm }}
+    size: {{ dig "server" "persistentVolume" "size" "16Gi" $vm }}
+    {{- with dig "server" "persistentVolume" "storageClass" "" $vm }}
+    storageClassName: {{ . | quote }}
+    {{- end }}
+  resources:
+{{ toYaml (dig "server" "resources" dict $vm) | indent 4 }}
+  serviceMonitor:
+    enabled: {{ dig "serviceMonitor" "enabled" false $vm }}
+{{- if .Values.global.imagePullSecrets }}
+global:
+  imagePullSecrets:
+    {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
+{{- end }}

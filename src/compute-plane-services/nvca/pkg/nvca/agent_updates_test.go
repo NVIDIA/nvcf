@@ -63,7 +63,6 @@ func TestICMSRegistrationSync(t *testing.T) {
 		SyncQueueInterval:              defaultSyncQueueInterval,
 		SyncRequestStatusInterval:      DefaultSyncRequestStatusInterval,
 		PeriodicInstanceStatusInterval: DefaultPeriodicInstanceStatusInterval,
-		RolloverServiceUpdateInterval:  DefaultRolloverServicesUpdateInterval,
 		SyncAcknowledgeRequestInterval: ackReqInterval,
 		DynamicGPUDiscoveryEnabled:     true,
 		MultipleGPUTypesAllowed:        true,

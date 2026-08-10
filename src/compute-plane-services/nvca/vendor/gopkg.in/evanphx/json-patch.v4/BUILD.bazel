@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "json-patch_v4",
+    srcs = [
+        "errors.go",
+        "merge.go",
+        "patch.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/gopkg.in/evanphx/json-patch.v4",
+    importpath = "gopkg.in/evanphx/json-patch.v4",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":json-patch_v4",
+    visibility = ["//visibility:public"],
+)

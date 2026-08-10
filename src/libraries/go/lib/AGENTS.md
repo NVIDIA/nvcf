@@ -1,243 +1,143 @@
 # AGENTS.md
 
+Scope: everything under `src/libraries/go/lib/`.
+
 ## Project Overview
 
-**nvcf-go** is a repository hosting common NVCF (NVIDIA Cloud Functions) components shared by both `egx/cloud` and `egx/edge`. The repository includes:
+This subtree is `go-lib`, the shared Go library module for NVCF. It is maintained
+inside the monorepo and uses the module path
+`github.com/NVIDIA/nvcf/src/libraries/go/lib`.
 
-- API definitions
-- Authentication components (OAuth, JWT, token fetching)
-- Core HTTP services and event streaming
-- Kubernetes client utilities
-- OpenTelemetry integration
-- Secret management
+The package roots under `pkg/` are:
 
-**Language:** Go  
-**Architecture:** Modular package structure under `pkg/`  
-**Development Model:** Trunk-based development on `main` branch
+- `pkg/auth/` - Authentication token fetching
+- `pkg/cobraautobind/` - Cobra command binding helpers
+- `pkg/core/` - HTTP services, event streaming, Kubernetes clients, and context management
+- `pkg/fnds/` - FNDS client and common types
+- `pkg/http/` - HTTP utilities, including logger, retry client, and request headers
+- `pkg/icms-translate/` - Queue-message translation helpers and CLI support for workload manifests
+- `pkg/imagecredential/` - Image credential refresh job and Kubernetes secret helpers
+- `pkg/ngc/` - NGC token fetching
+- `pkg/nvkit/` - Shared service framework utilities for auth, config, logging, metrics, tracing, servers, and clients
+- `pkg/oauth/` - OAuth and JWT handling with JWKS caching
+- `pkg/otel/` - OpenTelemetry integration
+- `pkg/otelconfig/` - OpenTelemetry collector config rendering and backend config templates
+- `pkg/secret/` - Secret management and file fetching
+- `pkg/types/` - Type definitions and configuration
+- `pkg/version/` - Version utilities
+- `pkg/zapotelspan/` - Helpers for adding OpenTelemetry span fields to zap logs
 
-## Build and Test Commands
+BYOO-facing `otelconfig` commands and fixtures live in `tools/byoo`.
 
-### Development Workflow
+## Commands
+
+Run these from `src/libraries/go/lib`:
 
 ```bash
-# Update vendored dependencies
 make vendor-update
-
-# After vendor update, regenerate NOTICE third-party list:
-make license-update
-
-# Verify NOTICE is in sync:
-make check-license
-
-# Run linting
 make lint
-
-# Run all unit tests
 make test
+make codegen-update
+make update-testdata
+make check-testdata
+```
 
-# Run individual unit test
+Useful targeted commands:
+
+```bash
 go test ./pkg/core -run TestHTTPServiceRoutes
+go test ./pkg/auth
+GOWORK=off GOFLAGS=-mod=vendor go test -race -timeout 10m ./...
+```
 
-# Update generated K8s client code
+Run Bazel commands from the repository root:
+
+```bash
+bazel build //src/libraries/go/lib/...
+bazel test //src/libraries/go/lib/...
+bazel test //src/libraries/go/lib:golangci_lint
+```
+
+Bazel build, test, and lint targets are the CI gate for this subtree. The Bazel
+lint target uses the shared runner at `rules/golangci/golangci_lint.sh` with this
+module's `.golangci.yml`. `make lint` still runs the same module-scoped
+`golangci-lint` command for local iteration.
+
+## Root CI
+
+Root CI generates the `go-lib` subproject validation pipeline from
+`tools/ci/subproject-validations.yaml`, an internal GitLab CI config not
+present in this public snapshot.
+
+The current subproject checks are:
+
+- vendor: `./tools/ci/check-go-vendor src/libraries/go/lib`
+- codegen: `./tools/ci/check-go-codegen src/libraries/go/lib --command 'make codegen-update'`
+- Bazel build/test/lint: `go-lib-bazel-build-test`, including `//src/libraries/go/lib:golangci_lint`
+
+Local Make targets source `.env`. Keep these values current when coverage
+behavior changes:
+
+- `GO_TEST_COVERAGE_THRESHOLD`
+- `GO_TEST_COVERAGE_EXCLUDE_REGEX`
+
+## Codegen
+
+`make codegen-update` uses the root helper `tools/scripts/update-go-deepcopy`.
+It regenerates:
+
+- `pkg/types/nvca/config/zz_generated.deepcopy.go`
+- `pkg/icms-translate/translate/common/zz_generated.deepcopy.go`
+- `pkg/icms-translate/translate/function/zz_generated.deepcopy.go`
+- `pkg/icms-translate/translate/task/zz_generated.deepcopy.go`
+
+The shared generated-file header is `tools/scripts/boilerplate.go.txt`. Generated
+files should carry the NVIDIA Apache header.
+
+After changing generated inputs, run:
+
+```bash
 make codegen-update
 ```
 
-### Test Coverage
-
-To view coverage results locally:
-1. `cd _output/cover && python3 -m http.server 8000`
-2. Open browser: `http://<machine_ip>:8000/coverage.html`
-
-## Code Style Guidelines
-
-- **CGO:** Disabled by default (`CGO_ENABLED=0`)
-- **Build Flags:** Static linking with vendored dependencies (`-mod=vendor`)
-- **Linting:** Uses `golangci-lint` with configuration in `.golangci.yml`
-- **Timeout:** Linting runs with 10-minute timeout
-- Always run `make lint` before committing to catch style violations
-
-### Go-Specific Guidelines
-
-- Use vendored dependencies (never modify `vendor/` manually)
-- Update boilerplate with `scripts/boilerplate.go.txt`
-- Follow standard Go formatting (gofmt)
-- Write tests alongside new code (test files: `*_test.go`)
-
-## Testing Instructions
-
-### Running Tests
+If generated sources change package lists or BUILD file source lists, also run
+Gazelle from the repository root:
 
 ```bash
-# Run all tests
-make test
-
-# Run tests for specific package
-go test ./pkg/auth
-
-# Run specific test by name
-go test ./pkg/core -run TestHTTPServiceRoutes
-
-# Run all packages with parallel execution
-go test -p $(nproc) -timeout 10m ./...
+bazel run //:gazelle
 ```
 
-### Test Requirements
+## Dependency and Notice Maintenance
 
-- All code changes must include or update unit tests
-- Tests must pass before creating a pull request
-- Test timeout is set to 10 minutes
-- Fix any test failures before requesting review
-- Add tests even if not explicitly requested in the issue
+This module uses a checked-in `vendor/` tree. Do not edit `vendor/` by hand.
+Use:
 
-### Package Testing Structure
-
-- Tests are co-located with source code
-- Test files: `pkg/<package>/*_test.go`
-- Test data: `pkg/<package>/test/` directories
-- Mock data and fixtures should be in `test/` subdirectories
-
-## Commit Message Guidelines
-
-### Conventional Commits
-
-All commits and PRs must follow [Conventional Commits v1.0.0](https://www.conventionalcommits.org/en/v1.0.0/).
-
-**Format:** `type(scope): short description`
-
-- **type:** Kind of change (see below)
-- **scope:** Product/area affected (required for feat, fix, perf)
-- **short description:** One sentence, present tense
-
-### Commit Types
-
-**End User (release notes):**
-- `feat` - New features
-- `fix` - Bug fixes
-- `perf` - Performance improvements
-
-**Foundational (no release notes):**
-- `docs` - Documentation only
-- `build` - Build system changes
-- `test` - Test additions/changes
-- `refactor` - Code restructuring
-- `ci` - CI configuration
-- `chore` - Maintenance tasks
-- `style` - Formatting changes
-- `revert` - Reverting changes
-
-### Examples
-
-```text
-fix(docs): remove dead hyperlink
-refactor(docs): use java 8 streams
-perf(workspace): improve workspace mount speed
-feat(workspace): enable workspaces in staging env
-fix(formatter): handle unicode chars with csv formatted output
-```
-
-### Commit Message Body
-
-- Include motivation for the change
-- Contrast implementation with previous behavior
-- May include GitHub issue references in footer
-- Use `BREAKING CHANGE:` in footer if applicable
-
-## Pull Request Instructions
-
-### PR Checklist
-
-1. **Before Creating PR:**
-   - Run `make lint`
-   - Run `make test`
-   - Verify all tests pass
-   - Update unit tests for changed code
-   - If dependencies changed, run `make vendor-update`, then `make license-update` and verify with `make check-license`
-
-2. **PR Title Format:** Use conventional commit format
-
-   ```text
-   type(scope): short description
-   ```
-
-3. **PR Description:**
-   - Explain motivation for changes
-   - Link to related issues
-   - Note any breaking changes
-   - Describe testing performed
-
-4. **Review Process:**
-   - Wait for CI status checks to pass
-   - Address reviewer feedback
-   - NVCA developer will merge when approved
-
-### Branch Strategy
-
-- Fork the repository
-- Create feature branch in your fork
-- Push changes to your fork
-- Create PR from your fork to `main`
-- Trunk-based development: all changes merge to `main`
-
-## Security Considerations
-
-### Secret Management
-
-- **Never commit secrets** to the repository
-- Secret fetcher components: `pkg/secret/`
-- Use secure credential storage mechanisms appropriate for your environment
-
-### Authentication
-
-- OAuth/JWT handling: `pkg/oauth/`
-- Token management: `pkg/auth/`, `pkg/ngc/`
-- Always validate tokens before use
-- JWKS caching implemented in `pkg/oauth/jwtcache.go`
-
-### Private Dependencies
-
-If using private dependencies, configure access appropriately:
-- Set `GOPRIVATE` environment variable for private module domains
-- Use secure credential storage for authentication
-- Ensure tokens have minimum required permissions
-
-## LICENSE File Maintenance
-
-The `LICENSE` file contains only the NVIDIA Apache 2.0 project license (so [pkg.go.dev](https://pkg.go.dev) can detect it). The `NOTICE` file contains the list of third-party licenses from vendored dependencies, following [Apache NOTICE convention](https://www.apache.org/dev/licensing-howto.html).
-
-**When to update:**
-- After running `make vendor-update`
-- After adding/removing/updating dependencies in `go.mod`
-
-**How to update:**
 ```bash
-# Update NOTICE with current vendor license list
-make license-update
-
-# Verify NOTICE is in sync (also runs in CI)
-make check-license
+make vendor-update
 ```
 
-**CI enforcement:**
-- The `check-license` CI job verifies the NOTICE file is in sync with vendor licenses
-- If out of sync, run `make license-update` to fix
+This subtree does not maintain its own `NOTICE` file. Vendored notices and
+licenses are collected into the repository root `NOTICE`. When dependencies or
+vendored license files change, run from the repository root:
 
-**Why this matters:**
-- Legal compliance requires accurate attribution of third-party code
-- NOTICE must reflect current vendored dependencies
+```bash
+./tools/scripts/update-license
+go run ./tools/collect-dependencies
+```
 
-## Common Troubleshooting
+## Style and Testing
 
-### Build and Test Issues
+- Use `GOWORK=off` and `GOFLAGS=-mod=vendor` when running module-scoped Go commands that need to match this module's vendored dependency set.
+- `bazel test //src/libraries/go/lib:golangci_lint` runs `golangci-lint` via `go run` with `.golangci.yml`; `make lint` remains a local equivalent.
+- Keep tests next to the code they cover.
+- Use `testdata/` for fixtures and refresh consolidated `icms-translate` fixtures with `make update-testdata`.
+- Do not commit secrets, tokens, or generated local output such as `_output/`.
 
-- Ensure Go 1.24.0+ is installed
-- Verify `vendor/` directory is up to date: run `make vendor-update`
-- Check that all dependencies are available
-- Run `make lint` to catch style violations
+## Public Mirror
 
-## Additional Resources
+The subtree OSS mirror is controlled by `.oss-allowlist`. Keep it explicit.
+Do not add internal CI, scanner, registry, or toolbox files back to the allowlist.
 
-- [CONTRIBUTING.md](CONTRIBUTING.md) - Detailed contribution guidelines
-- [README.md](README.md) - Project overview and setup
-- [SECURITY.md](SECURITY.md) - Security policies
-- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) - Community guidelines
-- [Issues](https://github.com/NVIDIA/nvcf-go/issues) - GitHub issue tracker
+Root files intentionally omitted from this subtree include local `NOTICE`,
+standalone `.gitlab-ci.yml`, toolbox files, Renovate config, and restricted
+scanner allowlists. Root monorepo tooling owns those concerns now.

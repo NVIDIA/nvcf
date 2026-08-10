@@ -55,8 +55,17 @@ if [ -z "${mr_project_id}" ] || [ -z "${mr_iid}" ] || [ -z "${FERN_BOT:-}" ]; th
   exit 0
 fi
 
-curl --silent --fail --location \
+gitlab_api_url="${DOCS_PREVIEW_GITLAB_API_URL:-${CI_API_V4_URL:-}}"
+if [ -z "${gitlab_api_url}" ]; then
+  echo "Skipping MR comment: set DOCS_PREVIEW_GITLAB_API_URL or CI_API_V4_URL to post it." >&2
+  exit 0
+fi
+gitlab_api_url="${gitlab_api_url%/}"
+
+if ! curl --silent --fail --location \
   --header "PRIVATE-TOKEN: ${FERN_BOT}" \
   --header "Content-Type: application/json" \
-  --url "https://github.com/NVIDIA/api/v4/projects/${mr_project_id}/merge_requests/${mr_iid}/notes" \
-  --data-raw "{ \"body\": \"Preview your docs at ${preview_url}\" }"
+  --url "${gitlab_api_url}/projects/${mr_project_id}/merge_requests/${mr_iid}/notes" \
+  --data-raw "{ \"body\": \"Preview your docs at ${preview_url}\" }"; then
+  echo "Skipping MR comment: GitLab API request failed." >&2
+fi

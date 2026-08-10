@@ -1,0 +1,93 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: gpucheckpoints.nvsnap.io
+spec:
+  group: nvsnap.io
+  names:
+    kind: GPUCheckpoint
+    listKind: GPUCheckpointList
+    plural: gpucheckpoints
+    singular: gpucheckpoint
+    shortNames:
+      - gpucp
+      - gcp
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - podName
+              properties:
+                podName:
+                  type: string
+                  description: Name of the pod to checkpoint
+                containerName:
+                  type: string
+                  description: Specific container to checkpoint (optional)
+                leaveRunning:
+                  type: boolean
+                  default: false
+                  description: Keep the pod running after checkpoint
+                storage:
+                  type: object
+                  properties:
+                    pvcName:
+                      type: string
+                    path:
+                      type: string
+                      default: /checkpoints
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum:
+                    - Pending
+                    - InProgress
+                    - Completed
+                    - Failed
+                checkpointPath:
+                  type: string
+                checkpointSize:
+                  type: integer
+                  format: int64
+                nodeName:
+                  type: string
+                containerImage:
+                  type: string
+                containerID:
+                  type: string
+                startTime:
+                  type: string
+                  format: date-time
+                completionTime:
+                  type: string
+                  format: date-time
+                message:
+                  type: string
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Pod
+          type: string
+          jsonPath: .spec.podName
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Size
+          type: integer
+          jsonPath: .status.checkpointSize
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

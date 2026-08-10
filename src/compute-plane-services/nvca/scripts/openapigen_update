@@ -2,22 +2,29 @@
 set -eu -o pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 
-main() {
+CODEGEN_VERSION="${CODEGEN_VERSION:-"589584f1c912f4367fe8954f649a59a98b912da5"}"
+export PATH="$(go env GOPATH)/bin:${PATH}"
+echo "Installing code-generator tools at ${CODEGEN_VERSION}..."
+go install "k8s.io/kube-openapi/cmd/openapi-gen@${CODEGEN_VERSION}"
+
+openapi_gen() {
+  local -r header_file="${repo_root}/scripts/boilerplate.go.txt"
+  local -r pkg_name="github.com/NVIDIA/nvcf/src/compute-plane-services/nvca"
+  local -r api=${1:?"API path needed"}
+
   cd "${repo_root}"
   openapi-gen \
     --v 1 --logtostderr \
-    --go-header-file ./scripts/boilerplate.go.txt \
-    --output-pkg github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1 \
-    --output-dir ./pkg/apis/nvcf/v1 \
-    github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1 \
+    --go-header-file "${header_file}" \
+    --output-pkg "${pkg_name}/pkg/apis/${api}" \
+    --output-dir ./pkg/apis/${api} \
+    "${pkg_name}/pkg/apis/${api}" \
     k8s.io/apimachinery/pkg/apis/meta/v1
-  openapi-gen \
-    --v 1 --logtostderr \
-    --go-header-file ./scripts/boilerplate.go.txt \
-    --output-pkg github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1 \
-    --output-dir ./pkg/apis/nvca/v1alpha1 \
-    github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1 \
-    k8s.io/apimachinery/pkg/apis/meta/v1
+}
+
+main() {
+  openapi_gen nvcf/v1
+  openapi_gen nvca/v1alpha1
 }
 
 main "$@"

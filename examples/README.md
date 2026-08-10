@@ -2,11 +2,7 @@
 
 Sample containers, configurations, and guides for self-hosted NVIDIA Cloud Functions (NVCF). All samples target the self-hosted control plane and are driven via `nvcf-cli`.
 
-## Local Development
-
-| Sample | Description |
-|--------|-------------|
-| [Self-Hosted Local Development](self-hosted-local-development/) | Run the full NVCF self-hosted control plane locally on k3d with fake GPUs. Includes cluster config, setup script, and teardown. |
+Local development tooling for self-hosted NVCF lives in [`tools/ncp-local-cluster/`](../tools/ncp-local-cluster/), not under `examples/`. Run `make build-and-deploy-cluster` there to bring up the canonical k3d topology.
 
 ## Function Samples
 
@@ -22,11 +18,25 @@ Functions are long-running services that respond to HTTP or gRPC invocations.
 | [vLLM OTLP Exporter](function-samples/vllm-otlp-exporter-sample/) | vLLM inference with OpenTelemetry (OTLP) metric exporting for BYO Observability. |
 | [Inference Helm Chart](function-samples/helmchart-samples/inference-test-sample/) | Helm chart that deploys the FastAPI Echo sample on a Kubernetes cluster. |
 | [Multi-Node Helm Function](function-samples/helmchart-samples/multi-node-helm-function-test/) | Multi-node Helm chart for running NCCL and GPU bandwidth tests via NVCF. |
+| [Ray Serve Helm Chart](function-samples/helmchart-samples/ray-serve-sample/) | Helm chart that deploys a Ray Serve application as an NVCF function. |
+| [Dynamo Operator Sample](function-samples/helmchart-samples/dynamo-operator-sample/) | Helm chart for a vLLM disaggregated router deployed through NVCF. |
 | [Load Tester Supreme](function-samples/load-tester-supreme/) | HTTP and gRPC echo servers designed for load and throughput testing. |
+
+## Task Samples
+
+Tasks are one-shot workloads that run to completion and surface progress and results through the NVCT API.
+
+| Sample | Description |
+|--------|-------------|
+| [Task Simple](task-samples/task-simple-sample/) | Minimal task that writes progress updates until completion. |
+| [Task BYOO](task-samples/task-byoo-sample/) | Task instrumented with OpenTelemetry for BYO Observability. |
+| [Task Helm Chart](task-samples/task-helmchart-sample/) | Helm chart that deploys the simple task container as a Kubernetes Job. |
+| [Task Helm Chart BYOO](task-samples/task-helmchart-byoo-sample/) | Helm chart that deploys the BYOO task container as a Kubernetes Job. |
+| [Multi-Node Helm Task](task-samples/multi-node-helm-task-test/) | Multi-node NCCL and GPU bandwidth test packaged as a Helm task. |
 
 ## Load Tests
 
-k6 load testing scripts for NVCF function endpoints are in the [load-tests/](load-tests/) directory.
+k6 load testing scripts for NVCF function and NVCT task endpoints are in the [load-tests/](load-tests/) directory.
 
 ## Building for Multiple Compute Architectures
 

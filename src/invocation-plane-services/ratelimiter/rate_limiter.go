@@ -19,7 +19,9 @@ package ratelimiter
 
 import (
 	"context"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -32,7 +34,6 @@ import (
 
 	"github.com/auth0/go-jwt-middleware/v2/jwks"
 	"github.com/auth0/go-jwt-middleware/v2/validator"
-	"github.com/carlmjohnson/versioninfo"
 	grpcprom "github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus"
 	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors"
 	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/auth"
@@ -57,9 +58,9 @@ import (
 	v1reflectiongrpc "google.golang.org/grpc/reflection/grpc_reflection_v1"
 	"google.golang.org/grpc/status"
 
-	nvauth "github.com/NVIDIA/nvcf-go/pkg/nvkit/auth"
-	"github.com/NVIDIA/nvcf-go/pkg/nvkit/clients"
-	"github.com/NVIDIA/nvcf-go/pkg/nvkit/tracing"
+	nvauth "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
 
 	"ratelimiter/credentials"
 	nvcfpb "ratelimiter/nvcf/pb"
@@ -79,10 +80,14 @@ type FunctionRateLimitConfig struct {
 }
 
 type Config struct {
-	// OAuth2Issuer is the OAuth2 issuer URL for validating inbound gRPC JWTs
-	// (JWKS at {issuer}/.well-known/jwks.json).
+	// OAuth2Issuer is the expected `iss` claim string on inbound gRPC JWTs.
 	OAuth2Issuer string `mapstructure:"OAUTH2_ISSUER"`
-	Audience     string `mapstructure:"AUDIENCE"`
+	// OAuth2JwksURL is the URL the validator fetches signing keys from. It is
+	// set explicitly rather than derived from OAuth2Issuer so the binary can
+	// run against any OAuth2/OIDC provider, whether it serves keys at the
+	// standard `{issuer}/.well-known/jwks.json` path or at a different one.
+	OAuth2JwksURL string `mapstructure:"OAUTH2_JWKS_URL"`
+	Audience      string `mapstructure:"AUDIENCE"`
 	// OAuth2ProviderHost is the hostname of the OAuth2 authorization server used for client-credentials
 	// tokens when calling the NVCF API (see nvkit ProviderConfig.Host).
 	OAuth2ProviderHost       string `mapstructure:"OAUTH2_PROVIDER_HOST"`
@@ -109,21 +114,23 @@ func (c CustomClaims) Validate(ctx context.Context) error {
 
 type ExcludedNcaIds map[string]struct{}
 
-// IndexedPolicy wraps the rate limit policy + a per nca id map for O(1) NCA ID lookups
+// IndexedPolicy wraps the rate limit policy + a per-NCA-ID map for O(1) lookups.
 type IndexedPolicy struct {
 	Policy                *nvcfpb.RateLimitPolicyResponse_RateLimitConfig
 	NcaIdToPerNcaIdConfig map[string]*nvcfpb.RateLimitPolicyResponse_RateLimitConfig_PerNcaIdConfigs
 }
 
-// CacheKey represents a strongly typed cache key for rate limiter metadata
+// CacheKey represents a strongly typed cache key for rate limiter metadata.
+// ClientAuthSubject is non-empty only for per-user (caller-tier) entries.
 type CacheKey struct {
+	ClientAuthSubject string
 	NcaId             string
 	FunctionVersionId string
 }
 
 // String returns the string representation of the cache key
 func (ck CacheKey) String() string {
-	return ck.NcaId + ck.FunctionVersionId
+	return ck.ClientAuthSubject + ":" + ck.NcaId + ":" + ck.FunctionVersionId
 }
 
 // NewPerNcaIdCacheKey creates a cache key for per nca id rate limiting
@@ -138,6 +145,17 @@ func NewPerNcaIdCacheKey(ncaId, functionVersionId string) CacheKey {
 func NewGlobalCacheKey(functionVersionId string) CacheKey {
 	return CacheKey{
 		NcaId:             "",
+		FunctionVersionId: functionVersionId,
+	}
+}
+
+// NewPerUserCacheKey creates a cache key for per-user rate limiting.
+// NcaId is included to keep counters distinct when the same clientAuthSubject is
+// used across multiple NCAs.
+func NewPerUserCacheKey(clientAuthSubject, ncaId, functionVersionId string) CacheKey {
+	return CacheKey{
+		ClientAuthSubject: clientAuthSubject,
+		NcaId:             ncaId,
 		FunctionVersionId: functionVersionId,
 	}
 }
@@ -274,6 +292,11 @@ func NewRateLimiter(config Config, olricConfig *olricConfig.Config) (*RateLimite
 	// Wrap the NVCF client with caching to reduce redundant gRPC calls
 	cachedNVCFClient := NewCachedNVCFClient(nvcfApiClient, cacheTTL)
 
+	stopCaches := func() {
+		cache.Stop()
+		indexedPoliciesCache.Stop()
+	}
+
 	c := make(chan struct{})
 	olricConfig.Started = func() {
 		close(c)
@@ -282,7 +305,8 @@ func NewRateLimiter(config Config, olricConfig *olricConfig.Config) (*RateLimite
 	// Create a new Olric instance.
 	db, err := olric.New(olricConfig)
 	if err != nil {
-		zap.L().Error("Failed to create Olric instance", zap.Error(err))
+		stopCaches()
+		return nil, fmt.Errorf("failed to create olric instance: %w", err)
 	}
 
 	errChannel := make(chan error, 1)
@@ -300,12 +324,17 @@ func NewRateLimiter(config Config, olricConfig *olricConfig.Config) (*RateLimite
 	case <-c:
 		break
 	case err := <-errChannel:
+		stopCaches()
 		return nil, err
 	}
 
 	store, err := NewStore(db.NewEmbeddedClient())
 	if err != nil {
 		zap.L().Error("Failed to create a Olric store", zap.Error(err))
+		stopCaches()
+		if shutdownErr := db.Shutdown(context.Background()); shutdownErr != nil {
+			zap.L().Error("Failed to shut down olric instance", zap.Error(shutdownErr))
+		}
 		return nil, err
 	}
 
@@ -406,8 +435,15 @@ func (r *RateLimiter) ResetLimiter(ctx context.Context, ttlCacheKey CacheKey, nc
 		return fmt.Errorf("no limiter to be reset")
 	}
 	limiterEntry := selectedLimiter.Value()
+	// Mirror the per-tier Olric key prefix from collectTiers: per-user entries
+	// are namespaced with "user:" + clientAuthSubject, so a reset targets the
+	// caller's counter rather than (and corrupting) the NCA-tier counter.
+	olricPrefix := ncaId
+	if ttlCacheKey.ClientAuthSubject != "" {
+		olricPrefix = "user:" + ttlCacheKey.ClientAuthSubject + ":" + ncaId
+	}
 	for _, rateEntry := range limiterEntry.Rates {
-		olricKey := ncaId + ":" + functionVersionId + ":" + rateEntry.Rate
+		olricKey := olricPrefix + ":" + functionVersionId + ":" + rateEntry.Rate
 		_, err := rateEntry.Limiter.Reset(ctx, olricKey)
 		if err != nil {
 			return fmt.Errorf("failed to reset limiter for rate %s: %w", rateEntry.Rate, err)
@@ -454,7 +490,6 @@ func buildIndexedPolicy(config *nvcfpb.RateLimitPolicyResponse_RateLimitConfig) 
 		NcaIdToPerNcaIdConfig: make(map[string]*nvcfpb.RateLimitPolicyResponse_RateLimitConfig_PerNcaIdConfigs),
 	}
 
-	// Build the map for O(1) lookups
 	for _, perNcaConfig := range config.GetPerNcaIdConfigs() {
 		if perNcaConfig != nil && perNcaConfig.GetNcaId() != "" {
 			indexedPolicy.NcaIdToPerNcaIdConfig[perNcaConfig.GetNcaId()] = perNcaConfig
@@ -556,6 +591,51 @@ func (r *RateLimiter) loadPerNcaIdLimiters(ctx context.Context, cacheKey CacheKe
 	return item, nil
 }
 
+// loadPerUserLimiters creates a per-user rate limiter for the requested
+// (clientAuthSubject, ncaId, functionVersionId). When perUserRate is configured
+// on the policy, the same single rate is enforced individually against every
+// unique caller; counters are kept distinct via the clientAuthSubject in the
+// cache key and Olric prefix. Returns nil when the policy has no perUserRate
+// configured, so downstream code falls through to NCA-tier-only behavior.
+func (r *RateLimiter) loadPerUserLimiters(ctx context.Context, cacheKey CacheKey, originalRequest *pb.RateLimitRequest) (*ttlcache.Item[CacheKey, LimiterEntry], error) {
+	indexedPolicy, err := r.fetchIndexedPolicy(ctx, originalRequest)
+	if err != nil {
+		return nil, err
+	}
+	if indexedPolicy == nil || indexedPolicy.Policy == nil {
+		return nil, nil
+	}
+
+	perUserRate := indexedPolicy.Policy.GetPerUserRate()
+	if perUserRate == "" {
+		zap.L().Debug("No per-user rate configured, no per-user limiter will be created",
+			zap.String("function id", originalRequest.FunctionId),
+			zap.String("function version id", originalRequest.FunctionVersionId))
+		return nil, nil
+	}
+
+	rates, err := parseRates(r.store, perUserRate)
+	if err != nil {
+		zap.L().Error("Failed to parse per-user rate",
+			zap.String("client auth subject", redactSubject(cacheKey.ClientAuthSubject)),
+			zap.Error(err))
+		return nil, err
+	}
+
+	limiterEntry := LimiterEntry{
+		Rates: rates,
+	}
+	item := r.Limiters.Set(cacheKey, limiterEntry, ttlcache.DefaultTTL)
+
+	zap.L().Debug("Created per-user limiter",
+		zap.String("client auth subject", redactSubject(cacheKey.ClientAuthSubject)),
+		zap.String("nca id", cacheKey.NcaId),
+		zap.String("function version id", cacheKey.FunctionVersionId),
+		zap.String("rate", perUserRate))
+
+	return item, nil
+}
+
 // loadGlobalLimiters creates global rate limiter based on the cache key.
 // Build the "global" rate limiter for this function version.
 // We store it into the ttlCache, and the key is functionVersionId.
@@ -597,12 +677,33 @@ func (r *RateLimiter) loadGlobalLimiters(ctx context.Context, cacheKey CacheKey,
 	return item, nil
 }
 
+// tierCheck represents one rate-limit tier evaluation. olricPrefix is prepended
+// to the per-rate Olric key so counters from different tiers stay in distinct
+// namespaces even when they share function-version + rate.
+type tierCheck struct {
+	name        string
+	entry       LimiterEntry
+	olricPrefix string
+}
+
+// redactSubject hashes clientAuthSubject for logs/traces. The value may be PII
+// (e.g. an email-shaped OIDC id), so never emit it raw; the stable hash still
+// allows per-caller correlation.
+func redactSubject(s string) string {
+	if s == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(s))
+	return "sha256:" + hex.EncodeToString(sum[:])[:16]
+}
+
 func (r *RateLimiter) RateLimit(ctx context.Context, request *pb.RateLimitRequest) (*pb.RateLimitResponse, error) {
 	span := trace.SpanFromContext(ctx)
 	span.SetAttributes(
 		attribute.String("nca_id", request.NcaId),
 		attribute.String("function_id", request.FunctionId),
-		attribute.String("function_version_id", request.FunctionVersionId))
+		attribute.String("function_version_id", request.FunctionVersionId),
+		attribute.String("client_auth_subject", redactSubject(request.ClientAuthSubject)))
 
 	if len(request.NcaId) == 0 ||
 		len(request.FunctionId) == 0 ||
@@ -610,44 +711,18 @@ func (r *RateLimiter) RateLimit(ctx context.Context, request *pb.RateLimitReques
 		return nil, errors.New("invalid request")
 	}
 
-	// Try to get per nca id rate limiter first
-	perNcaIdCacheKey := NewPerNcaIdCacheKey(request.NcaId, request.FunctionVersionId)
-	perNcaIdLimiters := r.Limiters.Get(perNcaIdCacheKey, ttlcache.WithLoader(ttlcache.LoaderFunc[CacheKey, LimiterEntry](func(c *ttlcache.Cache[CacheKey, LimiterEntry], k CacheKey) *ttlcache.Item[CacheKey, LimiterEntry] {
-		item, err := r.loadPerNcaIdLimiters(ctx, k, request)
-		if err != nil {
-			zap.L().Error("Failed to load per nca id limiter metadata", zap.Error(err))
-			return nil
-		}
-		return item
-	})))
-
-	// If there is a per nca id limiter, use it. Otherwise, fall back to the global rate limiter
-	var chosenLimiters *ttlcache.Item[CacheKey, LimiterEntry]
-	if perNcaIdLimiters != nil {
-		chosenLimiters = perNcaIdLimiters
-	} else {
-		// Only fetch global limiter if we don't have a per-NCA-ID limiter
-		globalCacheKey := NewGlobalCacheKey(request.FunctionVersionId)
-		chosenLimiters = r.Limiters.Get(globalCacheKey, ttlcache.WithLoader(ttlcache.LoaderFunc[CacheKey, LimiterEntry](func(c *ttlcache.Cache[CacheKey, LimiterEntry], k CacheKey) *ttlcache.Item[CacheKey, LimiterEntry] {
-			item, err := r.loadGlobalLimiters(ctx, k, request)
-			if err != nil {
-				zap.L().Error("Failed to load global limiter metadata", zap.Error(err))
-				return nil
-			}
-			return item
-		})))
-	}
+	tiers := r.collectTiers(ctx, request)
 
 	isAllowed := true
-	if chosenLimiters != nil {
+	if len(tiers) > 0 {
 		var err error
-		isAllowed, err = r.rateLimit(ctx, chosenLimiters, request)
+		isAllowed, err = r.rateLimit(ctx, tiers, request)
 		if err != nil {
 			zap.L().Error("Failed to rate limit", zap.Error(err))
 			return nil, err
 		}
 	} else {
-		zap.L().Error("No rate limit metadata was constructed",
+		zap.L().Debug("No rate limit metadata was constructed",
 			zap.String("nca id", request.NcaId),
 			zap.String("function id", request.FunctionId),
 			zap.String("version id", request.FunctionVersionId))
@@ -667,31 +742,97 @@ func (r *RateLimiter) RateLimit(ctx context.Context, request *pb.RateLimitReques
 	return response, nil
 }
 
-// rateLimit checks all configured rate limits for this entry. A request is
-// allowed only if every rate limit passes.
-//
-// Every request increments all counters regardless of outcome, consistent
-// with the original single-limiter behaviour. This keeps all counters in
-// sync across multiple rate windows.
-func (r *RateLimiter) rateLimit(ctx context.Context, selectedLimiters *ttlcache.Item[CacheKey, LimiterEntry], request *pb.RateLimitRequest) (bool, error) {
-	limiterEntry := selectedLimiters.Value()
+// collectTiers builds the ordered set of tier checks applicable to this request.
+// User tier (when ClientAuthSubject set and perUserRate configured) is enforced
+// alongside the NCA tier (per-NCA-ID config preferred over global). Both tiers
+// must allow for the request to be allowed.
+func (r *RateLimiter) collectTiers(ctx context.Context, request *pb.RateLimitRequest) []tierCheck {
+	tiers := make([]tierCheck, 0, 2)
 
-	if _, ok := limiterEntry.ExcludedNcaIds[request.NcaId]; ok {
-		return true, nil
+	// User tier; only when caller identity is present.
+	if request.ClientAuthSubject != "" {
+		userKey := NewPerUserCacheKey(request.ClientAuthSubject, request.NcaId, request.FunctionVersionId)
+		userLimiters := r.Limiters.Get(userKey, ttlcache.WithLoader(ttlcache.LoaderFunc[CacheKey, LimiterEntry](func(c *ttlcache.Cache[CacheKey, LimiterEntry], k CacheKey) *ttlcache.Item[CacheKey, LimiterEntry] {
+			item, err := r.loadPerUserLimiters(ctx, k, request)
+			if err != nil {
+				zap.L().Error("Failed to load per-user limiter metadata", zap.Error(err))
+				return nil
+			}
+			return item
+		})))
+		if userLimiters != nil {
+			tiers = append(tiers, tierCheck{
+				name:        "user",
+				entry:       userLimiters.Value(),
+				olricPrefix: "user:" + request.ClientAuthSubject + ":" + request.NcaId,
+			})
+		}
 	}
 
-	allowed := true
-	for _, rateEntry := range limiterEntry.Rates {
-		key := request.NcaId + ":" + request.FunctionVersionId + ":" + rateEntry.Rate
-		rateLimitContext, err := rateEntry.Limiter.Get(ctx, key)
+	// NCA tier; per-NCA-ID config takes precedence over global.
+	perNcaIdKey := NewPerNcaIdCacheKey(request.NcaId, request.FunctionVersionId)
+	perNcaIdLimiters := r.Limiters.Get(perNcaIdKey, ttlcache.WithLoader(ttlcache.LoaderFunc[CacheKey, LimiterEntry](func(c *ttlcache.Cache[CacheKey, LimiterEntry], k CacheKey) *ttlcache.Item[CacheKey, LimiterEntry] {
+		item, err := r.loadPerNcaIdLimiters(ctx, k, request)
 		if err != nil {
-			return false, err
+			zap.L().Error("Failed to load per nca id limiter metadata", zap.Error(err))
+			return nil
 		}
-		if rateLimitContext.Reached {
-			allowed = false
-		}
+		return item
+	})))
+	if perNcaIdLimiters != nil {
+		tiers = append(tiers, tierCheck{
+			name:        "nca",
+			entry:       perNcaIdLimiters.Value(),
+			olricPrefix: request.NcaId,
+		})
+		return tiers
 	}
 
+	globalKey := NewGlobalCacheKey(request.FunctionVersionId)
+	globalLimiters := r.Limiters.Get(globalKey, ttlcache.WithLoader(ttlcache.LoaderFunc[CacheKey, LimiterEntry](func(c *ttlcache.Cache[CacheKey, LimiterEntry], k CacheKey) *ttlcache.Item[CacheKey, LimiterEntry] {
+		item, err := r.loadGlobalLimiters(ctx, k, request)
+		if err != nil {
+			zap.L().Error("Failed to load global limiter metadata", zap.Error(err))
+			return nil
+		}
+		return item
+	})))
+	if globalLimiters != nil {
+		tiers = append(tiers, tierCheck{
+			name:        "global",
+			entry:       globalLimiters.Value(),
+			olricPrefix: request.NcaId,
+		})
+	}
+
+	return tiers
+}
+
+// rateLimit returns allowed only if every tier allows (AND). Tiers run in
+// priority order (per-user, then NCA axis); evaluation stops at the first
+// denying tier so a blocked request doesn't consume lower tiers' shared budget.
+// excludedNcaIds bypasses the global tier.
+func (r *RateLimiter) rateLimit(ctx context.Context, tiers []tierCheck, request *pb.RateLimitRequest) (bool, error) {
+	allowed := true
+	for _, t := range tiers {
+		// stop once denied: don't burn lower-priority shared tiers
+		if !allowed {
+			break
+		}
+		if _, ok := t.entry.ExcludedNcaIds[request.NcaId]; ok {
+			continue
+		}
+		for _, rateEntry := range t.entry.Rates {
+			key := t.olricPrefix + ":" + request.FunctionVersionId + ":" + rateEntry.Rate
+			rateLimitContext, err := rateEntry.Limiter.Get(ctx, key)
+			if err != nil {
+				return false, err
+			}
+			if rateLimitContext.Reached {
+				allowed = false
+			}
+		}
+	}
 	return allowed, nil
 }
 
@@ -707,7 +848,7 @@ func MakeGrpcServer(rateLimiter *RateLimiter, listener net.Listener, logger logg
 		zap.L().Error("Failed to parse OAuth2 issuer", zap.Error(err))
 		return nil, err
 	}
-	jwkUrl, err := url.Parse(rateLimiterConfig.OAuth2Issuer + "/.well-known/jwks.json")
+	jwkUrl, err := url.Parse(rateLimiterConfig.OAuth2JwksURL)
 	if err != nil {
 		return nil, err
 	}
@@ -736,7 +877,7 @@ func MakeGrpcServer(rateLimiter *RateLimiter, listener net.Listener, logger logg
 		AccessToken: rateLimiterConfig.TracingAccessToken,
 		Attributes: tracing.Attributes{
 			ServiceName:    "nvcf-rate-limiter-service",
-			ServiceVersion: versioninfo.Revision,
+			ServiceVersion: getVersion(),
 			Extra: map[string]string{
 				"host.id": hostName,
 				"host.ip": rateLimiterConfig.PodIP,

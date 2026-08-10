@@ -33,9 +33,10 @@ import (
 var _ service_discovery.ServiceDiscovery = &k8sDiscovery{}
 
 type k8sDiscovery struct {
-	c         context.Context
-	namespace string
-	clientset *kubernetes.Clientset
+	c             context.Context
+	namespace     string
+	labelSelector string
+	clientset     *kubernetes.Clientset
 }
 
 // NewK8sDiscovery We are not using olric-cloud-plugin because there are some compile issues because of dependency like people pointed out online
@@ -57,16 +58,25 @@ func NewK8sDiscovery(c context.Context) (*k8sDiscovery, error) {
 		return nil, errors.New("POD_NAMESPACE environment variable is not set")
 	}
 
+	// Scope peer discovery to this service's pods. Empty = all pods in the
+	// namespace (back-compat, e.g. single-tenant managed namespace); set it in
+	// shared namespaces to avoid merging with other Olric services.
+	labelSelector := os.Getenv("OLRIC_K8S_LABEL_SELECTOR")
+	if labelSelector == "" {
+		log.Printf("OLRIC_K8S_LABEL_SELECTOR unset; discovering all pods in namespace %q", namespace)
+	}
+
 	return &k8sDiscovery{
-		c:         c,
-		namespace: namespace,
-		clientset: clientset,
+		c:             c,
+		namespace:     namespace,
+		labelSelector: labelSelector,
+		clientset:     clientset,
 	}, nil
 }
 
 func (d *k8sDiscovery) DiscoverPeers() ([]string, error) {
 	pods, err := d.clientset.CoreV1().Pods(d.namespace).List(d.c, metav1.ListOptions{
-		// LabelSelector: "app=olric",
+		LabelSelector: d.labelSelector,
 	})
 	if err != nil {
 		return nil, err
@@ -84,23 +94,21 @@ func (d *k8sDiscovery) DiscoverPeers() ([]string, error) {
 	return addrs, nil
 }
 
-// podAddrs extracts the addresses from a list of pods.
-// adapted from https://github.com/hashicorp/go-discover/blob/49f60c093101c9c5f6b04d5b1c80164251a761a6/provider/k8s/k8s_discover.go#L122-L183
+// podAddrs returns join-seed IPs of Running, non-terminating pods.
+// Not gated on Ready: /health starts only after olric joins, so peers are
+// never Ready during the cold-start join window. memberlist SWIM handles
+// runtime liveness.
 func podAddrs(pods *corev1.PodList) ([]string, error) {
 	var addrs []string
 
-PodLoop:
 	for _, pod := range pods.Items {
 		if pod.Status.Phase != corev1.PodRunning {
 			continue
 		}
 
-		// If there is a Ready condition available, we need that to be true.
-		// If no ready condition is set, then we accept this pod regardless.
-		for _, condition := range pod.Status.Conditions {
-			if condition.Type == corev1.PodReady && condition.Status != corev1.ConditionTrue {
-				continue PodLoop
-			}
+		// Skip pods being torn down so we don't seed a leaving member.
+		if pod.DeletionTimestamp != nil {
+			continue
 		}
 
 		// Get the IP address that we will join.

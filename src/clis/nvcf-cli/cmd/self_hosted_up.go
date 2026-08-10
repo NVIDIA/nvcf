@@ -18,7 +18,10 @@ limitations under the License.
 package cmd
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -34,7 +37,10 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
+	corev1 "k8s.io/api/core/v1"
 	apiextclientset "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -61,6 +67,9 @@ var (
 const (
 	phaseControlPlaneNamespacesEnv = "NVCF_CLI_CP_NAMESPACES"
 	phaseComputePlaneNamespacesEnv = "NVCF_CLI_COMPUTE_NAMESPACES"
+	localPullSecretName            = "nvcr-pull-secret"
+	namespaceNVCAOperator          = "nvca-operator"
+	namespaceNVCASystem            = "nvca-system"
 
 	upPhasePreflight         = string(selfhosted.PhasePreflight)
 	upPhaseResolve           = string(selfhosted.PhaseResolve)
@@ -84,8 +93,35 @@ var defaultControlPlaneNamespaces = []string{
 // (apply-compute-plane). The compute plane lives in nvca-system + nvca-operator
 // per the multi-cluster topology.
 var defaultComputePlaneNamespaces = []string{
-	"nvca-system", "nvca-operator",
+	namespaceNVCASystem, namespaceNVCAOperator,
 }
+
+var localPullSecretNamespaces = []string{
+	"cassandra-system", "nats-system", "nvcf", "api-keys", "ess", "sis",
+	"vault-system", namespaceNVCAOperator, namespaceNVCASystem, "nvcf-backend",
+}
+
+const (
+	finalHealthTimeout = 5 * time.Minute
+	finalHealthPoll    = 5 * time.Second
+
+	namespaceTerminationPoll    = 250 * time.Millisecond
+	namespaceTerminationGrace   = 10 * time.Second
+	namespaceTerminationTimeout = 2 * time.Minute
+)
+
+type computePlaneHealthRequest struct {
+	ClusterName string
+	KubeContext string
+	Timeout     time.Duration
+}
+
+type computePlaneHealthResult struct {
+	BackendHealth string
+}
+
+var waitForComputePlaneHealth = waitForComputePlaneHealthDefault
+var selfHostedUpCurrentKubeContext = currentKubeContextName
 
 var selfHostedUpCmd = &cobra.Command{
 	Use:          "up",
@@ -112,7 +148,7 @@ func runSelfHostedUp(c *cobra.Command, _ []string) error {
 	// + ambient state (NO_COLOR / TERM / CI / TTY size).
 	// Cluster/Target/Stack populate the bubbletea Model header for TTY modes;
 	// they are ignored by the plain, JSONL, and accessible renderers.
-	// selfHostedStack is the flag value (before resolution); resolved.Path is
+	// selfHostedControlPlaneStack is the flag value (before resolution); resolved.Path is
 	// not yet available here, so the flag string is the best we have.
 	sink, kind, err := progress.SelectRenderer(c.ErrOrStderr(), progress.RenderOpts{
 		JSON:                selfHostedJSON,
@@ -120,7 +156,7 @@ func runSelfHostedUp(c *cobra.Command, _ []string) error {
 		Accessible:          selfHostedAccessible,
 		Cluster:             upClusterName,
 		Target:              upRegion,
-		Stack:               selfHostedStack,
+		Stack:               selfHostedControlPlaneStack,
 		ControlPlaneContext: selfHostedControlPlaneContext, // M+9.E: split-cluster header
 		ComputePlaneContext: selfHostedComputePlaneContext, // M+9.E: split-cluster header
 	})
@@ -145,12 +181,13 @@ func runSelfHostedUp(c *cobra.Command, _ []string) error {
 }
 
 type selfHostedUpRun struct {
-	c              *cobra.Command
-	ctx            context.Context
-	sink           progress.EventSink
-	started        time.Time
-	helmfileStdout io.Writer
-	helmfileStderr io.Writer
+	c               *cobra.Command
+	ctx             context.Context
+	sink            progress.EventSink
+	started         time.Time
+	helmfileStdout  io.Writer
+	helmfileStderr  io.Writer
+	helmRuntimeMode selfhosted.HelmRuntimeMode
 }
 
 type upClusterRegistration struct {
@@ -195,9 +232,10 @@ func noopUpCleanup() {
 }
 
 func (r *selfHostedUpRun) run() error {
-	if err := requireExplicitICMSForSplitMode(); err != nil {
+	if err := validateSelfHostedUpLocalK3DMode(); err != nil {
 		return err
 	}
+	applyLocalEndpointDefaults(resolveICMSURL(selfHostedICMSURL))
 	releaseLock, err := r.runPreflightAndLock()
 	if err != nil {
 		return err
@@ -205,6 +243,10 @@ func (r *selfHostedUpRun) run() error {
 	defer releaseLock()
 
 	resolved, err := r.resolveStack()
+	if err != nil {
+		return err
+	}
+	computeStackPath, err := r.resolveComputeStack()
 	if err != nil {
 		return err
 	}
@@ -216,30 +258,55 @@ func (r *selfHostedUpRun) run() error {
 	if err := r.applyControlPlane(resolved.Path); err != nil {
 		return err
 	}
+	if err := r.writeControlPlaneProfile(resolved.Path); err != nil {
+		return err
+	}
 	if err := r.checkControlPlane(); err != nil {
 		return err
 	}
-	registration, err := r.registerCluster(resolved.Path)
+	registration, err := r.registerCluster(computeStackPath)
 	if err != nil {
 		return err
 	}
-	if err := r.applyComputePlane(resolved.Path, registration); err != nil {
+	if err := r.applyComputePlane(computeStackPath, registration); err != nil {
 		return err
 	}
 	return r.emitFinalHealth(registration)
 }
 
-func requireExplicitICMSForSplitMode() error {
-	if kubectx.SelectMode(selfHostedControlPlaneContext, selfHostedComputePlaneContext) != kubectx.ModeSplit {
-		return nil
+func validateSelfHostedUpLocalK3DMode() error {
+	if !strings.EqualFold(selfHostedEnv, "local") {
+		return &ExitCodeError{
+			Code: 3,
+			Msg:  "self-hosted up only supports --env local; use control-plane profile, compute-plane register, and compute-plane install for non-local deployments",
+		}
 	}
-	if selfHostedICMSURL != "" {
-		return nil
+	if kubectx.SelectMode(selfHostedControlPlaneContext, selfHostedComputePlaneContext) != kubectx.ModeSingle {
+		return &ExitCodeError{
+			Code: 3,
+			Msg:  "self-hosted up only supports local k3d single-cluster deployments; use control-plane profile, compute-plane register, and compute-plane install for split-cluster deployments",
+		}
 	}
-	return &ExitCodeError{
-		Code: 3,
-		Msg:  "split-cluster mode requires explicit --icms-url=<https://sis.…>; the control-plane ICMS endpoint won't be reachable from the compute-plane context",
+	currentContext, err := selfHostedUpCurrentKubeContext()
+	if err != nil {
+		return fmt.Errorf("read current kube context: %w", err)
 	}
+	if !strings.HasPrefix(currentContext, "k3d-") {
+		return &ExitCodeError{
+			Code: 3,
+			Msg:  fmt.Sprintf("self-hosted up requires a k3d kube context; current context %q is not k3d. Use control-plane profile, compute-plane register, and compute-plane install for non-local deployments", currentContext),
+		}
+	}
+	return nil
+}
+
+func currentKubeContextName() (string, error) {
+	rules := clientcmd.NewDefaultClientConfigLoadingRules()
+	cfg, err := rules.Load()
+	if err != nil {
+		return "", err
+	}
+	return cfg.CurrentContext, nil
 }
 
 func (r *selfHostedUpRun) runPreflightAndLock() (func(), error) {
@@ -255,7 +322,8 @@ func (r *selfHostedUpRun) runPreflight() (time.Time, error) {
 		return time.Time{}, r.emitCancellation(1, upPhasePreflight)
 	}
 	p1Start := r.emitPhase(1, upPhasePreflight)
-	results := runUpPreflight(r.ctx, selfhosted.PreflightConfig{Tools: selfhosted.DefaultTools()})
+	results := runUpPreflight(r.ctx, selfhosted.PreflightConfig{Tools: selfHostedPreflightTools()})
+	r.helmRuntimeMode = helmRuntimeModeFromPreflightResults(results)
 	selfhosted.RenderText(r.c.ErrOrStderr(), results)
 	if anyFailed(results) {
 		r.emitFailure(selfhosted.Failure{Phase: selfhosted.PhasePreflight, Err: fmt.Errorf("pre-flight checks failed")}, p1Start)
@@ -305,8 +373,8 @@ func (r *selfHostedUpRun) emitInstallLockWarning(detail string) {
 func (r *selfHostedUpRun) resolveStack() (*selfhosted.ResolvedStack, error) {
 	p2Start := r.emitPhase(2, upPhaseResolve)
 	resolved, err := selfhosted.ResolveStack(r.ctx, selfhosted.StackOptions{
-		Source:        selfHostedStack,
-		BuiltInOCIRef: builtInStackOCI(),
+		Source:        selfHostedControlPlaneStack,
+		BuiltInOCIRef: builtInControlPlaneStackOCI(),
 	})
 	if err != nil {
 		r.emitFailure(selfhosted.Failure{Phase: selfhosted.PhaseResolve, Err: err}, p2Start)
@@ -317,6 +385,17 @@ func (r *selfHostedUpRun) resolveStack() (*selfhosted.ResolvedStack, error) {
 		return nil, r.emitCancellation(3, upPhaseRender)
 	}
 	return resolved, nil
+}
+
+func (r *selfHostedUpRun) resolveComputeStack() (string, error) {
+	computeResolved, err := selfhosted.ResolveStack(r.ctx, selfhosted.StackOptions{
+		Source:        selfHostedComputePlaneStack,
+		BuiltInOCIRef: builtInComputePlaneStackOCI(),
+	})
+	if err != nil {
+		return "", fmt.Errorf("resolve compute-plane stack: %w", err)
+	}
+	return computeResolved.Path, nil
 }
 
 func (r *selfHostedUpRun) emitPlanOnly(stackPath string) error {
@@ -342,15 +421,19 @@ func (r *selfHostedUpRun) emitPlanOnly(stackPath string) error {
 
 func (r *selfHostedUpRun) applyControlPlane(stackPath string) error {
 	p4Start := r.emitPhaseCtx(4, upPhaseApplyCP, kubectxFor(4))
+	if err := r.ensureLocalImagePullSecrets(kubectxFor(4), 4); err != nil {
+		return r.handleHelmfilePhaseError(4, upPhaseApplyCP, selfhosted.PhaseApplyCP, "prepare image pull secrets", err, p4Start)
+	}
 	cancelWatcher, watcherDone := startWatcher(r.ctx, r.sink, 4, upPhaseApplyCP, controlPlaneNamespaces())
 	err := selfhosted.Render(selfhosted.RenderOptions{
-		StackPath:   stackPath,
-		Env:         selfHostedEnv,
-		Apply:       true,
-		KubeContext: kubectxFor(4), // M+9.E: control-plane context in split mode
-		Stdout:      r.helmfileStdout,
-		Stderr:      r.helmfileStderr,
-		Ctx:         r.ctx,
+		StackPath:       stackPath,
+		Env:             selfHostedEnv,
+		Apply:           true,
+		HelmRuntimeMode: r.helmRuntimeMode,
+		KubeContext:     kubectxFor(4), // M+9.E: control-plane context in split mode
+		Stdout:          r.helmfileStdout,
+		Stderr:          r.helmfileStderr,
+		Ctx:             r.ctx,
 	})
 	stopWatcher(cancelWatcher, watcherDone)
 	if err != nil {
@@ -360,6 +443,34 @@ func (r *selfHostedUpRun) applyControlPlane(stackPath string) error {
 	if r.ctx.Err() != nil {
 		return r.emitCancellation(5, upPhaseCheckCP)
 	}
+	return nil
+}
+
+func (r *selfHostedUpRun) writeControlPlaneProfile(stackPath string) error {
+	path, err := writeControlPlaneProfile(controlPlaneProfileWriteRequest{
+		Ctx:                 r.ctx,
+		StackPath:           stackPath,
+		ClusterName:         upClusterName,
+		NCAID:               upNCAID,
+		Region:              upRegion,
+		Env:                 selfHostedEnv,
+		ControlPlaneContext: selfHostedControlPlaneContext,
+		ComputePlaneContext: selfHostedComputePlaneContext,
+		ICMSURL:             resolveICMSURL(selfHostedICMSURL),
+		NATSURL:             selfHostedNATSURL,
+		SourceRootCA:        true,
+	})
+	if err != nil {
+		wrapped := fmt.Errorf("writing control-plane profile: %w", err)
+		r.emitFailure(selfhosted.Failure{Phase: selfhosted.PhaseApplyCP, Err: wrapped}, time.Now().UTC())
+		return wrapped
+	}
+	_ = r.sink.Emit(r.ctx, progress.LastProgress{
+		Num:     4,
+		Detail:  "Wrote control-plane profile: " + path,
+		At:      time.Now().UTC(),
+		Context: kubectxFor(4),
+	})
 	return nil
 }
 
@@ -420,14 +531,44 @@ func (r *selfHostedUpRun) createClusterRegistration(stackPath string, p6Start ti
 		Region:         getenvDefault("CLUSTER_REGION", upRegion),
 		IdentitySource: defaultString(identitySource, "psat"),
 	}
-	resp, err := cc.RegisterCluster(r.ctx, selfhosted.RegisterRequest{
+	if selfHostedEnv == "local" {
+		deleted := 0
+		if rv, err := readRegisterValuesYAML(stackPath, upClusterName); err == nil && rv.ClusterID != "" {
+			if err := cc.DeleteCluster(r.ctx, rv.ClusterID); err != nil {
+				wrapped := fmt.Errorf("delete stale cluster registration %s: %w", rv.ClusterID, err)
+				r.emitFailure(selfhosted.Failure{Phase: selfhosted.PhaseRegister, Err: wrapped, HTTPStatus: httpStatusFromErr(err)}, p6Start)
+				return upClusterRegistration{}, wrapped
+			}
+			deleted++
+		} else if err != nil && !os.IsNotExist(err) {
+			wrapped := fmt.Errorf("read stale register-values: %w", err)
+			r.emitFailure(selfhosted.Failure{Phase: selfhosted.PhaseRegister, Err: wrapped}, p6Start)
+			return upClusterRegistration{}, wrapped
+		}
+		deletedByName, err := cc.DeleteClusterByName(r.ctx, registration.NCAID, upClusterName)
+		if err != nil {
+			wrapped := fmt.Errorf("delete existing cluster registration: %w", err)
+			r.emitFailure(selfhosted.Failure{Phase: selfhosted.PhaseRegister, Err: wrapped, HTTPStatus: httpStatusFromErr(err)}, p6Start)
+			return upClusterRegistration{}, wrapped
+		}
+		deleted += deletedByName
+		if deleted > 0 {
+			_ = r.sink.Emit(r.ctx, progress.LastProgress{
+				Num:    6,
+				Detail: fmt.Sprintf("removed %d existing cluster registration(s)", deleted),
+				At:     time.Now().UTC(),
+			})
+		}
+	}
+	registerReq := selfhosted.RegisterRequest{
 		ClusterName:    upClusterName,
 		NCAID:          registration.NCAID,
 		Region:         registration.Region,
 		JWKS:           jwks,
 		OIDCIssuer:     oidcIssuer,
 		IdentitySource: registration.IdentitySource,
-	})
+	}
+	resp, err := r.registerClusterWithRetry(cc, registerReq)
 	if err != nil {
 		wrapped := fmt.Errorf("cluster register: %w", err)
 		r.emitFailure(selfhosted.Failure{Phase: selfhosted.PhaseRegister, Err: wrapped, HTTPStatus: httpStatusFromErr(err)}, p6Start)
@@ -438,8 +579,73 @@ func (r *selfHostedUpRun) createClusterRegistration(stackPath string, p6Start ti
 	return registration, r.writeRegistrationValues(stackPath, icmsURL, registration, p6Start)
 }
 
+// registerClusterWithRetry implements the SRD §9.4 one-shot 401 auto-remint
+// contract for the register phase: if SIS returns 401, clear the cached token
+// (preserving the OIDC fingerprint), re-mint via init, and retry the register
+// call exactly once. The second 401 (or any non-401 error) is returned to the
+// caller so the existing phase_failed emission path handles it.
+//
+// The retry is suppressed when --token=$JWT was supplied: the operator chose
+// the token explicitly and a silent re-mint would invalidate that intent.
+// Per SRD §9.4 final paragraph, no HTTP 429 backoff is applied here — API Keys
+// rate-limiting is handled by authGatePhase5.
+func (r *selfHostedUpRun) registerClusterWithRetry(cc selfhosted.ClusterClient, req selfhosted.RegisterRequest) (*selfhosted.RegisterResponse, error) {
+	resp, err := cc.RegisterCluster(r.ctx, req)
+	if err == nil {
+		return resp, nil
+	}
+	if !isHTTP401Err(err) {
+		return nil, err
+	}
+	if selfHostedToken != "" {
+		// Operator supplied --token=$JWT; do not silently re-mint and override
+		// their explicit choice. Surface the 401 to the existing failure path.
+		return nil, err
+	}
+	_ = r.sink.Emit(r.ctx, progress.LastProgress{
+		Num:     6,
+		Detail:  "register returned 401; clearing cached token and retrying after re-init",
+		At:      time.Now().UTC(),
+		Context: kubectxFor(6),
+	})
+	sm := state.NewStateManager()
+	if loadErr := sm.Load(); loadErr == nil {
+		sm.ClearTokens()
+		_ = sm.Save()
+	}
+	if remintErr := runSelfHostedInit(r.ctx); remintErr != nil {
+		return nil, fmt.Errorf("re-mint admin token after 401: %w", remintErr)
+	}
+	retryCC, err := newClusterClientForSelfHosted(resolveICMSURL(selfHostedICMSURL))
+	if err != nil {
+		return nil, fmt.Errorf("rebuild cluster client after token re-mint: %w", err)
+	}
+	defer retryCC.Close()
+	return retryCC.RegisterCluster(r.ctx, req)
+}
+
+// isHTTP401Err returns true when err looks like an HTTP 401 from the SIS
+// client. httpStatusFromErr does not recognize the client's "SIS API error %d"
+// format, so we match both that shape and the generic "401" token explicitly.
+func isHTTP401Err(err error) bool {
+	if err == nil {
+		return false
+	}
+	if httpStatusFromErr(err) == 401 {
+		return true
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "SIS API error 401") {
+		return true
+	}
+	if strings.Contains(msg, " 401 ") || strings.HasSuffix(msg, " 401") {
+		return true
+	}
+	return false
+}
+
 func (r *selfHostedUpRun) writeRegistrationValues(stackPath, icmsURL string, registration upClusterRegistration, p6Start time.Time) error {
-	endpoints := resolveRegisterEndpointValues(selfHostedEnv, selfHostedControlPlaneContext, selfHostedComputePlaneContext, icmsURL, selfHostedNATSURL)
+	endpoints := resolveNVCAEndpointValues(selfHostedEnv, selfHostedControlPlaneContext, selfHostedComputePlaneContext, icmsURL, selfHostedNATSURL)
 	if err := writeRegisterValuesYAML(registerValuesWriteRequest{
 		StackPath:      stackPath,
 		ClusterName:    upClusterName,
@@ -454,24 +660,30 @@ func (r *selfHostedUpRun) writeRegistrationValues(stackPath, icmsURL string, reg
 		r.emitFailure(selfhosted.Failure{Phase: selfhosted.PhaseRegister, Err: wrapped}, p6Start)
 		return wrapped
 	}
+	_ = r.sink.Emit(r.ctx, progress.LastProgress{
+		Num:    6,
+		Detail: "Wrote NVCA values: " + nvcaValuesPath(stackPath, upClusterName),
+		At:     time.Now().UTC(),
+	})
 	return nil
 }
 
 func (r *selfHostedUpRun) applyComputePlane(stackPath string, registration upClusterRegistration) error {
 	p7Start := r.emitPhaseCtx(7, upPhaseApplyComputePlane, kubectxFor(7))
+	if err := r.ensureLocalImagePullSecrets(kubectxFor(7), 7); err != nil {
+		return r.handleHelmfilePhaseError(7, upPhaseApplyComputePlane, selfhosted.PhaseApplyCompute, "prepare image pull secrets", err, p7Start)
+	}
 	cancelWatcher, watcherDone := startWatcher(r.ctx, r.sink, 7, upPhaseApplyComputePlane, computePlaneNamespaces())
-	helmfileFile, selector := computePlaneTarget(stackPath)
 	err := selfhosted.Render(selfhosted.RenderOptions{
-		StackPath:    stackPath,
-		HelmfileFile: helmfileFile,
-		Env:          selfHostedEnv,
-		Apply:        true,
-		Selector:     selector,
-		KubeContext:  kubectxFor(7), // M+9.E: compute-plane context in split mode
-		Stdout:       r.helmfileStdout,
-		Stderr:       r.helmfileStderr,
-		Ctx:          r.ctx,
-		ExtraEnv:     registration.computePlaneEnv(),
+		StackPath:       stackPath,
+		Env:             selfHostedEnv,
+		Apply:           true,
+		HelmRuntimeMode: r.helmRuntimeMode,
+		KubeContext:     kubectxFor(7), // M+9.E: compute-plane context in split mode
+		Stdout:          r.helmfileStdout,
+		Stderr:          r.helmfileStderr,
+		Ctx:             r.ctx,
+		ExtraEnv:        registration.computePlaneEnv(),
 	})
 	stopWatcher(cancelWatcher, watcherDone)
 	if err != nil {
@@ -486,15 +698,298 @@ func (r *selfHostedUpRun) applyComputePlane(stackPath string, registration upClu
 
 func (r *selfHostedUpRun) emitFinalHealth(registration upClusterRegistration) error {
 	p8Start := r.emitPhaseCtx(8, upPhaseFinalHealth, kubectxFor(8))
+	health, err := waitForComputePlaneHealth(r.ctx, computePlaneHealthRequest{
+		ClusterName: upClusterName,
+		KubeContext: kubectxFor(8),
+		Timeout:     finalHealthTimeout,
+	})
+	if err != nil {
+		r.emitFailure(selfhosted.Failure{
+			Phase:            selfhosted.PhaseFinalCheck,
+			Err:              err,
+			KubernetesReason: "ComputePlaneNotReady",
+		}, p8Start)
+		return &ExitCodeError{Code: 2, Msg: "final health check failed: " + err.Error()}
+	}
 	r.emitPhaseDoneCtx(8, upPhaseFinalHealth, kubectxFor(8), p8Start)
 	_ = r.sink.Emit(r.ctx, progress.Final{
 		Success:           true,
 		ClusterID:         registration.ClusterID,
 		ClusterGroupID:    registration.ClusterGroupID,
-		NVCFBackendHealth: "healthy", // placeholder; real probe is M+8
+		NVCFBackendHealth: health.BackendHealth,
 		Duration:          time.Since(r.started),
 	})
 	return nil
+}
+
+func (r *selfHostedUpRun) ensureLocalImagePullSecrets(kubeContext string, phaseNum int) error {
+	if selfHostedEnv != "local" {
+		return nil
+	}
+	apiKey := firstNonEmptyEnv("NGC_IMAGE_PULL_API_KEY", "NVCF_NGCR_API_KEY", "NVCF_NGC_API_KEY", "NGC_API_KEY")
+	if apiKey == "" {
+		_ = r.sink.Emit(r.ctx, progress.LastProgress{
+			Num:     phaseNum,
+			Detail:  "NGC_API_KEY not set; expecting pre-created nvcr-pull-secret in local namespaces",
+			At:      time.Now().UTC(),
+			Context: kubeContext,
+		})
+		return nil
+	}
+	kube, err := buildKubeClientForCtx(kubeContext)
+	if err != nil {
+		return fmt.Errorf("build kube client for pull secrets: %w", err)
+	}
+	dockerConfig, err := dockerConfigJSON("nvcr.io", "$oauthtoken", apiKey)
+	if err != nil {
+		return err
+	}
+	for _, ns := range localPullSecretNamespaces {
+		if err := ensureNamespace(r.ctx, kube, ns); err != nil {
+			return err
+		}
+		if err := ensureDockerConfigSecret(r.ctx, kube, ns, localPullSecretName, dockerConfig); err != nil {
+			return err
+		}
+	}
+	_ = r.sink.Emit(r.ctx, progress.LastProgress{
+		Num:     phaseNum,
+		Detail:  fmt.Sprintf("ensured %s in %d local namespaces", localPullSecretName, len(localPullSecretNamespaces)),
+		At:      time.Now().UTC(),
+		Context: kubeContext,
+	})
+	return nil
+}
+
+func firstNonEmptyEnv(names ...string) string {
+	for _, name := range names {
+		if v := os.Getenv(name); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func dockerConfigJSON(registry, username, password string) ([]byte, error) {
+	auth := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
+	return json.Marshal(map[string]any{
+		"auths": map[string]any{
+			registry: map[string]string{
+				"username": username,
+				"password": password,
+				"auth":     auth,
+			},
+		},
+	})
+}
+
+func ensureNamespace(ctx context.Context, kube kubernetes.Interface, name string) error {
+	for {
+		ns, err := kube.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
+		if err == nil {
+			if namespaceIsTerminating(ns) {
+				if err := waitForNamespaceDeletion(ctx, kube, name); err != nil {
+					return err
+				}
+				continue
+			}
+			return nil
+		}
+		if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("get namespace %s: %w", name, err)
+		}
+		_, err = kube.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: name},
+		}, metav1.CreateOptions{})
+		if apierrors.IsAlreadyExists(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("create namespace %s: %w", name, err)
+		}
+		return nil
+	}
+}
+
+func namespaceIsTerminating(ns *corev1.Namespace) bool {
+	return ns.Status.Phase == corev1.NamespaceTerminating || ns.DeletionTimestamp != nil
+}
+
+func waitForNamespaceDeletion(ctx context.Context, kube kubernetes.Interface, name string) error {
+	started := time.Now()
+	ticker := time.NewTicker(namespaceTerminationPoll)
+	defer ticker.Stop()
+	cleanedFinalizers := false
+	for {
+		ns, err := kube.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
+		switch {
+		case apierrors.IsNotFound(err):
+			return nil
+		case err != nil:
+			return fmt.Errorf("get terminating namespace %s: %w", name, err)
+		case !namespaceIsTerminating(ns):
+			return nil
+		}
+		elapsed := time.Since(started)
+		if !cleanedFinalizers && elapsed >= namespaceTerminationGrace {
+			if err := clearNamespaceFinalizers(ctx, kube, ns); err != nil {
+				return err
+			}
+			cleanedFinalizers = true
+		}
+		if elapsed >= namespaceTerminationTimeout {
+			return fmt.Errorf("namespace %s still terminating after %s", name, namespaceTerminationTimeout)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func clearNamespaceFinalizers(ctx context.Context, kube kubernetes.Interface, ns *corev1.Namespace) error {
+	if len(ns.Spec.Finalizers) == 0 {
+		return nil
+	}
+	cp := ns.DeepCopy()
+	cp.Spec.Finalizers = nil
+	if _, err := kube.CoreV1().Namespaces().Finalize(ctx, cp, metav1.UpdateOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("clear namespace finalizers %s: %w", ns.Name, err)
+	}
+	return nil
+}
+
+func ensureDockerConfigSecret(ctx context.Context, kube kubernetes.Interface, namespace, name string, dockerConfig []byte) error {
+	secrets := kube.CoreV1().Secrets(namespace)
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Type:       corev1.SecretTypeDockerConfigJson,
+		Data:       map[string][]byte{corev1.DockerConfigJsonKey: dockerConfig},
+	}
+	current, err := secrets.Get(ctx, name, metav1.GetOptions{})
+	if err == nil {
+		current.Type = corev1.SecretTypeDockerConfigJson
+		if current.Data == nil {
+			current.Data = map[string][]byte{}
+		}
+		current.Data[corev1.DockerConfigJsonKey] = dockerConfig
+		if _, err := secrets.Update(ctx, current, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("update pull secret %s/%s: %w", namespace, name, err)
+		}
+		return nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("get pull secret %s/%s: %w", namespace, name, err)
+	}
+	if _, err := secrets.Create(ctx, secret, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create pull secret %s/%s: %w", namespace, name, err)
+	}
+	return nil
+}
+
+func waitForComputePlaneHealthDefault(ctx context.Context, req computePlaneHealthRequest) (computePlaneHealthResult, error) {
+	if req.ClusterName == "" {
+		return computePlaneHealthResult{}, fmt.Errorf("cluster name is required")
+	}
+	timeout := req.Timeout
+	if timeout <= 0 {
+		timeout = finalHealthTimeout
+	}
+	kube, err := buildKubeClientForCtx(req.KubeContext)
+	if err != nil {
+		return computePlaneHealthResult{}, fmt.Errorf("build kube client: %w", err)
+	}
+	deadline := time.Now().Add(timeout)
+	var last string
+	for {
+		backendHealth, backendErr := getNVCFBackendHealth(ctx, req.KubeContext, req.ClusterName)
+		operatorReady, operatorReason, operatorErr := namespacePodsReady(ctx, kube, namespaceNVCAOperator)
+		systemReady, systemReason, systemErr := namespacePodsReady(ctx, kube, namespaceNVCASystem)
+		switch {
+		case backendErr != nil:
+			last = backendErr.Error()
+		case !strings.EqualFold(backendHealth, "healthy"):
+			last = "NVCFBackend health is " + defaultString(backendHealth, "unknown")
+		case operatorErr != nil:
+			last = operatorErr.Error()
+		case !operatorReady:
+			last = namespaceNVCAOperator + " not ready: " + operatorReason
+		case systemErr != nil:
+			last = systemErr.Error()
+		case !systemReady:
+			last = namespaceNVCASystem + " not ready: " + systemReason
+		default:
+			return computePlaneHealthResult{BackendHealth: backendHealth}, nil
+		}
+		if time.Now().After(deadline) {
+			return computePlaneHealthResult{}, fmt.Errorf("timed out waiting for compute plane: %s", last)
+		}
+		select {
+		case <-ctx.Done():
+			return computePlaneHealthResult{}, ctx.Err()
+		case <-time.After(finalHealthPoll):
+		}
+	}
+}
+
+func getNVCFBackendHealth(ctx context.Context, kubeContext, clusterName string) (string, error) {
+	for _, field := range []string{".status.agentStatus", ".status.health"} {
+		health, err := getNVCFBackendHealthField(ctx, kubeContext, clusterName, field)
+		if err != nil {
+			return "", err
+		}
+		if health != "" {
+			return health, nil
+		}
+	}
+	return "", nil
+}
+
+func getNVCFBackendHealthField(ctx context.Context, kubeContext, clusterName, field string) (string, error) {
+	args := []string{}
+	if kubeContext != "" {
+		args = append(args, "--context", kubeContext)
+	}
+	args = append(args, "get", "nvcfbackend", "-n", namespaceNVCAOperator, clusterName, "-o", "jsonpath={"+field+"}")
+	out, err := exec.CommandContext(ctx, "kubectl", args...).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("kubectl %s: %w (%s)", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func namespacePodsReady(ctx context.Context, kube kubernetes.Interface, namespace string) (bool, string, error) {
+	pods, err := kube.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return false, "", fmt.Errorf("list pods in %s: %w", namespace, err)
+	}
+	active := 0
+	for _, pod := range pods.Items {
+		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+			continue
+		}
+		active++
+		if pod.Status.Phase != corev1.PodRunning {
+			return false, pod.Name + " phase=" + string(pod.Status.Phase), nil
+		}
+		if !podReady(pod) {
+			return false, pod.Name + " containers not ready", nil
+		}
+	}
+	if active == 0 {
+		return false, "no active pods found", nil
+	}
+	return true, "", nil
+}
+
+func podReady(pod corev1.Pod) bool {
+	for _, cond := range pod.Status.Conditions {
+		if cond.Type == corev1.PodReady {
+			return cond.Status == corev1.ConditionTrue
+		}
+	}
+	return false
 }
 
 func (r *selfHostedUpRun) handleHelmfilePhaseError(num int, name string, phase selfhosted.PhaseID, prefix string, err error, started time.Time) error {
@@ -784,15 +1279,35 @@ var runUpPreflight = func(ctx context.Context, cfg selfhosted.PreflightConfig) [
 	return selfhosted.RunPreflight(ctx, cfg)
 }
 
+func helmRuntimeModeFromPreflightResults(results []selfhosted.CheckResult) selfhosted.HelmRuntimeMode {
+	for _, r := range results {
+		if r.ID == "local-host-tools-helm-runtime" && r.Passed && r.Detail != "" {
+			mode := selfhosted.HelmRuntimeMode(r.Detail)
+			if selfhosted.IsKnownHelmRuntimeMode(mode) {
+				return mode
+			}
+		}
+	}
+	return selfhosted.HelmRuntimeHelm3Legacy
+}
+
 // runSelfHostedInit shells out to the existing nvcf-cli init command — the
 // runtime equivalent of the user typing `nvcf-cli init` themselves. Exposed
 // as a package-level var so tests can swap it out without spawning subprocesses.
 var runSelfHostedInit = func(ctx context.Context) error {
 	c := exec.CommandContext(ctx, os.Args[0], selfHostedInitArgs()...)
 	c.Stdin = os.Stdin
-	c.Stdout = os.Stdout
-	c.Stderr = os.Stderr
-	return c.Run()
+	c.Stdout = io.Discard
+	var stderr bytes.Buffer
+	c.Stderr = &stderr
+	if err := c.Run(); err != nil {
+		detail := strings.TrimSpace(stderr.String())
+		if detail != "" {
+			return fmt.Errorf("%w: %s", err, detail)
+		}
+		return err
+	}
+	return nil
 }
 
 func selfHostedInitArgs() []string {
@@ -817,53 +1332,14 @@ var authProbe = auth.Probe
 // Errors from Probe are non-fatal in "fall-through" mode: cache_corruption
 // or network errors → fall through to re-mint via init. Only init errors
 // are reported as phase_failed.
-func authGatePhase5(ctx context.Context, sink progress.EventSink, p5Start time.Time) error {
-	// Step 1: probe fingerprint (non-fatal: probe failures fall through to re-mint).
-	// LoadConfigWithoutAuth is used so missing NVCF_API_KEY / NVCF_TOKEN don't
-	// cause a hard failure here — this path runs before init has minted a token.
-	cfg, err := client.LoadConfigWithoutAuth()
+func authGatePhase5(ctx context.Context, sink progress.EventSink, _ time.Time) error {
+	fp, err := probeControlPlaneFingerprint(ctx, sink)
 	if err != nil {
-		return fmt.Errorf("load client config: %w", err)
+		return err
 	}
-	var fp *auth.Fingerprint
-	if cfg.BaseHTTPURL != "" {
-		probedFP, probeErr := authProbe(ctx, cfg.BaseHTTPURL)
-		if probeErr == nil {
-			fp = probedFP
-		} else {
-			_ = sink.Emit(ctx, progress.LastProgress{
-				Num:    5,
-				Detail: fmt.Sprintf("fingerprint probe failed (%v); falling through to re-mint", probeErr),
-				At:     time.Now().UTC(),
-			})
-		}
+	if !selfHostedRefreshToken && tryUseCachedAdminToken(ctx, sink, fp) {
+		return nil
 	}
-
-	// Step 2: try cached auth (skipped if --refresh-token).
-	if !selfHostedRefreshToken && fp != nil {
-		sm := state.NewStateManager()
-		if err := sm.Load(); err == nil {
-			if cached := sm.GetState().SelfHostedAuth; cached != nil && cached.Token != "" {
-				cachedFP := fingerprintFromRef(cached.Fingerprint)
-				cache := &auth.Cache{
-					Token:       cached.Token,
-					ExpiresAt:   cached.ExpiresAt,
-					Fingerprint: cachedFP,
-				}
-				if cache.Valid(time.Now().UTC(), fp) {
-					_ = sink.Emit(ctx, progress.LastProgress{
-						Num:    5,
-						Detail: "using cached admin token (fingerprint matches)",
-						At:     time.Now().UTC(),
-					})
-					selfHostedToken = cached.Token
-					return nil
-				}
-			}
-		}
-	}
-
-	// Step 3: re-mint via init.
 	_ = sink.Emit(ctx, progress.LastProgress{
 		Num:    5,
 		Detail: "minting admin token via API Keys service",
@@ -872,37 +1348,98 @@ func authGatePhase5(ctx context.Context, sink progress.EventSink, p5Start time.T
 	if err := runSelfHostedInit(ctx); err != nil {
 		return fmt.Errorf("init: %w", err)
 	}
-
-	// Step 4: persist Token+TokenExpiration that init wrote, alongside fingerprint.
-	if fp != nil {
-		sm := state.NewStateManager()
-		if err := sm.Load(); err != nil {
-			// Init succeeded but we can't read state — log and continue.
-			// The token is in the state file; we just couldn't add the fingerprint.
-			_ = sink.Emit(ctx, progress.LastProgress{
-				Num:    5,
-				Detail: fmt.Sprintf("warn: load state after init failed (%v); fingerprint not persisted", err),
-				At:     time.Now().UTC(),
-			})
-			return nil
-		}
-		s := sm.GetState()
-		if s.Token != "" {
-			s.SelfHostedAuth = &state.SelfHostedAuth{
-				Token:       s.Token,
-				ExpiresAt:   s.TokenExpiration,
-				Fingerprint: fingerprintRefFromAuth(fp),
-			}
-			if err := sm.Save(); err != nil {
-				_ = sink.Emit(ctx, progress.LastProgress{
-					Num:    5,
-					Detail: fmt.Sprintf("warn: save SelfHostedAuth failed (%v)", err),
-					At:     time.Now().UTC(),
-				})
-			}
-		}
-	}
+	persistAdminAuthAfterInit(ctx, sink, fp)
 	return nil
+}
+
+// probeControlPlaneFingerprint loads the client config and probes the
+// control-plane fingerprint. Probe failures are non-fatal: a nil fingerprint
+// signals the caller to fall through to a re-mint via init.
+func probeControlPlaneFingerprint(ctx context.Context, sink progress.EventSink) (*auth.Fingerprint, error) {
+	cfg, err := client.LoadConfigWithoutAuth()
+	if err != nil {
+		return nil, fmt.Errorf("load client config: %w", err)
+	}
+	if cfg.BaseHTTPURL == "" {
+		return nil, nil
+	}
+	fp, probeErr := authProbe(ctx, cfg.BaseHTTPURL)
+	if probeErr != nil {
+		_ = sink.Emit(ctx, progress.LastProgress{
+			Num:    5,
+			Detail: fmt.Sprintf("fingerprint probe failed (%v); falling through to re-mint", probeErr),
+			At:     time.Now().UTC(),
+		})
+		return nil, nil
+	}
+	return fp, nil
+}
+
+// tryUseCachedAdminToken returns true and assigns selfHostedToken when a
+// valid cached admin token matching the probed fingerprint is found.
+func tryUseCachedAdminToken(ctx context.Context, sink progress.EventSink, fp *auth.Fingerprint) bool {
+	if fp == nil {
+		return false
+	}
+	sm := state.NewStateManager()
+	if err := sm.Load(); err != nil {
+		return false
+	}
+	cached := sm.GetState().SelfHostedAuth
+	if cached == nil || cached.Token == "" {
+		return false
+	}
+	cache := &auth.Cache{
+		Token:       cached.Token,
+		ExpiresAt:   cached.ExpiresAt,
+		Fingerprint: fingerprintFromRef(cached.Fingerprint),
+	}
+	if !cache.Valid(time.Now().UTC(), fp) {
+		return false
+	}
+	_ = sink.Emit(ctx, progress.LastProgress{
+		Num:    5,
+		Detail: "using cached admin token (fingerprint matches)",
+		At:     time.Now().UTC(),
+	})
+	selfHostedToken = cached.Token
+	return true
+}
+
+// persistAdminAuthAfterInit re-reads the state file (which init populated),
+// then writes the SelfHostedAuth record so a subsequent run can match the
+// cached token against the probed fingerprint. Failures here are warnings,
+// not errors: init already wrote the token, so the next run can still use
+// it; it just won't short-circuit on the fingerprint match.
+func persistAdminAuthAfterInit(ctx context.Context, sink progress.EventSink, fp *auth.Fingerprint) {
+	if fp == nil {
+		return
+	}
+	sm := state.NewStateManager()
+	if err := sm.Load(); err != nil {
+		_ = sink.Emit(ctx, progress.LastProgress{
+			Num:    5,
+			Detail: fmt.Sprintf("warn: load state after init failed (%v); fingerprint not persisted", err),
+			At:     time.Now().UTC(),
+		})
+		return
+	}
+	s := sm.GetState()
+	if s.Token == "" {
+		return
+	}
+	s.SelfHostedAuth = &state.SelfHostedAuth{
+		Token:       s.Token,
+		ExpiresAt:   s.TokenExpiration,
+		Fingerprint: fingerprintRefFromAuth(fp),
+	}
+	if err := sm.Save(); err != nil {
+		_ = sink.Emit(ctx, progress.LastProgress{
+			Num:    5,
+			Detail: fmt.Sprintf("warn: save SelfHostedAuth failed (%v)", err),
+			At:     time.Now().UTC(),
+		})
+	}
 }
 
 // fingerprintFromRef converts the persisted state.FingerprintRef to the
@@ -996,6 +1533,7 @@ func writeRegisterValuesYAML(req registerValuesWriteRequest) error {
 		return fmt.Errorf("mkdir %s: %w", outDir, err)
 	}
 	vals := helmValues{
+		ClusterName:    req.ClusterName,
 		ClusterID:      req.ClusterID,
 		ClusterGroupID: req.ClusterGroupID,
 		NcaID:          req.NCAID,
@@ -1006,9 +1544,18 @@ func writeRegisterValuesYAML(req registerValuesWriteRequest) error {
 	if err != nil {
 		return fmt.Errorf("marshal register values: %w", err)
 	}
-	path := filepath.Join(outDir, req.ClusterName+"-register-values.yaml")
-	if err := os.WriteFile(path, body, 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
+	for _, path := range []string{legacyRegisterValuesPath(req.StackPath, req.ClusterName), nvcaValuesPath(req.StackPath, req.ClusterName)} {
+		if err := os.WriteFile(path, body, 0o644); err != nil {
+			return fmt.Errorf("write %s: %w", path, err)
+		}
 	}
 	return nil
+}
+
+func legacyRegisterValuesPath(stackPath, clusterName string) string {
+	return filepath.Join(stackPath, "out", clusterName+"-register-values.yaml")
+}
+
+func nvcaValuesPath(stackPath, clusterName string) string {
+	return filepath.Join(stackPath, "out", clusterName+"-nvca-values.yaml")
 }

@@ -43,8 +43,8 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/image-credential-helper/credhelper"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	credhelper "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/imagecredential"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zaptest"
@@ -625,10 +625,11 @@ func TestRun(t *testing.T) {
 		}
 	})
 
+	trueVal := true
 	t.Run("fail bad types on skip validate", func(t *testing.T) {
 		h, err := NewHandler(logger, "reval", HandlerOptions{
 			SkipValidateObjects: true,
-			SkipValidateImages:  true,
+			SkipValidateImages:  &trueVal,
 		})
 		require.NoError(t, err)
 		h.newImageChecker = func() imageChecker {
@@ -1417,6 +1418,60 @@ func Test_validateHelmChartURL(t *testing.T) {
 	assert.Empty(t,
 		validateHelmChartURL("https://helm.stg.ngc.nvidia.com/org"),
 	)
+}
+
+func Test_shouldSkipValidateImages(t *testing.T) {
+	boolPtr := func(v bool) *bool { return &v }
+
+	tests := []struct {
+		name               string
+		cfg                Config
+		skipValidateImages *bool
+		want               bool
+	}{
+		{
+			name: "defaults to false when no options are set",
+			cfg:  Config{},
+			want: false,
+		},
+		{
+			name:               "uses handler default when request override is unset",
+			cfg:                Config{},
+			skipValidateImages: boolPtr(true),
+			want:               true,
+		},
+		{
+			name:               "uses handler default false when request override is unset",
+			cfg:                Config{},
+			skipValidateImages: boolPtr(false),
+			want:               false,
+		},
+		{
+			name:               "request validateImages true overrides handler and does not skip",
+			cfg:                Config{ValidateImages: boolPtr(true)},
+			skipValidateImages: boolPtr(false),
+			want:               false,
+		},
+		{
+			name:               "request validateImages false overrides handler and skips",
+			cfg:                Config{ValidateImages: boolPtr(false)},
+			skipValidateImages: boolPtr(true),
+			want:               true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := &Handler{
+				HandlerOptions: HandlerOptions{
+					SkipValidateImages: tt.skipValidateImages,
+				},
+			}
+
+			got := h.shouldSkipValidateImages(tt.cfg)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
 func Test_hasTypeMeta(t *testing.T) {

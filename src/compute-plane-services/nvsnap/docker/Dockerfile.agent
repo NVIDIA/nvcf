@@ -1,0 +1,158 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# NVSNAP Agent Dockerfile - Builds CRIU from source for reproducibility
+#
+# This Dockerfile builds everything from versioned source code:
+# - CRIU from docker/phase2/criu-src/ (our forked version with GPU support)
+# - CUDA plugin
+# - restore-entrypoint from cmd/restore-entrypoint/
+#
+# Build:
+#   docker build -f docker/Dockerfile.agent -t nvsnap-agent .
+
+#############################################
+# Stage 1: Build CRIU from source
+#############################################
+FROM ubuntu:22.04 AS criu-builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install CRIU build dependencies and iproute2 (needed for 'ip' command during checkpoint)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    pkg-config \
+    libbsd-dev \
+    libcap-dev \
+    libnet1-dev \
+    libnl-3-dev \
+    libnl-route-3-dev \
+    libprotobuf-dev \
+    libprotobuf-c-dev \
+    protobuf-c-compiler \
+    protobuf-compiler \
+    python3-protobuf \
+    libgnutls28-dev \
+    libnftables-dev \
+    libaio-dev \
+    uuid-dev \
+    iproute2 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Copy CRIU source (versioned in repo at docker/phase2/criu-src/)
+COPY docker/phase2/criu-src/ /build/criu/
+
+# Build CRIU
+RUN cd criu && \
+    make clean 2>/dev/null || true && \
+    make WERROR=0 -j$(nproc) && \
+    strip criu/criu
+
+# Build CUDA plugin
+RUN cd /build/criu/plugins/cuda && \
+    make clean 2>/dev/null || true && \
+    make ARCH=x86
+
+# Create bundle with CRIU-specific libraries (not core glibc)
+RUN mkdir -p /bundle/lib /bundle/plugins && \
+    cp /build/criu/criu/criu /bundle/criu && \
+    chmod +x /bundle/criu && \
+    cp /build/criu/plugins/cuda/cuda_plugin.so /bundle/plugins/ && \
+    for lib in $(ldd /bundle/criu | grep "=> /" | awk '{print $3}'); do \
+        libname=$(basename "$lib"); \
+        case "$libname" in \
+            libc.so*|libpthread.so*|libdl.so*|ld-linux*|libm.so*|librt.so*) \
+                echo "Skipping core lib: $libname" ;; \
+            *) \
+                cp -L "$lib" /bundle/lib/ ;; \
+        esac; \
+    done && \
+    for lib in $(ldd /bundle/plugins/cuda_plugin.so 2>/dev/null | grep "=> /" | awk '{print $3}'); do \
+        libname=$(basename "$lib"); \
+        case "$libname" in \
+            libc.so*|libpthread.so*|libdl.so*|ld-linux*|libm.so*|librt.so*) ;; \
+            *) cp -L "$lib" /bundle/lib/ 2>/dev/null || true ;; \
+        esac; \
+    done
+
+# Create iptables shims (static binaries that just return 0)
+RUN printf '#include <stdlib.h>\nint main(){return 0;}' > /tmp/true.c && \
+    gcc -static -o /bundle/iptables-restore /tmp/true.c && \
+    cp /bundle/iptables-restore /bundle/ip6tables-restore
+
+# Copy 'ip' command and its dependencies (needed by CRIU for network namespace dumping)
+RUN cp /usr/sbin/ip /bundle/ip && \
+    chmod +x /bundle/ip && \
+    for lib in $(ldd /bundle/ip | grep "=> /" | awk '{print $3}'); do \
+        libname=$(basename "$lib"); \
+        case "$libname" in \
+            libc.so*|libpthread.so*|libdl.so*|ld-linux*|libm.so*|librt.so*) ;; \
+            *) cp -L "$lib" /bundle/lib/ 2>/dev/null || true ;; \
+        esac; \
+    done
+
+# Verify CRIU works
+RUN LD_LIBRARY_PATH=/bundle/lib /bundle/criu --version
+
+#############################################
+# Stage 2: Build Go binaries
+#############################################
+FROM golang:1.24-bookworm AS go-builder
+
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+# Build nvsnap-agent
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /app/bin/nvsnap-agent ./cmd/agent
+
+# Build restore-entrypoint
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /app/bin/restore-entrypoint ./cmd/restore-entrypoint
+
+#############################################
+# Stage 3: Final image
+#############################################
+FROM ubuntu:22.04
+
+LABEL org.opencontainers.image.title="NVSNAP Agent"
+LABEL org.opencontainers.image.description="GPU Checkpoint/Restore Node Agent with CRIU"
+
+# Install minimal runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create directory structure matching what restore pods expect
+WORKDIR /criu-bundle
+
+# Copy CRIU bundle from builder
+COPY --from=criu-builder /bundle/ /criu-bundle/
+
+# Copy cuda-checkpoint (NVIDIA proprietary binary - must be provided)
+# This is copied from docker/agent/cuda-checkpoint or bin/cuda-checkpoint
+COPY docker/agent/cuda-checkpoint /criu-bundle/cuda-checkpoint
+
+# Copy Go binaries
+COPY --from=go-builder /app/bin/nvsnap-agent /criu-bundle/nvsnap-agent
+COPY --from=go-builder /app/bin/restore-entrypoint /criu-bundle/restore-entrypoint
+
+# Create wrapper scripts
+# criu-wrapper: Sets LD_LIBRARY_PATH and PATH so CRIU can find bundled libs and 'ip' command
+RUN echo '#!/bin/bash\nBUNDLE_DIR="$(dirname "$(readlink -f "$0")")"\nexport LD_LIBRARY_PATH="$BUNDLE_DIR/lib:${LD_LIBRARY_PATH:-}"\nexport PATH="$BUNDLE_DIR:$PATH"\nexec "$BUNDLE_DIR/criu" --libdir "$BUNDLE_DIR/plugins" "$@"' > /criu-bundle/criu-wrapper && \
+    chmod +x /criu-bundle/criu-wrapper
+
+RUN echo '#!/bin/bash\nBUNDLE_DIR="$(dirname "$(readlink -f "$0")")"\nexport PATH="$BUNDLE_DIR:$PATH"\nexport CRIU_BUNDLE_PATH="$BUNDLE_DIR"\nexec "$BUNDLE_DIR/restore-entrypoint" "$@"' > /criu-bundle/restore-entrypoint-wrapper && \
+    chmod +x /criu-bundle/restore-entrypoint-wrapper
+
+# Create work directories
+RUN mkdir -p /var/lib/nvsnap /checkpoints
+
+# Verify CRIU works in final image
+RUN /criu-bundle/criu-wrapper --version
+
+ENTRYPOINT ["/criu-bundle/nvsnap-agent"]

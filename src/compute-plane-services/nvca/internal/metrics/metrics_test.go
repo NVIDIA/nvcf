@@ -31,6 +31,7 @@ import (
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
 	metricsgctypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/gctypes"
 	modelcachetypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/modelcachetypes"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/workloadtypes"
@@ -916,7 +917,7 @@ func TestModelCacheResultMetric(t *testing.T) {
 	require.NotNil(t, metrics.ModelCacheResultTotal)
 
 	t.Run("RecordSuccess", func(t *testing.T) {
-		metrics.RecordModelCacheResult("success", "")
+		metrics.RecordModelCacheResult("success", "", "nvmesh")
 
 		metricFamilies, err := reg.Gather()
 		require.NoError(t, err)
@@ -927,18 +928,20 @@ func TestModelCacheResultMetric(t *testing.T) {
 				found = true
 				require.Greater(t, len(mf.Metric), 0)
 
-				// Find the success metric
+				// Find the success metric for the nvmesh backend.
 				for _, metric := range mf.Metric {
-					var resultLabel, reasonLabel string
+					var resultLabel, reasonLabel, backendLabel string
 					for _, label := range metric.Label {
-						if *label.Name == ResultLabel {
+						switch *label.Name {
+						case ResultLabel:
 							resultLabel = *label.Value
-						}
-						if *label.Name == FailureReasonLabel {
+						case FailureReasonLabel:
 							reasonLabel = *label.Value
+						case BackendLabel:
+							backendLabel = *label.Value
 						}
 					}
-					if resultLabel == "success" {
+					if resultLabel == "success" && backendLabel == "nvmesh" {
 						assert.Equal(t, "", reasonLabel, "Success should have empty failure_reason")
 						assert.Equal(t, float64(1), *metric.Counter.Value)
 					}
@@ -949,7 +952,7 @@ func TestModelCacheResultMetric(t *testing.T) {
 	})
 
 	t.Run("RecordFailure", func(t *testing.T) {
-		metrics.RecordModelCacheResult("failure", "pvc_bind_failed")
+		metrics.RecordModelCacheResult("failure", "pvc_bind_failed", "samba")
 
 		metricFamilies, err := reg.Gather()
 		require.NoError(t, err)
@@ -958,23 +961,25 @@ func TestModelCacheResultMetric(t *testing.T) {
 		for _, mf := range metricFamilies {
 			if *mf.Name == ModelCacheResultTotalMetricName {
 				for _, metric := range mf.Metric {
-					var resultLabel, reasonLabel string
+					var resultLabel, reasonLabel, backendLabel string
 					for _, label := range metric.Label {
-						if *label.Name == ResultLabel {
+						switch *label.Name {
+						case ResultLabel:
 							resultLabel = *label.Value
-						}
-						if *label.Name == FailureReasonLabel {
+						case FailureReasonLabel:
 							reasonLabel = *label.Value
+						case BackendLabel:
+							backendLabel = *label.Value
 						}
 					}
-					if resultLabel == "failure" && reasonLabel == "pvc_bind_failed" {
+					if resultLabel == "failure" && reasonLabel == "pvc_bind_failed" && backendLabel == "samba" {
 						found = true
 						assert.Equal(t, float64(1), *metric.Counter.Value)
 					}
 				}
 			}
 		}
-		assert.True(t, found, "Failure metric with pvc_bind_failed reason should be found")
+		assert.True(t, found, "Failure metric with pvc_bind_failed reason and samba backend should be found")
 	})
 }
 
@@ -983,11 +988,19 @@ func TestModelCacheResultMetricNilSafety(t *testing.T) {
 	var metrics *Metrics
 
 	assert.NotPanics(t, func() {
-		metrics.RecordModelCacheResult("success", "")
+		metrics.RecordModelCacheResult("success", "", "nvmesh")
 	})
 
 	assert.NotPanics(t, func() {
-		metrics.RecordModelCacheResult("failure", "pvc_bind_failed")
+		metrics.RecordModelCacheResult("failure", "pvc_bind_failed", "samba")
+	})
+
+	assert.NotPanics(t, func() {
+		metrics.RecordModelCacheBackendSelected("samba")
+		metrics.RecordModelCachePopulate("samba")
+		metrics.RecordModelCacheReuse("samba")
+		metrics.RecordModelCacheReclaimed("samba")
+		metrics.SetModelCacheBackendCount("samba", 3)
 	})
 }
 
@@ -1000,18 +1013,19 @@ func TestModelCacheResultMetricLabels(t *testing.T) {
 	t.Cleanup(func() { metrics.Destroy() })
 	require.NotNil(t, metrics)
 
-	metrics.RecordModelCacheResult("failure", "image_pull")
+	metrics.RecordModelCacheResult("failure", "image_pull", "nvmesh")
 
 	metricFamilies, err := reg.Gather()
 	require.NoError(t, err)
 
-	// Should have: ClusterName, ClusterGroup, Version, Result, FailureReason (no NCAID for storage metrics)
+	// Should have: ClusterName, ClusterGroup, Version, Result, FailureReason, Backend (no NCAID for storage metrics)
 	expectedLabels := map[string]string{
 		ClusterNameLabel:   "test-cluster",
 		ClusterGroupLabel:  "test-group",
 		VersionLabel:       "v1.0.0",
 		ResultLabel:        "failure",
 		FailureReasonLabel: "image_pull",
+		BackendLabel:       "nvmesh",
 	}
 
 	found := false
@@ -1023,7 +1037,8 @@ func TestModelCacheResultMetricLabels(t *testing.T) {
 				for _, label := range metric.Label {
 					actualLabels[*label.Name] = *label.Value
 				}
-				if actualLabels[ResultLabel] == "failure" && actualLabels[FailureReasonLabel] == "image_pull" {
+				if actualLabels[ResultLabel] == "failure" && actualLabels[FailureReasonLabel] == "image_pull" &&
+					actualLabels[BackendLabel] == "nvmesh" {
 					found = true
 					for expectedName, expectedValue := range expectedLabels {
 						actualValue, exists := actualLabels[expectedName]
@@ -1050,7 +1065,7 @@ func TestModelCacheResultMetricFailureReasons(t *testing.T) {
 			metrics := FromContext(ctx)
 			require.NotNil(t, metrics)
 
-			metrics.RecordModelCacheResult("failure", reason)
+			metrics.RecordModelCacheResult("failure", reason, "nvmesh")
 
 			metricFamilies, err := reg.Gather()
 			require.NoError(t, err)
@@ -1059,11 +1074,18 @@ func TestModelCacheResultMetricFailureReasons(t *testing.T) {
 			for _, mf := range metricFamilies {
 				if *mf.Name == ModelCacheResultTotalMetricName {
 					for _, metric := range mf.Metric {
+						var reasonLabel, backendLabel string
 						for _, label := range metric.Label {
-							if *label.Name == FailureReasonLabel && *label.Value == reason {
-								found = true
-								assert.Equal(t, float64(1), *metric.Counter.Value)
+							switch *label.Name {
+							case FailureReasonLabel:
+								reasonLabel = *label.Value
+							case BackendLabel:
+								backendLabel = *label.Value
 							}
+						}
+						if reasonLabel == reason && backendLabel == "nvmesh" {
+							found = true
+							assert.Equal(t, float64(1), *metric.Counter.Value)
 						}
 					}
 				}
@@ -1131,6 +1153,100 @@ func TestKataRuntimeIsolationEnabledMetricNilSafety(t *testing.T) {
 	assert.NotPanics(t, func() {
 		metrics.SetKataRuntimeIsolationEnabled(false)
 	})
+}
+
+// TestMaintenanceModeStateMetric tests the maintenance-mode gauge: exactly one
+// mode series is 1 and the rest are 0 (one-hot encoding).
+func TestMaintenanceModeStateMetric(t *testing.T) {
+	ctx := context.Background()
+	reg := prometheus.NewRegistry()
+	ctx = WithDefaultMetrics(ctx, "nca-123", "test-cluster", "test-group", "v1.0.0", WithRegisterer(reg))
+	metrics := FromContext(ctx)
+	t.Cleanup(func() { metrics.Destroy() })
+	require.NotNil(t, metrics)
+	require.NotNil(t, metrics.MaintenanceModeState)
+
+	// modeValues returns the gauge value keyed by the `mode` label value.
+	modeValues := func() map[string]float64 {
+		metricFamilies, err := reg.Gather()
+		require.NoError(t, err)
+		out := map[string]float64{}
+		for _, mf := range metricFamilies {
+			if *mf.Name != MaintenanceModeStateMetricName {
+				continue
+			}
+			for _, metric := range mf.Metric {
+				for _, lp := range metric.Label {
+					if *lp.Name == MaintenanceModeLabel {
+						out[*lp.Value] = *metric.Gauge.Value
+					}
+				}
+			}
+		}
+		return out
+	}
+
+	t.Run("InitializedToZeroForAllModes", func(t *testing.T) {
+		values := modeValues()
+		require.Len(t, values, len(types.AllMaintenanceModes), "every mode series should be present")
+		for _, mm := range types.AllMaintenanceModes {
+			assert.Equal(t, float64(0), values[mm.String()], "mode %s should start at 0", mm)
+		}
+	})
+
+	t.Run("OneHotOnSet", func(t *testing.T) {
+		metrics.SetMaintenanceModeState(types.MaintenanceModeCordonAndDrain)
+		values := modeValues()
+		assert.Equal(t, float64(1), values[types.MaintenanceModeCordonAndDrain.String()])
+		assert.Equal(t, float64(0), values[types.MaintenanceModeCordon.String()])
+		assert.Equal(t, float64(0), values[types.MaintenanceModeNone.String()])
+	})
+
+	t.Run("SwitchClearsPreviousMode", func(t *testing.T) {
+		metrics.SetMaintenanceModeState(types.MaintenanceModeNone)
+		values := modeValues()
+		assert.Equal(t, float64(1), values[types.MaintenanceModeNone.String()])
+		assert.Equal(t, float64(0), values[types.MaintenanceModeCordonAndDrain.String()])
+		assert.Equal(t, float64(0), values[types.MaintenanceModeCordon.String()])
+	})
+}
+
+// TestMaintenanceModeStateMetricNilSafety tests nil-safety.
+func TestMaintenanceModeStateMetricNilSafety(t *testing.T) {
+	var metrics *Metrics
+	assert.NotPanics(t, func() {
+		metrics.SetMaintenanceModeState(types.MaintenanceModeCordon)
+	})
+}
+
+// TestWithMaintenanceModeOption tests the WithMaintenanceMode option sets the
+// active mode series to 1 at construction.
+func TestWithMaintenanceModeOption(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	ctx := WithDefaultMetrics(context.Background(), "nca-123", "test-cluster", "test-group", "v1.0.0",
+		WithRegisterer(reg),
+		WithMaintenanceMode(types.MaintenanceModeCordon))
+	metrics := FromContext(ctx)
+	t.Cleanup(func() { metrics.Destroy() })
+	require.NotNil(t, metrics)
+
+	metricFamilies, err := reg.Gather()
+	require.NoError(t, err)
+	found := false
+	for _, mf := range metricFamilies {
+		if *mf.Name != MaintenanceModeStateMetricName {
+			continue
+		}
+		for _, metric := range mf.Metric {
+			for _, lp := range metric.Label {
+				if *lp.Name == MaintenanceModeLabel && *lp.Value == types.MaintenanceModeCordon.String() {
+					assert.Equal(t, float64(1), *metric.Gauge.Value, "configured mode should be 1")
+					found = true
+				}
+			}
+		}
+	}
+	assert.True(t, found, "MaintenanceModeState metric for CordonOnly should be found")
 }
 
 // TestWithKataRuntimeIsolationEnabledOption tests the WithKataRuntimeIsolationEnabled option
@@ -1426,7 +1542,7 @@ func TestMetricsInitializedToZero(t *testing.T) {
 
 	t.Run("K8sAPISuccessTotal initialized to zero", func(t *testing.T) {
 		expectedResources := []string{
-			"csidriver", "namespace", "node", "pod", "runtimeclass",
+			"csidriver", "deployment", "namespace", "node", "pod", "runtimeclass",
 			"secret", "serviceaccount", "icmsrequest", "storageclass", "storagerequests",
 		}
 		for _, resource := range expectedResources {
@@ -1438,13 +1554,30 @@ func TestMetricsInitializedToZero(t *testing.T) {
 
 	t.Run("K8sAPIFailureTotal initialized to zero", func(t *testing.T) {
 		expectedResources := []string{
-			"csidriver", "namespace", "node", "pod", "runtimeclass",
+			"csidriver", "deployment", "namespace", "node", "pod", "runtimeclass",
 			"secret", "serviceaccount", "icmsrequest", "storageclass", "storagerequests",
 		}
 		for _, resource := range expectedResources {
 			value, found := findMetricValue(K8sAPIFailureTotalMetricName, "resource", resource)
 			assert.True(t, found, "K8sAPIFailureTotal should be initialized for resource %s", resource)
 			assert.Equal(t, float64(0), value, "K8sAPIFailureTotal should be zero for resource %s", resource)
+		}
+	})
+
+	t.Run("ModelCache backend counters initialized to zero", func(t *testing.T) {
+		counters := []string{
+			ModelCacheBackendSelectedTotalMetricName,
+			ModelCachePopulateTotalMetricName,
+			ModelCacheReuseTotalMetricName,
+			ModelCacheReclaimedTotalMetricName,
+		}
+		backends := []string{"nvmesh", "sharedfs", "samba", "ephemeral"}
+		for _, name := range counters {
+			for _, backend := range backends {
+				value, found := findMetricValue(name, BackendLabel, backend)
+				assert.True(t, found, "%s should be initialized for backend %s", name, backend)
+				assert.Equal(t, float64(0), value, "%s should be zero for backend %s", name, backend)
+			}
 		}
 	})
 
@@ -1712,6 +1845,48 @@ func TestMetricsInitializedToZero(t *testing.T) {
 			assert.True(t, found, "UpstreamRequestTotal should be initialized for operation=%s,status=success", op)
 			assert.Equal(t, float64(0), value, "UpstreamRequestTotal should be zero for operation=%s,status=success", op)
 		}
+	})
+
+	t.Run("StorageRequestDuration pre-registered for all phases", func(t *testing.T) {
+		// Verify all 6 storage phases appear on the first scrape so Prometheus panels
+		// can compute Ready vs all-terminal ratios without gaps.
+		findHistogramCount := func(phase string) (uint64, bool) {
+			for _, mf := range metricFamilies {
+				if *mf.Name == StorageRequestDurationMetricName {
+					for _, metric := range mf.Metric {
+						for _, label := range metric.Label {
+							if *label.Name == StorageRequestPhaseLabel && *label.Value == phase {
+								return metric.Histogram.GetSampleCount(), true
+							}
+						}
+					}
+				}
+			}
+			return 0, false
+		}
+		for _, phase := range []string{"Pending", "InitRunning", "Creating", "Ready", "Failed", "RuntimeError"} {
+			count, found := findHistogramCount(phase)
+			assert.True(t, found, "StorageRequestDuration should be pre-registered for phase %s", phase)
+			assert.Equal(t, uint64(0), count, "StorageRequestDuration count should be zero for phase %s", phase)
+		}
+	})
+
+	t.Run("StorageRequestDuration uses long-running SLO buckets", func(t *testing.T) {
+		// The metric must be a histogram with the coarse, minutes-scale buckets tuned
+		// for the 4-minute (240s) provisioning SLO, including the 240s boundary.
+		var bounds []float64
+		for _, mf := range metricFamilies {
+			if *mf.Name == StorageRequestDurationMetricName {
+				require.NotEmpty(t, mf.Metric)
+				for _, b := range mf.Metric[0].Histogram.Bucket {
+					bounds = append(bounds, b.GetUpperBound())
+				}
+				break
+			}
+		}
+		assert.Equal(t, storageRequestDurationBucketsSeconds, bounds,
+			"histogram bucket boundaries must match the OTel-aligned long-running buckets")
+		assert.Contains(t, bounds, float64(240), "the 240s SLO boundary must be a bucket")
 	})
 }
 
@@ -2218,4 +2393,188 @@ func TestRecordUpstreamRequestNilSafety(t *testing.T) {
 	var m *Metrics
 	assert.NotPanics(t, func() { m.RecordUpstreamRequest(UpstreamOperationHeartbeat, nil) })
 	assert.NotPanics(t, func() { m.RecordUpstreamRequest(UpstreamOperationHeartbeat, fmt.Errorf("error")) })
+}
+
+// gatherClusterValidatorSeries returns every series for a cluster-validator
+// metric family, so tests can assert which series are exposed.
+func gatherClusterValidatorSeries(t *testing.T, reg *prometheus.Registry, name string) []*promdto.Metric {
+	t.Helper()
+	mfs, err := reg.Gather()
+	require.NoError(t, err)
+	for _, mf := range mfs {
+		if mf.GetName() == name {
+			return mf.Metric
+		}
+	}
+	return nil
+}
+
+func labelValue(m *promdto.Metric, key string) string {
+	for _, l := range m.Label {
+		if l.GetName() == key {
+			return l.GetValue()
+		}
+	}
+	return ""
+}
+
+func hasLabel(m *promdto.Metric, key string) bool {
+	for _, l := range m.Label {
+		if l.GetName() == key {
+			return true
+		}
+	}
+	return false
+}
+
+// TestClusterValidatorMetrics_BaselineThenUpdateInPlace verifies the gauges
+// start at the init-to-zero baseline and that a real run updates the same
+// series in place. The metrics carry no run_timestamp label, so there is no
+// per-run series churn.
+func TestClusterValidatorMetrics_BaselineThenUpdateInPlace(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	ctx := WithDefaultMetrics(context.Background(), "nca-1", "c1", "g1", "v1", WithRegisterer(reg))
+	m := FromContext(ctx)
+	require.NotNil(t, m)
+	t.Cleanup(func() { m.Destroy() })
+
+	// At init: exactly one baseline series at 0, with no run_timestamp label.
+	ready := gatherClusterValidatorSeries(t, reg, ClusterValidatorReadyMetricName)
+	require.Len(t, ready, 1)
+	assert.False(t, hasLabel(ready[0], "run_timestamp"), "metrics must not carry a run_timestamp label")
+	assert.Equal(t, 0.0, ready[0].GetGauge().GetValue())
+
+	// First real run updates the same series in place.
+	m.SetClusterValidatorSummary(&ClusterValidatorSummary{
+		RanAtUnixSec:    1781175999,
+		DurationSeconds: 90.8,
+		VerdictReady:    true,
+		Checks: map[string]bool{
+			"control_plane": true,
+			"smb_csi":       true,
+		},
+		Endpoints: map[string]ClusterValidatorEndpoint{
+			"NGC API": {Reachable: true, Critical: true},
+		},
+	})
+
+	ready = gatherClusterValidatorSeries(t, reg, ClusterValidatorReadyMetricName)
+	require.Len(t, ready, 1, "ready stays a single series, updated in place")
+	assert.False(t, hasLabel(ready[0], "run_timestamp"))
+	assert.Equal(t, 1.0, ready[0].GetGauge().GetValue())
+
+	// LastRunTimestamp exposes the run time as a value (not a label).
+	lrt := gatherClusterValidatorSeries(t, reg, ClusterValidatorLastRunTimestampMetricName)
+	require.Len(t, lrt, 1)
+	assert.Equal(t, float64(1781175999), lrt[0].GetGauge().GetValue())
+}
+
+// TestClusterValidatorMetrics_RunUpdatesInPlaceAndPrunes confirms a new run
+// overwrites the fixed gauges in place (no accumulation) and prunes
+// config-driven series the new run no longer reports.
+func TestClusterValidatorMetrics_RunUpdatesInPlaceAndPrunes(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	ctx := WithDefaultMetrics(context.Background(), "nca-1", "c1", "g1", "v1", WithRegisterer(reg))
+	m := FromContext(ctx)
+	require.NotNil(t, m)
+	t.Cleanup(func() { m.Destroy() })
+
+	// Run 1: ready, with one configured endpoint.
+	m.SetClusterValidatorSummary(&ClusterValidatorSummary{
+		RanAtUnixSec: 1, VerdictReady: true,
+		Checks:    map[string]bool{"control_plane": true},
+		Endpoints: map[string]ClusterValidatorEndpoint{"NGC API": {Reachable: true, Critical: true}},
+	})
+	// Run 2: not ready, endpoint removed from config.
+	m.SetClusterValidatorSummary(&ClusterValidatorSummary{
+		RanAtUnixSec: 2, VerdictReady: false,
+		Checks: map[string]bool{"control_plane": false},
+	})
+
+	ready := gatherClusterValidatorSeries(t, reg, ClusterValidatorReadyMetricName)
+	require.Len(t, ready, 1, "ready is a single series updated in place")
+	assert.Equal(t, 0.0, ready[0].GetGauge().GetValue(), "in-place update reflects the latest run")
+
+	assert.Empty(t, gatherClusterValidatorSeries(t, reg, ClusterValidatorEndpointReachableMetricName),
+		"an endpoint removed from config must be pruned")
+}
+
+// TestClusterValidatorMetrics_ResetRestoresBaseline confirms the explicit
+// reset returns the gauges to the init-to-zero baseline.
+func TestClusterValidatorMetrics_ResetRestoresBaseline(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	ctx := WithDefaultMetrics(context.Background(), "nca-1", "c1", "g1", "v1", WithRegisterer(reg))
+	m := FromContext(ctx)
+	require.NotNil(t, m)
+	t.Cleanup(func() { m.Destroy() })
+
+	m.SetClusterValidatorSummary(&ClusterValidatorSummary{
+		RanAtUnixSec: 1, VerdictReady: true,
+		Checks: map[string]bool{"control_plane": true},
+	})
+	m.ResetClusterValidatorMetrics()
+
+	ready := gatherClusterValidatorSeries(t, reg, ClusterValidatorReadyMetricName)
+	require.Len(t, ready, 1, "reset must restore a single baseline series")
+	assert.Equal(t, 0.0, ready[0].GetGauge().GetValue())
+}
+
+// TestClusterValidatorCheckKeysSync guards the two hand-maintained check-key
+// lists against drift: the init-to-zero baseline in metrics
+// (clusterValidatorCheckKeys) must expose exactly the same checks the validator
+// emits (clustervalidator.AllCheckKeys). If they diverge, the baseline would
+// initialize a different set than real runs produce — a silent metric gap.
+func TestClusterValidatorCheckKeysSync(t *testing.T) {
+	assert.ElementsMatch(t, clustervalidator.AllCheckKeys, clusterValidatorCheckKeys(),
+		"clusterValidatorCheckKeys() must match clustervalidator.AllCheckKeys; "+
+			"when adding a CheckKey* constant, update both lists")
+}
+
+// TestClusterValidatorMetrics_NetpolDirectionalSeries confirms each pair
+// emits one series per (direction, policy_side) carrying that side's
+// allow/deny status, and that the prior run's tuples are pruned.
+func TestClusterValidatorMetrics_NetpolDirectionalSeries(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	ctx := WithDefaultMetrics(context.Background(), "nca-1", "c1", "g1", "v1", WithRegisterer(reg))
+	m := FromContext(ctx)
+	require.NotNil(t, m)
+	t.Cleanup(func() { m.Destroy() })
+
+	m.SetClusterValidatorSummary(&ClusterValidatorSummary{
+		RanAtUnixSec: 1, VerdictReady: false,
+		NetpolPairs: map[string]ClusterValidatorNetpolPair{
+			"agent-to-api": {
+				Passed:   false,
+				Critical: true,
+				Directions: map[string]ClusterValidatorNetpolDirection{
+					"a_to_b": {EgressAllowed: true, IngressAllowed: true},
+					"b_to_a": {EgressAllowed: true, IngressAllowed: false},
+				},
+			},
+		},
+	})
+
+	series := gatherClusterValidatorSeries(t, reg, ClusterValidatorNetpolPairPassedMetricName)
+	require.Len(t, series, 4, "one series per direction × policy_side")
+
+	type key struct{ direction, side string }
+	got := make(map[key]float64, 4)
+	for _, s := range series {
+		assert.Equal(t, "agent-to-api", labelValue(s, ClusterValidatorNetpolPairLabel))
+		assert.Equal(t, "true", labelValue(s, ClusterValidatorCriticalLabel))
+		assert.False(t, hasLabel(s, "run_timestamp"), "netpol series must not carry a run_timestamp label")
+		got[key{labelValue(s, ClusterValidatorDirectionLabel), labelValue(s, ClusterValidatorPolicySideLabel)}] =
+			s.GetGauge().GetValue()
+	}
+	assert.Equal(t, 1.0, got[key{"a_to_b", "egress"}])
+	assert.Equal(t, 1.0, got[key{"a_to_b", "ingress"}])
+	assert.Equal(t, 1.0, got[key{"b_to_a", "egress"}])
+	assert.Equal(t, 0.0, got[key{"b_to_a", "ingress"}], "b_to_a ingress is the blocked side")
+
+	// A later run that drops the pair must prune every directional series.
+	m.SetClusterValidatorSummary(&ClusterValidatorSummary{
+		RanAtUnixSec: 2, VerdictReady: true,
+	})
+	assert.Empty(t, gatherClusterValidatorSeries(t, reg, ClusterValidatorNetpolPairPassedMetricName),
+		"netpol series from the prior run must be pruned when the pair is gone")
 }

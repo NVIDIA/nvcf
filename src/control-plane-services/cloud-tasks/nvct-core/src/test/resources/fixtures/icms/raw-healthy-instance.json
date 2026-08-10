@@ -1,0 +1,25 @@
+{
+  "CreateTime": "2023-07-06T07:17:53.282Z",
+  "InstanceId": "%s",
+  "LaunchSpecification": {
+    "InstanceType": "%s",
+    "ContainerImage": "stg.nvcr.io/nv-cf/guineapig-1/ediffi:0.0.3",
+    "Placement": null,
+    "Gpu": "%s",
+    "Backend": "GFN",
+    "NcaId": "test-nca-id"
+  },
+  "LaunchedAvailabilityZone": "NP-LAX-03",
+  "InstanceRequestId": "%s",
+  "CloudProvider": "GFN",
+  "State": "active",
+  "Status": {
+    "Code": "fulfilled",
+    "Message": "Your instance request is fulfilled",
+    "UpdateTime": "2023-07-06T07:57:06.731Z"
+  },
+  "InstanceState": {
+    "Name": "running"
+  },
+  "InstanceInterruptionBehavior": "terminate"
+}

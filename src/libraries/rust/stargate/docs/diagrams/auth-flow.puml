@@ -1,0 +1,48 @@
+@startuml
+title Authentication Flows
+
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam participantPadding 15
+skinparam sequenceMessageAlign center
+
+participant "Client" as Client
+
+box "Colocated" #f9f9f0
+  participant "LLM Gateway" as Gateway #fde8e8
+  participant "Stargate" as SG #f0f7e8
+end box
+
+participant "NVCF API" as NVCF #f5e6ff
+participant "Worker" as Worker #e8f4fd
+
+== 1. Worker Registration (gRPC) ==
+Worker -> SG: RegisterInferenceServer(stream open)\nAuthorization: Bearer <worker_identity_token>
+SG -> NVCF: AuthLlmWorker(worker_identity_token)
+NVCF --> SG: routing_key
+SG -> SG: store routing_key with\nregistered worker identity
+
+== 2. Worker QUIC Reverse Tunnel ==
+Worker -> SG: QUIC connect + handshake\n(includes worker_identity_token)
+SG -> NVCF: AuthLlmWorker(worker_identity_token)
+NVCF --> SG: routing_key
+SG -> SG: compare routing_key\nwith gRPC registration
+SG --> Worker: ACK
+
+== 3. Inference Request ==
+Client -> Gateway: POST /v1/chat/completions\nAuthorization: Bearer <api_key>\nnvcf-function-id: <function_id>\n\n{"model": "my-model", ...}
+note right of Client
+  nvcf-function-id header name
+  is configurable.
+end note
+Gateway -> NVCF: validate api_key
+NVCF --> Gateway: routing_key, allowed_models, rate_limits
+note right of Gateway
+  Response is cached.
+end note
+
+Gateway -> SG: POST /v1/chat/completions\nx-routing-key: <routing_key>\nx-model: <model>\nx-request-id: <request_id>\nx-input-tokens: <estimate>\n\n{"stream": true, ...}
+SG -> SG: lookup registered workers\nmatching (routing_key, model)
+SG -> Worker: proxied request over QUIC
+
+@enduml

@@ -14,16 +14,17 @@
 # limitations under the License.
 
 {{- if (include "nvcaop.clusterValidatorEnabled" .) }}
+{{- $cv := include "nvcaop.clusterValidatorConfig" . | fromYaml }}
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ .Values.clusterValidator.configMapName | default "cluster-validator-network-checks" }}
+  name: {{ $cv.configMapName }}
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "nvcaop.labels" . | nindent 4 }}
     app.kubernetes.io/component: validation
 data:
   config.yaml: |
-    {{- .Values.clusterValidator.networkChecks | default dict | toYaml | nindent 4 }}
+    {{- $cv.networkChecks | toYaml | nindent 4 }}
 {{- end }}

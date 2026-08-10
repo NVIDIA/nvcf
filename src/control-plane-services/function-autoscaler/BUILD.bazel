@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Cargo workspace files exported here for crate_universe's
+# `crate.from_cargo` extension to read them by label.
+exports_files([
+    "Cargo.lock",
+    "Cargo.toml",
+])
+
+alias(
+    name = "rs-autoscaler",
+    actual = "//src/control-plane-services/function-autoscaler/crates/server:server",
+    visibility = ["//visibility:public"],
+)

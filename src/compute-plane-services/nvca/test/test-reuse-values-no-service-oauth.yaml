@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Simulates `helm upgrade --reuse-values` from a pre-3.0.0-rc.12 chart, where the
+# agent.serviceOAuth default tree did not yet exist. With --reuse-values Helm reuses
+# the prior release's values and does NOT merge the new chart defaults, so
+# agent.serviceOAuth is absent. Setting it to null here removes it from the merged
+# values (Helm coalesce), reproducing the reported upgrade failure. The cluster-dto
+# ConfigMaps must render nil-safely instead of failing on .Values.agent.serviceOAuth.helmReVal.
+agent:
+  serviceOAuth: null

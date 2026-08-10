@@ -96,27 +96,23 @@ type ClusterConfig struct {
 	BackendType            string   `json:"backendType,omitempty"`
 	Attributes             []string `json:"attributes,omitempty"`
 	K8sClusterNetworkCIDRs []string `json:"k8sClusterNetworkCIDRs,omitempty"`
-}
 
-const (
-	RolloverServiceURLStaging = "https://stg.api.ros.nvidia.com"
-	RolloverServiceURLProd    = "https://api.ros.nvidia.com"
-)
-
-// RolloverServiceURL returns the Rollover Service URL for the given environment type.
-func (cfg *ClusterConfig) RolloverServiceURL(envType EnvType) string {
-	if envType == EnvTypeStage {
-		return RolloverServiceURLStaging
-	}
-	return RolloverServiceURLProd
+	// Cryo configures the per-cluster behavior of the Cryo
+	// checkpoint/restore integration. Empty (or unset Enabled flag)
+	// → integration disabled on this cluster; pod creation behaves
+	// identically to today. The global featureflag.CryoCheckpointRestore
+	// short-circuits this field — both must be true for either hook
+	// to fire. See docs/users/cryo/CRYO-INTEGRATION-DESIGN.md.
+	Cryo *CryoConfig `json:"cryo,omitempty"`
 }
 
 // +k8s:openapi-gen=true
 type ICMSConfig struct {
-	ICMSServiceURL string `json:"icmsServiceURL"`
-	AWSEndpointURL string `json:"awsEndpointURL,omitempty"`
-	IsLocal        bool   `json:"isLocal,omitempty"`
-	TokenURL       string `json:"tokenURL"`
+	ICMSServiceURL                string `json:"icmsServiceURL"`
+	ICMSServiceHostHeaderOverride string `json:"icmsServiceHostHeaderOverride,omitempty"`
+	AWSEndpointURL                string `json:"awsEndpointURL,omitempty"`
+	IsLocal                       bool   `json:"isLocal,omitempty"`
+	TokenURL                      string `json:"tokenURL"`
 }
 
 // +k8s:openapi-gen=true
@@ -215,8 +211,100 @@ const (
 
 // +k8s:openapi-gen=true
 type MiniServiceConfig struct {
-	HelmReValServiceURL string             `json:"helmReValServiceURL"`
-	CacheDirSize        *resource.Quantity `json:"cacheDirSize"`
+	HelmReValServiceURL                string             `json:"helmReValServiceURL"`
+	HelmReValServiceHostHeaderOverride string             `json:"helmReValServiceHostHeaderOverride,omitempty"`
+	CacheDirSize                       *resource.Quantity `json:"cacheDirSize"`
+}
+
+const (
+	// DefaultCryoServerURL is the in-cluster cryo-server Service URL.
+	// Operators can override per cluster for off-cluster deployments
+	// (e.g., a hosted cryo-server fronting a fleet of NVCA clusters).
+	DefaultCryoServerURL = "http://cryo-server.cryo-system.svc.cluster.local:8080"
+
+	// DefaultCryoWarmupTimeoutSeconds caps how long NVCA polls
+	// /v1/health/ready on the inference container before giving up on
+	// a checkpoint attempt. 15 min covers TRT-LLM 70B engine compile.
+	DefaultCryoWarmupTimeoutSeconds = 15 * 60
+
+	// DefaultCryoWarmupBufferSeconds is the gap between the first
+	// /health 200 and the actual checkpoint POST — lets post-response
+	// setup (CUDA graph capture, lazy JIT) land before the snapshot.
+	DefaultCryoWarmupBufferSeconds = 10
+)
+
+// CryoConfig is the per-cluster configuration for the Cryo
+// checkpoint/restore integration. All fields default to "off" or to
+// the in-cluster Service URL — a default-constructed CryoConfig is
+// a no-op.
+//
+// Layered disable order (any false short-circuits):
+//
+//	featureflag.CryoCheckpointRestore  (global kill switch)
+//	→ CryoConfig.IntegrationEnabled    (per-cluster)
+//	→ CryoFunctionState.spec.optOut    (per-function-version)
+//
+// IntegrationEnabled controls the checkpoint side (Hook B).
+// RestoreEnabled controls the restore side (Hook A) — split so we
+// can roll out checkpoint-only first, then restore once we've
+// gathered timing data.
+//
+// +k8s:openapi-gen=true
+type CryoConfig struct {
+	// IntegrationEnabled turns on the post-Ready checkpoint reconciler
+	// (Hook B). When false, no pod is checkpointed on this cluster.
+	IntegrationEnabled bool `json:"integrationEnabled,omitempty"`
+
+	// RestoreEnabled turns on the restore-on-create hook (Hook A).
+	// When false, NVCA does not stamp cryo.io/restore-from on new
+	// pods even if a checkpoint hash exists in NGC. Lets us validate
+	// checkpoint capture independently of restore.
+	RestoreEnabled bool `json:"restoreEnabled,omitempty"`
+
+	// ServerURL is the cryo-server endpoint NVCA's checkpoint reconciler
+	// POSTs to. Empty → DefaultCryoServerURL (in-cluster Service).
+	ServerURL string `json:"serverURL,omitempty"`
+
+	// WarmupTimeoutSeconds caps the per-pod health-check polling
+	// window before NVCA gives up on triggering a checkpoint. 0 →
+	// DefaultCryoWarmupTimeoutSeconds (15 min).
+	WarmupTimeoutSeconds int32 `json:"warmupTimeoutSeconds,omitempty"`
+
+	// WarmupBufferSeconds is the dwell time between first /health 200
+	// and the checkpoint POST. 0 → DefaultCryoWarmupBufferSeconds (10s).
+	WarmupBufferSeconds int32 `json:"warmupBufferSeconds,omitempty"`
+}
+
+// Complete returns a copy of CryoConfig with empty fields filled from
+// the defaults. Returns a non-nil pointer even when called on nil,
+// so callers can rely on the result for field reads without nil
+// checks. The returned value has the same enable bits as the input
+// (defaults do not opt anything in).
+func (c *CryoConfig) Complete(_ EnvType) *CryoConfig {
+	var tmp *CryoConfig
+	if c == nil {
+		tmp = &CryoConfig{}
+	} else {
+		tmp = c.DeepCopy()
+	}
+	if tmp.ServerURL == "" {
+		tmp.ServerURL = DefaultCryoServerURL
+	}
+	if tmp.WarmupTimeoutSeconds == 0 {
+		tmp.WarmupTimeoutSeconds = DefaultCryoWarmupTimeoutSeconds
+	}
+	if tmp.WarmupBufferSeconds == 0 {
+		tmp.WarmupBufferSeconds = DefaultCryoWarmupBufferSeconds
+	}
+	return tmp
+}
+
+// IsEnabled reports whether the per-cluster integration is on AT ALL
+// — either checkpoint-side, restore-side, or both. The global feature
+// flag (featureflag.CryoCheckpointRestore) is a separate AND-gate
+// checked by callers.
+func (c *CryoConfig) IsEnabled() bool {
+	return c != nil && (c.IntegrationEnabled || c.RestoreEnabled)
 }
 
 func (msCfg *MiniServiceConfig) Complete(envType EnvType) *MiniServiceConfig {
@@ -339,6 +427,28 @@ type NVCFBackendSpec struct {
 	Overrides *NVCFBackendSpecT `json:"overrides,omitempty"`
 }
 
+// UnmarshalJSON implements custom deserialization for NVCFBackendSpec.
+// The embedded NVCFBackendSpecT has its own UnmarshalJSON which consumes the
+// full JSON data, preventing Go from populating the Overrides field. This
+// method explicitly handles both the inline fields and the Overrides pointer.
+func (spec *NVCFBackendSpec) UnmarshalJSON(data []byte) error {
+	// Unmarshal the inline NVCFBackendSpecT fields.
+	if err := json.Unmarshal(data, &spec.NVCFBackendSpecT); err != nil {
+		return err
+	}
+
+	// Unmarshal the Overrides field separately since the inline struct's
+	// custom UnmarshalJSON prevents Go from handling it automatically.
+	var raw struct {
+		Overrides *NVCFBackendSpecT `json:"overrides,omitempty"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	spec.Overrides = raw.Overrides
+	return nil
+}
+
 // +k8s:openapi-gen=true
 type DeploymentConfig struct {
 	// PriorityClassName for pod preference during evictions
@@ -447,14 +557,12 @@ type AgentConfig struct {
 	ByooResources                                          *corev1.ResourceRequirements `json:"byooResources,omitempty"`
 	OTelCollectorConfig                                    *OTelCollectorConfig         `json:"otelCollectorConfig,omitempty"`
 	NATSURL                                                *string                      `json:"natsURL,omitempty"`
+	NATSHostOverride                                       *string                      `json:"natsHostOverride,omitempty"`
+	LLMRequestRouterAddress                                string                       `json:"llmRequestRouterAddress,omitempty"`
 	HelmReValStageOAuthTokenURL                            string                       `json:"helmReValStageOAuthTokenURL,omitempty"`
 	HelmReValStageOAuthPublicKeysetEndpoint                string                       `json:"helmReValStageOAuthPublicKeysetEndpoint,omitempty"`
 	HelmReValProdOAuthTokenURL                             string                       `json:"helmReValProdOAuthTokenURL,omitempty"`
 	HelmReValProdOAuthPublicKeysetEndpoint                 string                       `json:"helmReValProdOAuthPublicKeysetEndpoint,omitempty"`
-	RolloverServiceStageOAuthTokenURL                      string                       `json:"rolloverServiceStageOAuthTokenURL,omitempty"`
-	RolloverServiceStageOAuthPublicKeysetEndpoint          string                       `json:"rolloverServiceStageOAuthPublicKeysetEndpoint,omitempty"`
-	RolloverServiceProdOAuthTokenURL                       string                       `json:"rolloverServiceProdOAuthTokenURL,omitempty"`
-	RolloverServiceProdOAuthPublicKeysetEndpoint           string                       `json:"rolloverServiceProdOAuthPublicKeysetEndpoint,omitempty"`
 	FunctionDeploymentStagesStageOAuthTokenURL             string                       `json:"functionDeploymentStagesStageOAuthTokenURL,omitempty"`
 	FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint string                       `json:"functionDeploymentStagesStageOAuthPublicKeysetEndpoint,omitempty"` //nolint:lll
 	FunctionDeploymentStagesProdOAuthTokenURL              string                       `json:"functionDeploymentStagesProdOAuthTokenURL,omitempty"`

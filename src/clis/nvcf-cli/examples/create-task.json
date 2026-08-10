@@ -1,0 +1,20 @@
+{
+  "name": "example-training-task",
+  "description": "Minimal NVCT task example used by `nvcf-cli task create --input-file`.",
+  "gpuSpecification": {
+    "gpu": "H100",
+    "instanceType": "NCP.GPU.H100_1x",
+    "backend": "ncp-local"
+  },
+  "containerImage": "nvcr.io/0651155215864979/ncp-dev/example-trainer:0.1.0",
+  "containerArgs": "--epochs 10 --batch-size 32",
+  "containerEnvironment": [
+    {"key": "MODEL_NAME", "value": "llama"},
+    {"key": "LOG_LEVEL", "value": "INFO"}
+  ],
+  "tags": ["example", "training", "demo"],
+  "maxRuntimeDuration": "PT4H",
+  "maxQueuedDuration": "PT24H",
+  "terminationGracePeriodDuration": "PT15M",
+  "resultHandlingStrategy": "NONE"
+}

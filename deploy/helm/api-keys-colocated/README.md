@@ -13,8 +13,8 @@ Example:
 ```yaml
 apikeys:
   image:
-    registry: <your-registry>
-    repository: <your-org>/api-keys
+    registry: <your-registry>            # e.g. nvcr.io
+    repository: <your-org>/<your-team>/nvcf-api-keys-service
     tag: <appVersion>
 ```
 
@@ -59,19 +59,18 @@ helm uninstall api-keys --namespace api-keys
 
 ## Configuration
 
-The default chart configuration lives in `api-keys/values.yaml`.
+The chart's `api-keys/values.yaml` carries minimal defaults; most service config (Cassandra, service IDs, NCA ID, key prefix, tracing) lives in the image's `ncp` Spring profile.
 
-Important settings to review before deployment:
+Settings to review before deployment:
 
 - `apikeys.image.*` for the API Keys container image
 - `apikeys.imagePullSecrets` for private registry access
 - `apikeys.replicaCount`, resource requests, and limits for your environment
-- `apikeys.config.cassandra.*` for Cassandra contact points, datacenter, and credentials
-- `apikeys.config.serviceId` for the API Keys service registration ID
-- `apikeys.config.ncaId` for the NCA identifier returned in authorization responses
-- `apikeys.vault.*` for JWT authentication path, role, and audience values used by the Vault Agent injector
+- `apikeys.env.HOSTNAME` / `apikeys.env.AWS_REGION` — observability tags (`host_id`, `host_dc`); keep stable for consistent metrics.
+- `apikeys.env.SPRING_PROFILES_ACTIVE` — defaults to `ncp`; do not change unless using a different bundled profile.
+- The chart's Vault Agent annotations and `configmap-vault-agent-template` for the Vault Agent sidecar's JWT auth path, role, and audience values (defaults set in `templates/_helpers.tpl`)
 
-The default values include development-oriented placeholders. Override them before using the chart in any shared or production environment.
+To override image-profile defaults (Cassandra, `apikeys.nca-id`, `apikeys.service-id-map.*`, etc), set the corresponding env var under `apikeys.env.*` — Spring relaxed binding maps env vars to Spring properties.
 
 ## Notes
 

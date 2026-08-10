@@ -1,0 +1,37 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "exec",
+    srcs = [
+        "exec.go",
+        "metrics.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/plugin/pkg/client/auth/exec",
+    importpath = "k8s.io/client-go/plugin/pkg/client/auth/exec",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/golang.org/x/term",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/serializer",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/dump",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/net",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/sets",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/pkg/apis/clientauthentication",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/pkg/apis/clientauthentication/install",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/pkg/apis/clientauthentication/v1:clientauthentication",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/pkg/apis/clientauthentication/v1beta1",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/clientcmd/api",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/metrics",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/transport",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/util/connrotation",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/klog/v2:klog",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/utils/clock",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":exec",
+    visibility = ["//visibility:public"],
+)

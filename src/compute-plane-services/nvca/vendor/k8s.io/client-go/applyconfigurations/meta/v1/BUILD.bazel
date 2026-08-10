@@ -1,0 +1,37 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "meta",
+    srcs = [
+        "condition.go",
+        "deleteoptions.go",
+        "groupresource.go",
+        "labelselector.go",
+        "labelselectorrequirement.go",
+        "managedfieldsentry.go",
+        "objectmeta.go",
+        "ownerreference.go",
+        "preconditions.go",
+        "typemeta.go",
+        "unstructured.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/applyconfigurations/meta/v1",
+    importpath = "k8s.io/client-go/applyconfigurations/meta/v1",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1/unstructured",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/schema",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/types",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/managedfields",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/discovery",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/kube-openapi/pkg/util/proto",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/structured-merge-diff/v6/typed",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":meta",
+    visibility = ["//visibility:public"],
+)

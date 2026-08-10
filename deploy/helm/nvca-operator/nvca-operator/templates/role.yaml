@@ -105,3 +105,6 @@ rules:
 - apiGroups: ["scheduling.run.ai"]
   resources: ["queues"]
   verbs: ["get", "list", "watch"]
+- apiGroups: ["run.ai"]
+  resources: ["kartas"]
+  verbs: ["get", "list", "watch"]

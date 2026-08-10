@@ -104,8 +104,6 @@ navigation:
     contents:
       - page: API
         path: ../../docs/v0.5/api.md
-      - page: Service Keys
-        path: ../../docs/v0.5/service-keys.md
       - page: Function Creation
         path: ../../docs/v0.5/function-creation.md
       - page: Container Functions

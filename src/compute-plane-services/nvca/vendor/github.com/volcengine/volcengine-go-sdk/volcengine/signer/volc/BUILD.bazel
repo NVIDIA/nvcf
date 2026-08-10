@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "volc",
+    srcs = ["volc.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/volcengine/signer/volc",
+    importpath = "github.com/volcengine/volcengine-go-sdk/volcengine/signer/volc",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/volcengine/volc-sdk-golang/base",
+        "//src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/volcengine",
+        "//src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/volcengine/credentials",
+        "//src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/volcengine/custom",
+        "//src/compute-plane-services/nvca/vendor/github.com/volcengine/volcengine-go-sdk/volcengine/request",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":volc",
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,46 @@
+---
+# Source: dynamo-platform/charts/dynamo-operator/templates/metrics-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: dynamo-operator
+  labels:
+    app.kubernetes.io/component: metrics
+    app.kubernetes.io/created-by: dynamo-operator
+    app.kubernetes.io/part-of: dynamo-operator
+    control-plane: controller-manager
+    helm.sh/chart: dynamo-operator-1.2.1
+    app.kubernetes.io/name: dynamo-operator
+    app.kubernetes.io/instance: dynamo-operator
+    app.kubernetes.io/version: "1.2.1"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  type: ClusterIP
+  selector:
+    control-plane: controller-manager
+    app.kubernetes.io/name: dynamo-operator
+    app.kubernetes.io/instance: dynamo-operator
+  ports:
+  - name: metrics
+    port: 8080
+    protocol: TCP
+    targetPort: metrics
+---
+# Source: dynamo-platform/charts/dynamo-operator/templates/metrics-service.yaml
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# metricsService.enabled: null/true = create, false = skip.
+# The Service is a core K8s resource (no CRD dependency), so null and true
+# both result in creation. Only explicit false disables it.

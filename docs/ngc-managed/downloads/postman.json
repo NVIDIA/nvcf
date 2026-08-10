@@ -1,0 +1,3149 @@
+{
+	"info": {
+		"_postman_id": "759feb0c-7126-4413-b2ce-e0c3526a1cb6",
+		"name": "Cloud Functions API Collection",
+		"description": "Please refer to the NVCF OpenAPI spec and API public documentation for further details.\n\n[https://docs.nvidia.com/cloud-functions/legacy/latest/api.html#authorization](https://docs.nvidia.com/cloud-functionslegacy/latest/api.html#authorization)\n\nThis postman defaults to NGC Personal API Key based authorization - If using JWT based authorization, you can either configure the Authorization type on this collection to OAuth 2.0, ensuring the header format is `Bearer $latestToken` or manually generate and set JWT tokens following the example call under the \"JWT Token\" folder.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "32309907"
+	},
+	"item": [
+		{
+			"name": "Function Invocation",
+			"item": [
+				{
+					"name": "Call Function",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "NVCF-INPUT-ASSET-REFERENCES",
+								"value": "<string>,<string>",
+								"disabled": true
+							},
+							{
+								"key": "NVCF-POLL-SECONDS",
+								"value": "<integer>",
+								"disabled": true
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Accept",
+								"value": "text/event-stream",
+								"disabled": true
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"inputs\": [\n        {\n            \"name\": \"message\",\n            \"shape\": [\n                1\n            ],\n            \"datatype\": \"BYTES\",\n            \"data\": [\n                \"Hello\"\n            ]\n        },\n        {\n            \"name\": \"response_delay_in_seconds\",\n            \"shape\": [\n                1\n            ],\n            \"datatype\": \"FP32\",\n            \"data\": [\n                0.1\n            ]\n        }\n    ],\n    \"outputs\": [\n        {\n            \"name\": \"echo\",\n            \"datatype\": \"BYTES\",\n            \"shape\": [\n                1\n            ]\n        }\n    ]\n}",
+							"options": {
+								"raw": {
+									"headerFamily": "json",
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{nvcfDomain}}/v2/nvcf/pexec/functions/:functionId",
+							"host": [
+								"{{nvcfDomain}}"
+							],
+							"path": [
+								"v2",
+								"nvcf",
+								"pexec",
+								"functions",
+								":functionId"
+							],
+							"variable": [
+								{
+									"key": "functionId",
+									"value": "<uuid>",
+									"description": "(Required) "
+								}
+							]
+						},
+						"description": "Invokes the specified function that was successfully deployed. If the version  is not specified, any active function versions will handle the request. If  the version is specified in the URI, then the request is exclusively processed  by the designated version of the function. By default, this endpoint will block  for 5 seconds. If the request is not fulfilled before the timeout, it's status  is considered in-progress or pending and the response includes HTTP status code  202 with an invocation request ID, indicating that the client should commence  polling for the result using the invocation request ID. Access to this endpoint  mandates inclusion of either a bearer token or an api-key with 'invoke_function'  scope in the HTTP Authorization header. Additionally, this endpoint has the  capability to provide updates on the progress of the request, contingent  upon the workload's provision of such information. In-progress responses are returned in order. If no in-progress response is received  during polling you will receive the most recent in-progress response. Only the first  256 unread in-progress messages are kept. "
+					},
+					"response": [
+						{
+							"name": "Invocation is fulfilled",
+							"originalRequest": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "NVCF-INPUT-ASSET-REFERENCES",
+										"value": "<string>,<string>"
+									},
+									{
+										"key": "NVCF-POLL-SECONDS",
+										"value": "<integer>"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									},
+									{
+										"key": "Accept",
+										"value": "text/event-stream"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{}",
+									"options": {
+										"raw": {
+											"headerFamily": "json",
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "https://api.nvcf.nvidia.com/v2/nvcf/pexec/functions/:functionId",
+									"protocol": "https",
+									"host": [
+										"api",
+										"nvcf",
+										"nvidia",
+										"com"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"pexec",
+										"functions",
+										":functionId"
+									],
+									"variable": [
+										{
+											"key": "functionId"
+										}
+									]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"_postman_previewlanguage": "json",
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								},
+								{
+									"key": "NVCF-REQID",
+									"value": "<string>",
+									"description": {
+										"content": "Invocation Request Id",
+										"type": "text/plain"
+									}
+								},
+								{
+									"key": "NVCF-PERCENT-COMPLETE",
+									"value": "<string>",
+									"description": {
+										"content": "Percentage complete",
+										"type": "text/plain"
+									}
+								},
+								{
+									"key": "NVCF-STATUS",
+									"value": "<string>",
+									"description": {
+										"content": "Invocation status",
+										"type": "text/plain"
+									}
+								}
+							],
+							"cookie": [],
+							"body": "{\n  \"short\": \"<integer>\",\n  \"char\": \"<string>\",\n  \"int\": \"<integer>\",\n  \"long\": \"<long>\",\n  \"float\": \"<float>\",\n  \"double\": \"<double>\",\n  \"direct\": \"<boolean>\",\n  \"readOnly\": \"<boolean>\"\n}"
+						},
+						{
+							"name": "Result is pending. Client should poll using the requestId.",
+							"originalRequest": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "NVCF-INPUT-ASSET-REFERENCES",
+										"value": "<string>,<string>"
+									},
+									{
+										"key": "NVCF-POLL-SECONDS",
+										"value": "<integer>"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									},
+									{
+										"key": "Accept",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{}",
+									"options": {
+										"raw": {
+											"headerFamily": "json",
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{baseUrl}}/v2/nvcf/pexec/functions/:functionId",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"pexec",
+										"functions",
+										":functionId"
+									],
+									"variable": [
+										{
+											"key": "functionId"
+										}
+									]
+								}
+							},
+							"status": "Accepted",
+							"code": 202,
+							"_postman_previewlanguage": "json",
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								},
+								{
+									"key": "NVCF-REQID",
+									"value": "<string>",
+									"description": {
+										"content": "Invocation Request Id",
+										"type": "text/plain"
+									}
+								},
+								{
+									"key": "NVCF-PERCENT-COMPLETE",
+									"value": "<string>",
+									"description": {
+										"content": "Percentage complete",
+										"type": "text/plain"
+									}
+								},
+								{
+									"key": "NVCF-STATUS",
+									"value": "<string>",
+									"description": {
+										"content": "Invocation status",
+										"type": "text/plain"
+									}
+								}
+							],
+							"cookie": [],
+							"body": "{\n  \"short\": \"<integer>\",\n  \"char\": \"<string>\",\n  \"int\": \"<integer>\",\n  \"long\": \"<long>\",\n  \"float\": \"<float>\",\n  \"double\": \"<double>\",\n  \"direct\": \"<boolean>\",\n  \"readOnly\": \"<boolean>\"\n}"
+						},
+						{
+							"name": "Client should use the URL specified in the 'Location' response header to fetch  large result. ",
+							"originalRequest": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "NVCF-INPUT-ASSET-REFERENCES",
+										"value": "<string>,<string>"
+									},
+									{
+										"key": "NVCF-POLL-SECONDS",
+										"value": "<integer>"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									},
+									{
+										"key": "Accept",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{}",
+									"options": {
+										"raw": {
+											"headerFamily": "json",
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{baseUrl}}/v2/nvcf/pexec/functions/:functionId",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"pexec",
+										"functions",
+										":functionId"
+									],
+									"variable": [
+										{
+											"key": "functionId"
+										}
+									]
+								}
+							},
+							"status": "Found",
+							"code": 302,
+							"_postman_previewlanguage": "json",
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								},
+								{
+									"key": "NVCF-REQID",
+									"value": "<string>",
+									"description": {
+										"content": "Invocation Request Id",
+										"type": "text/plain"
+									}
+								},
+								{
+									"key": "NVCF-PERCENT-COMPLETE",
+									"value": "<string>",
+									"description": {
+										"content": "Percentage complete",
+										"type": "text/plain"
+									}
+								},
+								{
+									"key": "NVCF-STATUS",
+									"value": "<string>",
+									"description": {
+										"content": "Invocation status",
+										"type": "text/plain"
+									}
+								},
+								{
+									"key": "Location",
+									"value": "<string>",
+									"description": {
+										"content": "URL to get the result",
+										"type": "text/plain"
+									}
+								}
+							],
+							"cookie": [],
+							"body": "{\n  \"short\": \"<integer>\",\n  \"char\": \"<string>\",\n  \"int\": \"<integer>\",\n  \"long\": \"<long>\",\n  \"float\": \"<float>\",\n  \"double\": \"<double>\",\n  \"direct\": \"<boolean>\",\n  \"readOnly\": \"<boolean>\"\n}"
+						},
+						{
+							"name": "Cloud credits expired for public functions. Please contact NVIDIA representatives.",
+							"originalRequest": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "NVCF-INPUT-ASSET-REFERENCES",
+										"value": "<string>,<string>"
+									},
+									{
+										"key": "NVCF-POLL-SECONDS",
+										"value": "<integer>"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									},
+									{
+										"key": "Accept",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{}",
+									"options": {
+										"raw": {
+											"headerFamily": "json",
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{baseUrl}}/v2/nvcf/pexec/functions/:functionId",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"pexec",
+										"functions",
+										":functionId"
+									],
+									"variable": [
+										{
+											"key": "functionId"
+										}
+									]
+								}
+							},
+							"status": "Payment Required",
+							"code": 402,
+							"_postman_previewlanguage": "json",
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								}
+							],
+							"cookie": [],
+							"body": "{\n  \"short\": \"<integer>\",\n  \"char\": \"<string>\",\n  \"int\": \"<integer>\",\n  \"long\": \"<long>\",\n  \"float\": \"<float>\",\n  \"double\": \"<double>\",\n  \"direct\": \"<boolean>\",\n  \"readOnly\": \"<boolean>\"\n}"
+						},
+						{
+							"name": "Either missing scope in the auth JWT / API key token and/or missing resource entry in the API key for the function. ",
+							"originalRequest": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "NVCF-INPUT-ASSET-REFERENCES",
+										"value": "<string>,<string>"
+									},
+									{
+										"key": "NVCF-POLL-SECONDS",
+										"value": "<integer>"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									},
+									{
+										"key": "Accept",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{}",
+									"options": {
+										"raw": {
+											"headerFamily": "json",
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{baseUrl}}/v2/nvcf/pexec/functions/:functionId",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"pexec",
+										"functions",
+										":functionId"
+									],
+									"variable": [
+										{
+											"key": "functionId"
+										}
+									]
+								}
+							},
+							"status": "Forbidden",
+							"code": 403,
+							"_postman_previewlanguage": "json",
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								}
+							],
+							"cookie": [],
+							"body": "{\n  \"short\": \"<integer>\",\n  \"char\": \"<string>\",\n  \"int\": \"<integer>\",\n  \"long\": \"<long>\",\n  \"float\": \"<float>\",\n  \"double\": \"<double>\",\n  \"direct\": \"<boolean>\",\n  \"readOnly\": \"<boolean>\"\n}"
+						}
+					]
+				},
+				{
+					"name": "Call Function Version",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "NVCF-INPUT-ASSET-REFERENCES",
+								"value": "<string>,<string>",
+								"disabled": true
+							},
+							{
+								"key": "NVCF-POLL-SECONDS",
+								"value": "<integer>",
+								"disabled": true
+							},
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Accept",
+								"value": "text/event-stream",
+								"disabled": true
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"inputs\": [\n        {\n            \"name\": \"message\",\n            \"shape\": [\n                1\n            ],\n            \"datatype\": \"BYTES\",\n            \"data\": [\n                \"Hello\"\n            ]\n        },\n        {\n            \"name\": \"response_delay_in_seconds\",\n            \"shape\": [\n                1\n            ],\n            \"datatype\": \"FP32\",\n            \"data\": [\n                0.1\n            ]\n        }\n    ],\n    \"outputs\": [\n        {\n            \"name\": \"echo\",\n            \"datatype\": \"BYTES\",\n            \"shape\": [\n                1\n            ]\n        }\n    ]\n}",
+							"options": {
+								"raw": {
+									"headerFamily": "json",
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{nvcfDomain}}/v2/nvcf/pexec/functions/:functionId/versions/:versionId",
+							"host": [
+								"{{nvcfDomain}}"
+							],
+							"path": [
+								"v2",
+								"nvcf",
+								"pexec",
+								"functions",
+								":functionId",
+								"versions",
+								":versionId"
+							],
+							"variable": [
+								{
+									"key": "functionId",
+									"value": "<uuid>",
+									"description": "(Required) "
+								},
+								{
+									"key": "versionId",
+									"value": "<uuid>",
+									"description": "(Required) "
+								}
+							]
+						},
+						"description": "Invokes the specified function that was successfully deployed. If the version  is not specified, any active function versions will handle the request. If  the version is specified in the URI, then the request is exclusively processed  by the designated version of the function. By default, this endpoint will block  for 5 seconds. If the request is not fulfilled before the timeout, it's status  is considered in-progress or pending and the response includes HTTP status code  202 with an invocation request ID, indicating that the client should commence  polling for the result using the invocation request ID. Access to this endpoint  mandates inclusion of either a bearer token or an api-key with 'invoke_function'  scope in the HTTP Authorization header. Additionally, this endpoint has the  capability to provide updates on the progress of the request, contingent  upon the workload's provision of such information. In-progress responses are returned in order. If no in-progress response is received  during polling you will receive the most recent in-progress response. Only the first  256 unread in-progress messages are kept. "
+					},
+					"response": [
+						{
+							"name": "Invocation is fulfilled",
+							"originalRequest": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "NVCF-INPUT-ASSET-REFERENCES",
+										"value": "<string>,<string>"
+									},
+									{
+										"key": "NVCF-POLL-SECONDS",
+										"value": "<integer>"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									},
+									{
+										"key": "Accept",
+										"value": "text/event-stream"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{}",
+									"options": {
+										"raw": {
+											"headerFamily": "json",
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "https://api.nvcf.nvidia.com/v2/nvcf/pexec/functions/:functionId/versions/:versionId",
+									"protocol": "https",
+									"host": [
+										"api",
+										"nvcf",
+										"nvidia",
+										"com"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"pexec",
+										"functions",
+										":functionId",
+										"versions",
+										":versionId"
+									],
+									"variable": [
+										{
+											"key": "functionId"
+										},
+										{
+											"key": "versionId"
+										}
+									]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"_postman_previewlanguage": "json",
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								},
+								{
+									"key": "NVCF-REQID",
+									"value": "<string>",
+									"description": {
+										"content": "Invocation Request Id",
+										"type": "text/plain"
+									}
+								},
+								{
+									"key": "NVCF-PERCENT-COMPLETE",
+									"value": "<string>",
+									"description": {
+										"content": "Percentage complete",
+										"type": "text/plain"
+									}
+								},
+								{
+									"key": "NVCF-STATUS",
+									"value": "<string>",
+									"description": {
+										"content": "Invocation status",
+										"type": "text/plain"
+									}
+								}
+							],
+							"cookie": [],
+							"body": "{\n  \"short\": \"<integer>\",\n  \"char\": \"<string>\",\n  \"int\": \"<integer>\",\n  \"long\": \"<long>\",\n  \"float\": \"<float>\",\n  \"double\": \"<double>\",\n  \"direct\": \"<boolean>\",\n  \"readOnly\": \"<boolean>\"\n}"
+						},
+						{
+							"name": "Result is pending. Client should poll using the requestId.",
+							"originalRequest": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "NVCF-INPUT-ASSET-REFERENCES",
+										"value": "<string>,<string>"
+									},
+									{
+										"key": "NVCF-POLL-SECONDS",
+										"value": "<integer>"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									},
+									{
+										"key": "Accept",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{}",
+									"options": {
+										"raw": {
+											"headerFamily": "json",
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{baseUrl}}/v2/nvcf/pexec/functions/:functionId/versions/:versionId",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"pexec",
+										"functions",
+										":functionId",
+										"versions",
+										":versionId"
+									],
+									"variable": [
+										{
+											"key": "functionId"
+										},
+										{
+											"key": "versionId"
+										}
+									]
+								}
+							},
+							"status": "Accepted",
+							"code": 202,
+							"_postman_previewlanguage": "json",
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								},
+								{
+									"key": "NVCF-REQID",
+									"value": "<string>",
+									"description": {
+										"content": "Invocation Request Id",
+										"type": "text/plain"
+									}
+								},
+								{
+									"key": "NVCF-PERCENT-COMPLETE",
+									"value": "<string>",
+									"description": {
+										"content": "Percentage complete",
+										"type": "text/plain"
+									}
+								},
+								{
+									"key": "NVCF-STATUS",
+									"value": "<string>",
+									"description": {
+										"content": "Invocation status",
+										"type": "text/plain"
+									}
+								}
+							],
+							"cookie": [],
+							"body": "{\n  \"short\": \"<integer>\",\n  \"char\": \"<string>\",\n  \"int\": \"<integer>\",\n  \"long\": \"<long>\",\n  \"float\": \"<float>\",\n  \"double\": \"<double>\",\n  \"direct\": \"<boolean>\",\n  \"readOnly\": \"<boolean>\"\n}"
+						},
+						{
+							"name": "Client should use the URL specified in the 'Location' response header to fetch  large result. ",
+							"originalRequest": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "NVCF-INPUT-ASSET-REFERENCES",
+										"value": "<string>,<string>"
+									},
+									{
+										"key": "NVCF-POLL-SECONDS",
+										"value": "<integer>"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									},
+									{
+										"key": "Accept",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{}",
+									"options": {
+										"raw": {
+											"headerFamily": "json",
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{baseUrl}}/v2/nvcf/pexec/functions/:functionId/versions/:versionId",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"pexec",
+										"functions",
+										":functionId",
+										"versions",
+										":versionId"
+									],
+									"variable": [
+										{
+											"key": "functionId"
+										},
+										{
+											"key": "versionId"
+										}
+									]
+								}
+							},
+							"status": "Found",
+							"code": 302,
+							"_postman_previewlanguage": "json",
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								},
+								{
+									"key": "NVCF-REQID",
+									"value": "<string>",
+									"description": {
+										"content": "Invocation Request Id",
+										"type": "text/plain"
+									}
+								},
+								{
+									"key": "NVCF-PERCENT-COMPLETE",
+									"value": "<string>",
+									"description": {
+										"content": "Percentage complete",
+										"type": "text/plain"
+									}
+								},
+								{
+									"key": "NVCF-STATUS",
+									"value": "<string>",
+									"description": {
+										"content": "Invocation status",
+										"type": "text/plain"
+									}
+								},
+								{
+									"key": "Location",
+									"value": "<string>",
+									"description": {
+										"content": "URL to get the result",
+										"type": "text/plain"
+									}
+								}
+							],
+							"cookie": [],
+							"body": "{\n  \"short\": \"<integer>\",\n  \"char\": \"<string>\",\n  \"int\": \"<integer>\",\n  \"long\": \"<long>\",\n  \"float\": \"<float>\",\n  \"double\": \"<double>\",\n  \"direct\": \"<boolean>\",\n  \"readOnly\": \"<boolean>\"\n}"
+						},
+						{
+							"name": "Cloud credits expired for public functions. Please contact NVIDIA representatives.",
+							"originalRequest": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "NVCF-INPUT-ASSET-REFERENCES",
+										"value": "<string>,<string>"
+									},
+									{
+										"key": "NVCF-POLL-SECONDS",
+										"value": "<integer>"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									},
+									{
+										"key": "Accept",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{}",
+									"options": {
+										"raw": {
+											"headerFamily": "json",
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{baseUrl}}/v2/nvcf/pexec/functions/:functionId/versions/:versionId",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"pexec",
+										"functions",
+										":functionId",
+										"versions",
+										":versionId"
+									],
+									"variable": [
+										{
+											"key": "functionId"
+										},
+										{
+											"key": "versionId"
+										}
+									]
+								}
+							},
+							"status": "Payment Required",
+							"code": 402,
+							"_postman_previewlanguage": "json",
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								}
+							],
+							"cookie": [],
+							"body": "{\n  \"short\": \"<integer>\",\n  \"char\": \"<string>\",\n  \"int\": \"<integer>\",\n  \"long\": \"<long>\",\n  \"float\": \"<float>\",\n  \"double\": \"<double>\",\n  \"direct\": \"<boolean>\",\n  \"readOnly\": \"<boolean>\"\n}"
+						},
+						{
+							"name": "Either missing scope in the auth JWT / API key token and/or missing resource entry in the API key for the function. ",
+							"originalRequest": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "NVCF-INPUT-ASSET-REFERENCES",
+										"value": "<string>,<string>"
+									},
+									{
+										"key": "NVCF-POLL-SECONDS",
+										"value": "<integer>"
+									},
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									},
+									{
+										"key": "Accept",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{}",
+									"options": {
+										"raw": {
+											"headerFamily": "json",
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{baseUrl}}/v2/nvcf/pexec/functions/:functionId/versions/:versionId",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"pexec",
+										"functions",
+										":functionId",
+										"versions",
+										":versionId"
+									],
+									"variable": [
+										{
+											"key": "functionId"
+										},
+										{
+											"key": "versionId"
+										}
+									]
+								}
+							},
+							"status": "Forbidden",
+							"code": 403,
+							"_postman_previewlanguage": "json",
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								}
+							],
+							"cookie": [],
+							"body": "{\n  \"short\": \"<integer>\",\n  \"char\": \"<string>\",\n  \"int\": \"<integer>\",\n  \"long\": \"<long>\",\n  \"float\": \"<float>\",\n  \"double\": \"<double>\",\n  \"direct\": \"<boolean>\",\n  \"readOnly\": \"<boolean>\"\n}"
+						}
+					]
+				},
+				{
+					"name": "Poll For Result Using Function Invocation Request",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "NVCF-POLL-SECONDS",
+								"value": "<integer>",
+								"disabled": true
+							},
+							{
+								"key": "Accept",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{nvcfDomain}}/v2/nvcf/pexec/status/:requestId",
+							"host": [
+								"{{nvcfDomain}}"
+							],
+							"path": [
+								"v2",
+								"nvcf",
+								"pexec",
+								"status",
+								":requestId"
+							],
+							"variable": [
+								{
+									"key": "requestId",
+									"value": "<uuid>",
+									"description": "(Required) Function invocation request id"
+								}
+							]
+						},
+						"description": "Retrieves the status of an in-progress or pending request using its unique  invocation request ID. If the result is available, it will be included in  the response, marking the request as fulfilled. Conversely, if the result is  not yet available, the request is deemed pending. Access to this endpoint  mandates inclusion of either a bearer token or an api-key with  'invoke_function' scope in the HTTP Authorization header. In-progress responses are returned in order. If no in-progress response is received  during polling you will receive the most recent in-progress response. Only the first  256 unread in-progress messages are kept. "
+					},
+					"response": [
+						{
+							"name": "Invocation is fulfilled",
+							"originalRequest": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "NVCF-POLL-SECONDS",
+										"value": "<integer>"
+									},
+									{
+										"key": "Accept",
+										"value": "application/json"
+									}
+								],
+								"url": {
+									"raw": "https://api.nvcf.nvidia.com/v2/nvcf/pexec/status/:requestId",
+									"protocol": "https",
+									"host": [
+										"api",
+										"nvcf",
+										"nvidia",
+										"com"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"pexec",
+										"status",
+										":requestId"
+									],
+									"variable": [
+										{
+											"key": "requestId"
+										}
+									]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"_postman_previewlanguage": "json",
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								},
+								{
+									"key": "NVCF-REQID",
+									"value": "<string>",
+									"description": {
+										"content": "Invocation Request Id",
+										"type": "text/plain"
+									}
+								},
+								{
+									"key": "NVCF-PERCENT-COMPLETE",
+									"value": "<string>",
+									"description": {
+										"content": "Percentage complete",
+										"type": "text/plain"
+									}
+								},
+								{
+									"key": "NVCF-STATUS",
+									"value": "<string>",
+									"description": {
+										"content": "Invocation status",
+										"type": "text/plain"
+									}
+								}
+							],
+							"cookie": [],
+							"body": "{\n  \"short\": \"<integer>\",\n  \"char\": \"<string>\",\n  \"int\": \"<integer>\",\n  \"long\": \"<long>\",\n  \"float\": \"<float>\",\n  \"double\": \"<double>\",\n  \"direct\": \"<boolean>\",\n  \"readOnly\": \"<boolean>\"\n}"
+						},
+						{
+							"name": "Result is pending. Client should poll using the requestId.",
+							"originalRequest": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "NVCF-POLL-SECONDS",
+										"value": "<integer>"
+									},
+									{
+										"key": "Accept",
+										"value": "application/json"
+									}
+								],
+								"url": {
+									"raw": "{{baseUrl}}/v2/nvcf/pexec/status/:requestId",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"pexec",
+										"status",
+										":requestId"
+									],
+									"variable": [
+										{
+											"key": "requestId"
+										}
+									]
+								}
+							},
+							"status": "Accepted",
+							"code": 202,
+							"_postman_previewlanguage": "json",
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								},
+								{
+									"key": "NVCF-REQID",
+									"value": "<string>",
+									"description": {
+										"content": "Invocation Request Id",
+										"type": "text/plain"
+									}
+								},
+								{
+									"key": "NVCF-PERCENT-COMPLETE",
+									"value": "<string>",
+									"description": {
+										"content": "Percentage complete",
+										"type": "text/plain"
+									}
+								},
+								{
+									"key": "NVCF-STATUS",
+									"value": "<string>",
+									"description": {
+										"content": "Invocation status",
+										"type": "text/plain"
+									}
+								}
+							],
+							"cookie": [],
+							"body": "{\n  \"short\": \"<integer>\",\n  \"char\": \"<string>\",\n  \"int\": \"<integer>\",\n  \"long\": \"<long>\",\n  \"float\": \"<float>\",\n  \"double\": \"<double>\",\n  \"direct\": \"<boolean>\",\n  \"readOnly\": \"<boolean>\"\n}"
+						},
+						{
+							"name": "Client should use the URL specified in the 'Location' response header to fetch  large result. ",
+							"originalRequest": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "NVCF-POLL-SECONDS",
+										"value": "<integer>"
+									},
+									{
+										"key": "Accept",
+										"value": "application/json"
+									}
+								],
+								"url": {
+									"raw": "{{baseUrl}}/v2/nvcf/pexec/status/:requestId",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"pexec",
+										"status",
+										":requestId"
+									],
+									"variable": [
+										{
+											"key": "requestId"
+										}
+									]
+								}
+							},
+							"status": "Found",
+							"code": 302,
+							"_postman_previewlanguage": "json",
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								},
+								{
+									"key": "NVCF-REQID",
+									"value": "<string>",
+									"description": {
+										"content": "Invocation Request Id",
+										"type": "text/plain"
+									}
+								},
+								{
+									"key": "NVCF-PERCENT-COMPLETE",
+									"value": "<string>",
+									"description": {
+										"content": "Percentage complete",
+										"type": "text/plain"
+									}
+								},
+								{
+									"key": "NVCF-STATUS",
+									"value": "<string>",
+									"description": {
+										"content": "Invocation status",
+										"type": "text/plain"
+									}
+								},
+								{
+									"key": "Location",
+									"value": "<string>",
+									"description": {
+										"content": "URL to get the result",
+										"type": "text/plain"
+									}
+								}
+							],
+							"cookie": [],
+							"body": "{\n  \"short\": \"<integer>\",\n  \"char\": \"<string>\",\n  \"int\": \"<integer>\",\n  \"long\": \"<long>\",\n  \"float\": \"<float>\",\n  \"double\": \"<double>\",\n  \"direct\": \"<boolean>\",\n  \"readOnly\": \"<boolean>\"\n}"
+						},
+						{
+							"name": "Cloud credits expired for public functions. Please contact NVIDIA representatives.",
+							"originalRequest": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "NVCF-POLL-SECONDS",
+										"value": "<integer>"
+									},
+									{
+										"key": "Accept",
+										"value": "application/json"
+									}
+								],
+								"url": {
+									"raw": "{{baseUrl}}/v2/nvcf/pexec/status/:requestId",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"pexec",
+										"status",
+										":requestId"
+									],
+									"variable": [
+										{
+											"key": "requestId"
+										}
+									]
+								}
+							},
+							"status": "Payment Required",
+							"code": 402,
+							"_postman_previewlanguage": "json",
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								}
+							],
+							"cookie": [],
+							"body": "{\n  \"short\": \"<integer>\",\n  \"char\": \"<string>\",\n  \"int\": \"<integer>\",\n  \"long\": \"<long>\",\n  \"float\": \"<float>\",\n  \"double\": \"<double>\",\n  \"direct\": \"<boolean>\",\n  \"readOnly\": \"<boolean>\"\n}"
+						},
+						{
+							"name": "Either missing scope in the auth JWT / API key token and/or missing resource entry in the API key for the function. ",
+							"originalRequest": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "NVCF-POLL-SECONDS",
+										"value": "<integer>"
+									},
+									{
+										"key": "Accept",
+										"value": "application/json"
+									}
+								],
+								"url": {
+									"raw": "{{baseUrl}}/v2/nvcf/pexec/status/:requestId",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"pexec",
+										"status",
+										":requestId"
+									],
+									"variable": [
+										{
+											"key": "requestId"
+										}
+									]
+								}
+							},
+							"status": "Forbidden",
+							"code": 403,
+							"_postman_previewlanguage": "json",
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								}
+							],
+							"cookie": [],
+							"body": "{\n  \"short\": \"<integer>\",\n  \"char\": \"<string>\",\n  \"int\": \"<integer>\",\n  \"long\": \"<long>\",\n  \"float\": \"<float>\",\n  \"double\": \"<double>\",\n  \"direct\": \"<boolean>\",\n  \"readOnly\": \"<boolean>\"\n}"
+						}
+					]
+				}
+			],
+			"description": "Defines function pass-through invocation endpoints where the invocation payload  is passed as-is without any wrapper. All the endpoints defined in this API  require either a bearer token or an api-key with 'invoke_function' scope in the  HTTP Authorization header. "
+		},
+		{
+			"name": "Asset Management",
+			"item": [
+				{
+					"name": "List Assets",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Accept",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{nvcfDomain}}/v2/nvcf/assets",
+							"host": [
+								"{{nvcfDomain}}"
+							],
+							"path": [
+								"v2",
+								"nvcf",
+								"assets"
+							]
+						},
+						"description": "List assets owned by the current NVIDIA Cloud Account. Requires either a  bearer token or an api-key with invoke_function scope in the HTTP Authorization  header. "
+					},
+					"response": [
+						{
+							"name": "OK",
+							"originalRequest": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "Accept",
+										"value": "application/json"
+									}
+								],
+								"url": {
+									"raw": "https://api.nvcf.nvidia.com/v2/nvcf/assets",
+									"protocol": "https",
+									"host": [
+										"api",
+										"nvcf",
+										"nvidia",
+										"com"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"assets"
+									]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"_postman_previewlanguage": "json",
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								}
+							],
+							"cookie": [],
+							"body": "{\n  \"assets\": [\n    {\n      \"assetId\": \"<uuid>\",\n      \"description\": \"<string>\",\n      \"contentType\": \"<string>\"\n    },\n    {\n      \"assetId\": \"<uuid>\",\n      \"description\": \"<string>\",\n      \"contentType\": \"<string>\"\n    }\n  ]\n}"
+						}
+					]
+				},
+				{
+					"name": "Create Asset",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Accept",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"contentType\": \"<string>\",\n  \"description\": \"<string>\"\n}",
+							"options": {
+								"raw": {
+									"headerFamily": "json",
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{nvcfDomain}}/v2/nvcf/assets",
+							"host": [
+								"{{nvcfDomain}}"
+							],
+							"path": [
+								"v2",
+								"nvcf",
+								"assets"
+							]
+						},
+						"description": "Creates a unique id representing an asset and a pre-signed URL to upload the  asset artifact to AWS S3 bucket for the NVIDIA Cloud Account. Requires either  a bearer token or an api-key with 'invoke_function' scope in the HTTP  Authorization header."
+					},
+					"response": [
+						{
+							"name": "OK",
+							"originalRequest": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									},
+									{
+										"key": "Accept",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n  \"contentType\": \"<string>\",\n  \"description\": \"<string>\"\n}",
+									"options": {
+										"raw": {
+											"headerFamily": "json",
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "https://api.nvcf.nvidia.com/v2/nvcf/assets",
+									"protocol": "https",
+									"host": [
+										"api",
+										"nvcf",
+										"nvidia",
+										"com"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"assets"
+									]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"_postman_previewlanguage": "json",
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								}
+							],
+							"cookie": [],
+							"body": "{\n  \"assetId\": \"<uuid>\",\n  \"uploadUrl\": \"<string>\",\n  \"contentType\": \"<string>\",\n  \"description\": \"<string>\"\n}"
+						}
+					]
+				},
+				{
+					"name": "Show Asset Details",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Accept",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{nvcfDomain}}/v2/nvcf/assets/:assetId",
+							"host": [
+								"{{nvcfDomain}}"
+							],
+							"path": [
+								"v2",
+								"nvcf",
+								"assets",
+								":assetId"
+							],
+							"variable": [
+								{
+									"key": "assetId",
+									"value": "<uuid>",
+									"description": "(Required) Asset id"
+								}
+							]
+						},
+						"description": "Returns details for the specified asset-id belonging to the current NVIDIA  Cloud Account. Requires either a bearer token or an api-key with  'invoke_function' scope in the HTTP Authorization header. "
+					},
+					"response": [
+						{
+							"name": "OK",
+							"originalRequest": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "Accept",
+										"value": "application/json"
+									}
+								],
+								"url": {
+									"raw": "https://api.nvcf.nvidia.com/v2/nvcf/assets/:assetId",
+									"protocol": "https",
+									"host": [
+										"api",
+										"nvcf",
+										"nvidia",
+										"com"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"assets",
+										":assetId"
+									],
+									"variable": [
+										{
+											"key": "assetId"
+										}
+									]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"_postman_previewlanguage": "json",
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								}
+							],
+							"cookie": [],
+							"body": "{\n  \"asset\": {\n    \"assetId\": \"<uuid>\",\n    \"description\": \"<string>\",\n    \"contentType\": \"<string>\"\n  }\n}"
+						}
+					]
+				},
+				{
+					"name": "Delete Asset",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{nvcfDomain}}/v2/nvcf/assets/:assetId",
+							"host": [
+								"{{nvcfDomain}}"
+							],
+							"path": [
+								"v2",
+								"nvcf",
+								"assets",
+								":assetId"
+							],
+							"variable": [
+								{
+									"key": "assetId",
+									"value": "<uuid>",
+									"description": "(Required) Id of the asset to be deleted"
+								}
+							]
+						},
+						"description": "Deletes asset belonging to the current NVIDIA Cloud Account. Requires either  a bearer token or an api-key with 'invoke_function' scope in the HTTP  Authorization header."
+					},
+					"response": [
+						{
+							"name": "No Content",
+							"originalRequest": {
+								"method": "DELETE",
+								"header": [],
+								"url": {
+									"raw": "https://api.nvcf.nvidia.com/v2/nvcf/assets/:assetId",
+									"protocol": "https",
+									"host": [
+										"api",
+										"nvcf",
+										"nvidia",
+										"com"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"assets",
+										":assetId"
+									],
+									"variable": [
+										{
+											"key": "assetId"
+										}
+									]
+								}
+							},
+							"status": "No Content",
+							"code": 204,
+							"_postman_previewlanguage": "text",
+							"header": [],
+							"cookie": [],
+							"body": ""
+						}
+					]
+				}
+			],
+			"description": "Defines Asset Management endpoints for Account Admins/Users. All the endpoints defined in this API require an api-key in the HTTP Authorization header with 'invoke_function' scope."
+		},
+		{
+			"name": "Cluster Groups and GPUs",
+			"item": [
+				{
+					"name": "List Cluster Groups",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Accept",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/v2/nvcf/clusterGroups",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"v2",
+								"nvcf",
+								"clusterGroups"
+							]
+						},
+						"description": "Lists Cluster Groups for the current account. The response includes cluster  groups defined specifically in the current account and publicly available  cluster groups such as GFN, OCI, etc. Requires a bearer token with 'list_cluster_groups' scope in HTTP Authorization header. "
+					},
+					"response": [
+						{
+							"name": "OK",
+							"originalRequest": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "Accept",
+										"value": "application/json"
+									}
+								],
+								"url": {
+									"raw": "https://api.ngc.nvidia.com/v2/nvcf/clusterGroups",
+									"protocol": "https",
+									"host": [
+										"api",
+										"ngc",
+										"nvidia",
+										"com"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"clusterGroups"
+									]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"_postman_previewlanguage": "json",
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								}
+							],
+							"cookie": [],
+							"body": "{\n  \"clusterGroups\": [\n    {\n      \"id\": \"<uuid>\",\n      \"name\": \"<string>\",\n      \"ncaId\": \"<string>\",\n      \"authorizedNcaIds\": [\n        \"<string>\",\n        \"<string>\"\n      ],\n      \"gpus\": [\n        {\n          \"name\": \"<string>\",\n          \"instanceTypes\": [\n            {\n              \"name\": \"<string>\",\n              \"description\": \"<string>\",\n              \"default\": \"<boolean>\"\n            },\n            {\n              \"name\": \"<string>\",\n              \"description\": \"<string>\",\n              \"default\": \"<boolean>\"\n            }\n          ]\n        },\n        {\n          \"name\": \"<string>\",\n          \"instanceTypes\": [\n            {\n              \"name\": \"<string>\",\n              \"description\": \"<string>\",\n              \"default\": \"<boolean>\"\n            },\n            {\n              \"name\": \"<string>\",\n              \"description\": \"<string>\",\n              \"default\": \"<boolean>\"\n            }\n          ]\n        }\n      ],\n      \"clusters\": [\n        {\n          \"k8sVersion\": \"<string>\",\n          \"id\": \"<string>\",\n          \"name\": \"<string>\"\n        },\n        {\n          \"k8sVersion\": \"<string>\",\n          \"id\": \"<string>\",\n          \"name\": \"<string>\"\n        }\n      ]\n    },\n    {\n      \"id\": \"<uuid>\",\n      \"name\": \"<string>\",\n      \"ncaId\": \"<string>\",\n      \"authorizedNcaIds\": [\n        \"<string>\",\n        \"<string>\"\n      ],\n      \"gpus\": [\n        {\n          \"name\": \"<string>\",\n          \"instanceTypes\": [\n            {\n              \"name\": \"<string>\",\n              \"description\": \"<string>\",\n              \"default\": \"<boolean>\"\n            },\n            {\n              \"name\": \"<string>\",\n              \"description\": \"<string>\",\n              \"default\": \"<boolean>\"\n            }\n          ]\n        },\n        {\n          \"name\": \"<string>\",\n          \"instanceTypes\": [\n            {\n              \"name\": \"<string>\",\n              \"description\": \"<string>\",\n              \"default\": \"<boolean>\"\n            },\n            {\n              \"name\": \"<string>\",\n              \"description\": \"<string>\",\n              \"default\": \"<boolean>\"\n            }\n          ]\n        }\n      ],\n      \"clusters\": [\n        {\n          \"k8sVersion\": \"<string>\",\n          \"id\": \"<string>\",\n          \"name\": \"<string>\"\n        },\n        {\n          \"k8sVersion\": \"<string>\",\n          \"id\": \"<string>\",\n          \"name\": \"<string>\"\n        }\n      ]\n    }\n  ]\n}"
+						}
+					]
+				}
+			],
+			"description": "Defines endpoints to list Cluster Groups and GPUs for Account Admins. All the endpoints defined in this API require an api-key with 'list_cluster_groups' scope in the HTTP Authorization header."
+		},
+		{
+			"name": "Queue Details",
+			"item": [
+				{
+					"name": "Queue Details - Function Version",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Accept",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{nvcfDomain}}/v2/nvcf/queues/functions/:functionId/versions/:versionId",
+							"host": [
+								"{{nvcfDomain}}"
+							],
+							"path": [
+								"v2",
+								"nvcf",
+								"queues",
+								"functions",
+								":functionId",
+								"versions",
+								":versionId"
+							],
+							"variable": [
+								{
+									"key": "functionId",
+									"value": "<uuid>",
+									"description": "(Required) Function id"
+								},
+								{
+									"key": "versionId",
+									"value": "<uuid>",
+									"description": "(Required) Function version id"
+								}
+							]
+						},
+						"description": "Provides details of all the queues associated with the specified function. If a function has multiple versions and they are all deployed, then the response includes details of all the queues. If the specified function is public, then Account Admin cannot perform this operation. Requires a bearer token or an api-key with 'queue_details' scope in the HTTP Authorization header."
+					},
+					"response": [
+						{
+							"name": "OK",
+							"originalRequest": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "Accept",
+										"value": "application/json"
+									}
+								],
+								"url": {
+									"raw": "https://api.ngc.nvidia.com/v2/nvcf/queues/functions/:functionId/versions/:versionId",
+									"protocol": "https",
+									"host": [
+										"api",
+										"ngc",
+										"nvidia",
+										"com"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"queues",
+										"functions",
+										":functionId",
+										"versions",
+										":versionId"
+									],
+									"variable": [
+										{
+											"key": "functionId"
+										},
+										{
+											"key": "versionId"
+										}
+									]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"_postman_previewlanguage": "json",
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								}
+							],
+							"cookie": [],
+							"body": "{\n  \"functionId\": \"<uuid>\",\n  \"queues\": [\n    {\n      \"functionName\": \"<string>\",\n      \"functionStatus\": \"DEPLOYING\",\n      \"functionVersionId\": \"<uuid>\",\n      \"queueDepth\": \"<integer>\"\n    },\n    {\n      \"functionName\": \"<string>\",\n      \"functionStatus\": \"DEPLOYING\",\n      \"functionVersionId\": \"<uuid>\",\n      \"queueDepth\": \"<integer>\"\n    }\n  ]\n}"
+						}
+					]
+				},
+				{
+					"name": "Queue Details",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Accept",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{nvcfDomain}}/v2/nvcf/queues/functions/:functionId",
+							"host": [
+								"{{nvcfDomain}}"
+							],
+							"path": [
+								"v2",
+								"nvcf",
+								"queues",
+								"functions",
+								":functionId"
+							],
+							"variable": [
+								{
+									"key": "functionId",
+									"value": "<uuid>",
+									"description": "(Required) Function id"
+								}
+							]
+						},
+						"description": "Provides details of all the queues associated with the specified function.  If a function has multiple versions and they are all deployed, then the  response includes details of all the queues. If the specified function  is public, then Account Admin cannot perform this operation. Requires a bearer token or an api-key with 'queue_details' scope in the HTTP  Authorization header. "
+					},
+					"response": [
+						{
+							"name": "OK",
+							"originalRequest": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "Accept",
+										"value": "application/json"
+									}
+								],
+								"url": {
+									"raw": "https://api.ngc.nvidia.com/v2/nvcf/queues/functions/:functionId",
+									"protocol": "https",
+									"host": [
+										"api",
+										"ngc",
+										"nvidia",
+										"com"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"queues",
+										"functions",
+										":functionId"
+									],
+									"variable": [
+										{
+											"key": "functionId"
+										}
+									]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"_postman_previewlanguage": "json",
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								}
+							],
+							"cookie": [],
+							"body": "{\n  \"functionId\": \"<uuid>\",\n  \"queues\": [\n    {\n      \"functionName\": \"<string>\",\n      \"functionStatus\": \"DEPLOYING\",\n      \"functionVersionId\": \"<uuid>\",\n      \"queueDepth\": \"<integer>\"\n    },\n    {\n      \"functionName\": \"<string>\",\n      \"functionStatus\": \"DEPLOYING\",\n      \"functionVersionId\": \"<uuid>\",\n      \"queueDepth\": \"<integer>\"\n    }\n  ]\n}"
+						}
+					]
+				},
+				{
+					"name": "Queue Position",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Accept",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{nvcfDomain}}/v2/nvcf/queues/:requestId/position",
+							"host": [
+								"{{nvcfDomain}}"
+							],
+							"path": [
+								"v2",
+								"nvcf",
+								"queues",
+								":requestId",
+								"position"
+							],
+							"variable": [
+								{
+									"key": "requestId",
+									"value": "<uuid>",
+									"description": "(Required) Function invocation request id"
+								}
+							]
+						},
+						"description": "Using the specified function invocation request id, returns the estimated  position of the corresponding message up to 1000 in the queue. Requires a bearer token or an api-key with 'queue_details' scope in the HTTP  Authorization header. "
+					},
+					"response": [
+						{
+							"name": "OK",
+							"originalRequest": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "Accept",
+										"value": "application/json"
+									}
+								],
+								"url": {
+									"raw": "https://api.ngc.nvidia.com/v2/nvcf/queues/:requestId/position",
+									"protocol": "https",
+									"host": [
+										"api",
+										"ngc",
+										"nvidia",
+										"com"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"queues",
+										":requestId",
+										"position"
+									],
+									"variable": [
+										{
+											"key": "requestId"
+										}
+									]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"_postman_previewlanguage": "json",
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								}
+							],
+							"cookie": [],
+							"body": "{\n  \"functionId\": \"<uuid>\",\n  \"functionVersionId\": \"<uuid>\",\n  \"positionInQueue\": \"<integer>\"\n}"
+						}
+					]
+				}
+			],
+			"description": "All the endpoints defined in this API require an api-key with 'queue_details' scope in the HTTP Authorization header."
+		},
+		{
+			"name": "Function Management",
+			"item": [
+				{
+					"name": "List Function Versions",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Accept",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/v2/nvcf/functions/:functionId/versions",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"v2",
+								"nvcf",
+								"functions",
+								":functionId",
+								"versions"
+							],
+							"variable": [
+								{
+									"key": "functionId",
+									"value": "<uuid>",
+									"description": "(Required) Function id"
+								}
+							]
+						},
+						"description": "Lists details of all the versions of the specified function in the authenticated  NVIDIA Cloud Account. Requires either a bearer token or an api-key with  'list_functions' or 'list_functions_details' scopes in the HTTP Authorization  header. "
+					},
+					"response": [
+						{
+							"name": "OK",
+							"originalRequest": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "Accept",
+										"value": "application/json"
+									}
+								],
+								"url": {
+									"raw": "https://api.ngc.nvidia.com/v2/nvcf/functions/:functionId/versions",
+									"protocol": "https",
+									"host": [
+										"api",
+										"ngc",
+										"nvidia",
+										"com"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"functions",
+										":functionId",
+										"versions"
+									],
+									"variable": [
+										{
+											"key": "functionId"
+										}
+									]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"_postman_previewlanguage": "json",
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								}
+							],
+							"cookie": [],
+							"body": "{\n  \"functions\": [\n    {\n      \"createdAt\": \"<dateTime>\",\n      \"healthUri\": \"<uri>\",\n      \"id\": \"<uuid>\",\n      \"name\": \"<string>\",\n      \"ncaId\": \"<string>\",\n      \"status\": \"DEPLOYING\",\n      \"versionId\": \"<uuid>\",\n      \"inferenceUrl\": \"<uri>\",\n      \"ownedByDifferentAccount\": \"<boolean>\",\n      \"inferencePort\": \"<integer>\",\n      \"containerArgs\": \"<string>\",\n      \"containerEnvironment\": [\n        {\n          \"key\": \"<string>\",\n          \"value\": \"<string>\"\n        },\n        {\n          \"key\": \"<string>\",\n          \"value\": \"<string>\"\n        }\n      ],\n      \"models\": [\n        {\n          \"name\": \"<string>\",\n          \"uri\": \"<uri>\",\n          \"version\": \"<string>\"\n        },\n        {\n          \"name\": \"<string>\",\n          \"uri\": \"<uri>\",\n          \"version\": \"<string>\"\n        }\n      ],\n      \"containerImage\": \"<uri>\",\n      \"apiBodyFormat\": \"CUSTOM\",\n      \"helmChart\": \"<uri>\",\n      \"helmChartServiceName\": \"<string>\",\n      \"activeInstances\": [\n        {\n          \"instanceId\": \"<string>\",\n          \"functionId\": \"<uuid>\",\n          \"functionVersionId\": \"<uuid>\",\n          \"instanceType\": \"<string>\",\n          \"instanceStatus\": \"DELETED\",\n          \"sisRequestId\": \"<uuid>\",\n          \"ncaId\": \"<string>\",\n          \"gpu\": \"<string>\",\n          \"backend\": \"<string>\",\n          \"location\": \"<string>\",\n          \"instanceCreatedAt\": \"<dateTime>\",\n          \"instanceUpdatedAt\": \"<dateTime>\"\n        },\n        {\n          \"instanceId\": \"<string>\",\n          \"functionId\": \"<uuid>\",\n          \"functionVersionId\": \"<uuid>\",\n          \"instanceType\": \"<string>\",\n          \"instanceStatus\": \"PREEMPTED\",\n          \"sisRequestId\": \"<uuid>\",\n          \"ncaId\": \"<string>\",\n          \"gpu\": \"<string>\",\n          \"backend\": \"<string>\",\n          \"location\": \"<string>\",\n          \"instanceCreatedAt\": \"<dateTime>\",\n          \"instanceUpdatedAt\": \"<dateTime>\"\n        }\n      ],\n      \"resources\": [\n        {\n          \"name\": \"<string>\",\n          \"uri\": \"<uri>\",\n          \"version\": \"<string>\"\n        },\n        {\n          \"name\": \"<string>\",\n          \"uri\": \"<uri>\",\n          \"version\": \"<string>\"\n        }\n      ]\n    },\n    {\n      \"createdAt\": \"<dateTime>\",\n      \"healthUri\": \"<uri>\",\n      \"id\": \"<uuid>\",\n      \"name\": \"<string>\",\n      \"ncaId\": \"<string>\",\n      \"status\": \"INACTIVE\",\n      \"versionId\": \"<uuid>\",\n      \"inferenceUrl\": \"<uri>\",\n      \"ownedByDifferentAccount\": \"<boolean>\",\n      \"inferencePort\": \"<integer>\",\n      \"containerArgs\": \"<string>\",\n      \"containerEnvironment\": [\n        {\n          \"key\": \"<string>\",\n          \"value\": \"<string>\"\n        },\n        {\n          \"key\": \"<string>\",\n          \"value\": \"<string>\"\n        }\n      ],\n      \"models\": [\n        {\n          \"name\": \"<string>\",\n          \"uri\": \"<uri>\",\n          \"version\": \"<string>\"\n        },\n        {\n          \"name\": \"<string>\",\n          \"uri\": \"<uri>\",\n          \"version\": \"<string>\"\n        }\n      ],\n      \"containerImage\": \"<uri>\",\n      \"apiBodyFormat\": \"PREDICT_V2\",\n      \"helmChart\": \"<uri>\",\n      \"helmChartServiceName\": \"<string>\",\n      \"activeInstances\": [\n        {\n          \"instanceId\": \"<string>\",\n          \"functionId\": \"<uuid>\",\n          \"functionVersionId\": \"<uuid>\",\n          \"instanceType\": \"<string>\",\n          \"instanceStatus\": \"DELETED\",\n          \"sisRequestId\": \"<uuid>\",\n          \"ncaId\": \"<string>\",\n          \"gpu\": \"<string>\",\n          \"backend\": \"<string>\",\n          \"location\": \"<string>\",\n          \"instanceCreatedAt\": \"<dateTime>\",\n          \"instanceUpdatedAt\": \"<dateTime>\"\n        },\n        {\n          \"instanceId\": \"<string>\",\n          \"functionId\": \"<uuid>\",\n          \"functionVersionId\": \"<uuid>\",\n          \"instanceType\": \"<string>\",\n          \"instanceStatus\": \"PREEMPTED\",\n          \"sisRequestId\": \"<uuid>\",\n          \"ncaId\": \"<string>\",\n          \"gpu\": \"<string>\",\n          \"backend\": \"<string>\",\n          \"location\": \"<string>\",\n          \"instanceCreatedAt\": \"<dateTime>\",\n          \"instanceUpdatedAt\": \"<dateTime>\"\n        }\n      ],\n      \"resources\": [\n        {\n          \"name\": \"<string>\",\n          \"uri\": \"<uri>\",\n          \"version\": \"<string>\"\n        },\n        {\n          \"name\": \"<string>\",\n          \"uri\": \"<uri>\",\n          \"version\": \"<string>\"\n        }\n      ]\n    }\n  ]\n}"
+						}
+					]
+				},
+				{
+					"name": "Create Function Version",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Accept",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"inferenceUrl\": \"<uri>\",\n  \"name\": \"TxxgTxxgTxxgTxxg\",\n  \"healthUri\": \"<uri>\",\n  \"inferencePort\": \"<integer>\",\n  \"containerArgs\": \"<string>\",\n  \"containerEnvironment\": [\n    {\n      \"key\": \"<string>\",\n      \"value\": \"<string>\"\n    },\n    {\n      \"key\": \"<string>\",\n      \"value\": \"<string>\"\n    }\n  ],\n  \"models\": [\n    {\n      \"name\": \"<string>\",\n      \"uri\": \"<uri>\",\n      \"version\": \"<string>\"\n    },\n    {\n      \"name\": \"<string>\",\n      \"uri\": \"<uri>\",\n      \"version\": \"<string>\"\n    }\n  ],\n  \"containerImage\": \"<uri>\",\n  \"helmChart\": \"<uri>\",\n  \"helmChartServiceName\": \"<string>\",\n  \"resources\": [\n    {\n      \"name\": \"<string>\",\n      \"uri\": \"<uri>\",\n      \"version\": \"<string>\"\n    },\n    {\n      \"name\": \"<string>\",\n      \"uri\": \"<uri>\",\n      \"version\": \"<string>\"\n    }\n  ],\n  \"apiBodyFormat\": \"CUSTOM\"\n}",
+							"options": {
+								"raw": {
+									"headerFamily": "json",
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{baseUrl}}/v2/nvcf/functions/:functionId/versions",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"v2",
+								"nvcf",
+								"functions",
+								":functionId",
+								"versions"
+							],
+							"variable": [
+								{
+									"key": "functionId",
+									"value": "<uuid>",
+									"description": "(Required) Function id"
+								}
+							]
+						},
+						"description": "Creates a version of the specified function within the authenticated NVIDIA  Cloud Account. Requires a bearer token with 'register_function' scope in the  HTTP Authorization header. "
+					},
+					"response": [
+						{
+							"name": "OK",
+							"originalRequest": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									},
+									{
+										"key": "Accept",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n  \"inferenceUrl\": \"<uri>\",\n  \"name\": \"TxxgTxxgTxxgTxxg\",\n  \"healthUri\": \"<uri>\",\n  \"inferencePort\": \"<integer>\",\n  \"containerArgs\": \"<string>\",\n  \"containerEnvironment\": [\n    {\n      \"key\": \"<string>\",\n      \"value\": \"<string>\"\n    },\n    {\n      \"key\": \"<string>\",\n      \"value\": \"<string>\"\n    }\n  ],\n  \"models\": [\n    {\n      \"name\": \"<string>\",\n      \"uri\": \"<uri>\",\n      \"version\": \"<string>\"\n    },\n    {\n      \"name\": \"<string>\",\n      \"uri\": \"<uri>\",\n      \"version\": \"<string>\"\n    }\n  ],\n  \"containerImage\": \"<uri>\",\n  \"helmChart\": \"<uri>\",\n  \"helmChartServiceName\": \"<string>\",\n  \"resources\": [\n    {\n      \"name\": \"<string>\",\n      \"uri\": \"<uri>\",\n      \"version\": \"<string>\"\n    },\n    {\n      \"name\": \"<string>\",\n      \"uri\": \"<uri>\",\n      \"version\": \"<string>\"\n    }\n  ],\n  \"apiBodyFormat\": \"CUSTOM\"\n}",
+									"options": {
+										"raw": {
+											"headerFamily": "json",
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "https://api.ngc.nvidia.com/v2/nvcf/functions/:functionId/versions",
+									"protocol": "https",
+									"host": [
+										"api",
+										"ngc",
+										"nvidia",
+										"com"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"functions",
+										":functionId",
+										"versions"
+									],
+									"variable": [
+										{
+											"key": "functionId"
+										}
+									]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"_postman_previewlanguage": "json",
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								}
+							],
+							"cookie": [],
+							"body": "{\n  \"function\": {\n    \"createdAt\": \"<dateTime>\",\n    \"healthUri\": \"<uri>\",\n    \"id\": \"<uuid>\",\n    \"name\": \"<string>\",\n    \"ncaId\": \"<string>\",\n    \"status\": \"INACTIVE\",\n    \"versionId\": \"<uuid>\",\n    \"inferenceUrl\": \"<uri>\",\n    \"ownedByDifferentAccount\": \"<boolean>\",\n    \"inferencePort\": \"<integer>\",\n    \"containerArgs\": \"<string>\",\n    \"containerEnvironment\": [\n      {\n        \"key\": \"<string>\",\n        \"value\": \"<string>\"\n      },\n      {\n        \"key\": \"<string>\",\n        \"value\": \"<string>\"\n      }\n    ],\n    \"models\": [\n      {\n        \"name\": \"<string>\",\n        \"uri\": \"<uri>\",\n        \"version\": \"<string>\"\n      },\n      {\n        \"name\": \"<string>\",\n        \"uri\": \"<uri>\",\n        \"version\": \"<string>\"\n      }\n    ],\n    \"containerImage\": \"<uri>\",\n    \"apiBodyFormat\": \"CUSTOM\",\n    \"helmChart\": \"<uri>\",\n    \"helmChartServiceName\": \"<string>\",\n    \"activeInstances\": [\n      {\n        \"instanceId\": \"<string>\",\n        \"functionId\": \"<uuid>\",\n        \"functionVersionId\": \"<uuid>\",\n        \"instanceType\": \"<string>\",\n        \"instanceStatus\": \"ERRORED\",\n        \"sisRequestId\": \"<uuid>\",\n        \"ncaId\": \"<string>\",\n        \"gpu\": \"<string>\",\n        \"backend\": \"<string>\",\n        \"location\": \"<string>\",\n        \"instanceCreatedAt\": \"<dateTime>\",\n        \"instanceUpdatedAt\": \"<dateTime>\"\n      },\n      {\n        \"instanceId\": \"<string>\",\n        \"functionId\": \"<uuid>\",\n        \"functionVersionId\": \"<uuid>\",\n        \"instanceType\": \"<string>\",\n        \"instanceStatus\": \"ACTIVE\",\n        \"sisRequestId\": \"<uuid>\",\n        \"ncaId\": \"<string>\",\n        \"gpu\": \"<string>\",\n        \"backend\": \"<string>\",\n        \"location\": \"<string>\",\n        \"instanceCreatedAt\": \"<dateTime>\",\n        \"instanceUpdatedAt\": \"<dateTime>\"\n      }\n    ],\n    \"resources\": [\n      {\n        \"name\": \"<string>\",\n        \"uri\": \"<uri>\",\n        \"version\": \"<string>\"\n      },\n      {\n        \"name\": \"<string>\",\n        \"uri\": \"<uri>\",\n        \"version\": \"<string>\"\n      }\n    ]\n  }\n}"
+						}
+					]
+				},
+				{
+					"name": "List Functions",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Accept",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/v2/nvcf/functions?visibility=authorized&visibility=private&visibility=public",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"v2",
+								"nvcf",
+								"functions"
+							],
+							"query": [
+								{
+									"key": "visibility",
+									"value": "authorized",
+									"description": "Query param 'visibility' indicates the kind of functions to be included  in the response. "
+								},
+								{
+									"key": "visibility",
+									"value": "private",
+									"description": "Query param 'visibility' indicates the kind of functions to be included  in the response. "
+								},
+								{
+									"key": "visibility",
+									"value": "public",
+									"description": "Query param 'visibility' indicates the kind of functions to be included  in the response. "
+								}
+							]
+						},
+						"description": "Lists all the functions associated with the authenticated NVIDIA Cloud Account.  Requires either a bearer token or an api-key with 'list_functions' or  'list_functions_details' scopes in the HTTP Authorization header."
+					},
+					"response": [
+						{
+							"name": "OK",
+							"originalRequest": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "Accept",
+										"value": "application/json"
+									}
+								],
+								"url": {
+									"raw": "https://api.ngc.nvidia.com/v2/nvcf/functions?visibility=public",
+									"protocol": "https",
+									"host": [
+										"api",
+										"ngc",
+										"nvidia",
+										"com"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"functions"
+									],
+									"query": [
+										{
+											"key": "visibility",
+											"value": "public",
+											"description": "Query param 'visibility' indicates the kind of functions to be included  in the response. "
+										}
+									]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"_postman_previewlanguage": "json",
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								}
+							],
+							"cookie": [],
+							"body": "{\n  \"functions\": [\n    {\n      \"createdAt\": \"<dateTime>\",\n      \"healthUri\": \"<uri>\",\n      \"id\": \"<uuid>\",\n      \"name\": \"<string>\",\n      \"ncaId\": \"<string>\",\n      \"status\": \"DEPLOYING\",\n      \"versionId\": \"<uuid>\",\n      \"inferenceUrl\": \"<uri>\",\n      \"ownedByDifferentAccount\": \"<boolean>\",\n      \"inferencePort\": \"<integer>\",\n      \"containerArgs\": \"<string>\",\n      \"containerEnvironment\": [\n        {\n          \"key\": \"<string>\",\n          \"value\": \"<string>\"\n        },\n        {\n          \"key\": \"<string>\",\n          \"value\": \"<string>\"\n        }\n      ],\n      \"models\": [\n        {\n          \"name\": \"<string>\",\n          \"uri\": \"<uri>\",\n          \"version\": \"<string>\"\n        },\n        {\n          \"name\": \"<string>\",\n          \"uri\": \"<uri>\",\n          \"version\": \"<string>\"\n        }\n      ],\n      \"containerImage\": \"<uri>\",\n      \"apiBodyFormat\": \"CUSTOM\",\n      \"helmChart\": \"<uri>\",\n      \"helmChartServiceName\": \"<string>\",\n      \"activeInstances\": [\n        {\n          \"instanceId\": \"<string>\",\n          \"functionId\": \"<uuid>\",\n          \"functionVersionId\": \"<uuid>\",\n          \"instanceType\": \"<string>\",\n          \"instanceStatus\": \"DELETED\",\n          \"sisRequestId\": \"<uuid>\",\n          \"ncaId\": \"<string>\",\n          \"gpu\": \"<string>\",\n          \"backend\": \"<string>\",\n          \"location\": \"<string>\",\n          \"instanceCreatedAt\": \"<dateTime>\",\n          \"instanceUpdatedAt\": \"<dateTime>\"\n        },\n        {\n          \"instanceId\": \"<string>\",\n          \"functionId\": \"<uuid>\",\n          \"functionVersionId\": \"<uuid>\",\n          \"instanceType\": \"<string>\",\n          \"instanceStatus\": \"PREEMPTED\",\n          \"sisRequestId\": \"<uuid>\",\n          \"ncaId\": \"<string>\",\n          \"gpu\": \"<string>\",\n          \"backend\": \"<string>\",\n          \"location\": \"<string>\",\n          \"instanceCreatedAt\": \"<dateTime>\",\n          \"instanceUpdatedAt\": \"<dateTime>\"\n        }\n      ],\n      \"resources\": [\n        {\n          \"name\": \"<string>\",\n          \"uri\": \"<uri>\",\n          \"version\": \"<string>\"\n        },\n        {\n          \"name\": \"<string>\",\n          \"uri\": \"<uri>\",\n          \"version\": \"<string>\"\n        }\n      ]\n    },\n    {\n      \"createdAt\": \"<dateTime>\",\n      \"healthUri\": \"<uri>\",\n      \"id\": \"<uuid>\",\n      \"name\": \"<string>\",\n      \"ncaId\": \"<string>\",\n      \"status\": \"INACTIVE\",\n      \"versionId\": \"<uuid>\",\n      \"inferenceUrl\": \"<uri>\",\n      \"ownedByDifferentAccount\": \"<boolean>\",\n      \"inferencePort\": \"<integer>\",\n      \"containerArgs\": \"<string>\",\n      \"containerEnvironment\": [\n        {\n          \"key\": \"<string>\",\n          \"value\": \"<string>\"\n        },\n        {\n          \"key\": \"<string>\",\n          \"value\": \"<string>\"\n        }\n      ],\n      \"models\": [\n        {\n          \"name\": \"<string>\",\n          \"uri\": \"<uri>\",\n          \"version\": \"<string>\"\n        },\n        {\n          \"name\": \"<string>\",\n          \"uri\": \"<uri>\",\n          \"version\": \"<string>\"\n        }\n      ],\n      \"containerImage\": \"<uri>\",\n      \"apiBodyFormat\": \"PREDICT_V2\",\n      \"helmChart\": \"<uri>\",\n      \"helmChartServiceName\": \"<string>\",\n      \"activeInstances\": [\n        {\n          \"instanceId\": \"<string>\",\n          \"functionId\": \"<uuid>\",\n          \"functionVersionId\": \"<uuid>\",\n          \"instanceType\": \"<string>\",\n          \"instanceStatus\": \"DELETED\",\n          \"sisRequestId\": \"<uuid>\",\n          \"ncaId\": \"<string>\",\n          \"gpu\": \"<string>\",\n          \"backend\": \"<string>\",\n          \"location\": \"<string>\",\n          \"instanceCreatedAt\": \"<dateTime>\",\n          \"instanceUpdatedAt\": \"<dateTime>\"\n        },\n        {\n          \"instanceId\": \"<string>\",\n          \"functionId\": \"<uuid>\",\n          \"functionVersionId\": \"<uuid>\",\n          \"instanceType\": \"<string>\",\n          \"instanceStatus\": \"PREEMPTED\",\n          \"sisRequestId\": \"<uuid>\",\n          \"ncaId\": \"<string>\",\n          \"gpu\": \"<string>\",\n          \"backend\": \"<string>\",\n          \"location\": \"<string>\",\n          \"instanceCreatedAt\": \"<dateTime>\",\n          \"instanceUpdatedAt\": \"<dateTime>\"\n        }\n      ],\n      \"resources\": [\n        {\n          \"name\": \"<string>\",\n          \"uri\": \"<uri>\",\n          \"version\": \"<string>\"\n        },\n        {\n          \"name\": \"<string>\",\n          \"uri\": \"<uri>\",\n          \"version\": \"<string>\"\n        }\n      ]\n    }\n  ]\n}"
+						}
+					]
+				},
+				{
+					"name": "Create Function",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Accept",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"inferenceUrl\": \"<uri>\",\n  \"name\": \"TxxgTxxgTxxgTxxg\",\n  \"healthUri\": \"<uri>\",\n  \"inferencePort\": \"<integer>\",\n  \"containerArgs\": \"<string>\",\n  \"containerEnvironment\": [\n    {\n      \"key\": \"<string>\",\n      \"value\": \"<string>\"\n    },\n    {\n      \"key\": \"<string>\",\n      \"value\": \"<string>\"\n    }\n  ],\n  \"models\": [\n    {\n      \"name\": \"<string>\",\n      \"uri\": \"<uri>\",\n      \"version\": \"<string>\"\n    },\n    {\n      \"name\": \"<string>\",\n      \"uri\": \"<uri>\",\n      \"version\": \"<string>\"\n    }\n  ],\n  \"containerImage\": \"<uri>\",\n  \"helmChart\": \"<uri>\",\n  \"helmChartServiceName\": \"<string>\",\n  \"resources\": [\n    {\n      \"name\": \"<string>\",\n      \"uri\": \"<uri>\",\n      \"version\": \"<string>\"\n    },\n    {\n      \"name\": \"<string>\",\n      \"uri\": \"<uri>\",\n      \"version\": \"<string>\"\n    }\n  ],\n  \"apiBodyFormat\": \"CUSTOM\"\n}",
+							"options": {
+								"raw": {
+									"headerFamily": "json",
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{baseUrl}}/v2/nvcf/functions",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"v2",
+								"nvcf",
+								"functions"
+							]
+						},
+						"description": "Creates a new function within the authenticated NVIDIA Cloud Account. Requires a  bearer token with 'register_function' scope in the HTTP Authorization header. "
+					},
+					"response": [
+						{
+							"name": "OK",
+							"originalRequest": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									},
+									{
+										"key": "Accept",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n  \"inferenceUrl\": \"<uri>\",\n  \"name\": \"TxxgTxxgTxxgTxxg\",\n  \"healthUri\": \"<uri>\",\n  \"inferencePort\": \"<integer>\",\n  \"containerArgs\": \"<string>\",\n  \"containerEnvironment\": [\n    {\n      \"key\": \"<string>\",\n      \"value\": \"<string>\"\n    },\n    {\n      \"key\": \"<string>\",\n      \"value\": \"<string>\"\n    }\n  ],\n  \"models\": [\n    {\n      \"name\": \"<string>\",\n      \"uri\": \"<uri>\",\n      \"version\": \"<string>\"\n    },\n    {\n      \"name\": \"<string>\",\n      \"uri\": \"<uri>\",\n      \"version\": \"<string>\"\n    }\n  ],\n  \"containerImage\": \"<uri>\",\n  \"helmChart\": \"<uri>\",\n  \"helmChartServiceName\": \"<string>\",\n  \"resources\": [\n    {\n      \"name\": \"<string>\",\n      \"uri\": \"<uri>\",\n      \"version\": \"<string>\"\n    },\n    {\n      \"name\": \"<string>\",\n      \"uri\": \"<uri>\",\n      \"version\": \"<string>\"\n    }\n  ],\n  \"apiBodyFormat\": \"CUSTOM\"\n}",
+									"options": {
+										"raw": {
+											"headerFamily": "json",
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "https://api.ngc.nvidia.com/v2/nvcf/functions",
+									"protocol": "https",
+									"host": [
+										"api",
+										"ngc",
+										"nvidia",
+										"com"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"functions"
+									]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"_postman_previewlanguage": "json",
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								}
+							],
+							"cookie": [],
+							"body": "{\n  \"function\": {\n    \"createdAt\": \"<dateTime>\",\n    \"healthUri\": \"<uri>\",\n    \"id\": \"<uuid>\",\n    \"name\": \"<string>\",\n    \"ncaId\": \"<string>\",\n    \"status\": \"INACTIVE\",\n    \"versionId\": \"<uuid>\",\n    \"inferenceUrl\": \"<uri>\",\n    \"ownedByDifferentAccount\": \"<boolean>\",\n    \"inferencePort\": \"<integer>\",\n    \"containerArgs\": \"<string>\",\n    \"containerEnvironment\": [\n      {\n        \"key\": \"<string>\",\n        \"value\": \"<string>\"\n      },\n      {\n        \"key\": \"<string>\",\n        \"value\": \"<string>\"\n      }\n    ],\n    \"models\": [\n      {\n        \"name\": \"<string>\",\n        \"uri\": \"<uri>\",\n        \"version\": \"<string>\"\n      },\n      {\n        \"name\": \"<string>\",\n        \"uri\": \"<uri>\",\n        \"version\": \"<string>\"\n      }\n    ],\n    \"containerImage\": \"<uri>\",\n    \"apiBodyFormat\": \"CUSTOM\",\n    \"helmChart\": \"<uri>\",\n    \"helmChartServiceName\": \"<string>\",\n    \"activeInstances\": [\n      {\n        \"instanceId\": \"<string>\",\n        \"functionId\": \"<uuid>\",\n        \"functionVersionId\": \"<uuid>\",\n        \"instanceType\": \"<string>\",\n        \"instanceStatus\": \"ERRORED\",\n        \"sisRequestId\": \"<uuid>\",\n        \"ncaId\": \"<string>\",\n        \"gpu\": \"<string>\",\n        \"backend\": \"<string>\",\n        \"location\": \"<string>\",\n        \"instanceCreatedAt\": \"<dateTime>\",\n        \"instanceUpdatedAt\": \"<dateTime>\"\n      },\n      {\n        \"instanceId\": \"<string>\",\n        \"functionId\": \"<uuid>\",\n        \"functionVersionId\": \"<uuid>\",\n        \"instanceType\": \"<string>\",\n        \"instanceStatus\": \"ACTIVE\",\n        \"sisRequestId\": \"<uuid>\",\n        \"ncaId\": \"<string>\",\n        \"gpu\": \"<string>\",\n        \"backend\": \"<string>\",\n        \"location\": \"<string>\",\n        \"instanceCreatedAt\": \"<dateTime>\",\n        \"instanceUpdatedAt\": \"<dateTime>\"\n      }\n    ],\n    \"resources\": [\n      {\n        \"name\": \"<string>\",\n        \"uri\": \"<uri>\",\n        \"version\": \"<string>\"\n      },\n      {\n        \"name\": \"<string>\",\n        \"uri\": \"<uri>\",\n        \"version\": \"<string>\"\n      }\n    ]\n  }\n}"
+						}
+					]
+				},
+				{
+					"name": "Get Function Version Details",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Accept",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/v2/nvcf/functions/:functionId/versions/:functionVersionId",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"v2",
+								"nvcf",
+								"functions",
+								":functionId",
+								"versions",
+								":functionVersionId"
+							],
+							"variable": [
+								{
+									"key": "functionId",
+									"value": "<uuid>",
+									"description": "(Required) Function id"
+								},
+								{
+									"key": "functionVersionId",
+									"value": "<uuid>",
+									"description": "(Required) Version id "
+								}
+							]
+						},
+						"description": "Retrieves detailed information of the specified function version in the  authenticated NVIDIA Cloud Account. Requires either a bearer token or an  api-key with 'list_functions' or 'list_functions_details' scopes in the HTTP  Authorization header. "
+					},
+					"response": [
+						{
+							"name": "OK",
+							"originalRequest": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "Accept",
+										"value": "application/json"
+									}
+								],
+								"url": {
+									"raw": "https://api.ngc.nvidia.com/v2/nvcf/functions/:functionId/versions/:functionVersionId",
+									"protocol": "https",
+									"host": [
+										"api",
+										"ngc",
+										"nvidia",
+										"com"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"functions",
+										":functionId",
+										"versions",
+										":functionVersionId"
+									],
+									"variable": [
+										{
+											"key": "functionId"
+										},
+										{
+											"key": "functionVersionId"
+										}
+									]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"_postman_previewlanguage": "json",
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								}
+							],
+							"cookie": [],
+							"body": "{\n  \"function\": {\n    \"createdAt\": \"<dateTime>\",\n    \"healthUri\": \"<uri>\",\n    \"id\": \"<uuid>\",\n    \"name\": \"<string>\",\n    \"ncaId\": \"<string>\",\n    \"status\": \"INACTIVE\",\n    \"versionId\": \"<uuid>\",\n    \"inferenceUrl\": \"<uri>\",\n    \"ownedByDifferentAccount\": \"<boolean>\",\n    \"inferencePort\": \"<integer>\",\n    \"containerArgs\": \"<string>\",\n    \"containerEnvironment\": [\n      {\n        \"key\": \"<string>\",\n        \"value\": \"<string>\"\n      },\n      {\n        \"key\": \"<string>\",\n        \"value\": \"<string>\"\n      }\n    ],\n    \"models\": [\n      {\n        \"name\": \"<string>\",\n        \"uri\": \"<uri>\",\n        \"version\": \"<string>\"\n      },\n      {\n        \"name\": \"<string>\",\n        \"uri\": \"<uri>\",\n        \"version\": \"<string>\"\n      }\n    ],\n    \"containerImage\": \"<uri>\",\n    \"apiBodyFormat\": \"CUSTOM\",\n    \"helmChart\": \"<uri>\",\n    \"helmChartServiceName\": \"<string>\",\n    \"activeInstances\": [\n      {\n        \"instanceId\": \"<string>\",\n        \"functionId\": \"<uuid>\",\n        \"functionVersionId\": \"<uuid>\",\n        \"instanceType\": \"<string>\",\n        \"instanceStatus\": \"DELETED\",\n        \"sisRequestId\": \"<uuid>\",\n        \"ncaId\": \"<string>\",\n        \"gpu\": \"<string>\",\n        \"backend\": \"<string>\",\n        \"location\": \"<string>\",\n        \"instanceCreatedAt\": \"<dateTime>\",\n        \"instanceUpdatedAt\": \"<dateTime>\"\n      },\n      {\n        \"instanceId\": \"<string>\",\n        \"functionId\": \"<uuid>\",\n        \"functionVersionId\": \"<uuid>\",\n        \"instanceType\": \"<string>\",\n        \"instanceStatus\": \"ACTIVE\",\n        \"sisRequestId\": \"<uuid>\",\n        \"ncaId\": \"<string>\",\n        \"gpu\": \"<string>\",\n        \"backend\": \"<string>\",\n        \"location\": \"<string>\",\n        \"instanceCreatedAt\": \"<dateTime>\",\n        \"instanceUpdatedAt\": \"<dateTime>\"\n      }\n    ],\n    \"resources\": [\n      {\n        \"name\": \"<string>\",\n        \"uri\": \"<uri>\",\n        \"version\": \"<string>\"\n      },\n      {\n        \"name\": \"<string>\",\n        \"uri\": \"<uri>\",\n        \"version\": \"<string>\"\n      }\n    ]\n  }\n}"
+						}
+					]
+				},
+				{
+					"name": "Delete Function",
+					"request": {
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/v2/nvcf/functions/:functionId/versions/:functionVersionId",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"v2",
+								"nvcf",
+								"functions",
+								":functionId",
+								"versions",
+								":functionVersionId"
+							],
+							"variable": [
+								{
+									"key": "functionId",
+									"value": "<uuid>",
+									"description": "(Required) Function id"
+								},
+								{
+									"key": "functionVersionId",
+									"value": "<uuid>",
+									"description": "(Required) Version id"
+								}
+							]
+						},
+						"description": "Deletes the specified function version in the authenticated NVIDIA Cloud  Account. Requires a bearer token with 'delete_function' scope in the HTTP  Authorization header. If the function version is public, then Account Admin  cannot delete the function. "
+					},
+					"response": [
+						{
+							"name": "No Content",
+							"originalRequest": {
+								"method": "DELETE",
+								"header": [],
+								"url": {
+									"raw": "https://api.ngc.nvidia.com/v2/nvcf/functions/:functionId/versions/:functionVersionId",
+									"protocol": "https",
+									"host": [
+										"api",
+										"ngc",
+										"nvidia",
+										"com"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"functions",
+										":functionId",
+										"versions",
+										":functionVersionId"
+									],
+									"variable": [
+										{
+											"key": "functionId"
+										},
+										{
+											"key": "functionVersionId"
+										}
+									]
+								}
+							},
+							"status": "No Content",
+							"code": 204,
+							"_postman_previewlanguage": "text",
+							"header": [],
+							"cookie": [],
+							"body": ""
+						}
+					]
+				},
+				{
+					"name": "List Function Ids",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Accept",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/v2/nvcf/functions/ids?visibility=authorized&visibility=private&visibility=public",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"v2",
+								"nvcf",
+								"functions",
+								"ids"
+							],
+							"query": [
+								{
+									"key": "visibility",
+									"value": "authorized",
+									"description": "Query param 'visibility' indicates the kind of functions to be included  in the response. "
+								},
+								{
+									"key": "visibility",
+									"value": "private",
+									"description": "Query param 'visibility' indicates the kind of functions to be included  in the response. "
+								},
+								{
+									"key": "visibility",
+									"value": "public",
+									"description": "Query param 'visibility' indicates the kind of functions to be included  in the response. "
+								}
+							]
+						},
+						"description": "Lists ids of all the functions in the authenticated NVIDIA Cloud Account.  Requires either a bearer token or an api-key with 'list_functions' or  'list_functions_details' scopes in the HTTP Authorization header. "
+					},
+					"response": [
+						{
+							"name": "OK",
+							"originalRequest": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "Accept",
+										"value": "application/json"
+									}
+								],
+								"url": {
+									"raw": "https://api.ngc.nvidia.com/v2/nvcf/functions/ids?visibility=public",
+									"protocol": "https",
+									"host": [
+										"api",
+										"ngc",
+										"nvidia",
+										"com"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"functions",
+										"ids"
+									],
+									"query": [
+										{
+											"key": "visibility",
+											"value": "public",
+											"description": "Query param 'visibility' indicates the kind of functions to be included  in the response. "
+										}
+									]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"_postman_previewlanguage": "json",
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								}
+							],
+							"cookie": [],
+							"body": "{\n  \"functionIds\": [\n    \"<uuid>\",\n    \"<uuid>\"\n  ]\n}"
+						}
+					]
+				}
+			],
+			"description": "Defines Function Management endpoints for Account Admins. All the endpoints  defined in this API require a bearer token or an api-key with appropriate scope in  the HTTP Authorization header. "
+		},
+		{
+			"name": "Function Deployment",
+			"item": [
+				{
+					"name": "Get Function Deployment Details",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Accept",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/v2/nvcf/deployments/functions/:functionId/versions/:functionVersionId",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"v2",
+								"nvcf",
+								"deployments",
+								"functions",
+								":functionId",
+								"versions",
+								":functionVersionId"
+							],
+							"variable": [
+								{
+									"key": "functionId",
+									"value": "<uuid>",
+									"description": "(Required) Function id"
+								},
+								{
+									"key": "functionVersionId",
+									"value": "<uuid>",
+									"description": "(Required) Function version id"
+								}
+							]
+						},
+						"description": "Allows Account Admins to retrieve the deployment details of the specified  function version. Access to this endpoint mandates a bearer token with 'deploy_function' scope in the  HTTP Authorization header. "
+					},
+					"response": [
+						{
+							"name": "OK",
+							"originalRequest": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "Accept",
+										"value": "application/json"
+									}
+								],
+								"url": {
+									"raw": "{{baseUrl}}/v2/nvcf/deployments/functions/:functionId/versions/:functionVersionId",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"deployments",
+										"functions",
+										":functionId",
+										"versions",
+										":functionVersionId"
+									],
+									"variable": [
+										{
+											"key": "functionId"
+										},
+										{
+											"key": "functionVersionId"
+										}
+									]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"_postman_previewlanguage": "json",
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								}
+							],
+							"cookie": [],
+							"body": "{\n  \"deployment\": {\n    \"deploymentSpecifications\": [\n      {\n        \"backend\": \"<string>\",\n        \"gpu\": \"<string>\",\n        \"maxInstances\": \"<integer>\",\n        \"minInstances\": \"<integer>\",\n        \"instanceType\": \"<string>\",\n        \"availabilityZones\": [\n          \"<string>\",\n          \"<string>\"\n        ],\n        \"maxRequestConcurrency\": \"<integer>\",\n        \"configuration\": {}\n      },\n      {\n        \"backend\": \"<string>\",\n        \"gpu\": \"<string>\",\n        \"maxInstances\": \"<integer>\",\n        \"minInstances\": \"<integer>\",\n        \"instanceType\": \"<string>\",\n        \"availabilityZones\": [\n          \"<string>\",\n          \"<string>\"\n        ],\n        \"maxRequestConcurrency\": \"<integer>\",\n        \"configuration\": {}\n      }\n    ],\n    \"functionId\": \"<uuid>\",\n    \"functionStatus\": \"DELETED\",\n    \"functionVersionId\": \"<uuid>\",\n    \"ncaId\": \"<string>\",\n    \"requestQueueUrl\": \"<string>\",\n    \"healthInfo\": [\n      {\n        \"backend\": \"<string>\",\n        \"error\": \"<string>\",\n        \"gpu\": \"<string>\",\n        \"sisRequestId\": \"<uuid>\",\n        \"instanceType\": \"<string>\"\n      },\n      {\n        \"backend\": \"<string>\",\n        \"error\": \"<string>\",\n        \"gpu\": \"<string>\",\n        \"sisRequestId\": \"<uuid>\",\n        \"instanceType\": \"<string>\"\n      }\n    ]\n  }\n}"
+						}
+					]
+				},
+				{
+					"name": "Update Function Deployment",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Accept",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"deploymentSpecifications\": [\n    {\n      \"backend\": \"<string>\",\n      \"gpu\": \"<string>\",\n      \"maxInstances\": \"<integer>\",\n      \"minInstances\": \"<integer>\",\n      \"instanceType\": \"<string>\",\n      \"availabilityZones\": [\n        \"<string>\",\n        \"<string>\"\n      ],\n      \"maxRequestConcurrency\": \"<integer>\",\n      \"configuration\": {}\n    },\n    {\n      \"backend\": \"<string>\",\n      \"gpu\": \"<string>\",\n      \"maxInstances\": \"<integer>\",\n      \"minInstances\": \"<integer>\",\n      \"instanceType\": \"<string>\",\n      \"availabilityZones\": [\n        \"<string>\",\n        \"<string>\"\n      ],\n      \"maxRequestConcurrency\": \"<integer>\",\n      \"configuration\": {}\n    }\n  ]\n}",
+							"options": {
+								"raw": {
+									"headerFamily": "json",
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{baseUrl}}/v2/nvcf/deployments/functions/:functionId/versions/:functionVersionId",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"v2",
+								"nvcf",
+								"deployments",
+								"functions",
+								":functionId",
+								"versions",
+								":functionVersionId"
+							],
+							"variable": [
+								{
+									"key": "functionId",
+									"value": "<uuid>",
+									"description": "(Required) Function id"
+								},
+								{
+									"key": "functionVersionId",
+									"value": "<uuid>",
+									"description": "(Required) Function version id"
+								}
+							]
+						},
+						"description": "Updates the deployment specs of the specified function version. It's important  to note that GPU type and backend configurations cannot be modified through  this endpoint. If the specified function is public, then Account Admin cannot  perform this operation. Access to this endpoint mandates a bearer token with 'deploy_function' scope in the  HTTP Authorization header. "
+					},
+					"response": [
+						{
+							"name": "OK",
+							"originalRequest": {
+								"method": "PUT",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									},
+									{
+										"key": "Accept",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n  \"deploymentSpecifications\": [\n    {\n      \"backend\": \"<string>\",\n      \"gpu\": \"<string>\",\n      \"maxInstances\": \"<integer>\",\n      \"minInstances\": \"<integer>\",\n      \"instanceType\": \"<string>\",\n      \"availabilityZones\": [\n        \"<string>\",\n        \"<string>\"\n      ],\n      \"maxRequestConcurrency\": \"<integer>\",\n      \"configuration\": {}\n    },\n    {\n      \"backend\": \"<string>\",\n      \"gpu\": \"<string>\",\n      \"maxInstances\": \"<integer>\",\n      \"minInstances\": \"<integer>\",\n      \"instanceType\": \"<string>\",\n      \"availabilityZones\": [\n        \"<string>\",\n        \"<string>\"\n      ],\n      \"maxRequestConcurrency\": \"<integer>\",\n      \"configuration\": {}\n    }\n  ]\n}",
+									"options": {
+										"raw": {
+											"headerFamily": "json",
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{baseUrl}}/v2/nvcf/deployments/functions/:functionId/versions/:functionVersionId",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"deployments",
+										"functions",
+										":functionId",
+										"versions",
+										":functionVersionId"
+									],
+									"variable": [
+										{
+											"key": "functionId"
+										},
+										{
+											"key": "functionVersionId"
+										}
+									]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"_postman_previewlanguage": "json",
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								}
+							],
+							"cookie": [],
+							"body": "{\n  \"deployment\": {\n    \"deploymentSpecifications\": [\n      {\n        \"backend\": \"<string>\",\n        \"gpu\": \"<string>\",\n        \"maxInstances\": \"<integer>\",\n        \"minInstances\": \"<integer>\",\n        \"instanceType\": \"<string>\",\n        \"availabilityZones\": [\n          \"<string>\",\n          \"<string>\"\n        ],\n        \"maxRequestConcurrency\": \"<integer>\",\n        \"configuration\": {}\n      },\n      {\n        \"backend\": \"<string>\",\n        \"gpu\": \"<string>\",\n        \"maxInstances\": \"<integer>\",\n        \"minInstances\": \"<integer>\",\n        \"instanceType\": \"<string>\",\n        \"availabilityZones\": [\n          \"<string>\",\n          \"<string>\"\n        ],\n        \"maxRequestConcurrency\": \"<integer>\",\n        \"configuration\": {}\n      }\n    ],\n    \"functionId\": \"<uuid>\",\n    \"functionStatus\": \"DELETED\",\n    \"functionVersionId\": \"<uuid>\",\n    \"ncaId\": \"<string>\",\n    \"requestQueueUrl\": \"<string>\",\n    \"healthInfo\": [\n      {\n        \"backend\": \"<string>\",\n        \"error\": \"<string>\",\n        \"gpu\": \"<string>\",\n        \"sisRequestId\": \"<uuid>\",\n        \"instanceType\": \"<string>\"\n      },\n      {\n        \"backend\": \"<string>\",\n        \"error\": \"<string>\",\n        \"gpu\": \"<string>\",\n        \"sisRequestId\": \"<uuid>\",\n        \"instanceType\": \"<string>\"\n      }\n    ]\n  }\n}"
+						}
+					]
+				},
+				{
+					"name": "Deploy Function",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							},
+							{
+								"key": "Accept",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"deploymentSpecifications\": [\n    {\n      \"backend\": \"<string>\",\n      \"gpu\": \"<string>\",\n      \"maxInstances\": \"<integer>\",\n      \"minInstances\": \"<integer>\",\n      \"instanceType\": \"<string>\",\n      \"availabilityZones\": [\n        \"<string>\",\n        \"<string>\"\n      ],\n      \"maxRequestConcurrency\": \"<integer>\",\n      \"configuration\": {}\n    },\n    {\n      \"backend\": \"<string>\",\n      \"gpu\": \"<string>\",\n      \"maxInstances\": \"<integer>\",\n      \"minInstances\": \"<integer>\",\n      \"instanceType\": \"<string>\",\n      \"availabilityZones\": [\n        \"<string>\",\n        \"<string>\"\n      ],\n      \"maxRequestConcurrency\": \"<integer>\",\n      \"configuration\": {}\n    }\n  ]\n}",
+							"options": {
+								"raw": {
+									"headerFamily": "json",
+									"language": "json"
+								}
+							}
+						},
+						"url": {
+							"raw": "{{baseUrl}}/v2/nvcf/deployments/functions/:functionId/versions/:functionVersionId",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"v2",
+								"nvcf",
+								"deployments",
+								"functions",
+								":functionId",
+								"versions",
+								":functionVersionId"
+							],
+							"variable": [
+								{
+									"key": "functionId",
+									"value": "<uuid>",
+									"description": "(Required) Function id"
+								},
+								{
+									"key": "functionVersionId",
+									"value": "<uuid>",
+									"description": "(Required) Function version id"
+								}
+							]
+						},
+						"description": "Initiates deployment for the specified function version. Upon invocation of  this endpoint, the function's status transitions to 'DEPLOYING'. If the  specified function version is public, then Account Admin cannot perform this  operation. Access to this endpoint mandates a bearer token with 'deploy_function' scope in the  HTTP Authorization header. "
+					},
+					"response": [
+						{
+							"name": "OK",
+							"originalRequest": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									},
+									{
+										"key": "Accept",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n  \"deploymentSpecifications\": [\n    {\n      \"backend\": \"<string>\",\n      \"gpu\": \"<string>\",\n      \"maxInstances\": \"<integer>\",\n      \"minInstances\": \"<integer>\",\n      \"instanceType\": \"<string>\",\n      \"availabilityZones\": [\n        \"<string>\",\n        \"<string>\"\n      ],\n      \"maxRequestConcurrency\": \"<integer>\",\n      \"configuration\": {}\n    },\n    {\n      \"backend\": \"<string>\",\n      \"gpu\": \"<string>\",\n      \"maxInstances\": \"<integer>\",\n      \"minInstances\": \"<integer>\",\n      \"instanceType\": \"<string>\",\n      \"availabilityZones\": [\n        \"<string>\",\n        \"<string>\"\n      ],\n      \"maxRequestConcurrency\": \"<integer>\",\n      \"configuration\": {}\n    }\n  ]\n}",
+									"options": {
+										"raw": {
+											"headerFamily": "json",
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{baseUrl}}/v2/nvcf/deployments/functions/:functionId/versions/:functionVersionId",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"deployments",
+										"functions",
+										":functionId",
+										"versions",
+										":functionVersionId"
+									],
+									"variable": [
+										{
+											"key": "functionId"
+										},
+										{
+											"key": "functionVersionId"
+										}
+									]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"_postman_previewlanguage": "json",
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								}
+							],
+							"cookie": [],
+							"body": "{\n  \"deployment\": {\n    \"deploymentSpecifications\": [\n      {\n        \"backend\": \"<string>\",\n        \"gpu\": \"<string>\",\n        \"maxInstances\": \"<integer>\",\n        \"minInstances\": \"<integer>\",\n        \"instanceType\": \"<string>\",\n        \"availabilityZones\": [\n          \"<string>\",\n          \"<string>\"\n        ],\n        \"maxRequestConcurrency\": \"<integer>\",\n        \"configuration\": {}\n      },\n      {\n        \"backend\": \"<string>\",\n        \"gpu\": \"<string>\",\n        \"maxInstances\": \"<integer>\",\n        \"minInstances\": \"<integer>\",\n        \"instanceType\": \"<string>\",\n        \"availabilityZones\": [\n          \"<string>\",\n          \"<string>\"\n        ],\n        \"maxRequestConcurrency\": \"<integer>\",\n        \"configuration\": {}\n      }\n    ],\n    \"functionId\": \"<uuid>\",\n    \"functionStatus\": \"DELETED\",\n    \"functionVersionId\": \"<uuid>\",\n    \"ncaId\": \"<string>\",\n    \"requestQueueUrl\": \"<string>\",\n    \"healthInfo\": [\n      {\n        \"backend\": \"<string>\",\n        \"error\": \"<string>\",\n        \"gpu\": \"<string>\",\n        \"sisRequestId\": \"<uuid>\",\n        \"instanceType\": \"<string>\"\n      },\n      {\n        \"backend\": \"<string>\",\n        \"error\": \"<string>\",\n        \"gpu\": \"<string>\",\n        \"sisRequestId\": \"<uuid>\",\n        \"instanceType\": \"<string>\"\n      }\n    ]\n  }\n}"
+						}
+					]
+				},
+				{
+					"name": "Delete Function Deployment",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{
+								"key": "Accept",
+								"value": "application/json"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/v2/nvcf/deployments/functions/:functionId/versions/:functionVersionId?graceful=true",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"v2",
+								"nvcf",
+								"deployments",
+								"functions",
+								":functionId",
+								"versions",
+								":functionVersionId"
+							],
+							"query": [
+								{
+									"key": "graceful",
+									"value": "true",
+									"description": "Query param to deactivate function for graceful shutdown"
+								}
+							],
+							"variable": [
+								{
+									"key": "functionId",
+									"value": "<uuid>",
+									"description": "(Required) Function id"
+								},
+								{
+									"key": "functionVersionId",
+									"value": "<uuid>",
+									"description": "(Required) Function version id"
+								}
+							]
+						},
+						"description": "Deletes the deployment associated with the specified function. Upon  deletion, any active instances will be terminated, and the function's status  will transition to 'INACTIVE'. To undeploy a function version gracefully,  specify 'graceful=true' query parameter, allowing current tasks to complete  before terminating the instances. If the specified function version is public,  then Account Admin cannot perform this operation. Access to this endpoint mandates a bearer token with 'deploy_function' scope in the  HTTP Authorization header. "
+					},
+					"response": [
+						{
+							"name": "OK",
+							"originalRequest": {
+								"method": "DELETE",
+								"header": [
+									{
+										"key": "Accept",
+										"value": "application/json"
+									}
+								],
+								"url": {
+									"raw": "{{baseUrl}}/v2/nvcf/deployments/functions/:functionId/versions/:functionVersionId?graceful=false",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"v2",
+										"nvcf",
+										"deployments",
+										"functions",
+										":functionId",
+										"versions",
+										":functionVersionId"
+									],
+									"query": [
+										{
+											"key": "graceful",
+											"value": "false",
+											"description": "Query param to deactivate function for graceful shutdown"
+										}
+									],
+									"variable": [
+										{
+											"key": "functionId"
+										},
+										{
+											"key": "functionVersionId"
+										}
+									]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"_postman_previewlanguage": "json",
+							"header": [
+								{
+									"key": "Content-Type",
+									"value": "application/json"
+								}
+							],
+							"cookie": [],
+							"body": "{\n  \"function\": {\n    \"createdAt\": \"<dateTime>\",\n    \"healthUri\": \"<uri>\",\n    \"id\": \"<uuid>\",\n    \"name\": \"<string>\",\n    \"ncaId\": \"<string>\",\n    \"status\": \"INACTIVE\",\n    \"versionId\": \"<uuid>\",\n    \"inferenceUrl\": \"<uri>\",\n    \"ownedByDifferentAccount\": \"<boolean>\",\n    \"inferencePort\": \"<integer>\",\n    \"containerArgs\": \"<string>\",\n    \"containerEnvironment\": [\n      {\n        \"key\": \"<string>\",\n        \"value\": \"<string>\"\n      },\n      {\n        \"key\": \"<string>\",\n        \"value\": \"<string>\"\n      }\n    ],\n    \"models\": [\n      {\n        \"name\": \"<string>\",\n        \"uri\": \"<uri>\",\n        \"version\": \"<string>\"\n      },\n      {\n        \"name\": \"<string>\",\n        \"uri\": \"<uri>\",\n        \"version\": \"<string>\"\n      }\n    ],\n    \"containerImage\": \"<uri>\",\n    \"apiBodyFormat\": \"CUSTOM\",\n    \"helmChart\": \"<uri>\",\n    \"helmChartServiceName\": \"<string>\",\n    \"activeInstances\": [\n      {\n        \"instanceId\": \"<string>\",\n        \"functionId\": \"<uuid>\",\n        \"functionVersionId\": \"<uuid>\",\n        \"instanceType\": \"<string>\",\n        \"instanceStatus\": \"DELETED\",\n        \"sisRequestId\": \"<uuid>\",\n        \"ncaId\": \"<string>\",\n        \"gpu\": \"<string>\",\n        \"backend\": \"<string>\",\n        \"location\": \"<string>\",\n        \"instanceCreatedAt\": \"<dateTime>\",\n        \"instanceUpdatedAt\": \"<dateTime>\"\n      },\n      {\n        \"instanceId\": \"<string>\",\n        \"functionId\": \"<uuid>\",\n        \"functionVersionId\": \"<uuid>\",\n        \"instanceType\": \"<string>\",\n        \"instanceStatus\": \"ACTIVE\",\n        \"sisRequestId\": \"<uuid>\",\n        \"ncaId\": \"<string>\",\n        \"gpu\": \"<string>\",\n        \"backend\": \"<string>\",\n        \"location\": \"<string>\",\n        \"instanceCreatedAt\": \"<dateTime>\",\n        \"instanceUpdatedAt\": \"<dateTime>\"\n      }\n    ],\n    \"resources\": [\n      {\n        \"name\": \"<string>\",\n        \"uri\": \"<uri>\",\n        \"version\": \"<string>\"\n      },\n      {\n        \"name\": \"<string>\",\n        \"uri\": \"<uri>\",\n        \"version\": \"<string>\"\n      }\n    ]\n  }\n}"
+						}
+					]
+				}
+			],
+			"description": "Defines Function Deployment endpoints for Account Admins. All the endpoints defined  in this API require a bearer token with 'deploy_function' scope in the HTTP  Authorization header."
+		},
+		{
+			"name": "JWT Token",
+			"item": [
+				{
+					"name": "Generate Token",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test(\"Your test name\", function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.collectionVariables.set(\"jwtToken\", jsonData[\"access_token\"]);",
+									"});"
+								],
+								"type": "text/javascript",
+								"packages": {}
+							}
+						}
+					],
+					"request": {
+						"auth": {
+							"type": "basic",
+							"basic": [
+								{
+									"key": "password",
+									"value": "{{adminClientSecret}}",
+									"type": "string"
+								},
+								{
+									"key": "username",
+									"value": "{{adminClientId}}",
+									"type": "string"
+								}
+							]
+						},
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"name": "Content-Type",
+								"value": "application/x-www-form-urlencoded",
+								"type": "text"
+							}
+						],
+						"body": {
+							"mode": "urlencoded",
+							"urlencoded": [
+								{
+									"key": "scope",
+									"value": "{{scopes}}",
+									"type": "text"
+								},
+								{
+									"key": "grant_type",
+									"value": "client_credentials",
+									"type": "text"
+								}
+							]
+						},
+						"url": {
+							"raw": "{{jwtTokenProvider}}/token",
+							"host": [
+								"{{jwtTokenProvider}}"
+							],
+							"path": [
+								"token"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		}
+	],
+	"auth": {
+		"type": "bearer",
+		"bearer": [
+			{
+				"key": "token",
+				"value": "{{ngcPersonalAPIKey}}",
+				"type": "string"
+			}
+		]
+	},
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"exec": [
+					""
+				]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "ngcPersonalAPIKey",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "baseUrl",
+			"value": "https://api.ngc.nvidia.com",
+			"type": "string"
+		},
+		{
+			"key": "nvcfDomain",
+			"value": "https://api.nvcf.nvidia.com"
+		},
+		{
+			"key": "adminClientId",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "adminClientSecret",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "jwtTokenProvider",
+			"value": "https://auth.example.com",
+			"type": "string"
+		},
+		{
+			"key": "scopes",
+			"value": "register_function list_cluster_groups update_function delete_function list_functions deploy_function invoke_function queue_details authorize_clients",
+			"type": "string"
+		},
+		{
+			"key": "jwtToken",
+			"value": "",
+			"type": "string"
+		}
+	]
+}

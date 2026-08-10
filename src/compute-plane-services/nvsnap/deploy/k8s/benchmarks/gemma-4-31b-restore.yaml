@@ -1,0 +1,75 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Restore pod for PDF-bench gemma-4-31b (cachedir / ember path).
+#
+# Webhook (cachedir mode, nvsnap.io/restore-from) RO-mounts the captured
+# rox at /opt/nvsnap, re-injects the same cache env (HF_HOME=/opt/nvsnap/
+# model, HOME=/opt/nvsnap/cache, …) stamped at capture, and OVERRIDES the
+# command to nvsnap-rootfs-restore — which page-cache-prewarms the cachedir
+# (~2.4 GB/s) then execs the original captured sglang command. So this is a
+# PLAIN pod: do NOT set HF_HOME or mount a cache volume (webhook owns it).
+# The args below are the source command; the webhook replays the captured
+# command, so they're informational/fallback.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: bench-gemma-4-31b-restored
+  namespace: nvsnap-system
+  labels:
+    app: bench-gemma-4-31b-restored
+    nvsnap.io/bench: "pdf-matrix"
+  annotations:
+    nvsnap.io/restore-from: "__CAPTURE_HASH__"
+spec:
+  tolerations:
+    - key: "nvidia.com/gpu"
+      operator: "Exists"
+      effect: "NoSchedule"
+  containers:
+    - name: sglang
+      image: lmsysorg/sglang:v0.5.12.post1
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/bash", "-lc"]
+      args:
+        - |
+          exec python3 -m sglang.launch_server \
+            --model-path google/gemma-4-31B-it \
+            --host 0.0.0.0 \
+            --port 30000 \
+            --tp-size 1 \
+            --mem-fraction-static 0.85 \
+            --quantization fp8
+      env:
+        # HF_HOME is injected by the webhook (cachedir) → /opt/nvsnap/model;
+        # do NOT set it here.
+        - { name: HF_HUB_DISABLE_XET,        value: "1" }
+        - { name: HF_HUB_ENABLE_HF_TRANSFER, value: "0" }
+        - { name: CUDA_VISIBLE_DEVICES,      value: "0" }
+        - { name: USE_LIBUV,                 value: "0" }
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: token
+      ports:
+        - { containerPort: 30000, name: http }
+      readinessProbe:
+        httpGet: { path: /v1/models, port: 30000 }
+        initialDelaySeconds: 30
+        periodSeconds: 10
+        timeoutSeconds: 5
+        failureThreshold: 60
+      resources:
+        limits:   { nvidia.com/gpu: "1" }
+        requests: { nvidia.com/gpu: "1" }
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - { name: shm, mountPath: /dev/shm }
+
+  volumes:
+    - name: shm
+      emptyDir: { medium: Memory, sizeLimit: 32Gi }
+
+  restartPolicy: Never

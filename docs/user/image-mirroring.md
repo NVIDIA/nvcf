@@ -1,6 +1,6 @@
 # Image Mirroring
 
-All required self-hosted NVCF artifacts (see [self-hosted-artifact-manifest](./manifest.md)) must be available to be pulled by pods in your Kubernetes cluster for a successful installation using the helmfile (`nvcf-self-managed-stack`) automation. This page provides examples on how to pull artifacts from NGC and push them to your desired registry.
+All required self-hosted NVCF artifacts (see [self-hosted-artifact-manifest](./manifest.md)) must be available to be pulled by pods in your Kubernetes cluster for a successful installation using the split stack bundles (`nvcf-self-managed-stack` for control plane and `nvcf-compute-plane-stack` for compute plane). This page provides examples on how to pull artifacts from NGC and push them to your desired registry.
 
 <Note>
 **Mirroring images is not the same as configuring image pull secrets.** This page covers how to copy NVCF artifacts into your registry. If your registry is private, Kubernetes also needs credentials to pull those images at runtime. For instructions on configuring image pull secrets for the NVCF control plane pods, see [control-plane-image-pull-secrets](./helmfile-installation.md) in the installation guide.
@@ -96,31 +96,41 @@ Failing to specify the correct platform will result in `exec format error` when 
 
    ```bash
    # For amd64 clusters (most EKS, GKE, AKS clusters)
-   docker pull --platform linux/amd64 nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-openbao:2.5.1-nv-1.1.0
+   docker pull --platform linux/amd64 nvcr.io/nvidia/nvcf/nats-box:0.19.7-nonroot
 
    # For arm64 clusters (Graviton-based EKS, etc.)
-   docker pull --platform linux/arm64 nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-openbao:2.5.1-nv-1.1.0
+   docker pull --platform linux/arm64 nvcr.io/nvidia/nvcf/nats-box:0.19.7-nonroot
    ```
 
 ### Pulling Helm Charts
 
-**OCI-compliant Helm Charts**
+<Warning>
+Public NVCF charts in the `nvidia/nvcf` namespace are NGC Helm
+charts. They are not public OCI artifacts. Pull them from
+`https://helm.ngc.nvidia.com/nvidia/nvcf`.
+
+</Warning>
+
+**Public NVCF Helm Charts**
 
 ```bash
-# Set your API key
-export NGC_API_KEY=<api key generated from the Personal API key steps above>
-
-# Login to the registry
-echo "${NGC_API_KEY}" | helm registry login nvcr.io/0833294136851237/nvcf-ncp-staging \
-  --username '$oauthtoken' --password-stdin
+# Add and update the public NVCF Helm repository
+helm repo add nvcf https://helm.ngc.nvidia.com/nvidia/nvcf --force-update
+helm repo update
 
 # Pull the chart
-helm pull oci://nvcr.io/0833294136851237/nvcf-ncp-staging/helm-nvca-operator --version 1.9.0
+helm pull nvcf/helm-nvca-operator --version 1.12.7
+
+# Prerelease charts require --devel when searching
+helm search repo nvcf/helm-nvcf-vanity-gateway --versions --devel
 ```
 
-**Repository-based Helm Charts (Non-OCI)**
+**Other Repository-based Helm Charts (Non-OCI)**
 
-Some charts like the GPU Operator and the Omniverse DDCS, UCC, storage-service, and discovery-service charts are available from traditional Helm repositories rather than OCI registries. These can be pulled directly from the public NVIDIA NGC Catalog.
+The GPU Operator and the Omniverse DDCS, UCC, storage-service, and
+discovery-service charts are also available from traditional Helm repositories
+rather than OCI registries. Pull them directly from the public NVIDIA NGC
+Catalog.
 
 ```bash
 # Add the NVIDIA Helm repository
@@ -139,7 +149,10 @@ helm pull omniverse/discovery-service --version 2.3.8
 ```
 
 <Note>
-The GPU Operator and related components (gpu-operator-validator, k8s-device-plugin), plus the Omniverse DDCS/UCC/storage charts, are available from public NVIDIA Helm repositories. You can either:
+Public NVCF charts, the GPU Operator and related components
+(gpu-operator-validator, k8s-device-plugin), plus the Omniverse
+DDCS/UCC/storage charts, are available from public NVIDIA Helm repositories.
+You can either:
 
 - Pull directly from the public repository at runtime (simplest approach)
 - Mirror to your private registry for air-gapped environments (see below)
@@ -181,35 +194,28 @@ First, ensure you have the [NGC CLI installed and configured](https://org.ngc.nv
 {/* docs-version-sync:BEGIN image-mirroring-resource-examples */}
 
 ```bash
-# Set the stack version
-export STACK_VERSION="0.6.0-rc.17"
+# Set stack versions
+export STACK_VERSION="0.6.0"
+export COMPUTE_STACK_VERSION="1.0.6"
 
-# Download a specific stack version
+# Download a specific control-plane stack version
 ngc registry resource download-version \
-  "0833294136851237/nvcf-ncp-staging/nvcf-self-managed-stack:${STACK_VERSION}"
+  "nvidia/nvcf/nvcf-self-managed-stack:${STACK_VERSION}"
 
-# List all stack versions
-ngc registry resource list \
-  "0833294136851237/nvcf-ncp-staging/nvcf-self-managed-stack:*"
-
-# Download latest stack version (omit version)
+# Download a specific compute-plane stack version
 ngc registry resource download-version \
-  "0833294136851237/nvcf-ncp-staging/nvcf-self-managed-stack"
+  "nvidia/nvcf/nvcf-compute-plane-stack:${COMPUTE_STACK_VERSION}"
 ```
 
 {/* docs-version-sync:END image-mirroring-resource-examples */}
 
-### Downloading `nvcf-self-managed-stack`
+### Downloading `nvcf-self-managed-stack` (control plane)
 
 The `nvcf-self-managed-stack` repository contains Helmfile configurations for deploying the NVCF control plane components.
 
 <Warning>
-**Check for the latest version before downloading.** The version shown below is an example only.
-
-```bash
-# List available versions to find the latest
-ngc registry resource list "0833294136851237/nvcf-ncp-staging/nvcf-self-managed-stack:*"
-```
+Use the control-plane stack version shown in the artifact manifest. The stack
+and its listed artifact versions are QA-qualified together.
 
 </Warning>
 
@@ -219,9 +225,9 @@ ngc registry resource list "0833294136851237/nvcf-ncp-staging/nvcf-self-managed-
 
 ```bash
 # Set the version
-export VERSION="0.6.0-rc.17"
+export VERSION="0.6.0"
 
-ngc registry resource download-version "0833294136851237/nvcf-ncp-staging/nvcf-self-managed-stack:${VERSION}" && \
+ngc registry resource download-version "nvidia/nvcf/nvcf-self-managed-stack:${VERSION}" && \
    mkdir -p nvcf-self-managed-stack && \
    tar -xzf nvcf-self-managed-stack_v${VERSION}/nvcf-self-managed-stack-${VERSION}.tar.gz -C nvcf-self-managed-stack && \
    rm -rf nvcf-self-managed-stack_v${VERSION}
@@ -234,17 +240,45 @@ If you don't have access to this repository, contact your NVIDIA representative.
 
 </Note>
 
+### Downloading `nvcf-compute-plane-stack`
+
+The `nvcf-compute-plane-stack` repository contains Helmfile configurations for deploying compute-plane components.
+
+<Warning>
+Use the compute-plane stack version shown in the artifact manifest. The stack
+and its listed artifact versions are QA-qualified together.
+
+</Warning>
+
+Download and extract:
+
+{/* docs-version-sync:BEGIN image-mirroring-compute-stack-snippet */}
+
+```bash
+# Set the version
+export COMPUTE_VERSION="1.0.6"
+
+ngc registry resource download-version "nvidia/nvcf/nvcf-compute-plane-stack:${COMPUTE_VERSION}" && \
+   mkdir -p nvcf-compute-plane-stack && \
+   tar -xzf nvcf-compute-plane-stack_v${COMPUTE_VERSION}/nvcf-compute-plane-stack-${COMPUTE_VERSION}.tar.gz -C nvcf-compute-plane-stack && \
+   rm -rf nvcf-compute-plane-stack_v${COMPUTE_VERSION}
+```
+
+{/* docs-version-sync:END image-mirroring-compute-stack-snippet */}
+
+<Note>
+Use both stack bundles for split-stack local and self-managed installs:
+`nvcf-self-managed-stack` for the control plane and
+`nvcf-compute-plane-stack` for compute-plane components.
+
+</Note>
+
 ### Downloading `nvcf-cli`
 
 The `nvcf-cli` is a command-line interface for managing NVIDIA Cloud Functions in self-hosted deployments.
 
 <Warning>
-**Check for the latest version before downloading.** The version shown below is an example only.
-
-```bash
-# List available versions to find the latest
-ngc registry resource list "0833294136851237/nvcf-ncp-staging/nvcf-cli:*"
-```
+Use the CLI version shown in the artifact manifest for this stack release.
 
 </Warning>
 
@@ -254,12 +288,12 @@ ngc registry resource list "0833294136851237/nvcf-ncp-staging/nvcf-cli:*"
 
 ```bash
 # Set the version
-export VERSION="0.0.30"
+export VERSION="1.10.3"
 
 # Set your platform (linux-amd64, linux-arm64, darwin-amd64, darwin-arm64, windows-amd64)
 export PLATFORM="linux-amd64"
 
-ngc registry resource download-version "0833294136851237/nvcf-ncp-staging/nvcf-cli:${VERSION}"
+ngc registry resource download-version "nvidia/nvcf/nvcf-cli:${VERSION}"
 
 tar -xzf nvcf-cli_v${VERSION}/${PLATFORM}/nvcf-cli-${PLATFORM}-${VERSION}.tar.gz
 mv nvcf-cli-${PLATFORM}-${VERSION} nvcf-cli
@@ -318,9 +352,9 @@ global:
     repository: nvcf-self-hosted
 ```
 
-The resulting image path would be: `<aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/nvcf-self-hosted/nvcf-openbao:2.5.1-nv-1.1.0`
+The resulting image path would be: `<aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/nvcf-self-hosted/nats-box:0.19.7-nonroot`
 
-In ECR, you must create repositories with the **full path** including the prefix, e.g., `nvcf-self-hosted/bitnami-cassandra`, `nvcf-self-hosted/nvcf-openbao`, etc.
+In ECR, you must create repositories with the **full path** including the prefix, e.g., `nvcf-self-hosted/notary-service`, `nvcf-self-hosted/nats-box`, etc.
 
 </Info>
 
@@ -339,27 +373,26 @@ aws ecr get-login-password --region us-east-1 | \
 
 ```bash
 # Create ECR repository with the full path (including prefix)
-aws ecr create-repository --repository-name ${REPO_PREFIX}/nvcf-openbao --region us-east-1
+aws ecr create-repository --repository-name ${REPO_PREFIX}/nats-box --region us-east-1
 
 # Tag the image for ECR (include repository prefix in path)
-docker tag nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-openbao:2.5.1-nv-1.1.0 \
-  <aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/${REPO_PREFIX}/nvcf-openbao:2.5.1-nv-1.1.0
+docker tag nvcr.io/nvidia/nvcf/nats-box:0.19.7-nonroot \
+  <aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/${REPO_PREFIX}/nats-box:0.19.7-nonroot
 
 # Push to ECR
-docker push <aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/${REPO_PREFIX}/nvcf-openbao:2.5.1-nv-1.1.0
+docker push <aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/${REPO_PREFIX}/nats-box:0.19.7-nonroot
 ```
 
 **Push a Helm Chart to ECR**
 
 ```bash
-# 1. Login to NGC with Helm
-export NGC_API_KEY="your-api-key"
-echo "${NGC_API_KEY}" | helm registry login nvcr.io/0833294136851237/nvcf-ncp-staging \
-  --username '$oauthtoken' --password-stdin
+# 1. Add and update the public NVCF Helm repository
+helm repo add nvcf https://helm.ngc.nvidia.com/nvidia/nvcf --force-update
+helm repo update
 
 # 2. Pull the Helm chart from NGC
-helm pull oci://nvcr.io/0833294136851237/nvcf-ncp-staging/helm-nvca-operator --version 1.9.0
-# This creates: helm-nvca-operator-1.9.0.tgz
+helm pull nvcf/helm-nvca-operator --version 1.12.7
+# This creates: helm-nvca-operator-1.12.7.tgz
 
 # 3. Login to AWS ECR with Helm
 aws ecr get-login-password --region us-east-1 | \
@@ -369,7 +402,7 @@ aws ecr get-login-password --region us-east-1 | \
 aws ecr create-repository --repository-name ${REPO_PREFIX}/helm-nvca-operator --region us-east-1
 
 # 5. Push to ECR as OCI artifact (include repository prefix)
-helm push helm-nvca-operator-1.9.0.tgz oci://<aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/${REPO_PREFIX}
+helm push helm-nvca-operator-1.12.7.tgz oci://<aws-account-id>.dkr.ecr.us-east-1.amazonaws.com/${REPO_PREFIX}
 ```
 
 <Note>
@@ -395,7 +428,7 @@ global:
     repository: nvcf-self-hosted
 ```
 
-The resulting image path would be: `cr-example-cn-beijing.cr.volces.com/nvcf-self-hosted/nvcf-openbao:2.5.1-nv-1.1.0`
+The resulting image path would be: `cr-example-cn-beijing.cr.volces.com/nvcf-self-hosted/nats-box:0.19.7-nonroot`
 
 </Info>
 
@@ -426,11 +459,11 @@ CR_ENDPOINT="cr-example-cn-beijing.cr.volces.com"
 NAMESPACE="nvcf-self-hosted"
 
 # Tag the image for Volcano Engine CR
-docker tag nvcr.io/0833294136851237/nvcf-ncp-staging/nvcf-openbao:2.5.1-nv-1.1.0 \
-  ${CR_ENDPOINT}/${NAMESPACE}/nvcf-openbao:2.5.1-nv-1.1.0
+docker tag nvcr.io/nvidia/nvcf/nats-box:0.19.7-nonroot \
+  ${CR_ENDPOINT}/${NAMESPACE}/nats-box:0.19.7-nonroot
 
 # Push to Volcano Engine CR
-docker push ${CR_ENDPOINT}/${NAMESPACE}/nvcf-openbao:2.5.1-nv-1.1.0
+docker push ${CR_ENDPOINT}/${NAMESPACE}/nats-box:0.19.7-nonroot
 ```
 
 **Push a Helm Chart to Volcano Engine CR**
@@ -442,14 +475,13 @@ NAMESPACE="nvcf-self-hosted"
 CR_USERNAME="your-username"
 CR_PASSWORD="your-password"
 
-# 1. Login to NGC with Helm
-export NGC_API_KEY="your-api-key"
-echo "${NGC_API_KEY}" | helm registry login nvcr.io/0833294136851237/nvcf-ncp-staging \
-  --username '$oauthtoken' --password-stdin
+# 1. Add and update the public NVCF Helm repository
+helm repo add nvcf https://helm.ngc.nvidia.com/nvidia/nvcf --force-update
+helm repo update
 
 # 2. Pull the Helm chart from NGC
-helm pull oci://nvcr.io/0833294136851237/nvcf-ncp-staging/helm-nvca-operator --version 1.9.0
-# This creates: helm-nvca-operator-1.9.0.tgz
+helm pull nvcf/helm-nvca-operator --version 1.12.7
+# This creates: helm-nvca-operator-1.12.7.tgz
 
 # 3. Login to Volcano Engine CR with Helm
 helm registry login ${CR_ENDPOINT} \
@@ -457,7 +489,7 @@ helm registry login ${CR_ENDPOINT} \
   --password "${CR_PASSWORD}"
 
 # 4. Push to Volcano Engine CR as OCI artifact
-helm push helm-nvca-operator-1.9.0.tgz oci://${CR_ENDPOINT}/${NAMESPACE}
+helm push helm-nvca-operator-1.12.7.tgz oci://${CR_ENDPOINT}/${NAMESPACE}
 ```
 
 ## Troubleshooting

@@ -1,0 +1,52 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "rootfsonly",
+    srcs = [
+        "classify.go",
+        "composer.go",
+        "enumerate.go",
+        "orchestrator.go",
+        "pidresolver.go",
+        "watcher.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/rootfsonly",
+    visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
+    deps = [
+        "//src/compute-plane-services/nvsnap/internal/checkpointstore",
+        "//src/compute-plane-services/nvsnap/internal/criu/mountinfo",
+        "//src/compute-plane-services/nvsnap/internal/tracing",
+        "@com_github_sirupsen_logrus//:logrus",
+        "@io_k8s_api//core/v1:core",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@io_k8s_apimachinery//pkg/fields",
+        "@io_k8s_apimachinery//pkg/types",
+        "@io_k8s_client_go//informers",
+        "@io_k8s_client_go//kubernetes",
+        "@io_k8s_client_go//tools/cache",
+        "@io_opentelemetry_go_otel//attribute",
+    ],
+)
+
+go_test(
+    name = "rootfsonly_test",
+    srcs = [
+        "capture_method_test.go",
+        "classify_test.go",
+        "composer_test.go",
+        "entry_argv_test.go",
+        "enumerate_test.go",
+        "orchestrator_test.go",
+        "pidresolver_test.go",
+        "watcher_test.go",
+    ],
+    embed = [":rootfsonly"],
+    deps = [
+        "//src/compute-plane-services/nvsnap/internal/checkpointstore",
+        "@io_k8s_api//core/v1:core",
+        "@io_k8s_apimachinery//pkg/api/resource",
+        "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
+        "@io_k8s_apimachinery//pkg/types",
+        "@io_k8s_client_go//kubernetes/fake",
+    ],
+)

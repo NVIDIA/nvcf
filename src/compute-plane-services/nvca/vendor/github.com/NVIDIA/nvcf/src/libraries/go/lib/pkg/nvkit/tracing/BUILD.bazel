@@ -1,0 +1,29 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "tracing",
+    srcs = ["trace.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/tracing",
+    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/tracing",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/errors",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/attribute",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/propagation",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/resource",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/sdk/trace",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/semconv/v1.17.0:v1_17_0",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/trace",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/otel/trace/noop",
+        "//src/compute-plane-services/nvca/vendor/go.uber.org/zap",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/credentials",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":tracing",
+    visibility = ["//visibility:public"],
+)

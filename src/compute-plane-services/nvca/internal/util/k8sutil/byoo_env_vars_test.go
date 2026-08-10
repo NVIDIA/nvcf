@@ -1,0 +1,91 @@
+/*
+SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package k8sutil
+
+import (
+	"encoding/base64"
+	"encoding/json"
+	"testing"
+
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+)
+
+func TestAddBYOOOTelCollectorEnvVarsToPodSpecMutatesOnlyBYOOCollectorContainer(t *testing.T) {
+	logSamplingPercentage := 10.0
+	traceSamplingPercentage := 1.0
+	samplingHashSeed := uint32(1234)
+	samplingFailClosed := false
+	collectorConfig := nvcaconfig.BYOOOTelCollectorConfig{
+		LogSampling: nvcaconfig.BYOOOTelLogSamplingConfig{
+			SamplingPercentage: &logSamplingPercentage,
+			Mode:               "hash_seed",
+			HashSeed:           &samplingHashSeed,
+			FailClosed:         &samplingFailClosed,
+			AttributeSource:    "record",
+			FromAttribute:      "log.id",
+			SamplingPriority:   "sampling.priority",
+		},
+		TraceSampling: nvcaconfig.BYOOOTelSamplingConfig{
+			SamplingPercentage: &traceSamplingPercentage,
+			Mode:               "hash_seed",
+			HashSeed:           &samplingHashSeed,
+			FailClosed:         &samplingFailClosed,
+		},
+	}
+	envs := append([]corev1.EnvVar{
+		{Name: nvcaconfig.BYOOLogChunkingEnabledEnv, Value: "true"},
+		{Name: nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv, Value: "983040"},
+		{Name: nvcaconfig.BYOODebugModeEnv, Value: "true"},
+		{Name: nvcaconfig.BYOOMetricSubsetEnabledEnv, Value: "true"},
+	}, collectorConfig.EnvVars()...)
+	expectedEnv := append([]corev1.EnvVar{
+		{Name: nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv, Value: "983040"},
+		{Name: nvcaconfig.BYOOLogChunkingEnabledEnv, Value: "true"},
+		{Name: nvcaconfig.BYOODebugModeEnv, Value: "true"},
+		{Name: nvcaconfig.BYOOMetricSubsetEnabledEnv, Value: "true"},
+	}, collectorConfig.EnvVars()...)
+	pod := &corev1.Pod{
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{
+					Name: common.ByooOTelCollectorPodNameBase,
+					Env: []corev1.EnvVar{
+						{Name: nvcaconfig.BYOOLogChunkMaxPayloadBytesEnv, Value: "1000000"},
+					},
+				},
+				{Name: "inference"},
+			},
+		},
+	}
+
+	AddBYOOOTelCollectorEnvVarsToPodSpec(&pod.Spec, envs)
+
+	assert.Equal(t, expectedEnv, pod.Spec.Containers[0].Env)
+	assert.Empty(t, pod.Spec.Containers[1].Env)
+
+	encodedConfig := pod.Spec.Containers[0].Env[len(pod.Spec.Containers[0].Env)-1].Value
+	decodedConfig, err := base64.StdEncoding.DecodeString(encodedConfig)
+	require.NoError(t, err)
+	var gotConfig nvcaconfig.BYOOOTelCollectorConfig
+	require.NoError(t, json.Unmarshal(decodedConfig, &gotConfig))
+	assert.Equal(t, collectorConfig, gotConfig)
+}

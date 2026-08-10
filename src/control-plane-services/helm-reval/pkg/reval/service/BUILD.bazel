@@ -1,0 +1,46 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "service",
+    srcs = [
+        "models.go",
+        "service.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/reval/service",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/control-plane-services/helm-reval/pkg/httpapi",
+        "//src/control-plane-services/helm-reval/reval",
+        "@com_github_go_chi_render//:render",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/icms-translate/translate/common",
+        "@io_k8s_apimachinery//pkg/runtime/schema",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":service",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "service_test",
+    srcs = [
+        "models_test.go",
+        "service_test.go",
+    ],
+    embed = [":service"],
+    deps = [
+        "//src/control-plane-services/helm-reval/reval",
+        "@com_github_go_chi_render//:render",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/icms-translate/translate/common",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@io_opentelemetry_go_otel_metric//noop",
+    ],
+)

@@ -1,0 +1,30 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+go_library(
+    name = "agent_lib",
+    srcs = [
+        "capture_write.go",
+        "main.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/cmd/agent",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//src/compute-plane-services/nvsnap/internal/agent",
+        "//src/compute-plane-services/nvsnap/internal/checkpointstore",
+        "//src/compute-plane-services/nvsnap/internal/treecopy",
+        "@com_github_sirupsen_logrus//:logrus",
+    ],
+)
+
+go_binary(
+    name = "agent",
+    embed = [":agent_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "agent_test",
+    srcs = ["capture_write_test.go"],
+    embed = [":agent_lib"],
+    deps = ["@com_github_sirupsen_logrus//:logrus"],
+)

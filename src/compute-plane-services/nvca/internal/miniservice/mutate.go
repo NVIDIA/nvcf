@@ -339,7 +339,7 @@ func (objMutators objectMutatorSet) setKAISchedulerMutators() {
 	})
 
 	queueLabel := map[string]string{
-		kaischeduler.SchedulerQueueLabel: kaischeduler.GetQName(),
+		kaischeduler.SchedulerQueueLabel: kaischeduler.DefaultQueue,
 	}
 	for key := range objMutators {
 		var mf objectMutatorFunc

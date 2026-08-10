@@ -27,8 +27,6 @@ go test ./internal/miniservice/... \
 - `internal/gc/` - Garbage collection cleaners
 - `internal/metrics/` - Prometheus metrics
 - `deployments/nvca-operator/` - Operator Helm chart
-- `docker/Dockerfile.nvca` - NVCA agent container image
-- `docker/Dockerfile.nvca-operator` - Operator container image
 - `test/` - E2E and integration tests
 
 ## Dev Environment Tips
@@ -375,6 +373,7 @@ Counter metrics are pre-initialized to zero in `internal/metrics/metrics.go` so 
 | `GCCleanerRunTotal` | `cleaner_name` | `Name()` methods in `internal/gc/*/cleaner.go` |
 | `GCCleanerRunTotal` | `status` | `success`, `failure` |
 | `KataRuntimeIsolationEnabled` | _(default labels only)_ | Initialized to 0; set via `SetKataRuntimeIsolationEnabled()` in `pkg/nvca/agent.go` |
+| `MaintenanceModeState` | `mode` | `MaintenanceMode` enum in `pkg/types/types.go` (`AllMaintenanceModes`); one-hot, set via `SetMaintenanceModeState()` / `WithMaintenanceMode()` |
 | `WorkloadResultTotal` | `workload_type` | `container`, `helm` (defined in `AllWorkloadTypes`) |
 | `WorkloadResultTotal` | `workload_kind` | Constants in `internal/metrics/workloadtypes/types.go` (`AllWorkloadKinds`) |
 | `WorkloadResultTotal` | `workload_status` | `success`, `failure` |
@@ -390,11 +389,29 @@ Counter metrics are pre-initialized to zero in `internal/metrics/metrics.go` so 
 - Adding a new MiniService event error type
 - Adding a new failure category or workload type/kind in `internal/metrics/workloadtypes/`
 - Adding a new upstream operation constant to `AllUpstreamOperations` in `internal/metrics/metrics.go`
+- Adding a new maintenance mode to `AllMaintenanceModes` in `pkg/types/types.go`
 
 **Why this matters:**
 - Prometheus `absent()` alerts fail on non-existent metrics
 - `rate()` calculations give unexpected results if metrics appear mid-scrape
 - Dashboards show gaps instead of zeros
+
+### OTel client metrics (outbound dependencies)
+
+Outbound dependency clients are instrumented with OpenTelemetry metrics following
+the OpenTelemetry Semantic Conventions, separate from the client_golang metrics
+above. This path does not use the manual zero-init loops: instruments come from an
+OTel MeterProvider and are exported through the OTel to Prometheus bridge onto the
+same `/metrics` endpoint. It is gated by the `ClientMetrics` feature flag.
+
+- Pipeline: `internal/otel/meter.go`. Recording: `internal/metrics/clientmetrics/`.
+  Labels: the semconv helpers in `internal/metrics/semconv/`.
+- Instrumented today: ICMS, ReVal, FNDS, the OAuth token fetchers, and the queue
+  client.
+- Declare histogram buckets explicitly and keep label values bounded.
+
+See `internal/metrics/METRICS.md` for the metric list, the label vocabulary, and
+the recipe for adding a new dependency or a new transport type.
 
 ## Key Environment Variables
 

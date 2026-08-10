@@ -12,6 +12,12 @@ message RateLimitRequest {
   string ncaId = 1;
   string functionId = 2;
   string functionVersionId = 3;
+  // clientAuthSubject is the unique caller identity the upstream service resolves
+  // from the request's credentials (e.g. a per-user delegation token or API key). When non-empty
+  // and a per-user rate is configured for the function version, an additional
+  // user-tier rate limit is enforced on top of the NCA-tier limit. Empty value
+  // skips user-tier checks (legacy behavior).
+  string clientAuthSubject = 4;
 }
 
 message RateLimitResponse {

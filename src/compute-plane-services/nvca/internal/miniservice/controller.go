@@ -25,6 +25,7 @@ import (
 
 	nvresourcev1beta1 "github.com/NVIDIA/k8s-dra-driver-gpu/api/nvidia.com/resource/v1beta1"
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
+	kartav1alpha1 "github.com/run-ai/karta/pkg/api/runai/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	authorizationv1 "k8s.io/api/authorization/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -35,11 +36,11 @@ import (
 	resourcev1 "k8s.io/api/resource/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/rest"
 	toolscache "k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
@@ -60,8 +61,10 @@ import (
 	nvcav1alpha1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/miniservice"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nodefeatures"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/profiling"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
@@ -81,13 +84,23 @@ var (
 		resourcev1.AddToScheme,
 		nvresourcev1beta1.AddToScheme,
 		authorizationv1.AddToScheme,
+		// Hack to fix karta's scheme builder.
+		getKartaAddToScheme(),
 	)
-
-	mgrScheme = runtime.NewScheme()
 )
 
-func init() {
-	utilruntime.Must(SchemeBuilder.AddToScheme(mgrScheme))
+func getKartaAddToScheme() func(*runtime.Scheme) error {
+	sb := runtime.NewSchemeBuilder(
+		func(s *runtime.Scheme) error {
+			s.AddKnownTypes(kartav1alpha1.SchemeGroupVersion,
+				&kartav1alpha1.Karta{},
+				&kartav1alpha1.KartaList{},
+			)
+			metav1.AddToGroupVersion(s, kartav1alpha1.SchemeGroupVersion)
+			return nil
+		},
+	)
+	return sb.AddToScheme
 }
 
 type ControllerOptions struct {
@@ -107,6 +120,11 @@ type ControllerOptions struct {
 	OverheadGetter enforce.InfraOverheadGetter
 	// CustomAnnotations is the cached custom annotations from BackendK8sCache
 	CustomAnnotations *sync.Map
+	// Kartas are live Karta objects from the cluster, to include in status checkers.
+	Kartas []*kartav1alpha1.Karta
+	// NsightProfilingAllowlist tracks which functions should have NVIDIA Nsight GPU
+	// profiling enabled. Shared with BackendK8sCache.
+	NsightProfilingAllowlist *profiling.Allowlist
 
 	// Internal use.
 	cacheDir string
@@ -118,6 +136,8 @@ type registrationInstanceTypeCache interface {
 }
 
 const (
+	controllerName = "miniservice-controller"
+
 	defaultCacheDir = "/var/run/nvca/reval-rendered-helmcharts"
 )
 
@@ -161,28 +181,32 @@ func BuildController(ctx context.Context,
 	r := &Reconciler{
 		ControllerOptions: opts,
 		cfg:               cfg,
-		Client:            mgr.GetClient(),
+		Client:            metrics.NewInstrumentedCRClient(mgr.GetClient()),
 		RESTConfig:        mgr.GetConfig(),
 		ReValClient:       rvClient,
 		tracer:            otel.NewTracer(),
 		Decoder:           newFlexibleDecoder(mgr.GetScheme(), extraGVKs...),
 		NFClient:          nflient,
-		eventRecorder:     mgr.GetEventRecorderFor("miniservice-controller"),
+		eventRecorder:     mgr.GetEventRecorderFor(controllerName),
 		chartCache:        chartcache.New(opts.cacheDir),
 		regITCache:        regITCache,
 		enabledAttrs:      enabledAttrs,
 		gvkCache:          gvkc,
 		now:               time.Now,
 		newImpersonatingClient: func(namespace string) (client.Client, error) {
-			const userNameFormat = "system:serviceaccount:%s:" + serviceAccountName
-			username := fmt.Sprintf(userNameFormat, namespace)
+			username := miniservice.InstanceServiceAccountUsername(namespace)
 			cfg := rest.CopyConfig(mgr.GetConfig())
 			cfg.Impersonate = rest.ImpersonationConfig{UserName: username}
-			return client.New(cfg, client.Options{
+			c, err := client.New(cfg, client.Options{
 				Scheme: mgr.GetScheme(),
 			})
+			if err == nil {
+				c = metrics.NewInstrumentedCRClient(c)
+			}
+			return c, err
 		},
-		newPermissionsChecker: newSelfSubjectAccessReviewPermissionsChecker,
+		newPermissionsChecker:             newSelfSubjectAccessReviewPermissionsChecker,
+		failedWorkloadUpdateRevisionCache: map[string]error{},
 	}
 
 	if r.regITCache == nil {
@@ -205,6 +229,20 @@ func BuildController(ctx context.Context,
 	}
 	if r.statusCheckers == nil {
 		r.statusCheckers = r.makeStatusCheckers()
+	}
+
+	// Add Karta status checkers from embedded and/or live Karta definitions.
+	// These are used to check first class operator objects generically.
+	kartas, err := loadKartaDefinitions(ctx, r.Kartas)
+	if err != nil {
+		return fmt.Errorf("load karta definitions: %w", err)
+	}
+	for _, karta := range kartas {
+		checker, err := r.newKartaDefinedObjectStatusChecker(karta)
+		if err != nil {
+			return fmt.Errorf("new karta defined object status checker: %w", err)
+		}
+		r.statusCheckers[kartaGVKToSchemaGVK(*karta.Spec.StructureDefinition.RootComponent.Kind)] = checker
 	}
 
 	if err := mgr.Add(r.chartCache); err != nil {
@@ -379,7 +417,7 @@ func (r *Reconciler) newNVLinkOptMetricsRunnable(mgr ctrl.Manager) manager.Runna
 	})
 }
 
-// updateNVLinkOptMetrics is a helper for the NVLink opt metrics runnable that actuall updates metrics.
+// updateNVLinkOptMetrics is a helper for the NVLink opt metrics runnable that actually updates metrics.
 func (r *Reconciler) updateNVLinkOptMetrics(ctx context.Context) error {
 	log := logf.FromContext(ctx)
 

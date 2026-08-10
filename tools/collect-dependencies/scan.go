@@ -27,6 +27,11 @@ import (
 func importPathsFromManifest(path string) ([]string, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
+		if os.IsNotExist(err) {
+			// imports.yaml is intentionally absent on the OSS mirror. Scan the
+			// native monorepo itself instead of silently collecting nothing.
+			return []string{repoRoot}, nil
+		}
 		return nil, err
 	}
 	var mf manifestFile
@@ -63,7 +68,7 @@ func scanTree(root string, langs map[string]bool) (dependencyScan, error) {
 		Go:     map[string]struct{}{},
 		Rust:   map[string]struct{}{},
 		Python: map[string]struct{}{},
-		Java:   map[string]struct{}{},
+		Node:   map[string]struct{}{},
 		Helm:   map[string]struct{}{},
 	}
 	if st, err := os.Stat(root); err != nil || !st.IsDir() {
@@ -96,9 +101,13 @@ func scanTree(root string, langs map[string]bool) (dependencyScan, error) {
 			for dep := range parsePipfile(path) {
 				out.Python[dep] = struct{}{}
 			}
-		case langs["java"] && name == "pom.xml":
-			for dep := range parsePOMDirectDependencies(path) {
-				out.Java[dep] = struct{}{}
+		case langs["node"] && name == "pnpm-lock.yaml":
+			deps, err := parsePNPMLock(path)
+			if err != nil {
+				return err
+			}
+			for dep := range deps {
+				out.Node[dep] = struct{}{}
 			}
 		}
 		return nil

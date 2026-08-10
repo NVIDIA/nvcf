@@ -57,6 +57,19 @@ func TestApplyEnvOverrides(t *testing.T) {
 			wantErr:   false,
 		},
 		{
+			name: "normalizes lowercase override key",
+			envB64: encodeTestEnv(map[string]string{
+				"BYOO_OTEL_COLLECTOR_CONTAINER": "original:v1",
+				"OTHER":                         "value",
+			}),
+			overrides: map[string]string{"byoo_otel_collector_container": "custom:v2"},
+			wantEnvs: map[string]string{
+				"BYOO_OTEL_COLLECTOR_CONTAINER": "custom:v2",
+				"OTHER":                         "value",
+			},
+			wantErr: false,
+		},
+		{
 			name:      "add new key",
 			envB64:    encodeTestEnv(map[string]string{"EXISTING": "value"}),
 			overrides: map[string]string{"NEW_KEY": "new_value"},

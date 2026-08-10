@@ -1,0 +1,32 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "policy",
+    srcs = [
+        "doc.go",
+        "eviction.go",
+        "eviction_expansion.go",
+        "generated_expansion.go",
+        "poddisruptionbudget.go",
+        "policy_client.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/typed/policy/v1",
+    importpath = "k8s.io/client-go/kubernetes/typed/policy/v1",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/policy/v1:policy",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/types",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/watch",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/applyconfigurations/policy/v1:policy",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/gentype",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/scheme",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/rest",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":policy",
+    visibility = ["//visibility:public"],
+)

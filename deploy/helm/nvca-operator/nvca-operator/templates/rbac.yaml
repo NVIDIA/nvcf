@@ -45,7 +45,18 @@ rules:
     verbs: ["get", "list", "create", "delete", "watch"]
   - apiGroups: [""]
     resources: ["configmaps"]
-    verbs: ["get"]
+    # get: read the network-checks config ConfigMap (its name is overridable
+    # via VALIDATOR_CONFIG_NAME, so this cannot be scoped by resourceName).
+    # create: write the cluster-validator-summary ConfigMap on the first run
+    # (create cannot be restricted by resourceName in Kubernetes RBAC).
+    verbs: ["get", "create"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    # update only ever targets the cluster-validator-summary ConfigMap the
+    # NVCA agent watches for the metrics pipeline, so scope it by name to
+    # limit blast radius if the validator ServiceAccount is compromised.
+    resourceNames: ["cluster-validator-summary"]
+    verbs: ["update"]
   - apiGroups: ["apps"]
     resources: ["deployments", "daemonsets"]
     verbs: ["get", "list"]

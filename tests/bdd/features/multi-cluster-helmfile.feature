@@ -1,0 +1,295 @@
+@ncp-local @multi-cluster @helmfile
+Feature: Install a local multi-cluster NVCF stack with Helmfile
+  As a self-managed NVCF operator,
+  I want to use the documented Helmfile workflow across a local multi-cluster
+  ncp-local topology,
+  so that I can install the control plane on one cluster and register and
+  install the NVCA operator on a separately registered compute cluster.
+
+  # The register-cluster Make target runs `nvcf-cli init` internally
+  # before the cluster register call, so unlike the CLI features this
+  # feature does not need a separate init step. The CLI state file
+  # (~/.nvcf-cli.nvcf-cli-local.state) the init writes is snapshotted
+  # by harness.NewSuite through the Ledger and restored at suite
+  # teardown.
+  #
+  # This feature is values-driven (not profile-driven). The CLI
+  # multi-cluster feature uses `self-hosted install --control-plane`
+  # which writes a profile with both inCluster and computeReachable
+  # URLs, then `compute-plane register --control-plane-profile`
+  # picks the right URL block by kube-context. This Helmfile path
+  # has no profile; the URLs come from the operator-authored env
+  # file (here: fixtures/self-managed-local-bdd-multi.yaml). The
+  # fixture's service-DNS hostnames must match the local stack values
+  # used by the CLI feature.
+  # See tests/bdd/AGENTS.md "CLI vs Helmfile install paths".
+
+  Rule: Helmfile installs the control plane on the control-plane cluster
+
+    Background:
+      Given environment variable "NGC_API_KEY" is set
+      And environment variable "SAMPLE_NGC_ORG" is set
+      And environment variable "SAMPLE_NGC_TEAM" is set
+      # The multi-cluster fixture starts from local service-DNS
+      # endpoint values, then the Background overlays
+      # operator-specific registry values before the first Helmfile
+      # install. Later scenarios reuse that install instead of
+      # reinstalling with different secrets or URLs.
+      And I copy the file "tests/bdd/fixtures/self-managed-local-bdd-multi.yaml" to "deploy/stacks/self-managed/environments/local-bdd.yaml"
+      And I update yaml file "deploy/stacks/self-managed/environments/local-bdd.yaml" with keys:
+        | global.imagePullSecrets[0].name               | nvcr-pull-secret                                                    |
+        | global.helm.sources.repository                | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                |
+        | global.image.repository                       | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                |
+        | api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE | nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/stargate-client:0.2.0  |
+      And I copy the file "tests/bdd/fixtures/nvcf-compute-plane-local-bdd-multi.yaml" to "deploy/stacks/nvcf-compute-plane/environments/local-bdd.yaml"
+      And I update yaml file "deploy/stacks/nvcf-compute-plane/environments/local-bdd.yaml" with keys:
+        | global.imagePullSecrets[0].name               | nvcr-pull-secret                                                    |
+        | global.helm.sources.repository                | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                |
+        | global.image.repository                       | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                |
+      And I copy the file "deploy/stacks/self-managed/secrets/secrets.yaml.template" to "deploy/stacks/self-managed/secrets/local-bdd-secrets.yaml"
+      And I substitute "REPLACE_WITH_BASE64_DOCKER_CREDENTIAL" in file "deploy/stacks/self-managed/secrets/local-bdd-secrets.yaml" with base64 of "$oauthtoken:${NGC_API_KEY}"
+      # Conflict precheck: single-cluster ncp-local's k3d serverlb
+      # claims 0.0.0.0:8080/8443/10081, and ncp-local-cp also
+      # needs NATS on 4222 plus the worker callback port 10086.
+      # Fail loudly so the operator runs
+      # `make -C tools/ncp-local-cluster destroy CLUSTER_NAME=ncp-local`
+      # before retrying. `k3d cluster get` exits 1 when absent (k3d v5).
+      And I run command "k3d cluster get ncp-local"
+      And the command exit code should be 1
+      And multi-cluster ncp-local compute clusters are running:
+        | ncp-local-compute-1 |
+      # The Helmfile install runs against whatever ambient kubectl
+      # context is set. Switch to the control-plane cluster so the
+      # subsequent pull-secret applies and the install target both
+      # land on k3d-ncp-local-cp.
+      And command has succeeded:
+        """
+        kubectl config use-context k3d-ncp-local-cp
+        """
+      And the "nvcr-pull-secret" image pull secret exists in namespaces:
+        | cassandra-system |
+        | nats-system      |
+        | nvcf             |
+        | api-keys         |
+        | ess              |
+        | sis              |
+        | vault-system     |
+        | nvca-operator    |
+        | cert-manager     |
+
+    @control-plane @llm-gateway
+    Scenario: Operator installs the control plane through Helmfile on the control-plane cluster
+      When I run command "make -C deploy/stacks/self-managed install HELMFILE_ENV=local-bdd"
+      Then the command exit code should be 0
+
+      When I run command "helm list --all-namespaces --kube-context k3d-ncp-local-cp -o json"
+      Then the json output should contain rows:
+        | name                      | namespace            | status   |
+        | nats                      | nats-system          | deployed |
+        | cert-manager              | cert-manager         | deployed |
+        | openbao-server            | vault-system         | deployed |
+        | cassandra                 | cassandra-system     | deployed |
+        | api-keys                  | api-keys             | deployed |
+        | sis                       | sis                  | deployed |
+        | api                       | nvcf                 | deployed |
+        | nvct-api                  | nvcf                 | deployed |
+        | invocation-service        | nvcf                 | deployed |
+        | grpc-proxy                | nvcf                 | deployed |
+        | ess-api                   | ess                  | deployed |
+        | notary-service            | nvcf                 | deployed |
+        | admin-issuer-proxy        | api-keys             | deployed |
+        | reval                     | nvcf                 | deployed |
+        | nats-auth-callout-service | nats-system          | deployed |
+        | ingress                   | envoy-gateway-system | deployed |
+        | llm-request-router        | nvcf                 | deployed |
+        | llm-api-gateway           | nvcf                 | deployed |
+
+      # These routes are installed by ncp-local before the Helmfile
+      # stack, then become fully resolved once the control-plane
+      # Services exist. Check route status here so Gateway wiring
+      # failures point at the route layer instead of surfacing only
+      # during function invocation.
+      When I run command:
+        """
+        kubectl --context k3d-ncp-local-cp wait httproute/nvcf-api-control-plane httproute/invocation-control-plane httproute/reval-control-plane -n nvcf --for=jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}'=True --timeout=2m
+        """
+      Then the command exit code should be 0
+
+      When I run command:
+        """
+        kubectl --context k3d-ncp-local-cp wait httproute/nvcf-api-control-plane httproute/invocation-control-plane httproute/reval-control-plane -n nvcf --for=jsonpath='{.status.parents[0].conditions[?(@.type=="ResolvedRefs")].status}'=True --timeout=2m
+        """
+      Then the command exit code should be 0
+
+      When I run command:
+        """
+        kubectl --context k3d-ncp-local-cp wait httproute/ess-control-plane -n ess --for=jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}'=True --timeout=2m
+        """
+      Then the command exit code should be 0
+
+      When I run command:
+        """
+        kubectl --context k3d-ncp-local-cp wait httproute/ess-control-plane -n ess --for=jsonpath='{.status.parents[0].conditions[?(@.type=="ResolvedRefs")].status}'=True --timeout=2m
+        """
+      Then the command exit code should be 0
+
+      When I run command:
+        """
+        kubectl --context k3d-ncp-local-cp wait httproute/sis-control-plane -n sis --for=jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}'=True --timeout=2m
+        """
+      Then the command exit code should be 0
+
+      When I run command:
+        """
+        kubectl --context k3d-ncp-local-cp wait httproute/sis-control-plane -n sis --for=jsonpath='{.status.parents[0].conditions[?(@.type=="ResolvedRefs")].status}'=True --timeout=2m
+        """
+      Then the command exit code should be 0
+
+      When I run command:
+        """
+        kubectl --context k3d-ncp-local-cp wait grpcroute/nvcf-api-control-plane-grpc -n nvcf --for=jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}'=True --timeout=2m
+        """
+      Then the command exit code should be 0
+
+      When I run command:
+        """
+        kubectl --context k3d-ncp-local-cp wait grpcroute/nvcf-api-control-plane-grpc -n nvcf --for=jsonpath='{.status.parents[0].conditions[?(@.type=="ResolvedRefs")].status}'=True --timeout=2m
+        """
+      Then the command exit code should be 0
+
+  Rule: Helmfile registers and installs NVCA on the compute cluster
+
+    Background:
+      Given environment variable "NVCF_CLI" is set
+      And environment variable "REPO_ROOT" is set
+      # This rule depends on the earlier control-plane scenario in the
+      # same feature run. That scenario authors local-bdd.yaml with
+      # the compute-reachable endpoints, creates the pull secrets, and
+      # installs the control plane. Do not repeat that setup here.
+
+    @nvca-registration
+    Scenario: Operator registers the compute cluster and installs the NVCA operator there
+      # nvcf-cli cluster register auto-discovers the target cluster's
+      # OIDC issuer + JWKS by running a probe Job in the CURRENT
+      # kubectl context, then POSTs that identity to ICMS so future
+      # PSAT tokens from this cluster can be validated. The compute
+      # cluster (not the control plane) is the target, so switch the
+      # context to it BEFORE register-cluster runs. If we registered
+      # from the cp context, ICMS would record the cp cluster's JWKS
+      # for the compute cluster row and the compute agent's tokens
+      # would 401 against ICMS at runtime.
+      #
+      # compute-plane install that follows also runs helm against the
+      # ambient context, so this single switch covers both steps.
+      When I run command "kubectl config use-context k3d-ncp-local-compute-1"
+      Then the command exit code should be 0
+
+      When I run command:
+        """
+        make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=ncp-local-compute-1 NVCF_CLI=${NVCF_CLI} NVCF_CLI_CONFIG=${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml
+        """
+      Then the command exit code should be 0
+      And file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-compute-1-register-values.yaml" should exist
+      And yaml file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-compute-1-register-values.yaml" should contain:
+        """
+        ncaID: nvcf-default
+        region: us-west-1
+        selfManaged:
+          identitySource: psat
+        """
+      And yaml file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-compute-1-register-values.yaml" key "clusterID" should not be empty
+      And yaml file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-compute-1-register-values.yaml" key "clusterGroupID" should not be empty
+
+      And the "nvcr-pull-secret" image pull secret exists in namespaces:
+        | nvca-operator |
+
+      When I run command:
+        """
+        make -C deploy/stacks/nvcf-compute-plane install CLUSTER_NAME=ncp-local-compute-1 HELMFILE_ENV=local-bdd NVCF_CLI=${NVCF_CLI} NVCF_CLI_CONFIG=${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml
+        """
+      Then the command exit code should be 0
+
+      When I run command "helm list -n nvca-operator --kube-context k3d-ncp-local-compute-1 -o json"
+      Then the json output should contain rows:
+        | name          | namespace     | status   |
+        | nvca-operator | nvca-operator | deployed |
+
+      When I run command "kubectl rollout status deployment/nvca-operator -n nvca-operator --context k3d-ncp-local-compute-1 --timeout=10m"
+      Then the command exit code should be 0
+
+      # The default NVCFBackend CR is created on the compute cluster
+      # by the nvca-operator helm chart at install time (helm reports
+      # this in its post-install output), and the NVCA agent updates
+      # its own .status.agentStatus locally. The NVCFBackend CRD is
+      # therefore only registered on k3d-ncp-local-compute-1, not on
+      # k3d-ncp-local-cp. Wait on the compute cluster.
+      When I run command "kubectl wait nvcfbackend ncp-local-compute-1 -n nvca-operator --context k3d-ncp-local-compute-1 --for=jsonpath={.status.agentStatus}=healthy --timeout=10m"
+      Then the command exit code should be 0
+
+  Rule: Helmfile-installed multi-cluster NVCF can run workloads
+
+    # This scenario intentionally has no Background. It depends on the
+    # earlier control-plane install and NVCA registration scenarios in
+    # this feature run, and is not a standalone tag target.
+    @nvct-task-api
+    Scenario: Operator launches an NVCT task and waits for it to complete
+      When I run command:
+        """
+        tests/bdd/scripts/run-nvct-task-smoke.sh
+        """
+      Then the command exit code should be 0
+      And the command output should contain "COMPLETED"
+
+    @function-lifecycle
+    Scenario: Operator creates, deploys, and invokes the Load Tester Supreme sample function
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function create --name bdd-load-tester-supreme --image nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/load_tester_supreme:0.0.8 --inference-url /echo --inference-port 8000 --health-uri /health --health-port 8000 --health-timeout PT30S
+        """
+      Then the command exit code should be 0
+
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function deploy create --gpu H100 --instance-type NCP.GPU.H100_8x --backend ncp-local-compute-1 --regions us-west-1 --min-instances 1 --max-instances 1 --timeout 900
+        """
+      Then the command exit code should be 0
+
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml api-key generate --description bdd-load-tester-supreme --for function --scopes invoke_function,list_functions,queue_details,list_functions_details
+        """
+      Then the command exit code should be 0
+
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke --request-body '{"message":"bdd-echo","repeats":1}' --timeout 120 --poll-duration 5
+        """
+      Then the command exit code should be 0
+      And the command output should contain "bdd-echo"
+
+    @function-lifecycle @grpc
+    Scenario: Operator creates, deploys, and invokes the gRPC Load Tester Supreme sample function
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function create --name bdd-grpc-load-tester-supreme --image nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/load_tester_supreme:0.0.8 --inference-url /grpc --inference-port 8001 --health-protocol GRPC --health-uri / --health-port 8001 --health-timeout PT30S
+        """
+      Then the command exit code should be 0
+
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function deploy create --gpu H100 --instance-type NCP.GPU.H100_8x --backend ncp-local-compute-1 --regions us-west-1 --min-instances 1 --max-instances 1 --timeout 900
+        """
+      Then the command exit code should be 0
+
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml api-key generate --description bdd-grpc-load-tester-supreme --for function --scopes invoke_function,list_functions,queue_details,list_functions_details
+        """
+      Then the command exit code should be 0
+
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke --grpc --grpc-plaintext --grpc-service Echo --grpc-method EchoMessage --request-body '{"message":"bdd-grpc-echo"}' --timeout 120 --poll-duration 5
+        """
+      Then the command exit code should be 0
+      And the command output should contain "bdd-grpc-echo"

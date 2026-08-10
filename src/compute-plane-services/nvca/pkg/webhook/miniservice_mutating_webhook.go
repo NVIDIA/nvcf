@@ -30,6 +30,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	translatecommon "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
+	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -71,7 +72,7 @@ type miniserviceMutatingWebhook struct {
 	scheme  *runtime.Scheme
 	decoder runtime.Decoder
 
-	// Shim for shared storage mutating webhook that needed object annoations applied by this webhook.
+	// Shim for shared storage mutating webhook that needed object annotations applied by this webhook.
 	// Since NVCA cannot guarantee webhook execution order, its mutate() method is called here.
 	sharedStorageMutator *helmStorageMutatingWebhook
 
@@ -228,11 +229,15 @@ func (w *miniserviceMutatingWebhook) Handle(ctx context.Context, req admission.R
 			fmt.Errorf("decode admitted %s: %w", gvk, err))
 	}
 
+	isCreate := req.Operation == admissionv1.Create
+
 	if pod, ok := obj.(*corev1.Pod); ok && pod.Name == translatecommon.UtilsPodName {
-		// Shared storage mutation does not need metadata.
-		if _, _, err := w.sharedStorageMutator.mutate(ctx, obj); err != nil {
-			return admission.Errored(http.StatusInternalServerError,
-				fmt.Errorf("mutate shared storage on utils pod: %w", err))
+		if isCreate {
+			// Shared storage mutation does not need metadata.
+			if _, _, err := w.sharedStorageMutator.mutate(ctx, obj, nvcatypes.MiniserviceMetadata{}); err != nil {
+				return admission.Errored(http.StatusInternalServerError,
+					fmt.Errorf("mutate shared storage on utils pod: %w", err))
+			}
 		}
 	} else {
 		// The metadata configmap is only written once, otherwise the webhook is not guaranteed
@@ -260,7 +265,7 @@ func (w *miniserviceMutatingWebhook) Handle(ctx context.Context, req admission.R
 			}
 		}
 
-		if err := w.mutate(ctx, obj, meta); err != nil {
+		if err := w.mutate(ctx, obj, meta, isCreate); err != nil {
 			return admission.Errored(http.StatusInternalServerError,
 				fmt.Errorf("mutate admitted %s: %w", gvk, err))
 		}
@@ -298,7 +303,7 @@ func (w *miniserviceMutatingWebhook) decodeObject(raw []byte, gvk schema.GroupVe
 }
 
 // mutate applies all NVCF mutations to obj in-place.
-func (w *miniserviceMutatingWebhook) mutate(ctx context.Context, obj client.Object, meta nvcatypes.MiniserviceMetadata) error {
+func (w *miniserviceMutatingWebhook) mutate(ctx context.Context, obj client.Object, meta nvcatypes.MiniserviceMetadata, isCreate bool) error {
 	// Always inject labels and annotations on the object itself.
 	labels, annotations := obj.GetLabels(), obj.GetAnnotations()
 	if labels == nil {
@@ -320,16 +325,18 @@ func (w *miniserviceMutatingWebhook) mutate(ctx context.Context, obj client.Obje
 		// GXCache label for injection.
 		w.mutateGXCache(labels)
 
-		// Pod-spec mutations.
-		w.mutatePodSpec(&t.Spec, meta)
+		// Pod spec mutations must only be applied on creation events.
+		if isCreate {
+			// NVLink DRA mutations for claims/scheduling.
+			if w.fff.IsAttributeEnabled(featureflag.AttrNVLinkOptimized) {
+				w.mutateNVLinkDRA(obj.GetNamespace(), t)
+			}
 
-		// NVLink DRA mutations for claims/scheduling.
-		if w.fff.IsAttributeEnabled(featureflag.AttrNVLinkOptimized) {
-			w.mutateNVLinkDRA(obj.GetNamespace(), t)
-		}
+			if _, _, err := w.sharedStorageMutator.mutate(ctx, obj, meta); err != nil {
+				return fmt.Errorf("mutate shared storage: %w", err)
+			}
 
-		if _, _, err := w.sharedStorageMutator.mutate(ctx, obj); err != nil {
-			return fmt.Errorf("mutate shared storage: %w", err)
+			w.mutatePodSpec(&t.Spec, meta)
 		}
 	}
 
@@ -359,8 +366,12 @@ func (w *miniserviceMutatingWebhook) mutatePodSpec(ps *corev1.PodSpec, meta nvca
 	}
 	_ = translatecommon.AddMixedEnvsToContainers(overrideableEnvVars, ps.InitContainers, meta.EnvVars...)
 	_ = translatecommon.AddMixedEnvsToContainers(overrideableEnvVars, ps.Containers, meta.EnvVars...)
+	k8sutil.AddBYOOOTelCollectorEnvVarsToPodSpec(ps, meta.OTelCollectorEnvVars)
 
-	if meta.ServiceAccountName != "" {
+	// If the pod is allowed k8s api access (ex. when an operator created it), and it has set a non-default service account,
+	// use it instead of the service account override.
+	if meta.ServiceAccountName != "" && (!w.fff.IsFeatureFlagEnabled(featureflag.AllowWorkloadKubernetesAPIAccess) ||
+		ps.ServiceAccountName == "" || ps.ServiceAccountName == "default") {
 		ps.ServiceAccountName = meta.ServiceAccountName
 	}
 
@@ -375,6 +386,8 @@ func (w *miniserviceMutatingWebhook) mutatePodSpec(ps *corev1.PodSpec, meta nvca
 	if meta.NodeAffinityKey != "" {
 		if w.fff.IsFeatureFlagEnabled(featureflag.HelmAllowCPUNodes) && !k8sutil.PodSpecRequestsGPU(ps) {
 			k8sutil.SetCPUWorkloadNodeAffinity(ps, meta.NodeAffinityKey)
+		} else {
+			k8sutil.SetInstanceTypeNodeAffinity(ps, meta.NodeAffinityKey, meta.NodeAffinityValue)
 		}
 	}
 

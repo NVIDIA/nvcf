@@ -24,8 +24,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"unicode/utf8"
-
-	"github.com/nats-io/nats-server/v2/server/stree"
 )
 
 // Sublist is a routing mechanism to handle subject distribution and
@@ -124,6 +122,18 @@ func NewSublist(enableCache bool) *Sublist {
 		return &Sublist{root: newLevel(), cache: make(map[string]*SublistResult)}
 	}
 	return &Sublist{root: newLevel()}
+}
+
+// NewSublistForServer will create a default sublist with caching enabled determined
+// by the server options.
+func NewSublistForServer(srv *Server) *Sublist {
+	if srv == nil {
+		return NewSublistNoCache() // Probably just unit tests.
+	}
+	if opts := srv.getOpts(); opts != nil {
+		return NewSublist(!opts.NoSublistCache)
+	}
+	return NewSublistNoCache()
 }
 
 // NewSublistWithCache will create a default sublist with caching enabled.
@@ -631,9 +641,10 @@ func (s *Sublist) hasInterest(subject string, doLock bool, np, nq *int) bool {
 	if doLock {
 		s.RLock()
 	}
-	var matched bool
+	var matched, ok bool
 	if s.cache != nil {
-		if r, ok := s.cache[subject]; ok {
+		var r *SublistResult
+		if r, ok = s.cache[subject]; ok {
 			if np != nil && nq != nil {
 				*np += len(r.psubs)
 				for _, qsub := range r.qsubs {
@@ -646,9 +657,9 @@ func (s *Sublist) hasInterest(subject string, doLock bool, np, nq *int) bool {
 	if doLock {
 		s.RUnlock()
 	}
-	if matched {
+	if ok {
 		atomic.AddUint64(&s.cacheHits, 1)
-		return true
+		return matched
 	}
 
 	tsa := [32]string{}
@@ -821,7 +832,9 @@ func matchLevelForAny(l *level, toks []string, np, nq *int) bool {
 				*nq += len(qsub)
 			}
 		}
-		return len(n.plist) > 0 || len(n.psubs) > 0 || len(n.qsubs) > 0
+		if len(n.plist) > 0 || len(n.psubs) > 0 || len(n.qsubs) > 0 {
+			return true
+		}
 	}
 	if pwc != nil {
 		if np != nil && nq != nil {
@@ -1330,8 +1343,9 @@ func SubjectsCollide(subj1, subj2 string) bool {
 	if subj1 == subj2 {
 		return true
 	}
-	toks1 := strings.Split(subj1, tsep)
-	toks2 := strings.Split(subj2, tsep)
+	tsa, tsb := [32]string{}, [32]string{}
+	toks1 := tokenizeSubjectIntoSlice(tsa[:0], subj1)
+	toks2 := tokenizeSubjectIntoSlice(tsb[:0], subj2)
 	pwc1, fwc1 := analyzeTokens(toks1)
 	pwc2, fwc2 := analyzeTokens(toks2)
 	// if both literal just string compare.
@@ -1341,9 +1355,9 @@ func SubjectsCollide(subj1, subj2 string) bool {
 	}
 	// So one or both have wildcards. If one is literal than we can do subset matching.
 	if l1 && !l2 {
-		return isSubsetMatch(toks1, subj2)
+		return isSubsetMatchTokenized(toks1, toks2)
 	} else if l2 && !l1 {
-		return isSubsetMatch(toks2, subj1)
+		return isSubsetMatchTokenized(toks2, toks1)
 	}
 	// Both have wildcards.
 	// If they only have partials then the lengths must match.
@@ -1727,65 +1741,5 @@ func getAllNodes(l *level, results *SublistResult) {
 	for _, n := range l.nodes {
 		addNodeToResults(n, results)
 		getAllNodes(n.next, results)
-	}
-}
-
-// IntersectStree will match all items in the given subject tree that
-// have interest expressed in the given sublist. The callback will only be called
-// once for each subject, regardless of overlapping subscriptions in the sublist.
-func IntersectStree[T any](st *stree.SubjectTree[T], sl *Sublist, cb func(subj []byte, entry *T)) {
-	var _subj [255]byte
-	intersectStree(st, sl.root, _subj[:0], cb)
-}
-
-func intersectStree[T any](st *stree.SubjectTree[T], r *level, subj []byte, cb func(subj []byte, entry *T)) {
-	nsubj := subj
-	if len(nsubj) > 0 {
-		nsubj = append(subj, '.')
-	}
-	if r.fwc != nil {
-		// We've reached a full wildcard, do a FWC match on the stree at this point
-		// and don't keep iterating downward.
-		nsubj := append(nsubj, '>')
-		st.Match(nsubj, cb)
-		return
-	}
-	if r.pwc != nil {
-		// We've found a partial wildcard. We'll keep iterating downwards, but first
-		// check whether there's interest at this level (without triggering dupes) and
-		// match if so.
-		var done bool
-		nsubj := append(nsubj, '*')
-		if len(r.pwc.psubs)+len(r.pwc.qsubs) > 0 {
-			st.Match(nsubj, cb)
-			done = true
-		}
-		if r.pwc.next.numNodes() > 0 {
-			intersectStree(st, r.pwc.next, nsubj, cb)
-		}
-		if done {
-			return
-		}
-	}
-	// Normal node with subject literals, keep iterating.
-	for t, n := range r.nodes {
-		if r.pwc != nil && r.pwc.next.numNodes() > 0 && n.next.numNodes() > 0 {
-			// A wildcard at the next level will already visit these descendents
-			// so skip so we don't callback the same subject more than once.
-			continue
-		}
-		nsubj := append(nsubj, t...)
-		if len(n.psubs)+len(n.qsubs) > 0 {
-			if subjectHasWildcard(bytesToString(nsubj)) {
-				st.Match(nsubj, cb)
-			} else {
-				if e, ok := st.Find(nsubj); ok {
-					cb(nsubj, e)
-				}
-			}
-		}
-		if n.next.numNodes() > 0 {
-			intersectStree(st, n.next, nsubj, cb)
-		}
 	}
 }

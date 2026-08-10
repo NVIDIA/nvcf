@@ -171,18 +171,18 @@ func (r *PlainRenderer) Emit(_ context.Context, e Event) error {
 			suffix = fmt.Sprintf(` reason="%s"`, ev.Message)
 		}
 		if ev.Cluster != "" && ev.Role != "" {
-			return r.writef("%s component %-16scluster=%s role=%s ready=%d/%d uptime=%s%s\n",
+			return r.writef("%s component %-18s cluster=%s role=%s ready=%d/%d uptime=%s%s\n",
 				ts, ev.Name, ev.Cluster, ev.Role, ev.Ready, ev.Total, uptime, suffix)
 		}
 		if ev.Cluster != "" {
-			return r.writef("%s component %-16scluster=%s ready=%d/%d uptime=%s%s\n",
+			return r.writef("%s component %-18s cluster=%s ready=%d/%d uptime=%s%s\n",
 				ts, ev.Name, ev.Cluster, ev.Ready, ev.Total, uptime, suffix)
 		}
 		if ev.Role != "" {
-			return r.writef("%s component %-16srole=%s ready=%d/%d  uptime=%s%s\n",
+			return r.writef("%s component %-18s role=%s ready=%d/%d  uptime=%s%s\n",
 				ts, ev.Name, ev.Role, ev.Ready, ev.Total, uptime, suffix)
 		}
-		return r.writef("%s component %-16sready=%d/%d  uptime=%s%s\n",
+		return r.writef("%s component %-18s ready=%d/%d  uptime=%s%s\n",
 			ts, ev.Name, ev.Ready, ev.Total, uptime, suffix)
 	case ClusterRow:
 		age := humanizeSec(ev.LastSeenAgeSec)

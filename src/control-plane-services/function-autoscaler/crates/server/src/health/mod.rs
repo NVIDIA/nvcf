@@ -239,9 +239,9 @@ impl Health {
         self.set_component_health(component_name, HealthStatus::Unhealthy, message);
     }
 
-    /// Register a health checker service and immediately run one check to set the initial state.
+    /// Register a health checker service and run one check to set the initial state before returning.
     /// Subsequent checks run on the background monitoring interval (every 30s).
-    pub fn register_health_checker(&self, checker: Arc<dyn HealthChecker>) {
+    pub async fn register_health_checker(&self, checker: Arc<dyn HealthChecker>) {
         let component_name = checker.component_name().to_string();
 
         // Register the component as unhealthy until proven otherwise
@@ -253,17 +253,12 @@ impl Health {
             checkers.push(checker.clone());
         }
 
-        // Run one check in the background so the state reflects reality before the
-        // monitoring loop has had a chance to tick.
-        let health = self.clone();
-        tokio::spawn(async move {
-            let result = checker.health().await;
-            if result.is_healthy {
-                health.set_component_healthy(&component_name, result.message);
-            } else {
-                health.set_component_unhealthy(&component_name, result.message);
-            }
-        });
+        let result = checker.health().await;
+        if result.is_healthy {
+            self.set_component_healthy(&component_name, result.message);
+        } else {
+            self.set_component_unhealthy(&component_name, result.message);
+        }
     }
 
     /// Start the background health monitoring task
@@ -375,10 +370,10 @@ mod tests {
     async fn test_health_checker() {
         let health = Arc::new(Health::new());
         let health_clone = health.clone();
-        health.register_health_checker(Arc::new(MockHealthChecker::new()));
+        health
+            .register_health_checker(Arc::new(MockHealthChecker::new()))
+            .await;
         health.start_health_monitoring(Duration::from_secs(1));
-        // Give the spawned initial check task a moment to complete.
-        tokio::time::sleep(Duration::from_millis(50)).await;
         let health_info = health_clone.get_health();
         assert_eq!(health_info.overall_status, HealthStatus::Healthy);
         assert_eq!(

@@ -1,0 +1,58 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "enforce",
+    srcs = [
+        "metadata.go",
+        "overhead.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/internal/util/k8sutil",
+        "//src/compute-plane-services/nvca/pkg/featureflag",
+        "//src/compute-plane-services/nvca/pkg/nvca/enforce/kata",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/core/v1:core",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/node/v1:node",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":enforce",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "enforce_test",
+    srcs = [
+        "metadata_test.go",
+        "overhead_test.go",
+    ],
+    embed = [":enforce"],
+    deps = [
+        "//src/compute-plane-services/nvca/pkg/featureflag",
+        "//src/compute-plane-services/nvca/pkg/featureflag/mock",
+        "//src/compute-plane-services/nvca/pkg/nvca/enforce/kata",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/core/v1:core",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/node/v1:node",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/resource",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/types",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/watch",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/applyconfigurations/node/v1:node",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/fake",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/typed/node/v1:node",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/testing",
+    ],
+)

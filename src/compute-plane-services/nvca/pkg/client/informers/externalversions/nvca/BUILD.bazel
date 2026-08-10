@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "nvca",
+    srcs = ["interface.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/informers/externalversions/nvca",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/pkg/client/informers/externalversions/internalinterfaces",
+        "//src/compute-plane-services/nvca/pkg/client/informers/externalversions/nvca/v1:nvca",
+        "//src/compute-plane-services/nvca/pkg/client/informers/externalversions/nvca/v1alpha1",
+        "//src/compute-plane-services/nvca/pkg/client/informers/externalversions/nvca/v2beta1",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":nvca",
+    visibility = ["//visibility:public"],
+)

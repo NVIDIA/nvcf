@@ -1,0 +1,32 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "resource",
+    srcs = [
+        "accessor.go",
+        "accessor_mock.go",
+        "component.go",
+        "component_factory.go",
+        "pod_querier.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/run-ai/karta/pkg/resource",
+    importpath = "github.com/run-ai/karta/pkg/resource",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/run-ai/karta/pkg/api/runai/v1alpha1",
+        "//src/compute-plane-services/nvca/vendor/github.com/run-ai/karta/pkg/jq/execution",
+        "//src/compute-plane-services/nvca/vendor/github.com/samber/lo",
+        "//src/compute-plane-services/nvca/vendor/go.uber.org/mock/gomock",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/core/v1:core",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1/unstructured",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/utils/ptr",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/client",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":resource",
+    visibility = ["//visibility:public"],
+)

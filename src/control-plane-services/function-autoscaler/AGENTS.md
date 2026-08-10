@@ -12,12 +12,12 @@
 - **Distributed locking**: Cassandra-based locks for coordinating discovery and scaling across replicas.
 
 ## Key Paths
-- `crates/server/src/scaling/` — scaling logic, policy client/cache, thresholds, stickiness
-- `crates/server/src/work/` — scaling loop, discovery, utilization queries
-- `crates/server/src/cassandra/` — Cassandra client, statements, distributed locks
-- `crates/server/src/timeseries_db/` — timeseries DB client (Thanos/VictoriaMetrics compatible)
-- `crates/server/src/nvcf_api/` — NVCF API client, OAuth2 token client
-- `crates/server/resources/` — YAML config files per environment
+- `crates/server/src/scaling/`: scaling logic, policy client/cache, thresholds, stickiness
+- `crates/server/src/work/`: scaling loop, discovery, utilization queries
+- `crates/server/src/cassandra/`: Cassandra client, statements, distributed locks
+- `crates/server/src/timeseries_db/`: timeseries DB client (Thanos/VictoriaMetrics compatible)
+- `crates/server/src/nvcf_api/`: NVCF API client, OAuth2 token client
+- `crates/server/resources/`: YAML config files per environment
 
 ## Config
 - All operational parameters are externalized to YAML settings files with `#[serde(default)]`.
@@ -45,3 +45,7 @@ cargo clippy -p rs-autoscaler --all-targets -- -D warnings
 cargo test -p rs-autoscaler
 cargo deny check advisories
 ```
+
+CI subproject id: `function-autoscaler`. Native Bazel validation and release
+wiring live in `tools/ci/subproject-validations.yaml`, an internal GitLab CI
+config not present in this public snapshot.

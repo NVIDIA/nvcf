@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "errors",
+    srcs = [
+        "encryption_errors.go",
+        "errors.go",
+    ],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/errors",
+    importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/errors",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/api/errors/v1:errors",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/uuid",
+        "//src/compute-plane-services/nvca/vendor/github.com/grpc-ecosystem/grpc-gateway/v2/runtime",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/genproto/googleapis/rpc/status",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/codes",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/status",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":errors",
+    visibility = ["//visibility:public"],
+)

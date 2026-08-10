@@ -1,0 +1,36 @@
+%%{init: {'theme':'base','themeVariables':{'primaryColor':'#1976D2','primaryTextColor':'#FFFFFF','primaryBorderColor':'#0D47A1','lineColor':'#212121','secondaryColor':'#F57C00','tertiaryColor':'#388E3C','actorBkg':'#1976D2','actorBorder':'#0D47A1','actorTextColor':'#FFFFFF','actorLineColor':'#212121','signalColor':'#212121','signalTextColor':'#212121','noteBkgColor':'#FFF59D','noteBorderColor':'#F57F17','noteTextColor':'#212121','activationBkgColor':'#5E35B1','activationBorderColor':'#311B92'}}}%%
+sequenceDiagram
+    participant User as User<br/>(nvsnap freeze / API)
+    participant Srv as nvsnap-server
+    participant Agent as nvsnap-agent<br/>(node N1)
+    participant WL as Workload Pod
+    participant Lib as libnvsnap_intercept.so
+    participant CRIU as CRIU
+    participant CC as cuda-checkpoint
+    participant PVC as per-capture PVC
+    participant Blob as nvsnap-blobstore
+
+    User->>Srv: POST /checkpoint/pod {pod, ns}
+    Srv->>Agent: Checkpoint(pod, ns, ckptID)
+    Agent->>WL: discover PIDs via cgroup
+    Agent->>WL: SIGUSR1 (quiesce)
+    WL->>Lib: signal handler
+    Lib->>Lib: drain io_uring queues
+    Lib->>Lib: ncclCommAbort all comms<br/>(multi-GPU only)
+    Lib->>WL: marker /dev/shm/nvsnap-quiesce-done-<pid>
+    Agent->>WL: poll for quiesce marker (30s timeout)
+
+    Agent->>CC: snapshot GPU state
+    CC-->>Agent: nvidia-files.img
+    Agent->>CRIU: dump --tree=<root-pid> --external=dev[195/0]:nvidia0 ...
+    CRIU->>WL: ptrace seize all threads
+    CRIU->>WL: dump memory, fds, vmas to /var/lib/containerd/nvsnap-checkpoints/<id>/
+    CRIU-->>Agent: dump complete (1237 files for NIM 8B)
+
+    Agent->>Agent: rootfs delta capture<br/>(if enabled)
+    Agent->>PVC: write CRIU + rootfs artifacts
+    Agent->>Blob: upload chunks (content-addressed)
+    Agent->>Srv: POST /api/v1/checkpoints/register
+    Srv-->>User: 202 Accepted {ckptID, size, location}
+
+    Note over Agent,Blob: NIM 8B: 76 GB checkpoint, ~3 min total

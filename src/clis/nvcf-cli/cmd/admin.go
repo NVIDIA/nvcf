@@ -184,8 +184,11 @@ var accountUpdateFlags struct {
 }
 
 func init() {
-	// COMMENTED OUT: Admin commands not currently exposed in CLI menu
-	// rootCmd.AddCommand(adminCmd)
+	// NVCF_CLI_ENABLE_ADMIN gates super-admin commands so they stay hidden from
+	// the default CLI menu. Operators set the env var to opt in.
+	if os.Getenv("NVCF_CLI_ENABLE_ADMIN") != "" {
+		rootCmd.AddCommand(adminCmd)
+	}
 
 	// Add subcommands
 	adminCmd.AddCommand(accountsCmd)
@@ -218,7 +221,7 @@ func init() {
 	secretsUpdateFunctionCmd.Flags().StringVar(&secretUpdateFlags.functionId, "function-id", "", "Function ID (required)")
 	secretsUpdateFunctionCmd.Flags().StringVar(&secretUpdateFlags.versionId, "version-id", "", "Function version ID (required)")
 	secretsUpdateFunctionCmd.Flags().StringVar(&secretUpdateFlags.inputFile, "input-file", "", "JSON file with secret data")
-	secretsUpdateFunctionCmd.Flags().StringVar(&secretUpdateFlags.secretsJSON, "secrets", "", "JSON string with secret data")
+	secretsUpdateFunctionCmd.Flags().StringVar(&secretUpdateFlags.secretsJSON, "secrets", "", "JSON string with secret data (WARNING: visible in process listings; prefer --input-file)")
 	secretsUpdateFunctionCmd.MarkFlagRequired("nca-id")
 	secretsUpdateFunctionCmd.MarkFlagRequired("function-id")
 	secretsUpdateFunctionCmd.MarkFlagRequired("version-id")
@@ -227,7 +230,7 @@ func init() {
 	secretsUpdateTelemetryCmd.Flags().StringVar(&secretUpdateFlags.ncaId, "nca-id", "", "NVIDIA Cloud Account ID (required)")
 	secretsUpdateTelemetryCmd.Flags().StringVar(&secretUpdateFlags.telemetryId, "telemetry-id", "", "Telemetry ID (required)")
 	secretsUpdateTelemetryCmd.Flags().StringVar(&secretUpdateFlags.inputFile, "input-file", "", "JSON file with secret data")
-	secretsUpdateTelemetryCmd.Flags().StringVar(&secretUpdateFlags.secretsJSON, "secrets", "", "JSON string with secret data")
+	secretsUpdateTelemetryCmd.Flags().StringVar(&secretUpdateFlags.secretsJSON, "secrets", "", "JSON string with secret data (WARNING: visible in process listings; prefer --input-file)")
 	secretsUpdateTelemetryCmd.MarkFlagRequired("nca-id")
 	secretsUpdateTelemetryCmd.MarkFlagRequired("telemetry-id")
 
@@ -247,27 +250,26 @@ func init() {
 }
 
 func runAccountsList(cmd *cobra.Command, args []string) error {
-	// Load client configuration
-	clientConfig, err := client.LoadConfig()
+	nvcfClient, err := loadAdminClient()
 	if err != nil {
-		return fmt.Errorf("failed to load configuration: %w", err)
-	}
-
-	// Create client
-	nvcfClient, err := client.NewClient(clientConfig)
-	if err != nil {
-		return fmt.Errorf("failed to create NVCF client: %w", err)
+		return err
 	}
 	defer nvcfClient.Close()
 
 	ctx := context.Background()
 
-	fmt.Println("Listing all NVIDIA Cloud Accounts...")
+	if !IsJSONOutput() {
+		fmt.Println("Listing all NVIDIA Cloud Accounts...")
+	}
 
 	// List accounts
 	resp, err := nvcfClient.ListAccounts(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to list accounts: %w", err)
+	}
+
+	if IsJSONOutput() {
+		return OutputJSON(resp)
 	}
 
 	if len(resp.Accounts) == 0 {
@@ -306,61 +308,31 @@ func runAccountsList(cmd *cobra.Command, args []string) error {
 }
 
 func runAccountsUpdate(cmd *cobra.Command, args []string) error {
-	// Validate that at least one update field is provided
-	if accountUpdateFlags.name == "" && accountUpdateFlags.maxFunctions == -1 &&
-		accountUpdateFlags.maxTasks == -1 && accountUpdateFlags.maxTelemetries == -1 &&
-		accountUpdateFlags.maxRegistryCredentials == -1 {
-		return fmt.Errorf("at least one update field must be provided (--name, --max-functions, --max-tasks, --max-telemetries, --max-registry-credentials)")
+	req, err := buildAccountUpdateRequest()
+	if err != nil {
+		return err
 	}
 
-	// Load client configuration
-	clientConfig, err := client.LoadConfig()
+	nvcfClient, err := loadAdminClient()
 	if err != nil {
-		return fmt.Errorf("failed to load configuration: %w", err)
-	}
-
-	// Create client
-	nvcfClient, err := client.NewClient(clientConfig)
-	if err != nil {
-		return fmt.Errorf("failed to create NVCF client: %w", err)
+		return err
 	}
 	defer nvcfClient.Close()
 
-	// Prepare update request
-	req := &client.AccountUpdateRequest{}
-
-	if accountUpdateFlags.name != "" {
-		req.Name = accountUpdateFlags.name
-	}
-	if accountUpdateFlags.maxFunctions >= 0 {
-		req.MaxFunctionsAllowed = &accountUpdateFlags.maxFunctions
-	}
-	if accountUpdateFlags.maxTasks >= 0 {
-		req.MaxTasksAllowed = &accountUpdateFlags.maxTasks
-	}
-	if accountUpdateFlags.maxTelemetries >= 0 {
-		// Validate max telemetries limit (max: 50)
-		if accountUpdateFlags.maxTelemetries > 50 {
-			return fmt.Errorf("max-telemetries cannot exceed 50")
-		}
-		req.MaxTelemetriesAllowed = &accountUpdateFlags.maxTelemetries
-	}
-	if accountUpdateFlags.maxRegistryCredentials >= 0 {
-		// Validate max registry credentials limit (max: 50)
-		if accountUpdateFlags.maxRegistryCredentials > 50 {
-			return fmt.Errorf("max-registry-credentials cannot exceed 50")
-		}
-		req.MaxRegistryCredentialsAllowed = &accountUpdateFlags.maxRegistryCredentials
-	}
-
 	ctx := context.Background()
 
-	fmt.Printf("Updating account %s...\n", accountUpdateFlags.ncaId)
+	if !IsJSONOutput() {
+		fmt.Printf("Updating account %s...\n", accountUpdateFlags.ncaId)
+	}
 
 	// Update account
 	resp, err := nvcfClient.UpdateAccount(ctx, accountUpdateFlags.ncaId, req)
 	if err != nil {
 		return fmt.Errorf("failed to update account: %w", err)
+	}
+
+	if IsJSONOutput() {
+		return OutputJSON(resp)
 	}
 
 	fmt.Printf("Account updated successfully!\n")
@@ -379,47 +351,23 @@ func runAccountsUpdate(cmd *cobra.Command, args []string) error {
 }
 
 func runSecretsUpdateFunction(cmd *cobra.Command, args []string) error {
-	// Validate input - either file or JSON string must be provided
-	if secretUpdateFlags.inputFile == "" && secretUpdateFlags.secretsJSON == "" {
-		return fmt.Errorf("either --input-file or --secrets must be provided")
-	}
-	if secretUpdateFlags.inputFile != "" && secretUpdateFlags.secretsJSON != "" {
-		return fmt.Errorf("only one of --input-file or --secrets can be provided")
-	}
-
-	// Load secret data
-	var secretData interface{}
-	if secretUpdateFlags.inputFile != "" {
-		data, err := os.ReadFile(secretUpdateFlags.inputFile)
-		if err != nil {
-			return fmt.Errorf("failed to read input file '%s': %w", secretUpdateFlags.inputFile, err)
-		}
-		if err := json.Unmarshal(data, &secretData); err != nil {
-			return fmt.Errorf("failed to parse JSON from file '%s': %w", secretUpdateFlags.inputFile, err)
-		}
-	} else {
-		if err := json.Unmarshal([]byte(secretUpdateFlags.secretsJSON), &secretData); err != nil {
-			return fmt.Errorf("failed to parse JSON from --secrets: %w", err)
-		}
-	}
-
-	// Load client configuration
-	clientConfig, err := client.LoadConfig()
+	nvcfClient, err := loadAdminClient()
 	if err != nil {
-		return fmt.Errorf("failed to load configuration: %w", err)
-	}
-
-	// Create client
-	nvcfClient, err := client.NewClient(clientConfig)
-	if err != nil {
-		return fmt.Errorf("failed to create NVCF client: %w", err)
+		return err
 	}
 	defer nvcfClient.Close()
 
+	secretData, err := loadSecretPayload()
+	if err != nil {
+		return err
+	}
+
 	ctx := context.Background()
 
-	fmt.Printf("Updating secrets for function %s version %s in account %s...\n",
-		secretUpdateFlags.functionId, secretUpdateFlags.versionId, secretUpdateFlags.ncaId)
+	if !IsJSONOutput() {
+		fmt.Printf("Updating secrets for function %s version %s in account %s...\n",
+			secretUpdateFlags.functionId, secretUpdateFlags.versionId, secretUpdateFlags.ncaId)
+	}
 
 	// Update function secrets (cross-account admin operation)
 	err = nvcfClient.UpdateFunctionSecretsAdmin(ctx, secretUpdateFlags.ncaId, secretUpdateFlags.functionId, secretUpdateFlags.versionId, secretData)
@@ -427,52 +375,37 @@ func runSecretsUpdateFunction(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to update function secrets: %w", err)
 	}
 
+	if IsJSONOutput() {
+		return OutputJSON(map[string]string{
+			"status":     "ok",
+			"ncaId":      secretUpdateFlags.ncaId,
+			"functionId": secretUpdateFlags.functionId,
+			"versionId":  secretUpdateFlags.versionId,
+		})
+	}
+
 	fmt.Printf("Function secrets updated successfully!\n")
 	return nil
 }
 
 func runSecretsUpdateTelemetry(cmd *cobra.Command, args []string) error {
-	// Validate input - either file or JSON string must be provided
-	if secretUpdateFlags.inputFile == "" && secretUpdateFlags.secretsJSON == "" {
-		return fmt.Errorf("either --input-file or --secrets must be provided")
-	}
-	if secretUpdateFlags.inputFile != "" && secretUpdateFlags.secretsJSON != "" {
-		return fmt.Errorf("only one of --input-file or --secrets can be provided")
-	}
-
-	// Load secret data
-	var secretData interface{}
-	if secretUpdateFlags.inputFile != "" {
-		data, err := os.ReadFile(secretUpdateFlags.inputFile)
-		if err != nil {
-			return fmt.Errorf("failed to read input file '%s': %w", secretUpdateFlags.inputFile, err)
-		}
-		if err := json.Unmarshal(data, &secretData); err != nil {
-			return fmt.Errorf("failed to parse JSON from file '%s': %w", secretUpdateFlags.inputFile, err)
-		}
-	} else {
-		if err := json.Unmarshal([]byte(secretUpdateFlags.secretsJSON), &secretData); err != nil {
-			return fmt.Errorf("failed to parse JSON from --secrets: %w", err)
-		}
-	}
-
-	// Load client configuration
-	clientConfig, err := client.LoadConfig()
+	nvcfClient, err := loadAdminClient()
 	if err != nil {
-		return fmt.Errorf("failed to load configuration: %w", err)
-	}
-
-	// Create client
-	nvcfClient, err := client.NewClient(clientConfig)
-	if err != nil {
-		return fmt.Errorf("failed to create NVCF client: %w", err)
+		return err
 	}
 	defer nvcfClient.Close()
 
+	secretData, err := loadSecretPayload()
+	if err != nil {
+		return err
+	}
+
 	ctx := context.Background()
 
-	fmt.Printf("Updating secrets for telemetry %s in account %s...\n",
-		secretUpdateFlags.telemetryId, secretUpdateFlags.ncaId)
+	if !IsJSONOutput() {
+		fmt.Printf("Updating secrets for telemetry %s in account %s...\n",
+			secretUpdateFlags.telemetryId, secretUpdateFlags.ncaId)
+	}
 
 	// Update telemetry secrets (cross-account admin operation)
 	err = nvcfClient.UpdateTelemetrySecretsAdmin(ctx, secretUpdateFlags.ncaId, secretUpdateFlags.telemetryId, secretData)
@@ -480,33 +413,40 @@ func runSecretsUpdateTelemetry(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to update telemetry secrets: %w", err)
 	}
 
+	if IsJSONOutput() {
+		return OutputJSON(map[string]string{
+			"status":      "ok",
+			"ncaId":       secretUpdateFlags.ncaId,
+			"telemetryId": secretUpdateFlags.telemetryId,
+		})
+	}
+
 	fmt.Printf("Telemetry secrets updated successfully!\n")
 	return nil
 }
 
 func runQueuesFunction(cmd *cobra.Command, args []string) error {
-	// Load client configuration
-	clientConfig, err := client.LoadConfig()
+	nvcfClient, err := loadAdminClient()
 	if err != nil {
-		return fmt.Errorf("failed to load configuration: %w", err)
-	}
-
-	// Create client
-	nvcfClient, err := client.NewClient(clientConfig)
-	if err != nil {
-		return fmt.Errorf("failed to create NVCF client: %w", err)
+		return err
 	}
 	defer nvcfClient.Close()
 
 	ctx := context.Background()
 
-	fmt.Printf("Getting queue details for function %s in account %s...\n",
-		queueFlags.functionId, queueFlags.ncaId)
+	if !IsJSONOutput() {
+		fmt.Printf("Getting queue details for function %s in account %s...\n",
+			queueFlags.functionId, queueFlags.ncaId)
+	}
 
 	// Get queue details
 	resp, err := nvcfClient.GetFunctionQueueDetails(ctx, queueFlags.ncaId, queueFlags.functionId)
 	if err != nil {
 		return fmt.Errorf("failed to get queue details: %w", err)
+	}
+
+	if IsJSONOutput() {
+		return OutputJSON(resp)
 	}
 
 	// Display queue details
@@ -531,28 +471,27 @@ func runQueuesFunction(cmd *cobra.Command, args []string) error {
 }
 
 func runQueuesVersion(cmd *cobra.Command, args []string) error {
-	// Load client configuration
-	clientConfig, err := client.LoadConfig()
+	nvcfClient, err := loadAdminClient()
 	if err != nil {
-		return fmt.Errorf("failed to load configuration: %w", err)
-	}
-
-	// Create client
-	nvcfClient, err := client.NewClient(clientConfig)
-	if err != nil {
-		return fmt.Errorf("failed to create NVCF client: %w", err)
+		return err
 	}
 	defer nvcfClient.Close()
 
 	ctx := context.Background()
 
-	fmt.Printf("Getting queue details for function %s version %s in account %s...\n",
-		queueFlags.functionId, queueFlags.versionId, queueFlags.ncaId)
+	if !IsJSONOutput() {
+		fmt.Printf("Getting queue details for function %s version %s in account %s...\n",
+			queueFlags.functionId, queueFlags.versionId, queueFlags.ncaId)
+	}
 
 	// Get queue details for specific version
 	resp, err := nvcfClient.GetFunctionVersionQueueDetails(ctx, queueFlags.ncaId, queueFlags.functionId, queueFlags.versionId)
 	if err != nil {
 		return fmt.Errorf("failed to get queue details: %w", err)
+	}
+
+	if IsJSONOutput() {
+		return OutputJSON(resp)
 	}
 
 	// Display queue details
@@ -574,6 +513,106 @@ func runQueuesVersion(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// requireAdminToken fails fast when NVCF_TOKEN is not set. Admin commands
+// require NVCF_TOKEN with admin scope; the backend would 403 a request made
+// with only NVCF_API_KEY, but failing here gives a clearer error.
+func requireAdminToken(cfg *client.Config) error {
+	if cfg.Token == "" {
+		return fmt.Errorf("admin commands require NVCF_TOKEN with the appropriate admin scope; NVCF_API_KEY is not accepted")
+	}
+	return nil
+}
+
+// loadAdminClient is the common preamble for every admin handler.
+// Centralises config load, NVCF_TOKEN fail-fast, and client construction.
+func loadAdminClient() (*client.Client, error) {
+	cfg, err := client.LoadConfig()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load configuration: %w", err)
+	}
+	if err := requireAdminToken(cfg); err != nil {
+		return nil, err
+	}
+	c, err := client.NewClient(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create NVCF client: %w", err)
+	}
+	return c, nil
+}
+
+// warnInlineSecrets prints a stderr warning when --secrets is used inline.
+// Inline values appear in /proc/*/cmdline and ps output for the lifetime of
+// the process; --input-file is the safer alternative.
+func warnInlineSecrets(used bool) {
+	if used {
+		fmt.Fprintln(os.Stderr,
+			"WARNING: --secrets exposes the payload in process listings (ps, /proc); prefer --input-file for sensitive data")
+	}
+}
+
+// buildAccountUpdateRequest validates the at-least-one-field rule and
+// constructs the AccountUpdateRequest from accountUpdateFlags. Extracted
+// to keep runAccountsUpdate below the cognitive-complexity threshold.
+func buildAccountUpdateRequest() (*client.AccountUpdateRequest, error) {
+	if accountUpdateFlags.name == "" && accountUpdateFlags.maxFunctions == -1 &&
+		accountUpdateFlags.maxTasks == -1 && accountUpdateFlags.maxTelemetries == -1 &&
+		accountUpdateFlags.maxRegistryCredentials == -1 {
+		return nil, fmt.Errorf("at least one update field must be provided (--name, --max-functions, --max-tasks, --max-telemetries, --max-registry-credentials)")
+	}
+	req := &client.AccountUpdateRequest{}
+	if accountUpdateFlags.name != "" {
+		req.Name = accountUpdateFlags.name
+	}
+	if accountUpdateFlags.maxFunctions >= 0 {
+		req.MaxFunctionsAllowed = &accountUpdateFlags.maxFunctions
+	}
+	if accountUpdateFlags.maxTasks >= 0 {
+		req.MaxTasksAllowed = &accountUpdateFlags.maxTasks
+	}
+	if accountUpdateFlags.maxTelemetries >= 0 {
+		if accountUpdateFlags.maxTelemetries > 50 {
+			return nil, fmt.Errorf("max-telemetries cannot exceed 50")
+		}
+		req.MaxTelemetriesAllowed = &accountUpdateFlags.maxTelemetries
+	}
+	if accountUpdateFlags.maxRegistryCredentials >= 0 {
+		if accountUpdateFlags.maxRegistryCredentials > 50 {
+			return nil, fmt.Errorf("max-registry-credentials cannot exceed 50")
+		}
+		req.MaxRegistryCredentialsAllowed = &accountUpdateFlags.maxRegistryCredentials
+	}
+	return req, nil
+}
+
+// loadSecretPayload reads the secret JSON from either --input-file or the
+// --secrets flag, validates the flag combination, and emits the inline-flag
+// warning when applicable.
+func loadSecretPayload() (interface{}, error) {
+	if secretUpdateFlags.inputFile == "" && secretUpdateFlags.secretsJSON == "" {
+		return nil, fmt.Errorf("either --input-file or --secrets must be provided")
+	}
+	if secretUpdateFlags.inputFile != "" && secretUpdateFlags.secretsJSON != "" {
+		return nil, fmt.Errorf("only one of --input-file or --secrets can be provided")
+	}
+	warnInlineSecrets(secretUpdateFlags.secretsJSON != "")
+
+	var payload interface{}
+	if secretUpdateFlags.inputFile != "" {
+		data, err := os.ReadFile(secretUpdateFlags.inputFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read input file '%s': %w", secretUpdateFlags.inputFile, err)
+		}
+		if err := json.Unmarshal(data, &payload); err != nil {
+			return nil, fmt.Errorf("failed to parse JSON from file '%s': %w", secretUpdateFlags.inputFile, err)
+		}
+		return payload, nil
+	}
+	if err := json.Unmarshal([]byte(secretUpdateFlags.secretsJSON), &payload); err != nil {
+		return nil, fmt.Errorf("failed to parse JSON from --secrets: %w", err)
+	}
+	return payload, nil
 }
 
 // Helper function to format client IDs for display

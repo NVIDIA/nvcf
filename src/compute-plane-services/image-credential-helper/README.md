@@ -4,6 +4,33 @@ NVCF Image Credential Helper is a Kubernetes utility that automates the manageme
 
 This tool monitors and refreshes image pull secrets across Kubernetes namespaces, ensuring that pods can consistently pull container images from private registries such as AWS ECR, Volcengine, and others. It eliminates the need for manual secret management and credential rotation.
 
+## Build with Bazel
+
+Bazel is the canonical build path. The legacy Dockerfile + `go build`
+flow stays available for dev iteration outside Bazel.
+
+```shell
+# Build everything Bazel knows about.
+bazel build //...
+
+# Run all tests with auto-retry on timing-sensitive failures.
+bazel test //... --flaky_test_attempts=3
+
+# Build the multi-arch OCI image index (linux/amd64 + linux/arm64).
+bazel build //cmd/image-credential-helper:image_index
+
+# Push to the NVCF self-managed NGC registries (nvcf-staging / nvcf-production).
+# See nvidia-internal/destinations.bzl for the destination catalog.
+bazel run //nvidia-internal:image_push_staging
+bazel run //nvidia-internal:image_push_production
+
+# Regenerate per-package BUILD files after Go source changes.
+bazel run //:gazelle
+
+# Refresh module graph after go.mod changes.
+bazel mod tidy
+```
+
 ## Features
 
 - **Automatic Credential Refresh**: Periodically updates image pull secrets before they expire

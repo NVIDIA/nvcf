@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "jsonpatch",
+    srcs = ["jsonpatch.go"],
+    importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/gomodules.xyz/jsonpatch/v2",
+    importpath = "gomodules.xyz/jsonpatch/v2",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":jsonpatch",
+    visibility = ["//visibility:public"],
+)

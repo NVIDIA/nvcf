@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+#
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Drift detector for the checked-in otelcol/ tree. Re-runs ocb against
+# the current otel-collector-build.yaml into a tmp area and diffs the
+# result against the committed otelcol/ files. Fails with a regenerate
+# hint when out of sync.
+#
+# Used by the `check-otelcol-generated` CI job and runnable locally.
+
+set -euo pipefail
+
+PROJECT_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+OUT_DIR="${PROJECT_ROOT}/otelcol"
+SCRIPT="${PROJECT_ROOT}/scripts/regenerate-otelcol.sh"
+
+if [ ! -x "${SCRIPT}" ]; then
+  echo "check-otelcol-generated: ${SCRIPT} is not executable" >&2
+  exit 1
+fi
+
+TMPROOT="$(mktemp -d -t byoo-otelcol-check.XXXXXX)"
+trap 'rm -rf "${TMPROOT}"' EXIT
+
+# Copy the inputs (otel-collector-build.yaml + scripts/) into the tmp
+# root so we can regenerate without touching the checked-in tree.
+cp "${PROJECT_ROOT}/otel-collector-build.yaml" "${TMPROOT}/"
+mkdir -p "${TMPROOT}/scripts"
+cp "${SCRIPT}" "${TMPROOT}/scripts/"
+chmod +x "${TMPROOT}/scripts/regenerate-otelcol.sh"
+if [ -d "${OUT_DIR}/logchunkprocessor" ]; then
+  mkdir -p "${TMPROOT}/otelcol"
+  cp -R "${OUT_DIR}/logchunkprocessor" "${TMPROOT}/otelcol/"
+fi
+
+# Run the regen against the tmp root.
+(
+  cd "${TMPROOT}"
+  ./scripts/regenerate-otelcol.sh
+) >/dev/null
+
+# Diff. Ignore BUILD.bazel (it is hand-maintained, not generated).
+# Use a per-run diff file inside the trap-cleaned TMPROOT so concurrent
+# runs (parallel CI jobs, local invocations) do not collide on a fixed
+# /tmp path.
+DIFF_FILE="${TMPROOT}/otelcol.diff"
+if diff -r \
+    --exclude=BUILD.bazel \
+    "${OUT_DIR}" "${TMPROOT}/otelcol" >"${DIFF_FILE}" 2>&1; then
+  echo "check-otelcol-generated: otelcol/ matches otel-collector-build.yaml -- OK"
+  exit 0
+fi
+
+echo "check-otelcol-generated: otelcol/ is out of sync with otel-collector-build.yaml"
+echo
+cat "${DIFF_FILE}"
+echo
+echo "Regenerate locally and commit:"
+echo "  ./scripts/regenerate-otelcol.sh"
+echo "  git add otelcol/"
+exit 1

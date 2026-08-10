@@ -107,9 +107,9 @@ VAULT_JWT_AUTH_ROLE_POLICIES="${VAULT_JWT_AUTH_ROLE_POLICIES},${policy_name}"
 # Add Access to Ratelimiter API via JWT Secret Role
 #-------------------------------------------
 
-RATELIMITER_API_SERVICE_ACCOUNT_NAMESPACE="ratelimiter"
+RATELIMITER_API_SERVICE_ACCOUNT_NAMESPACE="nvcf"
 RATELIMITER_API_SERVICE_ACCOUNT_NAME="ratelimiter-api"
-RATELIMITER_API_SERVICE_NAME="api"
+RATELIMITER_API_SERVICE_NAME="ratelimiter"
 RATELIMITER_API_SECRET_BASE_PATH="services/${RATELIMITER_API_SERVICE_ACCOUNT_NAME}"
 RATELIMITER_API_SECRET_POLICY_PATH="services-${RATELIMITER_API_SERVICE_ACCOUNT_NAME}"
 SCOPES="ratelimit:check_invocation"
@@ -117,7 +117,7 @@ SCOPES="ratelimit:check_invocation"
 #-------------------------------------------
 # Create JWT Secret Role for Ratelimiter API JWT Signer
 #-------------------------------------------
-# Issuer: http://api.ratelimiter.svc.cluster.local
+# Issuer: http://ratelimiter.nvcf.svc.cluster.local
 jwt_secret_role=$(generate_jwt_secret_role "${RATELIMITER_API_SERVICE_ACCOUNT_NAMESPACE}" "${RATELIMITER_API_SERVICE_NAME}" "${SERVICE_ACCOUNT_NAME}" "${SCOPES}")
 create_secret_jwt_role "${RATELIMITER_API_SECRET_BASE_PATH}/jwt" "${SERVICE_ACCOUNT_NAME}" "${jwt_secret_role}"
 

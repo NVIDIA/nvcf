@@ -289,7 +289,14 @@ func TestNewModelCacheStorageRequest(t *testing.T) {
 			if tt.expError != "" {
 				assert.EqualError(t, err, tt.expError)
 			} else {
+				// The cache-handle label is stamped at creation so the
+				// controller fan-out can map writer-job/PV events back to the SR.
+				if tt.expected.Labels == nil {
+					tt.expected.Labels = map[string]string{}
+				}
+				tt.expected.Labels[modelCacheHandleLabelKey] = tt.expected.Spec.ModelCache.CacheHandle
 				assert.Equal(t, tt.expected, actual)
+				assert.Equal(t, actual.Spec.ModelCache.CacheHandle, actual.Labels[modelCacheHandleLabelKey])
 			}
 		})
 	}
