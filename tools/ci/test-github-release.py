@@ -547,6 +547,44 @@ class GithubReleaseTest(unittest.TestCase):
         )
         self.assertEqual(self.github_release.next_release_train_version("3.1.0"), "3.2.0")
 
+    def test_linear_release_branch_base_preserves_the_selected_tree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_repo(root)
+            self.write_nvca_version(root, "3.2.0")
+            self.commit_all(root, "seed nvca")
+            main_branch = self.github_release.run(
+                ["git", "branch", "--show-current"], cwd=root, capture=True
+            ).strip()
+
+            git(root, "switch", "-c", "merged-change")
+            (root / "merged.txt").write_text("merged change\n")
+            self.commit_all(root, "fix: merged change")
+
+            git(root, "switch", main_branch)
+            (root / "main.txt").write_text("main change\n")
+            self.commit_all(root, "fix: main change")
+            git(root, "merge", "--no-ff", "merged-change", "-m", "Merge merged-change")
+            (root / "src/compute-plane-services/nvca" / "README.md").write_text("release head\n")
+            self.commit_all(root, "fix(nvca): prepare release")
+
+            base_sha = self.github_release.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, capture=True
+            ).strip()
+            release_base = self.github_release.linear_release_branch_base(root, base_sha)
+
+            self.assertNotEqual(release_base, base_sha)
+            self.assertEqual(
+                self.github_release.commit_tree(root, release_base),
+                self.github_release.commit_tree(root, base_sha),
+            )
+            self.assertEqual(
+                self.github_release.run(
+                    ["git", "rev-list", "--merges", release_base], cwd=root, capture=True
+                ).strip(),
+                "",
+            )
+
     def test_dev_prerelease_metadata_supports_branch_cut(self):
         root = SCRIPT_PATH.parents[2]
         metadata = json.loads(SCRIPT_PATH.with_name("github-release-subprojects.json").read_text())
