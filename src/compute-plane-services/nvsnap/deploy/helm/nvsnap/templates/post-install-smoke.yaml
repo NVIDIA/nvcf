@@ -94,6 +94,11 @@ rules:
   - apiGroups: ["storage.k8s.io"]
     resources: ["storageclasses"]
     verbs: ["get", "list"]
+  # Same reasoning for the VolumeSnapshotClass step 7 checks when
+  # agent.l2.snapshotClass is set.
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshotclasses"]
+    verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -236,6 +241,23 @@ spec:
               {{- if .Values.agent.l2.storageClass }}
               if kubectl get storageclass {{ .Values.agent.l2.storageClass | quote }} >/dev/null 2>&1; then
                 echo "  OK (L2 enabled on StorageClass {{ .Values.agent.l2.storageClass }})"
+                {{- if .Values.agent.l2.snapshotClass }}
+                # A named snapshot class that does not exist is worse than none:
+                # the snapshot-clone promote silently has nowhere to go. An unset
+                # one is NOT an error — internal/checkpointstore/storage_profile.go
+                # only needs it for StrategySnapshotClone (GKE PD, EBS).
+                # SharedVolumePromoter provisioners (nvmesh, EFS) promote
+                # zero-copy and never take a snapshot.
+                if ! kubectl get volumesnapshotclass {{ .Values.agent.l2.snapshotClass | quote }} >/dev/null 2>&1; then
+                  echo "  FAIL: agent.l2.snapshotClass={{ .Values.agent.l2.snapshotClass }} does not exist"
+                  FAIL=1
+                else
+                  echo "  OK (snapshot class {{ .Values.agent.l2.snapshotClass }} present)"
+                fi
+                {{- else }}
+                PROV=$(kubectl get storageclass {{ .Values.agent.l2.storageClass | quote }} -o jsonpath='{.provisioner}' 2>/dev/null)
+                echo "  NOTE: no snapshotClass set; provisioner $PROV must be one that promotes without snapshots"
+                {{- end }}
               else
                 echo "  FAIL: agent.l2.storageClass={{ .Values.agent.l2.storageClass }} does not exist"
                 FAIL=1
@@ -258,12 +280,21 @@ spec:
               else
                 for pair in "ds/nvsnap-agent:agent"{{ if .Values.server.enabled }}" deploy/nvsnap-server:server"{{ end }}; do
                   obj="${pair%%:*}"; who="${pair##*:}"
-                  if kubectl get "$obj" -n {{ .Release.Namespace }} \
-                       -o jsonpath='{.spec.template.spec.containers[0].env[*].name}' 2>/dev/null \
-                       | tr ' ' '\n' | grep -qx NVSNAP_AGENT_TOKEN; then
-                    echo "  OK ($who has NVSNAP_AGENT_TOKEN)"
+                  # Check where the value comes from, not just that the name is
+                  # present. A literal, or a secretKeyRef aimed at the wrong
+                  # Secret or key, produces a token that does not match the one
+                  # the agent verifies against — which fails exactly like having
+                  # no token at all, but looks correct in a name-only check.
+                  SRC=$(kubectl get "$obj" -n {{ .Release.Namespace }} -o jsonpath='
+                    {range .spec.template.spec.containers[0].env[?(@.name=="NVSNAP_AGENT_TOKEN")]}
+                    {.valueFrom.secretKeyRef.name}/{.valueFrom.secretKeyRef.key}{end}' 2>/dev/null | tr -d ' \n')
+                  if [ "$SRC" = "nvsnap-agent-token/token" ]; then
+                    echo "  OK ($who reads NVSNAP_AGENT_TOKEN from nvsnap-agent-token/token)"
+                  elif [ -z "$SRC" ] || [ "$SRC" = "/" ]; then
+                    echo "  FAIL: $who has no NVSNAP_AGENT_TOKEN secretKeyRef — its agent calls will 401"
+                    FAIL=1
                   else
-                    echo "  FAIL: $who has no NVSNAP_AGENT_TOKEN — its agent calls will 401"
+                    echo "  FAIL: $who reads NVSNAP_AGENT_TOKEN from $SRC, want nvsnap-agent-token/token"
                     FAIL=1
                   fi
                 done
@@ -275,7 +306,9 @@ spec:
               # Configuration that is present but not enforced looks identical
               # to configuration that works.
               AGENT_URL="http://nvsnap-agent.{{ .Release.Namespace }}.svc.cluster.local:8081"
-              TOK=$(kubectl get secret nvsnap-agent-token -n {{ .Release.Namespace }} -o jsonpath='{.data.token}' 2>/dev/null | base64 -d)
+              # `|| true` so a missing Secret reports a FAIL below rather than
+              # killing the script under `set -e` and losing the remaining checks.
+              TOK=$(kubectl get secret nvsnap-agent-token -n {{ .Release.Namespace }} -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null || true)
               AUTHED=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Authorization: Bearer $TOK" "$AGENT_URL/v1/checkpoints" || echo 000)
               [ "$AUTHED" = "200" ] && echo "  OK (authenticated call accepted)" \
                 || { echo "  FAIL: authenticated call returned $AUTHED, want 200"; FAIL=1; }

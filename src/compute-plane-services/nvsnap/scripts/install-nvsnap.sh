@@ -237,13 +237,29 @@ fi
 # never bind, and the right choice depends on cluster topology. RWX
 # capability isn't exposed on the StorageClass API, so candidates are
 # matched on known RWX provisioners.
-if ! printf '%s\n' "${EXTRA_HELM_ARGS[@]}" | grep -q "agent.l2.storageClass="; then
+#
+# Only --set is inspected here. An operator supplying the value through
+# -f/--values is passing a file this script does not parse, so stay quiet
+# rather than claim L2 is off on evidence we do not have.
+l2_configured=false
+printf '%s\n' "${EXTRA_HELM_ARGS[@]}" | grep -q "agent.l2.storageClass=" && l2_configured=true
+printf '%s\n' "${EXTRA_HELM_ARGS[@]}" | grep -qE '^(-f|--values)$' && l2_configured=true
+
+if [ "$l2_configured" = false ]; then
     rwx_re='smb\.csi|nfs\.csi|efs\.csi|filestore\.csi|azurefile|excelero|nvmesh|cephfs'
-    candidates=$(kubectl get storageclass -o jsonpath='{range .items[*]}{.metadata.name}{" ("}{.provisioner}{")"}{"\n"}{end}' 2>/dev/null \
-        | grep -iE "$rwx_re" || true)
+    # Keep the query's exit status: a denied or unreachable API returns
+    # nothing, which is indistinguishable from "no RWX classes exist" unless
+    # the failure is recorded separately. Reporting the wrong one of those two
+    # sends the operator to provision storage they may already have.
+    sc_ok=true
+    sc_list=$(kubectl get storageclass -o jsonpath='{range .items[*]}{.metadata.name}{" ("}{.provisioner}{")"}{"\n"}{end}' 2>/dev/null) || sc_ok=false
+    candidates=$(printf '%s\n' "$sc_list" | grep -iE "$rwx_re" || true)
+
     echo "     WARNING: agent.l2.storageClass is unset — L2 per-capture PVC fan-out is DISABLED." >&2
     echo "              Restore falls back to the L3 peer cascade (slower multi-node fan-out)." >&2
-    if [ -n "$candidates" ]; then
+    if [ "$sc_ok" = false ]; then
+        echo "              Unable to inspect StorageClasses (query failed); cannot list candidates." >&2
+    elif [ -n "$candidates" ]; then
         echo "              RWX-capable StorageClasses on this cluster:" >&2
         echo "$candidates" | sed 's/^/                /' >&2
         echo "              Enable with: --set agent.l2.storageClass=<name>" >&2
