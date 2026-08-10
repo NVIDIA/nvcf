@@ -82,8 +82,8 @@ func TestPodExposesReceiverAndMetricsPorts(t *testing.T) {
 	if pod.Spec.Containers[0].ReadinessProbe == nil {
 		t.Errorf("sink pod should have a readiness probe")
 	}
-	if pod.Spec.RestartPolicy != "Never" {
-		t.Errorf("restart policy = %q, want Never", pod.Spec.RestartPolicy)
+	if pod.Spec.RestartPolicy != "Always" {
+		t.Errorf("restart policy = %q, want Always", pod.Spec.RestartPolicy)
 	}
 }
 

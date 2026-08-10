@@ -247,11 +247,16 @@ func ensureK3dCluster(ctx context.Context, stdout io.Writer, cfg runConfig) (*k3
 	if err != nil {
 		return nil, nil, err
 	}
+	if cluster.Reused {
+		fmt.Fprintf(stdout, "reusing pre-existing k3d cluster %q; it will be left in place\n", cfg.k3dCluster)
+	}
 	if cfg.importImages {
 		images := []string{cfg.collectorImage, cfg.sinkImage, cfg.loadgenImage}
 		fmt.Fprintf(stdout, "importing images into k3d cluster %q: %s\n", cfg.k3dCluster, strings.Join(images, ", "))
 		if err := k3d.ImportImages(ctx, cluster.Name, images...); err != nil {
-			if !cfg.retain {
+			// Only delete a cluster this run created; never tear down a
+			// pre-existing one the developer owns.
+			if !cfg.retain && !cluster.Reused {
 				_ = k3d.Delete(ctx, cfg.k3dCluster)
 			}
 			return nil, nil, err
@@ -260,6 +265,10 @@ func ensureK3dCluster(ctx context.Context, stdout io.Writer, cfg runConfig) (*k3
 	fmt.Fprintf(stdout, "using kube context %q\n\n", cluster.Context)
 
 	teardown := func() {
+		if cluster.Reused {
+			fmt.Fprintf(stdout, "reused pre-existing k3d cluster %q; leaving it in place\n", cfg.k3dCluster)
+			return
+		}
 		if cfg.retain {
 			fmt.Fprintf(stdout, "retaining managed k3d cluster %q (--retain); delete with: k3d cluster delete %s\n", cfg.k3dCluster, cfg.k3dCluster)
 			return
@@ -303,14 +312,14 @@ func runShape(ctx context.Context, stdout io.Writer, client *deploy.Client, cfg 
 
 	res, err := render.Render(shape, opts)
 	if err != nil {
-		return fmt.Errorf("render %s: %w", shape, err)
+		return cleanupAfterErr(ctx, client, cfg, ns, fmt.Errorf("render %s: %w", shape, err))
 	}
 	exp := validate.Expectations{
 		Image:     opts.CollectorImage,
 		Resources: common.GetDefaultContainerResourcesBYOO(),
 	}
 	if err := validate.Render(res, exp); err != nil {
-		return err
+		return cleanupAfterErr(ctx, client, cfg, ns, fmt.Errorf("validate %s: %w", shape, err))
 	}
 
 	fmt.Fprintf(stdout, "[%s] deploying collector to namespace %q ...\n", shape, ns)

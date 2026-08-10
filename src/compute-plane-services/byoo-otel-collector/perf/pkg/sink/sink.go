@@ -138,7 +138,10 @@ func Pod(namespace string, opts Options) *corev1.Pod {
 		TypeMeta:   metav1.TypeMeta{Kind: "Pod", APIVersion: "v1"},
 		ObjectMeta: objectMeta(namespace),
 		Spec: corev1.PodSpec{
-			RestartPolicy: corev1.RestartPolicyNever,
+			// The sink must stay up for the whole load run; Always lets the
+			// kubelet restart it if its container dies so it does not drop out
+			// of the Service and break the run.
+			RestartPolicy: corev1.RestartPolicyAlways,
 			Containers: []corev1.Container{{
 				Name:  "otlp-sink",
 				Image: image,

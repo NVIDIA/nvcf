@@ -106,11 +106,11 @@ multi-document stream (`---`-separated) and `json` emits an array, so
 
 The target cluster depends on `--mode`:
 
-- `--mode k3d` (default): the suite provisions a dedicated local **k3d** cluster
+- `--mode k3d` (default): the suite provisions a dedicated local k3d cluster
   (`--k3d-cluster`, default `byoo-perf`), runs against it, and deletes it
-  afterwards — unless `--retain`, which keeps both the resources and the
-  cluster. An existing cluster of the same name is reused. Requires the `k3d`
-  CLI (and Docker). Use `--import-images` to load the collector/sink/loadgen
+  afterward, unless `--retain`, which keeps both the resources and the cluster.
+  An existing cluster of the same name is reused and left in place. Requires the
+  `k3d` CLI (and Docker). Use `--import-images` to load the collector/sink/loadgen
   images from local Docker into the cluster (for locally built or non-pullable
   images).
 - `--mode remote`: uses the ambient kubeconfig (or `--kubeconfig`/`--context`).
@@ -170,7 +170,7 @@ points at.
 The collector, sink, and telemetrygen images must be reachable from the target
 cluster. Only the collector image ships from NVIDIA; the sink and load generator
 are stock upstream images (overridable via `--sink-image` / `--loadgen-image`).
-For a private/offline cluster pre-load them — in managed k3d mode pass
+For a private or offline cluster, pre-load them. In managed k3d mode, pass
 `--import-images` to import them from local Docker.
 
 ## Sub-packages `pkg/k3d`

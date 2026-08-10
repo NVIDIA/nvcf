@@ -93,6 +93,9 @@ func TestCreateProvisionsWhenAbsent(t *testing.T) {
 	if cluster.Context != "k3d-byoo-perf" {
 		t.Errorf("context = %q", cluster.Context)
 	}
+	if cluster.Reused {
+		t.Errorf("Reused = true, want false when the cluster was created")
+	}
 	if !called(f.calls, "cluster", "create", "byoo-perf") {
 		t.Errorf("expected a cluster create call, got %v", f.calls)
 	}
@@ -102,8 +105,12 @@ func TestCreateReusesWhenPresent(t *testing.T) {
 	f := &fakeRunner{listOut: "byoo-perf 1/1\n"}
 	defer withRunner(f)()
 
-	if _, err := Create(context.Background(), DefaultOptions("byoo-perf")); err != nil {
+	cluster, err := Create(context.Background(), DefaultOptions("byoo-perf"))
+	if err != nil {
 		t.Fatalf("Create: %v", err)
+	}
+	if !cluster.Reused {
+		t.Errorf("Reused = false, want true when an existing cluster is reused")
 	}
 	if called(f.calls, "cluster", "create", "byoo-perf") {
 		t.Errorf("existing cluster should be reused, not recreated: %v", f.calls)

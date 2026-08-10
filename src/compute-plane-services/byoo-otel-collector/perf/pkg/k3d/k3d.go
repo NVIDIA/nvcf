@@ -61,6 +61,9 @@ func DefaultOptions(name string) Options {
 type Cluster struct {
 	Name    string
 	Context string
+	// Reused reports that the cluster already existed and was not created by
+	// this run, so callers must not delete it.
+	Reused bool
 }
 
 // KubeContext returns the kube context name k3d assigns to a cluster.
@@ -115,7 +118,7 @@ func Create(ctx context.Context, opts Options) (*Cluster, error) {
 			return nil, fmt.Errorf("create k3d cluster %q: %w (%s)", opts.Name, err, strings.TrimSpace(string(out)))
 		}
 	}
-	return &Cluster{Name: opts.Name, Context: KubeContext(opts.Name)}, nil
+	return &Cluster{Name: opts.Name, Context: KubeContext(opts.Name), Reused: exists}, nil
 }
 
 // Delete removes the cluster. Deleting a non-existent cluster is not an error.
