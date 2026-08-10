@@ -1,0 +1,15 @@
+Event Ledger has been deployed.
+
+Service DNS (in-cluster):
+  event-ledger.{{ include "nvcf-event-ledger.namespace" . }}.svc.cluster.local:8080
+
+Health check:
+  kubectl -n {{ include "nvcf-event-ledger.namespace" . }} port-forward svc/event-ledger 8080
+  curl http://localhost:8080/health
+
+Metrics (Prometheus):
+  event-ledger.{{ include "nvcf-event-ledger.namespace" . }}.svc.cluster.local:8081
+
+The Vault Agent sidecar injects /vault/secrets/secrets.json at pod start.
+If the pod is stuck in Init:CrashLoopBackOff, check the Vault Agent sidecar
+logs — the OpenBao role or secret path is likely missing from the migration.
