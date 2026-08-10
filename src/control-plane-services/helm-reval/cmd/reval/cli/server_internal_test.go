@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -110,7 +111,9 @@ func TestServeManagementRoutes_UnknownRoute(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
-func TestServeManagementRoutes_Info(t *testing.T) {
+// TestServeManagementRoutes_Info_NotFound locks in that /info is served on the API
+// router, not the management router.
+func TestServeManagementRoutes_Info_NotFound(t *testing.T) {
 	logger := zap.NewNop()
 	atomicLevel := zap.NewAtomicLevel()
 	cfg := config.HTTPConfig{ManagementPort: 0, Local: false}
@@ -121,6 +124,18 @@ func TestServeManagementRoutes_Info(t *testing.T) {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/info", nil)
 	server.Handler.ServeHTTP(w, r)
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+// ── serveInfo ─────────────────────────────────────────────────────────────────
+
+func TestServeInfo(t *testing.T) {
+	router := chi.NewRouter()
+	serveInfo(router, chi.Chain())
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/info", nil)
+	router.ServeHTTP(w, r)
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
@@ -129,27 +144,21 @@ func TestServeManagementRoutes_Info(t *testing.T) {
 	// for any empty field, so all three values are guaranteed non-empty.
 	var info map[string]string
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &info))
-	assert.Contains(t, info, "service")
-	assert.Contains(t, info, "version")
-	assert.Contains(t, info, "commit")
 	for _, field := range []string{"service", "version", "commit"} {
+		assert.Contains(t, info, field)
 		assert.NotEmpty(t, info[field], field+" must be populated")
 	}
 }
 
-func TestServeManagementRoutes_Info_RejectsNonGET(t *testing.T) {
-	logger := zap.NewNop()
-	atomicLevel := zap.NewAtomicLevel()
-	cfg := config.HTTPConfig{ManagementPort: 0, Local: false}
-
-	server := serveManagementRoutes(logger, &atomicLevel, cfg)
-	require.NotNil(t, server)
+func TestServeInfo_RejectsNonGET(t *testing.T) {
+	router := chi.NewRouter()
+	serveInfo(router, chi.Chain())
 
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
 		t.Run(method, func(t *testing.T) {
 			w := httptest.NewRecorder()
 			r := httptest.NewRequest(method, "/info", nil)
-			server.Handler.ServeHTTP(w, r)
+			router.ServeHTTP(w, r)
 
 			assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
 			assert.Equal(t, http.MethodGet, w.Header().Get("Allow"))
