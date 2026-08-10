@@ -383,42 +383,31 @@ bazel query 'rdeps(//..., //src/libraries/go/lib/pkg/auth:auth)'
 
 ## Caches
 
-The local cache locations have separate responsibilities:
+Three layers, in priority order from fastest to slowest:
 
-- The local action cache is under the workspace output base within
-  `${BAZEL_OUTPUT_USER_ROOT}`. Run `bazel info output_base` with the same
-  `--output_user_root` value to resolve the exact path.
-- The shared external repository download cache is under
-  `${BAZEL_OUTPUT_USER_ROOT}/cache/repos/v1`. It stores downloaded inputs such
-  as Go modules, OCI base images, and toolchains, and survives `bazel clean`.
-  Run `bazel info repository_cache` to resolve the exact path.
+1. **Local action cache** under `~/.cache/bazel/`. Incremental, per-target.
+2. **Local repository cache** under `~/.cache/bazel/`. External module
+   downloads (Go modules, OCI base images, Zig toolchain). Survives
+   `bazel clean`.
+3. **Remote cache**. Enabled by default via `.bazelrc` as a read-only cache;
+   CI layers on `--config=remote-write` after probing the cache endpoint.
 
-The repository download cache does not store compile or test action results.
-For action results, Bazel first reuses valid local outputs from the workspace
-output base. When a remote cache is enabled, Bazel queries it for results that
-are not available locally. On a cache miss, Bazel executes the action.
+`bazel clean` purges local build outputs but keeps the repo cache.
+`bazel clean --expunge` purges everything (rare; recovers from corrupted
+cache or stale toolchain pinning).
 
-The remote action cache is opt-in. The root `.bazelrc` defines read-only and
-read-write profiles, but the caller must select a profile and supply an
-endpoint. GitHub Actions enables the cache only when its endpoint and token are
-available.
-
-`bazel clean` purges local build outputs and action-cache entries for the
-current workspace but keeps the shared repository cache. `bazel clean
---expunge` removes the current workspace's complete output base; the shared
-repository cache remains outside that output base.
-
-GitHub Actions cache locations and persistence are defined in
-`.github/workflows/bazel.yml`. They do not change the local directory layout
-described above.
+In CI (`bazel-smoke` job in root `.gitlab-ci.yml`) both local caches are
+persisted to `${CI_PROJECT_DIR}/.bazel-cache` and registered in GitLab's
+`cache:` keyed on `MODULE.bazel.lock`, so the second pipeline run is fast.
 
 ### Remote cache
 
-The root `.bazelrc` defines the opt-in read-only `--config=remote` profile and
-the read-write `--config=remote-write` profile. The behaviorally important
-lines are:
+The repo enables the read-only `--config=remote` profile by default in
+`.bazelrc`. The behaviorally important lines are:
 
-```text
+```
+build --config=remote
+build:remote --remote_cache=grpc://<remote-cache-endpoint>
 build:remote --remote_upload_local_results=false
 build:remote --remote_cache_compression
 build:remote --remote_timeout=120
@@ -429,7 +418,7 @@ build:remote-write --config=remote
 build:remote-write --remote_upload_local_results=true
 ```
 
-When invoked with a caller-supplied `--remote_cache` endpoint:
+When invoked:
 
 - Bazel checks the remote action cache before executing each compile/test.
   Cache hit -> the action's outputs are downloaded and the action is not
@@ -462,20 +451,21 @@ boolean flag, so Bazel rejects the `no` prefix. `user.bazelrc` is in
 `.gitignore`-conventions territory; it lets you set personal defaults
 without polluting the shared `.bazelrc`.
 
-CI scope: GitHub Actions passes the remote-cache endpoint and access settings
-explicitly after confirming that the required token and endpoint are present.
-Jobs fall back to a cacheless build when the remote cache is unavailable.
+CI scope: the per-CLI Bazel jobs (`go-test`, `go-build`,
+`verify-agent-skill-manifest` in `tools/ci/nvcf-cli.yml`) and umbrella
+jobs inherit the default read-only cache. CI jobs add `--config=remote-write`
+only after their preflight probe confirms that the remote cache is reachable.
 
 ### Lifecycle and ownership
 
-- Host: managed by the NVCF team and reviewed on the team's normal
+- **Host**: managed by the NVCF team and reviewed on the team's normal
   infrastructure cadence.
-- Provisioning: managed by the NVCF team through the internal
+- **Provisioning**: managed by the NVCF team through the internal
   remote-cache automation.
-- Storage: starts modest; expansion happens out-of-band as cache
+- **Storage**: starts modest; expansion happens out-of-band as cache
   size grows. If you observe high cache-miss rates after large ingestion
   windows, check the cache browser for eviction patterns.
-- Failure mode: builds with `--config=remote --remote_local_fallback`
+- **Failure mode**: builds with `--config=remote --remote_local_fallback`
   degrade to local execution on action errors but hard-fail on initial
   Capabilities RPC failure (e.g., backend storage shards down).
   CI guards against this in two layers (see `.bazel-remote-probe` in
@@ -488,7 +478,7 @@ Jobs fall back to a cacheless build when the remote cache is unavailable.
      `0` in GitLab project settings to force local-only across all
      Bazel jobs without a code push. Useful when the remote cache is degraded
      in a way the TCP probe can't detect (port open, gRPC wedged).
-- End of lease: either renew, migrate to longer-term host, or roll
+- **End of lease**: either renew, migrate to longer-term host, or roll
   back to local-only caching. The per-service opt-in pattern means
   the rollback footprint is small.
 
