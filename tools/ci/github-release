@@ -921,7 +921,8 @@ def branch_cut(args):
         raise SystemExit(f"{bump_branch} already exists but has no open PR to {target_branch}")
 
     ensure_git_identity(root)
-    run(["git", "switch", "-C", bump_branch, base_sha], cwd=root)
+    bump_base = linear_release_branch_base(root, base_sha)
+    run(["git", "switch", "-C", bump_branch, bump_base], cwd=root)
     version_path = root / version_file_path
     version_path.write_text(f"{next_version}\n")
     run(["git", "add", version_file_path], cwd=root)

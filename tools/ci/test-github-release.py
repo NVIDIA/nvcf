@@ -634,6 +634,44 @@ class GithubReleaseTest(unittest.TestCase):
                 "",
             )
 
+            git(root, "switch", "-c", "release-bump/nvca/v3.2-to-v3.3", release_base)
+            (root / "src/compute-plane-services/nvca" / "VERSION").write_text("3.3.0\n")
+            self.commit_all(root, "chore(nvca): advance release train to v3.3.0")
+            bump_head = self.github_release.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, capture=True
+            ).strip()
+
+            self.assertEqual(
+                self.github_release.run(
+                    ["git", "rev-parse", f"{bump_head}^"], cwd=root, capture=True
+                ).strip(),
+                release_base,
+            )
+            self.assertEqual(
+                self.github_release.run(
+                    ["git", "diff", "--name-only", base_sha, bump_head], cwd=root, capture=True
+                ).strip(),
+                "src/compute-plane-services/nvca/VERSION",
+            )
+            self.assertEqual(
+                self.github_release.run(
+                    ["git", "rev-list", "--merges", bump_head], cwd=root, capture=True
+                ).strip(),
+                "",
+            )
+
+    def test_linear_release_branch_base_keeps_a_linear_base(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_repo(root)
+            self.write_nvca_version(root, "3.2.0")
+            self.commit_all(root, "seed nvca")
+            base_sha = self.github_release.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, capture=True
+            ).strip()
+
+            self.assertEqual(self.github_release.linear_release_branch_base(root, base_sha), base_sha)
+
     def test_dev_prerelease_metadata_supports_branch_cut(self):
         root = SCRIPT_PATH.parents[2]
         metadata = json.loads(SCRIPT_PATH.with_name("github-release-subprojects.json").read_text())
