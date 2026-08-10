@@ -67,6 +67,10 @@ navigation:
         path: ../../docs/user/cluster-management/multi-tenancy.md
       - page: KAI Scheduler
         path: ../../docs/user/cluster-management/kai-scheduler.md
+      - page: Gang Scheduling
+        path: ../../docs/user/cluster-management/gang-scheduling.md
+      - page: Topology-Aware Scheduling
+        path: ../../docs/user/cluster-management/topology-aware-scheduling.md
       - section: Low Latency Streaming
         skip-slug: true
         contents:
