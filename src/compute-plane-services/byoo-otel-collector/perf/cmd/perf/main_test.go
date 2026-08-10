@@ -19,10 +19,20 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"strings"
 	"testing"
+	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes/fake"
+	ktesting "k8s.io/client-go/testing"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/deploy"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/spec"
 )
 
@@ -153,5 +163,119 @@ func TestRenderCmdSummary(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "VALID") {
 		t.Errorf("expected summary to report VALID, got: %s", stdout.String())
+	}
+}
+
+func TestRunCmdDefaults(t *testing.T) {
+	cmd := newRunCmd()
+	defaults := map[string]string{
+		"shape":         "both",
+		"profile":       "dev",
+		"mode":          "k3d",
+		"namespace":     "byoo-perf",
+		"ready-timeout": "3m0s",
+		"retain":        "false",
+	}
+	for name, want := range defaults {
+		f := cmd.Flags().Lookup(name)
+		if f == nil {
+			t.Fatalf("run command missing --%s flag", name)
+		}
+		if f.DefValue != want {
+			t.Errorf("--%s default = %q, want %q", name, f.DefValue, want)
+		}
+	}
+}
+
+// TestRunCmdInvalidSelectors asserts run rejects bad selectors before it ever
+// touches a cluster, so these stay hermetic (no kubeconfig required).
+func TestRunCmdInvalidSelectors(t *testing.T) {
+	for _, args := range [][]string{
+		{"--mode", "nope"},
+		{"--profile", "nope"},
+		{"--shape", "nope"},
+	} {
+		cmd := newRunCmd()
+		cmd.SetArgs(args)
+		cmd.SetOut(&bytes.Buffer{})
+		cmd.SetErr(&bytes.Buffer{})
+		if err := cmd.Execute(); err == nil {
+			t.Errorf("run %v: expected error, got nil", args)
+		}
+	}
+}
+
+func TestCleanupCmdDefaults(t *testing.T) {
+	cmd := newCleanupCmd()
+	defaults := map[string]string{
+		"shape":     "both",
+		"namespace": "byoo-perf",
+	}
+	for name, want := range defaults {
+		f := cmd.Flags().Lookup(name)
+		if f == nil {
+			t.Fatalf("cleanup command missing --%s flag", name)
+		}
+		if f.DefValue != want {
+			t.Errorf("--%s default = %q, want %q", name, f.DefValue, want)
+		}
+	}
+}
+
+func TestCleanupCmdInvalidShape(t *testing.T) {
+	cmd := newCleanupCmd()
+	cmd.SetArgs([]string{"--shape", "nope"})
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	if err := cmd.Execute(); err == nil {
+		t.Error("cleanup --shape nope: expected error, got nil")
+	}
+}
+
+// TestRunCleansUpPodWhenServiceCreateFails verifies that when Deploy fails
+// after the pod is created (here, because service creation is rejected), run
+// rolls back the orphaned pod instead of leaking it, since --retain is false.
+func TestRunCleansUpPodWhenServiceCreateFails(t *testing.T) {
+	fakeCS := fake.NewSimpleClientset()
+	fakeCS.PrependReactor("create", "services", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, fmt.Errorf("service creation rejected")
+	})
+
+	orig := newDeployClient
+	newDeployClient = func(string, string) (*deploy.Client, error) {
+		return deploy.NewClientForClientset(fakeCS), nil
+	}
+	t.Cleanup(func() { newDeployClient = orig })
+
+	cfg := runConfig{
+		shape:          "container",
+		profile:        "dev",
+		mode:           "remote",
+		collectorImage: spec.DefaultCollectorImage,
+		namespace:      "byoo-perf",
+		readyTimeout:   time.Second,
+	}
+	if err := runRun(io.Discard, cfg); err == nil {
+		t.Fatal("expected run to fail when service creation is rejected")
+	}
+
+	pods, err := fakeCS.CoreV1().Pods("byoo-perf").List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatalf("list pods: %v", err)
+	}
+	if len(pods.Items) != 0 {
+		t.Errorf("expected the pod to be cleaned up after a failed deploy, got %d", len(pods.Items))
+	}
+}
+
+func TestNamespaceForShape(t *testing.T) {
+	if got := namespaceForShape("byoo-perf", spec.ShapeContainer, false); got != "byoo-perf" {
+		t.Errorf("single-shape namespace = %q, want %q", got, "byoo-perf")
+	}
+	if got := namespaceForShape("byoo-perf", spec.ShapeContainer, true); got != "byoo-perf-container" {
+		t.Errorf("multi-shape namespace = %q, want %q", got, "byoo-perf-container")
+	}
+	if got := namespaceForShape("byoo-perf", spec.ShapeHelm, true); got != "byoo-perf-helm" {
+		t.Errorf("multi-shape namespace = %q, want %q", got, "byoo-perf-helm")
 	}
 }

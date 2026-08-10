@@ -15,16 +15,20 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Command perf is the entrypoint for the BYOO collector performance test
-// suite. In this first milestone only "render" is fully wired; "run" and
-// "cleanup" are scaffolding for the deployment/load milestones (S4+).
+// Command perf is the entrypoint for the BYOO collector performance suite:
+// "render" validates the workload with no cluster, "run" deploys the collector
+// and waits for readiness, and "cleanup" removes suite-created resources. Load
+// generation and measurement land in a later milestone.
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
@@ -32,11 +36,16 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/deploy"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/profile"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/render"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/spec"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/validate"
 )
+
+// newDeployClient constructs the cluster client. It is a package variable so
+// tests can inject a fake-backed client.
+var newDeployClient = deploy.NewClient
 
 func main() {
 	if err := newRootCmd().Execute(); err != nil {
@@ -92,34 +101,199 @@ parser. "yaml" emits a multi-document stream and "json" emits an array, so
 	return cmd
 }
 
+// runConfig holds the resolved flags for the run command.
+type runConfig struct {
+	shape          string
+	profile        string
+	mode           string
+	collectorImage string
+	namespace      string
+	kubeconfig     string
+	kubeContext    string
+	readyTimeout   time.Duration
+	retain         bool
+}
+
 func newRunCmd() *cobra.Command {
+	var cfg runConfig
 	cmd := &cobra.Command{
 		Use:   "run",
-		Short: "Deploy, drive load, and measure (not yet implemented; see S4+)",
-		Args:  cobra.NoArgs,
+		Short: "Deploy the authentic collector to a cluster and wait until it is ready",
+		Long: `run renders the production workload shape via icms-translate, validates it,
+deploys the authentic BYOO collector (fronted by a harness OTLP Service) to the
+target cluster, and waits for the collector pod to become ready. It cleans up
+afterward unless --retain is set. Load generation and measurement land in a
+later milestone.`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("`run` is not implemented yet; it lands with the deployment/load milestones (S4-S9)")
+			return runRun(cmd.OutOrStdout(), cfg)
 		},
 	}
-	cmd.Flags().String("shape", "both", `deployment shape: "container", "helm", or "both"`)
-	cmd.Flags().String("profile", "dev", `execution profile: "dev" or "baseline"`)
-	cmd.Flags().String("mode", "k3d", `deployment mode: "k3d" or "remote"`)
-	cmd.Flags().Bool("retain", false, "retain test resources for debugging instead of cleaning up")
+	cmd.Flags().StringVar(&cfg.shape, "shape", "both", `deployment shape: "container", "helm", or "both"`)
+	cmd.Flags().StringVar(&cfg.profile, "profile", "dev", `execution profile: "dev" or "baseline"`)
+	cmd.Flags().StringVar(&cfg.mode, "mode", "k3d", `deployment mode: "k3d" or "remote"`)
+	cmd.Flags().StringVar(&cfg.collectorImage, "collector-image", spec.DefaultCollectorImage, "BYOO collector image reference")
+	cmd.Flags().StringVar(&cfg.namespace, "namespace", "byoo-perf", "base namespace for deployed resources")
+	cmd.Flags().StringVar(&cfg.kubeconfig, "kubeconfig", "", "path to kubeconfig (defaults to in-cluster or $KUBECONFIG)")
+	cmd.Flags().StringVar(&cfg.kubeContext, "context", "", "kubeconfig context to use")
+	cmd.Flags().DurationVar(&cfg.readyTimeout, "ready-timeout", 3*time.Minute, "how long to wait for the collector to become ready")
+	cmd.Flags().BoolVar(&cfg.retain, "retain", false, "retain deployed resources instead of cleaning up after the run")
 	return cmd
 }
 
+// cleanupConfig holds the resolved flags for the cleanup command.
+type cleanupConfig struct {
+	shape       string
+	namespace   string
+	kubeconfig  string
+	kubeContext string
+}
+
 func newCleanupCmd() *cobra.Command {
+	var cfg cleanupConfig
 	cmd := &cobra.Command{
 		Use:   "cleanup",
-		Short: "Remove test resources (not yet implemented; see S5+)",
-		Args:  cobra.NoArgs,
+		Short: "Remove the resources the suite created in a namespace",
+		Long: `cleanup deletes every pod and service the suite created, scoped by the
+suite's part-of label so it never removes unrelated resources.`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("`cleanup` is not implemented yet; it lands with the deployment milestone (S5)")
+			return runCleanup(cmd.OutOrStdout(), cfg)
 		},
 	}
-	cmd.Flags().String("mode", "k3d", `deployment mode: "k3d" or "remote"`)
-	cmd.Flags().String("namespace", "byoo-perf", "namespace to clean up")
+	cmd.Flags().StringVar(&cfg.shape, "shape", "both", `shape namespaces to clean: "container", "helm", or "both"`)
+	cmd.Flags().StringVar(&cfg.namespace, "namespace", "byoo-perf", "base namespace to clean up")
+	cmd.Flags().StringVar(&cfg.kubeconfig, "kubeconfig", "", "path to kubeconfig (defaults to in-cluster or $KUBECONFIG)")
+	cmd.Flags().StringVar(&cfg.kubeContext, "context", "", "kubeconfig context to use")
 	return cmd
+}
+
+func runRun(stdout io.Writer, cfg runConfig) error {
+	if cfg.mode != "k3d" && cfg.mode != "remote" {
+		return fmt.Errorf("unknown mode %q (want \"k3d\" or \"remote\")", cfg.mode)
+	}
+	prof, err := profile.Lookup(cfg.profile)
+	if err != nil {
+		return err
+	}
+	shapes, err := shapesFromFlag(cfg.shape)
+	if err != nil {
+		return err
+	}
+
+	opts := spec.DefaultOptions()
+	opts.CollectorImage = cfg.collectorImage
+
+	exp := validate.Expectations{
+		Image:     opts.CollectorImage,
+		Resources: common.GetDefaultContainerResourcesBYOO(),
+	}
+
+	client, err := newDeployClient(cfg.kubeconfig, cfg.kubeContext)
+	if err != nil {
+		return err
+	}
+
+	ctx := context.Background()
+	fmt.Fprintf(stdout, "mode=%s profile=%s warmup=%s window=%s reps=%d\n\n", cfg.mode, prof.Name, prof.Warmup, prof.MeasurementWindow, prof.Repetitions)
+
+	multi := len(shapes) > 1
+	for _, shape := range shapes {
+		ns := namespaceForShape(cfg.namespace, shape, multi)
+
+		res, err := render.Render(shape, opts)
+		if err != nil {
+			return fmt.Errorf("render %s: %w", shape, err)
+		}
+		if err := validate.Render(res, exp); err != nil {
+			return err
+		}
+
+		fmt.Fprintf(stdout, "[%s] deploying to namespace %q ...\n", shape, ns)
+		dep, err := client.Deploy(ctx, ns, res)
+		if err != nil {
+			// Deploy may fail after creating the pod (e.g. the service is
+			// rejected), so roll back before returning unless --retain is set.
+			return errors.Join(fmt.Errorf("deploy %s: %w", shape, err), cleanupOnFailure(ctx, client, ns, cfg.retain))
+		}
+
+		fmt.Fprintf(stdout, "[%s] waiting up to %s for collector pod %q to become ready ...\n", shape, cfg.readyTimeout, dep.PodName)
+		if err := client.WaitPodReady(ctx, ns, dep.PodName, cfg.readyTimeout); err != nil {
+			return errors.Join(fmt.Errorf("collector did not become ready for %s shape: %w", shape, err), cleanupOnFailure(ctx, client, ns, cfg.retain))
+		}
+
+		fmt.Fprintf(stdout, "[%s] READY\n", shape)
+		fmt.Fprintf(stdout, "  pod             : %s\n", dep.PodName)
+		fmt.Fprintf(stdout, "  otlp service    : %s\n", dep.ServiceName)
+		for _, name := range []string{"otlp-grpc", "otlp-http"} {
+			if ep, ok := dep.Endpoints[name]; ok {
+				fmt.Fprintf(stdout, "  %-15s : %s\n", name, ep)
+			}
+		}
+
+		if cfg.retain {
+			fmt.Fprintf(stdout, "[%s] retaining resources (--retain); clean up with: perf cleanup --namespace %s\n\n", shape, ns)
+			continue
+		}
+		fmt.Fprintf(stdout, "[%s] cleaning up namespace %q ...\n", shape, ns)
+		if err := client.Cleanup(ctx, ns); err != nil {
+			return fmt.Errorf("cleanup %s: %w", shape, err)
+		}
+		fmt.Fprintf(stdout, "[%s] done\n\n", shape)
+	}
+
+	fmt.Fprintln(stdout, "note: load generation and measurement land in a later milestone; this run deploys the authentic collector and verifies it starts.")
+	return nil
+}
+
+func runCleanup(stdout io.Writer, cfg cleanupConfig) error {
+	shapes, err := shapesFromFlag(cfg.shape)
+	if err != nil {
+		return err
+	}
+	client, err := newDeployClient(cfg.kubeconfig, cfg.kubeContext)
+	if err != nil {
+		return err
+	}
+
+	ctx := context.Background()
+	seen := map[string]bool{}
+	for _, shape := range shapes {
+		for _, ns := range []string{cfg.namespace, namespaceForShape(cfg.namespace, shape, true)} {
+			if seen[ns] {
+				continue
+			}
+			seen[ns] = true
+			fmt.Fprintf(stdout, "cleaning up namespace %q ...\n", ns)
+			if err := client.Cleanup(ctx, ns); err != nil {
+				return err
+			}
+		}
+	}
+	fmt.Fprintln(stdout, "done")
+	return nil
+}
+
+// cleanupOnFailure removes suite resources after a failed run step unless
+// --retain is set, returning any cleanup error so callers can join it with the
+// original failure instead of silently discarding it.
+func cleanupOnFailure(ctx context.Context, client *deploy.Client, namespace string, retain bool) error {
+	if retain {
+		return nil
+	}
+	if err := client.Cleanup(ctx, namespace); err != nil {
+		return fmt.Errorf("cleanup namespace %q after failure: %w", namespace, err)
+	}
+	return nil
+}
+
+// namespaceForShape suffixes the namespace per shape when multiple are deployed
+// so their pods and services never collide.
+func namespaceForShape(base string, shape spec.Shape, suffix bool) string {
+	if !suffix {
+		return base
+	}
+	return fmt.Sprintf("%s-%s", base, shape)
 }
 
 func runRender(stdout, stderr io.Writer, cfg renderConfig) error {
@@ -147,8 +321,7 @@ func runRender(stdout, stderr io.Writer, cfg renderConfig) error {
 		Resources: common.GetDefaultContainerResourcesBYOO(),
 	}
 
-	// Diagnostics go to stderr so stdout stays a clean machine-readable
-	// document in yaml/json modes.
+	// Diagnostics go to stderr so stdout stays machine-readable in yaml/json.
 	fmt.Fprintf(stderr, "profile=%s warmup=%s window=%s reps=%d\n\n", prof.Name, prof.Warmup, prof.MeasurementWindow, prof.Repetitions)
 
 	results := make([]*render.Result, 0, len(shapes))
@@ -196,9 +369,9 @@ func portSummary(res *render.Result) string {
 	return strings.Join(parts, " ")
 }
 
-// printYAML writes the bench pods as a multi-document YAML stream so that
-// --shape both remains a valid manifest kubectl can apply. The per-shape
-// annotation is written to stderr as a comment, keeping stdout parseable.
+// printYAML writes the bench pods as a multi-document stream so --shape both
+// stays a valid manifest; the per-shape note goes to stderr to keep stdout
+// parseable.
 func printYAML(stdout, stderr io.Writer, results []*render.Result, namespace string) error {
 	for i, res := range results {
 		out, err := yaml.Marshal(res.BenchPod(namespace))
@@ -214,8 +387,8 @@ func printYAML(stdout, stderr io.Writer, results []*render.Result, namespace str
 	return nil
 }
 
-// printJSON writes the bench pods as a JSON array so that multiple shapes emit
-// a single valid JSON document.
+// printJSON writes the bench pods as a JSON array so multiple shapes emit one
+// valid document.
 func printJSON(stdout io.Writer, results []*render.Result, namespace string) error {
 	pods := make([]*corev1.Pod, 0, len(results))
 	for _, res := range results {

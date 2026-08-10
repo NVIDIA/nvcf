@@ -216,6 +216,10 @@ publications:
     version: 1.0.1
     registry: public-helm
     chart_format: http
+  - name: helm-nvcf-ui
+    version: 1.1.2
+    registry: public-helm
+    chart_format: http
   - name: helm-nvcf-vanity-gateway
     version: 0.1.0-nvcf-10204.1
     registry: public-helm
@@ -225,7 +229,7 @@ publications:
     registry: public-helm
     chart_format: http
   - name: nvcf-gateway-routes
-    version: 1.14.0
+    version: 1.15.0
     registry: public-helm
     chart_format: http
   - name: nvcf-container-cache
@@ -371,6 +375,11 @@ manifest:
       kind: chart
       requirement: optional
       description: Deploys NVCF state metrics for observability.
+    - artifact_id: helm-nvcf-ui
+      plane: control
+      kind: chart
+      requirement: optional
+      description: Deploys the optional NVCF UI admin panel.
     - artifact_id: helm-nvcf-vanity-gateway
       plane: control
       kind: chart
@@ -820,6 +829,10 @@ artifacts:
     type: chart
     registry: staging
     version: 1.0.1
+  - name: helm-nvcf-ui
+    type: chart
+    registry: staging
+    version: 1.1.2
   - name: helm-nvcf-vanity-gateway
     type: chart
     registry: staging
@@ -855,7 +868,7 @@ artifacts:
   - name: nvcf-gateway-routes
     type: chart
     registry: staging
-    version: 1.14.0
+    version: 1.15.0
   - name: nvcf-grpc-proxy
     type: image
     registry: staging

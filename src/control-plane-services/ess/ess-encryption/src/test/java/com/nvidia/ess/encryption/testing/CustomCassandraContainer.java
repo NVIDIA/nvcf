@@ -27,7 +27,7 @@ public class CustomCassandraContainer implements Startable {
   // This means that we are not calling container.stop() anywhere explicitly.
   // However, ryuk container will be responsible for full cleanup of the testcontainers after all tests are run
 
-  private static final CassandraContainer cassandraContainer = new CassandraContainer(DockerImageName.parse("cassandra:4"))
+  private static final CassandraContainer cassandraContainer = new CassandraContainer(DockerImageName.parse("cassandra:5"))
       .withEnv("HEAP_NEWSIZE", "128M")
       .withEnv("MAX_HEAP_SIZE", "512M")
       .withInitScript(new ClassPathResource("local_env/cassandra/schema/schema.cql").getPath())
