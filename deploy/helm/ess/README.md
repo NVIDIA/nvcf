@@ -1,6 +1,6 @@
 # NVCF ESS API Helm Chart
 
-This repository contains the Helm chart for deploying the NVCF ESS (Encrypted Secrets Service) API on Kubernetes.
+This directory contains the Helm chart for deploying the NVCF ESS (Encrypted Secrets Service) API on Kubernetes.
 
 ## Overview
 
