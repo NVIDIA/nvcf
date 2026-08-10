@@ -16,7 +16,7 @@ ESS is a Bazel-only component in the root `nvcf` module. See [BAZEL.md](BAZEL.md
 for build, test, NOTICE, Docker, and local startup commands.
 
 Unit tests run without external services. Integration tests require a running
-Docker daemon and use Testcontainers to start an ephemeral Cassandra instance.
+Docker daemon and use Testcontainers to start an ephemeral Cassandra 5 instance.
 
 ## Run locally
 
