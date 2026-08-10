@@ -21,4 +21,4 @@ helm template ess-api ess-api -f ../../../tools/ci/helm-validate-values/ess.yaml
 
 The chart requires `ess.image.registry` and `ess.image.repository`, so a values
 override is always needed to render. This chart pairs with the ESS service image
-source at `src/control-plane-services/ess`.
+source at `src/control-plane-services/encrypted-secret-store`.

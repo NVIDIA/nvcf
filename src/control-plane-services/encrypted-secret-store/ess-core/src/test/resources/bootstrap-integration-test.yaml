@@ -22,5 +22,5 @@ nv-boot:
   reloadable-properties:
     # Resolved relative to the Bazel test working directory. local_env is staged
     # into runfiles by the test_local_env target with the
-    # src/control-plane-services/ess/ prefix stripped.
+    # src/control-plane-services/encrypted-secret-store/ prefix stripped.
     file: file:local_env/secrets/secrets.json

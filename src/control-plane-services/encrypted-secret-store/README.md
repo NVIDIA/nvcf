@@ -27,7 +27,7 @@ through Bazelisk. Helper scripts live in
 Fastest path, from `local_env/scripts`:
 
 ```bash
-cd src/control-plane-services/ess/local_env/scripts
+cd src/control-plane-services/encrypted-secret-store/local_env/scripts
 ./start-local.sh
 ```
 
@@ -56,11 +56,11 @@ ESS_APP_JAR=/path/to/app.jar ./start-ess.sh  # run a prebuilt jar, skip building
 Without the scripts, build and run the jar directly:
 
 ```bash
-bazel build //src/control-plane-services/ess/ess-service:app
+bazel build //src/control-plane-services/encrypted-secret-store/ess-service:app
 
-cd src/control-plane-services/ess
+cd src/control-plane-services/encrypted-secret-store
 SPRING_PROFILES_ACTIVE=local java -Dserver.port=8085 \
-  -jar ../../../bazel-bin/src/control-plane-services/ess/ess-service/app.jar \
+  -jar ../../../bazel-bin/src/control-plane-services/encrypted-secret-store/ess-service/app.jar \
   --nv-boot.reloadable-properties.file=file:"$(pwd)/local_env/secrets/secrets.json"
 ```
 
@@ -81,7 +81,7 @@ cqlsh cassandra -f /cassandra_cql/ncp.cql
 Recreate Cassandra so the seed applies, then run ESS with the NCP profile:
 
 ```bash
-cd src/control-plane-services/ess/local_env/scripts
+cd src/control-plane-services/encrypted-secret-store/local_env/scripts
 ./stop-cassandra.sh --purge   # drop the old data so the seed re-applies
 ./start-cassandra.sh
 SPRING_PROFILE=ncp-local ./start-ess.sh

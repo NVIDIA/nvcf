@@ -9,7 +9,7 @@ ESS_CORE_TEST_SRCS = glob(["src/test/java/**/*.java"])
 ESS_CORE_TEST_RESOURCES = glob(["src/test/resources/**"])
 
 ESS_CORE_DEPS = [
-    "//src/control-plane-services/ess/ess-encryption:ess_encryption",
+    "//src/control-plane-services/encrypted-secret-store/ess-encryption:ess_encryption",
     "//src/libraries/java/nv-boot-parent/nv-boot-starter-audit:nv_boot_starter_audit",
     "//src/libraries/java/nv-boot-parent/nv-boot-starter-cassandra:nv_boot_starter_cassandra",
     "//src/libraries/java/nv-boot-parent/nv-boot-starter-core:nv_boot_starter_core",
@@ -114,7 +114,7 @@ nv_boot_library_test(
     coverage_library = ":ess_core",
     include_classname = ".*(Test|Tests)",
     javacopts = ["-parameters", "--release", "25", "-Xep:ReturnValueIgnored:OFF"],
-    resource_strip_prefix = "src/control-plane-services/ess/ess-core/src/test/resources",
+    resource_strip_prefix = "src/control-plane-services/encrypted-secret-store/ess-core/src/test/resources",
     resources = ESS_CORE_TEST_RESOURCES,
     srcs = ESS_CORE_TEST_SRCS,
     deps = ESS_CORE_TEST_DEPS,
@@ -125,18 +125,18 @@ nv_boot_library_test(
     name = "integration_tests",
     coverage_library = ":ess_core",
     data = [
-        "//src/control-plane-services/ess:secrets_json",
-        "//src/control-plane-services/ess:test_local_env",
+        "//src/control-plane-services/encrypted-secret-store:secrets_json",
+        "//src/control-plane-services/encrypted-secret-store:test_local_env",
     ],
     include_classname = ".*IT",
     javacopts = ["-parameters", "--release", "25", "-Xep:ReturnValueIgnored:OFF"],
     jvm_flags = [
         "-Dspring.main.web-application-type=reactive",
     ],
-    resource_strip_prefix = "src/control-plane-services/ess/ess-core/src/test/resources",
+    resource_strip_prefix = "src/control-plane-services/encrypted-secret-store/ess-core/src/test/resources",
     resources = ESS_CORE_TEST_RESOURCES,
     runtime_deps = [
-        "//src/control-plane-services/ess:local_env_resources",
+        "//src/control-plane-services/encrypted-secret-store:local_env_resources",
     ],
     size = "large",
     srcs = ESS_CORE_TEST_SRCS,

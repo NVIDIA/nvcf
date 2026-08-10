@@ -270,14 +270,15 @@
     },
     {
       "id": "ess",
-      "path": "src/control-plane-services/ess",
-      "service_name": "nvcf-ess"
+      "path": "src/control-plane-services/encrypted-secret-store",
+      "service_name": "nvcf-ess",
+      "legacy_tag_prefix": "src/control-plane-services/ess/v"
     },
     {
       "id": "ess-helm",
-      "path": "deploy/helm/ess",
+      "path": "deploy/helm/encrypted-secret-store",
       "service_name": "helm-nvcf-ess-api",
-      "initial_version": "1.7.0"
+      "legacy_tag_prefix": "deploy/helm/ess/v"
     },
     {
       "id": "instance-cluster-management",
