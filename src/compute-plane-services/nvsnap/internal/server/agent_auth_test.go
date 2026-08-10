@@ -101,4 +101,27 @@ func TestWithAgentAuthEmptyTokenLeavesTransportAlone(t *testing.T) {
 	if out.Transport != http.RoundTripper(rt) {
 		t.Errorf("transport was wrapped for an empty token: %T", out.Transport)
 	}
+	if out.CheckRedirect != nil {
+		t.Error("CheckRedirect was set for an empty token")
+	}
+}
+
+// net/http strips Authorization when a redirect crosses origins, but a
+// header-adding RoundTripper runs on the redirected request too and puts it
+// back. Without CheckRedirect a compromised agent could answer any call with a
+// 302 to a host it controls and be handed the shared token. The client must
+// stop at the 3xx and hand it to the caller, who treats a non-200 as an error.
+func TestWithAgentAuthDoesNotFollowRedirects(t *testing.T) {
+	c := withAgentAuth(&http.Client{Transport: &captureRT{}}, "tok")
+
+	if c.CheckRedirect == nil {
+		t.Fatal("CheckRedirect not set; redirects would be followed with the token attached")
+	}
+	req, err := http.NewRequest(http.MethodGet, "http://evil.example/steal", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.CheckRedirect(req, nil); err != http.ErrUseLastResponse {
+		t.Errorf("CheckRedirect = %v, want http.ErrUseLastResponse", err)
+	}
 }

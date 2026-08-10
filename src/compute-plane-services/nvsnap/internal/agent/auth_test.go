@@ -226,3 +226,19 @@ func TestOutboundTokenSatisfiesGuard(t *testing.T) {
 		t.Errorf("guard rejected our own signed request: %s", got)
 	}
 }
+
+// Same leak as the server side (internal/server/agent_auth_test.go): the peer
+// client must refuse redirects, because authTransport re-adds the bearer token
+// on the redirected request after net/http strips it for a cross-origin hop.
+func TestPeerClientDoesNotFollowRedirects(t *testing.T) {
+	if peerHTTPClient.CheckRedirect == nil {
+		t.Fatal("peerHTTPClient follows redirects; a peer 302 would leak the token")
+	}
+	req, err := http.NewRequest(http.MethodGet, "http://evil.example/steal", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := peerHTTPClient.CheckRedirect(req, nil); err != http.ErrUseLastResponse {
+		t.Errorf("CheckRedirect = %v, want http.ErrUseLastResponse", err)
+	}
+}

@@ -108,6 +108,14 @@ var peerHTTPClient = &http.Client{
 		// hypothesis. Re-enable explicitly if/when we switch to h2c.
 		ForceAttemptHTTP2: false,
 	}},
+	// Do not follow redirects. net/http drops Authorization when a redirect
+	// crosses origins, but authTransport runs on the redirected request too
+	// and re-adds it -- so a peer that answers a fetch with a 302 to any host
+	// would be handed the shared token. No peer endpoint redirects, so
+	// surfacing the 3xx to the caller loses nothing.
+	CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
 }
 
 // EnsureLocal guarantees that /var/lib/nvsnap/checkpoints/<checkpointID>/

@@ -59,10 +59,22 @@ func (t *agentAuthTransport) RoundTrip(r *http.Request) (*http.Response, error) 
 
 // withAgentAuth wraps c so its requests carry the token. Returns c untouched
 // when there is no token, keeping the no-auth deployment byte-identical.
+//
+// It also stops the client following redirects. net/http strips Authorization
+// when a redirect crosses origins, but a header-adding RoundTripper runs on the
+// redirected request too and puts it straight back -- so a compromised or
+// spoofed agent could bounce the server at any host and harvest the token. No
+// agent endpoint redirects, so refusing outright costs nothing.
 func withAgentAuth(c *http.Client, token string) *http.Client {
 	if token == "" {
 		return c
 	}
 	c.Transport = &agentAuthTransport{base: c.Transport, token: token}
+	c.CheckRedirect = refuseRedirect
 	return c
+}
+
+// refuseRedirect surfaces the 3xx to the caller instead of following it.
+func refuseRedirect(*http.Request, []*http.Request) error {
+	return http.ErrUseLastResponse
 }

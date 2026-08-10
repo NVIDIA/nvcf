@@ -157,13 +157,19 @@ call_agent_api() {
     local method="$2"
     local endpoint="$3"
     local data="${4:-}"
+    # Callers resolve $agent_pod in the namespace they were given, so the
+    # port-forward and the token Secret have to be read from that same
+    # namespace -- pinning them to $NAMESPACE made a non-default namespace
+    # port-forward to a pod that isn't there and authenticate with the wrong
+    # token.
+    local namespace="${5:-$NAMESPACE}"
 
     # Empty unless the chart was installed with agent.auth.enabled; without it
     # every call here returns "unauthorized" under --auth-mode=required.
-    nvsnap_agent_auth_args "$NAMESPACE"
+    nvsnap_agent_auth_args "$namespace"
 
     # Start port-forward in background (redirect output to avoid contaminating API response)
-    kubectl port-forward -n "$NAMESPACE" "$agent_pod" "${AGENT_PORT}:${AGENT_PORT}" >/dev/null 2>&1 &
+    kubectl port-forward -n "$namespace" "$agent_pod" "${AGENT_PORT}:${AGENT_PORT}" >/dev/null 2>&1 &
     local pf_pid=$!
     trap "kill $pf_pid 2>/dev/null || true" EXIT
 
@@ -249,7 +255,7 @@ $capture_path_line
 EOF
 )
 
-    local response=$(call_agent_api "$agent" "POST" "/v1/checkpoint" "$payload")
+    local response=$(call_agent_api "$agent" "POST" "/v1/checkpoint" "$payload" "$namespace")
 
     # Agent may return a structured 422-style redirect when the workload's
     # backend (Riva or Triton) requires the rootfs capture path. The JSON
@@ -304,7 +310,7 @@ cmd_list() {
     fi
     
     echo "Listing checkpoints via agent $agent..."
-    call_agent_api "$agent" "GET" "/v1/checkpoints"
+    call_agent_api "$agent" "GET" "/v1/checkpoints" "" "$namespace"
     echo ""
 }
 
