@@ -413,6 +413,15 @@ api:
     NVCF_REGISTRIES_RECOGNIZED_RESOURCE_NGC_HOSTNAME: "api.ngc.nvidia.com"
     NVCF_REGISTRIES_RECOGNIZED_RESOURCE_NGC_OAUTH2_BASE_URL: "https://authn.nvidia.com"
     NVCF_REGISTRIES_RECOGNIZED_RESOURCE_NGC_OAUTH2_GROUP_SCOPE: "ngc"
+    {{- with dig "api" "icmsBaseUrl" nil .Values }}
+    NVCF_ICMS_BASE_URL: {{ . | quote }}
+    {{- end }}
+    {{- with dig "api" "jwt" "issuerUri" nil .Values }}
+    SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: {{ . | quote }}
+    {{- end }}
+    {{- with dig "api" "jwt" "jwkSetUri" nil .Values }}
+    SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: {{ . | quote }}
+    {{- end }}
     # Observability
     MANAGEMENT_TRACING_ENABLED: {{ .Values.global.observability.tracing.enabled | quote }}
     {{- if .Values.global.observability.tracing.enabled }}
