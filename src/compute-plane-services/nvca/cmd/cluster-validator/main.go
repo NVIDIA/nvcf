@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
+	"k8s.io/client-go/dynamic"
 
 	internalutil "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/cmd/internal"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
@@ -39,9 +40,19 @@ func main() {
 	log := core.GetLogger(ctx)
 	log.Logger.SetFormatter(&clustervalidator.CLIFormatter{})
 
-	client, _, err := internalutil.NewK8sClient(ctx, "")
+	client, restCfg, err := internalutil.NewK8sClient(ctx, "")
 	if err != nil {
 		log.WithError(err).Fatal("Failed to create Kubernetes client")
+	}
+
+	// Build the dynamic client from the same REST config. Used for listing
+	// Gateway API custom resources (HTTPRoutes, etc.) which are not in the
+	// typed k8s.io/client-go clientset. Failure is non-fatal: checkGatewayRoutes
+	// skips gracefully when dynClient is nil.
+	dynClient, err := dynamic.NewForConfig(restCfg)
+	if err != nil {
+		log.WithError(err).Warn("Could not create dynamic client; gateway route check will be skipped")
+		dynClient = nil
 	}
 
 	configNS := os.Getenv("VALIDATOR_CONFIG_NAMESPACE")
@@ -72,8 +83,27 @@ func main() {
 			clustervalidator.SummaryConfigMapNamespaceEnv)
 	}
 
-	if err := clustervalidator.Run(ctx, client, configNS, configName, summaryNS, emitMetrics); err != nil {
+	// VALIDATOR_ROLE selects which check set runs: "control-plane" enables
+	// gateway and StorageClass checks and skips GPU/SMB; anything else (including
+	// unset) runs the compute-plane check set (backward-compatible default).
+	role := parseRole(os.Getenv("VALIDATOR_ROLE"))
+
+	if err := clustervalidator.Run(ctx, client, dynClient, configNS, configName, summaryNS, emitMetrics, role); err != nil {
 		log.WithError(err).Fatal("Cluster validation failed")
+	}
+}
+
+// parseRole normalizes the VALIDATOR_ROLE env value. Returns the matching
+// clustervalidator constant for "control-plane" or "compute-plane"; returns ""
+// (compute-plane default) for any other value so unknown inputs are safe.
+func parseRole(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case clustervalidator.RoleControlPlane:
+		return clustervalidator.RoleControlPlane
+	case clustervalidator.RoleComputePlane:
+		return clustervalidator.RoleComputePlane
+	default:
+		return ""
 	}
 }
 

@@ -17,7 +17,35 @@ limitations under the License.
 
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
+)
+
+func TestParseRole(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		// Known roles are normalized.
+		{"control-plane", clustervalidator.RoleControlPlane},
+		{"CONTROL-PLANE", clustervalidator.RoleControlPlane},
+		{" control-plane ", clustervalidator.RoleControlPlane},
+		{"compute-plane", clustervalidator.RoleComputePlane},
+		{"COMPUTE-PLANE", clustervalidator.RoleComputePlane},
+		// Unknown values (including unset) fall back to "" = compute-plane default.
+		{"", ""},
+		{"gpu", ""},
+		{"both", ""},
+		{"control_plane", ""}, // underscore, not hyphen
+	}
+	for _, tt := range tests {
+		if got := parseRole(tt.in); got != tt.want {
+			t.Errorf("parseRole(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
 
 func TestPreflightMode(t *testing.T) {
 	tests := []struct {

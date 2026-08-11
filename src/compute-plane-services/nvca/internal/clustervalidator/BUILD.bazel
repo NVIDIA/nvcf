@@ -25,8 +25,10 @@ go_library(
         "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/errors",
         "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/resource",
         "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/schema",
         "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/util/intstr",
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/discovery",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/dynamic",
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes",
         "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/yaml",
     ],
@@ -41,6 +43,7 @@ alias(
 go_test(
     name = "clustervalidator_test",
     srcs = [
+        "checks_controlplane_test.go",
         "checks_test.go",
         "config_test.go",
         "enforcement_test.go",

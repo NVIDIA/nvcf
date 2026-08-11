@@ -25,11 +25,14 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -112,18 +115,8 @@ func summarizeContainerRuntimes(nodes []corev1.Node) string {
 	return strings.Join(parts, ", ")
 }
 
-// checkControlPlaneHealth verifies cluster health using three signals:
-//  1. /readyz — canonical API-server health (works on every distribution).
-//  2. Data-plane capabilities — DNS resolution of kubernetes.default.svc
-//     and HTTPS routing to kubernetes.default.svc/readyz via the in-cluster
-//     ClusterIP. Both must succeed; pod-presence detection (CoreDNS vs
-//     kube-dns, kube-proxy vs Cilium vs OVN-Kubernetes vs k3s-embedded)
-//     is diagnostic only and does not affect the verdict.
-//  3. Control-plane pods (kube-apiserver, etcd, scheduler, controller-manager)
-//     — informational only. Visible on self-hosted, hidden on managed K8s
-//     (EKS, GKE, AKS) where the cloud provider runs them. /readyz already
-//     covers their health.
-//
+// checkControlPlaneHealth verifies /readyz, in-cluster DNS, and service routing.
+// Control-plane pod presence is informational only; /readyz is authoritative.
 // NotReady worker nodes are Warning only (non-blocking).
 func checkControlPlaneHealth(ctx context.Context, client kubernetes.Interface, state *ValidationState) {
 	log := state.Log
@@ -310,16 +303,9 @@ var (
 	probeAPIServiceIPFn = probeKubernetesAPIServiceIP
 )
 
-// detectDNSProvider inspects kube-system pods and returns a short name for
-// the cluster's DNS provider when recognised. Diagnostic only — the
-// authoritative DNS health signal comes from probeInClusterDNS.
-//
-// Known providers:
-//   - CoreDNS: pod prefix "coredns" (vanilla, kubeadm, EKS, AKS, k3s)
-//   - kube-dns: pod prefix "kube-dns" (GKE's managed default)
-//   - OpenShift DNS: namespace openshift-dns hosts dns-default-*; this
-//     function only sees kube-system pods, so OpenShift returns "" here
-//     and the capability probe is authoritative.
+// detectDNSProvider inspects kube-system pods and returns a short provider
+// name (CoreDNS, kube-dns) when recognised. Diagnostic only; the authoritative
+// DNS health signal comes from probeInClusterDNS.
 func detectDNSProvider(pods []corev1.Pod) string {
 	switch {
 	case countRunningPods(pods, "coredns") > 0:
@@ -330,16 +316,9 @@ func detectDNSProvider(pods []corev1.Pod) string {
 	return ""
 }
 
-// detectServiceRoutingImpl inspects the K8s version and kube-system pods
-// to identify the cluster's kube-proxy implementation. Diagnostic only —
-// the authoritative routing health signal comes from
-// probeKubernetesAPIServiceIP.
-//
-// Recognised implementations:
-//   - kube-proxy DaemonSet (vanilla / kubeadm / EKS / AKS / GKE classic)
-//   - kube-proxy embedded in the server binary (k3s / rke2)
-//   - Cilium with kubeProxyReplacement (GKE Dataplane V2, custom Cilium)
-//   - OVN-Kubernetes (OpenShift 4.x default)
+// detectServiceRoutingImpl inspects K8s version and kube-system pods to
+// identify the kube-proxy implementation (DaemonSet, k3s/rke2 embedded,
+// Cilium, OVN-Kubernetes). Diagnostic only; probeKubernetesAPIServiceIP is authoritative.
 func detectServiceRoutingImpl(k8sVersion string, pods []corev1.Pod) string {
 	switch {
 	case isEmbeddedKubeProxyDistro(k8sVersion):
@@ -830,6 +809,431 @@ func checkGPUOperator(ctx context.Context, client kubernetes.Interface, state *V
 	} else {
 		printSuccess(log, "GPU Operator is installed")
 		state.GPUOperatorInstalled = true
+	}
+}
+
+// checkStorageClass verifies that a default StorageClass is present. NVCF
+// workloads use PersistentVolumeClaims; without a default StorageClass those
+// claims remain unbound and workloads fail to start. Critical for both
+// control-plane (operator chart) and compute-plane (model cache), but surfaced
+// here for the control-plane validator role.
+func checkStorageClass(ctx context.Context, client kubernetes.Interface, state *ValidationState) {
+	log := state.Log
+	printHeader(log, "Default StorageClass")
+
+	classes, err := client.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		printWarning(log, fmt.Sprintf("Could not list StorageClasses: %v", err))
+		ok := false
+		state.DefaultStorageClassOK = &ok
+		return
+	}
+
+	var defaultClass string
+	for _, sc := range classes.Items {
+		if sc.Annotations["storageclass.kubernetes.io/is-default-class"] == "true" ||
+			sc.Annotations["storageclass.beta.kubernetes.io/is-default-class"] == "true" {
+			defaultClass = sc.Name
+			break
+		}
+	}
+
+	if defaultClass == "" {
+		printError(log, fmt.Sprintf("No default StorageClass found (%d classes present, none marked as default)", len(classes.Items)))
+		state.Recommendations = append(state.Recommendations,
+			"Mark a StorageClass as default with: "+
+				"kubectl patch storageclass <name> -p '{\"metadata\":{\"annotations\":{\"storageclass.kubernetes.io/is-default-class\":\"true\"}}}'")
+		ok := false
+		state.DefaultStorageClassOK = &ok
+		return
+	}
+
+	printSuccess(log, fmt.Sprintf("Default StorageClass: %s", defaultClass))
+	ok := true
+	state.DefaultStorageClassOK = &ok
+}
+
+const (
+	gatewayAPIGroup   = "gateway.networking.k8s.io"
+	gatewayAPIVersion = "v1"
+	// envoyGatewayNamespace is the namespace created by the Envoy Gateway Helm chart.
+	envoyGatewayNamespace = "envoy-gateway-system"
+)
+
+var requiredGatewayResources = []string{"gatewayclasses", "gateways", "httproutes", "grpcroutes"}
+
+// checkGatewayAPICRDs verifies that the Gateway API CRD set is installed and
+// registers all four required resource types. Without these CRDs neither the
+// Gateway controller nor nvcf-cli can create routing objects.
+func checkGatewayAPICRDs(ctx context.Context, client kubernetes.Interface, state *ValidationState) {
+	log := state.Log
+	printHeader(log, "Gateway API CRDs")
+
+	gv := gatewayAPIGroup + "/" + gatewayAPIVersion
+	resources, err := client.Discovery().ServerResourcesForGroupVersion(gv)
+	if err != nil {
+		printError(log, fmt.Sprintf("Gateway API CRDs not installed (%s not registered): %v", gv, err))
+		state.Recommendations = append(state.Recommendations,
+			"Install Gateway API CRDs: kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/latest/download/standard-install.yaml")
+		ok := false
+		state.GatewayAPICRDsOK = &ok
+		return
+	}
+
+	found := make(map[string]bool, len(resources.APIResources))
+	for _, r := range resources.APIResources {
+		found[r.Name] = true
+	}
+	var missing []string
+	for _, r := range requiredGatewayResources {
+		if !found[r] {
+			missing = append(missing, r)
+		}
+	}
+	if len(missing) > 0 {
+		printError(log, fmt.Sprintf("Gateway API CRDs missing resources: %s", strings.Join(missing, ", ")))
+		ok := false
+		state.GatewayAPICRDsOK = &ok
+		return
+	}
+
+	printSuccess(log, fmt.Sprintf("Gateway API CRDs installed (%s): %s", gv, strings.Join(requiredGatewayResources, ", ")))
+	ok := true
+	state.GatewayAPICRDsOK = &ok
+}
+
+// checkEnvoyGateway verifies the Envoy Gateway controller is installed and has
+// at least one running pod in the envoy-gateway-system namespace. Without a
+// running gateway controller, Gateway and HTTPRoute objects are never reconciled
+// and no traffic reaches NVCF services.
+func checkEnvoyGateway(ctx context.Context, client kubernetes.Interface, state *ValidationState) {
+	log := state.Log
+	printHeader(log, "Envoy Gateway")
+
+	_, err := client.CoreV1().Namespaces().Get(ctx, envoyGatewayNamespace, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			printError(log, fmt.Sprintf("Envoy Gateway namespace %s not found", envoyGatewayNamespace))
+		} else {
+			printError(log, fmt.Sprintf("Could not check Envoy Gateway namespace: %v", err))
+		}
+		state.Recommendations = append(state.Recommendations,
+			"Install Envoy Gateway via the NVCF self-managed stack (nvcf-cli up) or "+
+				"helm install eg oci://docker.io/envoyproxy/gateway-helm -n envoy-gateway-system --create-namespace")
+		ok := false
+		state.EnvoyGatewayOK = &ok
+		return
+	}
+
+	pods, err := client.CoreV1().Pods(envoyGatewayNamespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		printError(log, fmt.Sprintf("Could not list Envoy Gateway pods: %v", err))
+		ok := false
+		state.EnvoyGatewayOK = &ok
+		return
+	}
+
+	running := 0
+	for i := range pods.Items {
+		if pods.Items[i].Status.Phase == corev1.PodRunning {
+			running++
+		}
+	}
+	log.Infof("  Pods in %s: %d total, %d running", envoyGatewayNamespace, len(pods.Items), running)
+
+	if running == 0 {
+		printError(log, fmt.Sprintf("No running pods found in %s", envoyGatewayNamespace))
+		ok := false
+		state.EnvoyGatewayOK = &ok
+		return
+	}
+
+	printSuccess(log, fmt.Sprintf("Envoy Gateway: %d pod(s) running in %s", running, envoyGatewayNamespace))
+	ok := true
+	state.EnvoyGatewayOK = &ok
+}
+
+// checkGatewayRoutes lists HTTPRoutes across all namespaces using the dynamic
+// client. At least one HTTPRoute must exist for traffic to reach NVCF
+// services. When dynClient is nil the check is silently skipped (used in tests
+// or early preflight before Gateway API CRDs are installed).
+//
+// Non-critical: routes may be deployed after the gateway infrastructure, and
+// their absence does not block the cluster verdict.
+func checkGatewayRoutes(ctx context.Context, dynClient dynamic.Interface, state *ValidationState) {
+	log := state.Log
+	printHeader(log, "Gateway Routes")
+
+	if dynClient == nil {
+		printInfo(log, "  Gateway route check skipped (no dynamic client configured)")
+		return
+	}
+
+	gvr := schema.GroupVersionResource{
+		Group:    gatewayAPIGroup,
+		Version:  gatewayAPIVersion,
+		Resource: "httproutes",
+	}
+	list, err := dynClient.Resource(gvr).Namespace("").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		printWarning(log, fmt.Sprintf("Could not list HTTPRoutes: %v", err))
+		state.Warnings = append(state.Warnings,
+			"Gateway Routes: could not list HTTPRoutes — verify Gateway API CRDs are installed")
+		ok := false
+		state.GatewayRoutesOK = &ok
+		return
+	}
+
+	count := len(list.Items)
+	if count == 0 {
+		printWarning(log, "No HTTPRoutes found in any namespace")
+		state.Warnings = append(state.Warnings,
+			"Gateway Routes: no HTTPRoutes found — routes may not yet be deployed by nvcf-cli")
+		ok := false
+		state.GatewayRoutesOK = &ok
+		return
+	}
+
+	printSuccess(log, fmt.Sprintf("HTTPRoutes present: %d", count))
+	for i := range list.Items {
+		printInfo(log, fmt.Sprintf("  %s/%s", list.Items[i].GetNamespace(), list.Items[i].GetName()))
+	}
+	ok := true
+	state.GatewayRoutesOK = &ok
+}
+
+// checkExternalLoadBalancer performs a passive check: it lists all Services of
+// type LoadBalancer across all namespaces and looks for one with a populated
+// .status.loadBalancer.ingress. A populated ingress means a load balancer
+// controller (cloud LB, MetalLB, etc.) is active and assigned an IP or hostname.
+//
+// Non-critical: the passive form only detects an existing LB service; it does
+// not create a probe service, so absence means either no LB service exists yet
+// or no LB controller is installed.
+func checkExternalLoadBalancer(ctx context.Context, client kubernetes.Interface, state *ValidationState) {
+	log := state.Log
+	printHeader(log, "External Load Balancer")
+
+	services, err := client.CoreV1().Services("").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		printWarning(log, fmt.Sprintf("Could not list services: %v", err))
+		ok := false
+		state.ExternalLBOK = &ok
+		return
+	}
+
+	type lbResult struct {
+		name      string
+		namespace string
+		addr      string
+	}
+	var found []lbResult
+	for i := range services.Items {
+		svc := &services.Items[i]
+		if svc.Spec.Type != corev1.ServiceTypeLoadBalancer {
+			continue
+		}
+		for _, ing := range svc.Status.LoadBalancer.Ingress {
+			addr := ing.IP
+			if addr == "" {
+				addr = ing.Hostname
+			}
+			if addr != "" {
+				found = append(found, lbResult{svc.Name, svc.Namespace, addr})
+				break
+			}
+		}
+	}
+
+	if len(found) == 0 {
+		printWarning(log, "No LoadBalancer Services with an assigned external address found")
+		printInfo(log, "  This may indicate: no LB controller is installed (MetalLB, cloud LB), "+
+			"or no LoadBalancer Service exists yet (normal before nvcf-cli up)")
+		state.Warnings = append(state.Warnings,
+			"External Load Balancer: no Service of type LoadBalancer has an assigned external IP or hostname. "+
+				"Verify a load balancer controller is installed.")
+		ok := false
+		state.ExternalLBOK = &ok
+		return
+	}
+
+	printSuccess(log, fmt.Sprintf("%d LoadBalancer Service(s) with external address:", len(found)))
+	for _, svc := range found {
+		printInfo(log, fmt.Sprintf("  %s/%s → %s", svc.namespace, svc.name, svc.addr))
+	}
+	ok := true
+	state.ExternalLBOK = &ok
+}
+
+const (
+	nodeToNodeTestPort   = 19999
+	nodeToNodeImage      = enforcementDefaultImg // busybox:1.36
+	nodeToNodeNamespace  = "default"
+	nodeToNodeServerName = "nvcf-n2n-server"
+	nodeToNodeClientName = "nvcf-n2n-client"
+	// 90 s per pod matches enforcementPodTimeout — image should already be
+	// cached from the enforcement check that ran earlier in the same run.
+	nodeToNodePodTimeout = 90 * time.Second
+)
+
+// checkNodeToNode verifies raw overlay-network connectivity between two
+// schedulable nodes. It pins a TCP server pod (busybox nc) to node A and a
+// client pod (nc -z) to node B, then checks whether the TCP connect succeeds.
+//
+// Single-node clusters are skipped with a passing warning: inter-node
+// connectivity is not applicable when there is only one node.
+//
+// Critical: broken overlay means NVCF services on different nodes cannot
+// communicate, causing cascade failures across every API call.
+func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *ValidationState) {
+	log := state.Log
+	printHeader(log, "Node-to-Node Communication")
+
+	nodes, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		printWarning(log, fmt.Sprintf("Could not list nodes: %v", err))
+		ok := false
+		state.NodeToNodeOK = &ok
+		return
+	}
+
+	var schedulable []string
+	for i := range nodes.Items {
+		if !nodes.Items[i].Spec.Unschedulable {
+			schedulable = append(schedulable, nodes.Items[i].Name)
+		}
+	}
+
+	if len(schedulable) < 2 {
+		printInfo(log, fmt.Sprintf("  %d schedulable node(s) — node-to-node check skipped (not applicable for single-node clusters)", len(schedulable)))
+		state.Warnings = append(state.Warnings,
+			"Node-to-Node: skipped — fewer than 2 schedulable nodes; not applicable for single-node clusters")
+		ok := true
+		state.NodeToNodeOK = &ok
+		return
+	}
+
+	nodeA, nodeB := schedulable[0], schedulable[1]
+	log.Infof("  Probing overlay connectivity: %s → %s", nodeA, nodeB)
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano()%1000000)
+	serverName := nodeToNodeServerName + "-" + suffix
+	clientName := nodeToNodeClientName + "-" + suffix
+
+	// Deferred cleanup uses a fresh context so it runs even when ctx is expired.
+	defer func() {
+		grace := int64(0)
+		opts := metav1.DeleteOptions{GracePeriodSeconds: &grace}
+		_ = client.CoreV1().Pods(nodeToNodeNamespace).Delete(context.Background(), serverName, opts)
+		_ = client.CoreV1().Pods(nodeToNodeNamespace).Delete(context.Background(), clientName, opts)
+	}()
+
+	if _, err := client.CoreV1().Pods(nodeToNodeNamespace).Create(
+		ctx, buildNodeToNodeServerPod(serverName, nodeA), metav1.CreateOptions{},
+	); err != nil {
+		printError(log, fmt.Sprintf("Failed to create server pod on %s: %v", nodeA, err))
+		ok := false
+		state.NodeToNodeOK = &ok
+		return
+	}
+
+	if err := waitForPodReady(ctx, client, nodeToNodeNamespace, serverName, nodeToNodePodTimeout); err != nil {
+		printError(log, fmt.Sprintf("Server pod on %s not ready: %v", nodeA, err))
+		ok := false
+		state.NodeToNodeOK = &ok
+		return
+	}
+
+	serverIP, err := getPodIP(ctx, client, nodeToNodeNamespace, serverName)
+	if err != nil {
+		printError(log, fmt.Sprintf("Could not get server pod IP: %v", err))
+		ok := false
+		state.NodeToNodeOK = &ok
+		return
+	}
+	log.Infof("  Server pod on %s has IP %s", nodeA, serverIP)
+
+	if _, err := client.CoreV1().Pods(nodeToNodeNamespace).Create(
+		ctx, buildNodeToNodeClientPod(clientName, nodeB, serverIP), metav1.CreateOptions{},
+	); err != nil {
+		printError(log, fmt.Sprintf("Failed to create client pod on %s: %v", nodeB, err))
+		ok := false
+		state.NodeToNodeOK = &ok
+		return
+	}
+
+	succeeded, err := waitForPodDone(ctx, client, nodeToNodeNamespace, clientName, nodeToNodePodTimeout)
+	if err != nil {
+		printError(log, fmt.Sprintf("Client pod probe error: %v", err))
+		ok := false
+		state.NodeToNodeOK = &ok
+		return
+	}
+
+	if succeeded {
+		printSuccess(log, fmt.Sprintf("Node-to-node overlay connectivity verified: %s → %s (%s:%d)",
+			nodeB, nodeA, serverIP, nodeToNodeTestPort))
+		ok := true
+		state.NodeToNodeOK = &ok
+	} else {
+		printError(log, fmt.Sprintf("Client on %s could not reach server on %s at %s:%d",
+			nodeB, nodeA, serverIP, nodeToNodeTestPort))
+		printInfo(log, "  Possible causes: CNI overlay misconfiguration, host firewall rules, "+
+			"or cloud security group rules blocking inter-node pod traffic")
+		state.Recommendations = append(state.Recommendations,
+			fmt.Sprintf("Check host firewall and security groups between nodes %s and %s. "+
+				"Verify the CNI overlay (VXLAN, Geneve, etc.) is not blocked.", nodeA, nodeB))
+		ok := false
+		state.NodeToNodeOK = &ok
+	}
+}
+
+func buildNodeToNodeServerPod(name, nodeName string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: nodeToNodeNamespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "nvcf-cli",
+				"app.kubernetes.io/component":  "n2n-probe",
+			},
+		},
+		Spec: corev1.PodSpec{
+			NodeName:      nodeName,
+			RestartPolicy: corev1.RestartPolicyNever,
+			Containers: []corev1.Container{{
+				Name:  "server",
+				Image: nodeToNodeImage,
+				// Loop keeps the pod Running while we resolve its IP and
+				// start the client. The pod is cleaned up via a deferred
+				// background-context delete, not by natural exit.
+				Command:   []string{"sh", "-c", fmt.Sprintf("while true; do nc -l -p %d; done", nodeToNodeTestPort)},
+				Resources: enforcementResources(),
+			}},
+		},
+	}
+}
+
+func buildNodeToNodeClientPod(name, nodeName, serverIP string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: nodeToNodeNamespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "nvcf-cli",
+				"app.kubernetes.io/component":  "n2n-probe",
+			},
+		},
+		Spec: corev1.PodSpec{
+			NodeName:      nodeName,
+			RestartPolicy: corev1.RestartPolicyNever,
+			Containers: []corev1.Container{{
+				Name:    "client",
+				Image:   nodeToNodeImage,
+				Command: []string{"sh", "-c", fmt.Sprintf("nc -z -w 5 %s %d", serverIP, nodeToNodeTestPort)},
+				Resources: enforcementResources(),
+			}},
+		},
 	}
 }
 
