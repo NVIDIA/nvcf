@@ -613,8 +613,6 @@ mod tests {
     fn validate_required_tunnel_headers_keeps_missing_priority_absent() {
         let required = validate_required_tunnel_headers(&request_headers("req-1", 42)).unwrap();
 
-        // Absent stays absent rather than defaulting to 0: the engine
-        // priority derivation treats unconfigured and rank 0 differently.
         assert_eq!(required.priority, None);
     }
 

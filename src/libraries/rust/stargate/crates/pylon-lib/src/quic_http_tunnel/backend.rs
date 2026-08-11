@@ -57,8 +57,7 @@ impl FromStr for UpstreamBackend {
     }
 }
 
-/// Default seconds of scheduling head start for the most urgent platform
-/// priority (`x-priority: 0`); see [`dynamo::request_priority`].
+/// Default priority band ceiling; see [`dynamo::request_priority`].
 pub const DEFAULT_PRIORITY_CEILING: u32 = 3600;
 
 pub(crate) mod dynamo {

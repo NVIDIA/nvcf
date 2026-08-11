@@ -106,11 +106,9 @@ pub struct TunnelForwardingConfig {
     pub request_quality_monitor: RequestQualityMonitorConfig,
     pub retry: PylonRetryConfig,
     pub queue_mismatch_retry: PylonQueueMismatchRetryConfig,
-    /// Engine dialect spoken to the local upstream. Inbound engine priority
-    /// headers are stripped in every mode; only derivation is per-backend.
+    /// Engine dialect spoken to the local upstream; see [`UpstreamBackend`].
     pub upstream_backend: UpstreamBackend,
-    /// Seconds of scheduling head start for the most urgent platform
-    /// priority; see [`backend::dynamo::request_priority`].
+    /// Priority band ceiling; see [`backend::dynamo::request_priority`].
     pub priority_ceiling: u32,
     pub metrics: Option<Arc<PylonMetrics>>,
     #[cfg(test)]

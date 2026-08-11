@@ -207,8 +207,7 @@ struct Args {
     #[arg(long, env = "PYLON_QUEUE_MISMATCH_RETRY_AFTER_MS", value_name = "MS")]
     pylon_queue_mismatch_retry_after_ms: Option<u64>,
     /// Engine dialect spoken to the local upstream: "dynamo" derives the
-    /// engine priority headers from x-priority, "passthrough" derives nothing.
-    /// Inbound engine priority headers are stripped in every mode.
+    /// engine priority headers from x-priority, "passthrough" derives nothing
     #[arg(
         long,
         default_value = "dynamo",
