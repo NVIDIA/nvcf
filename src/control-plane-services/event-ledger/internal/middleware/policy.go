@@ -171,6 +171,20 @@ func GetClaims(ctx context.Context) map[string]interface{} {
 	return nil
 }
 
+// mergePolicyClaims preserves general JWT claims while ensuring the trusted
+// authorization response owns identity and role fields.
+func mergePolicyClaims(jwtClaims map[string]interface{}, authResponse PolicyAuthzResponse) map[string]interface{} {
+	claims := make(map[string]interface{}, len(jwtClaims)+4)
+	for k, v := range jwtClaims {
+		claims[k] = v
+	}
+	claims["actorId"] = authResponse.ActorID
+	claims["orgName"] = authResponse.OrgName
+	claims["actorType"] = authResponse.ActorType
+	claims["roles"] = authResponse.Roles
+	return claims
+}
+
 // NewPolicyMiddleware creates a new Policy middleware
 func NewPolicyMiddleware(authzClient policy.Authorizer, serviceName string, jwtPubKeySetURL string, jwtTokenExpiration time.Duration, jwkCache *jwk.Cache, httpConfig *config.HTTPClientConfig, logger *otelzap.Logger) mux.MiddlewareFunc {
 	if authzClient == nil {
@@ -368,18 +382,7 @@ func NewPolicyMiddleware(authzClient policy.Authorizer, serviceName string, jwtP
 				requestCtx = context.WithValue(requestCtx, policyRolesContextKey, authResponse.Roles)
 			}
 
-			// Create a claims map for all auth info
-			claims := map[string]interface{}{
-				"actorId":   authResponse.ActorID,
-				"orgName":   authResponse.OrgName,
-				"actorType": authResponse.ActorType,
-				"roles":     authResponse.Roles,
-			}
-
-			// Add JWT claims if available
-			for k, v := range jwtClaims {
-				claims[k] = v
-			}
+			claims := mergePolicyClaims(jwtClaims, authResponse)
 
 			requestCtx = context.WithValue(requestCtx, policyClaimsContextKey, claims)
 

@@ -169,19 +169,7 @@ func testPolicyMiddleware(testClient PolicyAuthZClientInterface, serviceName str
 				}
 			}
 
-			// Create a claims map starting with JWT claims if available
-			claims := make(map[string]interface{})
-			if jwtClaims != nil {
-				for k, v := range jwtClaims {
-					claims[k] = v
-				}
-			}
-
-			// Override with Policy claims (Policy claims take precedence)
-			claims["actorId"] = authResponse.ActorID
-			claims["orgName"] = authResponse.OrgName
-			claims["actorType"] = authResponse.ActorType
-			claims["roles"] = authResponse.Roles
+			claims := mergePolicyClaims(jwtClaims, authResponse)
 
 			ctx = context.WithValue(ctx, policyClaimsContextKey, claims)
 
@@ -641,13 +629,16 @@ func TestPolicyMiddlewareWithJWT(t *testing.T) {
 
 	// Create JWT claims that would be extracted
 	jwtClaims := jwt.MapClaims{
-		"sub":     "user456",
-		"name":    "JWT User",
-		"scopes":  []string{"read", "write"},
-		"iat":     1516239022,
-		"exp":     1896239022,
-		"email":   "test@example.com",
-		"orgName": "jwtorg",
+		"sub":       "user456",
+		"name":      "JWT User",
+		"scopes":    []string{"read", "write"},
+		"iat":       1516239022,
+		"exp":       1896239022,
+		"email":     "test@example.com",
+		"actorId":   "jwt-user",
+		"orgName":   "jwt-org",
+		"actorType": "jwt-actor-type",
+		"roles":     []string{"jwt-admin"},
 	}
 
 	// Create a mock JWT parser to simulate JWT middleware
@@ -694,6 +685,7 @@ func TestPolicyMiddlewareWithJWT(t *testing.T) {
 	assert.Equal(t, "user456", claims["actorId"])
 	assert.Equal(t, "org456", claims["orgName"])
 	assert.Equal(t, "user", claims["actorType"])
+	assert.Equal(t, []string{"admin"}, claims["roles"])
 
 	// Should also have JWT claims
 	assert.Equal(t, "user456", claims["sub"])
