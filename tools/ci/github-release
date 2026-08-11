@@ -906,11 +906,13 @@ def branch_cut(args):
                 f"not selected base tree {base_tree}"
             )
         print(f"[github-release] {release_branch} already has the selected base tree")
+        bump_base = existing_release_sha
     else:
         ensure_git_identity(root)
         release_base = linear_release_branch_base(root, base_sha)
         run(["git", "push", "origin", f"{release_base}:refs/heads/{release_branch}"], cwd=root)
         print(f"[github-release] created {release_branch} from selected base {base_sha}")
+        bump_base = release_base
 
     existing_pr = open_pr_url(root, bump_branch, target_branch)
     if existing_pr:
@@ -921,7 +923,7 @@ def branch_cut(args):
         raise SystemExit(f"{bump_branch} already exists but has no open PR to {target_branch}")
 
     ensure_git_identity(root)
-    run(["git", "switch", "-C", bump_branch, base_sha], cwd=root)
+    run(["git", "switch", "-C", bump_branch, bump_base], cwd=root)
     version_path = root / version_file_path
     version_path.write_text(f"{next_version}\n")
     run(["git", "add", version_file_path], cwd=root)
