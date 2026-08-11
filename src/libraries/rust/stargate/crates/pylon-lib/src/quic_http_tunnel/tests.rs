@@ -521,6 +521,9 @@ fn pylon_dynamo_request_priority_inverts_within_bounded_ceiling() {
     // A ceiling beyond i32 is clamped so the emitted value stays a valid i32.
     assert_eq!(dynamo::request_priority(Some(0), u32::MAX), i32::MAX);
     assert_eq!(dynamo::request_priority(None, u32::MAX), 0);
+    // A ceiling of 0 collapses every rank to the lowest value.
+    assert_eq!(dynamo::request_priority(Some(0), 0), 0);
+    assert_eq!(dynamo::request_priority(None, 0), 0);
 }
 
 #[test]
@@ -1685,7 +1688,20 @@ async fn quic_tunnel_forwards_to_http_backend() {
 /// Echoes the Dynamo priority headers the backend received, so the tunnel
 /// tests assert on what actually crossed the pylon-to-engine hop.
 fn dynamo_priority_echo_router() -> Router {
-    Router::new().route(
+    Router::new()
+        .route(
+            "/health",
+            axum::routing::get(|req: Request| async move {
+                let dynamo_priority = req
+                    .headers()
+                    .get("x-dynamo-request-priority")
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("absent")
+                    .to_string();
+                ([("x-echo-dynamo-priority", dynamo_priority)], "ok")
+            }),
+        )
+        .route(
         "/v1/chat/completions",
         post(|req: Request| async move {
             let echo_header = |name: &str| {
@@ -1764,6 +1780,23 @@ async fn quic_tunnel_emits_lowest_dynamo_priority_without_x_priority() {
     let response_headers = tunnel.response_head(StatusCode::OK).await;
     assert_eq!(response_headers["x-echo-dynamo-priority"], "0");
     assert_eq!(response_headers["x-echo-dynamo-strict-priority"], "0");
+
+    tunnel.shutdown().await;
+}
+
+#[tokio::test]
+async fn quic_tunnel_health_requests_carry_no_derived_priority() {
+    let (config, _metrics) = metered_test_tunnel_config_for(dynamo_priority_echo_router()).await;
+    let mut tunnel = RawTunnelTest::start(config).await;
+
+    // Health requests skip validation, so no required tunnel headers.
+    let mut headers = HeaderMap::new();
+    headers.insert("x-method", "GET".parse().unwrap());
+    headers.insert("x-path", "/health".parse().unwrap());
+    tunnel.send(headers, b"").await;
+
+    let response_headers = tunnel.response_head(StatusCode::OK).await;
+    assert_eq!(response_headers["x-echo-dynamo-priority"], "absent");
 
     tunnel.shutdown().await;
 }

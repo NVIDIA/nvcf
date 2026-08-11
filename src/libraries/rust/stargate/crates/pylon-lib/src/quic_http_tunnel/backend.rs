@@ -26,7 +26,7 @@ use std::str::FromStr;
 /// add a variant and a submodule here, never a new CLI flag.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum UpstreamBackend {
-    /// Forward requests unchanged; derive nothing. Inbound engine request
+    /// Forward requests unchanged; derive nothing. Inbound engine priority
     /// headers are still stripped.
     Passthrough,
     /// Derive the engine priority headers from `x-priority`.
