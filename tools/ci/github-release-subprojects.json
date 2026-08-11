@@ -281,6 +281,12 @@
       "legacy_tag_prefix": "deploy/helm/ess/v"
     },
     {
+      "id": "cloud-tasks-helm",
+      "path": "deploy/helm/cloud-tasks",
+      "service_name": "helm-cloud-tasks-api",
+      "legacy_tag_prefix": "deploy/helm/cloud-tasks"
+    },
+    {
       "id": "instance-cluster-management",
       "path": "src/control-plane-services/instance-cluster-management",
       "service_name": "nvcf-instance-cluster-management"
