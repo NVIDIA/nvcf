@@ -117,7 +117,7 @@ spec:
           - --nvca-cache-mount-options-enabled
           - --nvca-cache-mount-options
           - "ro,norecovery,nouuid"
-        image: nvcr.io/0651155215864979/ncp-dev/nvca-operator:3.1.0
+        image: nvcr.io/0651155215864979/ncp-dev/nvca-operator:3.2.0
         imagePullPolicy: IfNotPresent
         securityContext:
           # Set here so openbao injection can copy it upon injection
@@ -163,7 +163,7 @@ spec:
             cpu: "1000m"
             memory: "4Gi"
       - name: nvca-mirror
-        image: nvcr.io/0651155215864979/ncp-dev/nvca-operator:3.1.0
+        image: nvcr.io/0651155215864979/ncp-dev/nvca-operator:3.2.0
         imagePullPolicy: IfNotPresent
         securityContext:
           runAsUser: 1000
