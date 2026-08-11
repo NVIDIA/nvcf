@@ -483,6 +483,15 @@ nvctApi:
     NVCT_ESS_BASE_URL: {{ . | quote }}
     NVCT_ESS_WORKER_BASE_URL: {{ . | quote }}
     {{- end }}
+    {{- with dig "nvctApi" "icmsBaseUrl" nil .Values }}
+    NVCT_ICMS_BASE_URL: {{ . | quote }}
+    {{- end }}
+    {{- with dig "nvctApi" "jwt" "issuerUri" nil .Values }}
+    SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: {{ . | quote }}
+    {{- end }}
+    {{- with dig "nvctApi" "jwt" "jwkSetUri" nil .Values }}
+    SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: {{ . | quote }}
+    {{- end }}
     # Observability
     MANAGEMENT_TRACING_ENABLED: {{ .Values.global.observability.tracing.enabled }}
     {{- if .Values.global.observability.tracing.enabled }}
