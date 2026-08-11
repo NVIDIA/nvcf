@@ -1784,6 +1784,8 @@ async fn quic_tunnel_health_requests_carry_no_derived_priority() {
     let mut headers = HeaderMap::new();
     headers.insert("x-method", "GET".parse().unwrap());
     headers.insert("x-path", "/health".parse().unwrap());
+    // A spoofed engine header is stripped on the health path too.
+    headers.insert("x-dynamo-request-priority", "42".parse().unwrap());
     tunnel.send(headers, b"").await;
 
     let response_headers = tunnel.response_head(StatusCode::OK).await;
