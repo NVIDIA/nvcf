@@ -480,7 +480,6 @@ fn pylon_request_header_filter_strips_tunnel_headers_case_insensitively()
         "X-Stargate-Expected-Queue-Ms",
         "X-Dynamo-Request-Priority",
         "X-Dynamo-Request-Strict-Priority",
-        "X-Dynamo-Request-Anything",
     ]
     .into_iter()
     .chain(RETRY_CONTROL_REQUEST_HEADERS)
@@ -490,7 +489,14 @@ fn pylon_request_header_filter_strips_tunnel_headers_case_insensitively()
             &retry
         ));
     }
-    for name in [b"X-Request-Id".as_slice(), b"X-Priority", b"X-Dynamo-Nvext"] {
+    // The strip denylist is scoped to the priority headers; other engine
+    // headers pass through unchanged for now.
+    for name in [
+        b"X-Request-Id".as_slice(),
+        b"X-Priority",
+        b"X-Dynamo-Nvext",
+        b"X-Dynamo-Request-Anything",
+    ] {
         assert!(should_forward_header(
             &HeaderName::from_bytes(name)?,
             &retry

@@ -74,12 +74,15 @@ pub(crate) mod dynamo {
     /// shared tunnel contract because only pylon speaks them.
     pub(crate) const HEADER_REQUEST_PRIORITY: &str = "x-dynamo-request-priority";
     pub(crate) const HEADER_REQUEST_STRICT_PRIORITY: &str = "x-dynamo-request-strict-priority";
-    const REQUEST_HEADER_PREFIX: &str = "x-dynamo-request-";
 
-    /// Pylon is the only writer of headers under this prefix, so inbound
-    /// values are stripped in every backend mode.
-    pub(crate) fn is_engine_request_header(name: &HeaderName) -> bool {
-        name.as_str().starts_with(REQUEST_HEADER_PREFIX)
+    /// Denylist of engine headers pylon owns: inbound values are stripped in
+    /// every backend mode so pylon stays their only writer. Scoped to the
+    /// priority headers for now; other engine headers are tracked separately.
+    const STRIPPED_REQUEST_HEADERS: [&str; 2] =
+        [HEADER_REQUEST_PRIORITY, HEADER_REQUEST_STRICT_PRIORITY];
+
+    pub(crate) fn is_stripped_engine_header(name: &HeaderName) -> bool {
+        STRIPPED_REQUEST_HEADERS.contains(&name.as_str())
     }
 
     /// Map the platform rank (lower wins, absent = unconfigured) to the

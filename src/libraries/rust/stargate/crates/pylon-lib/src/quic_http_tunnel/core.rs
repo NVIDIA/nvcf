@@ -747,9 +747,9 @@ async fn send_upstream_request(
     for (name, value) in request_headers {
         if should_forward_header(name, &app.retry) {
             upstream_headers.append(name, value.clone());
-        } else if backend::dynamo::is_engine_request_header(name) {
+        } else if backend::dynamo::is_stripped_engine_header(name) {
             // Values are client-controlled; log the name only.
-            tracing::debug!(header = %name, "stripped inbound engine request header");
+            tracing::debug!(header = %name, "stripped inbound engine priority header");
         }
     }
     if !health_request {
@@ -1096,7 +1096,7 @@ pub(super) fn join_base_path(base: &str, path_and_query: &str) -> Result<url::Ur
 
 pub(super) fn should_forward_header(name: &HeaderName, retry: &PylonRetryConfig) -> bool {
     !is_tunnel_control_header(name, retry)
-        && !backend::dynamo::is_engine_request_header(name)
+        && !backend::dynamo::is_stripped_engine_header(name)
         && !matches!(
             name.as_str(),
             "host" | "x-method" | "x-path" | HEADER_STARGATE_EXPECTED_QUEUE_MS
