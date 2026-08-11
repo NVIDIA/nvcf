@@ -655,6 +655,12 @@ class GithubReleaseTest(unittest.TestCase):
             )
             self.assertEqual(
                 self.github_release.run(
+                    ["git", "diff", "--name-only", f"{release_base}...{bump_head}"], cwd=root, capture=True
+                ).strip(),
+                "src/compute-plane-services/nvca/VERSION",
+            )
+            self.assertEqual(
+                self.github_release.run(
                     ["git", "rev-list", "--merges", bump_head], cwd=root, capture=True
                 ).strip(),
                 "",
