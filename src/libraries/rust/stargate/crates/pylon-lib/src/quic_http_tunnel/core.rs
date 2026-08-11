@@ -708,10 +708,6 @@ pub(super) async fn forward_tunnel_request(
     Ok(())
 }
 
-/// Health requests skip header validation and are not client inference
-/// traffic: no span, no trace context, no derived engine headers.
-/// `priority` is the validated x-priority value; `None` when the header was
-/// absent or the request is a health request.
 async fn send_upstream_request(
     app: &TunnelServerApp,
     method: Method,

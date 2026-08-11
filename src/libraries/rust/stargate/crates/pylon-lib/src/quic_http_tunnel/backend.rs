@@ -88,8 +88,7 @@ pub(crate) mod dynamo {
         (ceiling - rank) as i32
     }
 
-    /// Emit both priority headers on every inference request, so the engine
-    /// reads priority only from pylon and never from client-supplied values.
+    /// Emit both priority headers on every inference request.
     pub(crate) fn apply_priority_headers(
         priority: Option<u32>,
         ceiling: u32,
