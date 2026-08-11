@@ -29,6 +29,7 @@ import (
 	"io"
 	"maps"
 	"math/big"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -416,6 +417,38 @@ func validateInputs(cfg Config) (errs []error) {
 	return errs
 }
 
+var privateIPNets = func() []*net.IPNet {
+	blocks := []string{
+		"10.0.0.0/8",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+		"169.254.0.0/16",
+		"127.0.0.0/8",
+		"::1/128",
+		"fc00::/7",
+		"fe80::/10",
+	}
+	nets := make([]*net.IPNet, 0, len(blocks))
+	for _, b := range blocks {
+		_, n, _ := net.ParseCIDR(b)
+		nets = append(nets, n)
+	}
+	return nets
+}()
+
+func isPrivateIP(host string) bool {
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	for _, n := range privateIPNets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
 func validateHelmChartURL(urlStr string) (errs []error) {
 	u, err := url.Parse(urlStr)
 	if err != nil {
@@ -423,8 +456,16 @@ func validateHelmChartURL(urlStr string) (errs []error) {
 		return
 	}
 
-	if u.Scheme == "" || u.Scheme == "file" || u.Host == "" {
-		errs = append(errs, fmt.Errorf("helm chart URL must be absolute, got %q", urlStr))
+	if u.Scheme != "https" && u.Scheme != "oci" {
+		errs = append(errs, fmt.Errorf("helm chart URL must use https or oci scheme, got %q", u.Scheme))
+	}
+
+	if u.Hostname() == "" {
+		errs = append(errs, fmt.Errorf("helm chart URL must have a host"))
+	}
+
+	if isPrivateIP(u.Hostname()) {
+		errs = append(errs, fmt.Errorf("helm chart URL must not point to private networks"))
 	}
 
 	return errs

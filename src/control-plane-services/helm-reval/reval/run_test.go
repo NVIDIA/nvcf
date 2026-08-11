@@ -1395,8 +1395,31 @@ func Test_validateHelmChartURL(t *testing.T) {
 	)
 
 	assert.Equal(t,
-		[]error{fmt.Errorf("helm chart URL must be absolute, got \"file:///foo/bar.txt\"")},
+		[]error{
+			fmt.Errorf("helm chart URL must use https or oci scheme, got %q", "file"),
+			fmt.Errorf("helm chart URL must have a host"),
+		},
 		validateHelmChartURL("file:///foo/bar.txt"),
+	)
+
+	assert.Equal(t,
+		[]error{fmt.Errorf("helm chart URL must use https or oci scheme, got %q", "http")},
+		validateHelmChartURL("http://foo.bar"),
+	)
+
+	assert.Equal(t,
+		[]error{
+			fmt.Errorf("helm chart URL must use https or oci scheme, got %q", ""),
+			fmt.Errorf("helm chart URL must have a host"),
+		},
+		validateHelmChartURL(""),
+	)
+
+	// Port without hostname must be rejected — u.Host would be ":443" (non-empty)
+	// but u.Hostname() is empty, so the host check must use Hostname().
+	assert.Equal(t,
+		[]error{fmt.Errorf("helm chart URL must have a host")},
+		validateHelmChartURL("https://:443/chart"),
 	)
 
 	assert.Empty(t,
@@ -1418,6 +1441,73 @@ func Test_validateHelmChartURL(t *testing.T) {
 	assert.Empty(t,
 		validateHelmChartURL("https://helm.stg.ngc.nvidia.com/org"),
 	)
+
+	// Private IPv4 ranges are rejected to prevent SSRF.
+	for _, privateURL := range []string{
+		"https://10.0.0.1/chart",
+		"https://10.255.255.255/chart",
+		"https://172.16.0.1/chart",
+		"https://172.31.255.255/chart",
+		"https://192.168.1.1/chart",
+		"https://192.168.255.255/chart",
+		"https://169.254.169.254/chart",
+		"https://127.0.0.1/chart",
+		"https://127.255.255.255/chart",
+	} {
+		assert.Equal(t,
+			[]error{fmt.Errorf("helm chart URL must not point to private networks")},
+			validateHelmChartURL(privateURL),
+			"expected private URL to be rejected: %s", privateURL,
+		)
+	}
+
+	// Private IPv6 addresses are rejected.
+	assert.Equal(t,
+		[]error{fmt.Errorf("helm chart URL must not point to private networks")},
+		validateHelmChartURL("https://[::1]/chart"),
+	)
+	assert.Equal(t,
+		[]error{fmt.Errorf("helm chart URL must not point to private networks")},
+		validateHelmChartURL("https://[fc00::1]/chart"),
+	)
+
+	// Public IPs are allowed.
+	assert.Empty(t, validateHelmChartURL("https://1.2.3.4/chart"))
+	assert.Empty(t, validateHelmChartURL("https://8.8.8.8/chart"))
+}
+
+func Test_isPrivateIP(t *testing.T) {
+	tests := []struct {
+		host    string
+		private bool
+	}{
+		// Private ranges.
+		{"10.0.0.1", true},
+		{"10.255.255.255", true},
+		{"172.16.0.1", true},
+		{"172.31.255.255", true},
+		{"192.168.0.1", true},
+		{"192.168.255.255", true},
+		{"169.254.169.254", true},
+		{"127.0.0.1", true},
+		{"::1", true},
+		{"fc00::1", true},
+		{"fd00::1", true},
+		{"fe80::1", true},
+		// Public addresses.
+		{"1.2.3.4", false},
+		{"8.8.8.8", false},
+		{"172.15.255.255", false},
+		{"172.32.0.0", false},
+		{"2001:db8::1", false},
+		// Hostnames are not IPs and must not be flagged.
+		{"example.com", false},
+		{"helm.ngc.nvidia.com", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.private, isPrivateIP(tt.host), "host: %s", tt.host)
+	}
 }
 
 func Test_shouldSkipValidateImages(t *testing.T) {
