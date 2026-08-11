@@ -667,18 +667,17 @@ pub(super) async fn forward_tunnel_request(
         }
     }
 
-    // None for health requests, which skip header validation and are not
-    // client inference traffic; nothing to trace or derive for them.
-    let validated = lifecycle.as_ref().map(|lifecycle| ValidatedRequestContext {
-        priority: lifecycle.required.priority,
-    });
+    let priority = lifecycle
+        .as_ref()
+        .and_then(|lifecycle| lifecycle.required.priority);
     let response = match send_upstream_request(
         app,
         method,
         &path_and_query,
         &request_headers,
         body_bytes,
-        validated,
+        health_request,
+        priority,
     )
     .await
     {
@@ -711,24 +710,20 @@ pub(super) async fn forward_tunnel_request(
     Ok(())
 }
 
-/// Fields of the validated tunnel headers the upstream send path needs.
-/// `None` at the call site means a health request: unvalidated, untraced,
-/// and never carrying derived engine headers.
-#[derive(Clone, Copy)]
-struct ValidatedRequestContext {
-    /// Platform priority; `None` when the request carried no x-priority.
-    priority: Option<u32>,
-}
-
+/// `health_request` requests skip header validation and are not client
+/// inference traffic: they get no span, no trace context, and no derived
+/// engine headers. `priority` is the validated x-priority value, `None`
+/// when the header was absent (or the request is a health request).
 async fn send_upstream_request(
     app: &TunnelServerApp,
     method: Method,
     path_and_query: &str,
     request_headers: &HeaderMap,
     body_bytes: Vec<u8>,
-    validated: Option<ValidatedRequestContext>,
+    health_request: bool,
+    priority: Option<u32>,
 ) -> Result<Response, UpstreamRequestError> {
-    let span = if validated.is_some() {
+    let span = if !health_request {
         let span = tracing::info_span!(
             "pylon_upstream_http_request",
             otel_parent = field::Empty,
@@ -757,13 +752,13 @@ async fn send_upstream_request(
             tracing::debug!(header = %name, "stripped inbound engine request header");
         }
     }
-    if let Some(validated) = validated {
-        if let Some(priority) = validated.priority {
+    if !health_request {
+        if let Some(priority) = priority {
             span.record("priority", priority);
         }
         if app.upstream_backend == UpstreamBackend::Dynamo {
             let dynamo_priority = backend::dynamo::apply_priority_headers(
-                validated.priority,
+                priority,
                 app.priority_ceiling,
                 &mut upstream_headers,
             );
