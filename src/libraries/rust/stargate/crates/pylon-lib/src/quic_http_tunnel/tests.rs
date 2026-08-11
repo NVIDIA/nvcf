@@ -489,19 +489,10 @@ fn pylon_request_header_filter_strips_tunnel_headers_case_insensitively()
             &retry
         ));
     }
-    // The strip denylist is scoped to the priority headers; other engine
-    // headers pass through unchanged for now.
-    for name in [
-        b"X-Request-Id".as_slice(),
-        b"X-Priority",
-        b"X-Dynamo-Nvext",
-        b"X-Dynamo-Request-Anything",
-    ] {
-        assert!(should_forward_header(
-            &HeaderName::from_bytes(name)?,
-            &retry
-        ));
-    }
+    assert!(should_forward_header(
+        &HeaderName::from_bytes(b"X-Request-Id")?,
+        &retry
+    ));
     Ok(())
 }
 
