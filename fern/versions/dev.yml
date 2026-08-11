@@ -159,6 +159,8 @@ navigation:
     contents:
       - page: Observability
         path: ../../docs/user/observability.md
+      - page: BYOO Telemetry Compatibility
+        path: ../../docs/user/cluster-management/byoo-telemetry-compatibility.md
       - page: Example Dashboards
         path: ../../docs/user/example-dashboards.md
       - section: Metrics
