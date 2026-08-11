@@ -4,6 +4,8 @@ Encrypted Secret Store (ESS) provides a reactive REST API for storing secrets
 with tenant-scoped encryption and authorization. Its API design follows the
 Vault KV v2 model to support workload secret injection.
 
+The service lives under `src/control-plane-services/encrypted-secret-store/`.
+
 ## Modules
 
 | Module | Purpose |
