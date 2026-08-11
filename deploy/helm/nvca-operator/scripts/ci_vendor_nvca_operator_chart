@@ -98,8 +98,8 @@ insert_release_artifact_image_annotations() {
         print
         if ($0 == "  namespace: {{ .Release.Namespace }}") {
           print "  {{- $releaseArtifactNvcaImageRepository := .Values.nvcaImage.repositoryOverride }}"
-          print "  {{- $releaseArtifactImageCredentialHelperRepository := .Values.selfManaged.imageCredHelper.imageRepository }}"
-          print "  {{- $releaseArtifactSambaRepository := .Values.selfManaged.sharedStorage.imageRepository }}"
+          print "  {{- $releaseArtifactImageCredentialHelperRepository := (.Values.selfManaged.imageCredHelper | default dict).imageRepository }}"
+          print "  {{- $releaseArtifactSambaRepository := (.Values.selfManaged.sharedStorage | default dict).imageRepository }}"
           print "  {{- if or $releaseArtifactNvcaImageRepository $releaseArtifactImageCredentialHelperRepository $releaseArtifactSambaRepository }}"
           print "  annotations:"
           print "    {{- if $releaseArtifactNvcaImageRepository }}"
@@ -270,7 +270,6 @@ main() {
     # placeholder leaks through and helm releases report appVersion="1.0"
     # regardless of which NVCA Operator the chart is actually wired to.
     update_yaml_key ".appVersion = \"${NVCA_OPERATOR_VERSION:?"NVCA_OPERATOR_VERSION is not set"}\"" "${TARGET_DIR}/Chart.yaml"
-    update_yaml_key ".generateImagePullSecret = false" "${TARGET_DIR}/values.yaml"
     update_yaml_key ".selfManaged.sharedStorage.imageTag = \"${NVCA_SHARED_STORAGE_IMAGE_TAG:?"NVCA_SHARED_STORAGE_IMAGE_TAG is not set"}\"" "${TARGET_DIR}/values.yaml"
     update_yaml_key ".nameOverride = \"nvca-operator\"" "${TARGET_DIR}/values.yaml"
     update_yaml_key ".fullnameOverride = \"nvca-operator\"" "${TARGET_DIR}/values.yaml"
