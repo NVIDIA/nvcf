@@ -144,10 +144,20 @@ Optional trusted headers:
 The gateway must synthesize or validate these headers. Do not pass public
 caller-supplied routing headers through blindly.
 
-Internal header:
+Internal headers:
 
 - `x-stargate-expected-queue-ms`: Stargate-to-pylon only. Stargate strips
   caller values; pylon strips it before upstream forwarding.
+- `x-dynamo-request-*` (notably `x-dynamo-request-priority` and
+  `x-dynamo-request-strict-priority`): pylon-to-engine only. Pylon strips
+  inbound values in every backend mode, so pylon is the only writer of these
+  headers. When pylon runs with `--pylon-upstream-backend dynamo` (the
+  default), it emits both headers on every inference request: the priority is
+  derived from `x-priority` as `max(0, ceiling - x)` with a configurable
+  ceiling (`--pylon-priority-ceiling`, default 3600), requests without
+  `x-priority` carry the lowest value `0`, and the strict tier is always `0`.
+  Always emitting means the engine never falls back to client-controlled
+  request-body priority hints.
 
 Body rules:
 
