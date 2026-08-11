@@ -252,3 +252,55 @@ func TestNGCCredentials_EnvFallback(t *testing.T) {
 	assert.Equal(t, "$oauthtoken", user)
 	assert.Equal(t, "from-env", pass)
 }
+
+// -- parseWWWAuthenticate --
+
+func TestParseWWWAuthenticate_Standard(t *testing.T) {
+	header := `Bearer realm="https://auth.docker.io/token",service="registry-1.docker.io",scope="repository:library/ubuntu:pull"`
+	realm, service, scope := parseWWWAuthenticate(header)
+	assert.Equal(t, "https://auth.docker.io/token", realm)
+	assert.Equal(t, "registry-1.docker.io", service)
+	assert.Equal(t, "repository:library/ubuntu:pull", scope)
+}
+
+func TestParseWWWAuthenticate_GHCR(t *testing.T) {
+	header := `Bearer realm="https://ghcr.io/token",service="ghcr.io",scope="repository:owner/image:pull"`
+	realm, service, scope := parseWWWAuthenticate(header)
+	assert.Equal(t, "https://ghcr.io/token", realm)
+	assert.Equal(t, "ghcr.io", service)
+	assert.Equal(t, "repository:owner/image:pull", scope)
+}
+
+func TestParseWWWAuthenticate_NoBearer(t *testing.T) {
+	// Basic auth challenge — should return empty strings.
+	realm, service, scope := parseWWWAuthenticate(`Basic realm="My Registry"`)
+	assert.Empty(t, realm)
+	assert.Empty(t, service)
+	assert.Empty(t, scope)
+}
+
+func TestParseWWWAuthenticate_Empty(t *testing.T) {
+	realm, service, scope := parseWWWAuthenticate("")
+	assert.Empty(t, realm)
+	assert.Empty(t, service)
+	assert.Empty(t, scope)
+}
+
+func TestParseWWWAuthenticate_RealmOnly(t *testing.T) {
+	// Some registries omit service/scope in the initial challenge.
+	realm, service, scope := parseWWWAuthenticate(`Bearer realm="https://example.com/auth"`)
+	assert.Equal(t, "https://example.com/auth", realm)
+	assert.Empty(t, service)
+	assert.Empty(t, scope)
+}
+
+// -- isNGCRegistry --
+
+func TestIsNGCRegistry(t *testing.T) {
+	assert.True(t, isNGCRegistry("nvcr.io"))
+	assert.True(t, isNGCRegistry("stg.nvcr.io"))
+	assert.True(t, isNGCRegistry("registry.nvidia.com"))
+	assert.False(t, isNGCRegistry("ghcr.io"))
+	assert.False(t, isNGCRegistry("quay.io"))
+	assert.False(t, isNGCRegistry("harbor.company.internal"))
+}
