@@ -1,9 +1,10 @@
 # Bazel Developer Guide
 
 nv-boot lives inside the `NVIDIA/nvcf` monorepo. Run every command in this
-guide from the monorepo root. Maven remains available during coexistence, but
-Bazel configuration, dependencies, locks, and CI are owned by the monorepo
-root.
+guide from the monorepo root. The monorepo copy is Bazel-only and does not
+contain project POMs. Any Maven build and publication support remains in the
+independent source repository. Bazel configuration, dependencies, locks, and
+CI are owned by the monorepo root.
 
 ## Tooling
 
@@ -528,9 +529,9 @@ shell test wrapper rather than the individual JUnit tests. The root-owned
 and `bazel-testlogs` symlinks so the download contains real files after the CI
 runner is destroyed.
 
-## Build And Test Like `mvn clean install`
+## Build And Test All Targets
 
-For a Maven-like local validation loop:
+For a complete local validation loop:
 
 ```bash
 bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" clean
@@ -547,31 +548,13 @@ bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
 `bazel test` builds what the tests need. Run the scoped `bazel build` when you
 also want non-test library outputs.
 
-## Maven Coexistence
+## Bazel-only monorepo policy
 
-Do not publish Maven-shaped jars from the Bazel toolchain. We briefly built and
-validated that bridge, but it was the wrong long-term direction: it made Bazel
-pretend to be Maven instead of letting Bazel consumers use Bazel source targets.
-
-During coexistence:
-
-- Maven remains the canonical remote publish path for Maven consumers.
-- Bazel build/test remains the canonical path for Bazel consumers.
-- Applications in this monorepo consume nv-boot through direct labels under
-  `//src/libraries/java/nv-boot-parent/...`.
-- Bazel does not generate, install, or publish Maven-shaped project artifacts.
-
-Run the independent Maven reactor from the nv-boot subtree:
-
-```bash
-(
-  cd src/libraries/java/nv-boot-parent
-  mvn clean install
-)
-```
-
-Maven writes under the subtree's `target` directories. It does not consume
-`bazel-bin`, and the Bazel build does not consume Maven `target` outputs.
+Applications in this monorepo consume nv-boot through direct labels under
+`//src/libraries/java/nv-boot-parent/...`. Project POMs remain migration and
+publication inputs only in the independent source repository. This monorepo
+does not generate, install, or publish Maven-shaped project artifacts. Do not
+restore project POMs or add monorepo Maven build instructions.
 
 ## Dependency Updates
 
@@ -603,23 +586,26 @@ unrelated transitive path.
 
 ## Adding A New Module
 
-For a new nv-boot module during coexistence:
+For a new nv-boot module:
 
-1. Add the Maven module to
-   `src/libraries/java/nv-boot-parent/pom.xml`.
-2. Add the module's Maven `pom.xml`.
-3. Add the module to `nv-boot-bom/pom.xml` if downstream apps should get its
-   version through the BOM.
-4. Add
+1. Add
    `src/libraries/java/nv-boot-parent/new-module/BUILD.bazel`.
-5. Add `nv_boot_library(...)`.
-6. Add `nv_boot_library_test(...)` if the module has tests, with
+2. Add `nv_boot_library(...)`.
+3. Add `nv_boot_library_test(...)` if the module has tests, with
    `coverage_library` set to the module's `nv_boot_library(...)` target.
-7. Update the nv-boot NOTICE roots and metadata.
-8. Update architecture or release docs if they list modules explicitly.
+4. Add any new third-party roots to the monorepo `MODULE.bazel` and repin the
+   shared dependency hub.
+5. Regenerate the root dependency rollup from the monorepo root:
 
-For an internal-only Maven module, skip the Maven BOM entry. Its Bazel target
-is still an ordinary source library target.
+   ```bash
+   go run ./tools/collect-dependencies
+   ```
+
+6. Update the nv-boot NOTICE roots and metadata.
+7. Update architecture or release docs if they list modules explicitly.
+
+If external Maven consumers need the module, make the corresponding publication
+change in the independent source repository.
 
 ## Reusable Bazel Enablement Skills
 
@@ -673,27 +659,13 @@ toolchain code:
 - focused test selection and ordinary console logging continue to use the
   JUnit Platform Console Launcher.
 
-Remote deploy through Bazel has been removed. Maven remains the remote publish
-path for Maven consumers, and Bazel-native consumers should use source targets.
-
-Maven still owns parent/BOM publication during coexistence:
-
-- root `pom.xml` is still published as `com.nvidia.boot:nv-boot-parent:pom`;
-- `nv-boot-bom/pom.xml` is still published as
-  `com.nvidia.boot:nv-boot-bom:pom`;
-- Bazel has no corresponding POM or artifact targets.
-
-After Maven consumers have migrated, remove the Maven POM/publication path as a
-separate cutover decision. Do not recreate it inside Bazel.
+Remote deploy through Bazel has been removed. External Maven publication, when
+needed, is owned by the independent source repository. Bazel-native consumers
+use source targets. Do not recreate a POM or publication bridge in this
+monorepo.
 
 ## Current Gaps
 
-- Maven remains the canonical publishing path during coexistence.
-- The Bazel remote publish/deploy bridge was removed after validation because
-  the target Bazel-native model is source-target consumption, not URM Maven
-  artifact consumption.
-- Parent/BOM POM artifacts still come from the Maven build and checked-in
-  `pom.xml` files during coexistence.
 - GitHub CI enforces nv-boot NOTICE drift and uploads its complete NOTICE and
   runtime inventory. A license-grouped nv-boot OSRB delta still requires an
   approved nv-boot baseline inventory.

@@ -254,6 +254,11 @@
       "service_name": "nvcf-cloud-tasks"
     },
     {
+      "id": "cloud-functions",
+      "path": "src/control-plane-services/cloud-functions",
+      "service_name": "nvcf-cloud-functions"
+    },
+    {
       "id": "notary",
       "path": "src/control-plane-services/notary",
       "service_name": "nvcf-notary"
@@ -265,13 +270,25 @@
     },
     {
       "id": "ess",
-      "path": "src/control-plane-services/ess",
-      "service_name": "nvcf-ess"
+      "path": "src/control-plane-services/encrypted-secret-store",
+      "service_name": "nvcf-ess",
+      "legacy_tag_prefix": "src/control-plane-services/ess/v"
+    },
+    {
+      "id": "ess-helm",
+      "path": "deploy/helm/encrypted-secret-store",
+      "service_name": "helm-nvcf-ess-api",
+      "legacy_tag_prefix": "deploy/helm/ess/v"
     },
     {
       "id": "instance-cluster-management",
       "path": "src/control-plane-services/instance-cluster-management",
       "service_name": "nvcf-instance-cluster-management"
+    },
+    {
+      "id": "nvcf-ui",
+      "path": "src/uis/nvcf-ui",
+      "service_name": "nvcf-ui"
     }
   ]
 }

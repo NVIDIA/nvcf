@@ -234,6 +234,40 @@ def remote_branch_sha(root, branch):
     return raw.split()[0]
 
 
+def commit_tree(root, ref):
+    return run(["git", "rev-parse", "--verify", f"{ref}^{{tree}}"], cwd=root, capture=True).strip()
+
+
+def linear_release_branch_base(root, base_sha):
+    merges = run(
+        ["git", "rev-list", "--topo-order", "--reverse", "--merges", base_sha],
+        cwd=root,
+        capture=True,
+    ).splitlines()
+    if not merges:
+        return base_sha
+
+    # Keep the selected tree but root the release branch before the first merge
+    # in its history so the release ruleset sees only a linear commit graph.
+    first_merge = merges[0]
+    linear_parent = run(
+        ["git", "rev-parse", "--verify", f"{first_merge}^1"], cwd=root, capture=True
+    ).strip()
+    return run(
+        [
+            "git",
+            "commit-tree",
+            commit_tree(root, base_sha),
+            "-p",
+            linear_parent,
+            "-m",
+            "chore(release): snapshot default branch for linear history",
+        ],
+        cwd=root,
+        capture=True,
+    ).strip()
+
+
 def open_pr_url(root, source_branch, target_branch):
     raw = run(
         [
@@ -311,10 +345,21 @@ def synthesize_current_prefix_anchor(service):
     print(f"[github-release] {service['id']}: synthesized local compatibility anchor {anchor} -> {legacy_tag} ({sha})")
 
 
+def initial_floor_version(service):
+    raw = service.get("initial_version")
+    if raw is None:
+        raw = INITIAL_RELEASE_FLOOR_VERSION
+    floor = str(raw).strip().lstrip("v")
+    if not re.fullmatch(SEMVER_PATTERN, floor):
+        raise SystemExit(f"{service['id']}: unsupported initial_version {service.get('initial_version')!r}")
+    return floor
+
+
 def synthesize_initial_version_anchor(root, service):
     if latest_service_tag(service):
         return
-    anchor = tag_for_version(service, INITIAL_RELEASE_FLOOR_VERSION)
+    floor = initial_floor_version(service)
+    anchor = tag_for_version(service, floor)
     if run(["git", "rev-parse", "-q", "--verify", f"refs/tags/{anchor}"], cwd=root, capture=True, check=False).strip():
         return
 
@@ -333,9 +378,10 @@ def synthesize_initial_version_anchor(root, service):
     if not sha:
         return
     run(["git", "tag", anchor, sha], cwd=root)
+    next_hint = INITIAL_RELEASE_VERSION if floor == INITIAL_RELEASE_FLOOR_VERSION else f"the next bump after {floor}"
     print(
         f"[github-release] {service['id']}: synthesized local initial-version anchor "
-        f"{anchor} ({sha}); missing version tags start at {INITIAL_RELEASE_VERSION}"
+        f"{anchor} ({sha}); missing version tags start at {next_hint}"
     )
 
 
@@ -410,9 +456,25 @@ def no_release_output(output):
         for phrase in (
             "no relevant changes",
             "There are no commits",
-            "is behind the remote",
         )
     )
+
+
+def stale_checkout_output(output):
+    """True when semantic-release refused to publish because the checkout is behind main.
+
+    This is a race, not a verdict on the commits. The workflow checks out a
+    branch tip, but main can still move between checkout and the moment
+    semantic-release runs, which is minutes later once npm install has run.
+    semantic-release then reports "The local branch main is behind the remote
+    one" and publishes nothing.
+
+    Treating that as no-release loses the release silently: the run exits 0 and
+    goes green having tagged nothing. Worse, the concurrency group cancels
+    queued runs, so the superseded commit gets no second chance from its own
+    push. It is classified separately so it can be reported and retried.
+    """
+    return "is behind the remote" in output
 
 
 def validate_version_file(root, service):
@@ -662,6 +724,11 @@ def resolve_release_outcome(exit_code, output):
         return "unknown"
     if parse_next_version(output):
         return "released"
+    if stale_checkout_output(output):
+        # Checked before no_release_output: semantic-release prints the
+        # behind-the-remote notice instead of a verdict on the commits, so this
+        # must not be mistaken for "nothing to release".
+        return "stale-checkout"
     if no_release_output(output):
         return "no-release"
     return "unknown"
@@ -680,6 +747,14 @@ def finish_semantic_release(root, service, components, exit_code, output, dry_ru
             print(f"[github-release] {service['id']}: would create {tag_for_version(service, version)}")
         else:
             print(f"[github-release] {service['id']}: semantic-release created {tag_for_version(service, version)}")
+        return outcome
+    if outcome == "stale-checkout":
+        # No fan-out: semantic-release never judged the commits, so a dependency
+        # release here would invent a version the service may not be due.
+        print(
+            f"[github-release] {service['id']}: semantic-release saw a checkout behind main "
+            "and published nothing; this is a race, not a no-release"
+        )
         return outcome
     if outcome == "no-release":
         print(f"[github-release] {service['id']}: no release-worthy commits")
@@ -767,7 +842,7 @@ def release_branch_pr_body(service, release_branch, base_sha, version_file_path,
             "",
             "## Additional Details",
             "",
-            f"- Created release branch `{release_branch}` from `{base_sha}`.",
+            f"- Created release branch `{release_branch}` from the selected default branch content at `{base_sha}`.",
             f"- Advances `{version_file_path}` from `{current_version}` to `{next_version}` on `{target_branch}`.",
             "- The release branch push runs release automation for the first stable tag from the branch VERSION file.",
             "",
@@ -808,6 +883,7 @@ def branch_cut(args):
     bump_branch = service_version_bump_branch(service, current_version)
     next_version = next_release_train_version(current_version)
     version_file_path = f"{service['path'].rstrip('/')}/{service['version_file']}"
+    base_tree = commit_tree(root, base_sha)
 
     print(
         f"[github-release] {service['id']}: branch-cut base={base_sha} "
@@ -816,19 +892,27 @@ def branch_cut(args):
     )
 
     if args.dry_run:
-        print(f"[github-release] dry-run: would create {release_branch} at {base_sha}")
+        print(f"[github-release] dry-run: would create {release_branch} from {base_sha}'s tree")
         print(f"[github-release] dry-run: would create {bump_branch} with {version_file_path}={next_version}")
         print(f"[github-release] dry-run: would open PR from {bump_branch} to {target_branch}")
         return
 
     existing_release_sha = remote_branch_sha(root, release_branch)
     if existing_release_sha:
-        if existing_release_sha != base_sha:
-            raise SystemExit(f"{release_branch} already exists at {existing_release_sha}, not selected base {base_sha}")
-        print(f"[github-release] {release_branch} already exists at {base_sha}")
+        existing_release_tree = commit_tree(root, existing_release_sha)
+        if existing_release_tree != base_tree:
+            raise SystemExit(
+                f"{release_branch} already exists with tree {existing_release_tree}, "
+                f"not selected base tree {base_tree}"
+            )
+        print(f"[github-release] {release_branch} already has the selected base tree")
+        bump_base = existing_release_sha
     else:
-        run(["git", "push", "origin", f"{base_sha}:refs/heads/{release_branch}"], cwd=root)
-        print(f"[github-release] created {release_branch} at {base_sha}")
+        ensure_git_identity(root)
+        release_base = linear_release_branch_base(root, base_sha)
+        run(["git", "push", "origin", f"{release_base}:refs/heads/{release_branch}"], cwd=root)
+        print(f"[github-release] created {release_branch} from selected base {base_sha}")
+        bump_base = release_base
 
     existing_pr = open_pr_url(root, bump_branch, target_branch)
     if existing_pr:
@@ -839,7 +923,7 @@ def branch_cut(args):
         raise SystemExit(f"{bump_branch} already exists but has no open PR to {target_branch}")
 
     ensure_git_identity(root)
-    run(["git", "switch", "-C", bump_branch, base_sha], cwd=root)
+    run(["git", "switch", "-C", bump_branch, bump_base], cwd=root)
     version_path = root / version_file_path
     version_path.write_text(f"{next_version}\n")
     run(["git", "add", version_file_path], cwd=root)
@@ -897,6 +981,11 @@ def auto_release(args):
     # must not fail the job; publish mode below still fails hard.
     dry_run_failures = []
 
+    # Services whose semantic-release run hit the behind-the-remote race. These
+    # fail the job in publish mode: the release was lost, and a green run would
+    # hide that.
+    stale_checkouts = []
+
     for service in metadata.get("services", []):
         if not should_process_auto_service(service, service_filter, branch, default_branch):
             continue
@@ -941,7 +1030,11 @@ def auto_release(args):
                 outcome = finish_semantic_release(
                     root, service, java_components, code, output, dry_run=True, draft=draft
                 )
-                if outcome == "unknown":
+                if outcome == "stale-checkout":
+                    reason = "semantic-release dry-run saw a checkout behind main; preview is meaningless"
+                    print(f"[github-release] WARNING: {service['id']}: {reason}; continuing (dry-run preview)")
+                    dry_run_failures.append((service["id"], reason))
+                elif outcome == "unknown":
                     # Preview could not compute a version (for example the
                     # semantic-release child was killed on a large history).
                     # Do not fail the inert workflow on a preview; record it so
@@ -960,7 +1053,9 @@ def auto_release(args):
                 outcome = finish_semantic_release(
                     root, service, java_components, code, output, dry_run=False, draft=draft
                 )
-                if outcome == "unknown":
+                if outcome == "stale-checkout":
+                    stale_checkouts.append(service["id"])
+                elif outcome == "unknown":
                     print(
                         f"[github-release] WARNING: {service['id']}: semantic-release reported "
                         "neither a version nor a no-release result; not cutting a dependency release"
@@ -975,6 +1070,18 @@ def auto_release(args):
         )
         for sid, reason in dry_run_failures:
             print(f"[github-release]   - {sid}: {reason}")
+
+    if stale_checkouts:
+        # Fail rather than exit green. The release for these services was not
+        # cut and nothing else will retry it: the push that should have released
+        # them is already behind main, and the concurrency group cancels the
+        # queued runs that would otherwise pick it up.
+        raise SystemExit(
+            f"[github-release] ERROR: {len(stale_checkouts)} service(s) lost a release to a "
+            f"checkout behind {branch or 'the release branch'}: {', '.join(sorted(stale_checkouts))}. "
+            "Re-run this workflow on the current branch tip (workflow_dispatch, operation=auto) "
+            "to cut the missing tags."
+        )
 
 
 def parse_release_tag(tag, metadata):

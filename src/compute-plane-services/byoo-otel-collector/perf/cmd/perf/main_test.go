@@ -19,10 +19,23 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"strings"
 	"testing"
+	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes/fake"
+	ktesting "k8s.io/client-go/testing"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/deploy"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/k3d"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/loadgen"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/sink"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/spec"
 )
 
@@ -153,5 +166,156 @@ func TestRenderCmdSummary(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "VALID") {
 		t.Errorf("expected summary to report VALID, got: %s", stdout.String())
+	}
+}
+
+func TestRunCmdDefaults(t *testing.T) {
+	cmd := newRunCmd()
+	defaults := map[string]string{
+		"shape":         "both",
+		"profile":       "dev",
+		"mode":          "k3d",
+		"namespace":     "byoo-perf",
+		"ready-timeout": "3m0s",
+		"retain":        "false",
+		"skip-load":     "false",
+		"sink-image":    sink.DefaultImage,
+		"loadgen-image": loadgen.DefaultImage,
+		"k3d-cluster":   "byoo-perf",
+		"import-images": "false",
+	}
+	for name, want := range defaults {
+		f := cmd.Flags().Lookup(name)
+		if f == nil {
+			t.Fatalf("run command missing --%s flag", name)
+		}
+		if f.DefValue != want {
+			t.Errorf("--%s default = %q, want %q", name, f.DefValue, want)
+		}
+	}
+}
+
+// TestRunCmdInvalidSelectors asserts run rejects bad selectors before it ever
+// touches a cluster, so these stay hermetic (no kubeconfig required).
+func TestRunCmdInvalidSelectors(t *testing.T) {
+	for _, args := range [][]string{
+		{"--mode", "nope"},
+		{"--profile", "nope"},
+		{"--shape", "nope"},
+	} {
+		cmd := newRunCmd()
+		cmd.SetArgs(args)
+		cmd.SetOut(&bytes.Buffer{})
+		cmd.SetErr(&bytes.Buffer{})
+		if err := cmd.Execute(); err == nil {
+			t.Errorf("run %v: expected error, got nil", args)
+		}
+	}
+}
+
+func TestCleanupCmdDefaults(t *testing.T) {
+	cmd := newCleanupCmd()
+	defaults := map[string]string{
+		"shape":     "both",
+		"namespace": "byoo-perf",
+	}
+	for name, want := range defaults {
+		f := cmd.Flags().Lookup(name)
+		if f == nil {
+			t.Fatalf("cleanup command missing --%s flag", name)
+		}
+		if f.DefValue != want {
+			t.Errorf("--%s default = %q, want %q", name, f.DefValue, want)
+		}
+	}
+}
+
+func TestCleanupCmdInvalidShape(t *testing.T) {
+	cmd := newCleanupCmd()
+	cmd.SetArgs([]string{"--shape", "nope"})
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetErr(&bytes.Buffer{})
+	if err := cmd.Execute(); err == nil {
+		t.Error("cleanup --shape nope: expected error, got nil")
+	}
+}
+
+// TestRunCleansUpPodWhenServiceCreateFails verifies that when Deploy fails
+// after the pod is created (here, because service creation is rejected), run
+// rolls back the orphaned pod instead of leaking it, since --retain is false.
+func TestRunCleansUpPodWhenServiceCreateFails(t *testing.T) {
+	fakeCS := fake.NewSimpleClientset()
+	fakeCS.PrependReactor("create", "services", func(ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, fmt.Errorf("service creation rejected")
+	})
+
+	orig := newDeployClient
+	newDeployClient = func(string, string) (*deploy.Client, error) {
+		return deploy.NewClientForClientset(fakeCS), nil
+	}
+	t.Cleanup(func() { newDeployClient = orig })
+
+	cfg := runConfig{
+		shape:          "container",
+		profile:        "dev",
+		mode:           "remote",
+		collectorImage: spec.DefaultCollectorImage,
+		namespace:      "byoo-perf",
+		readyTimeout:   time.Second,
+	}
+	if err := runRun(io.Discard, cfg); err == nil {
+		t.Fatal("expected run to fail when service creation is rejected")
+	}
+
+	pods, err := fakeCS.CoreV1().Pods("byoo-perf").List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatalf("list pods: %v", err)
+	}
+	if len(pods.Items) != 0 {
+		t.Errorf("expected the pod to be cleaned up after a failed deploy, got %d", len(pods.Items))
+	}
+}
+
+func TestNamespaceForShape(t *testing.T) {
+	if got := namespaceForShape("byoo-perf", spec.ShapeContainer, false); got != "byoo-perf" {
+		t.Errorf("single-shape namespace = %q, want %q", got, "byoo-perf")
+	}
+	if got := namespaceForShape("byoo-perf", spec.ShapeContainer, true); got != "byoo-perf-container" {
+		t.Errorf("multi-shape namespace = %q, want %q", got, "byoo-perf-container")
+	}
+	if got := namespaceForShape("byoo-perf", spec.ShapeHelm, true); got != "byoo-perf-helm" {
+		t.Errorf("multi-shape namespace = %q, want %q", got, "byoo-perf-helm")
+	}
+}
+
+// TestEnsureK3dClusterDoesNotDeleteReusedCluster verifies the suite never tears
+// down a k3d cluster that already existed before the run.
+func TestEnsureK3dClusterDoesNotDeleteReusedCluster(t *testing.T) {
+	var calls [][]string
+	orig := k3d.Runner
+	k3d.Runner = func(_ context.Context, args ...string) ([]byte, error) {
+		calls = append(calls, args)
+		// Report that the target cluster already exists so Create reuses it.
+		if len(args) >= 2 && args[0] == "cluster" && args[1] == "list" {
+			return []byte("byoo-perf 1/1\n"), nil
+		}
+		return nil, nil
+	}
+	t.Cleanup(func() { k3d.Runner = orig })
+
+	cfg := runConfig{mode: "k3d", k3dCluster: "byoo-perf", retain: false}
+	cluster, teardown, err := ensureK3dCluster(context.Background(), io.Discard, cfg)
+	if err != nil {
+		t.Fatalf("ensureK3dCluster: %v", err)
+	}
+	if !cluster.Reused {
+		t.Fatal("expected the pre-existing cluster to be reported as reused")
+	}
+
+	teardown()
+	for _, c := range calls {
+		if len(c) >= 2 && c[0] == "cluster" && c[1] == "delete" {
+			t.Errorf("teardown deleted a reused cluster: calls=%v", calls)
+		}
 	}
 }

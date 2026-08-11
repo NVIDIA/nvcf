@@ -18,13 +18,16 @@ limitations under the License.
 package transporttls
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
+	evanphxpatch "github.com/evanphx/json-patch/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/strategicpatch"
 )
 
 const testRootCertPEM = `-----BEGIN CERTIFICATE-----
@@ -67,6 +70,12 @@ func TestValidateConfigRejectsMismatchedFingerprint(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "trustBundleFingerprint")
+}
+
+func TestNormalizeConfigDefaultsInstalledBundleMountPath(t *testing.T) {
+	cfg := NormalizeConfig(nvcaconfig.TransportTLSConfig{})
+
+	assert.Equal(t, "/etc/ssl/certs", cfg.InstalledBundleMountPath)
 }
 
 func TestValidateConfigRejectsInvalidKubernetesNames(t *testing.T) {
@@ -115,8 +124,65 @@ func TestValidateConfigRejectsInvalidKubernetesNames(t *testing.T) {
 	}
 }
 
+func TestValidateConfigRejectsInvalidInstalledBundleMountPaths(t *testing.T) {
+	tests := []struct {
+		name      string
+		mountPath string
+		wantErr   string
+	}{
+		{
+			name:      "relative path",
+			mountPath: "nvcf/transport-tls",
+			wantErr:   "must be absolute",
+		},
+		{
+			name:      "noncanonical path",
+			mountPath: "/nvcf/../transport-tls",
+			wantErr:   "must be canonical",
+		},
+		{
+			name:      "root path",
+			mountPath: "/",
+			wantErr:   "must not be root",
+		},
+		{
+			name:      "installer output path",
+			mountPath: MergedCertsMountPath,
+			wantErr:   "reserved",
+		},
+		{
+			name:      "trust source path",
+			mountPath: TrustBundleMountPath,
+			wantErr:   "reserved",
+		},
+		{
+			name:      "under installer output path",
+			mountPath: MergedCertsMountPath + "/nested",
+			wantErr:   "reserved",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := NormalizeConfig(nvcaconfig.TransportTLSConfig{
+				TrustMode:                nvcaconfig.TrustModeBundle,
+				TrustBundleFingerprint:   testRootFingerprint,
+				TrustBundlePEM:           testRootCertPEM,
+				InstalledBundleMountPath: tt.mountPath,
+			})
+
+			err := ValidateConfig(cfg)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "installedBundleMountPath")
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
 func TestInjectIntoPodSpecOnlyMutatesLLMWorker(t *testing.T) {
 	podSpec := &corev1.PodSpec{
+		InitContainers: []corev1.Container{testWorkerInitContainer()},
 		Containers: []corev1.Container{
 			{Name: function.LLMWorkerContainerName, Image: "nvcr.io/nvcf/llm-worker:test"},
 			{Name: "inference", Image: "nvcr.io/customer/inference:test"},
@@ -128,7 +194,6 @@ func TestInjectIntoPodSpecOnlyMutatesLLMWorker(t *testing.T) {
 		TrustMode:              nvcaconfig.TrustModeBundle,
 		TrustBundleFingerprint: testRootFingerprint,
 		TrustBundlePEM:         testRootCertPEM,
-		InstallerImage:         "nvcr.io/nvidia/nvcf-byoc/nvca:test",
 	}))
 	require.NoError(t, err)
 
@@ -153,8 +218,13 @@ func TestInjectIntoPodSpecOnlyMutatesLLMWorker(t *testing.T) {
 	}
 }
 
-func TestInjectIntoPodSpecUsesNVCAInstallCommand(t *testing.T) {
+func TestInjectIntoPodSpecUsesRenderedInitImageAndPullPolicy(t *testing.T) {
 	podSpec := &corev1.PodSpec{
+		InitContainers: []corev1.Container{{
+			Name:            "init",
+			Image:           "nvcr.io/nvcf-core/nvcf_worker_init:v3.1",
+			ImagePullPolicy: corev1.PullAlways,
+		}},
 		Containers: []corev1.Container{{
 			Name:  function.LLMWorkerContainerName,
 			Image: "nvcr.io/nvcf/llm-worker:test",
@@ -165,14 +235,13 @@ func TestInjectIntoPodSpecUsesNVCAInstallCommand(t *testing.T) {
 		TrustMode:              nvcaconfig.TrustModeBundle,
 		TrustBundleFingerprint: testRootFingerprint,
 		TrustBundlePEM:         testRootCertPEM,
-		InstallerImage:         "nvcr.io/nvidia/nvcf-byoc/nvca:test",
 	}))
 	require.NoError(t, err)
 
 	installContainer := findTestInitContainer(podSpec, InstallContainerName)
 	require.NotNil(t, installContainer)
-	assert.Equal(t, "nvcr.io/nvidia/nvcf-byoc/nvca:test", installContainer.Image)
-	assert.Equal(t, corev1.PullIfNotPresent, installContainer.ImagePullPolicy)
+	assert.Equal(t, "nvcr.io/nvcf-core/nvcf_worker_init:v3.1", installContainer.Image)
+	assert.Equal(t, corev1.PullAlways, installContainer.ImagePullPolicy)
 	assert.Equal(t, []string{InstallCommandPath}, installContainer.Command)
 	assert.Equal(t, []string{
 		"--system-bundle", SystemCertFile,
@@ -187,14 +256,42 @@ func TestInjectIntoPodSpecUsesNVCAInstallCommand(t *testing.T) {
 	assert.False(t, *installContainer.SecurityContext.RunAsNonRoot)
 }
 
-func TestInjectIntoPodSpecUsesConfiguredInstallerImageWhenLegacyEnvIsSet(t *testing.T) {
-	t.Setenv("NVCF_TRUST_BUNDLE_INSTALLER_IMAGE", "nvcr.io/private-mirror/nvca:test")
+func TestInjectIntoPodSpecRejectsMissingOrEmptyRegularInitImage(t *testing.T) {
+	tests := []struct {
+		name           string
+		initContainers []corev1.Container
+	}{
+		{name: "missing init"},
+		{name: "empty init image", initContainers: []corev1.Container{{Name: "init"}}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			podSpec := &corev1.PodSpec{
+				InitContainers: tt.initContainers,
+				Containers: []corev1.Container{{
+					Name:  function.LLMWorkerContainerName,
+					Image: "nvcr.io/nvcf/llm-worker:test",
+				}},
+			}
+
+			err := InjectIntoPodSpec(podSpec, NormalizeConfig(nvcaconfig.TransportTLSConfig{
+				TrustMode:              nvcaconfig.TrustModeBundle,
+				TrustBundleFingerprint: testRootFingerprint,
+				TrustBundlePEM:         testRootCertPEM,
+			}))
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), `regular init container "init"`)
+			assert.Empty(t, podSpec.Volumes)
+			assert.Nil(t, findTestInitContainer(podSpec, InstallContainerName))
+		})
+	}
+}
+
+func TestInjectIntoPodSpecUsesConfiguredInstalledBundleMountPath(t *testing.T) {
 	podSpec := &corev1.PodSpec{
-		InitContainers: []corev1.Container{{
-			Name:            InstallContainerName,
-			Image:           "nvcr.io/legacy/installer:42",
-			ImagePullPolicy: corev1.PullAlways,
-		}},
+		InitContainers: []corev1.Container{testWorkerInitContainer()},
 		Containers: []corev1.Container{{
 			Name:  function.LLMWorkerContainerName,
 			Image: "nvcr.io/nvcf/llm-worker:test",
@@ -202,26 +299,129 @@ func TestInjectIntoPodSpecUsesConfiguredInstallerImageWhenLegacyEnvIsSet(t *test
 	}
 
 	err := InjectIntoPodSpec(podSpec, NormalizeConfig(nvcaconfig.TransportTLSConfig{
-		TrustMode:              nvcaconfig.TrustModeBundle,
-		TrustBundleFingerprint: testRootFingerprint,
-		TrustBundlePEM:         testRootCertPEM,
-		InstallerImage:         "nvcr.io/nvidia/nvcf-byoc/nvca:test",
+		TrustMode:                nvcaconfig.TrustModeBundle,
+		TrustBundleFingerprint:   testRootFingerprint,
+		TrustBundlePEM:           testRootCertPEM,
+		InstalledBundleMountPath: "/nvcf/transport-tls",
 	}))
 	require.NoError(t, err)
 
+	llmWorker := findTestContainer(podSpec, function.LLMWorkerContainerName)
+	require.NotNil(t, llmWorker)
+	mount := findTestVolumeMount(llmWorker, MergedCertsVolumeName)
+	require.NotNil(t, mount)
+	assert.Equal(t, "/nvcf/transport-tls", mount.MountPath)
+	assert.Equal(t, "/nvcf/transport-tls/ca-certificates.crt", findTestEnvValue(llmWorker, CertPathEnv))
+
 	installContainer := findTestInitContainer(podSpec, InstallContainerName)
 	require.NotNil(t, installContainer)
-	assert.Equal(t, "nvcr.io/nvidia/nvcf-byoc/nvca:test", installContainer.Image)
-	assert.Equal(t, corev1.PullIfNotPresent, installContainer.ImagePullPolicy)
+	assert.Equal(t, MergedCertsMountPath, findTestVolumeMount(installContainer, MergedCertsVolumeName).MountPath)
+	assert.Contains(t, installContainer.Args, MergedCertsFile)
 }
 
-func TestInjectIntoPodSpecRejectsBundleModeWithoutInstallerImage(t *testing.T) {
+func TestInjectIntoPodSpecRejectsConflictingInstalledBundleMount(t *testing.T) {
 	podSpec := &corev1.PodSpec{
+		InitContainers: []corev1.Container{testWorkerInitContainer()},
+		Containers: []corev1.Container{{
+			Name:  function.LLMWorkerContainerName,
+			Image: "nvcr.io/nvcf/llm-worker:test",
+			VolumeMounts: []corev1.VolumeMount{{
+				Name:      "kyverno-certs",
+				MountPath: "/nvcf/transport-tls",
+			}},
+		}},
+	}
+
+	err := InjectIntoPodSpec(podSpec, NormalizeConfig(nvcaconfig.TransportTLSConfig{
+		TrustMode:                nvcaconfig.TrustModeBundle,
+		TrustBundleFingerprint:   testRootFingerprint,
+		TrustBundlePEM:           testRootCertPEM,
+		InstalledBundleMountPath: "/nvcf/transport-tls",
+	}))
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "conflicts with volume mount")
+	assert.Nil(t, findTestVolume(podSpec, TrustBundleVolumeName))
+	assert.Nil(t, findTestVolume(podSpec, MergedCertsVolumeName))
+	assert.Nil(t, findTestInitContainer(podSpec, InstallContainerName))
+}
+
+func TestInjectIntoPodSpecRejectsOverlappingInstalledBundleMount(t *testing.T) {
+	for _, existingMountPath := range []string{"/", "/nvcf", "/nvcf/", "/nvcf/transport-tls/nested"} {
+		t.Run(existingMountPath, func(t *testing.T) {
+			podSpec := &corev1.PodSpec{
+				InitContainers: []corev1.Container{testWorkerInitContainer()},
+				Containers: []corev1.Container{{
+					Name:  function.LLMWorkerContainerName,
+					Image: "nvcr.io/nvcf/llm-worker:test",
+					VolumeMounts: []corev1.VolumeMount{{
+						Name:      "existing-certs",
+						MountPath: existingMountPath,
+					}},
+				}},
+			}
+
+			err := InjectIntoPodSpec(podSpec, NormalizeConfig(nvcaconfig.TransportTLSConfig{
+				TrustMode:                nvcaconfig.TrustModeBundle,
+				TrustBundleFingerprint:   testRootFingerprint,
+				TrustBundlePEM:           testRootCertPEM,
+				InstalledBundleMountPath: "/nvcf/transport-tls",
+			}))
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "conflicts with volume mount")
+			assert.Nil(t, findTestVolume(podSpec, TrustBundleVolumeName))
+			assert.Nil(t, findTestVolume(podSpec, MergedCertsVolumeName))
+			assert.Nil(t, findTestInitContainer(podSpec, InstallContainerName))
+		})
+	}
+}
+
+func TestInjectIntoPodSpecCoexistsWithAdmissionCertificateMounts(t *testing.T) {
+	pod := &corev1.Pod{Spec: corev1.PodSpec{
+		InitContainers: []corev1.Container{testWorkerInitContainer()},
 		Containers: []corev1.Container{{
 			Name:  function.LLMWorkerContainerName,
 			Image: "nvcr.io/nvcf/llm-worker:test",
 		}},
-	}
+	}}
+	base, err := json.Marshal(pod)
+	require.NoError(t, err)
+
+	kyvernoStrategicMergePatch := []byte(`{"spec":{"volumes":[{"name":"kyverno-certs","emptyDir":{}}],"containers":[{"name":"llm-worker","volumeMounts":[{"name":"kyverno-certs","mountPath":"/etc/ssl/certs","readOnly":true}]}]}}`)
+	kyvernoMutated, err := strategicpatch.StrategicMergePatch(base, kyvernoStrategicMergePatch, corev1.Pod{})
+	require.NoError(t, err)
+
+	webhookJSONPatch, err := evanphxpatch.DecodePatch([]byte(`[
+  {"op":"add","path":"/spec/volumes/-","value":{"name":"webhook-certs","emptyDir":{}}},
+  {"op":"add","path":"/spec/containers/0/volumeMounts/-","value":{"name":"webhook-certs","mountPath":"/webhook/certs","readOnly":true}}
+]`))
+	require.NoError(t, err)
+	admissionMutated, err := webhookJSONPatch.Apply(kyvernoMutated)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(admissionMutated, pod))
+
+	err = InjectIntoPodSpec(&pod.Spec, NormalizeConfig(nvcaconfig.TransportTLSConfig{
+		TrustMode:                nvcaconfig.TrustModeBundle,
+		TrustBundleFingerprint:   testRootFingerprint,
+		TrustBundlePEM:           testRootCertPEM,
+		InstalledBundleMountPath: "/nvcf/transport-tls",
+	}))
+	require.NoError(t, err)
+
+	llmWorker := findTestContainer(&pod.Spec, function.LLMWorkerContainerName)
+	require.NotNil(t, llmWorker)
+	assert.Equal(t, "/etc/ssl/certs", findTestVolumeMount(llmWorker, "kyverno-certs").MountPath)
+	assert.Equal(t, "/webhook/certs", findTestVolumeMount(llmWorker, "webhook-certs").MountPath)
+	assert.Equal(t, "/nvcf/transport-tls", findTestVolumeMount(llmWorker, MergedCertsVolumeName).MountPath)
+	assert.Equal(t, "/nvcf/transport-tls/ca-certificates.crt", findTestEnvValue(llmWorker, CertPathEnv))
+	assert.NotNil(t, findTestVolume(&pod.Spec, TrustBundleVolumeName))
+	assert.NotNil(t, findTestVolume(&pod.Spec, MergedCertsVolumeName))
+	assert.NotNil(t, findTestInitContainer(&pod.Spec, InstallContainerName))
+}
+
+func TestInjectIntoPodSpecSkipsNonLLMWorkloads(t *testing.T) {
+	podSpec := &corev1.PodSpec{Containers: []corev1.Container{{Name: "inference", Image: "nvcr.io/customer/inference:test"}}}
 
 	err := InjectIntoPodSpec(podSpec, NormalizeConfig(nvcaconfig.TransportTLSConfig{
 		TrustMode:              nvcaconfig.TrustModeBundle,
@@ -229,8 +429,17 @@ func TestInjectIntoPodSpecRejectsBundleModeWithoutInstallerImage(t *testing.T) {
 		TrustBundlePEM:         testRootCertPEM,
 	}))
 
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "transportTls.installerImage")
+	require.NoError(t, err)
+	assert.Empty(t, podSpec.InitContainers)
+	assert.Empty(t, podSpec.Volumes)
+}
+
+func testWorkerInitContainer() corev1.Container {
+	return corev1.Container{
+		Name:            WorkerInitContainerName,
+		Image:           "nvcr.io/nvcf-core/nvcf_worker_init:v3.1",
+		ImagePullPolicy: corev1.PullIfNotPresent,
+	}
 }
 
 func findTestContainer(podSpec *corev1.PodSpec, name string) *corev1.Container {

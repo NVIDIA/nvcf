@@ -1,60 +1,69 @@
 # instance-cluster-management (ICMS)
 
-NVIDIA Instance and Cluster Management Service (ICMS) — exposes REST endpoints to manage
+NVIDIA Instance and Cluster Management Service (ICMS) exposes REST endpoints to manage
 instance and cluster lifecycles, abstracting backend/cluster details from the NVCF and NVCT
 APIs.
 
 ## Module layout
 
-This is a multi-module Maven project. The root `pom.xml` is an aggregator that inherits from
-`com.nvidia.boot:nv-boot-parent` (the NV-native Spring Boot parent, which itself extends
-`spring-boot-starter-parent`), mirroring the layout used by `cloud-tasks` and `cloud-functions`.
+This is a two-module Bazel component in the root `nvcf` module. It consumes
+nv-boot through direct source labels, like `cloud-tasks` and `cloud-functions`.
 
 | Module        | Type           | Status   | Description |
 |---------------|----------------|----------|-------------|
 | `icms-core`   | library        | current  | Core BYOC / NVCA business logic, REST endpoints, persistence, and shared integration-test fixtures. |
 | `icms-service`| app starter    | current  | Thin Spring Boot starter that depends on `icms-core` and provides the deployable application. |
 
-Shared, repo-wide configuration lives at the root: `pom.xml`, `settings.xml`, `lombok.config`,
-`.gitlab-ci.yml`, `.nspect-vuln-allowlist.toml`, `.gitignore`, `AGENTS.md`, `CLAUDE.md`, and the
-`local_env/` developer environment.
+Shared Bazel configuration and dependency locks live at the monorepo root. The
+`local_env/` directory contains the component's developer environment.
 
 ## Build
 
 ```bash
-# Build everything from the repo root
-mvn clean install
+export BAZEL_OUTPUT_USER_ROOT="${TMPDIR:-/tmp}/nvcf-bazel-cache"
 
-# Build just the core module (with its dependencies)
-mvn -pl icms-core -am clean install
+bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
+  build //src/control-plane-services/instance-cluster-management/...
 
-# Build the runnable service module (with its dependencies)
-mvn -pl icms-service -am clean install
-
-# Run tests
-mvn test
+bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
+  test //src/control-plane-services/instance-cluster-management/... \
+  --cache_test_results=no \
+  --test_output=errors \
+  --test_env=PATH \
+  --test_env=HOME \
+  --test_env=DOCKER_HOST \
+  --test_env=DOCKER_TLS_VERIFY \
+  --test_env=DOCKER_TLS_CERTDIR \
+  --test_env=DOCKER_CERT_PATH
 ```
 
-Tests run with the Surefire `workingDirectory` pinned to the repo root (`root.dir`), so module
-test code can resolve shared relative paths such as `local_env/...` consistently.
-
-Artifact resolution uses the NVIDIA Artifactory repos declared in the root `pom.xml`
-(`nvcf`, etc.). CI authenticates via the root `settings.xml`, which reads masked CI/CD
-variables from the environment.
+Tests receive `local_env/...` as Bazel runfiles so both modules resolve shared
+fixtures consistently. The root `MODULE.bazel` and `maven_install.json` own the
+third-party dependency graph.
 
 ## Run locally
 
-```bash
-# Start local dependencies (Cassandra, LocalStack AWS, NATS, OAuth2 mock)
-cd local_env
-docker compose up -d
-cd ..
+Run the following commands from the monorepo root:
 
-# Run the application (local profile)
-mvn -pl icms-service spring-boot:run
+```bash
+export BAZEL_OUTPUT_USER_ROOT="${TMPDIR:-/tmp}/nvcf-bazel-cache"
+
+# Start local dependencies (Cassandra, LocalStack AWS, NATS, OAuth2 mock)
+docker compose \
+  -f src/control-plane-services/instance-cluster-management/local_env/docker-compose.yml \
+  up -d
+
+# Build and run the application with the local profile
+bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
+  build //src/control-plane-services/instance-cluster-management/icms-service:app
+java -Dspring.profiles.active=local \
+  -jar bazel-bin/src/control-plane-services/instance-cluster-management/icms-service/app.jar
 ```
 
 The app listens on port `8080` with `/actuator/health` available.
+
+See [BAZEL.md](BAZEL.md) for complete test, coverage, NOTICE, and Docker
+commands.
 
 ## Profiles
 

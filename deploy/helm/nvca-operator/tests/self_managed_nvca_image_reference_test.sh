@@ -79,6 +79,18 @@ image_credential_helper_repository="$(yq -r '.selfManaged.imageCredHelper.imageR
 image_credential_helper_tag="$(yq -r '.selfManaged.imageCredHelper.imageTag' "${repo_root}/nvca-operator/values.yaml")"
 samba_repository="$(yq -r '.selfManaged.sharedStorage.imageRepository' "${repo_root}/values.release-sbom.yaml")"
 samba_tag="$(yq -r '.selfManaged.sharedStorage.imageTag' "${repo_root}/nvca-operator/values.yaml")"
+byoo_function_image="$(yq -r '.agent.functionEnvOverrides.BYOO_OTEL_COLLECTOR_CONTAINER' "${repo_root}/nvca-operator/values.yaml")"
+byoo_task_image="$(yq -r '.agent.taskEnvOverrides.BYOO_OTEL_COLLECTOR_CONTAINER' "${repo_root}/nvca-operator/values.yaml")"
+
+if [[ "${byoo_function_image}" != "${byoo_task_image}" ]]; then
+  echo "expected function and task BYOO collector defaults to match" >&2
+  exit 1
+fi
+
+if [[ "${byoo_function_image}" != "nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector:0.157.11" ]]; then
+  echo "unexpected BYOO collector default: ${byoo_function_image}" >&2
+  exit 1
+fi
 
 expected_annotations=(
   "release-artifact-nvca-image: \"${nvca_image_repository}:${nvca_version}\""

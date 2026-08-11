@@ -89,13 +89,20 @@ make install CLUSTER_NAME=...   # downloads helmfile v1.1.9 + helm v3.15.4 on fi
 
 ## Optional Add-ons
 
-KAI Scheduler, Grove (topology-aware scheduling), and Dynamo (inference framework
-scheduling) are disabled by default. Grove and Dynamo require KAI Scheduler
-(release and namespace `kai-scheduler`). Enable per-environment in
-`environments/<env>.yaml`:
+The stack can install KAI Scheduler, Grove, and Dynamo. KAI provides resource
+allocation and gang placement, Grove orchestrates related Pod groups, and
+Dynamo describes inference services that Grove manages. GPU clique
+topology-aware scheduling connects those workloads to the cluster's NVLink
+topology.
+
+All add-ons are disabled by default. Grove requires KAI Scheduler, and Dynamo
+requires Grove. Topology-aware scheduling also requires KAI Scheduler. Enable
+the complete stack in `environments/<env>.yaml`:
 
 ```yaml
 addons:
+  topologyAwareScheduling:
+    enabled: true
   kaiScheduler:
     enabled: true
   groveOperator:
@@ -108,8 +115,23 @@ Override KAI component resources under `addons.kaiScheduler.<component>.resource
 (for example `addons.kaiScheduler.scheduler.resources.requests.memory`). Defaults
 are set in `helmfile.d/01-dependencies.yaml.gotmpl`.
 
-For a standalone KAI install outside this stack, follow the
-[KAI Scheduler guide](https://docs.nvidia.com/cloud-functions/current/latest/cluster-management/kai-scheduler.html).
+`addons.topologyAwareScheduling` installs cluster-scoped KAI `Topology`
+resources from `topologyAwareScheduling.topologies` when KAI is enabled.
+When Grove is also enabled, the same toggle sets Grove
+`topologyAwareScheduling.enabled=true` and installs one
+`ClusterTopologyBinding` per KAI `Topology`. The default topology labels are
+`nvidia.com/gpu.clique` and `kubernetes.io/hostname`, in that order.
+
+Enabling `addons.kaiScheduler.enabled` or `addons.dynamoOperator.enabled` also
+adds the matching NVCA feature gate. Enabling KAI, Grove, or Dynamo permits
+their workload resource types in the NVCA validation policy.
+
+See [Gang Scheduling](../../../docs/user/cluster-management/gang-scheduling.md)
+for atomic workload placement and
+[Topology-Aware Scheduling](../../../docs/user/cluster-management/topology-aware-scheduling.md)
+for GPU clique placement. See
+[KAI Scheduler](../../../docs/user/cluster-management/kai-scheduler.md) for
+queue configuration and standalone installation.
 
 ## Multi-Cluster Example
 

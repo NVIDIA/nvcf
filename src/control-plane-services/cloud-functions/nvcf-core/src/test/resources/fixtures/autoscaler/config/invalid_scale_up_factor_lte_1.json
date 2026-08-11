@@ -1,0 +1,7 @@
+{
+  "scaleUpDetails": {
+    "metric": "worker_utilization",
+    "factor": 0.8,
+    "threshold": 80
+  }
+}

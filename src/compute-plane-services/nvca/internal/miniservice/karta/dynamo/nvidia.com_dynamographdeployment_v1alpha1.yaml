@@ -18,6 +18,7 @@ spec:
           path: .status.state
         statusMappings:
           initializing:
+          - byPhase: initializing
           - byPhase: pending
           running:
           - byPhase: successful
@@ -48,3 +49,30 @@ spec:
             idPath: .metadata.labels["nvidia.com/dynamo-component"]
           replicaSelector:
             keyPath: .metadata.labels["grove.io/podcliquescalinggroup-replica-index"] // .metadata.labels["leaderworkerset.sigs.k8s.io/group-index"]
+    additionalChildKinds:
+      - group: nvidia.com
+        version: v1alpha1
+        kind: DynamoComponentDeployment
+      - group: leaderworkerset.x-k8s.io
+        version: v1
+        kind: LeaderWorkerSet
+      - group: scheduler.grove.io
+        version: v1alpha1
+        kind: PodGang
+      - group: grove.io
+        version: v1alpha1
+        kind: PodClique
+      - group: grove.io
+        version: v1alpha1
+        kind: PodCliqueSet
+      - group: grove.io
+        version: v1alpha1
+        kind: PodCliqueScalingGroup
+  optimizationInstructions:
+    gangScheduling:
+      podGroups:
+        - name: service
+          members:
+            - componentName: service
+              groupByKeyPaths:
+                - .metadata.labels["nvidia.com/dynamo-component"]

@@ -15,8 +15,8 @@
 # Pull base image.
 FROM nvcr.io/nvidia/distroless/java:25-jdk-v4.0.9
 
-# add the service jar (build context is either the Maven repo root or Bazel output directory)
-ARG APP_JAR=icms-service/target/app.jar
+# Add the Bazel-built service jar from the Bazel output directory.
+ARG APP_JAR=app.jar
 COPY ${APP_JAR} /usr/share/app.jar
 
 # enable setting the ulimit to max on boot

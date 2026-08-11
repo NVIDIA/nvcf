@@ -1,8 +1,9 @@
 # Bazel for Instance Cluster Management
 
 ICMS is a two-module Spring Boot service imported into the root `nvcf` Bazel
-module. Run every Bazel command in this guide from the monorepo root. Maven
-commands still run from `src/control-plane-services/instance-cluster-management`.
+module. Run every command in this guide from the monorepo root. The monorepo
+copy is Bazel-only and does not contain project POMs. Any Maven build support
+remains in the independent source repository.
 
 ## Shared configuration
 
@@ -173,17 +174,6 @@ After validation, stop dependencies:
 ```bash
 docker compose   -f src/control-plane-services/instance-cluster-management/local_env/docker-compose.yml   down
 ```
-
-## Maven coexistence
-
-Maven remains independent:
-
-```bash
-cd src/control-plane-services/instance-cluster-management
-mvn clean package
-```
-
-Bazel does not install or publish Maven-shaped project artifacts.
 
 ## GitHub CI
 

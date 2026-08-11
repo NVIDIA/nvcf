@@ -1,9 +1,10 @@
 # Bazel
 
 Cloud Tasks lives inside the `NVIDIA/nvcf` monorepo. Run every command in this
-document from the monorepo root, not from this subtree. Maven remains available
-during coexistence, but Bazel configuration and dependency locks are owned by
-the monorepo root.
+document from the monorepo root, not from this subtree. The monorepo copy is
+Bazel-only and does not contain project POMs. Any Maven build support remains
+in the independent source repository. Bazel configuration and dependency locks
+are owned by the monorepo root.
 
 For the Bazel path, Cloud Tasks consumes nv-boot through direct first-party
 labels such as:
@@ -12,9 +13,8 @@ labels such as:
 //src/libraries/java/nv-boot-parent/nv-boot-starter-core:nv_boot_starter_core
 ```
 
-Bazel does not publish Maven-shaped Cloud Tasks or nv-boot jars. Maven
-consumers continue to use the Maven build/publish path during coexistence;
-Bazel consumers use source targets in this checkout.
+Bazel does not publish Maven-shaped Cloud Tasks or nv-boot jars. Bazel
+consumers use source targets in this checkout.
 
 Set one OS-neutral Bazel output root when opening a shell in this repository:
 
@@ -245,7 +245,6 @@ bazel-bin/src/control-plane-services/cloud-tasks/nvct-core/libnvct_core_test_fix
 ```
 
 This is a Bazel-native library target, not a Maven `tests` classifier artifact.
-Maven consumers keep using the Maven build during coexistence.
 
 ## Build `nvct-service`
 
@@ -291,8 +290,8 @@ by `rules_java`. It must not invoke a host `jar` command or depend on
 commands from `PATH`.
 
 It keeps Spring Boot loader classes at the jar root and places runtime jars
-under `BOOT-INF/lib`. It is intentionally separate from Maven's
-`nvct-service/target/app.jar` while Maven and Bazel coexist.
+under `BOOT-INF/lib`. This `app.jar` is the monorepo's executable application
+artifact.
 
 `git.properties` is generated from Bazel workspace status, replacing the app
 jar portion of `git-commit-id-maven-plugin` behavior for the Bazel path. The
@@ -384,9 +383,6 @@ docker compose \
   -f src/control-plane-services/cloud-tasks/local_env/docker-compose.yml \
   down
 ```
-
-Omitting the Docker build argument keeps the Dockerfile's Maven-build default,
-`nvct-service/target/app.jar`, during coexistence.
 
 ## Test Everything
 
@@ -733,8 +729,9 @@ The `ci_lane` descriptor field has two supported values:
   Cloud Tasks uses this lane because its tests start Cassandra containers.
 
 This distinction belongs to the GitHub CI environment, not to Bazel itself.
-On a developer machine, Maven and Bazel both use Docker Desktop when their
-tests require containers. Under the current one-lane-per-component policy, a
+On a developer machine, tests that require containers need a working Docker
+daemon. Docker Desktop and Docker Engine are supported options. Under the
+current one-lane-per-component policy, a
 component with even one `requires-docker` test uses `docker-host` for its
 complete suite. A Java component with no Docker-dependent tests may use
 `build-container`.
@@ -784,24 +781,12 @@ shell test wrapper rather than the individual JUnit tests. The root-owned
 and `bazel-testlogs` symlinks so the download contains real files after the CI
 runner is destroyed.
 
-## Maven Coexistence
+## Bazel-only monorepo policy
 
-Maven and Bazel remain independent during coexistence. Maven consumers use the
-Maven build and its published artifacts. Bazel consumers use source targets
-from the monorepo and do not consume Maven-shaped project artifacts generated
-by Bazel.
-
-Run the Maven reactor from the Cloud Tasks subtree:
-
-```bash
-(
-  cd src/control-plane-services/cloud-tasks
-  mvn clean install
-)
-```
-
-Maven writes under the modules' `target` directories. It does not consume
-`bazel-bin`, and the Bazel build does not consume Maven `target` outputs.
+Cloud Tasks project POMs are migration evidence in the independent source
+repository and are not copied into this monorepo. Build, test, packaging,
+dependency management, NOTICE generation, and CI use Bazel here. Do not restore
+project POMs or add monorepo Maven build instructions.
 
 ## Clean
 
