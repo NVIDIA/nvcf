@@ -528,8 +528,7 @@ fn pylon_dynamo_priority_headers_are_always_emitted() {
     );
     assert_eq!(headers["x-dynamo-request-strict-priority"], "0");
 
-    // Absent platform priority pins both headers to the lowest values so the
-    // engine never falls back to client-controlled body hints.
+    // Absent platform priority pins both headers to the lowest values.
     let mut headers = HeaderMap::new();
     let emitted = dynamo::apply_priority_headers(None, DEFAULT_PRIORITY_CEILING, &mut headers);
     assert_eq!(emitted, 0);
@@ -1755,8 +1754,7 @@ async fn quic_tunnel_emits_lowest_dynamo_priority_without_x_priority() {
         .send(headers, br#"{"messages":[],"stream":true}"#)
         .await;
 
-    // Unconfigured requests carry the lowest priority instead of no header,
-    // so the engine never falls back to client-controlled body values.
+    // Unconfigured requests carry the lowest priority instead of no header.
     let response_headers = tunnel.response_head(StatusCode::OK).await;
     assert_eq!(response_headers["x-echo-dynamo-priority"], "0");
     assert_eq!(response_headers["x-echo-dynamo-strict-priority"], "0");

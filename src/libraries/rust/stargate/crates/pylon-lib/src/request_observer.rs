@@ -161,11 +161,12 @@ impl RequestObserver {
         generation: Option<ModelGeneration>,
         runtime_state: PylonRuntimeState,
     ) -> Self {
+        let priority = required.queue_priority();
         let RequiredTunnelHeaders {
             request_id,
             routing_key,
             model_id,
-            priority,
+            priority: _,
             input_tokens,
             accepted_at,
         } = required;
@@ -175,7 +176,7 @@ impl RequestObserver {
             started_at: accepted_at,
             routing_key,
             model_id,
-            priority: priority.unwrap_or_default(),
+            priority,
             input_tokens,
             generation,
             embedding_items: None,

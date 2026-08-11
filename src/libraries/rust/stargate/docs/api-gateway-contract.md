@@ -156,8 +156,8 @@ Internal headers:
   derived from `x-priority` as `max(0, ceiling - x)` with a configurable
   ceiling (`--pylon-priority-ceiling`, default 3600), requests without
   `x-priority` carry the lowest value `0`, and the strict tier is always `0`.
-  Always emitting means the engine never falls back to client-controlled
-  request-body priority hints.
+  Always emitting means the engine reads priority only from pylon, never from
+  client-supplied values.
 
 Body rules:
 

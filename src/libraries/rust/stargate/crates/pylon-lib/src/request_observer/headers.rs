@@ -62,11 +62,19 @@ pub(crate) struct RequiredTunnelHeaders {
     pub request_id: String,
     pub routing_key: Option<String>,
     pub model_id: String,
-    /// `None` when the request carried no x-priority header. The distinction
-    /// from an explicit 0 matters to the engine priority derivation.
+    /// `None` when the request carried no x-priority header. Absent and an
+    /// explicit 0 are different values to the engine priority derivation.
     pub priority: Option<u32>,
     pub input_tokens: u64,
     pub(crate) accepted_at: Instant,
+}
+
+impl RequiredTunnelHeaders {
+    /// Priority for queue accounting and observation, where unconfigured
+    /// counts as 0. The engine derivation reads `priority` directly instead.
+    pub(crate) fn queue_priority(&self) -> u32 {
+        self.priority.unwrap_or_default()
+    }
 }
 
 pub(crate) fn validate_required_tunnel_headers(

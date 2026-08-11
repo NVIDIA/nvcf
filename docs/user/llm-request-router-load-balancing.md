@@ -133,22 +133,6 @@ Stargate returns HTTP `400` for a blank, unknown, or configured-but-unavailable
 `x-routing-method`. It also returns HTTP `400` when a required router header is
 missing or a numeric header is invalid.
 
-### Engine priority translation in pylon
-
-Pylon translates the platform `x-priority` header into the engine's own
-priority contract at the last hop. Two pylon flags control this:
-
-| Flag | Environment variable | Default | Meaning |
-| --- | --- | --- | --- |
-| `--pylon-upstream-backend` | `PYLON_UPSTREAM_BACKEND` | `dynamo` | Engine dialect. `dynamo` derives `x-dynamo-request-priority` and `x-dynamo-request-strict-priority`; `passthrough` derives nothing. |
-| `--pylon-priority-ceiling` | `PYLON_PRIORITY_CEILING` | `3600` | Seconds of engine scheduling head start for `x-priority: 0`. Lower-urgency ranks get proportionally less; ranks at or beyond the ceiling and requests without `x-priority` get `0`. |
-
-In `dynamo` mode pylon emits both engine headers on every inference request,
-so the engine never reads client-supplied priority values from headers or
-request bodies. Inbound `x-dynamo-request-*` headers are stripped in every
-mode. Pylon logs the resolved backend and ceiling at startup and records the
-inbound and derived priority on each request log and span.
-
 ## Apply and roll out
 
 Render the chart before applying it:

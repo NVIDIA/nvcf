@@ -669,7 +669,7 @@ pub(super) async fn forward_tunnel_request(
 
     // None for health requests, which skip header validation and are not
     // client inference traffic; nothing to trace or derive for them.
-    let upstream_context = lifecycle.as_ref().map(|lifecycle| UpstreamRequestContext {
+    let validated = lifecycle.as_ref().map(|lifecycle| ValidatedRequestContext {
         priority: lifecycle.required.priority,
     });
     let response = match send_upstream_request(
@@ -678,7 +678,7 @@ pub(super) async fn forward_tunnel_request(
         &path_and_query,
         &request_headers,
         body_bytes,
-        upstream_context,
+        validated,
     )
     .await
     {
@@ -715,7 +715,7 @@ pub(super) async fn forward_tunnel_request(
 /// `None` at the call site means a health request: unvalidated, untraced,
 /// and never carrying derived engine headers.
 #[derive(Clone, Copy)]
-struct UpstreamRequestContext {
+struct ValidatedRequestContext {
     /// Platform priority; `None` when the request carried no x-priority.
     priority: Option<u32>,
 }
@@ -726,9 +726,9 @@ async fn send_upstream_request(
     path_and_query: &str,
     request_headers: &HeaderMap,
     body_bytes: Vec<u8>,
-    context: Option<UpstreamRequestContext>,
+    validated: Option<ValidatedRequestContext>,
 ) -> Result<Response, UpstreamRequestError> {
-    let span = if context.is_some() {
+    let span = if validated.is_some() {
         let span = tracing::info_span!(
             "pylon_upstream_http_request",
             otel_parent = field::Empty,
@@ -752,18 +752,18 @@ async fn send_upstream_request(
     for (name, value) in request_headers {
         if should_forward_header(name, &app.retry) {
             upstream_headers.append(name, value.clone());
-        } else if backend::dynamo::is_engine_priority_header(name) {
+        } else if backend::dynamo::is_engine_request_header(name) {
             // Values are client-controlled; log the name only.
-            tracing::debug!(header = %name, "stripped inbound engine priority header");
+            tracing::debug!(header = %name, "stripped inbound engine request header");
         }
     }
-    if let Some(context) = context {
-        if let Some(priority) = context.priority {
+    if let Some(validated) = validated {
+        if let Some(priority) = validated.priority {
             span.record("priority", priority);
         }
         if app.upstream_backend == UpstreamBackend::Dynamo {
             let dynamo_priority = backend::dynamo::apply_priority_headers(
-                context.priority,
+                validated.priority,
                 app.priority_ceiling,
                 &mut upstream_headers,
             );
@@ -1101,7 +1101,7 @@ pub(super) fn join_base_path(base: &str, path_and_query: &str) -> Result<url::Ur
 
 pub(super) fn should_forward_header(name: &HeaderName, retry: &PylonRetryConfig) -> bool {
     !is_tunnel_control_header(name, retry)
-        && !backend::dynamo::is_engine_priority_header(name)
+        && !backend::dynamo::is_engine_request_header(name)
         && !matches!(
             name.as_str(),
             "host" | "x-method" | "x-path" | HEADER_STARGATE_EXPECTED_QUEUE_MS

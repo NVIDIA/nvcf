@@ -15,24 +15,21 @@
 
 //! Upstream inference-server dialects.
 //!
-//! Pylon presents one contract upward (the platform tunnel headers, notably
-//! `x-priority`) and translates it into the dialect of the engine it fronts
-//! at the last hop. The gateway and Stargate stay backend-agnostic; all
-//! engine-specific names and encodings live in this module.
+//! Pylon speaks the platform tunnel contract upward and translates it into
+//! the dialect of the engine it fronts. All engine-specific header names and
+//! encodings live in this module.
 
 use std::fmt;
 use std::str::FromStr;
 
-/// Which engine dialect pylon speaks to its local upstream.
-///
-/// One enum rather than per-backend flags: future engines add a variant and
-/// a submodule here, never a new CLI flag.
+/// Which engine dialect pylon speaks to its local upstream. Future engines
+/// add a variant and a submodule here, never a new CLI flag.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum UpstreamBackend {
-    /// Forward requests unchanged. No engine priority headers are derived;
-    /// inbound engine-control headers are still stripped.
+    /// Forward requests unchanged; derive nothing. Inbound engine request
+    /// headers are still stripped.
     Passthrough,
-    /// Dynamo dialect: derive the engine priority headers from `x-priority`.
+    /// Derive the engine priority headers from `x-priority`.
     #[default]
     Dynamo,
 }
@@ -73,43 +70,30 @@ pub const DEFAULT_PRIORITY_CEILING: u32 = 3600;
 pub(crate) mod dynamo {
     use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 
-    /// Engine-facing priority headers in the Dynamo contract. Pylon owns
-    /// this contract, so the names stay out of the shared tunnel contract.
+    /// Engine priority headers pylon derives; the names stay out of the
+    /// shared tunnel contract because only pylon speaks them.
     pub(crate) const HEADER_REQUEST_PRIORITY: &str = "x-dynamo-request-priority";
     pub(crate) const HEADER_REQUEST_STRICT_PRIORITY: &str = "x-dynamo-request-strict-priority";
     const REQUEST_HEADER_PREFIX: &str = "x-dynamo-request-";
 
-    /// Inbound headers under the Dynamo request-priority prefix are always
-    /// stripped, in every backend mode: pylon is the only writer of these
-    /// values, so a client cannot set engine priority through them.
-    /// Dynamo's non-priority routing headers (worker pinning, tenant cache
-    /// salt) are outside this prefix and tracked separately.
-    pub(crate) fn is_engine_priority_header(name: &HeaderName) -> bool {
+    /// Pylon is the only writer of headers under this prefix, so inbound
+    /// values are stripped in every backend mode.
+    pub(crate) fn is_engine_request_header(name: &HeaderName) -> bool {
         name.as_str().starts_with(REQUEST_HEADER_PREFIX)
     }
 
-    /// Map platform priority to Dynamo request priority.
-    ///
-    /// Dynamo reads the value as seconds of arrival-time head start in its
-    /// router queue (higher wins, i32), while `x-priority` is a rank (lower
-    /// wins, u32, absent = unconfigured). The mapping is
-    /// `max(0, ceiling - x)`, with absent treated as the lowest priority:
-    /// a bounded head start that queue aging can overcome, rather than a
-    /// permanent tier above unconfigured traffic.
+    /// Map the platform rank (lower wins, absent = unconfigured) to the
+    /// engine value (higher wins, read as seconds of queue head start):
+    /// `max(0, ceiling - rank)`, with absent as the lowest value. The head
+    /// start is bounded so prioritized traffic cannot starve the rest.
     pub(crate) fn request_priority(priority: Option<u32>, ceiling: u32) -> i32 {
         let ceiling = ceiling.min(i32::MAX as u32);
         let rank = priority.unwrap_or(ceiling).min(ceiling);
         (ceiling - rank) as i32
     }
 
-    /// Emit both Dynamo priority headers on every inference request.
-    ///
-    /// Dynamo resolves each priority field from the header when present and
-    /// well-formed, falling back to the client-controlled request body
-    /// (`nvext.agent_hints`) otherwise. Always emitting both headers makes
-    /// the platform the only source of engine priority: requests without a
-    /// platform priority carry the lowest value instead of leaving the body
-    /// fallback open, and the strict tier is pinned to the default.
+    /// Emit both priority headers on every inference request, so the engine
+    /// reads priority only from pylon and never from client-supplied values.
     pub(crate) fn apply_priority_headers(
         priority: Option<u32>,
         ceiling: u32,
