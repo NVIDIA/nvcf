@@ -45,9 +45,9 @@ pub use model_lifecycle::{
 };
 pub use queue_admission::PylonQueueMismatchRetryConfig;
 pub use quic_http_tunnel::{
-    DEFAULT_MAX_SSE_BUFFER_BYTES, PylonRetryConfig, QuicHttpTunnelConfig, QuicHttpTunnelHandle,
-    ReverseQuicTunnelConfig, ReverseQuicTunnelHandle, TunnelError, TunnelForwardingConfig,
-    start_quic_http_tunnel, start_reverse_quic_tunnel,
+    DEFAULT_MAX_SSE_BUFFER_BYTES, DEFAULT_PRIORITY_CEILING, PylonRetryConfig, QuicHttpTunnelConfig,
+    QuicHttpTunnelHandle, ReverseQuicTunnelConfig, ReverseQuicTunnelHandle, TunnelError,
+    TunnelForwardingConfig, UpstreamBackend, start_quic_http_tunnel, start_reverse_quic_tunnel,
 };
 pub use registration::{
     ClientError, InferenceServerRegistrationClient, InferenceServerRegistrationConfig,

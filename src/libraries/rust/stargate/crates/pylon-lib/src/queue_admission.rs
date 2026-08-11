@@ -304,7 +304,7 @@ impl LiveRequestState {
                         })
                         .filter(|request| request.generation == *generation);
                     model.queue_estimate_ms_for_priority_excluding(
-                        required.priority,
+                        required.priority.unwrap_or_default(),
                         excluded_request,
                     )
                 })
@@ -346,7 +346,9 @@ impl LiveRequestState {
         let request_id = required.request_id.clone();
         let request = TrackedPromptRequest {
             generation,
-            priority: required.priority,
+            // Queue accounting treats unconfigured as priority 0; the
+            // absent-vs-0 distinction only matters to the engine derivation.
+            priority: required.priority.unwrap_or_default(),
             input_tokens: required.input_tokens,
             phase: TrackedPromptPhase::Pending,
             active_chat_output_tps: None,
@@ -842,7 +844,7 @@ mod tests {
             request_id: request_id.to_string(),
             routing_key: None,
             model_id: model_id.to_string(),
-            priority,
+            priority: Some(priority),
             input_tokens,
             accepted_at: Instant::now(),
         }

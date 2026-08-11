@@ -28,8 +28,8 @@ use pylon_lib::{
     ModelInitialization, ModelLifecycleConfig, ModelLifecycleHandle, ModelSource, PylonMetrics,
     PylonQueueMismatchRetryConfig, PylonRetryConfig, PylonRuntimeState, QuicHttpTunnelConfig,
     QuicHttpTunnelHandle, RequestQualityMonitorConfig, StatsCollectorConfig, StatsCollectorHandle,
-    TunnelForwardingConfig, start_engine_stats_stream, start_metrics_server, start_model_lifecycle,
-    start_quic_http_tunnel, start_stats_collector_with_engine_stats,
+    TunnelForwardingConfig, UpstreamBackend, start_engine_stats_stream, start_metrics_server,
+    start_model_lifecycle, start_quic_http_tunnel, start_stats_collector_with_engine_stats,
     stats_aggregator_update_channel,
 };
 use reqwest::header::HeaderName;
@@ -79,6 +79,8 @@ fn log_startup_complete(
             inference_server_id,
             cluster_id = %plan.cluster_id,
             upstream = %plan.upstream,
+            upstream_backend = %plan.upstream_backend,
+            priority_ceiling = plan.priority_ceiling,
             model_ids = ?model_ids,
             "pylon startup complete; stargate registration started (reverse tunnel mode)"
         );
@@ -89,6 +91,8 @@ fn log_startup_complete(
             cluster_id = %plan.cluster_id,
             inference_server_url = registration_inference_server_url,
             upstream = %plan.upstream,
+            upstream_backend = %plan.upstream_backend,
+            priority_ceiling = plan.priority_ceiling,
             model_ids = ?model_ids,
             "pylon startup complete; stargate registration started (direct tunnel mode)"
         );
@@ -101,7 +105,8 @@ pub(crate) struct PylonStartupPlan {
     model_source: ModelSource,
     pylon_retry: PylonRetryConfig,
     queue_mismatch_retry: PylonQueueMismatchRetryConfig,
-    derive_dynamo_priority: bool,
+    upstream_backend: UpstreamBackend,
+    priority_ceiling: u32,
     model_initialization: ModelInitialization,
     bringup: BringupConfig,
     request_quality_monitor: RequestQualityMonitorConfig,
@@ -147,7 +152,8 @@ impl PylonStartupPlan {
             model_source,
             pylon_retry: pylon_retry_config_from_args(args)?,
             queue_mismatch_retry: pylon_queue_mismatch_retry_config_from_args(args)?,
-            derive_dynamo_priority: args.pylon_derive_dynamo_priority,
+            upstream_backend: args.pylon_upstream_backend,
+            priority_ceiling: args.pylon_priority_ceiling,
             model_initialization,
             bringup: BringupConfig {
                 enabled: !args.disable_bringup,
@@ -506,7 +512,8 @@ fn tunnel_forwarding_config_from_plan(
         metrics: Some(metrics),
         retry: plan.pylon_retry.clone(),
         queue_mismatch_retry: plan.queue_mismatch_retry.clone(),
-        derive_dynamo_priority: plan.derive_dynamo_priority,
+        upstream_backend: plan.upstream_backend,
+        priority_ceiling: plan.priority_ceiling,
         ..Default::default()
     }
 }
@@ -1117,12 +1124,24 @@ mod tests {
     }
 
     #[test]
-    fn derive_dynamo_priority_flows_from_args_to_forwarding_config() {
+    fn upstream_backend_flows_from_args_to_forwarding_config() {
         let (_, default_plan) = startup(&[]);
-        assert!(test_forwarding(&default_plan).derive_dynamo_priority);
+        let forwarding = test_forwarding(&default_plan);
+        assert_eq!(forwarding.upstream_backend, UpstreamBackend::Dynamo);
+        assert_eq!(
+            forwarding.priority_ceiling,
+            pylon_lib::DEFAULT_PRIORITY_CEILING
+        );
 
-        let (_, disabled_plan) = startup(&["--pylon-derive-dynamo-priority=false"]);
-        assert!(!test_forwarding(&disabled_plan).derive_dynamo_priority);
+        let (_, passthrough_plan) = startup(&[
+            "--pylon-upstream-backend",
+            "passthrough",
+            "--pylon-priority-ceiling",
+            "600",
+        ]);
+        let forwarding = test_forwarding(&passthrough_plan);
+        assert_eq!(forwarding.upstream_backend, UpstreamBackend::Passthrough);
+        assert_eq!(forwarding.priority_ceiling, 600);
     }
 
     #[test]

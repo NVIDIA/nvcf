@@ -62,7 +62,9 @@ pub(crate) struct RequiredTunnelHeaders {
     pub request_id: String,
     pub routing_key: Option<String>,
     pub model_id: String,
-    pub priority: u32,
+    /// `None` when the request carried no x-priority header. The distinction
+    /// from an explicit 0 matters to the engine priority derivation.
+    pub priority: Option<u32>,
     pub input_tokens: u64,
     pub(crate) accepted_at: Instant,
 }
@@ -77,8 +79,7 @@ pub(crate) fn validate_required_tunnel_headers(
         .ok_or_else(|| MissingRequiredHeaderError::new(HEADER_MODEL))?;
     let input_tokens = parse_optional_numeric_header(request_headers, HEADER_INPUT_TOKENS)?
         .ok_or_else(|| MissingRequiredHeaderError::new(HEADER_INPUT_TOKENS))?;
-    let priority =
-        parse_optional_numeric_header(request_headers, HEADER_PRIORITY)?.unwrap_or_default();
+    let priority = parse_optional_numeric_header(request_headers, HEADER_PRIORITY)?;
     Ok(RequiredTunnelHeaders {
         request_id,
         routing_key,

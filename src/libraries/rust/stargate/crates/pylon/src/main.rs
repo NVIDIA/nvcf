@@ -14,7 +14,9 @@
 // limitations under the License.
 
 use anyhow::Result;
-use pylon_lib::{EngineStatsStreamMode, ModelDiscoveryProvider, TunnelTransportProtocol};
+use pylon_lib::{
+    EngineStatsStreamMode, ModelDiscoveryProvider, TunnelTransportProtocol, UpstreamBackend,
+};
 use stargate_protocol::BackendConnectivity;
 use stargate_protocol::tunnel_contract::HEADER_STARGATE_UPSTREAM_RETRYABLE;
 
@@ -204,14 +206,25 @@ struct Args {
     /// Optional retry-after hint in milliseconds for local queue-mismatch retries
     #[arg(long, env = "PYLON_QUEUE_MISMATCH_RETRY_AFTER_MS", value_name = "MS")]
     pylon_queue_mismatch_retry_after_ms: Option<u64>,
-    /// Derive x-dynamo-request-priority for the upstream engine from x-priority
+    /// Engine dialect spoken to the local upstream: "dynamo" derives the
+    /// engine priority headers from x-priority, "passthrough" derives nothing.
+    /// Inbound engine priority headers are stripped in every mode.
     #[arg(
         long,
-        action = clap::ArgAction::Set,
-        default_value_t = true,
-        env = "PYLON_DERIVE_DYNAMO_PRIORITY"
+        default_value = "dynamo",
+        env = "PYLON_UPSTREAM_BACKEND",
+        value_name = "BACKEND"
     )]
-    pylon_derive_dynamo_priority: bool,
+    pylon_upstream_backend: UpstreamBackend,
+    /// Seconds of engine scheduling head start for the most urgent platform
+    /// priority (x-priority: 0); lower x-priority ranks get proportionally less
+    #[arg(
+        long,
+        default_value_t = pylon_lib::DEFAULT_PRIORITY_CEILING,
+        env = "PYLON_PRIORITY_CEILING",
+        value_name = "SECONDS"
+    )]
+    pylon_priority_ceiling: u32,
     /// Collect post-stream output quality metrics (gibberish checks)
     #[arg(long, default_value_t = false)]
     collect_quality_metrics: bool,
@@ -422,20 +435,30 @@ mod tests {
     }
 
     #[test]
-    fn pylon_derive_dynamo_priority_cli_default_matches_runtime_default() {
+    fn pylon_upstream_backend_cli_defaults_match_runtime_defaults() {
         let args = parse_args("");
+        let defaults = TunnelForwardingConfig::default();
 
-        assert_eq!(
-            args.pylon_derive_dynamo_priority,
-            TunnelForwardingConfig::default().derive_dynamo_priority
-        );
+        assert_eq!(args.pylon_upstream_backend, defaults.upstream_backend);
+        assert_eq!(args.pylon_priority_ceiling, defaults.priority_ceiling);
     }
 
     #[test]
-    fn pylon_derive_dynamo_priority_cli_override_is_applied() {
-        let args = parse_argv(&["--pylon-derive-dynamo-priority=false"]);
+    fn pylon_upstream_backend_cli_overrides_are_applied() {
+        let args = parse_argv(&[
+            "--pylon-upstream-backend",
+            "passthrough",
+            "--pylon-priority-ceiling",
+            "600",
+        ]);
 
-        assert!(!args.pylon_derive_dynamo_priority);
+        assert_eq!(args.pylon_upstream_backend, UpstreamBackend::Passthrough);
+        assert_eq!(args.pylon_priority_ceiling, 600);
+    }
+
+    #[test]
+    fn pylon_upstream_backend_cli_rejects_unknown_backend() {
+        assert!(try_parse_argv(&["--pylon-upstream-backend", "sglang"]).is_err());
     }
 
     #[test]

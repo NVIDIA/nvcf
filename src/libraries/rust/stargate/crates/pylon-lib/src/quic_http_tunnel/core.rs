@@ -27,9 +27,8 @@ use reqwest::{Client, Error as ReqwestError, Method, Response, StatusCode};
 use sonic_rs::JsonValueTrait;
 use stargate_protocol::common::is_hop_by_hop_header;
 use stargate_protocol::tunnel_contract::{
-    HEADER_MODEL, HEADER_PRIORITY, HEADER_REQUEST_ID, HEADER_STARGATE_EXPECTED_QUEUE_MS,
-    HEADER_STARGATE_RETRY_AFTER_MS, HEADER_STARGATE_RETRY_REASON, HEADER_STARGATE_RETRYABLE,
-    HEADER_STARGATE_UPSTREAM_RETRYABLE,
+    HEADER_MODEL, HEADER_STARGATE_EXPECTED_QUEUE_MS, HEADER_STARGATE_RETRY_AFTER_MS,
+    HEADER_STARGATE_RETRY_REASON, HEADER_STARGATE_RETRYABLE, HEADER_STARGATE_UPSTREAM_RETRYABLE,
 };
 use stargate_telemetry::{
     inject_trace_context, parent_context_from_headers, traceparent_from_headers,
@@ -38,6 +37,7 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use tracing::{Instrument, Span, field};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
+use super::backend::{self, DEFAULT_PRIORITY_CEILING, UpstreamBackend};
 use crate::output_token_parser::{OutputTokenParser, OutputTokenProgress};
 use crate::queue_admission::{
     PylonQueueMismatchRetryConfig, QueueAdmissionDecision, QueueTrackedRequestGuard,
@@ -106,9 +106,12 @@ pub struct TunnelForwardingConfig {
     pub request_quality_monitor: RequestQualityMonitorConfig,
     pub retry: PylonRetryConfig,
     pub queue_mismatch_retry: PylonQueueMismatchRetryConfig,
-    /// Derive x-dynamo-request-priority for the upstream engine from x-priority.
-    /// Inbound x-dynamo-request-* headers are stripped regardless of this gate.
-    pub derive_dynamo_priority: bool,
+    /// Engine dialect spoken to the local upstream. Inbound engine priority
+    /// headers are stripped in every mode; only derivation is per-backend.
+    pub upstream_backend: UpstreamBackend,
+    /// Seconds of scheduling head start for the most urgent platform
+    /// priority; see [`backend::dynamo::request_priority`].
+    pub priority_ceiling: u32,
     pub metrics: Option<Arc<PylonMetrics>>,
     #[cfg(test)]
     pub webtransport_stream_header_wait_tx: Option<flume::Sender<()>>,
@@ -125,7 +128,8 @@ impl Default for TunnelForwardingConfig {
             request_quality_monitor: RequestQualityMonitorConfig::default(),
             retry: PylonRetryConfig::default(),
             queue_mismatch_retry: PylonQueueMismatchRetryConfig::default(),
-            derive_dynamo_priority: true,
+            upstream_backend: UpstreamBackend::default(),
+            priority_ceiling: DEFAULT_PRIORITY_CEILING,
             metrics: None,
             #[cfg(test)]
             webtransport_stream_header_wait_tx: None,
@@ -146,7 +150,8 @@ pub(super) struct TunnelServerApp {
     pub(super) request_quality_monitor: RequestQualityMonitorConfig,
     pub(super) retry: PylonRetryConfig,
     pub(super) queue_mismatch_retry: PylonQueueMismatchRetryConfig,
-    pub(super) derive_dynamo_priority: bool,
+    pub(super) upstream_backend: UpstreamBackend,
+    pub(super) priority_ceiling: u32,
     pub(super) metrics: Option<Arc<PylonMetrics>>,
     #[cfg(test)]
     pub(super) webtransport_stream_header_wait_tx: Option<flume::Sender<()>>,
@@ -170,7 +175,8 @@ impl TunnelServerApp {
             request_quality_monitor: forwarding.request_quality_monitor,
             retry: forwarding.retry,
             queue_mismatch_retry: forwarding.queue_mismatch_retry,
-            derive_dynamo_priority: forwarding.derive_dynamo_priority,
+            upstream_backend: forwarding.upstream_backend,
+            priority_ceiling: forwarding.priority_ceiling,
             metrics: forwarding.metrics,
             #[cfg(test)]
             webtransport_stream_header_wait_tx: forwarding.webtransport_stream_header_wait_tx,
@@ -661,13 +667,18 @@ pub(super) async fn forward_tunnel_request(
         }
     }
 
+    // None for health requests, which skip header validation and are not
+    // client inference traffic; nothing to trace or derive for them.
+    let upstream_context = lifecycle.as_ref().map(|lifecycle| UpstreamRequestContext {
+        priority: lifecycle.required.priority,
+    });
     let response = match send_upstream_request(
         app,
         method,
         &path_and_query,
         &request_headers,
         body_bytes,
-        !health_request,
+        upstream_context,
     )
     .await
     {
@@ -700,15 +711,24 @@ pub(super) async fn forward_tunnel_request(
     Ok(())
 }
 
+/// Fields of the validated tunnel headers the upstream send path needs.
+/// `None` at the call site means a health request: unvalidated, untraced,
+/// and never carrying derived engine headers.
+#[derive(Clone, Copy)]
+struct UpstreamRequestContext {
+    /// Platform priority; `None` when the request carried no x-priority.
+    priority: Option<u32>,
+}
+
 async fn send_upstream_request(
     app: &TunnelServerApp,
     method: Method,
     path_and_query: &str,
     request_headers: &HeaderMap,
     body_bytes: Vec<u8>,
-    traced: bool,
+    context: Option<UpstreamRequestContext>,
 ) -> Result<Response, UpstreamRequestError> {
-    let span = if traced {
+    let span = if context.is_some() {
         let span = tracing::info_span!(
             "pylon_upstream_http_request",
             otel_parent = field::Empty,
@@ -717,6 +737,7 @@ async fn send_upstream_request(
             inference_server.id = %app.inference_server_id,
             upstream.status = field::Empty,
             upstream.error = field::Empty,
+            priority = field::Empty,
             dynamo.request_priority = field::Empty,
         );
         let _ = span.set_parent(pylon_upstream_parent_context(request_headers));
@@ -731,30 +752,23 @@ async fn send_upstream_request(
     for (name, value) in request_headers {
         if should_forward_header(name, &app.retry) {
             upstream_headers.append(name, value.clone());
+        } else if backend::dynamo::is_engine_priority_header(name) {
+            // Values are client-controlled; log the name only.
+            tracing::debug!(header = %name, "stripped inbound engine priority header");
         }
     }
-    // `traced` excludes health requests, which skip header validation and are
-    // not client inference traffic; nothing to derive for them.
-    if app.derive_dynamo_priority && traced {
-        if let Some(priority) = x_priority_header_value(request_headers) {
-            let dynamo_priority = dynamo_request_priority(priority);
-            upstream_headers.insert(
-                HeaderName::from_static(HEADER_DYNAMO_REQUEST_PRIORITY),
-                HeaderValue::from(dynamo_priority),
+    if let Some(context) = context {
+        if let Some(priority) = context.priority {
+            span.record("priority", priority);
+        }
+        if app.upstream_backend == UpstreamBackend::Dynamo {
+            let dynamo_priority = backend::dynamo::apply_priority_headers(
+                context.priority,
+                app.priority_ceiling,
+                &mut upstream_headers,
             );
             span.record("dynamo.request_priority", dynamo_priority);
-            tracing::info!(
-                request_id = request_headers
-                    .get(HEADER_REQUEST_ID)
-                    .and_then(|value| value.to_str().ok())
-                    .unwrap_or_default(),
-                priority,
-                dynamo.request_priority = dynamo_priority,
-                "derived dynamo request priority"
-            );
         }
-    }
-    if traced {
         inject_trace_context(&mut upstream_headers, &span.context());
     }
     let send = async {
@@ -1087,42 +1101,11 @@ pub(super) fn join_base_path(base: &str, path_and_query: &str) -> Result<url::Ur
 
 pub(super) fn should_forward_header(name: &HeaderName, retry: &PylonRetryConfig) -> bool {
     !is_tunnel_control_header(name, retry)
-        && !is_dynamo_request_header(name)
+        && !backend::dynamo::is_engine_priority_header(name)
         && !matches!(
             name.as_str(),
             "host" | "x-method" | "x-path" | HEADER_STARGATE_EXPECTED_QUEUE_MS
         )
-}
-
-/// Engine-facing priority header in the Dynamo contract; Pylon owns this
-/// contract, so the constant stays out of the shared tunnel contract.
-pub(super) const HEADER_DYNAMO_REQUEST_PRIORITY: &str = "x-dynamo-request-priority";
-const DYNAMO_REQUEST_HEADER_PREFIX: &str = "x-dynamo-request-";
-
-/// Client-supplied Dynamo request headers never reach the engine; Pylon is
-/// the only writer of x-dynamo-request-* values.
-pub(super) fn is_dynamo_request_header(name: &HeaderName) -> bool {
-    name.as_str().starts_with(DYNAMO_REQUEST_HEADER_PREFIX)
-}
-
-/// Dynamo schedules on an i32 where higher wins and silently drops values
-/// that do not parse as i32, while x-priority is a u32 where lower wins, so
-/// the mapping inverts and clamps to keep every configured priority valid.
-pub(super) fn dynamo_request_priority(priority: u32) -> i32 {
-    i32::MAX - i32::try_from(priority).unwrap_or(i32::MAX)
-}
-
-/// Absent stays absent: a request without x-priority must not be promoted to
-/// maximum engine priority, so this reads the raw header instead of the
-/// parsed default of 0. Malformed values were already rejected upstream.
-pub(super) fn x_priority_header_value(headers: &HeaderMap) -> Option<u32> {
-    headers
-        .get(HEADER_PRIORITY)?
-        .to_str()
-        .ok()?
-        .trim()
-        .parse()
-        .ok()
 }
 
 pub(super) fn should_forward_response_header(name: &HeaderName, retry: &PylonRetryConfig) -> bool {
