@@ -28,7 +28,7 @@ import (
 	"strings"
 	"sync"
 
-	nverrors "github.com/NVIDIA/nvcf-go/pkg/nvkit/errors"
+	nverrors "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/errors"
 	"github.com/go-chi/cors"
 	"github.com/google/uuid"
 	"github.com/jellydator/ttlcache/v3"
