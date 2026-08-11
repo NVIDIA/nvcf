@@ -208,7 +208,8 @@ func CheckStatus(ctx context.Context, ctxLogger *logging.TraceLogger, httpConfig
 		}
 	}
 
-	close(resultsQueue)
+	// Do not close resultsQueue. Timed-out checks may still send their result,
+	// and the channel buffer has capacity for every check.
 	return results
 }
 

@@ -241,6 +241,7 @@ func (c *CassandraHandler) ListDeploymentStageTransitionEvents(traceCtx context.
 	var record steRecord // Reusing steRecord from V1
 
 	err = c.executeWithSessionRecreation(traceCtx, func() error {
+		events = nil
 		iter := c.session.Query(query, args...).WithContext(traceCtx).Iter()
 		defer iter.Close()
 
@@ -320,6 +321,7 @@ func (c *CassandraHandler) ListDeploymentInstances(traceCtx context.Context, fun
 	var record InstanceRecord
 
 	err = c.executeWithSessionRecreation(traceCtx, func() error {
+		instances = nil
 		iter := c.session.Query(query, args...).WithContext(traceCtx).Iter()
 		defer iter.Close()
 
@@ -772,6 +774,7 @@ func (c *CassandraHandler) ListDeploymentInstancesPaginated(traceCtx context.Con
 	var record InstanceRecord
 
 	err = c.executeWithSessionRecreation(traceCtx, func() error {
+		instances = nil
 		iter := c.session.Query(query, args...).WithContext(traceCtx).Iter()
 		defer iter.Close()
 
@@ -1432,6 +1435,7 @@ func (c *CassandraHandler) getStatsRows(traceCtx context.Context, table, namespa
 	var records []data_access.StatsV3Record
 
 	err := c.executeWithSessionRecreation(traceCtx, func() error {
+		records = nil
 		query := fmt.Sprintf(`SELECT context, event_name, timestamp, created_at, updated_at
 				  FROM %s
 				  WHERE namespace = ?`, table)
@@ -1481,6 +1485,7 @@ func (c *CassandraHandler) GetEventsV3(traceCtx context.Context, namespace, even
 	var records []data_access.EventV3Record
 
 	err := c.executeWithSessionRecreation(traceCtx, func() error {
+		records = nil
 		// Note: Cannot ORDER BY timestamp as it's not part of the clustering key
 		// Ordering by event_name (clustering key), will sort by timestamp in Go
 		query := `SELECT event_name, source, details, timestamp, created_at, updated_at 

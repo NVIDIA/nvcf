@@ -19,6 +19,7 @@ package publisher
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -73,6 +74,18 @@ func NewBatchedPublisher(
 	storageClients []interfaces.BatchStorageClient,
 	logger *otelzap.Logger,
 ) (*BatchedPublisher, error) {
+	if config.QueueSize <= 0 {
+		return nil, fmt.Errorf("publisher queue size must be positive: %d", config.QueueSize)
+	}
+	if config.BatchSize <= 0 {
+		return nil, fmt.Errorf("publisher batch size must be positive: %d", config.BatchSize)
+	}
+	if config.BatchIntervalSeconds <= 0 {
+		return nil, fmt.Errorf(
+			"publisher batch interval seconds must be positive: %d",
+			config.BatchIntervalSeconds)
+	}
+
 	meter := otel.GetMeterProvider().Meter(constants.ApiSvcName)
 
 	itemsIn, err := meter.Int64Counter(

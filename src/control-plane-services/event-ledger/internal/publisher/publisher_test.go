@@ -106,6 +106,37 @@ func (m *MockBatchStorageClient) GetCallCountV2() int {
 	return m.callCountV2
 }
 
+func TestNewBatchedPublisherRejectsInvalidConfig(t *testing.T) {
+	valid := config2.BatchedPublisherConfig{
+		QueueSize:            10,
+		BatchSize:            5,
+		BatchIntervalSeconds: 1,
+	}
+
+	tests := []struct {
+		name      string
+		config    config2.BatchedPublisherConfig
+		wantError string
+	}{
+		{name: "zero queue size", config: config2.BatchedPublisherConfig{QueueSize: 0, BatchSize: valid.BatchSize, BatchIntervalSeconds: valid.BatchIntervalSeconds}, wantError: "queue size"},
+		{name: "negative queue size", config: config2.BatchedPublisherConfig{QueueSize: -1, BatchSize: valid.BatchSize, BatchIntervalSeconds: valid.BatchIntervalSeconds}, wantError: "queue size"},
+		{name: "zero batch size", config: config2.BatchedPublisherConfig{QueueSize: valid.QueueSize, BatchSize: 0, BatchIntervalSeconds: valid.BatchIntervalSeconds}, wantError: "batch size"},
+		{name: "negative batch size", config: config2.BatchedPublisherConfig{QueueSize: valid.QueueSize, BatchSize: -1, BatchIntervalSeconds: valid.BatchIntervalSeconds}, wantError: "batch size"},
+		{name: "zero batch interval", config: config2.BatchedPublisherConfig{QueueSize: valid.QueueSize, BatchSize: valid.BatchSize, BatchIntervalSeconds: 0}, wantError: "batch interval"},
+		{name: "negative batch interval", config: config2.BatchedPublisherConfig{QueueSize: valid.QueueSize, BatchSize: valid.BatchSize, BatchIntervalSeconds: -1}, wantError: "batch interval"},
+	}
+
+	logger := otelzap.New(zap.NewNop())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			publisher, err := NewBatchedPublisher(tt.config, nil, logger)
+			require.Error(t, err)
+			assert.Nil(t, publisher)
+			require.ErrorContains(t, err, tt.wantError)
+		})
+	}
+}
+
 func TestBatchedPublisher_StartStop(t *testing.T) {
 	logger := testutils.InitTestLogger(t)
 	storageClient := &MockBatchStorageClient{}

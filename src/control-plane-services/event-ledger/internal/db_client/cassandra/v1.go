@@ -66,6 +66,7 @@ func (c *CassandraHandler) ListStageTransitionEvents(traceCtx context.Context, f
 	var record steRecord
 
 	err = c.executeWithSessionRecreation(traceCtx, func() error {
+		events = nil
 		iter := c.session.Query(query, args...).WithContext(traceCtx).Iter()
 		defer iter.Close()
 
@@ -317,15 +318,25 @@ func buildFunctionVersionInstancesInsert(ste types.StageTransitionEvent) (string
 }
 
 func extractInstanceType(details json.RawMessage) (string, error) {
+	if len(details) == 0 {
+		return "", nil
+	}
+
 	var detailsMap map[string]interface{}
-	err := json.Unmarshal(details, &detailsMap)
-	if err != nil {
-		return "error", err
+	if err := json.Unmarshal(details, &detailsMap); err != nil {
+		return "", fmt.Errorf("failed to parse event details: %w", err)
 	}
-	if detailsMap["instanceType"] != nil {
-		return detailsMap["instanceType"].(string), nil
+
+	value, exists := detailsMap["instanceType"]
+	if !exists || value == nil {
+		return "", nil
 	}
-	return "", nil
+
+	instanceType, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("event details instanceType must be a string")
+	}
+	return instanceType, nil
 }
 
 func (c *CassandraHandler) ListInstances(traceCtx context.Context, functionVersionId uuid.UUID) ([]types.Instance, error) {
@@ -352,6 +363,7 @@ func (c *CassandraHandler) ListInstances(traceCtx context.Context, functionVersi
 	var record InstanceRecord
 
 	err = c.executeWithSessionRecreation(traceCtx, func() error {
+		instances = nil
 		iter := c.session.Query(query, args...).WithContext(traceCtx).Iter()
 		defer iter.Close()
 
@@ -812,6 +824,7 @@ func (c *CassandraHandler) ListInstancesPaginated(traceCtx context.Context, func
 	var record InstanceRecord
 
 	err = c.executeWithSessionRecreation(traceCtx, func() error {
+		instances = nil
 		iter := c.session.Query(query, args...).WithContext(traceCtx).Iter()
 		defer iter.Close()
 
