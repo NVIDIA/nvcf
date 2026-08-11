@@ -600,11 +600,13 @@ class GithubReleaseTest(unittest.TestCase):
                 self.github_release.synthesize_initial_version_anchor(root, service)
             self.assertIn("deploy/helm/cloud-tasks/v0.0.0", self._tags(root))
 
-    def test_initial_version_anchor_honors_metadata(self):
-        metadata = json.loads(
-            Path(__file__).with_name("github-release-subprojects.json").read_text()
-        )
-        service = self.github_release.find_service(metadata, "cloud-tasks-helm")
+    def test_cf_initial_version_anchor_honors_metadata(self):
+        service = {
+                "id": "cloud-tasks-helm",
+                "path": "deploy/helm/cloud-tasks",
+                "service_name": "helm-cloud-tasks-api",
+                "initial_version": "1.6.0",
+        }
         expected_tag = self.github_release.tag_for_version(service, service["initial_version"])
         default_floor_tag = self.github_release.tag_for_version(
             service, self.github_release.INITIAL_RELEASE_FLOOR_VERSION
@@ -618,7 +620,7 @@ class GithubReleaseTest(unittest.TestCase):
             self.assertIn(expected_tag, tags)
             self.assertNotIn(default_floor_tag, tags)
 
-    def test_initial_version_anchor_rejects_bad_semver(self):
+    def test_cf_initial_version_anchor_rejects_bad_semver(self):
         service = {
             "id": "cloud-tasks-helm",
             "path": "deploy/helm/cloud-tasks",
@@ -628,7 +630,7 @@ class GithubReleaseTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.github_release.initial_floor_version(service)
 
-    def test_initial_version_anchor_rejects_empty_string(self):
+    def test_cf_initial_version_anchor_rejects_empty_string(self):
         service = {
             "id": "cloud-tasks-helm",
             "path": "deploy/helm/cloud-tasks",
