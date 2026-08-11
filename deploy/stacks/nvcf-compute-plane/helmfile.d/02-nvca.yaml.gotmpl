@@ -181,6 +181,12 @@ releases:
         imagePullSecrets:
         {{- toYaml .Values.global.imagePullSecrets | nindent 10 }}
         {{- end }}
+        {{- /* Self-hosted clusters supply their own registry credentials through
+               global.imagePullSecrets and have no NGC service key to derive one
+               from, so the chart's generated pull secret is disabled here. The
+               chart default stays enabled for ngc-managed installs, which rely
+               on it being generated from ngcConfig.serviceKey. */}}
+        generateImagePullSecret: false
         ngcConfig:
           clusterSource: self-managed
         clusterName: {{ requiredEnv "CLUSTER_NAME" }}

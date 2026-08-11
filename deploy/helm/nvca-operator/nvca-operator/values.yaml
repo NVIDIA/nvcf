@@ -46,7 +46,7 @@ otelCollector:
       cpu: 200m
       memory: 256Mi
 ## @param generateImagePullSecret Use the ngcConfig.serviceKey to generate an image pull secret for nvca and nvca-operator Pods
-generateImagePullSecret: false
+generateImagePullSecret: true
 ## @param imagePullSecretName Name of the image pull secret to use for nvca and nvca-operator Pods.
 imagePullSecretName: "nvca-operator-image-pull"
 ## @param imagePullSecrets List of pre-existing imagePullSecret objects in the nvca-operator namespace to use for nvca and nvca-operator Pods. Each object must have a 'name' field. Example: [{name: "foo-bar"}, {name: "baz"}]
