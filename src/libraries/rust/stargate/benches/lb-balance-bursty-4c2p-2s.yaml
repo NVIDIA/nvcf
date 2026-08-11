@@ -116,9 +116,9 @@ algorithms:
   - name: random
     config:
       default: random
-  - name: groq-multiregion
+  - name: wait-and-widen
     config:
-      default: groq-multiregion
+      default: wait-and-widen
   - name: pulsar
     config:
       default: power-of-two

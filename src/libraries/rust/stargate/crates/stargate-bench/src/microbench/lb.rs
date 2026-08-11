@@ -31,7 +31,7 @@ use stargate::routing::{RoutedClusterSnapshot, RoutingTargetKey};
 use stargate_proto::pb::{InferenceServerStatus, ModelStats};
 
 #[derive(Clone, Copy, PartialEq)]
-enum MultiregionTuning {
+enum WaitAndWidenTuning {
     IgnoreQueue,
     RttOnly,
     Affinity,
@@ -40,11 +40,11 @@ enum MultiregionTuning {
 struct LbMicrobenchScenarioMetadata {
     model_id: &'static str,
     algorithm: LoadBalancerAlgorithm,
-    tuning: Option<MultiregionTuning>,
+    tuning: Option<WaitAndWidenTuning>,
     excluded_clusters: usize,
 }
 
-use MultiregionTuning::{Affinity, IgnoreQueue, RttOnly};
+use WaitAndWidenTuning::{Affinity, IgnoreQueue, RttOnly};
 
 macro_rules! scenarios {
     ($($scenario:ident, $model_id:literal, $algorithm:ident, $tuning:expr, $excluded:literal;)+) => {
@@ -69,17 +69,17 @@ macro_rules! scenarios {
 scenarios! {
     PowerOfTwo, "lb-bench-power-of-two", PowerOfTwo, None, 0;
     PowerOfTwoOneExcluded, "lb-bench-power-of-two-one-excluded", PowerOfTwo, None, 1;
-    GroqMultiregion, "lb-bench-multiregion", GroqMultiregion, None, 0;
-    GroqMultiregionOneExcluded, "lb-bench-multiregion-one-excluded", GroqMultiregion, None, 1;
-    GroqMultiregionIgnoreQueue, "lb-bench-multiregion-ignore-queue", GroqMultiregion, Some(IgnoreQueue), 0;
-    GroqMultiregionIgnoreQueueOneExcluded, "lb-bench-multiregion-ignore-queue-one-excluded", GroqMultiregion, Some(IgnoreQueue), 1;
-    GroqMultiregionIgnoreQueueMultiExcluded, "lb-bench-multiregion-ignore-queue-multi-excluded", GroqMultiregion, Some(IgnoreQueue), 2;
-    GroqMultiregionRttOnly, "lb-bench-multiregion-rtt-only", GroqMultiregion, Some(RttOnly), 0;
-    GroqMultiregionRttOnlyOneExcluded, "lb-bench-multiregion-rtt-only-one-excluded", GroqMultiregion, Some(RttOnly), 1;
-    GroqMultiregionRttOnlyMultiExcluded, "lb-bench-multiregion-rtt-only-multi-excluded", GroqMultiregion, Some(RttOnly), 2;
-    GroqMultiregionAffinity, "lb-bench-multiregion-affinity", GroqMultiregion, Some(Affinity), 0;
-    GroqMultiregionAffinityOneExcluded, "lb-bench-multiregion-affinity-one-excluded", GroqMultiregion, Some(Affinity), 1;
-    GroqMultiregionAffinityMultiExcluded, "lb-bench-multiregion-affinity-multi-excluded", GroqMultiregion, Some(Affinity), 2;
+    WaitAndWiden, "lb-bench-wait-and-widen", WaitAndWiden, None, 0;
+    WaitAndWidenOneExcluded, "lb-bench-wait-and-widen-one-excluded", WaitAndWiden, None, 1;
+    WaitAndWidenIgnoreQueue, "lb-bench-wait-and-widen-ignore-queue", WaitAndWiden, Some(IgnoreQueue), 0;
+    WaitAndWidenIgnoreQueueOneExcluded, "lb-bench-wait-and-widen-ignore-queue-one-excluded", WaitAndWiden, Some(IgnoreQueue), 1;
+    WaitAndWidenIgnoreQueueMultiExcluded, "lb-bench-wait-and-widen-ignore-queue-multi-excluded", WaitAndWiden, Some(IgnoreQueue), 2;
+    WaitAndWidenRttOnly, "lb-bench-wait-and-widen-rtt-only", WaitAndWiden, Some(RttOnly), 0;
+    WaitAndWidenRttOnlyOneExcluded, "lb-bench-wait-and-widen-rtt-only-one-excluded", WaitAndWiden, Some(RttOnly), 1;
+    WaitAndWidenRttOnlyMultiExcluded, "lb-bench-wait-and-widen-rtt-only-multi-excluded", WaitAndWiden, Some(RttOnly), 2;
+    WaitAndWidenAffinity, "lb-bench-wait-and-widen-affinity", WaitAndWiden, Some(Affinity), 0;
+    WaitAndWidenAffinityOneExcluded, "lb-bench-wait-and-widen-affinity-one-excluded", WaitAndWiden, Some(Affinity), 1;
+    WaitAndWidenAffinityMultiExcluded, "lb-bench-wait-and-widen-affinity-multi-excluded", WaitAndWiden, Some(Affinity), 2;
     Pulsar, "lb-bench-pulsar", Pulsar, None, 0;
     PulsarOneExcluded, "lb-bench-pulsar-one-excluded", Pulsar, None, 1;
     Random, "lb-bench-random", Random, None, 0;
@@ -467,20 +467,20 @@ fn config_for_scenario(scenario: LbMicrobenchScenario) -> LoadBalancerAlgorithmC
             .set_seed(Some("lb-microbench-seed".to_string()))
             .expect("pulsar supports deterministic seeding");
     }
-    if let Some(multiregion) = config.multiregion_settings_mut() {
-        multiregion.seed = Some("lb-microbench-seed".to_string());
-        multiregion.ttft_bucket_size_ms = Some(1_000_000);
-        multiregion.n = Some(2);
-        multiregion.max_queued = Some(64);
+    if let Some(wait_and_widen) = config.wait_and_widen_settings_mut() {
+        wait_and_widen.seed = Some("lb-microbench-seed".to_string());
+        wait_and_widen.ttft_bucket_size_ms = Some(1_000_000);
+        wait_and_widen.n = Some(2);
+        wait_and_widen.max_queued = Some(64);
         if metadata.tuning == Some(Affinity) {
-            multiregion.cache_affinity_virtual_nodes = Some(150);
-            multiregion.cache_affinity_backend_selection_count = Some(2);
+            wait_and_widen.cache_affinity_virtual_nodes = Some(150);
+            wait_and_widen.cache_affinity_backend_selection_count = Some(2);
         }
         if matches!(metadata.tuning, Some(IgnoreQueue | RttOnly)) {
-            multiregion.ignore_queue_time = Some(true);
+            wait_and_widen.ignore_queue_time = Some(true);
         }
         if metadata.tuning == Some(RttOnly) {
-            multiregion.ignore_input_processing_time = Some(true);
+            wait_and_widen.ignore_input_processing_time = Some(true);
         }
     }
     config
@@ -640,10 +640,10 @@ mod tests {
     exclusion_tests! {
         random_one_excluded_scenario_never_selects_excluded_backend: RandomOneExcluded => ["cluster-0000"];
         power_of_two_one_excluded_scenario_never_selects_excluded_backend: PowerOfTwoOneExcluded => ["cluster-0000"];
-        groq_multiregion_one_excluded_scenario_never_selects_excluded_backend: GroqMultiregionOneExcluded => ["cluster-0000"];
-        groq_multiregion_affinity_one_excluded_scenario_never_selects_excluded_backend: GroqMultiregionAffinityOneExcluded => ["cluster-0000"];
-        groq_multiregion_affinity_multi_excluded_scenario_never_selects_excluded_backend: GroqMultiregionAffinityMultiExcluded => ["cluster-0000", "cluster-0001"];
-        groq_multiregion_ignore_queue_multi_excluded_scenario_never_selects_excluded_backend: GroqMultiregionIgnoreQueueMultiExcluded => ["cluster-0000", "cluster-0001"];
+        wait_and_widen_one_excluded_scenario_never_selects_excluded_backend: WaitAndWidenOneExcluded => ["cluster-0000"];
+        wait_and_widen_affinity_one_excluded_scenario_never_selects_excluded_backend: WaitAndWidenAffinityOneExcluded => ["cluster-0000"];
+        wait_and_widen_affinity_multi_excluded_scenario_never_selects_excluded_backend: WaitAndWidenAffinityMultiExcluded => ["cluster-0000", "cluster-0001"];
+        wait_and_widen_ignore_queue_multi_excluded_scenario_never_selects_excluded_backend: WaitAndWidenIgnoreQueueMultiExcluded => ["cluster-0000", "cluster-0001"];
         pulsar_one_excluded_scenario_never_selects_excluded_backend: PulsarOneExcluded => ["cluster-0000"];
         round_robin_one_excluded_scenario_never_selects_excluded_backend: RoundRobinOneExcluded => ["cluster-0000"];
         round_robin_multi_excluded_scenario_never_selects_excluded_backend: RoundRobinMultiExcluded => ["cluster-0000", "cluster-0001"];

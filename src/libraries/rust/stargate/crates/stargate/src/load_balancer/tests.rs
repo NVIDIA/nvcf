@@ -20,11 +20,11 @@ use stargate_proto::pb::{InferenceServerStatus, ModelStats};
 
 use super::*;
 use crate::load_balancer::algorithm::{MAX_CACHE_AFFINITY_CACHE_KEY_BYTES, input_work_seconds};
-use crate::load_balancer::groq_multiregion::{
-    GroqMultiregionConfig, GroqMultiregionLoadBalancer, cache_affinity_candidate_indices,
-    cache_affinity_candidates, cache_affinity_virtual_node_hash, groq_multiregion_ttft_components,
-};
 use crate::load_balancer::pulsar::{PulsarLoadBalancer, pulsar_hash64, pulsar_ranked_indices};
+use crate::load_balancer::wait_and_widen::{
+    WaitAndWidenConfig, WaitAndWidenLoadBalancer, cache_affinity_candidate_indices,
+    cache_affinity_candidates, cache_affinity_virtual_node_hash, wait_and_widen_ttft_components,
+};
 use crate::routing::{RoutedClusterSnapshot, RoutingTargetKey};
 use xxhash_rust::xxh3::xxh3_64;
 
@@ -94,24 +94,24 @@ fn request_with_priority<'a>(
     }
 }
 
-fn groq_multiregion_algorithm_config(
-    configure: impl FnOnce(&mut GroqMultiregionAlgorithmConfig),
+fn wait_and_widen_algorithm_config(
+    configure: impl FnOnce(&mut WaitAndWidenAlgorithmConfig),
 ) -> LoadBalancerAlgorithmConfig {
-    let mut config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::GroqMultiregion);
+    let mut config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::WaitAndWiden);
     configure(
         config
-            .multiregion_settings_mut()
-            .expect("groq-multiregion config should expose multiregion settings"),
+            .wait_and_widen_settings_mut()
+            .expect("wait-and-widen config should expose wait_and_widen settings"),
     );
     config
 }
 
-fn groq_affinity_algorithm_config(
+fn wait_and_widen_affinity_algorithm_config(
     virtual_nodes: usize,
     selection_count: usize,
     sample_count: Option<usize>,
 ) -> LoadBalancerAlgorithmConfig {
-    groq_multiregion_algorithm_config(|settings| {
+    wait_and_widen_algorithm_config(|settings| {
         settings.seed = Some("seed-1".to_string());
         settings.cache_affinity_virtual_nodes = Some(virtual_nodes);
         settings.cache_affinity_backend_selection_count = Some(selection_count);
@@ -119,12 +119,12 @@ fn groq_affinity_algorithm_config(
     })
 }
 
-fn groq_affinity_config(
+fn wait_and_widen_affinity_config(
     virtual_nodes: usize,
     selection_count: usize,
     sample_count: Option<usize>,
-) -> GroqMultiregionConfig {
-    GroqMultiregionConfig::from_algorithm_config(&groq_affinity_algorithm_config(
+) -> WaitAndWidenConfig {
+    WaitAndWidenConfig::from_algorithm_config(&wait_and_widen_affinity_algorithm_config(
         virtual_nodes,
         selection_count,
         sample_count,
@@ -158,11 +158,11 @@ fn set_seed_reports_unsupported_algorithms_without_panicking() {
 }
 
 #[test]
-fn pulsar_multiregion_seed_has_one_authoritative_owner() {
-    let mut config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::PulsarMultiregion);
+fn pulsar_wait_and_widen_seed_has_one_authoritative_owner() {
+    let mut config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::PulsarWaitAndWiden);
     config
-        .multiregion_settings_mut()
-        .expect("pulsar-multiregion should expose multiregion settings")
+        .wait_and_widen_settings_mut()
+        .expect("pulsar-wait-and-widen should expose wait_and_widen settings")
         .seed = Some("shared-seed".to_string());
 
     assert_eq!(config.seed(), Some("shared-seed"));
@@ -267,7 +267,7 @@ fn max_queue_time(
     elapsed: Duration,
     request_slo: Option<Duration>,
 ) -> Duration {
-    let config = groq_multiregion_algorithm_config(|settings| {
+    let config = wait_and_widen_algorithm_config(|settings| {
         settings.max_queue_time_floor_ms = Some(floor_ms);
         settings.max_queue_time_ceil_ms = Some(ceil_ms);
     });
@@ -277,16 +277,16 @@ fn max_queue_time(
         request_slo,
         ..request(&target, None, Some(0))
     };
-    GroqMultiregionConfig::from_algorithm_config(&config)
+    WaitAndWidenConfig::from_algorithm_config(&config)
         .max_queue_time(&request)
         .expect("floor and ceil should enable max queue time")
 }
 
-fn groq_load_balancer(
-    configure: impl FnOnce(&mut GroqMultiregionAlgorithmConfig),
+fn wait_and_widen_load_balancer(
+    configure: impl FnOnce(&mut WaitAndWidenAlgorithmConfig),
 ) -> std::sync::Arc<dyn LoadBalancer> {
-    create_load_balancer_with_config(&groq_multiregion_algorithm_config(configure))
-        .expect("factory should accept groq-multiregion")
+    create_load_balancer_with_config(&wait_and_widen_algorithm_config(configure))
+        .expect("factory should accept wait-and-widen")
 }
 
 fn assert_repeated_choice(
@@ -324,7 +324,7 @@ fn choose_from_router(
 }
 
 fn assert_excluded_queue_choice(rtt_only: bool, excluded_ids: &[&str]) {
-    let load_balancer = groq_load_balancer(|settings| {
+    let load_balancer = wait_and_widen_load_balancer(|settings| {
         settings.n = Some(2);
         settings.ignore_queue_time = Some(true);
         settings.ignore_input_processing_time = rtt_only.then_some(true);
@@ -351,7 +351,7 @@ fn assert_excluded_queue_choice(rtt_only: bool, excluded_ids: &[&str]) {
 }
 
 type AffinityRetryFixture = (
-    GroqMultiregionConfig,
+    WaitAndWidenConfig,
     RoutingTargetKey,
     Vec<RoutedClusterSnapshot>,
     HashSet<String>,
@@ -359,7 +359,7 @@ type AffinityRetryFixture = (
 );
 
 fn affinity_retry_fixture(excluded_ids: &[&str]) -> AffinityRetryFixture {
-    let config = groq_affinity_config(32, 1, None);
+    let config = wait_and_widen_affinity_config(32, 1, None);
     let target = target();
     let mut candidates = excluded_ids
         .iter()
@@ -397,7 +397,7 @@ fn affinity_retry_fixture(excluded_ids: &[&str]) -> AffinityRetryFixture {
 
 fn assert_cache_affinity_retry(excluded_ids: &[&str]) {
     let (config, target, candidates, excluded, key) = affinity_retry_fixture(excluded_ids);
-    let load_balancer = GroqMultiregionLoadBalancer::new(config);
+    let load_balancer = WaitAndWidenLoadBalancer::new(config);
     let request = request(&target, Some(&key), Some(1));
     choose(&load_balancer, &request, &candidates);
     let retry_request = LoadBalancerRequest {
@@ -414,7 +414,7 @@ fn assert_cache_affinity_retry(excluded_ids: &[&str]) {
     assert_eq!(load_balancer.cached_affinity_key_bytes(), cached_key_bytes);
 }
 
-macro_rules! groq_choice_tests {
+macro_rules! wait_and_widen_choice_tests {
     ($(
         $name:ident:
         $configure:expr;
@@ -425,7 +425,7 @@ macro_rules! groq_choice_tests {
         $(
             #[test]
             fn $name() {
-                let load_balancer = groq_load_balancer($configure);
+                let load_balancer = wait_and_widen_load_balancer($configure);
                 let target = target();
                 let request = ($request)(&target);
                 let candidates = [$($candidate),+];
@@ -570,10 +570,10 @@ where
 
 fn assert_algorithm_overrides(raw: impl Fn(LoadBalancerAlgorithm) -> String) {
     for algorithm in [
-        LoadBalancerAlgorithm::GroqMultiregion,
+        LoadBalancerAlgorithm::WaitAndWiden,
         LoadBalancerAlgorithm::PowerOfTwo,
         LoadBalancerAlgorithm::Pulsar,
-        LoadBalancerAlgorithm::PulsarMultiregion,
+        LoadBalancerAlgorithm::PulsarWaitAndWiden,
         LoadBalancerAlgorithm::Random,
         LoadBalancerAlgorithm::RoundRobin,
     ] {
@@ -589,9 +589,9 @@ fn assert_algorithm_overrides(raw: impl Fn(LoadBalancerAlgorithm) -> String) {
 #[test]
 fn simple_model_config_parses_to_algorithm_enum() {
     let config: LoadBalancerConfig =
-        parse_json(r#"{"default":"groq-multiregion","models":{"model-a":"round-robin"}}"#);
+        parse_json(r#"{"default":"wait-and-widen","models":{"model-a":"round-robin"}}"#);
 
-    assert_eq!(config.default, LoadBalancerAlgorithm::GroqMultiregion);
+    assert_eq!(config.default, LoadBalancerAlgorithm::WaitAndWiden);
     assert!(matches!(
         config.models.get("model-a"),
         Some(LoadBalancerModelConfig::Name(
@@ -710,7 +710,7 @@ fn algorithm_specific_load_balancer_fields_are_rejected_for_other_algorithms() {
             "max_queue_time_floor_ms",
         ),
         (
-            r#"{"algorithm":"groq-multiregion","consider_kv_free_tokens":true}"#,
+            r#"{"algorithm":"wait-and-widen","consider_kv_free_tokens":true}"#,
             "consider_kv_free_tokens",
         ),
     ] {
@@ -725,9 +725,9 @@ fn detailed_algorithm_configs_preserve_all_variant_identities() {
     for (raw, expected, expected_seed, considers_kv_free_tokens) in [
         (r#"{"algorithm":"power-of-two"}"#, PowerOfTwo, None, false),
         (
-            r#"{"algorithm":"groq-multiregion","seed":"groq-seed"}"#,
-            GroqMultiregion,
-            Some("groq-seed"),
+            r#"{"algorithm":"wait-and-widen","seed":"wait-and-widen-seed"}"#,
+            WaitAndWiden,
+            Some("wait-and-widen-seed"),
             false,
         ),
         (r#"{"algorithm":"round-robin"}"#, RoundRobin, None, false),
@@ -739,8 +739,8 @@ fn detailed_algorithm_configs_preserve_all_variant_identities() {
             true,
         ),
         (
-            r#"{"algorithm":"pulsar-multiregion","seed":"hybrid-seed","consider_kv_free_tokens":true}"#,
-            PulsarMultiregion,
+            r#"{"algorithm":"pulsar-wait-and-widen","seed":"hybrid-seed","consider_kv_free_tokens":true}"#,
+            PulsarWaitAndWiden,
             Some("hybrid-seed"),
             true,
         ),
@@ -846,43 +846,43 @@ fn kv_free_token_consideration_is_rejected_for_non_pulsar_algorithms() {
 }
 
 #[test]
-fn detailed_model_config_parses_for_pulsar_multiregion() {
+fn detailed_model_config_parses_for_pulsar_wait_and_widen() {
     let router = router_from_json(
-        r#"{"default":"power-of-two","models":{"model-a":{"algorithm":"pulsar-multiregion","seed":"seed-1","require_cache_affinity_key":true,"require_input_tokens":true,"max_queue_time_floor_ms":100,"max_queue_time_ceil_ms":100,"ttft_bucket_size_ms":50,"n":2}}}"#,
+        r#"{"default":"power-of-two","models":{"model-a":{"algorithm":"pulsar-wait-and-widen","seed":"seed-1","require_cache_affinity_key":true,"require_input_tokens":true,"max_queue_time_floor_ms":100,"max_queue_time_ceil_ms":100,"ttft_bucket_size_ms":50,"n":2}}}"#,
     );
     let model_config = router.algorithm_config("model-a");
     assert_eq!(
         model_config.algorithm(),
-        LoadBalancerAlgorithm::PulsarMultiregion
+        LoadBalancerAlgorithm::PulsarWaitAndWiden
     );
     assert_eq!(model_config.seed(), Some("seed-1"));
     assert!(model_config.requires_cache_affinity_key());
     assert!(model_config.requires_input_tokens());
-    let multiregion_settings = model_config
-        .multiregion_settings()
-        .expect("hybrid config should include multiregion settings");
-    assert_eq!(multiregion_settings.max_queue_time_floor_ms, Some(100));
-    assert_eq!(multiregion_settings.max_queue_time_ceil_ms, Some(100));
-    assert_eq!(multiregion_settings.ttft_bucket_size_ms, Some(50));
-    assert_eq!(multiregion_settings.n, Some(2));
+    let wait_and_widen_settings = model_config
+        .wait_and_widen_settings()
+        .expect("hybrid config should include wait_and_widen settings");
+    assert_eq!(wait_and_widen_settings.max_queue_time_floor_ms, Some(100));
+    assert_eq!(wait_and_widen_settings.max_queue_time_ceil_ms, Some(100));
+    assert_eq!(wait_and_widen_settings.ttft_bucket_size_ms, Some(50));
+    assert_eq!(wait_and_widen_settings.n, Some(2));
 }
 
 #[test]
-fn detailed_model_config_parses_groq_multiregion_cache_affinity() {
+fn detailed_model_config_parses_wait_and_widen_cache_affinity() {
     let router = router_from_json(
-        r#"{"default":"power-of-two","models":{"model-a":{"algorithm":"groq-multiregion","seed":"seed-1","require_cache_affinity_key":true,"cache_affinity_virtual_nodes":64,"cache_affinity_backend_selection_count":2}}}"#,
+        r#"{"default":"power-of-two","models":{"model-a":{"algorithm":"wait-and-widen","seed":"seed-1","require_cache_affinity_key":true,"cache_affinity_virtual_nodes":64,"cache_affinity_backend_selection_count":2}}}"#,
     );
     let model_config = router.algorithm_config("model-a");
     assert_eq!(
         model_config.algorithm(),
-        LoadBalancerAlgorithm::GroqMultiregion
+        LoadBalancerAlgorithm::WaitAndWiden
     );
     assert_eq!(model_config.seed(), Some("seed-1"));
     assert!(model_config.requires_cache_affinity_key());
-    let multiregion_config = GroqMultiregionConfig::from_algorithm_config(model_config);
-    assert_eq!(multiregion_config.cache_affinity_virtual_nodes, 64);
+    let wait_and_widen_config = WaitAndWidenConfig::from_algorithm_config(model_config);
+    assert_eq!(wait_and_widen_config.cache_affinity_virtual_nodes, 64);
     assert_eq!(
-        multiregion_config.cache_affinity_backend_selection_count,
+        wait_and_widen_config.cache_affinity_backend_selection_count,
         Some(2)
     );
 }
@@ -997,12 +997,12 @@ fn request_algorithm_key_must_match_configured_algorithm() {
 }
 
 #[test]
-fn groq_multiregion_config_resolves_internal_defaults() {
+fn wait_and_widen_config_resolves_internal_defaults() {
     let mut algorithm_config =
-        LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::GroqMultiregion);
+        LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::WaitAndWiden);
     let settings = algorithm_config
-        .multiregion_settings_mut()
-        .expect("Groq config should include multiregion settings");
+        .wait_and_widen_settings_mut()
+        .expect("WaitAndWiden config should include wait-and-widen settings");
     settings.cache_affinity_virtual_nodes = Some(0);
     settings.cache_affinity_backend_selection_count = Some(0);
     settings.max_queue_time_floor_ms = Some(100);
@@ -1010,7 +1010,7 @@ fn groq_multiregion_config_resolves_internal_defaults() {
     settings.n = Some(0);
     settings.ignore_queue_time = Some(true);
     settings.ignore_input_processing_time = Some(true);
-    let config = GroqMultiregionConfig::from_algorithm_config(&algorithm_config);
+    let config = WaitAndWidenConfig::from_algorithm_config(&algorithm_config);
 
     assert_eq!(config.cache_affinity_virtual_nodes, 1);
     assert_eq!(config.cache_affinity_backend_selection_count, None);
@@ -1032,13 +1032,13 @@ fn groq_multiregion_config_resolves_internal_defaults() {
 }
 
 #[test]
-fn router_reports_groq_multiregion_algorithm_name() {
+fn router_reports_wait_and_widen_algorithm_name() {
     let router = router_with_model(
         LoadBalancerAlgorithm::PowerOfTwo,
         "model-a",
-        LoadBalancerModelConfig::Name(LoadBalancerAlgorithm::GroqMultiregion),
+        LoadBalancerModelConfig::Name(LoadBalancerAlgorithm::WaitAndWiden),
     );
-    assert_eq!(router.algorithm_name("model-a"), "groq-multiregion");
+    assert_eq!(router.algorithm_name("model-a"), "wait-and-widen");
 }
 
 #[test]
@@ -1377,8 +1377,8 @@ fn request_excluded_clusters_are_not_selected() {
     assert_eq!(chosen.candidate.cluster_id, "cluster-1");
 }
 
-groq_choice_tests! {
-    groq_multiregion_prefers_lower_estimated_ttft:
+wait_and_widen_choice_tests! {
+    wait_and_widen_prefers_lower_estimated_ttft:
     |_| {};
     |target| request(target, None, Some(10));
     [
@@ -1389,8 +1389,8 @@ groq_choice_tests! {
 }
 
 #[test]
-fn groq_multiregion_single_excluded_cluster_is_not_selected() {
-    let lb = groq_load_balancer(|_| {});
+fn wait_and_widen_single_excluded_cluster_is_not_selected() {
+    let lb = wait_and_widen_load_balancer(|_| {});
     let target = target();
     let excluded = HashSet::from(["fast-but-excluded".to_string()]);
     let request = LoadBalancerRequest {
@@ -1405,9 +1405,10 @@ fn groq_multiregion_single_excluded_cluster_is_not_selected() {
 }
 
 #[test]
-fn groq_multiregion_cache_affinity_key_selects_stable_primary() {
-    let lb = create_load_balancer_with_config(&groq_affinity_algorithm_config(8, 1, None))
-        .expect("factory should accept groq-multiregion");
+fn wait_and_widen_cache_affinity_key_selects_stable_primary() {
+    let lb =
+        create_load_balancer_with_config(&wait_and_widen_affinity_algorithm_config(8, 1, None))
+            .expect("factory should accept wait-and-widen");
     let target = target();
     let request = request(&target, Some("prefix-a"), Some(1));
     let candidates = candidates(&["affinity-a", "affinity-b", "affinity-c"]);
@@ -1419,12 +1420,12 @@ fn groq_multiregion_cache_affinity_key_selects_stable_primary() {
 }
 
 #[test]
-fn groq_multiregion_cache_affinity_retry_skips_excluded_primary() {
+fn wait_and_widen_cache_affinity_retry_skips_excluded_primary() {
     assert_cache_affinity_retry(&["excluded-primary"]);
 }
 
 #[test]
-fn groq_multiregion_cache_affinity_retry_returns_candidate_slice_indices() {
+fn wait_and_widen_cache_affinity_retry_returns_candidate_slice_indices() {
     let (config, target, candidates, excluded, key) = affinity_retry_fixture(&["excluded-primary"]);
     let request = request(&target, Some(&key), Some(1));
     let primary = cache_affinity_candidate_indices(&config, &request, &candidates)
@@ -1444,14 +1445,14 @@ fn groq_multiregion_cache_affinity_retry_returns_candidate_slice_indices() {
 }
 
 #[test]
-fn groq_multiregion_cache_affinity_retry_skips_multiple_excluded_primaries() {
+fn wait_and_widen_cache_affinity_retry_skips_multiple_excluded_primaries() {
     assert_cache_affinity_retry(&["excluded-a", "excluded-b"]);
 }
 
 #[test]
-fn groq_multiregion_affinity_cache_invalidates_when_candidates_change() {
-    let config = groq_affinity_config(8, 1, None);
-    let lb = GroqMultiregionLoadBalancer::new(config.clone());
+fn wait_and_widen_affinity_cache_invalidates_when_candidates_change() {
+    let config = wait_and_widen_affinity_config(8, 1, None);
+    let lb = WaitAndWidenLoadBalancer::new(config.clone());
     let target = target();
     let first_candidates = candidates(&["old-a", "old-b", "old-c"]);
 
@@ -1475,9 +1476,9 @@ fn groq_multiregion_affinity_cache_invalidates_when_candidates_change() {
 }
 
 #[test]
-fn groq_multiregion_does_not_cache_oversized_affinity_key() {
-    let config = groq_affinity_config(8, 1, None);
-    let lb = GroqMultiregionLoadBalancer::new(config);
+fn wait_and_widen_does_not_cache_oversized_affinity_key() {
+    let config = wait_and_widen_affinity_config(8, 1, None);
+    let lb = WaitAndWidenLoadBalancer::new(config);
     let target = target();
     let oversized_key = "x".repeat(MAX_CACHE_AFFINITY_CACHE_KEY_BYTES + 1);
     let request = request(&target, Some(&oversized_key), Some(1));
@@ -1490,8 +1491,8 @@ fn groq_multiregion_does_not_cache_oversized_affinity_key() {
 }
 
 #[test]
-fn groq_multiregion_cache_affinity_hash_uses_cluster_identity() {
-    let config = groq_affinity_config(8, 1, None);
+fn wait_and_widen_cache_affinity_hash_uses_cluster_identity() {
+    let config = wait_and_widen_affinity_config(8, 1, None);
     let target = target();
     let request = request(&target, Some("prefix-a"), Some(1));
     let candidate = candidate("inst-a", 1024);
@@ -1510,8 +1511,8 @@ fn groq_multiregion_cache_affinity_hash_uses_cluster_identity() {
 }
 
 #[test]
-fn groq_multiregion_cache_affinity_hash_changes_with_routing_key() {
-    let config = groq_affinity_config(8, 1, None);
+fn wait_and_widen_cache_affinity_hash_changes_with_routing_key() {
+    let config = wait_and_widen_affinity_config(8, 1, None);
     let target_a = target_with_routing_key("tenant-a", "shared-model");
     let target_b = target_with_routing_key("tenant-b", "shared-model");
     let request_a = request(&target_a, Some("same-prefix"), Some(1));
@@ -1528,13 +1529,14 @@ fn groq_multiregion_cache_affinity_hash_changes_with_routing_key() {
 }
 
 #[test]
-fn groq_multiregion_cache_affinity_falls_back_when_primary_is_full() {
-    let lb = create_load_balancer_with_config(&groq_affinity_algorithm_config(1, 1, Some(3)))
-        .expect("factory should accept groq-multiregion");
+fn wait_and_widen_cache_affinity_falls_back_when_primary_is_full() {
+    let lb =
+        create_load_balancer_with_config(&wait_and_widen_affinity_algorithm_config(1, 1, Some(3)))
+            .expect("factory should accept wait-and-widen");
     let target = target();
     let request = request(&target, Some("prefix-a"), Some(1));
     let mut candidates = candidates(&["fallback-a", "fallback-b", "fallback-c"]);
-    let primary_config = groq_affinity_config(1, 1, None);
+    let primary_config = wait_and_widen_affinity_config(1, 1, None);
     let primary = cache_affinity_candidates(&primary_config, &request, &candidates)
         .expect("cache affinity should select a primary")[0]
         .cluster_id
@@ -1551,9 +1553,9 @@ fn groq_multiregion_cache_affinity_falls_back_when_primary_is_full() {
 }
 
 #[test]
-fn groq_multiregion_two_affinity_candidates_still_filter_capacity() {
-    let config = groq_affinity_config(8, 2, Some(2));
-    let lb = GroqMultiregionLoadBalancer::new(config.clone());
+fn wait_and_widen_two_affinity_candidates_still_filter_capacity() {
+    let config = wait_and_widen_affinity_config(8, 2, Some(2));
+    let lb = WaitAndWidenLoadBalancer::new(config.clone());
     let target = target();
     let request = request(&target, Some("prefix-a"), Some(1));
     let mut candidates = candidates(&["two-affinity-a", "two-affinity-b", "two-affinity-c"]);
@@ -1575,8 +1577,8 @@ fn groq_multiregion_two_affinity_candidates_still_filter_capacity() {
 }
 
 #[test]
-fn groq_multiregion_cache_affinity_keys_distribute_across_backends() {
-    let config = groq_affinity_config(32, 1, None);
+fn wait_and_widen_cache_affinity_keys_distribute_across_backends() {
+    let config = wait_and_widen_affinity_config(32, 1, None);
     let target = target();
     let candidates = candidates(&["dist-a", "dist-b", "dist-c"]);
     let mut seen = HashSet::new();
@@ -1599,9 +1601,10 @@ fn groq_multiregion_cache_affinity_keys_distribute_across_backends() {
 }
 
 #[test]
-fn groq_multiregion_cache_affinity_is_skipped_without_header() {
-    let lb = create_load_balancer_with_config(&groq_affinity_algorithm_config(1, 1, Some(3)))
-        .expect("factory should accept groq-multiregion");
+fn wait_and_widen_cache_affinity_is_skipped_without_header() {
+    let lb =
+        create_load_balancer_with_config(&wait_and_widen_affinity_algorithm_config(1, 1, Some(3)))
+            .expect("factory should accept wait-and-widen");
     let target = target();
     let request = request(&target, None, Some(1));
     let candidates = [
@@ -1617,8 +1620,8 @@ fn groq_multiregion_cache_affinity_is_skipped_without_header() {
     );
 }
 
-groq_choice_tests! {
-    groq_multiregion_uses_input_tokens_in_ttft_estimate:
+wait_and_widen_choice_tests! {
+    wait_and_widen_uses_input_tokens_in_ttft_estimate:
     |_| {};
     |target| request(target, None, Some(100));
     [
@@ -1627,7 +1630,7 @@ groq_choice_tests! {
     ];
     1 => "higher-rtt-higher-cap";
 
-    groq_multiregion_can_ignore_input_processing_time_in_ttft_estimate:
+    wait_and_widen_can_ignore_input_processing_time_in_ttft_estimate:
     |settings| settings.ignore_input_processing_time = Some(true);
     |target| request(target, None, Some(100));
     [
@@ -1638,8 +1641,8 @@ groq_choice_tests! {
 }
 
 #[test]
-fn groq_multiregion_limits_selection_to_first_ttft_bucket() {
-    let lb = groq_load_balancer(|_| {});
+fn wait_and_widen_limits_selection_to_first_ttft_bucket() {
+    let lb = wait_and_widen_load_balancer(|_| {});
     let target = target();
     let request = request(&target, None, Some(1));
     let candidates = [
@@ -1654,8 +1657,8 @@ fn groq_multiregion_limits_selection_to_first_ttft_bucket() {
     }
 }
 
-groq_choice_tests! {
-    groq_multiregion_can_ignore_queue_time_in_ttft_estimate:
+wait_and_widen_choice_tests! {
+    wait_and_widen_can_ignore_queue_time_in_ttft_estimate:
     |settings| settings.ignore_queue_time = Some(true);
     |target| request(target, None, Some(0));
     [
@@ -1664,7 +1667,7 @@ groq_choice_tests! {
     ];
     1 => "lower-rtt-higher-queue";
 
-    groq_multiregion_ignore_queue_still_compares_sampled_candidates_by_queue_time:
+    wait_and_widen_ignore_queue_still_compares_sampled_candidates_by_queue_time:
     |settings| {
         settings.n = Some(2);
         settings.ignore_queue_time = Some(true);
@@ -1676,7 +1679,7 @@ groq_choice_tests! {
     ];
     16 => "lower-queue";
 
-    groq_multiregion_ignore_queue_keeps_later_prefill_buckets_locked:
+    wait_and_widen_ignore_queue_keeps_later_prefill_buckets_locked:
     |settings| {
         settings.n = Some(2);
         settings.ignore_queue_time = Some(true);
@@ -1690,17 +1693,17 @@ groq_choice_tests! {
 }
 
 #[test]
-fn groq_multiregion_ignore_queue_skips_single_excluded_backend() {
+fn wait_and_widen_ignore_queue_skips_single_excluded_backend() {
     assert_excluded_queue_choice(false, &["excluded"]);
 }
 
 #[test]
-fn groq_multiregion_ignore_queue_skips_multiple_excluded_backends() {
+fn wait_and_widen_ignore_queue_skips_multiple_excluded_backends() {
     assert_excluded_queue_choice(false, &["excluded-a", "excluded-b"]);
 }
 
-groq_choice_tests! {
-    groq_multiregion_deprioritizes_non_finite_ttft_candidates:
+wait_and_widen_choice_tests! {
+    wait_and_widen_deprioritizes_non_finite_ttft_candidates:
     |_| {};
     |target| request(target, None, Some(10));
     [
@@ -1709,7 +1712,7 @@ groq_choice_tests! {
     ];
     1 => "finite";
 
-    groq_multiregion_uses_last_mean_input_tps_for_prefill_estimates:
+    wait_and_widen_uses_last_mean_input_tps_for_prefill_estimates:
     |_| {};
     |target| request(target, None, Some(100));
     [
@@ -1720,8 +1723,8 @@ groq_choice_tests! {
 }
 
 #[test]
-fn groq_multiregion_unlocks_later_ttft_bucket_after_waiting() {
-    let lb = groq_load_balancer(|settings| {
+fn wait_and_widen_unlocks_later_ttft_bucket_after_waiting() {
+    let lb = wait_and_widen_load_balancer(|settings| {
         settings.n = Some(1);
     });
     let target = target();
@@ -1736,8 +1739,8 @@ fn groq_multiregion_unlocks_later_ttft_bucket_after_waiting() {
     assert_eq!(chosen.candidate.cluster_id, "slower-available");
 }
 
-groq_choice_tests! {
-    groq_multiregion_filters_full_backends:
+wait_and_widen_choice_tests! {
+    wait_and_widen_filters_full_backends:
     |_| {};
     |target| request(target, None, Some(1));
     [
@@ -1746,7 +1749,7 @@ groq_choice_tests! {
     ];
     1 => "available";
 
-    groq_multiregion_filters_backends_over_queue_slo:
+    wait_and_widen_filters_backends_over_queue_slo:
     |settings| {
         settings.max_queue_time_floor_ms = Some(5);
         settings.max_queue_time_ceil_ms = Some(5);
@@ -1759,7 +1762,7 @@ groq_choice_tests! {
     ];
     1 => "under-slo";
 
-    groq_multiregion_filters_queue_slo_before_ttft_bucket_locking:
+    wait_and_widen_filters_queue_slo_before_ttft_bucket_locking:
     |settings| {
         settings.max_queue_time_floor_ms = Some(5);
         settings.max_queue_time_ceil_ms = Some(5);
@@ -1772,7 +1775,7 @@ groq_choice_tests! {
     ];
     1 => "under-slo-later-bucket";
 
-    groq_multiregion_queue_slo_still_applies_when_queue_time_is_ignored_for_ttft:
+    wait_and_widen_queue_slo_still_applies_when_queue_time_is_ignored_for_ttft:
     |settings| {
         settings.ignore_queue_time = Some(true);
         settings.max_queue_time_floor_ms = Some(5);
@@ -1788,8 +1791,8 @@ groq_choice_tests! {
 }
 
 #[test]
-fn groq_multiregion_returns_none_when_only_candidate_exceeds_queue_slo() {
-    let lb = groq_load_balancer(|settings| {
+fn wait_and_widen_returns_none_when_only_candidate_exceeds_queue_slo() {
+    let lb = wait_and_widen_load_balancer(|settings| {
         settings.max_queue_time_floor_ms = Some(5);
         settings.max_queue_time_ceil_ms = Some(5);
     });
@@ -1839,8 +1842,8 @@ fn equal_floor_and_ceil_configures_fixed_max_queue_time() {
     );
 }
 
-groq_choice_tests! {
-    groq_multiregion_compares_by_queue_time_within_unlocked_bucket:
+wait_and_widen_choice_tests! {
+    wait_and_widen_compares_by_queue_time_within_unlocked_bucket:
     |settings| settings.n = Some(2);
     |target| request(target, None, Some(1));
     [
@@ -1849,7 +1852,7 @@ groq_choice_tests! {
     ];
     16 => "lower-queue";
 
-    groq_multiregion_rtt_only_still_compares_sampled_candidates_by_queue_time:
+    wait_and_widen_rtt_only_still_compares_sampled_candidates_by_queue_time:
     |settings| {
         settings.n = Some(2);
         settings.ignore_queue_time = Some(true);
@@ -1862,7 +1865,7 @@ groq_choice_tests! {
     ];
     16 => "lower-queue";
 
-    groq_multiregion_rtt_only_filters_full_backends_before_sampling:
+    wait_and_widen_rtt_only_filters_full_backends_before_sampling:
     |settings| {
         settings.n = Some(2);
         settings.ignore_queue_time = Some(true);
@@ -1875,7 +1878,7 @@ groq_choice_tests! {
     ];
     1 => "available";
 
-    groq_multiregion_rtt_only_keeps_later_rtt_buckets_locked:
+    wait_and_widen_rtt_only_keeps_later_rtt_buckets_locked:
     |settings| {
         settings.n = Some(2);
         settings.ignore_queue_time = Some(true);
@@ -1890,17 +1893,17 @@ groq_choice_tests! {
 }
 
 #[test]
-fn groq_multiregion_rtt_only_skips_single_excluded_backend() {
+fn wait_and_widen_rtt_only_skips_single_excluded_backend() {
     assert_excluded_queue_choice(true, &["excluded"]);
 }
 
 #[test]
-fn groq_multiregion_rtt_only_skips_multiple_excluded_backends() {
+fn wait_and_widen_rtt_only_skips_multiple_excluded_backends() {
     assert_excluded_queue_choice(true, &["excluded-a", "excluded-b"]);
 }
 
-groq_choice_tests! {
-    groq_multiregion_uses_priority_queue_time_estimate:
+wait_and_widen_choice_tests! {
+    wait_and_widen_uses_priority_queue_time_estimate:
     |settings| settings.n = Some(2);
     |target| request_with_priority(target, None, Some(0), 4);
     [
@@ -1912,25 +1915,25 @@ groq_choice_tests! {
 }
 
 #[test]
-fn groq_multiregion_ttft_estimator_uses_priority_queue_and_ignore_flags() {
+fn wait_and_widen_ttft_estimator_uses_priority_queue_and_ignore_flags() {
     let mut candidate = work_candidate("estimated", 7, 100.0, 999);
     candidate.stats.queue_time_estimate_ms_by_priority = HashMap::from([(4, 25)]);
 
-    let full = groq_multiregion_ttft_components(&candidate, Some(200), 4, false, false);
+    let full = wait_and_widen_ttft_components(&candidate, Some(200), 4, false, false);
     assert_eq!(full.queue_ms, 25.0);
     assert_eq!(full.ttft_ms, 2032.0);
 
-    let ignore_queue = groq_multiregion_ttft_components(&candidate, Some(200), 4, true, false);
+    let ignore_queue = wait_and_widen_ttft_components(&candidate, Some(200), 4, true, false);
     assert_eq!(ignore_queue.queue_ms, 25.0);
     assert_eq!(ignore_queue.ttft_ms, 2007.0);
 
-    let ignore_prefill = groq_multiregion_ttft_components(&candidate, Some(200), 4, false, true);
+    let ignore_prefill = wait_and_widen_ttft_components(&candidate, Some(200), 4, false, true);
     assert_eq!(ignore_prefill.queue_ms, 25.0);
     assert_eq!(ignore_prefill.ttft_ms, 32.0);
 }
 
-groq_choice_tests! {
-    groq_multiregion_clamps_priority_to_max_known_queue_time_priority:
+wait_and_widen_choice_tests! {
+    wait_and_widen_clamps_priority_to_max_known_queue_time_priority:
     |settings| settings.n = Some(2);
     |target| request_with_priority(target, None, Some(0), 10);
     [
@@ -1939,7 +1942,7 @@ groq_choice_tests! {
     ];
     16 => "lower-clamped-queue";
 
-    groq_multiregion_uses_next_highest_priority_queue_time_estimate:
+    wait_and_widen_uses_next_highest_priority_queue_time_estimate:
     |settings| settings.n = Some(2);
     |target| request_with_priority(target, None, Some(0), 3);
     [
@@ -1948,7 +1951,7 @@ groq_choice_tests! {
     ];
     16 => "lower-queue";
 
-    groq_multiregion_treats_lower_priority_only_queue_as_zero_for_higher_priority_request:
+    wait_and_widen_treats_lower_priority_only_queue_as_zero_for_higher_priority_request:
     |settings| settings.n = Some(2);
     |target| request_with_priority(target, None, Some(0), 0);
     [

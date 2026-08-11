@@ -18,7 +18,7 @@ metadata:
   description: Coding-session load run with 64k-token initial contexts and small appended turns across heterogeneous routing clusters.
   tags: [load-balance, grouped-pylons, multi-stargate, heterogeneous, cache, prefix-reuse, coding-session, pulsar]
   expected_runtime: medium
-  expected_signal: Compare cache-affine GMR and no-SLO PULSAR/PULSAR-multiregion cache-primary behavior against TTFT-first routing while heterogeneous cluster capacity shapes latency under misses.
+  expected_signal: Compare cache-affine WaitAndWiden and no-SLO PULSAR/PULSAR-wait-and-widen cache-primary behavior against TTFT-first routing while heterogeneous cluster capacity shapes latency under misses.
 model: dummy-model
 seed: 705
 request_count: 128
@@ -118,16 +118,16 @@ algorithms:
   - name: random
     config:
       default: random
-  - name: groq-multiregion
+  - name: wait-and-widen
     config:
-      default: groq-multiregion
-  - name: groq-multiregion-affinity
+      default: wait-and-widen
+  - name: wait-and-widen-affinity
     config:
       default: power-of-two
       models:
         dummy-model:
-          algorithm: groq-multiregion
-          seed: growing-prefix-load-gmr-affinity-v1
+          algorithm: wait-and-widen
+          seed: growing-prefix-load-wait-and-widen-affinity-v1
           require_cache_affinity_key: true
           require_input_tokens: true
           cache_affinity_backend_selection_count: 1
@@ -149,21 +149,21 @@ algorithms:
           seed: growing-prefix-load-v1
           require_cache_affinity_key: true
           consider_kv_free_tokens: true
-  - name: pulsar-multiregion
+  - name: pulsar-wait-and-widen
     config:
       default: power-of-two
       models:
         dummy-model:
-          algorithm: pulsar-multiregion
+          algorithm: pulsar-wait-and-widen
           seed: growing-prefix-load-v1
           require_cache_affinity_key: true
           require_input_tokens: true
-  - name: pulsar-multiregion-consider-kv-free-tokens
+  - name: pulsar-wait-and-widen-consider-kv-free-tokens
     config:
       default: power-of-two
       models:
         dummy-model:
-          algorithm: pulsar-multiregion
+          algorithm: pulsar-wait-and-widen
           seed: growing-prefix-load-v1
           require_cache_affinity_key: true
           consider_kv_free_tokens: true

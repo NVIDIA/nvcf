@@ -13,12 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-name: lb-balance-prefix-reuse-pmr-slo-4c2p-1s
+name: lb-balance-prefix-reuse-pulsar-wait-and-widen-slo-4c2p-1s
 metadata:
-  description: Controlled coding-session run for measuring PULSAR-multiregion ranked fallback when an affine primary exceeds an explicit queue SLO.
-  tags: [load-balance, grouped-pylons, heterogeneous, cache, prefix-reuse, coding-session, pulsar, pmr-fallback]
+  description: Controlled coding-session run for measuring PULSAR-wait-and-widen ranked fallback when an affine primary exceeds an explicit queue SLO.
+  tags: [load-balance, grouped-pylons, heterogeneous, cache, prefix-reuse, coding-session, pulsar, pulsar-wait-and-widen-fallback]
   expected_runtime: medium
-  expected_signal: At a controlled 8 req/s offered rate, PULSAR-multiregion must record nonzero fallback route choices under its 4000 ms queue SLO while pylon queue-mismatch admission is disabled; compare its TTFT, cache reuse, and cluster input-capacity balance with the same-ranking PULSAR control.
+  expected_signal: At a controlled 8 req/s offered rate, PULSAR-wait-and-widen must record nonzero fallback route choices under its 4000 ms queue SLO while pylon queue-mismatch admission is disabled; compare its TTFT, cache reuse, and cluster input-capacity balance with the same-ranking PULSAR control.
 model: dummy-model
 seed: 706
 request_count: 128
@@ -111,15 +111,15 @@ traffic_pattern:
     target_rps: 8
 
 algorithms:
-  - name: groq-multiregion-affinity
+  - name: wait-and-widen-affinity
     pylon_queue_admission:
       enabled: false
     config:
       default: power-of-two
       models:
         dummy-model:
-          algorithm: groq-multiregion
-          seed: growing-prefix-pmr-slo-gmr-affinity-v1
+          algorithm: wait-and-widen
+          seed: growing-prefix-pulsar-wait-and-widen-slo-wait-and-widen-affinity-v1
           require_cache_affinity_key: true
           require_input_tokens: true
           cache_affinity_backend_selection_count: 1
@@ -131,18 +131,18 @@ algorithms:
       models:
         dummy-model:
           algorithm: pulsar
-          seed: growing-prefix-pmr-slo-v1
+          seed: growing-prefix-pulsar-wait-and-widen-slo-v1
           require_cache_affinity_key: true
           require_input_tokens: true
-  - name: pulsar-multiregion
+  - name: pulsar-wait-and-widen
     pylon_queue_admission:
       enabled: false
     config:
       default: power-of-two
       models:
         dummy-model:
-          algorithm: pulsar-multiregion
-          seed: growing-prefix-pmr-slo-v1
+          algorithm: pulsar-wait-and-widen
+          seed: growing-prefix-pulsar-wait-and-widen-slo-v1
           require_cache_affinity_key: true
           require_input_tokens: true
           # A full uncached prefill costs 1 s on the fast cluster, 2 s on a

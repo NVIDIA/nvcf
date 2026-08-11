@@ -92,7 +92,7 @@ enum Command {
     Run(RunArgs),
     /// Compare Raw QUIC, HTTP/3, and WebTransport tunnel transports on loopback
     TransportBench(TransportBenchArgs),
-    /// Measure in-process groq-multiregion/pulsar load-balancer choose-path overhead
+    /// Measure in-process wait-and-widen/pulsar load-balancer choose-path overhead
     LbMicrobench {
         #[arg(long, default_value_t = 100_000, value_name = "N")]
         iterations: usize,
@@ -733,7 +733,7 @@ pylon_requests_total_total{model="dummy-model",status="complete"} 3
         std::fs::create_dir(&run_dir).expect("run dir should create");
         std::fs::write(
             run_dir.join("run-info.json"),
-            r#"{"algorithm_name":"groq-multiregion","extra_metadata":"ignored"}"#,
+            r#"{"algorithm_name":"wait-and-widen","extra_metadata":"ignored"}"#,
         )
         .expect("run-info should write");
 
@@ -741,7 +741,7 @@ pylon_requests_total_total{model="dummy-model",status="complete"} 3
             read_run_info(&run_dir)
                 .expect("run-info extra fields should be ignored")
                 .algorithm_name,
-            "groq-multiregion"
+            "wait-and-widen"
         );
     }
 
@@ -753,7 +753,7 @@ pylon_requests_total_total{model="dummy-model",status="complete"} 3
             &manifest_for_report_test(),
         )
         .expect("manifest should write");
-        let run_dir = tempdir.path().join("run-groq-admission-enabled");
+        let run_dir = tempdir.path().join("run-wait-and-widen-admission-enabled");
         std::fs::create_dir(&run_dir).expect("run dir should create");
         let summary = summarize_with_capacity(&[], std::collections::BTreeMap::new());
         std::fs::write(
@@ -764,7 +764,7 @@ pylon_requests_total_total{model="dummy-model",status="complete"} 3
         std::fs::write(
             run_dir.join("run-info.json"),
             r#"{
-                "algorithm_name": "groq-admission-enabled",
+                "algorithm_name": "wait-and-widen-admission-enabled",
                 "pylon_queue_admission": {
                     "enabled": true,
                     "min_delta_ms": 0,
@@ -782,7 +782,7 @@ pylon_requests_total_total{model="dummy-model",status="complete"} 3
         let report =
             std::fs::read_to_string(tempdir.path().join("report.md")).expect("report should read");
         assert!(report.contains("# Benchmark Report: report-regeneration-test"));
-        assert!(report.contains("| groq-admission-enabled | enabled"));
+        assert!(report.contains("| wait-and-widen-admission-enabled | enabled"));
         assert!(!report.contains("run-missing-summary"));
     }
 
@@ -1049,19 +1049,19 @@ pylon_requests_total_total{model="dummy-model",status="complete"} 3
             "power-of-two",
             "round-robin",
             "random",
-            "groq-multiregion",
+            "wait-and-widen",
             "pulsar",
         ];
         const PREFIX_ALGORITHMS: &[&str] = &[
             "power-of-two",
             "round-robin",
             "random",
-            "groq-multiregion",
-            "groq-multiregion-affinity",
+            "wait-and-widen",
+            "wait-and-widen-affinity",
             "pulsar",
             "pulsar-consider-kv-free-tokens",
-            "pulsar-multiregion",
-            "pulsar-multiregion-consider-kv-free-tokens",
+            "pulsar-wait-and-widen",
+            "pulsar-wait-and-widen-consider-kv-free-tokens",
         ];
         for (scenario, clusters, pylons_per_cluster, stargates) in [
             ("lb-balance-smoke-2c2p-1s", 2, 2, 1),
@@ -1087,35 +1087,35 @@ pylon_requests_total_total{model="dummy-model",status="complete"} 3
             };
             assert_eq!(algorithm_names(&config), expected_algorithms, "{scenario}");
             if prefix_reuse {
-                let affinity = model_config(&config, "groq-multiregion-affinity");
+                let affinity = model_config(&config, "wait-and-widen-affinity");
                 assert_eq!(
                     (
                         affinity["algorithm"].as_str(),
                         affinity["require_cache_affinity_key"].as_bool(),
                         affinity["cache_affinity_backend_selection_count"].as_u64(),
                     ),
-                    (Some("groq-multiregion"), Some(true), Some(1)),
+                    (Some("wait-and-widen"), Some(true), Some(1)),
                     "{scenario}"
                 );
-                let multiregion = model_config(&config, "pulsar-multiregion");
+                let wait_and_widen = model_config(&config, "pulsar-wait-and-widen");
                 assert_eq!(
                     (
-                        multiregion["algorithm"].as_str(),
-                        multiregion["require_cache_affinity_key"].as_bool(),
+                        wait_and_widen["algorithm"].as_str(),
+                        wait_and_widen["require_cache_affinity_key"].as_bool(),
                     ),
-                    (Some("pulsar-multiregion"), Some(true)),
+                    (Some("pulsar-wait-and-widen"), Some(true)),
                     "{scenario}"
                 );
                 let pulsar = model_config(&config, "pulsar");
                 assert_eq!(
-                    multiregion["seed"], pulsar["seed"],
+                    wait_and_widen["seed"], pulsar["seed"],
                     "{scenario} should compare PULSAR fallback modes over the same cache-owner ranking"
                 );
                 for (name, algorithm) in [
                     ("pulsar-consider-kv-free-tokens", "pulsar"),
                     (
-                        "pulsar-multiregion-consider-kv-free-tokens",
-                        "pulsar-multiregion",
+                        "pulsar-wait-and-widen-consider-kv-free-tokens",
+                        "pulsar-wait-and-widen",
                     ),
                 ] {
                     let kv_model = model_config(&config, name);
@@ -1134,16 +1134,16 @@ pylon_requests_total_total{model="dummy-model",status="complete"} 3
     }
 
     #[test]
-    fn pulsar_multiregion_slo_scenario_is_a_controlled_fallback_comparison() {
-        let config = load_scenario("lb-balance-prefix-reuse-pmr-slo-4c2p-1s");
+    fn pulsar_wait_and_widen_slo_scenario_is_a_controlled_fallback_comparison() {
+        let config = load_scenario("lb-balance-prefix-reuse-pulsar-wait-and-widen-slo-4c2p-1s");
 
         config
             .validate()
-            .expect("controlled PMR fallback scenario should validate");
+            .expect("controlled PulsarWaitAndWiden fallback scenario should validate");
         assert_eq!(topology(&config), (4, 2, 1));
         assert_eq!(
             algorithm_names(&config),
-            ["groq-multiregion-affinity", "pulsar", "pulsar-multiregion"]
+            ["wait-and-widen-affinity", "pulsar", "pulsar-wait-and-widen"]
         );
         assert!(config.algorithms.iter().all(|algorithm| {
             algorithm
@@ -1155,15 +1155,15 @@ pylon_requests_total_total{model="dummy-model",status="complete"} 3
             crate::config::TrafficPatternConfig::PrefixReuse(prefix) => assert_eq!(
                 prefix.arrival,
                 crate::config::ArrivalPatternConfig::Poisson { target_rps: 8.0 },
-                "controlled PMR fallback evidence must not overload every candidate at once"
+                "controlled PulsarWaitAndWiden fallback evidence must not overload every candidate at once"
             ),
-            _ => panic!("controlled PMR scenario must use growing prefixes"),
+            _ => panic!("controlled PulsarWaitAndWiden scenario must use growing prefixes"),
         }
-        let pmr = model_config(&config, "pulsar-multiregion");
+        let pulsar_wait_and_widen = model_config(&config, "pulsar-wait-and-widen");
         for key in ["max_queue_time_floor_ms", "max_queue_time_ceil_ms"] {
             assert_eq!(
-                pmr[key], 4000,
-                "controlled PMR scenario must leave enough queue budget for useful fallback routing"
+                pulsar_wait_and_widen[key], 4000,
+                "controlled PulsarWaitAndWiden scenario must leave enough queue budget for useful fallback routing"
             );
         }
     }
