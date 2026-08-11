@@ -136,7 +136,7 @@ Optional trusted headers:
 | `x-routing-key` | Authenticated routing scope. Omit for unscoped. |
 | `x-routing-method` | Request-scoped load-balancer override, only for methods allowed by Stargate config. |
 | `x-cache-affinity-key` | Opaque cache/prefix identity. Required by some LB configs. |
-| `x-priority` | Unsigned priority, default `0`. |
+| `x-priority` | Unsigned priority rank; lower is more urgent and `0` is the most urgent. Omit when no priority is resolved. Never synthesize `0` for unconfigured requests: absence maps to the lowest engine priority, while `0` maps to the highest. Stargate treats an absent header as `0` for its own queue accounting only. |
 | `x-request-slo-ms` | Per-request LB latency hint. |
 | `x-max-wait-ms` | Wait budget for temporarily infeasible candidates. |
 | `x-stargate-max-wait-ms` | Stargate internal retry budget. |
