@@ -1,10 +1,10 @@
 Event Ledger has been deployed.
 
 Service DNS (in-cluster):
-  event-ledger.{{ include "nvcf-event-ledger.namespace" . }}.svc.cluster.local:8080
+  {{ include "nvcf-event-ledger.fullname" . }}.{{ include "nvcf-event-ledger.namespace" . }}.svc.cluster.local:8080
 
 Health check:
-  kubectl -n {{ include "nvcf-event-ledger.namespace" . }} port-forward svc/event-ledger 8080
+  kubectl -n {{ include "nvcf-event-ledger.namespace" . }} port-forward svc/{{ include "nvcf-event-ledger.fullname" . }} 8080
   curl http://localhost:8080/health
 
 Metrics (Prometheus):
