@@ -30,6 +30,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -131,6 +132,10 @@ func TestRun(t *testing.T) {
 	origPlain := plainHTTP
 	plainHTTP = true
 	t.Cleanup(func() { plainHTTP = origPlain })
+
+	origDisable := disableSafeDialer
+	disableSafeDialer = true
+	t.Cleanup(func() { disableSafeDialer = origDisable })
 
 	h, err := NewHandler(logger, "reval", HandlerOptions{})
 	require.NoError(t, err)
@@ -1470,6 +1475,15 @@ func Test_validateHelmChartURL(t *testing.T) {
 		[]error{fmt.Errorf("helm chart URL must not point to private networks")},
 		validateHelmChartURL("https://[fc00::1]/chart"),
 	)
+	// IPv6 link-local (fe80::/10) and unique-local (fd00::/8) are also rejected.
+	assert.Equal(t,
+		[]error{fmt.Errorf("helm chart URL must not point to private networks")},
+		validateHelmChartURL("https://[fe80::1]/chart"),
+	)
+	assert.Equal(t,
+		[]error{fmt.Errorf("helm chart URL must not point to private networks")},
+		validateHelmChartURL("https://[fd00::1]/chart"),
+	)
 
 	// Public IPs are allowed.
 	assert.Empty(t, validateHelmChartURL("https://1.2.3.4/chart"))
@@ -1508,6 +1522,126 @@ func Test_isPrivateIP(t *testing.T) {
 	for _, tt := range tests {
 		assert.Equal(t, tt.private, isPrivateIP(tt.host), "host: %s", tt.host)
 	}
+}
+
+func Test_newSafeDialContext(t *testing.T) {
+	origLookup := defaultLookupHost
+	t.Cleanup(func() { defaultLookupHost = origLookup })
+
+	dialer := &net.Dialer{Timeout: 1 * time.Second}
+	dial := newSafeDialContext(dialer)
+	ctx := context.Background()
+
+	isSSRFError := func(err error) bool {
+		return err != nil && strings.Contains(err.Error(), "blocked address")
+	}
+
+	tests := []struct {
+		name        string
+		addr        string
+		resolves    []string // non-nil overrides defaultLookupHost for this case
+		wantBlocked bool
+	}{
+		// IP literals: blocked before any dial attempt.
+		{name: "loopback v4", addr: "127.0.0.1:443", wantBlocked: true},
+		{name: "private 10/8", addr: "10.0.0.1:443", wantBlocked: true},
+		{name: "private 172.16/12", addr: "172.16.0.1:443", wantBlocked: true},
+		{name: "private 192.168/16", addr: "192.168.1.1:443", wantBlocked: true},
+		{name: "link-local v4", addr: "169.254.169.254:80", wantBlocked: true},
+		{name: "loopback v6", addr: "[::1]:443", wantBlocked: true},
+		{name: "link-local v6 fe80", addr: "[fe80::1]:443", wantBlocked: true},
+		{name: "unique-local v6 fc00", addr: "[fc00::1]:443", wantBlocked: true},
+		{name: "unique-local v6 fd00", addr: "[fd00::1]:443", wantBlocked: true},
+		// Hostname resolved to private IP: blocked.
+		{name: "hostname → private 10/8", addr: "evil.example.com:443", resolves: []string{"10.0.0.1"}, wantBlocked: true},
+		{name: "hostname → link-local v6", addr: "evil.example.com:443", resolves: []string{"fe80::1"}, wantBlocked: true},
+		// Any private address in a multi-IP response blocks the connection.
+		{name: "hostname → mixed private+public", addr: "evil.example.com:443", resolves: []string{"1.2.3.4", "10.0.0.1"}, wantBlocked: true},
+		// Public IP literals and hostnames: not blocked by the SSRF check (connection fails for unrelated reasons).
+		{name: "public IP literal", addr: "1.2.3.4:443", wantBlocked: false},
+		{name: "hostname → public IP", addr: "example.com:443", resolves: []string{"1.2.3.4"}, wantBlocked: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.resolves != nil {
+				defaultLookupHost = func(_ context.Context, _ string) ([]string, error) {
+					return tt.resolves, nil
+				}
+			} else {
+				defaultLookupHost = origLookup
+			}
+
+			_, err := dial(ctx, "tcp", tt.addr)
+
+			if tt.wantBlocked {
+				assert.True(t, isSSRFError(err), "expected SSRF block error, got: %v", err)
+			} else {
+				// Connection may fail (no server), but the reason must not be our SSRF check.
+				assert.False(t, isSSRFError(err), "unexpected SSRF block error: %v", err)
+			}
+		})
+	}
+}
+
+func Test_checkRedirect(t *testing.T) {
+	checkRedirect := func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return fmt.Errorf("stopped after 10 redirects")
+		}
+		if isPrivateIP(req.URL.Hostname()) {
+			return fmt.Errorf("redirect to blocked address %q is not allowed", req.URL.Hostname())
+		}
+		return nil
+	}
+
+	makeReq := func(rawURL string) *http.Request {
+		u, _ := url.Parse(rawURL)
+		return &http.Request{URL: u}
+	}
+
+	t.Run("blocks private IPv4 redirect", func(t *testing.T) {
+		err := checkRedirect(makeReq("https://10.0.0.1/"), nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "blocked address")
+	})
+
+	t.Run("blocks loopback IPv4 redirect", func(t *testing.T) {
+		err := checkRedirect(makeReq("https://127.0.0.1/"), nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "blocked address")
+	})
+
+	t.Run("blocks IPv6 link-local redirect", func(t *testing.T) {
+		err := checkRedirect(makeReq("https://[fe80::1]/"), nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "blocked address")
+	})
+
+	t.Run("blocks IPv6 loopback redirect", func(t *testing.T) {
+		err := checkRedirect(makeReq("https://[::1]/"), nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "blocked address")
+	})
+
+	t.Run("allows public IP redirect", func(t *testing.T) {
+		err := checkRedirect(makeReq("https://1.2.3.4/"), nil)
+		assert.NoError(t, err)
+	})
+
+	t.Run("allows hostname redirect (DNS check happens at dial time)", func(t *testing.T) {
+		// CheckRedirect only blocks literal private IPs; hostname-based
+		// redirects that resolve to private IPs are caught by the safe DialContext.
+		err := checkRedirect(makeReq("https://internal.corp/"), nil)
+		assert.NoError(t, err)
+	})
+
+	t.Run("limits redirect count", func(t *testing.T) {
+		via := make([]*http.Request, 10)
+		err := checkRedirect(makeReq("https://1.2.3.4/"), via)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "10 redirects")
+	})
 }
 
 func Test_shouldSkipValidateImages(t *testing.T) {

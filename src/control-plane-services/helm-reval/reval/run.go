@@ -37,6 +37,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 	credhelper "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/imagecredential"
@@ -73,8 +74,10 @@ type Handler struct {
 	Logger      *zap.Logger
 	ServiceName string
 
-	httpClient      *http.Client
-	newImageChecker func() imageChecker
+	httpClient          *http.Client
+	safeTransport       *http.Transport // for h.httpClient (ORAS / image checks)
+	helmGetterTransport *http.Transport // for the Helm HTTPS getter (DisableCompression: true)
+	newImageChecker     func() imageChecker
 	// Image cache should be shared between threads.
 	imageCache cache.ImageCache
 	serializer *serializerImpl
@@ -175,12 +178,36 @@ func NewHandler(
 		HandlerOptions: opts,
 	}
 
+	dialer := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
 	trpt := http.DefaultTransport.(*http.Transport).Clone()
+	if !disableSafeDialer {
+		trpt.DialContext = newSafeDialContext(dialer)
+	}
 	if plainHTTP {
 		trpt.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	}
+	h.safeTransport = trpt
+
+	// Helm's HTTPGetter expects raw gzip/tar from the server; Go's http client
+	// must not auto-decompress "Content-Encoding: gzip" responses for it.
+	helmTrpt := trpt.Clone()
+	helmTrpt.DisableCompression = true
+	h.helmGetterTransport = helmTrpt
+
 	h.httpClient = &http.Client{
 		Transport: retry.NewTransport(trpt),
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("stopped after 10 redirects")
+			}
+			if isPrivateIP(req.URL.Hostname()) {
+				return fmt.Errorf("redirect to blocked address %q is not allowed", req.URL.Hostname())
+			}
+			return nil
+		},
 	}
 	h.imageCache = cache.NewImageCache(h.Logger)
 	h.newImageChecker = func() imageChecker {
@@ -447,6 +474,52 @@ func isPrivateIP(host string) bool {
 		}
 	}
 	return false
+}
+
+var (
+	// disableSafeDialer bypasses newSafeDialContext in NewHandler. For testing only — mirrors plainHTTP.
+	disableSafeDialer bool
+
+	// defaultLookupHost resolves a hostname to IP addresses. Injectable for tests.
+	defaultLookupHost = net.DefaultResolver.LookupHost
+)
+
+// newSafeDialContext returns a DialContext that resolves hostnames, rejects any
+// resolved private or blocked address, and then dials validated IPs directly
+// (preventing DNS rebinding via TOCTOU re-resolution).
+func newSafeDialContext(base *net.Dialer) func(context.Context, string, string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		candidates := []string{host}
+		if net.ParseIP(host) == nil {
+			// Hostname: resolve DNS, then validate every returned address.
+			ips, err := defaultLookupHost(ctx, host)
+			if err != nil {
+				return nil, err
+			}
+			candidates = ips
+		}
+		for _, ip := range candidates {
+			if isPrivateIP(ip) {
+				return nil, fmt.Errorf("connection to blocked address %q is not allowed (resolved from %q)", ip, host)
+			}
+		}
+		// Dial validated IPs directly — skipping re-resolution prevents DNS rebinding.
+		var firstErr error
+		for _, ip := range candidates {
+			conn, err := base.DialContext(ctx, network, net.JoinHostPort(ip, port))
+			if err == nil {
+				return conn, nil
+			}
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+		return nil, firstErr
+	}
 }
 
 func validateHelmChartURL(urlStr string) (errs []error) {
