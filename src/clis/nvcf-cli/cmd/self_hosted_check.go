@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -45,6 +46,7 @@ var (
 	checkClusterValidatorImage      string
 	checkClusterValidatorPullSecret string
 	checkClusterValidatorNoCleanup  bool
+	checkClusterValidatorRegistries []string
 	checkShowLogs                   bool
 )
 
@@ -58,8 +60,18 @@ var newClusterValidatorForSelfHosted = func() selfhosted.ClusterValidator {
 	return selfhosted.NewClusterValidator()
 }
 
+// Test seam.
+var newStaleNamespaceProberForSelfHosted = func() selfhosted.StaleNamespaceProber {
+	return selfhosted.NewStaleNamespaceProber()
+}
+
 // Test seam. Tests stub this to skip the registry network call.
 var resolveLatestValidatorTagForSelfHosted = selfhosted.ResolveLatestValidatorTag
+
+// Test seam.
+var newRegistryCredentialCheckerForSelfHosted = func() selfhosted.RegistryCredentialChecker {
+	return selfhosted.NewRegistryCredentialChecker()
+}
 
 var checkWriterIsTTY = isWriterTTY
 
@@ -100,6 +112,13 @@ func init() {
 	selfHostedCheckCmd.Flags().BoolVar(&checkClusterValidatorNoCleanup, "no-cleanup", false,
 		"Disable the validator Job's TTL so the Job persists for debugging. "+
 			"The next run still deletes prior Jobs via the singleton sweep.")
+	selfHostedCheckCmd.Flags().StringSliceVar(&checkClusterValidatorRegistries, "cluster-validator-registries", nil,
+		"Additional container registries to probe for reachability in the control-plane validator. "+
+			"Format: host:port (e.g. harbor.company.internal:443,ghcr.io:443). "+
+			"nvcr.io is always included. Env: NVCF_CLI_CLUSTER_VALIDATOR_REGISTRIES. "+
+			"Can also be set in nvcf-cli config as cluster_validator_registries (list).")
+	_ = viper.BindPFlag("cluster_validator_registries",
+		selfHostedCheckCmd.Flags().Lookup("cluster-validator-registries"))
 	selfHostedCheckCmd.Flags().BoolVar(&checkShowLogs, "show-logs", false,
 		"Print the cleaned cluster-validator transcript to stderr after the check events. "+
 			"Useful when piping --json output to a script that also wants the transcript.")
@@ -113,17 +132,25 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	localOnly := checkLocalOnly || os.Getenv("NVCF_CLI_SELFHOSTED_LOCAL_ONLY") != ""
 	skipClusterValidation := checkSkipClusterValidation || os.Getenv("NVCF_CLI_SELFHOSTED_SKIP_CLUSTER_VALIDATION") != ""
 
+	// Mode is needed before image resolution so computePlaneIsTargeted can
+	// gate the registry round trip. ValidateFlags in PersistentPreRunE
+	// guarantees mode is ModeSingle or ModeSplit here.
+	mode := kubectx.SelectMode(selfHostedControlPlaneContext, selfHostedComputePlaneContext)
+
 	// Resolve the validator image up-front so we can right-size the
 	// outer timeout (only when the validator actually runs) and emit a
 	// one-shot stderr note up-front explaining why no validator row
 	// appears in the output. Empty == not configured anywhere.
+	// One image covers both roles (VALIDATOR_ROLE selects the check set).
+	anyValidatorIsTargeted := !localOnly && !skipClusterValidation &&
+		(computePlaneIsTargeted(mode) || controlPlaneIsTargeted(mode))
 	clusterValidatorImage := ""
-	if !localOnly && !skipClusterValidation && (checkPre || checkAll) {
+	if anyValidatorIsTargeted {
 		if img, ok := resolveClusterValidatorImage(c.Context()); ok {
 			clusterValidatorImage = img
 		}
 	}
-	clusterValidatorWillRun := !localOnly && !skipClusterValidation && (checkPre || checkAll) && clusterValidatorImage != ""
+	clusterValidatorWillRun := anyValidatorIsTargeted && clusterValidatorImage != ""
 
 	// The cluster-validator Job's internal budget is 5m
 	// (selfhosted.clusterValidatorTimeout). The outer ctx must be at least
@@ -154,7 +181,7 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	// validator row" with "validator silently dropped". Print at most one
 	// reason; --skip-cluster-validation takes precedence over missing
 	// config since it's the explicit operator choice.
-	if !localOnly && (checkPre || checkAll) {
+	if !localOnly && (computePlaneIsTargeted(mode) || controlPlaneIsTargeted(mode)) {
 		switch {
 		case skipClusterValidation:
 			fmt.Fprintln(c.ErrOrStderr(), "note: cluster-validator skipped (--skip-cluster-validation)")
@@ -163,9 +190,27 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 		}
 	}
 
+	// Enumerate registries for the local credential check. Skipped when
+	// local-only (no network) or when no validator image is configured.
+	// Uses the same extras list as the in-cluster ConfigMap reachability check.
+	var (
+		credEntries     []selfhosted.RegistryEntry
+		registryChecker selfhosted.RegistryCredentialChecker
+	)
+	if !localOnly && clusterValidatorImage != "" {
+		extraRegistries := viper.GetStringSlice("cluster_validator_registries")
+		stackValuesFile := resolveStackValuesFile()
+		credEntries = selfhosted.EnumerateRegistries(
+			clusterValidatorImage, stackValuesFile, extraRegistries,
+		)
+		registryChecker = newRegistryCredentialCheckerForSelfHosted()
+	}
+
 	cfg := selfhosted.PreflightConfig{
-		LocalOnly: localOnly,
-		Tools:     selfHostedPreflightTools(),
+		LocalOnly:       localOnly,
+		Tools:           selfHostedPreflightTools(),
+		Registries:      credEntries,
+		RegistryChecker: registryChecker,
 	}
 
 	sink, err := selectCheckRenderer(c.ErrOrStderr(), selfHostedWait != "")
@@ -181,8 +226,8 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 
 	runOnce := func() []selfhosted.CheckResult {
 		var results []selfhosted.CheckResult
-		if checkPre || checkAll {
-			results = append(results, runPreflightByRole(ctx, cfg, sink, clusterValidatorImage)...)
+		if checkPre || checkAll || checkControlPlane || checkComputePlane {
+			results = append(results, runPreflightByRole(ctx, cfg, sink, mode, clusterValidatorImage)...)
 		}
 		// Inject force-fail seam for tests.
 		if os.Getenv("NVCF_CLI_SELFHOSTED_FORCE_FAIL") != "" {
@@ -194,7 +239,6 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 				Message:  "forced failure (test seam)",
 			}}, results...)
 		}
-		// control-plane / compute-plane wired in M3/M4 — placeholder no-op for M2.
 		return results
 	}
 
@@ -238,6 +282,44 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 			return ctx.Err()
 		}
 	}
+}
+
+// resolveStackValuesFile walks up from the current working directory to find
+// the active environment values YAML. Returns "" when not found so callers
+// skip the optional lookup gracefully.
+func resolveStackValuesFile() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	// Walk up to 6 directory levels to find the stack environments directory.
+	dir := cwd
+	for i := 0; i < 6; i++ {
+		candidate := filepath.Join(dir,
+			"deploy", "stacks", "self-managed", "environments", "local.yaml")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return ""
+}
+
+// computePlaneIsTargeted reports whether the compute-plane validator should run:
+// --compute-plane, --all, or --pre in ModeSingle. --pre in ModeSplit does not
+// target it because separate clusters have no implicit compute-plane role.
+func computePlaneIsTargeted(mode kubectx.Mode) bool {
+	return checkComputePlane || checkAll || (checkPre && mode == kubectx.ModeSingle)
+}
+
+// controlPlaneIsTargeted mirrors computePlaneIsTargeted but for the control
+// plane. Runs when: --control-plane, --all, or --pre in ModeSingle.
+func controlPlaneIsTargeted(mode kubectx.Mode) bool {
+	return checkControlPlane || checkAll || (checkPre && mode == kubectx.ModeSingle)
 }
 
 // maybeShowClusterValidatorLogs prints the cleaned cluster-validator transcript
@@ -296,10 +378,10 @@ func selectCheckRenderer(w io.Writer, wait bool) (progress.EventSink, error) {
 //   - ModeSingle (no context flags)           → RoleControlPlane + RoleComputePlane sequentially
 //   - ModeSplit  (both context flags set)     → RoleControlPlane + RoleComputePlane in parallel
 //
-// clusterValidatorImage is the already-resolved validator image (empty when
-// not configured). Resolution happens in the caller so the outer-timeout
-// and stderr-note logic can see the same answer this function does.
-func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sink progress.EventSink, clusterValidatorImage string) []selfhosted.CheckResult {
+// mode is the already-resolved kubectx.Mode (hoisted to the caller so image
+// resolution and timeout sizing share the same answer). clusterValidatorImage
+// is the already-resolved validator image (empty when not configured).
+func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sink progress.EventSink, mode kubectx.Mode, clusterValidatorImage string) []selfhosted.CheckResult {
 	// LocalOnly: skip all cluster probes.
 	if cfg.LocalOnly {
 		return selfhosted.RunPreflightForRole(ctx, cfg, selfhosted.RoleLocalOnly, selfhosted.RoleConfig{}, sink)
@@ -309,7 +391,6 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 	if checkAll || checkComputePlane || !checkPre {
 		icmsURL = resolveICMSURL(selfHostedICMSURL)
 	}
-	mode := kubectx.SelectMode(selfHostedControlPlaneContext, selfHostedComputePlaneContext)
 
 	skipInotify := checkSkipInotifyCheck || os.Getenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY") != ""
 	var inotifyProber selfhosted.NodeInotifyProber
@@ -328,6 +409,19 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 		clusterValidator = newClusterValidatorForSelfHosted()
 	}
 
+	staleNSProber := newStaleNamespaceProberForSelfHosted()
+
+	// Additional registries to probe in the control-plane validator ConfigMap.
+	// Priority: flag > env > config file.
+	registries := viper.GetStringSlice("cluster_validator_registries")
+
+	// The cluster-validator image is the same for both roles; VALIDATOR_ROLE
+	// in the Job env selects which check set runs inside the binary.
+	var cpClusterValidator selfhosted.ClusterValidator
+	if controlPlaneIsTargeted(mode) && clusterValidator != nil {
+		cpClusterValidator = newClusterValidatorForSelfHosted()
+	}
+
 	switch mode {
 	case kubectx.ModeSplit:
 		// Run both roles in parallel; each gets its own kubeconfig context.
@@ -337,7 +431,15 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 		)
 		eg, egCtx := errgroup.WithContext(ctx)
 		eg.Go(func() error {
-			rc := selfhosted.RoleConfig{KubeContext: selfHostedControlPlaneContext}
+			rc := selfhosted.RoleConfig{
+				KubeContext:                selfHostedControlPlaneContext,
+				ClusterValidator:           cpClusterValidator,
+				ClusterValidatorImage:      clusterValidatorImage,
+				ClusterValidatorPullSecret: checkClusterValidatorPullSecret,
+				ClusterValidatorNoCleanup:  checkClusterValidatorNoCleanup,
+				ClusterValidatorRegistries: registries,
+				StaleNamespaceProber:       staleNSProber,
+			}
 			cpResults = selfhosted.RunPreflightForRole(egCtx, cfg, selfhosted.RoleControlPlane, rc, sink)
 			return nil
 		})
@@ -350,6 +452,7 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 				ClusterValidatorImage:      clusterValidatorImage,
 				ClusterValidatorPullSecret: checkClusterValidatorPullSecret,
 				ClusterValidatorNoCleanup:  checkClusterValidatorNoCleanup,
+				StaleNamespaceProber:       staleNSProber,
 			}
 			gpuResults = selfhosted.RunPreflightForRole(egCtx, cfg, selfhosted.RoleComputePlane, rc, sink)
 			return nil
@@ -358,7 +461,15 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 		return append(cpResults, gpuResults...)
 
 	default: // ModeSingle — no context flags; union both role check sets sequentially.
-		cpRC := selfhosted.RoleConfig{SISURL: icmsURL}
+		cpRC := selfhosted.RoleConfig{
+			SISURL:                     icmsURL,
+			ClusterValidator:           cpClusterValidator,
+			ClusterValidatorImage:      clusterValidatorImage,
+			ClusterValidatorPullSecret: checkClusterValidatorPullSecret,
+			ClusterValidatorNoCleanup:  checkClusterValidatorNoCleanup,
+			ClusterValidatorRegistries: registries,
+			StaleNamespaceProber:       staleNSProber,
+		}
 		gpuRC := selfhosted.RoleConfig{
 			SISURL:                     icmsURL,
 			InotifyProber:              inotifyProber,
@@ -366,6 +477,7 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 			ClusterValidatorImage:      clusterValidatorImage,
 			ClusterValidatorPullSecret: checkClusterValidatorPullSecret,
 			ClusterValidatorNoCleanup:  checkClusterValidatorNoCleanup,
+			StaleNamespaceProber:       staleNSProber,
 		}
 		cpResults := selfhosted.RunPreflightForRole(ctx, cfg, selfhosted.RoleControlPlane, cpRC, sink)
 		gpuResults := selfhosted.RunPreflightForRole(ctx, cfg, selfhosted.RoleComputePlane, gpuRC, sink)
@@ -373,15 +485,9 @@ func runPreflightByRole(ctx context.Context, cfg selfhosted.PreflightConfig, sin
 	}
 }
 
-// Resolves the validator image from the viper-backed config chain
-// (flag > env > config-file > default). Returns ("", false) when nothing
-// is configured so the caller can surface a clear "not configured"
-// warning instead of pulling from a stale built-in default.
-//
-// When the configured value already has a tag, it is used as-is. When it
-// names only a repo, the latest tag is discovered from the registry
-// (preferring stable over rc, 1h cached); any discovery failure falls
-// back to the configured value unchanged.
+// resolveClusterValidatorImage resolves the validator image from flag > env >
+// config-file. Returns ("", false) when unconfigured. When only a repo is
+// given, discovers the latest stable tag (1h cached; falls back on failure).
 func resolveClusterValidatorImage(ctx context.Context) (string, bool) {
 	image := viper.GetString("cluster_validator_image")
 	if image == "" {

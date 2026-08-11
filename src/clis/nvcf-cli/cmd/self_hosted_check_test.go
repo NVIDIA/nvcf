@@ -30,6 +30,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"nvcf-cli/internal/selfhosted/kubectx"
 	"nvcf-cli/internal/selfhosted/progress"
 )
 
@@ -341,6 +342,165 @@ func TestCheck_SplitClusterMode(t *testing.T) {
 	}
 	assert.Contains(t, categories, "control-plane-cluster", "expected control-plane-cluster in split mode")
 	assert.Contains(t, categories, "compute-plane-cluster", "expected compute-plane-cluster in split mode")
+}
+
+// TestComputePlaneIsTargeted tests the predicate that gates the cluster-validator
+// probe. The validator should run when the compute plane is explicitly targeted
+// (--compute-plane, --all) or implicitly targeted by ModeSingle + --pre.
+// It must NOT run for --pre alone in ModeSplit, where the two context flags
+// identify separate clusters and --pre does not constitute targeting the compute plane.
+func TestComputePlaneIsTargeted(t *testing.T) {
+	t.Cleanup(func() {
+		checkPre = false
+		checkComputePlane = false
+		checkAll = false
+	})
+
+	tests := []struct {
+		name string
+		pre  bool
+		cp   bool
+		all  bool
+		mode kubectx.Mode
+		want bool
+	}{
+		{"--compute-plane single", false, true, false, kubectx.ModeSingle, true},
+		{"--compute-plane split", false, true, false, kubectx.ModeSplit, true},
+		{"--all single", false, false, true, kubectx.ModeSingle, true},
+		{"--all split", false, false, true, kubectx.ModeSplit, true},
+		{"--pre single — implicit compute plane", true, false, false, kubectx.ModeSingle, true},
+		{"--pre split — must not target compute plane", true, false, false, kubectx.ModeSplit, false},
+		{"--control-plane only", false, false, false, kubectx.ModeSingle, false},
+		{"no relevant flag", false, false, false, kubectx.ModeSingle, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			checkPre = tt.pre
+			checkComputePlane = tt.cp
+			checkAll = tt.all
+			assert.Equal(t, tt.want, computePlaneIsTargeted(tt.mode))
+		})
+	}
+}
+
+// TestCheck_ComputePlaneFlagRunsChecks verifies that --compute-plane alone
+// produces compute-plane-cluster category events. Before the gating fix this
+// flag was a complete no-op and produced no check events at all.
+func TestCheck_ComputePlaneFlagRunsChecks(t *testing.T) {
+	t.Cleanup(func() {
+		selfHostedJSON = false
+		selfHostedOutput = "text"
+		checkComputePlane = false
+	})
+
+	var stderr bytes.Buffer
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetOut(&bytes.Buffer{})
+
+	rootCmd.SetArgs([]string{"self-hosted", "check", "--compute-plane", "--json"})
+	_ = rootCmd.Execute()
+
+	lines := parseJSONLLines(t, stderr.String())
+	require.NotEmpty(t, lines, "expected at least one JSONL line")
+
+	var categories []string
+	for _, l := range lines[1:] {
+		if l["event"] == "category_completed" {
+			if cat, ok := l["category"].(string); ok {
+				categories = append(categories, cat)
+			}
+		}
+	}
+	assert.Contains(t, categories, "compute-plane-cluster",
+		"--compute-plane must produce compute-plane-cluster events")
+}
+
+// TestCheck_ControlPlaneFlagRunsChecks verifies that --control-plane alone
+// produces control-plane-cluster category events.
+func TestCheck_ControlPlaneFlagRunsChecks(t *testing.T) {
+	t.Cleanup(func() {
+		selfHostedJSON = false
+		selfHostedOutput = "text"
+		checkControlPlane = false
+	})
+
+	var stderr bytes.Buffer
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetOut(&bytes.Buffer{})
+
+	rootCmd.SetArgs([]string{"self-hosted", "check", "--control-plane", "--json"})
+	_ = rootCmd.Execute()
+
+	lines := parseJSONLLines(t, stderr.String())
+	require.NotEmpty(t, lines, "expected at least one JSONL line")
+
+	var categories []string
+	for _, l := range lines[1:] {
+		if l["event"] == "category_completed" {
+			if cat, ok := l["category"].(string); ok {
+				categories = append(categories, cat)
+			}
+		}
+	}
+	assert.Contains(t, categories, "control-plane-cluster",
+		"--control-plane must produce control-plane-cluster events")
+}
+
+// TestCheck_ValidatorSkipNoteAppearsOnComputePlane verifies that the
+// "cluster-validator skipped" note appears on stderr when --compute-plane is
+// used with --skip-cluster-validation (compute plane is targeted, validator is
+// suppressed).
+func TestCheck_ValidatorSkipNoteAppearsOnComputePlane(t *testing.T) {
+	t.Cleanup(func() {
+		selfHostedJSON = false
+		selfHostedOutput = "text"
+		checkComputePlane = false
+		checkSkipClusterValidation = false
+	})
+
+	var stderr bytes.Buffer
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetOut(&bytes.Buffer{})
+
+	rootCmd.SetArgs([]string{
+		"self-hosted", "check", "--compute-plane",
+		"--skip-cluster-validation", "--json",
+	})
+	_ = rootCmd.Execute()
+
+	assert.Contains(t, stderr.String(), "cluster-validator skipped",
+		"expected skip note when compute plane is targeted and --skip-cluster-validation is set")
+}
+
+// TestCheck_ValidatorSkipNoteAbsentForPreInSplitMode verifies that the
+// "cluster-validator skipped" note does NOT appear when --pre is used in
+// split mode, because the compute plane is not explicitly targeted and
+// ModeSplit + --pre does not implicitly make either context the compute plane.
+func TestCheck_ValidatorSkipNoteAbsentForPreInSplitMode(t *testing.T) {
+	t.Cleanup(func() {
+		selfHostedJSON = false
+		selfHostedOutput = "text"
+		checkPre = false
+		checkSkipClusterValidation = false
+		selfHostedControlPlaneContext = ""
+		selfHostedComputePlaneContext = ""
+	})
+
+	var stderr bytes.Buffer
+	rootCmd.SetErr(&stderr)
+	rootCmd.SetOut(&bytes.Buffer{})
+
+	rootCmd.SetArgs([]string{
+		"self-hosted", "check", "--pre",
+		"--skip-cluster-validation", "--json",
+		"--control-plane-context", "admin@cp",
+		"--compute-plane-context", "admin@gpu1",
+	})
+	_ = rootCmd.Execute()
+
+	assert.NotContains(t, stderr.String(), "cluster-validator skipped",
+		"skip note must not appear for --pre in split mode (compute plane not targeted)")
 }
 
 // parseJSONLLines splits s into non-empty lines, skips any non-JSON lines
