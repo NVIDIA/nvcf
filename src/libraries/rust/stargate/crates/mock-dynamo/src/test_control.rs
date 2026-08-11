@@ -56,22 +56,12 @@ pub(crate) struct ModelTestControlUpdate {
 
 type TestCounterKey = (TestEndpoint, String, TestRequestClass);
 
-/// Raw priority header values seen on the most recent request, kept so tunnel
-/// and gateway tests can assert what actually reached the mock engine.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-pub(crate) struct RecordedPriorityHeaders {
-    pub(crate) x_priority: Option<String>,
-    pub(crate) dynamo_request_priority: Option<String>,
-    pub(crate) dynamo_request_strict_priority: Option<String>,
-}
-
 #[derive(Debug, Default)]
 struct TestControlInner {
     discovered_models: BTreeSet<String>,
     model_discovery_requests: u64,
     models: BTreeMap<String, ModelTestControl>,
     counters: BTreeMap<TestCounterKey, u64>,
-    priority_headers: BTreeMap<(TestEndpoint, String), RecordedPriorityHeaders>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -89,19 +79,11 @@ pub(crate) struct TestCounterSnapshot {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct PriorityHeadersSnapshot {
-    pub(crate) endpoint: TestEndpoint,
-    pub(crate) model: String,
-    pub(crate) headers: RecordedPriorityHeaders,
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub(crate) struct TestControlSnapshot {
     pub(crate) discovered_models: Vec<String>,
     pub(crate) model_discovery_requests: u64,
     pub(crate) models: BTreeMap<String, ModelTestControl>,
     pub(crate) counters: Vec<TestCounterSnapshot>,
-    pub(crate) priority_headers: Vec<PriorityHeadersSnapshot>,
 }
 
 impl TestControlState {
@@ -188,7 +170,6 @@ impl TestControlState {
         endpoint: TestEndpoint,
         model: &str,
         request_class: TestRequestClass,
-        priority_headers: RecordedPriorityHeaders,
     ) {
         let mut inner = self.inner.lock().await;
         let count = inner
@@ -196,11 +177,6 @@ impl TestControlState {
             .entry((endpoint, model.to_string(), request_class))
             .or_default();
         *count = count.saturating_add(1);
-        // Last-seen semantics: a request without priority headers overwrites
-        // earlier values, so the snapshot always reflects the latest request.
-        inner
-            .priority_headers
-            .insert((endpoint, model.to_string()), priority_headers);
     }
 
     pub(crate) async fn snapshot(&self) -> TestControlSnapshot {
@@ -220,15 +196,6 @@ impl TestControlState {
                         count: *count,
                     },
                 )
-                .collect(),
-            priority_headers: inner
-                .priority_headers
-                .iter()
-                .map(|((endpoint, model), headers)| PriorityHeadersSnapshot {
-                    endpoint: *endpoint,
-                    model: model.clone(),
-                    headers: headers.clone(),
-                })
                 .collect(),
         }
     }
@@ -268,18 +235,6 @@ impl TestControlSnapshot {
             })
             .map_or(0, |counter| counter.count)
     }
-
-    #[cfg(test)]
-    pub(crate) fn priority_headers(
-        &self,
-        endpoint: TestEndpoint,
-        model: &str,
-    ) -> Option<&RecordedPriorityHeaders> {
-        self.priority_headers
-            .iter()
-            .find(|entry| entry.endpoint == endpoint && entry.model == model)
-            .map(|entry| &entry.headers)
-    }
 }
 
 pub(crate) async fn update_model_test_control(
@@ -295,20 +250,6 @@ pub(crate) async fn test_control_snapshot(
     State(state): State<AppState>,
 ) -> Json<TestControlSnapshot> {
     Json(state.test_control.snapshot().await)
-}
-
-pub(crate) fn recorded_priority_headers(headers: &HeaderMap) -> RecordedPriorityHeaders {
-    let header_value = |name: &str| {
-        headers
-            .get(name)
-            .and_then(|value| value.to_str().ok())
-            .map(str::to_string)
-    };
-    RecordedPriorityHeaders {
-        x_priority: header_value("x-priority"),
-        dynamo_request_priority: header_value("x-dynamo-request-priority"),
-        dynamo_request_strict_priority: header_value("x-dynamo-request-strict-priority"),
-    }
 }
 
 pub(crate) fn request_class(headers: &HeaderMap) -> TestRequestClass {

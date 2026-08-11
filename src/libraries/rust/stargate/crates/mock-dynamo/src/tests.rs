@@ -191,12 +191,7 @@ async fn test_controls_count_endpoint_model_and_request_class() {
     ];
     for (endpoint, model, request_class) in recorded {
         controls
-            .record_request(
-                endpoint,
-                model,
-                request_class,
-                RecordedPriorityHeaders::default(),
-            )
+            .record_request(endpoint, model, request_class)
             .await;
     }
 
@@ -308,65 +303,6 @@ async fn test_control_http_api_updates_one_model_and_reports_request_counters() 
             TestRequestClass::ApiGateway,
         ),
         1
-    );
-
-    server.abort();
-}
-
-#[tokio::test]
-async fn test_control_snapshot_reports_last_seen_priority_headers() {
-    let state = test_state();
-    let observed_control = state.test_control.clone();
-    let app = Router::new()
-        .route("/v1/chat/completions", post(chat_completions))
-        .route("/test-control", get(test_control_snapshot))
-        .with_state(state);
-    let (addr, server) = spawn_test_app(app).await;
-
-    let body = r#"{"model":"model-a","messages":[],"max_tokens":1,"stream":false}"#;
-    let prioritized_response = json_response(
-        addr,
-        "POST",
-        "/v1/chat/completions",
-        "connection: close\r\nx-request-id: user-8\r\nx-priority: 7\r\nx-dynamo-request-priority: 2147483640",
-        body,
-    )
-    .await;
-    assert!(prioritized_response.starts_with("HTTP/1.1 200 OK"));
-
-    let snapshot = observed_control.snapshot().await;
-    assert_eq!(
-        snapshot.priority_headers(TestEndpoint::ChatCompletions, "model-a"),
-        Some(&RecordedPriorityHeaders {
-            x_priority: Some("7".to_string()),
-            dynamo_request_priority: Some("2147483640".to_string()),
-            dynamo_request_strict_priority: None,
-        })
-    );
-
-    let snapshot_response = raw_http_request(
-        addr,
-        &format!("GET /test-control HTTP/1.1\r\nhost: {addr}\r\nconnection: close\r\n\r\n"),
-    )
-    .await;
-    assert!(snapshot_response.contains(r#""dynamo_request_priority":"2147483640""#));
-
-    // A later request without priority headers overwrites the recorded values,
-    // so the snapshot always reflects the latest request.
-    let plain_response = json_response(
-        addr,
-        "POST",
-        "/v1/chat/completions",
-        "connection: close\r\nx-request-id: user-9",
-        body,
-    )
-    .await;
-    assert!(plain_response.starts_with("HTTP/1.1 200 OK"));
-
-    let snapshot = observed_control.snapshot().await;
-    assert_eq!(
-        snapshot.priority_headers(TestEndpoint::ChatCompletions, "model-a"),
-        Some(&RecordedPriorityHeaders::default())
     );
 
     server.abort();
