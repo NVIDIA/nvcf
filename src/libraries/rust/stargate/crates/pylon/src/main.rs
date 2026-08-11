@@ -216,13 +216,14 @@ struct Args {
         value_name = "BACKEND"
     )]
     pylon_upstream_backend: UpstreamBackend,
-    /// Seconds of engine scheduling head start for the most urgent platform
-    /// priority (x-priority: 0); lower x-priority ranks get proportionally less
+    /// Priority band ceiling: x-priority rank 0 maps to this engine value and
+    /// ranks at or beyond it map to the lowest. Dynamo reads the derived
+    /// value as seconds of queue head start.
     #[arg(
         long,
         default_value_t = pylon_lib::DEFAULT_PRIORITY_CEILING,
         env = "PYLON_PRIORITY_CEILING",
-        value_name = "SECONDS"
+        value_name = "RANK"
     )]
     pylon_priority_ceiling: u32,
     /// Collect post-stream output quality metrics (gibberish checks)
