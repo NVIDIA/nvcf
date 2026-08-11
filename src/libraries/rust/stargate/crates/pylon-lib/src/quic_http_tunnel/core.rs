@@ -747,9 +747,6 @@ async fn send_upstream_request(
     for (name, value) in request_headers {
         if should_forward_header(name, &app.retry) {
             upstream_headers.append(name, value.clone());
-        } else if backend::dynamo::is_stripped_engine_header(name) {
-            // Values are client-controlled; log the name only.
-            tracing::debug!(header = %name, "stripped inbound engine priority header");
         }
     }
     if !health_request {

@@ -34,18 +34,12 @@ pub enum UpstreamBackend {
     Dynamo,
 }
 
-impl UpstreamBackend {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Passthrough => "passthrough",
-            Self::Dynamo => "dynamo",
-        }
-    }
-}
-
 impl fmt::Display for UpstreamBackend {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
+        f.write_str(match self {
+            Self::Passthrough => "passthrough",
+            Self::Dynamo => "dynamo",
+        })
     }
 }
 
