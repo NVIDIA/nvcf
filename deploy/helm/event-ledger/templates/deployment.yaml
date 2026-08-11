@@ -30,6 +30,7 @@ spec:
       annotations:
         {{- include "nvcf-event-ledger.vaultAnnotations" . | nindent 8 }}
         checksum/config-app: {{ toYaml .Values.eventLedger.config | sha256sum }}
+        checksum/vault-agent-template: {{ .Files.Get "files/secrets.json.tmpl" | sha256sum }}
         {{- with .Values.eventLedger.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
