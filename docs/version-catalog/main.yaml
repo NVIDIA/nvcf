@@ -96,6 +96,9 @@ publications:
   - name: nvcf-service-oss
     version: 1.9.0-hotfix.1
     registry: public-images
+  - name: nvcf-state-metrics-service
+    version: 1.23.7
+    registry: public-images
   - name: nvcf_worker_init
     version: 1.0.1
     registry: public-images
@@ -122,9 +125,8 @@ publications:
     published_version: 0.8.3-ea
     registry: selfhosted-ga
   - name: llm-request-router
-    version: 0.3.0
-    published_version: 0.3.0-ea
-    registry: selfhosted-ga
+    version: 0.3.2
+    registry: public-images
   - name: nats-server-config-reloader
     version: 0.23.0
     registry: nats-upstream-images
@@ -177,7 +179,7 @@ publications:
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-llm-request-router
-    version: 1.6.3
+    version: 1.6.6
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-nats-auth-callout-service
@@ -213,7 +215,7 @@ publications:
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-state-metrics
-    version: 1.0.1
+    version: 1.0.2
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-ui
@@ -252,9 +254,6 @@ version_overrides:
   - name: llm-api-gateway
     version: 0.8.3
     source: supplemental artifact missing from artifacts-0.6.0.txt
-  - name: llm-request-router
-    version: 0.3.0
-    source: helm-nvcf-llm-request-router:1.6.3 (image missing from artifacts-0.6.0.txt)
 manifest:
   entries:
     - artifact_id: helm-nvcf-api-keys
@@ -537,6 +536,11 @@ manifest:
       requirement: optional
       description: Routes LLM requests to eligible worker instances.
       github_url: https://github.com/NVIDIA/nvcf/tree/main/src/libraries/rust/stargate
+    - artifact_id: nvcf-state-metrics-service
+      plane: control
+      kind: service-image
+      requirement: optional
+      description: Exports NVCF resource state as Prometheus metrics.
     - artifact_id: bitnami-cassandra
       plane: control
       kind: ea-cve
@@ -792,7 +796,7 @@ artifacts:
   - name: helm-nvcf-llm-request-router
     type: chart
     registry: staging
-    version: 1.6.3
+    version: 1.6.6
   - name: helm-nvcf-nats-auth-callout-service
     type: chart
     registry: staging
@@ -828,7 +832,7 @@ artifacts:
   - name: helm-nvcf-state-metrics
     type: chart
     registry: staging
-    version: 1.0.1
+    version: 1.0.2
   - name: helm-nvcf-ui
     type: chart
     registry: staging
@@ -893,6 +897,10 @@ artifacts:
     type: image
     registry: staging
     version: 1.9.0-hotfix.1
+  - name: nvcf-state-metrics-service
+    type: image
+    registry: staging
+    version: 1.23.7
   - name: nvcf_worker_init
     type: image
     registry: staging
@@ -954,7 +962,7 @@ supplemental_artifacts:
     type: image
     registry: staging
     repository_name: stargate
-    version: 0.3.0
+    version: 0.3.2
   - name: nvcf-image-credential-helper
     type: image
     registry: staging
