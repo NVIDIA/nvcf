@@ -284,7 +284,6 @@ impl StargateRuntime {
         );
         info!(
             default_lb = %lb_config.default,
-            request_algorithms = lb_config.request_algorithms.len(),
             model_overrides = lb_config.models.len(),
             "load balancer config loaded"
         );
