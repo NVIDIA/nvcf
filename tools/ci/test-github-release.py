@@ -578,6 +578,90 @@ class GithubReleaseTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.github_release.initial_floor_version(service)
 
+    def _make_ct_service_repo(self, root):
+        self.init_repo(root)
+        (root / "README.md").write_text("root\n")
+        self.commit_all(root, "chore: init")
+        service_dir = root / "deploy/helm/cloud-tasks"
+        service_dir.mkdir(parents=True, exist_ok=True)
+        (service_dir / "Chart.yaml").write_text("name: helm-nvcf-nvct-api\n")
+        self.commit_all(root, "feat: import cloud tasks chart")
+
+    def test_cf_initial_version_anchor_defaults_to_floor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._make_ct_service_repo(root)
+            service = {
+                "id": "cloud-tasks-helm",
+                "path": "deploy/helm/cloud-tasks",
+                "service_name": "helm-nvcf-nvct-api",
+            }
+            with chdir(root), contextlib.redirect_stdout(io.StringIO()):
+                self.github_release.synthesize_initial_version_anchor(root, service)
+            self.assertIn("deploy/helm/cloud-tasks/v0.0.0", self._tags(root))
+
+    def test_cf_initial_version_anchor_honors_metadata(self):
+        service = {
+                "id": "cloud-tasks-helm",
+                "path": "deploy/helm/cloud-tasks",
+                "service_name": "helm-nvcf-nvct-api",
+                "initial_version": "1.4.4",
+        }
+        expected_tag = self.github_release.tag_for_version(service, service["initial_version"])
+        default_floor_tag = self.github_release.tag_for_version(
+            service, self.github_release.INITIAL_RELEASE_FLOOR_VERSION
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._make_ct_service_repo(root)
+            with chdir(root), contextlib.redirect_stdout(io.StringIO()):
+                self.github_release.synthesize_initial_version_anchor(root, service)
+            tags = self._tags(root)
+            self.assertIn(expected_tag, tags)
+            self.assertNotIn(default_floor_tag, tags)
+
+    def test_cf_initial_version_anchor_rejects_bad_semver(self):
+        service = {
+            "id": "cloud-tasks-helm",
+            "path": "deploy/helm/cloud-tasks",
+            "service_name": "helm-nvcf-nvct-api",
+            "initial_version": "not-a-version",
+        }
+        with self.assertRaises(SystemExit):
+            self.github_release.initial_floor_version(service)
+
+    def test_cf_initial_version_anchor_rejects_empty_string(self):
+        service = {
+            "id": "cloud-tasks-helm",
+            "path": "deploy/helm/cloud-tasks",
+            "service_name": "helm-nvcf-nvct-api",
+            "initial_version": "",
+        }
+        with self.assertRaises(SystemExit):
+            self.github_release.initial_floor_version(service)
+
+    def test_cloud_tasks_chart_continues_its_published_lineage(self):
+        # This chart migrated in from its own colocated-deploy repo with 11
+        # versions already published as helm-nvcf-nvct-api, the newest 1.4.4.
+        #
+        # Both fields below are load-bearing and both have a plausible wrong
+        # value. Without initial_version the floor is 0.0.0, so the first
+        # release computed here would land below everything already published.
+        # And 1.6.x, the number the chart's own appVersion carries, belongs to
+        # the cloud-tasks service, not to the chart.
+        #
+        # service_name is what the chart is published as. A service-shaped
+        # name would open an empty second chart repo and strand all 11
+        # existing versions while the pipeline still reported success.
+        metadata = json.loads(SCRIPT_PATH.with_name("github-release-subprojects.json").read_text())
+        service = next(s for s in metadata["services"] if s["id"] == "cloud-tasks-helm")
+        self.assertEqual(service["service_name"], "helm-nvcf-nvct-api")
+        self.assertEqual(service["initial_version"], "1.4.4")
+        self.assertEqual(
+            self.github_release.tag_for_version(service, service["initial_version"]),
+            "deploy/helm/cloud-tasks/v1.4.4",
+        )
+
     def test_nvca_branch_cut_uses_path_scoped_release_branch(self):
         service = {
             "id": "nvca",
