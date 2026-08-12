@@ -639,8 +639,8 @@ public class InstanceController {
     }
 
     @GetMapping("/clusters/{zoneName}/instances")
-    @PreAuthorize("hasAuthority('gfn-clusters') or hasAuthority('cluster-instances') "
-            + "or hasAuthority('nvca-cluster') or hasAuthority('apikey:nvca-cluster')")
+    @PreAuthorize("hasAuthority('cluster-instances') or hasAuthority('nvca-cluster') "
+            + "or hasAuthority('apikey:nvca-cluster')")
     @Operation(summary = "Get instances from zone or cluster",
             description = "Request to get instances from zone or cluster",
             responses = {
