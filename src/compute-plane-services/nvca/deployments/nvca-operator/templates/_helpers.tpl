@@ -157,6 +157,36 @@ nvcr.io/nvidia/nvcf-byoc/nvcf-otel-collector
 {{- end -}}
 
 {{/*
+Get the BYOO OTel collector repository based on image.repository.
+If imageRepository is explicitly set, use it. Otherwise, calculate it based on image.repository prefix.
+Usage: {{ include "nvcaop.byooOtelCollectorImage" . }}
+*/}}
+{{- define "nvcaop.byooOtelCollectorRepository" -}}
+{{- if .imageRepository -}}
+{{- .imageRepository -}}
+{{- else if hasPrefix "stg.nvcr.io/nvidia/nvcf-byoc" .defaultRepository -}}
+stg.nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector
+{{- else -}}
+nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector
+{{- end -}}
+{{- end -}}
+
+{{/*
+Get the BYOO OTel collector image when its tag is configured.
+*/}}
+{{- define "nvcaop.byooOtelCollectorImage" -}}
+{{- $agent := .Values.agent | default dict -}}
+{{- $byooOtelCollector := $agent.byooOtelCollector | default dict -}}
+{{- $imageTag := "0.157.11" -}}
+{{- if hasKey $byooOtelCollector "imageTag" -}}
+{{- $imageTag = $byooOtelCollector.imageTag -}}
+{{- end -}}
+{{- if $imageTag -}}
+{{- printf "%s:%s" (include "nvcaop.byooOtelCollectorRepository" (dict "imageRepository" ($byooOtelCollector.imageRepository | default "") "defaultRepository" .Values.image.repository)) $imageTag -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Check if cluster validator is enabled (nil-safe).
 Returns non-empty string if enabled, empty string if disabled.
 Usage: {{- if (include "nvcaop.clusterValidatorEnabled" .) -}}
