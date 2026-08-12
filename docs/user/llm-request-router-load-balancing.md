@@ -60,9 +60,8 @@ Algorithm availability is enforced at separate layers:
 
 For example, when a configuration is set and `power-of-two` is the effective
 algorithm, `wait_and_widen` requires a `wait-and-widen` entry in
-`request_algorithms`. Without a configuration, the allowlist already contains
-every built-in algorithm. The legacy `groq_multiregion` value remains
-accepted and resolves to the same algorithm.
+`request_algorithms`. The legacy `groq_multiregion` value remains accepted
+and resolves to the same algorithm.
 
 Use `wait-and-widen` and `pulsar-wait-and-widen` in new function metadata,
 `lb-config.json` files, request-algorithm maps, and deployment manifests.
