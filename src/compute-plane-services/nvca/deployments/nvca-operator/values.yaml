@@ -210,6 +210,11 @@ agent:
     requestRouterAddress: ""
   workload:
     tolerations: []
+  ## @param agent.byooOtelCollector.imageRepository Optional BYOO OpenTelemetry Collector image repository. If unset, it is derived from image.repository.
+  ## @param agent.byooOtelCollector.imageTag BYOO OpenTelemetry Collector image tag.
+  byooOtelCollector:
+    imageRepository: ""
+    imageTag: "0.157.11"
   ## Environment variable overrides for function workloads.
   ## Available keys: INIT_CONTAINER, UTILS_CONTAINER, OTEL_CONTAINER, BYOO_OTEL_COLLECTOR_CONTAINER,
   ##                 NICLLS_CONTAINER, ESS_AGENT_CONTAINER, INFERENCE_CONTAINER
