@@ -283,8 +283,8 @@
     {
       "id": "cloud-tasks-helm",
       "path": "deploy/helm/cloud-tasks",
-      "service_name": "helm-cloud-tasks-api",
-      "legacy_tag_prefix": "deploy/helm/cloud-tasks"
+      "service_name": "helm-nvcf-nvct-api",
+      "initial_version": "1.4.4"
     },
     {
       "id": "instance-cluster-management",
