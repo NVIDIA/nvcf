@@ -19,7 +19,7 @@ use crate::load_balancer::{LoadBalancerRequest, input_work_units};
 use crate::routing_state::RoutedClusterSnapshot;
 use stargate_protocol::common::valid_last_mean_input_tps;
 
-use super::GroqMultiregionConfig;
+use super::WaitAndWidenConfig;
 
 #[derive(Clone, Copy, Debug)]
 pub(in crate::load_balancer) struct TtftEstimate {
@@ -41,7 +41,7 @@ pub(super) struct CandidateEstimateAccumulator<'a> {
 
 impl<'a> CandidateEstimateAccumulator<'a> {
     pub(super) fn new(
-        config: &GroqMultiregionConfig,
+        config: &WaitAndWidenConfig,
         request: &LoadBalancerRequest<'_>,
         candidate_capacity: usize,
     ) -> Self {

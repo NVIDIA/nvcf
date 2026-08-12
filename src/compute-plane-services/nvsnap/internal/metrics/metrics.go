@@ -87,6 +87,18 @@ var (
 		Name:      "gpu_processes_discovered",
 		Help:      "Number of GPU processes discovered on this node.",
 	})
+
+	// AgentAuthTotal counts requests to the agent API by authentication
+	// outcome. The point of the "missing" and "invalid" series is the
+	// rollout: operators run auth in permissive mode until both reach zero,
+	// which proves every caller now sends a token, and only then switch to
+	// required. Pre-initialized below so the series exist on the first
+	// scrape and an alert on them does not misfire as absent. See GH #486.
+	AgentAuthTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: namespace,
+		Name:      "agent_auth_total",
+		Help:      "Agent API requests by authentication result (ok, missing, invalid).",
+	}, []string{"result"})
 )
 
 // Server metrics — API and cluster-wide.
@@ -120,7 +132,19 @@ var (
 var (
 	agentOnce  sync.Once
 	serverOnce sync.Once
+	// apiOnce guards the RED pair, which BOTH the agent and the server
+	// register. Without its own Once, a process starting both would panic in
+	// MustRegister on the second call.
+	apiOnce sync.Once
 )
+
+// registerAPIMetrics registers the shared request rate/duration pair used by
+// InstrumentRoute on any router.
+func registerAPIMetrics() {
+	apiOnce.Do(func() {
+		prometheus.MustRegister(APIRequestsTotal, APIRequestDuration)
+	})
+}
 
 // RegisterAgent registers agent-side metrics with the default Prometheus registry.
 func RegisterAgent() {
@@ -134,7 +158,16 @@ func RegisterAgent() {
 			ActiveOperations,
 			CRIUDumpDuration,
 			GPUProcessesDiscovered,
+			AgentAuthTotal,
 		)
+		// The agent serves an HTTP API too, so it needs the same RED metrics
+		// the server has. See InstrumentRoute.
+		registerAPIMetrics()
+		// Counters must exist before the first scrape or rate() gaps and
+		// absent() alerts misfire.
+		for _, r := range []string{"ok", "missing", "invalid"} {
+			AgentAuthTotal.WithLabelValues(r)
+		}
 	})
 }
 
@@ -142,11 +175,10 @@ func RegisterAgent() {
 func RegisterServer() {
 	serverOnce.Do(func() {
 		prometheus.MustRegister(
-			APIRequestsTotal,
-			APIRequestDuration,
 			CheckpointsStored,
 			WebSocketConnections,
 		)
+		registerAPIMetrics()
 	})
 }
 

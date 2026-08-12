@@ -24,8 +24,8 @@ use std::time::Duration;
 use rand::Rng;
 
 use super::{
-    GroqMultiregionAlgorithmConfig, LoadBalancer, LoadBalancerAlgorithmConfig,
-    LoadBalancerCandidateChoice, LoadBalancerRequest,
+    LoadBalancer, LoadBalancerAlgorithmConfig, LoadBalancerCandidateChoice, LoadBalancerRequest,
+    WaitAndWidenAlgorithmConfig,
 };
 use crate::routing_state::RoutedClusterSnapshot;
 use cache_affinity::CacheAffinitySelector;
@@ -39,22 +39,22 @@ pub(super) use cache_affinity::{
     cache_affinity_candidate_indices, cache_affinity_candidates, cache_affinity_virtual_node_hash,
 };
 #[cfg(test)]
-pub(super) use estimates::estimate_ttft_ms as groq_multiregion_ttft_components;
+pub(super) use estimates::estimate_ttft_ms as wait_and_widen_ttft_components;
 
-// Parity notes vs lpu-router MultiRegion:
+// Parity notes vs lpu-router WaitAndWiden:
 // - Stargate uses only the sticky last_mean_input_tps capacity signal for
 //   queue/prefill estimates; there is no separate live input-TPS fallback.
 // - Sparse priority queue maps use the nearest published priority at or below the request priority;
 //   lpu-router clamps only priorities above the max and otherwise treats missing entries as zero.
 // - Stargate does not currently model lpu-router batch-folding queue estimates, LoRA dynamic-model
 //   penalties, backend/datacenter request filters, backend-id overrides, or utilization-max rejection.
-pub(super) struct GroqMultiregionLoadBalancer {
-    config: GroqMultiregionConfig,
+pub(super) struct WaitAndWidenLoadBalancer {
+    config: WaitAndWidenConfig,
     cache_affinity: CacheAffinitySelector,
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct GroqMultiregionConfig {
+pub(super) struct WaitAndWidenConfig {
     pub(super) seed: Option<String>,
     pub(super) cache_affinity_virtual_nodes: usize,
     pub(super) cache_affinity_backend_selection_count: Option<usize>,
@@ -67,15 +67,15 @@ pub(super) struct GroqMultiregionConfig {
     pub(super) ignore_input_processing_time: bool,
 }
 
-impl GroqMultiregionConfig {
+impl WaitAndWidenConfig {
     pub(super) fn from_algorithm_config(config: &LoadBalancerAlgorithmConfig) -> Self {
         let config = config
-            .multiregion_settings()
-            .expect("multiregion settings should match load-balancer algorithm");
+            .wait_and_widen_settings()
+            .expect("wait_and_widen settings should match load-balancer algorithm");
         Self::from_settings(config)
     }
 
-    pub(super) fn from_settings(config: &GroqMultiregionAlgorithmConfig) -> Self {
+    pub(super) fn from_settings(config: &WaitAndWidenAlgorithmConfig) -> Self {
         Self {
             seed: config.seed.clone(),
             // Zero virtual nodes would make affinity routing degenerate; keep the historical minimum.
@@ -115,9 +115,9 @@ impl GroqMultiregionConfig {
     }
 }
 
-impl_display!(GroqMultiregionLoadBalancer, "groq-multiregion");
+impl_display!(WaitAndWidenLoadBalancer, "wait-and-widen");
 
-impl LoadBalancer for GroqMultiregionLoadBalancer {
+impl LoadBalancer for WaitAndWidenLoadBalancer {
     fn choose_candidate(
         &self,
         request: &LoadBalancerRequest<'_>,
@@ -141,8 +141,8 @@ impl LoadBalancer for GroqMultiregionLoadBalancer {
     }
 }
 
-impl GroqMultiregionLoadBalancer {
-    pub(super) fn new(config: GroqMultiregionConfig) -> Self {
+impl WaitAndWidenLoadBalancer {
+    pub(super) fn new(config: WaitAndWidenConfig) -> Self {
         Self {
             config,
             cache_affinity: CacheAffinitySelector::default(),

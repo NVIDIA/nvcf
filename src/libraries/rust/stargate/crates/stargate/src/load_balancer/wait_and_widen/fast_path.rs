@@ -23,7 +23,7 @@ use super::estimates::{
     rtt_ms,
 };
 use super::{
-    GroqMultiregionConfig, RequestExclusions, choice_for_candidate, choose_less_queued_candidate,
+    RequestExclusions, WaitAndWidenConfig, choice_for_candidate, choose_less_queued_candidate,
     shuffle_prefix,
 };
 
@@ -65,7 +65,7 @@ macro_rules! choose_with_fast_path_exclusions {
 }
 
 pub(super) fn choose_from_single_bucket(
-    config: &GroqMultiregionConfig,
+    config: &WaitAndWidenConfig,
     request: &LoadBalancerRequest<'_>,
     candidates: &[RoutedClusterSnapshot],
 ) -> Option<LoadBalancerCandidateChoice> {
@@ -84,7 +84,7 @@ pub(super) fn choose_from_single_bucket(
 }
 
 fn choose_from_single_bucket_filtered(
-    config: &GroqMultiregionConfig,
+    config: &WaitAndWidenConfig,
     request: &LoadBalancerRequest<'_>,
     candidates: &[RoutedClusterSnapshot],
     mut excludes_candidate: impl FnMut(&RoutedClusterSnapshot) -> bool,
@@ -125,7 +125,7 @@ fn choose_from_single_bucket_filtered(
 }
 
 fn choose_from_unlocked_candidate_refs(
-    config: &GroqMultiregionConfig,
+    config: &WaitAndWidenConfig,
     request: &LoadBalancerRequest<'_>,
     mut unlocked_with_capacity: Vec<&RoutedClusterSnapshot>,
     candidates: &[RoutedClusterSnapshot],
