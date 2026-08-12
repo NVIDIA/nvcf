@@ -200,13 +200,19 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 		credEntries     []selfhosted.RegistryEntry
 		registryChecker selfhosted.RegistryCredentialChecker
 	)
-	if !localOnly && clusterValidatorImage != "" {
+	// Run credential checks whenever not local-only. The validator image is
+	// optional: EnumerateRegistries handles an empty image ref and still picks
+	// up global.image.registry from the stack values file and any
+	// --cluster-validator-registries extras independently of the image config.
+	if !localOnly {
 		extraRegistries := viper.GetStringSlice("cluster_validator_registries")
 		stackValuesFile := resolveStackValuesFile()
 		credEntries = selfhosted.EnumerateRegistries(
 			clusterValidatorImage, stackValuesFile, extraRegistries,
 		)
-		registryChecker = newRegistryCredentialCheckerForSelfHosted()
+		if len(credEntries) > 0 {
+			registryChecker = newRegistryCredentialCheckerForSelfHosted()
+		}
 	}
 
 	cfg := selfhosted.PreflightConfig{

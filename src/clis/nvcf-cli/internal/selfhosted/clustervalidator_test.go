@@ -648,6 +648,11 @@ func TestParseRegistryHostPort(t *testing.T) {
 		{"registry.example.com", "registry.example.com", 443}, // no port → 443
 		{"", "", 0},   // empty → skip
 		{"  ", "", 0}, // blank → skip
+		// IPv6: net.SplitHostPort handles bracketed literals correctly.
+		{"[::1]:5000", "::1", 5000},
+		{"[2001:db8::1]:443", "2001:db8::1", 443},
+		// Trailing colon with no digit → default to 443.
+		{"nvcr.io:", "nvcr.io", 443},
 	}
 	for _, tt := range tests {
 		t.Run(tt.in, func(t *testing.T) {

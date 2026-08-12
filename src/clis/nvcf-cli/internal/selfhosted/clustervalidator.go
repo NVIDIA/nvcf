@@ -21,7 +21,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -389,28 +391,29 @@ func buildControlPlaneValidatorConfig(extraRegistries []string) string {
 		"enforcement:", extra.String()+"enforcement:", 1)
 }
 
-// parseRegistryHostPort splits a "host:port" string. Returns port 443 when
-// no port is specified or when the port is not a valid number.
+// parseRegistryHostPort splits a "host:port" string using net.SplitHostPort,
+// which correctly handles IPv6 literals ([::1]:5000) and bare hostnames.
+// Returns port 443 when no port is specified, the port is non-numeric, or
+// the input has a trailing colon with no digit (e.g. "nvcr.io:").
 func parseRegistryHostPort(s string) (host string, port int) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return "", 0
 	}
-	if idx := strings.LastIndex(s, ":"); idx > 0 {
-		h := s[:idx]
-		p := s[idx+1:]
-		n := 0
-		for _, c := range p {
-			if c < '0' || c > '9' {
-				return s, 443
-			}
-			n = n*10 + int(c-'0')
-		}
-		if n > 0 && n <= 65535 {
-			return h, n
-		}
+	h, p, err := net.SplitHostPort(s)
+	if err != nil {
+		// No port present (e.g. "nvcr.io") — return the input as-is.
+		return s, 443
 	}
-	return s, 443
+	if p == "" {
+		// Trailing colon with no port digit (e.g. "nvcr.io:").
+		return h, 443
+	}
+	n, err := strconv.Atoi(p)
+	if err != nil || n <= 0 || n > 65535 {
+		return h, 443
+	}
+	return h, n
 }
 
 // buildClusterValidatorJob creates the validator Job. PullIfNotPresent reuses
