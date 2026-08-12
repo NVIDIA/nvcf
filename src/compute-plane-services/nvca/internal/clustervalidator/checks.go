@@ -1202,7 +1202,7 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 func nodeToNodeSecurityContext() *corev1.SecurityContext {
 	runAsNonRoot := true
 	allowPrivEsc := false
-	runAsUser := int64(65534) // nobody — the conventional non-root UID for scratch/busybox images
+	runAsUser := int64(65534) // nobody; conventional non-root UID for scratch/busybox images
 	return &corev1.SecurityContext{
 		RunAsNonRoot:             &runAsNonRoot,
 		RunAsUser:                &runAsUser,
