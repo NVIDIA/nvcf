@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -221,12 +222,13 @@ func (w *Watcher) runCapture(ctx context.Context, pod *corev1.Pod) {
 
 	hashInput := w.Composer.Compose(pod, 0)
 	req := CaptureRequest{
-		PodUID:        string(pod.UID),
-		Namespace:     pod.Namespace,
-		Name:          pod.Name,
-		Spec:          &pod.Spec,
-		MainContainer: 0,
-		HashInput:     hashInput,
+		PodUID:          string(pod.UID),
+		Namespace:       pod.Namespace,
+		Name:            pod.Name,
+		Spec:            &pod.Spec,
+		MainContainer:   0,
+		MainContainerID: mainContainerID(pod, 0),
+		HashInput:       hashInput,
 	}
 	// Resolve GPU metadata from the capture node's labels (best-effort;
 	// empty on lookup failure). GPUType/DriverVersion are display-only;
@@ -351,4 +353,33 @@ func gpuInfoFromNodeLabels(labels map[string]string) (gpuType, driverVersion, co
 		}
 	}
 	return gpuType, driverVersion, computeCapability
+}
+
+// mainContainerID returns the runtime container ID of spec.Containers[idx]
+// from pod.status, with the runtime scheme stripped ("containerd://<id>" ->
+// "<id>"). Empty when the container has no status yet or is not running.
+//
+// The capture orchestrator uses this to read the entrypoint from the main
+// container's own PID. Pod-scoped PID resolution returns whichever container
+// started first, which on an NVCF function pod is the `utils` sidecar --
+// capture then recorded the sidecar's argv and restore exec'd a binary that
+// does not exist in the main container (nvsnap#788).
+func mainContainerID(pod *corev1.Pod, idx int) string {
+	if pod == nil || idx < 0 || idx >= len(pod.Spec.Containers) {
+		return ""
+	}
+	name := pod.Spec.Containers[idx].Name
+	for i := range pod.Status.ContainerStatuses {
+		cs := &pod.Status.ContainerStatuses[i]
+		if cs.Name != name || cs.ContainerID == "" {
+			continue
+		}
+		// "containerd://<64-hex>" / "docker://<id>" -> "<id>". The cgroup
+		// path carries the bare ID, so match on that.
+		if i := strings.Index(cs.ContainerID, "://"); i >= 0 {
+			return cs.ContainerID[i+3:]
+		}
+		return cs.ContainerID
+	}
+	return ""
 }

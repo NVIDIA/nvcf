@@ -239,3 +239,69 @@ func TestNewPIDResolver_DefaultsToProc(t *testing.T) {
 		t.Fatalf("ProcRoot = %q, want /proc or /host/proc", r.ProcRoot)
 	}
 }
+
+// The bug in nvsnap#788: capture read the entrypoint from the pod-scoped PID,
+// which is whichever container started first. On an NVCF function pod the
+// `utils` sidecar starts while the main container is still pulling its image,
+// so the sidecar always had the lower PID and capture recorded ITS argv.
+// Restore then exec'd a binary that does not exist in the main container.
+//
+// Models that exact layout: sidecar PID 100, main container PID 900, same pod.
+func TestResolveContainerPID_PicksTheNamedContainerNotTheLowestPodPID(t *testing.T) {
+	const (
+		podUID  = "0b4b630f-72b9-4a3b-884a-d630844351c7"
+		sidecar = "1111111111111111111111111111111111111111111111111111111111111111"
+		mainCtr = "2222222222222222222222222222222222222222222222222222222222222222"
+		cgFmt   = "0::/kubepods.slice/kubepods-besteffort.slice/pod%s.slice/cri-containerd-%s.scope"
+	)
+	uidUnderscored := strings.ReplaceAll(podUID, "-", "_")
+	root := fakeProc(t, map[int]string{
+		100: fmt.Sprintf(cgFmt, uidUnderscored, sidecar), // starts first -> lowest PID
+		900: fmt.Sprintf(cgFmt, uidUnderscored, mainCtr), // main container
+	})
+	r := &PIDResolver{ProcRoot: root}
+
+	// Pod-scoped resolution returns the sidecar. This is correct for its
+	// documented purpose (upperdir) and wrong for the entrypoint.
+	if got, err := r.ResolvePodPID(podUID); err != nil || got != 100 {
+		t.Fatalf("ResolvePodPID = %d, %v; want 100 (documents the pre-fix behavior)", got, err)
+	}
+
+	// Container-scoped resolution must return the main container's PID.
+	got, err := r.ResolveContainerPID(mainCtr)
+	if err != nil {
+		t.Fatalf("ResolveContainerPID: %v", err)
+	}
+	if got != 900 {
+		t.Errorf("ResolveContainerPID = %d, want 900 (the main container, not the lowest pod PID)", got)
+	}
+}
+
+func TestResolveContainerPID_SkipsSandbox(t *testing.T) {
+	const ctr = "3333333333333333333333333333333333333333333333333333333333333333"
+	cg := "0::/kubepods.slice/pod_x.slice/cri-containerd-" + ctr + ".scope"
+	root := fakeProcWithComm(t,
+		map[int]string{10: cg, 42: cg},
+		map[int]string{10: "pause"}, // sandbox must not win despite lower PID
+	)
+	r := &PIDResolver{ProcRoot: root}
+	got, err := r.ResolveContainerPID(ctr)
+	if err != nil {
+		t.Fatalf("ResolveContainerPID: %v", err)
+	}
+	if got != 42 {
+		t.Errorf("ResolveContainerPID = %d, want 42 (pause at PID 10 must be skipped)", got)
+	}
+}
+
+// Unknown/exited container must be a clean miss so the orchestrator can fall
+// back to the pod PID rather than recording nothing.
+func TestResolveContainerPID_NotFoundAndEmpty(t *testing.T) {
+	r := &PIDResolver{ProcRoot: fakeProc(t, map[int]string{7: "0::/kubepods.slice/other.scope"})}
+	if _, err := r.ResolveContainerPID("deadbeef"); !errors.Is(err, ErrPodNotRunning) {
+		t.Errorf("unknown container: err = %v, want ErrPodNotRunning", err)
+	}
+	if _, err := r.ResolveContainerPID(""); err == nil {
+		t.Error("empty containerID: want an error")
+	}
+}

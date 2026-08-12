@@ -53,6 +53,23 @@ type CaptureRequest struct {
 	// and image we use. Most nvsnap workloads are single-container at 0.
 	MainContainer int
 
+	// MainContainerID is the runtime container ID of Spec.Containers
+	// [MainContainer], as reported in pod.status (with the runtime scheme
+	// stripped). Used to resolve that container's PID specifically when
+	// recording the entrypoint to replay at restore.
+	//
+	// Pod-scoped PID resolution is not good enough here: it returns the
+	// lowest non-sandbox PID in the pod, which is whichever container
+	// started first. NVCF function pods run a `utils` sidecar that starts
+	// while the main container is still pulling its image, so the sidecar
+	// always won and capture recorded ITS argv -- restore then exec'd a
+	// binary that does not exist in the main container (nvsnap#788).
+	//
+	// Empty when the status lookup found no running main container; the
+	// orchestrator then falls back to the pod-scoped PID rather than
+	// recording nothing.
+	MainContainerID string
+
 	// HashInput is the canonical content-addressed identity (image
 	// digest + model id + engine compat flags + driver major). The agent
 	// composes this from the pod spec; the orchestrator hashes it.
@@ -261,9 +278,27 @@ func (c *Capturer) Capture(ctx context.Context, req CaptureRequest) (checkpoints
 	if procRoot == "" {
 		procRoot = mountinfo.DefaultProcRoot()
 	}
-	entryArgv := readEntryArgv(procRoot, pid)
+	// Read the argv from the MAIN container's PID, not the pod's. `pid`
+	// above is the lowest non-sandbox PID in the pod -- whichever container
+	// started first -- which on a multi-container pod is the sidecar, not
+	// the workload (nvsnap#788). Fall back to the pod PID when the main
+	// container ID is unknown or its process has already gone, so a
+	// single-container pod behaves exactly as before.
+	entryPID := pid
+	if req.MainContainerID != "" {
+		if cpid, cerr := c.PIDResolver.ResolveContainerPID(req.MainContainerID); cerr == nil {
+			entryPID = cpid
+		} else {
+			log.WithError(cerr).WithField("main_container_id", req.MainContainerID).
+				Warn("could not resolve main container PID; falling back to the pod PID for entrypoint recording")
+		}
+	}
+	entryArgv := readEntryArgv(procRoot, entryPID)
 	if len(entryArgv) > 0 {
-		log.WithField("entry_argv", entryArgv).Info("recorded source entrypoint for whole-rootfs restore")
+		log.WithFields(map[string]interface{}{
+			"entry_argv": entryArgv,
+			"entry_pid":  entryPID,
+		}).Info("recorded source entrypoint for whole-rootfs restore")
 	} else {
 		log.Warn("could not read source /proc/<pid>/cmdline; restore will rely on the pod's command/args")
 	}

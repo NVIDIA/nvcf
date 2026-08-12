@@ -1009,6 +1009,16 @@ func (s *Server) deleteCheckpoint(w http.ResponseWriter, r *http.Request) {
 		Status:     result.Status(),
 		Message:    result.Summary(),
 	})
+	// A partial cascade must not report 204. The catalog row is retained in
+	// that case (see cascadeDeleteCheckpoint), so the checkpoint still
+	// exists and the caller has to retry -- telling them "No Content" hides
+	// an orphaned dump behind an apparent success (nvsnap#736). The delete
+	// is idempotent, so retrying after the failing tier recovers is safe.
+	if result.CatalogRetained {
+		s.writeError(w, http.StatusInternalServerError,
+			"checkpoint partially deleted; catalog row retained for retry: "+result.Summary())
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1065,6 +1075,12 @@ type cascadeDeleteResult struct {
 	CaptureCMs   int // count of rootfs-capture-manifest ConfigMaps deleted (per hash)
 	Errors       []string
 	AnySuccess   bool
+
+	// CatalogRetained is set when the catalog rows were deliberately kept
+	// because a tier delete failed. The row is the only pointer to the
+	// on-disk dump, so dropping it on a partial cascade orphans those bytes
+	// (nvsnap#736). Callers must not report success when this is set.
+	CatalogRetained bool
 }
 
 // Status returns "success" when every attempted sub-delete succeeded
@@ -1172,9 +1188,27 @@ func (s *Server) cascadeDeleteCheckpoint(ctx context.Context, id, agentID string
 		s.deleteCaptureManifestCM(ctx, row.Hash, &result)
 	}
 
-	// Catalog rows — DeleteByHash takes everything sharing this hash
-	// in one statement. Falls back to single-id delete when hash is
-	// unknown.
+	// Catalog rows LAST, and only when the tiers above actually cleaned up.
+	//
+	// The row is the only pointer to the on-disk dump. Deleting it while a
+	// tier delete failed (agent 401 under --auth-mode=required, agent down,
+	// blobstore unreachable) orphans those bytes: nothing references them,
+	// so nothing will ever retry or GC them. Keeping the row on failure
+	// makes the delete retryable and keeps the dump discoverable.
+	//
+	// This was the worst part of nvsnap#736 -- the catalog delete also set
+	// AnySuccess, so a cascade where every tier failed still returned 204 No
+	// Content. The caller was told the checkpoint was gone while the bytes
+	// stayed on disk.
+	if len(result.Errors) > 0 {
+		// Not appended to Errors: that list is the set of things that
+		// actually failed, and callers count it.
+		result.CatalogRetained = true
+		return result
+	}
+
+	// DeleteByHash takes everything sharing this hash in one statement.
+	// Falls back to single-id delete when hash is unknown.
 	if row != nil && row.Hash != "" {
 		n, err := s.catalog.DeleteByHash(row.Hash)
 		if err != nil {

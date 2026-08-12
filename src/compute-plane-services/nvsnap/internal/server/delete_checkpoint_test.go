@@ -455,3 +455,61 @@ func TestCascadeDelete_NoCRDDeleteForRowsWithoutNamespace(t *testing.T) {
 		t.Errorf("namespace-less row should not generate errors; got %v", res.Errors)
 	}
 }
+
+// nvsnap#736: the catalog row is the only pointer to the on-disk dump. When a
+// tier delete fails (agent 401 under --auth-mode=required, agent down,
+// blobstore 5xx), dropping the row orphans those bytes -- nothing references
+// them, so nothing retries or GCs them. Worse, the catalog delete itself set
+// AnySuccess, so the handler returned 204 No Content while the dump survived.
+//
+// The row must be retained on any tier failure so the delete stays retryable.
+func TestCascadeDelete_RetainsCatalogRowWhenATierFails(t *testing.T) {
+	s := newTestServerWithCatalog(t)
+	fb, fbSrv := newFakeBlobstore()
+	fb.failHash["server-broken"] = http.StatusInternalServerError
+	defer fbSrv.Close()
+	s.config.BlobstoreURL = fbSrv.URL
+
+	row := &db.Checkpoint{ID: "ck-1", Hash: "abc123abc123abc123", CheckpointPath: "/var/lib/nvsnap/checkpoints/server-broken"}
+	if err := s.catalog.UpsertCheckpoint(row); err != nil {
+		t.Fatalf("seed catalog: %v", err)
+	}
+
+	res := s.cascadeDeleteCheckpoint(context.Background(), "ck-1", "server-broken", row)
+
+	if len(res.Errors) == 0 {
+		t.Fatal("expected a tier error from the failing blobstore")
+	}
+	if res.CatalogRows != 0 {
+		t.Errorf("CatalogRows = %d, want 0 — the row must survive a failed tier delete", res.CatalogRows)
+	}
+	// The row itself must still be readable, or the dump is unreachable.
+	if got, err := s.catalog.GetCheckpoint("ck-1"); err != nil || got == nil {
+		t.Errorf("catalog row was deleted despite a tier failure (get: %v) — dump is now orphaned", err)
+	}
+	if res.Status() != "partial" {
+		t.Errorf("Status() = %q, want partial", res.Status())
+	}
+}
+
+// The clean path must still delete the row, or nothing is ever reclaimed.
+func TestCascadeDelete_DeletesCatalogRowWhenAllTiersSucceed(t *testing.T) {
+	s := newTestServerWithCatalog(t)
+	_, fbSrv := newFakeBlobstore()
+	defer fbSrv.Close()
+	s.config.BlobstoreURL = fbSrv.URL
+
+	row := &db.Checkpoint{ID: "ck-ok", Hash: "def456def456def456", CheckpointPath: "/var/lib/nvsnap/checkpoints/agent-ok"}
+	if err := s.catalog.UpsertCheckpoint(row); err != nil {
+		t.Fatalf("seed catalog: %v", err)
+	}
+
+	res := s.cascadeDeleteCheckpoint(context.Background(), "ck-ok", "agent-ok", row)
+
+	if len(res.Errors) != 0 {
+		t.Fatalf("clean cascade should have no errors; got %v", res.Errors)
+	}
+	if res.CatalogRows == 0 {
+		t.Error("CatalogRows = 0 — a clean cascade must delete the row")
+	}
+}
