@@ -79,7 +79,15 @@ for name in "${!IMAGES[@]}"; do
     # nvsnap-agent-base (different prefix) and nvsnap-init from nvsnap-init-config.
     sed_re="s|[^[:space:]\"']*/${name}:[^[:space:]\"']*|${new}|g"
     for dir in "${DIRS[@]}"; do
-        find "$dir" -name "*.yaml" -exec sed -i -E "${sed_re}" {} \;
+        # Skip chart templates. They never carry a literal image reference --
+        # the chart reads images from values.yaml, handled by set_chart_tag
+        # below -- so there is nothing here to sync, and the pattern is loose
+        # enough to corrupt ordinary text. It rewrote the shell literal
+        # "ds/nvsnap-agent:agent" in post-install-smoke.yaml into a full image
+        # ref, which broke the smoke test and, because the smoke test gates
+        # the release, made every subsequent install and upgrade fail.
+        find "$dir" -name "*.yaml" -not -path "*/templates/*" \
+            -exec sed -i -E "${sed_re}" {} \;
     done
     for f in "${CHART_VALUES[@]}"; do
         [ -f "$f" ] && [ -n "$(chart_tag "$f" "$name")" ] || continue
@@ -94,7 +102,10 @@ fail=0
 for name in "${!IMAGES[@]}"; do
     ver="${IMAGES[$name]}"
     expected="${NVSNAP_REGISTRY}/${name}:${ver}"
-    if remaining=$(grep -rn "/${name}:" "${DIRS[@]}" 2>/dev/null | grep -v "${expected}" || true); then
+    # Same templates exclusion as the substitution above, or this reports the
+    # shell literals it deliberately no longer rewrites as stale references.
+    if remaining=$(grep -rn "/${name}:" "${DIRS[@]}" 2>/dev/null \
+                   | grep -v '/templates/' | grep -v "${expected}" || true); then
         if [ -n "$remaining" ]; then
             echo "WARNING: stale ${name} references found:" >&2
             echo "$remaining" >&2
