@@ -96,3 +96,79 @@ func TestBuildChiMux_Info_RejectsNonGET(t *testing.T) {
 		})
 	}
 }
+
+// newInfoTestMuxWithHosts builds the chi router with vanity and OpenAI hosts
+// registered so the hostRouter middleware is exercised for /info requests.
+func newInfoTestMuxWithHosts(t *testing.T, vanityHost, openAIHost string) http.Handler {
+	t.Helper()
+
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(backend.Close)
+
+	cfg := &config.GatewayConfig{}
+	cfg.Vanity = map[string]config.VanityEntry{
+		"test": {Host: vanityHost},
+	}
+	cfg.OpenAI.Host = openAIHost
+
+	mux, err := buildChiMux(cfg, Config{
+		NvcfApiEndpoint:              backend.URL,
+		PrivateModelNameRegexPattern: "^$",
+	})
+	require.NoError(t, err)
+	return mux
+}
+
+func TestBuildChiMux_Info_VanityHost(t *testing.T) {
+	golibversion.Service = "nvcf-ai-api-gateway-service"
+	golibversion.Version = "test-1.0.0"
+	golibversion.GitHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	t.Cleanup(func() {
+		golibversion.Service = ""
+		golibversion.Version = ""
+		golibversion.GitHash = ""
+	})
+
+	const vanityHost = "vanity.example.com"
+	mux := newInfoTestMuxWithHosts(t, vanityHost, "openai.example.com")
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/info", nil)
+	r.Host = vanityHost
+	mux.ServeHTTP(w, r)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
+
+	var info map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &info))
+	assert.Equal(t, "nvcf-ai-api-gateway-service", info["service"])
+}
+
+func TestBuildChiMux_Info_OpenAIHost(t *testing.T) {
+	golibversion.Service = "nvcf-ai-api-gateway-service"
+	golibversion.Version = "test-1.0.0"
+	golibversion.GitHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	t.Cleanup(func() {
+		golibversion.Service = ""
+		golibversion.Version = ""
+		golibversion.GitHash = ""
+	})
+
+	const openAIHost = "openai.example.com"
+	mux := newInfoTestMuxWithHosts(t, "vanity.example.com", openAIHost)
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/info", nil)
+	r.Host = openAIHost
+	mux.ServeHTTP(w, r)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
+
+	var info map[string]string
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &info))
+	assert.Equal(t, "nvcf-ai-api-gateway-service", info["service"])
+}
