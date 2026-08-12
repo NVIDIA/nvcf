@@ -276,7 +276,7 @@ impl StargateRuntime {
                 serde_json::from_slice::<LoadBalancerConfig>(&bytes)
                     .with_context(|| format!("failed to parse lb config file: {path}"))?
             }
-            None => LoadBalancerConfig::default(),
+            None => LoadBalancerConfig::permissive_default(),
         };
         let lb_router = Arc::new(
             LoadBalancerRouter::from_config(&lb_config)
@@ -284,6 +284,7 @@ impl StargateRuntime {
         );
         info!(
             default_lb = %lb_config.default,
+            request_algorithms = lb_config.request_algorithms.len(),
             model_overrides = lb_config.models.len(),
             "load balancer config loaded"
         );

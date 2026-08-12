@@ -15,8 +15,11 @@ Start Stargate with an optional JSON file:
 --lb-config-path=/config/lb-config.json
 ```
 
-When the argument is absent, Stargate uses `power-of-two` for every model.
-When the argument is present, Stargate reads and validates the file during
+When the argument is absent, Stargate uses `power-of-two` for every model and
+accepts every built-in algorithm as a routing-method override. When the
+argument is present, only the algorithms the file lists in
+`request_algorithms` are selectable per request.
+Stargate reads and validates the file during
 startup. A missing file, invalid JSON, unknown top-level field, unsupported
 algorithm field, or invalid algorithm factory configuration prevents startup.
 Stargate does not reload the file after startup.

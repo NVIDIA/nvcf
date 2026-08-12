@@ -1418,6 +1418,84 @@ fn unknown_request_override_returns_error() {
 }
 
 #[test]
+fn permissive_default_resolves_every_builtin_algorithm() {
+    let router = LoadBalancerRouter::from_config(&LoadBalancerConfig::permissive_default())
+        .expect("permissive default config should build");
+
+    for algorithm in LoadBalancerAlgorithm::ALL {
+        let algorithm_override = LoadBalancerAlgorithmOverride::parse(&algorithm.to_string())
+            .expect("routing algorithm override should parse");
+        let config = router
+            .resolve_algorithm_override("any-model", Some(&algorithm_override))
+            .expect("every built-in algorithm should resolve");
+        assert_eq!(config.config().algorithm(), algorithm);
+    }
+}
+
+#[test]
+fn permissive_default_resolves_alias_and_underscore_spellings() {
+    let router = LoadBalancerRouter::from_config(&LoadBalancerConfig::permissive_default())
+        .expect("permissive default config should build");
+    let spellings = [
+        ("power_of_two", LoadBalancerAlgorithm::PowerOfTwo),
+        ("round_robin", LoadBalancerAlgorithm::RoundRobin),
+        ("groq-multiregion", LoadBalancerAlgorithm::WaitAndWiden),
+        ("groq_multiregion", LoadBalancerAlgorithm::WaitAndWiden),
+        (
+            "pulsar-multiregion",
+            LoadBalancerAlgorithm::PulsarWaitAndWiden,
+        ),
+        (
+            "pulsar_multiregion",
+            LoadBalancerAlgorithm::PulsarWaitAndWiden,
+        ),
+    ];
+
+    for (spelling, expected) in spellings {
+        let algorithm_override = LoadBalancerAlgorithmOverride::parse(spelling)
+            .expect("routing algorithm override should parse");
+        let config = router
+            .resolve_algorithm_override("any-model", Some(&algorithm_override))
+            .expect("alias spelling should resolve");
+        assert_eq!(config.config().algorithm(), expected, "{spelling}");
+    }
+}
+
+#[test]
+fn permissive_default_keeps_power_of_two_without_override() {
+    let router = LoadBalancerRouter::from_config(&LoadBalancerConfig::permissive_default())
+        .expect("permissive default config should build");
+
+    let config = router
+        .resolve_algorithm_override("any-model", None)
+        .expect("default algorithm should resolve");
+    assert_eq!(
+        config.config().algorithm(),
+        LoadBalancerAlgorithm::PowerOfTwo
+    );
+}
+
+#[test]
+fn explicit_config_stays_restrictive() {
+    let router = router_from_json(
+        r#"{"default":"power-of-two","request_algorithms":{"round-robin":"round-robin"}}"#,
+    );
+    let algorithm_override = LoadBalancerAlgorithmOverride::parse("pulsar")
+        .expect("routing algorithm override should parse");
+
+    let error = router
+        .resolve_algorithm_override("any-model", Some(&algorithm_override))
+        .expect_err("unlisted routing method should stay unavailable");
+    assert_eq!(
+        error,
+        LoadBalancerRoutingAlgorithmError::Unavailable {
+            raw: "pulsar".to_string(),
+            algorithm: LoadBalancerAlgorithm::Pulsar,
+        }
+    );
+}
+
+#[test]
 fn request_excluded_clusters_are_not_selected() {
     let router = router_with_default(LoadBalancerAlgorithm::RoundRobin);
     let target = target_with_model("model-exclusions");
