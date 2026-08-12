@@ -15,8 +15,8 @@
 
 ess:
   image:
-    registry: nvcr.io
-    repository: 0651155215864979/ncp-dev/nvcf-ess
+    registry: ""
+    repository: ""
 
   env:
     # Ensure stacktraces are expanded
