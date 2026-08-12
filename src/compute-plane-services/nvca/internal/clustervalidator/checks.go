@@ -1194,6 +1194,19 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 	}
 }
 
+// nodeToNodeSecurityContext returns a restricted Pod Security Standards compliant
+// context. Port 19999 is above 1024 so busybox nc runs fine as non-root.
+func nodeToNodeSecurityContext() *corev1.SecurityContext {
+	runAsNonRoot := true
+	allowPrivEsc := false
+	return &corev1.SecurityContext{
+		RunAsNonRoot:             &runAsNonRoot,
+		AllowPrivilegeEscalation: &allowPrivEsc,
+		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+		SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+	}
+}
+
 func buildNodeToNodeServerPod(name, nodeName string) *corev1.Pod {
 	deadline := nodeToNodeActiveDeadline
 	return &corev1.Pod{
@@ -1210,10 +1223,11 @@ func buildNodeToNodeServerPod(name, nodeName string) *corev1.Pod {
 			RestartPolicy:         corev1.RestartPolicyNever,
 			ActiveDeadlineSeconds: &deadline,
 			Containers: []corev1.Container{{
-				Name:      "server",
-				Image:     nodeToNodeImage,
-				Command:   []string{"sh", "-c", fmt.Sprintf("while true; do nc -l -p %d; done", nodeToNodeTestPort)},
-				Resources: enforcementResources(),
+				Name:            "server",
+				Image:           nodeToNodeImage,
+				Command:         []string{"sh", "-c", fmt.Sprintf("while true; do nc -l -p %d; done", nodeToNodeTestPort)},
+				Resources:       enforcementResources(),
+				SecurityContext: nodeToNodeSecurityContext(),
 			}},
 		},
 	}
@@ -1235,10 +1249,11 @@ func buildNodeToNodeClientPod(name, nodeName, serverIP string) *corev1.Pod {
 			RestartPolicy:         corev1.RestartPolicyNever,
 			ActiveDeadlineSeconds: &deadline,
 			Containers: []corev1.Container{{
-				Name:      "client",
-				Image:     nodeToNodeImage,
-				Command:   []string{"sh", "-c", fmt.Sprintf("nc -z -w 5 %s %d", serverIP, nodeToNodeTestPort)},
-				Resources: enforcementResources(),
+				Name:            "client",
+				Image:           nodeToNodeImage,
+				Command:         []string{"sh", "-c", fmt.Sprintf("nc -z -w 5 %s %d", serverIP, nodeToNodeTestPort)},
+				Resources:       enforcementResources(),
+				SecurityContext: nodeToNodeSecurityContext(),
 			}},
 		},
 	}

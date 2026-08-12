@@ -99,34 +99,31 @@ func TestRun_EmitMetricsGatesSummaryWrite(t *testing.T) {
 }
 
 // TestRun_ControlPlaneRoleSkipsGPUChecks verifies that with role="control-plane"
-// the GPU and SMB checks do not run, so a control-plane cluster without GPU
-// nodes is not falsely reported as not-ready.
+// the GPU and SMB checks do not run. A bare cluster with no GPUs should fail
+// because of missing StorageClass or Gateway CRDs, not because of GPUAvailable.
 func TestRun_ControlPlaneRoleSkipsGPUChecks(t *testing.T) {
-	// A cluster with no GPU nodes and no GPU Operator. Under the compute-plane
-	// role (default) this would be NVCF-Not-Ready because GPUAvailable=false
-	// is a critical check. Under the control-plane role it must pass (no GPU
-	// row in the summary).
-	client := fake.NewSimpleClientset(
-		makeNode("node-1", true, 0), // no GPUs
-	)
-	// Run must not return an error on a control-plane role even when there are
-	// no GPU nodes. The control-plane checks (StorageClass, Gateway) will also
-	// fail on this bare cluster, but that's fine for this assertion — we only
-	// care that the GPU row absence means the call doesn't immediately return
-	// "not ready" due to GPUAvailable.
-	//
-	// Use emitMetrics=false so we don't need the summary write RBAC.
+	client := fake.NewSimpleClientset(makeNode("node-1", true, 0))
 	err := Run(context.Background(), client, nil, "ns", "cfg", "ns", false, RoleControlPlane)
-	// The control-plane checks (StorageClass missing, gateway CRDs missing)
-	// will fail, so the cluster IS not-ready. But the failure must be due to
-	// control-plane checks, NOT GPU checks. We verify by inspecting the state
-	// indirectly: if the GPU check ran and caused the failure, the error would
-	// mention GPU; the control-plane checks produce different messages.
-	// We can't easily inspect internal state here, so we settle for a simpler
-	// invariant: the call must complete without panicking, and the error (if any)
-	// must not be nil only for GPU-related reasons.
-	// The true correctness guard is TestPrintSummary_ControlPlaneRole below.
-	_ = err // return value is checked in the summary test
+	// A bare fake cluster fails control-plane checks (no StorageClass, no Gateway CRDs).
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "NVCF-Not-Ready",
+		"error must name the verdict, not a GPU-specific failure")
+	assert.NotContains(t, err.Error(), "GPU",
+		"GPU checks must not run under the control-plane role")
+}
+
+// TestRun_ControlPlaneRoleRunsControlPlaneChecks verifies the role dispatch:
+// StorageClass check runs and GPU state is not populated.
+func TestRun_ControlPlaneRoleRunsControlPlaneChecks(t *testing.T) {
+	state := &ValidationState{Log: testLog(), Role: RoleControlPlane}
+	client := fake.NewSimpleClientset(makeNode("node-1", true, 0))
+
+	checkStorageClass(context.Background(), client, state)
+
+	require.NotNil(t, state.DefaultStorageClassOK,
+		"control-plane role must set DefaultStorageClassOK after running the StorageClass check")
+	assert.False(t, state.GPUAvailable,
+		"GPUAvailable must remain false — GPU check must not have run")
 }
 
 // TestPrintSummary_ControlPlaneRole verifies that with Role=RoleControlPlane
