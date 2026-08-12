@@ -45,14 +45,14 @@ func main() {
 		log.WithError(err).Fatal("Failed to create Kubernetes client")
 	}
 
-	// Build the dynamic client from the same REST config. Used for listing
-	// Gateway API custom resources (HTTPRoutes, etc.) which are not in the
-	// typed k8s.io/client-go clientset. Failure is non-fatal: checkGatewayRoutes
-	// skips gracefully when dynClient is nil.
-	dynClient, err := dynamic.NewForConfig(restCfg)
-	if err != nil {
-		log.WithError(err).Warn("Could not create dynamic client; gateway route check will be skipped")
-		dynClient = nil
+	// Build the dynamic client from the same REST config. Declared as
+	// dynamic.Interface so the nil guard in checkGatewayRoutes works: assigning
+	// a typed *DynamicClient nil to an interface creates a non-nil interface.
+	var dynClient dynamic.Interface
+	if dc, dcErr := dynamic.NewForConfig(restCfg); dcErr != nil {
+		log.WithError(dcErr).Warn("Could not create dynamic client; gateway route check will be skipped")
+	} else {
+		dynClient = dc
 	}
 
 	configNS := os.Getenv("VALIDATOR_CONFIG_NAMESPACE")
@@ -86,7 +86,11 @@ func main() {
 	// VALIDATOR_ROLE selects which check set runs: "control-plane" enables
 	// gateway and StorageClass checks and skips GPU/SMB; anything else (including
 	// unset) runs the compute-plane check set (backward-compatible default).
-	role := parseRole(os.Getenv("VALIDATOR_ROLE"))
+	roleEnv := os.Getenv("VALIDATOR_ROLE")
+	role := parseRole(roleEnv)
+	if roleEnv != "" && role == "" {
+		log.Warnf("VALIDATOR_ROLE=%q is not recognized; defaulting to compute-plane", roleEnv)
+	}
 
 	if err := clustervalidator.Run(ctx, client, dynClient, configNS, configName, summaryNS, emitMetrics, role); err != nil {
 		log.WithError(err).Fatal("Cluster validation failed")

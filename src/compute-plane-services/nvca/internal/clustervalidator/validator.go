@@ -183,7 +183,12 @@ func Run(
 		checkEnvoyGateway(ctx, client, state)
 		checkGatewayRoutes(ctx, dynClient, state)
 		checkExternalLoadBalancer(ctx, client, state)
-		checkNodeToNode(ctx, client, state)
+		// Node-to-node creates pods and requires pod-create RBAC. Skip during
+		// preflight (emitMetrics=false) where the SA may not hold that permission;
+		// run only for in-cluster scheduled checks where the SA is fully provisioned.
+		if emitMetrics {
+			checkNodeToNode(ctx, client, state)
+		}
 	} else {
 		// Compute-plane cluster (default): GPU operator, SMB CSI driver.
 		checkSMBCSIDriver(ctx, client, state)

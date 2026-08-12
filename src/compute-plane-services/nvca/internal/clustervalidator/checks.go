@@ -31,6 +31,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -823,9 +824,11 @@ func checkStorageClass(ctx context.Context, client kubernetes.Interface, state *
 
 	classes, err := client.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{})
 	if err != nil {
+		// Leave DefaultStorageClassOK nil (unknown) so the summary row is
+		// omitted rather than reported as "Not Found" — an API error is not
+		// confirmation that no default StorageClass exists.
 		printWarning(log, fmt.Sprintf("Could not list StorageClasses: %v", err))
-		ok := false
-		state.DefaultStorageClassOK = &ok
+		state.Warnings = append(state.Warnings, "Default StorageClass: status unknown (listing failed)")
 		return
 	}
 
@@ -1066,11 +1069,12 @@ func checkExternalLoadBalancer(ctx context.Context, client kubernetes.Interface,
 }
 
 const (
-	nodeToNodeTestPort   = 19999
-	nodeToNodeImage      = enforcementDefaultImg // busybox:1.36
-	nodeToNodeNamespace  = "default"
-	nodeToNodeServerName = "nvcf-n2n-server"
-	nodeToNodeClientName = "nvcf-n2n-client"
+	nodeToNodeTestPort      = 19999
+	nodeToNodeImage         = enforcementDefaultImg // busybox:1.36
+	nodeToNodeNamespace     = "default"
+	nodeToNodeServerName    = "nvcf-n2n-server"
+	nodeToNodeClientName    = "nvcf-n2n-client"
+	nodeToNodeActiveDeadline = int64(120) // API server terminates pods if deferred cleanup never runs
 	// 90 s per pod matches enforcementPodTimeout — image should already be
 	// cached from the enforcement check that ran earlier in the same run.
 	nodeToNodePodTimeout = 90 * time.Second
@@ -1091,9 +1095,11 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 
 	nodes, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
+		// Leave NodeToNodeOK nil (unknown) so the summary row is omitted rather
+		// than reported as "Failed" — an RBAC or API error is not confirmation
+		// of a broken overlay network.
 		printWarning(log, fmt.Sprintf("Could not list nodes: %v", err))
-		ok := false
-		state.NodeToNodeOK = &ok
+		state.Warnings = append(state.Warnings, "Node-to-Node: status unknown (node listing failed)")
 		return
 	}
 
@@ -1116,7 +1122,7 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 	nodeA, nodeB := schedulable[0], schedulable[1]
 	log.Infof("  Probing overlay connectivity: %s → %s", nodeA, nodeB)
 
-	suffix := fmt.Sprintf("%d", time.Now().UnixNano()%1000000)
+	suffix := rand.String(6)
 	serverName := nodeToNodeServerName + "-" + suffix
 	clientName := nodeToNodeClientName + "-" + suffix
 
@@ -1189,24 +1195,23 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 }
 
 func buildNodeToNodeServerPod(name, nodeName string) *corev1.Pod {
+	deadline := nodeToNodeActiveDeadline
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: nodeToNodeNamespace,
 			Labels: map[string]string{
-				"app.kubernetes.io/managed-by": "nvcf-cli",
+				"app.kubernetes.io/managed-by": "nvcf-cluster-validator",
 				"app.kubernetes.io/component":  "n2n-probe",
 			},
 		},
 		Spec: corev1.PodSpec{
-			NodeName:      nodeName,
-			RestartPolicy: corev1.RestartPolicyNever,
+			NodeName:              nodeName,
+			RestartPolicy:         corev1.RestartPolicyNever,
+			ActiveDeadlineSeconds: &deadline,
 			Containers: []corev1.Container{{
-				Name:  "server",
-				Image: nodeToNodeImage,
-				// Loop keeps the pod Running while we resolve its IP and
-				// start the client. The pod is cleaned up via a deferred
-				// background-context delete, not by natural exit.
+				Name:      "server",
+				Image:     nodeToNodeImage,
 				Command:   []string{"sh", "-c", fmt.Sprintf("while true; do nc -l -p %d; done", nodeToNodeTestPort)},
 				Resources: enforcementResources(),
 			}},
@@ -1215,22 +1220,24 @@ func buildNodeToNodeServerPod(name, nodeName string) *corev1.Pod {
 }
 
 func buildNodeToNodeClientPod(name, nodeName, serverIP string) *corev1.Pod {
+	deadline := nodeToNodeActiveDeadline
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: nodeToNodeNamespace,
 			Labels: map[string]string{
-				"app.kubernetes.io/managed-by": "nvcf-cli",
+				"app.kubernetes.io/managed-by": "nvcf-cluster-validator",
 				"app.kubernetes.io/component":  "n2n-probe",
 			},
 		},
 		Spec: corev1.PodSpec{
-			NodeName:      nodeName,
-			RestartPolicy: corev1.RestartPolicyNever,
+			NodeName:              nodeName,
+			RestartPolicy:         corev1.RestartPolicyNever,
+			ActiveDeadlineSeconds: &deadline,
 			Containers: []corev1.Container{{
-				Name:    "client",
-				Image:   nodeToNodeImage,
-				Command: []string{"sh", "-c", fmt.Sprintf("nc -z -w 5 %s %d", serverIP, nodeToNodeTestPort)},
+				Name:      "client",
+				Image:     nodeToNodeImage,
+				Command:   []string{"sh", "-c", fmt.Sprintf("nc -z -w 5 %s %d", serverIP, nodeToNodeTestPort)},
 				Resources: enforcementResources(),
 			}},
 		},
