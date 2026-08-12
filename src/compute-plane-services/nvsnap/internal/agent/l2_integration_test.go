@@ -104,13 +104,26 @@ func TestDefaultL2Size_RootfsUsesTotalSize(t *testing.T) {
 	}
 }
 
-// Small rootfs captures get a 10 GiB floor so fs overhead on a tiny tree
-// doesn't provision a sub-GiB PVC that fails to format/fit.
-func TestDefaultL2Size_RootfsFloor(t *testing.T) {
+// The floor guards against a degenerate manifest; it is not a default size.
+// It was 10 GiB, which meant the measured size was discarded for anything
+// under ~8.5 GiB -- a 269 MB cachedir capture provisioned 10 GiB, permanently,
+// because the L2 StorageClasses are Retain. Sizes above the floor must come
+// from the measurement.
+func TestDefaultL2Size_FloorOnlyAppliesBelowIt(t *testing.T) {
 	const oneGiB = int64(1) << 30
-	m := checkpointstore.Manifest{CaptureMethod: "rootfs", TotalSizeBytes: 2 * oneGiB}
-	if got := defaultL2Size("hash", m); got != 10*oneGiB {
-		t.Errorf("2 GB rootfs tree → %d GiB, want 10 GiB floor", got/oneGiB)
+
+	// Well under the floor: a 269 MB cachedir capture (the dev2 case).
+	tiny := checkpointstore.Manifest{CaptureMethod: "cachedir", TotalSizeBytes: 269 * 1000 * 1000}
+	if got := defaultL2Size("hash", tiny); got != 2*oneGiB {
+		t.Errorf("269 MB cachedir capture → %d GiB, want the 2 GiB floor", got/oneGiB)
+	}
+
+	// Above the floor: measurement wins, floor must not inflate it.
+	m := checkpointstore.Manifest{CaptureMethod: "rootfs", TotalSizeBytes: 5 * oneGiB}
+	want := 5 * oneGiB * 12 / 10
+	if got := defaultL2Size("hash", m); got != want {
+		t.Errorf("5 GB rootfs tree → %d GiB, want %d GiB (measured x1.2, not the floor)",
+			got/oneGiB, want/oneGiB)
 	}
 }
 
