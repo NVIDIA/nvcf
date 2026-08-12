@@ -21,7 +21,7 @@ metadata:
   name: nvca-operator
   namespace: nvca-operator
   labels:
-    helm.sh/chart: helm-nvca-operator-1.14.0
+    helm.sh/chart: helm-nvca-operator-1.19.0
     app.kubernetes.io/name: nvca-operator
     app.kubernetes.io/instance: nvca-operator
     app.kubernetes.io/version: "3.0.4"
@@ -92,8 +92,6 @@ spec:
             fieldRef:
               fieldPath: metadata.namespace
         args:
-          - /tini
-          - --
           - /usr/bin/nvca-operator
           - --nca-id
           - "nvcf-default"
@@ -117,6 +115,10 @@ spec:
           - --nvca-cache-mount-options-enabled
           - --nvca-cache-mount-options
           - "ro,norecovery,nouuid"
+          - --function-env-overrides-b64
+          - "eyJCWU9PX09URUxfQ09MTEVDVE9SX0NPTlRBSU5FUiI6Im52Y3IuaW8vbnZpZGlhL252Y2YtYnlvYy9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTU3LjExIn0="
+          - --task-env-overrides-b64
+          - "eyJCWU9PX09URUxfQ09MTEVDVE9SX0NPTlRBSU5FUiI6Im52Y3IuaW8vbnZpZGlhL252Y2YtYnlvYy9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTU3LjExIn0="
         image: nvcr.io/0651155215864979/ncp-dev/nvca-operator:3.2.0
         imagePullPolicy: IfNotPresent
         securityContext:
@@ -173,8 +175,6 @@ spec:
             drop:
               - "ALL"
         args:
-          - /tini
-          - --
           - /usr/bin/nvca-mirror
           - run
           - --target-namespace
