@@ -94,7 +94,7 @@ pub(super) async fn send_completion_request(
                 request_id: request_id.clone(),
                 routing_key: None,
                 model_id: model_id.to_string(),
-                priority: 0,
+                priority: None,
                 input_tokens: u64::try_from(input_tokens).unwrap_or(u64::MAX),
                 accepted_at: std::time::Instant::now(),
             },
