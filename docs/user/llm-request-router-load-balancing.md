@@ -39,8 +39,8 @@ The chart supports two configuration sources:
 | `loadBalancer.configPath` | The chart only passes `--lb-config-path=<path>`. The operator must add and maintain the file mount by another mechanism. |
 
 Inline `config` takes precedence when both values are set. When neither value
-is set, Stargate uses its built-in `power-of-two` default and accepts every
-built-in algorithm as a routing-method override.
+is set, Stargate uses its built-in `power-of-two` default and accepts a
+routing-method override when it is in the allowlist of built-in algorithms.
 
 Stargate reads and validates the file only during process startup. The
 StatefulSet does not include a load-balancer ConfigMap checksum in its pod
@@ -60,8 +60,8 @@ Algorithm availability is enforced at separate layers:
 
 For example, when a configuration is set and `power-of-two` is the effective
 algorithm, `wait_and_widen` requires a `wait-and-widen` entry in
-`request_algorithms`. Without a configuration, every built-in algorithm is
-already available as an override. The legacy `groq_multiregion` value remains
+`request_algorithms`. Without a configuration, the allowlist already contains
+every built-in algorithm. The legacy `groq_multiregion` value remains
 accepted and resolves to the same algorithm.
 
 Use `wait-and-widen` and `pulsar-wait-and-widen` in new function metadata,
