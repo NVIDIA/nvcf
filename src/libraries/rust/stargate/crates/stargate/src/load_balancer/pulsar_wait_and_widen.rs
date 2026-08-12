@@ -13,23 +13,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::groq_multiregion::{GroqMultiregionConfig, GroqMultiregionLoadBalancer};
 use super::pulsar::PulsarLoadBalancer;
+use super::wait_and_widen::{WaitAndWidenConfig, WaitAndWidenLoadBalancer};
 use super::{
     LoadBalancer, LoadBalancerAlgorithmConfig, LoadBalancerCandidateChoice, LoadBalancerRequest,
 };
 use crate::routing_state::RoutedClusterSnapshot;
 
-pub(super) struct PulsarMultiregionLoadBalancer {
+pub(super) struct PulsarWaitAndWidenLoadBalancer {
     ranking: PulsarLoadBalancer,
-    multiregion: GroqMultiregionLoadBalancer,
+    wait_and_widen: WaitAndWidenLoadBalancer,
 }
 
-impl PulsarMultiregionLoadBalancer {
+impl PulsarWaitAndWidenLoadBalancer {
     pub(super) fn new(config: LoadBalancerAlgorithmConfig) -> Self {
         Self {
-            multiregion: GroqMultiregionLoadBalancer::new(
-                GroqMultiregionConfig::from_algorithm_config(&config),
+            wait_and_widen: WaitAndWidenLoadBalancer::new(
+                WaitAndWidenConfig::from_algorithm_config(&config),
             ),
             ranking: PulsarLoadBalancer::new(config),
         }
@@ -51,13 +51,13 @@ impl PulsarMultiregionLoadBalancer {
                     .is_eligible()
             })
             .collect::<Vec<_>>();
-        self.multiregion
+        self.wait_and_widen
             .choose_from_candidate_indices(request, candidates, &eligible)
             .map(|choice| {
                 let rank_depth = ranked_indices
                     .iter()
                     .position(|index| *index == choice.candidate_index)
-                    .expect("multiregion choice must come from the PULSAR ranking")
+                    .expect("wait_and_widen choice must come from the PULSAR ranking")
                     + 1;
                 LoadBalancerCandidateChoice {
                     candidate_index: choice.candidate_index,
@@ -74,9 +74,9 @@ impl PulsarMultiregionLoadBalancer {
     }
 }
 
-impl_display!(PulsarMultiregionLoadBalancer, "pulsar-multiregion");
+impl_display!(PulsarWaitAndWidenLoadBalancer, "pulsar-wait-and-widen");
 
-impl LoadBalancer for PulsarMultiregionLoadBalancer {
+impl LoadBalancer for PulsarWaitAndWidenLoadBalancer {
     fn choose_candidate(
         &self,
         request: &LoadBalancerRequest<'_>,
@@ -89,7 +89,7 @@ impl LoadBalancer for PulsarMultiregionLoadBalancer {
         let ranked_indices = self.ranking.compute_ranking(request, candidates);
         let primary_index = *ranked_indices.first()?;
         let primary = &candidates[primary_index];
-        if !self.multiregion.has_queue_slo(request)
+        if !self.wait_and_widen.has_queue_slo(request)
             && self.ranking.feasibility(request, primary).is_eligible()
         {
             return Some(LoadBalancerCandidateChoice {
@@ -135,8 +135,8 @@ mod tests {
     use super::super::pulsar::PulsarLoadBalancer;
     use super::super::tests::LoadBalancerTestChoiceExt;
     use super::super::{
-        GroqMultiregionAlgorithmConfig, LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig,
-        LoadBalancerRequest,
+        LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig, LoadBalancerRequest,
+        WaitAndWidenAlgorithmConfig,
     };
     use super::*;
     use crate::routing_state::{RoutedClusterSnapshot, RoutingTargetKey};
@@ -165,27 +165,27 @@ mod tests {
         let mut config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::Pulsar);
         config
             .set_seed(Some(seed.to_string()))
-            .expect("pulsar-multiregion supports deterministic seeding");
+            .expect("pulsar-wait-and-widen supports deterministic seeding");
         config.request_policy_mut().require_cache_affinity_key = true;
         config.request_policy_mut().require_input_tokens = true;
         config
     }
 
-    fn pulsar_multiregion_algorithm_config(
+    fn pulsar_wait_and_widen_algorithm_config(
         seed: &str,
         consider_kv_free_tokens: bool,
-        configure: impl FnOnce(&mut GroqMultiregionAlgorithmConfig),
+        configure: impl FnOnce(&mut WaitAndWidenAlgorithmConfig),
     ) -> LoadBalancerAlgorithmConfig {
         let mut config =
-            LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::PulsarMultiregion);
+            LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::PulsarWaitAndWiden);
         config
             .set_seed(Some(seed.to_string()))
-            .expect("pulsar-multiregion supports deterministic seeding");
+            .expect("pulsar-wait-and-widen supports deterministic seeding");
         config.request_policy_mut().consider_kv_free_tokens = consider_kv_free_tokens;
         configure(
             config
-                .multiregion_settings_mut()
-                .expect("pulsar-multiregion config should expose multiregion settings"),
+                .wait_and_widen_settings_mut()
+                .expect("pulsar-wait-and-widen config should expose wait_and_widen settings"),
         );
         config
     }
@@ -262,7 +262,7 @@ mod tests {
             pulsar_ranked_indices("hybrid-seed", &target, affinity_key, 0, &candidates)[0];
         candidates[primary_index].stats.num_running_queries = 1;
 
-        let hybrid = PulsarMultiregionLoadBalancer::new(pulsar_multiregion_algorithm_config(
+        let hybrid = PulsarWaitAndWidenLoadBalancer::new(pulsar_wait_and_widen_algorithm_config(
             "hybrid-seed",
             false,
             |settings| {
@@ -303,7 +303,7 @@ mod tests {
         candidates[primary_index].stats.kv_cache_free_tokens = 50;
         candidates[primary_index].stats.kv_cache_used_tokens = 974;
 
-        let hybrid = PulsarMultiregionLoadBalancer::new(pulsar_multiregion_algorithm_config(
+        let hybrid = PulsarWaitAndWidenLoadBalancer::new(pulsar_wait_and_widen_algorithm_config(
             "hybrid-kv-seed",
             true,
             |settings| {
@@ -335,8 +335,8 @@ mod tests {
         candidates[primary_index].stats.kv_cache_free_tokens = 1024;
         candidates[primary_index].stats.kv_cache_used_tokens = 0;
         candidates[primary_index].stats.queued_input_size = 50;
-        let hybrid_with_slo = PulsarMultiregionLoadBalancer::new(
-            pulsar_multiregion_algorithm_config("hybrid-kv-seed", true, |settings| {
+        let hybrid_with_slo = PulsarWaitAndWidenLoadBalancer::new(
+            pulsar_wait_and_widen_algorithm_config("hybrid-kv-seed", true, |settings| {
                 settings.max_queue_time_floor_ms = Some(100);
                 settings.max_queue_time_ceil_ms = Some(100);
                 settings.ttft_bucket_size_ms = Some(100);
@@ -387,7 +387,7 @@ mod tests {
             }
         }
 
-        let hybrid = PulsarMultiregionLoadBalancer::new(pulsar_multiregion_algorithm_config(
+        let hybrid = PulsarWaitAndWidenLoadBalancer::new(pulsar_wait_and_widen_algorithm_config(
             "hybrid-seed",
             false,
             |settings| {

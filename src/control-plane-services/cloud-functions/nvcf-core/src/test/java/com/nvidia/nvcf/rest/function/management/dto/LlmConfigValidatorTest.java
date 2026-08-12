@@ -19,9 +19,11 @@ class LlmConfigValidatorTest {
 
     @ParameterizedTest
     @ValueSource(strings = {
-        "power-of-two", "round-robin", "random", "groq-multiregion", "pulsar",
+        "power-of-two", "wait-and-widen", "round-robin", "random", "pulsar",
+        "pulsar-wait-and-widen", "groq-multiregion", "pulsar-multiregion",
         // Router normalizes case and '_' to '-', so these are accepted too.
-        "Power-Of-Two", "power_of_two", "  pulsar  "
+        "Power-Of-Two", "power_of_two", "wait_and_widen", "pulsar_wait_and_widen",
+        "groq_multiregion", "pulsar_multiregion", "  pulsar  "
     })
     void validRoutingMethodsAccepted(String routingMethod) {
         assertThatCode(() -> LlmConfigValidator.validateRoutingMethod(MODEL, routingMethod))

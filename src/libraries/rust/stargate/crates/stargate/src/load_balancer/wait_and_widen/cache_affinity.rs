@@ -19,7 +19,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use xxhash_rust::xxh3::xxh3_64;
 
-use super::{GroqMultiregionConfig, RequestExclusions};
+use super::{RequestExclusions, WaitAndWidenConfig};
 use crate::load_balancer::{
     HashInputBuilder, LoadBalancerRequest, cache_affinity_key_is_cacheable,
 };
@@ -35,7 +35,7 @@ pub(super) struct CacheAffinitySelector {
 impl CacheAffinitySelector {
     pub(super) fn candidate_indices(
         &self,
-        config: &GroqMultiregionConfig,
+        config: &WaitAndWidenConfig,
         request: &LoadBalancerRequest<'_>,
         candidates: &[RoutedClusterSnapshot],
     ) -> Option<Arc<Vec<usize>>> {
@@ -337,7 +337,7 @@ fn remove_nested<K: std::hash::Hash + Eq>(
 
 #[cfg(test)]
 pub(in crate::load_balancer) fn cache_affinity_candidate_indices(
-    config: &GroqMultiregionConfig,
+    config: &WaitAndWidenConfig,
     request: &LoadBalancerRequest<'_>,
     candidates: &[RoutedClusterSnapshot],
 ) -> Option<Vec<usize>> {
@@ -348,7 +348,7 @@ pub(in crate::load_balancer) fn cache_affinity_candidate_indices(
 
 #[cfg(test)]
 pub(in crate::load_balancer) fn cache_affinity_candidates(
-    config: &GroqMultiregionConfig,
+    config: &WaitAndWidenConfig,
     request: &LoadBalancerRequest<'_>,
     candidates: &[RoutedClusterSnapshot],
 ) -> Option<Vec<RoutedClusterSnapshot>> {
@@ -361,7 +361,7 @@ pub(in crate::load_balancer) fn cache_affinity_candidates(
 }
 
 fn build_ring(
-    config: &GroqMultiregionConfig,
+    config: &WaitAndWidenConfig,
     request: &LoadBalancerRequest<'_>,
     candidates: &[RoutedClusterSnapshot],
 ) -> Vec<CacheAffinityRingEntry> {
@@ -393,7 +393,7 @@ fn select_candidate_indices(
     candidates: &[RoutedClusterSnapshot],
     cache_affinity_key: &str,
     selection_count: usize,
-    config: &GroqMultiregionConfig,
+    config: &WaitAndWidenConfig,
     exclusions: RequestExclusions<'_>,
 ) -> Vec<usize> {
     if ring.is_empty() {
@@ -460,7 +460,7 @@ fn select_candidate_indices_from_ring(
 const HASH_VERSION: u8 = 1;
 
 fn cache_affinity_key_hash(
-    config: &GroqMultiregionConfig,
+    config: &WaitAndWidenConfig,
     request: &LoadBalancerRequest<'_>,
     cache_affinity_key: &str,
 ) -> u64 {
@@ -471,7 +471,7 @@ fn cache_affinity_key_hash(
 }
 
 pub(in crate::load_balancer) fn cache_affinity_virtual_node_hash(
-    config: &GroqMultiregionConfig,
+    config: &WaitAndWidenConfig,
     request: &LoadBalancerRequest<'_>,
     candidate: &RoutedClusterSnapshot,
     virtual_node: usize,
@@ -485,7 +485,7 @@ pub(in crate::load_balancer) fn cache_affinity_virtual_node_hash(
 
 fn append_ring_prefix(
     bytes: &mut HashInputBuilder,
-    config: &GroqMultiregionConfig,
+    config: &WaitAndWidenConfig,
     request: &LoadBalancerRequest<'_>,
 ) {
     bytes.push(HASH_VERSION);
