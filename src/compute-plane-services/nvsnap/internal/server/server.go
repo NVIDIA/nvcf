@@ -79,6 +79,12 @@ type Config struct {
 	// and every NVCA rootfs capture timed out at 15m → Failed → no
 	// pvc_promote_state=ready → no restore. GCP-H100-a 2026-06-10.)
 	ManifestNamespace string
+	// AgentToken is the shared bearer token the agent expects on its API
+	// (nvsnap#486). Empty when the deployment runs without
+	// agent.auth.enabled, in which case no header is sent and behaviour is
+	// unchanged. Read from NVSNAP_AGENT_TOKEN, which the chart projects
+	// from the nvsnap-agent-token Secret.
+	AgentToken string
 }
 
 // Server is the K8s-aware NVSNAP API server.
@@ -114,7 +120,7 @@ func New(cfg Config, kubeClient kubernetes.Interface, dynClient dynamic.Interfac
 		config:     cfg,
 		kubeClient: kubeClient,
 		dynClient:  dynClient,
-		httpClient: &http.Client{Timeout: 10 * time.Minute},
+		httpClient: withAgentAuth(&http.Client{Timeout: 10 * time.Minute}, cfg.AgentToken),
 		log:        log,
 		demo:       newDemoSession(),
 		hub:        newHub(log),
@@ -1116,7 +1122,10 @@ func (r *cascadeDeleteResult) Summary() string {
 
 func (s *Server) cascadeDeleteCheckpoint(ctx context.Context, id, agentID string, row *db.Checkpoint) cascadeDeleteResult {
 	var result cascadeDeleteResult
-	client := &http.Client{Timeout: 10 * time.Second}
+	// Own client rather than s.httpClient (much shorter timeout), so it needs
+	// the token wrapper too. Without it the L1 delete 401s, the row is dropped
+	// anyway, and the dump is orphaned (nvsnap#736).
+	client := withAgentAuth(&http.Client{Timeout: 10 * time.Second}, s.config.AgentToken)
 
 	// Targeted row, synthesizing missing fields from (id, agentID)
 	// so the per-row helper has what it needs even when row is nil
@@ -1421,7 +1430,7 @@ func (s *Server) proxyToAgentCheckpoint(w http.ResponseWriter, r *http.Request, 
 			continue
 		}
 		url := fmt.Sprintf("http://%s:%d%s?%s", ip, s.config.AgentPort, agentPath, r.URL.RawQuery)
-		client := &http.Client{Timeout: 10 * time.Second}
+		client := withAgentAuth(&http.Client{Timeout: 10 * time.Second}, s.config.AgentToken)
 		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, url, http.NoBody)
 		if err != nil {
 			s.writeError(w, http.StatusInternalServerError, err.Error())
@@ -1844,7 +1853,7 @@ func (s *Server) listAgentCheckpoints(ctx context.Context) []map[string]interfac
 		wg     sync.WaitGroup
 	)
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := withAgentAuth(&http.Client{Timeout: 5 * time.Second}, s.config.AgentToken)
 
 	for i := range nodes.Items {
 		node := &nodes.Items[i]
@@ -1907,7 +1916,7 @@ func (s *Server) checkAgentHealth(ctx context.Context, nodeIP string) bool {
 	if nodeIP == "" {
 		return false
 	}
-	client := &http.Client{Timeout: 3 * time.Second}
+	client := withAgentAuth(&http.Client{Timeout: 3 * time.Second}, s.config.AgentToken)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		fmt.Sprintf("http://%s:%d/health", nodeIP, s.config.AgentPort), http.NoBody)
 	if err != nil {
