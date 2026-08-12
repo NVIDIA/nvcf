@@ -39,7 +39,8 @@ The chart supports two configuration sources:
 | `loadBalancer.configPath` | The chart only passes `--lb-config-path=<path>`. The operator must add and maintain the file mount by another mechanism. |
 
 Inline `config` takes precedence when both values are set. When neither value
-is set, Stargate uses its built-in `power-of-two` default.
+is set, Stargate uses its built-in `power-of-two` default and accepts every
+built-in algorithm as a routing-method override.
 
 Stargate reads and validates the file only during process startup. The
 StatefulSet does not include a load-balancer ConfigMap checksum in its pod
@@ -57,10 +58,11 @@ Algorithm availability is enforced at separate layers:
 | LLM API Gateway | Nonblank routing method from authenticated model metadata, trimmed and forwarded as `x-routing-method` without algorithm validation. |
 | Stargate `x-routing-method` | Case-insensitive algorithm name with hyphens or underscores. It must match the effective algorithm or a model or top-level `request_algorithms` entry. Otherwise, Stargate returns HTTP `400`. |
 
-For example, when `power-of-two` is the effective algorithm,
-`wait_and_widen` requires a `wait-and-widen` entry in `request_algorithms`.
-The legacy `groq_multiregion` value remains accepted and resolves to the same
-algorithm.
+For example, when a configuration is set and `power-of-two` is the effective
+algorithm, `wait_and_widen` requires a `wait-and-widen` entry in
+`request_algorithms`. Without a configuration, every built-in algorithm is
+already available as an override. The legacy `groq_multiregion` value remains
+accepted and resolves to the same algorithm.
 
 Use `wait-and-widen` and `pulsar-wait-and-widen` in new function metadata,
 `lb-config.json` files, request-algorithm maps, and deployment manifests.

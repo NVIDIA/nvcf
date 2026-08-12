@@ -16,11 +16,10 @@ Start Stargate with an optional JSON file:
 ```
 
 When the argument is absent, Stargate uses `power-of-two` for every model and
-accepts every built-in algorithm as a routing-method override. When the
-argument is present, only the algorithms the file lists in
-`request_algorithms` are selectable per request.
-Stargate reads and validates the file during
-startup. A missing file, invalid JSON, unknown top-level field, unsupported
+accepts every built-in algorithm, with its default settings, as a
+routing-method override. When the argument is present, a request can select
+only the effective algorithm or an algorithm listed in `request_algorithms`.
+Stargate reads and validates the file during startup. A missing file, invalid JSON, unknown top-level field, unsupported
 algorithm field, or invalid algorithm factory configuration prevents startup.
 Stargate does not reload the file after startup.
 

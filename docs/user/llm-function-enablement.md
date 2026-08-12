@@ -79,8 +79,9 @@ the worker address under `api.env`. When the LLM addon is disabled, the stack
 does not pass a staged endpoint to the API chart.
 
 The request router uses `power-of-two` when no load-balancer configuration is
-set. Before a function selects a different routing method, configure the
-effective model algorithm or a request override.
+set, and accepts any supported `routingMethod` from a function. When a
+load-balancer configuration is set, a function can only select an algorithm
+that the configuration enables.
 
 If you mirror images to a registry that does not use the stack's default
 `global.image.registry` and `global.image.repository`, override the

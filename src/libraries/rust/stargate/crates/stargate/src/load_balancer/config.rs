@@ -476,10 +476,8 @@ pub struct LoadBalancerConfig {
 }
 
 impl LoadBalancerConfig {
-    /// Fallback when no config file is provided: `power-of-two` for every
-    /// model, with every built-in algorithm selectable per request. An
-    /// explicit config file keeps its restrictive semantics: only the
-    /// algorithms it lists in `request_algorithms` are selectable.
+    /// Config used when no config file is given: `power-of-two` by default,
+    /// and any built-in algorithm can be selected per request.
     pub fn permissive_default() -> Self {
         Self {
             request_algorithms: LoadBalancerAlgorithm::ALL
