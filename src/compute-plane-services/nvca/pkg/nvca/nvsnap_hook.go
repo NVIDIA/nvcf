@@ -71,6 +71,20 @@ const (
 	NvSnapFunctionVersionIDAnnotation = "nvsnap.io/function-version-id"
 )
 
+// NvSnapCaptureLabel marks a pod as a capture candidate.
+//
+// Unlike the annotations above this has to be a LABEL and it has to be present
+// at ADMISSION: NvSnap's mutating webhook gates the cachedir capture volume
+// (/opt/nvsnap) on it, and a volume cannot be added to a running pod.
+//
+// nvsnap-server also applies this label once the pod reports warm, which is
+// what drives the agent's rootfs capture watcher. That is correct for the
+// watcher but far too late for the webhook, so cachedir capture was never
+// injected into NVCA-created pods and the agent failed every capture with
+// "cachedir mode: no volume mounted at /opt/nvsnap". Bench manifests never hit
+// this because they carry the label from the start.
+const NvSnapCaptureLabel = "nvsnap.io/capture"
+
 // nvsnapFunctionStateGVR is the cluster-scoped CR holding per-cluster
 // NvSnap state for one NGC function-version. Defined in
 // pkg/apis/nvsnap/v1alpha1.
@@ -267,6 +281,16 @@ func (c K8sComputeBackend) stampNvSnapAnnotations(ctx context.Context, pod *core
 	// True cold start. Hook B trigger — cache is Cold / Fetching /
 	// Failed / absent and no content-addressed match exists either.
 	pod.Annotations[NvSnapCheckpointOnWarmAnnotation] = "true"
+	// Capture candidate. Stamped here and not on the restore paths above
+	// (which return early) on purpose: a restored pod must not be re-captured,
+	// or N replicas each POST a redundant CreateCheckpoint and overwrite each
+	// other's hash in CFS — the same reason checkpoint-on-warm is scoped this
+	// way (Greptile P2 on MR !1698). See NvSnapCaptureLabel for why this must
+	// be a label present at admission rather than an annotation.
+	if pod.Labels == nil {
+		pod.Labels = map[string]string{}
+	}
+	pod.Labels[NvSnapCaptureLabel] = "true"
 	span.SetAttributes(otelattr.String("nvsnap.decision", "stamped_checkpoint_on_warm"))
 }
 

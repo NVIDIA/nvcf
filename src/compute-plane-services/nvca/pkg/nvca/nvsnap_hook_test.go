@@ -154,6 +154,11 @@ func TestStampWarmHashStampsRestoreFrom(t *testing.T) {
 	if _, ok := pod.Annotations[NvSnapCheckpointOnWarmAnnotation]; ok {
 		t.Error("checkpoint-on-warm must NOT be stamped on a restore (cache Warm) — would cause redundant re-checkpoint by Hook B")
 	}
+	// Same scoping for the capture label: a restored pod is not a capture
+	// candidate, and labelling it would put N replicas back in the watcher.
+	if _, ok := pod.Labels[NvSnapCaptureLabel]; ok {
+		t.Error("capture label must NOT be stamped on a restore (cache Warm) — restored replicas would each be re-captured")
+	}
 }
 
 func TestStampColdSkipsRestoreFromKeepsOnWarm(t *testing.T) {
@@ -169,6 +174,14 @@ func TestStampColdSkipsRestoreFromKeepsOnWarm(t *testing.T) {
 	}
 	if got := pod.Annotations[NvSnapCheckpointOnWarmAnnotation]; got != "true" {
 		t.Errorf("checkpoint-on-warm should still be stamped to drive Hook B, got %q", got)
+	}
+	// The capture LABEL has to land at admission: NvSnap's webhook gates the
+	// cachedir volume (/opt/nvsnap) on it and cannot add a volume to a running
+	// pod. nvsnap-server relabels post-warm for the agent's watcher, which is
+	// too late for the webhook -- without this the agent fails every capture
+	// with "cachedir mode: no volume mounted at /opt/nvsnap".
+	if got := pod.Labels[NvSnapCaptureLabel]; got != "true" {
+		t.Errorf("capture label = %q, want \"true\" — cachedir capture cannot be injected without it at admission", got)
 	}
 }
 
