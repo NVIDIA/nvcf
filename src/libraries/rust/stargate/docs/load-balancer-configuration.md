@@ -34,6 +34,12 @@ The top-level object has three fields:
 Valid algorithm names are `power-of-two`, `wait-and-widen`, `round-robin`,
 `random`, `pulsar`, and `pulsar-wait-and-widen`.
 
+For backward compatibility, Stargate also accepts `groq-multiregion` as an
+alias for `wait-and-widen` and `pulsar-multiregion` as an alias for
+`pulsar-wait-and-widen` in `default`, `models`, `request_algorithms`, detailed
+algorithm objects, and routing-method overrides. Use the canonical names for
+new configurations.
+
 An entry in `models` or `request_algorithms` can be an algorithm name:
 
 ```json
@@ -174,7 +180,7 @@ Minimal configuration:
 
 ## `pulsar-wait-and-widen`
 
-`pulsar-wait-and-widen` combines Pulsar ranking with WaitAndWiden wait-and-widen fallback.
+`pulsar-wait-and-widen` combines Pulsar ranking with the WaitAndWiden fallback.
 Without queue-SLO fields, an eligible Pulsar primary wins immediately.
 
 When queue-SLO fields are enabled or the primary is ineligible, the algorithm

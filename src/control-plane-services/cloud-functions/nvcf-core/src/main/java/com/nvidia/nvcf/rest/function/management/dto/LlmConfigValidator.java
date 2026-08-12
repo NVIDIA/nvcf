@@ -23,7 +23,15 @@ public final class LlmConfigValidator {
 
     // Stargate LoadBalancerAlgorithm values; keep in sync. Blank = router default.
     private static final Set<String> VALID_ROUTING_METHODS = Set.of(
-            "power-of-two", "round-robin", "random", "groq-multiregion", "pulsar");
+            "power-of-two",
+            "wait-and-widen",
+            "round-robin",
+            "random",
+            "pulsar",
+            "pulsar-wait-and-widen",
+            // Deprecated Stargate aliases retained for existing deployments.
+            "groq-multiregion",
+            "pulsar-multiregion");
 
     // Comma-separated '<positiveInteger>-<unit>' entries, no unit repeated.
     private static final Pattern TOKEN_RATE_LIMIT_PATTERN = Pattern.compile(
@@ -31,7 +39,8 @@ public final class LlmConfigValidator {
 
     private static final String MESG_INVALID_ROUTING_METHOD =
             "Invalid request: 'llmConfig.routingMethod' for model '%s' is invalid; supported "
-                    + "values are [power-of-two, round-robin, random, groq-multiregion, pulsar]";
+                    + "values are [power-of-two, wait-and-widen, round-robin, random, pulsar, "
+                    + "pulsar-wait-and-widen, groq-multiregion, pulsar-multiregion]";
     private static final String MESG_INVALID_TOKEN_RATE_LIMIT =
             "Invalid request: 'llmConfig.tokenRateLimit' for model '%s' is invalid; expected "
                     + "comma-separated '<positiveInteger>-<unit>' entries with unit in [S, M, H, D, W] "

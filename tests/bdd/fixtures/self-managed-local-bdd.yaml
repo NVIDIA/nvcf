@@ -79,7 +79,7 @@ addons:
               "power-of-two": "power-of-two",
               "round-robin": "round-robin",
               "random": "random",
-              "groq-multiregion": "groq-multiregion"
+              "wait-and-widen": "wait-and-widen"
             }
           }
 
