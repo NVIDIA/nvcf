@@ -46,6 +46,7 @@ import (
 	"helm.sh/helm/v3/pkg/getter"
 	"helm.sh/helm/v3/pkg/registry"
 	"helm.sh/helm/v3/pkg/release"
+	"helm.sh/helm/v3/pkg/repo"
 
 	orasremote "oras.land/oras-go/v2/registry/remote"
 	orasauth "oras.land/oras-go/v2/registry/remote/auth"
@@ -93,7 +94,7 @@ func (h *Handler) runHelmTemplate(
 	}
 	safeGetters := getter.Providers{
 		{
-			Schemes: []string{"http", "https"},
+			Schemes: []string{"https"},
 			New: func(opts ...getter.Option) (getter.Getter, error) {
 				return getter.NewHTTPGetter(append(opts, getter.WithTransport(h.helmGetterTransport))...)
 			},
@@ -106,6 +107,7 @@ func (h *Handler) runHelmTemplate(
 		helmImageClientCache: helmImageClientCache,
 		safeGetters:          safeGetters,
 		helmRegistryClient:   helmRegistryClient,
+		workingDir:           workingDir,
 	}
 
 	if cfg.K8sVersion != "" {
@@ -161,25 +163,31 @@ type helmInstallClient struct {
 	helmCredsStore       orascredentials.Store
 	helmImageClient      orasauth.Client
 	helmImageClientCache *resettableAuthCache
-	safeGetters          getter.Providers // getter backed by h.httpClient (safe dialer)
+	safeGetters          getter.Providers // HTTP getter backed by the SSRF-safe transport
 	helmRegistryClient   *registry.Client // stored separately for the LocateChart override
+	workingDir           string           // request-scoped directory cleaned up by Handler.Run
 }
 
 // LocateChart shadows action.Install.LocateChart for HTTPS chart URLs so that
-// the download uses h.httpClient (which carries the SSRF-safe DialContext)
-// instead of Helm's default getter, which builds its own uncontrolled transport.
+// the download uses the handler-owned SSRF-safe transport instead of Helm's
+// default uncontrolled transport. RepoURL, credential, verification, and
+// ChartPathOptions getter settings are forwarded; runHelmTemplate leaves the
+// per-request TLS and plain-HTTP overrides unset so they cannot replace the
+// handler's transport policy.
 func (c helmInstallClient) LocateChart(name string, env *cli.EnvSettings) (string, error) {
 	if registry.IsOCI(name) {
-		// OCI path uses the registry client that wraps h.httpClient — safe dialer already applied.
+		// OCI path uses the registry client that wraps h.httpClient; safe dialer already applied.
 		return c.Install.LocateChart(name, env)
 	}
-	destDir, err := os.MkdirTemp("", "helm-chart-*")
-	if err != nil {
+	if err := os.MkdirAll(c.workingDir, 0700); err != nil {
 		return "", err
 	}
-	dlOpts := []getter.Option{}
-	if c.Username != "" || c.Password != "" {
-		dlOpts = append(dlOpts, getter.WithBasicAuth(c.Username, c.Password))
+	version := strings.TrimSpace(c.Version)
+	dlOpts := []getter.Option{
+		getter.WithPassCredentialsAll(c.PassCredentialsAll),
+		getter.WithTLSClientConfig(c.CertFile, c.KeyFile, c.CaFile),
+		getter.WithInsecureSkipVerifyTLS(c.InsecureSkipTLSverify),
+		getter.WithPlainHTTP(c.PlainHTTP),
 	}
 	verify := downloader.VerifyNever
 	if c.Verify {
@@ -195,8 +203,44 @@ func (c helmInstallClient) LocateChart(name string, env *cli.EnvSettings) (strin
 		RepositoryConfig: env.RepositoryConfig,
 		RepositoryCache:  env.RepositoryCache,
 	}
-	filename, _, err := dl.DownloadTo(name, c.Version, destDir)
-	return filename, err
+	if c.RepoURL != "" {
+		chartURL, err := repo.FindChartInAuthAndTLSAndPassRepoURL(
+			c.RepoURL, c.Username, c.Password, name, version,
+			c.CertFile, c.KeyFile, c.CaFile, c.InsecureSkipTLSverify,
+			c.PassCredentialsAll, c.safeGetters,
+		)
+		if err != nil {
+			return "", err
+		}
+		name = chartURL
+
+		repoURL, err := url.Parse(c.RepoURL)
+		if err != nil {
+			return "", err
+		}
+		chartURLParsed, err := url.Parse(chartURL)
+		if err != nil {
+			return "", err
+		}
+		if c.PassCredentialsAll ||
+			(repoURL.Scheme == chartURLParsed.Scheme && repoURL.Host == chartURLParsed.Host) {
+			dl.Options = append(dl.Options, getter.WithBasicAuth(c.Username, c.Password))
+		} else {
+			dl.Options = append(dl.Options, getter.WithBasicAuth("", ""))
+		}
+	} else {
+		dl.Options = append(dl.Options, getter.WithBasicAuth(c.Username, c.Password))
+	}
+
+	filename, _, err := dl.DownloadTo(name, version, c.workingDir)
+	if err != nil {
+		if filename != "" {
+			_ = os.Remove(filename)
+			_ = os.Remove(filename + ".prov")
+		}
+		return "", err
+	}
+	return filename, nil
 }
 
 func initHelmEnv() (settings *cli.EnvSettings, tmpDir string, err error) {

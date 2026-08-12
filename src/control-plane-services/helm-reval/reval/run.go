@@ -31,6 +31,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"reflect"
@@ -42,8 +43,10 @@ import (
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 	credhelper "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/imagecredential"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/zapotelspan"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 	"helm.sh/helm/v3/pkg/chartutil"
@@ -74,10 +77,11 @@ type Handler struct {
 	Logger      *zap.Logger
 	ServiceName string
 
-	httpClient          *http.Client
-	safeTransport       *http.Transport // for h.httpClient (ORAS / image checks)
-	helmGetterTransport *http.Transport // for the Helm HTTPS getter (DisableCompression: true)
-	newImageChecker     func() imageChecker
+	httpClient                *http.Client
+	safeTransport             *http.Transport // underlying transport for h.httpClient (ORAS / image checks)
+	helmGetterTransport       *http.Transport // Helm requires a concrete transport (DisableCompression: true)
+	helmInstrumentedTransport http.RoundTripper
+	newImageChecker           func() imageChecker
 	// Image cache should be shared between threads.
 	imageCache cache.ImageCache
 	serializer *serializerImpl
@@ -142,6 +146,8 @@ const (
 	UnrestrictedPolicy PolicyName = "Unrestricted"
 )
 
+const maxRedirects = 10
+
 type Result struct {
 	Valid              bool                     `json:"valid"`
 	ValidationErrors   []error                  `json:"validationErrors,omitempty"`
@@ -155,6 +161,28 @@ type ValidationPolicyResult struct {
 }
 
 type logContextValue struct{}
+
+type httpsOnlyRoundTripper struct{}
+
+func (httpsOnlyRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, fmt.Errorf("redirected chart downloads must use HTTPS")
+}
+
+func shouldTraceOutboundRequest(req *http.Request) bool {
+	return req != nil && req.URL != nil && req.URL.RawQuery == "" && !req.URL.ForceQuery
+}
+
+func newInstrumentedOutboundTransport(base http.RoundTripper) http.RoundTripper {
+	return otelhttp.NewTransport(
+		base,
+		// Query parameters commonly contain short-lived registry or object-store
+		// credentials. Skip those spans because otelhttp records url.full.
+		otelhttp.WithFilter(shouldTraceOutboundRequest),
+		// Hostnames originate in function configuration and chart content. Avoid
+		// unbounded server.address metric cardinality while retaining client spans.
+		otelhttp.WithMeterProvider(metricnoop.NewMeterProvider()),
+	)
+}
 
 func logIntoContext(ctx context.Context, l *zap.Logger) context.Context {
 	return context.WithValue(ctx, logContextValue{}, l)
@@ -183,6 +211,10 @@ func NewHandler(
 		KeepAlive: 30 * time.Second,
 	}
 	trpt := http.DefaultTransport.(*http.Transport).Clone()
+	// Destination validation must happen locally. A forward proxy would make
+	// DialContext validate the proxy address while the proxy resolves the
+	// attacker-controlled destination.
+	trpt.Proxy = nil
 	if !disableSafeDialer {
 		trpt.DialContext = newSafeDialContext(dialer)
 	}
@@ -195,19 +227,19 @@ func NewHandler(
 	// must not auto-decompress "Content-Encoding: gzip" responses for it.
 	helmTrpt := trpt.Clone()
 	helmTrpt.DisableCompression = true
+	helmTrpt.RegisterProtocol("http", httpsOnlyRoundTripper{})
+	// Helm's getter accepts only *http.Transport rather than http.RoundTripper.
+	// Route HTTPS through an instrumented clone while retaining the outer
+	// concrete transport for Helm and its explicit HTTP rejection.
+	helmHTTPS := trpt.Clone()
+	helmHTTPS.DisableCompression = true
+	h.helmInstrumentedTransport = newInstrumentedOutboundTransport(helmHTTPS)
+	helmTrpt.RegisterProtocol("https", h.helmInstrumentedTransport)
 	h.helmGetterTransport = helmTrpt
 
 	h.httpClient = &http.Client{
-		Transport: retry.NewTransport(trpt),
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 10 {
-				return fmt.Errorf("stopped after 10 redirects")
-			}
-			if isPrivateIP(req.URL.Hostname()) {
-				return fmt.Errorf("redirect to blocked address %q is not allowed", req.URL.Hostname())
-			}
-			return nil
-		},
+		Transport:     newInstrumentedOutboundTransport(retry.NewTransport(trpt)),
+		CheckRedirect: checkRedirect,
 	}
 	h.imageCache = cache.NewImageCache(h.Logger)
 	h.newImageChecker = func() imageChecker {
@@ -444,40 +476,38 @@ func validateInputs(cfg Config) (errs []error) {
 	return errs
 }
 
-var privateIPNets = func() []*net.IPNet {
-	blocks := []string{
-		"10.0.0.0/8",
-		"172.16.0.0/12",
-		"192.168.0.0/16",
-		"169.254.0.0/16",
-		"127.0.0.0/8",
-		"::1/128",
-		"fc00::/7",
-		"fe80::/10",
-	}
-	nets := make([]*net.IPNet, 0, len(blocks))
-	for _, b := range blocks {
-		_, n, _ := net.ParseCIDR(b)
-		nets = append(nets, n)
-	}
-	return nets
-}()
+// Carrier-grade NAT is not covered by netip.Addr's standard classifiers.
+var carrierGradeNAT = netip.MustParsePrefix("100.64.0.0/10")
 
 func isPrivateIP(host string) bool {
-	ip := net.ParseIP(host)
-	if ip == nil {
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
 		return false
 	}
-	for _, n := range privateIPNets {
-		if n.Contains(ip) {
-			return true
-		}
+	ip = ip.Unmap().WithZone("")
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsInterfaceLocalMulticast() {
+		return true
 	}
-	return false
+	return carrierGradeNAT.Contains(ip)
+}
+
+func checkRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= maxRedirects {
+		return fmt.Errorf("stopped after %d redirects", maxRedirects)
+	}
+	if req.URL.Scheme != "https" {
+		return fmt.Errorf("redirected requests must use HTTPS, got %q", req.URL.Scheme)
+	}
+	if isPrivateIP(req.URL.Hostname()) {
+		return fmt.Errorf("redirect to blocked address %q is not allowed", req.URL.Hostname())
+	}
+	return nil
 }
 
 var (
-	// disableSafeDialer bypasses newSafeDialContext in NewHandler. For testing only — mirrors plainHTTP.
+	// disableSafeDialer bypasses newSafeDialContext in NewHandler. For testing only; mirrors plainHTTP.
 	disableSafeDialer bool
 
 	// defaultLookupHost resolves a hostname to IP addresses. Injectable for tests.
@@ -502,12 +532,15 @@ func newSafeDialContext(base *net.Dialer) func(context.Context, string, string) 
 			}
 			candidates = ips
 		}
+		if len(candidates) == 0 {
+			return nil, fmt.Errorf("no addresses resolved for %q", host)
+		}
 		for _, ip := range candidates {
 			if isPrivateIP(ip) {
 				return nil, fmt.Errorf("connection to blocked address %q is not allowed (resolved from %q)", ip, host)
 			}
 		}
-		// Dial validated IPs directly — skipping re-resolution prevents DNS rebinding.
+		// Dial validated IPs directly; skipping re-resolution prevents DNS rebinding.
 		var firstErr error
 		for _, ip := range candidates {
 			conn, err := base.DialContext(ctx, network, net.JoinHostPort(ip, port))

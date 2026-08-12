@@ -40,6 +40,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 	"testing"
 	"text/template"
 	"time"
@@ -48,6 +49,7 @@ import (
 	credhelper "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/imagecredential"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.uber.org/zap/zaptest"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -1420,7 +1422,7 @@ func Test_validateHelmChartURL(t *testing.T) {
 		validateHelmChartURL(""),
 	)
 
-	// Port without hostname must be rejected — u.Host would be ":443" (non-empty)
+	// Port without hostname must be rejected; u.Host would be ":443" (non-empty)
 	// but u.Hostname() is empty, so the host check must use Hostname().
 	assert.Equal(t,
 		[]error{fmt.Errorf("helm chart URL must have a host")},
@@ -1484,6 +1486,10 @@ func Test_validateHelmChartURL(t *testing.T) {
 		[]error{fmt.Errorf("helm chart URL must not point to private networks")},
 		validateHelmChartURL("https://[fd00::1]/chart"),
 	)
+	assert.Equal(t,
+		[]error{fmt.Errorf("helm chart URL must not point to private networks")},
+		validateHelmChartURL("https://[fe80::1%25eth0]/chart"),
+	)
 
 	// Public IPs are allowed.
 	assert.Empty(t, validateHelmChartURL("https://1.2.3.4/chart"))
@@ -1508,6 +1514,11 @@ func Test_isPrivateIP(t *testing.T) {
 		{"fc00::1", true},
 		{"fd00::1", true},
 		{"fe80::1", true},
+		{"0.0.0.0", true},
+		{"::", true},
+		{"100.64.0.1", true},
+		{"::1%lo", true},
+		{"fe80::1%eth0", true},
 		// Public addresses.
 		{"1.2.3.4", false},
 		{"8.8.8.8", false},
@@ -1528,7 +1539,12 @@ func Test_newSafeDialContext(t *testing.T) {
 	origLookup := defaultLookupHost
 	t.Cleanup(func() { defaultLookupHost = origLookup })
 
-	dialer := &net.Dialer{Timeout: 1 * time.Second}
+	dialer := &net.Dialer{
+		Timeout: 1 * time.Second,
+		Control: func(_, _ string, _ syscall.RawConn) error {
+			return fmt.Errorf("outbound dialing disabled by test")
+		},
+	}
 	dial := newSafeDialContext(dialer)
 	ctx := context.Background()
 
@@ -1541,6 +1557,7 @@ func Test_newSafeDialContext(t *testing.T) {
 		addr        string
 		resolves    []string // non-nil overrides defaultLookupHost for this case
 		wantBlocked bool
+		wantError   string
 	}{
 		// IP literals: blocked before any dial attempt.
 		{name: "loopback v4", addr: "127.0.0.1:443", wantBlocked: true},
@@ -1552,14 +1569,17 @@ func Test_newSafeDialContext(t *testing.T) {
 		{name: "link-local v6 fe80", addr: "[fe80::1]:443", wantBlocked: true},
 		{name: "unique-local v6 fc00", addr: "[fc00::1]:443", wantBlocked: true},
 		{name: "unique-local v6 fd00", addr: "[fd00::1]:443", wantBlocked: true},
+		{name: "zoned loopback v6", addr: "[::1%lo]:443", wantBlocked: true},
+		{name: "zoned link-local v6", addr: "[fe80::1%eth0]:443", wantBlocked: true},
 		// Hostname resolved to private IP: blocked.
-		{name: "hostname → private 10/8", addr: "evil.example.com:443", resolves: []string{"10.0.0.1"}, wantBlocked: true},
-		{name: "hostname → link-local v6", addr: "evil.example.com:443", resolves: []string{"fe80::1"}, wantBlocked: true},
+		{name: "hostname to private 10/8", addr: "evil.example.com:443", resolves: []string{"10.0.0.1"}, wantBlocked: true},
+		{name: "hostname to link-local v6", addr: "evil.example.com:443", resolves: []string{"fe80::1"}, wantBlocked: true},
 		// Any private address in a multi-IP response blocks the connection.
-		{name: "hostname → mixed private+public", addr: "evil.example.com:443", resolves: []string{"1.2.3.4", "10.0.0.1"}, wantBlocked: true},
+		{name: "hostname to mixed private+public", addr: "evil.example.com:443", resolves: []string{"1.2.3.4", "10.0.0.1"}, wantBlocked: true},
+		{name: "hostname to no addresses", addr: "empty.example.com:443", resolves: []string{}, wantError: "no addresses resolved"},
 		// Public IP literals and hostnames: not blocked by the SSRF check (connection fails for unrelated reasons).
 		{name: "public IP literal", addr: "1.2.3.4:443", wantBlocked: false},
-		{name: "hostname → public IP", addr: "example.com:443", resolves: []string{"1.2.3.4"}, wantBlocked: false},
+		{name: "hostname to public IP", addr: "example.com:443", resolves: []string{"1.2.3.4"}, wantBlocked: false},
 	}
 
 	for _, tt := range tests {
@@ -1576,6 +1596,9 @@ func Test_newSafeDialContext(t *testing.T) {
 
 			if tt.wantBlocked {
 				assert.True(t, isSSRFError(err), "expected SSRF block error, got: %v", err)
+			} else if tt.wantError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantError)
 			} else {
 				// Connection may fail (no server), but the reason must not be our SSRF check.
 				assert.False(t, isSSRFError(err), "unexpected SSRF block error: %v", err)
@@ -1585,16 +1608,6 @@ func Test_newSafeDialContext(t *testing.T) {
 }
 
 func Test_checkRedirect(t *testing.T) {
-	checkRedirect := func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 10 {
-			return fmt.Errorf("stopped after 10 redirects")
-		}
-		if isPrivateIP(req.URL.Hostname()) {
-			return fmt.Errorf("redirect to blocked address %q is not allowed", req.URL.Hostname())
-		}
-		return nil
-	}
-
 	makeReq := func(rawURL string) *http.Request {
 		u, _ := url.Parse(rawURL)
 		return &http.Request{URL: u}
@@ -1636,12 +1649,63 @@ func Test_checkRedirect(t *testing.T) {
 		assert.NoError(t, err)
 	})
 
+	t.Run("blocks HTTPS downgrade", func(t *testing.T) {
+		err := checkRedirect(makeReq("http://1.2.3.4/chart"), nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "HTTPS")
+	})
+
 	t.Run("limits redirect count", func(t *testing.T) {
 		via := make([]*http.Request, 10)
 		err := checkRedirect(makeReq("https://1.2.3.4/"), via)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "10 redirects")
 	})
+}
+
+func TestNewHandlerDisablesEnvironmentProxy(t *testing.T) {
+	h, err := NewHandler(zaptest.NewLogger(t), "reval", HandlerOptions{})
+	require.NoError(t, err)
+	assert.Nil(t, h.safeTransport.Proxy)
+	assert.Nil(t, h.helmGetterTransport.Proxy)
+}
+
+func TestNewHandlerInstrumentsOutboundTransports(t *testing.T) {
+	h, err := NewHandler(zaptest.NewLogger(t), "reval", HandlerOptions{})
+	require.NoError(t, err)
+	assert.IsType(t, &otelhttp.Transport{}, h.httpClient.Transport)
+	assert.IsType(t, &otelhttp.Transport{}, h.helmInstrumentedTransport)
+}
+
+func TestShouldTraceOutboundRequest(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want bool
+	}{
+		{name: "plain URL", url: "https://charts.example.com/chart.tgz", want: true},
+		{name: "signed URL", url: "https://storage.example.com/chart.tgz?signature=secret", want: false},
+		{name: "empty query marker", url: "https://charts.example.com/chart.tgz?", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodGet, tt.url, nil)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, shouldTraceOutboundRequest(req))
+		})
+	}
+}
+
+func TestHelmGetterTransportRejectsPlainHTTP(t *testing.T) {
+	h, err := NewHandler(zaptest.NewLogger(t), "reval", HandlerOptions{})
+	require.NoError(t, err)
+	req, err := http.NewRequest(http.MethodGet, "http://1.2.3.4/chart", nil)
+	require.NoError(t, err)
+
+	_, err = h.helmGetterTransport.RoundTrip(req)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "HTTPS")
 }
 
 func Test_shouldSkipValidateImages(t *testing.T) {
