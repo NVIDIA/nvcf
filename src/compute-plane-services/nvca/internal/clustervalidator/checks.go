@@ -1196,11 +1196,16 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 
 // nodeToNodeSecurityContext returns a restricted Pod Security Standards compliant
 // context. Port 19999 is above 1024 so busybox nc runs fine as non-root.
+// RunAsUser must be set explicitly: busybox:1.36 declares no USER in its image
+// config, so kubelet rejects the container at admission when RunAsNonRoot is
+// true but RunAsUser is absent.
 func nodeToNodeSecurityContext() *corev1.SecurityContext {
 	runAsNonRoot := true
 	allowPrivEsc := false
+	runAsUser := int64(65534) // nobody — the conventional non-root UID for scratch/busybox images
 	return &corev1.SecurityContext{
 		RunAsNonRoot:             &runAsNonRoot,
+		RunAsUser:                &runAsUser,
 		AllowPrivilegeEscalation: &allowPrivEsc,
 		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
 		SeccompProfile:           &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
