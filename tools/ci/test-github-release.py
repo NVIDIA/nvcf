@@ -605,7 +605,7 @@ class GithubReleaseTest(unittest.TestCase):
                 "id": "cloud-tasks-helm",
                 "path": "deploy/helm/cloud-tasks",
                 "service_name": "helm-cloud-tasks-api",
-                "initial_version": "1.6.0",
+                "initial_version": "1.0.5",
         }
         expected_tag = self.github_release.tag_for_version(service, service["initial_version"])
         default_floor_tag = self.github_release.tag_for_version(
