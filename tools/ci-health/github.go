@@ -31,7 +31,9 @@ var fetch = func(path, repo string) ([]byte, error) {
 	if err != nil {
 		var ee *exec.ExitError
 		if ok := asExitError(err, &ee); ok {
-			return nil, fmt.Errorf("gh api %s: %s", path, strings.TrimSpace(string(ee.Stderr)))
+			// Keep the ExitError in the chain: the stderr text is what a human
+			// reads, but the exit status is what a caller can match on.
+			return nil, fmt.Errorf("gh api %s: %w: %s", path, err, strings.TrimSpace(string(ee.Stderr)))
 		}
 		return nil, fmt.Errorf("gh api %s: %w", path, err)
 	}

@@ -32,7 +32,12 @@ func stubFetch(t *testing.T, pages []string) *[]string {
 		calls = append(calls, path)
 		idx := 0
 		if i := strings.Index(path, "&page="); i >= 0 {
-			fmt.Sscanf(path[i+len("&page="):], "%d", &idx)
+			// An unchecked scan leaves idx at 0, and the decrement below then
+			// indexes pages[-1] and panics, reporting a stub bug as a crash in
+			// the code under test.
+			if _, err := fmt.Sscanf(path[i+len("&page="):], "%d", &idx); err != nil {
+				return nil, fmt.Errorf("stub: parse page from %q: %w", path, err)
+			}
 			idx--
 		}
 		if idx < len(pages) {
@@ -222,7 +227,11 @@ func TestFetchJobsPaginatesRunsWithManyJobs(t *testing.T) {
 		calls = append(calls, path)
 		page := 1
 		if i := strings.Index(path, "&page="); i >= 0 {
-			fmt.Sscanf(path[i+len("&page="):], "%d", &page)
+			// An unchecked scan leaves page at 1 and silently serves page one
+			// for every request, so a pagination bug would pass this test.
+			if _, err := fmt.Sscanf(path[i+len("&page="):], "%d", &page); err != nil {
+				return nil, fmt.Errorf("stub: parse page from %q: %w", path, err)
+			}
 		}
 		n := 100
 		if page == 2 {
