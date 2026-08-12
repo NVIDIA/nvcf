@@ -5,7 +5,6 @@ go 1.25.0
 require (
 	github.com/MadAppGang/httplog v1.3.0
 	github.com/MadAppGang/httplog/zap v1.2.1
-	github.com/NVIDIA/nvcf-go v1.0.11
 	github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260728185909-afca4ec2fb26
 	github.com/aws/aws-sdk-go-v2 v1.41.2
 	github.com/aws/aws-sdk-go-v2/config v1.32.10
