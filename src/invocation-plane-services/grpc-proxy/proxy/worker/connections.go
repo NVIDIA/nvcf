@@ -129,21 +129,22 @@ func (c *ConnectionTrackingConn) InitWorkerConn(functionId, functionVersionId st
 }
 
 func (c *ConnectionTrackingConn) Close() error {
+	c.workerConnectionLock.Lock()
+	activeFunctionConnections := len(c.workerConnections)
+
 	defer c.closeOnce.Do(func() {
 		c.span.End()
 		metrics.ActiveClientConnectionsTotal.Dec()
 		metrics.ClientConnectionDurationSeconds.Observe(time.Since(c.openedAt).Seconds())
 		// How many worker tunnels this client connection was still holding.
 		// Anything above zero means this close tore down live tunnels.
-		metrics.ClientConnectionWorkerTunnelsAtClose.Observe(float64(len(c.workerConnections)))
+		metrics.ClientConnectionWorkerTunnelsAtClose.Observe(float64(activeFunctionConnections))
 	})
+	defer c.workerConnectionLock.Unlock()
 
 	zap.L().Debug("closing client connection",
 		zap.String("ptr", fmt.Sprintf("%p", c)),
-		zap.Int("active_function_connections", len(c.workerConnections)))
-
-	c.workerConnectionLock.Lock()
-	defer c.workerConnectionLock.Unlock()
+		zap.Int("active_function_connections", activeFunctionConnections))
 
 	for key, conn := range c.workerConnections {
 		workerConnection, _ := conn.getWorkerConnection(func() (*WorkerConnection, error) {
