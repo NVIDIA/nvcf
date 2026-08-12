@@ -227,13 +227,23 @@ spec:
           - --nvca-secret-mirror-label-selector
           - "{{ .Values.agent.secretMirrorLabelSelector }}"
           {{- end }}
-          {{- if ((.Values.agent).functionEnvOverrides) }}
-          - --function-env-overrides-b64
-          - {{ .Values.agent.functionEnvOverrides | toJson | b64enc | quote }}
+          {{- $agent := .Values.agent | default dict }}
+          {{- $byooOtelCollectorImage := include "nvcaop.byooOtelCollectorImage" . }}
+          {{- $functionEnvOverrides := deepCopy ($agent.functionEnvOverrides | default dict) }}
+          {{- if and $byooOtelCollectorImage (or (not (hasKey $functionEnvOverrides "BYOO_OTEL_COLLECTOR_CONTAINER")) (eq (get $functionEnvOverrides "BYOO_OTEL_COLLECTOR_CONTAINER") "nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector:0.157.11")) }}
+          {{- $_ := set $functionEnvOverrides "BYOO_OTEL_COLLECTOR_CONTAINER" $byooOtelCollectorImage }}
           {{- end }}
-          {{- if ((.Values.agent).taskEnvOverrides) }}
+          {{- $taskEnvOverrides := deepCopy ($agent.taskEnvOverrides | default dict) }}
+          {{- if and $byooOtelCollectorImage (or (not (hasKey $taskEnvOverrides "BYOO_OTEL_COLLECTOR_CONTAINER")) (eq (get $taskEnvOverrides "BYOO_OTEL_COLLECTOR_CONTAINER") "nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector:0.157.11")) }}
+          {{- $_ := set $taskEnvOverrides "BYOO_OTEL_COLLECTOR_CONTAINER" $byooOtelCollectorImage }}
+          {{- end }}
+          {{- if $functionEnvOverrides }}
+          - --function-env-overrides-b64
+          - {{ $functionEnvOverrides | toJson | b64enc | quote }}
+          {{- end }}
+          {{- if $taskEnvOverrides }}
           - --task-env-overrides-b64
-          - {{ .Values.agent.taskEnvOverrides | toJson | b64enc | quote }}
+          - {{ $taskEnvOverrides | toJson | b64enc | quote }}
           {{- end }}
         image: {{ .Values.image.repository }}:{{ default .Chart.Version .Values.image.tag }}
         imagePullPolicy: {{ .Values.image.pullPolicy }}
