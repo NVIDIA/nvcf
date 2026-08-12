@@ -47,7 +47,7 @@ func TestProbeRegistryCredential_PublicRegistry(t *testing.T) {
 
 	// Use the test server's host as the registry.
 	host := strings.TrimPrefix(srv.URL, "https://")
-	err := probeRegistryCredential(context.Background(), host, "")
+	err := probeRegistryCredential(context.Background(), host, "", false)
 	assert.NoError(t, err, "public registry (200 on /v2/) must not return an error")
 }
 
@@ -80,7 +80,7 @@ func TestProbeRegistryCredential_AuthSucceeds(t *testing.T) {
 	t.Cleanup(func() { http.DefaultTransport = origTransport })
 
 	host := strings.TrimPrefix(registrySrv.URL, "https://")
-	err := probeRegistryCredential(context.Background(), host, "")
+	err := probeRegistryCredential(context.Background(), host, "", false)
 	assert.NoError(t, err, "successful token exchange must return nil")
 }
 
@@ -105,7 +105,7 @@ func TestProbeRegistryCredential_AuthFails(t *testing.T) {
 	t.Cleanup(func() { http.DefaultTransport = origTransport })
 
 	host := strings.TrimPrefix(registrySrv.URL, "https://")
-	err := probeRegistryCredential(context.Background(), host, "")
+	err := probeRegistryCredential(context.Background(), host, "", false)
 	assert.Error(t, err, "failed token exchange must return an error")
 }
 
@@ -113,7 +113,7 @@ func TestProbeRegistryCredential_ECRSkipped(t *testing.T) {
 	// ECR registries must get a clear "use AWS CLI" message rather than a
 	// confusing Bearer token failure.
 	err := probeRegistryCredential(context.Background(),
-		"123456789.dkr.ecr.us-east-1.amazonaws.com", "")
+		"123456789.dkr.ecr.us-east-1.amazonaws.com", "", false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ECR", "ECR registries must produce a clear diagnostic")
 	assert.Contains(t, err.Error(), "AWS", "message must mention AWS")
@@ -249,7 +249,7 @@ func TestIsECRRegistry(t *testing.T) {
 // -- registryCredentialCheck binaryCheckSpec --
 
 func TestRegistryCredentialCheck_PassWhenNoError(t *testing.T) {
-	checker := func(_ context.Context, reg, _ string) error { return nil }
+	checker := func(_ context.Context, reg, _ string, _ bool) error { return nil }
 	spec := registryCredentialCheck(checker, RegistryEntry{Registry: "nvcr.io", Critical: true})
 	r := spec.Run(context.Background())
 	assert.True(t, r.Passed)
@@ -258,7 +258,7 @@ func TestRegistryCredentialCheck_PassWhenNoError(t *testing.T) {
 }
 
 func TestRegistryCredentialCheck_CriticalSeverityOnFailure(t *testing.T) {
-	checker := func(_ context.Context, reg, _ string) error {
+	checker := func(_ context.Context, reg, _ string, _ bool) error {
 		return errorf("credentials rejected")
 	}
 	spec := registryCredentialCheck(checker, RegistryEntry{Registry: "nvcr.io", Critical: true})
@@ -268,7 +268,7 @@ func TestRegistryCredentialCheck_CriticalSeverityOnFailure(t *testing.T) {
 }
 
 func TestRegistryCredentialCheck_WarningSeverityOnNonCriticalFailure(t *testing.T) {
-	checker := func(_ context.Context, reg, _ string) error {
+	checker := func(_ context.Context, reg, _ string, _ bool) error {
 		return errorf("credentials rejected")
 	}
 	spec := registryCredentialCheck(checker, RegistryEntry{Registry: "quay.io", Critical: false})

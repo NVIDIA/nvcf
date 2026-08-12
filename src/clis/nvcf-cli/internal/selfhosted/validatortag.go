@@ -197,6 +197,13 @@ func exchangeBearerToken(ctx context.Context, client *http.Client, registry, rep
 	if err != nil {
 		return exchangeNGCBearerToken(ctx, client, registry, repo)
 	}
+	// Reject non-HTTPS or relative realms before attaching credentials.
+	// The realm comes from a registry-controlled response header and must be
+	// an absolute HTTPS URL to prevent sending credentials over cleartext or
+	// to an unrelated host.
+	if u.Scheme != "https" || u.Host == "" {
+		return "", fmt.Errorf("refusing token exchange at insecure or relative realm %q for %s", realm, registry)
+	}
 	q := u.Query()
 	if service != "" {
 		q.Set("service", service)
@@ -334,10 +341,10 @@ func parseWWWAuthenticate(header string) (realm, service, scope string) {
 		} else {
 			comma := strings.IndexByte(params, ',')
 			if comma < 0 {
-				val = params
+				val = strings.TrimSpace(params)
 				params = ""
 			} else {
-				val = params[:comma]
+				val = strings.TrimSpace(params[:comma])
 				params = params[comma+1:]
 			}
 		}

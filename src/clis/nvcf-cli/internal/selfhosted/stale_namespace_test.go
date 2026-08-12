@@ -171,7 +171,7 @@ func TestStaleNamespaceCheck_StaleIsError(t *testing.T) {
 	assert.Equal(t, "error", r.Severity,
 		"detected stale namespaces must use error severity so the exit code is non-zero")
 	assert.Contains(t, r.Message, "nvcf")
-	assert.Contains(t, r.Message, "kubectl delete namespace")
+	assert.Contains(t, r.Message, "kubectl patch namespace nvcf")
 }
 
 func TestStaleNamespaceCheck_CleanPasses(t *testing.T) {
@@ -194,5 +194,6 @@ func TestStaleNamespaceCheck_MessageNamesAllStaleNamespaces(t *testing.T) {
 	r := staleNamespaceCheck(prober, "", []string{"nvcf", "api-keys"}).Run(context.Background())
 	assert.Contains(t, r.Message, "nvcf")
 	assert.Contains(t, r.Message, "api-keys")
-	assert.Contains(t, r.Message, "kubectl delete namespace nvcf api-keys")
+	assert.Contains(t, r.Message, "kubectl patch namespace nvcf")
+	assert.Contains(t, r.Message, "kubectl delete namespace api-keys")
 }

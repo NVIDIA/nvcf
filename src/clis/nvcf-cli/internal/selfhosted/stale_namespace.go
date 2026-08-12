@@ -100,8 +100,13 @@ func probeStaleNamespaces(ctx context.Context, client kubernetes.Interface, name
 			continue
 		}
 
+		// Limit to 1: only existence matters, not the full release history.
+		// Note: this assumes Helm's default secret storage driver. Clusters
+		// using HELM_DRIVER=configmap or sql will have no owner=helm secrets
+		// and may be incorrectly reported as empty shells.
 		secrets, err := client.CoreV1().Secrets(name).List(ctx, metav1.ListOptions{
 			LabelSelector: "owner=helm",
+			Limit:         1,
 		})
 		if err != nil {
 			return stale, fmt.Errorf("list Helm secrets in %s: %w", name, err)

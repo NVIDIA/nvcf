@@ -152,13 +152,16 @@ func runSelfHostedCheck(c *cobra.Command, _ []string) error {
 	}
 	clusterValidatorWillRun := anyValidatorIsTargeted && clusterValidatorImage != ""
 
-	// The cluster-validator Job's internal budget is 5m
-	// (selfhosted.clusterValidatorTimeout). The outer ctx must be at least
-	// that plus headroom for RBAC bootstrap + log fetch, otherwise vctx
-	// derives from a shorter ceiling and silently truncates the wait.
 	outerTimeout := 2 * time.Minute
 	if clusterValidatorWillRun {
-		outerTimeout = 6 * time.Minute
+		// Each validator Job has a 5m internal budget. ModeSingle runs both
+		// validators sequentially (two 5m runs); ModeSplit runs them in
+		// parallel so one 6m ceiling covers both.
+		if mode == kubectx.ModeSingle && controlPlaneIsTargeted(mode) && computePlaneIsTargeted(mode) {
+			outerTimeout = 12 * time.Minute
+		} else {
+			outerTimeout = 6 * time.Minute
+		}
 	}
 	// --wait polls for the declared duration. The outer ctx has to outlive
 	// the last iteration, so add waitDur on top of a single iteration's

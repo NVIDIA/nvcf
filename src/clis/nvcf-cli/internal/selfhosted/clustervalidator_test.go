@@ -528,6 +528,16 @@ func TestBuildClusterValidatorJobShape(t *testing.T) {
 		"preflight invocation must tag the validator so it does not attempt the metrics ConfigMap write")
 }
 
+func TestBuildClusterValidatorJobShape_ValidatorRoleInEnv(t *testing.T) {
+	job := buildClusterValidatorJob("test-job", "img:1", "", clusterValidatorControlPlaneRole, false)
+	env := map[string]string{}
+	for _, e := range job.Spec.Template.Spec.Containers[0].Env {
+		env[e.Name] = e.Value
+	}
+	assert.Equal(t, clusterValidatorControlPlaneRole, env["VALIDATOR_ROLE"],
+		"VALIDATOR_ROLE must carry the role to the validator binary")
+}
+
 func TestBuildClusterValidatorJobShape_WithPullSecret(t *testing.T) {
 	job := buildClusterValidatorJob("test-job", "img:1", "nvcr-pull-secret", "", false)
 	require.Len(t, job.Spec.Template.Spec.ImagePullSecrets, 1)

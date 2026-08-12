@@ -142,10 +142,13 @@ func runClusterValidator(ctx context.Context, client kubernetes.Interface, image
 	// checks. Best-effort: a failure here is logged but does not abort the
 	// run — the validator gracefully skips configurable checks when the
 	// ConfigMap is absent.
+	var configNote string
 	if role == clusterValidatorControlPlaneRole {
 		if err := ensureClusterValidatorConfig(vctx, client, registries); err != nil {
-			// Non-fatal: reachability checks will be skipped, not the whole run.
-			_ = err
+			// Non-fatal: continue without the ConfigMap; the validator skips
+			// configurable reachability and enforcement checks silently unless
+			// we surface this note in the transcript.
+			configNote = fmt.Sprintf("note: validator config not applied (%v); reachability checks may be skipped", err)
 		}
 	}
 
@@ -166,6 +169,9 @@ func runClusterValidator(ctx context.Context, client kubernetes.Interface, image
 	defer logCancel()
 	rawLogs, _ := fetchClusterValidatorLogs(logCtx, client, jobName)
 	cleaned := cleanValidatorOutput(rawLogs)
+	if configNote != "" {
+		cleaned = configNote + "\n" + cleaned
+	}
 
 	if waitErr != nil {
 		return ClusterValidatorResult{

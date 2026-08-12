@@ -384,6 +384,40 @@ func TestComputePlaneIsTargeted(t *testing.T) {
 	}
 }
 
+func TestControlPlaneIsTargeted(t *testing.T) {
+	t.Cleanup(func() {
+		checkPre = false
+		checkControlPlane = false
+		checkAll = false
+	})
+
+	tests := []struct {
+		name string
+		pre  bool
+		cp   bool
+		all  bool
+		mode kubectx.Mode
+		want bool
+	}{
+		{"--control-plane single", false, true, false, kubectx.ModeSingle, true},
+		{"--control-plane split", false, true, false, kubectx.ModeSplit, true},
+		{"--all single", false, false, true, kubectx.ModeSingle, true},
+		{"--all split", false, false, true, kubectx.ModeSplit, true},
+		{"--pre single -- implicit control plane", true, false, false, kubectx.ModeSingle, true},
+		{"--pre split -- must not target control plane", true, false, false, kubectx.ModeSplit, false},
+		{"--compute-plane only", false, false, false, kubectx.ModeSingle, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			checkPre = tt.pre
+			checkControlPlane = tt.cp
+			checkAll = tt.all
+			assert.Equal(t, tt.want, controlPlaneIsTargeted(tt.mode))
+		})
+	}
+}
+
 // TestCheck_ComputePlaneFlagRunsChecks verifies that --compute-plane alone
 // produces compute-plane-cluster category events. Before the gating fix this
 // flag was a complete no-op and produced no check events at all.
@@ -398,7 +432,8 @@ func TestCheck_ComputePlaneFlagRunsChecks(t *testing.T) {
 	rootCmd.SetErr(&stderr)
 	rootCmd.SetOut(&bytes.Buffer{})
 
-	rootCmd.SetArgs([]string{"self-hosted", "check", "--compute-plane", "--json"})
+	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
+	rootCmd.SetArgs([]string{"self-hosted", "check", "--compute-plane", "--skip-cluster-validation", "--json"})
 	_ = rootCmd.Execute()
 
 	lines := parseJSONLLines(t, stderr.String())
@@ -429,7 +464,8 @@ func TestCheck_ControlPlaneFlagRunsChecks(t *testing.T) {
 	rootCmd.SetErr(&stderr)
 	rootCmd.SetOut(&bytes.Buffer{})
 
-	rootCmd.SetArgs([]string{"self-hosted", "check", "--control-plane", "--json"})
+	t.Setenv("NVCF_CLI_SELFHOSTED_SKIP_INOTIFY", "1")
+	rootCmd.SetArgs([]string{"self-hosted", "check", "--control-plane", "--skip-cluster-validation", "--json"})
 	_ = rootCmd.Execute()
 
 	lines := parseJSONLLines(t, stderr.String())

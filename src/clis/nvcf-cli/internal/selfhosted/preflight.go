@@ -346,9 +346,11 @@ func buildCategories(cfg PreflightConfig, role Role, rc RoleConfig) []categorySp
 	}
 
 	// Registry credential check runs from the operator's machine — no cluster
-	// contact needed. Placed after local-host-tools but before cluster probes
-	// so credential failures surface early.
-	if len(cfg.Registries) > 0 && cfg.RegistryChecker != nil {
+	// contact needed. Gated on role != RoleComputePlane so the category is
+	// emitted at most once per invocation: in ModeSingle RunPreflightForRole
+	// is called for RoleControlPlane then RoleComputePlane sequentially; the
+	// gate ensures no duplicate check_started/check_completed events.
+	if role != RoleComputePlane && len(cfg.Registries) > 0 && cfg.RegistryChecker != nil {
 		out = append(out, buildRegistryCredentialCategory(cfg))
 	}
 
@@ -643,7 +645,7 @@ func registryCredentialCheck(checker RegistryCredentialChecker, entry RegistryEn
 				ID:       id,
 				Severity: severity,
 			}
-			if err := checker(ctx, entry.Registry, entry.RepoHint); err != nil {
+			if err := checker(ctx, entry.Registry, entry.RepoHint, entry.Critical); err != nil {
 				r.Message = entry.Registry + ": " + err.Error()
 				r.Err = err
 				return r
@@ -679,15 +681,28 @@ func staleNamespaceCheck(prober StaleNamespaceProber, kubeContext string, namesp
 				return r
 			}
 			parts := make([]string, 0, len(stale))
-			names := make([]string, 0, len(stale))
+			var terminating, emptyShell []string
 			for _, ns := range stale {
 				parts = append(parts, ns.Name+" ("+ns.Reason+")")
-				names = append(names, ns.Name)
+				if ns.Reason == "stuck Terminating" {
+					terminating = append(terminating, ns.Name)
+				} else {
+					emptyShell = append(emptyShell, ns.Name)
+				}
 			}
-			r.Message = fmt.Sprintf(
-				"%d stale namespace(s) detected: %s — remove with: kubectl delete namespace %s --force --grace-period=0",
-				len(stale), strings.Join(parts, ", "), strings.Join(names, " "),
-			)
+			var hints []string
+			if len(terminating) > 0 {
+				hints = append(hints,
+					fmt.Sprintf("remove finalizers on stuck namespaces: kubectl patch namespace %s -p '{\"spec\":{\"finalizers\":[]}}' --type=merge",
+						strings.Join(terminating, " ")))
+			}
+			if len(emptyShell) > 0 {
+				hints = append(hints,
+					fmt.Sprintf("inspect and delete empty namespaces: kubectl delete namespace %s",
+						strings.Join(emptyShell, " ")))
+			}
+			r.Message = fmt.Sprintf("%d stale namespace(s) detected: %s. To resolve: %s",
+				len(stale), strings.Join(parts, ", "), strings.Join(hints, "; "))
 			return r
 		},
 	}

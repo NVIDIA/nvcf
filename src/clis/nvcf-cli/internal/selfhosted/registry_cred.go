@@ -39,8 +39,9 @@ const (
 // RegistryCredentialChecker probes whether credentials are present and valid
 // for a registry. repoHint is the repository path used as the OAuth scope;
 // pass "" to probe without a specific scope (works for public registries).
-// Returns nil on success, a descriptive error otherwise.
-type RegistryCredentialChecker func(ctx context.Context, registry, repoHint string) error
+// critical signals that anonymous success is insufficient; configured credentials
+// must be present. Returns nil on success, a descriptive error otherwise.
+type RegistryCredentialChecker func(ctx context.Context, registry, repoHint string, critical bool) error
 
 // NewRegistryCredentialChecker returns a production RegistryCredentialChecker
 // backed by real HTTP calls.
@@ -50,8 +51,9 @@ func NewRegistryCredentialChecker() RegistryCredentialChecker {
 
 // probeRegistryCredential authenticates to registry using the OCI Bearer token
 // flow. repoHint is the OAuth scope repository path. ECR registries return a
-// clear diagnostic instead of attempting the Bearer flow.
-func probeRegistryCredential(ctx context.Context, registry, repoHint string) error {
+// clear diagnostic instead of attempting the Bearer flow. When critical is true,
+// anonymous token success is rejected: configured credentials must be present.
+func probeRegistryCredential(ctx context.Context, registry, repoHint string, critical bool) error {
 	if isECRRegistry(registry) {
 		return fmt.Errorf("ECR registry detected — credential validation requires AWS CLI; " +
 			"run 'aws ecr get-login-password' to verify manually")
@@ -104,6 +106,14 @@ func probeRegistryCredential(ctx context.Context, registry, repoHint string) err
 				"(add to ~/.docker/config.json or set NGC_API_KEY for NGC registries)", registry)
 		}
 		return fmt.Errorf("credentials rejected by %s: %w", registry, err)
+	}
+	// For critical registries, a successful anonymous token is not enough:
+	// if the actual install pulls private images, anonymous access will fail.
+	if critical {
+		if _, _, hasCreds := credentialsForRegistry(registry); !hasCreds {
+			return fmt.Errorf("no credentials configured for %s "+
+				"(add to ~/.docker/config.json or set NGC_API_KEY for NGC registries)", registry)
+		}
 	}
 	return nil
 }
@@ -170,11 +180,18 @@ func EnumerateRegistries(imageRef, stackValuesFile string, extras []string) []Re
 	add(certManagerRegistry, false)
 
 	// Source 4: operator-supplied extras (--cluster-validator-registries).
+	// Preserve non-443 ports in the registry string so probeRegistryCredential
+	// builds the correct https://host:port/v2/ URL.
 	for _, e := range extras {
-		host, _ := parseRegistryHostPort(e)
-		if host != "" {
-			add(host, false)
+		host, port := parseRegistryHostPort(e)
+		if host == "" {
+			continue
 		}
+		reg := host
+		if port != 0 && port != 443 {
+			reg = fmt.Sprintf("%s:%d", host, port)
+		}
+		add(reg, false)
 	}
 
 	return out
