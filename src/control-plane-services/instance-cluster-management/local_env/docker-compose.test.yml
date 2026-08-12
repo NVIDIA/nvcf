@@ -18,7 +18,7 @@ name: icms-test
 
 services:
   aws:
-    image: localstack/localstack:4.3
+    image: ministackorg/ministack:1.4.16
     environment:
       - SERVICES=sqs,sns,sts
       - DEFAULT_REGION=us-east-1
