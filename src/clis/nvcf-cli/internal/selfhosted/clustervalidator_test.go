@@ -264,7 +264,8 @@ func TestRunClusterValidator_RBACRefreshesClusterRoleRules(t *testing.T) {
 	})
 	client.PrependReactor("list", "pods", podListReactor(""))
 
-	res := runClusterValidator(context.Background(), client, "test-image:1.0", "", false, "", nil)
+	// noCleanup=true so the ClusterRole is not swept before we inspect it.
+	res := runClusterValidator(context.Background(), client, "test-image:1.0", "", true, "", nil)
 	require.NoError(t, res.Err)
 
 	got, err := client.RbacV1().ClusterRoles().Get(context.Background(), clusterValidatorName, metav1.GetOptions{})

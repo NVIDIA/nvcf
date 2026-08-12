@@ -138,6 +138,14 @@ func runClusterValidator(ctx context.Context, client kubernetes.Interface, image
 	if err := ensureClusterValidatorRBAC(vctx, client); err != nil {
 		return ClusterValidatorResult{Err: fmt.Errorf("bootstrapping validator RBAC: %w", err)}
 	}
+	// Remove the ClusterRole and ClusterRoleBinding after the Job finishes
+	// (when cleanup is enabled) to minimize the window where the elevated SA
+	// exists. Uses a fresh context so cleanup runs even when vctx is expired.
+	// When --no-cleanup is set, the operator expects to inspect the Job; we
+	// leave the RBAC in place so they can re-exec the pod without re-bootstrap.
+	if !noCleanup {
+		defer sweepClusterValidatorRBAC(context.Background(), client)
+	}
 
 	// For the control-plane role, create a ConfigMap with reachability
 	// endpoints and enforcement config so the validator runs its configurable
@@ -274,6 +282,17 @@ func clusterValidatorLabels() map[string]string {
 		"app.kubernetes.io/managed-by": "nvcf-cli",
 		"app.kubernetes.io/component":  "preflight",
 	}
+}
+
+// sweepClusterValidatorRBAC removes the SA, ClusterRole, and ClusterRoleBinding
+// created by ensureClusterValidatorRBAC. Called after Job completion (when
+// --no-cleanup is not set) to close the window where the elevated ClusterRole
+// exists. The next run recreates them via ensureClusterValidatorRBAC.
+// Errors are swallowed: stale RBAC is preferable to failing the result.
+func sweepClusterValidatorRBAC(ctx context.Context, client kubernetes.Interface) {
+	_ = client.RbacV1().ClusterRoleBindings().Delete(ctx, clusterValidatorName, metav1.DeleteOptions{})
+	_ = client.RbacV1().ClusterRoles().Delete(ctx, clusterValidatorName, metav1.DeleteOptions{})
+	_ = client.CoreV1().ServiceAccounts(clusterValidatorNamespace).Delete(ctx, clusterValidatorName, metav1.DeleteOptions{})
 }
 
 // Errors are swallowed: a stale Job is preferable to blocking the new run.
