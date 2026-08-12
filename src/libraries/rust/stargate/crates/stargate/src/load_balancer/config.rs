@@ -50,10 +50,12 @@ impl<'de> Deserialize<'de> for LoadBalancerModelConfig {
 pub enum LoadBalancerAlgorithm {
     #[default]
     PowerOfTwo,
+    #[serde(alias = "groq-multiregion")]
     WaitAndWiden,
     RoundRobin,
     Random,
     Pulsar,
+    #[serde(alias = "pulsar-multiregion")]
     PulsarWaitAndWiden,
 }
 
@@ -362,6 +364,7 @@ impl RawCommonAlgorithmConfig {
 #[serde(tag = "algorithm", rename_all = "kebab-case")]
 enum RawLoadBalancerAlgorithmConfig {
     PowerOfTwo(RawCommonAlgorithmConfig),
+    #[serde(alias = "groq-multiregion")]
     WaitAndWiden {
         #[serde(flatten)]
         settings: WaitAndWidenAlgorithmConfig,
@@ -376,6 +379,7 @@ enum RawLoadBalancerAlgorithmConfig {
         #[serde(flatten)]
         common: RawCommonAlgorithmConfig,
     },
+    #[serde(alias = "pulsar-multiregion")]
     PulsarWaitAndWiden {
         #[serde(flatten)]
         settings: WaitAndWidenAlgorithmConfig,

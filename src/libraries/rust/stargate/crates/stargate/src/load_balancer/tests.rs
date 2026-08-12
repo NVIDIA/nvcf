@@ -592,6 +592,7 @@ fn simple_model_config_parses_to_algorithm_enum() {
         parse_json(r#"{"default":"wait-and-widen","models":{"model-a":"round-robin"}}"#);
 
     assert_eq!(config.default, LoadBalancerAlgorithm::WaitAndWiden);
+    assert_eq!(config.default.to_string(), "wait-and-widen");
     assert!(matches!(
         config.models.get("model-a"),
         Some(LoadBalancerModelConfig::Name(
@@ -865,6 +866,62 @@ fn detailed_model_config_parses_for_pulsar_wait_and_widen() {
     assert_eq!(wait_and_widen_settings.max_queue_time_ceil_ms, Some(100));
     assert_eq!(wait_and_widen_settings.ttft_bucket_size_ms, Some(50));
     assert_eq!(wait_and_widen_settings.n, Some(2));
+}
+
+#[test]
+fn legacy_algorithm_names_remain_compatible_in_short_configs() {
+    let config: LoadBalancerConfig = parse_json(
+        r#"{"default":"groq-multiregion","request_algorithms":{"pulsar-multiregion":"groq-multiregion"},"models":{"model-a":"pulsar-multiregion"}}"#,
+    );
+
+    assert_eq!(config.default, LoadBalancerAlgorithm::WaitAndWiden);
+    assert!(matches!(
+        config
+            .request_algorithms
+            .get(&LoadBalancerAlgorithm::PulsarWaitAndWiden),
+        Some(LoadBalancerModelConfig::Name(
+            LoadBalancerAlgorithm::WaitAndWiden
+        ))
+    ));
+    assert!(matches!(
+        config.models.get("model-a"),
+        Some(LoadBalancerModelConfig::Name(
+            LoadBalancerAlgorithm::PulsarWaitAndWiden
+        ))
+    ));
+
+    for (legacy_name, expected_algorithm) in [
+        ("groq-multiregion", LoadBalancerAlgorithm::WaitAndWiden),
+        (
+            "pulsar-multiregion",
+            LoadBalancerAlgorithm::PulsarWaitAndWiden,
+        ),
+    ] {
+        let algorithm_override = LoadBalancerAlgorithmOverride::parse(legacy_name)
+            .expect("legacy routing override should remain compatible");
+        assert_eq!(algorithm_override.algorithm(), expected_algorithm);
+        assert_eq!(algorithm_override.requested_algorithm(), legacy_name);
+    }
+}
+
+#[test]
+fn legacy_algorithm_names_remain_compatible_in_detailed_configs() {
+    let router = router_from_json(
+        r#"{"default":"power-of-two","models":{"wait-model":{"algorithm":"groq-multiregion","seed":"seed-1"},"pulsar-model":{"algorithm":"pulsar-multiregion","seed":"seed-2","max_queue_time_floor_ms":100,"max_queue_time_ceil_ms":200}}}"#,
+    );
+
+    assert_eq!(
+        router.algorithm_config("wait-model").algorithm(),
+        LoadBalancerAlgorithm::WaitAndWiden
+    );
+    assert_eq!(
+        router.algorithm_config("pulsar-model").algorithm(),
+        LoadBalancerAlgorithm::PulsarWaitAndWiden
+    );
+    assert_eq!(
+        router.algorithm_config("pulsar-model").seed(),
+        Some("seed-2")
+    );
 }
 
 #[test]
