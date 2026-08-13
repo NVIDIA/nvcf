@@ -260,6 +260,11 @@ addons:
       #   repository: ""
       #   tag: ""
 
+  # Event Ledger addon: records deployment stage events from NVCA and SIS.
+  # When enabled, deploys the event-ledger service backed by Cassandra.
+  eventLedger:
+    enabled: true
+
   # Vanity Gateway addon for optional vanity and OpenAI-compatible invocation routes.
   # Disabled by default; enabling this deploys the vanity-gateway service and its
   # Gateway API HTTPRoute without changing the default invocation or LLM routes.
