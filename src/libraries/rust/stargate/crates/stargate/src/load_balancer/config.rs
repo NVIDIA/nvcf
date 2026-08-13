@@ -59,6 +59,17 @@ pub enum LoadBalancerAlgorithm {
     PulsarWaitAndWiden,
 }
 
+impl LoadBalancerAlgorithm {
+    pub const ALL: [Self; 6] = [
+        Self::PowerOfTwo,
+        Self::WaitAndWiden,
+        Self::RoundRobin,
+        Self::Random,
+        Self::Pulsar,
+        Self::PulsarWaitAndWiden,
+    ];
+}
+
 impl fmt::Display for LoadBalancerAlgorithm {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {
@@ -462,4 +473,18 @@ pub struct LoadBalancerConfig {
     pub request_algorithms: HashMap<LoadBalancerAlgorithm, LoadBalancerModelConfig>,
     #[serde(default)]
     pub models: HashMap<String, LoadBalancerModelConfig>,
+}
+
+impl LoadBalancerConfig {
+    /// Config used when no config file is given: `power-of-two` by default,
+    /// and any built-in algorithm can be selected per request.
+    pub fn permissive_default() -> Self {
+        Self {
+            request_algorithms: LoadBalancerAlgorithm::ALL
+                .iter()
+                .map(|algorithm| (*algorithm, LoadBalancerModelConfig::Name(*algorithm)))
+                .collect(),
+            ..Self::default()
+        }
+    }
 }
