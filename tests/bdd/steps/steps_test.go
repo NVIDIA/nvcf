@@ -544,6 +544,31 @@ func TestPullSecretInNamespacesKeepsAPIKeyOutOfArgv(t *testing.T) {
 	}
 }
 
+func TestPullSecretInNamespacesUsingContextTargetsEveryApply(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NGC_API_KEY", "super-secret-token")
+	table := singleColumnTable(t, []string{"monitoring", "nvca-operator"})
+	if err := sc.pullSecretInNamespacesUsingContext(
+		context.Background(),
+		"nvcr-pull-secret",
+		"k3d-ncp-local-compute-1",
+		table,
+	); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if len(fake.runs) != 4 {
+		t.Fatalf("runs = %d, want 4 (2 namespaces x (ns manifest + secret manifest))", len(fake.runs))
+	}
+	for _, run := range fake.runs {
+		if !strings.HasPrefix(run.command, "kubectl --context k3d-ncp-local-compute-1 apply -f ") {
+			t.Fatalf("command does not target compute context: %q", run.command)
+		}
+		if strings.Contains(run.command, "super-secret-token") {
+			t.Fatalf("api key leaked into argv: %q", run.command)
+		}
+	}
+}
+
 func TestPullSecretInNamespacesRequiresAPIKey(t *testing.T) {
 	sc, _ := newScenarioContext(t)
 	t.Setenv("NGC_API_KEY", "")

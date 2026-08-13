@@ -60,7 +60,7 @@ include Makefile.dist
 -include helmfile-docker.mk
 
 # --- Development-Only Targets ---
-.PHONY: dist clean-dist ensure-helm ensure-helmfile ensure-binaries render-local test-observability-profile test-local generate-golden
+.PHONY: dist clean-dist ensure-helm ensure-helmfile ensure-binaries render-local test-observability-profile test-nvca-entrypoints test-local generate-golden
 
 # --- Binary Management (Development Only) ---
 ensure-helm:
@@ -172,7 +172,10 @@ render-local: dist
 test-observability-profile:
 	@tests/observability-profile.sh
 
-test-local: test-observability-profile render-local
+test-nvca-entrypoints: render-local
+	@tests/nvca-entrypoints.sh "$(DIST_DIR)/out"
+
+test-local: test-observability-profile test-nvca-entrypoints
 	@echo ">>> Comparing $(DIST_DIR)/out against golden $(GOLDEN_LOCAL_DIR)..."
 	@if ! tests/compare-golden.sh "$(GOLDEN_LOCAL_DIR)" "$(DIST_DIR)/out"; then \
 		echo ""; \
@@ -222,6 +225,7 @@ help:
 	@echo ""
 	@echo "Testing Targets:"
 	@echo "  test-observability-profile  Verify NVCA observability profile defaults"
+	@echo "  test-nvca-entrypoints       Verify rendered NVCA images use available entrypoints"
 	@echo "  test-local         Render the local env and diff against golden testdata"
 	@echo "  generate-golden    Render the local env and update golden testdata"
 	@echo ""

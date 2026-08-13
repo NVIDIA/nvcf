@@ -1,5 +1,5 @@
 ---
-# Source: helm-nvca-operator/templates/shutdown-sentinel.yaml
+# Source: helm-nvca-operator/templates/operator-config-cm.yaml
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,11 +14,10 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: nvca-operator-shutdown-sentinel
+  name: nvca-operator-config
   namespace: nvca-operator
   labels:
     helm.sh/chart: helm-nvca-operator-1.19.0
@@ -26,7 +25,12 @@ metadata:
     app.kubernetes.io/instance: nvca-operator
     app.kubernetes.io/version: "3.0.4"
     app.kubernetes.io/managed-by: Helm
-  finalizers:
-    - nvca.nvcf.nvidia.io/operator-cleanup
 data:
-  purpose: "Sentinel for graceful operator shutdown. When this ConfigMap is deleted, the operator will clean up all managed resources before terminating."
+  config.yaml: |
+    workload:
+      transportTLS:
+        trustBundle:
+          secretKeyRef:
+            name: ""
+            key: "ca.crt"
+        fingerprint: ""

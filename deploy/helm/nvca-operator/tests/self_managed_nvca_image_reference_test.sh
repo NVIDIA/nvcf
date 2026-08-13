@@ -261,6 +261,27 @@ if ! grep -Fxq "${stage_byoo_function_image}" "${stage_image_manifest}"; then
   exit 1
 fi
 
+expected_operator_otel_collector_tag="$(yq -r '.otelCollector.imageTag' "${repo_root}/nvca-operator/values.yaml")"
+expected_backend_otel_collector_tag="$(yq -r '.selfManaged.otelCollector.imageTag' "${repo_root}/nvca-operator/values.yaml")"
+rendered_operator_otel_collector_tag="$(
+  yq -r 'select(.kind == "Deployment" and .metadata.name == "nvca-operator") | .spec.template.spec.containers[] | select(.name == "nvca-operator") | .env[] | select(.name == "OTEL_COLLECTOR_IMAGE_TAG") | .value' \
+    "${manifest}"
+)"
+rendered_backend_otel_collector_tag="$(
+  yq -r 'select(.kind == "ConfigMap" and .metadata.name == "nvcfbackend-self-managed") | .data."cluster-dto.yaml" | from_yaml | .otelCollector.imageConfig.tag' \
+    "${manifest}"
+)"
+
+if [[ "${rendered_operator_otel_collector_tag}" != "${expected_operator_otel_collector_tag}" ]]; then
+  echo "expected rendered operator collector tag ${expected_operator_otel_collector_tag}, got ${rendered_operator_otel_collector_tag}" >&2
+  exit 1
+fi
+
+if [[ "${rendered_backend_otel_collector_tag}" != "${expected_backend_otel_collector_tag}" ]]; then
+  echo "expected rendered self-managed collector tag ${expected_backend_otel_collector_tag}, got ${rendered_backend_otel_collector_tag}" >&2
+  exit 1
+fi
+
 expected_annotations=(
   "release-artifact-nvca-image: \"${nvca_image_repository}:${nvca_version}\""
   "release-artifact-nvcf-image-credential-helper-image: \"${image_credential_helper_repository}:${image_credential_helper_tag}\""
