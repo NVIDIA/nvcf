@@ -49,7 +49,14 @@ impl<'de> Deserialize<'de> for LoadBalancerModelConfig {
 #[serde(rename_all = "kebab-case")]
 pub enum LoadBalancerAlgorithm {
     #[default]
-    PowerOfTwo,
+    #[serde(
+        alias = "power-of-two",
+        alias = "powerOf2",
+        alias = "powerOfN",
+        alias = "powerof2",
+        alias = "powerofn"
+    )]
+    PowerOfN,
     #[serde(alias = "groq-multiregion")]
     WaitAndWiden,
     RoundRobin,
@@ -61,7 +68,7 @@ pub enum LoadBalancerAlgorithm {
 
 impl LoadBalancerAlgorithm {
     pub const ALL: [Self; 6] = [
-        Self::PowerOfTwo,
+        Self::PowerOfN,
         Self::WaitAndWiden,
         Self::RoundRobin,
         Self::Random,
@@ -73,7 +80,7 @@ impl LoadBalancerAlgorithm {
 impl fmt::Display for LoadBalancerAlgorithm {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {
-            Self::PowerOfTwo => "power-of-two",
+            Self::PowerOfN => "power-of-n",
             Self::WaitAndWiden => "wait-and-widen",
             Self::RoundRobin => "round-robin",
             Self::Random => "random",
@@ -194,29 +201,29 @@ pub struct WaitAndWidenAlgorithmConfig {
     pub ignore_input_processing_time: Option<bool>,
 }
 
-const DEFAULT_POWER_OF_TWO_SAMPLE_COUNT: usize = 2;
-pub const MAX_POWER_OF_TWO_SAMPLE_COUNT: usize = 64;
+const DEFAULT_POWER_OF_N_SAMPLE_COUNT: usize = 2;
+pub const MAX_POWER_OF_N_SAMPLE_COUNT: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default)]
-pub struct PowerOfTwoAlgorithmConfig {
+pub struct PowerOfNAlgorithmConfig {
     pub sample_count: usize,
 }
 
-impl Default for PowerOfTwoAlgorithmConfig {
+impl Default for PowerOfNAlgorithmConfig {
     fn default() -> Self {
         Self {
-            sample_count: DEFAULT_POWER_OF_TWO_SAMPLE_COUNT,
+            sample_count: DEFAULT_POWER_OF_N_SAMPLE_COUNT,
         }
     }
 }
 
-impl PowerOfTwoAlgorithmConfig {
+impl PowerOfNAlgorithmConfig {
     pub(crate) fn validated_sample_count(&self) -> Result<usize, String> {
         let sample_count = self.sample_count;
-        if !(1..=MAX_POWER_OF_TWO_SAMPLE_COUNT).contains(&sample_count) {
+        if !(1..=MAX_POWER_OF_N_SAMPLE_COUNT).contains(&sample_count) {
             return Err(format!(
-                "power-of-two sample_count must be between 1 and {MAX_POWER_OF_TWO_SAMPLE_COUNT}, got {sample_count}"
+                "power-of-n sample_count must be between 1 and {MAX_POWER_OF_N_SAMPLE_COUNT}, got {sample_count}"
             ));
         }
         Ok(sample_count)
@@ -225,7 +232,7 @@ impl PowerOfTwoAlgorithmConfig {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum LoadBalancerAlgorithmSettings {
-    PowerOfTwo(PowerOfTwoAlgorithmConfig),
+    PowerOfN(PowerOfNAlgorithmConfig),
     WaitAndWiden(WaitAndWidenAlgorithmConfig),
     RoundRobin,
     Random,
@@ -235,14 +242,14 @@ pub enum LoadBalancerAlgorithmSettings {
 
 impl Default for LoadBalancerAlgorithmSettings {
     fn default() -> Self {
-        Self::PowerOfTwo(PowerOfTwoAlgorithmConfig::default())
+        Self::PowerOfN(PowerOfNAlgorithmConfig::default())
     }
 }
 
 impl LoadBalancerAlgorithmSettings {
     fn algorithm(&self) -> LoadBalancerAlgorithm {
         match self {
-            Self::PowerOfTwo(_) => LoadBalancerAlgorithm::PowerOfTwo,
+            Self::PowerOfN(_) => LoadBalancerAlgorithm::PowerOfN,
             Self::WaitAndWiden(_) => LoadBalancerAlgorithm::WaitAndWiden,
             Self::RoundRobin => LoadBalancerAlgorithm::RoundRobin,
             Self::Random => LoadBalancerAlgorithm::Random,
@@ -286,7 +293,7 @@ impl LoadBalancerAlgorithmConfig {
             LoadBalancerAlgorithmSettings::Pulsar(seed) => seed.as_deref(),
             LoadBalancerAlgorithmSettings::WaitAndWiden(config)
             | LoadBalancerAlgorithmSettings::PulsarWaitAndWiden(config) => config.seed.as_deref(),
-            LoadBalancerAlgorithmSettings::PowerOfTwo(_)
+            LoadBalancerAlgorithmSettings::PowerOfN(_)
             | LoadBalancerAlgorithmSettings::RoundRobin
             | LoadBalancerAlgorithmSettings::Random => None,
         }
@@ -308,7 +315,7 @@ impl LoadBalancerAlgorithmConfig {
                 config.seed = seed;
                 Ok(())
             }
-            LoadBalancerAlgorithmSettings::PowerOfTwo(_)
+            LoadBalancerAlgorithmSettings::PowerOfN(_)
             | LoadBalancerAlgorithmSettings::RoundRobin
             | LoadBalancerAlgorithmSettings::Random => {
                 Err(LoadBalancerSeedError::Unsupported { algorithm })
@@ -320,7 +327,7 @@ impl LoadBalancerAlgorithmConfig {
         match &self.settings {
             LoadBalancerAlgorithmSettings::WaitAndWiden(config)
             | LoadBalancerAlgorithmSettings::PulsarWaitAndWiden(config) => Some(config),
-            LoadBalancerAlgorithmSettings::PowerOfTwo(_)
+            LoadBalancerAlgorithmSettings::PowerOfN(_)
             | LoadBalancerAlgorithmSettings::RoundRobin
             | LoadBalancerAlgorithmSettings::Random
             | LoadBalancerAlgorithmSettings::Pulsar(_) => None,
@@ -331,16 +338,16 @@ impl LoadBalancerAlgorithmConfig {
         match &mut self.settings {
             LoadBalancerAlgorithmSettings::WaitAndWiden(config)
             | LoadBalancerAlgorithmSettings::PulsarWaitAndWiden(config) => Some(config),
-            LoadBalancerAlgorithmSettings::PowerOfTwo(_)
+            LoadBalancerAlgorithmSettings::PowerOfN(_)
             | LoadBalancerAlgorithmSettings::RoundRobin
             | LoadBalancerAlgorithmSettings::Random
             | LoadBalancerAlgorithmSettings::Pulsar(_) => None,
         }
     }
 
-    pub fn power_of_two_settings(&self) -> Option<&PowerOfTwoAlgorithmConfig> {
+    pub fn power_of_n_settings(&self) -> Option<&PowerOfNAlgorithmConfig> {
         match &self.settings {
-            LoadBalancerAlgorithmSettings::PowerOfTwo(config) => Some(config),
+            LoadBalancerAlgorithmSettings::PowerOfN(config) => Some(config),
             LoadBalancerAlgorithmSettings::WaitAndWiden(_)
             | LoadBalancerAlgorithmSettings::RoundRobin
             | LoadBalancerAlgorithmSettings::Random
@@ -349,9 +356,9 @@ impl LoadBalancerAlgorithmConfig {
         }
     }
 
-    pub fn power_of_two_settings_mut(&mut self) -> Option<&mut PowerOfTwoAlgorithmConfig> {
+    pub fn power_of_n_settings_mut(&mut self) -> Option<&mut PowerOfNAlgorithmConfig> {
         match &mut self.settings {
-            LoadBalancerAlgorithmSettings::PowerOfTwo(config) => Some(config),
+            LoadBalancerAlgorithmSettings::PowerOfN(config) => Some(config),
             LoadBalancerAlgorithmSettings::WaitAndWiden(_)
             | LoadBalancerAlgorithmSettings::RoundRobin
             | LoadBalancerAlgorithmSettings::Random
@@ -373,7 +380,7 @@ impl From<LoadBalancerAlgorithm> for LoadBalancerAlgorithmConfig {
 impl From<LoadBalancerAlgorithm> for LoadBalancerAlgorithmSettings {
     fn from(algorithm: LoadBalancerAlgorithm) -> Self {
         match algorithm {
-            LoadBalancerAlgorithm::PowerOfTwo => Self::PowerOfTwo(Default::default()),
+            LoadBalancerAlgorithm::PowerOfN => Self::PowerOfN(Default::default()),
             LoadBalancerAlgorithm::WaitAndWiden => Self::WaitAndWiden(Default::default()),
             LoadBalancerAlgorithm::RoundRobin => Self::RoundRobin,
             LoadBalancerAlgorithm::Random => Self::Random,
@@ -430,9 +437,10 @@ impl RawCommonAlgorithmConfig {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "algorithm", rename_all = "kebab-case")]
 enum RawLoadBalancerAlgorithmConfig {
-    PowerOfTwo {
+    #[serde(alias = "power-of-two", alias = "powerOf2", alias = "powerOfN")]
+    PowerOfN {
         #[serde(flatten)]
-        settings: PowerOfTwoAlgorithmConfig,
+        settings: PowerOfNAlgorithmConfig,
         #[serde(flatten)]
         common: RawCommonAlgorithmConfig,
     },
@@ -470,9 +478,9 @@ impl RawLoadBalancerAlgorithmConfig {
         Option<bool>,
     ) {
         match self {
-            Self::PowerOfTwo { settings, common } => (
+            Self::PowerOfN { settings, common } => (
                 common,
-                LoadBalancerAlgorithmSettings::PowerOfTwo(settings),
+                LoadBalancerAlgorithmSettings::PowerOfN(settings),
                 None,
             ),
             Self::WaitAndWiden { settings, common } => (
@@ -505,7 +513,7 @@ impl RawLoadBalancerAlgorithmConfig {
 
     fn into_config(self) -> Result<LoadBalancerAlgorithmConfig, String> {
         let (common, settings, consider_kv_free_tokens) = self.normalized();
-        if let LoadBalancerAlgorithmSettings::PowerOfTwo(config) = &settings {
+        if let LoadBalancerAlgorithmSettings::PowerOfN(config) = &settings {
             config.validated_sample_count()?;
         }
         common.into_config(settings, consider_kv_free_tokens)
@@ -544,7 +552,7 @@ pub struct LoadBalancerConfig {
 }
 
 impl LoadBalancerConfig {
-    /// Config used when no config file is given: `power-of-two` by default,
+    /// Config used when no config file is given: `power-of-n` by default,
     /// and any built-in algorithm can be selected per request.
     pub fn permissive_default() -> Self {
         Self {

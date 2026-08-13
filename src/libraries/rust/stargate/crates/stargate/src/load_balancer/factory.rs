@@ -15,7 +15,7 @@
 
 use std::sync::Arc;
 
-use super::power_of_two::PowerOfTwoLoadBalancer;
+use super::power_of_n::PowerOfNLoadBalancer;
 use super::pulsar::PulsarLoadBalancer;
 use super::pulsar_wait_and_widen::PulsarWaitAndWidenLoadBalancer;
 use super::random::RandomLoadBalancer;
@@ -38,8 +38,8 @@ pub fn create_load_balancer_with_config(
     }
 
     match config.algorithm() {
-        LoadBalancerAlgorithm::PowerOfTwo => Ok(Arc::new(
-            PowerOfTwoLoadBalancer::from_algorithm_config(config)?,
+        LoadBalancerAlgorithm::PowerOfN => Ok(Arc::new(
+            PowerOfNLoadBalancer::from_algorithm_config(config)?,
         )),
         LoadBalancerAlgorithm::WaitAndWiden => Ok(Arc::new(WaitAndWidenLoadBalancer::new(
             WaitAndWidenConfig::from_algorithm_config(config),

@@ -4,7 +4,7 @@ Stargate selects one load-balancing algorithm for each model. A request can
 select another preconfigured algorithm through a trusted header.
 
 This page defines the `lb-config.json` schema and the behavior of
-`power-of-two`, `wait-and-widen`, `pulsar`, and `pulsar-wait-and-widen`.
+`power-of-n`, `wait-and-widen`, `pulsar`, and `pulsar-wait-and-widen`.
 Deployment systems own the file mount and the `--lb-config-path` argument.
 
 ## Load the configuration
@@ -15,7 +15,7 @@ Start Stargate with an optional JSON file:
 --lb-config-path=/config/lb-config.json
 ```
 
-When the argument is absent, Stargate uses `power-of-two` for every model and
+When the argument is absent, Stargate uses `power-of-n` for every model and
 accepts a routing-method override when it is in the allowlist of built-in
 algorithms, each with its default settings. When the argument is present, the
 file defines the allowlist.
@@ -30,24 +30,25 @@ The top-level object has three fields:
 
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `default` | algorithm name | `power-of-two` | Algorithm for models without an entry in `models`. |
+| `default` | algorithm name | `power-of-n` | Algorithm for models without an entry in `models`. |
 | `request_algorithms` | object | `{}` | Algorithms that `x-routing-method` may select for every model. |
 | `models` | object | `{}` | Exact model ID to algorithm configuration. |
 
-Valid algorithm names are `power-of-two`, `wait-and-widen`, `round-robin`,
+Valid algorithm names are `power-of-n`, `wait-and-widen`, `round-robin`,
 `random`, `pulsar`, and `pulsar-wait-and-widen`.
 
-For backward compatibility, Stargate also accepts `groq-multiregion` as an
-alias for `wait-and-widen` and `pulsar-multiregion` as an alias for
-`pulsar-wait-and-widen` in `default`, `models`, `request_algorithms`, detailed
-algorithm objects, and routing-method overrides. Use the canonical names for
-new configurations.
+For backward compatibility, Stargate also accepts `powerOfN`, `powerOf2`, and
+`power-of-two` as aliases for `power-of-n`, `groq-multiregion` as an alias for
+`wait-and-widen`, and `pulsar-multiregion` as an alias for
+`pulsar-wait-and-widen`. These aliases work in `default`, `models`,
+`request_algorithms`, detailed algorithm objects, and routing-method overrides.
+Use the canonical names for new configurations.
 
 An entry in `models` or `request_algorithms` can be an algorithm name:
 
 ```json
 {
-  "default": "power-of-two",
+  "default": "power-of-n",
   "models": {
     "model-a": "wait-and-widen"
   }
@@ -58,7 +59,7 @@ Use a detailed object to set algorithm fields:
 
 ```json
 {
-  "default": "power-of-two",
+  "default": "power-of-n",
   "models": {
     "model-a": {
       "algorithm": "wait-and-widen",
@@ -111,13 +112,13 @@ Choose based on the routing goal and available backend statistics:
 | Keep the same prefix on a stable, capacity-weighted cluster. | `pulsar` | Positive finite `last_mean_input_tps` for every participating cluster. |
 | Keep Pulsar affinity when possible, but escape to lower-latency capacity when the primary cannot meet queue policy. | `pulsar-wait-and-widen` | Pulsar capacity plus the RTT and queue statistics used by `wait-and-widen`. |
 
-Use `power-of-two` when these statistics or affinity requirements are not
+Use `power-of-n` when these statistics or affinity requirements are not
 available. Use `round-robin` for deterministic cycling and `random` for uniform
 random selection.
 
-## `power-of-two`
+## `power-of-n`
 
-`power-of-two` uniformly samples distinct eligible clusters and selects the
+`power-of-n` uniformly samples distinct eligible clusters and selects the
 cluster with the lowest sum of queued and request input tokens divided by its
 last mean input TPS. It breaks equal scores randomly. Retried clusters are
 excluded before sampling.
@@ -129,10 +130,10 @@ compares every eligible cluster once.
 
 ```json
 {
-  "default": "power-of-two",
+  "default": "power-of-n",
   "models": {
     "model-a": {
-      "algorithm": "power-of-two",
+      "algorithm": "power-of-n",
       "sample_count": 4
     }
   }
@@ -167,7 +168,7 @@ Minimal configuration:
 
 ```json
 {
-  "default": "power-of-two",
+  "default": "power-of-n",
   "models": {
     "model-a": {
       "algorithm": "wait-and-widen",
@@ -194,7 +195,7 @@ Minimal configuration:
 
 ```json
 {
-  "default": "power-of-two",
+  "default": "power-of-n",
   "models": {
     "model-a": {
       "algorithm": "pulsar",
@@ -218,7 +219,7 @@ Minimal configuration:
 
 ```json
 {
-  "default": "power-of-two",
+  "default": "power-of-n",
   "models": {
     "model-a": {
       "algorithm": "pulsar-wait-and-widen",
@@ -233,7 +234,7 @@ Minimal configuration:
 
 ## Algorithm fields
 
-`power-of-two` supports this field:
+`power-of-n` supports this field:
 
 | Field | Type | Default | Constraint and effect |
 | --- | --- | --- | --- |
@@ -288,7 +289,7 @@ Preconfigure every algorithm that a request may select:
 
 ```json
 {
-  "default": "power-of-two",
+  "default": "power-of-n",
   "request_algorithms": {
     "wait-and-widen": "wait-and-widen",
     "pulsar": {

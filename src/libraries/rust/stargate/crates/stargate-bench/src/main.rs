@@ -566,7 +566,7 @@ mod tests {
     use clap::error::ErrorKind;
     const TRANSPORT_DISABLED: &str =
         "stargate-bench transport-bench --disable-quic-send-fairness --disable-http3-grease";
-    const MATERIALIZE_ARGS: &str = "stargate-bench materialize --scenario uniform-4-backends --seed 7 --algorithm power-of-two --output-dir out";
+    const MATERIALIZE_ARGS: &str = "stargate-bench materialize --scenario uniform-4-backends --seed 7 --algorithm power-of-n --output-dir out";
     const PREPARE_ARGS: &str = "stargate-bench prepare-run --config config.yaml";
     const RUN_ARGS: &str = "stargate-bench run --scenario uniform-4-backends --keep-resources-on-failure --reliability-mode controlled";
     const STARGATE_REQUEST_METRIC: &str = concat!(
@@ -612,7 +612,7 @@ mod tests {
         assert_eq!(conflict.kind(), ErrorKind::ArgumentConflict);
         assert_eq!(
             command_json!(MATERIALIZE_ARGS, Materialize),
-            r#"{"source":{"config":null,"scenario":"uniform-4-backends"},"seed":7,"algorithms":["power-of-two"],"output_dir":"out"}"#
+            r#"{"source":{"config":null,"scenario":"uniform-4-backends"},"seed":7,"algorithms":["power-of-n"],"output_dir":"out"}"#
         );
         assert_eq!(
             command_json!(PREPARE_ARGS, PrepareRun),
@@ -703,7 +703,7 @@ pylon_requests_total_total{model="dummy-model",status="complete"} 3
             concurrency: 1,
             candidates: 2,
             cache_key_count: 1,
-            scenarios: vec![LbMicrobenchScenario::PowerOfTwo],
+            scenarios: vec![LbMicrobenchScenario::PowerOfN],
         }
         .execute()
         .expect("real command should run lb microbench");
@@ -729,7 +729,7 @@ pylon_requests_total_total{model="dummy-model",status="complete"} 3
     #[test]
     fn run_info_reader_ignores_extra_run_metadata_fields() {
         let tempdir = tempfile::tempdir().expect("tempdir should create");
-        let run_dir = tempdir.path().join("run-power-of-two");
+        let run_dir = tempdir.path().join("run-power-of-n");
         std::fs::create_dir(&run_dir).expect("run dir should create");
         std::fs::write(
             run_dir.join("run-info.json"),
@@ -830,7 +830,7 @@ pylon_requests_total_total{model="dummy-model",status="complete"} 3
         BenchmarkInputArgs {
             source: source(None, Some("uniform-4-backends")),
             seed: Some(123),
-            algorithms: ["random", "power-of-two"].map(str::to_string).to_vec(),
+            algorithms: ["random", "power-of-n"].map(str::to_string).to_vec(),
             output_dir,
         }
     }
@@ -971,7 +971,7 @@ pylon_requests_total_total{model="dummy-model",status="complete"} 3
             .expect("benchmark input should load");
 
         assert_eq!(manifest.seed, 123);
-        assert_eq!(algorithm_names(&config), ["power-of-two", "random"]);
+        assert_eq!(algorithm_names(&config), ["power-of-n", "random"]);
         assert_eq!(output_dir, Path::new(".bench-out").join(&config.name));
     }
 
@@ -991,11 +991,11 @@ pylon_requests_total_total{model="dummy-model",status="complete"} 3
             .expect("summary should load");
 
         assert_eq!(manifest.seed, 123);
-        assert_eq!(algorithm_names(&config_copy), ["power-of-two", "random"]);
+        assert_eq!(algorithm_names(&config_copy), ["power-of-n", "random"]);
         assert_eq!(summary["seed"], 123);
         assert_eq!(
             summary["algorithm_names"],
-            serde_json::json!(["power-of-two", "random"])
+            serde_json::json!(["power-of-n", "random"])
         );
     }
 
@@ -1030,7 +1030,7 @@ pylon_requests_total_total{model="dummy-model",status="complete"} 3
         filter_algorithms(&mut config, &benchmark_args(None).algorithms)
             .expect("algorithm filter should succeed");
 
-        assert_eq!(algorithm_names(&config), ["power-of-two", "random"]);
+        assert_eq!(algorithm_names(&config), ["power-of-n", "random"]);
     }
 
     #[test]
@@ -1046,14 +1046,14 @@ pylon_requests_total_total{model="dummy-model",status="complete"} 3
     #[test]
     fn load_balance_sweep_scenarios_cover_grouped_topologies_and_all_algorithms() {
         const STANDARD_ALGORITHMS: &[&str] = &[
-            "power-of-two",
+            "power-of-n",
             "round-robin",
             "random",
             "wait-and-widen",
             "pulsar",
         ];
         const PREFIX_ALGORITHMS: &[&str] = &[
-            "power-of-two",
+            "power-of-n",
             "round-robin",
             "random",
             "wait-and-widen",

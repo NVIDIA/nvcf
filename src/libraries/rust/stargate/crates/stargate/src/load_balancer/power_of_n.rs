@@ -22,21 +22,21 @@ use tracing::{Span, debug};
 use super::tests::LoadBalancerTestChoiceExt;
 use super::{
     LoadBalancer, LoadBalancerAlgorithmConfig, LoadBalancerCandidateChoice, LoadBalancerRequest,
-    MAX_POWER_OF_TWO_SAMPLE_COUNT,
+    MAX_POWER_OF_N_SAMPLE_COUNT,
 };
 use crate::routing_state::RoutedClusterSnapshot;
 
-pub(super) struct PowerOfTwoLoadBalancer {
+pub(super) struct PowerOfNLoadBalancer {
     sample_count: usize,
 }
 
-impl PowerOfTwoLoadBalancer {
+impl PowerOfNLoadBalancer {
     pub(super) fn from_algorithm_config(
         config: &LoadBalancerAlgorithmConfig,
     ) -> anyhow::Result<Self> {
         let settings = config
-            .power_of_two_settings()
-            .expect("power-of-two settings should match load-balancer algorithm");
+            .power_of_n_settings()
+            .expect("power-of-n settings should match load-balancer algorithm");
         let sample_count = settings
             .validated_sample_count()
             .map_err(anyhow::Error::msg)?;
@@ -58,9 +58,9 @@ impl PowerOfTwoLoadBalancer {
     }
 }
 
-impl_display!(PowerOfTwoLoadBalancer, "power-of-two");
+impl_display!(PowerOfNLoadBalancer, "power-of-n");
 
-impl LoadBalancer for PowerOfTwoLoadBalancer {
+impl LoadBalancer for PowerOfNLoadBalancer {
     fn choose_candidate(
         &self,
         request: &LoadBalancerRequest<'_>,
@@ -72,14 +72,14 @@ impl LoadBalancer for PowerOfTwoLoadBalancer {
 }
 
 struct CandidateSample {
-    indices: [usize; MAX_POWER_OF_TWO_SAMPLE_COUNT],
+    indices: [usize; MAX_POWER_OF_N_SAMPLE_COUNT],
     len: usize,
 }
 
 impl CandidateSample {
     fn new() -> Self {
         Self {
-            indices: [0; MAX_POWER_OF_TWO_SAMPLE_COUNT],
+            indices: [0; MAX_POWER_OF_N_SAMPLE_COUNT],
             len: 0,
         }
     }
@@ -236,7 +236,7 @@ mod tests {
             request_slo: None,
             excluded_cluster_ids: Some(excluded_cluster_ids),
         };
-        PowerOfTwoLoadBalancer { sample_count }
+        PowerOfNLoadBalancer { sample_count }
             .choose_for_test(&request, candidates)
             .map(|choice| choice.candidate.cluster_id)
     }
@@ -286,7 +286,7 @@ mod tests {
     }
 
     #[test]
-    fn power_of_two_never_selects_excluded_clusters() {
+    fn power_of_n_never_selects_excluded_clusters() {
         let candidates = vec![
             candidate("excluded-a", 1_000.0, 0),
             candidate("eligible", 1.0, 0),
@@ -303,7 +303,7 @@ mod tests {
     }
 
     #[test]
-    fn power_of_two_skips_single_excluded_cluster_in_retry_set() {
+    fn power_of_n_skips_single_excluded_cluster_in_retry_set() {
         let candidates = (0..64)
             .map(|index| candidate(&format!("cluster-{index:04}"), 1_000.0, 0))
             .collect::<Vec<_>>();
@@ -317,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    fn power_of_two_returns_none_when_all_candidates_are_excluded() {
+    fn power_of_n_returns_none_when_all_candidates_are_excluded() {
         let candidates = vec![
             candidate("excluded-a", 1_000.0, 0),
             candidate("excluded-b", 1_000.0, 0),
@@ -450,7 +450,7 @@ mod tests {
             request_slo: None,
             excluded_cluster_ids: None,
         };
-        let load_balancer = PowerOfTwoLoadBalancer { sample_count: 3 };
+        let load_balancer = PowerOfNLoadBalancer { sample_count: 3 };
         let mut rng = StdRng::seed_from_u64(11);
         let mut selected = HashSet::new();
 

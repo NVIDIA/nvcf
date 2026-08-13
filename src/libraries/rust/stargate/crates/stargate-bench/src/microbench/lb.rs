@@ -26,7 +26,7 @@ use clap::ValueEnum;
 use stargate::load_balancer::{
     LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig, LoadBalancerConfig,
     LoadBalancerModelConfig, LoadBalancerRequest, LoadBalancerRouter, LoadBalancerTargetState,
-    MAX_POWER_OF_TWO_SAMPLE_COUNT,
+    MAX_POWER_OF_N_SAMPLE_COUNT,
 };
 use stargate::routing::{RoutedClusterSnapshot, RoutingTargetKey};
 use stargate_proto::pb::{InferenceServerStatus, ModelStats};
@@ -68,12 +68,12 @@ macro_rules! scenarios {
 // Keep the scenario matrix row-oriented so differences remain directly comparable.
 #[rustfmt::skip]
 scenarios! {
-    PowerOfTwo, "lb-bench-power-of-two", PowerOfTwo, None, 0;
-    PowerOfTwoSample1, "lb-bench-power-of-two-sample-1", PowerOfTwo, None, 0;
-    PowerOfTwoSample4, "lb-bench-power-of-two-sample-4", PowerOfTwo, None, 0;
-    PowerOfTwoSample8, "lb-bench-power-of-two-sample-8", PowerOfTwo, None, 0;
-    PowerOfTwoFullPool, "lb-bench-power-of-two-full-pool", PowerOfTwo, None, 0;
-    PowerOfTwoOneExcluded, "lb-bench-power-of-two-one-excluded", PowerOfTwo, None, 1;
+    PowerOfN, "lb-bench-power-of-n", PowerOfN, None, 0;
+    PowerOfNSample1, "lb-bench-power-of-n-sample-1", PowerOfN, None, 0;
+    PowerOfNSample4, "lb-bench-power-of-n-sample-4", PowerOfN, None, 0;
+    PowerOfNSample8, "lb-bench-power-of-n-sample-8", PowerOfN, None, 0;
+    PowerOfNFullPool, "lb-bench-power-of-n-full-pool", PowerOfN, None, 0;
+    PowerOfNOneExcluded, "lb-bench-power-of-n-one-excluded", PowerOfN, None, 1;
     WaitAndWiden, "lb-bench-wait-and-widen", WaitAndWiden, None, 0;
     WaitAndWidenOneExcluded, "lb-bench-wait-and-widen-one-excluded", WaitAndWiden, None, 1;
     WaitAndWidenIgnoreQueue, "lb-bench-wait-and-widen-ignore-queue", WaitAndWiden, Some(IgnoreQueue), 0;
@@ -100,11 +100,11 @@ impl LbMicrobenchScenario {
 
     fn configured_sample_count(self, candidate_count: usize) -> Option<usize> {
         match self {
-            Self::PowerOfTwo | Self::PowerOfTwoOneExcluded => Some(2),
-            Self::PowerOfTwoSample1 => Some(1),
-            Self::PowerOfTwoSample4 => Some(4),
-            Self::PowerOfTwoSample8 => Some(8),
-            Self::PowerOfTwoFullPool => Some(candidate_count),
+            Self::PowerOfN | Self::PowerOfNOneExcluded => Some(2),
+            Self::PowerOfNSample1 => Some(1),
+            Self::PowerOfNSample4 => Some(4),
+            Self::PowerOfNSample8 => Some(8),
+            Self::PowerOfNFullPool => Some(candidate_count),
             _ => None,
         }
     }
@@ -211,14 +211,14 @@ fn validate_config(config: &LbMicrobenchConfig) -> anyhow::Result<()> {
             anyhow::bail!("{flag} must be greater than 0");
         }
     }
-    if config.candidates > MAX_POWER_OF_TWO_SAMPLE_COUNT
+    if config.candidates > MAX_POWER_OF_N_SAMPLE_COUNT
         && (config.scenarios.is_empty()
             || config
                 .scenarios
-                .contains(&LbMicrobenchScenario::PowerOfTwoFullPool))
+                .contains(&LbMicrobenchScenario::PowerOfNFullPool))
     {
         anyhow::bail!(
-            "power-of-two-full-pool requires --candidates to be at most {MAX_POWER_OF_TWO_SAMPLE_COUNT}"
+            "power-of-n-full-pool requires --candidates to be at most {MAX_POWER_OF_N_SAMPLE_COUNT}"
         );
     }
     Ok(())
@@ -232,7 +232,7 @@ fn run_scenario(
 ) -> anyhow::Result<LbMicrobenchRow> {
     let algorithm_config = config_for_scenario(scenario, config.candidates);
     let router = LoadBalancerRouter::from_config(&LoadBalancerConfig {
-        default: LoadBalancerAlgorithm::PowerOfTwo,
+        default: LoadBalancerAlgorithm::PowerOfN,
         request_algorithms: HashMap::new(),
         models: HashMap::from([(
             scenario.metadata().model_id.to_string(),
@@ -497,8 +497,8 @@ fn config_for_scenario(
     config.request_policy_mut().require_input_tokens = is_pulsar;
     if let Some(sample_count) = scenario.configured_sample_count(candidate_count) {
         config
-            .power_of_two_settings_mut()
-            .expect("power-of-two scenario should expose power-of-two settings")
+            .power_of_n_settings_mut()
+            .expect("power-of-n scenario should expose power-of-n settings")
             .sample_count = sample_count;
     }
     if is_pulsar {
@@ -597,7 +597,7 @@ mod tests {
 
     #[test]
     fn lb_microbench_runs_default_scenarios() {
-        let mut config = config(LbMicrobenchScenario::PowerOfTwo);
+        let mut config = config(LbMicrobenchScenario::PowerOfN);
         config.iterations = 8;
         config.warmup_iterations = 2;
         config.candidates = 4;
@@ -605,7 +605,7 @@ mod tests {
         let rows = run_lb_microbench(&config).expect("microbench should run");
 
         assert_eq!(rows.len(), 23);
-        assert_eq!(rows[0].scenario, LbMicrobenchScenario::PowerOfTwo);
+        assert_eq!(rows[0].scenario, LbMicrobenchScenario::PowerOfN);
         for row in rows {
             assert_eq!(row.choices, row.iterations);
             assert_eq!(row.concurrency, 2);
@@ -649,13 +649,13 @@ mod tests {
     }
 
     #[test]
-    fn power_of_two_microbench_scenarios_cover_requested_sample_counts() {
+    fn power_of_n_microbench_scenarios_cover_requested_sample_counts() {
         for (scenario, expected_sample_count) in [
-            (LbMicrobenchScenario::PowerOfTwoSample1, 1),
-            (LbMicrobenchScenario::PowerOfTwo, 2),
-            (LbMicrobenchScenario::PowerOfTwoSample4, 4),
-            (LbMicrobenchScenario::PowerOfTwoSample8, 8),
-            (LbMicrobenchScenario::PowerOfTwoFullPool, 8),
+            (LbMicrobenchScenario::PowerOfNSample1, 1),
+            (LbMicrobenchScenario::PowerOfN, 2),
+            (LbMicrobenchScenario::PowerOfNSample4, 4),
+            (LbMicrobenchScenario::PowerOfNSample8, 8),
+            (LbMicrobenchScenario::PowerOfNFullPool, 8),
         ] {
             let rows = run_lb_microbench(&config(scenario)).expect("microbench should run");
             assert_eq!(
@@ -667,11 +667,11 @@ mod tests {
 
     #[test]
     fn full_pool_microbench_rejects_candidate_count_above_sample_limit() {
-        let mut config = config(LbMicrobenchScenario::PowerOfTwoFullPool);
-        config.candidates = MAX_POWER_OF_TWO_SAMPLE_COUNT + 1;
+        let mut config = config(LbMicrobenchScenario::PowerOfNFullPool);
+        config.candidates = MAX_POWER_OF_N_SAMPLE_COUNT + 1;
 
         let error = run_lb_microbench(&config).expect_err("oversized full pool should fail");
-        assert!(error.to_string().contains("power-of-two-full-pool"));
+        assert!(error.to_string().contains("power-of-n-full-pool"));
     }
 
     #[test]
@@ -704,7 +704,7 @@ mod tests {
     #[rustfmt::skip]
     exclusion_tests! {
         random_one_excluded_scenario_never_selects_excluded_backend: RandomOneExcluded => ["cluster-0000"];
-        power_of_two_one_excluded_scenario_never_selects_excluded_backend: PowerOfTwoOneExcluded => ["cluster-0000"];
+        power_of_n_one_excluded_scenario_never_selects_excluded_backend: PowerOfNOneExcluded => ["cluster-0000"];
         wait_and_widen_one_excluded_scenario_never_selects_excluded_backend: WaitAndWidenOneExcluded => ["cluster-0000"];
         wait_and_widen_affinity_one_excluded_scenario_never_selects_excluded_backend: WaitAndWidenAffinityOneExcluded => ["cluster-0000"];
         wait_and_widen_affinity_multi_excluded_scenario_never_selects_excluded_backend: WaitAndWidenAffinityMultiExcluded => ["cluster-0000", "cluster-0001"];
