@@ -86,3 +86,58 @@ func TestBenchPodSuppliesVolumesForEveryMount(t *testing.T) {
 		}
 	}
 }
+
+// BenchPod must carry the host pod's identity metadata (so the collector's
+// downward-API env resolves), overlay only the suite's own label keys, and not
+// alias Result's maps (mutating the pod must not mutate Result).
+func TestBenchPodPropagatesOwnerMetadata(t *testing.T) {
+	res, err := Render(spec.ShapeContainer, spec.DefaultOptions())
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if len(res.OwnerLabels) == 0 {
+		t.Fatal("expected owner labels captured from the translated pod")
+	}
+
+	pod := res.BenchPod("byoo-perf")
+
+	// Every owner label survives unless a suite key intentionally overrides it.
+	suiteKeys := map[string]bool{
+		common.K8sAppNameLabelKey:              true,
+		"app.kubernetes.io/part-of":            true,
+		common.BYOOMetricsEgressTargetLabelKey: true,
+	}
+	for k, v := range res.OwnerLabels {
+		if suiteKeys[k] {
+			continue
+		}
+		if pod.Labels[k] != v {
+			t.Errorf("owner label %q = %q on pod, want %q", k, pod.Labels[k], v)
+		}
+	}
+	for k, v := range res.OwnerAnnotations {
+		if pod.Annotations[k] != v {
+			t.Errorf("owner annotation %q = %q on pod, want %q", k, pod.Annotations[k], v)
+		}
+	}
+
+	// Suite labels are applied.
+	if pod.Labels["app.kubernetes.io/part-of"] != "byoo-perf" {
+		t.Errorf("suite part-of label = %q, want byoo-perf", pod.Labels["app.kubernetes.io/part-of"])
+	}
+	if pod.Labels[common.K8sAppNameLabelKey] != common.ByooOTelCollectorPodNameBase {
+		t.Errorf("suite app-name label = %q, want %q", pod.Labels[common.K8sAppNameLabelKey], common.ByooOTelCollectorPodNameBase)
+	}
+
+	// Mutating the returned pod must not leak back into Result.
+	pod.Labels["mutation-probe"] = "x"
+	if _, leaked := res.OwnerLabels["mutation-probe"]; leaked {
+		t.Error("mutating pod.Labels mutated Result.OwnerLabels (maps are aliased)")
+	}
+	if len(res.OwnerAnnotations) > 0 {
+		pod.Annotations["mutation-probe"] = "x"
+		if _, leaked := res.OwnerAnnotations["mutation-probe"]; leaked {
+			t.Error("mutating pod.Annotations mutated Result.OwnerAnnotations (maps are aliased)")
+		}
+	}
+}
