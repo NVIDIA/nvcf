@@ -73,3 +73,14 @@ jobs:
         run: |
           bash tools/ci/test-check-gazelle
           bash tools/ci/check-gazelle
+
+  openbao-bootstrap:
+    name: openbao bootstrap
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Run OpenBao bootstrap tests
+        run: bash deploy/helm/openbao/tests/bootstrap/test-deploy-bootstrap.sh
