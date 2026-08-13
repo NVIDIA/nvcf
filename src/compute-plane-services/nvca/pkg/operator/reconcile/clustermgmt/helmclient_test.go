@@ -64,6 +64,8 @@ clusterGroupId: "grp-1"
 ncaID: "test-nca"
 nvcaVersion: "1.0.0"
 oAuthClientId: "oauth-client-1"
+vaultConfig:
+  address: "https://vault.example.test:443"
 icmsConfig:
   tokenURL: "https://oauth.example.test/token"
   publicKeysetEndpoint: "https://oauth.example.test/.well-known/jwks.json"
@@ -117,8 +119,48 @@ agent:
 	assert.Equal(t, "https://stage-fnds-oauth.example.test/.well-known/jwks.json", nb.Spec.AgentConfig.FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint)
 	assert.Equal(t, "https://prod-fnds-oauth.example.test/token", nb.Spec.AgentConfig.FunctionDeploymentStagesProdOAuthTokenURL)
 	assert.Equal(t, "https://prod-fnds-oauth.example.test/.well-known/jwks.json", nb.Spec.AgentConfig.FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint)
-	assert.Equal(t, "https://:443", nb.Spec.VaultConfig.Address)
+	assert.Equal(t, "https://vault.example.test:443", nb.Spec.VaultConfig.Address)
 	assert.True(t, nb.Spec.VaultConfig.Enabled)
+}
+
+func TestHelmManagedClient_GetCluster_RequiresValidVaultAddress(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("OAuth disabled", func(t *testing.T) {
+		client := NewHelmManagedClient(
+			nvidiaiov1.EnvTypeProd,
+			dummyFetcher("clusterName: test-backend", nil),
+			DefaultVaultOAuthClientMountPathTemplate,
+		)
+
+		cluster, err := client.GetCluster(ctx, "test-cluster")
+		require.NoError(t, err)
+		assert.False(t, cluster.NVCFBackend.Spec.VaultConfig.Enabled)
+	})
+
+	t.Run("missing address", func(t *testing.T) {
+		client := NewHelmManagedClient(
+			nvidiaiov1.EnvTypeProd,
+			dummyFetcher("clusterName: test-backend\noAuthClientId: oauth-client-1", nil),
+			DefaultVaultOAuthClientMountPathTemplate,
+		)
+
+		_, err := client.GetCluster(ctx, "test-cluster")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "vaultConfig.address")
+	})
+
+	t.Run("address without host", func(t *testing.T) {
+		client := NewHelmManagedClient(
+			nvidiaiov1.EnvTypeProd,
+			dummyFetcher("clusterName: test-backend\noAuthClientId: oauth-client-1\nvaultConfig:\n  address: https://:443", nil),
+			DefaultVaultOAuthClientMountPathTemplate,
+		)
+
+		_, err := client.GetCluster(ctx, "test-cluster")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "vaultConfig.address")
+	})
 }
 
 func TestHelmManagedClient_GetCluster_InvalidYAML(t *testing.T) {

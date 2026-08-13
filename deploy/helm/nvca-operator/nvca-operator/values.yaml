@@ -269,9 +269,11 @@ ngcConfig:
   apiURL: https://api.ngc.nvidia.com
   clusterSource: ngc-managed
 ## @section Vault Configuration
+## @param vaultConfig.address Vault server URL for Helm-managed clusters. Required when helmManaged.oAuthClientID is set.
 ## @param vaultConfig.oAuthClientMountPathTemplate Template for constructing the OAuth client mount path in Vault. Use %s as placeholder for clientID. Example: "nvidia/services/oauth/clients/%s/kv/secret"
 ## @param vaultConfig.oAuthClientMountPath (Optional) Full OAuth client mount path. If set, overrides the computed path from template.
 vaultConfig:
+  address: ""
   oAuthClientMountPathTemplate: ""
   oAuthClientMountPath: ""
 ## @section Helm Managed NVCF Backend Configuration
