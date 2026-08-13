@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseTagPrefix(t *testing.T) {
@@ -300,5 +301,35 @@ func TestMergeOriginCombinesHosts(t *testing.T) {
 		if got := mergeOrigin(tc.a, tc.b); got != tc.want {
 			t.Errorf("mergeOrigin(%q,%q) = %q, want %q", tc.a, tc.b, got, tc.want)
 		}
+	}
+}
+
+// A network-facing git attempt must not be able to hang the run. Without a
+// per-attempt deadline a stalled connection or a credential prompt blocks until
+// the CI job times out an hour later, and the retry loop never gets to run.
+func TestFetchGitHubTagsBoundsEachAttempt(t *testing.T) {
+	if gitNetworkTimeout <= 0 {
+		t.Fatal("gitNetworkTimeout must be positive; an unbounded git attempt can hang the whole run")
+	}
+	// Three attempts plus backoff has to leave room inside a CI job.
+	worst := 3*gitNetworkTimeout + (0+2+4)*time.Second
+	if worst > 30*time.Minute {
+		t.Fatalf("worst-case retry budget %s is too large for a CI job", worst)
+	}
+}
+
+// The tool is also run by hand, where the publishing job's GIT_TERMINAL_PROMPT
+// export is absent. A prompt on a closed stdin is exactly the stall the deadline
+// then has to clean up, so the command sets it itself.
+func TestFetchGitHubTagsDisablesCredentialPrompt(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	if !strings.Contains(string(src), `"GIT_TERMINAL_PROMPT=0"`) {
+		t.Fatal("fetchGitHubTags must set GIT_TERMINAL_PROMPT=0 on each git command")
+	}
+	if !strings.Contains(string(src), "exec.CommandContext") {
+		t.Fatal("fetchGitHubTags must use exec.CommandContext so each attempt is bounded")
 	}
 }

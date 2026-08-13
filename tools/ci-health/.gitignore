@@ -1,0 +1,2 @@
+# Build output from `go build` in this directory.
+/ci-health

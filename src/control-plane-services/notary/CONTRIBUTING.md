@@ -85,7 +85,7 @@ The name and email used must match those configured in `git config`.
 2. Create a feature branch (`git checkout -b feature/my-feature`).
 3. Make your changes. Ensure the code builds and all tests pass:
    ```bash
-   mvn clean verify
+   bazel test //src/control-plane-services/notary/... --cache_test_results=no
    ```
 4. Ensure all new files include the standard NVIDIA SPDX Apache-2.0 header.
    See any existing source file in the repository for the canonical header
@@ -105,8 +105,7 @@ The name and email used must match those configured in `git config`.
 
 ## Code Style
 
-- Java sources follow the formatting enforced by the project's Checkstyle
-  configuration. Run `mvn -pl notary-core checkstyle:check` to validate.
+- Match the formatting of nearby Java sources.
 - Public APIs should include Javadoc.
 - Follow conventional commit style for commit subjects (e.g. `feat:`,
   `fix:`, `chore:`, `docs:`).

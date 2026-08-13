@@ -1,0 +1,52 @@
+load("@rules_java//java:defs.bzl", "java_library")
+load("//rules/java:defs.bzl", "nv_boot_workspace_runfiles")
+load("//rules/java:notice.bzl", "nvcf_notice", "nvcf_notice_delta")
+
+package(default_visibility = ["//visibility:public"])
+
+filegroup(
+    name = "local_env_files",
+    srcs = glob(["local_env/**"]),
+)
+
+filegroup(
+    name = "secrets_json",
+    srcs = ["local_env/secrets/secrets.json"],
+)
+
+nv_boot_workspace_runfiles(
+    name = "test_local_env",
+    srcs = [":local_env_files"],
+    strip_prefix = "src/control-plane-services/encrypted-secret-store/",
+    visibility = ["//src/control-plane-services/encrypted-secret-store:__subpackages__"],
+)
+
+java_library(
+    name = "local_env_resources",
+    resource_strip_prefix = "src/control-plane-services/encrypted-secret-store",
+    resources = [":local_env_files"],
+    visibility = ["//src/control-plane-services/encrypted-secret-store:__subpackages__"],
+)
+
+exports_files([
+    "NOTICE",
+    "notice_metadata.json",
+])
+
+nvcf_notice(
+    checked_notice = ":NOTICE",
+    first_party_groups = ["com.nvidia.ess"],
+    inventory_name = "ess_runtime_inventory",
+    metadata = ":notice_metadata.json",
+    runtime_target = "//src/control-plane-services/encrypted-secret-store/ess-service:app",
+    shared_metadata = [
+        "//src/libraries/java/nv-boot-parent:notice_metadata.json",
+    ],
+)
+
+nvcf_notice_delta(
+    baseline_inventories = [
+        "//src/libraries/java/nv-boot-parent:runtime_inventory.json",
+    ],
+    inventory = ":runtime_inventory.json",
+)

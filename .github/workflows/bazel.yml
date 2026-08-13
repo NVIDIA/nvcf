@@ -80,7 +80,9 @@ jobs:
           fetch-depth: 0
 
       - name: Check Java import boundaries
-        run: bash tools/ci/check-java-import-boundaries
+        run: |
+          bash tools/scripts/test/test-check-java-import-boundaries
+          bash tools/ci/check-java-import-boundaries
 
       # Behavioral tests for the CI shell this workflow depends on. actionlint
       # covers syntax; these cover the decisions.
@@ -165,6 +167,10 @@ jobs:
                 exit 1
               fi
             done
+            while IFS= read -r project_pom; do
+              echo "::error file=${project_pom}::Java components are Bazel-only; remove imported project POM"
+              exit 1
+            done < <(find "${path}" -name pom.xml -print)
             id="$(jq -er '.id | select(test("^[a-z0-9][a-z0-9-]*$"))' "$manifest")"
             tests_skip="$(jq -er '.tests_skip | if type == "boolean" then tostring else error("tests_skip must be boolean") end' "$manifest")"
             component_kind="$(jq -er '.component_kind | select(. == "java-framework" or . == "java-service")' "$manifest")"
@@ -433,7 +439,14 @@ jobs:
       # same instant, tripping GitHub's action-download rate limit (HTTP 429 in
       # "Set up job"). Batching keeps the download burst under that limit;
       # change-aware scheduling already keeps most PRs well below the cap.
-      max-parallel: 8
+      #
+      # Raised 8 -> 12 to shorten full-matrix runs: a recent 25-row merge-queue
+      # run needed three waves at 8 and needs two at 12. The bazel-docker matrix
+      # below contributes 4 more, so simultaneous checkouts peak at 16 rather
+      # than the previous 12. If "Set up job" starts failing with HTTP 429 this
+      # is the first knob to walk back; measure with `tools/ci/ci-health --why`,
+      # which reports queue wait separately from execution time.
+      max-parallel: 12
       matrix:
         subtree: ${{ fromJSON(needs.detect.outputs.matrix) }}
     steps:
@@ -482,9 +495,17 @@ jobs:
       #
       # Concurrent saves to one key are safe: the first writer wins and the rest
       # no-op. Rows with their own module keep a per-row identity.
-      - name: Cache Bazel repository + disk caches
+      # Restore on every event, save only from main. GitHub scopes a cache
+      # entry to the ref that wrote it, so a pull_request or merge_group run
+      # writes a copy only that ref can read: used once, then holding quota
+      # until evicted. These entries are 1.5-1.9 GB against a 10 GB repository
+      # limit, so PR-scoped copies evict the main entry every other row is
+      # trying to restore. Runs on any ref can restore from the default branch,
+      # so main-only saves lose no reuse. Same read/write split as the remote
+      # cache in tools/ci/bazel-cache-upload-mode.
+      - name: Restore Bazel repository + disk caches
         if: steps.precheck.outputs.skip == 'false'
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cache/bazel/_bazel_${{ env.USER || 'root' }}/install
@@ -499,9 +520,9 @@ jobs:
       # dependency graph and the Bazel cache above, so cache the genrule's Go
       # module + build cache separately, keyed on the collector go.sum, so cold
       # runners restore it instead of re-downloading. See NVIDIA/nvcf#373.
-      - name: Cache byoo-otel-collector Go module cache
+      - name: Restore byoo-otel-collector Go module cache
         if: matrix.subtree.id == 'byoo-otel-collector' && steps.precheck.outputs.skip == 'false'
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             ${{ runner.temp }}/byoo-gomodcache
@@ -865,6 +886,24 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Save Bazel repository + disk caches
+        if: steps.precheck.outputs.skip == 'false' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/bazel/_bazel_${{ env.USER || 'root' }}/install
+            ~/.cache/bazel/_bazel_${{ env.USER || 'root' }}/cache
+          key: bazel-${{ matrix.subtree.workdir == '.' && 'rootmodule' || matrix.subtree.id }}-${{ hashFiles(format('{0}/MODULE.bazel.lock', matrix.subtree.workdir), format('{0}/.bazelversion', matrix.subtree.workdir)) }}
+
+      - name: Save byoo-otel-collector Go module cache
+        if: matrix.subtree.id == 'byoo-otel-collector' && steps.precheck.outputs.skip == 'false' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ runner.temp }}/byoo-gomodcache
+            ${{ runner.temp }}/byoo-gocache
+          key: byoo-gomod-${{ hashFiles('src/compute-plane-services/byoo-otel-collector/otelcol/go.sum') }}
+
   # Docker-host lane. Each subtree that owns requires-docker
   # (Testcontainers) tests runs its FULL suite (unit + Testcontainers) here, in
   # its own visibly-named lane, with no tag filter -- so no test a subtree owns
@@ -916,8 +955,10 @@ jobs:
       # Cache Bazel's install base + repository cache (external deps: Maven
       # artifacts, toolchains) across runs. Compiled action outputs come from
       # the remote cache below.
-      - name: Cache Bazel repository + disk caches
-        uses: actions/cache@v4
+      # Restore on every event, save only from main; see the matching comment in
+      # the build-container lane above.
+      - name: Restore Bazel repository + disk caches
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cache/bazel/*/install
@@ -1027,6 +1068,15 @@ jobs:
           path: ${{ runner.temp }}/bazel-java-verification/${{ matrix.subtree.id }}
           if-no-files-found: error
           retention-days: 14
+
+      - name: Save Bazel repository + disk caches
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/bazel/*/install
+            ~/.cache/bazel/*/cache
+          key: bazel-docker-${{ matrix.subtree.workdir == '.' && 'rootmodule' || matrix.subtree.id }}-${{ hashFiles(format('{0}/MODULE.bazel.lock', matrix.subtree.workdir), format('{0}/.bazelversion', matrix.subtree.workdir)) }}
 
   bazel-verification:
     name: bazel required checks

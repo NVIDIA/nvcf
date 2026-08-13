@@ -701,7 +701,7 @@ fn rendered_pylons_include_per_algorithm_queue_admission_args() {
     let config = config();
     let algorithm = AlgorithmConfig {
         name: "queue-admission-enabled".to_string(),
-        config: serde_json::json!({"default": "groq-multiregion"}),
+        config: serde_json::json!({"default": "wait-and-widen"}),
         pylon_queue_admission: Some(crate::config::PylonQueueAdmissionConfig {
             enabled: true,
             min_delta_ms: Some(0),
@@ -714,7 +714,7 @@ fn rendered_pylons_include_per_algorithm_queue_admission_args() {
         &algorithm,
         "sgbench-sg-queue",
         "sgbench-be-queue",
-        r#"{"default":"groq-multiregion"}"#,
+        r#"{"default":"wait-and-widen"}"#,
     );
 
     assert_contains_all(

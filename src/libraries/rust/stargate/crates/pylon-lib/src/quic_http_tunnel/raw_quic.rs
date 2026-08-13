@@ -171,6 +171,8 @@ mod tests {
             request_quality_monitor: RequestQualityMonitorConfig::default(),
             retry: PylonRetryConfig::default(),
             queue_mismatch_retry: PylonQueueMismatchRetryConfig::default(),
+            upstream_backend: crate::quic_http_tunnel::UpstreamBackend::default(),
+            priority_ceiling: crate::quic_http_tunnel::DEFAULT_PRIORITY_CEILING,
             metrics: None,
             #[cfg(test)]
             webtransport_stream_header_wait_tx: None,

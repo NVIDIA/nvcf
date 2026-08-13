@@ -37,7 +37,7 @@ nvcaImage:
 otelCollector:
   enabled: false
   imageRepository: ""
-  imageTag: 0.143.2
+  imageTag: 0.157.9
   resources:
     limits:
       cpu: 1000m
@@ -46,7 +46,7 @@ otelCollector:
       cpu: 200m
       memory: 256Mi
 ## @param generateImagePullSecret Use the ngcConfig.serviceKey to generate an image pull secret for nvca and nvca-operator Pods
-generateImagePullSecret: false
+generateImagePullSecret: true
 ## @param imagePullSecretName Name of the image pull secret to use for nvca and nvca-operator Pods.
 imagePullSecretName: "nvca-operator-image-pull"
 ## @param imagePullSecrets List of pre-existing imagePullSecret objects in the nvca-operator namespace to use for nvca and nvca-operator Pods. Each object must have a 'name' field. Example: [{name: "foo-bar"}, {name: "baz"}]
@@ -192,6 +192,11 @@ agent:
     requestRouterAddress: ""
   workload:
     tolerations: []
+  ## @param agent.byooOtelCollector.imageRepository Optional BYOO OpenTelemetry Collector image repository. If unset, it is derived from image.repository.
+  ## @param agent.byooOtelCollector.imageTag BYOO OpenTelemetry Collector image tag.
+  byooOtelCollector:
+    imageRepository: ""
+    imageTag: "0.157.11"
   ## Environment variable overrides for function workloads.
   ## Available keys: INIT_CONTAINER, UTILS_CONTAINER, OTEL_CONTAINER, BYOO_OTEL_COLLECTOR_CONTAINER,
   ##                 NICLLS_CONTAINER, ESS_AGENT_CONTAINER, INFERENCE_CONTAINER
@@ -306,7 +311,7 @@ helmManaged:
   otelCollector:
     enabled: false
     imageRepository: ""
-    imageTag: 0.143.2
+    imageTag: 0.157.9
 ## @section Self Managed NVCF Backend Configuration
 ## Only used when ngcConfig.clusterSource is "self-managed"
 ## All values below are under the 'selfManaged:' key, e.g. 'selfManaged.nvcaVersion'
@@ -330,7 +335,7 @@ selfManaged:
   otelCollector:
     enabled: false
     imageRepository: ""
-    imageTag: 0.143.2
+    imageTag: 0.157.9
   ## @param selfManaged.icmsServiceURL URL of the ICMS service for self-managed clusters. Override with the endpoint generated during cluster registration.
   icmsServiceURL: "http://icms.example.invalid:8080"
   ## @param selfManaged.icmsServiceHostHeaderOverride Optional Host header override for selfManaged.icmsServiceURL.

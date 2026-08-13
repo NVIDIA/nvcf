@@ -4,6 +4,7 @@ go_library(
     name = "agent",
     srcs = [
         "agent.go",
+        "auth.go",
         "blob_uploader.go",
         "capture_cascade.go",
         "capture_peer.go",
@@ -81,6 +82,8 @@ go_library(
 go_test(
     name = "agent_test",
     srcs = [
+        "advertise_test.go",
+        "auth_test.go",
         "blob_uploader_test.go",
         "cascade_fetch_test.go",
         "catalog_test.go",

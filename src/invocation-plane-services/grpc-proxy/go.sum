@@ -18,8 +18,6 @@ github.com/MadAppGang/httplog/zap v1.2.1 h1:8sxJ82E3vQhIBu7IlfVUKIk1Vf4g82UB6aPt
 github.com/MadAppGang/httplog/zap v1.2.1/go.mod h1:vZZ0MO9h5ANSi5iIUFV/Iq3Kn6qD/UqZ7hJu4f7AF50=
 github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERoyfY=
 github.com/Microsoft/go-winio v0.6.2/go.mod h1:yd8OoFMLzJbo9gZq8j5qaps8bJ9aShtEA8Ipt1oGCvU=
-github.com/NVIDIA/nvcf-go v1.0.11 h1:jPAxbl5rr69ozsxjN5KLS9GwB8d6tnf7W6J+pELTNjk=
-github.com/NVIDIA/nvcf-go v1.0.11/go.mod h1:VrjMFFZeEchl/x/fkjkHfoRu0trqh7vYluBlrXThwSo=
 github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260728185909-afca4ec2fb26 h1:P9OSmvy6MQPqfzRgaLl0XpvK5UYHAFtNnQQb+yk+6b0=
 github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260728185909-afca4ec2fb26/go.mod h1:nj3yBW2weO0qzi1ML45tBqviLa2Y/KG9qCalxQuJVB8=
 github.com/TylerBrock/colorjson v0.0.0-20200706003622-8a50f05110d2 h1:ZBbLwSJqkHBuFDA6DUhhse0IGJ7T5bemHyNILUjvOq4=

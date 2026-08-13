@@ -98,6 +98,57 @@ to connect GPU workload Pods through IMEX.
 Each GPU-enabled Pod must request a full node of GPUs.
 </Note>
 
+#### Legacy NVCA NVLink partition annotation
+
+<Warning>
+NVLink partition placement through these legacy affinity rules is best-effort
+without KAI Scheduler or Grove topology-aware scheduling. The rules do not
+provide atomic gang placement. Concurrent Pods can initially land in different
+cliques, and distinct logical groups can land in the same clique. Use
+[Gang Scheduling](./cluster-management/gang-scheduling.md) with
+[Topology-Aware Scheduling](./cluster-management/topology-aware-scheduling.md)
+when the workload requires all Pods to fit and start in a specific topology
+domain.
+</Warning>
+
+For charts that do not use KAI Scheduler or Grove topology constraints, NVCA
+supports this legacy Pod template annotation:
+
+```yaml
+spec:
+  template:
+    metadata:
+      annotations:
+        dra.nvcf.nvidia.io/required-nvlink-domain-index: "0"
+```
+
+Set the annotation on the Pod template for a Deployment, ReplicaSet,
+StatefulSet, Job, or CronJob. Set it on `metadata.annotations` for a standalone
+Pod. Setting it only on the controller object's metadata does not pass it to
+the Pods.
+
+The value is a logical partition index within the function. It is not the
+value of the `nvidia.com/gpu.clique` node label and does not select a physical
+rack or clique:
+
+- Pods with the same value form one logical placement group.
+- Pods with different values get different logical group labels. This does not
+  require the groups to use different GPU cliques.
+- Pods without the annotation share a default logical group.
+
+On an NVLink-optimized cluster, NVCA mutates each admitted Pod as follows:
+
+- It adds the generated `dra.nvcf.nvidia.io/nvlink-domain-partition` label.
+  Do not set this label in the chart.
+- For an annotated Pod, it adds required Pod affinity so Pods in the same
+  logical group use one value of the `nvidia.com/gpu.clique` topology key.
+- For an unannotated Pod, it adds preferred Pod affinity with weight 100. The
+  scheduler can spread these Pods when it cannot satisfy the preference.
+- It requires placement on a node that has the `nvidia.com/gpu.clique` label.
+- It adds the function's `ComputeDomain` resource claim to containers that
+  request `nvidia.com/gpu`, `nvidia.com/pgpu`, `nvidia.com/gpu.shared`, or an
+  `nvidia.com/mig-*` resource.
+
 ## Limitations
 
 When using Helm Charts to deploy a function, the following limitations need to be taken into consideration.

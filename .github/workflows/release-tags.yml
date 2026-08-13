@@ -64,10 +64,23 @@ jobs:
       contents: write
       packages: read
     steps:
+      # ref is the branch, not the pushed SHA. Two reasons, both about the gap
+      # between when a push happens and when this job actually runs:
+      #
+      # 1. semantic-release refuses to publish from a branch behind its remote.
+      #    A checkout pinned to the pushed SHA goes stale as soon as anything
+      #    else merges, and the release is silently skipped.
+      # 2. The concurrency group cancels queued runs, so a superseded commit
+      #    never gets a run of its own. Only a run that releases from the branch
+      #    tip covers the commits whose runs were cancelled.
+      #
+      # Releasing from the tip is also simply what this job means: cut whatever
+      # tags the branch is currently due, not what it was due minutes ago.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           fetch-tags: true
+          ref: ${{ github.ref_name }}
           token: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
 
       - uses: actions/setup-node@v4

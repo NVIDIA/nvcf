@@ -531,6 +531,58 @@ class ReservationCapacityValidationHelperTest {
     }
 
     @Test
+    void testValidateReservedBackupCapacity_BackupDisabled_ThrowsExceptionBeforeHealthLookup() {
+        // Given - reservation opted out of backup while the request was already in flight
+        testReservation.setReservationBackUpDisabled(true);
+
+        // When & Then
+        PreConditionFailedException exception = assertThrows(
+                PreConditionFailedException.class,
+                () -> reservationCapacityValidationHelper.validateReservationBackupCapacityForInstanceStateUpdate(
+                        testReservation, testInstanceRequest)
+        );
+
+        assertTrue(exception.getMessage().contains("has backup disabled"));
+        assertTrue(exception.getMessage().contains(testReservationId.toString()));
+        // Fast fails before any zone health or capacity lookup
+        verify(cloudHealthRepository, never()).findAllInMap();
+        verify(reservationProcessor, never()).calculateAvailableCapacityForUnhealthyZone(any());
+    }
+
+    @Test
+    void testValidateReservationBackupCapacityForRequestStateUpdate_BackupDisabled_ThrowsException() {
+        // Given
+        testReservation.setReservationBackUpDisabled(true);
+
+        // When & Then
+        PreConditionFailedException exception = assertThrows(
+                PreConditionFailedException.class,
+                () -> reservationCapacityValidationHelper.validateReservationBackupCapacityForRequestStateUpdate(
+                        testReservation, testInstanceRequest, 1)
+        );
+
+        assertTrue(exception.getMessage().contains("has backup disabled"));
+        verify(cloudHealthRepository, never()).findAllInMap();
+        verify(reservationProcessor, never()).calculateAvailableCapacityForUnhealthyZone(any());
+    }
+
+    @Test
+    void testValidateReservedBackupCapacity_BackupExplicitlyEnabled_Success() {
+        // Given - explicit false must behave exactly like the legacy null default
+        testReservation.setReservationBackUpDisabled(false);
+        testInstanceRequest.setGpuCountPerInstance(2);
+        when(cloudHealthRepository.findAllInMap()).thenReturn(cloudHealthMap);
+        when(reservationProcessor.calculateAvailableCapacityForUnhealthyZone(testReservation)).thenReturn(4.0);
+
+        // When & Then
+        assertDoesNotThrow(() ->
+            reservationCapacityValidationHelper.validateReservationBackupCapacityForInstanceStateUpdate(
+                testReservation, testInstanceRequest));
+
+        verify(reservationProcessor).calculateAvailableCapacityForUnhealthyZone(testReservation);
+    }
+
+    @Test
     void testValidateAndGetReservationEntity_ReservationJustExpired_ThrowsException() {
         // Given - Reservation that just expired
         testReservation.setEndTime(Instant.now().minusSeconds(1)); // Just expired

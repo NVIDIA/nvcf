@@ -26,10 +26,9 @@ macro_rules! impl_display {
 mod algorithm;
 mod config;
 mod factory;
-mod groq_multiregion;
 mod power_of_two;
 mod pulsar;
-mod pulsar_multiregion;
+mod pulsar_wait_and_widen;
 mod random;
 mod request;
 mod round_robin;
@@ -37,15 +36,16 @@ mod router;
 mod target_state;
 #[cfg(test)]
 mod tests;
+mod wait_and_widen;
 
 pub use algorithm::LoadBalancer;
 pub(crate) use algorithm::input_work_seconds_for_request;
 pub(super) use algorithm::{HashInputBuilder, cache_affinity_key_is_cacheable, input_work_units};
 pub use config::{
-    GroqMultiregionAlgorithmConfig, LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig,
-    LoadBalancerAlgorithmOverride, LoadBalancerAlgorithmSettings, LoadBalancerConfig,
-    LoadBalancerModelConfig, LoadBalancerRequestPolicy, LoadBalancerRoutingAlgorithmError,
-    LoadBalancerSeedError,
+    LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig, LoadBalancerAlgorithmOverride,
+    LoadBalancerAlgorithmSettings, LoadBalancerConfig, LoadBalancerModelConfig,
+    LoadBalancerRequestPolicy, LoadBalancerRoutingAlgorithmError, LoadBalancerSeedError,
+    WaitAndWidenAlgorithmConfig,
 };
 pub use factory::create_load_balancer_with_config;
 pub use request::{LoadBalancerCandidateChoice, LoadBalancerRequest};

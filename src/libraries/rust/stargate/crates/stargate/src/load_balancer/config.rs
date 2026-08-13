@@ -50,22 +50,35 @@ impl<'de> Deserialize<'de> for LoadBalancerModelConfig {
 pub enum LoadBalancerAlgorithm {
     #[default]
     PowerOfTwo,
-    GroqMultiregion,
+    #[serde(alias = "groq-multiregion")]
+    WaitAndWiden,
     RoundRobin,
     Random,
     Pulsar,
-    PulsarMultiregion,
+    #[serde(alias = "pulsar-multiregion")]
+    PulsarWaitAndWiden,
+}
+
+impl LoadBalancerAlgorithm {
+    pub const ALL: [Self; 6] = [
+        Self::PowerOfTwo,
+        Self::WaitAndWiden,
+        Self::RoundRobin,
+        Self::Random,
+        Self::Pulsar,
+        Self::PulsarWaitAndWiden,
+    ];
 }
 
 impl fmt::Display for LoadBalancerAlgorithm {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {
             Self::PowerOfTwo => "power-of-two",
-            Self::GroqMultiregion => "groq-multiregion",
+            Self::WaitAndWiden => "wait-and-widen",
             Self::RoundRobin => "round-robin",
             Self::Random => "random",
             Self::Pulsar => "pulsar",
-            Self::PulsarMultiregion => "pulsar-multiregion",
+            Self::PulsarWaitAndWiden => "pulsar-wait-and-widen",
         };
         f.write_str(name)
     }
@@ -167,7 +180,7 @@ pub struct LoadBalancerRequestPolicy {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
-pub struct GroqMultiregionAlgorithmConfig {
+pub struct WaitAndWidenAlgorithmConfig {
     pub seed: Option<String>,
     pub cache_affinity_virtual_nodes: Option<usize>,
     pub cache_affinity_backend_selection_count: Option<usize>,
@@ -185,22 +198,22 @@ pub struct GroqMultiregionAlgorithmConfig {
 pub enum LoadBalancerAlgorithmSettings {
     #[default]
     PowerOfTwo,
-    GroqMultiregion(GroqMultiregionAlgorithmConfig),
+    WaitAndWiden(WaitAndWidenAlgorithmConfig),
     RoundRobin,
     Random,
     Pulsar(Option<String>),
-    PulsarMultiregion(GroqMultiregionAlgorithmConfig),
+    PulsarWaitAndWiden(WaitAndWidenAlgorithmConfig),
 }
 
 impl LoadBalancerAlgorithmSettings {
     fn algorithm(&self) -> LoadBalancerAlgorithm {
         match self {
             Self::PowerOfTwo => LoadBalancerAlgorithm::PowerOfTwo,
-            Self::GroqMultiregion(_) => LoadBalancerAlgorithm::GroqMultiregion,
+            Self::WaitAndWiden(_) => LoadBalancerAlgorithm::WaitAndWiden,
             Self::RoundRobin => LoadBalancerAlgorithm::RoundRobin,
             Self::Random => LoadBalancerAlgorithm::Random,
             Self::Pulsar(_) => LoadBalancerAlgorithm::Pulsar,
-            Self::PulsarMultiregion(_) => LoadBalancerAlgorithm::PulsarMultiregion,
+            Self::PulsarWaitAndWiden(_) => LoadBalancerAlgorithm::PulsarWaitAndWiden,
         }
     }
 }
@@ -237,8 +250,8 @@ impl LoadBalancerAlgorithmConfig {
     pub fn seed(&self) -> Option<&str> {
         match &self.settings {
             LoadBalancerAlgorithmSettings::Pulsar(seed) => seed.as_deref(),
-            LoadBalancerAlgorithmSettings::GroqMultiregion(config)
-            | LoadBalancerAlgorithmSettings::PulsarMultiregion(config) => config.seed.as_deref(),
+            LoadBalancerAlgorithmSettings::WaitAndWiden(config)
+            | LoadBalancerAlgorithmSettings::PulsarWaitAndWiden(config) => config.seed.as_deref(),
             LoadBalancerAlgorithmSettings::PowerOfTwo
             | LoadBalancerAlgorithmSettings::RoundRobin
             | LoadBalancerAlgorithmSettings::Random => None,
@@ -256,8 +269,8 @@ impl LoadBalancerAlgorithmConfig {
                 *current_seed = seed;
                 Ok(())
             }
-            LoadBalancerAlgorithmSettings::GroqMultiregion(config)
-            | LoadBalancerAlgorithmSettings::PulsarMultiregion(config) => {
+            LoadBalancerAlgorithmSettings::WaitAndWiden(config)
+            | LoadBalancerAlgorithmSettings::PulsarWaitAndWiden(config) => {
                 config.seed = seed;
                 Ok(())
             }
@@ -269,10 +282,10 @@ impl LoadBalancerAlgorithmConfig {
         }
     }
 
-    pub fn multiregion_settings(&self) -> Option<&GroqMultiregionAlgorithmConfig> {
+    pub fn wait_and_widen_settings(&self) -> Option<&WaitAndWidenAlgorithmConfig> {
         match &self.settings {
-            LoadBalancerAlgorithmSettings::GroqMultiregion(config)
-            | LoadBalancerAlgorithmSettings::PulsarMultiregion(config) => Some(config),
+            LoadBalancerAlgorithmSettings::WaitAndWiden(config)
+            | LoadBalancerAlgorithmSettings::PulsarWaitAndWiden(config) => Some(config),
             LoadBalancerAlgorithmSettings::PowerOfTwo
             | LoadBalancerAlgorithmSettings::RoundRobin
             | LoadBalancerAlgorithmSettings::Random
@@ -280,10 +293,10 @@ impl LoadBalancerAlgorithmConfig {
         }
     }
 
-    pub fn multiregion_settings_mut(&mut self) -> Option<&mut GroqMultiregionAlgorithmConfig> {
+    pub fn wait_and_widen_settings_mut(&mut self) -> Option<&mut WaitAndWidenAlgorithmConfig> {
         match &mut self.settings {
-            LoadBalancerAlgorithmSettings::GroqMultiregion(config)
-            | LoadBalancerAlgorithmSettings::PulsarMultiregion(config) => Some(config),
+            LoadBalancerAlgorithmSettings::WaitAndWiden(config)
+            | LoadBalancerAlgorithmSettings::PulsarWaitAndWiden(config) => Some(config),
             LoadBalancerAlgorithmSettings::PowerOfTwo
             | LoadBalancerAlgorithmSettings::RoundRobin
             | LoadBalancerAlgorithmSettings::Random
@@ -305,11 +318,13 @@ impl From<LoadBalancerAlgorithm> for LoadBalancerAlgorithmSettings {
     fn from(algorithm: LoadBalancerAlgorithm) -> Self {
         match algorithm {
             LoadBalancerAlgorithm::PowerOfTwo => Self::PowerOfTwo,
-            LoadBalancerAlgorithm::GroqMultiregion => Self::GroqMultiregion(Default::default()),
+            LoadBalancerAlgorithm::WaitAndWiden => Self::WaitAndWiden(Default::default()),
             LoadBalancerAlgorithm::RoundRobin => Self::RoundRobin,
             LoadBalancerAlgorithm::Random => Self::Random,
             LoadBalancerAlgorithm::Pulsar => Self::Pulsar(None),
-            LoadBalancerAlgorithm::PulsarMultiregion => Self::PulsarMultiregion(Default::default()),
+            LoadBalancerAlgorithm::PulsarWaitAndWiden => {
+                Self::PulsarWaitAndWiden(Default::default())
+            }
         }
     }
 }
@@ -360,9 +375,10 @@ impl RawCommonAlgorithmConfig {
 #[serde(tag = "algorithm", rename_all = "kebab-case")]
 enum RawLoadBalancerAlgorithmConfig {
     PowerOfTwo(RawCommonAlgorithmConfig),
-    GroqMultiregion {
+    #[serde(alias = "groq-multiregion")]
+    WaitAndWiden {
         #[serde(flatten)]
-        settings: GroqMultiregionAlgorithmConfig,
+        settings: WaitAndWidenAlgorithmConfig,
         #[serde(flatten)]
         common: RawCommonAlgorithmConfig,
     },
@@ -374,9 +390,10 @@ enum RawLoadBalancerAlgorithmConfig {
         #[serde(flatten)]
         common: RawCommonAlgorithmConfig,
     },
-    PulsarMultiregion {
+    #[serde(alias = "pulsar-multiregion")]
+    PulsarWaitAndWiden {
         #[serde(flatten)]
-        settings: GroqMultiregionAlgorithmConfig,
+        settings: WaitAndWidenAlgorithmConfig,
         consider_kv_free_tokens: Option<bool>,
         #[serde(flatten)]
         common: RawCommonAlgorithmConfig,
@@ -393,9 +410,9 @@ impl RawLoadBalancerAlgorithmConfig {
     ) {
         match self {
             Self::PowerOfTwo(common) => (common, LoadBalancerAlgorithmSettings::PowerOfTwo, None),
-            Self::GroqMultiregion { settings, common } => (
+            Self::WaitAndWiden { settings, common } => (
                 common,
-                LoadBalancerAlgorithmSettings::GroqMultiregion(settings),
+                LoadBalancerAlgorithmSettings::WaitAndWiden(settings),
                 None,
             ),
             Self::RoundRobin(common) => (common, LoadBalancerAlgorithmSettings::RoundRobin, None),
@@ -409,13 +426,13 @@ impl RawLoadBalancerAlgorithmConfig {
                 LoadBalancerAlgorithmSettings::Pulsar(seed),
                 consider_kv_free_tokens,
             ),
-            Self::PulsarMultiregion {
+            Self::PulsarWaitAndWiden {
                 settings,
                 consider_kv_free_tokens,
                 common,
             } => (
                 common,
-                LoadBalancerAlgorithmSettings::PulsarMultiregion(settings),
+                LoadBalancerAlgorithmSettings::PulsarWaitAndWiden(settings),
                 consider_kv_free_tokens,
             ),
         }
@@ -456,4 +473,18 @@ pub struct LoadBalancerConfig {
     pub request_algorithms: HashMap<LoadBalancerAlgorithm, LoadBalancerModelConfig>,
     #[serde(default)]
     pub models: HashMap<String, LoadBalancerModelConfig>,
+}
+
+impl LoadBalancerConfig {
+    /// Config used when no config file is given: `power-of-two` by default,
+    /// and any built-in algorithm can be selected per request.
+    pub fn permissive_default() -> Self {
+        Self {
+            request_algorithms: LoadBalancerAlgorithm::ALL
+                .iter()
+                .map(|algorithm| (*algorithm, LoadBalancerModelConfig::Name(*algorithm)))
+                .collect(),
+            ..Self::default()
+        }
+    }
 }
