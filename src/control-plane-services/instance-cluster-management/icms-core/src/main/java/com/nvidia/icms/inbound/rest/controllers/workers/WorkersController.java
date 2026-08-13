@@ -100,26 +100,30 @@ public class WorkersController {
                 .build());
     }
 
+    private static final String GENERIC_REJECTION_MESSAGE = "JWT verification failed";
+
     private ResponseEntity<WorkerTokenIntrospectResponse> mapRejection(
             WorkerTokenVerificationService.Outcome outcome) {
+        // Log the specific reason server-side; the caller receives only the
+        // generic message so JWT library internals and registration state do
+        // not leak to untrusted callers.
+        log.debug("Worker token rejected: reason={} detail={}",
+                outcome.getReason(), outcome.getErrorMessage());
         NvcaTokenVerificationService.RejectReason reason = outcome.getReason();
         if (reason == null) {
             return ResponseEntity.ok(
-                    WorkerTokenIntrospectResponse.inactive(outcome.getErrorMessage()));
+                    WorkerTokenIntrospectResponse.inactive(GENERIC_REJECTION_MESSAGE));
         }
         return switch (reason) {
             case TOKEN_TOO_LARGE ->
                     ResponseEntity.status(431).body(
-                            WorkerTokenIntrospectResponse.inactive(outcome.getErrorMessage()));
+                            WorkerTokenIntrospectResponse.inactive(GENERIC_REJECTION_MESSAGE));
             case UNKNOWN_CLUSTER ->
                     ResponseEntity.status(403).body(
-                            WorkerTokenIntrospectResponse.inactive(outcome.getErrorMessage()));
-            case MISSING_TOKEN, INVALID_AUDIENCE ->
+                            WorkerTokenIntrospectResponse.inactive(GENERIC_REJECTION_MESSAGE));
+            case MISSING_TOKEN, INVALID_AUDIENCE, SIGNATURE_INVALID ->
                     ResponseEntity.ok(
-                            WorkerTokenIntrospectResponse.inactive(outcome.getErrorMessage()));
-            case SIGNATURE_INVALID ->
-                    ResponseEntity.ok(
-                            WorkerTokenIntrospectResponse.inactive(outcome.getErrorMessage()));
+                            WorkerTokenIntrospectResponse.inactive(GENERIC_REJECTION_MESSAGE));
         };
     }
 }

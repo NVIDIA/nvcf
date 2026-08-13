@@ -28,10 +28,8 @@ import com.nvidia.icms.inbound.rest.model.workers.WorkerTokenIntrospectRequest;
 import com.nvidia.icms.inbound.rest.model.workers.WorkerTokenIntrospectResponse;
 import com.nvidia.icms.service.byoc.nvca.NvcaTokenVerificationService;
 import com.nvidia.icms.service.workers.WorkerTokenVerificationService;
-import java.net.URI;
 import java.time.Instant;
 import java.util.List;
-import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -70,8 +68,10 @@ class WorkersControllerUnitTest {
         var response = controller.introspectWorkerToken(request);
 
         assertEquals(431, response.getStatusCode().value());
-        assertNotNull(response.getBody());
-        assertFalse(response.getBody().isActive());
+        var body = response.getBody();
+        assertNotNull(body);
+        assertFalse(body.isActive());
+        assertEquals("JWT verification failed", body.getError());
     }
 
     @Test
@@ -87,7 +87,9 @@ class WorkersControllerUnitTest {
         var response = controller.introspectWorkerToken(request);
 
         assertEquals(403, response.getStatusCode().value());
-        assertFalse(response.getBody().isActive());
+        var body = response.getBody();
+        assertFalse(body.isActive());
+        assertEquals("JWT verification failed", body.getError());
     }
 
     @Test
@@ -95,16 +97,18 @@ class WorkersControllerUnitTest {
         WorkersController controller = controllerWithOidcEnabled(true);
         var request = tokenRequest("bad.token.value");
 
+        // Service may return a detailed message; controller must coarsen it.
         when(workerTokenVerificationService.verify("bad.token.value"))
                 .thenReturn(rejectedOutcome(
                         NvcaTokenVerificationService.RejectReason.SIGNATURE_INVALID,
-                        "JWT verification failed"));
+                        "worker identity not in registered set"));
 
         var response = controller.introspectWorkerToken(request);
 
         assertEquals(200, response.getStatusCode().value());
-        assertFalse(response.getBody().isActive());
-        assertEquals("JWT verification failed", response.getBody().getError());
+        var body = response.getBody();
+        assertFalse(body.isActive());
+        assertEquals("JWT verification failed", body.getError());
     }
 
     @Test
