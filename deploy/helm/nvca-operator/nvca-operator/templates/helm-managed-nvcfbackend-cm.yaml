@@ -21,6 +21,17 @@ metadata:
   labels:
     {{- include "nvcaop.labels" . | nindent 4 }}
 {{- if eq .Values.ngcConfig.clusterSource "helm-managed" }}
+{{- $vaultConfig := .Values.vaultConfig | default dict }}
+{{- $vaultAddress := $vaultConfig.address | default "" }}
+{{- if .Values.helmManaged.oAuthClientID }}
+{{- if not $vaultAddress }}
+{{- fail "vaultConfig.address is required when Helm-managed Vault authentication is enabled" }}
+{{- end }}
+{{- $vaultURL := urlParse $vaultAddress }}
+{{- if or (empty (get $vaultURL "scheme")) (empty (get $vaultURL "hostname")) }}
+{{- fail "vaultConfig.address must be a valid URL with a scheme and host" }}
+{{- end }}
+{{- end }}
 data:
   cluster-dto.yaml: |
     clusterId: {{ .Values.clusterID | quote }}
@@ -41,6 +52,8 @@ data:
     nvcaVersion: {{ .nvcaVersion | quote }}
     oAuthClientId: {{ $clientID | quote }}
     oAuthClientMountPath: {{ $mountPath | quote }}
+    vaultConfig:
+      address: {{ $vaultAddress | quote }}
     cloudProvider: {{ .cloudProvider | quote }}
     region: {{ .clusterRegion | quote }}
     attributes: {{ include "nvcaop.jsonListOrEmpty" .clusterAttributes }}

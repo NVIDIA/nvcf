@@ -107,6 +107,7 @@ used in Kubernetes Clusters to run NVCF Workloads.
 
 | Name                                       | Description                                                                                                                                             | Value |
 | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
+| `vaultConfig.address`                      | Vault server URL used by the Vault agent and as the projected service-account token audience.                                                          | `""`  |
 | `vaultConfig.oAuthClientMountPathTemplate` | Template for constructing the OAuth client mount path in Vault. Use %s as placeholder for clientID. Example: "nvidia/services/oauth/clients/%s/kv/secret" | `""`  |
 | `vaultConfig.oAuthClientMountPath`         | (Optional) Full OAuth client mount path. If set, overrides the computed path from template.                                                             | `""`  |
 

@@ -205,6 +205,64 @@ assert_service_oauth_nil_safe "self-managed" \
   --set-string "selfManaged.natsURL=nats://nats.nvcf-control-plane.test:14222" \
   --show-only templates/self-managed-nvcfbackend-cm.yaml
 
+echo -e "\nTesting Helm-managed Vault address validation..."
+vault_address="https://vault.example.test:443"
+vault_rendered="$(mktemp)"
+
+if ! helm template test-release "${repo_root}/deployments/nvca-operator" \
+  --set "ngcConfig.serviceKey=fakekey" \
+  --set "ngcConfig.clusterSource=helm-managed" \
+  --set "helmManaged.oAuthClientID=test-client" \
+  --set-string "vaultConfig.address=${vault_address}" \
+  --show-only templates/helm-managed-nvcfbackend-cm.yaml > "${vault_rendered}"; then
+  echo "Expected Helm-managed Vault configuration to render"
+  rm -f "${vault_rendered}"
+  exit 1
+fi
+if ! grep -Fq "address: \"${vault_address}\"" "${vault_rendered}"; then
+  echo "Expected Helm-managed cluster DTO to include vaultConfig.address"
+  cat "${vault_rendered}"
+  rm -f "${vault_rendered}"
+  exit 1
+fi
+rm -f "${vault_rendered}"
+
+assert_helm_managed_vault_render_fails() {
+  local description=${1}
+  local expected_error=${2}
+  shift 2
+  local output
+  output="$(mktemp)"
+
+  if helm template test-release "${repo_root}/deployments/nvca-operator" \
+    --set "ngcConfig.serviceKey=fakekey" \
+    --set "ngcConfig.clusterSource=helm-managed" \
+    --set "helmManaged.oAuthClientID=test-client" \
+    "$@" \
+    --show-only templates/helm-managed-nvcfbackend-cm.yaml > "${output}" 2>&1; then
+    echo "Expected Helm-managed ${description} to fail"
+    cat "${output}"
+    rm -f "${output}"
+    exit 1
+  fi
+  if ! grep -Fq "${expected_error}" "${output}"; then
+    echo "Expected Helm-managed ${description} to report: ${expected_error}"
+    cat "${output}"
+    rm -f "${output}"
+    exit 1
+  fi
+  rm -f "${output}"
+  echo "✓ Helm-managed ${description} is rejected"
+}
+
+assert_helm_managed_vault_render_fails \
+  "Vault authentication without an address" \
+  "vaultConfig.address is required when Helm-managed Vault authentication is enabled"
+assert_helm_managed_vault_render_fails \
+  "malformed Vault address" \
+  "vaultConfig.address must be a valid URL with a scheme and host" \
+  --set-string "vaultConfig.address=https://:443"
+
 # Secret-backed workload transport trust is operator-owned configuration, not a
 # raw agentConfig.mergeConfig overlay. Confirm its ConfigMap is rendered with
 # defaults, configured values, and values inherited by reuse-values upgrades.
