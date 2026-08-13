@@ -63,17 +63,13 @@ public class WorkersController {
                     @ApiResponse(responseCode = "200",
                             description = "Introspection result (active or inactive)"),
                     @ApiResponse(content = @Content(schema = @Schema(hidden = true)),
-                            responseCode = "400", description = "Missing or empty token"),
-                    @ApiResponse(content = @Content(schema = @Schema(hidden = true)),
-                            responseCode = "404", description = "Feature flag disabled"),
-                    @ApiResponse(content = @Content(schema = @Schema(hidden = true)),
-                            responseCode = "431", description = "JWT too large")
+                            responseCode = "400", description = "Missing or empty token")
             })
     public ResponseEntity<WorkerTokenIntrospectResponse> introspectWorkerToken(
             @Valid @RequestBody WorkerTokenIntrospectRequest request) {
 
         if (!nvcaConfig.isOidcClusterIdentityEnabled()) {
-            return ResponseEntity.notFound().build();
+            return ResponseEntity.ok(WorkerTokenIntrospectResponse.inactive(GENERIC_REJECTION_MESSAGE));
         }
 
         WorkerTokenVerificationService.Outcome outcome =
@@ -111,10 +107,7 @@ public class WorkersController {
                     WorkerTokenIntrospectResponse.inactive(GENERIC_REJECTION_MESSAGE));
         }
         return switch (reason) {
-            case TOKEN_TOO_LARGE ->
-                    ResponseEntity.status(431).body(
-                            WorkerTokenIntrospectResponse.inactive(GENERIC_REJECTION_MESSAGE));
-            case MISSING_TOKEN, INVALID_AUDIENCE, UNKNOWN_CLUSTER, SIGNATURE_INVALID ->
+            case TOKEN_TOO_LARGE, MISSING_TOKEN, INVALID_AUDIENCE, UNKNOWN_CLUSTER, SIGNATURE_INVALID ->
                     ResponseEntity.ok(
                             WorkerTokenIntrospectResponse.inactive(GENERIC_REJECTION_MESSAGE));
         };
