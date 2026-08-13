@@ -671,7 +671,7 @@ All `function create` flags:
 | `--secrets` | Secrets in `name=value` format (repeatable) |
 | `--tags` | Comma-separated tags |
 | `--models` | Model artifacts in `name:version:uri` format (repeatable) |
-| `--llm-model` | LLM model config in `name=MODEL,uris=URI\|URI,routingMethod=round_robin\|power_of_n\|groq_multiregion\|pulsar\|random,tokenRateLimit=LIMIT` format (repeatable). Token limits use `<value>-<unit>` with `S`, `M`, `H`, `D`, or `W`, for example `1000-S`. Use JSON input for combined token limits because inline model specs use commas as field separators. |
+| `--llm-model` | LLM model config in `name=MODEL,uris=URI\|URI,routingMethod=round_robin\|power_of_two\|groq_multiregion\|pulsar\|random,tokenRateLimit=LIMIT` format (repeatable). Token limits use `<value>-<unit>` with `S`, `M`, `H`, `D`, or `W`, for example `1000-S`. Use JSON input for combined token limits because inline model specs use commas as field separators. |
 | `--resources` | Resource artifacts in `name:version:uri` format (repeatable) |
 | `--helm-chart` | Helm chart specification |
 | `--helm-chart-service` | Helm chart service name |
@@ -719,7 +719,7 @@ LLM functions use `functionType: "LLM"` and define model routing metadata under 
 }
 ```
 
-For LLM models, `llmConfig.routingMethod` accepts `round_robin`, `power_of_n`, `groq_multiregion`, `pulsar`, or `random`. Existing `power_of_two`, `power-of-two`, and `powerOf2` values remain accepted as aliases for `power_of_n`.
+For LLM models, `llmConfig.routingMethod` accepts `round_robin`, `power_of_two`, `groq_multiregion`, `pulsar`, or `random`.
 Supported LLM paths are `/v1/chat/completions`, `/v1/responses`, and `/v1/embeddings`.
 `llmConfig.tokenRateLimit` accepts one or more comma-separated positive integer token limits in `<value>-<unit>` format. Supported units are `S` (seconds), `M` (minutes), `H` (hours), `D` (days), and `W` (weeks). Use `1000-S` for a single limit, or `1000-S,5000-M,100000-H,500000-D,1000000-W` for a combined limit with distinct units. Use JSON input for combined limits because inline CLI model specs use commas as field separators.
 

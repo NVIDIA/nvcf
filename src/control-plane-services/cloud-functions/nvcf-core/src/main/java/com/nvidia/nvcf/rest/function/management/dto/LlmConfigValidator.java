@@ -23,10 +23,7 @@ public final class LlmConfigValidator {
 
     // Stargate LoadBalancerAlgorithm values; keep in sync. Blank = router default.
     private static final Set<String> VALID_ROUTING_METHODS = Set.of(
-            "power-of-n",
             "power-of-two",
-            "powerof2",
-            "powerofn",
             "wait-and-widen",
             "round-robin",
             "random",
@@ -42,7 +39,7 @@ public final class LlmConfigValidator {
 
     private static final String MESG_INVALID_ROUTING_METHOD =
             "Invalid request: 'llmConfig.routingMethod' for model '%s' is invalid; supported "
-                    + "values are [power-of-n, wait-and-widen, round-robin, random, pulsar, "
+                    + "values are [power-of-two, wait-and-widen, round-robin, random, pulsar, "
                     + "pulsar-wait-and-widen, groq-multiregion, pulsar-multiregion]";
     private static final String MESG_INVALID_TOKEN_RATE_LIMIT =
             "Invalid request: 'llmConfig.tokenRateLimit' for model '%s' is invalid; expected "
