@@ -322,6 +322,7 @@ type ChatCompletionRequest struct {
 	ToolChoice          ChatCompletionToolChoiceField     `json:"tool_choice"`
 	FunctionChoice      ChatCompletionFunctionChoiceField `json:"function_call"`
 	ParallelToolCalls   *bool                             `json:"parallel_tool_calls"`
+	PromptCacheKey      *string                           `json:"prompt_cache_key"`
 	User                *string                           `json:"user"`
 	ReasoningFormat     *string                           `json:"reasoning_format"`
 	ReasoningEffort     *string                           `json:"reasoning_effort"`
