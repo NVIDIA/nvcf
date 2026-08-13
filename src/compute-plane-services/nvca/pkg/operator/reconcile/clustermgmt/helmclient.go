@@ -19,6 +19,9 @@ package clustermgmt
 
 import (
 	"context"
+	"errors"
+	"net/url"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -42,5 +45,29 @@ func NewHelmManagedClient(
 	vaultMountPathTemplate string,
 ) *HelmManagedClient {
 	return &HelmManagedClient{newConfigMapClient(
-		envType, fetcher, vaultMountPathTemplate, withClusterSourceMapper(nvcaoptypes.ClusterSourceHelmManaged))}
+		envType,
+		fetcher,
+		vaultMountPathTemplate,
+		withHelmManagedVaultConfigValidation(),
+		withClusterSourceMapper(nvcaoptypes.ClusterSourceHelmManaged),
+	)}
+}
+
+func withHelmManagedVaultConfigValidation() clusterMapper {
+	return func(_ context.Context, _ nvidiaiov1.EnvType, src *clusterDTO, _ *Cluster) error {
+		if !src.vaultEnabled() {
+			return nil
+		}
+
+		if strings.TrimSpace(src.VaultConfig.Address) == "" {
+			return errors.New("vaultConfig.address is required when Helm-managed Vault authentication is enabled")
+		}
+
+		vaultURL, err := url.ParseRequestURI(src.VaultConfig.Address)
+		if err != nil || vaultURL.Scheme == "" || vaultURL.Hostname() == "" {
+			return errors.New("vaultConfig.address must be a valid URL with a scheme and host")
+		}
+
+		return nil
+	}
 }

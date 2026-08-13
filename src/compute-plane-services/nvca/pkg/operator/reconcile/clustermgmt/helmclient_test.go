@@ -64,6 +64,8 @@ clusterGroupId: "grp-1"
 ncaID: "test-nca"
 nvcaVersion: "1.0.0"
 oAuthClientId: "oauth-client-1"
+vaultConfig:
+  address: "https://vault.example.test:443"
 icmsConfig:
   tokenURL: "https://oauth.example.test/token"
   publicKeysetEndpoint: "https://oauth.example.test/.well-known/jwks.json"
@@ -117,8 +119,49 @@ agent:
 	assert.Equal(t, "https://stage-fnds-oauth.example.test/.well-known/jwks.json", nb.Spec.AgentConfig.FunctionDeploymentStagesStageOAuthPublicKeysetEndpoint)
 	assert.Equal(t, "https://prod-fnds-oauth.example.test/token", nb.Spec.AgentConfig.FunctionDeploymentStagesProdOAuthTokenURL)
 	assert.Equal(t, "https://prod-fnds-oauth.example.test/.well-known/jwks.json", nb.Spec.AgentConfig.FunctionDeploymentStagesProdOAuthPublicKeysetEndpoint)
-	assert.Equal(t, "https://:443", nb.Spec.VaultConfig.Address)
+	assert.Equal(t, "https://vault.example.test:443", nb.Spec.VaultConfig.Address)
 	assert.True(t, nb.Spec.VaultConfig.Enabled)
+}
+
+func TestHelmManagedClient_GetCluster_RejectsInvalidVaultAddress(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name    string
+		dto     string
+		wantErr string
+	}{
+		{
+			name: "missing address",
+			dto: `
+clusterName: "test-backend"
+oAuthClientId: "oauth-client-1"
+`,
+			wantErr: "vaultConfig.address is required when Helm-managed Vault authentication is enabled",
+		},
+		{
+			name: "malformed address",
+			dto: `
+clusterName: "test-backend"
+oAuthClientId: "oauth-client-1"
+vaultConfig:
+  address: "https://:443"
+`,
+			wantErr: "vaultConfig.address must be a valid URL with a scheme and host",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fetcher := func(context.Context) (*corev1.ConfigMap, error) {
+				return &corev1.ConfigMap{Data: map[string]string{"cluster-dto.yaml": test.dto}}, nil
+			}
+
+			client := NewHelmManagedClient(nvidiaiov1.EnvTypeProd, fetcher, DefaultVaultOAuthClientMountPathTemplate)
+			_, err := client.GetCluster(ctx, "test-cluster")
+			require.EqualError(t, err, test.wantErr)
+		})
+	}
 }
 
 func TestHelmManagedClient_GetCluster_InvalidYAML(t *testing.T) {
