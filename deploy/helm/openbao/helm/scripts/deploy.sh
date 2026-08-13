@@ -341,6 +341,16 @@ unseal_cluster() {
 
     log_section "Unsealing OpenBao cluster"
 
+    # get_unseal_key returns "" when the secret is missing or still holds the
+    # empty placeholder. initialize_cluster rejects that state before we get
+    # here, but check anyway so this never degrades into
+    # `bao operator unseal ""` and its low-signal error.
+    if [ -z "${unseal_key}" ]; then
+        log_error "No unseal key stored in secret '${statefulset}-unseal'; cannot unseal the cluster."
+        log_error "If the cluster is already initialized the generated keys are unrecoverable. Run ./cleanup.sh and reinstall."
+        return 1
+    fi
+
     # First unseal the primary node (pod 0). Unsealing an already-unsealed node
     # is a no-op that exits 0, so this is safe to re-run.
     log_info "Unsealing primary pod ${statefulset}-0"

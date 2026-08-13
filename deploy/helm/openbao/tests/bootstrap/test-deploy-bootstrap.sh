@@ -234,6 +234,15 @@ run_suite() {
     expect_output "${label}: unrecoverable keys are called out" "unrecoverable"
     expect_calls "${label}: no unseal is attempted with an empty key" "${state}" "bao operator unseal" 0
 
+    # An unseal secret that is missing or still empty must fail with an
+    # actionable error rather than running `bao operator unseal ""`.
+    state="$(new_state)"
+    printf 'true' >"${state}/initialized"
+    run_fn "${funcs}" "${state}" unseal_cluster "${namespace}" "${statefulset}"
+    expect_rc "${label}: unseal without a stored key fails" 1 "${rc}"
+    expect_output "${label}: the missing unseal key is named" "No unseal key stored"
+    expect_calls "${label}: no unseal is attempted without a key" "${state}" "bao operator unseal" 0
+
     # No peer may join before the primary reports ha_mode=active. Hold the
     # primary in standby for three polls; a fixed sleep would join immediately.
     state="$(bootstrapped_state)"
