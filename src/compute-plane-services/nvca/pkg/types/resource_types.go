@@ -421,6 +421,13 @@ func (g BackendGPU) toDynamicRegistration(allowMultiNodeWorkloads bool, infraOve
 	// instance type. This doesn't fix the cross-cluster instance type compatibility issue
 	// (what if "GPU.NCP.A100-6_1x" looks different between two target-able clusters), but does fix the problem
 	// on individual clusters with intentionally different machine sizes for the same GPU.
+	//
+	// The same applies to nodes carrying different products that normalize to one GPUName
+	// (ex. A100 SXM4 and A100 PCIe): they collapse to a single registered instance type,
+	// derived from the largest node because of the ordering below. Until instance names can
+	// distinguish them, the smaller node is not separately addressable. That is preferable to
+	// registering both under one name, which makes a single-instance request create one
+	// instance per duplicate.
 	sort.Slice(g.InstanceTypes, func(i, j int) bool {
 		return g.InstanceTypes[i].GPUCount >= g.InstanceTypes[j].GPUCount
 	})
@@ -434,9 +441,18 @@ func (g BackendGPU) toDynamicRegistration(allowMultiNodeWorkloads bool, infraOve
 
 		// Calculate the per-GPU memory count for instance multiples.
 		for i := uint64(1); i < it.GPUCount; i *= 2 {
-			// Use the full GPU name to dedup entries, since some features
-			// are captured in the full name only.
-			instIDStr := fmt.Sprintf("%s-%dx", it.FullName, i)
+			// Dedup on the published instance type name, which is the only handle
+			// downstream services have on an instance type. Two registered entries
+			// sharing a name are indistinguishable to them: a request naming it
+			// resolves to every match and is dispatched once per match, so a request
+			// for one instance creates one instance per duplicate.
+			//
+			// FullName is not a safe key here because several distinct products
+			// normalize to the same GPUName, and therefore to the same instance name:
+			// board SKUs of one model (NVIDIA-A100-SXM4-80GB vs NVIDIA-A100-80GB-PCIe),
+			// capacity variants (NVIDIA-A100-SXM4-40GB vs -80GB), and time-sliced
+			// nodes (the "-SHARED" suffix is dropped by ParseGPUName).
+			instIDStr := it.Name.WithMultiplier(i)
 
 			if _, ok := instSetByIDStr[instIDStr]; ok {
 				continue
@@ -451,7 +467,7 @@ func (g BackendGPU) toDynamicRegistration(allowMultiNodeWorkloads bool, infraOve
 			rg.InstanceTypes = append(rg.InstanceTypes, instType)
 		}
 
-		lastInstIDStr := fmt.Sprintf("%s-%dx", it.FullName, it.GPUCount)
+		lastInstIDStr := it.Name.WithMultiplier(it.GPUCount)
 		if _, ok := instSetByIDStr[lastInstIDStr]; ok {
 			continue
 		}

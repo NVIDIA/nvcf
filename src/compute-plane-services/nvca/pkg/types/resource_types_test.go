@@ -21,6 +21,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -400,22 +402,9 @@ func TestToRegistration(t *testing.T) {
 					Storage:       "85Gi",
 					NodeType:      RegistrationInstanceTypeNodeTypeSingle,
 				},
-				{
-					Name:          "ON-PREM.GPU.A100_1x",
-					Value:         "ON-PREM.GPU.A100",
-					Description:   "Desc",
-					Default:       false,
-					CPUCores:      2,
-					CPU:           "2",
-					SystemMemory:  "2Gi",
-					GPUCount:      1,
-					GPUMemory:     "80Gi",
-					CPUArch:       "amd64",
-					OS:            "Linux",
-					DriverVersion: "525.2.02",
-					Storage:       "512Gi",
-					NodeType:      RegistrationInstanceTypeNodeTypeSingle,
-				},
+				// The 80GB node also yields an "ON-PREM.GPU.A100_1x", since ParseGPUName
+				// normalizes both capacities to "A100". Only one entry may be registered
+				// under a given name, so it is dropped in favor of the larger node's.
 				{
 					Name:          "ON-PREM.GPU.A100_2x",
 					Value:         "ON-PREM.GPU.A100",
@@ -591,6 +580,60 @@ func TestToRegistration(t *testing.T) {
 	)
 
 	assert.Equal(t, expRegistrationGPUs, inBackendGPUs.ToRegistration(true, corev1.ResourceList{}))
+}
+
+// Two board SKUs of one GPU model normalize to the same GPUName, and so to the same
+// instance type name. Registering both makes a single-instance request resolve to two
+// destinations upstream and create two instances, so only one may be published.
+func TestToRegistrationDedupsInstanceNamesAcrossBoardSKUs(t *testing.T) {
+	newIT := func(fullName string, gpuCount uint64, cpu, mem string) InstanceType {
+		return InstanceType{
+			Name:            "NCP.GPU.A100",
+			FullName:        fullName,
+			Description:     fullName,
+			CPU:             resource.MustParse(cpu),
+			SystemMemory:    resource.MustParse(mem),
+			GPUCount:        gpuCount,
+			GPUMemoryPerGPU: resource.MustParse("81920Mi"),
+			CPUArch:         "amd64",
+			OS:              "linux",
+			DriverVersion:   "570.211.01",
+			Storage:         resource.MustParse("512Gi"),
+		}
+	}
+
+	// An 8-GPU DGX (SXM4) and a 2-GPU VMware host (PCIe), both reporting A100.
+	in := BackendGPUs{
+		{
+			Name: "A100",
+			InstanceTypes: []InstanceType{
+				newIT("NVIDIA-A100-SXM4-80GB", 8, "256", "2015Gi"),
+				newIT("NVIDIA-A100-80GB-PCIe", 2, "48", "62Gi"),
+			},
+		},
+	}
+
+	got := in.ToRegistration(false, corev1.ResourceList{})
+	require.Len(t, got, 1)
+
+	seen := map[string]int{}
+	for _, it := range got[0].InstanceTypes {
+		seen[it.Name]++
+	}
+	for name, count := range seen {
+		assert.Equalf(t, 1, count, "instance type %q registered %d times", name, count)
+	}
+
+	// The PCIe node contributes no new names: 1x/2x collide with the DGX subdivisions.
+	assert.Equal(t,
+		[]string{"NCP.GPU.A100_1x", "NCP.GPU.A100_2x", "NCP.GPU.A100_4x", "NCP.GPU.A100_8x"},
+		slices.Sorted(maps.Keys(seen)),
+	)
+
+	// The surviving entries are the DGX-derived ones, since the larger node sorts first.
+	for _, it := range got[0].InstanceTypes {
+		assert.Equal(t, "NVIDIA-A100-SXM4-80GB", it.Description)
+	}
 }
 
 func Test_calcFractionCPU(t *testing.T) {
