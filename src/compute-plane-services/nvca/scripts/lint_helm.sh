@@ -199,6 +199,7 @@ assert_helm_managed_vault_address() {
   local chart_dir=${1}
   local chart_label=${2}
   local rendered
+  local invalid_address
   rendered="$(mktemp)"
   trap 'rm -f "${rendered}"' RETURN
 
@@ -213,26 +214,24 @@ assert_helm_managed_vault_address() {
     "$(yq '.data."cluster-dto.yaml" | from_yaml | .vaultConfig.address' "${rendered}")" \
     "${chart_label} helm-managed cluster DTO includes the configured Vault address"
 
-  if helm template test-release "${chart_dir}" \
-    --set "ngcConfig.serviceKey=fakekey" \
-    --set "ngcConfig.clusterSource=helm-managed" \
-    --set-string "helmManaged.oAuthClientID=oauth-client-1" \
-    --show-only templates/helm-managed-nvcfbackend-cm.yaml >"${rendered}" 2>&1; then
-    echo "Expected ${chart_label} helm-managed render with OAuth enabled and no Vault address to fail"
-    return 1
-  fi
-  grep -q "vaultConfig.address" "${rendered}"
-
-  if helm template test-release "${chart_dir}" \
-    --set "ngcConfig.serviceKey=fakekey" \
-    --set "ngcConfig.clusterSource=helm-managed" \
-    --set-string "helmManaged.oAuthClientID=oauth-client-1" \
-    --set-string "vaultConfig.address=https://:443" \
-    --show-only templates/helm-managed-nvcfbackend-cm.yaml >"${rendered}" 2>&1; then
-    echo "Expected ${chart_label} helm-managed render with a hostless Vault address to fail"
-    return 1
-  fi
-  grep -q "vaultConfig.address" "${rendered}"
+  for invalid_address in \
+    "" \
+    "https://:443" \
+    " https://vault.example.test:443 " \
+    "https://user@vault.example.test:443" \
+    "https://vault.example.test:443?namespace=test" \
+    "https://vault.example.test:443#test"; do
+    if helm template test-release "${chart_dir}" \
+      --set "ngcConfig.serviceKey=fakekey" \
+      --set "ngcConfig.clusterSource=helm-managed" \
+      --set-string "helmManaged.oAuthClientID=oauth-client-1" \
+      --set-string "vaultConfig.address=${invalid_address}" \
+      --show-only templates/helm-managed-nvcfbackend-cm.yaml >"${rendered}" 2>&1; then
+      printf 'Expected %s helm-managed render with invalid Vault address %q to fail\n' "${chart_label}" "${invalid_address}"
+      return 1
+    fi
+    grep -q "vaultConfig.address" "${rendered}"
+  done
 }
 
 assert_helm_managed_vault_address "${repo_root}/deployments/nvca-operator" "service chart"

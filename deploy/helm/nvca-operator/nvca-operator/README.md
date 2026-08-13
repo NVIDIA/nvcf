@@ -107,7 +107,7 @@ used in Kubernetes Clusters to run NVCF Workloads.
 
 | Name                                       | Description                                                                                                                                             | Value |
 | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
-| `vaultConfig.address`                      | Vault server URL for Helm-managed clusters. Required when `helmManaged.oAuthClientID` is set.                                                          | `""`  |
+| `vaultConfig.address`                      | Vault server URL for Helm-managed clusters. Required when `helmManaged.oAuthClientID` is set; must be HTTP(S), without credentials, query, or fragment. | `""`  |
 | `vaultConfig.oAuthClientMountPathTemplate` | Template for constructing the OAuth client mount path in Vault. Use %s as placeholder for clientID. Example: "nvidia/services/oauth/clients/%s/kv/secret" | `""`  |
 | `vaultConfig.oAuthClientMountPath`         | (Optional) Full OAuth client mount path. If set, overrides the computed path from template.                                                             | `""`  |
 
