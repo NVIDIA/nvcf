@@ -207,14 +207,14 @@ if [[ "${byoo_function_image}" != "${byoo_task_image}" ]]; then
   exit 1
 fi
 
-if [[ "${byoo_function_image}" != "nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector:0.157.11" ]]; then
+if [[ "${byoo_function_image}" != "nvcr.io/qtfpt1h0bieu/nvcf-core/byoo-otel-collector:0.157.11" ]]; then
   echo "unexpected BYOO collector default: ${byoo_function_image}" >&2
   exit 1
 fi
 
-if [[ "${stage_byoo_function_image}" != "stg.nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector:0.157.11" || \
+if [[ "${stage_byoo_function_image}" != "stg.nvcr.io/nv-cf/nvcf-core/byoo-otel-collector:0.157.11" || \
   "${stage_byoo_task_image}" != "${stage_byoo_function_image}" ]]; then
-  echo "expected BYOO collector defaults to use the staging image repository" >&2
+  echo "expected BYOO collector defaults to use the staging nvcf-core image repository" >&2
   exit 1
 fi
 
