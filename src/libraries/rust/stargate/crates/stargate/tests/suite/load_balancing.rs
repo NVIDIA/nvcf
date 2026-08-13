@@ -403,7 +403,7 @@ fn float_eq(actual: f64, expected: f64) -> bool {
 }
 
 #[tokio::test]
-async fn power_of_two_prefers_less_input_work() {
+async fn power_of_n_prefers_less_input_work() {
     let stargate = RunningStargate::start("test-sg-p2c", None).await;
     let mut low =
         RegisteredBackend::active(stargate.grpc_addr, "p2c-model", "inst-low-headroom").await;
@@ -476,7 +476,7 @@ async fn input_work_admission_rejects_overloaded_pool_and_registered_unavailable
     let stargate = RunningStargate::start(
         "test-sg-input-work-admission",
         Some(
-            r#"{"models": {"admission-model": {"algorithm": "power-of-two", "max_input_work_seconds": 0.5}}}"#,
+            r#"{"models": {"admission-model": {"algorithm": "power-of-n", "max_input_work_seconds": 0.5}}}"#,
         ),
     )
     .await;
@@ -655,7 +655,7 @@ async fn random_load_balancing_uses_all_instances() {
 }
 
 #[tokio::test]
-async fn power_of_two_uses_cluster_aggregated_metrics_and_backend_round_robin() {
+async fn power_of_n_uses_cluster_aggregated_metrics_and_backend_round_robin() {
     let stargate = RunningStargate::start("test-sg-p2c-clusters", None).await;
     let state = stargate.handle.state();
     let mut shared_a = RegisteredBackend::active_in_cluster(
@@ -850,9 +850,7 @@ async fn power_of_two_uses_cluster_aggregated_metrics_and_backend_round_robin() 
 async fn wait_and_widen_load_balancing_prefers_lower_estimated_ttft() {
     let stargate = RunningStargate::start(
         "test-sg-wait-and-widen",
-        Some(
-            r#"{"default": "power-of-two", "models": {"wait-and-widen-model": "wait-and-widen"}}"#,
-        ),
+        Some(r#"{"default": "power-of-n", "models": {"wait-and-widen-model": "wait-and-widen"}}"#),
     )
     .await;
 
@@ -923,7 +921,7 @@ async fn wait_and_widen_waits_for_later_bucket_when_fastest_is_full() {
     let stargate = RunningStargate::start(
         "test-sg-wait-and-widen-wait",
         Some(
-            r#"{"default": "power-of-two", "models": {"wait-and-widen-wait-model": "wait-and-widen"}}"#,
+            r#"{"default": "power-of-n", "models": {"wait-and-widen-wait-model": "wait-and-widen"}}"#,
         ),
     )
     .await;
@@ -991,7 +989,7 @@ async fn wait_and_widen_cache_affinity_prefers_stable_subset_then_falls_back() {
         "test-sg-wait-and-widen-affinity",
         Some(
             r#"{
-            "default": "power-of-two",
+            "default": "power-of-n",
             "models": {
                 "wait-and-widen-affinity-model": {
                     "algorithm": "wait-and-widen",
@@ -1123,7 +1121,7 @@ async fn wait_and_widen_requires_cache_affinity_key_when_configured() {
         "test-sg-wait-and-widen-affinity-required",
         Some(
             r#"{
-            "default": "power-of-two",
+            "default": "power-of-n",
             "models": {
                 "wait-and-widen-affinity-required-model": {
                     "algorithm": "wait-and-widen",
@@ -1204,7 +1202,7 @@ async fn wait_and_widen_priority_header_uses_matching_queue_estimate() {
         "test-sg-wait-and-widen-priority",
         Some(
             r#"{
-            "default": "power-of-two",
+            "default": "power-of-n",
             "models": {
                 "wait-and-widen-priority-model": {
                     "algorithm": "wait-and-widen",
@@ -1311,7 +1309,7 @@ async fn pulsar_routes_same_affinity_key_consistently() {
         "test-sg-pulsar",
         Some(
             r#"{
-            "default": "power-of-two",
+            "default": "power-of-n",
             "models": {
                 "pulsar-model": {
                     "algorithm": "pulsar",

@@ -1009,7 +1009,7 @@ impl PulsarHeaderFixture {
         let mut config_file = tempfile::NamedTempFile::new().expect("failed to create temp file");
         std::io::Write::write_all(
             &mut config_file,
-            br#"{"default":"power-of-two","models":{"pulsar-model":{"algorithm":"pulsar","seed":"test-seed","require_cache_affinity_key":true,"require_input_tokens":true}}}"#,
+            br#"{"default":"power-of-n","models":{"pulsar-model":{"algorithm":"pulsar","seed":"test-seed","require_cache_affinity_key":true,"require_input_tokens":true}}}"#,
         )
         .expect("failed to write config");
         let config_path = config_file.path().to_str().unwrap().to_string();
@@ -2027,7 +2027,7 @@ async fn transport_local_shared_cluster_failover_stays_within_selected_cluster()
     init_crypto();
 
     let mut tmp_file = tempfile::NamedTempFile::new().expect("failed to create temp file");
-    std::io::Write::write_all(&mut tmp_file, br#"{"default":"power-of-two"}"#)
+    std::io::Write::write_all(&mut tmp_file, br#"{"default":"power-of-n"}"#)
         .expect("failed to write config");
     let config_path = tmp_file.path().to_str().unwrap().to_string();
 
@@ -2597,7 +2597,7 @@ async fn queue_estimate_mismatch_retries_sibling_in_selected_shared_cluster() {
     );
     assert_delta!(
         &before_metrics, &metrics, "stargate_routing_selections_total", 1.0;
-        r#"algorithm="power-of-two""#,
+        r#"algorithm="power-of-n""#,
         r#"model="queue-mismatch-shared-model""#,
         r#"routing_key="""#,
         r#"selection="primary""#
