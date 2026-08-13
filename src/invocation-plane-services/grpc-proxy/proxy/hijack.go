@@ -29,8 +29,10 @@ import (
 	"go.uber.org/zap"
 	"net"
 	"net/http"
+	"nvcf-grpc-proxy/proxy/metrics"
 	"nvcf-grpc-proxy/proxy/quicconn"
 	"strings"
+	"time"
 )
 
 func (s *StreamDirector) HijackHandler(w http.ResponseWriter, r *http.Request) {
@@ -41,6 +43,14 @@ func (s *StreamDirector) HijackHandler(w http.ResponseWriter, r *http.Request) {
 			semconv.HTTPRequestMethodKey.String(r.Method),
 			semconv.NetworkProtocolVersion(r.Proto)))
 	defer span.End()
+
+	// Every terminal path below records exactly one outcome, so the counter
+	// accounts for all CONNECT attempts.
+	result := metrics.ConnectNotHijackable
+	defer func() {
+		metrics.WorkerConnectTotal.WithLabelValues(result).Inc()
+		span.SetAttributes(attribute.String("connect_result", result))
+	}()
 
 	http1Hijacker, _ := w.(http.Hijacker)
 	http3Hijacker, _ := w.(http3.HTTPStreamer)
@@ -54,6 +64,7 @@ func (s *StreamDirector) HijackHandler(w http.ResponseWriter, r *http.Request) {
 	auth := r.Header.Get("Authorization")
 	auth = strings.TrimPrefix(auth, "Bearer ")
 	if auth == "" {
+		result = metrics.ConnectMissingAuth
 		err := fmt.Errorf("HTTP CONNECT request is missing auth")
 		err = spanError(span, err)
 		http.Error(w, err.Error(), http.StatusUnauthorized)
@@ -62,6 +73,7 @@ func (s *StreamDirector) HijackHandler(w http.ResponseWriter, r *http.Request) {
 
 	requestId := r.Header.Get("X-Request-ID")
 	if requestId == "" {
+		result = metrics.ConnectMissingRequestID
 		err := fmt.Errorf("HTTP CONNECT request is missing request id")
 		err = spanError(span, err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -69,6 +81,7 @@ func (s *StreamDirector) HijackHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	parsedRequestId, err := uuid.Parse(requestId)
 	if err != nil {
+		result = metrics.ConnectInvalidRequestID
 		err := fmt.Errorf("HTTP CONNECT request has an invalid request id")
 		err = spanError(span, err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -78,6 +91,35 @@ func (s *StreamDirector) HijackHandler(w http.ResponseWriter, r *http.Request) {
 
 	authLookup := s.workerAuth.Get(auth)
 	if authLookup == nil || authLookup.Value().requestId != parsedRequestId {
+		// Classify the rejection. All three cases return 403 and are
+		// indistinguishable to the caller, but they mean very different
+		// things: an expired token is a timing problem, an unknown token is
+		// either a different pod or a genuinely bad credential, and a
+		// mismatch is a token being reused for the wrong request.
+		var tokenAge time.Duration
+		haveAge := false
+		switch {
+		case authLookup != nil:
+			result = metrics.ConnectRequestIDMismatch
+			tokenAge, haveAge = time.Since(authLookup.Value().mintedAt), true
+		default:
+			result = metrics.ConnectTokenUnknown
+			if issued := s.issuedTokens.Get(auth); issued != nil {
+				result = metrics.ConnectTokenExpired
+				tokenAge, haveAge = time.Since(issued.Value().mintedAt), true
+			}
+		}
+		logFields := []zap.Field{
+			zap.Stringer("request_id", parsedRequestId),
+			zap.String("connect_result", result),
+		}
+		if haveAge {
+			metrics.WorkerConnectTokenAgeSeconds.WithLabelValues(result).Observe(tokenAge.Seconds())
+			logFields = append(logFields, zap.Duration("token_age", tokenAge))
+			span.SetAttributes(attribute.Float64("token_age_seconds", tokenAge.Seconds()))
+		}
+		zap.L().Info("rejecting worker CONNECT", logFields...)
+
 		err := fmt.Errorf("HTTP CONNECT request is missing valid auth")
 		err = spanError(span, err)
 		http.Error(w, err.Error(), http.StatusForbidden)
@@ -85,6 +127,11 @@ func (s *StreamDirector) HijackHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	authInfo := authLookup.Value()
 
+	tokenAge := time.Since(authInfo.mintedAt)
+	metrics.WorkerConnectTokenAgeSeconds.WithLabelValues(metrics.ConnectAccepted).Observe(tokenAge.Seconds())
+	span.SetAttributes(attribute.Float64("token_age_seconds", tokenAge.Seconds()))
+
+	result = metrics.ConnectAccepted
 	w.WriteHeader(http.StatusOK)
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
@@ -96,13 +143,14 @@ func (s *StreamDirector) HijackHandler(w http.ResponseWriter, r *http.Request) {
 	} else {
 		conn, _, err = http1Hijacker.Hijack()
 		if err != nil {
+			result = metrics.ConnectHijackFailed
 			err = spanError(span, err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
 
-	// record the transport peer that established this CONNECT tunnel to aid network-level tracing. 
+	// record the transport peer that established this CONNECT tunnel to aid network-level tracing.
 	// This is the immediate socket peer only: on split control-plane /
 	// compute-plane deployments the worker dials back through a routable endpoint, so the peer
 	// may be a load balancer, node, or other SNAT address rather than the worker pod itself,
