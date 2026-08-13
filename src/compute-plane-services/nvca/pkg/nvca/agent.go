@@ -948,6 +948,11 @@ func (a *Agent) registerWithICMS(ctx context.Context, regBackendGPUs []types.Reg
 		return nil, err
 	}
 
+	if a.queueManager != nil {
+		a.queueManager.updateQueues(a.postProcessQueueCredentials(ctx, res.Credentials))
+		log.Debug("refreshed queue manager with registration credentials")
+	}
+
 	return res, nil
 }
 
