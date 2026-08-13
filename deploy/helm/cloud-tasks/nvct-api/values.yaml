@@ -1,0 +1,144 @@
+nvctApi:
+  image:
+    registry: "" # must be supplied
+    repository: "" # must be supplied
+    pullPolicy: IfNotPresent
+    tag: "1.63.2"
+
+  # Namespace to deploy the resources. The default value is the release namespace.
+  namespace: ""
+
+  nameOverride: ""
+  fullnameOverride: ""
+
+  replicaCount: 1
+
+  podAnnotations: {}
+  podLabels: {}
+
+  podSecurityContext: {}
+  securityContext:
+    capabilities:
+      drop:
+        - ALL
+      add:
+        - NET_BIND_SERVICE
+    runAsUser: 1000
+
+  service:
+    type: ClusterIP
+    ports:
+      - name: http
+        port: 8080
+        targetPort: 8080
+        protocol: TCP
+      - name: grpc
+        port: 9090
+        targetPort: 9090
+        protocol: TCP
+
+  resources:
+    limits:
+      cpu: 2
+      memory: 4Gi
+    requests:
+      cpu: 1
+      memory: 2Gi
+
+  livenessProbe:
+    httpGet:
+      path: /actuator/health/liveness
+      port: management
+    periodSeconds: 10
+    timeoutSeconds: 1
+    failureThreshold: 6
+
+  readinessProbe:
+    httpGet:
+      path: /actuator/health/readiness
+      port: management
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 1
+    failureThreshold: 1
+
+  startupProbe:
+    httpGet:
+      path: /actuator/health/readiness
+      port: management
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 30
+
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPUUtilizationPercentage: 80
+
+  volumes:
+    - name: token
+      projected:
+        sources:
+        - serviceAccountToken:
+            path: token
+            expirationSeconds: 3600
+            audience: http://openbao-server.vault-system.svc.cluster.local:8200
+
+  volumeMounts:
+    - name: token
+      mountPath: /var/run/secrets/openbao
+      readOnly: true
+    - name: vault-config-templates
+      mountPath: /vault/config/templates
+      readOnly: true
+
+  # Remote configuration via spring-cloud-kubernetes-client-config.
+  # When enabled, the chart renders the ConfigMap + Role/RoleBinding + REMOTE_CONFIG_*
+  # env vars. Set to false to opt out. service then falls back to JAR defaults in application-ncp.yaml.
+  # See README "Remote Config RBAC".
+  remoteConfig:
+    enabled: true
+    # ConfigMap metadata.name. Empty -> defaults to <fullname>-remote-config
+    # (release-scoped, collision-safe across installs in the same namespace).
+    # Override with a fixed string only when an external contract pins the name.
+    configMapName: ""
+    # Can be used for remote configuration by adding NVCT-specific properties here.
+    # Add only the keys you need to override.
+    # Placeholders like ${nvct.sidecars.hostname} resolve from environment variables
+    # (NVCT_SIDECARS_HOSTNAME / NVCT_SIDECARS_REPOSITORY).
+    # Examples:
+    #   configData:
+    #     nvct:
+    #       sidecars:
+    #         init-container: "${nvct.sidecars.hostname}/${nvct.sidecars.repository}/nvcf_worker_init:2.103.0"
+    #       scheduled-routines:
+    #         migration-job-1: # use specific migration job name here
+    #           enabled: false
+    configData:
+      nvct:
+        sidecars:
+          init-container: "${nvct.sidecars.hostname}/${nvct.sidecars.repository}/nvcf_worker_init:2.107.0"
+          utils-container: "${nvct.sidecars.hostname}/${nvct.sidecars.repository}/nvcf_worker_task:2.107.0"
+          otel-container: dummy
+          ess-agent-container: "${nvct.sidecars.hostname}/${nvct.sidecars.repository}/ess-agent:1.1.0"
+          otel-collector-container: dummy
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+  ports:
+    - name: http
+      containerPort: 8080
+      protocol: TCP
+    - name: grpc
+      containerPort: 9090
+      protocol: TCP
+    - name: management
+      containerPort: 8181
+      protocol: TCP
+
+  env:
+    HOSTNAME: "nvct-api"
+    AWS_REGION: "ncp"

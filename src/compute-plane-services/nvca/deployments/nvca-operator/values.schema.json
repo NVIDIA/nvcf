@@ -53,7 +53,7 @@
                 "imageTag": {
                     "type": "string",
                     "description": "Image tag of OpenTelemetry Collector sidecar.",
-                    "default": "0.143.2"
+                    "default": "0.157.9"
                 },
                 "resources": {
                     "type": "object",
@@ -375,6 +375,22 @@
                         }
                     }
                 },
+                "byooOtelCollector": {
+                    "type": "object",
+                    "description": "Default BYOO OpenTelemetry Collector image. The repository is derived from image.repository when not set.",
+                    "properties": {
+                        "imageRepository": {
+                            "type": "string",
+                            "description": "Optional BYOO OpenTelemetry Collector image repository. If unset, it is derived from image.repository.",
+                            "default": ""
+                        },
+                        "imageTag": {
+                            "type": "string",
+                            "description": "BYOO OpenTelemetry Collector image tag.",
+                            "default": "0.157.11"
+                        }
+                    }
+                },
                 "functionEnvOverrides": {
                     "type": "object",
                     "description": "Map of environment variable overrides for function workloads (e.g., {\"INIT_CONTAINER\": \"nvcr.io/custom/init:v1.0\", \"UTILS_CONTAINER\": \"nvcr.io/custom/utils:v1.0\"})",
@@ -672,7 +688,7 @@
                         "imageTag": {
                             "type": "string",
                             "description": "(REQUIRED) Image tag of \"otel-collector\". Only override this if you know what you are doing.",
-                            "default": "0.143.2"
+                            "default": "0.157.9"
                         }
                     }
                 }
@@ -738,7 +754,7 @@
                         "imageTag": {
                             "type": "string",
                             "description": "(REQUIRED) Image tag of \"otel-collector\". Only override this if you know what you are doing.",
-                            "default": "0.143.2"
+                            "default": "0.157.9"
                         }
                     }
                 },

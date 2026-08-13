@@ -192,7 +192,8 @@ struct Args {
     /// Skip QUIC TLS certificate verification for outbound connections and relays.
     #[arg(long, default_value_t = false, env = "STARGATE_QUIC_INSECURE")]
     quic_insecure: bool,
-    /// Path to load balancer config JSON file (uses power-of-two default if omitted)
+    /// Path to load balancer config JSON file. If omitted, uses power-of-two
+    /// with every built-in algorithm selectable per request.
     #[arg(long, value_name = "PATH")]
     lb_config_path: Option<String>,
     /// OTLP/gRPC trace export endpoint. Tracing export is disabled if omitted.

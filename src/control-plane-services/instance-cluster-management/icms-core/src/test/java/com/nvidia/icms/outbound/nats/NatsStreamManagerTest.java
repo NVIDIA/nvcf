@@ -33,16 +33,13 @@ import io.nats.client.ConsumerContext;
 import io.nats.client.JetStreamApiException;
 import io.nats.client.JetStreamManagement;
 import io.nats.client.StreamContext;
-import io.nats.client.api.ApiResponse;
 import io.nats.client.api.ConsumerConfiguration;
 import io.nats.client.api.StreamConfiguration;
 import io.nats.client.api.StreamInfo;
-import io.nats.client.support.JsonValue;
+import io.nats.client.support.Status;
 import java.io.IOException;
 import java.time.Duration;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
@@ -96,7 +93,7 @@ class NatsStreamManagerTest {
             throws IOException, JetStreamApiException {
         // Mock
         when(jetStreamManagement.getStreamInfo(anyString())).thenThrow(
-                new JetStreamApiException(new TestResponse()));
+                streamNotFoundException());
         when(jetStreamManagement.addStream(any(StreamConfiguration.class))).thenReturn(
                 mock(StreamInfo.class));
 
@@ -194,7 +191,7 @@ class NatsStreamManagerTest {
             throws IOException, InterruptedException, JetStreamApiException {
         // Mock
         when(jetStreamManagement.getStreamInfo("TestStream")).thenThrow(
-                new JetStreamApiException(new TestResponse()));
+                streamNotFoundException());
 
         // Act
         StreamInfo streamInfo = natsStreamManager.getStream("TestStream");
@@ -211,7 +208,7 @@ class NatsStreamManagerTest {
             throws IOException, JetStreamApiException {
         // Mock
         when(jetStreamManagement.getStreamInfo("TestStream")).thenThrow(
-                new JetStreamApiException(new TestResponse()));
+                streamNotFoundException());
         when(jetStreamManagement.addStream(any(StreamConfiguration.class))).thenReturn(
                 mock(StreamInfo.class));
 
@@ -280,18 +277,10 @@ class NatsStreamManagerTest {
     }
 
     /**
-     * Mock implementation of an API response for testing purposes.
+     * Builds the error the JetStream API reports when a stream does not exist.
      */
-    class TestResponse extends ApiResponse<StreamInfo> {
-
-        public TestResponse() {
-            super(getJsonMap());
-        }
-
-        private static JsonValue getJsonMap() {
-            Map<String, JsonValue> m = new HashMap<>();
-            m.put("error", new JsonValue("Stream not found"));
-            return new JsonValue(m);
-        }
+    private static JetStreamApiException streamNotFoundException() {
+        Status notFound = new Status(Status.NOT_FOUND_CODE, "Stream not found");
+        return new JetStreamApiException(io.nats.client.api.Error.convert(notFound));
     }
 }
