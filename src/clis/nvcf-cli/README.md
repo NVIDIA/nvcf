@@ -667,7 +667,7 @@ export NVCF_TOKEN="nvapi-your-function-creation-token"
 
 `--llm-model` accepts `name`, `uris`, `routingMethod`, and `tokenRateLimit`
 key/value fields. Separate multiple URIs with `|`. Valid routing
-methods are `round_robin`, `power_of_two`, `groq_multiregion`, `pulsar`, and
+methods are `round_robin`, `power_of_n`, `groq_multiregion`, `pulsar`, and
 `random`; the CLI validates and sends these API/auth spellings in the create
 request.
 `tokenRateLimit` supports positive integer token limits for `S`, `M`, `H`, `D`, and `W`.

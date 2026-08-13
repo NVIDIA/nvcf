@@ -813,7 +813,7 @@ curl -X POST https://api.nvcf.nvidia.com/v2/nvcf/accounts/nvcf-default/registry-
 ```
 
 For LLM models, `llmConfig.routingMethod` accepts the API/auth spellings
-`round_robin`, `power_of_two`, `groq_multiregion`, `pulsar`, or `random`. The
+`round_robin`, `power_of_n`, `groq_multiregion`, `pulsar`, or `random`. The
 CLI validates these values before sending the create request.
 Supported LLM paths are `/v1/chat/completions`, `/v1/responses`, and `/v1/embeddings`.
 
@@ -1373,4 +1373,3 @@ nvcf-cli task delete    # DELETE - permanent
 ```
 
 `task delete` clears the saved task from state when it matches.
-

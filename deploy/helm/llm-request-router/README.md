@@ -87,7 +87,7 @@ The chart can pass a Stargate load-balancer config in either of two ways:
 - `llmRequestRouter.loadBalancer.config` embeds JSON directly in the release. The chart writes it to a ConfigMap and starts Stargate with `--lb-config-path=/etc/llm-request-router/lb-config.json`.
 - `llmRequestRouter.loadBalancer.configPath` points Stargate at an existing file path and starts it with `--lb-config-path=<configPath>`.
 
-`config` takes precedence over `configPath` when both are set. If neither value is set, Stargate uses its built-in default algorithm, `power-of-two`.
+`config` takes precedence over `configPath` when both are set. If neither value is set, Stargate uses its built-in default algorithm, `power-of-n`, with a sample count of `2`. Existing `power-of-two` and `powerOf2` values remain accepted as aliases.
 
 See the
 [Stargate load balancer configuration](../../../src/libraries/rust/stargate/docs/load-balancer-configuration.md)

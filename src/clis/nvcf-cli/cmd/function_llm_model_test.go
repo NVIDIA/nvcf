@@ -140,7 +140,7 @@ func TestCreateConfigModelLLMConfigOmittedWhenNil(t *testing.T) {
 func TestParseLLMModelString(t *testing.T) {
 	t.Parallel()
 
-	model, err := parseLLMModelString("name=dummy-model,uris=/v1/chat/completions|/v1/responses|/v1/embeddings,routingMethod=power_of_two,tokenRateLimit=1000-M")
+	model, err := parseLLMModelString("name=dummy-model,uris=/v1/chat/completions|/v1/responses|/v1/embeddings,routingMethod=power_of_n,tokenRateLimit=1000-M")
 	if err != nil {
 		t.Fatalf("parse llm model: %v", err)
 	}
@@ -152,8 +152,8 @@ func TestParseLLMModelString(t *testing.T) {
 		t.Fatal("llmConfig is nil")
 	}
 	assertStringSlice(t, model.LLMConfig.URIs, []string{"/v1/chat/completions", "/v1/responses", "/v1/embeddings"})
-	if got := stringValue(model.LLMConfig.RoutingMethod); got != "power_of_two" {
-		t.Fatalf("routingMethod = %q, want power_of_two", got)
+	if got := stringValue(model.LLMConfig.RoutingMethod); got != "power_of_n" {
+		t.Fatalf("routingMethod = %q, want power_of_n", got)
 	}
 }
 
@@ -167,7 +167,7 @@ func TestParseLLMModelStringAcceptsAdvancedRoutingMethods(t *testing.T) {
 		{input: "groq_multiregion", expected: "groq_multiregion"},
 		{input: "groq-multiregion", expected: "groq_multiregion"},
 		{input: "round-robin", expected: "round_robin"},
-		{input: "power-of-two", expected: "power_of_two"},
+		{input: "power_of_n", expected: "power_of_n"},
 		{input: "wait_and_widen", expected: "wait_and_widen"},
 		{input: "wait-and-widen", expected: "wait_and_widen"},
 		{input: "pulsar_wait_and_widen", expected: "pulsar_wait_and_widen"},
@@ -372,7 +372,7 @@ func TestUpdateConfigParsesLLMModelUpdatesFromJSON(t *testing.T) {
 func TestParseLLMModelUpdateString(t *testing.T) {
 	t.Parallel()
 
-	update, err := parseLLMModelUpdateString("name=dummy-model,routingMethod=power_of_two,tokenRateLimit=1000-M")
+	update, err := parseLLMModelUpdateString("name=dummy-model,routingMethod=power_of_n,tokenRateLimit=1000-M")
 	if err != nil {
 		t.Fatalf("parse llm model update: %v", err)
 	}
@@ -383,8 +383,8 @@ func TestParseLLMModelUpdateString(t *testing.T) {
 	if update.LLMConfig == nil {
 		t.Fatal("llmConfig is nil")
 	}
-	if got := stringValue(update.LLMConfig.RoutingMethod); got != "power_of_two" {
-		t.Fatalf("routingMethod = %q, want power_of_two", got)
+	if got := stringValue(update.LLMConfig.RoutingMethod); got != "power_of_n" {
+		t.Fatalf("routingMethod = %q, want power_of_n", got)
 	}
 	if got := stringValue(update.LLMConfig.TokenRateLimit); got != "1000-M" {
 		t.Fatalf("tokenRateLimit = %q, want 1000-M", got)
@@ -401,7 +401,7 @@ func TestParseLLMModelUpdateStringAcceptsAdvancedRoutingMethods(t *testing.T) {
 		{input: "groq_multiregion", expected: "groq_multiregion"},
 		{input: "groq-multiregion", expected: "groq_multiregion"},
 		{input: "round-robin", expected: "round_robin"},
-		{input: "power-of-two", expected: "power_of_two"},
+		{input: "power_of_n", expected: "power_of_n"},
 		{input: "wait_and_widen", expected: "wait_and_widen"},
 		{input: "wait-and-widen", expected: "wait_and_widen"},
 		{input: "pulsar_wait_and_widen", expected: "pulsar_wait_and_widen"},

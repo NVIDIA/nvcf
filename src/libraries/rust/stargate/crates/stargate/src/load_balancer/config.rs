@@ -437,7 +437,16 @@ impl RawCommonAlgorithmConfig {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "algorithm", rename_all = "kebab-case")]
 enum RawLoadBalancerAlgorithmConfig {
-    #[serde(alias = "power-of-two", alias = "powerOf2", alias = "powerOfN")]
+    // Technical debt: these aliases duplicate LoadBalancerAlgorithm because serde parses this
+    // tagged detailed-config enum independently. Keep both lists in sync until NVIDIA/nvcf#831
+    // centralizes algorithm-name parsing.
+    #[serde(
+        alias = "power-of-two",
+        alias = "powerOf2",
+        alias = "powerOfN",
+        alias = "powerof2",
+        alias = "powerofn"
+    )]
     PowerOfN {
         #[serde(flatten)]
         settings: PowerOfNAlgorithmConfig,

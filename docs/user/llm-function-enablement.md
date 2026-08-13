@@ -78,8 +78,10 @@ API then includes the address in LLM worker configuration. Do not configure
 the worker address under `api.env`. When the LLM addon is disabled, the stack
 does not pass a staged endpoint to the API chart.
 
-The request router uses `power-of-two` when no load-balancer configuration is
-set, and accepts any supported `routingMethod` from a function. When a
+The request router uses `power-of-n` with a sample count of `2` when no
+load-balancer configuration is set. Existing `power-of-two` and `powerOf2`
+values remain accepted as aliases. The router accepts any supported
+`routingMethod` from a function. When a
 load-balancer configuration is set, a function can only select an algorithm
 that the configuration enables.
 

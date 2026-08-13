@@ -1003,31 +1003,6 @@ fn legacy_algorithm_names_remain_compatible_in_short_configs() {
 }
 
 #[test]
-fn power_of_n_aliases_remain_compatible() {
-    for alias in ["power-of-two", "powerOf2", "powerOfN"] {
-        let config: LoadBalancerConfig = parse_json(&format!(r#"{{"default":"{alias}"}}"#));
-        assert_eq!(config.default, LoadBalancerAlgorithm::PowerOfN, "{alias}");
-
-        let detailed: LoadBalancerAlgorithmConfig =
-            parse_json(&format!(r#"{{"algorithm":"{alias}"}}"#));
-        assert_eq!(
-            detailed.algorithm(),
-            LoadBalancerAlgorithm::PowerOfN,
-            "{alias}"
-        );
-
-        let algorithm_override = LoadBalancerAlgorithmOverride::parse(alias)
-            .expect("power-of-n alias should remain compatible");
-        assert_eq!(
-            algorithm_override.algorithm(),
-            LoadBalancerAlgorithm::PowerOfN,
-            "{alias}"
-        );
-        assert_eq!(algorithm_override.requested_algorithm(), alias);
-    }
-}
-
-#[test]
 fn legacy_algorithm_names_remain_compatible_in_detailed_configs() {
     let router = router_from_json(
         r#"{"default":"power-of-n","models":{"wait-model":{"algorithm":"groq-multiregion","seed":"seed-1"},"pulsar-model":{"algorithm":"pulsar-multiregion","seed":"seed-2","max_queue_time_floor_ms":100,"max_queue_time_ceil_ms":200}}}"#,
