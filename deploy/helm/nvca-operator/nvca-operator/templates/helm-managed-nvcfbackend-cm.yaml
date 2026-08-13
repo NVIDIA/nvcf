@@ -38,11 +38,17 @@ data:
     {{- end }}
     {{- end }}
     {{- if $clientID }}
+    {{- if or (ne $vaultAddress (trim $vaultAddress)) (contains "@" $vaultAddress) (contains "?" $vaultAddress) (contains "#" $vaultAddress) }}
+    {{- fail "vaultConfig.address must be an absolute HTTP(S) URL with no credentials, query, or fragment when helmManaged.oAuthClientID is set" }}
+    {{- end }}
     {{- $parsedVaultAddress := urlParse $vaultAddress }}
     {{- $vaultScheme := $parsedVaultAddress.scheme | default "" }}
     {{- $vaultHost := $parsedVaultAddress.host | default "" }}
-    {{- if or (not (has $vaultScheme (list "http" "https"))) (not (regexMatch `^(\[[^]]+\]|[^:[:space:]]+)(:[0-9]+)?$` $vaultHost)) }}
-    {{- fail "vaultConfig.address must be an absolute HTTP(S) URL with a non-empty hostname when helmManaged.oAuthClientID is set" }}
+    {{- $vaultUserInfo := $parsedVaultAddress.userinfo | default "" }}
+    {{- $vaultQuery := $parsedVaultAddress.query | default "" }}
+    {{- $vaultFragment := $parsedVaultAddress.fragment | default "" }}
+    {{- if or (not (has $vaultScheme (list "http" "https"))) (not (regexMatch `^(\[[^]]+\]|[^:[:space:]]+)(:[0-9]+)?$` $vaultHost)) $vaultUserInfo $vaultQuery $vaultFragment }}
+    {{- fail "vaultConfig.address must be an absolute HTTP(S) URL with no credentials, query, or fragment when helmManaged.oAuthClientID is set" }}
     {{- end }}
     {{- end }}
     clusterDescription: {{ .clusterDescription | default $.Values.clusterName | quote }}

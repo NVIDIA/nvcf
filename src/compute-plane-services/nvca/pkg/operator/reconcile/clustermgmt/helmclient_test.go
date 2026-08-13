@@ -20,6 +20,7 @@ package clustermgmt
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -138,29 +139,30 @@ func TestHelmManagedClient_GetCluster_RequiresValidVaultAddress(t *testing.T) {
 		assert.False(t, cluster.NVCFBackend.Spec.VaultConfig.Enabled)
 	})
 
-	t.Run("missing address", func(t *testing.T) {
-		client := NewHelmManagedClient(
-			nvidiaiov1.EnvTypeProd,
-			dummyFetcher("clusterName: test-backend\noAuthClientId: oauth-client-1", nil),
-			DefaultVaultOAuthClientMountPathTemplate,
-		)
+	for name, address := range map[string]string{
+		"missing address":        "",
+		"address without host":   "https://:443",
+		"surrounding whitespace": " https://vault.example.test:443 ",
+		"credentials":            "https://user@vault.example.test:443",
+		"query":                  "https://vault.example.test:443?namespace=test",
+		"fragment":               "https://vault.example.test:443#test",
+	} {
+		t.Run(name, func(t *testing.T) {
+			clusterYAML := "clusterName: test-backend\noAuthClientId: oauth-client-1"
+			if address != "" {
+				clusterYAML += fmt.Sprintf("\nvaultConfig:\n  address: %q", address)
+			}
+			client := NewHelmManagedClient(
+				nvidiaiov1.EnvTypeProd,
+				dummyFetcher(clusterYAML, nil),
+				DefaultVaultOAuthClientMountPathTemplate,
+			)
 
-		_, err := client.GetCluster(ctx, "test-cluster")
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "vaultConfig.address")
-	})
-
-	t.Run("address without host", func(t *testing.T) {
-		client := NewHelmManagedClient(
-			nvidiaiov1.EnvTypeProd,
-			dummyFetcher("clusterName: test-backend\noAuthClientId: oauth-client-1\nvaultConfig:\n  address: https://:443", nil),
-			DefaultVaultOAuthClientMountPathTemplate,
-		)
-
-		_, err := client.GetCluster(ctx, "test-cluster")
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "vaultConfig.address")
-	})
+			_, err := client.GetCluster(ctx, "test-cluster")
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "vaultConfig.address")
+		})
+	}
 }
 
 func TestHelmManagedClient_GetCluster_InvalidYAML(t *testing.T) {
