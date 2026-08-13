@@ -69,6 +69,7 @@ import com.nvidia.icms.service.telemetry.TelemetryEventClient;
 import com.nvidia.icms.service.telemetry.TelemetryEventClient.EventMetaData;
 import com.nvidia.icms.service.telemetry.model.Events;
 import com.nvidia.icms.service.telemetry.model.GenericMetric;
+import com.nvidia.icms.service.workers.WorkerIdentifierService;
 import com.nvidia.icms.util.GsonCompatMapper;
 import com.nvidia.icms.util.InstanceStateUtils;
 import com.nvidia.icms.util.TimeUtils;
@@ -117,9 +118,26 @@ public class InstanceUpdateService {
 
     private final IcmsConfigurationProperties icmsConfigurationProperties;
 
+    private final WorkerIdentifierService workerIdentifierService;
+
     /*
      We will not log the healthInfo which contains error logs from container
      */
+    /**
+     * Store or remove the worker-identifier set for an instance.
+     * On terminal status: always clean up (even if workerAuth is absent).
+     * On non-terminal status: store only if workerAuth is present; no-op otherwise.
+     */
+    private void handleWorkerAuth(
+            SpotInstanceStatusUpdateRequest request, String instanceId, String clientId) {
+        if (isInstanceTerminated(request.getStatus())) {
+            workerIdentifierService.deleteWorkerIdentifiers(clientId, instanceId);
+        } else if (request.getWorkerAuth() != null) {
+            workerIdentifierService.storeWorkerIdentifiers(clientId, instanceId,
+                    request.getWorkerAuth());
+        }
+    }
+
     public static SpotInstanceStatusUpdateRequest ignoreSensitiveInformation(
             @NotNull SpotInstanceStatusUpdateRequest statusUpdateRequest) {
         return SpotInstanceStatusUpdateRequest.builder().action(statusUpdateRequest.getAction())
@@ -191,6 +209,10 @@ public class InstanceUpdateService {
         InstanceRequestV2Entity instanceRequestEntity = instanceRequestV2Repository.findRequestById(
                 instanceRequestId).orElseThrow(() -> new IcmsNotFoundException(
                 "Cannot find request with id " + instanceRequestId));
+
+        // Register or clean up worker identifiers for self-hosted clusters.
+        // Must run before the early return on terminal status so cleanup is not skipped.
+        handleWorkerAuth(instanceStatusUpdateRequest, instanceId, clientId);
 
         // Handling terminated state update irrespective of request state
         if (isInstanceTerminated(instanceStatusUpdateRequest.getStatus())) {

@@ -100,11 +100,11 @@ public class NvcaTokenVerificationService {
             this.errorMessage = errorMessage;
         }
 
-        static Outcome active(Jwt jwt, String clusterId) {
+        public static Outcome active(Jwt jwt, String clusterId) {
             return new Outcome(jwt, clusterId, null, null);
         }
 
-        static Outcome reject(RejectReason reason, String message) {
+        public static Outcome reject(RejectReason reason, String message) {
             return new Outcome(null, null, reason, message);
         }
 

@@ -150,6 +150,9 @@ class InstanceUpdateServiceTest {
     @Mock
     IcmsConfigurationProperties icmsConfigurationProperties;
 
+    @Mock
+    com.nvidia.icms.service.workers.WorkerIdentifierService workerIdentifierService;
+
     @Captor
     private ArgumentCaptor<InstanceV2Entity> instanceEntityArgumentCaptor;
 
@@ -168,7 +171,8 @@ class InstanceUpdateServiceTest {
                 functionDeploymentStagesService,
                 clusterRepository,
                 reservationCapacityValidationHelper,
-                icmsConfigurationProperties);
+                icmsConfigurationProperties,
+                workerIdentifierService);
     }
 
     @Test
