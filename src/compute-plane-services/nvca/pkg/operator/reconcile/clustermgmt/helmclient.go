@@ -19,6 +19,9 @@ package clustermgmt
 
 import (
 	"context"
+	"errors"
+	"net/url"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -42,5 +45,28 @@ func NewHelmManagedClient(
 	vaultMountPathTemplate string,
 ) *HelmManagedClient {
 	return &HelmManagedClient{newConfigMapClient(
-		envType, fetcher, vaultMountPathTemplate, withClusterSourceMapper(nvcaoptypes.ClusterSourceHelmManaged))}
+		envType,
+		fetcher,
+		vaultMountPathTemplate,
+		withRequiredHelmManagedVaultAddress(),
+		withClusterSourceMapper(nvcaoptypes.ClusterSourceHelmManaged),
+	)}
+}
+
+// withRequiredHelmManagedVaultAddress rejects enabled Vault configuration that
+// cannot produce a valid token audience or Vault Agent server address.
+func withRequiredHelmManagedVaultAddress() clusterMapper {
+	return func(_ context.Context, _ nvidiaiov1.EnvType, src *clusterDTO, _ *Cluster) error {
+		if !src.vaultEnabled() {
+			return nil
+		}
+
+		address := strings.TrimSpace(src.VaultConfig.Address)
+		parsed, err := url.Parse(address)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" {
+			return errors.New("vaultConfig.address must be an absolute HTTP(S) URL with a non-empty hostname when OAuth is enabled")
+		}
+
+		return nil
+	}
 }
