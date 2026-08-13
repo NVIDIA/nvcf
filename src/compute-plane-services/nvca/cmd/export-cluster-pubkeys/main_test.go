@@ -35,6 +35,7 @@ import (
 	jose "github.com/go-jose/go-jose/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
@@ -279,6 +280,20 @@ func TestRunWithMockStreamer(t *testing.T) {
 			expectedError: false,
 		},
 		{
+			name: "EKS uses jwks_url in YAML output",
+			oidcConfig: `{
+				"issuer": "https://oidc.eks.us-east-2.amazonaws.com/id/ABC123",
+				"id_token_signing_alg_values_supported": ["RS256"],
+				"jwks_uri": "https://oidc.eks.us-east-2.amazonaws.com/id/ABC123/keys"
+			}`,
+			opts: options{
+				outputFormat: "yaml",
+				egressCIDRs:  []string{"10.0.0.0/24"},
+				out:          &bytes.Buffer{},
+			},
+			expectedError: false,
+		},
+		{
 			name: "EKS static pubkeys with force flag",
 			oidcConfig: `{
 				"issuer": "https://oidc.eks.us-east-2.amazonaws.com/id/ABC123",
@@ -334,6 +349,11 @@ func TestRunWithMockStreamer(t *testing.T) {
 						require.NoError(t, json.Unmarshal(buf.Bytes(), &cfg))
 						assert.Equal(t, "https://oidc.eks.us-east-2.amazonaws.com/id/ABC123/keys", cfg.JWKSURL)
 						assert.Empty(t, cfg.PubkeysPEM)
+					case "EKS uses jwks_url in YAML output":
+						var mount vaultJWTMountYAML
+						require.NoError(t, yaml.Unmarshal(buf.Bytes(), &mount))
+						assert.Equal(t, "https://oidc.eks.us-east-2.amazonaws.com/id/ABC123/keys", mount.Config.JWKSURL)
+						assert.Empty(t, mount.Config.PubkeysPEM)
 					case "EKS static pubkeys with force flag":
 						var cfg vaultJWTConfig
 						require.NoError(t, json.Unmarshal(buf.Bytes(), &cfg))
@@ -375,6 +395,24 @@ func TestUseVaultJWKSURL(t *testing.T) {
 			name:     "azure aks issuer",
 			issuer:   "https://westus.oic.prod-aks.azure.com/tenant",
 			jwksURI:  "https://westus.oic.prod-aks.azure.com/tenant/discovery/v2.0/keys",
+			expected: false,
+		},
+		{
+			name:     "EKS jwks host with non-EKS issuer",
+			issuer:   "https://kubernetes.default.svc.cluster.local",
+			jwksURI:  "https://oidc.eks.us-east-2.amazonaws.com/id/ABC123/keys",
+			expected: false,
+		},
+		{
+			name:     "EKS issuer with non-EKS jwks override",
+			issuer:   "https://oidc.eks.us-east-2.amazonaws.com/id/ABC123",
+			jwksURI:  "https://test-server:6443/openid/v1/jwks",
+			expected: false,
+		},
+		{
+			name:     "mismatched EKS region authorities",
+			issuer:   "https://oidc.eks.us-east-2.amazonaws.com/id/ABC123",
+			jwksURI:  "https://oidc.eks.us-west-2.amazonaws.com/id/ABC123/keys",
 			expected: false,
 		},
 	}

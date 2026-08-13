@@ -152,25 +152,30 @@ type vaultJWTConfig struct {
 	PubkeysPEM       []string `json:"jwt_validation_pubkeys,omitempty" yaml:"jwt_validation_pubkeys,omitempty"`
 }
 
+// publicEKSOIDCAuthority returns the normalized HTTPS authority for a public EKS OIDC URL.
+func publicEKSOIDCAuthority(rawURL string) (string, bool) {
+	u, err := url.Parse(rawURL)
+	if err != nil || !u.IsAbs() || u.Scheme != "https" {
+		return "", false
+	}
+
+	host := strings.ToLower(u.Hostname())
+	if !strings.HasPrefix(host, "oidc.eks.") || !strings.HasSuffix(host, ".amazonaws.com") {
+		return "", false
+	}
+
+	if port := u.Port(); port != "" && port != "443" {
+		return host + ":" + port, true
+	}
+	return host, true
+}
+
 // useVaultJWKSURL reports whether Vault should fetch signing keys dynamically from a
 // publicly reachable JWKS endpoint instead of using static jwt_validation_pubkeys.
 func useVaultJWKSURL(issuer, jwksURIStr string) bool {
-	jwksURL, err := url.Parse(jwksURIStr)
-	if err != nil || !jwksURL.IsAbs() || jwksURL.Scheme != "https" {
-		return false
-	}
-
-	host := strings.ToLower(jwksURL.Hostname())
-	if strings.HasPrefix(host, "oidc.eks.") && strings.HasSuffix(host, ".amazonaws.com") {
-		return true
-	}
-
-	issuerURL, err := url.Parse(issuer)
-	if err != nil || issuerURL.Scheme != "https" {
-		return false
-	}
-	issuerHost := strings.ToLower(issuerURL.Hostname())
-	return strings.HasPrefix(issuerHost, "oidc.eks.") && strings.HasSuffix(issuerHost, ".amazonaws.com")
+	issuerAuthority, issuerOK := publicEKSOIDCAuthority(issuer)
+	jwksAuthority, jwksOK := publicEKSOIDCAuthority(jwksURIStr)
+	return issuerOK && jwksOK && issuerAuthority == jwksAuthority
 }
 
 type streamer interface {
