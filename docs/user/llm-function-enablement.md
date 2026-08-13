@@ -190,8 +190,8 @@ mean the router knows the target but has no active eligible backend. Check:
 - The request `model` value uses `<function-id>/<model-name>`.
 - The function's `models[].name` matches the model suffix in the request.
 - `models[].llmConfig.uris` includes the invoked path.
-- `addons.llm.requestRouter.loadBalancer.config` includes the algorithm selected
-  by the function's `models[].llmConfig.routingMethod`.
+- When `addons.llm.requestRouter.loadBalancer.config` is set, it includes the
+  algorithm selected by the function's `models[].llmConfig.routingMethod`.
 - The `llm-worker` sidecar connected to `llm-request-router`.
 - The effective LLM request-router worker address is reachable from the worker
   cluster.
