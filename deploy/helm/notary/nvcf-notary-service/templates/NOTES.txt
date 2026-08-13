@@ -1,0 +1,7 @@
+NVCF Notary Service has been deployed.
+
+Service can be accessed via:
+  HTTP: {{ include "nvcf-notary-service.fullname" . }}.{{ include "nvcf-notary-service.namespace" . }}.svc.cluster.local:8080
+  Management: {{ include "nvcf-notary-service.fullname" . }}.{{ include "nvcf-notary-service.namespace" . }}.svc.cluster.local:8181
+
+For more information about NVCF Notary Service, please refer to the documentation. 
