@@ -65,10 +65,6 @@ public class WorkersController {
                     @ApiResponse(content = @Content(schema = @Schema(hidden = true)),
                             responseCode = "400", description = "Missing or empty token"),
                     @ApiResponse(content = @Content(schema = @Schema(hidden = true)),
-                            responseCode = "401", description = "JWT signature verification failed"),
-                    @ApiResponse(content = @Content(schema = @Schema(hidden = true)),
-                            responseCode = "403", description = "No cluster for the token audience"),
-                    @ApiResponse(content = @Content(schema = @Schema(hidden = true)),
                             responseCode = "404", description = "Feature flag disabled"),
                     @ApiResponse(content = @Content(schema = @Schema(hidden = true)),
                             responseCode = "431", description = "JWT too large")
@@ -118,10 +114,7 @@ public class WorkersController {
             case TOKEN_TOO_LARGE ->
                     ResponseEntity.status(431).body(
                             WorkerTokenIntrospectResponse.inactive(GENERIC_REJECTION_MESSAGE));
-            case UNKNOWN_CLUSTER ->
-                    ResponseEntity.status(403).body(
-                            WorkerTokenIntrospectResponse.inactive(GENERIC_REJECTION_MESSAGE));
-            case MISSING_TOKEN, INVALID_AUDIENCE, SIGNATURE_INVALID ->
+            case MISSING_TOKEN, INVALID_AUDIENCE, UNKNOWN_CLUSTER, SIGNATURE_INVALID ->
                     ResponseEntity.ok(
                             WorkerTokenIntrospectResponse.inactive(GENERIC_REJECTION_MESSAGE));
         };

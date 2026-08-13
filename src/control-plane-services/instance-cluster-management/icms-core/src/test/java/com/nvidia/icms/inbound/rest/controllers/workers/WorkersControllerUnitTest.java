@@ -75,7 +75,7 @@ class WorkersControllerUnitTest {
     }
 
     @Test
-    void introspectWorkerToken_unknownCluster_returns403() {
+    void introspectWorkerToken_unknownCluster_returns200WithActiveFalse() {
         WorkersController controller = controllerWithOidcEnabled(true);
         var request = tokenRequest("tok");
 
@@ -86,7 +86,7 @@ class WorkersControllerUnitTest {
 
         var response = controller.introspectWorkerToken(request);
 
-        assertEquals(403, response.getStatusCode().value());
+        assertEquals(200, response.getStatusCode().value());
         var body = response.getBody();
         assertFalse(body.isActive());
         assertEquals("JWT verification failed", body.getError());
