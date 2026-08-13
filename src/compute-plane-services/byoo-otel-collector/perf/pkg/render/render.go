@@ -49,6 +49,12 @@ type Result struct {
 	Collector corev1.Container
 	// OwnerPod is the name of the pod that hosts the collector.
 	OwnerPod string
+	// OwnerLabels and OwnerAnnotations are the host pod's metadata. The
+	// collector reads its identity env (NVCF_FUNCTION_ID, nca-id, etc.) via
+	// downward-API fieldRefs into these, so the bench pod must carry them or
+	// the collector's startup config generator fails on empty IDs.
+	OwnerLabels      map[string]string
+	OwnerAnnotations map[string]string
 	// Service is the OTLP ClusterIP Service (Helm shape only; nil otherwise).
 	Service *corev1.Service
 	// OTelVersion is the collector config code path ("v1" or "v2") the
@@ -88,6 +94,8 @@ func Render(shape spec.Shape, o spec.Options) (*Result, error) {
 					}
 					res.Collector = *t.Spec.Containers[i].DeepCopy()
 					res.OwnerPod = t.Name
+					res.OwnerLabels = copyStringMap(t.Labels)
+					res.OwnerAnnotations = copyStringMap(t.Annotations)
 					found = true
 				}
 			}
@@ -101,6 +109,16 @@ func Render(shape spec.Shape, o spec.Options) (*Result, error) {
 		return nil, fmt.Errorf("no %q container found in translated %s workload (are telemetries enabled?)", CollectorContainerName, shape)
 	}
 	return res, nil
+}
+
+// copyStringMap returns a shallow copy of m, always non-nil so callers can
+// safely write into the result.
+func copyStringMap(m map[string]string) map[string]string {
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 // HasContainer reports whether any translated pod contains a container with the
@@ -139,11 +157,14 @@ func (r *Result) BenchPod(namespace string) *corev1.Pod {
 	}
 	pod.Name = r.Options.ObjectNameBase + "-collector"
 	pod.Namespace = namespace
-	pod.Labels = map[string]string{
-		common.K8sAppNameLabelKey:              common.ByooOTelCollectorPodNameBase,
-		"app.kubernetes.io/part-of":            "byoo-perf",
-		common.BYOOMetricsEgressTargetLabelKey: common.BYOOMetricsEgressTargetLabelValue,
-	}
+	// Seed with the host pod's identity metadata so the collector's downward-API
+	// env (function-id/version-id labels, nca-id/function-name annotations)
+	// resolves, then overlay the suite's own labels.
+	pod.Labels = copyStringMap(r.OwnerLabels)
+	pod.Annotations = copyStringMap(r.OwnerAnnotations)
+	pod.Labels[common.K8sAppNameLabelKey] = common.ByooOTelCollectorPodNameBase
+	pod.Labels["app.kubernetes.io/part-of"] = "byoo-perf"
+	pod.Labels[common.BYOOMetricsEgressTargetLabelKey] = common.BYOOMetricsEgressTargetLabelValue
 
 	collector := *r.Collector.DeepCopy()
 	pod.Spec.Containers = []corev1.Container{collector}

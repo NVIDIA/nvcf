@@ -265,6 +265,7 @@ CREATE TABLE IF NOT EXISTS sis_api.reservations (
     end_time           timestamp,
     name               text,
     last_updated_time  timestamp,
+    reservation_backup_disabled boolean,
     PRIMARY KEY (reservation_id)
 );
 

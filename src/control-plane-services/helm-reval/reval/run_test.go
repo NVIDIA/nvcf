@@ -30,6 +30,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -39,6 +40,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"syscall"
 	"testing"
 	"text/template"
 	"time"
@@ -47,6 +49,7 @@ import (
 	credhelper "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/imagecredential"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.uber.org/zap/zaptest"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -131,6 +134,10 @@ func TestRun(t *testing.T) {
 	origPlain := plainHTTP
 	plainHTTP = true
 	t.Cleanup(func() { plainHTTP = origPlain })
+
+	origDisable := disableSafeDialer
+	disableSafeDialer = true
+	t.Cleanup(func() { disableSafeDialer = origDisable })
 
 	h, err := NewHandler(logger, "reval", HandlerOptions{})
 	require.NoError(t, err)
@@ -1395,8 +1402,31 @@ func Test_validateHelmChartURL(t *testing.T) {
 	)
 
 	assert.Equal(t,
-		[]error{fmt.Errorf("helm chart URL must be absolute, got \"file:///foo/bar.txt\"")},
+		[]error{
+			fmt.Errorf("helm chart URL must use https or oci scheme, got %q", "file"),
+			fmt.Errorf("helm chart URL must have a host"),
+		},
 		validateHelmChartURL("file:///foo/bar.txt"),
+	)
+
+	assert.Equal(t,
+		[]error{fmt.Errorf("helm chart URL must use https or oci scheme, got %q", "http")},
+		validateHelmChartURL("http://foo.bar"),
+	)
+
+	assert.Equal(t,
+		[]error{
+			fmt.Errorf("helm chart URL must use https or oci scheme, got %q", ""),
+			fmt.Errorf("helm chart URL must have a host"),
+		},
+		validateHelmChartURL(""),
+	)
+
+	// Port without hostname must be rejected; u.Host would be ":443" (non-empty)
+	// but u.Hostname() is empty, so the host check must use Hostname().
+	assert.Equal(t,
+		[]error{fmt.Errorf("helm chart URL must have a host")},
+		validateHelmChartURL("https://:443/chart"),
 	)
 
 	assert.Empty(t,
@@ -1418,6 +1448,264 @@ func Test_validateHelmChartURL(t *testing.T) {
 	assert.Empty(t,
 		validateHelmChartURL("https://helm.stg.ngc.nvidia.com/org"),
 	)
+
+	// Private IPv4 ranges are rejected to prevent SSRF.
+	for _, privateURL := range []string{
+		"https://10.0.0.1/chart",
+		"https://10.255.255.255/chart",
+		"https://172.16.0.1/chart",
+		"https://172.31.255.255/chart",
+		"https://192.168.1.1/chart",
+		"https://192.168.255.255/chart",
+		"https://169.254.169.254/chart",
+		"https://127.0.0.1/chart",
+		"https://127.255.255.255/chart",
+	} {
+		assert.Equal(t,
+			[]error{fmt.Errorf("helm chart URL must not point to private networks")},
+			validateHelmChartURL(privateURL),
+			"expected private URL to be rejected: %s", privateURL,
+		)
+	}
+
+	// Private IPv6 addresses are rejected.
+	assert.Equal(t,
+		[]error{fmt.Errorf("helm chart URL must not point to private networks")},
+		validateHelmChartURL("https://[::1]/chart"),
+	)
+	assert.Equal(t,
+		[]error{fmt.Errorf("helm chart URL must not point to private networks")},
+		validateHelmChartURL("https://[fc00::1]/chart"),
+	)
+	// IPv6 link-local (fe80::/10) and unique-local (fd00::/8) are also rejected.
+	assert.Equal(t,
+		[]error{fmt.Errorf("helm chart URL must not point to private networks")},
+		validateHelmChartURL("https://[fe80::1]/chart"),
+	)
+	assert.Equal(t,
+		[]error{fmt.Errorf("helm chart URL must not point to private networks")},
+		validateHelmChartURL("https://[fd00::1]/chart"),
+	)
+	assert.Equal(t,
+		[]error{fmt.Errorf("helm chart URL must not point to private networks")},
+		validateHelmChartURL("https://[fe80::1%25eth0]/chart"),
+	)
+
+	// Public IPs are allowed.
+	assert.Empty(t, validateHelmChartURL("https://1.2.3.4/chart"))
+	assert.Empty(t, validateHelmChartURL("https://8.8.8.8/chart"))
+}
+
+func Test_isPrivateIP(t *testing.T) {
+	tests := []struct {
+		host    string
+		private bool
+	}{
+		// Private ranges.
+		{"10.0.0.1", true},
+		{"10.255.255.255", true},
+		{"172.16.0.1", true},
+		{"172.31.255.255", true},
+		{"192.168.0.1", true},
+		{"192.168.255.255", true},
+		{"169.254.169.254", true},
+		{"127.0.0.1", true},
+		{"::1", true},
+		{"fc00::1", true},
+		{"fd00::1", true},
+		{"fe80::1", true},
+		{"0.0.0.0", true},
+		{"::", true},
+		{"100.64.0.1", true},
+		{"::1%lo", true},
+		{"fe80::1%eth0", true},
+		// Public addresses.
+		{"1.2.3.4", false},
+		{"8.8.8.8", false},
+		{"172.15.255.255", false},
+		{"172.32.0.0", false},
+		{"2001:db8::1", false},
+		// Hostnames are not IPs and must not be flagged.
+		{"example.com", false},
+		{"helm.ngc.nvidia.com", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		assert.Equal(t, tt.private, isPrivateIP(tt.host), "host: %s", tt.host)
+	}
+}
+
+func Test_newSafeDialContext(t *testing.T) {
+	origLookup := defaultLookupHost
+	t.Cleanup(func() { defaultLookupHost = origLookup })
+
+	dialer := &net.Dialer{
+		Timeout: 1 * time.Second,
+		Control: func(_, _ string, _ syscall.RawConn) error {
+			return fmt.Errorf("outbound dialing disabled by test")
+		},
+	}
+	dial := newSafeDialContext(dialer)
+	ctx := context.Background()
+
+	isSSRFError := func(err error) bool {
+		return err != nil && strings.Contains(err.Error(), "blocked address")
+	}
+
+	tests := []struct {
+		name        string
+		addr        string
+		resolves    []string // non-nil overrides defaultLookupHost for this case
+		wantBlocked bool
+		wantError   string
+	}{
+		// IP literals: blocked before any dial attempt.
+		{name: "loopback v4", addr: "127.0.0.1:443", wantBlocked: true},
+		{name: "private 10/8", addr: "10.0.0.1:443", wantBlocked: true},
+		{name: "private 172.16/12", addr: "172.16.0.1:443", wantBlocked: true},
+		{name: "private 192.168/16", addr: "192.168.1.1:443", wantBlocked: true},
+		{name: "link-local v4", addr: "169.254.169.254:80", wantBlocked: true},
+		{name: "loopback v6", addr: "[::1]:443", wantBlocked: true},
+		{name: "link-local v6 fe80", addr: "[fe80::1]:443", wantBlocked: true},
+		{name: "unique-local v6 fc00", addr: "[fc00::1]:443", wantBlocked: true},
+		{name: "unique-local v6 fd00", addr: "[fd00::1]:443", wantBlocked: true},
+		{name: "zoned loopback v6", addr: "[::1%lo]:443", wantBlocked: true},
+		{name: "zoned link-local v6", addr: "[fe80::1%eth0]:443", wantBlocked: true},
+		// Hostname resolved to private IP: blocked.
+		{name: "hostname to private 10/8", addr: "evil.example.com:443", resolves: []string{"10.0.0.1"}, wantBlocked: true},
+		{name: "hostname to link-local v6", addr: "evil.example.com:443", resolves: []string{"fe80::1"}, wantBlocked: true},
+		// Any private address in a multi-IP response blocks the connection.
+		{name: "hostname to mixed private+public", addr: "evil.example.com:443", resolves: []string{"1.2.3.4", "10.0.0.1"}, wantBlocked: true},
+		{name: "hostname to no addresses", addr: "empty.example.com:443", resolves: []string{}, wantError: "no addresses resolved"},
+		// Public IP literals and hostnames: not blocked by the SSRF check (connection fails for unrelated reasons).
+		{name: "public IP literal", addr: "1.2.3.4:443", wantBlocked: false},
+		{name: "hostname to public IP", addr: "example.com:443", resolves: []string{"1.2.3.4"}, wantBlocked: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.resolves != nil {
+				defaultLookupHost = func(_ context.Context, _ string) ([]string, error) {
+					return tt.resolves, nil
+				}
+			} else {
+				defaultLookupHost = origLookup
+			}
+
+			_, err := dial(ctx, "tcp", tt.addr)
+
+			if tt.wantBlocked {
+				assert.True(t, isSSRFError(err), "expected SSRF block error, got: %v", err)
+			} else if tt.wantError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantError)
+			} else {
+				// Connection may fail (no server), but the reason must not be our SSRF check.
+				assert.False(t, isSSRFError(err), "unexpected SSRF block error: %v", err)
+			}
+		})
+	}
+}
+
+func Test_checkRedirect(t *testing.T) {
+	makeReq := func(rawURL string) *http.Request {
+		u, _ := url.Parse(rawURL)
+		return &http.Request{URL: u}
+	}
+
+	t.Run("blocks private IPv4 redirect", func(t *testing.T) {
+		err := checkRedirect(makeReq("https://10.0.0.1/"), nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "blocked address")
+	})
+
+	t.Run("blocks loopback IPv4 redirect", func(t *testing.T) {
+		err := checkRedirect(makeReq("https://127.0.0.1/"), nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "blocked address")
+	})
+
+	t.Run("blocks IPv6 link-local redirect", func(t *testing.T) {
+		err := checkRedirect(makeReq("https://[fe80::1]/"), nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "blocked address")
+	})
+
+	t.Run("blocks IPv6 loopback redirect", func(t *testing.T) {
+		err := checkRedirect(makeReq("https://[::1]/"), nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "blocked address")
+	})
+
+	t.Run("allows public IP redirect", func(t *testing.T) {
+		err := checkRedirect(makeReq("https://1.2.3.4/"), nil)
+		assert.NoError(t, err)
+	})
+
+	t.Run("allows hostname redirect (DNS check happens at dial time)", func(t *testing.T) {
+		// CheckRedirect only blocks literal private IPs; hostname-based
+		// redirects that resolve to private IPs are caught by the safe DialContext.
+		err := checkRedirect(makeReq("https://internal.corp/"), nil)
+		assert.NoError(t, err)
+	})
+
+	t.Run("blocks HTTPS downgrade", func(t *testing.T) {
+		err := checkRedirect(makeReq("http://1.2.3.4/chart"), nil)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "HTTPS")
+	})
+
+	t.Run("limits redirect count", func(t *testing.T) {
+		via := make([]*http.Request, 10)
+		err := checkRedirect(makeReq("https://1.2.3.4/"), via)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "10 redirects")
+	})
+}
+
+func TestNewHandlerDisablesEnvironmentProxy(t *testing.T) {
+	h, err := NewHandler(zaptest.NewLogger(t), "reval", HandlerOptions{})
+	require.NoError(t, err)
+	assert.Nil(t, h.safeTransport.Proxy)
+	assert.Nil(t, h.helmGetterTransport.Proxy)
+}
+
+func TestNewHandlerInstrumentsOutboundTransports(t *testing.T) {
+	h, err := NewHandler(zaptest.NewLogger(t), "reval", HandlerOptions{})
+	require.NoError(t, err)
+	assert.IsType(t, &otelhttp.Transport{}, h.httpClient.Transport)
+	assert.IsType(t, &otelhttp.Transport{}, h.helmInstrumentedTransport)
+}
+
+func TestShouldTraceOutboundRequest(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want bool
+	}{
+		{name: "plain URL", url: "https://charts.example.com/chart.tgz", want: true},
+		{name: "signed URL", url: "https://storage.example.com/chart.tgz?signature=secret", want: false},
+		{name: "empty query marker", url: "https://charts.example.com/chart.tgz?", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := http.NewRequest(http.MethodGet, tt.url, nil)
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, shouldTraceOutboundRequest(req))
+		})
+	}
+}
+
+func TestHelmGetterTransportRejectsPlainHTTP(t *testing.T) {
+	h, err := NewHandler(zaptest.NewLogger(t), "reval", HandlerOptions{})
+	require.NoError(t, err)
+	req, err := http.NewRequest(http.MethodGet, "http://1.2.3.4/chart", nil)
+	require.NoError(t, err)
+
+	_, err = h.helmGetterTransport.RoundTrip(req)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "HTTPS")
 }
 
 func Test_shouldSkipValidateImages(t *testing.T) {

@@ -387,6 +387,55 @@ class GithubReleaseTest(unittest.TestCase):
             "unknown",
         )
 
+    def test_stale_checkout_is_not_classified_as_no_release(self):
+        # Regression guard for the ess v0.4.10 miss: semantic-release printed
+        # "is behind the remote", the helper called that a no-release, and the
+        # run went green having tagged nothing.
+        behind = (
+            "[semantic-release] i The local branch main is behind the remote one, "
+            "therefore a new version won't be published.\n"
+        )
+        self.assertEqual(
+            self.github_release.resolve_release_outcome(0, behind), "stale-checkout"
+        )
+        self.assertFalse(self.github_release.no_release_output(behind))
+        self.assertTrue(self.github_release.stale_checkout_output(behind))
+        # A genuine no-release must stay a no-release.
+        self.assertEqual(
+            self.github_release.resolve_release_outcome(
+                0, "There are no relevant changes, so no new version is released."
+            ),
+            "no-release",
+        )
+        # A stale checkout that also died is still just untrustworthy.
+        self.assertEqual(self.github_release.resolve_release_outcome(1, behind), "unknown")
+
+    def test_stale_checkout_does_not_fan_out_a_dependency_release(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_java_repo(root)
+            self.commit_framework_change(root)
+            components = self.github_release.java_ci_components(root)
+            service_id, path, _version = self.JAVA_SERVICES[0]
+            service = self.java_service_metadata(service_id, path)
+            behind = (
+                "[semantic-release] i The local branch main is behind the remote one, "
+                "therefore a new version won't be published.\n"
+            )
+
+            output = io.StringIO()
+            with chdir(root), contextlib.redirect_stdout(output):
+                outcome = self.github_release.finish_semantic_release(
+                    root, service, components, 0, behind, dry_run=True, draft=False
+                )
+
+            text = output.getvalue()
+            self.assertEqual(outcome, "stale-checkout")
+            # The no-release path fans out a dependency release; this one must not.
+            self.assertNotIn("would create", text)
+            self.assertNotIn("dependency-triggered", text)
+            self.assertIn("race, not a no-release", text)
+
     def test_failed_semantic_release_run_does_not_fan_out(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -461,6 +510,158 @@ class GithubReleaseTest(unittest.TestCase):
             self.assertIn("byoo-otel-collector-v0.153.6 already exists", output.getvalue())
             self.assertIn("skipping", output.getvalue())
 
+    def _make_service_repo(self, root):
+        self.init_repo(root)
+        (root / "README.md").write_text("root\n")
+        self.commit_all(root, "chore: init")
+        service_dir = root / "deploy/helm/encrypted-secret-store"
+        service_dir.mkdir(parents=True, exist_ok=True)
+        (service_dir / "Chart.yaml").write_text("name: helm-nvcf-ess-api\n")
+        self.commit_all(root, "feat: import ess chart")
+
+    def _tags(self, root):
+        result = subprocess.run(
+            ["git", "tag"], cwd=root, check=True, stdout=subprocess.PIPE, text=True
+        )
+        return sorted(line.strip() for line in result.stdout.splitlines() if line.strip())
+
+    def test_initial_version_anchor_defaults_to_floor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._make_service_repo(root)
+            service = {
+                "id": "ess-helm",
+                "path": "deploy/helm/encrypted-secret-store",
+                "service_name": "helm-nvcf-ess-api",
+            }
+            with chdir(root), contextlib.redirect_stdout(io.StringIO()):
+                self.github_release.synthesize_initial_version_anchor(root, service)
+            self.assertIn("deploy/helm/encrypted-secret-store/v0.0.0", self._tags(root))
+
+    def test_initial_version_anchor_honors_metadata(self):
+        service = {
+            "id": "ess-helm",
+            "path": "deploy/helm/encrypted-secret-store",
+            "service_name": "helm-nvcf-ess-api",
+            "initial_version": "1.7.0",
+        }
+        expected_tag = self.github_release.tag_for_version(service, service["initial_version"])
+        default_floor_tag = self.github_release.tag_for_version(
+            service, self.github_release.INITIAL_RELEASE_FLOOR_VERSION
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._make_service_repo(root)
+            with chdir(root), contextlib.redirect_stdout(io.StringIO()):
+                self.github_release.synthesize_initial_version_anchor(root, service)
+            tags = self._tags(root)
+            self.assertIn(expected_tag, tags)
+            self.assertNotIn(default_floor_tag, tags)
+
+    def test_initial_version_anchor_rejects_bad_semver(self):
+        service = {
+            "id": "ess-helm",
+            "path": "deploy/helm/encrypted-secret-store",
+            "service_name": "helm-nvcf-ess-api",
+            "initial_version": "not-a-version",
+        }
+        with self.assertRaises(SystemExit):
+            self.github_release.initial_floor_version(service)
+
+    def test_initial_version_anchor_rejects_empty_string(self):
+        service = {
+            "id": "ess-helm",
+            "path": "deploy/helm/encrypted-secret-store",
+            "service_name": "helm-nvcf-ess-api",
+            "initial_version": "",
+        }
+        with self.assertRaises(SystemExit):
+            self.github_release.initial_floor_version(service)
+
+    def _make_ct_service_repo(self, root):
+        self.init_repo(root)
+        (root / "README.md").write_text("root\n")
+        self.commit_all(root, "chore: init")
+        service_dir = root / "deploy/helm/cloud-tasks"
+        service_dir.mkdir(parents=True, exist_ok=True)
+        (service_dir / "Chart.yaml").write_text("name: helm-nvcf-nvct-api\n")
+        self.commit_all(root, "feat: import cloud tasks chart")
+
+    def test_cf_initial_version_anchor_defaults_to_floor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._make_ct_service_repo(root)
+            service = {
+                "id": "cloud-tasks-helm",
+                "path": "deploy/helm/cloud-tasks",
+                "service_name": "helm-nvcf-nvct-api",
+            }
+            with chdir(root), contextlib.redirect_stdout(io.StringIO()):
+                self.github_release.synthesize_initial_version_anchor(root, service)
+            self.assertIn("deploy/helm/cloud-tasks/v0.0.0", self._tags(root))
+
+    def test_cf_initial_version_anchor_honors_metadata(self):
+        service = {
+                "id": "cloud-tasks-helm",
+                "path": "deploy/helm/cloud-tasks",
+                "service_name": "helm-nvcf-nvct-api",
+                "initial_version": "1.4.4",
+        }
+        expected_tag = self.github_release.tag_for_version(service, service["initial_version"])
+        default_floor_tag = self.github_release.tag_for_version(
+            service, self.github_release.INITIAL_RELEASE_FLOOR_VERSION
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._make_ct_service_repo(root)
+            with chdir(root), contextlib.redirect_stdout(io.StringIO()):
+                self.github_release.synthesize_initial_version_anchor(root, service)
+            tags = self._tags(root)
+            self.assertIn(expected_tag, tags)
+            self.assertNotIn(default_floor_tag, tags)
+
+    def test_cf_initial_version_anchor_rejects_bad_semver(self):
+        service = {
+            "id": "cloud-tasks-helm",
+            "path": "deploy/helm/cloud-tasks",
+            "service_name": "helm-nvcf-nvct-api",
+            "initial_version": "not-a-version",
+        }
+        with self.assertRaises(SystemExit):
+            self.github_release.initial_floor_version(service)
+
+    def test_cf_initial_version_anchor_rejects_empty_string(self):
+        service = {
+            "id": "cloud-tasks-helm",
+            "path": "deploy/helm/cloud-tasks",
+            "service_name": "helm-nvcf-nvct-api",
+            "initial_version": "",
+        }
+        with self.assertRaises(SystemExit):
+            self.github_release.initial_floor_version(service)
+
+    def test_cloud_tasks_chart_continues_its_published_lineage(self):
+        # This chart migrated in from its own colocated-deploy repo with 11
+        # versions already published as helm-nvcf-nvct-api, the newest 1.4.4.
+        #
+        # Both fields below are load-bearing and both have a plausible wrong
+        # value. Without initial_version the floor is 0.0.0, so the first
+        # release computed here would land below everything already published.
+        # And 1.6.x, the number the chart's own appVersion carries, belongs to
+        # the cloud-tasks service, not to the chart.
+        #
+        # service_name is what the chart is published as. A service-shaped
+        # name would open an empty second chart repo and strand all 11
+        # existing versions while the pipeline still reported success.
+        metadata = json.loads(SCRIPT_PATH.with_name("github-release-subprojects.json").read_text())
+        service = next(s for s in metadata["services"] if s["id"] == "cloud-tasks-helm")
+        self.assertEqual(service["service_name"], "helm-nvcf-nvct-api")
+        self.assertEqual(service["initial_version"], "1.4.4")
+        self.assertEqual(
+            self.github_release.tag_for_version(service, service["initial_version"]),
+            "deploy/helm/cloud-tasks/v1.4.4",
+        )
+
     def test_nvca_branch_cut_uses_path_scoped_release_branch(self):
         service = {
             "id": "nvca",
@@ -480,6 +681,88 @@ class GithubReleaseTest(unittest.TestCase):
             "release-bump/nvca/v3.1-to-v3.2",
         )
         self.assertEqual(self.github_release.next_release_train_version("3.1.0"), "3.2.0")
+
+    def test_linear_release_branch_base_preserves_the_selected_tree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_repo(root)
+            self.write_nvca_version(root, "3.2.0")
+            self.commit_all(root, "seed nvca")
+            main_branch = self.github_release.run(
+                ["git", "branch", "--show-current"], cwd=root, capture=True
+            ).strip()
+
+            git(root, "switch", "-c", "merged-change")
+            (root / "merged.txt").write_text("merged change\n")
+            self.commit_all(root, "fix: merged change")
+
+            git(root, "switch", main_branch)
+            (root / "main.txt").write_text("main change\n")
+            self.commit_all(root, "fix: main change")
+            git(root, "merge", "--no-ff", "merged-change", "-m", "Merge merged-change")
+            (root / "src/compute-plane-services/nvca" / "README.md").write_text("release head\n")
+            self.commit_all(root, "fix(nvca): prepare release")
+
+            base_sha = self.github_release.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, capture=True
+            ).strip()
+            release_base = self.github_release.linear_release_branch_base(root, base_sha)
+
+            self.assertNotEqual(release_base, base_sha)
+            self.assertEqual(
+                self.github_release.commit_tree(root, release_base),
+                self.github_release.commit_tree(root, base_sha),
+            )
+            self.assertEqual(
+                self.github_release.run(
+                    ["git", "rev-list", "--merges", release_base], cwd=root, capture=True
+                ).strip(),
+                "",
+            )
+
+            git(root, "switch", "-c", "release-bump/nvca/v3.2-to-v3.3", release_base)
+            (root / "src/compute-plane-services/nvca" / "VERSION").write_text("3.3.0\n")
+            self.commit_all(root, "chore(nvca): advance release train to v3.3.0")
+            bump_head = self.github_release.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, capture=True
+            ).strip()
+
+            self.assertEqual(
+                self.github_release.run(
+                    ["git", "rev-parse", f"{bump_head}^"], cwd=root, capture=True
+                ).strip(),
+                release_base,
+            )
+            self.assertEqual(
+                self.github_release.run(
+                    ["git", "diff", "--name-only", base_sha, bump_head], cwd=root, capture=True
+                ).strip(),
+                "src/compute-plane-services/nvca/VERSION",
+            )
+            self.assertEqual(
+                self.github_release.run(
+                    ["git", "diff", "--name-only", f"{release_base}...{bump_head}"], cwd=root, capture=True
+                ).strip(),
+                "src/compute-plane-services/nvca/VERSION",
+            )
+            self.assertEqual(
+                self.github_release.run(
+                    ["git", "rev-list", "--merges", bump_head], cwd=root, capture=True
+                ).strip(),
+                "",
+            )
+
+    def test_linear_release_branch_base_keeps_a_linear_base(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_repo(root)
+            self.write_nvca_version(root, "3.2.0")
+            self.commit_all(root, "seed nvca")
+            base_sha = self.github_release.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, capture=True
+            ).strip()
+
+            self.assertEqual(self.github_release.linear_release_branch_base(root, base_sha), base_sha)
 
     def test_dev_prerelease_metadata_supports_branch_cut(self):
         root = SCRIPT_PATH.parents[2]

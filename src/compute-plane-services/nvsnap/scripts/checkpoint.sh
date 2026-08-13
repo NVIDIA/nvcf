@@ -20,6 +20,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/config.sh" 2>/dev/null || true
+source "${SCRIPT_DIR}/lib/agent-auth.sh"
 
 # Agent API port - IMPORTANT: Agent listens on 8081, not 8080!
 AGENT_PORT="${AGENT_PORT:-8081}"
@@ -156,9 +157,19 @@ call_agent_api() {
     local method="$2"
     local endpoint="$3"
     local data="${4:-}"
-    
+    # Callers resolve $agent_pod in the namespace they were given, so the
+    # port-forward and the token Secret have to be read from that same
+    # namespace -- pinning them to $NAMESPACE made a non-default namespace
+    # port-forward to a pod that isn't there and authenticate with the wrong
+    # token.
+    local namespace="${5:-$NAMESPACE}"
+
+    # Empty unless the chart was installed with agent.auth.enabled; without it
+    # every call here returns "unauthorized" under --auth-mode=required.
+    nvsnap_agent_auth_args "$namespace"
+
     # Start port-forward in background (redirect output to avoid contaminating API response)
-    kubectl port-forward -n "$NAMESPACE" "$agent_pod" "${AGENT_PORT}:${AGENT_PORT}" >/dev/null 2>&1 &
+    kubectl port-forward -n "$namespace" "$agent_pod" "${AGENT_PORT}:${AGENT_PORT}" >/dev/null 2>&1 &
     local pf_pid=$!
     trap "kill $pf_pid 2>/dev/null || true" EXIT
 
@@ -166,7 +177,9 @@ call_agent_api() {
     # Port-forward can take time to establish, especially on remote clusters
     local ready=false
     for i in {1..15}; do
-        if timeout 5 curl -s http://localhost:${AGENT_PORT}/v1/checkpoints >/dev/null 2>&1; then
+        # /health, not an API route: it stays unauthenticated in every auth
+        # mode, so this probes the port-forward rather than the credential.
+        if timeout 5 curl -sf http://localhost:${AGENT_PORT}/health >/dev/null 2>&1; then
             ready=true
             break
         fi
@@ -182,10 +195,12 @@ call_agent_api() {
     local max_time="${CHECKPOINT_TIMEOUT:-600}"
     if [[ -n "$data" ]]; then
         curl -s --max-time "$max_time" -X "$method" "http://localhost:${AGENT_PORT}${endpoint}" \
+            "${NVSNAP_AUTH_ARGS[@]}" \
             -H "Content-Type: application/json" \
             -d "$data"
     else
-        curl -s --max-time "$max_time" -X "$method" "http://localhost:${AGENT_PORT}${endpoint}"
+        curl -s --max-time "$max_time" -X "$method" "http://localhost:${AGENT_PORT}${endpoint}" \
+            "${NVSNAP_AUTH_ARGS[@]}"
     fi
     
     # Cleanup
@@ -240,7 +255,7 @@ $capture_path_line
 EOF
 )
 
-    local response=$(call_agent_api "$agent" "POST" "/v1/checkpoint" "$payload")
+    local response=$(call_agent_api "$agent" "POST" "/v1/checkpoint" "$payload" "$namespace")
 
     # Agent may return a structured 422-style redirect when the workload's
     # backend (Riva or Triton) requires the rootfs capture path. The JSON
@@ -295,7 +310,7 @@ cmd_list() {
     fi
     
     echo "Listing checkpoints via agent $agent..."
-    call_agent_api "$agent" "GET" "/v1/checkpoints"
+    call_agent_api "$agent" "GET" "/v1/checkpoints" "" "$namespace"
     echo ""
 }
 

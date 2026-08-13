@@ -288,6 +288,18 @@ def check_collector_health() -> bool:
         logger.error(f"Collector health check error: {str(e)}")
         return False
 
+
+def prepare_task_container() -> bool:
+    while not os.path.exists(ROOT_OUTPUT_DIR):
+        logger.info(f"Waiting for {ROOT_OUTPUT_DIR} to be created")
+        time.sleep(2)
+
+    update_task_progress_file(0, PROGRESS_FILE, "")
+    Thread(target=heartbeat, args=(PROGRESS_FILE,), daemon=True).start()
+
+    return check_collector_health()
+
+
 if __name__ == "__main__":
     # first wait for secrets file to be ready. BYOO requires secrets file
     ACCOUNTS_SECRETS_PATH = os.getenv("ACCOUNTS_SECRETS_PATH", "/var/secrets/accounts-secrets.json")
@@ -295,8 +307,14 @@ if __name__ == "__main__":
         logger.error(f"Secrets file {ACCOUNTS_SECRETS_PATH} not available after maximum retries")
         exit(1)
 
+    try:
+        collector_ready = prepare_task_container()
+    except Exception as e:
+        logger.exception(f"Failed to initialize task progress heartbeat: {e}")
+        exit(1)
+
     # wait for BYOO collector to be ready
-    if check_collector_health() == False:
+    if not collector_ready:
         logger.error("BYOO Collector is not ready, exit")
         exit(1)
 
@@ -322,17 +340,6 @@ if __name__ == "__main__":
     add_metadata = False
     if INCLUDE_METADATA.lower() == "true":
         add_metadata = True
-
-    while not os.path.exists(ROOT_OUTPUT_DIR):
-        logger.info(f"Waiting for {ROOT_OUTPUT_DIR} to be created")
-        time.sleep(2)
-
-    t = Thread(target=heartbeat, args=(PROGRESS_FILE,), daemon=True)
-    try:
-        t.start()
-    except Exception as e:
-        logger.exception(f"Failed to start heartbeat thread: {e}")
-        exit(1)
 
     # start generating dummy results
     for i in range(NUM_OF_RESULTS):

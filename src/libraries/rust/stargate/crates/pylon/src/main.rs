@@ -14,7 +14,9 @@
 // limitations under the License.
 
 use anyhow::Result;
-use pylon_lib::{EngineStatsStreamMode, ModelDiscoveryProvider, TunnelTransportProtocol};
+use pylon_lib::{
+    EngineStatsStreamMode, ModelDiscoveryProvider, TunnelTransportProtocol, UpstreamBackend,
+};
 use stargate_protocol::BackendConnectivity;
 use stargate_protocol::tunnel_contract::HEADER_STARGATE_UPSTREAM_RETRYABLE;
 
@@ -204,6 +206,25 @@ struct Args {
     /// Optional retry-after hint in milliseconds for local queue-mismatch retries
     #[arg(long, env = "PYLON_QUEUE_MISMATCH_RETRY_AFTER_MS", value_name = "MS")]
     pylon_queue_mismatch_retry_after_ms: Option<u64>,
+    /// Engine dialect spoken to the local upstream: "dynamo" derives the
+    /// engine priority headers from x-priority, "passthrough" derives nothing
+    #[arg(
+        long,
+        default_value = "dynamo",
+        env = "PYLON_UPSTREAM_BACKEND",
+        value_name = "BACKEND"
+    )]
+    pylon_upstream_backend: UpstreamBackend,
+    /// Priority band ceiling: x-priority rank 0 maps to this engine value and
+    /// ranks at or beyond it map to the lowest. Dynamo reads the derived
+    /// value as seconds of queue head start.
+    #[arg(
+        long,
+        default_value_t = pylon_lib::DEFAULT_PRIORITY_CEILING,
+        env = "PYLON_PRIORITY_CEILING",
+        value_name = "RANK"
+    )]
+    pylon_priority_ceiling: u32,
     /// Collect post-stream output quality metrics (gibberish checks)
     #[arg(long, default_value_t = false)]
     collect_quality_metrics: bool,
@@ -243,7 +264,7 @@ async fn main() -> Result<()> {
 mod tests {
     use pylon_lib::{
         EngineStatsStreamMode, ModelDiscoveryProvider, PylonQueueMismatchRetryConfig,
-        PylonRetryConfig, TunnelTransportProtocol,
+        PylonRetryConfig, TunnelForwardingConfig, TunnelTransportProtocol,
     };
     use reqwest::header::HeaderName;
 
@@ -411,6 +432,33 @@ mod tests {
         let retry = pylon_retry_config_from_args(&args).expect("retry config should parse");
 
         assert!(retry.retryable_upstream_status_codes.is_empty());
+    }
+
+    #[test]
+    fn pylon_upstream_backend_cli_defaults_match_runtime_defaults() {
+        let args = parse_args("");
+        let defaults = TunnelForwardingConfig::default();
+
+        assert_eq!(args.pylon_upstream_backend, defaults.upstream_backend);
+        assert_eq!(args.pylon_priority_ceiling, defaults.priority_ceiling);
+    }
+
+    #[test]
+    fn pylon_upstream_backend_cli_overrides_are_applied() {
+        let args = parse_argv(&[
+            "--pylon-upstream-backend",
+            "passthrough",
+            "--pylon-priority-ceiling",
+            "600",
+        ]);
+
+        assert_eq!(args.pylon_upstream_backend, UpstreamBackend::Passthrough);
+        assert_eq!(args.pylon_priority_ceiling, 600);
+    }
+
+    #[test]
+    fn pylon_upstream_backend_cli_rejects_unknown_backend() {
+        assert!(try_parse_argv(&["--pylon-upstream-backend", "sglang"]).is_err());
     }
 
     #[test]

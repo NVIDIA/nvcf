@@ -15,12 +15,12 @@
 
 use std::sync::Arc;
 
-use super::groq_multiregion::{GroqMultiregionConfig, GroqMultiregionLoadBalancer};
 use super::power_of_two::PowerOfTwoLoadBalancer;
 use super::pulsar::PulsarLoadBalancer;
-use super::pulsar_multiregion::PulsarMultiregionLoadBalancer;
+use super::pulsar_wait_and_widen::PulsarWaitAndWidenLoadBalancer;
 use super::random::RandomLoadBalancer;
 use super::round_robin::RoundRobinLoadBalancer;
+use super::wait_and_widen::{WaitAndWidenConfig, WaitAndWidenLoadBalancer};
 use super::{LoadBalancer, LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig};
 
 pub fn create_load_balancer_with_config(
@@ -29,24 +29,24 @@ pub fn create_load_balancer_with_config(
     if config.considers_kv_free_tokens()
         && !matches!(
             config.algorithm(),
-            LoadBalancerAlgorithm::Pulsar | LoadBalancerAlgorithm::PulsarMultiregion
+            LoadBalancerAlgorithm::Pulsar | LoadBalancerAlgorithm::PulsarWaitAndWiden
         )
     {
         anyhow::bail!(
-            "consider_kv_free_tokens is supported only for pulsar and pulsar-multiregion"
+            "consider_kv_free_tokens is supported only for pulsar and pulsar-wait-and-widen"
         );
     }
 
     match config.algorithm() {
         LoadBalancerAlgorithm::PowerOfTwo => Ok(Arc::new(PowerOfTwoLoadBalancer)),
-        LoadBalancerAlgorithm::GroqMultiregion => Ok(Arc::new(GroqMultiregionLoadBalancer::new(
-            GroqMultiregionConfig::from_algorithm_config(config),
+        LoadBalancerAlgorithm::WaitAndWiden => Ok(Arc::new(WaitAndWidenLoadBalancer::new(
+            WaitAndWidenConfig::from_algorithm_config(config),
         ))),
         LoadBalancerAlgorithm::RoundRobin => Ok(Arc::new(RoundRobinLoadBalancer::new())),
         LoadBalancerAlgorithm::Random => Ok(Arc::new(RandomLoadBalancer)),
         LoadBalancerAlgorithm::Pulsar => Ok(Arc::new(PulsarLoadBalancer::new(config.clone()))),
-        LoadBalancerAlgorithm::PulsarMultiregion => {
-            Ok(Arc::new(PulsarMultiregionLoadBalancer::new(config.clone())))
-        }
+        LoadBalancerAlgorithm::PulsarWaitAndWiden => Ok(Arc::new(
+            PulsarWaitAndWidenLoadBalancer::new(config.clone()),
+        )),
     }
 }

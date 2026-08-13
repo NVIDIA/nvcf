@@ -104,4 +104,37 @@ class ReservationEntityTest {
         // Act & Assert
         assertFalse(reservation.isActive());
     }
+
+    @Test
+    void isBackupDisabled_WhenFlagIsNull_ReturnsFalse() {
+        // Arrange - rows written before the column existed read back as null
+        ReservationEntity reservation = createReservation(builder ->
+            builder.reservationBackUpDisabled(null)
+        );
+
+        // Act & Assert
+        assertFalse(reservation.isBackupDisabled());
+    }
+
+    @Test
+    void isBackupDisabled_WhenFlagIsFalse_ReturnsFalse() {
+        // Arrange
+        ReservationEntity reservation = createReservation(builder ->
+            builder.reservationBackUpDisabled(false)
+        );
+
+        // Act & Assert
+        assertFalse(reservation.isBackupDisabled());
+    }
+
+    @Test
+    void isBackupDisabled_WhenFlagIsTrue_ReturnsTrue() {
+        // Arrange
+        ReservationEntity reservation = createReservation(builder ->
+            builder.reservationBackUpDisabled(true)
+        );
+
+        // Act & Assert
+        assertTrue(reservation.isBackupDisabled());
+    }
 } 

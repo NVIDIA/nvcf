@@ -79,8 +79,9 @@ the worker address under `api.env`. When the LLM addon is disabled, the stack
 does not pass a staged endpoint to the API chart.
 
 The request router uses `power-of-two` when no load-balancer configuration is
-set. Before a function selects a different routing method, configure the
-effective model algorithm or a request override.
+set, and accepts any supported `routingMethod` from a function. When a
+load-balancer configuration is set, a function can only select an algorithm
+that the configuration enables.
 
 If you mirror images to a registry that does not use the stack's default
 `global.image.registry` and `global.image.repository`, override the
@@ -189,8 +190,8 @@ mean the router knows the target but has no active eligible backend. Check:
 - The request `model` value uses `<function-id>/<model-name>`.
 - The function's `models[].name` matches the model suffix in the request.
 - `models[].llmConfig.uris` includes the invoked path.
-- `addons.llm.requestRouter.loadBalancer.config` includes the algorithm selected
-  by the function's `models[].llmConfig.routingMethod`.
+- When `addons.llm.requestRouter.loadBalancer.config` is set, it includes the
+  algorithm selected by the function's `models[].llmConfig.routingMethod`.
 - The `llm-worker` sidecar connected to `llm-request-router`.
 - The effective LLM request-router worker address is reachable from the worker
   cluster.

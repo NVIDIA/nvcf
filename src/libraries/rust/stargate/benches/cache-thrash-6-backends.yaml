@@ -67,9 +67,9 @@ algorithms:
   - name: power-of-two
     config:
       default: power-of-two
-  - name: groq-multiregion
+  - name: wait-and-widen
     config:
-      default: groq-multiregion
+      default: wait-and-widen
   - name: pulsar
     config:
       default: power-of-two
@@ -88,21 +88,21 @@ algorithms:
           seed: cache-thrash-v1
           require_cache_affinity_key: true
           consider_kv_free_tokens: true
-  - name: pulsar-multiregion
+  - name: pulsar-wait-and-widen
     config:
       default: power-of-two
       models:
         dummy-model:
-          algorithm: pulsar-multiregion
+          algorithm: pulsar-wait-and-widen
           seed: cache-thrash-v1
           require_cache_affinity_key: true
           require_input_tokens: true
-  - name: pulsar-multiregion-consider-kv-free-tokens
+  - name: pulsar-wait-and-widen-consider-kv-free-tokens
     config:
       default: power-of-two
       models:
         dummy-model:
-          algorithm: pulsar-multiregion
+          algorithm: pulsar-wait-and-widen
           seed: cache-thrash-v1
           require_cache_affinity_key: true
           consider_kv_free_tokens: true

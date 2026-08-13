@@ -804,14 +804,14 @@ action: pause_backend
         yaml["algorithms"] = serde_yaml_ng::from_str(
             r#"
 - name: queue-admission-enabled
-  config: { default: groq-multiregion }
+  config: { default: wait-and-widen }
   pylon_queue_admission:
     enabled: true
     min_delta_ms: 0
     tolerance_factor: 1.0
     retry_after_ms: 5
 - name: queue-admission-disabled
-  config: { default: groq-multiregion }
+  config: { default: wait-and-widen }
   pylon_queue_admission:
     enabled: false
     min_delta_ms: 0

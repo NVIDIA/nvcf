@@ -4,7 +4,7 @@ Stargate selects one load-balancing algorithm for each model. A request can
 select another preconfigured algorithm through a trusted header.
 
 This page defines the `lb-config.json` schema and the behavior of
-`groq-multiregion`, `pulsar`, and `pulsar-multiregion`. Deployment systems own
+`wait-and-widen`, `pulsar`, and `pulsar-wait-and-widen`. Deployment systems own
 the file mount and the `--lb-config-path` argument.
 
 ## Load the configuration
@@ -15,11 +15,14 @@ Start Stargate with an optional JSON file:
 --lb-config-path=/config/lb-config.json
 ```
 
-When the argument is absent, Stargate uses `power-of-two` for every model.
-When the argument is present, Stargate reads and validates the file during
-startup. A missing file, invalid JSON, unknown top-level field, unsupported
-algorithm field, or invalid algorithm factory configuration prevents startup.
-Stargate does not reload the file after startup.
+When the argument is absent, Stargate uses `power-of-two` for every model and
+accepts a routing-method override when it is in the allowlist of built-in
+algorithms, each with its default settings. When the argument is present, the
+file defines the allowlist.
+Stargate reads and validates the file during startup. A missing file, invalid
+JSON, unknown top-level field, unsupported algorithm field, or invalid
+algorithm factory configuration prevents startup. Stargate does not reload
+the file after startup.
 
 ## Schema
 
@@ -31,8 +34,14 @@ The top-level object has three fields:
 | `request_algorithms` | object | `{}` | Algorithms that `x-routing-method` may select for every model. |
 | `models` | object | `{}` | Exact model ID to algorithm configuration. |
 
-Valid algorithm names are `power-of-two`, `groq-multiregion`, `round-robin`,
-`random`, `pulsar`, and `pulsar-multiregion`.
+Valid algorithm names are `power-of-two`, `wait-and-widen`, `round-robin`,
+`random`, `pulsar`, and `pulsar-wait-and-widen`.
+
+For backward compatibility, Stargate also accepts `groq-multiregion` as an
+alias for `wait-and-widen` and `pulsar-multiregion` as an alias for
+`pulsar-wait-and-widen` in `default`, `models`, `request_algorithms`, detailed
+algorithm objects, and routing-method overrides. Use the canonical names for
+new configurations.
 
 An entry in `models` or `request_algorithms` can be an algorithm name:
 
@@ -40,7 +49,7 @@ An entry in `models` or `request_algorithms` can be an algorithm name:
 {
   "default": "power-of-two",
   "models": {
-    "model-a": "groq-multiregion"
+    "model-a": "wait-and-widen"
   }
 }
 ```
@@ -52,7 +61,7 @@ Use a detailed object to set algorithm fields:
   "default": "power-of-two",
   "models": {
     "model-a": {
-      "algorithm": "groq-multiregion",
+      "algorithm": "wait-and-widen",
       "require_cache_affinity_key": true
     }
   }
@@ -98,17 +107,17 @@ Choose based on the routing goal and available backend statistics:
 
 | Goal | Algorithm | Required backend signals |
 | --- | --- | --- |
-| Minimize estimated time to first token across heterogeneous or remote clusters. | `groq-multiregion` | Forwarded health RTT and model statistics. Valid `last_mean_input_tps` is needed when queued or request input work is nonzero. |
+| Minimize estimated time to first token across heterogeneous or remote clusters. | `wait-and-widen` | Forwarded health RTT and model statistics. Valid `last_mean_input_tps` is needed when queued or request input work is nonzero. |
 | Keep the same prefix on a stable, capacity-weighted cluster. | `pulsar` | Positive finite `last_mean_input_tps` for every participating cluster. |
-| Keep Pulsar affinity when possible, but escape to lower-latency capacity when the primary cannot meet queue policy. | `pulsar-multiregion` | Pulsar capacity plus the RTT and queue statistics used by `groq-multiregion`. |
+| Keep Pulsar affinity when possible, but escape to lower-latency capacity when the primary cannot meet queue policy. | `pulsar-wait-and-widen` | Pulsar capacity plus the RTT and queue statistics used by `wait-and-widen`. |
 
 Use `power-of-two` when these statistics or affinity requirements are not
 available. Use `round-robin` for deterministic cycling and `random` for uniform
 random selection.
 
-## `groq-multiregion`
+## `wait-and-widen`
 
-`groq-multiregion` estimates time to first token (TTFT) as:
+`wait-and-widen` estimates time to first token (TTFT) as:
 
 ```text
 forwarded health RTT + queue delay + request prefill time
@@ -137,7 +146,7 @@ Minimal configuration:
   "default": "power-of-two",
   "models": {
     "model-a": {
-      "algorithm": "groq-multiregion",
+      "algorithm": "wait-and-widen",
       "require_cache_affinity_key": true,
       "cache_affinity_backend_selection_count": 2
     }
@@ -172,14 +181,14 @@ Minimal configuration:
 }
 ```
 
-## `pulsar-multiregion`
+## `pulsar-wait-and-widen`
 
-`pulsar-multiregion` combines Pulsar ranking with Groq multiregion fallback.
+`pulsar-wait-and-widen` combines Pulsar ranking with the WaitAndWiden fallback.
 Without queue-SLO fields, an eligible Pulsar primary wins immediately.
 
 When queue-SLO fields are enabled or the primary is ineligible, the algorithm
 checks the primary and then exponentially wider ranking bands of 2, 4, 8, and
-so on. Within each band, `groq-multiregion` selects an eligible candidate.
+so on. Within each band, `wait-and-widen` selects an eligible candidate.
 
 Minimal configuration:
 
@@ -188,7 +197,7 @@ Minimal configuration:
   "default": "power-of-two",
   "models": {
     "model-a": {
-      "algorithm": "pulsar-multiregion",
+      "algorithm": "pulsar-wait-and-widen",
       "seed": "model-a-v1",
       "require_cache_affinity_key": true,
       "max_queue_time_floor_ms": 500,
@@ -200,21 +209,21 @@ Minimal configuration:
 
 ## Algorithm fields
 
-`groq-multiregion` supports these cache-affinity fields:
+`wait-and-widen` supports these cache-affinity fields:
 
 | Field | Type | Default | Constraint and effect |
 | --- | --- | --- | --- |
 | `cache_affinity_virtual_nodes` | unsigned integer | `150` | Virtual nodes per cluster. `0` is normalized to `1`. |
 | `cache_affinity_backend_selection_count` | unsigned integer | unset | Enables the affinity subset. `0` disables it. Values above the candidate count select all candidates. |
 
-These fields are accepted in `pulsar-multiregion` JSON but do not affect its
+These fields are accepted in `pulsar-wait-and-widen` JSON but do not affect its
 selection. Pulsar ranking supplies that algorithm's affinity.
 
-`groq-multiregion` and `pulsar-multiregion` support these multiregion fields:
+`wait-and-widen` and `pulsar-wait-and-widen` support these wait-and-widen fields:
 
 | Field | Type | Default | Constraint and effect |
 | --- | --- | --- | --- |
-| `seed` | string | empty | Changes Groq affinity hashing or Pulsar multiregion ranking. Keep it stable across replicas that should make the same choice. |
+| `seed` | string | empty | Changes WaitAndWiden affinity hashing or Pulsar wait-and-widen ranking. Keep it stable across replicas that should make the same choice. |
 | `max_queue_time_floor_ms` | unsigned integer | unset | Queue-SLO lower bound. Has an effect only when `max_queue_time_ceil_ms` is also set. |
 | `max_queue_time_ceil_ms` | unsigned integer | unset | Queue-SLO upper bound. Has an effect only when `max_queue_time_floor_ms` is also set. |
 | `ttft_bucket_size_ms` | unsigned integer | `20` | Maximum TTFT difference within one bucket. |
@@ -240,7 +249,7 @@ bounds, so set the floor less than or equal to the ceiling.
 | `seed` | string | empty | Changes the rendezvous ranking. Keep it stable across replicas. |
 | `consider_kv_free_tokens` | boolean | `false` | Requires KV-cache values to be reported and skips candidates with fewer free tokens than the request input-token estimate. |
 
-`pulsar-multiregion` supports both multiregion fields and
+`pulsar-wait-and-widen` supports both wait-and-widen fields and
 `consider_kv_free_tokens`.
 
 ## Request algorithm overrides
@@ -251,14 +260,14 @@ Preconfigure every algorithm that a request may select:
 {
   "default": "power-of-two",
   "request_algorithms": {
-    "groq-multiregion": "groq-multiregion",
+    "wait-and-widen": "wait-and-widen",
     "pulsar": {
       "algorithm": "pulsar",
       "seed": "request-routing-v1",
       "require_cache_affinity_key": true
     },
-    "pulsar-multiregion": {
-      "algorithm": "pulsar-multiregion",
+    "pulsar-wait-and-widen": {
+      "algorithm": "pulsar-wait-and-widen",
       "seed": "request-routing-v1",
       "require_cache_affinity_key": true
     }
@@ -273,8 +282,8 @@ x-routing-method: pulsar
 ```
 
 Header values are trimmed, converted to lowercase, and normalized from
-underscores to hyphens. For example, `pulsar_multiregion` selects
-`pulsar-multiregion`.
+underscores to hyphens. For example, `pulsar_wait_and_widen` selects
+`pulsar-wait-and-widen`.
 
 An absent header uses the configured model algorithm. A blank, invalid UTF-8,
 unknown, or known but unconfigured value returns HTTP `400`. A model-specific
@@ -309,10 +318,10 @@ contract.
 
 Algorithm fallback is part of load-balancer selection:
 
-- Groq later-bucket fallback depends on elapsed request time.
+- WaitAndWiden later-bucket fallback depends on elapsed request time.
 - Pulsar fallback walks the stable ranking after exclusions or optional KV
   filtering.
-- Pulsar multiregion fallback widens ranking bands and runs Groq selection
+- Pulsar wait-and-widen fallback widens ranking bands and runs WaitAndWiden selection
   within each band.
 
 Proxy retries can exclude a backend or cluster and run selection again. See
@@ -347,9 +356,9 @@ for metric names, labels, and descriptions.
 - `crates/stargate/src/load_balancer/config.rs`
 - `crates/stargate/src/load_balancer/factory.rs`
 - `crates/stargate/src/load_balancer/router.rs`
-- `crates/stargate/src/load_balancer/groq_multiregion.rs`
+- `crates/stargate/src/load_balancer/wait_and_widen.rs`
 - `crates/stargate/src/load_balancer/pulsar.rs`
-- `crates/stargate/src/load_balancer/pulsar_multiregion.rs`
+- `crates/stargate/src/load_balancer/pulsar_wait_and_widen.rs`
 - `crates/stargate/src/http_proxy/`
 - `crates/stargate/src/metrics.rs`
 - `benches/`
