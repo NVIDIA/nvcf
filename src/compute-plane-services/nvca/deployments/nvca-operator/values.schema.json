@@ -585,6 +585,11 @@
         "vaultConfig": {
             "type": "object",
             "properties": {
+                "address": {
+                    "type": "string",
+                    "description": "Vault server URL for Helm-managed clusters. Required when helmManaged.oAuthClientID is set; must be HTTP(S), without credentials, query, or fragment.",
+                    "default": ""
+                },
                 "oAuthClientMountPathTemplate": {
                     "type": "string",
                     "description": "Template for constructing the OAuth client mount path in Vault. Use %s as placeholder for clientID. Example: \"nvidia/services/oauth/clients/%s/kv/secret\"",
