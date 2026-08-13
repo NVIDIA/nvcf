@@ -92,8 +92,13 @@ jobs:
           # Service subtrees are src/<plane>/<service>; take that prefix from
           # every changed file and require exactly one, because a dev image is
           # for one service and guessing between several would be wrong.
+          # Three dots, not two: compare the merge base of the two commits with
+          # the head, so only this PR's own changes are considered. A two-dot
+          # diff also reports whatever landed on the base branch after this PR
+          # forked, so an unrelated service merging to main would make a
+          # single-service PR look like a multi-service one and skip its image.
           mapfile -t subtrees < <(
-            git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" \
+            git diff --name-only "${BASE_SHA}...${HEAD_SHA}" \
               | grep -E '^src/[^/]+/[^/]+/' \
               | cut -d/ -f1-3 | sort -u
           )
