@@ -21,7 +21,6 @@ Feature: Install local Helmfile observability with the control profile
       | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | observability.profile           | control                              |
-      | functionAutoscaler.chartVersion | 0.2.0                                |
       | functionAutoscaler.image.tag    | 1.18.10                              |
     # Set the shared observability stack environment.
     And I copy the file "tests/bdd/fixtures/self-managed-local-bdd.yaml" to "deploy/stacks/observability/environments/local-bdd-observability-control.yaml"
