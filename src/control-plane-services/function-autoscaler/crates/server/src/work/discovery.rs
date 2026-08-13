@@ -185,15 +185,20 @@ fn get_timeseries_db_query(
     template.replace("{env_filter}", &selector)
 }
 
-fn llm_gateway_discovery_query(shard: DiscoveryShard) -> String {
+fn llm_gateway_discovery_query(env: &str, ignore_env: bool, shard: DiscoveryShard) -> String {
     let function_id_regex = shard.function_id_regex();
+    let env_matcher = if ignore_env {
+        String::new()
+    } else {
+        format!(r#", aws_env="{}""#, env)
+    };
     format!(
         r#"(sum by(function_id) (
-            increase(llm_api_gateway_http_request_duration_seconds_sum{{function_id=~"{function_id_regex}", function_id!="none"}}[5m])
+            increase(llm_api_gateway_http_requests_total{{function_id=~"{function_id_regex}", function_id!="none"{env_matcher}}}[5m])
         ) > 0)
         * on(function_id) group_right(function_version_id, nca_id)
         max by(function_id, function_version_id, nca_id) (
-            nvcf_function_info{{function_id=~"{function_id_regex}"}}
+            nvcf_function_info{{function_id=~"{function_id_regex}"{env_matcher}}}
         )"#
     )
 }
@@ -238,7 +243,7 @@ fn recent_invocation_queries(
             queries.push(RecentInvocationQuery {
                 source: InvocationMetricSource::LlmGateway,
                 shard: Some(shard),
-                query: llm_gateway_discovery_query(shard),
+                query: llm_gateway_discovery_query(env, ignore_env, shard),
             });
         }
     }
@@ -992,12 +997,24 @@ mod tests {
             for query in shard_queries {
                 if matches!(query.source, InvocationMetricSource::LlmGateway) {
                     assert_eq!(query.query.matches(&matcher).count(), 2);
-                    assert!(!query.query.contains(r#"aws_env="prd""#));
+                    assert_eq!(query.query.matches(r#"aws_env="prd""#).count(), 2);
+                    assert!(query.query.contains("llm_api_gateway_http_requests_total"));
                 } else {
                     assert_eq!(query.query.matches(&matcher).count(), 4);
                     assert_eq!(query.query.matches(r#"aws_env="prd""#).count(), 4);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn gateway_discovery_omits_environment_when_configured() {
+        let queries = recent_invocation_queries("stg", true, None);
+        for query in queries
+            .iter()
+            .filter(|query| matches!(query.source, InvocationMetricSource::LlmGateway))
+        {
+            assert!(!query.query.contains("aws_env"));
         }
     }
 

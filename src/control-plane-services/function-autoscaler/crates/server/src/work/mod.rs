@@ -105,11 +105,16 @@ async fn get_function_utilization_history(
     let start_time = end_time - Duration::minutes(lookback_minutes);
     let step = TIMESERIES_DB_QUERY_STEP;
 
-    let env_suffix = if ignore_env {
+    let environment_suffix = if ignore_env {
         String::new()
     } else {
         let env_val = if env == "stg" { "stage" } else { "prod" };
         format!(", environment=\"{}\"", env_val)
+    };
+    let aws_env_suffix = if ignore_env {
+        String::new()
+    } else {
+        format!(", aws_env=\"{}\"", env)
     };
 
     let query = match metric_source {
@@ -118,24 +123,28 @@ async fn get_function_utilization_history(
             (avg by(function_id, function_version_id, nca_id) (nvcf_function_instances_current{{function_id="{id}", function_version_id="{v_id}"{env}}}) * avg by(function_id, function_version_id, nca_id) (nvcf_function_concurrency{{function_id="{id}", function_version_id="{v_id}"{env}}})) or vector(0)"#,
             id = function_id,
             v_id = function_version_id,
-            env = env_suffix
+            env = environment_suffix
         ),
         MetricSource::WorkerThreads => format!(
             r#"((sum by(function_id, function_version_id, nca_id) (increase(nvcf_worker_service_worker_thread_busy_seconds_total{{function_id="{id}", function_version_id="{v_id}"{env}}}[{window}s]))) / {window} * 100) /
             (sum by(function_id, function_version_id, nca_id) (nvcf_worker_service_worker_thread_count_total{{function_id="{id}", function_version_id="{v_id}"{env}}}))"#,
             id = function_id,
             v_id = function_version_id,
-            env = env_suffix,
+            env = environment_suffix,
             window = utilization_window_seconds
         ),
         MetricSource::LlmGateway => {
             // Little's Law: average duration * request rate collapses to the
             // per-second rate of the duration sum.
             format!(
-                r#"100 * sum by(function_id) (rate(llm_api_gateway_http_request_duration_seconds_sum{{function_id="{id}"}}[2m])) /
-                clamp_min(sum by(function_id) (nvcf_function_instances_current{{function_id="{id}"{env}}}), 1)"#,
+                r#"100 * sum by(function_id) (rate(llm_api_gateway_http_request_duration_seconds_sum{{function_id="{id}"{aws_env}}}[2m])) /
+                clamp_min(sum by(function_id) (
+                    max by(function_id, function_version_id) (nvcf_function_instances_current{{function_id="{id}"{aws_env}}})
+                    * on(function_id, function_version_id)
+                    max by(function_id, function_version_id) (nvcf_function_concurrency{{function_id="{id}"{aws_env}}})
+                ), 1)"#,
                 id = function_id,
-                env = env_suffix,
+                aws_env = aws_env_suffix,
             )
         }
     };
@@ -300,11 +309,17 @@ async fn get_byoc_instance_count(
 async fn llm_gateway_metrics_present(
     timeseries_db_client: &TimeseriesDbClient,
     function_id: &Uuid,
+    env: &str,
+    ignore_env: bool,
 ) -> Result<bool> {
     let end_time = Utc::now();
+    let env_suffix = if ignore_env {
+        String::new()
+    } else {
+        format!(r#", aws_env="{}""#, env)
+    };
     let query = format!(
-        r#"count by(function_id) (llm_api_gateway_http_requests_total{{function_id="{}"}})"#,
-        function_id
+        r#"count by(function_id) (llm_api_gateway_http_requests_total{{function_id="{function_id}"{env_suffix}}})"#,
     );
     let response = timeseries_db_client
         .query_range(
@@ -353,16 +368,24 @@ fn gateway_target_desired_instances(
 async fn get_gateway_target(
     timeseries_db_client: &TimeseriesDbClient,
     function_id: &Uuid,
+    env: &str,
+    ignore_env: bool,
     routing_cache: &MetricRoutingCache,
 ) -> Result<GatewayTarget> {
     let end_time = Utc::now();
+    let env_suffix = if ignore_env {
+        String::new()
+    } else {
+        format!(r#", aws_env="{}""#, env)
+    };
     let query = format!(
-        r#"((max by(function_id, function_version_id) (nvcf_function_instances_current{{function_id="{id}"}}))
+        r#"((max by(function_id, function_version_id) (nvcf_function_instances_current{{function_id="{id}"{env}}}))
         * on(function_id, function_version_id) group_left(nca_id)
-        max by(function_id, function_version_id, nca_id) (nvcf_function_info{{function_id="{id}"}}))
+        max by(function_id, function_version_id, nca_id) (nvcf_function_info{{function_id="{id}"{env}}}))
         or
-        (max by(function_id, function_version_id, nca_id) (nvcf_function_info{{function_id="{id}"}}) * 0)"#,
+        (max by(function_id, function_version_id, nca_id) (nvcf_function_info{{function_id="{id}"{env}}}) * 0)"#,
         id = function_id,
+        env = env_suffix,
     );
     let response = timeseries_db_client
         .query_range(
@@ -419,12 +442,19 @@ async fn get_gateway_target(
 async fn llm_gateway_recently_invoked(
     timeseries_db_client: &TimeseriesDbClient,
     function_id: &Uuid,
-    lookback_minutes: i64,
+    lookback_seconds: u64,
+    env: &str,
+    ignore_env: bool,
 ) -> Result<bool> {
     let end_time = Utc::now();
+    let lookback_seconds = lookback_seconds.max(1);
+    let env_suffix = if ignore_env {
+        String::new()
+    } else {
+        format!(r#", aws_env="{}""#, env)
+    };
     let query = format!(
-        r#"sum by(function_id) (increase(llm_api_gateway_http_request_duration_seconds_sum{{function_id="{}"}}[{}m])) > 0"#,
-        function_id, lookback_minutes
+        r#"sum by(function_id) (increase(llm_api_gateway_http_requests_total{{function_id="{function_id}"{env_suffix}}}[{lookback_seconds}s])) > 0"#,
     );
     let response = timeseries_db_client
         .query_range(
@@ -539,12 +569,18 @@ async fn gather_scaling_inputs(
         {
             Ok(Some(count)) => current_instances = count,
             Ok(None) if cached_source.is_none() => {
-                metric_source =
-                    if llm_gateway_metrics_present(timeseries_db_client, function_id).await? {
-                        MetricSource::LlmGateway
-                    } else {
-                        MetricSource::ControlPlane
-                    };
+                metric_source = if llm_gateway_metrics_present(
+                    timeseries_db_client,
+                    function_id,
+                    env,
+                    ignore_env,
+                )
+                .await?
+                {
+                    MetricSource::LlmGateway
+                } else {
+                    MetricSource::ControlPlane
+                };
             }
             Ok(None) => {}
             Err(error) => {
@@ -563,8 +599,14 @@ async fn gather_scaling_inputs(
     match metric_source {
         MetricSource::WorkerThreads => {}
         MetricSource::LlmGateway => {
-            let target =
-                get_gateway_target(timeseries_db_client, function_id, routing_cache).await?;
+            let target = get_gateway_target(
+                timeseries_db_client,
+                function_id,
+                env,
+                ignore_env,
+                routing_cache,
+            )
+            .await?;
             current_instances = target.total_current_instances;
             gateway_target = Some(target);
         }
@@ -610,7 +652,9 @@ async fn gather_scaling_inputs(
         llm_gateway_recently_invoked(
             timeseries_db_client,
             function_id,
-            scaling_settings.scale_to_zero_idle_timeout.as_secs() as i64 / 60,
+            scaling_settings.scale_to_zero_idle_timeout.as_secs(),
+            env,
+            ignore_env,
         )
         .await?
     } else {
@@ -1182,6 +1226,7 @@ mod tests {
             .match_query(mockito::Matcher::Regex("http_requests_total".into()))
             .with_status(200)
             .with_body(vm_series(&format!(r#""function_id":"{fid}""#), "1"))
+            .expect_at_least(2)
             .create_async()
             .await;
         let versions = format!(
@@ -1204,7 +1249,6 @@ mod tests {
             ))
             .with_status(200)
             .with_body(vm_series(&format!(r#""function_id":"{fid}""#), "25"))
-            .expect_at_least(2)
             .create_async()
             .await;
 
@@ -1217,6 +1261,98 @@ mod tests {
         let target = gathered.gateway_target.expect("gateway target");
         assert_eq!(target.function_version_id, active_version);
         assert_eq!(target.nca_id, "nca");
+    }
+
+    #[tokio::test]
+    async fn gateway_queries_use_aws_env_concurrency_and_request_counter() {
+        let fid = Uuid::new_v4();
+        let fvid = Uuid::new_v4();
+        let mut server = mockito::Server::new_async().await;
+        let function_series = vm_series(&format!(r#""function_id":"{fid}""#), "1");
+
+        let _present = server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::Regex("count.*http_requests_total".into()),
+                mockito::Matcher::Regex("aws_env.*stg".into()),
+            ]))
+            .with_status(200)
+            .with_body(function_series.clone())
+            .create_async()
+            .await;
+        assert!(
+            llm_gateway_metrics_present(&ts_client(server.url()), &fid, "stg", false)
+                .await
+                .expect("gateway presence query")
+        );
+
+        let _target = server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::Regex("nvcf_function_info".into()),
+                mockito::Matcher::Regex("aws_env.*stg".into()),
+            ]))
+            .with_status(200)
+            .with_body(vm_series(
+                &format!(r#""function_id":"{fid}","function_version_id":"{fvid}","nca_id":"nca""#),
+                "1",
+            ))
+            .create_async()
+            .await;
+        let target = get_gateway_target(
+            &ts_client(server.url()),
+            &fid,
+            "stg",
+            false,
+            &new_metric_routing_cache(),
+        )
+        .await
+        .expect("gateway target query");
+        assert_eq!(target.function_version_id, fvid);
+
+        let _utilization = server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::Regex("http_request_duration_seconds_sum".into()),
+                mockito::Matcher::Regex("nvcf_function_concurrency".into()),
+                mockito::Matcher::Regex("aws_env.*stg".into()),
+            ]))
+            .with_status(200)
+            .with_body(function_series.clone())
+            .create_async()
+            .await;
+        assert_eq!(
+            get_function_utilization_history(
+                &ts_client(server.url()),
+                &fid,
+                &fvid,
+                "stg",
+                MetricSource::LlmGateway,
+                false,
+                5,
+                70,
+            )
+            .await
+            .expect("gateway utilization query"),
+            vec![(1700000000, "1".to_string())]
+        );
+
+        let _recent = server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::Regex("increase.*http_requests_total".into()),
+                mockito::Matcher::Regex("aws_env.*stg".into()),
+                mockito::Matcher::Regex("1s".into()),
+            ]))
+            .with_status(200)
+            .with_body(function_series)
+            .create_async()
+            .await;
+        assert!(
+            llm_gateway_recently_invoked(&ts_client(server.url()), &fid, 0, "stg", false)
+                .await
+                .expect("gateway recent invocation query")
+        );
     }
 
     /// No worker or gateway series -> fall back to control-plane metrics.
