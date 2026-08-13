@@ -568,6 +568,10 @@ rateLimiter:
   env:
     OTEL_EXPORTER_OTLP_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
   {{- end }}
+  {{- with dig "rateLimiter" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 
 ess:
   fullnameOverride: ess-api
@@ -591,6 +595,10 @@ ess:
     {{- if .Values.global.observability.tracing.enabled }}
     MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
     {{- end }}
+  {{- with dig "ess" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 
 notary:
   fullnameOverride: notary-service

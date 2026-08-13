@@ -14,6 +14,14 @@
 # limitations under the License.
 
 {{- if .Values.invocation.podDisruptionBudget.enabled }}
+{{- $pdbMinAvail := .Values.invocation.podDisruptionBudget.minAvailable | toString }}
+{{- $pdbMaxUnavail := .Values.invocation.podDisruptionBudget.maxUnavailable | toString }}
+{{- if and (ne $pdbMinAvail "") (ne $pdbMaxUnavail "") }}
+{{- fail "podDisruptionBudget: set exactly one of minAvailable or maxUnavailable, not both" }}
+{{- end }}
+{{- if and (eq $pdbMinAvail "") (eq $pdbMaxUnavail "") }}
+{{- fail "podDisruptionBudget: set exactly one of minAvailable or maxUnavailable" }}
+{{- end }}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
@@ -21,9 +29,9 @@ metadata:
   namespace: {{ include "nvcf-invocation-service.namespace" . }}
   labels: {{- include "nvcf-invocation-service.labels" . | nindent 4 }}
 spec:
-  {{- if .Values.invocation.podDisruptionBudget.minAvailable }}
+  {{- if ne $pdbMinAvail "" }}
   minAvailable: {{ .Values.invocation.podDisruptionBudget.minAvailable }}
-  {{- else if .Values.invocation.podDisruptionBudget.maxUnavailable }}
+  {{- else }}
   maxUnavailable: {{ .Values.invocation.podDisruptionBudget.maxUnavailable }}
   {{- end }}
   selector:

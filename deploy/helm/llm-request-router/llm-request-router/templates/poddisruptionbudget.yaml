@@ -14,6 +14,14 @@
 # limitations under the License.
 
 {{- if .Values.llmRequestRouter.podDisruptionBudget.enabled }}
+{{- $pdbMinAvail := .Values.llmRequestRouter.podDisruptionBudget.minAvailable | toString }}
+{{- $pdbMaxUnavail := .Values.llmRequestRouter.podDisruptionBudget.maxUnavailable | toString }}
+{{- if and (ne $pdbMinAvail "") (ne $pdbMaxUnavail "") }}
+{{- fail "podDisruptionBudget: set exactly one of minAvailable or maxUnavailable, not both" }}
+{{- end }}
+{{- if and (eq $pdbMinAvail "") (eq $pdbMaxUnavail "") }}
+{{- fail "podDisruptionBudget: set exactly one of minAvailable or maxUnavailable" }}
+{{- end }}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
@@ -21,9 +29,9 @@ metadata:
   namespace: {{ include "llm-request-router.namespace" . }}
   labels: {{- include "llm-request-router.labels" . | nindent 4 }}
 spec:
-  {{- if .Values.llmRequestRouter.podDisruptionBudget.minAvailable }}
+  {{- if ne $pdbMinAvail "" }}
   minAvailable: {{ .Values.llmRequestRouter.podDisruptionBudget.minAvailable }}
-  {{- else if .Values.llmRequestRouter.podDisruptionBudget.maxUnavailable }}
+  {{- else }}
   maxUnavailable: {{ .Values.llmRequestRouter.podDisruptionBudget.maxUnavailable }}
   {{- end }}
   selector:

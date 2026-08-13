@@ -14,6 +14,14 @@
 # limitations under the License.
 
 {{- if .Values.functionautoscaler.podDisruptionBudget.enabled }}
+{{- $pdbMinAvail := .Values.functionautoscaler.podDisruptionBudget.minAvailable | toString }}
+{{- $pdbMaxUnavail := .Values.functionautoscaler.podDisruptionBudget.maxUnavailable | toString }}
+{{- if and (ne $pdbMinAvail "") (ne $pdbMaxUnavail "") }}
+{{- fail "podDisruptionBudget: set exactly one of minAvailable or maxUnavailable, not both" }}
+{{- end }}
+{{- if and (eq $pdbMinAvail "") (eq $pdbMaxUnavail "") }}
+{{- fail "podDisruptionBudget: set exactly one of minAvailable or maxUnavailable" }}
+{{- end }}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
@@ -21,9 +29,9 @@ metadata:
   namespace: {{ include "function-autoscaler.namespace" . }}
   labels: {{- include "function-autoscaler.labels" . | nindent 4 }}
 spec:
-  {{- if .Values.functionautoscaler.podDisruptionBudget.minAvailable }}
+  {{- if ne $pdbMinAvail "" }}
   minAvailable: {{ .Values.functionautoscaler.podDisruptionBudget.minAvailable }}
-  {{- else if .Values.functionautoscaler.podDisruptionBudget.maxUnavailable }}
+  {{- else }}
   maxUnavailable: {{ .Values.functionautoscaler.podDisruptionBudget.maxUnavailable }}
   {{- end }}
   selector:

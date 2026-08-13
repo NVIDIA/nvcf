@@ -14,6 +14,14 @@
 # limitations under the License.
 
 {{- if .Values.llmApiGateway.podDisruptionBudget.enabled }}
+{{- $pdbMinAvail := .Values.llmApiGateway.podDisruptionBudget.minAvailable | toString }}
+{{- $pdbMaxUnavail := .Values.llmApiGateway.podDisruptionBudget.maxUnavailable | toString }}
+{{- if and (ne $pdbMinAvail "") (ne $pdbMaxUnavail "") }}
+{{- fail "podDisruptionBudget: set exactly one of minAvailable or maxUnavailable, not both" }}
+{{- end }}
+{{- if and (eq $pdbMinAvail "") (eq $pdbMaxUnavail "") }}
+{{- fail "podDisruptionBudget: set exactly one of minAvailable or maxUnavailable" }}
+{{- end }}
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
@@ -21,9 +29,9 @@ metadata:
   namespace: {{ include "llm-api-gateway.namespace" . }}
   labels: {{- include "llm-api-gateway.labels" . | nindent 4 }}
 spec:
-  {{- if .Values.llmApiGateway.podDisruptionBudget.minAvailable }}
+  {{- if ne $pdbMinAvail "" }}
   minAvailable: {{ .Values.llmApiGateway.podDisruptionBudget.minAvailable }}
-  {{- else if .Values.llmApiGateway.podDisruptionBudget.maxUnavailable }}
+  {{- else }}
   maxUnavailable: {{ .Values.llmApiGateway.podDisruptionBudget.maxUnavailable }}
   {{- end }}
   selector:
