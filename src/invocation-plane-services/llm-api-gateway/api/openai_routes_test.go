@@ -195,6 +195,27 @@ func TestOpenAIChatCompletionsReturnsHeaderSessionID(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatCompletionsReturnsPromptCacheKeySessionID(t *testing.T) {
+	t.Parallel()
+
+	e := newTestAPI(config.Default())
+
+	body := `{"model":"fn-alpha/company-name/model-name","messages":[{"role":"user","content":"hello"}],"prompt_cache_key":"chat-prompt-cache-key"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	req.Header.Set(HeaderMultiTurnSessionID, "chat-header-session")
+	rec := httptest.NewRecorder()
+
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if got := rec.Header().Get(HeaderMultiTurnSessionID); got != "chat-prompt-cache-key" {
+		t.Fatalf("%s = %q, want chat-prompt-cache-key", HeaderMultiTurnSessionID, got)
+	}
+}
+
 func TestOpenAIChatCompletionsReturnsGeneratedSessionIDForPayloadFallback(t *testing.T) {
 	t.Parallel()
 
@@ -258,6 +279,51 @@ func TestOpenAIChatCompletionsStreamReturnsSessionHeader(t *testing.T) {
 	}
 	if got := rec.Header().Get(HeaderMultiTurnSessionID); got != "chat-stream-session" {
 		t.Fatalf("%s = %q, want chat-stream-session", HeaderMultiTurnSessionID, got)
+	}
+}
+
+func TestOpenAIChatCompletionsStreamReturnsPromptCacheKeySessionHeader(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	handlers := NewHandlers(
+		cfg,
+		&stubResponsesProvider{
+			streamEvents: []provider.StreamEvent{
+				{
+					Chunk: &models.ChatCompletionChunk{
+						Choices: []models.ChatCompletionChunkChoice{
+							{
+								Delta: models.ChatCompletionChunkDelta{
+									Content: ptr.To("hello"),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		nil,
+		nil,
+	)
+
+	e := echo.New()
+	e.Use(NewContextMiddleware(cfg))
+	handlers.AsOpenAIChatHandlers().RegisterRoutes(e.Group(""))
+
+	body := `{"model":"fn-alpha/company-name/model-name","messages":[{"role":"user","content":"hello"}],"prompt_cache_key":"chat-stream-prompt-cache-key","stream":true}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	req.Header.Set(HeaderMultiTurnSessionID, "chat-stream-header-session")
+	rec := httptest.NewRecorder()
+
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if got := rec.Header().Get(HeaderMultiTurnSessionID); got != "chat-stream-prompt-cache-key" {
+		t.Fatalf("%s = %q, want chat-stream-prompt-cache-key", HeaderMultiTurnSessionID, got)
 	}
 }
 
