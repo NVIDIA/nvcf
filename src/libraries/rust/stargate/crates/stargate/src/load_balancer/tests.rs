@@ -727,7 +727,7 @@ fn power_of_two_sample_count_defaults_to_two() {
         .power_of_two_settings()
         .expect("power-of-two config should expose settings");
 
-    assert_eq!(settings.sample_count(), DEFAULT_POWER_OF_TWO_SAMPLE_COUNT);
+    assert_eq!(settings.sample_count, 2);
 }
 
 #[test]
@@ -738,7 +738,7 @@ fn detailed_power_of_two_sample_count_parses_in_every_supported_context() {
         direct
             .power_of_two_settings()
             .expect("direct config should expose settings")
-            .sample_count(),
+            .sample_count,
         1
     );
 
@@ -750,7 +750,7 @@ fn detailed_power_of_two_sample_count_parses_in_every_supported_context() {
             .algorithm_config("model-a")
             .power_of_two_settings()
             .expect("model config should expose settings")
-            .sample_count(),
+            .sample_count,
         8
     );
 
@@ -767,7 +767,7 @@ fn detailed_power_of_two_sample_count_parses_in_every_supported_context() {
             .config()
             .power_of_two_settings()
             .expect("model override should expose settings")
-            .sample_count(),
+            .sample_count,
         8,
         "the configured model algorithm takes precedence over its same-algorithm override"
     );
@@ -776,7 +776,7 @@ fn detailed_power_of_two_sample_count_parses_in_every_supported_context() {
             .config()
             .power_of_two_settings()
             .expect("top-level override should expose settings")
-            .sample_count(),
+            .sample_count,
         4
     );
 
@@ -791,7 +791,7 @@ fn detailed_power_of_two_sample_count_parses_in_every_supported_context() {
             .config()
             .power_of_two_settings()
             .expect("nested override should expose settings")
-            .sample_count(),
+            .sample_count,
         64
     );
 }
@@ -809,7 +809,7 @@ fn invalid_power_of_two_sample_counts_are_rejected_with_field_context() {
     config
         .power_of_two_settings_mut()
         .expect("power-of-two config should expose mutable settings")
-        .sample_count = Some(0);
+        .sample_count = 0;
     let error = match create_load_balancer_with_config(&config) {
         Ok(_) => panic!("programmatic invalid sample count should fail"),
         Err(error) => error,

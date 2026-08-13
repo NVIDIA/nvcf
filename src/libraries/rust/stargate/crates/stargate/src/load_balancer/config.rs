@@ -194,22 +194,26 @@ pub struct WaitAndWidenAlgorithmConfig {
     pub ignore_input_processing_time: Option<bool>,
 }
 
-pub const DEFAULT_POWER_OF_TWO_SAMPLE_COUNT: usize = 2;
+const DEFAULT_POWER_OF_TWO_SAMPLE_COUNT: usize = 2;
 pub const MAX_POWER_OF_TWO_SAMPLE_COUNT: usize = 64;
 
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default)]
 pub struct PowerOfTwoAlgorithmConfig {
-    pub sample_count: Option<usize>,
+    pub sample_count: usize,
+}
+
+impl Default for PowerOfTwoAlgorithmConfig {
+    fn default() -> Self {
+        Self {
+            sample_count: DEFAULT_POWER_OF_TWO_SAMPLE_COUNT,
+        }
+    }
 }
 
 impl PowerOfTwoAlgorithmConfig {
-    pub fn sample_count(&self) -> usize {
-        self.sample_count
-            .unwrap_or(DEFAULT_POWER_OF_TWO_SAMPLE_COUNT)
-    }
-
     pub(crate) fn validated_sample_count(&self) -> Result<usize, String> {
-        let sample_count = self.sample_count();
+        let sample_count = self.sample_count;
         if !(1..=MAX_POWER_OF_TWO_SAMPLE_COUNT).contains(&sample_count) {
             return Err(format!(
                 "power-of-two sample_count must be between 1 and {MAX_POWER_OF_TWO_SAMPLE_COUNT}, got {sample_count}"

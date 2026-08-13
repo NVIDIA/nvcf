@@ -38,24 +38,17 @@ enum WaitAndWidenTuning {
     Affinity,
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum PowerOfTwoSampleCount {
-    Fixed(usize),
-    FullPool,
-}
-
 struct LbMicrobenchScenarioMetadata {
     model_id: &'static str,
     algorithm: LoadBalancerAlgorithm,
     tuning: Option<WaitAndWidenTuning>,
-    power_of_two_sample_count: Option<PowerOfTwoSampleCount>,
     excluded_clusters: usize,
 }
 
 use WaitAndWidenTuning::{Affinity, IgnoreQueue, RttOnly};
 
 macro_rules! scenarios {
-    ($($scenario:ident, $model_id:literal, $algorithm:ident, $tuning:expr, $power_of_two_sample_count:expr, $excluded:literal;)+) => {
+    ($($scenario:ident, $model_id:literal, $algorithm:ident, $tuning:expr, $excluded:literal;)+) => {
         #[repr(usize)]
         #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
         #[value(rename_all = "kebab-case")]
@@ -66,7 +59,6 @@ macro_rules! scenarios {
                 model_id: $model_id,
                 algorithm: LoadBalancerAlgorithm::$algorithm,
                 tuning: $tuning,
-                power_of_two_sample_count: $power_of_two_sample_count,
                 excluded_clusters: $excluded,
             },
         )+];
@@ -76,34 +68,45 @@ macro_rules! scenarios {
 // Keep the scenario matrix row-oriented so differences remain directly comparable.
 #[rustfmt::skip]
 scenarios! {
-    PowerOfTwo, "lb-bench-power-of-two", PowerOfTwo, None, Some(PowerOfTwoSampleCount::Fixed(2)), 0;
-    PowerOfTwoSample1, "lb-bench-power-of-two-sample-1", PowerOfTwo, None, Some(PowerOfTwoSampleCount::Fixed(1)), 0;
-    PowerOfTwoSample4, "lb-bench-power-of-two-sample-4", PowerOfTwo, None, Some(PowerOfTwoSampleCount::Fixed(4)), 0;
-    PowerOfTwoSample8, "lb-bench-power-of-two-sample-8", PowerOfTwo, None, Some(PowerOfTwoSampleCount::Fixed(8)), 0;
-    PowerOfTwoFullPool, "lb-bench-power-of-two-full-pool", PowerOfTwo, None, Some(PowerOfTwoSampleCount::FullPool), 0;
-    PowerOfTwoOneExcluded, "lb-bench-power-of-two-one-excluded", PowerOfTwo, None, Some(PowerOfTwoSampleCount::Fixed(2)), 1;
-    WaitAndWiden, "lb-bench-wait-and-widen", WaitAndWiden, None, None, 0;
-    WaitAndWidenOneExcluded, "lb-bench-wait-and-widen-one-excluded", WaitAndWiden, None, None, 1;
-    WaitAndWidenIgnoreQueue, "lb-bench-wait-and-widen-ignore-queue", WaitAndWiden, Some(IgnoreQueue), None, 0;
-    WaitAndWidenIgnoreQueueOneExcluded, "lb-bench-wait-and-widen-ignore-queue-one-excluded", WaitAndWiden, Some(IgnoreQueue), None, 1;
-    WaitAndWidenIgnoreQueueMultiExcluded, "lb-bench-wait-and-widen-ignore-queue-multi-excluded", WaitAndWiden, Some(IgnoreQueue), None, 2;
-    WaitAndWidenRttOnly, "lb-bench-wait-and-widen-rtt-only", WaitAndWiden, Some(RttOnly), None, 0;
-    WaitAndWidenRttOnlyOneExcluded, "lb-bench-wait-and-widen-rtt-only-one-excluded", WaitAndWiden, Some(RttOnly), None, 1;
-    WaitAndWidenRttOnlyMultiExcluded, "lb-bench-wait-and-widen-rtt-only-multi-excluded", WaitAndWiden, Some(RttOnly), None, 2;
-    WaitAndWidenAffinity, "lb-bench-wait-and-widen-affinity", WaitAndWiden, Some(Affinity), None, 0;
-    WaitAndWidenAffinityOneExcluded, "lb-bench-wait-and-widen-affinity-one-excluded", WaitAndWiden, Some(Affinity), None, 1;
-    WaitAndWidenAffinityMultiExcluded, "lb-bench-wait-and-widen-affinity-multi-excluded", WaitAndWiden, Some(Affinity), None, 2;
-    Pulsar, "lb-bench-pulsar", Pulsar, None, None, 0;
-    PulsarOneExcluded, "lb-bench-pulsar-one-excluded", Pulsar, None, None, 1;
-    Random, "lb-bench-random", Random, None, None, 0;
-    RandomOneExcluded, "lb-bench-random-one-excluded", Random, None, None, 1;
-    RoundRobinOneExcluded, "lb-bench-round-robin-one-excluded", RoundRobin, None, None, 1;
-    RoundRobinMultiExcluded, "lb-bench-round-robin-multi-excluded", RoundRobin, None, None, 2;
+    PowerOfTwo, "lb-bench-power-of-two", PowerOfTwo, None, 0;
+    PowerOfTwoSample1, "lb-bench-power-of-two-sample-1", PowerOfTwo, None, 0;
+    PowerOfTwoSample4, "lb-bench-power-of-two-sample-4", PowerOfTwo, None, 0;
+    PowerOfTwoSample8, "lb-bench-power-of-two-sample-8", PowerOfTwo, None, 0;
+    PowerOfTwoFullPool, "lb-bench-power-of-two-full-pool", PowerOfTwo, None, 0;
+    PowerOfTwoOneExcluded, "lb-bench-power-of-two-one-excluded", PowerOfTwo, None, 1;
+    WaitAndWiden, "lb-bench-wait-and-widen", WaitAndWiden, None, 0;
+    WaitAndWidenOneExcluded, "lb-bench-wait-and-widen-one-excluded", WaitAndWiden, None, 1;
+    WaitAndWidenIgnoreQueue, "lb-bench-wait-and-widen-ignore-queue", WaitAndWiden, Some(IgnoreQueue), 0;
+    WaitAndWidenIgnoreQueueOneExcluded, "lb-bench-wait-and-widen-ignore-queue-one-excluded", WaitAndWiden, Some(IgnoreQueue), 1;
+    WaitAndWidenIgnoreQueueMultiExcluded, "lb-bench-wait-and-widen-ignore-queue-multi-excluded", WaitAndWiden, Some(IgnoreQueue), 2;
+    WaitAndWidenRttOnly, "lb-bench-wait-and-widen-rtt-only", WaitAndWiden, Some(RttOnly), 0;
+    WaitAndWidenRttOnlyOneExcluded, "lb-bench-wait-and-widen-rtt-only-one-excluded", WaitAndWiden, Some(RttOnly), 1;
+    WaitAndWidenRttOnlyMultiExcluded, "lb-bench-wait-and-widen-rtt-only-multi-excluded", WaitAndWiden, Some(RttOnly), 2;
+    WaitAndWidenAffinity, "lb-bench-wait-and-widen-affinity", WaitAndWiden, Some(Affinity), 0;
+    WaitAndWidenAffinityOneExcluded, "lb-bench-wait-and-widen-affinity-one-excluded", WaitAndWiden, Some(Affinity), 1;
+    WaitAndWidenAffinityMultiExcluded, "lb-bench-wait-and-widen-affinity-multi-excluded", WaitAndWiden, Some(Affinity), 2;
+    Pulsar, "lb-bench-pulsar", Pulsar, None, 0;
+    PulsarOneExcluded, "lb-bench-pulsar-one-excluded", Pulsar, None, 1;
+    Random, "lb-bench-random", Random, None, 0;
+    RandomOneExcluded, "lb-bench-random-one-excluded", Random, None, 1;
+    RoundRobinOneExcluded, "lb-bench-round-robin-one-excluded", RoundRobin, None, 1;
+    RoundRobinMultiExcluded, "lb-bench-round-robin-multi-excluded", RoundRobin, None, 2;
 }
 
 impl LbMicrobenchScenario {
     fn metadata(self) -> &'static LbMicrobenchScenarioMetadata {
         &LB_MICROBENCH_SCENARIOS[self as usize]
+    }
+
+    fn configured_sample_count(self, candidate_count: usize) -> Option<usize> {
+        match self {
+            Self::PowerOfTwo | Self::PowerOfTwoOneExcluded => Some(2),
+            Self::PowerOfTwoSample1 => Some(1),
+            Self::PowerOfTwoSample4 => Some(4),
+            Self::PowerOfTwoSample8 => Some(8),
+            Self::PowerOfTwoFullPool => Some(candidate_count),
+            _ => None,
+        }
     }
 }
 
@@ -130,7 +133,6 @@ pub struct LbMicrobenchConfig {
 #[derive(Clone, Debug)]
 pub struct LbMicrobenchRow {
     pub scenario: LbMicrobenchScenario,
-    pub configured_sample_count: Option<usize>,
     pub candidates: usize,
     pub iterations: usize,
     pub warmup_iterations: usize,
@@ -177,7 +179,8 @@ pub fn write_lb_microbench_csv<W: Write>(
             writer,
             "choose-only-v3,{},{},{},{},{},{},{},{:.1},{},{:.3},{},{},{},{},{}",
             row.scenario,
-            row.configured_sample_count
+            row.scenario
+                .configured_sample_count(row.candidates)
                 .map_or_else(String::new, |count| count.to_string()),
             row.candidates,
             row.iterations,
@@ -228,9 +231,6 @@ fn run_scenario(
     cache_keys: &[String],
 ) -> anyhow::Result<LbMicrobenchRow> {
     let algorithm_config = config_for_scenario(scenario, config.candidates);
-    let configured_sample_count = algorithm_config
-        .power_of_two_settings()
-        .map(|settings| settings.sample_count());
     let router = LoadBalancerRouter::from_config(&LoadBalancerConfig {
         default: LoadBalancerAlgorithm::PowerOfTwo,
         request_algorithms: HashMap::new(),
@@ -288,7 +288,6 @@ fn run_scenario(
     let (top_backend, top_backend_choices) = top_backend(&backend_counts);
     Ok(LbMicrobenchRow {
         scenario,
-        configured_sample_count,
         candidates: config.candidates,
         iterations: config.iterations,
         warmup_iterations: config.warmup_iterations,
@@ -496,15 +495,11 @@ fn config_for_scenario(
     let is_pulsar = metadata.algorithm == LoadBalancerAlgorithm::Pulsar;
     config.request_policy_mut().require_cache_affinity_key = is_pulsar;
     config.request_policy_mut().require_input_tokens = is_pulsar;
-    if let Some(sample_count) = metadata.power_of_two_sample_count {
-        let sample_count = match sample_count {
-            PowerOfTwoSampleCount::Fixed(count) => count,
-            PowerOfTwoSampleCount::FullPool => candidate_count,
-        };
+    if let Some(sample_count) = scenario.configured_sample_count(candidate_count) {
         config
             .power_of_two_settings_mut()
             .expect("power-of-two scenario should expose power-of-two settings")
-            .sample_count = Some(sample_count);
+            .sample_count = sample_count;
     }
     if is_pulsar {
         config
@@ -663,7 +658,10 @@ mod tests {
             (LbMicrobenchScenario::PowerOfTwoFullPool, 8),
         ] {
             let rows = run_lb_microbench(&config(scenario)).expect("microbench should run");
-            assert_eq!(rows[0].configured_sample_count, Some(expected_sample_count));
+            assert_eq!(
+                rows[0].scenario.configured_sample_count(rows[0].candidates),
+                Some(expected_sample_count)
+            );
         }
     }
 
@@ -720,7 +718,6 @@ mod tests {
     fn lb_microbench_csv_is_parseable() {
         let rows = vec![LbMicrobenchRow {
             scenario: LbMicrobenchScenario::Pulsar,
-            configured_sample_count: None,
             candidates: 8,
             iterations: 10,
             warmup_iterations: 2,

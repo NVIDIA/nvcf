@@ -42,11 +42,10 @@ pub use algorithm::LoadBalancer;
 pub(crate) use algorithm::input_work_seconds_for_request;
 pub(super) use algorithm::{HashInputBuilder, cache_affinity_key_is_cacheable, input_work_units};
 pub use config::{
-    DEFAULT_POWER_OF_TWO_SAMPLE_COUNT, LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig,
-    LoadBalancerAlgorithmOverride, LoadBalancerAlgorithmSettings, LoadBalancerConfig,
-    LoadBalancerModelConfig, LoadBalancerRequestPolicy, LoadBalancerRoutingAlgorithmError,
-    LoadBalancerSeedError, MAX_POWER_OF_TWO_SAMPLE_COUNT, PowerOfTwoAlgorithmConfig,
-    WaitAndWidenAlgorithmConfig,
+    LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig, LoadBalancerAlgorithmOverride,
+    LoadBalancerAlgorithmSettings, LoadBalancerConfig, LoadBalancerModelConfig,
+    LoadBalancerRequestPolicy, LoadBalancerRoutingAlgorithmError, LoadBalancerSeedError,
+    MAX_POWER_OF_TWO_SAMPLE_COUNT, PowerOfTwoAlgorithmConfig, WaitAndWidenAlgorithmConfig,
 };
 pub use factory::create_load_balancer_with_config;
 pub use request::{LoadBalancerCandidateChoice, LoadBalancerRequest};
