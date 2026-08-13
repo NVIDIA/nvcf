@@ -39,6 +39,11 @@ cassandra:
   replicaCount: {{ dig "cassandra" "replicaCount" 3 .Values }}
   resourcesPreset: {{ dig "cassandra" "resourcesPreset" "xlarge" .Values }}
 
+  {{- with dig "cassandra" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
   {{- with include "nvcf.nodeSelector" (dict "type" "cassandra" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}
@@ -154,7 +159,7 @@ openbao:
       {{- toYaml $webhook | nindent 6 }}
     {{- end }}
     podDisruptionBudget:
-      minAvailable: 1
+      minAvailable: {{ dig "openbao" "injector" "podDisruptionBudget" "minAvailable" 1 .Values }}
   server:
     image:
       registry: {{ .Values.global.image.registry }}
@@ -171,6 +176,12 @@ openbao:
       storageClass: {{ .Values.global.storageClass }}
       {{- end }}
       size: {{ .Values.global.storageSize | default "10Gi" }}
+
+    ha:
+      {{- with dig "openbao" "server" "ha" "disruptionBudget" dict .Values }}
+      disruptionBudget:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
 
 nats:
   {{- if .Values.global.imagePullSecrets }}
@@ -221,6 +232,11 @@ nats:
       fileStore:
         pvc:
           storageClassName: {{ .Values.global.storageClass }}
+  {{- end }}
+
+  {{- with dig "nats" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
   {{- end }}
 
 apikeys:

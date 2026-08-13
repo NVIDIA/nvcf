@@ -51,6 +51,8 @@ navigation:
     contents:
       - page: Optional Enhancements
         path: ../../docs/user/optional-enhancements.md
+      - page: Pod Disruption Budgets
+        path: ../../docs/user/pod-disruption-budgets.md
       - page: LLM Function Enablement
         path: ../../docs/user/llm-function-enablement.md
       - page: LLM Request Router Load Balancing
