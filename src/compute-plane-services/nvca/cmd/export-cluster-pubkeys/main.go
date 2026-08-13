@@ -46,10 +46,11 @@ import (
 )
 
 type options struct {
-	out          io.Writer
-	outputFormat string
-	egressCIDRs  []string
-	jwksURI      string
+	out             io.Writer
+	outputFormat    string
+	egressCIDRs     []string
+	jwksURI         string
+	forceStaticKeys bool
 }
 
 func main() {
@@ -91,6 +92,12 @@ func main() {
 				Value:       "",
 				Usage:       `Override the JWKS URI from the OIDC configuration`,
 				Destination: &opts.jwksURI,
+			},
+			&cli.BoolFlag{
+				Name:        "static-pubkeys",
+				Value:       false,
+				Usage:       `Always emit jwt_validation_pubkeys instead of jwks_url (overrides auto-detection for public EKS OIDC)`,
+				Destination: &opts.forceStaticKeys,
 			},
 		},
 		Action: func(c *cli.Context) error {
@@ -141,7 +148,29 @@ type vaultJWTConfig struct {
 	BoundCIDRs       []string `json:"bound_cidrs" yaml:"-"`
 	Issuer           string   `json:"bound_issuer" yaml:"bound_issuer"`
 	SupportedSigAlgs []string `json:"jwt_supported_algs" yaml:"jwt_supported_algs"`
-	PubkeysPEM       []string `json:"jwt_validation_pubkeys" yaml:"jwt_validation_pubkeys"`
+	JWKSURL          string   `json:"jwks_url,omitempty" yaml:"jwks_url,omitempty"`
+	PubkeysPEM       []string `json:"jwt_validation_pubkeys,omitempty" yaml:"jwt_validation_pubkeys,omitempty"`
+}
+
+// useVaultJWKSURL reports whether Vault should fetch signing keys dynamically from a
+// publicly reachable JWKS endpoint instead of using static jwt_validation_pubkeys.
+func useVaultJWKSURL(issuer, jwksURIStr string) bool {
+	jwksURL, err := url.Parse(jwksURIStr)
+	if err != nil || !jwksURL.IsAbs() || jwksURL.Scheme != "https" {
+		return false
+	}
+
+	host := strings.ToLower(jwksURL.Hostname())
+	if strings.HasPrefix(host, "oidc.eks.") && strings.HasSuffix(host, ".amazonaws.com") {
+		return true
+	}
+
+	issuerURL, err := url.Parse(issuer)
+	if err != nil || issuerURL.Scheme != "https" {
+		return false
+	}
+	issuerHost := strings.ToLower(issuerURL.Hostname())
+	return strings.HasPrefix(issuerHost, "oidc.eks.") && strings.HasSuffix(issuerHost, ".amazonaws.com")
 }
 
 type streamer interface {
@@ -224,45 +253,54 @@ func run(ctx context.Context, s streamer, opts options, k8sServerHost string) (e
 		return fmt.Errorf("parse JWKS URI: %w", err)
 	}
 
-	jwksRC, err := s.streamGetURI(ctx, jwksURL)
-	if err != nil {
-		if os.IsTimeout(err) || errors.Is(err, syscall.ECONNREFUSED) {
-			// If the JWKS URL times out, try the /openid/v1/jwks endpoint from the KUBECONFIG
-			retryJWKSURLStr := fmt.Sprintf("%s/openid/v1/jwks", k8sServerHost)
-			log.Printf("get JWKS from cluster failed due to timeout: %v, "+
-				"retrying with the cluster's server endpoint (from KUBECONFIG) --jwks-uri=\"%s\" flag\n",
-				err,
-				retryJWKSURLStr)
-			jwksURL, err = url.Parse(retryJWKSURLStr)
-			if err != nil {
-				return fmt.Errorf("parse JWKS URI: %w", err)
-			}
-			jwksRC, err = s.streamGetURI(ctx, jwksURL)
-			if err != nil {
+	useJWKSURL := !opts.forceStaticKeys && useVaultJWKSURL(oidcCfg.Issuer, jwksURIStr)
+	var pubkeyPEMStrs []string
+	if !useJWKSURL {
+		jwksRC, err := s.streamGetURI(ctx, jwksURL)
+		if err != nil {
+			if os.IsTimeout(err) || errors.Is(err, syscall.ECONNREFUSED) {
+				// If the JWKS URL times out, try the /openid/v1/jwks endpoint from the KUBECONFIG
+				retryJWKSURLStr := fmt.Sprintf("%s/openid/v1/jwks", k8sServerHost)
+				log.Printf("get JWKS from cluster failed due to timeout: %v, "+
+					"retrying with the cluster's server endpoint (from KUBECONFIG) --jwks-uri=\"%s\" flag\n",
+					err,
+					retryJWKSURLStr)
+				jwksURL, err = url.Parse(retryJWKSURLStr)
+				if err != nil {
+					return fmt.Errorf("parse JWKS URI: %w", err)
+				}
+				jwksRC, err = s.streamGetURI(ctx, jwksURL)
+				if err != nil {
+					return fmt.Errorf("get JWKS from cluster: %w", err)
+				}
+			} else {
 				return fmt.Errorf("get JWKS from cluster: %w", err)
 			}
-		} else {
-			return fmt.Errorf("get JWKS from cluster: %w", err)
 		}
-	}
-	defer jwksRC.Close()
+		defer jwksRC.Close()
 
-	pubkeyPEMStrs, err := jwksToPEMStrs(jwksRC)
-	if err != nil {
-		return fmt.Errorf("convert JWKS to PEM: %w", err)
+		pubkeyPEMStrs, err = jwksToPEMStrs(jwksRC)
+		if err != nil {
+			return fmt.Errorf("convert JWKS to PEM: %w", err)
+		}
+	} else {
+		log.Printf("using Vault jwks_url %s (public EKS OIDC; Vault fetches keys dynamically)", jwksURIStr)
 	}
 
 	switch opts.outputFormat {
 	case "yaml":
-		pubkeyPEMStrsBase64 := make([]string, len(pubkeyPEMStrs))
-		for i, pkpem := range pubkeyPEMStrs {
-			pubkeyPEMStrsBase64[i] = base64.StdEncoding.EncodeToString([]byte(pkpem))
-		}
-
 		vaultJWTCfg := vaultJWTConfig{
 			Issuer:           oidcCfg.Issuer,
 			SupportedSigAlgs: oidcCfg.SupportedSigAlgs,
-			PubkeysPEM:       pubkeyPEMStrsBase64,
+		}
+		if useJWKSURL {
+			vaultJWTCfg.JWKSURL = jwksURIStr
+		} else {
+			pubkeyPEMStrsBase64 := make([]string, len(pubkeyPEMStrs))
+			for i, pkpem := range pubkeyPEMStrs {
+				pubkeyPEMStrsBase64[i] = base64.StdEncoding.EncodeToString([]byte(pkpem))
+			}
+			vaultJWTCfg.PubkeysPEM = pubkeyPEMStrsBase64
 		}
 
 		vaultJWTMount := newVaultJWTMount(
@@ -277,7 +315,11 @@ func run(ctx context.Context, s streamer, opts options, k8sServerHost string) (e
 			BoundCIDRs:       opts.egressCIDRs,
 			Issuer:           oidcCfg.Issuer,
 			SupportedSigAlgs: oidcCfg.SupportedSigAlgs,
-			PubkeysPEM:       pubkeyPEMStrs,
+		}
+		if useJWKSURL {
+			vaultJWTCfg.JWKSURL = jwksURIStr
+		} else {
+			vaultJWTCfg.PubkeysPEM = pubkeyPEMStrs
 		}
 		if err := encodeJSON(opts.out, vaultJWTCfg); err != nil {
 			return fmt.Errorf("write Vault JWT config: %w", err)

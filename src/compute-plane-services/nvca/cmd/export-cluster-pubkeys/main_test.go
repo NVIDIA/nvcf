@@ -264,6 +264,45 @@ func TestRunWithMockStreamer(t *testing.T) {
 			},
 			expectedError: false,
 		},
+		{
+			name: "EKS uses jwks_url without fetching JWKS",
+			oidcConfig: `{
+				"issuer": "https://oidc.eks.us-east-2.amazonaws.com/id/ABC123",
+				"id_token_signing_alg_values_supported": ["RS256"],
+				"jwks_uri": "https://oidc.eks.us-east-2.amazonaws.com/id/ABC123/keys"
+			}`,
+			opts: options{
+				outputFormat: "json",
+				egressCIDRs:  []string{"10.0.0.0/24"},
+				out:          &bytes.Buffer{},
+			},
+			expectedError: false,
+		},
+		{
+			name: "EKS static pubkeys with force flag",
+			oidcConfig: `{
+				"issuer": "https://oidc.eks.us-east-2.amazonaws.com/id/ABC123",
+				"id_token_signing_alg_values_supported": ["RS256"],
+				"jwks_uri": "https://oidc.eks.us-east-2.amazonaws.com/id/ABC123/keys"
+			}`,
+			jwksResponse: `{
+				"keys": [{
+					"kty": "RSA",
+					"kid": "test-key",
+					"use": "sig",
+					"alg": "RS256",
+					"n": "test-n",
+					"e": "AQAB"
+				}]
+			}`,
+			opts: options{
+				outputFormat:    "json",
+				egressCIDRs:     []string{"10.0.0.0/24"},
+				forceStaticKeys: true,
+				out:             &bytes.Buffer{},
+			},
+			expectedError: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -273,6 +312,7 @@ func TestRunWithMockStreamer(t *testing.T) {
 					"/.well-known/openid-configuration": tt.oidcConfig,
 					"/keys":                             tt.jwksResponse,
 					"/custom-keys":                      tt.jwksResponse,
+					"/id/ABC123/keys":                   tt.jwksResponse,
 				},
 				errors: tt.errors,
 				delays: tt.delays,
@@ -288,8 +328,60 @@ func TestRunWithMockStreamer(t *testing.T) {
 				assert.NoError(t, err)
 				if buf, ok := tt.opts.out.(*bytes.Buffer); ok {
 					assert.NotEmpty(t, buf.String())
+					switch tt.name {
+					case "EKS uses jwks_url without fetching JWKS":
+						var cfg vaultJWTConfig
+						require.NoError(t, json.Unmarshal(buf.Bytes(), &cfg))
+						assert.Equal(t, "https://oidc.eks.us-east-2.amazonaws.com/id/ABC123/keys", cfg.JWKSURL)
+						assert.Empty(t, cfg.PubkeysPEM)
+					case "EKS static pubkeys with force flag":
+						var cfg vaultJWTConfig
+						require.NoError(t, json.Unmarshal(buf.Bytes(), &cfg))
+						assert.Empty(t, cfg.JWKSURL)
+						assert.NotEmpty(t, cfg.PubkeysPEM)
+					}
 				}
 			}
+		})
+	}
+}
+
+func TestUseVaultJWKSURL(t *testing.T) {
+	tests := []struct {
+		name     string
+		issuer   string
+		jwksURI  string
+		expected bool
+	}{
+		{
+			name:     "EKS absolute jwks uri",
+			issuer:   "https://oidc.eks.us-east-2.amazonaws.com/id/ABC123",
+			jwksURI:  "https://oidc.eks.us-east-2.amazonaws.com/id/ABC123/keys",
+			expected: true,
+		},
+		{
+			name:     "k3d cluster internal issuer",
+			issuer:   "https://kubernetes.default.svc.cluster.local",
+			jwksURI:  "https://kubernetes.default.svc.cluster.local/openid/v1/jwks",
+			expected: false,
+		},
+		{
+			name:     "relative jwks uri",
+			issuer:   "https://test-issuer",
+			jwksURI:  "/keys",
+			expected: false,
+		},
+		{
+			name:     "azure aks issuer",
+			issuer:   "https://westus.oic.prod-aks.azure.com/tenant",
+			jwksURI:  "https://westus.oic.prod-aks.azure.com/tenant/discovery/v2.0/keys",
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, useVaultJWKSURL(tt.issuer, tt.jwksURI))
 		})
 	}
 }
