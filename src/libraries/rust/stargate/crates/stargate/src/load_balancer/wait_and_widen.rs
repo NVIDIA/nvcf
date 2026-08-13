@@ -24,22 +24,19 @@ use std::time::Duration;
 use rand::Rng;
 
 use super::{
-    LoadBalancer, LoadBalancerAlgorithmConfig, LoadBalancerCandidateChoice, LoadBalancerRequest,
-    WaitAndWidenAlgorithmConfig,
+    ClusterComparator, LoadBalancer, LoadBalancerAlgorithmConfig, LoadBalancerCandidateChoice,
+    LoadBalancerRequest, TtftEstimate, estimate_ttft,
 };
 use crate::routing_state::RoutedClusterSnapshot;
 use cache_affinity::CacheAffinitySelector;
-use estimates::{
-    CandidateEstimateAccumulator, TtftEstimate, compare_least_queue_time, estimate_ttft_ms,
-    has_capacity,
-};
+use estimates::{CandidateEstimateAccumulator, compare_least_queue_time, has_capacity};
 
+#[cfg(test)]
+pub(super) use super::estimate_ttft as wait_and_widen_ttft_components;
 #[cfg(test)]
 pub(super) use cache_affinity::{
     cache_affinity_candidate_indices, cache_affinity_candidates, cache_affinity_virtual_node_hash,
 };
-#[cfg(test)]
-pub(super) use estimates::estimate_ttft_ms as wait_and_widen_ttft_components;
 
 // Parity notes vs lpu-router WaitAndWiden:
 // - Stargate uses only the sticky last_mean_input_tps capacity signal for
@@ -55,6 +52,7 @@ pub(super) struct WaitAndWidenLoadBalancer {
 
 #[derive(Clone, Debug)]
 pub(super) struct WaitAndWidenConfig {
+    comparator: Option<ClusterComparator>,
     pub(super) seed: Option<String>,
     pub(super) cache_affinity_virtual_nodes: usize,
     pub(super) cache_affinity_backend_selection_count: Option<usize>,
@@ -69,14 +67,12 @@ pub(super) struct WaitAndWidenConfig {
 
 impl WaitAndWidenConfig {
     pub(super) fn from_algorithm_config(config: &LoadBalancerAlgorithmConfig) -> Self {
+        let comparator = config.comparator();
         let config = config
             .wait_and_widen_settings()
             .expect("wait_and_widen settings should match load-balancer algorithm");
-        Self::from_settings(config)
-    }
-
-    pub(super) fn from_settings(config: &WaitAndWidenAlgorithmConfig) -> Self {
         Self {
+            comparator,
             seed: config.seed.clone(),
             // Zero virtual nodes would make affinity routing degenerate; keep the historical minimum.
             cache_affinity_virtual_nodes: config.cache_affinity_virtual_nodes.unwrap_or(150).max(1),
@@ -112,6 +108,41 @@ impl WaitAndWidenConfig {
         };
         let max_queue_time_ms = floor_ms + (ceil_ms - floor_ms) * slo_elapsed_percentage;
         Some(Duration::from_secs_f64(max_queue_time_ms / 1000.0))
+    }
+
+    #[inline]
+    fn compare_configured_candidates(
+        &self,
+        request: &LoadBalancerRequest<'_>,
+        candidate_a: &RoutedClusterSnapshot,
+        candidate_b: &RoutedClusterSnapshot,
+    ) -> Ordering {
+        self.comparator
+            .expect("wait-and-widen fast path should have a configured comparator")
+            .compare(request, candidate_a, candidate_b)
+    }
+
+    #[inline]
+    fn compare_candidates_with_estimates(
+        &self,
+        request: &LoadBalancerRequest<'_>,
+        candidate_a: &RoutedClusterSnapshot,
+        estimate_a: &TtftEstimate,
+        candidate_b: &RoutedClusterSnapshot,
+        estimate_b: &TtftEstimate,
+    ) -> Ordering {
+        match self.comparator {
+            None => compare_least_queue_time(candidate_a, estimate_a, candidate_b, estimate_b),
+            Some(ClusterComparator::EstimatedTtft)
+                if !self.ignore_queue_time && !self.ignore_input_processing_time =>
+            {
+                estimate_a.ttft_ms.total_cmp(&estimate_b.ttft_ms)
+            }
+            Some(ClusterComparator::QueueTime) => {
+                estimate_a.queue_ms.total_cmp(&estimate_b.queue_ms)
+            }
+            Some(comparator) => comparator.compare(request, candidate_a, candidate_b),
+        }
     }
 }
 
@@ -206,7 +237,7 @@ impl WaitAndWidenLoadBalancer {
         }
 
         let estimate = |candidate| {
-            estimate_ttft_ms(
+            estimate_ttft(
                 candidate,
                 request.input_tokens,
                 request.priority,
@@ -229,7 +260,9 @@ impl WaitAndWidenLoadBalancer {
         // by the shuffled order, so keep that random tie-break explicitly while
         // avoiding the allocation and prefix-shuffle overhead on cache hits.
         let mut rng = rand::rng();
-        let candidate = choose_less_queued_candidate(
+        let candidate = choose_preferred_candidate(
+            &self.config,
+            request,
             candidate_a,
             &estimate_a,
             candidate_b,
@@ -278,6 +311,7 @@ impl WaitAndWidenLoadBalancer {
         let bucket_size_ms = self.config.ttft_bucket_size.as_secs_f64() * 1000.0;
         if estimates.all_estimates_in_first_bucket(bucket_size_ms) {
             return self.choose_from_unlocked_candidates(
+                request,
                 estimates.into_estimates(),
                 candidate_index_source,
             );
@@ -315,11 +349,12 @@ impl WaitAndWidenLoadBalancer {
         }
 
         estimated.truncate(unlocked_count);
-        self.choose_from_unlocked_candidates(estimated, candidate_index_source)
+        self.choose_from_unlocked_candidates(request, estimated, candidate_index_source)
     }
 
     fn choose_from_unlocked_candidates(
         &self,
+        request: &LoadBalancerRequest<'_>,
         mut unlocked_with_capacity: Vec<(&RoutedClusterSnapshot, TtftEstimate)>,
         candidates: &[RoutedClusterSnapshot],
     ) -> Option<LoadBalancerCandidateChoice> {
@@ -340,7 +375,13 @@ impl WaitAndWidenLoadBalancer {
             .into_iter()
             .take(sampled_count)
             .min_by(|(candidate_a, estimate_a), (candidate_b, estimate_b)| {
-                compare_least_queue_time(candidate_a, estimate_a, candidate_b, estimate_b)
+                self.config.compare_candidates_with_estimates(
+                    request,
+                    candidate_a,
+                    estimate_a,
+                    candidate_b,
+                    estimate_b,
+                )
             })
             .map(|(candidate, _)| choice_for_candidate(candidates, candidate, 1))
     }
@@ -374,14 +415,22 @@ fn choice_for_candidate(
     }
 }
 
-fn choose_less_queued_candidate<'a>(
+fn choose_preferred_candidate<'a>(
+    config: &WaitAndWidenConfig,
+    request: &LoadBalancerRequest<'_>,
     candidate_a: &'a RoutedClusterSnapshot,
     estimate_a: &TtftEstimate,
     candidate_b: &'a RoutedClusterSnapshot,
     estimate_b: &TtftEstimate,
     rng: &mut impl Rng,
 ) -> &'a RoutedClusterSnapshot {
-    match compare_least_queue_time(candidate_a, estimate_a, candidate_b, estimate_b) {
+    match config.compare_candidates_with_estimates(
+        request,
+        candidate_a,
+        estimate_a,
+        candidate_b,
+        estimate_b,
+    ) {
         Ordering::Less => candidate_a,
         Ordering::Equal if rng.random_bool(0.5) => candidate_a,
         Ordering::Equal | Ordering::Greater => candidate_b,

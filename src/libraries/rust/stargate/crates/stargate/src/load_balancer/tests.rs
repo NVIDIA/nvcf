@@ -715,6 +715,10 @@ fn algorithm_specific_load_balancer_fields_are_rejected_for_other_algorithms() {
             "consider_kv_free_tokens",
         ),
         (r#"{"algorithm":"random","sample_count":4}"#, "sample_count"),
+        (
+            r#"{"algorithm":"random","comparator":"estimated-ttft"}"#,
+            "comparator",
+        ),
     ] {
         assert_json_rejected::<LoadBalancerAlgorithmConfig>(raw, expected_field);
     }
@@ -728,6 +732,84 @@ fn power_of_n_sample_count_defaults_to_two() {
         .expect("power-of-n config should expose settings");
 
     assert_eq!(settings.sample_count, 2);
+}
+
+#[test]
+fn comparator_defaults_to_estimated_ttft_only_for_supported_algorithms() {
+    for algorithm in [
+        LoadBalancerAlgorithm::PowerOfN,
+        LoadBalancerAlgorithm::WaitAndWiden,
+    ] {
+        assert_eq!(
+            LoadBalancerAlgorithmConfig::from(algorithm).comparator(),
+            Some(ClusterComparator::EstimatedTtft)
+        );
+    }
+
+    for algorithm in [
+        LoadBalancerAlgorithm::RoundRobin,
+        LoadBalancerAlgorithm::Random,
+        LoadBalancerAlgorithm::Pulsar,
+        LoadBalancerAlgorithm::PulsarWaitAndWiden,
+    ] {
+        assert_eq!(
+            LoadBalancerAlgorithmConfig::from(algorithm).comparator(),
+            None
+        );
+    }
+}
+
+#[test]
+fn configured_comparators_resolve_for_models_and_request_overrides() {
+    let direct: LoadBalancerAlgorithmConfig =
+        parse_json(r#"{"algorithm":"power-of-n","comparator":"input-work-seconds"}"#);
+    assert_eq!(
+        direct.comparator(),
+        Some(ClusterComparator::InputWorkSeconds)
+    );
+
+    let router = router_from_json(
+        r#"{"default":"random","request_algorithms":{"power-of-n":{"algorithm":"power-of-n","comparator":"queue-time"}},"models":{"model-a":{"algorithm":"wait-and-widen","comparator":"utilization","request_algorithms":{"power-of-n":{"algorithm":"power-of-n","comparator":"num-requests-queued"}}}}}"#,
+    );
+    assert_eq!(
+        router.algorithm_config("model-a").comparator(),
+        Some(ClusterComparator::Utilization)
+    );
+
+    let override_header = LoadBalancerAlgorithmOverride::parse("power-of-n")
+        .expect("power-of-n override should parse");
+    assert_eq!(
+        router
+            .resolve_algorithm_override("model-a", Some(&override_header))
+            .expect("model request override should resolve")
+            .config()
+            .comparator(),
+        Some(ClusterComparator::NumRequestsQueued)
+    );
+    assert_eq!(
+        router
+            .resolve_algorithm_override("model-b", Some(&override_header))
+            .expect("top-level request override should resolve")
+            .config()
+            .comparator(),
+        Some(ClusterComparator::QueueTime)
+    );
+}
+
+#[test]
+fn pulsar_wait_and_widen_rejects_explicit_comparator() {
+    let config: LoadBalancerConfig = parse_json(
+        r#"{"models":{"model-a":{"algorithm":"pulsar-wait-and-widen","comparator":"estimated-ttft"}}}"#,
+    );
+    let error = match LoadBalancerRouter::from_config(&config) {
+        Ok(_) => panic!("pulsar-wait-and-widen comparator should be rejected"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("comparator is not supported for pulsar-wait-and-widen")
+    );
 }
 
 #[test]
@@ -1596,6 +1678,140 @@ fn request_excluded_clusters_are_not_selected() {
     let chosen = choose_from_router(&router, &target_state, &request, &candidates);
 
     assert_eq!(chosen.candidate.cluster_id, "cluster-1");
+}
+
+#[test]
+fn power_of_n_uses_each_configured_comparator() {
+    let cases = [
+        (
+            ClusterComparator::EstimatedTtft,
+            [
+                candidate("preferred", 1024).with_rtt_ms(1),
+                candidate("other", 1024).with_rtt_ms(100),
+            ],
+        ),
+        (
+            ClusterComparator::QueueTime,
+            [
+                priority_candidate("preferred", 0, 1).with_rtt_ms(100),
+                priority_candidate("other", 0, 50).with_rtt_ms(1),
+            ],
+        ),
+        (
+            ClusterComparator::InputWorkSeconds,
+            [
+                work_candidate("preferred", 100, 1000.0, 100),
+                work_candidate("other", 100, 10.0, 100),
+            ],
+        ),
+        (
+            ClusterComparator::Utilization,
+            [
+                concurrency_candidate("preferred", 100, 10, 1),
+                concurrency_candidate("other", 1, 10, 9),
+            ],
+        ),
+        (
+            ClusterComparator::NumRequestsQueued,
+            [
+                candidate("preferred", 1024)
+                    .with_rtt_ms(100)
+                    .with_stats(|stats| stats.queue_size = 1),
+                candidate("other", 1024)
+                    .with_rtt_ms(1)
+                    .with_stats(|stats| stats.queue_size = 10),
+            ],
+        ),
+    ];
+    let target = target();
+    let request = request(&target, None, Some(100));
+
+    for (comparator, candidates) in cases {
+        let mut config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::PowerOfN);
+        let settings = config
+            .power_of_n_settings_mut()
+            .expect("power-of-n config should expose settings");
+        settings.sample_count = 2;
+        settings.comparator = Some(comparator);
+        let load_balancer =
+            create_load_balancer_with_config(&config).expect("comparator config should be valid");
+
+        let chosen = choose(load_balancer.as_ref(), &request, &candidates);
+        assert_eq!(chosen.candidate.cluster_id, "preferred", "{comparator}");
+    }
+}
+
+#[test]
+fn wait_and_widen_uses_comparator_with_and_without_affinity() {
+    let candidates = [
+        candidate("lower-ttft-higher-queue", 1024)
+            .with_rtt_ms(5)
+            .with_stats(|stats| stats.queue_size = 10),
+        candidate("higher-ttft-lower-queue", 1024)
+            .with_rtt_ms(50)
+            .with_stats(|stats| stats.queue_size = 1),
+    ];
+    let target = target();
+
+    for cache_affinity_key in [None, Some("prefix-a")] {
+        let load_balancer = wait_and_widen_load_balancer(|settings| {
+            settings.comparator = Some(ClusterComparator::NumRequestsQueued);
+            settings.ttft_bucket_size_ms = Some(100);
+            settings.n = Some(2);
+            if cache_affinity_key.is_some() {
+                settings.seed = Some("seed-1".to_string());
+                settings.cache_affinity_virtual_nodes = Some(8);
+                settings.cache_affinity_backend_selection_count = Some(2);
+            }
+        });
+        let request = request(&target, cache_affinity_key, Some(1));
+
+        assert_repeated_choice(
+            load_balancer.as_ref(),
+            &request,
+            &candidates,
+            8,
+            "higher-ttft-lower-queue",
+        );
+    }
+}
+
+#[test]
+fn routing_selection_reports_effective_comparator_and_selected_score() {
+    let router =
+        router_from_json(r#"{"models":{"model-a":{"algorithm":"power-of-n","sample_count":2}}}"#);
+    let target = target();
+    let request = request(&target, None, Some(100));
+    let candidates = [
+        priority_candidate("selected", 0, 20).with_rtt_ms(5),
+        priority_candidate("slower", 0, 50).with_rtt_ms(100),
+    ];
+    let target_state = LoadBalancerTargetState::default();
+    let resolution = router
+        .resolve_algorithm_override(&target.model_id, None)
+        .expect("configured algorithm should resolve");
+
+    let selection = router
+        .choose_candidate_with_algorithm_resolution(
+            &target_state,
+            &request,
+            &candidates,
+            &resolution,
+        )
+        .expect("candidate should be selected");
+    let comparator = selection
+        .comparator
+        .expect("power-of-n selection should report its comparator");
+
+    assert_eq!(
+        candidates[selection.choice.candidate_index].cluster_id,
+        "selected"
+    );
+    assert_eq!(comparator.comparator, ClusterComparator::EstimatedTtft);
+    assert_eq!(comparator.score, 1025.0);
+    assert_eq!(comparator.queue_ms, Some(20.0));
+    assert_eq!(comparator.prefill_ms, Some(1000.0));
+    assert_eq!(comparator.rtt_ms, Some(5.0));
 }
 
 wait_and_widen_choice_tests! {

@@ -182,6 +182,7 @@ impl<'a> ProxyRequestRun<'a> {
                     .selection
                     .choice
                     .selected_after_kv_free_tokens_skip,
+                comparator: selected_cluster.selection.comparator.as_ref(),
                 cluster: selected_cluster.cluster.snapshot(),
                 chosen: &chosen,
             });
@@ -442,6 +443,7 @@ mod tests {
             num_candidates: 1,
             rank_depth: 0,
             selected_after_kv_free_tokens_skip: false,
+            comparator: None,
             cluster: &cluster,
             chosen: &chosen,
         });
@@ -467,6 +469,7 @@ mod tests {
             },
             effective_algorithm: LoadBalancerAlgorithm::PowerOfN,
             requested_algorithm: None,
+            comparator: None,
         };
         let selected_cluster = SelectedClusterRun::new(
             RoutingTargetSnapshot::for_test(vec![cluster_candidate("cluster-a")]),

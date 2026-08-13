@@ -108,20 +108,20 @@ Choose based on the routing goal and available backend statistics:
 
 | Goal | Algorithm | Required backend signals |
 | --- | --- | --- |
-| Minimize estimated time to first token across heterogeneous or remote clusters. | `wait-and-widen` | Forwarded health RTT and model statistics. Valid `last_mean_input_tps` is needed when queued or request input work is nonzero. |
+| Compare a small random sample using estimated TTFT or another load signal. | `power-of-n` | Signals required by the configured comparator. |
+| Minimize estimated time to first token across heterogeneous or remote clusters while controlling which TTFT bands are eligible. | `wait-and-widen` | Forwarded health RTT and model statistics. Valid `last_mean_input_tps` is needed when queued or request input work is nonzero. |
 | Keep the same prefix on a stable, capacity-weighted cluster. | `pulsar` | Positive finite `last_mean_input_tps` for every participating cluster. |
 | Keep Pulsar affinity when possible, but escape to lower-latency capacity when the primary cannot meet queue policy. | `pulsar-wait-and-widen` | Pulsar capacity plus the RTT and queue statistics used by `wait-and-widen`. |
 
-Use `power-of-n` when these statistics or affinity requirements are not
-available. Use `round-robin` for deterministic cycling and `random` for uniform
-random selection.
+Use `round-robin` for deterministic cycling and `random` for uniform random
+selection when routing should not depend on backend load statistics.
 
 ## `power-of-n`
 
 `power-of-n` uniformly samples distinct eligible clusters and selects the
-cluster with the lowest sum of queued and request input tokens divided by its
-last mean input TPS. It breaks equal scores randomly. Retried clusters are
-excluded before sampling.
+cluster with the lowest configured comparator score. The default comparator is
+`estimated-ttft`. It breaks equal scores randomly. Retried clusters are excluded
+before sampling.
 
 The default sample count is `2`. A larger sample can improve routing decisions
 in a heterogeneous pool, but it compares more clusters on every request. Valid
@@ -134,7 +134,8 @@ compares every eligible cluster once.
   "models": {
     "model-a": {
       "algorithm": "power-of-n",
-      "sample_count": 4
+      "sample_count": 4,
+      "comparator": "num-requests-queued"
     }
   }
 }
@@ -153,9 +154,10 @@ Otherwise it divides queued input tokens by `last_mean_input_tps`. Prefill time
 divides `x-input-tokens` by the same capacity signal.
 
 The algorithm groups close TTFT estimates into buckets. It samples `n`
-candidates from unlocked buckets and chooses the candidate with the least
-queue time, then the lowest engine utilization. A later bucket becomes
-available after the request has waited for a fraction of the TTFT gap.
+candidates from unlocked buckets and chooses the candidate with the lowest
+configured comparator score. The default comparator is `estimated-ttft`. A
+later bucket becomes available after the request has waited for a fraction of
+the TTFT gap.
 
 When `cache_affinity_backend_selection_count` is enabled and the request has
 `x-cache-affinity-key`, a consistent hash ring first limits selection to a
@@ -234,6 +236,31 @@ Minimal configuration:
 
 ## Algorithm fields
 
+`power-of-n` and `wait-and-widen` support this field:
+
+| Field | Type | Default | Constraint and effect |
+| --- | --- | --- | --- |
+| `comparator` | string | `estimated-ttft` | Signal used to choose among sampled candidates. See the supported values below. |
+
+Supported comparator values are:
+
+| Value | Score |
+| --- | --- |
+| `estimated-ttft` | Forwarded health RTT plus priority-aware queue delay plus request prefill time. |
+| `queue-time` | Priority-aware queue delay. Uses queued input tokens divided by `last_mean_input_tps` when no published priority estimate is available. |
+| `input-work-seconds` | Queued input tokens plus request input tokens, divided by `last_mean_input_tps`. |
+| `utilization` | Running queries divided by `max_engine_concurrency`, using `1` as the denominator when the reported maximum is `0`. |
+| `num-requests-queued` | Reported `queue_size`, including pending local routing reservations applied to the snapshot. |
+
+Comparators use the latest eligible routing snapshot without a second age
+filter. Registration stream timeout and cleanup determine snapshot eligibility.
+A nonpositive or non-finite `last_mean_input_tps` is unavailable capacity: zero
+work scores zero, while nonzero work scores infinity. Equal scores use the
+algorithm's existing tie behavior.
+
+`pulsar-wait-and-widen` does not support `comparator`. An explicit comparator in
+that algorithm's detailed configuration prevents startup.
+
 `power-of-n` supports this field:
 
 | Field | Type | Default | Constraint and effect |
@@ -261,8 +288,8 @@ selection. Pulsar ranking supplies that algorithm's affinity.
 | `next_bucket_unlock_factor` | number | `0.25` | Fraction of the TTFT gap to wait before the next bucket unlocks. |
 | `n` | unsigned integer | `2` | Number of unlocked candidates sampled. `0` is normalized to `1`. |
 | `max_queued` | unsigned integer | `0` | Additional queued requests allowed above `max_engine_concurrency`. A reported concurrency of `0` disables this capacity check. |
-| `ignore_queue_time` | boolean | `false` | Removes queue delay from TTFT ranking. Queue-SLO filtering still uses the queue estimate. |
-| `ignore_input_processing_time` | boolean | `false` | Removes request prefill time from TTFT ranking. |
+| `ignore_queue_time` | boolean | `false` | Removes queue delay from TTFT bucket formation. Queue-SLO filtering and the configured comparator are unchanged. |
+| `ignore_input_processing_time` | boolean | `false` | Removes request prefill time from TTFT bucket formation. The configured comparator is unchanged. |
 
 Stargate does not range-check `next_bucket_unlock_factor`. Values from `0` to
 `1` unlock a later bucket between no wait and the full TTFT gap. Values outside
@@ -280,8 +307,8 @@ bounds, so set the floor less than or equal to the ceiling.
 | `seed` | string | empty | Changes the rendezvous ranking. Keep it stable across replicas. |
 | `consider_kv_free_tokens` | boolean | `false` | Requires KV-cache values to be reported and skips candidates with fewer free tokens than the request input-token estimate. |
 
-`pulsar-wait-and-widen` supports both wait-and-widen fields and
-`consider_kv_free_tokens`.
+`pulsar-wait-and-widen` supports the wait-and-widen fields except `comparator`,
+plus `consider_kv_free_tokens`.
 
 ## Request algorithm overrides
 
@@ -367,6 +394,10 @@ admission rejections, upstream latency, and active backend counts. The prefix
 is configurable with `--metrics-prefix`. See the
 [NVCF request-router metrics reference](../../../../../docs/user/metrics/llm-request-router/metrics.md)
 for metric names, labels, and descriptions.
+
+The proxy request span records the effective comparator and selected score in
+`routing.comparator` and `routing.comparator.score`. It also records queue,
+prefill, and RTT score components when they apply.
 
 ## Validation checklist
 

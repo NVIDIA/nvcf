@@ -19,9 +19,10 @@ use crate::routing_state::RoutedClusterSnapshot;
 
 use super::target_state::LoadBalancerDefinition;
 use super::{
-    LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig, LoadBalancerAlgorithmOverride,
-    LoadBalancerCandidateChoice, LoadBalancerConfig, LoadBalancerModelConfig, LoadBalancerRequest,
-    LoadBalancerRoutingAlgorithmError, LoadBalancerTargetState,
+    ClusterComparatorTrace, LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig,
+    LoadBalancerAlgorithmOverride, LoadBalancerCandidateChoice, LoadBalancerConfig,
+    LoadBalancerModelConfig, LoadBalancerRequest, LoadBalancerRoutingAlgorithmError,
+    LoadBalancerTargetState,
 };
 
 #[cfg(test)]
@@ -42,6 +43,7 @@ pub struct LoadBalancerCandidateSelection {
     pub choice: LoadBalancerCandidateChoice,
     pub effective_algorithm: LoadBalancerAlgorithm,
     pub requested_algorithm: Option<String>,
+    pub comparator: Option<ClusterComparatorTrace>,
 }
 
 #[derive(Clone, Debug)]
@@ -188,9 +190,13 @@ impl LoadBalancerRouter {
         let lb = target_state.load_balancer(&resolution.definition);
         let effective_algorithm = resolution.config().algorithm();
         let requested_algorithm = resolution.requested_algorithm.clone();
+        let comparator = resolution.config().comparator();
 
         lb.choose_candidate(request, candidates)
             .map(|choice| LoadBalancerCandidateSelection {
+                comparator: comparator.map(|comparator| {
+                    comparator.trace(request, &candidates[choice.candidate_index])
+                }),
                 choice,
                 effective_algorithm,
                 requested_algorithm,

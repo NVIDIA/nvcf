@@ -15,17 +15,14 @@
 
 use rand::Rng;
 
-use crate::load_balancer::{LoadBalancerCandidateChoice, LoadBalancerRequest};
+use crate::load_balancer::{
+    LoadBalancerCandidateChoice, LoadBalancerRequest, cluster_comparator::queue_ignored_ttft_ms,
+    cluster_comparator::rtt_ms,
+};
 use crate::routing_state::RoutedClusterSnapshot;
 
-use super::estimates::{
-    compare_least_queue_time, estimate_queue_comparison, has_capacity, queue_ignored_ttft_ms,
-    rtt_ms,
-};
-use super::{
-    RequestExclusions, WaitAndWidenConfig, choice_for_candidate, choose_less_queued_candidate,
-    shuffle_prefix,
-};
+use super::estimates::has_capacity;
+use super::{RequestExclusions, WaitAndWidenConfig, choice_for_candidate, shuffle_prefix};
 
 macro_rules! choose_with_fast_path_exclusions {
     ($config:expr, $request:expr, $candidates:expr, $ttft_ms:expr) => {
@@ -144,11 +141,7 @@ fn choose_from_unlocked_candidate_refs(
         ));
     }
     if sample_count == 2 {
-        return choose_two_rtt_only_candidates(
-            &unlocked_with_capacity,
-            request.priority,
-            candidates,
-        );
+        return choose_two_candidates(config, request, &unlocked_with_capacity, candidates);
     }
 
     let sampled_count = sample_count.min(unlocked_with_capacity.len());
@@ -156,21 +149,16 @@ fn choose_from_unlocked_candidate_refs(
     unlocked_with_capacity
         .into_iter()
         .take(sampled_count)
-        .map(|candidate| {
-            (
-                candidate,
-                estimate_queue_comparison(candidate, request.priority),
-            )
+        .min_by(|candidate_a, candidate_b| {
+            config.compare_configured_candidates(request, candidate_a, candidate_b)
         })
-        .min_by(|(candidate_a, estimate_a), (candidate_b, estimate_b)| {
-            compare_least_queue_time(candidate_a, estimate_a, candidate_b, estimate_b)
-        })
-        .map(|(candidate, _)| choice_for_candidate(candidates, candidate, 1))
+        .map(|candidate| choice_for_candidate(candidates, candidate, 1))
 }
 
-fn choose_two_rtt_only_candidates(
+fn choose_two_candidates(
+    config: &WaitAndWidenConfig,
+    request: &LoadBalancerRequest<'_>,
     unlocked_with_capacity: &[&RoutedClusterSnapshot],
-    priority: u32,
     candidates: &[RoutedClusterSnapshot],
 ) -> Option<LoadBalancerCandidateChoice> {
     if unlocked_with_capacity.len() < 2 {
@@ -194,9 +182,10 @@ fn choose_two_rtt_only_candidates(
 
     let candidate_a = unlocked_with_capacity[candidate_a_index];
     let candidate_b = unlocked_with_capacity[candidate_b_index];
-    let estimate_a = estimate_queue_comparison(candidate_a, priority);
-    let estimate_b = estimate_queue_comparison(candidate_b, priority);
-    let candidate =
-        choose_less_queued_candidate(candidate_a, &estimate_a, candidate_b, &estimate_b, &mut rng);
+    let candidate = match config.compare_configured_candidates(request, candidate_a, candidate_b) {
+        std::cmp::Ordering::Less => candidate_a,
+        std::cmp::Ordering::Equal if rng.random_bool(0.5) => candidate_a,
+        std::cmp::Ordering::Equal | std::cmp::Ordering::Greater => candidate_b,
+    };
     Some(choice_for_candidate(candidates, candidate, 1))
 }

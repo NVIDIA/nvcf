@@ -15,19 +15,19 @@
 
 use rand::Rng;
 use rand::seq::IteratorRandom;
-use stargate_protocol::common::valid_last_mean_input_tps;
 use tracing::{Span, debug};
 
 #[cfg(test)]
 use super::tests::LoadBalancerTestChoiceExt;
 use super::{
-    LoadBalancer, LoadBalancerAlgorithmConfig, LoadBalancerCandidateChoice, LoadBalancerRequest,
-    MAX_POWER_OF_N_SAMPLE_COUNT,
+    ClusterComparator, LoadBalancer, LoadBalancerAlgorithmConfig, LoadBalancerCandidateChoice,
+    LoadBalancerRequest, MAX_POWER_OF_N_SAMPLE_COUNT,
 };
 use crate::routing_state::RoutedClusterSnapshot;
 
 pub(super) struct PowerOfNLoadBalancer {
     sample_count: usize,
+    comparator: ClusterComparator,
 }
 
 impl PowerOfNLoadBalancer {
@@ -40,7 +40,12 @@ impl PowerOfNLoadBalancer {
         let sample_count = settings
             .validated_sample_count()
             .map_err(anyhow::Error::msg)?;
-        Ok(Self { sample_count })
+        Ok(Self {
+            sample_count,
+            comparator: config
+                .comparator()
+                .expect("power-of-n should have a comparator"),
+        })
     }
 
     fn choose_candidate_with_rng<R: Rng + ?Sized>(
@@ -54,7 +59,13 @@ impl PowerOfNLoadBalancer {
         span.record("routing.sample_count_configured", self.sample_count);
         span.record("routing.sample_count_effective", sampled.len());
 
-        choose_least_loaded(candidates, sampled.as_slice(), request.input_tokens, rng)
+        choose_least_loaded(
+            candidates,
+            sampled.as_slice(),
+            request,
+            self.comparator,
+            rng,
+        )
     }
 }
 
@@ -148,47 +159,43 @@ fn sample_distinct_pair<R: Rng + ?Sized>(len: usize, rng: &mut R) -> (usize, usi
 fn choose_least_loaded<R: Rng + ?Sized>(
     candidates: &[RoutedClusterSnapshot],
     sampled_indices: &[usize],
-    input_tokens: Option<u64>,
+    request: &LoadBalancerRequest<'_>,
+    comparator: ClusterComparator,
     rng: &mut R,
 ) -> Option<LoadBalancerCandidateChoice> {
     let (&first_index, remaining_indices) = sampled_indices.split_first()?;
     let mut selected_index = first_index;
-    let mut selected_score = load_score(&candidates[first_index], input_tokens);
     let mut tied_best_count = 1u32;
 
     for &candidate_index in remaining_indices {
-        let score = load_score(&candidates[candidate_index], input_tokens);
-        if score < selected_score {
-            selected_index = candidate_index;
-            selected_score = score;
-            tied_best_count = 1;
-        } else if score == selected_score {
-            tied_best_count += 1;
-            if rng.random_ratio(1, tied_best_count) {
+        match comparator.compare(
+            request,
+            &candidates[candidate_index],
+            &candidates[selected_index],
+        ) {
+            std::cmp::Ordering::Less => {
                 selected_index = candidate_index;
+                tied_best_count = 1;
             }
+            std::cmp::Ordering::Equal => {
+                tied_best_count += 1;
+                if rng.random_ratio(1, tied_best_count) {
+                    selected_index = candidate_index;
+                }
+            }
+            std::cmp::Ordering::Greater => {}
         }
     }
 
     debug!(
         effective_sample_count = sampled_indices.len(),
         selected_candidate_index = selected_index,
-        selected_load_score = selected_score,
+        comparator = %comparator,
         "sampled clusters"
     );
     Some(LoadBalancerCandidateChoice::with_rank_depth_1(
         selected_index,
     ))
-}
-
-fn load_score(candidate: &RoutedClusterSnapshot, input_tokens: Option<u64>) -> f64 {
-    let last_mean_input_tps = candidate.stats.last_mean_input_tps;
-    if valid_last_mean_input_tps(last_mean_input_tps) {
-        (super::input_work_units(candidate) + input_tokens.unwrap_or_default() as f64)
-            / last_mean_input_tps
-    } else {
-        f64::INFINITY
-    }
 }
 
 #[cfg(test)]
@@ -236,9 +243,12 @@ mod tests {
             request_slo: None,
             excluded_cluster_ids: Some(excluded_cluster_ids),
         };
-        PowerOfNLoadBalancer { sample_count }
-            .choose_for_test(&request, candidates)
-            .map(|choice| choice.candidate.cluster_id)
+        PowerOfNLoadBalancer {
+            sample_count,
+            comparator: ClusterComparator::default(),
+        }
+        .choose_for_test(&request, candidates)
+        .map(|choice| choice.candidate.cluster_id)
     }
 
     fn sampled_indices(
@@ -260,29 +270,6 @@ mod tests {
         sample_candidates(&request, candidates, sample_count, rng)
             .as_slice()
             .to_vec()
-    }
-
-    #[test]
-    fn load_score_prefers_faster_empty_backend_for_incoming_prefill() {
-        let fast = candidate("fast", 200.0, 0);
-        let slow = candidate("slow", 100.0, 0);
-
-        assert!(load_score(&fast, Some(1000)) < load_score(&slow, Some(1000)));
-    }
-
-    #[test]
-    fn load_score_accounts_for_queued_prefill_work() {
-        let busy_fast = candidate("busy-fast", 200.0, 10_000);
-        let empty_slow = candidate("empty-slow", 100.0, 0);
-
-        assert!(load_score(&empty_slow, Some(1000)) < load_score(&busy_fast, Some(1000)));
-    }
-
-    #[test]
-    fn load_score_rejects_invalid_input_throughput() {
-        for input_tps in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
-            assert!(load_score(&candidate("invalid", input_tps, 0), Some(100)).is_infinite());
-        }
     }
 
     #[test]
@@ -450,7 +437,10 @@ mod tests {
             request_slo: None,
             excluded_cluster_ids: None,
         };
-        let load_balancer = PowerOfNLoadBalancer { sample_count: 3 };
+        let load_balancer = PowerOfNLoadBalancer {
+            sample_count: 3,
+            comparator: ClusterComparator::default(),
+        };
         let mut rng = StdRng::seed_from_u64(11);
         let mut selected = HashSet::new();
 

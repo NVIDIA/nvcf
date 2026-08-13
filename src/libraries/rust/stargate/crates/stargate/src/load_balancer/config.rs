@@ -19,6 +19,8 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Deserializer};
 
+use super::ClusterComparator;
+
 #[derive(Clone, Debug)]
 pub enum LoadBalancerModelConfig {
     Name(LoadBalancerAlgorithm),
@@ -189,6 +191,7 @@ pub struct LoadBalancerRequestPolicy {
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct WaitAndWidenAlgorithmConfig {
     pub seed: Option<String>,
+    pub comparator: Option<ClusterComparator>,
     pub cache_affinity_virtual_nodes: Option<usize>,
     pub cache_affinity_backend_selection_count: Option<usize>,
     pub max_queue_time_floor_ms: Option<u64>,
@@ -208,12 +211,14 @@ pub const MAX_POWER_OF_N_SAMPLE_COUNT: usize = 64;
 #[serde(default)]
 pub struct PowerOfNAlgorithmConfig {
     pub sample_count: usize,
+    pub comparator: Option<ClusterComparator>,
 }
 
 impl Default for PowerOfNAlgorithmConfig {
     fn default() -> Self {
         Self {
             sample_count: DEFAULT_POWER_OF_N_SAMPLE_COUNT,
+            comparator: None,
         }
     }
 }
@@ -282,6 +287,21 @@ impl LoadBalancerAlgorithmConfig {
 
     pub fn considers_kv_free_tokens(&self) -> bool {
         self.request_policy.consider_kv_free_tokens
+    }
+
+    pub fn comparator(&self) -> Option<ClusterComparator> {
+        match &self.settings {
+            LoadBalancerAlgorithmSettings::PowerOfN(config) => {
+                Some(config.comparator.unwrap_or_default())
+            }
+            LoadBalancerAlgorithmSettings::WaitAndWiden(config) => {
+                Some(config.comparator.unwrap_or_default())
+            }
+            LoadBalancerAlgorithmSettings::RoundRobin
+            | LoadBalancerAlgorithmSettings::Random
+            | LoadBalancerAlgorithmSettings::Pulsar(_)
+            | LoadBalancerAlgorithmSettings::PulsarWaitAndWiden(_) => None,
+        }
     }
 
     pub fn request_policy_mut(&mut self) -> &mut LoadBalancerRequestPolicy {
