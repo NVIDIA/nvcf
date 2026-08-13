@@ -663,6 +663,16 @@ func TestToRegistrationCollisionWinnerIsIndependentOfInputOrder(t *testing.T) {
 	profileOf := func(its []InstanceType) []RegistrationInstanceType {
 		got := BackendGPUs{{Name: "A100", InstanceTypes: its}}.ToRegistration(false, corev1.ResourceList{})
 		require.Len(t, got, 1)
+
+		// Both SKUs subdivide to the same two names, so the collision keeps one entry
+		// each. Asserted here so the comparisons below cannot hold vacuously on an
+		// empty registration.
+		names := make([]string, 0, len(got[0].InstanceTypes))
+		for _, it := range got[0].InstanceTypes {
+			names = append(names, it.Name)
+		}
+		require.Equal(t, []string{"NCP.GPU.A100_1x", "NCP.GPU.A100_2x"}, names)
+
 		return got[0].InstanceTypes
 	}
 
