@@ -19,7 +19,6 @@ package com.nvidia.icms.inbound.rest.controllers.workers;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.when;
 
@@ -44,19 +43,21 @@ class WorkersControllerUnitTest {
     private WorkerTokenVerificationService workerTokenVerificationService;
 
     @Test
-    void introspectWorkerToken_featureFlagDisabled_returns404() {
+    void introspectWorkerToken_featureFlagDisabled_returns200WithActiveFalse() {
         WorkersController controller = controllerWithOidcEnabled(false);
 
         var request = tokenRequest("any.token.value");
         ResponseEntity<WorkerTokenIntrospectResponse> response =
                 controller.introspectWorkerToken(request);
 
-        assertEquals(404, response.getStatusCode().value());
-        assertNull(response.getBody());
+        assertEquals(200, response.getStatusCode().value());
+        assertNotNull(response.getBody());
+        assertFalse(response.getBody().isActive());
+        assertEquals("JWT verification failed", response.getBody().getError());
     }
 
     @Test
-    void introspectWorkerToken_tokenTooLarge_returns431() {
+    void introspectWorkerToken_tokenTooLarge_returns200WithActiveFalse() {
         WorkersController controller = controllerWithOidcEnabled(true);
         var request = tokenRequest("tok");
 
@@ -67,7 +68,7 @@ class WorkersControllerUnitTest {
 
         var response = controller.introspectWorkerToken(request);
 
-        assertEquals(431, response.getStatusCode().value());
+        assertEquals(200, response.getStatusCode().value());
         var body = response.getBody();
         assertNotNull(body);
         assertFalse(body.isActive());
