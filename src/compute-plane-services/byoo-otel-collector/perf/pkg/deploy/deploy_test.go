@@ -19,11 +19,13 @@ package deploy
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/render"
@@ -190,5 +192,32 @@ func TestCleanupScopedToLabel(t *testing.T) {
 	}
 	if len(svcs.Items) != 0 {
 		t.Errorf("cleanup should remove suite services, got %+v", svcs.Items)
+	}
+}
+
+// An unresponsive pod or API proxy must not hang the run: ScrapePodMetrics
+// bounds each fetch with scrapeTimeout and returns a deadline error the caller
+// treats as a missing sample.
+func TestScrapePodMetricsTimesOut(t *testing.T) {
+	origGet, origTimeout := proxyGet, scrapeTimeout
+	defer func() { proxyGet, scrapeTimeout = origGet, origTimeout }()
+
+	scrapeTimeout = 20 * time.Millisecond
+	proxyGet = func(ctx context.Context, _ kubernetes.Interface, _, _, _, _ string) ([]byte, error) {
+		<-ctx.Done() // block like an unresponsive endpoint until the timeout fires
+		return nil, ctx.Err()
+	}
+
+	c := NewClientForClientset(fake.NewSimpleClientset())
+	start := time.Now()
+	_, err := c.ScrapePodMetrics(context.Background(), "byoo-perf", "collector", "8888", "/metrics")
+	if err == nil {
+		t.Fatal("expected a timeout error from an unresponsive scrape")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("error = %v, want context.DeadlineExceeded", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("scrape ignored the timeout, took %v", elapsed)
 	}
 }
