@@ -92,7 +92,7 @@ enum Command {
     Run(RunArgs),
     /// Compare Raw QUIC, HTTP/3, and WebTransport tunnel transports on loopback
     TransportBench(TransportBenchArgs),
-    /// Measure in-process wait-and-widen/pulsar load-balancer choose-path overhead
+    /// Measure in-process load-balancer choose-path overhead
     LbMicrobench {
         #[arg(long, default_value_t = 100_000, value_name = "N")]
         iterations: usize,

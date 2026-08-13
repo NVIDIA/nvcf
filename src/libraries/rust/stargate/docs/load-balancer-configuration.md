@@ -4,8 +4,8 @@ Stargate selects one load-balancing algorithm for each model. A request can
 select another preconfigured algorithm through a trusted header.
 
 This page defines the `lb-config.json` schema and the behavior of
-`wait-and-widen`, `pulsar`, and `pulsar-wait-and-widen`. Deployment systems own
-the file mount and the `--lb-config-path` argument.
+`power-of-two`, `wait-and-widen`, `pulsar`, and `pulsar-wait-and-widen`.
+Deployment systems own the file mount and the `--lb-config-path` argument.
 
 ## Load the configuration
 
@@ -115,6 +115,30 @@ Use `power-of-two` when these statistics or affinity requirements are not
 available. Use `round-robin` for deterministic cycling and `random` for uniform
 random selection.
 
+## `power-of-two`
+
+`power-of-two` uniformly samples distinct eligible clusters and selects the
+cluster with the lowest sum of queued and request input tokens divided by its
+last mean input TPS. It breaks equal scores randomly. Retried clusters are
+excluded before sampling.
+
+The default sample count is `2`. A larger sample can improve routing decisions
+in a heterogeneous pool, but it compares more clusters on every request. Valid
+values are `1` through `64`. If fewer eligible clusters exist, the algorithm
+compares every eligible cluster once.
+
+```json
+{
+  "default": "power-of-two",
+  "models": {
+    "model-a": {
+      "algorithm": "power-of-two",
+      "sample_count": 4
+    }
+  }
+}
+```
+
 ## `wait-and-widen`
 
 `wait-and-widen` estimates time to first token (TTFT) as:
@@ -208,6 +232,12 @@ Minimal configuration:
 ```
 
 ## Algorithm fields
+
+`power-of-two` supports this field:
+
+| Field | Type | Default | Constraint and effect |
+| --- | --- | --- | --- |
+| `sample_count` | unsigned integer | `2` | Number of distinct eligible clusters sampled. Must be from `1` through `64`. Values above the eligible cluster count compare the complete eligible pool. |
 
 `wait-and-widen` supports these cache-affinity fields:
 

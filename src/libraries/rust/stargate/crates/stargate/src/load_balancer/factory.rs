@@ -38,7 +38,9 @@ pub fn create_load_balancer_with_config(
     }
 
     match config.algorithm() {
-        LoadBalancerAlgorithm::PowerOfTwo => Ok(Arc::new(PowerOfTwoLoadBalancer)),
+        LoadBalancerAlgorithm::PowerOfTwo => Ok(Arc::new(
+            PowerOfTwoLoadBalancer::from_algorithm_config(config)?,
+        )),
         LoadBalancerAlgorithm::WaitAndWiden => Ok(Arc::new(WaitAndWidenLoadBalancer::new(
             WaitAndWidenConfig::from_algorithm_config(config),
         ))),

@@ -714,9 +714,107 @@ fn algorithm_specific_load_balancer_fields_are_rejected_for_other_algorithms() {
             r#"{"algorithm":"wait-and-widen","consider_kv_free_tokens":true}"#,
             "consider_kv_free_tokens",
         ),
+        (r#"{"algorithm":"random","sample_count":4}"#, "sample_count"),
     ] {
         assert_json_rejected::<LoadBalancerAlgorithmConfig>(raw, expected_field);
     }
+}
+
+#[test]
+fn power_of_two_sample_count_defaults_to_two() {
+    let config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::PowerOfTwo);
+    let settings = config
+        .power_of_two_settings()
+        .expect("power-of-two config should expose settings");
+
+    assert_eq!(settings.sample_count(), DEFAULT_POWER_OF_TWO_SAMPLE_COUNT);
+}
+
+#[test]
+fn detailed_power_of_two_sample_count_parses_in_every_supported_context() {
+    let direct: LoadBalancerAlgorithmConfig =
+        parse_json(r#"{"algorithm":"power-of-two","sample_count":1}"#);
+    assert_eq!(
+        direct
+            .power_of_two_settings()
+            .expect("direct config should expose settings")
+            .sample_count(),
+        1
+    );
+
+    let router = router_from_json(
+        r#"{"default":"random","request_algorithms":{"power-of-two":{"algorithm":"power-of-two","sample_count":4}},"models":{"model-a":{"algorithm":"power-of-two","sample_count":8,"request_algorithms":{"power-of-two":{"algorithm":"power-of-two","sample_count":64}}}}}"#,
+    );
+    assert_eq!(
+        router
+            .algorithm_config("model-a")
+            .power_of_two_settings()
+            .expect("model config should expose settings")
+            .sample_count(),
+        8
+    );
+
+    let override_header = LoadBalancerAlgorithmOverride::parse("power-of-two")
+        .expect("power-of-two override should parse");
+    let model_override = router
+        .resolve_algorithm_override("model-a", Some(&override_header))
+        .expect("model override should resolve");
+    let default_override = router
+        .resolve_algorithm_override("model-b", Some(&override_header))
+        .expect("top-level override should resolve");
+    assert_eq!(
+        model_override
+            .config()
+            .power_of_two_settings()
+            .expect("model override should expose settings")
+            .sample_count(),
+        8,
+        "the configured model algorithm takes precedence over its same-algorithm override"
+    );
+    assert_eq!(
+        default_override
+            .config()
+            .power_of_two_settings()
+            .expect("top-level override should expose settings")
+            .sample_count(),
+        4
+    );
+
+    let nested_router = router_from_json(
+        r#"{"default":"random","models":{"model-a":{"algorithm":"random","request_algorithms":{"power-of-two":{"algorithm":"power-of-two","sample_count":64}}}}}"#,
+    );
+    let nested_override = nested_router
+        .resolve_algorithm_override("model-a", Some(&override_header))
+        .expect("nested override should resolve");
+    assert_eq!(
+        nested_override
+            .config()
+            .power_of_two_settings()
+            .expect("nested override should expose settings")
+            .sample_count(),
+        64
+    );
+}
+
+#[test]
+fn invalid_power_of_two_sample_counts_are_rejected_with_field_context() {
+    for sample_count in [0, MAX_POWER_OF_TWO_SAMPLE_COUNT + 1] {
+        assert_json_rejected::<LoadBalancerAlgorithmConfig>(
+            &format!(r#"{{"algorithm":"power-of-two","sample_count":{sample_count}}}"#),
+            "power-of-two sample_count must be between 1 and 64",
+        );
+    }
+
+    let mut config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::PowerOfTwo);
+    config
+        .power_of_two_settings_mut()
+        .expect("power-of-two config should expose mutable settings")
+        .sample_count = Some(0);
+    let error = match create_load_balancer_with_config(&config) {
+        Ok(_) => panic!("programmatic invalid sample count should fail"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("power-of-two sample_count"));
 }
 
 #[test]
