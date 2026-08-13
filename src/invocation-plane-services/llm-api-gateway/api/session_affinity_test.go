@@ -18,6 +18,7 @@ limitations under the License.
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -89,6 +90,32 @@ func TestApplyResponsesSessionAffinityPrefersPromptCacheKeyOverConversation(t *t
 		strings.Contains(reqCtx.CacheAffinityKey, conversationID) ||
 		strings.Contains(reqCtx.CacheAffinityKey, "header-session") {
 		t.Fatalf("CacheAffinityKey leaks raw session value: %q", reqCtx.CacheAffinityKey)
+	}
+}
+
+func TestApplyResponsesSessionAffinityHashesPromptCacheKeyThatLooksLikeAffinityKey(t *testing.T) {
+	t.Parallel()
+
+	ctx := newSessionAffinityTestContext()
+	promptCacheKey := "mt:v1:payload:" + strings.Repeat("a", 64)
+	request := &openairesponses.CreateRequest{
+		PromptCacheKey: &promptCacheKey,
+	}
+
+	if err := applyResponsesSessionAffinity(ctx, request); err != nil {
+		t.Fatalf("applyResponsesSessionAffinity: %v", err)
+	}
+
+	reqCtx := ctx.RequestContext()
+	if reqCtx.SessionID != promptCacheKey {
+		t.Fatalf("SessionID = %q, want %q", reqCtx.SessionID, promptCacheKey)
+	}
+	if reqCtx.CacheAffinityKey == promptCacheKey {
+		t.Fatalf("CacheAffinityKey contains unmodified prompt cache key: %q", reqCtx.CacheAffinityKey)
+	}
+	want := affinityKey(sessionAffinitySourceSession, []byte(promptCacheKey))
+	if reqCtx.CacheAffinityKey != want {
+		t.Fatalf("CacheAffinityKey = %q, want %q", reqCtx.CacheAffinityKey, want)
 	}
 }
 
@@ -171,6 +198,167 @@ func TestApplyChatSessionAffinityReusesGeneratedPayloadIDFromHeader(t *testing.T
 	}
 	if secondReqCtx.CacheAffinityKey != firstReqCtx.CacheAffinityKey {
 		t.Fatalf("second CacheAffinityKey = %q, want %q", secondReqCtx.CacheAffinityKey, firstReqCtx.CacheAffinityKey)
+	}
+}
+
+func TestApplyChatSessionAffinityPrefersPromptCacheKeyOverHeader(t *testing.T) {
+	t.Parallel()
+
+	ctx := newSessionAffinityTestContext()
+	ctx.Request().Header.Set(HeaderMultiTurnSessionID, "header-session")
+	promptCacheKey := "prompt-cache-session"
+	request := &models.ChatCompletionRequest{
+		PromptCacheKey: &promptCacheKey,
+	}
+
+	if err := applyChatSessionAffinity(ctx, request); err != nil {
+		t.Fatalf("applyChatSessionAffinity: %v", err)
+	}
+
+	reqCtx := ctx.RequestContext()
+	if reqCtx.SessionID != promptCacheKey {
+		t.Fatalf("SessionID = %q, want %q", reqCtx.SessionID, promptCacheKey)
+	}
+	if reqCtx.SessionSource != sessionAffinitySourcePrompt {
+		t.Fatalf("SessionSource = %q, want %q", reqCtx.SessionSource, sessionAffinitySourcePrompt)
+	}
+	if !strings.HasPrefix(reqCtx.CacheAffinityKey, "mt:v1:session:") {
+		t.Fatalf("CacheAffinityKey = %q, want session source", reqCtx.CacheAffinityKey)
+	}
+	if strings.Contains(reqCtx.CacheAffinityKey, promptCacheKey) ||
+		strings.Contains(reqCtx.CacheAffinityKey, "header-session") {
+		t.Fatalf("CacheAffinityKey leaks raw session value: %q", reqCtx.CacheAffinityKey)
+	}
+
+	second := newSessionAffinityTestContext()
+	secondRequest := &models.ChatCompletionRequest{PromptCacheKey: &promptCacheKey}
+	if err := applyChatSessionAffinity(second, secondRequest); err != nil {
+		t.Fatalf("second applyChatSessionAffinity: %v", err)
+	}
+	if second.RequestContext().CacheAffinityKey != reqCtx.CacheAffinityKey {
+		t.Fatalf("second CacheAffinityKey = %q, want %q", second.RequestContext().CacheAffinityKey, reqCtx.CacheAffinityKey)
+	}
+}
+
+func TestApplyChatSessionAffinityHashesPromptCacheKeyThatLooksLikeAffinityKey(t *testing.T) {
+	t.Parallel()
+
+	ctx := newSessionAffinityTestContext()
+	promptCacheKey := "mt:v1:payload:" + strings.Repeat("a", 64)
+	request := &models.ChatCompletionRequest{
+		PromptCacheKey: &promptCacheKey,
+	}
+
+	if err := applyChatSessionAffinity(ctx, request); err != nil {
+		t.Fatalf("applyChatSessionAffinity: %v", err)
+	}
+
+	reqCtx := ctx.RequestContext()
+	if reqCtx.SessionID != promptCacheKey {
+		t.Fatalf("SessionID = %q, want %q", reqCtx.SessionID, promptCacheKey)
+	}
+	if reqCtx.CacheAffinityKey == promptCacheKey {
+		t.Fatalf("CacheAffinityKey contains unmodified prompt cache key: %q", reqCtx.CacheAffinityKey)
+	}
+	want := affinityKey(sessionAffinitySourceSession, []byte(promptCacheKey))
+	if reqCtx.CacheAffinityKey != want {
+		t.Fatalf("CacheAffinityKey = %q, want %q", reqCtx.CacheAffinityKey, want)
+	}
+}
+
+func TestApplyChatSessionAffinityEmptyPromptCacheKeyFallsBackToHeader(t *testing.T) {
+	t.Parallel()
+
+	ctx := newSessionAffinityTestContext()
+	ctx.Request().Header.Set(HeaderMultiTurnSessionID, "header-session")
+	promptCacheKey := ""
+	request := &models.ChatCompletionRequest{
+		PromptCacheKey: &promptCacheKey,
+	}
+
+	if err := applyChatSessionAffinity(ctx, request); err != nil {
+		t.Fatalf("applyChatSessionAffinity: %v", err)
+	}
+
+	reqCtx := ctx.RequestContext()
+	if reqCtx.SessionID != "header-session" {
+		t.Fatalf("SessionID = %q, want header-session", reqCtx.SessionID)
+	}
+	if reqCtx.SessionSource != sessionAffinitySourceHeader {
+		t.Fatalf("SessionSource = %q, want %q", reqCtx.SessionSource, sessionAffinitySourceHeader)
+	}
+}
+
+func TestApplyChatSessionAffinityRejectsInvalidPromptCacheKey(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		promptCacheKey string
+		wantMessage    string
+	}{
+		{
+			name:           "oversized",
+			promptCacheKey: strings.Repeat("a", sessionIDMaxLen+1),
+			wantMessage:    "must be at most 256 bytes",
+		},
+		{
+			name:           "control character",
+			promptCacheKey: "prompt\ncache",
+			wantMessage:    "must not contain control characters",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx := newSessionAffinityTestContext()
+			request := &models.ChatCompletionRequest{
+				PromptCacheKey: &test.promptCacheKey,
+			}
+
+			err := applyChatSessionAffinity(ctx, request)
+			if err == nil {
+				t.Fatal("applyChatSessionAffinity returned nil error")
+			}
+			httpErr, ok := err.(*echo.HTTPError)
+			if !ok {
+				t.Fatalf("error = %T, want *echo.HTTPError", err)
+			}
+			if httpErr.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d", httpErr.Code, http.StatusBadRequest)
+			}
+			if !strings.Contains(fmt.Sprint(httpErr.Message), test.wantMessage) {
+				t.Fatalf("message = %q, want substring %q", httpErr.Message, test.wantMessage)
+			}
+		})
+	}
+}
+
+func TestApplyChatSessionAffinityRejectsInvalidHeaderBeforePromptCacheKey(t *testing.T) {
+	t.Parallel()
+
+	ctx := newSessionAffinityTestContext()
+	ctx.Request().Header.Set(HeaderMultiTurnSessionID, "bad\nsession")
+	promptCacheKey := "valid-prompt-cache-session"
+	request := &models.ChatCompletionRequest{
+		PromptCacheKey: &promptCacheKey,
+	}
+
+	err := applyChatSessionAffinity(ctx, request)
+	if err == nil {
+		t.Fatal("applyChatSessionAffinity returned nil error")
+	}
+	httpErr, ok := err.(*echo.HTTPError)
+	if !ok {
+		t.Fatalf("error = %T, want *echo.HTTPError", err)
+	}
+	if httpErr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", httpErr.Code, http.StatusBadRequest)
+	}
+	if !strings.Contains(fmt.Sprint(httpErr.Message), HeaderMultiTurnSessionID+" is invalid") {
+		t.Fatalf("message = %q, want invalid header error", httpErr.Message)
 	}
 }
 
