@@ -292,6 +292,12 @@
       "service_name": "nvcf-instance-cluster-management"
     },
     {
+      "id": "icms-helm",
+      "path": "deploy/helm/isms",
+      "service_name": "helm-icms-api",
+      "initial_version": "1.4.4"
+    },
+    {
       "id": "nvcf-ui",
       "path": "src/uis/nvcf-ui",
       "service_name": "nvcf-ui"

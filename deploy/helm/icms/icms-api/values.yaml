@@ -1,0 +1,203 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+sis:
+  # Namespace to deploy the resources. The default is the release namespace.
+  namespace: "" #
+
+  # This is to override the chart name.
+  nameOverride: ""
+  fullnameOverride: ""
+
+  replicaCount: 1
+
+  # LLS/TURN Streaming addon configuration
+  lls:
+    # Enable LLS/TURN infrastructure (OpenBao secrets, HMAC rotation)
+    enabled: false
+    # Namespace for LLS resources (migrations hook, rotation CronJob)
+    namespace: "vault-system"
+    podAnnotations: {}
+    migrations:
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: 250m
+          memory: 256Mi
+    hmacRotation:
+      # Rotation schedule: 1st of each month at midnight UTC (every ~30 days)
+      schedule: "0 0 1 * *"
+      # Migrations image for rotation job
+      image:
+        # registry: must be supplied in additional values
+        # repository: must be supplied in additional values
+        # tag: must be supplied in additional values (see sis/values.versions.yaml for the internal pin)
+        tag: ""
+        pullPolicy: IfNotPresent
+      # OpenBao connection settings
+      # When empty, baoService is derived from lls.namespace in templates (openbao-server.<namespace>.svc.cluster.local)
+      baoService: ""
+      baoPort: "8200"
+      # Service account with access to openbao root token (created by k8s-openbao chart)
+      serviceAccountName: "openbao-server-initialize-cluster"
+      # Secret containing the root token (created by k8s-openbao chart)
+      rootTokenSecretName: "openbao-server-root-token"
+      resources:
+        requests:
+          cpu: 50m
+          memory: 64Mi
+        limits:
+          cpu: 250m
+          memory: 256Mi
+
+  # This sets the container image more information can be found here: https://kubernetes.io/docs/concepts/containers/images/
+  image:
+    registry: "" # must be supplied
+    repository: "" # must be supplied
+    # This sets the pull policy for images.
+    pullPolicy: IfNotPresent
+    # Pin the runtime image tag because the chart release pipeline rewrites
+    # Chart.appVersion to the chart version.
+    tag: "1.2.2"
+    # Optional immutable manifest digest. When set, this takes precedence over
+    # `tag` and `Chart.AppVersion`.
+    digest: ""
+
+  # Option 1: Single secret (convenience shorthand)
+  imagePullSecret:
+    name: "" # optional legacy shorthand
+
+  # Option 2: Multiple secrets (takes precedence over imagePullSecret if set)
+  imagePullSecrets: [] # format:  [{name: secret1}, {name: secret2}]
+
+  podAnnotations: {}
+  podLabels: {}
+  podSecurityContext: {}
+
+  # This will set the terminationGracePeriodSeconds for the pod
+  terminationGracePeriodSeconds: 60
+
+  securityContext:
+    capabilities:
+      drop:
+        - ALL
+      add:
+        - NET_BIND_SERVICE
+    runAsUser: 1000
+    # readOnlyRootFilesystem: true
+    # runAsNonRoot: true
+
+  resources:
+    limits:
+      cpu: 4
+      memory: 6Gi
+    requests:
+      cpu: 4
+      memory: 4Gi
+
+  readinessProbe:
+    httpGet:
+      path: /actuator/health/readiness
+      port: management-port
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    failureThreshold: 1
+    successThreshold: 3
+    timeoutSeconds: 1
+
+  livenessProbe:
+    httpGet:
+      path: /actuator/health/liveness
+      port: management-port
+    periodSeconds: 10
+    timeoutSeconds: 1
+    failureThreshold: 6
+
+  startupProbe:
+    httpGet:
+      path: /actuator/health/readiness
+      port: management-port
+    failureThreshold: 30
+    periodSeconds: 5
+
+  # This section is for setting up autoscaling more information can be found here: https://kubernetes.io/docs/concepts/workloads/autoscaling/
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPUUtilizationPercentage: 60
+    targetMemoryUtilizationPercentage: 60
+
+  # Vault Agent / OpenBao settings. The projected OpenBao-audience token volume
+  # and its mount are chart-owned (rendered directly in deployment.yaml) so that
+  # umbrella-chart or Helmfile list overrides cannot remove required vault-agent
+  # wiring. Only the audience is configuration.
+  vault:
+    audience: http://openbao-server.vault-system.svc.cluster.local:8200
+
+  # Additional volumes on the output Deployment definition. Appended AFTER the
+  # chart-owned volumes (openbao token, vault-config-templates) — do not redefine
+  # those here.
+  extraVolumes: []
+
+  # Additional volumeMounts on the output Deployment definition. Appended after
+  # the chart-owned mounts.
+  extraVolumeMounts: []
+
+  # Remote configuration via spring-cloud-kubernetes-client-config. When enabled,
+  # the chart renders the ConfigMap + Role/RoleBinding + REMOTE_CONFIG_* env vars,
+  # giving a hot-reloadable override layer over the baked-in ncp profile.
+  # Set to false to opt out; the service then falls back to JAR defaults in
+  # application-ncp.yaml. See README "Remote Config RBAC".
+  remoteConfig:
+    enabled: true
+    # ConfigMap metadata.name. Empty -> defaults to <fullname>-remote-config
+    # (release-scoped, collision-safe across installs in the same namespace).
+    # Override with a fixed string only when an external contract pins the name.
+    configMapName: ""
+    # Can be used for remote configuration by adding icms properties here.
+    # Add only the keys you need to override. All defaults ship in the image's
+    # application-ncp.yaml, so keep this empty unless pinning a runtime override.
+    # Example:
+    #   configData:
+    #     icms:
+    #       instance-batch-count: 10
+    #     logging:
+    #       level:
+    #         com.nvidia: DEBUG
+    configData: {}
+
+  nodeSelector: {}
+
+  tolerations: []
+
+  affinity: {}
+
+  ports:
+    - name: http
+      port: 8080
+      protocol: TCP
+    - name: management-port
+      port: 8181
+      protocol: TCP
+
+  env:
+    HOSTNAME: "sis-api"
+    AWS_REGION: "ncp"
+
+    # NATS Configuration
+    NATS_RECONNECT_ALLOWED: "true"
