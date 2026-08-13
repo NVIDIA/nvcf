@@ -465,7 +465,7 @@ mod tests {
                 rank_depth: 1,
                 selected_after_kv_free_tokens_skip: false,
             },
-            effective_algorithm: LoadBalancerAlgorithm::PowerOfTwo,
+            effective_algorithm: LoadBalancerAlgorithm::PowerOfN,
             requested_algorithm: None,
         };
         let selected_cluster = SelectedClusterRun::new(
@@ -479,7 +479,7 @@ mod tests {
         let body = metrics_text(&app.metrics);
         assert!(
             body.contains(
-                r#"stargate_routing_selections_total{algorithm="power-of-two",model="model-a",routing_key="tenant-a",selection="primary"} 1"#
+                r#"stargate_routing_selections_total{algorithm="power-of-n",model="model-a",routing_key="tenant-a",selection="primary"} 1"#
             ),
             "selected cluster should preserve routing selection metric labels, got:\n{body}"
         );

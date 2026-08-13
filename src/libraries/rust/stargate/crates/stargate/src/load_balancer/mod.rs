@@ -26,7 +26,7 @@ macro_rules! impl_display {
 mod algorithm;
 mod config;
 mod factory;
-mod power_of_two;
+mod power_of_n;
 mod pulsar;
 mod pulsar_wait_and_widen;
 mod random;
@@ -45,7 +45,7 @@ pub use config::{
     LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig, LoadBalancerAlgorithmOverride,
     LoadBalancerAlgorithmSettings, LoadBalancerConfig, LoadBalancerModelConfig,
     LoadBalancerRequestPolicy, LoadBalancerRoutingAlgorithmError, LoadBalancerSeedError,
-    WaitAndWidenAlgorithmConfig,
+    MAX_POWER_OF_N_SAMPLE_COUNT, PowerOfNAlgorithmConfig, WaitAndWidenAlgorithmConfig,
 };
 pub use factory::create_load_balancer_with_config;
 pub use request::{LoadBalancerCandidateChoice, LoadBalancerRequest};
