@@ -401,6 +401,33 @@ func roundUpCPUToInteger(cpu resource.Quantity) uint64 {
 	return uint64(cpu.Value())
 }
 
+// instanceTypePrecedes reports whether a must be considered before b when building
+// a registration, ordering by descending capacity: GPU count first, then the
+// non-GPU resources, with FullName as a final tie-break.
+//
+// This must be a strict ordering that totally orders any two instance types. Ties
+// are resolved by whichever entry is considered first, and that entry supplies the
+// resource profile published for a name it collides on. The input arrives in node
+// listing order, which is not stable, so a comparator that leaves equal-capacity
+// entries unordered would let the published profile change from one reconcile to
+// the next.
+func instanceTypePrecedes(a, b InstanceType) bool {
+	if a.GPUCount != b.GPUCount {
+		return a.GPUCount > b.GPUCount
+	}
+	for _, c := range []int{
+		a.CPU.Cmp(b.CPU),
+		a.SystemMemory.Cmp(b.SystemMemory),
+		a.Storage.Cmp(b.Storage),
+		a.GPUMemoryPerGPU.Cmp(b.GPUMemoryPerGPU),
+	} {
+		if c != 0 {
+			return c > 0
+		}
+	}
+	return a.FullName < b.FullName
+}
+
 func (g BackendGPU) toDynamicRegistration(allowMultiNodeWorkloads bool, infraOverhead corev1.ResourceList) (rg RegistrationGPU) {
 	rg.Name = string(g.Name)
 	// use the Capacity AS IS from BackendGPU for
@@ -429,7 +456,7 @@ func (g BackendGPU) toDynamicRegistration(allowMultiNodeWorkloads bool, infraOve
 	// registering both under one name, which makes a single-instance request create one
 	// instance per duplicate.
 	sort.Slice(g.InstanceTypes, func(i, j int) bool {
-		return g.InstanceTypes[i].GPUCount >= g.InstanceTypes[j].GPUCount
+		return instanceTypePrecedes(g.InstanceTypes[i], g.InstanceTypes[j])
 	})
 
 	instSetByIDStr := map[string]RegistrationInstanceType{}

@@ -636,6 +636,47 @@ func TestToRegistrationDedupsInstanceNamesAcrossBoardSKUs(t *testing.T) {
 	}
 }
 
+// Nodes arrive in listing order, which is not stable. When two SKUs of equal GPU count
+// collide on a published name, the winner supplies that name's resource profile, so the
+// choice must not depend on the order they happen to be listed in.
+func TestToRegistrationCollisionWinnerIsIndependentOfInputOrder(t *testing.T) {
+	newIT := func(fullName, cpu, mem, storage string) InstanceType {
+		return InstanceType{
+			Name:            "NCP.GPU.A100",
+			FullName:        fullName,
+			Description:     fullName,
+			CPU:             resource.MustParse(cpu),
+			SystemMemory:    resource.MustParse(mem),
+			GPUCount:        2,
+			GPUMemoryPerGPU: resource.MustParse("81920Mi"),
+			CPUArch:         "amd64",
+			OS:              "linux",
+			DriverVersion:   "570.211.01",
+			Storage:         resource.MustParse(storage),
+		}
+	}
+
+	// Same GPU count, different machines. Only the resource profile distinguishes them.
+	sxm := newIT("NVIDIA-A100-SXM4-80GB", "64", "503Gi", "424Gi")
+	pcie := newIT("NVIDIA-A100-80GB-PCIe", "48", "62Gi", "973Gi")
+
+	profileOf := func(its []InstanceType) []RegistrationInstanceType {
+		got := BackendGPUs{{Name: "A100", InstanceTypes: its}}.ToRegistration(false, corev1.ResourceList{})
+		require.Len(t, got, 1)
+		return got[0].InstanceTypes
+	}
+
+	forward := profileOf([]InstanceType{sxm, pcie})
+	reversed := profileOf([]InstanceType{pcie, sxm})
+
+	assert.Equal(t, forward, reversed, "published registration must not depend on node listing order")
+
+	// The larger machine wins the collision, consistent with the descending ordering.
+	for _, it := range forward {
+		assert.Equal(t, "NVIDIA-A100-SXM4-80GB", it.Description)
+	}
+}
+
 func Test_calcFractionCPU(t *testing.T) {
 	type spec struct {
 		q         resource.Quantity
