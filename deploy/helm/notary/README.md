@@ -31,8 +31,8 @@ notary:
 Install the chart with the default values plus your own overrides:
 
 ```bash
-helm install nvcf-notary-service nvcf-notary-service \
-  --namespace nvcf-notary-service \
+helm install notary nvcf-notary-service \
+  --namespace nvcf \
   --create-namespace \
   --values nvcf-notary-service/values.yaml \
   --values path/to/values.yaml \
@@ -43,8 +43,8 @@ helm install nvcf-notary-service nvcf-notary-service \
 Upgrade an existing release:
 
 ```bash
-helm upgrade nvcf-notary-service nvcf-notary-service \
-  --namespace nvcf-notary-service \
+helm upgrade notary nvcf-notary-service \
+  --namespace nvcf \
   --values nvcf-notary-service/values.yaml \
   --values path/to/values.yaml \
   --wait \
@@ -54,7 +54,7 @@ helm upgrade nvcf-notary-service nvcf-notary-service \
 Uninstall the release:
 
 ```bash
-helm uninstall nvcf-notary-service --namespace nvcf-notary-service
+helm uninstall notary --namespace nvcf
 ```
 
 ## Configuration
