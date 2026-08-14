@@ -209,6 +209,16 @@ releases:
     labels:
       release-group: services
 
+  - name: event-ledger
+    chart: nvcf/helm-event-ledger
+    version: 0.1.0-test
+    namespace: nvcf
+    condition: addons.eventLedger.enabled
+    values:
+      - ../global.yaml.gotmpl
+    labels:
+      release-group: services
+
   # --- Gateway API Ingress ---
   - name: ingress
     chart: nvcf/nvcf-gateway-routes
