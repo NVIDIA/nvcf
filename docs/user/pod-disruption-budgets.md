@@ -21,11 +21,11 @@ out-of-memory pressure.
 
 ## Configuration
 
-All supported PDB knobs are pre-declared as commented-out blocks in
+All supported PDB knobs are pre-declared with `enabled: false` in
 `deploy/stacks/self-managed/environments/base.yaml`. To enable a budget,
-uncomment the relevant block and set your chosen value. For environment-specific
-overrides, copy the block into your environment file (e.g.
-`deploy/stacks/self-managed/environments/<env>.yaml`) and adjust there.
+set `enabled: true` and choose a value for the relevant block. For
+environment-specific overrides, copy the block into your environment file
+(e.g. `deploy/stacks/self-managed/environments/<env>.yaml`) and adjust there.
 
 ### Infrastructure components
 
