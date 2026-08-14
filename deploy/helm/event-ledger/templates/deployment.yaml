@@ -60,7 +60,14 @@ spec:
             items:
               - key: config.yaml
                 path: config.yaml
-        {{- with .Values.eventLedger.volumes }}
+        - name: {{ include "nvcf-event-ledger.openbaoTokenVolumeName" . }}
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: {{ .Values.eventLedger.vault.audience | quote }}
+                  expirationSeconds: 3600
+                  path: {{ include "nvcf-event-ledger.openbaoTokenFileName" . }}
+        {{- with .Values.eventLedger.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
       containers:
@@ -76,7 +83,10 @@ spec:
             - name: app-config
               mountPath: /etc/event-ledger
               readOnly: true
-            {{- with .Values.eventLedger.volumeMounts }}
+            - name: {{ include "nvcf-event-ledger.openbaoTokenVolumeName" . }}
+              mountPath: {{ include "nvcf-event-ledger.openbaoTokenMountPath" . }}
+              readOnly: true
+            {{- with .Values.eventLedger.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
           env:

@@ -68,6 +68,27 @@ image.
 {{- end -}}
 
 {{/*
+OpenBao projected service-account token helpers. These four helpers define
+the chart-owned contract for the Vault Agent Kubernetes auto-auth token volume.
+Use these in annotations and the workload template instead of repeating literals.
+*/}}
+{{- define "nvcf-event-ledger.openbaoTokenVolumeName" -}}
+openbao-token
+{{- end -}}
+
+{{- define "nvcf-event-ledger.openbaoTokenMountPath" -}}
+/var/run/secrets/openbao
+{{- end -}}
+
+{{- define "nvcf-event-ledger.openbaoTokenFileName" -}}
+token
+{{- end -}}
+
+{{- define "nvcf-event-ledger.openbaoTokenPath" -}}
+{{- printf "%s/%s" (include "nvcf-event-ledger.openbaoTokenMountPath" .) (include "nvcf-event-ledger.openbaoTokenFileName" .) -}}
+{{- end -}}
+
+{{/*
 Hashicorp Vault Agent Injector annotations. Always rendered onto the pod
 so the injector mints /vault/secrets/secrets.json at pod start from the
 OpenBao secret paths. The template content is rendered into a ConfigMap by
@@ -79,12 +100,8 @@ templates/configmap-vault-agent-template.yaml and mounted into the pod at
 vault.hashicorp.com/agent-inject: "true"
 vault.hashicorp.com/role: {{ $role | quote }}
 vault.hashicorp.com/auth-path: {{ .Values.eventLedger.vault.jwtAuthPath | default "auth/jwt" | quote }}
-{{- /* Point the agent's kubernetes auto-auth at the OpenBao-audience token,
-       mounted off the standard SA path.
-       NOTE: this literal must stay in sync with eventLedger.volumeMounts for
-       the `openbao-token` volume in values.yaml (mountPath + projected path).
-       If you change that mount, change this annotation too. */}}
-vault.hashicorp.com/auth-config-token-path: "/var/run/secrets/openbao/token"
+vault.hashicorp.com/agent-service-account-token-volume-name: {{ include "nvcf-event-ledger.openbaoTokenVolumeName" . | quote }}
+vault.hashicorp.com/auth-config-token-path: {{ include "nvcf-event-ledger.openbaoTokenPath" . | quote }}
 vault.hashicorp.com/agent-copy-volume-mounts: {{ include "nvcf-event-ledger.fullname" . | quote }}
 vault.hashicorp.com/agent-inject-template-file-secrets.json: "/vault/config/templates/secrets.json.tmpl"
 vault.hashicorp.com/secret-volume-path: "/vault/secrets"

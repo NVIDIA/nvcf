@@ -100,31 +100,12 @@ eventLedger:
   vault:
     role: "event-ledger"
     jwtAuthPath: "auth/jwt"
-    # Secret paths for the Vault Agent template are fixed in
-    # files/secrets.json.tmpl and match what 22_setup_event-ledger.sh
-    # provisions in OpenBao.
+    # audience must match the JWT auth role's bound_audiences in OpenBao,
+    # which the 22_setup_event-ledger migration sets to the internal OpenBao URL.
+    audience: "http://openbao-server.vault-system.svc.cluster.local:8200"
 
-  # Projected ServiceAccount token with the OpenBao-bound audience, mounted at
-  # a dedicated path. The Vault Agent's kubernetes auto-auth reads this token
-  # via the vault.hashicorp.com/auth-config-token-path annotation.
-  # The token's `aud` claim must match the JWT auth role's bound_audiences,
-  # which the migration sets to OPENBAO_SERVER_INTERNAL_URL.
-  volumes:
-    - name: openbao-token
-      projected:
-        sources:
-          - serviceAccountToken:
-              path: token
-              expirationSeconds: 3600
-              audience: http://openbao-server.vault-system.svc.cluster.local:8200
-  volumeMounts:
-    # NOTE: the Vault Agent reads this token via the hardcoded
-    # vault.hashicorp.com/auth-config-token-path annotation in _helpers.tpl
-    # ("/var/run/secrets/openbao/token"). If you change this mountPath (or the
-    # projected token `path` above), update that annotation to match.
-    - name: openbao-token
-      mountPath: /var/run/secrets/openbao
-      readOnly: true
+  extraVolumes: []
+  extraVolumeMounts: []
 
   nodeSelector: {}
   tolerations: []
