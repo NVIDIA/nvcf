@@ -86,9 +86,12 @@ async fn get_function_utilization_history(
     };
 
     let query = if use_control_plane_metrics {
+        // Invocation latency can be split by caller NCA, while capacity belongs to the shared
+        // function-version pool. Aggregate both sides by that shared identity so the query works
+        // with both per-caller and NCA-free latency series.
         format!(
-            r#"100 * sum by(function_id, function_version_id, nca_id) (rate(function_request_latency_sum{{function_id="{id}", function_version_id="{v_id}"{env}}}[2m])) /
-            (avg by(function_id, function_version_id, nca_id) (nvcf_function_instances_current{{function_id="{id}", function_version_id="{v_id}"{env}}}) * avg by(function_id, function_version_id, nca_id) (nvcf_function_concurrency{{function_id="{id}", function_version_id="{v_id}"{env}}})) or vector(0)"#,
+            r#"100 * sum by(function_id, function_version_id) (rate(function_request_latency_sum{{function_id="{id}", function_version_id="{v_id}"{env}}}[2m])) /
+            (avg by(function_id, function_version_id) (nvcf_function_instances_current{{function_id="{id}", function_version_id="{v_id}"{env}}}) * avg by(function_id, function_version_id) (nvcf_function_concurrency{{function_id="{id}", function_version_id="{v_id}"{env}}})) or vector(0)"#,
             id = function_id,
             v_id = function_version_id,
             env = env_suffix
@@ -856,6 +859,45 @@ mod tests {
     /// A VictoriaMetrics matrix response with no series (empty result).
     fn vm_empty() -> String {
         r#"{"status":"success","data":{"resultType":"matrix","result":[]}}"#.to_string()
+    }
+
+    #[tokio::test]
+    async fn test_control_plane_utilization_query_aggregates_shared_function_pool() {
+        let fid = Uuid::new_v4();
+        let fvid = Uuid::new_v4();
+        let expected_query = format!(
+            r#"100 * sum by(function_id, function_version_id) (rate(function_request_latency_sum{{function_id="{fid}", function_version_id="{fvid}"}}[2m])) /
+            (avg by(function_id, function_version_id) (nvcf_function_instances_current{{function_id="{fid}", function_version_id="{fvid}"}}) * avg by(function_id, function_version_id) (nvcf_function_concurrency{{function_id="{fid}", function_version_id="{fvid}"}})) or vector(0)"#
+        );
+        let mut server = mockito::Server::new_async().await;
+        let _utilization = server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::UrlEncoded(
+                "query".to_string(),
+                expected_query,
+            ))
+            .with_status(200)
+            .with_body(vm_series(
+                &format!(r#""function_id":"{fid}","function_version_id":"{fvid}""#),
+                "42",
+            ))
+            .create_async()
+            .await;
+
+        let utilization = get_function_utilization_history(
+            &ts_client(server.url()),
+            &fid,
+            &fvid,
+            "stg",
+            true,
+            true,
+            5,
+            60,
+        )
+        .await
+        .expect("control-plane utilization");
+
+        assert_eq!(utilization, vec![(1_700_000_000, "42".to_string())]);
     }
 
     #[tokio::test]

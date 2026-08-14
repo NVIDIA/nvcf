@@ -231,13 +231,11 @@ pub fn init_metrics(settings: &MetricsSettings) -> anyhow::Result<()> {
 pub fn record_invocation_end(
     function_id: String,
     function_version_id: String,
-    nca_id: String,
     start_time: SystemTime,
 ) {
     let labels = [
         ("function_id", function_id),
         ("function_version_id", function_version_id),
-        ("nca_id", nca_id),
     ];
     if let Ok(latency) = start_time.elapsed() {
         histogram!(FUNCTION_REQUEST_LATENCY.name, &labels).record(latency);
@@ -355,6 +353,38 @@ mod tests {
     use super::*;
     use metrics_util::debugging::{DebugValue, DebuggingRecorder};
     use metrics_util::MetricKind;
+
+    #[test]
+    fn invocation_latency_omits_nca_id() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        metrics::with_local_recorder(&recorder, || {
+            record_invocation_end(
+                "function-id".to_string(),
+                "function-version-id".to_string(),
+                SystemTime::now() - Duration::from_secs(1),
+            );
+        });
+
+        let metrics = snapshotter.snapshot().into_vec();
+        let (key, _, _, _) = metrics
+            .iter()
+            .find(|(key, _, _, _)| {
+                key.kind() == MetricKind::Histogram
+                    && key.key().name() == FUNCTION_REQUEST_LATENCY.name
+            })
+            .expect("function request latency should be recorded");
+
+        assert!(key
+            .key()
+            .labels()
+            .any(|label| label.key() == "function_id" && label.value() == "function-id"));
+        assert!(key.key().labels().any(|label| {
+            label.key() == "function_version_id" && label.value() == "function-version-id"
+        }));
+        assert!(!key.key().labels().any(|label| label.key() == "nca_id"));
+    }
 
     #[test]
     fn application_error_uses_empty_function_id_when_context_is_missing() {

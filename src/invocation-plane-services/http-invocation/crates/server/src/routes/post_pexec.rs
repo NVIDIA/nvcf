@@ -536,7 +536,6 @@ pub(crate) async fn handle_streaming_response(
                 metrics::record_invocation_end(
                     function_id.to_string(),
                     function_version_id.to_string(),
-                    nca_id.to_string(),
                     start_time,
                 );
             }),
