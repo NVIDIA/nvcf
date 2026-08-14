@@ -62,9 +62,10 @@ const SECONDS_DURATION_BUCKETS: &[f64; 15] = &[
     0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 1000.0,
 ];
 
-// define time bucket for FUNCTION_REQUEST_LATENCY in the same way we're doing in the Java code
-const FUNCTION_REQUEST_LATENCY_BUCKETS_IN_SECONDS: &[f64; 15] = &[
-    0.1, 0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 6.0, 20.0, 60.0, 120.0, 300.0, 600.0, 1200.0, 1800.0,
+// Buckets tuned for AI inference latency: coarser resolution reduces series count
+// while preserving visibility at p50/p95/p99 thresholds that matter operationally.
+const FUNCTION_REQUEST_LATENCY_BUCKETS_IN_SECONDS: &[f64; 9] = &[
+    0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 300.0, 600.0, 1800.0,
 ];
 
 const FUNCTION_REQUEST_LATENCY: Metric = Metric {
