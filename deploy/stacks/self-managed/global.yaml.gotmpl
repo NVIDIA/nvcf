@@ -561,7 +561,7 @@ ess:
   {{- end }}
   image:
     registry: {{ .Values.global.image.registry }}
-    repository: {{ .Values.global.image.repository }}/ess-api
+    repository: {{ .Values.global.image.repository }}/nvcf-ess
   {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}
