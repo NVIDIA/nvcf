@@ -192,6 +192,37 @@ func podGPURequest(pod *corev1.Pod) int64 {
 	return total
 }
 
+// refreshPodForCapture re-reads the Pod immediately before a capture and
+// returns the object to capture from, plus whether to proceed at all.
+//
+// runCapture holds a DeepCopy taken before WarmupDelay (60s by default).
+// Container IDs are the field that goes stale in that window: a
+// main-container restart mints a new runtime ID, the old one matches no
+// cgroup, so ResolveContainerPID misses and the orchestrator falls back to
+// the pod PID -- the sidecar on a multi-container pod, which is exactly the
+// bug nvsnap#788 fixed. Re-reading keeps MainContainerID naming what is
+// actually running.
+//
+// A read failure is not fatal: fall back to the copy we already have, since
+// a stale ID costs only that pre-#788 fallback. A UID change is fatal --
+// same name, different pod means ours was deleted and recreated during the
+// delay, and capturing now would stamp the live pod's bytes with the dead
+// pod's identity. The replacement gets its own capture from its own Ready
+// event.
+func (w *Watcher) refreshPodForCapture(ctx context.Context, pod *corev1.Pod, log *logrus.Entry) (*corev1.Pod, bool) {
+	fresh, err := w.KubeClient.CoreV1().Pods(pod.Namespace).Get(ctx, pod.Name, metav1.GetOptions{})
+	if err != nil {
+		log.WithError(err).Warn("pod re-read before capture failed; using the pre-warmup copy")
+		return pod, true
+	}
+	if fresh.UID != pod.UID {
+		log.WithField("fresh_pod_uid", string(fresh.UID)).
+			Warn("pod was replaced during the warmup delay; abandoning this capture")
+		return nil, false
+	}
+	return fresh, true
+}
+
 // runCapture sleeps WarmupDelay, acquires a concurrency slot, and runs Capture.
 // Failures are logged but don't tear down the watcher; transient errors are
 // retried by re-firing on subsequent Pod Update events (we clear captured
@@ -219,6 +250,11 @@ func (w *Watcher) runCapture(ctx context.Context, pod *corev1.Pod) {
 	// take 5–10 min for tar+rsync, so 30 min is generous.
 	captureCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
+
+	pod, ok := w.refreshPodForCapture(captureCtx, pod, log)
+	if !ok {
+		return
+	}
 
 	hashInput := w.Composer.Compose(pod, 0)
 	req := CaptureRequest{

@@ -321,6 +321,109 @@ func TestDeleteCheckpoint_HTTP_204WhenCatalogRowExists(t *testing.T) {
 	}
 }
 
+// A cascade where every tier fails leaves AnySuccess false, same as a
+// checkpoint that genuinely does not exist. Answering 404 for both told the
+// caller the dump was gone while it was still on disk -- the nvsnap#736
+// failure mode wearing a different status code. The retained catalog row is
+// what distinguishes them.
+func TestDeleteCheckpoint_HTTP_500WhenEveryTierFails(t *testing.T) {
+	s := newTestServerWithCatalog(t)
+	fb, fbSrv := newFakeBlobstore()
+	fb.failHash["agent-dead"] = http.StatusInternalServerError
+	defer fbSrv.Close()
+	s.config.BlobstoreURL = fbSrv.URL
+
+	if err := s.catalog.UpsertCheckpoint(&db.Checkpoint{
+		ID:             "ck-allfail",
+		Hash:           "aaa111aaa111aaa111",
+		CheckpointPath: "/var/lib/nvsnap/checkpoints/agent-dead",
+		CreatedAt:      time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/checkpoints/ck-allfail", http.NoBody)
+	rr := httptest.NewRecorder()
+	s.router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Errorf("got %d, want 500; body=%s", rr.Code, rr.Body.String())
+	}
+	if _, err := s.catalog.GetCheckpoint("ck-allfail"); err != nil {
+		t.Errorf("catalog row must survive so the delete can be retried; get: %v", err)
+	}
+}
+
+// The by-hash endpoint runs the same cascade and so owes the same answer.
+// It only consulted AnySuccess, so a partial cascade reported 204 while the
+// row it deliberately kept was still there.
+func TestDeleteCheckpointByHash_HTTP_500OnPartialCascade(t *testing.T) {
+	s := newTestServerWithCatalog(t)
+	fb, fbSrv := newFakeBlobstore()
+	fb.failHash["agent-dead"] = http.StatusInternalServerError
+	defer fbSrv.Close()
+	s.config.BlobstoreURL = fbSrv.URL
+
+	const hash = "bbb222bbb222bbb222"
+	if err := s.catalog.UpsertCheckpoint(&db.Checkpoint{
+		ID:             "ck-hash",
+		Hash:           hash,
+		Namespace:      "ns1",
+		PodName:        "p1",
+		CheckpointPath: "/var/lib/nvsnap/checkpoints/agent-dead",
+		CreatedAt:      time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/checkpoints/by-hash/"+hash, http.NoBody)
+	rr := httptest.NewRecorder()
+	s.router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Errorf("got %d, want 500; body=%s", rr.Code, rr.Body.String())
+	}
+	if rows, err := s.catalog.ListByHash(hash); err != nil || len(rows) == 0 {
+		t.Errorf("catalog row must survive a partial by-hash cascade (rows=%d, err=%v)", len(rows), err)
+	}
+}
+
+// A catalog delete that itself errors is the one tier whose failure the
+// cascade cannot route around: it appended to Errors but left
+// CatalogRetained false, so a run where some other tier had already
+// succeeded still answered 204 with the row in place.
+func TestCascadeDelete_CatalogDeleteErrorSetsRetained(t *testing.T) {
+	s := newTestServerWithCatalog(t)
+	s.config.BlobstoreURL = ""
+
+	// An empty Hash is what isolates this: every other catalog touch in the
+	// cascade (sibling lookup, L2 PVCs, snapshots, leases, capture CM) is
+	// gated on row.Hash != "", so DeleteCheckpoint is the only catalog call
+	// that runs. Closing the DB therefore fails that call and nothing else,
+	// leaving result.Errors empty until it -- which means the pre-delete
+	// "errors already happened" early return cannot be what sets the flag.
+	row := &db.Checkpoint{
+		ID:        "ck-catalog-err",
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := s.catalog.UpsertCheckpoint(row); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := s.catalog.Close(); err != nil {
+		t.Fatalf("close catalog: %v", err)
+	}
+
+	res := s.cascadeDeleteCheckpoint(context.Background(), row.ID, "agent-x", row)
+
+	if len(res.Errors) != 1 || !strings.Contains(res.Errors[0], "DeleteCheckpoint") {
+		t.Fatalf("want exactly one error, from the catalog delete; got %v", res.Errors)
+	}
+	if !res.CatalogRetained {
+		t.Error("CatalogRetained = false; a failed catalog delete leaves the row, " +
+			"so callers must not be told the checkpoint is gone")
+	}
+}
+
 // ---------------- helpers ----------------
 
 func splitHostPort(s string) (host, port string, ok bool) {
@@ -481,11 +584,11 @@ func TestCascadeDelete_RetainsCatalogRowWhenATierFails(t *testing.T) {
 		t.Fatal("expected a tier error from the failing blobstore")
 	}
 	if res.CatalogRows != 0 {
-		t.Errorf("CatalogRows = %d, want 0 — the row must survive a failed tier delete", res.CatalogRows)
+		t.Errorf("CatalogRows = %d, want 0; the row must survive a failed tier delete", res.CatalogRows)
 	}
 	// The row itself must still be readable, or the dump is unreachable.
 	if got, err := s.catalog.GetCheckpoint("ck-1"); err != nil || got == nil {
-		t.Errorf("catalog row was deleted despite a tier failure (get: %v) — dump is now orphaned", err)
+		t.Errorf("catalog row was deleted despite a tier failure (get: %v); dump is now orphaned", err)
 	}
 	if res.Status() != "partial" {
 		t.Errorf("Status() = %q, want partial", res.Status())
@@ -510,6 +613,6 @@ func TestCascadeDelete_DeletesCatalogRowWhenAllTiersSucceed(t *testing.T) {
 		t.Fatalf("clean cascade should have no errors; got %v", res.Errors)
 	}
 	if res.CatalogRows == 0 {
-		t.Error("CatalogRows = 0 — a clean cascade must delete the row")
+		t.Error("CatalogRows = 0; a clean cascade must delete the row")
 	}
 }

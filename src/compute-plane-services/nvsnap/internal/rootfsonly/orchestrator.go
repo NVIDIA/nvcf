@@ -295,8 +295,12 @@ func (c *Capturer) Capture(ctx context.Context, req CaptureRequest) (checkpoints
 	}
 	entryArgv := readEntryArgv(procRoot, entryPID)
 	if len(entryArgv) > 0 {
+		// argc, never argv: inference entrypoints routinely carry
+		// --api-key / HF tokens / signed model URLs, and this log ships to
+		// the cluster log stack. The argv still goes into the manifest,
+		// which is what restore replays, but that is not a service log.
 		log.WithFields(map[string]interface{}{
-			"entry_argv": entryArgv,
+			"entry_argc": len(entryArgv),
 			"entry_pid":  entryPID,
 		}).Info("recorded source entrypoint for whole-rootfs restore")
 	} else {

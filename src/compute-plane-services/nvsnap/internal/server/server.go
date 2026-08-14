@@ -996,7 +996,11 @@ func (s *Server) deleteCheckpoint(w http.ResponseWriter, r *http.Request) {
 
 	result := s.cascadeDeleteCheckpoint(ctx, id, agentID, row)
 
-	if !result.AnySuccess {
+	// Genuine 404: nothing matched anywhere AND nothing failed. A cascade
+	// that failed on every tier also leaves AnySuccess false, but there the
+	// checkpoint still exists -- answering 404 would claim it is gone.
+	// CatalogRetained separates the two.
+	if !result.AnySuccess && !result.CatalogRetained {
 		s.writeError(w, http.StatusNotFound, "checkpoint not found in any tier (agent, peers, blobstore, catalog)")
 		return
 	}
@@ -1053,8 +1057,15 @@ func (s *Server) deleteCheckpointByHash(w http.ResponseWriter, r *http.Request) 
 		Status:     result.Status(),
 		Message:    result.Summary(),
 	})
-	if !result.AnySuccess {
+	if !result.AnySuccess && !result.CatalogRetained {
 		s.writeError(w, http.StatusNotFound, "no artifacts found for hash "+hash)
+		return
+	}
+	// Same contract as deleteCheckpoint: a retained catalog row means the
+	// checkpoint is still there, so this is not a 204 (nvsnap#736).
+	if result.CatalogRetained {
+		s.writeError(w, http.StatusInternalServerError,
+			"checkpoint partially deleted; catalog row retained for retry: "+result.Summary())
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -1212,6 +1223,9 @@ func (s *Server) cascadeDeleteCheckpoint(ctx context.Context, id, agentID string
 	if row != nil && row.Hash != "" {
 		n, err := s.catalog.DeleteByHash(row.Hash)
 		if err != nil {
+			// The row survived the delete just as deliberately as in the
+			// branch above, so callers must hear about it the same way.
+			result.CatalogRetained = true
 			result.Errors = append(result.Errors,
 				fmt.Sprintf("catalog DeleteByHash(%s): %v", row.Hash[:12], err))
 		} else {
@@ -1222,6 +1236,7 @@ func (s *Server) cascadeDeleteCheckpoint(ctx context.Context, id, agentID string
 		}
 	} else if row != nil {
 		if err := s.catalog.DeleteCheckpoint(id); err != nil {
+			result.CatalogRetained = true
 			result.Errors = append(result.Errors,
 				fmt.Sprintf("catalog DeleteCheckpoint(%s): %v", id, err))
 		} else {

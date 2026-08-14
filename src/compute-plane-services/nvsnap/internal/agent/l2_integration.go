@@ -232,19 +232,19 @@ func defaultL2Size(_ string, m checkpointstore.Manifest) int64 {
 	const oneGiB int64 = 1 << 30
 
 	// Rootfs and cachedir paths both measure what they captured, so size
-	// from that rather than guessing. cachedir was added after this
-	// function and did not match the rootfs-only check, so every cachedir
-	// capture fell through to the vRAM estimate below: a 14 GB capture
-	// asked for 96 GiB (80 GiB H100 default x 1.2). On a Retain
-	// StorageClass that over-allocation is permanent and per-capture.
-	// The floor is a guard against a degenerate manifest, not a default: it
-	// used to be 10 GiB, which discarded the measured size for every capture
-	// under ~8.5 GiB. A 269 MB cachedir capture provisioned 10 GiB (~20 GiB
-	// raw on a RAID-10 VPG), permanently, because these StorageClasses are
-	// Retain -- the same over-allocation this function was written to remove,
-	// one order of magnitude down. The 1.2x multiplier already covers fs
-	// overhead, and the L2 StorageClasses set allowVolumeExpansion, so
-	// sizing tight costs nothing.
+	// from that rather than guessing. Sizing from the vRAM estimate below
+	// asked 96 GiB (80 GiB H100 default x 1.2) for a 14 GB capture, and on
+	// a Retain StorageClass that over-allocation is permanent and
+	// per-capture.
+	//
+	// The floor is a guard against a degenerate manifest, not a default. It
+	// was 10 GiB, which discarded the measured size for every capture under
+	// ~8.5 GiB: a 269 MB cachedir capture still provisioned 10 GiB (~20 GiB
+	// raw on a RAID-10 VPG), permanently. Same over-allocation this branch
+	// exists to avoid, just 5x smaller than the vRAM estimate instead of
+	// 350x. The 1.2x multiplier already covers fs overhead and the L2
+	// StorageClasses set allowVolumeExpansion, so sizing tight costs
+	// nothing.
 	if (m.CaptureMethod == "rootfs" || m.CaptureMethod == "cachedir") && m.TotalSizeBytes > 0 {
 		const floor = 2 * oneGiB
 		return max(m.TotalSizeBytes*12/10, floor)
