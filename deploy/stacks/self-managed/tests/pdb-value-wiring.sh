@@ -111,7 +111,7 @@ cassandra:
 EOF
 
 render_chart_values cassandra "$work_dir/cassandra-min-values.yaml" >/dev/null
-grep -q "enabled: true" "$work_dir/cassandra-min-values.yaml" ||
+grep -A2 "podDisruptionBudget:" "$work_dir/cassandra-min-values.yaml" | grep -q "enabled: true" ||
   fail "cassandra: minAvailable PDB did not set enabled: true"
 grep -q "minAvailable: 2" "$work_dir/cassandra-min-values.yaml" ||
   fail "cassandra: minAvailable: 2 did not reach the chart values"
@@ -259,7 +259,7 @@ rateLimiter:
 EOF
 
 render_chart_values ratelimiter "$work_dir/ratelimiter-values.yaml" >/dev/null
-grep -q "enabled: true" "$work_dir/ratelimiter-values.yaml" ||
+grep -A2 "podDisruptionBudget:" "$work_dir/ratelimiter-values.yaml" | grep -q "enabled: true" ||
   fail "rateLimiter: podDisruptionBudget.enabled: true did not reach chart values"
 
 # ---------------------------------------------------------------------------
@@ -277,7 +277,7 @@ ess:
 EOF
 
 render_chart_values ess-api "$work_dir/ess-values.yaml" >/dev/null
-grep -q "enabled: true" "$work_dir/ess-values.yaml" ||
+grep -A2 "podDisruptionBudget:" "$work_dir/ess-values.yaml" | grep -q "enabled: true" ||
   fail "ess: podDisruptionBudget.enabled: true did not reach chart values"
 
 echo "pdb-value-wiring: all checks passed"
