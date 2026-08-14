@@ -21,8 +21,11 @@ out-of-memory pressure.
 
 ## Configuration
 
-Set PDB values in your environment file (e.g.
-`deploy/stacks/self-managed/environments/<env>.yaml`).
+All supported PDB knobs are pre-declared as commented-out blocks in
+`deploy/stacks/self-managed/environments/base.yaml`. To enable a budget,
+uncomment the relevant block and set your chosen value. For environment-specific
+overrides, copy the block into your environment file (e.g.
+`deploy/stacks/self-managed/environments/<env>.yaml`) and adjust there.
 
 ### Infrastructure components
 
