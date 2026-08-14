@@ -29,10 +29,26 @@ data:
     {{- with .Values.helmManaged }}
     {{- $clientID := .oAuthClientID | default "" }}
     {{- $mountPath := "" }}
+    {{- $vaultAddress := "" }}
     {{- if $.Values.vaultConfig }}
     {{- $mountPath = $.Values.vaultConfig.oAuthClientMountPath }}
+    {{- $vaultAddress = $.Values.vaultConfig.address | default "" }}
     {{- if and (not $mountPath) $clientID $.Values.vaultConfig.oAuthClientMountPathTemplate }}
     {{- $mountPath = printf $.Values.vaultConfig.oAuthClientMountPathTemplate $clientID }}
+    {{- end }}
+    {{- end }}
+    {{- if $clientID }}
+    {{- if or (ne $vaultAddress (trim $vaultAddress)) (contains "@" $vaultAddress) (contains "?" $vaultAddress) (contains "#" $vaultAddress) }}
+    {{- fail "vaultConfig.address must be an absolute HTTPS URL with no credentials, query, or fragment when helmManaged.oAuthClientID is set" }}
+    {{- end }}
+    {{- $parsedVaultAddress := urlParse $vaultAddress }}
+    {{- $vaultScheme := $parsedVaultAddress.scheme | default "" }}
+    {{- $vaultHost := $parsedVaultAddress.host | default "" }}
+    {{- $vaultUserInfo := $parsedVaultAddress.userinfo | default "" }}
+    {{- $vaultQuery := $parsedVaultAddress.query | default "" }}
+    {{- $vaultFragment := $parsedVaultAddress.fragment | default "" }}
+    {{- if or (ne $vaultScheme "https") (not (regexMatch `^(\[[^]]+\]|[^:[:space:]]+)(:[0-9]+)?$` $vaultHost)) $vaultUserInfo $vaultQuery $vaultFragment }}
+    {{- fail "vaultConfig.address must be an absolute HTTPS URL with no credentials, query, or fragment when helmManaged.oAuthClientID is set" }}
     {{- end }}
     {{- end }}
     clusterDescription: {{ .clusterDescription | default $.Values.clusterName | quote }}
@@ -41,6 +57,8 @@ data:
     nvcaVersion: {{ .nvcaVersion | quote }}
     oAuthClientId: {{ $clientID | quote }}
     oAuthClientMountPath: {{ $mountPath | quote }}
+    vaultConfig:
+      address: {{ $vaultAddress | quote }}
     cloudProvider: {{ .cloudProvider | quote }}
     region: {{ .clusterRegion | quote }}
     attributes: {{ include "nvcaop.jsonListOrEmpty" .clusterAttributes }}
