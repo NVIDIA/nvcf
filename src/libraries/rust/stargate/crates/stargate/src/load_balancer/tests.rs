@@ -810,6 +810,10 @@ fn pulsar_wait_and_widen_rejects_explicit_comparator() {
             .to_string()
             .contains("comparator is not supported for pulsar-wait-and-widen")
     );
+    assert_json_rejected::<LoadBalancerAlgorithmConfig>(
+        r#"{"algorithm":"pulsar-wait-and-widen","comparator":null}"#,
+        "invalid type: null",
+    );
 }
 
 #[test]
@@ -1732,7 +1736,7 @@ fn power_of_n_uses_each_configured_comparator() {
             .power_of_n_settings_mut()
             .expect("power-of-n config should expose settings");
         settings.sample_count = 2;
-        settings.comparator = Some(comparator);
+        settings.comparator = comparator;
         let load_balancer =
             create_load_balancer_with_config(&config).expect("comparator config should be valid");
 

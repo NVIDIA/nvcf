@@ -58,9 +58,8 @@ impl ClusterComparator {
         candidate_b: &RoutedClusterSnapshot,
     ) -> Ordering {
         match self {
-            Self::EstimatedTtft => full_ttft(candidate_a, request)
-                .ttft_ms
-                .total_cmp(&full_ttft(candidate_b, request).ttft_ms),
+            Self::EstimatedTtft => estimated_ttft_ms(candidate_a, request)
+                .total_cmp(&estimated_ttft_ms(candidate_b, request)),
             Self::QueueTime => queue_delay_ms(candidate_a, request.priority)
                 .total_cmp(&queue_delay_ms(candidate_b, request.priority)),
             Self::InputWorkSeconds => input_work_seconds(candidate_a, request.input_tokens)
@@ -88,9 +87,10 @@ pub(crate) fn estimate_ttft(
     ignore_queue_time: bool,
     ignore_input_processing_time: bool,
 ) -> TtftEstimate {
-    let (queue_ms, prefill_ms, rtt_ms) =
-        ttft_components(candidate, input_tokens.unwrap_or_default() as f64, priority);
-    let ttft_ms = rtt_ms
+    let input_tps = input_tps(candidate);
+    let queue_ms = queue_delay_ms_with_tps(candidate, priority, input_tps);
+    let prefill_ms = processing_delay_ms(input_tokens.unwrap_or_default() as f64, input_tps);
+    let ttft_ms = rtt_ms(candidate)
         + if ignore_queue_time { 0.0 } else { queue_ms }
         + if ignore_input_processing_time {
             0.0
@@ -111,7 +111,7 @@ pub(crate) fn rtt_ms(candidate: &RoutedClusterSnapshot) -> f64 {
     candidate.rtt.as_secs_f64() * 1000.0
 }
 
-fn full_ttft(candidate: &RoutedClusterSnapshot, request: &LoadBalancerRequest<'_>) -> TtftEstimate {
+fn estimated_ttft_ms(candidate: &RoutedClusterSnapshot, request: &LoadBalancerRequest<'_>) -> f64 {
     estimate_ttft(
         candidate,
         request.input_tokens,
@@ -119,23 +119,11 @@ fn full_ttft(candidate: &RoutedClusterSnapshot, request: &LoadBalancerRequest<'_
         false,
         false,
     )
+    .ttft_ms
 }
 
 fn queue_delay_ms(candidate: &RoutedClusterSnapshot, priority: u32) -> f64 {
     queue_delay_ms_with_tps(candidate, priority, input_tps(candidate))
-}
-
-fn ttft_components(
-    candidate: &RoutedClusterSnapshot,
-    input_tokens: f64,
-    priority: u32,
-) -> (f64, f64, f64) {
-    let input_tps = input_tps(candidate);
-    (
-        queue_delay_ms_with_tps(candidate, priority, input_tps),
-        processing_delay_ms(input_tokens, input_tps),
-        rtt_ms(candidate),
-    )
 }
 
 fn queue_delay_ms_with_tps(

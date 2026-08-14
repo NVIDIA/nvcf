@@ -42,9 +42,7 @@ impl PowerOfNLoadBalancer {
             .map_err(anyhow::Error::msg)?;
         Ok(Self {
             sample_count,
-            comparator: config
-                .comparator()
-                .expect("power-of-n should have a comparator"),
+            comparator: settings.comparator,
         })
     }
 

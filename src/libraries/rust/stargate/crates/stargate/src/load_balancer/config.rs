@@ -191,6 +191,7 @@ pub struct LoadBalancerRequestPolicy {
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct WaitAndWidenAlgorithmConfig {
     pub seed: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_present_comparator")]
     pub comparator: Option<ClusterComparator>,
     pub cache_affinity_virtual_nodes: Option<usize>,
     pub cache_affinity_backend_selection_count: Option<usize>,
@@ -204,6 +205,15 @@ pub struct WaitAndWidenAlgorithmConfig {
     pub ignore_input_processing_time: Option<bool>,
 }
 
+fn deserialize_present_comparator<'de, D>(
+    deserializer: D,
+) -> Result<Option<ClusterComparator>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    ClusterComparator::deserialize(deserializer).map(Some)
+}
+
 const DEFAULT_POWER_OF_N_SAMPLE_COUNT: usize = 2;
 pub const MAX_POWER_OF_N_SAMPLE_COUNT: usize = 64;
 
@@ -211,14 +221,14 @@ pub const MAX_POWER_OF_N_SAMPLE_COUNT: usize = 64;
 #[serde(default)]
 pub struct PowerOfNAlgorithmConfig {
     pub sample_count: usize,
-    pub comparator: Option<ClusterComparator>,
+    pub comparator: ClusterComparator,
 }
 
 impl Default for PowerOfNAlgorithmConfig {
     fn default() -> Self {
         Self {
             sample_count: DEFAULT_POWER_OF_N_SAMPLE_COUNT,
-            comparator: None,
+            comparator: ClusterComparator::default(),
         }
     }
 }
@@ -291,9 +301,7 @@ impl LoadBalancerAlgorithmConfig {
 
     pub(crate) fn comparator(&self) -> Option<ClusterComparator> {
         match &self.settings {
-            LoadBalancerAlgorithmSettings::PowerOfN(config) => {
-                Some(config.comparator.unwrap_or_default())
-            }
+            LoadBalancerAlgorithmSettings::PowerOfN(config) => Some(config.comparator),
             LoadBalancerAlgorithmSettings::WaitAndWiden(config) => {
                 Some(config.comparator.unwrap_or_default())
             }
