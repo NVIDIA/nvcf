@@ -296,7 +296,7 @@
       "id": "cloud-functions-helm",
       "path": "deploy/helm/cloud-functions",
       "service_name": "helm-nvcf-api",
-      "initial_version": "0.4.2"
+      "initial_version": "1.23.11"
     },
     {
       "id": "instance-cluster-management",
