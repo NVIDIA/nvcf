@@ -153,7 +153,7 @@ The queue delay uses the backend's priority-aware queue estimate when present.
 Otherwise it divides queued input tokens by `last_mean_input_tps`. Prefill time
 divides `x-input-tokens` by the same capacity signal.
 
-The algorithm groups close TTFT estimates into buckets. It samples `n`
+The algorithm groups close TTFT values into buckets. It samples `n`
 candidates from unlocked buckets and chooses the candidate with the lowest
 configured comparator score. The default comparator is `ttft`. A
 later bucket becomes available after the request has waited for a fraction of

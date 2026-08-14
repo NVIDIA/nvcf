@@ -2027,7 +2027,7 @@ fn wait_and_widen_cache_affinity_is_skipped_without_header() {
 }
 
 wait_and_widen_choice_tests! {
-    wait_and_widen_uses_input_tokens_in_ttft_estimate:
+    wait_and_widen_uses_input_tokens_in_ttft:
     |_| {};
     |target| request(target, None, Some(100));
     [
@@ -2036,7 +2036,7 @@ wait_and_widen_choice_tests! {
     ];
     1 => "higher-rtt-higher-cap";
 
-    wait_and_widen_can_ignore_input_processing_time_in_ttft_estimate:
+    wait_and_widen_can_ignore_input_processing_time_in_ttft:
     |settings| settings.ignore_input_processing_time = Some(true);
     |target| request(target, None, Some(100));
     [
@@ -2064,7 +2064,7 @@ fn wait_and_widen_limits_selection_to_first_ttft_bucket() {
 }
 
 wait_and_widen_choice_tests! {
-    wait_and_widen_can_ignore_queue_time_in_ttft_estimate:
+    wait_and_widen_can_ignore_queue_time_in_ttft:
     |settings| settings.ignore_queue_time = Some(true);
     |target| request(target, None, Some(0));
     [
@@ -2321,7 +2321,7 @@ wait_and_widen_choice_tests! {
 }
 
 #[test]
-fn wait_and_widen_ttft_estimator_uses_priority_queue_and_ignore_flags() {
+fn wait_and_widen_ttft_uses_priority_queue_and_ignore_flags() {
     let mut candidate = work_candidate("estimated", 7, 100.0, 999);
     candidate.stats.queue_time_estimate_ms_by_priority = HashMap::from([(4, 25)]);
 

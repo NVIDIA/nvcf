@@ -73,19 +73,19 @@ impl ClusterComparator {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct TtftEstimate {
+pub(crate) struct Ttft {
     pub(crate) queue_ms: f64,
     pub(crate) ttft_ms: f64,
 }
 
 #[inline]
-pub(crate) fn estimate_ttft(
+pub(crate) fn ttft(
     candidate: &RoutedClusterSnapshot,
     input_tokens: Option<u64>,
     priority: u32,
     ignore_queue_time: bool,
     ignore_input_processing_time: bool,
-) -> TtftEstimate {
+) -> Ttft {
     let input_tps = input_tps(candidate);
     let queue_ms = queue_delay_ms_with_tps(candidate, priority, input_tps);
     let prefill_ms = processing_delay_ms(input_tokens.unwrap_or_default() as f64, input_tps);
@@ -97,7 +97,7 @@ pub(crate) fn estimate_ttft(
             prefill_ms
         };
 
-    TtftEstimate { queue_ms, ttft_ms }
+    Ttft { queue_ms, ttft_ms }
 }
 
 #[inline]
@@ -111,7 +111,7 @@ pub(crate) fn rtt_ms(candidate: &RoutedClusterSnapshot) -> f64 {
 }
 
 fn ttft_ms(candidate: &RoutedClusterSnapshot, request: &LoadBalancerRequest<'_>) -> f64 {
-    estimate_ttft(
+    ttft(
         candidate,
         request.input_tokens,
         request.priority,
