@@ -111,7 +111,7 @@ func TestValidateAuthConfig_PolicyProvider(t *testing.T) {
 	tests := []struct {
 		name                 string
 		cfg                  AuthConfig
-		hasStaticPolicyToken bool
+		hasSecretsFile bool
 		expectedErr          error
 	}{
 		{
@@ -252,9 +252,9 @@ func TestValidateAuthConfig_PolicyProvider(t *testing.T) {
 			expectedErr: ErrInvalidPolicyCredsRefreshInterval,
 		},
 		{
-			// When a static policy token is available, OAuth2 fields are not required.
-			name:                 "valid config with static policy token - oauth2 fields not required",
-			hasStaticPolicyToken: true,
+			// When the secrets file is present (self-managed), OAuth2 fields are not required.
+			name:                 "valid config with secrets file - oauth2 fields not required",
+			hasSecretsFile: true,
 			cfg: AuthConfig{
 				Enabled:   true,
 				Provider:  "policy",
@@ -268,9 +268,9 @@ func TestValidateAuthConfig_PolicyProvider(t *testing.T) {
 			expectedErr: nil,
 		},
 		{
-			// Even with a static policy token, the always-required fields are still checked.
-			name:                 "static policy token does not bypass namespace check",
-			hasStaticPolicyToken: true,
+			// Even with a secrets file present, always-required fields are still checked.
+			name:                 "secrets file does not bypass namespace check",
+			hasSecretsFile: true,
 			cfg: AuthConfig{
 				Enabled:   true,
 				Provider:  "policy",
@@ -286,7 +286,7 @@ func TestValidateAuthConfig_PolicyProvider(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateAuthConfig(tt.cfg, tt.hasStaticPolicyToken)
+			err := ValidateAuthConfig(tt.cfg, tt.hasSecretsFile)
 			if tt.expectedErr != nil {
 				require.Error(t, err)
 				assert.Equal(t, tt.expectedErr, err)

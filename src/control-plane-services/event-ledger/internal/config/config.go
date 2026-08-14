@@ -101,9 +101,9 @@ func (p PolicyConfig) WithDefaults() PolicyConfig {
 }
 
 // ValidateAuthConfig validates the authentication configuration.
-// hasStaticPolicyToken indicates whether a usable static bearer token was found
-// in the secrets file; when true the OAuth2 credential fields are not required.
-func ValidateAuthConfig(cfg AuthConfig, hasStaticPolicyToken bool) error {
+// hasSecretsFile indicates whether the Vault Agent secrets file is present,
+// signalling a self-managed deployment where OAuth2 credential fields are not required.
+func ValidateAuthConfig(cfg AuthConfig, hasSecretsFile bool) error {
 	if !cfg.Enabled {
 		return nil
 	}
@@ -135,7 +135,7 @@ func ValidateAuthConfig(cfg AuthConfig, hasStaticPolicyToken bool) error {
 		if cfg.Policy.PolicyFQDN == "" {
 			return ErrMissingPolicyFQDN
 		}
-		if !hasStaticPolicyToken {
+		if !hasSecretsFile {
 			if cfg.Policy.CredsFile == "" {
 				return ErrMissingPolicyCredsFile
 			}

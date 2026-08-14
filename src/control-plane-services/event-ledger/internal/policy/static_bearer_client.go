@@ -31,8 +31,8 @@ import (
 )
 
 // staticBearerClient implements Authorizer for self-managed deployments where no
-// OAuth2 token issuer is available. It authenticates outbound calls to the policy
-// evaluator using a static bearer token read from the Vault Agent secrets file.
+// OAuth2 token issuer is available. If tokenReader is non-nil, it sets an
+// Authorization: Bearer header on outbound calls; otherwise no auth header is sent.
 type staticBearerClient struct {
 	evaluatorAddr string
 	policyCfg     *PolicyConfig
@@ -40,8 +40,9 @@ type staticBearerClient struct {
 	httpClient    *http.Client
 }
 
-// NewStaticBearerClient creates an Authorizer that presents a static bearer token
-// when calling the policy evaluator, instead of performing a live OAuth2 exchange.
+// NewStaticBearerClient creates an Authorizer for self-managed deployments.
+// Pass a non-nil tokenReader to authenticate outbound calls with a static bearer
+// token; pass nil when the destination service requires no authentication.
 func NewStaticBearerClient(
 	evaluatorAddr string,
 	policyCfg *PolicyConfig,
@@ -74,7 +75,9 @@ func (c *staticBearerClient) Evaluate(ctx context.Context, req *pdpv1.RuleReques
 
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.tokenReader.Token())
+	if c.tokenReader != nil {
+		httpReq.Header.Set("Authorization", "Bearer "+c.tokenReader.Token())
+	}
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {

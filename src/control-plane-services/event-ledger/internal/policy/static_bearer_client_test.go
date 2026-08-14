@@ -57,23 +57,26 @@ func TestStaticBearerClient_Evaluate(t *testing.T) {
 
 	tests := []struct {
 		name           string
+		tokenReader    *credentials.BearerTokenReader
 		serverResponse any
 		serverStatus   int
 		wantErr        bool
-		checkAuth      bool
+		wantAuthHeader string
 		checkURL       bool
 	}{
 		{
-			name:           "sends correct Authorization header and URL",
+			name:           "with token reader sends Authorization header and correct URL",
 			serverStatus:   http.StatusOK,
 			serverResponse: allowResponse,
-			checkAuth:      true,
+			wantAuthHeader: "Bearer test-bearer-token",
 			checkURL:       true,
 		},
 		{
-			name:           "returns parsed response on success",
+			name:           "without token reader sends no Authorization header",
+			tokenReader:    nil,
 			serverStatus:   http.StatusOK,
 			serverResponse: allowResponse,
+			wantAuthHeader: "",
 		},
 		{
 			name:         "returns error on non-200 status",
@@ -84,6 +87,11 @@ func TestStaticBearerClient_Evaluate(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			tokenReader := tc.tokenReader
+			if tc.wantAuthHeader != "" {
+				tokenReader = newTestTokenReader(t, "test-bearer-token")
+			}
+
 			var capturedAuth, capturedURL string
 
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -97,7 +105,7 @@ func TestStaticBearerClient_Evaluate(t *testing.T) {
 			defer srv.Close()
 
 			cfg := &PolicyConfig{Namespace: "event-ledger", PolicyFQDN: "apikey.allow"}
-			client := NewStaticBearerClient(srv.URL, cfg, newTestTokenReader(t, "test-bearer-token"), &http.Client{})
+			client := NewStaticBearerClient(srv.URL, cfg, tokenReader, &http.Client{})
 
 			req := &pdpv1.RuleRequest{
 				Namespace: "event-ledger",
@@ -112,9 +120,7 @@ func TestStaticBearerClient_Evaluate(t *testing.T) {
 			}
 			require.NoError(t, err)
 
-			if tc.checkAuth {
-				assert.Equal(t, "Bearer test-bearer-token", capturedAuth)
-			}
+			assert.Equal(t, tc.wantAuthHeader, capturedAuth)
 			if tc.checkURL {
 				assert.Equal(t, "/v1/namespaces/event-ledger/evaluations/apikey.allow", capturedURL)
 			}
