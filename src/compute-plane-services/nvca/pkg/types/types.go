@@ -253,6 +253,20 @@ const (
 	ErrorSourceTaskContainer = "task_container"
 )
 
+// WorkerIdentifier identifies a single worker pod by name and UID.
+type WorkerIdentifier struct {
+	Name string `json:"name"`
+	UID  string `json:"uid"`
+}
+
+// WorkerAuth carries the worker identity set that ICMS stores for a given instance.
+// Populated by NVCA when oidcClusterIdentity is enabled.
+type WorkerAuth struct {
+	Sub               string             `json:"sub"`
+	SAuid             string             `json:"saUid,omitempty"`
+	WorkerIdentifiers []WorkerIdentifier `json:"workerIdentifiers"`
+}
+
 type ICMSInstanceStatusUpdateRequest struct {
 	Status           ICMSRequestStatus        `json:"status,omitempty"`
 	InstanceState    ICMSInstanceState        `json:"instanceState,omitempty"`
@@ -263,6 +277,7 @@ type ICMSInstanceStatusUpdateRequest struct {
 	SystemFailure    string                   `json:"systemFailure,omitempty"`
 	MessageBatchID   string                   `json:"messageBatchId,omitempty"`
 	InstanceIPs      []string                 `json:"instanceIps,omitempty"`
+	WorkerAuth       *WorkerAuth              `json:"workerAuth,omitempty"`
 }
 
 type ICMSRequestUpdateInfo struct {
