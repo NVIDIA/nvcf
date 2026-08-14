@@ -163,6 +163,32 @@ grep -qi "exactly one" "$work_dir/cassandra-both.log" ||
   fail "cassandra: both-fields error did not contain expected message"
 
 # ---------------------------------------------------------------------------
+# 4b. Cassandra PDB — chart fail: neither field set
+# ---------------------------------------------------------------------------
+write_env <<'EOF'
+global:
+  image:
+    registry: nvcr.io
+    repository: test/nvcf
+cassandra:
+  podDisruptionBudget:
+    enabled: true
+EOF
+
+# helm template should fail when enabled but neither field is set
+if HELMFILE_ENV="$environment_name" \
+   HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
+   helmfile \
+     --file "$test_stack_dir/helmfile.d/01-dependencies.yaml.gotmpl" \
+     --environment default \
+     --selector name=cassandra \
+     template >"$work_dir/cassandra-neither.log" 2>&1; then
+  fail "cassandra: enabled with neither minAvailable nor maxUnavailable should have failed"
+fi
+grep -qi "exactly one" "$work_dir/cassandra-neither.log" ||
+  fail "cassandra: neither-field error did not contain expected message"
+
+# ---------------------------------------------------------------------------
 # 5. NATS PDB — passthrough (upstream chart; enabled by default)
 # ---------------------------------------------------------------------------
 write_env <<'EOF'
