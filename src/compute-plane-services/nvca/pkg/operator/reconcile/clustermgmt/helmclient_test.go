@@ -142,6 +142,7 @@ func TestHelmManagedClient_GetCluster_RequiresValidVaultAddress(t *testing.T) {
 	for name, address := range map[string]string{
 		"missing address":        "",
 		"address without host":   "https://:443",
+		"plain HTTP":             "http://vault.example.test:8200",
 		"surrounding whitespace": " https://vault.example.test:443 ",
 		"credentials":            "https://user@vault.example.test:443",
 		"query":                  "https://vault.example.test:443?namespace=test",
