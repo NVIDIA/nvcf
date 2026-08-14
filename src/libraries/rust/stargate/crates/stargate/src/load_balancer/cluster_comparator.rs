@@ -26,7 +26,7 @@ use crate::routing_state::RoutedClusterSnapshot;
 #[serde(rename_all = "kebab-case")]
 pub enum ClusterComparator {
     #[default]
-    EstimatedTtft,
+    Ttft,
     QueueTime,
     InputWorkSeconds,
     Utilization,
@@ -42,7 +42,7 @@ impl fmt::Display for ClusterComparator {
 impl ClusterComparator {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
-            Self::EstimatedTtft => "estimated-ttft",
+            Self::Ttft => "ttft",
             Self::QueueTime => "queue-time",
             Self::InputWorkSeconds => "input-work-seconds",
             Self::Utilization => "utilization",
@@ -58,8 +58,7 @@ impl ClusterComparator {
         candidate_b: &RoutedClusterSnapshot,
     ) -> Ordering {
         match self {
-            Self::EstimatedTtft => estimated_ttft_ms(candidate_a, request)
-                .total_cmp(&estimated_ttft_ms(candidate_b, request)),
+            Self::Ttft => ttft_ms(candidate_a, request).total_cmp(&ttft_ms(candidate_b, request)),
             Self::QueueTime => queue_delay_ms(candidate_a, request.priority)
                 .total_cmp(&queue_delay_ms(candidate_b, request.priority)),
             Self::InputWorkSeconds => input_work_seconds(candidate_a, request.input_tokens)
@@ -111,7 +110,7 @@ pub(crate) fn rtt_ms(candidate: &RoutedClusterSnapshot) -> f64 {
     candidate.rtt.as_secs_f64() * 1000.0
 }
 
-fn estimated_ttft_ms(candidate: &RoutedClusterSnapshot, request: &LoadBalancerRequest<'_>) -> f64 {
+fn ttft_ms(candidate: &RoutedClusterSnapshot, request: &LoadBalancerRequest<'_>) -> f64 {
     estimate_ttft(
         candidate,
         request.input_tokens,

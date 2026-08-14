@@ -111,7 +111,7 @@ impl WaitAndWidenConfig {
     }
 
     #[inline]
-    fn compare_configured_candidates(
+    fn compare_sampled_candidates(
         &self,
         request: &LoadBalancerRequest<'_>,
         candidate_a: &RoutedClusterSnapshot,
@@ -123,7 +123,7 @@ impl WaitAndWidenConfig {
     }
 
     #[inline]
-    fn compare_candidates_with_estimates(
+    fn compare_sampled_candidates_with_estimates(
         &self,
         request: &LoadBalancerRequest<'_>,
         candidate_a: &RoutedClusterSnapshot,
@@ -133,7 +133,7 @@ impl WaitAndWidenConfig {
     ) -> Ordering {
         match self.comparator {
             None => compare_least_queue_time(candidate_a, estimate_a, candidate_b, estimate_b),
-            Some(ClusterComparator::EstimatedTtft)
+            Some(ClusterComparator::Ttft)
                 if !self.ignore_queue_time && !self.ignore_input_processing_time =>
             {
                 estimate_a.ttft_ms.total_cmp(&estimate_b.ttft_ms)
@@ -284,6 +284,8 @@ impl WaitAndWidenLoadBalancer {
         candidates: impl ExactSizeIterator<Item = &'a RoutedClusterSnapshot>,
         candidate_index_source: &[RoutedClusterSnapshot],
     ) -> Option<LoadBalancerCandidateChoice> {
+        // TTFT determines bucket eligibility and unlock timing. The configured
+        // comparator is applied after the unlocked candidates are sampled.
         let mut estimates =
             CandidateEstimateAccumulator::new(&self.config, request, candidates.len());
         if let RequestExclusions::One(excluded_cluster_id) = RequestExclusions::from(request) {
@@ -375,7 +377,7 @@ impl WaitAndWidenLoadBalancer {
             .into_iter()
             .take(sampled_count)
             .min_by(|(candidate_a, estimate_a), (candidate_b, estimate_b)| {
-                self.config.compare_candidates_with_estimates(
+                self.config.compare_sampled_candidates_with_estimates(
                     request,
                     candidate_a,
                     estimate_a,
@@ -424,7 +426,7 @@ fn choose_preferred_candidate<'a>(
     estimate_b: &TtftEstimate,
     rng: &mut impl Rng,
 ) -> &'a RoutedClusterSnapshot {
-    match config.compare_candidates_with_estimates(
+    match config.compare_sampled_candidates_with_estimates(
         request,
         candidate_a,
         estimate_a,

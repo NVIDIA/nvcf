@@ -108,7 +108,7 @@ Choose based on the routing goal and available backend statistics:
 
 | Goal | Algorithm | Required backend signals |
 | --- | --- | --- |
-| Compare a small random sample using estimated TTFT or another load signal. | `power-of-n` | Signals required by the configured comparator. |
+| Compare a small random sample using TTFT or another load signal. | `power-of-n` | Signals required by the configured comparator. |
 | Minimize estimated time to first token across heterogeneous or remote clusters while controlling which TTFT bands are eligible. | `wait-and-widen` | Forwarded health RTT and model statistics. Valid `last_mean_input_tps` is needed when queued or request input work is nonzero. |
 | Keep the same prefix on a stable, capacity-weighted cluster. | `pulsar` | Positive finite `last_mean_input_tps` for every participating cluster. |
 | Keep Pulsar affinity when possible, but escape to lower-latency capacity when the primary cannot meet queue policy. | `pulsar-wait-and-widen` | Pulsar capacity plus the RTT and queue statistics used by `wait-and-widen`. |
@@ -120,7 +120,7 @@ selection when routing should not depend on backend load statistics.
 
 `power-of-n` uniformly samples distinct eligible clusters and selects the
 cluster with the lowest configured comparator score. The default comparator is
-`estimated-ttft`. It breaks equal scores randomly. Retried clusters are excluded
+`ttft`. It breaks equal scores randomly. Retried clusters are excluded
 before sampling.
 
 The default sample count is `2`. A larger sample can improve routing decisions
@@ -155,7 +155,7 @@ divides `x-input-tokens` by the same capacity signal.
 
 The algorithm groups close TTFT estimates into buckets. It samples `n`
 candidates from unlocked buckets and chooses the candidate with the lowest
-configured comparator score. The default comparator is `estimated-ttft`. A
+configured comparator score. The default comparator is `ttft`. A
 later bucket becomes available after the request has waited for a fraction of
 the TTFT gap.
 
@@ -240,13 +240,13 @@ Minimal configuration:
 
 | Field | Type | Default | Constraint and effect |
 | --- | --- | --- | --- |
-| `comparator` | string | `estimated-ttft` | Signal used to choose among sampled candidates. See the supported values below. |
+| `comparator` | string | `ttft` | Signal used to choose among sampled candidates. See the supported values below. |
 
 Supported comparator values are:
 
 | Value | Score |
 | --- | --- |
-| `estimated-ttft` | Forwarded health RTT plus priority-aware queue delay plus request prefill time. |
+| `ttft` | Forwarded health RTT plus priority-aware queue delay plus request prefill time. |
 | `queue-time` | Priority-aware queue delay. Uses queued input tokens divided by `last_mean_input_tps` when no published priority estimate is available. |
 | `input-work-seconds` | Queued input tokens plus request input tokens, divided by `last_mean_input_tps`. |
 | `utilization` | Running queries divided by `max_engine_concurrency`, using `1` as the denominator when the reported maximum is `0`. |

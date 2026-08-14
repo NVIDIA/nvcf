@@ -150,7 +150,7 @@ fn choose_from_unlocked_candidate_refs(
         .into_iter()
         .take(sampled_count)
         .min_by(|candidate_a, candidate_b| {
-            config.compare_configured_candidates(request, candidate_a, candidate_b)
+            config.compare_sampled_candidates(request, candidate_a, candidate_b)
         })
         .map(|candidate| choice_for_candidate(candidates, candidate, 1))
 }
@@ -182,7 +182,7 @@ fn choose_two_candidates(
 
     let candidate_a = unlocked_with_capacity[candidate_a_index];
     let candidate_b = unlocked_with_capacity[candidate_b_index];
-    let candidate = match config.compare_configured_candidates(request, candidate_a, candidate_b) {
+    let candidate = match config.compare_sampled_candidates(request, candidate_a, candidate_b) {
         std::cmp::Ordering::Less => candidate_a,
         std::cmp::Ordering::Equal if rng.random_bool(0.5) => candidate_a,
         std::cmp::Ordering::Equal | std::cmp::Ordering::Greater => candidate_b,
