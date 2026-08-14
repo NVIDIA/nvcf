@@ -144,7 +144,21 @@ func (c K8sComputeBackend) shouldDeferColdStart(ctx context.Context, req *nvcav2
 	}
 
 	// Lost the election to a live foreign pioneer → defer (requeue).
-	pioneer, _, _ := unstructured.NestedString(cfsObj.Object, "status", "coldStartPioneer")
+	//
+	// Re-read rather than reusing cfsObj. Two reasons: cfsObj is nil whenever
+	// the Get above returned NotFound and the winner created the CFS between
+	// that Get and our claim -- dereferencing it panicked in the MiniService
+	// creation path -- and even when non-nil it predates the claim, so its
+	// coldStartPioneer is stale by definition. The point of the field is to
+	// name whoever just won.
+	//
+	// Best-effort: pioneer only feeds the log line and the requeue message, so
+	// a failed re-read leaves it empty rather than failing the gate.
+	var pioneer string
+	if fresh, ferr := c.dynClient.Resource(nvsnapFunctionStateGVR).
+		Get(ctx, fvID, metav1.GetOptions{}); ferr == nil && fresh != nil {
+		pioneer, _, _ = unstructured.NestedString(fresh.Object, "status", "coldStartPioneer")
+	}
 	coldStartReplicasDeferred.Inc()
 	log.WithFields(map[string]any{
 		"functionVersionID": fvID, "owner": owner, "pioneer": pioneer,

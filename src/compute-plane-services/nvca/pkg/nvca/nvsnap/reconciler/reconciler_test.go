@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -405,11 +406,27 @@ func TestReconcileSwallowsEmptyHashOnCompleted(t *testing.T) {
 	// the reconciler treats this as "capture never happened," so the
 	// CFS stays in whatever state it was. Pod-ready event triggers a
 	// fresh attempt.
-	if s.LocalCacheState == nvsnapv1alpha1.LocalCacheStateFailed {
-		t.Errorf("LocalCacheState = Failed; should be untouched when swallowing empty-hash")
-	}
 	if s.LastError != "" {
 		t.Errorf("LastError should stay empty (we don't surface as a CFS error); got %q", s.LastError)
+	}
+
+	// Assert the EXACT state, not just "not Warm and not Failed". The
+	// earlier version of this test allowed the leaked Capturing claim to
+	// pass both of those checks: Reconcile claims the capture (Capturing +
+	// captureOwner + captureLeaseExpiry, ~50 min lease) before polling, and
+	// the empty-hash branch returned without releasing it. The CFS then sat
+	// Capturing under a pod that had stopped capturing, gating every peer
+	// pod of the function version at the claim until the lease expired.
+	if s.LocalCacheState != nvsnapv1alpha1.LocalCacheStateCold {
+		t.Errorf("LocalCacheState = %q, want Cold — the capture claim must be released, not left Capturing",
+			s.LocalCacheState)
+	}
+	if s.CaptureOwner != "" {
+		t.Errorf("CaptureOwner = %q, want empty — claim leaked; peers stay gated until lease expiry",
+			s.CaptureOwner)
+	}
+	if s.CaptureLeaseExpiry != nil {
+		t.Errorf("CaptureLeaseExpiry = %v, want nil — claim leaked", s.CaptureLeaseExpiry)
 	}
 }
 
@@ -987,5 +1004,43 @@ func TestReconcileL2PromoteTimeout_RecordsFailure(t *testing.T) {
 	}
 	if s.LastError == "" || !strings.Contains(s.LastError, "L2 promote poll") {
 		t.Errorf("LastError = %q, want one mentioning L2 promote poll", s.LastError)
+	}
+}
+
+// applyDefaults writes nine receiver fields, and a controller shares ONE
+// Reconciler across its workqueue workers plus the SweepOnce timer goroutine.
+// Before the sync.Once those writes raced: identical values, but still a data
+// race under the Go memory model, which contradicted the "safe for many
+// concurrent Reconcile calls" guarantee on the type.
+//
+// Fails under -race without the Once. Also pins that the derived value stays
+// self-consistent, since CaptureLeaseTTL is computed from three other fields.
+func TestApplyDefaultsIsRaceFreeAndIdempotent(t *testing.T) {
+	r := &Reconciler{}
+
+	const goroutines = 16
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func() {
+			defer wg.Done()
+			<-start // maximize overlap
+			r.applyDefaults()
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	if r.InferenceContainerName != "inference" {
+		t.Errorf("InferenceContainerName = %q, want inference", r.InferenceContainerName)
+	}
+	if r.Log == nil {
+		t.Error("Log is nil; defaults did not apply")
+	}
+	// Derived from WarmupBuffer + CheckpointTimeout + PromotePollTimeout + 5m.
+	want := r.WarmupBuffer + r.CheckpointTimeout + r.PromotePollTimeout + 5*time.Minute
+	if r.CaptureLeaseTTL != want {
+		t.Errorf("CaptureLeaseTTL = %v, want %v (derived value must stay consistent)", r.CaptureLeaseTTL, want)
 	}
 }

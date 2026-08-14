@@ -29,6 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -87,6 +88,11 @@ type Reconciler struct {
 
 	// DynClient reads/writes NvSnapFunctionState.
 	DynClient dynamic.Interface
+
+	// defaultsOnce guards applyDefaults. One Reconciler is shared across a
+	// controller's workers and the sweep goroutine, so the default-filling
+	// writes must happen exactly once and be published to every reader.
+	defaultsOnce sync.Once
 
 	// NvSnapClient is the nvsnap-server HTTP client (PR-1).
 	NvSnapClient *nvsnap.Client
@@ -147,7 +153,28 @@ type Reconciler struct {
 // applyDefaults fills zero fields with sane defaults. Called at the
 // top of Reconcile so callers can use a partially-populated
 // Reconciler without thinking about every knob.
+// applyDefaults fills unset fields with their defaults exactly once.
+//
+// It writes nine receiver fields, and a controller shares ONE Reconciler
+// across its workqueue workers -- plus SweepOnce, which runs on its own timer
+// goroutine. Without the Once, every concurrent Reconcile wrote the same
+// fields simultaneously: still a data race under the Go memory model even
+// though the values are identical, and `go test -race` trips on it as soon as
+// two workers overlap. That contradicted the "safe for many concurrent
+// Reconcile calls" guarantee on the type.
+//
+// Once also gives the happens-before edge the readers need: every caller goes
+// through Do, so the single write is ordered before every subsequent read.
+//
+// Consequence worth knowing: defaults freeze at first use. Mutating an
+// exported field after the first Reconcile/SweepOnce will not re-derive
+// dependents (CaptureLeaseTTL is computed from three other fields). Set
+// everything before first use, which is what nvsnap_controller_start.go does.
 func (r *Reconciler) applyDefaults() {
+	r.defaultsOnce.Do(r.resolveDefaults)
+}
+
+func (r *Reconciler) resolveDefaults() {
 	if r.InferenceContainerName == "" {
 		r.InferenceContainerName = "inference"
 	}
@@ -458,7 +485,24 @@ func (r *Reconciler) Reconcile(ctx context.Context, pod *corev1.Pod) error {
 			"duration":     final.Duration,
 			"reason":       "empty_hash",
 		}).Error("nvsnap-server returned Completed with empty hash — likely agent or nvsnap-server bug (see nvnvsnap#61). " +
-			"Skipping CFS update; pod stays cold. Next pod-ready event will retry.")
+			"Releasing the capture claim; pod stays cold. Next pod-ready event will reconsider.")
+		// Release the capture claim before returning. This reconcile already
+		// claimed it -- LocalCacheState=Capturing, captureOwner,
+		// captureLeaseExpiry with a ~50 min lease -- and writeStatus is the
+		// only thing that clears those. The bare `return nil` that used to be
+		// here left the CFS Capturing under a pod that had stopped capturing,
+		// so every peer pod of the same function version backed off at the
+		// claim gate until the lease expired.
+		//
+		// Deliberately NOT recordFailure: that would set LastError and count
+		// an attempt. This branch's contract is "treat it as if the capture
+		// never happened" -- prior state, no CFS-level error surface -- so it
+		// restores prev verbatim and lets writeStatus drop the claim fields.
+		if err := releaseCaptureClaim(ctx, r.DynClient, fvID, prev); err != nil {
+			// Non-fatal: the lease still expires on its own, just later.
+			log.WithError(err).Warn("failed to release capture claim after empty hash; " +
+				"peers will be gated until the lease expires")
+		}
 		return nil
 	}
 

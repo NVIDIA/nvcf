@@ -471,3 +471,33 @@ func TryClaimColdStartPioneer(ctx context.Context, dc dynamic.Interface, fvID, o
 	}
 	return true, nil
 }
+
+// releaseCaptureClaim drops the Capturing claim without recording a failure,
+// restoring the status this reconcile observed before it claimed.
+//
+// Reconcile stamps LocalCacheState=Capturing + captureOwner +
+// captureLeaseExpiry when it wins the claim, and writeStatus is the only code
+// that clears those. Any path that gives up AFTER claiming and returns nil has
+// to come through here, or the CFS stays Capturing under a pod that is no
+// longer capturing and every peer pod of the function version is gated at the
+// claim until the ~50 min lease expires (nvca#208 review).
+//
+// Distinct from recordFailure on purpose: this does not set LastError or
+// increment AttemptCount, so a path whose contract is "treat it as if the
+// capture never happened" leaves no CFS-level error surface behind.
+func releaseCaptureClaim(ctx context.Context, dc dynamic.Interface, fvID string, prev cfsStatus) error {
+	upd := statusUpdate{
+		CheckpointHash:  prev.CheckpointHash,
+		CapturedHere:    prev.CapturedHere,
+		LocalCacheState: prev.LocalCacheState,
+		AttemptCount:    prev.AttemptCount,
+		LastError:       prev.LastError,
+	}
+	if prev.CapturedAt != nil {
+		upd.CapturedAt = prev.CapturedAt.Time
+	}
+	if prev.LastAttemptAt != nil {
+		upd.LastAttemptAt = prev.LastAttemptAt.Time
+	}
+	return writeStatus(ctx, dc, fvID, upd)
+}
