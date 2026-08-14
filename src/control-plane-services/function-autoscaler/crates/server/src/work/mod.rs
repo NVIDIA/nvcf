@@ -62,6 +62,31 @@ use discovery::get_recently_invoked_functions;
 const TIMESERIES_DB_QUERY_STEP: StdDuration = StdDuration::from_secs(60); // 1 minute step for TimeseriesDb queries
 pub const CALCULATE_UTILIZATION_LOCK_PREFIX: &str = "util_lock";
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct MetricEnvironments {
+    aws: &'static str,
+    worker: &'static str,
+    control_plane: &'static str,
+}
+
+impl MetricEnvironments {
+    fn from_config(env: &str) -> Self {
+        if env == "stg" {
+            Self {
+                aws: "stg",
+                worker: "stage",
+                control_plane: "staging",
+            }
+        } else {
+            Self {
+                aws: "prd",
+                worker: "prod",
+                control_plane: "production",
+            }
+        }
+    }
+}
+
 /// Get historical utilization data for a specific function
 #[allow(clippy::too_many_arguments)]
 async fn get_function_utilization_history(
@@ -78,11 +103,13 @@ async fn get_function_utilization_history(
     let start_time = end_time - Duration::minutes(lookback_minutes);
     let step = TIMESERIES_DB_QUERY_STEP;
 
+    let metric_env = MetricEnvironments::from_config(env);
     let env_suffix = if ignore_env {
         String::new()
+    } else if use_control_plane_metrics {
+        format!(r#", aws_env="{}""#, metric_env.aws)
     } else {
-        let env_val = if env == "stg" { "stage" } else { "prod" };
-        format!(", environment=\"{}\"", env_val)
+        format!(r#", environment="{}""#, metric_env.worker)
     };
 
     let query = if use_control_plane_metrics {
@@ -173,12 +200,8 @@ async fn get_byoc_instance_count(
     let env_suffix = if ignore_env {
         String::new()
     } else {
-        let env_val = if env == "stg" {
-            "staging"
-        } else {
-            "production"
-        };
-        format!(r#", environment="{}""#, env_val)
+        let metric_env = MetricEnvironments::from_config(env);
+        format!(r#", environment="{}""#, metric_env.control_plane)
     };
 
     let query = format!(
@@ -280,8 +303,8 @@ async fn get_current_worker_count_from_timeseries_db(
     let env_filter = if ignore_env {
         String::new()
     } else {
-        let environment = if env == "stg" { "stage" } else { "prod" };
-        format!(r#", environment="{}""#, environment)
+        let metric_env = MetricEnvironments::from_config(env);
+        format!(r#", environment="{}""#, metric_env.worker)
     };
     let query = format!(
         r#"count by(function_id, function_version_id) (nvcf_worker_service_worker_thread_count_total{{function_id="{}", function_version_id="{}"{}}})"#,
@@ -861,6 +884,30 @@ mod tests {
         r#"{"status":"success","data":{"resultType":"matrix","result":[]}}"#.to_string()
     }
 
+    #[test]
+    fn metric_environments_use_metric_family_label_values() {
+        assert_eq!(
+            MetricEnvironments::from_config("stg"),
+            MetricEnvironments {
+                aws: "stg",
+                worker: "stage",
+                control_plane: "staging",
+            }
+        );
+        assert_eq!(
+            MetricEnvironments::from_config("prd"),
+            MetricEnvironments {
+                aws: "prd",
+                worker: "prod",
+                control_plane: "production",
+            }
+        );
+        assert_eq!(
+            MetricEnvironments::from_config("prod"),
+            MetricEnvironments::from_config("prd")
+        );
+    }
+
     #[tokio::test]
     async fn test_control_plane_utilization_query_aggregates_shared_function_pool() {
         let fid = Uuid::new_v4();
@@ -898,6 +945,50 @@ mod tests {
         .expect("control-plane utilization");
 
         assert_eq!(utilization, vec![(1_700_000_000, "42".to_string())]);
+    }
+
+    #[tokio::test]
+    async fn test_control_plane_utilization_query_uses_aws_environment_labels() {
+        let fid = Uuid::new_v4();
+        let fvid = Uuid::new_v4();
+        let mut server = mockito::Server::new_async().await;
+
+        for (configured_env, aws_env) in [("prd", "prd"), ("stg", "stg")] {
+            let expected_query = format!(
+                r#"100 * sum by(function_id, function_version_id) (rate(function_request_latency_sum{{function_id="{fid}", function_version_id="{fvid}", aws_env="{aws_env}"}}[2m])) /
+            (avg by(function_id, function_version_id) (nvcf_function_instances_current{{function_id="{fid}", function_version_id="{fvid}", aws_env="{aws_env}"}}) * avg by(function_id, function_version_id) (nvcf_function_concurrency{{function_id="{fid}", function_version_id="{fvid}", aws_env="{aws_env}"}})) or vector(0)"#
+            );
+            let query_mock = server
+                .mock("GET", "/api/v1/query_range")
+                .match_query(mockito::Matcher::UrlEncoded(
+                    "query".to_string(),
+                    expected_query,
+                ))
+                .with_status(200)
+                .with_body(vm_series(
+                    &format!(r#""function_id":"{fid}","function_version_id":"{fvid}""#),
+                    "42",
+                ))
+                .expect(1)
+                .create_async()
+                .await;
+
+            let utilization = get_function_utilization_history(
+                &ts_client(server.url()),
+                &fid,
+                &fvid,
+                configured_env,
+                true,
+                false,
+                5,
+                60,
+            )
+            .await
+            .expect("control-plane utilization");
+
+            assert_eq!(utilization, vec![(1_700_000_000, "42".to_string())]);
+            query_mock.assert_async().await;
+        }
     }
 
     #[tokio::test]
