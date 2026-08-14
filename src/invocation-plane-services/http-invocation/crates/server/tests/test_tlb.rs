@@ -272,12 +272,13 @@ async fn test_fully_streamed_pexec_forwards_invocation_region() -> anyhow::Resul
     assert_eq!(response.status(), StatusCode::OK);
     let response_body = response.into_body().collect().await?.to_bytes();
     let parsed_request: JsonHttpRequest = serde_json::from_slice(&response_body)?;
-    let region = parsed_request
+    let regions: Vec<_> = parsed_request
         .headers
         .iter()
-        .find(|(key, _)| key.eq_ignore_ascii_case("nvcf-invocation-region"))
-        .map(|(_, value)| value);
-    assert_eq!(region.map(String::as_str), Some("server-region"));
+        .filter(|(key, _)| key.eq_ignore_ascii_case("nvcf-invocation-region"))
+        .map(|(_, value)| value.as_str())
+        .collect();
+    assert_eq!(regions, ["server-region"]);
     Ok(())
 }
 

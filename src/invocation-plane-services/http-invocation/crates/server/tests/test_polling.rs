@@ -273,6 +273,7 @@ async fn test_cross_region_poll() -> anyhow::Result<()> {
         .header(AUTHORIZATION, format!("Bearer {API_KEY}"))
         .header(CONTENT_TYPE, "text/plain")
         .header("nvcf-poll-seconds", "3")
+        .header("NVCF-INVOCATION-REGION", "client-region")
         .body(Body::empty())?;
 
     let response = app_region_2.call(request).await?;

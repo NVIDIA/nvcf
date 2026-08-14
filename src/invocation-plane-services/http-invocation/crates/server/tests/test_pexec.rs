@@ -132,6 +132,7 @@ async fn test_pexec_forwards_invocation_region() -> anyhow::Result<()> {
         ))
         .header(AUTHORIZATION, format!("Bearer {API_KEY}"))
         .header("x-user-header", "user-value")
+        .header("NVCF-INVOCATION-REGION", "client-region")
         .body(Body::from("a body"))?;
     let response = app.call(request).await?;
     assert_eq!(response.status(), StatusCode::OK);
@@ -143,17 +144,19 @@ async fn test_pexec_forwards_invocation_region() -> anyhow::Result<()> {
         .is_none());
     let response_body = response.into_body().collect().await?.to_bytes();
     let parsed_request: JsonHttpRequest = serde_json::from_slice(&response_body)?;
-    let region = parsed_request
+    let regions: Vec<_> = parsed_request
         .headers
         .iter()
-        .find(|(key, _)| key.eq_ignore_ascii_case("nvcf-invocation-region"))
-        .map(|(_, value)| value);
-    assert_eq!(region.map(String::as_str), Some("server-region"));
+        .filter(|(key, _)| key.eq_ignore_ascii_case("nvcf-invocation-region"))
+        .map(|(_, value)| value.as_str())
+        .collect();
+    assert_eq!(regions, ["server-region"]);
     assert_eq!(
         parsed_request
             .headers
-            .get("x-user-header")
-            .map(String::as_str),
+            .iter()
+            .find(|(key, _)| key == "x-user-header")
+            .map(|(_, value)| value.as_str()),
         Some("user-value")
     );
     Ok(())

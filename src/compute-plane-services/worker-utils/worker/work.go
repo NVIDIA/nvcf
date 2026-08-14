@@ -68,6 +68,24 @@ const (
 	invocationRegionHeader            = "NVCF-INVOCATION-REGION"
 )
 
+var workerOwnedHeaders = map[string]struct{}{
+	"nvcf-reqid":                   {},
+	"nvcf-sub":                     {},
+	"nvcf-ncaid":                   {},
+	"nvcf-function-name":           {},
+	"nvcf-function-id":             {},
+	"nvcf-function-version-id":     {},
+	"nvcf-asset-dir":               {},
+	"nvcf-large-output-dir":        {},
+	"nvcf-max-response-size-bytes": {},
+	"nvcf-nspectid":                {},
+	"nvcf-backend":                 {},
+	"nvcf-instancetype":            {},
+	"nvcf-region":                  {},
+	"nvcf-env":                     {},
+	"nvcf-function-asset-ids":      {},
+}
+
 func (w *NVCFWorker) handleWorkRequest(ctx context.Context, work *consumer.WorkRequest) error {
 	// setup metrics
 	requestTracker := nvcfMetrics.NewRequestTracker(
@@ -506,6 +524,9 @@ func (w *NVCFWorker) createInferenceRequest(ctx context.Context, work *pb.Worker
 	for _, header := range work.RequestHeaders {
 		if strings.EqualFold(header.Key, invocationRegionHeader) {
 			req.Header[invocationRegionHeader] = []string{header.Value}
+			continue
+		}
+		if _, workerOwned := workerOwnedHeaders[strings.ToLower(header.Key)]; workerOwned {
 			continue
 		}
 		req.Header.Add(header.Key, header.Value)

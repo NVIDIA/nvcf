@@ -21,11 +21,13 @@ limitations under the License.
 package worker
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -96,6 +98,7 @@ func TestCreateInferenceRequest(t *testing.T) {
 			RequestHeaders: []*pb.StringKV{
 				{Key: "nvcf-poll-seconds", Value: "45"},
 				{Key: "Content-Length", Value: "123"},
+				{Key: "Nvcf-Region", Value: "client-region"},
 				{Key: "Nvcf-Invocation-Region", Value: "invocation-region"},
 			},
 			InputAssetReference: []*pb.InputAssetReference{
@@ -108,10 +111,16 @@ func TestCreateInferenceRequest(t *testing.T) {
 		// preserve case, so they must be read via direct map indexing.
 		assert.Equal(t, "req-1", req.Header["NVCF-REQID"][0])
 		assert.Equal(t, "fn-name", req.Header["NVCF-FUNCTION-NAME"][0])
-		assert.Equal(t, "z1", req.Header["NVCF-REGION"][0])
-		assert.Equal(t, "invocation-region", req.Header["NVCF-INVOCATION-REGION"][0])
+		//nolint:staticcheck // The worker intentionally stores this server-owned key in uppercase.
+		assert.Equal(t, []string{"z1"}, req.Header["NVCF-REGION"])
+		//nolint:staticcheck // The public container contract requires this literal uppercase key.
+		assert.Equal(t, []string{"invocation-region"}, req.Header["NVCF-INVOCATION-REGION"])
 		assert.NotContains(t, req.Header, "Nvcf-Invocation-Region")
 		assert.Equal(t, "a1,a2", req.Header["NVCF-FUNCTION-ASSET-IDS"][0])
+		var serializedHeaders bytes.Buffer
+		require.NoError(t, req.Header.Write(&serializedHeaders))
+		assert.Equal(t, 1, strings.Count(serializedHeaders.String(), "NVCF-REGION: z1\r\n"))
+		assert.NotContains(t, serializedHeaders.String(), "Nvcf-Region")
 		assert.Equal(t, "application/json", req.Header.Get("Content-Type")) // defaulted
 		assert.Equal(t, int64(123), req.ContentLength)
 		assert.Equal(t, 45*time.Second, target)

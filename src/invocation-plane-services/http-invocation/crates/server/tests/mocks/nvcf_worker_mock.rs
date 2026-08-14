@@ -639,7 +639,7 @@ pub struct JsonHttpRequest {
     pub method: String,
     pub path: String,
     pub body: Option<String>,
-    pub headers: HashMap<String, String>,
+    pub headers: Vec<(String, String)>,
 }
 
 #[async_trait]
