@@ -116,6 +116,7 @@ func TestCreateInferenceRequest(t *testing.T) {
 		//nolint:staticcheck // The public container contract requires this literal uppercase key.
 		assert.Equal(t, []string{"invocation-region"}, req.Header["NVCF-INVOCATION-REGION"])
 		assert.NotContains(t, req.Header, "Nvcf-Invocation-Region")
+		//nolint:staticcheck // The worker intentionally stores this contract key in uppercase.
 		assert.Equal(t, "a1,a2", req.Header["NVCF-FUNCTION-ASSET-IDS"][0])
 		var serializedHeaders bytes.Buffer
 		require.NoError(t, req.Header.Write(&serializedHeaders))
