@@ -307,6 +307,8 @@ nvcf:
   icms:
     allocator:
       maximum-target-latency: PT10S
+  worker:
+    delegated-token-enabled: false
   notary:
     jwt:
       issuer-uri: ${nvcf.notary.base-url}

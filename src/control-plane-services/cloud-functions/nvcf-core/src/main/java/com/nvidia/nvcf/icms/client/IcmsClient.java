@@ -671,6 +671,11 @@ public class IcmsClient {
         return clusterGroupCache.get(new IcmsCacheKey(ncaId, instanceUsage));
     }
 
+    public IcmsStubService.WorkerTokenIntrospectResult introspectWorkerToken(
+            IcmsStubService.WorkerTokenIntrospectRequest request) {
+        return service.introspectWorkerToken(request);
+    }
+
     public DescribeInstancesResponse.Instance getInstanceById(String instanceId) {
         var response = service.describeInstances(List.of(instanceId));
         return Optional.ofNullable(response)

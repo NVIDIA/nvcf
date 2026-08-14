@@ -33,6 +33,7 @@ import com.nvidia.nvcf.configuration.AwsConfiguration.AwsProperties;
 import com.nvidia.nvcf.configuration.nats.NatsConfiguration.NatsProperties;
 import com.nvidia.nvcf.icms.client.IcmsClient;
 import com.nvidia.nvcf.persistence.function.entity.FunctionType;
+import com.nvidia.nvcf.service.token.WorkerTokenIntrospectionService;
 import com.nvidia.nvcf.proto.ArtifactsRequest;
 import com.nvidia.nvcf.proto.ArtifactsResponse;
 import com.nvidia.nvcf.proto.ArtifactsResponse.ArtifactResponse;
@@ -103,6 +104,7 @@ public class GrpcWorkerService extends WorkerImplBase {
     private final RegistryArtifactService artifactService;
     private final WorkerUrlGeneratorService workerUrlGeneratorService;
     private final IcmsClient icmsClient;
+    private final WorkerTokenIntrospectionService workerTokenIntrospectionService;
 
     @Override
     public void connectOnce(
@@ -238,12 +240,30 @@ public class GrpcWorkerService extends WorkerImplBase {
 
     private NvcfIssuedToken validateWorkerToken(UUID functionId, UUID functionVersionId) {
         var token = getToken();
-        var nvcfIssuedToken = grpcTokenService.validateToken(token, TokenType.WORKER);
-        if (nvcfIssuedToken.functionId().equals(functionId)
-                && nvcfIssuedToken.functionVersionId().equals(functionVersionId)) {
-            return nvcfIssuedToken;
+        try {
+            var nvcfIssuedToken = grpcTokenService.validateToken(token, TokenType.WORKER);
+            if (nvcfIssuedToken.functionId().equals(functionId)
+                    && nvcfIssuedToken.functionVersionId().equals(functionVersionId)) {
+                return nvcfIssuedToken;
+            }
+            throw new ForbiddenException("invalid worker token");
+        } catch (ForbiddenException e) {
+            if (!workerTokenIntrospectionService.isEnabled()) {
+                throw e;
+            }
+            // Delegated token path: the bearer token is a projected ServiceAccount Token (PSAT).
+            // ICMS verifies cluster OIDC and worker identity; active=true means authorized.
+            var result = workerTokenIntrospectionService.introspect(token);
+            if (!result.isActive()) {
+                log.warn("worker token introspection returned active=false: {}", result.getError());
+                throw new ForbiddenException("worker token not active");
+            }
+            log.debug("worker authorized via delegated token, instance_id={}", result.getInstanceId());
+            // Construct a synthetic token representing this worker's claimed function identity.
+            // The function lookup below independently verifies the function is active.
+            return new NvcfIssuedToken(functionId, functionVersionId, Instant.now(),
+                                       TokenType.WORKER);
         }
-        throw new ForbiddenException("invalid worker token");
     }
 
     private static String getToken() {
