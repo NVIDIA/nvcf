@@ -29,7 +29,7 @@ llmRequestRouter:
   image:
     registry: ""
     repository: ""
-    tag: "0.3.2"
+    tag: "0.9.0"
     pullPolicy: IfNotPresent
 
   imagePullSecrets: []
