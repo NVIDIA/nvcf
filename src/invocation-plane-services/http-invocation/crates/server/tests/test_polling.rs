@@ -34,7 +34,8 @@ use tower::{Service, ServiceExt};
 
 #[tokio::test]
 async fn test_poll() -> anyhow::Result<()> {
-    let (_localstack, _nats, _mock_nvcf_api, config) = fixtures().await;
+    let (_localstack, _nats, _mock_nvcf_api, mut config) = fixtures().await;
+    config.nats_properties.region = "server-region".into();
     let mut app = app(config.clone(), None).await?;
     let app = ServiceExt::<http::Request<Body>>::ready(&mut app).await?;
     let _worker = Worker::new(
@@ -47,6 +48,7 @@ async fn test_poll() -> anyhow::Result<()> {
         Box::new(PollAwareHandler {
             sleep_time: Duration::from_secs(2),
             enable_echo_request: false,
+            echo_polling_request_headers: true,
         }),
         PublishMode::Attach(app.clone()),
     )
@@ -56,6 +58,7 @@ async fn test_poll() -> anyhow::Result<()> {
     let request = axum::http::Request::builder()
         .method(Method::POST)
         .header("nvcf-poll-seconds", "1")
+        .header("NVCF-INVOCATION-REGION", "client-initial-region")
         .uri(format!(
             "/v2/nvcf/pexec/functions/{FUNCTION_ID}/versions/{VERSION_ID_1}"
         ))
@@ -85,6 +88,8 @@ async fn test_poll() -> anyhow::Result<()> {
         .method(Method::GET)
         .uri(format!("/v2/nvcf/pexec/status/{request_id}"))
         .header(AUTHORIZATION, format!("Bearer {API_KEY}"))
+        .header(CONTENT_TYPE, "text/plain")
+        .header("NVCF-INVOCATION-REGION", "client-poll-region")
         .body(Body::empty())?;
     let response = app.call(request).await?;
     assert_eq!(response.status(), StatusCode::OK);
@@ -100,6 +105,9 @@ async fn test_poll() -> anyhow::Result<()> {
         response.headers().get("nvcf-status"),
         Some(&HeaderValue::from_static("fulfilled"))
     );
+    let regions = response.headers().get_all("nvcf-invocation-region");
+    assert_eq!(regions.iter().count(), 1);
+    assert_eq!(regions.iter().next().unwrap(), "server-region");
     let response_body = response.into_body().collect().await?.to_bytes();
     let response_body = String::from_utf8(response_body.into())?;
     assert_eq!(response_body, "a response");
@@ -121,6 +129,7 @@ async fn test_worker_responds_while_client_is_not_polling() -> anyhow::Result<()
         Box::new(PollAwareHandler {
             sleep_time: Duration::from_secs(2),
             enable_echo_request: false,
+            echo_polling_request_headers: false,
         }),
         PublishMode::Attach(app.clone()),
     )
@@ -216,6 +225,7 @@ async fn test_cross_region_poll() -> anyhow::Result<()> {
         Box::new(PollAwareHandler {
             sleep_time: Duration::from_secs(2),
             enable_echo_request: false,
+            echo_polling_request_headers: false,
         }),
         PublishMode::AttachMultiRegion(HashMap::from([
             (
@@ -334,6 +344,7 @@ async fn test_cross_region_poll_response_returned_while_client_not_present() -> 
         Box::new(PollAwareHandler {
             sleep_time: Duration::from_secs(2),
             enable_echo_request: false,
+            echo_polling_request_headers: false,
         }),
         PublishMode::AttachMultiRegion(HashMap::from([
             (

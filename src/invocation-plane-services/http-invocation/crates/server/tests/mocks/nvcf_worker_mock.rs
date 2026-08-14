@@ -529,6 +529,7 @@ impl WorkHandler for FnWorkHandler {
 pub struct PollAwareHandler {
     pub sleep_time: Duration,
     pub enable_echo_request: bool,
+    pub echo_polling_request_headers: bool,
 }
 
 #[async_trait]
@@ -561,14 +562,11 @@ impl WorkHandler for PollAwareHandler {
         } else {
             "a response".into()
         };
-        let response_headers = if self.enable_echo_request {
-            request.request_headers.clone()
-        } else {
-            vec![StringKv {
-                key: CONTENT_TYPE.to_string(),
-                value: "text/plain".into(),
-            }]
-        };
+        let default_response_headers = vec![StringKv {
+            key: CONTENT_TYPE.to_string(),
+            value: "text/plain".into(),
+        }];
+        let echo_polling_request_headers = self.echo_polling_request_headers;
 
         let send_responses = async move {
             let finished = tokio::time::sleep(self.sleep_time);
@@ -579,7 +577,12 @@ impl WorkHandler for PollAwareHandler {
                     () = &mut finished => {
                         tracing::debug!("producing finished response");
                         let mut builder = http::Response::builder().status(StatusCode::OK);
-                        for header in &response_headers {
+                        let response_headers = if echo_polling_request_headers {
+                            &polling_request.request_headers
+                        } else {
+                            &default_response_headers
+                        };
+                        for header in response_headers {
                             builder = builder.header(header.key.clone(), header.value.clone());
                         }
                         let response = builder.body(response_body.into())?;
@@ -631,6 +634,7 @@ pub struct JsonHttpRequest {
     pub method: String,
     pub path: String,
     pub body: Option<String>,
+    pub headers: HashMap<String, String>,
 }
 
 #[async_trait]
@@ -640,9 +644,32 @@ impl WorkHandler for ReturnRequestHandler {
         worker: &Worker,
         request: &WorkerInvokeFunctionRequest,
     ) -> anyhow::Result<()> {
-        let body_stream = match worker.get_request_body(request).await? {
-            AttachedRequest::BodyOnly(body) => body,
-            AttachedRequest::FullRequest(request) => request.into_body(),
+        let (body_stream, method, path, headers) = match worker.get_request_body(request).await? {
+            AttachedRequest::BodyOnly(body) => (
+                body,
+                request.request_method.clone(),
+                request.request_path.clone(),
+                HashMap::new(),
+            ),
+            AttachedRequest::FullRequest(request) => {
+                let (parts, body) = request.into_parts();
+                let headers = parts
+                    .headers
+                    .iter()
+                    .filter_map(|(key, value)| {
+                        value
+                            .to_str()
+                            .ok()
+                            .map(|value| (key.to_string(), value.to_string()))
+                    })
+                    .collect();
+                (
+                    body,
+                    parts.method.to_string(),
+                    parts.uri.to_string(),
+                    headers,
+                )
+            }
         };
         let body = body_stream.collect().await?.to_bytes();
         let body = if body.is_empty() {
@@ -651,9 +678,10 @@ impl WorkHandler for ReturnRequestHandler {
             Some(String::from_utf8(body.to_vec())?)
         };
         let json_http_request = JsonHttpRequest {
-            method: request.request_method.clone(),
-            path: request.request_path.clone(),
+            method,
+            path,
             body,
+            headers,
         };
         let body = serde_json::to_vec(&json_http_request)?;
         let response = http::Response::builder()

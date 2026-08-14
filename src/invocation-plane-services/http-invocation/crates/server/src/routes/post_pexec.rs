@@ -63,6 +63,8 @@ use uom::si::information;
 use uom::si::usize::Information;
 use uuid::Uuid;
 
+const NVCF_INVOCATION_REGION: &str = "nvcf-invocation-region";
+
 #[derive(Clone, Deserialize)]
 pub struct FunctionRouting {
     pub function_id: Uuid,
@@ -217,6 +219,7 @@ pub async fn pexec(
 
     let (mut parts, request_body) = req.into_parts();
     remove_hop_by_hop_headers(&mut parts.headers);
+    inject_invocation_region_header(&mut parts.headers, nats_service.region())?;
     let stream_full_request = app_config.worker_stream_properties.stream_full_request
         || is_only_stream_full_request_opt_in(&parts.headers);
     let headers = if stream_full_request {
@@ -624,6 +627,17 @@ pub fn to_nvcf_request_headers(map: &HeaderMap) -> anyhow::Result<Vec<StringKv>>
         .collect()
 }
 
+pub(crate) fn inject_invocation_region_header(
+    headers: &mut HeaderMap,
+    region: &str,
+) -> anyhow::Result<()> {
+    headers.insert(
+        NVCF_INVOCATION_REGION,
+        HeaderValue::from_str(region).context("invalid nats_properties.region header value")?,
+    );
+    Ok(())
+}
+
 fn select_version(routing: &AllowedFunctionInvocations) -> anyhow::Result<AllowedFunctionVersion> {
     let version = if routing.function_version_ids.len() == 1 {
         routing.function_version_ids[0].clone()
@@ -657,6 +671,29 @@ mod tests {
     use testcontainers_modules::nats::Nats;
     use testcontainers_modules::testcontainers::core::Mount;
     use testcontainers_modules::testcontainers::{runners::AsyncRunner, ContainerAsync, ImageExt};
+
+    #[test]
+    fn invocation_region_header_replaces_client_value() {
+        let mut headers = HeaderMap::new();
+        headers.append(
+            NVCF_INVOCATION_REGION,
+            HeaderValue::from_static("client-region-1"),
+        );
+        headers.append(
+            "NVCF-INVOCATION-REGION",
+            HeaderValue::from_static("client-region-2"),
+        );
+        headers.insert("x-user-header", HeaderValue::from_static("user-value"));
+        headers.insert("nvcf-region", HeaderValue::from_static("worker-region"));
+
+        inject_invocation_region_header(&mut headers, "server-region").unwrap();
+
+        let values = headers.get_all(NVCF_INVOCATION_REGION);
+        assert_eq!(values.iter().count(), 1);
+        assert_eq!(values.iter().next().unwrap(), "server-region");
+        assert_eq!(headers.get("x-user-header").unwrap(), "user-value");
+        assert_eq!(headers.get("nvcf-region").unwrap(), "worker-region");
+    }
 
     #[test]
     fn gateway_timeout_response_records_function_error_metric() {

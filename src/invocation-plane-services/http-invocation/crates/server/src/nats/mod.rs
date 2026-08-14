@@ -199,6 +199,10 @@ pub enum WorkerPollingResponse {
 }
 
 impl NatsService {
+    pub(crate) fn region(&self) -> &str {
+        &self.nats_properties.region
+    }
+
     pub async fn new(
         nats_properties: &NatsProperties,
         oauth2_token_endpoint: &str,

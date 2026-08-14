@@ -91,6 +91,7 @@ pub async fn pexec_status(
     let span = Span::current();
     span.record("request_id", request_id_string.clone());
     remove_hop_by_hop_headers(headers);
+    crate::routes::post_pexec::inject_invocation_region_header(headers, nats_service.region())?;
 
     let poll_duration = super::post_pexec::poll_duration(headers, false)
         .context("failed to parse poll duration")
