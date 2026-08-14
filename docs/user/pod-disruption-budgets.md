@@ -44,7 +44,9 @@ cassandra:
 NATS (3-node JetStream cluster, namespace `nats-system`):
 
 The upstream NATS chart enables a PDB by default. Override to disable or
-customise:
+customise. These values are set in the Helmfile environment file
+(`environments/<env>.yaml`); the `merge:` key is interpreted by the upstream
+NATS chart's values schema and is not a Helmfile directive:
 
 ```yaml
 nats:
