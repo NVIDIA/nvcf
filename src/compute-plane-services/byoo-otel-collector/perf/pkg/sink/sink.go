@@ -53,6 +53,10 @@ const (
 	portMetrics  = 8888
 	portHealth   = 13133
 
+	// MetricsPort is the sink's Prometheus telemetry port, exported so callers
+	// can scrape its receiver counters through the API-server proxy.
+	MetricsPort = portMetrics
+
 	// Port names, reused as the harness endpoint keys.
 	PortNameOTLPGRPC = "otlp-grpc"
 	PortNameOTLPHTTP = "otlp-http"

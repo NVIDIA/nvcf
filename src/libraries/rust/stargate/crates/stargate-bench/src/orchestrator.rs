@@ -361,7 +361,7 @@ traffic_pattern:
   output_tokens: { distribution: constant, value: 20 }
   arrival: { distribution: constant, interval_ms: 10 }
 algorithms:
-  - { name: power-of-two, config: { default: power-of-two } }
+  - { name: power-of-n, config: { default: power-of-n } }
   - { name: random, config: { default: random } }
 "#,
         )
@@ -429,7 +429,7 @@ algorithms:
         let run = prepared
             .algorithm_runs
             .iter()
-            .find(|run| run.algorithm_name == "power-of-two")
+            .find(|run| run.algorithm_name == "power-of-n")
             .expect("configured run should exist");
         let run_info: serde_json::Value = serde_json::from_slice(
             &std::fs::read(&run.run_info_path).expect("run info should read"),
@@ -448,7 +448,7 @@ algorithms:
         let compose = build_compose_spec(
             &config,
             &config.algorithms[0],
-            Path::new(".bench-out/prepare/run-power-of-two/lb-config.json"),
+            Path::new(".bench-out/prepare/run-power-of-n/lb-config.json"),
             STARGATE_GRPC_PORT,
             STARGATE_HTTP_PORT,
             STARGATE_METRICS_PORT,

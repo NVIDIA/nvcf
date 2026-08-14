@@ -22,6 +22,7 @@ package deploy
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -29,6 +30,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
@@ -37,6 +39,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/labels"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/render"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/report"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/sink"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/spec"
 )
@@ -53,12 +56,15 @@ const (
 
 	servicePrefix = "byoo-perf-otlp"
 
-	// collectorSecretsMountPath is where the BYOO collector reads its exporter
-	// credentials. The translator mounts an emptyDir here; to make the
-	// collector export to the in-cluster sink we back that volume with a Secret
-	// holding the credential files the generated config references via
-	// ${file:...}.
-	collectorSecretsMountPath = "/etc/byoo-otel-collector/secrets"
+	// accountsSecretsMountPath is where the BYOO collector's secrets-extractor
+	// reads its input accounts-secrets.json. The extractor flattens that JSON
+	// into one file per key under the output secrets dir, which the generated
+	// exporter config then references via ${file:...}. The translator mounts an
+	// emptyDir here; we back it with a Secret so the extractor can start and
+	// generate the per-signal token files (leaving the output dir writable).
+	accountsSecretsMountPath = "/var/secrets"
+	// accountsSecretsFile is the input file name the extractor waits for.
+	accountsSecretsFile = "accounts-secrets.json"
 )
 
 // Client wraps a Kubernetes clientset with the operations the suite needs.
@@ -148,10 +154,12 @@ type deploySettings struct {
 // DeployOption customizes Deploy.
 type DeployOption func(*deploySettings)
 
-// WithExportCredentials backs the collector's secrets volume with a Secret
-// containing the given credential files (name -> content), so the collector can
-// export to the in-cluster sink instead of the unreachable placeholder
-// endpoints used for rendering.
+// WithExportCredentials backs the collector's accounts-secrets input with a
+// Secret whose accounts-secrets.json holds the given name -> token map. The
+// collector's secrets-extractor flattens it into the per-signal token files the
+// exporter config references, so the collector can start and export to the
+// in-cluster sink instead of the unreachable placeholder endpoints used for
+// rendering.
 func WithExportCredentials(creds map[string]string) DeployOption {
 	return func(s *deploySettings) { s.exportCredentials = creds }
 }
@@ -180,11 +188,17 @@ func (c *Client) Deploy(ctx context.Context, namespace string, res *render.Resul
 
 	if len(settings.exportCredentials) > 0 {
 		secretName := instance + "-export-creds"
-		if err := c.applyCredentialsSecret(ctx, namespace, secretName, instance, settings.exportCredentials); err != nil {
+		// The extractor consumes a single accounts-secrets.json whose keys become
+		// the per-signal token files, so encode the credential map as that file.
+		payload, err := json.Marshal(settings.exportCredentials)
+		if err != nil {
+			return nil, fmt.Errorf("encode accounts secrets: %w", err)
+		}
+		if err := c.applyCredentialsSecret(ctx, namespace, secretName, instance, map[string]string{accountsSecretsFile: string(payload)}); err != nil {
 			return nil, err
 		}
-		if !mountSecretOverPath(pod, collectorSecretsMountPath, secretName) {
-			return nil, fmt.Errorf("collector container does not mount %q; cannot inject export credentials", collectorSecretsMountPath)
+		if !mountSecretOverPath(pod, accountsSecretsMountPath, secretName) {
+			return nil, fmt.Errorf("collector container does not mount %q; cannot inject accounts secrets", accountsSecretsMountPath)
 		}
 	}
 
@@ -346,21 +360,146 @@ func (c *Client) DeploySink(ctx context.Context, namespace string, opts sink.Opt
 	}, nil
 }
 
-// RunLoad creates the telemetrygen Jobs and blocks until they all complete or
-// the timeout elapses. Existing Jobs with the same names are replaced first so
-// a rerun does not stack load.
-func (c *Client) RunLoad(ctx context.Context, namespace string, jobs []*batchv1.Job, timeout time.Duration) error {
+// StartLoad creates the telemetrygen Jobs without waiting. Existing Jobs with
+// the same names are replaced first so a rerun does not stack load. Splitting
+// start from wait lets the caller sample metrics while load is in flight.
+func (c *Client) StartLoad(ctx context.Context, namespace string, jobs []*batchv1.Job) error {
 	for _, j := range jobs {
 		if err := c.applyJob(ctx, namespace, j); err != nil {
 			return err
 		}
 	}
+	return nil
+}
+
+// WaitLoadStarted blocks until every load Job has a pod that has started
+// (Running, or already Succeeded for very short jobs) or the timeout elapses.
+// Waiting for generators to start before the measurement window keeps pod
+// scheduling and image-pull latency out of the sampled throughput.
+func (c *Client) WaitLoadStarted(ctx context.Context, namespace string, jobs []*batchv1.Job, timeout time.Duration) error {
+	for _, j := range jobs {
+		if err := c.waitJobPodStarted(ctx, namespace, j.Name, timeout); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// loadStartPollInterval is the poll cadence for waiting on load-generator pods
+// to start. It is a variable so tests can shorten it.
+var loadStartPollInterval = time.Second
+
+// jobPodLabelKeys are the labels the Job controller stamps on its pods. The
+// modern key is batch.kubernetes.io/job-name; the unprefixed job-name is kept
+// for backward compatibility. Matching either keeps the readiness wait working
+// across cluster versions.
+var jobPodLabelKeys = []string{"batch.kubernetes.io/job-name", "job-name"}
+
+func (c *Client) waitJobPodStarted(ctx context.Context, namespace, jobName string, timeout time.Duration) error {
+	return wait.PollUntilContextTimeout(ctx, loadStartPollInterval, timeout, true, func(ctx context.Context) (bool, error) {
+		// Resolve the current Job's UID so we only observe its pods. applyJob
+		// replaces the previous run's Job with background propagation, so a
+		// Failed pod from a prior repetition can briefly linger under the same
+		// name; without this filter it would wrongly abort the new run.
+		job, err := c.cs.BatchV1().Jobs(namespace).Get(ctx, jobName, metav1.GetOptions{})
+		if err != nil {
+			if k8serrors.IsNotFound(err) {
+				return false, nil
+			}
+			return false, fmt.Errorf("get job %q: %w", jobName, err)
+		}
+		for _, key := range jobPodLabelKeys {
+			pods, err := c.cs.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: key + "=" + jobName})
+			if err != nil {
+				return false, fmt.Errorf("list pods for job %q: %w", jobName, err)
+			}
+			for _, p := range pods.Items {
+				if !ownedBy(p.OwnerReferences, job.UID) {
+					continue
+				}
+				switch p.Status.Phase {
+				case corev1.PodRunning, corev1.PodSucceeded:
+					return true, nil
+				case corev1.PodFailed:
+					return false, fmt.Errorf("load generator job %q pod %q failed", jobName, p.Name)
+				}
+			}
+		}
+		return false, nil
+	})
+}
+
+// ownedBy reports whether any owner reference matches the given UID.
+func ownedBy(owners []metav1.OwnerReference, uid types.UID) bool {
+	for _, o := range owners {
+		if o.UID == uid {
+			return true
+		}
+	}
+	return false
+}
+
+// WaitLoad blocks until every load Job completes or the timeout elapses.
+func (c *Client) WaitLoad(ctx context.Context, namespace string, jobs []*batchv1.Job, timeout time.Duration) error {
 	for _, j := range jobs {
 		if err := c.waitJobComplete(ctx, namespace, j.Name, timeout); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// RunLoad starts the load Jobs and blocks until they all complete.
+func (c *Client) RunLoad(ctx context.Context, namespace string, jobs []*batchv1.Job, timeout time.Duration) error {
+	if err := c.StartLoad(ctx, namespace, jobs); err != nil {
+		return err
+	}
+	return c.WaitLoad(ctx, namespace, jobs, timeout)
+}
+
+// scrapeTimeout bounds a single metric scrape so an unresponsive pod or API
+// proxy cannot hang the whole run; a timeout yields an error the caller treats
+// as a missing (best-effort) sample. It is a variable so tests can shorten it.
+var scrapeTimeout = 15 * time.Second
+
+// proxyGet performs the low-level API-proxy fetch. It is a seam so tests can
+// exercise the timeout path without a live cluster.
+var proxyGet = func(ctx context.Context, cs kubernetes.Interface, namespace, pod, port, path string) ([]byte, error) {
+	return cs.CoreV1().Pods(namespace).ProxyGet("http", pod, port, path, nil).DoRaw(ctx)
+}
+
+// ScrapePodMetrics fetches a pod's Prometheus endpoint through the API server
+// proxy. This works without a metrics-server, an ingress, or port-forwarding,
+// and is the only cross-namespace-safe way to read in-cluster endpoints from
+// outside the cluster. Each scrape is bounded by scrapeTimeout.
+func (c *Client) ScrapePodMetrics(ctx context.Context, namespace, pod, port, path string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, scrapeTimeout)
+	defer cancel()
+	raw, err := proxyGet(ctx, c.cs, namespace, pod, port, path)
+	if err != nil {
+		return nil, fmt.Errorf("scrape %s/%s:%s%s: %w", namespace, pod, port, path, err)
+	}
+	return raw, nil
+}
+
+// PodHealth reports the collector pod's phase, aggregate restart count, and
+// whether any container was OOM killed.
+func (c *Client) PodHealth(ctx context.Context, namespace, pod string) (report.PodHealth, error) {
+	p, err := c.cs.CoreV1().Pods(namespace).Get(ctx, pod, metav1.GetOptions{})
+	if err != nil {
+		return report.PodHealth{}, fmt.Errorf("get pod %q: %w", pod, err)
+	}
+	h := report.PodHealth{Phase: string(p.Status.Phase)}
+	for _, cs := range p.Status.ContainerStatuses {
+		h.Restarts += cs.RestartCount
+		if term := cs.LastTerminationState.Terminated; term != nil && term.Reason == "OOMKilled" {
+			h.OOMKilled = true
+		}
+		if term := cs.State.Terminated; term != nil && term.Reason == "OOMKilled" {
+			h.OOMKilled = true
+		}
+	}
+	return h, nil
 }
 
 func (c *Client) applyJob(ctx context.Context, namespace string, job *batchv1.Job) error {

@@ -287,6 +287,12 @@
       "initial_version": "1.4.4"
     },
     {
+      "id": "notary-helm",
+      "path": "deploy/helm/notary",
+      "service_name": "helm-nvcf-notary-service",
+      "initial_version": "1.4.2"
+    },
+    {
       "id": "instance-cluster-management",
       "path": "src/control-plane-services/instance-cluster-management",
       "service_name": "nvcf-instance-cluster-management"

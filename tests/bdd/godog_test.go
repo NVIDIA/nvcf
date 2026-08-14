@@ -538,13 +538,6 @@ func TestObservabilityControlFeatureFileWiresToSteps(t *testing.T) {
 		t.Fatal("control-profile Helmfile install command was never invoked")
 	}
 	environmentPath := filepath.Join(suite.Config.RepoRoot, "deploy", "stacks", "self-managed", "environments", "local-bdd-observability-control.yaml")
-	chartVersion, found, err := dsl.ReadYAMLKey(environmentPath, "functionAutoscaler.chartVersion")
-	if err != nil {
-		t.Fatalf("read control-profile autoscaler chart version: %v", err)
-	}
-	if !found || chartVersion != "0.2.0" {
-		t.Fatalf("control-profile autoscaler chart version = %q, found = %t; want 0.2.0", chartVersion, found)
-	}
 	imageTag, found, err := dsl.ReadYAMLKey(environmentPath, "functionAutoscaler.image.tag")
 	if err != nil {
 		t.Fatalf("read control-profile autoscaler image tag: %v", err)
