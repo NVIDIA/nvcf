@@ -17,8 +17,14 @@
 #
 # Triggered by workflow_run after "Preview Fern Docs: Build" completes.
 # Downloads the fern/ artifact, builds a preview with DOCS_FERN_TOKEN, and
-# posts a stable :herb: comment on the PR. This workflow never checks out the
-# PR branch directly, keeping secrets isolated from untrusted code.
+# posts a stable :herb: comment on the PR.
+#
+# Not checking out the PR branch is not by itself sufficient. The artifact IS
+# the PR branch content, and `fern generate` processes it with DOCS_FERN_TOKEN
+# in the environment, so a fork could have its docs.yml and API specs handled
+# by a privileged process holding the token. The job is therefore restricted to
+# pull requests from this repository; a fork gets no preview rather than a
+# preview built with a secret.
 #
 # Required configuration:
 # - Organization secret: DOCS_FERN_TOKEN (from `fern token` for the nvidia Fern org)
@@ -42,7 +48,14 @@ jobs:
   preview:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    # A fork must never reach DOCS_FERN_TOKEN. workflow_run runs privileged with
+    # repository secrets, and the artifact it consumes is built from the PR
+    # branch, so this is the boundary that keeps untrusted content away from the
+    # token. head_repository is the repository the PR branch lives in.
+    if: >-
+      ${{ github.event.workflow_run.conclusion == 'success'
+          && github.event.workflow_run.event == 'pull_request'
+          && github.event.workflow_run.head_repository.full_name == github.repository }}
     steps:
       - name: Download fern sources and metadata
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -54,8 +67,24 @@ jobs:
       - name: Read PR metadata
         id: metadata
         run: |
-          echo "pr_number=$(cat preview-metadata/pr_number)" >> "$GITHUB_OUTPUT"
-          echo "head_ref=$(cat preview-metadata/head_ref)" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          # These files come from the artifact, which is PR branch content. Written
+          # to $GITHUB_OUTPUT unchecked, a value containing a newline injects
+          # further outputs: a crafted head_ref could set preview_url, and
+          # pr_number is interpolated into a gh api path, so it could redirect the
+          # comment elsewhere. Read one line and require a known-safe shape.
+          pr_number=$(head -n1 preview-metadata/pr_number | tr -d '\r')
+          head_ref=$(head -n1 preview-metadata/head_ref | tr -d '\r')
+          if ! printf '%s' "$pr_number" | grep -Eq '^[0-9]+$'; then
+            echo "::error::pr_number from the artifact is not a number"
+            exit 1
+          fi
+          if ! printf '%s' "$head_ref" | grep -Eq '^[A-Za-z0-9._/-]{1,255}$'; then
+            echo "::error::head_ref from the artifact is not a plain git ref"
+            exit 1
+          fi
+          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+          echo "head_ref=$head_ref" >> "$GITHUB_OUTPUT"
 
       - name: Setup Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
