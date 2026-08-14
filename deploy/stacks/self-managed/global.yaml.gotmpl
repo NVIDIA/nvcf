@@ -39,6 +39,11 @@ cassandra:
   replicaCount: {{ dig "cassandra" "replicaCount" 3 .Values }}
   resourcesPreset: {{ dig "cassandra" "resourcesPreset" "xlarge" .Values }}
 
+  {{- with dig "cassandra" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
   {{- with include "nvcf.nodeSelector" (dict "type" "cassandra" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}
@@ -154,7 +159,7 @@ openbao:
       {{- toYaml $webhook | nindent 6 }}
     {{- end }}
     podDisruptionBudget:
-      minAvailable: 1
+      minAvailable: {{ dig "openbao" "injector" "podDisruptionBudget" "minAvailable" 1 .Values }}
   server:
     image:
       registry: {{ .Values.global.image.registry }}
@@ -171,6 +176,12 @@ openbao:
       storageClass: {{ .Values.global.storageClass }}
       {{- end }}
       size: {{ .Values.global.storageSize | default "10Gi" }}
+
+    ha:
+      {{- with dig "openbao" "server" "ha" "disruptionBudget" dict .Values }}
+      disruptionBudget:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
 
 nats:
   {{- if .Values.global.imagePullSecrets }}
@@ -223,6 +234,11 @@ nats:
           storageClassName: {{ .Values.global.storageClass }}
   {{- end }}
 
+  {{- with dig "nats" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
 apikeys:
   fullnameOverride: api-keys
   {{- if .Values.global.imagePullSecrets }}
@@ -237,6 +253,10 @@ apikeys:
   {{- end }}
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
+  {{- end }}
+  {{- with dig "apikeys" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
   {{- end }}
 
 natsAuthCalloutService:
@@ -459,7 +479,11 @@ invocation:
     {{- with $invocationWorkerBaseURL }}
     WORKER_STREAM_PROPERTIES__SELF_ADDRESS: {{ . | quote }}
     {{- end }}
-  
+  {{- with dig "invocation" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
 nvctApi:
   fullnameOverride: nvct-api
   {{- if .Values.global.imagePullSecrets }}
@@ -534,6 +558,10 @@ grpcproxy:
     RATE_LIMIT_ENABLED: "true"
     RATE_LIMIT_ADDR: "http://ratelimiter.nvcf.svc.cluster.local:7777"
     {{- end }}
+  {{- with dig "grpcproxy" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 
 rateLimiter:
   {{- if .Values.global.imagePullSecrets }}
@@ -551,6 +579,10 @@ rateLimiter:
   {{- if .Values.global.observability.tracing.enabled }}
   env:
     OTEL_EXPORTER_OTLP_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
+  {{- end }}
+  {{- with dig "rateLimiter" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
   {{- end }}
 
 ess:
@@ -575,6 +607,10 @@ ess:
     {{- if .Values.global.observability.tracing.enabled }}
     MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
     {{- end }}
+  {{- with dig "ess" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 
 notary:
   fullnameOverride: notary-service
@@ -660,6 +696,10 @@ adminIssuerProxy:
       name: {{ required "ingress.gatewayApi.gateways.shared.name is required" .Values.ingress.gatewayApi.gateways.shared.name }}
     hostname: "api-keys.{{ .Values.global.domain }}"
     path: "/v1/admin/keys"
+  {{- with dig "adminIssuerProxy" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 
 stateMetrics:
   enabled: false
@@ -728,6 +768,10 @@ functionautoscaler:
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
   {{- end }}
+  {{- with dig "functionautoscaler" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 {{- end }}
 
 reval:
@@ -747,6 +791,10 @@ reval:
   {{- end }}
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
+  {{- end }}
+  {{- with dig "reval" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
   {{- end }}
 
 llmApiGateway:
@@ -786,6 +834,10 @@ llmApiGateway:
       {{- if .Values.global.observability.tracing.enabled }}
       endpoint: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
       {{- end }}
+  {{- with dig "llmApiGateway" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 
 llmRequestRouter:
   enabled: {{ dig "addons" "llm" "enabled" false .Values }}
@@ -866,6 +918,10 @@ llmRequestRouter:
     imagePullSecrets:
       {{- toYaml .Values.global.imagePullSecrets | nindent 6 }}
     {{- end }}
+  {{- end }}
+  {{- with dig "llmRequestRouter" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
   {{- end }}
 
 vanityGateway:
