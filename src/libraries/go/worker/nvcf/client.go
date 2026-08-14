@@ -128,6 +128,13 @@ func CreateClient(nvcfFqdn string, nvcfFqdnNats *string, nvcfWorkerToken string,
 
 	tokenProvider := auth.NewSettableTokenSource(oauth2.StaticTokenSource(nvcfToken))
 
+	// Prefer a mounted projected ServiceAccount Token (PSAT) over the bootstrap token
+	// when running on a self-hosted cluster with worker identity enabled.
+	if mountedSrc, err := token.NewMountedJWTSource(); err == nil {
+		zap.L().Info("mounted JWT found; using projected ServiceAccount token as NVCF credential")
+		tokenProvider.SetTokenSource(mountedSrc)
+	}
+
 	client := &Client{
 		Client: workerClient,
 		regionalNvcfClients: map[string]pb.WorkerClient{
