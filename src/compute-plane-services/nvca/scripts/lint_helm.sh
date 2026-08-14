@@ -220,7 +220,9 @@ assert_helm_managed_vault_address() {
     "http://vault.example.test:8200" \
     " https://vault.example.test:443 " \
     "https://user@vault.example.test:443" \
+    "https://vault.example.test:443?" \
     "https://vault.example.test:443?namespace=test" \
+    "https://vault.example.test:443#" \
     "https://vault.example.test:443#test"; do
     if helm template test-release "${chart_dir}" \
       --set "ngcConfig.serviceKey=fakekey" \

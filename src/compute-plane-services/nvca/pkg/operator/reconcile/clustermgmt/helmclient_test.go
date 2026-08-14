@@ -145,7 +145,9 @@ func TestHelmManagedClient_GetCluster_RequiresValidVaultAddress(t *testing.T) {
 		"plain HTTP":             "http://vault.example.test:8200",
 		"surrounding whitespace": " https://vault.example.test:443 ",
 		"credentials":            "https://user@vault.example.test:443",
+		"empty query":            "https://vault.example.test:443?",
 		"query":                  "https://vault.example.test:443?namespace=test",
+		"empty fragment":         "https://vault.example.test:443#",
 		"fragment":               "https://vault.example.test:443#test",
 	} {
 		t.Run(name, func(t *testing.T) {
