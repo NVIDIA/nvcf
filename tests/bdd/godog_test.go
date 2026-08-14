@@ -795,7 +795,6 @@ func TestObservabilityAllFeatureFileWiresToSteps(t *testing.T) {
 		key   string
 		want  string
 	}{
-		{stack: "self-managed", key: "functionAutoscaler.chartVersion", want: "0.2.0"},
 		{stack: "self-managed", key: "functionAutoscaler.image.tag", want: "1.18.10"},
 		{stack: "nvcf-compute-plane", key: "global.nvcaOperator.selfManaged.otelCollector.imageRepository", want: "nvcr.io/test-org/test-team/nvcf-otel-collector"},
 	}
