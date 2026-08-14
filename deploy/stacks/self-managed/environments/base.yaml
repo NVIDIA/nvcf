@@ -359,11 +359,6 @@ rateLimiter:
 #     enabled: true
 #     maxUnavailable: 1
 #
-# grpcproxy:
-#   podDisruptionBudget:
-#     enabled: true
-#     maxUnavailable: 1
-#
 # adminIssuerProxy:
 #   podDisruptionBudget:
 #     enabled: true
