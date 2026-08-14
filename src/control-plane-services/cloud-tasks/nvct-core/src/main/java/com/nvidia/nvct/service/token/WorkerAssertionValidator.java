@@ -60,6 +60,7 @@ public class WorkerAssertionValidator {
     private final Clock clock;
     private final String issuer;
     private final String subject;
+    private final WorkerTokenIntrospectionService workerTokenIntrospectionService;
 
     public WorkerAssertionValidator(
             @Qualifier("notaryJwtDecoder") JwtDecoder jwtDecoder,
@@ -67,15 +68,36 @@ public class WorkerAssertionValidator {
             Clock clock,
             @Value("${nvct.notary.base-url}") String issuer,
             @Value("${spring.security.oauth2.client.registration.notary.client-id}")
-            String subject) {
+            String subject,
+            WorkerTokenIntrospectionService workerTokenIntrospectionService) {
         this.jwtDecoder = jwtDecoder;
         this.jsonMapper = jsonMapper;
         this.clock = clock;
         this.issuer = issuer;
         this.subject = subject;
+        this.workerTokenIntrospectionService = workerTokenIntrospectionService;
     }
 
     public void validate(String token, String ncaId, UUID taskId) {
+        try {
+            validateNotaryJwt(token, ncaId, taskId);
+        } catch (ForbiddenException e) {
+            if (!workerTokenIntrospectionService.isEnabled()) {
+                throw e;
+            }
+            // Delegated token path: the bearer token is a projected ServiceAccount Token (PSAT).
+            // ICMS verifies cluster OIDC and worker identity; active=true means authorized.
+            var result = workerTokenIntrospectionService.introspect(token);
+            if (!result.isActive()) {
+                log.warn("worker token introspection returned active=false: {}", result.getError());
+                throw new ForbiddenException("worker token not active");
+            }
+            log.debug("task worker authorized via delegated token, instance_id={}",
+                      result.getInstanceId());
+        }
+    }
+
+    private void validateNotaryJwt(String token, String ncaId, UUID taskId) {
         var jwt = decode(token, taskId);
         validateIssuer(jwt, taskId);
         validateIssuedAt(jwt, taskId);
