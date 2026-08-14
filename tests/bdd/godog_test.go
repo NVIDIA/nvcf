@@ -927,25 +927,8 @@ func TestSingleClusterHelmfileUpstreamImagesFeatureFileWiresToSteps(t *testing.T
 	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
 	upstreamReloader := "docker.io/natsio/nats-server-config-reloader:0.23.0"
-	upstreamAlpine := "docker.io/alpine/k8s:1.36.1"
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
 		"k3d cluster get ncp-local-cp": {ExitCode: 1},
-		"rg --fixed-strings 'docker.io/natsio/nats-server-config-reloader:0.23.0' deploy/stacks/self-managed/out -g '**/*-nats/**'": {
-			ExitCode: 0,
-			Stdout:   upstreamReloader,
-		},
-		"rg --fixed-strings 'nvcf-cassandra-migrations:' deploy/stacks/self-managed/out -g '**/*-cassandra/**'": {
-			ExitCode: 0,
-			Stdout:   "nvcf-cassandra-migrations:",
-		},
-		"rg --fixed-strings '# Source: helm-nvcf-nats/templates/nkey-secret.yaml' deploy/stacks/self-managed/out -g '**/*-nats/**'": {
-			ExitCode: 0,
-			Stdout:   "nkey-secret.yaml",
-		},
-		"rg --fixed-strings 'docker.io/alpine/k8s:1.36.1' deploy/stacks/self-managed/out -g '**/*-api/**'": {
-			ExitCode: 0,
-			Stdout:   upstreamAlpine,
-		},
 		"helm list --all-namespaces -o json": {
 			ExitCode: 0,
 			Stdout:   helmListAllNamespacesJSON(),
@@ -958,6 +941,7 @@ func TestSingleClusterHelmfileUpstreamImagesFeatureFileWiresToSteps(t *testing.T
 	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
 	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
 	seedUpstreamImageStackInputs(t, suite.Config.RepoRoot)
+	seedUpstreamImageRenderOutput(t, suite.Config.RepoRoot)
 
 	sc := steps.NewScenarioContext(suite)
 	featurePath := mustResolveFeaturePath(t, "single-cluster-helmfile-upstream-images.feature")
@@ -990,6 +974,9 @@ func TestSingleClusterHelmfileUpstreamImagesFeatureFileWiresToSteps(t *testing.T
 		if !commandRanThatContains(runs, "install HELMFILE_ENV=local-bdd "+selector) {
 			t.Fatalf("helmfile install selector %q was never invoked", selector)
 		}
+	}
+	if commandRanThatContains(runs, "rg --fixed-strings") {
+		t.Fatal("rendered manifest assertions should not invoke rg")
 	}
 }
 
@@ -1149,6 +1136,29 @@ api:
 `
 	if err := os.WriteFile(filepath.Join(stackDir, "global.yaml.gotmpl"), []byte(global), 0o644); err != nil {
 		t.Fatalf("write global template: %v", err)
+	}
+}
+
+// seedUpstreamImageRenderOutput writes representative render directories for
+// the positive fixed-string assertions in the upstream-image feature.
+func seedUpstreamImageRenderOutput(t *testing.T, repoRoot string) {
+	t.Helper()
+	manifests := map[string]string{
+		"01-nats/templates/nats.yaml": `# Source: helm-nvcf-nats/templates/nkey-secret.yaml
+image: docker.io/natsio/nats-server-config-reloader:0.23.0
+`,
+		"02-cassandra/templates/cassandra.yaml": "image: nvcf-cassandra-migrations:latest\n",
+		"03-api/templates/api.yaml":             "image: docker.io/alpine/k8s:1.36.1\n",
+	}
+	root := filepath.Join(repoRoot, "deploy", "stacks", "self-managed", "out")
+	for relativePath, body := range manifests {
+		filePath := filepath.Join(root, filepath.FromSlash(relativePath))
+		if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
+			t.Fatalf("mkdir rendered manifest dir: %v", err)
+		}
+		if err := os.WriteFile(filePath, []byte(body), 0o644); err != nil {
+			t.Fatalf("write rendered manifest: %v", err)
+		}
 	}
 }
 
