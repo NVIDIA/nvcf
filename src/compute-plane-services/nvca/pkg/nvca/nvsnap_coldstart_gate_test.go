@@ -19,6 +19,7 @@ package nvca
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -87,6 +88,13 @@ func TestShouldDeferColdStart_CFSAbsentAtLookupThenClaimLost(t *testing.T) {
 	}
 	if gets < 2 {
 		t.Errorf("expected the lost-election path to re-read the CFS; saw %d Get calls", gets)
+	}
+	// Counting Gets only proves a second call happened. Assert the value it
+	// read actually reached deferColdStartReplica, so a regression to the
+	// stale (nil cfsObj -> empty) pioneer is caught rather than passing on
+	// the call count alone.
+	if !strings.Contains(err.Error(), "other-ns/other-pod") {
+		t.Errorf("deferral error should name the pioneer read after the election; got %q", err)
 	}
 }
 

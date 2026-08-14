@@ -158,6 +158,11 @@ func (c K8sComputeBackend) shouldDeferColdStart(ctx context.Context, req *nvcav2
 	if fresh, ferr := c.dynClient.Resource(nvsnapFunctionStateGVR).
 		Get(ctx, fvID, metav1.GetOptions{}); ferr == nil && fresh != nil {
 		pioneer, _, _ = unstructured.NestedString(fresh.Object, "status", "coldStartPioneer")
+	} else if ferr != nil {
+		// Debug, not Info: the deferral itself is unaffected, only the
+		// name in the log line and requeue message is lost.
+		log.WithError(ferr).WithField("functionVersionID", fvID).
+			Debug("nvsnap: CFS pioneer re-read failed; deferring with an empty pioneer")
 	}
 	coldStartReplicasDeferred.Inc()
 	log.WithFields(map[string]any{
