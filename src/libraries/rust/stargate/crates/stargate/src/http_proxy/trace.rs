@@ -17,7 +17,7 @@ use axum::http::HeaderMap;
 use tracing::{Span, field};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::load_balancer::ClusterComparatorTrace;
+use crate::load_balancer::ClusterComparator;
 use crate::routing_state::{RoutedClusterSnapshot, RoutedInferenceServerSnapshot};
 use crate::telemetry::parent_context_from_headers;
 
@@ -61,10 +61,6 @@ pub(super) fn proxy_openai_request_span(headers: &HeaderMap) -> Span {
         routing.sample_count_configured = field::Empty,
         routing.sample_count_effective = field::Empty,
         routing.comparator = field::Empty,
-        routing.comparator.score = field::Empty,
-        routing.comparator.queue_ms = field::Empty,
-        routing.comparator.prefill_ms = field::Empty,
-        routing.comparator.rtt_ms = field::Empty,
         routing.rank_depth = field::Empty,
         routing.selected_after_kv_free_tokens_skip = field::Empty,
         routing.retry_attempts = field::Empty,
@@ -113,7 +109,7 @@ pub(super) struct RoutingTraceFields<'a> {
     pub(super) num_candidates: usize,
     pub(super) rank_depth: usize,
     pub(super) selected_after_kv_free_tokens_skip: bool,
-    pub(super) comparator: Option<&'a ClusterComparatorTrace>,
+    pub(super) comparator: Option<ClusterComparator>,
     pub(super) cluster: &'a RoutedClusterSnapshot,
     pub(super) chosen: &'a RoutedInferenceServerSnapshot,
 }
@@ -144,19 +140,7 @@ pub(super) fn record_routing_to_span(span: &Span, routing: RoutingTraceFields<'_
     );
 
     if let Some(comparator) = routing.comparator {
-        record_fields!(span;
-            "routing.comparator" = comparator.comparator.as_str(),
-            "routing.comparator.score" = comparator.score,
-        );
-        if let Some(queue_ms) = comparator.queue_ms {
-            span.record("routing.comparator.queue_ms", queue_ms);
-        }
-        if let Some(prefill_ms) = comparator.prefill_ms {
-            span.record("routing.comparator.prefill_ms", prefill_ms);
-        }
-        if let Some(rtt_ms) = comparator.rtt_ms {
-            span.record("routing.comparator.rtt_ms", rtt_ms);
-        }
+        span.record("routing.comparator", comparator.as_str());
     }
 }
 
@@ -202,9 +186,5 @@ mod tests {
         assert!(fields.field("routing.sample_count_configured").is_some());
         assert!(fields.field("routing.sample_count_effective").is_some());
         assert!(fields.field("routing.comparator").is_some());
-        assert!(fields.field("routing.comparator.score").is_some());
-        assert!(fields.field("routing.comparator.queue_ms").is_some());
-        assert!(fields.field("routing.comparator.prefill_ms").is_some());
-        assert!(fields.field("routing.comparator.rtt_ms").is_some());
     }
 }

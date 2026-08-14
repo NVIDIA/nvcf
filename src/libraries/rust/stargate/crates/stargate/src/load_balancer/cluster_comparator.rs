@@ -72,69 +72,6 @@ impl ClusterComparator {
                 .cmp(&candidate_b.stats.queue_size),
         }
     }
-
-    pub(crate) fn trace(
-        self,
-        request: &LoadBalancerRequest<'_>,
-        candidate: &RoutedClusterSnapshot,
-    ) -> ClusterComparatorTrace {
-        match self {
-            Self::EstimatedTtft => {
-                let (queue_ms, prefill_ms, rtt_ms) = ttft_components(
-                    candidate,
-                    request.input_tokens.unwrap_or_default() as f64,
-                    request.priority,
-                );
-                ClusterComparatorTrace {
-                    comparator: self,
-                    score: rtt_ms + queue_ms + prefill_ms,
-                    queue_ms: Some(queue_ms),
-                    prefill_ms: Some(prefill_ms),
-                    rtt_ms: Some(rtt_ms),
-                }
-            }
-            Self::QueueTime => {
-                let queue_ms = queue_delay_ms(candidate, request.priority);
-                ClusterComparatorTrace {
-                    comparator: self,
-                    score: queue_ms,
-                    queue_ms: Some(queue_ms),
-                    prefill_ms: None,
-                    rtt_ms: None,
-                }
-            }
-            Self::InputWorkSeconds => ClusterComparatorTrace {
-                comparator: self,
-                score: input_work_seconds(candidate, request.input_tokens),
-                queue_ms: None,
-                prefill_ms: None,
-                rtt_ms: None,
-            },
-            Self::Utilization => ClusterComparatorTrace {
-                comparator: self,
-                score: utilization(candidate),
-                queue_ms: None,
-                prefill_ms: None,
-                rtt_ms: None,
-            },
-            Self::NumRequestsQueued => ClusterComparatorTrace {
-                comparator: self,
-                score: candidate.stats.queue_size as f64,
-                queue_ms: None,
-                prefill_ms: None,
-                rtt_ms: None,
-            },
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct ClusterComparatorTrace {
-    pub(crate) comparator: ClusterComparator,
-    pub(crate) score: f64,
-    pub(crate) queue_ms: Option<f64>,
-    pub(crate) prefill_ms: Option<f64>,
-    pub(crate) rtt_ms: Option<f64>,
 }
 
 #[derive(Clone, Copy, Debug)]

@@ -1776,25 +1776,6 @@ fn wait_and_widen_uses_comparator_with_and_without_affinity() {
     }
 }
 
-#[test]
-fn default_comparator_trace_reports_score_components() {
-    let config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::PowerOfN);
-    let comparator = config
-        .comparator()
-        .expect("power-of-n should have an effective comparator");
-    let target = target();
-    let request = request(&target, None, Some(100));
-    let selected = priority_candidate("selected", 0, 20).with_rtt_ms(5);
-
-    let trace = comparator.trace(&request, &selected);
-
-    assert_eq!(trace.comparator, ClusterComparator::EstimatedTtft);
-    assert_eq!(trace.score, 1025.0);
-    assert_eq!(trace.queue_ms, Some(20.0));
-    assert_eq!(trace.prefill_ms, Some(1000.0));
-    assert_eq!(trace.rtt_ms, Some(5.0));
-}
-
 wait_and_widen_choice_tests! {
     wait_and_widen_prefers_lower_estimated_ttft:
     |_| {};

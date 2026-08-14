@@ -395,9 +395,7 @@ is configurable with `--metrics-prefix`. See the
 [NVCF request-router metrics reference](../../../../../docs/user/metrics/llm-request-router/metrics.md)
 for metric names, labels, and descriptions.
 
-The proxy request span records the effective comparator and selected score in
-`routing.comparator` and `routing.comparator.score`. It also records queue,
-prefill, and RTT score components when they apply.
+The proxy request span records the effective comparator in `routing.comparator`.
 
 ## Validation checklist
 
