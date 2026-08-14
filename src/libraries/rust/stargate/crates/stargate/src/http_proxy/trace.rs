@@ -57,6 +57,8 @@ pub(super) fn proxy_openai_request_span(headers: &HeaderMap) -> Span {
         selected_inst.snapshot_age_ms = field::Empty,
         routing.algorithm = field::Empty,
         routing.num_candidates = field::Empty,
+        routing.sample_count_configured = field::Empty,
+        routing.sample_count_effective = field::Empty,
         routing.rank_depth = field::Empty,
         routing.selected_after_kv_free_tokens_skip = field::Empty,
         routing.retry_attempts = field::Empty,
@@ -137,6 +139,7 @@ pub(super) fn record_routing_to_span(span: &Span, routing: RoutingTraceFields<'_
 
 #[cfg(test)]
 mod tests {
+    use super::proxy_openai_request_span;
     use crate::telemetry::parent_context_from_headers;
     use axum::http::{HeaderMap, HeaderName, HeaderValue};
     use opentelemetry::global;
@@ -163,5 +166,17 @@ mod tests {
             "4bf92f3577b34da6a3ce929d0e0e4736"
         );
         assert_eq!(span_context.span_id().to_string(), "00f067aa0ba902b7");
+    }
+
+    #[test]
+    fn proxy_span_declares_load_balancer_sample_count_fields() {
+        let span = proxy_openai_request_span(&HeaderMap::new());
+        let fields = span
+            .metadata()
+            .expect("proxy span should have static metadata")
+            .fields();
+
+        assert!(fields.field("routing.sample_count_configured").is_some());
+        assert!(fields.field("routing.sample_count_effective").is_some());
     }
 }

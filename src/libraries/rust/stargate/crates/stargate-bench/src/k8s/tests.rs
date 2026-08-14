@@ -73,8 +73,8 @@ fn config() -> BenchmarkConfig {
         }),
         degradation: DegradationConfig::default(),
         algorithms: vec![AlgorithmConfig {
-            name: "power-of-two".to_string(),
-            config: serde_json::json!({"default": "power-of-two"}),
+            name: "power-of-n".to_string(),
+            config: serde_json::json!({"default": "power-of-n"}),
             pylon_queue_admission: None,
         }],
     }
@@ -111,7 +111,7 @@ fn render_default_test_manifest(config: &BenchmarkConfig) -> RenderedManifests {
         &config.algorithms[0],
         "sgbench-sg-power",
         "sgbench-be-power",
-        r#"{"default":"power-of-two"}"#,
+        r#"{"default":"power-of-n"}"#,
     )
 }
 
@@ -275,11 +275,11 @@ fn benchmark_run(run_dir: &Path) -> BenchmarkK8sRun {
         fs::write(run_dir.join(manifest), "kind: List\n").expect("manifest should write");
     }
     BenchmarkK8sRun {
-        algorithm_name: "power-of-two".to_string(),
+        algorithm_name: "power-of-n".to_string(),
         manifest_path: run_dir.join("manifest.json"),
         run_dir: run_dir.to_path_buf(),
-        stargate_ns: "sgbench-sg-power-of-two".to_string(),
-        backends_ns: "sgbench-be-power-of-two".to_string(),
+        stargate_ns: "sgbench-sg-power-of-n".to_string(),
+        backends_ns: "sgbench-be-power-of-n".to_string(),
         stargate_count: 2,
         nodeport_host: "node.test".to_string(),
         stargate_http_endpoint: "http://node.test:30080".to_string(),
@@ -316,8 +316,8 @@ fn prepare_benchmark_k8s_run_writes_split_manifests_and_run_info() {
     )
     .expect("benchmark k8s run should prepare");
 
-    assert_eq!(run.stargate_ns, "sgbench-sg-power-of-two");
-    assert_eq!(run.backends_ns, "sgbench-be-power-of-two");
+    assert_eq!(run.stargate_ns, "sgbench-sg-power-of-n");
+    assert_eq!(run.backends_ns, "sgbench-be-power-of-n");
     assert_eq!(run.stargate_http_endpoint, "http://node.example:30082");
     assert_eq!(
         run.stargate_metrics_endpoint,
@@ -352,7 +352,7 @@ fn prepare_benchmark_k8s_run_writes_split_manifests_and_run_info() {
         "run info should read",
     ))
     .expect("run info should parse");
-    assert_eq!(run_info["algorithm_name"], "power-of-two");
+    assert_eq!(run_info["algorithm_name"], "power-of-n");
     assert_eq!(run_info["http_node_port"], 30082);
     assert_eq!(
         run_info["stargate_http_endpoint"],
@@ -369,7 +369,7 @@ fn kubectl_runner_executes_readiness_and_maintenance_commands() {
     let fake = FakeKubectl::new();
     let kubectl = fake.runner();
     let tempdir = tempfile::tempdir().expect("tempdir should create");
-    let run = benchmark_run(&tempdir.path().join("run-power-of-two"));
+    let run = benchmark_run(&tempdir.path().join("run-power-of-n"));
 
     kubectl.apply(&run).expect("stargate manifest should apply");
     kubectl
@@ -412,7 +412,7 @@ fn kubectl_runner_executes_readiness_and_maintenance_commands() {
         &stargate_log,
         &[
             "status: exit status: 0",
-            "logs for -n sgbench-sg-power-of-two logs",
+            "logs for -n sgbench-sg-power-of-n logs",
         ],
     );
     let backend_log = read_utf8(
@@ -455,7 +455,7 @@ fi
     );
     let kubectl = fake.runner();
     let tempdir = tempfile::tempdir().expect("tempdir should create");
-    let run = benchmark_run(&tempdir.path().join("run-power-of-two"));
+    let run = benchmark_run(&tempdir.path().join("run-power-of-n"));
 
     assert_error_contains(kubectl.apply(&run), "kubectl apply failed");
     assert_error_contains(kubectl.delete(&run), "kubectl delete failed");
