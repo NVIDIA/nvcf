@@ -1026,6 +1026,9 @@ func (c K8sComputeBackend) CreatePodArtifactInstances(ctx context.Context, pod *
 			if _, saErr := ensureWorkerServiceAccount(ctx, c.clients, pod.Namespace, pod.Name); saErr != nil {
 				plog.WithError(saErr).Warn("Failed to ensure worker ServiceAccount; skipping worker identity injection")
 			} else {
+				if rbacErr := ensureWorkerRBAC(ctx, c.clients, pod.Namespace, pod.Name); rbacErr != nil {
+					plog.WithError(rbacErr).Warn("Failed to ensure worker RBAC")
+				}
 				injectWorkerIdentity(pod, c.bk8s.clusterID, pod.Name)
 				plog.Debug("Injected worker identity into pod")
 			}
@@ -1152,6 +1155,10 @@ func (c K8sComputeBackend) purgeInstanceID(ctx context.Context, req *nvcav2beta1
 			log.Debug("Terminated Pod")
 			c.bk8s.eventRecorder.Eventf(req, corev1.EventTypeNormal,
 				string(types.EventCategoryInstanceTermination), "Stopped instance %v/%v", c.bk8s.podInstanceNamespace, id)
+		}
+
+		if c.bk8s.workerIdentityEnabled {
+			cleanupWorkerIdentity(ctx, c.clients, c.bk8s.podInstanceNamespace, id)
 		}
 
 		if _, ok := terminatedInstances[id]; !ok {

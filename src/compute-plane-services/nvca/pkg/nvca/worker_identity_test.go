@@ -22,6 +22,8 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
@@ -143,6 +145,90 @@ func TestBuildWorkerAuth_NoWorkerSA(t *testing.T) {
 	if got := buildWorkerAuth(ctx, clients, "nvcf-backend", pod); got != nil {
 		t.Errorf("expected nil WorkerAuth for non-worker SA, got %+v", got)
 	}
+}
+
+func TestEnsureWorkerRBAC_Create(t *testing.T) {
+	fakeK8s := fake.NewSimpleClientset()
+	clients := &kubeclients.KubeClients{K8s: fakeK8s}
+	ctx := context.Background()
+
+	if err := ensureWorkerRBAC(ctx, clients, "nvcf-backend", "inst-001"); err != nil {
+		t.Fatalf("ensureWorkerRBAC: %v", err)
+	}
+
+	role, err := fakeK8s.RbacV1().Roles("nvcf-backend").Get(ctx, "nvcf-worker-inst-001", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get Role: %v", err)
+	}
+	if len(role.Rules) != 0 {
+		t.Errorf("expected empty Rules, got %v", role.Rules)
+	}
+
+	rb, err := fakeK8s.RbacV1().RoleBindings("nvcf-backend").Get(ctx, "nvcf-worker-inst-001", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get RoleBinding: %v", err)
+	}
+	if rb.RoleRef.Name != "nvcf-worker-inst-001" {
+		t.Errorf("RoleRef.Name = %q", rb.RoleRef.Name)
+	}
+	if len(rb.Subjects) != 1 || rb.Subjects[0].Name != "nvcf-worker-inst-001" {
+		t.Errorf("unexpected Subjects: %v", rb.Subjects)
+	}
+
+	// Idempotent: second call must not error even though objects already exist.
+	if err := ensureWorkerRBAC(ctx, clients, "nvcf-backend", "inst-001"); err != nil {
+		t.Fatalf("second ensureWorkerRBAC: %v", err)
+	}
+}
+
+func TestEnsureWorkerRBAC_RoleHasEmptyRules(t *testing.T) {
+	fakeK8s := fake.NewSimpleClientset()
+	clients := &kubeclients.KubeClients{K8s: fakeK8s}
+	ctx := context.Background()
+
+	if err := ensureWorkerRBAC(ctx, clients, "nvcf-backend", "inst-002"); err != nil {
+		t.Fatalf("ensureWorkerRBAC: %v", err)
+	}
+
+	role, err := fakeK8s.RbacV1().Roles("nvcf-backend").Get(ctx, "nvcf-worker-inst-002", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get Role: %v", err)
+	}
+	// nil and empty slice are both acceptable — neither grants any permissions.
+	if len(role.Rules) != 0 {
+		t.Errorf("Role.Rules should be empty, got: %v", role.Rules)
+	}
+}
+
+func TestCleanupWorkerIdentity(t *testing.T) {
+	saName := "nvcf-worker-inst-003"
+	ns := "nvcf-backend"
+	fakeK8s := fake.NewSimpleClientset(
+		&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: saName, Namespace: ns}},
+		&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: saName, Namespace: ns}},
+		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: saName, Namespace: ns}},
+	)
+	clients := &kubeclients.KubeClients{K8s: fakeK8s}
+	ctx := context.Background()
+
+	cleanupWorkerIdentity(ctx, clients, ns, "inst-003")
+
+	if _, err := fakeK8s.CoreV1().ServiceAccounts(ns).Get(ctx, saName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("SA should be deleted, got err: %v", err)
+	}
+	if _, err := fakeK8s.RbacV1().Roles(ns).Get(ctx, saName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("Role should be deleted, got err: %v", err)
+	}
+	if _, err := fakeK8s.RbacV1().RoleBindings(ns).Get(ctx, saName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("RoleBinding should be deleted, got err: %v", err)
+	}
+}
+
+func TestCleanupWorkerIdentity_ToleratesNotFound(t *testing.T) {
+	// Nothing pre-exists — cleanup should not panic or error.
+	fakeK8s := fake.NewSimpleClientset()
+	clients := &kubeclients.KubeClients{K8s: fakeK8s}
+	cleanupWorkerIdentity(context.Background(), clients, "nvcf-backend", "inst-004")
 }
 
 func TestBuildWorkerAuth_WithWorkerSA(t *testing.T) {

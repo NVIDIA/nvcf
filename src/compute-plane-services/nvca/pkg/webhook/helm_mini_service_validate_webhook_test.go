@@ -662,6 +662,73 @@ func TestValidateResourceLimitsVariousObjects(t *testing.T) {
 	}
 }
 
+func TestValidateWorkerSARestriction(t *testing.T) {
+	workerSA := "nvcf-worker-inst-001"
+	regularSA := "helm-instance-permissions"
+
+	tests := []struct {
+		name    string
+		obj     client.Object
+		wantErr bool
+	}{
+		{
+			name: "pod with worker SA is rejected",
+			obj: &corev1.Pod{
+				Spec: corev1.PodSpec{ServiceAccountName: workerSA},
+			},
+			wantErr: true,
+		},
+		{
+			name: "pod with regular SA is allowed",
+			obj: &corev1.Pod{
+				Spec: corev1.PodSpec{ServiceAccountName: regularSA},
+			},
+			wantErr: false,
+		},
+		{
+			name: "deployment with worker SA is rejected",
+			obj: &appsv1.Deployment{
+				Spec: appsv1.DeploymentSpec{
+					Template: corev1.PodTemplateSpec{
+						Spec: corev1.PodSpec{ServiceAccountName: workerSA},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "job with worker SA is rejected",
+			obj: &batchv1.Job{
+				Spec: batchv1.JobSpec{
+					Template: corev1.PodTemplateSpec{
+						Spec: corev1.PodSpec{ServiceAccountName: workerSA},
+					},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "pod with empty SA is allowed",
+			obj: &corev1.Pod{
+				Spec: corev1.PodSpec{},
+			},
+			wantErr: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errs := validateWorkerSARestriction(tt.obj)
+			if tt.wantErr {
+				require.NotEmpty(t, errs, "expected validation error")
+				assert.Contains(t, errs[0].Error(), "nvcf-worker-")
+			} else {
+				assert.Empty(t, errs)
+			}
+		})
+	}
+}
+
 func TestValidateContainerLimits_DisallowedResource(t *testing.T) {
 	badResName := corev1.ResourceName("example.com/foo")
 	pod := corev1.Pod{

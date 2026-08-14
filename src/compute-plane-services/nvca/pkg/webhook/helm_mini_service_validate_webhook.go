@@ -143,6 +143,10 @@ func (v *helmMiniServiceValWebhookHandler) validateUpdate(ctx context.Context, _
 func (v *helmMiniServiceValWebhookHandler) validate(ctx context.Context, obj client.Object) (warnings admission.Warnings, err error) {
 	var errs []error
 
+	// REQ-220: workload pods must never run as a worker ServiceAccount regardless of
+	// AllowWorkloadKubernetesAPIAccess, to prevent Helm charts from forging worker tokens.
+	errs = append(errs, validateWorkerSARestriction(obj)...)
+
 	if shouldEnforceResourceLimits(v.fff, obj) {
 		warns, verrs := v.validateResourceLimits(ctx, obj)
 		warnings = append(warnings, warns...)
@@ -150,6 +154,30 @@ func (v *helmMiniServiceValWebhookHandler) validate(ctx context.Context, obj cli
 	}
 
 	return warnings, errors.Join(errs...)
+}
+
+// validateWorkerSARestriction rejects any pod-bearing resource that specifies a worker
+// ServiceAccount (name prefix "nvcf-worker-") as its service account.
+func validateWorkerSARestriction(obj client.Object) []error {
+	var ps *corev1.PodSpec
+	switch t := obj.(type) {
+	case *corev1.Pod:
+		ps = &t.Spec
+	case *appsv1.Deployment:
+		ps = &t.Spec.Template.Spec
+	case *appsv1.StatefulSet:
+		ps = &t.Spec.Template.Spec
+	case *batchv1.Job:
+		ps = &t.Spec.Template.Spec
+	case *batchv1.CronJob:
+		ps = &t.Spec.JobTemplate.Spec.Template.Spec
+	default:
+		return nil
+	}
+	if strings.HasPrefix(ps.ServiceAccountName, "nvcf-worker-") {
+		return []error{fmt.Errorf("workload pods may not use worker ServiceAccounts (prefix \"nvcf-worker-\")")}
+	}
+	return nil
 }
 
 func (v *helmMiniServiceValWebhookHandler) validateResourceLimits(ctx context.Context, obj client.Object) (

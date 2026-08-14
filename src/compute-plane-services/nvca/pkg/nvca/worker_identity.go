@@ -22,6 +22,7 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -154,6 +155,51 @@ func buildWorkerAuth(
 		WorkerIdentifiers: []types.WorkerIdentifier{
 			{Name: pod.Name, UID: string(pod.UID)},
 		},
+	}
+}
+
+// ensureWorkerRBAC creates an empty Role and a RoleBinding that attaches it to the worker SA.
+// The Role has no rules, granting the SA no Kubernetes API access (deny-by-default) and making
+// the permission boundary explicit and auditable.
+func ensureWorkerRBAC(ctx context.Context, clients *kubeclients.KubeClients, namespace, podName string) error {
+	name := workerSAName(podName)
+	role := &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Rules:      nil,
+	}
+	if _, err := clients.K8s.RbacV1().Roles(namespace).Create(ctx, role, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create worker Role %s/%s: %w", namespace, name, err)
+	}
+	rb := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		RoleRef:    rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "Role", Name: name},
+		Subjects:   []rbacv1.Subject{{Kind: "ServiceAccount", Name: name, Namespace: namespace}},
+	}
+	if _, err := clients.K8s.RbacV1().RoleBindings(namespace).Create(ctx, rb, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create worker RoleBinding %s/%s: %w", namespace, name, err)
+	}
+	return nil
+}
+
+// cleanupWorkerIdentity removes the RBAC objects and ServiceAccount that were provisioned for a
+// worker pod. Errors are logged but not returned so termination proceeds regardless.
+func cleanupWorkerIdentity(ctx context.Context, clients *kubeclients.KubeClients, namespace, podName string) {
+	name := workerSAName(podName)
+	log := core.GetLogger(ctx).WithField("workerSA", name)
+	for _, fn := range []func() error{
+		func() error {
+			return clients.K8s.RbacV1().RoleBindings(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+		},
+		func() error {
+			return clients.K8s.RbacV1().Roles(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+		},
+		func() error {
+			return clients.K8s.CoreV1().ServiceAccounts(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+		},
+	} {
+		if err := fn(); err != nil && !apierrors.IsNotFound(err) {
+			log.WithError(err).Warn("Failed to clean up worker identity object")
+		}
 	}
 }
 
