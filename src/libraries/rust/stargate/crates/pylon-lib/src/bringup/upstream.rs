@@ -203,6 +203,8 @@ pub enum BringupError {
     RunawayGeneration { tokens: u32 },
     #[error("invalid completion response: {0}")]
     InvalidResponse(String),
+    #[error("calibration saturated before measuring positive input throughput")]
+    InsufficientCalibrationData,
     #[error("stats collector stopped during model initialization")]
     StatsCollectorStopped,
     #[error("model generation retired during initialization")]

@@ -746,6 +746,7 @@ mod tests {
         FailModel {
             model_id: &'static str,
             failing: Arc<AtomicBool>,
+            completed_requests_per_generation: usize,
         },
     }
 
@@ -943,37 +944,40 @@ mod tests {
             .calibrations
             .send(generation.clone())
             .expect("test should still observe calibration traffic");
-        match state.completion_behavior {
-            CompletionBehavior::Pending => std::future::pending().await,
+        let completed_requests_per_generation = match state.completion_behavior {
+            CompletionBehavior::Pending => return std::future::pending().await,
             CompletionBehavior::SaturateAfter {
                 completed_requests_per_generation,
-            } => {
-                let should_complete = {
-                    let mut completed = state
-                        .completed_requests
-                        .lock()
-                        .expect("completed request counts should not be poisoned");
-                    let completed = completed.entry(generation).or_default();
-                    if *completed < completed_requests_per_generation {
-                        *completed += 1;
-                        true
-                    } else {
-                        false
-                    }
-                };
-                if should_complete {
-                    Json(json!({"usage": {"completion_tokens": 1}})).into_response()
-                } else {
-                    std::future::pending().await
-                }
-            }
+            } => completed_requests_per_generation,
             CompletionBehavior::FailModel {
                 model_id: failed_model,
                 ref failing,
+                ..
             } if model_id == failed_model && failing.load(Ordering::SeqCst) => {
-                StatusCode::SERVICE_UNAVAILABLE.into_response()
+                return StatusCode::SERVICE_UNAVAILABLE.into_response();
             }
-            CompletionBehavior::FailModel { .. } => std::future::pending().await,
+            CompletionBehavior::FailModel {
+                completed_requests_per_generation,
+                ..
+            } => completed_requests_per_generation,
+        };
+        let should_complete = {
+            let mut completed = state
+                .completed_requests
+                .lock()
+                .expect("completed request counts should not be poisoned");
+            let completed = completed.entry(generation).or_default();
+            if *completed < completed_requests_per_generation {
+                *completed += 1;
+                true
+            } else {
+                false
+            }
+        };
+        if should_complete {
+            Json(json!({"usage": {"completion_tokens": 1}})).into_response()
+        } else {
+            std::future::pending().await
         }
     }
 
@@ -1368,7 +1372,7 @@ mod tests {
 
     #[tokio::test]
     async fn calibration_traffic_seeds_positive_observed_stats_before_publication() {
-        let upstream = TestUpstream::spawn(
+        let mut upstream = TestUpstream::spawn(
             &[],
             CompletionBehavior::SaturateAfter {
                 completed_requests_per_generation: 7,
@@ -1388,30 +1392,46 @@ mod tests {
         );
         let stats = start_stats_collector(stats_config, observations, runtime_state.clone());
 
-        let lifecycle = start_model_lifecycle(
-            ModelLifecycleConfig {
-                upstream_http_base_url: upstream.base_url.clone(),
-                source: ModelSource::Static(BTreeSet::from(["model-a".to_string()])),
-                initialization: ModelInitialization::Calibration(CalibrationConfig {
-                    health_timeout: Duration::from_secs(1),
-                    calibration_requests: 1,
-                    calibration_prompt_units: 1024,
-                    calibration_max_concurrency: 1,
-                    calibration_timeout: Duration::from_millis(20),
-                }),
-                bringup: BringupConfig {
-                    enabled: false,
-                    ..BringupConfig::default()
+        let lifecycle_handle = {
+            let lifecycle = start_model_lifecycle(
+                ModelLifecycleConfig {
+                    upstream_http_base_url: upstream.base_url.clone(),
+                    source: ModelSource::Static(BTreeSet::from(["model-a".to_string()])),
+                    initialization: ModelInitialization::Calibration(CalibrationConfig {
+                        health_timeout: Duration::from_secs(1),
+                        calibration_requests: 1,
+                        calibration_prompt_units: 1024,
+                        calibration_max_concurrency: 1,
+                        calibration_timeout: Duration::from_secs(30),
+                    }),
+                    bringup: BringupConfig {
+                        enabled: false,
+                        ..BringupConfig::default()
+                    },
+                    health_paths: UpstreamHealthPaths::default(),
+                    startup_health_wait: Duration::ZERO,
                 },
-                health_paths: UpstreamHealthPaths::default(),
-                startup_health_wait: Duration::ZERO,
-            },
-            runtime_state.clone(),
-            &stats,
-            None,
-        )
-        .await
-        .expect("calibration timeout should complete startup");
+                runtime_state.clone(),
+                &stats,
+                None,
+            );
+            tokio::pin!(lifecycle);
+            for _ in 0..8 {
+                tokio::select! {
+                    _ = upstream.next_calibration() => {}
+                    _ = &mut lifecycle => {
+                        panic!("calibration completed before reaching saturation")
+                    }
+                }
+            }
+            tokio::time::pause();
+            tokio::time::advance(Duration::from_secs(30)).await;
+            lifecycle
+                .as_mut()
+                .await
+                .expect("calibration timeout should complete startup")
+        };
+        tokio::time::resume();
 
         let published = runtime_state
             .advertised_models()
@@ -1424,7 +1444,7 @@ mod tests {
             "completed calibration traffic must seed the ordinary observed stats window"
         );
 
-        lifecycle.shutdown().await;
+        lifecycle_handle.shutdown().await;
         stats.shutdown().await;
         upstream.shutdown().await;
     }
@@ -1437,6 +1457,7 @@ mod tests {
             CompletionBehavior::FailModel {
                 model_id: "model-a",
                 failing,
+                completed_requests_per_generation: 7,
             },
         )
         .await;
@@ -1814,10 +1835,14 @@ mod tests {
             CompletionBehavior::FailModel {
                 model_id: "model-b",
                 failing: failing.clone(),
+                completed_requests_per_generation: 7,
             },
         )
         .await;
-        let stats_config = StatsCollectorConfig::default();
+        let stats_config = StatsCollectorConfig {
+            duration_floor: Duration::ZERO,
+            ..StatsCollectorConfig::default()
+        };
         let (runtime_state, observations) = PylonRuntimeState::observed(
             InferenceServerStatus::Active,
             &[],
@@ -1826,7 +1851,7 @@ mod tests {
         );
         let stats = start_stats_collector(stats_config, observations, runtime_state.clone());
         let mut config =
-            calibration_discovery_config(&upstream.base_url, Duration::from_millis(20));
+            calibration_discovery_config(&upstream.base_url, Duration::from_millis(100));
         let ModelSource::Discovered(discovery) = &mut config.source else {
             unreachable!("test config must use discovery")
         };
@@ -1837,7 +1862,9 @@ mod tests {
                 .expect("empty initial discovery should start");
 
         upstream.set_models(&["model-a"]).await;
-        assert_eq!(upstream.next_calibration().await.model_id(), "model-a");
+        for _ in 0..8 {
+            assert_eq!(upstream.next_calibration().await.model_id(), "model-a");
+        }
         wait_for_model_ids(&runtime_state, &["model-a"]).await;
 
         failing.store(true, Ordering::SeqCst);
@@ -1945,9 +1972,18 @@ mod tests {
 
     #[tokio::test]
     async fn blocked_discovery_does_not_pause_or_inflate_active_calibration() {
-        let mut upstream = TestUpstream::spawn(&[], CompletionBehavior::Pending).await;
+        let mut upstream = TestUpstream::spawn(
+            &[],
+            CompletionBehavior::SaturateAfter {
+                completed_requests_per_generation: 7,
+            },
+        )
+        .await;
         let metrics = PylonMetrics::new().expect("metrics should initialize");
-        let stats_config = StatsCollectorConfig::default();
+        let stats_config = StatsCollectorConfig {
+            duration_floor: Duration::ZERO,
+            ..StatsCollectorConfig::default()
+        };
         let (runtime_state, observations) = PylonRuntimeState::observed(
             InferenceServerStatus::Active,
             &[],
@@ -1991,9 +2027,18 @@ mod tests {
 
     #[tokio::test]
     async fn sibling_reconciliation_does_not_pause_or_inflate_active_calibration() {
-        let mut upstream = TestUpstream::spawn(&[], CompletionBehavior::Pending).await;
+        let mut upstream = TestUpstream::spawn(
+            &[],
+            CompletionBehavior::SaturateAfter {
+                completed_requests_per_generation: 7,
+            },
+        )
+        .await;
         let metrics = PylonMetrics::new().expect("metrics should initialize");
-        let stats_config = StatsCollectorConfig::default();
+        let stats_config = StatsCollectorConfig {
+            duration_floor: Duration::ZERO,
+            ..StatsCollectorConfig::default()
+        };
         let (runtime_state, observations) = PylonRuntimeState::observed(
             InferenceServerStatus::Active,
             &[],
@@ -2007,7 +2052,7 @@ mod tests {
         assert!(runtime_state.publish_generation(&sibling));
         let stats = start_stats_collector(stats_config, observations, runtime_state.clone());
         let mut config =
-            calibration_discovery_config(&upstream.base_url, Duration::from_millis(50));
+            calibration_discovery_config(&upstream.base_url, Duration::from_millis(100));
         let ModelSource::Discovered(discovery) = &mut config.source else {
             unreachable!("test config must use discovery")
         };
@@ -2135,8 +2180,17 @@ mod tests {
 
     #[tokio::test]
     async fn discovery_errors_during_calibration_retain_the_pending_generation() {
-        let mut upstream = TestUpstream::spawn(&[], CompletionBehavior::Pending).await;
-        let stats_config = StatsCollectorConfig::default();
+        let mut upstream = TestUpstream::spawn(
+            &[],
+            CompletionBehavior::SaturateAfter {
+                completed_requests_per_generation: 7,
+            },
+        )
+        .await;
+        let stats_config = StatsCollectorConfig {
+            duration_floor: Duration::ZERO,
+            ..StatsCollectorConfig::default()
+        };
         let (runtime_state, observations) = PylonRuntimeState::observed(
             InferenceServerStatus::Active,
             &[],
@@ -2183,10 +2237,15 @@ mod tests {
     async fn initial_discovered_calibrations_run_sequentially() {
         let mut upstream = TestUpstream::spawn(
             &["model-d", "model-b", "model-a", "model-c"],
-            CompletionBehavior::Pending,
+            CompletionBehavior::SaturateAfter {
+                completed_requests_per_generation: 7,
+            },
         )
         .await;
-        let stats_config = StatsCollectorConfig::default();
+        let stats_config = StatsCollectorConfig {
+            duration_floor: Duration::ZERO,
+            ..StatsCollectorConfig::default()
+        };
         let (runtime_state, observations) = PylonRuntimeState::observed(
             InferenceServerStatus::Active,
             &[],
@@ -2194,7 +2253,7 @@ mod tests {
             None,
         );
         let stats = start_stats_collector(stats_config, observations, runtime_state.clone());
-        let config = calibration_discovery_config(&upstream.base_url, Duration::from_millis(20));
+        let config = calibration_discovery_config(&upstream.base_url, Duration::from_secs(30));
         let start_runtime = runtime_state.clone();
         let start = tokio::spawn(async move {
             let result = start_model_lifecycle(config, start_runtime, &stats, None).await;
@@ -2202,13 +2261,14 @@ mod tests {
         });
 
         let mut order = Vec::new();
-        for _ in 0..4 {
-            let generation = upstream.next_calibration().await;
-            assert!(
-                !order.contains(&generation.model_id().to_string()),
-                "one generation should reach its timeout before the next starts"
-            );
-            order.push(generation.model_id().to_string());
+        for expected_model in ["model-a", "model-b", "model-c", "model-d"] {
+            for _ in 0..8 {
+                assert_eq!(upstream.next_calibration().await.model_id(), expected_model);
+            }
+            order.push(expected_model.to_string());
+            tokio::time::pause();
+            tokio::time::advance(Duration::from_secs(30)).await;
+            tokio::time::resume();
         }
         let (lifecycle, stats) = start.await.expect("lifecycle startup should not panic");
         let lifecycle = lifecycle.expect("all expected timeouts should complete calibration");

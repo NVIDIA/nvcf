@@ -841,6 +841,7 @@ mod tests {
         if state.calibration_request_errors {
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
+        tokio::time::sleep(Duration::from_millis(20)).await;
         Json(serde_json::json!({"usage": {"completion_tokens": 1}})).into_response()
     }
 
@@ -1471,7 +1472,7 @@ mod tests {
                 "--calibration-max-concurrency",
                 "1",
                 "--bringup-calibration-timeout-ms",
-                "20",
+                "1000",
             ],
         );
         let plan = PylonStartupPlan::from_args(&args).expect("startup plan should build");
@@ -1482,13 +1483,13 @@ mod tests {
             Some("model-a")
         );
         control_plane.assert_no_calls();
-        upstream.calibration_release.add_permits(1);
+        upstream.calibration_release.add_permits(5);
         assert_eq!(
             upstream.calibration_started.recv().await.as_deref(),
             Some("model-b")
         );
         control_plane.assert_no_calls();
-        upstream.calibration_release.add_permits(1);
+        upstream.calibration_release.add_permits(5);
 
         let registration = control_plane.first_registration().await;
         assert_eq!(upstream.calibration_plans.load(Ordering::SeqCst), 2);
@@ -1502,7 +1503,7 @@ mod tests {
                 .as_ref()
                 .expect("first heartbeat should contain stats")
                 .last_mean_input_tps;
-            assert!(input_tps.is_finite());
+            assert!(input_tps.is_finite() && input_tps > 0.0);
         }
 
         startup
@@ -1530,7 +1531,7 @@ mod tests {
                 "--calibration-prompt-units",
                 "256",
                 "--bringup-calibration-timeout-ms",
-                "20",
+                "1000",
             ],
         );
         let plan = PylonStartupPlan::from_args(&args).expect("startup plan should build");
@@ -1540,7 +1541,7 @@ mod tests {
             upstream.calibration_started.recv().await.as_deref(),
             Some("model-a")
         );
-        upstream.calibration_release.add_permits(1);
+        upstream.calibration_release.add_permits(5);
         let runtime = startup
             .await
             .expect("pylon startup task should not panic")
