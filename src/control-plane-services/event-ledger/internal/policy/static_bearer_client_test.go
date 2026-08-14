@@ -79,8 +79,15 @@ func TestStaticBearerClient_Evaluate(t *testing.T) {
 			wantAuthHeader: "",
 		},
 		{
-			name:         "returns error on non-200 status",
-			serverStatus: http.StatusForbidden,
+			name:           "with token reader returns error on non-200 status",
+			serverStatus:   http.StatusForbidden,
+			wantAuthHeader: "Bearer test-bearer-token",
+			wantErr:        true,
+		},
+		{
+			name:         "without token reader returns error on non-200 status",
+			tokenReader:  nil,
+			serverStatus: http.StatusInternalServerError,
 			wantErr:      true,
 		},
 	}
