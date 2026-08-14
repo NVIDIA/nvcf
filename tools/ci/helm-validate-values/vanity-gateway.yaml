@@ -1,0 +1,7 @@
+# CI-only values for helm lint/template validation.
+vanityGateway:
+  image:
+    registry: example.com
+    repository: foo/bar/baz
+  serviceMonitor:
+    enabled: true
