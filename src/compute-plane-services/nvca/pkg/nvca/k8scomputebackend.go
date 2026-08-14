@@ -1022,6 +1022,15 @@ func (c K8sComputeBackend) CreatePodArtifactInstances(ctx context.Context, pod *
 		setTerminationGracePeriodIfNotSet(pod)
 		k8sutil.ApplyCustomAnnotations(pod, c.bk8s.customAnnotations)
 
+		if c.bk8s.workerIdentityEnabled {
+			if _, saErr := ensureWorkerServiceAccount(ctx, c.clients, pod.Namespace, pod.Name); saErr != nil {
+				plog.WithError(saErr).Warn("Failed to ensure worker ServiceAccount; skipping worker identity injection")
+			} else {
+				injectWorkerIdentity(pod, c.bk8s.clusterID, pod.Name)
+				plog.Debug("Injected worker identity into pod")
+			}
+		}
+
 		if _, err := c.clients.K8s.CoreV1().Pods(pod.Namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 			if !apierrors.IsAlreadyExists(err) {
 				return nil, fmt.Errorf("failed to create instance for Request %v/%v, err: %v", req.Namespace, req.Name, err)
@@ -1724,6 +1733,11 @@ func (c K8sComputeBackend) GetICMSRequestUpdatesForCreatePodRequest(ctx context.
 			}
 		}
 
+		var workerAuth *types.WorkerAuth
+		if c.bk8s.workerIdentityEnabled && !needsPurge {
+			workerAuth = buildWorkerAuth(ctx, c.clients, c.bk8s.podInstanceNamespace, p)
+		}
+
 		return types.ICMSRequestUpdateInfo{
 			RequestID:  req.Spec.RequestID,
 			InstanceID: id,
@@ -1739,6 +1753,7 @@ func (c K8sComputeBackend) GetICMSRequestUpdatesForCreatePodRequest(ctx context.
 				},
 				SystemFailure: string(tc),
 				InstanceIPs:   instanceIPs,
+				WorkerAuth:    workerAuth,
 			},
 		}, nil
 	}
