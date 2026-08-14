@@ -164,6 +164,24 @@ func TestRunAccountsList_NoToken_FailsFast(t *testing.T) {
 	assert.Contains(t, err.Error(), "NVCF_TOKEN")
 }
 
+// TestRunAccountsList_NoCredentialsAtAll_FailsFastWithAdminMessage is a
+// regression test: when neither NVCF_TOKEN nor NVCF_API_KEY is configured,
+// the generic "missing authentication credentials" error from LoadConfig
+// must not fire ahead of requireAdminToken's Admin Accounts-specific
+// message, and the error must not tell the user to set NVCF_API_KEY.
+func TestRunAccountsList_NoCredentialsAtAll_FailsFastWithAdminMessage(t *testing.T) {
+	viper.Reset()
+	viper.Set("base_http_url", "http://unused")
+	viper.Set("base_grpc_url", "localhost:50051")
+	t.Cleanup(func() { viper.Reset() })
+
+	err := runAccountsList(nil, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "NVCF_TOKEN")
+	assert.NotContains(t, err.Error(), "NVCF_API_KEY environment variable")
+	assert.NotContains(t, err.Error(), "missing authentication credentials")
+}
+
 func TestRunQueuesVersion_JSON(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t,

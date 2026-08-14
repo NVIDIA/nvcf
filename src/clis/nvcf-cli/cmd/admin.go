@@ -527,8 +527,14 @@ func requireAdminToken(cfg *client.Config) error {
 
 // loadAdminClient is the common preamble for every admin handler.
 // Centralises config load, NVCF_TOKEN fail-fast, and client construction.
+//
+// Uses LoadConfigWithoutAuth instead of LoadConfig: LoadConfig itself
+// hard-errors with a generic "set NVCF_API_KEY or NVCF_TOKEN" message when
+// both credentials are unset, which would fire before requireAdminToken
+// below ever runs and would incorrectly suggest NVCF_API_KEY for an Admin
+// Accounts operation.
 func loadAdminClient() (*client.Client, error) {
-	cfg, err := client.LoadConfig()
+	cfg, err := client.LoadConfigWithoutAuth()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load configuration: %w", err)
 	}
