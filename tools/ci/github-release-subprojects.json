@@ -293,6 +293,12 @@
       "initial_version": "1.4.2"
     },
     {
+      "id": "cloud-functions-helm",
+      "path": "deploy/helm/cloud-functions",
+      "service_name": "helm-nvcf-api",
+      "initial_version": "0.4.2"
+    },
+    {
       "id": "instance-cluster-management",
       "path": "src/control-plane-services/instance-cluster-management",
       "service_name": "nvcf-instance-cluster-management"
