@@ -289,7 +289,7 @@ impl LoadBalancerAlgorithmConfig {
         self.request_policy.consider_kv_free_tokens
     }
 
-    pub fn comparator(&self) -> Option<ClusterComparator> {
+    pub(crate) fn comparator(&self) -> Option<ClusterComparator> {
         match &self.settings {
             LoadBalancerAlgorithmSettings::PowerOfN(config) => {
                 Some(config.comparator.unwrap_or_default())

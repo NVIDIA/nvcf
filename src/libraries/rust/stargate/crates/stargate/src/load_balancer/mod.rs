@@ -42,7 +42,8 @@ mod wait_and_widen;
 pub use algorithm::LoadBalancer;
 pub(crate) use algorithm::input_work_seconds_for_request;
 pub(super) use algorithm::{HashInputBuilder, cache_affinity_key_is_cacheable, input_work_units};
-pub use cluster_comparator::{ClusterComparator, ClusterComparatorTrace};
+pub use cluster_comparator::ClusterComparator;
+pub(crate) use cluster_comparator::ClusterComparatorTrace;
 pub(super) use cluster_comparator::{TtftEstimate, estimate_ttft};
 pub use config::{
     LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig, LoadBalancerAlgorithmOverride,

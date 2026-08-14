@@ -171,6 +171,14 @@ impl<'a> ProxyRequestRun<'a> {
             self.app.metrics.as_ref(),
             &self.request.request_inputs.target,
         );
+        let comparator_trace = {
+            let request = self.load_balancer_request();
+            self.request
+                .lb_resolution
+                .config()
+                .comparator()
+                .map(|comparator| comparator.trace(&request, selected_cluster.cluster.snapshot()))
+        };
 
         loop {
             self.record_routing_selection(RoutingTraceFields {
@@ -182,7 +190,7 @@ impl<'a> ProxyRequestRun<'a> {
                     .selection
                     .choice
                     .selected_after_kv_free_tokens_skip,
-                comparator: selected_cluster.selection.comparator.as_ref(),
+                comparator: comparator_trace.as_ref(),
                 cluster: selected_cluster.cluster.snapshot(),
                 chosen: &chosen,
             });
@@ -469,7 +477,6 @@ mod tests {
             },
             effective_algorithm: LoadBalancerAlgorithm::PowerOfN,
             requested_algorithm: None,
-            comparator: None,
         };
         let selected_cluster = SelectedClusterRun::new(
             RoutingTargetSnapshot::for_test(vec![cluster_candidate("cluster-a")]),

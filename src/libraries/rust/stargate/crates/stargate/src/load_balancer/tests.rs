@@ -1777,41 +1777,22 @@ fn wait_and_widen_uses_comparator_with_and_without_affinity() {
 }
 
 #[test]
-fn routing_selection_reports_effective_comparator_and_selected_score() {
-    let router =
-        router_from_json(r#"{"models":{"model-a":{"algorithm":"power-of-n","sample_count":2}}}"#);
+fn default_comparator_trace_reports_score_components() {
+    let config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::PowerOfN);
+    let comparator = config
+        .comparator()
+        .expect("power-of-n should have an effective comparator");
     let target = target();
     let request = request(&target, None, Some(100));
-    let candidates = [
-        priority_candidate("selected", 0, 20).with_rtt_ms(5),
-        priority_candidate("slower", 0, 50).with_rtt_ms(100),
-    ];
-    let target_state = LoadBalancerTargetState::default();
-    let resolution = router
-        .resolve_algorithm_override(&target.model_id, None)
-        .expect("configured algorithm should resolve");
+    let selected = priority_candidate("selected", 0, 20).with_rtt_ms(5);
 
-    let selection = router
-        .choose_candidate_with_algorithm_resolution(
-            &target_state,
-            &request,
-            &candidates,
-            &resolution,
-        )
-        .expect("candidate should be selected");
-    let comparator = selection
-        .comparator
-        .expect("power-of-n selection should report its comparator");
+    let trace = comparator.trace(&request, &selected);
 
-    assert_eq!(
-        candidates[selection.choice.candidate_index].cluster_id,
-        "selected"
-    );
-    assert_eq!(comparator.comparator, ClusterComparator::EstimatedTtft);
-    assert_eq!(comparator.score, 1025.0);
-    assert_eq!(comparator.queue_ms, Some(20.0));
-    assert_eq!(comparator.prefill_ms, Some(1000.0));
-    assert_eq!(comparator.rtt_ms, Some(5.0));
+    assert_eq!(trace.comparator, ClusterComparator::EstimatedTtft);
+    assert_eq!(trace.score, 1025.0);
+    assert_eq!(trace.queue_ms, Some(20.0));
+    assert_eq!(trace.prefill_ms, Some(1000.0));
+    assert_eq!(trace.rtt_ms, Some(5.0));
 }
 
 wait_and_widen_choice_tests! {

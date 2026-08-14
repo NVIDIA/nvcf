@@ -129,12 +129,12 @@ impl ClusterComparator {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ClusterComparatorTrace {
-    pub comparator: ClusterComparator,
-    pub score: f64,
-    pub queue_ms: Option<f64>,
-    pub prefill_ms: Option<f64>,
-    pub rtt_ms: Option<f64>,
+pub(crate) struct ClusterComparatorTrace {
+    pub(crate) comparator: ClusterComparator,
+    pub(crate) score: f64,
+    pub(crate) queue_ms: Option<f64>,
+    pub(crate) prefill_ms: Option<f64>,
+    pub(crate) rtt_ms: Option<f64>,
 }
 
 #[derive(Clone, Copy, Debug)]
