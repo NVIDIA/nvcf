@@ -121,15 +121,19 @@ filters:
 
 The stock gateway-routes chart does not expose a value for this filter. Use an
 equivalent policy at an external edge or maintain a route override. Preserve
-`x-multi-turn-session-id`; it is the supported client-facing session header.
+`x-multi-turn-session-id`; clients can use it for session affinity. Chat
+Completions and Responses request bodies can also supply `prompt_cache_key`.
 See the
 [Gateway API header modifier guide](https://gateway-api.sigs.k8s.io/guides/user-guides/http-header-modifier/)
 for filter semantics.
 
 The gateway derives `x-cache-affinity-key` for chat-completions and Responses
-requests when affinity applies. It does not derive affinity for embeddings.
-Do not set `require_cache_affinity_key` on a model that serves
-`/v1/embeddings` unless another trusted gateway supplies the key.
+requests when affinity applies. A request body can contain the raw
+`prompt_cache_key`, but only its SHA-256-derived value appears in the internal
+header. The router forwards the request body to the model backend. It does not
+derive affinity for embeddings. Do not set `require_cache_affinity_key` on a
+model that serves `/v1/embeddings` unless another trusted gateway supplies the
+key.
 
 Stargate returns HTTP `400` for a blank, unknown, or configured-but-unavailable
 `x-routing-method`. It also returns HTTP `400` when a required router header is
@@ -204,8 +208,8 @@ algorithm or is present in `request_algorithms`.
 3. Try a method accepted by `nvcf-cli` that is neither the configured
    algorithm nor present in `request_algorithms`; confirm that Stargate returns
    HTTP `400`.
-4. For an affinity-aware method, repeat a supported multi-turn request with
-   the returned `x-multi-turn-session-id`.
+4. For an affinity-aware method, repeat a supported multi-turn request with the
+   same `prompt_cache_key` or the returned `x-multi-turn-session-id`.
 5. Exercise a failed or saturated backend and confirm selection and retry
    counters change.
 

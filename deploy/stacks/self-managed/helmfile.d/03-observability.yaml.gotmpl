@@ -68,7 +68,7 @@ releases:
 
   {{- if $functionAutoscalerEnabled }}
   - name: function-autoscaler
-    version: {{ dig "functionAutoscaler" "chartVersion" "0.2.1" .Values | quote }}
+    version: 0.2.1
     namespace: nvcf
     inherit:
       - template: functionAutoscaler

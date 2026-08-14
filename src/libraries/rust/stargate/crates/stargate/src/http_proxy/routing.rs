@@ -286,7 +286,7 @@ mod tests {
         let mut candidate = cluster_candidate("cluster-a");
         candidate.stats.queued_input_size = 300;
         candidate.stats.last_mean_input_tps = 100.0;
-        let config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::PowerOfTwo);
+        let config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::PowerOfN);
         let target = routing_target();
         let request = input_work_admission_request(&target, 50);
 
@@ -302,7 +302,7 @@ mod tests {
         candidate.stats.total_query_input_size = 300;
         candidate.stats.queued_input_size = 0;
         candidate.stats.last_mean_input_tps = 100.0;
-        let config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::PowerOfTwo);
+        let config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::PowerOfN);
         let target = routing_target();
         let request = input_work_admission_request(&target, 50);
 
@@ -316,7 +316,7 @@ mod tests {
     fn input_work_admission_rejects_pool_without_valid_capacity() {
         let mut candidate = cluster_candidate("cluster-a");
         candidate.stats.last_mean_input_tps = 0.0;
-        let config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::PowerOfTwo);
+        let config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::PowerOfN);
         let target = routing_target();
         let request = input_work_admission_request(&target, 50);
 

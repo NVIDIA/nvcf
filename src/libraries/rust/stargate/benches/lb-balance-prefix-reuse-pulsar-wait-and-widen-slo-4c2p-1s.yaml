@@ -115,7 +115,7 @@ algorithms:
     pylon_queue_admission:
       enabled: false
     config:
-      default: power-of-two
+      default: power-of-n
       models:
         dummy-model:
           algorithm: wait-and-widen
@@ -127,7 +127,7 @@ algorithms:
     pylon_queue_admission:
       enabled: false
     config:
-      default: power-of-two
+      default: power-of-n
       models:
         dummy-model:
           algorithm: pulsar
@@ -138,7 +138,7 @@ algorithms:
     pylon_queue_admission:
       enabled: false
     config:
-      default: power-of-two
+      default: power-of-n
       models:
         dummy-model:
           algorithm: pulsar-wait-and-widen

@@ -144,7 +144,6 @@ observability:
 
 # Defaults consumed only for the control and all observability profiles.
 functionAutoscaler:
-  chartVersion: "0.2.1"
   region: local
   cassandra:
     contactPoints: cassandra.cassandra-system.svc.cluster.local
