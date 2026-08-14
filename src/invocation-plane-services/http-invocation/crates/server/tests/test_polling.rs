@@ -48,7 +48,7 @@ async fn test_poll() -> anyhow::Result<()> {
         Box::new(PollAwareHandler {
             sleep_time: Duration::from_secs(2),
             enable_echo_request: false,
-            echo_polling_request_headers: true,
+            echo_polling_request_headers: false,
         }),
         PublishMode::Attach(app.clone()),
     )
@@ -58,7 +58,6 @@ async fn test_poll() -> anyhow::Result<()> {
     let request = axum::http::Request::builder()
         .method(Method::POST)
         .header("nvcf-poll-seconds", "1")
-        .header("NVCF-INVOCATION-REGION", "client-initial-region")
         .uri(format!(
             "/v2/nvcf/pexec/functions/{FUNCTION_ID}/versions/{VERSION_ID_1}"
         ))
@@ -88,8 +87,6 @@ async fn test_poll() -> anyhow::Result<()> {
         .method(Method::GET)
         .uri(format!("/v2/nvcf/pexec/status/{request_id}"))
         .header(AUTHORIZATION, format!("Bearer {API_KEY}"))
-        .header(CONTENT_TYPE, "text/plain")
-        .header("NVCF-INVOCATION-REGION", "client-poll-region")
         .body(Body::empty())?;
     let response = app.call(request).await?;
     assert_eq!(response.status(), StatusCode::OK);
@@ -105,9 +102,6 @@ async fn test_poll() -> anyhow::Result<()> {
         response.headers().get("nvcf-status"),
         Some(&HeaderValue::from_static("fulfilled"))
     );
-    let regions = response.headers().get_all("nvcf-invocation-region");
-    assert_eq!(regions.iter().count(), 1);
-    assert_eq!(regions.iter().next().unwrap(), "server-region");
     let response_body = response.into_body().collect().await?.to_bytes();
     let response_body = String::from_utf8(response_body.into())?;
     assert_eq!(response_body, "a response");
@@ -225,7 +219,7 @@ async fn test_cross_region_poll() -> anyhow::Result<()> {
         Box::new(PollAwareHandler {
             sleep_time: Duration::from_secs(2),
             enable_echo_request: false,
-            echo_polling_request_headers: false,
+            echo_polling_request_headers: true,
         }),
         PublishMode::AttachMultiRegion(HashMap::from([
             (
@@ -277,6 +271,7 @@ async fn test_cross_region_poll() -> anyhow::Result<()> {
         .method(Method::GET)
         .uri(format!("/v2/nvcf/pexec/status/{request_id}"))
         .header(AUTHORIZATION, format!("Bearer {API_KEY}"))
+        .header(CONTENT_TYPE, "text/plain")
         .header("nvcf-poll-seconds", "3")
         .body(Body::empty())?;
 
@@ -294,6 +289,9 @@ async fn test_cross_region_poll() -> anyhow::Result<()> {
         response.headers().get("nvcf-status"),
         Some(&HeaderValue::from_static("fulfilled"))
     );
+    let regions = response.headers().get_all("nvcf-invocation-region");
+    assert_eq!(regions.iter().count(), 1);
+    assert_eq!(regions.iter().next().unwrap(), "region_1");
     let response_body = response.into_body().collect().await?.to_bytes();
     let response_body = String::from_utf8(response_body.into())?;
     assert_eq!(response_body, "a response");

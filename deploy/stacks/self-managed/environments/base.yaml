@@ -355,6 +355,8 @@ ess:
     maxUnavailable: 1
 
 invocation:
+  env:
+    NATS_PROPERTIES__REGION: local
   podDisruptionBudget:
     enabled: false
     maxUnavailable: 1

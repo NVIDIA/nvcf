@@ -65,6 +65,7 @@ const (
 	inferenceConnErrorResponse string = "inference-connection"
 	successResponseCode        int    = 0
 	internalErrorResponseCode  int    = 500
+	invocationRegionHeader            = "NVCF-INVOCATION-REGION"
 )
 
 func (w *NVCFWorker) handleWorkRequest(ctx context.Context, work *consumer.WorkRequest) error {
@@ -503,6 +504,10 @@ func (w *NVCFWorker) createInferenceRequest(ctx context.Context, work *pb.Worker
 		"NVCF-ENV":                     {w.meteringConfig.ICMSEnvironment},
 	}
 	for _, header := range work.RequestHeaders {
+		if strings.EqualFold(header.Key, invocationRegionHeader) {
+			req.Header[invocationRegionHeader] = []string{header.Value}
+			continue
+		}
 		req.Header.Add(header.Key, header.Value)
 	}
 	if !w.config.V3BackwardsCompatibilityDisabled && req.Header.Get("Content-Type") == "" {

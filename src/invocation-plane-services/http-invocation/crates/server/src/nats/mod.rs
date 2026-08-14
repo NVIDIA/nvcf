@@ -26,7 +26,7 @@ use crate::{
     request_id::RequestId,
     secrets::secret_provider::SecretFileWatcher,
 };
-use anyhow::anyhow;
+use anyhow::{anyhow, Context as _};
 use async_nats::{
     connection::State,
     jetstream::{
@@ -45,11 +45,13 @@ use async_nats::{
 };
 use bytes::Bytes;
 use futures::{FutureExt, StreamExt, TryFutureExt};
+use http::HeaderValue;
 use oauth2::Scope;
 use opentelemetry::propagation::Injector;
 use prost::Message;
 use rand;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::pin::pin;
 use std::sync::Arc;
@@ -68,6 +70,7 @@ pub struct NatsService {
     client: Client,
     jetstream: Context,
     nats_properties: NatsProperties,
+    invocation_region_headers: HashMap<String, HeaderValue>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -199,8 +202,14 @@ pub enum WorkerPollingResponse {
 }
 
 impl NatsService {
-    pub(crate) fn region(&self) -> &str {
-        &self.nats_properties.region
+    pub(crate) fn invocation_region_header(&self) -> &HeaderValue {
+        self.invocation_region_header_for_region(&self.nats_properties.region)
+    }
+
+    pub(crate) fn invocation_region_header_for_region(&self, region: &str) -> &HeaderValue {
+        self.invocation_region_headers
+            .get(region)
+            .expect("request mapping region must be configured")
     }
 
     pub async fn new(
@@ -209,6 +218,7 @@ impl NatsService {
         secrets_provider: Option<Arc<SecretFileWatcher>>,
         grpc_config: &crate::settings::GrpcClientConfig,
     ) -> anyhow::Result<Self> {
+        let invocation_region_headers = Self::invocation_region_headers(nats_properties)?;
         tracing::info!("connecting to nats {}", nats_properties.nats_address);
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
 
@@ -267,6 +277,7 @@ impl NatsService {
             client: client.clone(),
             jetstream,
             nats_properties: nats_properties.clone(),
+            invocation_region_headers,
         };
         // NATS will time out instead of returning a 404 if the stream does not exist and we do a direct get.
         // create the stream eagerly to prevent timeouts.
@@ -277,6 +288,19 @@ impl NatsService {
                 record_nats_error_total();
             })?;
         Ok(nats_service)
+    }
+
+    fn invocation_region_headers(
+        nats_properties: &NatsProperties,
+    ) -> anyhow::Result<HashMap<String, HeaderValue>> {
+        std::iter::once(&nats_properties.region)
+            .chain(nats_properties.other_regions.iter())
+            .map(|region| {
+                HeaderValue::from_str(region)
+                    .with_context(|| format!("invalid configured invocation region: {region:?}"))
+                    .map(|header| (region.clone(), header))
+            })
+            .collect()
     }
 
     fn create_auth_callback(
@@ -977,6 +1001,20 @@ mod tests {
     use tempfile::NamedTempFile;
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
+
+    #[test]
+    fn invocation_region_headers_reject_invalid_config() {
+        let nats_properties = NatsProperties {
+            region: "invalid\nregion".into(),
+            ..Default::default()
+        };
+
+        let error = NatsService::invocation_region_headers(&nats_properties).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("invalid configured invocation region"));
+    }
 
     #[derive(Serialize)]
     struct TokenResponse {

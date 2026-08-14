@@ -96,6 +96,7 @@ func TestCreateInferenceRequest(t *testing.T) {
 			RequestHeaders: []*pb.StringKV{
 				{Key: "nvcf-poll-seconds", Value: "45"},
 				{Key: "Content-Length", Value: "123"},
+				{Key: "Nvcf-Invocation-Region", Value: "invocation-region"},
 			},
 			InputAssetReference: []*pb.InputAssetReference{
 				{AssetId: "a1"}, {AssetId: "a2"},
@@ -107,6 +108,9 @@ func TestCreateInferenceRequest(t *testing.T) {
 		// preserve case, so they must be read via direct map indexing.
 		assert.Equal(t, "req-1", req.Header["NVCF-REQID"][0])
 		assert.Equal(t, "fn-name", req.Header["NVCF-FUNCTION-NAME"][0])
+		assert.Equal(t, "z1", req.Header["NVCF-REGION"][0])
+		assert.Equal(t, "invocation-region", req.Header["NVCF-INVOCATION-REGION"][0])
+		assert.NotContains(t, req.Header, "Nvcf-Invocation-Region")
 		assert.Equal(t, "a1,a2", req.Header["NVCF-FUNCTION-ASSET-IDS"][0])
 		assert.Equal(t, "application/json", req.Header.Get("Content-Type")) // defaulted
 		assert.Equal(t, int64(123), req.ContentLength)

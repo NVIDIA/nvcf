@@ -566,6 +566,9 @@ impl WorkHandler for PollAwareHandler {
             key: CONTENT_TYPE.to_string(),
             value: "text/plain".into(),
         }];
+        let echo_request_headers = self
+            .enable_echo_request
+            .then(|| request.request_headers.clone());
         let echo_polling_request_headers = self.echo_polling_request_headers;
 
         let send_responses = async move {
@@ -579,6 +582,8 @@ impl WorkHandler for PollAwareHandler {
                         let mut builder = http::Response::builder().status(StatusCode::OK);
                         let response_headers = if echo_polling_request_headers {
                             &polling_request.request_headers
+                        } else if let Some(headers) = &echo_request_headers {
+                            headers
                         } else {
                             &default_response_headers
                         };
@@ -649,7 +654,11 @@ impl WorkHandler for ReturnRequestHandler {
                 body,
                 request.request_method.clone(),
                 request.request_path.clone(),
-                HashMap::new(),
+                request
+                    .request_headers
+                    .iter()
+                    .map(|header| (header.key.clone(), header.value.clone()))
+                    .collect(),
             ),
             AttachedRequest::FullRequest(request) => {
                 let (parts, body) = request.into_parts();
