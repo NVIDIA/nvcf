@@ -23,8 +23,6 @@ import (
 	"fmt"
 	"net/http"
 
-	"go.uber.org/zap"
-
 	pdpv1 "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients/pdp_types"
 )
 
@@ -77,9 +75,6 @@ func (c *ApiKeysClient) Evaluate(ctx context.Context, req *pdpv1.RuleRequest) (*
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		zap.L().Error("api-keys-api returned non-200",
-			zap.Int("status_code", resp.StatusCode),
-		)
 		return nil, fmt.Errorf("api-keys-api returned status %d", resp.StatusCode)
 	}
 
