@@ -43,7 +43,7 @@ eventLedger:
 
   serviceAccount:
     create: true
-    automount: true
+    automount: false
     annotations: {}
     # ServiceAccount name must match the JWT auth role provisioned by the
     # nvcf-openbao-migrations 22_setup_event-ledger migration. The Vault Agent
@@ -89,7 +89,7 @@ eventLedger:
   autoscaling:
     enabled: false
     minReplicas: 1
-    maxReplicas: 1
+    maxReplicas: 3
     targetCPUUtilizationPercentage: 80
 
   # Hashicorp Vault Agent Injector wiring. The chart always renders the
@@ -124,6 +124,7 @@ eventLedger:
     # Tracing is opt-in. Leave empty to disable; set to an OTLP collector
     # endpoint to enable.
     OTEL_EXPORTER_OTLP_ENDPOINT: ""
+    EVENT_LEDGER_SELF_MANAGED: "true"
 
   # Application configuration rendered into /etc/event-ledger/config.yaml.
   # Credentials (username, password, policy-bearer-token) are not set here;
