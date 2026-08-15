@@ -55,7 +55,12 @@ eventLedger:
   podLabels: {}
 
   podSecurityContext: {}
-  securityContext: {}
+  securityContext:
+    allowPrivilegeEscalation: false
+    runAsNonRoot: true
+    capabilities:
+      drop:
+        - ALL
 
   service:
     type: ClusterIP
