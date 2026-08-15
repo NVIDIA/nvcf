@@ -68,6 +68,21 @@ spec:
         - { name: CUDA_VISIBLE_DEVICES, value: "0" }
         - { name: HF_HUB_DISABLE_XET, value: "1" }
         - { name: HF_HUB_ENABLE_HF_TRANSFER, value: "0" }
+        # TensorRT-LLM runs under HPC-X Open MPI, so UCX initializes even on a
+        # single GPU. Two of its default transports produce VMAs CRIU cannot
+        # dump, and the container is privileged so it sees the node's real
+        # RDMA devices:
+        #   ib    -> maps /dev/infiniband/uverbsN doorbell pages. No CRIU
+        #            plugin claims those, so collect-mappings dies with
+        #            "handle_device_vma plugin failed" (proc_parse.c:121).
+        #   sysv  -> UCX's shm transport allocates a SysV segment alongside its
+        #            POSIX one. criu-v2 nsenters into the container's IPC ns,
+        #            so CRIU sees no ipc ns to dump and rejects the mapping:
+        #            "doesn't live in IPC ns" (cr-dump.c:511).
+        # posix keeps shared memory working; there is no RDMA peer to talk to
+        # on a single-GPU single-node pod. Verified: with this set the tree
+        # holds zero infiniband and zero SYSV mappings and the dump succeeds.
+        - { name: UCX_TLS, value: "tcp,self,posix,cma,cuda_copy,cuda_ipc" }
       ports:
         - containerPort: 8000
           name: http
