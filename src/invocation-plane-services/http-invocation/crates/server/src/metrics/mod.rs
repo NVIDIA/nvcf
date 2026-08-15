@@ -62,8 +62,9 @@ const SECONDS_DURATION_BUCKETS: &[f64; 15] = &[
     0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 1000.0,
 ];
 
-// Buckets tuned for AI inference latency: coarser resolution reduces series count
-// while preserving visibility at p50/p95/p99 thresholds that matter operationally.
+// Reduces each (function_id, function_version_id) histogram from 18 to 12 series
+// (15 to 9 finite buckets, plus +Inf, sum, and count), a 33.3% reduction, while
+// preserving useful resolution for AI inference latency.
 const FUNCTION_REQUEST_LATENCY_BUCKETS_IN_SECONDS: &[f64; 9] = &[
     0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 300.0, 600.0, 1800.0,
 ];
@@ -354,6 +355,14 @@ mod tests {
     use super::*;
     use metrics_util::debugging::{DebugValue, DebuggingRecorder};
     use metrics_util::MetricKind;
+
+    #[test]
+    fn function_request_latency_uses_expected_buckets() {
+        assert_eq!(
+            FUNCTION_REQUEST_LATENCY_BUCKETS_IN_SECONDS,
+            &[0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 300.0, 600.0, 1800.0]
+        );
+    }
 
     #[test]
     fn invocation_latency_omits_nca_id() {
