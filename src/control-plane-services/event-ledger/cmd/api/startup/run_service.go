@@ -166,12 +166,8 @@ func runService(cfg config.Config) error {
 	var requireLocalScopeCheck = false
 
 	if cfg.Auth.Enabled {
-		// Detect self-managed deployment by the presence of the Vault Agent secrets file.
-		_, hasSecretsFileErr := os.Stat(secretsPath)
-		hasSecretsFile := hasSecretsFileErr == nil
-
 		// Validate auth configuration
-		if err := config.ValidateAuthConfig(cfg.Auth, hasSecretsFile); err != nil {
+		if err := config.ValidateAuthConfig(cfg.Auth, cfg.SelfManaged); err != nil {
 			logger.Error("invalid auth configuration", zap.Error(err))
 			return err
 		}
@@ -235,20 +231,18 @@ func runService(cfg config.Config) error {
 
 			var policyClient policy.Authorizer
 
-			// Use a static (no-auth) client when the Vault Agent secrets file is present,
-			// indicating a self-managed deployment. Otherwise fall back to OAuth2.
-			if hasSecretsFile {
-				logger.Warn("secrets file detected, using static client for policy evaluator",
-					zap.String("secrets_path", secretsPath))
+			// Use a static (no-auth) client in self-managed deployments.
+			// Otherwise fall back to the OAuth2 client-credentials flow.
+			if cfg.SelfManaged {
+				logger.Warn("self-managed mode: using api-keys client for policy evaluator")
 
-				policyClient = policy.NewStaticBearerClient(
+				policyClient = policy.NewApiKeysClient(
 					cfg.Auth.Policy.PolicyEvaluatorAddr,
 					policyConfig,
-					nil,
 					middleware.GetSharedHTTPClient(&cfg.HTTP),
 				)
 			} else {
-				logger.Warn("static bearer token not found, using OAuth2 for policy evaluator",
+				logger.Warn("using OAuth2 for policy evaluator",
 					zap.String("token_issuer", cfg.Auth.Policy.TokenIssuerAddr))
 
 				oidcConfig := &auth.ProviderConfig{

@@ -59,6 +59,7 @@ type Config struct {
 	Secret             string                 `mapstructure:"secret"`
 	DeprecateEndpoints bool                   `mapstructure:"deprecate-endpoints"`
 	SecretsPath        string                 `mapstructure:"secrets-path"`
+	SelfManaged        bool                   `mapstructure:"self-managed"`
 }
 
 type PublisherConfig struct {
@@ -101,9 +102,8 @@ func (p PolicyConfig) WithDefaults() PolicyConfig {
 }
 
 // ValidateAuthConfig validates the authentication configuration.
-// hasSecretsFile indicates whether the Vault Agent secrets file is present,
-// signalling a self-managed deployment where OAuth2 credential fields are not required.
-func ValidateAuthConfig(cfg AuthConfig, hasSecretsFile bool) error {
+// selfManaged indicates a self-managed deployment where OAuth2 credential fields are not required.
+func ValidateAuthConfig(cfg AuthConfig, selfManaged bool) error {
 	if !cfg.Enabled {
 		return nil
 	}
@@ -135,7 +135,7 @@ func ValidateAuthConfig(cfg AuthConfig, hasSecretsFile bool) error {
 		if cfg.Policy.PolicyFQDN == "" {
 			return ErrMissingPolicyFQDN
 		}
-		if !hasSecretsFile {
+		if !selfManaged {
 			if cfg.Policy.CredsFile == "" {
 				return ErrMissingPolicyCredsFile
 			}

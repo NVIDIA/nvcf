@@ -111,7 +111,7 @@ func TestValidateAuthConfig_PolicyProvider(t *testing.T) {
 	tests := []struct {
 		name                 string
 		cfg                  AuthConfig
-		hasSecretsFile bool
+		selfManaged bool
 		expectedErr          error
 	}{
 		{
@@ -252,9 +252,9 @@ func TestValidateAuthConfig_PolicyProvider(t *testing.T) {
 			expectedErr: ErrInvalidPolicyCredsRefreshInterval,
 		},
 		{
-			// When the secrets file is present (self-managed), OAuth2 fields are not required.
-			name:                 "valid config with secrets file - oauth2 fields not required",
-			hasSecretsFile: true,
+			// In self-managed mode, OAuth2 fields are not required.
+			name:                 "valid config in self-managed mode - oauth2 fields not required",
+			selfManaged: true,
 			cfg: AuthConfig{
 				Enabled:   true,
 				Provider:  "policy",
@@ -268,9 +268,9 @@ func TestValidateAuthConfig_PolicyProvider(t *testing.T) {
 			expectedErr: nil,
 		},
 		{
-			// Even with a secrets file present, always-required fields are still checked.
-			name:                 "secrets file does not bypass namespace check",
-			hasSecretsFile: true,
+			// Even in self-managed mode, always-required fields are still checked.
+			name:                 "self-managed mode does not bypass namespace check",
+			selfManaged: true,
 			cfg: AuthConfig{
 				Enabled:   true,
 				Provider:  "policy",
@@ -286,7 +286,7 @@ func TestValidateAuthConfig_PolicyProvider(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateAuthConfig(tt.cfg, tt.hasSecretsFile)
+			err := ValidateAuthConfig(tt.cfg, tt.selfManaged)
 			if tt.expectedErr != nil {
 				require.Error(t, err)
 				assert.Equal(t, tt.expectedErr, err)

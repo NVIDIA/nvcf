@@ -26,42 +26,31 @@ import (
 	"go.uber.org/zap"
 
 	pdpv1 "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients/pdp_types"
-
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/credentials"
 )
 
-// staticBearerClient implements Authorizer for self-managed deployments where no
-// OAuth2 token issuer is available. If tokenReader is non-nil, it sets an
-// Authorization: Bearer header on outbound calls; otherwise no auth header is sent.
-type staticBearerClient struct {
+// ApiKeysClient implements Authorizer for self-managed deployments where the
+// api-keys-api evaluation endpoint requires no authentication.
+type ApiKeysClient struct {
 	evaluatorAddr string
 	policyCfg     *PolicyConfig
-	tokenReader   *credentials.BearerTokenReader
 	httpClient    *http.Client
 }
 
-// NewStaticBearerClient creates an Authorizer for self-managed deployments.
-// Pass a non-nil tokenReader to authenticate outbound calls with a static bearer
-// token; pass nil when the destination service requires no authentication.
-func NewStaticBearerClient(
-	evaluatorAddr string,
-	policyCfg *PolicyConfig,
-	tokenReader *credentials.BearerTokenReader,
-	httpClient *http.Client,
-) Authorizer {
-	return &staticBearerClient{
+// NewApiKeysClient creates an Authorizer that calls the api-keys-api evaluation
+// endpoint without authentication, for use in self-managed deployments.
+func NewApiKeysClient(evaluatorAddr string, policyCfg *PolicyConfig, httpClient *http.Client) Authorizer {
+	return &ApiKeysClient{
 		evaluatorAddr: evaluatorAddr,
 		policyCfg:     policyCfg,
-		tokenReader:   tokenReader,
 		httpClient:    httpClient,
 	}
 }
 
-func (c *staticBearerClient) PolicyConfig() *PolicyConfig {
+func (c *ApiKeysClient) PolicyConfig() *PolicyConfig {
 	return c.policyCfg
 }
 
-func (c *staticBearerClient) Evaluate(ctx context.Context, req *pdpv1.RuleRequest) (*pdpv1.RuleResponse, error) {
+func (c *ApiKeysClient) Evaluate(ctx context.Context, req *pdpv1.RuleRequest) (*pdpv1.RuleResponse, error) {
 	reqBytes, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal rule request: %w", err)
@@ -75,9 +64,6 @@ func (c *staticBearerClient) Evaluate(ctx context.Context, req *pdpv1.RuleReques
 
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json")
-	if c.tokenReader != nil {
-		httpReq.Header.Set("Authorization", "Bearer "+c.tokenReader.Token())
-	}
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -91,10 +77,10 @@ func (c *staticBearerClient) Evaluate(ctx context.Context, req *pdpv1.RuleReques
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		zap.L().Error("policy evaluator returned non-200",
+		zap.L().Error("api-keys-api returned non-200",
 			zap.Int("status_code", resp.StatusCode),
 		)
-		return nil, fmt.Errorf("policy evaluator returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("api-keys-api returned status %d", resp.StatusCode)
 	}
 
 	var ruleResp pdpv1.RuleResponse
