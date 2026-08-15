@@ -63,8 +63,6 @@ spec:
           env:
             - name: NVSNAP_BUNDLE_TOOLS_DST
               value: {{ printf "%s/nvsnap" (.Values.agent.l2.hostBundleRoot | default "/var/lib/nvsnap/bundle") | quote }}
-            - name: NVSNAP_BUNDLE_LIB_DST
-              value: {{ printf "%s/nvsnap-lib" (.Values.agent.l2.hostBundleRoot | default "/var/lib/nvsnap/bundle") | quote }}
           volumeMounts:
             - name: host-bundle
               # Mount the parent of {tools,lib} so the script can rename
