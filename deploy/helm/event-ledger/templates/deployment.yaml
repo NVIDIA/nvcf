@@ -21,7 +21,9 @@ metadata:
   labels:
     {{- include "nvcf-event-ledger.labels" . | nindent 4 }}
 spec:
+  {{- if not .Values.eventLedger.autoscaling.enabled }}
   replicas: {{ .Values.eventLedger.replicaCount }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "nvcf-event-ledger.selectorLabels" . | nindent 6 }}

@@ -14,11 +14,11 @@
 # limitations under the License.
 
 apiVersion: v2
-name: helm-event-ledger
+name: helm-nvcf-event-ledger
 description: A Helm chart for NVCF Event Ledger deployment
 
 type: application
 
 version: 0.0.0 # autoversioning enabled via release pipeline
 
-appVersion: "1.0.0"
+appVersion: "0.10.2"
