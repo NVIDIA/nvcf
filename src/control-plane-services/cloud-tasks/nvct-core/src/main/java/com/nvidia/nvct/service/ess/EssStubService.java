@@ -52,6 +52,13 @@ public interface EssStubService {
                                               @RequestParam("query_type") String queryType,
                                               @RequestHeader("X-ESS-NAMESPACE") String namespace);
 
+    @GetExchange("v1/accounts/{ncaId}/registry-credentials/{registryCredentialId}")
+    FetchSecretsResponse fetchRegistryCredentialSecret(
+            @PathVariable String ncaId,
+            @PathVariable String registryCredentialId,
+            @RequestParam("query_type") String queryType,
+            @RequestHeader("X-ESS-NAMESPACE") String namespace);
+
     @DeleteExchange("v1/tasks/{taskId}/secrets")
     void deleteSecrets(@PathVariable String taskId,
                        @RequestHeader("X-ESS-NAMESPACE") String namespace);

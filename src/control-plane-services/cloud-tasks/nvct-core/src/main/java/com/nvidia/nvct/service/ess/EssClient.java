@@ -209,4 +209,30 @@ public class EssClient {
         }
     }
 
+    public Optional<Map<String, JsonNode>> fetchRegistryCredentialSecret(
+            String ncaId,
+            UUID registryCredentialId) {
+        if (!enabled) {
+            log.debug(MESG_ESS_DISABLED);
+            return Optional.empty();
+        }
+
+        try {
+            var response = essStubService.fetchRegistryCredentialSecret(
+                    ncaId, registryCredentialId.toString(), "fetch_secret", ESS_NAMESPACE);
+            return Optional.ofNullable(response)
+                    .map(body -> Optional.ofNullable(body.getData().getData()))
+                    .orElseThrow(() -> {
+                        var path = "accounts/%s/registry-credentials/%s"
+                                .formatted(ncaId, registryCredentialId);
+                        var mesg = MESG_MISSING_FETCH_SECRETS_RESPONSE_BODY
+                                .formatted(path, "Fetch Secrets");
+                        log.error(mesg);
+                        return new UpstreamException(mesg);
+                    });
+        } catch (NotFoundException ex) {
+            return Optional.empty();
+        }
+    }
+
 }
