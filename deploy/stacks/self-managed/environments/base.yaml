@@ -168,6 +168,13 @@ accounts:
 # These static global values are processed in the values template
 nats:
   enabled: true
+  # PDB: the upstream NATS chart enables a disruption budget by default.
+  # Override here to disable it or adjust the minAvailable threshold.
+  podDisruptionBudget:
+    enabled: false
+    merge:
+      spec:
+        minAvailable: 2
 
 cassandra:
   enabled: true
@@ -184,6 +191,11 @@ cassandra:
   # Do not use small for default cloud installs. Cassandra can OOM during
   # first boot and leave migrations in a failed or dirty state.
   resourcesPreset: "xlarge"
+  # PDB: disabled by default. Recommended for production 3-node clusters.
+  # Set exactly one of minAvailable or maxUnavailable.
+  podDisruptionBudget:
+    enabled: false
+    minAvailable: 2   # keep at least 2 of 3 nodes up during any disruption
 
 certManager:
   # cert-manager controller required to reconcile Certificate resources for
@@ -220,6 +232,16 @@ openbao:
       #         - nats-system
       #         - nvcf
       #         - sis
+    # PDB for the injector Deployment. minAvailable: 1 by default (always active).
+    podDisruptionBudget:
+      minAvailable: 1
+  server:
+    ha:
+      # PDB for the HA Raft StatefulSet. The upstream chart enables this by
+      # default with maxUnavailable derived from replica count.
+      disruptionBudget:
+        enabled: false
+        maxUnavailable: 1
 
 addons:
   # LLS/TURN Low-Latency Streaming addon
@@ -314,6 +336,54 @@ stateMetrics:
 rateLimiter:
   enabled: true
   replicaCount: 1
+  # PDB: enable when replicaCount > 1.
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
+
+# PDB knobs for control-plane services. Disabled by default.
+# Set enabled: true for any service running more than one replica.
+
+apikeys:
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
+
+ess:
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
+
+invocation:
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
+
+adminIssuerProxy:
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
+
+functionautoscaler:
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
+
+reval:
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
+
+# LLM addon services (active only when addons.llm.enabled: true):
+llmApiGateway:
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
+
+llmRequestRouter:
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
 
 # Ingress Gateway Configuration
 ingress:
@@ -373,6 +443,10 @@ ingress:
         listenerName: nats
 
 grpcproxy:
+  # PDB: disabled by default. Enable when running multiple grpc-proxy replicas.
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
   # Optional NVCF API gRPC endpoint used only by grpc-proxy.
   # Leave empty when grpc-proxy can use the same endpoint advertised to workers
   # through global.workerEndpoints.nvcfGrpcServiceURL. Set this when workers
