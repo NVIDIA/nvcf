@@ -20,11 +20,16 @@ metadata:
     nvsnap.io/demo: "true"
   annotations:
     nvsnap.io/demo-name: "vLLM TP=2 eager"
-    nvsnap.io/desc: "TinyLlama 1.1B on vLLM, TP=2 eager (E1, criu-v2 multi-GPU)"
+    nvsnap.io/desc: "TinyLlama 1.1B on vLLM, TP=2 eager (multi-GPU cachedir)"
     nvsnap.io/model: "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
     nvsnap.io/port: "8000"
     nvsnap.io/gpus: "2"
-    nvsnap.io/path: "criu"
+    # cachedir, not criu: the agent refuses multi-GPU CRIU outright
+    # (checkpoint.go, "multi-GPU CRIU is unsupported"), and test-e2e.sh routes
+    # anything requesting >= 2 GPUs here. Declaring "criu" made the manifest
+    # generator emit a criu-v2 restore placeholder that nothing ever drives,
+    # so the restore pod idled until the readiness timeout.
+    nvsnap.io/path: "rootfs"
 spec:
   automountServiceAccountToken: false
   tolerations:

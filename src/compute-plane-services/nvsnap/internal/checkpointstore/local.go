@@ -152,6 +152,15 @@ func (l *Local) Put(ctx context.Context, hash string, sources []CaptureSource, m
 	if m.FileCount == 0 {
 		m.FileCount = totalFiles
 	}
+	// Refuse to commit an artifact that contradicts its own manifest. Every
+	// declared volume has to resolve to a directory that was actually
+	// written; otherwise the mismatch stays invisible until a restore pod
+	// waits out its readiness timeout on a mount that can never appear,
+	// which is how the cachedir layout bug presented.
+	if err := verifyTreeMatchesManifest(treeRoot, m); err != nil {
+		return Manifest{}, err
+	}
+
 	if err := writeManifest(filepath.Join(tmpDir, "manifest.json"), m); err != nil {
 		return Manifest{}, fmt.Errorf("write manifest: %w", err)
 	}
@@ -164,6 +173,38 @@ func (l *Local) Put(ctx context.Context, hash string, sources []CaptureSource, m
 	}
 	committed = true
 	return m, nil
+}
+
+// verifyTreeMatchesManifest checks that every volume the manifest declares
+// resolves to a directory that exists under treeRoot.
+//
+// The capture and restore sides derive the on-disk location independently:
+// the writer from CaptureSource.DstSubpath, the reader from VolumeSubpath.
+// When those disagree the capture still reports success -- the bytes are on
+// disk, just not where the manifest says -- and the failure surfaces minutes
+// later as a restore pod stuck on a mount that will never resolve. Checking
+// it here turns a 10-minute readiness timeout into an immediate, specific
+// capture error naming the volume and the path it expected.
+func verifyTreeMatchesManifest(treeRoot string, m Manifest) error {
+	for _, vol := range m.Volumes {
+		subdir, ok := VolumeSubpath(vol)
+		if !ok {
+			return fmt.Errorf("checkpointstore: manifest declares volume %q (type %q) "+
+				"with no resolvable subpath", vol.Name, vol.Type)
+		}
+		// subdir == "" is the tree root, which Join leaves as treeRoot.
+		path := filepath.Join(treeRoot, subdir)
+		st, err := os.Stat(path)
+		if err != nil {
+			return fmt.Errorf("checkpointstore: manifest declares volume %q at tree/%s "+
+				"but it was not written: %w", vol.Name, subdir, err)
+		}
+		if !st.IsDir() {
+			return fmt.Errorf("checkpointstore: manifest declares volume %q at tree/%s "+
+				"but that path is not a directory", vol.Name, subdir)
+		}
+	}
+	return nil
 }
 
 // Get copies the stored capture tree for hash into dstDir and returns its manifest.
@@ -206,10 +247,13 @@ func (l *Local) Mount(_ context.Context, hash string, vol VolumeMeta) (PodMount,
 	// "wrong" agent and would force a 5-second peer-fetch within the
 	// admission timeout — which can't transfer 100GB+ captures.
 	treePath := filepath.Join(l.root, hash, "tree")
-	subdir := VolumeSubpath(vol)
-	if subdir == "" {
+	subdir, ok := VolumeSubpath(vol)
+	if !ok {
 		return PodMount{}, fmt.Errorf("checkpointstore: Local.Mount: cannot derive subpath for volume %+v", vol)
 	}
+	// subdir == "" is valid and means the tree root: cachedir mode captures
+	// the whole cache volume as the artifact root, so filepath.Join leaves
+	// treePath untouched and the pod mounts tree/ at the volume's MountPath.
 	name := mountVolumeName(hash, vol)
 	hpType := corev1.HostPathDirectory
 	return PodMount{
@@ -245,22 +289,36 @@ func (l *Local) Mount(_ context.Context, hash string, vol VolumeMeta) (PodMount,
 // Exported because nvsnap#88's generic OverlayFS-for-all-volumes work
 // in the agent's restore-overlay resolver needs to map any captured
 // volume — not just rootfs-extract — to its on-disk lower dir.
-func VolumeSubpath(vol VolumeMeta) string {
+// The bool reports whether a location could be resolved at all. It exists
+// because "" is a legitimate answer -- the tree root, which cachedir mode
+// writes -- and previously shared a return value with "no idea", so callers
+// could not tell a root-mounted capture from a malformed one. Local.Mount
+// treated both as an error, which is precisely how a cachedir capture that
+// had written its bytes correctly still failed to mount.
+//
+// Manifests written since VolumeMeta.Subpath exists answer directly. Older
+// ones fall back to inferring from Type, which stays correct for every
+// layout that inference ever described accurately (rootfs, rootfs-extract,
+// and user-data volumes under volumes/<name>/).
+func VolumeSubpath(vol VolumeMeta) (string, bool) {
+	if vol.Subpath != nil {
+		return *vol.Subpath, true
+	}
 	switch vol.Type {
 	case "rootfs":
-		return "rootfs"
+		return "rootfs", true
 	case "rootfs-extract":
 		if vol.MountPath == "" || vol.MountPath == "/" {
-			return ""
+			return "", false
 		}
-		return filepath.Join("rootfs", strings.TrimPrefix(vol.MountPath, "/"))
+		return filepath.Join("rootfs", strings.TrimPrefix(vol.MountPath, "/")), true
 	case "hostPath", "emptyDir":
 		if vol.Name == "" {
-			return ""
+			return "", false
 		}
-		return filepath.Join("volumes", vol.Name)
+		return filepath.Join("volumes", vol.Name), true
 	default:
-		return ""
+		return "", false
 	}
 }
 

@@ -388,9 +388,10 @@ func (c *Capturer) buildSources(pid int, req CaptureRequest) (
 				return nil, nil, nil, fmt.Errorf("resolve cache dir %s: %w", c.CacheDir, err)
 			}
 			size, files, _ := dirContentStats(src)
+			const cacheDirSubpath = "" // contents land at the PVC root
 			sources = append(sources, checkpointstore.CaptureSource{
 				SrcPath:    src,
-				DstSubpath: "", // contents land at the PVC root
+				DstSubpath: cacheDirSubpath,
 			})
 			volumes = append(volumes, checkpointstore.VolumeMeta{
 				Name:      "cachedir",
@@ -398,6 +399,11 @@ func (c *Capturer) buildSources(pid int, req CaptureRequest) (
 				Type:      cls.VolumeType,
 				SizeBytes: size,
 				FileCount: files,
+				// Record the root explicitly. Type is the underlying
+				// emptyDir, from which consumers would otherwise infer
+				// volumes/cachedir/ and mount a path that was never
+				// written.
+				Subpath: checkpointstore.SubpathAt(cacheDirSubpath),
 			})
 			return sources, volumes, extractPaths, nil
 		}
@@ -429,6 +435,7 @@ func (c *Capturer) buildSources(pid int, req CaptureRequest) (
 				Type:      "rootfs",
 				SizeBytes: size,
 				FileCount: files,
+				Subpath:   checkpointstore.SubpathAt(stagingRootfsDir),
 			})
 		case VolumeUserData:
 			src, err := c.resolveUserDataSrc(req.PodUID, cls)
@@ -436,9 +443,10 @@ func (c *Capturer) buildSources(pid int, req CaptureRequest) (
 				return nil, nil, nil, fmt.Errorf("resolve volume %s: %w", cls.Name, err)
 			}
 			size, files, _ := dirContentStats(src)
+			udSubpath := filepath.Join(stagingVolumesDir, cls.Name)
 			sources = append(sources, checkpointstore.CaptureSource{
 				SrcPath:    src,
-				DstSubpath: filepath.Join(stagingVolumesDir, cls.Name),
+				DstSubpath: udSubpath,
 			})
 			volumes = append(volumes, checkpointstore.VolumeMeta{
 				Name:      cls.Name,
@@ -446,6 +454,7 @@ func (c *Capturer) buildSources(pid int, req CaptureRequest) (
 				Type:      cls.VolumeType,
 				SizeBytes: size,
 				FileCount: files,
+				Subpath:   checkpointstore.SubpathAt(udSubpath),
 			})
 		}
 	}

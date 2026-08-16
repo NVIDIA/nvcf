@@ -132,8 +132,10 @@ func (a *Agent) resolveOverlayLowerDir(_ context.Context, req PrepareOverlayRequ
 	if req.CaptureHash == "" {
 		return "", errors.New("either lowerDir or captureHash is required")
 	}
-	subdir := checkpointstore.VolumeSubpath(req.Volume)
-	if subdir == "" {
+	// subdir == "" with ok is the tree root (cachedir mode captures the whole
+	// cache volume as the artifact root), so only !ok is an error here.
+	subdir, ok := checkpointstore.VolumeSubpath(req.Volume)
+	if !ok {
 		return "", fmt.Errorf("cannot derive lower subpath for volume %+v", req.Volume)
 	}
 	root := a.config.RootfsCapture.CacheDir
