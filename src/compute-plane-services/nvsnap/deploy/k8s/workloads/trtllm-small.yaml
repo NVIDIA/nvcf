@@ -80,7 +80,11 @@ spec:
         #            so CRIU sees no ipc ns to dump and rejects the mapping:
         #            "doesn't live in IPC ns" (cr-dump.c:511).
         # posix keeps shared memory working; there is no RDMA peer to talk to
-        # on a single-GPU single-node pod. Verified: with this set the tree
+        # on a single-GPU single-node pod. This is only free because the pod is
+        # single-node. A multi-node deployment needs ib, so it needs the device
+        # mappings handled rather than avoided: see NVIDIA/nvcf#891. Do not
+        # promote this to a webhook or cluster-wide default.
+        # Verified: with this set the tree
         # holds zero infiniband and zero SYSV mappings and the dump succeeds.
         - { name: UCX_TLS, value: "tcp,self,posix,cma,cuda_copy,cuda_ipc" }
       ports:
