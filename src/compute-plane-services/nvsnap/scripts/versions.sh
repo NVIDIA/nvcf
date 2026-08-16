@@ -67,7 +67,7 @@ NVSNAP_CRIU_REPO="${NVSNAP_CRIU_REPO:-https://github.com/balajinvda/criu.git}"
 # rings survive C/R, so libuv/uvloop servers restore with UV_USE_IO_URING=1)
 # for reproducible OSS builds. Bump when the fork advances.
 # Consumed by build-agent.sh (clean-checkout auto-clone) and ci/build-image.sh.
-NVSNAP_CRIU_REF="${NVSNAP_CRIU_REF:-31d90a8a847219812185232fd93e8bee55c2a443}"
+NVSNAP_CRIU_REF="${NVSNAP_CRIU_REF:-169595fd8}"
 NVSNAP_LIBZMQ_REPO="${NVSNAP_LIBZMQ_REPO:-https://github.com/balajinvda/libzmq.git}"
 NVSNAP_LIBZMQ_REF="${NVSNAP_LIBZMQ_REF:-checkpoint-restore-v1}"
 NVSNAP_LIBUV_REPO="${NVSNAP_LIBUV_REPO:-https://github.com/balajinvda/libuv.git}"
