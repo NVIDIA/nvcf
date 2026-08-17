@@ -31,10 +31,10 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	ktesting "k8s.io/client-go/testing"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/loadgen"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/render"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/sink"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/spec"
+	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/loadgen"
+	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/render"
+	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/sink"
+	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/spec"
 )
 
 func TestDeploySinkCreatesResources(t *testing.T) {

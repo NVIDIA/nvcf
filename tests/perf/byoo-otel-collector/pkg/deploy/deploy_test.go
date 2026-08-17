@@ -28,8 +28,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/render"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/spec"
+	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/render"
+	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/spec"
 )
 
 func TestEnsureNamespaceIdempotent(t *testing.T) {

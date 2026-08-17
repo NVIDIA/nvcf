@@ -32,13 +32,13 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	ktesting "k8s.io/client-go/testing"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/deploy"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/k3d"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/loadgen"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/profile"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/report"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/sink"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/spec"
+	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/deploy"
+	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/k3d"
+	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/loadgen"
+	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/profile"
+	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/report"
+	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/sink"
+	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/spec"
 )
 
 func TestShapesFromFlag(t *testing.T) {
