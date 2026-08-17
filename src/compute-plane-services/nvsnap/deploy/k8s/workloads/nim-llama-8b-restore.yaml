@@ -42,7 +42,18 @@ spec:
           echo 100000 > /proc/sys/kernel/ns_last_pid || echo "(ns_last_pid bump failed)"
           # Restored workload stdio is a plain-file fd on /tmp/nim.out (the
           # source manifest's setsid convention); surface it via kubelet.
-          touch /tmp/nim.out
+          #
+          # Do NOT pre-create this file. The rootfs-diff replay delivers it
+          # with the exact contents and size CRIU recorded, and CRIU verifies
+          # that size before reopening the fd. An empty placeholder both fails
+          # that check and blocks the replay that would have fixed it:
+          #   tar: ./tmp/nim.out: Cannot open: Permission denied
+          #   Error (criu/files-reg.c:2184): File tmp/nim.out has bad size 0
+          #                                  (expect 17058)
+          #   Error (criu/files.c:1322): Unable to open fd=1 id=0x6
+          # touch creates it owned by the image's unprivileged user, and the
+          # replay's tar cannot overwrite that. Leaving the path absent lets
+          # tar create it cleanly. tail -F already waits for a missing file.
           tail -F /tmp/nim.out &
           while true; do sleep 30; done
       env:
