@@ -195,7 +195,7 @@ func TestWaitCollectorHealthRecordsStartTimes(t *testing.T) {
 
 	c := NewClientForClientset(fake.NewSimpleClientset(pod))
 	before := time.Now()
-	startup, err := c.WaitCollectorHealth(context.Background(), "byoo-perf", "perf-collector", "byoo-otel-collector", time.Second)
+	startup, err := c.WaitCollectorHealth(context.Background(), "byoo-perf", "perf-collector", "byoo-otel-collector", time.Second, time.Minute)
 	if err != nil {
 		t.Fatalf("WaitCollectorHealth: %v", err)
 	}
@@ -226,12 +226,52 @@ func TestWaitCollectorHealthTimesOutWithoutContainerStart(t *testing.T) {
 		},
 	}
 	c := NewClientForClientset(fake.NewSimpleClientset(pod))
-	_, err := c.WaitCollectorHealth(context.Background(), "byoo-perf", "perf-collector", "byoo-otel-collector", 10*time.Millisecond)
+	_, err := c.WaitCollectorHealth(context.Background(), "byoo-perf", "perf-collector", "byoo-otel-collector", 10*time.Millisecond, time.Second)
 	if err == nil {
 		t.Fatal("expected WaitCollectorHealth to time out without a collector start time")
 	}
 	if !strings.Contains(err.Error(), "collector health endpoint") {
 		t.Errorf("timeout error = %v, want collector health endpoint context", err)
+	}
+}
+
+func TestWaitCollectorHealthStopsAtStartupMaximum(t *testing.T) {
+	origPoll, origProxy := healthPollInterval, proxyGet
+	t.Cleanup(func() {
+		healthPollInterval = origPoll
+		proxyGet = origProxy
+	})
+	healthPollInterval = time.Millisecond
+
+	collectorStartedAt := time.Now().UTC()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "perf-collector", Namespace: "byoo-perf"},
+		Status: corev1.PodStatus{
+			Phase:     corev1.PodRunning,
+			StartTime: &metav1.Time{Time: collectorStartedAt.Add(-time.Second)},
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name: "byoo-otel-collector",
+				State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{
+					StartedAt: metav1.Time{Time: collectorStartedAt},
+				}},
+			}},
+		},
+	}
+	proxyGet = func(context.Context, kubernetes.Interface, string, string, string, string) ([]byte, error) {
+		return nil, errors.New("collector is still starting")
+	}
+
+	c := NewClientForClientset(fake.NewSimpleClientset(pod))
+	startedWaiting := time.Now()
+	_, err := c.WaitCollectorHealth(context.Background(), "byoo-perf", "perf-collector", "byoo-otel-collector", 250*time.Millisecond, 10*time.Millisecond)
+	if err == nil {
+		t.Fatal("expected WaitCollectorHealth to stop at the startup maximum")
+	}
+	if !strings.Contains(err.Error(), "startup maximum") {
+		t.Errorf("error = %v, want startup maximum context", err)
+	}
+	if elapsed := time.Since(startedWaiting); elapsed > 100*time.Millisecond {
+		t.Errorf("WaitCollectorHealth returned after %s, want it to stop near the 10ms startup maximum", elapsed)
 	}
 }
 

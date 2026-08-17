@@ -575,10 +575,11 @@ func (c *Client) WaitPodReady(ctx context.Context, namespace, podName string, ti
 	})
 }
 
-// WaitCollectorHealth waits for the BYOO collector container to start and for
-// its health endpoint to return successfully. The returned timestamps separate
-// pod scheduling/image-pull delay from collector initialization delay.
-func (c *Client) WaitCollectorHealth(ctx context.Context, namespace, podName, collectorContainer string, timeout time.Duration) (report.StartupHealth, error) {
+// WaitCollectorHealth waits up to timeout for the BYOO collector container to
+// start. Once started, it waits no longer than startupMax for the health
+// endpoint to return successfully. The returned timestamps separate pod
+// scheduling/image-pull delay from collector initialization delay.
+func (c *Client) WaitCollectorHealth(ctx context.Context, namespace, podName, collectorContainer string, timeout, startupMax time.Duration) (report.StartupHealth, error) {
 	var startup report.StartupHealth
 	err := wait.PollUntilContextTimeout(ctx, healthPollInterval, timeout, true, func(ctx context.Context) (bool, error) {
 		pod, err := c.cs.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
@@ -600,6 +601,9 @@ func (c *Client) WaitCollectorHealth(ctx context.Context, namespace, podName, co
 		collectorStartedAt, ok := containerStartedAt(pod, collectorContainer)
 		if !ok {
 			return false, nil
+		}
+		if time.Since(collectorStartedAt) > startupMax {
+			return false, fmt.Errorf("collector container %q exceeded startup maximum %s without reporting healthy", collectorContainer, startupMax)
 		}
 		if _, err := c.FetchPodEndpoint(ctx, namespace, podName, collectorHealthPort, collectorHealthPath); err != nil {
 			return false, nil

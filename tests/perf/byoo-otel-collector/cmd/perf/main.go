@@ -342,8 +342,8 @@ func runShape(ctx context.Context, stdout io.Writer, client *deploy.Client, cfg 
 		return cleanupAfterErr(ctx, client, cfg, ns, fmt.Errorf("deploy %s: %w", shape, err))
 	}
 
-	fmt.Fprintf(stdout, "[%s] waiting up to %s for collector pod %q to report healthy on /health ...\n", shape, cfg.readyTimeout, dep.PodName)
-	startup, err := client.WaitCollectorHealth(ctx, ns, dep.PodName, render.CollectorContainerName, cfg.readyTimeout)
+	fmt.Fprintf(stdout, "[%s] waiting up to %s for collector pod %q to start and up to %s after container start for /health ...\n", shape, cfg.readyTimeout, dep.PodName, cfg.startupMax)
+	startup, err := client.WaitCollectorHealth(ctx, ns, dep.PodName, render.CollectorContainerName, cfg.readyTimeout, cfg.startupMax)
 	if err != nil {
 		return cleanupAfterErr(ctx, client, cfg, ns, fmt.Errorf("collector did not report healthy for %s shape: %w", shape, err))
 	}
