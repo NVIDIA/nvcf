@@ -51,6 +51,8 @@ nv_boot_library_test(
     srcs = ICMS_SERVICE_TEST_SRCS,
     deps = ICMS_SERVICE_DEPS + [
         ":app_classes",
+        "@nv_third_party_deps//:org_awaitility_awaitility",
+        "@nv_third_party_deps//:org_springframework_cloud_spring_cloud_kubernetes_commons",
         "@nv_third_party_deps//:org_springframework_spring_web",
         "@nv_third_party_deps//:org_springframework_spring_core",
         "@nv_third_party_deps//:org_springframework_spring_beans",

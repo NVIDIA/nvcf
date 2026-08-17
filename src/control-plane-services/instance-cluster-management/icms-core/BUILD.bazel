@@ -86,6 +86,7 @@ ICMS_CORE_DEPS = [
     "@nv_third_party_deps//:org_springframework_boot_spring_boot_starter_webmvc",
     "@nv_third_party_deps//:org_springframework_boot_spring_boot_webclient",
     "@nv_third_party_deps//:org_springframework_cloud_spring_cloud_context",
+    "@nv_third_party_deps//:org_springframework_cloud_spring_cloud_kubernetes_commons",
     "@nv_third_party_deps//:org_springframework_cloud_spring_cloud_starter_bootstrap",
     "@nv_third_party_deps//:org_springframework_cloud_spring_cloud_starter_kubernetes_client_config",
     "@nv_third_party_deps//:org_springframework_data_spring_data_cassandra",
