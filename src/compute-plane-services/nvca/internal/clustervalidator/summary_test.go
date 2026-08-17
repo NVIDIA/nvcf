@@ -289,8 +289,11 @@ func TestAllCheckKeysCoversEveryCheckKeyConst(t *testing.T) {
 		CheckKeyGatewayRoutes,
 		CheckKeyExternalLB,
 		CheckKeyNodeToNode,
+		// HA readiness keys (CP Resilience SDD).
+		CheckKeyTier1Deployments,
+		CheckKeyTier2StatefulSets,
 	} {
 		assert.True(t, known[k], "%q is a CheckKey constant but missing from AllCheckKeys", k)
 	}
-	assert.Len(t, AllCheckKeys, 16, "if you added a new CheckKey, also add it to AllCheckKeys AND to clusterValidatorCheckKeys() in internal/metrics/metrics.go")
+	assert.Len(t, AllCheckKeys, 18, "if you added a new CheckKey, also add it to AllCheckKeys AND to clusterValidatorCheckKeys() in internal/metrics/metrics.go")
 }

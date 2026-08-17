@@ -23,7 +23,6 @@ import (
 	"strings"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
-	"k8s.io/client-go/dynamic"
 
 	internalutil "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/cmd/internal"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
@@ -40,19 +39,9 @@ func main() {
 	log := core.GetLogger(ctx)
 	log.Logger.SetFormatter(&clustervalidator.CLIFormatter{})
 
-	client, restCfg, err := internalutil.NewK8sClient(ctx, "")
+	client, _, err := internalutil.NewK8sClient(ctx, "")
 	if err != nil {
 		log.WithError(err).Fatal("Failed to create Kubernetes client")
-	}
-
-	// Build the dynamic client from the same REST config. Declared as
-	// dynamic.Interface so the nil guard in checkGatewayRoutes works: assigning
-	// a typed *DynamicClient nil to an interface creates a non-nil interface.
-	var dynClient dynamic.Interface
-	if dc, dcErr := dynamic.NewForConfig(restCfg); dcErr != nil {
-		log.WithError(dcErr).Warn("Could not create dynamic client; gateway route check will be skipped")
-	} else {
-		dynClient = dc
 	}
 
 	configNS := os.Getenv("VALIDATOR_CONFIG_NAMESPACE")
@@ -92,7 +81,7 @@ func main() {
 		log.Warnf("VALIDATOR_ROLE=%q is not recognized; defaulting to compute-plane", roleEnv)
 	}
 
-	if err := clustervalidator.Run(ctx, client, dynClient, configNS, configName, summaryNS, emitMetrics, role); err != nil {
+	if err := clustervalidator.Run(ctx, client, configNS, configName, summaryNS, emitMetrics, role); err != nil {
 		log.WithError(err).Fatal("Cluster validation failed")
 	}
 }

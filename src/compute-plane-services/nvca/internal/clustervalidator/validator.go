@@ -24,7 +24,6 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	"github.com/sirupsen/logrus"
-	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -88,6 +87,10 @@ type ValidationState struct {
 	// NodeToNodeOK is nil when the check was skipped (single-node cluster or
 	// compute-plane role). true = overlay verified, false = failed.
 	NodeToNodeOK *bool
+	// Tier1DeploymentsOK is nil when no Deployments were found (pre-install).
+	Tier1DeploymentsOK *bool
+	// Tier2StatefulSetsOK is nil when no quorum StatefulSets (spec.replicas==3) were found.
+	Tier2StatefulSetsOK *bool
 
 	// EndpointResults captures per-endpoint reachability outcomes for the
 	// summary ConfigMap / metrics pipeline. Keyed by the user-supplied
@@ -124,7 +127,6 @@ type NetpolPairResult struct {
 func Run(
 	ctx context.Context,
 	client kubernetes.Interface,
-	dynClient dynamic.Interface,
 	configNamespace, configName, summaryNamespace string,
 	emitMetrics bool,
 	role string,
@@ -181,14 +183,13 @@ func Run(
 		checkStorageClass(ctx, client, state)
 		checkGatewayAPICRDs(ctx, client, state)
 		checkEnvoyGateway(ctx, client, state)
-		checkGatewayRoutes(ctx, dynClient, state)
+		checkGatewayRoutes(ctx, client, state)
 		checkExternalLoadBalancer(ctx, client, state)
-		// Node-to-node creates pods and requires pod-create RBAC. Skip during
-		// preflight (emitMetrics=false) where the SA may not hold that permission;
-		// run only for in-cluster scheduled checks where the SA is fully provisioned.
-		if emitMetrics {
-			checkNodeToNode(ctx, client, state)
-		}
+		// CLI RBAC bootstrap (Req 3) grants DaemonSet create/delete and
+		// pod-create before Job submission — no emitMetrics gate needed.
+		checkNodeToNode(ctx, client, state)
+		checkTier1Deployments(ctx, client, state)
+		checkTier2StatefulSets(ctx, client, state)
 	} else {
 		// Compute-plane cluster (default): GPU operator, SMB CSI driver.
 		checkSMBCSIDriver(ctx, client, state)
@@ -301,6 +302,14 @@ func printSummary(state *ValidationState) error {
 		if state.NodeToNodeOK != nil {
 			checks = append(checks, check{*state.NodeToNodeOK,
 				"Node-to-Node Communication: Verified", "Node-to-Node Communication: Failed", true})
+		}
+		if state.Tier1DeploymentsOK != nil {
+			checks = append(checks, check{*state.Tier1DeploymentsOK,
+				"Tier-1 Deployments: All Ready", "Tier-1 Deployments: Under-replicated", true})
+		}
+		if state.Tier2StatefulSetsOK != nil {
+			checks = append(checks, check{*state.Tier2StatefulSetsOK,
+				"Tier-2 StatefulSets: Quorum and Placement OK", "Tier-2 StatefulSets: Quorum or Placement Failed", true})
 		}
 	} else {
 		// Compute-plane checks: GPU resources, GPU operator, SMB CSI driver.

@@ -24,6 +24,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -143,11 +144,13 @@ func TestCheckEnvoyGateway_NamespacePresentNoRunningPods(t *testing.T) {
 
 // -- checkGatewayRoutes --
 
-func TestCheckGatewayRoutes_NilClientSkips(t *testing.T) {
+func TestCheckGatewayRoutes_MissingCRDs(t *testing.T) {
+	// Fake client with no gateway.networking.k8s.io group registered.
+	client := fake.NewSimpleClientset()
 	state := &ValidationState{Log: testLog()}
-	// Should not panic or set GatewayRoutesOK.
-	checkGatewayRoutes(context.Background(), nil, state)
-	assert.Nil(t, state.GatewayRoutesOK, "nil dynClient must leave GatewayRoutesOK unset")
+	checkGatewayRoutes(context.Background(), client, state)
+	require.NotNil(t, state.GatewayRoutesOK)
+	assert.False(t, *state.GatewayRoutesOK, "missing route CR types must set GatewayRoutesOK=false")
 }
 
 // -- checkExternalLoadBalancer --
@@ -250,26 +253,27 @@ func TestCheckNodeToNode_UnschedulableNodesSkipped(t *testing.T) {
 	assert.True(t, *state.NodeToNodeOK, "no schedulable nodes must skip, not fail")
 }
 
-func TestCheckNodeToNode_ServerPodCreateFailure(t *testing.T) {
-	// Two schedulable nodes, but pod creation fails.
+func TestCheckNodeToNode_DaemonSetCreateFailure(t *testing.T) {
+	// Two schedulable nodes, but DaemonSet creation fails.
 	client := fake.NewSimpleClientset(
 		makeNode("node-1", true, 0),
 		makeNode("node-2", true, 0),
 	)
-	client.PrependReactor("create", "pods", func(_ ktesting.Action) (bool, runtime.Object, error) {
-		return true, nil, fmt.Errorf("pod quota exceeded")
+	client.PrependReactor("create", "daemonsets", func(_ ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, fmt.Errorf("quota exceeded")
 	})
 
 	state := &ValidationState{Log: testLog()}
 	checkNodeToNode(context.Background(), client, state)
 
 	require.NotNil(t, state.NodeToNodeOK)
-	assert.False(t, *state.NodeToNodeOK, "server pod create failure must set NodeToNodeOK=false")
+	assert.False(t, *state.NodeToNodeOK, "DaemonSet create failure must set NodeToNodeOK=false")
 }
 
 // init is required to register types with the fake client's object tracker.
 func init() {
 	_ = []runtime.Object{
+		&appsv1.DaemonSet{},
 		&storagev1.StorageClass{},
 		&corev1.Namespace{},
 		&corev1.Pod{},

@@ -27,13 +27,12 @@ import (
 	"strings"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/client-go/discovery"
-	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -958,49 +957,58 @@ func checkEnvoyGateway(ctx context.Context, client kubernetes.Interface, state *
 
 // checkGatewayRoutes lists HTTPRoutes across all namespaces using the dynamic
 // client. At least one HTTPRoute must exist for traffic to reach NVCF
-// services. When dynClient is nil the check is silently skipped (used in tests
-// or early preflight before Gateway API CRDs are installed).
-//
-// Non-critical: routes may be deployed after the gateway infrastructure, and
-// their absence does not block the cluster verdict.
-func checkGatewayRoutes(ctx context.Context, dynClient dynamic.Interface, state *ValidationState) {
+// Non-critical: route CR types are installed by nvcf up and are expected to
+// be absent on a fresh cluster before install.
+func checkGatewayRoutes(ctx context.Context, client kubernetes.Interface, state *ValidationState) {
 	log := state.Log
-	printHeader(log, "Gateway Routes")
+	printHeader(log, "Gateway Route CR Types")
 
-	if dynClient == nil {
-		printInfo(log, "  Gateway route check skipped (no dynamic client configured)")
-		return
-	}
-
-	gvr := schema.GroupVersionResource{
-		Group:    gatewayAPIGroup,
-		Version:  gatewayAPIVersion,
-		Resource: "httproutes",
-	}
-	list, err := dynClient.Resource(gvr).Namespace("").List(ctx, metav1.ListOptions{})
+	groups, err := client.Discovery().ServerGroups()
 	if err != nil {
-		printWarning(log, fmt.Sprintf("Could not list HTTPRoutes: %v", err))
+		printWarning(log, fmt.Sprintf("Could not list API server groups: %v", err))
 		state.Warnings = append(state.Warnings,
-			"Gateway Routes: could not list HTTPRoutes — verify Gateway API CRDs are installed")
+			"Gateway Routes: status unknown (API group discovery failed)")
 		ok := false
 		state.GatewayRoutesOK = &ok
 		return
 	}
 
-	count := len(list.Items)
-	if count == 0 {
-		printWarning(log, "No HTTPRoutes found in any namespace")
+	// Collect all resource names registered under gateway.networking.k8s.io
+	// across all versions (httproutes is v1, tcproutes/udproutes are v1alpha2).
+	found := make(map[string]bool)
+	for _, g := range groups.Groups {
+		if g.Name != gatewayAPIGroup {
+			continue
+		}
+		for _, v := range g.Versions {
+			resources, err := client.Discovery().ServerResourcesForGroupVersion(v.GroupVersion)
+			if err != nil {
+				continue
+			}
+			for _, r := range resources.APIResources {
+				found[r.Name] = true
+			}
+		}
+	}
+
+	required := []string{"httproutes", "tcproutes", "grpcroutes", "udproutes"}
+	var missing []string
+	for _, rt := range required {
+		if !found[rt] {
+			missing = append(missing, rt)
+		}
+	}
+
+	if len(missing) > 0 {
+		printWarning(log, fmt.Sprintf("Route CR types not registered: %s", strings.Join(missing, ", ")))
 		state.Warnings = append(state.Warnings,
-			"Gateway Routes: no HTTPRoutes found — routes may not yet be deployed by nvcf-cli")
+			"Gateway Routes: route CR types missing — install Gateway API CRDs via nvcf up")
 		ok := false
 		state.GatewayRoutesOK = &ok
 		return
 	}
 
-	printSuccess(log, fmt.Sprintf("HTTPRoutes present: %d", count))
-	for i := range list.Items {
-		printInfo(log, fmt.Sprintf("  %s/%s", list.Items[i].GetNamespace(), list.Items[i].GetName()))
-	}
+	printSuccess(log, "Route CR types registered: httproutes, tcproutes, grpcroutes, udproutes")
 	ok := true
 	state.GatewayRoutesOK = &ok
 }
@@ -1069,23 +1077,23 @@ func checkExternalLoadBalancer(ctx context.Context, client kubernetes.Interface,
 }
 
 const (
-	nodeToNodeTestPort      = 19999
-	nodeToNodeImage         = enforcementDefaultImg // busybox:1.36
-	nodeToNodeNamespace     = "default"
-	nodeToNodeServerName    = "nvcf-n2n-server"
-	nodeToNodeClientName    = "nvcf-n2n-client"
-	nodeToNodeActiveDeadline = int64(120) // API server terminates pods if deferred cleanup never runs
-	// 90 s per pod matches enforcementPodTimeout — image should already be
-	// cached from the enforcement check that ran earlier in the same run.
-	nodeToNodePodTimeout = 90 * time.Second
+	nodeToNodeTestPort       = 19999
+	nodeToNodeImage          = enforcementDefaultImg // busybox:1.36
+	nodeToNodeNamespace      = "default"
+	nodeToNodeDSName         = "nvcf-n2n-server"
+	nodeToNodeCheckerName    = "nvcf-n2n-checker"
+	nodeToNodeActiveDeadline = int64(180)
+	nodeToNodeDSTimeout      = 2 * time.Minute
+	nodeToNodeCheckerTimeout = 90 * time.Second
 )
 
-// checkNodeToNode verifies raw overlay-network connectivity between two
-// schedulable nodes. It pins a TCP server pod (busybox nc) to node A and a
-// client pod (nc -z) to node B, then checks whether the TCP connect succeeds.
+// checkNodeToNode verifies overlay-network connectivity across all schedulable
+// nodes using a DaemonSet-based probe. A server DaemonSet is deployed on every
+// schedulable node; a checker pod on node[0] connects to each server pod IP on
+// nodes[1..N-1]. This validates full-mesh connectivity, not just a single pair.
 //
-// Single-node clusters are skipped with a passing warning: inter-node
-// connectivity is not applicable when there is only one node.
+// The CLI RBAC bootstrap (Req 3) grants the validator SA DaemonSet create/delete
+// and pod-create before Job submission, so no separate permission gate is needed.
 //
 // Critical: broken overlay means NVCF services on different nodes cannot
 // communicate, causing cascade failures across every API call.
@@ -1095,9 +1103,6 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 
 	nodes, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
-		// Leave NodeToNodeOK nil (unknown) so the summary row is omitted rather
-		// than reported as "Failed" — an RBAC or API error is not confirmation
-		// of a broken overlay network.
 		printWarning(log, fmt.Sprintf("Could not list nodes: %v", err))
 		state.Warnings = append(state.Warnings, "Node-to-Node: status unknown (node listing failed)")
 		return
@@ -1111,98 +1116,131 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 	}
 
 	if len(schedulable) < 2 {
-		printInfo(log, fmt.Sprintf("  %d schedulable node(s) — node-to-node check skipped (not applicable for single-node clusters)", len(schedulable)))
+		printInfo(log, fmt.Sprintf("  %d schedulable node(s) — node-to-node check skipped", len(schedulable)))
 		state.Warnings = append(state.Warnings,
-			"Node-to-Node: skipped — fewer than 2 schedulable nodes; not applicable for single-node clusters")
+			"Node-to-Node: skipped — fewer than 2 schedulable nodes")
 		ok := true
 		state.NodeToNodeOK = &ok
 		return
 	}
 
-	nodeA, nodeB := schedulable[0], schedulable[1]
-	log.Infof("  Probing overlay connectivity: %s → %s", nodeA, nodeB)
-
 	suffix := rand.String(6)
-	serverName := nodeToNodeServerName + "-" + suffix
-	clientName := nodeToNodeClientName + "-" + suffix
+	dsName := nodeToNodeDSName + "-" + suffix
+	checkerName := nodeToNodeCheckerName + "-" + suffix
+	dsLabels := map[string]string{
+		"app.kubernetes.io/managed-by": "nvcf-cluster-validator",
+		"app.kubernetes.io/component":  "n2n-server",
+		"app.kubernetes.io/instance":   suffix,
+	}
 
-	// Deferred cleanup uses a fresh context so it runs even when ctx is expired.
 	defer func() {
 		grace := int64(0)
 		opts := metav1.DeleteOptions{GracePeriodSeconds: &grace}
-		_ = client.CoreV1().Pods(nodeToNodeNamespace).Delete(context.Background(), serverName, opts)
-		_ = client.CoreV1().Pods(nodeToNodeNamespace).Delete(context.Background(), clientName, opts)
+		_ = client.AppsV1().DaemonSets(nodeToNodeNamespace).Delete(context.Background(), dsName, opts)
+		_ = client.CoreV1().Pods(nodeToNodeNamespace).Delete(context.Background(), checkerName, opts)
 	}()
 
-	if _, err := client.CoreV1().Pods(nodeToNodeNamespace).Create(
-		ctx, buildNodeToNodeServerPod(serverName, nodeA), metav1.CreateOptions{},
+	if _, err := client.AppsV1().DaemonSets(nodeToNodeNamespace).Create(
+		ctx, buildNodeToNodeDaemonSet(dsName, dsLabels), metav1.CreateOptions{},
 	); err != nil {
-		printError(log, fmt.Sprintf("Failed to create server pod on %s: %v", nodeA, err))
+		printError(log, fmt.Sprintf("Failed to create server DaemonSet: %v", err))
 		ok := false
 		state.NodeToNodeOK = &ok
 		return
 	}
 
-	if err := waitForPodReady(ctx, client, nodeToNodeNamespace, serverName, nodeToNodePodTimeout); err != nil {
-		printError(log, fmt.Sprintf("Server pod on %s not ready: %v", nodeA, err))
-		ok := false
-		state.NodeToNodeOK = &ok
-		return
-	}
-
-	serverIP, err := getPodIP(ctx, client, nodeToNodeNamespace, serverName)
+	log.Infof("  Waiting for server DaemonSet pods on %d nodes...", len(schedulable))
+	selector := metav1.FormatLabelSelector(&metav1.LabelSelector{MatchLabels: dsLabels})
+	serverPods, err := waitForDaemonSetPods(ctx, client, nodeToNodeNamespace, selector, len(schedulable), nodeToNodeDSTimeout)
 	if err != nil {
-		printError(log, fmt.Sprintf("Could not get server pod IP: %v", err))
+		printError(log, fmt.Sprintf("Server DaemonSet pods did not become ready: %v", err))
 		ok := false
 		state.NodeToNodeOK = &ok
 		return
 	}
-	log.Infof("  Server pod on %s has IP %s", nodeA, serverIP)
+
+	checkerNode := schedulable[0]
+	var targetIPs []string
+	for i := range serverPods {
+		if serverPods[i].Spec.NodeName != checkerNode && serverPods[i].Status.PodIP != "" {
+			targetIPs = append(targetIPs, serverPods[i].Status.PodIP)
+			log.Infof("  Server pod on %s: %s", serverPods[i].Spec.NodeName, serverPods[i].Status.PodIP)
+		}
+	}
+
+	if len(targetIPs) == 0 {
+		printWarning(log, "No cross-node server pod IPs available")
+		ok := true
+		state.NodeToNodeOK = &ok
+		return
+	}
 
 	if _, err := client.CoreV1().Pods(nodeToNodeNamespace).Create(
-		ctx, buildNodeToNodeClientPod(clientName, nodeB, serverIP), metav1.CreateOptions{},
+		ctx, buildNodeToNodeCheckerPod(checkerName, checkerNode, targetIPs), metav1.CreateOptions{},
 	); err != nil {
-		printError(log, fmt.Sprintf("Failed to create client pod on %s: %v", nodeB, err))
+		printError(log, fmt.Sprintf("Failed to create checker pod: %v", err))
 		ok := false
 		state.NodeToNodeOK = &ok
 		return
 	}
 
-	succeeded, err := waitForPodDone(ctx, client, nodeToNodeNamespace, clientName, nodeToNodePodTimeout)
+	succeeded, err := waitForPodDone(ctx, client, nodeToNodeNamespace, checkerName, nodeToNodeCheckerTimeout)
 	if err != nil {
-		printError(log, fmt.Sprintf("Client pod probe error: %v", err))
+		printError(log, fmt.Sprintf("Checker pod error: %v", err))
 		ok := false
 		state.NodeToNodeOK = &ok
 		return
 	}
 
 	if succeeded {
-		printSuccess(log, fmt.Sprintf("Node-to-node overlay connectivity verified: %s → %s (%s:%d)",
-			nodeB, nodeA, serverIP, nodeToNodeTestPort))
+		printSuccess(log, fmt.Sprintf("Node-to-node overlay verified: %s → %d node(s) reachable on port %d",
+			checkerNode, len(targetIPs), nodeToNodeTestPort))
 		ok := true
 		state.NodeToNodeOK = &ok
 	} else {
-		printError(log, fmt.Sprintf("Client on %s could not reach server on %s at %s:%d",
-			nodeB, nodeA, serverIP, nodeToNodeTestPort))
+		printError(log, fmt.Sprintf("Checker on %s could not reach one or more server pods (port %d)",
+			checkerNode, nodeToNodeTestPort))
 		printInfo(log, "  Possible causes: CNI overlay misconfiguration, host firewall rules, "+
 			"or cloud security group rules blocking inter-node pod traffic")
 		state.Recommendations = append(state.Recommendations,
-			fmt.Sprintf("Check host firewall and security groups between nodes %s and %s. "+
-				"Verify the CNI overlay (VXLAN, Geneve, etc.) is not blocked.", nodeA, nodeB))
+			"Check host firewall and security groups between nodes. "+
+				"Verify the CNI overlay (VXLAN, Geneve, etc.) is not blocked across all nodes.")
 		ok := false
 		state.NodeToNodeOK = &ok
 	}
 }
 
-// nodeToNodeSecurityContext returns a restricted Pod Security Standards compliant
-// context. Port 19999 is above 1024 so busybox nc runs fine as non-root.
-// RunAsUser must be set explicitly: busybox:1.36 declares no USER in its image
-// config, so kubelet rejects the container at admission when RunAsNonRoot is
-// true but RunAsUser is absent.
+func waitForDaemonSetPods(ctx context.Context, client kubernetes.Interface, ns, selector string, wantCount int, timeout time.Duration) ([]corev1.Pod, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		pods, err := client.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: selector})
+		if err != nil {
+			return nil, err
+		}
+		var running []corev1.Pod
+		for i := range pods.Items {
+			if pods.Items[i].Status.Phase == corev1.PodRunning && pods.Items[i].Status.PodIP != "" {
+				running = append(running, pods.Items[i])
+			}
+		}
+		if len(running) >= wantCount {
+			return running, nil
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("timed out waiting for %d Running pods (got %d)", wantCount, len(running))
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
+	}
+}
+
 func nodeToNodeSecurityContext() *corev1.SecurityContext {
 	runAsNonRoot := true
 	allowPrivEsc := false
-	runAsUser := int64(65534) // nobody; conventional non-root UID for scratch/busybox images
+	runAsUser := int64(65534)
 	return &corev1.SecurityContext{
 		RunAsNonRoot:             &runAsNonRoot,
 		RunAsUser:                &runAsUser,
@@ -1212,15 +1250,43 @@ func nodeToNodeSecurityContext() *corev1.SecurityContext {
 	}
 }
 
-func buildNodeToNodeServerPod(name, nodeName string) *corev1.Pod {
+func buildNodeToNodeDaemonSet(name string, labels map[string]string) *appsv1.DaemonSet {
 	deadline := nodeToNodeActiveDeadline
+	return &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: nodeToNodeNamespace, Labels: labels},
+		Spec: appsv1.DaemonSetSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: labels},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				Spec: corev1.PodSpec{
+					RestartPolicy:         corev1.RestartPolicyAlways,
+					ActiveDeadlineSeconds: &deadline,
+					Containers: []corev1.Container{{
+						Name:            "server",
+						Image:           nodeToNodeImage,
+						Command:         []string{"sh", "-c", fmt.Sprintf("while true; do nc -l -p %d; done", nodeToNodeTestPort)},
+						Resources:       enforcementResources(),
+						SecurityContext: nodeToNodeSecurityContext(),
+					}},
+				},
+			},
+		},
+	}
+}
+
+func buildNodeToNodeCheckerPod(name, nodeName string, targetIPs []string) *corev1.Pod {
+	deadline := nodeToNodeActiveDeadline
+	var cmds []string
+	for _, ip := range targetIPs {
+		cmds = append(cmds, fmt.Sprintf("nc -z -w 5 %s %d || exit 1", ip, nodeToNodeTestPort))
+	}
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: nodeToNodeNamespace,
 			Labels: map[string]string{
 				"app.kubernetes.io/managed-by": "nvcf-cluster-validator",
-				"app.kubernetes.io/component":  "n2n-probe",
+				"app.kubernetes.io/component":  "n2n-checker",
 			},
 		},
 		Spec: corev1.PodSpec{
@@ -1228,9 +1294,9 @@ func buildNodeToNodeServerPod(name, nodeName string) *corev1.Pod {
 			RestartPolicy:         corev1.RestartPolicyNever,
 			ActiveDeadlineSeconds: &deadline,
 			Containers: []corev1.Container{{
-				Name:            "server",
+				Name:            "checker",
 				Image:           nodeToNodeImage,
-				Command:         []string{"sh", "-c", fmt.Sprintf("while true; do nc -l -p %d; done", nodeToNodeTestPort)},
+				Command:         []string{"sh", "-c", strings.Join(cmds, " && ")},
 				Resources:       enforcementResources(),
 				SecurityContext: nodeToNodeSecurityContext(),
 			}},
@@ -1238,30 +1304,166 @@ func buildNodeToNodeServerPod(name, nodeName string) *corev1.Pod {
 	}
 }
 
-func buildNodeToNodeClientPod(name, nodeName, serverIP string) *corev1.Pod {
-	deadline := nodeToNodeActiveDeadline
-	return &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: nodeToNodeNamespace,
-			Labels: map[string]string{
-				"app.kubernetes.io/managed-by": "nvcf-cluster-validator",
-				"app.kubernetes.io/component":  "n2n-probe",
-			},
-		},
-		Spec: corev1.PodSpec{
-			NodeName:              nodeName,
-			RestartPolicy:         corev1.RestartPolicyNever,
-			ActiveDeadlineSeconds: &deadline,
-			Containers: []corev1.Container{{
-				Name:            "client",
-				Image:           nodeToNodeImage,
-				Command:         []string{"sh", "-c", fmt.Sprintf("nc -z -w 5 %s %d", serverIP, nodeToNodeTestPort)},
-				Resources:       enforcementResources(),
-				SecurityContext: nodeToNodeSecurityContext(),
-			}},
-		},
+// controlPlaneNamespaces is the set of namespaces scanned by Tier-1 and
+// Tier-2 HA checks on the control-plane cluster.
+var controlPlaneNamespaces = []string{
+	"nvcf", "sis", "api-keys", "ess", "ncp",
+	"nats-system", "vault-system", "cassandra-system", "envoy-gateway-system",
+}
+
+// checkTier1Deployments verifies that every Deployment in the control-plane
+// namespaces has readyReplicas >= spec.replicas. Any under-replicated Deployment
+// means HA headroom is gone and a second failure causes a full outage.
+//
+// The check is generic — no hardcoded Deployment names. New services added to
+// those namespaces are automatically covered.
+//
+// Critical: under-replication means a single additional failure causes a full
+// service outage.
+func checkTier1Deployments(ctx context.Context, client kubernetes.Interface, state *ValidationState) {
+	log := state.Log
+	printHeader(log, "Tier-1 Deployment Readiness")
+
+	var underReplicated []string
+	checkedCount := 0
+
+	for _, ns := range controlPlaneNamespaces {
+		deploys, err := client.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) {
+				continue
+			}
+			printWarning(log, fmt.Sprintf("Could not list Deployments in %s: %v", ns, err))
+			return // leave nil on API error
+		}
+		for i := range deploys.Items {
+			d := &deploys.Items[i]
+			checkedCount++
+			want := int32(1)
+			if d.Spec.Replicas != nil {
+				want = *d.Spec.Replicas
+			}
+			if d.Status.ReadyReplicas < want {
+				underReplicated = append(underReplicated,
+					fmt.Sprintf("%s/%s (ready: %d, want: %d)", ns, d.Name, d.Status.ReadyReplicas, want))
+			}
+		}
 	}
+
+	if checkedCount == 0 {
+		printInfo(log, "  No Deployments found in control-plane namespaces (pre-install state)")
+		ok := true
+		state.Tier1DeploymentsOK = &ok
+		return
+	}
+
+	if len(underReplicated) > 0 {
+		printError(log, fmt.Sprintf("Under-replicated Deployments (%d):", len(underReplicated)))
+		for _, name := range underReplicated {
+			printInfo(log, "  "+name)
+		}
+		state.Recommendations = append(state.Recommendations,
+			"Apply the Helmfile resilience profile (resilience.enabled=true) to bring Tier-1 services to >= 2 replicas.")
+		ok := false
+		state.Tier1DeploymentsOK = &ok
+		return
+	}
+
+	printSuccess(log, fmt.Sprintf("All %d Deployments in control-plane namespaces are fully ready", checkedCount))
+	ok := true
+	state.Tier1DeploymentsOK = &ok
+}
+
+// checkTier2StatefulSets verifies quorum membership and node placement for
+// Tier-2 stateful components (NATS JetStream, OpenBao Raft, Cassandra).
+// Any StatefulSet with spec.replicas == 3 is treated as a quorum component
+// and checked for:
+//  1. readyReplicas == 3
+//  2. all 3 pods on distinct nodes
+//
+// The check is generic — no hardcoded StatefulSet names.
+//
+// Critical: broken quorum or co-located peers leave the stack one failure
+// away from a total control-plane outage.
+func checkTier2StatefulSets(ctx context.Context, client kubernetes.Interface, state *ValidationState) {
+	log := state.Log
+	printHeader(log, "Tier-2 StatefulSet Quorum and Placement")
+
+	const quorumSize = int32(3)
+	var failures []string
+	checkedCount := 0
+
+	for _, ns := range controlPlaneNamespaces {
+		stsList, err := client.AppsV1().StatefulSets(ns).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) {
+				continue
+			}
+			printWarning(log, fmt.Sprintf("Could not list StatefulSets in %s: %v", ns, err))
+			return // leave nil on API error
+		}
+
+		for i := range stsList.Items {
+			sts := &stsList.Items[i]
+			if sts.Spec.Replicas == nil || *sts.Spec.Replicas != quorumSize {
+				continue
+			}
+			checkedCount++
+
+			if sts.Status.ReadyReplicas < quorumSize {
+				failures = append(failures,
+					fmt.Sprintf("%s/%s: readyReplicas=%d (need %d)",
+						ns, sts.Name, sts.Status.ReadyReplicas, quorumSize))
+				continue
+			}
+
+			selector := metav1.FormatLabelSelector(sts.Spec.Selector)
+			pods, err := client.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: selector})
+			if err != nil {
+				failures = append(failures,
+					fmt.Sprintf("%s/%s: could not list pods: %v", ns, sts.Name, err))
+				continue
+			}
+
+			nodeOwner := make(map[string]string)
+			for j := range pods.Items {
+				p := &pods.Items[j]
+				if p.Status.Phase != corev1.PodRunning {
+					continue
+				}
+				if first, dup := nodeOwner[p.Spec.NodeName]; dup {
+					failures = append(failures,
+						fmt.Sprintf("%s/%s: pods %s and %s are co-located on node %s",
+							ns, sts.Name, first, p.Name, p.Spec.NodeName))
+				} else {
+					nodeOwner[p.Spec.NodeName] = p.Name
+				}
+			}
+		}
+	}
+
+	if checkedCount == 0 {
+		printInfo(log, "  No quorum StatefulSets (spec.replicas==3) found (pre-install or non-HA install)")
+		ok := true
+		state.Tier2StatefulSetsOK = &ok
+		return
+	}
+
+	if len(failures) > 0 {
+		printError(log, fmt.Sprintf("Tier-2 quorum/placement failures (%d):", len(failures)))
+		for _, f := range failures {
+			printInfo(log, "  "+f)
+		}
+		state.Recommendations = append(state.Recommendations,
+			"Ensure Tier-2 StatefulSets (NATS, OpenBao, Cassandra) have 3 Ready pods each on distinct nodes.")
+		ok := false
+		state.Tier2StatefulSetsOK = &ok
+		return
+	}
+
+	printSuccess(log, fmt.Sprintf("All %d quorum StatefulSet(s): 3 Ready pods on distinct nodes", checkedCount))
+	ok := true
+	state.Tier2StatefulSetsOK = &ok
 }
 
 // checkConfigurableReachability probes user-defined endpoints loaded from the

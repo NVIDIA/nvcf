@@ -159,6 +159,9 @@ const (
 	CheckKeyGatewayRoutes       = "gateway_routes"
 	CheckKeyExternalLB          = "external_lb"
 	CheckKeyNodeToNode          = "node_to_node"
+	// HA readiness checks (CP Resilience SDD).
+	CheckKeyTier1Deployments  = "tier1_deployments"
+	CheckKeyTier2StatefulSets = "tier2_statefulsets"
 )
 
 // AllCheckKeys is the canonical ordering used for documentation and
@@ -182,6 +185,8 @@ var AllCheckKeys = []string{
 	CheckKeyGatewayRoutes,
 	CheckKeyExternalLB,
 	CheckKeyNodeToNode,
+	CheckKeyTier1Deployments,
+	CheckKeyTier2StatefulSets,
 }
 
 // buildSummary projects a ValidationState into the wire format. Checks
@@ -239,6 +244,12 @@ func buildSummary(state *ValidationState, startedAt time.Time, verdictReady bool
 	}
 	if state.NodeToNodeOK != nil {
 		s.Checks[CheckKeyNodeToNode] = *state.NodeToNodeOK
+	}
+	if state.Tier1DeploymentsOK != nil {
+		s.Checks[CheckKeyTier1Deployments] = *state.Tier1DeploymentsOK
+	}
+	if state.Tier2StatefulSetsOK != nil {
+		s.Checks[CheckKeyTier2StatefulSets] = *state.Tier2StatefulSetsOK
 	}
 
 	if len(state.EndpointResults) > 0 {

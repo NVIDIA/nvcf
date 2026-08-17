@@ -1317,6 +1317,9 @@ func clusterValidatorCheckKeys() []string {
 		"gateway_routes",
 		"external_lb",
 		"node_to_node",
+		// HA readiness keys (CP Resilience SDD).
+		"tier1_deployments",
+		"tier2_statefulsets",
 	}
 }
 

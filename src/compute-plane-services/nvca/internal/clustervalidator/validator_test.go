@@ -64,7 +64,7 @@ func TestRun_EmitMetricsGatesSummaryWrite(t *testing.T) {
 
 	t.Run("preflight (emitMetrics=false) does not write the summary", func(t *testing.T) {
 		client := fake.NewSimpleClientset()
-		_ = Run(context.Background(), client, nil, ns, "cluster-validator-network-checks", ns, false, "")
+		_ = Run(context.Background(), client, ns, "cluster-validator-network-checks", ns, false, "")
 		_, err := client.CoreV1().ConfigMaps(ns).Get(
 			context.Background(), SummaryConfigMapName, metav1.GetOptions{})
 		assert.True(t, apierrors.IsNotFound(err),
@@ -73,7 +73,7 @@ func TestRun_EmitMetricsGatesSummaryWrite(t *testing.T) {
 
 	t.Run("post-install (emitMetrics=true) writes the summary", func(t *testing.T) {
 		client := fake.NewSimpleClientset()
-		_ = Run(context.Background(), client, nil, ns, "cluster-validator-network-checks", ns, true, "")
+		_ = Run(context.Background(), client, ns, "cluster-validator-network-checks", ns, true, "")
 		cm, err := client.CoreV1().ConfigMaps(ns).Get(
 			context.Background(), SummaryConfigMapName, metav1.GetOptions{})
 		require.NoError(t, err, "summary ConfigMap must be written when emitMetrics=true")
@@ -85,7 +85,7 @@ func TestRun_EmitMetricsGatesSummaryWrite(t *testing.T) {
 		// Guards the decoupling: a non-operator config namespace must NOT
 		// redirect the summary away from the namespace the agent watches.
 		client := fake.NewSimpleClientset()
-		_ = Run(context.Background(), client, nil, "some-config-ns", "cluster-validator-network-checks", ns, true, "")
+		_ = Run(context.Background(), client, "some-config-ns", "cluster-validator-network-checks", ns, true, "")
 
 		_, err := client.CoreV1().ConfigMaps(ns).Get(
 			context.Background(), SummaryConfigMapName, metav1.GetOptions{})
@@ -103,7 +103,7 @@ func TestRun_EmitMetricsGatesSummaryWrite(t *testing.T) {
 // because of missing StorageClass or Gateway CRDs, not because of GPUAvailable.
 func TestRun_ControlPlaneRoleSkipsGPUChecks(t *testing.T) {
 	client := fake.NewSimpleClientset(makeNode("node-1", true, 0))
-	err := Run(context.Background(), client, nil, "ns", "cfg", "ns", false, RoleControlPlane)
+	err := Run(context.Background(), client, "ns", "cfg", "ns", false, RoleControlPlane)
 	// A bare fake cluster fails control-plane checks (no StorageClass, no Gateway CRDs).
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "NVCF-Not-Ready",
