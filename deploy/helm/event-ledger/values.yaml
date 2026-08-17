@@ -115,6 +115,8 @@ eventLedger:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+  topologySpreadConstraints: []
+  priorityClassName: ""
 
   ports:
     - name: api-port
