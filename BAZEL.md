@@ -166,6 +166,28 @@ the target name.
 Each Java component's `BAZEL.md` shows the same mapping with names from that
 component.
 
+### Java test and coverage target selection
+
+The shared Java macros use an intentional test-selection contract:
+
+- `nvcf_java_test` creates the native `java_test` target used by IntelliJ and
+  direct test commands. The macro adds `manual` so wildcard target patterns do
+  not select it.
+- `nvcf_java_coverage_test` creates the report-producing wrapper. The macro
+  does not add `manual`, so wildcard test patterns select this target. It runs
+  the native Java target once and writes the JUnit and JaCoCo artifacts used by
+  CI.
+
+This arrangement avoids running the same suite once as a native Java test and
+again for coverage. The IntelliJ project view sets
+`allow_manual_targets_sync: true`, so the `manual` tag does not hide the native
+test target from the IDE.
+
+Do not move `manual` from `nvcf_java_test` to
+`nvcf_java_coverage_test` as an isolated cleanup. Such a change must also
+update target selection in `.github/workflows/bazel.yml`, Java artifact
+staging, and the component test documentation.
+
 Set a portable output root once per local shell:
 
 ```bash
