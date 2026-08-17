@@ -161,6 +161,7 @@ go_test(
         "//src/compute-plane-services/nvca/internal/metrics",
         "//src/compute-plane-services/nvca/internal/miniservice/chartcache",
         "//src/compute-plane-services/nvca/internal/otel",
+        "//src/compute-plane-services/nvca/internal/transporttls",
         "//src/compute-plane-services/nvca/internal/util/k8sutil",
         "//src/compute-plane-services/nvca/internal/util/k8sutil/mock",
         "//src/compute-plane-services/nvca/pkg/apis/nvca/v1:nvca",

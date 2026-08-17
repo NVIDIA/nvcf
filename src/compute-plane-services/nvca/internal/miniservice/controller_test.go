@@ -54,6 +54,7 @@ import (
 	nvcaenvtest "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/envtest"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/icms"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/transporttls"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	k8smock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil/mock"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
@@ -118,6 +119,7 @@ func TestController(t *testing.T) {
 
 	fff := &featureflagmock.Fetcher{
 		EnabledFFs: []*featureflag.FeatureFlag{
+			featureflag.EnforceHelmFunctionResourceLimits,
 			featureflag.HelmRBACEnforcement,
 		},
 		EnabledAttrs: []*featureflag.Attribute{
@@ -209,6 +211,15 @@ func TestController(t *testing.T) {
 				},
 			},
 		},
+		Workload: nvcaconfig.WorkloadConfig{
+			TransportTLS: &nvcaconfig.TransportTLSConfig{
+				TrustMode:                nvcaconfig.TrustModeBundle,
+				TrustBundleConfigMapName: "nvcf-transport-trust-bundle",
+				TrustBundleKey:           "nvcf-ca-bundle.pem",
+				TrustBundleFingerprint:   testTransportTLSRootFingerprint,
+				TrustBundlePEM:           testTransportTLSRootCertPEM,
+			},
+		},
 	}
 	err = k8sutil.SetConfigDefaultResources(&cfg)
 	require.NoError(t, err)
@@ -238,6 +249,7 @@ func TestController(t *testing.T) {
 		{Name: "INFERENCE_PROTOCOL", Value: "GRPC"},
 		{Name: "INFERENCE_URL", Value: "/grpc"},
 		{Name: "INIT_CONTAINER", Value: "registry.example.test/nvcf-core/nvcf_worker_init:0.24.10"},
+		{Name: "LLM_REQUEST_ROUTER_ADDRESS", Value: "llm-router.example.test:443"},
 		{Name: "MAX_REQUEST_CONCURRENCY", Value: "1"},
 		{Name: "NVCF_FQDN", Value: "https://api.example.test"},
 		{Name: "NVCF_FQDN_GRPC", Value: "https://grpc.example.test"},
@@ -258,7 +270,7 @@ func TestController(t *testing.T) {
 		FunctionDetails: function.Details{
 			FunctionID:        "funcid-1",
 			FunctionVersionID: "funcverid-1",
-			FunctionType:      "DEFAULT",
+			FunctionType:      function.FunctionTypeLLM,
 		},
 		Action:         common.FunctionCreationAction,
 		NCAId:          "ncaid-1",
@@ -396,6 +408,26 @@ rules:
 		err = crclient.Get(ctx, client.ObjectKey{Name: "utils", Namespace: ms.Spec.Namespace}, utilsPod)
 		assert.NoError(collect, err)
 	}, 2*time.Second, 100*time.Millisecond)
+
+	llmWorker := findWorkloadContainer(utilsPod.Spec, function.LLMWorkerContainerName)
+	require.NotNil(t, llmWorker)
+	installContainer := findWorkloadInitContainer(utilsPod.Spec, transporttls.InstallContainerName)
+	require.NotNil(t, installContainer)
+	assert.Equal(t, llmWorker.Resources, installContainer.Resources)
+	assert.NotNil(t, findWorkloadVolume(utilsPod.Spec, transporttls.TrustBundleVolumeName))
+	assert.NotNil(t, findWorkloadVolume(utilsPod.Spec, transporttls.MergedCertsVolumeName))
+	assert.Equal(t, transporttls.SystemCertFile,
+		findWorkloadEnvValue(llmWorker, transporttls.CertPathEnv))
+	assert.NotNil(t, findWorkloadVolumeMount(llmWorker, transporttls.MergedCertsVolumeName))
+
+	trustConfigMap := &corev1.ConfigMap{}
+	require.NoError(t, crclient.Get(ctx, client.ObjectKey{
+		Name:      "nvcf-transport-trust-bundle",
+		Namespace: ms.Spec.Namespace,
+	}, trustConfigMap))
+	assert.Equal(t, testTransportTLSRootCertPEM, trustConfigMap.Data["nvcf-ca-bundle.pem"])
+	assert.Equal(t, testTransportTLSRootFingerprint,
+		trustConfigMap.Data[transporttls.TrustBundleFingerprintKey])
 
 	utilsPod.Status.Phase = corev1.PodRunning
 	utilsPod.Status.Conditions = []corev1.PodCondition{
