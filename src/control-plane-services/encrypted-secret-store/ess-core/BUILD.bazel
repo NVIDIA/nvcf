@@ -1,4 +1,4 @@
-load("//rules/java:defs.bzl", "nv_boot_library", "nv_boot_library_test")
+load("//rules/java:defs.bzl", "nvcf_java_coverage_test", "nvcf_java_library", "nvcf_java_test")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -77,11 +77,11 @@ ESS_CORE_DEPS = [
     "@nv_third_party_deps//:tools_jackson_core_jackson_databind",
 ]
 
-nv_boot_library(
+nvcf_java_library(
     name = "ess_core",
     srcs = ESS_CORE_SRCS,
     deps = ESS_CORE_DEPS,
-    javacopts = ["-parameters", "--release", "25"],
+    javacopts = ["-parameters"],
     runtime_deps = [
         "@nv_third_party_deps//:io_projectreactor_reactor_tools",
         "@nv_third_party_deps//:net_logstash_logback_logstash_logback_encoder",
@@ -109,27 +109,14 @@ ESS_CORE_TEST_DEPS = ESS_CORE_DEPS + [
     "@nv_third_party_deps//:org_wiremock_wiremock_standalone",
 ]
 
-nv_boot_library_test(
-    name = "unit_tests",
-    coverage_library = ":ess_core",
-    include_classname = ".*(Test|Tests)",
-    javacopts = ["-parameters", "--release", "25", "-Xep:ReturnValueIgnored:OFF"],
-    resource_strip_prefix = "src/control-plane-services/encrypted-secret-store/ess-core/src/test/resources",
-    resources = ESS_CORE_TEST_RESOURCES,
-    srcs = ESS_CORE_TEST_SRCS,
-    deps = ESS_CORE_TEST_DEPS,
-    timeout = "long",
-)
-
-nv_boot_library_test(
-    name = "integration_tests",
-    coverage_library = ":ess_core",
+nvcf_java_test(
+    name = "tests",
     data = [
         "//src/control-plane-services/encrypted-secret-store:secrets_json",
         "//src/control-plane-services/encrypted-secret-store:test_local_env",
     ],
-    include_classname = ".*IT",
-    javacopts = ["-parameters", "--release", "25", "-Xep:ReturnValueIgnored:OFF"],
+    include_classname = ".*(Test|Tests|IT|IntegrationTest)",
+    javacopts = ["-parameters", "-Xep:ReturnValueIgnored:OFF"],
     jvm_flags = [
         "-Dspring.main.web-application-type=reactive",
     ],
@@ -145,5 +132,65 @@ nv_boot_library_test(
         "requires-docker",
     ],
     deps = ESS_CORE_TEST_DEPS,
+    timeout = "long",
+)
+
+nvcf_java_test(
+    name = "unit_tests_runner",
+    include_classname = ".*(Test|Tests)",
+    ide_visible = False,
+    javacopts = ["-parameters", "-Xep:ReturnValueIgnored:OFF"],
+    resource_strip_prefix = "src/control-plane-services/encrypted-secret-store/ess-core/src/test/resources",
+    resources = ESS_CORE_TEST_RESOURCES,
+    srcs = ESS_CORE_TEST_SRCS,
+    deps = ESS_CORE_TEST_DEPS,
+    timeout = "long",
+)
+
+nvcf_java_coverage_test(
+    name = "unit_tests",
+    coverage_target = ":ess_core",
+    include_classname = ".*(Test|Tests)",
+    test = ":unit_tests_runner",
+    timeout = "long",
+)
+
+nvcf_java_test(
+    name = "integration_tests_runner",
+    data = [
+        "//src/control-plane-services/encrypted-secret-store:secrets_json",
+        "//src/control-plane-services/encrypted-secret-store:test_local_env",
+    ],
+    include_classname = ".*IT",
+    ide_visible = False,
+    javacopts = ["-parameters", "-Xep:ReturnValueIgnored:OFF"],
+    jvm_flags = [
+        "-Dspring.main.web-application-type=reactive",
+    ],
+    resource_strip_prefix = "src/control-plane-services/encrypted-secret-store/ess-core/src/test/resources",
+    resources = ESS_CORE_TEST_RESOURCES,
+    runtime_deps = [
+        "//src/control-plane-services/encrypted-secret-store:local_env_resources",
+    ],
+    size = "large",
+    srcs = ESS_CORE_TEST_SRCS,
+    tags = [
+        "exclusive",
+        "requires-docker",
+    ],
+    deps = ESS_CORE_TEST_DEPS,
+    timeout = "long",
+)
+
+nvcf_java_coverage_test(
+    name = "integration_tests",
+    coverage_target = ":ess_core",
+    include_classname = ".*IT",
+    size = "large",
+    tags = [
+        "exclusive",
+        "requires-docker",
+    ],
+    test = ":integration_tests_runner",
     timeout = "long",
 )

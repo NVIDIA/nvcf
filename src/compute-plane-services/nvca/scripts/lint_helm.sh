@@ -304,6 +304,8 @@ assert_transport_trust_config "reuse-values upgrade simulation" "" "" "" \
   --values "${reuse_values_file}" \
   --set "operatorConfig=null"
 
+bash "${repo_root}/scripts/test_transport_trust_validation.sh"
+
 # Test secret mirroring feature
 # Test with only source namespace (should not add args)
 run_lint nvca-operator --set "agent.secretMirror.sourceNamespace=custom-ns" --set "ngcConfig.serviceKey=fakekey"

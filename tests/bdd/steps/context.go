@@ -39,11 +39,11 @@ import (
 // suite (so the Ledger and CommandCache persist); LastResult,
 // LastErr, and LastCommand are reset per scenario inside the Before
 // hook installed by RegisterAll. LastCommand tracks the resolved text
-// of the most recent command executed in this scenario; a successful
-// "the command exit code should be 0" assertion uses it to seed the
-// suite-level CommandCache so a subsequent "Given command has
-// succeeded:" for the same resolved text hits the cache instead of
-// rerunning a destructive command.
+// of the most recent command executed in this scenario. A successful-run step
+// or an explicit "the command exit code should be 0" assertion uses it to seed
+// the suite-level CommandCache so a subsequent "Given command has succeeded:"
+// for the same resolved text hits the cache instead of rerunning a destructive
+// command.
 type ScenarioContext struct {
 	Suite       *harness.Suite
 	LastResult  harness.Result

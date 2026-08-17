@@ -1,4 +1,4 @@
-load("//rules/java:defs.bzl", "nv_boot_library", "nv_boot_library_test")
+load("//rules/java:defs.bzl", "nvcf_java_coverage_test", "nvcf_java_test", "nv_boot_library")
 
 CASSANDRA_COMPILE_DEPS = [
     "@nv_third_party_deps//:at_yawk_lz4_lz4_java",
@@ -53,10 +53,9 @@ nv_boot_library(
     deps = CASSANDRA_COMPILE_DEPS,
 )
 
-nv_boot_library_test(
+nvcf_java_test(
     name = "tests",
     srcs = glob(["src/test/java/**/*.java"]),
-    coverage_library = ":nv_boot_starter_cassandra",
     resource_strip_prefix = "src/libraries/java/nv-boot-parent/nv-boot-starter-cassandra/src/test/resources",
     resources = glob(["src/test/resources/**"]),
     deps = CASSANDRA_TEST_DEPS,
@@ -65,5 +64,17 @@ nv_boot_library_test(
         "integration",
         "requires-docker",
     ],
+    timeout = "long",
+)
+
+nvcf_java_coverage_test(
+    name = "tests_coverage",
+    coverage_target = ":nv_boot_starter_cassandra",
+    size = "large",
+    tags = [
+        "integration",
+        "requires-docker",
+    ],
+    test = ":tests",
     timeout = "long",
 )

@@ -1,4 +1,4 @@
-load("//rules/java:defs.bzl", "nv_boot_library", "nv_boot_library_test")
+load("//rules/java:defs.bzl", "nvcf_java_coverage_test", "nvcf_java_library", "nvcf_java_test")
 load("//rules/java:spring.bzl", "spring_boot_app")
 load("//rules/oci:defs.bzl", "java_image_contract_test", "java_oci_image")
 
@@ -22,7 +22,7 @@ ICMS_SERVICE_DEPS = [
     "@nv_third_party_deps//:io_swagger_core_v3_swagger_annotations_jakarta",
 ]
 
-nv_boot_library(
+nvcf_java_library(
     name = "app_classes",
     srcs = ICMS_SERVICE_SRCS,
     deps = ICMS_SERVICE_DEPS,
@@ -45,9 +45,8 @@ spring_boot_app(
     main_class = "com.nvidia.icms.App",
 )
 
-nv_boot_library_test(
+nvcf_java_test(
     name = "tests",
-    coverage_library = ":app_classes",
     srcs = ICMS_SERVICE_TEST_SRCS,
     deps = ICMS_SERVICE_DEPS + [
         ":app_classes",
@@ -72,6 +71,17 @@ nv_boot_library_test(
         "exclusive",
         "requires-docker",
     ],
+    timeout = "long",
+)
+
+nvcf_java_coverage_test(
+    name = "tests_coverage",
+    coverage_target = ":app_classes",
+    tags = [
+        "exclusive",
+        "requires-docker",
+    ],
+    test = ":tests",
     timeout = "long",
 )
 

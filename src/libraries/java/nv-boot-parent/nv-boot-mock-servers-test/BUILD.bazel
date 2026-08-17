@@ -1,4 +1,4 @@
-load("//rules/java:defs.bzl", "nv_boot_library", "nv_boot_library_test")
+load("//rules/java:defs.bzl", "nvcf_java_coverage_test", "nvcf_java_test", "nv_boot_library")
 
 MOCK_SERVERS_COMPILE_DEPS = [
     "@nv_third_party_deps//:com_fasterxml_jackson_core_jackson_annotations",
@@ -26,14 +26,22 @@ nv_boot_library(
     deps = MOCK_SERVERS_COMPILE_DEPS,
 )
 
-nv_boot_library_test(
+nvcf_java_test(
     name = "tests",
     srcs = glob(["src/test/java/**/*.java"]),
-    coverage_library = ":nv_boot_mock_servers_test",
     deps = [
         ":nv_boot_mock_servers_test",
     ] + MOCK_SERVERS_COMPILE_DEPS,
     size = "medium",
     tags = ["exclusive"],
+    timeout = "moderate",
+)
+
+nvcf_java_coverage_test(
+    name = "tests_coverage",
+    coverage_target = ":nv_boot_mock_servers_test",
+    size = "medium",
+    tags = ["exclusive"],
+    test = ":tests",
     timeout = "moderate",
 )
