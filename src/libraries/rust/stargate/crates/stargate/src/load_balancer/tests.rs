@@ -144,7 +144,7 @@ fn seeded_pulsar_algorithm_config(seed: &str) -> LoadBalancerAlgorithmConfig {
 #[test]
 fn set_seed_reports_unsupported_algorithms_without_panicking() {
     for algorithm in [
-        LoadBalancerAlgorithm::PowerOfTwo,
+        LoadBalancerAlgorithm::PowerOfN,
         LoadBalancerAlgorithm::RoundRobin,
         LoadBalancerAlgorithm::Random,
     ] {
@@ -571,7 +571,7 @@ where
 fn assert_algorithm_overrides(raw: impl Fn(LoadBalancerAlgorithm) -> String) {
     for algorithm in [
         LoadBalancerAlgorithm::WaitAndWiden,
-        LoadBalancerAlgorithm::PowerOfTwo,
+        LoadBalancerAlgorithm::PowerOfN,
         LoadBalancerAlgorithm::Pulsar,
         LoadBalancerAlgorithm::PulsarWaitAndWiden,
         LoadBalancerAlgorithm::Random,
@@ -604,7 +604,7 @@ fn simple_model_config_parses_to_algorithm_enum() {
 #[test]
 fn detailed_model_config_parses_input_work_admission_limit() {
     let config: LoadBalancerConfig = parse_json(
-        r#"{"models":{"model-a":{"algorithm":"power-of-two","max_input_work_seconds":2.5}}}"#,
+        r#"{"models":{"model-a":{"algorithm":"power-of-n","max_input_work_seconds":2.5}}}"#,
     );
 
     let detailed = config
@@ -714,9 +714,193 @@ fn algorithm_specific_load_balancer_fields_are_rejected_for_other_algorithms() {
             r#"{"algorithm":"wait-and-widen","consider_kv_free_tokens":true}"#,
             "consider_kv_free_tokens",
         ),
+        (r#"{"algorithm":"random","sample_count":4}"#, "sample_count"),
+        (
+            r#"{"algorithm":"random","comparator":"ttft"}"#,
+            "comparator",
+        ),
     ] {
         assert_json_rejected::<LoadBalancerAlgorithmConfig>(raw, expected_field);
     }
+}
+
+#[test]
+fn power_of_n_sample_count_defaults_to_two() {
+    let config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::PowerOfN);
+    let settings = config
+        .power_of_n_settings()
+        .expect("power-of-n config should expose settings");
+
+    assert_eq!(settings.sample_count, 2);
+}
+
+#[test]
+fn comparator_defaults_to_ttft_only_for_supported_algorithms() {
+    for algorithm in [
+        LoadBalancerAlgorithm::PowerOfN,
+        LoadBalancerAlgorithm::WaitAndWiden,
+    ] {
+        assert_eq!(
+            LoadBalancerAlgorithmConfig::from(algorithm).comparator(),
+            Some(ClusterComparator::Ttft)
+        );
+    }
+
+    for algorithm in [
+        LoadBalancerAlgorithm::RoundRobin,
+        LoadBalancerAlgorithm::Random,
+        LoadBalancerAlgorithm::Pulsar,
+        LoadBalancerAlgorithm::PulsarWaitAndWiden,
+    ] {
+        assert_eq!(
+            LoadBalancerAlgorithmConfig::from(algorithm).comparator(),
+            None
+        );
+    }
+}
+
+#[test]
+fn configured_comparators_resolve_for_models_and_request_overrides() {
+    let direct: LoadBalancerAlgorithmConfig =
+        parse_json(r#"{"algorithm":"power-of-n","comparator":"input-work-seconds"}"#);
+    assert_eq!(
+        direct.comparator(),
+        Some(ClusterComparator::InputWorkSeconds)
+    );
+
+    let router = router_from_json(
+        r#"{"default":"random","request_algorithms":{"power-of-n":{"algorithm":"power-of-n","comparator":"queue-time"}},"models":{"model-a":{"algorithm":"wait-and-widen","comparator":"utilization","request_algorithms":{"power-of-n":{"algorithm":"power-of-n","comparator":"num-requests-queued"}}}}}"#,
+    );
+    assert_eq!(
+        router.algorithm_config("model-a").comparator(),
+        Some(ClusterComparator::Utilization)
+    );
+
+    let override_header = LoadBalancerAlgorithmOverride::parse("power-of-n")
+        .expect("power-of-n override should parse");
+    assert_eq!(
+        router
+            .resolve_algorithm_override("model-a", Some(&override_header))
+            .expect("model request override should resolve")
+            .config()
+            .comparator(),
+        Some(ClusterComparator::NumRequestsQueued)
+    );
+    assert_eq!(
+        router
+            .resolve_algorithm_override("model-b", Some(&override_header))
+            .expect("top-level request override should resolve")
+            .config()
+            .comparator(),
+        Some(ClusterComparator::QueueTime)
+    );
+}
+
+#[test]
+fn pulsar_wait_and_widen_rejects_explicit_comparator() {
+    let config: LoadBalancerConfig = parse_json(
+        r#"{"models":{"model-a":{"algorithm":"pulsar-wait-and-widen","comparator":"ttft"}}}"#,
+    );
+    let error = match LoadBalancerRouter::from_config(&config) {
+        Ok(_) => panic!("pulsar-wait-and-widen comparator should be rejected"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("comparator is not supported for pulsar-wait-and-widen")
+    );
+    assert_json_rejected::<LoadBalancerAlgorithmConfig>(
+        r#"{"algorithm":"pulsar-wait-and-widen","comparator":null}"#,
+        "invalid type: null",
+    );
+}
+
+#[test]
+fn detailed_power_of_n_sample_count_parses_in_every_supported_context() {
+    let direct: LoadBalancerAlgorithmConfig =
+        parse_json(r#"{"algorithm":"power-of-n","sample_count":1}"#);
+    assert_eq!(
+        direct
+            .power_of_n_settings()
+            .expect("direct config should expose settings")
+            .sample_count,
+        1
+    );
+
+    let router = router_from_json(
+        r#"{"default":"random","request_algorithms":{"power-of-n":{"algorithm":"power-of-n","sample_count":4}},"models":{"model-a":{"algorithm":"power-of-n","sample_count":8,"request_algorithms":{"power-of-n":{"algorithm":"power-of-n","sample_count":64}}}}}"#,
+    );
+    assert_eq!(
+        router
+            .algorithm_config("model-a")
+            .power_of_n_settings()
+            .expect("model config should expose settings")
+            .sample_count,
+        8
+    );
+
+    let override_header = LoadBalancerAlgorithmOverride::parse("power-of-n")
+        .expect("power-of-n override should parse");
+    let model_override = router
+        .resolve_algorithm_override("model-a", Some(&override_header))
+        .expect("model override should resolve");
+    let default_override = router
+        .resolve_algorithm_override("model-b", Some(&override_header))
+        .expect("top-level override should resolve");
+    assert_eq!(
+        model_override
+            .config()
+            .power_of_n_settings()
+            .expect("model override should expose settings")
+            .sample_count,
+        8,
+        "the configured model algorithm takes precedence over its same-algorithm override"
+    );
+    assert_eq!(
+        default_override
+            .config()
+            .power_of_n_settings()
+            .expect("top-level override should expose settings")
+            .sample_count,
+        4
+    );
+
+    let nested_router = router_from_json(
+        r#"{"default":"random","models":{"model-a":{"algorithm":"random","request_algorithms":{"power-of-n":{"algorithm":"power-of-n","sample_count":64}}}}}"#,
+    );
+    let nested_override = nested_router
+        .resolve_algorithm_override("model-a", Some(&override_header))
+        .expect("nested override should resolve");
+    assert_eq!(
+        nested_override
+            .config()
+            .power_of_n_settings()
+            .expect("nested override should expose settings")
+            .sample_count,
+        64
+    );
+}
+
+#[test]
+fn invalid_power_of_n_sample_counts_are_rejected_with_field_context() {
+    for sample_count in [0, MAX_POWER_OF_N_SAMPLE_COUNT + 1] {
+        assert_json_rejected::<LoadBalancerAlgorithmConfig>(
+            &format!(r#"{{"algorithm":"power-of-n","sample_count":{sample_count}}}"#),
+            "power-of-n sample_count must be between 1 and 64",
+        );
+    }
+
+    let mut config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::PowerOfN);
+    config
+        .power_of_n_settings_mut()
+        .expect("power-of-n config should expose mutable settings")
+        .sample_count = 0;
+    let error = match create_load_balancer_with_config(&config) {
+        Ok(_) => panic!("programmatic invalid sample count should fail"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("power-of-n sample_count"));
 }
 
 #[test]
@@ -724,7 +908,7 @@ fn detailed_algorithm_configs_preserve_all_variant_identities() {
     use LoadBalancerAlgorithm::*;
 
     for (raw, expected, expected_seed, considers_kv_free_tokens) in [
-        (r#"{"algorithm":"power-of-two"}"#, PowerOfTwo, None, false),
+        (r#"{"algorithm":"power-of-n"}"#, PowerOfN, None, false),
         (
             r#"{"algorithm":"wait-and-widen","seed":"wait-and-widen-seed"}"#,
             WaitAndWiden,
@@ -756,7 +940,7 @@ fn detailed_algorithm_configs_preserve_all_variant_identities() {
 #[test]
 fn unknown_load_balancer_config_fields_are_rejected() {
     assert_json_rejected::<LoadBalancerConfig>(
-        r#"{"default":"power-of-two","unused_top_level_field":true,"models":{"model-a":{"algorithm":"pulsar","unused_model_field":123}}}"#,
+        r#"{"default":"power-of-n","unused_top_level_field":true,"models":{"model-a":{"algorithm":"pulsar","unused_model_field":123}}}"#,
         "unused_top_level_field",
     );
 }
@@ -828,7 +1012,7 @@ fn published_load_balancer_configuration_examples_parse() {
 #[test]
 fn detailed_model_config_parses_for_pulsar() {
     let router = router_from_json(
-        r#"{"default":"power-of-two","models":{"model-a":{"algorithm":"pulsar","seed":"seed-1","require_cache_affinity_key":true,"consider_kv_free_tokens":true}}}"#,
+        r#"{"default":"power-of-n","models":{"model-a":{"algorithm":"pulsar","seed":"seed-1","require_cache_affinity_key":true,"consider_kv_free_tokens":true}}}"#,
     );
     let model_config = router.algorithm_config("model-a");
     assert_eq!(model_config.algorithm(), LoadBalancerAlgorithm::Pulsar);
@@ -849,7 +1033,7 @@ fn kv_free_token_consideration_is_rejected_for_non_pulsar_algorithms() {
 #[test]
 fn detailed_model_config_parses_for_pulsar_wait_and_widen() {
     let router = router_from_json(
-        r#"{"default":"power-of-two","models":{"model-a":{"algorithm":"pulsar-wait-and-widen","seed":"seed-1","require_cache_affinity_key":true,"require_input_tokens":true,"max_queue_time_floor_ms":100,"max_queue_time_ceil_ms":100,"ttft_bucket_size_ms":50,"n":2}}}"#,
+        r#"{"default":"power-of-n","models":{"model-a":{"algorithm":"pulsar-wait-and-widen","seed":"seed-1","require_cache_affinity_key":true,"require_input_tokens":true,"max_queue_time_floor_ms":100,"max_queue_time_ceil_ms":100,"ttft_bucket_size_ms":50,"n":2}}}"#,
     );
     let model_config = router.algorithm_config("model-a");
     assert_eq!(
@@ -907,7 +1091,7 @@ fn legacy_algorithm_names_remain_compatible_in_short_configs() {
 #[test]
 fn legacy_algorithm_names_remain_compatible_in_detailed_configs() {
     let router = router_from_json(
-        r#"{"default":"power-of-two","models":{"wait-model":{"algorithm":"groq-multiregion","seed":"seed-1"},"pulsar-model":{"algorithm":"pulsar-multiregion","seed":"seed-2","max_queue_time_floor_ms":100,"max_queue_time_ceil_ms":200}}}"#,
+        r#"{"default":"power-of-n","models":{"wait-model":{"algorithm":"groq-multiregion","seed":"seed-1"},"pulsar-model":{"algorithm":"pulsar-multiregion","seed":"seed-2","max_queue_time_floor_ms":100,"max_queue_time_ceil_ms":200}}}"#,
     );
 
     assert_eq!(
@@ -927,7 +1111,7 @@ fn legacy_algorithm_names_remain_compatible_in_detailed_configs() {
 #[test]
 fn detailed_model_config_parses_wait_and_widen_cache_affinity() {
     let router = router_from_json(
-        r#"{"default":"power-of-two","models":{"model-a":{"algorithm":"wait-and-widen","seed":"seed-1","require_cache_affinity_key":true,"cache_affinity_virtual_nodes":64,"cache_affinity_backend_selection_count":2}}}"#,
+        r#"{"default":"power-of-n","models":{"model-a":{"algorithm":"wait-and-widen","seed":"seed-1","require_cache_affinity_key":true,"cache_affinity_virtual_nodes":64,"cache_affinity_backend_selection_count":2}}}"#,
     );
     let model_config = router.algorithm_config("model-a");
     assert_eq!(
@@ -947,7 +1131,7 @@ fn detailed_model_config_parses_wait_and_widen_cache_affinity() {
 #[test]
 fn request_algorithms_parse_and_override_default_selection() {
     let router = router_from_json(
-        r#"{"default":"power-of-two","request_algorithms":{"round-robin":"round-robin"}}"#,
+        r#"{"default":"power-of-n","request_algorithms":{"round-robin":"round-robin"}}"#,
     );
     let target = target_with_model("model-a");
     let request = request(&target, None, None);
@@ -987,7 +1171,7 @@ fn choose_candidate_returns_slice_index_for_selected_cluster() {
 #[test]
 fn choose_candidate_with_resolution_preserves_algorithm_metadata() {
     let router = router_from_json(
-        r#"{"default":"power-of-two","request_algorithms":{"round-robin":"round-robin"}}"#,
+        r#"{"default":"power-of-n","request_algorithms":{"round-robin":"round-robin"}}"#,
     );
     let target = target_with_model("model-a");
     let request = request(&target, None, None);
@@ -1022,7 +1206,7 @@ fn choose_candidate_with_resolution_preserves_algorithm_metadata() {
 #[test]
 fn model_request_algorithms_override_top_level_request_algorithms() {
     let router = router_from_json(
-        r#"{"default":"power-of-two","request_algorithms":{"round-robin":"round-robin"},"models":{"model-a":{"algorithm":"power-of-two","request_algorithms":{"round-robin":{"algorithm":"round-robin","require_input_tokens":true}}}}}"#,
+        r#"{"default":"power-of-n","request_algorithms":{"round-robin":"round-robin"},"models":{"model-a":{"algorithm":"power-of-n","request_algorithms":{"round-robin":{"algorithm":"round-robin","require_input_tokens":true}}}}}"#,
     );
     let algorithm_override = LoadBalancerAlgorithmOverride::parse("round-robin")
         .expect("routing algorithm override should parse");
@@ -1041,7 +1225,7 @@ fn model_request_algorithms_override_top_level_request_algorithms() {
 #[test]
 fn request_algorithm_key_must_match_configured_algorithm() {
     let config: LoadBalancerConfig =
-        parse_json(r#"{"default":"power-of-two","request_algorithms":{"random":"round-robin"}}"#);
+        parse_json(r#"{"default":"power-of-n","request_algorithms":{"random":"round-robin"}}"#);
 
     let err = match LoadBalancerRouter::from_config(&config) {
         Ok(_) => panic!("mismatched request algorithm should fail"),
@@ -1091,7 +1275,7 @@ fn wait_and_widen_config_resolves_internal_defaults() {
 #[test]
 fn router_reports_wait_and_widen_algorithm_name() {
     let router = router_with_model(
-        LoadBalancerAlgorithm::PowerOfTwo,
+        LoadBalancerAlgorithm::PowerOfN,
         "model-a",
         LoadBalancerModelConfig::Name(LoadBalancerAlgorithm::WaitAndWiden),
     );
@@ -1170,7 +1354,7 @@ fn target_state_distinguishes_independent_router_definitions() {
 #[test]
 fn configured_round_robin_uses_independent_sequences_per_routing_target() {
     let router = router_with_model(
-        LoadBalancerAlgorithm::PowerOfTwo,
+        LoadBalancerAlgorithm::PowerOfN,
         "shared-model",
         LoadBalancerModelConfig::Name(LoadBalancerAlgorithm::RoundRobin),
     );
@@ -1203,7 +1387,7 @@ fn choose_with_no_candidates_does_not_cache_default_lb_for_target() {
 #[test]
 fn request_round_robin_override_uses_stable_per_target_sequence() {
     let router = router_with_options(
-        LoadBalancerAlgorithm::PowerOfTwo,
+        LoadBalancerAlgorithm::PowerOfN,
         &[LoadBalancerAlgorithm::RoundRobin],
         None,
     );
@@ -1232,24 +1416,19 @@ fn request_round_robin_override_uses_stable_per_target_sequence() {
 fn configured_request_override_creates_target_local_balancer() {
     let router = router_with_options(
         LoadBalancerAlgorithm::RoundRobin,
-        &[LoadBalancerAlgorithm::PowerOfTwo],
+        &[LoadBalancerAlgorithm::PowerOfN],
         None,
     );
     let target = target_with_model("model-a");
     let request = request(&target, None, None);
     let candidates = candidates(&["cluster-0", "cluster-1"]);
     let target_state = LoadBalancerTargetState::default();
-    let selection = choose_with_override(
-        &router,
-        &target_state,
-        &request,
-        &candidates,
-        "power-of-two",
-    );
+    let selection =
+        choose_with_override(&router, &target_state, &request, &candidates, "power-of-n");
 
     assert_eq!(
         selection.effective_algorithm,
-        LoadBalancerAlgorithm::PowerOfTwo
+        LoadBalancerAlgorithm::PowerOfN
     );
     assert_eq!(target_state.instance_count(), 1);
 }
@@ -1277,7 +1456,7 @@ fn matching_round_robin_override_reuses_configured_target_sequence() {
 #[test]
 fn request_round_robin_override_keeps_routing_targets_isolated() {
     let router = router_with_options(
-        LoadBalancerAlgorithm::PowerOfTwo,
+        LoadBalancerAlgorithm::PowerOfN,
         &[LoadBalancerAlgorithm::RoundRobin],
         None,
     );
@@ -1302,8 +1481,8 @@ fn request_round_robin_override_keeps_routing_targets_isolated() {
 #[test]
 fn request_override_beats_configured_model_algorithm() {
     let router = router_with_options(
-        LoadBalancerAlgorithm::PowerOfTwo,
-        &[LoadBalancerAlgorithm::PowerOfTwo],
+        LoadBalancerAlgorithm::PowerOfN,
+        &[LoadBalancerAlgorithm::PowerOfN],
         Some((
             "shared-model",
             LoadBalancerModelConfig::Name(LoadBalancerAlgorithm::RoundRobin),
@@ -1313,17 +1492,12 @@ fn request_override_beats_configured_model_algorithm() {
     let request = request(&target, None, None);
     let candidates = candidates(&["cluster-0", "cluster-1"]);
     let target_state = LoadBalancerTargetState::default();
-    let selection = choose_with_override(
-        &router,
-        &target_state,
-        &request,
-        &candidates,
-        "power_of_two",
-    );
+    let selection =
+        choose_with_override(&router, &target_state, &request, &candidates, "power_of_n");
 
     assert_eq!(
         selection.effective_algorithm,
-        LoadBalancerAlgorithm::PowerOfTwo
+        LoadBalancerAlgorithm::PowerOfN
     );
 }
 
@@ -1333,7 +1507,7 @@ fn matching_request_override_reuses_configured_algorithm_config() {
         LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::RoundRobin);
     round_robin_config.request_policy_mut().require_input_tokens = true;
     let router = router_with_model(
-        LoadBalancerAlgorithm::PowerOfTwo,
+        LoadBalancerAlgorithm::PowerOfN,
         "shared-model",
         LoadBalancerModelConfig::Detailed(Box::new(round_robin_config)),
     );
@@ -1356,7 +1530,7 @@ fn matching_model_algorithm_beats_top_level_request_config() {
     let mut pulsar_config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::Pulsar);
     pulsar_config.request_policy_mut().require_input_tokens = true;
     let router = router_with_options(
-        LoadBalancerAlgorithm::PowerOfTwo,
+        LoadBalancerAlgorithm::PowerOfN,
         &[LoadBalancerAlgorithm::Pulsar],
         Some((
             "shared-model",
@@ -1376,7 +1550,7 @@ fn matching_model_algorithm_beats_top_level_request_config() {
 
 #[test]
 fn known_unavailable_request_override_returns_error() {
-    let router = router_with_default(LoadBalancerAlgorithm::PowerOfTwo);
+    let router = router_with_default(LoadBalancerAlgorithm::PowerOfN);
     let target = target_with_model("shared-model");
     let request = request(&target, None, None);
     let candidates = candidates(&["cluster-0", "cluster-1"]);
@@ -1437,7 +1611,8 @@ fn permissive_default_resolves_alias_and_underscore_spellings() {
     let router = LoadBalancerRouter::from_config(&LoadBalancerConfig::permissive_default())
         .expect("permissive default config should build");
     let spellings = [
-        ("power_of_two", LoadBalancerAlgorithm::PowerOfTwo),
+        ("power_of_n", LoadBalancerAlgorithm::PowerOfN),
+        ("power_of_two", LoadBalancerAlgorithm::PowerOfN),
         ("round_robin", LoadBalancerAlgorithm::RoundRobin),
         ("groq-multiregion", LoadBalancerAlgorithm::WaitAndWiden),
         ("groq_multiregion", LoadBalancerAlgorithm::WaitAndWiden),
@@ -1462,23 +1637,20 @@ fn permissive_default_resolves_alias_and_underscore_spellings() {
 }
 
 #[test]
-fn permissive_default_keeps_power_of_two_without_override() {
+fn permissive_default_keeps_power_of_n_without_override() {
     let router = LoadBalancerRouter::from_config(&LoadBalancerConfig::permissive_default())
         .expect("permissive default config should build");
 
     let config = router
         .resolve_algorithm_override("any-model", None)
         .expect("default algorithm should resolve");
-    assert_eq!(
-        config.config().algorithm(),
-        LoadBalancerAlgorithm::PowerOfTwo
-    );
+    assert_eq!(config.config().algorithm(), LoadBalancerAlgorithm::PowerOfN);
 }
 
 #[test]
 fn explicit_config_stays_restrictive() {
     let router = router_from_json(
-        r#"{"default":"power-of-two","request_algorithms":{"round-robin":"round-robin"}}"#,
+        r#"{"default":"power-of-n","request_algorithms":{"round-robin":"round-robin"}}"#,
     );
     let algorithm_override = LoadBalancerAlgorithmOverride::parse("pulsar")
         .expect("routing algorithm override should parse");
@@ -1512,8 +1684,107 @@ fn request_excluded_clusters_are_not_selected() {
     assert_eq!(chosen.candidate.cluster_id, "cluster-1");
 }
 
+#[test]
+fn power_of_n_uses_each_configured_comparator() {
+    let cases = [
+        (
+            ClusterComparator::Ttft,
+            [
+                candidate("preferred", 1024).with_rtt_ms(1),
+                candidate("other", 1024).with_rtt_ms(100),
+            ],
+        ),
+        (
+            ClusterComparator::QueueTime,
+            [
+                priority_candidate("preferred", 0, 1).with_rtt_ms(100),
+                priority_candidate("other", 0, 50).with_rtt_ms(1),
+            ],
+        ),
+        (
+            ClusterComparator::InputWorkSeconds,
+            [
+                work_candidate("preferred", 100, 1000.0, 100),
+                work_candidate("other", 100, 10.0, 100),
+            ],
+        ),
+        (
+            ClusterComparator::Utilization,
+            [
+                concurrency_candidate("preferred", 100, 10, 1),
+                concurrency_candidate("other", 1, 10, 9),
+            ],
+        ),
+        (
+            ClusterComparator::NumRequestsQueued,
+            [
+                candidate("preferred", 1024)
+                    .with_rtt_ms(100)
+                    .with_stats(|stats| stats.queue_size = 1),
+                candidate("other", 1024)
+                    .with_rtt_ms(1)
+                    .with_stats(|stats| stats.queue_size = 10),
+            ],
+        ),
+    ];
+    let target = target();
+    let request = request(&target, None, Some(100));
+
+    for (comparator, candidates) in cases {
+        let mut config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::PowerOfN);
+        let settings = config
+            .power_of_n_settings_mut()
+            .expect("power-of-n config should expose settings");
+        settings.sample_count = 2;
+        settings.comparator = comparator;
+        let load_balancer =
+            create_load_balancer_with_config(&config).expect("comparator config should be valid");
+
+        let chosen = choose(load_balancer.as_ref(), &request, &candidates);
+        assert_eq!(chosen.candidate.cluster_id, "preferred", "{comparator}");
+    }
+}
+
+#[test]
+fn wait_and_widen_uses_comparator_in_every_selection_path() {
+    let candidates = [
+        candidate("lower-ttft-higher-queue", 1024)
+            .with_rtt_ms(5)
+            .with_stats(|stats| stats.queue_size = 10),
+        candidate("higher-ttft-lower-queue", 1024)
+            .with_rtt_ms(50)
+            .with_stats(|stats| stats.queue_size = 1),
+    ];
+    let target = target();
+
+    for (cache_affinity_key, ignore_queue_time) in
+        [(None, false), (None, true), (Some("prefix-a"), false)]
+    {
+        let load_balancer = wait_and_widen_load_balancer(|settings| {
+            settings.comparator = Some(ClusterComparator::NumRequestsQueued);
+            settings.ttft_bucket_size_ms = Some(100);
+            settings.n = Some(2);
+            settings.ignore_queue_time = ignore_queue_time.then_some(true);
+            if cache_affinity_key.is_some() {
+                settings.seed = Some("seed-1".to_string());
+                settings.cache_affinity_virtual_nodes = Some(8);
+                settings.cache_affinity_backend_selection_count = Some(2);
+            }
+        });
+        let request = request(&target, cache_affinity_key, Some(1));
+
+        assert_repeated_choice(
+            load_balancer.as_ref(),
+            &request,
+            &candidates,
+            8,
+            "higher-ttft-lower-queue",
+        );
+    }
+}
+
 wait_and_widen_choice_tests! {
-    wait_and_widen_prefers_lower_estimated_ttft:
+    wait_and_widen_prefers_lower_ttft:
     |_| {};
     |target| request(target, None, Some(10));
     [
@@ -1756,7 +2027,7 @@ fn wait_and_widen_cache_affinity_is_skipped_without_header() {
 }
 
 wait_and_widen_choice_tests! {
-    wait_and_widen_uses_input_tokens_in_ttft_estimate:
+    wait_and_widen_uses_input_tokens_in_ttft:
     |_| {};
     |target| request(target, None, Some(100));
     [
@@ -1765,7 +2036,7 @@ wait_and_widen_choice_tests! {
     ];
     1 => "higher-rtt-higher-cap";
 
-    wait_and_widen_can_ignore_input_processing_time_in_ttft_estimate:
+    wait_and_widen_can_ignore_input_processing_time_in_ttft:
     |settings| settings.ignore_input_processing_time = Some(true);
     |target| request(target, None, Some(100));
     [
@@ -1793,7 +2064,7 @@ fn wait_and_widen_limits_selection_to_first_ttft_bucket() {
 }
 
 wait_and_widen_choice_tests! {
-    wait_and_widen_can_ignore_queue_time_in_ttft_estimate:
+    wait_and_widen_can_ignore_queue_time_in_ttft:
     |settings| settings.ignore_queue_time = Some(true);
     |target| request(target, None, Some(0));
     [
@@ -2050,7 +2321,7 @@ wait_and_widen_choice_tests! {
 }
 
 #[test]
-fn wait_and_widen_ttft_estimator_uses_priority_queue_and_ignore_flags() {
+fn wait_and_widen_ttft_uses_priority_queue_and_ignore_flags() {
     let mut candidate = work_candidate("estimated", 7, 100.0, 999);
     candidate.stats.queue_time_estimate_ms_by_priority = HashMap::from([(4, 25)]);
 

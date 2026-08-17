@@ -36,9 +36,12 @@ spec:
       args:
         - |
           set -e
-          # Push this pod's own pid allocations high so the low pid range the
-          # dump captured stays free for CRIU's exact-pid forks.
-          echo 100000 > /proc/sys/kernel/ns_last_pid || echo "(ns_last_pid bump failed)"
+          # NOTE: this pod does NOT reserve its own pid range. Writing
+          # /proc/sys/kernel/ns_last_pid from a container fails with EPERM
+          # (/proc/sys is mounted read-only into the pod) even when privileged,
+          # so the attempt that used to live here never did anything. The agent
+          # does it from the host instead, before invoking CRIU restore --
+          # see reservePlaceholderPIDs in internal/agent/restore_v2.go.
           # Restored workload stdio is a plain-file fd on /trtllm.out (the
           # source manifest's setsid convention); surface it via kubelet.
           touch /trtllm.out

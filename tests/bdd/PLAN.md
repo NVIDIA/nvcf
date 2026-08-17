@@ -1,9 +1,10 @@
 # Strict Infrastructure-Level Gherkin DSL
 
 This is the complete set of step definitions for `tests/bdd`. Every
-new step must reuse one of these patterns. Step handlers do not contain
-domain-specific validation logic; that lives in Gherkin via CLI invocations
-and output assertions.
+new step must reuse one of these patterns. Shared steps may hide repeated
+command and output-format mechanics, but their Gherkin must keep meaningful
+targets, values, contexts, and timeouts visible. Step handlers do not contain
+domain-specific validation logic.
 
 ## Vocabulary
 
@@ -112,6 +113,8 @@ refactor in every consumer; that is a feature.
 |------|-------|
 | `When I run command {string}` | Single-line command. `${VAR}` expansion applies. Captures exit code + stdout + stderr in scenario state. The most recent run is the one assertions reference. |
 | `When I run command:` (docstring) | Multi-line form for commands that don't fit on one line. Same recording semantics. |
+| `When I successfully run command {string}` | Single-line command that must exit 0. Preserves the command result for later output assertions and records the resolved command in the successful-command cache. |
+| `When I successfully run command:` (docstring) | Multi-line form for commands that must exit 0. Uses the same result recording, interpolation, logging, and cache semantics as the single-line form. |
 | `When I run command with a terminal:` (docstring) | Same as the docstring form, but stdin is attached to a pseudo-terminal so the child sees a TTY on fd 0. For commands that gate interactive-only behavior on a TTY, such as `nvcf-cli self-hosted up` (its auth-gate mints the admin token only when stdin is a terminal). No input is written; stdout and stderr are captured separately as usual. |
 | `When I export command output to environment variable {string}` | Exports the previous command's trimmed stdout under the named env var. Fails the step unless the prior command exited 0 and produced non-empty stdout. Snapshotted by the env Ledger; restored at suite teardown. |
 
@@ -130,6 +133,8 @@ refactor in every consumer; that is a feature.
 | `Then yaml file {string} should contain:` (docstring) | Subset variant: every key in expected must exist in actual with the same value; extra keys in actual are allowed. Use this when the file has dynamic or future-additive fields. `${VAR}` expansion applies. |
 | `Then yaml file {string} key {string} should contain:` (docstring) | Subset semantics scoped to the subtree at the dotted key path. |
 | `Then the json output should contain rows:` (table) | Parses the last command's stdout as JSON (expected: array of objects). For each table row, asserts an object matching every column value exists in the array. Extra objects are allowed; ordering is not asserted. |
+| `Then the rendered manifests in {string} should contain:` (table) | Requires a `text` header and one or more fixed strings. Recursively inspects regular files under the repo-relative directory and fails if any listed string is absent. `${VAR}` expansion applies to the path and table values. |
+| `Then the rendered manifests in {string} under directories matching {string} should contain:` (table) | Positive rendered-manifest assertion scoped to files below a directory whose name matches the supplied shell pattern, such as `*-nats`. The render directory, directory-name pattern, and table values support `${VAR}` expansion. |
 | `Then the rendered manifests in {string} should not contain:` (table) | Requires a `text` header and one or more fixed strings. Recursively inspects regular files under the repo-relative directory and fails if any listed string appears. `${VAR}` expansion applies to the path and table values. |
 | `Then these ServiceMonitors should exist in namespace {string} using context {string}:` (table) | Requires a `name` header and one or more names. Runs one `kubectl get` with every named ServiceMonitor; exit code 0 proves every listed resource exists. |
 
@@ -227,10 +232,10 @@ do so via another `When I run command "rm ..."`.
 
 ## Why this list
 
-The promise of the DSL is that any future feature file can be written
-using only these steps. If a new scenario needs something the catalog
-doesn't cover, the right move is almost always to express it as a
-`When I run command` + an output assertion, not to add a new step.
+The promise of the DSL is that any future feature file can be written using
+only these steps. Add a shared step when a repeated action or observable keeps
+its meaningful inputs visible and hides only command or output-format
+mechanics. Otherwise use `When I run command` plus an output assertion.
 
 The infrastructure-bootstrap Givens (cluster up, image pull secret) and
 the single `Given command has succeeded:` carry-over are the only places
@@ -448,6 +453,11 @@ func JSONContainsRows(raw string, rows []map[string]string) error
 // FilesDoNotContain recursively inspects regular files under root and
 // fails if any interpolated fixed string appears.
 func FilesDoNotContain(root string, needles []string) error
+
+// FilesContain recursively inspects regular files under root and fails if any
+// fixed string is absent. A non-empty directoryNamePattern limits the search
+// to files below a directory whose name matches the shell pattern.
+func FilesContain(root, directoryNamePattern string, needles []string) error
 
 // ServiceMonitorExistenceCommand builds one kubectl get command whose
 // successful exit proves every named ServiceMonitor exists.

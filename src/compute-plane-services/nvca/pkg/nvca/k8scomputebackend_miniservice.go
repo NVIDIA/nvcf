@@ -114,6 +114,17 @@ func (c K8sComputeBackend) applyMiniServiceCreationMessage(ctx context.Context,
 		return c.bk8s.ApplyICMSRequestStatusChange(ctx, req)
 	}
 
+	// Serialized-herd cold-start gate (pioneer election). Before
+	// creating the MiniService for a cold function-version, defer all
+	// but one "pioneer" replica until that pioneer's capture warms the
+	// function — the others then warm-restore via Hook A instead of all
+	// cold-starting. Returns a non-terminal error (requeue) for a
+	// deferred replica; nil (proceed) in every fail-open case. No-op
+	// when NvSnap is disabled. See shouldDeferColdStart.
+	if err := c.shouldDeferColdStart(ctx, req); err != nil {
+		return err
+	}
+
 	c.bk8s.eventRecorder.Eventf(req, corev1.EventTypeNormal, string(nvcatypes.EventCategoryInstanceCreation),
 		"Creating %v requested instances", instCount)
 

@@ -23,6 +23,7 @@ Feature: Install a local single-cluster stack with upstream supporting images
       | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
       | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+      | observability.profile           | disabled                             |
     And I copy the file "deploy/stacks/self-managed/secrets/secrets.yaml.template" to "deploy/stacks/self-managed/secrets/local-bdd-secrets.yaml"
     # Only ${VAR} is interpolated; bare $oauthtoken stays literal.
     And I substitute "REPLACE_WITH_BASE64_DOCKER_CREDENTIAL" in file "deploy/stacks/self-managed/secrets/local-bdd-secrets.yaml" with base64 of "$oauthtoken:${NGC_API_KEY}"
@@ -73,37 +74,23 @@ Feature: Install a local single-cluster stack with upstream supporting images
     Then the command exit code should be 0
     And the command output should not contain "Error:"
 
-    When I run command:
-      """
-      rg --fixed-strings 'docker.io/natsio/nats-server-config-reloader:0.23.0' deploy/stacks/self-managed/out -g '**/*-nats/**'
-      """
-    Then the command exit code should be 0
-    And the command output should contain "docker.io/natsio/nats-server-config-reloader:0.23.0"
+    # The current NATS chart renders NKey Secrets directly and has no nkey job
+    # image to override. Check it beside the supporting image override owned by
+    # the same rendered release.
+    Then the rendered manifests in "deploy/stacks/self-managed/out" under directories matching "*-nats" should contain:
+      | text                                                               |
+      | docker.io/natsio/nats-server-config-reloader:0.23.0                |
+      | # Source: helm-nvcf-nats/templates/nkey-secret.yaml                |
 
     # Cassandra initialization currently uses its migrations image. Selecting
     # alpine-k8s for this hook requires chart support.
-    When I run command:
-      """
-      rg --fixed-strings 'nvcf-cassandra-migrations:' deploy/stacks/self-managed/out -g '**/*-cassandra/**'
-      """
-    Then the command exit code should be 0
-    And the command output should contain "nvcf-cassandra-migrations:"
+    And the rendered manifests in "deploy/stacks/self-managed/out" under directories matching "*-cassandra" should contain:
+      | text                       |
+      | nvcf-cassandra-migrations: |
 
-    # The current NATS chart renders NKey Secrets directly and has no nkey job
-    # image to override.
-    When I run command:
-      """
-      rg --fixed-strings '# Source: helm-nvcf-nats/templates/nkey-secret.yaml' deploy/stacks/self-managed/out -g '**/*-nats/**'
-      """
-    Then the command exit code should be 0
-    And the command output should contain "nkey-secret.yaml"
-
-    When I run command:
-      """
-      rg --fixed-strings 'docker.io/alpine/k8s:1.36.1' deploy/stacks/self-managed/out -g '**/*-api/**'
-      """
-    Then the command exit code should be 0
-    And the command output should contain "docker.io/alpine/k8s:1.36.1"
+    And the rendered manifests in "deploy/stacks/self-managed/out" under directories matching "*-api" should contain:
+      | text                             |
+      | docker.io/alpine/k8s:1.36.1      |
 
     # Keep this focused on the releases that own or exercise the overrides.
     # A full local stack install also starts unrelated service images that may

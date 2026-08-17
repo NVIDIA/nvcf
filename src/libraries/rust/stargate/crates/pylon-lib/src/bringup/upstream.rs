@@ -20,6 +20,7 @@ use crate::request_observer::{
     RequestObservationEndpoint, RequiredTunnelHeaders, TunnelRequestObserver,
 };
 use crate::runtime_state::{ModelGeneration, PylonRuntimeState};
+use crate::upstream_health::UpstreamHealthPaths;
 use crate::upstream_url::upstream_endpoint;
 use reqwest::StatusCode;
 use serde::Deserialize;
@@ -29,12 +30,19 @@ pub(crate) async fn check_upstream_health(
     http_client: &reqwest::Client,
     upstream_http_base_url: &str,
     timeout: Duration,
+    health_paths: &UpstreamHealthPaths,
 ) -> bool {
-    let health_url = upstream_endpoint(upstream_http_base_url, "/health");
-    matches!(
-        http_client.get(health_url).timeout(timeout).send().await,
-        Ok(response) if response.status().is_success()
-    )
+    for (index, path) in health_paths.probe_order() {
+        let health_url = upstream_endpoint(upstream_http_base_url, path);
+        if matches!(
+            http_client.get(health_url).timeout(timeout).send().await,
+            Ok(response) if response.status().is_success()
+        ) {
+            health_paths.mark_resolved(index);
+            return true;
+        }
+    }
+    false
 }
 
 pub(super) async fn send_canary_request(
@@ -195,6 +203,8 @@ pub enum BringupError {
     RunawayGeneration { tokens: u32 },
     #[error("invalid completion response: {0}")]
     InvalidResponse(String),
+    #[error("calibration saturated before measuring positive input throughput")]
+    InsufficientCalibrationData,
     #[error("stats collector stopped during model initialization")]
     StatsCollectorStopped,
     #[error("model generation retired during initialization")]

@@ -15,7 +15,7 @@
 
 use std::sync::Arc;
 
-use super::power_of_two::PowerOfTwoLoadBalancer;
+use super::power_of_n::PowerOfNLoadBalancer;
 use super::pulsar::PulsarLoadBalancer;
 use super::pulsar_wait_and_widen::PulsarWaitAndWidenLoadBalancer;
 use super::random::RandomLoadBalancer;
@@ -26,6 +26,14 @@ use super::{LoadBalancer, LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig};
 pub fn create_load_balancer_with_config(
     config: &LoadBalancerAlgorithmConfig,
 ) -> anyhow::Result<Arc<dyn LoadBalancer>> {
+    if config.algorithm() == LoadBalancerAlgorithm::PulsarWaitAndWiden
+        && config
+            .wait_and_widen_settings()
+            .is_some_and(|settings| settings.comparator.is_some())
+    {
+        anyhow::bail!("comparator is not supported for pulsar-wait-and-widen");
+    }
+
     if config.considers_kv_free_tokens()
         && !matches!(
             config.algorithm(),
@@ -38,7 +46,9 @@ pub fn create_load_balancer_with_config(
     }
 
     match config.algorithm() {
-        LoadBalancerAlgorithm::PowerOfTwo => Ok(Arc::new(PowerOfTwoLoadBalancer)),
+        LoadBalancerAlgorithm::PowerOfN => Ok(Arc::new(
+            PowerOfNLoadBalancer::from_algorithm_config(config)?,
+        )),
         LoadBalancerAlgorithm::WaitAndWiden => Ok(Arc::new(WaitAndWidenLoadBalancer::new(
             WaitAndWidenConfig::from_algorithm_config(config),
         ))),
