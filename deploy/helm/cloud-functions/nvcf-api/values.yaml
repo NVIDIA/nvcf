@@ -41,6 +41,8 @@ api:
 
   # Post-install hook job for creating NVCF account
   accountBootstrap:
+    # Set false to skip the post-install account-bootstrap hook (e.g. when accounts are provisioned via the API).
+    enabled: true
     image:
       registry: ""
       repository: ""
