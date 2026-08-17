@@ -22,10 +22,13 @@ to match the other chart subtrees.
 
 ## Versioning
 
-The chart is registered in `tools/ci/github-release-subprojects.json` with no
-`initial_version`, so it releases from a `0.0.0` floor on tags of the form
-`deploy/helm/vanity-gateway/v<X.Y.Z>`. The first published version is `0.1.0`
-for a `feat` commit under this subtree, or `0.0.1` for a `fix`. See
+The chart is registered in `tools/ci/github-release-subprojects.json` with an
+`initial_version` floor of `0.2.0`, so it releases on tags of the form
+`deploy/helm/vanity-gateway/v<X.Y.Z>`. The floor is a computation baseline and
+is not published, so no `0.2.0` tag is created: the first published version is
+`0.3.0` for a `feat` commit under this subtree, or `0.2.1` for a `fix`. The
+floor sits above the `0.1.0-nvcf-10204.x` artifacts the chart was recovered
+from, so every published version is unambiguously newer. See
 `docs/dev/github-release-process.md`.
 
 `Chart.yaml` carries `version: 0.0.0`. The release pipeline packages the chart
