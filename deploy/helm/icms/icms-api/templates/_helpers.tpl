@@ -64,8 +64,12 @@ values:
 */}}
 {{- define "sis.image" -}}
 {{- if .Values.sis.image.name }}
-{{- $tag := required "Image reference required: set .Values.sis.image.tag or .Chart.AppVersion." (.Values.sis.image.tag | default .Chart.AppVersion) -}}
+{{- if .Values.sis.image.digest -}}
+{{- printf "%s@%s" .Values.sis.image.name .Values.sis.image.digest -}}
+{{- else -}}
+{{- $tag := required "Image reference required: set .Values.sis.image.digest, .Values.sis.image.tag, or .Chart.AppVersion." (.Values.sis.image.tag | default .Chart.AppVersion) -}}
 {{- printf "%s:%s" .Values.sis.image.name $tag -}}
+{{- end -}}
 {{- else }}
 {{- $registry := required "A valid image registry (.Values.sis.image.registry) is required!" .Values.sis.image.registry -}}
 {{- $repository := required "A valid image repository (.Values.sis.image.repository) is required!" .Values.sis.image.repository -}}

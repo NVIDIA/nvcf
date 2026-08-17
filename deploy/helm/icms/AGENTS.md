@@ -41,7 +41,7 @@ Match the conventional commit type to the version bump type:
 - `BREAKING CHANGE:` footer in the commit body for major version bumps (e.g., 1.2.0 -> 2.0.0),
   on a regular `feat` commit:
 
-  ```
+  ```text
   feat(<scope>): <description>
 
   BREAKING CHANGE: <what changed and how to migrate>
