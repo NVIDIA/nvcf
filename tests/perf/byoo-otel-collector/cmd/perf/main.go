@@ -242,10 +242,19 @@ func runRun(stdout io.Writer, cfg runConfig) error {
 		}
 	}
 
-	if cfg.skipLoad {
-		fmt.Fprintln(stdout, "note: --skip-load set; the collector and sink were deployed but no load was driven and no baseline was measured.")
-	} else {
-		fmt.Fprintln(stdout, "note: load was driven end-to-end and a baseline was measured. Startup health has a pass/fail bound; throughput and delivery numbers establish the reproducible baseline.")
+	if err := writeRunCompletion(stdout, cfg.skipLoad); err != nil {
+		return err
+	}
+	return nil
+}
+
+func writeRunCompletion(w io.Writer, skipLoad bool) error {
+	message := "note: load was driven end-to-end and a baseline was measured. Startup health has a pass/fail bound; throughput and delivery numbers establish the reproducible baseline."
+	if skipLoad {
+		message = "note: --skip-load set; the collector and sink were deployed but no load was driven and no baseline was measured."
+	}
+	if _, err := fmt.Fprintln(w, message); err != nil {
+		return fmt.Errorf("write run completion message: %w", err)
 	}
 	return nil
 }
@@ -495,8 +504,9 @@ func validateStartupThresholds(target, max time.Duration) error {
 
 func printStartupHealth(w io.Writer, shape spec.Shape, startup report.StartupHealth, target, max time.Duration) {
 	podToHealth := time.Duration(startup.PodToHealthSeconds * float64(time.Second)).Round(time.Millisecond)
-	collectorToHealth := time.Duration(startup.CollectorToHealthSeconds * float64(time.Second)).Round(time.Millisecond)
-	fmt.Fprintf(w, "[%s] startup health: pod_to_health=%s collector_to_health=%s (target <= %s, maximum <= %s)\n", shape, podToHealth, collectorToHealth, target, max)
+	collectorToHealth := time.Duration(startup.CollectorToHealthSeconds * float64(time.Second))
+	collectorToHealthDisplay := collectorToHealth.Round(time.Millisecond)
+	fmt.Fprintf(w, "[%s] startup health: pod_to_health=%s collector_to_health=%s (target <= %s, maximum <= %s)\n", shape, podToHealth, collectorToHealthDisplay, target, max)
 	if collectorToHealth > target && collectorToHealth <= max {
 		fmt.Fprintf(w, "[%s] warning: collector startup exceeded the %s target\n", shape, target)
 	}

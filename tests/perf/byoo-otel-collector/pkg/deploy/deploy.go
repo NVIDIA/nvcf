@@ -602,14 +602,22 @@ func (c *Client) WaitCollectorHealth(ctx context.Context, namespace, podName, co
 		if !ok {
 			return false, nil
 		}
-		if time.Since(collectorStartedAt) > startupMax {
+		startupDeadline := collectorStartedAt.Add(startupMax)
+		if time.Now().After(startupDeadline) {
 			return false, fmt.Errorf("collector container %q exceeded startup maximum %s without reporting healthy", collectorContainer, startupMax)
 		}
-		if _, err := c.FetchPodEndpoint(ctx, namespace, podName, collectorHealthPort, collectorHealthPath); err != nil {
-			return false, nil
+		healthCtx, cancel := context.WithDeadline(ctx, startupDeadline)
+		_, healthErr := c.FetchPodEndpoint(healthCtx, namespace, podName, collectorHealthPort, collectorHealthPath)
+		cancel()
+		healthyAt := time.Now().UTC()
+		if healthyAt.After(startupDeadline) {
+			return false, fmt.Errorf("collector container %q exceeded startup maximum %s without reporting healthy", collectorContainer, startupMax)
 		}
-		startup = report.NewStartupHealth(pod.Status.StartTime.Time, collectorStartedAt, time.Now().UTC())
-		return true, nil
+		if healthErr == nil {
+			startup = report.NewStartupHealth(pod.Status.StartTime.Time, collectorStartedAt, healthyAt)
+			return true, nil
+		}
+		return false, nil
 	})
 	if err != nil {
 		return report.StartupHealth{}, fmt.Errorf("wait for collector health endpoint %s:%s%s: %w", podName, collectorHealthPort, collectorHealthPath, err)

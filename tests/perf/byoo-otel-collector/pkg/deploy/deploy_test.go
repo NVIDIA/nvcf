@@ -275,6 +275,57 @@ func TestWaitCollectorHealthStopsAtStartupMaximum(t *testing.T) {
 	}
 }
 
+func TestWaitCollectorHealthRejectsLateHealthResponse(t *testing.T) {
+	origPoll, origProxy := healthPollInterval, proxyGet
+	t.Cleanup(func() {
+		healthPollInterval = origPoll
+		proxyGet = origProxy
+	})
+	healthPollInterval = time.Millisecond
+
+	const startupMax = 100 * time.Millisecond
+	collectorStartedAt := time.Now().UTC()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "perf-collector", Namespace: "byoo-perf"},
+		Status: corev1.PodStatus{
+			Phase:     corev1.PodRunning,
+			StartTime: &metav1.Time{Time: collectorStartedAt.Add(-time.Second)},
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name: "byoo-otel-collector",
+				State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{
+					StartedAt: metav1.Time{Time: collectorStartedAt},
+				}},
+			}},
+		},
+	}
+	called := false
+	proxyGet = func(ctx context.Context, _ kubernetes.Interface, _, _, _, _ string) ([]byte, error) {
+		called = true
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Error("health request has no startup deadline")
+		} else if want := collectorStartedAt.Add(startupMax); !deadline.Equal(want) {
+			t.Errorf("health request deadline = %s, want %s", deadline, want)
+		}
+		if delay := time.Until(deadline) + time.Millisecond; delay > 0 {
+			time.Sleep(delay)
+		}
+		return []byte("ok"), nil
+	}
+
+	c := NewClientForClientset(fake.NewSimpleClientset(pod))
+	_, err := c.WaitCollectorHealth(context.Background(), "byoo-perf", "perf-collector", "byoo-otel-collector", time.Second, startupMax)
+	if !called {
+		t.Fatal("expected a health request before the startup deadline")
+	}
+	if err == nil {
+		t.Fatal("expected a late successful health response to fail")
+	}
+	if !strings.Contains(err.Error(), "startup maximum") {
+		t.Errorf("error = %v, want startup maximum context", err)
+	}
+}
+
 func TestCleanupScopedToLabel(t *testing.T) {
 	c := NewClientForClientset(fake.NewSimpleClientset())
 	ctx := context.Background()

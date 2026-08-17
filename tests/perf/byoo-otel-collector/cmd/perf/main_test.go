@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -466,6 +467,43 @@ func TestStartupHealthThresholdOutput(t *testing.T) {
 	}
 	if err := checkStartupHealth(startup, 15*time.Second); err == nil {
 		t.Fatal("20s startup should exceed 15s maximum")
+	}
+}
+
+func TestPrintStartupHealthUsesUnroundedThresholds(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		collectorTo time.Duration
+		wantWarning bool
+	}{
+		{name: "over target", collectorTo: 15*time.Second + 400*time.Microsecond, wantWarning: true},
+		{name: "over maximum", collectorTo: 30*time.Second + 400*time.Microsecond, wantWarning: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			startup := report.NewStartupHealth(time.Unix(0, 0), time.Unix(0, 0), time.Unix(0, 0).Add(tt.collectorTo))
+			var out bytes.Buffer
+			printStartupHealth(&out, spec.ShapeContainer, startup, 15*time.Second, 30*time.Second)
+			gotWarning := strings.Contains(out.String(), "warning: collector startup exceeded")
+			if gotWarning != tt.wantWarning {
+				t.Errorf("warning = %t, want %t; output:\n%s", gotWarning, tt.wantWarning, out.String())
+			}
+		})
+	}
+}
+
+type failingWriter struct{ err error }
+
+func (w failingWriter) Write([]byte) (int, error) {
+	return 0, w.err
+}
+
+func TestWriteRunCompletionReturnsWriteError(t *testing.T) {
+	writeErr := errors.New("write failed")
+	for _, skipLoad := range []bool{false, true} {
+		err := writeRunCompletion(failingWriter{err: writeErr}, skipLoad)
+		if !errors.Is(err, writeErr) {
+			t.Errorf("writeRunCompletion(skipLoad=%t) error = %v, want wrapped write error", skipLoad, err)
+		}
 	}
 }
 
