@@ -72,7 +72,11 @@ default_manifest="${tmpdir}/default.yaml"
 render >"$default_manifest"
 
 policy_count=$(query_all '[select(.kind == "NetworkPolicy" and .metadata.name == "openbao-server")] | length' "$default_manifest")
-assert_equal 1 "$policy_count" "default NetworkPolicy count"
+assert_equal 0 "$policy_count" "default NetworkPolicy count"
+
+render --set openbao.networkPolicy.enabled=true >"$default_manifest"
+policy_count=$(query_all '[select(.kind == "NetworkPolicy" and .metadata.name == "openbao-server")] | length' "$default_manifest")
+assert_equal 1 "$policy_count" "enabled NetworkPolicy count"
 
 policy_namespace=$(policy_query '.metadata.namespace' "$default_manifest")
 assert_equal vault-system "$policy_namespace" "default policy namespace"
@@ -149,6 +153,7 @@ assert_equal 0 "$disabled_count" "disabled NetworkPolicy count"
 
 no_clients_manifest="${tmpdir}/no-clients.yaml"
 render \
+  --set openbao.networkPolicy.enabled=true \
   --set openbao.networkPolicy.clients.certManager.enabled=false \
   --set openbao.networkPolicy.clients.apiKeys.enabled=false \
   --set openbao.networkPolicy.clients.ess.enabled=false \
@@ -163,6 +168,7 @@ assert_equal 0 "$empty_from_count" "empty ingress source count with all API clie
 invalid_client_manifest="${tmpdir}/invalid-client.yaml"
 invalid_client_error="${tmpdir}/invalid-client.err"
 if render \
+  --set openbao.networkPolicy.enabled=true \
   --set openbao.networkPolicy.clients.custom.enabled=true \
   --set-string openbao.networkPolicy.clients.custom.namespace=custom-client \
   >"$invalid_client_manifest" 2>"$invalid_client_error"; then
@@ -196,7 +202,7 @@ openbao:
 EOF
 for broad_client_values in "$empty_match_labels_values" "$empty_match_expressions_values"; do
   broad_client_error="${broad_client_values}.err"
-  if render --values "$broad_client_values" >/dev/null 2>"$broad_client_error"; then
+  if render --set openbao.networkPolicy.enabled=true --values "$broad_client_values" >/dev/null 2>"$broad_client_error"; then
     fail "enabled client with an empty nested pod selector rendered successfully"
   fi
   if ! grep -q 'openbao.networkPolicy.clients.custom.podSelector must contain at least one matchLabels or matchExpressions entry' "$broad_client_error"; then
@@ -206,6 +212,7 @@ done
 
 override_manifest="${tmpdir}/override.yaml"
 render \
+  --set openbao.networkPolicy.enabled=true \
   --set-string openbao.namespace=security-openbao \
   --set-string openbao.networkPolicy.clients.certManager.namespace=security-cert-manager \
   --set-string openbao.networkPolicy.clients.nvcf.namespace=control-plane \
@@ -220,6 +227,7 @@ assert_equal 1 "$override_nvcf_count" "overridden nvcf namespace"
 
 global_namespace_manifest="${tmpdir}/global-namespace.yaml"
 render \
+  --set openbao.networkPolicy.enabled=true \
   --set-string openbao.namespace=ignored-openbao \
   --set-string openbao.global.namespace=global-openbao \
   >"$global_namespace_manifest"

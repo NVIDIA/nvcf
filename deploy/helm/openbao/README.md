@@ -90,14 +90,23 @@ Key configurable areas include:
 - Image pull secrets
 - OIDC issuer discovery for migration-time JWT auth configuration
 
-The OpenBao server NetworkPolicy is enabled by default. It permits the
-OpenBao API on TCP 8200 only from labeled NVCF clients, cert-manager, and
-migration or bootstrap Jobs. OpenBao server peers can also use TCP 8201 for
-Raft traffic. Cross-namespace rules match both the namespace name and pod
-labels.
+The OpenBao server NetworkPolicy is disabled by default. Enable it after
+confirming that its client selectors match the workloads in the target
+cluster:
 
-When a cluster-level controller manages an equivalent policy, disable the
-chart policy:
+```yaml
+openbao:
+  networkPolicy:
+    enabled: true
+```
+
+When enabled, the policy permits the OpenBao API on TCP 8200 only from labeled
+NVCF clients, cert-manager, and migration or bootstrap Jobs. OpenBao server
+peers can also use TCP 8201 for Raft traffic. Cross-namespace rules match both
+the namespace name and pod labels.
+
+Keep the chart policy disabled when a cluster-level controller manages an
+equivalent policy:
 
 ```yaml
 openbao:

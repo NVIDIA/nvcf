@@ -206,6 +206,8 @@ certManager:
 
 openbao:
   enabled: true
+  networkPolicy:
+    enabled: false
   migrations:
     issuerDiscovery:
       enabled: false

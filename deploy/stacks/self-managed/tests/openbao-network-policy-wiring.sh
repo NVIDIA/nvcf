@@ -14,6 +14,7 @@ environment_name="openbao-network-policy-test"
 environment_file="$test_stack_dir/environments/$environment_name.yaml"
 secrets_file="$test_stack_dir/secrets/$environment_name-secrets.yaml"
 rendered_values="$work_dir/openbao-values.yaml"
+enabled_rendered_values="$work_dir/openbao-enabled-values.yaml"
 full_stack_releases="$work_dir/full-stack-releases.json"
 nvcf_ui_manifest="$work_dir/nvcf-ui-manifest.yaml"
 trap 'rm -rf "$work_dir"' EXIT
@@ -35,7 +36,6 @@ global:
     repository: test/nvcf
 openbao:
   networkPolicy:
-    enabled: false
     clients:
       certManager:
         namespace: security-cert-manager
@@ -63,6 +63,22 @@ HELMFILE_ENV="$environment_name" \
 HELMFILE_ENV="$environment_name" \
   HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
   helmfile \
+    --file "$test_stack_dir/helmfile.d/01-dependencies.yaml.gotmpl" \
+    --environment default \
+    --state-values-set openbao.networkPolicy.enabled=true \
+    --state-values-set ingress.gatewayApi.controllerNamespace=envoy-gateway-system \
+    --state-values-set ingress.gatewayApi.gateways.shared.name=shared-gw \
+    --state-values-set ingress.gatewayApi.gateways.shared.namespace=envoy-gateway-system \
+    --state-values-set ingress.gatewayApi.gateways.grpc.name=grpc-gw \
+    --state-values-set ingress.gatewayApi.gateways.grpc.namespace=envoy-gateway-system \
+    --selector name=openbao-server \
+    write-values \
+    --output-file-template "$enabled_rendered_values" \
+    >/dev/null
+
+HELMFILE_ENV="$environment_name" \
+  HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
+  helmfile \
     --file "$test_stack_dir/helmfile.d" \
     --environment default \
     --state-values-set ingress.gatewayApi.controllerNamespace=envoy-gateway-system \
@@ -76,10 +92,12 @@ HELMFILE_ENV="$environment_name" \
     >"$full_stack_releases"
 
 enabled=$(yq -r '.openbao.networkPolicy.enabled' "$rendered_values")
+enabled_override=$(yq -r '.openbao.networkPolicy.enabled' "$enabled_rendered_values")
 cert_manager_namespace=$(yq -r '.openbao.networkPolicy.clients.certManager.namespace' "$rendered_values")
 nvcf_namespace=$(yq -r '.openbao.networkPolicy.clients.nvcf.namespace' "$rendered_values")
 
-[[ "$enabled" == "false" ]] || fail "enabled override did not reach the chart values"
+[[ "$enabled" == "false" ]] || fail "disabled-by-default setting did not reach the chart values"
+[[ "$enabled_override" == "true" ]] || fail "enabled override did not reach the chart values"
 [[ "$cert_manager_namespace" == "security-cert-manager" ]] || fail "cert-manager namespace override did not reach the chart values"
 [[ "$nvcf_namespace" == "control-plane" ]] || fail "nvcf namespace override did not reach the chart values"
 

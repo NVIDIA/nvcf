@@ -21,9 +21,8 @@ openbao:
   fullnameOverride: openbao-server
 
   networkPolicy:
-    # Restrict ingress to the OpenBao API and Raft ports. Set enabled to false
-    # only when another controller manages equivalent policy for these pods.
-    enabled: true
+    # Restrict ingress to the OpenBao API and Raft ports when enabled.
+    enabled: false
     # These optional releases create migration Jobs in the OpenBao namespace.
     migrationReleaseNames:
       - llm-request-router
