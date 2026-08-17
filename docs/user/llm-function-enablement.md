@@ -509,12 +509,20 @@ Use this order for a safe rollback:
    ```
 
 7. Remove the old managed release after it is no longer part of the Helmfile
-   state:
+   state. Run `helm status` first and confirm the release is the superseded
+   one, that the previous step listed no `Certificate` still referencing its
+   issuer, and that the replacement data path is verified. Uninstalling is
+   not reversible from the cluster; only proceed once all three hold.
 
    ```bash
    helm status nvcf-pki \
      --namespace cert-manager \
      --kube-context <control-plane-context>
+   ```
+
+   After confirming, remove the release:
+
+   ```bash
    helm uninstall nvcf-pki \
      --namespace cert-manager \
      --kube-context <control-plane-context>

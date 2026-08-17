@@ -11,6 +11,14 @@ environments:
 {{- $issuerKind := dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values }}
 {{- $issuerName := dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values }}
 {{- $manageSetting := dig "addons" "llm" "pki" "clusterIssuer" "enabled" "__default__" .Values }}
+{{- /* dig only falls back for a missing path, so an explicit empty value
+     survives and would silently disable managed-issuer detection. */ -}}
+{{- if and $llmEnabled $pkiEnabled (not $issuerKind) }}
+{{- fail "addons.llm.pki.issuerKind must not be empty when addons.llm.pki.enabled is true" }}
+{{- end }}
+{{- if and $llmEnabled $pkiEnabled (not $issuerName) }}
+{{- fail "addons.llm.pki.issuerName must not be empty when addons.llm.pki.enabled is true" }}
+{{- end }}
 {{- $manageIssuer := and (eq $issuerKind "ClusterIssuer") (eq $issuerName "nvcf-openbao-pki") }}
 {{- if ne (toString $manageSetting) "__default__" }}
 {{- $manageIssuer = eq (toString $manageSetting) "true" }}

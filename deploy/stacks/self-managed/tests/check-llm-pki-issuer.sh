@@ -70,6 +70,22 @@ expect_enabled() {
     fail "$case_name expected nvcf-pki enabled=$expected, got $actual"
 }
 
+# An explicit empty value cannot be expressed with --state-values-set-string,
+# which leaves the key unset so dig falls back to its default. Write a real
+# override file so the empty string reaches the template.
+empty_issuer_override() {
+  local field="$1"
+  local override_file="$work_dir/empty-$field.yaml"
+
+  cat >"$override_file" <<YAML
+addons:
+  llm:
+    pki:
+      $field: ""
+YAML
+  printf '%s' "$override_file"
+}
+
 expect_failure() {
   local case_name="$1"
   local expected_error="$2"
@@ -332,5 +348,20 @@ expect_failure managed-namespaced-issuer \
   --state-values-set addons.llm.pki.clusterIssuer.enabled=true \
   --state-values-set-string addons.llm.pki.issuerKind=Issuer \
   --state-values-set-string addons.llm.pki.issuerName=custom-managed-pki
+
+# Case 10: An explicit empty issuerKind must not silently fall out of managed
+# mode. Without this guard the release is skipped while the router chart
+# re-defaults the kind, leaving a Certificate pointing at an absent issuer.
+expect_failure empty-issuer-kind \
+  'addons.llm.pki.issuerKind must not be empty when addons.llm.pki.enabled is true' \
+  "${managed_defaults[@]}" \
+  --state-values-file "$(empty_issuer_override issuerKind)"
+
+# Case 11: An explicit empty issuerName must fail in the stack, not later in
+# the request-router chart.
+expect_failure empty-issuer-name \
+  'addons.llm.pki.issuerName must not be empty when addons.llm.pki.enabled is true' \
+  "${managed_defaults[@]}" \
+  --state-values-file "$(empty_issuer_override issuerName)"
 
 echo "check-llm-pki-issuer: all checks passed"

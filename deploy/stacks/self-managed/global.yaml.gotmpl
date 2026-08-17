@@ -865,8 +865,12 @@ llmRequestRouter:
        should not be punished with confusing required errors during render. */ -}}
   {{- if and (dig "addons" "llm" "enabled" false .Values) (dig "addons" "llm" "pki" "enabled" false .Values) }}
   {{- $secretName := dig "addons" "llm" "pki" "secretName" "stargate-quic-tls" .Values }}
-  {{- $issuerKind := dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values }}
-  {{- $issuerName := dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values }}
+  {{- /* dig only falls back for a missing path, so an explicit empty value
+       survives. An empty issuerKind would drop out of managed-issuer
+       detection here while the router chart re-defaults it to ClusterIssuer,
+       leaving a Certificate that references an issuer nothing creates. */ -}}
+  {{- $issuerKind := required "addons.llm.pki.issuerKind must not be empty when addons.llm.pki.enabled is true" (dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values) }}
+  {{- $issuerName := required "addons.llm.pki.issuerName must not be empty when addons.llm.pki.enabled is true" (dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values) }}
   {{- $manageSetting := dig "addons" "llm" "pki" "clusterIssuer" "enabled" "__default__" .Values }}
   {{- $managedIssuer := and (eq $issuerKind "ClusterIssuer") (eq $issuerName "nvcf-openbao-pki") }}
   {{- if ne (toString $manageSetting) "__default__" }}

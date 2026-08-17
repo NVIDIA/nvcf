@@ -200,11 +200,13 @@ cassandra:
 certManager:
   # cert-manager controller required to reconcile Certificate resources for
   # the self-managed PKI stack. Enabling addons.llm.pki with the managed
-  # issuer installs ClusterIssuer/nvcf-openbao-pki in this namespace. The
-  # bundled helm-nvcf-cert-manager chart ships installCRDs=true by default.
-  # Set this to false when cert-manager is installed outside this stack; the
-  # external installation must still provide ServiceAccount/cert-manager in
-  # the cert-manager namespace for the managed issuer to authenticate.
+  # issuer creates ClusterIssuer/nvcf-openbao-pki, which is cluster-scoped
+  # and has no namespace. The nvcf-pki Helm release that creates it and the
+  # cert-manager ServiceAccount it authenticates as both live in the
+  # cert-manager namespace. The bundled helm-nvcf-cert-manager chart ships
+  # installCRDs=true by default. Set this to false when cert-manager is
+  # installed outside this stack; that external installation must still
+  # provide ServiceAccount/cert-manager in the cert-manager namespace.
   enabled: true
 
 openbao:
