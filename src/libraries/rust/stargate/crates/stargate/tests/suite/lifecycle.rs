@@ -1269,6 +1269,8 @@ impl LifecycleBackendOptions<'_> {
                     pin: true,
                 },
                 bringup,
+                health_paths: pylon_lib::UpstreamHealthPaths::default(),
+                startup_health_wait: std::time::Duration::ZERO,
             },
             runtime_state.clone(),
             &stats_collector,

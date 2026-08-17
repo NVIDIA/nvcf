@@ -15,6 +15,8 @@
 
 use std::time::Duration;
 
+use crate::upstream_health::UpstreamHealthPaths;
+
 mod calibration;
 mod lifecycle;
 mod upstream;
@@ -77,6 +79,7 @@ pub(crate) struct BringupTaskConfig {
     pub upstream_http_base_url: String,
     pub generation: crate::runtime_state::ModelGeneration,
     pub config: BringupConfig,
+    pub health_paths: UpstreamHealthPaths,
 }
 
 #[cfg(test)]
@@ -103,6 +106,7 @@ mod tests {
 
     use crate::runtime_state::PylonRuntimeState;
     use crate::test_support::TestHttpServer;
+    use crate::upstream_health::UpstreamHealthPaths;
     use crate::{StatsCollectorConfig, StatsCollectorHandle, start_stats_collector};
 
     async fn wait_for_bringup_ready(runtime_state: &PylonRuntimeState, expected: bool) {
@@ -156,7 +160,143 @@ mod tests {
             upstream_http_base_url,
             generation: crate::runtime_state::ModelGeneration::new("test-model", 0),
             config,
+            health_paths: UpstreamHealthPaths::default(),
         }
+    }
+
+    #[tokio::test]
+    async fn health_check_falls_back_to_the_openai_ready_path() {
+        let server =
+            TestHttpServer::spawn(Router::new().route("/v1/health/ready", get(|| async { "ok" })))
+                .await;
+        let paths = UpstreamHealthPaths::default();
+
+        assert!(
+            check_upstream_health(
+                &reqwest::Client::new(),
+                server.as_str(),
+                Duration::from_secs(1),
+                &paths,
+            )
+            .await
+        );
+        assert_eq!(paths.resolved_path().as_deref(), Some("/v1/health/ready"));
+
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn health_check_reuses_the_resolved_path() {
+        let health_requests = Arc::new(AtomicUsize::new(0));
+        let ready_requests = Arc::new(AtomicUsize::new(0));
+        let server_health_requests = health_requests.clone();
+        let server_ready_requests = ready_requests.clone();
+        let server = TestHttpServer::spawn(
+            Router::new()
+                .route(
+                    "/health",
+                    get(move || {
+                        let requests = server_health_requests.clone();
+                        async move {
+                            requests.fetch_add(1, Ordering::SeqCst);
+                            axum::http::StatusCode::NOT_FOUND
+                        }
+                    }),
+                )
+                .route(
+                    "/v1/health/ready",
+                    get(move || {
+                        let requests = server_ready_requests.clone();
+                        async move {
+                            requests.fetch_add(1, Ordering::SeqCst);
+                            "ok"
+                        }
+                    }),
+                ),
+        )
+        .await;
+        let client = reqwest::Client::new();
+        let paths = UpstreamHealthPaths::default();
+
+        for _ in 0..2 {
+            assert!(
+                check_upstream_health(&client, server.as_str(), Duration::from_secs(1), &paths)
+                    .await
+            );
+        }
+
+        assert_eq!(health_requests.load(Ordering::SeqCst), 1);
+        assert_eq!(ready_requests.load(Ordering::SeqCst), 2);
+
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn health_check_fails_when_no_candidate_path_is_served() {
+        let server =
+            TestHttpServer::spawn(Router::new().route("/v1/models", get(|| async { "ok" }))).await;
+        let paths = UpstreamHealthPaths::default();
+
+        assert!(
+            !check_upstream_health(
+                &reqwest::Client::new(),
+                server.as_str(),
+                Duration::from_secs(1),
+                &paths,
+            )
+            .await
+        );
+        assert_eq!(paths.resolved_path(), None);
+
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn health_check_prefers_a_configured_path() {
+        let server =
+            TestHttpServer::spawn(Router::new().route("/ping", get(|| async { "ok" }))).await;
+        let paths = UpstreamHealthPaths::new(["ping"]);
+
+        assert!(
+            check_upstream_health(
+                &reqwest::Client::new(),
+                server.as_str(),
+                Duration::from_secs(1),
+                &paths,
+            )
+            .await
+        );
+        assert_eq!(paths.resolved_path().as_deref(), Some("/ping"));
+
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn health_check_falls_back_to_the_defaults_when_a_configured_path_is_wrong() {
+        let server =
+            TestHttpServer::spawn(Router::new().route("/v1/health/ready", get(|| async { "ok" })))
+                .await;
+        let paths = UpstreamHealthPaths::new(["/typo"]);
+
+        assert!(
+            check_upstream_health(
+                &reqwest::Client::new(),
+                server.as_str(),
+                Duration::from_secs(1),
+                &paths,
+            )
+            .await
+        );
+        assert_eq!(paths.resolved_path().as_deref(), Some("/v1/health/ready"));
+
+        server.shutdown().await;
+    }
+
+    #[test]
+    fn probe_path_is_the_first_candidate_until_a_probe_resolves() {
+        let paths = UpstreamHealthPaths::default();
+
+        assert_eq!(paths.probe_path(), "/health");
     }
 
     #[test]

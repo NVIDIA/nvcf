@@ -26,6 +26,14 @@ use super::{LoadBalancer, LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig};
 pub fn create_load_balancer_with_config(
     config: &LoadBalancerAlgorithmConfig,
 ) -> anyhow::Result<Arc<dyn LoadBalancer>> {
+    if config.algorithm() == LoadBalancerAlgorithm::PulsarWaitAndWiden
+        && config
+            .wait_and_widen_settings()
+            .is_some_and(|settings| settings.comparator.is_some())
+    {
+        anyhow::bail!("comparator is not supported for pulsar-wait-and-widen");
+    }
+
     if config.considers_kv_free_tokens()
         && !matches!(
             config.algorithm(),
