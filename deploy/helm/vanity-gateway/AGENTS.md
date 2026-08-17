@@ -24,9 +24,11 @@ to match the other chart subtrees.
 
 The chart is registered in `tools/ci/github-release-subprojects.json` with an
 `initial_version` floor of `0.2.0`, so it releases on tags of the form
-`deploy/helm/vanity-gateway/v<X.Y.Z>`. The floor is a computation baseline and
-is not published, so no `0.2.0` tag is created: the first published version is
-`0.3.0` for a `feat` commit under this subtree, or `0.2.1` for a `fix`. The
+`deploy/helm/vanity-gateway/v<X.Y.Z>`. The release job creates
+`deploy/helm/vanity-gateway/v0.2.0` in its own checkout as a semantic-release
+baseline and never pushes it, so `0.2.0` is not a published chart version. The
+first published version is `0.3.0` for a `feat` commit under this subtree, or
+`0.2.1` for a `fix`. The
 floor sits above the `0.1.0-nvcf-10204.x` artifacts the chart was recovered
 from, so every published version is unambiguously newer. See
 `docs/dev/github-release-process.md`.
