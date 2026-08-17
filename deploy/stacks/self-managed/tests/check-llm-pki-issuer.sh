@@ -70,20 +70,55 @@ expect_enabled() {
     fail "$case_name expected nvcf-pki enabled=$expected, got $actual"
 }
 
-# An explicit empty value cannot be expressed with --state-values-set-string,
-# which leaves the key unset so dig falls back to its default. Write a real
-# override file so the empty string reaches the template.
-empty_issuer_override() {
-  local field="$1"
-  local override_file="$work_dir/empty-$field.yaml"
+# Explicit null, empty, and quoted-boolean values cannot be expressed with
+# --state-values-set or --state-values-set-string: those either leave the key
+# unset, so dig falls back to its default, or coerce the type. Write a real
+# YAML override file so the exact value and type reach the template. Body is
+# read from stdin and indented under addons.llm.pki.
+pki_override() {
+  local case_name="$1"
+  local override_file="$work_dir/$case_name.override.yaml"
 
-  cat >"$override_file" <<YAML
-addons:
-  llm:
-    pki:
-      $field: ""
-YAML
+  {
+    printf 'addons:\n  llm:\n    pki:\n'
+    sed 's/^/      /'
+  } >"$override_file"
   printf '%s' "$override_file"
+}
+
+# Guards the defect this stack exists to prevent: a Certificate that names an
+# issuer no release creates. Dangling is only acceptable when the operator
+# explicitly declined management, so pass explicitly_external=true for those.
+expect_no_dangling_issuer() {
+  local case_name="$1"
+  local explicitly_external="$2"
+  local manifests_file="$work_dir/$case_name.router-manifests.yaml"
+
+  local issuer_kind issuer_name pki_enabled
+  issuer_kind="$(yq -rN 'select(.kind == "Certificate") | .spec.issuerRef.kind' "$manifests_file" | head -1)"
+  issuer_name="$(yq -rN 'select(.kind == "Certificate") | .spec.issuerRef.name' "$manifests_file" | head -1)"
+  pki_enabled="$(jq -r 'any(.[]; .name == "nvcf-pki" and .enabled == true)' "$work_dir/$case_name.json")"
+
+  # Without this the check is vacuous: if the manifest shape changes and the
+  # queries stop resolving, every case would take the "not the default issuer"
+  # exit below and silently pass.
+  if test -z "$issuer_kind" || test "$issuer_kind" = "null"; then
+    fail "$case_name could not read .spec.issuerRef.kind from the rendered Certificate"
+  fi
+  if test -z "$issuer_name" || test "$issuer_name" = "null"; then
+    fail "$case_name could not read .spec.issuerRef.name from the rendered Certificate"
+  fi
+
+  if test "$issuer_kind" != "ClusterIssuer" || test "$issuer_name" != "nvcf-openbao-pki"; then
+    return 0
+  fi
+  if test "$pki_enabled" = "true"; then
+    return 0
+  fi
+  if test "$explicitly_external" = "true"; then
+    return 0
+  fi
+  fail "$case_name renders a Certificate for ClusterIssuer/nvcf-openbao-pki while the nvcf-pki release is absent and management was not explicitly declined"
 }
 
 expect_failure() {
@@ -349,19 +384,166 @@ expect_failure managed-namespaced-issuer \
   --state-values-set-string addons.llm.pki.issuerKind=Issuer \
   --state-values-set-string addons.llm.pki.issuerName=custom-managed-pki
 
-# Case 10: An explicit empty issuerKind must not silently fall out of managed
-# mode. Without this guard the release is skipped while the router chart
-# re-defaults the kind, leaving a Certificate pointing at an absent issuer.
-expect_failure empty-issuer-kind \
-  'addons.llm.pki.issuerKind must not be empty when addons.llm.pki.enabled is true' \
-  "${managed_defaults[@]}" \
-  --state-values-file "$(empty_issuer_override issuerKind)"
+# Cases 10 to 19: malformed issuer-management values must fail rendering.
+#
+# Each of these previously resolved to "not managed" without an error, which
+# skipped the nvcf-pki release while the request-router Certificate still
+# named ClusterIssuer/nvcf-openbao-pki. Asserting only that nvcf-pki is absent
+# would pass against that defect, so every case asserts the diagnostic.
+bool_error='addons.llm.pki.clusterIssuer.enabled must be a YAML boolean'
+kind_error='addons.llm.pki.issuerKind must be exactly'
+kind_type_error='addons.llm.pki.issuerKind must be the string'
+name_error='addons.llm.pki.issuerName must be a lowercase RFC 1123 DNS subdomain'
+name_type_error='addons.llm.pki.issuerName must be a string'
 
-# Case 11: An explicit empty issuerName must fail in the stack, not later in
-# the request-router chart.
-expect_failure empty-issuer-name \
-  'addons.llm.pki.issuerName must not be empty when addons.llm.pki.enabled is true' \
+expect_failure cluster-issuer-null "$bool_error" \
   "${managed_defaults[@]}" \
-  --state-values-file "$(empty_issuer_override issuerName)"
+  --state-values-file "$(pki_override cluster-issuer-null <<'YAML'
+clusterIssuer:
+  enabled: null
+YAML
+)"
+
+expect_failure cluster-issuer-empty-string "$bool_error" \
+  "${managed_defaults[@]}" \
+  --state-values-file "$(pki_override cluster-issuer-empty-string <<'YAML'
+clusterIssuer:
+  enabled: ""
+YAML
+)"
+
+expect_failure cluster-issuer-string-true "$bool_error" \
+  "${managed_defaults[@]}" \
+  --state-values-file "$(pki_override cluster-issuer-string-true <<'YAML'
+clusterIssuer:
+  enabled: "true"
+YAML
+)"
+
+expect_failure cluster-issuer-string-upper-true "$bool_error" \
+  "${managed_defaults[@]}" \
+  --state-values-file "$(pki_override cluster-issuer-string-upper-true <<'YAML'
+clusterIssuer:
+  enabled: "TRUE"
+YAML
+)"
+
+expect_failure issuer-kind-whitespace "$kind_error" \
+  "${managed_defaults[@]}" \
+  --state-values-file "$(pki_override issuer-kind-whitespace <<'YAML'
+issuerKind: "   "
+YAML
+)"
+
+expect_failure issuer-kind-wrong-case "$kind_error" \
+  "${managed_defaults[@]}" \
+  --state-values-file "$(pki_override issuer-kind-wrong-case <<'YAML'
+issuerKind: clusterissuer
+YAML
+)"
+
+expect_failure issuer-kind-null "$kind_type_error" \
+  "${managed_defaults[@]}" \
+  --state-values-file "$(pki_override issuer-kind-null <<'YAML'
+issuerKind: null
+YAML
+)"
+
+expect_failure issuer-name-whitespace "$name_error" \
+  "${managed_defaults[@]}" \
+  --state-values-file "$(pki_override issuer-name-whitespace <<'YAML'
+issuerName: "   "
+YAML
+)"
+
+expect_failure issuer-name-uppercase "$name_error" \
+  "${managed_defaults[@]}" \
+  --state-values-file "$(pki_override issuer-name-uppercase <<'YAML'
+issuerName: Custom-PKI
+YAML
+)"
+
+expect_failure issuer-name-null "$name_type_error" \
+  "${managed_defaults[@]}" \
+  --state-values-file "$(pki_override issuer-name-null <<'YAML'
+issuerName: null
+YAML
+)"
+
+# Cases 20 to 24: the valid forms must keep working, and none of them may
+# leave a Certificate pointing at an issuer the stack was expected to install.
+explicit_true_file="$(pki_override cluster-issuer-bool-true <<'YAML'
+clusterIssuer:
+  enabled: true
+YAML
+)"
+render_list cluster-issuer-bool-true \
+  "${managed_defaults[@]}" --state-values-file "$explicit_true_file"
+expect_enabled cluster-issuer-bool-true true
+render_router cluster-issuer-bool-true \
+  --state-values-set-string addons.llm.pki.allowedDomains=nvcf.svc.cluster.local \
+  --state-values-set-string addons.llm.pki.image.tag=test \
+  --state-values-file "$explicit_true_file"
+expect_no_dangling_issuer cluster-issuer-bool-true false
+
+explicit_false_file="$(pki_override cluster-issuer-bool-false <<'YAML'
+clusterIssuer:
+  enabled: false
+YAML
+)"
+render_list cluster-issuer-bool-false \
+  "${managed_defaults[@]}" \
+  --state-values-set openbao.enabled=false \
+  --state-values-file "$explicit_false_file"
+expect_enabled cluster-issuer-bool-false false
+render_router cluster-issuer-bool-false \
+  --state-values-set openbao.enabled=false \
+  --state-values-file "$explicit_false_file"
+expect_no_dangling_issuer cluster-issuer-bool-false true
+
+render_list omitted-cluster-issuer "${managed_defaults[@]}"
+expect_enabled omitted-cluster-issuer true
+render_router omitted-cluster-issuer \
+  --state-values-set-string addons.llm.pki.allowedDomains=nvcf.svc.cluster.local \
+  --state-values-set-string addons.llm.pki.image.tag=test
+expect_no_dangling_issuer omitted-cluster-issuer false
+
+# A valid custom external issuer must remain supported end to end.
+external_valid_file="$(pki_override external-issuer-valid <<'YAML'
+issuerKind: Issuer
+issuerName: external-pki.example.invalid
+clusterIssuer:
+  enabled: false
+YAML
+)"
+render_list external-issuer-valid \
+  "${managed_defaults[@]}" \
+  --state-values-set openbao.enabled=false \
+  --state-values-file "$external_valid_file"
+expect_enabled external-issuer-valid false
+render_router external-issuer-valid \
+  --state-values-set openbao.enabled=false \
+  --state-values-file "$external_valid_file"
+expect_no_dangling_issuer external-issuer-valid true
+
+# Managed mode with external cert-manager must still install the issuer.
+render_list managed-external-cert-manager \
+  "${managed_defaults[@]}" \
+  --state-values-set certManager.enabled=false \
+  --state-values-file "$explicit_true_file"
+expect_enabled managed-external-cert-manager true
+render_router managed-external-cert-manager \
+  --state-values-set certManager.enabled=false \
+  --state-values-set-string addons.llm.pki.allowedDomains=nvcf.svc.cluster.local \
+  --state-values-set-string addons.llm.pki.image.tag=test \
+  --state-values-file "$explicit_true_file"
+expect_no_dangling_issuer managed-external-cert-manager false
+
+# Managed mode still requires stack-managed OpenBao under an explicit boolean.
+expect_failure managed-bool-without-openbao \
+  'openbao.enabled must be true when addons.llm.pki.clusterIssuer management is enabled' \
+  "${managed_defaults[@]}" \
+  --state-values-set openbao.enabled=false \
+  --state-values-file "$explicit_true_file"
 
 echo "check-llm-pki-issuer: all checks passed"

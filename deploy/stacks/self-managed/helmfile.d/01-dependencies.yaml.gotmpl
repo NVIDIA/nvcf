@@ -8,22 +8,48 @@ environments:
 
 {{- $llmEnabled := dig "addons" "llm" "enabled" false .Values }}
 {{- $pkiEnabled := dig "addons" "llm" "pki" "enabled" false .Values }}
+{{- $llmPkiActive := and $llmEnabled $pkiEnabled }}
 {{- $issuerKind := dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values }}
 {{- $issuerName := dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values }}
-{{- $manageSetting := dig "addons" "llm" "pki" "clusterIssuer" "enabled" "__default__" .Values }}
-{{- /* dig only falls back for a missing path, so an explicit empty value
-     survives and would silently disable managed-issuer detection. */ -}}
-{{- if and $llmEnabled $pkiEnabled (not $issuerKind) }}
-{{- fail "addons.llm.pki.issuerKind must not be empty when addons.llm.pki.enabled is true" }}
+{{- $manageIssuer := false }}
+{{- if $llmPkiActive }}
+{{- /* dig only falls back for a missing path, so explicit null, empty, and
+     wrongly typed values reach these checks. Reject them instead of coercing
+     them: a malformed management flag that silently resolves to false skips
+     the nvcf-pki release while global.yaml.gotmpl still renders a Certificate
+     referencing ClusterIssuer/nvcf-openbao-pki, which is the dangling-issuer
+     failure this stack exists to prevent. */ -}}
+{{- if not (kindIs "string" $issuerKind) }}
+{{- fail "addons.llm.pki.issuerKind must be the string \"ClusterIssuer\" or \"Issuer\"" }}
 {{- end }}
-{{- if and $llmEnabled $pkiEnabled (not $issuerName) }}
-{{- fail "addons.llm.pki.issuerName must not be empty when addons.llm.pki.enabled is true" }}
+{{- if not (has $issuerKind (list "ClusterIssuer" "Issuer")) }}
+{{- fail (printf "addons.llm.pki.issuerKind must be exactly \"ClusterIssuer\" or \"Issuer\", got %q" $issuerKind) }}
 {{- end }}
-{{- $manageIssuer := and (eq $issuerKind "ClusterIssuer") (eq $issuerName "nvcf-openbao-pki") }}
-{{- if ne (toString $manageSetting) "__default__" }}
-{{- $manageIssuer = eq (toString $manageSetting) "true" }}
+{{- if not (kindIs "string" $issuerName) }}
+{{- fail "addons.llm.pki.issuerName must be a string" }}
 {{- end }}
-{{- $managedIssuer := and $llmEnabled $pkiEnabled $manageIssuer }}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $issuerName) }}
+{{- fail (printf "addons.llm.pki.issuerName must be a lowercase RFC 1123 DNS subdomain, got %q" $issuerName) }}
+{{- end }}
+{{- if gt (len $issuerName) 253 }}
+{{- fail "addons.llm.pki.issuerName must be at most 253 characters" }}
+{{- end }}
+{{- $manageIssuer = and (eq $issuerKind "ClusterIssuer") (eq $issuerName "nvcf-openbao-pki") }}
+{{- $pkiValues := dig "addons" "llm" "pki" dict .Values }}
+{{- if kindIs "map" $pkiValues }}
+{{- $clusterIssuerValues := dig "clusterIssuer" dict $pkiValues }}
+{{- if and (kindIs "map" $clusterIssuerValues) (hasKey $clusterIssuerValues "enabled") }}
+{{- /* index, not get: helmfile overrides sprig's get with a path-based
+     signature that rejects a map as its first argument. */ -}}
+{{- $manageSetting := index $clusterIssuerValues "enabled" }}
+{{- if not (kindIs "bool" $manageSetting) }}
+{{- fail (printf "addons.llm.pki.clusterIssuer.enabled must be a YAML boolean, true or false. Quoted strings, null, and empty values are rejected. Got %q" (toString $manageSetting)) }}
+{{- end }}
+{{- $manageIssuer = $manageSetting }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- $managedIssuer := and $llmPkiActive $manageIssuer }}
 {{- if and $managedIssuer (ne $issuerKind "ClusterIssuer") }}
 {{- fail "addons.llm.pki.clusterIssuer management supports only issuerKind=ClusterIssuer" }}
 {{- end }}

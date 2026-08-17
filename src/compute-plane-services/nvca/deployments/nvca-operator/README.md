@@ -80,7 +80,7 @@ used in Kubernetes Clusters to run NVCF Workloads.
 | `agent.functionEnvOverrides`         | Map of environment variable overrides for function workloads (e.g., {"INIT_CONTAINER": "nvcr.io/custom/init:v1.0", "UTILS_CONTAINER": "nvcr.io/custom/utils:v1.0"})        | `{}`                   |
 | `agent.taskEnvOverrides`             | Map of environment variable overrides for task workloads (e.g., {"INIT_CONTAINER": "nvcr.io/custom/init:v1.0", "ESS_AGENT_CONTAINER": "nvcr.io/custom/ess:v1.0"})          | `{}`                   |
 | `agent.overrideEnvironmentVariables` | Map of environment variables to override on the NVCA agent container. These take precedence over default values. Example: {"LOG_LEVEL": "debug", "CUSTOM_FLAG": "enabled"} | `{}`                   |
-| `agent.llm.requestRouterAddress`     | Default LLM request-router worker address rendered as STARGATE_ADDRESS for LLM workers                                                                                      | `""`                   |
+| `agent.llm.requestRouterAddress`     | Operator default LLM request-router address. Workers read LLM_REQUEST_ROUTER_ADDRESS from the launch environment; not a runtime fallback                                    | `""`                   |
 | `agent.serviceOAuth`                 | OAuth token and JWKS endpoints used by dependent services                                                                                                                   | See `values.yaml`      |
 
 ### Webhook Container Resource configuration

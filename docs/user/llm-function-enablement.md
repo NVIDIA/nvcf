@@ -211,9 +211,17 @@ controlPlane:
 ```
 
 Use the endpoint that compute-plane workers can resolve and reach. Its
-hostname must match a SAN on the request-router certificate. Registration
-converts this field to `agent.llm.requestRouterAddress`, which supplies the
-worker's `--stargate-address` argument.
+hostname must match a SAN on the request-router certificate.
+
+Registration renders this field as `agent.llm.requestRouterAddress` in the
+compute-plane values. That is operator configuration, not a runtime fallback
+for workers. At this release the worker sidecar takes its `--stargate-address`
+from the `LLM_REQUEST_ROUTER_ADDRESS` variable in its launch environment, with
+`STARGATE_ADDRESS` accepted as a legacy alias. The NVCF API injects
+`LLM_REQUEST_ROUTER_ADDRESS` on the normal launch path, derived from
+`global.workerEndpoints.llmRequestRouterAddress`. If neither variable reaches
+the workload, translation rejects the launch instead of falling back to the
+registered address.
 
 Add that hostname to `addons.llm.pki.dnsNames`. The list accepts any number of
 additional names; the stack only requires that one entry covers the router's
