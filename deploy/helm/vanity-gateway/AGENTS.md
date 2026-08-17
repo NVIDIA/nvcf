@@ -9,7 +9,7 @@ Native Helm chart subtree. Shared chart rules live in `deploy/helm/AGENTS.md`.
 - Chart directory: `helm-nvcf-vanity-gateway`
 - CI values: `tools/ci/helm-validate-values/vanity-gateway.yaml`
 - Release service name: `helm-nvcf-vanity-gateway`
-- Initial release version: not yet assigned. See "Versioning" below.
+- Release tag format: `deploy/helm/vanity-gateway/v<X.Y.Z>`
 
 ## Provenance
 
@@ -22,11 +22,17 @@ to match the other chart subtrees.
 
 ## Versioning
 
-The imported `Chart.yaml` still carries the published version
-`0.1.0-nvcf-10204.1` and appVersion `1.25.0-nvcf-10204.0`. Neither is a form the
-repo release tooling accepts, so no release lane is registered for this chart
-and no tag exists. Renumber `version` to a plain `X.Y.Z` before wiring a
-release lane.
+The chart is registered in `tools/ci/github-release-subprojects.json` with no
+`initial_version`, so it releases from a `0.0.0` floor on tags of the form
+`deploy/helm/vanity-gateway/v<X.Y.Z>`. The first published version is `0.1.0`
+for a `feat` commit under this subtree, or `0.0.1` for a `fix`. See
+`docs/dev/github-release-process.md`.
+
+`Chart.yaml` carries `version: 0.0.0`. The release pipeline packages the chart
+at the version taken from the release tag, so the committed value is only used
+by local renders and never ships.
+
+`appVersion` tracks the image this chart deploys and is bumped by hand.
 
 ## Validate
 
