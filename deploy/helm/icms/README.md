@@ -88,27 +88,27 @@ The default values include development-oriented placeholders. Override them befo
 
 ## Remote Config RBAC
 
-`spring-cloud-kubernetes` (5.0.2, shipped in icms-service `1.2.x`) calls `listNamespacedConfigMap` without a `fieldSelector=metadata.name` filter and matches the target name in memory. Because the API request is unfiltered, the Role must grant `list`/`watch` on the configmaps collection itself — no `resourceNames` scoping for those verbs — so the `sis-api` SA can read every ConfigMap in the namespace. Chart assumes none are sensitive; clusters that block broad namespace reads need a policy exception.
+`spring-cloud-kubernetes` (5.0.2, shipped in icms-service `1.2.x`) calls `listNamespacedConfigMap` without a `fieldSelector=metadata.name` filter and matches the target name in memory. Because the API request is unfiltered, the Role must grant `list`/`watch` on the configmaps collection itself, with no `resourceNames` scoping for those verbs, so the `sis-api` SA can read every ConfigMap in the namespace. Chart assumes none are sensitive; clusters that block broad namespace reads need a policy exception.
 
 Set `sis.remoteConfig.enabled: false` to opt out: the chart no longer renders the broad RBAC, and the service runs on JAR defaults in `application-ncp.yaml`. The SA keeps default-token automount on (the K8s default); with remote config disabled the token is simply unused. Hot reload is unavailable.
 
 ## Upgrade: `sis.volumes` / `sis.volumeMounts` renamed
 
-The OpenBao token volume and mount are now **chart-owned** (rendered in `deployment.yaml`)
+The OpenBao token volume and mount are now chart-owned (rendered in `deployment.yaml`)
 so a list override can't accidentally drop the vault-agent wiring. Two keys were renamed:
 
-- `sis.volumes` → `sis.extraVolumes`
-- `sis.volumeMounts` → `sis.extraVolumeMounts`
+- `sis.volumes` becomes `sis.extraVolumes`
+- `sis.volumeMounts` becomes `sis.extraVolumeMounts`
 
 They still append your own entries after the chart-owned ones. Before upgrading, move any
-custom entries to the new keys — the chart now **fails rendering** (rather than silently
+custom entries to the new keys. The chart now fails rendering (rather than silently
 dropping them) if the old keys are set. Don't redefine the chart-owned `openbao-token` or
 `vault-config-templates` volumes in the `extra*` lists.
 
-If you had overridden the token volume inline, drop it — it's fully chart-owned now:
+If you had overridden the token volume inline, drop it, since it is fully chart-owned now:
 
-- volume `token` → `openbao-token`
-- mount path `/var/run/secrets/kubernetes.io/serviceaccount` → `/var/run/secrets/openbao/serviceaccount`
+- volume `token` becomes `openbao-token`
+- mount path `/var/run/secrets/kubernetes.io/serviceaccount` becomes `/var/run/secrets/openbao/serviceaccount`
 - a custom `audience` now goes in `sis.vault.audience`
 
 ## Notes

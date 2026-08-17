@@ -150,7 +150,7 @@ sis:
     audience: http://openbao-server.vault-system.svc.cluster.local:8200
 
   # Additional volumes on the output Deployment definition. Appended AFTER the
-  # chart-owned volumes (openbao token, vault-config-templates) — do not redefine
+  # chart-owned volumes (openbao token, vault-config-templates): do not redefine
   # those here.
   extraVolumes: []
 

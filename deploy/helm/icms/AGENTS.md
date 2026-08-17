@@ -23,7 +23,7 @@ Check these files first when they exist in your local workspace:
 - If the request is about cross-chart ordering, stage selection, or environment-wide configuration, route to `nvcf-self-managed-stack`.
 
 ## Working In This Repo
-- Read this repo’s top-level `README*`, build files, and CI config before making assumptions about language or tooling.
+- Read this repo's top-level `README*`, build files, and CI config before making assumptions about language or tooling.
 - Search for existing patterns with `rg` before adding new structure.
 - Keep changes scoped to the owning repo once routing is confirmed; only fan out when the workspace docs show an explicit dependency.
 
