@@ -69,6 +69,7 @@ nvcf_java_test(
     resources = ICMS_SERVICE_TEST_RESOURCES,
     tags = [
         "exclusive",
+        "external",
         "requires-docker",
     ],
     timeout = "long",
@@ -79,6 +80,7 @@ nvcf_java_coverage_test(
     coverage_target = ":app_classes",
     tags = [
         "exclusive",
+        "external",
         "requires-docker",
     ],
     test = ":tests",

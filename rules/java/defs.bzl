@@ -239,6 +239,10 @@ def nvcf_java_test(
         "resources": resources,
         "runtime_deps": test_runtime_deps,
         "size": size,
+        # Intentional: wildcard test patterns must select the companion coverage
+        # target, not this Java target, so the suite runs once and CI gets its
+        # JUnit and JaCoCo artifacts. IntelliJ imports this manual target through
+        # allow_manual_targets_sync.
         "tags": _unique(tags + ["manual"] + ([] if ide_visible else ["no-ide"])),
         "testonly": True,
         "timeout": timeout,
@@ -301,6 +305,10 @@ def nvcf_java_coverage_test(
             _JACOCO_CLI,
         ] + coverage_sourcefiles),
         size = size,
+        # Intentional: do not add manual by default. Wildcard test patterns
+        # select this report-producing wrapper. Do not reverse the manual tag
+        # placement without updating .github/workflows/bazel.yml, artifact
+        # staging, and the Java Bazel documentation together.
         tags = tags,
         timeout = timeout,
         visibility = visibility,

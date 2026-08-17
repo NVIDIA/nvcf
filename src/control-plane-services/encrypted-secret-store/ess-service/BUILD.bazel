@@ -58,6 +58,7 @@ nvcf_java_test(
     srcs = ESS_SERVICE_TEST_SRCS,
     tags = [
         "exclusive",
+        "external",
         "requires-docker",
     ],
     deps = [
@@ -86,6 +87,7 @@ nvcf_java_coverage_test(
     size = "large",
     tags = [
         "exclusive",
+        "external",
         "requires-docker",
     ],
     test = ":tests",
