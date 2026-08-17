@@ -108,6 +108,22 @@ func TestChatMessageContentMarshalRejectsUnknownPart(t *testing.T) {
 	}
 }
 
+// A typed-nil part would otherwise serialize as a type with no member.
+func TestChatMessageContentMarshalRejectsNilParts(t *testing.T) {
+	tests := map[string]ChatMessageContent{
+		"nil image_url": {ContentPartText("a"), (*ContentPartImageURL)(nil)},
+		"nil document":  {ContentPartText("a"), (*ContentPartDocument)(nil)},
+	}
+
+	for name, content := range tests {
+		t.Run(name, func(t *testing.T) {
+			if _, err := json.Marshal(content); err == nil {
+				t.Fatal("expected error for nil content part")
+			}
+		})
+	}
+}
+
 type unknownContentPart struct{}
 
 func (unknownContentPart) ContentType() ContentPartType {

@@ -500,10 +500,16 @@ func (content ChatMessageContent) MarshalJSON() ([]byte, error) {
 		case ContentPartText:
 			parts = append(parts, outboundContentPart{Type: ContentPartTypeText, Text: string(typed)})
 		case *ContentPartImageURL:
+			if typed == nil {
+				return nil, errors.New("marshal content: nil image_url content part")
+			}
 			parts = append(parts, outboundContentPart{Type: ContentPartTypeImageURL, ImageURL: typed})
 		case ContentPartImageURL:
 			parts = append(parts, outboundContentPart{Type: ContentPartTypeImageURL, ImageURL: &typed})
 		case *ContentPartDocument:
+			if typed == nil {
+				return nil, errors.New("marshal content: nil document content part")
+			}
 			parts = append(parts, outboundContentPart{Type: ContentPartTypeDocument, Document: typed})
 		case ContentPartDocument:
 			parts = append(parts, outboundContentPart{Type: ContentPartTypeDocument, Document: &typed})

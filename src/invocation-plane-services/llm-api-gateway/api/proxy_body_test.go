@@ -19,6 +19,7 @@ package api
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 )
 
@@ -55,8 +56,9 @@ func TestRewriteJSONModelPreservesEverythingElse(t *testing.T) {
 	if got["encoding_format"] != "float" {
 		t.Errorf("encoding_format = %v, want float", got["encoding_format"])
 	}
-	if _, ok := got["unknown"]; !ok {
-		t.Error("unknown passthrough field was dropped")
+	wantUnknown := map[string]any{"a": []any{float64(1), float64(2)}}
+	if !reflect.DeepEqual(got["unknown"], wantUnknown) {
+		t.Errorf("unknown = %v, want %v", got["unknown"], wantUnknown)
 	}
 }
 
@@ -84,8 +86,8 @@ func TestRewriteResponsesProxyBodyPreservesEverythingElse(t *testing.T) {
 	if got["input"] != "hello" {
 		t.Errorf("input = %v, want the original string", got["input"])
 	}
-	tools, ok := got["tools"].([]any)
-	if !ok || len(tools) != 1 {
-		t.Fatalf("tools = %v, want the original single-element array", got["tools"])
+	wantTools := []any{map[string]any{"type": "function", "name": "f"}}
+	if !reflect.DeepEqual(got["tools"], wantTools) {
+		t.Errorf("tools = %v, want %v", got["tools"], wantTools)
 	}
 }
