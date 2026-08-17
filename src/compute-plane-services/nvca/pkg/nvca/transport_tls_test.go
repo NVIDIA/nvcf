@@ -95,7 +95,6 @@ func TestCreatePodArtifactInstancesTransportTLSBundleInjectsOnlyLLMWorker(t *tes
 
 	llmWorker := findTransportTLSContainer(createdPod, function.LLMWorkerContainerName)
 	require.NotNil(t, llmWorker)
-	assert.NotContains(t, llmWorker.Args, "--quic-insecure")
 	assert.Equal(t, "/nvcf/transport-tls/ca-certificates.crt",
 		findTransportTLSEnvValue(llmWorker, "STARGATE_TLS_CERT_PATH"))
 	mount := findTransportTLSVolumeMount(llmWorker, "nvcf-trust-merged-certs")

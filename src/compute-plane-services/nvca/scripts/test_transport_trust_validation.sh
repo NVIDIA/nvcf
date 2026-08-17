@@ -56,6 +56,28 @@ agentConfig:
         trustMode: bundle
 EOF
 
+cat > "${test_dir}/valid-secret-bundle.yaml" <<'EOF'
+agentConfig:
+  mergeConfig: |
+    workload:
+      stargateQUICInsecure: false
+operatorConfig:
+  workload:
+    transportTLS:
+      trustBundle:
+        secretKeyRef:
+          name: nvcf-trust
+EOF
+
+cat > "${test_dir}/valid-secret-bundle-unset.yaml" <<'EOF'
+operatorConfig:
+  workload:
+    transportTLS:
+      trustBundle:
+        secretKeyRef:
+          name: nvcf-trust
+EOF
+
 validation_error="workload.stargateQUICInsecure=true cannot be used with workload.transportTLS.trustMode=bundle"
 
 assert_invalid() {
@@ -102,4 +124,8 @@ for chart_dir in \
   assert_valid "${chart_dir}" "${chart_label} system mode with QUIC insecure" "${test_dir}/valid-system.yaml"
   assert_valid "${chart_dir}" "${chart_label} bundle mode with QUIC insecure false" "${test_dir}/valid-bundle.yaml"
   assert_valid "${chart_dir}" "${chart_label} bundle mode with QUIC insecure unset" "${test_dir}/valid-bundle-unset.yaml"
+  assert_valid "${chart_dir}" "${chart_label} secret-backed bundle with QUIC insecure false" \
+    "${test_dir}/valid-secret-bundle.yaml"
+  assert_valid "${chart_dir}" "${chart_label} secret-backed bundle with QUIC insecure unset" \
+    "${test_dir}/valid-secret-bundle-unset.yaml"
 done

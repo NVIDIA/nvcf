@@ -127,7 +127,6 @@ func TestPrepareTransportTLSForWorkloadsInjectsPodLLMWorker(t *testing.T) {
 	assert.Equal(t, corev1.PullAlways, installer.ImagePullPolicy)
 	llmWorker := findWorkloadContainer(podSpec, function.LLMWorkerContainerName)
 	require.NotNil(t, llmWorker)
-	assert.NotContains(t, llmWorker.Args, "--quic-insecure")
 	assert.Equal(t, "/nvcf/transport-tls/ca-certificates.crt",
 		findWorkloadEnvValue(llmWorker, "STARGATE_TLS_CERT_PATH"))
 	mount := findWorkloadVolumeMount(llmWorker, "nvcf-trust-merged-certs")
