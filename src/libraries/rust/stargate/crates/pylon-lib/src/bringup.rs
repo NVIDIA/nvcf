@@ -252,7 +252,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn health_check_uses_configured_paths_instead_of_the_defaults() {
+    async fn health_check_prefers_a_configured_path() {
         let server =
             TestHttpServer::spawn(Router::new().route("/ping", get(|| async { "ok" }))).await;
         let paths = UpstreamHealthPaths::new(["ping"]);
@@ -267,6 +267,27 @@ mod tests {
             .await
         );
         assert_eq!(paths.resolved_path().as_deref(), Some("/ping"));
+
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn health_check_falls_back_to_the_defaults_when_a_configured_path_is_wrong() {
+        let server =
+            TestHttpServer::spawn(Router::new().route("/v1/health/ready", get(|| async { "ok" })))
+                .await;
+        let paths = UpstreamHealthPaths::new(["/typo"]);
+
+        assert!(
+            check_upstream_health(
+                &reqwest::Client::new(),
+                server.as_str(),
+                Duration::from_secs(1),
+                &paths,
+            )
+            .await
+        );
+        assert_eq!(paths.resolved_path().as_deref(), Some("/v1/health/ready"));
 
         server.shutdown().await;
     }

@@ -35,23 +35,22 @@ impl Default for UpstreamHealthPaths {
 }
 
 impl UpstreamHealthPaths {
+    /// Configured paths are probed first; the defaults always stay as a
+    /// fallback so a wrong path cannot strand an otherwise healthy upstream.
     pub fn new<I, P>(paths: I) -> Self
     where
         I: IntoIterator<Item = P>,
         P: AsRef<str>,
     {
         let mut candidates = Vec::new();
-        for path in paths {
-            let path = normalize_path(path.as_ref());
+        let configured = paths.into_iter().map(|path| normalize_path(path.as_ref()));
+        let defaults = DEFAULT_UPSTREAM_HEALTH_PATHS
+            .iter()
+            .map(|path| (*path).to_string());
+        for path in configured.chain(defaults) {
             if !path.is_empty() && !candidates.contains(&path) {
                 candidates.push(path);
             }
-        }
-        if candidates.is_empty() {
-            candidates = DEFAULT_UPSTREAM_HEALTH_PATHS
-                .iter()
-                .map(|path| (*path).to_string())
-                .collect();
         }
         Self {
             candidates: Arc::new(candidates),
@@ -129,6 +128,17 @@ mod tests {
         let paths = UpstreamHealthPaths::new(Vec::<String>::new());
 
         assert_eq!(paths.probe_path(), "/health");
+    }
+
+    #[test]
+    fn configured_paths_are_probed_before_the_defaults() {
+        let paths = UpstreamHealthPaths::new(["/ping"]);
+
+        assert_eq!(
+            paths.probe_order(),
+            vec![(0, "/ping"), (1, "/health"), (2, "/v1/health/ready")]
+        );
+        assert_eq!(paths.probe_path(), "/ping");
     }
 
     #[test]

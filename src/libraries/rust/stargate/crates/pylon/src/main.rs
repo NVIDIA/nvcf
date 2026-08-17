@@ -74,7 +74,7 @@ struct Args {
     /// Disable ongoing upstream health monitoring and active canaries
     #[arg(long, default_value_t = false)]
     disable_bringup: bool,
-    /// Upstream health path to probe; repeat to try several in order. The first path that answers is reused
+    /// Upstream health path probed ahead of the built-in defaults; repeat to try several in order
     #[arg(long = "upstream-health-path", value_name = "PATH")]
     upstream_health_paths: Vec<String>,
     /// How long startup retries the upstream health probe before exiting. `0` probes once
