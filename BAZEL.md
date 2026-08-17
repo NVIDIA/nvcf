@@ -76,10 +76,11 @@ The repo expects Bazel 9.1.1 (pinned in `.bazelversion`). Bazelisk handles
 the download automatically; do not install Bazel via apt or brew directly,
 as that pins a different version.
 
-Java targets use Java 25 with the root `.bazelrc` setting
-`--java_runtime_version=local_jdk`. The pinned containerized CI image supplies
-Temurin 25 through `JAVA_HOME`. The Docker-host lane downloads and configures
-Temurin 25 through the workflow's `actions/setup-java@v4` step.
+Java targets use Java 25. The root `.bazelrc` selects the JDK with
+`--java_runtime_version=local_jdk`, and the shared Java macros compile sources
+with `--release 25`. The pinned containerized CI image supplies Temurin 25
+through `JAVA_HOME`. The Docker-host lane downloads and configures Temurin 25
+through the workflow's `actions/setup-java@v4` step.
 
 For local Java work, install an organization-approved full JDK 25 and point
 `JAVA_HOME` at it:
@@ -145,6 +146,26 @@ as:
 //src/control-plane-services/<service-directory>/<module>:<target>
 ```
 
+### Basic Bazel terms
+
+The Java component guides use four related terms:
+
+| Term | Meaning | Example |
+|---|---|---|
+| Macro | A Starlark function that writes one or more rule calls for us | `nvcf_java_test(...)` |
+| Rule | A Bazel building block that knows how to create an output | `java_test(...)` |
+| Target | One named object created by a rule | `tests` |
+| Label | The full Bazel address of a target | `//src/control-plane-services/cloud-functions/nvcf-core:tests` |
+
+For the example above, `nvcf-core/BUILD.bazel` calls the
+`nvcf_java_test(name = "tests", ...)` macro. The shared macro in
+`//rules/java:defs.bzl` calls the standard `java_test` rule. That rule declares
+the `tests` target. The full label tells Bazel both the package directory and
+the target name.
+
+Each Java component's `BAZEL.md` shows the same mapping with names from that
+component.
+
 Set a portable output root once per local shell:
 
 ```bash
@@ -195,9 +216,10 @@ Its output is:
 bazel-bin/src/control-plane-services/<service-directory>/<spring-boot-app-module>/app.jar
 ```
 
-Real Java test, JUnit, and JaCoCo outputs are under each target's
-`bazel-testlogs/<component>/<module>/tests/test.outputs` directory. The
-component guides provide commands for one module, class, or method and for
+Real Java test, JUnit, and JaCoCo outputs are under the report target's
+`bazel-testlogs/<component>/<module>/<report-target>/test.outputs` directory.
+The normal report target name is `tests_coverage`. The component guides
+provide commands for one module, class, or method and for
 NOTICE, OSRB, Docker, and component-specific validation:
 
 ```text

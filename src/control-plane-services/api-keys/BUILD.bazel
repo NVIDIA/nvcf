@@ -1,5 +1,5 @@
 load("@rules_java//java:defs.bzl", "java_library")
-load("//rules/java:defs.bzl", "nv_boot_library", "nv_boot_library_test", "nv_boot_workspace_runfiles")
+load("//rules/java:defs.bzl", "nvcf_java_coverage_test", "nvcf_java_library", "nvcf_java_test", "nvcf_workspace_runfiles")
 load("//rules/java:notice.bzl", "nvcf_notice", "nvcf_notice_delta")
 load("//rules/java:spring.bzl", "spring_boot_app")
 load("//rules/oci:defs.bzl", "java_image_contract_test", "java_oci_image")
@@ -76,7 +76,7 @@ filegroup(
 
 # Tests open local_env paths relative to the runfiles workspace root. Strip the
 # imported package prefix to preserve the standalone repository layout.
-nv_boot_workspace_runfiles(
+nvcf_workspace_runfiles(
     name = "integration_local_env",
     srcs = [":integration_local_env_files"],
     strip_prefix = "src/control-plane-services/api-keys/",
@@ -89,7 +89,7 @@ java_library(
     visibility = ["//visibility:private"],
 )
 
-nv_boot_library(
+nvcf_java_library(
     name = "app_classes",
     srcs = API_KEYS_SRCS,
     deps = API_KEYS_DEPS,
@@ -113,9 +113,8 @@ spring_boot_app(
     main_class = "com.nvidia.apikeys.App",
 )
 
-nv_boot_library_test(
+nvcf_java_test(
     name = "tests",
-    coverage_library = ":app_classes",
     srcs = API_KEYS_TEST_SRCS,
     deps = API_KEYS_DEPS + [
         ":app_classes",
@@ -138,6 +137,18 @@ nv_boot_library_test(
         "exclusive",
         "requires-docker",
     ],
+    timeout = "long",
+)
+
+nvcf_java_coverage_test(
+    name = "tests_coverage",
+    coverage_target = ":app_classes",
+    size = "large",
+    tags = [
+        "exclusive",
+        "requires-docker",
+    ],
+    test = ":tests",
     timeout = "long",
 )
 
