@@ -275,6 +275,11 @@
       "service_name": "nvcf-api-keys"
     },
     {
+      "id": "event-ledger",
+      "path": "src/control-plane-services/event-ledger",
+      "service_name": "nvcf-event-ledger"
+    },
+    {
       "id": "ess",
       "path": "src/control-plane-services/encrypted-secret-store",
       "service_name": "nvcf-ess",
