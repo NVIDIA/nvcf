@@ -38,6 +38,7 @@ eventLedger:
     name: "nvcf-event-ledger"
     pullPolicy: IfNotPresent
     tag: "0.10.2"
+    digest: ""
 
   imagePullSecrets: []
 

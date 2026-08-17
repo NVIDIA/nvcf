@@ -64,7 +64,12 @@ image.
 {{- $repository := required "A valid image repository (.Values.eventLedger.image.repository) is required!" .Values.eventLedger.image.repository -}}
 {{- $name := .Values.eventLedger.image.name | default "event-ledger" -}}
 {{- $tag := .Values.eventLedger.image.tag | default .Chart.AppVersion -}}
+{{- $digest := .Values.eventLedger.image.digest -}}
+{{- if $digest -}}
+{{- printf "%s/%s/%s:%s@%s" $registry $repository $name $tag $digest -}}
+{{- else -}}
 {{- printf "%s/%s/%s:%s" $registry $repository $name $tag -}}
+{{- end -}}
 {{- end -}}
 
 {{/*
