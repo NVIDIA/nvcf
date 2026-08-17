@@ -28,6 +28,7 @@ import (
 	"testing"
 
 	"nvcf-cli/internal/client"
+	"nvcf-cli/internal/state"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -97,6 +98,21 @@ func configureAdminTest(t *testing.T, srvURL string) {
 	t.Cleanup(func() { viper.Reset() })
 }
 
+// isolateCredentialState prevents a developer's real ~/.nvcf-cli.state (or
+// inherited NVCF_TOKEN/NVCF_API_KEY env vars) from leaking into credential
+// fallback lookups. Config loading falls back to the on-disk state file via
+// os.UserHomeDir, so redirecting HOME to an empty temp dir and rebuilding
+// the package-level state manager is required for a deterministic "no
+// credentials configured" test; viper.Reset alone does not cover this path.
+func isolateCredentialState(t *testing.T) {
+	t.Helper()
+	t.Cleanup(state.ResetDefaultStateManager)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("NVCF_TOKEN", "")
+	t.Setenv("NVCF_API_KEY", "")
+	state.ResetDefaultStateManager()
+}
+
 // withJSONOutput flips the package-level jsonOutput flag for the duration of
 // the calling test.
 func withJSONOutput(t *testing.T) {
@@ -152,7 +168,10 @@ func TestRunAccountsList_JSON(t *testing.T) {
 	assert.Equal(t, "Acme", first["name"])
 }
 
+const wantAdminTokenRequiredError = "admin commands require NVCF_TOKEN with the appropriate admin scope; NVCF_API_KEY is not accepted"
+
 func TestRunAccountsList_NoToken_FailsFast(t *testing.T) {
+	isolateCredentialState(t)
 	viper.Reset()
 	viper.Set("base_http_url", "http://unused")
 	viper.Set("base_grpc_url", "localhost:50051")
@@ -161,7 +180,24 @@ func TestRunAccountsList_NoToken_FailsFast(t *testing.T) {
 
 	err := runAccountsList(nil, nil)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "NVCF_TOKEN")
+	assert.Equal(t, wantAdminTokenRequiredError, err.Error())
+}
+
+// TestRunAccountsList_NoCredentialsAtAll_FailsFastWithAdminMessage is a
+// regression test: when neither NVCF_TOKEN nor NVCF_API_KEY is configured,
+// the generic "missing authentication credentials" error from LoadConfig
+// must not fire ahead of requireAdminToken's Admin Accounts-specific
+// message, and the error must not tell the user to set NVCF_API_KEY.
+func TestRunAccountsList_NoCredentialsAtAll_FailsFastWithAdminMessage(t *testing.T) {
+	isolateCredentialState(t)
+	viper.Reset()
+	viper.Set("base_http_url", "http://unused")
+	viper.Set("base_grpc_url", "localhost:50051")
+	t.Cleanup(func() { viper.Reset() })
+
+	err := runAccountsList(nil, nil)
+	require.Error(t, err)
+	assert.Equal(t, wantAdminTokenRequiredError, err.Error())
 }
 
 func TestRunQueuesVersion_JSON(t *testing.T) {

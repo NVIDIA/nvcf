@@ -64,6 +64,7 @@ For examples of how to extract and use some of these variables, see [NVCF Contai
 | NVCF-BACKEND                 | Backend or "Cluster Group" the function is deployed on. |
 | NVCF-INSTANCETYPE            | Instance type the function is deployed on.              |
 | NVCF-REGION                  | Region or zone the function is deployed in.             |
+| NVCF-INVOCATION-REGION       | Region of the invocation service that accepted the request. Client values are replaced. |
 | NVCF-ENV                     | Spot environment if deployed on spot instances.         |
 
 #### Environment Variables
