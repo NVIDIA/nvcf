@@ -20,6 +20,65 @@ openbao:
   # secrets, volumes, and bootstrap scripts.
   fullnameOverride: openbao-server
 
+  networkPolicy:
+    # Restrict ingress to the OpenBao API and Raft ports. Set enabled to false
+    # only when another controller manages equivalent policy for these pods.
+    enabled: true
+    # These optional releases create migration Jobs in the OpenBao namespace.
+    migrationReleaseNames:
+      - llm-request-router
+      - nvcf-ui
+    # Cross-namespace clients must match both the namespace and pod selector.
+    # Add or override named entries when release namespaces are customized.
+    clients:
+      certManager:
+        enabled: true
+        namespace: cert-manager
+        podSelector:
+          matchLabels:
+            app.kubernetes.io/name: cert-manager
+            app.kubernetes.io/instance: cert-manager
+            app.kubernetes.io/component: controller
+      apiKeys:
+        enabled: true
+        namespace: api-keys
+        podSelector:
+          matchExpressions:
+            - key: app.kubernetes.io/instance
+              operator: In
+              values:
+                - api-keys
+                - admin-issuer-proxy
+      ess:
+        enabled: true
+        namespace: ess
+        podSelector:
+          matchLabels:
+            app.kubernetes.io/instance: ess-api
+      nvcf:
+        enabled: true
+        namespace: nvcf
+        podSelector:
+          matchExpressions:
+            - key: app.kubernetes.io/instance
+              operator: In
+              values:
+                - api
+                - nvct-api
+                - invocation-service
+                - grpc-proxy
+                - notary-service
+                - ratelimiter
+                - function-autoscaler
+                - llm-request-router
+                - llm-api-gateway
+      nvcfUi:
+        enabled: true
+        namespace: nvcf-ui
+        podSelector:
+          matchLabels:
+            app.kubernetes.io/instance: nvcf-ui
+
   hooks:
     initializeCluster:
       podAnnotations: {}

@@ -131,17 +131,29 @@ tls_volume_name="$(yq -rN 'select(.kind == "StatefulSet" and .metadata.name == "
 # PKI provisioning hook: Helm hook Job rendered with the right env, image, and root-token mount.
 hook_job_name="$(yq -rN 'select(.kind == "Job" and .metadata.name == "addons-llm-migrations") | .metadata.name' "${manifest}")"
 hook_helm_hook="$(yq -rN 'select(.kind == "Job" and .metadata.name == "addons-llm-migrations") | .metadata.annotations."helm.sh/hook"' "${manifest}")"
+hook_weight="$(yq -rN 'select(.kind == "Job" and .metadata.name == "addons-llm-migrations") | .metadata.annotations."helm.sh/hook-weight"' "${manifest}")"
 hook_image="$(yq -rN 'select(.kind == "Job" and .metadata.name == "addons-llm-migrations") | .spec.template.spec.containers[0].image' "${manifest}")"
 hook_addons_llm="$(yq -rN 'select(.kind == "Job" and .metadata.name == "addons-llm-migrations") | .spec.template.spec.containers[0].env[] | select(.name == "ADDONS_LLM_ENABLED") | .value' "${manifest}")"
 hook_core_off="$(yq -rN 'select(.kind == "Job" and .metadata.name == "addons-llm-migrations") | .spec.template.spec.containers[0].env[] | select(.name == "CORE_MIGRATIONS_ENABLED") | .value' "${manifest}")"
 hook_allowed_domains="$(yq -rN 'select(.kind == "Job" and .metadata.name == "addons-llm-migrations") | .spec.template.spec.containers[0].env[] | select(.name == "NVCF_SERVICE_PKI_ALLOWED_DOMAINS") | .value' "${manifest}")"
+hook_component_label="$(yq -rN 'select(.kind == "Job" and .metadata.name == "addons-llm-migrations") | .spec.template.metadata.labels."app.kubernetes.io/component"' "${manifest}")"
+hook_instance_label="$(yq -rN 'select(.kind == "Job" and .metadata.name == "addons-llm-migrations") | .spec.template.metadata.labels."app.kubernetes.io/instance"' "${manifest}")"
 
 [ "${hook_job_name}" = "addons-llm-migrations" ]
 [ "${hook_helm_hook}" = "pre-install,pre-upgrade" ]
+[ "${hook_weight}" = "2" ]
 [ "${hook_image}" = "nvcr.io/<your-org>/nvcf-openbao-migrations:0.12.1" ]
 [ "${hook_addons_llm}" = "true" ]
 [ "${hook_core_off}" = "false" ]
 [ "${hook_allowed_domains}" = "stargate.localhost,cluster.local" ]
+[ "${hook_component_label}" = "openbao-migrations" ] || {
+  echo "FAIL: addons-llm-migrations pod lacks the OpenBao migration component label" >&2
+  exit 1
+}
+[ "${hook_instance_label}" = "llm-request-router" ] || {
+  echo "FAIL: addons-llm-migrations pod lacks the release instance label" >&2
+  exit 1
+}
 
 # Exact and wildcard SANs cover a static advertised hostname.
 exact_manifest="${tmp_dir}/exact.yaml"

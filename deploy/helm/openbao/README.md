@@ -86,8 +86,34 @@ Key configurable areas include:
 - OpenBao server image settings and HA configuration
 - Migration job image settings and migration environment variables
 - Injector image settings
+- Restrictive ingress policy for OpenBao server pods
 - Image pull secrets
 - OIDC issuer discovery for migration-time JWT auth configuration
+
+The OpenBao server NetworkPolicy is enabled by default. It permits the
+OpenBao API on TCP 8200 only from labeled NVCF clients, cert-manager, and
+migration or bootstrap Jobs. OpenBao server peers can also use TCP 8201 for
+Raft traffic. Cross-namespace rules match both the namespace name and pod
+labels.
+
+When a cluster-level controller manages an equivalent policy, disable the
+chart policy:
+
+```yaml
+openbao:
+  networkPolicy:
+    enabled: false
+```
+
+Override a named client namespace when a release uses a non-default namespace:
+
+```yaml
+openbao:
+  networkPolicy:
+    clients:
+      certManager:
+        namespace: security-cert-manager
+```
 
 Important note on Helm list merging:
 

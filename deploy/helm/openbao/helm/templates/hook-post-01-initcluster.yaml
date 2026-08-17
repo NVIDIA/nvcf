@@ -26,13 +26,21 @@ kind: Job
 metadata:
   name: {{ $serverFullname }}-initialize-cluster
   namespace: {{ include "nvcf-openbao.namespace" . }}
+  labels:
+    app.kubernetes.io/name: openbao
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: openbao-bootstrap
   annotations:
     helm.sh/hook: post-install
     helm.sh/hook-weight: "-5"
 spec:
   template:
-    {{- with .Values.openbao.hooks.initializeCluster.podAnnotations }}
     metadata:
+      labels:
+        app.kubernetes.io/name: openbao
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: openbao-bootstrap
+    {{- with .Values.openbao.hooks.initializeCluster.podAnnotations }}
       annotations:
         {{- toYaml . | nindent 8 }}
     {{- end }}

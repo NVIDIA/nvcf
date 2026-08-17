@@ -103,6 +103,10 @@ cert-manager:
       repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/cert-manager-startupapicheck
 
 openbao:
+  {{- with dig "openbao" "networkPolicy" dict .Values }}
+  networkPolicy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- if .Values.global.imagePullSecrets }}
   global:
     imagePullSecrets:

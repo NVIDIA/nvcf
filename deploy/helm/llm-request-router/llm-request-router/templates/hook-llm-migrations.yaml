@@ -37,8 +37,11 @@ metadata:
 spec:
   backoffLimit: {{ default 3 $pki.backoffLimit }}
   template:
-    {{- with $pki.podAnnotations }}
     metadata:
+      labels:
+        {{- include "llm-request-router.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: openbao-migrations
+    {{- with $pki.podAnnotations }}
       annotations:
         {{- toYaml . | nindent 8 }}
     {{- end }}

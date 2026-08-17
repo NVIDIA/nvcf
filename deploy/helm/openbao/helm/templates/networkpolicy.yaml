@@ -1,0 +1,90 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+{{- if .Values.openbao.networkPolicy.enabled }}
+{{- $serverFullname := include "nvcf-openbao.serverFullname" . }}
+{{- $migrationInstances := concat (list .Release.Name) .Values.openbao.networkPolicy.migrationReleaseNames | uniq }}
+{{- $enabledClients := dict }}
+{{- range $name, $client := .Values.openbao.networkPolicy.clients }}
+{{- if $client.enabled }}
+{{- if empty $client.podSelector }}
+{{- fail (printf "openbao.networkPolicy.clients.%s.podSelector is required when the client is enabled" $name) }}
+{{- end }}
+{{- $matchLabels := dig "matchLabels" dict $client.podSelector }}
+{{- $matchExpressions := dig "matchExpressions" list $client.podSelector }}
+{{- if and (empty $matchLabels) (empty $matchExpressions) }}
+{{- fail (printf "openbao.networkPolicy.clients.%s.podSelector must contain at least one matchLabels or matchExpressions entry" $name) }}
+{{- end }}
+{{- $_ := set $enabledClients $name $client }}
+{{- end }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $serverFullname }}
+  namespace: {{ include "nvcf-openbao.namespace" . }}
+  labels:
+    app.kubernetes.io/name: openbao
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: openbao
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      component: server
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: openbao
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              component: server
+      ports:
+        - port: 8200
+          protocol: TCP
+        - port: 8201
+          protocol: TCP
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: openbao-bootstrap
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: openbao-migrations
+            matchExpressions:
+              - key: app.kubernetes.io/instance
+                operator: In
+                values:
+                  {{- toYaml $migrationInstances | nindent 18 }}
+      ports:
+        - port: 8200
+          protocol: TCP
+    {{- if $enabledClients }}
+    - from:
+        {{- range $name, $client := $enabledClients }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ required (printf "openbao.networkPolicy.clients.%s.namespace is required when the client is enabled" $name) $client.namespace | quote }}
+          podSelector:
+            {{- toYaml $client.podSelector | nindent 12 }}
+        {{- end }}
+      ports:
+        - port: 8200
+          protocol: TCP
+    {{- end }}
+{{- end }}

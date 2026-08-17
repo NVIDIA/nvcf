@@ -19,13 +19,21 @@ kind: Job
 metadata:
   name: {{ $serverFullname }}-migrations
   namespace: {{ include "nvcf-openbao.namespace" . }}
+  labels:
+    app.kubernetes.io/name: openbao
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: openbao-migrations
   annotations:
     helm.sh/hook: post-install,post-upgrade
     helm.sh/hook-weight: "1"
 spec:
   template:
-    {{- with .Values.openbao.hooks.migrations.podAnnotations }}
     metadata:
+      labels:
+        app.kubernetes.io/name: openbao
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: openbao-migrations
+    {{- with .Values.openbao.hooks.migrations.podAnnotations }}
       annotations:
         {{- toYaml . | nindent 8 }}
     {{- end }}

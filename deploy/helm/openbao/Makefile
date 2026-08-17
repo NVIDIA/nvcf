@@ -1,4 +1,4 @@
-.PHONY: all deps build install uninstall clean package push-oci bump-version release
+.PHONY: all deps build install uninstall clean package push-oci bump-version release test
 
 # Directory variables
 helm_dir := helm
@@ -38,6 +38,9 @@ deps:
 	fi
 
 build: deps
+
+test: build
+	@tests/network-policy-render.sh
 
 install: build
 	@cd helm/secrets && kustomize edit set namespace ${namespace} && kustomize build . | kubectl apply -f -
@@ -107,4 +110,3 @@ prepare-local: deps
 		echo '{"auths":{"nvcr.io":{"auth":"<PUT_YOUR_AUTH_HERE>"}}}' > ${DOCKER_CONFIG_JSON}; \
 	fi
 	@echo "[prepare-local] Successfully prepared local environment"
-
