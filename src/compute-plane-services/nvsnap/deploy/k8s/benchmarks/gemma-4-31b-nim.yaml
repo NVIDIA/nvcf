@@ -36,16 +36,6 @@ spec:
   imagePullSecrets:
     - name: nvsnap-pull-secret
 
-  initContainers:
-    - name: get-nvsnap
-      image: nvcr.io/0651155215864979/ncp-dev/nvsnap-agent:v0.2.41
-      imagePullPolicy: IfNotPresent
-      command: ["/bin/sh", "-c"]
-      args:
-        - |
-          set -eu
-      volumeMounts:
-
   containers:
     - name: nim
       image: nvcr.io/nim/google/gemma-4-31b-it:1.7.1-variant

@@ -29,6 +29,10 @@ metadata:
   annotations:
     nvsnap.io/restore-from: "__CAPTURE_HASH__"
 spec:
+  # Matches the source manifest and every other restore manifest: nothing in
+  # a restored workload talks to the API server (the agent does the restore),
+  # so a privileged pod has no reason to carry the default SA credential.
+  automountServiceAccountToken: false
   tolerations:
     - key: "nvidia.com/gpu"
       operator: "Exists"
