@@ -1,4 +1,4 @@
-module github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf
+module github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector
 
 go 1.25.0
 
@@ -60,7 +60,7 @@ require (
 
 // The perf suite consumes the shared SIS translation library directly so that
 // it renders exactly the workload shape NVCA produces in production.
-replace github.com/NVIDIA/nvcf/src/libraries/go/lib => ../../../libraries/go/lib
+replace github.com/NVIDIA/nvcf/src/libraries/go/lib => ../../../src/libraries/go/lib
 
 // Mirror the k8s pins used by the shared library. replace directives in
 // dependencies are not inherited, so we repeat them here for the main module.

@@ -92,7 +92,7 @@ jobs:
             exit 0
           fi
 
-          if printf "%s\n" "$changed" | grep -qE '^(src/compute-plane-services/byoo-otel-collector/|\.github/workflows/byoo-otel-collector\.yml$)'; then
+          if printf "%s\n" "$changed" | grep -qE '^(src/compute-plane-services/byoo-otel-collector/|tests/perf/byoo-otel-collector/|\.github/workflows/byoo-otel-collector\.yml$)'; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -140,14 +140,13 @@ jobs:
         with:
           # The perf suite is a standalone module; use its own go.mod so the
           # toolchain matches what the module declares.
-          go-version-file: src/compute-plane-services/byoo-otel-collector/perf/go.mod
+          go-version-file: tests/perf/byoo-otel-collector/go.mod
 
       # The perf module is intentionally excluded from go.work and has no Bazel
       # targets, so neither the Bazel lane nor the recursive workspace build
-      # covers it. Run it explicitly with GOWORK=off so its tests are part of
-      # the required checks for this subtree.
+      # covers it. Run it explicitly with GOWORK=off.
       - name: Build, vet, and test the perf module
-        working-directory: src/compute-plane-services/byoo-otel-collector
+        working-directory: tests/perf/byoo-otel-collector
         env:
           GOCACHE: ${{ runner.temp }}/go-cache
-        run: make perf-test
+        run: GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...

@@ -57,11 +57,12 @@ GOWORK=off go test ./...
 
 Because it is outside `go.work` and has no Bazel targets, the Bazel CI lane does
 not cover it. Its build/vet/test run as a required check via the `perf` job in
-`.github/workflows/byoo-otel-collector.yml`, which invokes `make perf-test` from
-the collector directory. Run the same target locally with:
+`.github/workflows/byoo-otel-collector.yml`. From this directory, run:
 
 ```bash
-make -C .. perf-test
+GOWORK=off go build ./...
+GOWORK=off go vet ./...
+GOWORK=off go test ./...
 ```
 
 ## Usage
