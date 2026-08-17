@@ -6,7 +6,7 @@
 - Tier: `chart`
 - Team: `@NVIDIA/nvcf-dev`
 - Default owner: `@NVIDIA/nvcf-dev`.
-- Manifest description: Helm chart for SIS spot inference service (helm-nvcf-sis)
+- Manifest description: Helm chart for the ICMS API (published as `helm-nvcf-sis`)
 
 ## Use `nvcf-agentic-dev` As The Routing Layer
 Before making changes, use the `nvcf-agentic-dev` workspace repo to confirm whether this repo is actually the right place for the task. Treat that repo as the source of truth for workspace membership, repo ownership, deployment dependencies, and available agent skills.
@@ -19,7 +19,7 @@ Check these files first when they exist in your local workspace:
 
 ## Routing Rules
 - Stay in this repo for Helm templates, values, hooks, chart metadata, and Kubernetes deployment behavior.
-- If the request is about application logic, APIs, jobs, or binaries running inside the container, route to the paired image-source repo.
+- If the request is about application logic, APIs, jobs, or binaries running inside the container, route to the paired image source at `src/control-plane-services/instance-cluster-management`.
 - If the request is about cross-chart ordering, stage selection, or environment-wide configuration, route to `nvcf-self-managed-stack`.
 
 ## Working In This Repo

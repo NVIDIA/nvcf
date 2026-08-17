@@ -293,9 +293,9 @@
     },
     {
       "id": "icms-helm",
-      "path": "deploy/helm/isms",
-      "service_name": "helm-icms-api",
-      "initial_version": "1.4.4"
+      "path": "deploy/helm/icms",
+      "service_name": "helm-nvcf-sis",
+      "initial_version": "2.0.2"
     },
     {
       "id": "nvcf-ui",

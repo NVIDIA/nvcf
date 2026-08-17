@@ -1,10 +1,19 @@
-# NVCF Spot Instance Service Helm Chart
+# ICMS API Helm Chart
 
-This repository contains the Helm chart for deploying the NVCF Spot Instance Service (SIS) on Kubernetes.
+Helm chart for deploying the NVCF Instance Cluster Management Service (ICMS) API
+on Kubernetes. The paired image source is
+`src/control-plane-services/instance-cluster-management`.
+
+The chart publishes as `helm-nvcf-sis` and its value keys are namespaced under
+`sis.*`. That name predates the rename from Spot Instance Service to ICMS. It is
+kept so the published chart continues its existing version lineage and so
+existing override files keep working; the ServiceAccount name and the OpenBao
+JWT role are `sis-api` for the same reason. Renaming those is a coordinated
+change across the service and the OpenBao configuration, not a chart-only edit.
 
 ## Overview
 
-The chart packages the SIS deployment along with its Vault Agent sidecar configuration for fetching service credentials from a Vault or OpenBao backend, and includes a credential-rotation Job that refreshes signing material on a schedule.
+The chart packages the ICMS API deployment along with its Vault Agent sidecar configuration for fetching service credentials from a Vault or OpenBao backend, and includes a credential-rotation Job that refreshes signing material on a schedule.
 
 The default chart values do not set the required image registry and repository. They must be supplied through an additional values file at install time, and access to those images must be arranged separately.
 
@@ -14,9 +23,13 @@ Example:
 sis:
   image:
     registry: <your-registry>
-    repository: <your-org>/sis
-    tag: <appVersion>
+    repository: <your-org>/icms-api
+    tag: <image-tag>
 ```
+
+Set `sis.image.tag` explicitly rather than relying on `Chart.appVersion`. The
+chart release pipeline rewrites `appVersion` to the chart version when it
+publishes, so a published chart's `appVersion` is not the application version.
 
 ## Prerequisites
 
@@ -32,10 +45,10 @@ sis:
 Install the chart with the default values plus your own overrides:
 
 ```bash
-helm install sis sis \
-  --namespace sis \
+helm install icms-api icms-api \
+  --namespace nvcf \
   --create-namespace \
-  --values sis/values.yaml \
+  --values icms-api/values.yaml \
   --values path/to/values.yaml \
   --wait \
   --timeout 10m
@@ -44,9 +57,9 @@ helm install sis sis \
 Upgrade an existing release:
 
 ```bash
-helm upgrade sis sis \
-  --namespace sis \
-  --values sis/values.yaml \
+helm upgrade icms-api icms-api \
+  --namespace nvcf \
+  --values icms-api/values.yaml \
   --values path/to/values.yaml \
   --wait \
   --timeout 10m
@@ -55,16 +68,16 @@ helm upgrade sis sis \
 Uninstall the release:
 
 ```bash
-helm uninstall sis --namespace sis
+helm uninstall icms-api --namespace nvcf
 ```
 
 ## Configuration
 
-The default chart configuration lives in `sis/values.yaml`.
+The default chart configuration lives in `icms-api/values.yaml`.
 
 Important settings to review before deployment:
 
-- `sis.image.*` for the SIS container image
+- `sis.image.*` for the ICMS API container image
 - `sis.imagePullSecrets` for private registry access
 - `sis.replicaCount`, resource requests, and limits for your environment
 - `sis.config.*` for the NVCF FQDN, Cassandra contact points, and authentication issuer URLs

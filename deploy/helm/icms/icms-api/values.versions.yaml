@@ -13,15 +13,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Internal-only Helm values override. Not OSS exported (see ../.oss-allowlist).
+# Supplemental Helm values override, layered on top of values.yaml.
 #
 # Pins image tags that Renovate auto-bumps. The chart's main values.yaml leaves
-# these tags empty so OSS consumers must supply them via their own override
-# file; internal builds layer this file on top of values.yaml so the tags get
-# resolved without leaking the internal registry path through OSS.
+# these tags empty so consumers publishing into their own registry supply the
+# tag themselves; this file carries the tag NVIDIA builds against, so an install
+# that layers it does not have to restate the version.
 #
 # Internal install: pass via an additional --values flag, for example:
-#   helm install sis sis -f sis/values.yaml -f sis/values.versions.yaml ...
+#   helm install icms-api icms-api -f icms-api/values.yaml \
+#     -f icms-api/values.versions.yaml ...
 sis:
   lls:
     hmacRotation:

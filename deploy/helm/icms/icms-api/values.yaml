@@ -45,7 +45,7 @@ sis:
       image:
         # registry: must be supplied in additional values
         # repository: must be supplied in additional values
-        # tag: must be supplied in additional values (see sis/values.versions.yaml for the internal pin)
+        # tag: must be supplied in additional values (see icms-api/values.versions.yaml for the internal pin)
         tag: ""
         pullPolicy: IfNotPresent
       # OpenBao connection settings

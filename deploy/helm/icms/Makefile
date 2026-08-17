@@ -14,9 +14,9 @@
 # limitations under the License.
 
 # Variables
-release ?= sis
-namespace ?= sis
-helm_dir ?= ./sis
+release ?= icms-api
+namespace ?= nvcf
+helm_dir ?= ./icms-api
 values := $(helm_dir)/values.yaml
 packaged_charts_dir := ./packaged-charts
 
@@ -104,17 +104,5 @@ push-oci:
 	@rm -rf ./packaged-charts
 	@echo "[push-oci] Cleanup complete."
 
-# === License headers ===
-.PHONY: license-headers license-headers-check
-LICENSE_HEADER_FILE := .license-header.txt
-LICENSE_HEADER_TARGETS := $(shell find . -type f \( -name '*.yaml' -o -name '*.sh' -o -name 'Makefile' \) ! -path './charts/*' ! -path './packaged-charts/*')
-
-license-headers:
-	@echo "[license-headers] Applying license headers..."
-	@sh ./scripts/apply-license-header.sh $(LICENSE_HEADER_FILE) $(LICENSE_HEADER_TARGETS)
-	@echo "[license-headers] Done."
-
-license-headers-check:
-	@echo "[license-headers-check] Verifying license headers..."
-	@sh ./scripts/check-license-header.sh $(LICENSE_HEADER_TARGETS)
-	@echo "[license-headers-check] All checked files have license headers."
+# License headers are enforced repo-wide by tools/ci/check-license, so this
+# chart does not carry its own apply/check targets.
