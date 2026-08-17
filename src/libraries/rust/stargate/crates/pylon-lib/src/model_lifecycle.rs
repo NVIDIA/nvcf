@@ -48,6 +48,7 @@ pub enum ModelSource {
 pub enum ModelInitialization {
     Calibration(CalibrationConfig),
     ConfiguredInputTps { input_tps: f64, pin: bool },
+    Uncalibrated,
 }
 
 #[derive(Clone, Debug)]
@@ -344,7 +345,9 @@ impl ModelLifecycleSupervisor {
                 return Err(ModelLifecycleError::StaleGeneration);
             }
             let initialization = match &self.config.initialization {
-                ModelInitialization::Calibration(_) => ModelStatsInitialization::Empty,
+                ModelInitialization::Calibration(_) | ModelInitialization::Uncalibrated => {
+                    ModelStatsInitialization::Empty
+                }
                 ModelInitialization::ConfiguredInputTps { input_tps, pin } => {
                     ModelStatsInitialization::ConfiguredInputTps {
                         input_tps: *input_tps,
@@ -634,10 +637,12 @@ async fn initialization_attempt(
 fn health_probe_timeout(config: &ModelLifecycleConfig) -> Option<Duration> {
     match &config.initialization {
         ModelInitialization::Calibration(calibration) => Some(calibration.health_timeout),
-        ModelInitialization::ConfiguredInputTps { .. } if config.bringup.enabled => {
+        ModelInitialization::ConfiguredInputTps { .. } | ModelInitialization::Uncalibrated
+            if config.bringup.enabled =>
+        {
             Some(config.bringup.canary_timeout)
         }
-        ModelInitialization::ConfiguredInputTps { .. } => None,
+        ModelInitialization::ConfiguredInputTps { .. } | ModelInitialization::Uncalibrated => None,
     }
 }
 
