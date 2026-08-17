@@ -1274,6 +1274,8 @@ pub async fn start_and_register_backend_with_bringup(
                 pin: true,
             },
             bringup,
+            health_paths: pylon_lib::UpstreamHealthPaths::default(),
+            startup_health_wait: std::time::Duration::ZERO,
         },
         runtime_state.clone(),
         &stats_collector,
