@@ -52,8 +52,10 @@ public record RegistryCredentialDto(
                 message = "Invalid hostname: Must be 1 - " + MAX_HOSTNAME_LENGTH + " chars long")
         @NotBlank String registryHostname,
 
-        @Schema(description = "Registry credential - secret value must be base64 encoded " +
-                "string in username:password format")
+        @Schema(description = "Registry credential - secret value must be base64 encoded "
+                + "string in username:password format. Required on requests. Omitted from the "
+                + "internal account details response: Cloud Tasks reads the value from ESS by "
+                + "registry credential id.")
         @NotNull SecretDto secret,
 
         @Schema(description = "Artifact types")
