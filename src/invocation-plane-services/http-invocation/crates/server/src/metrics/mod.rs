@@ -62,9 +62,11 @@ const SECONDS_DURATION_BUCKETS: &[f64; 15] = &[
     0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 1000.0,
 ];
 
-// define time bucket for FUNCTION_REQUEST_LATENCY in the same way we're doing in the Java code
-const FUNCTION_REQUEST_LATENCY_BUCKETS_IN_SECONDS: &[f64; 15] = &[
-    0.1, 0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 6.0, 20.0, 60.0, 120.0, 300.0, 600.0, 1200.0, 1800.0,
+// Reduces each (function_id, function_version_id) histogram from 18 to 12 series
+// (15 to 9 finite buckets, plus +Inf, sum, and count), a 33.3% reduction, while
+// preserving useful resolution for AI inference latency.
+const FUNCTION_REQUEST_LATENCY_BUCKETS_IN_SECONDS: &[f64; 9] = &[
+    0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 300.0, 600.0, 1800.0,
 ];
 
 const FUNCTION_REQUEST_LATENCY: Metric = Metric {
@@ -353,6 +355,14 @@ mod tests {
     use super::*;
     use metrics_util::debugging::{DebugValue, DebuggingRecorder};
     use metrics_util::MetricKind;
+
+    #[test]
+    fn function_request_latency_uses_expected_buckets() {
+        assert_eq!(
+            FUNCTION_REQUEST_LATENCY_BUCKETS_IN_SECONDS,
+            &[0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 300.0, 600.0, 1800.0]
+        );
+    }
 
     #[test]
     fn invocation_latency_omits_nca_id() {
