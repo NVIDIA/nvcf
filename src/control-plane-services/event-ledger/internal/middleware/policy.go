@@ -186,8 +186,8 @@ func mergePolicyClaims(jwtClaims map[string]interface{}, authResponse PolicyAuth
 }
 
 // NewPolicyMiddleware creates a new Policy middleware
-func NewPolicyMiddleware(authzClient policy.Authorizer, serviceName string, jwtPubKeySetURL string, jwtTokenExpiration time.Duration, jwkCache *jwk.Cache, httpConfig *config.HTTPClientConfig, logger *otelzap.Logger) mux.MiddlewareFunc {
-	if authzClient == nil {
+func NewPolicyMiddleware(policyClient policy.Authorizer, serviceName string, jwtPubKeySetURL string, jwtTokenExpiration time.Duration, jwkCache *jwk.Cache, httpConfig *config.HTTPClientConfig, logger *otelzap.Logger) mux.MiddlewareFunc {
+	if policyClient == nil {
 		if logger != nil {
 			logger.Error("policy client is nil - denying requests")
 		}
@@ -219,7 +219,7 @@ func NewPolicyMiddleware(authzClient policy.Authorizer, serviceName string, jwtP
 			logger := logging.GetLogger(traceCtx)
 			logger.InfoContext(traceCtx, "policy: processing request", zap.String("path", r.URL.Path), zap.String("method", r.Method))
 
-			policyConfig := authzClient.PolicyConfig()
+			policyConfig := policyClient.PolicyConfig()
 			subjectField, apiKeyField := policyInputFields(policyConfig)
 
 			// 1. Extract the token (simple bearer token extraction)
@@ -305,7 +305,7 @@ func NewPolicyMiddleware(authzClient policy.Authorizer, serviceName string, jwtP
 
 			// 5. Call Policy service
 			logger.InfoContext(traceCtx, "policy: calling policy evaluate service")
-			authzResp, err := authzClient.Evaluate(traceCtx, authReq)
+			authzResp, err := policyClient.Evaluate(traceCtx, authReq)
 			if err != nil {
 				logger.ErrorContext(traceCtx, "policy: evaluation failed", zap.Error(err))
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)

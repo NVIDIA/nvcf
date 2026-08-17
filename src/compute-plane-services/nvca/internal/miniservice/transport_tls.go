@@ -37,6 +37,9 @@ func (r *Reconciler) prepareTransportTLSForWorkloads(
 	ms *nvcav1alpha1.MiniService,
 	objs []client.Object,
 ) error {
+	if err := r.cfg.Workload.Validate(); err != nil {
+		return reconcile.TerminalError(err)
+	}
 	if r.cfg.Workload.TransportTLS == nil {
 		return nil
 	}

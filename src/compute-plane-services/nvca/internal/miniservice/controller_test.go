@@ -49,11 +49,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cache/informertest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	ctrlconfig "sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
 	nvcaenvtest "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/envtest"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/icms"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/transporttls"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	k8smock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil/mock"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
@@ -72,7 +74,38 @@ func init() {
 	utilruntime.Must(SchemeBuilder.AddToScheme(mgrScheme))
 }
 
+type controllerTestCase struct {
+	functionType   string
+	configure      func(*nvcaconfig.Config, *featureflagmock.Fetcher)
+	additionalEnvs []corev1.EnvVar
+	assertUtilsPod func(*testing.T, context.Context, client.Client, *v1alpha1.MiniService, *corev1.Pod)
+}
+
 func TestController(t *testing.T) {
+	testController(t, controllerTestCase{functionType: "DEFAULT"})
+}
+
+func TestControllerHelmLLMTransportTLS(t *testing.T) {
+	testController(t, controllerTestCase{
+		functionType: function.FunctionTypeLLM,
+		configure: func(cfg *nvcaconfig.Config, fff *featureflagmock.Fetcher) {
+			fff.EnabledFFs = append(fff.EnabledFFs, featureflag.EnforceHelmFunctionResourceLimits)
+			cfg.Workload.TransportTLS = &nvcaconfig.TransportTLSConfig{
+				TrustMode:                nvcaconfig.TrustModeBundle,
+				TrustBundleConfigMapName: "nvcf-transport-trust-bundle",
+				TrustBundleKey:           "nvcf-ca-bundle.pem",
+				TrustBundleFingerprint:   testTransportTLSRootFingerprint,
+				TrustBundlePEM:           testTransportTLSRootCertPEM,
+			}
+		},
+		additionalEnvs: []corev1.EnvVar{
+			{Name: "LLM_REQUEST_ROUTER_ADDRESS", Value: "llm-router.example.test:443"},
+		},
+		assertUtilsPod: assertHelmLLMTransportTLS,
+	})
+}
+
+func testController(t *testing.T, tc controllerTestCase) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
@@ -80,12 +113,16 @@ func TestController(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(cleanup)
 
+	skipControllerNameValidation := true
 	mgr, err := ctrl.NewManager(restConfig, manager.Options{
 		Scheme:                  mgrScheme,
 		GracefulShutdownTimeout: new(time.Duration),
 		BaseContext:             func() context.Context { return ctx },
 		WebhookServer:           nvcaenvtest.NewFakeWebhookServer(),
 		Metrics:                 nvcaenvtest.NewFakeMetricsOptions(),
+		Controller: ctrlconfig.Controller{
+			SkipNameValidation: &skipControllerNameValidation,
+		},
 	})
 	require.NoError(t, err)
 
@@ -191,8 +228,14 @@ func TestController(t *testing.T) {
 		FeatureFlagFetcher:   fff,
 		ClusterName:          "local",
 		ClusterRegion:        "us-west-1",
-		Metrics:              metrics.NewDefaultMetrics("nca-cluster", "cluster-foo", "cluster-group-foo", "1.2.3"),
-		cacheDir:             t.TempDir(),
+		Metrics: metrics.NewDefaultMetrics(
+			"nca-cluster",
+			"cluster-foo",
+			"cluster-group-foo",
+			"1.2.3",
+			metrics.WithRegisterer(prometheus.NewRegistry()),
+		),
+		cacheDir: t.TempDir(),
 	}
 
 	cfg := nvcaconfig.Config{
@@ -209,6 +252,9 @@ func TestController(t *testing.T) {
 				},
 			},
 		},
+	}
+	if tc.configure != nil {
+		tc.configure(&cfg, fff)
 	}
 	err = k8sutil.SetConfigDefaultResources(&cfg)
 	require.NoError(t, err)
@@ -250,6 +296,7 @@ func TestController(t *testing.T) {
 		{Name: "TRACING_ACCESS_TOKEN", Value: "trace-tok-1"},
 		{Name: "UTILS_CONTAINER", Value: "registry.example.test/nvcf-core/nvcf_worker_utils:2.21.4"},
 	}
+	envs = append(envs, tc.additionalEnvs...)
 
 	sr := &nvcav2beta1.ICMSRequest{}
 	sr.Name = "sr-7788caf9-cac0-42a4-820d-36bde3ced020"
@@ -258,7 +305,7 @@ func TestController(t *testing.T) {
 		FunctionDetails: function.Details{
 			FunctionID:        "funcid-1",
 			FunctionVersionID: "funcverid-1",
-			FunctionType:      "DEFAULT",
+			FunctionType:      tc.functionType,
 		},
 		Action:         common.FunctionCreationAction,
 		NCAId:          "ncaid-1",
@@ -397,6 +444,10 @@ rules:
 		assert.NoError(collect, err)
 	}, 2*time.Second, 100*time.Millisecond)
 
+	if tc.assertUtilsPod != nil {
+		tc.assertUtilsPod(t, ctx, crclient, ms, utilsPod)
+	}
+
 	utilsPod.Status.Phase = corev1.PodRunning
 	utilsPod.Status.Conditions = []corev1.PodCondition{
 		{
@@ -442,6 +493,34 @@ rules:
 
 	cancel()
 	<-mgrErrCh
+}
+
+func assertHelmLLMTransportTLS(
+	t *testing.T,
+	ctx context.Context,
+	crclient client.Client,
+	ms *v1alpha1.MiniService,
+	utilsPod *corev1.Pod,
+) {
+	llmWorker := findWorkloadContainer(utilsPod.Spec, function.LLMWorkerContainerName)
+	require.NotNil(t, llmWorker)
+	installContainer := findWorkloadInitContainer(utilsPod.Spec, transporttls.InstallContainerName)
+	require.NotNil(t, installContainer)
+	assert.Equal(t, llmWorker.Resources, installContainer.Resources)
+	assert.NotNil(t, findWorkloadVolume(utilsPod.Spec, transporttls.TrustBundleVolumeName))
+	assert.NotNil(t, findWorkloadVolume(utilsPod.Spec, transporttls.MergedCertsVolumeName))
+	assert.Equal(t, transporttls.SystemCertFile,
+		findWorkloadEnvValue(llmWorker, transporttls.CertPathEnv))
+	assert.NotNil(t, findWorkloadVolumeMount(llmWorker, transporttls.MergedCertsVolumeName))
+
+	trustConfigMap := &corev1.ConfigMap{}
+	require.NoError(t, crclient.Get(ctx, client.ObjectKey{
+		Name:      "nvcf-transport-trust-bundle",
+		Namespace: ms.Spec.Namespace,
+	}, trustConfigMap))
+	assert.Equal(t, testTransportTLSRootCertPEM, trustConfigMap.Data["nvcf-ca-bundle.pem"])
+	assert.Equal(t, testTransportTLSRootFingerprint,
+		trustConfigMap.Data[transporttls.TrustBundleFingerprintKey])
 }
 
 func TestNVLinkOptMetricsRunnable(t *testing.T) {

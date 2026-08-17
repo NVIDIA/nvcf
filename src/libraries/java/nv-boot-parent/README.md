@@ -9,7 +9,6 @@ Baseline: Spring Boot 4.0.7, Spring Cloud 2025.1.2 (Oakwood), Java 25.
 
 ```text
 nv-boot-parent  (extends spring-boot-starter-parent 4.0.7)
-|-- nv-boot-bom         : BOM for nv-boot-starter-* versions
 `-- nv-boot-starter-*   : shared libraries
 ```
 
@@ -17,7 +16,6 @@ nv-boot-parent  (extends spring-boot-starter-parent 4.0.7)
 
 | Module                                                                                   | Description                                                                    |
 |------------------------------------------------------------------------------------------|--------------------------------------------------------------------------------|
-| [nv-boot-bom](nv-boot-bom/README.md)                                                     | Bill of Materials for nv-boot module versions                                  |
 | [nv-boot-mock-servers-test](nv-boot-mock-servers-test/README.md)                         | WireMock-based mock servers for testing                                        |
 | [nv-boot-starter-audit](nv-boot-starter-audit/README.md)                                 | Audit logging and event tracking                                               |
 | [nv-boot-starter-cassandra](nv-boot-starter-cassandra/README.md)                         | Cassandra with SSL bundle and refreshable session support                      |
@@ -29,126 +27,6 @@ nv-boot-parent  (extends spring-boot-starter-parent 4.0.7)
 | [nv-boot-starter-registries](nv-boot-starter-registries/README.md)                       | Container, Helm, Model, and Resource registry clients                          |
 | [nv-boot-starter-reloadable-properties](nv-boot-starter-reloadable-properties/README.md) | File-based property reloading with context refresh                             |
 | [nv-boot-starter-telemetry](nv-boot-starter-telemetry/README.md)                         | CloudEvents client for Telemetry servers (WebClient, OAuth2 bearer)            |
-
-## Using in External Maven Projects
-
-The examples in this section are for external projects that consume artifacts
-published by the independent nv-boot source repository. Applications inside
-this monorepo use the Bazel source targets documented in [BAZEL.md](BAZEL.md).
-
-External Spring Boot applications can extend `nv-boot-parent` as their Maven
-parent and import `nv-boot-bom` in `<dependencyManagement>`. This gives the application:
-
-- All Spring Boot build conventions (compiler, surefire, jacoco, etc.)
-- Managed versions for all third-party dependencies (Bouncy Castle, Spring Cloud, etc.)
-- Managed versions for all `nv-boot-starter-*` libraries via `nv-boot-bom`
-
-### Basic setup
-
-```xml
-<parent>
-    <groupId>com.nvidia.boot</groupId>
-    <artifactId>nv-boot-parent</artifactId>
-    <version>${get.latest.version}</version>
-</parent>
-
-<dependencyManagement>
-    <dependencies>
-        <dependency>
-            <groupId>com.nvidia.boot</groupId>
-            <artifactId>nv-boot-bom</artifactId>
-            <version>${get.latest.version}</version>
-            <type>pom</type>
-            <scope>import</scope>
-        </dependency>
-    </dependencies>
-</dependencyManagement>
-```
-
-Once declared, nv-boot libraries and third-party dependencies can be used without specifying
-a version:
-
-```xml
-<dependencies>
-    <dependency>
-        <groupId>com.nvidia.boot</groupId>
-        <artifactId>nv-boot-starter-jwt</artifactId>
-    </dependency>
-    <dependency>
-        <groupId>org.bouncycastle</groupId>
-        <artifactId>bcprov-jdk18on</artifactId>
-    </dependency>
-</dependencies>
-```
-
-### Projects that cannot extend nv-boot-parent
-
-If your project already has a corporate or framework parent POM and cannot extend
-`nv-boot-parent`, import `nv-boot-bom` in your `<dependencyManagement>` block instead.
-This gives managed versions for all `nv-boot-starter-*` libraries, but does not provide the
-build conventions or third-party version management that come with the full parent:
-
-```xml
-<dependencyManagement>
-    <dependencies>
-        <dependency>
-            <groupId>com.nvidia.boot</groupId>
-            <artifactId>nv-boot-bom</artifactId>
-            <version>${get.latest.version}</version>
-            <type>pom</type>
-            <scope>import</scope>
-        </dependency>
-    </dependencies>
-</dependencyManagement>
-```
-
-Third-party dependencies used by the nv-boot libraries (e.g. Bouncy Castle, etc.)
-will still be resolved transitively, but their versions will not be centrally
-managed. You must manage them explicitly if you use them directly in your own
-code.
-
-### Overriding a dependency version
-
-All third-party dependency versions are declared as properties in `nv-boot-parent`. Because
-external applications extend `nv-boot-parent`, any version property can be overridden in the
-application's own `<properties>` block. This is the recommended approach for pulling in a patched
-version to address a CVE without waiting for an `nv-boot-parent` release:
-
-```xml
-<properties>
-     <bouncycastle.version>1.85</bouncycastle.version>
-     ...
-</properties>
-```
-
-The overridden property takes effect wherever that dependency is used. This
-includes direct application use and transitive use through any nv-boot library
-on the classpath.
-
-### Available version properties
-
-- `nv-boot-parent` (this project): properties listed in the table below
-- `spring-boot-starter-parent`: build and plugin version properties (e.g. `maven-compiler-plugin.version`)
-- `spring-boot-dependencies` - all Spring Boot managed dependency versions
-     (e.g. `spring-framework.version`, `jackson-bom.version`, `logback.version`). See the
-     [Spring Boot dependency versions reference](https://docs.spring.io/spring-boot/appendix/dependency-versions/properties.html)
-     for the full list
-
-Properties defined in `nv-boot-parent`:
-
-| Property                    | Controls                                                    |
-|-----------------------------|-------------------------------------------------------------|
-| `bouncycastle.version`      | `bcpkix-jdk18on`, `bcprov-jdk18on`                          |
-| `commons-io.version`        | `commons-io`                                                |
-| `commons-lang3.version`     | `commons-lang3`                                             |
-| `commons-logging.version`   | `commons-logging`                                           |
-| `commons-text.version`      | `commons-text`                                              |
-| `cloudevents.version`       | `cloudevents-core`, `cloudevents-json-jackson`              |
-| `guice.version`             | `com.google.inject:guice`                                   |
-| `shedlock.version`          | `net.javacrumbs.shedlock:*`                                 |
-| `spring-cloud.version`      | `org.springframework.cloud:*`                               |
-| `springdoc-openapi.version` | `springdoc-openapi-starter-*` (Boot 4 / OpenAPI 3.x line)   |
-| `wiremock.version`          | `wiremock`, `wiremock-standalone`                           |
 
 ## Minimum Requirements
 

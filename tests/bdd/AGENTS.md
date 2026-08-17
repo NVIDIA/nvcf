@@ -4,7 +4,7 @@ Scope: everything under `tests/bdd/`.
 
 This directory is the strict-DSL replacement for the legacy `tests/bdd`
 runner. The whole point is a Gherkin vocabulary that an AI can extend
-without inventing domain helpers. Read `PLAN.md` before touching code.
+without inventing opaque domain helpers. Read `PLAN.md` before touching code.
 
 ## The strict-DSL contract
 
@@ -15,9 +15,10 @@ output. Step handlers in `steps/` are thin wrappers around helpers in
 Gherkin via `When I run command` plus an output assertion, never inside
 a handler.
 
-If a scenario asks for behavior the catalog cannot express, the right
-move is almost always another `When I run command` plus an assertion,
-not a new step.
+Use a shared step when a repeated operator action or observable keeps every
+meaningful target, value, context, and timeout visible while hiding only
+command or output-format mechanics. Keep `When I run command` plus an
+assertion as the escape hatch for uncommon or command-specific behavior.
 
 ## Layering
 
@@ -235,8 +236,9 @@ multi-cluster feature:
 
 ## Adding a step
 
-Adding a step is rare. The DSL should not grow domain-shaped
-primitives.
+Adding a step is deliberate. Add one only for a repeated action or observable
+that keeps meaningful inputs visible and has no hidden workflow branching.
+Do not add opaque composite steps such as `Given the stack is installed`.
 
 1. Add the row to `PLAN.md` first: regex, table/docstring shape, one
    sentence of behavior.

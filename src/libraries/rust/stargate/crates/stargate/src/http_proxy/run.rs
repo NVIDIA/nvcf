@@ -171,6 +171,7 @@ impl<'a> ProxyRequestRun<'a> {
             self.app.metrics.as_ref(),
             &self.request.request_inputs.target,
         );
+        let comparator = self.request.lb_resolution.config().comparator();
 
         loop {
             self.record_routing_selection(RoutingTraceFields {
@@ -182,6 +183,7 @@ impl<'a> ProxyRequestRun<'a> {
                     .selection
                     .choice
                     .selected_after_kv_free_tokens_skip,
+                comparator,
                 cluster: selected_cluster.cluster.snapshot(),
                 chosen: &chosen,
             });
@@ -442,6 +444,7 @@ mod tests {
             num_candidates: 1,
             rank_depth: 0,
             selected_after_kv_free_tokens_skip: false,
+            comparator: None,
             cluster: &cluster,
             chosen: &chosen,
         });

@@ -16,9 +16,9 @@
 use super::backend::{DEFAULT_PRIORITY_CEILING, UpstreamBackend, dynamo};
 use super::core::{
     MAX_SPECULATIVE_REQUEST_BODY_PREALLOC_BYTES, TunnelServerApp, extend_body_from_buf,
-    is_health_request_path, otel_parent_from_headers, pylon_upstream_parent_context,
-    request_body_buffer, request_body_capacity, should_forward_header,
-    should_forward_response_header,
+    health_probe_path_and_query, is_health_request_path, otel_parent_from_headers,
+    pylon_upstream_parent_context, request_body_buffer, request_body_capacity,
+    should_forward_header, should_forward_response_header,
 };
 use super::endpoint::{
     build_trusted_client_config, derive_sni, make_server_config, target_authority,
@@ -61,6 +61,7 @@ use crate::request_observer::{
 use crate::request_quality_monitor::RequestQualityMonitorConfig;
 use crate::runtime_state::ModelGeneration;
 use crate::stats::PylonMetrics;
+use crate::upstream_health::UpstreamHealthPaths;
 use crate::{PylonRuntimeState, StatsCollectorConfig, start_stats_collector};
 
 #[derive(Clone, Default)]
@@ -921,6 +922,21 @@ fn assert_queue_mismatch_response(response: &TunnelResponse, raw_quic: bool) {
         std::str::from_utf8(&response.body)
             .unwrap()
             .contains("queue_estimate_mismatch")
+    );
+}
+
+#[test]
+fn health_probe_path_keeps_the_query_string() {
+    let health_paths = UpstreamHealthPaths::default();
+    health_paths.mark_resolved(1);
+
+    assert_eq!(
+        health_probe_path_and_query(&health_paths, "/health?probe=1"),
+        "/v1/health/ready?probe=1"
+    );
+    assert_eq!(
+        health_probe_path_and_query(&health_paths, "/health"),
+        "/v1/health/ready"
     );
 }
 
@@ -1790,6 +1806,27 @@ async fn quic_tunnel_health_requests_carry_no_derived_priority() {
 
     let response_headers = tunnel.response_head(StatusCode::OK).await;
     assert_eq!(response_headers["x-echo-dynamo-priority"], "absent");
+
+    tunnel.shutdown().await;
+}
+
+#[tokio::test]
+async fn quic_tunnel_health_probes_follow_the_resolved_upstream_path() {
+    let (mut config, _metrics) = metered_test_tunnel_config_for(
+        Router::new().route("/v1/health/ready", axum::routing::get(|| async { "ok" })),
+    )
+    .await;
+    let health_paths = UpstreamHealthPaths::default();
+    health_paths.mark_resolved(1);
+    config.forwarding.upstream_health_paths = health_paths;
+    let mut tunnel = RawTunnelTest::start(config).await;
+
+    let mut headers = HeaderMap::new();
+    headers.insert("x-method", "GET".parse().unwrap());
+    headers.insert("x-path", "/health".parse().unwrap());
+    tunnel.send(headers, b"").await;
+
+    tunnel.response_head(StatusCode::OK).await;
 
     tunnel.shutdown().await;
 }

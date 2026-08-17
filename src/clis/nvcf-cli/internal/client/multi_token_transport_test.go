@@ -131,6 +131,37 @@ func TestMultiTokenTransportIsAdminOperation(t *testing.T) {
 			reason:   "Delete is cluster-management scope",
 		},
 
+		// Admin Accounts — must use JWT (account_setup scope) even when an
+		// API key is present; API-key support for account_setup is temporary.
+		{
+			name:     "Admin accounts list",
+			method:   "GET",
+			path:     "/v2/nvcf/accounts",
+			expected: true,
+			reason:   "List accounts requires account_setup scope (JWT)",
+		},
+		{
+			name:     "Admin accounts update",
+			method:   "PATCH",
+			path:     "/v2/nvcf/accounts/nvcf-default",
+			expected: true,
+			reason:   "Update account requires account_setup scope (JWT)",
+		},
+		{
+			name:     "Admin accounts secrets sub-resource",
+			method:   "PUT",
+			path:     "/v2/nvcf/accounts/nvcf-default/secrets/functions/id/versions/vid",
+			expected: true,
+			reason:   "Already covered by isSecretUpdate (update_secrets scope), not account_setup",
+		},
+		{
+			name:     "Admin accounts queues sub-resource",
+			method:   "GET",
+			path:     "/v2/nvcf/accounts/nvcf-default/queues/functions/id",
+			expected: false,
+			reason:   "Queue details are not account_setup scoped and are unaffected by this check",
+		},
+
 		// USER OPERATIONS - Should use API KEY
 		{
 			name:     "Get function details",
@@ -395,6 +426,33 @@ func TestTokenSelectionPriority(t *testing.T) {
 			expectedToken: "Bearer jwt-token",
 			description:   "Per-spec deployment update is admin; must use function token even when API key present",
 		},
+		{
+			name:          "Admin accounts list with both tokens - use JWT",
+			apiKey:        "api-key",
+			functionToken: "jwt-token",
+			requestMethod: "GET",
+			requestPath:   "/v2/nvcf/accounts",
+			expectedToken: "Bearer jwt-token",
+			description:   "account_setup is JWT-only; API key must not be picked ahead of it",
+		},
+		{
+			name:          "Admin accounts update with both tokens - use JWT",
+			apiKey:        "api-key",
+			functionToken: "jwt-token",
+			requestMethod: "PATCH",
+			requestPath:   "/v2/nvcf/accounts/nvcf-default",
+			expectedToken: "Bearer jwt-token",
+			description:   "account_setup is JWT-only; API key must not be picked ahead of it",
+		},
+		{
+			name:          "Admin accounts list without JWT - fall back to API key",
+			apiKey:        "api-key",
+			functionToken: "",
+			requestMethod: "GET",
+			requestPath:   "/v2/nvcf/accounts",
+			expectedToken: "Bearer api-key",
+			description:   "API-key support for account_setup is temporary; still used when no JWT is configured",
+		},
 	}
 
 	for _, tt := range tests {
@@ -471,5 +529,44 @@ func TestMultiTokenTransportLogsClusterManagementForSISDelete(t *testing.T) {
 	}
 	if strings.Contains(got, "function operation") {
 		t.Fatalf("ICMS delete must not be logged as a function operation: %q", got)
+	}
+}
+
+func TestMultiTokenTransportLogsAccountManagementForAccountsList(t *testing.T) {
+	var logs bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(prev) })
+
+	mockBase := &mockRoundTripper{}
+	transport := &multiTokenTransport{
+		apiKey:        "api-key",
+		functionToken: "jwt-token",
+		base:          mockBase,
+	}
+	reqURL, err := url.Parse("https://api.nvcf.example.test/v2/nvcf/accounts")
+	if err != nil {
+		t.Fatalf("Failed to parse URL: %v", err)
+	}
+	req := &http.Request{
+		Method: http.MethodGet,
+		URL:    reqURL,
+		Header: make(http.Header),
+	}
+
+	_, err = transport.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip failed: %v", err)
+	}
+
+	if mockBase.capturedAuth != "Bearer jwt-token" {
+		t.Fatalf("expected admin accounts list to use admin JWT even with an API key present, got %q", mockBase.capturedAuth)
+	}
+	got := logs.String()
+	if !strings.Contains(got, "account_setup") {
+		t.Fatalf("expected account_setup auth log, got %q", got)
+	}
+	if strings.Contains(got, "fallback") {
+		t.Fatalf("admin accounts list must not be logged as a fallback: %q", got)
 	}
 }
