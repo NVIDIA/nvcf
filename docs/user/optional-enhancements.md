@@ -4,6 +4,10 @@ NVCF supports several optional components that can enhance your deployment's
 performance, routing, and GPU cluster capabilities. Each component has its own
 installation and configuration guide.
 
+## Pod Disruption Budgets
+
+- [Pod Disruption Budgets](pod-disruption-budgets.md) - Protect stateful infrastructure and control-plane services from simultaneous voluntary evictions during node drains and cluster upgrades
+
 ## Low-Latency Streaming
 
 - [LLS Installation](lls-installation.md) - Required for streaming Cloud Functions using WebRTC

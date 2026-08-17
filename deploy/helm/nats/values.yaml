@@ -16,6 +16,14 @@
 # NATS Configuration (reference: https://github.com/nats-io/k8s/tree/main/helm/charts/nats)
 nats:
   enabled: true
+
+  # Pod disruption budget. The upstream chart enables this by default.
+  # Set enabled: false to disable, or configure merge/patch for custom spec fields.
+  podDisruptionBudget:
+    enabled: true
+    merge: {}
+    patch: []
+
   global:
     image:
       pullSecretNames: []

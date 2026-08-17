@@ -648,6 +648,50 @@ func TestRenderedManifestsShouldNotContainAcceptsExplicitMarkers(t *testing.T) {
 	}
 }
 
+func TestRenderedManifestsShouldContainAcceptsExplicitMarkers(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	renderDir := filepath.Join(sc.Suite.Config.RepoRoot, "out", "rendered")
+	if err := os.MkdirAll(renderDir, 0o755); err != nil {
+		t.Fatalf("create render directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(renderDir, "collector.yaml"), []byte("kind: OpenTelemetryCollector\n"), 0o644); err != nil {
+		t.Fatalf("write rendered manifest: %v", err)
+	}
+	table := docTable(t, [][]string{
+		{"text"},
+		{"kind: OpenTelemetryCollector"},
+	})
+
+	if err := sc.renderedManifestsShouldContain("out/rendered", table); err != nil {
+		t.Fatalf("assert rendered manifests: %v", err)
+	}
+	if len(fake.runs) != 0 {
+		t.Fatalf("runs = %d, want 0", len(fake.runs))
+	}
+}
+
+func TestRenderedManifestsUnderMatchingDirectoriesShouldContainAcceptsExplicitMarkers(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	renderDir := filepath.Join(sc.Suite.Config.RepoRoot, "out", "rendered", "01-nats", "templates")
+	if err := os.MkdirAll(renderDir, 0o755); err != nil {
+		t.Fatalf("create render directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(renderDir, "nats.yaml"), []byte("image: docker.io/natsio/reloader:0.23.0\n"), 0o644); err != nil {
+		t.Fatalf("write rendered manifest: %v", err)
+	}
+	table := docTable(t, [][]string{
+		{"text"},
+		{"docker.io/natsio/reloader:0.23.0"},
+	})
+
+	if err := sc.renderedManifestsUnderMatchingDirectoriesShouldContain("out/rendered", "*-nats", table); err != nil {
+		t.Fatalf("assert rendered manifests: %v", err)
+	}
+	if len(fake.runs) != 0 {
+		t.Fatalf("runs = %d, want 0", len(fake.runs))
+	}
+}
+
 // docTable builds a godog.Table from a slice of rows. The Picker rows
 // type matches what godog hands to step handlers at runtime.
 func docTable(t *testing.T, rows [][]string) *godog.Table {

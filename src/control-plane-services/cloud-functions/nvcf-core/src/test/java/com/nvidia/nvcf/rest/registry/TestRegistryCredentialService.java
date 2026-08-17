@@ -16,7 +16,6 @@
  */
 package com.nvidia.nvcf.rest.registry;
 
-import static com.nvidia.nvcf.service.registry.RegistryFunctionMapperService.toRegistryCredentialDetailsDto;
 import static com.nvidia.nvcf.util.TestConstants.TEST_CONTAINER_REGISTRY_CRED;
 import static com.nvidia.nvcf.util.TestConstants.TEST_HELM_REGISTRY_CRED;
 import static com.nvidia.nvcf.util.TestConstants.TEST_MODEL_REGISTRY_CRED;
@@ -27,6 +26,7 @@ import com.nvidia.nvcf.rest.registry.dto.RegistryCredentialDetailsDto;
 import com.nvidia.nvcf.service.account.AccountService;
 import com.nvidia.nvcf.service.registry.RegistryCredentialEssService;
 import com.nvidia.nvcf.service.registry.RegistryCredentialLookupService;
+import com.nvidia.nvcf.service.registry.RegistryFunctionMapperService;
 import java.util.Base64;
 import java.util.List;
 import java.util.Set;
@@ -44,6 +44,9 @@ public class TestRegistryCredentialService {
 
     @Autowired
     private AccountService accountService;
+
+    @Autowired
+    private RegistryFunctionMapperService registryFunctionMapperService;
 
     public void validateRegistryCredentials(String ncaId) {
         validateRegistryCredential(
@@ -73,7 +76,7 @@ public class TestRegistryCredentialService {
                                                                      UUID registryCredentialId) {
         var entity = registryCredentialLookupService
                 .lookupRegistryCredentialByAccountAndIdOrThrow(ncaId, registryCredentialId);
-        return toRegistryCredentialDetailsDto(entity);
+        return registryFunctionMapperService.toRegistryCredentialDetailsDto(entity);
     }
 
     private void validateRegistryCredential(

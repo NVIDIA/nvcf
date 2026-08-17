@@ -51,6 +51,7 @@ public class RegistryCredentialManagementFacade {
     private final RegistryCredentialLookupService registryCredentialLookupService;
     private final RegistryCredentialService registryCredentialService;
     private final RegistryLookupService registryLookupService;
+    private final RegistryFunctionMapperService registryFunctionMapperService;
 
     public RegistryCredentialDetailsResponse addRegistryCredential(
             String ncaId,
@@ -66,7 +67,7 @@ public class RegistryCredentialManagementFacade {
                                                                        payloadBuilder);
         return RegistryCredentialDetailsResponse.builder()
                 .registryCredential(
-                        RegistryFunctionMapperService.toRegistryCredentialDetailsDto(registry))
+                        registryFunctionMapperService.toRegistryCredentialDetailsDto(registry))
                 .build();
     }
 
@@ -87,7 +88,7 @@ public class RegistryCredentialManagementFacade {
         var entity = registryCredentialLookupService
                 .lookupRegistryCredentialByAccountAndIdOrThrow(ncaId, registryCredentialId);
         return RegistryCredentialDetailsResponse.builder()
-                .registryCredential(RegistryFunctionMapperService
+                .registryCredential(registryFunctionMapperService
                                             .toRegistryCredentialDetailsDto(entity))
                 .build();
     }
