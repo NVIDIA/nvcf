@@ -127,6 +127,7 @@ func TestPrepareTransportTLSForWorkloadsInjectsPodLLMWorker(t *testing.T) {
 	assert.Equal(t, corev1.PullAlways, installer.ImagePullPolicy)
 	llmWorker := findWorkloadContainer(podSpec, function.LLMWorkerContainerName)
 	require.NotNil(t, llmWorker)
+	assert.NotContains(t, llmWorker.Args, "--quic-insecure")
 	assert.Equal(t, "/nvcf/transport-tls/ca-certificates.crt",
 		findWorkloadEnvValue(llmWorker, "STARGATE_TLS_CERT_PATH"))
 	mount := findWorkloadVolumeMount(llmWorker, "nvcf-trust-merged-certs")
@@ -320,6 +321,39 @@ func TestPrepareTransportTLSForWorkloadsReturnsTerminalErrorForInvalidConfig(t *
 			assert.True(t, errors.Is(err, reconcile.TerminalError(nil)), "invalid static transport TLS config should fail terminally")
 		})
 	}
+}
+
+func TestPrepareTransportTLSForWorkloadsRejectsQUICInsecureTerminal(t *testing.T) {
+	ctx := newTestContext()
+	ms := &nvcav1alpha1.MiniService{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "llm-miniservice",
+			Namespace: "worker-ns",
+			UID:       k8stypes.UID("llm-miniservice-uid"),
+		},
+		Spec: nvcav1alpha1.MiniServiceSpec{Namespace: "worker-ns"},
+	}
+	crClient, _ := newFakeClient(mgrScheme, ms)
+	r := newTransportTLSReconciler(crClient, nvcaconfig.TransportTLSConfig{
+		TrustMode:                nvcaconfig.TrustModeBundle,
+		TrustBundleConfigMapName: "nvcf-transport-trust-bundle",
+		TrustBundleKey:           "nvcf-ca-bundle.pem",
+		TrustBundleFingerprint:   testTransportTLSRootFingerprint,
+		TrustBundlePEM:           testTransportTLSRootCertPEM,
+	})
+	r.cfg.Workload.StargateQUICInsecure = true
+	pod := newTransportTLSPod()
+	pod.Spec.Containers[0].Args = []string{"--quic-insecure"}
+
+	err := r.prepareTransportTLSForWorkloads(ctx, ms, []client.Object{pod})
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, reconcile.TerminalError(nil)), "invalid static workload configuration must not be retried")
+	assert.Contains(t, err.Error(), "workload.stargateQUICInsecure=true cannot be used with workload.transportTLS.trustMode=bundle")
+	assert.Contains(t, err.Error(), "set workload.stargateQUICInsecure=false or use trustMode=system")
+	cm := &corev1.ConfigMap{}
+	getErr := crClient.Get(ctx, client.ObjectKey{Namespace: "worker-ns", Name: "nvcf-transport-trust-bundle"}, cm)
+	assert.True(t, apierrors.IsNotFound(getErr))
 }
 
 func TestPrepareTransportTLSForWorkloadsReturnsTerminalErrorWithoutRegularInitImage(t *testing.T) {

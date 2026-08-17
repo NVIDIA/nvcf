@@ -1450,6 +1450,10 @@ func (bc *BackendK8sCache) getAgentConfigToMerge(ctx context.Context) (nvcaconfi
 	}
 
 	mergeCfg.Workload.TransportTLS = operatorCfg.Workload.TransportTLS
+	if err := mergeCfg.Validate(); err != nil {
+		return nvcaconfig.Config{}, false,
+			nvcaoperatorerrors.FatalError(fmt.Errorf("invalid combined NVCA agent configuration: %w", err))
+	}
 	return mergeCfg, true, nil
 }
 
@@ -1469,7 +1473,11 @@ func (bc *BackendK8sCache) getRawAgentConfigToMerge(ctx context.Context) (nvcaco
 
 	data := cm.Data[agentConfigFile]
 	cfg, err := nvcaconfig.DecodeConfig([]byte(data))
-	return cfg, true, err
+	if err != nil {
+		return nvcaconfig.Config{}, false,
+			nvcaoperatorerrors.FatalError(fmt.Errorf("invalid %s: %w", agentConfigMergeConfigMapName, err))
+	}
+	return cfg, true, nil
 }
 
 func (bc *BackendK8sCache) getImageRegistryServerFromRepo(nb *nvidiaiov1.NVCFBackend) string {
