@@ -191,6 +191,18 @@ cassandra:
   # Do not use small for default cloud installs. Cassandra can OOM during
   # first boot and leave migrations in a failed or dirty state.
   resourcesPreset: "xlarge"
+  # Image overrides for the Cassandra server and dynamicSeedDiscovery containers.
+  # The default image name is `cassandra` under global.image.repository.
+  # Override here when pulling from a registry that uses a different path or tag.
+  # image:
+  #   registry: ""         # defaults to global.image.registry
+  #   repository: ""       # defaults to <global.image.repository>/cassandra
+  #   tag: ""              # defaults to the chart appVersion
+  # dynamicSeedDiscovery:
+  #   image:
+  #     registry: ""
+  #     repository: ""
+  #     tag: ""
   # PDB: disabled by default. Recommended for production 3-node clusters.
   # Set exactly one of minAvailable or maxUnavailable.
   podDisruptionBudget:

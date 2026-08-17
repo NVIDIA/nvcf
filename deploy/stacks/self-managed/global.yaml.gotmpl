@@ -68,12 +68,18 @@ cassandra:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/alpine-k8s
   image:
-    registry: {{ .Values.global.image.registry }}
-    repository: {{ .Values.global.image.repository }}/bitnami-cassandra
+    registry: {{ dig "cassandra" "image" "registry" .Values.global.image.registry .Values }}
+    repository: {{ dig "cassandra" "image" "repository" (printf "%s/cassandra" .Values.global.image.repository) .Values }}
+    {{- if dig "cassandra" "image" "tag" "" .Values }}
+    tag: {{ dig "cassandra" "image" "tag" "" .Values }}
+    {{- end }}
   dynamicSeedDiscovery:
     image:
-      registry: {{ .Values.global.image.registry }}
-      repository: {{ .Values.global.image.repository }}/bitnami-cassandra
+      registry: {{ dig "cassandra" "dynamicSeedDiscovery" "image" "registry" .Values.global.image.registry .Values }}
+      repository: {{ dig "cassandra" "dynamicSeedDiscovery" "image" "repository" (printf "%s/cassandra" .Values.global.image.repository) .Values }}
+      {{- if dig "cassandra" "dynamicSeedDiscovery" "image" "tag" "" .Values }}
+      tag: {{ dig "cassandra" "dynamicSeedDiscovery" "image" "tag" "" .Values }}
+      {{- end }}
 
 # cert-manager subchart image overrides. The helm-nvcf-cert-manager wrapper
 # passes these through to the upstream cert-manager subchart under the
