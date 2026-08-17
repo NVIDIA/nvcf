@@ -20,6 +20,8 @@ llmRequestRouter:
 
 Single-replica deployments may use self-only discovery with `llmRequestRouter.discovery.disableDnsDiscovery=true`. Multi-replica deployments require DNS discovery and stable per-pod identity, so the chart fails rendering if DNS discovery is disabled while `llmRequestRouter.replicaCount > 1`. For multi-replica deployments, the default advertised hostname template is `{pod_name}.<headless-service>.<namespace>.svc.cluster.local`; the StatefulSet and headless service provide the stable pod DNS names required for router replicas to discover each other and share backend registrations.
 
+`llmRequestRouter.kubernetes.advertisedHostnameTemplate` supports the Stargate placeholders `{pod_name}` and `{namespace}`. Stargate resolves both placeholders at runtime. For certificate validation, the chart substitutes the deployment namespace and a representative StatefulSet pod name. `{pod_name}` must stay within the leftmost DNS label when certificate coverage relies on a wildcard. When `llmRequestRouter.certificate.enabled=true`, `certificate.dnsNames` must cover the advertised hostname with either a case-insensitive exact name or a valid leftmost `*.` wildcard. A wildcard covers exactly one label and requires at least two suffix labels. For example, `*.nvcf.example.internal` covers `{pod_name}.nvcf.example.internal`, but `*.example.internal` does not cover `{pod_name}.nvcf.example.internal`.
+
 Upgrading from a chart version that rendered a Deployment can briefly run both the old Deployment and new StatefulSet during `helm upgrade` while Helm replaces the workload kind.
 
 ## Prerequisites
