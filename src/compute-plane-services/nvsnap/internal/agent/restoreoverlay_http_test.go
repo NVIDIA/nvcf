@@ -48,3 +48,17 @@ func TestUnderRootConfinesLowerDirHint(t *testing.T) {
 		}
 	}
 }
+
+// A cache root of "/" is not a sane configuration, but the naive
+// root+separator prefix yields "//" and rejects every descendant, which fails
+// closed in a way that looks like a path bug rather than a config one.
+func TestUnderRootHandlesFilesystemRoot(t *testing.T) {
+	for _, p := range []string{"/", "/etc", "/var/lib/nvsnap/cache/x"} {
+		if !underRoot("/", p) {
+			t.Errorf(`underRoot("/", %q) = false, want true`, p)
+		}
+	}
+	if underRoot("/", "relative") {
+		t.Error(`underRoot("/", "relative") = true, want false`)
+	}
+}

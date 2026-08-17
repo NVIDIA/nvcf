@@ -172,6 +172,13 @@ func underRoot(root, path string) bool {
 	if cleanPath == cleanRoot {
 		return true
 	}
+	// "/" already ends in the separator; appending another yields "//", which
+	// no cleaned path is prefixed by, so every descendant of / would be
+	// rejected. A cache root of / is not a sane configuration, but silently
+	// refusing everything is a worse failure than saying so.
+	if cleanRoot == string(filepath.Separator) {
+		return strings.HasPrefix(cleanPath, cleanRoot)
+	}
 	return strings.HasPrefix(cleanPath, cleanRoot+string(filepath.Separator))
 }
 
