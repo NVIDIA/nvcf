@@ -135,6 +135,7 @@ nvcf_java_test(
     size = "large",
     tags = [
         "exclusive",
+        "external",
         "requires-docker",
     ],
     timeout = "long",
@@ -146,6 +147,7 @@ nvcf_java_coverage_test(
     size = "large",
     tags = [
         "exclusive",
+        "external",
         "requires-docker",
     ],
     test = ":tests",
