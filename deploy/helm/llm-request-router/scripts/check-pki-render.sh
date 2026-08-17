@@ -162,6 +162,27 @@ render_certificate_case \
   "" \
   "*.llm-request-router-headless.nvcf.svc.cluster.local"
 
+# A single replica advertises its stable service DNS name. Render it with an
+# exact Certificate SAN so this hostname and certificate path stay covered.
+single_replica_manifest="${tmp_dir}/single-replica.yaml"
+helm template llm-request-router ./llm-request-router \
+  --namespace nvcf \
+  --values ./llm-request-router/values.yaml \
+  --set llmRequestRouter.image.repository=stargate \
+  --set llmRequestRouter.replicaCount=1 \
+  --set llmRequestRouter.discovery.disableDnsDiscovery=true \
+  --set llmRequestRouter.certificate.enabled=true \
+  --set llmRequestRouter.certificate.secretName=stargate-quic-tls \
+  --set llmRequestRouter.certificate.issuerRef.name=nvcf-openbao-pki \
+  --set-string 'llmRequestRouter.certificate.dnsNames[0]=llm-request-router.nvcf.svc.cluster.local' \
+  > "${single_replica_manifest}"
+
+single_replica_dns_name="$(yq -rN 'select(.kind == "Certificate" and .metadata.name == "stargate-quic-tls") | .spec.dnsNames[0]' "${single_replica_manifest}")"
+[ "${single_replica_dns_name}" = "llm-request-router.nvcf.svc.cluster.local" ] || fail "single-replica Certificate SAN did not render the advertised hostname"
+
+single_replica_args="$(yq -rN 'select(.kind == "StatefulSet" and .metadata.name == "llm-request-router") | .spec.template.spec.containers[0].args[]' "${single_replica_manifest}")"
+printf '%s\n' "${single_replica_args}" | grep -qx -- "--advertised-hostname-template=llm-request-router.nvcf.svc.cluster.local" || fail "single-replica render missing the advertised hostname template"
+
 # Certificate validation resolves both supported placeholders. The pod name
 # remains one DNS label, while the namespace is known at chart render time.
 placeholder_manifest="${tmp_dir}/placeholder.yaml"
