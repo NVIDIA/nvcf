@@ -590,22 +590,22 @@ pub(crate) fn pylon_queue_mismatch_retry_config_from_args(
 
 fn model_initialization_from_args(args: &Args) -> Result<ModelInitialization> {
     ensure!(
-        args.do_calibration ^ args.initial_input_tps.is_some(),
-        "exactly one of --do-calibration or --initial-input-tps is required"
+        !(args.do_calibration && args.initial_input_tps.is_some()),
+        "--do-calibration and --initial-input-tps cannot be used together"
     );
     ensure!(
         args.initial_input_tps
             .is_none_or(|input_tps| input_tps.is_finite() && input_tps > 0.0),
         "initial input TPS must be finite and positive"
     );
+    ensure!(
+        !args.benchmark_pin_input_tps || args.initial_input_tps.is_some(),
+        "--benchmark-pin-input-tps requires --initial-input-tps"
+    );
     if args.do_calibration {
         ensure!(
             args.calibration_requests > 0,
             "--do-calibration requires --calibration-requests greater than zero"
-        );
-        ensure!(
-            !args.benchmark_pin_input_tps,
-            "--benchmark-pin-input-tps requires --initial-input-tps"
         );
         return Ok(ModelInitialization::Calibration(CalibrationConfig {
             health_timeout: Duration::from_millis(args.bringup_canary_timeout_ms),
@@ -616,11 +616,12 @@ fn model_initialization_from_args(args: &Args) -> Result<ModelInitialization> {
         }));
     }
 
-    Ok(ModelInitialization::ConfiguredInputTps {
-        input_tps: args
-            .initial_input_tps
-            .expect("exactly one bootstrap source was validated"),
-        pin: args.benchmark_pin_input_tps,
+    Ok(match args.initial_input_tps {
+        Some(input_tps) => ModelInitialization::ConfiguredInputTps {
+            input_tps,
+            pin: args.benchmark_pin_input_tps,
+        },
+        None => ModelInitialization::Uncalibrated,
     })
 }
 
@@ -841,6 +842,7 @@ mod tests {
         if state.calibration_request_errors {
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
+        tokio::time::sleep(Duration::from_millis(20)).await;
         Json(serde_json::json!({"usage": {"completion_tokens": 1}})).into_response()
     }
 
@@ -1471,7 +1473,7 @@ mod tests {
                 "--calibration-max-concurrency",
                 "1",
                 "--bringup-calibration-timeout-ms",
-                "20",
+                "1000",
             ],
         );
         let plan = PylonStartupPlan::from_args(&args).expect("startup plan should build");
@@ -1482,13 +1484,13 @@ mod tests {
             Some("model-a")
         );
         control_plane.assert_no_calls();
-        upstream.calibration_release.add_permits(1);
+        upstream.calibration_release.add_permits(5);
         assert_eq!(
             upstream.calibration_started.recv().await.as_deref(),
             Some("model-b")
         );
         control_plane.assert_no_calls();
-        upstream.calibration_release.add_permits(1);
+        upstream.calibration_release.add_permits(5);
 
         let registration = control_plane.first_registration().await;
         assert_eq!(upstream.calibration_plans.load(Ordering::SeqCst), 2);
@@ -1502,7 +1504,7 @@ mod tests {
                 .as_ref()
                 .expect("first heartbeat should contain stats")
                 .last_mean_input_tps;
-            assert!(input_tps.is_finite());
+            assert!(input_tps.is_finite() && input_tps > 0.0);
         }
 
         startup
@@ -1530,7 +1532,7 @@ mod tests {
                 "--calibration-prompt-units",
                 "256",
                 "--bringup-calibration-timeout-ms",
-                "20",
+                "1000",
             ],
         );
         let plan = PylonStartupPlan::from_args(&args).expect("startup plan should build");
@@ -1540,7 +1542,7 @@ mod tests {
             upstream.calibration_started.recv().await.as_deref(),
             Some("model-a")
         );
-        upstream.calibration_release.add_permits(1);
+        upstream.calibration_release.add_permits(5);
         let runtime = startup
             .await
             .expect("pylon startup task should not panic")
@@ -1558,24 +1560,53 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invalid_bootstrap_source_selection_makes_zero_stargate_calls() {
+    async fn conflicting_bootstrap_sources_make_zero_stargate_calls() {
         let upstream = TestUpstream::spawn(false).await;
         let control_plane = TestControlPlane::spawn().await;
 
-        for bootstrap_args in [
-            Vec::<&str>::new(),
-            vec!["--do-calibration", "--initial-input-tps", "100"],
-        ] {
-            let args = runtime_args(
-                &upstream.base_url,
-                control_plane.addr,
-                &["model-a"],
-                &bootstrap_args,
+        let args = runtime_args(
+            &upstream.base_url,
+            control_plane.addr,
+            &["model-a"],
+            &["--do-calibration", "--initial-input-tps", "100"],
+        );
+        assert!(PylonStartupPlan::from_args(&args).is_err());
+        control_plane.assert_no_calls();
+
+        upstream.shutdown().await;
+        control_plane.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn uncalibrated_models_are_advertised_without_positive_input_tps() {
+        let upstream = TestUpstream::spawn(false).await;
+        let mut control_plane = TestControlPlane::spawn().await;
+        let args = runtime_args(
+            &upstream.base_url,
+            control_plane.addr,
+            &["model-a", "model-b"],
+            &[],
+        );
+        let plan = PylonStartupPlan::from_args(&args).expect("startup plan should build");
+        let runtime = start_pylon_runtime(&args, &plan)
+            .await
+            .expect("pylon startup should succeed");
+
+        let registration = control_plane.first_registration().await;
+        assert_eq!(upstream.calibration_requests.load(Ordering::SeqCst), 0);
+        assert_eq!(registration.models.len(), 2);
+        for model_id in ["model-a", "model-b"] {
+            assert_eq!(
+                registration.models[model_id]
+                    .stats
+                    .as_ref()
+                    .expect("first heartbeat should contain stats")
+                    .last_mean_input_tps,
+                0.0
             );
-            assert!(PylonStartupPlan::from_args(&args).is_err());
-            control_plane.assert_no_calls();
         }
 
+        runtime.shutdown().await;
         upstream.shutdown().await;
         control_plane.shutdown().await;
     }

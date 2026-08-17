@@ -21,36 +21,20 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 
 	pdpv1 "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients/pdp_types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/credentials"
 )
 
-func newTestTokenReader(t *testing.T, token string) *credentials.BearerTokenReader {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "secrets.json")
-	data, err := json.Marshal(map[string]any{"token": token})
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(path, data, 0600))
-	r, err := credentials.NewBearerTokenReader(path, "token")
-	require.NoError(t, err)
-	t.Cleanup(func() { r.Close() })
-	return r
-}
-
-func TestStaticBearerClient_PolicyConfig(t *testing.T) {
+func TestAPIKeysClient_PolicyConfig(t *testing.T) {
 	cfg := &PolicyConfig{Namespace: "event-ledger", PolicyFQDN: "apikey.allow"}
-	client := NewStaticBearerClient("http://example.com", cfg, newTestTokenReader(t, "tok"), &http.Client{})
+	client := NewApiKeysClient("http://example.com", cfg, &http.Client{})
 	assert.Equal(t, cfg, client.PolicyConfig())
 }
 
-func TestStaticBearerClient_Evaluate(t *testing.T) {
+func TestAPIKeysClient_Evaluate(t *testing.T) {
 	allowResponse := map[string]any{
 		"result": map[string]any{"allow": true},
 	}
@@ -60,14 +44,14 @@ func TestStaticBearerClient_Evaluate(t *testing.T) {
 		serverResponse any
 		serverStatus   int
 		wantErr        bool
-		checkAuth      bool
+		checkNoAuth    bool
 		checkURL       bool
 	}{
 		{
-			name:           "sends correct Authorization header and URL",
+			name:           "sends no Authorization header and correct URL",
 			serverStatus:   http.StatusOK,
 			serverResponse: allowResponse,
-			checkAuth:      true,
+			checkNoAuth:    true,
 			checkURL:       true,
 		},
 		{
@@ -77,7 +61,7 @@ func TestStaticBearerClient_Evaluate(t *testing.T) {
 		},
 		{
 			name:         "returns error on non-200 status",
-			serverStatus: http.StatusForbidden,
+			serverStatus: http.StatusInternalServerError,
 			wantErr:      true,
 		},
 	}
@@ -97,7 +81,7 @@ func TestStaticBearerClient_Evaluate(t *testing.T) {
 			defer srv.Close()
 
 			cfg := &PolicyConfig{Namespace: "event-ledger", PolicyFQDN: "apikey.allow"}
-			client := NewStaticBearerClient(srv.URL, cfg, newTestTokenReader(t, "test-bearer-token"), &http.Client{})
+			client := NewApiKeysClient(srv.URL, cfg, &http.Client{})
 
 			req := &pdpv1.RuleRequest{
 				Namespace: "event-ledger",
@@ -112,8 +96,8 @@ func TestStaticBearerClient_Evaluate(t *testing.T) {
 			}
 			require.NoError(t, err)
 
-			if tc.checkAuth {
-				assert.Equal(t, "Bearer test-bearer-token", capturedAuth)
+			if tc.checkNoAuth {
+				assert.Empty(t, capturedAuth, "expected no Authorization header")
 			}
 			if tc.checkURL {
 				assert.Equal(t, "/v1/namespaces/event-ledger/evaluations/apikey.allow", capturedURL)

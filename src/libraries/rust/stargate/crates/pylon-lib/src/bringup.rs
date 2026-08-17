@@ -141,7 +141,10 @@ mod tests {
     }
 
     fn test_stats_collector() -> (PylonRuntimeState, StatsCollectorHandle) {
-        let config = StatsCollectorConfig::default();
+        let config = StatsCollectorConfig {
+            duration_floor: Duration::ZERO,
+            ..StatsCollectorConfig::default()
+        };
         let (runtime_state, observations) = PylonRuntimeState::observed(
             InferenceServerStatus::Active,
             &["test-model".to_string()],
@@ -418,7 +421,7 @@ mod tests {
         let prompt_lengths = Arc::new(Mutex::new(Vec::new()));
         let base_url = spawn_test_server(TestServerState {
             prompt_too_long_above: Some(700),
-            completions_before_block: Some(Arc::new(AtomicUsize::new(4))),
+            completions_before_block: Some(Arc::new(AtomicUsize::new(20))),
             prompt_lengths: Some(prompt_lengths.clone()),
             ..TestServerState::default()
         })
@@ -464,7 +467,7 @@ mod tests {
         let prompt_rejections = Arc::new(Mutex::new(vec![1024, 512]));
         let base_url = spawn_test_server(TestServerState {
             prompt_rejections: Some(prompt_rejections.clone()),
-            completions_before_block: Some(Arc::new(AtomicUsize::new(6))),
+            completions_before_block: Some(Arc::new(AtomicUsize::new(20))),
             prompt_lengths: Some(prompt_lengths.clone()),
             ..TestServerState::default()
         })
@@ -693,10 +696,11 @@ mod tests {
 
         tokio::time::pause();
         tokio::time::advance(Duration::from_secs(30)).await;
-        calibration
+        let error = calibration
             .await
             .expect("calibration task should not panic")
-            .expect("the first load-step timeout should complete calibration");
+            .expect_err("a timeout before sufficient throughput samples must fail");
+        assert!(matches!(error, BringupError::InsufficientCalibrationData));
         tokio::time::resume();
         stats.shutdown().await;
     }

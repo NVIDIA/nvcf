@@ -22,7 +22,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/labels"
+	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/labels"
 )
 
 func baseOpts() Options {

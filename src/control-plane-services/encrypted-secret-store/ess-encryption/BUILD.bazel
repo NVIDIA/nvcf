@@ -86,6 +86,7 @@ nvcf_java_test(
     srcs = ESS_ENCRYPTION_TEST_SRCS,
     tags = [
         "exclusive",
+        "external",
         "requires-docker",
     ],
     deps = ESS_ENCRYPTION_TEST_DEPS,
@@ -132,6 +133,7 @@ nvcf_java_test(
     srcs = ESS_ENCRYPTION_TEST_SRCS,
     tags = [
         "exclusive",
+        "external",
         "requires-docker",
     ],
     deps = ESS_ENCRYPTION_TEST_DEPS,
@@ -145,6 +147,7 @@ nvcf_java_coverage_test(
     size = "large",
     tags = [
         "exclusive",
+        "external",
         "requires-docker",
     ],
     test = ":base_integration_tests_runner",
@@ -169,6 +172,7 @@ nvcf_java_test(
     srcs = ESS_ENCRYPTION_TEST_SRCS,
     tags = [
         "exclusive",
+        "external",
         "requires-docker",
     ],
     deps = ESS_ENCRYPTION_TEST_DEPS,
@@ -182,6 +186,7 @@ nvcf_java_coverage_test(
     size = "large",
     tags = [
         "exclusive",
+        "external",
         "requires-docker",
     ],
     test = ":other_integration_tests_runner",

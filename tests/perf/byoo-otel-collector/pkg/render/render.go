@@ -30,7 +30,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/spec"
+	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/spec"
 )
 
 // CollectorContainerName is the container name the translator assigns the BYOO

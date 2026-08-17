@@ -30,7 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/labels"
+	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/labels"
 )
 
 const (

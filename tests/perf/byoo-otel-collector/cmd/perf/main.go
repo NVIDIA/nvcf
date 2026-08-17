@@ -39,15 +39,15 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/deploy"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/k3d"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/loadgen"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/profile"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/render"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/report"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/sink"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/spec"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/validate"
+	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/deploy"
+	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/k3d"
+	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/loadgen"
+	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/profile"
+	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/render"
+	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/report"
+	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/sink"
+	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/spec"
+	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/validate"
 )
 
 // newDeployClient constructs the cluster client. It is a package variable so

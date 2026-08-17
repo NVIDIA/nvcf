@@ -37,11 +37,11 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/labels"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/render"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/report"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/sink"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/perf/pkg/spec"
+	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/labels"
+	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/render"
+	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/report"
+	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/sink"
+	"github.com/NVIDIA/nvcf/tests/perf/byoo-otel-collector/pkg/spec"
 )
 
 // Label keys/values are shared with the sink and loadgen packages via
