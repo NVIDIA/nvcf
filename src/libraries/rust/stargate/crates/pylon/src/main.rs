@@ -505,11 +505,11 @@ mod tests {
     }
 
     #[test]
-    fn startup_requires_exactly_one_input_tps_bootstrap_source() {
+    fn startup_rejects_conflicting_input_tps_bootstrap_sources() {
         let neither = parse_args("");
         let both = parse_args("--do-calibration --initial-input-tps 2200");
 
-        assert!(startup::PylonStartupPlan::from_args(&neither).is_err());
+        assert!(startup::PylonStartupPlan::from_args(&neither).is_ok());
         assert!(startup::PylonStartupPlan::from_args(&both).is_err());
         assert!(startup::PylonStartupPlan::from_args(&parse_args("--do-calibration")).is_ok());
         assert!(
@@ -537,9 +537,11 @@ mod tests {
 
     #[test]
     fn benchmark_pin_requires_initial_input_tps() {
+        let uncalibrated = parse_args("--benchmark-pin-input-tps");
         let calibration = parse_args("--do-calibration --benchmark-pin-input-tps");
         let initial = parse_args("--initial-input-tps 2200 --benchmark-pin-input-tps");
 
+        assert!(startup::PylonStartupPlan::from_args(&uncalibrated).is_err());
         assert!(startup::PylonStartupPlan::from_args(&calibration).is_err());
         assert!(startup::PylonStartupPlan::from_args(&initial).is_ok());
     }
