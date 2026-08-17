@@ -16,8 +16,6 @@
  */
 package com.nvidia.nvcf.service.registry;
 
-import static com.nvidia.nvcf.service.registry.RegistryFunctionMapperService.toRegistryCredentialDetailsDto;
-
 import com.nvidia.boot.audit.event.AuditEventPayload;
 import com.nvidia.boot.exceptions.BadRequestException;
 import com.nvidia.boot.exceptions.BootResponseException;
@@ -102,6 +100,7 @@ public class RegistryCredentialService {
     private final RegistryCredentialFunctionService registryCredentialFunctionService;
     private final RegistryCredentialEssService registryCredentialEssService;
     private final RegistryCredentialValidationService registryCredentialValidationService;
+    private final RegistryFunctionMapperService registryFunctionMapperService;
     private final JsonMapper jsonMapper;
 
     public RegistryCredentialService(
@@ -112,6 +111,7 @@ public class RegistryCredentialService {
             RegistryCredentialFunctionService registryCredentialFunctionService,
             RegistryCredentialEssService registryCredentialEssService,
             RegistryCredentialValidationService registryCredentialValidationService,
+            RegistryFunctionMapperService registryFunctionMapperService,
             JsonMapper jsonMapper) {
         this.registryCredentialAuditService = registryCredentialAuditService;
         this.registryLookupService = registryLookupService;
@@ -120,6 +120,7 @@ public class RegistryCredentialService {
         this.registryCredentialFunctionService = registryCredentialFunctionService;
         this.registryCredentialEssService = registryCredentialEssService;
         this.registryCredentialValidationService = registryCredentialValidationService;
+        this.registryFunctionMapperService = registryFunctionMapperService;
         this.jsonMapper = jsonMapper;
     }
 
@@ -198,7 +199,7 @@ public class RegistryCredentialService {
         registryCredentialLookupService.saveRegistryCredential(ncaId, entity);
 
         var hostname = entity.getRegistryHostname();
-        var dto = toRegistryCredentialDetailsDto(entity);
+        var dto = registryFunctionMapperService.toRegistryCredentialDetailsDto(entity);
         registryCredentialAuditService
                 .auditRegistryCredentialUpdate(payloadBuilder, jsonBefore, entity);
         log.info(MESG_REGISTRY_CREDENTIAL_OPER, ncaId, registryCredentialId, "Updated", hostname);
