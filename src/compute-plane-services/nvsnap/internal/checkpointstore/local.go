@@ -129,6 +129,13 @@ func (l *Local) Put(ctx context.Context, hash string, sources []CaptureSource, m
 
 	var totalSize, totalFiles int64
 	for _, src := range sources {
+		// Reject before the Join: filepath.Join resolves "../" instead of
+		// refusing it, so an escaping DstSubpath would write outside the
+		// capture tree, and the manifest check below would then validate
+		// against that same escaped path.
+		if !SafeSubpath(src.DstSubpath) {
+			return Manifest{}, fmt.Errorf("capture source %q: subpath %q escapes the capture tree", src.SrcPath, src.DstSubpath)
+		}
 		dst := filepath.Join(treeRoot, src.DstSubpath)
 		copier := treecopy.NewCopier(src.Excludes, nil)
 		bytes, files, copyErr := copier.Copy(ctx, src.SrcPath, dst)
@@ -300,7 +307,39 @@ func (l *Local) Mount(_ context.Context, hash string, vol VolumeMeta) (PodMount,
 // ones fall back to inferring from Type, which stays correct for every
 // layout that inference ever described accurately (rootfs, rootfs-extract,
 // and user-data volumes under volumes/<name>/).
+// SafeSubpath reports whether p is a location strictly inside the capture
+// tree: relative, and with no component that walks out of it.
+//
+// Every subpath is joined onto a root before it is written, verified, mounted
+// or used as an overlay lowerdir, and filepath.Join cleans "../" rather than
+// rejecting it, so an escaping value silently resolves outside the tree. The
+// inputs are not all internally generated: the agent's HTTP restore-overlay
+// route decodes VolumeMeta straight off the wire, so Subpath, MountPath and
+// Name all arrive from the caller.
+//
+// The empty string is valid and means the tree root.
+func SafeSubpath(p string) bool {
+	if p == "" || p == "." {
+		return true
+	}
+	if filepath.IsAbs(p) {
+		return false
+	}
+	cleaned := filepath.Clean(p)
+	return cleaned != ".." && !strings.HasPrefix(cleaned, ".."+string(filepath.Separator))
+}
+
+// VolumeSubpath resolves a volume's location within the capture tree,
+// rejecting any that would escape it. See SafeSubpath.
 func VolumeSubpath(vol VolumeMeta) (string, bool) {
+	sub, ok := volumeSubpath(vol)
+	if !ok || !SafeSubpath(sub) {
+		return "", false
+	}
+	return sub, true
+}
+
+func volumeSubpath(vol VolumeMeta) (string, bool) {
 	if vol.Subpath != nil {
 		return *vol.Subpath, true
 	}

@@ -149,3 +149,75 @@ func TestPutAcceptsCacheDirAtTreeRoot(t *testing.T) {
 		t.Errorf("cachedir contents not at the tree root: %v", err)
 	}
 }
+
+// Subpaths are joined onto a root before anything is written, verified or
+// mounted, and filepath.Join silently resolves "../" instead of rejecting it.
+// The agent's HTTP restore-overlay route decodes VolumeMeta from the request
+// body, so these values are not all internally generated.
+func TestSafeSubpathRejectsEscapes(t *testing.T) {
+	safe := []string{"", ".", "rootfs", "rootfs/opt/nim", "volumes/cachedir", "a/b/../c"}
+	for _, p := range safe {
+		if !SafeSubpath(p) {
+			t.Errorf("SafeSubpath(%q) = false, want true", p)
+		}
+	}
+	unsafe := []string{
+		"..",
+		"../etc",
+		"../../etc/shadow",
+		"rootfs/../../etc",
+		"/etc/shadow",
+		"/",
+	}
+	for _, p := range unsafe {
+		if SafeSubpath(p) {
+			t.Errorf("SafeSubpath(%q) = true, want false", p)
+		}
+	}
+}
+
+// An escaping Subpath must not survive VolumeSubpath, which is what the
+// writer, the manifest verifier and the overlay lowerdir resolution all use.
+func TestVolumeSubpathRejectsEscapingExplicitSubpath(t *testing.T) {
+	vol := VolumeMeta{Name: "evil", Type: "emptyDir", Subpath: SubpathAt("../../etc")}
+	if got, ok := VolumeSubpath(vol); ok {
+		t.Fatalf("VolumeSubpath accepted escaping subpath, got %q", got)
+	}
+}
+
+// MountPath and Name are joined too, so they need the same guard as Subpath.
+func TestVolumeSubpathRejectsEscapingDerivedPaths(t *testing.T) {
+	if got, ok := VolumeSubpath(VolumeMeta{Type: "rootfs-extract", MountPath: "/../../etc"}); ok {
+		t.Errorf("rootfs-extract escape accepted: %q", got)
+	}
+	if got, ok := VolumeSubpath(VolumeMeta{Type: "emptyDir", Name: "../../etc"}); ok {
+		t.Errorf("emptyDir name escape accepted: %q", got)
+	}
+}
+
+// Put must refuse the capture rather than write outside the tree; the manifest
+// verification that runs afterwards would otherwise check the escaped path.
+func TestPutRejectsEscapingDstSubpath(t *testing.T) {
+	root := t.TempDir()
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "f"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewLocal(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.Put(context.Background(), "deadbeef", []CaptureSource{{
+		SrcPath:    src,
+		DstSubpath: "../../escaped",
+	}}, Manifest{})
+	if err == nil {
+		t.Fatal("Put accepted an escaping DstSubpath")
+	}
+	if !strings.Contains(err.Error(), "escapes the capture tree") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(filepath.Dir(root), "escaped")); statErr == nil {
+		t.Fatal("Put wrote outside the store root")
+	}
+}

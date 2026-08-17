@@ -67,7 +67,14 @@ NVSNAP_CRIU_REPO="${NVSNAP_CRIU_REPO:-https://github.com/balajinvda/criu.git}"
 # rings survive C/R, so libuv/uvloop servers restore with UV_USE_IO_URING=1)
 # for reproducible OSS builds. Bump when the fork advances.
 # Consumed by build-agent.sh (clean-checkout auto-clone) and ci/build-image.sh.
-NVSNAP_CRIU_REF="${NVSNAP_CRIU_REF:-169595fd8}"
+# Must be the full 40-character SHA. build-agent.sh reaches this ref with
+# `git fetch --depth 1 origin <ref>`, and fetch-by-object-id requires a
+# complete OID -- an abbreviated one is not a ref name and the server cannot
+# resolve it:
+#   fatal: couldn't find remote ref 169595fd8
+# Only the clean-checkout path fetches, so a developer with a local ../criu
+# checkout never sees this; it breaks OSS clone-and-build only.
+NVSNAP_CRIU_REF="${NVSNAP_CRIU_REF:-169595fd8ff115690c35d70c1fae90a8d03a7321}"
 NVSNAP_LIBZMQ_REPO="${NVSNAP_LIBZMQ_REPO:-https://github.com/balajinvda/libzmq.git}"
 NVSNAP_LIBZMQ_REF="${NVSNAP_LIBZMQ_REF:-checkpoint-restore-v1}"
 NVSNAP_LIBUV_REPO="${NVSNAP_LIBUV_REPO:-https://github.com/balajinvda/libuv.git}"

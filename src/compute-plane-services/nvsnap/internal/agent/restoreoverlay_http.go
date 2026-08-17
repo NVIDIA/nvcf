@@ -31,6 +31,7 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -48,14 +49,15 @@ import (
 // overlay key inside OverlayManager — two volumes cannot mount at the
 // same MountPath, so it's stable and unique.
 //
-// LowerDirHint bypasses the captureHash-based resolution (tests rely on
-// this). When set, Volume.MountPath is still required as the overlay key.
+// LowerDirHint bypasses the captureHash-based resolution. When set,
+// Volume.MountPath is still required as the overlay key, and the hint must
+// point inside the agent's cache root — see resolveOverlayLowerDir.
 type PrepareOverlayRequest struct {
 	PodUID       string                     `json:"podUID"`
 	CaptureHash  string                     `json:"captureHash,omitempty"`
 	Volume       checkpointstore.VolumeMeta `json:"volume,omitempty"`
 	Tier         string                     `json:"tier,omitempty"`     // "local" | "rox" — informational only today
-	LowerDirHint string                     `json:"lowerDir,omitempty"` // explicit override; tests rely on this
+	LowerDirHint string                     `json:"lowerDir,omitempty"` // explicit override, confined to the cache root
 }
 
 // PrepareOverlayResponse is the JSON body returned by the prepare-overlay handler.
@@ -126,18 +128,6 @@ func (a *Agent) cleanupRestoreOverlayHandler(w http.ResponseWriter, r *http.Requ
 // is then the L2 PerCapturePVCBackend and lacks Root(), but rootfs
 // captures still land on local disk under RootfsCapture.CacheDir.
 func (a *Agent) resolveOverlayLowerDir(_ context.Context, req PrepareOverlayRequest) (string, error) {
-	if req.LowerDirHint != "" {
-		return req.LowerDirHint, nil
-	}
-	if req.CaptureHash == "" {
-		return "", errors.New("either lowerDir or captureHash is required")
-	}
-	// subdir == "" with ok is the tree root (cachedir mode captures the whole
-	// cache volume as the artifact root), so only !ok is an error here.
-	subdir, ok := checkpointstore.VolumeSubpath(req.Volume)
-	if !ok {
-		return "", fmt.Errorf("cannot derive lower subpath for volume %+v", req.Volume)
-	}
 	root := a.config.RootfsCapture.CacheDir
 	if local, ok := a.captureBackend.(interface{ Root() string }); ok {
 		root = local.Root()
@@ -145,7 +135,44 @@ func (a *Agent) resolveOverlayLowerDir(_ context.Context, req PrepareOverlayRequ
 	if root == "" {
 		return "", errors.New("no cache root configured (captureBackend has no Root() and RootfsCapture.CacheDir is empty)")
 	}
+	if req.LowerDirHint != "" {
+		// The hint bypasses hash-based resolution, and this request arrives
+		// over the agent's HTTP API, so an unconstrained value would let a
+		// caller name any host directory as the lower layer of an overlay
+		// this privileged agent then mounts into a pod. Confine it to the
+		// cache root, which is the only place a capture tree can legitimately
+		// live.
+		if !underRoot(root, req.LowerDirHint) {
+			return "", fmt.Errorf("lowerDir %q is outside the cache root %q", req.LowerDirHint, root)
+		}
+		return req.LowerDirHint, nil
+	}
+	if req.CaptureHash == "" {
+		return "", errors.New("either lowerDir or captureHash is required")
+	}
+	// subdir == "" with ok is the tree root (cachedir mode captures the whole
+	// cache volume as the artifact root), so only !ok is an error here.
+	// VolumeSubpath rejects any subpath that escapes the tree.
+	subdir, ok := checkpointstore.VolumeSubpath(req.Volume)
+	if !ok {
+		return "", fmt.Errorf("cannot derive lower subpath for volume %+v", req.Volume)
+	}
 	return filepath.Join(root, req.CaptureHash, "tree", subdir), nil
+}
+
+// underRoot reports whether path resolves to root itself or something beneath
+// it. Both sides are cleaned first so "..' components cannot slip past the
+// prefix comparison.
+func underRoot(root, path string) bool {
+	if !filepath.IsAbs(path) {
+		return false
+	}
+	cleanRoot := filepath.Clean(root)
+	cleanPath := filepath.Clean(path)
+	if cleanPath == cleanRoot {
+		return true
+	}
+	return strings.HasPrefix(cleanPath, cleanRoot+string(filepath.Separator))
 }
 
 // PrepareOverlay is the in-process entry point the webhook calls during

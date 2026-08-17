@@ -50,6 +50,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -328,8 +329,11 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 		// is a different problem from a dump that never wrote one, and
 		// reporting only runErr makes the two indistinguishable.
 		if moveErr != nil {
-			return fmt.Errorf("criu-v2 dump: %w (output: %s; harvest also failed: %v; dump.log tail: %s)",
-				runErr, strings.TrimSpace(string(out)), moveErr, tail)
+			// Join rather than format moveErr with %v: a caller inspecting
+			// this with errors.Is/As needs to reach both the dump failure and
+			// the harvest failure, not just the first one.
+			return fmt.Errorf("criu-v2 dump (output: %s; dump.log tail: %s): %w",
+				strings.TrimSpace(string(out)), tail, errors.Join(runErr, moveErr))
 		}
 		return fmt.Errorf("criu-v2 dump: %w (output: %s; dump.log tail: %s)", runErr, strings.TrimSpace(string(out)), tail)
 	}
