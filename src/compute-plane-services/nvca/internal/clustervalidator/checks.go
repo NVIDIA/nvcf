@@ -1251,7 +1251,6 @@ func nodeToNodeSecurityContext() *corev1.SecurityContext {
 }
 
 func buildNodeToNodeDaemonSet(name string, labels map[string]string) *appsv1.DaemonSet {
-	deadline := nodeToNodeActiveDeadline
 	return &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: nodeToNodeNamespace, Labels: labels},
 		Spec: appsv1.DaemonSetSpec{
@@ -1259,8 +1258,9 @@ func buildNodeToNodeDaemonSet(name string, labels map[string]string) *appsv1.Dae
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: labels},
 				Spec: corev1.PodSpec{
-					RestartPolicy:         corev1.RestartPolicyAlways,
-					ActiveDeadlineSeconds: &deadline,
+					// ActiveDeadlineSeconds is forbidden on DaemonSet pod templates.
+					// Cleanup is handled by deleting the DaemonSet in the deferred sweep.
+					RestartPolicy: corev1.RestartPolicyAlways,
 					Containers: []corev1.Container{{
 						Name:            "server",
 						Image:           nodeToNodeImage,
