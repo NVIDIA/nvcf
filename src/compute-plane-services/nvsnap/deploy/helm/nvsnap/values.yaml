@@ -137,7 +137,7 @@ agent:
     # is no AppVersion fallback (see _helpers.tpl) — empty tag fails
     # the chart render with a clear error rather than templating a
     # known-broken image ref.
-    tag: "v0.2.42"
+    tag: "v0.2.43"
     pullPolicy: Always
 
   # nodeSelector is intentionally empty — GPU detection runs through

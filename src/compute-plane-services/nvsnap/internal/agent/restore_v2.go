@@ -106,8 +106,6 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 		"imagesDir":      imgsInContainer,
 	}).Info("criu-v2: restoring in-namespace")
 
-	reservePlaceholderPIDs(hostPID, log)
-
 	// Same execution shape as dumpV2: minimal env, PATH covers the bundle
 	// (cuda_plugin execs cuda-checkpoint and CRIU network-lock execs
 	// iptables-restore from PATH), no LD_LIBRARY_PATH.
@@ -223,56 +221,4 @@ func (a *Agent) gpuProcessInSamePidNS(ctx context.Context, procBase string, cont
 		}
 	}
 	return 0, nil
-}
-
-// pidReserveFloor is where the placeholder's own PID allocation is pushed to
-// before CRIU restores. It has to clear the highest PID any dumped tree might
-// carry (NIM's session leader sits around 336; a large multi-process tree is
-// still far below this) while staying well under the default pid_max of
-// 4194304 so the write is accepted.
-const pidReserveFloor = 100000
-
-// reservePlaceholderPIDs pushes the placeholder container's next PID
-// allocation above the range CRIU has to recreate.
-//
-// CRIU rebuilds a tree at the exact PIDs recorded in the dump, via clone3 with
-// set_tid. If anything in the target PID namespace already holds one, restore
-// dies at the first collision:
-//
-//	Error (criu/cr-restore.c:1242): Can't fork for 336: File exists
-//
-// The placeholder manifests used to attempt this themselves, but a container
-// cannot do it: /proc/sys is mounted read-only into the pod, so the write
-// fails with EPERM even when the pod is privileged, and the failure was
-// swallowed. Restores have therefore been running with no protection at all,
-// succeeding only when the required PIDs happened to be free -- which is
-// usually, and silently not always.
-//
-// The agent can do it because it runs on the host with a writable /proc.
-// nsenter enters only the PID namespace, deliberately NOT the mount namespace:
-// the child then allocates from the target namespace while still writing
-// through the agent's own /proc.
-//
-// Best-effort by design. A failure here restores the previous behaviour rather
-// than breaking a restore that would have worked, so it warns rather than
-// returning an error -- but it warns loudly, naming the consequence, because
-// the silent version of this is what hid the bug.
-func reservePlaceholderPIDs(placeholderPID int, log *logrus.Entry) {
-	target := strconv.Itoa(pidReserveFloor)
-	cmd := exec.Command("nsenter", //nolint:gosec // PID is internally sourced
-		"--pid=/proc/"+strconv.Itoa(placeholderPID)+"/ns/pid", "--",
-		"sh", "-c", "echo "+target+" > /proc/sys/kernel/ns_last_pid")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		log.WithError(err).WithFields(logrus.Fields{
-			"placeholderPID": placeholderPID,
-			"floor":          pidReserveFloor,
-			"output":         strings.TrimSpace(string(out)),
-		}).Warn("criu-v2: could not reserve placeholder PID range; " +
-			"restore will fail if the dumped tree needs a PID that is already taken")
-		return
-	}
-	log.WithFields(logrus.Fields{
-		"placeholderPID": placeholderPID,
-		"floor":          pidReserveFloor,
-	}).Info("criu-v2: placeholder PID allocation pushed above the dumped range")
 }
