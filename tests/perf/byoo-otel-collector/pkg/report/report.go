@@ -17,9 +17,8 @@ limitations under the License.
 
 // Package report turns collector and sink metric scrapes taken across a
 // measurement window into a performance baseline: per-signal throughput, drops,
-// end-to-end delivery, collector resource usage, and pod health. It emits both a
-// human-readable summary and structured JSON. There are no pass/fail thresholds
-// yet; the goal is a reproducible baseline.
+// end-to-end delivery, collector resource usage, pod health, and startup
+// health. It emits both a human-readable summary and structured JSON.
 package report
 
 import (
@@ -52,6 +51,30 @@ type PodHealth struct {
 	Phase     string `json:"phase"`
 	Restarts  int32  `json:"restarts"`
 	OOMKilled bool   `json:"oom_killed"`
+}
+
+// StartupHealth records when the pod and collector container started, and when
+// the collector first returned a successful response from its health endpoint.
+// PodToHealthSeconds includes pod startup and image-pull time.
+// CollectorToHealthSeconds isolates collector initialization after its
+// container started.
+type StartupHealth struct {
+	PodStartedAt             time.Time `json:"pod_started_at"`
+	CollectorStartedAt       time.Time `json:"collector_started_at"`
+	HealthyAt                time.Time `json:"healthy_at"`
+	PodToHealthSeconds       float64   `json:"pod_to_health_seconds"`
+	CollectorToHealthSeconds float64   `json:"collector_to_health_seconds"`
+}
+
+// NewStartupHealth constructs startup-health timestamps and derived durations.
+func NewStartupHealth(podStartedAt, collectorStartedAt, healthyAt time.Time) StartupHealth {
+	return StartupHealth{
+		PodStartedAt:             podStartedAt,
+		CollectorStartedAt:       collectorStartedAt,
+		HealthyAt:                healthyAt,
+		PodToHealthSeconds:       durationSeconds(podStartedAt, healthyAt),
+		CollectorToHealthSeconds: durationSeconds(collectorStartedAt, healthyAt),
+	}
 }
 
 // Snapshot is a set of metric scrapes taken at one instant.
@@ -104,18 +127,19 @@ const (
 
 // ShapeReport is the full baseline for one workload shape.
 type ShapeReport struct {
-	Shape         string       `json:"shape"`
-	Profile       string       `json:"profile"`
-	Run           int          `json:"run,omitempty"`
-	Repetitions   int          `json:"repetitions,omitempty"`
-	Status        string       `json:"status"`
-	FailureReason string       `json:"failure_reason,omitempty"`
-	WindowSeconds float64      `json:"window_seconds"`
-	Logs          SignalStat   `json:"logs"`
-	Metrics       SignalStat   `json:"metrics"`
-	Resources     ResourceStat `json:"resources"`
-	Health        PodHealth    `json:"health"`
-	Notes         []string     `json:"notes,omitempty"`
+	Shape         string         `json:"shape"`
+	Profile       string         `json:"profile"`
+	Run           int            `json:"run,omitempty"`
+	Repetitions   int            `json:"repetitions,omitempty"`
+	Status        string         `json:"status"`
+	FailureReason string         `json:"failure_reason,omitempty"`
+	WindowSeconds float64        `json:"window_seconds"`
+	Logs          SignalStat     `json:"logs"`
+	Metrics       SignalStat     `json:"metrics"`
+	Resources     ResourceStat   `json:"resources"`
+	Health        PodHealth      `json:"health"`
+	StartupHealth *StartupHealth `json:"startup_health,omitempty"`
+	Notes         []string       `json:"notes,omitempty"`
 }
 
 // MarkInvalid flags the report as an invalid measurement with a reason, so
@@ -133,6 +157,7 @@ type Inputs struct {
 	MetricsPerSec int
 	Window        Window
 	Health        PodHealth
+	StartupHealth *StartupHealth
 	// HealthErr, when non-nil, means pod health could not be observed. The
 	// zero-value Health is then recorded as missing (note + partial) so a
 	// report cannot read as healthy when health was never collected.
@@ -148,6 +173,7 @@ func Build(in Inputs) ShapeReport {
 		Profile:       in.Profile,
 		WindowSeconds: in.Window.Seconds(),
 		Health:        in.Health,
+		StartupHealth: in.StartupHealth,
 	}
 	win := r.WindowSeconds
 
@@ -266,6 +292,12 @@ func (r ShapeReport) WriteSummary(w io.Writer) {
 	writeSignal(w, "metrics", r.Metrics)
 	fmt.Fprintf(w, "  resources     : cpu=%.3f cores (avg)  mem_rss=%s\n", r.Resources.CPUCoresAvg, humanBytes(r.Resources.MemRSSBytes))
 	fmt.Fprintf(w, "  health        : phase=%s restarts=%d oom_killed=%t\n", r.Health.Phase, r.Health.Restarts, r.Health.OOMKilled)
+	if r.StartupHealth != nil {
+		fmt.Fprintf(w, "  startup       : pod_to_health=%s  collector_to_health=%s\n",
+			humanDuration(r.StartupHealth.PodToHealthSeconds),
+			humanDuration(r.StartupHealth.CollectorToHealthSeconds),
+		)
+	}
 	if len(r.Notes) > 0 {
 		fmt.Fprintf(w, "  notes         : missing metrics: ")
 		for i, n := range r.Notes {
@@ -297,4 +329,16 @@ func humanBytes(b float64) string {
 		i++
 	}
 	return fmt.Sprintf("%.1f%s", val, units[i])
+}
+
+func durationSeconds(start, end time.Time) float64 {
+	d := end.Sub(start).Seconds()
+	if d <= 0 {
+		return 0
+	}
+	return d
+}
+
+func humanDuration(seconds float64) string {
+	return time.Duration(seconds * float64(time.Second)).Round(time.Millisecond).String()
 }

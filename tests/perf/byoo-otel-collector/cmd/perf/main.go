@@ -120,6 +120,8 @@ type runConfig struct {
 	kubeconfig     string
 	kubeContext    string
 	readyTimeout   time.Duration
+	startupTarget  time.Duration
+	startupMax     time.Duration
 	retain         bool
 	skipLoad       bool
 	k3dCluster     string
@@ -131,11 +133,12 @@ func newRunCmd() *cobra.Command {
 	var cfg runConfig
 	cmd := &cobra.Command{
 		Use:   "run",
-		Short: "Deploy the collector + OTLP sink, drive load, and wait until it is ready",
+		Short: "Deploy the collector + OTLP sink, check startup health, and drive load",
 		Long: `run renders the production workload shape via icms-translate, validates it,
 deploys an in-cluster OTLP sink, deploys the authentic BYOO collector pointed at
-that sink, waits for both to become ready, and drives telemetrygen load at the
-selected profile's rates. It cleans up afterward unless --retain is set.
+that sink, measures collector startup health, waits for both to become ready,
+and drives telemetrygen load at the selected profile's rates. It cleans up
+afterward unless --retain is set.
 
 With --mode k3d (the default) it provisions a dedicated local k3d cluster, runs
 against it, and deletes it afterward (unless --retain). With --mode remote it
@@ -156,6 +159,8 @@ reporting land in a later milestone.`,
 	cmd.Flags().StringVar(&cfg.kubeconfig, "kubeconfig", "", "path to kubeconfig (remote mode; defaults to in-cluster or $KUBECONFIG)")
 	cmd.Flags().StringVar(&cfg.kubeContext, "context", "", "kubeconfig context to use (remote mode)")
 	cmd.Flags().DurationVar(&cfg.readyTimeout, "ready-timeout", 3*time.Minute, "how long to wait for the collector and sink to become ready")
+	cmd.Flags().DurationVar(&cfg.startupTarget, "startup-target", 15*time.Second, "target collector-container start-to-health duration")
+	cmd.Flags().DurationVar(&cfg.startupMax, "startup-max", 30*time.Second, "maximum collector-container start-to-health duration")
 	cmd.Flags().BoolVar(&cfg.retain, "retain", false, "retain deployed resources (and the managed k3d cluster) instead of cleaning up")
 	cmd.Flags().BoolVar(&cfg.skipLoad, "skip-load", false, "deploy the collector and sink but do not drive load")
 	cmd.Flags().StringVar(&cfg.k3dCluster, "k3d-cluster", "byoo-perf", "name of the managed k3d cluster (k3d mode)")
@@ -194,6 +199,9 @@ suite's part-of label so it never removes unrelated resources.`,
 func runRun(stdout io.Writer, cfg runConfig) error {
 	if cfg.mode != "k3d" && cfg.mode != "remote" {
 		return fmt.Errorf("unknown mode %q (want \"k3d\" or \"remote\")", cfg.mode)
+	}
+	if err := validateStartupThresholds(cfg.startupTarget, cfg.startupMax); err != nil {
+		return err
 	}
 	prof, err := profile.Lookup(cfg.profile)
 	if err != nil {
@@ -237,7 +245,7 @@ func runRun(stdout io.Writer, cfg runConfig) error {
 	if cfg.skipLoad {
 		fmt.Fprintln(stdout, "note: --skip-load set; the collector and sink were deployed but no load was driven and no baseline was measured.")
 	} else {
-		fmt.Fprintln(stdout, "note: load was driven end-to-end and a baseline was measured. There are no pass/fail thresholds yet; these numbers establish the reproducible baseline.")
+		fmt.Fprintln(stdout, "note: load was driven end-to-end and a baseline was measured. Startup health has a pass/fail bound; throughput and delivery numbers establish the reproducible baseline.")
 	}
 	return nil
 }
@@ -334,6 +342,16 @@ func runShape(ctx context.Context, stdout io.Writer, client *deploy.Client, cfg 
 		return cleanupAfterErr(ctx, client, cfg, ns, fmt.Errorf("deploy %s: %w", shape, err))
 	}
 
+	fmt.Fprintf(stdout, "[%s] waiting up to %s for collector pod %q to report healthy on /health ...\n", shape, cfg.readyTimeout, dep.PodName)
+	startup, err := client.WaitCollectorHealth(ctx, ns, dep.PodName, render.CollectorContainerName, cfg.readyTimeout)
+	if err != nil {
+		return cleanupAfterErr(ctx, client, cfg, ns, fmt.Errorf("collector did not report healthy for %s shape: %w", shape, err))
+	}
+	printStartupHealth(stdout, shape, startup, cfg.startupTarget, cfg.startupMax)
+	if err := checkStartupHealth(startup, cfg.startupMax); err != nil {
+		return cleanupAfterErr(ctx, client, cfg, ns, fmt.Errorf("collector startup failed for %s shape: %w", shape, err))
+	}
+
 	fmt.Fprintf(stdout, "[%s] waiting up to %s for collector pod %q to become ready ...\n", shape, cfg.readyTimeout, dep.PodName)
 	if err := client.WaitPodReady(ctx, ns, dep.PodName, cfg.readyTimeout); err != nil {
 		return cleanupAfterErr(ctx, client, cfg, ns, fmt.Errorf("collector did not become ready for %s shape: %w", shape, err))
@@ -386,7 +404,7 @@ func runShape(ctx context.Context, stdout io.Writer, client *deploy.Client, cfg 
 				return nil
 			},
 			func(run int) report.ShapeReport {
-				return measure(ctx, stdout, client, cfg, prof, shape, ns, dep.PodName, collectorMetricsPort)
+				return measure(ctx, stdout, client, cfg, prof, shape, ns, dep.PodName, collectorMetricsPort, startup)
 			},
 			func(run int) error {
 				return client.WaitLoad(ctx, ns, loadgen.Jobs(ns, dep.PodName, lgOpts), cfg.readyTimeout)
@@ -422,7 +440,7 @@ func runShape(ctx context.Context, stdout io.Writer, client *deploy.Client, cfg 
 // measurement window (after a warmup) and computes the baseline. Scrapes are
 // best-effort: a failed scrape yields empty samples, which Build records as
 // missing rather than failing the run.
-func measure(ctx context.Context, stdout io.Writer, client *deploy.Client, cfg runConfig, prof profile.Profile, shape spec.Shape, ns, collectorPod, collectorMetricsPort string) report.ShapeReport {
+func measure(ctx context.Context, stdout io.Writer, client *deploy.Client, cfg runConfig, prof profile.Profile, shape spec.Shape, ns, collectorPod, collectorMetricsPort string, startup report.StartupHealth) report.ShapeReport {
 	snap := func(label string) report.Snapshot {
 		s, collErr, sinkErr := takeSnapshot(
 			func() (report.Samples, error) {
@@ -461,7 +479,35 @@ func measure(ctx context.Context, stdout io.Writer, client *deploy.Client, cfg r
 		Window:        report.Window{Start: start, End: end},
 		Health:        health,
 		HealthErr:     healthErr,
+		StartupHealth: &startup,
 	})
+}
+
+func validateStartupThresholds(target, max time.Duration) error {
+	if target <= 0 {
+		return fmt.Errorf("startup target must be positive, got %s", target)
+	}
+	if max < target {
+		return fmt.Errorf("startup maximum %s must be at least the target %s", max, target)
+	}
+	return nil
+}
+
+func printStartupHealth(w io.Writer, shape spec.Shape, startup report.StartupHealth, target, max time.Duration) {
+	podToHealth := time.Duration(startup.PodToHealthSeconds * float64(time.Second)).Round(time.Millisecond)
+	collectorToHealth := time.Duration(startup.CollectorToHealthSeconds * float64(time.Second)).Round(time.Millisecond)
+	fmt.Fprintf(w, "[%s] startup health: pod_to_health=%s collector_to_health=%s (target <= %s, maximum <= %s)\n", shape, podToHealth, collectorToHealth, target, max)
+	if collectorToHealth > target && collectorToHealth <= max {
+		fmt.Fprintf(w, "[%s] warning: collector startup exceeded the %s target\n", shape, target)
+	}
+}
+
+func checkStartupHealth(startup report.StartupHealth, max time.Duration) error {
+	collectorToHealth := time.Duration(startup.CollectorToHealthSeconds * float64(time.Second))
+	if collectorToHealth > max {
+		return fmt.Errorf("collector start-to-health duration %s exceeded the %s maximum", collectorToHealth.Round(time.Millisecond), max)
+	}
+	return nil
 }
 
 // loadStartupMargin extends the generator run beyond warmup+window. The

@@ -65,6 +65,9 @@ const (
 	accountsSecretsMountPath = "/var/secrets"
 	// accountsSecretsFile is the input file name the extractor waits for.
 	accountsSecretsFile = "accounts-secrets.json"
+
+	collectorHealthPort = "13133"
+	collectorHealthPath = "/health"
 )
 
 // Client wraps a Kubernetes clientset with the operations the suite needs.
@@ -462,24 +465,34 @@ func (c *Client) RunLoad(ctx context.Context, namespace string, jobs []*batchv1.
 // as a missing (best-effort) sample. It is a variable so tests can shorten it.
 var scrapeTimeout = 15 * time.Second
 
+// healthPollInterval is the cadence for observing collector startup health. It
+// is a variable so tests can shorten it.
+var healthPollInterval = time.Second
+
 // proxyGet performs the low-level API-proxy fetch. It is a seam so tests can
 // exercise the timeout path without a live cluster.
 var proxyGet = func(ctx context.Context, cs kubernetes.Interface, namespace, pod, port, path string) ([]byte, error) {
 	return cs.CoreV1().Pods(namespace).ProxyGet("http", pod, port, path, nil).DoRaw(ctx)
 }
 
-// ScrapePodMetrics fetches a pod's Prometheus endpoint through the API server
-// proxy. This works without a metrics-server, an ingress, or port-forwarding,
-// and is the only cross-namespace-safe way to read in-cluster endpoints from
-// outside the cluster. Each scrape is bounded by scrapeTimeout.
-func (c *Client) ScrapePodMetrics(ctx context.Context, namespace, pod, port, path string) ([]byte, error) {
+// FetchPodEndpoint fetches an HTTP pod endpoint through the API server proxy.
+// This works without a metrics-server, an ingress, or port-forwarding, and is
+// the only cross-namespace-safe way to read in-cluster endpoints from outside
+// the cluster. Each fetch is bounded by scrapeTimeout.
+func (c *Client) FetchPodEndpoint(ctx context.Context, namespace, pod, port, path string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, scrapeTimeout)
 	defer cancel()
 	raw, err := proxyGet(ctx, c.cs, namespace, pod, port, path)
 	if err != nil {
-		return nil, fmt.Errorf("scrape %s/%s:%s%s: %w", namespace, pod, port, path, err)
+		return nil, fmt.Errorf("fetch %s/%s:%s%s: %w", namespace, pod, port, path, err)
 	}
 	return raw, nil
+}
+
+// ScrapePodMetrics fetches a pod's Prometheus endpoint through the API server
+// proxy. It is a metrics-specific wrapper around FetchPodEndpoint.
+func (c *Client) ScrapePodMetrics(ctx context.Context, namespace, pod, port, path string) ([]byte, error) {
+	return c.FetchPodEndpoint(ctx, namespace, pod, port, path)
 }
 
 // PodHealth reports the collector pod's phase, aggregate restart count, and
@@ -560,6 +573,53 @@ func (c *Client) WaitPodReady(ctx context.Context, namespace, podName string, ti
 		}
 		return false, nil
 	})
+}
+
+// WaitCollectorHealth waits for the BYOO collector container to start and for
+// its health endpoint to return successfully. The returned timestamps separate
+// pod scheduling/image-pull delay from collector initialization delay.
+func (c *Client) WaitCollectorHealth(ctx context.Context, namespace, podName, collectorContainer string, timeout time.Duration) (report.StartupHealth, error) {
+	var startup report.StartupHealth
+	err := wait.PollUntilContextTimeout(ctx, healthPollInterval, timeout, true, func(ctx context.Context) (bool, error) {
+		pod, err := c.cs.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
+		if err != nil {
+			if k8serrors.IsNotFound(err) {
+				return false, nil
+			}
+			return false, err
+		}
+		if pod.Status.Phase == corev1.PodFailed {
+			return false, fmt.Errorf("pod %q failed: %s", podName, pod.Status.Reason)
+		}
+		if reason, ok := terminalContainerFailure(pod); ok {
+			return false, fmt.Errorf("pod %q not schedulable/healthy: %s", podName, reason)
+		}
+		if pod.Status.StartTime == nil {
+			return false, nil
+		}
+		collectorStartedAt, ok := containerStartedAt(pod, collectorContainer)
+		if !ok {
+			return false, nil
+		}
+		if _, err := c.FetchPodEndpoint(ctx, namespace, podName, collectorHealthPort, collectorHealthPath); err != nil {
+			return false, nil
+		}
+		startup = report.NewStartupHealth(pod.Status.StartTime.Time, collectorStartedAt, time.Now().UTC())
+		return true, nil
+	})
+	if err != nil {
+		return report.StartupHealth{}, fmt.Errorf("wait for collector health endpoint %s:%s%s: %w", podName, collectorHealthPort, collectorHealthPath, err)
+	}
+	return startup, nil
+}
+
+func containerStartedAt(pod *corev1.Pod, name string) (time.Time, bool) {
+	for _, status := range pod.Status.ContainerStatuses {
+		if status.Name == name && status.State.Running != nil {
+			return status.State.Running.StartedAt.Time, !status.State.Running.StartedAt.IsZero()
+		}
+	}
+	return time.Time{}, false
 }
 
 func (c *Client) waitPodDeleted(ctx context.Context, namespace, podName string, timeout time.Duration) error {
