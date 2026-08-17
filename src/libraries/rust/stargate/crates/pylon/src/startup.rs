@@ -28,9 +28,9 @@ use pylon_lib::{
     ModelInitialization, ModelLifecycleConfig, ModelLifecycleHandle, ModelSource, PylonMetrics,
     PylonQueueMismatchRetryConfig, PylonRetryConfig, PylonRuntimeState, QuicHttpTunnelConfig,
     QuicHttpTunnelHandle, RequestQualityMonitorConfig, StatsCollectorConfig, StatsCollectorHandle,
-    TunnelForwardingConfig, UpstreamBackend, start_engine_stats_stream, start_metrics_server,
-    start_model_lifecycle, start_quic_http_tunnel, start_stats_collector_with_engine_stats,
-    stats_aggregator_update_channel,
+    TunnelForwardingConfig, UpstreamBackend, UpstreamHealthPaths, start_engine_stats_stream,
+    start_metrics_server, start_model_lifecycle, start_quic_http_tunnel,
+    start_stats_collector_with_engine_stats, stats_aggregator_update_channel,
 };
 use reqwest::header::HeaderName;
 use stargate_proto::pb::InferenceServerStatus;
@@ -110,6 +110,8 @@ pub(crate) struct PylonStartupPlan {
     model_initialization: ModelInitialization,
     bringup: BringupConfig,
     request_quality_monitor: RequestQualityMonitorConfig,
+    health_paths: UpstreamHealthPaths,
+    startup_health_wait: Duration,
     metrics_addr: SocketAddr,
     auth_token_provider: Option<Arc<AuthTokenProvider>>,
     backend_tunnel: BackendTunnelStartup,
@@ -162,6 +164,8 @@ impl PylonStartupPlan {
                 canary_max_generation_threshold: args.canary_max_generation_threshold,
             },
             request_quality_monitor: request_quality_monitor_config_from_args(args),
+            health_paths: UpstreamHealthPaths::new(args.upstream_health_paths.clone()),
+            startup_health_wait: Duration::from_millis(args.upstream_health_wait_ms),
             metrics_addr: format!("{}:{}", args.metrics_host, args.metrics_port).parse()?,
             auth_token_provider: auth_token_provider_from_args(args),
             backend_tunnel: BackendTunnelStartup::from_args(args)?,
@@ -383,6 +387,8 @@ async fn start_pylon_runtime(args: &Args, plan: &PylonStartupPlan) -> Result<Run
             source: plan.model_source.clone(),
             initialization: plan.model_initialization.clone(),
             bringup: plan.bringup.clone(),
+            health_paths: plan.health_paths.clone(),
+            startup_health_wait: plan.startup_health_wait,
         },
         runtime_state.clone(),
         &stats_collector,
@@ -514,6 +520,7 @@ fn tunnel_forwarding_config_from_plan(
         queue_mismatch_retry: plan.queue_mismatch_retry.clone(),
         upstream_backend: plan.upstream_backend,
         priority_ceiling: plan.priority_ceiling,
+        upstream_health_paths: plan.health_paths.clone(),
         ..Default::default()
     }
 }
@@ -1015,6 +1022,8 @@ mod tests {
                     enabled: false,
                     ..BringupConfig::default()
                 },
+                health_paths: UpstreamHealthPaths::default(),
+                startup_health_wait: Duration::ZERO,
             },
             PylonRuntimeState::default(),
             &stats_collector,
@@ -1142,6 +1151,35 @@ mod tests {
         let forwarding = test_forwarding(&passthrough_plan);
         assert_eq!(forwarding.upstream_backend, UpstreamBackend::Passthrough);
         assert_eq!(forwarding.priority_ceiling, 600);
+    }
+
+    #[test]
+    fn upstream_health_paths_default_and_flow_to_the_forwarding_config() {
+        let (_, default_plan) = startup(&[]);
+        assert_eq!(
+            test_forwarding(&default_plan)
+                .upstream_health_paths
+                .probe_path(),
+            "/health"
+        );
+        assert_eq!(default_plan.startup_health_wait, Duration::from_secs(60));
+
+        let (_, configured_plan) = startup(&[
+            "--upstream-health-path",
+            "/v1/health/ready",
+            "--upstream-health-wait-ms",
+            "5000",
+        ]);
+        assert_eq!(
+            test_forwarding(&configured_plan)
+                .upstream_health_paths
+                .probe_path(),
+            "/v1/health/ready"
+        );
+        assert_eq!(
+            configured_plan.startup_health_wait,
+            Duration::from_millis(5000)
+        );
     }
 
     #[test]
@@ -1341,6 +1379,8 @@ mod tests {
                     enabled: false,
                     ..BringupConfig::default()
                 },
+                health_paths: UpstreamHealthPaths::default(),
+                startup_health_wait: Duration::ZERO,
             },
             runtime_state.clone(),
             &stats_collector,

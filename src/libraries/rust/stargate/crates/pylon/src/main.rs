@@ -74,6 +74,12 @@ struct Args {
     /// Disable ongoing upstream health monitoring and active canaries
     #[arg(long, default_value_t = false)]
     disable_bringup: bool,
+    /// Upstream health path to probe; repeat to try several in order. The first path that answers is reused
+    #[arg(long = "upstream-health-path", value_name = "PATH")]
+    upstream_health_paths: Vec<String>,
+    /// How long startup retries the upstream health probe before exiting. `0` probes once
+    #[arg(long, default_value_t = 60000, value_name = "MS")]
+    upstream_health_wait_ms: u64,
     /// Run local input-TPS calibration before contacting Stargate. Use only when this is the cluster's sole Pylon
     #[arg(long, default_value_t = false)]
     do_calibration: bool,

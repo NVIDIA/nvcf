@@ -33,8 +33,10 @@ use crate::stats::{
     CalibrationOutcome, ModelStatsInitialization, PylonMetrics, StatsCollectorControl,
     StatsCollectorHandle,
 };
+use crate::upstream_health::UpstreamHealthPaths;
 
 const STATIC_RETRY_INTERVAL: Duration = Duration::from_secs(1);
+const STARTUP_HEALTH_RETRY_INTERVAL: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Debug)]
 pub enum ModelSource {
@@ -54,6 +56,10 @@ pub struct ModelLifecycleConfig {
     pub source: ModelSource,
     pub initialization: ModelInitialization,
     pub bringup: BringupConfig,
+    pub health_paths: UpstreamHealthPaths,
+    /// How long startup retries the upstream health probe before failing. Zero
+    /// probes once and leaves recovery to the container restart.
+    pub startup_health_wait: Duration,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -126,6 +132,7 @@ pub async fn start_model_lifecycle(
 ) -> Result<ModelLifecycleHandle, ModelLifecycleError> {
     let http_client = reqwest::Client::new();
     Url::parse(&config.upstream_http_base_url).map_err(ModelDiscoveryError::from)?;
+    wait_for_upstream_health(&http_client, &config).await?;
     let desired = match &config.source {
         ModelSource::Static(model_ids) => model_ids.clone(),
         ModelSource::Discovered(discovery) => {
@@ -479,6 +486,7 @@ impl ModelLifecycleSupervisor {
                 upstream_http_base_url: self.config.upstream_http_base_url.clone(),
                 generation: generation.clone(),
                 config: self.config.bringup.clone(),
+                health_paths: self.config.health_paths.clone(),
             };
             let runtime_state = self.runtime_state.clone();
             OwnedTask::spawn_child("model canary", stop, move |model_stop| {
@@ -595,16 +603,14 @@ async fn initialization_attempt(
     generation: ModelGeneration,
     metrics: Option<Arc<PylonMetrics>>,
 ) -> Result<(), ModelLifecycleError> {
-    let health_timeout = match &config.initialization {
-        ModelInitialization::Calibration(calibration) => Some(calibration.health_timeout),
-        ModelInitialization::ConfiguredInputTps { .. } if config.bringup.enabled => {
-            Some(config.bringup.canary_timeout)
-        }
-        ModelInitialization::ConfiguredInputTps { .. } => None,
-    };
-    if let Some(health_timeout) = health_timeout
-        && !check_upstream_health(&http_client, &config.upstream_http_base_url, health_timeout)
-            .await
+    if let Some(health_timeout) = health_probe_timeout(&config)
+        && !check_upstream_health(
+            &http_client,
+            &config.upstream_http_base_url,
+            health_timeout,
+            &config.health_paths,
+        )
+        .await
     {
         return Err(BringupError::UnhealthyUpstream.into());
     }
@@ -623,6 +629,56 @@ async fn initialization_attempt(
         result?;
     }
     Ok(())
+}
+
+fn health_probe_timeout(config: &ModelLifecycleConfig) -> Option<Duration> {
+    match &config.initialization {
+        ModelInitialization::Calibration(calibration) => Some(calibration.health_timeout),
+        ModelInitialization::ConfiguredInputTps { .. } if config.bringup.enabled => {
+            Some(config.bringup.canary_timeout)
+        }
+        ModelInitialization::ConfiguredInputTps { .. } => None,
+    }
+}
+
+async fn wait_for_upstream_health(
+    http_client: &reqwest::Client,
+    config: &ModelLifecycleConfig,
+) -> Result<(), ModelLifecycleError> {
+    let Some(health_timeout) = health_probe_timeout(config) else {
+        return Ok(());
+    };
+    let deadline = Instant::now() + config.startup_health_wait;
+    let mut reported = false;
+    loop {
+        if check_upstream_health(
+            http_client,
+            &config.upstream_http_base_url,
+            health_timeout,
+            &config.health_paths,
+        )
+        .await
+        {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(BringupError::UnhealthyUpstream.into());
+        }
+        if reported {
+            tracing::debug!(
+                upstream = %config.upstream_http_base_url,
+                "upstream is still not healthy; retrying"
+            );
+        } else {
+            reported = true;
+            tracing::warn!(
+                upstream = %config.upstream_http_base_url,
+                paths = ?config.health_paths.probe_order(),
+                "waiting for the upstream to answer a health probe"
+            );
+        }
+        tokio::time::sleep(STARTUP_HEALTH_RETRY_INTERVAL).await;
+    }
 }
 
 async fn wait_until(deadline: Option<Instant>) {
@@ -668,15 +724,17 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::{
-        LiveModelGeneration, ModelInitialization, ModelLifecycleConfig, ModelLifecycleSupervisor,
-        ModelSource, start_model_lifecycle,
+        LiveModelGeneration, ModelInitialization, ModelLifecycleConfig, ModelLifecycleError,
+        ModelLifecycleSupervisor, ModelSource, start_model_lifecycle,
     };
     use crate::generated_request_id::generated_request_generation;
     use crate::runtime_state::ModelGeneration;
     use crate::test_support::TestHttpServer;
+    use crate::upstream_health::UpstreamHealthPaths;
     use crate::{
-        BringupConfig, CalibrationConfig, ModelDiscoveryConfig, ModelDiscoveryProvider,
-        PylonMetrics, PylonRuntimeState, StatsCollectorConfig, start_stats_collector,
+        BringupConfig, BringupError, CalibrationConfig, ModelDiscoveryConfig,
+        ModelDiscoveryProvider, PylonMetrics, PylonRuntimeState, StatsCollectorConfig,
+        start_stats_collector,
     };
 
     #[derive(Clone)]
@@ -955,6 +1013,8 @@ mod tests {
                 enabled: false,
                 ..BringupConfig::default()
             },
+            health_paths: UpstreamHealthPaths::default(),
+            startup_health_wait: Duration::ZERO,
         }
     }
 
@@ -1074,6 +1134,8 @@ mod tests {
                     enabled: false,
                     ..BringupConfig::default()
                 },
+                health_paths: UpstreamHealthPaths::default(),
+                startup_health_wait: Duration::ZERO,
             },
             runtime_state.clone(),
             &stats,
@@ -1095,6 +1157,107 @@ mod tests {
         }));
 
         lifecycle.shutdown().await;
+        stats.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn startup_waits_for_an_upstream_that_is_not_healthy_yet() {
+        let unhealthy_probes = Arc::new(AtomicUsize::new(2));
+        let server_unhealthy_probes = unhealthy_probes.clone();
+        let upstream = TestHttpServer::spawn(Router::new().route(
+            "/health",
+            get(move || {
+                let remaining = server_unhealthy_probes.clone();
+                async move {
+                    if remaining.load(Ordering::SeqCst) > 0 {
+                        remaining.fetch_sub(1, Ordering::SeqCst);
+                        axum::http::StatusCode::SERVICE_UNAVAILABLE
+                    } else {
+                        axum::http::StatusCode::OK
+                    }
+                }
+            }),
+        ))
+        .await;
+        let stats_config = StatsCollectorConfig::default();
+        let (runtime_state, observations) = PylonRuntimeState::observed(
+            InferenceServerStatus::Active,
+            &[],
+            stats_config.observation_channel_capacity,
+            None,
+        );
+        let stats = start_stats_collector(stats_config, observations, runtime_state.clone());
+
+        let lifecycle = start_model_lifecycle(
+            ModelLifecycleConfig {
+                upstream_http_base_url: upstream.to_string(),
+                source: ModelSource::Static(BTreeSet::from(["model-a".to_string()])),
+                initialization: ModelInitialization::ConfiguredInputTps {
+                    input_tps: 123.0,
+                    pin: false,
+                },
+                bringup: BringupConfig {
+                    active_canary_interval: Duration::ZERO,
+                    ..BringupConfig::default()
+                },
+                health_paths: UpstreamHealthPaths::default(),
+                startup_health_wait: Duration::from_secs(10),
+            },
+            runtime_state.clone(),
+            &stats,
+            None,
+        )
+        .await
+        .expect("startup should wait for the upstream to become healthy");
+
+        assert_eq!(unhealthy_probes.load(Ordering::SeqCst), 0);
+        assert_eq!(runtime_state.advertised_model_ids(), ["model-a"]);
+
+        lifecycle.shutdown().await;
+        stats.shutdown().await;
+        upstream.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn startup_fails_fast_when_no_health_wait_is_configured() {
+        let stats_config = StatsCollectorConfig::default();
+        let (runtime_state, observations) = PylonRuntimeState::observed(
+            InferenceServerStatus::Active,
+            &[],
+            stats_config.observation_channel_capacity,
+            None,
+        );
+        let stats = start_stats_collector(stats_config, observations, runtime_state.clone());
+
+        let result = start_model_lifecycle(
+            ModelLifecycleConfig {
+                upstream_http_base_url: "http://127.0.0.1:1".to_string(),
+                source: ModelSource::Static(BTreeSet::from(["model-a".to_string()])),
+                initialization: ModelInitialization::ConfiguredInputTps {
+                    input_tps: 123.0,
+                    pin: false,
+                },
+                bringup: BringupConfig {
+                    active_canary_interval: Duration::ZERO,
+                    ..BringupConfig::default()
+                },
+                health_paths: UpstreamHealthPaths::default(),
+                startup_health_wait: Duration::ZERO,
+            },
+            runtime_state.clone(),
+            &stats,
+            None,
+        )
+        .await;
+
+        let Err(error) = result else {
+            panic!("startup should not wait for an unreachable upstream");
+        };
+        assert!(matches!(
+            error,
+            ModelLifecycleError::Bringup(BringupError::UnhealthyUpstream)
+        ));
+
         stats.shutdown().await;
     }
 
@@ -1153,6 +1316,8 @@ mod tests {
                     enabled: false,
                     ..BringupConfig::default()
                 },
+                health_paths: UpstreamHealthPaths::default(),
+                startup_health_wait: Duration::ZERO,
             },
             runtime_state: runtime_state.clone(),
             stats: stats.control(),
@@ -1238,6 +1403,8 @@ mod tests {
                     enabled: false,
                     ..BringupConfig::default()
                 },
+                health_paths: UpstreamHealthPaths::default(),
+                startup_health_wait: Duration::ZERO,
             },
             runtime_state.clone(),
             &stats,
@@ -1327,6 +1494,8 @@ mod tests {
                     enabled: false,
                     ..BringupConfig::default()
                 },
+                health_paths: UpstreamHealthPaths::default(),
+                startup_health_wait: Duration::ZERO,
             },
             runtime_state.clone(),
             &stats,

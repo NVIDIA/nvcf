@@ -33,6 +33,7 @@ pub(crate) async fn run_bringup_task(
         upstream_http_base_url,
         generation,
         config,
+        health_paths,
     } = task_config;
     let http_client = reqwest::Client::new();
 
@@ -58,6 +59,7 @@ pub(crate) async fn run_bringup_task(
                     &http_client,
                     &upstream_http_base_url,
                     config.canary_timeout,
+                    &health_paths,
                 ))
                 .await
             else {

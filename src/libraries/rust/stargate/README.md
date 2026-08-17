@@ -30,6 +30,14 @@ set. Every Pylon must also select exactly one local stats initialization source:
 [Pylon onboarding](docs/operations/pylon-onboarding.md) for the complete
 lifecycle and calibration contract.
 
+Pylon gates startup on an upstream health probe. It tries `/health` and then
+`/v1/health/ready`, reuses whichever path answers first, and forwards Stargate's
+`/health` RTT probe to that same path, so engines that serve only the
+OpenAI-style ready endpoint work without extra configuration. Override the
+candidate list with the repeatable `--upstream-health-path`, and bound how long
+startup retries the probe with `--upstream-health-wait-ms` (default 60000; `0`
+probes once and exits).
+
 Use [docs/README.md](docs/README.md) as the docs entrypoint.
 Use [local quickstart](docs/getting-started/local-quickstart.md) to run the local stack.
 
