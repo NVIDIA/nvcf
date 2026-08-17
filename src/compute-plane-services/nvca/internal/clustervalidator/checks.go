@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sirupsen/logrus"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -1087,6 +1088,44 @@ const (
 	nodeToNodeCheckerTimeout = 90 * time.Second
 )
 
+// sweepOrphanN2NDaemonSets deletes any nvcf-n2n-server-* DaemonSets older
+// than ttl. These are left behind when the validator process is killed with
+// SIGKILL (OOM, force-delete, node failure) before the deferred cleanup fires.
+// DaemonSets younger than ttl are skipped in case they belong to a concurrent run.
+func sweepOrphanN2NDaemonSets(ctx context.Context, log *logrus.Entry, client kubernetes.Interface, ttl time.Duration) {
+	listCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	dsList, err := client.AppsV1().DaemonSets(nodeToNodeNamespace).List(listCtx, metav1.ListOptions{
+		LabelSelector: "app.kubernetes.io/managed-by=nvcf-cluster-validator,app.kubernetes.io/component=n2n-server",
+	})
+	if err != nil || len(dsList.Items) == 0 {
+		return
+	}
+
+	cutoff := time.Now().Add(-ttl)
+	grace := int64(0)
+	deleted := 0
+	for i := range dsList.Items {
+		ds := &dsList.Items[i]
+		if ds.CreationTimestamp.After(cutoff) {
+			continue // still within TTL — might be a concurrent run
+		}
+		delCtx, delCancel := context.WithTimeout(ctx, 30*time.Second)
+		err := client.AppsV1().DaemonSets(nodeToNodeNamespace).Delete(delCtx, ds.Name,
+			metav1.DeleteOptions{GracePeriodSeconds: &grace})
+		delCancel()
+		if err != nil && !apierrors.IsNotFound(err) {
+			log.Warnf("N2N orphan sweep: failed to delete DaemonSet %s: %v", ds.Name, err)
+			continue
+		}
+		deleted++
+	}
+	if deleted > 0 {
+		printInfo(log, fmt.Sprintf("N2N orphan sweep: deleted %d stale server DaemonSet(s) older than %s", deleted, ttl))
+	}
+}
+
 // checkNodeToNode verifies overlay-network connectivity across all schedulable
 // nodes using a DaemonSet-based probe. A server DaemonSet is deployed on every
 // schedulable node; a checker pod on node[0] connects to each server pod IP on
@@ -1100,6 +1139,11 @@ const (
 func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *ValidationState) {
 	log := state.Log
 	printHeader(log, "Node-to-Node Communication")
+
+	// Reclaim DaemonSets orphaned by prior runs killed before their deferred
+	// cleanup fired (SIGKILL, OOM, node failure). TTL of 10 minutes is long
+	// enough to avoid racing with concurrent runs (checker timeout is 90s).
+	sweepOrphanN2NDaemonSets(ctx, log, client, 10*time.Minute)
 
 	nodes, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {

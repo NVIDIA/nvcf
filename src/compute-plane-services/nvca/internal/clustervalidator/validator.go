@@ -157,6 +157,7 @@ func Run(
 	// flow). Runs unconditionally so orphans get reclaimed even if enforcement
 	// is currently disabled.
 	sweepOrphanTestNamespaces(ctx, log, client, orphanNamespaceTTL)
+	sweepOrphanN2NDaemonSets(ctx, log, client, 10*time.Minute)
 
 	checkControlPlaneHealth(ctx, client, state)
 	checkWebhookSupport(ctx, client, state)
