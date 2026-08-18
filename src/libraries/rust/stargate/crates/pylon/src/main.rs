@@ -86,6 +86,9 @@ struct Args {
     /// Bootstrap input TPS for every configured model instead of running calibration
     #[arg(long, value_name = "TPS")]
     initial_input_tps: Option<f64>,
+    /// Window for max input TPS capacity in milliseconds
+    #[arg(long, default_value_t = 86_400_000, value_name = "MS")]
+    input_tps_capacity_window_ms: u64,
     /// Interval between active canary requests in milliseconds. `0` disables active canaries
     #[arg(long, default_value_t = 5000, value_name = "MS")]
     active_canary_interval_ms: u64,
@@ -526,6 +529,34 @@ mod tests {
                 "{value} must be rejected"
             );
         }
+    }
+
+    #[test]
+    fn input_tps_capacity_window_defaults_flow_and_zero_is_rejected() {
+        let default_args = parse_args("");
+        let default_config =
+            stats_collector_config_from_args(&default_args, &default_args.upstream_http_base_url);
+        assert_eq!(
+            default_config.input_tps_capacity_window,
+            std::time::Duration::from_secs(24 * 60 * 60)
+        );
+        assert_eq!(
+            default_config.input_tps_capacity_window,
+            pylon_lib::StatsCollectorConfig::default().input_tps_capacity_window
+        );
+
+        let configured_args = parse_args("--input-tps-capacity-window-ms 1234");
+        let configured = stats_collector_config_from_args(
+            &configured_args,
+            &configured_args.upstream_http_base_url,
+        );
+        assert_eq!(
+            configured.input_tps_capacity_window,
+            std::time::Duration::from_millis(1234)
+        );
+
+        let zero = parse_args("--input-tps-capacity-window-ms 0");
+        assert!(startup::PylonStartupPlan::from_args(&zero).is_err());
     }
 
     #[test]

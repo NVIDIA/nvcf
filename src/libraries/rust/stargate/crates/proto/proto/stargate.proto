@@ -126,6 +126,11 @@ message ModelStats {
   // Sticky source labels for stat observations seen by this backend since the
   // model metrics state was initialized.
   repeated string stats_sources = 17;
+  // Rolling-window maximum input tokens per second observed by this backend.
+  // Absent after startup or restart until observed, and after the window
+  // expires. Stargate sums this field only when every active backend in a
+  // shared cluster reports it.
+  optional double max_input_tps = 18;
 }
 
 enum InferenceServerStatus {

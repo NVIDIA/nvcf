@@ -48,7 +48,8 @@ pub use config::{
     LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig, LoadBalancerAlgorithmOverride,
     LoadBalancerAlgorithmSettings, LoadBalancerConfig, LoadBalancerModelConfig,
     LoadBalancerRequestPolicy, LoadBalancerRoutingAlgorithmError, LoadBalancerSeedError,
-    MAX_POWER_OF_N_SAMPLE_COUNT, PowerOfNAlgorithmConfig, WaitAndWidenAlgorithmConfig,
+    MAX_POWER_OF_N_SAMPLE_COUNT, PowerOfNAlgorithmConfig, PulsarRendezvousWeight,
+    WaitAndWidenAlgorithmConfig,
 };
 pub use factory::create_load_balancer_with_config;
 pub use request::{LoadBalancerCandidateChoice, LoadBalancerRequest};

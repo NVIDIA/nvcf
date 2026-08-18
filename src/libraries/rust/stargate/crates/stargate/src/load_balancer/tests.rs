@@ -141,6 +141,12 @@ fn seeded_pulsar_algorithm_config(seed: &str) -> LoadBalancerAlgorithmConfig {
     config
 }
 
+fn max_weight_pulsar_algorithm_config(seed: &str) -> LoadBalancerAlgorithmConfig {
+    parse_json(&format!(
+        r#"{{"algorithm":"pulsar","seed":"{seed}","rendezvous_weight":"max-input-tps"}}"#
+    ))
+}
+
 #[test]
 fn set_seed_reports_unsupported_algorithms_without_panicking() {
     for algorithm in [
@@ -670,6 +676,20 @@ fn input_work_seconds_for_pulsar_excludes_low_free_kv_when_considered() {
 }
 
 #[test]
+fn max_rendezvous_weight_keeps_mean_input_work_capacity() {
+    let config = max_weight_pulsar_algorithm_config("seed-1");
+    let target = target();
+    let request = request(&target, Some("prefix-a"), Some(100));
+    let mut backend = work_candidate("backend", 5, 50.0, 50);
+    backend.stats.max_input_tps = Some(500.0);
+
+    assert_eq!(
+        input_work_seconds_for_request(&config, &request, &[backend]),
+        Some(3.0)
+    );
+}
+
+#[test]
 fn invalid_algorithm_name_fails_during_parse() {
     assert_json_rejected::<LoadBalancerConfig>(r#"{"default":"not-a-real-lb"}"#, "not-a-real-lb");
 }
@@ -713,6 +733,10 @@ fn algorithm_specific_load_balancer_fields_are_rejected_for_other_algorithms() {
         (
             r#"{"algorithm":"wait-and-widen","consider_kv_free_tokens":true}"#,
             "consider_kv_free_tokens",
+        ),
+        (
+            r#"{"algorithm":"round-robin","rendezvous_weight":"max-input-tps"}"#,
+            "rendezvous_weight",
         ),
         (r#"{"algorithm":"random","sample_count":4}"#, "sample_count"),
         (
@@ -934,6 +958,29 @@ fn detailed_algorithm_configs_preserve_all_variant_identities() {
         assert_eq!(config.algorithm(), expected);
         assert_eq!(config.seed(), expected_seed);
         assert_eq!(config.considers_kv_free_tokens(), considers_kv_free_tokens);
+    }
+}
+
+#[test]
+fn pulsar_rendezvous_weight_parses_for_both_pulsar_variants() {
+    for algorithm in ["pulsar", "pulsar-wait-and-widen"] {
+        let config: LoadBalancerAlgorithmConfig = parse_json(&format!(
+            r#"{{"algorithm":"{algorithm}","rendezvous_weight":"max-input-tps"}}"#
+        ));
+        assert_eq!(
+            config.pulsar_rendezvous_weight(),
+            PulsarRendezvousWeight::MaxInputTps
+        );
+    }
+
+    for algorithm in [
+        LoadBalancerAlgorithm::Pulsar,
+        LoadBalancerAlgorithm::PulsarWaitAndWiden,
+    ] {
+        assert_eq!(
+            LoadBalancerAlgorithmConfig::from(algorithm).pulsar_rendezvous_weight(),
+            PulsarRendezvousWeight::LastMeanInputTps
+        );
     }
 }
 
@@ -2561,6 +2608,51 @@ fn pulsar_ranking_cache_invalidates_when_capacity_weight_changes() {
 }
 
 #[test]
+fn pulsar_max_ranking_cache_tracks_only_the_selected_weight() {
+    let pulsar = PulsarLoadBalancer::new(max_weight_pulsar_algorithm_config("seed-1"));
+    let target = target();
+    let first_key = "max-cache-a";
+    let second_key = "max-cache-b";
+    let mut snapshots = candidates(&["inst-a", "inst-b"]);
+    snapshots[0].stats.max_input_tps = Some(100.0);
+    snapshots[1].stats.max_input_tps = Some(200.0);
+    choose(
+        &pulsar,
+        &request(&target, Some(first_key), Some(128)),
+        &snapshots,
+    );
+    choose(
+        &pulsar,
+        &request(&target, Some(second_key), Some(128)),
+        &snapshots,
+    );
+    assert_eq!(
+        pulsar.cached_affinity_key_bytes(),
+        first_key.len() + second_key.len()
+    );
+
+    snapshots[0].stats.last_mean_input_tps = 1.0;
+    snapshots[1].stats.last_mean_input_tps = 10_000.0;
+    choose(
+        &pulsar,
+        &request(&target, Some(first_key), Some(128)),
+        &snapshots,
+    );
+    assert_eq!(
+        pulsar.cached_affinity_key_bytes(),
+        first_key.len() + second_key.len()
+    );
+
+    snapshots[0].stats.max_input_tps = Some(300.0);
+    choose(
+        &pulsar,
+        &request(&target, Some(first_key), Some(128)),
+        &snapshots,
+    );
+    assert_eq!(pulsar.cached_affinity_key_bytes(), first_key.len());
+}
+
+#[test]
 fn pulsar_does_not_cache_oversized_affinity_key() {
     let pulsar = PulsarLoadBalancer::new(seeded_pulsar_algorithm_config("seed-1"));
     let target = target();
@@ -2594,6 +2686,26 @@ fn pulsar_uses_last_mean_input_tps_as_weight() {
     let candidate = work_candidate("inst-a", 5, 123.0, 0);
 
     assert_eq!(pulsar.weight(&candidate), Some(123.0));
+}
+
+#[test]
+fn pulsar_can_use_windowed_max_input_tps_as_weight() {
+    let pulsar = PulsarLoadBalancer::new(max_weight_pulsar_algorithm_config("seed-1"));
+    let mut candidate = work_candidate("inst-a", 5, 123.0, 0);
+    candidate.stats.max_input_tps = Some(456.0);
+
+    assert_eq!(pulsar.weight(&candidate), Some(456.0));
+
+    candidate.stats.last_mean_input_tps = 0.0;
+    assert_eq!(pulsar.weight(&candidate), Some(456.0));
+}
+
+#[test]
+fn pulsar_max_weight_does_not_fall_back_to_mean() {
+    let pulsar = PulsarLoadBalancer::new(max_weight_pulsar_algorithm_config("seed-1"));
+    let candidate = work_candidate("inst-a", 5, 123.0, 0);
+
+    assert_eq!(pulsar.weight(&candidate), None);
 }
 
 #[test]

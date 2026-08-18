@@ -28,7 +28,7 @@ use super::collector::{
     FinalizeRequestUpdate, RequestCounterUpdate, StatsAggregatorUpdate, StatsCollectorConfig,
     StatsUpdateSource,
 };
-use super::token_metrics::TpsDistribution;
+use super::token_metrics::{TpsDistribution, WindowedMax};
 pub(super) const ENGINE_STATS_SOURCE: &str = "engine_stats_stream";
 
 #[derive(Debug, Default)]
@@ -42,6 +42,7 @@ pub(super) struct ModelMetricsState {
     pub(super) max_embedding_item_tps: f64,
     pub(super) kv_cache: KvCacheStatsSnapshot,
     pub(super) input_tps_distribution: TpsDistribution,
+    pub(super) input_tps_window_max: WindowedMax,
     aggregate_state_counted: bool,
     pub(super) counter_output_tps_authoritative: bool,
     pub(super) chunk_usage_stats_observed: bool,
@@ -237,22 +238,20 @@ impl StatsAggregator {
         if self.per_model.contains_key(generation.model_id()) {
             return None;
         }
-        let (metrics, pinned_input_tps) = match initialization {
-            super::collector::ModelStatsInitialization::Empty => {
-                (ModelMetricsState::default(), None)
-            }
+        let mut metrics =
+            ModelMetricsState::with_input_tps_window(self.config.input_tps_capacity_window);
+        let pinned_input_tps = match initialization {
+            super::collector::ModelStatsInitialization::Empty => None,
             super::collector::ModelStatsInitialization::ConfiguredInputTps { input_tps, pin } => {
                 let input_tps_distribution = TpsDistribution::bootstrap(input_tps)
                     .expect("configured input TPS must be positive and finite");
-                (
-                    ModelMetricsState {
-                        last_mean_input_tps: input_tps,
-                        input_tps_distribution,
-                        aggregate_state_counted: true,
-                        ..ModelMetricsState::default()
-                    },
-                    pin.then_some(input_tps),
-                )
+                metrics.last_mean_input_tps = input_tps;
+                metrics.input_tps_distribution = input_tps_distribution;
+                metrics.aggregate_state_counted = true;
+                metrics
+                    .input_tps_window_max
+                    .observe(TokioInstant::now(), input_tps);
+                pin.then_some(input_tps)
             }
         };
         self.aggregate_model_state_count += usize::from(metrics.aggregate_state_counted);
@@ -397,6 +396,13 @@ impl StatsAggregator {
 
     pub(super) fn sweep_stale(&mut self, now: TokioInstant) -> Vec<ModelStatsUpdate> {
         let mut dirty_models = Vec::new();
+        for (model_id, generation_state) in &mut self.per_model {
+            if generation_state.pinned_input_tps.is_none()
+                && generation_state.metrics.input_tps_window_max.expire(now)
+            {
+                push_dirty_model(&mut dirty_models, model_id.clone());
+            }
+        }
         let request_ttl = self.config.engine_stats_request_ttl;
         if !request_ttl.is_zero() {
             let metrics = self.runtime_state.metrics();
@@ -650,6 +656,7 @@ impl StatsAggregator {
                     config,
                     model_state,
                     generation_state.pinned_input_tps,
+                    update.observed_at,
                     InputThroughputSample {
                         units,
                         duration,
@@ -806,6 +813,7 @@ pub(super) fn apply_input_throughput_sample(
     config: &StatsCollectorConfig,
     model_state: &mut ModelMetricsState,
     pinned_input_tps: Option<f64>,
+    observed_at: TokioInstant,
     sample: InputThroughputSample,
 ) -> bool {
     if sample.units < config.min_input_tokens {
@@ -819,16 +827,20 @@ pub(super) fn apply_input_throughput_sample(
     let Some(input_tps) = tps_for_units(sample.units, duration, config.duration_floor) else {
         return false;
     };
+    let max_changed = pinned_input_tps.is_none()
+        && model_state
+            .input_tps_window_max
+            .observe(observed_at, input_tps);
     model_state.input_tps_distribution.update(input_tps);
     let mean_input_tps = model_state.input_tps_distribution.mean;
     if !model_state.input_tps_distribution.has_sufficient_data()
         || !valid_last_mean_input_tps(mean_input_tps)
     {
-        return false;
+        return max_changed;
     }
     let last_mean_input_tps = pinned_input_tps.unwrap_or(mean_input_tps);
     if model_state.last_mean_input_tps == last_mean_input_tps {
-        return false;
+        return max_changed;
     }
     model_state.last_mean_input_tps = last_mean_input_tps;
     true
@@ -857,6 +869,13 @@ pub(super) struct ModelStatsSnapshotInputs {
 }
 
 impl ModelMetricsState {
+    fn with_input_tps_window(window: Duration) -> Self {
+        Self {
+            input_tps_window_max: WindowedMax::new(window),
+            ..Self::default()
+        }
+    }
+
     pub(super) fn clear_live_output_tps(&mut self) -> bool {
         self.last_stats_event_at = None;
         if self.chat_output_tps_samples.is_empty() {
@@ -877,6 +896,7 @@ impl ModelMetricsState {
         };
         CurrentModelStats {
             last_mean_input_tps: self.last_mean_input_tps,
+            max_input_tps: self.input_tps_window_max.current(),
             output_tps: active_chat_output_tps.max(average_with_sum(
                 &self.chat_output_tps_samples,
                 self.chat_output_tps_sum,

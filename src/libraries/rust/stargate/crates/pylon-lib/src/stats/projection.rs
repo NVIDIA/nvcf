@@ -119,7 +119,13 @@ impl StatsAggregator {
         };
         let mut stats = self.per_model.get(model_id).map_or_else(
             || ModelMetricsState::default().current_stats(inputs),
-            |state| state.metrics.current_stats(inputs),
+            |state| {
+                let mut stats = state.metrics.current_stats(inputs);
+                if let Some(pinned_input_tps) = state.pinned_input_tps {
+                    stats.max_input_tps = Some(pinned_input_tps);
+                }
+                stats
+            },
         );
         stats.queue_time_estimate_ms_by_priority = queue.queue_time_estimate_ms_by_priority;
         stats
@@ -201,7 +207,13 @@ impl StatsAggregator {
             }
         }
         if input_sample.is_some_and(|sample| {
-            apply_input_throughput_sample(&self.config, model_state, pinned_input_tps, sample)
+            apply_input_throughput_sample(
+                &self.config,
+                model_state,
+                pinned_input_tps,
+                TokioInstant::now(),
+                sample,
+            )
         }) {
             push_changed_model(&mut changed_models, observation.model_id.clone());
         }
