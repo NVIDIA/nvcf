@@ -58,6 +58,14 @@ used in Kubernetes Clusters to run NVCF Workloads.
 | `resources.requests.cpu`    | CPU request for the nvca-operator container    | `50m`   |
 | `resources.requests.memory` | Memory request for the nvca-operator container | `50Mi`  |
 
+### PodDisruptionBudget configuration
+
+| Name                                 | Description                                                                                                              | Value   |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ | ------- |
+| `podDisruptionBudget.enabled`        | Enable a PodDisruptionBudget for the NVCA Operator.                                                                      | `false` |
+| `podDisruptionBudget.minAvailable`   | Minimum available pods. When enabled, set exactly one of this value or `maxUnavailable`. Supports an integer or 0-100%. | `""`    |
+| `podDisruptionBudget.maxUnavailable` | Maximum unavailable pods. When enabled, set exactly one of this value or `minAvailable`. Supports an integer or 0-100%. | `""`    |
+
 ### Agent Container Resource configuration
 
 | Name                                 | Description                                                                                                                                                                | Value                  |
