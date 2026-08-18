@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+{{- if .Values.api.accountBootstrap.enabled }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -87,3 +87,4 @@ spec:
             value: "{{ .Values.api.accountBootstrap.readiness.failureThreshold }}"
         resources:
           {{- toYaml .Values.api.accountBootstrap.resources | nindent 10 }}
+{{- end }}

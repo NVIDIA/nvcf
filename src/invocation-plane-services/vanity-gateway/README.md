@@ -374,6 +374,12 @@ dropped before replay. The `openai_model_name` label identifies the shadow
 target. The `reason` label is one of `body_read_error`, `body_rewrite_error`,
 or `concurrency_limit`.
 
+`gateway_proxy_outcome` is present only on Gateway server metrics emitted when
+the ReverseProxy ErrorHandler writes an error response. Its value is
+`client_canceled` when the inbound request is canceled before upstream response
+headers are written, or `gateway_proxy_error` for another ErrorHandler failure.
+Successful requests and upstream HTTP responses omit this label.
+
 ## Running a Local OpenAI-compatible Model
 
 Use this only when validating OpenAI-compatible request bodies against a local model server.

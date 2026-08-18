@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+{{- if .Values.api.accountBootstrap.enabled }}
 # ConfigMap for NVCF API NCA bootstrap script
 apiVersion: v1
 kind: ConfigMap
@@ -29,3 +29,4 @@ metadata:
 data:
   account-bootstrap.sh: |-
     {{- tpl (.Files.Get "scripts/account-bootstrap.sh") . | nindent 4 }}
+{{- end }}

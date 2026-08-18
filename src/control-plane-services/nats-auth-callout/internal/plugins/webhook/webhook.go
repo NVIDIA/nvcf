@@ -20,7 +20,6 @@ package webhook
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -36,10 +35,17 @@ import (
 
 // Config contains Webhook plugin configuration.
 type Config struct {
-	URL                string        `mapstructure:"url"                  yaml:"url"`
-	Timeout            time.Duration `mapstructure:"timeout"              yaml:"timeout"`
-	RetryAttempts      int           `mapstructure:"retry_attempts"       yaml:"retry_attempts"`
-	InsecureSkipVerify bool          `mapstructure:"insecure_skip_verify" yaml:"insecure_skip_verify"`
+	URL           string        `mapstructure:"url"            yaml:"url"`
+	Timeout       time.Duration `mapstructure:"timeout"        yaml:"timeout"`
+	RetryAttempts int           `mapstructure:"retry_attempts" yaml:"retry_attempts"`
+}
+
+// configInput retains retired options so insecure legacy configurations fail closed.
+type configInput struct {
+	URL                    string        `mapstructure:"url"                  yaml:"url"`
+	Timeout                time.Duration `mapstructure:"timeout"              yaml:"timeout"`
+	RetryAttempts          int           `mapstructure:"retry_attempts"       yaml:"retry_attempts"`
+	DisableTLSVerification bool          `mapstructure:"insecure_skip_verify" yaml:"insecure_skip_verify"`
 }
 
 // Plugin implements webhook-based authentication.
@@ -83,13 +89,6 @@ func NewPlugin(configData any, logger *zap.Logger) (*Plugin, error) {
 	transport := &http.Transport{
 		MaxIdleConns:    10,
 		IdleConnTimeout: 90 * time.Second,
-	}
-
-	// Configure TLS if needed
-	if webhookConfig.InsecureSkipVerify {
-		transport.TLSClientConfig = &tls.Config{
-			InsecureSkipVerify: true, //nolint:gosec // Configurable for development/testing
-		}
 	}
 
 	// Wrap transport with OpenTelemetry instrumentation
@@ -230,13 +229,24 @@ func (p *Plugin) parseSuccessResponse(resp *http.Response) (*types.Result, error
 
 // parseWebhookConfig parses webhook plugin configuration.
 func parseWebhookConfig(configData any) (*Config, error) {
-	webhookConfig := &Config{}
-	if err := config.DecodeConfig(configData, webhookConfig); err != nil {
+	input := &configInput{}
+	if err := config.DecodeConfig(configData, input); err != nil {
 		return nil, fmt.Errorf("failed to decode config: %w", err)
 	}
 
-	if webhookConfig.URL == "" {
+	if input.URL == "" {
 		return nil, fmt.Errorf("url is required")
+	}
+	if input.DisableTLSVerification {
+		return nil, fmt.Errorf(
+			"insecure_skip_verify cannot be enabled; webhook TLS certificate verification is required",
+		)
+	}
+
+	webhookConfig := &Config{
+		URL:           input.URL,
+		Timeout:       input.Timeout,
+		RetryAttempts: input.RetryAttempts,
 	}
 
 	// Set defaults
