@@ -35,7 +35,12 @@ import (
 // CaptureFormatVersion is bumped whenever the on-disk schema for a capture
 // changes (manifest format, layout, included metadata). Hashes are recomputed
 // across versions, so old captures stop matching.
-const CaptureFormatVersion = 1
+// 2: added EntryRuntimeDirs. A capture taken before this has no recorded
+// runtime directories, so restoring it cannot recreate them and workloads that
+// need one still fail. Without the bump those captures hash identically to new
+// ones and would be reused forever after an upgrade -- silently, since the
+// agent reports the reuse as a successful capture.
+const CaptureFormatVersion = 2
 
 // ErrNotFound is returned by Stat / Get when no capture is stored under the
 // given hash.
