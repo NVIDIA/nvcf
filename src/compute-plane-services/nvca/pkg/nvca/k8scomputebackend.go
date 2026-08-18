@@ -1736,7 +1736,10 @@ func (c K8sComputeBackend) GetICMSRequestUpdatesForCreatePodRequest(ctx context.
 		}
 
 		// Record workload result metric on terminal state transitions.
-		var failureCategory workloadtypes.FailureCategory
+		// Default to the explicit success category so a running transition
+		// without a metrics provider still stamps failure_category (parity with
+		// the MiniService path); needsPurge overrides it below.
+		failureCategory := workloadtypes.FailureCategoryNone
 		if m := nvcametrics.FromContext(ctx); m != nil {
 			if needsPurge {
 				failureCategory = nvcametrics.ICMSInstanceStateToFailureCategory(tc)

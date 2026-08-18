@@ -31,18 +31,35 @@ import (
 // Used when the agent has not configured a periodic status interval yet.
 const defaultHeartbeatFallback = 5 * time.Minute
 
+// ledgerAggregationDisabledMaxEvents is a MaxEvents value large enough that the
+// client-go aggregator never reaches its unique-event threshold, so ledger
+// Events are never collapsed into an aggregate. This matters because
+// EventAggregate builds the aggregate Event without copying Annotations, which
+// would strip the FnDs ledger context. It is used when the heartbeat interval
+// is too small to derive a safe sub-heartbeat aggregation window.
+const ledgerAggregationDisabledMaxEvents = 1 << 30
+
 // NewLedgerEventCorrelatorOptions builds client-go Event correlator options so
 // multi-instance ICMSRequest Events do not share one spam budget or collapse
 // into annotation-less aggregates.
 //
-// Aggregation MaxInterval is set just below the periodic status heartbeat
-// interval (same config source) so each re-report starts a fresh window.
+// For a usable heartbeat interval, aggregation MaxInterval is set just below
+// the periodic status heartbeat (same config source) so each re-report starts
+// a fresh window. When no such window exists (interval <=1s), aggregation is
+// disabled outright via MaxEvents: client-go treats MaxIntervalInSeconds==0 as
+// its 10m default, so a zero here would re-enable aggregation and drop ledger
+// annotations.
 func NewLedgerEventCorrelatorOptions(heartbeatInterval time.Duration) record.CorrelatorOptions {
-	return record.CorrelatorOptions{
-		KeyFunc:              ledgerEventAggregatorKey,
-		SpamKeyFunc:          ledgerEventSpamKey,
-		MaxIntervalInSeconds: ledgerEventAggregateMaxIntervalSeconds(heartbeatInterval),
+	opts := record.CorrelatorOptions{
+		KeyFunc:     ledgerEventAggregatorKey,
+		SpamKeyFunc: ledgerEventSpamKey,
 	}
+	if secs := ledgerEventAggregateMaxIntervalSeconds(heartbeatInterval); secs > 0 {
+		opts.MaxIntervalInSeconds = secs
+	} else {
+		opts.MaxEvents = ledgerAggregationDisabledMaxEvents
+	}
+	return opts
 }
 
 // ledgerEventSpamKey mirrors client-go's default spam key (source + object +
@@ -82,15 +99,19 @@ func eventAnnotation(event *corev1.Event, key string) string {
 	return event.Annotations[key]
 }
 
-// ledgerEventAggregateMaxIntervalSeconds returns seconds just below the
-// heartbeat interval so the aggregator window resets between periodic reports.
+// ledgerEventAggregateMaxIntervalSeconds returns the aggregation window in
+// whole seconds just below the heartbeat interval so the aggregator resets
+// between periodic reports. It returns 0 when the interval is <=1s to signal
+// the caller that no safe sub-heartbeat window exists and aggregation should be
+// disabled instead (a 0 passed to client-go would fall back to its 10m
+// default). A non-positive interval falls back to the default heartbeat.
 func ledgerEventAggregateMaxIntervalSeconds(heartbeatInterval time.Duration) int {
 	if heartbeatInterval <= 0 {
 		heartbeatInterval = defaultHeartbeatFallback
 	}
 	secs := int(heartbeatInterval / time.Second)
 	if secs <= 1 {
-		return 1
+		return 0
 	}
 	return secs - 1
 }

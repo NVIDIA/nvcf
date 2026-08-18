@@ -19,6 +19,7 @@ package nvca
 
 import (
 	"testing"
+	"time"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
 	"github.com/stretchr/testify/assert"
@@ -92,6 +93,19 @@ func newLedgerTestCache(rec record.EventRecorder) *BackendK8sCache {
 	}
 }
 
+// receiveEvent reads one event from the fake recorder, failing the test rather
+// than blocking indefinitely if event emission regressed.
+func receiveEvent(t *testing.T, rec *record.FakeRecorder) string {
+	t.Helper()
+	select {
+	case ev := <-rec.Events:
+		return ev
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for an event to be recorded")
+		return ""
+	}
+}
+
 func functionLedgerRequest() *nvcav2beta1.ICMSRequest {
 	return &nvcav2beta1.ICMSRequest{
 		Spec: nvcav2beta1.ICMSRequestSpec{
@@ -112,7 +126,7 @@ func TestAnnotatedICMSEventf_ForwardsAnnotationsAndArgs(t *testing.T) {
 	c.AnnotatedICMSEventf(functionLedgerRequest(), corev1.EventTypeNormal,
 		"InstanceStatusUpdate", "%v is %v", instanceUpdate("0-sr-a"), "0-sr-a", "running")
 
-	got := <-rec.Events
+	got := receiveEvent(t, rec)
 	// Formatting args are forwarded to the recorder.
 	assert.Contains(t, got, "Normal InstanceStatusUpdate 0-sr-a is running")
 	// Instance-level annotations are stamped.
@@ -130,7 +144,7 @@ func TestAnnotatedICMSEvent_RequestLevelOmitsInstanceID(t *testing.T) {
 	c.AnnotatedICMSEvent(functionLedgerRequest(), corev1.EventTypeNormal,
 		"InstanceCreation", "Request accepted for processing", nil)
 
-	got := <-rec.Events
+	got := receiveEvent(t, rec)
 	assert.Contains(t, got, "Normal InstanceCreation Request accepted for processing")
 	assert.Contains(t, got, types.LedgerAnnotationICMSRequestID+":req-1")
 	assert.NotContains(t, got, types.LedgerAnnotationInstanceID,
@@ -138,26 +152,50 @@ func TestAnnotatedICMSEvent_RequestLevelOmitsInstanceID(t *testing.T) {
 }
 
 func TestAnnotatedICMSEventf_NilGuards(t *testing.T) {
-	t.Run("nil cache", func(t *testing.T) {
-		var c *BackendK8sCache
-		assert.NotPanics(t, func() {
-			c.AnnotatedICMSEventf(functionLedgerRequest(), corev1.EventTypeNormal, "R", "m", nil)
-		})
-	})
+	tests := []struct {
+		name string
+		// newCache builds the cache under test. rec is non-nil only when the
+		// case wires a fake recorder (so we can assert nothing was emitted).
+		newCache func(rec record.EventRecorder) *BackendK8sCache
+		withRec  bool
+		req      *nvcav2beta1.ICMSRequest
+	}{
+		{
+			name:     "nil cache",
+			newCache: func(record.EventRecorder) *BackendK8sCache { return nil },
+			req:      functionLedgerRequest(),
+		},
+		{
+			name:     "nil recorder",
+			newCache: func(record.EventRecorder) *BackendK8sCache { return &BackendK8sCache{clusterName: "cluster-east"} },
+			req:      functionLedgerRequest(),
+		},
+		{
+			name:     "nil request",
+			newCache: newLedgerTestCache,
+			withRec:  true,
+			req:      nil,
+		},
+	}
 
-	t.Run("nil recorder", func(t *testing.T) {
-		c := &BackendK8sCache{clusterName: "cluster-east"}
-		assert.NotPanics(t, func() {
-			c.AnnotatedICMSEventf(functionLedgerRequest(), corev1.EventTypeNormal, "R", "m", nil)
-		})
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var rec *record.FakeRecorder
+			var recorder record.EventRecorder
+			if tt.withRec {
+				rec = record.NewFakeRecorder(4)
+				recorder = rec
+			}
+			c := tt.newCache(recorder)
 
-	t.Run("nil request", func(t *testing.T) {
-		rec := record.NewFakeRecorder(4)
-		c := newLedgerTestCache(rec)
-		c.AnnotatedICMSEventf(nil, corev1.EventTypeNormal, "R", "m", nil)
-		assert.Empty(t, rec.Events, "no event should be emitted for a nil request")
-	})
+			assert.NotPanics(t, func() {
+				c.AnnotatedICMSEventf(tt.req, corev1.EventTypeNormal, "R", "m", nil)
+			})
+			if rec != nil {
+				assert.Empty(t, rec.Events, "no event should be emitted")
+			}
+		})
+	}
 }
 
 func TestInstanceUpdate(t *testing.T) {
