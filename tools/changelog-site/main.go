@@ -41,6 +41,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -271,11 +272,20 @@ func buildReleases(repoDir string, tagPrefixes []string, pathFilter, commitBase 
 	}
 	sort.SliceStable(svs, func(i, j int) bool { return less(svs[i], svs[j]) })
 
+	svs, aliases := dedupeByVersion(svs)
+
 	var releases []release
 	for i, sv := range svs {
 		origin := "gitlab"
 		if originFor != nil {
 			origin = originFor(sv.tag)
+			// A release tagged under both the legacy and the path-scoped
+			// prefix is still one release, and it may be carried by a
+			// different host under each name. Fold the dropped tags in so it
+			// is not reported as living on only one of them.
+			for _, alias := range aliases[sv.version] {
+				origin = mergeOrigin(origin, originFor(alias))
+			}
 		}
 		rel := release{Version: sv.version, Tag: sv.tag, Origin: origin}
 		if d, err := git(repoDir, "log", "-1", "--pretty=format:%cI", sv.tag); err == nil {
@@ -313,6 +323,48 @@ func buildReleases(repoDir string, tagPrefixes []string, pathFilter, commitBase 
 		releases = append(releases, rel)
 	}
 	return releases, nil
+}
+
+// dedupeByVersion collapses tags that carry the same semantic version into a
+// single entry, returning the surviving tags and, per version, the tag names
+// that were dropped.
+//
+// A service can have two live tag prefixes for one release line: the legacy
+// flat prefix (nvcf-<svc>-v) and the current path-scoped one
+// (<path>/v). The same release is then tagged twice under different names, and
+// emitting both produced two entries with an identical Version string. The UI
+// keys its from/to pickers by version and defaults them to the last two
+// entries, so when a service's two newest entries were the same release both
+// pickers resolved to the same index and the diff came out empty. The page
+// looked broken while the data behind it was merely duplicated.
+//
+// tagPrefixesForRelease returns the canonical prefix before the legacy one and
+// the caller's sort is stable, so the first occurrence of a version is the
+// canonical tag. Keeping it also keeps the commit ranges anchored to the tag
+// scheme currently in use.
+func dedupeByVersion(svs []semver) ([]semver, map[string][]string) {
+	aliases := map[string][]string{}
+	out := svs[:0:0]
+	seen := map[string]struct{}{}
+	for _, sv := range svs {
+		if _, ok := seen[sv.version]; ok {
+			aliases[sv.version] = append(aliases[sv.version], sv.tag)
+			continue
+		}
+		seen[sv.version] = struct{}{}
+		out = append(out, sv)
+	}
+	return out, aliases
+}
+
+// mergeOrigin combines two host labels for what is now known to be a single
+// release. A release tagged on GitLab under one name and on GitHub under
+// another is carried by both, even though neither tag alone says so.
+func mergeOrigin(a, b string) string {
+	if a == b {
+		return a
+	}
+	return "both"
 }
 
 // sortReleases sorts a merged release list ascending by semantic version.
@@ -370,6 +422,11 @@ func commitBaseFromRepo(repoURL string) string {
 	return u + "/-/commit/"
 }
 
+// gitNetworkTimeout bounds a single network-facing git attempt. Generous enough
+// for a full tag fetch on a large repository, short enough that three attempts
+// plus backoff still finish well inside a CI job.
+const gitNetworkTimeout = 2 * time.Minute
+
 // fetchGitHubTags enumerates the tags on the GitHub mirror at base and fetches
 // them into repoDir's refs/tags so their commits are reachable by tag name.
 // Release tagging moved to GitHub and the GitLab->GitHub mirror is one-way, so
@@ -399,15 +456,47 @@ func fetchGitHubTags(repoDir, base string) (map[string]bool, error) {
 	// Capture (do not live-forward) git's stderr: on auth failure git echoes
 	// the credential-embedded remote URL, which would leak the token into CI
 	// logs. Scrub it before surfacing anything.
+	// Both calls below cross the network to GitHub. A single transient failure
+	// used to drop the entire GitHub tag set, and because the caller only
+	// warned, the site republished with every GitHub-only release missing --
+	// services appeared and disappeared between half-hourly rebuilds. Retry
+	// with a short backoff so a blip does not decide the contents of the site.
+	// Both calls cross the network, so each attempt gets its own deadline.
+	// Without one, a hung connection or a credential prompt blocks until the CI
+	// job timeout an hour later, and the retry loop above never gets to run.
+	// GIT_TERMINAL_PROMPT=0 is set here rather than relied on from the
+	// environment: the publishing job does export it, but this tool is also run
+	// by hand, and a prompt waiting on a closed stdin is the exact stall the
+	// deadline then has to clean up.
 	run := func(args ...string) (string, error) {
-		cmd := exec.Command("git", append([]string{"-C", repoDir}, args...)...)
-		var stdout, stderr strings.Builder
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-		if err := cmd.Run(); err != nil {
-			return "", fmt.Errorf("git %s: %w: %s", args[0], err, scrub(stderr.String()))
+		var lastErr error
+		for attempt := 0; attempt < 3; attempt++ {
+			if attempt > 0 {
+				time.Sleep(time.Duration(attempt) * 2 * time.Second)
+			}
+			out, err := func() (string, error) {
+				ctx, cancel := context.WithTimeout(context.Background(), gitNetworkTimeout)
+				defer cancel()
+				cmd := exec.CommandContext(ctx, "git", append([]string{"-C", repoDir}, args...)...)
+				cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+				var stdout, stderr strings.Builder
+				cmd.Stdout = &stdout
+				cmd.Stderr = &stderr
+				if err := cmd.Run(); err != nil {
+					if ctx.Err() == context.DeadlineExceeded {
+						return "", fmt.Errorf("git %s: timed out after %s: %s", args[0], gitNetworkTimeout, scrub(stderr.String()))
+					}
+					return "", fmt.Errorf("git %s: %w: %s", args[0], err, scrub(stderr.String()))
+				}
+				return stdout.String(), nil
+			}()
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			return out, nil
 		}
-		return stdout.String(), nil
+		return "", lastErr
 	}
 	lsOut, err := run("ls-remote", "--tags", url)
 	if err != nil {
@@ -445,6 +534,8 @@ func main() {
 	commitBase := flag.String("commit-base", "", "umbrella commit URL base, e.g. https://host/group/proj/-/commit/")
 	githubRepo := flag.String("github-repo", envOr("NVCF_GITHUB_REMOTE", "https://github.com/NVIDIA/nvcf.git"),
 		"GitHub mirror to also scan for release tags; empty disables the GitHub source")
+	allowMissingGitHub := flag.Bool("allow-missing-github-tags", false,
+		"publish even if the GitHub tag fetch fails, omitting every GitHub-only release")
 	flag.Parse()
 
 	raw, err := os.ReadFile(*configPath)
@@ -470,7 +561,14 @@ func main() {
 			}
 		}
 		if set, err := fetchGitHubTags(*repo, base); err != nil {
-			// Degrade gracefully: an unreachable mirror must not fail the build.
+			// Fail rather than degrade. Continuing here publishes a site with
+			// every GitHub-only release silently missing, which overwrites a
+			// good deployment with a worse one and reads as data loss rather
+			// than as an outage. Failing leaves the previous deployment served.
+			// Pass --allow-missing-github-tags to opt into the old behavior.
+			if !*allowMissingGitHub {
+				fatal(fmt.Errorf("github tags unavailable: %w (pass --allow-missing-github-tags to publish without them)", err))
+			}
 			fmt.Fprintf(os.Stderr, "changelog-site: github tags unavailable (%v)\n", err)
 		} else {
 			githubTags = set

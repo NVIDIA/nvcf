@@ -19,6 +19,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"reflect"
 	"strconv"
 	"strings"
@@ -192,18 +193,30 @@ type BYOOOTelCollectorConfig struct {
 	MemoryLimiter  BYOOOTelMemoryLimiterConfig  `mapstructure:"memoryLimiter" yaml:"memoryLimiter,omitempty" json:"memoryLimiter,omitempty"`
 	Batch          BYOOOTelBatchConfig          `mapstructure:"batch" yaml:"batch,omitempty" json:"batch,omitempty"`
 	LogBatch       BYOOOTelBatchConfig          `mapstructure:"logBatch" yaml:"logBatch,omitempty" json:"logBatch,omitempty"`
+	LogSampling    BYOOOTelLogSamplingConfig    `mapstructure:"logSampling" yaml:"logSampling,omitempty" json:"logSampling,omitempty"`
+	TraceSampling  BYOOOTelSamplingConfig       `mapstructure:"traceSampling" yaml:"traceSampling,omitempty" json:"traceSampling,omitempty"`
 }
+
+const (
+	byooOTelConsistentMinSamplingPercentage = 100.0 / (1 << 56)
+	byooOTelHashSeedMinSamplingPercentage   = 100.0 / (1 << 14)
+)
 
 // IsZero returns true when no collector rendering overrides are configured.
 func (c BYOOOTelCollectorConfig) IsZero() bool {
 	return c.ExporterHelper.IsZero() &&
 		c.MemoryLimiter.IsZero() &&
 		c.Batch.IsZero() &&
-		c.LogBatch.IsZero()
+		c.LogBatch.IsZero() &&
+		c.LogSampling.IsZero() &&
+		c.TraceSampling.IsZero()
 }
 
 // EnvVars returns the BYOO collector env vars for the structured config.
 func (c BYOOOTelCollectorConfig) EnvVars() []corev1.EnvVar {
+	if err := c.Validate(); err != nil {
+		panic(fmt.Sprintf("code bug: invalid BYOO OTel collector config: %v", err))
+	}
 	if c.IsZero() {
 		return nil
 	}
@@ -215,6 +228,102 @@ func (c BYOOOTelCollectorConfig) EnvVars() []corev1.EnvVar {
 		Name:  BYOOOTelCollectorConfigEnv,
 		Value: base64.StdEncoding.EncodeToString(data),
 	}}
+}
+
+// Validate rejects BYOO OTel sampler settings that the pinned collector cannot apply safely.
+func (c BYOOOTelCollectorConfig) Validate() error {
+	if err := c.LogSampling.validate(); err != nil {
+		return fmt.Errorf("log sampling: %w", err)
+	}
+	if err := c.TraceSampling.validate(); err != nil {
+		return fmt.Errorf("trace sampling: %w", err)
+	}
+	return nil
+}
+
+func (c BYOOOTelSamplingConfig) validate() error {
+	return validateBYOOOTelSampling(c.Mode, c.SamplingPercentage)
+}
+
+func (c BYOOOTelLogSamplingConfig) validate() error {
+	if err := validateBYOOOTelSampling(c.Mode, c.SamplingPercentage); err != nil {
+		return err
+	}
+	if c.SamplingPercentage == nil || c.Mode == "" || c.Mode == "hash_seed" {
+		return nil
+	}
+	if c.AttributeSource != "" || c.FromAttribute != "" {
+		return fmt.Errorf("attributeSource and fromAttribute require hash_seed mode")
+	}
+	return nil
+}
+
+func validateBYOOOTelSampling(mode string, samplingPercentage *float64) error {
+	if samplingPercentage == nil {
+		return nil
+	}
+
+	minimumSamplingPercentage, err := byooOTelMinimumSamplingPercentage(mode)
+	if err != nil {
+		return err
+	}
+	if math.IsNaN(*samplingPercentage) || math.IsInf(*samplingPercentage, 0) {
+		return fmt.Errorf("samplingPercentage must be finite")
+	}
+	if *samplingPercentage < 0 || *samplingPercentage > math.MaxFloat32 {
+		return fmt.Errorf("samplingPercentage must be between 0 and %g", math.MaxFloat32)
+	}
+	if *samplingPercentage != 0 && *samplingPercentage < minimumSamplingPercentage {
+		return fmt.Errorf("samplingPercentage must be 0 or at least %g for %s mode", minimumSamplingPercentage, byooOTelEffectiveSamplingMode(mode))
+	}
+	return nil
+}
+
+func byooOTelMinimumSamplingPercentage(mode string) (float64, error) {
+	switch mode {
+	case "", "hash_seed":
+		return byooOTelHashSeedMinSamplingPercentage, nil
+	case "proportional", "equalizing":
+		return byooOTelConsistentMinSamplingPercentage, nil
+	default:
+		return 0, fmt.Errorf("unsupported sampling mode %q", mode)
+	}
+}
+
+func byooOTelEffectiveSamplingMode(mode string) string {
+	if mode == "" {
+		return "hash_seed"
+	}
+	return mode
+}
+
+// BYOOOTelSamplingConfig configures the BYOO collector trace probabilistic sampling processor.
+type BYOOOTelSamplingConfig struct {
+	SamplingPercentage *float64 `mapstructure:"samplingPercentage" yaml:"samplingPercentage,omitempty" json:"samplingPercentage,omitempty"`
+	Mode               string   `mapstructure:"mode" yaml:"mode,omitempty" json:"mode,omitempty"`
+	HashSeed           *uint32  `mapstructure:"hashSeed" yaml:"hashSeed,omitempty" json:"hashSeed,omitempty"`
+	FailClosed         *bool    `mapstructure:"failClosed" yaml:"failClosed,omitempty" json:"failClosed,omitempty"`
+}
+
+// IsZero returns true when the trace sampling percentage is unset.
+func (c BYOOOTelSamplingConfig) IsZero() bool {
+	return c.SamplingPercentage == nil
+}
+
+// BYOOOTelLogSamplingConfig configures the BYOO collector log probabilistic sampling processor.
+type BYOOOTelLogSamplingConfig struct {
+	SamplingPercentage *float64 `mapstructure:"samplingPercentage" yaml:"samplingPercentage,omitempty" json:"samplingPercentage,omitempty"`
+	Mode               string   `mapstructure:"mode" yaml:"mode,omitempty" json:"mode,omitempty"`
+	HashSeed           *uint32  `mapstructure:"hashSeed" yaml:"hashSeed,omitempty" json:"hashSeed,omitempty"`
+	FailClosed         *bool    `mapstructure:"failClosed" yaml:"failClosed,omitempty" json:"failClosed,omitempty"`
+	AttributeSource    string   `mapstructure:"attributeSource" yaml:"attributeSource,omitempty" json:"attributeSource,omitempty"`
+	FromAttribute      string   `mapstructure:"fromAttribute" yaml:"fromAttribute,omitempty" json:"fromAttribute,omitempty"`
+	SamplingPriority   string   `mapstructure:"samplingPriority" yaml:"samplingPriority,omitempty" json:"samplingPriority,omitempty"`
+}
+
+// IsZero returns true when the log sampling percentage is unset.
+func (c BYOOOTelLogSamplingConfig) IsZero() bool {
+	return c.SamplingPercentage == nil
 }
 
 // BYOOOTelExporterHelperConfig configures common exporterhelper settings for BYOO exporters.
@@ -370,6 +479,17 @@ func (c Config) Complete() Config {
 	c.Workload = c.Workload.Complete()
 	c.Authz = c.Authz.Complete()
 	return c
+}
+
+// Validate rejects configuration combinations that cannot be applied safely.
+func (c Config) Validate() error {
+	if err := c.Workload.Validate(); err != nil {
+		return err
+	}
+	if err := c.Agent.BYOOOTelCollector.Validate(); err != nil {
+		return fmt.Errorf("agent.byooOtelCollector: %w", err)
+	}
+	return nil
 }
 
 type NVCFClusterConfig struct {
@@ -728,7 +848,15 @@ type TransportTLSConfig struct {
 	TrustBundleKey           string    `yaml:"trustBundleKey"`
 	TrustBundleFingerprint   string    `yaml:"trustBundleFingerprint"`
 	TrustBundlePEM           string    `yaml:"trustBundlePem"`
-	InstallerImage           string    `yaml:"installerImage"`
+	InstalledBundleMountPath string    `yaml:"installedBundleMountPath"`
+}
+
+// Validate rejects workload settings that disable configured transport trust.
+func (t WorkloadConfig) Validate() error {
+	if t.StargateQUICInsecure && t.TransportTLS != nil && t.TransportTLS.TrustMode == TrustModeBundle {
+		return fmt.Errorf("workload.stargateQUICInsecure=true cannot be used with workload.transportTLS.trustMode=bundle; set workload.stargateQUICInsecure=false or use trustMode=system")
+	}
+	return nil
 }
 
 func (t WorkloadConfig) Complete() WorkloadConfig {

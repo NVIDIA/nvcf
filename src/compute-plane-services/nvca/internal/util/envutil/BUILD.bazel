@@ -7,14 +7,14 @@ go_library(
     name = "envutil",
     srcs = ["envutil.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/envutil",
-    visibility = ["//:__subpackages__"],
-    deps = ["//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"],
+    visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
+    deps = ["//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"],
 )
 
 alias(
     name = "go_default_library",
     actual = ":envutil",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
 )
 
 go_test(
@@ -22,8 +22,8 @@ go_test(
     srcs = ["envutil_test.go"],
     embed = [":envutil"],
     deps = [
-        "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common",
-        "//vendor/github.com/stretchr/testify/assert",
-        "//vendor/github.com/stretchr/testify/require",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/require",
     ],
 )

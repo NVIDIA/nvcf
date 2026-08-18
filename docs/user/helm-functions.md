@@ -9,7 +9,7 @@ Ensure that your helm charts version does not contain `-` For example `v1` is ok
 
 </Warning>
 
-1. The helm chart **must have a "mini-service" container defined, which will be used as the inference entry point.**
+1. The Helm chart must define a `mini-service` container as the inference entry point.
 2. The name of this service in your helm chart should be supplied by setting `helmChartServiceName` during the function definition. This allows Cloud Functions to communicate and make inference requests to the "mini-service" endpoint.
 
 <Warning>
@@ -35,11 +35,13 @@ All Pod specs in your helm chart will be updated with pull secrets at runtime, s
 
    - The `helmChart` property should be set to the OCI URL of the helm chart that will deploy the "mini-service". The helm chart URL should follow the format: `oci://${REGISTRY}/${REPOSITORY}/charts/$NAME-X.Y.Z.tgz`. The chart name should not contain `-` in the version string.
 
-   - The `helmChartServiceName` is used for checking if the "mini-service" is ready for inference and is also scraped for function metrics. At this time, templatized service names are not supported. **This must match the service name of your "mini-service" with the exposed entry point port.**
+   - NVCF uses `helmChartServiceName` for readiness checks and function
+     metrics. It must match the service that exposes the `mini-service` entry
+     point. Templated service names are not supported.
 
    - Important: The Helm chart name should not contain underscores or other special symbols, as that may cause issues during deployment.
 
-**Example Creation via API**
+### API example
 
 Please see our [sample helm chart used](https://github.com/NVIDIA/nvcf/tree/main/examples/function-samples/helmchart-samples/inference-test-sample) in this example for reference.
 
@@ -68,11 +70,84 @@ For gRPC-based functions, set `"inferenceURL" : "/gRPC"`. This signals to Cloud 
 
 3. Proceed with function deployment and invocation normally.
 
-**Multi-node helm deployment**
+### Multi-node helm deployment
+
 To create a multi-node helm deployment, you need to use the following format for the `instanceType`:
 `<CSP>.GPU.<GPU_NAME>_<number of gpus per node>x[.x<number of nodes>]`. For example, `DGXC.GPU.L40S_1x` is a single L40S instance while `ON-PREM.GPU.B200_8x.x2` is two full nodes of 8-way B200.
 
 A sample helm chart for a multi-node deployment can be found [in the multi-node helm example](https://github.com/NVIDIA/nvcf/tree/main/examples/function-samples/helmchart-samples/multi-node-helm-function-test/).
+
+#### Multi-node NVLink scheduling
+
+<Note>
+The compute cluster must have the `NVLinkOptimized` attribute. See
+[NVLink-optimized clusters](./cluster-management/configuration.md#nvlink-optimized-clusters).
+</Note>
+
+NVCF can place the Pods from one multi-node Helm function in a single NVLink
+GPU clique. Use [Gang Scheduling](./cluster-management/gang-scheduling.md) when every Pod
+must be placed atomically. Use
+[Topology-Aware Scheduling](./cluster-management/topology-aware-scheduling.md)
+to place that gang in one GPU clique. The guides include examples for direct
+KAI StatefulSets and workloads managed through Grove and Dynamo.
+NVCA will create a
+[`ComputeDomain`](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/dra-cds.html)
+to connect GPU workload Pods through IMEX.
+
+<Note>
+Each GPU-enabled Pod must request a full node of GPUs.
+</Note>
+
+#### Legacy NVCA NVLink partition annotation
+
+<Warning>
+NVLink partition placement through these legacy affinity rules is best-effort
+without KAI Scheduler or Grove topology-aware scheduling. The rules do not
+provide atomic gang placement. Concurrent Pods can initially land in different
+cliques, and distinct logical groups can land in the same clique. Use
+[Gang Scheduling](./cluster-management/gang-scheduling.md) with
+[Topology-Aware Scheduling](./cluster-management/topology-aware-scheduling.md)
+when the workload requires all Pods to fit and start in a specific topology
+domain.
+</Warning>
+
+For charts that do not use KAI Scheduler or Grove topology constraints, NVCA
+supports this legacy Pod template annotation:
+
+```yaml
+spec:
+  template:
+    metadata:
+      annotations:
+        dra.nvcf.nvidia.io/required-nvlink-domain-index: "0"
+```
+
+Set the annotation on the Pod template for a Deployment, ReplicaSet,
+StatefulSet, Job, or CronJob. Set it on `metadata.annotations` for a standalone
+Pod. Setting it only on the controller object's metadata does not pass it to
+the Pods.
+
+The value is a logical partition index within the function. It is not the
+value of the `nvidia.com/gpu.clique` node label and does not select a physical
+rack or clique:
+
+- Pods with the same value form one logical placement group.
+- Pods with different values get different logical group labels. This does not
+  require the groups to use different GPU cliques.
+- Pods without the annotation share a default logical group.
+
+On an NVLink-optimized cluster, NVCA mutates each admitted Pod as follows:
+
+- It adds the generated `dra.nvcf.nvidia.io/nvlink-domain-partition` label.
+  Do not set this label in the chart.
+- For an annotated Pod, it adds required Pod affinity so Pods in the same
+  logical group use one value of the `nvidia.com/gpu.clique` topology key.
+- For an unannotated Pod, it adds preferred Pod affinity with weight 100. The
+  scheduler can spread these Pods when it cannot satisfy the preference.
+- It requires placement on a node that has the `nvidia.com/gpu.clique` label.
+- It adds the function's `ComputeDomain` resource claim to containers that
+  request `nvidia.com/gpu`, `nvidia.com/pgpu`, `nvidia.com/gpu.shared`, or an
+  `nvidia.com/mig-*` resource.
 
 ## Limitations
 
@@ -98,7 +173,7 @@ it will only do so if modification will not break your chart when it is installe
 Possible areas amenable to modification will be noted in the restrictions section below.
 Any standard that cannot be enforced by modification will result in error(s) during function creation.
 
-**Restrictions**
+#### Restrictions
 
 - Supported k8s artifacts under Helm Chart Namespace are listed below; others will be rejected:
   - ConfigMaps

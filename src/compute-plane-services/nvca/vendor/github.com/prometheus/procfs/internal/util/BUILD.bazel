@@ -11,11 +11,11 @@ go_library(
     ],
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/prometheus/procfs/internal/util",
     importpath = "github.com/prometheus/procfs/internal/util",
-    visibility = ["//vendor/github.com/prometheus/procfs:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/github.com/prometheus/procfs:__subpackages__"],
 )
 
 alias(
     name = "go_default_library",
     actual = ":util",
-    visibility = ["//vendor/github.com/prometheus/procfs:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/github.com/prometheus/procfs:__subpackages__"],
 )

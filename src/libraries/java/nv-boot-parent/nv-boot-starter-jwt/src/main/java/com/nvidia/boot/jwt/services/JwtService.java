@@ -244,8 +244,8 @@ public class JwtService {
                 result = true;
             }
         } catch (JOSEException e) {
-            log.error("Failed to validate signature with {} error message: {}", jwsVerifier, e
-                    .getMessage());
+            log.error("Failed to validate signature with {} error message: {}",
+                      jwsVerifier, e.getMessage());
         }
         return result;
     }

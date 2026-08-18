@@ -1,0 +1,57 @@
+/**
+ * SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import { screen } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+import { getGetClustersMockHandler } from "~/generated/api/clusters/clusters.msw";
+import { GetClusterResponseStatus } from "~/generated/model/getClusterResponseStatus";
+import { server } from "~/mocks/server";
+import { renderWithRouter } from "~/testing/render";
+import { clustersListRoute } from "./routes";
+
+describe("ClustersList", () => {
+	it("renders a list of clusters", async () => {
+		server.use(
+			getGetClustersMockHandler([
+				{
+					clusterName: "cluster-1",
+					status: GetClusterResponseStatus.READY,
+					region: "us-east-1",
+					gpus: [{ name: "NVIDIA A100" }],
+				},
+			]),
+		);
+
+		renderWithRouter({
+			routes: [clustersListRoute],
+			initialLocation: "/clusters",
+		});
+
+		expect(await screen.findByText("cluster-1")).toBeInTheDocument();
+	});
+
+	it("shows empty state when no clusters are returned", async () => {
+		server.use(getGetClustersMockHandler([]));
+
+		renderWithRouter({
+			routes: [clustersListRoute],
+			initialLocation: "/clusters",
+		});
+
+		expect(await screen.findByText("No data")).toBeInTheDocument();
+	});
+});

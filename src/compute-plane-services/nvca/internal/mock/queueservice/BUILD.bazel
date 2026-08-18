@@ -10,22 +10,22 @@ go_library(
         "queueservice.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/mock/queueservice",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
     deps = [
-        "//internal/mock/utils",
-        "//pkg/queue",
-        "//pkg/types",
-        "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
-        "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function",
-        "//vendor/github.com/google/uuid",
-        "//vendor/github.com/gorilla/handlers",
-        "//vendor/github.com/gorilla/mux",
-        "//vendor/github.com/sirupsen/logrus",
+        "//src/compute-plane-services/nvca/internal/mock/utils",
+        "//src/compute-plane-services/nvca/pkg/queue",
+        "//src/compute-plane-services/nvca/pkg/types",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/uuid",
+        "//src/compute-plane-services/nvca/vendor/github.com/gorilla/handlers",
+        "//src/compute-plane-services/nvca/vendor/github.com/gorilla/mux",
+        "//src/compute-plane-services/nvca/vendor/github.com/sirupsen/logrus",
     ],
 )
 
 alias(
     name = "go_default_library",
     actual = ":queueservice",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
 )

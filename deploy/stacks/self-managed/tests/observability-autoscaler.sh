@@ -89,7 +89,7 @@ helm template function-autoscaler "$repo_dir/deploy/helm/function-autoscaler" \
   >"$work_dir/autoscaler-manifests.yaml"
 
 autoscaler_manifests="$work_dir/autoscaler-manifests.yaml"
-grep -q 'image: nvcr.io/YOUR_ORG/YOUR_TEAM/nvcf-function-autoscaler:1.18.11' "$autoscaler_manifests" ||
+grep -q 'image: nvcr.io/YOUR_ORG/YOUR_TEAM/nvcf-function-autoscaler:1.19.0' "$autoscaler_manifests" ||
   fail "self-managed stack did not pin the autoscaler image"
 test "$(grep -c '^kind: ConfigMap$' "$autoscaler_manifests")" = "2" ||
   fail "autoscaler chart did not render only its env and Vault template ConfigMaps"

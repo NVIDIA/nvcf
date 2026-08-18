@@ -15,6 +15,14 @@
 name: image-push (manual)
 
 on:
+  # Label a PR with deploy-to-stg and every subsequent push builds and pushes a
+  # dev image automatically. Removing the label stops it. `labeled` covers the
+  # first build, `synchronize` each push after that, `reopened` a revived PR.
+  #
+  # Fork PRs are filtered out in the resolve job below; pull_request (not
+  # pull_request_target) is used, so untrusted code never runs with secrets.
+  pull_request:
+    types: [labeled, synchronize, reopened]
   workflow_dispatch:
     inputs:
       service_path:
@@ -31,13 +39,99 @@ permissions:
   packages: read
 
 concurrency:
-  group: image-push-${{ github.event.inputs.service_path }}-${{ github.ref }}
-  cancel-in-progress: false
+  group: image-push-${{ github.event.inputs.service_path || github.ref }}
+  # A superseded PR build is worthless: the tag it would produce is for a commit
+  # nobody will deploy. Dispatch runs are deliberate, so they still queue.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  resolve:
+    name: resolve subtree
+    runs-on: ubuntu-latest
+    # Skip anything not asking for a build, without failing the PR.
+    #
+    # Fork PRs are excluded here rather than left to fail at the push step:
+    # they receive no secrets, so they would burn a runner and end in a
+    # confusing auth error.
+    #
+    # The last clause matters because `labeled` fires for every label. Without
+    # it, adding an unrelated label to a PR that already carries deploy-to-stg
+    # would trigger a full rebuild. On `synchronize` and `reopened` there is no
+    # github.event.label, so the clause is true and the contains() check governs.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        contains(github.event.pull_request.labels.*.name, 'deploy-to-stg') &&
+        (github.event.action != 'labeled' || github.event.label.name == 'deploy-to-stg')
+      )
+    outputs:
+      service_path: ${{ steps.pick.outputs.service_path }}
+      found: ${{ steps.pick.outputs.found }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Pick the subtree to build
+        id: pick
+        env:
+          INPUT_PATH: ${{ github.event.inputs.service_path }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_PATH}" ]; then
+            echo "service_path=${INPUT_PATH}" >> "$GITHUB_OUTPUT"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "dispatch: ${INPUT_PATH}"
+            exit 0
+          fi
+
+          # A PR event carries no path input, so derive it from what changed.
+          # Service subtrees are src/<plane>/<service>; take that prefix from
+          # every changed file and require exactly one, because a dev image is
+          # for one service and guessing between several would be wrong.
+          # Three dots, not two: compare the merge base of the two commits with
+          # the head, so only this PR's own changes are considered. A two-dot
+          # diff also reports whatever landed on the base branch after this PR
+          # forked, so an unrelated service merging to main would make a
+          # single-service PR look like a multi-service one and skip its image.
+          mapfile -t subtrees < <(
+            git diff --name-only "${BASE_SHA}...${HEAD_SHA}" \
+              | grep -E '^src/[^/]+/[^/]+/' \
+              | cut -d/ -f1-3 | sort -u
+          )
+          if [ "${#subtrees[@]}" -eq 1 ] && [ -f "${subtrees[0]}/BUILD.bazel" ]; then
+            echo "service_path=${subtrees[0]}" >> "$GITHUB_OUTPUT"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "resolved from changed files: ${subtrees[0]}"
+            exit 0
+          fi
+
+          # Three distinct reasons to skip. They need distinct messages: the
+          # right next step differs, and a wrong explanation sends people to
+          # workflow_dispatch when dispatch would not help either.
+          echo "found=false" >> "$GITHUB_OUTPUT"
+          if [ "${#subtrees[@]}" -eq 0 ]; then
+            echo "::notice::No service subtree changed; nothing to push."
+          elif [ "${#subtrees[@]}" -eq 1 ]; then
+            echo "::notice::${subtrees[0]} has no BUILD.bazel, so it is not a buildable service subtree; nothing to push."
+          else
+            echo "::notice::Changed ${#subtrees[@]} subtrees (${subtrees[*]}); a dev image targets one. Use workflow_dispatch to pick one."
+          fi
+
   push:
     name: push to ncp-dev
+    needs: resolve
+    if: needs.resolve.outputs.found == 'true'
     runs-on: ubuntu-latest
+    # Same public EC2 Buildbarn cache the matrix build uses. workflow_dispatch
+    # is restricted to users with write access, so the secret is available;
+    # fork PRs cannot reach this workflow at all.
+    env:
+      CACHE_TOKEN: ${{ secrets.BAZEL_REMOTE_CACHE_TOKEN }}
+      CACHE_ENDPOINT: ${{ vars.BAZEL_REMOTE_CACHE_ENDPOINT }}
     container:
       image: ${{ vars.BAZEL_CI_IMAGE || 'ghcr.io/nvidia/nvcf/bazel-ci:0.14.0' }}
     defaults:
@@ -52,26 +146,68 @@ jobs:
       - name: Resolve service name for cache keys
         id: svc
         env:
-          SVC_PATH: ${{ github.event.inputs.service_path }}
+          SVC_PATH: ${{ needs.resolve.outputs.service_path }}
         run: |
           set -euo pipefail
           echo "name=$(basename "$SVC_PATH")" >> "$GITHUB_OUTPUT"
 
-      # Same repository/install caching as bazel.yml, plus a Bazel disk
-      # cache so compiled actions survive between dispatches. Without
-      # this every dispatch recompiled the full dependency tree from
-      # scratch. Keyed per service so caches do not evict each other;
-      # the restore-keys prefix tolerates lockfile drift.
-      - name: Cache Bazel repository + disk caches
+      # Two caches, because the content has two different identities.
+      #
+      # The install base and repository cache are a pure function of the root
+      # MODULE.bazel.lock and .bazelversion: every service dispatched from this
+      # workflow produces byte-identical content. Storing that per service would
+      # keep N copies of the same multi-gigabyte entry inside GitHub's 10 GB
+      # per-repository budget, so they would evict one another and nothing would
+      # ever hit. It is shared, and shares the key the matrix build uses so a
+      # dispatch can restore what CI already populated.
+      #
+      # Compiled action outputs in the disk cache genuinely are service-specific
+      # and stay keyed per service.
+      #
+      # Both previously hashed a MODULE.bazel.lock inside the service subtree.
+      # Those files are gone now that every service builds from the root module,
+      # so hashFiles returned empty and the key degenerated to a constant: the
+      # entry never matched the dependency state it claimed to describe.
+      - name: Cache Bazel repository + install
         uses: actions/cache@v4
         with:
           path: |
             ~/.cache/bazel/_bazel_${{ env.USER || 'root' }}/install
             ~/.cache/bazel/_bazel_${{ env.USER || 'root' }}/cache
-            ~/.bazel-disk-cache
-          key: bazel-dispatch-${{ steps.svc.outputs.name }}-${{ hashFiles(format('{0}/MODULE.bazel.lock', github.event.inputs.service_path), format('{0}/.bazelversion', github.event.inputs.service_path)) }}
+          key: bazel-rootmodule-${{ hashFiles('MODULE.bazel.lock', '.bazelversion') }}
+          restore-keys: |
+            bazel-rootmodule-
+
+      - name: Cache Bazel disk cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bazel-disk-cache
+          key: bazel-dispatch-${{ steps.svc.outputs.name }}-${{ hashFiles('MODULE.bazel.lock', '.bazelversion') }}
           restore-keys: |
             bazel-dispatch-${{ steps.svc.outputs.name }}-
+
+      # Read-only remote cache, same public Buildbarn the matrix build uses.
+      # This workflow previously passed --remote_cache= (empty, i.e. disabled)
+      # and relied only on a local disk cache, so every dispatch recompiled the
+      # service's entire dependency closure even though CI had already built
+      # those exact actions on main. Reusing tools/ci/bazel-cache-upload-mode
+      # keeps the upload policy in one place; a workflow_dispatch is neither a
+      # main push nor a merge_group, so it resolves to read-only and an ad-hoc
+      # push can never write to the shared cache.
+      - name: Prepare remote cache
+        id: rc
+        run: |
+          set -euo pipefail
+          if [ -n "${CACHE_TOKEN:-}" ] && [ -n "${CACHE_ENDPOINT:-}" ]; then
+            printf '%s\n' "${{ vars.BAZEL_REMOTE_CACHE_CA }}" > "$RUNNER_TEMP/cache-ca.pem"
+            upload="$(bash "$GITHUB_WORKSPACE/tools/ci/bazel-cache-upload-mode")"
+            echo "ready=1" >> "$GITHUB_OUTPUT"
+            echo "upload=$upload" >> "$GITHUB_OUTPUT"
+            echo "remote cache ready (upload=$upload)"
+          else
+            echo "ready=0" >> "$GITHUB_OUTPUT"
+            echo "remote cache unavailable (no token/endpoint): local disk cache only"
+          fi
 
       - name: Compute snapshot tag
         id: meta
@@ -115,7 +251,7 @@ jobs:
       - name: Resolve Bazel module layout
         id: layout
         env:
-          SVC_PATH: ${{ github.event.inputs.service_path }}
+          SVC_PATH: ${{ needs.resolve.outputs.service_path }}
         run: |
           set -euo pipefail
           if [ ! -d "$SVC_PATH" ]; then
@@ -137,10 +273,12 @@ jobs:
       - name: Build and push multi-arch image(s)
         working-directory: ${{ steps.layout.outputs.workdir }}
         env:
-          SVC_PATH: ${{ github.event.inputs.service_path }}
+          SVC_PATH: ${{ needs.resolve.outputs.service_path }}
           SCOPE: ${{ steps.layout.outputs.scope }}
           TAG: ${{ steps.meta.outputs.tag }}
           REGISTRY: ${{ secrets.NCP_DEV_REGISTRY }}
+          RC_READY: ${{ steps.rc.outputs.ready }}
+          RC_UPLOAD: ${{ steps.rc.outputs.upload }}
         run: |
           set -euo pipefail
           REGISTRY="${REGISTRY%/}"
@@ -191,7 +329,21 @@ jobs:
             mkdir -p ci-ghcr
             printf 'load("@rules_oci//oci:defs.bzl", "oci_push")\n\noci_push(\n    name = "push",\n    image = "%s",\n    repository = "%s",\n    remote_tags = ["%s", "latest-dispatch"],\n)\n' \
               "$tgt" "$dest" "$TAG" > ci-ghcr/BUILD.bazel
-            bazel run --remote_cache= --disk_cache="${BAZEL_DISK_CACHE}" //ci-ghcr:push
+            CACHE=(--remote_cache=)
+            if [ "${RC_READY:-0}" = "1" ]; then
+              CACHE=(--remote_cache="$CACHE_ENDPOINT"
+                     --tls_certificate="$RUNNER_TEMP/cache-ca.pem"
+                     --remote_header="authorization=Bearer $CACHE_TOKEN"
+                     --remote_cache_compression
+                     --remote_download_all
+                     --remote_timeout=600 --remote_retries=5)
+              if [ "$RC_UPLOAD" = "true" ]; then
+                CACHE+=(--remote_upload_local_results=true)
+              else
+                CACHE+=(--remote_upload_local_results=false)
+              fi
+            fi
+            bazel run "${CACHE[@]}" --disk_cache="${BAZEL_DISK_CACHE}" //ci-ghcr:push
             rm -rf ci-ghcr
           done
           echo "Done: pushed ${#indexes[@]} image(s) under ${REGISTRY}/ at tag ${TAG}"

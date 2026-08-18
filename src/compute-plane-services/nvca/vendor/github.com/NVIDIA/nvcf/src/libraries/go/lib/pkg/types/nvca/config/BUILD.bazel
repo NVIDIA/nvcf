@@ -13,12 +13,12 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/go-viper/mapstructure/v2:mapstructure",
-        "//vendor/github.com/sirupsen/logrus",
-        "//vendor/github.com/spf13/viper",
-        "//vendor/go.yaml.in/yaml/v3:yaml",
-        "//vendor/k8s.io/api/core/v1:core",
-        "//vendor/k8s.io/apimachinery/pkg/api/resource",
+        "//src/compute-plane-services/nvca/vendor/github.com/go-viper/mapstructure/v2:mapstructure",
+        "//src/compute-plane-services/nvca/vendor/github.com/sirupsen/logrus",
+        "//src/compute-plane-services/nvca/vendor/github.com/spf13/viper",
+        "//src/compute-plane-services/nvca/vendor/go.yaml.in/yaml/v3:yaml",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/core/v1:core",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/resource",
     ],
 )
 

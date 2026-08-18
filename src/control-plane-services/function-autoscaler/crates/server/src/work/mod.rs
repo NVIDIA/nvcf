@@ -29,7 +29,7 @@ use crate::{
     cassandra::cassandra_service::CassandraServiceManager,
     timeseries_db::timeseries_db_client::TimeseriesDbClient,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{Duration, Utc};
 use moka::sync::Cache;
 
@@ -62,6 +62,31 @@ use discovery::get_recently_invoked_functions;
 const TIMESERIES_DB_QUERY_STEP: StdDuration = StdDuration::from_secs(60); // 1 minute step for TimeseriesDb queries
 pub const CALCULATE_UTILIZATION_LOCK_PREFIX: &str = "util_lock";
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct MetricEnvironments {
+    aws: &'static str,
+    worker: &'static str,
+    control_plane: &'static str,
+}
+
+impl MetricEnvironments {
+    fn from_config(env: &str) -> Self {
+        if env == "stg" {
+            Self {
+                aws: "stg",
+                worker: "stage",
+                control_plane: "staging",
+            }
+        } else {
+            Self {
+                aws: "prd",
+                worker: "prod",
+                control_plane: "production",
+            }
+        }
+    }
+}
+
 /// Get historical utilization data for a specific function
 #[allow(clippy::too_many_arguments)]
 async fn get_function_utilization_history(
@@ -78,17 +103,22 @@ async fn get_function_utilization_history(
     let start_time = end_time - Duration::minutes(lookback_minutes);
     let step = TIMESERIES_DB_QUERY_STEP;
 
+    let metric_env = MetricEnvironments::from_config(env);
     let env_suffix = if ignore_env {
         String::new()
+    } else if use_control_plane_metrics {
+        format!(r#", aws_env="{}""#, metric_env.aws)
     } else {
-        let env_val = if env == "stg" { "stage" } else { "prod" };
-        format!(", environment=\"{}\"", env_val)
+        format!(r#", environment="{}""#, metric_env.worker)
     };
 
     let query = if use_control_plane_metrics {
+        // Invocation latency can be split by caller NCA, while capacity belongs to the shared
+        // function-version pool. Aggregate both sides by that shared identity so the query works
+        // with both per-caller and NCA-free latency series.
         format!(
-            r#"100 * sum by(function_id, function_version_id, nca_id) (rate(function_request_latency_sum{{function_id="{id}", function_version_id="{v_id}"{env}}}[2m])) /
-            (avg by(function_id, function_version_id, nca_id) (nvcf_function_instances_current{{function_id="{id}", function_version_id="{v_id}"{env}}}) * avg by(function_id, function_version_id, nca_id) (nvcf_function_concurrency{{function_id="{id}", function_version_id="{v_id}"{env}}})) or vector(0)"#,
+            r#"100 * sum by(function_id, function_version_id) (rate(function_request_latency_sum{{function_id="{id}", function_version_id="{v_id}"{env}}}[2m])) /
+            (avg by(function_id, function_version_id) (nvcf_function_instances_current{{function_id="{id}", function_version_id="{v_id}"{env}}}) * avg by(function_id, function_version_id) (nvcf_function_concurrency{{function_id="{id}", function_version_id="{v_id}"{env}}})) or vector(0)"#,
             id = function_id,
             v_id = function_version_id,
             env = env_suffix
@@ -170,12 +200,8 @@ async fn get_byoc_instance_count(
     let env_suffix = if ignore_env {
         String::new()
     } else {
-        let env_val = if env == "stg" {
-            "staging"
-        } else {
-            "production"
-        };
-        format!(r#", environment="{}""#, env_val)
+        let metric_env = MetricEnvironments::from_config(env);
+        format!(r#", environment="{}""#, metric_env.control_plane)
     };
 
     let query = format!(
@@ -277,8 +303,8 @@ async fn get_current_worker_count_from_timeseries_db(
     let env_filter = if ignore_env {
         String::new()
     } else {
-        let environment = if env == "stg" { "stage" } else { "prod" };
-        format!(r#", environment="{}""#, environment)
+        let metric_env = MetricEnvironments::from_config(env);
+        format!(r#", environment="{}""#, metric_env.worker)
     };
     let query = format!(
         r#"count by(function_id, function_version_id) (nvcf_worker_service_worker_thread_count_total{{function_id="{}", function_version_id="{}"{}}})"#,
@@ -517,6 +543,8 @@ async fn make_scaling_requests_for_table(
     function_state_cache: Arc<FunctionStateCache>,
 ) -> Result<()> {
     let bucket_ranges = bucket_manager.get_all_bucket_ranges();
+    let mut task_failures = 0usize;
+    let mut first_task_error = None;
 
     if bucket_ranges.is_empty() {
         tracing::warn!("No buckets assigned to this node, skipping scaling logic");
@@ -601,7 +629,13 @@ async fn make_scaling_requests_for_table(
                         ignore_env,
                         &scaling_settings,
                     )
-                    .await?;
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "gathering scaling inputs for {}:{}",
+                            function.function_id, function.function_version_id
+                        )
+                    })?;
                     let current_instances = inputs.current_instances;
 
                     tracing::info!(
@@ -722,11 +756,13 @@ async fn make_scaling_requests_for_table(
                 });
             }
 
-            // Wait for all scaling requests in this bucket to complete
-            while let Some(result) = join_set.join_next().await {
-                if let Err(e) = result {
-                    tracing::error!("Task failed in bucket {}: {}", bucket_index, e);
-                }
+            // Wait for all scaling requests in this bucket to complete. JoinSet
+            // returns two result layers: the task's Result and Tokio's JoinError.
+            // Count both while continuing to drain independent work.
+            let (failure_count, error) = drain_scaling_tasks(&mut join_set).await;
+            task_failures += failure_count;
+            if first_task_error.is_none() {
+                first_task_error = error.map(|error| (*bucket_index, error));
             }
 
             tracing::debug!("Completed processing bucket {}", bucket_index);
@@ -738,7 +774,37 @@ async fn make_scaling_requests_for_table(
         }
     }
 
-    Ok(())
+    if let Some((bucket_index, error)) = first_task_error {
+        Err(error.context(format!(
+            "{task_failures} per-function scaling task(s) failed for table {table:?}; first failure was in bucket {bucket_index}"
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+async fn drain_scaling_tasks(join_set: &mut JoinSet<Result<()>>) -> (usize, Option<anyhow::Error>) {
+    let mut failures = 0usize;
+    let mut first_task_error = None;
+    let mut first_join_error = None;
+    while let Some(join_result) = join_set.join_next().await {
+        match join_result {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                failures += 1;
+                if first_task_error.is_none() {
+                    first_task_error = Some(error);
+                }
+            }
+            Err(join_error) => {
+                failures += 1;
+                if first_join_error.is_none() {
+                    first_join_error = Some(join_error.into());
+                }
+            }
+        }
+    }
+    (failures, first_task_error.or(first_join_error))
 }
 
 // Function that determines if we should skip a scaling request
@@ -816,6 +882,129 @@ mod tests {
     /// A VictoriaMetrics matrix response with no series (empty result).
     fn vm_empty() -> String {
         r#"{"status":"success","data":{"resultType":"matrix","result":[]}}"#.to_string()
+    }
+
+    #[test]
+    fn metric_environments_use_metric_family_label_values() {
+        assert_eq!(
+            MetricEnvironments::from_config("stg"),
+            MetricEnvironments {
+                aws: "stg",
+                worker: "stage",
+                control_plane: "staging",
+            }
+        );
+        assert_eq!(
+            MetricEnvironments::from_config("prd"),
+            MetricEnvironments {
+                aws: "prd",
+                worker: "prod",
+                control_plane: "production",
+            }
+        );
+        assert_eq!(
+            MetricEnvironments::from_config("prod"),
+            MetricEnvironments::from_config("prd")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_control_plane_utilization_query_aggregates_shared_function_pool() {
+        let fid = Uuid::new_v4();
+        let fvid = Uuid::new_v4();
+        let expected_query = format!(
+            r#"100 * sum by(function_id, function_version_id) (rate(function_request_latency_sum{{function_id="{fid}", function_version_id="{fvid}"}}[2m])) /
+            (avg by(function_id, function_version_id) (nvcf_function_instances_current{{function_id="{fid}", function_version_id="{fvid}"}}) * avg by(function_id, function_version_id) (nvcf_function_concurrency{{function_id="{fid}", function_version_id="{fvid}"}})) or vector(0)"#
+        );
+        let mut server = mockito::Server::new_async().await;
+        let _utilization = server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::UrlEncoded(
+                "query".to_string(),
+                expected_query,
+            ))
+            .with_status(200)
+            .with_body(vm_series(
+                &format!(r#""function_id":"{fid}","function_version_id":"{fvid}""#),
+                "42",
+            ))
+            .create_async()
+            .await;
+
+        let utilization = get_function_utilization_history(
+            &ts_client(server.url()),
+            &fid,
+            &fvid,
+            "stg",
+            true,
+            true,
+            5,
+            60,
+        )
+        .await
+        .expect("control-plane utilization");
+
+        assert_eq!(utilization, vec![(1_700_000_000, "42".to_string())]);
+    }
+
+    #[tokio::test]
+    async fn test_control_plane_utilization_query_uses_aws_environment_labels() {
+        let fid = Uuid::new_v4();
+        let fvid = Uuid::new_v4();
+        let mut server = mockito::Server::new_async().await;
+
+        for (configured_env, aws_env) in [("prd", "prd"), ("stg", "stg")] {
+            let expected_query = format!(
+                r#"100 * sum by(function_id, function_version_id) (rate(function_request_latency_sum{{function_id="{fid}", function_version_id="{fvid}", aws_env="{aws_env}"}}[2m])) /
+            (avg by(function_id, function_version_id) (nvcf_function_instances_current{{function_id="{fid}", function_version_id="{fvid}", aws_env="{aws_env}"}}) * avg by(function_id, function_version_id) (nvcf_function_concurrency{{function_id="{fid}", function_version_id="{fvid}", aws_env="{aws_env}"}})) or vector(0)"#
+            );
+            let query_mock = server
+                .mock("GET", "/api/v1/query_range")
+                .match_query(mockito::Matcher::UrlEncoded(
+                    "query".to_string(),
+                    expected_query,
+                ))
+                .with_status(200)
+                .with_body(vm_series(
+                    &format!(r#""function_id":"{fid}","function_version_id":"{fvid}""#),
+                    "42",
+                ))
+                .expect(1)
+                .create_async()
+                .await;
+
+            let utilization = get_function_utilization_history(
+                &ts_client(server.url()),
+                &fid,
+                &fvid,
+                configured_env,
+                true,
+                false,
+                5,
+                60,
+            )
+            .await
+            .expect("control-plane utilization");
+
+            assert_eq!(utilization, vec![(1_700_000_000, "42".to_string())]);
+            query_mock.assert_async().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn drain_scaling_tasks_preserves_inner_and_counts_join_errors() {
+        let mut join_set: JoinSet<Result<()>> = JoinSet::new();
+        join_set.spawn(async { Ok(()) });
+        join_set.spawn(async { Err(anyhow::anyhow!("sentinel task error")) });
+        join_set.spawn(async {
+            panic!("sentinel task panic");
+            #[allow(unreachable_code)]
+            Ok(())
+        });
+
+        let (failures, error) = drain_scaling_tasks(&mut join_set).await;
+        assert_eq!(failures, 2);
+        assert!(format!("{:#}", error.expect("first task error")).contains("sentinel task error"));
     }
 
     /// Worker series present -> use worker metrics, no control-plane fallback.

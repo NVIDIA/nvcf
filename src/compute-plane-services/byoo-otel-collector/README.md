@@ -127,7 +127,7 @@ Exposed Ports:
 
 The configuration produced by otelconfig-generator guarantees that only `otlp` telemetry and selected platform metrics are received, processed and exported by the collector using the generated configuration.
 
-### 🧩 Oversized Log Chunking
+### Oversized Log Chunking
 
 Some telemetry backends reject a single log entry when its body and attributes are larger than the backend's per-entry size limit. The BYOO collector can insert a custom `logchunk/byoo` processor into the logs pipeline to split oversized log bodies and attributes into correlated chunks before export. Maps and slices are traversed recursively, their string and byte leaves can be split, and each emitted fragment keeps the original partial map or slice type. Scalar values remain atomic.
 
@@ -138,7 +138,7 @@ Chunking is disabled by default. Configure it with:
 - `BYOO_LOG_CHUNK_MAX_BODY_BYTES`: deprecated alias for `BYOO_LOG_CHUNK_MAX_PAYLOAD_BYTES`. When both are set, `BYOO_LOG_CHUNK_MAX_PAYLOAD_BYTES` wins.
 - `BYOO_LOG_CHUNK_DRY_RUN`: records oversized-log metrics and warnings without mutating log payloads. Dry-run metric datapoints use `mode=dry_run`.
 - `BYOO_DEBUG_MODE`: enables collector debug logging and adds the `debug` exporter to every generated pipeline.
-- `BYOO_OTEL_COLLECTOR_CONFIG_B64`: optional base64-encoded JSON for advanced collector rendering overrides, such as exporterhelper timeout, retry, sending queue, sending queue batch, memory limiter, batch, and log batch settings.
+- `BYOO_OTEL_COLLECTOR_CONFIG_B64`: optional base64-encoded JSON for advanced collector rendering overrides, such as exporterhelper timeout, retry, sending queue, sending queue batch, memory limiter, batch, log batch, and separate log and trace sampler settings. Both samplers support sampling percentage, mode, hash seed, and fail closed. The log sampler also supports attribute source, source attribute, and sampling priority.
 - `BYOO_METRIC_SUBSET_ENABLED`: enables an additional OTLP-only metrics pipeline that exposes filtered user metrics through a Prometheus exporter on port `19091`. Disabled by default.
 - `BYOO_METRIC_SUBSET_FILTER_CONFIG`: optional YAML filter processor config for the metric subset pipeline. If unset, the default drops every metric except `BpsInstrument`, `FpsInstrument`, `RtdInstrument`, and `StageOpenDuration`, and drops datapoints/resources explicitly labeled `metric_subset_enabled=false`.
 - `BYOO_WORKLOAD_METRICS_DROP_LABELS`: comma-separated resource attribute names removed from the generated workload `metrics` pipeline. If unset, defaults to `metric_subset_enabled` only when the metric subset pipeline is enabled.
@@ -155,7 +155,7 @@ When chunking is enabled, each emitted chunk preserves the original log metadata
 
 `log.chunk.structured_paths` contains escaped JSON Pointer paths such as `/attributes/payload/messages/0/content`. Consumers can merge partial maps and slices by path in chunk-index order, concatenating repeated string or byte leaves.
 
-The processor emits `otelcol_processor_logchunk_*` metrics for oversized records, original bytes, emitted chunks, output bytes, and errors. The metric `mode` attribute distinguishes active chunking (`mode=chunk`) from dry run (`mode=dry_run`).
+The processor emits `otelcol_processor_logchunk_*` metrics for oversized records, original payload bytes, emitted chunks, and errors. The metric `mode` attribute distinguishes active chunking (`mode=chunk`) from dry run (`mode=dry_run`).
 
 Advanced collector config can enable exporterhelper byte batching with `sending_queue.batch.sizer=bytes` and configurable `min_size=max_size` where applicable. That exporter-side split limits serialized request size, but it cannot split a single oversized log record; the log chunk processor handles the per-record body limit.
 

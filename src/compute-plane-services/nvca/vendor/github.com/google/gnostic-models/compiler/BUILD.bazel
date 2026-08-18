@@ -14,11 +14,11 @@ go_library(
     importpath = "github.com/google/gnostic-models/compiler",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/google/gnostic-models/extensions",
-        "//vendor/github.com/google/gnostic-models/jsonschema",
-        "//vendor/go.yaml.in/yaml/v3:yaml",
-        "//vendor/google.golang.org/protobuf/proto",
-        "//vendor/google.golang.org/protobuf/types/known/anypb",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/gnostic-models/extensions",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/gnostic-models/jsonschema",
+        "//src/compute-plane-services/nvca/vendor/go.yaml.in/yaml/v3:yaml",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/proto",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/types/known/anypb",
     ],
 )
 

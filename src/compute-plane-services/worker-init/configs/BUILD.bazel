@@ -19,6 +19,6 @@ go_library(
     name = "configs",
     srcs = ["configs.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-init/configs",
-    visibility = ["//:__subpackages__"],
-    deps = ["//internal/downloader"],
+    visibility = ["//src/compute-plane-services/worker-init:__subpackages__"],
+    deps = ["//src/compute-plane-services/worker-init/internal/downloader"],
 )

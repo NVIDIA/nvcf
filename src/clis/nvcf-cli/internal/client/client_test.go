@@ -1210,6 +1210,9 @@ func TestLoadConfigUsesStateForActiveConfigFile(t *testing.T) {
 	t.Setenv("NVCF_TOKEN", "")
 	t.Setenv("NVCF_API_KEY", "")
 	t.Setenv("HOME", t.TempDir())
+	// Rebuild the state manager so it points at the temp HOME above;
+	// it is otherwise built at package init and reads the real one.
+	state.ResetDefaultStateManager()
 
 	configPath := filepath.Join(t.TempDir(), "nvcf-cli-local.yaml")
 	configBody := []byte(`
@@ -1253,5 +1256,92 @@ client_id: "nvcf-default"
 	}
 	if config.BaseHTTPURL != "http://api.localhost:8080" {
 		t.Fatalf("BaseHTTPURL = %q, want http://api.localhost:8080", config.BaseHTTPURL)
+	}
+}
+
+func TestLoadConfigAuthCredentials(t *testing.T) {
+	tests := []struct {
+		name string
+		env  map[string]string
+		// wantAuth is empty when LoadConfig must fail.
+		wantAuth AuthType
+		want     []string
+		omit     []string
+	}{
+		{
+			name: "nothing set",
+			want: []string{"NVCF_API_KEY or NVCF_TOKEN", "NVCF_OAUTH2_CLIENT_ID", "NVCF_OAUTH2_CLIENT_SECRET", "NVCF_OAUTH2_TOKEN_ENDPOINT"},
+		},
+		{
+			name: "partial oauth2 setup",
+			env: map[string]string{
+				"NVCF_OAUTH2_CLIENT_ID":     "client-id",
+				"NVCF_OAUTH2_CLIENT_SECRET": "client-secret",
+			},
+			want: []string{"NVCF_OAUTH2_TOKEN_ENDPOINT"},
+			omit: []string{"NVCF_OAUTH2_CLIENT_ID", "NVCF_OAUTH2_CLIENT_SECRET"},
+		},
+		{
+			name:     "api key set",
+			env:      map[string]string{"NVCF_API_KEY": "api-key"},
+			wantAuth: AuthTypeBearer,
+		},
+		{
+			name:     "token set",
+			env:      map[string]string{"NVCF_TOKEN": "token"},
+			wantAuth: AuthTypeBearer,
+		},
+		{
+			name: "complete oauth2 setup",
+			env: map[string]string{
+				"NVCF_OAUTH2_CLIENT_ID":      "client-id",
+				"NVCF_OAUTH2_CLIENT_SECRET":  "client-secret",
+				"NVCF_OAUTH2_TOKEN_ENDPOINT": "https://oauth2.localhost/token",
+			},
+			wantAuth: AuthTypeOAuth2,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			viper.Reset()
+			viper.SetEnvPrefix("NVCF")
+			viper.AutomaticEnv()
+			t.Cleanup(func() { viper.Reset() })
+			t.Setenv("HOME", t.TempDir())
+			// Rebuild the state manager so it points at the temp HOME above;
+			// it is otherwise built at package init and reads the real one.
+			state.ResetDefaultStateManager()
+			for _, key := range []string{"NVCF_API_KEY", "NVCF_TOKEN", "NVCF_OAUTH2_CLIENT_ID", "NVCF_OAUTH2_CLIENT_SECRET", "NVCF_OAUTH2_TOKEN_ENDPOINT"} {
+				t.Setenv(key, "")
+			}
+			for key, value := range tc.env {
+				t.Setenv(key, value)
+			}
+
+			config, err := LoadConfig()
+			if tc.wantAuth != "" {
+				if err != nil {
+					t.Fatalf("LoadConfig() error = %v, want success", err)
+				}
+				if config.AuthType != tc.wantAuth {
+					t.Fatalf("AuthType = %q, want %q", config.AuthType, tc.wantAuth)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("LoadConfig() = nil error, want missing credentials error")
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not name missing %s", err, want)
+				}
+			}
+			for _, omit := range tc.omit {
+				if strings.Contains(err.Error(), omit) {
+					t.Errorf("error %q names %s, which is set", err, omit)
+				}
+			}
+		})
 	}
 }

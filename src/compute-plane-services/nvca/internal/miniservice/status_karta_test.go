@@ -161,9 +161,94 @@ func TestLoadKartaDefinitions_LiveWithNilKind(t *testing.T) {
 		},
 	}
 
-	_, err := loadKartaDefinitions(context.Background(), []*kartav1alpha1.Karta{liveKarta})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "has no root component kind")
+	kartas, err := loadKartaDefinitions(context.Background(), []*kartav1alpha1.Karta{liveKarta})
+	require.NoError(t, err, "a malformed live karta must not fail agent startup")
+
+	embeddedKartas, err := getEmbeddedKartaDefinitions()
+	require.NoError(t, err)
+	assert.Equal(t, len(embeddedKartas), len(kartas), "live karta with no root component kind should be skipped")
+}
+
+// TestValidateKartaGVK covers the core API group, whose Group is empty by definition. A
+// cluster-installed krt-v1--pod Karta rooted at v1/Pod used to crashloop the agent on every
+// cluster with the Karta CRD installed.
+func TestValidateKartaGVK(t *testing.T) {
+	tests := []struct {
+		name    string
+		gvk     *kartav1alpha1.GroupVersionKind
+		wantErr string
+	}{
+		{
+			name:    "nil kind",
+			gvk:     nil,
+			wantErr: "has no root component kind",
+		},
+		{
+			name: "core group pod",
+			gvk:  &kartav1alpha1.GroupVersionKind{Group: "", Version: "v1", Kind: "Pod"},
+		},
+		{
+			name: "core group service",
+			gvk:  &kartav1alpha1.GroupVersionKind{Group: "", Version: "v1", Kind: "Service"},
+		},
+		{
+			name: "named group",
+			gvk:  &kartav1alpha1.GroupVersionKind{Group: "nvidia.com", Version: "v1alpha1", Kind: "DynamoGraphDeployment"},
+		},
+		{
+			name:    "empty group on a non-core kind",
+			gvk:     &kartav1alpha1.GroupVersionKind{Group: "", Version: "v1", Kind: "DynamoGraphDeployment"},
+			wantErr: "is not a core API resource",
+		},
+		{
+			name:    "empty group on a non-core version",
+			gvk:     &kartav1alpha1.GroupVersionKind{Group: "", Version: "v2", Kind: "Pod"},
+			wantErr: "is not a core API resource",
+		},
+		{
+			name:    "empty version",
+			gvk:     &kartav1alpha1.GroupVersionKind{Group: "foo.io", Version: "", Kind: "Foo"},
+			wantErr: "is missing version or kind",
+		},
+		{
+			name:    "empty kind",
+			gvk:     &kartav1alpha1.GroupVersionKind{Group: "foo.io", Version: "v1", Kind: ""},
+			wantErr: "is missing version or kind",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateKartaGVK(tt.gvk)
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestLoadKartaDefinitions_LiveWithCoreGroup(t *testing.T) {
+	liveKarta := &kartav1alpha1.Karta{
+		ObjectMeta: metav1.ObjectMeta{Name: "krt-v1--pod"},
+		Spec: kartav1alpha1.KartaSpec{
+			StructureDefinition: kartav1alpha1.StructureDefinition{
+				RootComponent: kartav1alpha1.ComponentDefinition{
+					Name: "pod",
+					Kind: &kartav1alpha1.GroupVersionKind{Group: "", Version: "v1", Kind: "Pod"},
+				},
+			},
+		},
+	}
+
+	kartas, err := loadKartaDefinitions(context.Background(), []*kartav1alpha1.Karta{liveKarta})
+	require.NoError(t, err, "an empty group denotes the core API group and must be accepted")
+
+	embeddedKartas, err := getEmbeddedKartaDefinitions()
+	require.NoError(t, err)
+	assert.Equal(t, len(embeddedKartas), len(kartas), "core-group karta has no embedded counterpart to override")
 }
 
 func TestLoadKartaDefinitions_LiveWithEmptyGVKFields(t *testing.T) {
@@ -172,7 +257,7 @@ func TestLoadKartaDefinitions_LiveWithEmptyGVKFields(t *testing.T) {
 		karta *kartav1alpha1.Karta
 	}{
 		{
-			name: "empty group",
+			name: "empty group on a non-core kind",
 			karta: &kartav1alpha1.Karta{
 				ObjectMeta: metav1.ObjectMeta{Name: "empty-group"},
 				Spec: kartav1alpha1.KartaSpec{
@@ -215,11 +300,14 @@ func TestLoadKartaDefinitions_LiveWithEmptyGVKFields(t *testing.T) {
 		},
 	}
 
+	embeddedKartas, err := getEmbeddedKartaDefinitions()
+	require.NoError(t, err)
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := loadKartaDefinitions(context.Background(), []*kartav1alpha1.Karta{tt.karta})
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "is missing group, version, or kind")
+			kartas, err := loadKartaDefinitions(context.Background(), []*kartav1alpha1.Karta{tt.karta})
+			require.NoError(t, err, "a malformed live karta must not fail agent startup")
+			assert.Equal(t, len(embeddedKartas), len(kartas), "karta with an incomplete gvk should be skipped")
 		})
 	}
 }

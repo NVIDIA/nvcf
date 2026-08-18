@@ -1,8 +1,13 @@
 # NVCF Compute Plane Releases
 #
-# Two optional releases — installed once per GPU cluster:
-#   grove-operator   — optional; topology-aware scheduling (addons.groveOperator.enabled)
-#   dynamo-operator  — optional; Dynamo inference framework scheduling (addons.dynamoOperator.enabled)
+# Optional releases, installed once per GPU cluster:
+#   kai-scheduler:           addons.kaiScheduler.enabled (required by grove/dynamo)
+#   nvcf-kai-topology:       KAI Topology CRs
+#                            (topologyAwareScheduling + kaiScheduler)
+#   grove-operator:          topology-aware scheduling (addons.groveOperator.enabled)
+#   nvcf-grove-topology:     Grove ClusterTopologyBinding CRs
+#                            (topologyAwareScheduling + groveOperator; needs KAI Topology)
+#   dynamo-operator:         Dynamo inference framework scheduling (addons.dynamoOperator.enabled)
 #
 # CLUSTER_NAME is required and scopes the registration values handoff file.
 # Run `make register-cluster CLUSTER_NAME=<name>` before `make install`.
@@ -16,6 +21,9 @@ environments:
 ---
 
 repositories:
+  - name: kai-scheduler
+    url: ghcr.io/kai-scheduler/kai-scheduler
+    oci: true
   - name: nvidia-ai-dynamo-grove
     url: ghcr.io/ai-dynamo/grove
     oci: true
@@ -33,30 +41,263 @@ helmDefaults:
 
 releases:
 
+  - name: kai-scheduler
+    # Required by grove-operator and dynamo-operator. Release name and namespace
+    # must be "kai-scheduler" per KAI installation requirements.
+    # Enable per-environment: addons.kaiScheduler.enabled: true
+    # Per-component resources can be overridden under addons.kaiScheduler.<component>.resources;
+    # defaults below match the managed SBOM template.
+    condition: addons.kaiScheduler.enabled
+    chart: kai-scheduler/kai-scheduler
+    version: v0.16.7
+    namespace: kai-scheduler
+    values:
+      - ../global.yaml.gotmpl
+      - {{- $kai := dig "kaiScheduler" dict .Values.addons }}
+        {{- $opRes := dig "operator" "resources" dict $kai }}
+        {{- $opReq := dig "requests" dict $opRes }}
+        {{- $opLim := dig "limits" dict $opRes }}
+        {{- $pgRes := dig "podgrouper" "resources" dict $kai }}
+        {{- $pgReq := dig "requests" dict $pgRes }}
+        {{- $pgLim := dig "limits" dict $pgRes }}
+        {{- $pgcRes := dig "podgroupcontroller" "resources" dict $kai }}
+        {{- $pgcReq := dig "requests" dict $pgcRes }}
+        {{- $pgcLim := dig "limits" dict $pgcRes }}
+        {{- $bdRes := dig "binder" "resources" dict $kai }}
+        {{- $bdReq := dig "requests" dict $bdRes }}
+        {{- $bdLim := dig "limits" dict $bdRes }}
+        {{- $schRes := dig "scheduler" "resources" dict $kai }}
+        {{- $schReq := dig "requests" dict $schRes }}
+        {{- $schLim := dig "limits" dict $schRes }}
+        {{- $qcRes := dig "queuecontroller" "resources" dict $kai }}
+        {{- $qcReq := dig "requests" dict $qcRes }}
+        {{- $qcLim := dig "limits" dict $qcRes }}
+        {{- $adRes := dig "admission" "resources" dict $kai }}
+        {{- $adReq := dig "requests" dict $adRes }}
+        {{- $adLim := dig "limits" dict $adRes }}
+        {{- $nsaRes := dig "nodescaleadjuster" "resources" dict $kai }}
+        {{- $nsaReq := dig "requests" dict $nsaRes }}
+        {{- $nsaLim := dig "limits" dict $nsaRes }}
+        {{- $npeRes := dig "numaPlacementExporter" "resources" dict $kai }}
+        {{- $npeReq := dig "requests" dict $npeRes }}
+        {{- $npeLim := dig "limits" dict $npeRes }}
+        global:
+          securityContext:
+            runAsUser: 10000
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+          {{- if .Values.global.nodeSelector.enabled }}
+          nodeSelector:
+            {{ .Values.global.nodeSelector.key | quote }}: {{ .Values.global.nodeSelector.value | quote }}
+          {{- end }}
+          {{- if .Values.global.imagePullSecrets }}
+          imagePullSecrets:
+          {{- toYaml .Values.global.imagePullSecrets | nindent 12 }}
+          {{- end }}
+          {{- if not (empty .Values.global.tolerations) }}
+          tolerations:
+          {{- toYaml .Values.global.tolerations | nindent 12 }}
+          {{- end }}
+
+        # Image names stay at chart defaults (ghcr.io/kai-scheduler/kai-scheduler/*).
+        # Managed SBOM uses kai-scheduler-* names with nv-ngc-devops; those do not
+        # resolve against the public chart registry.
+        operator:
+          resources:
+            requests:
+              cpu: {{ dig "cpu" "50m" $opReq }}
+              memory: {{ dig "memory" "256Mi" $opReq }}
+            limits:
+              cpu: {{ dig "cpu" "1000m" $opLim }}
+              memory: {{ dig "memory" "1Gi" $opLim }}
+
+        podgrouper:
+          resources:
+            requests:
+              cpu: {{ dig "cpu" "50m" $pgReq }}
+              memory: {{ dig "memory" "512Mi" $pgReq }}
+            limits:
+              cpu: {{ dig "cpu" "1000m" $pgLim }}
+              memory: {{ dig "memory" "4Gi" $pgLim }}
+
+        podgroupcontroller:
+          resources:
+            requests:
+              cpu: {{ dig "cpu" "50m" $pgcReq }}
+              memory: {{ dig "memory" "256Mi" $pgcReq }}
+            limits:
+              cpu: {{ dig "cpu" "1000m" $pgcLim }}
+              memory: {{ dig "memory" "1Gi" $pgcLim }}
+
+        binder:
+          resources:
+            requests:
+              cpu: {{ dig "cpu" "50m" $bdReq }}
+              memory: {{ dig "memory" "2Gi" $bdReq }}
+            limits:
+              cpu: {{ dig "cpu" "4000m" $bdLim }}
+              memory: {{ dig "memory" "4Gi" $bdLim }}
+
+        scheduler:
+          placementStrategy: binpack
+          plugins:
+            nodeplacement:
+              arguments:
+                gpu: binpack
+                cpu: spread
+          actions:
+            preempt:
+              enabled: false
+            consolidation:
+              enabled: false
+          resources:
+            requests:
+              cpu: {{ dig "cpu" "500m" $schReq }}
+              memory: {{ dig "memory" "3Gi" $schReq }}
+            limits:
+              cpu: {{ dig "cpu" "2000m" $schLim }}
+              memory: {{ dig "memory" "6Gi" $schLim }}
+
+        queuecontroller:
+          resources:
+            requests:
+              cpu: {{ dig "cpu" "50m" $qcReq }}
+              memory: {{ dig "memory" "256Mi" $qcReq }}
+            limits:
+              cpu: {{ dig "cpu" "1000m" $qcLim }}
+              memory: {{ dig "memory" "1Gi" $qcLim }}
+
+        admission:
+          resources:
+            requests:
+              cpu: {{ dig "cpu" "50m" $adReq }}
+              memory: {{ dig "memory" "256Mi" $adReq }}
+            limits:
+              cpu: {{ dig "cpu" "1000m" $adLim }}
+              memory: {{ dig "memory" "1Gi" $adLim }}
+
+        nodescaleadjuster:
+          resources:
+            requests:
+              cpu: {{ dig "cpu" "50m" $nsaReq }}
+              memory: {{ dig "memory" "256Mi" $nsaReq }}
+            limits:
+              cpu: {{ dig "cpu" "1000m" $nsaLim }}
+              memory: {{ dig "memory" "1Gi" $nsaLim }}
+
+        numaPlacementExporter:
+          resources:
+            requests:
+              cpu: {{ dig "cpu" "50m" $npeReq }}
+              memory: {{ dig "memory" "64Mi" $npeReq }}
+            limits:
+              cpu: {{ dig "cpu" "1000m" $npeLim }}
+              memory: {{ dig "memory" "1Gi" $npeLim }}
+
+        defaultQueue:
+          createDefaultQueue: true
+          parentName: default-parent-queue
+          childName: default-queue
+          parentResources:
+            cpu:
+              quota: -1
+              limit: -1
+              overQuotaWeight: 1
+            gpu:
+              quota: -1
+              limit: -1
+              overQuotaWeight: 1
+            memory:
+              quota: -1
+              limit: -1
+              overQuotaWeight: 1
+          childResources:
+            cpu:
+              quota: -1
+              limit: -1
+              overQuotaWeight: 1
+            gpu:
+              quota: -1
+              limit: -1
+              overQuotaWeight: 1
+            memory:
+              quota: -1
+              limit: -1
+              overQuotaWeight: 1
+    labels:
+      release-group: workers
+    wait: true
+    waitForJobs: true
+
+  - name: nvcf-kai-topology
+    # Cluster-scoped KAI Scheduler Topology resources (optional; disabled by
+    # default). Workloads opt in through the `kai.scheduler/topology`
+    # annotation so KAI places every replica of a StatefulSet inside a single
+    # clique instead of binding pods one at a time.
+    #
+    # Installed when addons.topologyAwareScheduling.enabled and
+    # addons.kaiScheduler.enabled are both true. Configure the Topology list
+    # under addons.topologyAwareScheduling.topologies.
+    #
+    # Requires the kai-scheduler release (and KAI v0.12.0 or later) for the
+    # native `kai.scheduler/v1alpha1` Topology CRD.
+    #
+    # Resources are cluster-scoped; the release lives in the nvca-operator
+    # namespace so lifecycle stays with NVCA-owned resources.
+    {{- $topoEnabled := dig "topologyAwareScheduling" "enabled" false .Values.addons }}
+    {{- $kaiEnabled := dig "kaiScheduler" "enabled" false .Values.addons }}
+    {{- if and $topoEnabled (not $kaiEnabled) }}
+    {{- fail "addons.topologyAwareScheduling.enabled requires addons.kaiScheduler.enabled" }}
+    {{- end }}
+    installed: {{ and $topoEnabled $kaiEnabled }}
+    chart: ../charts/nvcf-cluster-topology
+    namespace: nvca-operator
+    needs:
+      - kai-scheduler/kai-scheduler
+    values:
+      - topologies:
+        {{- toYaml (dig "topologyAwareScheduling" "topologies" list .Values.addons) | nindent 10 }}
+        kaiScheduler:
+          enabled: true
+        groveOperator:
+          enabled: false
+    labels:
+      release-group: workers
+    wait: true
+    waitForJobs: true
+
   - name: grove-operator
     # Topology-aware scheduling operator (optional; disabled by default).
     # Enable per-environment: addons.groveOperator.enabled: true
     condition: addons.groveOperator.enabled
+    # Minimum v0.1.0-alpha.10: earlier charts have no nodeSelector support and
+    # silently drop the nodeSelector set below, letting the operator schedule onto
+    # any node — including one whose architecture its image does not support.
     chart: nvidia-ai-dynamo-grove/grove-charts
-    version: v0.1.0-alpha.9
+    version: v0.1.0-alpha.11
     namespace: grove-system
+    needs:
+      - kai-scheduler/kai-scheduler
     values:
       - ../global.yaml.gotmpl
       - replicaCount: 1
         image:
           repository: ghcr.io/ai-dynamo/grove/grove-operator
-          tag: v0.1.0-alpha.9
+          tag: v0.1.0-alpha.11
         resources:
           limits:
             memory: 1Gi
           requests:
             cpu: 50m
             memory: 128Mi
-        {{- if .Values.global.nodeSelector.enabled -}}
+        {{- if .Values.global.nodeSelector.enabled }}
         nodeSelector:
-          {{ .Values.global.nodeSelector.key }}: {{ .Values.global.nodeSelector.value }}
+          {{ .Values.global.nodeSelector.key | quote }}: {{ .Values.global.nodeSelector.value | quote }}
         {{- end }}
-        {{- if not (empty .Values.global.tolerations) -}}
+        {{- if not (empty .Values.global.tolerations) }}
         tolerations:
         {{- toYaml .Values.global.tolerations | nindent 8 }}
         {{- end }}
@@ -77,9 +318,9 @@ releases:
               concurrentSyncs: 3
             podCliqueScalingGroup:
               concurrentSyncs: 3
-          {{- with .Values.addons.groveOperator.topologyAwareScheduling }}
+          {{- if dig "topologyAwareScheduling" "enabled" false .Values.addons }}
           topologyAwareScheduling:
-            {{- toYaml . | nindent 12 }}
+            enabled: true
           {{- end }}
           {{- with .Values.addons.groveOperator.network }}
           network:
@@ -102,6 +343,35 @@ releases:
         # Init container that SSAs Grove CRDs on every pod startup. Helm does not
         # upgrade CRDs on `helm upgrade`, so this covers both install and upgrade.
         crdInstaller:
+          enabled: true
+    labels:
+      release-group: workers
+    wait: true
+    waitForJobs: true
+
+  - name: nvcf-grove-topology
+    # Cluster-scoped Grove ClusterTopologyBinding resources (optional).
+    # Installed when addons.topologyAwareScheduling.enabled and
+    # addons.groveOperator.enabled are both true. Bindings are derived from
+    # addons.topologyAwareScheduling.topologies and reference the KAI Topology
+    # CRs created by nvcf-kai-topology.
+    #
+    # Waits on grove-operator (ClusterTopologyBinding CRD) and
+    # nvcf-kai-topology (Topology CRs referenced by topologyReference).
+    {{- $topoEnabled := dig "topologyAwareScheduling" "enabled" false .Values.addons }}
+    {{- $groveEnabled := dig "groveOperator" "enabled" false .Values.addons }}
+    installed: {{ and $topoEnabled $groveEnabled }}
+    chart: ../charts/nvcf-cluster-topology
+    namespace: nvca-operator
+    needs:
+      - grove-system/grove-operator
+      - nvca-operator/nvcf-kai-topology
+    values:
+      - topologies:
+        {{- toYaml (dig "topologyAwareScheduling" "topologies" list .Values.addons) | nindent 10 }}
+        kaiScheduler:
+          enabled: false
+        groveOperator:
           enabled: true
     labels:
       release-group: workers
@@ -131,7 +401,7 @@ releases:
                 cpu: 512m
                 memory: 1Gi
             replicas: 1
-            {{- if .Values.global.nodeSelector.enabled -}}
+            {{- if .Values.global.nodeSelector.enabled }}
             affinity:
               nodeAffinity:
                 requiredDuringSchedulingIgnoredDuringExecution:
@@ -142,7 +412,7 @@ releases:
                       values:
                       - {{ .Values.global.nodeSelector.value | quote }}
             {{- end }}
-            {{- if not (empty .Values.global.tolerations) -}}
+            {{- if not (empty .Values.global.tolerations) }}
             tolerations:
             {{- toYaml .Values.global.tolerations | nindent 12 }}
             {{- end }}
@@ -160,9 +430,15 @@ releases:
               enabled: true
               pvc:
                 enabled: true
-          {{- $ns := .Values.global.nodeSelector -}}
-          {{- $tol := .Values.global.tolerations -}}
-          {{- if or (and .Values.global.nodeSelector.enabled (not (empty $ns))) (not (empty $tol)) }}
+          {{- $ns := .Values.global.nodeSelector | default dict -}}
+          {{- $tol := .Values.global.tolerations | default list -}}
+          {{- $nsKey := dig "key" nil $ns -}}
+          {{- $nsValue := dig "value" nil $ns -}}
+          {{- /* Presence-based, so a configured `false` or `0` still counts as set. */ -}}
+          {{- $nsSet := and (not (kindIs "invalid" $nsKey)) (ne (toString $nsKey) "") -}}
+          {{- $nsSet = and $nsSet (not (kindIs "invalid" $nsValue)) (ne (toString $nsValue) "") -}}
+          {{- $nsOn := and (dig "enabled" false $ns) $nsSet -}}
+          {{- if or $nsOn (not (empty $tol)) }}
           podTemplate:
             merge:
               spec:
@@ -170,11 +446,9 @@ releases:
                 # JetStream PVC attachment in some clusters (e.g. OCI). Override
                 # this nodeSelector per environment when no `monitoring` node
                 # group exists (e.g. local k3d).
-                {{- with $ns }}
-                {{- if and .key .value }}
+                {{- if $nsOn }}
                 nodeSelector:
-                  {{ .key }}: {{ .value }}
-                {{- end }}
+                  {{ $nsKey | quote }}: {{ $nsValue | quote }}
                 {{- end }}
                 {{- with $tol }}
                 tolerations:

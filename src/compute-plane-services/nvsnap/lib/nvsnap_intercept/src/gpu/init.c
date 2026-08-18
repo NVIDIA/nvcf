@@ -174,9 +174,16 @@ static void nvsnap_atfork_child(void)
                       (int)getpid());
 }
 
+/* Defined in src/self_disable.c. Declared here rather than pulling in
+ * nvsnap_intercept.h, which this GPU sub-module otherwise does not use. */
+int nvsnap_self_disabled(void);
+
 __attribute__((constructor(102)))  /* After NvSnap init (101), before NvSnap atfork (103) */
 static void nvsnap_gpu_init(void)
 {
+    if (nvsnap_self_disabled())
+        return;
+
     nvsnap_config_init();
 
     const NvSnapConfig *cfg = nvsnap_config_get();

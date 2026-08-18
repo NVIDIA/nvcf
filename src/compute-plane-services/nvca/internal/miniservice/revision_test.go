@@ -55,12 +55,15 @@ func TestPrepareUpgradeIfNeeded(t *testing.T) {
 	nsName := "test-ns"
 	msName := "test-ms"
 
+	// Each case describes the MiniService generation and revision state before update detection,
+	// plus the expected lifecycle state after it runs.
 	tests := []struct {
 		name               string
 		generation         int64
 		observedGeneration int64
 		revision           int64
 		specValues         string
+		workloadConfig     *v1alpha1.WorkloadConfig
 		phase              v1alpha1.MiniServicePhase
 		existingCMs        []*corev1.ConfigMap
 		wantUpgrade        bool
@@ -77,6 +80,20 @@ func TestPrepareUpgradeIfNeeded(t *testing.T) {
 			wantUpgrade:        false,
 			wantRevision:       0,
 			wantPhase:          v1alpha1.MiniServiceInstalling,
+		},
+		{
+			name:               "workload config generation during initial install continues install",
+			generation:         2,
+			observedGeneration: 1,
+			revision:           0,
+			specValues:         `{"key": "initial"}`,
+			workloadConfig: &v1alpha1.WorkloadConfig{
+				FeatureFlags: map[string]bool{featureflag.StatusByWorkerReadiness: true},
+			},
+			phase:        v1alpha1.MiniServiceInstalling,
+			wantUpgrade:  false,
+			wantRevision: 0,
+			wantPhase:    v1alpha1.MiniServiceInstalling,
 		},
 		{
 			name:               "same generation, no upgrade",
@@ -160,6 +177,7 @@ func TestPrepareUpgradeIfNeeded(t *testing.T) {
 				Spec: v1alpha1.MiniServiceSpec{
 					Namespace:       nsName,
 					HelmChartConfig: testHelmConfig("https://helm.example.com/chart.tgz", tt.specValues),
+					WorkloadConfig:  tt.workloadConfig,
 				},
 				Status: v1alpha1.MiniServiceStatus{
 					Phase:              tt.phase,
@@ -200,6 +218,8 @@ func TestPrepareUpgradeIfNeeded(t *testing.T) {
 			assert.Equal(t, tt.wantPhase, ms.Status.Phase)
 			if tt.wantUpgrade {
 				assert.Nil(t, ms.Status.RenderDetails)
+			} else {
+				assert.NotNil(t, ms.Status.RenderDetails)
 			}
 		})
 	}

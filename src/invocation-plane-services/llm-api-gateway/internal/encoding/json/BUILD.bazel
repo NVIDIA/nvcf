@@ -23,15 +23,15 @@ go_library(
         "upstream.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/encoding/json",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/invocation-plane-services/llm-api-gateway:__subpackages__"],
     deps = [
-        "//internal/pool",
-        "//internal/ptr",
+        "//src/invocation-plane-services/llm-api-gateway/internal/pool",
+        "//src/invocation-plane-services/llm-api-gateway/internal/ptr",
     ],
 )
 
 alias(
     name = "go_default_library",
     actual = ":json",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/invocation-plane-services/llm-api-gateway:__subpackages__"],
 )

@@ -28,9 +28,9 @@ use pylon_lib::{
     ModelInitialization, ModelLifecycleConfig, ModelLifecycleHandle, ModelSource, PylonMetrics,
     PylonQueueMismatchRetryConfig, PylonRetryConfig, PylonRuntimeState, QuicHttpTunnelConfig,
     QuicHttpTunnelHandle, RequestQualityMonitorConfig, StatsCollectorConfig, StatsCollectorHandle,
-    TunnelForwardingConfig, start_engine_stats_stream, start_metrics_server, start_model_lifecycle,
-    start_quic_http_tunnel, start_stats_collector_with_engine_stats,
-    stats_aggregator_update_channel,
+    TunnelForwardingConfig, UpstreamBackend, UpstreamHealthPaths, start_engine_stats_stream,
+    start_metrics_server, start_model_lifecycle, start_quic_http_tunnel,
+    start_stats_collector_with_engine_stats, stats_aggregator_update_channel,
 };
 use reqwest::header::HeaderName;
 use stargate_proto::pb::InferenceServerStatus;
@@ -79,6 +79,8 @@ fn log_startup_complete(
             inference_server_id,
             cluster_id = %plan.cluster_id,
             upstream = %plan.upstream,
+            upstream_backend = %plan.upstream_backend,
+            priority_ceiling = plan.priority_ceiling,
             model_ids = ?model_ids,
             "pylon startup complete; stargate registration started (reverse tunnel mode)"
         );
@@ -89,6 +91,8 @@ fn log_startup_complete(
             cluster_id = %plan.cluster_id,
             inference_server_url = registration_inference_server_url,
             upstream = %plan.upstream,
+            upstream_backend = %plan.upstream_backend,
+            priority_ceiling = plan.priority_ceiling,
             model_ids = ?model_ids,
             "pylon startup complete; stargate registration started (direct tunnel mode)"
         );
@@ -101,9 +105,13 @@ pub(crate) struct PylonStartupPlan {
     model_source: ModelSource,
     pylon_retry: PylonRetryConfig,
     queue_mismatch_retry: PylonQueueMismatchRetryConfig,
+    upstream_backend: UpstreamBackend,
+    priority_ceiling: u32,
     model_initialization: ModelInitialization,
     bringup: BringupConfig,
     request_quality_monitor: RequestQualityMonitorConfig,
+    health_paths: UpstreamHealthPaths,
+    startup_health_wait: Duration,
     metrics_addr: SocketAddr,
     auth_token_provider: Option<Arc<AuthTokenProvider>>,
     backend_tunnel: BackendTunnelStartup,
@@ -146,6 +154,8 @@ impl PylonStartupPlan {
             model_source,
             pylon_retry: pylon_retry_config_from_args(args)?,
             queue_mismatch_retry: pylon_queue_mismatch_retry_config_from_args(args)?,
+            upstream_backend: args.pylon_upstream_backend,
+            priority_ceiling: args.pylon_priority_ceiling,
             model_initialization,
             bringup: BringupConfig {
                 enabled: !args.disable_bringup,
@@ -154,6 +164,8 @@ impl PylonStartupPlan {
                 canary_max_generation_threshold: args.canary_max_generation_threshold,
             },
             request_quality_monitor: request_quality_monitor_config_from_args(args),
+            health_paths: UpstreamHealthPaths::new(args.upstream_health_paths.clone()),
+            startup_health_wait: Duration::from_millis(args.upstream_health_wait_ms),
             metrics_addr: format!("{}:{}", args.metrics_host, args.metrics_port).parse()?,
             auth_token_provider: auth_token_provider_from_args(args),
             backend_tunnel: BackendTunnelStartup::from_args(args)?,
@@ -375,6 +387,8 @@ async fn start_pylon_runtime(args: &Args, plan: &PylonStartupPlan) -> Result<Run
             source: plan.model_source.clone(),
             initialization: plan.model_initialization.clone(),
             bringup: plan.bringup.clone(),
+            health_paths: plan.health_paths.clone(),
+            startup_health_wait: plan.startup_health_wait,
         },
         runtime_state.clone(),
         &stats_collector,
@@ -504,6 +518,9 @@ fn tunnel_forwarding_config_from_plan(
         metrics: Some(metrics),
         retry: plan.pylon_retry.clone(),
         queue_mismatch_retry: plan.queue_mismatch_retry.clone(),
+        upstream_backend: plan.upstream_backend,
+        priority_ceiling: plan.priority_ceiling,
+        upstream_health_paths: plan.health_paths.clone(),
         ..Default::default()
     }
 }
@@ -573,22 +590,22 @@ pub(crate) fn pylon_queue_mismatch_retry_config_from_args(
 
 fn model_initialization_from_args(args: &Args) -> Result<ModelInitialization> {
     ensure!(
-        args.do_calibration ^ args.initial_input_tps.is_some(),
-        "exactly one of --do-calibration or --initial-input-tps is required"
+        !(args.do_calibration && args.initial_input_tps.is_some()),
+        "--do-calibration and --initial-input-tps cannot be used together"
     );
     ensure!(
         args.initial_input_tps
             .is_none_or(|input_tps| input_tps.is_finite() && input_tps > 0.0),
         "initial input TPS must be finite and positive"
     );
+    ensure!(
+        !args.benchmark_pin_input_tps || args.initial_input_tps.is_some(),
+        "--benchmark-pin-input-tps requires --initial-input-tps"
+    );
     if args.do_calibration {
         ensure!(
             args.calibration_requests > 0,
             "--do-calibration requires --calibration-requests greater than zero"
-        );
-        ensure!(
-            !args.benchmark_pin_input_tps,
-            "--benchmark-pin-input-tps requires --initial-input-tps"
         );
         return Ok(ModelInitialization::Calibration(CalibrationConfig {
             health_timeout: Duration::from_millis(args.bringup_canary_timeout_ms),
@@ -599,11 +616,12 @@ fn model_initialization_from_args(args: &Args) -> Result<ModelInitialization> {
         }));
     }
 
-    Ok(ModelInitialization::ConfiguredInputTps {
-        input_tps: args
-            .initial_input_tps
-            .expect("exactly one bootstrap source was validated"),
-        pin: args.benchmark_pin_input_tps,
+    Ok(match args.initial_input_tps {
+        Some(input_tps) => ModelInitialization::ConfiguredInputTps {
+            input_tps,
+            pin: args.benchmark_pin_input_tps,
+        },
+        None => ModelInitialization::Uncalibrated,
     })
 }
 
@@ -824,6 +842,7 @@ mod tests {
         if state.calibration_request_errors {
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
+        tokio::time::sleep(Duration::from_millis(20)).await;
         Json(serde_json::json!({"usage": {"completion_tokens": 1}})).into_response()
     }
 
@@ -1005,6 +1024,8 @@ mod tests {
                     enabled: false,
                     ..BringupConfig::default()
                 },
+                health_paths: UpstreamHealthPaths::default(),
+                startup_health_wait: Duration::ZERO,
             },
             PylonRuntimeState::default(),
             &stats_collector,
@@ -1111,6 +1132,56 @@ mod tests {
 
         assert!(registration_url(&plan, Some(&tunnel)).starts_with("quic://127.0.0.1:"));
         tunnel.shutdown().await;
+    }
+
+    #[test]
+    fn upstream_backend_flows_from_args_to_forwarding_config() {
+        let (_, default_plan) = startup(&[]);
+        let forwarding = test_forwarding(&default_plan);
+        assert_eq!(forwarding.upstream_backend, UpstreamBackend::Dynamo);
+        assert_eq!(
+            forwarding.priority_ceiling,
+            pylon_lib::DEFAULT_PRIORITY_CEILING
+        );
+
+        let (_, passthrough_plan) = startup(&[
+            "--pylon-upstream-backend",
+            "passthrough",
+            "--pylon-priority-ceiling",
+            "600",
+        ]);
+        let forwarding = test_forwarding(&passthrough_plan);
+        assert_eq!(forwarding.upstream_backend, UpstreamBackend::Passthrough);
+        assert_eq!(forwarding.priority_ceiling, 600);
+    }
+
+    #[test]
+    fn upstream_health_paths_default_and_flow_to_the_forwarding_config() {
+        let (_, default_plan) = startup(&[]);
+        assert_eq!(
+            test_forwarding(&default_plan)
+                .upstream_health_paths
+                .probe_path(),
+            "/health"
+        );
+        assert_eq!(default_plan.startup_health_wait, Duration::from_secs(60));
+
+        let (_, configured_plan) = startup(&[
+            "--upstream-health-path",
+            "/v1/health/ready",
+            "--upstream-health-wait-ms",
+            "5000",
+        ]);
+        assert_eq!(
+            test_forwarding(&configured_plan)
+                .upstream_health_paths
+                .probe_path(),
+            "/v1/health/ready"
+        );
+        assert_eq!(
+            configured_plan.startup_health_wait,
+            Duration::from_millis(5000)
+        );
     }
 
     #[test]
@@ -1310,6 +1381,8 @@ mod tests {
                     enabled: false,
                     ..BringupConfig::default()
                 },
+                health_paths: UpstreamHealthPaths::default(),
+                startup_health_wait: Duration::ZERO,
             },
             runtime_state.clone(),
             &stats_collector,
@@ -1400,7 +1473,7 @@ mod tests {
                 "--calibration-max-concurrency",
                 "1",
                 "--bringup-calibration-timeout-ms",
-                "20",
+                "1000",
             ],
         );
         let plan = PylonStartupPlan::from_args(&args).expect("startup plan should build");
@@ -1411,13 +1484,13 @@ mod tests {
             Some("model-a")
         );
         control_plane.assert_no_calls();
-        upstream.calibration_release.add_permits(1);
+        upstream.calibration_release.add_permits(5);
         assert_eq!(
             upstream.calibration_started.recv().await.as_deref(),
             Some("model-b")
         );
         control_plane.assert_no_calls();
-        upstream.calibration_release.add_permits(1);
+        upstream.calibration_release.add_permits(5);
 
         let registration = control_plane.first_registration().await;
         assert_eq!(upstream.calibration_plans.load(Ordering::SeqCst), 2);
@@ -1431,7 +1504,7 @@ mod tests {
                 .as_ref()
                 .expect("first heartbeat should contain stats")
                 .last_mean_input_tps;
-            assert!(input_tps.is_finite());
+            assert!(input_tps.is_finite() && input_tps > 0.0);
         }
 
         startup
@@ -1459,7 +1532,7 @@ mod tests {
                 "--calibration-prompt-units",
                 "256",
                 "--bringup-calibration-timeout-ms",
-                "20",
+                "1000",
             ],
         );
         let plan = PylonStartupPlan::from_args(&args).expect("startup plan should build");
@@ -1469,7 +1542,7 @@ mod tests {
             upstream.calibration_started.recv().await.as_deref(),
             Some("model-a")
         );
-        upstream.calibration_release.add_permits(1);
+        upstream.calibration_release.add_permits(5);
         let runtime = startup
             .await
             .expect("pylon startup task should not panic")
@@ -1487,24 +1560,53 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invalid_bootstrap_source_selection_makes_zero_stargate_calls() {
+    async fn conflicting_bootstrap_sources_make_zero_stargate_calls() {
         let upstream = TestUpstream::spawn(false).await;
         let control_plane = TestControlPlane::spawn().await;
 
-        for bootstrap_args in [
-            Vec::<&str>::new(),
-            vec!["--do-calibration", "--initial-input-tps", "100"],
-        ] {
-            let args = runtime_args(
-                &upstream.base_url,
-                control_plane.addr,
-                &["model-a"],
-                &bootstrap_args,
+        let args = runtime_args(
+            &upstream.base_url,
+            control_plane.addr,
+            &["model-a"],
+            &["--do-calibration", "--initial-input-tps", "100"],
+        );
+        assert!(PylonStartupPlan::from_args(&args).is_err());
+        control_plane.assert_no_calls();
+
+        upstream.shutdown().await;
+        control_plane.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn uncalibrated_models_are_advertised_without_positive_input_tps() {
+        let upstream = TestUpstream::spawn(false).await;
+        let mut control_plane = TestControlPlane::spawn().await;
+        let args = runtime_args(
+            &upstream.base_url,
+            control_plane.addr,
+            &["model-a", "model-b"],
+            &[],
+        );
+        let plan = PylonStartupPlan::from_args(&args).expect("startup plan should build");
+        let runtime = start_pylon_runtime(&args, &plan)
+            .await
+            .expect("pylon startup should succeed");
+
+        let registration = control_plane.first_registration().await;
+        assert_eq!(upstream.calibration_requests.load(Ordering::SeqCst), 0);
+        assert_eq!(registration.models.len(), 2);
+        for model_id in ["model-a", "model-b"] {
+            assert_eq!(
+                registration.models[model_id]
+                    .stats
+                    .as_ref()
+                    .expect("first heartbeat should contain stats")
+                    .last_mean_input_tps,
+                0.0
             );
-            assert!(PylonStartupPlan::from_args(&args).is_err());
-            control_plane.assert_no_calls();
         }
 
+        runtime.shutdown().await;
         upstream.shutdown().await;
         control_plane.shutdown().await;
     }

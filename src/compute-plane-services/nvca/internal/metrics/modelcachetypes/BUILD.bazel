@@ -7,11 +7,11 @@ go_library(
     name = "modelcachetypes",
     srcs = ["types.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/modelcachetypes",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
 )
 
 alias(
     name = "go_default_library",
     actual = ":modelcachetypes",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
 )

@@ -12,8 +12,8 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/reval/service",
     visibility = ["//visibility:public"],
     deps = [
-        "//pkg/httpapi",
-        "//reval",
+        "//src/control-plane-services/helm-reval/pkg/httpapi",
+        "//src/control-plane-services/helm-reval/reval",
         "@com_github_go_chi_render//:render",
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/icms-translate/translate/common",
         "@io_k8s_apimachinery//pkg/runtime/schema",
@@ -36,7 +36,7 @@ go_test(
     ],
     embed = [":service"],
     deps = [
-        "//reval",
+        "//src/control-plane-services/helm-reval/reval",
         "@com_github_go_chi_render//:render",
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/icms-translate/translate/common",
         "@com_github_stretchr_testify//assert",

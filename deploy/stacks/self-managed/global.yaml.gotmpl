@@ -39,6 +39,11 @@ cassandra:
   replicaCount: {{ dig "cassandra" "replicaCount" 3 .Values }}
   resourcesPreset: {{ dig "cassandra" "resourcesPreset" "xlarge" .Values }}
 
+  {{- with dig "cassandra" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
   {{- with include "nvcf.nodeSelector" (dict "type" "cassandra" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}
@@ -154,7 +159,7 @@ openbao:
       {{- toYaml $webhook | nindent 6 }}
     {{- end }}
     podDisruptionBudget:
-      minAvailable: 1
+      minAvailable: {{ dig "openbao" "injector" "podDisruptionBudget" "minAvailable" 1 .Values }}
   server:
     image:
       registry: {{ .Values.global.image.registry }}
@@ -171,6 +176,12 @@ openbao:
       storageClass: {{ .Values.global.storageClass }}
       {{- end }}
       size: {{ .Values.global.storageSize | default "10Gi" }}
+
+    ha:
+      {{- with dig "openbao" "server" "ha" "disruptionBudget" dict .Values }}
+      disruptionBudget:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
 
 nats:
   {{- if .Values.global.imagePullSecrets }}
@@ -223,6 +234,11 @@ nats:
           storageClassName: {{ .Values.global.storageClass }}
   {{- end }}
 
+  {{- with dig "nats" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
 apikeys:
   fullnameOverride: api-keys
   {{- if .Values.global.imagePullSecrets }}
@@ -237,6 +253,10 @@ apikeys:
   {{- end }}
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
+  {{- end }}
+  {{- with dig "apikeys" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
   {{- end }}
 
 natsAuthCalloutService:
@@ -259,6 +279,65 @@ natsAuthCalloutService:
 {{- $invocationWorkerBaseURL := dig "invocationServiceURL" "" $workerEndpoints }}
 {{- $grpcProxyWorkerConnectURL := dig "grpcProxyWorkerConnectURL" "" $workerEndpoints }}
 {{- $grpcProxyWorkerConnectBaseURL := dig "grpcproxy" "workerConnectBaseURL" "" .Values | default $grpcProxyWorkerConnectURL }}
+{{- $llmRequestRouterGrpcPort := dig "addons" "llm" "requestRouter" "service" "grpcPort" 50071 .Values }}
+{{- $llmRequestRouterDefaultAddress := printf "llm-request-router.nvcf.svc.cluster.local:%v" $llmRequestRouterGrpcPort }}
+{{- $llmRequestRouterWorkerAddress := dig "llmRequestRouterAddress" "" $workerEndpoints | trim | default $llmRequestRouterDefaultAddress }}
+{{- $llmEnabled := dig "addons" "llm" "enabled" false .Values }}
+{{- if $llmEnabled }}
+{{- $llmRequestRouterWorkerAddressError := "global.workerEndpoints.llmRequestRouterAddress must use DNS-or-IPv4:port or [IPv6]:port with port 1-65535" }}
+{{- $llmRequestRouterDNSAddressPattern := `^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*:[0-9]{1,5}$` }}
+{{- $llmRequestRouterBracketedIPv6Pattern := `^\[[0-9A-Fa-f:.]+\]:[0-9]{1,5}$` }}
+{{- $llmRequestRouterWorkerAddressValid := regexMatch $llmRequestRouterDNSAddressPattern $llmRequestRouterWorkerAddress }}
+{{- if regexMatch $llmRequestRouterBracketedIPv6Pattern $llmRequestRouterWorkerAddress }}
+{{- $llmRequestRouterIPv6Host := regexFind `^\[[0-9A-Fa-f:.]+\]` $llmRequestRouterWorkerAddress | trimPrefix "[" | trimSuffix "]" }}
+{{- $llmRequestRouterIPv6Valid := true }}
+{{- $llmRequestRouterIPv6CompressionCount := len (regexFindAll `::` $llmRequestRouterIPv6Host -1) }}
+{{- if or (contains `:::` $llmRequestRouterIPv6Host) (gt $llmRequestRouterIPv6CompressionCount 1) }}
+{{- $llmRequestRouterIPv6Valid = false }}
+{{- end }}
+{{- if or (and (hasPrefix `:` $llmRequestRouterIPv6Host) (not (hasPrefix `::` $llmRequestRouterIPv6Host))) (and (hasSuffix `:` $llmRequestRouterIPv6Host) (not (hasSuffix `::` $llmRequestRouterIPv6Host))) }}
+{{- $llmRequestRouterIPv6Valid = false }}
+{{- end }}
+{{- $llmRequestRouterIPv6HexPart := $llmRequestRouterIPv6Host }}
+{{- $llmRequestRouterIPv6RequiredHextets := 8 }}
+{{- if contains `.` $llmRequestRouterIPv6Host }}
+{{- $llmRequestRouterIPv4OctetPattern := `(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]?|0)` }}
+{{- $llmRequestRouterIPv4SuffixPattern := printf `(^|:)(%s)(\.%s){3}$` $llmRequestRouterIPv4OctetPattern $llmRequestRouterIPv4OctetPattern }}
+{{- $llmRequestRouterIPv4Suffix := regexFind $llmRequestRouterIPv4SuffixPattern $llmRequestRouterIPv6Host | trimPrefix ":" }}
+{{- if not $llmRequestRouterIPv4Suffix }}
+{{- $llmRequestRouterIPv6Valid = false }}
+{{- else }}
+{{- $llmRequestRouterIPv6HexPart = trimSuffix $llmRequestRouterIPv4Suffix $llmRequestRouterIPv6Host }}
+{{- $llmRequestRouterIPv6RequiredHextets = 6 }}
+{{- end }}
+{{- end }}
+{{- $llmRequestRouterIPv6ExplicitHextets := 0 }}
+{{- range $llmRequestRouterIPv6Hextet := splitList `:` $llmRequestRouterIPv6HexPart }}
+{{- if $llmRequestRouterIPv6Hextet }}
+{{- $llmRequestRouterIPv6ExplicitHextets = add $llmRequestRouterIPv6ExplicitHextets 1 }}
+{{- if not (regexMatch `^[0-9A-Fa-f]{1,4}$` $llmRequestRouterIPv6Hextet) }}
+{{- $llmRequestRouterIPv6Valid = false }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if and (eq $llmRequestRouterIPv6CompressionCount 0) (ne $llmRequestRouterIPv6ExplicitHextets $llmRequestRouterIPv6RequiredHextets) }}
+{{- $llmRequestRouterIPv6Valid = false }}
+{{- end }}
+{{- if and (eq $llmRequestRouterIPv6CompressionCount 1) (ge $llmRequestRouterIPv6ExplicitHextets $llmRequestRouterIPv6RequiredHextets) }}
+{{- $llmRequestRouterIPv6Valid = false }}
+{{- end }}
+{{- if $llmRequestRouterIPv6Valid }}
+{{- $llmRequestRouterWorkerAddressValid = true }}
+{{- end }}
+{{- end }}
+{{- if not $llmRequestRouterWorkerAddressValid }}
+{{- fail $llmRequestRouterWorkerAddressError }}
+{{- end }}
+{{- $llmRequestRouterWorkerPort := regexFind `[0-9]{1,5}$` $llmRequestRouterWorkerAddress | atoi }}
+{{- if or (lt $llmRequestRouterWorkerPort 1) (gt $llmRequestRouterWorkerPort 65535) }}
+{{- fail $llmRequestRouterWorkerAddressError }}
+{{- end }}
+{{- end }}
 {{- $nvcfApiGrpcRouteHostnames := dig "ingress" "gatewayApi" "routes" "nvcfApi" "grpc" "hostnames" (list) .Values | default (list (printf "api-grpc.%s" .Values.global.domain)) }}
 {{- $nvctApiGrpcRouteHostnames := dig "ingress" "gatewayApi" "routes" "nvctApi" "grpc" "hostnames" (list) .Values | default (list (printf "tasks-grpc.%s" .Values.global.domain)) }}
 api:
@@ -280,6 +359,13 @@ api:
   {{- end }}
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
+  {{- end }}
+  {{- if $llmEnabled }}
+  remoteConfig:
+    configData:
+      nvcf:
+        llm-request-router:
+          worker-address: {{ $llmRequestRouterWorkerAddress | quote }}
   {{- end }}
   accountBootstrap:
     image:
@@ -333,20 +419,15 @@ api:
     NVCF_ESS_WORKER_BASE_URL: {{ . | quote }}
     NVCF_ESS_BASE_URL: {{ . | quote }}
     {{- end }}
-    NVCF_REGISTRIES_NGC_CONTAINER_REGISTRY_URL: "https://nvcr.io"
-    NVCF_REGISTRIES_NGC_BASE_URL: "https://api.ngc.nvidia.com"
-    NVCF_REGISTRIES_NGC_OAUTH2_BASE_URL: "https://authn.nvidia.com"
-    NVCF_REGISTRIES_NGC_OAUTH2_GROUP_SCOPE: "ngc"
-    NVCF_REGISTRIES_RECOGNIZED_CONTAINER_NGC_HOSTNAME: "nvcr.io"
-    NVCF_REGISTRIES_RECOGNIZED_HELM_NGC_HOSTNAME: "helm.ngc.nvidia.com"
-    NVCF_REGISTRIES_RECOGNIZED_HELM_NGC_OAUTH2_BASE_URL: "https://authn.nvidia.com"
-    NVCF_REGISTRIES_RECOGNIZED_HELM_NGC_OAUTH2_GROUP_SCOPE: "ngc"
-    NVCF_REGISTRIES_RECOGNIZED_MODEL_NGC_HOSTNAME: "api.ngc.nvidia.com"
-    NVCF_REGISTRIES_RECOGNIZED_MODEL_NGC_OAUTH2_BASE_URL: "https://authn.nvidia.com"
-    NVCF_REGISTRIES_RECOGNIZED_MODEL_NGC_OAUTH2_GROUP_SCOPE: "ngc"
-    NVCF_REGISTRIES_RECOGNIZED_RESOURCE_NGC_HOSTNAME: "api.ngc.nvidia.com"
-    NVCF_REGISTRIES_RECOGNIZED_RESOURCE_NGC_OAUTH2_BASE_URL: "https://authn.nvidia.com"
-    NVCF_REGISTRIES_RECOGNIZED_RESOURCE_NGC_OAUTH2_GROUP_SCOPE: "ngc"
+    {{- with dig "api" "icmsBaseUrl" nil .Values }}
+    NVCF_ICMS_BASE_URL: {{ . | quote }}
+    {{- end }}
+    {{- with dig "api" "jwt" "issuerUri" nil .Values }}
+    SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: {{ . | quote }}
+    {{- end }}
+    {{- with dig "api" "jwt" "jwkSetUri" nil .Values }}
+    SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: {{ . | quote }}
+    {{- end }}
     # Observability
     MANAGEMENT_TRACING_ENABLED: {{ .Values.global.observability.tracing.enabled | quote }}
     {{- if .Values.global.observability.tracing.enabled }}
@@ -384,7 +465,11 @@ invocation:
     {{- with $invocationWorkerBaseURL }}
     WORKER_STREAM_PROPERTIES__SELF_ADDRESS: {{ . | quote }}
     {{- end }}
-  
+  {{- with dig "invocation" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
 nvctApi:
   fullnameOverride: nvct-api
   {{- if .Values.global.imagePullSecrets }}
@@ -407,6 +492,15 @@ nvctApi:
     {{- with $essWorkerBaseURL }}
     NVCT_ESS_BASE_URL: {{ . | quote }}
     NVCT_ESS_WORKER_BASE_URL: {{ . | quote }}
+    {{- end }}
+    {{- with dig "nvctApi" "icmsBaseUrl" nil .Values }}
+    NVCT_ICMS_BASE_URL: {{ . | quote }}
+    {{- end }}
+    {{- with dig "nvctApi" "jwt" "issuerUri" nil .Values }}
+    SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: {{ . | quote }}
+    {{- end }}
+    {{- with dig "nvctApi" "jwt" "jwkSetUri" nil .Values }}
+    SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: {{ . | quote }}
     {{- end }}
     # Observability
     MANAGEMENT_TRACING_ENABLED: {{ .Values.global.observability.tracing.enabled }}
@@ -450,6 +544,10 @@ grpcproxy:
     RATE_LIMIT_ENABLED: "true"
     RATE_LIMIT_ADDR: "http://ratelimiter.nvcf.svc.cluster.local:7777"
     {{- end }}
+  {{- with dig "grpcproxy" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 
 rateLimiter:
   {{- if .Values.global.imagePullSecrets }}
@@ -468,6 +566,10 @@ rateLimiter:
   env:
     OTEL_EXPORTER_OTLP_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
   {{- end }}
+  {{- with dig "rateLimiter" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 
 ess:
   fullnameOverride: ess-api
@@ -477,7 +579,7 @@ ess:
   {{- end }}
   image:
     registry: {{ .Values.global.image.registry }}
-    repository: {{ .Values.global.image.repository }}/ess-api
+    repository: {{ .Values.global.image.repository }}/nvcf-ess
   {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}
@@ -491,6 +593,10 @@ ess:
     {{- if .Values.global.observability.tracing.enabled }}
     MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
     {{- end }}
+  {{- with dig "ess" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 
 notary:
   fullnameOverride: notary-service
@@ -576,6 +682,10 @@ adminIssuerProxy:
       name: {{ required "ingress.gatewayApi.gateways.shared.name is required" .Values.ingress.gatewayApi.gateways.shared.name }}
     hostname: "api-keys.{{ .Values.global.domain }}"
     path: "/v1/admin/keys"
+  {{- with dig "adminIssuerProxy" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 
 stateMetrics:
   enabled: false
@@ -644,6 +754,10 @@ functionautoscaler:
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
   {{- end }}
+  {{- with dig "functionautoscaler" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 {{- end }}
 
 reval:
@@ -663,6 +777,10 @@ reval:
   {{- end }}
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
+  {{- end }}
+  {{- with dig "reval" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
   {{- end }}
 
 llmApiGateway:
@@ -702,11 +820,17 @@ llmApiGateway:
       {{- if .Values.global.observability.tracing.enabled }}
       endpoint: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
       {{- end }}
+  {{- with dig "llmApiGateway" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 
 llmRequestRouter:
   enabled: {{ dig "addons" "llm" "enabled" false .Values }}
   fullnameOverride: llm-request-router
   replicaCount: {{ dig "addons" "llm" "requestRouter" "replicaCount" 3 .Values }}
+  service:
+    grpcPort: {{ $llmRequestRouterGrpcPort }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
     {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
@@ -780,6 +904,10 @@ llmRequestRouter:
     imagePullSecrets:
       {{- toYaml .Values.global.imagePullSecrets | nindent 6 }}
     {{- end }}
+  {{- end }}
+  {{- with dig "llmRequestRouter" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
   {{- end }}
 
 vanityGateway:

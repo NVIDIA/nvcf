@@ -14,6 +14,8 @@ At the time of writing, the pinned chart version is `v0.14.0`. See [NVCF KAI Sch
 
 ## Install
 
+When `addons.kaiScheduler.enabled` is true in `nvcf-compute-plane`, that stack installs KAI Scheduler for you. Skip this section in that case.
+
 ```bash
 cat > nvca-values.yaml << 'EOF'
 scheduler:

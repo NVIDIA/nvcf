@@ -7,6 +7,9 @@
 .idea/
 .vscode/
 *.swp
+# Per-user IntelliJ Bazel plugin project view and its generated project dir
+.bazelproject
+.ijwb/
 
 # AI agent local config (per-user settings, ephemeral plans)
 .claude/settings.local.json
@@ -28,6 +31,9 @@
 # Local CI/test artifacts.
 /public/
 /tests/bdd/out/
+
+# Maven build output. Bazel is the build path; target/ trees are transient.
+target/
 
 # Transient symlink created by root Makefile's link-secrets target;
 # points at ../../../../secrets/<env>-secrets.yaml (root-level user file).

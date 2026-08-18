@@ -4,7 +4,7 @@ go_library(
     name = "reloadableconfig",
     srcs = ["config.go"],
     importpath = "ai-api-gateway-service/internal/reloadableconfig",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/invocation-plane-services/vanity-gateway:__subpackages__"],
     deps = [
         "@com_github_fsnotify_fsnotify//:fsnotify",
         "@io_k8s_sigs_yaml//:yaml",
@@ -15,7 +15,7 @@ go_library(
 alias(
     name = "go_default_library",
     actual = ":reloadableconfig",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/invocation-plane-services/vanity-gateway:__subpackages__"],
 )
 
 go_test(

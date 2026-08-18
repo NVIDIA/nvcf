@@ -24,7 +24,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/NVIDIA/nvcf-go/pkg/nvkit/auth"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nkeys"
 	"go.uber.org/zap"

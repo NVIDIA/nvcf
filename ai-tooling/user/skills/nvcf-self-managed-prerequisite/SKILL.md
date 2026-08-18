@@ -35,7 +35,7 @@ One operator tool plus two cluster-level components the NVCA operator / compute 
 | Prereq | Why it is needed | Detail |
 | ------ | ------------------ | ------ |
 | `nvcf-cli` | The compute-plane stack's `make register-cluster` (and `install`/`apply`/`sync`, which abort without the registration values it writes) shells out to `nvcf-cli`. The shipped stack defaults to building it from a sibling `../cli` checkout that the release does not include, so a green-field repo fails with `ensure-nvcf-cli` / "Registration values not found". | See Step 0b below |
-| KAI Scheduler | `selfManaged.featureGateValues` includes `KAIScheduler`; NVCA polls `Queue` CRs and refuses to become healthy until their quotas are `-1` | [references/kai-scheduler.md](references/kai-scheduler.md) |
+| KAI Scheduler | `selfManaged.featureGateValues` includes `KAIScheduler`; NVCA polls `Queue` CRs and refuses to become healthy until their quotas are `-1`. Skip the standalone helm step below when `addons.kaiScheduler.enabled` is set in `nvcf-compute-plane` (required when enabling Grove or Dynamo). | [references/kai-scheduler.md](references/kai-scheduler.md) |
 | SMB CSI driver (`smb.csi.k8s.io`) | NVCA's `selfManaged.sharedStorage` runs Samba sidecar pods that export file shares; the resulting PVCs need this CSI driver to bind | [references/smb-csi.md](references/smb-csi.md) |
 
 The KAI Scheduler and SMB CSI installs are cloud-neutral helm commands pinned to NVCF-validated versions. These are upstream third-party charts (not NVCF images), so they are not in `manifest.yaml`; the per-component reference docs carry the current pin and link the NVCF docs version table. `nvcf-cli` is an operator workstation tool, not an in-cluster install.
@@ -81,6 +81,8 @@ make install CLUSTER_NAME=<name> HELMFILE_ENV=<env>
 ```
 
 ### 1 — KAI Scheduler
+
+Skip this step when `addons.kaiScheduler.enabled` is true in `nvcf-compute-plane`. That stack installs KAI Scheduler (release and namespace `kai-scheduler`). Enable that flag whenever Grove or Dynamo is enabled. Use the standalone install below when you need KAI without the compute-plane add-on (for example the NVCA `KAIScheduler` feature gate alone).
 
 ```bash
 cat > nvca-values.yaml << 'EOF'

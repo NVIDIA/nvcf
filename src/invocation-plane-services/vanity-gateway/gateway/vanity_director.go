@@ -21,6 +21,8 @@ import (
 	config "ai-api-gateway-service/gateway_config"
 	"ai-api-gateway-service/pool"
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -37,6 +39,10 @@ import (
 
 const NVCFPollSeconds string = "NVCF-POLL-SECONDS"
 const defaultNVCFPollSeconds config.SessionTimeoutSeconds = 300
+
+// 499 (nginx's non-standard "client closed request"). Telemetry-only: the
+// disconnected client can't receive it; it distinguishes a disconnect from a 502.
+const statusClientClosedRequest = 499
 
 // writeFunctionStatusError writes a 503 or 410 response if the function is offline or expired.
 // name is used in the EOL detail message; pass empty string for vanity/path-based endpoints.
@@ -72,6 +78,30 @@ func writeFunctionStatusError(writer http.ResponseWriter, offlineMessage string,
 		return true
 	}
 	return false
+}
+
+// clientClosedRequest is true only when the inbound request context is canceled
+// (the authoritative disconnect signal); a transport error wrapping
+// context.Canceled with a live context stays a genuine upstream fault (502).
+func clientClosedRequest(request *http.Request) bool {
+	return request != nil && errors.Is(request.Context().Err(), context.Canceled)
+}
+
+// writeProxyError: confirmed client disconnect => 499, everything else => 502.
+func writeProxyError(writer http.ResponseWriter, request *http.Request, err error) {
+	if clientClosedRequest(request) {
+		zap.L().Warn("client closed request before upstream response", zap.Error(err))
+		writer.Header().Set("Content-Type", "application/problem+json")
+		writer.WriteHeader(statusClientClosedRequest)
+		_ = json.NewEncoder(writer).Encode(ProblemDetails{
+			Type:   "about:blank",
+			Title:  "Client Closed Request",
+			Status: statusClientClosedRequest,
+			Detail: "Client closed the request before a response was produced.",
+		})
+		return
+	}
+	writeBadGatewayProblem(writer, request, err)
 }
 
 func writeBadGatewayProblem(writer http.ResponseWriter, _ *http.Request, err error) {
@@ -128,7 +158,7 @@ func NewVanityDirector(nvcfApiHost string, transport http.RoundTripper) (*Vanity
 		BufferPool:     pool.ByteSlice,
 		Transport:      transport,
 		ModifyResponse: modifyTooManyRequestsResponse,
-		ErrorHandler:   writeBadGatewayProblem,
+		ErrorHandler:   writeProxyError,
 	}
 	nvcfApiUrl, err := url.Parse(nvcfApiHost)
 	if err != nil || nvcfApiUrl.Scheme == "" || nvcfApiUrl.Host == "" {
@@ -209,7 +239,7 @@ func (d *VanityDirector) ServeExec(target VanityExecRequest, writer http.Respons
 	rp := *d.rp
 	rp.ErrorHandler = func(writer http.ResponseWriter, request *http.Request, err error) {
 		proxyErr = err
-		writeBadGatewayProblem(writer, request, err)
+		writeProxyError(writer, request, err)
 	}
 	rp.ServeHTTP(writer, request)
 	return proxyErr

@@ -69,8 +69,6 @@ spec:
             drop:
               - "ALL"
         args:
-          - /tini
-          - --
           - /usr/bin/nvca-operator-cleanup
           - --namespace
           - "{{ .Release.Namespace }}"

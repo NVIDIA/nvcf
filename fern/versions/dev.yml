@@ -53,6 +53,8 @@ navigation:
         path: ../../docs/user/nvcf-ui.md
       - page: Optional Enhancements
         path: ../../docs/user/optional-enhancements.md
+      - page: Pod Disruption Budgets
+        path: ../../docs/user/pod-disruption-budgets.md
       - page: LLM Function Enablement
         path: ../../docs/user/llm-function-enablement.md
       - page: LLM Request Router Load Balancing
@@ -69,6 +71,10 @@ navigation:
         path: ../../docs/user/cluster-management/multi-tenancy.md
       - page: KAI Scheduler
         path: ../../docs/user/cluster-management/kai-scheduler.md
+      - page: Gang Scheduling
+        path: ../../docs/user/cluster-management/gang-scheduling.md
+      - page: Topology-Aware Scheduling
+        path: ../../docs/user/cluster-management/topology-aware-scheduling.md
       - section: Low Latency Streaming
         skip-slug: true
         contents:

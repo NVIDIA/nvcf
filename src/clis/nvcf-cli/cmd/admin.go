@@ -210,10 +210,10 @@ func init() {
 	// Account update flags
 	accountsUpdateCmd.Flags().StringVar(&accountUpdateFlags.ncaId, "nca-id", "", "NVIDIA Cloud Account ID (required)")
 	accountsUpdateCmd.Flags().StringVar(&accountUpdateFlags.name, "name", "", "Human readable account/customer name (4-36 chars)")
-	accountsUpdateCmd.Flags().IntVar(&accountUpdateFlags.maxFunctions, "max-functions", -1, "Maximum number of functions allowed")
-	accountsUpdateCmd.Flags().IntVar(&accountUpdateFlags.maxTasks, "max-tasks", -1, "Maximum number of tasks allowed")
-	accountsUpdateCmd.Flags().IntVar(&accountUpdateFlags.maxTelemetries, "max-telemetries", -1, "Maximum number of telemetries allowed (max: 50)")
-	accountsUpdateCmd.Flags().IntVar(&accountUpdateFlags.maxRegistryCredentials, "max-registry-credentials", -1, "Maximum number of registry credentials allowed (max: 50)")
+	accountsUpdateCmd.Flags().IntVar(&accountUpdateFlags.maxFunctions, "max-functions", 0, "Maximum number of functions allowed")
+	accountsUpdateCmd.Flags().IntVar(&accountUpdateFlags.maxTasks, "max-tasks", 0, "Maximum number of tasks allowed")
+	accountsUpdateCmd.Flags().IntVar(&accountUpdateFlags.maxTelemetries, "max-telemetries", 0, "Maximum number of telemetries allowed (max: 50)")
+	accountsUpdateCmd.Flags().IntVar(&accountUpdateFlags.maxRegistryCredentials, "max-registry-credentials", 0, "Maximum number of registry credentials allowed (max: 50)")
 	accountsUpdateCmd.MarkFlagRequired("nca-id")
 
 	// Secret update function flags
@@ -308,7 +308,7 @@ func runAccountsList(cmd *cobra.Command, args []string) error {
 }
 
 func runAccountsUpdate(cmd *cobra.Command, args []string) error {
-	req, err := buildAccountUpdateRequest()
+	req, err := buildAccountUpdateRequest(cmd)
 	if err != nil {
 		return err
 	}
@@ -527,8 +527,14 @@ func requireAdminToken(cfg *client.Config) error {
 
 // loadAdminClient is the common preamble for every admin handler.
 // Centralises config load, NVCF_TOKEN fail-fast, and client construction.
+//
+// Uses LoadConfigWithoutAuth instead of LoadConfig: LoadConfig itself
+// hard-errors with a generic "set NVCF_API_KEY or NVCF_TOKEN" message when
+// both credentials are unset, which would fire before requireAdminToken
+// below ever runs and would incorrectly suggest NVCF_API_KEY for an Admin
+// Accounts operation.
 func loadAdminClient() (*client.Client, error) {
-	cfg, err := client.LoadConfig()
+	cfg, err := client.LoadConfigWithoutAuth()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load configuration: %w", err)
 	}
@@ -555,29 +561,46 @@ func warnInlineSecrets(used bool) {
 // buildAccountUpdateRequest validates the at-least-one-field rule and
 // constructs the AccountUpdateRequest from accountUpdateFlags. Extracted
 // to keep runAccountsUpdate below the cognitive-complexity threshold.
-func buildAccountUpdateRequest() (*client.AccountUpdateRequest, error) {
-	if accountUpdateFlags.name == "" && accountUpdateFlags.maxFunctions == -1 &&
-		accountUpdateFlags.maxTasks == -1 && accountUpdateFlags.maxTelemetries == -1 &&
-		accountUpdateFlags.maxRegistryCredentials == -1 {
+//
+// Flag presence is determined via cmd.Flags().Changed rather than a
+// sentinel default value, so a negative quota (e.g. --max-functions -2) is
+// rejected with a flag-specific error instead of being silently dropped
+// from the request.
+func buildAccountUpdateRequest(cmd *cobra.Command) (*client.AccountUpdateRequest, error) {
+	if accountUpdateFlags.name == "" && !cmd.Flags().Changed("max-functions") &&
+		!cmd.Flags().Changed("max-tasks") && !cmd.Flags().Changed("max-telemetries") &&
+		!cmd.Flags().Changed("max-registry-credentials") {
 		return nil, fmt.Errorf("at least one update field must be provided (--name, --max-functions, --max-tasks, --max-telemetries, --max-registry-credentials)")
 	}
 	req := &client.AccountUpdateRequest{}
 	if accountUpdateFlags.name != "" {
 		req.Name = accountUpdateFlags.name
 	}
-	if accountUpdateFlags.maxFunctions >= 0 {
+	if cmd.Flags().Changed("max-functions") {
+		if accountUpdateFlags.maxFunctions < 0 {
+			return nil, fmt.Errorf("--max-functions must be greater than or equal to 0")
+		}
 		req.MaxFunctionsAllowed = &accountUpdateFlags.maxFunctions
 	}
-	if accountUpdateFlags.maxTasks >= 0 {
+	if cmd.Flags().Changed("max-tasks") {
+		if accountUpdateFlags.maxTasks < 0 {
+			return nil, fmt.Errorf("--max-tasks must be greater than or equal to 0")
+		}
 		req.MaxTasksAllowed = &accountUpdateFlags.maxTasks
 	}
-	if accountUpdateFlags.maxTelemetries >= 0 {
+	if cmd.Flags().Changed("max-telemetries") {
+		if accountUpdateFlags.maxTelemetries < 0 {
+			return nil, fmt.Errorf("--max-telemetries must be greater than or equal to 0")
+		}
 		if accountUpdateFlags.maxTelemetries > 50 {
 			return nil, fmt.Errorf("max-telemetries cannot exceed 50")
 		}
 		req.MaxTelemetriesAllowed = &accountUpdateFlags.maxTelemetries
 	}
-	if accountUpdateFlags.maxRegistryCredentials >= 0 {
+	if cmd.Flags().Changed("max-registry-credentials") {
+		if accountUpdateFlags.maxRegistryCredentials < 0 {
+			return nil, fmt.Errorf("--max-registry-credentials must be greater than or equal to 0")
+		}
 		if accountUpdateFlags.maxRegistryCredentials > 50 {
 			return nil, fmt.Errorf("max-registry-credentials cannot exceed 50")
 		}
