@@ -1003,7 +1003,7 @@ func checkGatewayRoutes(ctx context.Context, client kubernetes.Interface, state 
 	if len(missing) > 0 {
 		printWarning(log, fmt.Sprintf("Route CR types not registered: %s", strings.Join(missing, ", ")))
 		state.Warnings = append(state.Warnings,
-			"Gateway Routes: route CR types missing — install Gateway API CRDs via nvcf up")
+			"Gateway Routes: route CR types missing; install Gateway API CRDs via nvcf up")
 		ok := false
 		state.GatewayRoutesOK = &ok
 		return
@@ -1117,7 +1117,7 @@ func sweepOrphanN2NDaemonSets(ctx context.Context, log *logrus.Entry, client kub
 	for i := range dsList.Items {
 		ds := &dsList.Items[i]
 		if ds.CreationTimestamp.After(cutoff) {
-			continue // still within TTL — might be a concurrent run
+			continue // still within TTL; might be a concurrent run
 		}
 		delCtx, delCancel := context.WithTimeout(ctx, 30*time.Second)
 		err := client.AppsV1().DaemonSets(nodeToNodeNamespace).Delete(delCtx, ds.Name,
@@ -1167,9 +1167,9 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 	}
 
 	if len(schedulable) < 2 {
-		printInfo(log, fmt.Sprintf("  %d schedulable node(s) — node-to-node check skipped", len(schedulable)))
+		printInfo(log, fmt.Sprintf("  %d schedulable node(s); node-to-node check skipped", len(schedulable)))
 		state.Warnings = append(state.Warnings,
-			"Node-to-Node: skipped — fewer than 2 schedulable nodes")
+			"Node-to-Node: skipped (fewer than 2 schedulable nodes)")
 		ok := true
 		state.NodeToNodeOK = &ok
 		return
@@ -1380,7 +1380,7 @@ var controlPlaneNamespaces = []string{
 // namespaces has readyReplicas >= spec.replicas. Any under-replicated Deployment
 // means HA headroom is gone and a second failure causes a full outage.
 //
-// The check is generic — no hardcoded Deployment names. New services added to
+// The check is generic; no hardcoded Deployment names. New services added to
 // those namespaces are automatically covered.
 //
 // Critical: under-replication means a single additional failure causes a full
@@ -1408,6 +1408,17 @@ func checkTier1Deployments(ctx context.Context, client kubernetes.Interface, sta
 			if d.Spec.Replicas != nil {
 				want = *d.Spec.Replicas
 			}
+			// Skip Deployments where a rolling update is in progress.
+			// During a rollout, readyReplicas transiently drops below
+			// spec.replicas even on healthy clusters. A rollout is in
+			// progress when the controller has not yet reconciled the
+			// generation (ObservedGeneration < Generation) or when not
+			// all pods have been updated (UpdatedReplicas < spec.replicas).
+			rollingOut := d.Status.ObservedGeneration < d.Generation ||
+				d.Status.UpdatedReplicas < want
+			if rollingOut {
+				continue
+			}
 			if d.Status.ReadyReplicas < want {
 				underReplicated = append(underReplicated,
 					fmt.Sprintf("%s/%s (ready: %d, want: %d)", ns, d.Name, d.Status.ReadyReplicas, want))
@@ -1428,7 +1439,7 @@ func checkTier1Deployments(ctx context.Context, client kubernetes.Interface, sta
 			printInfo(log, "  "+name)
 		}
 		state.Recommendations = append(state.Recommendations,
-			"Apply the Helmfile resilience profile (resilience.enabled=true) to bring Tier-1 services to >= 2 replicas.")
+			"Check for crashed or evicted pods in control-plane namespaces. If the resilience profile is not yet applied, enable it (resilience.enabled=true) to ensure Tier-1 services run with multiple replicas.")
 		ok := false
 		state.Tier1DeploymentsOK = &ok
 		return
@@ -1446,7 +1457,7 @@ func checkTier1Deployments(ctx context.Context, client kubernetes.Interface, sta
 //  1. readyReplicas == 3
 //  2. all 3 pods on distinct nodes
 //
-// The check is generic — no hardcoded StatefulSet names.
+// The check is generic; no hardcoded StatefulSet names.
 //
 // Critical: broken quorum or co-located peers leave the stack one failure
 // away from a total control-plane outage.

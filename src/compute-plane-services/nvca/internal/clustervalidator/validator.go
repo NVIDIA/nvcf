@@ -87,9 +87,13 @@ type ValidationState struct {
 	// NodeToNodeOK is nil when the check was skipped (single-node cluster or
 	// compute-plane role). true = overlay verified, false = failed.
 	NodeToNodeOK *bool
-	// Tier1DeploymentsOK is nil when no Deployments were found (pre-install).
+	// Tier1DeploymentsOK is nil when the check did not run (compute-plane role)
+	// or when a Deployment list call fails. Pre-install (no Deployments found)
+	// sets this to true, not nil.
 	Tier1DeploymentsOK *bool
-	// Tier2StatefulSetsOK is nil when no quorum StatefulSets (spec.replicas==3) were found.
+	// Tier2StatefulSetsOK is nil when the check did not run (compute-plane role)
+	// or when a StatefulSet list call fails. No quorum StatefulSets found
+	// (pre-install or non-HA install) sets this to true, not nil.
 	Tier2StatefulSetsOK *bool
 
 	// EndpointResults captures per-endpoint reachability outcomes for the
@@ -186,7 +190,7 @@ func Run(
 		checkGatewayRoutes(ctx, client, state)
 		checkExternalLoadBalancer(ctx, client, state)
 		// CLI RBAC bootstrap (Req 3) grants DaemonSet create/delete and
-		// pod-create before Job submission — no emitMetrics gate needed.
+		// pod-create before Job submission; no emitMetrics gate needed.
 		checkNodeToNode(ctx, client, state)
 		checkTier1Deployments(ctx, client, state)
 		checkTier2StatefulSets(ctx, client, state)

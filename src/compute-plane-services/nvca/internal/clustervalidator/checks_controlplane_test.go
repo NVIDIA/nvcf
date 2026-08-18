@@ -253,6 +253,66 @@ func TestCheckNodeToNode_UnschedulableNodesSkipped(t *testing.T) {
 	assert.True(t, *state.NodeToNodeOK, "no schedulable nodes must skip, not fail")
 }
 
+func TestCheckNodeToNode_TaintedNodeExcluded(t *testing.T) {
+	// Three nodes: two schedulable, one with a NoSchedule taint.
+	// DesiredNumberScheduled=2 (tainted node excluded by scheduler), so
+	// waitForDaemonSetPods must converge on 2 pods, not 3. If the old
+	// len(schedulable)=3 path were used the test would block until deadline.
+	n1 := makeNode("node-1", true, 0)
+	n2 := makeNode("node-2", true, 0)
+	n3 := makeNode("node-3", true, 0)
+	n3.Spec.Taints = []corev1.Taint{{
+		Key: "dedicated", Value: "gpu", Effect: corev1.TaintEffectNoSchedule,
+	}}
+
+	client := fake.NewSimpleClientset(n1, n2, n3)
+
+	// Capture DaemonSet labels (which include a random suffix) so the pod-list
+	// reactor can return pods that survive FakePods.List label filtering.
+	// capturedLabels is set synchronously by the daemonset create reactor
+	// before any list call, so no synchronisation is needed.
+	var capturedLabels map[string]string
+	client.PrependReactor("create", "daemonsets", func(action ktesting.Action) (bool, runtime.Object, error) {
+		ds := action.(ktesting.CreateAction).GetObject().(*appsv1.DaemonSet)
+		capturedLabels = ds.Labels
+		ds.Status.DesiredNumberScheduled = 2
+		return true, ds, nil
+	})
+
+	// Return 2 Running pods whose labels match the DaemonSet selector.
+	// FakePods.List filters by label after the reactor returns, so pods must
+	// carry the full label set including the random instance suffix.
+	client.PrependReactor("list", "pods", func(_ ktesting.Action) (bool, runtime.Object, error) {
+		lbl := capturedLabels
+		return true, &corev1.PodList{Items: []corev1.Pod{
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "s-1", Namespace: nodeToNodeNamespace, Labels: lbl},
+				Spec:       corev1.PodSpec{NodeName: "node-1"},
+				Status:     corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.1"},
+			},
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "s-2", Namespace: nodeToNodeNamespace, Labels: lbl},
+				Spec:       corev1.PodSpec{NodeName: "node-2"},
+				Status:     corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.2"},
+			},
+		}}, nil
+	})
+
+	// Fail checker pod creation so the test exits quickly without needing to
+	// simulate full pod lifecycle (no Get/poll needed).
+	client.PrependReactor("create", "pods", func(_ ktesting.Action) (bool, runtime.Object, error) {
+		return true, nil, fmt.Errorf("no pods scheduled")
+	})
+
+	state := &ValidationState{Log: testLog()}
+	checkNodeToNode(context.Background(), client, state)
+
+	// NodeToNodeOK must be non-nil: the check reached the checker-pod step,
+	// proving waitForDaemonSetPods did not block waiting for the tainted node.
+	require.NotNil(t, state.NodeToNodeOK, "check must not hang waiting for tainted node")
+	assert.False(t, *state.NodeToNodeOK, "NodeToNodeOK false because checker pod creation failed")
+}
+
 func TestCheckNodeToNode_DaemonSetCreateFailure(t *testing.T) {
 	// Two schedulable nodes, but DaemonSet creation fails.
 	client := fake.NewSimpleClientset(
@@ -280,3 +340,4 @@ func init() {
 		&corev1.Service{},
 	}
 }
+
