@@ -126,6 +126,18 @@ message ModelStats {
   // Sticky source labels for stat observations seen by this backend since the
   // model metrics state was initialized.
   repeated string stats_sources = 17;
+  // Absolute KV cache snapshot reported by the serving frontend. In shared
+  // clusters Stargate selects the freshest complete snapshot; it never sums
+  // replicated frontend observations.
+  optional KvCacheStats kv_cache = 18;
+}
+
+message KvCacheStats {
+  uint64 capacity_tokens = 1;
+  uint64 used_tokens = 2;
+  uint64 free_tokens = 3;
+  uint64 source_observed_at_unix_ms = 4;
+  bool complete = 5;
 }
 
 enum InferenceServerStatus {

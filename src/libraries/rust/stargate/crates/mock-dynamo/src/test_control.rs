@@ -15,6 +15,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use axum::Json;
 use axum::extract::{Path, State};
@@ -250,6 +251,21 @@ pub(crate) async fn test_control_snapshot(
     State(state): State<AppState>,
 ) -> Json<TestControlSnapshot> {
     Json(state.test_control.snapshot().await)
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct KvStatsTestControlUpdate {
+    pub(crate) enabled: bool,
+}
+
+pub(crate) async fn update_kv_stats_test_control(
+    State(state): State<AppState>,
+    Json(update): Json<KvStatsTestControlUpdate>,
+) -> axum::http::StatusCode {
+    state
+        .kv_stats_enabled
+        .store(update.enabled, Ordering::Relaxed);
+    axum::http::StatusCode::NO_CONTENT
 }
 
 pub(crate) fn request_class(headers: &HeaderMap) -> TestRequestClass {

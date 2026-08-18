@@ -601,8 +601,7 @@ pub(crate) fn stats_collector_config_from_args(
 ) -> StatsCollectorConfig {
     StatsCollectorConfig {
         openai_fallback_stats_enabled: args.engine_stats_stream == EngineStatsStreamMode::Off,
-        // Mock benchmark backends can expose live KV-cache occupancy over HTTP;
-        // real upstreams usually do not, so polling is explicit.
+        // Dynamo exposes this canonical stream independently from request stats.
         kv_cache_stats_url: args.kv_cache_stats_path.as_deref().map(|path| {
             format!(
                 "{}/{}",

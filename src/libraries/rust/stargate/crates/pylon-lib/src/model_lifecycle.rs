@@ -1275,10 +1275,10 @@ mod tests {
         let kv_cache = BlockingKvCacheServer::spawn().await;
         let stats_config = StatsCollectorConfig {
             kv_cache_stats_url: Some(kv_cache.url()),
-            // Poll quickly and keep the request open so retirement parks on
+            // Reconnect quickly and keep the request open so retirement parks on
             // stats cleanup after the canary ordering point under test.
-            kv_cache_poll_interval: Duration::from_millis(1),
-            kv_cache_request_timeout: Duration::from_secs(60),
+            kv_cache_reconnect_interval: Duration::from_millis(1),
+            kv_cache_connect_timeout: Duration::from_secs(60),
             ..StatsCollectorConfig::default()
         };
         let (runtime_state, observations) = PylonRuntimeState::observed(

@@ -318,6 +318,7 @@ fn shared_backend_a_stats() -> ModelStats {
         kv_cache_capacity_tokens: 1000,
         kv_cache_used_tokens: 100,
         kv_cache_free_tokens: 900,
+        kv_cache: None,
         num_running_queries: 11,
         max_engine_concurrency: 111,
         total_query_input_size: 1111,
@@ -343,6 +344,7 @@ fn shared_backend_b_stats() -> ModelStats {
         kv_cache_capacity_tokens: 2000,
         kv_cache_used_tokens: 500,
         kv_cache_free_tokens: 1500,
+        kv_cache: None,
         num_running_queries: 7,
         max_engine_concurrency: 77,
         total_query_input_size: 777,
@@ -1775,6 +1777,80 @@ fn cluster_backend_aggregate_dedupes_sources_and_averages_rtt() {
     sources.sort();
     assert_eq!(sources, vec!["shared", "source-a", "source-b"]);
     assert_eq!(stats.stats_sources.len(), 3);
+}
+
+#[test]
+fn shared_cluster_reconciles_kv_snapshots_without_summing() {
+    let mut backend_a = backend!("kv-cluster", "backend-a", 1.0, 10.0, 5);
+    backend_a.stats.kv_cache = Some(stargate_proto::pb::KvCacheStats {
+        capacity_tokens: 1_000,
+        used_tokens: 250,
+        free_tokens: 750,
+        source_observed_at_unix_ms: 200,
+        complete: true,
+    });
+    let cluster_state = RoutedClusterState::new(backend_a.registration.cluster_generation.clone());
+    cluster_state.upsert_backend(Arc::new(backend_a.clone()));
+
+    let mut backend_b = backend!(
+        backend_a.registration.cluster_generation.clone() =>
+        "kv-cluster", "backend-b", 1.0, 10.0, 5
+    );
+    backend_b.stats.kv_cache = Some(stargate_proto::pb::KvCacheStats {
+        capacity_tokens: 2_000,
+        used_tokens: 500,
+        free_tokens: 1_500,
+        source_observed_at_unix_ms: 300,
+        complete: false,
+    });
+    let backend_b_registration = backend_b.registration.clone();
+    cluster_state.upsert_backend(Arc::new(backend_b.clone()));
+
+    let snapshot = cluster_state
+        .routing_snapshot()
+        .expect("shared cluster should publish");
+    let kv_cache = snapshot
+        .stats
+        .kv_cache
+        .expect("fresh complete KV snapshot should be selected");
+    assert_eq!(kv_cache.capacity_tokens, 1_000);
+    assert_eq!(kv_cache.used_tokens, 250);
+    assert_eq!(snapshot.stats.kv_cache_capacity_tokens, 1_000);
+    assert_eq!(snapshot.stats.kv_cache_used_tokens, 250);
+    assert_eq!(snapshot.stats.kv_cache_free_tokens, 750);
+    assert!(!cluster_state.kv_cache_stats_disagree());
+
+    let backend_b_kv = backend_b.stats.kv_cache.as_mut().unwrap();
+    backend_b_kv.complete = true;
+    cluster_state.upsert_backend(Arc::new(backend_b.clone()));
+    let snapshot = cluster_state.routing_snapshot().unwrap();
+    assert_eq!(snapshot.stats.kv_cache.unwrap().capacity_tokens, 2_000);
+    assert!(cluster_state.kv_cache_stats_disagree());
+
+    let backend_b_kv = backend_b.stats.kv_cache.as_mut().unwrap();
+    backend_b_kv.used_tokens = 501;
+    cluster_state.upsert_backend(Arc::new(backend_b.clone()));
+    let snapshot = cluster_state.routing_snapshot().unwrap();
+    assert_eq!(snapshot.stats.kv_cache.unwrap().capacity_tokens, 1_000);
+    assert!(!cluster_state.kv_cache_stats_disagree());
+
+    let backend_b_kv = backend_b.stats.kv_cache.as_mut().unwrap();
+    backend_b_kv.used_tokens = 500;
+    backend_b_kv.source_observed_at_unix_ms = 200;
+    cluster_state.upsert_backend(Arc::new(backend_b));
+    let snapshot = cluster_state.routing_snapshot().unwrap();
+    let kv_cache = snapshot.stats.kv_cache.unwrap();
+    assert_eq!(kv_cache.capacity_tokens, 2_000);
+    assert_eq!(kv_cache.used_tokens, 500);
+    assert!(cluster_state.kv_cache_stats_disagree());
+
+    assert_eq!(
+        cluster_state.remove_backend(&backend_b_registration),
+        super::snapshots::ClusterBackendRemoval::Removed
+    );
+    let snapshot = cluster_state.routing_snapshot().unwrap();
+    assert_eq!(snapshot.stats.kv_cache.unwrap().capacity_tokens, 1_000);
+    assert!(!cluster_state.kv_cache_stats_disagree());
 }
 
 #[tokio::test]

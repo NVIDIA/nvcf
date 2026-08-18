@@ -16,13 +16,12 @@
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use serde::Deserialize;
 use stargate_protocol::common::valid_last_mean_input_tps;
 use tokio::time::Instant as TokioInstant;
 
 use crate::generated_request_id::{GeneratedRequestKind, generated_request_kind};
 use crate::runtime_state::ModelGeneration;
-use crate::{CurrentModelStats, PylonRuntimeState};
+use crate::{CurrentKvCacheStats, CurrentModelStats, PylonRuntimeState};
 
 use super::collector::{
     FinalizeRequestUpdate, RequestCounterUpdate, StatsAggregatorUpdate, StatsCollectorConfig,
@@ -40,12 +39,13 @@ pub(super) struct ModelMetricsState {
     pub(super) embedding_item_tps_sum: f64,
     pub(super) max_chat_output_tps: f64,
     pub(super) max_embedding_item_tps: f64,
-    pub(super) kv_cache: KvCacheStatsSnapshot,
+    pub(super) kv_cache: Option<KvCacheStatsSnapshot>,
     pub(super) input_tps_distribution: TpsDistribution,
     aggregate_state_counted: bool,
     pub(super) counter_output_tps_authoritative: bool,
     pub(super) chunk_usage_stats_observed: bool,
     pub(super) kv_cache_stats_observed: bool,
+    pub(super) kv_cache_received_at: Option<TokioInstant>,
     pub(super) engine_stream_stats_observed: bool,
     pub(super) last_stats_event_at: Option<TokioInstant>,
     pub(super) stats_observed_at_unix_ms: u64,
@@ -57,12 +57,20 @@ pub(super) struct GenerationMetricsState {
     pub(super) metrics: ModelMetricsState,
     pub(super) pinned_input_tps: Option<f64>,
 }
-#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct KvCacheStatsSnapshot {
     pub(super) model: String,
+    pub(super) aliases: Vec<String>,
     pub(super) kv_cache_capacity_tokens: u64,
     pub(super) kv_cache_used_tokens: u64,
     pub(super) kv_cache_free_tokens: u64,
+    pub(super) source_observed_at_unix_ms: u64,
+    pub(super) complete: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct KvCacheStatsEnvelope {
+    pub(super) models: Vec<KvCacheStatsSnapshot>,
 }
 struct RequestCounterState {
     generation: ModelGeneration,
@@ -453,6 +461,27 @@ impl StatsAggregator {
                         metrics.observe_engine_stats_stale_cleanup("stats", ENGINE_STATS_SOURCE);
                     }
                     push_dirty_model(&mut dirty_models, model_id.clone());
+                }
+            }
+        }
+
+        let kv_cache_ttl = self.config.kv_cache_stats_ttl;
+        if !kv_cache_ttl.is_zero() {
+            for (model_id, generation_state) in &mut self.per_model {
+                let state = &mut generation_state.metrics;
+                if state.kv_cache_received_at.is_some_and(|received_at| {
+                    now.saturating_duration_since(received_at) >= kv_cache_ttl
+                }) {
+                    state.kv_cache_received_at = None;
+                    if state.kv_cache.take().is_some() {
+                        state.stats_observed_at_unix_ms = current_unix_millis();
+                        tracing::warn!(
+                            model_id,
+                            ttl_ms = kv_cache_ttl.as_millis(),
+                            "clearing stale KV cache stats"
+                        );
+                        push_dirty_model(&mut dirty_models, model_id.clone());
+                    }
                 }
             }
         }
@@ -870,6 +899,7 @@ impl ModelMetricsState {
 
     pub(super) fn current_stats(&self, inputs: ModelStatsSnapshotInputs) -> CurrentModelStats {
         let (stats_capabilities, stats_sources) = self.stats_labels();
+        let kv_cache = self.kv_cache.as_ref().filter(|snapshot| snapshot.complete);
         let active_chat_output_tps = if self.counter_output_tps_authoritative {
             0.0
         } else {
@@ -889,9 +919,21 @@ impl ModelMetricsState {
             max_embedding_item_tps: self.max_embedding_item_tps,
             queue_size: inputs.queue_size,
             queued_input_size: inputs.queued_input_size,
-            kv_cache_capacity_tokens: self.kv_cache.kv_cache_capacity_tokens,
-            kv_cache_used_tokens: self.kv_cache.kv_cache_used_tokens,
-            kv_cache_free_tokens: self.kv_cache.kv_cache_free_tokens,
+            kv_cache_capacity_tokens: kv_cache
+                .map(|snapshot| snapshot.kv_cache_capacity_tokens)
+                .unwrap_or_default(),
+            kv_cache_used_tokens: kv_cache
+                .map(|snapshot| snapshot.kv_cache_used_tokens)
+                .unwrap_or_default(),
+            kv_cache_free_tokens: kv_cache
+                .map(|snapshot| snapshot.kv_cache_free_tokens)
+                .unwrap_or_default(),
+            kv_cache: kv_cache.map(|snapshot| CurrentKvCacheStats {
+                capacity_tokens: snapshot.kv_cache_capacity_tokens,
+                used_tokens: snapshot.kv_cache_used_tokens,
+                free_tokens: snapshot.kv_cache_free_tokens,
+                source_observed_at_unix_ms: snapshot.source_observed_at_unix_ms,
+            }),
             num_running_queries: inputs.num_running_queries,
             max_engine_concurrency: None,
             total_query_input_size: inputs.total_query_input_size,

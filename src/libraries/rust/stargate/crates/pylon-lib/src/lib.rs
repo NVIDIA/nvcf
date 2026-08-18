@@ -57,7 +57,9 @@ pub use request_observer::{
     RequestObservation, RequestObservationEndpoint, RequestObservationState,
 };
 pub use request_quality_monitor::RequestQualityMonitorConfig;
-pub use runtime_state::{CurrentModelStats, PylonRuntimeState, RequestObservationEvent};
+pub use runtime_state::{
+    CurrentKvCacheStats, CurrentModelStats, PylonRuntimeState, RequestObservationEvent,
+};
 pub use stats::{
     EngineStatsStreamConfig, EngineStatsStreamHandle, EngineStatsStreamMode, MetricsServerHandle,
     PylonMetrics, RequestCounterUpdate, RequestCounterUpdateInput, StatsAggregatorUpdate,

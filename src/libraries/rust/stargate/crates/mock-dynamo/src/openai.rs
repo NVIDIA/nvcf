@@ -14,11 +14,14 @@
 // limitations under the License.
 
 use axum::Json;
+use axum::body::{Body, Bytes};
 use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::OwnedSemaphorePermit;
 use tracing::info;
@@ -389,6 +392,52 @@ pub(crate) async fn kv_cache_stats(State(state): State<AppState>) -> Json<KvCach
     Json(state.kv_cache.lock().await.stats(&state.model_name))
 }
 
+pub(crate) async fn kv_cache_stats_stream(State(state): State<AppState>) -> Response {
+    if !state.kv_stats_enabled.load(Ordering::Relaxed) {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+    let stream = async_stream::stream! {
+        let mut interval = tokio::time::interval(Duration::from_secs(1));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut snapshot_id = 1_u64;
+        loop {
+            interval.tick().await;
+            if !state.kv_stats_enabled.load(Ordering::Relaxed) {
+                break;
+            }
+            let stats = state.kv_cache.lock().await.stats(&state.model_name);
+            let snapshot = serde_json::json!({
+                "v": 1,
+                "type": "kv_stats_snapshot",
+                "snapshot_id": snapshot_id,
+                "observed_at_unix_ms": unix_millis(),
+                "models": [{
+                    "model": stats.model,
+                    "aliases": [],
+                    "routing_cache": {
+                        "role": "aggregated",
+                        "capacity_tokens": stats.kv_cache_capacity_tokens,
+                        "used_tokens": stats.kv_cache_used_tokens,
+                        "free_tokens": stats.kv_cache_free_tokens,
+                        "complete": true
+                    },
+                    "pools": []
+                }]
+            });
+            snapshot_id = snapshot_id.saturating_add(1);
+            let mut line = serde_json::to_vec(&snapshot).expect("mock KV stats serialize");
+            line.push(b'\n');
+            yield Ok::<Bytes, Infallible>(Bytes::from(line));
+        }
+    };
+    let mut response = Response::new(Body::from_stream(stream));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/x-ndjson"),
+    );
+    response
+}
+
 impl AppState {
     async fn process_input_with_cache(
         &self,
@@ -617,4 +666,8 @@ fn rand_id() -> String {
 
 fn current_unix_timestamp() -> u64 {
     time_since_epoch().as_secs()
+}
+
+fn unix_millis() -> u64 {
+    u64::try_from(time_since_epoch().as_millis()).unwrap_or(u64::MAX)
 }

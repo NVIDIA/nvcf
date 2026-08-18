@@ -24,15 +24,17 @@ use crate::runtime_state::ModelGeneration;
 use crate::{CurrentModelStats, PylonRuntimeState, RequestObservationEvent};
 use stargate_runtime::OwnedTask;
 
-use super::aggregator::{ENGINE_STATS_SOURCE, KvCacheStatsSnapshot, StatsAggregator};
+use super::aggregator::{ENGINE_STATS_SOURCE, StatsAggregator};
+use super::kv_stats_stream::{KvStatsStreamConfig, run_kv_stats_stream};
 
 const DEFAULT_OBSERVATION_CHANNEL_CAPACITY: usize = 1024;
 const DEFAULT_SMOOTHING_WINDOW_SIZE: usize = 8;
 const DEFAULT_MIN_INPUT_TOKENS: u64 = 1;
 const DEFAULT_MIN_OUTPUT_TOKENS: u64 = 1;
 const DEFAULT_DURATION_FLOOR: Duration = Duration::from_millis(10);
-const DEFAULT_KV_CACHE_POLL_INTERVAL: Duration = Duration::from_secs(1);
-const DEFAULT_KV_CACHE_REQUEST_TIMEOUT: Duration = Duration::from_secs(1);
+const DEFAULT_KV_CACHE_RECONNECT_INTERVAL: Duration = Duration::from_secs(1);
+const DEFAULT_KV_CACHE_CONNECT_TIMEOUT: Duration = Duration::from_secs(1);
+const DEFAULT_KV_CACHE_STATS_TTL: Duration = Duration::from_secs(5);
 const DEFAULT_ENGINE_STATS_REQUEST_TTL: Duration = Duration::from_secs(300);
 const DEFAULT_ENGINE_STATS_MODEL_TTL: Duration = Duration::from_secs(30);
 const DEFAULT_ENGINE_STATS_SWEEP_INTERVAL: Duration = Duration::from_secs(1);
@@ -45,8 +47,9 @@ pub struct StatsCollectorConfig {
     pub min_output_tokens: u64,
     pub duration_floor: Duration,
     pub kv_cache_stats_url: Option<String>,
-    pub kv_cache_poll_interval: Duration,
-    pub kv_cache_request_timeout: Duration,
+    pub kv_cache_reconnect_interval: Duration,
+    pub kv_cache_connect_timeout: Duration,
+    pub kv_cache_stats_ttl: Duration,
     pub engine_stats_request_ttl: Duration,
     pub engine_stats_model_ttl: Duration,
     pub engine_stats_sweep_interval: Duration,
@@ -62,8 +65,9 @@ impl Default for StatsCollectorConfig {
             min_output_tokens: DEFAULT_MIN_OUTPUT_TOKENS,
             duration_floor: DEFAULT_DURATION_FLOOR,
             kv_cache_stats_url: None,
-            kv_cache_poll_interval: DEFAULT_KV_CACHE_POLL_INTERVAL,
-            kv_cache_request_timeout: DEFAULT_KV_CACHE_REQUEST_TIMEOUT,
+            kv_cache_reconnect_interval: DEFAULT_KV_CACHE_RECONNECT_INTERVAL,
+            kv_cache_connect_timeout: DEFAULT_KV_CACHE_CONNECT_TIMEOUT,
+            kv_cache_stats_ttl: DEFAULT_KV_CACHE_STATS_TTL,
             engine_stats_request_ttl: DEFAULT_ENGINE_STATS_REQUEST_TTL,
             engine_stats_model_ttl: DEFAULT_ENGINE_STATS_MODEL_TTL,
             engine_stats_sweep_interval: DEFAULT_ENGINE_STATS_SWEEP_INTERVAL,
@@ -329,9 +333,31 @@ async fn run_stats_collector(
 ) {
     let config = aggregator.config.clone();
     let runtime_state = aggregator.runtime_state.clone();
-    let http_client = reqwest::Client::new();
-    let mut kv_cache_poll = tokio::time::interval(config.kv_cache_poll_interval);
-    kv_cache_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let kv_stream_stop = stop.child_token();
+    let (mut kv_stats_rx, kv_stream_task) = if let Some(url) = config.kv_cache_stats_url.clone() {
+        let (tx, rx) = flume::bounded(config.observation_channel_capacity);
+        let stream_config = KvStatsStreamConfig {
+            url,
+            reconnect_interval: config.kv_cache_reconnect_interval,
+            connect_timeout: config.kv_cache_connect_timeout,
+            idle_timeout: if config.kv_cache_stats_ttl.is_zero() {
+                DEFAULT_KV_CACHE_STATS_TTL
+            } else {
+                config.kv_cache_stats_ttl
+            },
+        };
+        let stream_stop = kv_stream_stop.clone();
+        (
+            Some(rx),
+            Some(tokio::spawn(run_kv_stats_stream(
+                stream_config,
+                tx,
+                stream_stop,
+            ))),
+        )
+    } else {
+        (None, None)
+    };
     let mut engine_stats_sweep = tokio::time::interval(config.engine_stats_sweep_interval);
     engine_stats_sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut stats_aggregator_updated_models = Vec::with_capacity(2);
@@ -363,6 +389,19 @@ async fn run_stats_collector(
                     });
                 }
                 apply_collector_command(&mut aggregator, &runtime_state, command);
+            }
+            snapshot = async {
+                match &kv_stats_rx {
+                    Some(rx) => rx.recv_async().await.ok(),
+                    None => std::future::pending().await,
+                }
+            } => {
+                let Some(snapshot) = snapshot else {
+                    kv_stats_rx = None;
+                    continue;
+                };
+                let updates = aggregator.apply_kv_cache_snapshot(snapshot, TokioInstant::now());
+                publish_model_stats_updates(&runtime_state, updates);
             }
             event = observation_rx.recv_async() => {
                 let Ok(event) = event else {
@@ -418,33 +457,12 @@ async fn run_stats_collector(
                 }
                 publish_model_stats_updates(&runtime_state, updated_models);
             }
-            _ = kv_cache_poll.tick(), if config.kv_cache_stats_url.is_some() => {
-                let Some(kv_cache) = stop
-                    .run_until_cancelled(poll_kv_cache_stats(&config, &http_client))
-                    .await
-                else {
-                    break 'collector;
-                };
-                let Some(kv_cache) = kv_cache else {
-                    continue;
-                };
-                if kv_cache.model.is_empty() {
-                    tracing::warn!("dropping KV-cache stats without model id");
-                    continue;
-                }
-                let model_id = kv_cache.model.clone();
-                let Some((model_id, updated_stats)) = aggregator.apply_kv_cache_stats(kv_cache)
-                else {
-                    tracing::warn!(
-                        model_id,
-                        configured_models = ?aggregator.per_model.keys(),
-                        "dropping KV-cache stats for a model with no live generation"
-                    );
-                    continue;
-                };
-                publish_model_stats_update(&runtime_state, model_id, updated_stats);
-            }
         }
+    }
+
+    kv_stream_stop.cancel();
+    if let Some(task) = kv_stream_task {
+        let _ = task.await;
     }
 }
 
@@ -516,33 +534,6 @@ fn observe_aggregate_counts(aggregator: &StatsAggregator, runtime_state: &PylonR
     }
 }
 
-async fn poll_kv_cache_stats(
-    config: &StatsCollectorConfig,
-    http_client: &reqwest::Client,
-) -> Option<KvCacheStatsSnapshot> {
-    let url = config.kv_cache_stats_url.as_ref()?;
-    let response = http_client
-        .get(url)
-        .timeout(config.kv_cache_request_timeout)
-        .send()
-        .await
-        .inspect_err(|error| {
-            tracing::warn!(url, error = %error, "failed to poll KV-cache stats");
-        })
-        .ok()?;
-    if !response.status().is_success() {
-        tracing::warn!(url, status = %response.status(), "KV-cache stats endpoint returned non-success status");
-        return None;
-    }
-    response
-        .json()
-        .await
-        .inspect_err(|error| {
-            tracing::warn!(url, error = %error, "failed to parse KV-cache stats");
-        })
-        .ok()
-}
-
 fn drain_ready<T>(rx: &flume::Receiver<T>, mut consume: impl FnMut(T)) {
     for _ in 0..rx.len() {
         let Ok(value) = rx.try_recv() else { break };
@@ -564,8 +555,9 @@ fn retain_latest_model_updates(
 mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use super::super::aggregator::{KvCacheStatsSnapshot, StatsAggregator};
+    use super::super::aggregator::{KvCacheStatsEnvelope, KvCacheStatsSnapshot, StatsAggregator};
     use super::super::metrics::PylonMetrics;
     use super::super::projection::fallback_update_from_observation;
     use super::*;
@@ -1024,9 +1016,18 @@ mod tests {
     fn kv_cache_stats(model: &str) -> KvCacheStatsSnapshot {
         KvCacheStatsSnapshot {
             model: model.to_string(),
+            aliases: Vec::new(),
             kv_cache_capacity_tokens: 1_000,
             kv_cache_used_tokens: 400,
             kv_cache_free_tokens: 600,
+            source_observed_at_unix_ms: 1,
+            complete: true,
+        }
+    }
+
+    fn kv_cache_envelope(model: KvCacheStatsSnapshot) -> KvCacheStatsEnvelope {
+        KvCacheStatsEnvelope {
+            models: vec![model],
         }
     }
 
@@ -2326,7 +2327,7 @@ mod tests {
     );
 
     #[test]
-    fn snapshot_includes_polled_kv_cache_stats() {
+    fn snapshot_includes_streamed_kv_cache_stats() {
         let mut aggregator = test_aggregator(StatsCollectorConfig::default());
         let stats = aggregator
             .apply_kv_cache_stats(kv_cache_stats("model-a"))
@@ -2335,23 +2336,63 @@ mod tests {
         assert_stats!(stats; kv_cache_capacity_tokens: 1_000, kv_cache_used_tokens: 400, kv_cache_free_tokens: 600);
     }
 
+    #[test]
+    fn kv_cache_snapshot_matches_alias_and_replaces_atomically() {
+        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        let mut snapshot = kv_cache_stats("canonical-model");
+        snapshot.aliases.push("model-a".to_string());
+        let updates =
+            aggregator.apply_kv_cache_snapshot(kv_cache_envelope(snapshot), TokioInstant::now());
+        let stats = published_stats(updates);
+        assert_stats!(stats; kv_cache_capacity_tokens: 1_000, kv_cache_used_tokens: 400, kv_cache_free_tokens: 600);
+        assert!(stats.kv_cache.is_some());
+
+        let mut incomplete = kv_cache_stats("canonical-model");
+        incomplete.aliases.push("model-a".to_string());
+        incomplete.complete = false;
+        let updates =
+            aggregator.apply_kv_cache_snapshot(kv_cache_envelope(incomplete), TokioInstant::now());
+        let stats = published_stats(updates);
+        assert_stats!(stats; kv_cache_capacity_tokens: 0, kv_cache_used_tokens: 0, kv_cache_free_tokens: 0);
+        assert!(stats.kv_cache.is_none());
+    }
+
+    #[test]
+    fn stale_kv_cache_snapshot_expires_without_clearing_request_stats() {
+        let config = config!(kv_cache_stats_ttl: milliseconds(10));
+        let mut aggregator = test_aggregator(config);
+        aggregator.stream("req", (0, 0), false, Duration::ZERO);
+        let request_updates = aggregator.stream("req", (10, 4), false, milliseconds(100));
+        assert_eq!(published_stats(request_updates).output_tps, 40.0);
+
+        let received_at = TokioInstant::now();
+        aggregator
+            .apply_kv_cache_snapshot(kv_cache_envelope(kv_cache_stats("model-a")), received_at);
+        let updates = aggregator.sweep_stale(received_at + milliseconds(11));
+        let stats = published_stats(updates);
+        assert!(stats.kv_cache.is_none());
+        assert_eq!(stats.kv_cache_capacity_tokens, 0);
+        assert_eq!(stats.output_tps, 40.0);
+    }
+
     #[tokio::test]
-    async fn kv_cache_poll_updates_model_metrics() {
-        async fn kv_cache_stats() -> Json<serde_json::Value> {
-            Json(serde_json::json!({
-                "model": "model-a",
-                "kv_cache_capacity_tokens": 1000,
-                "kv_cache_used_tokens": 400,
-                "kv_cache_free_tokens": 600
-            }))
-        }
+    async fn kv_cache_stream_updates_model_metrics() {
+        const SNAPSHOT: &str = "{\"v\":1,\"type\":\"kv_stats_snapshot\",\"observed_at_unix_ms\":42,\"models\":[{\"model\":\"model-a\",\"aliases\":[],\"routing_cache\":{\"role\":\"decode\",\"capacity_tokens\":1000,\"used_tokens\":400,\"free_tokens\":600,\"complete\":true},\"pools\":[]}]}\n";
+        let requests = Arc::new(AtomicUsize::new(0));
+        let handler_requests = requests.clone();
         let metrics = PylonMetrics::new().expect("metrics should initialize");
-        let app = Router::new().route("/kv-cache", get(kv_cache_stats));
+        let app = Router::new().route(
+            "/kv-cache",
+            get(move || {
+                handler_requests.fetch_add(1, Ordering::Relaxed);
+                async { SNAPSHOT }
+            }),
+        );
         let (addr, server) = spawn_kv_cache_server(app).await;
         let config = config!(
             kv_cache_stats_url: Some(format!("http://{addr}/kv-cache")),
-            kv_cache_poll_interval: milliseconds(10),
-            kv_cache_request_timeout: seconds(1),
+            kv_cache_reconnect_interval: milliseconds(10),
+            kv_cache_connect_timeout: seconds(1),
         );
         let collector = RunningCollector::spawn(config, Some(metrics.clone()), false);
         let stats = collector
@@ -2360,10 +2401,24 @@ mod tests {
             })
             .await;
         assert_stats!(stats; kv_cache_capacity_tokens: 1000, kv_cache_used_tokens: 400, kv_cache_free_tokens: 600);
+        assert_eq!(
+            stats
+                .kv_cache
+                .as_ref()
+                .map(|stats| stats.source_observed_at_unix_ms),
+            Some(42)
+        );
         let body = metrics.gather_text().expect("metrics should encode");
         assert!(body.contains(r#"pylon_model_kv_cache_capacity_tokens{model="model-a"} 1000"#));
         assert!(body.contains(r#"pylon_model_kv_cache_used_tokens{model="model-a"} 400"#));
         assert!(body.contains(r#"pylon_model_kv_cache_free_tokens{model="model-a"} 600"#));
+        tokio::time::timeout(seconds(1), async {
+            while requests.load(Ordering::Relaxed) < 2 {
+                tokio::time::sleep(milliseconds(10)).await;
+            }
+        })
+        .await
+        .expect("finite KV stats responses should reconnect");
         tokio::time::timeout(seconds(2), collector.handle.shutdown())
             .await
             .expect("collector should stop");
@@ -2371,7 +2426,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stats_collector_shutdown_interrupts_blocked_kv_cache_poll() {
+    async fn stats_collector_shutdown_interrupts_blocked_kv_cache_connect() {
         let poll_entered = Arc::new(tokio::sync::Barrier::new(2));
         let server_poll_entered = poll_entered.clone();
         let app = Router::new().route(
@@ -2387,14 +2442,14 @@ mod tests {
         let (addr, server) = spawn_kv_cache_server(app).await;
         let config = config!(
             kv_cache_stats_url: Some(format!("http://{addr}/kv-cache")),
-            kv_cache_poll_interval: milliseconds(1),
-            kv_cache_request_timeout: seconds(60),
+            kv_cache_reconnect_interval: milliseconds(1),
+            kv_cache_connect_timeout: seconds(60),
         );
         let collector = RunningCollector::spawn(config, None, false);
         poll_entered.wait().await;
         let stopped = tokio::time::timeout(seconds(1), collector.handle.shutdown()).await;
         server.abort();
-        stopped.expect("collector shutdown should interrupt blocked KV-cache poll");
+        stopped.expect("collector shutdown should interrupt blocked KV-cache connect");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
