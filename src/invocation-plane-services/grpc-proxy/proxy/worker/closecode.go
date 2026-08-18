@@ -23,7 +23,10 @@ import (
 	"io"
 	"net"
 	"nvcf-grpc-proxy/proxy/metrics"
+	"strings"
 	"syscall"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/quic-go/quic-go"
 	"golang.org/x/net/http2"
@@ -50,6 +53,43 @@ const (
 	CloseCodeH2Connection         = metrics.CloseCodeH2Connection
 	CloseCodeUnknown              = metrics.CloseCodeUnknown
 )
+
+// maxDetailLen bounds peer-supplied text before it reaches logs or spans.
+// QUIC reason phrases and HTTP/2 debug data are meant to be short diagnostics,
+// but nothing in either protocol enforces that, and both are written by the
+// remote end.
+const maxDetailLen = 256
+
+// sanitizePeerText makes remote-supplied text safe to log.
+//
+// The reason phrase is the single most useful field here, because it is where a
+// peer says why it closed, so it is bounded rather than dropped. Truncating
+// caps how much a peer can push into the log stream, and stripping
+// non-printables stops newlines or control sequences being used to forge log
+// lines. Structured encoding already escapes these, so this is defence in
+// depth rather than the only guard.
+func sanitizePeerText(s string) string {
+	if s == "" {
+		return ""
+	}
+	truncated := false
+	if len(s) > maxDetailLen {
+		s = s[:maxDetailLen]
+		truncated = true
+	}
+	s = strings.Map(func(r rune) rune {
+		// Drop control characters and anything that failed UTF-8 decoding,
+		// which includes a rune cut in half by the truncation above.
+		if r == utf8.RuneError || !unicode.IsPrint(r) {
+			return -1
+		}
+		return r
+	}, s)
+	if truncated {
+		s += "[truncated]"
+	}
+	return s
+}
 
 // CloseInfo is the transport-level account of why a tunnel ended.
 type CloseInfo struct {
@@ -82,7 +122,7 @@ func ClassifyCloseError(err error) CloseInfo {
 	if errors.As(err, &appErr) {
 		return CloseInfo{
 			Code:   CloseCodeQUICApplication,
-			Detail: fmt.Sprintf("code=%d reason=%q", uint64(appErr.ErrorCode), appErr.ErrorMessage),
+			Detail: fmt.Sprintf("code=%d reason=%q", uint64(appErr.ErrorCode), sanitizePeerText(appErr.ErrorMessage)),
 			Remote: remote(appErr.Remote),
 		}
 	}
@@ -90,7 +130,7 @@ func ClassifyCloseError(err error) CloseInfo {
 	if errors.As(err, &transportErr) {
 		return CloseInfo{
 			Code:   CloseCodeQUICTransport,
-			Detail: fmt.Sprintf("code=%d reason=%q", uint64(transportErr.ErrorCode), transportErr.ErrorMessage),
+			Detail: fmt.Sprintf("code=%d reason=%q", uint64(transportErr.ErrorCode), sanitizePeerText(transportErr.ErrorMessage)),
 			Remote: remote(transportErr.Remote),
 		}
 	}
@@ -119,7 +159,7 @@ func ClassifyCloseError(err error) CloseInfo {
 	if errors.As(err, &goAwayErr) {
 		return CloseInfo{
 			Code:   CloseCodeH2GoAway,
-			Detail: fmt.Sprintf("code=%s last_stream=%d debug=%q", goAwayErr.ErrCode, goAwayErr.LastStreamID, goAwayErr.DebugData),
+			Detail: fmt.Sprintf("code=%s last_stream=%d debug=%q", goAwayErr.ErrCode, goAwayErr.LastStreamID, sanitizePeerText(goAwayErr.DebugData)),
 			Remote: remote(true),
 		}
 	}

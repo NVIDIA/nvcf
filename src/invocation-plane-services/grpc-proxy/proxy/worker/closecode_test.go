@@ -29,6 +29,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/quic-go/quic-go"
@@ -196,8 +197,10 @@ func boolPtr(b bool) *bool { return &b }
 
 type stubConn struct {
 	net.Conn
-	readErrs []error
-	n        int
+	readErrs  []error
+	writeErrs []error
+	n         int
+	w         int
 }
 
 func (s *stubConn) Read([]byte) (int, error) {
@@ -209,8 +212,15 @@ func (s *stubConn) Read([]byte) (int, error) {
 	return 0, nil
 }
 
-func (s *stubConn) Write(b []byte) (int, error) { return len(b), nil }
-func (s *stubConn) Close() error                { return nil }
+func (s *stubConn) Write(b []byte) (int, error) {
+	if s.w < len(s.writeErrs) {
+		err := s.writeErrs[s.w]
+		s.w++
+		return 0, err
+	}
+	return len(b), nil
+}
+func (s *stubConn) Close() error { return nil }
 
 func TestMarkClosedFirstWriterWins(t *testing.T) {
 	w := NewWorkerConnection(uuid.New(), "fn", "ver", func() {}, func() {})
@@ -238,5 +248,94 @@ func TestSetCloseErrorFirstWriterWinsAndIgnoresNil(t *testing.T) {
 	w.SetCloseError(errors.New("cascade"))
 	if got := w.CloseError(); !errors.Is(got, real) {
 		t.Errorf("CloseError() = %v, want %v", got, real)
+	}
+}
+
+func TestCloseFuncConnRecordsFirstWriteError(t *testing.T) {
+	first := errors.New("first write failure")
+	second := errors.New("second write failure")
+	fc := &CloseFuncConn{Conn: &stubConn{writeErrs: []error{first, second}}, onClose: func() {}}
+
+	_, _ = fc.Write([]byte("a"))
+	_, _ = fc.Write([]byte("b"))
+
+	if got := fc.FirstError(); !errors.Is(got, first) {
+		t.Errorf("FirstError() = %v, want %v: the first write failure must survive", got, first)
+	}
+}
+
+func TestCloseFuncConnFirstErrorSpansReadAndWrite(t *testing.T) {
+	writeErr := errors.New("write failed first")
+	readErr := errors.New("read failed after")
+	fc := &CloseFuncConn{
+		Conn:    &stubConn{writeErrs: []error{writeErr}, readErrs: []error{readErr}},
+		onClose: func() {},
+	}
+
+	_, _ = fc.Write([]byte("a"))
+	_, _ = fc.Read(make([]byte, 1))
+
+	if got := fc.FirstError(); !errors.Is(got, writeErr) {
+		t.Errorf("FirstError() = %v, want %v: first-writer-wins must hold across both directions", got, writeErr)
+	}
+}
+
+// Peer-supplied reason text reaches logs and spans, so it must be bounded and
+// stripped of anything that could forge a log line.
+func TestSanitizePeerText(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "empty stays empty", in: "", want: ""},
+		{name: "ordinary reason is preserved", in: "worker shutting down", want: "worker shutting down"},
+		{name: "newlines are stripped", in: "line one\nline two", want: "line oneline two"},
+		{name: "carriage returns are stripped", in: "a\r\nb", want: "ab"},
+		{name: "control characters are stripped", in: "a\x00\x07b", want: "ab"},
+		{name: "tabs are stripped", in: "a\tb", want: "ab"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sanitizePeerText(tc.in); got != tc.want {
+				t.Errorf("sanitizePeerText(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSanitizePeerTextTruncates(t *testing.T) {
+	got := sanitizePeerText(strings.Repeat("x", maxDetailLen*4))
+	if !strings.HasSuffix(got, "[truncated]") {
+		t.Errorf("long input was not marked truncated: %q", got)
+	}
+	if body := strings.TrimSuffix(got, "[truncated]"); len(body) != maxDetailLen {
+		t.Errorf("kept %d bytes, want %d", len(body), maxDetailLen)
+	}
+}
+
+// Truncating at a byte offset can split a multi-byte rune. The result must
+// still be valid UTF-8, or it corrupts whatever consumes the log.
+func TestSanitizePeerTextTruncationKeepsValidUTF8(t *testing.T) {
+	// Three-byte runes do not divide evenly into maxDetailLen, so this
+	// guarantees the cut lands mid-rune.
+	got := sanitizePeerText(strings.Repeat("世", maxDetailLen))
+	if !utf8.ValidString(got) {
+		t.Errorf("sanitized output is not valid UTF-8: %q", got)
+	}
+}
+
+// A peer must not be able to smuggle a fake field into the classified detail.
+func TestClassifyCloseErrorSanitizesPeerReason(t *testing.T) {
+	hostile := &quic.ApplicationError{
+		ErrorCode:    7,
+		ErrorMessage: "ok\n\tlevel=fatal msg=\"forged\"",
+	}
+	detail := ClassifyCloseError(hostile).Detail
+	if strings.ContainsAny(detail, "\n\r\t") {
+		t.Errorf("detail carries control characters from the peer: %q", detail)
+	}
+	if !strings.Contains(detail, "code=7") {
+		t.Errorf("detail lost the protocol code, which is the bounded part: %q", detail)
 	}
 }
