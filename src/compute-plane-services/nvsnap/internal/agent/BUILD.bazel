@@ -82,6 +82,7 @@ go_library(
 go_test(
     name = "agent_test",
     srcs = [
+        "rootfs_wholerootfs_guard_test.go",
         "advertise_test.go",
         "auth_test.go",
         "blob_uploader_test.go",
