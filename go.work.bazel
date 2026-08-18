@@ -51,5 +51,7 @@ use (
 	./src/compute-plane-services/ess-agent/api
 	./src/compute-plane-services/ess-agent/sdk
 	./src/control-plane-services/helm-reval
+	./src/control-plane-services/event-ledger
+	./src/control-plane-services/event-ledger/common
 	./src/compute-plane-services/byoo-otel-collector
 )
