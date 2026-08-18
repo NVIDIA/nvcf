@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Decide whether a change can affect generated dependency docs.
+# Reads changed repository paths on stdin, one per line.
+# Prints "true" or "false" on stdout.
+#
+# dependencies.md is produced by tools/collect-dependencies from dependency
+# manifests, so a change touching none of them cannot alter it. Regenerating
+# anyway costs about nine minutes per pull request, most of it spent building
+# each Java component's runtime inventory through Bazel.
+#
+# This fails closed. Anything unrecognised, and any failure to determine the
+# changed set, yields "true". A wrong "false" lets dependencies.md go stale
+# with a green check, which is the failure this whole job exists to catch; a
+# wrong "true" only costs time.
+#
+# The Java rule is the subtle one. java_deps.go builds runtime_inventory.json
+# through Bazel, so the inventory follows the build graph, not just
+# maven_install.json: moving an artifact between compile and runtime deps in a
+# Java component's BUILD.bazel changes the output with no manifest touched.
+# So BUILD.bazel and *.bzl count, but only under a registered Java component
+# root. That keeps a BUILD.bazel edit in a Go or Rust subtree out of scope,
+# which is the common case.
+#
+# Component roots are discovered from bazel-java-ci.json rather than listed
+# here, so a new Java service is covered the day it is added and this script
+# cannot drift out of date.
+#
+# This lives in a script rather than inline in
+# .github/workflows/license-dependencies.yml so the decision is testable; see
+# tools/ci/test-dependency-docs-scope.
+set -euo pipefail
+
+root="."
+if [ "${1:-}" = "--root" ]; then
+    root="${2:?--root needs a directory}"
+fi
+
+# Paths whose content feeds the generator directly, or which change how it runs.
+exact_paths=(
+    "imports.yaml"
+    "dependencies.md"
+    "MODULE.bazel"
+    "MODULE.bazel.lock"
+    "maven_install.json"
+    ".bazelversion"
+    ".github/workflows/license-dependencies.yml"
+    "tools/ci/check-dependency-docs"
+    "tools/ci/dependency-docs-scope"
+    "tools/ci/test-dependency-docs-scope"
+)
+
+# Manifest file names, matched anywhere in the tree.
+manifest_names=(
+    "go.mod"
+    "go.sum"
+    "Cargo.toml"
+    "pom.xml"
+    "bazel-java-ci.json"
+    "pyproject.toml"
+    "pnpm-lock.yaml"
+    "Chart.yaml"
+    "Chart.lock"
+)
+
+# Registered Java component roots, as repository-relative directory prefixes.
+java_roots=()
+while IFS= read -r descriptor; do
+    [ -n "${descriptor}" ] || continue
+    dir="${descriptor%/bazel-java-ci.json}"
+    dir="${dir#"${root}"/}"
+    java_roots+=("${dir}")
+done < <(find "${root}" -name bazel-java-ci.json -not -path '*/.git/*' 2>/dev/null || true)
+
+relevant() {
+    local path="$1" candidate name prefix
+
+    for candidate in "${exact_paths[@]}"; do
+        [ "${path}" = "${candidate}" ] && return 0
+    done
+
+    # The generator itself.
+    case "${path}" in
+        tools/collect-dependencies/*) return 0 ;;
+    esac
+
+    name="${path##*/}"
+    for candidate in "${manifest_names[@]}"; do
+        [ "${name}" = "${candidate}" ] && return 0
+    done
+
+    # Python requirements files carry a suffix more often than not
+    # (requirements-dev.txt, requirements.lock.txt).
+    case "${name}" in
+        requirements*.txt) return 0 ;;
+    esac
+
+    # Vendored Go source is read for license text, so its contents matter.
+    case "${path}" in
+        vendor/*|*/vendor/*) return 0 ;;
+    esac
+
+    # Bazel build graph, but only where it feeds a Java runtime inventory.
+    case "${name}" in
+        BUILD.bazel|BUILD|*.bzl)
+            for prefix in "${java_roots[@]}"; do
+                [ -n "${prefix}" ] || continue
+                case "${path}" in
+                    "${prefix}"/*) return 0 ;;
+                esac
+            done
+            ;;
+    esac
+
+    return 1
+}
+
+saw_input=false
+while IFS= read -r path; do
+    [ -n "${path}" ] || continue
+    saw_input=true
+    if relevant "${path}"; then
+        echo "true"
+        exit 0
+    fi
+done
+
+# No input at all means the caller could not work out what changed, so run.
+# A change set that is genuinely empty cannot reach here: GitHub does not
+# start a pull_request run without at least one changed file.
+if [ "${saw_input}" = false ]; then
+    echo "true"
+    exit 0
+fi
+
+echo "false"

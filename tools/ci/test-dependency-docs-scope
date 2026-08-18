@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Behavioral test for tools/ci/dependency-docs-scope.
+#
+# The two directions are not symmetric. A wrong "true" wastes nine minutes; a
+# wrong "false" lets dependencies.md go stale behind a green required check,
+# which is the one failure this job exists to prevent. So the cases that must
+# return "true" are asserted far more thoroughly than the ones that may
+# return "false", and every unrecognised or degenerate input is pinned to
+# "true" rather than left to chance.
+set -euo pipefail
+
+script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/dependency-docs-scope"
+
+# A tree shaped like the repository: two registered Java components, and Go
+# and Rust subtrees that also carry BUILD.bazel files.
+fixture="$(mktemp -d)"
+trap 'rm -rf "${fixture}"' EXIT
+mkdir -p "${fixture}/src/control-plane-services/cloud-tasks"
+mkdir -p "${fixture}/src/control-plane-services/api-keys"
+mkdir -p "${fixture}/src/compute-plane-services/nvsnap/internal/rootfsonly"
+mkdir -p "${fixture}/src/invocation-plane-services/ratelimiter"
+: > "${fixture}/src/control-plane-services/cloud-tasks/bazel-java-ci.json"
+: > "${fixture}/src/control-plane-services/api-keys/bazel-java-ci.json"
+
+fail=0
+
+check() {
+    local desc="$1" want="$2"
+    shift 2
+    local got
+    got="$(printf '%s\n' "$@" | bash "${script}" --root "${fixture}")"
+    if [ "${got}" = "${want}" ]; then
+        printf 'ok   %s\n' "${desc}"
+    else
+        printf 'FAIL %s: want %s, got %s\n' "${desc}" "${want}" "${got}"
+        fail=1
+    fi
+}
+
+# Manifests, per ecosystem. Each of these can change the generated output.
+check "go.mod"                    true  "src/x/go.mod"
+check "go.sum"                    true  "src/x/go.sum"
+check "vendored source"           true  "src/x/vendor/github.com/y/LICENSE"
+check "root vendored source"      true  "vendor/github.com/y/z.go"
+check "Cargo.toml"                true  "src/x/Cargo.toml"
+check "pom.xml"                   true  "src/x/pom.xml"
+check "pyproject.toml"            true  "tools/x/pyproject.toml"
+check "requirements.txt"          true  "tools/x/requirements.txt"
+check "suffixed requirements"     true  "tools/x/requirements-dev.txt"
+check "pnpm-lock.yaml"            true  "src/uis/nvcf-ui/pnpm-lock.yaml"
+check "Chart.yaml"                true  "deploy/helm/nats/Chart.yaml"
+check "Chart.lock"                true  "deploy/helm/nats/Chart.lock"
+
+# Repository-level inputs.
+check "imports.yaml"              true  "imports.yaml"
+check "dependencies.md itself"    true  "dependencies.md"
+check "MODULE.bazel"              true  "MODULE.bazel"
+check "MODULE.bazel.lock"         true  "MODULE.bazel.lock"
+check "maven_install.json"        true  "maven_install.json"
+check ".bazelversion"             true  ".bazelversion"
+check "the collector"             true  "tools/collect-dependencies/java_deps.go"
+check "the check script"          true  "tools/ci/check-dependency-docs"
+check "the scope script"          true  "tools/ci/dependency-docs-scope"
+check "this test"                 true  "tools/ci/test-dependency-docs-scope"
+check "the workflow"              true  ".github/workflows/license-dependencies.yml"
+
+# The Java build graph feeds runtime_inventory.json through Bazel, so a
+# BUILD.bazel under a registered component counts even with no manifest edit.
+check "Java component BUILD.bazel" true \
+    "src/control-plane-services/cloud-tasks/BUILD.bazel"
+check "nested Java BUILD.bazel"    true \
+    "src/control-plane-services/api-keys/svc/BUILD.bazel"
+check "Java component .bzl"        true \
+    "src/control-plane-services/cloud-tasks/defs.bzl"
+
+# The same file names outside a Java component cannot reach the inventory.
+# This is the #945 case: a Go subtree's BUILD.bazel.
+check "Go subtree BUILD.bazel"     false \
+    "src/compute-plane-services/nvsnap/internal/rootfsonly/BUILD.bazel"
+check "Rust subtree BUILD.bazel"   false \
+    "src/invocation-plane-services/ratelimiter/BUILD.bazel"
+
+# Ordinary source changes.
+check "Go source"                  false "src/compute-plane-services/nvsnap/main.go"
+check "Rust source"                false "src/invocation-plane-services/ratelimiter/src/lib.rs"
+check "Java source"                false \
+    "src/control-plane-services/cloud-tasks/src/main/java/A.java"
+check "markdown"                   false "docs/guide.md"
+check "an unrelated workflow"      false ".github/workflows/bazel.yml"
+check "a Helm template"            false "deploy/helm/nats/templates/svc.yaml"
+
+# Mixed change sets: one relevant path is enough.
+check "relevant among many"        true \
+    "src/x/main.go" "docs/a.md" "src/x/go.mod" "docs/b.md"
+check "none relevant"              false \
+    "src/x/main.go" "docs/a.md" "docs/b.md"
+
+# Fail closed. Losing the changed set must never be read as "nothing changed".
+check "no input at all"            true ""
+printf '' | {
+    got="$(bash "${script}" --root "${fixture}")"
+    if [ "${got}" = "true" ]; then
+        printf 'ok   %s\n' "empty stdin"
+    else
+        printf 'FAIL %s: want true, got %s\n' "empty stdin" "${got}"
+        fail=1
+    fi
+}
+
+# A path that matches nothing known is not assumed harmless.
+check "unknown manifest kind"      false "src/x/Gemfile.lock"
+
+if [ "${fail}" -ne 0 ]; then
+    echo "dependency-docs-scope: FAILED" >&2
+    exit 1
+fi
+echo "dependency-docs-scope: all checks passed"
