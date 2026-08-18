@@ -112,7 +112,9 @@ const (
 	// knob, by design: changing the path requires coordinated
 	// edits in both places, which a single config value can't
 	// safely express.
-	DefaultHostBundleRoot = "/var/lib/nvsnap/bundle"
+	// Under the containerd root so the bundle lands on the node's local disk
+	// rather than the boot volume, matching agent.hostPaths in the chart.
+	DefaultHostBundleRoot = "/var/lib/containerd/nvsnap-bundle"
 
 	// envOrigCommand and envOrigArgs are read by restore-entrypoint's
 	// cold-start fallback path (cmd/restore-entrypoint/main.go).

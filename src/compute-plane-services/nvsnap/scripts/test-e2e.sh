@@ -639,7 +639,16 @@ if [ "$CAPTURE_PATH" = "rootfs" ]; then
     log_info "Step 7: Waiting for rootfs capture (watcher auto-fires post-Ready + warmup)..."
     POD_UID=$(kubectl get pod $POD_NAME -n $NAMESPACE -o jsonpath='{.metadata.uid}')
     HASH=""
-    DEADLINE=$(( $(date +%s) + 900 ))  # 15 min — large captures take time
+    # Capture time scales with what has to be written, not with wall-clock
+    # patience: a 70B TP=4 cache dir is ~132 GB and takes ~28 min, so the old
+    # flat 15 min failed the test while the agent was still succeeding. Scale
+    # off the declared GPU count (a good enough proxy for model size) and let
+    # the caller override outright.
+    CAPTURE_GPUS=$(kubectl get pod $POD_NAME -n $NAMESPACE \
+        -o jsonpath='{.metadata.annotations.nvsnap\.io/gpus}' 2>/dev/null)
+    [ -n "$CAPTURE_GPUS" ] || CAPTURE_GPUS=1
+    CAPTURE_TIMEOUT="${NVSNAP_CAPTURE_TIMEOUT:-$(( 900 + 900 * (CAPTURE_GPUS - 1) ))}"
+    DEADLINE=$(( $(date +%s) + CAPTURE_TIMEOUT ))
     while [ "$(date +%s)" -lt "$DEADLINE" ]; do
         # Pick the most-recent ConfigMap whose manifest.json source_pod_meta
         # matches this pod (by name + namespace). Multiple may exist if
@@ -672,7 +681,7 @@ if matches:
         sleep 10
     done
     if [ -z "$HASH" ]; then
-        fail "Rootfs capture (no manifest CM appeared within 15min)"
+        fail "Rootfs capture (no manifest CM appeared within $(( CAPTURE_TIMEOUT / 60 ))min)"
     fi
     CHECKPOINT_ID="$HASH"     # downstream uses this name uniformly
     log_info "Capture hash: $HASH"
