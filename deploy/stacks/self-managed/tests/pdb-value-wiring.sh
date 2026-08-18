@@ -25,6 +25,7 @@ fail() {
 # self-managed alone is not a working stack.
 mkdir -p "$test_stacks_dir"
 cp -R "$stacks_dir"/. "$test_stacks_dir"
+mkdir -p "$(dirname "$secrets_file")"
 printf '{}\n' >"$secrets_file"
 
 # Every stack the copy reaches resolves ../environments/$HELMFILE_ENV.yaml
@@ -71,10 +72,20 @@ run_helmfile() {
 assert_single_release() {
   local release="$1"
 
-  # helmfile exits non-zero when a selector matches nothing, so the count has
-  # to survive that rather than take the whole script down with it.
-  local listed matches
-  listed="$(run_helmfile --selector "name=$release" list --skip-charts --output json 2>/dev/null || true)"
+  # helmfile exits non-zero both when a selector matches nothing and when the
+  # stack fails to render. Only the first is this check's business. Reporting a
+  # render failure as a missing release is the same misdirection this test was
+  # fixed for, so let it surface as itself.
+  local list_log="$work_dir/$release-list.log"
+  local listed status=0
+  listed="$(run_helmfile --selector "name=$release" list --skip-charts --output json 2>"$list_log")" ||
+    status=$?
+  if test "$status" -ne 0 && ! grep -Fq "no releases found" "$list_log"; then
+    cat "$list_log" >&2
+    fail "$release: helmfile could not render the stack"
+  fi
+
+  local matches
   matches="$(printf '%s' "${listed:-[]}" |
     jq -r --arg name "$release" '[.[] | select(.name == $name)] | length' 2>/dev/null || true)"
   test "${matches:-0}" = "1" ||
@@ -86,11 +97,15 @@ render_chart_values() {
   local output_file="$2"
   shift 2
 
-  run_helmfile \
+  local render_log="$work_dir/$release-write-values.log"
+  if ! run_helmfile \
     --selector "name=$release" \
     "$@" \
     write-values \
-    --output-file-template "$output_file"
+    --output-file-template "$output_file" 2>"$render_log"; then
+    cat "$render_log" >&2
+    fail "$release: helmfile could not render the stack"
+  fi
 
   test -s "$output_file" ||
     fail "$release: helmfile wrote no values to $output_file"
@@ -149,9 +164,8 @@ done
 # 1. Cassandra PDB - omitted (default off)
 # ---------------------------------------------------------------------------
 render_chart_values cassandra "$work_dir/cassandra-off-values.yaml" >/dev/null
-if grep -q "podDisruptionBudget:" "$work_dir/cassandra-off-values.yaml" &&
-  yq -e '.cassandra.podDisruptionBudget.enabled == true' \
-    "$work_dir/cassandra-off-values.yaml" >/dev/null 2>&1; then
+if yq -e '.cassandra.podDisruptionBudget.enabled == true' \
+  "$work_dir/cassandra-off-values.yaml" >/dev/null 2>&1; then
   fail "cassandra: PDB should be disabled by default but rendered enabled: true"
 fi
 
