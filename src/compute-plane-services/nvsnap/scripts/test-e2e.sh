@@ -794,17 +794,9 @@ else
         "$RESTORE_MANIFEST_TEMPLATE" > "$RESTORE_MANIFEST"
 fi
 
-# A template placeholder that survives substitution is not a cosmetic problem.
-# nvsnap.io/restore-from: "__CAPTURE_HASH__" gives the webhook nothing to
-# resolve, so it injects no storage and no cache env -- and the pod cold-starts
-# while looking exactly like a slow restore, model download included. Every
-# timing measured from that point is a cold-start number wearing a restore
-# label. Refuse to launch instead.
-if grep -nE '__[A-Z_]+__' "$RESTORE_MANIFEST"; then
-    log_error "Unsubstituted placeholder(s) above in $RESTORE_MANIFEST."
-    log_error "The webhook would ignore this pod and it would COLD START, not restore."
-    exit 1
-fi
+# See scripts/lib/restore-guard.sh: a surviving placeholder leaves the webhook
+# nothing to resolve, so the pod cold-starts while looking like a slow restore.
+assert_no_placeholders "$RESTORE_MANIFEST" || exit 1
 
 # Phase 5d: restore goes back to the simple hostPath mount on the
 # capture-source node (or the agent's EnsureLocal cascade materializes
