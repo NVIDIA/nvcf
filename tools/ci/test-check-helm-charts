@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Behavioral test for tools/ci/check-helm-charts.
+#
+# The point of the mapping table is that an unwired values file cannot land
+# silently, so assert the failure directly. A wiring loop that never fails is
+# indistinguishable from no loop at all. Each case builds a throwaway values
+# directory instead of depending on the real one, so these stay true as charts
+# come and go.
+#
+# The wiring checks run before helm is invoked, so this test needs no helm.
+set -euo pipefail
+
+script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-helm-charts"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+fail=0
+
+run() {  # run <values-dir> [chart-root] -> sets $out and $rc
+    local values_dir="$1" chart_root="${2:-${repo_root}/deploy/helm}"
+    set +e
+    out="$(bash "${script}" --values-dir "${values_dir}" --chart-root "${chart_root}" 2>&1)"
+    rc=$?
+    set -e
+}
+
+expect() {  # expect <desc> <want-rc> [substring]
+    local desc="$1" want="$2" substr="${3:-}"
+    if [ "${rc}" != "${want}" ]; then
+        printf 'FAIL %s: want exit %s, got %s\n%s\n' "${desc}" "${want}" "${rc}" "${out}"
+        fail=1
+        return
+    fi
+    if [ -n "${substr}" ] && ! printf '%s' "${out}" | grep -q -- "${substr}"; then
+        printf 'FAIL %s: output missing %q\n%s\n' "${desc}" "${substr}" "${out}"
+        fail=1
+        return
+    fi
+    printf 'ok   %s\n' "${desc}"
+}
+
+# A values file with no chart_map entry must fail, and must name the file.
+d="$(mktemp -d)"
+touch "${d}/brand-new-service.yaml"
+run "${d}"
+expect "unmapped values file fails" 1 "brand-new-service.yaml has no chart mapping"
+rm -rf "${d}"
+
+# A chart_map entry whose chart directory is gone must fail.
+d="$(mktemp -d)"
+empty_charts="$(mktemp -d)"
+touch "${d}/cassandra.yaml"
+run "${d}" "${empty_charts}"
+expect "missing chart directory fails" 1 "which has no Chart.yaml"
+rm -rf "${d}" "${empty_charts}"
+
+# An empty values directory must fail rather than report success over nothing.
+d="$(mktemp -d)"
+run "${d}"
+expect "empty values directory fails" 1 "no values files in"
+rm -rf "${d}"
+
+# A missing values directory must fail.
+run "/nonexistent/helm-validate-values"
+expect "missing values directory fails" 1 "values directory not found"
+
+exit "${fail}"

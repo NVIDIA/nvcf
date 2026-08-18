@@ -50,6 +50,66 @@ jobs:
       - name: Run go-lib codegen freshness check
         run: ./tools/ci/check-go-codegen src/libraries/go/lib --install k8s.io/code-generator/cmd/deepcopy-gen@v0.34.2 --command 'make codegen-update'
 
+  helm-charts:
+    name: helm charts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # Pinned and checksum-verified rather than floating latest, so a chart
+      # that renders today keeps rendering the same way tomorrow. helmfile
+      # v1.2.0+ processes helmfile.d/ in parallel and breaks the ordering the
+      # self-managed stack relies on, so stay on v1.1.x. deploy/stacks
+      # requires helm v3.x.
+      - name: Install helm and helmfile (pinned, checksum-verified)
+        env:
+          HELM_VERSION: "3.21.4"
+          HELM_SHA256: "61f88ab166748cb19604d7884cb100ae9ccb13804ddeb98e08af167eacbb6a14"
+          HELMFILE_VERSION: "1.1.9"
+          HELMFILE_SHA256: "ee71196bb12460905b8cbe0ef67b28db51ef681b777cc212d8c0956475b51905"
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}"
+          curl -sSL --retry 3 -o helm.tar.gz \
+            "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz"
+          echo "${HELM_SHA256}  helm.tar.gz" | sha256sum -c -
+          tar xzf helm.tar.gz linux-amd64/helm
+
+          curl -sSL --retry 3 -o helmfile.tar.gz \
+            "https://github.com/helmfile/helmfile/releases/download/v${HELMFILE_VERSION}/helmfile_${HELMFILE_VERSION}_linux_amd64.tar.gz"
+          echo "${HELMFILE_SHA256}  helmfile.tar.gz" | sha256sum -c -
+          tar xzf helmfile.tar.gz helmfile
+
+          mkdir -p "${RUNNER_TEMP}/bin"
+          mv linux-amd64/helm helmfile "${RUNNER_TEMP}/bin/"
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+
+      - name: Check tool versions
+        run: |
+          set -euo pipefail
+          helm version --short
+          helmfile --version
+
+      - name: Test the chart mapping guard
+        run: bash tools/ci/test-check-helm-charts
+
+      - name: Lint and render every chart with a CI values file
+        run: ./tools/ci/check-helm-charts
+
+      - name: Run self-managed Helmfile render tests
+        run: make -C deploy/stacks/self-managed test
+
+      - name: Check for uncommitted helm dependency artifacts
+        run: |
+          set -euo pipefail
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "ERROR: the checks left the working tree dirty:" >&2
+            git status --porcelain >&2
+            exit 1
+          fi
+
   github-release-helper:
     name: GitHub release helper
     runs-on: ubuntu-latest
