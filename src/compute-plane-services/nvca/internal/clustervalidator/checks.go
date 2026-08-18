@@ -1417,6 +1417,10 @@ func checkTier1Deployments(ctx context.Context, client kubernetes.Interface, sta
 			rollingOut := d.Status.ObservedGeneration < d.Generation ||
 				d.Status.UpdatedReplicas < want
 			if rollingOut {
+				msg := fmt.Sprintf("%s/%s: rollout in progress (updated: %d/%d); re-run check after rollout completes",
+					ns, d.Name, d.Status.UpdatedReplicas, want)
+				printWarning(log, msg)
+				state.Warnings = append(state.Warnings, "Tier-1 Deployments: "+msg)
 				continue
 			}
 			if d.Status.ReadyReplicas < want {

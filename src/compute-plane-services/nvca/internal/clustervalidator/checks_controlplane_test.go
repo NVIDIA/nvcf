@@ -300,16 +300,21 @@ func TestCheckNodeToNode_TaintedNodeExcluded(t *testing.T) {
 
 	// Fail checker pod creation so the test exits quickly without needing to
 	// simulate full pod lifecycle (no Get/poll needed).
+	var checkerPodCreateCalled bool
 	client.PrependReactor("create", "pods", func(_ ktesting.Action) (bool, runtime.Object, error) {
+		checkerPodCreateCalled = true
 		return true, nil, fmt.Errorf("no pods scheduled")
 	})
 
 	state := &ValidationState{Log: testLog()}
 	checkNodeToNode(context.Background(), client, state)
 
-	// NodeToNodeOK must be non-nil: the check reached the checker-pod step,
-	// proving waitForDaemonSetPods did not block waiting for the tainted node.
-	require.NotNil(t, state.NodeToNodeOK, "check must not hang waiting for tainted node")
+	// checkerPodCreateCalled must be true: if waitForDaemonSetPods had
+	// waited for 3 pods (len(schedulable)) instead of 2 (DesiredNumberScheduled),
+	// it would have timed out before reaching pod creation and this flag
+	// would stay false, catching the regression.
+	require.True(t, checkerPodCreateCalled, "check must reach checker pod creation step")
+	require.NotNil(t, state.NodeToNodeOK)
 	assert.False(t, *state.NodeToNodeOK, "NodeToNodeOK false because checker pod creation failed")
 }
 
@@ -328,6 +333,80 @@ func TestCheckNodeToNode_DaemonSetCreateFailure(t *testing.T) {
 
 	require.NotNil(t, state.NodeToNodeOK)
 	assert.False(t, *state.NodeToNodeOK, "DaemonSet create failure must set NodeToNodeOK=false")
+}
+
+// -- checkTier1Deployments --
+
+func TestCheckTier1Deployments_AllReady(t *testing.T) {
+	replicas := int32(2)
+	client := fake.NewSimpleClientset(&appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "nvcf-api", Namespace: "nvcf"},
+		Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
+		Status: appsv1.DeploymentStatus{
+			ObservedGeneration: 1,
+			UpdatedReplicas:    2,
+			ReadyReplicas:      2,
+		},
+	})
+	state := &ValidationState{Log: testLog()}
+	checkTier1Deployments(context.Background(), client, state)
+
+	require.NotNil(t, state.Tier1DeploymentsOK)
+	assert.True(t, *state.Tier1DeploymentsOK)
+	assert.Empty(t, state.Warnings)
+}
+
+func TestCheckTier1Deployments_UnderReplicated(t *testing.T) {
+	replicas := int32(2)
+	client := fake.NewSimpleClientset(&appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "nvcf-api", Namespace: "nvcf",
+			Generation: 1,
+		},
+		Spec: appsv1.DeploymentSpec{Replicas: &replicas},
+		Status: appsv1.DeploymentStatus{
+			ObservedGeneration: 1,
+			UpdatedReplicas:    2,
+			ReadyReplicas:      1, // one pod crashed
+		},
+	})
+	state := &ValidationState{Log: testLog()}
+	checkTier1Deployments(context.Background(), client, state)
+
+	require.NotNil(t, state.Tier1DeploymentsOK)
+	assert.False(t, *state.Tier1DeploymentsOK, "crashed pod must set Tier1DeploymentsOK=false")
+}
+
+func TestCheckTier1Deployments_RollingOutEmitsWarningNotFailure(t *testing.T) {
+	replicas := int32(2)
+	client := fake.NewSimpleClientset(&appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "nvcf-api", Namespace: "nvcf",
+			Generation: 3, // new spec written
+		},
+		Spec: appsv1.DeploymentSpec{Replicas: &replicas},
+		Status: appsv1.DeploymentStatus{
+			ObservedGeneration: 2, // controller hasn't caught up yet
+			UpdatedReplicas:    1, // only 1 of 2 pods updated
+			ReadyReplicas:      2, // old pods still serving (maxUnavailable=0)
+		},
+	})
+	state := &ValidationState{Log: testLog()}
+	checkTier1Deployments(context.Background(), client, state)
+
+	require.NotNil(t, state.Tier1DeploymentsOK)
+	assert.True(t, *state.Tier1DeploymentsOK, "in-progress rollout must not set Tier1DeploymentsOK=false")
+	assert.NotEmpty(t, state.Warnings, "rollout in progress must emit a warning")
+	assert.Contains(t, state.Warnings[0], "rollout in progress")
+}
+
+func TestCheckTier1Deployments_PreInstallPassesTrivially(t *testing.T) {
+	client := fake.NewSimpleClientset() // no namespaces, no deployments
+	state := &ValidationState{Log: testLog()}
+	checkTier1Deployments(context.Background(), client, state)
+
+	require.NotNil(t, state.Tier1DeploymentsOK)
+	assert.True(t, *state.Tier1DeploymentsOK, "pre-install (no deployments) must pass trivially")
 }
 
 // init is required to register types with the fake client's object tracker.
