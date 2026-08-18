@@ -21,4 +21,4 @@ type: application
 
 version: 0.0.0 # autoversioning enabled via release pipeline
 
-appVersion: "0.10.2"
+appVersion: "0.1.1"
