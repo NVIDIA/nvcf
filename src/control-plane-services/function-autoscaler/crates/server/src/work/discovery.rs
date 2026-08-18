@@ -662,8 +662,6 @@ async fn get_recently_invoked_functions_with_semaphore(
                         nca_id: Some(nca_id.clone()),
                         last_updated_at: Some(end_time),
                         num_workers: None, // Recently invoked functions start with unknown worker count
-                        last_predicted_desired_instance_count: None,
-                        last_predicted_error_code: None,
                     };
 
                     tracing::debug!(
@@ -800,8 +798,6 @@ pub async fn get_functions_with_workers(
                     nca_id: Some(nca_id),
                     last_updated_at: Some(end_time),
                     num_workers,
-                    last_predicted_desired_instance_count: None,
-                    last_predicted_error_code: None,
                 };
 
                 let existing = by_key.get(&key).and_then(|d| d.num_workers);
@@ -921,8 +917,6 @@ pub async fn get_functions_with_active_instances(
                             nca_id: Some(nca_id.clone()),
                             last_updated_at: Some(end_time),
                             num_workers: Some(-1), // BYOC functions have num_workers = -1
-                            last_predicted_desired_instance_count: None,
-                            last_predicted_error_code: None,
                         };
 
                         tracing::debug!(
