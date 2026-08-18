@@ -18,6 +18,7 @@ limitations under the License.
 package operator
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -157,14 +158,82 @@ func TestGetOTelCollectorConfigData(t *testing.T) {
 			assert.Contains(t, config, "${env:NVCA_OTEL_COLLECTOR_METRICS_PORT}")
 			assert.Contains(t, config, "${env:NVCA_OTEL_COLLECTOR_AUTHENTICATOR}")
 			assert.Contains(t, config, "memory_limiter")
-			assert.Contains(t, config, "k8sobjects")
-			assert.Contains(t, config, "k8sattributes")
 			assert.Contains(t, config, "otlphttp")
-			// Pod lane: tasks key on task-id, and event_name is Pod-scoped.
-			assert.Contains(t, config, "task_id")
-			assert.Contains(t, config, `Concat(["Pod"`)
+			// Assert receiver/pipeline and Pod-lane semantics structurally.
+			assertClusterWideK8sObjects(t, config)
+			assertPodLaneTransforms(t, config)
 		})
 	}
+}
+
+// assertClusterWideK8sObjects parses the rendered collector config and asserts
+// the namespace-scoped k8s_events receiver was replaced by a cluster-wide
+// k8sobjects watch (with initial-state re-list) wired into the logs pipeline.
+func assertClusterWideK8sObjects(t *testing.T, config string) {
+	t.Helper()
+	var full map[string]any
+	require.NoError(t, yaml.Unmarshal([]byte(config), &full))
+
+	receivers, ok := full["receivers"].(map[string]any)
+	require.True(t, ok, "receivers must be a map")
+	assert.NotContains(t, receivers, "k8s_events", "namespace-scoped k8s_events must be removed")
+	recv, ok := receivers["k8sobjects"].(map[string]any)
+	require.True(t, ok, "k8sobjects receiver must be configured")
+	assert.Equal(t, true, recv["include_initial_state"], "collector must re-list Events on start")
+	objs, ok := recv["objects"].([]any)
+	require.True(t, ok, "k8sobjects.objects must be a list")
+	require.Len(t, objs, 1)
+	obj0, ok := objs[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "events", obj0["name"])
+	assert.Equal(t, "watch", obj0["mode"])
+
+	logs := full["service"].(map[string]any)["pipelines"].(map[string]any)["logs"].(map[string]any)
+	assert.Contains(t, logs["receivers"], "k8sobjects", "logs pipeline must read from k8sobjects")
+}
+
+// assertPodLaneTransforms asserts the Pod-lane #813 semantics: the task-id Pod
+// label is extracted as task_id, the task_id namespace override runs after the
+// function_version_id default, and both Pod event_name branches are present.
+func assertPodLaneTransforms(t *testing.T, config string) {
+	t.Helper()
+	var full map[string]any
+	require.NoError(t, yaml.Unmarshal([]byte(config), &full))
+	processors := full["processors"].(map[string]any)
+
+	k8sattr := processors["k8sattributes"].(map[string]any)
+	labels := k8sattr["extract"].(map[string]any)["labels"].([]any)
+	tagByKey := map[string]string{}
+	for _, l := range labels {
+		m := l.(map[string]any)
+		tagByKey[m["key"].(string)] = m["tag_name"].(string)
+	}
+	assert.Equal(t, "task_id", tagByKey["task-id"], "task-id label must map to task_id")
+
+	var stmts []string
+	for _, s := range processors["transform"].(map[string]any)["log_statements"].([]any) {
+		stmts = append(stmts, s.(string))
+	}
+	fvIdx := indexOfContaining(stmts, `"namespace"], resource.attributes["function_version_id"]`)
+	taskIdx := indexOfContaining(stmts, `"namespace"], resource.attributes["task_id"]`)
+	require.GreaterOrEqual(t, fvIdx, 0, "function_version_id namespace statement missing")
+	require.GreaterOrEqual(t, taskIdx, 0, "task_id namespace override missing")
+	assert.Less(t, fvIdx, taskIdx, "task_id override must run after the function_version_id default")
+	assert.GreaterOrEqual(t, indexOfContaining(stmts,
+		`Concat(["Pod", resource.attributes["k8s.container.name"], log.attributes["k8s.event.reason"]]`), 0,
+		"container-scoped event_name branch missing")
+	assert.GreaterOrEqual(t, indexOfContaining(stmts,
+		`Concat(["Pod", log.attributes["k8s.event.reason"]]`), 0,
+		"pod-scoped event_name branch missing")
+}
+
+func indexOfContaining(items []string, sub string) int {
+	for i, s := range items {
+		if strings.Contains(s, sub) {
+			return i
+		}
+	}
+	return -1
 }
 
 // otelAuthSpec builds minimal NVCFBackendSpecT for getOTelCollectorAuthConfig tests.
