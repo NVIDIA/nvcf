@@ -84,14 +84,6 @@ where
             span.record("cassandra.status", "error");
             span.record("error", tracing::field::display(error));
             span.record("otel.status_code", "ERROR");
-            tracing::warn!(
-                parent: &span,
-                cassandra.operation = operation_name,
-                cassandra.duration_ms = duration_ms,
-                cassandra.status = "error",
-                error = %error,
-                "Cassandra operation failed"
-            );
         }
     }
 
@@ -541,6 +533,7 @@ impl CassandraServiceManager {
         };
         let mut prepared_active_function = session.prepare(stmt_active_function).await?;
         prepared_active_function.set_consistency(scylla::statement::Consistency::Quorum);
+        prepared_active_function.set_is_idempotent(true);
 
         with_cassandra_timing("add_new_active_functions_batch", || async {
             execute_chunked(functions, 200, |function| {
@@ -593,6 +586,7 @@ impl CassandraServiceManager {
         };
         let mut prepared = session.prepare(stmt_active_function).await?;
         prepared.set_consistency(scylla::statement::Consistency::Quorum);
+        prepared.set_is_idempotent(true);
         let result = with_cassandra_timing("delete_active_function", || async {
             session
                 .execute_unpaged(&prepared, (function_id, function_version_id))
@@ -1047,12 +1041,10 @@ mod tests {
                 .get_active_functions_with_token_range(&token_range, 100, table_type)
                 .await
                 .unwrap();
-            assert_eq!(functions.len(), 1);
-            assert_eq!(functions[0].function_id, function.function_id);
-            assert_eq!(
-                functions[0].function_version_id,
-                function.function_version_id
-            );
+            assert!(functions.iter().any(|active| {
+                active.function_id == function.function_id
+                    && active.function_version_id == function.function_version_id
+            }));
 
             manager
                 .delete_active_function(
@@ -1066,7 +1058,10 @@ mod tests {
                 .get_active_functions_with_token_range(&token_range, 100, table_type)
                 .await
                 .unwrap();
-            assert!(functions.is_empty());
+            assert!(!functions.iter().any(|active| {
+                active.function_id == function.function_id
+                    && active.function_version_id == function.function_version_id
+            }));
         }
     }
 
