@@ -160,6 +160,9 @@ func TestGetOTelCollectorConfigData(t *testing.T) {
 			assert.Contains(t, config, "k8sobjects")
 			assert.Contains(t, config, "k8sattributes")
 			assert.Contains(t, config, "otlphttp")
+			// Pod lane: tasks key on task-id, and event_name is Pod-scoped.
+			assert.Contains(t, config, "task_id")
+			assert.Contains(t, config, `Concat(["Pod"`)
 		})
 	}
 }

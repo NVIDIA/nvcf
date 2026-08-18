@@ -74,6 +74,8 @@ processors:
           tag_name: function_id
         - key: function-version-id
           tag_name: function_version_id
+        - key: task-id
+          tag_name: task_id
     pod_association:
       - sources:
           - from: resource_attribute
@@ -87,7 +89,13 @@ processors:
       - set(log.attributes["gpu_specification_id"], resource.attributes["gpu_specification_id"]) where resource.attributes["gpu_specification_id"] != nil
       - set(log.attributes["instance_id"], resource.attributes["k8s.pod.name"]) where resource.attributes["k8s.pod.name"] != nil
       - set(log.attributes["namespace"], resource.attributes["function_version_id"]) where resource.attributes["function_version_id"] != nil
-      - set(log.attributes["event_name"], log.attributes["k8s.event.reason"]) where log.attributes["k8s.event.reason"] != nil
+      # Tasks are keyed by task-id in FnDs; override function_version_id when present.
+      - set(log.attributes["namespace"], resource.attributes["task_id"]) where resource.attributes["task_id"] != nil and resource.attributes["task_id"] != ""
+      # Pod-lane event_name: Pod.<container>.<reason> when the Event targets a
+      # specific container, else Pod.<reason>. Distinguishes container/helm/task
+      # Pod signals for FnDs consumers.
+      - set(log.attributes["event_name"], Concat(["Pod", resource.attributes["k8s.container.name"], log.attributes["k8s.event.reason"]], ".")) where log.attributes["k8s.event.reason"] != nil and resource.attributes["k8s.container.name"] != nil
+      - set(log.attributes["event_name"], Concat(["Pod", log.attributes["k8s.event.reason"]], ".")) where log.attributes["k8s.event.reason"] != nil and resource.attributes["k8s.container.name"] == nil
       - set(log.attributes["source"], "nvca")
       - set(log.attributes["nca_id"], resource.attributes["nca_id"]) where resource.attributes["nca_id"] != nil
       - set(log.attributes["function_id"], resource.attributes["function_id"]) where resource.attributes["function_id"] != nil
