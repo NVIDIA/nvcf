@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# Restore pod for PDF-bench gpt-oss-120b (TP=4, rootfs path).
+# Restore pod for PDF-bench gpt-oss-120b (TP=4, cachedir path).
 #
 # Customer-shape: no CRIU init ladder, no nodeName pin. The nvsnap
 # webhook injects PVC mounts and (for Local backend) nodeAffinity
