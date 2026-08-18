@@ -137,8 +137,9 @@ spec:
             - --agent-port=8081
             - --log-level=info
             - --db-path=/data/nvsnap.db
-          {{- if .Values.jaeger.enabled }}
+          {{- if or .Values.jaeger.enabled .Values.agent.auth.enabled }}
           env:
+            {{- if .Values.jaeger.enabled }}
             # OTLP/gRPC to the bundled Jaeger collector. nvsnap-server reads
             # this via internal/tracing.Init — unset means no-op. otelhttp
             # then emits one server span per API request.
@@ -146,6 +147,19 @@ spec:
               value: "nvsnap-jaeger-collector.{{ .Release.Namespace }}.svc.cluster.local:4317"
             - name: NVSNAP_VERSION
               value: {{ .Values.server.image.tag | quote }}
+            {{- end }}
+            {{- if .Values.agent.auth.enabled }}
+            # The server is an agent client: it drops L1 dumps during
+            # cascade delete, dispatches captures, and polls the checkpoint
+            # list. Without the token those all 401 once the agent runs with
+            # --auth-mode=required, and the delete path fails silently —
+            # 204 returned, catalog row gone, dump orphaned (nvsnap#736).
+            - name: NVSNAP_AGENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: nvsnap-agent-token
+                  key: token
+            {{- end }}
           {{- end }}
           ports:
             - containerPort: {{ .Values.server.service.port }}

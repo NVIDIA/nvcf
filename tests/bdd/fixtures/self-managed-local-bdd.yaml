@@ -78,8 +78,7 @@ addons:
             "request_algorithms": {
               "power-of-two": "power-of-two",
               "round-robin": "round-robin",
-              "random": "random",
-              "groq-multiregion": "groq-multiregion"
+              "random": "random"
             }
           }
 

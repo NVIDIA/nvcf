@@ -30,6 +30,9 @@ import (
 )
 
 func (c K8sComputeBackend) prepareTransportTLSForPod(ctx context.Context, pod *corev1.Pod) error {
+	if err := c.bk8s.cfg.Workload.Validate(); err != nil {
+		return nvcaerrors.TerminalError(err)
+	}
 	if c.bk8s.cfg.Workload.TransportTLS == nil {
 		return nil
 	}

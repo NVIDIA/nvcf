@@ -42,6 +42,8 @@ func registerAssertionSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^yaml file "([^"]*)" should contain:$`, sc.yamlFileShouldContain)
 	ctx.Step(`^yaml file "([^"]*)" key "([^"]*)" should contain:$`, sc.yamlFileKeyShouldContain)
 	ctx.Step(`^the json output should contain rows:$`, sc.jsonOutputShouldContainRows)
+	ctx.Step(`^the rendered manifests in "([^"]*)" should contain:$`, sc.renderedManifestsShouldContain)
+	ctx.Step(`^the rendered manifests in "([^"]*)" under directories matching "([^"]*)" should contain:$`, sc.renderedManifestsUnderMatchingDirectoriesShouldContain)
 	ctx.Step(`^the rendered manifests in "([^"]*)" should not contain:$`, sc.renderedManifestsShouldNotContain)
 	ctx.Step(`^these ServiceMonitors should exist in namespace "([^"]*)" using context "([^"]*)":$`, sc.serviceMonitorsShouldExist)
 }
@@ -155,6 +157,22 @@ func (sc *ScenarioContext) renderedManifestsShouldNotContain(path string, table 
 		return err
 	}
 	return dsl.FilesDoNotContain(sc.resolvePath(dsl.Interpolate(path)), needles)
+}
+
+func (sc *ScenarioContext) renderedManifestsShouldContain(path string, table *godog.Table) error {
+	needles, err := tableToSingleColumn(table, "text")
+	if err != nil {
+		return err
+	}
+	return dsl.FilesContain(sc.resolvePath(dsl.Interpolate(path)), "", needles)
+}
+
+func (sc *ScenarioContext) renderedManifestsUnderMatchingDirectoriesShouldContain(path, pattern string, table *godog.Table) error {
+	needles, err := tableToSingleColumn(table, "text")
+	if err != nil {
+		return err
+	}
+	return dsl.FilesContain(sc.resolvePath(dsl.Interpolate(path)), pattern, needles)
 }
 
 func tableToSingleColumn(table *godog.Table, header string) ([]string, error) {

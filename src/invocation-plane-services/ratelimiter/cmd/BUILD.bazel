@@ -35,6 +35,7 @@ go_library(
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/config",
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/logs",
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/tracing",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/version",
         "@com_github_olric_data_olric//config",
         "@com_github_prometheus_client_golang//prometheus/promhttp",
         "@com_github_spf13_cobra//:cobra",
@@ -48,6 +49,11 @@ go_binary(
     name = "cmd",
     embed = [":cmd_lib"],
     visibility = ["//visibility:public"],
+    x_defs = {
+        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Service": "nvcf-ratelimiter",
+        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Version": "{STABLE_VERSION}",
+        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.GitHash": "{STABLE_GIT_COMMIT_FULL}",
+    },
 )
 
 # Multi-arch OCI image. Build-side targets (image, image_index,
@@ -76,12 +82,16 @@ go_oci_image(
 
 go_test(
     name = "cmd_test",
-    srcs = ["main_test.go"],
+    srcs = [
+        "info_test.go",
+        "main_test.go",
+    ],
     embed = [":cmd_lib"],
     deps = [
         "//src/invocation-plane-services/ratelimiter:ratelimiter",
         "//src/invocation-plane-services/ratelimiter/pb",
         "@com_github_olric_data_olric//config",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/version",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
         "@org_golang_google_grpc//:grpc",

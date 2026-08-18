@@ -91,6 +91,31 @@ assert_pre_delete_cleanup_rbac() {
     "pre-delete cleanup hook RBAC is kept for the running Job"
 }
 
+# The Bazel-built NVCA operator image is distroless, so the rendered workload
+# commands must execute the packaged binaries directly. A /tini wrapper would
+# fail at container startup because that binary is not present in the image.
+assert_distroless_operator_commands() {
+  local chart_dir=${1}
+  local chart_label=${2}
+  local rendered
+  rendered="$(mktemp)"
+  trap 'rm -f "${rendered}"' RETURN
+
+  helm template test-release "${chart_dir}" --set "ngcConfig.serviceKey=fakekey" >"${rendered}"
+
+  assert_eq "/usr/bin/nvca-operator" \
+    "$(yq 'select(.kind == "Deployment") | .spec.template.spec.containers[0].args[0]' "${rendered}")" \
+    "${chart_label} operator starts the packaged binary directly"
+  assert_eq "/usr/bin/nvca-mirror" \
+    "$(yq 'select(.kind == "Deployment") | .spec.template.spec.containers[1].args[0]' "${rendered}")" \
+    "${chart_label} mirror starts the packaged binary directly"
+  assert_eq "/usr/bin/nvca-operator-cleanup" \
+    "$(yq 'select(.kind == "Job") | .spec.template.spec.containers[0].args[0]' "${rendered}")" \
+    "${chart_label} cleanup Job starts the packaged binary directly"
+}
+
+assert_distroless_operator_commands "${repo_root}/deployments/nvca-operator" "service chart"
+assert_distroless_operator_commands "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator" "release chart"
 install_kubeconform
 assert_pre_delete_cleanup_rbac
 run_lint nvca-operator --set "ngcConfig.serviceKey=fakekey"
@@ -168,6 +193,50 @@ assert_service_oauth_nil_safe "helm-managed" \
   --set-string "clusterName=ncp-helm-managed-1" \
   --show-only templates/helm-managed-nvcfbackend-cm.yaml
 
+# Helm-managed Vault authentication must carry an explicit, usable server URL
+# into the cluster DTO. This keeps environment selection outside the OSS chart.
+assert_helm_managed_vault_address() {
+  local chart_dir=${1}
+  local chart_label=${2}
+  local rendered
+  local invalid_address
+  rendered="$(mktemp)"
+  trap 'rm -f "${rendered}"' RETURN
+
+  helm template test-release "${chart_dir}" \
+    --set "ngcConfig.serviceKey=fakekey" \
+    --set "ngcConfig.clusterSource=helm-managed" \
+    --set-string "helmManaged.oAuthClientID=oauth-client-1" \
+    --set-string "vaultConfig.address=https://vault.example.test:443" \
+    --show-only templates/helm-managed-nvcfbackend-cm.yaml >"${rendered}"
+
+  assert_eq "https://vault.example.test:443" \
+    "$(yq '.data."cluster-dto.yaml" | from_yaml | .vaultConfig.address' "${rendered}")" \
+    "${chart_label} helm-managed cluster DTO includes the configured Vault address"
+
+  for invalid_address in \
+    "" \
+    "https://:443" \
+    " https://vault.example.test:443 " \
+    "https://user@vault.example.test:443" \
+    "https://vault.example.test:443?namespace=test" \
+    "https://vault.example.test:443#test"; do
+    if helm template test-release "${chart_dir}" \
+      --set "ngcConfig.serviceKey=fakekey" \
+      --set "ngcConfig.clusterSource=helm-managed" \
+      --set-string "helmManaged.oAuthClientID=oauth-client-1" \
+      --set-string "vaultConfig.address=${invalid_address}" \
+      --show-only templates/helm-managed-nvcfbackend-cm.yaml >"${rendered}" 2>&1; then
+      printf 'Expected %s helm-managed render with invalid Vault address %q to fail\n' "${chart_label}" "${invalid_address}"
+      return 1
+    fi
+    grep -q "vaultConfig.address" "${rendered}"
+  done
+}
+
+assert_helm_managed_vault_address "${repo_root}/deployments/nvca-operator" "service chart"
+assert_helm_managed_vault_address "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator" "release chart"
+
 assert_service_oauth_nil_safe "self-managed" \
   --set "generateImagePullSecret=false" \
   --set "ngcConfig.clusterSource=self-managed" \
@@ -179,6 +248,63 @@ assert_service_oauth_nil_safe "self-managed" \
   --set-string "selfManaged.revalServiceURL=http://reval.nvcf-control-plane.test:18080" \
   --set-string "selfManaged.natsURL=nats://nats.nvcf-control-plane.test:14222" \
   --show-only templates/self-managed-nvcfbackend-cm.yaml
+
+# Secret-backed workload transport trust is operator-owned configuration, not a
+# raw agentConfig.mergeConfig overlay. Confirm its ConfigMap is rendered with
+# defaults, configured values, and values inherited by reuse-values upgrades.
+echo -e "\nTesting workload transport trust ConfigMap renders..."
+assert_transport_trust_config() {
+  local label="${1}"
+  local expected_name="${2}"
+  local expected_fingerprint="${3}"
+  local expected_mount_path="${4}"
+  shift 4
+  local render_output
+  render_output="$(mktemp)"
+
+  if ! helm template test-release "${repo_root}/deployments/nvca-operator" "$@" \
+    --show-only templates/operator-config-cm.yaml > "${render_output}" 2>&1; then
+    echo "Expected ${label} workload transport trust ConfigMap to render"
+    cat "${render_output}"
+    rm -f "${render_output}"
+    exit 1
+  fi
+  if ! grep -Fq "name: \"${expected_name}\"" "${render_output}" ||
+    ! grep -Fq "fingerprint: \"${expected_fingerprint}\"" "${render_output}"; then
+    echo "Expected ${label} workload transport trust configuration"
+    cat "${render_output}"
+    rm -f "${render_output}"
+    exit 1
+  fi
+  if [[ -z "${expected_mount_path}" ]]; then
+    if grep -Fq "installedBundleMountPath:" "${render_output}"; then
+      echo "Expected ${label} workload transport trust configuration to omit installedBundleMountPath"
+      cat "${render_output}"
+      rm -f "${render_output}"
+      exit 1
+    fi
+  elif ! grep -Fq "installedBundleMountPath: \"${expected_mount_path}\"" "${render_output}"; then
+    echo "Expected ${label} workload transport trust configuration to set installedBundleMountPath"
+    cat "${render_output}"
+    rm -f "${render_output}"
+    exit 1
+  fi
+  rm -f "${render_output}"
+  echo "✓ ${label} workload transport trust ConfigMap renders"
+}
+
+assert_transport_trust_config "default" "" "" "" --set "ngcConfig.serviceKey=fakekey"
+assert_transport_trust_config "configured" "nvcf-trust" "sha256:example" "/nvcf/transport-tls" \
+  --set "ngcConfig.serviceKey=fakekey" \
+  --set "operatorConfig.workload.transportTLS.trustBundle.secretKeyRef.name=nvcf-trust" \
+  --set "operatorConfig.workload.transportTLS.fingerprint=sha256:example" \
+  --set "operatorConfig.workload.transportTLS.installedBundleMountPath=/nvcf/transport-tls"
+assert_transport_trust_config "reuse-values upgrade simulation" "" "" "" \
+  --set "ngcConfig.serviceKey=fakekey" \
+  --values "${reuse_values_file}" \
+  --set "operatorConfig=null"
+
+bash "${repo_root}/scripts/test_transport_trust_validation.sh"
 
 # Test secret mirroring feature
 # Test with only source namespace (should not add args)

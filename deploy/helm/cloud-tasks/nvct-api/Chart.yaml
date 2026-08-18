@@ -1,0 +1,7 @@
+apiVersion: v2
+name: helm-nvcf-nvct-api
+description: NCP Compatible deployment of NVCT API (nvct-service)
+
+type: application
+version: 0.0.0 # autoversioning enabled via release pipeline
+appVersion: "1.63.2"

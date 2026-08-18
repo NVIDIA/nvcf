@@ -3,6 +3,8 @@
   "__INPUT_ARTIFACTS_HASH": {
     "aopalliance:aopalliance": 85128824,
     "at.yawk.lz4:lz4-java": 1725015399,
+    "ch.qos.logback:logback-classic": -1622778065,
+    "ch.qos.logback:logback-core": -1878965258,
     "com.amazonaws:aws-java-sdk-sns": -468673589,
     "com.amazonaws:aws-java-sdk-sqs": 1149177486,
     "com.amazonaws:aws-java-sdk-sts": -1527938735,
@@ -10,10 +12,12 @@
     "com.github.ben-manes.caffeine:caffeine": 1100418982,
     "com.github.ben-manes.caffeine:guava": 1054685015,
     "com.github.java-json-tools:json-patch": -1031005245,
-    "com.google.crypto.tink:tink": -1774240767,
+    "com.google.code.gson:gson": 988637195,
+    "com.google.errorprone:error_prone_annotations": 1790047777,
     "com.google.protobuf:protobuf-java": 1906581597,
     "com.google.protobuf:protobuf-java-util": -1626074784,
     "com.jayway.jsonpath:json-path": 489827081,
+    "com.nimbusds:nimbus-jose-jwt": -1260914239,
     "com.vdurmont:semver4j": -1532032838,
     "commons-codec:commons-codec": -1269462382,
     "commons-logging:commons-logging": -916690979,
@@ -26,10 +30,14 @@
     "io.micrometer:micrometer-tracing-bridge-otel": -754588172,
     "io.nats:jnats": 572014237,
     "io.nats:jwt-java": 89793856,
+    "io.opentelemetry.instrumentation:opentelemetry-instrumentation-annotations": -1738770709,
     "io.opentelemetry:opentelemetry-exporter-otlp": -12806658,
     "io.opentelemetry:opentelemetry-sdk-testing": -32635354,
     "io.projectreactor.netty:reactor-netty-core": -2096527644,
     "io.projectreactor.netty:reactor-netty-http": 131695323,
+    "io.projectreactor:reactor-core-micrometer": 2012949339,
+    "io.projectreactor:reactor-test": 923452592,
+    "io.projectreactor:reactor-tools": -256363469,
     "jakarta.servlet:jakarta.servlet-api": 2120044853,
     "javax.annotation:javax.annotation-api": 1286517389,
     "net.devh:grpc-server-spring-boot-starter": -1304967214,
@@ -70,6 +78,7 @@
     "org.projectlombok:lombok": -2073039513,
     "org.reflections:reflections": 1048675919,
     "org.springdoc:springdoc-openapi-starter-webflux-api": 1102747448,
+    "org.springdoc:springdoc-openapi-starter-webflux-ui": -420246430,
     "org.springdoc:springdoc-openapi-starter-webmvc-api": 655186513,
     "org.springframework.boot:spring-boot-actuator": 763411999,
     "org.springframework.boot:spring-boot-dependencies": 70164638,
@@ -84,7 +93,9 @@
     "org.springframework.boot:spring-boot-starter-actuator": -1082017891,
     "org.springframework.boot:spring-boot-starter-actuator-test": 536870722,
     "org.springframework.boot:spring-boot-starter-aspectj": -1960483986,
+    "org.springframework.boot:spring-boot-starter-cache": -37072162,
     "org.springframework.boot:spring-boot-starter-data-cassandra": 699136521,
+    "org.springframework.boot:spring-boot-starter-data-cassandra-reactive": 1564904125,
     "org.springframework.boot:spring-boot-starter-data-cassandra-test": -667262890,
     "org.springframework.boot:spring-boot-starter-jackson": -1899095121,
     "org.springframework.boot:spring-boot-starter-security": 1168390884,
@@ -98,6 +109,7 @@
     "org.springframework.boot:spring-boot-starter-webflux-test": 5326534,
     "org.springframework.boot:spring-boot-starter-webmvc": 338400426,
     "org.springframework.boot:spring-boot-starter-webmvc-test": -2111356331,
+    "org.springframework.boot:spring-boot-testcontainers": 152627146,
     "org.springframework.boot:spring-boot-webclient": -1835278023,
     "org.springframework.cloud:spring-cloud-commons": -673836000,
     "org.springframework.cloud:spring-cloud-context": -1724959431,
@@ -116,7 +128,9 @@
     "org.wiremock:wiremock-standalone": -1242936487,
     "repositories": -1624298853,
     "software.amazon.awssdk:arns": -1247094155,
+    "software.amazon.awssdk:auth": -1127796377,
     "software.amazon.awssdk:regions": -1274787064,
+    "software.amazon.awssdk:s3": -1963686753,
     "software.amazon.awssdk:sts": -794152901,
     "tools.jackson.module:jackson-module-blackbird": -423541381
   },
@@ -125,10 +139,10 @@
     "args4j:args4j:jar:sources": 74047526,
     "at.yawk.lz4:lz4-java": -1985362494,
     "at.yawk.lz4:lz4-java:jar:sources": -2141970549,
-    "ch.qos.logback:logback-classic": -619930806,
-    "ch.qos.logback:logback-classic:jar:sources": -390128445,
-    "ch.qos.logback:logback-core": -1554021729,
-    "ch.qos.logback:logback-core:jar:sources": 77538609,
+    "ch.qos.logback:logback-classic": 1651934264,
+    "ch.qos.logback:logback-classic:jar:sources": -1264560118,
+    "ch.qos.logback:logback-core": 1441290378,
+    "ch.qos.logback:logback-core:jar:sources": -208502196,
     "com.amazonaws:aws-java-sdk-core": -1219639971,
     "com.amazonaws:aws-java-sdk-core:jar:sources": -1864552030,
     "com.amazonaws:aws-java-sdk-sns": -1260894531,
@@ -200,8 +214,6 @@
     "com.google.code.findbugs:jsr305:jar:sources": -1300148931,
     "com.google.code.gson:gson": 328405842,
     "com.google.code.gson:gson:jar:sources": -329485452,
-    "com.google.crypto.tink:tink": -1125558941,
-    "com.google.crypto.tink:tink:jar:sources": 99979554,
     "com.google.errorprone:error_prone_annotations": -1266099896,
     "com.google.errorprone:error_prone_annotations:jar:sources": 936701586,
     "com.google.guava:failureaccess": -56291903,
@@ -221,9 +233,9 @@
     "com.nimbusds:content-type:jar:sources": -634646164,
     "com.nimbusds:lang-tag": -694347345,
     "com.nimbusds:lang-tag:jar:sources": 266930896,
-    "com.nimbusds:nimbus-jose-jwt": -286981492,
-    "com.nimbusds:nimbus-jose-jwt:jar:sources": 24935039,
-    "com.nimbusds:oauth2-oidc-sdk": -498816278,
+    "com.nimbusds:nimbus-jose-jwt": -1763138105,
+    "com.nimbusds:nimbus-jose-jwt:jar:sources": -1749002682,
+    "com.nimbusds:oauth2-oidc-sdk": -246671542,
     "com.nimbusds:oauth2-oidc-sdk:jar:sources": 1276926642,
     "com.squareup.okhttp3:logging-interceptor": -2002563184,
     "com.squareup.okhttp3:logging-interceptor:jar:sources": 524942179,
@@ -365,6 +377,8 @@
     "io.netty:netty-transport-native-unix-common": -166041147,
     "io.netty:netty-transport-native-unix-common:jar:sources": -1674017507,
     "io.netty:netty-transport:jar:sources": -820889350,
+    "io.opentelemetry.instrumentation:opentelemetry-instrumentation-annotations": -1819386201,
+    "io.opentelemetry.instrumentation:opentelemetry-instrumentation-annotations:jar:sources": -1576012470,
     "io.opentelemetry.semconv:opentelemetry-semconv": 1195624836,
     "io.opentelemetry.semconv:opentelemetry-semconv:jar:sources": -893534237,
     "io.opentelemetry:opentelemetry-api": 885391408,
@@ -404,9 +418,13 @@
     "io.projectreactor.netty:reactor-netty-http": -1289714469,
     "io.projectreactor.netty:reactor-netty-http:jar:sources": 1066415166,
     "io.projectreactor:reactor-core": -745004757,
+    "io.projectreactor:reactor-core-micrometer": -359471625,
+    "io.projectreactor:reactor-core-micrometer:jar:sources": -792479668,
     "io.projectreactor:reactor-core:jar:sources": -717353230,
     "io.projectreactor:reactor-test": 947112823,
     "io.projectreactor:reactor-test:jar:sources": 383025302,
+    "io.projectreactor:reactor-tools": -108795174,
+    "io.projectreactor:reactor-tools:jar:sources": 976947358,
     "io.prometheus:prometheus-metrics-config": 2090275681,
     "io.prometheus:prometheus-metrics-config:jar:sources": -594166944,
     "io.prometheus:prometheus-metrics-core": 786050810,
@@ -445,9 +463,9 @@
     "net.bytebuddy:byte-buddy-agent": -1380713096,
     "net.bytebuddy:byte-buddy-agent:jar:sources": 564051985,
     "net.bytebuddy:byte-buddy:jar:sources": -1360611642,
-    "net.devh:grpc-common-spring-boot": -312272718,
+    "net.devh:grpc-common-spring-boot": -721079601,
     "net.devh:grpc-common-spring-boot:jar:sources": 1655513026,
-    "net.devh:grpc-server-spring-boot-starter": 267656663,
+    "net.devh:grpc-server-spring-boot-starter": 87522442,
     "net.devh:grpc-server-spring-boot-starter:jar:sources": 1954333860,
     "net.java.dev.jna:jna": -1951542637,
     "net.java.dev.jna:jna:jar:sources": -545183654,
@@ -607,11 +625,13 @@
     "org.slf4j:jul-to-slf4j:jar:sources": -662175280,
     "org.slf4j:slf4j-api": -1249720338,
     "org.slf4j:slf4j-api:jar:sources": -297247278,
-    "org.springdoc:springdoc-openapi-starter-common": 789756479,
+    "org.springdoc:springdoc-openapi-starter-common": -1310371940,
     "org.springdoc:springdoc-openapi-starter-common:jar:sources": 776689800,
-    "org.springdoc:springdoc-openapi-starter-webflux-api": -1853587369,
+    "org.springdoc:springdoc-openapi-starter-webflux-api": 999559127,
     "org.springdoc:springdoc-openapi-starter-webflux-api:jar:sources": -1775632648,
-    "org.springdoc:springdoc-openapi-starter-webmvc-api": -1571036310,
+    "org.springdoc:springdoc-openapi-starter-webflux-ui": -1171372355,
+    "org.springdoc:springdoc-openapi-starter-webflux-ui:jar:sources": -1295847530,
+    "org.springdoc:springdoc-openapi-starter-webmvc-api": 187494506,
     "org.springdoc:springdoc-openapi-starter-webmvc-api:jar:sources": -1201450538,
     "org.springframework.boot:spring-boot": -217042451,
     "org.springframework.boot:spring-boot-actuator": 391557646,
@@ -620,6 +640,8 @@
     "org.springframework.boot:spring-boot-actuator:jar:sources": 1545596535,
     "org.springframework.boot:spring-boot-autoconfigure": -931486067,
     "org.springframework.boot:spring-boot-autoconfigure:jar:sources": 562322138,
+    "org.springframework.boot:spring-boot-cache": -316804532,
+    "org.springframework.boot:spring-boot-cache:jar:sources": -2095054362,
     "org.springframework.boot:spring-boot-cassandra": -162228161,
     "org.springframework.boot:spring-boot-cassandra:jar:sources": -285158244,
     "org.springframework.boot:spring-boot-data-cassandra": -300793208,
@@ -667,64 +689,68 @@
     "org.springframework.boot:spring-boot-resttestclient": 427136130,
     "org.springframework.boot:spring-boot-resttestclient:jar:sources": 1128597445,
     "org.springframework.boot:spring-boot-security": 1577209621,
-    "org.springframework.boot:spring-boot-security-oauth2-client": 1868854830,
+    "org.springframework.boot:spring-boot-security-oauth2-client": 867669908,
     "org.springframework.boot:spring-boot-security-oauth2-client:jar:sources": -1211778370,
-    "org.springframework.boot:spring-boot-security-oauth2-resource-server": -21026393,
+    "org.springframework.boot:spring-boot-security-oauth2-resource-server": -641989633,
     "org.springframework.boot:spring-boot-security-oauth2-resource-server:jar:sources": 1301519418,
     "org.springframework.boot:spring-boot-security-test": 1233999834,
     "org.springframework.boot:spring-boot-security-test:jar:sources": -311791400,
     "org.springframework.boot:spring-boot-security:jar:sources": -1644906067,
     "org.springframework.boot:spring-boot-servlet": -1653410474,
     "org.springframework.boot:spring-boot-servlet:jar:sources": 1162002660,
-    "org.springframework.boot:spring-boot-starter": 1873824649,
-    "org.springframework.boot:spring-boot-starter-actuator": -1855864019,
-    "org.springframework.boot:spring-boot-starter-actuator-test": 1364042115,
+    "org.springframework.boot:spring-boot-starter": 1539904224,
+    "org.springframework.boot:spring-boot-starter-actuator": 838431249,
+    "org.springframework.boot:spring-boot-starter-actuator-test": 2050303397,
     "org.springframework.boot:spring-boot-starter-actuator-test:jar:sources": 314973026,
     "org.springframework.boot:spring-boot-starter-actuator:jar:sources": -2079433447,
-    "org.springframework.boot:spring-boot-starter-aspectj": 2117230935,
+    "org.springframework.boot:spring-boot-starter-aspectj": 286085300,
     "org.springframework.boot:spring-boot-starter-aspectj:jar:sources": 1957689077,
-    "org.springframework.boot:spring-boot-starter-data-cassandra": -756828381,
-    "org.springframework.boot:spring-boot-starter-data-cassandra-test": -1188943434,
+    "org.springframework.boot:spring-boot-starter-cache": 1062169369,
+    "org.springframework.boot:spring-boot-starter-cache:jar:sources": 1826158198,
+    "org.springframework.boot:spring-boot-starter-data-cassandra": -1165635264,
+    "org.springframework.boot:spring-boot-starter-data-cassandra-reactive": 1569302335,
+    "org.springframework.boot:spring-boot-starter-data-cassandra-reactive:jar:sources": 289702936,
+    "org.springframework.boot:spring-boot-starter-data-cassandra-test": -467645696,
     "org.springframework.boot:spring-boot-starter-data-cassandra-test:jar:sources": 464889083,
     "org.springframework.boot:spring-boot-starter-data-cassandra:jar:sources": 62860247,
-    "org.springframework.boot:spring-boot-starter-jackson": -789286705,
-    "org.springframework.boot:spring-boot-starter-jackson-test": -1259015604,
+    "org.springframework.boot:spring-boot-starter-jackson": -1198093588,
+    "org.springframework.boot:spring-boot-starter-jackson-test": -170694695,
     "org.springframework.boot:spring-boot-starter-jackson-test:jar:sources": 1211585483,
     "org.springframework.boot:spring-boot-starter-jackson:jar:sources": 1689728463,
-    "org.springframework.boot:spring-boot-starter-logging": 51215582,
+    "org.springframework.boot:spring-boot-starter-logging": -222708228,
     "org.springframework.boot:spring-boot-starter-logging:jar:sources": 1271111015,
-    "org.springframework.boot:spring-boot-starter-micrometer-metrics": -103216218,
-    "org.springframework.boot:spring-boot-starter-micrometer-metrics-test": 1823423190,
+    "org.springframework.boot:spring-boot-starter-micrometer-metrics": -512023101,
+    "org.springframework.boot:spring-boot-starter-micrometer-metrics-test": 910253334,
     "org.springframework.boot:spring-boot-starter-micrometer-metrics-test:jar:sources": 1830581000,
     "org.springframework.boot:spring-boot-starter-micrometer-metrics:jar:sources": -1130818080,
-    "org.springframework.boot:spring-boot-starter-reactor-netty": 1009047865,
+    "org.springframework.boot:spring-boot-starter-reactor-netty": 600240982,
     "org.springframework.boot:spring-boot-starter-reactor-netty:jar:sources": 1164956430,
-    "org.springframework.boot:spring-boot-starter-security": -1695625735,
-    "org.springframework.boot:spring-boot-starter-security-oauth2-client": 623595396,
+    "org.springframework.boot:spring-boot-starter-security": 768195926,
+    "org.springframework.boot:spring-boot-starter-security-oauth2-client": 951644416,
     "org.springframework.boot:spring-boot-starter-security-oauth2-client:jar:sources": 1707609356,
-    "org.springframework.boot:spring-boot-starter-security-oauth2-resource-server": 1168522450,
-    "org.springframework.boot:spring-boot-starter-security-oauth2-resource-server-test": -1711644160,
+    "org.springframework.boot:spring-boot-starter-security-oauth2-resource-server": 25571303,
+    "org.springframework.boot:spring-boot-starter-security-oauth2-resource-server-test": 1529679474,
     "org.springframework.boot:spring-boot-starter-security-oauth2-resource-server-test:jar:sources": -746940353,
     "org.springframework.boot:spring-boot-starter-security-oauth2-resource-server:jar:sources": 2136275088,
-    "org.springframework.boot:spring-boot-starter-security-test": -1654018173,
+    "org.springframework.boot:spring-boot-starter-security-test": 2147272777,
     "org.springframework.boot:spring-boot-starter-security-test:jar:sources": 468207576,
     "org.springframework.boot:spring-boot-starter-security:jar:sources": -1720617031,
-    "org.springframework.boot:spring-boot-starter-test": 1844551537,
+    "org.springframework.boot:spring-boot-starter-test": 1608994766,
     "org.springframework.boot:spring-boot-starter-test:jar:sources": -480189945,
-    "org.springframework.boot:spring-boot-starter-tomcat": -736524407,
+    "org.springframework.boot:spring-boot-starter-tomcat": 1097926540,
     "org.springframework.boot:spring-boot-starter-tomcat-runtime": 534744375,
     "org.springframework.boot:spring-boot-starter-tomcat-runtime:jar:sources": 1011838045,
     "org.springframework.boot:spring-boot-starter-tomcat:jar:sources": 1319064174,
-    "org.springframework.boot:spring-boot-starter-validation": -77518058,
+    "org.springframework.boot:spring-boot-starter-validation": 2117320819,
     "org.springframework.boot:spring-boot-starter-validation:jar:sources": -1002865328,
-    "org.springframework.boot:spring-boot-starter-web": -1875236601,
+    "org.springframework.boot:spring-boot-starter-web": -2069144769,
     "org.springframework.boot:spring-boot-starter-web:jar:sources": -768709610,
-    "org.springframework.boot:spring-boot-starter-webflux": 484244077,
-    "org.springframework.boot:spring-boot-starter-webflux-test": 248412203,
+    "org.springframework.boot:spring-boot-starter-webflux": -935241559,
+    "org.springframework.boot:spring-boot-starter-webflux-test": 1809447584,
     "org.springframework.boot:spring-boot-starter-webflux-test:jar:sources": -1654084055,
     "org.springframework.boot:spring-boot-starter-webflux:jar:sources": 1008425882,
-    "org.springframework.boot:spring-boot-starter-webmvc": 1516404787,
-    "org.springframework.boot:spring-boot-starter-webmvc-test": -17141819,
+    "org.springframework.boot:spring-boot-starter-webmvc": 1080653104,
+    "org.springframework.boot:spring-boot-starter-webmvc-test": 2124968681,
     "org.springframework.boot:spring-boot-starter-webmvc-test:jar:sources": -1751111514,
     "org.springframework.boot:spring-boot-starter-webmvc:jar:sources": -2120956724,
     "org.springframework.boot:spring-boot-starter:jar:sources": 1138639700,
@@ -732,6 +758,8 @@
     "org.springframework.boot:spring-boot-test-autoconfigure": 2011168683,
     "org.springframework.boot:spring-boot-test-autoconfigure:jar:sources": 392165449,
     "org.springframework.boot:spring-boot-test:jar:sources": -1764708648,
+    "org.springframework.boot:spring-boot-testcontainers": 105535830,
+    "org.springframework.boot:spring-boot-testcontainers:jar:sources": 829014764,
     "org.springframework.boot:spring-boot-tomcat": -807291440,
     "org.springframework.boot:spring-boot-tomcat:jar:sources": -1529683395,
     "org.springframework.boot:spring-boot-validation": 892547576,
@@ -757,14 +785,14 @@
     "org.springframework.cloud:spring-cloud-context:jar:sources": -1413797918,
     "org.springframework.cloud:spring-cloud-kubernetes-client-autoconfig": 1728280096,
     "org.springframework.cloud:spring-cloud-kubernetes-client-autoconfig:jar:sources": 758022911,
-    "org.springframework.cloud:spring-cloud-kubernetes-client-config": 1376925809,
+    "org.springframework.cloud:spring-cloud-kubernetes-client-config": -578009102,
     "org.springframework.cloud:spring-cloud-kubernetes-client-config:jar:sources": -251471561,
     "org.springframework.cloud:spring-cloud-kubernetes-commons": 376611909,
     "org.springframework.cloud:spring-cloud-kubernetes-commons:jar:sources": -325491963,
-    "org.springframework.cloud:spring-cloud-starter": 2107316504,
-    "org.springframework.cloud:spring-cloud-starter-bootstrap": 1445574042,
+    "org.springframework.cloud:spring-cloud-starter": 653749,
+    "org.springframework.cloud:spring-cloud-starter-bootstrap": 909820315,
     "org.springframework.cloud:spring-cloud-starter-bootstrap:jar:sources": 1965832056,
-    "org.springframework.cloud:spring-cloud-starter-kubernetes-client-config": 2112043873,
+    "org.springframework.cloud:spring-cloud-starter-kubernetes-client-config": -1490517314,
     "org.springframework.data:spring-data-cassandra": -953080749,
     "org.springframework.data:spring-data-cassandra:jar:sources": -1628107854,
     "org.springframework.data:spring-data-commons": 60312922,
@@ -777,11 +805,11 @@
     "org.springframework.security:spring-security-core:jar:sources": 1285888871,
     "org.springframework.security:spring-security-crypto": 424824057,
     "org.springframework.security:spring-security-crypto:jar:sources": 1862561396,
-    "org.springframework.security:spring-security-oauth2-client": -288490529,
+    "org.springframework.security:spring-security-oauth2-client": 1351316941,
     "org.springframework.security:spring-security-oauth2-client:jar:sources": 1833974239,
     "org.springframework.security:spring-security-oauth2-core": 318009206,
     "org.springframework.security:spring-security-oauth2-core:jar:sources": -948845785,
-    "org.springframework.security:spring-security-oauth2-jose": -404931323,
+    "org.springframework.security:spring-security-oauth2-jose": 1123856459,
     "org.springframework.security:spring-security-oauth2-jose:jar:sources": 17294361,
     "org.springframework.security:spring-security-oauth2-resource-server": -21703339,
     "org.springframework.security:spring-security-oauth2-resource-server:jar:sources": -1508178760,
@@ -821,6 +849,9 @@
     "org.testcontainers:testcontainers-localstack": 744979553,
     "org.testcontainers:testcontainers-localstack:jar:sources": 311852137,
     "org.testcontainers:testcontainers:jar:sources": 76092129,
+    "org.webjars:swagger-ui": 71586607,
+    "org.webjars:webjars-locator-lite": 468742503,
+    "org.webjars:webjars-locator-lite:jar:sources": -644070866,
     "org.wiremock:wiremock-standalone": -1817681233,
     "org.wiremock:wiremock-standalone:jar:sources": 695361099,
     "org.xmlunit:xmlunit-core": 1938864481,
@@ -839,10 +870,14 @@
     "software.amazon.awssdk:aws-core:jar:sources": -2056881600,
     "software.amazon.awssdk:aws-query-protocol": -173402282,
     "software.amazon.awssdk:aws-query-protocol:jar:sources": -1913348674,
+    "software.amazon.awssdk:aws-xml-protocol": -1565751554,
+    "software.amazon.awssdk:aws-xml-protocol:jar:sources": -56317673,
     "software.amazon.awssdk:checksums": 573213413,
     "software.amazon.awssdk:checksums-spi": -720493267,
     "software.amazon.awssdk:checksums-spi:jar:sources": -650776626,
     "software.amazon.awssdk:checksums:jar:sources": -241565759,
+    "software.amazon.awssdk:crt-core": 739385881,
+    "software.amazon.awssdk:crt-core:jar:sources": 866896833,
     "software.amazon.awssdk:endpoints-spi": 1412926322,
     "software.amazon.awssdk:endpoints-spi:jar:sources": -1092637607,
     "software.amazon.awssdk:http-auth": 487532892,
@@ -873,6 +908,8 @@
     "software.amazon.awssdk:retries-spi": 1857446587,
     "software.amazon.awssdk:retries-spi:jar:sources": -974151310,
     "software.amazon.awssdk:retries:jar:sources": 1826499536,
+    "software.amazon.awssdk:s3": -1646018660,
+    "software.amazon.awssdk:s3:jar:sources": -1707962816,
     "software.amazon.awssdk:sdk-core": 1641186658,
     "software.amazon.awssdk:sdk-core:jar:sources": -769872481,
     "software.amazon.awssdk:sts": 1181279442,
@@ -909,17 +946,17 @@
     },
     "ch.qos.logback:logback-classic": {
       "shasums": {
-        "jar": "b65e05076a5c1aadb659b4fe4bc5fee31cb26cd70390292eb03e4a7a24cff10f",
-        "sources": "c2e39cb4d6d9b8c2343c6da2469e21e1d6aef2dde16c2227762c084d549ad0a0"
+        "jar": "fd68ff5aa2760857ac5b7ad301e98bc6c18a74d60d7e016da1a608307c9eead7",
+        "sources": "454a1a174415253d42f215dcf4772d55bbb5ea8ecfeb5aaaf6aa60c58562780e"
       },
-      "version": "1.5.34"
+      "version": "1.5.37"
     },
     "ch.qos.logback:logback-core": {
       "shasums": {
-        "jar": "42eda264c0c650c2bec59e66151a88b708a8663dc1b49d788202d53e78b8caae",
-        "sources": "6a9f217ef206caf2880810c505e057fd2bb90a6024013906815e9513c6e488c5"
+        "jar": "c142955d757d923c6c626296bd97be2e0db1cfd33adeadbf2e2927403391e0a1",
+        "sources": "abb1829e11537bbc376fa4f72cdae1f3ac195aeb8c31d05b1236cc6d7aa47bb2"
       },
-      "version": "1.5.34"
+      "version": "1.5.37"
     },
     "com.amazonaws:aws-java-sdk-core": {
       "shasums": {
@@ -1167,13 +1204,6 @@
       },
       "version": "2.13.2"
     },
-    "com.google.crypto.tink:tink": {
-      "shasums": {
-        "jar": "6cd3feff51ec5d5fbfa299381cd806bf247a805794d6f7ffb924c9e0d8b8f0d6",
-        "sources": "963ee462bae506f67a5e4711cc47dc418e34882e33ff6bab92ea8c122b3d5f37"
-      },
-      "version": "1.6.1"
-    },
     "com.google.errorprone:error_prone_annotations": {
       "shasums": {
         "jar": "3b1003e51b8ae56fdbd7c71073e81d1683b97e6c4dff5a9151164d59b769d13c",
@@ -1245,10 +1275,10 @@
     },
     "com.nimbusds:nimbus-jose-jwt": {
       "shasums": {
-        "jar": "6f13f3480ddc53d820d276f582f54843cff1daf5c6e35e534947e9de7723b46b",
-        "sources": "b3fd3b569013246fb9a1ac6b43ff3e3033065bce16de92ecf4c971d14875eb30"
+        "jar": "33152ea83ec50d22706fdaf3b07acbcd716f9a68edcabdd7c4d02843cbdcdcf6",
+        "sources": "cead38bc98c18a3f4b6da7157f503e74d8701b9d547d2a722e5fc40c1bdc7c32"
       },
-      "version": "10.4"
+      "version": "10.9.1"
     },
     "com.nimbusds:oauth2-oidc-sdk": {
       "shasums": {
@@ -1737,6 +1767,13 @@
       },
       "version": "4.2.15.Final"
     },
+    "io.opentelemetry.instrumentation:opentelemetry-instrumentation-annotations": {
+      "shasums": {
+        "jar": "937908f74c5b07fe4700fcfdbda8c4cbdc34d1d084483df81d407d0f5ce64b51",
+        "sources": "1fd09c763a25189102b24b355b06fe8bb32815105efda1166fc1e48b63bda2da"
+      },
+      "version": "2.21.0"
+    },
     "io.opentelemetry.semconv:opentelemetry-semconv": {
       "shasums": {
         "jar": "693ad6f04f29b4b593a04adef5f575d28b3a91ea3449ab5b1e1e2e5c6efc6cdc",
@@ -1877,10 +1914,24 @@
       },
       "version": "3.8.6"
     },
+    "io.projectreactor:reactor-core-micrometer": {
+      "shasums": {
+        "jar": "a45cf77ef9e12dc1a7310c7626cec2d08cc044e4bc44e1ea32d4cb8d3131f2f1",
+        "sources": "37287f8aecba177bc5bb41478dd0693ce671026de1ef72b34667166e87f90fde"
+      },
+      "version": "3.8.6"
+    },
     "io.projectreactor:reactor-test": {
       "shasums": {
         "jar": "27acda356a59c19bc3db033f1ed4cff9a6469da6caf424a4004ffaabbfe24d2a",
         "sources": "882b7654b056b77f721a03a804e4830030f072a2f4afb92638d6925568d6d930"
+      },
+      "version": "3.8.6"
+    },
+    "io.projectreactor:reactor-tools": {
+      "shasums": {
+        "jar": "d43b4145a6c12d0128b4b503ba2918e43909fb8307a6e68ebbba756400cf8d76",
+        "sources": "7672cd21a5591a64794a6e61be839b3b07f4416562e17e3651a59b7e830072eb"
       },
       "version": "3.8.6"
     },
@@ -2598,6 +2649,13 @@
       },
       "version": "3.0.3"
     },
+    "org.springdoc:springdoc-openapi-starter-webflux-ui": {
+      "shasums": {
+        "jar": "056e7ca011c9e76469d4dc531c1b9d597256f69f77a847ee0a85ffe38c9989ad",
+        "sources": "84ec0438b49ed198b887365cdb91638234484cfb21e39d89283fec7ac1b1bce3"
+      },
+      "version": "3.0.3"
+    },
     "org.springdoc:springdoc-openapi-starter-webmvc-api": {
       "shasums": {
         "jar": "c7e0221797240037eaf20c834f2d03fabec3f26051bd7052be8bf169f2c02876",
@@ -2630,6 +2688,13 @@
       "shasums": {
         "jar": "1e8a953294fe76727965970de31e3bb08fba2b65e3ca0ee9b8bca492d0818d10",
         "sources": "477e9834d7982b080b485c7baeb27ea399fca324d0442dc2f694a473b6a394fd"
+      },
+      "version": "4.0.7"
+    },
+    "org.springframework.boot:spring-boot-cache": {
+      "shasums": {
+        "jar": "3c60f9dbf9b81eaea0814d717252d589463b9476b3e392b5f2bc5e0d31188e40",
+        "sources": "6a3a10eb20e19589b51e2b584a5ee4a06a1f4464db29dea3f49ff3be1d756a3f"
       },
       "version": "4.0.7"
     },
@@ -2857,10 +2922,24 @@
       },
       "version": "4.0.7"
     },
+    "org.springframework.boot:spring-boot-starter-cache": {
+      "shasums": {
+        "jar": "4ab915af048dc1ae19e99d63cadaa2d457d87f6eedd1a8e1e0351e5bfe041a75",
+        "sources": "4ab915af048dc1ae19e99d63cadaa2d457d87f6eedd1a8e1e0351e5bfe041a75"
+      },
+      "version": "4.0.7"
+    },
     "org.springframework.boot:spring-boot-starter-data-cassandra": {
       "shasums": {
         "jar": "32abc561b414e781bc1998e1a6cd1167f3eff2247e6bb2b1b08a347bb3054acb",
         "sources": "32abc561b414e781bc1998e1a6cd1167f3eff2247e6bb2b1b08a347bb3054acb"
+      },
+      "version": "4.0.7"
+    },
+    "org.springframework.boot:spring-boot-starter-data-cassandra-reactive": {
+      "shasums": {
+        "jar": "8ad2a61602b648192bf77272ff7836641b86cd6e65a33ba3e2ffe512c0c44394",
+        "sources": "8ad2a61602b648192bf77272ff7836641b86cd6e65a33ba3e2ffe512c0c44394"
       },
       "version": "4.0.7"
     },
@@ -3022,6 +3101,13 @@
       "shasums": {
         "jar": "99ca7ab8be0dde10fa6c03e1026969619e826fcc914b6bc0d09090e75ba17cb4",
         "sources": "f94cf34c24539cc3752fae1a0bf182282086452e9c83cfae5241574f20951eb3"
+      },
+      "version": "4.0.7"
+    },
+    "org.springframework.boot:spring-boot-testcontainers": {
+      "shasums": {
+        "jar": "d1410f782f5751efef4d989e3b546a11b88dfc22746161704caddbd396ea39b4",
+        "sources": "389af5d90edbe7bce3aaa3cbe615dca1ed47315b9db113eec17010b7ee159bea"
       },
       "version": "4.0.7"
     },
@@ -3338,6 +3424,19 @@
       },
       "version": "2.0.5"
     },
+    "org.webjars:swagger-ui": {
+      "shasums": {
+        "jar": "1db1386611b1f3d71cc8acc6a1898c3b514060ad01055bae904e24969d591ed0"
+      },
+      "version": "5.32.2"
+    },
+    "org.webjars:webjars-locator-lite": {
+      "shasums": {
+        "jar": "7b67c4e69437a9c32b9c901bfaa056c7e2f1db62401757f02387c1f014bd00c4",
+        "sources": "74040949a0827fc1fe2347cb852dc105d0a62bc0c794ea3fccc27b92050ac114"
+      },
+      "version": "1.1.3"
+    },
     "org.wiremock:wiremock-standalone": {
       "shasums": {
         "jar": "d097b19bd483c5038479b13a5c71e9faf8f2f5106584f0c120a7770ab0bdb367",
@@ -3401,6 +3500,13 @@
       },
       "version": "2.40.1"
     },
+    "software.amazon.awssdk:aws-xml-protocol": {
+      "shasums": {
+        "jar": "2777e4078cdd91ecb19e5084293bddff15bbb99ac828b09f8a10abe0ea0d9f22",
+        "sources": "d4f8404a76e083984a8cb0f4bc1ad6bfae0c5e38082bdd00b31d2c958d8950ef"
+      },
+      "version": "2.40.1"
+    },
     "software.amazon.awssdk:checksums": {
       "shasums": {
         "jar": "6770fdd0d970c1869cd869d784cc20963a4a6b2bee09f125da0504ba2c9e818d",
@@ -3412,6 +3518,13 @@
       "shasums": {
         "jar": "1f9d68cd2f5ec133757e37b794ab06de015d1b35f4c1452b43ab8b612318a8c3",
         "sources": "d17d8d92268f9c6773aa6b72564774dc394ae2fb2149bed26152385a9b6751ff"
+      },
+      "version": "2.40.1"
+    },
+    "software.amazon.awssdk:crt-core": {
+      "shasums": {
+        "jar": "94446e3fd5e88bb9a87a6b5517343bd3194133024a52746c4b9884af52fffd8e",
+        "sources": "663321d5b2652196f2b29e4dee62efd02b73605cba64181a9bbf2e6f54337941"
       },
       "version": "2.40.1"
     },
@@ -3520,6 +3633,13 @@
       },
       "version": "2.40.1"
     },
+    "software.amazon.awssdk:s3": {
+      "shasums": {
+        "jar": "d6039335d6b83892dd2d257db4237f0cf7bc0703e0ca97a6368c2841181f9120",
+        "sources": "0bfc68325e6e31fedf1f4bbafc4c5fcafa6af674f528fe853b06cc7e55215ce7"
+      },
+      "version": "2.40.1"
+    },
     "software.amazon.awssdk:sdk-core": {
       "shasums": {
         "jar": "6c6b1a49b18538060d1f9a797998ca8d589910b274b345bbf0a61c4540e41f27",
@@ -3588,10 +3708,6 @@
     "com.github.jnr:jnr-ffi:2.2.11": "com.github.jnr:jnr-ffi:2.1.7",
     "com.github.jnr:jnr-posix:3.0.44": "com.github.jnr:jnr-posix:3.1.15",
     "com.google.code.findbugs:jsr305:2.0.1": "com.google.code.findbugs:jsr305:3.0.2",
-    "com.google.errorprone:error_prone_annotations:2.18.0": "com.google.errorprone:error_prone_annotations:2.49.0",
-    "com.google.errorprone:error_prone_annotations:2.23.0": "com.google.errorprone:error_prone_annotations:2.49.0",
-    "com.google.errorprone:error_prone_annotations:2.41.0": "com.google.errorprone:error_prone_annotations:2.49.0",
-    "com.google.errorprone:error_prone_annotations:2.47.0": "com.google.errorprone:error_prone_annotations:2.49.0",
     "com.google.guava:guava:19.0": "com.google.guava:guava:33.6.0-jre",
     "com.google.guava:guava:32.1.3-android": "com.google.guava:guava:33.6.0-jre",
     "com.google.guava:guava:32.1.3-jre": "com.google.guava:guava:33.6.0-jre",
@@ -3711,10 +3827,6 @@
     ],
     "com.google.code.gson:gson": [
       "com.google.errorprone:error_prone_annotations"
-    ],
-    "com.google.crypto.tink:tink": [
-      "com.google.code.gson:gson",
-      "com.google.protobuf:protobuf-java"
     ],
     "com.google.guava:guava": [
       "com.google.errorprone:error_prone_annotations",
@@ -4099,6 +4211,9 @@
       "io.netty:netty-common",
       "io.netty:netty-transport"
     ],
+    "io.opentelemetry.instrumentation:opentelemetry-instrumentation-annotations": [
+      "io.opentelemetry:opentelemetry-api"
+    ],
     "io.opentelemetry:opentelemetry-api": [
       "io.opentelemetry:opentelemetry-context"
     ],
@@ -4181,9 +4296,16 @@
       "org.jspecify:jspecify",
       "org.reactivestreams:reactive-streams"
     ],
+    "io.projectreactor:reactor-core-micrometer": [
+      "io.micrometer:micrometer-core",
+      "io.projectreactor:reactor-core"
+    ],
     "io.projectreactor:reactor-test": [
       "io.projectreactor:reactor-core",
       "org.jspecify:jspecify"
+    ],
+    "io.projectreactor:reactor-tools": [
+      "io.projectreactor:reactor-core"
     ],
     "io.prometheus:prometheus-metrics-core": [
       "io.prometheus:prometheus-metrics-config",
@@ -4443,6 +4565,11 @@
       "org.springframework.boot:spring-boot-web-server",
       "org.springframework.boot:spring-boot-webflux"
     ],
+    "org.springdoc:springdoc-openapi-starter-webflux-ui": [
+      "org.springdoc:springdoc-openapi-starter-webflux-api",
+      "org.webjars:swagger-ui",
+      "org.webjars:webjars-locator-lite"
+    ],
     "org.springdoc:springdoc-openapi-starter-webmvc-api": [
       "org.springdoc:springdoc-openapi-starter-common",
       "org.springframework.boot:spring-boot-web-server",
@@ -4461,6 +4588,10 @@
     ],
     "org.springframework.boot:spring-boot-autoconfigure": [
       "org.springframework.boot:spring-boot"
+    ],
+    "org.springframework.boot:spring-boot-cache": [
+      "org.springframework.boot:spring-boot",
+      "org.springframework:spring-context-support"
     ],
     "org.springframework.boot:spring-boot-cassandra": [
       "org.apache.cassandra:java-driver-core",
@@ -4612,9 +4743,19 @@
       "org.springframework.boot:spring-boot-starter",
       "org.springframework:spring-aop"
     ],
+    "org.springframework.boot:spring-boot-starter-cache": [
+      "org.springframework.boot:spring-boot-cache",
+      "org.springframework.boot:spring-boot-starter"
+    ],
     "org.springframework.boot:spring-boot-starter-data-cassandra": [
       "org.springframework.boot:spring-boot-cassandra",
       "org.springframework.boot:spring-boot-data-cassandra",
+      "org.springframework.boot:spring-boot-starter"
+    ],
+    "org.springframework.boot:spring-boot-starter-data-cassandra-reactive": [
+      "org.springframework.boot:spring-boot-cassandra",
+      "org.springframework.boot:spring-boot-data-cassandra",
+      "org.springframework.boot:spring-boot-reactor",
       "org.springframework.boot:spring-boot-starter"
     ],
     "org.springframework.boot:spring-boot-starter-data-cassandra-test": [
@@ -4751,6 +4892,10 @@
     ],
     "org.springframework.boot:spring-boot-test-autoconfigure": [
       "org.springframework.boot:spring-boot-test"
+    ],
+    "org.springframework.boot:spring-boot-testcontainers": [
+      "org.springframework.boot:spring-boot-autoconfigure",
+      "org.testcontainers:testcontainers"
     ],
     "org.springframework.boot:spring-boot-tomcat": [
       "jakarta.annotation:jakarta.annotation-api",
@@ -4981,6 +5126,9 @@
     "org.testcontainers:testcontainers-localstack": [
       "org.testcontainers:testcontainers"
     ],
+    "org.webjars:webjars-locator-lite": [
+      "org.jspecify:jspecify"
+    ],
     "org.xmlunit:xmlunit-core": [
       "jakarta.xml.bind:jakarta.xml.bind-api"
     ],
@@ -5039,6 +5187,15 @@
       "software.amazon.awssdk:sdk-core",
       "software.amazon.awssdk:utils"
     ],
+    "software.amazon.awssdk:aws-xml-protocol": [
+      "software.amazon.awssdk:annotations",
+      "software.amazon.awssdk:aws-core",
+      "software.amazon.awssdk:aws-query-protocol",
+      "software.amazon.awssdk:http-client-spi",
+      "software.amazon.awssdk:protocol-core",
+      "software.amazon.awssdk:sdk-core",
+      "software.amazon.awssdk:utils"
+    ],
     "software.amazon.awssdk:checksums": [
       "software.amazon.awssdk:annotations",
       "software.amazon.awssdk:checksums-spi",
@@ -5046,6 +5203,10 @@
     ],
     "software.amazon.awssdk:checksums-spi": [
       "software.amazon.awssdk:annotations"
+    ],
+    "software.amazon.awssdk:crt-core": [
+      "software.amazon.awssdk:annotations",
+      "software.amazon.awssdk:utils"
     ],
     "software.amazon.awssdk:endpoints-spi": [
       "software.amazon.awssdk:annotations"
@@ -5139,6 +5300,32 @@
     ],
     "software.amazon.awssdk:retries-spi": [
       "software.amazon.awssdk:annotations",
+      "software.amazon.awssdk:utils"
+    ],
+    "software.amazon.awssdk:s3": [
+      "software.amazon.awssdk:annotations",
+      "software.amazon.awssdk:apache-client",
+      "software.amazon.awssdk:arns",
+      "software.amazon.awssdk:auth",
+      "software.amazon.awssdk:aws-core",
+      "software.amazon.awssdk:aws-xml-protocol",
+      "software.amazon.awssdk:checksums",
+      "software.amazon.awssdk:checksums-spi",
+      "software.amazon.awssdk:crt-core",
+      "software.amazon.awssdk:endpoints-spi",
+      "software.amazon.awssdk:http-auth",
+      "software.amazon.awssdk:http-auth-aws",
+      "software.amazon.awssdk:http-auth-spi",
+      "software.amazon.awssdk:http-client-spi",
+      "software.amazon.awssdk:identity-spi",
+      "software.amazon.awssdk:json-utils",
+      "software.amazon.awssdk:metrics-spi",
+      "software.amazon.awssdk:netty-nio-client",
+      "software.amazon.awssdk:profiles",
+      "software.amazon.awssdk:protocol-core",
+      "software.amazon.awssdk:regions",
+      "software.amazon.awssdk:retries-spi",
+      "software.amazon.awssdk:sdk-core",
       "software.amazon.awssdk:utils"
     ],
     "software.amazon.awssdk:sdk-core": [
@@ -5731,26 +5918,6 @@
       "com.google.gson.internal.sql",
       "com.google.gson.reflect",
       "com.google.gson.stream"
-    ],
-    "com.google.crypto.tink:tink": [
-      "com.google.crypto.tink",
-      "com.google.crypto.tink.aead",
-      "com.google.crypto.tink.aead.subtle",
-      "com.google.crypto.tink.annotations",
-      "com.google.crypto.tink.config",
-      "com.google.crypto.tink.daead",
-      "com.google.crypto.tink.hybrid",
-      "com.google.crypto.tink.hybrid.subtle",
-      "com.google.crypto.tink.mac",
-      "com.google.crypto.tink.prf",
-      "com.google.crypto.tink.proto",
-      "com.google.crypto.tink.signature",
-      "com.google.crypto.tink.signature.internal",
-      "com.google.crypto.tink.streamingaead",
-      "com.google.crypto.tink.subtle",
-      "com.google.crypto.tink.subtle.prf",
-      "com.google.crypto.tink.tinkkey",
-      "com.google.crypto.tink.util"
     ],
     "com.google.errorprone:error_prone_annotations": [
       "com.google.errorprone.annotations",
@@ -6402,6 +6569,9 @@
     "io.netty:netty-transport-native-unix-common": [
       "io.netty.channel.unix"
     ],
+    "io.opentelemetry.instrumentation:opentelemetry-instrumentation-annotations": [
+      "io.opentelemetry.instrumentation.annotations"
+    ],
     "io.opentelemetry.semconv:opentelemetry-semconv": [
       "io.opentelemetry.semconv"
     ],
@@ -6576,12 +6746,59 @@
       "reactor.util.repeat",
       "reactor.util.retry"
     ],
+    "io.projectreactor:reactor-core-micrometer": [
+      "reactor.core.observability.micrometer"
+    ],
     "io.projectreactor:reactor-test": [
       "reactor.test",
       "reactor.test.publisher",
       "reactor.test.scheduler",
       "reactor.test.subscriber",
       "reactor.test.util"
+    ],
+    "io.projectreactor:reactor-tools": [
+      "reactor.tools.agent",
+      "reactor.tools.shaded.net.bytebuddy",
+      "reactor.tools.shaded.net.bytebuddy.agent",
+      "reactor.tools.shaded.net.bytebuddy.agent.builder",
+      "reactor.tools.shaded.net.bytebuddy.agent.utility.nullability",
+      "reactor.tools.shaded.net.bytebuddy.asm",
+      "reactor.tools.shaded.net.bytebuddy.build",
+      "reactor.tools.shaded.net.bytebuddy.description",
+      "reactor.tools.shaded.net.bytebuddy.description.annotation",
+      "reactor.tools.shaded.net.bytebuddy.description.enumeration",
+      "reactor.tools.shaded.net.bytebuddy.description.field",
+      "reactor.tools.shaded.net.bytebuddy.description.method",
+      "reactor.tools.shaded.net.bytebuddy.description.modifier",
+      "reactor.tools.shaded.net.bytebuddy.description.module",
+      "reactor.tools.shaded.net.bytebuddy.description.type",
+      "reactor.tools.shaded.net.bytebuddy.dynamic",
+      "reactor.tools.shaded.net.bytebuddy.dynamic.loading",
+      "reactor.tools.shaded.net.bytebuddy.dynamic.scaffold",
+      "reactor.tools.shaded.net.bytebuddy.dynamic.scaffold.inline",
+      "reactor.tools.shaded.net.bytebuddy.dynamic.scaffold.subclass",
+      "reactor.tools.shaded.net.bytebuddy.implementation",
+      "reactor.tools.shaded.net.bytebuddy.implementation.attribute",
+      "reactor.tools.shaded.net.bytebuddy.implementation.auxiliary",
+      "reactor.tools.shaded.net.bytebuddy.implementation.bind",
+      "reactor.tools.shaded.net.bytebuddy.implementation.bind.annotation",
+      "reactor.tools.shaded.net.bytebuddy.implementation.bytecode",
+      "reactor.tools.shaded.net.bytebuddy.implementation.bytecode.assign",
+      "reactor.tools.shaded.net.bytebuddy.implementation.bytecode.assign.primitive",
+      "reactor.tools.shaded.net.bytebuddy.implementation.bytecode.assign.reference",
+      "reactor.tools.shaded.net.bytebuddy.implementation.bytecode.collection",
+      "reactor.tools.shaded.net.bytebuddy.implementation.bytecode.constant",
+      "reactor.tools.shaded.net.bytebuddy.implementation.bytecode.member",
+      "reactor.tools.shaded.net.bytebuddy.jar.asm",
+      "reactor.tools.shaded.net.bytebuddy.jar.asm.commons",
+      "reactor.tools.shaded.net.bytebuddy.jar.asm.signature",
+      "reactor.tools.shaded.net.bytebuddy.matcher",
+      "reactor.tools.shaded.net.bytebuddy.pool",
+      "reactor.tools.shaded.net.bytebuddy.utility",
+      "reactor.tools.shaded.net.bytebuddy.utility.dispatcher",
+      "reactor.tools.shaded.net.bytebuddy.utility.nullability",
+      "reactor.tools.shaded.net.bytebuddy.utility.privilege",
+      "reactor.tools.shaded.net.bytebuddy.utility.visitor"
     ],
     "io.prometheus:prometheus-metrics-config": [
       "io.prometheus.metrics.config"
@@ -8522,6 +8739,9 @@
       "org.springdoc.webflux.core.service",
       "org.springdoc.webflux.core.visitor"
     ],
+    "org.springdoc:springdoc-openapi-starter-webflux-ui": [
+      "org.springdoc.webflux.ui"
+    ],
     "org.springdoc:springdoc-openapi-starter-webmvc-api": [
       "org.springdoc.webmvc.api",
       "org.springdoc.webmvc.core.configuration",
@@ -8653,6 +8873,12 @@
       "org.springframework.boot.autoconfigure.template",
       "org.springframework.boot.autoconfigure.web",
       "org.springframework.boot.autoconfigure.web.format"
+    ],
+    "org.springframework.boot:spring-boot-cache": [
+      "org.springframework.boot.cache.actuate.endpoint",
+      "org.springframework.boot.cache.autoconfigure",
+      "org.springframework.boot.cache.autoconfigure.metrics",
+      "org.springframework.boot.cache.metrics"
     ],
     "org.springframework.boot:spring-boot-cassandra": [
       "org.springframework.boot.cassandra.autoconfigure",
@@ -8858,6 +9084,14 @@
       "org.springframework.boot.test.autoconfigure",
       "org.springframework.boot.test.autoconfigure.jdbc",
       "org.springframework.boot.test.autoconfigure.json"
+    ],
+    "org.springframework.boot:spring-boot-testcontainers": [
+      "org.springframework.boot.testcontainers",
+      "org.springframework.boot.testcontainers.beans",
+      "org.springframework.boot.testcontainers.context",
+      "org.springframework.boot.testcontainers.lifecycle",
+      "org.springframework.boot.testcontainers.properties",
+      "org.springframework.boot.testcontainers.service.connection"
     ],
     "org.springframework.boot:spring-boot-tomcat": [
       "org.springframework.boot.tomcat",
@@ -10159,6 +10393,9 @@
       "org.testcontainers.containers.localstack",
       "org.testcontainers.localstack"
     ],
+    "org.webjars:webjars-locator-lite": [
+      "org.webjars"
+    ],
     "org.wiremock:wiremock-standalone": [
       "com.github.tomakehurst.wiremock",
       "com.github.tomakehurst.wiremock.admin",
@@ -10653,12 +10890,20 @@
       "software.amazon.awssdk.protocols.query.internal.unmarshall",
       "software.amazon.awssdk.protocols.query.unmarshall"
     ],
+    "software.amazon.awssdk:aws-xml-protocol": [
+      "software.amazon.awssdk.protocols.xml",
+      "software.amazon.awssdk.protocols.xml.internal.marshall",
+      "software.amazon.awssdk.protocols.xml.internal.unmarshall"
+    ],
     "software.amazon.awssdk:checksums": [
       "software.amazon.awssdk.checksums",
       "software.amazon.awssdk.checksums.internal"
     ],
     "software.amazon.awssdk:checksums-spi": [
       "software.amazon.awssdk.checksums.spi"
+    ],
+    "software.amazon.awssdk:crt-core": [
+      "software.amazon.awssdk.crtcore"
     ],
     "software.amazon.awssdk:endpoints-spi": [
       "software.amazon.awssdk.endpoints"
@@ -10744,6 +10989,41 @@
       "software.amazon.awssdk.retries.api",
       "software.amazon.awssdk.retries.api.internal",
       "software.amazon.awssdk.retries.api.internal.backoff"
+    ],
+    "software.amazon.awssdk:s3": [
+      "software.amazon.awssdk.services.s3",
+      "software.amazon.awssdk.services.s3.auth.scheme",
+      "software.amazon.awssdk.services.s3.auth.scheme.internal",
+      "software.amazon.awssdk.services.s3.crt",
+      "software.amazon.awssdk.services.s3.endpoints",
+      "software.amazon.awssdk.services.s3.endpoints.authscheme",
+      "software.amazon.awssdk.services.s3.endpoints.internal",
+      "software.amazon.awssdk.services.s3.internal",
+      "software.amazon.awssdk.services.s3.internal.checksums",
+      "software.amazon.awssdk.services.s3.internal.client",
+      "software.amazon.awssdk.services.s3.internal.crossregion",
+      "software.amazon.awssdk.services.s3.internal.crossregion.endpointprovider",
+      "software.amazon.awssdk.services.s3.internal.crossregion.utils",
+      "software.amazon.awssdk.services.s3.internal.crt",
+      "software.amazon.awssdk.services.s3.internal.endpoints",
+      "software.amazon.awssdk.services.s3.internal.handlers",
+      "software.amazon.awssdk.services.s3.internal.multipart",
+      "software.amazon.awssdk.services.s3.internal.plugins",
+      "software.amazon.awssdk.services.s3.internal.resource",
+      "software.amazon.awssdk.services.s3.internal.s3express",
+      "software.amazon.awssdk.services.s3.internal.settingproviders",
+      "software.amazon.awssdk.services.s3.internal.signing",
+      "software.amazon.awssdk.services.s3.jmespath.internal",
+      "software.amazon.awssdk.services.s3.model",
+      "software.amazon.awssdk.services.s3.model.selectobjectcontenteventstream",
+      "software.amazon.awssdk.services.s3.multipart",
+      "software.amazon.awssdk.services.s3.paginators",
+      "software.amazon.awssdk.services.s3.presigner",
+      "software.amazon.awssdk.services.s3.presigner.model",
+      "software.amazon.awssdk.services.s3.s3express",
+      "software.amazon.awssdk.services.s3.transform",
+      "software.amazon.awssdk.services.s3.waiters",
+      "software.amazon.awssdk.services.s3.waiters.internal"
     ],
     "software.amazon.awssdk:sdk-core": [
       "software.amazon.awssdk.core",
@@ -10998,8 +11278,6 @@
       "com.google.code.findbugs:jsr305:jar:sources",
       "com.google.code.gson:gson",
       "com.google.code.gson:gson:jar:sources",
-      "com.google.crypto.tink:tink",
-      "com.google.crypto.tink:tink:jar:sources",
       "com.google.errorprone:error_prone_annotations",
       "com.google.errorprone:error_prone_annotations:jar:sources",
       "com.google.guava:failureaccess",
@@ -11163,6 +11441,8 @@
       "io.netty:netty-transport-native-unix-common",
       "io.netty:netty-transport-native-unix-common:jar:sources",
       "io.netty:netty-transport:jar:sources",
+      "io.opentelemetry.instrumentation:opentelemetry-instrumentation-annotations",
+      "io.opentelemetry.instrumentation:opentelemetry-instrumentation-annotations:jar:sources",
       "io.opentelemetry.semconv:opentelemetry-semconv",
       "io.opentelemetry.semconv:opentelemetry-semconv:jar:sources",
       "io.opentelemetry:opentelemetry-api",
@@ -11202,9 +11482,13 @@
       "io.projectreactor.netty:reactor-netty-http",
       "io.projectreactor.netty:reactor-netty-http:jar:sources",
       "io.projectreactor:reactor-core",
+      "io.projectreactor:reactor-core-micrometer",
+      "io.projectreactor:reactor-core-micrometer:jar:sources",
       "io.projectreactor:reactor-core:jar:sources",
       "io.projectreactor:reactor-test",
       "io.projectreactor:reactor-test:jar:sources",
+      "io.projectreactor:reactor-tools",
+      "io.projectreactor:reactor-tools:jar:sources",
       "io.prometheus:prometheus-metrics-config",
       "io.prometheus:prometheus-metrics-config:jar:sources",
       "io.prometheus:prometheus-metrics-core",
@@ -11409,6 +11693,8 @@
       "org.springdoc:springdoc-openapi-starter-common:jar:sources",
       "org.springdoc:springdoc-openapi-starter-webflux-api",
       "org.springdoc:springdoc-openapi-starter-webflux-api:jar:sources",
+      "org.springdoc:springdoc-openapi-starter-webflux-ui",
+      "org.springdoc:springdoc-openapi-starter-webflux-ui:jar:sources",
       "org.springdoc:springdoc-openapi-starter-webmvc-api",
       "org.springdoc:springdoc-openapi-starter-webmvc-api:jar:sources",
       "org.springframework.boot:spring-boot",
@@ -11418,6 +11704,8 @@
       "org.springframework.boot:spring-boot-actuator:jar:sources",
       "org.springframework.boot:spring-boot-autoconfigure",
       "org.springframework.boot:spring-boot-autoconfigure:jar:sources",
+      "org.springframework.boot:spring-boot-cache",
+      "org.springframework.boot:spring-boot-cache:jar:sources",
       "org.springframework.boot:spring-boot-cassandra",
       "org.springframework.boot:spring-boot-cassandra:jar:sources",
       "org.springframework.boot:spring-boot-data-cassandra",
@@ -11481,7 +11769,11 @@
       "org.springframework.boot:spring-boot-starter-actuator:jar:sources",
       "org.springframework.boot:spring-boot-starter-aspectj",
       "org.springframework.boot:spring-boot-starter-aspectj:jar:sources",
+      "org.springframework.boot:spring-boot-starter-cache",
+      "org.springframework.boot:spring-boot-starter-cache:jar:sources",
       "org.springframework.boot:spring-boot-starter-data-cassandra",
+      "org.springframework.boot:spring-boot-starter-data-cassandra-reactive",
+      "org.springframework.boot:spring-boot-starter-data-cassandra-reactive:jar:sources",
       "org.springframework.boot:spring-boot-starter-data-cassandra-test",
       "org.springframework.boot:spring-boot-starter-data-cassandra-test:jar:sources",
       "org.springframework.boot:spring-boot-starter-data-cassandra:jar:sources",
@@ -11530,6 +11822,8 @@
       "org.springframework.boot:spring-boot-test-autoconfigure",
       "org.springframework.boot:spring-boot-test-autoconfigure:jar:sources",
       "org.springframework.boot:spring-boot-test:jar:sources",
+      "org.springframework.boot:spring-boot-testcontainers",
+      "org.springframework.boot:spring-boot-testcontainers:jar:sources",
       "org.springframework.boot:spring-boot-tomcat",
       "org.springframework.boot:spring-boot-tomcat:jar:sources",
       "org.springframework.boot:spring-boot-validation",
@@ -11619,6 +11913,9 @@
       "org.testcontainers:testcontainers-localstack",
       "org.testcontainers:testcontainers-localstack:jar:sources",
       "org.testcontainers:testcontainers:jar:sources",
+      "org.webjars:swagger-ui",
+      "org.webjars:webjars-locator-lite",
+      "org.webjars:webjars-locator-lite:jar:sources",
       "org.wiremock:wiremock-standalone",
       "org.wiremock:wiremock-standalone:jar:sources",
       "org.xmlunit:xmlunit-core",
@@ -11637,10 +11934,14 @@
       "software.amazon.awssdk:aws-core:jar:sources",
       "software.amazon.awssdk:aws-query-protocol",
       "software.amazon.awssdk:aws-query-protocol:jar:sources",
+      "software.amazon.awssdk:aws-xml-protocol",
+      "software.amazon.awssdk:aws-xml-protocol:jar:sources",
       "software.amazon.awssdk:checksums",
       "software.amazon.awssdk:checksums-spi",
       "software.amazon.awssdk:checksums-spi:jar:sources",
       "software.amazon.awssdk:checksums:jar:sources",
+      "software.amazon.awssdk:crt-core",
+      "software.amazon.awssdk:crt-core:jar:sources",
       "software.amazon.awssdk:endpoints-spi",
       "software.amazon.awssdk:endpoints-spi:jar:sources",
       "software.amazon.awssdk:http-auth",
@@ -11671,6 +11972,8 @@
       "software.amazon.awssdk:retries-spi",
       "software.amazon.awssdk:retries-spi:jar:sources",
       "software.amazon.awssdk:retries:jar:sources",
+      "software.amazon.awssdk:s3",
+      "software.amazon.awssdk:s3:jar:sources",
       "software.amazon.awssdk:sdk-core",
       "software.amazon.awssdk:sdk-core:jar:sources",
       "software.amazon.awssdk:sts",
@@ -11770,8 +12073,6 @@
       "com.google.code.findbugs:jsr305:jar:sources",
       "com.google.code.gson:gson",
       "com.google.code.gson:gson:jar:sources",
-      "com.google.crypto.tink:tink",
-      "com.google.crypto.tink:tink:jar:sources",
       "com.google.errorprone:error_prone_annotations",
       "com.google.errorprone:error_prone_annotations:jar:sources",
       "com.google.guava:failureaccess",
@@ -11935,6 +12236,8 @@
       "io.netty:netty-transport-native-unix-common",
       "io.netty:netty-transport-native-unix-common:jar:sources",
       "io.netty:netty-transport:jar:sources",
+      "io.opentelemetry.instrumentation:opentelemetry-instrumentation-annotations",
+      "io.opentelemetry.instrumentation:opentelemetry-instrumentation-annotations:jar:sources",
       "io.opentelemetry.semconv:opentelemetry-semconv",
       "io.opentelemetry.semconv:opentelemetry-semconv:jar:sources",
       "io.opentelemetry:opentelemetry-api",
@@ -11974,9 +12277,13 @@
       "io.projectreactor.netty:reactor-netty-http",
       "io.projectreactor.netty:reactor-netty-http:jar:sources",
       "io.projectreactor:reactor-core",
+      "io.projectreactor:reactor-core-micrometer",
+      "io.projectreactor:reactor-core-micrometer:jar:sources",
       "io.projectreactor:reactor-core:jar:sources",
       "io.projectreactor:reactor-test",
       "io.projectreactor:reactor-test:jar:sources",
+      "io.projectreactor:reactor-tools",
+      "io.projectreactor:reactor-tools:jar:sources",
       "io.prometheus:prometheus-metrics-config",
       "io.prometheus:prometheus-metrics-config:jar:sources",
       "io.prometheus:prometheus-metrics-core",
@@ -12181,6 +12488,8 @@
       "org.springdoc:springdoc-openapi-starter-common:jar:sources",
       "org.springdoc:springdoc-openapi-starter-webflux-api",
       "org.springdoc:springdoc-openapi-starter-webflux-api:jar:sources",
+      "org.springdoc:springdoc-openapi-starter-webflux-ui",
+      "org.springdoc:springdoc-openapi-starter-webflux-ui:jar:sources",
       "org.springdoc:springdoc-openapi-starter-webmvc-api",
       "org.springdoc:springdoc-openapi-starter-webmvc-api:jar:sources",
       "org.springframework.boot:spring-boot",
@@ -12190,6 +12499,8 @@
       "org.springframework.boot:spring-boot-actuator:jar:sources",
       "org.springframework.boot:spring-boot-autoconfigure",
       "org.springframework.boot:spring-boot-autoconfigure:jar:sources",
+      "org.springframework.boot:spring-boot-cache",
+      "org.springframework.boot:spring-boot-cache:jar:sources",
       "org.springframework.boot:spring-boot-cassandra",
       "org.springframework.boot:spring-boot-cassandra:jar:sources",
       "org.springframework.boot:spring-boot-data-cassandra",
@@ -12253,7 +12564,11 @@
       "org.springframework.boot:spring-boot-starter-actuator:jar:sources",
       "org.springframework.boot:spring-boot-starter-aspectj",
       "org.springframework.boot:spring-boot-starter-aspectj:jar:sources",
+      "org.springframework.boot:spring-boot-starter-cache",
+      "org.springframework.boot:spring-boot-starter-cache:jar:sources",
       "org.springframework.boot:spring-boot-starter-data-cassandra",
+      "org.springframework.boot:spring-boot-starter-data-cassandra-reactive",
+      "org.springframework.boot:spring-boot-starter-data-cassandra-reactive:jar:sources",
       "org.springframework.boot:spring-boot-starter-data-cassandra-test",
       "org.springframework.boot:spring-boot-starter-data-cassandra-test:jar:sources",
       "org.springframework.boot:spring-boot-starter-data-cassandra:jar:sources",
@@ -12302,6 +12617,8 @@
       "org.springframework.boot:spring-boot-test-autoconfigure",
       "org.springframework.boot:spring-boot-test-autoconfigure:jar:sources",
       "org.springframework.boot:spring-boot-test:jar:sources",
+      "org.springframework.boot:spring-boot-testcontainers",
+      "org.springframework.boot:spring-boot-testcontainers:jar:sources",
       "org.springframework.boot:spring-boot-tomcat",
       "org.springframework.boot:spring-boot-tomcat:jar:sources",
       "org.springframework.boot:spring-boot-validation",
@@ -12391,6 +12708,9 @@
       "org.testcontainers:testcontainers-localstack",
       "org.testcontainers:testcontainers-localstack:jar:sources",
       "org.testcontainers:testcontainers:jar:sources",
+      "org.webjars:swagger-ui",
+      "org.webjars:webjars-locator-lite",
+      "org.webjars:webjars-locator-lite:jar:sources",
       "org.wiremock:wiremock-standalone",
       "org.wiremock:wiremock-standalone:jar:sources",
       "org.xmlunit:xmlunit-core",
@@ -12409,10 +12729,14 @@
       "software.amazon.awssdk:aws-core:jar:sources",
       "software.amazon.awssdk:aws-query-protocol",
       "software.amazon.awssdk:aws-query-protocol:jar:sources",
+      "software.amazon.awssdk:aws-xml-protocol",
+      "software.amazon.awssdk:aws-xml-protocol:jar:sources",
       "software.amazon.awssdk:checksums",
       "software.amazon.awssdk:checksums-spi",
       "software.amazon.awssdk:checksums-spi:jar:sources",
       "software.amazon.awssdk:checksums:jar:sources",
+      "software.amazon.awssdk:crt-core",
+      "software.amazon.awssdk:crt-core:jar:sources",
       "software.amazon.awssdk:endpoints-spi",
       "software.amazon.awssdk:endpoints-spi:jar:sources",
       "software.amazon.awssdk:http-auth",
@@ -12443,6 +12767,8 @@
       "software.amazon.awssdk:retries-spi",
       "software.amazon.awssdk:retries-spi:jar:sources",
       "software.amazon.awssdk:retries:jar:sources",
+      "software.amazon.awssdk:s3",
+      "software.amazon.awssdk:s3:jar:sources",
       "software.amazon.awssdk:sdk-core",
       "software.amazon.awssdk:sdk-core:jar:sources",
       "software.amazon.awssdk:sts",

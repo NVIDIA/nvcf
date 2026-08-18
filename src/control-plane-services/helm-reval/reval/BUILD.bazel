@@ -21,6 +21,7 @@ go_library(
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/imagecredential",
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/zapotelspan",
         "@com_github_sourcegraph_conc//pool",
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
         "@io_k8s_api//apps/v1:apps",
         "@io_k8s_api//batch/v1:batch",
         "@io_k8s_api//core/v1:core",
@@ -39,6 +40,7 @@ go_library(
         "@io_k8s_sigs_controller_runtime//pkg/client",
         "@io_opentelemetry_go_otel//:otel",
         "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//noop",
         "@io_opentelemetry_go_otel_trace//:trace",
         "@land_oras_oras_go_v2//errdef",
         "@land_oras_oras_go_v2//registry",
@@ -57,6 +59,7 @@ go_library(
         "@sh_helm_helm_v3//pkg/getter",
         "@sh_helm_helm_v3//pkg/registry",
         "@sh_helm_helm_v3//pkg/release",
+        "@sh_helm_helm_v3//pkg/repo",
     ],
 )
 
@@ -104,6 +107,7 @@ go_test(
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/imagecredential",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
         "@io_k8s_api//autoscaling/v2:autoscaling",
         "@io_k8s_api//core/v1:core",
         "@io_k8s_apimachinery//pkg/apis/meta/v1:meta",
@@ -117,6 +121,8 @@ go_test(
         "@org_uber_go_zap//:zap",
         "@org_uber_go_zap//zapcore",
         "@org_uber_go_zap//zaptest",
+        "@sh_helm_helm_v3//pkg/action",
         "@sh_helm_helm_v3//pkg/chart",
+        "@sh_helm_helm_v3//pkg/getter",
     ],
 )

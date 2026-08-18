@@ -92,6 +92,12 @@ func (c *AgentCopier) Copy(ctx context.Context, destRoot string, sources []check
 		if kind == "" {
 			kind = checkpointstore.SourceKindRootfs
 		}
+		// Same guard as the local backend: Join would resolve an escaping
+		// "../" rather than refuse it, and this writes into a shared L2
+		// volume.
+		if !checkpointstore.SafeSubpath(src.DstSubpath) {
+			return totalBytes, totalFiles, fmt.Errorf("capture source %q: subpath %q escapes the capture tree", src.SrcPath, src.DstSubpath)
+		}
 		fullDst := filepath.Join(destRoot, src.DstSubpath)
 		if err := os.MkdirAll(filepath.Dir(fullDst), 0o755); err != nil {
 			return totalBytes, totalFiles, fmt.Errorf("mkdir parent of %q: %w", fullDst, err)

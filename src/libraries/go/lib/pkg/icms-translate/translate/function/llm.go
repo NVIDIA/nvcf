@@ -19,6 +19,8 @@ package function
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -56,6 +58,24 @@ func normalizeLLMRequestRouterAddressEnvAliases(envSet map[string]string) {
 	if envSet[legacyStargateAddressEnv] == "" {
 		envSet[legacyStargateAddressEnv] = llmRequestRouterAddress
 	}
+}
+
+// pylon probes the upstream over HTTP on the inference port, so the function's
+// declared health endpoint only carries over when the function keeps both
+// aligned. Otherwise pylon falls back to its own candidate paths.
+func upstreamHealthPath(allEnvSet map[string]string) string {
+	path := strings.TrimSpace(allEnvSet["INFERENCE_HEALTH_ENDPOINT"])
+	if path == "" {
+		return ""
+	}
+	if strings.EqualFold(strings.TrimSpace(allEnvSet["INFERENCE_HEALTH_PROTOCOL"]), "grpc") {
+		return ""
+	}
+	healthPort, err := strconv.Atoi(strings.TrimSpace(allEnvSet["INFERENCE_HEALTH_PORT"]))
+	if err == nil && healthPort > 0 && strconv.Itoa(healthPort) != strings.TrimSpace(allEnvSet["INFERENCE_PORT"]) {
+		return ""
+	}
+	return path
 }
 
 func newLLMRouterClientContainer(
@@ -127,6 +147,9 @@ func newLLMRouterClientContainer(
 		fmt.Sprintf("--auth-token-file=%s", llmWorkerTokenPath),
 		"--backend-connectivity=reverse",
 		"--initial-input-tps=100",
+	}
+	if healthPath := upstreamHealthPath(allEnvSet); healthPath != "" {
+		args = append(args, fmt.Sprintf("--upstream-health-path=%s", healthPath))
 	}
 	if tcfg.StargateQUICInsecure {
 		args = append(args, "--quic-insecure")

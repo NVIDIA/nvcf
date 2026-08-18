@@ -35,6 +35,8 @@ import (
 	"go.uber.org/zap"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
+
+	golibversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 )
 
 const (
@@ -110,6 +112,7 @@ func buildChiMux(mappings *config.GatewayConfig, serverConfig Config) (*chi.Mux,
 
 	r.Use(hostRouter.Handler)
 	r.With(serverTelemetry).Get(healthPath, healthManager.HandlerFunc)
+	r.With(serverTelemetry).Get("/info", golibversion.Handler().ServeHTTP)
 	return r, nil
 }
 
@@ -143,6 +146,7 @@ func registerVanity(hostRouter *middleware.HostRouter, mappings *config.GatewayC
 			})
 		}
 		r.Get(healthPath, healthManager.HandlerFunc)
+		r.Get("/info", golibversion.Handler().ServeHTTP)
 		r.Get("/v1/status/{requestId}", vanityDirector.ServePolling)
 		hostRouter.Register(vanity.Host, chimiddleware.New(r))
 	}
@@ -164,6 +168,7 @@ func registerOpenAI(hostRouter *middleware.HostRouter, mappings *config.GatewayC
 	r.Get("/v1/models/{company}/{model}", openAIDirector.GetModel)
 
 	r.Get(healthPath, healthManager.HandlerFunc)
+	r.Get("/info", golibversion.Handler().ServeHTTP)
 
 	// special domain for openai
 	hostRouter.Register(mappings.OpenAI.Host, chimiddleware.New(r))

@@ -483,6 +483,9 @@ func (c Config) Complete() Config {
 
 // Validate rejects configuration combinations that cannot be applied safely.
 func (c Config) Validate() error {
+	if err := c.Workload.Validate(); err != nil {
+		return err
+	}
 	if err := c.Agent.BYOOOTelCollector.Validate(); err != nil {
 		return fmt.Errorf("agent.byooOtelCollector: %w", err)
 	}
@@ -845,7 +848,15 @@ type TransportTLSConfig struct {
 	TrustBundleKey           string    `yaml:"trustBundleKey"`
 	TrustBundleFingerprint   string    `yaml:"trustBundleFingerprint"`
 	TrustBundlePEM           string    `yaml:"trustBundlePem"`
-	InstallerImage           string    `yaml:"installerImage"`
+	InstalledBundleMountPath string    `yaml:"installedBundleMountPath"`
+}
+
+// Validate rejects workload settings that disable configured transport trust.
+func (t WorkloadConfig) Validate() error {
+	if t.StargateQUICInsecure && t.TransportTLS != nil && t.TransportTLS.TrustMode == TrustModeBundle {
+		return fmt.Errorf("workload.stargateQUICInsecure=true cannot be used with workload.transportTLS.trustMode=bundle; set workload.stargateQUICInsecure=false or use trustMode=system")
+	}
+	return nil
 }
 
 func (t WorkloadConfig) Complete() WorkloadConfig {

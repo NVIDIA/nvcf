@@ -161,11 +161,12 @@ impl RequestObserver {
         generation: Option<ModelGeneration>,
         runtime_state: PylonRuntimeState,
     ) -> Self {
+        let priority = required.queue_priority();
         let RequiredTunnelHeaders {
             request_id,
             routing_key,
             model_id,
-            priority,
+            priority: _,
             input_tokens,
             accepted_at,
         } = required;
@@ -605,14 +606,14 @@ mod tests {
         assert_eq!(required.routing_key.as_deref(), Some("rk-1"));
         assert_eq!(required.model_id, "model-a");
         assert_eq!(required.input_tokens, 42);
-        assert_eq!(required.priority, 7);
+        assert_eq!(required.priority, Some(7));
     }
 
     #[test]
-    fn validate_required_tunnel_headers_defaults_missing_priority_to_zero() {
+    fn validate_required_tunnel_headers_keeps_missing_priority_absent() {
         let required = validate_required_tunnel_headers(&request_headers("req-1", 42)).unwrap();
 
-        assert_eq!(required.priority, 0);
+        assert_eq!(required.priority, None);
     }
 
     #[test]
@@ -676,7 +677,7 @@ mod tests {
             request_id: "req-embeddings-terminal".to_string(),
             routing_key: Some("rk-1".to_string()),
             model_id: "model-embed".to_string(),
-            priority: 0,
+            priority: None,
             input_tokens: 12,
             accepted_at: Instant::now(),
         }

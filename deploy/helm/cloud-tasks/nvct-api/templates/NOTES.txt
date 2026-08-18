@@ -1,0 +1,7 @@
+NVCT API (nvct-service) has been deployed.
+
+HTTP:  http://nvct-api.{{ include "nvct-api.namespace" . }}.svc.cluster.local:8080
+gRPC:  nvct-api.{{ include "nvct-api.namespace" . }}.svc.cluster.local:9090
+Management (actuator):  {{ include "nvct-api.fullname" . }}.{{ include "nvct-api.namespace" . }}.svc.cluster.local:8181
+
+For more information, see the nvct-service application repository and self-hosted deployment docs.

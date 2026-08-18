@@ -60,9 +60,9 @@ traffic_pattern:
     interval_ms: 100
 
 algorithms:
-  - name: power-of-two
+  - name: power-of-n
     config:
-      default: power-of-two
+      default: power-of-n
   - name: round-robin
     config:
       default: round-robin
