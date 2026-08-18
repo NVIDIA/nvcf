@@ -384,6 +384,22 @@ check_required_existing_secret_value \
   --set-string llmRequestRouter.tls.secretName=operator-quic-tls \
   --set-string llmRequestRouter.tls.certPath=/etc/stargate/tls/tls.crt
 
+# The Secret is mounted as a directory, so changing its mount location without
+# changing the certificate paths would leave the router unable to read them.
+mismatched_mount_path_error="${tmp_dir}/mismatched-mount-path.err"
+if render_existing_secret_case \
+  /dev/null \
+  --set-string llmRequestRouter.tls.secretName=operator-quic-tls \
+  --set-string llmRequestRouter.tls.mountPath=/var/run/router-tls \
+  --set-string llmRequestRouter.tls.certPath=/etc/stargate/tls/tls.crt \
+  --set-string llmRequestRouter.tls.keyPath=/etc/stargate/tls/tls.key \
+  2> "${mismatched_mount_path_error}"; then
+  fail "existing-Secret mode accepted a mount path that does not contain the TLS files"
+fi
+grep -Fq \
+  "llmRequestRouter.tls.mountPath must match the directory containing llmRequestRouter.tls.certPath and llmRequestRouter.tls.keyPath when llmRequestRouter.tls.mode is existingSecret" \
+  "${mismatched_mount_path_error}" || fail "mismatched mount path did not return the expected guard message"
+
 # An unknown mode must fail rather than silently fall back to cert-manager.
 invalid_mode_error="${tmp_dir}/invalid-mode.err"
 if helm template llm-request-router ./llm-request-router \

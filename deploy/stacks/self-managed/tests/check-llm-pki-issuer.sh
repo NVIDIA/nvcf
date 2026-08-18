@@ -711,6 +711,11 @@ expect_router_failure existing-secret-dns-names \
   --state-values-set-string addons.llm.pki.secretName=operator-quic-tls \
   --state-values-set-string 'addons.llm.pki.dnsNames[0]=llm-request-router.nvcf.svc.cluster.local'
 
+expect_router_failure existing-secret-scalar-dns-names \
+  'addons.llm.pki.dnsNames must be a list when addons.llm.pki.mode is existingSecret' \
+  --state-values-set-string addons.llm.pki.secretName=operator-quic-tls \
+  --state-values-set-string addons.llm.pki.dnsNames=llm-request-router.nvcf.svc.cluster.local
+
 expect_router_failure existing-secret-allowed-domains \
   'addons.llm.pki.allowedDomains constrains the managed OpenBao signing role only and must be empty when addons.llm.pki.mode is existingSecret' \
   --state-values-set-string addons.llm.pki.secretName=operator-quic-tls \

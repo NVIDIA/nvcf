@@ -898,7 +898,10 @@ llmRequestRouter:
   {{- end }}
   {{- end }}
   {{- $existingSecretDnsNames := dig "addons" "llm" "pki" "dnsNames" (list) .Values }}
-  {{- if and (kindIs "slice" $existingSecretDnsNames) (gt (len $existingSecretDnsNames) 0) }}
+  {{- if not (kindIs "slice" $existingSecretDnsNames) }}
+  {{- fail "addons.llm.pki.dnsNames must be a list when addons.llm.pki.mode is existingSecret" }}
+  {{- end }}
+  {{- if gt (len $existingSecretDnsNames) 0 }}
   {{- fail "addons.llm.pki.dnsNames applies only to a stack-issued Certificate and must be empty when addons.llm.pki.mode is existingSecret" }}
   {{- end }}
   {{- if dig "addons" "llm" "pki" "allowedDomains" "" .Values }}
