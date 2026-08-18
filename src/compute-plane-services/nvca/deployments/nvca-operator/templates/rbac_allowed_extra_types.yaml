@@ -1,4 +1,5 @@
-{{- if (.Values.agentConfig).mergeConfig }}
+{{- $effectiveConfig := include "nvcaop.effectiveAgentConfig" . | fromYaml }}
+{{- if $effectiveConfig }}
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -14,7 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-{{- $mc := .Values.agentConfig.mergeConfig | fromYaml }}
+{{- $mc := $effectiveConfig }}
 {{- if and $mc.cluster ($mc.cluster.validationPolicy).allowedExtraKubernetesTypes }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
