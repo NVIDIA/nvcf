@@ -90,6 +90,7 @@ jobs:
         run: |
           bash tools/ci/test-bazel-cache-upload-mode
           bash tools/ci/test-bazel-remote-probe
+          bash tools/ci/test-bazel-lock-touches-java
 
       - name: Compute changed subtrees
         id: detect

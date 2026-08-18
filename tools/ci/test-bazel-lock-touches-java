@@ -60,6 +60,12 @@ git commit -qm "unrelated change"
 same=$(git rev-parse HEAD)
 check "lock unchanged across commits" false "${head}" "${same}"
 
+# Every fixture below is RUST_B plus exactly one mutation, so each must be
+# compared against RUST_B. Chaining them against the previous fixture would
+# also revert the previous mutation, and a case could then pass on that
+# reversion rather than on the condition it names.
+baseline="${same}"
+
 # Anything that is not a recognised Rust extension must schedule Java.
 OCI=$(python3 -c "
 import json,sys
@@ -67,7 +73,7 @@ d=json.loads('''${RUST_B}''')
 d['moduleExtensions']['@@rules_oci+//oci:extensions.bzl%oci']={'v':9}
 print(json.dumps(d))")
 h=$(commit_lock "${OCI}" "oci extension changed")
-check "unrecognised extension changed" true "${same}" "${h}"
+check "unrecognised extension changed" true "${baseline}" "${h}"
 
 # A registry hash change can move a Java module version.
 REG=$(python3 -c "
@@ -76,7 +82,7 @@ d=json.loads('''${RUST_B}''')
 d['registryFileHashes']['b']='2'
 print(json.dumps(d))")
 h2=$(commit_lock "${REG}" "registry hash changed")
-check "registryFileHashes changed" true "${h}" "${h2}"
+check "registryFileHashes changed" true "${baseline}" "${h2}"
 
 # A lock format bump affects everything.
 VER=$(python3 -c "
@@ -85,7 +91,7 @@ d=json.loads('''${RUST_B}''')
 d['lockFileVersion']=27
 print(json.dumps(d))")
 h3=$(commit_lock "${VER}" "lock version bump")
-check "lockFileVersion changed" true "${h2}" "${h3}"
+check "lockFileVersion changed" true "${baseline}" "${h3}"
 
 # A new top-level section must fail closed, not be ignored.
 NEW=$(python3 -c "
@@ -94,7 +100,7 @@ d=json.loads('''${RUST_B}''')
 d['somethingBazelAddedLater']={'x':1}
 print(json.dumps(d))")
 h4=$(commit_lock "${NEW}" "new top-level section")
-check "unknown top-level section" true "${h3}" "${h4}"
+check "unknown top-level section" true "${baseline}" "${h4}"
 
 # yanked versions can change which module version resolves.
 YNK=$(python3 -c "
@@ -103,15 +109,41 @@ d=json.loads('''${RUST_B}''')
 d['selectedYankedVersions']={'m':'1.0'}
 print(json.dumps(d))")
 h5=$(commit_lock "${YNK}" "yanked versions changed")
-check "selectedYankedVersions changed" true "${h4}" "${h5}"
+check "selectedYankedVersions changed" true "${baseline}" "${h5}"
 
 # Malformed or missing input must never read as "no Java change".
 printf 'not json' > MODULE.bazel.lock
 git add MODULE.bazel.lock && git commit -qm "corrupt lock"
 bad=$(git rev-parse HEAD)
-check "unparseable lock" true "${h5}" "${bad}"
-check "nonexistent revision" true "${h5}" "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
-check "missing argument" true "${h5}" ""
+check "unparseable lock" true "${baseline}" "${bad}"
+check "nonexistent revision" true "${baseline}" "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+check "empty head revision" true "${baseline}" ""
+
+# check() always passes two arguments, so the argv-length branch needs its own
+# invocation with a single one. Without this the "missing argument" case was
+# really testing an unreadable revision.
+argv_got="$(python3 "${script}" "${baseline}" 2>/dev/null || echo CRASH)"
+if [ "${argv_got}" = "true" ]; then
+    printf 'ok   %s\n' "too few arguments"
+else
+    printf 'FAIL %s: want true, got %s\n' "too few arguments" "${argv_got}"
+    fail=1
+fi
+
+# Valid JSON that is not an object must fail closed rather than raise.
+for bad_json in '[]' 'null' '"a string"' '42'; do
+    printf '%s' "${bad_json}" > MODULE.bazel.lock
+    git add MODULE.bazel.lock
+    git commit -qm "lock is ${bad_json}"
+    nb=$(git rev-parse HEAD)
+    check "lock is ${bad_json}, not an object" true "${baseline}" "${nb}"
+done
+
+# A non-object moduleExtensions must fail closed too.
+printf '%s' '{"lockFileVersion":26,"registryFileHashes":{"a":"1"},"selectedYankedVersions":{},"moduleExtensions":[],"facts":{"f":1}}' > MODULE.bazel.lock
+git add MODULE.bazel.lock && git commit -qm "moduleExtensions is a list"
+mex=$(git rev-parse HEAD)
+check "moduleExtensions is not an object" true "${baseline}" "${mex}"
 
 # The real thing: NVIDIA/nvcf#777, base fcf08b63 vs head 96831eae. Fixtures are
 # the parsed section digests rather than the 5 MB locks, but the shape is what

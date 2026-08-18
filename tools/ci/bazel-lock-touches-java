@@ -67,9 +67,15 @@ def read_lock(ref):
     except (subprocess.CalledProcessError, OSError) as exc:
         die_true(f"cannot read {LOCK} at {ref}: {exc}")
     try:
-        return json.loads(raw)
+        parsed = json.loads(raw)
     except json.JSONDecodeError as exc:
         die_true(f"cannot parse {LOCK} at {ref}: {exc}")
+    # "[]" and "null" are valid JSON but not a lock. Without this the section
+    # comparison below raises on a non-mapping and the tool dies with a
+    # traceback, which is an exit code nobody reads as "run Java".
+    if not isinstance(parsed, dict):
+        die_true(f"{LOCK} at {ref} is {type(parsed).__name__}, not an object")
+    return parsed
 
 
 def main():
@@ -91,6 +97,8 @@ def main():
         die_true(f"lock sections changed that are not inspectable: {sorted(unexpected)}")
 
     ma, mb = a.get("moduleExtensions", {}), b.get("moduleExtensions", {})
+    if not isinstance(ma, dict) or not isinstance(mb, dict):
+        die_true("moduleExtensions is not an object in one of the revisions")
     changed_exts = {k for k in set(ma) | set(mb) if ma.get(k) != mb.get(k)}
 
     unrecognised = changed_exts - JAVA_IRRELEVANT_EXTENSIONS
