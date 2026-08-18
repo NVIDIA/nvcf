@@ -17,8 +17,15 @@
 # placeholder survives substitution the webhook has nothing to resolve, injects
 # nothing, and the pod cold-starts.
 assert_no_placeholders() {
-    local manifest="$1"
-    if grep -nE '__[A-Z_]+__' "$manifest"; then
+    local manifest="$1" hits
+    # Comments are excluded deliberately. Templates name their own placeholders
+    # in explanatory comments ("test-e2e.sh substitutes __NODE_NAME__ from ..."),
+    # and matching those fails a correctly substituted manifest -- a guard that
+    # blocks good runs is worse than the problem it was added for. sed keeps the
+    # line count, so grep -n still reports true line numbers.
+    hits=$(sed 's/#.*//' "$manifest" | grep -nE '__[A-Z_]+__')
+    if [ -n "$hits" ]; then
+        printf '%s\n' "$hits" >&2
         echo "ERROR: unsubstituted placeholder(s) above in $manifest" >&2
         echo "ERROR: the webhook would ignore this pod and it would COLD START, not restore" >&2
         return 1
