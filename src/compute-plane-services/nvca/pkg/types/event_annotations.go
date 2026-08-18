@@ -52,7 +52,7 @@ func LedgerEventAnnotations(
 		return nil
 	}
 
-	annotations := make(map[string]string, 12)
+	annotations := make(map[string]string)
 	set := func(key, value string) {
 		if value != "" {
 			annotations[key] = value
@@ -64,6 +64,9 @@ func LedgerEventAnnotations(
 	set(LedgerAnnotationClusterID, clusterID)
 	set(LedgerAnnotationRegion, region)
 
+	// FunctionDetails is authoritative; the flat Spec.Function*ID fields are
+	// deprecated. Fall back to them only for pre-FunctionDetails CRs still in
+	// flight during an upgrade (parity with common_labels.go).
 	functionID := req.Spec.FunctionDetails.FunctionID
 	if functionID == "" {
 		functionID = req.Spec.FunctionID
@@ -75,7 +78,9 @@ func LedgerEventAnnotations(
 		functionVersionID = req.Spec.FunctionVersionID
 	}
 	taskID := req.Spec.TaskDetails.TaskID
-	// Prefer task-id for tasks; otherwise function-version-id (FnDs namespace identity).
+	// A request is either a function deployment or a task, never both, so TaskID
+	// and FunctionVersionID are mutually exclusive by design. Emit task-id for
+	// tasks; otherwise function-version-id.
 	if taskID != "" {
 		set(LedgerAnnotationTaskID, taskID)
 	} else {
@@ -90,8 +95,5 @@ func LedgerEventAnnotations(
 		set(LedgerAnnotationFailureCategory, update.Payload.FailureCategory)
 	}
 
-	if len(annotations) == 0 {
-		return nil
-	}
 	return annotations
 }

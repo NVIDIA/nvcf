@@ -22,10 +22,10 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
-// AnnotatedICMSEventf emits a Kubernetes Event on the ICMSRequest with FnDs ledger
+// EmitICMSEventf emits a Kubernetes Event on the ICMSRequest with FnDs ledger
 // annotations. Pass update=nil for request-level events; pass an update with
 // InstanceID (and status payload fields when applicable) for instance-level events.
-func (c *BackendK8sCache) AnnotatedICMSEventf(
+func (c *BackendK8sCache) EmitICMSEventf(
 	req *nvcav2beta1.ICMSRequest,
 	eventType, reason, msgFmt string,
 	update *types.ICMSRequestUpdateInfo,
@@ -38,13 +38,13 @@ func (c *BackendK8sCache) AnnotatedICMSEventf(
 	c.eventRecorder.AnnotatedEventf(req, annotations, eventType, reason, msgFmt, args...)
 }
 
-// AnnotatedICMSEvent is AnnotatedICMSEventf without formatting args.
-func (c *BackendK8sCache) AnnotatedICMSEvent(
+// EmitICMSEvent is EmitICMSEventf without formatting args.
+func (c *BackendK8sCache) EmitICMSEvent(
 	req *nvcav2beta1.ICMSRequest,
 	eventType, reason, message string,
 	update *types.ICMSRequestUpdateInfo,
 ) {
-	c.AnnotatedICMSEventf(req, eventType, reason, "%s", update, message)
+	c.EmitICMSEventf(req, eventType, reason, "%s", update, message)
 }
 
 // instanceUpdate is a convenience for instance-level Events that only need instance-id.

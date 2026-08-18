@@ -119,11 +119,11 @@ func functionLedgerRequest() *nvcav2beta1.ICMSRequest {
 	}
 }
 
-func TestAnnotatedICMSEventf_ForwardsAnnotationsAndArgs(t *testing.T) {
+func TestEmitICMSEventf_ForwardsAnnotationsAndArgs(t *testing.T) {
 	rec := record.NewFakeRecorder(4)
 	c := newLedgerTestCache(rec)
 
-	c.AnnotatedICMSEventf(functionLedgerRequest(), corev1.EventTypeNormal,
+	c.EmitICMSEventf(functionLedgerRequest(), corev1.EventTypeNormal,
 		"InstanceStatusUpdate", "%v is %v", instanceUpdate("0-sr-a"), "0-sr-a", "running")
 
 	got := receiveEvent(t, rec)
@@ -137,11 +137,11 @@ func TestAnnotatedICMSEventf_ForwardsAnnotationsAndArgs(t *testing.T) {
 	assert.Empty(t, rec.Events, "exactly one event should be emitted")
 }
 
-func TestAnnotatedICMSEvent_RequestLevelOmitsInstanceID(t *testing.T) {
+func TestEmitICMSEvent_RequestLevelOmitsInstanceID(t *testing.T) {
 	rec := record.NewFakeRecorder(4)
 	c := newLedgerTestCache(rec)
 
-	c.AnnotatedICMSEvent(functionLedgerRequest(), corev1.EventTypeNormal,
+	c.EmitICMSEvent(functionLedgerRequest(), corev1.EventTypeNormal,
 		"InstanceCreation", "Request accepted for processing", nil)
 
 	got := receiveEvent(t, rec)
@@ -151,7 +151,7 @@ func TestAnnotatedICMSEvent_RequestLevelOmitsInstanceID(t *testing.T) {
 		"request-level events must not carry instance-id")
 }
 
-func TestAnnotatedICMSEventf_NilGuards(t *testing.T) {
+func TestEmitICMSEventf_NilGuards(t *testing.T) {
 	tests := []struct {
 		name string
 		// newCache builds the cache under test. rec is non-nil only when the
@@ -189,7 +189,7 @@ func TestAnnotatedICMSEventf_NilGuards(t *testing.T) {
 			c := tt.newCache(recorder)
 
 			assert.NotPanics(t, func() {
-				c.AnnotatedICMSEventf(tt.req, corev1.EventTypeNormal, "R", "m", nil)
+				c.EmitICMSEventf(tt.req, corev1.EventTypeNormal, "R", "m", nil)
 			})
 			if rec != nil {
 				assert.Empty(t, rec.Events, "no event should be emitted")

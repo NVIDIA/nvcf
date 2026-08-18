@@ -125,7 +125,7 @@ func (c K8sComputeBackend) applyMiniServiceCreationMessage(ctx context.Context,
 		return err
 	}
 
-	c.bk8s.AnnotatedICMSEventf(req, corev1.EventTypeNormal, string(nvcatypes.EventCategoryInstanceCreation),
+	c.bk8s.EmitICMSEventf(req, corev1.EventTypeNormal, string(nvcatypes.EventCategoryInstanceCreation),
 		"Creating %v requested instances", nil, instCount)
 
 	labelsForReq := nvcatypes.GetLabelsForRequest(req, c.bk8s.featureFlagFetcher)
@@ -167,7 +167,7 @@ func (c K8sComputeBackend) applyMiniServiceCreationMessage(ctx context.Context,
 	}
 
 	log.Debugf("Successfully created MiniService instance %s", instanceID)
-	c.bk8s.AnnotatedICMSEventf(req, corev1.EventTypeNormal,
+	c.bk8s.EmitICMSEventf(req, corev1.EventTypeNormal,
 		string(nvcatypes.EventCategoryInstanceCreation), "Created %v Instance %v", instanceUpdate(instance.ID), instance.Type, instance.ID)
 
 	// update timestamp only once for InProgress

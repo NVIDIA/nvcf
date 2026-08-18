@@ -1670,7 +1670,7 @@ func (a *Agent) PutICMSRequestAcknowledgement(ctx context.Context) error {
 			req.Spec.CreationMsgInfo.InstanceCount,
 			req.Spec.GetTraceContext())
 		if err != nil {
-			a.backendk8scache.AnnotatedICMSEventf(req, v1.EventTypeWarning,
+			a.backendk8scache.EmitICMSEventf(req, v1.EventTypeWarning,
 				string(types.EventCategoryInstanceStatusUpdate), "Acknowledgement failed: %v", nil, err)
 			log.WithError(err).Error("Failed to acknowledge request")
 
@@ -1735,7 +1735,7 @@ func (a *Agent) PutICMSRequestAcknowledgement(ctx context.Context) error {
 				if !ackSR(ctx, req) {
 					return
 				}
-				a.backendk8scache.AnnotatedICMSEvent(req, v1.EventTypeNormal, string(types.EventCategoryInstanceStatusUpdate),
+				a.backendk8scache.EmitICMSEvent(req, v1.EventTypeNormal, string(types.EventCategoryInstanceStatusUpdate),
 					"Request accepted for processing", nil)
 
 				// If ACK is successful, purge the message now
@@ -1796,7 +1796,7 @@ func (a *Agent) putTaskICMSRequestAcknowledgementAfterScheduled(
 			if !ackSR(ctx, req) {
 				return
 			}
-			a.backendk8scache.AnnotatedICMSEvent(req, v1.EventTypeNormal, string(types.EventCategoryInstanceStatusUpdate),
+			a.backendk8scache.EmitICMSEvent(req, v1.EventTypeNormal, string(types.EventCategoryInstanceStatusUpdate),
 				"Request accepted for processing", nil)
 
 			modify := func(ctx context.Context, sr *nvcav2beta1.ICMSRequest) {
@@ -1845,7 +1845,7 @@ func (a *Agent) putTaskICMSRequestAcknowledgementAfterScheduled(
 				}
 				return
 			}
-			a.backendk8scache.AnnotatedICMSEvent(req, v1.EventTypeNormal, string(types.EventCategoryInstanceCreation),
+			a.backendk8scache.EmitICMSEvent(req, v1.EventTypeNormal, string(types.EventCategoryInstanceCreation),
 				"Message visibility extended", nil)
 
 			modify := func(ctx context.Context, sr *nvcav2beta1.ICMSRequest) {
@@ -2102,7 +2102,7 @@ func (a *Agent) PostICMSInstanceRequestStatusUpdates(ctx context.Context) error 
 					}
 					continue
 				}
-				a.backendk8scache.AnnotatedICMSEventf(req, v1.EventTypeNormal,
+				a.backendk8scache.EmitICMSEventf(req, v1.EventTypeNormal,
 					string(types.EventCategoryInstanceStatusUpdate), "%v is %v", &ru, ru.InstanceID, ruPayload.InstanceState)
 				// successfully posted this update so this has to be updated to Status
 				postedInstanceStatus[ru.InstanceID] = getPostedInstanceStatus(ctx, ru)
