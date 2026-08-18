@@ -82,7 +82,6 @@ go_library(
 go_test(
     name = "agent_test",
     srcs = [
-        "rootfs_wholerootfs_guard_test.go",
         "advertise_test.go",
         "auth_test.go",
         "blob_uploader_test.go",
@@ -108,6 +107,7 @@ go_test(
         "restoreoverlay_integration_test.go",
         "restoreoverlay_test.go",
         "rootfs_diff_test.go",
+        "rootfs_wholerootfs_guard_test.go",
         "rootfsonly_integration_test.go",
     ],
     embed = [":agent"],

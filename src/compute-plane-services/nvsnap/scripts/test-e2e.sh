@@ -854,40 +854,75 @@ fi
 # injected cache mount plus a cache env that points into it.
 if [ "$CAPTURE_PATH" = "rootfs" ]; then
     log_info "Verifying the restore pod was admitted as a restore..."
+
+    # The cache path is the agent's, not ours to guess: read the deployed
+    # --pod-cache-dir so this check follows a cluster that was configured
+    # differently instead of asserting a hardcoded default.
+    POD_CACHE_DIR=$(kubectl get ds nvsnap-agent -n nvsnap-system \
+        -o jsonpath='{.spec.template.spec.containers[0].args}' 2>/dev/null \
+        | tr ',' '\n' | sed -n 's|.*--pod-cache-dir=\([^"]*\).*|\1|p' | head -1)
+    if [ -z "$POD_CACHE_DIR" ]; then
+        log_error "Agent has no --pod-cache-dir; cachedir capture is not configured on this cluster."
+        fail "Restore verification cannot run without a configured cache dir"
+    fi
+
+    RESTORE_POD_JSON=$(mktemp -t nvsnap-restore-pod.XXXXXX.json)
+    trap 'rm -f "$RESTORE_POD_JSON"' EXIT
     for _ in $(seq 1 30); do
-        kubectl get pod "$RESTORE_POD_NAME" -n "$NAMESPACE" -o json >/tmp/nvsnap-restore-pod.json 2>/dev/null && break
+        kubectl get pod "$RESTORE_POD_NAME" -n "$NAMESPACE" -o json >"$RESTORE_POD_JSON" 2>/dev/null && break
         sleep 2
     done
-    if ! python3 - /tmp/nvsnap-restore-pod.json "$RESTORE_CONTAINER_NAME" <<'PY'
-import json, sys
-pod = json.load(open(sys.argv[1]))
-want = sys.argv[2]
+    if ! python3 - "$RESTORE_POD_JSON" "$RESTORE_CONTAINER_NAME" "$POD_CACHE_DIR" <<'PY'
+import json, sys, posixpath
+
+pod_json, want, cache_dir = sys.argv[1], sys.argv[2], sys.argv[3].rstrip("/")
+pod = json.load(open(pod_json))
 containers = pod["spec"]["containers"]
-c = next((x for x in containers if x["name"] == want), containers[0])
+
+# Fail closed on the container: falling back to containers[0] would let a
+# decorated sidecar vouch for a workload that is cold-starting.
+c = next((x for x in containers if x["name"] == want), None)
+if c is None:
+    print(f"  container {want!r} not found (have: {[x['name'] for x in containers]})", file=sys.stderr)
+    sys.exit(1)
+
 env = {e["name"]: e.get("value", "") for e in (c.get("env") or [])}
-mounts = [m["mountPath"] for m in (c.get("volumeMounts") or [])]
+mounts = {m["mountPath"].rstrip("/"): m.get("name", "") for m in (c.get("volumeMounts") or [])}
+
+def at_or_under(path, root):
+    # Exact match or a genuine child. Prefix matching alone would accept
+    # "/opt/nvsnap-other" for root "/opt/nvsnap".
+    path = path.rstrip("/")
+    return path == root or path.startswith(root + posixpath.sep)
 
 problems = []
-if not [m for m in mounts if m.startswith("/opt/nvsnap")]:
-    problems.append(f"no captured-cache mount injected (mounts: {mounts})")
+if cache_dir not in mounts:
+    problems.append(f"cache dir {cache_dir} is not mounted (mounts: {sorted(mounts)})")
+
+# The cache env is what makes the engine reuse the capture instead of
+# fetching. Absent counts as a failure: a restore pod that inherited none
+# of the stamped env is not restoring from anything.
+if not any(v in env for v in ("HF_HOME", "NIM_CACHE_PATH")):
+    problems.append("no cache env (HF_HOME / NIM_CACHE_PATH) injected")
 for var in ("HF_HOME", "NIM_CACHE_PATH"):
     val = env.get(var)
-    if val and not val.startswith("/opt/nvsnap"):
-        problems.append(f"{var}={val!r} points outside the restored cache")
+    if val and not at_or_under(val, cache_dir):
+        problems.append(f"{var}={val!r} points outside {cache_dir}")
+
 if problems:
     for p in problems:
         print(f"  {p}", file=sys.stderr)
     sys.exit(1)
 PY
     then
-        log_error "Restore pod was NOT decorated by the webhook — it will COLD START."
+        log_error "Restore pod was NOT decorated by the webhook - it will COLD START."
         log_error "Any timing from this run would be a cold start labelled as a restore."
         kubectl get pod "$RESTORE_POD_NAME" -n "$NAMESPACE" \
             -o jsonpath='{.metadata.annotations.nvsnap\.io/restore-from}{"\n"}' 2>/dev/null \
             | sed 's/^/  restore-from: /'
         fail "Restore pod not admitted as a restore"
     fi
-    log_info "  verified: captured cache is mounted and the cache env points into it"
+    log_info "  verified: $POD_CACHE_DIR is mounted and the cache env points into it"
 fi
 
 log_info "Waiting for restore pod ready (up to ${RESTORE_READY_TIMEOUT}s)..."

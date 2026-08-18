@@ -19,6 +19,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/sirupsen/logrus"
@@ -38,8 +39,17 @@ func TestStartRootfsCapture_EnabledFailsWithoutKubeConfig(t *testing.T) {
 	t.Setenv("KUBECONFIG", "/nonexistent/kubeconfig")
 	t.Setenv("HOME", t.TempDir()) // hide any ~/.kube/config the test runner has
 	a := &Agent{config: Config{}, log: logrus.New()}
-	_, err := a.startRootfsCapture(context.Background(), RootfsCaptureConfig{Enabled: true})
+	// PodCacheDir is set so the whole-rootfs guard does not answer first.
+	// Without it this test would still fail -- but on the guard, not on the
+	// kube client it is named for, and the coverage would be gone silently.
+	_, err := a.startRootfsCapture(context.Background(), RootfsCaptureConfig{
+		Enabled:     true,
+		PodCacheDir: "/opt/nvsnap",
+	})
 	if err == nil {
 		t.Fatal("expected kube client construction error when no config available")
+	}
+	if strings.Contains(err.Error(), "whole-rootfs") {
+		t.Fatalf("guard fired instead of the kube client path; this test no longer covers what it claims: %v", err)
 	}
 }
