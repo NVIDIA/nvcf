@@ -48,7 +48,7 @@ The namespace defaults to the Helm release namespace. Set `eventLedger.namespace
 - `eventLedger.image.registry` and `eventLedger.image.repository`: required, no defaults
 - `eventLedger.replicaCount`: defaults to 1
 - `eventLedger.resources`: defaults are conservative; tune for your environment
-- `eventLedger.config.database.cassandra.hosts`: defaults to `localhost`; set to the Cassandra service address in your stack
+- `eventLedger.config.database.cassandra.hosts`: defaults to `cassandra.cassandra-system.svc.cluster.local`
 - `eventLedger.config.auth.policy.policy-evaluator-addr`: set to the api-keys-api address in your stack
 
 ## API Keys policy evaluator
@@ -63,7 +63,7 @@ Prometheus metrics are exposed on port 8081 at `/metrics`. The internal service 
 
 ```bash
 helm install event-ledger deploy/helm/event-ledger \
-  --namespace event-ledger-system \
+  --namespace nvcf \
   --values deploy/helm/event-ledger/values.yaml \
   --set eventLedger.image.registry=<your-registry> \
   --set eventLedger.image.repository=<your-org> \
