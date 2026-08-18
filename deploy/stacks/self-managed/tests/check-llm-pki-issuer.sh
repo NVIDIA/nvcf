@@ -121,6 +121,36 @@ expect_no_dangling_issuer() {
   fail "$case_name renders a Certificate for ClusterIssuer/nvcf-openbao-pki while the nvcf-pki release is absent and management was not explicitly declined"
 }
 
+# The ownership cases above render 01-dependencies on its own, which cannot see
+# a second nvcf-pki declaration in a neighbouring state. `make` applies every
+# state in helmfile.d in one invocation, so the ownership decision only holds if
+# it holds across the whole directory.
+render_list_all() {
+  local case_name="$1"
+  shift
+
+  HELMFILE_ENV=base HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" helmfile \
+    --file "$stack_dir/helmfile.d" \
+    --environment default \
+    "${core_state_values[@]}" \
+    "$@" \
+    list --skip-charts --output json \
+    >"$work_dir/$case_name.all.json"
+}
+
+# Counts declarations, not enabled releases. A release that is merely
+# conditioned off is still a second owner of the same cluster-scoped issuer and
+# still reappears whenever its condition flips.
+expect_declared_all() {
+  local case_name="$1"
+  local expected="$2"
+
+  local actual
+  actual="$(jq -r '[.[] | select(.name == "nvcf-pki")] | length' "$work_dir/$case_name.all.json")"
+  test "$actual" = "$expected" ||
+    fail "$case_name expected $expected nvcf-pki releases across helmfile.d, got $actual"
+}
+
 expect_failure() {
   local case_name="$1"
   local expected_error="$2"
@@ -545,5 +575,28 @@ expect_failure managed-bool-without-openbao \
   "${managed_defaults[@]}" \
   --state-values-set openbao.enabled=false \
   --state-values-file "$explicit_true_file"
+
+# Cases 25 and 26: the ownership decision must hold across every state in
+# helmfile.d, not only in the state that gates the release. A second
+# declaration elsewhere installs a ClusterIssuer under the operator's own
+# external issuer name, pointed at an OpenBao the operator did not deploy. The
+# nvcf-pki chart keeps that object on uninstall and rollback, so the router
+# Certificate never issues until it is deleted by hand.
+render_list_all managed-defaults-all \
+  --state-values-set addons.llm.enabled=true \
+  --state-values-set addons.llm.pki.enabled=true \
+  --state-values-set-string addons.llm.pki.allowedDomains=nvcf.svc.cluster.local \
+  --state-values-set-string addons.llm.pki.image.tag=test \
+  "${router_dns_names[@]}"
+expect_declared_all managed-defaults-all 1
+
+render_list_all external-issuer-all \
+  --state-values-set addons.llm.enabled=true \
+  --state-values-set addons.llm.pki.enabled=true \
+  --state-values-set-string addons.llm.pki.issuerName=external-llm-pki \
+  --state-values-set addons.llm.pki.clusterIssuer.enabled=false \
+  --state-values-set openbao.enabled=false \
+  "${router_dns_names[@]}"
+expect_declared_all external-issuer-all 0
 
 echo "check-llm-pki-issuer: all checks passed"

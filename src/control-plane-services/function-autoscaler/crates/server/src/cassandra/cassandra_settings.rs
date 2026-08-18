@@ -29,8 +29,6 @@ const DEFAULT_SERIAL_CONSISTENCY: &str = "LOCAL_SERIAL";
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_millis(10000); // 10 seconds
 const DEFAULT_MAX_RETRY_COUNT: u32 = 3;
 const DEFAULT_RETRY_INTERVAL: Duration = Duration::from_millis(1000); // 1 second
-const DEFAULT_HISTORY_PREDICTION_TTL_SECONDS: i32 = 300;
-
 #[serde_as]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -47,7 +45,6 @@ pub struct CassandraSettings {
     pub execution_profile: ExecutionProfileSettings,
     #[serde(default)]
     pub is_development: bool,
-    pub history_prediction_ttl_seconds: i32,
     #[serde(default = "default_node_health_ttl")]
     pub node_health_ttl_seconds: i32,
     #[serde(default = "default_recently_invoked_ttl")]
@@ -78,7 +75,6 @@ impl Default for CassandraSettings {
             pool: PoolSettings::default(),
             execution_profile: ExecutionProfileSettings::default(),
             is_development: true,
-            history_prediction_ttl_seconds: DEFAULT_HISTORY_PREDICTION_TTL_SECONDS,
             node_health_ttl_seconds: default_node_health_ttl(),
             recently_invoked_ttl_seconds: default_recently_invoked_ttl(),
             health_check_cache_ttl_seconds: default_health_check_cache_ttl(),
