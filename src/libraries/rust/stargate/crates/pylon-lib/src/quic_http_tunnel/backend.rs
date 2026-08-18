@@ -63,20 +63,18 @@ pub const DEFAULT_PRIORITY_CEILING: u32 = 3600;
 pub(crate) mod dynamo {
     use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
     use stargate_protocol::tunnel_contract::{HEADER_MODEL, HEADER_REQUEST_ID, HEADER_ROUTING_KEY};
-    use uuid::Uuid;
 
     /// Engine priority headers pylon derives; the names stay out of the
     /// shared tunnel contract because only pylon speaks them.
-    pub(crate) const HEADER_STATS_CORRELATION_ID: &str = "x-dynamo-stats-correlation-id";
+    pub(crate) const HEADER_DYNAMO_REQUEST_ID: &str = "request-id";
     pub(crate) const HEADER_REQUEST_PRIORITY: &str = "x-dynamo-request-priority";
     pub(crate) const HEADER_REQUEST_STRICT_PRIORITY: &str = "x-dynamo-request-strict-priority";
 
     /// Denylist of engine headers pylon owns: inbound values are stripped in
     /// every backend mode so pylon stays their only writer.
-    const STRIPPED_REQUEST_HEADERS: [&str; 5] = [
-        "request-id",
+    const STRIPPED_REQUEST_HEADERS: [&str; 4] = [
+        HEADER_DYNAMO_REQUEST_ID,
         "x-dynamo-request-id",
-        HEADER_STATS_CORRELATION_ID,
         HEADER_REQUEST_PRIORITY,
         HEADER_REQUEST_STRICT_PRIORITY,
     ];
@@ -85,17 +83,25 @@ pub(crate) mod dynamo {
         STRIPPED_REQUEST_HEADERS.contains(&name.as_str())
     }
 
-    /// Replace platform identity headers with an engine-local stats correlation ID.
-    pub(crate) fn translate_stats_correlation(upstream_headers: &mut HeaderMap) -> String {
-        for name in [HEADER_REQUEST_ID, HEADER_MODEL, HEADER_ROUTING_KEY] {
+    /// Translate the validated platform request ID into Dynamo's canonical ID.
+    pub(crate) fn apply_request_id(request_id: &str, upstream_headers: &mut HeaderMap) {
+        for name in [HEADER_DYNAMO_REQUEST_ID, "x-dynamo-request-id"] {
             upstream_headers.remove(name);
         }
-        let correlation_id = Uuid::new_v4().to_string();
+        for name in [HEADER_MODEL, HEADER_ROUTING_KEY] {
+            upstream_headers.remove(name);
+        }
         upstream_headers.insert(
-            HeaderName::from_static(HEADER_STATS_CORRELATION_ID),
-            HeaderValue::from_str(&correlation_id).expect("UUID should be a valid header value"),
+            HeaderName::from_static(HEADER_DYNAMO_REQUEST_ID),
+            HeaderValue::from_str(request_id)
+                .expect("validated x-request-id should be a valid header value"),
         );
-        correlation_id
+        debug_assert_eq!(
+            upstream_headers
+                .get(HEADER_REQUEST_ID)
+                .and_then(|value| value.to_str().ok()),
+            Some(request_id)
+        );
     }
 
     /// Map the platform rank (lower wins, absent = unconfigured) to the

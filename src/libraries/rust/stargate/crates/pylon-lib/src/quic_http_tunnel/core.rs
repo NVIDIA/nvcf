@@ -727,7 +727,6 @@ async fn send_upstream_request(
     lifecycle: Option<&TunnelRequestLifecycle>,
 ) -> Result<Response, UpstreamRequestError> {
     let priority = lifecycle.and_then(|lifecycle| lifecycle.required.priority);
-    let generation = lifecycle.and_then(|lifecycle| lifecycle.generation.as_ref());
     let span = if !health_request {
         let span = tracing::info_span!(
             "pylon_upstream_http_request",
@@ -754,18 +753,16 @@ async fn send_upstream_request(
             upstream_headers.append(name, value.clone());
         }
     }
-    let mut registered_stats_correlation_id = None;
     if !health_request {
         if let Some(priority) = priority {
             span.record("priority", priority);
         }
         if app.upstream_backend == UpstreamBackend::Dynamo {
-            let correlation_id =
-                backend::dynamo::translate_stats_correlation(&mut upstream_headers);
-            if let Some(generation) = generation {
-                app.runtime_state
-                    .register_engine_stats_correlation(correlation_id.clone(), generation.clone());
-                registered_stats_correlation_id = Some(correlation_id);
+            if let Some(lifecycle) = lifecycle {
+                backend::dynamo::apply_request_id(
+                    &lifecycle.required.request_id,
+                    &mut upstream_headers,
+                );
             }
             let dynamo_priority = backend::dynamo::apply_priority_headers(
                 priority,
@@ -788,14 +785,6 @@ async fn send_upstream_request(
             .map_err(UpstreamRequestError::Send)
     };
     let result = send.instrument(span.clone()).await;
-    let request_failed = match &result {
-        Ok(response) => !response.status().is_success(),
-        Err(_) => true,
-    };
-    if request_failed && let Some(correlation_id) = registered_stats_correlation_id {
-        app.runtime_state
-            .finish_engine_stats_correlation(&correlation_id);
-    }
     match &result {
         Ok(response) => span.record("upstream.status", response.status().as_u16()),
         Err(error) => span.record("upstream.error", error.to_string()),

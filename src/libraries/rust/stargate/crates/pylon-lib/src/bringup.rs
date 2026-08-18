@@ -928,6 +928,13 @@ mod tests {
                 .get(HEADER_REQUEST_ID)
                 .and_then(|value| value.to_str().ok())
         {
+            assert_eq!(
+                headers
+                    .get("request-id")
+                    .and_then(|value| value.to_str().ok()),
+                Some(request_id),
+                "Pylon-generated requests must use one canonical upstream ID"
+            );
             request_ids.lock().await.push(request_id.to_string());
         }
         let prompt = request
