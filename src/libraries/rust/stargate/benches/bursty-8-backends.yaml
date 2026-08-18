@@ -105,12 +105,12 @@ traffic_pattern:
   burst_period_requests: 16
 
 algorithms:
-  - name: power-of-two
+  - name: power-of-n
     config:
-      default: power-of-two
+      default: power-of-n
   - name: random
     config:
       default: random
-  - name: groq-multiregion
+  - name: wait-and-widen
     config:
-      default: groq-multiregion
+      default: wait-and-widen

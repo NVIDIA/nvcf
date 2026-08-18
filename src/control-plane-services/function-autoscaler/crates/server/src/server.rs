@@ -25,7 +25,7 @@ use rs_autoscaler::{
     scaling::{policy_cache::PolicyCache, ScalingPolicy, ScalingSettings},
     secrets::secrets_file_watcher::SecretFileWatcher,
     settings, startup, timeseries_db, work,
-    work::new_function_state_cache,
+    work::{new_function_state_cache, new_metric_routing_cache},
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -231,6 +231,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let function_state_cache = Arc::new(new_function_state_cache());
+    let metric_routing_cache = Arc::new(new_metric_routing_cache());
 
     tracing::info!("Initializing NVCF API client");
     let cassandra_service_manager_nvcf = Arc::clone(&cassandra_service_manager);
@@ -301,6 +302,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bucket_manager_p0 = Arc::clone(&bucket_manager);
     let lock_manager_p0 = Arc::clone(&lock_manager);
     let function_state_cache_p0 = Arc::clone(&function_state_cache);
+    let metric_routing_cache_p0 = Arc::clone(&metric_routing_cache);
     let scaling_loop_interval = config.scaling.scaling_loop_interval;
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(scaling_loop_interval);
@@ -315,6 +317,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &bucket_manager_p0,
                 &lock_manager_p0,
                 Arc::clone(&function_state_cache_p0),
+                Arc::clone(&metric_routing_cache_p0),
             )
             .await
             {

@@ -51,6 +51,7 @@ public class ReservationEntity {
     public static final String COLUMN_NAME = "name";
     public static final String COLUMN_DESCRIPTION = "description";
     public static final String COLUMN_LAST_UPDATED_TIME = "last_updated_time";
+    public static final String COLUMN_RESERVATION_BACKUP_DISABLED = "reservation_backup_disabled";
 
     @NonNull
     @PrimaryKey
@@ -92,6 +93,14 @@ public class ReservationEntity {
     @Column(COLUMN_LAST_UPDATED_TIME)
     private Instant lastUpdatedTime;
 
+    /**
+     * When true, this reservation never falls back to another zone if its primary zone is
+     * unhealthy. Null for rows written before the column existed, and for reporters that do
+     * not send the field, both of which mean backup is allowed.
+     */
+    @Column(COLUMN_RESERVATION_BACKUP_DISABLED)
+    private Boolean reservationBackUpDisabled;
+
     public String toString() {
         return "ReservationEntity{" +
                 "reservationId=" + reservationId +
@@ -104,7 +113,12 @@ public class ReservationEntity {
                 ", endTime=" + endTime +
                 ", name='" + name + '\'' +
                 ", lastUpdatedTime=" + lastUpdatedTime +
+                ", reservationBackUpDisabled=" + reservationBackUpDisabled +
                 '}';
+    }
+
+    public boolean isBackupDisabled() {
+        return Boolean.TRUE.equals(reservationBackUpDisabled);
     }
 
     public boolean isActive() {

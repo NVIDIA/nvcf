@@ -46,6 +46,17 @@ spec:
         runAsUser: 1000
         runAsGroup: 1010
         fsGroup: 1010
+        # Defense in depth: enforce non-root + seccomp at the pod
+        # level. runAsUser=1000 already guarantees non-root; setting
+        # runAsNonRoot=true makes the constraint explicit (kubelet
+        # will reject the pod if the image's USER somehow goes back
+        # to root). seccompProfile=RuntimeDefault blocks the
+        # ~40 syscalls Docker's default seccomp profile blocks
+        # (clock_settime, modify_ldt, …) — safe for any normal Go
+        # operator.
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       {{- if .Values.priorityClassName }}
       priorityClassName: {{ .Values.priorityClassName }}
       {{- end}}
@@ -154,7 +165,7 @@ spec:
         - name: OTEL_COLLECTOR_IMAGE_REPO
           value: {{ include "nvcaop.otelCollectorRepository" (dict "imageRepository" .Values.otelCollector.imageRepository "defaultRepository" .Values.image.repository) | quote }}
         - name: OTEL_COLLECTOR_IMAGE_TAG
-          value: {{ .Values.otelCollector.imageTag | default "0.143.2" | quote }}
+          value: {{ .Values.otelCollector.imageTag | default "0.157.9" | quote }}
         {{- if .Values.otelCollector.resources }}
         - name: OTEL_COLLECTOR_RESOURCES_B64
           value: {{ .Values.otelCollector.resources | toJson | b64enc | quote }}
@@ -227,13 +238,23 @@ spec:
           - --nvca-secret-mirror-label-selector
           - "{{ .Values.agent.secretMirrorLabelSelector }}"
           {{- end }}
-          {{- if ((.Values.agent).functionEnvOverrides) }}
-          - --function-env-overrides-b64
-          - {{ .Values.agent.functionEnvOverrides | toJson | b64enc | quote }}
+          {{- $agent := .Values.agent | default dict }}
+          {{- $byooOtelCollectorImage := include "nvcaop.byooOtelCollectorImage" . }}
+          {{- $functionEnvOverrides := deepCopy ($agent.functionEnvOverrides | default dict) }}
+          {{- if and $byooOtelCollectorImage (or (not (hasKey $functionEnvOverrides "BYOO_OTEL_COLLECTOR_CONTAINER")) (eq (get $functionEnvOverrides "BYOO_OTEL_COLLECTOR_CONTAINER") "nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector:0.157.11")) }}
+          {{- $_ := set $functionEnvOverrides "BYOO_OTEL_COLLECTOR_CONTAINER" $byooOtelCollectorImage }}
           {{- end }}
-          {{- if ((.Values.agent).taskEnvOverrides) }}
+          {{- $taskEnvOverrides := deepCopy ($agent.taskEnvOverrides | default dict) }}
+          {{- if and $byooOtelCollectorImage (or (not (hasKey $taskEnvOverrides "BYOO_OTEL_COLLECTOR_CONTAINER")) (eq (get $taskEnvOverrides "BYOO_OTEL_COLLECTOR_CONTAINER") "nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector:0.157.11")) }}
+          {{- $_ := set $taskEnvOverrides "BYOO_OTEL_COLLECTOR_CONTAINER" $byooOtelCollectorImage }}
+          {{- end }}
+          {{- if $functionEnvOverrides }}
+          - --function-env-overrides-b64
+          - {{ $functionEnvOverrides | toJson | b64enc | quote }}
+          {{- end }}
+          {{- if $taskEnvOverrides }}
           - --task-env-overrides-b64
-          - {{ .Values.agent.taskEnvOverrides | toJson | b64enc | quote }}
+          - {{ $taskEnvOverrides | toJson | b64enc | quote }}
           {{- end }}
         image: {{ .Values.image.repository }}:{{ default .Chart.Version .Values.image.tag }}
         imagePullPolicy: {{ .Values.image.pullPolicy }}

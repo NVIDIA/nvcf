@@ -1,6 +1,5 @@
 {
   "version": 1,
-  "generated_by": "go run -C tools/generate-subproject-ci . --config ../ci/subproject-validations.yaml --github-release-output ../ci/github-release-subprojects.json",
   "release_generated_paths": [
     "MODULE.bazel.lock",
     ".oss-allowlist"
@@ -147,9 +146,16 @@
       "id": "byoo-otel-collector",
       "path": "src/compute-plane-services/byoo-otel-collector",
       "service_name": "byoo-otel-collector",
-      "legacy_tag_prefix": "byoo-otel-collector-v",
-      "version_file": "VERSION",
-      "version_major_minor_source_file": "otel-collector-build.yaml"
+      "tag_format": "src/compute-plane-services/byoo-otel-collector/v${upstream_version}-nv-${version}",
+      "tag_upstream_version_file": "otel-collector-build.yaml",
+      "tag_upstream_version_pattern": "(?m)^\\s*otelcol_version:\\s*(?P<version>(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*))\\s*$",
+      "initial_version": "0.0.0",
+      "reset_release_history": true,
+      "release_history_marker_file": "RELEASE_SERIES_START",
+      "legacy_tag_prefixes": [
+        "src/compute-plane-services/byoo-otel-collector/v",
+        "byoo-otel-collector-v"
+      ]
     },
     {
       "id": "nvca",
@@ -219,6 +225,12 @@
       "legacy_tag_prefix": "nvcf-gateway-routes-v"
     },
     {
+      "id": "vanity-gateway-helm",
+      "path": "deploy/helm/vanity-gateway",
+      "service_name": "helm-nvcf-vanity-gateway",
+      "initial_version": "0.2.0"
+    },
+    {
       "id": "nvca-operator",
       "path": "deploy/helm/nvca-operator",
       "service_name": "helm-nvca-operator",
@@ -269,20 +281,50 @@
       "service_name": "nvcf-api-keys"
     },
     {
+      "id": "event-ledger",
+      "path": "src/control-plane-services/event-ledger",
+      "service_name": "nvcf-event-ledger"
+    },
+    {
       "id": "ess",
-      "path": "src/control-plane-services/ess",
-      "service_name": "nvcf-ess"
+      "path": "src/control-plane-services/encrypted-secret-store",
+      "service_name": "nvcf-ess",
+      "legacy_tag_prefix": "src/control-plane-services/ess/v"
     },
     {
       "id": "ess-helm",
-      "path": "deploy/helm/ess",
+      "path": "deploy/helm/encrypted-secret-store",
       "service_name": "helm-nvcf-ess-api",
-      "initial_version": "1.7.0"
+      "legacy_tag_prefix": "deploy/helm/ess/v"
+    },
+    {
+      "id": "cloud-tasks-helm",
+      "path": "deploy/helm/cloud-tasks",
+      "service_name": "helm-nvcf-nvct-api",
+      "initial_version": "1.4.4"
+    },
+    {
+      "id": "notary-helm",
+      "path": "deploy/helm/notary",
+      "service_name": "helm-nvcf-notary-service",
+      "initial_version": "1.4.2"
+    },
+    {
+      "id": "cloud-functions-helm",
+      "path": "deploy/helm/cloud-functions",
+      "service_name": "helm-nvcf-api",
+      "initial_version": "1.23.11"
     },
     {
       "id": "instance-cluster-management",
       "path": "src/control-plane-services/instance-cluster-management",
       "service_name": "nvcf-instance-cluster-management"
+    },
+    {
+      "id": "icms-helm",
+      "path": "deploy/helm/icms",
+      "service_name": "helm-nvcf-sis",
+      "initial_version": "2.0.2"
     },
     {
       "id": "nvcf-ui",

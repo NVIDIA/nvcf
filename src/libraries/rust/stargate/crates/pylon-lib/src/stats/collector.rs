@@ -2048,7 +2048,7 @@ mod tests {
                 request_id: "req-queued-after-fallback-samples".to_string(),
                 routing_key: None,
                 model_id: "model-a".to_string(),
-                priority: 0,
+                priority: None,
                 input_tokens: 50,
                 accepted_at: std::time::Instant::now(),
             });
@@ -2479,7 +2479,7 @@ mod tests {
                 request_id: "req-queued".to_string(),
                 routing_key: None,
                 model_id: "model-a".to_string(),
-                priority: 0,
+                priority: None,
                 input_tokens: 32,
                 accepted_at: std::time::Instant::now(),
             },

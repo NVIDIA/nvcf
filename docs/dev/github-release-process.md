@@ -33,35 +33,22 @@ secret is missing.
 
 1. Keep GitHub release automation dry-run-only while the repository is
    still being anchored.
-2. Stop GitLab monorepo tag creation by setting
-   `NVCF_GITLAB_RELEASE_TAGGING_ENABLED=false` in the GitLab source
-   project. This skips the generated `semantic-release-*` tag
-   creation jobs so the GitLab monorepo no longer creates release
-   tags. It also disables GitLab tag pipelines for manually-created
-   GitLab tags, so release publish cannot start from GitLab tags after
-   the cutover gate is off.
-3. Keep `nvcf/nvcf-github` mirror publish disabled by leaving
-   `NVCF_GITHUB_MIRROR_RELEASE_PUBLISH_ENABLED` unset or `false` while
-   recreating historical anchors that should not republish artifacts.
-4. Recreate any missing GitHub anchors with path-format tags and
+2. Recreate any missing GitHub anchors with path-format tags and
    `refs/notes/semantic-release` notes on the GitHub commit graph.
-5. Enable the `nvcf/nvcf-github` mirror tag-publish bridge by setting
-   `NVCF_GITHUB_MIRROR_RELEASE_PUBLISH_ENABLED=true` in that GitLab
-   mirror project.
-6. Manually create any GitHub tags that were missed while GitLab
-   tagging was disabled and GitHub auto-tagging was still dry-run-only.
-   This includes any `-dev.N`, `-rc.N`, or stable tags that should have
-   existed during the cutover window. If a tag was pushed before mirror
-   publish was enabled, retrigger the matching `nvcf/nvcf-github` tag
-   pipeline.
-7. Enable GitHub auto-tagging and publish by setting
+3. Enable GitHub auto-tagging and publish by setting
    `NVCF_GITHUB_AUTO_TAGGING_ENABLED=true` and
    `NVCF_GITHUB_RELEASE_DRY_RUN=false`.
 
-After step 7, release tags originate from GitHub. Publish work that
-needs GitLab runners starts from the `nvcf/nvcf-github` mirror tag
-pipeline, not from the original `nvcf/nvcf` monorepo and not from a
-GitHub-to-GitLab API call.
+After step 3, GitHub is the sole tag and release authority. The active
+release path is:
+
+```text
+NVIDIA/nvcf -> GitLab mirror -> scheduled internal release dispatcher -> image release pipeline
+```
+
+After a GitHub tag and release appear in the mirror, the scheduled
+internal release dispatcher detects eligible releases and starts the
+image release pipeline.
 
 ## Service auto-tags
 
@@ -71,10 +58,8 @@ On `main` branch pushes, the workflow runs:
 ./tools/ci/github-release auto
 ```
 
-The script reads `tools/ci/github-release-subprojects.json`, which is
-generated from the internal `tools/ci/subproject-validations.yaml`
-source of truth. The generated file intentionally contains only public
-release metadata:
+The script reads `tools/ci/github-release-subprojects.json`. The file
+intentionally contains only public release metadata:
 
 - service id
 - service subtree path
@@ -86,12 +71,11 @@ release metadata:
 - version-file hints for services that do not use semantic-release
 - generated/mechanical file basenames to ignore for release decisions
 
-It does not contain GitLab runner tags, Vault paths, NGC registry
-destinations, `nvcf-internal` trigger details, or Slack notification
+It does not contain internal runner tags, Vault paths, NGC registry
+destinations, internal trigger details, or Slack notification
 configuration.
 
-The service tag format mirrors GitLab and uses the repo-relative
-service path:
+The service tag format uses the repo-relative service path:
 
 ```text
 <service-path>/v<X.Y.Z>
@@ -129,14 +113,11 @@ monorepo version source. Its release config currently keeps default
 branch release tagging disabled.
 
 For `nvcf-compute-plane-stack`, GitHub-created
-`deploy/stacks/nvcf-compute-plane/v*` tags are mirrored into
-`nvcf/nvcf-github`. That mirror tag pipeline triggers `nvcf-internal`,
-which owns stack build/package/publish. The original GitLab monorepo no
-longer builds or publishes the stack from tag pipelines after
-`NVCF_GITLAB_RELEASE_TAGGING_ENABLED=false`.
+`deploy/stacks/nvcf-compute-plane/v*` tags are mirrored. The scheduled
+release dispatcher then starts the stack image and package pipeline.
 
-For semantic-release services, the GitHub workflow uses the same
-release rules as the generated GitLab release jobs:
+For semantic-release services, the GitHub workflow uses these release
+rules:
 
 - `feat:` creates a minor release
 - `fix:` and `perf:` create patch releases
@@ -214,28 +195,17 @@ release metadata still declares `legacy_tag_prefix`:
 
 Invalid tags are skipped without creating a GitHub release.
 
-## nvcf-internal publish bridge
+## Image publishing bridge
 
-GitHub does not need GitLab credentials. Tag pushes only run the
-GitHub release-note workflow; GitLab-side publish work starts after the
-tag appears in the `nvcf/nvcf-github` mirror.
+GitHub does not need image-publishing credentials. Tag pushes only run
+the GitHub release-note workflow. Image publishing starts after the tag
+and release appear in the mirror.
 
-The `nvcf/nvcf-github` mirror tag pipeline covers all release lanes
-that trigger `nvcf-internal`:
-
-- services with `release.staging` build staging images, write
-  `release-manifest.json`, and trigger `nvcf-internal` with
-  `NVCF_RELEASE_MANIFEST_B64`
-- services with `release.internal_release` trigger `nvcf-internal`
-  with source repo/ref metadata
-- `nvcf-compute-plane-stack` uses a root bridge job to trigger
-  `nvcf-internal`, where the stack distribution, package, NGC
-  resources, and nvpublish handoff are owned
-
-The mirror project requires `NVCF_GITHUB_MIRROR_RELEASE_PUBLISH_ENABLED=true`
-before tag pipelines publish. `nvcf-internal` accepts source metadata
-from `NVCF_SOURCE_PROJECT_PATH=nvcf/nvcf-github` and fetches source
-tags from `https://github.com/NVIDIA/nvcf/nvcf-github`.
+After a GitHub tag and release are mirrored, the scheduled release
+dispatcher detects eligible releases and starts the corresponding image
+release pipeline. The pipeline uses the mirrored source ref and release
+metadata to build, promote, and publish artifacts. The mirror tag
+pipeline does not publish artifacts.
 
 ## Package metadata
 
@@ -271,10 +241,10 @@ GitHub release publishing needs both the latest service tag and the
 matching `refs/notes/semantic-release` entry on the GitHub commit
 graph. `.oss-allowlist` mirrors files, not Git refs, tags, or notes.
 
-If the GitHub mirror is a snapshot with different commit SHAs from
-GitLab, do not copy GitLab refs verbatim. Recreate the latest service
-tags and semantic-release notes on the GitHub commits that represent
-the released content, then enable publish mode.
+If the GitHub mirror is a snapshot with different commit SHAs from the
+prior release source, do not copy old refs verbatim. Recreate the
+latest service tags and semantic-release notes on the GitHub commits
+that represent the released content, then enable publish mode.
 
 Use the helper below to create one path-format anchor locally. The
 version may be a dev prerelease, release candidate, or stable release:
@@ -308,15 +278,13 @@ the notes ref can be merged manually.
 Release automation computes the next version by bumping the highest
 existing release tag for a service. A new service or chart has no tags
 yet, so there is nothing to bump from until you seed one. This section
-explains how to seed that first tag, and how to pin a new floor on a line
-that already has tags.
+explains how to seed that first tag, and how to pin a new floor on a
+service or chart that already has tags.
 
 ### 1. Register the service
 
-Register the service in the metadata that produces
-`tools/ci/github-release-subprojects.json`. The public snapshot is
-generated from the internal source; edit the source, not the generated
-file, when possible. Each entry provides:
+Add the service to the release metadata in
+`tools/ci/github-release-subprojects.json`. Each entry provides:
 
 - `id`: short service id
 - `path`: repo-relative subtree path, which also drives the tag format
@@ -328,8 +296,8 @@ file, when possible. Each entry provides:
   release-neutral commits produce no release. An empty string is
   rejected; either omit the field or give a valid SemVer.
 
-For example, the `ess-helm` chart is registered with an
-`initial_version` floor so it continues the upstream chart version line:
+For example, the `ess-helm` chart was first seeded with an
+`initial_version` floor so it continued the upstream chart version line:
 
 ```json
 {
@@ -339,6 +307,11 @@ For example, the `ess-helm` chart is registered with an
   "initial_version": "1.7.0"
 }
 ```
+
+After it published `1.7.1` and its directory was renamed to
+`deploy/helm/encrypted-secret-store`, the floor was replaced with a
+`legacy_tag_prefix` of `deploy/helm/ess/v` so the version line carried
+across the path change without a reset.
 
 Run the registry tests:
 

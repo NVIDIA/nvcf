@@ -37,6 +37,7 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use tracing::{Instrument, Span, field};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
+use super::backend::{self, DEFAULT_PRIORITY_CEILING, UpstreamBackend};
 use crate::output_token_parser::{OutputTokenParser, OutputTokenProgress};
 use crate::queue_admission::{
     PylonQueueMismatchRetryConfig, QueueAdmissionDecision, QueueTrackedRequestGuard,
@@ -55,6 +56,7 @@ use crate::sse_message_stream::{
     upstream_sse_message_stream,
 };
 use crate::stats::PylonMetrics;
+use crate::upstream_health::UpstreamHealthPaths;
 
 pub(super) const DEFAULT_MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 // This bounds only one upstream SSE event waiting for its blank-line delimiter,
@@ -105,6 +107,13 @@ pub struct TunnelForwardingConfig {
     pub request_quality_monitor: RequestQualityMonitorConfig,
     pub retry: PylonRetryConfig,
     pub queue_mismatch_retry: PylonQueueMismatchRetryConfig,
+    /// Engine dialect spoken to the local upstream; see [`UpstreamBackend`].
+    pub upstream_backend: UpstreamBackend,
+    /// Priority band ceiling; see [`backend::dynamo::request_priority`].
+    pub priority_ceiling: u32,
+    /// Shared with bringup so forwarded health probes reach the upstream path
+    /// that answered, not the literal path Stargate asked for.
+    pub upstream_health_paths: UpstreamHealthPaths,
     pub metrics: Option<Arc<PylonMetrics>>,
     #[cfg(test)]
     pub webtransport_stream_header_wait_tx: Option<flume::Sender<()>>,
@@ -121,6 +130,9 @@ impl Default for TunnelForwardingConfig {
             request_quality_monitor: RequestQualityMonitorConfig::default(),
             retry: PylonRetryConfig::default(),
             queue_mismatch_retry: PylonQueueMismatchRetryConfig::default(),
+            upstream_backend: UpstreamBackend::default(),
+            priority_ceiling: DEFAULT_PRIORITY_CEILING,
+            upstream_health_paths: UpstreamHealthPaths::default(),
             metrics: None,
             #[cfg(test)]
             webtransport_stream_header_wait_tx: None,
@@ -141,6 +153,9 @@ pub(super) struct TunnelServerApp {
     pub(super) request_quality_monitor: RequestQualityMonitorConfig,
     pub(super) retry: PylonRetryConfig,
     pub(super) queue_mismatch_retry: PylonQueueMismatchRetryConfig,
+    pub(super) upstream_backend: UpstreamBackend,
+    pub(super) priority_ceiling: u32,
+    pub(super) upstream_health_paths: UpstreamHealthPaths,
     pub(super) metrics: Option<Arc<PylonMetrics>>,
     #[cfg(test)]
     pub(super) webtransport_stream_header_wait_tx: Option<flume::Sender<()>>,
@@ -164,6 +179,9 @@ impl TunnelServerApp {
             request_quality_monitor: forwarding.request_quality_monitor,
             retry: forwarding.retry,
             queue_mismatch_retry: forwarding.queue_mismatch_retry,
+            upstream_backend: forwarding.upstream_backend,
+            priority_ceiling: forwarding.priority_ceiling,
+            upstream_health_paths: forwarding.upstream_health_paths,
             metrics: forwarding.metrics,
             #[cfg(test)]
             webtransport_stream_header_wait_tx: forwarding.webtransport_stream_header_wait_tx,
@@ -575,6 +593,11 @@ pub(super) async fn forward_tunnel_request(
     } = request;
     let health_request = is_health_request_path(&path_and_query);
     let observation_endpoint = request_observation_endpoint(&method, &path_and_query);
+    let path_and_query = if health_request {
+        health_probe_path_and_query(&app.upstream_health_paths, &path_and_query)
+    } else {
+        path_and_query
+    };
     let mut lifecycle = if health_request {
         None
     } else {
@@ -654,13 +677,17 @@ pub(super) async fn forward_tunnel_request(
         }
     }
 
+    let priority = lifecycle
+        .as_ref()
+        .and_then(|lifecycle| lifecycle.required.priority);
     let response = match send_upstream_request(
         app,
         method,
         &path_and_query,
         &request_headers,
         body_bytes,
-        !health_request,
+        health_request,
+        priority,
     )
     .await
     {
@@ -699,9 +726,10 @@ async fn send_upstream_request(
     path_and_query: &str,
     request_headers: &HeaderMap,
     body_bytes: Vec<u8>,
-    traced: bool,
+    health_request: bool,
+    priority: Option<u32>,
 ) -> Result<Response, UpstreamRequestError> {
-    let span = if traced {
+    let span = if !health_request {
         let span = tracing::info_span!(
             "pylon_upstream_http_request",
             otel_parent = field::Empty,
@@ -710,6 +738,8 @@ async fn send_upstream_request(
             inference_server.id = %app.inference_server_id,
             upstream.status = field::Empty,
             upstream.error = field::Empty,
+            priority = field::Empty,
+            dynamo.request_priority = field::Empty,
         );
         let _ = span.set_parent(pylon_upstream_parent_context(request_headers));
         if let Some(otel_parent) = otel_parent_from_headers(request_headers) {
@@ -725,7 +755,18 @@ async fn send_upstream_request(
             upstream_headers.append(name, value.clone());
         }
     }
-    if traced {
+    if !health_request {
+        if let Some(priority) = priority {
+            span.record("priority", priority);
+        }
+        if app.upstream_backend == UpstreamBackend::Dynamo {
+            let dynamo_priority = backend::dynamo::apply_priority_headers(
+                priority,
+                app.priority_ceiling,
+                &mut upstream_headers,
+            );
+            span.record("dynamo.request_priority", dynamo_priority);
+        }
         inject_trace_context(&mut upstream_headers, &span.context());
     }
     let send = async {
@@ -786,6 +827,17 @@ fn validate_request_body(
 
 pub(super) fn is_health_request_path(path_and_query: &str) -> bool {
     path_and_query.split('?').next() == Some("/health")
+}
+
+pub(super) fn health_probe_path_and_query(
+    health_paths: &UpstreamHealthPaths,
+    path_and_query: &str,
+) -> String {
+    let probe_path = health_paths.probe_path();
+    match path_and_query.split_once('?') {
+        Some((_, query)) => format!("{probe_path}?{query}"),
+        None => probe_path.to_string(),
+    }
 }
 
 fn request_observation_endpoint(
@@ -1058,6 +1110,7 @@ pub(super) fn join_base_path(base: &str, path_and_query: &str) -> Result<url::Ur
 
 pub(super) fn should_forward_header(name: &HeaderName, retry: &PylonRetryConfig) -> bool {
     !is_tunnel_control_header(name, retry)
+        && !backend::dynamo::is_stripped_engine_header(name)
         && !matches!(
             name.as_str(),
             "host" | "x-method" | "x-path" | HEADER_STARGATE_EXPECTED_QUEUE_MS

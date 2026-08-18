@@ -53,6 +53,23 @@ type CaptureRequest struct {
 	// and image we use. Most nvsnap workloads are single-container at 0.
 	MainContainer int
 
+	// MainContainerID is the runtime container ID of Spec.Containers
+	// [MainContainer], as reported in pod.status (with the runtime scheme
+	// stripped). Used to resolve that container's PID specifically when
+	// recording the entrypoint to replay at restore.
+	//
+	// Pod-scoped PID resolution is not good enough here: it returns the
+	// lowest non-sandbox PID in the pod, which is whichever container
+	// started first. NVCF function pods run a `utils` sidecar that starts
+	// while the main container is still pulling its image, so the sidecar
+	// always won and capture recorded ITS argv -- restore then exec'd a
+	// binary that does not exist in the main container (nvsnap#788).
+	//
+	// Empty when the status lookup found no running main container; the
+	// orchestrator then falls back to the pod-scoped PID rather than
+	// recording nothing.
+	MainContainerID string
+
 	// HashInput is the canonical content-addressed identity (image
 	// digest + model id + engine compat flags + driver major). The agent
 	// composes this from the pod spec; the orchestrator hashes it.
@@ -261,9 +278,31 @@ func (c *Capturer) Capture(ctx context.Context, req CaptureRequest) (checkpoints
 	if procRoot == "" {
 		procRoot = mountinfo.DefaultProcRoot()
 	}
-	entryArgv := readEntryArgv(procRoot, pid)
+	// Read the argv from the MAIN container's PID, not the pod's. `pid`
+	// above is the lowest non-sandbox PID in the pod -- whichever container
+	// started first -- which on a multi-container pod is the sidecar, not
+	// the workload (nvsnap#788). Fall back to the pod PID when the main
+	// container ID is unknown or its process has already gone, so a
+	// single-container pod behaves exactly as before.
+	entryPID := pid
+	if req.MainContainerID != "" {
+		if cpid, cerr := c.PIDResolver.ResolveContainerPID(req.MainContainerID); cerr == nil {
+			entryPID = cpid
+		} else {
+			log.WithError(cerr).WithField("main_container_id", req.MainContainerID).
+				Warn("could not resolve main container PID; falling back to the pod PID for entrypoint recording")
+		}
+	}
+	entryArgv := readEntryArgv(procRoot, entryPID)
 	if len(entryArgv) > 0 {
-		log.WithField("entry_argv", entryArgv).Info("recorded source entrypoint for whole-rootfs restore")
+		// argc, never argv: inference entrypoints routinely carry
+		// --api-key / HF tokens / signed model URLs, and this log ships to
+		// the cluster log stack. The argv still goes into the manifest,
+		// which is what restore replays, but that is not a service log.
+		log.WithFields(map[string]interface{}{
+			"entry_argc": len(entryArgv),
+			"entry_pid":  entryPID,
+		}).Info("recorded source entrypoint for whole-rootfs restore")
 	} else {
 		log.Warn("could not read source /proc/<pid>/cmdline; restore will rely on the pod's command/args")
 	}
@@ -388,9 +427,10 @@ func (c *Capturer) buildSources(pid int, req CaptureRequest) (
 				return nil, nil, nil, fmt.Errorf("resolve cache dir %s: %w", c.CacheDir, err)
 			}
 			size, files, _ := dirContentStats(src)
+			const cacheDirSubpath = "" // contents land at the PVC root
 			sources = append(sources, checkpointstore.CaptureSource{
 				SrcPath:    src,
-				DstSubpath: "", // contents land at the PVC root
+				DstSubpath: cacheDirSubpath,
 			})
 			volumes = append(volumes, checkpointstore.VolumeMeta{
 				Name:      "cachedir",
@@ -398,6 +438,11 @@ func (c *Capturer) buildSources(pid int, req CaptureRequest) (
 				Type:      cls.VolumeType,
 				SizeBytes: size,
 				FileCount: files,
+				// Record the root explicitly. Type is the underlying
+				// emptyDir, from which consumers would otherwise infer
+				// volumes/cachedir/ and mount a path that was never
+				// written.
+				Subpath: checkpointstore.SubpathAt(cacheDirSubpath),
 			})
 			return sources, volumes, extractPaths, nil
 		}
@@ -429,6 +474,7 @@ func (c *Capturer) buildSources(pid int, req CaptureRequest) (
 				Type:      "rootfs",
 				SizeBytes: size,
 				FileCount: files,
+				Subpath:   checkpointstore.SubpathAt(stagingRootfsDir),
 			})
 		case VolumeUserData:
 			src, err := c.resolveUserDataSrc(req.PodUID, cls)
@@ -436,9 +482,10 @@ func (c *Capturer) buildSources(pid int, req CaptureRequest) (
 				return nil, nil, nil, fmt.Errorf("resolve volume %s: %w", cls.Name, err)
 			}
 			size, files, _ := dirContentStats(src)
+			udSubpath := filepath.Join(stagingVolumesDir, cls.Name)
 			sources = append(sources, checkpointstore.CaptureSource{
 				SrcPath:    src,
-				DstSubpath: filepath.Join(stagingVolumesDir, cls.Name),
+				DstSubpath: udSubpath,
 			})
 			volumes = append(volumes, checkpointstore.VolumeMeta{
 				Name:      cls.Name,
@@ -446,6 +493,7 @@ func (c *Capturer) buildSources(pid int, req CaptureRequest) (
 				Type:      cls.VolumeType,
 				SizeBytes: size,
 				FileCount: files,
+				Subpath:   checkpointstore.SubpathAt(udSubpath),
 			})
 		}
 	}

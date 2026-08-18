@@ -79,6 +79,21 @@ spec:
           value: "/opt/nim/.cache"
         - name: HF_HUB_DISABLE_XET
           value: "1"
+        # NIM ships HPC-X, so UCX initializes even at TP=1 (orted is in the
+        # tree and libuct_* are mapped). Its shared-memory transport allocates
+        # a SysV segment alongside the POSIX one, and criu-v2 nsenters into the
+        # container's IPC namespace, so CRIU sees no ipc ns to dump and rejects
+        # the mapping:
+        #   Error (criu/cr-dump.c:511): Task N with SysVIPC shmem map @...
+        #                               doesn't live in IPC ns
+        # The same allowlist also keeps UCX off the node's RDMA devices, whose
+        # doorbell pages no CRIU plugin can claim. posix keeps shared memory
+        # working; a single-GPU NIM has no RDMA peer to reach. Same fix and
+        # same UCX segment sizes as trtllm-small. Single-node only: a
+        # multi-node deployment needs ib, so it needs the device mappings
+        # handled rather than avoided. See NVIDIA/nvcf#891.
+        - name: UCX_TLS
+          value: "tcp,self,posix,cma,cuda_copy,cuda_ipc"
         # Force TP=1 — privileged container sees all 8 H100s on the
         # node regardless of nvidia.com/gpu request, so NIM auto-selects
         # FP8 latency (TP=2) profile if not pinned. CUDA_VISIBLE_DEVICES

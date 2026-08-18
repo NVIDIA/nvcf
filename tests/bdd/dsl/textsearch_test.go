@@ -24,6 +24,45 @@ import (
 	"testing"
 )
 
+func TestFilesContainFindsFixedTextUnderMatchingDirectories(t *testing.T) {
+	root := t.TempDir()
+	writeRenderedManifest(t, root, "01-nats/templates/statefulset.yaml", "image: docker.io/natsio/reloader:0.23.0\n")
+	writeRenderedManifest(t, root, "01-nats/templates/secret.yaml", "# Source: helm-nvcf-nats/templates/nkey-secret.yaml\n")
+	writeRenderedManifest(t, root, "02-api/templates/deployment.yaml", "image: docker.io/alpine/k8s:1.36.1\n")
+
+	err := FilesContain(root, "*-nats", []string{
+		"docker.io/natsio/reloader:0.23.0",
+		"# Source: helm-nvcf-nats/templates/nkey-secret.yaml",
+	})
+	if err != nil {
+		t.Fatalf("find required rendered text: %v", err)
+	}
+}
+
+func TestFilesContainRestrictsSearchToMatchingDirectories(t *testing.T) {
+	root := t.TempDir()
+	writeRenderedManifest(t, root, "01-nats/templates/statefulset.yaml", "kind: StatefulSet\n")
+	writeRenderedManifest(t, root, "02-api/templates/deployment.yaml", "image: docker.io/alpine/k8s:1.36.1\n")
+
+	err := FilesContain(root, "*-nats", []string{"docker.io/alpine/k8s:1.36.1"})
+	if err == nil {
+		t.Fatal("expected missing required text error")
+	}
+	if !strings.Contains(err.Error(), `under directories matching "*-nats"`) ||
+		!strings.Contains(err.Error(), "docker.io/alpine/k8s:1.36.1") {
+		t.Fatalf("error = %q, want filter and missing text", err)
+	}
+}
+
+func TestFilesContainSearchesAllFilesWithoutPathFilter(t *testing.T) {
+	root := t.TempDir()
+	writeRenderedManifest(t, root, "collector.yaml", "kind: OpenTelemetryCollector\n")
+
+	if err := FilesContain(root, "", []string{"kind: OpenTelemetryCollector"}); err != nil {
+		t.Fatalf("find required rendered text: %v", err)
+	}
+}
+
 func TestFilesDoNotContainRejectsMatchedText(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "control-plane", "collector.yaml")
@@ -51,5 +90,16 @@ func TestFilesDoNotContainRejectsEmptyDirectory(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "contains no regular files") {
 		t.Fatalf("error = %q, want empty render directory detail", err)
+	}
+}
+
+func writeRenderedManifest(t *testing.T, root, relativePath, body string) {
+	t.Helper()
+	filePath := filepath.Join(root, filepath.FromSlash(relativePath))
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
+		t.Fatalf("create render directory: %v", err)
+	}
+	if err := os.WriteFile(filePath, []byte(body), 0o644); err != nil {
+		t.Fatalf("write rendered manifest: %v", err)
 	}
 }

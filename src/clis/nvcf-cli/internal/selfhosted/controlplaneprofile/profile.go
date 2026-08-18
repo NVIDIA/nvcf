@@ -80,9 +80,11 @@ type Addons struct {
 
 // LLMAddon advertises the LLM add-on coordinates. RequestRouterAddress is the
 // host:port the LLM request router (Stargate QUIC endpoint) is reachable at
-// from the compute plane; register renders it as the default
-// agent.llm.requestRouterAddress so LLM workloads that do not set
-// STARGATE_ADDRESS bootstrap against it.
+// from the compute plane; register renders it as
+// agent.llm.requestRouterAddress in the compute-plane values. That is operator
+// configuration only. LLM workloads read their address from the
+// LLM_REQUEST_ROUTER_ADDRESS launch environment variable (STARGATE_ADDRESS is
+// a legacy alias), and translation rejects a launch that supplies neither.
 type LLMAddon struct {
 	RequestRouterAddress string `yaml:"requestRouterAddress,omitempty"`
 }

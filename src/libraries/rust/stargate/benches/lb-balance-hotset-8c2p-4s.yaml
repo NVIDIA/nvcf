@@ -109,21 +109,21 @@ traffic_pattern:
     target_rps: 140
 
 algorithms:
-  - name: power-of-two
+  - name: power-of-n
     config:
-      default: power-of-two
+      default: power-of-n
   - name: round-robin
     config:
       default: round-robin
   - name: random
     config:
       default: random
-  - name: groq-multiregion
+  - name: wait-and-widen
     config:
-      default: groq-multiregion
+      default: wait-and-widen
   - name: pulsar
     config:
-      default: power-of-two
+      default: power-of-n
       models:
         dummy-model:
           algorithm: pulsar

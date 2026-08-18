@@ -1,0 +1,347 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "vanityGateway": {
+      "type": "object",
+      "properties": {
+        "replicaCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "image": {
+          "type": "object",
+          "properties": {
+            "registry": {
+              "type": "string"
+            },
+            "repository": {
+              "type": "string",
+              "minLength": 1
+            },
+            "tag": {
+              "type": "string"
+            },
+            "pullPolicy": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "imagePullSecrets": {
+          "type": "array"
+        },
+        "nameOverride": {
+          "type": "string"
+        },
+        "fullnameOverride": {
+          "type": "string"
+        },
+        "serviceAccount": {
+          "type": "object",
+          "properties": {
+            "create": {
+              "type": "boolean"
+            },
+            "annotations": {
+              "type": "object"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "podAnnotations": {
+          "type": "object"
+        },
+        "podLabels": {
+          "type": "object"
+        },
+        "podSecurityContext": {
+          "type": "object"
+        },
+        "securityContext": {
+          "type": "object"
+        },
+        "shutdown": {
+          "type": "object",
+          "properties": {
+            "terminationGracePeriodSeconds": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "preStopSleepSeconds": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "terminationGracePeriodSeconds",
+            "preStopSleepSeconds"
+          ],
+          "additionalProperties": false
+        },
+        "service": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string"
+            },
+            "httpPort": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "adminPort": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            }
+          },
+          "additionalProperties": false
+        },
+        "config": {
+          "type": "object",
+          "properties": {
+            "mappingPath": {
+              "$ref": "#/definitions/nonEmptyString"
+            },
+            "nvcfApiEndpoint": {
+              "$ref": "#/definitions/nonEmptyString"
+            },
+            "otelExporterOtlpEndpoint": {
+              "type": "string"
+            },
+            "secretsPath": {
+              "type": "string"
+            },
+            "privateModelNameRegexPattern": {
+              "type": "string"
+            },
+            "awsRegion": {
+              "type": "string"
+            },
+            "shadowMaxConcurrent": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "mappingConfig": {
+          "type": "object",
+          "properties": {
+            "v2config": {
+              "type": "object",
+              "properties": {
+                "openai": {
+                  "$ref": "#/definitions/openAIRoutes"
+                },
+                "vanity": {
+                  "$ref": "#/definitions/vanityRoutes"
+                }
+              },
+              "required": [
+                "openai",
+                "vanity"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "required": [
+            "v2config"
+          ],
+          "additionalProperties": true
+        },
+        "resources": {
+          "type": "object"
+        },
+        "nodeSelector": {
+          "type": "object"
+        },
+        "tolerations": {
+          "type": "array"
+        },
+        "affinity": {
+          "type": "object"
+        },
+        "serviceMonitor": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "interval": {
+              "$ref": "#/definitions/nonEmptyString"
+            },
+            "labels": {
+              "type": "object"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "replicaCount",
+        "image",
+        "service",
+        "config",
+        "mappingConfig"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "definitions": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "openAIRoutes": {
+      "type": "object",
+      "properties": {
+        "host": {
+          "$ref": "#/definitions/nonEmptyString"
+        },
+        "chatCompletions": {
+          "$ref": "#/definitions/openAIEndpointRoutes"
+        },
+        "completions": {
+          "$ref": "#/definitions/openAIEndpointRoutes"
+        },
+        "embeddings": {
+          "$ref": "#/definitions/openAIEndpointRoutes"
+        },
+        "responses": {
+          "$ref": "#/definitions/openAIEndpointRoutes"
+        },
+        "imageGenerations": {
+          "$ref": "#/definitions/openAIEndpointRoutes"
+        },
+        "imageEdits": {
+          "$ref": "#/definitions/openAIEndpointRoutes"
+        },
+        "imageVariations": {
+          "$ref": "#/definitions/openAIEndpointRoutes"
+        }
+      },
+      "additionalProperties": {
+        "$ref": "#/definitions/openAIEndpointRoutes"
+      }
+    },
+    "openAIEndpointRoutes": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/openAIModelRoute"
+      }
+    },
+    "openAIModelRoute": {
+      "type": "object",
+      "properties": {
+        "modelName": {
+          "$ref": "#/definitions/nonEmptyString"
+        },
+        "functionID": {
+          "$ref": "#/definitions/nonEmptyString"
+        },
+        "functionVersionID": {
+          "type": "string"
+        },
+        "outgoingPathOverride": {
+          "type": "string"
+        },
+        "usePexec": {
+          "type": "boolean"
+        },
+        "eol": {
+          "type": "string"
+        },
+        "offlineMessage": {
+          "type": "string"
+        },
+        "tooManyRequestsMessage": {
+          "type": "string"
+        },
+        "shadowModelName": {
+          "type": "string"
+        },
+        "shadowModelNames": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/nonEmptyString"
+          }
+        },
+        "shadowPercentage": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "shadowCancelOnClientDisconnect": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "modelName",
+        "functionID"
+      ],
+      "additionalProperties": true
+    },
+    "vanityRoutes": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/vanityRoute"
+      }
+    },
+    "vanityRoute": {
+      "type": "object",
+      "properties": {
+        "host": {
+          "$ref": "#/definitions/nonEmptyString"
+        },
+        "paths": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/vanityPathRoute"
+          }
+        }
+      },
+      "required": [
+        "host",
+        "paths"
+      ],
+      "additionalProperties": true
+    },
+    "vanityPathRoute": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "$ref": "#/definitions/nonEmptyString"
+        },
+        "functionID": {
+          "$ref": "#/definitions/nonEmptyString"
+        },
+        "functionVersionID": {
+          "type": "string"
+        },
+        "outgoingPathOverride": {
+          "type": "string"
+        },
+        "usePexec": {
+          "type": "boolean"
+        },
+        "eol": {
+          "type": "string"
+        },
+        "offlineMessage": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "functionID"
+      ],
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

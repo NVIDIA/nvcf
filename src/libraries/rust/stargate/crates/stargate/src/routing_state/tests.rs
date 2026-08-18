@@ -21,9 +21,9 @@ use super::reservations::update_reserved_priority_queue_time;
 use super::snapshots::{ClusterBackendUpsert, RoutedClusterState, RoutingTargetGeneration};
 use super::*;
 use crate::load_balancer::{
-    GroqMultiregionAlgorithmConfig, LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig,
-    LoadBalancerAlgorithmSettings, LoadBalancerConfig, LoadBalancerModelConfig,
-    LoadBalancerRequest, LoadBalancerRouter,
+    LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig, LoadBalancerAlgorithmSettings,
+    LoadBalancerConfig, LoadBalancerModelConfig, LoadBalancerRequest, LoadBalancerRouter,
+    WaitAndWidenAlgorithmConfig,
 };
 use InferenceServerStatus::{Active, Inactive};
 use stargate_proto::pb::InferenceServerModelRegistration;
@@ -2245,24 +2245,24 @@ async fn registered_backend_rtt_means_drive_cluster_load_balancer_selection() {
     assert_eq!(steady.rtt, Duration::from_millis(20));
 
     let algorithm_config = LoadBalancerAlgorithmConfig {
-        settings: LoadBalancerAlgorithmSettings::GroqMultiregion(GroqMultiregionAlgorithmConfig {
+        settings: LoadBalancerAlgorithmSettings::WaitAndWiden(WaitAndWidenAlgorithmConfig {
             // Keep the slower TTFT bucket locked regardless of scheduler delay in the test.
             ttft_bucket_size_ms: Some(0),
             next_bucket_unlock_factor: Some(1_000_000.0),
             n: Some(2),
-            ..GroqMultiregionAlgorithmConfig::default()
+            ..WaitAndWidenAlgorithmConfig::default()
         }),
         ..LoadBalancerAlgorithmConfig::default()
     };
     let router = LoadBalancerRouter::from_config(&LoadBalancerConfig {
-        default: LoadBalancerAlgorithm::PowerOfTwo,
+        default: LoadBalancerAlgorithm::PowerOfN,
         request_algorithms: HashMap::new(),
         models: HashMap::from([(
             model_id.to_string(),
             LoadBalancerModelConfig::Detailed(Box::new(algorithm_config)),
         )]),
     })
-    .expect("Groq multiregion router should initialize");
+    .expect("WaitAndWiden router should initialize");
     let request = LoadBalancerRequest {
         routing_target: &target,
         cache_affinity_key: None,

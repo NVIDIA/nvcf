@@ -50,6 +50,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -222,6 +223,26 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 		// misclassified and fails CHECKPOINT_DEVICES ("Failed to track").
 		// Same value the legacy engine uses for vLLM.
 		"--timeout", "1200",
+		// Serialize POSIX/BSD file locks instead of refusing to dump when any
+		// task holds one:
+		//   Error (criu/file-lock.c:110): Some file locks are hold by dumping
+		//                                 tasks! You can try --file-locks
+		// Inference servers take these routinely -- NIM's guided decoding holds
+		// two advisory read locks on its outlines SQLite cache (cache.db and
+		// cache.db-shm), and any library using Python filelock (HF hub, torch
+		// inductor) does the same. Without this a single lock anywhere in the
+		// tree is an unconditional dump failure, so the flag is on by default
+		// rather than opt-in: CRIU only serializes locks that exist, making it
+		// a no-op for workloads that hold none.
+		//
+		// CRIU makes this opt-in because it cannot verify that every holder of
+		// a lock is inside the dumped tree. Here that holds structurally: we
+		// dump the GPU leader's whole session inside the container's own mount
+		// namespace, so a lock on the container rootfs has no possible holder
+		// outside the tree. The residual risk is a lock on a volume shared with
+		// another pod; our read fan-out mounts per-capture volumes ReadOnlyMany,
+		// which cannot carry an exclusive lock.
+		"--file-locks",
 	}
 	// Optional LZ4 page compression (upstream CRIU #2895), OFF by default.
 	// Measured ~1.0x on the dominant cost — the cuda-checkpoint GPU-memory
@@ -246,6 +267,9 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	for _, e := range externals {
 		args = append(args, "--external", e)
 	}
+	// The exact argv is the first thing needed to reproduce a dump failure by
+	// hand, and it is otherwise unrecoverable after the fact.
+	log.WithField("argv", "nsenter "+strings.Join(args, " ")).Info("criu-v2: dump argv")
 	dctx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(dctx, "nsenter", args...)
@@ -264,16 +288,53 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	// non-leave-running dump the target tree is gone and /proc/<pid>/root
 	// with it — read the images from the overlay upperdir instead, which
 	// persists until the runtime tears the container down.
-	imgsHost := filepath.Join(sourceUpperdir, strings.TrimPrefix(v2ImagesDirInContainer, "/"))
-	if _, statErr := os.Stat(imgsHost); statErr != nil {
-		// leave-running (tree alive): the /proc root view still works.
-		imgsHost = imgsDir
+	// Harvest through the overlay mount whenever the tree is still alive, and
+	// fall back to the upperdir only once it is gone.
+	//
+	// Mutating a mounted overlay's upperdir directly is undefined behavior
+	// (Documentation/filesystems/overlayfs.rst, "Changes to underlying
+	// filesystems"): the kernel caches its own dentries for the merged view,
+	// so removing the images directory underneath a live mount leaves a
+	// zombie behind -- it still lists, with st_nlink == 0, but every openat
+	// inside it fails ENOENT. That does not break the capture that did it; it
+	// breaks the NEXT capture on the same pod, which cannot write images:
+	//   Error (criu/image.c:748): Unable to open filelocks.img: No such file
+	// and the state is not repairable, because a fresh mkdir through the
+	// overlay inherits the poisoned dentry. Only restarting the container
+	// clears it.
+	//
+	// The /proc/<pid>/root path goes through the overlay itself, so the mount
+	// stays consistent. After a successful non-leave-running dump the tree is
+	// gone and /proc/<pid>/root with it; the upperdir is then both the only
+	// option and a safe one, since that container is already being torn down.
+	imgsHost := imgsDir
+	if _, statErr := os.Stat(imgsDir); statErr != nil {
+		imgsHost = filepath.Join(sourceUpperdir, strings.TrimPrefix(v2ImagesDirInContainer, "/"))
 	}
 	moveErr := moveDirContents(imgsHost, checkpointDir)
-	_ = os.RemoveAll(imgsHost) // keep the upperdir mirror free of image files
+	// Only clear the mirror once its contents are safely moved. Removing it
+	// unconditionally destroys dump.log on any move failure, which is exactly
+	// when it is the only account of what went wrong.
+	if moveErr == nil {
+		_ = os.RemoveAll(imgsHost)
+	}
 
 	if runErr != nil {
 		tail := tailOfFile(filepath.Join(checkpointDir, "dump.log"), 6)
+		if strings.TrimSpace(tail) == "" {
+			// Move failed or never ran: read it where CRIU wrote it.
+			tail = tailOfFile(filepath.Join(imgsHost, "dump.log"), 6)
+		}
+		// moveErr matters here too: "no dump.log" caused by a failed harvest
+		// is a different problem from a dump that never wrote one, and
+		// reporting only runErr makes the two indistinguishable.
+		if moveErr != nil {
+			// Join rather than format moveErr with %v: a caller inspecting
+			// this with errors.Is/As needs to reach both the dump failure and
+			// the harvest failure, not just the first one.
+			return fmt.Errorf("criu-v2 dump (output: %s; dump.log tail: %s): %w",
+				strings.TrimSpace(string(out)), tail, errors.Join(runErr, moveErr))
+		}
 		return fmt.Errorf("criu-v2 dump: %w (output: %s; dump.log tail: %s)", runErr, strings.TrimSpace(string(out)), tail)
 	}
 	if moveErr != nil {

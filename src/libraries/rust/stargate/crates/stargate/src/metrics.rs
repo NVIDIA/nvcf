@@ -243,7 +243,7 @@ mod tests {
             .routing_selections_total(
                 Some("routing-a"),
                 "model-a",
-                "pulsar-multiregion",
+                "pulsar-wait-and-widen",
                 "fallback",
             )
             .inc();
@@ -251,7 +251,7 @@ mod tests {
             .routing_kv_free_token_fallback_selections_total(
                 Some("routing-a"),
                 "model-a",
-                "pulsar-multiregion",
+                "pulsar-wait-and-widen",
             )
             .inc();
 

@@ -437,7 +437,7 @@ public class IcmsTest extends IntegrationTest {
                                 .header(HttpHeaders.AUTHORIZATION, ssaAuthHeader))
                 .andExpect(MockMvcResultMatchers.status().isOk()).andReturn();
         return objectMapper.readValue(mvcResult.getResponse().getContentAsString(),
-                                      ObjectNode.class).get("clusterId").textValue();
+                                      ObjectNode.class).get("clusterId").stringValue();
     }
 
     private void sendClusterHeartbeat(String path, String clusterId)

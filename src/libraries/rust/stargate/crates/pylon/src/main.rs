@@ -14,7 +14,9 @@
 // limitations under the License.
 
 use anyhow::Result;
-use pylon_lib::{EngineStatsStreamMode, ModelDiscoveryProvider, TunnelTransportProtocol};
+use pylon_lib::{
+    EngineStatsStreamMode, ModelDiscoveryProvider, TunnelTransportProtocol, UpstreamBackend,
+};
 use stargate_protocol::BackendConnectivity;
 use stargate_protocol::tunnel_contract::HEADER_STARGATE_UPSTREAM_RETRYABLE;
 
@@ -72,6 +74,12 @@ struct Args {
     /// Disable ongoing upstream health monitoring and active canaries
     #[arg(long, default_value_t = false)]
     disable_bringup: bool,
+    /// Upstream health path probed ahead of the built-in defaults; repeat to try several in order
+    #[arg(long = "upstream-health-path", value_name = "PATH")]
+    upstream_health_paths: Vec<String>,
+    /// How long startup retries the upstream health probe before exiting. `0` probes once
+    #[arg(long, default_value_t = 60000, value_name = "MS")]
+    upstream_health_wait_ms: u64,
     /// Run local input-TPS calibration before contacting Stargate. Use only when this is the cluster's sole Pylon
     #[arg(long, default_value_t = false)]
     do_calibration: bool,
@@ -204,6 +212,25 @@ struct Args {
     /// Optional retry-after hint in milliseconds for local queue-mismatch retries
     #[arg(long, env = "PYLON_QUEUE_MISMATCH_RETRY_AFTER_MS", value_name = "MS")]
     pylon_queue_mismatch_retry_after_ms: Option<u64>,
+    /// Engine dialect spoken to the local upstream: "dynamo" derives the
+    /// engine priority headers from x-priority, "passthrough" derives nothing
+    #[arg(
+        long,
+        default_value = "dynamo",
+        env = "PYLON_UPSTREAM_BACKEND",
+        value_name = "BACKEND"
+    )]
+    pylon_upstream_backend: UpstreamBackend,
+    /// Priority band ceiling: x-priority rank 0 maps to this engine value and
+    /// ranks at or beyond it map to the lowest. Dynamo reads the derived
+    /// value as seconds of queue head start.
+    #[arg(
+        long,
+        default_value_t = pylon_lib::DEFAULT_PRIORITY_CEILING,
+        env = "PYLON_PRIORITY_CEILING",
+        value_name = "RANK"
+    )]
+    pylon_priority_ceiling: u32,
     /// Collect post-stream output quality metrics (gibberish checks)
     #[arg(long, default_value_t = false)]
     collect_quality_metrics: bool,
@@ -243,7 +270,7 @@ async fn main() -> Result<()> {
 mod tests {
     use pylon_lib::{
         EngineStatsStreamMode, ModelDiscoveryProvider, PylonQueueMismatchRetryConfig,
-        PylonRetryConfig, TunnelTransportProtocol,
+        PylonRetryConfig, TunnelForwardingConfig, TunnelTransportProtocol,
     };
     use reqwest::header::HeaderName;
 
@@ -414,6 +441,33 @@ mod tests {
     }
 
     #[test]
+    fn pylon_upstream_backend_cli_defaults_match_runtime_defaults() {
+        let args = parse_args("");
+        let defaults = TunnelForwardingConfig::default();
+
+        assert_eq!(args.pylon_upstream_backend, defaults.upstream_backend);
+        assert_eq!(args.pylon_priority_ceiling, defaults.priority_ceiling);
+    }
+
+    #[test]
+    fn pylon_upstream_backend_cli_overrides_are_applied() {
+        let args = parse_argv(&[
+            "--pylon-upstream-backend",
+            "passthrough",
+            "--pylon-priority-ceiling",
+            "600",
+        ]);
+
+        assert_eq!(args.pylon_upstream_backend, UpstreamBackend::Passthrough);
+        assert_eq!(args.pylon_priority_ceiling, 600);
+    }
+
+    #[test]
+    fn pylon_upstream_backend_cli_rejects_unknown_backend() {
+        assert!(try_parse_argv(&["--pylon-upstream-backend", "sglang"]).is_err());
+    }
+
+    #[test]
     fn pylon_queue_mismatch_retry_cli_defaults_match_runtime_defaults() {
         let args = parse_args("");
         let config = pylon_queue_mismatch_retry_config_from_args(&args)
@@ -451,11 +505,11 @@ mod tests {
     }
 
     #[test]
-    fn startup_requires_exactly_one_input_tps_bootstrap_source() {
+    fn startup_rejects_conflicting_input_tps_bootstrap_sources() {
         let neither = parse_args("");
         let both = parse_args("--do-calibration --initial-input-tps 2200");
 
-        assert!(startup::PylonStartupPlan::from_args(&neither).is_err());
+        assert!(startup::PylonStartupPlan::from_args(&neither).is_ok());
         assert!(startup::PylonStartupPlan::from_args(&both).is_err());
         assert!(startup::PylonStartupPlan::from_args(&parse_args("--do-calibration")).is_ok());
         assert!(
@@ -483,9 +537,11 @@ mod tests {
 
     #[test]
     fn benchmark_pin_requires_initial_input_tps() {
+        let uncalibrated = parse_args("--benchmark-pin-input-tps");
         let calibration = parse_args("--do-calibration --benchmark-pin-input-tps");
         let initial = parse_args("--initial-input-tps 2200 --benchmark-pin-input-tps");
 
+        assert!(startup::PylonStartupPlan::from_args(&uncalibrated).is_err());
         assert!(startup::PylonStartupPlan::from_args(&calibration).is_err());
         assert!(startup::PylonStartupPlan::from_args(&initial).is_ok());
     }

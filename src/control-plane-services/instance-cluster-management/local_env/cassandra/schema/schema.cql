@@ -151,6 +151,7 @@ start_time timestamp,
 end_time timestamp,
 name text,
 last_updated_time timestamp,
+reservation_backup_disabled boolean,
 PRIMARY KEY (reservation_id)
 );
 

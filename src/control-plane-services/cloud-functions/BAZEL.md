@@ -1,9 +1,10 @@
 # Bazel
 
 Cloud Functions lives inside the `NVIDIA/nvcf` monorepo. Run every command in this
-document from the monorepo root, not from this subtree. Maven remains available
-during coexistence, but Bazel configuration and dependency locks are owned by
-the monorepo root.
+document from the monorepo root, not from this subtree. The monorepo copy is
+Bazel-only and does not contain project POMs. Any Maven build support remains
+in the independent source repository. Bazel configuration and dependency locks
+are owned by the monorepo root.
 
 For the Bazel path, Cloud Functions consumes nv-boot through direct first-party
 labels such as:
@@ -12,9 +13,8 @@ labels such as:
 //src/libraries/java/nv-boot-parent/nv-boot-starter-core:nv_boot_starter_core
 ```
 
-Bazel does not publish Maven-shaped Cloud Functions or nv-boot jars. Maven
-consumers continue to use the Maven build/publish path during coexistence;
-Bazel consumers use source targets in this checkout.
+Bazel does not publish Maven-shaped Cloud Functions or nv-boot jars. Bazel
+consumers use source targets in this checkout.
 
 Set one OS-neutral Bazel output root when opening a shell in this repository:
 
@@ -25,6 +25,152 @@ export BAZEL_OUTPUT_USER_ROOT="${TMPDIR:-/tmp}/nvcf-bazel-cache"
 The commands below reuse this variable. It resolves under the operating
 system's temporary directory instead of assuming the macOS-specific
 `/private/tmp` path.
+
+## Bazel in Maven terms
+
+Cloud Functions keeps the usual Maven directory layout. Bazel gives the same
+files different build names.
+
+| Maven idea | Bazel idea |
+|---|---|
+| A Maven module | A directory with a `BUILD.bazel` file, called a package |
+| A POM dependency | An entry in a target's `deps` list |
+| A plugin or parent-POM convention | A shared Bazel macro |
+| A Maven goal | A Bazel target selected by a label |
+| `mvn test` | `bazel test //src/control-plane-services/cloud-functions/...` |
+
+A label contains the package path before the colon and the target name after
+it. For example:
+
+```text
+//src/control-plane-services/cloud-functions/nvcf-core:nvcf_core
+```
+
+## Project structure and targets
+
+```text
+cloud-functions/
+  BUILD.bazel                 component-wide test data
+  nvcf-core/
+    BUILD.bazel
+    src/main/java/            reusable core code
+    src/main/resources/       core resources, when present
+    src/test/java/            core tests
+    src/test/resources/       core test resources
+  nvcf-service/
+    BUILD.bazel
+    src/main/java/            Spring Boot application code
+    src/main/resources/       application resources
+    src/test/java/            service tests
+    src/test/resources/       service test resources
+```
+
+Keep one `BUILD.bazel` file at each Maven-like module root. Do not add package
+boundaries below `src/main/java` or `src/test/java`. That keeps Java packages,
+resources, and IntelliJ roots together.
+
+The important core targets are `nvcf_core`, `tests`, and `tests_coverage`. The
+important service targets are `app_classes`, `app`, `tests`,
+`tests_coverage`, and `nvcf-service-oss-image`.
+`nvcf-service` depends on the `nvcf_core` library target in the same way that a
+Maven application module depends on its core module.
+
+## Shared Java macros
+
+Both modules load shared macros from `//rules/java:defs.bzl`:
+
+- `nvcf_java_library` compiles Java into a reusable library. The core module
+  names that library `nvcf_core`. The service module names it `app_classes`
+  because the Spring Boot packaging target consumes it.
+- `nvcf_java_test` is a macro that declares one native `java_test` target.
+  The normal target name is `tests`. Bazel and IntelliJ use this same target.
+- `nvcf_java_coverage_test` is a macro that declares the separate
+  `tests_coverage` target. It runs `tests` and writes JUnit and JaCoCo reports
+  for CI. Its `coverage_target` points to the production library covered by
+  the tests.
+- `spring_boot_app` turns the service's `app_classes` into an executable jar.
+- `java_oci_image` turns the application into a container image.
+
+Core and service modules use the same library and test macros because the
+Bazel operations are the same. The module role is shown by its directory and
+target names, not by a separate macro name.
+
+## Bazel terms by example
+
+These terms describe different parts of the same declaration:
+
+| Term | Meaning | Cloud Functions example |
+|---|---|---|
+| Macro | A Starlark function that writes one or more rule calls for us | `nvcf_java_test(...)` |
+| Rule | A Bazel building block that knows how to create an output | `java_test(...)` inside `//rules/java:defs.bzl` |
+| Target | One named object created by a rule | `tests` in `nvcf-core` |
+| Label | The full Bazel address of a target | `//src/control-plane-services/cloud-functions/nvcf-core:tests` |
+
+For example, `nvcf-core/BUILD.bazel` contains this kind of macro call:
+
+```starlark
+nvcf_java_test(
+    name = "tests",
+    srcs = NVCF_CORE_TEST_SRCS,
+    deps = NVCF_CORE_TEST_DEPS,
+)
+```
+
+The macro contains the actual `_java_test(...)` call. `_java_test` is a private
+name for the standard `java_test` rule from `rules_java`. That rule declares
+the `//src/control-plane-services/cloud-functions/nvcf-core:tests` target.
+
+The core library follows the same idea. Its `nvcf_java_library(...)` macro call
+declares `//src/control-plane-services/cloud-functions/nvcf-core:nvcf_core`.
+The `nvcf-service` `app_classes` target lists that label in `deps`. This is the
+Bazel equivalent of the Maven service module depending on the core module.
+
+The separate `nvcf_java_coverage_test(name = "tests_coverage", ...)` macro call
+declares an `sh_test` target. It runs `tests` for CI reports but does not own
+the Java test source files.
+
+## IntelliJ-compatible BUILD structure
+
+The JetBrains Bazel plugin learns source roots from Bazel targets. Follow these
+rules when changing either module:
+
+1. Give each `src/main/java` tree exactly one IDE-visible library owner.
+2. Give each `src/test/java` tree exactly one IDE-visible native Java test
+   owner. A compatibility fixture library may compile the same files only when
+   it sets `ide_visible = False` and produces a downstream artifact.
+3. List `src/main/resources` only as production resources.
+4. List `src/test/resources` only as test resources.
+5. Keep the helper resource targets generated by the shared macros. IntelliJ
+   uses them to classify Resources Root and Test Resources Root correctly.
+6. Keep coverage and report targets separate from the native Java test. They
+   must not own Java source files.
+
+The canonical project view is `tools/intellij/.managed.bazelproject`. Its
+directory list includes Cloud Functions. The active file under `.bazelbsp`
+must enable `rules_java`, derive targets from directories, and allow manual
+targets to sync. These settings are needed because the IDE and CI targets have
+different jobs.
+
+After changing a `BUILD.bazel` file, run a Bazel project resync in IntelliJ.
+Do not mark roots manually because the next sync replaces those settings. A
+correct sync marks main sources, test sources, main resources, and test
+resources.
+
+The Project view shows the filesystem, so Java packages can look like ordinary
+directories there. Select Packages from the Project tool window's view menu to
+see the Java package hierarchy. In Packages view, open the Options menu and
+turn off Modules. Otherwise, IntelliJ shows Bazel targets such as
+`app_classes` and `tests_coverage` as module names. Turn off Library Contents
+too if external jars make the view noisy. Use Packages view for Java packages
+and the Bazel tool window for Bazel targets.
+
+Each `nvcf_java_test(name = "tests")` macro call declares exactly one native
+`java_test` target named `tests`. This same-name rule lets the JetBrains Bazel
+plugin offer gutter test actions. The new plugin does not add a per-test Run
+action to the Java editor context menu. JetBrains tracks that feature gap in
+[BAZEL-2755](https://youtrack.jetbrains.com/issue/BAZEL-2755). Right-click
+actions remain available on targets in the Bazel tool window. Use
+`tests_coverage` when JUnit or JaCoCo report files are required.
 
 ## Understanding the Dependency Files
 
@@ -238,14 +384,19 @@ bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
   --verbose_failures
 ```
 
-The current Bazel test-fixtures jar is:
+The fixture label is a compatibility `java_library` target. Managed
+`nvcf-service` builds depend on its label and exact output name:
 
 ```text
 bazel-bin/src/control-plane-services/cloud-functions/nvcf-core/libnvcf_core_test_fixtures.jar
 ```
 
-This is a Bazel-native library target, not a Maven `tests` classifier artifact.
-Maven consumers keep using the Maven build during coexistence.
+The library keeps the `local_env/` files in the classpath layout expected by
+downstream tests. Its `no-ide` tag keeps it out of the IntelliJ project model.
+The native `tests` target remains the IDE owner of `src/test/java`, so the Run
+gutter stays available. Do not replace the fixture library with an alias to
+`tests`; an alias changes the jar name and pulls monorepo-only runfiles into
+external Bzlmod consumers.
 
 ## Build `nvcf-service`
 
@@ -291,8 +442,8 @@ by `rules_java`. It must not invoke a host `jar` command or depend on
 commands from `PATH`.
 
 It keeps Spring Boot loader classes at the jar root and places runtime jars
-under `BOOT-INF/lib`. It is intentionally separate from Maven's
-`nvcf-service/target/app.jar` while Maven and Bazel coexist.
+under `BOOT-INF/lib`. This `app.jar` is the monorepo's executable application
+artifact.
 
 `git.properties` is generated from Bazel workspace status, replacing the app
 jar portion of `git-commit-id-maven-plugin` behavior for the Bazel path. The
@@ -385,9 +536,6 @@ docker compose \
   down
 ```
 
-Omitting the Docker build argument keeps the Dockerfile's Maven-build default,
-`nvcf-service/target/app.jar`, during coexistence.
-
 ## Test Everything
 
 Run all current Bazel test targets without using cached test results:
@@ -408,12 +556,16 @@ Current Bazel test targets are:
 
 ```text
 //src/control-plane-services/cloud-functions/nvcf-core:tests
+//src/control-plane-services/cloud-functions/nvcf-core:tests_coverage
 //src/control-plane-services/cloud-functions/nvcf-service:tests
+//src/control-plane-services/cloud-functions/nvcf-service:tests_coverage
 ```
 
-Both are tagged `exclusive` because they use the same fixed-port local
-integration environment. Without that, a scoped wildcard test can run them in
-parallel and collide on ports such as WireMock `9092`.
+The module tests and their coverage targets are tagged `exclusive` because
+they use the same fixed-port local integration environment. Without that, a
+scoped wildcard test can run them in parallel and collide on ports such as
+WireMock `9092`. The native `tests` targets are also tagged `manual`, so a
+wildcard test runs only the corresponding coverage targets.
 
 ## Test `nvcf-core`
 
@@ -532,14 +684,14 @@ Useful files:
 
 ```text
 bazel-testlogs/src/control-plane-services/cloud-functions/nvcf-core/tests/test.log
-bazel-testlogs/src/control-plane-services/cloud-functions/nvcf-core/tests/test.outputs/junit/TEST-junit-jupiter.xml
+bazel-testlogs/src/control-plane-services/cloud-functions/nvcf-core/tests_coverage/test.outputs/junit/TEST-junit-jupiter.xml
 bazel-testlogs/src/control-plane-services/cloud-functions/nvcf-service/tests/test.log
-bazel-testlogs/src/control-plane-services/cloud-functions/nvcf-service/tests/test.outputs/junit/TEST-junit-jupiter.xml
+bazel-testlogs/src/control-plane-services/cloud-functions/nvcf-service/tests_coverage/test.outputs/junit/TEST-junit-jupiter.xml
 ```
 
 The Jupiter XML files contain the real Java testcases and are the reports
-published by GitHub Actions. The nearby `tests/test.xml` files describe Bazel's single
-outer `sh_test` wrapper and must not be used as JUnit reports.
+published by GitHub Actions. The nearby `tests_coverage/test.xml` files
+describe Bazel's outer `sh_test` wrapper and must not be used as JUnit reports.
 
 Use `--cache_test_results=no` when you want to force the tests to run again.
 
@@ -559,19 +711,30 @@ bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
 
 ## Coverage And Sonar XML
 
-Coverage generation is part of
-`//src/control-plane-services/cloud-functions/nvcf-core:tests` and
-`//src/control-plane-services/cloud-functions/nvcf-service:tests`; no separate
-coverage command is required. Running a
-test with `--cache_test_results=no` refreshes these outputs:
+Coverage generation belongs to the separate report targets. Run:
+
+```bash
+bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
+  test \
+  //src/control-plane-services/cloud-functions/nvcf-core:tests_coverage \
+  //src/control-plane-services/cloud-functions/nvcf-service:tests_coverage \
+  --cache_test_results=no \
+  --test_output=errors \
+  --test_env=DOCKER_HOST \
+  --test_env=DOCKER_TLS_VERIFY \
+  --test_env=DOCKER_TLS_CERTDIR \
+  --test_env=DOCKER_CERT_PATH
+```
+
+This refreshes these outputs:
 
 ```text
-bazel-testlogs/src/control-plane-services/cloud-functions/nvcf-core/tests/test.outputs/index.html
-bazel-testlogs/src/control-plane-services/cloud-functions/nvcf-core/tests/test.outputs/jacoco.xml
-bazel-testlogs/src/control-plane-services/cloud-functions/nvcf-core/tests/test.outputs/jacoco.exec
-bazel-testlogs/src/control-plane-services/cloud-functions/nvcf-service/tests/test.outputs/index.html
-bazel-testlogs/src/control-plane-services/cloud-functions/nvcf-service/tests/test.outputs/jacoco.xml
-bazel-testlogs/src/control-plane-services/cloud-functions/nvcf-service/tests/test.outputs/jacoco.exec
+bazel-testlogs/src/control-plane-services/cloud-functions/nvcf-core/tests_coverage/test.outputs/index.html
+bazel-testlogs/src/control-plane-services/cloud-functions/nvcf-core/tests_coverage/test.outputs/jacoco.xml
+bazel-testlogs/src/control-plane-services/cloud-functions/nvcf-core/tests_coverage/test.outputs/jacoco.exec
+bazel-testlogs/src/control-plane-services/cloud-functions/nvcf-service/tests_coverage/test.outputs/index.html
+bazel-testlogs/src/control-plane-services/cloud-functions/nvcf-service/tests_coverage/test.outputs/jacoco.xml
+bazel-testlogs/src/control-plane-services/cloud-functions/nvcf-service/tests_coverage/test.outputs/jacoco.exec
 ```
 
 The test JVM runs the JaCoCo agent with `dumponexit=true`. After JUnit exits,
@@ -583,7 +746,7 @@ Open `index.html` for the JaCoCo HTML report. Sonar consumes the corresponding
 `jacoco.xml`, for example:
 
 ```text
--Dsonar.coverage.jacoco.xmlReportPaths=bazel-testlogs/src/control-plane-services/cloud-functions/nvcf-core/tests/test.outputs/jacoco.xml,bazel-testlogs/src/control-plane-services/cloud-functions/nvcf-service/tests/test.outputs/jacoco.xml
+-Dsonar.coverage.jacoco.xmlReportPaths=bazel-testlogs/src/control-plane-services/cloud-functions/nvcf-core/tests_coverage/test.outputs/jacoco.xml,bazel-testlogs/src/control-plane-services/cloud-functions/nvcf-service/tests_coverage/test.outputs/jacoco.xml
 ```
 
 Class and method filters also produce reports, but those reports describe only
@@ -733,8 +896,9 @@ The `ci_lane` descriptor field has two supported values:
   Cloud Functions uses this lane because its tests start Cassandra containers.
 
 This distinction belongs to the GitHub CI environment, not to Bazel itself.
-On a developer machine, Maven and Bazel both use Docker Desktop when their
-tests require containers. Under the current one-lane-per-component policy, a
+On a developer machine, tests that require containers need access to a
+configured Docker daemon, provided by Docker Desktop or Docker Engine. Under
+the current one-lane-per-component policy, a
 component with even one `requires-docker` test uses `docker-host` for its
 complete suite. A Java component with no Docker-dependent tests may use
 `build-container`.
@@ -771,11 +935,11 @@ generated/runtime_inventory.json
 generated/osrb_dependency_delta.json
 generated/osrb_dependency_delta.md
 testlogs/nvcf-core/tests/test.log
-testlogs/nvcf-core/tests/test.outputs/junit/TEST-junit-jupiter.xml
-testlogs/nvcf-core/tests/test.outputs/jacoco.exec
-testlogs/nvcf-core/tests/test.outputs/jacoco.xml
-testlogs/nvcf-core/tests/test.outputs/index.html
-testlogs/nvcf-service/tests/test.outputs/...
+testlogs/nvcf-core/tests_coverage/test.outputs/junit/TEST-junit-jupiter.xml
+testlogs/nvcf-core/tests_coverage/test.outputs/jacoco.exec
+testlogs/nvcf-core/tests_coverage/test.outputs/jacoco.xml
+testlogs/nvcf-core/tests_coverage/test.outputs/index.html
+testlogs/nvcf-service/tests_coverage/test.outputs/...
 ```
 
 Use the XML under `test.outputs/junit`; Bazel's outer `test.xml` describes the
@@ -784,24 +948,12 @@ shell test wrapper rather than the individual JUnit tests. The root-owned
 and `bazel-testlogs` symlinks so the download contains real files after the CI
 runner is destroyed.
 
-## Maven Coexistence
+## Bazel-only monorepo policy
 
-Maven and Bazel remain independent during coexistence. Maven consumers use the
-Maven build and its published artifacts. Bazel consumers use source targets
-from the monorepo and do not consume Maven-shaped project artifacts generated
-by Bazel.
-
-Run the Maven reactor from the Cloud Functions subtree:
-
-```bash
-(
-  cd src/control-plane-services/cloud-functions
-  mvn clean install
-)
-```
-
-Maven writes under the modules' `target` directories. It does not consume
-`bazel-bin`, and the Bazel build does not consume Maven `target` outputs.
+Cloud Functions project POMs are migration evidence in the independent source
+repository and are not copied into this monorepo. Build, test, packaging,
+dependency management, NOTICE generation, and CI use Bazel here. Do not restore
+project POMs or add monorepo Maven build instructions.
 
 ## Clean
 

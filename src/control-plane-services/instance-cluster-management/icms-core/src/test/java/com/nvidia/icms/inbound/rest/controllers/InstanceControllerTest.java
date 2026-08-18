@@ -1026,8 +1026,8 @@ class InstanceControllerTest extends IntegrationTest {
     // Instance listing
     @ParameterizedTest
     @ValueSource(strings = {
-            TestUtil.NON_BYOC_CLUSTER_REGISTRATION_SCOPE,
-            TestUtil.CLUSTER_INSTANCES_SCOPE
+            TestUtil.CLUSTER_INSTANCES_SCOPE,
+            TestUtil.NVCA_CLUSTER_REGISTRATION_SCOPE
     })
     void getActiveInstancesForZone_withSupportedScope_returnsSuccess(String scope)
             throws Exception {
@@ -1076,7 +1076,7 @@ class InstanceControllerTest extends IntegrationTest {
                                         .contentType(MediaType.APPLICATION_JSON)
                                         .header(HttpHeaders.AUTHORIZATION,
                                                 JwtKeyUtils.getAuthHeader(DUMMY_CLUSTER_ID,
-                                                                          TestUtil.NON_BYOC_CLUSTER_REGISTRATION_SCOPE)))
+                                                                          TestUtil.CLUSTER_INSTANCES_SCOPE)))
                         .andExpect(MockMvcResultMatchers.status().isInternalServerError())
                         .andReturn();
 
@@ -1084,6 +1084,25 @@ class InstanceControllerTest extends IntegrationTest {
         Assertions.assertThat(mvcResult.getResponse().getContentAsString())
                 .isEqualTo("{\"error\":\"Internal Server Error\"}");
         verify(instanceService).getActiveInstancesForZone(DUMMY_CLUSTER_ID);
+    }
+
+    // Error: 403 - the cluster registration scope no longer grants instance listing
+    @Test
+    void getActiveInstancesForZone_withClusterRegistrationScope_throwsException()
+            throws Exception {
+        // Act
+        MvcResult mvcResult =
+                mockMvc.perform(
+                                MockMvcRequestBuilders.get(INSTANCE_LISTING_API_URL, DUMMY_CLUSTER_ID)
+                                        .contentType(MediaType.APPLICATION_JSON)
+                                        .header(HttpHeaders.AUTHORIZATION,
+                                                JwtKeyUtils.getAuthHeader(DUMMY_CLUSTER_ID,
+                                                                          TestUtil.NON_BYOC_CLUSTER_REGISTRATION_SCOPE)))
+                        .andExpect(MockMvcResultMatchers.status().isForbidden()).andReturn();
+
+        // Assert
+        Assertions.assertThat(mvcResult.getResponse().getContentAsString())
+                .isEqualTo("{\"error\":\"Access Denied\"}");
     }
 
     // Error: 401

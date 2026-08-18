@@ -16,7 +16,8 @@
 FROM nvcr.io/nvidia/distroless/java:25-jdk-v4.0.8
 
 # Add the service jar
-ADD nvcf-service/target/app.jar /usr/share/app.jar
+ARG APP_JAR=app.jar
+COPY ${APP_JAR} /usr/share/app.jar
 
 # enable setting the ulimit to max on boot
 ENV ULIMIT_FLAG=1

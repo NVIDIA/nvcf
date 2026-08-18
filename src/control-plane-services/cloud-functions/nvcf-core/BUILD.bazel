@@ -1,7 +1,14 @@
 load("@com_google_protobuf//bazel:proto_library.bzl", "proto_library")
 load("@rules_java//java:defs.bzl", "java_library")
-load("//rules/java:defs.bzl", "nvct_library", "nvct_library_test")
-load("//rules/java:proto.bzl", "nvct_java_grpc_compile")
+load(
+    "//rules/java:defs.bzl",
+    "NVCF_JAVA_ERROR_PRONE_COMPAT_JAVACOPTS",
+    "NVCF_JAVA_JAVACOPTS",
+    "nvcf_java_coverage_test",
+    "nvcf_java_library",
+    "nvcf_java_test",
+)
+load("//rules/java:proto.bzl", "nvcf_java_grpc_compile")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -27,7 +34,7 @@ proto_library(
     srcs = ["src/main/proto/llm_gateway.proto"],
 )
 
-nvct_java_grpc_compile(
+nvcf_java_grpc_compile(
     name = "nvcf_proto_java_grpc_srcs",
     protos = [
         ":llm_gateway_proto",
@@ -41,6 +48,7 @@ nvct_java_grpc_compile(
 java_library(
     name = "nvcf_proto_java_grpc",
     srcs = [":nvcf_proto_java_grpc_srcs"],
+    javacopts = NVCF_JAVA_JAVACOPTS,
     deps = [
         "@nv_third_party_deps//:com_google_guava_guava",
         "@nv_third_party_deps//:com_google_protobuf_protobuf_java",
@@ -61,9 +69,10 @@ java_library(
     ],
 )
 
-nvct_library(
+nvcf_java_library(
     name = "nvcf_core",
     srcs = NVCF_CORE_SRCS,
+    javacopts = NVCF_JAVA_ERROR_PRONE_COMPAT_JAVACOPTS,
     deps = [
         ":nvcf_proto_java_grpc",
         "@nv_third_party_deps//:com_bucket4j_bucket4j_jdk17_core",
@@ -232,21 +241,23 @@ NVCF_CORE_TEST_DEPS = [
     "@nv_third_party_deps//:software_amazon_awssdk_sdk_core",
 ]
 
-nvct_library(
+nvcf_java_library(
     name = "nvcf_core_test_fixtures",
     srcs = NVCF_CORE_TEST_SRCS,
     deps = NVCF_CORE_TEST_DEPS,
-    # Preserve the classpath layout of the standalone cloud-functions fixture jar
-    # after moving its sources under this monorepo directory.
+    ide_visible = False,
+    javacopts = NVCF_JAVA_ERROR_PRONE_COMPAT_JAVACOPTS,
+    # Preserve the classpath layout and artifact name used by downstream
+    # Bzlmod consumers.
     resource_strip_prefix = "src/control-plane-services/cloud-functions",
     resources = NVCF_CORE_TEST_RESOURCES,
 )
 
-nvct_library_test(
+nvcf_java_test(
     name = "tests",
-    coverage_library = ":nvcf_core",
     srcs = NVCF_CORE_TEST_SRCS,
     deps = NVCF_CORE_TEST_DEPS,
+    javacopts = NVCF_JAVA_ERROR_PRONE_COMPAT_JAVACOPTS,
     data = [
         "//src/control-plane-services/cloud-functions:integration_local_env",
     ],
@@ -257,9 +268,24 @@ nvct_library_test(
         "-Dspring.test.context.cache.pause=never",
     ],
     resources = NVCF_CORE_TEST_RESOURCES,
+    size = "large",
     tags = [
         "exclusive",
+        "external",
         "requires-docker",
     ],
+    timeout = "eternal",
+)
+
+nvcf_java_coverage_test(
+    name = "tests_coverage",
+    coverage_target = ":nvcf_core",
+    size = "large",
+    tags = [
+        "exclusive",
+        "external",
+        "requires-docker",
+    ],
+    test = ":tests",
     timeout = "eternal",
 )
