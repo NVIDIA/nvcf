@@ -465,6 +465,11 @@ invocation:
     {{- with $invocationWorkerBaseURL }}
     WORKER_STREAM_PROPERTIES__SELF_ADDRESS: {{ . | quote }}
     {{- end }}
+  {{- with dig "invocation" "tracing" "baggageAttributeAllowlist" nil .Values }}
+  tracing:
+    baggageAttributeAllowlist:
+    {{- toYaml . | nindent 6 }}
+  {{- end }}
   {{- with dig "invocation" "podDisruptionBudget" dict .Values }}
   podDisruptionBudget:
     {{- toYaml . | nindent 4 }}

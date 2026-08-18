@@ -130,3 +130,7 @@ invocation:
     S3_PROPERTIES__ENABLE_LARGE_RESPONSE_URL: "false"
     SECRETS_PATH: "/vault/secrets/secrets.json"
     OAUTH2_BASE_URL: "https://oauth2.example.com"
+
+  tracing:
+    # Comma-delimited W3C baggage keys copied to invocation span attributes.
+    baggageAttributeAllowlist: []
