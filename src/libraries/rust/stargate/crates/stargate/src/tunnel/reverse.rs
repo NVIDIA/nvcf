@@ -33,6 +33,7 @@ use super::connection::TunnelConnection;
 use super::endpoint::{build_client_config, build_server_config};
 use super::http3::build_h3_client_connection;
 use super::raw_quic::RawQuicConnectionHandle;
+use crate::metrics::StargateMetrics;
 
 mod handshake;
 mod webtransport;
@@ -135,11 +136,20 @@ impl QuicHttpProxy {
         tasks: CriticalTaskGroup,
         forwarding: Option<Arc<dyn ForwardingResolver>>,
         socket: std::net::UdpSocket,
+        metrics: Arc<StargateMetrics>,
     ) -> Result<SocketAddr> {
-        let server_config = build_server_config(
-            &self.config.server_tls_identity,
-            self.config.tunnel_protocol,
-        )?;
+        // Serve the identity the reloader validated and owns. Reading the
+        // mounted files a second time here could pick up a different generation,
+        // which would leave the reloader treating the served identity as already
+        // current and never installing the replacement.
+        let initial_identity = self
+            .config
+            .server_identity_reloader
+            .as_ref()
+            .map_or(&self.config.server_tls_identity, |reloader| {
+                reloader.current_identity()
+            });
+        let server_config = build_server_config(initial_identity, self.config.tunnel_protocol)?;
         socket
             .set_nonblocking(true)
             .context("set reverse listener socket to non-blocking")?;
@@ -165,6 +175,31 @@ impl QuicHttpProxy {
             )
             .context("build relay endpoints")?,
         );
+
+        if let Some(reloader) = self.config.server_identity_reloader.clone() {
+            let status = metrics.tls_identity();
+            status.set_validity(reloader.current_validity());
+            metrics.refresh_tls_certificate_expiry();
+            let tunnel_protocol = self.config.tunnel_protocol;
+            let reload = stargate_tls::ServerIdentityReloadTask {
+                component: "stargate-reverse-listener",
+                reloader,
+                endpoint: endpoint.clone(),
+                build_server_config: Box::new(move |identity| {
+                    build_server_config(identity, tunnel_protocol)
+                }),
+                poll_interval: self.config.tls_reload_interval,
+                status,
+            };
+            tasks.spawn_critical("reverse tunnel TLS reload", move |stop| async move {
+                reload
+                    .run(stop, move |outcome| {
+                        metrics.tls_reloads_total(outcome).inc();
+                        metrics.refresh_tls_certificate_expiry();
+                    })
+                    .await
+            });
+        }
 
         let dispatch = ReverseDispatchContext {
             proxy: self.clone(),

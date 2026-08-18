@@ -326,6 +326,7 @@ crate.from_cargo(
     ],
     supported_platform_triples = SUPPORTED_TRIPLES,
 )
+
 use_repo(crate, "nvcf_invocation_crates", "rs_autoscaler_crates", "stargate_crates")
 
 # ============================================================================
