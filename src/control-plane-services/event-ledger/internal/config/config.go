@@ -59,6 +59,7 @@ type Config struct {
 	Secret             string                 `mapstructure:"secret"`
 	DeprecateEndpoints bool                   `mapstructure:"deprecate-endpoints"`
 	SecretsPath        string                 `mapstructure:"secrets-path"`
+	SelfManaged        bool                   `mapstructure:"self-managed"`
 }
 
 type PublisherConfig struct {
@@ -101,9 +102,8 @@ func (p PolicyConfig) WithDefaults() PolicyConfig {
 }
 
 // ValidateAuthConfig validates the authentication configuration.
-// hasStaticPolicyToken indicates whether a usable static bearer token was found
-// in the secrets file; when true the OAuth2 credential fields are not required.
-func ValidateAuthConfig(cfg AuthConfig, hasStaticPolicyToken bool) error {
+// selfManaged indicates a self-managed deployment where OAuth2 credential fields are not required.
+func ValidateAuthConfig(cfg AuthConfig, selfManaged bool) error {
 	if !cfg.Enabled {
 		return nil
 	}
@@ -135,7 +135,7 @@ func ValidateAuthConfig(cfg AuthConfig, hasStaticPolicyToken bool) error {
 		if cfg.Policy.PolicyFQDN == "" {
 			return ErrMissingPolicyFQDN
 		}
-		if !hasStaticPolicyToken {
+		if !selfManaged {
 			if cfg.Policy.CredsFile == "" {
 				return ErrMissingPolicyCredsFile
 			}

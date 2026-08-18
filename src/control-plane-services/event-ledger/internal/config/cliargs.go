@@ -49,6 +49,7 @@ func (c *CliArgs) Register(svcName string) {
 	c.SetupPublisher()
 	c.SetupHTTP()
 	c.SetupClientCredentials()
+	c.SetupDeploymentMode()
 }
 
 func (c *CliArgs) SetupLogging(svcName string) {
@@ -165,6 +166,10 @@ func (c *CliArgs) SetupHTTP() {
 func (c *CliArgs) SetupClientCredentials() {
 	c.string("id", "", "OAuth client ID", true)
 	c.string("secret", "", "OAuth client secret", true)
+}
+
+func (c *CliArgs) SetupDeploymentMode() {
+	c.bool("self-managed", false, "Enable self-managed deployment mode (disables OAuth2 requirements)", true)
 }
 
 func (c *CliArgs) string(name string, defaultValue string, usage string, bindToFlag bool) {

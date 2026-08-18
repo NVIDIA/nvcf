@@ -84,6 +84,9 @@ llmRequestRouter:
   affinity: {}
 
   kubernetes:
+    # Supports {pod_name} and {namespace}. When certificate.enabled is true,
+    # certificate.dnsNames must cover the resolved hostname with an exact name
+    # or a valid leftmost wildcard that matches one DNS label.
     advertisedHostnameTemplate: ""
 
   certificate:
@@ -92,6 +95,7 @@ llmRequestRouter:
     issuerRef:
       kind: ClusterIssuer
       name: ""
+    # Wildcards use the form *.example.internal and cover one label only.
     dnsNames: []
     usages:
       - server auth
