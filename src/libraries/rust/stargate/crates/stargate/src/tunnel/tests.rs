@@ -44,7 +44,7 @@ use crate::routing_state::{
     test_registration_generation,
 };
 use pylon_lib::{
-    QuicHttpTunnelConfig, ReverseQuicTunnelConfig, start_quic_http_tunnel,
+    QuicHttpTunnelConfig, ReverseQuicTunnelConfig, UpstreamBackend, start_quic_http_tunnel,
     start_reverse_quic_tunnel,
 };
 use stargate_runtime::CriticalTaskGroup;
@@ -192,6 +192,7 @@ async fn start_test_quic_tunnel(
 ) -> pylon_lib::QuicHttpTunnelHandle {
     let mut config = QuicHttpTunnelConfig::new("127.0.0.1:0".parse().unwrap(), backend_url);
     config.tunnel_protocol = tunnel_protocol;
+    config.forwarding.upstream_backend = UpstreamBackend::Passthrough;
     start_quic_http_tunnel(config).await.unwrap()
 }
 
@@ -436,11 +437,13 @@ fn reverse_tunnel_config(
     server_id: &str,
     backend_url: String,
 ) -> ReverseQuicTunnelConfig {
-    ReverseQuicTunnelConfig::new(
+    let mut config = ReverseQuicTunnelConfig::new(
         format!("127.0.0.1:{}", listener_addr.port()),
         server_id.to_string(),
         backend_url,
-    )
+    );
+    config.forwarding.upstream_backend = UpstreamBackend::Passthrough;
+    config
 }
 
 struct ReverseTunnelFixture {
