@@ -258,6 +258,34 @@ type Manifest struct {
 	// time. The shim chdir()s here before exec so relative paths in the
 	// entrypoint resolve as they did pre-capture. Empty → "/".
 	EntryCwd string `json:"entry_cwd,omitempty"`
+
+	// EntryRuntimeDirs are directories that existed under the source
+	// container's ephemeral runtime roots (/run, /var/run) at capture time.
+	//
+	// EntryArgv is /proc/<pid>/cmdline, which is the process image AFTER any
+	// exec. A container started as `bash -c 'mkdir -p /var/run/vllm; vllm
+	// serve ...'` runs the mkdir as a child and then, via bash's last-command
+	// exec optimization, REPLACES itself with vllm -- so by capture time the
+	// mkdir is no longer anywhere in the process image and cannot be
+	// recovered from argv. Restore then execs into a pristine container where
+	// the directory does not exist, and anything binding a unix socket there
+	// fails with ENOENT (vLLM's ZMQ IPC socket, observed).
+	//
+	// We cannot replay the setup commands (they are gone), and we cannot
+	// prefer the Pod's command/args instead -- ENTRYPOINT-only images carry
+	// only args, or nothing, in the Pod spec. So we record the directories
+	// themselves and recreate them before exec.
+	EntryRuntimeDirs []EntryRuntimeDir `json:"entry_runtime_dirs,omitempty"`
+}
+
+// EntryRuntimeDir is one directory to recreate in the restored container
+// before the entrypoint is exec'd. Mode and ownership are carried so a
+// workload running as a non-root UID can still write inside it.
+type EntryRuntimeDir struct {
+	Path string `json:"path"`
+	Mode uint32 `json:"mode"`
+	UID  uint32 `json:"uid"`
+	GID  uint32 `json:"gid"`
 }
 
 // VolumeMeta is a single captured volume's metadata. Volume.Name == "rootfs"

@@ -18,6 +18,8 @@ limitations under the License.
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -128,5 +130,54 @@ func TestParseMountpoints(t *testing.T) {
 		if strings.Count(got[i-1], "/") > strings.Count(got[i], "/") {
 			t.Errorf("not sorted shallow-first: %v", got)
 		}
+	}
+}
+
+// TestRecreateRuntimeDirs covers the vLLM ENOENT case: the source container's
+// entrypoint created /var/run/vllm before starting, bash exec'd itself away so
+// the mkdir is absent from the recorded argv, and restore must recreate the
+// directory or the engine's unix socket bind fails.
+func TestRecreateRuntimeDirs(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "var", "run", "vllm")
+
+	env := func(k string) string {
+		if k == envRuntimeDirs {
+			return `[{"path":"` + target + `","mode":493,"uid":0,"gid":0}]`
+		}
+		return ""
+	}
+	recreateRuntimeDirs(env)
+
+	fi, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("runtime dir not recreated: %v", err)
+	}
+	if !fi.IsDir() {
+		t.Fatalf("%s is not a directory", target)
+	}
+	if got := fi.Mode().Perm(); got != 0o755 {
+		t.Errorf("mode = %o, want 755 (umask must not narrow it)", got)
+	}
+}
+
+// Malformed or hostile input must not abort a restore: the workload may not
+// need these directories at all, so every one of these is a skip, not a fail.
+func TestRecreateRuntimeDirsIgnoresBadInput(t *testing.T) {
+	for name, val := range map[string]string{
+		"empty":         "",
+		"not json":      "{{{",
+		"wrong type":    `{"path":"/x"}`,
+		"relative":      `[{"path":"var/run/x","mode":493}]`,
+		"parent escape": `[{"path":"/tmp/../etc/x","mode":493}]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			recreateRuntimeDirs(func(k string) string {
+				if k == envRuntimeDirs {
+					return val
+				}
+				return ""
+			})
+		})
 	}
 }

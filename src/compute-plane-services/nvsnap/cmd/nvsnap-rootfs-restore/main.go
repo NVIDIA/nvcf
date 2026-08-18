@@ -74,6 +74,10 @@ import (
 
 const mergedRoot = "/nvsnap-merged"
 
+// envRuntimeDirs carries the capture's EntryRuntimeDirs as a JSON array.
+// Must match the name the webhook injects.
+const envRuntimeDirs = "NVSNAP_RUNTIME_DIRS"
+
 type volMount struct {
 	Name      string `json:"name"`
 	MountPath string `json:"mountPath"`
@@ -129,6 +133,8 @@ func runNoOverlay() error {
 		fmt.Fprintln(os.Stderr, "nvsnap-rootfs-restore: page-cache prewarm disabled (NVSNAP_PREWARM=0)")
 	}
 
+	recreateRuntimeDirs(os.Getenv)
+
 	if err := unix.Chdir(cwd); err != nil {
 		if err2 := unix.Chdir("/"); err2 != nil {
 			return fmt.Errorf("chdir %q (and / fallback): %w", cwd, err2)
@@ -143,6 +149,62 @@ func runNoOverlay() error {
 		return fmt.Errorf("exec %v: %w", argv, err)
 	}
 	return nil
+}
+
+// runtimeDir mirrors checkpointstore.EntryRuntimeDir. Declared here rather
+// than imported so the shim stays a standalone static binary the webhook can
+// drop into any workload image.
+type runtimeDir struct {
+	Path string `json:"path"`
+	Mode uint32 `json:"mode"`
+	UID  uint32 `json:"uid"`
+	GID  uint32 `json:"gid"`
+}
+
+// recreateRuntimeDirs recreates the ephemeral directories the source
+// container had before its entrypoint ran.
+//
+// The commands that created them are not recoverable: a container started as
+// `bash -c 'mkdir -p /var/run/vllm; vllm serve ...'` runs the mkdir as a child
+// and then replaces itself with vllm, so /proc/1/cmdline at capture time holds
+// only the engine. Restoring into a pristine container therefore leaves the
+// directory missing, and anything binding a unix socket under it fails with
+// ENOENT (vLLM's ZMQ IPC socket).
+//
+// Best-effort by design: most workloads need none of these, so a directory we
+// cannot create is reported and skipped rather than failing the restore.
+func recreateRuntimeDirs(getenv func(string) string) {
+	raw := getenv(envRuntimeDirs)
+	if raw == "" {
+		return
+	}
+	var dirs []runtimeDir
+	if err := json.Unmarshal([]byte(raw), &dirs); err != nil {
+		fmt.Fprintf(os.Stderr, "nvsnap-rootfs-restore: ignoring malformed %s: %v\n", envRuntimeDirs, err)
+		return
+	}
+	for _, d := range dirs {
+		if d.Path == "" || !filepath.IsAbs(d.Path) || strings.Contains(d.Path, "..") {
+			continue
+		}
+		mode := os.FileMode(d.Mode).Perm()
+		if mode == 0 {
+			mode = 0o755
+		}
+		if err := os.MkdirAll(d.Path, mode); err != nil {
+			fmt.Fprintf(os.Stderr, "nvsnap-rootfs-restore: runtime dir %s: %v\n", d.Path, err)
+			continue
+		}
+		// MkdirAll applies the umask, so set the recorded mode explicitly --
+		// a group-writable runtime dir must stay writable for a workload that
+		// drops privileges after start.
+		if err := os.Chmod(d.Path, mode); err != nil {
+			fmt.Fprintf(os.Stderr, "nvsnap-rootfs-restore: chmod %s: %v\n", d.Path, err)
+		}
+		if err := os.Chown(d.Path, int(d.UID), int(d.GID)); err != nil {
+			fmt.Fprintf(os.Stderr, "nvsnap-rootfs-restore: chown %s: %v\n", d.Path, err)
+		}
+	}
 }
 
 func parseConfig(getenv func(string) string) (config, error) {
@@ -373,6 +435,9 @@ func run() error {
 		return fmt.Errorf("detach old root: %w", uErr)
 	}
 	_ = os.Remove("/.nvsnap-oldroot")
+
+	// After pivot_root, so the paths resolve inside the restored tree.
+	recreateRuntimeDirs(os.Getenv)
 
 	// chdir into the captured working directory so the entrypoint's
 	// relative paths resolve as they did pre-capture. Fall back to "/"
