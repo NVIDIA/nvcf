@@ -70,6 +70,9 @@ import (
 const (
 	defaultLimiterCacheCapacity       = 300
 	defaultIndexedPolicyCacheCapacity = 100
+	// Keep a backup of every counter so losing a member does not reset it.
+	// Olric warns and places fewer backups when the cluster is smaller.
+	DefaultOlricReplicaCount = 2
 )
 
 type FunctionRateLimitConfig struct {
@@ -99,6 +102,9 @@ type Config struct {
 	NvcfApiUrl               string `mapstructure:"NVCF_API_URL"`
 	CacheTTL                 int    `mapstructure:"CACHE_TTL"`
 	CollectMetrics           bool   `mapstructure:"COLLECT_METRICS"`
+	// Copies of each counter kept in the cluster. At 1 the owning member is a
+	// single point of failure for the counters it holds.
+	OlricReplicaCount int `mapstructure:"OLRIC_REPLICA_COUNT"`
 }
 
 type CustomClaims struct {
