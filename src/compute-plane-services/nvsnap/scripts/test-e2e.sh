@@ -793,6 +793,18 @@ else
         "$RESTORE_MANIFEST_TEMPLATE" > "$RESTORE_MANIFEST"
 fi
 
+# A template placeholder that survives substitution is not a cosmetic problem.
+# nvsnap.io/restore-from: "__CAPTURE_HASH__" gives the webhook nothing to
+# resolve, so it injects no storage and no cache env -- and the pod cold-starts
+# while looking exactly like a slow restore, model download included. Every
+# timing measured from that point is a cold-start number wearing a restore
+# label. Refuse to launch instead.
+if grep -nE '__[A-Z_]+__' "$RESTORE_MANIFEST"; then
+    log_error "Unsubstituted placeholder(s) above in $RESTORE_MANIFEST."
+    log_error "The webhook would ignore this pod and it would COLD START, not restore."
+    exit 1
+fi
+
 # Phase 5d: restore goes back to the simple hostPath mount on the
 # capture-source node (or the agent's EnsureLocal cascade materializes
 # it locally on a different target node before the placeholder reads
@@ -828,6 +840,54 @@ if [ "$CAPTURE_PATH" = "criu-v2" ]; then
         fail "criu-v2 agent restore"
     fi
     log_info "criu-v2: agent restore returned: $RESTORE_RESP"
+fi
+
+# Prove the webhook admitted this pod AS A RESTORE before timing anything.
+#
+# A pod the webhook declined still starts, still serves, and still passes every
+# check below -- it just cold-starts, downloading the model again. The timings
+# then describe a cold start wearing a restore label, and nothing in the run
+# says so. (Measured: a 70B "restore" that spent 8m47s downloading weights,
+# because the pod carried no injected cache at all.)
+#
+# The observable signature of a real restore on the rootfs/cachedir path is the
+# injected cache mount plus a cache env that points into it.
+if [ "$CAPTURE_PATH" = "rootfs" ]; then
+    log_info "Verifying the restore pod was admitted as a restore..."
+    for _ in $(seq 1 30); do
+        kubectl get pod "$RESTORE_POD_NAME" -n "$NAMESPACE" -o json >/tmp/nvsnap-restore-pod.json 2>/dev/null && break
+        sleep 2
+    done
+    if ! python3 - /tmp/nvsnap-restore-pod.json "$RESTORE_CONTAINER_NAME" <<'PY'
+import json, sys
+pod = json.load(open(sys.argv[1]))
+want = sys.argv[2]
+containers = pod["spec"]["containers"]
+c = next((x for x in containers if x["name"] == want), containers[0])
+env = {e["name"]: e.get("value", "") for e in (c.get("env") or [])}
+mounts = [m["mountPath"] for m in (c.get("volumeMounts") or [])]
+
+problems = []
+if not [m for m in mounts if m.startswith("/opt/nvsnap")]:
+    problems.append(f"no captured-cache mount injected (mounts: {mounts})")
+for var in ("HF_HOME", "NIM_CACHE_PATH"):
+    val = env.get(var)
+    if val and not val.startswith("/opt/nvsnap"):
+        problems.append(f"{var}={val!r} points outside the restored cache")
+if problems:
+    for p in problems:
+        print(f"  {p}", file=sys.stderr)
+    sys.exit(1)
+PY
+    then
+        log_error "Restore pod was NOT decorated by the webhook — it will COLD START."
+        log_error "Any timing from this run would be a cold start labelled as a restore."
+        kubectl get pod "$RESTORE_POD_NAME" -n "$NAMESPACE" \
+            -o jsonpath='{.metadata.annotations.nvsnap\.io/restore-from}{"\n"}' 2>/dev/null \
+            | sed 's/^/  restore-from: /'
+        fail "Restore pod not admitted as a restore"
+    fi
+    log_info "  verified: captured cache is mounted and the cache env points into it"
 fi
 
 log_info "Waiting for restore pod ready (up to ${RESTORE_READY_TIMEOUT}s)..."
