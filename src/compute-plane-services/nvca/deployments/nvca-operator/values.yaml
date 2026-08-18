@@ -70,6 +70,13 @@ serviceAccount:
 
 ## @param replicaCount Replica count for the operator deployment
 replicaCount: 1
+## @param podDisruptionBudget PodDisruptionBudget configuration
+podDisruptionBudget:
+  enabled: false
+  # minAvailable and maxUnavailable are mutually exclusive; set exactly one.
+  # Accepts an integer or a percentage string (e.g. 1 or "50%").
+  minAvailable: ""
+  maxUnavailable: ""
 
 ## @param systemNamespace Namespace in which NVCFBackend objects are created.
 systemNamespace: nvca-operator
@@ -107,7 +114,36 @@ enableGXCache: true
 ## @param ddcsIPAllowList provides comma separated CIDR ranges to allowList
 ddcsIPAllowList: ""
 
+## @section BYOO Configuration
+## @param byoo.resources Resource requests and limits for the BYOO OTel collector container
+## @param byoo.logChunking.maxPayloadBytes Maximum log chunk payload size in bytes. Zero disables the override.
+## @param byoo.logChunking.dryRun Record chunking metrics without modifying log payloads.
+## @param byoo.otelCollector Structured BYOO OTel collector rendering overrides.
+## @param byoo.additionalResourceOverhead Cluster capacity reserved for BYOO and related DaemonSet overhead.
+byoo:
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 4Gi
+    requests:
+      cpu: 1000m
+      memory: 4Gi
+  logChunking:
+    maxPayloadBytes: 262144
+    dryRun: false
+  otelCollector:
+    exporterHelper:
+      sendingQueue:
+        batch:
+          sizer: bytes
+          maxSize: 1000000
+  additionalResourceOverhead:
+    cpu: "8"
+    ephemeral-storage: 5Gi
+    memory: 10Gi
+
 ## @param agentConfig.mergeConfig Merge fields into the generated NVCA config. Must be a string.
+## @description agentConfig.mergeConfig is deprecated for BYOO settings. Use the top-level byoo values instead.
 agentConfig:
   mergeConfig: ""
   # Example:
@@ -116,7 +152,7 @@ agentConfig:
   #   agent:
   #     logLevel: debug
   #
-  # BYOO metric subset example:
+  # Legacy BYOO example (deprecated):
   #
   # mergeConfig: |
   #   agent:

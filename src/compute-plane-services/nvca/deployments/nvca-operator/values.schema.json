@@ -201,8 +201,56 @@
             "properties": {
                 "mergeConfig": {
                     "type": "string",
-                    "description": "Merge fields into the generated NVCA config. Must be a string.",
+                    "description": "Merge fields into the generated NVCA config. Must be a string. Deprecated for BYOO settings; use byoo instead.",
                     "default": ""
+                }
+            }
+        },
+        "byoo": {
+            "type": "object",
+            "description": "First-class BYOO OTel collector and capacity configuration.",
+            "properties": {
+                "resources": {
+                    "type": "object",
+                    "properties": {
+                        "limits": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        },
+                        "requests": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                },
+                "logChunking": {
+                    "type": "object",
+                    "properties": {
+                        "enabled": {
+                            "type": "boolean"
+                        },
+                        "maxPayloadBytes": {
+                            "type": "integer",
+                            "minimum": 0
+                        },
+                        "dryRun": {
+                            "type": "boolean"
+                        }
+                    }
+                },
+                "otelCollector": {
+                    "type": "object",
+                    "description": "Structured BYOO OTel collector rendering overrides."
+                },
+                "additionalResourceOverhead": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
                 }
             }
         },
