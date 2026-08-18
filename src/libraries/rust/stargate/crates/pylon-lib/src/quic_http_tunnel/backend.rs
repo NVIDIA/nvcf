@@ -62,20 +62,40 @@ pub const DEFAULT_PRIORITY_CEILING: u32 = 3600;
 
 pub(crate) mod dynamo {
     use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+    use stargate_protocol::tunnel_contract::{HEADER_MODEL, HEADER_REQUEST_ID, HEADER_ROUTING_KEY};
+    use uuid::Uuid;
 
     /// Engine priority headers pylon derives; the names stay out of the
     /// shared tunnel contract because only pylon speaks them.
+    pub(crate) const HEADER_STATS_CORRELATION_ID: &str = "x-dynamo-stats-correlation-id";
     pub(crate) const HEADER_REQUEST_PRIORITY: &str = "x-dynamo-request-priority";
     pub(crate) const HEADER_REQUEST_STRICT_PRIORITY: &str = "x-dynamo-request-strict-priority";
 
     /// Denylist of engine headers pylon owns: inbound values are stripped in
-    /// every backend mode so pylon stays their only writer. Scoped to the
-    /// priority headers for now; other engine headers are tracked separately.
-    const STRIPPED_REQUEST_HEADERS: [&str; 2] =
-        [HEADER_REQUEST_PRIORITY, HEADER_REQUEST_STRICT_PRIORITY];
+    /// every backend mode so pylon stays their only writer.
+    const STRIPPED_REQUEST_HEADERS: [&str; 5] = [
+        "request-id",
+        "x-dynamo-request-id",
+        HEADER_STATS_CORRELATION_ID,
+        HEADER_REQUEST_PRIORITY,
+        HEADER_REQUEST_STRICT_PRIORITY,
+    ];
 
     pub(crate) fn is_stripped_engine_header(name: &HeaderName) -> bool {
         STRIPPED_REQUEST_HEADERS.contains(&name.as_str())
+    }
+
+    /// Replace platform identity headers with an engine-local stats correlation ID.
+    pub(crate) fn translate_stats_correlation(upstream_headers: &mut HeaderMap) -> String {
+        for name in [HEADER_REQUEST_ID, HEADER_MODEL, HEADER_ROUTING_KEY] {
+            upstream_headers.remove(name);
+        }
+        let correlation_id = Uuid::new_v4().to_string();
+        upstream_headers.insert(
+            HeaderName::from_static(HEADER_STATS_CORRELATION_ID),
+            HeaderValue::from_str(&correlation_id).expect("UUID should be a valid header value"),
+        );
+        correlation_id
     }
 
     /// Map the platform rank (lower wins, absent = unconfigured) to the

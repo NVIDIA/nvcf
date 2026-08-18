@@ -480,6 +480,9 @@ fn pylon_request_header_filter_strips_tunnel_headers_case_insensitively()
         "X-Method",
         "X-Path",
         "X-Stargate-Expected-Queue-Ms",
+        "Request-Id",
+        "X-Dynamo-Request-Id",
+        "X-Dynamo-Stats-Correlation-Id",
         "X-Dynamo-Request-Priority",
         "X-Dynamo-Request-Strict-Priority",
     ]
@@ -536,6 +539,22 @@ fn pylon_dynamo_priority_headers_are_always_emitted() {
     assert_eq!(emitted, 0);
     assert_eq!(headers["x-dynamo-request-priority"], "0");
     assert_eq!(headers["x-dynamo-request-strict-priority"], "0");
+}
+
+#[test]
+fn pylon_replaces_platform_identity_with_a_dynamo_stats_correlation() {
+    let mut headers = HeaderMap::new();
+    headers.insert("x-request-id", "gateway-request".parse().unwrap());
+    headers.insert("x-model", "gateway-model".parse().unwrap());
+    headers.insert("x-routing-key", "gateway-route".parse().unwrap());
+
+    let correlation_id = dynamo::translate_stats_correlation(&mut headers);
+
+    assert!(uuid::Uuid::parse_str(&correlation_id).is_ok());
+    assert_eq!(headers[dynamo::HEADER_STATS_CORRELATION_ID], correlation_id);
+    assert!(!headers.contains_key("x-request-id"));
+    assert!(!headers.contains_key("x-model"));
+    assert!(!headers.contains_key("x-routing-key"));
 }
 
 #[test]
@@ -1721,6 +1740,10 @@ fn dynamo_priority_echo_router() -> Router {
             };
             let dynamo_priority = echo_header("x-dynamo-request-priority");
             let dynamo_strict_priority = echo_header("x-dynamo-request-strict-priority");
+            let stats_correlation_id = echo_header(dynamo::HEADER_STATS_CORRELATION_ID);
+            let platform_identity_present = ["x-request-id", "x-model", "x-routing-key"]
+                .into_iter()
+                .any(|name| req.headers().contains_key(name));
             let mut sse = axum::response::Sse::new(async_stream::stream! {
                 yield Ok::<_, std::convert::Infallible>(
                     Event::default().data(r#"{"object":"chat.completion.chunk","choices":[{"delta":{"content":"ok"}}]}"#)
@@ -1736,6 +1759,14 @@ fn dynamo_priority_echo_router() -> Router {
                 HeaderName::from_static("x-echo-dynamo-strict-priority"),
                 HeaderValue::from_str(&dynamo_strict_priority).unwrap(),
             );
+            sse.headers_mut().insert(
+                HeaderName::from_static("x-echo-stats-correlation-id"),
+                HeaderValue::from_str(&stats_correlation_id).unwrap(),
+            );
+            sse.headers_mut().insert(
+                HeaderName::from_static("x-saw-platform-identity"),
+                HeaderValue::from_static(if platform_identity_present { "true" } else { "false" }),
+            );
             *sse.status_mut() = StatusCode::OK;
             sse
         }),
@@ -1743,9 +1774,10 @@ fn dynamo_priority_echo_router() -> Router {
 }
 
 #[tokio::test]
-async fn quic_tunnel_derives_dynamo_priority_from_x_priority() {
+async fn quic_tunnel_translates_dynamo_request_headers() {
     let (config, _metrics) = metered_test_tunnel_config_for(dynamo_priority_echo_router()).await;
     let ceiling = config.forwarding.priority_ceiling;
+    let runtime_state = config.forwarding.runtime_state.clone();
     let mut tunnel = RawTunnelTest::start(config).await;
 
     let mut headers =
@@ -1754,6 +1786,11 @@ async fn quic_tunnel_derives_dynamo_priority_from_x_priority() {
     // Spoofed engine headers must be replaced by pylon-derived values.
     headers.insert("x-dynamo-request-priority", "42".parse().unwrap());
     headers.insert("x-dynamo-request-strict-priority", "1".parse().unwrap());
+    headers.insert(
+        "request-id",
+        uuid::Uuid::new_v4().to_string().parse().unwrap(),
+    );
+    headers.insert("x-routing-key", "gateway-route".parse().unwrap());
     tunnel
         .send(headers, br#"{"messages":[],"stream":true}"#)
         .await;
@@ -1768,6 +1805,19 @@ async fn quic_tunnel_derives_dynamo_priority_from_x_priority() {
         (ceiling - 7).to_string()
     );
     assert_eq!(response_headers["x-echo-dynamo-strict-priority"], "0");
+    assert_eq!(response_headers["x-saw-platform-identity"], "false");
+    let stats_correlation_id = response_headers["x-echo-stats-correlation-id"]
+        .to_str()
+        .unwrap();
+    assert!(uuid::Uuid::parse_str(stats_correlation_id).is_ok());
+    assert_eq!(
+        runtime_state
+            .engine_stats_generation(stats_correlation_id)
+            .as_ref()
+            .map(ModelGeneration::model_id),
+        Some("model-a")
+    );
+    runtime_state.finish_engine_stats_correlation(stats_correlation_id);
 
     tunnel.shutdown().await;
 }
