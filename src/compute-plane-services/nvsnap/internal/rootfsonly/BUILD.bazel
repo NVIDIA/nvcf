@@ -35,6 +35,7 @@ go_test(
         "classify_test.go",
         "composer_test.go",
         "entry_argv_test.go",
+        "entry_runtime_dirs_test.go",
         "enumerate_test.go",
         "orchestrator_test.go",
         "pidresolver_test.go",
