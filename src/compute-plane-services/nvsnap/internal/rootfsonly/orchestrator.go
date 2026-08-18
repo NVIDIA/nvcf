@@ -669,24 +669,35 @@ func readEntryRuntimeDirs(procRoot string, pid int) []checkpointstore.EntryRunti
 	seen := make(map[string]bool) // /var/run is usually a symlink to /run
 
 	for _, root := range runtimeDirRoots {
+		// Walk the /proc/<pid>/root path as-is. It must NOT be canonicalized:
+		// /proc/<pid>/root is a magic link, so EvalSymlinks (and realpath, and
+		// anything else that resolves it) rewrites it to the equivalent HOST
+		// path, which silently takes the walk outside the container's view and
+		// would record the node's own runtime tree as if it were the pod's.
+		//
+		// WalkDir does not follow symlinks, which also gives the /var/run ->
+		// /run dedupe for free: on a distro where /var/run is a symlink it is
+		// reported once as a non-directory and never descended into.
 		hostRoot := filepath.Join(containerRoot, root)
-		resolved, err := filepath.EvalSymlinks(hostRoot)
-		if err != nil {
-			continue
-		}
-		_ = filepath.WalkDir(resolved, func(p string, d fs.DirEntry, err error) error {
+		_ = filepath.WalkDir(hostRoot, func(p string, d fs.DirEntry, err error) error {
 			if err != nil || !d.IsDir() {
 				return nil //nolint:nilerr // unreadable subtree is not fatal
 			}
-			rel, rerr := filepath.Rel(resolved, p)
+			rel, rerr := filepath.Rel(hostRoot, p)
 			if rerr != nil || rel == "." {
 				return nil
 			}
 			if strings.Count(rel, string(filepath.Separator)) >= maxRuntimeDepth {
 				return fs.SkipDir
 			}
+			// Stop the whole walk at the cap rather than skipping entries: a
+			// workload can put a large tree under /run, and continuing to
+			// traverse it would add capture latency for entries we discard.
+			if len(out) >= maxRuntimeDirs {
+				return fs.SkipAll
+			}
 			inContainer := filepath.Join(root, rel)
-			if seen[inContainer] || len(out) >= maxRuntimeDirs {
+			if seen[inContainer] {
 				return nil
 			}
 			info, ierr := d.Info()

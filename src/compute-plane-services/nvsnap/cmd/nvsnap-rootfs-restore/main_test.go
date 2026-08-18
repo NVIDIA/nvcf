@@ -138,16 +138,10 @@ func TestParseMountpoints(t *testing.T) {
 // the mkdir is absent from the recorded argv, and restore must recreate the
 // directory or the engine's unix socket bind fails.
 func TestRecreateRuntimeDirs(t *testing.T) {
-	root := t.TempDir()
-	target := filepath.Join(root, "var", "run", "vllm")
+	sandbox := t.TempDir()
+	target := filepath.Join(sandbox, "vllm")
 
-	env := func(k string) string {
-		if k == envRuntimeDirs {
-			return `[{"path":"` + target + `","mode":493,"uid":0,"gid":0}]`
-		}
-		return ""
-	}
-	recreateRuntimeDirs(env)
+	recreateRuntimeDirs(envFunc(`[{"path":"`+target+`","mode":493,"uid":0,"gid":0}]`), []string{sandbox})
 
 	fi, err := os.Stat(target)
 	if err != nil {
@@ -161,23 +155,60 @@ func TestRecreateRuntimeDirs(t *testing.T) {
 	}
 }
 
-// Malformed or hostile input must not abort a restore: the workload may not
-// need these directories at all, so every one of these is a skip, not a fail.
+// A recorded 0000 directory must come back as 0000, not widened to 0755.
+func TestRecreateRuntimeDirsPreservesZeroMode(t *testing.T) {
+	sandbox := t.TempDir()
+	target := filepath.Join(sandbox, "locked")
+
+	recreateRuntimeDirs(envFunc(`[{"path":"`+target+`","mode":0,"uid":0,"gid":0}]`), []string{sandbox})
+
+	fi, err := os.Stat(target)
+	if err != nil {
+		t.Fatalf("dir not created: %v", err)
+	}
+	if got := fi.Mode().Perm(); got != 0 {
+		t.Errorf("mode = %o, want 0 (an explicit 0000 must not be widened)", got)
+	}
+}
+
+// Malformed or hostile input must not abort a restore, and must not create
+// anything. The traversal string is built by concatenation, NOT filepath.Join,
+// because Join normalizes ".." away and would silently make this a clean path
+// that legitimately gets created -- which is exactly how an earlier version of
+// this test passed against a guard that did not actually block traversal.
 func TestRecreateRuntimeDirsIgnoresBadInput(t *testing.T) {
+	sandbox := t.TempDir()
+	escapeTarget := filepath.Join(sandbox, "etc", "pwn")
+	traversal := sandbox + "/run/../etc/pwn"
+	outside := filepath.Join(t.TempDir(), "elsewhere")
+
 	for name, val := range map[string]string{
-		"empty":         "",
-		"not json":      "{{{",
-		"wrong type":    `{"path":"/x"}`,
-		"relative":      `[{"path":"var/run/x","mode":493}]`,
-		"parent escape": `[{"path":"/tmp/../etc/x","mode":493}]`,
+		"empty":          "",
+		"not json":       "{{{",
+		"wrong type":     `{"path":"/x"}`,
+		"relative":       `[{"path":"var/run/x","mode":493}]`,
+		"parent escape":  `[{"path":"` + traversal + `","mode":493}]`,
+		"outside root":   `[{"path":"` + outside + `","mode":493}]`,
+		"root itself":    `[{"path":"/","mode":493}]`,
+		"prefix look-al": `[{"path":"` + sandbox + `-evil/x","mode":493}]`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			recreateRuntimeDirs(func(k string) string {
-				if k == envRuntimeDirs {
-					return val
-				}
-				return ""
-			})
+			recreateRuntimeDirs(envFunc(val), []string{sandbox})
 		})
+	}
+
+	for _, p := range []string{escapeTarget, outside, sandbox + "-evil/x"} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("created %s (err=%v); the path guard regressed", p, err)
+		}
+	}
+}
+
+func envFunc(val string) func(string) string {
+	return func(k string) string {
+		if k == envRuntimeDirs {
+			return val
+		}
+		return ""
 	}
 }
