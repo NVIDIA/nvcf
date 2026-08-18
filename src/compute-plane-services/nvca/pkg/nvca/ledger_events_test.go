@@ -22,6 +22,9 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/tools/record"
 
 	nvcametrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
@@ -79,4 +82,88 @@ func TestFailureCategoryAnnotationParity_HelmNotFound(t *testing.T) {
 	annotations := types.LedgerEventAnnotations(req, "cluster-east", "us-east-1", update)
 	assert.Equal(t, string(metricCategory), annotations[types.LedgerAnnotationFailureCategory])
 	assert.Equal(t, "not_found", annotations[types.LedgerAnnotationFailureCategory])
+}
+
+func newLedgerTestCache(rec record.EventRecorder) *BackendK8sCache {
+	return &BackendK8sCache{
+		eventRecorder: rec,
+		clusterName:   "cluster-east",
+		clusterRegion: "us-east-1",
+	}
+}
+
+func functionLedgerRequest() *nvcav2beta1.ICMSRequest {
+	return &nvcav2beta1.ICMSRequest{
+		Spec: nvcav2beta1.ICMSRequestSpec{
+			RequestID: "req-1",
+			NCAId:     "nca-1",
+			FunctionDetails: function.Details{
+				FunctionID:        "func-1",
+				FunctionVersionID: "fv-1",
+			},
+		},
+	}
+}
+
+func TestAnnotatedICMSEventf_ForwardsAnnotationsAndArgs(t *testing.T) {
+	rec := record.NewFakeRecorder(4)
+	c := newLedgerTestCache(rec)
+
+	c.AnnotatedICMSEventf(functionLedgerRequest(), corev1.EventTypeNormal,
+		"InstanceStatusUpdate", "%v is %v", instanceUpdate("0-sr-a"), "0-sr-a", "running")
+
+	got := <-rec.Events
+	// Formatting args are forwarded to the recorder.
+	assert.Contains(t, got, "Normal InstanceStatusUpdate 0-sr-a is running")
+	// Instance-level annotations are stamped.
+	assert.Contains(t, got, types.LedgerAnnotationInstanceID+":0-sr-a")
+	assert.Contains(t, got, types.LedgerAnnotationICMSRequestID+":req-1")
+	assert.Contains(t, got, types.LedgerAnnotationClusterID+":cluster-east")
+	assert.Contains(t, got, types.LedgerAnnotationRegion+":us-east-1")
+	assert.Empty(t, rec.Events, "exactly one event should be emitted")
+}
+
+func TestAnnotatedICMSEvent_RequestLevelOmitsInstanceID(t *testing.T) {
+	rec := record.NewFakeRecorder(4)
+	c := newLedgerTestCache(rec)
+
+	c.AnnotatedICMSEvent(functionLedgerRequest(), corev1.EventTypeNormal,
+		"InstanceCreation", "Request accepted for processing", nil)
+
+	got := <-rec.Events
+	assert.Contains(t, got, "Normal InstanceCreation Request accepted for processing")
+	assert.Contains(t, got, types.LedgerAnnotationICMSRequestID+":req-1")
+	assert.NotContains(t, got, types.LedgerAnnotationInstanceID,
+		"request-level events must not carry instance-id")
+}
+
+func TestAnnotatedICMSEventf_NilGuards(t *testing.T) {
+	t.Run("nil cache", func(t *testing.T) {
+		var c *BackendK8sCache
+		assert.NotPanics(t, func() {
+			c.AnnotatedICMSEventf(functionLedgerRequest(), corev1.EventTypeNormal, "R", "m", nil)
+		})
+	})
+
+	t.Run("nil recorder", func(t *testing.T) {
+		c := &BackendK8sCache{clusterName: "cluster-east"}
+		assert.NotPanics(t, func() {
+			c.AnnotatedICMSEventf(functionLedgerRequest(), corev1.EventTypeNormal, "R", "m", nil)
+		})
+	})
+
+	t.Run("nil request", func(t *testing.T) {
+		rec := record.NewFakeRecorder(4)
+		c := newLedgerTestCache(rec)
+		c.AnnotatedICMSEventf(nil, corev1.EventTypeNormal, "R", "m", nil)
+		assert.Empty(t, rec.Events, "no event should be emitted for a nil request")
+	})
+}
+
+func TestInstanceUpdate(t *testing.T) {
+	assert.Nil(t, instanceUpdate(""), "empty instance-id yields a request-level (nil) update")
+
+	got := instanceUpdate("0-sr-a")
+	require.NotNil(t, got)
+	assert.Equal(t, "0-sr-a", got.InstanceID)
 }

@@ -475,7 +475,8 @@ func (c K8sComputeBackend) applyFunctionCreationMessage(ctx context.Context, req
 		return c.bk8s.ApplyICMSRequestStatusChange(ctx, req)
 	}
 
-	c.bk8s.AnnotatedICMSEventf(req, corev1.EventTypeNormal, string(types.EventCategoryInstanceCreation), "Creating %v requested instances", nil, instCount)
+	c.bk8s.AnnotatedICMSEventf(req, corev1.EventTypeNormal, string(types.EventCategoryInstanceCreation),
+		"Creating %v requested instances", nil, instCount)
 
 	labelsForReq := nvcatypes.GetLabelsForRequest(req, c.bk8s.featureFlagFetcher)
 	annosForReq := nvcatypes.GetAnnotationsForRequest(req)
