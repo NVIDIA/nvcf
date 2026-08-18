@@ -245,11 +245,11 @@ curl -s -X POST "http://${GATEWAY_ADDR}/v2/nvcf/deployments/functions/${FUNCTION
 
 ## Instance health
 
-Cloud Functions uses "holistic" Helm function health checking: on every reconcile,
-NVCA evaluates the health of every object applied from your Helm chart and their children
-(ex. a Deployment, its active ReplicaSet, and its replica Pods) plus infrastructure Pods.
-If any single object reaches a terminal bad state, the whole function instance is marked failed.
-NVCA then reports the failing object's status and events for debugging and re-creates the instance.
+By default, Cloud Functions considers the health of every Kubernetes object rendered by a Helm chart
+(for example a Deployment, its active ReplicaSet, and its replica Pods), alongside infrastructure Pods.
+One unhealthy object can cause the entire instance to be recreated, even when the inference
+service can still serve traffic. [`StatusByWorkerReadiness`](#use-worker-readiness-for-function-health)
+changes this tradeoff by using only the inference worker's readiness to determine instance health.
 
 An instance transitions through these phases:
 
@@ -259,8 +259,7 @@ An instance transitions through these phases:
 
 Because health depends on all chart objects, a Pod that is not the inference
 worker (for example a sidecar Deployment or an init Job) can fail the instance
-if it enters a terminal state. Use [`StatusByWorkerReadiness`](#use-worker-readiness-for-function-health)
-if only the inference worker's readiness should determine instance health.
+if it enters a terminal state.
 
 ### Timeouts
 
@@ -281,7 +280,8 @@ defaults. Only Worker Degradation Period is operator-configurable, through the
 | Pending timeout (max running) | 3 hours | Objects remain pending, that is not all objects reach ready, since the instance health condition first went unhealthy. | The instance fails with a pending timeout. |
 | Failing objects backoff | 90 seconds | An object reports a transient failure, for example `FailedMount` or `FailedAttachVolume`. | NVCA requeues and retries every 30 seconds for up to 90 seconds. If the object is still failing after 90 seconds, the instance fails. |
 
-Some conditions fail an instance immediately, without waiting for a timeout:
+Some conditions fail an instance immediately when default instance health checking is used,
+without waiting for a timeout:
 
 - A Pod that enters the `Failed` phase, including admission rejection
   (`UnexpectedAdmissionError`).
@@ -295,9 +295,12 @@ Some conditions fail an instance immediately, without waiting for a timeout:
   `FailedUpdate`, `ReplicaSetCreateError`, or a `forbidden` error, on a tracked
   object.
 
+[`StatusByWorkerReadiness`](#use-worker-readiness-for-function-health) will not result in instance failure
+in any of these scenarios as long as the instance's healthcheck endpoint continues to return a positive status.
+
 ### Use worker readiness for function health
 
-As described above, an unhealthy object, ex. a Pod, applied by the Helm chart can fail the function
+As described above, any unhealthy object, like a Pod, applied by the Helm chart can fail the function
 instance. This behavior may not be desirable if some objects in your chart are expected to fail or are not critical
 to serving inference. When your function is configured with the `StatusByWorkerReadiness` feature flag, the instance health check performed by NVCF becomes the sole determinant of instance health.
 The flag is read from the chart at install time to configure the function instance.
@@ -315,7 +318,7 @@ data:
       StatusByWorkerReadiness: true
 ```
 
-The ConfigMap **must** be named `nvcf-workload-config` and the `config.yaml` key **must** exist.
+The ConfigMap must be named `nvcf-workload-config` and the `config.yaml` key must exist.
 Cloud Functions reads this configuration from the chart and does not create the ConfigMap
 in the instance namespace.
 
@@ -337,6 +340,8 @@ helm push ./my-chart-1.0.0.tgz \
   --health-port 8000
 
 ./nvcf-cli function deploy create \
+  --function-id <id> \
+  --version-id <id> \
   --instance-type NCP.GPU.H100_1x \
   --gpu H100 \
   --min-instances 1 \
@@ -351,9 +356,11 @@ indicating readiness. With this flag enabled:
 - If a non-worker Pod goes down while the instance health endpoint reports ready, the
   instance remains `RUNNING`. Cloud Functions reports the unhealthy object's status for
   debugging, and Kubernetes can replace it.
-- If the health endpoint does not report ready, the instance is marked degraded
-  until it reports ready again or 30 minutes have passed (Worker Degradation Period, see [NVCA Configuration](./cluster-management/configuration.md)),
-  after which the instance is killed and re-created by NVCF.
+- If the health endpoint begins to not report ready after the instance has entered the `RUNNING` state,
+  the instance is marked degraded until it reports ready again or 30 minutes have passed
+  (Worker Degradation Period, see [NVCA Configuration](./cluster-management/configuration.md)),
+  after which the instance is killed and re-created by NVCF. (Note: initial startup behavior
+  with a 2 hour timeout remains the same as default instance health behavior)
 
 Without the ConfigMap, or with the flag set to `false`, Cloud Functions uses standard health behavior.
 
