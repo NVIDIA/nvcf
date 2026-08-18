@@ -83,11 +83,31 @@ func TestServerTelemetryMiddlewareRecordsStatusAndRouteMetrics(t *testing.T) {
 		"function_id":               attribute.StringValue("func-123"),
 	}))
 	require.True(t, hasMetricPointWithAttributes(metrics, "http.server.request.duration", map[attribute.Key]attribute.Value{
-		"http.request.method":       attribute.StringValue(http.MethodPost),
-		"http.response.status_code": attribute.Int64Value(499),
-		"http.route":                attribute.StringValue("/v1/chat/canceled"),
-		"gateway_proxy_outcome":     attribute.StringValue(string(GatewayProxyOutcomeClientCanceled)),
+		"http.request.method":              attribute.StringValue(http.MethodPost),
+		"http.response.status_code":        attribute.Int64Value(499),
+		"http.route":                       attribute.StringValue("/v1/chat/canceled"),
+		GatewayProxyOutcomeMetricAttribute: attribute.StringValue(string(GatewayProxyOutcomeClientCanceled)),
 	}))
+
+	for _, want := range []map[attribute.Key]attribute.Value{
+		{
+			"http.request.method":       attribute.StringValue(http.MethodGet),
+			"http.response.status_code": attribute.Int64Value(http.StatusTooManyRequests),
+			"http.route":                attribute.StringValue("/limited"),
+		},
+		{
+			"http.request.method":       attribute.StringValue(http.MethodGet),
+			"http.response.status_code": attribute.Int64Value(http.StatusGatewayTimeout),
+			"http.route":                attribute.StringValue("/requests/{requestId}"),
+		},
+		{
+			"http.request.method":       attribute.StringValue(http.MethodPost),
+			"http.response.status_code": attribute.Int64Value(http.StatusAccepted),
+			"http.route":                attribute.StringValue("/v1/chat/completions"),
+		},
+	} {
+		require.True(t, hasMetricPointWithoutAttribute(metrics, "http.server.request.duration", want, GatewayProxyOutcomeMetricAttribute))
+	}
 }
 
 func TestHTTPDurationHistogramBoundaries(t *testing.T) {
@@ -136,6 +156,15 @@ func TestAddOpenAIRequestMetricAttributesCopiesModelName(t *testing.T) {
 	runtime.KeepAlive(backing)
 }
 
+func TestAddGatewayProxyOutcomeMetricAttributeRejectsUnknownOutcome(t *testing.T) {
+	labeler := &otelhttp.Labeler{}
+	ctx := otelhttp.ContextWithLabeler(context.Background(), labeler)
+
+	AddGatewayProxyOutcomeMetricAttribute(ctx, GatewayProxyOutcome("unknown"))
+
+	require.Empty(t, labeler.Get())
+}
+
 func serve(handler http.Handler, method, path string) {
 	req := httptest.NewRequest(method, path, nil)
 	rec := httptest.NewRecorder()
@@ -162,6 +191,26 @@ func hasMetricPointWithAttributes(metrics []metricdata.Metrics, name string, wan
 		}
 		if histogramHasAttributes(metric.Data, want) {
 			return true
+		}
+	}
+	return false
+}
+
+func hasMetricPointWithoutAttribute(metrics []metricdata.Metrics, name string, want map[attribute.Key]attribute.Value, absent attribute.Key) bool {
+	for _, metric := range metrics {
+		if metric.Name != name {
+			continue
+		}
+		switch histogram := metric.Data.(type) {
+		case metricdata.Histogram[float64]:
+			for _, point := range histogram.DataPoints {
+				if !dataPointHasAttributes(point.Attributes, want) {
+					continue
+				}
+				if _, ok := point.Attributes.Value(absent); !ok {
+					return true
+				}
+			}
 		}
 	}
 	return false

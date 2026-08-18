@@ -430,29 +430,45 @@ func TestServeExecClientDisconnectReturns499(t *testing.T) {
 	assert.Empty(t, observedLogs.FilterMessage("proxy request failed").All())
 }
 
-// A genuine upstream transport failure (inbound context still live) stays 502.
-func TestServeExecGenuineProxyFailureReturns502(t *testing.T) {
-	for _, transportErr := range []error{
-		context.DeadlineExceeded,
-		errors.New("dial tcp: connection refused"),
-		errors.New("read: connection reset by peer"),
+// A non-canceled ReverseProxy error (inbound context still live) stays 502.
+func TestServeExecProxyErrorReturns502(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{name: "deadline exceeded", err: context.DeadlineExceeded},
+		{name: "connection refused", err: errors.New("dial tcp: connection refused")},
+		{name: "connection reset", err: errors.New("read: connection reset by peer")},
 	} {
-		t.Run(transportErr.Error(), func(t *testing.T) {
+		t.Run(test.name, func(t *testing.T) {
 			director, err := NewVanityDirector("https://nvcf.example.test", roundTripFunc(func(req *http.Request) (*http.Response, error) {
-				return nil, transportErr
+				return nil, test.err
 			}))
 			assert.NoError(t, err)
 
 			recorder := httptest.NewRecorder()
 			err = director.ServeExec(VanityExecRequest{FunctionID: "func-123", FunctionVersionID: "version-456"}, recorder, httptest.NewRequest("POST", "/test", nil))
 
-			assert.ErrorIs(t, err, transportErr)
-			assert.Equal(t, http.StatusBadGateway, recorder.Result().StatusCode)
+			assert.ErrorIs(t, err, test.err)
+			result := recorder.Result()
+			t.Cleanup(func() { _ = result.Body.Close() })
+			assert.Equal(t, http.StatusBadGateway, result.StatusCode)
+
+			var pd ProblemDetails
+			require.NoError(t, json.NewDecoder(result.Body).Decode(&pd))
+			assert.Equal(t, "about:blank", pd.Type)
+			assert.Equal(t, "Bad Gateway", pd.Title)
+			assert.Equal(t, http.StatusBadGateway, pd.Status)
+			assert.Equal(t, "Upstream request failed.", pd.Detail)
 		})
 	}
 }
 
 func TestServeExecPassesThroughUpstreamBadGateway(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.Background())) })
+
 	const upstreamBody = `{"error":"upstream unavailable"}`
 	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -465,8 +481,12 @@ func TestServeExecPassesThroughUpstreamBadGateway(t *testing.T) {
 	require.NoError(t, err)
 
 	recorder := httptest.NewRecorder()
-	err = director.ServeExec(VanityExecRequest{FunctionID: "func-123"}, recorder, httptest.NewRequest("POST", "/test", nil))
-	require.NoError(t, err)
+	handler := middleware.ServerTelemetryMiddleware(otelhttp.WithMeterProvider(provider))(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			require.NoError(t, director.ServeExec(VanityExecRequest{FunctionID: "func-123"}, w, r))
+		}),
+	)
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/test", nil))
 
 	result := recorder.Result()
 	t.Cleanup(func() { _ = result.Body.Close() })
@@ -474,6 +494,12 @@ func TestServeExecPassesThroughUpstreamBadGateway(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, http.StatusBadGateway, result.StatusCode)
 	require.Equal(t, upstreamBody, string(body))
+
+	metrics := collectGatewayMetrics(t, reader)
+	require.True(t, gatewayMetricHasAttributeAbsent(metrics, map[attribute.Key]attribute.Value{
+		"http.request.method":       attribute.StringValue(http.MethodPost),
+		"http.response.status_code": attribute.Int64Value(http.StatusBadGateway),
+	}, middleware.GatewayProxyOutcomeMetricAttribute))
 }
 
 func TestServeExecRecordsGatewayProxyOutcomeOnParentSpan(t *testing.T) {
@@ -482,42 +508,66 @@ func TestServeExecRecordsGatewayProxyOutcomeOnParentSpan(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.Background())) })
 
 	for _, test := range []struct {
-		name       string
-		cancel     bool
-		proxyError error
-		outcome    middleware.GatewayProxyOutcome
+		name        string
+		cancel      bool
+		proxyError  error
+		outcome     middleware.GatewayProxyOutcome
+		wantOutcome bool
 	}{
 		{
-			name:       "client canceled",
-			cancel:     true,
-			proxyError: context.Canceled,
-			outcome:    middleware.GatewayProxyOutcomeClientCanceled,
+			name:        "client canceled",
+			cancel:      true,
+			proxyError:  context.Canceled,
+			outcome:     middleware.GatewayProxyOutcomeClientCanceled,
+			wantOutcome: true,
 		},
 		{
-			name:       "upstream transport failure",
-			proxyError: errors.New("connection refused"),
-			outcome:    middleware.GatewayProxyOutcomeUpstreamTransportFailure,
+			name:        "proxy error",
+			proxyError:  errors.New("connection refused"),
+			outcome:     middleware.GatewayProxyOutcomeProxyError,
+			wantOutcome: true,
+		},
+		{
+			name: "upstream response",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			director, err := NewVanityDirector("https://nvcf.example.test", roundTripFunc(func(req *http.Request) (*http.Response, error) {
-				return nil, test.proxyError
+				if test.proxyError != nil {
+					return nil, test.proxyError
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(bytes.NewReader(nil)),
+				}, nil
 			}))
 			require.NoError(t, err)
 
 			ctx, cancel := context.WithCancel(context.Background())
-			ctx, span := provider.Tracer("test").Start(ctx, "gateway parent")
+			defer cancel()
+			ctx, span := provider.Tracer("test").Start(ctx, test.name)
 			if test.cancel {
 				cancel()
 			}
-			defer cancel()
 
-			_ = director.ServeExec(VanityExecRequest{}, httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/test", nil).WithContext(ctx))
-			span.End()
+			func() {
+				defer span.End()
+				err = director.ServeExec(VanityExecRequest{}, httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/test", nil).WithContext(ctx))
+			}()
 
-			spans := spanRecorder.Ended()
-			require.NotEmpty(t, spans)
-			assert.True(t, spanHasAttribute(spans[len(spans)-1].Attributes(), traceAttrGatewayProxyOutcome, string(test.outcome)))
+			if test.proxyError != nil {
+				require.ErrorIs(t, err, test.proxyError)
+			} else {
+				require.NoError(t, err)
+			}
+
+			endedSpan := endedSpanByName(t, spanRecorder, test.name)
+			if test.wantOutcome {
+				assert.True(t, spanHasAttribute(endedSpan.Attributes(), traceAttrGatewayProxyOutcome, string(test.outcome)))
+			} else {
+				assert.False(t, spanHasAttributeKey(endedSpan.Attributes(), traceAttrGatewayProxyOutcome))
+			}
 		})
 	}
 }
@@ -620,9 +670,9 @@ func TestServeExecClientDisconnectRecords499Metric(t *testing.T) {
 		"client disconnect must not be recorded as 502")
 }
 
-// A genuine upstream transport failure (inbound context still live) must be
+// A non-canceled ReverseProxy error (inbound context still live) must be
 // recorded as 502, not 499.
-func TestServeExecGenuineFailureRecords502Metric(t *testing.T) {
+func TestServeExecProxyErrorRecords502Metric(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
 	t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.Background())) })
@@ -646,13 +696,13 @@ func TestServeExecGenuineFailureRecords502Metric(t *testing.T) {
 
 	metrics := collectGatewayMetrics(t, reader)
 	assert.True(t, gatewayMetricHasStatusCode(metrics, http.StatusBadGateway),
-		"genuine upstream failure must record status_code=502")
+		"proxy error must record status_code=502")
 	assert.True(t, gatewayMetricHasAttributes(metrics, map[attribute.Key]attribute.Value{
-		"http.response.status_code": attribute.Int64Value(http.StatusBadGateway),
-		"gateway_proxy_outcome":     attribute.StringValue(string(middleware.GatewayProxyOutcomeUpstreamTransportFailure)),
+		"http.response.status_code":                   attribute.Int64Value(http.StatusBadGateway),
+		middleware.GatewayProxyOutcomeMetricAttribute: attribute.StringValue(string(middleware.GatewayProxyOutcomeProxyError)),
 	}))
 	assert.False(t, gatewayMetricHasStatusCode(metrics, statusClientClosedRequest),
-		"genuine upstream failure must not be recorded as 499")
+		"proxy error must not be recorded as 499")
 }
 
 func collectGatewayMetrics(t *testing.T, reader sdkmetric.Reader) []metricdata.Metrics {
@@ -698,6 +748,35 @@ func gatewayMetricHasAttributes(metrics []metricdata.Metrics, want map[attribute
 	return false
 }
 
+func gatewayMetricHasAttributeAbsent(metrics []metricdata.Metrics, want map[attribute.Key]attribute.Value, absent attribute.Key) bool {
+	for _, metric := range metrics {
+		if metric.Name != "http.server.request.duration" {
+			continue
+		}
+		histogram, ok := metric.Data.(metricdata.Histogram[float64])
+		if !ok {
+			continue
+		}
+		for _, point := range histogram.DataPoints {
+			matched := true
+			for key, value := range want {
+				actual, ok := point.Attributes.Value(key)
+				if !ok || actual != value {
+					matched = false
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+			if _, ok := point.Attributes.Value(absent); !ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func spanHasAttribute(attrs []attribute.KeyValue, key attribute.Key, want string) bool {
 	for _, attr := range attrs {
 		if attr.Key == key && attr.Value == attribute.StringValue(want) {
@@ -705,4 +784,24 @@ func spanHasAttribute(attrs []attribute.KeyValue, key attribute.Key, want string
 		}
 	}
 	return false
+}
+
+func spanHasAttributeKey(attrs []attribute.KeyValue, key attribute.Key) bool {
+	for _, attr := range attrs {
+		if attr.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
+func endedSpanByName(t *testing.T, recorder *tracetest.SpanRecorder, name string) sdktrace.ReadOnlySpan {
+	t.Helper()
+	for _, span := range recorder.Ended() {
+		if span.Name() == name {
+			return span
+		}
+	}
+	require.FailNow(t, "span not found", name)
+	return nil
 }

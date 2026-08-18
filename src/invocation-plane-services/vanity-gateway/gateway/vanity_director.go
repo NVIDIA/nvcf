@@ -96,12 +96,13 @@ func addGatewayProxyOutcome(request *http.Request, outcome middleware.GatewayPro
 	trace.SpanFromContext(request.Context()).SetAttributes(traceAttrGatewayProxyOutcome.String(string(outcome)))
 }
 
-// writeProxyError: confirmed client disconnect => 499, everything else => 502.
+// writeProxyError maps a canceled inbound request to 499; all other ReverseProxy
+// ErrorHandler failures remain 502.
 func writeProxyError(writer http.ResponseWriter, request *http.Request, err error) {
 	if clientClosedRequest(request) {
 		addGatewayProxyOutcome(request, middleware.GatewayProxyOutcomeClientCanceled)
 		zap.L().Debug("proxy request canceled",
-			zap.String("gateway_proxy_outcome", string(middleware.GatewayProxyOutcomeClientCanceled)),
+			zap.String(string(middleware.GatewayProxyOutcomeMetricAttribute), string(middleware.GatewayProxyOutcomeClientCanceled)),
 			zap.Error(err),
 		)
 		writer.Header().Set("Content-Type", "application/problem+json")
@@ -118,9 +119,9 @@ func writeProxyError(writer http.ResponseWriter, request *http.Request, err erro
 }
 
 func writeBadGatewayProblem(writer http.ResponseWriter, request *http.Request, err error) {
-	addGatewayProxyOutcome(request, middleware.GatewayProxyOutcomeUpstreamTransportFailure)
+	addGatewayProxyOutcome(request, middleware.GatewayProxyOutcomeProxyError)
 	zap.L().Warn("proxy request failed",
-		zap.String("gateway_proxy_outcome", string(middleware.GatewayProxyOutcomeUpstreamTransportFailure)),
+		zap.String(string(middleware.GatewayProxyOutcomeMetricAttribute), string(middleware.GatewayProxyOutcomeProxyError)),
 		zap.Error(err),
 	)
 	writer.Header().Set("Content-Type", "application/problem+json")
