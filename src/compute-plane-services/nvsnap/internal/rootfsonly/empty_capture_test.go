@@ -27,10 +27,9 @@ import (
 // the first tier that claims a hash, so the tiers can disagree. An L2 PVC left
 // behind by an earlier capture claims a hash whose manifest tier is gone, and
 // the manifest it returns describes no content. Skipping the capture on that
-// claim leaves the pod recorded as captured but unrestorable -- observed on a
-// 70B TP=4 workload, where the agent logged "capture skipped: hash already
-// exists" then "capture committed for pod files=0 size_mib=0" and the e2e sat
-// for an hour waiting for a manifest that was never written.
+// claim leaves the pod recorded as captured but unrestorable, and the skip is
+// logged as a successful commit -- so nothing downstream can tell the
+// difference until a restore needs the manifest that was never written.
 func TestUsableCapture(t *testing.T) {
 	cases := []struct {
 		name string
