@@ -22,8 +22,7 @@ metadata:
     {{- include "nvcf-event-ledger.labels" . | nindent 4 }}
 data:
   # Vault Agent template rendered into /vault/secrets/secrets.json on pod start.
-  # The service reads username/password for Cassandra and policy-bearer-token
-  # for the api-keys-api policy evaluator from this file (run_service.go).
+  # The service reads username/password for Cassandra from this file.
   # Secret paths match what 22_setup_event-ledger.sh provisions in OpenBao.
   secrets.json.tmpl: |
     {{- .Files.Get "files/secrets.json.tmpl" | nindent 4 }}

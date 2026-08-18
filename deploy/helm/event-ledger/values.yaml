@@ -135,7 +135,7 @@ eventLedger:
     EVENT_LEDGER_SELF_MANAGED: "true"
 
   # Application configuration rendered into /etc/event-ledger/config.yaml.
-  # Credentials (username, password, policy-bearer-token) are not set here;
+  # Credentials (username, password) are not set here;
   # they are injected at runtime by Vault Agent into /vault/secrets/secrets.json
   # and loaded by the service on startup (cfg.SecretsPath default).
   config:
