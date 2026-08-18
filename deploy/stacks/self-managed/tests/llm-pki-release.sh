@@ -49,6 +49,18 @@ releases="$(
       list 2>/dev/null
 )"
 
+release_definition="$(
+  awk '
+    /^  - name: nvcf-pki$/ { in_release = 1 }
+    in_release && /^  - name: / && $0 != "  - name: nvcf-pki" { exit }
+    in_release { print }
+  ' "$test_stack_dir/helmfile.d/02-core.yaml.gotmpl"
+)"
+
+if printf '%s\n' "$release_definition" | grep -q '^    needs:$'; then
+  fail "LLM PKI cannot depend on releases owned by another Helmfile state"
+fi
+
 test "$(printf '%s\n' "$releases" | awk 'NR > 1 && $1 == "nvcf-pki" && $2 == "cert-manager" { count++ } END { print count + 0 }')" = "1" ||
   fail "LLM PKI did not install exactly one nvcf-pki release in cert-manager"
 

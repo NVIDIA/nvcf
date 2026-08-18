@@ -181,9 +181,6 @@ releases:
             serviceAccount:
               name: {{ dig "addons" "llm" "pki" "issuerServiceAccountName" "cert-manager" .Values | quote }}
               audience: {{ dig "addons" "llm" "pki" "issuerAudience" "http://openbao-server.vault-system.svc.cluster.local:8200" .Values | quote }}
-    needs:
-      - cert-manager/cert-manager
-      - vault-system/openbao-server
     labels:
       release-group: services
 
