@@ -28,11 +28,37 @@ import (
 	"testing"
 
 	"nvcf-cli/internal/client"
+	"nvcf-cli/internal/state"
 
+	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// newAccountsUpdateTestCmd builds a throwaway *cobra.Command carrying the
+// same flag set as accountsUpdateCmd, bound to a fresh accountUpdateFlags
+// value. Using a fresh command per test avoids Changed() state leaking
+// across tests via the package-level singleton.
+func newAccountsUpdateTestCmd(t *testing.T) *cobra.Command {
+	t.Helper()
+	accountUpdateFlags = struct {
+		ncaId                  string
+		name                   string
+		maxFunctions           int
+		maxTasks               int
+		maxTelemetries         int
+		maxRegistryCredentials int
+	}{}
+	cmd := &cobra.Command{Use: "update"}
+	cmd.Flags().StringVar(&accountUpdateFlags.ncaId, "nca-id", "", "")
+	cmd.Flags().StringVar(&accountUpdateFlags.name, "name", "", "")
+	cmd.Flags().IntVar(&accountUpdateFlags.maxFunctions, "max-functions", 0, "")
+	cmd.Flags().IntVar(&accountUpdateFlags.maxTasks, "max-tasks", 0, "")
+	cmd.Flags().IntVar(&accountUpdateFlags.maxTelemetries, "max-telemetries", 0, "")
+	cmd.Flags().IntVar(&accountUpdateFlags.maxRegistryCredentials, "max-registry-credentials", 0, "")
+	return cmd
+}
 
 // Note: the NVCF_CLI_ENABLE_ADMIN env guard is evaluated in init() at package
 // import time, so it cannot be re-exercised after the test binary starts. The
@@ -70,6 +96,21 @@ func configureAdminTest(t *testing.T, srvURL string) {
 	viper.Set("base_grpc_url", "localhost:50051")
 	viper.Set("token", "test-admin-token")
 	t.Cleanup(func() { viper.Reset() })
+}
+
+// isolateCredentialState prevents a developer's real ~/.nvcf-cli.state (or
+// inherited NVCF_TOKEN/NVCF_API_KEY env vars) from leaking into credential
+// fallback lookups. Config loading falls back to the on-disk state file via
+// os.UserHomeDir, so redirecting HOME to an empty temp dir and rebuilding
+// the package-level state manager is required for a deterministic "no
+// credentials configured" test; viper.Reset alone does not cover this path.
+func isolateCredentialState(t *testing.T) {
+	t.Helper()
+	t.Cleanup(state.ResetDefaultStateManager)
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("NVCF_TOKEN", "")
+	t.Setenv("NVCF_API_KEY", "")
+	state.ResetDefaultStateManager()
 }
 
 // withJSONOutput flips the package-level jsonOutput flag for the duration of
@@ -127,7 +168,10 @@ func TestRunAccountsList_JSON(t *testing.T) {
 	assert.Equal(t, "Acme", first["name"])
 }
 
+const wantAdminTokenRequiredError = "admin commands require NVCF_TOKEN with the appropriate admin scope; NVCF_API_KEY is not accepted"
+
 func TestRunAccountsList_NoToken_FailsFast(t *testing.T) {
+	isolateCredentialState(t)
 	viper.Reset()
 	viper.Set("base_http_url", "http://unused")
 	viper.Set("base_grpc_url", "localhost:50051")
@@ -136,7 +180,24 @@ func TestRunAccountsList_NoToken_FailsFast(t *testing.T) {
 
 	err := runAccountsList(nil, nil)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "NVCF_TOKEN")
+	assert.Equal(t, wantAdminTokenRequiredError, err.Error())
+}
+
+// TestRunAccountsList_NoCredentialsAtAll_FailsFastWithAdminMessage is a
+// regression test: when neither NVCF_TOKEN nor NVCF_API_KEY is configured,
+// the generic "missing authentication credentials" error from LoadConfig
+// must not fire ahead of requireAdminToken's Admin Accounts-specific
+// message, and the error must not tell the user to set NVCF_API_KEY.
+func TestRunAccountsList_NoCredentialsAtAll_FailsFastWithAdminMessage(t *testing.T) {
+	isolateCredentialState(t)
+	viper.Reset()
+	viper.Set("base_http_url", "http://unused")
+	viper.Set("base_grpc_url", "localhost:50051")
+	t.Cleanup(func() { viper.Reset() })
+
+	err := runAccountsList(nil, nil)
+	require.Error(t, err)
+	assert.Equal(t, wantAdminTokenRequiredError, err.Error())
 }
 
 func TestRunQueuesVersion_JSON(t *testing.T) {
@@ -156,11 +217,13 @@ func TestRunQueuesVersion_JSON(t *testing.T) {
 	queueFlags.ncaId = "nca-1"
 	queueFlags.functionId = "fn-1"
 	queueFlags.versionId = "ver-1"
-	t.Cleanup(func() { queueFlags = struct {
-		ncaId      string
-		functionId string
-		versionId  string
-	}{} })
+	t.Cleanup(func() {
+		queueFlags = struct {
+			ncaId      string
+			functionId string
+			versionId  string
+		}{}
+	})
 
 	output := captureStdout(t, func() {
 		require.NoError(t, runQueuesVersion(nil, nil))
@@ -193,14 +256,16 @@ func TestRunSecretsUpdateFunction_JSONEnvelope(t *testing.T) {
 	secretUpdateFlags.functionId = "fn-1"
 	secretUpdateFlags.versionId = "ver-1"
 	secretUpdateFlags.secretsJSON = `{"FOO":"bar"}`
-	t.Cleanup(func() { secretUpdateFlags = struct {
-		ncaId       string
-		functionId  string
-		versionId   string
-		telemetryId string
-		inputFile   string
-		secretsJSON string
-	}{} })
+	t.Cleanup(func() {
+		secretUpdateFlags = struct {
+			ncaId       string
+			functionId  string
+			versionId   string
+			telemetryId string
+			inputFile   string
+			secretsJSON string
+		}{}
+	})
 
 	output := captureStdout(t, func() {
 		require.NoError(t, runSecretsUpdateFunction(nil, nil))
@@ -236,4 +301,142 @@ func TestRunAccountsList_HumanOutput(t *testing.T) {
 	var parsed map[string]any
 	assert.Error(t, json.Unmarshal([]byte(output), &parsed),
 		"human output should not be valid JSON")
+}
+
+func TestBuildAccountUpdateRequest_NoFieldsProvided(t *testing.T) {
+	cmd := newAccountsUpdateTestCmd(t)
+
+	req, err := buildAccountUpdateRequest(cmd)
+	require.Error(t, err)
+	assert.Nil(t, req)
+	assert.Contains(t, err.Error(), "at least one update field must be provided")
+}
+
+func TestBuildAccountUpdateRequest_ValidQuotas(t *testing.T) {
+	cmd := newAccountsUpdateTestCmd(t)
+	require.NoError(t, cmd.Flags().Set("max-functions", "5"))
+	require.NoError(t, cmd.Flags().Set("max-tasks", "3"))
+	require.NoError(t, cmd.Flags().Set("max-telemetries", "10"))
+	require.NoError(t, cmd.Flags().Set("max-registry-credentials", "2"))
+
+	req, err := buildAccountUpdateRequest(cmd)
+	require.NoError(t, err)
+	require.NotNil(t, req)
+	require.NotNil(t, req.MaxFunctionsAllowed)
+	require.NotNil(t, req.MaxTasksAllowed)
+	require.NotNil(t, req.MaxTelemetriesAllowed)
+	require.NotNil(t, req.MaxRegistryCredentialsAllowed)
+	assert.Equal(t, 5, *req.MaxFunctionsAllowed)
+	assert.Equal(t, 3, *req.MaxTasksAllowed)
+	assert.Equal(t, 10, *req.MaxTelemetriesAllowed)
+	assert.Equal(t, 2, *req.MaxRegistryCredentialsAllowed)
+}
+
+func TestBuildAccountUpdateRequest_ZeroIsAllowed(t *testing.T) {
+	// 0 is a legitimate quota value, not the "unset" sentinel: it must
+	// reach the request when the flag is explicitly passed.
+	cmd := newAccountsUpdateTestCmd(t)
+	require.NoError(t, cmd.Flags().Set("max-functions", "0"))
+
+	req, err := buildAccountUpdateRequest(cmd)
+	require.NoError(t, err)
+	require.NotNil(t, req.MaxFunctionsAllowed)
+	assert.Equal(t, 0, *req.MaxFunctionsAllowed)
+}
+
+func TestBuildAccountUpdateRequest_NegativeQuota_RejectedPerFlag(t *testing.T) {
+	tests := []struct {
+		flag        string
+		wantErrText string
+	}{
+		{"max-functions", "--max-functions must be greater than or equal to 0"},
+		{"max-tasks", "--max-tasks must be greater than or equal to 0"},
+		{"max-telemetries", "--max-telemetries must be greater than or equal to 0"},
+		{"max-registry-credentials", "--max-registry-credentials must be greater than or equal to 0"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.flag, func(t *testing.T) {
+			cmd := newAccountsUpdateTestCmd(t)
+			require.NoError(t, cmd.Flags().Set(tt.flag, "-2"))
+
+			req, err := buildAccountUpdateRequest(cmd)
+			require.Error(t, err)
+			assert.Nil(t, req)
+			assert.Equal(t, tt.wantErrText, err.Error())
+		})
+	}
+}
+
+func TestBuildAccountUpdateRequest_QuotaAboveMax_Rejected(t *testing.T) {
+	tests := []struct {
+		flag        string
+		wantErrText string
+	}{
+		{"max-telemetries", "max-telemetries cannot exceed 50"},
+		{"max-registry-credentials", "max-registry-credentials cannot exceed 50"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.flag, func(t *testing.T) {
+			cmd := newAccountsUpdateTestCmd(t)
+			require.NoError(t, cmd.Flags().Set(tt.flag, "51"))
+
+			req, err := buildAccountUpdateRequest(cmd)
+			require.Error(t, err)
+			assert.Nil(t, req)
+			assert.Equal(t, tt.wantErrText, err.Error())
+		})
+	}
+}
+
+func TestRunAccountsUpdate_NegativeQuota_NoRequestSent(t *testing.T) {
+	// Regression test for the empty-PATCH bug: a negative quota flag must
+	// be rejected client-side before any HTTP request reaches the backend.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected request sent to backend: %s %s", r.Method, r.URL.Path)
+	}))
+	defer srv.Close()
+
+	configureAdminTest(t, srv.URL)
+
+	cmd := newAccountsUpdateTestCmd(t)
+	accountUpdateFlags.ncaId = "nca-1"
+	require.NoError(t, cmd.Flags().Set("max-functions", "-2"))
+
+	err := runAccountsUpdate(cmd, nil)
+	require.Error(t, err)
+	assert.Equal(t, "--max-functions must be greater than or equal to 0", err.Error())
+}
+
+func TestRunAccountsUpdate_ValidQuota_SendsPatch(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodPatch, r.Method)
+		assert.Equal(t, "/v2/nvcf/accounts/nca-1", r.URL.Path)
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		var parsed map[string]any
+		require.NoError(t, json.Unmarshal(body, &parsed))
+		assert.Equal(t, float64(5), parsed["maxFunctionsAllowed"])
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"account":{"ncaId":"nca-1","name":"Acme","maxFunctionsAllowed":5,"maxTasksAllowed":3,"maxTelemetriesAllowed":2,"maxRegistryCredentialsAllowed":1,"adminClientIds":[]}}`))
+	}))
+	defer srv.Close()
+
+	configureAdminTest(t, srv.URL)
+	withJSONOutput(t)
+
+	cmd := newAccountsUpdateTestCmd(t)
+	accountUpdateFlags.ncaId = "nca-1"
+	require.NoError(t, cmd.Flags().Set("max-functions", "5"))
+
+	output := captureStdout(t, func() {
+		require.NoError(t, runAccountsUpdate(cmd, nil))
+	})
+
+	var parsed map[string]map[string]any
+	require.NoError(t, json.Unmarshal([]byte(output), &parsed))
+	assert.Equal(t, "nca-1", parsed["account"]["ncaId"])
 }

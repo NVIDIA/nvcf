@@ -374,8 +374,8 @@ mod tests {
             }),
             degradation: crate::config::DegradationConfig::default(),
             algorithms: vec![AlgorithmConfig {
-                name: "power-of-two".to_string(),
-                config: serde_json::json!({ "default": "power-of-two" }),
+                name: "power-of-n".to_string(),
+                config: serde_json::json!({ "default": "power-of-n" }),
                 pylon_queue_admission: None,
             }],
         }

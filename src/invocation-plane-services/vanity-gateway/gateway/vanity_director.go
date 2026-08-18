@@ -19,6 +19,7 @@ package gateway
 
 import (
 	config "ai-api-gateway-service/gateway_config"
+	"ai-api-gateway-service/middleware"
 	"ai-api-gateway-service/pool"
 	"bytes"
 	"context"
@@ -87,10 +88,23 @@ func clientClosedRequest(request *http.Request) bool {
 	return request != nil && errors.Is(request.Context().Err(), context.Canceled)
 }
 
-// writeProxyError: confirmed client disconnect => 499, everything else => 502.
+func addGatewayProxyOutcome(request *http.Request, outcome middleware.GatewayProxyOutcome) {
+	if request == nil {
+		return
+	}
+	middleware.AddGatewayProxyOutcomeMetricAttribute(request.Context(), outcome)
+	trace.SpanFromContext(request.Context()).SetAttributes(traceAttrGatewayProxyOutcome.String(string(outcome)))
+}
+
+// writeProxyError maps a canceled inbound request to 499; all other ReverseProxy
+// ErrorHandler failures remain 502.
 func writeProxyError(writer http.ResponseWriter, request *http.Request, err error) {
 	if clientClosedRequest(request) {
-		zap.L().Warn("client closed request before upstream response", zap.Error(err))
+		addGatewayProxyOutcome(request, middleware.GatewayProxyOutcomeClientCanceled)
+		zap.L().Debug("proxy request canceled",
+			zap.String(string(middleware.GatewayProxyOutcomeMetricAttribute), string(middleware.GatewayProxyOutcomeClientCanceled)),
+			zap.Error(err),
+		)
 		writer.Header().Set("Content-Type", "application/problem+json")
 		writer.WriteHeader(statusClientClosedRequest)
 		_ = json.NewEncoder(writer).Encode(ProblemDetails{
@@ -104,8 +118,12 @@ func writeProxyError(writer http.ResponseWriter, request *http.Request, err erro
 	writeBadGatewayProblem(writer, request, err)
 }
 
-func writeBadGatewayProblem(writer http.ResponseWriter, _ *http.Request, err error) {
-	zap.L().Warn("proxy request failed", zap.Error(err))
+func writeBadGatewayProblem(writer http.ResponseWriter, request *http.Request, err error) {
+	addGatewayProxyOutcome(request, middleware.GatewayProxyOutcomeProxyError)
+	zap.L().Warn("proxy request failed",
+		zap.String(string(middleware.GatewayProxyOutcomeMetricAttribute), string(middleware.GatewayProxyOutcomeProxyError)),
+		zap.Error(err),
+	)
 	writer.Header().Set("Content-Type", "application/problem+json")
 	writer.WriteHeader(http.StatusBadGateway)
 	_ = json.NewEncoder(writer).Encode(ProblemDetails{

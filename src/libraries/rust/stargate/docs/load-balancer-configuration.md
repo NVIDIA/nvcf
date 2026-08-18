@@ -4,8 +4,8 @@ Stargate selects one load-balancing algorithm for each model. A request can
 select another preconfigured algorithm through a trusted header.
 
 This page defines the `lb-config.json` schema and the behavior of
-`groq-multiregion`, `pulsar`, and `pulsar-multiregion`. Deployment systems own
-the file mount and the `--lb-config-path` argument.
+`power-of-n`, `wait-and-widen`, `pulsar`, and `pulsar-wait-and-widen`.
+Deployment systems own the file mount and the `--lb-config-path` argument.
 
 ## Load the configuration
 
@@ -15,11 +15,14 @@ Start Stargate with an optional JSON file:
 --lb-config-path=/config/lb-config.json
 ```
 
-When the argument is absent, Stargate uses `power-of-two` for every model.
-When the argument is present, Stargate reads and validates the file during
-startup. A missing file, invalid JSON, unknown top-level field, unsupported
-algorithm field, or invalid algorithm factory configuration prevents startup.
-Stargate does not reload the file after startup.
+When the argument is absent, Stargate uses `power-of-n` for every model and
+accepts a routing-method override when it is in the allowlist of built-in
+algorithms, each with its default settings. When the argument is present, the
+file defines the allowlist.
+Stargate reads and validates the file during startup. A missing file, invalid
+JSON, unknown top-level field, unsupported algorithm field, or invalid
+algorithm factory configuration prevents startup. Stargate does not reload
+the file after startup.
 
 ## Schema
 
@@ -27,20 +30,27 @@ The top-level object has three fields:
 
 | Field | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `default` | algorithm name | `power-of-two` | Algorithm for models without an entry in `models`. |
+| `default` | algorithm name | `power-of-n` | Algorithm for models without an entry in `models`. |
 | `request_algorithms` | object | `{}` | Algorithms that `x-routing-method` may select for every model. |
 | `models` | object | `{}` | Exact model ID to algorithm configuration. |
 
-Valid algorithm names are `power-of-two`, `groq-multiregion`, `round-robin`,
-`random`, `pulsar`, and `pulsar-multiregion`.
+Valid algorithm names are `power-of-n`, `wait-and-widen`, `round-robin`,
+`random`, `pulsar`, and `pulsar-wait-and-widen`.
+
+For backward compatibility, Stargate also accepts `powerOfN`, `powerOf2`, and
+`power-of-two` as aliases for `power-of-n`, `groq-multiregion` as an alias for
+`wait-and-widen`, and `pulsar-multiregion` as an alias for
+`pulsar-wait-and-widen`. These aliases work in `default`, `models`,
+`request_algorithms`, detailed algorithm objects, and routing-method overrides.
+Use the canonical names for new configurations.
 
 An entry in `models` or `request_algorithms` can be an algorithm name:
 
 ```json
 {
-  "default": "power-of-two",
+  "default": "power-of-n",
   "models": {
-    "model-a": "groq-multiregion"
+    "model-a": "wait-and-widen"
   }
 }
 ```
@@ -49,10 +59,10 @@ Use a detailed object to set algorithm fields:
 
 ```json
 {
-  "default": "power-of-two",
+  "default": "power-of-n",
   "models": {
     "model-a": {
-      "algorithm": "groq-multiregion",
+      "algorithm": "wait-and-widen",
       "require_cache_affinity_key": true
     }
   }
@@ -98,17 +108,42 @@ Choose based on the routing goal and available backend statistics:
 
 | Goal | Algorithm | Required backend signals |
 | --- | --- | --- |
-| Minimize estimated time to first token across heterogeneous or remote clusters. | `groq-multiregion` | Forwarded health RTT and model statistics. Valid `last_mean_input_tps` is needed when queued or request input work is nonzero. |
+| Compare a small random sample using TTFT or another load signal. | `power-of-n` | Signals required by the configured comparator. |
+| Minimize estimated time to first token across heterogeneous or remote clusters while controlling which TTFT bands are eligible. | `wait-and-widen` | Forwarded health RTT and model statistics. Valid `last_mean_input_tps` is needed when queued or request input work is nonzero. |
 | Keep the same prefix on a stable, capacity-weighted cluster. | `pulsar` | Positive finite `last_mean_input_tps` for every participating cluster. |
-| Keep Pulsar affinity when possible, but escape to lower-latency capacity when the primary cannot meet queue policy. | `pulsar-multiregion` | Pulsar capacity plus the RTT and queue statistics used by `groq-multiregion`. |
+| Keep Pulsar affinity when possible, but escape to lower-latency capacity when the primary cannot meet queue policy. | `pulsar-wait-and-widen` | Pulsar capacity plus the RTT and queue statistics used by `wait-and-widen`. |
 
-Use `power-of-two` when these statistics or affinity requirements are not
-available. Use `round-robin` for deterministic cycling and `random` for uniform
-random selection.
+Use `round-robin` for deterministic cycling and `random` for uniform random
+selection when routing should not depend on backend load statistics.
 
-## `groq-multiregion`
+## `power-of-n`
 
-`groq-multiregion` estimates time to first token (TTFT) as:
+`power-of-n` uniformly samples distinct eligible clusters and selects the
+cluster with the lowest configured comparator score. The default comparator is
+`ttft`. It breaks equal scores randomly. Retried clusters are excluded
+before sampling.
+
+The default sample count is `2`. A larger sample can improve routing decisions
+in a heterogeneous pool, but it compares more clusters on every request. Valid
+values are `1` through `64`. If fewer eligible clusters exist, the algorithm
+compares every eligible cluster once.
+
+```json
+{
+  "default": "power-of-n",
+  "models": {
+    "model-a": {
+      "algorithm": "power-of-n",
+      "sample_count": 4,
+      "comparator": "num-requests-queued"
+    }
+  }
+}
+```
+
+## `wait-and-widen`
+
+`wait-and-widen` estimates time to first token (TTFT) as:
 
 ```text
 forwarded health RTT + queue delay + request prefill time
@@ -118,10 +153,11 @@ The queue delay uses the backend's priority-aware queue estimate when present.
 Otherwise it divides queued input tokens by `last_mean_input_tps`. Prefill time
 divides `x-input-tokens` by the same capacity signal.
 
-The algorithm groups close TTFT estimates into buckets. It samples `n`
-candidates from unlocked buckets and chooses the candidate with the least
-queue time, then the lowest engine utilization. A later bucket becomes
-available after the request has waited for a fraction of the TTFT gap.
+The algorithm groups close TTFT values into buckets. It samples `n`
+candidates from unlocked buckets and chooses the candidate with the lowest
+configured comparator score. The default comparator is `ttft`. A
+later bucket becomes available after the request has waited for a fraction of
+the TTFT gap.
 
 When `cache_affinity_backend_selection_count` is enabled and the request has
 `x-cache-affinity-key`, a consistent hash ring first limits selection to a
@@ -134,10 +170,10 @@ Minimal configuration:
 
 ```json
 {
-  "default": "power-of-two",
+  "default": "power-of-n",
   "models": {
     "model-a": {
-      "algorithm": "groq-multiregion",
+      "algorithm": "wait-and-widen",
       "require_cache_affinity_key": true,
       "cache_affinity_backend_selection_count": 2
     }
@@ -161,7 +197,7 @@ Minimal configuration:
 
 ```json
 {
-  "default": "power-of-two",
+  "default": "power-of-n",
   "models": {
     "model-a": {
       "algorithm": "pulsar",
@@ -172,23 +208,23 @@ Minimal configuration:
 }
 ```
 
-## `pulsar-multiregion`
+## `pulsar-wait-and-widen`
 
-`pulsar-multiregion` combines Pulsar ranking with Groq multiregion fallback.
+`pulsar-wait-and-widen` combines Pulsar ranking with the WaitAndWiden fallback.
 Without queue-SLO fields, an eligible Pulsar primary wins immediately.
 
 When queue-SLO fields are enabled or the primary is ineligible, the algorithm
 checks the primary and then exponentially wider ranking bands of 2, 4, 8, and
-so on. Within each band, `groq-multiregion` selects an eligible candidate.
+so on. Within each band, `wait-and-widen` selects an eligible candidate.
 
 Minimal configuration:
 
 ```json
 {
-  "default": "power-of-two",
+  "default": "power-of-n",
   "models": {
     "model-a": {
-      "algorithm": "pulsar-multiregion",
+      "algorithm": "pulsar-wait-and-widen",
       "seed": "model-a-v1",
       "require_cache_affinity_key": true,
       "max_queue_time_floor_ms": 500,
@@ -200,29 +236,60 @@ Minimal configuration:
 
 ## Algorithm fields
 
-`groq-multiregion` supports these cache-affinity fields:
+`power-of-n` and `wait-and-widen` support this field:
+
+| Field | Type | Default | Constraint and effect |
+| --- | --- | --- | --- |
+| `comparator` | string | `ttft` | Signal used to choose among sampled candidates. See the supported values below. |
+
+Supported comparator values are:
+
+| Value | Score |
+| --- | --- |
+| `ttft` | Forwarded health RTT plus priority-aware queue delay plus request prefill time. |
+| `queue-time` | Priority-aware queue delay. Uses queued input tokens divided by `last_mean_input_tps` when no published priority estimate is available. |
+| `input-work-seconds` | Queued input tokens plus request input tokens, divided by `last_mean_input_tps`. |
+| `utilization` | Running queries divided by `max_engine_concurrency`, using `1` as the denominator when the reported maximum is `0`. |
+| `num-requests-queued` | Reported `queue_size`, including pending local routing reservations applied to the snapshot. |
+
+Comparators use the latest eligible routing snapshot without a second age
+filter. Registration stream timeout and cleanup determine snapshot eligibility.
+A nonpositive or non-finite `last_mean_input_tps` is unavailable capacity: zero
+work scores zero, while nonzero work scores infinity. Equal scores use the
+algorithm's existing tie behavior.
+
+`pulsar-wait-and-widen` does not support `comparator`. An explicit comparator in
+that algorithm's detailed configuration prevents startup.
+
+`power-of-n` supports this field:
+
+| Field | Type | Default | Constraint and effect |
+| --- | --- | --- | --- |
+| `sample_count` | unsigned integer | `2` | Number of distinct eligible clusters sampled. Must be from `1` through `64`. Values above the eligible cluster count compare the complete eligible pool. |
+
+`wait-and-widen` supports these cache-affinity fields:
 
 | Field | Type | Default | Constraint and effect |
 | --- | --- | --- | --- |
 | `cache_affinity_virtual_nodes` | unsigned integer | `150` | Virtual nodes per cluster. `0` is normalized to `1`. |
 | `cache_affinity_backend_selection_count` | unsigned integer | unset | Enables the affinity subset. `0` disables it. Values above the candidate count select all candidates. |
 
-These fields are accepted in `pulsar-multiregion` JSON but do not affect its
+These fields are accepted in `pulsar-wait-and-widen` JSON but do not affect its
 selection. Pulsar ranking supplies that algorithm's affinity.
 
-`groq-multiregion` and `pulsar-multiregion` support these multiregion fields:
+`wait-and-widen` and `pulsar-wait-and-widen` support these wait-and-widen fields:
 
 | Field | Type | Default | Constraint and effect |
 | --- | --- | --- | --- |
-| `seed` | string | empty | Changes Groq affinity hashing or Pulsar multiregion ranking. Keep it stable across replicas that should make the same choice. |
+| `seed` | string | empty | Changes WaitAndWiden affinity hashing or Pulsar wait-and-widen ranking. Keep it stable across replicas that should make the same choice. |
 | `max_queue_time_floor_ms` | unsigned integer | unset | Queue-SLO lower bound. Has an effect only when `max_queue_time_ceil_ms` is also set. |
 | `max_queue_time_ceil_ms` | unsigned integer | unset | Queue-SLO upper bound. Has an effect only when `max_queue_time_floor_ms` is also set. |
 | `ttft_bucket_size_ms` | unsigned integer | `20` | Maximum TTFT difference within one bucket. |
 | `next_bucket_unlock_factor` | number | `0.25` | Fraction of the TTFT gap to wait before the next bucket unlocks. |
 | `n` | unsigned integer | `2` | Number of unlocked candidates sampled. `0` is normalized to `1`. |
 | `max_queued` | unsigned integer | `0` | Additional queued requests allowed above `max_engine_concurrency`. A reported concurrency of `0` disables this capacity check. |
-| `ignore_queue_time` | boolean | `false` | Removes queue delay from TTFT ranking. Queue-SLO filtering still uses the queue estimate. |
-| `ignore_input_processing_time` | boolean | `false` | Removes request prefill time from TTFT ranking. |
+| `ignore_queue_time` | boolean | `false` | Removes queue delay from TTFT bucket formation. Queue-SLO filtering and the configured comparator are unchanged. |
+| `ignore_input_processing_time` | boolean | `false` | Removes request prefill time from TTFT bucket formation. The configured comparator is unchanged. |
 
 Stargate does not range-check `next_bucket_unlock_factor`. Values from `0` to
 `1` unlock a later bucket between no wait and the full TTFT gap. Values outside
@@ -240,8 +307,8 @@ bounds, so set the floor less than or equal to the ceiling.
 | `seed` | string | empty | Changes the rendezvous ranking. Keep it stable across replicas. |
 | `consider_kv_free_tokens` | boolean | `false` | Requires KV-cache values to be reported and skips candidates with fewer free tokens than the request input-token estimate. |
 
-`pulsar-multiregion` supports both multiregion fields and
-`consider_kv_free_tokens`.
+`pulsar-wait-and-widen` supports the wait-and-widen fields except `comparator`,
+plus `consider_kv_free_tokens`.
 
 ## Request algorithm overrides
 
@@ -249,16 +316,16 @@ Preconfigure every algorithm that a request may select:
 
 ```json
 {
-  "default": "power-of-two",
+  "default": "power-of-n",
   "request_algorithms": {
-    "groq-multiregion": "groq-multiregion",
+    "wait-and-widen": "wait-and-widen",
     "pulsar": {
       "algorithm": "pulsar",
       "seed": "request-routing-v1",
       "require_cache_affinity_key": true
     },
-    "pulsar-multiregion": {
-      "algorithm": "pulsar-multiregion",
+    "pulsar-wait-and-widen": {
+      "algorithm": "pulsar-wait-and-widen",
       "seed": "request-routing-v1",
       "require_cache_affinity_key": true
     }
@@ -273,8 +340,8 @@ x-routing-method: pulsar
 ```
 
 Header values are trimmed, converted to lowercase, and normalized from
-underscores to hyphens. For example, `pulsar_multiregion` selects
-`pulsar-multiregion`.
+underscores to hyphens. For example, `pulsar_wait_and_widen` selects
+`pulsar-wait-and-widen`.
 
 An absent header uses the configured model algorithm. A blank, invalid UTF-8,
 unknown, or known but unconfigured value returns HTTP `400`. A model-specific
@@ -309,10 +376,10 @@ contract.
 
 Algorithm fallback is part of load-balancer selection:
 
-- Groq later-bucket fallback depends on elapsed request time.
+- WaitAndWiden later-bucket fallback depends on elapsed request time.
 - Pulsar fallback walks the stable ranking after exclusions or optional KV
   filtering.
-- Pulsar multiregion fallback widens ranking bands and runs Groq selection
+- Pulsar wait-and-widen fallback widens ranking bands and runs WaitAndWiden selection
   within each band.
 
 Proxy retries can exclude a backend or cluster and run selection again. See
@@ -327,6 +394,8 @@ admission rejections, upstream latency, and active backend counts. The prefix
 is configurable with `--metrics-prefix`. See the
 [NVCF request-router metrics reference](../../../../../docs/user/metrics/llm-request-router/metrics.md)
 for metric names, labels, and descriptions.
+
+The proxy request span records the effective comparator in `routing.comparator`.
 
 ## Validation checklist
 
@@ -347,9 +416,9 @@ for metric names, labels, and descriptions.
 - `crates/stargate/src/load_balancer/config.rs`
 - `crates/stargate/src/load_balancer/factory.rs`
 - `crates/stargate/src/load_balancer/router.rs`
-- `crates/stargate/src/load_balancer/groq_multiregion.rs`
+- `crates/stargate/src/load_balancer/wait_and_widen.rs`
 - `crates/stargate/src/load_balancer/pulsar.rs`
-- `crates/stargate/src/load_balancer/pulsar_multiregion.rs`
+- `crates/stargate/src/load_balancer/pulsar_wait_and_widen.rs`
 - `crates/stargate/src/http_proxy/`
 - `crates/stargate/src/metrics.rs`
 - `benches/`

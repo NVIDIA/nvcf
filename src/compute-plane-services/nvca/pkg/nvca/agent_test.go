@@ -192,6 +192,59 @@ func TestAgentApis(t *testing.T) {
 	assert.Equal(t, is.LastReportedStatus, string(types.ICMSInstanceTerminated))
 }
 
+func TestAgentRegisterWithICMSUpdatesQueueManagerCredentials(t *testing.T) {
+	ctx, cancel := context.WithCancel(newTestContext())
+	t.Cleanup(cancel)
+
+	agentOpts := AgentOptions{
+		TokenFetcherOptions: nvcaauth.TokenFetcherOptions{
+			OAuthTokenScope:      "byoc_registration",
+			OAuthClientID:        "foo",
+			OAuthClientSecretKey: "bar",
+		},
+		NCAId:                          "randomNCAId123",
+		ClusterName:                    "bartnvbackend",
+		ClusterID:                      "clusterid-1",
+		ClusterDescription:             "this is a test cluster",
+		ClusterGroupName:               "group of all A30",
+		ComputeBackend:                 "k8s",
+		CloudProvider:                  "on-prem",
+		NamespaceLabels:                labels.Set{"foo": "bar"},
+		K8sVersion:                     "1.27.8",
+		CredRenewInterval:              DefaultCredRenewInterval,
+		HeartbeatInterval:              DefaultHeartBeatInterval,
+		SyncQueueInterval:              defaultSyncQueueInterval,
+		SyncRequestStatusInterval:      DefaultSyncRequestStatusInterval,
+		PeriodicInstanceStatusInterval: DefaultPeriodicInstanceStatusInterval,
+		SyncAcknowledgeRequestInterval: ackReqInterval,
+		GPUCapacity:                    2,
+		FeatureFlagFetcher:             featureflag.DefaultFetcher,
+		MetricsRegisterer:              prometheus.NewRegistry(),
+	}
+	agent := newMockAgentSingleGPU(t, ctx, agentOpts)
+	require.NoError(t, agent.Start(ctx))
+
+	updatedGPU := types.GPUName("H100")
+	updatedQueue := getTestCreationMessageQueueInfo(true)
+	updatedQueue.GPU = string(updatedGPU)
+	updatedCreds := getTestQueueCreds(true)
+	updatedCreds.CreationQueues = types.CreationQueueInfoSet{
+		updatedGPU: updatedQueue,
+	}
+	agent.icmsClient = &mockICMSClient{
+		registrationResponse: &types.ICMSRegistrationResponse{
+			ClusterID:      agent.ClusterID,
+			ClusterGroupID: "test-cluster-group-id",
+			Credentials:    updatedCreds,
+		},
+	}
+
+	_, err := agent.registerWithICMS(ctx, []types.RegistrationGPU{{Name: string(updatedGPU)}})
+	require.NoError(t, err)
+	assert.Equal(t, updatedQueue, agent.queueManager.getCreateQueue(updatedGPU))
+	assert.Empty(t, agent.queueManager.getCreateQueue(testGPUNameDefault).QueueURL)
+}
+
 func TestAgent_getTelemetryAttributes(t *testing.T) {
 	ctx := context.Background()
 	agentOpts := AgentOptions{
@@ -845,6 +898,7 @@ func TestAgentMaintenanceModeInitialization(t *testing.T) {
 type mockICMSClient struct {
 	healthStatusRequests []types.HealthStatusRequest
 	registrationRequests []types.ICMSRegistrationRequest
+	registrationResponse *types.ICMSRegistrationResponse
 	registerErr          error
 }
 
@@ -857,6 +911,9 @@ func (m *mockICMSClient) Register(ctx context.Context, req *types.ICMSRegistrati
 	m.registrationRequests = append(m.registrationRequests, *req)
 	if m.registerErr != nil {
 		return nil, m.registerErr
+	}
+	if m.registrationResponse != nil {
+		return m.registrationResponse, nil
 	}
 	return &types.ICMSRegistrationResponse{
 		ClusterID:      "test-cluster-id",

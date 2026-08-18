@@ -22,6 +22,12 @@ See the
 and [Dynamo topology guide](https://docs.nvidia.com/dynamo/v1.2.1/kubernetes-deployment/scale/topology-aware-scheduling)
 for component-level details.
 
+Helm functions can also use the legacy
+[`dra.nvcf.nvidia.io` partition annotation](../helm-functions.md#legacy-nvca-nvlink-partition-annotation).
+That path uses Kubernetes Pod affinity and is best-effort without KAI Scheduler
+or Grove topology-aware scheduling. Use the KAI or Grove mechanisms on this
+page when clique placement must be coordinated for the complete workload.
+
 ## Prerequisites
 
 - Install the

@@ -1,0 +1,58 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "startup",
+    srcs = [
+        "root_cmd.go",
+        "run_service.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/cmd/api/startup",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/control-plane-services/event-ledger/cmd/api/service",
+        "//src/control-plane-services/event-ledger/cmd/toolbox",
+        "//src/control-plane-services/event-ledger/internal/config",
+        "//src/control-plane-services/event-ledger/internal/credentials",
+        "//src/control-plane-services/event-ledger/internal/data_access",
+        "//src/control-plane-services/event-ledger/internal/interfaces",
+        "//src/control-plane-services/event-ledger/internal/middleware",
+        "//src/control-plane-services/event-ledger/internal/observability/logging",
+        "//src/control-plane-services/event-ledger/internal/observability/tracing",
+        "//src/control-plane-services/event-ledger/internal/policy",
+        "//src/control-plane-services/event-ledger/internal/publisher",
+        "//src/control-plane-services/event-ledger/internal/publisher/cloudevents",
+        "//src/control-plane-services/event-ledger/internal/registrations",
+        "//src/control-plane-services/event-ledger/pkg/constants",
+        "@com_github_golang_jwt_jwt_v5//:jwt",
+        "@com_github_gorilla_handlers//:handlers",
+        "@com_github_gorilla_mux//:mux",
+        "@com_github_klauspost_compress//gzhttp",
+        "@com_github_lestrrat_go_httprc//:httprc",
+        "@com_github_lestrrat_go_jwx_v2//jwk",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/auth",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/clients",
+        "@com_github_spf13_cobra//:cobra",
+        "@com_github_spf13_viper//:viper",
+        "@com_github_uptrace_opentelemetry_go_extra_otelzap//:otelzap",
+        "@io_opentelemetry_go_contrib_instrumentation_github_com_gorilla_mux_otelmux//:otelmux",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":startup",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "startup_test",
+    srcs = ["root_cmd_test.go"],
+    embed = [":startup"],
+    deps = [
+        "//src/control-plane-services/event-ledger/internal/config",
+        "@com_github_spf13_cobra//:cobra",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

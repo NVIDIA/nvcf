@@ -1,0 +1,29 @@
+{{- if .Values.nvctApi.remoteConfig.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "nvct-api.remoteConfigReaderName" . }}
+  namespace: {{ include "nvct-api.namespace" . }}
+  labels:
+    {{- include "nvct-api.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "nvct-api.remoteConfigReaderName" . }}
+  namespace: {{ include "nvct-api.namespace" . }}
+  labels:
+    {{- include "nvct-api.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: nvct-api
+    namespace: {{ include "nvct-api.namespace" . }}
+roleRef:
+  kind: Role
+  name: {{ include "nvct-api.remoteConfigReaderName" . }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

@@ -32,6 +32,8 @@ use tokio::time::Instant;
 use tracing;
 use uuid::Uuid;
 
+use super::MetricEnvironments;
+
 pub const LOCK_NAME_FUNCTION_DISCOVERY: &str = "function_discovery";
 
 /// Lookback window (minutes) for "recently invoked" in discovery. Functions with no invocations
@@ -168,7 +170,8 @@ fn get_timeseries_db_query(
 ) -> String {
     let mut matchers = Vec::new();
     if !ignore_env {
-        matchers.push(format!(r#"aws_env="{}""#, env));
+        let metric_env = MetricEnvironments::from_config(env);
+        matchers.push(format!(r#"aws_env="{}""#, metric_env.aws));
     }
     if let Some(function_version_id) = function_version_filter {
         matchers.push(format!(r#"function_version_id="{}""#, function_version_id));
@@ -190,7 +193,8 @@ fn llm_gateway_discovery_query(env: &str, ignore_env: bool, shard: DiscoveryShar
     let env_matcher = if ignore_env {
         String::new()
     } else {
-        format!(r#", aws_env="{}""#, env)
+        let metric_env = MetricEnvironments::from_config(env);
+        format!(r#", aws_env="{}""#, metric_env.aws)
     };
     format!(
         r#"(sum by(function_id) (
@@ -724,19 +728,7 @@ pub async fn get_functions_with_workers(
     // Query for functions with workers OR functions with active instances (for BYOC)
     // This ensures both normal functions and BYOC functions are discovered
     // Note: nvcf_function_instances_current query does NOT filter by state to match get_byoc_instance_count
-    let query = if timeseries_db_ignore_env {
-        r#"count by(function_id, function_version_id, nca_id) (nvcf_worker_service_worker_thread_count_total) > 0
-or
-avg by(function_id, function_version_id, nca_id) (nvcf_function_instances_current) > 0"#.to_string()
-    } else {
-        let environment = if env == "stg" { "stage" } else { "prod" };
-        format!(
-            r#"count by(function_id, function_version_id, nca_id) (nvcf_worker_service_worker_thread_count_total{{environment="{}"}}) > 0
-or
-avg by(function_id, function_version_id, nca_id) (nvcf_function_instances_current{{environment="{}"}}) > 0"#,
-            environment, environment
-        )
-    };
+    let query = functions_with_workers_query(env, timeseries_db_ignore_env);
 
     tracing::info!(
         "Executing PromQL query for functions with workers (ignore_env={}): {}",
@@ -834,6 +826,22 @@ avg by(function_id, function_version_id, nca_id) (nvcf_function_instances_curren
     Ok(functions_with_workers)
 }
 
+fn functions_with_workers_query(env: &str, ignore_env: bool) -> String {
+    if ignore_env {
+        r#"count by(function_id, function_version_id, nca_id) (nvcf_worker_service_worker_thread_count_total) > 0
+or
+avg by(function_id, function_version_id, nca_id) (nvcf_function_instances_current) > 0"#.to_string()
+    } else {
+        let metric_env = MetricEnvironments::from_config(env);
+        format!(
+            r#"count by(function_id, function_version_id, nca_id) (nvcf_worker_service_worker_thread_count_total{{environment="{}"}}) > 0
+or
+avg by(function_id, function_version_id, nca_id) (nvcf_function_instances_current{{environment="{}"}}) > 0"#,
+            metric_env.worker, metric_env.control_plane
+        )
+    }
+}
+
 /// Get functions with active instances from TimeseriesDb (for BYOC functions that don't emit worker metrics)
 /// This uses the nvcf_function_instances_current metric which tracks actual running instances
 pub async fn get_functions_with_active_instances(
@@ -850,15 +858,7 @@ pub async fn get_functions_with_active_instances(
     let start_time = end_time - Duration::minutes(5); // 5 minute window
     let step = StdDuration::from_secs(STEP_SECS as u64);
 
-    let query = if timeseries_db_ignore_env {
-        r#"nvcf_function_instances_current{state="active"} > 0"#.to_string()
-    } else {
-        let environment = if env == "stg" { "stage" } else { "prod" };
-        format!(
-            r#"nvcf_function_instances_current{{state="active", environment="{}"}} > 0"#,
-            environment
-        )
-    };
+    let query = active_instances_query(env, timeseries_db_ignore_env);
 
     tracing::info!(
         "Executing PromQL query for functions with active instances (ignore_env={}): {}",
@@ -948,6 +948,18 @@ pub async fn get_functions_with_active_instances(
     Ok(functions_with_active_instances)
 }
 
+fn active_instances_query(env: &str, ignore_env: bool) -> String {
+    if ignore_env {
+        "nvcf_function_instances_current > 0".to_string()
+    } else {
+        let metric_env = MetricEnvironments::from_config(env);
+        format!(
+            r#"nvcf_function_instances_current{{environment="{}"}} > 0"#,
+            metric_env.control_plane
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -983,7 +995,7 @@ mod tests {
 
     #[test]
     fn discovery_queries_cover_four_fixed_shards_for_all_sources() {
-        let queries = recent_invocation_queries("prd", false, None);
+        let queries = recent_invocation_queries("prod", false, None);
         assert_eq!(queries.len(), 12);
 
         for shard in DiscoveryShard::ALL {
@@ -1035,6 +1047,35 @@ mod tests {
                 4
             );
         }
+    }
+
+    #[test]
+    fn running_function_query_uses_each_metric_familys_environment_labels() {
+        let prod_query = functions_with_workers_query("prd", false);
+        assert!(prod_query
+            .contains(r#"nvcf_worker_service_worker_thread_count_total{environment="prod"}"#));
+        assert!(prod_query.contains(r#"nvcf_function_instances_current{environment="production"}"#));
+
+        let stage_query = functions_with_workers_query("stg", false);
+        assert!(stage_query
+            .contains(r#"nvcf_worker_service_worker_thread_count_total{environment="stage"}"#));
+        assert!(stage_query.contains(r#"nvcf_function_instances_current{environment="staging"}"#));
+    }
+
+    #[test]
+    fn active_instance_query_uses_control_plane_environment_without_state() {
+        assert_eq!(
+            active_instances_query("prd", false),
+            r#"nvcf_function_instances_current{environment="production"} > 0"#
+        );
+        assert_eq!(
+            active_instances_query("stg", false),
+            r#"nvcf_function_instances_current{environment="staging"} > 0"#
+        );
+        assert_eq!(
+            active_instances_query("prd", true),
+            "nvcf_function_instances_current > 0"
+        );
     }
 
     #[tokio::test]

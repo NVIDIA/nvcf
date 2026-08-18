@@ -23,6 +23,7 @@ const (
 	traceAttrEndpointType              attribute.Key = "endpoint.type"
 	traceAttrFunctionID                attribute.Key = "function.id"
 	traceAttrFunctionVersionID         attribute.Key = "function.version_id"
+	traceAttrGatewayProxyOutcome       attribute.Key = "gateway.proxy.outcome"
 	traceAttrHTTPResponseStatusCode    attribute.Key = "http.response.status_code"
 	traceAttrIsShadow                  attribute.Key = "is_shadow"
 	traceAttrModelName                 attribute.Key = "model.name"

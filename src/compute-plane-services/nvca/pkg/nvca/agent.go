@@ -948,6 +948,15 @@ func (a *Agent) registerWithICMS(ctx context.Context, regBackendGPUs []types.Reg
 		return nil, err
 	}
 
+	if a.queueManager != nil {
+		a.queueManager.updateQueues(a.postProcessQueueCredentials(ctx, res.Credentials))
+		log.WithFields(logrus.Fields{
+			"clusterID":      res.ClusterID,
+			"clusterGroupID": res.ClusterGroupID,
+			"ncaID":          a.NCAId,
+		}).Info("Refreshed queue manager with registration credentials")
+	}
+
 	return res, nil
 }
 
@@ -1450,6 +1459,14 @@ func (a *Agent) Start(ctx context.Context) error {
 	// Start ticker event dispatchers
 	log.Info("Starting event dispatchers")
 	a.startEventProcessDispatchers(ctx, a.getTickerEvents(ctx))
+
+	// Start the NvSnap Hook B controller (post-Ready checkpoint
+	// reconciler). No-op when NvSnapCheckpointRestore feature flag is
+	// off — see pkg/nvca/nvsnap_controller_start.go. Fire-and-forget;
+	// failure logs but doesn't block agent startup.
+	if err := a.startNvSnapController(ctx, k8sclients, log); err != nil {
+		log.WithError(err).Warn("nvsnap controller start failed (non-fatal)")
+	}
 
 	// Set readiness check only after all critical initialization (including ICMS registration)
 	// has succeeded. This ensures the readiness probe stays not-ready on error returns,

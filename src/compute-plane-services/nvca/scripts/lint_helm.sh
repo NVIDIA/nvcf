@@ -193,6 +193,50 @@ assert_service_oauth_nil_safe "helm-managed" \
   --set-string "clusterName=ncp-helm-managed-1" \
   --show-only templates/helm-managed-nvcfbackend-cm.yaml
 
+# Helm-managed Vault authentication must carry an explicit, usable server URL
+# into the cluster DTO. This keeps environment selection outside the OSS chart.
+assert_helm_managed_vault_address() {
+  local chart_dir=${1}
+  local chart_label=${2}
+  local rendered
+  local invalid_address
+  rendered="$(mktemp)"
+  trap 'rm -f "${rendered}"' RETURN
+
+  helm template test-release "${chart_dir}" \
+    --set "ngcConfig.serviceKey=fakekey" \
+    --set "ngcConfig.clusterSource=helm-managed" \
+    --set-string "helmManaged.oAuthClientID=oauth-client-1" \
+    --set-string "vaultConfig.address=https://vault.example.test:443" \
+    --show-only templates/helm-managed-nvcfbackend-cm.yaml >"${rendered}"
+
+  assert_eq "https://vault.example.test:443" \
+    "$(yq '.data."cluster-dto.yaml" | from_yaml | .vaultConfig.address' "${rendered}")" \
+    "${chart_label} helm-managed cluster DTO includes the configured Vault address"
+
+  for invalid_address in \
+    "" \
+    "https://:443" \
+    " https://vault.example.test:443 " \
+    "https://user@vault.example.test:443" \
+    "https://vault.example.test:443?namespace=test" \
+    "https://vault.example.test:443#test"; do
+    if helm template test-release "${chart_dir}" \
+      --set "ngcConfig.serviceKey=fakekey" \
+      --set "ngcConfig.clusterSource=helm-managed" \
+      --set-string "helmManaged.oAuthClientID=oauth-client-1" \
+      --set-string "vaultConfig.address=${invalid_address}" \
+      --show-only templates/helm-managed-nvcfbackend-cm.yaml >"${rendered}" 2>&1; then
+      printf 'Expected %s helm-managed render with invalid Vault address %q to fail\n' "${chart_label}" "${invalid_address}"
+      return 1
+    fi
+    grep -q "vaultConfig.address" "${rendered}"
+  done
+}
+
+assert_helm_managed_vault_address "${repo_root}/deployments/nvca-operator" "service chart"
+assert_helm_managed_vault_address "${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator" "release chart"
+
 assert_service_oauth_nil_safe "self-managed" \
   --set "generateImagePullSecret=false" \
   --set "ngcConfig.clusterSource=self-managed" \
@@ -259,6 +303,8 @@ assert_transport_trust_config "reuse-values upgrade simulation" "" "" "" \
   --set "ngcConfig.serviceKey=fakekey" \
   --values "${reuse_values_file}" \
   --set "operatorConfig=null"
+
+bash "${repo_root}/scripts/test_transport_trust_validation.sh"
 
 # Test secret mirroring feature
 # Test with only source namespace (should not add args)

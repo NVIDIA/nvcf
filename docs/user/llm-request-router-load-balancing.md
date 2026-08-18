@@ -39,7 +39,8 @@ The chart supports two configuration sources:
 | `loadBalancer.configPath` | The chart only passes `--lb-config-path=<path>`. The operator must add and maintain the file mount by another mechanism. |
 
 Inline `config` takes precedence when both values are set. When neither value
-is set, Stargate uses its built-in `power-of-two` default.
+is set, Stargate uses its built-in `power-of-two` default and accepts a
+routing-method override when it is in the allowlist of built-in algorithms.
 
 Stargate reads and validates the file only during process startup. The
 StatefulSet does not include a load-balancer ConfigMap checksum in its pod
@@ -50,21 +51,22 @@ replica loads the same configuration.
 
 Algorithm availability is enforced at separate layers:
 
-| Layer | Input contract | `pulsar-multiregion` support |
-| --- | --- | --- |
-| `lb-config.json` | Canonical Stargate algorithm names | Supported as the default, a model algorithm, or a `request_algorithms` entry. |
-| Current `nvcf-cli` `llmConfig.routingMethod` | `round_robin`, `power_of_two`, `groq_multiregion`, `pulsar`, or `random` | `pulsar_multiregion` is not accepted. |
-| LLM API Gateway | Nonblank routing method from authenticated model metadata | Trimmed, then forwarded as `x-routing-method` without algorithm validation. |
-| Stargate `x-routing-method` | Case-insensitive algorithm name; multiword names may use hyphens or underscores | Normalized, then accepted only when it matches the effective algorithm or a model or top-level `request_algorithms` entry. Otherwise, Stargate returns HTTP `400`. |
+| Layer | Input contract |
+| --- | --- |
+| `lb-config.json` | Canonical Stargate algorithm names: `power-of-two`, `wait-and-widen`, `round-robin`, `random`, `pulsar`, and `pulsar-wait-and-widen`. Legacy `groq-multiregion` and `pulsar-multiregion` aliases remain accepted for existing deployments. |
+| Function model `llmConfig.routingMethod` | The same algorithm names, with underscores accepted in place of hyphens. Legacy aliases remain accepted for existing functions. |
+| LLM API Gateway | Nonblank routing method from authenticated model metadata, trimmed and forwarded as `x-routing-method` without algorithm validation. |
+| Stargate `x-routing-method` | Case-insensitive algorithm name with hyphens or underscores. It must match the effective algorithm or a model or top-level `request_algorithms` entry. Otherwise, Stargate returns HTTP `400`. |
 
-For example, when `power-of-two` is the effective algorithm,
-`groq_multiregion` requires a `groq-multiregion` entry in
-`request_algorithms`.
+For example, when a configuration is set and `power-of-two` is the effective
+algorithm, `wait_and_widen` requires a `wait-and-widen` entry in
+`request_algorithms`. The legacy `groq_multiregion` value remains accepted
+and resolves to the same algorithm.
 
-Stargate can use `pulsar-multiregion` as its default or a model algorithm when
-no request override is sent. Selecting it through function model metadata
-requires a control-plane API and client path that accepts
-`pulsar_multiregion`. The current `nvcf-cli` does not provide that path.
+Use `wait-and-widen` and `pulsar-wait-and-widen` in new function metadata,
+`lb-config.json` files, request-algorithm maps, and deployment manifests.
+Existing `groq-multiregion` and `pulsar-multiregion` values continue to work
+through the Stargate and control-plane compatibility aliases.
 
 ## Keep router headers trusted
 
@@ -119,15 +121,19 @@ filters:
 
 The stock gateway-routes chart does not expose a value for this filter. Use an
 equivalent policy at an external edge or maintain a route override. Preserve
-`x-multi-turn-session-id`; it is the supported client-facing session header.
+`x-multi-turn-session-id`; clients can use it for session affinity. Chat
+Completions and Responses request bodies can also supply `prompt_cache_key`.
 See the
 [Gateway API header modifier guide](https://gateway-api.sigs.k8s.io/guides/user-guides/http-header-modifier/)
 for filter semantics.
 
 The gateway derives `x-cache-affinity-key` for chat-completions and Responses
-requests when affinity applies. It does not derive affinity for embeddings.
-Do not set `require_cache_affinity_key` on a model that serves
-`/v1/embeddings` unless another trusted gateway supplies the key.
+requests when affinity applies. A request body can contain the raw
+`prompt_cache_key`, but only its SHA-256-derived value appears in the internal
+header. The router forwards the request body to the model backend. It does not
+derive affinity for embeddings. Do not set `require_cache_affinity_key` on a
+model that serves `/v1/embeddings` unless another trusted gateway supplies the
+key.
 
 Stargate returns HTTP `400` for a blank, unknown, or configured-but-unavailable
 `x-routing-method`. It also returns HTTP `400` when a required router header is
@@ -202,8 +208,8 @@ algorithm or is present in `request_algorithms`.
 3. Try a method accepted by `nvcf-cli` that is neither the configured
    algorithm nor present in `request_algorithms`; confirm that Stargate returns
    HTTP `400`.
-4. For an affinity-aware method, repeat a supported multi-turn request with
-   the returned `x-multi-turn-session-id`.
+4. For an affinity-aware method, repeat a supported multi-turn request with the
+   same `prompt_cache_key` or the returned `x-multi-turn-session-id`.
 5. Exercise a failed or saturated backend and confirm selection and retry
    counters change.
 

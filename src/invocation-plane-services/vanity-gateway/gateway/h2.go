@@ -146,6 +146,7 @@ func registerVanity(hostRouter *middleware.HostRouter, mappings *config.GatewayC
 			})
 		}
 		r.Get(healthPath, healthManager.HandlerFunc)
+		r.Get("/info", golibversion.Handler().ServeHTTP)
 		r.Get("/v1/status/{requestId}", vanityDirector.ServePolling)
 		hostRouter.Register(vanity.Host, chimiddleware.New(r))
 	}
@@ -167,6 +168,7 @@ func registerOpenAI(hostRouter *middleware.HostRouter, mappings *config.GatewayC
 	r.Get("/v1/models/{company}/{model}", openAIDirector.GetModel)
 
 	r.Get(healthPath, healthManager.HandlerFunc)
+	r.Get("/info", golibversion.Handler().ServeHTTP)
 
 	// special domain for openai
 	hostRouter.Register(mappings.OpenAI.Host, chimiddleware.New(r))

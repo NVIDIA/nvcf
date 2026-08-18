@@ -37,7 +37,7 @@ nvcaImage:
 otelCollector:
   enabled: false
   imageRepository: ""
-  imageTag: 0.143.2
+  imageTag: 0.157.9
   resources:
     limits:
       cpu: 1000m
@@ -46,7 +46,7 @@ otelCollector:
       cpu: 200m
       memory: 256Mi
 ## @param generateImagePullSecret Use the ngcConfig.serviceKey to generate an image pull secret for nvca and nvca-operator Pods
-generateImagePullSecret: false
+generateImagePullSecret: true
 ## @param imagePullSecretName Name of the image pull secret to use for nvca and nvca-operator Pods.
 imagePullSecretName: "nvca-operator-image-pull"
 ## @param imagePullSecrets List of pre-existing imagePullSecret objects in the nvca-operator namespace to use for nvca and nvca-operator Pods. Each object must have a 'name' field. Example: [{name: "foo-bar"}, {name: "baz"}]
@@ -65,6 +65,13 @@ serviceAccount:
   name: ""
 ## @param replicaCount Replica count for the operator deployment
 replicaCount: 1
+## @param podDisruptionBudget PodDisruptionBudget configuration
+podDisruptionBudget:
+  enabled: false
+  # minAvailable and maxUnavailable are mutually exclusive; set exactly one.
+  # Accepts an integer or a percentage string (e.g. 1 or "50%").
+  minAvailable: ""
+  maxUnavailable: ""
 ## @param systemNamespace Namespace in which NVCFBackend objects are created.
 systemNamespace: nvca-operator
 ## @param logLevel Logging level for the module
@@ -192,6 +199,11 @@ agent:
     requestRouterAddress: ""
   workload:
     tolerations: []
+  ## @param agent.byooOtelCollector.imageRepository Optional BYOO OpenTelemetry Collector image repository. If unset, it is derived from image.repository.
+  ## @param agent.byooOtelCollector.imageTag BYOO OpenTelemetry Collector image tag.
+  byooOtelCollector:
+    imageRepository: ""
+    imageTag: "0.157.11"
   ## Environment variable overrides for function workloads.
   ## Available keys: INIT_CONTAINER, UTILS_CONTAINER, OTEL_CONTAINER, BYOO_OTEL_COLLECTOR_CONTAINER,
   ##                 NICLLS_CONTAINER, ESS_AGENT_CONTAINER, INFERENCE_CONTAINER
@@ -264,9 +276,11 @@ ngcConfig:
   apiURL: https://api.ngc.nvidia.com
   clusterSource: ngc-managed
 ## @section Vault Configuration
+## @param vaultConfig.address Vault server URL for Helm-managed clusters. Required when helmManaged.oAuthClientID is set; must be HTTP(S), without credentials, query, or fragment.
 ## @param vaultConfig.oAuthClientMountPathTemplate Template for constructing the OAuth client mount path in Vault. Use %s as placeholder for clientID. Example: "nvidia/services/oauth/clients/%s/kv/secret"
 ## @param vaultConfig.oAuthClientMountPath (Optional) Full OAuth client mount path. If set, overrides the computed path from template.
 vaultConfig:
+  address: ""
   oAuthClientMountPathTemplate: ""
   oAuthClientMountPath: ""
 ## @section Helm Managed NVCF Backend Configuration
@@ -306,7 +320,7 @@ helmManaged:
   otelCollector:
     enabled: false
     imageRepository: ""
-    imageTag: 0.143.2
+    imageTag: 0.157.9
 ## @section Self Managed NVCF Backend Configuration
 ## Only used when ngcConfig.clusterSource is "self-managed"
 ## All values below are under the 'selfManaged:' key, e.g. 'selfManaged.nvcaVersion'
@@ -330,7 +344,7 @@ selfManaged:
   otelCollector:
     enabled: false
     imageRepository: ""
-    imageTag: 0.143.2
+    imageTag: 0.157.9
   ## @param selfManaged.icmsServiceURL URL of the ICMS service for self-managed clusters. Override with the endpoint generated during cluster registration.
   icmsServiceURL: "http://icms.example.invalid:8080"
   ## @param selfManaged.icmsServiceHostHeaderOverride Optional Host header override for selfManaged.icmsServiceURL.
@@ -381,6 +395,23 @@ gracefulShutdown:
 networkPolicy:
   clusterNetworkCIDRs: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/12"]
   customPolicies: []
+  ## @param networkPolicy.operator.enabled Apply a default-deny NetworkPolicy to the operator pod itself, with explicit allows for kube-dns, nvsnap-server, and the kube-apiserver. Opt-in: false by default so existing deployments are unchanged.
+  ## @param networkPolicy.operator.nvsnapServerNamespace Namespace where nvsnap-server runs (egress target for L2 promote-state polls + audit writes)
+  ## @param networkPolicy.operator.nvsnapServerPodLabel app= label value matched against pods in the nvsnap-server namespace
+  ## @param networkPolicy.operator.nvsnapServerPort nvsnap-server REST port
+  ## @param networkPolicy.operator.apiServerCIDRs CIDR list containing the kube-apiserver. Empty = no apiserver allow (operator loses K8s API access). Pin to your cluster's apiserver range.
+  ## @param networkPolicy.operator.apiServerPort kube-apiserver port
+  ## @param networkPolicy.operator.ingressFrom Optional NetworkPolicyPeer list for ingress (Prometheus, kubelet probes). Empty = allow from anywhere.
+  ## @param networkPolicy.operator.extraEgress Additional egress rule entries appended verbatim (private registries, OTLP collector, …)
+  operator:
+    enabled: false
+    nvsnapServerNamespace: "nvsnap-system"
+    nvsnapServerPodLabel: "nvsnap-server"
+    nvsnapServerPort: 8080
+    apiServerCIDRs: []
+    apiServerPort: 443
+    ingressFrom: []
+    extraEgress: []
 ## @section Cluster Validator Configuration
 
 ## @param clusterValidator.enabled Enable the cluster-validator CronJob and init container

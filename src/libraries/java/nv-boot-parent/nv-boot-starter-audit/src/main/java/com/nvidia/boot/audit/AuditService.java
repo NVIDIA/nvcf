@@ -131,7 +131,7 @@ public final class AuditService {
         } catch (JacksonException | IllegalArgumentException e) {
             var mesg = "Failed to parse HMAC keys. Expected base64-encoded JSON with structure: " +
                                     "{\"keys\": [{\"kid\": \"...\", \"key\": \"...\"}]}";
-            log.error(mesg, e);
+            log.error(mesg + " - '{}'", e.getMessage());
             throw new IllegalStateException(mesg, e);
         }
     }

@@ -9,13 +9,13 @@ global:
   # =============================================================================
   # Helm Chart Sources Configuration
   # =============================================================================
-  # Option A — HTTP Helm repository (e.g. NGC public catalog):
+  # Option A: HTTP Helm repository (e.g. NGC public catalog):
   #   sources:
   #     url: "https://helm.ngc.nvidia.com/nvidia/nvcf"
   #     username: "$oauthtoken"
   #     password: "YOUR_NGC_API_KEY"
   #
-  # Option B — OCI registry (e.g. ECR or a private NGC org after mirroring):
+  # Option B: OCI registry (e.g. ECR or a private NGC org after mirroring):
   #   sources:
   #     registry: "nvcr.io"           # or <account>.dkr.ecr.<region>.amazonaws.com
   #     repository: "YOUR_ORG/YOUR_TEAM"
@@ -144,7 +144,6 @@ observability:
 
 # Defaults consumed only for the control and all observability profiles.
 functionAutoscaler:
-  chartVersion: "0.2.1"
   region: local
   cassandra:
     contactPoints: cassandra.cassandra-system.svc.cluster.local
@@ -169,6 +168,13 @@ accounts:
 # These static global values are processed in the values template
 nats:
   enabled: true
+  # PDB: the upstream NATS chart enables a disruption budget by default.
+  # Override here to disable it or adjust the minAvailable threshold.
+  podDisruptionBudget:
+    enabled: false
+    merge:
+      spec:
+        minAvailable: 2
 
 cassandra:
   enabled: true
@@ -185,12 +191,22 @@ cassandra:
   # Do not use small for default cloud installs. Cassandra can OOM during
   # first boot and leave migrations in a failed or dirty state.
   resourcesPreset: "xlarge"
+  # PDB: disabled by default. Recommended for production 3-node clusters.
+  # Set exactly one of minAvailable or maxUnavailable.
+  podDisruptionBudget:
+    enabled: false
+    minAvailable: 2   # keep at least 2 of 3 nodes up during any disruption
 
 certManager:
   # cert-manager controller required to reconcile Certificate resources for
-  # the self-managed PKI stack (ClusterIssuer/nvcf-openbao-pki + per-service
-  # Certificates land in subsequent MRs). The bundled helm-nvcf-cert-manager
-  # chart ships installCRDs=true by default.
+  # the self-managed PKI stack. Enabling addons.llm.pki with the managed
+  # issuer creates ClusterIssuer/nvcf-openbao-pki, which is cluster-scoped
+  # and has no namespace. The nvcf-pki Helm release that creates it and the
+  # cert-manager ServiceAccount it authenticates as both live in the
+  # cert-manager namespace. The bundled helm-nvcf-cert-manager chart ships
+  # installCRDs=true by default. Set this to false when cert-manager is
+  # installed outside this stack; that external installation must still
+  # provide ServiceAccount/cert-manager in the cert-manager namespace.
   enabled: true
 
 openbao:
@@ -221,6 +237,16 @@ openbao:
       #         - nats-system
       #         - nvcf
       #         - sis
+    # PDB for the injector Deployment. minAvailable: 1 by default (always active).
+    podDisruptionBudget:
+      minAvailable: 1
+  server:
+    ha:
+      # PDB for the HA Raft StatefulSet. The upstream chart enables this by
+      # default with maxUnavailable derived from replica count.
+      disruptionBudget:
+        enabled: false
+        maxUnavailable: 1
 
 addons:
   # LLS/TURN Low-Latency Streaming addon
@@ -231,16 +257,16 @@ addons:
   # LLM addon: gateway + request router (stargate) for LLM function invocation
   llm:
     enabled: false
-    # OpenBao-issued QUIC TLS certificate for the request router (Stargate).
-    # When enabled, the chart provisions an NVCF service-issuing PKI hierarchy
-    # in OpenBao via a Helm pre-install/pre-upgrade Job, requests a Certificate
-    # against the nvcf-openbao-pki ClusterIssuer, and mounts the resulting
-    # Secret into the request-router pod. Disabled by default; opt in per env.
+    # QUIC TLS certificate for the request router (Stargate). When enabled,
+    # the chart requests a Certificate from the configured issuer and mounts
+    # the resulting Secret. Managed mode also provisions the OpenBao
+    # service-issuing hierarchy and defaults to
+    # ClusterIssuer/nvcf-openbao-pki. Disabled by default; opt in per env.
     pki:
       enabled: false
-      # REQUIRED when enabled. Comma-separated DNS suffixes the OpenBao PKI
-      # role accepts. Typically the customer domain plus cluster.local for
-      # in-cluster service identity.
+      # REQUIRED for a managed issuer. Comma-separated DNS suffixes the
+      # OpenBao PKI role accepts. Typically the customer domain plus
+      # cluster.local for in-cluster service identity.
       allowedDomains: ""
       # REQUIRED when enabled. SANs requested on the issued certificate.
       dnsNames: []
@@ -248,6 +274,11 @@ addons:
       # secretName: stargate-quic-tls
       # issuerKind: ClusterIssuer
       # issuerName: nvcf-openbao-pki
+      # Stack management defaults to true only for the default
+      # ClusterIssuer/nvcf-openbao-pki configuration. Set this explicitly to
+      # manage a custom ClusterIssuer. Leave it false for an external issuer.
+      # clusterIssuer:
+      #   enabled: true
       # namespace: vault-system
       # mountPath: /etc/stargate/tls
       # certPath: /etc/stargate/tls/tls.crt
@@ -315,6 +346,56 @@ stateMetrics:
 rateLimiter:
   enabled: true
   replicaCount: 1
+  # PDB: enable when replicaCount > 1.
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
+
+# PDB knobs for control-plane services. Disabled by default.
+# Set enabled: true for any service running more than one replica.
+
+apikeys:
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
+
+ess:
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
+
+invocation:
+  env:
+    NATS_PROPERTIES__REGION: local
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
+
+adminIssuerProxy:
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
+
+functionautoscaler:
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
+
+reval:
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
+
+# LLM addon services (active only when addons.llm.enabled: true):
+llmApiGateway:
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
+
+llmRequestRouter:
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
 
 # Ingress Gateway Configuration
 ingress:
@@ -374,6 +455,10 @@ ingress:
         listenerName: nats
 
 grpcproxy:
+  # PDB: disabled by default. Enable when running multiple grpc-proxy replicas.
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
   # Optional NVCF API gRPC endpoint used only by grpc-proxy.
   # Leave empty when grpc-proxy can use the same endpoint advertised to workers
   # through global.workerEndpoints.nvcfGrpcServiceURL. Set this when workers
