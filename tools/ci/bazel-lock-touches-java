@@ -50,6 +50,15 @@ JAVA_IRRELEVANT_EXTENSIONS = {
 # fails closed rather than being silently ignored.
 INSPECTABLE_SECTIONS = {"moduleExtensions"}
 
+# dict.get() cannot tell an absent key from one whose value is null, and
+# cannot tell an absent section from an empty one. Both conflations were live
+# bugs: a new top-level section added as null compared equal to its own
+# absence and was never noticed, and deleting moduleExtensions outright made
+# the head look like an empty extension set, so the only "changed" extensions
+# were the base's, all recognised, and the tool answered false. Losing a whole
+# section must never be a skip. Compare against a sentinel instead.
+MISSING = object()
+
 
 def die_true(reason):
     print("true")
@@ -90,16 +99,24 @@ def main():
         print("[lock-scope] lock is unchanged; skipping Java", file=sys.stderr)
         return
 
-    changed_sections = {k for k in set(a) | set(b) if a.get(k) != b.get(k)}
+    changed_sections = {
+        k for k in set(a) | set(b) if a.get(k, MISSING) != b.get(k, MISSING)
+    }
 
     unexpected = changed_sections - INSPECTABLE_SECTIONS
     if unexpected:
         die_true(f"lock sections changed that are not inspectable: {sorted(unexpected)}")
 
-    ma, mb = a.get("moduleExtensions", {}), b.get("moduleExtensions", {})
+    # Require the section in both. Defaulting it to {} is what let a deletion
+    # read as "no extensions changed".
+    if "moduleExtensions" not in a or "moduleExtensions" not in b:
+        die_true("moduleExtensions is absent from one of the revisions")
+    ma, mb = a["moduleExtensions"], b["moduleExtensions"]
     if not isinstance(ma, dict) or not isinstance(mb, dict):
         die_true("moduleExtensions is not an object in one of the revisions")
-    changed_exts = {k for k in set(ma) | set(mb) if ma.get(k) != mb.get(k)}
+    changed_exts = {
+        k for k in set(ma) | set(mb) if ma.get(k, MISSING) != mb.get(k, MISSING)
+    }
 
     unrecognised = changed_exts - JAVA_IRRELEVANT_EXTENSIONS
     if unrecognised:

@@ -91,6 +91,7 @@ jobs:
           bash tools/ci/test-bazel-cache-upload-mode
           bash tools/ci/test-bazel-remote-probe
           bash tools/ci/test-bazel-lock-touches-java
+          python3 tools/ci/test-bazel-lock-touches-java-properties
 
       - name: Compute changed subtrees
         id: detect
