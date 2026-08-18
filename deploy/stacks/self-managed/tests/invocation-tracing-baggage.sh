@@ -120,6 +120,9 @@ changed_checksum="$(yq ea -r 'select(.kind == "Deployment" and .metadata.name ==
 if [ -z "$configured_checksum" ] || [ "$configured_checksum" = null ]; then
   fail "configured baggage allowlist did not render a deployment checksum"
 fi
+if [ -z "$changed_checksum" ] || [ "$changed_checksum" = null ]; then
+  fail "changed baggage allowlist did not render a deployment checksum"
+fi
 if [ "$configured_checksum" = "$changed_checksum" ]; then
   fail "deployment checksum did not change when the baggage allowlist changed"
 fi
