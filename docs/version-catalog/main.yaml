@@ -387,6 +387,7 @@ manifest:
       kind: chart
       requirement: optional
       description: Deploys the optional vanity hostname gateway.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/vanity-gateway
     - artifact_id: nvcf-example-dashboards
       plane: control
       kind: chart
@@ -466,6 +467,7 @@ manifest:
       kind: service-image
       requirement: optional
       description: Serves the optional vanity hostname gateway.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/vanity-gateway
     - artifact_id: nvcf-api-keys-service
       plane: control
       kind: service-image
