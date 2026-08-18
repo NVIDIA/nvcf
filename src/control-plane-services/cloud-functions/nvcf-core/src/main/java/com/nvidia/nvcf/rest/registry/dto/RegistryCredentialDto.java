@@ -33,12 +33,18 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import java.util.Set;
+import java.util.UUID;
 import lombok.Builder;
 import org.hibernate.validator.constraints.Length;
 
 @Builder
 @Schema(description = "DTO of a registry credential")
 public record RegistryCredentialDto(
+        @Nullable
+        @Schema(description = "Registry credential id. Populated on the internal account "
+                + "details response so downstream services can read the secret from ESS.")
+        UUID registryCredentialId,
+
         @Schema(description = "Registry hostname")
         @Pattern(regexp = HOSTNAME_REGEX,
                 message = "Invalid hostname: Must conform to regex " + HOSTNAME_REGEX)
@@ -46,8 +52,10 @@ public record RegistryCredentialDto(
                 message = "Invalid hostname: Must be 1 - " + MAX_HOSTNAME_LENGTH + " chars long")
         @NotBlank String registryHostname,
 
-        @Schema(description = "Registry credential - secret value must be base64 encoded " +
-                "string in username:password format")
+        @Schema(description = "Registry credential - secret value must be base64 encoded "
+                + "string in username:password format. Required on requests. Omitted from the "
+                + "internal account details response: Cloud Tasks reads the value from ESS by "
+                + "registry credential id.")
         @NotNull SecretDto secret,
 
         @Schema(description = "Artifact types")

@@ -65,7 +65,7 @@ public class RegistryFunctionMapperService {
         var hostname = registryCredentialDetailsDto.registryHostname();
         var ncaId = registryCredentialDetailsDto.ncaId();
         var artifactTypes = registryCredentialDetailsDto.artifactTypes();
-        
+
         return registryCredentialEssService
                 .getRegistryCredentialSecret(ncaId, registryCredentialId)
                 .map(secret -> RegistryCredentialDto.builder()
@@ -91,6 +91,21 @@ public class RegistryFunctionMapperService {
                     }
                     return null;
                 });
+    }
+
+    // Maps a registry credential to the DTO returned in the internal account details response
+    // consumed by Cloud Tasks. The secret value is intentionally omitted: it is stored in ESS by
+    // NVCF and read directly from ESS by Cloud Tasks using the registry credential id. This
+    // mirrors how telemetry secrets are handled.
+    public static RegistryCredentialDto toRegistryCredentialDtoWithoutSecret(
+            RegistryCredentialDetailsDto registryCredentialDetailsDto) {
+        return RegistryCredentialDto.builder()
+                .registryCredentialId(registryCredentialDetailsDto.registryCredentialId())
+                .registryHostname(registryCredentialDetailsDto.registryHostname())
+                .artifactTypes(registryCredentialDetailsDto.artifactTypes())
+                .tags(registryCredentialDetailsDto.tags())
+                .description(registryCredentialDetailsDto.description())
+                .build();
     }
 
     public RegistryCredentialDetailsDto toRegistryCredentialDetailsDto(

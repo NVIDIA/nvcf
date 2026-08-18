@@ -42,6 +42,7 @@ import com.nvidia.nvct.rest.task.dto.GpuSpecificationDto;
 import com.nvidia.nvct.service.account.AccountService;
 import com.nvidia.nvct.service.account.dto.AccountDto;
 import com.nvidia.nvct.service.registry.RegistryArtifactValidationService;
+import com.nvidia.nvct.service.registry.RegistryCredentialEssService;
 import com.nvidia.nvct.service.registry.RegistryCredentialService;
 import com.nvidia.nvct.service.registry.RegistryTaskMapperService;
 import com.nvidia.nvct.util.MockRevalServer;
@@ -126,9 +127,12 @@ class RevalClientIntegrationTest {
                                           TEST_HELM_REGISTRY);
         RegistryTaskMapperService registryTaskMapperService =
                 new RegistryTaskMapperService(registryMapperService);
+        RegistryCredentialEssService registryCredentialEssService =
+                mock(RegistryCredentialEssService.class);
         registryCredentialService = new RegistryCredentialService(accountService,
                                                                   registryMapperService,
                                                                   registryTaskMapperService,
+                                                                  registryCredentialEssService,
                                                                   jsonMapper,
                                                                   sidecarImagePullSecret,
                                                                   sidecarRegistryHostname);

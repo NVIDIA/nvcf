@@ -21,6 +21,7 @@ import static com.nvidia.boot.registries.service.registry.dto.ArtifactTypeEnum.C
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.json.JsonMapper;
 import com.google.common.collect.Sets;
+import com.nvidia.boot.exceptions.NotFoundException;
 import com.nvidia.boot.registries.service.registry.RegistryMapperService;
 import com.nvidia.boot.registries.service.registry.dto.ArtifactTypeEnum;
 import com.nvidia.nvct.persistence.task.entity.TaskEntity;
@@ -55,10 +56,13 @@ public class RegistryCredentialService {
     private static final String MESG_FAIL_TO_ENCODE_SECRETS =
             MESG_COMMON_ERROR_PREFIX + "Failed to encode secrets";
     private static final String MESG_INVALID_REGISTRY_URL = "Invalid registry URL: %s";
+    private static final String MESG_MISSING_REGISTRY_SECRET =
+            "Account '%s', Registry Credential '%s': Secret not found in ESS";
 
     private final AccountService accountService;
     private final RegistryMapperService registryMapperService;
     private final RegistryTaskMapperService registryTaskMapperService;
+    private final RegistryCredentialEssService registryCredentialEssService;
     private final JsonMapper jsonMapper;
     private final String sidecarImagePullSecret;
     private final String sidecarRegistryHostname;
@@ -67,6 +71,7 @@ public class RegistryCredentialService {
             AccountService accountService,
             RegistryMapperService registryMapperService,
             RegistryTaskMapperService registryTaskMapperService,
+            RegistryCredentialEssService registryCredentialEssService,
             JsonMapper jsonMapper,
             @Value("${nvct.sidecars.image-pull-secret}")
             String sidecarImagePullSecret,
@@ -75,6 +80,7 @@ public class RegistryCredentialService {
         this.accountService = accountService;
         this.registryTaskMapperService = registryTaskMapperService;
         this.registryMapperService = registryMapperService;
+        this.registryCredentialEssService = registryCredentialEssService;
         this.jsonMapper = jsonMapper;
         this.sidecarImagePullSecret = sidecarImagePullSecret;
         this.sidecarRegistryHostname = sidecarRegistryHostname;
@@ -169,12 +175,33 @@ public class RegistryCredentialService {
                 .toList();
     }
 
+    // Reads the registry credential secret value directly from ESS by registry credential id.
+    // NVCF no longer returns the secret inline in the account details response. As a rollout
+    // safeguard, if an older NVCF still returns the secret inline (and no id), that value is used.
+    private String getRegistryCredentialSecretValue(
+            String ncaId,
+            RegistryCredentialDto registryCredential) {
+        if (registryCredential.secret() != null) {
+            return registryCredential.secret().value().asString();
+        }
+        return registryCredentialEssService
+                .getRegistryCredentialSecret(ncaId, registryCredential.registryCredentialId())
+                .map(secret -> secret.value().asString())
+                .orElseThrow(() -> {
+                    var mesg = MESG_MISSING_REGISTRY_SECRET
+                            .formatted(ncaId, registryCredential.registryCredentialId());
+                    log.error(mesg);
+                    return new NotFoundException(mesg);
+                });
+    }
+
     private K8sSecretsDto getRegistryImagePullSecrets(
+            String ncaId,
             List<RegistryCredentialDto> registryCredentials) {
         K8sSecretsDto k8SSecretsDto = K8sSecretsDto.builder().k8sSecrets(new ArrayList<>()).build();
         registryCredentials.forEach(registry -> {
             var hostname = registry.registryHostname();
-            var secret = registry.secret().value().asString();
+            var secret = getRegistryCredentialSecretValue(ncaId, registry);
             var dockerConfigJsonRegistryCredentialDto = DockerConfigJsonAuthDto
                     .builder()
                     .auth(secret)
@@ -213,13 +240,14 @@ public class RegistryCredentialService {
 
     public List<String> getContainerRegistryCredentialsValue(TaskEntity taskEntity) {
         return getContainerRegistryCredentials(taskEntity)
-                .stream().map(x -> x.secret().value().asString())
+                .stream()
+                .map(x -> getRegistryCredentialSecretValue(taskEntity.getNcaId(), x))
                 .toList();
     }
 
     public K8sSecretsDto getContainerRegistryImagePullSecrets(TaskEntity task) {
         var containerRegistryCredentials = getContainerRegistryCredentials(task);
-        return getRegistryImagePullSecrets(containerRegistryCredentials);
+        return getRegistryImagePullSecrets(task.getNcaId(), containerRegistryCredentials);
     }
 
     public List<RegistryCredentialDto> getHelmRegistryCredentials(TaskEntity task) {
@@ -243,13 +271,14 @@ public class RegistryCredentialService {
 
     public List<String> getHelmRegistryCredentialsValue(TaskEntity taskEntity) {
         return getHelmRegistryCredentials(taskEntity)
-                .stream().map(x -> x.secret().value().asString())
+                .stream()
+                .map(x -> getRegistryCredentialSecretValue(taskEntity.getNcaId(), x))
                 .toList();
     }
 
     public K8sSecretsDto getHelmRegistryImagePullSecrets(TaskEntity task) {
         var helmRegistryCredentials = getHelmRegistryCredentials(task);
-        return getRegistryImagePullSecrets(helmRegistryCredentials);
+        return getRegistryImagePullSecrets(task.getNcaId(), helmRegistryCredentials);
     }
 
     public Map<String, List<RegistryCredentialDto>> getModelRegistryCredentials(TaskEntity task) {
@@ -287,8 +316,8 @@ public class RegistryCredentialService {
                         Map.Entry::getKey,
                         x -> x.getValue().stream()
                                 .map(registryCredentialDto ->
-                                             registryCredentialDto
-                                                     .secret().value().asString())
+                                             getRegistryCredentialSecretValue(
+                                                     taskEntity.getNcaId(), registryCredentialDto))
                                 .toList()));
     }
 
@@ -329,8 +358,8 @@ public class RegistryCredentialService {
                         Map.Entry::getKey,
                         x -> x.getValue().stream()
                                 .map(registryCredentialDto ->
-                                             registryCredentialDto
-                                                     .secret().value().asString())
+                                             getRegistryCredentialSecretValue(
+                                                     taskEntity.getNcaId(), registryCredentialDto))
                                 .toList()));
     }
 
