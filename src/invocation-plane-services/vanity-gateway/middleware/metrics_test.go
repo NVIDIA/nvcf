@@ -53,10 +53,15 @@ func TestServerTelemetryMiddlewareRecordsStatusAndRouteMetrics(t *testing.T) {
 		AddOpenAIRequestMetricAttributes(r.Context(), "meta/llama-3", "func-123")
 		w.WriteHeader(http.StatusAccepted)
 	})
+	r.Post("/v1/chat/canceled", func(w http.ResponseWriter, r *http.Request) {
+		AddGatewayProxyOutcomeMetricAttribute(r.Context(), GatewayProxyOutcomeClientCanceled)
+		w.WriteHeader(499)
+	})
 
 	serve(r, http.MethodGet, "/limited")
 	serve(r, http.MethodGet, "/requests/abc123")
 	serve(r, http.MethodPost, "/v1/chat/completions")
+	serve(r, http.MethodPost, "/v1/chat/canceled")
 
 	metrics := collectMetrics(t, reader)
 
@@ -76,6 +81,12 @@ func TestServerTelemetryMiddlewareRecordsStatusAndRouteMetrics(t *testing.T) {
 		"http.route":                attribute.StringValue("/v1/chat/completions"),
 		"openai_model_name":         attribute.StringValue("meta/llama-3"),
 		"function_id":               attribute.StringValue("func-123"),
+	}))
+	require.True(t, hasMetricPointWithAttributes(metrics, "http.server.request.duration", map[attribute.Key]attribute.Value{
+		"http.request.method":       attribute.StringValue(http.MethodPost),
+		"http.response.status_code": attribute.Int64Value(499),
+		"http.route":                attribute.StringValue("/v1/chat/canceled"),
+		"gateway_proxy_outcome":     attribute.StringValue(string(GatewayProxyOutcomeClientCanceled)),
 	}))
 }
 

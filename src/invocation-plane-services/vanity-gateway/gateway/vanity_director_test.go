@@ -35,6 +35,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 )
@@ -390,7 +392,7 @@ func TestServeExecReturnsProxyErrorAsProblemDetails(t *testing.T) {
 // A confirmed client disconnect (canceled inbound request context) is accounted
 // as 499 rather than a generic 502.
 func TestServeExecClientDisconnectReturns499(t *testing.T) {
-	core, observedLogs := observer.New(zap.WarnLevel)
+	core, observedLogs := observer.New(zap.DebugLevel)
 	undoLogger := zap.ReplaceGlobals(zap.New(core))
 	defer undoLogger()
 
@@ -424,34 +426,100 @@ func TestServeExecClientDisconnectReturns499(t *testing.T) {
 	assert.Equal(t, "Client Closed Request", pd.Title)
 	assert.Equal(t, statusClientClosedRequest, pd.Status)
 
-	assert.Len(t, observedLogs.FilterMessage("client closed request before upstream response").All(), 1)
+	assert.Len(t, observedLogs.FilterMessage("proxy request canceled").All(), 1)
+	assert.Empty(t, observedLogs.FilterMessage("proxy request failed").All())
 }
 
 // A genuine upstream transport failure (inbound context still live) stays 502.
 func TestServeExecGenuineProxyFailureReturns502(t *testing.T) {
-	director, err := NewVanityDirector("https://nvcf.example.test", roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		return nil, errors.New("connection refused")
+	for _, transportErr := range []error{
+		context.DeadlineExceeded,
+		errors.New("dial tcp: connection refused"),
+		errors.New("read: connection reset by peer"),
+	} {
+		t.Run(transportErr.Error(), func(t *testing.T) {
+			director, err := NewVanityDirector("https://nvcf.example.test", roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				return nil, transportErr
+			}))
+			assert.NoError(t, err)
+
+			recorder := httptest.NewRecorder()
+			err = director.ServeExec(VanityExecRequest{FunctionID: "func-123", FunctionVersionID: "version-456"}, recorder, httptest.NewRequest("POST", "/test", nil))
+
+			assert.ErrorIs(t, err, transportErr)
+			assert.Equal(t, http.StatusBadGateway, recorder.Result().StatusCode)
+		})
+	}
+}
+
+func TestServeExecPassesThroughUpstreamBadGateway(t *testing.T) {
+	const upstreamBody = `{"error":"upstream unavailable"}`
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(upstreamBody))
 	}))
-	assert.NoError(t, err)
+	t.Cleanup(upstreamServer.Close)
 
-	req := httptest.NewRequest("POST", "/test", nil)
+	director, err := NewVanityDirector(upstreamServer.URL, http.DefaultTransport)
+	require.NoError(t, err)
+
 	recorder := httptest.NewRecorder()
+	err = director.ServeExec(VanityExecRequest{FunctionID: "func-123"}, recorder, httptest.NewRequest("POST", "/test", nil))
+	require.NoError(t, err)
 
-	err = director.ServeExec(VanityExecRequest{
-		FunctionID:        "func-123",
-		FunctionVersionID: "version-456",
-	}, recorder, req)
-
-	assert.Error(t, err)
 	result := recorder.Result()
-	defer result.Body.Close()
-	assert.Equal(t, http.StatusBadGateway, result.StatusCode)
+	t.Cleanup(func() { _ = result.Body.Close() })
+	body, err := io.ReadAll(result.Body)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusBadGateway, result.StatusCode)
+	require.Equal(t, upstreamBody, string(body))
+}
 
-	var pd ProblemDetails
-	err = json.NewDecoder(result.Body).Decode(&pd)
-	assert.NoError(t, err)
-	assert.Equal(t, "Bad Gateway", pd.Title)
-	assert.Equal(t, http.StatusBadGateway, pd.Status)
+func TestServeExecRecordsGatewayProxyOutcomeOnParentSpan(t *testing.T) {
+	spanRecorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(spanRecorder))
+	t.Cleanup(func() { require.NoError(t, provider.Shutdown(context.Background())) })
+
+	for _, test := range []struct {
+		name       string
+		cancel     bool
+		proxyError error
+		outcome    middleware.GatewayProxyOutcome
+	}{
+		{
+			name:       "client canceled",
+			cancel:     true,
+			proxyError: context.Canceled,
+			outcome:    middleware.GatewayProxyOutcomeClientCanceled,
+		},
+		{
+			name:       "upstream transport failure",
+			proxyError: errors.New("connection refused"),
+			outcome:    middleware.GatewayProxyOutcomeUpstreamTransportFailure,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			director, err := NewVanityDirector("https://nvcf.example.test", roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				return nil, test.proxyError
+			}))
+			require.NoError(t, err)
+
+			ctx, cancel := context.WithCancel(context.Background())
+			ctx, span := provider.Tracer("test").Start(ctx, "gateway parent")
+			if test.cancel {
+				cancel()
+			}
+			defer cancel()
+
+			_ = director.ServeExec(VanityExecRequest{}, httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/test", nil).WithContext(ctx))
+			span.End()
+
+			spans := spanRecorder.Ended()
+			require.NotEmpty(t, spans)
+			assert.True(t, spanHasAttribute(spans[len(spans)-1].Attributes(), traceAttrGatewayProxyOutcome, string(test.outcome)))
+		})
+	}
 }
 
 func TestOfflineMessageReturns503(t *testing.T) {
@@ -544,6 +612,10 @@ func TestServeExecClientDisconnectRecords499Metric(t *testing.T) {
 	metrics := collectGatewayMetrics(t, reader)
 	assert.True(t, gatewayMetricHasStatusCode(metrics, statusClientClosedRequest),
 		"gateway must record http.server.request.duration with status_code=499 on client disconnect")
+	assert.True(t, gatewayMetricHasAttributes(metrics, map[attribute.Key]attribute.Value{
+		"http.response.status_code": attribute.Int64Value(statusClientClosedRequest),
+		"gateway_proxy_outcome":     attribute.StringValue(string(middleware.GatewayProxyOutcomeClientCanceled)),
+	}))
 	assert.False(t, gatewayMetricHasStatusCode(metrics, http.StatusBadGateway),
 		"client disconnect must not be recorded as 502")
 }
@@ -575,6 +647,10 @@ func TestServeExecGenuineFailureRecords502Metric(t *testing.T) {
 	metrics := collectGatewayMetrics(t, reader)
 	assert.True(t, gatewayMetricHasStatusCode(metrics, http.StatusBadGateway),
 		"genuine upstream failure must record status_code=502")
+	assert.True(t, gatewayMetricHasAttributes(metrics, map[attribute.Key]attribute.Value{
+		"http.response.status_code": attribute.Int64Value(http.StatusBadGateway),
+		"gateway_proxy_outcome":     attribute.StringValue(string(middleware.GatewayProxyOutcomeUpstreamTransportFailure)),
+	}))
 	assert.False(t, gatewayMetricHasStatusCode(metrics, statusClientClosedRequest),
 		"genuine upstream failure must not be recorded as 499")
 }
@@ -591,6 +667,12 @@ func collectGatewayMetrics(t *testing.T, reader sdkmetric.Reader) []metricdata.M
 }
 
 func gatewayMetricHasStatusCode(metrics []metricdata.Metrics, code int) bool {
+	return gatewayMetricHasAttributes(metrics, map[attribute.Key]attribute.Value{
+		"http.response.status_code": attribute.Int64Value(int64(code)),
+	})
+}
+
+func gatewayMetricHasAttributes(metrics []metricdata.Metrics, want map[attribute.Key]attribute.Value) bool {
 	for _, metric := range metrics {
 		if metric.Name != "http.server.request.duration" {
 			continue
@@ -600,10 +682,26 @@ func gatewayMetricHasStatusCode(metrics []metricdata.Metrics, code int) bool {
 			continue
 		}
 		for _, point := range histogram.DataPoints {
-			if value, ok := point.Attributes.Value("http.response.status_code"); ok &&
-				value == attribute.Int64Value(int64(code)) {
+			matched := true
+			for key, value := range want {
+				actual, ok := point.Attributes.Value(key)
+				if !ok || actual != value {
+					matched = false
+					break
+				}
+			}
+			if matched {
 				return true
 			}
+		}
+	}
+	return false
+}
+
+func spanHasAttribute(attrs []attribute.KeyValue, key attribute.Key, want string) bool {
+	for _, attr := range attrs {
+		if attr.Key == key && attr.Value == attribute.StringValue(want) {
+			return true
 		}
 	}
 	return false

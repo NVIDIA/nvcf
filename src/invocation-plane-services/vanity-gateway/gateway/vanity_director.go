@@ -19,6 +19,7 @@ package gateway
 
 import (
 	config "ai-api-gateway-service/gateway_config"
+	"ai-api-gateway-service/middleware"
 	"ai-api-gateway-service/pool"
 	"bytes"
 	"context"
@@ -87,10 +88,22 @@ func clientClosedRequest(request *http.Request) bool {
 	return request != nil && errors.Is(request.Context().Err(), context.Canceled)
 }
 
+func addGatewayProxyOutcome(request *http.Request, outcome middleware.GatewayProxyOutcome) {
+	if request == nil {
+		return
+	}
+	middleware.AddGatewayProxyOutcomeMetricAttribute(request.Context(), outcome)
+	trace.SpanFromContext(request.Context()).SetAttributes(traceAttrGatewayProxyOutcome.String(string(outcome)))
+}
+
 // writeProxyError: confirmed client disconnect => 499, everything else => 502.
 func writeProxyError(writer http.ResponseWriter, request *http.Request, err error) {
 	if clientClosedRequest(request) {
-		zap.L().Warn("client closed request before upstream response", zap.Error(err))
+		addGatewayProxyOutcome(request, middleware.GatewayProxyOutcomeClientCanceled)
+		zap.L().Debug("proxy request canceled",
+			zap.String("gateway_proxy_outcome", string(middleware.GatewayProxyOutcomeClientCanceled)),
+			zap.Error(err),
+		)
 		writer.Header().Set("Content-Type", "application/problem+json")
 		writer.WriteHeader(statusClientClosedRequest)
 		_ = json.NewEncoder(writer).Encode(ProblemDetails{
@@ -104,8 +117,12 @@ func writeProxyError(writer http.ResponseWriter, request *http.Request, err erro
 	writeBadGatewayProblem(writer, request, err)
 }
 
-func writeBadGatewayProblem(writer http.ResponseWriter, _ *http.Request, err error) {
-	zap.L().Warn("proxy request failed", zap.Error(err))
+func writeBadGatewayProblem(writer http.ResponseWriter, request *http.Request, err error) {
+	addGatewayProxyOutcome(request, middleware.GatewayProxyOutcomeUpstreamTransportFailure)
+	zap.L().Warn("proxy request failed",
+		zap.String("gateway_proxy_outcome", string(middleware.GatewayProxyOutcomeUpstreamTransportFailure)),
+		zap.Error(err),
+	)
 	writer.Header().Set("Content-Type", "application/problem+json")
 	writer.WriteHeader(http.StatusBadGateway)
 	_ = json.NewEncoder(writer).Encode(ProblemDetails{
