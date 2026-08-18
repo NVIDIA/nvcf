@@ -115,9 +115,12 @@ func TestCreatePodArtifactInstancesTransportTLSSystemDoesNotInjectBundle(t *test
 	kb := newTransportTLSTestBackend(clients, nvcaconfig.TransportTLSConfig{
 		TrustMode: nvcaconfig.TrustModeSystem,
 	})
+	kb.bk8s.cfg.Workload.StargateQUICInsecure = true
 	req := newTransportTLSTestRequest()
+	pod := newTransportTLSTestPod()
+	pod.Spec.Containers[0].Args = []string{"--quic-insecure"}
 
-	_, err := kb.CreatePodArtifactInstances(ctx, newTransportTLSTestPod(), req, transportTLSTestMutator)
+	_, err := kb.CreatePodArtifactInstances(ctx, pod, req, transportTLSTestMutator)
 
 	require.NoError(t, err)
 	_, err = clients.K8s.CoreV1().ConfigMaps(RequestsNamespace).Get(ctx, "nvcf-transport-trust-bundle", metav1.GetOptions{})
@@ -128,7 +131,36 @@ func TestCreatePodArtifactInstancesTransportTLSSystemDoesNotInjectBundle(t *test
 	assert.Nil(t, findTransportTLSInitContainer(createdPod, "nvcf-trust-bundle-install"))
 	llmWorker := findTransportTLSContainer(createdPod, function.LLMWorkerContainerName)
 	require.NotNil(t, llmWorker)
+	assert.Contains(t, llmWorker.Args, "--quic-insecure")
 	assert.Empty(t, findTransportTLSEnvValue(llmWorker, "STARGATE_TLS_CERT_PATH"))
+}
+
+func TestCreatePodArtifactInstancesTransportTLSBundleRejectsQUICInsecureTerminal(t *testing.T) {
+	ctx := newTestContext()
+	clients := makeMockKubeClients()
+	kb := newTransportTLSTestBackend(clients, nvcaconfig.TransportTLSConfig{
+		TrustMode:                nvcaconfig.TrustModeBundle,
+		TrustBundleConfigMapName: "nvcf-transport-trust-bundle",
+		TrustBundleKey:           "nvcf-ca-bundle.pem",
+		TrustBundleFingerprint:   testTransportRootFingerprint,
+		TrustBundlePEM:           testTransportRootCertPEM,
+	})
+	kb.bk8s.cfg.Workload.StargateQUICInsecure = true
+	pod := newTransportTLSTestPod()
+	pod.Spec.Containers[0].Args = []string{"--quic-insecure"}
+
+	_, err := kb.CreatePodArtifactInstances(ctx, pod, newTransportTLSTestRequest(), transportTLSTestMutator)
+
+	require.Error(t, err)
+	assert.True(t, nvcaerrors.IsTerminal(err), "invalid static workload configuration must not be retried")
+	assert.Contains(t, err.Error(), "workload.stargateQUICInsecure=true cannot be used with workload.transportTLS.trustMode=bundle")
+	assert.Contains(t, err.Error(), "set workload.stargateQUICInsecure=false or use trustMode=system")
+	pods, listErr := clients.K8s.CoreV1().Pods(RequestsNamespace).List(ctx, metav1.ListOptions{})
+	require.NoError(t, listErr)
+	assert.Empty(t, pods.Items)
+	_, getErr := clients.K8s.CoreV1().ConfigMaps(RequestsNamespace).Get(ctx, "nvcf-transport-trust-bundle",
+		metav1.GetOptions{})
+	assert.True(t, apierrors.IsNotFound(getErr))
 }
 
 func TestCreatePodArtifactInstancesTransportTLSBundleRejectsMismatchedFingerprint(t *testing.T) {

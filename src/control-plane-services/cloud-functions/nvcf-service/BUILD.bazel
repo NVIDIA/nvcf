@@ -1,4 +1,10 @@
-load("//rules/java:defs.bzl", "nvct_library", "nvct_library_test")
+load(
+    "//rules/java:defs.bzl",
+    "NVCF_JAVA_ERROR_PRONE_COMPAT_JAVACOPTS",
+    "nvcf_java_coverage_test",
+    "nvcf_java_library",
+    "nvcf_java_test",
+)
 load("//rules/java:spring.bzl", "spring_boot_app")
 load("//rules/oci:defs.bzl", "java_image_contract_test", "java_oci_image")
 
@@ -25,10 +31,11 @@ NVCF_SERVICE_DEPS = [
     "@nv_third_party_deps//:org_springframework_boot_spring_boot_security",
 ]
 
-nvct_library(
+nvcf_java_library(
     name = "app_classes",
     srcs = NVCF_SERVICE_SRCS,
     deps = NVCF_SERVICE_DEPS,
+    javacopts = NVCF_JAVA_ERROR_PRONE_COMPAT_JAVACOPTS,
     resource_strip_prefix = "src/control-plane-services/cloud-functions/nvcf-service/src/main/resources",
     resources = NVCF_SERVICE_RESOURCES,
     visibility = ["//visibility:private"],
@@ -45,10 +52,10 @@ spring_boot_app(
     main_class = "com.nvidia.nvcf.App",
 )
 
-nvct_library_test(
+nvcf_java_test(
     name = "tests",
-    coverage_library = ":app_classes",
     srcs = NVCF_SERVICE_TEST_SRCS,
+    javacopts = NVCF_JAVA_ERROR_PRONE_COMPAT_JAVACOPTS,
     deps = [
         ":app_classes",
         "//src/control-plane-services/cloud-functions/nvcf-core:nvcf_core",
@@ -72,10 +79,25 @@ nvct_library_test(
         "//src/control-plane-services/cloud-functions:integration_local_env",
     ],
     resources = NVCF_SERVICE_TEST_RESOURCES,
+    size = "large",
     tags = [
         "exclusive",
+        "external",
         "requires-docker",
     ],
+    timeout = "long",
+)
+
+nvcf_java_coverage_test(
+    name = "tests_coverage",
+    coverage_target = ":app_classes",
+    size = "large",
+    tags = [
+        "exclusive",
+        "external",
+        "requires-docker",
+    ],
+    test = ":tests",
     timeout = "long",
 )
 

@@ -156,8 +156,9 @@ func InjectIntoPodSpec(podSpec *corev1.PodSpec, cfg nvcaconfig.TransportTLSConfi
 	if err := validateInstalledBundleMountConflict(&podSpec.Containers[llmWorkerIdx], cfg.InstalledBundleMountPath); err != nil {
 		return err
 	}
+	llmWorkerResources := *podSpec.Containers[llmWorkerIdx].Resources.DeepCopy()
 	upsertVolumes(podSpec, cfg)
-	upsertInstallContainer(podSpec, installImage, installImagePullPolicy, cfg)
+	upsertInstallContainer(podSpec, installImage, installImagePullPolicy, llmWorkerResources, cfg)
 
 	llmWorker := &podSpec.Containers[llmWorkerIdx]
 	upsertVolumeMount(&llmWorker.VolumeMounts, corev1.VolumeMount{
@@ -234,12 +235,14 @@ func upsertInstallContainer(
 	podSpec *corev1.PodSpec,
 	image string,
 	imagePullPolicy corev1.PullPolicy,
+	resources corev1.ResourceRequirements,
 	cfg nvcaconfig.TransportTLSConfig,
 ) {
 	upsertContainer(&podSpec.InitContainers, corev1.Container{
 		Name:            InstallContainerName,
 		Image:           image,
 		ImagePullPolicy: imagePullPolicy,
+		Resources:       resources,
 		Command:         []string{InstallCommandPath},
 		Args: []string{
 			"--system-bundle", SystemCertFile,

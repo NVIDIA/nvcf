@@ -166,14 +166,8 @@ func runService(cfg config.Config) error {
 	var requireLocalScopeCheck = false
 
 	if cfg.Auth.Enabled {
-		// Check for a static policy bearer token before validation so that
-		// ValidateAuthConfig can accurately skip OAuth2 field checks.
-		const policyBearerTokenKey = "policy-bearer-token"
-		_, hasStaticPolicyTokenErr := credentials.ReadTokenFromFile(secretsPath, policyBearerTokenKey)
-		hasStaticPolicyToken := hasStaticPolicyTokenErr == nil
-
 		// Validate auth configuration
-		if err := config.ValidateAuthConfig(cfg.Auth, hasStaticPolicyToken); err != nil {
+		if err := config.ValidateAuthConfig(cfg.Auth, cfg.SelfManaged); err != nil {
 			logger.Error("invalid auth configuration", zap.Error(err))
 			return err
 		}
@@ -237,27 +231,18 @@ func runService(cfg config.Config) error {
 
 			var policyClient policy.Authorizer
 
-			// If a bearer token exists in the secrets file, use it to authenticate
-			// outbound calls to the policy evaluator when no OAuth2 token issuer is available.
+			// Use a static (no-auth) client in self-managed deployments.
 			// Otherwise fall back to the OAuth2 client-credentials flow.
-			if hasStaticPolicyToken {
-				logger.Warn("using static bearer token for policy evaluator",
-					zap.String("secrets_path", secretsPath))
+			if cfg.SelfManaged {
+				logger.Warn("self-managed mode: using api-keys client for policy evaluator")
 
-				tokenReader, err := credentials.NewBearerTokenReader(secretsPath, policyBearerTokenKey)
-				if err != nil {
-					logger.Error("failed to create bearer token reader", zap.Error(err))
-					return fmt.Errorf("failed to create bearer token reader: %w", err)
-				}
-
-				policyClient = policy.NewStaticBearerClient(
+				policyClient = policy.NewApiKeysClient(
 					cfg.Auth.Policy.PolicyEvaluatorAddr,
 					policyConfig,
-					tokenReader,
 					middleware.GetSharedHTTPClient(&cfg.HTTP),
 				)
 			} else {
-				logger.Warn("static bearer token not found, using OAuth2 for policy evaluator",
+				logger.Warn("using OAuth2 for policy evaluator",
 					zap.String("token_issuer", cfg.Auth.Policy.TokenIssuerAddr))
 
 				oidcConfig := &auth.ProviderConfig{

@@ -191,8 +191,8 @@ func (p *SharedVolumePromoter) Promote(ctx context.Context, in PromoteInput) (Pr
 }
 
 func (p *SharedVolumePromoter) ensureSecondaryPV(ctx context.Context, primary *corev1.PersistentVolume, secName, roxName, ns string) error {
-	if _, err := p.KubeClient.CoreV1().PersistentVolumes().Get(ctx, secName, metav1.GetOptions{}); err == nil {
-		return nil // idempotent
+	if existing, err := p.KubeClient.CoreV1().PersistentVolumes().Get(ctx, secName, metav1.GetOptions{}); err == nil {
+		return p.releaseStaleBinding(ctx, existing, roxName, ns)
 	} else if !apierrors.IsNotFound(err) {
 		return fmt.Errorf("get secondary PV %s: %w", secName, err)
 	}
@@ -231,6 +231,59 @@ func (p *SharedVolumePromoter) ensureSecondaryPV(ctx context.Context, primary *c
 	sec.Status = corev1.PersistentVolumeStatus{}
 	if _, err := p.KubeClient.CoreV1().PersistentVolumes().Create(ctx, sec, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("create secondary PV %s: %w", secName, err)
+	}
+	return nil
+}
+
+// releaseStaleBinding returns an already-existing per-capture PV to Available
+// when its previous claim is gone.
+//
+// We pre-bind the PV with a claimRef carrying only name + namespace, which is
+// what lets a statically provisioned volume wait for a specific PVC. On
+// binding, Kubernetes stamps that claimRef with the PVC's UID. The reclaim
+// policy is Retain, so deleting the PVC leaves the PV in Released with the
+// dead UID still pinned -- and a freshly created PVC of the same name gets a
+// new UID, which no longer matches, so the binder refuses it. The claim stays
+// Pending forever and the restore pod never schedules:
+//
+//	0/6 nodes are available: pod has unbound immediate PersistentVolumeClaims
+//
+// Without this, any capture whose PVC is deleted once becomes permanently
+// unrestorable even though its data is intact.
+//
+// Clearing the binding fields is the documented manual recovery for a
+// Released volume. Doing it automatically is safe here only because these PVs
+// are per-capture, content-addressed and read-only, and pre-bound to a
+// deterministic claim name: we touch the PV solely when its claimRef still
+// names the rox claim we are about to (re)create, so we can never steal a
+// volume from an unrelated claim. Released is set by Kubernetes only after
+// the claim is actually gone, so there is no live claim to disturb.
+func (p *SharedVolumePromoter) releaseStaleBinding(ctx context.Context, pv *corev1.PersistentVolume, roxName, ns string) error {
+	if pv.Status.Phase != corev1.VolumeReleased {
+		return nil // Available or Bound: nothing to reconcile
+	}
+	// Not ours to reclaim: surface it rather than silently proceeding, since
+	// the PVC will otherwise stay Pending with no stated reason.
+	cr := pv.Spec.ClaimRef
+	if cr == nil {
+		return fmt.Errorf("per-capture PV %s is Released with no claimRef; refusing to rebind it to %s/%s",
+			pv.Name, ns, roxName)
+	}
+	if cr.Name != roxName || cr.Namespace != ns {
+		return fmt.Errorf("per-capture PV %s is Released but reserved for %s/%s, not %s/%s; refusing to rebind",
+			pv.Name, cr.Namespace, cr.Name, ns, roxName)
+	}
+	patched := pv.DeepCopy()
+	// Drop only the identity of the dead claim; keep the reservation so the
+	// PV cannot be grabbed by some other pending claim in the meantime.
+	patched.Spec.ClaimRef = &corev1.ObjectReference{
+		APIVersion: "v1",
+		Kind:       "PersistentVolumeClaim",
+		Name:       roxName,
+		Namespace:  ns,
+	}
+	if _, err := p.KubeClient.CoreV1().PersistentVolumes().Update(ctx, patched, metav1.UpdateOptions{}); err != nil {
+		return fmt.Errorf("clear stale claimRef on released PV %s: %w", pv.Name, err)
 	}
 	return nil
 }

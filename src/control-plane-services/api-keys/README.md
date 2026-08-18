@@ -80,3 +80,27 @@ The `/health` endpoint is also exposed on the main HTTP port without authenticat
 The component `NOTICE` is generated from the Bazel executable runtime. Use the
 commands in [BAZEL.md](BAZEL.md). Do not restore source-repository NOTICE
 generation commands in this imported subtree.
+
+## Run the app from IntelliJ IDEA
+
+1. Open the monorepo root as a Bazel project.
+2. Open `Settings` > `Build, Execution, Deployment` > `Build Tools` >
+   `Bazel`.
+3. Set `Project View Path` to
+   `<monorepo-root>/tools/intellij/.managed.bazelproject` and sync the
+   project.
+4. Run `@//src/control-plane-services/api-keys:app_run` from the Bazel tool
+   window or the gutter beside `App.main()`.
+5. Open the generated `Bazel` run configuration. Keep `Run with Bazel`
+   selected.
+6. Add these values to `CLI arguments to your application`, replacing the
+   example root with the absolute path to this checkout:
+
+   ```text
+   --jvm_flag=-Dspring.profiles.active=local
+   --jvm_flag=-Dnv-boot.reloadable-properties.file=file:/absolute/path/to/nvcf/src/control-plane-services/api-keys/local_env/vault/secrets.json
+   ```
+
+Bazel runs the application from its runfiles tree. The absolute secrets path
+keeps the external file outside Bazel while making it available to Spring.
+Do not set `-Duser.dir`; it breaks Bazel's relative Java classpath.

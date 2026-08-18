@@ -640,6 +640,108 @@ class GithubReleaseTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.github_release.initial_floor_version(service)
 
+    def composite_byoo_service(self):
+        return {
+            "id": "byoo-otel-collector",
+            "path": "src/compute-plane-services/byoo-otel-collector",
+            "service_name": "byoo-otel-collector",
+            "tag_format": "src/compute-plane-services/byoo-otel-collector/v${upstream_version}-nv-${version}",
+            "tag_upstream_version_file": "otel-collector-build.yaml",
+            "tag_upstream_version_pattern": "(?m)^\\s*otelcol_version:\\s*(?P<version>(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*))\\s*$",
+            "initial_version": "0.0.0",
+            "reset_release_history": True,
+            "release_history_marker_file": "RELEASE_SERIES_START",
+            "legacy_tag_prefixes": [
+                "src/compute-plane-services/byoo-otel-collector/v",
+                "byoo-otel-collector-v",
+            ],
+        }
+
+    def write_composite_byoo_source(self, root, upstream_version):
+        service_dir = root / "src/compute-plane-services/byoo-otel-collector"
+        service_dir.mkdir(parents=True, exist_ok=True)
+        (service_dir / "otel-collector-build.yaml").write_text(
+            f"dist:\n  module: example.test/byoo\n  otelcol_version: {upstream_version}\n"
+            "exporters:\n  - gomod: example.test/incidental v9.9.9\n"
+        )
+        (service_dir / "README.md").write_text("BYOO\n")
+
+    def test_composite_tag_starts_a_wrapper_series_without_using_legacy_tags(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_repo(root)
+            self.write_composite_byoo_source(root, "0.157.0")
+            self.commit_all(root, "feat(byoo): import collector")
+            git(root, "tag", "src/compute-plane-services/byoo-otel-collector/v0.157.19")
+            marker = root / "src/compute-plane-services/byoo-otel-collector" / "RELEASE_SERIES_START"
+            marker.write_text("semantic-release wrapper series\n")
+            self.commit_all(root, "feat(byoo): adopt wrapper semantic releases")
+            service = self.composite_byoo_service()
+
+            with chdir(root), contextlib.redirect_stdout(io.StringIO()):
+                self.github_release.synthesize_current_prefix_anchor(root, service)
+                self.github_release.synthesize_initial_version_anchor(root, service)
+
+            self.assertIn(
+                "src/compute-plane-services/byoo-otel-collector/v0.157.0-nv-0.0.0",
+                self._tags(root),
+            )
+            self.assertEqual(
+                self.github_release.tag_sha(
+                    root,
+                    "src/compute-plane-services/byoo-otel-collector/v0.157.0-nv-0.0.0",
+                ),
+                self.github_release.run(["git", "rev-parse", "HEAD^"], cwd=root, capture=True).strip(),
+            )
+            self.assertEqual(
+                self.github_release.tag_for_version(service, "0.1.0", root),
+                "src/compute-plane-services/byoo-otel-collector/v0.157.0-nv-0.1.0",
+            )
+            parsed = self.github_release.parse_release_tag(
+                "src/compute-plane-services/byoo-otel-collector/v0.157.0-nv-0.1.0",
+                {"version": 1, "services": [service]},
+                root,
+            )
+            self.assertEqual(parsed["package"], "byoo-otel-collector")
+            self.assertEqual(parsed["version"], "0.1.0")
+
+    def test_composite_tag_keeps_the_wrapper_series_across_an_upstream_bump(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_repo(root)
+            self.write_composite_byoo_source(root, "0.157.0")
+            self.commit_all(root, "feat(byoo): import collector")
+            service = self.composite_byoo_service()
+            git(root, "tag", self.github_release.tag_for_version(service, "0.1.0", root))
+
+            self.write_composite_byoo_source(root, "1.0.0")
+            self.commit_all(root, "feat(byoo): update collector")
+            with chdir(root), contextlib.redirect_stdout(io.StringIO()):
+                self.github_release.synthesize_current_prefix_anchor(root, service)
+
+            self.assertIn(
+                "src/compute-plane-services/byoo-otel-collector/v1.0.0-nv-0.1.0",
+                self._tags(root),
+            )
+
+    def test_byoo_release_metadata_uses_composite_tags_without_a_version_file(self):
+        root = SCRIPT_PATH.parents[2]
+        metadata = json.loads(SCRIPT_PATH.with_name("github-release-subprojects.json").read_text())
+        service = next(s for s in metadata["services"] if s["id"] == "byoo-otel-collector")
+        self.assertNotIn("version_file", service)
+        self.assertNotIn("version_major_minor_source_file", service)
+        self.assertEqual(service["initial_version"], "0.0.0")
+        self.assertTrue(service["reset_release_history"])
+        self.assertEqual(service["release_history_marker_file"], "RELEASE_SERIES_START")
+        self.assertEqual(
+            service["tag_format"],
+            "src/compute-plane-services/byoo-otel-collector/v${upstream_version}-nv-${version}",
+        )
+        self.assertEqual(
+            self.github_release.tag_for_version(service, "0.1.0", root),
+            "src/compute-plane-services/byoo-otel-collector/v0.157.0-nv-0.1.0",
+        )
+
     def test_cloud_tasks_chart_continues_its_published_lineage(self):
         # This chart migrated in from its own colocated-deploy repo with 11
         # versions already published as helm-nvcf-nvct-api, the newest 1.4.4.

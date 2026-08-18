@@ -3,4 +3,4 @@ appVersion: 1.32.1
 description: Helm chart for the NVCF Vanity Gateway
 name: helm-nvcf-vanity-gateway
 type: application
-version: 0.1.0-nvcf-10204.1
+version: 0.0.0 # autoversioning enabled via release pipeline

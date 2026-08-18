@@ -715,6 +715,10 @@ fn algorithm_specific_load_balancer_fields_are_rejected_for_other_algorithms() {
             "consider_kv_free_tokens",
         ),
         (r#"{"algorithm":"random","sample_count":4}"#, "sample_count"),
+        (
+            r#"{"algorithm":"random","comparator":"ttft"}"#,
+            "comparator",
+        ),
     ] {
         assert_json_rejected::<LoadBalancerAlgorithmConfig>(raw, expected_field);
     }
@@ -728,6 +732,88 @@ fn power_of_n_sample_count_defaults_to_two() {
         .expect("power-of-n config should expose settings");
 
     assert_eq!(settings.sample_count, 2);
+}
+
+#[test]
+fn comparator_defaults_to_ttft_only_for_supported_algorithms() {
+    for algorithm in [
+        LoadBalancerAlgorithm::PowerOfN,
+        LoadBalancerAlgorithm::WaitAndWiden,
+    ] {
+        assert_eq!(
+            LoadBalancerAlgorithmConfig::from(algorithm).comparator(),
+            Some(ClusterComparator::Ttft)
+        );
+    }
+
+    for algorithm in [
+        LoadBalancerAlgorithm::RoundRobin,
+        LoadBalancerAlgorithm::Random,
+        LoadBalancerAlgorithm::Pulsar,
+        LoadBalancerAlgorithm::PulsarWaitAndWiden,
+    ] {
+        assert_eq!(
+            LoadBalancerAlgorithmConfig::from(algorithm).comparator(),
+            None
+        );
+    }
+}
+
+#[test]
+fn configured_comparators_resolve_for_models_and_request_overrides() {
+    let direct: LoadBalancerAlgorithmConfig =
+        parse_json(r#"{"algorithm":"power-of-n","comparator":"input-work-seconds"}"#);
+    assert_eq!(
+        direct.comparator(),
+        Some(ClusterComparator::InputWorkSeconds)
+    );
+
+    let router = router_from_json(
+        r#"{"default":"random","request_algorithms":{"power-of-n":{"algorithm":"power-of-n","comparator":"queue-time"}},"models":{"model-a":{"algorithm":"wait-and-widen","comparator":"utilization","request_algorithms":{"power-of-n":{"algorithm":"power-of-n","comparator":"num-requests-queued"}}}}}"#,
+    );
+    assert_eq!(
+        router.algorithm_config("model-a").comparator(),
+        Some(ClusterComparator::Utilization)
+    );
+
+    let override_header = LoadBalancerAlgorithmOverride::parse("power-of-n")
+        .expect("power-of-n override should parse");
+    assert_eq!(
+        router
+            .resolve_algorithm_override("model-a", Some(&override_header))
+            .expect("model request override should resolve")
+            .config()
+            .comparator(),
+        Some(ClusterComparator::NumRequestsQueued)
+    );
+    assert_eq!(
+        router
+            .resolve_algorithm_override("model-b", Some(&override_header))
+            .expect("top-level request override should resolve")
+            .config()
+            .comparator(),
+        Some(ClusterComparator::QueueTime)
+    );
+}
+
+#[test]
+fn pulsar_wait_and_widen_rejects_explicit_comparator() {
+    let config: LoadBalancerConfig = parse_json(
+        r#"{"models":{"model-a":{"algorithm":"pulsar-wait-and-widen","comparator":"ttft"}}}"#,
+    );
+    let error = match LoadBalancerRouter::from_config(&config) {
+        Ok(_) => panic!("pulsar-wait-and-widen comparator should be rejected"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("comparator is not supported for pulsar-wait-and-widen")
+    );
+    assert_json_rejected::<LoadBalancerAlgorithmConfig>(
+        r#"{"algorithm":"pulsar-wait-and-widen","comparator":null}"#,
+        "invalid type: null",
+    );
 }
 
 #[test]
@@ -1598,8 +1684,107 @@ fn request_excluded_clusters_are_not_selected() {
     assert_eq!(chosen.candidate.cluster_id, "cluster-1");
 }
 
+#[test]
+fn power_of_n_uses_each_configured_comparator() {
+    let cases = [
+        (
+            ClusterComparator::Ttft,
+            [
+                candidate("preferred", 1024).with_rtt_ms(1),
+                candidate("other", 1024).with_rtt_ms(100),
+            ],
+        ),
+        (
+            ClusterComparator::QueueTime,
+            [
+                priority_candidate("preferred", 0, 1).with_rtt_ms(100),
+                priority_candidate("other", 0, 50).with_rtt_ms(1),
+            ],
+        ),
+        (
+            ClusterComparator::InputWorkSeconds,
+            [
+                work_candidate("preferred", 100, 1000.0, 100),
+                work_candidate("other", 100, 10.0, 100),
+            ],
+        ),
+        (
+            ClusterComparator::Utilization,
+            [
+                concurrency_candidate("preferred", 100, 10, 1),
+                concurrency_candidate("other", 1, 10, 9),
+            ],
+        ),
+        (
+            ClusterComparator::NumRequestsQueued,
+            [
+                candidate("preferred", 1024)
+                    .with_rtt_ms(100)
+                    .with_stats(|stats| stats.queue_size = 1),
+                candidate("other", 1024)
+                    .with_rtt_ms(1)
+                    .with_stats(|stats| stats.queue_size = 10),
+            ],
+        ),
+    ];
+    let target = target();
+    let request = request(&target, None, Some(100));
+
+    for (comparator, candidates) in cases {
+        let mut config = LoadBalancerAlgorithmConfig::from(LoadBalancerAlgorithm::PowerOfN);
+        let settings = config
+            .power_of_n_settings_mut()
+            .expect("power-of-n config should expose settings");
+        settings.sample_count = 2;
+        settings.comparator = comparator;
+        let load_balancer =
+            create_load_balancer_with_config(&config).expect("comparator config should be valid");
+
+        let chosen = choose(load_balancer.as_ref(), &request, &candidates);
+        assert_eq!(chosen.candidate.cluster_id, "preferred", "{comparator}");
+    }
+}
+
+#[test]
+fn wait_and_widen_uses_comparator_in_every_selection_path() {
+    let candidates = [
+        candidate("lower-ttft-higher-queue", 1024)
+            .with_rtt_ms(5)
+            .with_stats(|stats| stats.queue_size = 10),
+        candidate("higher-ttft-lower-queue", 1024)
+            .with_rtt_ms(50)
+            .with_stats(|stats| stats.queue_size = 1),
+    ];
+    let target = target();
+
+    for (cache_affinity_key, ignore_queue_time) in
+        [(None, false), (None, true), (Some("prefix-a"), false)]
+    {
+        let load_balancer = wait_and_widen_load_balancer(|settings| {
+            settings.comparator = Some(ClusterComparator::NumRequestsQueued);
+            settings.ttft_bucket_size_ms = Some(100);
+            settings.n = Some(2);
+            settings.ignore_queue_time = ignore_queue_time.then_some(true);
+            if cache_affinity_key.is_some() {
+                settings.seed = Some("seed-1".to_string());
+                settings.cache_affinity_virtual_nodes = Some(8);
+                settings.cache_affinity_backend_selection_count = Some(2);
+            }
+        });
+        let request = request(&target, cache_affinity_key, Some(1));
+
+        assert_repeated_choice(
+            load_balancer.as_ref(),
+            &request,
+            &candidates,
+            8,
+            "higher-ttft-lower-queue",
+        );
+    }
+}
+
 wait_and_widen_choice_tests! {
-    wait_and_widen_prefers_lower_estimated_ttft:
+    wait_and_widen_prefers_lower_ttft:
     |_| {};
     |target| request(target, None, Some(10));
     [
@@ -1842,7 +2027,7 @@ fn wait_and_widen_cache_affinity_is_skipped_without_header() {
 }
 
 wait_and_widen_choice_tests! {
-    wait_and_widen_uses_input_tokens_in_ttft_estimate:
+    wait_and_widen_uses_input_tokens_in_ttft:
     |_| {};
     |target| request(target, None, Some(100));
     [
@@ -1851,7 +2036,7 @@ wait_and_widen_choice_tests! {
     ];
     1 => "higher-rtt-higher-cap";
 
-    wait_and_widen_can_ignore_input_processing_time_in_ttft_estimate:
+    wait_and_widen_can_ignore_input_processing_time_in_ttft:
     |settings| settings.ignore_input_processing_time = Some(true);
     |target| request(target, None, Some(100));
     [
@@ -1879,7 +2064,7 @@ fn wait_and_widen_limits_selection_to_first_ttft_bucket() {
 }
 
 wait_and_widen_choice_tests! {
-    wait_and_widen_can_ignore_queue_time_in_ttft_estimate:
+    wait_and_widen_can_ignore_queue_time_in_ttft:
     |settings| settings.ignore_queue_time = Some(true);
     |target| request(target, None, Some(0));
     [
@@ -2136,7 +2321,7 @@ wait_and_widen_choice_tests! {
 }
 
 #[test]
-fn wait_and_widen_ttft_estimator_uses_priority_queue_and_ignore_flags() {
+fn wait_and_widen_ttft_uses_priority_queue_and_ignore_flags() {
     let mut candidate = work_candidate("estimated", 7, 100.0, 999);
     candidate.stats.queue_time_estimate_ms_by_priority = HashMap::from([(4, 25)]);
 
