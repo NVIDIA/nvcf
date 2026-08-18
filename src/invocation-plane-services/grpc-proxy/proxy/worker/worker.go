@@ -154,12 +154,13 @@ func (w *WorkerConnection) SetConnection(conn net.Conn) error {
 			w.MarkClosed(time.Now())
 			w.onInactive()
 		}
-		conn := net.Conn(wrapped)
 		dialOnce := atomic.Bool{}
 		dialContext := func(ctx context.Context, network, addr string) (net.Conn, error) {
 			if !dialOnce.Swap(true) {
 				w.onActive()
-				return conn, nil
+				// Hand out the wrapper, not the raw conn: it is what records
+				// the transport error used to explain the close.
+				return wrapped, nil
 			}
 			return nil, fmt.Errorf("can only dial once")
 		}
@@ -210,7 +211,7 @@ func (w *WorkerConnection) SetConnection(conn net.Conn) error {
 			return
 		}
 		w.handler.Store(handler)
-		w.closeWorkerConn = conn // implements io.Closer
+		w.closeWorkerConn = wrapped // implements io.Closer
 		close(w.connPopulated)
 		set = true
 	})

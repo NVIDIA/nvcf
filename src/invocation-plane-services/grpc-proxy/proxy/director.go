@@ -168,6 +168,12 @@ func NewStreamDirector(functionInvoker FunctionInvoker) *StreamDirector {
 			// leaving the field empty.
 			closedAt = time.Now()
 		}
+		// held_for is now measured to the close itself rather than to whenever
+		// this callback ran. The callback can lag the close, so the old value
+		// was the tunnel's lifetime plus an unknown amount of cache latency,
+		// which is precisely the error that makes cross-component correlation
+		// hard. Where no close was stamped the fallback above reproduces the
+		// previous behaviour exactly.
 		heldFor := closedAt.Sub(wc.CreatedAt)
 		closeInfo := worker.ClassifyCloseError(wc.CloseError())
 

@@ -28,7 +28,9 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/quic-go/quic-go"
 	"golang.org/x/net/http2"
 )
@@ -209,3 +211,32 @@ func (s *stubConn) Read([]byte) (int, error) {
 
 func (s *stubConn) Write(b []byte) (int, error) { return len(b), nil }
 func (s *stubConn) Close() error                { return nil }
+
+func TestMarkClosedFirstWriterWins(t *testing.T) {
+	w := NewWorkerConnection(uuid.New(), "fn", "ver", func() {}, func() {})
+	if !w.ClosedAt().IsZero() {
+		t.Fatal("ClosedAt() should be zero before any close is stamped")
+	}
+	first := time.Now()
+	second := first.Add(time.Second)
+	w.MarkClosed(first)
+	w.MarkClosed(second)
+	if got := w.ClosedAt(); !got.Equal(first) {
+		t.Errorf("ClosedAt() = %v, want %v: a later cascade must not overwrite the real close", got, first)
+	}
+}
+
+func TestSetCloseErrorFirstWriterWinsAndIgnoresNil(t *testing.T) {
+	w := NewWorkerConnection(uuid.New(), "fn", "ver", func() {}, func() {})
+	if w.CloseError() != nil {
+		t.Fatal("CloseError() should be nil before any error is recorded")
+	}
+	// A nil must not occupy the slot, or the real error that follows is lost.
+	w.SetCloseError(nil)
+	real := errors.New("real cause")
+	w.SetCloseError(real)
+	w.SetCloseError(errors.New("cascade"))
+	if got := w.CloseError(); !errors.Is(got, real) {
+		t.Errorf("CloseError() = %v, want %v", got, real)
+	}
+}
