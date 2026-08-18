@@ -88,22 +88,42 @@ jobs:
             # should not be pulled into memory.
             value=$(head -c 512 "$path")
             value=${value%$'\n'}
-            if printf '%s' "$value" | LC_ALL=C grep -q '[[:cntrl:]]'; then
-              echo "::error::$path contains control characters" >&2
-              return 1
-            fi
+            # Match with bash, not grep. grep splits its input on LF, so a
+            # bracket expression can never match one, and an anchored pattern
+            # matches if any single line matches. LF is precisely the
+            # $GITHUB_OUTPUT injection character, so a grep-based guard passes
+            # the one input it most needs to reject. Bash patterns have no
+            # concept of a line and test the whole string.
+            case $value in
+              *[[:cntrl:]]*)
+                echo "::error::$path contains control characters" >&2
+                return 1
+                ;;
+            esac
             printf '%s' "$value"
           }
 
           pr_number=$(read_one_line preview-metadata/pr_number)
           head_ref=$(read_one_line preview-metadata/head_ref)
 
-          if ! printf '%s' "$pr_number" | grep -Eq '^[0-9]{1,10}$'; then
+          # Same reason as above: bash =~ anchors against the whole string,
+          # where grep -E '^...$' would anchor per line.
+          if ! [[ $pr_number =~ ^[0-9]{1,10}$ ]]; then
             echo "::error::pr_number from the artifact is not a plain number"
             exit 1
           fi
           # git decides what a valid ref is. A character-class pattern accepted
           # ../evil, foo//bar, /foo, foo/ and -x, all of which git rejects.
+          # Reject a leading dash before git sees it. check-ref-format has no
+          # -- separator, so it would parse the value as an option and exit on
+          # a usage error: the right verdict reached by accident, and one that
+          # would silently change if git ever grew a matching option.
+          case $head_ref in
+            -*)
+              echo "::error::head_ref from the artifact starts with a dash"
+              exit 1
+              ;;
+          esac
           if ! git check-ref-format --allow-onelevel "$head_ref"; then
             echo "::error::head_ref from the artifact is not a valid git ref"
             exit 1
