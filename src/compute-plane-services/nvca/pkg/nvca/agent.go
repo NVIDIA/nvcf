@@ -1670,8 +1670,8 @@ func (a *Agent) PutICMSRequestAcknowledgement(ctx context.Context) error {
 			req.Spec.CreationMsgInfo.InstanceCount,
 			req.Spec.GetTraceContext())
 		if err != nil {
-			a.backendk8scache.eventRecorder.Eventf(req, v1.EventTypeWarning,
-				string(types.EventCategoryInstanceStatusUpdate), "Acknowledgement failed: %v", err)
+			a.backendk8scache.AnnotatedICMSEventf(req, v1.EventTypeWarning,
+				string(types.EventCategoryInstanceStatusUpdate), "Acknowledgement failed: %v", nil, err)
 			log.WithError(err).Error("Failed to acknowledge request")
 
 			// If it has only been five minutes since the request was created, and a 404 is return, retry
@@ -1735,8 +1735,8 @@ func (a *Agent) PutICMSRequestAcknowledgement(ctx context.Context) error {
 				if !ackSR(ctx, req) {
 					return
 				}
-				a.backendk8scache.eventRecorder.Event(req, v1.EventTypeNormal, string(types.EventCategoryInstanceStatusUpdate),
-					"Request accepted for processing")
+				a.backendk8scache.AnnotatedICMSEvent(req, v1.EventTypeNormal, string(types.EventCategoryInstanceStatusUpdate),
+					"Request accepted for processing", nil)
 
 				// If ACK is successful, purge the message now
 				err = a.queueManager.DeleteCreationMessageV2(ctx, req.Spec.MessageReceipt, req.Spec.CreationMsgInfo.QueueURL)
@@ -1796,8 +1796,8 @@ func (a *Agent) putTaskICMSRequestAcknowledgementAfterScheduled(
 			if !ackSR(ctx, req) {
 				return
 			}
-			a.backendk8scache.eventRecorder.Event(req, v1.EventTypeNormal, string(types.EventCategoryInstanceStatusUpdate),
-				"Request accepted for processing")
+			a.backendk8scache.AnnotatedICMSEvent(req, v1.EventTypeNormal, string(types.EventCategoryInstanceStatusUpdate),
+				"Request accepted for processing", nil)
 
 			modify := func(ctx context.Context, sr *nvcav2beta1.ICMSRequest) {
 				sr.Status.LastACKTimestamp = &metav1.Time{Time: core.GetCurrentTime(ctx)}
@@ -1845,8 +1845,8 @@ func (a *Agent) putTaskICMSRequestAcknowledgementAfterScheduled(
 				}
 				return
 			}
-			a.backendk8scache.eventRecorder.Event(req, v1.EventTypeNormal, string(types.EventCategoryInstanceCreation),
-				"Message visibility extended")
+			a.backendk8scache.AnnotatedICMSEvent(req, v1.EventTypeNormal, string(types.EventCategoryInstanceCreation),
+				"Message visibility extended", nil)
 
 			modify := func(ctx context.Context, sr *nvcav2beta1.ICMSRequest) {
 				sr.Status.LastStatusUpdated = &metav1.Time{Time: core.GetCurrentTime(ctx)}
@@ -2102,8 +2102,8 @@ func (a *Agent) PostICMSInstanceRequestStatusUpdates(ctx context.Context) error 
 					}
 					continue
 				}
-				a.backendk8scache.eventRecorder.Eventf(req, v1.EventTypeNormal,
-					string(types.EventCategoryInstanceStatusUpdate), "%v is %v", ru.InstanceID, ruPayload.InstanceState)
+				a.backendk8scache.AnnotatedICMSEventf(req, v1.EventTypeNormal,
+					string(types.EventCategoryInstanceStatusUpdate), "%v is %v", &ru, ru.InstanceID, ruPayload.InstanceState)
 				// successfully posted this update so this has to be updated to Status
 				postedInstanceStatus[ru.InstanceID] = getPostedInstanceStatus(ctx, ru)
 			}
