@@ -5,10 +5,10 @@ Quick reference for NVCF (NVIDIA Cloud Functions) in this repository.
 ## Repo Layout
 
 This repo is an umbrella layout: upstream services appear as ordinary
-directories arranged under `src/`, `deploy/`, `infra/`, and `migrations/`
-according to `imports.yaml`. Goal: over time, land and maintain code here
-natively while upstream-owned sources are still tracked by commit pin. Tooling
-lives under `tools/` and `tests/`.
+directories arranged under `src/`, `deploy/`, `infra/`, and `migrations/`.
+Goal: over time, land and maintain code here natively while upstream-owned
+sources are still tracked by commit pin. Tooling lives under `tools/` and
+`tests/`.
 
 Use `python3`, not `python`, when Python is needed. Use the nearest nested `AGENTS.md` for subtree-specific guidance.
 
@@ -16,7 +16,6 @@ Useful pointers:
 - `BAZEL.md` for the contributor-facing Bazel build path
 - `docs/AGENTS.md` for in-repo user and developer documentation
 - `tools/AGENTS.md` for repo tooling
-- `imports.yaml` for subtree ownership and commit pins
 - `.cursor/skills/documentation-style/SKILL.md` for docs style
 - `.cursor/skills/` for root dev-skill symlink fanout
 - `ai-tooling/user/skills/` and `ai-tooling/dev/skills/` for public skills
@@ -31,10 +30,10 @@ documentation changes through an external documentation repository or an
 external workspace index. Start with `docs/AGENTS.md` and the nearest nested
 guidance.
 
-Use `imports.yaml` to decide whether a subtree is monorepo-native or still
-owned by an upstream repo. Native subprojects are edited here. Upstream-owned
-subtrees usually need the change in the upstream repo and a later commit-pin
-update.
+Read the subtree `AGENTS.md` to decide whether a subtree is monorepo-native or
+still owned by an upstream repo: a subtree with its own build and test commands
+is native and is edited here. Upstream-owned subtrees usually need the change in
+the upstream repo and a later commit-pin update.
 
 For self-managed stack ownership, deployment order, chart/image-source mapping,
 or "which subtree owns this" questions, use:

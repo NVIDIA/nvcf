@@ -218,13 +218,14 @@ func findRepoRoot() (string, error) {
 	}
 	dir := wd
 	for {
-		candidate := filepath.Join(dir, "imports.yaml")
-		if st, err := os.Stat(candidate); err == nil && !st.IsDir() {
+		// .git is a directory in a normal clone and a file in a worktree, so
+		// only presence is checked.
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
 			return dir, nil
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return "", fmt.Errorf("imports.yaml not found (started from %s)", wd)
+			return "", fmt.Errorf(".git not found (started from %s)", wd)
 		}
 		dir = parent
 	}
