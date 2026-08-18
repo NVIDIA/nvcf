@@ -646,8 +646,21 @@ if [ "$CAPTURE_PATH" = "rootfs" ]; then
     # the caller override outright.
     CAPTURE_GPUS=$(kubectl get pod $POD_NAME -n $NAMESPACE \
         -o jsonpath='{.metadata.annotations.nvsnap\.io/gpus}' 2>/dev/null)
-    [ -n "$CAPTURE_GPUS" ] || CAPTURE_GPUS=1
+    # Both inputs are attacker-of-convenience: a hand-edited annotation or a
+    # typo'd env var. Validate rather than feed them to $(( )), which
+    # evaluates a non-numeric string as 0 -- that would make the timeout
+    # 900 + 900*(0-1) = 0 and fail this step instantly, the same
+    # test-fails-while-product-works trap this timeout was added to fix.
+    case "$CAPTURE_GPUS" in
+        '' | *[!0-9]* | 0) CAPTURE_GPUS=1 ;;
+    esac
     CAPTURE_TIMEOUT="${NVSNAP_CAPTURE_TIMEOUT:-$(( 900 + 900 * (CAPTURE_GPUS - 1) ))}"
+    case "$CAPTURE_TIMEOUT" in
+        '' | *[!0-9]* | 0)
+            log_warn "NVSNAP_CAPTURE_TIMEOUT=${CAPTURE_TIMEOUT} is not a positive integer; using 900s"
+            CAPTURE_TIMEOUT=900
+            ;;
+    esac
     DEADLINE=$(( $(date +%s) + CAPTURE_TIMEOUT ))
     while [ "$(date +%s)" -lt "$DEADLINE" ]; do
         # Pick the most-recent ConfigMap whose manifest.json source_pod_meta
