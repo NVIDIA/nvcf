@@ -53,8 +53,26 @@ fn test_state() -> AppState {
         health_delay: Duration::ZERO,
         kv_cache: Arc::new(Mutex::new(KvCacheState::new(0))),
         stats_events: test_stats_events(),
+        kv_stats_enabled: Arc::new(AtomicBool::new(true)),
         test_control: TestControlState::with_discovered_models(["dummy-model".to_string()]),
     }
+}
+
+#[tokio::test]
+async fn kv_stats_test_control_does_not_disable_health() {
+    let state = test_state();
+    let status = update_kv_stats_test_control(
+        State(state.clone()),
+        Json(KvStatsTestControlUpdate { enabled: false }),
+    )
+    .await;
+
+    assert_eq!(status, axum::http::StatusCode::NO_CONTENT);
+    assert_eq!(
+        kv_cache_stats_stream(State(state.clone())).await.status(),
+        axum::http::StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(health(State(state)).await, "ok");
 }
 
 async fn spawn_test_app(app: Router) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {

@@ -36,6 +36,7 @@ macro_rules! owned_task_handle {
 mod aggregator;
 mod collector;
 mod engine_stats_stream;
+mod kv_stats_stream;
 mod metrics;
 mod projection;
 pub(crate) mod token_metrics;

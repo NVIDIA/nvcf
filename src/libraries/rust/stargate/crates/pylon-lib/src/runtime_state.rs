@@ -47,6 +47,7 @@ pub struct CurrentModelStats {
     pub kv_cache_capacity_tokens: u64,
     pub kv_cache_used_tokens: u64,
     pub kv_cache_free_tokens: u64,
+    pub kv_cache: Option<CurrentKvCacheStats>,
     pub num_running_queries: u64,
     pub max_engine_concurrency: Option<u64>,
     pub total_query_input_size: u64,
@@ -56,6 +57,14 @@ pub struct CurrentModelStats {
     pub stats_observed_at_unix_ms: u64,
     pub stats_capabilities: Vec<String>,
     pub stats_sources: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CurrentKvCacheStats {
+    pub capacity_tokens: u64,
+    pub used_tokens: u64,
+    pub free_tokens: u64,
+    pub source_observed_at_unix_ms: u64,
 }
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -373,6 +382,15 @@ impl PylonRuntimeState {
                         kv_cache_capacity_tokens: stats.kv_cache_capacity_tokens,
                         kv_cache_used_tokens: stats.kv_cache_used_tokens,
                         kv_cache_free_tokens: stats.kv_cache_free_tokens,
+                        kv_cache: stats.kv_cache.as_ref().map(|kv_cache| {
+                            stargate_proto::pb::KvCacheStats {
+                                capacity_tokens: kv_cache.capacity_tokens,
+                                used_tokens: kv_cache.used_tokens,
+                                free_tokens: kv_cache.free_tokens,
+                                source_observed_at_unix_ms: kv_cache.source_observed_at_unix_ms,
+                                complete: true,
+                            }
+                        }),
                         num_running_queries: stats.num_running_queries,
                         max_engine_concurrency: stats.max_engine_concurrency.unwrap_or_default(),
                         total_query_input_size: stats.total_query_input_size,

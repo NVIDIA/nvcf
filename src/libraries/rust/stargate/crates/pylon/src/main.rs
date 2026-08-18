@@ -107,8 +107,8 @@ struct Args {
     /// Timeout for calibration requests in milliseconds
     #[arg(long, default_value_t = 30000, value_name = "MS")]
     bringup_calibration_timeout_ms: u64,
-    /// Upstream HTTP path to poll for KV-cache stats. Omit to disable KV metric polling
-    #[arg(long, value_name = "PATH")]
+    /// Upstream HTTP path for the canonical KV-cache stats stream
+    #[arg(long, default_value = "/v1/kv-cache/stats/stream", value_name = "PATH")]
     kv_cache_stats_path: Option<String>,
     /// Engine stats stream source selection mode
     #[arg(long, default_value_t = EngineStatsStreamMode::Auto, value_name = "MODE")]
@@ -554,7 +554,10 @@ mod tests {
 
         assert_eq!(args.engine_stats_stream, EngineStatsStreamMode::Auto);
         assert_eq!(args.engine_stats_stream_path, "/pylon/v1/stats/stream");
-        assert!(metrics_config.kv_cache_stats_url.is_none());
+        assert_eq!(
+            metrics_config.kv_cache_stats_url.as_deref(),
+            Some("http://127.0.0.1:8090/v1/kv-cache/stats/stream")
+        );
         assert!(
             !metrics_config.openai_fallback_stats_enabled,
             "auto mode should wait for a permanent unsupported stream response before fallback stats"
@@ -568,12 +571,15 @@ mod tests {
         let metrics_config = stats_collector_config_from_args(&args, &upstream);
 
         assert_eq!(args.engine_stats_stream, EngineStatsStreamMode::Off);
-        assert!(metrics_config.kv_cache_stats_url.is_none());
+        assert_eq!(
+            metrics_config.kv_cache_stats_url.as_deref(),
+            Some("http://127.0.0.1:8090/v1/kv-cache/stats/stream")
+        );
         assert!(metrics_config.openai_fallback_stats_enabled);
     }
 
     #[test]
-    fn kv_cache_stats_path_enables_explicit_kv_cache_polling() {
+    fn kv_cache_stats_path_overrides_the_canonical_stream() {
         let args = parse_args("--kv-cache-stats-path /kv-cache/stats");
         let upstream = normalize_base_url(&args.upstream_http_base_url);
         let metrics_config = stats_collector_config_from_args(&args, &upstream);

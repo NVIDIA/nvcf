@@ -22,6 +22,7 @@ mod test_control;
 mod timing;
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -84,6 +85,7 @@ struct AppState {
     health_delay: Duration,
     kv_cache: Arc<Mutex<kv_cache::KvCacheState>>,
     stats_events: broadcast::Sender<stats_stream::StatsStreamEvent>,
+    kv_stats_enabled: Arc<AtomicBool>,
     test_control: test_control::TestControlState,
 }
 
@@ -116,6 +118,7 @@ async fn main() -> Result<()> {
             args.kv_cache_capacity_tokens,
         ))),
         stats_events,
+        kv_stats_enabled: Arc::new(AtomicBool::new(true)),
         test_control: test_control::TestControlState::with_discovered_models([args.model_name]),
     };
 
@@ -125,12 +128,20 @@ async fn main() -> Result<()> {
         .route("/v1/responses", post(openai::responses))
         .route("/v1/embeddings", post(openai::embeddings))
         .route("/pylon/v1/stats/stream", get(stats_stream::stats_stream))
+        .route(
+            "/v1/kv-cache/stats/stream",
+            get(openai::kv_cache_stats_stream),
+        )
         .route("/kv-cache/stats", get(openai::kv_cache_stats))
         .route(
             "/test-control/models/{model}",
             put(test_control::update_model_test_control),
         )
         .route("/test-control", get(test_control::test_control_snapshot))
+        .route(
+            "/test-control/kv-stats",
+            put(test_control::update_kv_stats_test_control),
+        )
         .route(
             "/test-control/discovery-models",
             put(test_control::replace_discovery_models),
