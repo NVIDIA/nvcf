@@ -175,6 +175,15 @@ llmRequestRouter:
     audience: ""
 
   tls:
+    # The mount directory is polled every 30 seconds for certificate and key
+    # updates, which apply to new connections without a pod restart. Keep both
+    # files in one Secret so Kubernetes projects one atomic generation.
+    #
+    # Trust bundles do not reload yet, so changing one still needs a rolling
+    # restart of Pylon, which verifies this certificate over the reverse tunnel.
+    # Point Pylon at the root CA rather than an intermediate: intermediates are
+    # renewed far more often, and trusting the root keeps those renewals
+    # restart-free. See the Transport TLS Rotation runbook.
     secretName: ""
     mountPath: ""
     certPath: ""

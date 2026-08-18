@@ -42,9 +42,12 @@ stargate-proto = { workspace = true }
 stargate-protocol = { workspace = true }
 stargate-runtime = { workspace = true }
 stargate-telemetry = { workspace = true }
+stargate-tls = { workspace = true }
 
 [dev-dependencies]
 axum = { workspace = true }
+quinn = { workspace = true }
+rustls = { workspace = true }
 serde_json = { workspace = true }
 tokio-stream = { workspace = true, features = ["net"] }
 tonic = { workspace = true }
