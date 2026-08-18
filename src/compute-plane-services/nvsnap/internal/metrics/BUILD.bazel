@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_library")
+load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "metrics",
@@ -10,4 +10,10 @@ go_library(
         "@com_github_prometheus_client_golang//prometheus",
         "@com_github_prometheus_client_golang//prometheus/promhttp",
     ],
+)
+
+go_test(
+    name = "metrics_test",
+    srcs = ["register_test.go"],
+    embed = [":metrics"],
 )

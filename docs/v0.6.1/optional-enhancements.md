@@ -8,10 +8,6 @@ installation and configuration guide.
 
 - [LLS Installation](lls-installation.md) - Required for streaming Cloud Functions using WebRTC
 
-## LLM Functions
-
-- [LLM Function Enablement](./llm-function-enablement.md) - Required for `functionType: "LLM"` functions using the LLM invocation gateway
-
 ## NVCF Caches
 
 - [container-cache](./cluster-management/container-cache.md) - Accelerates container image pulls by caching layers locally

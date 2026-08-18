@@ -1,0 +1,35 @@
+--- a/internal/bzlmod/go_deps.bzl
++++ b/internal/bzlmod/go_deps.bzl
+@@ -412,9 +412,19 @@
+             elif from_file_tag.go_work:
+                 go_work = go_work_from_label(module_ctx, from_file_tag.go_work)
+ 
++                # Inherit the from_file(go_work) tag's own dev status. Synthetic
++                # go.work child tags hardcode _is_dev_dependency=False upstream;
++                # without this, use_extension(..., dev_dependency=True) fails with
++                # "root_module_direct_deps must be empty".
++                work_is_dev = (
++                    module_ctx.is_dev_dependency(from_file_tag)
++                    if hasattr(module_ctx, "is_dev_dependency")
++                    else False
++                )
++
+                 # this ensures go.work replacements are considered
+                 additional_module_tags += [
+-                    with_replaced_or_new_fields(tag, _is_dev_dependency = False)
++                    with_replaced_or_new_fields(tag, _is_dev_dependency = work_is_dev)
+                     for tag in go_work.module_tags
+                 ]
+ 
+@@ -422,7 +432,10 @@
+                     _safe_insert_sum(sums, entry, new_sum)
+ 
+                 replace_map.update(go_work.replace_map)
+-                from_file_tags = from_file_tags + go_work.from_file_tags
++                from_file_tags = from_file_tags + [
++                    with_replaced_or_new_fields(tag, _is_dev_dependency = work_is_dev)
++                    for tag in go_work.from_file_tags
++                ]
+             else:
+                 fail("Either \"go_mod\" or \"go_work\" must be specified in \"go_deps.from_file\" tags.")
+ 

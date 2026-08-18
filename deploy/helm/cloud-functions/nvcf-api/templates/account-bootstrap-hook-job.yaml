@@ -1,0 +1,89 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "nvcf-api.fullname" . }}-account-bootstrap
+  namespace: {{ include "nvcf-api.namespace" . }}
+  labels:
+    {{- include "nvcf-api.labels" . | nindent 4 }}
+    app.kubernetes.io/component: account-bootstrap
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "2"
+    # don't delete the job on success, it will be deleted by the ttl
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      {{- with .Values.api.accountBootstrap.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "nvcf-api.labels" . | nindent 8 }}
+        app.kubernetes.io/component: account-bootstrap
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: nvcf-api-account-bootstrap
+      {{- with .Values.api.accountBootstrap.schedulingGates }}
+      schedulingGates:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+      - name: token
+        projected:
+          sources:
+          - serviceAccountToken:
+              path: token
+              expirationSeconds: 3600
+              audience: http://openbao-server.vault-system.svc.cluster.local:8200
+      - name: account-bootstrap-script
+        configMap:
+          name: {{ include "nvcf-api.fullname" . }}-account-bootstrap-script
+          defaultMode: 0755
+      {{- with .Values.api.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+      - name: account-bootstrap-creator
+        image: "{{ include "nvcf-api.accountBootstrapImage" . }}"
+        imagePullPolicy: {{ .Values.api.accountBootstrap.image.pullPolicy }}
+        command: ["/bin/bash"]
+        args: ["/scripts/account-bootstrap.sh"]
+        volumeMounts:
+        - name: token
+          mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+          readOnly: true
+        - name: account-bootstrap-script
+          mountPath: /scripts
+          readOnly: true
+        envFrom:
+        - secretRef:
+            name: {{ include "nvcf-api.fullname" . }}-account-bootstrap-secret
+        env:
+          - name: API_SERVICE_NAME
+            value: api
+          - name: API_NAMESPACE
+            value: {{ include "nvcf-api.namespace" . | quote }}
+          - name: API_READINESS_PERIOD_SECONDS
+            value: "{{ .Values.api.accountBootstrap.readiness.periodSeconds }}"
+          - name: API_READINESS_FAILURE_THRESHOLD
+            value: "{{ .Values.api.accountBootstrap.readiness.failureThreshold }}"
+        resources:
+          {{- toYaml .Values.api.accountBootstrap.resources | nindent 10 }}

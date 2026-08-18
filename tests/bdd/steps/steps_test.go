@@ -202,6 +202,52 @@ func TestIRunCommandRecordsResult(t *testing.T) {
 	}
 }
 
+func TestISuccessfullyRunCommandLineRecordsResultAndCaches(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("EXAMPLE_VAR", "value")
+	fake.result = harness.Result{ExitCode: 0, Stdout: "ok"}
+	if err := sc.iSuccessfullyRunCommandLine(context.Background(), "echo ${EXAMPLE_VAR}"); err != nil {
+		t.Fatalf("run successfully: %v", err)
+	}
+	if sc.LastResult.Stdout != "ok" {
+		t.Fatalf("last stdout = %q", sc.LastResult.Stdout)
+	}
+	if sc.LastCommand != "echo value" {
+		t.Fatalf("last command = %q, want resolved command", sc.LastCommand)
+	}
+	if !sc.Suite.Cache.Has("echo value") {
+		t.Fatal("successful command was not recorded in cache")
+	}
+}
+
+func TestISuccessfullyRunCommandDocPreservesOutput(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0, Stdout: "rendered output"}
+	doc := &godog.DocString{Content: "make template"}
+	if err := sc.iSuccessfullyRunCommandDoc(context.Background(), doc); err != nil {
+		t.Fatalf("run successfully: %v", err)
+	}
+	if err := sc.commandOutputShouldContain("rendered output"); err != nil {
+		t.Fatalf("assert preserved output: %v", err)
+	}
+}
+
+func TestISuccessfullyRunCommandRejectsNonZeroExit(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 2, Stderr: "failed"}
+	fake.err = errors.New("command failed: exit status 2")
+	err := sc.iSuccessfullyRunCommandLine(context.Background(), "make install")
+	if err == nil {
+		t.Fatal("expected non-zero command to fail the step")
+	}
+	if sc.LastResult.ExitCode != 2 {
+		t.Fatalf("last exit code = %d, want 2", sc.LastResult.ExitCode)
+	}
+	if sc.Suite.Cache.Has("make install") {
+		t.Fatal("failed command was recorded in cache")
+	}
+}
+
 // TestIRunCommandWithTTYDocRecordsResult verifies the pty-backed run form
 // wires through RunWithTTY and records the result like the plain docstring
 // form. The fake runner ignores the TTY and resolves identically.
@@ -484,12 +530,16 @@ func TestRegisterAllRunsAFeatureFile(t *testing.T) {
 	feature := `Feature: Smoke
   Scenario: register-all smoke
     Given environment variable "BDD_TMP_SMOKE" is set
-    When I run command "echo smoke"
-    Then the command exit code should be 0
+    When I successfully run command "echo smoke"
+    And I successfully run command:
+      """
+      echo documented
+      """
+    Then the command output should contain "documented"
 `
 	t.Setenv("BDD_TMP_SMOKE", "ready")
 	sc, fake := newScenarioContext(t)
-	fake.result = harness.Result{ExitCode: 0, Stdout: "smoke\n"}
+	fake.result = harness.Result{ExitCode: 0, Stdout: "smoke documented\n"}
 
 	suite := godog.TestSuite{
 		Name: "smoke",
@@ -538,6 +588,31 @@ func TestPullSecretInNamespacesKeepsAPIKeyOutOfArgv(t *testing.T) {
 		t.Fatalf("runs = %d, want 4 (2 namespaces x (ns manifest + secret manifest))", len(fake.runs))
 	}
 	for _, run := range fake.runs {
+		if strings.Contains(run.command, "super-secret-token") {
+			t.Fatalf("api key leaked into argv: %q", run.command)
+		}
+	}
+}
+
+func TestPullSecretInNamespacesUsingContextTargetsEveryApply(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NGC_API_KEY", "super-secret-token")
+	table := singleColumnTable(t, []string{"monitoring", "nvca-operator"})
+	if err := sc.pullSecretInNamespacesUsingContext(
+		context.Background(),
+		"nvcr-pull-secret",
+		"k3d-ncp-local-compute-1",
+		table,
+	); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if len(fake.runs) != 4 {
+		t.Fatalf("runs = %d, want 4 (2 namespaces x (ns manifest + secret manifest))", len(fake.runs))
+	}
+	for _, run := range fake.runs {
+		if !strings.HasPrefix(run.command, "kubectl --context k3d-ncp-local-compute-1 apply -f ") {
+			t.Fatalf("command does not target compute context: %q", run.command)
+		}
 		if strings.Contains(run.command, "super-secret-token") {
 			t.Fatalf("api key leaked into argv: %q", run.command)
 		}
@@ -616,6 +691,50 @@ func TestRenderedManifestsShouldNotContainAcceptsExplicitMarkers(t *testing.T) {
 	})
 
 	if err := sc.renderedManifestsShouldNotContain("out/rendered", table); err != nil {
+		t.Fatalf("assert rendered manifests: %v", err)
+	}
+	if len(fake.runs) != 0 {
+		t.Fatalf("runs = %d, want 0", len(fake.runs))
+	}
+}
+
+func TestRenderedManifestsShouldContainAcceptsExplicitMarkers(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	renderDir := filepath.Join(sc.Suite.Config.RepoRoot, "out", "rendered")
+	if err := os.MkdirAll(renderDir, 0o755); err != nil {
+		t.Fatalf("create render directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(renderDir, "collector.yaml"), []byte("kind: OpenTelemetryCollector\n"), 0o644); err != nil {
+		t.Fatalf("write rendered manifest: %v", err)
+	}
+	table := docTable(t, [][]string{
+		{"text"},
+		{"kind: OpenTelemetryCollector"},
+	})
+
+	if err := sc.renderedManifestsShouldContain("out/rendered", table); err != nil {
+		t.Fatalf("assert rendered manifests: %v", err)
+	}
+	if len(fake.runs) != 0 {
+		t.Fatalf("runs = %d, want 0", len(fake.runs))
+	}
+}
+
+func TestRenderedManifestsUnderMatchingDirectoriesShouldContainAcceptsExplicitMarkers(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	renderDir := filepath.Join(sc.Suite.Config.RepoRoot, "out", "rendered", "01-nats", "templates")
+	if err := os.MkdirAll(renderDir, 0o755); err != nil {
+		t.Fatalf("create render directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(renderDir, "nats.yaml"), []byte("image: docker.io/natsio/reloader:0.23.0\n"), 0o644); err != nil {
+		t.Fatalf("write rendered manifest: %v", err)
+	}
+	table := docTable(t, [][]string{
+		{"text"},
+		{"docker.io/natsio/reloader:0.23.0"},
+	})
+
+	if err := sc.renderedManifestsUnderMatchingDirectoriesShouldContain("out/rendered", "*-nats", table); err != nil {
 		t.Fatalf("assert rendered manifests: %v", err)
 	}
 	if len(fake.runs) != 0 {

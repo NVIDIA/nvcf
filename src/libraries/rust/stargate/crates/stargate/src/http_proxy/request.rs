@@ -279,7 +279,7 @@ mod tests {
     #[test]
     fn proxy_valid_configured_routing_method_uses_request_algorithm() {
         let lb_router = LoadBalancerRouter::from_config(&LoadBalancerConfig {
-            default: LoadBalancerAlgorithm::PowerOfTwo,
+            default: LoadBalancerAlgorithm::PowerOfN,
             request_algorithms: HashMap::from([(
                 LoadBalancerAlgorithm::RoundRobin,
                 LoadBalancerModelConfig::Name(LoadBalancerAlgorithm::RoundRobin),

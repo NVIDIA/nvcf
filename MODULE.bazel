@@ -43,7 +43,7 @@ bazel_dep(name = "rules_oci", version = "2.2.7")
 # load @rules_cc//cc:defs.bzl against a pinned version.
 bazel_dep(name = "rules_cc", version = "0.2.17")
 bazel_dep(name = "rules_pkg", version = "1.2.0")
-bazel_dep(name = "aspect_bazel_lib", version = "2.21.2")
+bazel_dep(name = "aspect_bazel_lib", version = "2.22.5")
 
 bazel_dep(
     name = "hermetic_cc_toolchain",
@@ -89,18 +89,51 @@ protoc.toolchain(
 
 # ============================================================================
 # Go
+#
+# rules_go / gazelle / go_sdk / go_deps are root-only (dev_dependency). Spot and
+# other Java consumers depend on this module for icms-core / nv-boot source
+# labels; they must not evaluate go_deps.gazelle_override or the full Go
+# use_repo list, which fails outside the monorepo root.
 # ============================================================================
-bazel_dep(name = "rules_go", version = "0.60.0")
-bazel_dep(name = "gazelle", version = "0.48.0")
+bazel_dep(
+    name = "rules_go",
+    version = "0.60.0",
+    dev_dependency = True,
+)
+bazel_dep(
+    name = "gazelle",
+    version = "0.48.0",
+    dev_dependency = True,
+)
 
-go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
+# Gazelle 0.48.0 hardcodes go.work child deps as non-dev
+# (_is_dev_dependency=False). That conflicts with the root-only
+# use_extension(..., dev_dependency=True) above: Bazel then fails with
+# "root_module_direct_deps must be empty". Patch inherits the parent
+# from_file(go_work) tag's own dev status.
+single_version_override(
+    module_name = "gazelle",
+    patch_strip = 1,
+    patches = ["//tools/bazel:patches/gazelle_go_work_dev_dependency.patch"],
+    version = "0.48.0",
+)
+
+go_sdk = use_extension(
+    "@rules_go//go:extensions.bzl",
+    "go_sdk",
+    dev_dependency = True,
+)
 
 # The Go toolchain version is declared once, in tools/go-toolchain/go.mod, and
 # derived here. Do not put a literal version in this file: it drifted from CI's
 # setup-go and from the bazel-ci image while each was maintained separately.
 go_sdk.from_file(go_mod = "//tools/go-toolchain:go.mod")
 
-go_deps = use_extension("@gazelle//:extensions.bzl", "go_deps")
+go_deps = use_extension(
+    "@gazelle//:extensions.bzl",
+    "go_deps",
+    dev_dependency = True,
+)
 go_deps.from_file(go_work = "//:go.work.bazel")
 
 # containerd/cgroups ships stats/v1/metrics.proto, which imports
@@ -171,7 +204,7 @@ go_deps.gazelle_override(
 # use_repo entries below are auto-managed by `bazel mod tidy`. Re-run after
 # adding new imports in nvcf-cli, src/libraries/go/lib, or
 # src/libraries/go/worker.
-use_repo(go_deps, "cat_dario_mergo", "com_github_armon_go_metrics", "com_github_armon_go_radix", "com_github_auth0_go_jwt_middleware_v2", "com_github_aws_aws_sdk_go_v2", "com_github_aws_aws_sdk_go_v2_config", "com_github_aws_aws_sdk_go_v2_credentials", "com_github_aws_aws_sdk_go_v2_service_s3", "com_github_aws_smithy_go", "com_github_awslabs_amazon_ecr_credential_helper_ecr_login", "com_github_balajinvda_go_criu_v8", "com_github_burntsushi_toml", "com_github_carlmjohnson_versioninfo", "com_github_cenkalti_backoff_v3", "com_github_cenkalti_backoff_v4", "com_github_charmbracelet_bubbles", "com_github_charmbracelet_bubbletea", "com_github_charmbracelet_lipgloss", "com_github_containerd_containerd", "com_github_davecgh_go_spew", "com_github_docker_go_connections", "com_github_dustin_go_humanize", "com_github_evanphx_json_patch_v5", "com_github_fatih_structs", "com_github_felixge_httpsnoop", "com_github_fsnotify_fsnotify", "com_github_gin_contrib_zap", "com_github_gin_gonic_gin", "com_github_go_chi_chi_v5", "com_github_go_chi_cors", "com_github_go_chi_render", "com_github_go_co_op_gocron", "com_github_go_jose_go_jose_v4", "com_github_go_kit_kit", "com_github_go_ldap_ldap_v3", "com_github_go_logr_zapr", "com_github_go_test_deep", "com_github_go_viper_mapstructure_v2", "com_github_goccy_go_json", "com_github_golang_jwt_jwt_v4", "com_github_golang_jwt_jwt_v5", "com_github_golang_protobuf", "com_github_golang_snappy", "com_github_google_go_cmp", "com_github_google_go_containerregistry", "com_github_google_shlex", "com_github_google_uuid", "com_github_gorilla_mux", "com_github_gorilla_websocket", "com_github_grpc_ecosystem_go_grpc_middleware", "com_github_grpc_ecosystem_go_grpc_middleware_providers_prometheus", "com_github_grpc_ecosystem_go_grpc_middleware_v2", "com_github_grpc_ecosystem_grpc_gateway_v2", "com_github_hashicorp_consul_api", "com_github_hashicorp_consul_sdk", "com_github_hashicorp_errwrap", "com_github_hashicorp_go_cleanhttp", "com_github_hashicorp_go_gatedio", "com_github_hashicorp_go_hclog", "com_github_hashicorp_go_immutable_radix", "com_github_hashicorp_go_kms_wrapping_entropy_v2", "com_github_hashicorp_go_metrics", "com_github_hashicorp_go_multierror", "com_github_hashicorp_go_plugin", "com_github_hashicorp_go_retryablehttp", "com_github_hashicorp_go_rootcerts", "com_github_hashicorp_go_secure_stdlib_base62", "com_github_hashicorp_go_secure_stdlib_mlock", "com_github_hashicorp_go_secure_stdlib_parseutil", "com_github_hashicorp_go_secure_stdlib_password", "com_github_hashicorp_go_secure_stdlib_strutil", "com_github_hashicorp_go_secure_stdlib_tlsutil", "com_github_hashicorp_go_sockaddr", "com_github_hashicorp_go_syslog", "com_github_hashicorp_go_uuid", "com_github_hashicorp_go_version", "com_github_hashicorp_golang_lru", "com_github_hashicorp_golang_lru_v2", "com_github_hashicorp_hcl", "com_github_hashicorp_hcl_v2", "com_github_hashicorp_logutils", "com_github_hashicorp_nomad_api", "com_github_hashicorp_vault_api", "com_github_hashicorp_vault_api_auth_kubernetes", "com_github_hashicorp_vault_sdk", "com_github_hellofresh_health_go_v5", "com_github_imdario_mergo", "com_github_jarcoal_httpmock", "com_github_jellydator_ttlcache_v3", "com_github_kaptinlin_jsonrepair", "com_github_kelseyhightower_envconfig", "com_github_kimmachinegun_automemlimit", "com_github_klauspost_compress", "com_github_knadh_koanf_parsers_json", "com_github_knadh_koanf_parsers_yaml", "com_github_knadh_koanf_providers_env", "com_github_knadh_koanf_providers_file", "com_github_knadh_koanf_providers_posflag", "com_github_knadh_koanf_providers_rawbytes", "com_github_knadh_koanf_v2", "com_github_labstack_echo_v4", "com_github_lestrrat_go_jwx", "com_github_lestrrat_go_jwx_v2", "com_github_madappgang_httplog", "com_github_madappgang_httplog_zap", "com_github_magiconair_properties", "com_github_masterminds_semver_v3", "com_github_masterminds_sprig_v3", "com_github_mattn_go_isatty", "com_github_micahparks_keyfunc_v3", "com_github_mitchellh_copystructure", "com_github_mitchellh_go_homedir", "com_github_mitchellh_go_testing_interface", "com_github_mitchellh_hashstructure", "com_github_mitchellh_mapstructure", "com_github_muesli_termenv", "com_github_nats_io_jwt_v2", "com_github_nats_io_nats_go", "com_github_nats_io_nats_server_v2", "com_github_nats_io_nkeys", "com_github_nvidia_nvcf_go", "com_github_nvidia_nvcf_src_libraries_go_lib", "com_github_nvidia_nvcf_src_libraries_go_worker", "com_github_oklog_oklog", "com_github_olric_data_olric", "com_github_opencontainers_runtime_spec", "com_github_openzipkin_zipkin_go", "com_github_panjf2000_ants_v2", "com_github_pierrec_lz4", "com_github_pierrec_lz4_v4", "com_github_pkg_errors", "com_github_prometheus_client_golang", "com_github_prometheus_client_model", "com_github_prometheus_common", "com_github_prometheus_otlptranslator", "com_github_quic_go_quic_go", "com_github_rs_zerolog", "com_github_ryanuber_go_glob", "com_github_samber_lo", "com_github_santhosh_tekuri_jsonschema_v5", "com_github_senseyeio_duration", "com_github_sirupsen_logrus", "com_github_sourcegraph_conc", "com_github_spf13_cobra", "com_github_spf13_pflag", "com_github_spf13_viper", "com_github_stretchr_testify", "com_github_swaggo_files", "com_github_swaggo_gin_swagger", "com_github_swaggo_swag", "com_github_synadia_io_callout_go", "com_github_testcontainers_testcontainers_go", "com_github_testcontainers_testcontainers_go_modules_localstack", "com_github_ulule_limiter_v3", "com_github_urfave_cli_v2", "com_github_valyala_bytebufferpool", "com_github_vishvananda_netlink", "com_github_vishvananda_netns", "com_github_volcengine_volcengine_go_sdk", "com_google_cloud_go_pubsub_v2", "com_google_cloud_go_storage", "com_jetify_go_sse", "com_jetify_go_typeid", "in_gopkg_yaml_v2", "in_gopkg_yaml_v3", "in_yaml_go_yaml_v3", "io_k8s_api", "io_k8s_apiextensions_apiserver", "io_k8s_apimachinery", "io_k8s_client_go", "io_k8s_cri_api", "io_k8s_klog_v2", "io_k8s_sigs_controller_runtime", "io_k8s_sigs_yaml", "io_opentelemetry_go_contrib_instrumentation_github_com_aws_aws_sdk_go_v2_otelaws", "io_opentelemetry_go_contrib_instrumentation_github_com_gin_gonic_gin_otelgin", "io_opentelemetry_go_contrib_instrumentation_github_com_gorilla_mux_otelmux", "io_opentelemetry_go_contrib_instrumentation_google_golang_org_grpc_otelgrpc", "io_opentelemetry_go_contrib_instrumentation_host", "io_opentelemetry_go_contrib_instrumentation_net_http_httptrace_otelhttptrace", "io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp", "io_opentelemetry_go_otel", "io_opentelemetry_go_otel_exporters_otlp_otlpmetric_otlpmetricgrpc", "io_opentelemetry_go_otel_exporters_otlp_otlptrace", "io_opentelemetry_go_otel_exporters_otlp_otlptrace_otlptracegrpc", "io_opentelemetry_go_otel_exporters_otlp_otlptrace_otlptracehttp", "io_opentelemetry_go_otel_exporters_prometheus", "io_opentelemetry_go_otel_exporters_stdout_stdoutmetric", "io_opentelemetry_go_otel_exporters_stdout_stdouttrace", "io_opentelemetry_go_otel_metric", "io_opentelemetry_go_otel_sdk", "io_opentelemetry_go_otel_sdk_metric", "io_opentelemetry_go_otel_trace", "io_opentelemetry_go_proto_otlp", "land_oras_oras_go_v2", "org_golang_google_api", "org_golang_google_genproto_googleapis_rpc", "org_golang_google_grpc", "org_golang_google_grpc_cmd_protoc_gen_go_grpc", "org_golang_google_protobuf", "org_golang_x_crypto", "org_golang_x_exp", "org_golang_x_net", "org_golang_x_oauth2", "org_golang_x_sync", "org_golang_x_sys", "org_golang_x_term", "org_golang_x_text", "org_golang_x_time", "org_modernc_sqlite", "org_uber_go_atomic", "org_uber_go_automaxprocs", "org_uber_go_mock", "org_uber_go_zap", "sh_helm_helm_v3", "tools_gotest_v3")
+use_repo(go_deps, "cat_dario_mergo", "com_github_armon_go_metrics", "com_github_armon_go_radix", "com_github_auth0_go_jwt_middleware_v2", "com_github_aws_aws_sdk_go_v2", "com_github_aws_aws_sdk_go_v2_config", "com_github_aws_aws_sdk_go_v2_credentials", "com_github_aws_aws_sdk_go_v2_service_s3", "com_github_aws_smithy_go", "com_github_awslabs_amazon_ecr_credential_helper_ecr_login", "com_github_balajinvda_go_criu_v8", "com_github_burntsushi_toml", "com_github_carlmjohnson_versioninfo", "com_github_cenkalti_backoff_v3", "com_github_cenkalti_backoff_v4", "com_github_charmbracelet_bubbles", "com_github_charmbracelet_bubbletea", "com_github_charmbracelet_lipgloss", "com_github_containerd_containerd", "com_github_davecgh_go_spew", "com_github_dustin_go_humanize", "com_github_evanphx_json_patch_v5", "com_github_fatih_structs", "com_github_felixge_httpsnoop", "com_github_fsnotify_fsnotify", "com_github_gin_contrib_zap", "com_github_gin_gonic_gin", "com_github_go_chi_chi_v5", "com_github_go_chi_cors", "com_github_go_chi_render", "com_github_go_co_op_gocron", "com_github_go_jose_go_jose_v4", "com_github_go_kit_kit", "com_github_go_ldap_ldap_v3", "com_github_go_logr_zapr", "com_github_go_test_deep", "com_github_go_viper_mapstructure_v2", "com_github_goccy_go_json", "com_github_golang_jwt_jwt_v4", "com_github_golang_jwt_jwt_v5", "com_github_golang_protobuf", "com_github_golang_snappy", "com_github_google_go_cmp", "com_github_google_go_containerregistry", "com_github_google_shlex", "com_github_google_uuid", "com_github_gorilla_mux", "com_github_gorilla_websocket", "com_github_grpc_ecosystem_go_grpc_middleware", "com_github_grpc_ecosystem_go_grpc_middleware_providers_prometheus", "com_github_grpc_ecosystem_go_grpc_middleware_v2", "com_github_grpc_ecosystem_grpc_gateway_v2", "com_github_hashicorp_consul_api", "com_github_hashicorp_consul_sdk", "com_github_hashicorp_errwrap", "com_github_hashicorp_go_cleanhttp", "com_github_hashicorp_go_gatedio", "com_github_hashicorp_go_hclog", "com_github_hashicorp_go_immutable_radix", "com_github_hashicorp_go_kms_wrapping_entropy_v2", "com_github_hashicorp_go_metrics", "com_github_hashicorp_go_multierror", "com_github_hashicorp_go_plugin", "com_github_hashicorp_go_retryablehttp", "com_github_hashicorp_go_rootcerts", "com_github_hashicorp_go_secure_stdlib_base62", "com_github_hashicorp_go_secure_stdlib_mlock", "com_github_hashicorp_go_secure_stdlib_parseutil", "com_github_hashicorp_go_secure_stdlib_password", "com_github_hashicorp_go_secure_stdlib_strutil", "com_github_hashicorp_go_secure_stdlib_tlsutil", "com_github_hashicorp_go_sockaddr", "com_github_hashicorp_go_syslog", "com_github_hashicorp_go_uuid", "com_github_hashicorp_go_version", "com_github_hashicorp_golang_lru", "com_github_hashicorp_golang_lru_v2", "com_github_hashicorp_hcl", "com_github_hashicorp_hcl_v2", "com_github_hashicorp_logutils", "com_github_hashicorp_nomad_api", "com_github_hashicorp_vault_api", "com_github_hashicorp_vault_api_auth_kubernetes", "com_github_hashicorp_vault_sdk", "com_github_hellofresh_health_go_v5", "com_github_imdario_mergo", "com_github_jarcoal_httpmock", "com_github_jellydator_ttlcache_v3", "com_github_kaptinlin_jsonrepair", "com_github_kelseyhightower_envconfig", "com_github_kimmachinegun_automemlimit", "com_github_klauspost_compress", "com_github_knadh_koanf_parsers_json", "com_github_knadh_koanf_parsers_yaml", "com_github_knadh_koanf_providers_env", "com_github_knadh_koanf_providers_file", "com_github_knadh_koanf_providers_posflag", "com_github_knadh_koanf_providers_rawbytes", "com_github_knadh_koanf_v2", "com_github_labstack_echo_v4", "com_github_lestrrat_go_jwx", "com_github_lestrrat_go_jwx_v2", "com_github_madappgang_httplog", "com_github_madappgang_httplog_zap", "com_github_magiconair_properties", "com_github_masterminds_semver_v3", "com_github_masterminds_sprig_v3", "com_github_mattn_go_isatty", "com_github_micahparks_keyfunc_v3", "com_github_mitchellh_copystructure", "com_github_mitchellh_go_homedir", "com_github_mitchellh_go_testing_interface", "com_github_mitchellh_hashstructure", "com_github_mitchellh_mapstructure", "com_github_muesli_termenv", "com_github_nats_io_jwt_v2", "com_github_nats_io_nats_go", "com_github_nats_io_nats_server_v2", "com_github_nats_io_nkeys", "com_github_nvidia_nvcf_go", "com_github_nvidia_nvcf_src_libraries_go_lib", "com_github_nvidia_nvcf_src_libraries_go_worker", "com_github_oklog_oklog", "com_github_olric_data_olric", "com_github_opencontainers_runtime_spec", "com_github_openzipkin_zipkin_go", "com_github_panjf2000_ants_v2", "com_github_pierrec_lz4", "com_github_pierrec_lz4_v4", "com_github_pkg_errors", "com_github_prometheus_client_golang", "com_github_prometheus_client_model", "com_github_prometheus_common", "com_github_prometheus_otlptranslator", "com_github_quic_go_quic_go", "com_github_rs_zerolog", "com_github_ryanuber_go_glob", "com_github_samber_lo", "com_github_santhosh_tekuri_jsonschema_v5", "com_github_senseyeio_duration", "com_github_sirupsen_logrus", "com_github_sourcegraph_conc", "com_github_spf13_cobra", "com_github_spf13_pflag", "com_github_spf13_viper", "com_github_stretchr_testify", "com_github_swaggo_files", "com_github_swaggo_gin_swagger", "com_github_swaggo_swag", "com_github_synadia_io_callout_go", "com_github_testcontainers_testcontainers_go", "com_github_testcontainers_testcontainers_go_modules_localstack", "com_github_ulule_limiter_v3", "com_github_urfave_cli_v2", "com_github_valyala_bytebufferpool", "com_github_vishvananda_netlink", "com_github_vishvananda_netns", "com_github_volcengine_volcengine_go_sdk", "com_google_cloud_go_pubsub_v2", "com_google_cloud_go_storage", "com_jetify_go_sse", "com_jetify_go_typeid", "in_gopkg_yaml_v2", "in_gopkg_yaml_v3", "in_yaml_go_yaml_v3", "io_k8s_api", "io_k8s_apiextensions_apiserver", "io_k8s_apimachinery", "io_k8s_client_go", "io_k8s_cri_api", "io_k8s_klog_v2", "io_k8s_sigs_controller_runtime", "io_k8s_sigs_yaml", "io_opentelemetry_go_contrib_instrumentation_github_com_aws_aws_sdk_go_v2_otelaws", "io_opentelemetry_go_contrib_instrumentation_github_com_gin_gonic_gin_otelgin", "io_opentelemetry_go_contrib_instrumentation_github_com_gorilla_mux_otelmux", "io_opentelemetry_go_contrib_instrumentation_google_golang_org_grpc_otelgrpc", "io_opentelemetry_go_contrib_instrumentation_host", "io_opentelemetry_go_contrib_instrumentation_net_http_httptrace_otelhttptrace", "io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp", "io_opentelemetry_go_otel", "io_opentelemetry_go_otel_exporters_otlp_otlpmetric_otlpmetricgrpc", "io_opentelemetry_go_otel_exporters_otlp_otlptrace", "io_opentelemetry_go_otel_exporters_otlp_otlptrace_otlptracegrpc", "io_opentelemetry_go_otel_exporters_otlp_otlptrace_otlptracehttp", "io_opentelemetry_go_otel_exporters_prometheus", "io_opentelemetry_go_otel_exporters_stdout_stdoutmetric", "io_opentelemetry_go_otel_exporters_stdout_stdouttrace", "io_opentelemetry_go_otel_metric", "io_opentelemetry_go_otel_sdk", "io_opentelemetry_go_otel_sdk_metric", "io_opentelemetry_go_otel_trace", "io_opentelemetry_go_proto_otlp", "land_oras_oras_go_v2", "org_golang_google_api", "org_golang_google_genproto_googleapis_rpc", "org_golang_google_grpc", "org_golang_google_grpc_cmd_protoc_gen_go_grpc", "org_golang_google_protobuf", "org_golang_x_crypto", "org_golang_x_exp", "org_golang_x_net", "org_golang_x_oauth2", "org_golang_x_sync", "org_golang_x_sys", "org_golang_x_term", "org_golang_x_text", "org_golang_x_time", "org_modernc_sqlite", "org_uber_go_atomic", "org_uber_go_automaxprocs", "org_uber_go_mock", "org_uber_go_zap", "sh_helm_helm_v3", "tools_gotest_v3")
 
 # ============================================================================
 # Rust
@@ -198,6 +231,23 @@ use_repo(go_deps, "cat_dario_mergo", "com_github_armon_go_metrics", "com_github_
 # semantics, not a build setting, so the value here is kept at the majority
 # edition and carries no meaning beyond that.
 # ============================================================================
+# ---- JS/TS (aspect_rules_js, pnpm-native) ----
+# Lifted from src/uis/nvcf-ui/MODULE.bazel when the UI joined the root module.
+# 3.2.x reads the build-script allowlist from pnpm-workspace.yaml (allowBuilds).
+bazel_dep(name = "aspect_rules_js", version = "3.2.2")
+bazel_dep(name = "rules_nodejs", version = "6.7.3")
+
+node = use_extension("@rules_nodejs//nodejs:extensions.bzl", "node")
+node.toolchain(node_version = "22.12.0")
+
+npm = use_extension("@aspect_rules_js//npm:extensions.bzl", "npm")
+npm.npm_translate_lock(
+    name = "npm",
+    pnpm_lock = "//src/uis/nvcf-ui/ui:pnpm-lock.yaml",
+    verify_node_modules_ignored = "//:.bazelignore",
+)
+use_repo(npm, "npm")
+
 bazel_dep(name = "rules_rust", version = "0.69.0")
 
 rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
@@ -225,6 +275,21 @@ crate.from_cargo(
         "//src/control-plane-services/function-autoscaler/crates/server:Cargo.toml",
     ],
     supported_platform_triples = SUPPORTED_TRIPLES,
+)
+
+# The bazel-ci image provides libssl-dev for both Linux architectures. Keep
+# these paths target-specific so macOS triples use native OpenSSL discovery.
+crate.annotation(
+    build_script_env = {
+        "AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_INCLUDE_DIR": "/usr/include",
+        "AARCH64_UNKNOWN_LINUX_GNU_OPENSSL_LIB_DIR": "/usr/lib/aarch64-linux-gnu",
+        "CFLAGS_aarch64_unknown_linux_gnu": "-I/usr/include/aarch64-linux-gnu",
+        "OPENSSL_NO_VENDOR": "1",
+        "X86_64_UNKNOWN_LINUX_GNU_OPENSSL_INCLUDE_DIR": "/usr/include",
+        "X86_64_UNKNOWN_LINUX_GNU_OPENSSL_LIB_DIR": "/usr/lib/x86_64-linux-gnu",
+    },
+    crate = "openssl-sys",
+    repositories = ["rs_autoscaler_crates"],
 )
 
 # Only the workspace root Cargo.toml is listed. Naming the member manifest too
@@ -385,6 +450,7 @@ oci.pull(
         "linux/arm64/v8",
     ],
 )
+
 # NVIDIA distroless cc: the base for Rust service images, which need a libc and
 # so cannot use distroless_static. arm64/v8, not arm64: nvcr.io/nvidia/distroless
 # publishes its aarch64 manifest under the v8 variant, and rules_oci matches the
@@ -516,9 +582,19 @@ maven.install(
         # OTel / Cassandra / Testcontainers). Root coordinates only: BOM-managed
         # starters/modules, parent-owned explicit pins, and build/test tools.
         "at.yawk.lz4:lz4-java:1.10.3",
+        # ESS overrides the Spring Boot BOM version to include the current
+        # logback security fixes. Keep the runtime family aligned.
+        "ch.qos.logback:logback-classic:1.5.37",
+        "ch.qos.logback:logback-core:1.5.37",
         "com.github.ben-manes.caffeine:guava",
+        "com.google.code.gson:gson",
+        # Direct pin overrides the Spring Boot BOM, which manages this to
+        # 2.41.0. Without the pin the Maven resolver downgrades the shared
+        # graph from 2.49.0; keep the higher version across all services.
+        "com.google.errorprone:error_prone_annotations:2.49.0",
         "com.github.java-json-tools:json-patch:1.13",
         "com.jayway.jsonpath:json-path",
+        "com.nimbusds:nimbus-jose-jwt:10.9.1",
         "commons-codec:commons-codec",
         # nv-boot-parent overrides the Spring Boot BOM's lower version.
         "commons-logging:commons-logging:1.4.0",
@@ -528,6 +604,10 @@ maven.install(
         "io.nats:jnats:2.23.0",
         "io.opentelemetry:opentelemetry-exporter-otlp",
         "io.opentelemetry:opentelemetry-sdk-testing",
+        "io.opentelemetry.instrumentation:opentelemetry-instrumentation-annotations:2.21.0",
+        "io.projectreactor:reactor-core-micrometer",
+        "io.projectreactor:reactor-test",
+        "io.projectreactor:reactor-tools",
         "jakarta.servlet:jakarta.servlet-api",
         "org.apache.cassandra:java-driver-metrics-micrometer",
         "org.apache.commons:commons-collections4:4.5.0",
@@ -548,6 +628,7 @@ maven.install(
         "org.ow2.asm:asm-util:9.9",
         "org.projectlombok:lombok",
         "org.springdoc:springdoc-openapi-starter-webflux-api:3.0.3",
+        "org.springdoc:springdoc-openapi-starter-webflux-ui:3.0.3",
         "org.springdoc:springdoc-openapi-starter-webmvc-api:3.0.3",
         "org.springframework.boot:spring-boot-micrometer-tracing-opentelemetry",
         "org.springframework.boot:spring-boot-restclient",
@@ -556,7 +637,9 @@ maven.install(
         "org.springframework.boot:spring-boot-starter",
         "org.springframework.boot:spring-boot-starter-actuator",
         "org.springframework.boot:spring-boot-starter-actuator-test",
+        "org.springframework.boot:spring-boot-starter-cache",
         "org.springframework.boot:spring-boot-starter-data-cassandra",
+        "org.springframework.boot:spring-boot-starter-data-cassandra-reactive",
         "org.springframework.boot:spring-boot-starter-data-cassandra-test",
         "org.springframework.boot:spring-boot-starter-jackson",
         "org.springframework.boot:spring-boot-starter-security-oauth2-client",
@@ -567,6 +650,7 @@ maven.install(
         "org.springframework.boot:spring-boot-starter-webflux",
         "org.springframework.boot:spring-boot-starter-webflux-test",
         "org.springframework.boot:spring-boot-starter-webmvc-test",
+        "org.springframework.boot:spring-boot-testcontainers",
         "org.springframework.boot:spring-boot-webclient",
         "org.springframework.cloud:spring-cloud-commons",
         "org.springframework.cloud:spring-cloud-context",
@@ -595,7 +679,6 @@ maven.install(
         "com.amazonaws:aws-java-sdk-sns:1.12.696",
         "com.amazonaws:aws-java-sdk-sqs:1.12.696",
         "com.amazonaws:aws-java-sdk-sts:1.12.696",
-        "com.google.crypto.tink:tink:1.6.1",
         "com.vdurmont:semver4j:3.1.0",
         "io.nats:jwt-java:2.2.0",
         "net.logstash.logback:logstash-logback-encoder:8.1",
@@ -626,6 +709,8 @@ maven.install(
         "org.ow2.asm:asm-tree:9.9",
         "org.reflections:reflections:0.10.2",
         "software.amazon.awssdk:arns:2.40.1",
+        "software.amazon.awssdk:auth:2.40.1",
+        "software.amazon.awssdk:s3:2.40.1",
         "software.amazon.awssdk:sts:2.40.1",
         "org.springframework:spring-context-support",
         "org.springframework:spring-webflux",

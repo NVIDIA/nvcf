@@ -21,7 +21,6 @@ Feature: Install local Helmfile observability with the control profile
       | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | observability.profile           | control                              |
-      | functionAutoscaler.chartVersion | 0.2.0                                |
       | functionAutoscaler.image.tag    | 1.18.10                              |
     # Set the shared observability stack environment.
     And I copy the file "tests/bdd/fixtures/self-managed-local-bdd.yaml" to "deploy/stacks/observability/environments/local-bdd-observability-control.yaml"
@@ -51,8 +50,7 @@ Feature: Install local Helmfile observability with the control profile
       | monitoring       |
 
   Scenario: Control profile installs shared infrastructure and control monitors
-    When I run command "make -C deploy/stacks/self-managed install HELMFILE_ENV=local-bdd-observability-control"
-    Then the command exit code should be 0
+    When I successfully run command "make -C deploy/stacks/self-managed install HELMFILE_ENV=local-bdd-observability-control"
 
     When I run command "helm list --all-namespaces --kube-context k3d-ncp-local -o json"
     Then the json output should contain rows:
@@ -63,8 +61,7 @@ Feature: Install local Helmfile observability with the control profile
       | otel-collector           | monitoring | deployed |
       | default-monitors         | monitoring | deployed |
 
-    When I run command "kubectl get opentelemetrycollector nvcf-observability -n monitoring --context k3d-ncp-local -o jsonpath='{.spec.targetAllocator.enabled}'"
-    Then the command exit code should be 0
+    When I successfully run command "kubectl get opentelemetrycollector nvcf-observability -n monitoring --context k3d-ncp-local -o jsonpath='{.spec.targetAllocator.enabled}'"
     And the command output should contain "true"
 
     Then these ServiceMonitors should exist in namespace "monitoring" using context "k3d-ncp-local":

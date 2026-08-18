@@ -43,12 +43,15 @@ go_library(
     # (absent under Bazel).
     x_defs = {
         "nvcf-grpc-proxy/proxy.version": "{STABLE_VERSION}",
+        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Service": "nvcf-grpc-proxy",
+        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Version": "{STABLE_VERSION}",
+        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.GitHash": "{STABLE_GIT_COMMIT_FULL}",
     },
     deps = [
         "//src/invocation-plane-services/grpc-proxy/proxy",
-        "@com_github_nvidia_nvcf_go//pkg/nvkit/config",
-        "@com_github_nvidia_nvcf_go//pkg/nvkit/logs",
-        "@com_github_nvidia_nvcf_go//pkg/nvkit/tracing",
+        "//src/libraries/go/lib/pkg/nvkit/config",
+        "//src/libraries/go/lib/pkg/nvkit/logs",
+        "//src/libraries/go/lib/pkg/nvkit/tracing",
         "@com_github_spf13_cobra//:cobra",
         "@com_github_spf13_pflag//:pflag",
         "@org_uber_go_zap//:zap",

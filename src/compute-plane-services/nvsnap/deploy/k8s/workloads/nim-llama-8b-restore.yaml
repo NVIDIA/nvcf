@@ -37,12 +37,26 @@ spec:
       args:
         - |
           set -e
-          # Push this pod's own pid allocations high so the low pid range the
-          # dump captured stays free for CRIU's exact-pid forks.
-          echo 100000 > /proc/sys/kernel/ns_last_pid || echo "(ns_last_pid bump failed)"
+          # NOTE: this pod does NOT reserve its own pid range. Writing
+          # /proc/sys/kernel/ns_last_pid from a container fails with EPERM
+          # (/proc/sys is mounted read-only into the pod) even when privileged,
+          # so the attempt that used to live here never did anything. The agent
+          # does it from the host instead, before invoking CRIU restore --
+          # see reservePlaceholderPIDs in internal/agent/restore_v2.go.
           # Restored workload stdio is a plain-file fd on /tmp/nim.out (the
           # source manifest's setsid convention); surface it via kubelet.
-          touch /tmp/nim.out
+          #
+          # Do NOT pre-create this file. The rootfs-diff replay delivers it
+          # with the exact contents and size CRIU recorded, and CRIU verifies
+          # that size before reopening the fd. An empty placeholder both fails
+          # that check and blocks the replay that would have fixed it:
+          #   tar: ./tmp/nim.out: Cannot open: Permission denied
+          #   Error (criu/files-reg.c:2184): File tmp/nim.out has bad size 0
+          #                                  (expect 17058)
+          #   Error (criu/files.c:1322): Unable to open fd=1 id=0x6
+          # touch creates it owned by the image's unprivileged user, and the
+          # replay's tar cannot overwrite that. Leaving the path absent lets
+          # tar create it cleanly. tail -F already waits for a missing file.
           tail -F /tmp/nim.out &
           while true; do sleep 30; done
       env:

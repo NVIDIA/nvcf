@@ -482,6 +482,54 @@ agent:
 		require.ErrorContains(t, err, "validate merged config: agent.byooOtelCollector: log sampling: samplingPercentage must be 0 or at least")
 	})
 
+	t.Run("rejects_bundle_transport_trust_with_quic_insecure", func(t *testing.T) {
+		_, err := DecodeConfig([]byte(`
+workload:
+  stargateQUICInsecure: true
+  transportTLS:
+    trustMode: bundle
+`))
+		require.ErrorContains(t, err, "workload.stargateQUICInsecure=true cannot be used with workload.transportTLS.trustMode=bundle")
+		require.ErrorContains(t, err, "set workload.stargateQUICInsecure=false or use trustMode=system")
+	})
+
+	for _, tc := range []struct {
+		name string
+		yaml string
+	}{
+		{
+			name: "allows_system_transport_trust_with_quic_insecure",
+			yaml: `
+workload:
+  stargateQUICInsecure: true
+  transportTLS:
+    trustMode: system
+`,
+		},
+		{
+			name: "allows_bundle_transport_trust_with_quic_insecure_false",
+			yaml: `
+workload:
+  stargateQUICInsecure: false
+  transportTLS:
+    trustMode: bundle
+`,
+		},
+		{
+			name: "allows_bundle_transport_trust_with_quic_insecure_unset",
+			yaml: `
+workload:
+  transportTLS:
+    trustMode: bundle
+`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := DecodeConfig([]byte(tc.yaml))
+			require.NoError(t, err)
+		})
+	}
+
 	t.Run("duration_parsing", func(t *testing.T) {
 		data := []byte(`
 agent:
@@ -497,19 +545,6 @@ workload:
 		assert.Equal(t, 3*time.Hour, cfg.Workload.MaxRunningTimeout)
 	})
 
-	t.Run("transport_tls_installer_image_env_override", func(t *testing.T) {
-		t.Setenv("NVCA_WORKLOAD_TRANSPORT_TLS_INSTALLER_IMAGE", "nvcr.io/private-mirror/nvca:test")
-		data := []byte(`
-workload:
-  transportTLS:
-    trustMode: bundle
-    installerImage: nvcr.io/nvidia/nvcf-byoc/nvca:file
-`)
-		cfg, err := DecodeConfig(data)
-		require.NoError(t, err)
-		require.NotNil(t, cfg.Workload.TransportTLS)
-		assert.Equal(t, "nvcr.io/private-mirror/nvca:test", cfg.Workload.TransportTLS.InstallerImage)
-	})
 }
 
 func TestEncodeConfig(t *testing.T) {

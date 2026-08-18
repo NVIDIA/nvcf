@@ -13,11 +13,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::backend::{DEFAULT_PRIORITY_CEILING, UpstreamBackend, dynamo};
 use super::core::{
     MAX_SPECULATIVE_REQUEST_BODY_PREALLOC_BYTES, TunnelServerApp, extend_body_from_buf,
-    is_health_request_path, otel_parent_from_headers, pylon_upstream_parent_context,
-    request_body_buffer, request_body_capacity, should_forward_header,
-    should_forward_response_header,
+    health_probe_path_and_query, is_health_request_path, otel_parent_from_headers,
+    pylon_upstream_parent_context, request_body_buffer, request_body_capacity,
+    should_forward_header, should_forward_response_header,
 };
 use super::endpoint::{
     build_trusted_client_config, derive_sni, make_server_config, target_authority,
@@ -60,6 +61,7 @@ use crate::request_observer::{
 use crate::request_quality_monitor::RequestQualityMonitorConfig;
 use crate::runtime_state::ModelGeneration;
 use crate::stats::PylonMetrics;
+use crate::upstream_health::UpstreamHealthPaths;
 use crate::{PylonRuntimeState, StatsCollectorConfig, start_stats_collector};
 
 #[derive(Clone, Default)]
@@ -477,6 +479,8 @@ fn pylon_request_header_filter_strips_tunnel_headers_case_insensitively()
         "X-Method",
         "X-Path",
         "X-Stargate-Expected-Queue-Ms",
+        "X-Dynamo-Request-Priority",
+        "X-Dynamo-Request-Strict-Priority",
     ]
     .into_iter()
     .chain(RETRY_CONTROL_REQUEST_HEADERS)
@@ -491,6 +495,46 @@ fn pylon_request_header_filter_strips_tunnel_headers_case_insensitively()
         &retry
     ));
     Ok(())
+}
+
+#[test]
+fn pylon_dynamo_request_priority_inverts_within_bounded_ceiling() {
+    let ceiling = DEFAULT_PRIORITY_CEILING;
+    // Most urgent platform rank gets the full head start.
+    assert_eq!(dynamo::request_priority(Some(0), ceiling), ceiling as i32);
+    assert_eq!(
+        dynamo::request_priority(Some(7), ceiling),
+        (ceiling - 7) as i32
+    );
+    // Unconfigured and beyond-ceiling ranks both land at the lowest value.
+    assert_eq!(dynamo::request_priority(None, ceiling), 0);
+    assert_eq!(dynamo::request_priority(Some(ceiling), ceiling), 0);
+    assert_eq!(dynamo::request_priority(Some(u32::MAX), ceiling), 0);
+    // A ceiling beyond i32 is clamped so the emitted value stays a valid i32.
+    assert_eq!(dynamo::request_priority(Some(0), u32::MAX), i32::MAX);
+    assert_eq!(dynamo::request_priority(None, u32::MAX), 0);
+    // A ceiling of 0 collapses every rank to the lowest value.
+    assert_eq!(dynamo::request_priority(Some(0), 0), 0);
+    assert_eq!(dynamo::request_priority(None, 0), 0);
+}
+
+#[test]
+fn pylon_dynamo_priority_headers_are_always_emitted() {
+    let mut headers = HeaderMap::new();
+    let emitted = dynamo::apply_priority_headers(Some(7), DEFAULT_PRIORITY_CEILING, &mut headers);
+    assert_eq!(emitted, (DEFAULT_PRIORITY_CEILING - 7) as i32);
+    assert_eq!(
+        headers["x-dynamo-request-priority"],
+        emitted.to_string().as_str()
+    );
+    assert_eq!(headers["x-dynamo-request-strict-priority"], "0");
+
+    // Absent platform priority pins both headers to the lowest values.
+    let mut headers = HeaderMap::new();
+    let emitted = dynamo::apply_priority_headers(None, DEFAULT_PRIORITY_CEILING, &mut headers);
+    assert_eq!(emitted, 0);
+    assert_eq!(headers["x-dynamo-request-priority"], "0");
+    assert_eq!(headers["x-dynamo-request-strict-priority"], "0");
 }
 
 #[test]
@@ -765,7 +809,7 @@ async fn start_queue_mismatch_test_tunnel(
             request_id: "req-already-queued".to_string(),
             routing_key: Some("rk-1".to_string()),
             model_id: "model-a".to_string(),
-            priority: 0,
+            priority: None,
             input_tokens: 100,
             accepted_at: std::time::Instant::now(),
         });
@@ -878,6 +922,21 @@ fn assert_queue_mismatch_response(response: &TunnelResponse, raw_quic: bool) {
         std::str::from_utf8(&response.body)
             .unwrap()
             .contains("queue_estimate_mismatch")
+    );
+}
+
+#[test]
+fn health_probe_path_keeps_the_query_string() {
+    let health_paths = UpstreamHealthPaths::default();
+    health_paths.mark_resolved(1);
+
+    assert_eq!(
+        health_probe_path_and_query(&health_paths, "/health?probe=1"),
+        "/v1/health/ready?probe=1"
+    );
+    assert_eq!(
+        health_probe_path_and_query(&health_paths, "/health"),
+        "/v1/health/ready"
     );
 }
 
@@ -1629,6 +1688,168 @@ async fn quic_tunnel_forwards_to_http_backend() {
     assert_eq!(payloads.len(), 1);
     assert_eq!(payloads[0]["object"], "chat.completion.chunk");
     assert_eq!(payloads[0]["choices"][0]["delta"]["content"], "ok");
+
+    tunnel.shutdown().await;
+}
+
+/// Echoes the Dynamo priority headers the backend received, so the tunnel
+/// tests assert on what actually crossed the pylon-to-engine hop.
+fn dynamo_priority_echo_router() -> Router {
+    Router::new()
+        .route(
+            "/health",
+            axum::routing::get(|req: Request| async move {
+                let dynamo_priority = req
+                    .headers()
+                    .get("x-dynamo-request-priority")
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("absent")
+                    .to_string();
+                ([("x-echo-dynamo-priority", dynamo_priority)], "ok")
+            }),
+        )
+        .route(
+        "/v1/chat/completions",
+        post(|req: Request| async move {
+            let echo_header = |name: &str| {
+                req.headers()
+                    .get(name)
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("absent")
+                    .to_string()
+            };
+            let dynamo_priority = echo_header("x-dynamo-request-priority");
+            let dynamo_strict_priority = echo_header("x-dynamo-request-strict-priority");
+            let mut sse = axum::response::Sse::new(async_stream::stream! {
+                yield Ok::<_, std::convert::Infallible>(
+                    Event::default().data(r#"{"object":"chat.completion.chunk","choices":[{"delta":{"content":"ok"}}]}"#)
+                );
+                yield Ok::<_, std::convert::Infallible>(Event::default().data("[DONE]"));
+            })
+            .into_response();
+            sse.headers_mut().insert(
+                HeaderName::from_static("x-echo-dynamo-priority"),
+                HeaderValue::from_str(&dynamo_priority).unwrap(),
+            );
+            sse.headers_mut().insert(
+                HeaderName::from_static("x-echo-dynamo-strict-priority"),
+                HeaderValue::from_str(&dynamo_strict_priority).unwrap(),
+            );
+            *sse.status_mut() = StatusCode::OK;
+            sse
+        }),
+    )
+}
+
+#[tokio::test]
+async fn quic_tunnel_derives_dynamo_priority_from_x_priority() {
+    let (config, _metrics) = metered_test_tunnel_config_for(dynamo_priority_echo_router()).await;
+    let ceiling = config.forwarding.priority_ceiling;
+    let mut tunnel = RawTunnelTest::start(config).await;
+
+    let mut headers =
+        tunnel_request_headers("/v1/chat/completions", "model-a", "req-dynamo-1", "11");
+    headers.insert("x-priority", "7".parse().unwrap());
+    // Spoofed engine headers must be replaced by pylon-derived values.
+    headers.insert("x-dynamo-request-priority", "42".parse().unwrap());
+    headers.insert("x-dynamo-request-strict-priority", "1".parse().unwrap());
+    tunnel
+        .send(headers, br#"{"messages":[],"stream":true}"#)
+        .await;
+
+    let response_headers = tunnel.response_head(StatusCode::OK).await;
+    assert_eq!(
+        response_headers
+            .get("x-echo-dynamo-priority")
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        (ceiling - 7).to_string()
+    );
+    assert_eq!(response_headers["x-echo-dynamo-strict-priority"], "0");
+
+    tunnel.shutdown().await;
+}
+
+#[tokio::test]
+async fn quic_tunnel_emits_lowest_dynamo_priority_without_x_priority() {
+    let (config, _metrics) = metered_test_tunnel_config_for(dynamo_priority_echo_router()).await;
+    let mut tunnel = RawTunnelTest::start(config).await;
+
+    let mut headers =
+        tunnel_request_headers("/v1/chat/completions", "model-a", "req-dynamo-2", "11");
+    headers.insert("x-dynamo-request-priority", "42".parse().unwrap());
+    tunnel
+        .send(headers, br#"{"messages":[],"stream":true}"#)
+        .await;
+
+    // Unconfigured requests carry the lowest priority instead of no header.
+    let response_headers = tunnel.response_head(StatusCode::OK).await;
+    assert_eq!(response_headers["x-echo-dynamo-priority"], "0");
+    assert_eq!(response_headers["x-echo-dynamo-strict-priority"], "0");
+
+    tunnel.shutdown().await;
+}
+
+#[tokio::test]
+async fn quic_tunnel_health_requests_carry_no_derived_priority() {
+    let (config, _metrics) = metered_test_tunnel_config_for(dynamo_priority_echo_router()).await;
+    let mut tunnel = RawTunnelTest::start(config).await;
+
+    // Health requests skip validation, so no required tunnel headers.
+    let mut headers = HeaderMap::new();
+    headers.insert("x-method", "GET".parse().unwrap());
+    headers.insert("x-path", "/health".parse().unwrap());
+    // A spoofed engine header is stripped on the health path too.
+    headers.insert("x-dynamo-request-priority", "42".parse().unwrap());
+    tunnel.send(headers, b"").await;
+
+    let response_headers = tunnel.response_head(StatusCode::OK).await;
+    assert_eq!(response_headers["x-echo-dynamo-priority"], "absent");
+
+    tunnel.shutdown().await;
+}
+
+#[tokio::test]
+async fn quic_tunnel_health_probes_follow_the_resolved_upstream_path() {
+    let (mut config, _metrics) = metered_test_tunnel_config_for(
+        Router::new().route("/v1/health/ready", axum::routing::get(|| async { "ok" })),
+    )
+    .await;
+    let health_paths = UpstreamHealthPaths::default();
+    health_paths.mark_resolved(1);
+    config.forwarding.upstream_health_paths = health_paths;
+    let mut tunnel = RawTunnelTest::start(config).await;
+
+    let mut headers = HeaderMap::new();
+    headers.insert("x-method", "GET".parse().unwrap());
+    headers.insert("x-path", "/health".parse().unwrap());
+    tunnel.send(headers, b"").await;
+
+    tunnel.response_head(StatusCode::OK).await;
+
+    tunnel.shutdown().await;
+}
+
+#[tokio::test]
+async fn quic_tunnel_passthrough_backend_strips_but_derives_nothing() {
+    let (mut config, _metrics) =
+        metered_test_tunnel_config_for(dynamo_priority_echo_router()).await;
+    config.forwarding.upstream_backend = UpstreamBackend::Passthrough;
+    let mut tunnel = RawTunnelTest::start(config).await;
+
+    let mut headers =
+        tunnel_request_headers("/v1/chat/completions", "model-a", "req-dynamo-3", "11");
+    headers.insert("x-priority", "7".parse().unwrap());
+    headers.insert("x-dynamo-request-strict-priority", "1".parse().unwrap());
+    tunnel
+        .send(headers, br#"{"messages":[],"stream":true}"#)
+        .await;
+
+    let response_headers = tunnel.response_head(StatusCode::OK).await;
+    assert_eq!(response_headers["x-echo-dynamo-priority"], "absent");
+    // Stripping inbound engine priority headers is not gated by the backend.
+    assert_eq!(response_headers["x-echo-dynamo-strict-priority"], "absent");
 
     tunnel.shutdown().await;
 }
