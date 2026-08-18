@@ -128,6 +128,7 @@ const (
 	agentConfigMergeConfigMapName = "agent-config-merge"
 	nvcaOperatorConfigMapName     = "nvca-operator-config"
 	agentConfigVolumeName         = "agent-config"
+	legacyBYOOConfigAnnotation    = "nvcf.nvidia.com/legacy-byoo-config"
 
 	// ReVal config.
 	ReValCacheVolumeName = "reval-rendered-helmcharts"
@@ -1488,7 +1489,29 @@ func (bc *BackendK8sCache) getRawAgentConfigToMerge(ctx context.Context) (nvcaco
 		return nvcaconfig.Config{}, false,
 			nvcaoperatorerrors.FatalError(fmt.Errorf("invalid %s: %w", agentConfigMergeConfigMapName, err))
 	}
+	if bc.shouldWarnForLegacyBYOOConfig(cm) {
+		log.Warnf(
+			"ConfigMap %s/%s contains deprecated agentConfig.mergeConfig BYOO settings; migrate to top-level chart byoo values before the next minor release",
+			cm.Namespace,
+			cm.Name,
+		)
+	}
 	return cfg, true, nil
+}
+
+func (bc *BackendK8sCache) shouldWarnForLegacyBYOOConfig(cm *corev1.ConfigMap) bool {
+	if cm.Annotations[legacyBYOOConfigAnnotation] != "true" {
+		return false
+	}
+
+	bc.legacyBYOOConfigWarningMu.Lock()
+	defer bc.legacyBYOOConfigWarningMu.Unlock()
+	if bc.legacyBYOOConfigWarningSeen && bc.legacyBYOOConfigWarningResourceVersion == cm.ResourceVersion {
+		return false
+	}
+	bc.legacyBYOOConfigWarningResourceVersion = cm.ResourceVersion
+	bc.legacyBYOOConfigWarningSeen = true
+	return true
 }
 
 func (bc *BackendK8sCache) getImageRegistryServerFromRepo(nb *nvidiaiov1.NVCFBackend) string {

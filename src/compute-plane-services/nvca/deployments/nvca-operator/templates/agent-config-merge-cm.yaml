@@ -1,4 +1,5 @@
-{{- if (.Values.agentConfig).mergeConfig }}
+{{- $effectiveConfig := include "nvcaop.effectiveAgentConfig" . | fromYaml }}
+{{- if $effectiveConfig }}
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -21,6 +22,11 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "nvcaop.labels" . | nindent 4 }}
+  {{- if eq (include "nvcaop.usesLegacyBYOOConfig" .) "true" }}
+  annotations:
+    nvcf.nvidia.com/legacy-byoo-config: "true"
+  {{- end }}
 data:
-  config.yaml: {{- .Values.agentConfig.mergeConfig | toYaml | indent 2 }}
+  config.yaml: |
+{{ include "nvcaop.effectiveAgentConfig" . | nindent 4 }}
 {{- end }}

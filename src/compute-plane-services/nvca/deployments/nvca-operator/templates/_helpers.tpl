@@ -121,6 +121,58 @@ Reject transport trust settings that explicitly disable QUIC verification.
 {{- end -}}
 
 {{/*
+Render the effective chart-owned agent configuration. Top-level byoo values
+provide the supported API. agentConfig.mergeConfig remains a legacy override
+and takes precedence for one minor-version transition.
+*/}}
+{{- define "nvcaop.effectiveAgentConfig" -}}
+{{- $byoo := .Values.byoo | default dict -}}
+{{- $agent := dict -}}
+{{- with $byoo.resources }}
+{{- $_ := set $agent "BYOOResources" . -}}
+{{- end -}}
+{{- with $byoo.logChunking }}
+{{- $_ := set $agent "byooLogChunking" . -}}
+{{- end -}}
+{{- with $byoo.otelCollector }}
+{{- $_ := set $agent "byooOtelCollector" . -}}
+{{- end -}}
+{{- with $byoo.additionalResourceOverhead }}
+{{- $_ := set $agent "additionalResourceOverhead" . -}}
+{{- end -}}
+{{- $config := dict -}}
+{{- if $agent }}
+{{- $_ := set $config "agent" $agent -}}
+{{- end -}}
+{{- $agentConfig := .Values.agentConfig | default dict -}}
+{{- $mergeConfigData := $agentConfig.mergeConfig | default "" -}}
+{{- if $mergeConfigData }}
+{{- $config = mergeOverwrite $config ($mergeConfigData | fromYaml | default dict) -}}
+{{- end -}}
+{{- $config | toYaml -}}
+{{- end -}}
+
+{{/*
+Return true when legacy agentConfig.mergeConfig configures BYOO fields. The
+ConfigMap annotation lets the operator emit a source-aware migration warning.
+*/}}
+{{- define "nvcaop.usesLegacyBYOOConfig" -}}
+{{- $agentConfig := .Values.agentConfig | default dict -}}
+{{- $mergeConfigData := $agentConfig.mergeConfig | default "" -}}
+{{- $legacyBYOO := false -}}
+{{- if $mergeConfigData }}
+{{- $config := $mergeConfigData | fromYaml | default dict -}}
+{{- $agent := $config.agent | default dict -}}
+{{- range $key, $_ := $agent }}
+{{- if or (hasPrefix "byoo" (lower $key)) (eq $key "additionalResourceOverhead") }}
+{{- $legacyBYOO = true -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- $legacyBYOO -}}
+{{- end -}}
+
+{{/*
 ImagePullSecret for images.
 */}}
 {{- define "nvcaop.generatedImagePullSecret" }}
