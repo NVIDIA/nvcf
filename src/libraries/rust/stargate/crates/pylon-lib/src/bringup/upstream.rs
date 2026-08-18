@@ -116,6 +116,7 @@ pub(super) async fn send_completion_request(
             "/v1/chat/completions",
         ))
         .header(HEADER_REQUEST_ID, &request_id)
+        .header("request-id", &request_id)
         .header(HEADER_MODEL, model_id)
         .header(HEADER_INPUT_TOKENS, input_tokens.to_string())
         .json(request);

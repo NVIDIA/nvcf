@@ -481,7 +481,6 @@ fn pylon_request_header_filter_strips_tunnel_headers_case_insensitively()
         "X-Stargate-Expected-Queue-Ms",
         "Request-Id",
         "X-Dynamo-Request-Id",
-        "X-Dynamo-Stats-Correlation-Id",
         "X-Dynamo-Request-Priority",
         "X-Dynamo-Request-Strict-Priority",
     ]
@@ -541,17 +540,19 @@ fn pylon_dynamo_priority_headers_are_always_emitted() {
 }
 
 #[test]
-fn pylon_replaces_platform_identity_with_a_dynamo_stats_correlation() {
+fn pylon_translates_platform_request_id_to_dynamo_request_id() {
     let mut headers = HeaderMap::new();
     headers.insert("x-request-id", "gateway-request".parse().unwrap());
     headers.insert("x-model", "gateway-model".parse().unwrap());
     headers.insert("x-routing-key", "gateway-route".parse().unwrap());
+    headers.insert("request-id", "spoofed-request".parse().unwrap());
+    headers.insert("x-dynamo-request-id", "spoofed-legacy".parse().unwrap());
 
-    let correlation_id = dynamo::translate_stats_correlation(&mut headers);
+    dynamo::apply_request_id("gateway-request", &mut headers);
 
-    assert!(uuid::Uuid::parse_str(&correlation_id).is_ok());
-    assert_eq!(headers[dynamo::HEADER_STATS_CORRELATION_ID], correlation_id);
-    assert!(!headers.contains_key("x-request-id"));
+    assert_eq!(headers["x-request-id"], "gateway-request");
+    assert_eq!(headers["request-id"], "gateway-request");
+    assert!(!headers.contains_key("x-dynamo-request-id"));
     assert!(!headers.contains_key("x-model"));
     assert!(!headers.contains_key("x-routing-key"));
 }
@@ -1070,6 +1071,7 @@ async fn http3_direct_tunnel_accepts_responses_request_to_upstream() {
     );
     let mut config = test_tunnel_config_for(app).await;
     config.tunnel_protocol = TunnelTransportProtocol::Http3;
+    config.forwarding.upstream_backend = UpstreamBackend::Passthrough;
     let tunnel = start_quic_http_tunnel(config).await.unwrap();
     let mut headers = HeaderMap::new();
     headers.insert("x-request-id", "req-h3-direct".parse().unwrap());
@@ -1668,6 +1670,7 @@ async fn quic_tunnel_forwards_to_http_backend() {
             }),
         );
     let (mut config, _metrics) = metered_test_tunnel_config_for(app).await;
+    config.forwarding.upstream_backend = UpstreamBackend::Passthrough;
     config.forwarding.retry.upstream_retry_header = HeaderName::from_static("x-vendor-retryable");
     let mut tunnel = RawTunnelTest::start(config).await;
 
@@ -1739,8 +1742,9 @@ fn dynamo_priority_echo_router() -> Router {
             };
             let dynamo_priority = echo_header("x-dynamo-request-priority");
             let dynamo_strict_priority = echo_header("x-dynamo-request-strict-priority");
-            let stats_correlation_id = echo_header(dynamo::HEADER_STATS_CORRELATION_ID);
-            let platform_identity_present = ["x-request-id", "x-model", "x-routing-key"]
+            let x_request_id = echo_header("x-request-id");
+            let dynamo_request_id = echo_header(dynamo::HEADER_DYNAMO_REQUEST_ID);
+            let platform_routing_identity_present = ["x-model", "x-routing-key"]
                 .into_iter()
                 .any(|name| req.headers().contains_key(name));
             let mut sse = axum::response::Sse::new(async_stream::stream! {
@@ -1759,12 +1763,16 @@ fn dynamo_priority_echo_router() -> Router {
                 HeaderValue::from_str(&dynamo_strict_priority).unwrap(),
             );
             sse.headers_mut().insert(
-                HeaderName::from_static("x-echo-stats-correlation-id"),
-                HeaderValue::from_str(&stats_correlation_id).unwrap(),
+                HeaderName::from_static("x-echo-request-id"),
+                HeaderValue::from_str(&x_request_id).unwrap(),
             );
             sse.headers_mut().insert(
-                HeaderName::from_static("x-saw-platform-identity"),
-                HeaderValue::from_static(if platform_identity_present { "true" } else { "false" }),
+                HeaderName::from_static("x-echo-dynamo-request-id"),
+                HeaderValue::from_str(&dynamo_request_id).unwrap(),
+            );
+            sse.headers_mut().insert(
+                HeaderName::from_static("x-saw-platform-routing-identity"),
+                HeaderValue::from_static(if platform_routing_identity_present { "true" } else { "false" }),
             );
             *sse.status_mut() = StatusCode::OK;
             sse
@@ -1776,7 +1784,6 @@ fn dynamo_priority_echo_router() -> Router {
 async fn quic_tunnel_translates_dynamo_request_headers() {
     let (config, _metrics) = metered_test_tunnel_config_for(dynamo_priority_echo_router()).await;
     let ceiling = config.forwarding.priority_ceiling;
-    let runtime_state = config.forwarding.runtime_state.clone();
     let mut tunnel = RawTunnelTest::start(config).await;
 
     let mut headers =
@@ -1787,6 +1794,10 @@ async fn quic_tunnel_translates_dynamo_request_headers() {
     headers.insert("x-dynamo-request-strict-priority", "1".parse().unwrap());
     headers.insert(
         "request-id",
+        uuid::Uuid::new_v4().to_string().parse().unwrap(),
+    );
+    headers.insert(
+        "x-dynamo-request-id",
         uuid::Uuid::new_v4().to_string().parse().unwrap(),
     );
     headers.insert("x-routing-key", "gateway-route".parse().unwrap());
@@ -1804,19 +1815,9 @@ async fn quic_tunnel_translates_dynamo_request_headers() {
         (ceiling - 7).to_string()
     );
     assert_eq!(response_headers["x-echo-dynamo-strict-priority"], "0");
-    assert_eq!(response_headers["x-saw-platform-identity"], "false");
-    let stats_correlation_id = response_headers["x-echo-stats-correlation-id"]
-        .to_str()
-        .unwrap();
-    assert!(uuid::Uuid::parse_str(stats_correlation_id).is_ok());
-    assert_eq!(
-        runtime_state
-            .engine_stats_generation(stats_correlation_id)
-            .as_ref()
-            .map(ModelGeneration::model_id),
-        Some("model-a")
-    );
-    runtime_state.finish_engine_stats_correlation(stats_correlation_id);
+    assert_eq!(response_headers["x-echo-request-id"], "req-dynamo-1");
+    assert_eq!(response_headers["x-echo-dynamo-request-id"], "req-dynamo-1");
+    assert_eq!(response_headers["x-saw-platform-routing-identity"], "false");
 
     tunnel.shutdown().await;
 }
@@ -1900,6 +1901,8 @@ async fn quic_tunnel_passthrough_backend_strips_but_derives_nothing() {
     assert_eq!(response_headers["x-echo-dynamo-priority"], "absent");
     // Stripping inbound engine priority headers is not gated by the backend.
     assert_eq!(response_headers["x-echo-dynamo-strict-priority"], "absent");
+    assert_eq!(response_headers["x-echo-request-id"], "req-dynamo-3");
+    assert_eq!(response_headers["x-echo-dynamo-request-id"], "absent");
 
     tunnel.shutdown().await;
 }
@@ -2753,6 +2756,7 @@ async fn assert_direct_embeddings_case(case: DirectEmbeddingsCase) {
     let (runtime_state, rx) = observed_runtime(16);
     let mut config = test_tunnel_config_for(app).await;
     config.tunnel_protocol = case.protocol;
+    config.forwarding.upstream_backend = UpstreamBackend::Passthrough;
     config.forwarding.runtime_state = runtime_state;
     let tunnel = start_quic_http_tunnel(config).await.unwrap();
     let client = DirectTunnelClient::connect(case.protocol, tunnel.listen_addr()).await;

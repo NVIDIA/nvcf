@@ -176,11 +176,7 @@ fn parse_stats_event(
     raw: RawEngineStatsEvent<'_>,
     observed_at: TokioInstant,
 ) -> Result<ParsedEngineStatsEvent, EngineStatsParseError> {
-    let dynamo_request_id = required_nonempty_string(raw.request_id, "request_id")?;
-    let request_id = match raw.correlation_id {
-        Some(value) => required_nonempty_string(Some(value), "correlation_id")?,
-        None => dynamo_request_id,
-    };
+    let request_id = required_nonempty_string(raw.request_id, "request_id")?;
     let model_id = required_nonempty_string(raw.model, "model")?;
     let tokens_processed = optional_u64(raw.tokens_processed, "tokens_processed")?;
     let tokens_generated = optional_u64(raw.tokens_generated, "tokens_generated")?;
@@ -213,7 +209,6 @@ struct RawEngineStatsEvent<'a> {
     version: Option<JsonScalar<'a>>,
     event_type: Option<JsonScalar<'a>>,
     request_id: Option<JsonScalar<'a>>,
-    correlation_id: Option<JsonScalar<'a>>,
     model: Option<JsonScalar<'a>>,
     tokens_processed: Option<JsonScalar<'a>>,
     tokens_generated: Option<JsonScalar<'a>>,
@@ -248,7 +243,6 @@ impl<'de> Visitor<'de> for RawEngineStatsEventVisitor {
                 "v" => event.version = Some(map.next_value()?),
                 "type" => event.event_type = Some(map.next_value()?),
                 "request_id" => event.request_id = Some(map.next_value()?),
-                "correlation_id" => event.correlation_id = Some(map.next_value()?),
                 "model" => event.model = Some(map.next_value()?),
                 "tokens_processed" => event.tokens_processed = Some(map.next_value()?),
                 "tokens_generated" => event.tokens_generated = Some(map.next_value()?),
@@ -604,24 +598,12 @@ async fn emit_engine_stats_event(
     }
     match update {
         Some(mut update) => {
-            let platform_generation = config.runtime_state.as_ref().and_then(|runtime_state| {
-                runtime_state.engine_stats_generation(&update.request_id)
-            });
-            if let Some(generation) = &platform_generation {
-                update.model_id = generation.model_id().to_string();
-            }
-            update.generation = platform_generation
-                .or_else(|| generated_request_generation(&update.request_id, &update.model_id))
+            update.generation = generated_request_generation(&update.request_id, &update.model_id)
                 .or_else(|| {
                     config.runtime_state.as_ref().and_then(|runtime_state| {
                         runtime_state.request_generation(&update.request_id)
                     })
                 });
-            if update.finished
-                && let Some(runtime_state) = &config.runtime_state
-            {
-                runtime_state.finish_engine_stats_correlation(&update.request_id);
-            }
             send_stats_update(
                 stats_update_tx,
                 StatsAggregatorUpdate::RequestCounters(update),
@@ -700,6 +682,9 @@ mod tests {
     use tokio::net::TcpListener;
 
     use crate::generated_request_id::{GeneratedRequestKind, next_generated_request_id};
+    use crate::request_observer::{
+        RequestObservationEndpoint, RequiredTunnelHeaders, TunnelRequestObserver,
+    };
 
     fn parse(line: &[u8]) -> Result<ParsedEngineStatsEvent, EngineStatsParseError> {
         parse_engine_stats_line(line, TokioInstant::now())
@@ -845,7 +830,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dynamo_stats_correlation_is_translated_to_the_platform_generation() {
+    async fn platform_request_id_routes_engine_stats_to_the_live_generation() {
         let runtime_state = PylonRuntimeState::new(
             stargate_proto::pb::InferenceServerStatus::Active,
             &["platform-model".to_string()],
@@ -853,18 +838,27 @@ mod tests {
         let generation = runtime_state
             .current_generation("platform-model")
             .expect("test generation should exist");
-        runtime_state.register_engine_stats_correlation(
-            "dynamo-correlation".to_string(),
-            generation.clone(),
+        let observer = TunnelRequestObserver::accepted(
+            RequestObservationEndpoint::ChatCompletions,
+            RequiredTunnelHeaders {
+                request_id: "gateway-request".to_string(),
+                routing_key: None,
+                model_id: "platform-model".to_string(),
+                priority: None,
+                input_tokens: 64,
+                accepted_at: std::time::Instant::now(),
+            },
+            Some(generation.clone()),
+            runtime_state.clone(),
         );
         let config = EngineStatsStreamConfig {
-            runtime_state: Some(runtime_state.clone()),
+            runtime_state: Some(runtime_state),
             ..EngineStatsStreamConfig::default()
         };
 
         let processed = process_lines(
             &config,
-            [r#"{"v":1,"type":"stats","request_id":"dynamo-request","correlation_id":"dynamo-correlation","model":"dynamo-model","tokens_processed":64,"finished":true}
+            [r#"{"v":1,"type":"stats","request_id":"gateway-request","model":"platform-model","tokens_processed":64,"finished":true}
 "#],
         )
         .await;
@@ -876,13 +870,10 @@ mod tests {
             panic!("expected request counters update");
         };
 
-        assert_eq!(update.request_id, "dynamo-correlation");
+        assert_eq!(update.request_id, "gateway-request");
         assert_eq!(update.model_id, "platform-model");
         assert_eq!(update.generation, Some(generation));
-        assert_eq!(
-            runtime_state.engine_stats_generation("dynamo-correlation"),
-            None
-        );
+        drop(observer);
     }
 
     #[test]
@@ -928,14 +919,6 @@ mod tests {
             (
                 br#"{"v":1,"type":"stats","request_id":"req-1","model":"llama","finished":"true"}"#.as_slice(),
                 "finished",
-            ),
-            (
-                br#"{"v":1,"type":"stats","request_id":"req-1","correlation_id":1,"model":"llama","finished":true}"#.as_slice(),
-                "correlation_id",
-            ),
-            (
-                br#"{"v":1,"type":"stats","request_id":"req-1","correlation_id":"  ","model":"llama","finished":true}"#.as_slice(),
-                "correlation_id",
             ),
         ] {
             assert!(matches!(
