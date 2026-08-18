@@ -167,11 +167,31 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	}
 
 	// 4. Dump target: CRIU's -t is resolved in the entered pid namespace.
-	// Use the GPU leader's session leader when available (PoC convention:
-	// workload launched via setsid, tree root != container init); fall back
-	// to the container init's in-namespace pid.
+	//
+	// Two choices, and they decide whether restore can ever be reliable:
+	//
+	//   session leader (default today): dumps a SUBTREE. CRIU only writes a
+	//     pidns image when the target is the namespace root, so a subtree dump
+	//     has none. Restore then cannot create a namespace -- it must recreate
+	//     the original PIDs inside the placeholder's existing one, because PIDs
+	//     are baked into the memory image (cached getpid, pthread TCBs, robust
+	//     futexes). If the placeholder already used one of them, clone3(set_tid)
+	//     fails with EEXIST and the restore dies. Whether that happens depends
+	//     on where the placeholder's PID counter sits, which is why this looks
+	//     like flakiness rather than a bug.
+	//
+	//   namespace init (this option): dumps the whole container tree, so CRIU
+	//     records the pid namespace and restore recreates it fresh. Every PID
+	//     is free by construction and the collision cannot occur.
+	//
+	// Off by default until validated end to end on every workload: it changes
+	// what a capture contains, so it must not switch silently under anyone.
 	targetHostPID := hostPID
-	if len(gpuPIDs) > 0 {
+	if dumpNamespaceRoot() {
+		// hostPID is the container init (NSpid 1) -- the namespace root.
+		log.WithField("dump_target", "namespace-init").
+			Info("dumping the container's pid namespace root (pidns image expected)")
+	} else if len(gpuPIDs) > 0 {
 		if sid, err := sessionID(procBase, gpuPIDs[0]); err == nil && sid > 1 {
 			targetHostPID = sid
 		}
@@ -486,4 +506,19 @@ func tailOfFile(path string, n int) string {
 		lines = lines[len(lines)-n:]
 	}
 	return strings.Join(lines, " | ")
+}
+
+// dumpNamespaceRoot reports whether capture should target the container's pid
+// namespace root rather than the workload's session leader.
+//
+// Dumping the namespace root is what lets CRIU record a pid namespace, which
+// in turn lets restore create a fresh one instead of recreating exact PIDs in
+// the placeholder's namespace. It is the structural fix for the clone3 EEXIST
+// restore failures; see docs/proposals/pidns-capture.md.
+//
+// Env-gated rather than a flag so it can be flipped per-run during validation
+// without a chart change, and defaults off so an upgrade never silently alters
+// what captures contain.
+func dumpNamespaceRoot() bool {
+	return os.Getenv("NVSNAP_DUMP_PIDNS_ROOT") == "1"
 }
