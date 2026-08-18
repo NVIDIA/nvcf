@@ -1,4 +1,5 @@
 load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//rules/oci:defs.bzl", "go_oci_image")
 
 go_library(
     name = "api_lib",
@@ -15,5 +16,14 @@ go_library(
 go_binary(
     name = "api",
     embed = [":api_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_oci_image(
+    name = "image",
+    base = "@distroless_go",
+    binary = ":api",
+    binary_path = "/usr/bin/event-ledger",
+    tags = ["nvcf-event-ledger"],
     visibility = ["//visibility:public"],
 )
