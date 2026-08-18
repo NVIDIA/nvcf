@@ -1086,6 +1086,10 @@ const (
 	nodeToNodeActiveDeadline = int64(180)
 	nodeToNodeDSTimeout      = 2 * time.Minute
 	nodeToNodeCheckerTimeout = 90 * time.Second
+	// orphanN2NDaemonSetTTL is the minimum age before a leftover nvcf-n2n-server-*
+	// DaemonSet is swept. Must exceed nodeToNodeCheckerTimeout to avoid racing
+	// with a concurrent run.
+	orphanN2NDaemonSetTTL = 10 * time.Minute
 )
 
 // sweepOrphanN2NDaemonSets deletes any nvcf-n2n-server-* DaemonSets older
@@ -1099,7 +1103,11 @@ func sweepOrphanN2NDaemonSets(ctx context.Context, log *logrus.Entry, client kub
 	dsList, err := client.AppsV1().DaemonSets(nodeToNodeNamespace).List(listCtx, metav1.ListOptions{
 		LabelSelector: "app.kubernetes.io/managed-by=nvcf-cluster-validator,app.kubernetes.io/component=n2n-server",
 	})
-	if err != nil || len(dsList.Items) == 0 {
+	if err != nil {
+		log.Warnf("N2N orphan sweep: failed to list DaemonSets in %s: %v", nodeToNodeNamespace, err)
+		return
+	}
+	if len(dsList.Items) == 0 {
 		return
 	}
 
@@ -1141,9 +1149,8 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 	printHeader(log, "Node-to-Node Communication")
 
 	// Reclaim DaemonSets orphaned by prior runs killed before their deferred
-	// cleanup fired (SIGKILL, OOM, node failure). TTL of 10 minutes is long
-	// enough to avoid racing with concurrent runs (checker timeout is 90s).
-	sweepOrphanN2NDaemonSets(ctx, log, client, 10*time.Minute)
+	// cleanup fired (SIGKILL, OOM, node failure).
+	sweepOrphanN2NDaemonSets(ctx, log, client, orphanN2NDaemonSetTTL)
 
 	nodes, err := client.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -1184,18 +1191,30 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 		_ = client.CoreV1().Pods(nodeToNodeNamespace).Delete(context.Background(), checkerName, opts)
 	}()
 
-	if _, err := client.AppsV1().DaemonSets(nodeToNodeNamespace).Create(
+	ds, err := client.AppsV1().DaemonSets(nodeToNodeNamespace).Create(
 		ctx, buildNodeToNodeDaemonSet(dsName, dsLabels), metav1.CreateOptions{},
-	); err != nil {
+	)
+	if err != nil {
 		printError(log, fmt.Sprintf("Failed to create server DaemonSet: %v", err))
 		ok := false
 		state.NodeToNodeOK = &ok
 		return
 	}
 
-	log.Infof("  Waiting for server DaemonSet pods on %d nodes...", len(schedulable))
+	// Use DesiredNumberScheduled from the DaemonSet status rather than
+	// len(schedulable): the scheduler respects taints and tolerations, so nodes
+	// with NoSchedule taints the DaemonSet has no toleration for are excluded.
+	// Waiting for len(schedulable) would block on pods that can never be scheduled.
+	wantPods := int(ds.Status.DesiredNumberScheduled)
+	if wantPods == 0 {
+		// Status may not be populated immediately after creation; fall back to
+		// the schedulable count and let the timeout surface any real problems.
+		wantPods = len(schedulable)
+	}
+
+	log.Infof("  Waiting for server DaemonSet pods on %d nodes...", wantPods)
 	selector := metav1.FormatLabelSelector(&metav1.LabelSelector{MatchLabels: dsLabels})
-	serverPods, err := waitForDaemonSetPods(ctx, client, nodeToNodeNamespace, selector, len(schedulable), nodeToNodeDSTimeout)
+	serverPods, err := waitForDaemonSetPods(ctx, client, nodeToNodeNamespace, selector, wantPods, nodeToNodeDSTimeout)
 	if err != nil {
 		printError(log, fmt.Sprintf("Server DaemonSet pods did not become ready: %v", err))
 		ok := false
@@ -1203,7 +1222,9 @@ func checkNodeToNode(ctx context.Context, client kubernetes.Interface, state *Va
 		return
 	}
 
-	checkerNode := schedulable[0]
+	// Select checkerNode from a Running server pod so it is guaranteed to be
+	// a node where the DaemonSet actually scheduled.
+	checkerNode := serverPods[0].Spec.NodeName
 	var targetIPs []string
 	for i := range serverPods {
 		if serverPods[i].Spec.NodeName != checkerNode && serverPods[i].Status.PodIP != "" {
