@@ -4525,7 +4525,7 @@ func TestSetupOTelCollectorConfigMap(t *testing.T) {
 				require.NoError(t, err)
 				assert.NotNil(t, cm)
 				assert.Contains(t, cm.Data, "config.yaml")
-				assert.Contains(t, cm.Data["config.yaml"], "k8s_events")
+				assert.Contains(t, cm.Data["config.yaml"], "k8sobjects")
 				assert.Contains(t, cm.Data["config.yaml"], "memory_limiter")
 			} else {
 				_, err := clients.K8s.CoreV1().ConfigMaps(ns).Get(ctx, NVCAOTelCollectorConfigMapName, metav1.GetOptions{})

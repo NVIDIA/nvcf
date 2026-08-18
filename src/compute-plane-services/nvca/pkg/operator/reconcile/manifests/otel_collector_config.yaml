@@ -2,10 +2,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 receivers:
-  k8s_events:
-    auth_type: "serviceAccount"
-    namespaces:
-      - "${env:NVCA_OTEL_COLLECTOR_REQUESTS_NAMESPACE}"
+  # Cluster-wide watch of Kubernetes Events (no namespace scoping) so Pod Events
+  # in per-instance namespaces (sr-<uuid>) and ICMSRequest Events are all
+  # captured.
+  k8sobjects:
+    auth_type: serviceAccount
+    # Re-list existing Events on start so a collector restart does not lose
+    # in-flight signals (within Kubernetes Event retention).
+    include_initial_state: true
+    objects:
+      - name: events
+        mode: watch
 
 processors:
   batch:
@@ -27,9 +34,14 @@ processors:
   transform/normalize:
     error_mode: ignore
     log_statements:
-      - set(resource.attributes["k8s.pod.uid"], resource.attributes["k8s.object.uid"]) where resource.attributes["k8s.object.kind"] == "Pod"
+      # k8sobjects (watch) delivers each Event under log.body["object"]; lift the
+      # fields the downstream Pod filter and enrichment rely on into attributes.
+      - set(resource.attributes["k8s.object.kind"], log.body["object"]["involvedObject"]["kind"]) where IsMap(log.body) and log.body["object"]["involvedObject"]["kind"] != nil
+      - set(resource.attributes["k8s.pod.uid"], log.body["object"]["involvedObject"]["uid"]) where resource.attributes["k8s.object.kind"] == "Pod"
+      - set(resource.attributes["k8s.object.fieldpath"], log.body["object"]["involvedObject"]["fieldPath"]) where IsMap(log.body) and log.body["object"]["involvedObject"]["fieldPath"] != nil
       # Only run when fieldpath contains {...} so ExtractPatterns has "name" key (avoids "key not found in map" warn)
       - set(resource.attributes["k8s.container.name"], ExtractPatterns(resource.attributes["k8s.object.fieldpath"], "{(?P<name>[^}]+)}")["name"]) where resource.attributes["k8s.object.fieldpath"] != nil and IsMatch(resource.attributes["k8s.object.fieldpath"], ".*\\{[^}]+\\}.*")
+      - set(log.attributes["k8s.event.reason"], log.body["object"]["reason"]) where IsMap(log.body) and log.body["object"]["reason"] != nil
 
   k8sattributes:
     auth_type: serviceAccount
@@ -152,11 +164,13 @@ service:
   pipelines:
     logs:
       receivers:
-        - k8s_events
+        - k8sobjects
       processors:
         - memory_limiter
-        - filter
+        # normalize lifts body["object"] fields into attributes, so it must run
+        # before the kind==Pod filter and k8sattributes enrichment.
         - transform/normalize
+        - filter
         - k8sattributes
         - transform
         - filter/required-fields

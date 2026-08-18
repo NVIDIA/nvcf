@@ -150,7 +150,6 @@ func TestGetOTelCollectorConfigData(t *testing.T) {
 				assert.NotContains(t, config, placeholder)
 			}
 
-			assert.Contains(t, config, "${env:NVCA_OTEL_COLLECTOR_REQUESTS_NAMESPACE}")
 			assert.Contains(t, config, "${env:NVCA_OTEL_COLLECTOR_MEMORY_LIMIT_PERCENTAGE}")
 			assert.Contains(t, config, "${env:NVCA_OTEL_COLLECTOR_SPIKE_LIMIT_PERCENTAGE}")
 			assert.Contains(t, config, "${env:NVCA_OTEL_COLLECTOR_HEALTH_CHECK_PORT}")
@@ -158,7 +157,7 @@ func TestGetOTelCollectorConfigData(t *testing.T) {
 			assert.Contains(t, config, "${env:NVCA_OTEL_COLLECTOR_METRICS_PORT}")
 			assert.Contains(t, config, "${env:NVCA_OTEL_COLLECTOR_AUTHENTICATOR}")
 			assert.Contains(t, config, "memory_limiter")
-			assert.Contains(t, config, "k8s_events")
+			assert.Contains(t, config, "k8sobjects")
 			assert.Contains(t, config, "k8sattributes")
 			assert.Contains(t, config, "otlphttp")
 		})
