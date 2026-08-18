@@ -10,7 +10,9 @@
 # directory instead of depending on the real one, so these stay true as charts
 # come and go.
 #
-# The wiring checks run before helm is invoked, so this test needs no helm.
+# The wiring cases run before helm is invoked, so they need no helm. The
+# cleanup cases stub helm instead of installing it, so the whole file runs
+# anywhere.
 set -euo pipefail
 
 script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/check-helm-charts"
@@ -64,5 +66,95 @@ rm -rf "${d}"
 # A missing values directory must fail.
 run "/nonexistent/helm-validate-values"
 expect "missing values directory fails" 1 "values directory not found"
+
+# ---------------------------------------------------------------------------
+# Dependency cleanup
+#
+# helm dependency build writes charts/*.tgz into the working tree. Stub helm so
+# these cases assert the cleanup without a network fetch, and satisfy the real
+# chart_map so the run reaches helm at all.
+# ---------------------------------------------------------------------------
+
+fake_values_dir=""
+fake_chart_root=""
+
+make_fake_tree() {  # sets $fake_values_dir and $fake_chart_root from the real chart_map
+    local stem rel
+    fake_values_dir="$(mktemp -d)"
+    fake_chart_root="$(mktemp -d)"
+    while read -r stem rel; do
+        [ -n "${stem}" ] || continue
+        : >"${fake_values_dir}/${stem}.yaml"
+        mkdir -p "${fake_chart_root}/${rel}"
+        printf 'apiVersion: v2\nname: %s\nversion: 0.0.0\n' "${stem}" \
+            >"${fake_chart_root}/${rel}/Chart.yaml"
+    done < <(sed -n '/^chart_map=(/,/^)/p' "${script}" | sed -n 's/^ *"\(.*\)"$/\1/p')
+    if [ ! -f "${fake_chart_root}/openbao/helm/Chart.yaml" ]; then
+        printf 'FAIL fake tree: chart_map did not yield the expected entries\n'
+        fail=1
+    fi
+}
+
+make_fake_helm() {  # make_fake_helm -> directory holding a helm stub, printed to stdout
+    local dir; dir="$(mktemp -d)"
+    cat >"${dir}/helm" <<'STUB'
+#!/usr/bin/env bash
+# Stub helm: dependency build drops an archive, everything else succeeds.
+if [ "${1:-}" = "dependency" ]; then
+    mkdir -p "${3}/charts"
+    : >"${3}/charts/fetched-0.1.0.tgz"
+fi
+exit 0
+STUB
+    chmod +x "${dir}/helm"
+    printf '%s' "${dir}"
+}
+
+run_with_fake_helm() {  # run_with_fake_helm -> sets $out and $rc
+    local stub_dir; stub_dir="$(make_fake_helm)"
+    set +e
+    out="$(PATH="${stub_dir}:${PATH}" bash "${script}" \
+        --values-dir "${fake_values_dir}" --chart-root "${fake_chart_root}" 2>&1)"
+    rc=$?
+    set -e
+    rm -rf "${stub_dir}"
+}
+
+# A charts/ directory created by the run is removed entirely.
+make_fake_tree
+printf 'dependencies:\n  - name: openbao\n' >>"${fake_chart_root}/openbao/helm/Chart.yaml"
+run_with_fake_helm
+expect "fetched charts directory is removed" 0 "14 charts linted and rendered"
+if [ -e "${fake_chart_root}/openbao/helm/charts" ]; then
+    printf 'FAIL created charts directory left behind\n'
+    fail=1
+else
+    printf 'ok   created charts directory removed\n'
+fi
+rm -rf "${fake_values_dir}" "${fake_chart_root}"
+
+# An existing charts/ directory keeps its contents and loses only the fetch.
+# helm dependency build adds to charts/ rather than replacing it, so removing
+# the whole directory would delete a vendored subchart.
+make_fake_tree
+printf 'dependencies:\n  - name: openbao\n' >>"${fake_chart_root}/openbao/helm/Chart.yaml"
+mkdir -p "${fake_chart_root}/openbao/helm/charts/vendored-subchart"
+: >"${fake_chart_root}/openbao/helm/charts/vendored-0.1.0.tgz"
+run_with_fake_helm
+expect "existing charts directory run succeeds" 0 "14 charts linted and rendered"
+if [ -e "${fake_chart_root}/openbao/helm/charts/fetched-0.1.0.tgz" ]; then
+    printf 'FAIL fetched archive left in an existing charts directory\n'
+    fail=1
+else
+    printf 'ok   fetched archive removed from an existing charts directory\n'
+fi
+if [ -f "${fake_chart_root}/openbao/helm/charts/vendored-0.1.0.tgz" ] &&
+   [ -d "${fake_chart_root}/openbao/helm/charts/vendored-subchart" ]; then
+    printf 'ok   vendored charts directory contents preserved\n'
+else
+    printf 'FAIL cleanup removed pre-existing charts directory contents\n'
+    fail=1
+fi
+rm -rf "${fake_values_dir}" "${fake_chart_root}"
 
 exit "${fail}"

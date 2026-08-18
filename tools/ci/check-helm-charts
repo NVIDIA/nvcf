@@ -122,13 +122,37 @@ if ! command -v helm >/dev/null 2>&1; then
     exit 1
 fi
 
-# helm dependency build writes charts/*.tgz into the working tree. Remove only
-# what this run fetched so a dirty tree never leaks into a commit.
-fetched_dirs=()
+# helm dependency build writes charts/*.tgz into the working tree, and adds to
+# an existing charts/ directory rather than replacing it. deploy/helm already
+# has charts/ directories holding vendored subchart sources, so removing the
+# whole directory is not safe. Record the archives present before each fetch
+# and delete only the ones this run added, plus any charts/ directory it
+# created outright. A dirty tree then never leaks into a commit.
+created_dirs=()
+fetched_archives=()
+
+archives_in() {  # archives_in <chart dir> -> one archive path per line
+    find "$1/charts" -maxdepth 1 -type f -name '*.tgz' 2>/dev/null | sort
+}
+
+record_new_archives() {  # record_new_archives <chart dir> <before list>
+    local chart_dir="$1" before="$2" archive
+    while IFS= read -r archive; do
+        [ -n "${archive}" ] || continue
+        case $'\n'"${before}"$'\n' in
+            *$'\n'"${archive}"$'\n'*) continue ;;
+        esac
+        fetched_archives+=("${archive}")
+    done < <(archives_in "${chart_dir}")
+}
+
 cleanup() {
-    local dir
-    for dir in ${fetched_dirs[@]+"${fetched_dirs[@]}"}; do
-        rm -rf "${dir}"
+    local path
+    for path in ${fetched_archives[@]+"${fetched_archives[@]}"}; do
+        rm -f "${path}"
+    done
+    for path in ${created_dirs[@]+"${created_dirs[@]}"}; do
+        rm -rf "${path}"
     done
 }
 trap cleanup EXIT
@@ -156,11 +180,17 @@ for stem in "${stems[@]}"; do
         # The chart declares subcharts. helm lint only warns when they are
         # absent, so without this fetch helm template fails on a missing
         # dependency and lint alone would not have caught it.
-        if [ ! -d "${chart_dir}/charts" ]; then
-            fetched_dirs+=("${chart_dir}/charts")
+        before_archives=""
+        if [ -d "${chart_dir}/charts" ]; then
+            before_archives="$(archives_in "${chart_dir}")"
+        else
+            created_dirs+=("${chart_dir}/charts")
         fi
         run_step "${stem}: helm dependency build" \
             helm dependency build "${chart_dir}" || chart_failed=1
+        # Record after a failed fetch too. helm can leave a partial download
+        # behind on error.
+        record_new_archives "${chart_dir}" "${before_archives}"
     fi
 
     if [ "${chart_failed}" -eq 0 ]; then

@@ -109,6 +109,14 @@ jobs:
             git status --porcelain >&2
             exit 1
           fi
+          # git status alone would miss a fetched subchart archive, since
+          # .gitignore covers them. Look for the files themselves.
+          leftover="$(git status --porcelain --ignored=matching -- 'deploy/helm/*/*/charts/*.tgz')"
+          if [ -n "${leftover}" ]; then
+            echo "ERROR: the checks left fetched subchart archives behind:" >&2
+            echo "${leftover}" >&2
+            exit 1
+          fi
 
   github-release-helper:
     name: GitHub release helper
