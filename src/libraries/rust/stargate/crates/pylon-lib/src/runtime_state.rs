@@ -85,6 +85,7 @@ impl ModelGeneration {
 pub struct PylonRuntimeState {
     advertised: Arc<Mutex<AdvertisedRuntimeState>>,
     live_requests: LiveRequestState,
+    engine_stats_correlations: Arc<Mutex<HashMap<String, ModelGeneration>>>,
     metrics: Option<Arc<PylonMetrics>>,
     observation_tx: Option<flume::Sender<RequestObservationEvent>>,
 }
@@ -168,6 +169,7 @@ impl PylonRuntimeState {
                 models,
             })),
             live_requests: LiveRequestState::default(),
+            engine_stats_correlations: Arc::default(),
             metrics: None,
             observation_tx: None,
         }
@@ -275,6 +277,9 @@ impl PylonRuntimeState {
             .remove(generation.model_id())
             .expect("validated generation should still exist");
         self.live_requests.retire_generation(generation);
+        self.engine_stats_correlations
+            .lock()
+            .retain(|_, owner| owner != generation);
         Some(retired.stats)
     }
 
@@ -504,6 +509,27 @@ impl PylonRuntimeState {
 
     pub(crate) fn request_generation(&self, request_id: &str) -> Option<ModelGeneration> {
         self.live_requests.request_generation(request_id)
+    }
+
+    pub(crate) fn register_engine_stats_correlation(
+        &self,
+        correlation_id: String,
+        generation: ModelGeneration,
+    ) {
+        self.engine_stats_correlations
+            .lock()
+            .insert(correlation_id, generation);
+    }
+
+    pub(crate) fn engine_stats_generation(&self, correlation_id: &str) -> Option<ModelGeneration> {
+        self.engine_stats_correlations
+            .lock()
+            .get(correlation_id)
+            .cloned()
+    }
+
+    pub(crate) fn finish_engine_stats_correlation(&self, correlation_id: &str) {
+        self.engine_stats_correlations.lock().remove(correlation_id);
     }
 
     pub(crate) fn snapshot_live_model(&self, model_id: &str) -> QueueModelSnapshot {
