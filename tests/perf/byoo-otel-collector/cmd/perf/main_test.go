@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -174,18 +175,20 @@ func TestRenderCmdSummary(t *testing.T) {
 func TestRunCmdDefaults(t *testing.T) {
 	cmd := newRunCmd()
 	defaults := map[string]string{
-		"shape":         "both",
-		"profile":       "dev",
-		"mode":          "k3d",
-		"namespace":     "byoo-perf",
-		"ready-timeout": "3m0s",
-		"retain":        "false",
-		"skip-load":     "false",
-		"sink-image":    sink.DefaultImage,
-		"loadgen-image": loadgen.DefaultImage,
-		"k3d-cluster":   "byoo-perf",
-		"import-images": "false",
-		"results-dir":   "",
+		"shape":          "both",
+		"profile":        "dev",
+		"mode":           "k3d",
+		"namespace":      "byoo-perf",
+		"ready-timeout":  "3m0s",
+		"startup-target": "15s",
+		"startup-max":    "30s",
+		"retain":         "false",
+		"skip-load":      "false",
+		"sink-image":     sink.DefaultImage,
+		"loadgen-image":  loadgen.DefaultImage,
+		"k3d-cluster":    "byoo-perf",
+		"import-images":  "false",
+		"results-dir":    "",
 	}
 	for name, want := range defaults {
 		f := cmd.Flags().Lookup(name)
@@ -205,6 +208,8 @@ func TestRunCmdInvalidSelectors(t *testing.T) {
 		{"--mode", "nope"},
 		{"--profile", "nope"},
 		{"--shape", "nope"},
+		{"--startup-target", "0s"},
+		{"--startup-target", "31s", "--startup-max", "30s"},
 	} {
 		cmd := newRunCmd()
 		cmd.SetArgs(args)
@@ -265,6 +270,8 @@ func TestRunCleansUpPodWhenServiceCreateFails(t *testing.T) {
 		collectorImage: spec.DefaultCollectorImage,
 		namespace:      "byoo-perf",
 		readyTimeout:   time.Second,
+		startupTarget:  15 * time.Second,
+		startupMax:     30 * time.Second,
 	}
 	if err := runRun(io.Discard, cfg); err == nil {
 		t.Fatal("expected run to fail when service creation is rejected")
@@ -424,6 +431,79 @@ func TestLoadGenDurationExceedsWindowByMargin(t *testing.T) {
 	}
 	if got != base+loadStartupMargin {
 		t.Errorf("loadGenDuration = %s, want %s (warmup+window+margin)", got, base+loadStartupMargin)
+	}
+}
+
+func TestStartupThresholds(t *testing.T) {
+	if err := validateStartupThresholds(15*time.Second, 30*time.Second); err != nil {
+		t.Fatalf("valid thresholds: %v", err)
+	}
+	for _, tt := range []struct {
+		target time.Duration
+		max    time.Duration
+	}{
+		{target: 0, max: 30 * time.Second},
+		{target: 31 * time.Second, max: 30 * time.Second},
+	} {
+		if err := validateStartupThresholds(tt.target, tt.max); err == nil {
+			t.Errorf("validateStartupThresholds(%s, %s): expected error", tt.target, tt.max)
+		}
+	}
+}
+
+func TestStartupHealthThresholdOutput(t *testing.T) {
+	startup := report.NewStartupHealth(
+		time.Unix(0, 0),
+		time.Unix(2, 0),
+		time.Unix(22, 0),
+	)
+	var out bytes.Buffer
+	printStartupHealth(&out, spec.ShapeContainer, startup, 15*time.Second, 30*time.Second)
+	if !strings.Contains(out.String(), "collector_to_health=20s") || !strings.Contains(out.String(), "exceeded the 15s target") {
+		t.Errorf("startup output missing duration or warning:\n%s", out.String())
+	}
+	if err := checkStartupHealth(startup, 30*time.Second); err != nil {
+		t.Fatalf("20s startup should meet 30s maximum: %v", err)
+	}
+	if err := checkStartupHealth(startup, 15*time.Second); err == nil {
+		t.Fatal("20s startup should exceed 15s maximum")
+	}
+}
+
+func TestPrintStartupHealthUsesUnroundedThresholds(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		collectorTo time.Duration
+		wantWarning bool
+	}{
+		{name: "over target", collectorTo: 15*time.Second + 400*time.Microsecond, wantWarning: true},
+		{name: "over maximum", collectorTo: 30*time.Second + 400*time.Microsecond, wantWarning: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			startup := report.NewStartupHealth(time.Unix(0, 0), time.Unix(0, 0), time.Unix(0, 0).Add(tt.collectorTo))
+			var out bytes.Buffer
+			printStartupHealth(&out, spec.ShapeContainer, startup, 15*time.Second, 30*time.Second)
+			gotWarning := strings.Contains(out.String(), "warning: collector startup exceeded")
+			if gotWarning != tt.wantWarning {
+				t.Errorf("warning = %t, want %t; output:\n%s", gotWarning, tt.wantWarning, out.String())
+			}
+		})
+	}
+}
+
+type failingWriter struct{ err error }
+
+func (w failingWriter) Write([]byte) (int, error) {
+	return 0, w.err
+}
+
+func TestWriteRunCompletionReturnsWriteError(t *testing.T) {
+	writeErr := errors.New("write failed")
+	for _, skipLoad := range []bool{false, true} {
+		err := writeRunCompletion(failingWriter{err: writeErr}, skipLoad)
+		if !errors.Is(err, writeErr) {
+			t.Errorf("writeRunCompletion(skipLoad=%t) error = %v, want wrapped write error", skipLoad, err)
+		}
 	}
 }
 
