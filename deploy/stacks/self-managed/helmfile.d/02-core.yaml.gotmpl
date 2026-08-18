@@ -164,6 +164,26 @@ releases:
     labels:
       release-group: services
 
+  - name: nvcf-pki
+    chart: nvcf/helm-nvcf-pki
+    version: 0.1.0
+    namespace: cert-manager
+    condition: addons.llm.pki.enabled
+    values:
+      - clusterIssuer:
+          enabled: true
+          name: {{ dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values | quote }}
+          server: {{ dig "addons" "llm" "pki" "issuerServer" "http://openbao-server.vault-system.svc.cluster.local:8200" .Values | quote }}
+          path: {{ dig "addons" "llm" "pki" "issuerPath" "services/all/pki/nvcf-service-issuing/sign/nvcf-service-server" .Values | quote }}
+          auth:
+            mountPath: {{ dig "addons" "llm" "pki" "issuerAuthMountPath" "/v1/auth/jwt" .Values | quote }}
+            role: {{ dig "addons" "llm" "pki" "issuerAuthRole" "cert-manager" .Values | quote }}
+            serviceAccount:
+              name: {{ dig "addons" "llm" "pki" "issuerServiceAccountName" "cert-manager" .Values | quote }}
+              audience: {{ dig "addons" "llm" "pki" "issuerAudience" "http://openbao-server.vault-system.svc.cluster.local:8200" .Values | quote }}
+    labels:
+      release-group: services
+
   - name: llm-request-router
     chart: nvcf/helm-nvcf-llm-request-router
     version: 1.6.6
@@ -173,6 +193,7 @@ releases:
       - ../global.yaml.gotmpl
     needs:
       - nvcf/api
+      - cert-manager/nvcf-pki
     labels:
       release-group: services
 
