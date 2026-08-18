@@ -257,21 +257,35 @@ addons:
   # LLM addon: gateway + request router (stargate) for LLM function invocation
   llm:
     enabled: false
-    # QUIC TLS certificate for the request router (Stargate). When enabled,
-    # the chart requests a Certificate from the configured issuer and mounts
-    # the resulting Secret. Managed mode also provisions the OpenBao
-    # service-issuing hierarchy and defaults to
-    # ClusterIssuer/nvcf-openbao-pki. Disabled by default; opt in per env.
+    # QUIC TLS certificate for the request router (Stargate). Disabled by
+    # default; opt in per env.
+    #
+    # mode selects who owns the server identity:
+    #   certManager    - the chart requests a Certificate from the configured
+    #                    issuer and mounts the resulting Secret. Managed mode
+    #                    also provisions the OpenBao service-issuing hierarchy
+    #                    and defaults to ClusterIssuer/nvcf-openbao-pki.
+    #   existingSecret - the chart mounts a Secret you created and manages no
+    #                    issuance. Requires secretName. clusterIssuer.enabled,
+    #                    dnsNames, and allowedDomains must be unset because
+    #                    they only steer stack-managed issuance. You own
+    #                    issuance, renewal, rotation, and recovery, and the
+    #                    stack validates neither the SANs nor the expiry.
     pki:
       enabled: false
+      mode: certManager
       # REQUIRED for a managed issuer. Comma-separated DNS suffixes the
       # OpenBao PKI role accepts. Typically the customer domain plus
       # cluster.local for in-cluster service identity.
       allowedDomains: ""
-      # REQUIRED when enabled. SANs requested on the issued certificate.
+      # REQUIRED for mode certManager. SANs requested on the issued
+      # certificate. Must be empty for mode existingSecret.
       dnsNames: []
-      # Optional overrides; defaults are usually correct.
+      # REQUIRED for mode existingSecret; the kubernetes.io/tls Secret in the
+      # nvcf namespace holding the tls.crt and tls.key entries. Optional for
+      # mode certManager, where it names the Secret cert-manager writes.
       # secretName: stargate-quic-tls
+      # Optional overrides; defaults are usually correct.
       # issuerKind: ClusterIssuer
       # issuerName: nvcf-openbao-pki
       # Stack management defaults to true only for the default

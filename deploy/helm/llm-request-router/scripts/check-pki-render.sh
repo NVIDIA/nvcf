@@ -290,4 +290,112 @@ if render_certificate_case \
   fail "advertised hostname containing non-DNS braces unexpectedly rendered"
 fi
 
+# Pass 3: existing-Secret identity mode. The operator owns issuance, so the
+# chart must mount the pre-created Secret without rendering a Certificate or
+# the OpenBao provisioning hook.
+existing_secret_manifest="${tmp_dir}/existing-secret.yaml"
+render_existing_secret_case() {
+  output="$1"
+  shift
+
+  helm template llm-request-router ./llm-request-router \
+    --namespace nvcf \
+    --values ./llm-request-router/values.yaml \
+    --set llmRequestRouter.image.repository=stargate \
+    --set-string llmRequestRouter.tls.mode=existingSecret \
+    --set llmRequestRouter.tls.quicInsecure=false \
+    "$@" \
+    > "${output}"
+}
+
+render_existing_secret_case \
+  "${existing_secret_manifest}" \
+  --set-string llmRequestRouter.tls.secretName=operator-quic-tls \
+  --set-string llmRequestRouter.tls.certPath=/etc/stargate/tls/tls.crt \
+  --set-string llmRequestRouter.tls.keyPath=/etc/stargate/tls/tls.key
+
+existing_secret_cert="$(yq -rN 'select(.kind == "Certificate") | .metadata.name' "${existing_secret_manifest}" | head -n1)"
+[ -z "${existing_secret_cert}" ] || fail "existing-Secret mode rendered a Certificate: ${existing_secret_cert}"
+
+existing_secret_job="$(yq -rN 'select(.kind == "Job" and .metadata.name == "addons-llm-migrations") | .metadata.name' "${existing_secret_manifest}" | head -n1)"
+[ -z "${existing_secret_job}" ] || fail "existing-Secret mode rendered the OpenBao provisioning hook"
+
+existing_secret_volume="$(yq -rN 'select(.kind == "StatefulSet" and .metadata.name == "llm-request-router") | .spec.template.spec.volumes[] | select(.name == "stargate-tls" and .secret.secretName == "operator-quic-tls") | .name' "${existing_secret_manifest}")"
+[ "${existing_secret_volume}" = "stargate-tls" ] || fail "existing-Secret mode did not mount the pre-created Secret"
+
+existing_secret_mount="$(yq -rN 'select(.kind == "StatefulSet" and .metadata.name == "llm-request-router") | .spec.template.spec.containers[0].volumeMounts[] | select(.name == "stargate-tls" and .mountPath == "/etc/stargate/tls" and .readOnly == true) | .name' "${existing_secret_manifest}")"
+[ "${existing_secret_mount}" = "stargate-tls" ] || fail "existing-Secret mode did not mount stargate-tls read-only"
+
+existing_secret_args="$(yq -rN 'select(.kind == "StatefulSet" and .metadata.name == "llm-request-router") | .spec.template.spec.containers[0].args[]' "${existing_secret_manifest}")"
+printf '%s\n' "${existing_secret_args}" | grep -qx -- "--tls-cert-path=/etc/stargate/tls/tls.crt" || fail "existing-Secret mode did not pass the certificate path"
+printf '%s\n' "${existing_secret_args}" | grep -qx -- "--tls-key-path=/etc/stargate/tls/tls.key" || fail "existing-Secret mode did not pass the private key path"
+if printf '%s\n' "${existing_secret_args}" | grep -qx -- "--quic-insecure"; then
+  fail "existing-Secret mode enabled insecure request-router transport"
+fi
+
+# Mixed ownership: cert-manager and the operator cannot both own the identity.
+mixed_ownership_error="${tmp_dir}/mixed-ownership.err"
+if render_existing_secret_case \
+  /dev/null \
+  --set llmRequestRouter.certificate.enabled=true \
+  --set-string llmRequestRouter.certificate.issuerRef.name=nvcf-openbao-pki \
+  --set-string 'llmRequestRouter.certificate.dnsNames[0]=*.llm-request-router-headless.nvcf.svc.cluster.local' \
+  --set-string llmRequestRouter.tls.secretName=operator-quic-tls \
+  --set-string llmRequestRouter.tls.certPath=/etc/stargate/tls/tls.crt \
+  --set-string llmRequestRouter.tls.keyPath=/etc/stargate/tls/tls.key \
+  2> "${mixed_ownership_error}"; then
+  fail "mixed certificate ownership unexpectedly rendered"
+fi
+grep -Fq \
+  "llmRequestRouter.certificate.enabled must be false when llmRequestRouter.tls.mode is existingSecret" \
+  "${mixed_ownership_error}" || fail "mixed ownership render did not return the expected guard message"
+
+# Incomplete configuration: every required value reports itself by name. The
+# mount and the Stargate arguments are conditional, so a missing value would
+# otherwise leave the router on plaintext QUIC without any diagnostic.
+check_required_existing_secret_value() {
+  case_name="$1"
+  expected_message="$2"
+  shift 2
+
+  error_file="${tmp_dir}/${case_name}.err"
+  if render_existing_secret_case /dev/null "$@" 2> "${error_file}"; then
+    fail "existing-Secret render without ${case_name} unexpectedly succeeded"
+  fi
+  grep -Fq "${expected_message}" "${error_file}" ||
+    fail "${case_name} render did not return the expected guard message"
+}
+
+check_required_existing_secret_value \
+  secret-name \
+  "llmRequestRouter.tls.secretName is required when llmRequestRouter.tls.mode is existingSecret" \
+  --set-string llmRequestRouter.tls.certPath=/etc/stargate/tls/tls.crt \
+  --set-string llmRequestRouter.tls.keyPath=/etc/stargate/tls/tls.key
+
+check_required_existing_secret_value \
+  cert-path \
+  "llmRequestRouter.tls.certPath is required when llmRequestRouter.tls.mode is existingSecret" \
+  --set-string llmRequestRouter.tls.secretName=operator-quic-tls \
+  --set-string llmRequestRouter.tls.keyPath=/etc/stargate/tls/tls.key
+
+check_required_existing_secret_value \
+  key-path \
+  "llmRequestRouter.tls.keyPath is required when llmRequestRouter.tls.mode is existingSecret" \
+  --set-string llmRequestRouter.tls.secretName=operator-quic-tls \
+  --set-string llmRequestRouter.tls.certPath=/etc/stargate/tls/tls.crt
+
+# An unknown mode must fail rather than silently fall back to cert-manager.
+invalid_mode_error="${tmp_dir}/invalid-mode.err"
+if helm template llm-request-router ./llm-request-router \
+  --namespace nvcf \
+  --values ./llm-request-router/values.yaml \
+  --set llmRequestRouter.image.repository=stargate \
+  --set-string llmRequestRouter.tls.mode=externalSecret \
+  > /dev/null 2> "${invalid_mode_error}"; then
+  fail "unknown llmRequestRouter.tls.mode unexpectedly rendered"
+fi
+grep -Fq \
+  'llmRequestRouter.tls.mode must be certManager or existingSecret, got "externalSecret"' \
+  "${invalid_mode_error}" || fail "unknown mode render did not return the expected guard message"
+
 echo "PKI render checks passed"

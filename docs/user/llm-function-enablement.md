@@ -35,8 +35,9 @@ When enabled, the stack creates:
 
 Production deployments must secure the QUIC transport between each LLM worker
 and the request router. The request router presents a certificate issued by
-cert-manager. Each compute plane receives the public root CA certificate and
-uses the combined system and private trust bundle in the `llm-worker` sidecar.
+cert-manager, or one you issue yourself and supply in a pre-created Secret.
+Each compute plane receives the public root CA certificate and uses the
+combined system and private trust bundle in the `llm-worker` sidecar.
 
 The request-router address configured for the compute plane must use a DNS name
 listed in the certificate SANs. For a single-cluster deployment, use
@@ -155,6 +156,71 @@ The request router uses `power-of-two` when no load-balancer configuration is
 set, and accepts any supported `routingMethod` from a function. When a
 load-balancer configuration is set, a function can only select an algorithm
 that the configuration enables.
+
+### Pre-created request-router Secret
+
+Set `mode: existingSecret` when you already issue the request-router server
+certificate yourself and want the stack to mount it without managing issuance:
+
+```yaml
+addons:
+  llm:
+    enabled: true
+    pki:
+      enabled: true
+      mode: existingSecret
+      secretName: stargate-quic-tls
+```
+
+The stack renders no `Certificate`, installs no `ClusterIssuer`, and adds no
+cert-manager or OpenBao dependency for the request router. You can set
+`certManager.enabled: false` and `openbao.enabled: false` when no other stack
+component needs them.
+
+Create the Secret in the `nvcf` namespace before installing the stack. It must
+carry the `tls.crt` and `tls.key` entries, as a `kubernetes.io/tls` Secret
+does:
+
+```bash
+kubectl create secret tls stargate-quic-tls \
+  --namespace nvcf \
+  --cert path/to/tls.crt \
+  --key path/to/tls.key
+```
+
+`clusterIssuer.enabled`, `dnsNames`, and `allowedDomains` only steer
+stack-managed issuance. Rendering fails if any of them is set in this mode, so
+a configuration that expects the stack to issue a certificate cannot be
+mistaken for one that expects you to.
+
+The certificate must carry a SAN covering the router's advertised hostname and
+the address workers connect to. At the default single-replica configuration
+that is `llm-request-router.nvcf.svc.cluster.local`. At higher replica counts
+the router advertises per-pod headless names, so use a leftmost wildcard such
+as `*.llm-request-router-headless.nvcf.svc.cluster.local`. Include any external
+name set in `global.workerEndpoints.llmRequestRouterAddress`. The stack cannot
+read your Secret at render time, so it validates neither the SANs nor the
+expiry. A certificate that does not cover the advertised hostname fails at
+worker connection time, not at install time.
+
+You own issuance, renewal, rotation, and recovery in this mode:
+
+- Renewal and rotation: update the Secret, then restart the router with
+  `kubectl rollout restart statefulset/llm-request-router --namespace nvcf`.
+  The router reads the certificate at startup.
+- Expiry: track it yourself. Nothing in the stack renews the certificate or
+  alerts on an approaching expiry.
+- Recovery: if the Secret is deleted or malformed, the router pods fail to
+  start. Restore the Secret and roll the StatefulSet.
+
+Compute-plane trust works exactly as described in
+[Compute-plane trust](#compute-plane-trust). Author the `transportTls` block
+in the control-plane profile by hand with the public root CA that signed your
+certificate, as you would for an external issuer. The profile exporter sources
+a bundle only from the managed OpenBao hierarchy, so it leaves the block empty
+here. The bundle must contain `CERTIFICATE` blocks only. Profile validation
+rejects a private key, so the request-router private key never reaches the
+compute plane.
 
 ### External cert-manager
 
@@ -457,9 +523,10 @@ kubectl get httproute -A | grep llm
 ## Certificate Renewal
 
 cert-manager renews the request-router certificate and updates
-`Secret/stargate-quic-tls`. The request router loads its certificate when the
-pod starts. Restart the StatefulSet after renewal so every replica uses the
-updated certificate:
+`Secret/stargate-quic-tls`. With `mode: existingSecret` there is no renewal
+loop and you update the Secret yourself. Either way, the request router loads
+its certificate when the pod starts. Restart the StatefulSet after renewal so
+every replica uses the updated certificate:
 
 ```bash
 kubectl -n nvcf rollout restart statefulset/llm-request-router

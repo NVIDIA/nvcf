@@ -175,6 +175,17 @@ llmRequestRouter:
     audience: ""
 
   tls:
+    # Source of the QUIC server identity.
+    #   certManager    - certificate.enabled controls cert-manager issuance and
+    #                    the chart mounts the Secret cert-manager writes.
+    #   existingSecret - mount a pre-created TLS Secret. The chart renders no
+    #                    Certificate and adds no issuer dependency. secretName,
+    #                    certPath, and keyPath are required, certificate.enabled
+    #                    must stay false, and the operator owns issuance,
+    #                    renewal, rotation, and recovery.
+    mode: certManager
+    # Secret holding the server certificate. It must provide the tls.crt and
+    # tls.key entries, as a kubernetes.io/tls Secret does.
     # The mount directory is polled every 30 seconds for certificate and key
     # updates, which apply to new connections without a pod restart. Keep both
     # files in one Secret so Kubernetes projects one atomic generation.

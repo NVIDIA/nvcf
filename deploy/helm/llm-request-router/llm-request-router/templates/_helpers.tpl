@@ -180,6 +180,36 @@ comparing suffixes.
 {{- end -}}
 {{- end }}
 
+{{/*
+Validate the QUIC server identity source. certManager keeps cert-manager as the
+owner of issuance and renewal. existingSecret mounts a pre-created TLS Secret,
+renders no Certificate, and makes the operator the owner. The two are mutually
+exclusive, and existingSecret needs the Secret name plus both file paths because
+the mount and the Stargate arguments are all conditional on them.
+*/}}
+{{- define "llm-request-router.validateTlsIdentity" -}}
+{{- $tls := .Values.llmRequestRouter.tls | default dict -}}
+{{- $certificate := .Values.llmRequestRouter.certificate | default dict -}}
+{{- $mode := $tls.mode | default "certManager" -}}
+{{- if not (has $mode (list "certManager" "existingSecret")) -}}
+{{- fail (printf "llmRequestRouter.tls.mode must be certManager or existingSecret, got %q" (toString $mode)) -}}
+{{- end -}}
+{{- if eq $mode "existingSecret" -}}
+{{- if $certificate.enabled -}}
+{{- fail "llmRequestRouter.certificate.enabled must be false when llmRequestRouter.tls.mode is existingSecret; cert-manager and the operator cannot both own the request-router certificate" -}}
+{{- end -}}
+{{- if not $tls.secretName -}}
+{{- fail "llmRequestRouter.tls.secretName is required when llmRequestRouter.tls.mode is existingSecret" -}}
+{{- end -}}
+{{- if not $tls.certPath -}}
+{{- fail "llmRequestRouter.tls.certPath is required when llmRequestRouter.tls.mode is existingSecret" -}}
+{{- end -}}
+{{- if not $tls.keyPath -}}
+{{- fail "llmRequestRouter.tls.keyPath is required when llmRequestRouter.tls.mode is existingSecret" -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
 {{- define "llm-request-router.tlsSecretName" -}}
 {{- $tls := .Values.llmRequestRouter.tls | default dict -}}
 {{- $certificate := .Values.llmRequestRouter.certificate | default dict -}}
