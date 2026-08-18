@@ -4,7 +4,7 @@ go_library(
     name = "registrations",
     srcs = ["registrations.go"],
     importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/registrations",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/control-plane-services/event-ledger:__subpackages__"],
     deps = [
         "//src/control-plane-services/event-ledger/internal/config",
         "//src/control-plane-services/event-ledger/internal/data_access",
@@ -16,5 +16,5 @@ go_library(
 alias(
     name = "go_default_library",
     actual = ":registrations",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/control-plane-services/event-ledger:__subpackages__"],
 )
