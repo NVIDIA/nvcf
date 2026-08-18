@@ -110,8 +110,70 @@ printf '' | {
     fi
 }
 
-# A path that matches nothing known is not assumed harmless.
+# Discovery failure must stop the decision rather than silently empty the Java
+# roots: without them a Java BUILD.bazel change scores false, which is the one
+# wrong-way error. Raised by CodeRabbit on #949.
+for bad_root in /nonexistent/does/not/exist "${fixture}/unreadable"; do
+    mkdir -p "${fixture}/unreadable/inner" 2>/dev/null || true
+    chmod 000 "${fixture}/unreadable/inner" 2>/dev/null || true
+    got="$(printf 'src/control-plane-services/cloud-tasks/BUILD.bazel\n' \
+        | bash "${script}" --root "${bad_root}")"
+    chmod 755 "${fixture}/unreadable/inner" 2>/dev/null || true
+    if [ "${got}" = "true" ]; then
+        printf 'ok   Java root discovery failure fails closed (%s)\n' "${bad_root}"
+    else
+        printf 'FAIL Java root discovery failure (%s): want true, got %s\n' "${bad_root}" "${got}"
+        fail=1
+    fi
+done
+
+# A path matching nothing known yields false, and that is the whole point:
+# every pull request touches ordinary source, so treating an unmatched path as
+# relevant would make the answer always "true" and the scoping a no-op. The
+# real exposure is not an unknown path, it is this list falling behind the
+# collector. That is what the drift check below pins down.
 check "unknown manifest kind"      false "src/x/Gemfile.lock"
+
+# Drift guard.
+#
+# The allowlist is only safe while it matches what tools/collect-dependencies
+# actually reads. If the collector learns a new manifest and this script is not
+# updated, changes to that manifest would be scoped out and dependencies.md
+# would go stale behind a green required check. Silent, and exactly the failure
+# the fail-closed design is meant to prevent.
+#
+# So compare the two. Every manifest-shaped literal in the collector must be
+# either matched by the scope script or listed below with a reason. Adding a
+# manifest without doing one or the other fails here.
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+# Read by the collector, deliberately not a scope trigger.
+declare -A not_a_trigger=(
+    ["LICENSE.txt"]="license text inside vendor/, already covered by the vendor rule"
+    ["modules.txt"]="vendor/modules.txt, already covered by the vendor rule"
+    ["repositories.yaml"]="written by the collector into a temp dir, never read from the repo"
+    ["runtime_inventory.json"]="a Bazel output, not a repository file"
+)
+
+collector_literals="$(
+    grep -rhoE '"[A-Za-z0-9_.-]+\.(json|txt|toml|lock|yaml|mod|sum|xml)"' \
+        "${repo_root}/tools/collect-dependencies/"*.go \
+        | tr -d '"' | sort -u
+)"
+
+while IFS= read -r literal; do
+    [ -n "${literal}" ] || continue
+    if [ "$(printf '%s\n' "some/dir/${literal}" | bash "${script}" --root "${fixture}")" = "true" ]; then
+        printf 'ok   drift: %s is in scope\n' "${literal}"
+    elif [ -n "${not_a_trigger[${literal}]:-}" ]; then
+        printf 'ok   drift: %s excluded (%s)\n' "${literal}" "${not_a_trigger[${literal}]}"
+    else
+        printf 'FAIL drift: the collector reads %s but the scope script ignores it.\n' "${literal}"
+        printf '     Add it to manifest_names in dependency-docs-scope, or to\n'
+        printf '     not_a_trigger here with the reason it cannot change the output.\n'
+        fail=1
+    fi
+done <<< "${collector_literals}"
 
 if [ "${fail}" -ne 0 ]; then
     echo "dependency-docs-scope: FAILED" >&2

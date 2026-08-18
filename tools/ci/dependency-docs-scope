@@ -40,7 +40,6 @@ fi
 
 # Paths whose content feeds the generator directly, or which change how it runs.
 exact_paths=(
-    "imports.yaml"
     "dependencies.md"
     "MODULE.bazel"
     "MODULE.bazel.lock"
@@ -54,6 +53,7 @@ exact_paths=(
 
 # Manifest file names, matched anywhere in the tree.
 manifest_names=(
+    "imports.yaml"
     "go.mod"
     "go.sum"
     "Cargo.toml"
@@ -66,13 +66,24 @@ manifest_names=(
 )
 
 # Registered Java component roots, as repository-relative directory prefixes.
+#
+# A failure here has to stop the whole decision, not just yield an empty list.
+# Without the roots a changed Java BUILD.bazel looks irrelevant, which is the
+# wrong-way error: the check would be skipped for precisely the change the
+# Java rule exists to catch. find also exits non-zero on a partial result, for
+# instance one unreadable directory, so a truncated list is caught too.
+if ! descriptors="$(find "${root}" -name bazel-java-ci.json -not -path '*/.git/*' 2>/dev/null)"; then
+    echo "true"
+    exit 0
+fi
+
 java_roots=()
 while IFS= read -r descriptor; do
     [ -n "${descriptor}" ] || continue
     dir="${descriptor%/bazel-java-ci.json}"
     dir="${dir#"${root}"/}"
     java_roots+=("${dir}")
-done < <(find "${root}" -name bazel-java-ci.json -not -path '*/.git/*' 2>/dev/null || true)
+done <<< "${descriptors}"
 
 relevant() {
     local path="$1" candidate name prefix
