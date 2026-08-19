@@ -31,9 +31,9 @@ global:
   # NVCA Operator Configuration
   # =============================================================================
   nvcaOperator:
-    imageTag: "3.2.0"
+    imageTag: "3.2.6"
     selfManaged:
-      nvcaVersion: "3.2.0"
+      nvcaVersion: "3.2.6"
       otelCollector:
         imageTag: "0.157.9"
       # ICMS (SIS) service URL — required; set per environment.

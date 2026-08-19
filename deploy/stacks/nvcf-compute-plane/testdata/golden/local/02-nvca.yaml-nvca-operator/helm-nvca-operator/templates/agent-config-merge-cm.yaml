@@ -27,8 +27,7 @@ metadata:
     app.kubernetes.io/version: "3.0.4"
     app.kubernetes.io/managed-by: Helm
 data:
-  config.yaml:  |2
-  
+  config.yaml:  |
     cluster:
       validationPolicy:
         allowedExtraKubernetesTypes:
