@@ -142,8 +142,13 @@ persistentVolumeClaim:
   freeProxyPct: 15
 
 # Service configuration.
+#
+# The service type is not configurable: it is always NodePort. The host
+# container runtime reaches the cache at ${NODE_IP}:${port} from the host
+# network namespace, so the port has to be published on every node. Setting
+# service.type to anything else fails the render rather than installing a cache
+# that pulls silently bypass.
 service:
-  type: NodePort
   port: 30345
 
 # Proxy service (nvcf-proxy-cache ClusterIP) configuration.

@@ -38,6 +38,48 @@ assert_has 'name: nvcf-container-cache'
 # nodes without a local cache pod (kube-proxy drops NodePort traffic).
 assert_not_has 'externalTrafficPolicy: Local'
 assert_not_has 'internalTrafficPolicy: Local'
+# The registry mirror endpoint is ${NODE_IP}:${port}, so the port must be
+# published on every node. A ClusterIP service renders no nodePort and the
+# mirror then points at a closed port, which fails as a silent fallback to the
+# upstream registry rather than a visible error.
+assert_has 'type: NodePort'
+
+echo "Checking service.type cannot be overridden..."
+# Capture rather than pipe: `set -o pipefail` would otherwise report helm's
+# intentional non-zero exit as the pipeline's failure.
+override_out="$(helm template container-cache ./deploy --set service.type=ClusterIP 2>&1 || true)"
+if ! printf '%s' "${override_out}" | grep -F -q -- 'is not supported'; then
+  echo "FAILED: service.type=ClusterIP should fail the render with an explanation" >&2
+  echo "${override_out}" >&2
+  exit 1
+fi
+# NodePort is still accepted, so existing values files keep working.
+helm template container-cache ./deploy --set service.type=NodePort >/dev/null
+
+echo "Checking containerd pending-restart reporting..."
+# containerd reads registry.config_path only at daemon start and has no config
+# reload, so correcting config.toml does not take effect on its own. Detect that
+# we changed it and report the node; never restart containerd, which would be
+# disruptive on nodes running function workloads.
+assert_has 'before="$(sha256sum /host/etc/containerd/config.toml | cut -d'"'"' '"'"' -f1)"'
+assert_has 'if [ "${before}" != "${after}" ]; then'
+assert_has 'containerd_restart_pending=true'
+assert_not_has 'systemctl restart containerd'
+assert_not_has 'nsenter'
+
+echo "Checking readiness reflects whether cache routing is live..."
+# A DaemonSet ready count below its desired count is the signal that some nodes
+# still pull straight from the upstream registry.
+assert_has 'test -f /tmp/nvcf-cc-ready'
+assert_has 'readinessProbe:'
+assert_has 'touch "${READY_MARKER}"'
+
+echo "Checking CRI-O reload..."
+# SIGHUP is a documented CRI-O reload, not a kill, so it is safe to signal.
+# Needed because auto_reload_registries only applies once CRI-O has read the
+# crio.conf.d drop-in this DaemonSet writes.
+assert_has 'kill -HUP "${crio_pid}"'
+assert_has 'pgrep -x crio'
 
 echo "Checking multi-domain NodePort listeners..."
 assert_has 'nodePort: 30346'

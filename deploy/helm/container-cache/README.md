@@ -295,8 +295,15 @@ Key behaviors:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `service.type` | `NodePort` | `NodePort`, `ClusterIP`, or `LoadBalancer` |
 | `service.port` | `30345` | Primary service port |
+
+The service is always `NodePort` and the type is not configurable. The host
+container runtime reaches the cache at `${NODE_IP}:${port}` from the host
+network namespace, where cluster service DNS and ClusterIP addresses are not
+dependable, so the port has to be published on every node. Setting
+`service.type` to anything other than `NodePort` fails the render: a ClusterIP
+service publishes no node port, so the mirror endpoint would point at a closed
+port and every pull would fall back to the upstream registry with no error.
 
 ### CRI-O
 

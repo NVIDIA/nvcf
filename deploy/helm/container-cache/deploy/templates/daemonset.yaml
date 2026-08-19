@@ -59,6 +59,17 @@ spec:
           value: {{ $.Values.vault.certLocation | quote }}
         securityContext:
           privileged: true
+        # Not-ready means this node's registry config is written but not yet in
+        # effect (containerd needs a restart or a node cycle to pick up
+        # config_path). The pod keeps running either way -- this reports the
+        # node, it does not try to fix it. A DaemonSet whose ready count is
+        # below its desired count is the signal that some nodes are still
+        # pulling straight from the upstream registry.
+        readinessProbe:
+          exec:
+            command: ["/bin/bash", "-c", "test -f /tmp/nvcf-cc-ready"]
+          periodSeconds: 30
+          failureThreshold: 1
         {{- with $.Values.configure.resources }}
         resources:
           {{- toYaml . | nindent 10 }}
@@ -86,6 +97,13 @@ spec:
           set -euo pipefail
           hosts=(${TARGET_HOST//,/ })
           declare -A CRIO_PORTS
+
+          # Cleared here and only written once the node's registry config is
+          # actually live; the readinessProbe reads it, so `kubectl get ds`
+          # counts exactly the nodes whose cache routing is in effect.
+          READY_MARKER=/tmp/nvcf-cc-ready
+          rm -f "${READY_MARKER}"
+          containerd_restart_pending=false
 {{- $crioPorts := include "nvcf-container-cache.crioRegistryPorts" . | fromYaml -}}
 {{- if $crioPorts }}
 {{- range $name, $val := $crioPorts }}
@@ -128,7 +146,31 @@ spec:
               capabilities = ["pull", "resolve"]
           EOF
             done
+
+            # containerd re-reads certs.d/*/hosts.toml on every pull, but
+            # registry.config_path lives in config.toml and is only read at
+            # startup -- containerd has no config reload, and SIGHUP kills the
+            # daemon rather than reloading it. So a config.toml edit is inert
+            # until containerd next starts.
+            #
+            # This DaemonSet deliberately does not restart containerd: that is
+            # disruptive on nodes running function workloads, and node lifecycle
+            # is managed out of band. Instead, hash around the updater to detect
+            # that we changed the active config, and report the node as pending
+            # so an operator can see which nodes still need a containerd restart
+            # or a node cycle. Until then this node keeps pulling from the
+            # upstream registry -- correctly, just without the cache.
+            before="$(sha256sum /host/etc/containerd/config.toml | cut -d' ' -f1)"
             python3 update_config.py /host/etc/containerd/config.toml
+            after="$(sha256sum /host/etc/containerd/config.toml | cut -d' ' -f1)"
+
+            if [ "${before}" != "${after}" ]; then
+              containerd_restart_pending=true
+              echo "NOTICE: corrected containerd registry config on this node." >&2
+              echo "NOTICE: containerd only reads registry.config_path at startup, so the" >&2
+              echo "NOTICE: correction is inactive and image pulls still bypass the cache." >&2
+              echo "NOTICE: Restart containerd or cycle this node to activate it." >&2
+            fi
           fi
 
           # CRI-O: write a single drop-in. Do NOT touch /etc/containers/registries.conf;
@@ -190,6 +232,32 @@ spec:
               mkdir -p "${user_drop_in_dir}"
               cp "${crio_conf}" "${user_drop_in_dir}/nvcf-container-cache.conf"
             fi
+
+            # auto_reload_registries makes CRI-O watch registries.conf.d, but
+            # that setting only takes effect once CRI-O has read the drop-in we
+            # just wrote -- on a first install it has not. Unlike containerd,
+            # CRI-O reloads registry config on SIGHUP without dropping
+            # workloads, so nudge it rather than leaving the mirror inactive
+            # until something else restarts the daemon. Best-effort: a node
+            # where CRI-O is absent or unsignalable is not a failure.
+            crio_pid="$(pgrep -x crio | head -1 || true)"
+            if [ -n "${crio_pid}" ]; then
+              if kill -HUP "${crio_pid}" 2>/dev/null; then
+                echo "Reloaded CRI-O registry config (SIGHUP)."
+              else
+                echo "Could not signal CRI-O; the drop-in applies on its next reload." >&2
+              fi
+            fi
+          fi
+
+          # containerd is the only runtime that can be left with config on disk
+          # that is not yet in effect, because config_path is read at startup
+          # and it has no reload. CRI-O has no equivalent gap: the mirror lives
+          # directly in the drop-in, which it re-reads.
+          if [ "${containerd_restart_pending}" = "true" ]; then
+            echo "NOT READY: this node needs a containerd restart or a node cycle." >&2
+          else
+            touch "${READY_MARKER}"
           fi
 
           # CRI-O picks up registries.conf.d changes via auto_reload_registries=true,
