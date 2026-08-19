@@ -1,8 +1,14 @@
 # Function Autoscaler Observability
 
-The function autoscaler emits structured logs, Prometheus metrics that explain dependency health statuses and scaling decisions, and OpenTelemetry spans for outbound calls to its dependencies. The Prometheus exporter serves metrics on the address configured in `server.metrics.exporters`. The local settings file at `crates/server/resources/settings-local.yaml` uses `0.0.0.0:41338`.
+The Function Autoscaler emits structured logs, Prometheus metrics, and
+OpenTelemetry spans. The chart exposes its Prometheus exporter through the
+`function-autoscaler` service on the `metrics` port, which defaults to `41338`.
+The shared stack's default monitors do not include this service. Add a monitor
+or scrape target for it to collect these metrics.
 
-Job and namespace labels follow the standard NVCF naming convention for the cluster that runs the function autoscaler.
+These service metrics describe the autoscaler itself. They are separate from
+the function metrics that the autoscaler reads from VictoriaMetrics or an
+external backend.
 
 ## Metric reference
 
