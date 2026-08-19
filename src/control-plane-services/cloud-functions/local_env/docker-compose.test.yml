@@ -18,7 +18,7 @@ name: nvcf-cloud-functions-test
 
 services:
   aws:
-    image: localstack/localstack:4.3
+    image: ministackorg/ministack:1.4.16
     environment:
       - SERVICES=sts,s3
       - AWS_DEFAULT_REGION=us-east-1
