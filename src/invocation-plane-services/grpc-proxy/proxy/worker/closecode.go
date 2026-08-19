@@ -60,7 +60,12 @@ const (
 // remote end.
 const maxDetailLen = 256
 
-// sanitizePeerText makes remote-supplied text safe to log.
+// truncationMarker is appended when text is cut. Its length is reserved out of
+// maxDetailLen so the returned string never exceeds the stated bound.
+const truncationMarker = "[truncated]"
+
+// sanitizePeerText makes remote-supplied text safe to log, returning at most
+// maxDetailLen bytes.
 //
 // The reason phrase is the single most useful field here, because it is where a
 // peer says why it closed, so it is bounded rather than dropped. Truncating
@@ -74,7 +79,9 @@ func sanitizePeerText(s string) string {
 	}
 	truncated := false
 	if len(s) > maxDetailLen {
-		s = s[:maxDetailLen]
+		// Reserve room for the marker so the result stays within the bound
+		// this function advertises.
+		s = s[:maxDetailLen-len(truncationMarker)]
 		truncated = true
 	}
 	s = strings.Map(func(r rune) rune {
@@ -86,9 +93,21 @@ func sanitizePeerText(s string) string {
 		return r
 	}, s)
 	if truncated {
-		s += "[truncated]"
+		s += truncationMarker
 	}
 	return s
+}
+
+// appendPeerText adds an optional peer-supplied field to a detail string, and
+// omits it entirely when the sanitized text is empty. Emitting reason="" or
+// debug="" is noise that reads like the peer said nothing when in fact it sent
+// no field at all.
+func appendPeerText(base, key, text string) string {
+	clean := sanitizePeerText(text)
+	if clean == "" {
+		return base
+	}
+	return fmt.Sprintf("%s %s=%q", base, key, clean)
 }
 
 // CloseInfo is the transport-level account of why a tunnel ended.
@@ -122,7 +141,7 @@ func ClassifyCloseError(err error) CloseInfo {
 	if errors.As(err, &appErr) {
 		return CloseInfo{
 			Code:   CloseCodeQUICApplication,
-			Detail: fmt.Sprintf("code=%d reason=%q", uint64(appErr.ErrorCode), sanitizePeerText(appErr.ErrorMessage)),
+			Detail: appendPeerText(fmt.Sprintf("code=%d", uint64(appErr.ErrorCode)), "reason", appErr.ErrorMessage),
 			Remote: remote(appErr.Remote),
 		}
 	}
@@ -130,7 +149,7 @@ func ClassifyCloseError(err error) CloseInfo {
 	if errors.As(err, &transportErr) {
 		return CloseInfo{
 			Code:   CloseCodeQUICTransport,
-			Detail: fmt.Sprintf("code=%d reason=%q", uint64(transportErr.ErrorCode), sanitizePeerText(transportErr.ErrorMessage)),
+			Detail: appendPeerText(fmt.Sprintf("code=%d", uint64(transportErr.ErrorCode)), "reason", transportErr.ErrorMessage),
 			Remote: remote(transportErr.Remote),
 		}
 	}
@@ -159,7 +178,7 @@ func ClassifyCloseError(err error) CloseInfo {
 	if errors.As(err, &goAwayErr) {
 		return CloseInfo{
 			Code:   CloseCodeH2GoAway,
-			Detail: fmt.Sprintf("code=%s last_stream=%d debug=%q", goAwayErr.ErrCode, goAwayErr.LastStreamID, sanitizePeerText(goAwayErr.DebugData)),
+			Detail: appendPeerText(fmt.Sprintf("code=%s last_stream=%d", goAwayErr.ErrCode, goAwayErr.LastStreamID), "debug", goAwayErr.DebugData),
 			Remote: remote(true),
 		}
 	}

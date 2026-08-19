@@ -78,9 +78,16 @@ type WorkerConnection struct {
 	// Distinct from closeOrigin: origin says which side tore down, closeErr
 	// says what the transport reported while doing it.
 	closeErr atomic.Pointer[errBox]
-	// closedAt is when the transport actually went away. The cache eviction
-	// callback can run measurably later, so the log line's own timestamp is
-	// not a reliable stand-in.
+	// closedAt is when the proxy observed this tunnel stop carrying traffic,
+	// recorded by whichever side noticed first: the worker transport faulting,
+	// or the client connection going away.
+	//
+	// Deliberately not "when we finished tearing down". Teardown is our own
+	// cleanup and can lag arbitrarily behind the session actually ending, and
+	// folding that lag into held_for is the measurement error this field
+	// exists to remove. First writer wins for the same reason: the moment the
+	// tunnel stopped being useful is what matters, not the last step of the
+	// cascade that follows it.
 	closedAt        atomic.Pointer[time.Time]
 	connSetOnce     sync.Once
 	connPopulated   chan struct{}
@@ -107,13 +114,15 @@ func (w *WorkerConnection) CloseError() error {
 	return nil
 }
 
-// MarkClosed stamps the moment the transport went away. First writer wins.
+// MarkClosed stamps the moment this tunnel stopped carrying traffic. First
+// writer wins, so a later step in the teardown cascade cannot overwrite the
+// moment the session actually ended.
 func (w *WorkerConnection) MarkClosed(t time.Time) {
 	w.closedAt.CompareAndSwap(nil, &t)
 }
 
-// ClosedAt returns when the transport went away, or the zero time if the
-// close was never stamped.
+// ClosedAt returns when the tunnel stopped carrying traffic, or the zero time
+// if no close was stamped.
 func (w *WorkerConnection) ClosedAt() time.Time {
 	if t := w.closedAt.Load(); t != nil {
 		return *t

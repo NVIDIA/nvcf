@@ -309,8 +309,8 @@ func TestSanitizePeerTextTruncates(t *testing.T) {
 	if !strings.HasSuffix(got, "[truncated]") {
 		t.Errorf("long input was not marked truncated: %q", got)
 	}
-	if body := strings.TrimSuffix(got, "[truncated]"); len(body) != maxDetailLen {
-		t.Errorf("kept %d bytes, want %d", len(body), maxDetailLen)
+	if len(got) > maxDetailLen {
+		t.Errorf("sanitized output is %d bytes, which exceeds the advertised bound of %d", len(got), maxDetailLen)
 	}
 }
 
@@ -337,5 +337,79 @@ func TestClassifyCloseErrorSanitizesPeerReason(t *testing.T) {
 	}
 	if !strings.Contains(detail, "code=7") {
 		t.Errorf("detail lost the protocol code, which is the bounded part: %q", detail)
+	}
+}
+
+// The whole point of closedAt is to exclude teardown latency. If eviction runs
+// long after the session ended, held_for must still reflect the session, not
+// the session plus our cleanup.
+func TestClosedAtExcludesTeardownLatency(t *testing.T) {
+	w := NewWorkerConnection(uuid.New(), "fn", "ver", func() {}, func() {})
+	sessionEnd := w.CreatedAt.Add(15 * time.Second)
+
+	// Whoever noticed first stamps it.
+	w.MarkClosed(sessionEnd)
+	// Teardown then cascades, arbitrarily later.
+	w.MarkClosed(sessionEnd.Add(30 * time.Second))
+	w.MarkClosed(sessionEnd.Add(90 * time.Second))
+
+	heldFor := w.ClosedAt().Sub(w.CreatedAt)
+	if heldFor != 15*time.Second {
+		t.Errorf("held_for = %v, want 15s: teardown latency must not inflate the tunnel lifetime", heldFor)
+	}
+}
+
+func TestDetailOmitsEmptyPeerFields(t *testing.T) {
+	tests := []struct {
+		name        string
+		err         error
+		wantContain string
+		wantAbsent  string
+	}{
+		{
+			name:        "quic application error without a reason omits the field",
+			err:         &quic.ApplicationError{ErrorCode: 3},
+			wantContain: "code=3",
+			wantAbsent:  "reason=",
+		},
+		{
+			name:        "quic application error with a reason includes it",
+			err:         &quic.ApplicationError{ErrorCode: 3, ErrorMessage: "draining"},
+			wantContain: `reason="draining"`,
+		},
+		{
+			name:        "quic transport error without a reason omits the field",
+			err:         &quic.TransportError{ErrorCode: quic.NoError},
+			wantContain: "code=",
+			wantAbsent:  "reason=",
+		},
+		{
+			name:        "goaway without debug data omits the field",
+			err:         http2.GoAwayError{LastStreamID: 4, ErrCode: http2.ErrCodeNo},
+			wantContain: "last_stream=4",
+			wantAbsent:  "debug=",
+		},
+		{
+			name:        "goaway with debug data includes it",
+			err:         http2.GoAwayError{LastStreamID: 4, ErrCode: http2.ErrCodeNo, DebugData: "bye"},
+			wantContain: `debug="bye"`,
+		},
+		{
+			name:        "a reason of only control characters is dropped, not emitted empty",
+			err:         &quic.ApplicationError{ErrorCode: 9, ErrorMessage: "\n\r\x00"},
+			wantContain: "code=9",
+			wantAbsent:  "reason=",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ClassifyCloseError(tc.err).Detail
+			if !strings.Contains(got, tc.wantContain) {
+				t.Errorf("detail = %q, want it to contain %q", got, tc.wantContain)
+			}
+			if tc.wantAbsent != "" && strings.Contains(got, tc.wantAbsent) {
+				t.Errorf("detail = %q, want it to omit %q", got, tc.wantAbsent)
+			}
+		})
 	}
 }
