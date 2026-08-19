@@ -2,10 +2,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 receivers:
-  k8s_events:
-    auth_type: "serviceAccount"
-    namespaces:
-      - "${env:NVCA_OTEL_COLLECTOR_REQUESTS_NAMESPACE}"
+  # Cluster-wide watch of Kubernetes Events (no namespace scoping) so Pod Events
+  # in per-instance namespaces (sr-<uuid>) and ICMSRequest Events are all
+  # captured.
+  k8sobjects:
+    auth_type: serviceAccount
+    # Re-list existing Events on start so a collector restart does not lose
+    # in-flight signals (within Kubernetes Event retention).
+    include_initial_state: true
+    objects:
+      - name: events
+        mode: watch
 
 processors:
   batch:
@@ -27,9 +34,14 @@ processors:
   transform/normalize:
     error_mode: ignore
     log_statements:
-      - set(resource.attributes["k8s.pod.uid"], resource.attributes["k8s.object.uid"]) where resource.attributes["k8s.object.kind"] == "Pod"
+      # k8sobjects (watch) delivers each Event under log.body["object"]; lift the
+      # fields the downstream Pod filter and enrichment rely on into attributes.
+      - set(resource.attributes["k8s.object.kind"], log.body["object"]["involvedObject"]["kind"]) where IsMap(log.body) and log.body["object"]["involvedObject"]["kind"] != nil
+      - set(resource.attributes["k8s.pod.uid"], log.body["object"]["involvedObject"]["uid"]) where resource.attributes["k8s.object.kind"] == "Pod"
+      - set(resource.attributes["k8s.object.fieldpath"], log.body["object"]["involvedObject"]["fieldPath"]) where IsMap(log.body) and log.body["object"]["involvedObject"]["fieldPath"] != nil
       # Only run when fieldpath contains {...} so ExtractPatterns has "name" key (avoids "key not found in map" warn)
       - set(resource.attributes["k8s.container.name"], ExtractPatterns(resource.attributes["k8s.object.fieldpath"], "{(?P<name>[^}]+)}")["name"]) where resource.attributes["k8s.object.fieldpath"] != nil and IsMatch(resource.attributes["k8s.object.fieldpath"], ".*\\{[^}]+\\}.*")
+      - set(log.attributes["k8s.event.reason"], log.body["object"]["reason"]) where IsMap(log.body) and log.body["object"]["reason"] != nil
 
   k8sattributes:
     auth_type: serviceAccount
@@ -62,6 +74,8 @@ processors:
           tag_name: function_id
         - key: function-version-id
           tag_name: function_version_id
+        - key: task-id
+          tag_name: task_id
     pod_association:
       - sources:
           - from: resource_attribute
@@ -75,7 +89,13 @@ processors:
       - set(log.attributes["gpu_specification_id"], resource.attributes["gpu_specification_id"]) where resource.attributes["gpu_specification_id"] != nil
       - set(log.attributes["instance_id"], resource.attributes["k8s.pod.name"]) where resource.attributes["k8s.pod.name"] != nil
       - set(log.attributes["namespace"], resource.attributes["function_version_id"]) where resource.attributes["function_version_id"] != nil
-      - set(log.attributes["event_name"], log.attributes["k8s.event.reason"]) where log.attributes["k8s.event.reason"] != nil
+      # Tasks are keyed by task-id in FnDs; override function_version_id when present.
+      - set(log.attributes["namespace"], resource.attributes["task_id"]) where resource.attributes["task_id"] != nil and resource.attributes["task_id"] != ""
+      # Pod-lane event_name: Pod.<container>.<reason> when the Event targets a
+      # specific container, else Pod.<reason>. Distinguishes container/helm/task
+      # Pod signals for FnDs consumers.
+      - set(log.attributes["event_name"], Concat(["Pod", resource.attributes["k8s.container.name"], log.attributes["k8s.event.reason"]], ".")) where log.attributes["k8s.event.reason"] != nil and resource.attributes["k8s.container.name"] != nil
+      - set(log.attributes["event_name"], Concat(["Pod", log.attributes["k8s.event.reason"]], ".")) where log.attributes["k8s.event.reason"] != nil and resource.attributes["k8s.container.name"] == nil
       - set(log.attributes["source"], "nvca")
       - set(log.attributes["nca_id"], resource.attributes["nca_id"]) where resource.attributes["nca_id"] != nil
       - set(log.attributes["function_id"], resource.attributes["function_id"]) where resource.attributes["function_id"] != nil
@@ -152,11 +172,13 @@ service:
   pipelines:
     logs:
       receivers:
-        - k8s_events
+        - k8sobjects
       processors:
         - memory_limiter
-        - filter
+        # normalize lifts body["object"] fields into attributes, so it must run
+        # before the kind==Pod filter and k8sattributes enrichment.
         - transform/normalize
+        - filter
         - k8sattributes
         - transform
         - filter/required-fields
