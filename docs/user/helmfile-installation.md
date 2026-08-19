@@ -33,14 +33,15 @@ ls
 
 ## Namespace Requirements
 
-Each control-plane Helm chart must be installed into a specific namespace. These
-namespace assignments are fixed and must not be changed because
-service-to-service cluster DNS addressing and Vault (OpenBao) authentication
-claims depend on this layout.
+Each control-plane Helm chart must be installed into a specific namespace. The
+control-plane namespace assignments are fixed because service-to-service DNS
+addressing and Vault (OpenBao) authentication claims depend on them. The
+observability stack uses `monitoring` by default, but its namespace is
+configurable.
 
 | Namespace | Services |
 | --- | --- |
-| `nvcf` | api, invocation-service, grpc-proxy, notary-service, reval, state-metrics |
+| `nvcf` | api, invocation-service, grpc-proxy, notary-service, reval, state-metrics, function-autoscaler |
 | `api-keys` | api-keys, admin-issuer-proxy |
 | `ess` | ess-api |
 | `sis` | sis |
@@ -48,12 +49,14 @@ claims depend on this layout.
 | `cassandra-system` | cassandra |
 | `nats-system` | nats |
 | `cert-manager` | cert-manager |
+| `monitoring` (default) | OpenTelemetry Operator, collector, default monitors, VictoriaMetrics |
 | `envoy-gateway-system` | ingress (nvcf-gateway-routes) |
 
 <Warning>
 Installing a chart into the wrong namespace will cause authentication failures such as
 `error validating claims: claim "/kubernetes.io/namespace" does not match any associated bound claim values`.
-If you see this error, verify that every release is deployed in the namespace shown above.
+If you see this error, verify that each control-plane release uses the required
+namespace and each observability release uses its configured namespace.
 
 </Warning>
 
@@ -280,6 +283,18 @@ global:
       # collectorPort: <your-collector-port>
       # collectorProtocol: <your-collector-protocol>
 
+# Install control-plane monitors, the bundled metrics backend, and the
+# Function Autoscaler.
+observability:
+  profile: control
+
+victoriaMetrics:
+  server:
+    persistentVolume:
+      enabled: true
+      size: 16Gi
+      storageClass: "gp3" # Customize to your storage class.
+
 fakeGpuOperator:
   enabled: false # If deploying locally with no GPUs, true
   ubuntu:
@@ -338,6 +353,18 @@ additional configuration. For a split deployment, override this value with a
 request-router host and port that worker pods can reach. See
 [LLM Function Enablement](./llm-function-enablement.md) for the complete addon
 configuration.
+
+#### `observability` Configuration
+
+The self-managed control-plane stack defaults to
+`observability.profile: control`. This installs the shared metrics components,
+VictoriaMetrics, State Metrics, and the Function Autoscaler. Set the
+VictoriaMetrics storage class for the target cluster.
+
+To use a customer-managed backend or change component ownership, see
+[Observability Configuration](./observability.md). For autoscaler health and
+backend checks, see
+[Function Autoscaler Operations](./autoscaling/operations.md).
 
 #### `domain` and `ingress` Configuration
 
