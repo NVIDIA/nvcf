@@ -5,10 +5,12 @@ Feature: Render local Helmfile stacks with observability disabled
   so that I can verify the profile does not add observability resources.
 
   Background:
-    Given environment variable "NGC_API_KEY" is set
-    And environment variable "SAMPLE_NGC_ORG" is set
-    And environment variable "SAMPLE_NGC_TEAM" is set
-    And environment variable "REPO_ROOT" is set
+    Given these environment variables are set:
+      | name            |
+      | NGC_API_KEY     |
+      | SAMPLE_NGC_ORG  |
+      | SAMPLE_NGC_TEAM |
+      | REPO_ROOT       |
     # Helmfile pulls OCI charts during rendering. Keep $NGC_API_KEY unbraced
     # so the BDD runner does not expand it into command logs.
     And command has succeeded:

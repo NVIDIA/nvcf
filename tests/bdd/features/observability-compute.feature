@@ -7,11 +7,13 @@ Feature: Install local Helmfile observability with the compute profile
   control-plane-only observability components.
 
   Background:
-    Given environment variable "NGC_API_KEY" is set
-    And environment variable "SAMPLE_NGC_ORG" is set
-    And environment variable "SAMPLE_NGC_TEAM" is set
-    And environment variable "NVCF_CLI" is set
-    And environment variable "REPO_ROOT" is set
+    Given these environment variables are set:
+      | name            |
+      | NGC_API_KEY     |
+      | SAMPLE_NGC_ORG  |
+      | SAMPLE_NGC_TEAM |
+      | NVCF_CLI        |
+      | REPO_ROOT       |
     # Helmfile pulls OCI charts during installation. Keep $NGC_API_KEY unbraced
     # so the BDD runner does not expand it into command logs.
     And command has succeeded:
