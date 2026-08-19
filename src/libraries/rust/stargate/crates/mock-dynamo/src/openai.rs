@@ -418,8 +418,7 @@ pub(crate) async fn kv_cache_stats_stream(State(state): State<AppState>) -> Resp
                         "role": "aggregated",
                         "capacity_tokens": stats.kv_cache_capacity_tokens,
                         "used_tokens": stats.kv_cache_used_tokens,
-                        "free_tokens": stats.kv_cache_free_tokens,
-                        "complete": true
+                        "free_tokens": stats.kv_cache_free_tokens
                     },
                     "pools": []
                 }]

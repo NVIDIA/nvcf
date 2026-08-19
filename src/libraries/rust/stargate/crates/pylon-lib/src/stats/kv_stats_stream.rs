@@ -42,7 +42,6 @@ struct RawRoutingCacheStats {
     capacity_tokens: Option<u64>,
     used_tokens: Option<u64>,
     free_tokens: Option<u64>,
-    complete: bool,
 }
 
 pub(super) fn parse_kv_stats_snapshot(line: &[u8]) -> anyhow::Result<KvCacheStatsEnvelope> {
@@ -86,7 +85,7 @@ pub(super) fn parse_kv_stats_snapshot(line: &[u8]) -> anyhow::Result<KvCacheStat
                     else {
                         return false;
                     };
-                    routing.complete && capacity > 0 && used.checked_add(free) == Some(capacity)
+                    capacity > 0 && used.checked_add(free) == Some(capacity)
                 });
             let (capacity, used, free) = routing
                 .map(|routing| {
@@ -224,9 +223,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_complete_snapshot_without_placement_data() {
+    fn routing_cache_presence_denotes_a_complete_snapshot() {
         let snapshot = parse_kv_stats_snapshot(
-            br#"{"v":1,"type":"kv_stats_snapshot","snapshot_id":9,"observed_at_unix_ms":42,"models":[{"model":"m","aliases":["alias"],"routing_cache":{"role":"decode","capacity_tokens":100,"used_tokens":40,"free_tokens":60,"complete":true},"pools":[]}]}"#,
+            br#"{"v":1,"type":"kv_stats_snapshot","snapshot_id":9,"observed_at_unix_ms":42,"models":[{"model":"m","aliases":["alias"],"routing_cache":{"role":"decode","capacity_tokens":100,"used_tokens":40,"free_tokens":60},"pools":[]}]}"#,
         )
         .unwrap();
         assert_eq!(snapshot.models[0].source_observed_at_unix_ms, 42);
@@ -236,9 +235,9 @@ mod tests {
     }
 
     #[test]
-    fn inconsistent_complete_snapshot_is_not_usable() {
+    fn inconsistent_routing_cache_snapshot_is_not_usable() {
         let snapshot = parse_kv_stats_snapshot(
-            br#"{"v":1,"type":"kv_stats_snapshot","observed_at_unix_ms":42,"models":[{"model":"m","aliases":[],"routing_cache":{"capacity_tokens":100,"used_tokens":80,"free_tokens":30,"complete":true},"pools":[]}]}"#,
+            br#"{"v":1,"type":"kv_stats_snapshot","observed_at_unix_ms":42,"models":[{"model":"m","aliases":[],"routing_cache":{"capacity_tokens":100,"used_tokens":80,"free_tokens":30},"pools":[]}]}"#,
         )
         .unwrap();
         assert!(!snapshot.models[0].complete);
@@ -263,8 +262,7 @@ mod tests {
                         "role": "decode",
                         "capacity_tokens": 65_536_000,
                         "used_tokens": 6_553_600,
-                        "free_tokens": 58_982_400,
-                        "complete": true
+                        "free_tokens": 58_982_400
                     },
                     "pools": [{
                         "namespace": "dynamo",
@@ -307,7 +305,7 @@ mod tests {
                 b"{\"v\":1,\"type\":\"kv_stats_snapshot\",\"observed_at_unix_ms\":9,",
             )),
             Ok(Bytes::from_static(
-                b"\"models\":[{\"model\":\"m\",\"routing_cache\":{\"capacity_tokens\":10,\"used_tokens\":4,\"free_tokens\":6,\"complete\":true}}]}\n",
+                b"\"models\":[{\"model\":\"m\",\"routing_cache\":{\"capacity_tokens\":10,\"used_tokens\":4,\"free_tokens\":6}}]}\n",
             )),
         ]);
         let (tx, rx) = flume::bounded(1);

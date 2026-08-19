@@ -2377,7 +2377,7 @@ mod tests {
 
     #[tokio::test]
     async fn kv_cache_stream_updates_model_metrics() {
-        const SNAPSHOT: &str = "{\"v\":1,\"type\":\"kv_stats_snapshot\",\"observed_at_unix_ms\":42,\"models\":[{\"model\":\"model-a\",\"aliases\":[],\"routing_cache\":{\"role\":\"decode\",\"capacity_tokens\":1000,\"used_tokens\":400,\"free_tokens\":600,\"complete\":true},\"pools\":[]}]}\n";
+        const SNAPSHOT: &str = "{\"v\":1,\"type\":\"kv_stats_snapshot\",\"observed_at_unix_ms\":42,\"models\":[{\"model\":\"model-a\",\"aliases\":[],\"routing_cache\":{\"role\":\"decode\",\"capacity_tokens\":1000,\"used_tokens\":400,\"free_tokens\":600},\"pools\":[]}]}\n";
         let requests = Arc::new(AtomicUsize::new(0));
         let handler_requests = requests.clone();
         let metrics = PylonMetrics::new().expect("metrics should initialize");
