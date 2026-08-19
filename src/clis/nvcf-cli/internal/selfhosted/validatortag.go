@@ -240,15 +240,19 @@ func exchangeBearerToken(ctx context.Context, client *http.Client, registry, rep
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		// WWW-Authenticate realm failed — try NGC's /proxy_auth as last resort
+		// Close the body immediately before the fallback or the error return so
+		// the connection is not held open while the NGC /proxy_auth call runs.
+		status := resp.Status
+		resp.Body.Close()
+		// WWW-Authenticate realm failed; try NGC's /proxy_auth as last resort
 		// for registries that implement both endpoints (e.g. staging NGC envs).
 		if isNGCRegistry(registry) {
 			return exchangeNGCBearerToken(ctx, client, registry, repo)
 		}
-		return "", fmt.Errorf("token exchange at %s returned %s", realm, resp.Status)
+		return "", fmt.Errorf("token exchange at %s returned %s", realm, status)
 	}
+	defer resp.Body.Close()
 
 	// Both "token" (OCI spec) and "access_token" (Docker Hub variant) are valid.
 	var doc struct {
@@ -280,14 +284,14 @@ func exchangeNGCBearerToken(ctx context.Context, client *http.Client, registry, 
 	if !ok {
 		return "", fmt.Errorf("no credentials for %s", registry)
 	}
-	// Build scope: use actual repo when provided; omit when empty so the NGC
-	// /proxy_auth endpoint validates the key without org-scoped access checks.
-	scope := ""
+	// Build the query: use url.Values so the scope key is omitted entirely
+	// when repo is empty rather than sending scope= with an empty value.
+	// An empty scope validates the API key without org-scoped access checks.
+	q := url.Values{"service": {registry}}
 	if repo != "" {
-		scope = "repository:" + repo + ":pull"
+		q.Set("scope", "repository:"+repo+":pull")
 	}
-	tokenURL := fmt.Sprintf("https://%s/proxy_auth?service=%s&scope=%s",
-		registry, registry, scope)
+	tokenURL := "https://" + registry + "/proxy_auth?" + q.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, tokenURL, nil)
 	if err != nil {
 		return "", err
@@ -357,7 +361,7 @@ func parseWWWAuthenticate(header string) (realm, service, scope string) {
 			}
 		}
 
-		switch key {
+		switch strings.ToLower(key) {
 		case "realm":
 			realm = val
 		case "service":

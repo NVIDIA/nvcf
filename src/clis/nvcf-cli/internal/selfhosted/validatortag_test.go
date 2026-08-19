@@ -295,6 +295,14 @@ func TestParseWWWAuthenticate_RealmOnly(t *testing.T) {
 	assert.Empty(t, scope)
 }
 
+func TestParseWWWAuthenticate_MixedCaseParams(t *testing.T) {
+	// Auth parameter names are parsed with mixed case in the wild.
+	realm, service, scope := parseWWWAuthenticate(`Bearer Realm="https://auth.example.com/token",Service="reg.example.com",Scope="repository:foo:pull"`)
+	assert.Equal(t, "https://auth.example.com/token", realm)
+	assert.Equal(t, "reg.example.com", service)
+	assert.Equal(t, "repository:foo:pull", scope)
+}
+
 func TestParseWWWAuthenticate_CaseInsensitiveBearer(t *testing.T) {
 	// HTTP auth scheme names are case-insensitive (RFC 7235 s2.1).
 	for _, header := range []string{
@@ -330,11 +338,21 @@ func TestIsNGCRegistry(t *testing.T) {
 
 // -- exchangeNGCBearerToken --
 
+// spyTransport is an http.RoundTripper that fails the test if called.
+type spyTransport struct{ t *testing.T }
+
+func (s *spyTransport) RoundTrip(_ *http.Request) (*http.Response, error) {
+	s.t.Fatal("HTTP request must not be issued for non-NGC registry")
+	return nil, nil
+}
+
 func TestExchangeNGCBearerToken_RejectsNonNGCRegistry(t *testing.T) {
-	// A non-NGC registry with an absent or malformed WWW-Authenticate header
-	// must not trigger the NGC /proxy_auth fallback. If it did, NGC credentials
-	// could be sent to an unrelated registry's /proxy_auth endpoint.
-	client := &http.Client{}
+	// A non-NGC registry must be rejected before any HTTP request is made,
+	// even when NGC credentials are configured. The spy transport fails the
+	// test immediately if RoundTrip is called, ensuring the isNGCRegistry
+	// guard fires before any network activity.
+	t.Setenv("NGC_API_KEY", "test-key") // configure a credential so a missing guard would reach the transport
+	client := &http.Client{Transport: &spyTransport{t: t}}
 	_, err := exchangeNGCBearerToken(context.Background(), client, "harbor.company.internal", "myrepo/image")
 	require.Error(t, err, "non-NGC registry must be rejected without issuing a request")
 	assert.Contains(t, err.Error(), "non-NGC registry")
