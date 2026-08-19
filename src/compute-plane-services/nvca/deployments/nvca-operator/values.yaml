@@ -71,6 +71,14 @@ serviceAccount:
 ## @param replicaCount Replica count for the operator deployment
 replicaCount: 1
 
+## @param podDisruptionBudget PodDisruptionBudget configuration
+podDisruptionBudget:
+  enabled: false
+  # minAvailable and maxUnavailable are mutually exclusive; set exactly one.
+  # Accepts an integer or a percentage string from 0% to 100%.
+  minAvailable: ""
+  maxUnavailable: ""
+
 ## @param systemNamespace Namespace in which NVCFBackend objects are created.
 systemNamespace: nvca-operator
 
