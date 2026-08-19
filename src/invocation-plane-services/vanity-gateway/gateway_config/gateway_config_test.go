@@ -867,3 +867,149 @@ func TestGatewayConfigValidateRejectsVanityShadowSamplingMethod(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "shadow config is unsupported for vanity routes")
 }
+
+func llmGatewayConfig(entry LLMGatewayEntry) *GatewayConfig {
+	cfg := &GatewayConfig{}
+	cfg.LLMGateway = map[string]LLMGatewayEntry{"llm_example": entry}
+	return cfg
+}
+
+func TestGatewayConfigValidateAcceptsLLMGatewayEntry(t *testing.T) {
+	cfg := llmGatewayConfig(LLMGatewayEntry{
+		Host:           "llm.example.com",
+		CustomHeaders:  CustomHeaders{"X-Provider-Feature": "enabled"},
+		OfflineMessage: "",
+	})
+
+	require.NoError(t, cfg.Validate())
+	assert.True(t, cfg.HasLLMGatewayRoute())
+}
+
+func TestGatewayConfigHasLLMGatewayRouteFalseWhenSectionEmpty(t *testing.T) {
+	cfg := &GatewayConfig{}
+	cfg.Vanity = map[string]VanityEntry{
+		"example": {
+			Host:  "ai.example.com",
+			Paths: map[string]PathFunctionDetails{"sample": {Path: "/v1/example/infer", FunctionID: "func-id"}},
+		},
+	}
+
+	require.NoError(t, cfg.Validate())
+	assert.False(t, cfg.HasLLMGatewayRoute())
+}
+
+func TestGatewayConfigValidateRejectsLLMGatewayEntryWithoutHost(t *testing.T) {
+	err := llmGatewayConfig(LLMGatewayEntry{}).Validate()
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "llmGateway.llm_example: host is required")
+}
+
+func TestGatewayConfigValidateRejectsPriorityHeaderOnLLMGatewayEntry(t *testing.T) {
+	for _, name := range []string{"X-Priority", "x-priority"} {
+		t.Run(name, func(t *testing.T) {
+			cfg := llmGatewayConfig(LLMGatewayEntry{
+				Host:          "llm.example.com",
+				CustomHeaders: CustomHeaders{name: "high"},
+			})
+
+			err := cfg.Validate()
+			require.Error(t, err)
+			assert.ErrorContains(t, err, "the LLM Gateway rejects requests carrying it")
+		})
+	}
+}
+
+func TestGatewayConfigValidateRejectsReservedHeaderOnLLMGatewayEntry(t *testing.T) {
+	cfg := llmGatewayConfig(LLMGatewayEntry{
+		Host:          "llm.example.com",
+		CustomHeaders: CustomHeaders{"Authorization": "Bearer nope"},
+	})
+
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "cannot set reserved header")
+}
+
+func TestGatewayConfigValidateRejectsDuplicateHostsAcrossSections(t *testing.T) {
+	tests := []struct {
+		name        string
+		mutate      func(cfg *GatewayConfig)
+		wantMessage string
+	}{
+		{
+			name:        "llmGateway collides with openai",
+			mutate:      func(cfg *GatewayConfig) { cfg.OpenAI.Host = "shared.example.com" },
+			wantMessage: `host "shared.example.com" is already served by openai`,
+		},
+		{
+			name: "llmGateway collides with vanity",
+			mutate: func(cfg *GatewayConfig) {
+				cfg.Vanity = map[string]VanityEntry{
+					"example": {
+						Host:  "shared.example.com",
+						Paths: map[string]PathFunctionDetails{"sample": {Path: "/v1/example/infer", FunctionID: "func-id"}},
+					},
+				}
+			},
+			wantMessage: `host "shared.example.com" is already served by vanity.example`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := llmGatewayConfig(LLMGatewayEntry{Host: "shared.example.com"})
+			tc.mutate(cfg)
+
+			err := cfg.Validate()
+			require.Error(t, err)
+			assert.ErrorContains(t, err, tc.wantMessage)
+		})
+	}
+}
+
+func TestGatewayConfigValidateRejectsDuplicateHostAcrossTwoLLMGatewayEntries(t *testing.T) {
+	cfg := &GatewayConfig{}
+	cfg.LLMGateway = map[string]LLMGatewayEntry{
+		"first":  {Host: "llm.example.com"},
+		"second": {Host: "llm.example.com"},
+	}
+
+	err := cfg.Validate()
+	require.Error(t, err)
+	assert.ErrorContains(t, err, `host "llm.example.com" is already served by llmGateway.`)
+}
+
+func TestGatewayConfigValidateAllowsEmptyOpenAIHostAlongsideLLMGateway(t *testing.T) {
+	cfg := llmGatewayConfig(LLMGatewayEntry{Host: "llm.example.com"})
+
+	require.NoError(t, cfg.Validate())
+}
+
+func TestGatewayConfigLoadAcceptsLLMGatewaySection(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	err := os.WriteFile(configPath, []byte(`
+v2config:
+  vanity:
+    example:
+      host: ai.example.com
+      paths:
+        infer:
+          path: /v1/example/infer
+          functionID: func-id
+  llmGateway:
+    llm_example:
+      host: llm.example.com
+      offlineMessage: ""
+      customHeaders:
+        X-Provider-Feature: enabled
+`), 0600)
+	require.NoError(t, err)
+
+	loaded, err := SetupConfigWithConfigPath(configPath)
+	require.NoError(t, err)
+
+	cfg := loaded.Get()
+	require.True(t, cfg.HasLLMGatewayRoute())
+	assert.Equal(t, "llm.example.com", cfg.LLMGateway["llm_example"].Host)
+	assert.Equal(t, "enabled", cfg.LLMGateway["llm_example"].CustomHeaders["X-Provider-Feature"])
+}

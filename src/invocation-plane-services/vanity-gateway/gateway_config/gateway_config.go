@@ -131,6 +131,16 @@ type VanityEntry struct {
 	Paths map[string]PathFunctionDetails `json:"paths"`
 }
 
+// LLMGatewayEntry serves the LLM Gateway's OpenAI-compatible routes on Host.
+// The gateway proxies them verbatim, so an entry carries no function or model
+// selection: the LLM Gateway resolves the function from the request model.
+type LLMGatewayEntry struct {
+	Host           string        `json:"host"`
+	CustomHeaders  CustomHeaders `json:"customHeaders,omitempty"`
+	EOL            time.Time     `json:"eol,omitempty"`
+	OfflineMessage string        `json:"offlineMessage,omitempty"`
+}
+
 type V2Config struct {
 	OpenAI struct {
 		Host             string                          `json:"host"`
@@ -142,7 +152,8 @@ type V2Config struct {
 		ImageEdits       map[string]ModelFunctionDetails `json:"imageEdits"`
 		ImageVariations  map[string]ModelFunctionDetails `json:"imageVariations"`
 	} `json:"openai"`
-	Vanity map[string]VanityEntry `json:"vanity"`
+	Vanity     map[string]VanityEntry     `json:"vanity"`
+	LLMGateway map[string]LLMGatewayEntry `json:"llmGateway"`
 }
 
 // sharedNotifications is a package-level channel shared across all config instances.
@@ -240,7 +251,11 @@ func (c *GatewayConfig) Validate() error {
 		}
 	}
 
-	return c.validateVanityConfig()
+	if err := c.validateVanityConfig(); err != nil {
+		return err
+	}
+
+	return c.validateLLMGatewayConfig()
 }
 
 func (c *GatewayConfig) openAISections() map[string]map[string]ModelFunctionDetails {
@@ -348,6 +363,12 @@ var reservedCustomHeaderNames = map[string]struct{}{
 	"x-forwarded-proto":   {},
 }
 
+// The LLM Gateway rejects any request carrying X-Priority, on header presence
+// rather than value, so a configured value would fail every request.
+var llmGatewayReservedCustomHeaderNames = map[string]struct{}{
+	"x-priority": {},
+}
+
 func validateCustomHeaders(location string, headers CustomHeaders) error {
 	seenNames := make(map[string]string, len(headers))
 	for name := range headers {
@@ -423,6 +444,59 @@ func (c *GatewayConfig) validateVanityConfig() error {
 	}
 
 	return nil
+}
+
+// validateLLMGatewayConfig checks the hosts that proxy to the LLM Gateway. The
+// gateway registers a fixed route set on each of them, so the only things an
+// entry can get wrong are the host itself and the static headers.
+func (c *GatewayConfig) validateLLMGatewayConfig() error {
+	for entryKey, entry := range c.LLMGateway {
+		location := "llmGateway." + entryKey
+		if entry.Host == "" {
+			return fmt.Errorf("%s: host is required", location)
+		}
+		if err := validateCustomHeaders(location, entry.CustomHeaders); err != nil {
+			return err
+		}
+		for name := range entry.CustomHeaders {
+			if _, ok := llmGatewayReservedCustomHeaderNames[strings.ToLower(name)]; ok {
+				return fmt.Errorf("%s: customHeaders cannot set %q; the LLM Gateway rejects requests carrying it", location, name)
+			}
+		}
+	}
+
+	return c.validateHostUniqueness()
+}
+
+// validateHostUniqueness rejects a host claimed by more than one section.
+// Registration is a plain map assignment keyed by host, so a collision would
+// silently drop one section's routes.
+func (c *GatewayConfig) validateHostUniqueness() error {
+	owners := make(map[string]string, len(c.LLMGateway)+len(c.Vanity)+1)
+	if c.OpenAI.Host != "" {
+		owners[c.OpenAI.Host] = "openai"
+	}
+	for vanityName, vanity := range c.Vanity {
+		if vanity.Host == "" {
+			continue
+		}
+		if owner, ok := owners[vanity.Host]; ok {
+			return fmt.Errorf("vanity.%s: host %q is already served by %s", vanityName, vanity.Host, owner)
+		}
+		owners[vanity.Host] = "vanity." + vanityName
+	}
+	for entryKey, entry := range c.LLMGateway {
+		if owner, ok := owners[entry.Host]; ok {
+			return fmt.Errorf("llmGateway.%s: host %q is already served by %s", entryKey, entry.Host, owner)
+		}
+		owners[entry.Host] = "llmGateway." + entryKey
+	}
+	return nil
+}
+
+// HasLLMGatewayRoute reports whether any host proxies to the LLM Gateway.
+func (c *GatewayConfig) HasLLMGatewayRoute() bool {
+	return len(c.LLMGateway) > 0
 }
 
 func SetupConfigWithConfigPath(path string) (rc.ReloadableConfig[GatewayConfig], error) {

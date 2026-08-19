@@ -26,16 +26,38 @@ import (
 	"time"
 )
 
-func healthManager(nvcfApiHost string, transport http.RoundTripper) (*health.Health, error) {
+// healthManager probes the NVCF API, plus the LLM Gateway when any vanity route
+// targets it. The LLM Gateway serves /healthz rather than /health.
+func healthManager(nvcfApiHost string, llmGatewayEndpoint string, transport http.RoundTripper) (*health.Health, error) {
 	client := http.Client{Timeout: 5 * time.Second, Transport: transport}
-	healthUrl, err := url.JoinPath(nvcfApiHost, "/health")
+
+	nvcfCheck, err := upstreamHealthCheck(client, "nvcf api", nvcfApiHost, "/health")
 	if err != nil {
 		return nil, err
 	}
-	return health.New(health.WithComponent(health.Component{
+	options := []health.Option{health.WithChecks(nvcfCheck)}
+
+	if llmGatewayEndpoint != "" {
+		llmCheck, err := upstreamHealthCheck(client, "llm api gateway", llmGatewayEndpoint, "/healthz")
+		if err != nil {
+			return nil, err
+		}
+		options = append(options, health.WithChecks(llmCheck))
+	}
+
+	options = append(options, health.WithComponent(health.Component{
 		Name: "vanity gateway",
-	}), health.WithChecks(health.Config{
-		Name:    "nvcf api",
+	}))
+	return health.New(options...)
+}
+
+func upstreamHealthCheck(client http.Client, name string, endpoint string, path string) (health.Config, error) {
+	healthUrl, err := url.JoinPath(endpoint, path)
+	if err != nil {
+		return health.Config{}, err
+	}
+	return health.Config{
+		Name:    name,
 		Timeout: 5 * time.Second,
 		Check: func(ctx context.Context) error {
 			request, err := http.NewRequestWithContext(ctx, http.MethodGet, healthUrl, nil)
@@ -50,7 +72,7 @@ func healthManager(nvcfApiHost string, transport http.RoundTripper) (*health.Hea
 			if resp.StatusCode == 200 {
 				return nil
 			}
-			return fmt.Errorf("invalid nvcf api health response %d", resp.StatusCode)
+			return fmt.Errorf("invalid %s health response %d", name, resp.StatusCode)
 		},
-	}))
+	}, nil
 }
