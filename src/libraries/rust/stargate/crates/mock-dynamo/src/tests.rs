@@ -53,23 +53,23 @@ fn test_state() -> AppState {
         health_delay: Duration::ZERO,
         kv_cache: Arc::new(Mutex::new(KvCacheState::new(0))),
         stats_events: test_stats_events(),
-        kv_stats_enabled: Arc::new(AtomicBool::new(true)),
+        stats_stream_enabled: Arc::new(AtomicBool::new(true)),
         test_control: TestControlState::with_discovered_models(["dummy-model".to_string()]),
     }
 }
 
 #[tokio::test]
-async fn kv_stats_test_control_does_not_disable_health() {
+async fn stats_stream_test_control_does_not_disable_health() {
     let state = test_state();
-    let status = update_kv_stats_test_control(
+    let status = update_stats_stream_test_control(
         State(state.clone()),
-        Json(KvStatsTestControlUpdate { enabled: false }),
+        Json(StatsStreamTestControlUpdate { enabled: false }),
     )
     .await;
 
     assert_eq!(status, axum::http::StatusCode::NO_CONTENT);
     assert_eq!(
-        kv_cache_stats_stream(State(state.clone())).await.status(),
+        stats_stream(State(state.clone())).await.status(),
         axum::http::StatusCode::SERVICE_UNAVAILABLE
     );
     assert_eq!(health(State(state)).await, "ok");
@@ -675,7 +675,7 @@ async fn streaming_response_delays_first_data_frame_until_ttft() {
     };
     let app = Router::new()
         .route("/v1/chat/completions", post(chat_completions))
-        .route("/pylon/v1/stats/stream", get(stats_stream))
+        .route("/v1/stats/stream", get(stats_stream))
         .with_state(state);
     let (addr, server) = spawn_test_app(app).await;
 
@@ -710,7 +710,7 @@ async fn streaming_response_exposes_stats_stream_endpoint() {
     };
     let app = Router::new()
         .route("/v1/chat/completions", post(chat_completions))
-        .route("/pylon/v1/stats/stream", get(stats_stream))
+        .route("/v1/stats/stream", get(stats_stream))
         .with_state(state);
     let (addr, server) = spawn_test_app(app).await;
 
@@ -732,10 +732,8 @@ async fn streaming_response_exposes_stats_stream_endpoint() {
         .expect("test client should connect");
     stream
         .write_all(
-            format!(
-                "GET /pylon/v1/stats/stream HTTP/1.1\r\nhost: {addr}\r\nconnection: close\r\n\r\n",
-            )
-            .as_bytes(),
+            format!("GET /v1/stats/stream HTTP/1.1\r\nhost: {addr}\r\nconnection: close\r\n\r\n",)
+                .as_bytes(),
         )
         .await
         .expect("stats stream request should write");
@@ -754,23 +752,35 @@ async fn streaming_response_exposes_stats_stream_endpoint() {
 
 #[test]
 fn stats_stream_events_are_ndjson() {
-    let event = StatsStreamEvent::Stats {
-        v: 1,
-        request_id: "req-1".to_string(),
-        model: "dummy-model".to_string(),
-        tokens_processed: Some(11),
-        tokens_generated: Some(2),
-        finished: true,
+    let event = stargate_proto::dynamo_frontend_stats::StatsUpdate {
+        update: Some(
+            stargate_proto::dynamo_frontend_stats::stats_update::Update::RequestStats(
+                stargate_proto::dynamo_frontend_stats::RequestStats {
+                    request_id: "req-1".to_string(),
+                    model: "dummy-model".to_string(),
+                    tokens_processed: Some(11),
+                    tokens_generated: Some(2),
+                    finished: true,
+                },
+            ),
+        ),
     };
 
-    let line = String::from_utf8(ndjson_event(&event).to_vec()).unwrap();
+    let line = ndjson_event(event);
+    let value: serde_json::Value = serde_json::from_slice(&line).unwrap();
 
     assert_eq!(
-            line,
-            r#"{"type":"stats","v":1,"request_id":"req-1","model":"dummy-model","tokens_processed":11,"tokens_generated":2,"finished":true}"#
-                .to_string()
-                + "\n"
-        );
+        value,
+        serde_json::json!({
+            "v": 1,
+            "type": "stats",
+            "request_id": "req-1",
+            "model": "dummy-model",
+            "tokens_processed": 11,
+            "tokens_generated": 2,
+            "finished": true,
+        })
+    );
 }
 
 #[tokio::test]

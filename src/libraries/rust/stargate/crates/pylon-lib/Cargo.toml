@@ -65,13 +65,8 @@ stargate-tls = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
-criterion = "0.5"
 opentelemetry_sdk = { workspace = true }
 rcgen = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 tower = { workspace = true }
-
-[[bench]]
-name = "engine_stats_stream"
-harness = false

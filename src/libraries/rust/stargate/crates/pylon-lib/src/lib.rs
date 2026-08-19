@@ -63,9 +63,8 @@ pub use runtime_state::{
 pub use stats::{
     EngineStatsStreamConfig, EngineStatsStreamHandle, EngineStatsStreamMode, MetricsServerHandle,
     PylonMetrics, RequestCounterUpdate, RequestCounterUpdateInput, StatsAggregatorUpdate,
-    StatsCollectorConfig, StatsCollectorHandle, StatsUpdateSource,
-    parse_engine_stats_line_for_benchmark, start_engine_stats_stream, start_metrics_server,
-    start_stats_collector, start_stats_collector_with_engine_stats,
+    StatsCollectorConfig, StatsCollectorHandle, StatsUpdateSource, start_engine_stats_stream,
+    start_metrics_server, start_stats_collector, start_stats_collector_with_engine_stats,
     stats_aggregator_update_channel,
 };
 pub use upstream_health::{DEFAULT_UPSTREAM_HEALTH_PATHS, UpstreamHealthPaths};
