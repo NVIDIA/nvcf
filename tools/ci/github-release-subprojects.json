@@ -286,6 +286,11 @@
       "service_name": "nvcf-event-ledger"
     },
     {
+      "id": "event-ledger-helm",
+      "path": "deploy/helm/event-ledger",
+      "service_name": "helm-nvcf-event-ledger"
+    },
+    {
       "id": "ess",
       "path": "src/control-plane-services/encrypted-secret-store",
       "service_name": "nvcf-ess",
