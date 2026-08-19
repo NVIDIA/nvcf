@@ -400,6 +400,22 @@ grep -Fq \
   "llmRequestRouter.tls.mountPath must match the directory containing llmRequestRouter.tls.certPath and llmRequestRouter.tls.keyPath when llmRequestRouter.tls.mode is existingSecret" \
   "${mismatched_mount_path_error}" || fail "mismatched mount path did not return the expected guard message"
 
+# Kubernetes volume mounts must be absolute paths. Matching relative paths
+# would otherwise pass the directory consistency check but fail at deployment.
+relative_mount_path_error="${tmp_dir}/relative-mount-path.err"
+if render_existing_secret_case \
+  /dev/null \
+  --set-string llmRequestRouter.tls.secretName=operator-quic-tls \
+  --set-string llmRequestRouter.tls.mountPath=tls \
+  --set-string llmRequestRouter.tls.certPath=tls/tls.crt \
+  --set-string llmRequestRouter.tls.keyPath=tls/tls.key \
+  2> "${relative_mount_path_error}"; then
+  fail "existing-Secret mode accepted a relative TLS mount path"
+fi
+grep -Fq \
+  "llmRequestRouter.tls.mountPath must be an absolute path when llmRequestRouter.tls.mode is existingSecret" \
+  "${relative_mount_path_error}" || fail "relative mount path did not return the expected guard message"
+
 # An unknown mode must fail rather than silently fall back to cert-manager.
 invalid_mode_error="${tmp_dir}/invalid-mode.err"
 if helm template llm-request-router ./llm-request-router \

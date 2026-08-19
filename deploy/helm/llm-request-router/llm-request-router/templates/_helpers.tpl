@@ -208,6 +208,9 @@ the mount and the Stargate arguments are all conditional on them.
 {{- fail "llmRequestRouter.tls.keyPath is required when llmRequestRouter.tls.mode is existingSecret" -}}
 {{- end -}}
 {{- $tlsMountPath := include "llm-request-router.tlsMountPath" . | trim -}}
+{{- if not (hasPrefix "/" $tlsMountPath) -}}
+{{- fail "llmRequestRouter.tls.mountPath must be an absolute path when llmRequestRouter.tls.mode is existingSecret" -}}
+{{- end -}}
 {{- if or (ne $tlsMountPath (dir $tls.certPath)) (ne $tlsMountPath (dir $tls.keyPath)) -}}
 {{- fail "llmRequestRouter.tls.mountPath must match the directory containing llmRequestRouter.tls.certPath and llmRequestRouter.tls.keyPath when llmRequestRouter.tls.mode is existingSecret" -}}
 {{- end -}}
