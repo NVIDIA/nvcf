@@ -270,7 +270,12 @@ func exchangeBearerToken(ctx context.Context, client *http.Client, registry, rep
 
 // exchangeNGCBearerToken is the NGC-specific /proxy_auth token exchange,
 // kept as a named fallback for when the standard OCI flow cannot be used.
+// It always rejects non-NGC registries so NGC credentials are never sent
+// to an unrelated /proxy_auth endpoint.
 func exchangeNGCBearerToken(ctx context.Context, client *http.Client, registry, repo string) (string, error) {
+	if !isNGCRegistry(registry) {
+		return "", fmt.Errorf("NGC token fallback not applicable for non-NGC registry %s", registry)
+	}
 	user, pass, ok := ngcCredentials(registry)
 	if !ok {
 		return "", fmt.Errorf("no credentials for %s", registry)

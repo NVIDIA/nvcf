@@ -20,6 +20,7 @@ package selfhosted
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -325,4 +326,16 @@ func TestIsNGCRegistry(t *testing.T) {
 	assert.False(t, isNGCRegistry("evilnvcr.io"), "suffix match without dot boundary must be rejected")
 	assert.False(t, isNGCRegistry("nvidia.com.invalid"), "deceptive TLD must be rejected")
 	assert.False(t, isNGCRegistry("fakenvidia.com"), "partial host match must be rejected")
+}
+
+// -- exchangeNGCBearerToken --
+
+func TestExchangeNGCBearerToken_RejectsNonNGCRegistry(t *testing.T) {
+	// A non-NGC registry with an absent or malformed WWW-Authenticate header
+	// must not trigger the NGC /proxy_auth fallback. If it did, NGC credentials
+	// could be sent to an unrelated registry's /proxy_auth endpoint.
+	client := &http.Client{}
+	_, err := exchangeNGCBearerToken(context.Background(), client, "harbor.company.internal", "myrepo/image")
+	require.Error(t, err, "non-NGC registry must be rejected without issuing a request")
+	assert.Contains(t, err.Error(), "non-NGC registry")
 }
