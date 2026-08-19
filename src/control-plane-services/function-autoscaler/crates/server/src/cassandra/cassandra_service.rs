@@ -381,75 +381,22 @@ impl CassandraServiceManager {
         }
     }
 
-    #[tracing::instrument(skip(self, function), fields(function_id = %function.function_id, function_version_id = %function.function_version_id))]
-    pub async fn insert_to_active_functions(
-        &self,
-        function: &ActiveFunctionDetails,
-        table: ActiveFunctionTable,
-    ) -> Result<()> {
-        let session = self.get_session().await?;
-
-        let stmt = match table {
-            ActiveFunctionTable::RecentlyInvokedFunctions => {
-                get_stmt_insert_to_recently_invoked_functions(
-                    &self.config.keyspace,
-                    self.config.recently_invoked_ttl_seconds,
-                )
-            }
-            ActiveFunctionTable::RunningFunctionsWithoutInvocations => {
-                get_stmt_insert_to_running_functions_without_invocations(
-                    &self.config.keyspace,
-                    self.config.recently_invoked_ttl_seconds,
-                )
-            }
-        };
-
-        let nca_id = function.nca_id_or_nil();
-        with_cassandra_timing("insert_to_active_functions", || async {
-            let mut prepared_statement = session.prepare(stmt).await?;
-            prepared_statement.set_is_idempotent(true);
-            session
-                .execute_unpaged(
-                    &prepared_statement,
-                    (
-                        &function.function_id,
-                        &function.function_version_id,
-                        &nca_id,
-                        &function.last_updated_at,
-                    ),
-                )
-                .await?;
-            Ok(())
-        })
-        .await
-    }
-
     // Not instrumented: return value is Vec<ActiveFunction> and would be captured in the span (large debug output).
     pub async fn get_active_functions_with_token_range(
         &self,
         token_range: &[i64],
         page_size: i32,
-        table: ActiveFunctionTable,
     ) -> Result<Vec<ActiveFunction>> {
         let session = self.get_session().await?;
-        let stmt = match table {
-            ActiveFunctionTable::RecentlyInvokedFunctions => {
-                get_select_recently_invoked_functions_in_token_range_stmt(&self.config.keyspace)
-            }
-            ActiveFunctionTable::RunningFunctionsWithoutInvocations => {
-                get_select_running_functions_without_invocations_in_token_range_stmt(
-                    &self.config.keyspace,
-                )
-            }
-        };
+        let stmt =
+            get_select_recently_invoked_functions_in_token_range_stmt(&self.config.keyspace);
 
         with_cassandra_timing("get_active_functions_with_token_range", || async {
             let mut prepared_statement = session.prepare(stmt).await?;
             prepared_statement.set_page_size(page_size);
             // Use LOCAL_QUORUM to match the QUORUM write consistency used in add_new_active_functions_batch.
             // LOCAL_ONE (execution profile default) can read from a replica that hasn't received a
-            // recent QUORUM write, causing a second pod to see a function as new and overwrite the
-            // history row with num_workers=-1 even after a prior pod already wrote it.
+            // recent write, causing a second pod to see the function as new.
             prepared_statement.set_consistency(Consistency::LocalQuorum);
             let mut results = Vec::new();
             let token_range_min = token_range[0];
@@ -479,7 +426,7 @@ impl CassandraServiceManager {
 
     /// Upserts a function into recently_invoked_functions with a fresh TTL.
     /// Called by the scaling loop when desired_instance_count > 0 to keep the
-    /// function alive in the active set without touching the history table.
+    /// function alive in the active set.
     #[tracing::instrument(skip(self))]
     pub async fn refresh_active_function_ttl(&self, function: &ActiveFunction) -> Result<()> {
         let session = self.get_session().await?;
@@ -510,43 +457,32 @@ impl CassandraServiceManager {
     pub async fn add_new_active_functions_batch(
         &self,
         functions: &[ActiveFunctionDetails],
-        table: ActiveFunctionTable,
     ) -> Result<()> {
         if functions.is_empty() {
             return Ok(());
         }
 
         let session = self.get_session().await?;
-        let stmt_active_function = match table {
-            ActiveFunctionTable::RecentlyInvokedFunctions => {
-                get_stmt_insert_to_recently_invoked_functions(
-                    &self.config.keyspace,
-                    self.config.recently_invoked_ttl_seconds,
-                )
-            }
-            ActiveFunctionTable::RunningFunctionsWithoutInvocations => {
-                get_stmt_insert_to_running_functions_without_invocations(
-                    &self.config.keyspace,
-                    self.config.recently_invoked_ttl_seconds,
-                )
-            }
-        };
-        let mut prepared_active_function = session.prepare(stmt_active_function).await?;
-        prepared_active_function.set_consistency(scylla::statement::Consistency::Quorum);
-        prepared_active_function.set_is_idempotent(true);
+        let stmt = get_stmt_insert_to_recently_invoked_functions(
+            &self.config.keyspace,
+            self.config.recently_invoked_ttl_seconds,
+        );
+        let mut prepared = session.prepare(stmt).await?;
+        prepared.set_consistency(Consistency::Quorum);
+        prepared.set_is_idempotent(true);
 
         with_cassandra_timing("add_new_active_functions_batch", || async {
             execute_chunked(functions, 200, |function| {
                 let session = session.clone();
-                let prepared_active_function = prepared_active_function.clone();
+                let prepared = prepared.clone();
                 let function_id = function.function_id;
                 let function_version_id = function.function_version_id;
-                let nca_id = function.nca_id_or_nil();
+                let nca_id = function.nca_id.clone().unwrap_or_default();
                 let last_updated_at = function.last_updated_at;
                 async move {
                     session
                         .execute_unpaged(
-                            &prepared_active_function,
+                            &prepared,
                             (&function_id, &function_version_id, &nca_id, last_updated_at),
                         )
                         .await
@@ -565,52 +501,6 @@ impl CassandraServiceManager {
         })
         .await?;
 
-        Ok(())
-    }
-
-    #[tracing::instrument(skip(self))]
-    pub async fn delete_active_function(
-        &self,
-        function_id: &Uuid,
-        function_version_id: &Uuid,
-        table: ActiveFunctionTable,
-    ) -> Result<()> {
-        let session = self.get_session().await?;
-        let stmt_active_function = match table {
-            ActiveFunctionTable::RecentlyInvokedFunctions => {
-                get_delete_recently_invoked_function_stmt(&self.config.keyspace)
-            }
-            ActiveFunctionTable::RunningFunctionsWithoutInvocations => {
-                get_delete_running_function_without_invocations_stmt(&self.config.keyspace)
-            }
-        };
-        let mut prepared = session.prepare(stmt_active_function).await?;
-        prepared.set_consistency(scylla::statement::Consistency::Quorum);
-        prepared.set_is_idempotent(true);
-        let result = with_cassandra_timing("delete_active_function", || async {
-            session
-                .execute_unpaged(&prepared, (function_id, function_version_id))
-                .await
-        })
-        .await;
-        match result {
-            Ok(_) => {
-                tracing::debug!(
-                    "Successfully deleted function {}:{} from Cassandra",
-                    function_id,
-                    function_version_id
-                );
-            }
-            Err(e) => {
-                tracing::error!(
-                    "Failed to delete function {}:{} from Cassandra: {}",
-                    function_id,
-                    function_version_id,
-                    e
-                );
-                return Err(e.into());
-            }
-        }
         Ok(())
     }
 
@@ -973,16 +863,6 @@ mod tests {
         }
     }
 
-    fn create_test_active_function_details() -> ActiveFunctionDetails {
-        ActiveFunctionDetails {
-            function_id: Uuid::new_v4(),
-            function_version_id: Uuid::new_v4(),
-            nca_id: Some("test-nca-id".to_string()),
-            num_workers: Some(1),
-            last_updated_at: Some(Utc::now()),
-        }
-    }
-
     fn create_test_lock() -> DistributedLock {
         DistributedLock {
             lock_name: "test_lock".to_string(),
@@ -1010,59 +890,6 @@ mod tests {
         );
         let result = CassandraServiceManager::new(&settings, secrets_watcher).await;
         assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    #[ignore = "Requires running Cassandra"]
-    async fn test_active_function_operations() {
-        let settings = create_test_settings().await;
-        let secrets_path = get_test_secrets_path();
-        let secrets_watcher = Arc::new(
-            SecretFileWatcher::new(Path::new(&secrets_path))
-                .await
-                .unwrap(),
-        );
-        let manager = CassandraServiceManager::new(&settings, secrets_watcher)
-            .await
-            .unwrap();
-
-        for table_type in [
-            ActiveFunctionTable::RecentlyInvokedFunctions,
-            ActiveFunctionTable::RunningFunctionsWithoutInvocations,
-        ] {
-            let function = create_test_active_function_details();
-            manager
-                .add_new_active_functions_batch(std::slice::from_ref(&function), table_type)
-                .await
-                .unwrap();
-
-            let token_range = CASSANDRA_TOKEN_RANGE;
-            let functions = manager
-                .get_active_functions_with_token_range(&token_range, 100, table_type)
-                .await
-                .unwrap();
-            assert!(functions.iter().any(|active| {
-                active.function_id == function.function_id
-                    && active.function_version_id == function.function_version_id
-            }));
-
-            manager
-                .delete_active_function(
-                    &function.function_id,
-                    &function.function_version_id,
-                    table_type,
-                )
-                .await
-                .unwrap();
-            let functions = manager
-                .get_active_functions_with_token_range(&token_range, 100, table_type)
-                .await
-                .unwrap();
-            assert!(!functions.iter().any(|active| {
-                active.function_id == function.function_id
-                    && active.function_version_id == function.function_version_id
-            }));
-        }
     }
 
     #[tokio::test]
