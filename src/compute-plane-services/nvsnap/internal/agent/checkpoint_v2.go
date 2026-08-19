@@ -187,11 +187,7 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	// Off by default until validated end to end on every workload: it changes
 	// what a capture contains, so it must not switch silently under anyone.
 	targetHostPID := hostPID
-	if dumpNamespaceRoot() {
-		// hostPID is the container init (NSpid 1) -- the namespace root.
-		log.WithField("dump_target", "namespace-init").
-			Info("dumping the container's pid namespace root (pidns image expected)")
-	} else if len(gpuPIDs) > 0 {
+	if len(gpuPIDs) > 0 {
 		if sid, err := sessionID(procBase, gpuPIDs[0]); err == nil && sid > 1 {
 			targetHostPID = sid
 		}
@@ -508,17 +504,3 @@ func tailOfFile(path string, n int) string {
 	return strings.Join(lines, " | ")
 }
 
-// dumpNamespaceRoot reports whether capture should target the container's pid
-// namespace root rather than the workload's session leader.
-//
-// Dumping the namespace root is what lets CRIU record a pid namespace, which
-// in turn lets restore create a fresh one instead of recreating exact PIDs in
-// the placeholder's namespace. It is the structural fix for the clone3 EEXIST
-// restore failures; see docs/proposals/pidns-capture.md.
-//
-// Env-gated rather than a flag so it can be flipped per-run during validation
-// without a chart change, and defaults off so an upgrade never silently alters
-// what captures contain.
-func dumpNamespaceRoot() bool {
-	return os.Getenv("NVSNAP_DUMP_PIDNS_ROOT") == "1"
-}

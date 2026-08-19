@@ -5,7 +5,9 @@ SPDX-License-Identifier: Apache-2.0
 
 # Capture the PID namespace, so restore can create a fresh one
 
-Status: proposed, implementation behind `NVSNAP_DUMP_PIDNS_ROOT=1`
+Status: proposed. Not implemented -- the trial implementation was removed
+(see "First attempt hung" below), and the immediate failure it targeted has since
+been fixed another way (the placeholder pid reservation).
 
 ## The failure
 
@@ -99,10 +101,21 @@ This is unverified. It is the leading hypothesis, not a conclusion.
 
 ## Alternatives rejected
 
-**Bump `ns_last_pid` before restore.** Tried and reverted. The in-pod write is
-`EPERM` even privileged; the agent-side write works but is a race -- nothing
-stops another process consuming the PID between the bump and the clone. It
-lowers the failure rate without removing the failure.
+**Bump `ns_last_pid` before restore.** This is what actually shipped, and the
+reasoning that first rejected it here was wrong on the facts.
+
+The claim was that the in-pod write returns `EPERM` even when privileged. It
+does not. `/proc` is mounted `rw` in these pods and the write succeeds --
+measured in a live placeholder, the next child landed at pid 100003. That false
+premise is what removed the reservation in the first place and produced a 79%
+restore failure rate that read as flakiness.
+
+It is prevention rather than impossibility: it works because nothing else in a
+restore pod allocates pids between the bump and CRIU's forks. That assumption
+holds for the pods we control and is enforced -- the agent refuses to restore
+into a pod whose pid range was never pushed up. Dumping the namespace root, as
+proposed here, would remove the requirement rather than satisfy it, which is why
+this document is still worth keeping.
 
 **Restore into a freshly unshared PID namespace.** Keeps the dump unchanged and
 guarantees free PIDs, but leaves the workload in a nested namespace. Needs
@@ -114,8 +127,11 @@ as `ns_last_pid`: it tunes a race rather than removing it.
 
 ## Rollout
 
-Off by default (`NVSNAP_DUMP_PIDNS_ROOT=1` to enable). It changes what a capture
-contains, so it must not switch silently under a running deployment.
+If this is picked up again, it needs a real configuration surface -- an agent
+flag plumbed through chart values -- not an environment variable. The trial used
+one and it was removed rather than merged: an env switch that changes what a
+capture contains is invisible in the pod spec, untyped, and easy to leave
+behind.
 
 Validation before it becomes the default:
 
