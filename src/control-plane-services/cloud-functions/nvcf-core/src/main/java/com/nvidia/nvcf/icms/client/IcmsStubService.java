@@ -398,4 +398,35 @@ public interface IcmsStubService {
     void deleteInstancesByDeploymentId(
             @PathVariable("ncaId") String ncaId,
             @PathVariable("workloadId") UUID deploymentId);
+
+    @Value
+    @Jacksonized
+    @Builder
+    class WorkerTokenIntrospectRequest {
+        @JsonProperty("token")
+        String token;
+    }
+
+    @Value
+    @Jacksonized
+    @Builder
+    class WorkerTokenIntrospectResult {
+        boolean active;
+        @Nullable String sub;
+        @Nullable String aud;
+        @Nullable String iss;
+        @JsonProperty("instance_id")
+        @Nullable String instanceId;
+        @JsonProperty("worker_id")
+        @Nullable String workerId;
+        @JsonProperty("token_type")
+        @Nullable String tokenType;
+        @Nullable String error;
+    }
+
+    @PostExchange(url = "/v1/workers/tokens/introspect",
+                  accept = APPLICATION_JSON_VALUE,
+                  contentType = APPLICATION_JSON_VALUE)
+    WorkerTokenIntrospectResult introspectWorkerToken(
+            @org.springframework.web.bind.annotation.RequestBody WorkerTokenIntrospectRequest request);
 }
