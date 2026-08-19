@@ -71,6 +71,17 @@ secrets, or artifact directories without explicit user confirmation.
 If creating a net-new environment, use unique cluster names, ports, Helmfile
 environments, secrets files, CLI configs, and artifact directories.
 
+Use separate control-plane and compute-plane clusters for validation that
+affects worker registration, callbacks, request routing, reverse tunnels,
+transport PKI, DNS, or cross-cluster endpoints. A single-cluster result is
+supplemental and does not prove cross-cluster behavior.
+
+Light split-cluster validation is sufficient unless broader coverage is
+requested. Launch a real worker on the compute cluster and complete at least
+one end-to-end invocation through the control plane. If the invocation fails,
+capture evidence from both clusters and identify the first broken hop. Use
+`.cursor/skills/nvcf-self-hosted-local-dev/SKILL.md` for the reusable workflow.
+
 ## GitLab CI Manual Actions
 
 Treat manual GitLab CI actions as remote write operations. Before triggering a
@@ -214,6 +225,7 @@ public snapshot; still follow OSS Snapshot Hygiene manually before finishing.
 |-------|----------|---------|
 | `documentation-style` | `ai-tooling/dev/skills/` | Public docs, AGENTS, and skill-writing style |
 | `nvcf-explore-stack` | `ai-tooling/dev/skills/` | Navigate the self-hosted stack topology and dependency graph |
+| `nvcf-self-hosted-local-dev` | `ai-tooling/dev/skills/` | Select and validate local single-cluster or split-cluster self-hosted topology |
 | `nvca-chart-release` | `ai-tooling/dev/skills/` | Release NVCA Operator chart changes from monorepo source to the vendored Helm chart |
 | `nvca-self-managed-install` | `ai-tooling/dev/skills/` | Install or validate the NVCA Operator chart against a self-managed control plane |
 | `nvca-values-customization` | `ai-tooling/dev/skills/` | Customize NVCA Operator Helm chart values in the monorepo |
