@@ -4,4 +4,7 @@ include Makefile.dist
 .PHONY: test
 test:
 	@tests/llm-router-worker-address.sh
+	@tests/llm-pki-release.sh
+	@tests/check-llm-pki-issuer.sh
 	@tests/pdb-value-wiring.sh
+	@tests/invocation-tracing-baggage.sh

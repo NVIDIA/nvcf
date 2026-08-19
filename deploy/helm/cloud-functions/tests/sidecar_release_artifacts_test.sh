@@ -48,7 +48,7 @@ helm template nvcf-api "${chart_dir}" \
 # concrete, placeholder-free release-artifact-*-image annotation resolved from
 # NVCF_SIDECARS_HOSTNAME / NVCF_SIDECARS_REPOSITORY.
 expected_annotations=(
-  "release-artifact-init-container-image: \"${hostname}/${repository}/nvcf-worker-init-oss:1.0.9\""
+  "release-artifact-init-container-image: \"${hostname}/${repository}/nvcf-worker-init-oss:1.2.0\""
   "release-artifact-utils-container-image-go-image: \"${hostname}/${repository}/nvcf-worker-utils-oss:1.0.4\""
   "release-artifact-niclls-container-image: \"${hostname}/${repository}/nvcf_worker_niclls:2.109.4\""
   "release-artifact-ess-agent-container-image: \"${hostname}/${repository}/ess-agent:1.3.1\""

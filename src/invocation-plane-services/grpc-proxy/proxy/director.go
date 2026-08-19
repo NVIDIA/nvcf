@@ -161,9 +161,24 @@ func NewStreamDirector(functionInvoker FunctionInvoker) *StreamDirector {
 	cache.OnEviction(func(ctx context.Context, reason ttlcache.EvictionReason, i *ttlcache.Item[workerConnectionKey, *worker.WorkerConnection]) {
 		wc := i.Value()
 		reasonStr := resolveCloseReason(reason, wc, shuttingDown.Load())
-		heldFor := time.Since(wc.CreatedAt)
+		closedAt := wc.ClosedAt()
+		if closedAt.IsZero() {
+			// No transport-level close was stamped, so this eviction is the
+			// first thing that noticed. Attribute it to now rather than
+			// leaving the field empty.
+			closedAt = time.Now()
+		}
+		// held_for is now measured to the close itself rather than to whenever
+		// this callback ran. The callback can lag the close, so the old value
+		// was the tunnel's lifetime plus an unknown amount of cache latency,
+		// which is precisely the error that makes cross-component correlation
+		// hard. Where no close was stamped the fallback above reproduces the
+		// previous behaviour exactly.
+		heldFor := closedAt.Sub(wc.CreatedAt)
+		closeInfo := worker.ClassifyCloseError(wc.CloseError())
 
 		metrics.WorkerConnectionClosedTotal.WithLabelValues(reasonStr).Inc()
+		metrics.WorkerConnectionCloseCodeTotal.WithLabelValues(closeInfo.Code).Inc()
 		metrics.WorkerConnectionsActive.Dec()
 		metrics.WorkerConnectionDurationSeconds.Observe(heldFor.Seconds())
 
@@ -172,13 +187,32 @@ func NewStreamDirector(functionInvoker FunctionInvoker) *StreamDirector {
 		// during incidents. At debug it was unavailable in production exactly
 		// when it was needed. The message text is unchanged so existing log
 		// searches keep working.
-		zap.L().Info("worker connection cache eviction triggered",
+		logFields := []zap.Field{
 			zap.Stringer("request_id", i.Key().requestId),
 			zap.String("eviction_reason", reasonStr),
 			zap.String("raw_eviction_reason", mapEvictionReason(reason)),
 			zap.Duration("held_for", heldFor),
+			// Explicit timestamps: the eviction callback can run measurably
+			// after the transport went away, so the log line's own timestamp
+			// cannot be used to correlate against other components.
+			zap.Time("opened_at", wc.CreatedAt),
+			zap.Time("closed_at", closedAt),
+			// What the transport reported, as opposed to which side tore down.
+			zap.String("close_code", closeInfo.Code),
+			zap.String("local_timeout", localTimeoutFor(reasonStr, closeInfo.Code)),
+		}
+		if closeInfo.Detail != "" {
+			logFields = append(logFields, zap.String("close_detail", closeInfo.Detail))
+		}
+		if closeInfo.Remote != nil {
+			// Only QUIC tells us this. Absence means unknown, not local.
+			logFields = append(logFields, zap.Bool("closed_by_peer", *closeInfo.Remote))
+		}
+		logFields = append(logFields,
 			zap.String("function_id", wc.FunctionId),
 			zap.String("function_version_id", wc.FunctionVersionId))
+
+		zap.L().Info("worker connection cache eviction triggered", logFields...)
 
 		// The eviction context is the cache's own, not the session's, so this
 		// span has no parent to attach to. It carries the request id as an
@@ -190,6 +224,10 @@ func NewStreamDirector(functionInvoker FunctionInvoker) *StreamDirector {
 				attribute.Stringer("request_id", i.Key().requestId),
 				attribute.String("eviction_reason", reasonStr),
 				attribute.Float64("held_for_seconds", heldFor.Seconds()),
+				attribute.String("close_code", closeInfo.Code),
+				attribute.String("close_detail", closeInfo.Detail),
+				attribute.String("local_timeout", localTimeoutFor(reasonStr, closeInfo.Code)),
+				attribute.String("closed_at", closedAt.Format(time.RFC3339Nano)),
 				attribute.String("function_id", wc.FunctionId),
 				attribute.String("function_version_id", wc.FunctionVersionId),
 			))
@@ -207,6 +245,40 @@ func NewStreamDirector(functionInvoker FunctionInvoker) *StreamDirector {
 		functionInvoker: functionInvoker,
 		cors:            cors.New(middleware.DefaultCorsOptions),
 	}
+}
+
+// Timer names reported in local_timeout. Only the proxy's own timers can be
+// named here.
+const (
+	localTimeoutNone           = ""
+	localTimeoutWorkerCacheTTL = "worker_cache_ttl"
+	localTimeoutTransportIdle  = "transport_idle"
+	localTimeoutQUICIdle       = "quic_idle"
+)
+
+// localTimeoutFor names which of the proxy's own timers fired, where one did.
+//
+// Deliberately conservative. Timers owned by other components on the path
+// cannot be identified from here, and guessing at them would be worse than
+// saying nothing: close_code still characterises those cases. An empty result
+// means "not one of ours", not "no timer".
+func localTimeoutFor(evictionReason, closeCode string) string {
+	if evictionReason == metrics.CloseReasonTTLExpired {
+		// consts.Timeout on the worker connection cache.
+		return localTimeoutWorkerCacheTTL
+	}
+	switch closeCode {
+	case worker.CloseCodeQUICIdleTimeout:
+		// quic-go's MaxIdleTimeout. Either endpoint can own this, so it is
+		// named but not attributed.
+		return localTimeoutQUICIdle
+	case worker.CloseCodeTimeout:
+		// The HTTP/1 and HTTP/2 transports are configured with consts.Timeout
+		// for idle, read and write. A bare net timeout on this path is one of
+		// those.
+		return localTimeoutTransportIdle
+	}
+	return localTimeoutNone
 }
 
 // resolveCloseReason turns a ttlcache eviction into something actionable.

@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "constants",
+    srcs = ["service.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/pkg/constants",
+    visibility = ["//visibility:public"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":constants",
+    visibility = ["//visibility:public"],
+)

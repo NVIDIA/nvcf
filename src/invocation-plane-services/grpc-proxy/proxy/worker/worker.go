@@ -73,13 +73,61 @@ type WorkerConnection struct {
 	// closeOrigin records which side initiated the teardown, set by whoever
 	// calls onInactive. Without it the eviction handler only sees "deleted"
 	// and cannot tell a client hang-up from a worker hang-up.
-	closeOrigin     atomic.Value
+	closeOrigin atomic.Value
+	// closeErr is the transport error that ended the tunnel, if there was one.
+	// Distinct from closeOrigin: origin says which side tore down, closeErr
+	// says what the transport reported while doing it.
+	closeErr atomic.Pointer[errBox]
+	// closedAt is when the proxy observed this tunnel stop carrying traffic,
+	// recorded by whichever side noticed first: the worker transport faulting,
+	// or the client connection going away.
+	//
+	// Deliberately not "when we finished tearing down". Teardown is our own
+	// cleanup and can lag arbitrarily behind the session actually ending, and
+	// folding that lag into held_for is the measurement error this field
+	// exists to remove. First writer wins for the same reason: the moment the
+	// tunnel stopped being useful is what matters, not the last step of the
+	// cascade that follows it.
+	closedAt        atomic.Pointer[time.Time]
 	connSetOnce     sync.Once
 	connPopulated   chan struct{}
 	handler         atomic.Pointer[httputil.ReverseProxy]
 	closeWorkerConn io.Closer
 	onActive        func() // call this function to indicate the connection is active
 	onInactive      func() // call this function to indicate the connection is idle
+}
+
+// SetCloseError records the transport error that ended this tunnel. First
+// writer wins, matching SetCloseOrigin.
+func (w *WorkerConnection) SetCloseError(err error) {
+	if err == nil {
+		return
+	}
+	w.closeErr.CompareAndSwap(nil, &errBox{err: err})
+}
+
+// CloseError returns the recorded transport error, or nil if none was seen.
+func (w *WorkerConnection) CloseError() error {
+	if b := w.closeErr.Load(); b != nil {
+		return b.err
+	}
+	return nil
+}
+
+// MarkClosed stamps the moment this tunnel stopped carrying traffic. First
+// writer wins, so a later step in the teardown cascade cannot overwrite the
+// moment the session actually ended.
+func (w *WorkerConnection) MarkClosed(t time.Time) {
+	w.closedAt.CompareAndSwap(nil, &t)
+}
+
+// ClosedAt returns when the tunnel stopped carrying traffic, or the zero time
+// if no close was stamped.
+func (w *WorkerConnection) ClosedAt() time.Time {
+	if t := w.closedAt.Load(); t != nil {
+		return *t
+	}
+	return time.Time{}
 }
 
 // WaitForConnection may return without a connection if the WorkerConnection struct is closed while
@@ -108,15 +156,20 @@ func (w *WorkerConnection) SetConnection(conn net.Conn) error {
 	var err error
 	set := false
 	w.connSetOnce.Do(func() {
-		conn := CloseFuncConn{Conn: conn, onClose: func() {
+		wrapped := &CloseFuncConn{Conn: conn}
+		wrapped.onClose = func() {
 			w.SetCloseOrigin(metrics.CloseReasonWorkerClosed)
+			w.SetCloseError(wrapped.FirstError())
+			w.MarkClosed(time.Now())
 			w.onInactive()
-		}}
+		}
 		dialOnce := atomic.Bool{}
 		dialContext := func(ctx context.Context, network, addr string) (net.Conn, error) {
 			if !dialOnce.Swap(true) {
 				w.onActive()
-				return conn, nil
+				// Hand out the wrapper, not the raw conn: it is what records
+				// the transport error used to explain the close.
+				return wrapped, nil
 			}
 			return nil, fmt.Errorf("can only dial once")
 		}
@@ -167,7 +220,7 @@ func (w *WorkerConnection) SetConnection(conn net.Conn) error {
 			return
 		}
 		w.handler.Store(handler)
-		w.closeWorkerConn = conn // implements io.Closer
+		w.closeWorkerConn = wrapped // implements io.Closer
 		close(w.connPopulated)
 		set = true
 	})
@@ -210,12 +263,50 @@ func (w *WorkerConnection) logClosure(reason string) {
 	zap.L().Info("closing worker connection", logFields...)
 }
 
+// errBox keeps the concrete type stored in an atomic.Pointer constant.
+// Storing bare error values in an atomic.Value panics as soon as two different
+// concrete error types are written.
+type errBox struct{ err error }
+
 type CloseFuncConn struct {
 	net.Conn
 	onClose func()
+	// firstErr is the first transport error seen on this connection. Recorded
+	// on Read and Write rather than in Close, because by the time Close runs
+	// the underlying cause has usually been discarded. First writer wins: the
+	// original fault is more informative than the cascade that follows it.
+	firstErr atomic.Pointer[errBox]
 }
 
-func (c CloseFuncConn) Close() error {
+func (c *CloseFuncConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	c.recordErr(err)
+	return n, err
+}
+
+func (c *CloseFuncConn) Write(b []byte) (int, error) {
+	n, err := c.Conn.Write(b)
+	c.recordErr(err)
+	return n, err
+}
+
+func (c *CloseFuncConn) recordErr(err error) {
+	if err == nil {
+		return
+	}
+	c.firstErr.CompareAndSwap(nil, &errBox{err: err})
+}
+
+// FirstError returns the first transport error seen, or nil if the connection
+// closed without one.
+func (c *CloseFuncConn) FirstError() error {
+	if b := c.firstErr.Load(); b != nil {
+		return b.err
+	}
+	return nil
+}
+
+func (c *CloseFuncConn) Close() error {
 	c.onClose()
 	return c.Conn.Close()
 }

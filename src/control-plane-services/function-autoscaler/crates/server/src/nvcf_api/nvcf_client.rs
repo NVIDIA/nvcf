@@ -17,15 +17,12 @@
 
 use crate::cassandra::cassandra_service::CassandraServiceManager;
 use crate::cassandra::distributed_lock::DistributedLockManager;
-use crate::cassandra::statements::ActiveFunctionTable;
 use crate::metrics;
-use crate::models::ActiveFunctionDetails;
 use crate::nvcf_api::oauth2_client;
 use crate::nvcf_api::{AutoscalerResponse, DeploymentInfo, FunctionStatus, NvcfApiError};
 use crate::secrets::secrets_file_watcher::SecretFileWatcher;
 use crate::work::bucket::{NodeBucketManager, BUCKET_COUNT};
 use crate::work::{FunctionCachedState, FunctionStateCache};
-use chrono::Utc;
 use leaky_bucket::RateLimiter;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -163,7 +160,6 @@ struct ProcessRequestCtx<'a> {
     rate_limiter: &'a Arc<RateLimiter>,
     nvcf_api_channel: &'a Channel,
     oauth2_client: Option<&'a oauth2_client::OAuth2Client>,
-    cassandra_service: Option<&'a CassandraServiceManager>,
     function_state_cache: Option<&'a FunctionStateCache>,
     dry_run: bool,
 }
@@ -316,7 +312,7 @@ impl NvcfApiService {
                                 return;
                             }
 
-                    if let Some(cassandra_service) = &cassandra_service {
+                    if cassandra_service.is_some() {
                         let lock_name = format!("{}_{}", NVCF_API_BUCKET_LOCK_PREFIX, bucket_index);
                         match lock_manager.try_acquire(
                             lock_name,
@@ -346,7 +342,6 @@ impl NvcfApiService {
                                                     rate_limiter: &rate_limiter,
                                                     nvcf_api_channel: &nvcf_api_channel,
                                                     oauth2_client: oauth2_client.as_ref(),
-                                                    cassandra_service: Some(cassandra_service.as_ref()),
                                                     function_state_cache: function_state_cache.as_deref(),
                                                     dry_run,
                                                 },
@@ -577,7 +572,6 @@ impl NvcfApiService {
         let rate_limiter = ctx.rate_limiter;
         let nvcf_api_channel = ctx.nvcf_api_channel;
         let oauth2_client = ctx.oauth2_client;
-        let cassandra_service = ctx.cassandra_service;
         let function_state_cache = ctx.function_state_cache;
         let dry_run = ctx.dry_run;
         // Check if request is stale (older than 15 seconds)
@@ -614,7 +608,6 @@ impl NvcfApiService {
                     .await;
 
             // Log result and record metrics
-            let mut num_workers_from_api: Option<i32> = None;
             match result {
                 Ok(response) => {
                     // Record autoscaling status
@@ -623,9 +616,6 @@ impl NvcfApiService {
                         info.function_version_id.to_string(),
                         0_f64,
                     );
-
-                    // Capture active_instances from API response for feedback loop
-                    num_workers_from_api = Some(response.active_instances);
 
                     tracing::debug!(
                         "Successfully processed scaling request - Active: {}, Pending: {}, Allocating: {}, Terminating: {}, Status: {}",
@@ -649,16 +639,6 @@ impl NvcfApiService {
                 }
             }
 
-            let active_function_details = ActiveFunctionDetails {
-                function_id: info.function_id,
-                function_version_id: info.function_version_id,
-                nca_id: Some(info.nca_id),
-                last_updated_at: Some(Utc::now()),
-                num_workers: num_workers_from_api,
-                last_predicted_desired_instance_count: Some(info.required_number_of_instances),
-                last_predicted_error_code: error_code.clone(),
-            };
-
             // Update in-memory cache with the latest prediction result
             if let Some(cache) = function_state_cache {
                 cache.insert(
@@ -670,30 +650,6 @@ impl NvcfApiService {
                         last_predicted_error_code: error_code,
                     },
                 );
-            }
-
-            // Handle Cassandra operations if available
-            if let Some(cassandra_service) = &cassandra_service {
-                let table = if info.recently_invoked {
-                    ActiveFunctionTable::RecentlyInvokedFunctions
-                } else {
-                    ActiveFunctionTable::RunningFunctionsWithoutInvocations
-                };
-
-                if let Err(cassandra_error) = cassandra_service
-                    .insert_to_active_function_history_prediction_row(
-                        &active_function_details,
-                        table,
-                    )
-                    .await
-                {
-                    tracing::error!(
-                        "Failed to report error to Cassandra for function {} version {}: {}",
-                        info.function_id,
-                        info.function_version_id,
-                        cassandra_error,
-                    );
-                }
             }
         }
 

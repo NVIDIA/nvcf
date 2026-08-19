@@ -54,6 +54,33 @@ pub fn new_function_state_cache() -> FunctionStateCache {
         .build()
 }
 
+#[derive(Clone)]
+pub struct MetricRoutingCache {
+    sources: Cache<(Uuid, Uuid), MetricSource>,
+    gateway_targets: Cache<Uuid, Uuid>,
+}
+
+pub fn new_metric_routing_cache() -> MetricRoutingCache {
+    let ttl = StdDuration::from_secs(60 * 60);
+    MetricRoutingCache {
+        sources: Cache::builder().time_to_live(ttl).build(),
+        gateway_targets: Cache::new(10_000),
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct GatewayTarget {
+    function_version_id: Uuid,
+    nca_id: String,
+    current_instances: usize,
+    total_current_instances: usize,
+}
+
+struct GatheredScalingInputs {
+    inputs: ScalingInputs,
+    gateway_target: Option<GatewayTarget>,
+}
+
 pub mod bucket;
 pub mod discovery;
 
@@ -94,7 +121,7 @@ async fn get_function_utilization_history(
     function_id: &Uuid,
     function_version_id: &Uuid,
     env: &str,
-    use_control_plane_metrics: bool,
+    metric_source: MetricSource,
     ignore_env: bool,
     lookback_minutes: i64,
     utilization_window_seconds: u64,
@@ -104,34 +131,52 @@ async fn get_function_utilization_history(
     let step = TIMESERIES_DB_QUERY_STEP;
 
     let metric_env = MetricEnvironments::from_config(env);
-    let env_suffix = if ignore_env {
+    let worker_env_suffix = if ignore_env {
         String::new()
-    } else if use_control_plane_metrics {
-        format!(r#", aws_env="{}""#, metric_env.aws)
     } else {
         format!(r#", environment="{}""#, metric_env.worker)
     };
-
-    let query = if use_control_plane_metrics {
-        // Invocation latency can be split by caller NCA, while capacity belongs to the shared
-        // function-version pool. Aggregate both sides by that shared identity so the query works
-        // with both per-caller and NCA-free latency series.
-        format!(
-            r#"100 * sum by(function_id, function_version_id) (rate(function_request_latency_sum{{function_id="{id}", function_version_id="{v_id}"{env}}}[2m])) /
-            (avg by(function_id, function_version_id) (nvcf_function_instances_current{{function_id="{id}", function_version_id="{v_id}"{env}}}) * avg by(function_id, function_version_id) (nvcf_function_concurrency{{function_id="{id}", function_version_id="{v_id}"{env}}})) or vector(0)"#,
-            id = function_id,
-            v_id = function_version_id,
-            env = env_suffix
-        )
+    let aws_env_suffix = if ignore_env {
+        String::new()
     } else {
-        format!(
+        format!(r#", aws_env="{}""#, metric_env.aws)
+    };
+
+    let query = match metric_source {
+        MetricSource::ControlPlane => {
+            // Invocation latency can be split by caller NCA, while capacity belongs to the shared
+            // function-version pool. Aggregate both sides by that shared identity so the query works
+            // with both per-caller and NCA-free latency series.
+            format!(
+                r#"100 * sum by(function_id, function_version_id) (rate(function_request_latency_sum{{function_id="{id}", function_version_id="{v_id}"{env}}}[2m])) /
+            (avg by(function_id, function_version_id) (nvcf_function_instances_current{{function_id="{id}", function_version_id="{v_id}"{env}}}) * avg by(function_id, function_version_id) (nvcf_function_concurrency{{function_id="{id}", function_version_id="{v_id}"{env}}})) or vector(0)"#,
+                id = function_id,
+                v_id = function_version_id,
+                env = aws_env_suffix
+            )
+        }
+        MetricSource::WorkerThreads => format!(
             r#"((sum by(function_id, function_version_id, nca_id) (increase(nvcf_worker_service_worker_thread_busy_seconds_total{{function_id="{id}", function_version_id="{v_id}"{env}}}[{window}s]))) / {window} * 100) /
             (sum by(function_id, function_version_id, nca_id) (nvcf_worker_service_worker_thread_count_total{{function_id="{id}", function_version_id="{v_id}"{env}}}))"#,
             id = function_id,
             v_id = function_version_id,
-            env = env_suffix,
+            env = worker_env_suffix,
             window = utilization_window_seconds
-        )
+        ),
+        MetricSource::LlmGateway => {
+            // Little's Law: average duration * request rate collapses to the
+            // per-second rate of the duration sum.
+            format!(
+                r#"100 * sum by(function_id) (rate(llm_api_gateway_http_request_duration_seconds_sum{{function_id="{id}"{aws_env}}}[2m])) /
+                clamp_min(sum by(function_id) (
+                    max by(function_id, function_version_id) (nvcf_function_instances_current{{function_id="{id}"{aws_env}}})
+                    * on(function_id, function_version_id)
+                    max by(function_id, function_version_id) (nvcf_function_concurrency{{function_id="{id}"{aws_env}}})
+                ), 1)"#,
+                id = function_id,
+                aws_env = aws_env_suffix,
+            )
+        }
     };
     tracing::debug!(
         "Executing utilization query for function {} version {} (ignore_env={}): {}",
@@ -154,17 +199,23 @@ async fn get_function_utilization_history(
         function_version_id
     );
 
+    let expected_function_id = function_id.to_string();
+    let expected_version_id = function_version_id.to_string();
     for result in &response.data.result {
-        if let (Some(f_id), Some(f_v_id)) = (
-            &result.metric.function_id,
-            &result.metric.function_version_id,
-        ) {
+        if let Some(f_id) = &result.metric.function_id {
+            let version_matches = metric_source == MetricSource::LlmGateway
+                || result.metric.function_version_id.as_deref()
+                    == Some(expected_version_id.as_str());
             // Verify this is the function we're looking for
-            if f_id == &function_id.to_string() && f_v_id == &function_version_id.to_string() {
+            if f_id == &expected_function_id && version_matches {
                 tracing::debug!(
                     "Found matching function {}:{} with {} data points",
                     f_id,
-                    f_v_id,
+                    result
+                        .metric
+                        .function_version_id
+                        .as_deref()
+                        .unwrap_or("gateway"),
                     result.values.len()
                 );
                 utilization_data.extend(
@@ -281,14 +332,178 @@ async fn get_byoc_instance_count(
     Ok(0)
 }
 
+async fn llm_gateway_metrics_present(
+    timeseries_db_client: &TimeseriesDbClient,
+    function_id: &Uuid,
+    env: &str,
+    ignore_env: bool,
+) -> Result<bool> {
+    let end_time = Utc::now();
+    let env_suffix = if ignore_env {
+        String::new()
+    } else {
+        let metric_env = MetricEnvironments::from_config(env);
+        format!(r#", aws_env="{}""#, metric_env.aws)
+    };
+    let query = format!(
+        r#"count by(function_id) (llm_api_gateway_http_requests_total{{function_id="{function_id}"{env_suffix}}})"#,
+    );
+    let response = timeseries_db_client
+        .query_range(
+            &query,
+            end_time - Duration::minutes(5),
+            end_time,
+            TIMESERIES_DB_QUERY_STEP,
+        )
+        .await?;
+
+    Ok(!response.data.result.is_empty())
+}
+
+fn select_gateway_target(
+    mut versions: Vec<GatewayTarget>,
+    pinned: Option<Uuid>,
+) -> Option<GatewayTarget> {
+    versions.sort_by_key(|version| (version.current_instances == 0, version.function_version_id));
+    let has_active = versions
+        .first()
+        .is_some_and(|version| version.current_instances > 0);
+
+    pinned
+        .and_then(|id| {
+            versions
+                .iter()
+                .find(|version| {
+                    version.function_version_id == id
+                        && (!has_active || version.current_instances > 0)
+                })
+                .cloned()
+        })
+        .or_else(|| versions.into_iter().next())
+}
+
+fn gateway_target_desired_instances(
+    desired_total: usize,
+    total_current: usize,
+    target_current: usize,
+) -> usize {
+    target_current
+        .saturating_add(desired_total)
+        .saturating_sub(total_current)
+}
+
+async fn get_gateway_target(
+    timeseries_db_client: &TimeseriesDbClient,
+    function_id: &Uuid,
+    env: &str,
+    ignore_env: bool,
+    routing_cache: &MetricRoutingCache,
+) -> Result<GatewayTarget> {
+    let end_time = Utc::now();
+    let env_suffix = if ignore_env {
+        String::new()
+    } else {
+        let metric_env = MetricEnvironments::from_config(env);
+        format!(r#", aws_env="{}""#, metric_env.aws)
+    };
+    let query = format!(
+        r#"((max by(function_id, function_version_id) (nvcf_function_instances_current{{function_id="{id}"{env}}}))
+        * on(function_id, function_version_id) group_left(nca_id)
+        max by(function_id, function_version_id, nca_id) (nvcf_function_info{{function_id="{id}"{env}}}))
+        or
+        (max by(function_id, function_version_id, nca_id) (nvcf_function_info{{function_id="{id}"{env}}}) * 0)"#,
+        id = function_id,
+        env = env_suffix,
+    );
+    let response = timeseries_db_client
+        .query_range(
+            &query,
+            end_time - Duration::minutes(5),
+            end_time,
+            TIMESERIES_DB_QUERY_STEP,
+        )
+        .await?;
+
+    let mut versions = Vec::new();
+    for result in response.data.result {
+        let Some(version_id) = result
+            .metric
+            .function_version_id
+            .as_deref()
+            .and_then(|value| Uuid::parse_str(value).ok())
+        else {
+            continue;
+        };
+        let current_instances = result
+            .values
+            .last()
+            .and_then(|(_, value)| value.parse::<f64>().ok())
+            .filter(|value| value.is_finite() && *value >= 0.0)
+            .map(|value| value.round() as usize)
+            .unwrap_or(0);
+        versions.push(GatewayTarget {
+            function_version_id: version_id,
+            nca_id: result.metric.nca_id.unwrap_or_default(),
+            current_instances,
+            total_current_instances: 0,
+        });
+    }
+
+    let total_current_instances = versions
+        .iter()
+        .map(|version| version.current_instances)
+        .sum();
+    let pinned = routing_cache.gateway_targets.get(function_id);
+    let mut target = select_gateway_target(versions, pinned).with_context(|| {
+        format!(
+            "nvcf_function_info returned no versions for gateway function {}",
+            function_id
+        )
+    })?;
+    target.total_current_instances = total_current_instances;
+    routing_cache
+        .gateway_targets
+        .insert(*function_id, target.function_version_id);
+    Ok(target)
+}
+
+async fn llm_gateway_recently_invoked(
+    timeseries_db_client: &TimeseriesDbClient,
+    function_id: &Uuid,
+    lookback_seconds: u64,
+    env: &str,
+    ignore_env: bool,
+) -> Result<bool> {
+    let end_time = Utc::now();
+    let lookback_seconds = lookback_seconds.max(1);
+    let env_suffix = if ignore_env {
+        String::new()
+    } else {
+        let metric_env = MetricEnvironments::from_config(env);
+        format!(r#", aws_env="{}""#, metric_env.aws)
+    };
+    let query = format!(
+        r#"sum by(function_id) (increase(llm_api_gateway_http_requests_total{{function_id="{function_id}"{env_suffix}}}[{lookback_seconds}s])) > 0"#,
+    );
+    let response = timeseries_db_client
+        .query_range(
+            &query,
+            end_time - Duration::minutes(1),
+            end_time,
+            TIMESERIES_DB_QUERY_STEP,
+        )
+        .await?;
+    Ok(!response.data.result.is_empty())
+}
+
 /// Get current worker count for non-BYOC functions from TimeseriesDb.
 /// We use this instead of details.num_workers because the history table is only updated when
 /// discovery adds or moves a function; if a function stays in the same table, num_workers is
 /// never refreshed and scaling would report stale counts (e.g. 2 when TimeseriesDb shows 3).
 ///
 /// Returns `Ok(None)` when no worker series matched the query at all. Callers use that as the
-/// signal to fall back to control-plane metrics (BYOC / CP-only functions never emit worker
-/// series). `Ok(Some(0))` would mean "series exists but count parsed as 0," which we don't
+/// signal to try gateway metrics before control-plane metrics. `Ok(Some(0))` would mean
+/// "series exists but count parsed as 0," which we don't
 /// expect from this counter shape but is kept distinct from the fallback signal.
 ///
 /// We do not filter or group by nca_id in the query (same as utilization and BYOC queries).
@@ -343,7 +558,7 @@ async fn get_current_worker_count_from_timeseries_db(
     }
 
     tracing::debug!(
-        "No worker series for {}:{} (nca_id={}); caller will fall back to control-plane metrics",
+        "No worker series for {}:{} (nca_id={}); caller will try gateway metrics",
         function_id,
         function_version_id,
         nca_id
@@ -351,73 +566,8 @@ async fn get_current_worker_count_from_timeseries_db(
     Ok(None)
 }
 
-/// Resolve the current instance count and which metric family drives scaling.
-/// Worker metrics are the default; when no worker series exists at query time
-/// (BYOC and other CP-only functions) we fall back to control-plane metrics.
-/// Instance-count lookups never abort the cycle — failures degrade to 0.
-async fn resolve_current_instances(
-    timeseries_db_client: &TimeseriesDbClient,
-    function_id: &Uuid,
-    function_version_id: &Uuid,
-    nca_id: &str,
-    env: &str,
-    ignore_env: bool,
-) -> (usize, MetricSource) {
-    match get_current_worker_count_from_timeseries_db(
-        timeseries_db_client,
-        function_id,
-        function_version_id,
-        nca_id,
-        env,
-        ignore_env,
-    )
-    .await
-    {
-        Ok(Some(n)) => (n, MetricSource::WorkerThreads),
-        Ok(None) => {
-            tracing::info!(
-                "No worker series for {}:{} (nca_id={}); falling back to control-plane metrics",
-                function_id,
-                function_version_id,
-                nca_id
-            );
-            let n = get_byoc_instance_count(
-                timeseries_db_client,
-                function_id,
-                function_version_id,
-                env,
-                ignore_env,
-            )
-            .await
-            .unwrap_or_else(|e| {
-                tracing::warn!(
-                    "CP fallback instance count failed for {}:{} (nca_id={}), using 0: {}",
-                    function_id,
-                    function_version_id,
-                    nca_id,
-                    e
-                );
-                0
-            });
-            (n, MetricSource::ControlPlane)
-        }
-        Err(e) => {
-            tracing::warn!(
-                "TimeseriesDb worker count failed for {}:{} (nca_id={}), using 0: {}",
-                function_id,
-                function_version_id,
-                nca_id,
-                e
-            );
-            (0, MetricSource::WorkerThreads)
-        }
-    }
-}
-
-/// Gather everything the scaling decision needs from the timeseries DB into a
-/// single sanitized struct. After this returns, the decision is identical for
-/// every metric source (see `scaling::decide_scaling`). Utilization is
-/// sanitized here, so downstream logic never sees NaN/Inf or unsorted points.
+/// Gather source-specific inputs and retain the selected gateway target for deployment.
+#[allow(clippy::too_many_arguments)]
 async fn gather_scaling_inputs(
     timeseries_db_client: &TimeseriesDbClient,
     function_id: &Uuid,
@@ -426,23 +576,100 @@ async fn gather_scaling_inputs(
     env: &str,
     ignore_env: bool,
     scaling_settings: &ScalingSettings,
-) -> Result<ScalingInputs> {
-    let (current_instances, metric_source) = resolve_current_instances(
-        timeseries_db_client,
-        function_id,
-        function_version_id,
-        nca_id,
-        env,
-        ignore_env,
-    )
-    .await;
+    routing_cache: &MetricRoutingCache,
+) -> Result<GatheredScalingInputs> {
+    let key = (*function_id, *function_version_id);
+    let cached_source = routing_cache.sources.get(&key);
+    let mut metric_source = cached_source.unwrap_or(MetricSource::WorkerThreads);
+    let mut current_instances = 0;
+    let mut gateway_target = None;
+    let mut cache_source = cached_source.is_none();
+
+    if metric_source == MetricSource::WorkerThreads {
+        match get_current_worker_count_from_timeseries_db(
+            timeseries_db_client,
+            function_id,
+            function_version_id,
+            nca_id,
+            env,
+            ignore_env,
+        )
+        .await
+        {
+            Ok(Some(count)) => current_instances = count,
+            Ok(None) if cached_source.is_none() => {
+                metric_source = if llm_gateway_metrics_present(
+                    timeseries_db_client,
+                    function_id,
+                    env,
+                    ignore_env,
+                )
+                .await?
+                {
+                    MetricSource::LlmGateway
+                } else {
+                    MetricSource::ControlPlane
+                };
+            }
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(
+                    "TimeseriesDb worker count failed for {}:{} (nca_id={}), using 0: {}",
+                    function_id,
+                    function_version_id,
+                    nca_id,
+                    error
+                );
+                cache_source = false;
+            }
+        }
+    }
+
+    match metric_source {
+        MetricSource::WorkerThreads => {}
+        MetricSource::LlmGateway => {
+            let target = get_gateway_target(
+                timeseries_db_client,
+                function_id,
+                env,
+                ignore_env,
+                routing_cache,
+            )
+            .await?;
+            current_instances = target.total_current_instances;
+            gateway_target = Some(target);
+        }
+        MetricSource::ControlPlane => {
+            current_instances = get_byoc_instance_count(
+                timeseries_db_client,
+                function_id,
+                function_version_id,
+                env,
+                ignore_env,
+            )
+            .await
+            .unwrap_or_else(|error| {
+                tracing::warn!(
+                    "CP instance count failed for {}:{}, using 0: {}",
+                    function_id,
+                    function_version_id,
+                    error
+                );
+                0
+            });
+        }
+    }
+
+    if cache_source {
+        routing_cache.sources.insert(key, metric_source);
+    }
 
     let raw_utilization = get_function_utilization_history(
         timeseries_db_client,
         function_id,
         function_version_id,
         env,
-        metric_source.uses_control_plane_metrics(),
+        metric_source,
         ignore_env,
         scaling_settings.lookback.as_secs() as i64 / 60,
         scaling_settings.utilization_window_seconds,
@@ -450,20 +677,35 @@ async fn gather_scaling_inputs(
     .await?;
     let utilization_samples = sanitize_utilization(raw_utilization);
 
-    let recent_invocations = get_recently_invoked_functions(
-        timeseries_db_client,
-        Some(*function_version_id),
-        scaling_settings.scale_to_zero_idle_timeout.as_secs() as i64 / 60,
-        env,
-        ignore_env,
-    )
-    .await?;
+    let recently_invoked = if metric_source == MetricSource::LlmGateway {
+        llm_gateway_recently_invoked(
+            timeseries_db_client,
+            function_id,
+            scaling_settings.scale_to_zero_idle_timeout.as_secs(),
+            env,
+            ignore_env,
+        )
+        .await?
+    } else {
+        !get_recently_invoked_functions(
+            timeseries_db_client,
+            Some(*function_version_id),
+            scaling_settings.scale_to_zero_idle_timeout.as_secs() as i64 / 60,
+            env,
+            ignore_env,
+        )
+        .await?
+        .is_empty()
+    };
 
-    Ok(ScalingInputs {
-        metric_source,
-        current_instances,
-        utilization_samples,
-        recently_invoked: !recent_invocations.is_empty(),
+    Ok(GatheredScalingInputs {
+        inputs: ScalingInputs {
+            metric_source,
+            current_instances,
+            utilization_samples,
+            recently_invoked,
+        },
+        gateway_target,
     })
 }
 
@@ -505,6 +747,7 @@ pub async fn run_autoscaling_logic_p0(
     bucket_manager: &bucket::NodeBucketManager,
     lock_manager: &DistributedLockManager,
     function_state_cache: Arc<FunctionStateCache>,
+    metric_routing_cache: Arc<MetricRoutingCache>,
 ) -> Result<()> {
     tracing::info!("Starting P0 autoscaling logic for env: {}", env);
 
@@ -514,13 +757,13 @@ pub async fn run_autoscaling_logic_p0(
         timeseries_db_client,
         nvcf_api_service,
         ActiveFunctionTable::RecentlyInvokedFunctions,
-        true, // recently_invoked = true
         scaling_settings,
         env,
         ignore_env,
         bucket_manager,
         lock_manager,
         function_state_cache,
+        metric_routing_cache,
     )
     .await?;
 
@@ -534,13 +777,13 @@ async fn make_scaling_requests_for_table(
     timeseries_db_client: Arc<TimeseriesDbClient>,
     nvcf_api_service: Arc<NvcfApiService>,
     table: ActiveFunctionTable,
-    recently_invoked: bool,
     scaling_settings: Arc<ScalingSettings>,
     env: &str,
     ignore_env: bool,
     bucket_manager: &bucket::NodeBucketManager,
     lock_manager: &DistributedLockManager,
     function_state_cache: Arc<FunctionStateCache>,
+    metric_routing_cache: Arc<MetricRoutingCache>,
 ) -> Result<()> {
     let bucket_ranges = bucket_manager.get_all_bucket_ranges();
     let mut task_failures = 0usize;
@@ -602,6 +845,7 @@ async fn make_scaling_requests_for_table(
                 let nvcf_api_service = nvcf_api_service.clone();
                 let scaling_settings = scaling_settings.clone();
                 let function_state_cache = function_state_cache.clone();
+                let metric_routing_cache = metric_routing_cache.clone();
                 let env = env.to_string();
                 let bucket_index = *bucket_index;
 
@@ -620,7 +864,7 @@ async fn make_scaling_requests_for_table(
                     // Acquire all metrics into one sanitized struct, then run the single
                     // decision path that is shared by every metric source. NaN handling,
                     // metric-source selection, and scale-to-zero all live behind these calls.
-                    let inputs = gather_scaling_inputs(
+                    let gathered = gather_scaling_inputs(
                         &timeseries_db_client,
                         &function.function_id,
                         &function.function_version_id,
@@ -628,6 +872,7 @@ async fn make_scaling_requests_for_table(
                         &env,
                         ignore_env,
                         &scaling_settings,
+                        &metric_routing_cache,
                     )
                     .await
                     .with_context(|| {
@@ -636,7 +881,24 @@ async fn make_scaling_requests_for_table(
                             function.function_id, function.function_version_id
                         )
                     })?;
-                    let current_instances = inputs.current_instances;
+
+                    if gathered.gateway_target.as_ref().is_some_and(|target| {
+                        target.function_version_id != function.function_version_id
+                    }) {
+                        return Ok(());
+                    }
+
+                    let current_instances = gathered
+                        .gateway_target
+                        .as_ref()
+                        .map(|target| target.current_instances)
+                        .unwrap_or(gathered.inputs.current_instances);
+                    let target_nca_id = gathered
+                        .gateway_target
+                        .as_ref()
+                        .map(|target| target.nca_id.clone())
+                        .unwrap_or_else(|| function.nca_id.clone());
+                    let inputs = gathered.inputs;
 
                     tracing::info!(
                         "Scaling inputs for {}:{} - current_instances: {}, source: {:?}, samples: {}, recently_invoked: {}",
@@ -667,12 +929,24 @@ async fn make_scaling_requests_for_table(
                         return Ok(());
                     };
 
+                    let desired_instance_count = if let Some(target) = &gathered.gateway_target {
+                        gateway_target_desired_instances(
+                            decision.desired_instances,
+                            target.total_current_instances,
+                            target.current_instances,
+                        ) as i32
+                    } else {
+                        decision.desired_instances as i32
+                    };
+
                     tracing::info!(
-                        "Scaling decision for {}:{} - current: {}, desired: {}, avg_utilization: {:.6}% (recently_invoked: {})",
+                        "Scaling decision for {}:{} - total current: {}, total desired: {}, target current: {}, target desired: {}, avg_utilization: {:.6}% (recently_invoked: {})",
                         function.function_id,
                         function.function_version_id,
-                        current_instances,
+                        inputs.current_instances,
                         decision.desired_instances,
+                        current_instances,
+                        desired_instance_count,
                         decision.average_utilization,
                         inputs.recently_invoked,
                     );
@@ -687,7 +961,6 @@ async fn make_scaling_requests_for_table(
                             policy.thresholds.scale_down_threshold,
                         );
                     }
-                    let desired_instance_count = decision.desired_instances as i32;
                     let utilization = Some(decision.average_utilization as f64);
 
                     tracing::debug!(
@@ -735,9 +1008,9 @@ async fn make_scaling_requests_for_table(
                     let deployment_info = DeploymentInfo {
                         function_id: function.function_id,
                         function_version_id: function.function_version_id,
-                        nca_id: function.nca_id.clone(),
+                        nca_id: target_nca_id,
                         required_number_of_instances: desired_instance_count,
-                        recently_invoked,
+                        recently_invoked: inputs.recently_invoked,
                         enqueued_at: std::time::Instant::now(),
                     };
 
@@ -884,6 +1157,69 @@ mod tests {
         r#"{"status":"success","data":{"resultType":"matrix","result":[]}}"#.to_string()
     }
 
+    async fn gather_for_test(
+        client: &TimeseriesDbClient,
+        function_id: &Uuid,
+        function_version_id: &Uuid,
+    ) -> GatheredScalingInputs {
+        gather_scaling_inputs(
+            client,
+            function_id,
+            function_version_id,
+            "nca",
+            "stg",
+            true,
+            &ScalingSettings::default(),
+            &new_metric_routing_cache(),
+        )
+        .await
+        .expect("gather scaling inputs")
+    }
+
+    fn gateway_version(function_version_id: Uuid, current_instances: usize) -> GatewayTarget {
+        GatewayTarget {
+            function_version_id,
+            nca_id: "nca".to_string(),
+            current_instances,
+            total_current_instances: 0,
+        }
+    }
+
+    #[test]
+    fn gateway_target_prefers_and_sticks_to_an_active_version() {
+        let idle = Uuid::new_v4();
+        let active = Uuid::new_v4();
+        let other_active = Uuid::new_v4();
+
+        let selected = select_gateway_target(
+            vec![gateway_version(idle, 0), gateway_version(active, 2)],
+            Some(idle),
+        )
+        .expect("active target");
+        assert_eq!(selected.function_version_id, active);
+
+        let selected = select_gateway_target(
+            vec![gateway_version(active, 2), gateway_version(other_active, 3)],
+            Some(active),
+        )
+        .expect("pinned active target");
+        assert_eq!(selected.function_version_id, active);
+
+        let selected = select_gateway_target(
+            vec![gateway_version(idle, 0), gateway_version(active, 0)],
+            Some(idle),
+        )
+        .expect("pinned idle target");
+        assert_eq!(selected.function_version_id, idle);
+    }
+
+    #[test]
+    fn gateway_delta_is_applied_only_to_the_selected_version() {
+        assert_eq!(gateway_target_desired_instances(12, 10, 4), 6);
+        assert_eq!(gateway_target_desired_instances(10, 10, 4), 4);
+        assert_eq!(gateway_target_desired_instances(6, 10, 4), 0);
+    }
+
     #[test]
     fn metric_environments_use_metric_family_label_values() {
         assert_eq!(
@@ -936,7 +1272,7 @@ mod tests {
             &fid,
             &fvid,
             "stg",
-            true,
+            MetricSource::ControlPlane,
             true,
             5,
             60,
@@ -978,7 +1314,7 @@ mod tests {
                 &fid,
                 &fvid,
                 configured_env,
-                true,
+                MetricSource::ControlPlane,
                 false,
                 5,
                 60,
@@ -1007,45 +1343,170 @@ mod tests {
         assert!(format!("{:#}", error.expect("first task error")).contains("sentinel task error"));
     }
 
-    /// Worker series present -> use worker metrics, no control-plane fallback.
     #[tokio::test]
-    async fn test_resolve_uses_worker_metrics_when_series_present() {
+    async fn test_gather_uses_gateway_and_selects_active_version() {
+        let fid = Uuid::new_v4();
+        let idle_version = Uuid::new_v4();
+        let active_version = Uuid::new_v4();
         let mut server = mockito::Server::new_async().await;
+
         let _wc = server
             .mock("GET", "/api/v1/query_range")
             .match_query(mockito::Matcher::Regex("worker_thread_count_total".into()))
             .with_status(200)
-            .with_body(vm_series(
-                r#""function_id":"f","function_version_id":"v""#,
-                "3",
+            .with_body(vm_empty())
+            .create_async()
+            .await;
+        let _gateway = server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::Regex("http_requests_total".into()))
+            .with_status(200)
+            .with_body(vm_series(&format!(r#""function_id":"{fid}""#), "1"))
+            .expect_at_least(2)
+            .create_async()
+            .await;
+        let versions = format!(
+            r#"{{"status":"success","data":{{"resultType":"matrix","result":[
+                {{"metric":{{"function_id":"{fid}","function_version_id":"{idle_version}","nca_id":"nca"}},"values":[[1700000000,"0"]]}},
+                {{"metric":{{"function_id":"{fid}","function_version_id":"{active_version}","nca_id":"nca"}},"values":[[1700000000,"2"]]}}
+            ]}}}}"#
+        );
+        let _info = server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::Regex("nvcf_function_info".into()))
+            .with_status(200)
+            .with_body(versions)
+            .create_async()
+            .await;
+        let _samples = server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::Regex(
+                "http_request_duration_seconds_sum".into(),
             ))
+            .with_status(200)
+            .with_body(vm_series(&format!(r#""function_id":"{fid}""#), "25"))
             .create_async()
             .await;
 
-        let client = ts_client(server.url());
-        let (n, src) = resolve_current_instances(
-            &client,
-            &Uuid::new_v4(),
-            &Uuid::new_v4(),
-            "nca",
-            "stg",
-            true,
-        )
-        .await;
+        let gathered = gather_for_test(&ts_client(server.url()), &fid, &idle_version).await;
 
-        assert_eq!(n, 3);
-        assert_eq!(src, MetricSource::WorkerThreads);
+        assert_eq!(gathered.inputs.metric_source, MetricSource::LlmGateway);
+        assert_eq!(gathered.inputs.current_instances, 2);
+        assert_eq!(gathered.inputs.utilization_samples, vec![25.0]);
+        assert!(gathered.inputs.recently_invoked);
+        let target = gathered.gateway_target.expect("gateway target");
+        assert_eq!(target.function_version_id, active_version);
+        assert_eq!(target.nca_id, "nca");
     }
 
-    /// No worker series -> fall back to control-plane (BYOC) instance count.
     #[tokio::test]
-    async fn test_resolve_falls_back_to_control_plane_when_no_worker_series() {
+    async fn gateway_queries_use_normalized_aws_env_concurrency_and_request_counter() {
+        let fid = Uuid::new_v4();
+        let fvid = Uuid::new_v4();
+        let mut server = mockito::Server::new_async().await;
+        let function_series = vm_series(&format!(r#""function_id":"{fid}""#), "1");
+
+        let _present = server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::Regex("count.*http_requests_total".into()),
+                mockito::Matcher::Regex("aws_env.*prd".into()),
+            ]))
+            .with_status(200)
+            .with_body(function_series.clone())
+            .create_async()
+            .await;
+        assert!(
+            llm_gateway_metrics_present(&ts_client(server.url()), &fid, "prod", false)
+                .await
+                .expect("gateway presence query")
+        );
+
+        let _target = server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::Regex("nvcf_function_info".into()),
+                mockito::Matcher::Regex("aws_env.*prd".into()),
+            ]))
+            .with_status(200)
+            .with_body(vm_series(
+                &format!(r#""function_id":"{fid}","function_version_id":"{fvid}","nca_id":"nca""#),
+                "1",
+            ))
+            .create_async()
+            .await;
+        let target = get_gateway_target(
+            &ts_client(server.url()),
+            &fid,
+            "prod",
+            false,
+            &new_metric_routing_cache(),
+        )
+        .await
+        .expect("gateway target query");
+        assert_eq!(target.function_version_id, fvid);
+
+        let _utilization = server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::Regex("http_request_duration_seconds_sum".into()),
+                mockito::Matcher::Regex("nvcf_function_concurrency".into()),
+                mockito::Matcher::Regex("aws_env.*prd".into()),
+            ]))
+            .with_status(200)
+            .with_body(function_series.clone())
+            .create_async()
+            .await;
+        assert_eq!(
+            get_function_utilization_history(
+                &ts_client(server.url()),
+                &fid,
+                &fvid,
+                "prod",
+                MetricSource::LlmGateway,
+                false,
+                5,
+                70,
+            )
+            .await
+            .expect("gateway utilization query"),
+            vec![(1700000000, "1".to_string())]
+        );
+
+        let _recent = server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::Regex("increase.*http_requests_total".into()),
+                mockito::Matcher::Regex("aws_env.*prd".into()),
+                mockito::Matcher::Regex("1s".into()),
+            ]))
+            .with_status(200)
+            .with_body(function_series)
+            .create_async()
+            .await;
+        assert!(
+            llm_gateway_recently_invoked(&ts_client(server.url()), &fid, 0, "prod", false)
+                .await
+                .expect("gateway recent invocation query")
+        );
+    }
+
+    /// No worker or gateway series -> fall back to control-plane metrics.
+    #[tokio::test]
+    async fn test_gather_falls_back_to_control_plane_when_other_sources_are_absent() {
         let fid = Uuid::new_v4();
         let fvid = Uuid::new_v4();
         let mut server = mockito::Server::new_async().await;
         let _wc = server
             .mock("GET", "/api/v1/query_range")
             .match_query(mockito::Matcher::Regex("worker_thread_count_total".into()))
+            .with_status(200)
+            .with_body(vm_empty())
+            .create_async()
+            .await;
+        let _gateway = server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::Regex("http_requests_total".into()))
             .with_status(200)
             .with_body(vm_empty())
             .create_async()
@@ -1060,14 +1521,28 @@ mod tests {
                 &format!(r#""function_id":"{fid}","function_version_id":"{fvid}""#),
                 "7",
             ))
+            .expect_at_least(2)
+            .create_async()
+            .await;
+        let _invocation = server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::Regex("function_request%7B".into()))
+            .with_status(200)
+            .with_body(vm_empty())
+            .create_async()
+            .await;
+        let _grpc = server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::Regex("function_request_total".into()))
+            .with_status(200)
+            .with_body(vm_empty())
             .create_async()
             .await;
 
-        let client = ts_client(server.url());
-        let (n, src) = resolve_current_instances(&client, &fid, &fvid, "nca", "stg", true).await;
+        let gathered = gather_for_test(&ts_client(server.url()), &fid, &fvid).await;
 
-        assert_eq!(n, 7);
-        assert_eq!(src, MetricSource::ControlPlane);
+        assert_eq!(gathered.inputs.current_instances, 7);
+        assert_eq!(gathered.inputs.metric_source, MetricSource::ControlPlane);
     }
 
     #[tokio::test]
@@ -1111,69 +1586,6 @@ mod tests {
         );
     }
 
-    /// No worker series and the BYOC query fails -> control-plane with 0 instances.
-    #[tokio::test]
-    async fn test_resolve_control_plane_zero_when_byoc_query_fails() {
-        let mut server = mockito::Server::new_async().await;
-        let _wc = server
-            .mock("GET", "/api/v1/query_range")
-            .match_query(mockito::Matcher::Regex("worker_thread_count_total".into()))
-            .with_status(200)
-            .with_body(vm_empty())
-            .create_async()
-            .await;
-        let _byoc = server
-            .mock("GET", "/api/v1/query_range")
-            .match_query(mockito::Matcher::Regex(
-                "nvcf_function_instances_current".into(),
-            ))
-            .with_status(500)
-            .with_body("boom")
-            .create_async()
-            .await;
-
-        let client = ts_client(server.url());
-        let (n, src) = resolve_current_instances(
-            &client,
-            &Uuid::new_v4(),
-            &Uuid::new_v4(),
-            "nca",
-            "stg",
-            true,
-        )
-        .await;
-
-        assert_eq!(n, 0);
-        assert_eq!(src, MetricSource::ControlPlane);
-    }
-
-    /// Worker-count query itself errors -> default to 0 instances on the worker path.
-    #[tokio::test]
-    async fn test_resolve_worker_query_error_defaults_to_zero() {
-        let mut server = mockito::Server::new_async().await;
-        let _wc = server
-            .mock("GET", "/api/v1/query_range")
-            .match_query(mockito::Matcher::Regex("worker_thread_count_total".into()))
-            .with_status(500)
-            .with_body("boom")
-            .create_async()
-            .await;
-
-        let client = ts_client(server.url());
-        let (n, src) = resolve_current_instances(
-            &client,
-            &Uuid::new_v4(),
-            &Uuid::new_v4(),
-            "nca",
-            "stg",
-            true,
-        )
-        .await;
-
-        assert_eq!(n, 0);
-        assert_eq!(src, MetricSource::WorkerThreads);
-    }
-
     /// Happy path: worker count, utilization, and recent invocations are gathered
     /// and sanitized into one ScalingInputs. A single response satisfies every
     /// query (count, utilization, invocation), so we assert the assembled shape.
@@ -1197,9 +1609,20 @@ mod tests {
 
         let client = ts_client(server.url());
         let settings = ScalingSettings::default();
-        let inputs = gather_scaling_inputs(&client, &fid, &fvid, "nca", "stg", true, &settings)
-            .await
-            .expect("gather inputs");
+        let routing_cache = new_metric_routing_cache();
+        let gathered = gather_scaling_inputs(
+            &client,
+            &fid,
+            &fvid,
+            "nca",
+            "stg",
+            true,
+            &settings,
+            &routing_cache,
+        )
+        .await
+        .expect("gather inputs");
+        let inputs = gathered.inputs;
 
         assert_eq!(inputs.current_instances, 5);
         assert_eq!(inputs.metric_source, MetricSource::WorkerThreads);

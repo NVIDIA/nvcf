@@ -109,8 +109,20 @@ enum RouterTunnelConfig {
 impl RouterStartupConfig {
     fn from_args(args: Args) -> Result<Self> {
         let relay_endpoint_config = relay_endpoint_config_from_args(&args)?;
-        let tls_cert_pem = read_optional_file(args.tls_cert_path.as_deref())?;
-        let tls_key_pem = read_optional_file(args.tls_key_path.as_deref())?;
+        let server_identity_reloader = server_identity_reloader_from_args(&args)?;
+        // Read the mounted pair once. The reloader validated and owns these
+        // bytes, so the listener identity and the reload baseline cannot come
+        // from different projected generations. `tls_cert_pem` doubles as the
+        // startup-only outbound trust bundle.
+        let (tls_cert_pem, tls_key_pem) = match server_identity_reloader
+            .as_ref()
+            .map(stargate_tls::ServerIdentityReloader::current_identity)
+        {
+            Some(stargate_tls::ServerTlsIdentity::Provided { cert_pem, key_pem }) => {
+                (Some(cert_pem.clone()), Some(key_pem.clone()))
+            }
+            Some(stargate_tls::ServerTlsIdentity::SelfSigned) | None => (None, None),
+        };
         let grpc = GrpcRouterConfig {
             advertised_hostname_template: args.advertised_hostname_template.clone(),
             target_namespace: args.target_namespace.clone(),
@@ -131,6 +143,8 @@ impl RouterStartupConfig {
                     relay_keep_alive_interval: relay_endpoint_config.keep_alive_interval,
                     tls_cert_pem,
                     tls_key_pem,
+                    server_identity_reloader,
+                    tls_reload_interval: stargate_tls::DEFAULT_TLS_RELOAD_INTERVAL,
                     quic_insecure: args.quic_insecure,
                 })
             }
@@ -144,6 +158,8 @@ impl RouterStartupConfig {
                     relay_keep_alive_interval: relay_endpoint_config.keep_alive_interval,
                     tls_cert_pem,
                     tls_key_pem,
+                    server_identity_reloader,
+                    tls_reload_interval: stargate_tls::DEFAULT_TLS_RELOAD_INTERVAL,
                     upstream_tls_cert_pem: read_optional_file(
                         args.upstream_tls_cert_path.as_deref(),
                     )?,
@@ -333,6 +349,24 @@ fn log_startup(config: &RouterStartupConfig) {
     );
 }
 
+/// Loads the mounted server identity so the router can reload it in place.
+///
+/// Requiring both paths together here reports the mistake at startup rather
+/// than from inside the endpoint builder.
+fn server_identity_reloader_from_args(
+    args: &Args,
+) -> Result<Option<stargate_tls::ServerIdentityReloader>> {
+    match (&args.tls_cert_path, &args.tls_key_path) {
+        (Some(cert_path), Some(key_path)) => Ok(Some(
+            stargate_tls::ServerIdentityReloader::load(cert_path.into(), key_path.into())
+                .context("load initial router TLS server identity")?,
+        )),
+        (None, None) => Ok(None),
+        (Some(_), None) => bail!("--tls-key-path is required with --tls-cert-path"),
+        (None, Some(_)) => bail!("--tls-cert-path is required with --tls-key-path"),
+    }
+}
+
 fn read_optional_file(path: Option<&str>) -> Result<Option<Vec<u8>>> {
     path.map(|path| std::fs::read(path).with_context(|| format!("failed to read {path}")))
         .transpose()
@@ -431,8 +465,12 @@ mod tests {
 
     #[test]
     fn startup_config_derives_runtime_configs_from_args() {
-        let cert = test_file(b"cert-bytes");
-        let key = test_file(b"key-bytes");
+        // The server identity is validated at startup, so the fixture has to be a
+        // real certificate and matching key rather than placeholder bytes.
+        let (cert_pem, key_pem) =
+            stargate_tls::generate_self_signed_cert().expect("test identity should generate");
+        let cert = test_file(&cert_pem);
+        let key = test_file(&key_pem);
         let upstream_ca = test_file(b"upstream-ca-bytes");
         let config = startup_config(&[
             "--listen-addr",
@@ -502,9 +540,13 @@ mod tests {
         );
         assert_eq!(
             quic_config.tls_cert_pem.as_deref(),
-            Some(&b"cert-bytes"[..])
+            Some(cert_pem.as_slice())
         );
-        assert_eq!(quic_config.tls_key_pem.as_deref(), Some(&b"key-bytes"[..]));
+        assert_eq!(quic_config.tls_key_pem.as_deref(), Some(key_pem.as_slice()));
+        assert!(
+            quic_config.server_identity_reloader.is_some(),
+            "a mounted identity must be reloadable"
+        );
         assert!(quic_config.quic_insecure);
 
         let webtransport_config = startup_config(&[

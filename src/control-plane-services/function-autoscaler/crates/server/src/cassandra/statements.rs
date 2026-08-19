@@ -87,70 +87,6 @@ pub(crate) fn get_delete_running_function_without_invocations_stmt(keyspace: &st
     )
 }
 
-// recently_invoked_functions_history Table
-// account_id is a regular column, not part of PK
-pub(crate) fn get_select_recently_invoked_function_history_by_id_stmt(keyspace: &str) -> String {
-    format!(
-        "SELECT function_id, function_version_id, account_id, num_workers, \
-         last_predicted_desired_instance_count, \
-         last_predicted_error_code, last_updated_at \
-         FROM {}.recently_invoked_functions_history \
-         WHERE function_id = ? AND function_version_id = ? LIMIT 1;",
-        keyspace
-    )
-}
-
-pub(crate) fn get_delete_recently_invoked_function_history_pk_stmt(keyspace: &str) -> String {
-    format!(
-        "DELETE FROM {}.recently_invoked_functions_history \
-         WHERE function_id = ? AND function_version_id = ?;",
-        keyspace
-    )
-}
-
-pub(crate) fn get_insert_recently_invoked_functions_history_pk_stmt(keyspace: &str) -> String {
-    format!(
-        "INSERT INTO {}.recently_invoked_functions_history (function_id, function_version_id, account_id, num_workers) \
-         VALUES (?, ?, ?, ?)",
-        keyspace
-    )
-}
-
-// running_functions_without_invocations_history Table
-// account_id is a regular column, not part of PK
-pub(crate) fn get_select_running_function_without_invocations_history_by_id_stmt(
-    keyspace: &str,
-) -> String {
-    format!(
-        "SELECT function_id, function_version_id, account_id, num_workers, \
-         last_predicted_desired_instance_count, \
-         last_predicted_error_code, last_updated_at \
-         FROM {}.running_functions_without_invocations_history \
-         WHERE function_id = ? AND function_version_id = ? LIMIT 1;",
-        keyspace
-    )
-}
-
-pub(crate) fn get_delete_running_function_without_invocations_history_pk_stmt(
-    keyspace: &str,
-) -> String {
-    format!(
-        "DELETE FROM {}.running_functions_without_invocations_history \
-         WHERE function_id = ? AND function_version_id = ?;",
-        keyspace
-    )
-}
-
-pub(crate) fn get_insert_running_functions_without_invocations_history_pk_stmt(
-    keyspace: &str,
-) -> String {
-    format!(
-        "INSERT INTO {}.running_functions_without_invocations_history (function_id, function_version_id, account_id, num_workers) \
-         VALUES (?, ?, ?, ?)",
-        keyspace
-    )
-}
-
 pub(crate) fn get_health_check_query_stmt(keyspace: &str) -> String {
     format!("SELECT now() from {}.healthy_nodes LIMIT 1;", keyspace)
 }
@@ -207,40 +143,6 @@ pub(crate) fn get_stmt_insert_to_running_functions_without_invocations(
         "INSERT INTO {}.running_functions_without_invocations (function_id, function_version_id, account_id, last_updated_at) VALUES (?, ?, ?, ?) USING TTL {}",
         keyspace,
         ttl_seconds
-    )
-}
-
-// Inserts to the recently_invoked_functions_history table must be done with a row TTL of 180 seconds.
-// If function discovery logic doesn't report the function as active, the row is pruned automatically after 180 seconds.
-// The table itself has no default TTL and is kept for historical context if needed.
-// We want to add a configurable job to prune the table periodically for inactive rows.
-pub(crate) fn get_stmt_str_insert_to_recently_invoked_functions_history_prediction_row(
-    keyspace: &str,
-    ttl_seconds: i32,
-) -> String {
-    format!(
-        "INSERT INTO {}.recently_invoked_functions_history (function_id, function_version_id, account_id, \
-         num_workers, last_predicted_desired_instance_count, \
-         last_predicted_error_code, last_updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?) USING TTL {}",
-        keyspace, ttl_seconds
-    )
-}
-
-// Inserts to the running_functions_without_invocations_history table must be done with a row TTL of 300 seconds.
-// If function discovery logic doesn't report the function as active, the row is pruned automatically after 300 seconds.
-// The table itself has no default TTL and is kept for historical context if needed.
-// We want to add a configurable job to prune the table periodically for inactive rows.
-pub(crate) fn get_stmt_str_insert_to_running_functions_without_invocations_history_prediction_row(
-    keyspace: &str,
-    ttl_seconds: i32,
-) -> String {
-    format!(
-        "INSERT INTO {}.running_functions_without_invocations_history (function_id, function_version_id, account_id, \
-         num_workers, last_predicted_desired_instance_count, \
-         last_predicted_error_code, last_updated_at) \
-         VALUES (?, ?, ?, ?, ?, ?, ?) USING TTL {}",
-        keyspace, ttl_seconds
     )
 }
 

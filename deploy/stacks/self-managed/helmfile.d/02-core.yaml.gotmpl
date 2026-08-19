@@ -56,7 +56,7 @@ releases:
       - template: service
 
   - name: api
-    version: 1.24.1
+    version: 1.25.1
     namespace: nvcf
     inherit:
       - template: service
@@ -166,7 +166,7 @@ releases:
 
   - name: llm-request-router
     chart: nvcf/helm-nvcf-llm-request-router
-    version: 1.6.6
+    version: 1.7.2
     namespace: nvcf
     condition: addons.llm.enabled
     values:
@@ -178,7 +178,7 @@ releases:
 
   - name: llm-api-gateway
     chart: nvcf/helm-nvcf-llm-api-gateway
-    version: 1.0.1
+    version: 1.4.1
     namespace: nvcf
     condition: addons.llm.enabled
     values:
@@ -189,7 +189,7 @@ releases:
       release-group: services
 
   - name: vanity-gateway
-    version: 0.1.0-nvcf-10204.1
+    version: 0.3.0
     namespace: nvcf
     condition: addons.vanityGateway.enabled
     inherit:

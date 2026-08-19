@@ -225,6 +225,12 @@
       "legacy_tag_prefix": "nvcf-gateway-routes-v"
     },
     {
+      "id": "vanity-gateway-helm",
+      "path": "deploy/helm/vanity-gateway",
+      "service_name": "helm-nvcf-vanity-gateway",
+      "initial_version": "0.2.0"
+    },
+    {
       "id": "nvca-operator",
       "path": "deploy/helm/nvca-operator",
       "service_name": "helm-nvca-operator",

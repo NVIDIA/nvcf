@@ -212,6 +212,8 @@ navigation:
         path: ../../docs/user/runbooks/index.md
       - page: Key Rotation
         path: ../../docs/user/runbooks/control-plane-key-rotation-mek.md
+      - page: Transport TLS Rotation
+        path: ../../docs/user/runbooks/transport-tls-rotation.md
       - section: Cache Runbooks
         skip-slug: true
         contents:
