@@ -30,6 +30,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
+	golibversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
@@ -52,6 +53,14 @@ import (
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/publisher/cloudevents"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/registrations"
 )
+
+// registerUnauthenticatedRoutes registers routes that must be reachable before
+// (and regardless of) auth middleware: /health for liveness/readiness probes,
+// and /info for build-version discovery (NVCF-10975).
+func registerUnauthenticatedRoutes(router *mux.Router, server *service.Server) {
+	router.HandleFunc("/health", server.Health)
+	router.Handle("/info", golibversion.Handler())
+}
 
 func runService(cfg config.Config) error {
 	ctx := context.Background()
@@ -149,7 +158,7 @@ func runService(cfg config.Config) error {
 	router.Use(middleware.BodyLimitMiddleware(10 * 1024 * 1024)) // 10MB limit
 	router.Use(metricsMiddleware)
 
-	router.HandleFunc("/health", server.Health)
+	registerUnauthenticatedRoutes(router, server)
 
 	spanNameFormatter := func(operation string, r *http.Request) string {
 		return r.Method + " " + operation // e.g., "GET /api/resource"

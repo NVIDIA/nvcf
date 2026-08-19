@@ -16,6 +16,11 @@ go_library(
 go_binary(
     name = "api",
     embed = [":api_lib"],
+    x_defs = {
+        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Service": "nvcf-event-ledger",
+        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Version": "{STABLE_VERSION}",
+        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.GitHash": "{STABLE_GIT_COMMIT_FULL}",
+    },
     visibility = ["//visibility:public"],
 )
 
