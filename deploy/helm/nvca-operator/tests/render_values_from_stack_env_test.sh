@@ -47,9 +47,9 @@ fi
 if [[ "$1" == "get" && "$2" == "values" ]]; then
   cat <<'YAML'
 image:
-  tag: 2.52.0-rc.1
+  tag: 3.2.6
 selfManaged:
-  nvcaVersion: 2.52.0-rc.1
+  nvcaVersion: 3.2.6
 YAML
   exit 0
 fi
@@ -64,21 +64,21 @@ STACK_ENV_FILE="${stack_env_file}" \
 OUTPUT_FILE="${output_file}" \
 RELEASE="nvca-operator" \
 NAMESPACE="nvca-operator" \
-NVCA_OPERATOR_VERSION="2.52.0-rc.5" \
-NVCA_VERSION="2.52.0-rc.5" \
+NVCA_OPERATOR_VERSION="3.2.7" \
+NVCA_VERSION="3.2.7" \
 "${repo_root}/scripts/render_values_from_stack_env.sh"
 
 actual_image_tag="$(yq -r '.image.tag' "${output_file}")"
 actual_nvca_version="$(yq -r '.selfManaged.nvcaVersion' "${output_file}")"
 
-if [[ "${actual_image_tag}" != "2.52.0-rc.5" ]]; then
-  echo "expected image.tag to stay aligned with vendored chart defaults, got ${actual_image_tag}" >&2
+if [[ "${actual_image_tag}" != "3.2.7" ]]; then
+  echo "expected image.tag to use the requested operator version, got ${actual_image_tag}" >&2
   exit 1
 fi
 
-if [[ "${actual_nvca_version}" != "2.52.0-rc.5" ]]; then
-  echo "expected selfManaged.nvcaVersion to stay aligned with vendored chart defaults, got ${actual_nvca_version}" >&2
+if [[ "${actual_nvca_version}" != "3.2.7" ]]; then
+  echo "expected selfManaged.nvcaVersion to use the requested NVCA version, got ${actual_nvca_version}" >&2
   exit 1
 fi
 
-echo "render_values_from_stack_env.sh keeps upgrade version fields aligned with vendored defaults"
+echo "render_values_from_stack_env.sh keeps upgrade version fields aligned with requested versions"
