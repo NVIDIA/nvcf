@@ -56,10 +56,12 @@ import (
 
 // registerUnauthenticatedRoutes registers routes that must be reachable before
 // (and regardless of) auth middleware: /health for liveness/readiness probes,
-// and /info for build-version discovery (NVCF-10975).
-func registerUnauthenticatedRoutes(router *mux.Router, server *service.Server) {
+// and /info for build-version discovery. /info is wrapped with tracing and
+// request logging via infoMiddleware; /health probes are left uninstrumented to
+// avoid span and log spam.
+func registerUnauthenticatedRoutes(router *mux.Router, server *service.Server, infoMiddleware func(http.Handler) http.Handler) {
 	router.HandleFunc("/health", server.Health)
-	router.Handle("/info", golibversion.Handler())
+	router.Handle("/info", infoMiddleware(golibversion.Handler()))
 }
 
 func runService(cfg config.Config) error {
@@ -158,16 +160,21 @@ func runService(cfg config.Config) error {
 	router.Use(middleware.BodyLimitMiddleware(10 * 1024 * 1024)) // 10MB limit
 	router.Use(metricsMiddleware)
 
-	registerUnauthenticatedRoutes(router, server)
-
 	spanNameFormatter := func(operation string, r *http.Request) string {
 		return r.Method + " " + operation // e.g., "GET /api/resource"
 	}
-	authRouter := router.PathPrefix("").Subrouter()
-	authRouter.Use(otelmux.Middleware("deployment-stages", otelmux.WithSpanNameFormatter(spanNameFormatter)))
-
-	// Initialize request logger mw
+	tracingMW := otelmux.Middleware("deployment-stages", otelmux.WithSpanNameFormatter(spanNameFormatter))
 	loggerMW := logging.LoggerMiddleware(logger)
+
+	// /info runs through tracing and request logging (RED metrics already apply
+	// on the base router). /health is left uninstrumented to avoid probe span and
+	// log spam.
+	registerUnauthenticatedRoutes(router, server, func(h http.Handler) http.Handler {
+		return tracingMW(loggerMW(h))
+	})
+
+	authRouter := router.PathPrefix("").Subrouter()
+	authRouter.Use(tracingMW)
 	authRouter.Use(loggerMW)
 
 	// If we're not using Policy, we need to handle scope checks locally in our middleware

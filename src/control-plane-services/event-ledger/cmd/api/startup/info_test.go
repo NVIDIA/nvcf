@@ -36,17 +36,18 @@ import (
 // middleware, so an empty *service.Server is safe as long as /health is not
 // exercised.
 func TestRegisterUnauthenticatedRoutes_Info(t *testing.T) {
-	golibversion.Service = "nvcf-fnds-api"
+	prevService, prevVersion, prevHash := golibversion.Service, golibversion.Version, golibversion.GitHash
+	golibversion.Service = "nvcf-event-ledger"
 	golibversion.Version = "test-1.0.0"
 	golibversion.GitHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	t.Cleanup(func() {
-		golibversion.Service = ""
-		golibversion.Version = ""
-		golibversion.GitHash = ""
+		golibversion.Service = prevService
+		golibversion.Version = prevVersion
+		golibversion.GitHash = prevHash
 	})
 
 	router := mux.NewRouter()
-	registerUnauthenticatedRoutes(router, &service.Server{})
+	registerUnauthenticatedRoutes(router, &service.Server{}, func(h http.Handler) http.Handler { return h })
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/info", nil)
@@ -57,7 +58,7 @@ func TestRegisterUnauthenticatedRoutes_Info(t *testing.T) {
 
 	var info map[string]string
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &info))
-	assert.Equal(t, "nvcf-fnds-api", info["service"])
+	assert.Equal(t, "nvcf-event-ledger", info["service"])
 	assert.Equal(t, "test-1.0.0", info["version"])
 	assert.Equal(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", info["commit"])
 }
@@ -66,7 +67,7 @@ func TestRegisterUnauthenticatedRoutes_Info(t *testing.T) {
 // /info return 405 with an Allow: GET header, as enforced by the go-lib handler.
 func TestRegisterUnauthenticatedRoutes_Info_RejectsNonGET(t *testing.T) {
 	router := mux.NewRouter()
-	registerUnauthenticatedRoutes(router, &service.Server{})
+	registerUnauthenticatedRoutes(router, &service.Server{}, func(h http.Handler) http.Handler { return h })
 
 	for _, method := range []string{
 		http.MethodPost,
