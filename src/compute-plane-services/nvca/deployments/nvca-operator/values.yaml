@@ -71,6 +71,14 @@ serviceAccount:
 ## @param replicaCount Replica count for the operator deployment
 replicaCount: 1
 
+## @param podDisruptionBudget PodDisruptionBudget configuration
+podDisruptionBudget:
+  enabled: false
+  # minAvailable and maxUnavailable are mutually exclusive; set exactly one.
+  # Accepts an integer or a percentage string from 0% to 100%.
+  minAvailable: ""
+  maxUnavailable: ""
+
 ## @param systemNamespace Namespace in which NVCFBackend objects are created.
 systemNamespace: nvca-operator
 
@@ -214,7 +222,7 @@ agent:
   ## @param agent.byooOtelCollector.imageTag BYOO OpenTelemetry Collector image tag.
   byooOtelCollector:
     imageRepository: ""
-    imageTag: "0.157.11"
+    imageTag: "0.157.0-nv-0.1.1"
   ## Environment variable overrides for function workloads.
   ## Available keys: INIT_CONTAINER, UTILS_CONTAINER, OTEL_CONTAINER, BYOO_OTEL_COLLECTOR_CONTAINER,
   ##                 NICLLS_CONTAINER, ESS_AGENT_CONTAINER, INFERENCE_CONTAINER

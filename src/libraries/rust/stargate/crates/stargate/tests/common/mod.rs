@@ -534,6 +534,8 @@ pub fn base_config(
                 request_timeout: Duration::from_secs(10),
                 tls_cert_pem: None,
                 server_tls_identity: stargate_tls::ServerTlsIdentity::SelfSigned,
+                server_identity_reloader: None,
+                tls_reload_interval: stargate_tls::DEFAULT_TLS_RELOAD_INTERVAL,
                 quic_insecure: true,
                 tunnel_protocol: Default::default(),
                 direct_quic_connections: 1,

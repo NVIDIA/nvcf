@@ -41,3 +41,32 @@ pub(crate) fn build_upstream_client_config(
         missing_trust_error,
     )
 }
+
+/// Writes a Kubernetes-style projected TLS generation and swaps `..data` to it.
+///
+/// Mirrors the atomic symlink swap kubelet performs, which is what the reload
+/// watcher keys on.
+#[cfg(all(test, unix))]
+pub(crate) fn install_projected_identity(
+    root: &std::path::Path,
+    generation: &str,
+    cert: &[u8],
+    key: &[u8],
+) {
+    use std::os::unix::fs::symlink;
+
+    let generation_dir = root.join(generation);
+    std::fs::create_dir(&generation_dir).expect("create projected generation");
+    std::fs::write(generation_dir.join("tls.crt"), cert).expect("write projected cert");
+    std::fs::write(generation_dir.join("tls.key"), key).expect("write projected key");
+
+    let next_data = root.join("..data-next");
+    let _ = std::fs::remove_file(&next_data);
+    symlink(generation, &next_data).expect("create projected data symlink");
+    std::fs::rename(next_data, root.join("..data")).expect("swap projected data symlink");
+
+    if !root.join("tls.crt").exists() {
+        symlink("..data/tls.crt", root.join("tls.crt")).expect("create projected cert symlink");
+        symlink("..data/tls.key", root.join("tls.key")).expect("create projected key symlink");
+    }
+}

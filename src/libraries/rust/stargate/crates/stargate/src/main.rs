@@ -794,7 +794,7 @@ mod tests {
         .expect("reverse listener arguments should parse");
         let err = proxy_transport_config_from_args(&args)
             .expect_err("reverse listener server TLS still needs a complete PEM pair");
-        assert_error_contains(&err, "TLS key PEM is required");
+        assert_error_contains(&err, "--tls-key-path is required with --tls-cert-path");
     }
 
     #[test]

@@ -12,7 +12,19 @@ environments:
 {{- $issuerKind := dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values }}
 {{- $issuerName := dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values }}
 {{- $manageIssuer := false }}
+{{- /* existingSecret hands issuance to the operator, so the stack must not
+     create an issuer or require OpenBao for one. Validate the mode here as
+     well as in global.yaml.gotmpl so both states reject the same inputs. */ -}}
+{{- $pkiMode := dig "addons" "llm" "pki" "mode" "certManager" .Values }}
 {{- if $llmPkiActive }}
+{{- if not (kindIs "string" $pkiMode) }}
+{{- fail "addons.llm.pki.mode must be the string \"certManager\" or \"existingSecret\"" }}
+{{- end }}
+{{- if not (has $pkiMode (list "certManager" "existingSecret")) }}
+{{- fail (printf "addons.llm.pki.mode must be exactly \"certManager\" or \"existingSecret\", got %q" $pkiMode) }}
+{{- end }}
+{{- end }}
+{{- if and $llmPkiActive (eq ($pkiMode | toString) "certManager") }}
 {{- /* dig only falls back for a missing path, so explicit null, empty, and
      wrongly typed values reach these checks. Reject them instead of coercing
      them: a malformed management flag that silently resolves to false skips
@@ -144,7 +156,7 @@ releases:
 {{- end }}
 
   - name: cassandra
-    version: 0.17.0
+    version: 0.19.1
     condition: cassandra.enabled # From defaults.yaml or env overrides
     namespace: cassandra-system
     <<: *dependency # Inherits base values from the dependency template
