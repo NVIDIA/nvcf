@@ -365,7 +365,7 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
         test "$(kubectl --context k3d-ncp-local-cp get statefulset llm-request-router -n nvcf -o jsonpath='{.status.readyReplicas}')" = "2"
         test "$(kubectl --context k3d-ncp-local-cp get deployment llm-api-gateway -n nvcf -o jsonpath='{.status.readyReplicas}')" = "2"
         kubectl --context k3d-ncp-local-cp wait certificate/stargate-quic-tls -n nvcf --for=condition=Ready --timeout=5m
-        kubectl --context k3d-ncp-local-cp get statefulset/llm-request-router -n nvcf -o json | jq -e '.spec.template.spec.containers[] | select(.name == "llm-request-router") | (.args | index("--grpc-pylon-dial-addr={stargate_id}.nvcf-llm-router.svc.cluster.local:50071")) != null and (.args | index("--reverse-tunnel-pylon-dial-addr=$(POD_NAME).nvcf-llm-router.svc.cluster.local:50072")) != null' >/dev/null
+        kubectl --context k3d-ncp-local-cp get statefulset/llm-request-router -n nvcf -o json | jq -e '.spec.template.spec.containers[] | select(any(.args[]?; startswith("--grpc-pylon-dial-addr="))) | (.args | index("--grpc-pylon-dial-addr={stargate_id}.nvcf-llm-router.svc.cluster.local:50071")) != null and (.args | index("--reverse-tunnel-pylon-dial-addr=$(POD_NAME).nvcf-llm-router.svc.cluster.local:50072")) != null' >/dev/null
         kubectl --context k3d-ncp-local-cp get certificate/stargate-quic-tls -n nvcf -o json | jq -e '(.spec.dnsNames | index("llm-request-router.nvcf.svc.cluster.local")) != null and (.spec.dnsNames | index("*.llm-request-router-headless.nvcf.svc.cluster.local")) != null and all(.spec.dnsNames[]; contains("nvcf-llm-router.svc.cluster.local") | not)' >/dev/null
         """
       Then the command exit code should be 0
