@@ -16,6 +16,7 @@ _WORKSPACE_DEPS = [
     "//src/libraries/rust/stargate/crates/pylon-lib:pylon-lib",
     "//src/libraries/rust/stargate/crates/stargate-runtime:stargate-runtime",
     "//src/libraries/rust/stargate/crates/stargate-telemetry:stargate-telemetry",
+    "//src/libraries/rust/stargate/crates/stargate-tls:stargate-tls",
 ]
 
 rust_binary(

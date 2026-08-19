@@ -1,3 +1,4 @@
+{{- if .Values.statusByWorkerReadiness }}
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
@@ -13,30 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-[package]
-name = "stargate-tls"
-version.workspace = true
-edition.workspace = true
-authors.workspace = true
-license.workspace = true
-homepage.workspace = true
-repository.workspace = true
-description = "Shared QUIC TLS utilities for Stargate"
-
-[lints]
-workspace = true
-
-[dependencies]
-anyhow = { workspace = true }
-quinn = { workspace = true }
-rcgen = { workspace = true }
-rustls = { workspace = true }
-rustls-webpki = { workspace = true }
-rustls-pemfile = { workspace = true }
-tokio = { workspace = true }
-tokio-util = { workspace = true }
-tracing = { workspace = true }
-x509-parser = { workspace = true }
-
-[dev-dependencies]
-tempfile = { workspace = true }
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nvcf-workload-config
+data:
+  config.yaml: |
+    featureFlags:
+      StatusByWorkerReadiness: true
+{{- end }}

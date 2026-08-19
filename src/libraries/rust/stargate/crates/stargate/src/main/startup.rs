@@ -17,7 +17,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use stargate::auth::OpenAuthenticator;
 use stargate::discovery::{
     Discovery, DnsDiscovery, HeadlessDnsDiscovery, HeadlessDnsDiscoveryConfig, SelfOnlyDiscovery,
@@ -28,7 +28,7 @@ use stargate::runtime::{
 };
 use stargate_forwarding::{ForwardingResolver, HeadlessDnsResolver, render_hostname};
 use stargate_protocol::BackendConnectivity;
-use stargate_tls::ServerTlsIdentity;
+use stargate_tls::{ServerIdentityReloader, ServerTlsIdentity};
 
 use super::Args;
 
@@ -97,8 +97,39 @@ fn validate_backend_connectivity_args(args: &Args) -> Result<()> {
 
 pub(super) fn proxy_transport_config_from_args(args: &Args) -> Result<ProxyTransportConfig> {
     let retry = proxy_retry_config_from_args(args)?;
-    let tls_cert_pem = args.tls_cert_path.as_ref().map(std::fs::read).transpose()?;
-    let tls_key_pem = args.tls_key_path.as_ref().map(std::fs::read).transpose()?;
+    // Only the reverse listener serves an identity, so only that mode reloads
+    // one. Direct mode reads the certificate as a trust bundle.
+    let server_identity_reloader = if args.reverse_tunnel_listen_addr.is_some() {
+        match (&args.tls_cert_path, &args.tls_key_path) {
+            (Some(cert_path), Some(key_path)) => Some(
+                ServerIdentityReloader::load(cert_path.into(), key_path.into())
+                    .context("load initial reverse listener TLS server identity")?,
+            ),
+            (None, None) => None,
+            (Some(_), None) => bail!("--tls-key-path is required with --tls-cert-path"),
+            (None, Some(_)) => bail!("--tls-cert-path is required with --tls-key-path"),
+        }
+    } else {
+        None
+    };
+    // Take the served pair from the reloader that validated and owns it. Two
+    // independent reads could straddle a rotation, which would leave the
+    // reloader treating the served identity as already current and never
+    // installing the replacement.
+    let (tls_cert_pem, tls_key_pem) = match server_identity_reloader
+        .as_ref()
+        .map(ServerIdentityReloader::current_identity)
+    {
+        Some(ServerTlsIdentity::Provided { cert_pem, key_pem }) => {
+            (Some(cert_pem.clone()), Some(key_pem.clone()))
+        }
+        // Direct mode serves a generated identity and reads the certificate
+        // only as its outbound trust bundle.
+        Some(ServerTlsIdentity::SelfSigned) | None => (
+            args.tls_cert_path.as_ref().map(std::fs::read).transpose()?,
+            None,
+        ),
+    };
     Ok(ProxyTransportConfig {
         quic: QuicTunnelConfig {
             connect_timeout: Duration::from_millis(args.quic_connect_timeout_ms),
@@ -108,6 +139,8 @@ pub(super) fn proxy_transport_config_from_args(args: &Args) -> Result<ProxyTrans
             } else {
                 ServerTlsIdentity::SelfSigned
             },
+            server_identity_reloader,
+            tls_reload_interval: stargate_tls::DEFAULT_TLS_RELOAD_INTERVAL,
             tls_cert_pem,
             quic_insecure: args.quic_insecure,
             tunnel_protocol: args.tunnel_protocol,

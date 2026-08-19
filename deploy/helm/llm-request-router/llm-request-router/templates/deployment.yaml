@@ -31,6 +31,11 @@ tunnel target.
 {{- if and $disableDnsDiscovery (gt $replicaCount 1) }}
 {{- fail "llmRequestRouter.discovery.disableDnsDiscovery cannot be true when llmRequestRouter.replicaCount is greater than 1; multi-replica routers require DNS discovery" }}
 {{- end }}
+{{- /*
+The identity guard lives here, not in certificate.yaml: existingSecret mode
+renders no Certificate, so a guard in that template would never run.
+*/}}
+{{- include "llm-request-router.validateTlsIdentity" . }}
 {{- $advertisedHostnameTemplate := include "llm-request-router.advertisedHostnameTemplate" . }}
 spec:
   serviceName: {{ .Values.llmRequestRouter.service.headlessName }}
