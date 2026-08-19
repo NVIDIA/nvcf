@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -315,11 +316,13 @@ func exchangeNGCBearerToken(ctx context.Context, client *http.Client, registry, 
 // Returns empty strings when the header is absent, not a Bearer challenge, or
 // cannot be parsed. The parser handles quoted values that might contain commas.
 func parseWWWAuthenticate(header string) (realm, service, scope string) {
-	const prefix = "Bearer "
-	if !strings.HasPrefix(header, prefix) {
+	// Split scheme from parameters on the first whitespace. HTTP auth scheme
+	// names are case-insensitive (RFC 7235 s2.1), so compare with EqualFold.
+	idx := strings.IndexByte(header, ' ')
+	if idx < 0 || !strings.EqualFold(header[:idx], "Bearer") {
 		return
 	}
-	params := strings.TrimSpace(header[len(prefix):])
+	params := strings.TrimSpace(header[idx+1:])
 	for len(params) > 0 {
 		// Find key=
 		eq := strings.IndexByte(params, '=')
@@ -361,12 +364,42 @@ func parseWWWAuthenticate(header string) (realm, service, scope string) {
 	return
 }
 
-// isNGCRegistry returns true when the registry is hosted on an NVIDIA / NGC
-// domain, where the /proxy_auth fallback applies.
+// ngcApprovedHosts is the set of exact hostnames (without port) that are
+// considered NGC-hosted. Dot-prefixed entries match any subdomain.
+var ngcApprovedHosts = []string{
+	"nvcr.io",
+	".nvcr.io",
+	"nvidia.com",
+	".nvidia.com",
+	"ngc.nvidia",
+	".ngc.nvidia",
+}
+
+// isNGCRegistry returns true when the registry host belongs to an NVIDIA / NGC
+// domain. The check strips any port from the registry string before matching
+// so that nvcr.io:443 is handled correctly, and uses dot-boundary matching to
+// reject deceptive suffixes such as evilnvcr.io or nvidia.com.invalid.
 func isNGCRegistry(registry string) bool {
-	return strings.HasSuffix(registry, "nvcr.io") ||
-		strings.Contains(registry, "nvidia.com") ||
-		strings.Contains(registry, "ngc.nvidia")
+	host := registry
+	// Strip port if present (e.g. nvcr.io:5000 -> nvcr.io).
+	if h, _, err := net.SplitHostPort(registry); err == nil {
+		host = h
+	}
+	host = strings.ToLower(host)
+	for _, approved := range ngcApprovedHosts {
+		if strings.HasPrefix(approved, ".") {
+			// Subdomain match: host must end with ".suffix" or equal "suffix".
+			suffix := approved[1:] // strip the leading dot
+			if host == suffix || strings.HasSuffix(host, approved) {
+				return true
+			}
+		} else {
+			if host == approved {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // credentialsForRegistry resolves (username, password) for any registry.

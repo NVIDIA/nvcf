@@ -294,13 +294,35 @@ func TestParseWWWAuthenticate_RealmOnly(t *testing.T) {
 	assert.Empty(t, scope)
 }
 
+func TestParseWWWAuthenticate_CaseInsensitiveBearer(t *testing.T) {
+	// HTTP auth scheme names are case-insensitive (RFC 7235 s2.1).
+	for _, header := range []string{
+		`bearer realm="https://auth.example.com/token",service="reg.example.com"`,
+		`BEARER realm="https://auth.example.com/token",service="reg.example.com"`,
+		`Bearer realm="https://auth.example.com/token",service="reg.example.com"`,
+	} {
+		realm, service, _ := parseWWWAuthenticate(header)
+		assert.Equal(t, "https://auth.example.com/token", realm, "header: %s", header)
+		assert.Equal(t, "reg.example.com", service, "header: %s", header)
+	}
+}
+
 // -- isNGCRegistry --
 
 func TestIsNGCRegistry(t *testing.T) {
+	// Valid NGC registries.
 	assert.True(t, isNGCRegistry("nvcr.io"))
 	assert.True(t, isNGCRegistry("stg.nvcr.io"))
 	assert.True(t, isNGCRegistry("registry.nvidia.com"))
+	assert.True(t, isNGCRegistry("nvcr.io:443"), "port must be stripped before matching")
+
+	// Non-NGC registries must be rejected.
 	assert.False(t, isNGCRegistry("ghcr.io"))
 	assert.False(t, isNGCRegistry("quay.io"))
 	assert.False(t, isNGCRegistry("harbor.company.internal"))
+
+	// Deceptive suffixes must be rejected.
+	assert.False(t, isNGCRegistry("evilnvcr.io"), "suffix match without dot boundary must be rejected")
+	assert.False(t, isNGCRegistry("nvidia.com.invalid"), "deceptive TLD must be rejected")
+	assert.False(t, isNGCRegistry("fakenvidia.com"), "partial host match must be rejected")
 }

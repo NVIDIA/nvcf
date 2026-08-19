@@ -33,7 +33,7 @@ import (
 // -- probeStaleNamespaces --
 
 func TestProbeStaleNamespaces_AbsentIsHealthy(t *testing.T) {
-	// A namespace that doesn't exist is not stale — it has simply never been
+	// A namespace that doesn't exist is not stale - it has simply never been
 	// created or was already fully deleted.
 	client := fake.NewSimpleClientset()
 	stale, err := probeStaleNamespaces(context.Background(), client, []string{"nvcf", "sis"})
@@ -101,11 +101,33 @@ func TestProbeStaleNamespaces_HealthyReleaseNotStale(t *testing.T) {
 	assert.Empty(t, stale, "namespace with an active Helm release must not be stale")
 }
 
+func TestProbeStaleNamespaces_HealthyReleaseConfigMapDriverNotStale(t *testing.T) {
+	// HELM_DRIVER=configmap stores release objects as ConfigMaps with owner=helm.
+	// A namespace with an owner=helm ConfigMap and no Helm Secret must not be
+	// reported as stale.
+	client := fake.NewSimpleClientset(
+		&corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: "nvcf"},
+			Status:     corev1.NamespaceStatus{Phase: corev1.NamespaceActive},
+		},
+		&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "nvcf.v1",
+				Namespace: "nvcf",
+				Labels:    map[string]string{"owner": "helm", "name": "nvcf", "status": "deployed"},
+			},
+		},
+	)
+	stale, err := probeStaleNamespaces(context.Background(), client, []string{"nvcf"})
+	require.NoError(t, err)
+	assert.Empty(t, stale, "namespace with an owner=helm ConfigMap (configmap driver) must not be stale")
+}
+
 func TestProbeStaleNamespaces_MixedNamespaces(t *testing.T) {
 	// One absent, one healthy, one terminating, one empty shell.
 	now := metav1.Now()
 	client := fake.NewSimpleClientset(
-		// "sis" — healthy with a Helm release
+		// "sis" - healthy with a Helm release
 		&corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{Name: "sis"},
 			Status:     corev1.NamespaceStatus{Phase: corev1.NamespaceActive},
@@ -116,17 +138,17 @@ func TestProbeStaleNamespaces_MixedNamespaces(t *testing.T) {
 				Labels: map[string]string{"owner": "helm"},
 			},
 		},
-		// "nvcf" — stuck terminating
+		// "nvcf" - stuck terminating
 		&corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{Name: "nvcf", DeletionTimestamp: &now},
 			Status:     corev1.NamespaceStatus{Phase: corev1.NamespaceTerminating},
 		},
-		// "api-keys" — empty shell
+		// "api-keys" - empty shell
 		&corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{Name: "api-keys"},
 			Status:     corev1.NamespaceStatus{Phase: corev1.NamespaceActive},
 		},
-		// "cassandra-system" — absent (not present in fake)
+		// "cassandra-system" - absent (not present in fake)
 	)
 
 	namespaces := []string{"cassandra-system", "sis", "nvcf", "api-keys"}
@@ -148,7 +170,7 @@ func TestProbeStaleNamespaces_MixedNamespaces(t *testing.T) {
 
 func TestStaleNamespaceCheck_ProberErrorDegradestoWarning(t *testing.T) {
 	// A prober that cannot contact the cluster must not fail the overall check
-	// at error severity — it would produce false failures on transient network
+	// at error severity - it would produce false failures on transient network
 	// issues or misconfigured kubeconfigs.
 	prober := func(_ context.Context, _ string, _ []string) ([]StaleNamespace, error) {
 		return nil, fmt.Errorf("cluster unreachable")
