@@ -33,6 +33,7 @@ Key targets include:
 * `make build-and-deploy-multicluster`: Build one control-plane cluster and one or more compute-plane clusters.
 * `make build-and-deploy-control-plane-cluster`: Build only the local control-plane cluster.
 * `make build-and-deploy-compute-plane-cluster`: Build one local compute-plane cluster.
+* `make configure-compute-llm-router-endpoints`: Configure post-install split-cluster LLM router aliases.
 * `make clean`: Remove built binaries and test coverage files.
 * `make build-credential-provider-multiarch`: Build `linux/amd64` and `linux/arm64` binaries locally without publishing.
 
@@ -153,6 +154,58 @@ make build-and-deploy-multicluster \
   CONTROL_PLANE_GRPC_WORKER_PORT=20086 \
   CONTROL_PLANE_NATS_PORT=14222
 ```
+
+### Split-cluster LLM router aliases
+
+Configure the control-plane stack with two router replicas, NodePort Services,
+and the compute alias DNS suffix:
+
+```yaml
+global:
+  workerEndpoints:
+    llmRequestRouterAddress: llm-request-router.nvcf.svc.cluster.local:50071
+
+addons:
+  llm:
+    requestRouter:
+      replicaCount: 2
+      service:
+        type: NodePort
+      externalAccess:
+        enabled: true
+        domain: nvcf-llm-router.svc.cluster.local
+        service:
+          type: NodePort
+```
+
+After the control-plane chart creates the Services, configure one compute
+cluster:
+
+```sh
+make configure-compute-llm-router-endpoints \
+  CONTROL_PLANE_CLUSTER_NAME=ncp-local-cp \
+  COMPUTE_CLUSTER_NAME=ncp-local-compute-1
+```
+
+The target discovers the StatefulSet replica count and allocated TCP and UDP
+NodePorts. It attaches the control server node to the compute Docker network,
+creates the shared `llm-request-router.nvcf` seed alias, and creates one
+selectorless Service and Endpoints pair per router in the `nvcf-llm-router`
+namespace. Every per-replica Service has a distinct ClusterIP and exposes TCP
+50071 plus UDP 50072.
+
+Preview the generated aliases without changing Docker or Kubernetes state:
+
+```sh
+CONTROL_PLANE_NODE_IP=172.20.0.10 \
+LLM_REQUEST_ROUTER_REPLICAS=2 \
+LLM_REQUEST_ROUTER_SHARED_GRPC_NODE_PORT=31071 \
+LLM_REQUEST_ROUTER_NAMESPACE=nvcf \
+bash scripts/configure-llm-router-endpoints.sh --dry-run
+```
+
+Dry-run still discovers per-replica NodePorts from the control context. The
+ordinary API, SIS, ReVal, NATS, invocation, and gRPC aliases are unchanged.
 
 Use a custom local control-plane DNS suffix:
 

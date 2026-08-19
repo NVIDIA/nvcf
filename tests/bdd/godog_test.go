@@ -846,6 +846,12 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 			ExitCode: 0,
 			Stdout:   "Function invocation completed!\n\nResponse:\n{\"message\":\"bdd-grpc-echo\"}\n",
 		},
+		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke" +
+			" --model-name dummy-model --inference-url /v1/chat/completions" +
+			" --request-body '{\"messages\":[{\"role\":\"user\",\"content\":\"split cluster smoke\"}],\"stream\":false}' --timeout 30": {
+			ExitCode: 0,
+			Stdout:   "{\"object\":\"chat.completion\",\"model\":\"function-id/dummy-model\",\"choices\":[]}\n",
+		},
 		"tests/bdd/scripts/run-nvct-task-smoke.sh": {
 			ExitCode: 0,
 			Stdout:   "Task bdd-nvct-task-smoke status: COMPLETED\n",
@@ -1174,6 +1180,7 @@ func seedHelmfileLocalBDDMultiFixture(t *testing.T, repoRoot string) {
   workerEndpoints:
     essServiceURL: http://ess-api.ess.svc.cluster.local:8080
     invocationServiceURL: http://invocation.nvcf.svc.cluster.local:8080
+    llmRequestRouterAddress: llm-request-router.nvcf.svc.cluster.local:50071
   nvcaOperator:
     selfManaged:
       icmsServiceURL: http://api.sis.svc.cluster.local:8080
@@ -1182,6 +1189,23 @@ func seedHelmfileLocalBDDMultiFixture(t *testing.T, repoRoot string) {
 addons:
   llm:
     enabled: true
+    pki:
+      enabled: true
+      allowedDomains: cluster.local
+      dnsNames:
+        - llm-request-router.nvcf.svc.cluster.local
+        - "*.llm-request-router-headless.nvcf.svc.cluster.local"
+    gateway:
+      replicaCount: 2
+    requestRouter:
+      replicaCount: 2
+      service:
+        type: NodePort
+      externalAccess:
+        enabled: true
+        domain: nvcf-llm-router.svc.cluster.local
+        service:
+          type: NodePort
 grpcproxy:
   workerConnectBaseURL: http://grpc.nvcf.svc.cluster.local:10086
 ingress:
@@ -1211,7 +1235,7 @@ agentConfig:
       validationPolicy:
         name: Unrestricted
     workload:
-      stargateQUICInsecure: true
+      stargateQUICInsecure: false
 `)
 }
 

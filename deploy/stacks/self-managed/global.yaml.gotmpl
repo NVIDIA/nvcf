@@ -834,8 +834,22 @@ llmRequestRouter:
   enabled: {{ dig "addons" "llm" "enabled" false .Values }}
   fullnameOverride: llm-request-router
   replicaCount: {{ dig "addons" "llm" "requestRouter" "replicaCount" 3 .Values }}
+  {{- $llmRequestRouterService := dig "addons" "llm" "requestRouter" "service" dict .Values }}
   service:
+    {{- with omit $llmRequestRouterService "grpcPort" }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
     grpcPort: {{ $llmRequestRouterGrpcPort }}
+  {{- with dig "addons" "llm" "requestRouter" "externalAccess" dict .Values }}
+  externalAccess:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- $remoteStargateURLs := dig "addons" "llm" "requestRouter" "discovery" "remoteStargateURLs" (list) .Values }}
+  {{- if gt (len $remoteStargateURLs) 0 }}
+  discovery:
+    remoteStargateURLs:
+      {{- toYaml $remoteStargateURLs | nindent 6 }}
+  {{- end }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
     {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}

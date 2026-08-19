@@ -346,4 +346,53 @@ if grep -Fq "$staged_worker_address" "$work_dir/disabled-api-values.yaml"; then
   fail "disabled LLM supplied a staged worker address to the API chart"
 fi
 
+split_seed_address='llm-request-router.nvcf.svc.cluster.local:50071'
+printf '%s\n' \
+  'global:' \
+  '  workerEndpoints:' \
+  "    llmRequestRouterAddress: '$split_seed_address'" \
+  'addons:' \
+  '  llm:' \
+  '    enabled: true' \
+  '    requestRouter:' \
+  '      service:' \
+  '        type: NodePort' \
+  '        annotations:' \
+  '          shared: seed' \
+  '      externalAccess:' \
+  '        enabled: true' \
+  '        domain: nvcf-llm-router.svc.cluster.local' \
+  '        service:' \
+  '          type: NodePort' \
+  '          annotations:' \
+  '            scope: replica' \
+  '      discovery:' \
+  '        remoteStargateURLs:' \
+  '          - https://watch-a.example:50071' \
+  '          - https://watch-b.example:50071' \
+  >"$environment_file"
+render_api_values "$work_dir/split-router-api-values.yaml" >/dev/null
+assert_remote_config_address "$work_dir/split-router-api-values.yaml" \
+  "$split_seed_address" ||
+  fail "split-cluster configuration changed the shared worker seed address"
+split_values="$work_dir/split-router-api-values.yaml"
+yq -e '.llmRequestRouter.service.type == "NodePort"' "$split_values" >/dev/null ||
+  fail "shared seed Service type was not passed through the stack"
+yq -e '.llmRequestRouter.service.annotations.shared == "seed"' "$split_values" >/dev/null ||
+  fail "shared seed Service annotations were not passed through the stack"
+yq -e '.llmRequestRouter.externalAccess.enabled == true' "$split_values" >/dev/null ||
+  fail "external access enablement was not passed through the stack"
+yq -e '.llmRequestRouter.externalAccess.domain == "nvcf-llm-router.svc.cluster.local"' "$split_values" >/dev/null ||
+  fail "external access domain was not passed through the stack"
+yq -e '.llmRequestRouter.externalAccess.service.type == "NodePort"' "$split_values" >/dev/null ||
+  fail "per-replica Service type was not passed through the stack"
+yq -e '.llmRequestRouter.externalAccess.service.annotations.scope == "replica"' "$split_values" >/dev/null ||
+  fail "per-replica Service annotations were not passed through the stack"
+yq -e '.llmRequestRouter.discovery.remoteStargateURLs | length == 2' "$split_values" >/dev/null ||
+  fail "remote Stargate URL count was not passed through the stack"
+yq -e '.llmRequestRouter.discovery.remoteStargateURLs[0] == "https://watch-a.example:50071"' "$split_values" >/dev/null ||
+  fail "first remote Stargate URL was not passed through the stack"
+yq -e '.llmRequestRouter.discovery.remoteStargateURLs[1] == "https://watch-b.example:50071"' "$split_values" >/dev/null ||
+  fail "second remote Stargate URL was not passed through the stack"
+
 echo "llm-router-worker-address: all checks passed"

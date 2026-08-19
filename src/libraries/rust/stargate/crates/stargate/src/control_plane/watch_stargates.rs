@@ -20,13 +20,15 @@ use std::time::{Duration, Instant};
 use futures::{Stream, stream};
 use tokio::sync::watch;
 use tonic::Status;
-use tracing::debug;
+use tracing::{debug, warn};
 use url::Url;
 
 use stargate_proto::pb::{StargateInfo, WatchStargatesResponse};
 
 use crate::discovery::Discovery;
 use stargate_runtime::CriticalTaskGroup;
+
+const STARGATE_ID_DIAL_ADDR_TOKEN: &str = "{stargate_id}";
 
 pub(super) struct WatchStargatesPublisherConfig {
     pub(super) advertise_addr: SocketAddr,
@@ -113,8 +115,24 @@ fn build_watch_stargates_response(
         .map(str::trim)
         .filter(|addr| !addr.is_empty())
     {
-        for stargate in &mut stargates {
-            stargate.grpc_pylon_dial_addr = grpc_pylon_dial_addr.to_string();
+        if grpc_pylon_dial_addr.contains(STARGATE_ID_DIAL_ADDR_TOKEN) {
+            stargates.retain_mut(|stargate| {
+                let stargate_id = stargate.stargate_id.trim();
+                if stargate_id.is_empty() {
+                    warn!(
+                        advertise_addr = %stargate.advertise_addr,
+                        "omitting Stargate without an ID from templated pylon dial addresses"
+                    );
+                    return false;
+                }
+                stargate.grpc_pylon_dial_addr =
+                    grpc_pylon_dial_addr.replace(STARGATE_ID_DIAL_ADDR_TOKEN, stargate_id);
+                true
+            });
+        } else {
+            for stargate in &mut stargates {
+                stargate.grpc_pylon_dial_addr = grpc_pylon_dial_addr.to_string();
+            }
         }
     }
     WatchStargatesResponse {
@@ -295,6 +313,71 @@ mod tests {
         assert_eq!(
             response.stargates[0].grpc_pylon_dial_addr,
             "stargate-grpc-lb.region-a:443"
+        );
+    }
+
+    #[test]
+    fn watch_stargates_response_renders_per_stargate_grpc_pylon_dial_addrs() {
+        let response = build_watch_stargates_response(
+            vec![
+                stargate(
+                    "llm-request-router-1",
+                    "llm-request-router-1.headless:50071",
+                    "",
+                ),
+                stargate(
+                    "llm-request-router-0",
+                    "llm-request-router-0.headless:50071",
+                    "",
+                ),
+            ],
+            &[],
+            Some("{stargate_id}.router.region-a.example:50071"),
+        );
+
+        let dial_addrs: Vec<&str> = response
+            .stargates
+            .iter()
+            .map(|info| info.grpc_pylon_dial_addr.as_str())
+            .collect();
+        assert_eq!(
+            dial_addrs,
+            vec![
+                "llm-request-router-0.router.region-a.example:50071",
+                "llm-request-router-1.router.region-a.example:50071",
+            ]
+        );
+    }
+
+    #[test]
+    fn watch_stargates_response_ignores_empty_grpc_pylon_dial_addr() {
+        let mut info = stargate("stargate-0", "stargate-0.region-a:50071", "");
+        info.grpc_pylon_dial_addr = "existing.region-a:50071".to_string();
+
+        let response = build_watch_stargates_response(vec![info], &[], Some("  "));
+
+        assert_eq!(
+            response.stargates[0].grpc_pylon_dial_addr,
+            "existing.region-a:50071"
+        );
+    }
+
+    #[test]
+    fn watch_stargates_response_omits_missing_id_from_templated_dial_addrs() {
+        let response = build_watch_stargates_response(
+            vec![
+                stargate("", "10.0.0.1:50071", ""),
+                stargate("stargate-1", "10.0.0.2:50071", ""),
+            ],
+            &[],
+            Some("{stargate_id}.router.region-a.example:50071"),
+        );
+
+        assert_eq!(response.stargates.len(), 1);
+        assert_eq!(response.stargates[0].stargate_id, "stargate-1");
+        assert_eq!(
+            response.stargates[0].grpc_pylon_dial_addr,
+            "stargate-1.router.region-a.example:50071"
         );
     }
 

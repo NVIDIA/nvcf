@@ -117,6 +117,7 @@ for target in \
   build-and-deploy-control-plane-cluster \
   build-and-deploy-compute-plane-cluster \
   build-and-deploy-multicluster \
+  configure-compute-llm-router-endpoints \
   configure-compute-control-plane-dns \
   deploy-compute-control-plane-endpoints \
   deploy-control-plane-endpoints \
@@ -187,6 +188,9 @@ if ! grep -q 'docker network connect' "$ROOT_DIR/scripts/configure-control-plane
 fi
 if ! grep -q 'deploy-compute-control-plane-endpoints configure-compute-control-plane-dns' "$ROOT_DIR/Makefile"; then
   fail "compute DNS must be configured after alias Services exist"
+fi
+if ! grep -q '^configure-compute-llm-router-endpoints:' "$ROOT_DIR/Makefile"; then
+  fail "Makefile must expose the post-control-install LLM endpoint target"
 fi
 if ! grep -q 'CONTROL_PLANE_LB_HTTP_PORT=80' "$ROOT_DIR/Makefile"; then
   fail "Makefile must pass the control-plane HTTP container port to endpoint configuration"
@@ -294,6 +298,84 @@ fi
 if ! grep -q "port: 14222" <<<"$endpoints_yaml"; then
   fail "compute NATS endpoint dry-run must use CONTROL_PLANE_LB_NATS_PORT"
 fi
+
+llm_fake_bin="$(mktemp -d)"
+cat >"$llm_fake_bin/docker" <<'EOF'
+#!/usr/bin/env bash
+if [ "$1" = "network" ] && [ "$2" = "inspect" ]; then
+  printf '%s\n' '172.29.0.5/16'
+  exit 0
+fi
+echo "unexpected docker command: $*" >&2
+exit 42
+EOF
+cat >"$llm_fake_bin/kubectl" <<'EOF'
+#!/usr/bin/env bash
+args="$*"
+if [[ "$args" == *" get statefulset llm-request-router "* ]]; then
+  printf '%s' "${MOCK_LLM_REPLICAS:-2}"
+  exit 0
+fi
+if [[ "$args" =~ get\ service\ (llm-request-router(-[0-9]+)?)\  ]]; then
+  service_name="${BASH_REMATCH[1]}"
+  if [ "$service_name" = "llm-request-router" ]; then
+    printf '%s' '31071'
+    exit 0
+  fi
+  ordinal="${service_name##*-}"
+  if [[ "$args" == *'name=="grpc"'* ]]; then
+    printf '%s' "$((32071 + ordinal * 10))"
+    exit 0
+  fi
+  if [[ "$args" == *'name=="quic"'* ]]; then
+    printf '%s' "$((32072 + ordinal * 10))"
+    exit 0
+  fi
+fi
+echo "unexpected kubectl command: $*" >&2
+exit 42
+EOF
+chmod +x "$llm_fake_bin/docker" "$llm_fake_bin/kubectl"
+llm_aliases_yaml="$(MOCK_LLM_REPLICAS=2 PATH="$llm_fake_bin:$PATH" \
+  CONTROL_PLANE_CLUSTER_NAME=ncp-test-cp \
+  COMPUTE_CLUSTER_NAME=ncp-test-compute \
+  "$ROOT_DIR/scripts/configure-llm-router-endpoints.sh" --dry-run)"
+if ! grep -q 'ip: 172.29.0.5' <<<"$llm_aliases_yaml"; then
+  fail "LLM endpoint dry-run must discover the control node on the compute Docker network"
+fi
+if ! grep -A12 'name: llm-request-router$' <<<"$llm_aliases_yaml" | grep -q 'port: 31071'; then
+  fail "LLM endpoint dry-run must discover the shared seed TCP NodePort"
+fi
+for ordinal in 0 1; do
+  if ! grep -q "name: llm-request-router-${ordinal}" <<<"$llm_aliases_yaml"; then
+    fail "LLM endpoint dry-run missing replica ${ordinal} aliases"
+  fi
+done
+if [ "$(grep -c '^kind: Service$' <<<"$llm_aliases_yaml")" -ne 3 ]; then
+  fail "LLM endpoint dry-run must generate one shared and two per-replica Services"
+fi
+for port in 32071 32072 32081 32082; do
+  if ! grep -q "port: ${port}" <<<"$llm_aliases_yaml"; then
+    fail "LLM endpoint dry-run missing discovered NodePort ${port}"
+  fi
+done
+if ! grep -q 'protocol: TCP' <<<"$llm_aliases_yaml" || ! grep -q 'protocol: UDP' <<<"$llm_aliases_yaml"; then
+  fail "LLM endpoint aliases must preserve TCP registration and UDP QUIC protocols"
+fi
+if grep -q 'selector:' <<<"$llm_aliases_yaml"; then
+  fail "compute LLM aliases must be selectorless Services backed by explicit Endpoints"
+fi
+
+scaled_llm_aliases_yaml="$(MOCK_LLM_REPLICAS=3 PATH="$llm_fake_bin:$PATH" \
+  CONTROL_PLANE_NODE_IP=172.29.0.6 \
+  "$ROOT_DIR/scripts/configure-llm-router-endpoints.sh" --dry-run)"
+if [ "$(grep -c '^kind: Service$' <<<"$scaled_llm_aliases_yaml")" -ne 4 ]; then
+  fail "LLM endpoint aliases must follow request-router replica-count changes"
+fi
+if ! grep -q 'name: llm-request-router-2' <<<"$scaled_llm_aliases_yaml"; then
+  fail "scaled LLM endpoint dry-run missing the third replica"
+fi
+rm -rf "$llm_fake_bin"
 
 fake_bin="$(mktemp -d)"
 cat >"$fake_bin/docker" <<'EOF'

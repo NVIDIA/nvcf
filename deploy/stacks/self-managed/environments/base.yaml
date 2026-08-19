@@ -257,6 +257,26 @@ addons:
   # LLM addon: gateway + request router (stargate) for LLM function invocation
   llm:
     enabled: false
+    requestRouter:
+      replicaCount: 3
+      # The shared Service is the single worker bootstrap address. It is
+      # separate from the per-replica external Services below.
+      service:
+        type: ClusterIP
+        annotations: {}
+        grpcPort: 50071
+      discovery:
+        # Additional WatchStargates seeds, typically one or more per region.
+        remoteStargateURLs: []
+      # Provider-owned DNS and transparent L4 forwarding expose one TCP and
+      # UDP endpoint per StatefulSet replica when workers are remote. Use a
+      # region-unique domain. It is dial-only and is not a certificate SAN.
+      externalAccess:
+        enabled: false
+        domain: ""
+        service:
+          type: LoadBalancer
+          annotations: {}
     # QUIC TLS certificate for the request router (Stargate). Disabled by
     # default; opt in per env.
     #

@@ -36,6 +36,8 @@ The identity guard lives here, not in certificate.yaml: existingSecret mode
 renders no Certificate, so a guard in that template would never run.
 */}}
 {{- include "llm-request-router.validateTlsIdentity" . }}
+{{- $externalAccess := .Values.llmRequestRouter.externalAccess | default dict }}
+{{- include "llm-request-router.validateExternalAccess" . }}
 {{- $advertisedHostnameTemplate := include "llm-request-router.advertisedHostnameTemplate" . }}
 spec:
   serviceName: {{ .Values.llmRequestRouter.service.headlessName }}
@@ -87,6 +89,9 @@ spec:
             {{- with dig "discovery" "watchHeartbeatMs" "" .Values.llmRequestRouter }}
             - --watch-heartbeat-ms={{ . }}
             {{- end }}
+            {{- range (dig "discovery" "remoteStargateURLs" (list) .Values.llmRequestRouter) }}
+            - {{ printf "--remote-stargate-url=%s" . | quote }}
+            {{- end }}
             - --shutdown-drain-timeout-ms={{ .Values.llmRequestRouter.shutdown.drainTimeoutMs }}
             - --quic-connect-timeout-ms={{ .Values.llmRequestRouter.transport.quicConnectTimeoutMs }}
             - --quic-request-timeout-ms={{ .Values.llmRequestRouter.transport.quicRequestTimeoutMs }}
@@ -95,7 +100,12 @@ spec:
             - --backend-connectivity=reverse
             - --reverse-tunnel-listen-addr={{ .Values.llmRequestRouter.transport.reverseTunnelListenAddr }}
             {{- end }}
-            {{- if and .Values.llmRequestRouter.transport.reverseTunnelListenAddr (gt $replicaCount 1) }}
+            {{- if $externalAccess.enabled }}
+            - --grpc-pylon-dial-addr={stargate_id}.{{ $externalAccess.domain }}:{{ .Values.llmRequestRouter.service.grpcPort }}
+            {{- end }}
+            {{- if and .Values.llmRequestRouter.transport.reverseTunnelListenAddr $externalAccess.enabled }}
+            - --reverse-tunnel-pylon-dial-addr=$(POD_NAME).{{ $externalAccess.domain }}:{{ .Values.llmRequestRouter.service.reverseTunnelPort }}
+            {{- else if and .Values.llmRequestRouter.transport.reverseTunnelListenAddr (gt $replicaCount 1) }}
             - --reverse-tunnel-pylon-dial-addr=$(POD_IP):{{ .Values.llmRequestRouter.service.reverseTunnelPort }}
             {{- end }}
             {{- if .Values.llmRequestRouter.transport.reverseTunnelConnectTimeoutMs }}

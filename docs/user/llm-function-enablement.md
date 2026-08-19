@@ -39,10 +39,12 @@ cert-manager, or one you issue yourself and supply in a pre-created Secret.
 Each compute plane receives the public root CA certificate and uses the
 combined system and private trust bundle in the `llm-worker` sidecar.
 
-The request-router address configured for the compute plane must use a DNS name
-listed in the certificate SANs. For a single-cluster deployment, use
-`llm-request-router.nvcf.svc.cluster.local:50071`. Use an address reachable from
-each compute cluster when the control and compute planes use separate networks.
+The request-router address configured for the compute plane is the shared TCP
+discovery seed. For a single-cluster deployment, use
+`llm-request-router.nvcf.svc.cluster.local:50071`. In a split-cluster
+deployment, use a seed that every worker can resolve and reach. Per-replica
+external dial names are separate from the internal hostname used as the QUIC
+certificate identity.
 
 ### Managed OpenBao issuer
 
@@ -193,12 +195,12 @@ stack-managed issuance. Rendering fails if any of them is set in this mode, so
 a configuration that expects the stack to issue a certificate cannot be
 mistaken for one that expects you to.
 
-The certificate must carry a SAN covering the router's advertised hostname and
-the address workers connect to. At the default single-replica configuration
-that is `llm-request-router.nvcf.svc.cluster.local`. At higher replica counts
-the router advertises per-pod headless names, so use a leftmost wildcard such
-as `*.llm-request-router-headless.nvcf.svc.cluster.local`. Include any external
-name set in `global.workerEndpoints.llmRequestRouterAddress`. The stack cannot
+The certificate must carry a SAN covering the router's internal advertised
+hostname. At the default single-replica configuration that is
+`llm-request-router.nvcf.svc.cluster.local`. At higher replica counts the router
+advertises per-pod headless names, so use a leftmost wildcard such as
+`*.llm-request-router-headless.nvcf.svc.cluster.local`. Per-replica external
+names are dial-only and must not be added to the certificate. The stack cannot
 read your Secret at render time, so it validates neither the SANs nor the
 expiry. A certificate that does not cover the advertised hostname fails at
 worker connection time, not at install time.
@@ -266,18 +268,19 @@ nvcf-cli self-hosted \
   --region <region>
 ```
 
-The exporter cannot infer the worker-facing request-router endpoint. Add the
-reachable `host:port` before validating or registering the profile:
+The exporter cannot infer the worker-facing shared seed. Add the reachable
+`host:port` before validating or registering the profile:
 
 ```yaml
 controlPlane:
   addons:
     llm:
-      requestRouterAddress: llm-router.example.com:443
+      requestRouterAddress: llm-request-router.nvcf.svc.cluster.local:50071
 ```
 
-Use the endpoint that compute-plane workers can resolve and reach. Its
-hostname must match a SAN on the request-router certificate.
+Use the endpoint that compute-plane workers can resolve and reach. In a split
+cluster, this can be a selectorless Service alias backed by the control-cluster
+seed endpoint.
 
 Registration renders this field as `agent.llm.requestRouterAddress` in the
 compute-plane values. That is operator configuration, not a runtime fallback
@@ -289,25 +292,69 @@ from the `LLM_REQUEST_ROUTER_ADDRESS` variable in its launch environment, with
 the workload, translation rejects the launch instead of falling back to the
 registered address.
 
-Add that hostname to `addons.llm.pki.dnsNames`. The list accepts any number of
-additional names; the stack only requires that one entry covers the router's
-advertised hostname. For the managed issuer, also extend `allowedDomains` with
-the parent domain, because the OpenBao signing role allows subdomains and
-wildcards but not bare domains. To issue for `llm-router.example.com`, use:
+Keep only internal advertised identities in `addons.llm.pki.dnsNames`. A
+multi-replica router normally uses:
 
 ```yaml
 addons:
   llm:
     pki:
-      allowedDomains: nvcf.svc.cluster.local,example.com
+      allowedDomains: cluster.local
       dnsNames:
         - llm-request-router.nvcf.svc.cluster.local
         - "*.llm-request-router-headless.nvcf.svc.cluster.local"
-        - llm-router.example.com
 ```
 
-`allowedDomains: llm-router.example.com` does not work for that name. The role
-sets `allow_bare_domains=false`, so the entry must be the parent domain.
+Do not add the shared seed alias or the per-replica external domain unless one
+of those names is also the router's internal advertised identity.
+
+### Split-cluster replica endpoints
+
+Use per-replica endpoints when the compute cluster cannot reach
+control-cluster pod DNS or pod IPs directly. The worker path has three address
+classes:
+
+| Address | Purpose | Identity |
+| --- | --- | --- |
+| Shared seed | Initial `WatchStargates` call on TCP 50071 | Dial-only |
+| Per-replica TCP | Direct registration with each Stargate on TCP 50071 | Internal advertised hostname remains the HTTP/2 authority |
+| Per-replica UDP | Reverse QUIC tunnel to the registering Stargate on UDP 50072 | Internal advertised hostname remains the QUIC SNI |
+
+Configure the self-managed stack like this:
+
+```yaml
+global:
+  workerEndpoints:
+    llmRequestRouterAddress: llm-request-router.nvcf.svc.cluster.local:50071
+
+addons:
+  llm:
+    requestRouter:
+      replicaCount: 2
+      service:
+        annotations: {}
+      externalAccess:
+        enabled: true
+        domain: router.region-a.example
+        service:
+          type: LoadBalancer
+          annotations: {}
+      discovery:
+        remoteStargateURLs: []
+```
+
+The chart creates one Service per StatefulSet ordinal. For
+`llm-request-router-0`, workers dial
+`llm-request-router-0.router.region-a.example:50071` for registration and the
+same host on UDP 50072 for reverse QUIC. The internal name
+`llm-request-router-0.llm-request-router-headless.nvcf.svc.cluster.local`
+remains the authority and QUIC SNI.
+
+The infrastructure provider owns the external DNS records and transparent L4
+load balancers. Each name must forward TCP and UDP to the matching replica.
+Do not terminate TLS or place several replicas behind one external name. Use a
+region-unique domain when `discovery.remoteStargateURLs` joins regional router
+meshes. The stack does not create provider DNS records.
 
 The managed export reads the public root CA certificate from
 `services/all/pki/root` in the stack's OpenBao service and calculates the
@@ -504,8 +551,10 @@ kubectl -n nvcf-backend get pod <function-pod> \
 
 The worker args must contain
 `--stargate-address=llm-request-router.nvcf.svc.cluster.local:50071`, or the
-configured routable DNS name, and must not contain `--quic-insecure`. The
-address hostname must match a certificate SAN. The environment must contain:
+configured shared seed, and must not contain `--quic-insecure`. In a
+split-cluster deployment, router logs should show a distinct registration and
+reverse tunnel for every replica. The internal advertised hostname used as
+QUIC SNI must match a certificate SAN. The environment must contain:
 
 ```text
 STARGATE_TLS_CERT_PATH=/etc/ssl/certs/ca-certificates.crt
@@ -677,8 +726,9 @@ For transport TLS failures, check:
 - Unknown issuer: inspect the `Certificate` Ready condition and verify
   `issuerRef.kind`, `issuerRef.name`, and the issuer namespace. A namespaced
   `Issuer` must be in `nvcf`.
-- SAN mismatch: compare the hostname in `--stargate-address` with the SANs in
-  `Secret/stargate-quic-tls`. Do not replace the hostname with an IP address.
+- SAN mismatch: compare the internal advertised hostname returned by Stargate
+  with the SANs in `Secret/stargate-quic-tls`. The shared seed and external
+  dial names are not the QUIC identity.
 - Expired or not-yet-valid certificate: inspect the certificate dates and the
   cluster clock. Renew the certificate and restart the request-router
   StatefulSet.

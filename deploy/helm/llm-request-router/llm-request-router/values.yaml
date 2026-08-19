@@ -65,6 +65,7 @@ llmRequestRouter:
 
   service:
     type: ClusterIP
+    annotations: {}
     httpPort: 8000
     grpcPort: 50071
     metricsPort: 9090
@@ -121,8 +122,8 @@ llmRequestRouter:
     # suffixes). REQUIRED when enabled. Typically:
     #   "<customer-domain>,cluster.local"
     # so the signing role accepts both the customer's external DNS and
-    # in-cluster service names. Missing value → script aborts non-zero →
-    # entrypoint accumulator → Job fails on backoff exhaustion.
+    # in-cluster service names. Missing value -> script aborts non-zero ->
+    # entrypoint accumulator -> Job fails on backoff exhaustion.
     allowedDomains: ""
     # nvcf-openbao-migrations image. The chart picks up the same image
     # that the k8s-openbao Helm hook uses; supply registry/repository/tag
@@ -154,12 +155,28 @@ llmRequestRouter:
 
   discovery:
     disableDnsDiscovery: false
+    # Additional Stargate WatchStargates endpoints. Each item renders as one
+    # --remote-stargate-url argument.
+    remoteStargateURLs: []
 
   transport:
     quicConnectTimeoutMs: 2000
     quicRequestTimeoutMs: 30000
     reverseTunnelListenAddr: "0.0.0.0:50072"
     reverseTunnelConnectTimeoutMs: 10000
+
+  # Per-replica TCP registration and UDP reverse-tunnel Services. Enable this
+  # when pylons run outside the router cluster. Each external hostname is
+  # "<stargate-id>.<domain>". The provider owns DNS and transparent L4
+  # forwarding for these names; the chart does not create DNS records. Use a
+  # region-unique domain. These names are dial-only and do not belong in the
+  # router certificate SANs.
+  externalAccess:
+    enabled: false
+    domain: ""
+    service:
+      type: LoadBalancer
+      annotations: {}
 
   shutdown:
     drainTimeoutMs: 30000

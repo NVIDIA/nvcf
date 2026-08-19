@@ -33,6 +33,7 @@ global:
   workerEndpoints:
     essServiceURL: http://ess-api.ess.svc.cluster.local:8080
     invocationServiceURL: http://invocation.nvcf.svc.cluster.local:8080
+    llmRequestRouterAddress: llm-request-router.nvcf.svc.cluster.local:50071
 
 cassandra:
   replicaCount: 1
@@ -59,18 +60,39 @@ api:
 addons:
   llm:
     enabled: true
+    pki:
+      enabled: true
+      allowedDomains: cluster.local
+      dnsNames:
+        - llm-request-router.nvcf.svc.cluster.local
+        - "*.llm-request-router-headless.nvcf.svc.cluster.local"
     gateway:
-      replicaCount: 1
+      replicaCount: 2
       auth:
         grpcInsecure: true
       metrics:
         serviceMonitor:
           enabled: false
     requestRouter:
-      replicaCount: 1
+      replicaCount: 2
+      service:
+        type: NodePort
+      externalAccess:
+        enabled: true
+        domain: nvcf-llm-router.svc.cluster.local
+        service:
+          type: NodePort
       metrics:
         serviceMonitor:
           enabled: false
+      loadBalancer:
+        config: |
+          {
+            "default": "round-robin",
+            "request_algorithms": {
+              "round-robin": "round-robin"
+            }
+          }
 
 grpcproxy:
   workerConnectBaseURL: http://grpc.nvcf.svc.cluster.local:10086

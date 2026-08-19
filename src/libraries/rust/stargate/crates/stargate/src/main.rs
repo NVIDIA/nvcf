@@ -82,7 +82,7 @@ struct Args {
         value_name = "URL"
     )]
     remote_stargate_url: Vec<String>,
-    /// Optional TCP load-balancer dial address for pylons; per-pod addresses remain the advertised gRPC authority/SNI identity.
+    /// Optional TCP dial address for pylons. Supports `{stargate_id}` for per-Stargate addresses; advertised addresses remain the gRPC authority.
     #[arg(long, value_name = "ADDR")]
     grpc_pylon_dial_addr: Option<String>,
     /// Backend hostname template supporting `{pod_name}` and `{namespace}`; its rendered host is the pylon gRPC authority and reverse QUIC SNI.

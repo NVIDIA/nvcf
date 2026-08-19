@@ -149,6 +149,41 @@ comparing suffixes.
 {{- end -}}
 {{- end -}}
 
+{{/*
+External access gives every replica a distinct TCP and UDP dial address. The
+internal advertised hostname remains the gRPC authority and QUIC certificate
+identity, so the external domain must not be added to certificate SANs.
+*/}}
+{{- define "llm-request-router.validateExternalAccess" -}}
+{{- $externalAccess := .Values.llmRequestRouter.externalAccess | default dict -}}
+{{- if $externalAccess.enabled -}}
+{{- $domain := $externalAccess.domain | default "" | toString | lower -}}
+{{- if not $domain -}}
+{{- fail "llmRequestRouter.externalAccess.domain is required when llmRequestRouter.externalAccess.enabled is true" -}}
+{{- end -}}
+{{- $labels := splitList "." $domain -}}
+{{- $validDomain := and
+      (gt (len $domain) 0)
+      (le (len $domain) 253)
+      (not (hasPrefix "." $domain))
+      (not (hasSuffix "." $domain)) -}}
+{{- range $label := $labels -}}
+{{- if not (regexMatch "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$" $label) -}}
+{{- $validDomain = false -}}
+{{- end -}}
+{{- end -}}
+{{- if regexMatch "^[0-9]+$" (last $labels) -}}
+{{- $validDomain = false -}}
+{{- end -}}
+{{- if not $validDomain -}}
+{{- fail (printf "llmRequestRouter.externalAccess.domain %q is not a valid DNS name" $domain) -}}
+{{- end -}}
+{{- if not .Values.llmRequestRouter.transport.reverseTunnelListenAddr -}}
+{{- fail "llmRequestRouter.transport.reverseTunnelListenAddr is required when llmRequestRouter.externalAccess.enabled is true" -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
 {{- define "llm-request-router.serviceAccountName" -}}
 {{- if .Values.llmRequestRouter.serviceAccount.create }}
 {{- default (include "llm-request-router.fullname" .) .Values.llmRequestRouter.serviceAccount.name }}
