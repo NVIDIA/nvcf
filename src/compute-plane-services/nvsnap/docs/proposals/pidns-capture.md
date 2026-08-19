@@ -71,6 +71,32 @@ Cost: the dump includes the container's init process (typically the `bash` the
 workload was launched under). That is cheap -- a shell, no GPU state -- and is
 what a container checkpoint normally contains.
 
+## First attempt hung, and why
+
+Measured, not theorised. With the gate on, the dump ran as:
+
+```
+nsenter -t <hostPID> -m -p -n -i -u -r -w -- criu dump -t 1 ...
+```
+
+It never returned. No image files, no `dump.log`, and the agent log stops at
+the invocation. The harness gave up at 10m13s, well inside CRIU's own 1200s
+timeout, so nothing failed -- it hung.
+
+The likely mechanism is the `-p` in that nsenter. It places CRIU *inside* the
+container's PID namespace, which is harmless when the target is a subtree
+(CRIU is not a descendant of the session leader) and self-defeating when the
+target is the namespace root: CRIU is then a member of the very tree it is
+freezing, so it stalls on itself.
+
+Stock container checkpoint does not do this. `runc checkpoint` runs CRIU in the
+host PID namespace and names the container init by its *host* pid, letting CRIU
+discover and record the namespace from the target. So the next attempt should
+drop `-p` and pass the host pid rather than `-t 1`, which is both the fix and a
+further step onto the standard path.
+
+This is unverified. It is the leading hypothesis, not a conclusion.
+
 ## Alternatives rejected
 
 **Bump `ns_last_pid` before restore.** Tried and reverted. The in-pod write is

@@ -35,7 +35,13 @@ import (
 // CaptureFormatVersion is bumped whenever the on-disk schema for a capture
 // changes (manifest format, layout, included metadata). Hashes are recomputed
 // across versions, so old captures stop matching.
-const CaptureFormatVersion = 1
+//
+// 2: dumps target the pid namespace root, so the image set now contains a
+// pidns image. A v1 capture does not, and replaying one keeps the restore on
+// the old recreate-PIDs-in-place path that fails with clone3 EEXIST. The bump
+// is what makes the fix take effect: without it the agent reuses the stale
+// capture by hash and the fix looks like it did nothing.
+const CaptureFormatVersion = 2
 
 // ErrNotFound is returned by Stat / Get when no capture is stored under the
 // given hash.
