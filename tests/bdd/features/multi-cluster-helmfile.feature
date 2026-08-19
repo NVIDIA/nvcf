@@ -334,6 +334,11 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
     # the managed OpenBao trust bundle in the compute environment.
     @function-lifecycle @split-cluster-llm @llm-pki
     Scenario: Operator invokes two mock LLM replicas through two split-cluster Stargates
+      # Function creation validates the registry manifest even when k3d has
+      # local image bytes. The operator supplies an existing mock-dynamo tag;
+      # the build and import below replace only the local cluster image.
+      Given environment variable "NVCF_BDD_MOCK_DYNAMO_TAG" is set
+
       When I run command:
         """
         docker build --file src/libraries/rust/stargate/Dockerfile --target stargate-runtime --tag nvcf-stargate-per-replica:bdd src/libraries/rust/stargate
@@ -372,14 +377,16 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
 
       When I run command:
         """
-        docker build --file src/libraries/rust/stargate/Dockerfile --target mock-dynamo-runtime --tag nvcf-mock-dynamo-per-replica:bdd src/libraries/rust/stargate
-        k3d image import nvcf-mock-dynamo-per-replica:bdd --cluster ncp-local-compute-1
+        MOCK_IMAGE="nvcr.io/$SAMPLE_NGC_ORG/$SAMPLE_NGC_TEAM/mock-dynamo:$NVCF_BDD_MOCK_DYNAMO_TAG"
+        docker build --file src/libraries/rust/stargate/Dockerfile --target mock-dynamo-runtime --tag "$MOCK_IMAGE" src/libraries/rust/stargate
+        k3d image import "$MOCK_IMAGE" --cluster ncp-local-compute-1
         """
       Then the command exit code should be 0
 
       When I run command:
         """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function create --name bdd-split-mock-llm --image nvcf-mock-dynamo-per-replica:bdd --container-args "--http-listen-addr=0.0.0.0:8000 --model-name=dummy-model --num-tokens=2 --token-delay-ms=0" --inference-url /v1/chat/completions --inference-port 8000 --health-uri /health --health-port 8000 --health-timeout PT30S --function-type LLM --llm-model "name=dummy-model,uris=/v1/chat/completions|/v1/responses|/v1/embeddings,routingMethod=round_robin,tokenRateLimit=1000-S"
+        MOCK_IMAGE="nvcr.io/$SAMPLE_NGC_ORG/$SAMPLE_NGC_TEAM/mock-dynamo:$NVCF_BDD_MOCK_DYNAMO_TAG"
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function create --name bdd-split-mock-llm --image "$MOCK_IMAGE" --container-args "--http-listen-addr=0.0.0.0:8000 --model-name=dummy-model --num-tokens=2 --token-delay-ms=0" --inference-url /v1/chat/completions --inference-port 8000 --health-uri /health --health-port 8000 --health-timeout PT30S --function-type LLM --llm-model "name=dummy-model,uris=/v1/chat/completions|/v1/responses|/v1/embeddings,routingMethod=round_robin,tokenRateLimit=1000-S"
         """
       Then the command exit code should be 0
 

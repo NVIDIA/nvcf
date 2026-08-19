@@ -84,8 +84,11 @@ BDD_CLEANUP_MODE=topology-multi \
 # Multi-cluster Helmfile feature: control-plane install on
 # k3d-ncp-local-cp followed by compute-plane register-cluster + install
 # on k3d-ncp-local-compute-1. Same secrets as the single-cluster
-# Helmfile feature.
+# Helmfile feature. NVCF_BDD_MOCK_DYNAMO_TAG must name an existing
+# mock-dynamo registry manifest; the feature builds and imports local bytes
+# under that tag.
 NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
+  NVCF_BDD_MOCK_DYNAMO_TAG=<tag> \
   go test -run '^TestMultiClusterHelmfile$' -timeout 90m -v
 ```
 
@@ -164,6 +167,9 @@ If a new step is genuinely needed:
   invocations resolve.
 - For the Helmfile feature: `NGC_API_KEY`, `SAMPLE_NGC_ORG`,
   `SAMPLE_NGC_TEAM` env vars set.
+- For the multi-cluster LLM scenario: `NVCF_BDD_MOCK_DYNAMO_TAG` names an
+  existing `mock-dynamo` manifest in the sample NGC repository. The function
+  API validates the manifest before the locally imported image is deployed.
 - For the upstream-image feature: outbound cluster access to
   `docker.io/natsio` and `docker.io/alpine`.
 
