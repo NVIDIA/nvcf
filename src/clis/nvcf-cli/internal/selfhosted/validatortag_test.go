@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -383,6 +384,22 @@ func (s *spyTransport) RoundTrip(_ *http.Request) (*http.Response, error) {
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestExchangeBearerToken_DockerHubDelegatedRealm(t *testing.T) {
+	// Docker Hub uses registry-1.docker.io as the pull host and auth.docker.io
+	// for token exchange. The realm host check must allow this documented
+	// delegation rather than rejecting it as an unauthorized host.
+	wwwAuth := `Bearer realm="https://auth.docker.io/token",service="registry.docker.io",scope="repository:library/ubuntu:pull"`
+	realm, _, _ := parseWWWAuthenticate(wwwAuth)
+	u, err := url.Parse(realm)
+	require.NoError(t, err)
+
+	realmHost := strings.ToLower(u.Hostname())
+	regHost := "registry-1.docker.io"
+	delegated := trustedRealmDelegations[regHost]
+	assert.Equal(t, "auth.docker.io", delegated, "Docker Hub auth host must be in trusted delegation map")
+	assert.Equal(t, delegated, realmHost, "auth.docker.io realm must be authorized for registry-1.docker.io")
+}
 
 func TestExchangeNGCBearerToken_RejectsNonNGCRegistry(t *testing.T) {
 	// A non-NGC registry must be rejected before any HTTP request is made,

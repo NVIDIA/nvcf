@@ -217,7 +217,8 @@ func exchangeBearerToken(ctx context.Context, client *http.Client, registry, rep
 	}
 	realmOK := realmHost == regHost ||
 		strings.HasSuffix(realmHost, "."+regHost) ||
-		(isNGCRegistry(registry) && isNGCRegistry(realmHost))
+		(isNGCRegistry(registry) && isNGCRegistry(realmHost)) ||
+		trustedRealmDelegations[regHost] == realmHost
 	if !realmOK {
 		return "", fmt.Errorf("refusing to forward credentials to realm host %q; not authorized for registry %s", realmHost, registry)
 	}
@@ -387,6 +388,18 @@ func parseWWWAuthenticate(header string) (realm, service, scope string) {
 		}
 	}
 	return
+}
+
+// trustedRealmDelegations maps a registry host to its authorized token host
+// when the registry uses a separate host for token exchange. Only add entries
+// here for registries with publicly documented auth architectures; this list
+// extends the fail-closed realm validation and must not grow without a clear
+// trust basis.
+var trustedRealmDelegations = map[string]string{
+	// Docker Hub documents this split explicitly: the pull host and the auth
+	// host are distinct (docs.docker.com/registry/spec/auth/token/).
+	"registry-1.docker.io": "auth.docker.io",
+	"docker.io":            "auth.docker.io",
 }
 
 // ngcApprovedHosts is the set of exact hostnames (without port) that are
