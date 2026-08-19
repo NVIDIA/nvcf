@@ -85,6 +85,13 @@ spec:
         failureThreshold: 180
       securityContext:
         privileged: true
+        # The NIM image's default user is uid 1000, and privileged does not
+        # confer root. Writing /proc/sys/kernel/ns_last_pid then fails with
+        # "Operation not permitted", the pid reservation above silently does
+        # nothing, and the agent refuses the restore. Only the placeholder runs
+        # as root: CRIU restores the workload with the uid recorded in the
+        # checkpoint, so this does not change what the workload runs as.
+        runAsUser: 0
       resources:
         limits:
           nvidia.com/gpu: "1"
