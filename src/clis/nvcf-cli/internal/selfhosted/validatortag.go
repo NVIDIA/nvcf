@@ -199,11 +199,27 @@ func exchangeBearerToken(ctx context.Context, client *http.Client, registry, rep
 		return exchangeNGCBearerToken(ctx, client, registry, repo)
 	}
 	// Reject non-HTTPS or relative realms before attaching credentials.
-	// The realm comes from a registry-controlled response header and must be
-	// an absolute HTTPS URL to prevent sending credentials over cleartext or
-	// to an unrelated host.
 	if u.Scheme != "https" || u.Host == "" {
 		return "", fmt.Errorf("refusing token exchange at insecure or relative realm %q for %s", realm, registry)
+	}
+	// Authorize the realm host before forwarding credentials. The realm URL
+	// comes from a registry-controlled response header. Without this check, a
+	// malicious registry could return realm="https://attacker.com/token" and
+	// receive the operator's Docker credentials for the original registry.
+	// Allow the realm only when it matches the registry's own host, is a
+	// sub-domain of that host (e.g. auth.registry.example.com for registry.example.com),
+	// or is an NGC auth domain when the registry is NGC-hosted (NGC delegates
+	// token issuance to authn.nvidia.com and other nvidia.com sub-domains).
+	realmHost := strings.ToLower(u.Hostname())
+	regHost := strings.ToLower(registry)
+	if h, _, err := net.SplitHostPort(registry); err == nil {
+		regHost = strings.ToLower(h)
+	}
+	realmOK := realmHost == regHost ||
+		strings.HasSuffix(realmHost, "."+regHost) ||
+		(isNGCRegistry(registry) && isNGCRegistry(realmHost))
+	if !realmOK {
+		return "", fmt.Errorf("refusing to forward credentials to realm host %q; not authorized for registry %s", realmHost, registry)
 	}
 	q := u.Query()
 	if service != "" {

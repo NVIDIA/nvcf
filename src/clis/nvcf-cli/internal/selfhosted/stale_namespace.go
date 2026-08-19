@@ -77,7 +77,7 @@ func NewStaleNamespaceProber() StaleNamespaceProber {
 //
 // A namespace is considered stale when either:
 //   - its DeletionTimestamp is set or its phase is Terminating (finalizer
-//     deadlock — it will never complete without operator intervention), or
+//     deadlock; it will never complete without operator intervention), or
 //   - it exists but holds no active Helm release (empty shell left by a partial
 //     helm uninstall or a failed teardown that cleaned the release but not the
 //     namespace).

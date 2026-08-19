@@ -21,8 +21,10 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -336,6 +338,37 @@ func TestIsNGCRegistry(t *testing.T) {
 	assert.False(t, isNGCRegistry("fakenvidia.com"), "partial host match must be rejected")
 }
 
+// -- exchangeBearerToken realm host authorization --
+
+func TestExchangeBearerToken_RejectsAttackerRealm(t *testing.T) {
+	// A malicious registry returns a realm on an attacker-controlled host.
+	// The function must reject this without forwarding credentials.
+	spy := &spyTransport{t: t}
+
+	// Set up a fake registry server that returns 401 with an attacker realm.
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Www-Authenticate", `Bearer realm="https://attacker.example.com/token",service="harbor.company.internal"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	client := srv.Client()
+	// Replace the transport with the spy AFTER the TLS is set up; the spy
+	// wraps the original to preserve TLS but fails on any attacker call.
+	origTransport := client.Transport
+	client.Transport = roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Host == "attacker.example.com" || strings.Contains(r.URL.Host, "attacker") {
+			t.Fatalf("credentials must not be forwarded to attacker host: %s", r.URL)
+		}
+		return origTransport.RoundTrip(r)
+	})
+	_ = spy
+
+	_, err := exchangeBearerToken(context.Background(), client, "harbor.company.internal", "myrepo/image", `Bearer realm="https://attacker.example.com/token",service="harbor.company.internal"`)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not authorized for registry")
+}
+
 // -- exchangeNGCBearerToken --
 
 // spyTransport is an http.RoundTripper that fails the test if called.
@@ -345,6 +378,11 @@ func (s *spyTransport) RoundTrip(_ *http.Request) (*http.Response, error) {
 	s.t.Fatal("HTTP request must not be issued for non-NGC registry")
 	return nil, nil
 }
+
+// roundTripperFunc adapts a function to the http.RoundTripper interface.
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestExchangeNGCBearerToken_RejectsNonNGCRegistry(t *testing.T) {
 	// A non-NGC registry must be rejected before any HTTP request is made,
