@@ -638,7 +638,7 @@
             "properties": {
                 "address": {
                     "type": "string",
-                    "description": "Vault server URL for Helm-managed clusters. Required when helmManaged.oAuthClientID is set; must be HTTP(S), without credentials, query, or fragment.",
+                    "description": "Vault server URL for Helm-managed clusters. Required when helmManaged.oAuthClientID is set; must use HTTPS without credentials, query, or fragment.",
                     "default": ""
                 },
                 "oAuthClientMountPathTemplate": {
