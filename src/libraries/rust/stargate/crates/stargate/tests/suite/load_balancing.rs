@@ -403,7 +403,7 @@ fn float_eq(actual: f64, expected: f64) -> bool {
 }
 
 #[tokio::test]
-async fn power_of_n_prefers_less_input_work() {
+async fn power_of_n_prefers_lower_ttft() {
     let stargate = RunningStargate::start("test-sg-p2c", None).await;
     let mut low =
         RegisteredBackend::active(stargate.grpc_addr, "p2c-model", "inst-low-headroom").await;
@@ -412,7 +412,8 @@ async fn power_of_n_prefers_less_input_work() {
 
     wait_for_routing(stargate.http_addr, "p2c-model", Duration::from_secs(5)).await;
 
-    // More pending prompt work should lose when both clusters report the same service rate.
+    // More pending prompt work increases estimated queue delay and TTFT when both clusters
+    // report the same service rate.
     low.set_stats(CurrentModelStats {
         output_tps: 50.0,
         last_mean_input_tps: 1000.0,
@@ -425,7 +426,7 @@ async fn power_of_n_prefers_less_input_work() {
         ..CurrentModelStats::default()
     });
 
-    // Less pending prompt work should win.
+    // Less pending prompt work should have the lower TTFT.
     high.set_stats(CurrentModelStats {
         output_tps: 50.0,
         last_mean_input_tps: 1000.0,
@@ -456,7 +457,7 @@ async fn power_of_n_prefers_less_input_work() {
     )
     .await;
 
-    // With exactly 2 candidates, p2c samples both and picks the lower work-time candidate.
+    // With exactly 2 candidates, power-of-n samples both and picks the lower TTFT candidate.
     assert_all_probes_routed_to(
         stargate.http_addr,
         "p2c-model",
@@ -847,7 +848,7 @@ async fn power_of_n_uses_cluster_aggregated_metrics_and_backend_round_robin() {
 }
 
 #[tokio::test]
-async fn wait_and_widen_load_balancing_prefers_lower_estimated_ttft() {
+async fn wait_and_widen_load_balancing_prefers_lower_ttft() {
     let stargate = RunningStargate::start(
         "test-sg-wait-and-widen",
         Some(r#"{"default": "power-of-n", "models": {"wait-and-widen-model": "wait-and-widen"}}"#),
@@ -907,10 +908,7 @@ async fn wait_and_widen_load_balancing_prefers_lower_estimated_ttft() {
         poll.tick().await;
     }
 
-    assert!(
-        stable_fast,
-        "expected wait-and-widen to prefer lower estimated TTFT"
-    );
+    assert!(stable_fast, "expected wait-and-widen to prefer lower TTFT");
 
     stop_backends(&mut backends);
     stargate.shutdown().await;
@@ -1206,6 +1204,7 @@ async fn wait_and_widen_priority_header_uses_matching_queue_estimate() {
             "models": {
                 "wait-and-widen-priority-model": {
                     "algorithm": "wait-and-widen",
+                    "comparator": "queue-time",
                     "n": 2
                 }
             }
@@ -1218,12 +1217,12 @@ async fn wait_and_widen_priority_header_uses_matching_queue_estimate() {
         (
             "wait-and-widen-priority-specific-low",
             100_u64,
-            HashMap::from([(4_u32, 5_u64)]),
+            HashMap::from([(0_u32, 1000_u64), (4_u32, 5_u64)]),
         ),
         (
             "wait-and-widen-priority-specific-high",
             0_u64,
-            HashMap::from([(4_u32, 500_u64)]),
+            HashMap::from([(0_u32, 0_u64), (4_u32, 500_u64)]),
         ),
     ];
     let mut backends = Vec::new();

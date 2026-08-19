@@ -1,0 +1,29 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//rules/oci:defs.bzl", "go_oci_image")
+
+go_library(
+    name = "api_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/cmd/api",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//src/control-plane-services/event-ledger/cmd/api/startup",
+        "//src/control-plane-services/event-ledger/internal/observability/logging",
+        "//src/control-plane-services/event-ledger/pkg/constants",
+    ],
+)
+
+go_binary(
+    name = "api",
+    embed = [":api_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_oci_image(
+    name = "image",
+    base = "@distroless_go",
+    binary = ":api",
+    binary_path = "/usr/bin/event-ledger",
+    tags = ["nvcf-event-ledger"],
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,139 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "sis.fullname" . }}
+  namespace: {{ include "sis.namespace" . }}
+  labels:
+    {{- include "sis.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.sis.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "sis.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- include "sis.vaultAnnotations" . | nindent 8 }}
+      {{- with .Values.sis.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.sis.env }}
+        checksum/config-env: {{ toYaml .Values.sis.env | sha256sum }}
+      {{- end }}
+      labels:
+        {{- include "sis.selectorLabels" . | nindent 8 }}
+    spec:
+      terminationGracePeriodSeconds: {{ .Values.sis.terminationGracePeriodSeconds | default 30 }}
+      {{- with (include "sis.imagePullSecrets" .) }}
+      imagePullSecrets:
+        {{- . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: sis-api
+      securityContext:
+        {{- toYaml .Values.sis.podSecurityContext | nindent 8 }}
+      volumes:
+        # Chart-owned: OpenBao-audience projected token for vault-agent auth.
+        # Name/path contract lives in the sis.openbaoToken* helpers.
+        - name: {{ include "sis.openbaoTokenVolumeName" . }}
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: {{ include "sis.openbaoTokenFileName" . }}
+                  expirationSeconds: 3600
+                  audience: {{ required "sis.vault.audience must be set (the OpenBao JWT audience)" .Values.sis.vault.audience | quote }}
+        - name: vault-config-templates
+          configMap:
+            name: {{ include "sis.fullname" . }}-vault-agent-tpl
+            items:
+              - key: secrets.json.tmpl
+                path: secrets.json.tmpl
+        {{- with .Values.sis.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.sis.securityContext | nindent 12 }}
+          image: "{{ include "sis.image" . }}"
+          imagePullPolicy: {{ .Values.sis.image.pullPolicy }}
+          lifecycle:
+            {{- toYaml .Values.sis.lifecycle | nindent 12 }}
+          volumeMounts:
+            - name: {{ include "sis.openbaoTokenVolumeName" . }}
+              mountPath: {{ include "sis.openbaoTokenMountPath" . }}
+              readOnly: true
+            - name: vault-config-templates
+              mountPath: /vault/config/templates
+              readOnly: true
+            {{- with .Values.sis.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.sis.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.sis.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.sis.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: SPRING_PROFILES_ACTIVE
+              value: "ncp"
+            {{- if .Values.sis.remoteConfig.enabled }}
+            - name: REMOTE_CONFIG_ENABLED
+              value: "true"
+            - name: REMOTE_CONFIG_NAME
+              value: {{ include "sis.remoteConfigName" . | quote }}
+            {{- end }}
+          {{- if .Values.sis.env }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "sis.fullname" . }}-env
+          {{- end }}
+          ports:
+            {{- range .Values.sis.ports }}
+            - name: {{ .name }}
+              containerPort: {{ .port }}
+              protocol: {{ .protocol }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.sis.resources | nindent 12 }}
+      {{- with .Values.sis.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.sis.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.sis.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

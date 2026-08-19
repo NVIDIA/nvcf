@@ -1,0 +1,43 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "publisher",
+    srcs = ["publisher.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/publisher",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//src/control-plane-services/event-ledger/common/core/types",
+        "//src/control-plane-services/event-ledger/internal/config",
+        "//src/control-plane-services/event-ledger/internal/interfaces",
+        "//src/control-plane-services/event-ledger/internal/observability/logging",
+        "//src/control-plane-services/event-ledger/pkg/constants",
+        "@com_github_uptrace_opentelemetry_go_extra_otelzap//:otelzap",
+        "@io_opentelemetry_go_otel//:otel",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_metric//:metric",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":publisher",
+    visibility = ["//:__subpackages__"],
+)
+
+go_test(
+    name = "publisher_test",
+    srcs = ["publisher_test.go"],
+    embed = [":publisher"],
+    deps = [
+        "//src/control-plane-services/event-ledger/common/core/types",
+        "//src/control-plane-services/event-ledger/internal/config",
+        "//src/control-plane-services/event-ledger/internal/interfaces",
+        "//src/control-plane-services/event-ledger/pkg/testutils",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@com_github_uptrace_opentelemetry_go_extra_otelzap//:otelzap",
+        "@org_uber_go_zap//:zap",
+    ],
+)

@@ -152,8 +152,13 @@ func (c *ConnectionTrackingConn) Close() error {
 		})
 		if workerConnection != nil {
 			// Record the origin before tearing down, so the eviction handler
-			// reports client_closed rather than a bare deleted.
+			// reports client_closed rather than a bare deleted. Stamp the
+			// close here too: client_closed is the common case, so without
+			// this the accurate close time would be missing from most
+			// evictions and held_for would fall back to whenever the cache
+			// callback happened to run.
 			workerConnection.SetCloseOrigin(metrics.CloseReasonClientClosed)
+			workerConnection.MarkClosed(time.Now())
 			zap.L().Info("triggering worker connection shutdown from client close",
 				zap.String("function_id", key.functionId),
 				zap.String("function_version_id", key.functionVersionId),

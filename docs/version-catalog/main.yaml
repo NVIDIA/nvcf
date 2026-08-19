@@ -81,6 +81,9 @@ publications:
   - name: notary-service
     version: 1.8.1
     registry: public-images
+  - name: nvcf-ai-api-gateway-service
+    version: 1.32.1
+    registry: public-images
   - name: nvcf-api-keys-service
     version: 1.5.0
     registry: public-images
@@ -223,7 +226,7 @@ publications:
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-vanity-gateway
-    version: 0.1.0-nvcf-10204.1
+    version: 0.3.0
     registry: public-helm
     chart_format: http
   - name: helm-reval
@@ -384,6 +387,7 @@ manifest:
       kind: chart
       requirement: optional
       description: Deploys the optional vanity hostname gateway.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/vanity-gateway
     - artifact_id: nvcf-example-dashboards
       plane: control
       kind: chart
@@ -458,6 +462,12 @@ manifest:
       kind: service-image
       requirement: required
       description: Signs and validates functions and cluster nodes.
+    - artifact_id: nvcf-ai-api-gateway-service
+      plane: control
+      kind: service-image
+      requirement: optional
+      description: Serves the optional vanity hostname gateway.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/vanity-gateway
     - artifact_id: nvcf-api-keys-service
       plane: control
       kind: service-image
@@ -840,7 +850,7 @@ artifacts:
   - name: helm-nvcf-vanity-gateway
     type: chart
     registry: staging
-    version: 0.1.0-nvcf-10204.1
+    version: 0.3.0
   - name: helm-reval
     type: chart
     registry: staging
@@ -963,6 +973,10 @@ supplemental_artifacts:
     registry: staging
     repository_name: stargate
     version: 0.3.2
+  - name: nvcf-ai-api-gateway-service
+    type: image
+    registry: staging
+    version: 1.32.1
   - name: nvcf-image-credential-helper
     type: image
     registry: staging

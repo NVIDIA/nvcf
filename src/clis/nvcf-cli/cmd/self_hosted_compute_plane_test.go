@@ -23,6 +23,7 @@ import (
 	"crypto/tls"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -838,6 +839,62 @@ func TestReadNVCAValuesMetadata(t *testing.T) {
 		assert.Equal(t, "-----BEGIN CERTIFICATE-----\nrendered\n-----END CERTIFICATE-----\n", transportTLS["trustBundlePem"])
 		assert.NotContains(t, transportTLS, "installerImage")
 	})
+
+	t.Run("bundle transport trust with QUIC insecure is rejected", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "insecure-nvca-values.yaml")
+		body := `clusterName: gpu-insecure
+agentConfig:
+  mergeConfig: |
+    workload:
+      stargateQUICInsecure: true
+      transportTLS:
+        trustMode: bundle
+`
+		require.NoError(t, os.WriteFile(path, []byte(body), 0o644))
+
+		_, err := readNVCAValuesMetadata(path)
+		require.ErrorContains(t, err, "workload.stargateQUICInsecure=true cannot be used with workload.transportTLS.trustMode=bundle")
+		require.ErrorContains(t, err, "set workload.stargateQUICInsecure=false or use trustMode=system")
+	})
+
+	for _, tc := range []struct {
+		name        string
+		mergeConfig string
+	}{
+		{
+			name: "system transport trust with QUIC insecure is accepted",
+			mergeConfig: `workload:
+  stargateQUICInsecure: true
+  transportTLS:
+    trustMode: system
+`,
+		},
+		{
+			name: "bundle transport trust with QUIC insecure false is accepted",
+			mergeConfig: `workload:
+  stargateQUICInsecure: false
+  transportTLS:
+    trustMode: bundle
+`,
+		},
+		{
+			name: "bundle transport trust with QUIC insecure unset is accepted",
+			mergeConfig: `workload:
+  transportTLS:
+    trustMode: bundle
+`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "compatible-nvca-values.yaml")
+			body := "clusterName: gpu-compatible\nagentConfig:\n  mergeConfig: |\n    " +
+				strings.ReplaceAll(tc.mergeConfig, "\n", "\n    ")
+			require.NoError(t, os.WriteFile(path, []byte(body), 0o644))
+
+			_, err := readNVCAValuesMetadata(path)
+			require.NoError(t, err)
+		})
+	}
 
 	t.Run("typo in known field surfaces a decode error", func(t *testing.T) {
 		dir := t.TempDir()

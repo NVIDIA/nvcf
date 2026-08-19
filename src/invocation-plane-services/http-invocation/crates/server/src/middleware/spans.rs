@@ -24,8 +24,9 @@ use tracing_opentelemetry_instrumentation_sdk::http::{
 
 use axum::extract;
 use http::request::Parts;
+use opentelemetry::baggage::{Baggage, BaggageExt};
 use std::collections::HashMap;
-use tracing::{field::Empty, span, Level, Span};
+use tracing::{Level, Span, field::Empty, span};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use tracing_opentelemetry_instrumentation_sdk::http as otel_http;
 
@@ -51,17 +52,21 @@ pub async fn _add_path_params_to_span(req: Request<AxumBody>, next: Next) -> imp
 }
 
 #[derive(Debug, Clone)]
-pub struct NVCFMakeSpan {}
+pub struct NVCFMakeSpan {
+    baggage_attribute_allowlist: std::collections::HashSet<String>,
+}
 
 impl NVCFMakeSpan {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(baggage_attribute_allowlist: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            baggage_attribute_allowlist: baggage_attribute_allowlist.into_iter().collect(),
+        }
     }
 }
 
 impl Default for NVCFMakeSpan {
     fn default() -> Self {
-        Self::new()
+        Self::new(std::iter::empty())
     }
 }
 
@@ -137,9 +142,29 @@ impl<B> tower_http::trace::MakeSpan<B> for NVCFMakeSpan {
             query,
             url_scheme
         );
-        let _ = span.set_parent(otel_http::extract_context(request.headers()));
+        let parent_context = otel_http::extract_context(request.headers());
+        let baggage_attributes =
+            allowed_baggage_attributes(parent_context.baggage(), &self.baggage_attribute_allowlist);
+        let _ = span.set_parent(parent_context);
+        for (key, value) in baggage_attributes {
+            span.set_attribute(key, value);
+        }
         span
     }
+}
+
+fn allowed_baggage_attributes(
+    baggage: &Baggage,
+    allowlist: &std::collections::HashSet<String>,
+) -> Vec<(String, String)> {
+    allowlist
+        .iter()
+        .filter_map(|key| {
+            baggage
+                .get(key)
+                .map(|value| (key.clone(), value.as_str().to_owned()))
+        })
+        .collect()
 }
 
 pub async fn _parse_url_params(
@@ -169,4 +194,35 @@ fn http_route<B>(req: &extract::Request<B>) -> &str {
     req.extensions()
         .get::<MatchedPath>()
         .map_or_else(|| "", |mp| mp.as_str())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allowed_baggage_attributes_only_copies_configured_keys() {
+        let mut baggage = Baggage::new();
+        baggage.insert("allowed.one", "one");
+        baggage.insert("allowed.two", "two");
+        baggage.insert("unapproved", "must-not-copy");
+        let allowlist = ["allowed.one".to_string(), "allowed.two".to_string()]
+            .into_iter()
+            .collect();
+
+        let attributes = allowed_baggage_attributes(&baggage, &allowlist);
+
+        assert_eq!(attributes.len(), 2);
+        assert!(attributes.contains(&("allowed.one".to_string(), "one".to_string())));
+        assert!(attributes.contains(&("allowed.two".to_string(), "two".to_string())));
+    }
+
+    #[test]
+    fn allowed_baggage_attributes_ignores_missing_keys() {
+        let mut baggage = Baggage::new();
+        baggage.insert("allowed.one", "one");
+        let allowlist = ["missing".to_string()].into_iter().collect();
+
+        assert!(allowed_baggage_attributes(&baggage, &allowlist).is_empty());
+    }
 }
