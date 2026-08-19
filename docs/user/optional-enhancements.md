@@ -45,7 +45,8 @@ or route values.
 
 When the addon is present and enabled, it is deployed as the `nvcf-ui`
 service and exposed through the Gateway API route `nvcf-ui.<domain>` by default.
-See [Gateway Routing](./gateway-routing.md#nvcf-ui-optional) for routing and
+See [Enabling NVCF UI](./nvcf-ui.md) for the enablement steps and
+[Gateway Routing](./gateway-routing.md#nvcf-ui-optional) for routing and
 verification details.
 
 ## Physical Simulation Caches

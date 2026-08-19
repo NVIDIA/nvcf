@@ -1,56 +1,75 @@
 # Enabling NVCF UI
 
-The NVCF UI is an optional web interface for managing NVCF deployments. It is
-disabled by default. Enable it only when the `nvcf-ui` addon is installed in
-your cluster.
+NVCF UI is an optional customer-facing NVCF admin-panel UI. It is disabled by
+default and is available only in stack packages that include the NVCF UI addon.
+If your extracted stack package does not contain a `nvcf-ui` release and
+`nvcfUi` route values, skip this page until you use a stack package that
+includes them.
 
-The NVCF UI addon runs as a Service named `nvcf-ui` in the `nvcf-ui` namespace
-on port 8300. When enabled, the gateway-routes chart creates an HTTPRoute and a
-ReferenceGrant that forward requests from `nvcf-ui.<domain>` to that Service,
-where `<domain>` is the Gateway load balancer address or custom DNS name set as
-`global.domain` in your environment file.
+<Warning>
+The NVCF UI admin panel is currently unauthenticated. Do not expose it to the
+public internet. Restrict access to a trusted network, VPN, or an
+authenticating proxy in front of the `nvcf-ui` route.
+</Warning>
+
+The addon runs as a Service named `nvcf-ui` in the `nvcf-ui` namespace on port
+8300. When it is enabled, the gateway-routes chart also creates an HTTPRoute and
+a ReferenceGrant that forward requests from `nvcf-ui.<domain>` to that Service,
+where `<domain>` is the `global.domain` value in your environment file.
 
 ## Prerequisites
 
-- The `nvcf-ui` addon must be deployed in the `nvcf-ui` namespace before
-  enabling the gateway route.
-- Gateway API ingress must be configured. See [Gateway Routing](./gateway-routing.md).
+- A stack package that includes the `nvcf-ui` release and `nvcfUi` route values.
+- Gateway API ingress configured. See
+  [Gateway Routing](./gateway-routing.md#nvcf-ui-optional).
 
-## Enable the gateway route
+## Enable the addon
 
-The `nvcfUi` route is not wired through the standard environment file. Enable it
-by adding a values override to the `ingress` release in
-`helmfile.d/02-core.yaml.gotmpl`:
+Set the addon flag in your environment file
+(`environments/<environment-name>.yaml`):
 
 ```yaml
-- name: ingress
-  chart: nvcf/nvcf-gateway-routes
-  ...
-  values:
-    - ../global.yaml.gotmpl
-    - nvcfGatewayRoutes:
-        routes:
-          nvcfUi:
-            enabled: true
+addons:
+  nvcfUi:
+    enabled: true
 ```
 
-<Note>
-When adding `values` to a release that already uses `../global.yaml.gotmpl`,
-you must keep that entry in the list. YAML merge replaces lists entirely.
-</Note>
+This single flag deploys the `nvcf-ui` release and enables the `nvcfUi`
+HTTPRoute and ReferenceGrant on the shared Gateway. No `helmfile.d` edit is
+needed.
 
-Then sync the ingress release to apply:
+## Configure the image pull secret (conditional)
+
+`nvcf-ui` runs in its own `nvcf-ui` namespace, separate from the namespaces
+covered by the main install step. If your `image` registry is private and your
+cluster nodes do not have built-in credential helpers, create a
+`docker-registry` secret in that namespace. See
+[Enabling NVCF UI](./helmfile-installation.md#enabling-nvcf-ui) in the Helmfile
+Installation guide for the exact commands.
+
+## Apply
+
+Preview and apply the service, then sync the ingress release so the route is
+created:
 
 ```bash
+HELMFILE_ENV=<environment-name> helmfile --selector name=nvcf-ui template
+HELMFILE_ENV=<environment-name> helmfile --selector name=nvcf-ui sync
 HELMFILE_ENV=<environment-name> helmfile --selector release-group=ingress sync
 ```
 
-The UI is available at `http://nvcf-ui.<domain>` (substituting your `global.domain` value) after the HTTPRoute is ready.
+The UI is available at `http://nvcf-ui.<domain>` once the HTTPRoute is accepted.
 
 ## Verify
 
 ```bash
-kubectl get httproute -A --field-selector=metadata.name=nvcf-ui
+kubectl get deploy,svc -n nvcf-ui
+
+kubectl get httproute -A --field-selector=metadata.name=nvcf-ui \
+  -o jsonpath='{range .items[*]}{.metadata.namespace}{"\t"}{.spec.hostnames[0]}{"\t"}{.status.parents[*].conditions[?(@.type=="Accepted")].status}{"\n"}{end}'
+
+curl -i -H "Host: nvcf-ui.<domain>" "http://<gateway-address>/status"
 ```
 
-The route should show `Accepted` status and the hostname `nvcf-ui.<domain>` (your `global.domain` value).
+The route lives in the Gateway namespace configured for your install, its
+hostname is `nvcf-ui.<domain>`, and the `Accepted` condition reports `True`.
