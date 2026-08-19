@@ -58,19 +58,19 @@ pub(super) struct GenerationMetricsState {
     pub(super) pinned_input_tps: Option<f64>,
 }
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(super) struct KvCacheStatsSnapshot {
-    pub(super) model: String,
-    pub(super) aliases: Vec<String>,
-    pub(super) kv_cache_capacity_tokens: u64,
-    pub(super) kv_cache_used_tokens: u64,
-    pub(super) kv_cache_free_tokens: u64,
-    pub(super) source_observed_at_unix_ms: u64,
-    pub(super) complete: bool,
+pub struct KvCacheStatsSnapshot {
+    pub(crate) model: String,
+    pub(crate) aliases: Vec<String>,
+    pub(crate) kv_cache_capacity_tokens: u64,
+    pub(crate) kv_cache_used_tokens: u64,
+    pub(crate) kv_cache_free_tokens: u64,
+    pub(crate) source_observed_at_unix_ms: u64,
+    pub(crate) complete: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(super) struct KvCacheStatsEnvelope {
-    pub(super) models: Vec<KvCacheStatsSnapshot>,
+pub struct KvCacheStatsEnvelope {
+    pub(crate) models: Vec<KvCacheStatsSnapshot>,
 }
 struct RequestCounterState {
     generation: ModelGeneration,
@@ -331,6 +331,8 @@ impl StatsAggregator {
             StatsAggregatorUpdate::RequestCounters(update) => {
                 self.apply_request_counters_into(update, updated_models)
             }
+            StatsAggregatorUpdate::KvCache(snapshot) => updated_models
+                .extend(self.apply_kv_cache_snapshot(snapshot, tokio::time::Instant::now())),
             StatsAggregatorUpdate::FinalizeRequest(update) => {
                 updated_models.extend(self.finalize_request(update))
             }

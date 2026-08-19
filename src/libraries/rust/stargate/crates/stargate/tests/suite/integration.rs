@@ -16,6 +16,7 @@
 use std::collections::HashSet;
 use std::io::Write;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::time::Duration;
 
 use crate::common::sse::{assert_sse_done, chat_completion_contents, parse_sse_events};
@@ -25,11 +26,12 @@ use crate::common::{
     reverse_registration_config, start_dummy_backend, start_dummy_inst,
     wait_for_inference_server_ids, wait_for_routing, wait_for_unroutable, with_proxy_headers,
 };
-use axum::body::{Body, Bytes};
+use axum::body::Body;
 use axum::extract::State;
 use axum::http::{HeaderMap, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use futures::Stream;
 use pylon_lib::{
     EngineStatsStreamConfig, EngineStatsStreamMode, InferenceServerRegistrationClient,
     InferenceServerRegistrationConfig, PylonRuntimeState, QuicHttpTunnelConfig,
@@ -39,7 +41,7 @@ use pylon_lib::{
 };
 use stargate::routing::RoutingTargetKey;
 use stargate::test_support::StargateState;
-use stargate_proto::pb::InferenceServerStatus;
+use stargate_proto::{dynamo_frontend_stats as stats_proto, pb::InferenceServerStatus};
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, watch};
 
@@ -128,7 +130,6 @@ async fn end_to_end_engine_stats_stream_reports_model_stats() {
             runtime_state: Some(runtime_state.clone()),
             ..EngineStatsStreamConfig::new(
                 &format!("http://{inst_addr}"),
-                "/pylon/v1/stats/stream",
                 EngineStatsStreamMode::Required,
             )
         },
@@ -495,7 +496,7 @@ async fn reverse_tunnel_handshake_rejects_non_reverse_instance_id() {
 #[derive(Clone)]
 struct EngineStatsState {
     model: String,
-    stats_tx: broadcast::Sender<String>,
+    stats_tx: broadcast::Sender<stats_proto::StatsUpdate>,
     connected_tx: watch::Sender<bool>,
 }
 
@@ -512,15 +513,22 @@ async fn start_engine_stats_inst(
     let addr = listener.local_addr().unwrap();
     let (stats_tx, _) = broadcast::channel(16);
     let (connected_tx, connected_rx) = watch::channel(false);
+    let state = EngineStatsState {
+        model: model.to_string(),
+        stats_tx,
+        connected_tx,
+    };
+    let grpc = tonic::service::Routes::new(
+        stats_proto::frontend_stats_server::FrontendStatsServer::new(EngineStatsGrpc {
+            state: state.clone(),
+        }),
+    )
+    .into_axum_router();
     let app = Router::new()
         .route("/v1/chat/completions", post(engine_stats_chat))
-        .route("/pylon/v1/stats/stream", get(engine_stats_stream))
         .route("/health", get(|| async { "ok" }))
-        .with_state(EngineStatsState {
-            model: model.to_string(),
-            stats_tx,
-            connected_tx,
-        });
+        .with_state(state)
+        .merge(grpc);
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
     });
@@ -533,25 +541,6 @@ async fn start_engine_stats_inst(
         .expect("tunnel failed to start");
     let tunnel_addr = tunnel.listen_addr();
     (addr, format!("quic://{tunnel_addr}"), tunnel, connected_rx)
-}
-
-async fn engine_stats_stream(State(state): State<EngineStatsState>) -> Response<Body> {
-    let _ = state.connected_tx.send(true);
-    let mut events = state.stats_tx.subscribe();
-    let stream = async_stream::stream! {
-        loop {
-            match events.recv().await {
-                Ok(event) => yield Ok::<Bytes, std::convert::Infallible>(Bytes::from(event)),
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(broadcast::error::RecvError::Closed) => break,
-            }
-        }
-    };
-
-    Response::builder()
-        .header("content-type", "application/x-ndjson")
-        .body(Body::from_stream(stream))
-        .unwrap()
 }
 
 async fn engine_stats_chat(
@@ -571,30 +560,8 @@ async fn engine_stats_chat(
         .and_then(|value| value.to_str().ok())
         .expect("test proxy should send x-request-id");
     let model = state.model.clone();
-    send_engine_stats_event(
-        &state.stats_tx,
-        serde_json::json!({
-            "v": 1,
-            "type": "stats",
-            "request_id": request_id,
-            "model": model,
-            "tokens_processed": 1,
-            "tokens_generated": 0,
-            "finished": false,
-        }),
-    );
-    send_engine_stats_event(
-        &state.stats_tx,
-        serde_json::json!({
-            "v": 1,
-            "type": "stats",
-            "request_id": request_id,
-            "model": model,
-            "tokens_processed": 1,
-            "tokens_generated": 2,
-            "finished": true,
-        }),
-    );
+    send_engine_stats_event(&state.stats_tx, request_id, &model, Some(1), Some(0), false);
+    send_engine_stats_event(&state.stats_tx, request_id, &model, Some(1), Some(2), true);
 
     let data_chunk = format!(
         r#"{{"object":"chat.completion.chunk","model":"{model}","choices":[{{"delta":{{"content":"Hello from engine stats"}}}}]}}"#
@@ -611,8 +578,72 @@ data: [DONE]\n\n"
         .unwrap()
 }
 
-fn send_engine_stats_event(tx: &broadcast::Sender<String>, event: serde_json::Value) {
-    let _ = tx.send(format!("{event}\n"));
+fn send_engine_stats_event(
+    tx: &broadcast::Sender<stats_proto::StatsUpdate>,
+    request_id: &str,
+    model: &str,
+    tokens_processed: Option<u64>,
+    tokens_generated: Option<u64>,
+    finished: bool,
+) {
+    let _ = tx.send(stats_proto::StatsUpdate {
+        update: Some(stats_proto::stats_update::Update::RequestStats(
+            stats_proto::RequestStats {
+                request_id: request_id.to_string(),
+                model: model.to_string(),
+                tokens_processed,
+                tokens_generated,
+                finished,
+            },
+        )),
+    });
+}
+
+#[derive(Clone)]
+struct EngineStatsGrpc {
+    state: EngineStatsState,
+}
+
+#[tonic::async_trait]
+impl stats_proto::frontend_stats_server::FrontendStats for EngineStatsGrpc {
+    type WatchStatsStream =
+        Pin<Box<dyn Stream<Item = Result<stats_proto::StatsUpdate, tonic::Status>> + Send>>;
+    type WatchKvPlacementsStream =
+        Pin<Box<dyn Stream<Item = Result<stats_proto::KvPlacementUpdate, tonic::Status>> + Send>>;
+
+    async fn watch_stats(
+        &self,
+        _request: tonic::Request<stats_proto::WatchStatsRequest>,
+    ) -> Result<tonic::Response<Self::WatchStatsStream>, tonic::Status> {
+        let _ = self.state.connected_tx.send(true);
+        let mut events = self.state.stats_tx.subscribe();
+        let stream = async_stream::stream! {
+            yield Ok(stats_proto::StatsUpdate {
+                update: Some(stats_proto::stats_update::Update::KvStats(
+                    stats_proto::KvStatsSnapshot {
+                        snapshot_id: 1,
+                        observed_at_unix_ms: 1,
+                        models: Vec::new(),
+                    },
+                )),
+            });
+            loop {
+                match events.recv().await {
+                    Ok(event) => yield Ok(event),
+                    Err(broadcast::error::RecvError::Lagged(_)) => break,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        };
+        Ok(tonic::Response::new(Box::pin(stream)))
+    }
+
+    async fn watch_kv_placements(
+        &self,
+        _request: tonic::Request<stats_proto::WatchKvPlacementsRequest>,
+    ) -> Result<tonic::Response<Self::WatchKvPlacementsStream>, tonic::Status> {
+        Err(tonic::Status::unimplemented("placements are not used here"))
+    }
 }
 
 async fn wait_for_engine_stats_stream_connection(

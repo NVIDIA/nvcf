@@ -339,7 +339,7 @@ async fn start_pylon_runtime(args: &Args, plan: &PylonStartupPlan) -> Result<Run
             .unwrap_or(""),
     );
     let metrics_server = start_metrics_server(plan.metrics_addr, metrics.registry()).await?;
-    let stats_config = stats_collector_config_from_args(args, &plan.upstream);
+    let stats_config = stats_collector_config_from_args(args);
     let (runtime_state, request_observation_rx) = PylonRuntimeState::observed(
         InferenceServerStatus::Active,
         &[],
@@ -431,11 +431,7 @@ fn start_engine_stats_runtime(
     flume::Receiver<pylon_lib::StatsAggregatorUpdate>,
 )> {
     let (stats_update_tx, stats_update_rx) = stats_aggregator_update_channel(stats_config);
-    let mut config = EngineStatsStreamConfig::new(
-        &plan.upstream,
-        &args.engine_stats_stream_path,
-        args.engine_stats_stream,
-    );
+    let mut config = EngineStatsStreamConfig::new(&plan.upstream, args.engine_stats_stream);
     config.metrics = Some(metrics);
     config.runtime_state = Some(runtime_state);
     let mode = config.mode;
@@ -525,20 +521,9 @@ fn tunnel_forwarding_config_from_plan(
     }
 }
 
-pub(crate) fn stats_collector_config_from_args(
-    args: &Args,
-    upstream: &str,
-) -> StatsCollectorConfig {
+pub(crate) fn stats_collector_config_from_args(args: &Args) -> StatsCollectorConfig {
     StatsCollectorConfig {
         openai_fallback_stats_enabled: args.engine_stats_stream == EngineStatsStreamMode::Off,
-        // Dynamo exposes this canonical stream independently from request stats.
-        kv_cache_stats_url: args.kv_cache_stats_path.as_deref().map(|path| {
-            format!(
-                "{}/{}",
-                upstream.trim_end_matches('/'),
-                path.trim_start_matches('/')
-            )
-        }),
         ..Default::default()
     }
 }
@@ -1334,19 +1319,10 @@ mod tests {
     }
 
     #[test]
-    fn stats_config_uses_normalized_upstream() {
-        let (args, plan) = startup(&[
-            "--engine-stats-stream",
-            "required",
-            "--kv-cache-stats-path",
-            "kv/live",
-        ]);
-        let stats = stats_collector_config_from_args(&args, &plan.upstream);
+    fn required_stats_config_disables_fallback() {
+        let (args, _) = startup(&["--engine-stats-stream", "required"]);
+        let stats = stats_collector_config_from_args(&args);
 
-        assert_eq!(
-            stats.kv_cache_stats_url.as_deref(),
-            Some("http://127.0.0.1:8090/kv/live")
-        );
         assert!(!stats.openai_fallback_stats_enabled);
     }
 
@@ -1354,7 +1330,7 @@ mod tests {
     async fn configured_input_tps_seeds_queue_estimates_before_engine_stats() {
         let (args, plan) = startup(&[]);
         let metrics = PylonMetrics::new().expect("metrics should initialize");
-        let mut config = stats_collector_config_from_args(&args, &plan.upstream);
+        let mut config = stats_collector_config_from_args(&args);
         config.openai_fallback_stats_enabled = true;
         let (runtime_state, request_observation_rx) = PylonRuntimeState::observed(
             InferenceServerStatus::Unknown,

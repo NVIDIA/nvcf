@@ -848,73 +848,6 @@ mod tests {
         }
     }
 
-    #[derive(Clone)]
-    struct BlockingKvCacheState {
-        blocked: Arc<AtomicBool>,
-        blocked_polls: Arc<AtomicUsize>,
-        released: Arc<Notify>,
-    }
-
-    struct BlockingKvCacheServer {
-        server: TestHttpServer,
-        blocked: Arc<AtomicBool>,
-        blocked_polls: Arc<AtomicUsize>,
-        released: Arc<Notify>,
-    }
-
-    impl BlockingKvCacheServer {
-        async fn spawn() -> Self {
-            let blocked = Arc::new(AtomicBool::new(false));
-            let blocked_polls = Arc::new(AtomicUsize::new(0));
-            let released = Arc::new(Notify::new());
-            let state = BlockingKvCacheState {
-                blocked: blocked.clone(),
-                blocked_polls: blocked_polls.clone(),
-                released: released.clone(),
-            };
-            let server = TestHttpServer::spawn(
-                Router::new()
-                    .route("/kv-cache", get(test_kv_cache))
-                    .with_state(state),
-            )
-            .await;
-            Self {
-                server,
-                blocked,
-                blocked_polls,
-                released,
-            }
-        }
-
-        fn url(&self) -> String {
-            format!("{}/kv-cache", self.server.as_str())
-        }
-
-        fn block(&self) {
-            self.blocked.store(true, Ordering::SeqCst);
-        }
-
-        fn unblock(&self) {
-            self.blocked.store(false, Ordering::SeqCst);
-            self.released.notify_waiters();
-        }
-
-        fn blocked_poll_count(&self) -> usize {
-            self.blocked_polls.load(Ordering::SeqCst)
-        }
-
-        async fn wait_for_blocked_poll_after(&self, count: usize) {
-            wait_for("KV-cache stats poll should block", || {
-                self.blocked_polls.load(Ordering::SeqCst) > count
-            })
-            .await;
-        }
-
-        async fn shutdown(self) {
-            self.server.shutdown().await;
-        }
-    }
-
     async fn test_models(State(state): State<TestUpstreamState>) -> Response {
         state.discovery_polls.fetch_add(1, Ordering::SeqCst);
         state.discovery_polled.notify_one();
@@ -984,26 +917,6 @@ mod tests {
         } else {
             std::future::pending().await
         }
-    }
-
-    async fn test_kv_cache(State(state): State<BlockingKvCacheState>) -> Response {
-        if state.blocked.load(Ordering::SeqCst) {
-            state.blocked_polls.fetch_add(1, Ordering::SeqCst);
-            loop {
-                let released = state.released.notified();
-                if !state.blocked.load(Ordering::SeqCst) {
-                    break;
-                }
-                released.await;
-            }
-        }
-        Json(json!({
-            "model": "model-a",
-            "kv_cache_capacity_tokens": 1000,
-            "kv_cache_used_tokens": 400,
-            "kv_cache_free_tokens": 600
-        }))
-        .into_response()
     }
 
     fn discovery_config(base_url: &str) -> ModelLifecycleConfig {
@@ -1272,15 +1185,7 @@ mod tests {
 
     #[tokio::test]
     async fn retire_cancels_canary_before_removing_runtime_generation() {
-        let kv_cache = BlockingKvCacheServer::spawn().await;
-        let stats_config = StatsCollectorConfig {
-            kv_cache_stats_url: Some(kv_cache.url()),
-            // Reconnect quickly and keep the request open so retirement parks on
-            // stats cleanup after the canary ordering point under test.
-            kv_cache_reconnect_interval: Duration::from_millis(1),
-            kv_cache_connect_timeout: Duration::from_secs(60),
-            ..StatsCollectorConfig::default()
-        };
+        let stats_config = StatsCollectorConfig::default();
         let (runtime_state, observations) = PylonRuntimeState::observed(
             InferenceServerStatus::Active,
             &[],
@@ -1344,9 +1249,6 @@ mod tests {
             next_poll_at: None,
         };
 
-        let blocked_polls = kv_cache.blocked_poll_count();
-        kv_cache.block();
-        kv_cache.wait_for_blocked_poll_after(blocked_polls).await;
         let retire_generation = generation.clone();
         let retire = tokio::spawn(async move {
             supervisor.retire(&retire_generation).await;
@@ -1367,12 +1269,8 @@ mod tests {
             "normal retirement must not look like an unexpected canary exit"
         );
 
-        kv_cache.unblock();
-        let _supervisor = retire
-            .await
-            .expect("retirement task should not panic after stats resumes");
+        let _supervisor = retire.await.expect("retirement task should not panic");
         stats.shutdown().await;
-        kv_cache.shutdown().await;
     }
 
     #[tokio::test]

@@ -254,16 +254,16 @@ pub(crate) async fn test_control_snapshot(
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct KvStatsTestControlUpdate {
+pub(crate) struct StatsStreamTestControlUpdate {
     pub(crate) enabled: bool,
 }
 
-pub(crate) async fn update_kv_stats_test_control(
+pub(crate) async fn update_stats_stream_test_control(
     State(state): State<AppState>,
-    Json(update): Json<KvStatsTestControlUpdate>,
+    Json(update): Json<StatsStreamTestControlUpdate>,
 ) -> axum::http::StatusCode {
     state
-        .kv_stats_enabled
+        .stats_stream_enabled
         .store(update.enabled, Ordering::Relaxed);
     axum::http::StatusCode::NO_CONTENT
 }

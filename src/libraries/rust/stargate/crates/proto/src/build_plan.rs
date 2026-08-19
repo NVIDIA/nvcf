@@ -24,7 +24,7 @@ pub(crate) struct ProtoCompilePlan {
     pub field_attributes: &'static [(&'static str, &'static str)],
 }
 
-pub(crate) fn proto_compile_plans() -> [ProtoCompilePlan; 2] {
+pub(crate) fn proto_compile_plans() -> [ProtoCompilePlan; 3] {
     [
         ProtoCompilePlan {
             protos: &["proto/stargate.proto"],
@@ -49,6 +49,13 @@ pub(crate) fn proto_compile_plans() -> [ProtoCompilePlan; 2] {
             type_attributes: &[],
             field_attributes: &[],
         },
+        ProtoCompilePlan {
+            protos: &["proto/dynamo_frontend_stats.proto"],
+            includes: &["proto"],
+            build_server: true,
+            type_attributes: &[],
+            field_attributes: &[],
+        },
     ]
 }
 
@@ -58,7 +65,7 @@ mod tests {
 
     #[test]
     fn stargate_plan_carries_watch_response_serde_attributes() {
-        let [stargate_plan, _] = proto_compile_plans();
+        let [stargate_plan, _, _] = proto_compile_plans();
 
         assert_eq!(stargate_plan.protos, ["proto/stargate.proto"]);
         assert!(stargate_plan.build_server);
@@ -68,12 +75,21 @@ mod tests {
 
     #[test]
     fn gateway_plan_builds_client_and_server_proto() {
-        let [_, gateway_plan] = proto_compile_plans();
+        let [_, gateway_plan, _] = proto_compile_plans();
 
         assert_eq!(gateway_plan.protos, ["proto/llm_gateway.proto"]);
         assert_eq!(gateway_plan.includes, ["proto"]);
         assert!(gateway_plan.build_server);
         assert!(gateway_plan.type_attributes.is_empty());
         assert!(gateway_plan.field_attributes.is_empty());
+    }
+
+    #[test]
+    fn dynamo_frontend_stats_plan_builds_client_and_server_proto() {
+        let [_, _, stats_plan] = proto_compile_plans();
+
+        assert_eq!(stats_plan.protos, ["proto/dynamo_frontend_stats.proto"]);
+        assert_eq!(stats_plan.includes, ["proto"]);
+        assert!(stats_plan.build_server);
     }
 }
