@@ -45,6 +45,7 @@ type Config struct {
 	MappingPath                  string        `mapstructure:"MAPPING_PATH"`
 	MappingLoadTimeout           time.Duration `mapstructure:"MAPPING_LOAD_TIMEOUT"`
 	NvcfApiEndpoint              string        `mapstructure:"NVCF_API_ENDPOINT"`
+	LLMGatewayEndpoint           string        `mapstructure:"LLM_GATEWAY_ENDPOINT"`
 	PrivateModelNameRegexPattern string        `mapstructure:"PRIVATE_MODEL_NAME_REGEX_PATTERN"`
 	PodIP                        string        `mapstructure:"POD_IP"`
 	AWSRegion                    string        `mapstructure:"AWS_REGION"`

@@ -45,6 +45,7 @@ Configuration is passed through environment variables.
 | `MAPPING_PATH` | Yes | None | Path to the rendered mapping config file. |
 | `MAPPING_LOAD_TIMEOUT` | No | `15s` | Maximum time to wait at startup for `MAPPING_PATH` to appear. Increase this when a ConfigMap projection or remote-config sidecar materializes the file after the main container starts. Duration strings require a unit, such as `2m` or `90s`. A value without a unit is rejected when configuration is loaded, and a negative value is rejected at startup. |
 | `NVCF_API_ENDPOINT` | No | Service default | Upstream invocation service endpoint. In cluster deployments, this usually points to the in-cluster invocation service. |
+| `LLM_GATEWAY_ENDPOINT` | No | Empty | Upstream LLM Gateway endpoint. Required only when `v2config.llmGateway` declares a host. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | Empty | OTLP endpoint for tracing. Empty disables OTLP export. |
 | `TRACING_ACCESS_TOKEN` | No | Empty | Access token for OTLP tracing. Also configurable in the secrets file under `$.tracingAccessToken`. |
 | `SECRETS_PATH` | No | `vault/secrets.json` | File used to read `tracingAccessToken` when `TRACING_ACCESS_TOKEN` is not set. |
@@ -171,6 +172,9 @@ v2config:
           functionID: 00000000-0000-0000-0000-000000000004
           functionVersionID: 11111111-1111-1111-1111-111111111114
           usePexec: true
+  llmGateway:
+    example_llm:
+      host: llm.api.example.com
 ```
 
 ### OpenAI Mapping Fields
@@ -249,6 +253,67 @@ response completes.
 | shadow fields | No | Unsupported for Vanity URL routes. `shadowFunctionID`, `shadowFunctionVersionID`, `shadowPercentage`, and `shadowSamplingMethod` are rejected during config validation. |
 
 `customHeaders` only affects outbound proxied requests; it does not add response headers. Header names must be valid HTTP field names and cannot include reserved routing, auth, protocol, proxy, or NVCF-managed names such as `Authorization`, `Host`, `function-id`, `function-version-id`, `Content-Length`, `Connection`, or any `NVCF-*` header.
+
+### LLM Gateway Mapping Fields
+
+Hosts under `v2config.llmGateway` serve the LLM Gateway's OpenAI-compatible
+routes instead of invoking a function. Each host serves exactly
+`POST /v1/chat/completions`, `POST /v1/responses`, and `POST /v1/embeddings`,
+the routes the LLM Gateway registers, plus `GET /health` and `GET /info`.
+
+The gateway proxies these routes to `LLM_GATEWAY_ENDPOINT` unchanged. It does
+not read or rewrite the request body, and it does not set `function-id`,
+`function-version-id`, or `NVCF-POLL-SECONDS`. Clients send the same body they
+would send to the LLM Gateway directly, including the `functionID/model-name`
+form of `model`, and the LLM Gateway resolves the function from it. An entry
+therefore has no `functionID` and no model list.
+
+```yaml
+v2config:
+  llmGateway:
+    example_llm:
+      host: llm.api.example.com
+```
+
+`host` is a hostname this gateway serves, not the LLM Gateway's own hostname.
+Requests have to reach this gateway first, so the hostname must resolve to it
+and its ingress must route it here. Pointing `host` at a name that already
+routes directly to the LLM Gateway registers a route table that never receives
+a request.
+
+| Field | Required | Description |
+| --- | --- | --- |
+| llmGateway map key | Yes | YAML map key for a host entry. It cannot contain periods. |
+| `host` | Yes | Host header served by this gateway and proxied to the LLM Gateway. Must not be used by the `openai` or `vanity` sections. |
+| `customHeaders` | No | Map of static request headers to set on the upstream request. Same rules as vanity routes, and `X-Priority` is additionally rejected because the LLM Gateway answers `400 Bad Request` for any request carrying it. |
+| `eol` | No | RFC3339 timestamp. Future dates add a `Deprecation` header; past dates return `410 Gone`. |
+| `offlineMessage` | No | Non-empty value returns `503 Service Unavailable` with this message. |
+
+`LLM_GATEWAY_ENDPOINT` is required whenever this section declares a host. It is
+the outbound address of the LLM Gateway, so it is a full URL with a scheme, and
+it is not the same value as `host`. `host` is the inbound name clients dial.
+
+Startup rejects a `host` that matches the `LLM_GATEWAY_ENDPOINT` hostname. The
+proxy clears the inbound `Host`, so the outbound request would come back to this
+gateway, match the same entry, and loop rather than fail.
+
+Config validation also rejects a host claimed by more than one section, because
+routing is keyed by host and a collision would silently drop one section's
+routes.
+
+The optional fields apply to every route on the host. `offlineMessage` takes
+priority over `eol`, and both are answered by the gateway without contacting the
+LLM Gateway:
+
+```yaml
+v2config:
+  llmGateway:
+    retiring_llm:
+      host: old.llm.api.example.com
+      eol: "2026-12-31T23:59:59Z"
+      customHeaders:
+        X-Provider-Feature: enabled
+```
 
 ## Invoking OpenAI-compatible Endpoints
 
@@ -375,6 +440,11 @@ curl -v localhost:10081/health
 curl -v -H 'Host: api.example.com' localhost:10081/health
 curl -v localhost:10083/metrics
 ```
+
+`/health` reports one check per configured upstream. The `nvcf api` check probes
+`/health` on `NVCF_API_ENDPOINT`. When `v2config.llmGateway` declares a host, an
+`llm api gateway` check probes `/healthz` on `LLM_GATEWAY_ENDPOINT`, since the
+LLM Gateway does not serve `/health`.
 
 `nvcf_ai_api_gateway_shadow_requests_dropped_total` counts shadow dispatches
 dropped before replay. The `openai_model_name` label identifies the shadow
