@@ -110,8 +110,8 @@ vault.hashicorp.com/role: {{ $role | quote }}
 vault.hashicorp.com/auth-path: {{ .Values.eventLedger.vault.jwtAuthPath | default "auth/jwt" | quote }}
 vault.hashicorp.com/agent-service-account-token-volume-name: {{ include "nvcf-event-ledger.openbaoTokenVolumeName" . | quote }}
 vault.hashicorp.com/auth-config-token-path: {{ include "nvcf-event-ledger.openbaoTokenPath" . | quote }}
-vault.hashicorp.com/agent-copy-volume-mounts: {{ include "nvcf-event-ledger.fullname" . | quote }}
-vault.hashicorp.com/agent-inject-template-file-secrets.json: "/vault/config/templates/secrets.json.tmpl"
+vault.hashicorp.com/agent-inject-template-secrets.json: |
+{{ .Files.Get "files/secrets.json.tmpl" | trim | indent 2 }}
 vault.hashicorp.com/secret-volume-path: "/vault/secrets"
 {{- end }}
 

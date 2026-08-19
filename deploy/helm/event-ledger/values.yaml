@@ -58,7 +58,6 @@ eventLedger:
   podSecurityContext: {}
   securityContext:
     allowPrivilegeEscalation: false
-    runAsNonRoot: true
     capabilities:
       drop:
         - ALL

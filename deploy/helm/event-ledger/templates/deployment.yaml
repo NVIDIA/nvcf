@@ -50,12 +50,6 @@ spec:
       securityContext:
         {{- toYaml .Values.eventLedger.podSecurityContext | nindent 8 }}
       volumes:
-        - name: vault-config-templates
-          configMap:
-            name: {{ include "nvcf-event-ledger.fullname" . }}-vault-agent-tpl
-            items:
-              - key: secrets.json.tmpl
-                path: secrets.json.tmpl
         - name: app-config
           configMap:
             name: {{ include "nvcf-event-ledger.fullname" . }}-app-config
@@ -79,9 +73,6 @@ spec:
           image: {{ include "nvcf-event-ledger.image" . | quote }}
           imagePullPolicy: {{ .Values.eventLedger.image.pullPolicy }}
           volumeMounts:
-            - name: vault-config-templates
-              mountPath: /vault/config/templates
-              readOnly: true
             - name: app-config
               mountPath: /etc/event-ledger
               readOnly: true
