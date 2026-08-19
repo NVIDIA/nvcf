@@ -67,7 +67,7 @@ pub(crate) fn input_work_seconds_for_request(
         candidates
             .iter()
             .filter(|candidate| match config.algorithm() {
-                LoadBalancerAlgorithm::Pulsar | LoadBalancerAlgorithm::PulsarMultiregion => {
+                LoadBalancerAlgorithm::Pulsar | LoadBalancerAlgorithm::PulsarWaitAndWiden => {
                     pulsar::input_work_admission_candidate(config, request, candidate)
                 }
                 _ => !request.excludes_cluster(&candidate.cluster_id),

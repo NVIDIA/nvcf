@@ -1,0 +1,47 @@
+---
+# Source: kai-scheduler/templates/default-queue.yaml
+# Copyright 2025 NVIDIA CORPORATION
+# SPDX-License-Identifier: Apache-2.0
+apiVersion: scheduling.run.ai/v2
+kind: Queue
+metadata:
+    name: default-parent-queue
+    annotations:
+        helm.sh/resource-policy: keep
+spec:
+    resources:
+        cpu:
+            quota: -1
+            limit: -1
+            overQuotaWeight: 1
+        gpu:
+            quota: -1
+            limit: -1
+            overQuotaWeight: 1
+        memory:
+            quota: -1
+            limit: -1
+            overQuotaWeight: 1
+---
+# Source: kai-scheduler/templates/default-queue.yaml
+apiVersion: scheduling.run.ai/v2
+kind: Queue
+metadata:
+    name: default-queue
+    annotations:
+        helm.sh/resource-policy: keep
+spec:
+    parentQueue: default-parent-queue
+    resources:
+        cpu:
+            quota: -1
+            limit: -1
+            overQuotaWeight: 1
+        gpu:
+            quota: -1
+            limit: -1
+            overQuotaWeight: 1
+        memory:
+            quota: -1
+            limit: -1
+            overQuotaWeight: 1

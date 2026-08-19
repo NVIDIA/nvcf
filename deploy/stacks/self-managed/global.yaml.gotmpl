@@ -39,6 +39,11 @@ cassandra:
   replicaCount: {{ dig "cassandra" "replicaCount" 3 .Values }}
   resourcesPreset: {{ dig "cassandra" "resourcesPreset" "xlarge" .Values }}
 
+  {{- with dig "cassandra" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
   {{- with include "nvcf.nodeSelector" (dict "type" "cassandra" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}
@@ -137,17 +142,24 @@ openbao:
     {{- end }}
     replicas: {{ .Values.openbao.injector.replicas }}
     {{- $nvcfUiEnabled := dig "addons" "nvcfUi" "enabled" false .Values }}
-    {{- with .Values.openbao.injector.webhook }}
+    {{- with dig "openbao" "injector" "webhook" dict .Values }}
     webhook:
       {{- $webhook := deepCopy . }}
+      {{- $matchExpressions := dig "namespaceSelector" "matchExpressions" list $webhook }}
       {{- if $nvcfUiEnabled }}
-      {{- $expr := index $webhook.namespaceSelector.matchExpressions 0 }}
-      {{- $_ := set $expr "values" (append $expr.values "nvcf-ui") }}
+      {{- range $expr := $matchExpressions }}
+      {{- if and (eq (dig "key" "" $expr) "kubernetes.io/metadata.name") (eq (dig "operator" "" $expr) "In") }}
+      {{- $values := dig "values" list $expr }}
+      {{- if not (has "nvcf-ui" $values) }}
+      {{- $_ := set $expr "values" (append $values "nvcf-ui") }}
+      {{- end }}
+      {{- end }}
+      {{- end }}
       {{- end }}
       {{- toYaml $webhook | nindent 6 }}
     {{- end }}
     podDisruptionBudget:
-      minAvailable: 1
+      minAvailable: {{ dig "openbao" "injector" "podDisruptionBudget" "minAvailable" 1 .Values }}
   server:
     image:
       registry: {{ .Values.global.image.registry }}
@@ -164,6 +176,12 @@ openbao:
       storageClass: {{ .Values.global.storageClass }}
       {{- end }}
       size: {{ .Values.global.storageSize | default "10Gi" }}
+
+    ha:
+      {{- with dig "openbao" "server" "ha" "disruptionBudget" dict .Values }}
+      disruptionBudget:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
 
 nats:
   {{- if .Values.global.imagePullSecrets }}
@@ -216,6 +234,11 @@ nats:
           storageClassName: {{ .Values.global.storageClass }}
   {{- end }}
 
+  {{- with dig "nats" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
 apikeys:
   fullnameOverride: api-keys
   {{- if .Values.global.imagePullSecrets }}
@@ -230,6 +253,10 @@ apikeys:
   {{- end }}
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
+  {{- end }}
+  {{- with dig "apikeys" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
   {{- end }}
 
 natsAuthCalloutService:
@@ -252,6 +279,65 @@ natsAuthCalloutService:
 {{- $invocationWorkerBaseURL := dig "invocationServiceURL" "" $workerEndpoints }}
 {{- $grpcProxyWorkerConnectURL := dig "grpcProxyWorkerConnectURL" "" $workerEndpoints }}
 {{- $grpcProxyWorkerConnectBaseURL := dig "grpcproxy" "workerConnectBaseURL" "" .Values | default $grpcProxyWorkerConnectURL }}
+{{- $llmRequestRouterGrpcPort := dig "addons" "llm" "requestRouter" "service" "grpcPort" 50071 .Values }}
+{{- $llmRequestRouterDefaultAddress := printf "llm-request-router.nvcf.svc.cluster.local:%v" $llmRequestRouterGrpcPort }}
+{{- $llmRequestRouterWorkerAddress := dig "llmRequestRouterAddress" "" $workerEndpoints | trim | default $llmRequestRouterDefaultAddress }}
+{{- $llmEnabled := dig "addons" "llm" "enabled" false .Values }}
+{{- if $llmEnabled }}
+{{- $llmRequestRouterWorkerAddressError := "global.workerEndpoints.llmRequestRouterAddress must use DNS-or-IPv4:port or [IPv6]:port with port 1-65535" }}
+{{- $llmRequestRouterDNSAddressPattern := `^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*:[0-9]{1,5}$` }}
+{{- $llmRequestRouterBracketedIPv6Pattern := `^\[[0-9A-Fa-f:.]+\]:[0-9]{1,5}$` }}
+{{- $llmRequestRouterWorkerAddressValid := regexMatch $llmRequestRouterDNSAddressPattern $llmRequestRouterWorkerAddress }}
+{{- if regexMatch $llmRequestRouterBracketedIPv6Pattern $llmRequestRouterWorkerAddress }}
+{{- $llmRequestRouterIPv6Host := regexFind `^\[[0-9A-Fa-f:.]+\]` $llmRequestRouterWorkerAddress | trimPrefix "[" | trimSuffix "]" }}
+{{- $llmRequestRouterIPv6Valid := true }}
+{{- $llmRequestRouterIPv6CompressionCount := len (regexFindAll `::` $llmRequestRouterIPv6Host -1) }}
+{{- if or (contains `:::` $llmRequestRouterIPv6Host) (gt $llmRequestRouterIPv6CompressionCount 1) }}
+{{- $llmRequestRouterIPv6Valid = false }}
+{{- end }}
+{{- if or (and (hasPrefix `:` $llmRequestRouterIPv6Host) (not (hasPrefix `::` $llmRequestRouterIPv6Host))) (and (hasSuffix `:` $llmRequestRouterIPv6Host) (not (hasSuffix `::` $llmRequestRouterIPv6Host))) }}
+{{- $llmRequestRouterIPv6Valid = false }}
+{{- end }}
+{{- $llmRequestRouterIPv6HexPart := $llmRequestRouterIPv6Host }}
+{{- $llmRequestRouterIPv6RequiredHextets := 8 }}
+{{- if contains `.` $llmRequestRouterIPv6Host }}
+{{- $llmRequestRouterIPv4OctetPattern := `(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]?|0)` }}
+{{- $llmRequestRouterIPv4SuffixPattern := printf `(^|:)(%s)(\.%s){3}$` $llmRequestRouterIPv4OctetPattern $llmRequestRouterIPv4OctetPattern }}
+{{- $llmRequestRouterIPv4Suffix := regexFind $llmRequestRouterIPv4SuffixPattern $llmRequestRouterIPv6Host | trimPrefix ":" }}
+{{- if not $llmRequestRouterIPv4Suffix }}
+{{- $llmRequestRouterIPv6Valid = false }}
+{{- else }}
+{{- $llmRequestRouterIPv6HexPart = trimSuffix $llmRequestRouterIPv4Suffix $llmRequestRouterIPv6Host }}
+{{- $llmRequestRouterIPv6RequiredHextets = 6 }}
+{{- end }}
+{{- end }}
+{{- $llmRequestRouterIPv6ExplicitHextets := 0 }}
+{{- range $llmRequestRouterIPv6Hextet := splitList `:` $llmRequestRouterIPv6HexPart }}
+{{- if $llmRequestRouterIPv6Hextet }}
+{{- $llmRequestRouterIPv6ExplicitHextets = add $llmRequestRouterIPv6ExplicitHextets 1 }}
+{{- if not (regexMatch `^[0-9A-Fa-f]{1,4}$` $llmRequestRouterIPv6Hextet) }}
+{{- $llmRequestRouterIPv6Valid = false }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- if and (eq $llmRequestRouterIPv6CompressionCount 0) (ne $llmRequestRouterIPv6ExplicitHextets $llmRequestRouterIPv6RequiredHextets) }}
+{{- $llmRequestRouterIPv6Valid = false }}
+{{- end }}
+{{- if and (eq $llmRequestRouterIPv6CompressionCount 1) (ge $llmRequestRouterIPv6ExplicitHextets $llmRequestRouterIPv6RequiredHextets) }}
+{{- $llmRequestRouterIPv6Valid = false }}
+{{- end }}
+{{- if $llmRequestRouterIPv6Valid }}
+{{- $llmRequestRouterWorkerAddressValid = true }}
+{{- end }}
+{{- end }}
+{{- if not $llmRequestRouterWorkerAddressValid }}
+{{- fail $llmRequestRouterWorkerAddressError }}
+{{- end }}
+{{- $llmRequestRouterWorkerPort := regexFind `[0-9]{1,5}$` $llmRequestRouterWorkerAddress | atoi }}
+{{- if or (lt $llmRequestRouterWorkerPort 1) (gt $llmRequestRouterWorkerPort 65535) }}
+{{- fail $llmRequestRouterWorkerAddressError }}
+{{- end }}
+{{- end }}
 {{- $nvcfApiGrpcRouteHostnames := dig "ingress" "gatewayApi" "routes" "nvcfApi" "grpc" "hostnames" (list) .Values | default (list (printf "api-grpc.%s" .Values.global.domain)) }}
 {{- $nvctApiGrpcRouteHostnames := dig "ingress" "gatewayApi" "routes" "nvctApi" "grpc" "hostnames" (list) .Values | default (list (printf "tasks-grpc.%s" .Values.global.domain)) }}
 api:
@@ -273,6 +359,13 @@ api:
   {{- end }}
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
+  {{- end }}
+  {{- if $llmEnabled }}
+  remoteConfig:
+    configData:
+      nvcf:
+        llm-request-router:
+          worker-address: {{ $llmRequestRouterWorkerAddress | quote }}
   {{- end }}
   accountBootstrap:
     image:
@@ -326,20 +419,15 @@ api:
     NVCF_ESS_WORKER_BASE_URL: {{ . | quote }}
     NVCF_ESS_BASE_URL: {{ . | quote }}
     {{- end }}
-    NVCF_REGISTRIES_NGC_CONTAINER_REGISTRY_URL: "https://nvcr.io"
-    NVCF_REGISTRIES_NGC_BASE_URL: "https://api.ngc.nvidia.com"
-    NVCF_REGISTRIES_NGC_OAUTH2_BASE_URL: "https://authn.nvidia.com"
-    NVCF_REGISTRIES_NGC_OAUTH2_GROUP_SCOPE: "ngc"
-    NVCF_REGISTRIES_RECOGNIZED_CONTAINER_NGC_HOSTNAME: "nvcr.io"
-    NVCF_REGISTRIES_RECOGNIZED_HELM_NGC_HOSTNAME: "helm.ngc.nvidia.com"
-    NVCF_REGISTRIES_RECOGNIZED_HELM_NGC_OAUTH2_BASE_URL: "https://authn.nvidia.com"
-    NVCF_REGISTRIES_RECOGNIZED_HELM_NGC_OAUTH2_GROUP_SCOPE: "ngc"
-    NVCF_REGISTRIES_RECOGNIZED_MODEL_NGC_HOSTNAME: "api.ngc.nvidia.com"
-    NVCF_REGISTRIES_RECOGNIZED_MODEL_NGC_OAUTH2_BASE_URL: "https://authn.nvidia.com"
-    NVCF_REGISTRIES_RECOGNIZED_MODEL_NGC_OAUTH2_GROUP_SCOPE: "ngc"
-    NVCF_REGISTRIES_RECOGNIZED_RESOURCE_NGC_HOSTNAME: "api.ngc.nvidia.com"
-    NVCF_REGISTRIES_RECOGNIZED_RESOURCE_NGC_OAUTH2_BASE_URL: "https://authn.nvidia.com"
-    NVCF_REGISTRIES_RECOGNIZED_RESOURCE_NGC_OAUTH2_GROUP_SCOPE: "ngc"
+    {{- with dig "api" "icmsBaseUrl" nil .Values }}
+    NVCF_ICMS_BASE_URL: {{ . | quote }}
+    {{- end }}
+    {{- with dig "api" "jwt" "issuerUri" nil .Values }}
+    SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: {{ . | quote }}
+    {{- end }}
+    {{- with dig "api" "jwt" "jwkSetUri" nil .Values }}
+    SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: {{ . | quote }}
+    {{- end }}
     # Observability
     MANAGEMENT_TRACING_ENABLED: {{ .Values.global.observability.tracing.enabled | quote }}
     {{- if .Values.global.observability.tracing.enabled }}
@@ -377,7 +465,16 @@ invocation:
     {{- with $invocationWorkerBaseURL }}
     WORKER_STREAM_PROPERTIES__SELF_ADDRESS: {{ . | quote }}
     {{- end }}
-  
+  {{- with dig "invocation" "tracing" "baggageAttributeAllowlist" nil .Values }}
+  tracing:
+    baggageAttributeAllowlist:
+    {{- toYaml . | nindent 6 }}
+  {{- end }}
+  {{- with dig "invocation" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
 nvctApi:
   fullnameOverride: nvct-api
   {{- if .Values.global.imagePullSecrets }}
@@ -400,6 +497,15 @@ nvctApi:
     {{- with $essWorkerBaseURL }}
     NVCT_ESS_BASE_URL: {{ . | quote }}
     NVCT_ESS_WORKER_BASE_URL: {{ . | quote }}
+    {{- end }}
+    {{- with dig "nvctApi" "icmsBaseUrl" nil .Values }}
+    NVCT_ICMS_BASE_URL: {{ . | quote }}
+    {{- end }}
+    {{- with dig "nvctApi" "jwt" "issuerUri" nil .Values }}
+    SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: {{ . | quote }}
+    {{- end }}
+    {{- with dig "nvctApi" "jwt" "jwkSetUri" nil .Values }}
+    SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: {{ . | quote }}
     {{- end }}
     # Observability
     MANAGEMENT_TRACING_ENABLED: {{ .Values.global.observability.tracing.enabled }}
@@ -443,6 +549,10 @@ grpcproxy:
     RATE_LIMIT_ENABLED: "true"
     RATE_LIMIT_ADDR: "http://ratelimiter.nvcf.svc.cluster.local:7777"
     {{- end }}
+  {{- with dig "grpcproxy" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 
 rateLimiter:
   {{- if .Values.global.imagePullSecrets }}
@@ -461,6 +571,10 @@ rateLimiter:
   env:
     OTEL_EXPORTER_OTLP_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
   {{- end }}
+  {{- with dig "rateLimiter" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 
 ess:
   fullnameOverride: ess-api
@@ -470,7 +584,7 @@ ess:
   {{- end }}
   image:
     registry: {{ .Values.global.image.registry }}
-    repository: {{ .Values.global.image.repository }}/ess-api
+    repository: {{ .Values.global.image.repository }}/nvcf-ess
   {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}
@@ -484,6 +598,10 @@ ess:
     {{- if .Values.global.observability.tracing.enabled }}
     MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
     {{- end }}
+  {{- with dig "ess" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 
 notary:
   fullnameOverride: notary-service
@@ -569,6 +687,10 @@ adminIssuerProxy:
       name: {{ required "ingress.gatewayApi.gateways.shared.name is required" .Values.ingress.gatewayApi.gateways.shared.name }}
     hostname: "api-keys.{{ .Values.global.domain }}"
     path: "/v1/admin/keys"
+  {{- with dig "adminIssuerProxy" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 
 stateMetrics:
   enabled: false
@@ -637,6 +759,10 @@ functionautoscaler:
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
   {{- end }}
+  {{- with dig "functionautoscaler" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 {{- end }}
 
 reval:
@@ -656,6 +782,10 @@ reval:
   {{- end }}
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
+  {{- end }}
+  {{- with dig "reval" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
   {{- end }}
 
 llmApiGateway:
@@ -695,11 +825,17 @@ llmApiGateway:
       {{- if .Values.global.observability.tracing.enabled }}
       endpoint: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
       {{- end }}
+  {{- with dig "llmApiGateway" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 
 llmRequestRouter:
   enabled: {{ dig "addons" "llm" "enabled" false .Values }}
   fullnameOverride: llm-request-router
   replicaCount: {{ dig "addons" "llm" "requestRouter" "replicaCount" 3 .Values }}
+  service:
+    grpcPort: {{ $llmRequestRouterGrpcPort }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
     {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
@@ -733,25 +869,108 @@ llmRequestRouter:
        so an operator staging pki.enabled=true ahead of llm.enabled=true
        should not be punished with confusing required errors during render. */ -}}
   {{- if and (dig "addons" "llm" "enabled" false .Values) (dig "addons" "llm" "pki" "enabled" false .Values) }}
+  {{- /* Identity ownership. certManager keeps cert-manager as the owner of
+       issuance and renewal. existingSecret points the router at a Secret the
+       operator already created, so the stack renders no Certificate and pulls
+       in no issuer dependency. Validate the same way as issuerKind: dig only
+       falls back for a missing path, so explicit null and wrongly typed values
+       must be rejected rather than coerced into the default. */ -}}
+  {{- $pkiMode := dig "addons" "llm" "pki" "mode" "certManager" .Values }}
+  {{- if not (kindIs "string" $pkiMode) }}
+  {{- fail "addons.llm.pki.mode must be the string \"certManager\" or \"existingSecret\"" }}
+  {{- end }}
+  {{- if not (has $pkiMode (list "certManager" "existingSecret")) }}
+  {{- fail (printf "addons.llm.pki.mode must be exactly \"certManager\" or \"existingSecret\", got %q" $pkiMode) }}
+  {{- end }}
+  {{- if eq $pkiMode "existingSecret" }}
+  {{- /* The operator owns issuance in this mode, so every value that only
+       steers stack-managed issuance is a mixed-ownership conflict. Fail loudly
+       instead of silently ignoring it: a leftover dnsNames list reads as "the
+       stack still issues my certificate" and would go unnoticed until the
+       certificate expired. */ -}}
+  {{- $existingSecretPkiValues := dig "addons" "llm" "pki" dict .Values }}
+  {{- if kindIs "map" $existingSecretPkiValues }}
+  {{- $existingSecretClusterIssuer := dig "clusterIssuer" dict $existingSecretPkiValues }}
+  {{- if and (kindIs "map" $existingSecretClusterIssuer) (hasKey $existingSecretClusterIssuer "enabled") }}
+  {{- if index $existingSecretClusterIssuer "enabled" }}
+  {{- fail "addons.llm.pki.clusterIssuer.enabled must be false or unset when addons.llm.pki.mode is existingSecret; cert-manager and the operator cannot both own the request-router certificate" }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- $existingSecretDnsNames := dig "addons" "llm" "pki" "dnsNames" (list) .Values }}
+  {{- if not (kindIs "slice" $existingSecretDnsNames) }}
+  {{- fail "addons.llm.pki.dnsNames must be a list when addons.llm.pki.mode is existingSecret" }}
+  {{- end }}
+  {{- if gt (len $existingSecretDnsNames) 0 }}
+  {{- fail "addons.llm.pki.dnsNames applies only to a stack-issued Certificate and must be empty when addons.llm.pki.mode is existingSecret" }}
+  {{- end }}
+  {{- if dig "addons" "llm" "pki" "allowedDomains" "" .Values }}
+  {{- fail "addons.llm.pki.allowedDomains constrains the managed OpenBao signing role only and must be empty when addons.llm.pki.mode is existingSecret" }}
+  {{- end }}
+  {{- /* No default: the Secret is the operator's, so guessing a name would
+       mount the wrong identity or fail at pod start instead of at render. */ -}}
+  {{- $existingSecretName := required "addons.llm.pki.secretName is required when addons.llm.pki.mode is existingSecret" (dig "addons" "llm" "pki" "secretName" "" .Values) }}
+  certificate:
+    enabled: false
+  tls:
+    mode: existingSecret
+    secretName: {{ $existingSecretName | quote }}
+    mountPath: {{ dig "addons" "llm" "pki" "mountPath" "/etc/stargate/tls" .Values | quote }}
+    certPath: {{ dig "addons" "llm" "pki" "certPath" "/etc/stargate/tls/tls.crt" .Values | quote }}
+    keyPath: {{ dig "addons" "llm" "pki" "keyPath" "/etc/stargate/tls/tls.key" .Values | quote }}
+    quicInsecure: false
+  {{- else }}
   {{- $secretName := dig "addons" "llm" "pki" "secretName" "stargate-quic-tls" .Values }}
-  {{- $allowedDomains := required "addons.llm.pki.allowedDomains is required when addons.llm.pki.enabled is true" (dig "addons" "llm" "pki" "allowedDomains" "" .Values) }}
+  {{- /* dig only falls back for a missing path, so explicit null, empty, and
+       wrongly typed values reach these checks. Reject them instead of coercing
+       them: a malformed management flag that silently resolves to false skips
+       the nvcf-pki release in 01-dependencies.yaml.gotmpl while the block
+       below still renders a Certificate referencing the default issuer. Keep
+       this contract identical to the dependency stage. */ -}}
+  {{- $issuerKind := dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values }}
+  {{- $issuerName := dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values }}
+  {{- if not (kindIs "string" $issuerKind) }}
+  {{- fail "addons.llm.pki.issuerKind must be the string \"ClusterIssuer\" or \"Issuer\"" }}
+  {{- end }}
+  {{- if not (has $issuerKind (list "ClusterIssuer" "Issuer")) }}
+  {{- fail (printf "addons.llm.pki.issuerKind must be exactly \"ClusterIssuer\" or \"Issuer\", got %q" $issuerKind) }}
+  {{- end }}
+  {{- if not (kindIs "string" $issuerName) }}
+  {{- fail "addons.llm.pki.issuerName must be a string" }}
+  {{- end }}
+  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $issuerName) }}
+  {{- fail (printf "addons.llm.pki.issuerName must be a lowercase RFC 1123 DNS subdomain, got %q" $issuerName) }}
+  {{- end }}
+  {{- if gt (len $issuerName) 253 }}
+  {{- fail "addons.llm.pki.issuerName must be at most 253 characters" }}
+  {{- end }}
+  {{- $managedIssuer := and (eq $issuerKind "ClusterIssuer") (eq $issuerName "nvcf-openbao-pki") }}
+  {{- $pkiValues := dig "addons" "llm" "pki" dict .Values }}
+  {{- if kindIs "map" $pkiValues }}
+  {{- $clusterIssuerValues := dig "clusterIssuer" dict $pkiValues }}
+  {{- if and (kindIs "map" $clusterIssuerValues) (hasKey $clusterIssuerValues "enabled") }}
+  {{- /* index, not get: helmfile overrides sprig's get with a path-based
+       signature that rejects a map as its first argument. */ -}}
+  {{- $manageSetting := index $clusterIssuerValues "enabled" }}
+  {{- if not (kindIs "bool" $manageSetting) }}
+  {{- fail (printf "addons.llm.pki.clusterIssuer.enabled must be a YAML boolean, true or false. Quoted strings, null, and empty values are rejected. Got %q" (toString $manageSetting)) }}
+  {{- end }}
+  {{- $managedIssuer = $manageSetting }}
+  {{- end }}
+  {{- end }}
+  {{- if and $managedIssuer (ne $issuerKind "ClusterIssuer") }}
+  {{- fail "addons.llm.pki.clusterIssuer management supports only issuerKind=ClusterIssuer" }}
+  {{- end }}
   {{- $dnsNames := dig "addons" "llm" "pki" "dnsNames" (list) .Values }}
   {{- if eq (len $dnsNames) 0 }}
   {{- fail "addons.llm.pki.dnsNames must contain at least one DNS name when addons.llm.pki.enabled is true" }}
-  {{- end }}
-  {{- /* Provisioning hook reuses the same image the k8s-openbao chart drives;
-       fall back to openbao.migrations.image.tag so operators set the version
-       in one place. */ -}}
-  {{- $pkiImageTag := dig "addons" "llm" "pki" "image" "tag" (dig "openbao" "migrations" "image" "tag" "" .Values) .Values }}
-  {{- if not $pkiImageTag }}
-  {{- fail "addons.llm.pki.image.tag (or openbao.migrations.image.tag) is required when addons.llm.pki.enabled is true" }}
   {{- end }}
   certificate:
     enabled: true
     secretName: {{ $secretName | quote }}
     issuerRef:
-      kind: {{ dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values | quote }}
-      name: {{ dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values | quote }}
+      kind: {{ $issuerKind | quote }}
+      name: {{ $issuerName | quote }}
     dnsNames:
       {{- toYaml $dnsNames | nindent 6 }}
   tls:
@@ -760,6 +979,15 @@ llmRequestRouter:
     certPath: {{ dig "addons" "llm" "pki" "certPath" "/etc/stargate/tls/tls.crt" .Values | quote }}
     keyPath: {{ dig "addons" "llm" "pki" "keyPath" "/etc/stargate/tls/tls.key" .Values | quote }}
     quicInsecure: false
+  {{- if $managedIssuer }}
+  {{- $allowedDomains := required "addons.llm.pki.allowedDomains is required when addons.llm.pki.clusterIssuer management is enabled" (dig "addons" "llm" "pki" "allowedDomains" "" .Values) }}
+  {{- /* Provisioning hook reuses the same image the k8s-openbao chart drives;
+       fall back to openbao.migrations.image.tag so operators set the version
+       in one place. */ -}}
+  {{- $pkiImageTag := dig "addons" "llm" "pki" "image" "tag" (dig "openbao" "migrations" "image" "tag" "" .Values) .Values }}
+  {{- if not $pkiImageTag }}
+  {{- fail "addons.llm.pki.image.tag (or openbao.migrations.image.tag) is required when addons.llm.pki.clusterIssuer management is enabled" }}
+  {{- end }}
   pki:
     enabled: true
     namespace: {{ dig "addons" "llm" "pki" "namespace" "vault-system" .Values | quote }}
@@ -773,6 +1001,12 @@ llmRequestRouter:
     imagePullSecrets:
       {{- toYaml .Values.global.imagePullSecrets | nindent 6 }}
     {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- with dig "llmRequestRouter" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
   {{- end }}
 
 vanityGateway:
@@ -857,7 +1091,7 @@ vanityGateway:
 {{- if dig "addons" "nvcfUi" "enabled" false .Values }}
 {{/* Shared backend coordinates for the services the nvcf-ui proxies to and
      the control-plane health monitor probes. Read the same way gateway-routes
-     is fed — from ingress.gatewayApi.routes.<x>.backend — so the config URLs and
+     is fed from ingress.gatewayApi.routes.<x>.backend so the config URLs and
      component endpoints track any operator override; the dict defaults fill the
      usual case where a route pins no explicit backend. merge lets a partial
      override (e.g. namespace only) keep the remaining default fields. */}}

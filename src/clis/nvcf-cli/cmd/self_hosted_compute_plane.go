@@ -159,10 +159,38 @@ func readNVCAValuesMetadata(path string) (nvcaValuesMetadata, error) {
 	if err := decoder.Decode(&values); err != nil {
 		return nvcaValuesMetadata{}, fmt.Errorf("parsing values file: %w", err)
 	}
+	if err := validateNVCAAgentConfig(values.AgentConfig); err != nil {
+		return nvcaValuesMetadata{}, fmt.Errorf("validating values file: %w", err)
+	}
 	return nvcaValuesMetadata{
 		ClusterName: values.ClusterName,
 		NCAID:       firstNonEmpty(values.NCAID, values.NCAIDLower),
 	}, nil
+}
+
+type nvcaAgentConfigValidation struct {
+	Workload struct {
+		StargateQUICInsecure bool `yaml:"stargateQUICInsecure"`
+		TransportTLS         *struct {
+			TrustMode string `yaml:"trustMode"`
+		} `yaml:"transportTLS"`
+	} `yaml:"workload"`
+}
+
+func validateNVCAAgentConfig(agentConfig *nvca.AgentConfigValues) error {
+	if agentConfig == nil || strings.TrimSpace(agentConfig.MergeConfig) == "" {
+		return nil
+	}
+
+	var cfg nvcaAgentConfigValidation
+	if err := yaml.Unmarshal([]byte(agentConfig.MergeConfig), &cfg); err != nil {
+		return fmt.Errorf("parsing agentConfig.mergeConfig: %w", err)
+	}
+	if cfg.Workload.StargateQUICInsecure && cfg.Workload.TransportTLS != nil &&
+		cfg.Workload.TransportTLS.TrustMode == controlplaneprofile.TrustModeBundle {
+		return fmt.Errorf("workload.stargateQUICInsecure=true cannot be used with workload.transportTLS.trustMode=bundle; set workload.stargateQUICInsecure=false or use trustMode=system")
+	}
+	return nil
 }
 
 // nvcaValuesMetadataDoc is the strict-decode shape for the nvca-operator

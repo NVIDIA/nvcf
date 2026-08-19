@@ -21,11 +21,11 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/cmd/llm-api-gateway",
     visibility = ["//visibility:private"],
     deps = [
-        "//config",
-        "//nvcf",
-        "//provider",
-        "//server",
-        "//telemetry",
+        "//src/invocation-plane-services/llm-api-gateway/config",
+        "//src/invocation-plane-services/llm-api-gateway/nvcf",
+        "//src/invocation-plane-services/llm-api-gateway/provider",
+        "//src/invocation-plane-services/llm-api-gateway/server",
+        "//src/invocation-plane-services/llm-api-gateway/telemetry",
         "@com_github_rs_zerolog//log",
     ],
 )
@@ -34,4 +34,9 @@ go_binary(
     name = "llm-api-gateway",
     embed = [":llm-api-gateway_lib"],
     visibility = ["//visibility:public"],
+    x_defs = {
+        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Service": "nvcf-llm-api-gateway",
+        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Version": "{STABLE_VERSION}",
+        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.GitHash": "{STABLE_GIT_COMMIT_FULL}",
+    },
 )

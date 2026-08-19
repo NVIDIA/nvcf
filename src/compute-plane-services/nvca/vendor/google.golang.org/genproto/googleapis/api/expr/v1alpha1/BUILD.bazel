@@ -13,14 +13,14 @@ go_library(
     importpath = "google.golang.org/genproto/googleapis/api/expr/v1alpha1",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/google.golang.org/genproto/googleapis/rpc/status",
-        "//vendor/google.golang.org/protobuf/reflect/protoreflect",
-        "//vendor/google.golang.org/protobuf/runtime/protoimpl",
-        "//vendor/google.golang.org/protobuf/types/known/anypb",
-        "//vendor/google.golang.org/protobuf/types/known/durationpb",
-        "//vendor/google.golang.org/protobuf/types/known/emptypb",
-        "//vendor/google.golang.org/protobuf/types/known/structpb",
-        "//vendor/google.golang.org/protobuf/types/known/timestamppb",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/genproto/googleapis/rpc/status",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/reflect/protoreflect",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/runtime/protoimpl",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/types/known/anypb",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/types/known/durationpb",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/types/known/emptypb",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/types/known/structpb",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/types/known/timestamppb",
     ],
 )
 

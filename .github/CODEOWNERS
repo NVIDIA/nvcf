@@ -13,6 +13,7 @@
 /.github/workflows/ @NVIDIA/nvcf-ci-dev
 /ci/ @NVIDIA/nvcf-ci-dev
 /tools/ @NVIDIA/nvcf-ci-dev
+/tools/byoo/** @NVIDIA/nvcf-compute-plane-dev
 
 # Documentation.
 /docs/ @NVIDIA/nvcf-docs-dev
@@ -21,7 +22,7 @@
 /deploy/helm/cassandra/ @NVIDIA/nvcf-infra-dev
 /deploy/helm/nats/ @NVIDIA/nvcf-infra-dev
 /deploy/helm/openbao/ @NVIDIA/nvcf-infra-dev
-/infra/cassandra/ @NVIDIA/nvcf-infra-dev
+/infra/ @NVIDIA/nvcf-infra-dev
 /migrations/cassandra/ @NVIDIA/nvcf-infra-dev
 /migrations/openbao/ @NVIDIA/nvcf-infra-dev
 
@@ -30,6 +31,7 @@
 # ledger, deployment stages, NVCT API, vanity gateway, autoscaler, Helm ReVal,
 # LLM gateway, LLM request router, SIS, and Stargate.
 /src/control-plane-services/ @NVIDIA/nvcf-control-plane-dev
+/src/uis/ @NVIDIA/nvcf-control-plane-dev
 /src/invocation-plane-services/ @NVIDIA/nvcf-control-plane-dev
 /src/libraries/rust/stargate/ @NVIDIA/nvcf-control-plane-dev
 /deploy/helm/admin-token-issuer-proxy/ @NVIDIA/nvcf-control-plane-dev

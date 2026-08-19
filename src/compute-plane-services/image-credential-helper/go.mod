@@ -18,19 +18,22 @@ require (
 	sigs.k8s.io/controller-runtime v0.21.0
 )
 
+// Only modules this service actually compiles are pinned here. Seven further
+// replaces (cloud.google.com/go, Masterminds/vcs, google/cel-go,
+// k8s.io/apiextensions-apiserver, k8s.io/apiserver, k8s.io/cluster-bootstrap,
+// k8s.io/component-base) were dropped: none of them is vendored or imported, so
+// they pinned nothing here, but a replace is not scoped to its own module once
+// the module joins the root go.work. They silently re-pinned the whole
+// workspace, and because nothing here imports them no go.sum carried the forced
+// version, so the shared build failed with "No sum for
+// k8s.io/apiextensions-apiserver@v0.35.3" in an unrelated subtree.
+//
+// client-go needs its replace: the require below is the v11.0.0+incompatible
+// mis-tag, which resolves to a 2019 release without it.
 replace (
-	// Resolves https://github.com/aws-observability/aws-otel-collector/issues/926#issuecomment-1263065587
-	cloud.google.com/go => cloud.google.com/go v0.112.2
-	github.com/Masterminds/vcs => github.com/Masterminds/vcs v1.13.3
-	github.com/google/cel-go => github.com/google/cel-go v0.17.8
-
 	k8s.io/api => k8s.io/api v0.35.3
-	k8s.io/apiextensions-apiserver => k8s.io/apiextensions-apiserver v0.35.3
 	k8s.io/apimachinery => k8s.io/apimachinery v0.35.3
-	k8s.io/apiserver => k8s.io/apiserver v0.35.3
 	k8s.io/client-go => k8s.io/client-go v0.35.3
-	k8s.io/cluster-bootstrap => k8s.io/cluster-bootstrap v0.35.3
-	k8s.io/component-base => k8s.io/component-base v0.35.3
 )
 
 require github.com/NVIDIA/nvcf/src/libraries/go/lib v0.0.0-20260514233945-67568a2d4f00

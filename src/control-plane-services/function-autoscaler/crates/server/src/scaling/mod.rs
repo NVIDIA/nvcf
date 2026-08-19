@@ -303,16 +303,11 @@ pub fn calculate_average_utilization(
 pub enum MetricSource {
     /// Worker-thread busy ratio. The default; emitted by managed worker pods.
     WorkerThreads,
+    /// Function-level request duration emitted by the LLM API gateway.
+    LlmGateway,
     /// Control-plane request-latency / instance metrics. Used for BYOC and any
     /// other function that never emits worker series.
     ControlPlane,
-}
-
-impl MetricSource {
-    /// Whether this source uses the control-plane utilization query.
-    pub fn uses_control_plane_metrics(self) -> bool {
-        matches!(self, MetricSource::ControlPlane)
-    }
 }
 
 /// Everything a scaling decision needs, gathered once from the timeseries DB.
@@ -320,8 +315,7 @@ impl MetricSource {
 /// All NaN/parse sanitization happens while building this (see
 /// [`sanitize_utilization`]), so every downstream path operates on the same
 /// shape regardless of which [`MetricSource`] produced it. That is what keeps
-/// scale-to-zero behaving identically for worker-metric and control-plane
-/// functions.
+/// scale-to-zero behaving identically for every metric source.
 #[derive(Debug, Clone)]
 pub struct ScalingInputs {
     pub metric_source: MetricSource,

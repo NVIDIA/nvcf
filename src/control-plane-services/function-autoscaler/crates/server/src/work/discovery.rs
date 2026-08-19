@@ -21,21 +21,95 @@ use crate::cassandra::{
 use crate::metrics;
 use crate::models::ActiveFunctionDetails;
 use crate::timeseries_db::timeseries_db_client::TimeseriesDbClient;
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use chrono::{Duration, Utc};
+use futures::{stream, StreamExt};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
+use tokio::sync::Semaphore;
 use tokio::time::Instant;
 use tracing;
 use uuid::Uuid;
 
+use super::MetricEnvironments;
+
 pub const LOCK_NAME_FUNCTION_DISCOVERY: &str = "function_discovery";
 
 /// Lookback window (minutes) for "recently invoked" in discovery. Functions with no invocations
-/// in this window are moved from recently_invoked to running_functions. Aligns with
-/// recently_invoked_functions table TTL (300s): rows expire after 5 min if not re-inserted.
+/// in this window are moved from recently_invoked to running_functions.
 pub const DISCOVERY_RECENTLY_INVOKED_LOOKBACK_MINUTES: i64 = 5;
+const DISCOVERY_QUERY_CONCURRENCY: usize = 4;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DiscoveryShard {
+    Hex0To3,
+    Hex4To7,
+    Hex8ToB,
+    HexCToF,
+}
+
+impl DiscoveryShard {
+    const ALL: [Self; 4] = [Self::Hex0To3, Self::Hex4To7, Self::Hex8ToB, Self::HexCToF];
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Hex0To3 => "0-3",
+            Self::Hex4To7 => "4-7",
+            Self::Hex8ToB => "8-b",
+            Self::HexCToF => "c-f",
+        }
+    }
+
+    fn function_id_regex(self) -> &'static str {
+        match self {
+            Self::Hex0To3 => "[0-3].*",
+            Self::Hex4To7 => "[4-7].*",
+            Self::Hex8ToB => "[89ab].*",
+            Self::HexCToF => "[c-f].*",
+        }
+    }
+
+    fn order(self) -> u8 {
+        match self {
+            Self::Hex0To3 => 0,
+            Self::Hex4To7 => 1,
+            Self::Hex8ToB => 2,
+            Self::HexCToF => 3,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum InvocationMetricSource {
+    InvocationService,
+    GrpcProxy,
+    LlmGateway,
+}
+
+impl InvocationMetricSource {
+    fn name(self) -> &'static str {
+        match self {
+            Self::InvocationService => "invocation_service",
+            Self::GrpcProxy => "grpc_proxy",
+            Self::LlmGateway => "llm_gateway",
+        }
+    }
+
+    fn order(self) -> u8 {
+        match self {
+            Self::InvocationService => 0,
+            Self::GrpcProxy => 1,
+            Self::LlmGateway => 2,
+        }
+    }
+}
+
+struct RecentInvocationQuery {
+    source: InvocationMetricSource,
+    shard: Option<DiscoveryShard>,
+    query: String,
+}
 
 const QUERY_INVOCATION_SERVICE: &str = r#"(
     sum by (function_id, function_version_id, nca_id) (function_request{env_filter} > 0)
@@ -92,22 +166,92 @@ fn get_timeseries_db_query(
     env: &str,
     ignore_env: bool,
     function_version_filter: Option<Uuid>,
+    shard: Option<DiscoveryShard>,
 ) -> String {
-    match (ignore_env, function_version_filter) {
-        (true, None) => template.replace("{env_filter}", ""),
-        (false, None) => {
-            let env_filter = format!(r#"{{aws_env="{}"}}"#, env);
-            template.replace("{env_filter}", &env_filter)
-        }
-        (true, Some(fv)) => {
-            let env_filter = format!(r#"{{function_version_id="{}"}}"#, fv);
-            template.replace("{env_filter}", &env_filter)
-        }
-        (false, Some(fv)) => {
-            let env_filter = format!(r#"{{function_version_id="{}", aws_env="{}"}}"#, fv, env);
-            template.replace("{env_filter}", &env_filter)
+    let mut matchers = Vec::new();
+    if !ignore_env {
+        let metric_env = MetricEnvironments::from_config(env);
+        matchers.push(format!(r#"aws_env="{}""#, metric_env.aws));
+    }
+    if let Some(function_version_id) = function_version_filter {
+        matchers.push(format!(r#"function_version_id="{}""#, function_version_id));
+    }
+    if let Some(shard) = shard {
+        matchers.push(format!(r#"function_id=~"{}""#, shard.function_id_regex()));
+    }
+
+    let selector = if matchers.is_empty() {
+        String::new()
+    } else {
+        format!("{{{}}}", matchers.join(", "))
+    };
+    template.replace("{env_filter}", &selector)
+}
+
+fn llm_gateway_discovery_query(env: &str, ignore_env: bool, shard: DiscoveryShard) -> String {
+    let function_id_regex = shard.function_id_regex();
+    let env_matcher = if ignore_env {
+        String::new()
+    } else {
+        let metric_env = MetricEnvironments::from_config(env);
+        format!(r#", aws_env="{}""#, metric_env.aws)
+    };
+    format!(
+        r#"(sum by(function_id) (
+            increase(llm_api_gateway_http_requests_total{{function_id=~"{function_id_regex}", function_id!="none"{env_matcher}}}[5m])
+        ) > 0)
+        * on(function_id) group_right(function_version_id, nca_id)
+        max by(function_id, function_version_id, nca_id) (
+            nvcf_function_info{{function_id=~"{function_id_regex}"{env_matcher}}}
+        )"#
+    )
+}
+
+fn recent_invocation_queries(
+    env: &str,
+    ignore_env: bool,
+    function_version_filter: Option<Uuid>,
+) -> Vec<RecentInvocationQuery> {
+    let shards: Vec<Option<DiscoveryShard>> = if function_version_filter.is_some() {
+        vec![None]
+    } else {
+        DiscoveryShard::ALL.into_iter().map(Some).collect()
+    };
+
+    let mut queries = Vec::with_capacity(shards.len() * 3);
+    for shard in shards {
+        queries.push(RecentInvocationQuery {
+            source: InvocationMetricSource::InvocationService,
+            shard,
+            query: get_timeseries_db_query(
+                QUERY_INVOCATION_SERVICE,
+                env,
+                ignore_env,
+                function_version_filter,
+                shard,
+            ),
+        });
+        queries.push(RecentInvocationQuery {
+            source: InvocationMetricSource::GrpcProxy,
+            shard,
+            query: get_timeseries_db_query(
+                QUERY_GRPC_PROXY,
+                env,
+                ignore_env,
+                function_version_filter,
+                shard,
+            ),
+        });
+        if function_version_filter.is_none() {
+            let shard = shard.expect("discovery queries are sharded");
+            queries.push(RecentInvocationQuery {
+                source: InvocationMetricSource::LlmGateway,
+                shard: Some(shard),
+                query: llm_gateway_discovery_query(env, ignore_env, shard),
+            });
         }
     }
+    queries
 }
 
 /// Current state of functions across different sources.
@@ -140,41 +284,9 @@ async fn fetch_function_state(
         )
         .await?;
 
-    tracing::info!("Getting recently invoked functions...");
-    let timeseries_db_recently_invoked = get_recently_invoked_functions(
-        timeseries_db_client,
-        None,
-        DISCOVERY_RECENTLY_INVOKED_LOOKBACK_MINUTES,
-        env,
-        timeseries_db_ignore_env,
-    )
-    .await?;
-    tracing::debug!(
-        "Got {} recently invoked functions",
-        timeseries_db_recently_invoked.len()
-    );
-
-    tracing::info!("Getting running functions (workers + BYOC active instances)...");
-    let timeseries_db_running_functions =
-        get_functions_with_workers(timeseries_db_client, env, timeseries_db_ignore_env).await?;
-    tracing::info!(
-        "Got {} running functions (includes BYOC)",
-        timeseries_db_running_functions.len()
-    );
-
-    // Union both TimeseriesDb sources — everything active belongs in the single table
-    let mut timeseries_db_active_map: HashMap<(Uuid, Uuid), ActiveFunctionDetails> =
-        timeseries_db_recently_invoked
-            .into_iter()
-            .map(|f| ((f.function_id, f.function_version_id), f))
-            .collect();
-    for f in timeseries_db_running_functions {
-        timeseries_db_active_map
-            .entry((f.function_id, f.function_version_id))
-            .or_insert(f);
-    }
-    let timeseries_db_active_functions: Vec<ActiveFunctionDetails> =
-        timeseries_db_active_map.into_values().collect();
+    let timeseries_db_active_functions =
+        fetch_timeseries_db_active_functions(timeseries_db_client, env, timeseries_db_ignore_env)
+            .await?;
 
     let state = FunctionState {
         db_recently_invoked: db_recently_invoked
@@ -184,6 +296,94 @@ async fn fetch_function_state(
     };
 
     Ok((state, timeseries_db_active_functions))
+}
+
+/// Fetch active functions from independent invocation and worker metric sources.
+/// A failed source is unknown, not empty: keep every successful result, and fail
+/// only when neither source produced a usable response.
+async fn fetch_timeseries_db_active_functions(
+    timeseries_db_client: &TimeseriesDbClient,
+    env: &str,
+    timeseries_db_ignore_env: bool,
+) -> Result<Vec<ActiveFunctionDetails>> {
+    tracing::info!("Getting recently invoked and running functions...");
+    let query_semaphore = Arc::new(Semaphore::new(DISCOVERY_QUERY_CONCURRENCY));
+    let workers_semaphore = Arc::clone(&query_semaphore);
+    let (recent_result, workers_result) = tokio::join!(
+        get_recently_invoked_functions_with_semaphore(
+            timeseries_db_client,
+            None,
+            DISCOVERY_RECENTLY_INVOKED_LOOKBACK_MINUTES,
+            env,
+            timeseries_db_ignore_env,
+            Some(query_semaphore),
+        ),
+        async {
+            let _permit = workers_semaphore
+                .acquire_owned()
+                .await
+                .expect("discovery query semaphore must remain open");
+            get_functions_with_workers(timeseries_db_client, env, timeseries_db_ignore_env).await
+        },
+    );
+
+    let mut active_map: HashMap<(Uuid, Uuid), ActiveFunctionDetails> = HashMap::new();
+    let mut failed_sources = 0usize;
+
+    match recent_result {
+        Ok(functions) => {
+            tracing::debug!("Got {} recently invoked functions", functions.len());
+            for function in functions {
+                active_map.insert(
+                    (function.function_id, function.function_version_id),
+                    function,
+                );
+            }
+        }
+        Err(error) => {
+            tracing::error!(error = %error, "Recently invoked function discovery failed");
+            failed_sources += 1;
+        }
+    }
+
+    match workers_result {
+        Ok(functions) => {
+            tracing::info!("Got {} running functions (includes BYOC)", functions.len());
+            for function in functions {
+                merge_worker_details(&mut active_map, function);
+            }
+        }
+        Err(error) => {
+            tracing::error!(error = %error, "Running function discovery failed");
+            failed_sources += 1;
+        }
+    }
+
+    if failed_sources == 2 {
+        return Err(anyhow!(
+            "all TimeseriesDb function discovery sources failed"
+        ));
+    }
+
+    if failed_sources > 0 {
+        tracing::warn!(
+            failed_sources,
+            functions_found = active_map.len(),
+            "Function discovery completed with partial TimeseriesDb results"
+        );
+    }
+
+    Ok(active_map.into_values().collect())
+}
+
+fn merge_worker_details(
+    active_map: &mut HashMap<(Uuid, Uuid), ActiveFunctionDetails>,
+    function: ActiveFunctionDetails,
+) {
+    active_map
+        .entry((function.function_id, function.function_version_id))
+        .and_modify(|existing| existing.num_workers = function.num_workers)
+        .or_insert(function);
 }
 
 /// Step 3: Find TimeseriesDb-active functions not yet in the DB
@@ -334,64 +534,105 @@ pub async fn get_recently_invoked_functions(
     env: &str,
     timeseries_db_ignore_env: bool,
 ) -> Result<Vec<ActiveFunctionDetails>> {
+    get_recently_invoked_functions_with_semaphore(
+        timeseries_db_client,
+        function_version_id_filter,
+        lookback_period_minutes,
+        env,
+        timeseries_db_ignore_env,
+        None,
+    )
+    .await
+}
+
+async fn get_recently_invoked_functions_with_semaphore(
+    timeseries_db_client: &TimeseriesDbClient,
+    function_version_id_filter: Option<Uuid>,
+    lookback_period_minutes: i64,
+    env: &str,
+    timeseries_db_ignore_env: bool,
+    query_semaphore: Option<Arc<Semaphore>>,
+) -> Result<Vec<ActiveFunctionDetails>> {
     let end_time = Utc::now();
     let start_time = end_time - Duration::minutes(lookback_period_minutes);
     let step = StdDuration::from_secs(60); // 1 minute step
 
-    tracing::info!("Executing PromQL queries for recently invoked functions");
-
-    let invocation_query = get_timeseries_db_query(
-        QUERY_INVOCATION_SERVICE,
-        env,
-        timeseries_db_ignore_env,
-        function_version_id_filter,
-    );
-    let grpc_query = get_timeseries_db_query(
-        QUERY_GRPC_PROXY,
-        env,
-        timeseries_db_ignore_env,
-        function_version_id_filter,
-    );
-
+    let queries =
+        recent_invocation_queries(env, timeseries_db_ignore_env, function_version_id_filter);
+    let query_count = queries.len();
     tracing::info!(
-        "Will execute invocation service query: {}",
-        invocation_query
+        query_count,
+        sharded = function_version_id_filter.is_none(),
+        "Executing PromQL queries for recently invoked functions"
     );
-    tracing::info!("Will execute gRPC proxy query: {}", grpc_query);
 
-    let response_invocation_service = match timeseries_db_client
-        .query_range(&invocation_query, start_time, end_time, step)
-        .await
-    {
-        Ok(response) => {
-            tracing::info!("Successfully executed invocation service query");
-            response
+    // Discovery runs twelve queries (three sources across four shards) through
+    // one shared concurrency bound. Per-version invocation checks remain two
+    // unsharded queries. Every query is polled even when another source or
+    // shard fails.
+    let mut query_results = stream::iter(queries.into_iter().map(|query_spec| {
+        let query_semaphore = query_semaphore.clone();
+        async move {
+            let _permit = match query_semaphore {
+                Some(semaphore) => Some(
+                    semaphore
+                        .acquire_owned()
+                        .await
+                        .expect("discovery query semaphore must remain open"),
+                ),
+                None => None,
+            };
+            let source = query_spec.source;
+            let shard = query_spec.shard;
+            let result = timeseries_db_client
+                .query_range(&query_spec.query, start_time, end_time, step)
+                .await;
+            (source, shard, result)
         }
-        Err(e) => {
-            tracing::error!("Failed to execute invocation service query: {}", e);
-            return Err(e);
-        }
-    };
+    }))
+    .buffer_unordered(DISCOVERY_QUERY_CONCURRENCY.min(query_count))
+    .collect::<Vec<_>>()
+    .await;
 
-    let response_grpc_proxy = match timeseries_db_client
-        .query_range(&grpc_query, start_time, end_time, step)
-        .await
-    {
-        Ok(response) => {
-            tracing::info!("Successfully executed gRPC proxy query");
-            response
-        }
-        Err(e) => {
-            tracing::error!("Failed to execute gRPC proxy query: {}", e);
-            return Err(e);
-        }
-    };
+    // Preserve the original source precedence even though requests complete
+    // out of order. This keeps deduplication independent of query latency.
+    query_results.sort_by_key(|(source, shard, _)| {
+        (
+            source.order(),
+            shard.map(DiscoveryShard::order).unwrap_or(0),
+        )
+    });
 
     let mut recently_invoked_functions = Vec::new();
     let mut seen_functions: HashSet<(Uuid, Uuid, String)> = HashSet::new();
+    let mut failed_queries = 0usize;
+    let mut successful_queries = 0usize;
 
-    // Process both responses to extract function details
-    for response in [&response_invocation_service, &response_grpc_proxy] {
+    for (source, shard, query_result) in query_results {
+        let shard_name = shard.map(DiscoveryShard::name).unwrap_or("none");
+        let response = match query_result {
+            Ok(response) => {
+                successful_queries += 1;
+                tracing::info!(
+                    source = source.name(),
+                    shard = shard_name,
+                    series = response.data.result.len(),
+                    "Recently invoked query succeeded"
+                );
+                response
+            }
+            Err(error) => {
+                tracing::error!(
+                    source = source.name(),
+                    shard = shard_name,
+                    error = %error,
+                    "Recently invoked query failed"
+                );
+                failed_queries += 1;
+                continue;
+            }
+        };
+
         for result in &response.data.result {
             if let Some(function_version_id_str) = &result.metric.function_version_id {
                 // Parse UUIDs from strings (nca_id is kept as string, not UUID)
@@ -421,8 +662,6 @@ pub async fn get_recently_invoked_functions(
                         nca_id: Some(nca_id.clone()),
                         last_updated_at: Some(end_time),
                         num_workers: None, // Recently invoked functions start with unknown worker count
-                        last_predicted_desired_instance_count: None,
-                        last_predicted_error_code: None,
                     };
 
                     tracing::debug!(
@@ -439,6 +678,24 @@ pub async fn get_recently_invoked_functions(
                 tracing::info!("Missing function_version_id in result: {:?}", result.metric);
             }
         }
+    }
+
+    // Discovery can safely consume partial shards because it only inserts
+    // positive observations. Per-function scaling remains fail-closed: both
+    // invocation sources must succeed before an empty result can mean idle.
+    if successful_queries == 0 || (function_version_id_filter.is_some() && failed_queries > 0) {
+        return Err(anyhow!(
+            "recently invoked TimeseriesDb queries failed: {successful_queries} succeeded, {failed_queries} failed"
+        ));
+    }
+
+    if failed_queries > 0 {
+        tracing::warn!(
+            successful_queries,
+            failed_queries,
+            functions_found = recently_invoked_functions.len(),
+            "Recently invoked discovery completed with partial shard results"
+        );
     }
 
     tracing::info!(
@@ -469,19 +726,7 @@ pub async fn get_functions_with_workers(
     // Query for functions with workers OR functions with active instances (for BYOC)
     // This ensures both normal functions and BYOC functions are discovered
     // Note: nvcf_function_instances_current query does NOT filter by state to match get_byoc_instance_count
-    let query = if timeseries_db_ignore_env {
-        r#"count by(function_id, function_version_id, nca_id) (nvcf_worker_service_worker_thread_count_total) > 0
-or
-avg by(function_id, function_version_id, nca_id) (nvcf_function_instances_current) > 0"#.to_string()
-    } else {
-        let environment = if env == "stg" { "stage" } else { "prod" };
-        format!(
-            r#"count by(function_id, function_version_id, nca_id) (nvcf_worker_service_worker_thread_count_total{{environment="{}"}}) > 0
-or
-avg by(function_id, function_version_id, nca_id) (nvcf_function_instances_current{{environment="{}"}}) > 0"#,
-            environment, environment
-        )
-    };
+    let query = functions_with_workers_query(env, timeseries_db_ignore_env);
 
     tracing::info!(
         "Executing PromQL query for functions with workers (ignore_env={}): {}",
@@ -553,8 +798,6 @@ avg by(function_id, function_version_id, nca_id) (nvcf_function_instances_curren
                     nca_id: Some(nca_id),
                     last_updated_at: Some(end_time),
                     num_workers,
-                    last_predicted_desired_instance_count: None,
-                    last_predicted_error_code: None,
                 };
 
                 let existing = by_key.get(&key).and_then(|d| d.num_workers);
@@ -579,6 +822,22 @@ avg by(function_id, function_version_id, nca_id) (nvcf_function_instances_curren
     Ok(functions_with_workers)
 }
 
+fn functions_with_workers_query(env: &str, ignore_env: bool) -> String {
+    if ignore_env {
+        r#"count by(function_id, function_version_id, nca_id) (nvcf_worker_service_worker_thread_count_total) > 0
+or
+avg by(function_id, function_version_id, nca_id) (nvcf_function_instances_current) > 0"#.to_string()
+    } else {
+        let metric_env = MetricEnvironments::from_config(env);
+        format!(
+            r#"count by(function_id, function_version_id, nca_id) (nvcf_worker_service_worker_thread_count_total{{environment="{}"}}) > 0
+or
+avg by(function_id, function_version_id, nca_id) (nvcf_function_instances_current{{environment="{}"}}) > 0"#,
+            metric_env.worker, metric_env.control_plane
+        )
+    }
+}
+
 /// Get functions with active instances from TimeseriesDb (for BYOC functions that don't emit worker metrics)
 /// This uses the nvcf_function_instances_current metric which tracks actual running instances
 pub async fn get_functions_with_active_instances(
@@ -595,15 +854,7 @@ pub async fn get_functions_with_active_instances(
     let start_time = end_time - Duration::minutes(5); // 5 minute window
     let step = StdDuration::from_secs(STEP_SECS as u64);
 
-    let query = if timeseries_db_ignore_env {
-        r#"nvcf_function_instances_current{state="active"} > 0"#.to_string()
-    } else {
-        let environment = if env == "stg" { "stage" } else { "prod" };
-        format!(
-            r#"nvcf_function_instances_current{{state="active", environment="{}"}} > 0"#,
-            environment
-        )
-    };
+    let query = active_instances_query(env, timeseries_db_ignore_env);
 
     tracing::info!(
         "Executing PromQL query for functions with active instances (ignore_env={}): {}",
@@ -666,8 +917,6 @@ pub async fn get_functions_with_active_instances(
                             nca_id: Some(nca_id.clone()),
                             last_updated_at: Some(end_time),
                             num_workers: Some(-1), // BYOC functions have num_workers = -1
-                            last_predicted_desired_instance_count: None,
-                            last_predicted_error_code: None,
                         };
 
                         tracing::debug!(
@@ -693,12 +942,283 @@ pub async fn get_functions_with_active_instances(
     Ok(functions_with_active_instances)
 }
 
+fn active_instances_query(env: &str, ignore_env: bool) -> String {
+    if ignore_env {
+        "nvcf_function_instances_current > 0".to_string()
+    } else {
+        let metric_env = MetricEnvironments::from_config(env);
+        format!(
+            r#"nvcf_function_instances_current{{environment="{}"}} > 0"#,
+            metric_env.control_plane
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::timeseries_db::timeseries_db_client::{
         Metric, ResponseData, TimeseriesDbResponse, TimeseriesDbResult,
     };
+    use crate::timeseries_db::TimeseriesDbSettings;
+
+    fn fast_backoff() -> backon::ExponentialBuilder {
+        backon::ExponentialBuilder::default()
+            .with_max_times(1)
+            .with_min_delay(StdDuration::from_millis(1))
+            .with_max_delay(StdDuration::from_millis(2))
+    }
+
+    fn ts_client(url: String) -> TimeseriesDbClient {
+        let config = TimeseriesDbSettings {
+            timeseries_db_url: url,
+            disable_auth: true,
+            env: "stg".to_string(),
+            ignore_env: true,
+            backoff: Some(fast_backoff()),
+            ..Default::default()
+        };
+        TimeseriesDbClient::new(&config, None).expect("build test client")
+    }
+
+    fn vm_series(metric_name: &str, function_id: Uuid, function_version_id: Uuid) -> String {
+        format!(
+            r#"{{"status":"success","data":{{"resultType":"matrix","result":[{{"metric":{{"__name__":"{metric_name}","function_id":"{function_id}","function_version_id":"{function_version_id}","nca_id":"nca"}},"values":[[1700000000,"1"]]}}]}}}}"#
+        )
+    }
+
+    #[test]
+    fn discovery_queries_cover_four_fixed_shards_for_all_sources() {
+        let queries = recent_invocation_queries("prod", false, None);
+        assert_eq!(queries.len(), 12);
+
+        for shard in DiscoveryShard::ALL {
+            let matcher = format!(r#"function_id=~"{}""#, shard.function_id_regex());
+            let shard_queries: Vec<_> = queries
+                .iter()
+                .filter(|query| query.shard == Some(shard))
+                .collect();
+            assert_eq!(shard_queries.len(), 3);
+
+            for query in shard_queries {
+                if matches!(query.source, InvocationMetricSource::LlmGateway) {
+                    assert_eq!(query.query.matches(&matcher).count(), 2);
+                    assert_eq!(query.query.matches(r#"aws_env="prd""#).count(), 2);
+                    assert!(query.query.contains("llm_api_gateway_http_requests_total"));
+                } else {
+                    assert_eq!(query.query.matches(&matcher).count(), 4);
+                    assert_eq!(query.query.matches(r#"aws_env="prd""#).count(), 4);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn gateway_discovery_omits_environment_when_configured() {
+        let queries = recent_invocation_queries("stg", true, None);
+        for query in queries
+            .iter()
+            .filter(|query| matches!(query.source, InvocationMetricSource::LlmGateway))
+        {
+            assert!(!query.query.contains("aws_env"));
+        }
+    }
+
+    #[test]
+    fn per_function_recent_invocation_queries_are_not_sharded() {
+        let function_version_id = Uuid::new_v4();
+        let queries = recent_invocation_queries("stg", true, Some(function_version_id));
+
+        assert_eq!(queries.len(), 2);
+        for query in queries {
+            assert!(query.shard.is_none());
+            assert!(!query.query.contains("function_id=~"));
+            assert_eq!(
+                query
+                    .query
+                    .matches(&format!(r#"function_version_id="{function_version_id}""#))
+                    .count(),
+                4
+            );
+        }
+    }
+
+    #[test]
+    fn running_function_query_uses_each_metric_familys_environment_labels() {
+        let prod_query = functions_with_workers_query("prd", false);
+        assert!(prod_query
+            .contains(r#"nvcf_worker_service_worker_thread_count_total{environment="prod"}"#));
+        assert!(prod_query.contains(r#"nvcf_function_instances_current{environment="production"}"#));
+
+        let stage_query = functions_with_workers_query("stg", false);
+        assert!(stage_query
+            .contains(r#"nvcf_worker_service_worker_thread_count_total{environment="stage"}"#));
+        assert!(stage_query.contains(r#"nvcf_function_instances_current{environment="staging"}"#));
+    }
+
+    #[test]
+    fn active_instance_query_uses_control_plane_environment_without_state() {
+        assert_eq!(
+            active_instances_query("prd", false),
+            r#"nvcf_function_instances_current{environment="production"} > 0"#
+        );
+        assert_eq!(
+            active_instances_query("stg", false),
+            r#"nvcf_function_instances_current{environment="staging"} > 0"#
+        );
+        assert_eq!(
+            active_instances_query("prd", true),
+            "nvcf_function_instances_current > 0"
+        );
+    }
+
+    #[tokio::test]
+    async fn invocation_failure_does_not_suppress_grpc_discovery_shards() {
+        let function_id = Uuid::new_v4();
+        let function_version_id = Uuid::new_v4();
+        let mut server = mockito::Server::new_async().await;
+        let invocation = server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::Regex(
+                r"function_request(?:%7B|\{)".to_string(),
+            ))
+            .with_status(500)
+            .with_body("boom")
+            .expect_at_least(4)
+            .create_async()
+            .await;
+        let grpc = server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::Regex(
+                "function_request_total".to_string(),
+            ))
+            .with_status(200)
+            .with_body(vm_series(
+                "function_request_total",
+                function_id,
+                function_version_id,
+            ))
+            .expect(4)
+            .create_async()
+            .await;
+
+        let functions = get_recently_invoked_functions(
+            &ts_client(server.url()),
+            None,
+            DISCOVERY_RECENTLY_INVOKED_LOOKBACK_MINUTES,
+            "stg",
+            true,
+        )
+        .await
+        .expect("gRPC shard results should survive invocation failures");
+
+        assert_eq!(functions.len(), 1);
+        assert_eq!(functions[0].function_id, function_id);
+        invocation.assert_async().await;
+        grpc.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn per_function_invocation_failure_still_queries_grpc_but_fails_closed() {
+        let function_id = Uuid::new_v4();
+        let function_version_id = Uuid::new_v4();
+        let mut server = mockito::Server::new_async().await;
+        let invocation = server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::Regex(
+                r"function_request(?:%7B|\{)".to_string(),
+            ))
+            .with_status(500)
+            .with_body("boom")
+            .expect_at_least(1)
+            .create_async()
+            .await;
+        let grpc = server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::Regex(
+                "function_request_total".to_string(),
+            ))
+            .with_status(200)
+            .with_body(vm_series(
+                "function_request_total",
+                function_id,
+                function_version_id,
+            ))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let result = get_recently_invoked_functions(
+            &ts_client(server.url()),
+            Some(function_version_id),
+            DISCOVERY_RECENTLY_INVOKED_LOOKBACK_MINUTES,
+            "stg",
+            true,
+        )
+        .await;
+
+        let error = result.expect_err("a partial per-function result must fail closed");
+        let message = format!("{error:#}");
+        assert!(message.contains("1 succeeded, 1 failed"));
+        assert!(!message.contains("boom"));
+        invocation.assert_async().await;
+        grpc.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn workers_query_survives_total_invocation_discovery_failure() {
+        let function_id = Uuid::new_v4();
+        let function_version_id = Uuid::new_v4();
+        let mut server = mockito::Server::new_async().await;
+        let recent = server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::Regex("function_request".to_string()))
+            .with_status(500)
+            .with_body("boom")
+            .expect_at_least(8)
+            .create_async()
+            .await;
+        let workers = server
+            .mock("GET", "/api/v1/query_range")
+            .match_query(mockito::Matcher::Regex(
+                "worker_thread_count_total".to_string(),
+            ))
+            .with_status(200)
+            .with_body(vm_series(
+                "nvcf_worker_service_worker_thread_count_total",
+                function_id,
+                function_version_id,
+            ))
+            .expect(1)
+            .create_async()
+            .await;
+
+        let functions = fetch_timeseries_db_active_functions(&ts_client(server.url()), "stg", true)
+            .await
+            .expect("worker results should survive invocation discovery failure");
+
+        assert_eq!(functions.len(), 1);
+        assert_eq!(functions[0].function_id, function_id);
+        recent.assert_async().await;
+        workers.assert_async().await;
+    }
+
+    #[test]
+    fn worker_count_is_preserved_when_discovery_sources_overlap() {
+        let function_id = Uuid::new_v4();
+        let function_version_id = Uuid::new_v4();
+        let recent = ActiveFunctionDetails::new(function_id, function_version_id, "recent".into());
+        let mut worker =
+            ActiveFunctionDetails::new(function_id, function_version_id, "worker".into());
+        worker.num_workers = Some(3);
+        let mut active_map = HashMap::from([((function_id, function_version_id), recent)]);
+
+        merge_worker_details(&mut active_map, worker);
+
+        let merged = active_map.get(&(function_id, function_version_id)).unwrap();
+        assert_eq!(merged.nca_id.as_deref(), Some("recent"));
+        assert_eq!(merged.num_workers, Some(3));
+    }
 
     #[test]
     fn test_get_functions_with_workers_response_parsing() {

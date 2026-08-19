@@ -15,6 +15,7 @@
 
 {{ $certificate := .Values.llmRequestRouter.certificate | default dict -}}
 {{- if $certificate.enabled }}
+{{- include "llm-request-router.validateCertificateDnsNames" . }}
 {{- $issuerRef := $certificate.issuerRef | default dict -}}
 apiVersion: cert-manager.io/v1
 kind: Certificate

@@ -5,11 +5,11 @@ go_library(
     srcs = ["lru.go"],
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/utils/internal/third_party/forked/golang/golang-lru",
     importpath = "k8s.io/utils/internal/third_party/forked/golang/golang-lru",
-    visibility = ["//vendor/k8s.io/utils:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/k8s.io/utils:__subpackages__"],
 )
 
 alias(
     name = "go_default_library",
     actual = ":golang-lru",
-    visibility = ["//vendor/k8s.io/utils:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/k8s.io/utils:__subpackages__"],
 )

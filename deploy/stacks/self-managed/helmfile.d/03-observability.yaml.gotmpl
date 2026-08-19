@@ -11,6 +11,9 @@ environments:
 {{- fail (printf "observability.profile must be disabled, control, compute, or all, got %q" $observabilityProfile) }}
 {{- end }}
 {{- $functionAutoscalerEnabled := or (eq $observabilityProfile "control") (eq $observabilityProfile "all") }}
+{{- if and $functionAutoscalerEnabled (not (dig "stateMetrics" "enabled" false .Values)) }}
+{{- fail "function-autoscaler requires stateMetrics.enabled=true for control and all observability profiles" }}
+{{- end }}
 
 repositories:
   - name: nvcf
@@ -55,7 +58,7 @@ releases:
 
   # --- Observability Services ---
   - name: state-metrics
-    version: 1.0.1
+    version: 1.0.2
     namespace: nvcf
     condition: stateMetrics.enabled # From global.yaml.gotmpl or env overrides
     inherit:
@@ -65,8 +68,10 @@ releases:
 
   {{- if $functionAutoscalerEnabled }}
   - name: function-autoscaler
-    version: {{ dig "functionAutoscaler" "chartVersion" "0.1.0" .Values | quote }}
+    version: 0.2.1
     namespace: nvcf
     inherit:
       - template: functionAutoscaler
+    needs:
+      - nvcf/state-metrics
   {{- end }}

@@ -4,9 +4,10 @@ API Keys is a single-module OSS/self-hosted Java service in the root `nvcf`
 Bazel module. Do not create a synthetic core module, nested Bazel module,
 lockfile, repository configuration, or third-party dependency hub.
 
-Maven remains an independent coexistence path. Bazel consumes nv-boot through
-direct source labels and produces the executable application jar. Do not
-generate or publish Maven-shaped API Keys artifacts from Bazel.
+The monorepo copy is Bazel-only and contains no project POM. Bazel consumes
+nv-boot through direct source labels and produces the executable application
+jar. Keep any Maven build support in the independent source repository. Do not
+restore project POMs or add Maven build instructions here.
 
 ## Build and test
 

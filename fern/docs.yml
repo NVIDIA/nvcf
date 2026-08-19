@@ -13,6 +13,9 @@ metadata:
 
 global-theme: nvidia
 
+css:
+  - custom.css
+
 logo:
   href: /nvcf/overview
   right-text: Cloud Functions
@@ -23,15 +26,15 @@ navbar-links:
   value: https://github.com/NVIDIA/nvcf
 
 versions:
-- display-name: "Latest (0.6.0)"
-  path: versions/v0.6.0.yml
+- display-name: "Latest (0.6.1)"
+  path: versions/v0.6.1.yml
   slug: ""
 - display-name: dev
   path: versions/dev.yml
   slug: dev
-- display-name: "0.6.1-rc"
-  path: versions/v0.6.1-rc.yml
-  slug: "v0.6.1-rc"
+- display-name: "0.6.1"
+  path: versions/v0.6.1.yml
+  slug: "v0.6.1"
 - display-name: "0.6.0"
   path: versions/v0.6.0.yml
   slug: "v0.6.0"
@@ -54,8 +57,20 @@ redirects:
     destination: "/nvcf/v0.6.0/"
   - source: "/nvcf/v0.6.0/index.html"
     destination: "/nvcf/v0.6.0/"
+  - source: "/nvcf/v0.6.1-rc/index.html"
+    destination: "/nvcf/v0.6.1/"
+  - source: "/nvcf/v0.6.1/index.html"
+    destination: "/nvcf/v0.6.1/"
   - source: "/nvcf/v0.5/index.html"
     destination: "/nvcf/v0.5/"
+  - source: "/nvcf/dev/0-6-1-release-notes"
+    destination: "/nvcf/v0.6.1/0-6-1-release-notes"
+  - source: "/nvcf/dev/0-6-0-to-0-6-1-upgrade"
+    destination: "/nvcf/v0.6.1/0-6-0-to-0-6-1-upgrade"
+  - source: "/nvcf/dev/0-6-0-release-notes"
+    destination: "/nvcf/v0.6.0/0-6-0-release-notes"
+  - source: "/nvcf/dev/0-5-0-to-0-6-0-upgrade"
+    destination: "/nvcf/v0.6.0/0-5-0-to-0-6-0-upgrade"
   - source: "/nvcf/dev/function-autoscaling-overview"
     destination: "/nvcf/function-autoscaling-overview"
   - source: "/nvcf/dev/function-lifecycle"

@@ -22,11 +22,12 @@ go_library(
         "router.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/router",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/control-plane-services/nats-auth-callout:__subpackages__"],
     deps = [
-        "//api",
+        "//src/control-plane-services/nats-auth-callout/api",
         "@com_github_gin_contrib_zap//:zap",
         "@com_github_gin_gonic_gin//:gin",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/version",
         "@com_github_prometheus_client_golang//prometheus",
         "@com_github_prometheus_client_golang//prometheus/promauto",
         "@com_github_prometheus_client_golang//prometheus/promhttp",
@@ -40,18 +41,23 @@ go_library(
 alias(
     name = "go_default_library",
     actual = ":router",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/control-plane-services/nats-auth-callout:__subpackages__"],
 )
 
 go_test(
     name = "router_test",
     srcs = [
+        "info_test.go",
         "metrics_test.go",
         "router_test.go",
     ],
     embed = [":router"],
     deps = [
+        "@com_github_gin_gonic_gin//:gin",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/version",
         "@com_github_prometheus_client_golang//prometheus",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
         "@org_uber_go_zap//:zap",
     ],
 )

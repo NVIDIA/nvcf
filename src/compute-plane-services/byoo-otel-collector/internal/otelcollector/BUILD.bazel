@@ -4,10 +4,10 @@ go_library(
     name = "otelcollector",
     srcs = ["otelcollector.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/internal/otelcollector",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/byoo-otel-collector:__subpackages__"],
     deps = [
-        "//internal/logger",
-        "//internal/metrics",
+        "//src/compute-plane-services/byoo-otel-collector/internal/logger",
+        "//src/compute-plane-services/byoo-otel-collector/internal/metrics",
         "@org_golang_x_sys//execabs",
     ],
 )
@@ -15,12 +15,12 @@ go_library(
 alias(
     name = "go_default_library",
     actual = ":otelcollector",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/byoo-otel-collector:__subpackages__"],
 )
 
 go_test(
     name = "otelcollector_test",
     srcs = ["otelcollector_test.go"],
     embed = [":otelcollector"],
-    deps = ["//internal/logger"],
+    deps = ["//src/compute-plane-services/byoo-otel-collector/internal/logger"],
 )

@@ -10,9 +10,9 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/cmd/cluster-validator",
     visibility = ["//visibility:private"],
     deps = [
-        "//cmd/internal",
-        "//internal/clustervalidator",
-        "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//src/compute-plane-services/nvca/cmd/internal",
+        "//src/compute-plane-services/nvca/internal/clustervalidator",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
     ],
 )
 

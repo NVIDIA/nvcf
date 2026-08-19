@@ -142,6 +142,18 @@ fn endpoint_has_port(endpoint: &str) -> bool {
         .unwrap_or(false)
 }
 
+pub struct TracingGuard {
+    provider: SdkTracerProvider,
+}
+
+impl Drop for TracingGuard {
+    fn drop(&mut self) {
+        if let Err(e) = self.provider.shutdown() {
+            eprintln!("TracerProvider shutdown error: {:?}", e);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,17 +216,5 @@ mod tests {
         let settings = TracingSettings::default();
 
         assert_eq!(build_otlp_grpc_endpoint(&settings), "http://127.0.0.1:4317");
-    }
-}
-
-pub struct TracingGuard {
-    provider: SdkTracerProvider,
-}
-
-impl Drop for TracingGuard {
-    fn drop(&mut self) {
-        if let Err(e) = self.provider.shutdown() {
-            eprintln!("TracerProvider shutdown error: {:?}", e);
-        }
     }
 }

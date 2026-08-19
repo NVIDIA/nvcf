@@ -200,6 +200,23 @@ func assertBYOOOTelCollectorEnvVars(t *testing.T, envs []corev1.EnvVar) {
 	var collectorConfig nvcaconfig.BYOOOTelCollectorConfig
 	require.NoError(t, json.Unmarshal(decodedCollectorConfig, &collectorConfig))
 	assert.Equal(t, "30s", collectorConfig.ExporterHelper.Timeout)
+	require.NotNil(t, collectorConfig.LogSampling.SamplingPercentage)
+	assert.Equal(t, 10.0, *collectorConfig.LogSampling.SamplingPercentage)
+	assert.Equal(t, "hash_seed", collectorConfig.LogSampling.Mode)
+	require.NotNil(t, collectorConfig.LogSampling.HashSeed)
+	assert.Equal(t, uint32(1234), *collectorConfig.LogSampling.HashSeed)
+	require.NotNil(t, collectorConfig.LogSampling.FailClosed)
+	assert.False(t, *collectorConfig.LogSampling.FailClosed)
+	assert.Equal(t, "record", collectorConfig.LogSampling.AttributeSource)
+	assert.Equal(t, "log.id", collectorConfig.LogSampling.FromAttribute)
+	assert.Equal(t, "sampling.priority", collectorConfig.LogSampling.SamplingPriority)
+	require.NotNil(t, collectorConfig.TraceSampling.SamplingPercentage)
+	assert.Equal(t, 1.0, *collectorConfig.TraceSampling.SamplingPercentage)
+	assert.Equal(t, "hash_seed", collectorConfig.TraceSampling.Mode)
+	require.NotNil(t, collectorConfig.TraceSampling.HashSeed)
+	assert.Equal(t, uint32(1234), *collectorConfig.TraceSampling.HashSeed)
+	require.NotNil(t, collectorConfig.TraceSampling.FailClosed)
+	assert.False(t, *collectorConfig.TraceSampling.FailClosed)
 	assert.Equal(t, "true", envsByName[nvcaconfig.BYOOMetricSubsetEnabledEnv])
 	assert.Contains(t, envsByName[nvcaconfig.BYOOMetricSubsetFilterConfigEnv], "metric.name")
 	assert.Equal(t, "metric_subset_enabled,custom_label", envsByName[nvcaconfig.BYOOWorkloadMetricsDropLabelsEnv])
@@ -279,6 +296,10 @@ func TestReconcile_Function(t *testing.T) {
 		Operator: corev1.TolerationOpExists,
 		Effect:   corev1.TaintEffectNoSchedule,
 	}
+	logSamplingPercentage := 10.0
+	traceSamplingPercentage := 1.0
+	samplingHashSeed := uint32(1234)
+	samplingFailClosed := false
 	r.cfg.Agent.SharedStorage.Server.Image = "smb:latest"
 	r.cfg.Agent.BYOOLogChunking = nvcaconfig.BYOOLogChunkingConfig{
 		Enabled:         true,
@@ -288,6 +309,21 @@ func TestReconcile_Function(t *testing.T) {
 	r.cfg.Agent.BYOOOTelCollector = nvcaconfig.BYOOOTelCollectorConfig{
 		ExporterHelper: nvcaconfig.BYOOOTelExporterHelperConfig{
 			Timeout: "30s",
+		},
+		LogSampling: nvcaconfig.BYOOOTelLogSamplingConfig{
+			SamplingPercentage: &logSamplingPercentage,
+			Mode:               "hash_seed",
+			HashSeed:           &samplingHashSeed,
+			FailClosed:         &samplingFailClosed,
+			AttributeSource:    "record",
+			FromAttribute:      "log.id",
+			SamplingPriority:   "sampling.priority",
+		},
+		TraceSampling: nvcaconfig.BYOOOTelSamplingConfig{
+			SamplingPercentage: &traceSamplingPercentage,
+			Mode:               "hash_seed",
+			HashSeed:           &samplingHashSeed,
+			FailClosed:         &samplingFailClosed,
 		},
 	}
 	r.cfg.Agent.BYOOMetricSubset = nvcaconfig.BYOOMetricSubsetConfig{
@@ -2199,6 +2235,10 @@ func TestReconcile_Task(t *testing.T) {
 		return r.Client, nil
 	}
 
+	logSamplingPercentage := 10.0
+	traceSamplingPercentage := 1.0
+	samplingHashSeed := uint32(1234)
+	samplingFailClosed := false
 	r.cfg.Agent.SharedStorage.Server.Image = "smb:latest"
 	r.cfg.Agent.BYOOLogChunking = nvcaconfig.BYOOLogChunkingConfig{
 		Enabled:         true,
@@ -2208,6 +2248,21 @@ func TestReconcile_Task(t *testing.T) {
 	r.cfg.Agent.BYOOOTelCollector = nvcaconfig.BYOOOTelCollectorConfig{
 		ExporterHelper: nvcaconfig.BYOOOTelExporterHelperConfig{
 			Timeout: "30s",
+		},
+		LogSampling: nvcaconfig.BYOOOTelLogSamplingConfig{
+			SamplingPercentage: &logSamplingPercentage,
+			Mode:               "hash_seed",
+			HashSeed:           &samplingHashSeed,
+			FailClosed:         &samplingFailClosed,
+			AttributeSource:    "record",
+			FromAttribute:      "log.id",
+			SamplingPriority:   "sampling.priority",
+		},
+		TraceSampling: nvcaconfig.BYOOOTelSamplingConfig{
+			SamplingPercentage: &traceSamplingPercentage,
+			Mode:               "hash_seed",
+			HashSeed:           &samplingHashSeed,
+			FailClosed:         &samplingFailClosed,
 		},
 	}
 	r.cfg.Agent.BYOOMetricSubset = nvcaconfig.BYOOMetricSubsetConfig{
@@ -5362,4 +5417,67 @@ func TestPatchMiniService(t *testing.T) {
 			assert.Equal(t, tt.wantFinalizers, got.Finalizers)
 		})
 	}
+}
+
+func TestSaveWorkloadConfigUsesTargetedSSA(t *testing.T) {
+	ctx := newTestContext()
+	stored := baseMiniServiceForPatchTest()
+	patchType := client.Merge.Type()
+	var patchData []byte
+	var patchOptions client.PatchOptions
+	crClient, _ := newFakeClientWithInterceptors(
+		mgrScheme,
+		interceptor.Funcs{
+			Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+				patchType = patch.Type()
+				for _, opt := range opts {
+					opt.ApplyToPatch(&patchOptions)
+				}
+				var err error
+				patchData, err = patch.Data(obj)
+				require.NoError(t, err)
+				return c.Patch(ctx, obj, patch, opts...)
+			},
+		},
+		stored,
+	)
+	r := &Reconciler{Client: crClient}
+
+	ms := &v1alpha1.MiniService{}
+	require.NoError(t, crClient.Get(ctx, client.ObjectKeyFromObject(stored), ms))
+	wantSpec := ms.Spec.DeepCopy()
+	desired := &v1alpha1.WorkloadConfig{
+		FeatureFlags: map[string]bool{featureflag.StatusByWorkerReadiness: true},
+	}
+
+	require.NoError(t, r.saveWorkloadConfig(ctx, ms, desired))
+
+	got := &v1alpha1.MiniService{}
+	require.NoError(t, crClient.Get(ctx, client.ObjectKeyFromObject(stored), got))
+	assert.Equal(t, client.Apply.Type(), patchType)
+	assert.Equal(t, managedByValue, patchOptions.FieldManager)
+	if assert.NotNil(t, patchOptions.Force) {
+		assert.True(t, *patchOptions.Force)
+	}
+
+	var gotPatch map[string]any
+	require.NoError(t, json.Unmarshal(patchData, &gotPatch))
+	assert.Equal(t, map[string]any{
+		"apiVersion": v1alpha1.SchemeGroupVersion.String(),
+		"kind":       "MiniService",
+		"metadata": map[string]any{
+			"name": stored.Name,
+		},
+		"spec": map[string]any{
+			"workloadConfig": map[string]any{
+				"featureFlags": map[string]any{
+					featureflag.StatusByWorkerReadiness: true,
+				},
+			},
+		},
+	}, gotPatch)
+	assert.Equal(t, wantSpec.Namespace, got.Spec.Namespace)
+	assert.Equal(t, wantSpec.ICMSRequestName, got.Spec.ICMSRequestName)
+	assert.Empty(t, cmp.Diff(wantSpec.HelmChartConfig, got.Spec.HelmChartConfig))
+	assert.Empty(t, cmp.Diff(desired, got.Spec.WorkloadConfig))
 }

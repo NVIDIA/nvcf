@@ -29,6 +29,12 @@ struct Metric {
     description: &'static str,
 }
 
+/// Status code used to mark a client early disconnect (the caller went away
+/// before any response was produced). 499 is nginx's non-standard "client closed
+/// request"; it is emitted for internal telemetry only and never sent to a
+/// client. Defined once here and reused so the value stays consistent.
+pub const CLIENT_EARLY_DISCONNECT_STATUS: &str = "499";
+
 const COUNTERS: [Metric; 19] = [
     FUNCTION_INVOCATION_ERROR,
     FUNCTION_REQUEST,
@@ -56,9 +62,11 @@ const SECONDS_DURATION_BUCKETS: &[f64; 15] = &[
     0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 25.0, 50.0, 100.0, 1000.0,
 ];
 
-// define time bucket for FUNCTION_REQUEST_LATENCY in the same way we're doing in the Java code
-const FUNCTION_REQUEST_LATENCY_BUCKETS_IN_SECONDS: &[f64; 15] = &[
-    0.1, 0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 6.0, 20.0, 60.0, 120.0, 300.0, 600.0, 1200.0, 1800.0,
+// Reduces each (function_id, function_version_id) histogram from 18 to 12 series
+// (15 to 9 finite buckets, plus +Inf, sum, and count), a 33.3% reduction, while
+// preserving useful resolution for AI inference latency.
+const FUNCTION_REQUEST_LATENCY_BUCKETS_IN_SECONDS: &[f64; 9] = &[
+    0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 300.0, 600.0, 1800.0,
 ];
 
 const FUNCTION_REQUEST_LATENCY: Metric = Metric {
@@ -200,6 +208,16 @@ pub fn init_metrics(settings: &MetricsSettings) -> anyhow::Result<()> {
     for name in HISTOGRAMS {
         register_histogram(name);
     }
+
+    // Pre-init the client-early-disconnect series so it reports 0 before the
+    // first disconnect.
+    counter!(
+        FUNCTION_INVOCATION_ERROR.name,
+        "http_status_code" => CLIENT_EARLY_DISCONNECT_STATUS,
+        "function_id" => "",
+    )
+    .increment(0);
+
     let collector = metrics_process::Collector::default();
     collector.describe();
     tokio::spawn(async move {
@@ -215,13 +233,11 @@ pub fn init_metrics(settings: &MetricsSettings) -> anyhow::Result<()> {
 pub fn record_invocation_end(
     function_id: String,
     function_version_id: String,
-    nca_id: String,
     start_time: SystemTime,
 ) {
     let labels = [
         ("function_id", function_id),
         ("function_version_id", function_version_id),
-        ("nca_id", nca_id),
     ];
     if let Ok(latency) = start_time.elapsed() {
         histogram!(FUNCTION_REQUEST_LATENCY.name, &labels).record(latency);
@@ -339,6 +355,46 @@ mod tests {
     use super::*;
     use metrics_util::debugging::{DebugValue, DebuggingRecorder};
     use metrics_util::MetricKind;
+
+    #[test]
+    fn function_request_latency_uses_expected_buckets() {
+        assert_eq!(
+            FUNCTION_REQUEST_LATENCY_BUCKETS_IN_SECONDS,
+            &[0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 300.0, 600.0, 1800.0]
+        );
+    }
+
+    #[test]
+    fn invocation_latency_omits_nca_id() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        metrics::with_local_recorder(&recorder, || {
+            record_invocation_end(
+                "function-id".to_string(),
+                "function-version-id".to_string(),
+                SystemTime::now() - Duration::from_secs(1),
+            );
+        });
+
+        let metrics = snapshotter.snapshot().into_vec();
+        let (key, _, _, _) = metrics
+            .iter()
+            .find(|(key, _, _, _)| {
+                key.kind() == MetricKind::Histogram
+                    && key.key().name() == FUNCTION_REQUEST_LATENCY.name
+            })
+            .expect("function request latency should be recorded");
+
+        assert!(key
+            .key()
+            .labels()
+            .any(|label| label.key() == "function_id" && label.value() == "function-id"));
+        assert!(key.key().labels().any(|label| {
+            label.key() == "function_version_id" && label.value() == "function-version-id"
+        }));
+        assert!(!key.key().labels().any(|label| label.key() == "nca_id"));
+    }
 
     #[test]
     fn application_error_uses_empty_function_id_when_context_is_missing() {

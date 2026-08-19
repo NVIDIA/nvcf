@@ -9,7 +9,7 @@ Ensure that your helm charts version does not contain `-` For example `v1` is ok
 
 </Warning>
 
-1. The helm chart **must have a "mini-service" container defined, which will be used as the inference entry point.**
+1. The Helm chart must define a `mini-service` container as the inference entry point.
 2. The name of this service in your helm chart should be supplied by setting `helmChartServiceName` during the function definition. This allows Cloud Functions to communicate and make inference requests to the "mini-service" endpoint.
 
 <Warning>
@@ -35,11 +35,13 @@ All Pod specs in your helm chart will be updated with pull secrets at runtime, s
 
    - The `helmChart` property should be set to the OCI URL of the helm chart that will deploy the "mini-service". The helm chart URL should follow the format: `oci://${REGISTRY}/${REPOSITORY}/charts/$NAME-X.Y.Z.tgz`. The chart name should not contain `-` in the version string.
 
-   - The `helmChartServiceName` is used for checking if the "mini-service" is ready for inference and is also scraped for function metrics. At this time, templatized service names are not supported. **This must match the service name of your "mini-service" with the exposed entry point port.**
+   - NVCF uses `helmChartServiceName` for readiness checks and function
+     metrics. It must match the service that exposes the `mini-service` entry
+     point. Templated service names are not supported.
 
    - Important: The Helm chart name should not contain underscores or other special symbols, as that may cause issues during deployment.
 
-**Example Creation via API**
+### API example
 
 Please see our [sample helm chart used](https://github.com/NVIDIA/nvcf/tree/main/examples/function-samples/helmchart-samples/inference-test-sample) in this example for reference.
 
@@ -68,11 +70,84 @@ For gRPC-based functions, set `"inferenceURL" : "/gRPC"`. This signals to Cloud 
 
 3. Proceed with function deployment and invocation normally.
 
-**Multi-node helm deployment**
+## Multi-node Helm deployment
+
 To create a multi-node helm deployment, you need to use the following format for the `instanceType`:
 `<CSP>.GPU.<GPU_NAME>_<number of gpus per node>x[.x<number of nodes>]`. For example, `DGXC.GPU.L40S_1x` is a single L40S instance while `ON-PREM.GPU.B200_8x.x2` is two full nodes of 8-way B200.
 
 A sample helm chart for a multi-node deployment can be found [in the multi-node helm example](https://github.com/NVIDIA/nvcf/tree/main/examples/function-samples/helmchart-samples/multi-node-helm-function-test/).
+
+### Multi-node NVLink scheduling
+
+<Note>
+The compute cluster must have the `NVLinkOptimized` attribute. See
+[NVLink-optimized clusters](./cluster-management/configuration.md#nvlink-optimized-clusters).
+</Note>
+
+NVCF can place the Pods from one multi-node Helm function in a single NVLink
+GPU clique. Use [Gang Scheduling](./cluster-management/gang-scheduling.md) when every Pod
+must be placed atomically. Use
+[Topology-Aware Scheduling](./cluster-management/topology-aware-scheduling.md)
+to place that gang in one GPU clique. The guides include examples for direct
+KAI StatefulSets and workloads managed through Grove and Dynamo.
+NVCA will create a
+[`ComputeDomain`](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/dra-cds.html)
+to connect GPU workload Pods through IMEX.
+
+<Note>
+Each GPU-enabled Pod must request a full node of GPUs.
+</Note>
+
+#### Legacy NVCA NVLink partition annotation
+
+<Warning>
+NVLink partition placement through these legacy affinity rules is best-effort
+without KAI Scheduler or Grove topology-aware scheduling. The rules do not
+provide atomic gang placement. Concurrent Pods can initially land in different
+cliques, and distinct logical groups can land in the same clique. Use
+[Gang Scheduling](./cluster-management/gang-scheduling.md) with
+[Topology-Aware Scheduling](./cluster-management/topology-aware-scheduling.md)
+when the workload requires all Pods to fit and start in a specific topology
+domain.
+</Warning>
+
+For charts that do not use KAI Scheduler or Grove topology constraints, NVCA
+supports this legacy Pod template annotation:
+
+```yaml
+spec:
+  template:
+    metadata:
+      annotations:
+        dra.nvcf.nvidia.io/required-nvlink-domain-index: "0"
+```
+
+Set the annotation on the Pod template for a Deployment, ReplicaSet,
+StatefulSet, Job, or CronJob. Set it on `metadata.annotations` for a standalone
+Pod. Setting it only on the controller object's metadata does not pass it to
+the Pods.
+
+The value is a logical partition index within the function. It is not the
+value of the `nvidia.com/gpu.clique` node label and does not select a physical
+rack or clique:
+
+- Pods with the same value form one logical placement group.
+- Pods with different values get different logical group labels. This does not
+  require the groups to use different GPU cliques.
+- Pods without the annotation share a default logical group.
+
+On an NVLink-optimized cluster, NVCA mutates each admitted Pod as follows:
+
+- It adds the generated `dra.nvcf.nvidia.io/nvlink-domain-partition` label.
+  Do not set this label in the chart.
+- For an annotated Pod, it adds required Pod affinity so Pods in the same
+  logical group use one value of the `nvidia.com/gpu.clique` topology key.
+- For an unannotated Pod, it adds preferred Pod affinity with weight 100. The
+  scheduler can spread these Pods when it cannot satisfy the preference.
+- It requires placement on a node that has the `nvidia.com/gpu.clique` label.
+- It adds the function's `ComputeDomain` resource claim to containers that
+  request `nvidia.com/gpu`, `nvidia.com/pgpu`, `nvidia.com/gpu.shared`, or an
+  `nvidia.com/mig-*` resource.
 
 ## Limitations
 
@@ -98,7 +173,7 @@ it will only do so if modification will not break your chart when it is installe
 Possible areas amenable to modification will be noted in the restrictions section below.
 Any standard that cannot be enforced by modification will result in error(s) during function creation.
 
-**Restrictions**
+#### Restrictions
 
 - Supported k8s artifacts under Helm Chart Namespace are listed below; others will be rejected:
   - ConfigMaps
@@ -167,3 +242,127 @@ curl -s -X POST "http://${GATEWAY_ADDR}/v2/nvcf/deployments/functions/${FUNCTION
      }]
  }'
 ```
+
+## Instance health
+
+By default, Cloud Functions considers the health of every Kubernetes object rendered by a Helm chart
+(for example a Deployment, its active ReplicaSet, and its replica Pods), alongside infrastructure Pods.
+One unhealthy object can cause the entire instance to be recreated, even when the inference
+service can still serve traffic. [`StatusByWorkerReadiness`](#use-worker-readiness-for-function-health)
+changes this tradeoff by using only the inference worker's readiness to determine instance health.
+
+An instance transitions through these phases:
+
+- Scheduling: one or more Pods have not yet been assigned to a node.
+- Starting: all Pods are scheduled and NVCA is waiting on readiness.
+- Running: all Helm chart objects and the worker Pod report healthy or ready.
+
+Because health depends on all chart objects, a Pod that is not the inference
+worker (for example a sidecar Deployment or an init Job) can fail the instance
+if it enters a terminal state.
+
+### Timeouts
+
+The following timeouts govern when a still-unhealthy object fails the instance.
+The clock for each timeout starts when the described condition is first
+observed, measured from the Pod launch time unless noted. Values are NVCA
+defaults. Only Worker Degradation Period is operator-configurable, through the
+`Worker Degradation Period` setting in [NVCA Configuration](./cluster-management/configuration.md).
+
+| Timeout | Default | Cause (when the clock starts) | Effect (when exceeded) |
+| --- | --- | --- | --- |
+| Pod scheduling | 10 minutes | A Pod cannot be scheduled onto a node, for example no node satisfies its resources or affinity. | The Pod is marked terminal (`PodStuckScheduling`) and the instance fails and is re-created. For tasks, the task's max queued duration is used instead of this default. |
+| Image pull error | 1 minute | A scheduled Pod reports `ErrImagePull` or `ImagePullBackOff` on any container or init container. | The Pod is marked terminal (`ImagePullIssues`) and the instance fails. Check registry credentials and image references. |
+| Container restart loop | 10 minutes | A container or init container restarts at least 3 times. | The Pod is marked terminal (stuck initializing, containers in restart loop) and the instance fails. |
+| Init container stuck | 2 hours | A Pod's init containers have not completed (the Pod is not yet `Initialized`). | The Pod is marked terminal (init container stuck) and the instance fails. |
+| Worker startup | 2 hours | A running Pod has not become ready during its initial startup, before it has ever reported ready. | The Pod is considered degraded and the instance fails. |
+| Worker Degradation Period | 30 minutes | A Pod that had been ready becomes not ready (containers report not ready) after being initialized. | The Pod is considered degraded, the instance is marked degraded, and NVCA kills and re-creates it. Operator-configurable. |
+| Pending timeout (max running) | 3 hours | Objects remain pending, that is not all objects reach ready, since the instance health condition first went unhealthy. | The instance fails with a pending timeout. |
+| Failing objects backoff | 90 seconds | An object reports a transient failure, for example `FailedMount` or `FailedAttachVolume`. | NVCA requeues and retries every 30 seconds for up to 90 seconds. If the object is still failing after 90 seconds, the instance fails. |
+
+Some conditions fail an instance immediately when default instance health checking is used,
+without waiting for a timeout:
+
+- A Pod that enters the `Failed` phase, including admission rejection
+  (`UnexpectedAdmissionError`).
+- A Pod with restart policy `Never` whose non-restartable container terminates
+  with a non-zero exit code is treated as degraded right away, regardless of the
+  Worker Degradation Period.
+- A controller object (Deployment, ReplicaSet, StatefulSet, Job) that reports a
+  terminal condition such as `ProgressDeadlineExceeded`, a replica-failure
+  condition, or a failed Job.
+- A warning event that indicates a terminal error, such as `FailedCreate`,
+  `FailedUpdate`, `ReplicaSetCreateError`, or a `forbidden` error, on a tracked
+  object.
+
+[`StatusByWorkerReadiness`](#use-worker-readiness-for-function-health) will not result in instance failure
+in any of these scenarios as long as the instance's healthcheck endpoint continues to return a positive status.
+
+### Use worker readiness for function health
+
+As described above, any unhealthy object, like a Pod, applied by the Helm chart can fail the function
+instance. This behavior may not be desirable if some objects in your chart are expected to fail or are not critical
+to serving inference. When your function is configured with the `StatusByWorkerReadiness` feature flag, the instance health check performed by NVCF becomes the sole determinant of instance health.
+The flag is read from the chart at install time to configure the function instance.
+
+Add `templates/nvcf-workload-config.yaml` to the function chart:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nvcf-workload-config
+data:
+  config.yaml: |
+    featureFlags:
+      StatusByWorkerReadiness: true
+```
+
+The ConfigMap must be named `nvcf-workload-config` and the `config.yaml` key must exist.
+Cloud Functions reads this configuration from the chart and does not create the ConfigMap
+in the instance namespace.
+
+Package and push the chart, then create and deploy the function:
+
+```bash
+helm package ./my-chart
+helm push ./my-chart-1.0.0.tgz \
+  oci://${REGISTRY}/${REPOSITORY}/charts
+
+./nvcf-cli function create \
+  --name my-helm-function \
+  --helm-chart \
+    oci://${REGISTRY}/${REPOSITORY}/charts/my-chart-1.0.0.tgz \
+  --helm-chart-service my-inference-service \
+  --inference-url /infer \
+  --inference-port 8000 \
+  --health-uri /health/ready \
+  --health-port 8000
+
+./nvcf-cli function deploy create \
+  --function-id <id> \
+  --version-id <id> \
+  --instance-type NCP.GPU.H100_1x \
+  --gpu H100 \
+  --min-instances 1 \
+  --max-instances 1
+```
+
+The function reaches `RUNNING` when the instance health endpoint `/health/ready` returns HTTP `200`,
+indicating readiness. With this flag enabled:
+
+- Other chart objects' statuses, including the inference Deployment and Service, are
+  informational only. Their statuses are sent in logs but do not gate `RUNNING`.
+- If a non-worker Pod goes down while the instance health endpoint reports ready, the
+  instance remains `RUNNING`. Cloud Functions reports the unhealthy object's status for
+  debugging, and Kubernetes can replace it.
+- If the health endpoint begins to not report ready after the instance has entered the `RUNNING` state,
+  the instance is marked degraded until it reports ready again or 30 minutes have passed
+  (Worker Degradation Period, see [NVCA Configuration](./cluster-management/configuration.md)),
+  after which the instance is killed and re-created by NVCF. (Note: initial startup behavior
+  with a 2 hour timeout remains the same as default instance health behavior)
+
+Without the ConfigMap, or with the flag set to `false`, Cloud Functions uses standard health behavior.
+
+See also the optional `statusByWorkerReadiness` value in
+[examples/function-samples/helmchart-samples/inference-test-sample](https://github.com/NVIDIA/nvcf/tree/main/examples/function-samples/helmchart-samples/inference-test-sample).

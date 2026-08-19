@@ -31,7 +31,11 @@ Before installing the NVCA Operator, ensure the following prerequisites are met:
 
 - The [NVIDIA GPU Operator](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/getting-started.html) is installed on the GPU cluster. The GPU Operator manages the NVIDIA drivers, device plugin, and GPU feature discovery required for workload scheduling. For development or testing environments without physical GPUs, see [fake-gpu-operator](../fake-gpu-operator).
 
-- (Optional) The [KAI Scheduler](./kai-scheduler.md) can be installed on the GPU cluster for optimized AI workload scheduling and bin-packing of GPU resources. It is required only when you enable the `KAIScheduler` feature flag. See [NVCA Configuration](./configuration.md).
+- (Optional) Install [KAI Scheduler](./kai-scheduler.md) for GPU bin-packing
+  and queues. KAI is also the scheduling foundation for
+  [gang scheduling](./gang-scheduling.md) and
+  [topology-aware scheduling](./topology-aware-scheduling.md) with Grove and
+  Dynamo.
 
 - `GPU Workload Components` must be available in a user-managed registry that your Kubernetes cluster can access. See `GPU Workload Components` under [self-hosted-artifact-manifest](../manifest.md) for necessary artifacts and [self-hosted-image-mirroring](../image-mirroring.md) for mirroring instructions.
 

@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "testutils",
+    srcs = ["testutils.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/pkg/testutils",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/control-plane-services/event-ledger/common/core/types",
+        "@com_github_uptrace_opentelemetry_go_extra_otelzap//:otelzap",
+        "@org_uber_go_zap//zaptest",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":testutils",
+    visibility = ["//visibility:public"],
+)

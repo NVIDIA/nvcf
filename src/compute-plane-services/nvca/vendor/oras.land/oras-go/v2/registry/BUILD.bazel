@@ -11,12 +11,12 @@ go_library(
     importpath = "oras.land/oras-go/v2/registry",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/opencontainers/go-digest",
-        "//vendor/github.com/opencontainers/image-spec/specs-go/v1:specs-go",
-        "//vendor/oras.land/oras-go/v2/content",
-        "//vendor/oras.land/oras-go/v2/errdef",
-        "//vendor/oras.land/oras-go/v2/internal/descriptor",
-        "//vendor/oras.land/oras-go/v2/internal/spec",
+        "//src/compute-plane-services/nvca/vendor/github.com/opencontainers/go-digest",
+        "//src/compute-plane-services/nvca/vendor/github.com/opencontainers/image-spec/specs-go/v1:specs-go",
+        "//src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/content",
+        "//src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/errdef",
+        "//src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/internal/descriptor",
+        "//src/compute-plane-services/nvca/vendor/oras.land/oras-go/v2/internal/spec",
     ],
 )
 

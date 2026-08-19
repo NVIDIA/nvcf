@@ -568,7 +568,7 @@ func init() {
 	createCmd.Flags().StringVar(&createFlags.helmChartServiceName, "helm-chart-service", "", "Helm chart service name")
 	createCmd.Flags().StringSliceVar(&createFlags.secrets, "secrets", []string{}, "Secrets in name=value format (e.g., API_KEY=secret123,DB_PASSWORD=pass456)")
 	createCmd.Flags().StringSliceVar(&createFlags.models, "models", []string{}, "Model artifacts (format: name:version:uri)")
-	createCmd.Flags().StringArrayVar(&createFlags.llmModels, "llm-model", []string{}, "LLM model config (format: name=<model>,uris=<uri>|<uri>,routingMethod=<round_robin|power_of_two|groq_multiregion|pulsar|random>,tokenRateLimit=<limit>)")
+	createCmd.Flags().StringArrayVar(&createFlags.llmModels, "llm-model", []string{}, "LLM model config (format: name=<model>,uris=<uri>|<uri>,routingMethod=<round_robin|power_of_two|wait_and_widen|pulsar_wait_and_widen|groq_multiregion|pulsar|random>,tokenRateLimit=<limit>)")
 	createCmd.Flags().StringSliceVar(&createFlags.resources, "resources", []string{}, "Resource artifacts (format: name:version:uri)")
 	createCmd.Flags().StringVar(&createFlags.rateLimit, "rate-limit", "", "Rate limit pattern (e.g., '100-S', '50-M', '10-H', '5-D')")
 	createCmd.Flags().StringSliceVar(&createFlags.rateLimitExempted, "rate-limit-exempted", []string{}, "NCA IDs exempted from rate limiting")
@@ -609,7 +609,7 @@ func init() {
 	updateCmd.Flags().StringVar(&updateFlags.functionID, "function-id", "", "Function ID (required)")
 	updateCmd.Flags().StringVar(&updateFlags.versionID, "version-id", "", "Version ID (required)")
 	updateCmd.Flags().StringSliceVar(&updateFlags.tags, "tags", []string{}, "Function tags (comma-separated)")
-	updateCmd.Flags().StringArrayVar(&updateFlags.llmModelUpdates, "llm-model-update", []string{}, "LLM model update (format: name=<model>,routingMethod=<round_robin|power_of_two|groq_multiregion|pulsar|random>,tokenRateLimit=<limit>)")
+	updateCmd.Flags().StringArrayVar(&updateFlags.llmModelUpdates, "llm-model-update", []string{}, "LLM model update (format: name=<model>,routingMethod=<round_robin|power_of_two|wait_and_widen|pulsar_wait_and_widen|groq_multiregion|pulsar|random>,tokenRateLimit=<limit>)")
 }
 
 // ============================================================================
@@ -818,16 +818,26 @@ func normalizeLLMRoutingMethod(value string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "round_robin":
 		return "round_robin", nil
+	case "round-robin":
+		return "round_robin", nil
 	case "power_of_two":
 		return "power_of_two", nil
+	case "power-of-two":
+		return "power_of_two", nil
+	case "wait_and_widen", "wait-and-widen":
+		return "wait_and_widen", nil
+	case "pulsar_wait_and_widen", "pulsar-wait-and-widen":
+		return "pulsar_wait_and_widen", nil
 	case "groq_multiregion":
+		return "groq_multiregion", nil
+	case "groq-multiregion":
 		return "groq_multiregion", nil
 	case "pulsar":
 		return "pulsar", nil
 	case "random":
 		return "random", nil
 	default:
-		return "", fmt.Errorf("unsupported routingMethod %q (expected round_robin, power_of_two, groq_multiregion, pulsar, or random)", value)
+		return "", fmt.Errorf("unsupported routingMethod %q (expected round_robin, power_of_two, wait_and_widen, pulsar_wait_and_widen, groq_multiregion, pulsar, or random)", value)
 	}
 }
 

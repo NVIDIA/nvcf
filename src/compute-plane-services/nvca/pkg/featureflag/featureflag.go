@@ -57,11 +57,14 @@ var (
 	MultiNodeWorkloads            = newFeatureFlag("MultiNodeWorkloads", newBool(true))
 	BYOObservability              = newFeatureFlag("BYOObservability", newBool(false))
 	BYOOFluentBit                 = newFeatureFlag("BYOOFluentBit", newBool(false))
-	KAIScheduler                  = newFeatureFlag("KAIScheduler", newBool(false))
-	HelmCustomAnnotations         = newFeatureFlag("HelmCustomAnnotations", newBool(false))
-	MaxSQSBatchPull               = newFeatureFlag("MaxSQSBatchPull", newBool(true))
-	CordonMaintenance             = newFeatureFlag("CordonMaintenance", newBool(false))
-	CordonAndDrainMaintenance     = newFeatureFlag("CordonAndDrainMaintenance", newBool(false))
+	// ClientMetrics gates OpenTelemetry semantic-convention metrics for NVCA's
+	// outbound dependency clients.
+	ClientMetrics             = newFeatureFlag("ClientMetrics", newBool(false))
+	KAIScheduler              = newFeatureFlag("KAIScheduler", newBool(false))
+	HelmCustomAnnotations     = newFeatureFlag("HelmCustomAnnotations", newBool(false))
+	MaxSQSBatchPull           = newFeatureFlag("MaxSQSBatchPull", newBool(true))
+	CordonMaintenance         = newFeatureFlag("CordonMaintenance", newBool(false))
+	CordonAndDrainMaintenance = newFeatureFlag("CordonAndDrainMaintenance", newBool(false))
 	// AckTaskRequestAfterPodsScheduled instructs the agent to only acknowledge ICMS requests with ICMS
 	// and delete queue messages after all NVCT task pods have been accepted by the cluster's scheduler.
 	AckTaskRequestAfterPodsScheduled = newFeatureFlag("AckTaskRequestAfterPodsScheduled", newBool(false))
@@ -79,6 +82,14 @@ var (
 
 	// FCO operator-specific feature flags. To be removed once Phase 1 of the FCO SDD is in progress.
 	DynamoOperatorSupport = newFeatureFlag("DynamoOperatorSupport", newBool(false))
+
+	// NvSnapCheckpointRestore is the global kill switch for the NvSnap
+	// integration (see docs/users/nvsnap/NVSNAP-INTEGRATION-DESIGN.md).
+	// When false, NVCA pod creation behaves exactly as before — no
+	// nvsnap.io/restore-from stamping on apply, no post-Ready checkpoint
+	// kick-off. Disabled by default. Per-cluster + per-function-version
+	// overrides land in a follow-up CRD update.
+	NvSnapCheckpointRestore = newFeatureFlag("NvSnapCheckpointRestore", newBool(false))
 )
 
 // Feature flags for migrating resource limits.

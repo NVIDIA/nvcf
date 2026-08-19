@@ -4,15 +4,16 @@ set -euo pipefail
 stack_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work_dir="$(mktemp -d)"
 cluster_name="observability-profile-test-$$"
-registration_values="$stack_dir/out/$cluster_name-register-values.yaml"
-trap 'rm -rf "$work_dir"; rm -f "$registration_values"' EXIT
+output_dir="$work_dir/render-output"
+registration_values="$output_dir/$cluster_name-register-values.yaml"
+trap 'rm -rf "$work_dir"' EXIT
 
 fail() {
   echo "observability-profile: $*" >&2
   exit 1
 }
 
-mkdir -p "$stack_dir/out"
+mkdir -p "$output_dir"
 cp "$stack_dir/testdata/registration/ncp-local-register-values.yaml" \
   "$registration_values"
 
@@ -29,10 +30,11 @@ render_values() {
   HELMFILE_ENV=base \
     CLUSTER_NAME="$cluster_name" \
     NCA_ID=nvcf-default \
+    OUTPUT_DIR="$output_dir" \
     helmfile \
       --file "$stack_dir/helmfile.d/02-nvca.yaml.gotmpl" \
       --environment default \
-      "${profile_args[@]}" \
+      "${profile_args[@]+"${profile_args[@]}"}" \
       "$@" \
       --selector name=nvca-operator \
       write-values \
@@ -47,8 +49,26 @@ collector_enabled() {
   ' "$1"
 }
 
-has_byoo_gate() {
-  grep -q '^[[:space:]]*- BYOObservability$' "$1"
+collector_image_tag() {
+  awk '
+    /^selfManaged:$/ { self_managed = 1; next }
+    self_managed && /^  otelCollector:$/ { collector = 1; next }
+    collector && /^    imageTag:/ { gsub(/"/, "", $2); print $2; exit }
+  ' "$1"
+}
+
+operator_image_tag() {
+  awk '
+    /^image:$/ { image = 1; next }
+    image && /^  tag:/ { gsub(/"/, "", $2); print $2; exit }
+  ' "$1"
+}
+
+nvca_version() {
+  awk '
+    /^selfManaged:$/ { self_managed = 1; next }
+    self_managed && /^  nvcaVersion:/ { gsub(/"/, "", $2); print $2; exit }
+  ' "$1"
 }
 
 for profile in default disabled control compute all; do
@@ -59,48 +79,38 @@ for profile in default disabled control compute all; do
     default|compute|all)
       test "$(collector_enabled "$values")" = "true" ||
         fail "$profile profile did not enable the NVCA collector"
-      has_byoo_gate "$values" ||
-        fail "$profile profile did not enable BYOObservability"
       ;;
     disabled|control)
       test "$(collector_enabled "$values")" = "false" ||
         fail "$profile profile enabled the NVCA collector"
-      if has_byoo_gate "$values"; then
-        fail "$profile profile enabled BYOObservability"
-      fi
       ;;
   esac
 done
 
 render_values compute "$work_dir/compute-overrides.yaml" \
+  --state-values-set-string global.nvcaOperator.imageTag=operator-test-tag \
+  --state-values-set-string global.nvcaOperator.selfManaged.nvcaVersion=nvca-test-tag \
   --state-values-set global.nvcaOperator.selfManaged.otelCollector.enabled=false \
   --state-values-set-string global.nvcaOperator.selfManaged.otelCollector.imageRepository=registry.example.com/nvcf/collector \
-  --state-values-set-string global.nvcaOperator.selfManaged.otelCollector.imageTag=test-tag \
-  --state-values-set-string 'global.nvcaOperator.selfManaged.featureGateValues[0]=-BYOObservability'
+  --state-values-set-string global.nvcaOperator.selfManaged.otelCollector.imageTag=test-tag
 
 test "$(collector_enabled "$work_dir/compute-overrides.yaml")" = "false" ||
   fail "explicit collector disable did not override the compute profile"
-if has_byoo_gate "$work_dir/compute-overrides.yaml"; then
-  fail "explicit BYOObservability disable did not override the compute profile"
-fi
-grep -q '^[[:space:]]*- -BYOObservability$' \
-  "$work_dir/compute-overrides.yaml" ||
-  fail "explicit BYOObservability disable was not preserved"
 grep -Eq '^    imageRepository: "?registry\.example\.com/nvcf/collector"?$' \
   "$work_dir/compute-overrides.yaml" ||
   fail "explicit collector image repository was not preserved"
-grep -Eq '^    imageTag: "?test-tag"?$' \
-  "$work_dir/compute-overrides.yaml" ||
+test "$(collector_image_tag "$work_dir/compute-overrides.yaml")" = "test-tag" ||
   fail "explicit collector image tag was not preserved"
+test "$(operator_image_tag "$work_dir/compute-overrides.yaml")" = "operator-test-tag" ||
+  fail "operator image tag override was not preserved"
+test "$(nvca_version "$work_dir/compute-overrides.yaml")" = "nvca-test-tag" ||
+  fail "NVCA version override was not preserved"
 
 render_values control "$work_dir/control-overrides.yaml" \
-  --state-values-set global.nvcaOperator.selfManaged.otelCollector.enabled=true \
-  --state-values-set-string 'global.nvcaOperator.selfManaged.featureGateValues[0]=BYOObservability'
+  --state-values-set global.nvcaOperator.selfManaged.otelCollector.enabled=true
 
 test "$(collector_enabled "$work_dir/control-overrides.yaml")" = "true" ||
   fail "explicit collector enable did not override the control profile"
-has_byoo_gate "$work_dir/control-overrides.yaml" ||
-  fail "explicit BYOObservability enable did not override the control profile"
 
 if render_values invalid "$work_dir/invalid.yaml" \
   >"$work_dir/invalid.log" 2>&1; then

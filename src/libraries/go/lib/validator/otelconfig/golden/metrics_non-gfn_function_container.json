@@ -69,7 +69,8 @@
                 "job": "kubernetes-cadvisor",
                 "nca_id": "<SKIP_VALIDATION>",
                 "pod": "0-sr-<SKIP_VALIDATION>",
-                "service_name": "kubernetes-cadvisor"
+                "service_name": "kubernetes-cadvisor",
+                "container": "POD"
             },
             "values": []
         },
@@ -121,7 +122,8 @@
                 "job": "kubernetes-cadvisor",
                 "nca_id": "<SKIP_VALIDATION>",
                 "pod": "0-sr-<SKIP_VALIDATION>",
-                "service_name": "kubernetes-cadvisor"
+                "service_name": "kubernetes-cadvisor",
+                "container": "POD"
             },
             "values": []
         },
@@ -172,7 +174,8 @@
                 "job": "kubernetes-cadvisor",
                 "nca_id": "<SKIP_VALIDATION>",
                 "pod": "0-sr-<SKIP_VALIDATION>",
-                "service_name": "kubernetes-cadvisor"
+                "service_name": "kubernetes-cadvisor",
+                "container": "POD"
             },
             "values": []
         },
@@ -223,7 +226,8 @@
                 "job": "kubernetes-cadvisor",
                 "nca_id": "<SKIP_VALIDATION>",
                 "pod": "0-sr-<SKIP_VALIDATION>",
-                "service_name": "kubernetes-cadvisor"
+                "service_name": "kubernetes-cadvisor",
+                "container": "POD"
             },
             "values": []
         },
@@ -274,7 +278,8 @@
                 "job": "kubernetes-cadvisor",
                 "nca_id": "<SKIP_VALIDATION>",
                 "pod": "0-sr-<SKIP_VALIDATION>",
-                "service_name": "kubernetes-cadvisor"
+                "service_name": "kubernetes-cadvisor",
+                "container": "POD"
             },
             "values": []
         },
@@ -325,7 +330,8 @@
                 "job": "kubernetes-cadvisor",
                 "nca_id": "<SKIP_VALIDATION>",
                 "pod": "0-sr-<SKIP_VALIDATION>",
-                "service_name": "kubernetes-cadvisor"
+                "service_name": "kubernetes-cadvisor",
+                "container": "POD"
             },
             "values": []
         },
@@ -359,7 +365,8 @@
                 "job": "kubernetes-cadvisor",
                 "nca_id": "<SKIP_VALIDATION>",
                 "pod": "0-sr-<SKIP_VALIDATION>",
-                "service_name": "kubernetes-cadvisor"
+                "service_name": "kubernetes-cadvisor",
+                "container": "POD"
             },
             "values": []
         },
@@ -377,7 +384,8 @@
                 "job": "kubernetes-cadvisor",
                 "nca_id": "<SKIP_VALIDATION>",
                 "pod": "0-sr-<SKIP_VALIDATION>",
-                "service_name": "kubernetes-cadvisor"
+                "service_name": "kubernetes-cadvisor",
+                "container": "POD"
             },
             "values": []
         },
@@ -395,7 +403,8 @@
                 "job": "kubernetes-cadvisor",
                 "nca_id": "<SKIP_VALIDATION>",
                 "pod": "0-sr-<SKIP_VALIDATION>",
-                "service_name": "kubernetes-cadvisor"
+                "service_name": "kubernetes-cadvisor",
+                "container": "POD"
             },
             "values": []
         },
@@ -413,7 +422,8 @@
                 "job": "kubernetes-cadvisor",
                 "nca_id": "<SKIP_VALIDATION>",
                 "pod": "0-sr-<SKIP_VALIDATION>",
-                "service_name": "kubernetes-cadvisor"
+                "service_name": "kubernetes-cadvisor",
+                "container": "POD"
             },
             "values": []
         },
@@ -431,7 +441,8 @@
                 "job": "kubernetes-cadvisor",
                 "nca_id": "<SKIP_VALIDATION>",
                 "pod": "0-sr-<SKIP_VALIDATION>",
-                "service_name": "kubernetes-cadvisor"
+                "service_name": "kubernetes-cadvisor",
+                "container": "POD"
             },
             "values": []
         },
@@ -449,7 +460,8 @@
                 "job": "kubernetes-cadvisor",
                 "nca_id": "<SKIP_VALIDATION>",
                 "pod": "0-sr-<SKIP_VALIDATION>",
-                "service_name": "kubernetes-cadvisor"
+                "service_name": "kubernetes-cadvisor",
+                "container": "POD"
             },
             "values": []
         },
@@ -467,7 +479,8 @@
                 "job": "kubernetes-cadvisor",
                 "nca_id": "<SKIP_VALIDATION>",
                 "pod": "0-sr-<SKIP_VALIDATION>",
-                "service_name": "kubernetes-cadvisor"
+                "service_name": "kubernetes-cadvisor",
+                "container": "POD"
             },
             "values": []
         },
@@ -485,7 +498,8 @@
                 "job": "kubernetes-cadvisor",
                 "nca_id": "<SKIP_VALIDATION>",
                 "pod": "0-sr-<SKIP_VALIDATION>",
-                "service_name": "kubernetes-cadvisor"
+                "service_name": "kubernetes-cadvisor",
+                "container": "POD"
             },
             "values": []
         },
@@ -642,6 +656,114 @@
                 "nca_id": "<SKIP_VALIDATION>",
                 "pod": "0-sr-<SKIP_VALIDATION>",
                 "service_name": "kube-state-metrics"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "otelcol_exporter_queue_capacity",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "data_type": "logs",
+                "exporter": "<SKIP_VALIDATION>",
+                "function_id": "<SKIP_VALIDATION>",
+                "function_version_id": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "opentelemetry-collector",
+                "nca_id": "<SKIP_VALIDATION>",
+                "otel_scope_name": "go.opentelemetry.io/collector/exporter/exporterhelper",
+                "service_name": "opentelemetry-collector"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "otelcol_exporter_queue_capacity",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "data_type": "metrics",
+                "exporter": "<SKIP_VALIDATION>",
+                "function_id": "<SKIP_VALIDATION>",
+                "function_version_id": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "opentelemetry-collector",
+                "nca_id": "<SKIP_VALIDATION>",
+                "otel_scope_name": "go.opentelemetry.io/collector/exporter/exporterhelper",
+                "service_name": "opentelemetry-collector"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "otelcol_exporter_queue_capacity",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "data_type": "traces",
+                "exporter": "<SKIP_VALIDATION>",
+                "function_id": "<SKIP_VALIDATION>",
+                "function_version_id": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "opentelemetry-collector",
+                "nca_id": "<SKIP_VALIDATION>",
+                "otel_scope_name": "go.opentelemetry.io/collector/exporter/exporterhelper",
+                "service_name": "opentelemetry-collector"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "otelcol_exporter_queue_size",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "data_type": "logs",
+                "exporter": "<SKIP_VALIDATION>",
+                "function_id": "<SKIP_VALIDATION>",
+                "function_version_id": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "opentelemetry-collector",
+                "nca_id": "<SKIP_VALIDATION>",
+                "otel_scope_name": "go.opentelemetry.io/collector/exporter/exporterhelper",
+                "service_name": "opentelemetry-collector"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "otelcol_exporter_queue_size",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "data_type": "metrics",
+                "exporter": "<SKIP_VALIDATION>",
+                "function_id": "<SKIP_VALIDATION>",
+                "function_version_id": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "opentelemetry-collector",
+                "nca_id": "<SKIP_VALIDATION>",
+                "otel_scope_name": "go.opentelemetry.io/collector/exporter/exporterhelper",
+                "service_name": "opentelemetry-collector"
+            },
+            "values": []
+        },
+        {
+            "metric": {
+                "__name__": "otelcol_exporter_queue_size",
+                "cloud_provider": "<SKIP_VALIDATION>",
+                "cloud_region": "<SKIP_VALIDATION>",
+                "data_type": "traces",
+                "exporter": "<SKIP_VALIDATION>",
+                "function_id": "<SKIP_VALIDATION>",
+                "function_version_id": "<SKIP_VALIDATION>",
+                "host_id": "<SKIP_VALIDATION>",
+                "instance_id": "<SKIP_VALIDATION>",
+                "job": "opentelemetry-collector",
+                "nca_id": "<SKIP_VALIDATION>",
+                "otel_scope_name": "go.opentelemetry.io/collector/exporter/exporterhelper",
+                "service_name": "opentelemetry-collector"
             },
             "values": []
         },

@@ -39,7 +39,7 @@ nvcaImage:
 otelCollector:
   enabled: false
   imageRepository: ""
-  imageTag: 0.143.2
+  imageTag: 0.157.9
   resources:
     limits:
       cpu: 1000m
@@ -130,6 +130,32 @@ agentConfig:
   #       dropLabels:
   #         - metric_subset_enabled
   #         - custom_label
+  #     byooOtelCollector:
+  #       logSampling:
+  #         samplingPercentage: 10
+  #         mode: hash_seed
+  #         hashSeed: 1234
+  #         failClosed: true
+  #       traceSampling:
+  #         samplingPercentage: 1
+  #         mode: hash_seed
+  #         hashSeed: 1234
+  #         failClosed: true
+
+## @section Workload transport trust configuration
+## @param operatorConfig.workload.transportTLS.trustBundle.secretKeyRef.name Secret containing the workload transport trust bundle. Empty disables Secret-backed transport trust. Example: nvcf-trust.
+## @param operatorConfig.workload.transportTLS.trustBundle.secretKeyRef.key Secret data key containing certificate-only PEM.
+## @param operatorConfig.workload.transportTLS.fingerprint Optional sha256 fingerprint pin for the trust bundle. Empty computes the fingerprint from the selected Secret data.
+## @param operatorConfig.workload.transportTLS.installedBundleMountPath Optional llm-worker mount path for the installed transport trust bundle. Empty uses /etc/ssl/certs.
+operatorConfig:
+  workload:
+    transportTLS:
+      trustBundle:
+        secretKeyRef:
+          name: ""
+          key: ca.crt
+      fingerprint: ""
+      installedBundleMountPath: ""
 
 ## @section resources Resource requests and limits for the nvca-operator container
 ## @param resources.limits.cpu CPU limit for the nvca-operator container
@@ -163,7 +189,7 @@ resources:
 ## @param agent.taskEnvOverrides Map of environment variable overrides for task workloads (e.g., {"INIT_CONTAINER": "nvcr.io/custom/init:v1.0", "ESS_AGENT_CONTAINER": "nvcr.io/custom/ess:v1.0"})
 ## @param agent.overrideEnvironmentVariables Map of environment variables to override on the NVCA agent container. These take precedence over default values. Example: {"LOG_LEVEL": "debug", "CUSTOM_FLAG": "enabled"}
 ## @param agent.tolerations K8s tolerations for the NVCA agent pod
-## @param agent.llm.requestRouterAddress Default LLM request-router worker address rendered as STARGATE_ADDRESS for LLM workers
+## @param agent.llm.requestRouterAddress Operator default LLM request-router address. Workers read LLM_REQUEST_ROUTER_ADDRESS from the launch environment; not a runtime fallback
 ## @param agent.serviceOAuth OAuth token and JWKS endpoints used by dependent services
 agent:
   cacheMountOptionsEnabled: true
@@ -184,6 +210,11 @@ agent:
     requestRouterAddress: ""
   workload:
     tolerations: []
+  ## @param agent.byooOtelCollector.imageRepository Optional BYOO OpenTelemetry Collector image repository. If unset, it is derived from image.repository.
+  ## @param agent.byooOtelCollector.imageTag BYOO OpenTelemetry Collector image tag.
+  byooOtelCollector:
+    imageRepository: ""
+    imageTag: "0.157.11"
   ## Environment variable overrides for function workloads.
   ## Available keys: INIT_CONTAINER, UTILS_CONTAINER, OTEL_CONTAINER, BYOO_OTEL_COLLECTOR_CONTAINER,
   ##                 NICLLS_CONTAINER, ESS_AGENT_CONTAINER, INFERENCE_CONTAINER
@@ -246,8 +277,9 @@ webhook:
 ## @param ngcConfig.serviceKeySecretKeyName Key in the secret ngcConfig.serviceKeySecretName containing the NGC ServiceKey (password).
 ## @param ngcConfig.apiURL NGC API URL for requesting auth tokens
 ## @param ngcConfig.clusterSource Source of the cluster configuration:
-##     - "helm-managed": Cluster configuration managed by the helm chart
-##     - "ngc-managed": Cluster configuration managed by NGC
+##     - "ngc-managed": Cluster configuration managed by NGC (default)
+##     - "helm-managed": Cluster configuration managed by the Helm chart
+##     - "self-managed": Cluster configuration managed by the self-hosted compute plane
 ngcConfig:
   username: '$oauthtoken'
   serviceKey: ""
@@ -258,9 +290,11 @@ ngcConfig:
 
 
 ## @section Vault Configuration
+## @param vaultConfig.address Vault server URL for Helm-managed clusters. Required when helmManaged.oAuthClientID is set; must be HTTP(S), without credentials, query, or fragment.
 ## @param vaultConfig.oAuthClientMountPathTemplate Template for constructing the OAuth client mount path in Vault. Use %s as placeholder for clientID. Example: "nvidia/services/oauth/clients/%s/kv/secret"
 ## @param vaultConfig.oAuthClientMountPath (Optional) Full OAuth client mount path. If set, overrides the computed path from template.
 vaultConfig:
+  address: ""
   oAuthClientMountPathTemplate: ""
   oAuthClientMountPath: ""
 
@@ -301,7 +335,7 @@ helmManaged:
   otelCollector:
     enabled: false
     imageRepository: ""
-    imageTag: 0.143.2
+    imageTag: 0.157.9
 
 ## @section Self Managed NVCF Backend Configuration
 ## Only used when ngcConfig.clusterSource is "self-managed"
@@ -326,7 +360,7 @@ selfManaged:
   otelCollector:
     enabled: false
     imageRepository: ""
-    imageTag: 0.143.2
+    imageTag: 0.157.9
   ## @param selfManaged.icmsServiceURL URL of the SIS/ICMS service for self-managed clusters. Required when ngcConfig.clusterSource is "self-managed".
   icmsServiceURL: ""
   ## @param selfManaged.icmsServiceHostHeaderOverride Optional Host header override for selfManaged.icmsServiceURL.
@@ -378,6 +412,24 @@ gracefulShutdown:
 networkPolicy:
   clusterNetworkCIDRs: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/12"]
   customPolicies: []
+
+  ## @param networkPolicy.operator.enabled Apply a default-deny NetworkPolicy to the operator pod itself, with explicit allows for kube-dns, nvsnap-server, and the kube-apiserver. Opt-in: false by default so existing deployments are unchanged.
+  ## @param networkPolicy.operator.nvsnapServerNamespace Namespace where nvsnap-server runs (egress target for L2 promote-state polls + audit writes)
+  ## @param networkPolicy.operator.nvsnapServerPodLabel app= label value matched against pods in the nvsnap-server namespace
+  ## @param networkPolicy.operator.nvsnapServerPort nvsnap-server REST port
+  ## @param networkPolicy.operator.apiServerCIDRs CIDR list containing the kube-apiserver. Empty = no apiserver allow (operator loses K8s API access). Pin to your cluster's apiserver range.
+  ## @param networkPolicy.operator.apiServerPort kube-apiserver port
+  ## @param networkPolicy.operator.ingressFrom Optional NetworkPolicyPeer list for ingress (Prometheus, kubelet probes). Empty = allow from anywhere.
+  ## @param networkPolicy.operator.extraEgress Additional egress rule entries appended verbatim (private registries, OTLP collector, …)
+  operator:
+    enabled: false
+    nvsnapServerNamespace: "nvsnap-system"
+    nvsnapServerPodLabel: "nvsnap-server"
+    nvsnapServerPort: 8080
+    apiServerCIDRs: []
+    apiServerPort: 443
+    ingressFrom: []
+    extraEgress: []
 
 ## @section Cluster Validator Configuration
 

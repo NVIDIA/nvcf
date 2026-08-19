@@ -7,10 +7,10 @@ go_library(
     importpath = "k8s.io/client-go/informers/storage",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/k8s.io/client-go/informers/internalinterfaces",
-        "//vendor/k8s.io/client-go/informers/storage/v1:storage",
-        "//vendor/k8s.io/client-go/informers/storage/v1alpha1",
-        "//vendor/k8s.io/client-go/informers/storage/v1beta1",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/informers/internalinterfaces",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/informers/storage/v1:storage",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/informers/storage/v1alpha1",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/informers/storage/v1beta1",
     ],
 )
 

@@ -12,11 +12,11 @@ go_library(
     importpath = "github.com/go-openapi/swag/yamlutils",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/go-openapi/swag/conv",
-        "//vendor/github.com/go-openapi/swag/jsonutils",
-        "//vendor/github.com/go-openapi/swag/jsonutils/adapters/ifaces",
-        "//vendor/github.com/go-openapi/swag/typeutils",
-        "//vendor/go.yaml.in/yaml/v3:yaml",
+        "//src/compute-plane-services/nvca/vendor/github.com/go-openapi/swag/conv",
+        "//src/compute-plane-services/nvca/vendor/github.com/go-openapi/swag/jsonutils",
+        "//src/compute-plane-services/nvca/vendor/github.com/go-openapi/swag/jsonutils/adapters/ifaces",
+        "//src/compute-plane-services/nvca/vendor/github.com/go-openapi/swag/typeutils",
+        "//src/compute-plane-services/nvca/vendor/go.yaml.in/yaml/v3:yaml",
     ],
 )
 

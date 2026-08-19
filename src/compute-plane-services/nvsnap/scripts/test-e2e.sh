@@ -31,6 +31,7 @@ fi
 
 # Verify deployed agent matches expected version
 source "$SCRIPT_DIR/versions.sh"
+source "$SCRIPT_DIR/lib/agent-auth.sh"
 DEPLOYED=$(kubectl get ds nvsnap-agent -n nvsnap-system -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null)
 EXPECTED="${NVSNAP_REGISTRY}/nvsnap-agent:${NVSNAP_APP_VERSION}"
 if [ "$DEPLOYED" != "$EXPECTED" ]; then
@@ -537,6 +538,19 @@ else
 fi
 log_info "Capture path: $CAPTURE_PATH"
 
+# RESTORE_CONTAINER_NAME defaults to "restore" per workload, which is right
+# for criu-v2: that restore pod is a placeholder whose only container is the
+# bash reaper the agent restores into.
+#
+# The cachedir path has no placeholder. Its restore target is a customer-shaped
+# pod running the real workload, so the container carries the engine's name and
+# an exec against "restore" hits a container that does not exist. The pod then
+# passes its readiness probe (an httpGet on /v1/models) while every post-restore
+# poll fails, which reads as "restored but not serving" when it is serving fine.
+if [ "$CAPTURE_PATH" = "rootfs" ]; then
+    RESTORE_CONTAINER_NAME="$CONTAINER_NAME"
+fi
+
 # On the rootfs/cachedir path, prefer a dedicated <workload>-rootfs-restore.yaml
 # if one exists: the CRIU restore template chains restore-entrypoint and waits
 # for a CRIU dump that never appears on the rootfs path. The rootfs variant is a
@@ -799,8 +813,13 @@ if [ "$CAPTURE_PATH" = "criu-v2" ]; then
         --field-selector "spec.nodeName=$POD_NODE" -o jsonpath='{.items[0].metadata.name}')
     [ -n "$AGENT_POD" ] || fail "criu-v2 restore (no agent pod on $POD_NODE)"
     log_info "criu-v2: agent-driven restore via $AGENT_POD (synchronous, up to 21min)..."
+    # curl runs in the pod, but these args are expanded by the local shell
+    # (no sh -c), so the token comes from the Secret rather than the
+    # container's NVSNAP_AGENT_TOKEN. Empty unless auth is enabled.
+    nvsnap_agent_auth_args "$NAMESPACE"
     RESTORE_RESP=$(kubectl exec -n $NAMESPACE "$AGENT_POD" -c agent -- \
         curl -s --max-time 1260 -X POST "http://localhost:8081/v1/restore" \
+        "${NVSNAP_AUTH_ARGS[@]}" \
         -H 'Content-Type: application/json' \
         -d "{\"checkpointId\":\"$CHECKPOINT_ID\",\"placeholderPodName\":\"$RESTORE_POD_NAME\",\"placeholderNamespace\":\"$NAMESPACE\"}") || true
     if ! printf '%s' "$RESTORE_RESP" | grep -q '"newContainerId"'; then

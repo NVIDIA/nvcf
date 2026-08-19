@@ -17,18 +17,16 @@
 set -euo pipefail
 
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+FULL_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
 BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
 DIRTY=""
 if [ "$COMMIT" != "unknown" ] && [ -n "$(git status --porcelain 2>/dev/null)" ]; then
     DIRTY="-dirty"
 fi
 
-# CI overrides for VERSION (from git tag or MR sha) and BUILD_USER.
-# When unset, fall back to the values the legacy nvcf-cli Makefile computed.
+# VERSION comes from NVCF_VERSION (set by release builds) or mr-<sha> otherwise.
 if [ -n "${NVCF_VERSION:-}" ]; then
     VERSION="${NVCF_VERSION}"
-elif TAG=$(git describe --tags --exact-match HEAD 2>/dev/null); then
-    VERSION="${TAG}"
 else
     VERSION="mr-${COMMIT}"
 fi
@@ -39,6 +37,7 @@ GO_VERSION="${NVCF_GO_VERSION:-bazel-rules_go}"
 
 echo "STABLE_VERSION ${VERSION}"
 echo "STABLE_GIT_COMMIT ${COMMIT}${DIRTY}"
+echo "STABLE_GIT_COMMIT_FULL ${FULL_COMMIT}${DIRTY}"
 echo "STABLE_GIT_BRANCH ${BRANCH}"
 echo "STABLE_BUILD_USER ${BUILD_USER}"
 echo "STABLE_GO_VERSION ${GO_VERSION}"
@@ -47,7 +46,6 @@ echo "STABLE_OCI_TAG ${VERSION}-${COMMIT}${DIRTY}"
 # Java build metadata. The Spring Boot packaging macro (//rules/java:spring.bzl)
 # stamps git.properties / maven.properties from these keys. Empty values are
 # handled gracefully by the packaging rule.
-FULL_COMMIT=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
 GIT_TAGS=$(git tag --points-at HEAD 2>/dev/null | paste -sd, - || true)
 CLOSEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
 echo "STABLE_GIT_COMMIT_ID_FULL ${FULL_COMMIT}"
