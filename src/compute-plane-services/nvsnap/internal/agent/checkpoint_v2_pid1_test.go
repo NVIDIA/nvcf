@@ -139,6 +139,23 @@ func TestNamespaceRootDumpArgsClosesTCPRatherThanRestoringIt(t *testing.T) {
 	}
 }
 
+// restore-entrypoint sets MntnsCompatMode, so the dump must use the same mount
+// engine. Recording with mount-v2 and rebuilding with the compat engine made
+// criu fail to enter the namespace ("Can't setns 46/mnt: Invalid argument")
+// while restoring a listening unix socket bound to a path inside it.
+func TestNamespaceRootDumpArgsMatchesRestoreMountEngine(t *testing.T) {
+	args := namespaceRootDumpArgs(1, "/r", "/imgs", "/plugins", nil, nil, nil, false)
+	found := false
+	for _, a := range args {
+		if a == "--mntns-compat-mode" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("--mntns-compat-mode missing; restore sets MntnsCompatMode: %s", argsString(args))
+	}
+}
+
 func TestNamespaceRootDumpArgsLeaveRunning(t *testing.T) {
 	for _, leave := range []bool{true, false} {
 		args := namespaceRootDumpArgs(1, "/r", "/imgs", "/plugins", nil, nil, nil, leave)
