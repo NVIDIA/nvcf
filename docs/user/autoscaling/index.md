@@ -1,33 +1,50 @@
 # Function Autoscaling
 
-The NVCF Function Autoscaler is a distributed Rust service that monitors function utilization and uses it to determine the ideal instance count per function on the NVCF control plane. It runs as a horizontally scaled deployment on the same Kubernetes cluster as the rest of the control plane.
-
-On an interval, the function autoscaler reads metrics from the timeseries database, decides how many instances each function should have, and calls the NVCF API to apply that decision.
-
-The function autoscaler depends on a Prometheus-compatible timeseries database fed by the worker pods and invocation-plane services. Without it, the service reports `not ready` and makes no scaling decisions. See [Timeseries database](./architecture.md#timeseries-database) for the required metrics and endpoints.
+The NVCF Function Autoscaler reads function metrics, calculates a desired
+instance count, and sends that count to the NVCF API. It runs in the
+self-hosted control-plane cluster.
 
 ## Function Autoscaler vs Horizontal Pod Autoscaler
 
-Function autoscaling is distinct from Kubernetes horizontal pod autoscaling (HPA). HPA scales pods within a single cluster, so it cannot reach NVCF worker pods that are spread across multiple clusters. Function autoscaling orchestrates scaling across clusters using global load patterns.
+Function autoscaling is distinct from Kubernetes horizontal pod autoscaling
+(HPA). HPA scales a Kubernetes workload in one cluster. The Function
+Autoscaler sets the desired instance count for an NVCF function version, which
+can run across NVCF compute clusters.
 
 ## Key Functionality
 
-- Discovers active functions from invocation and worker metrics in the timeseries database and persists the active set in Cassandra.
-- Periodically computes a desired instance count per function from recent utilization and the function's scaling policy.
+- Discovers active functions from invocation and worker metrics in the
+  timeseries database and persists the active set in Cassandra.
+- Periodically computes a desired instance count per function from recent
+  utilization and the function's scaling policy.
 - Applies the desired count by calling the NVCF API's predictions endpoint.
-- Coordinates work across replicas using hash-based bucket assignment and Cassandra Lightweight Transaction (LWT) distributed locks.
+- Coordinates work across replicas using hash-based bucket assignment and
+  Cassandra lightweight transaction (LWT) locks.
+
+## Self-hosted deployment
+
+The self-managed control-plane stack defaults to the `control` observability
+profile. The `control` and `all` profiles install the Function Autoscaler. The
+`compute` and `disabled` profiles do not.
+
+State Metrics must be enabled for `control` and `all`. With the default
+component modes, the control-plane stack also installs the shared collector and
+VictoriaMetrics. See [Observability Configuration](../observability.md) for
+profile and backend settings.
 
 ## Architecture Overview
 
 ```mermaid
 flowchart LR
-    Workers[Workers / Invocation Services] --> TSDB[(Time Series DB)]
+    Services[Metrics endpoints] --> Collector[OpenTelemetry Collector]
+    Collector --> TSDB[(VictoriaMetrics or external backend)]
     TSDB --> Autoscaler[Function Autoscaler]
     Autoscaler <--> Cassandra[(Cassandra)]
     Autoscaler --> NVCF[NVCF API]
 ```
 
-See [Architecture](./architecture.md#sequence-diagram) for the end-to-end sequence diagram and the bucket model.
+See [Architecture](./architecture.md#sequence-diagram) for the end-to-end
+sequence and bucket model.
 
 ## See Also
 
@@ -35,3 +52,4 @@ See [Architecture](./architecture.md#sequence-diagram) for the end-to-end sequen
 - [Configure Autoscaling](../configure-autoscaling.md) for setting per-function scaling bounds, factors, thresholds, and stickiness via the NVCF API.
 - [Function Autoscaler Operations](./operations.md) for health endpoints and operational guidance.
 - [Function Autoscaler Observability](./observability.md) for the metrics, traces, and logs emitted by the service.
+- [Observability Configuration](../observability.md) for profiles and metrics backend configuration.

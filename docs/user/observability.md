@@ -14,6 +14,7 @@ Common operator questions and where to look on this page or in linked references
 | Where are gRPC proxy metrics? | [gRPC Proxy metrics](./metrics/grpc-proxy/metrics.md). The page documents client connection counts, NATS pipe health, gRPC worker session-attach latency, and HTTP RED metrics. |
 | How do I add custom spans or metrics in a Kit application? | Use the OpenTelemetry API directly, the OmniTrace helper, the Carbonite static metrics API, or the `omni::observability::IMeter` interface. Refer to the Omniverse Kit and Carbonite documentation for details. |
 | Where are reference dashboards? | [Example dashboards](./example-dashboards.md) and the [Dashboards](#dashboards) section below. |
+| How do I configure the shared metrics stack? | See [Self-managed metrics stack](#self-managed-metrics-stack). |
 
 ## Overview
 
@@ -36,8 +37,8 @@ The observability solution currently provides:
 to explore metrics, logs, and dashboards, see [self-hosted-example-dashboards](./example-dashboards.md).
 
 The example deployments are designed for development and testing only, and are not suitable
-for production use. For production deployments, follow the guidance on this page to integrate
-with your own observability infrastructure.
+for production use. For production deployments, use the self-managed metrics stack or
+integrate with your own observability infrastructure.
 
 </Note>
 
@@ -50,14 +51,15 @@ NVCF self-hosted observability is currently in Early Access (EA). During EA, NVC
 - Documented metrics for critical control-plane services
 - Example scrape targets for prometheus-operator ServiceMonitor configuration
 - Metrics exposed via Prometheus-compatible endpoints
+- Shared metrics collection with bundled VictoriaMetrics or an existing backend
 - Logs emitted to stdout/stderr for easy collection
 - Configuration and deployment documentation
 - Example dashboards for key metrics
 
 **Your Responsibility:**
 
-- Deploy and manage your own observability backend (Prometheus, Grafana, Loki, Elasticsearch, etc.)
-- Configure metrics scraping from control-plane services
+- Configure storage for bundled VictoriaMetrics or connect an existing backend
+- Configure compute-plane collection for split deployments
 - Deploy log collectors (e.g., Fluentd, Promtail, OTel Collector) to aggregate logs
 - Set up your preferred visualization and alerting tools
 
@@ -71,6 +73,7 @@ The following control-plane services expose metrics and logs for monitoring:
 - **Invocation Service**: Handles function invocation requests
 - **SPOT Instance Service (SIS)**: Manages worker pod and cluster state
 - **State Metrics Service**: Aggregates and exports NVCF-specific metrics
+- **Function Autoscaler**: Calculates desired function instance counts
 
 **Supporting Services:**
 
@@ -101,6 +104,55 @@ All control-plane services expose Prometheus-compatible metrics endpoints. You c
 Detailed metrics documentation is available for each service, including metric names,
 types, labels, and descriptions. See the per-service metrics reference under the
 `Metrics` section.
+
+### Self-managed metrics stack
+
+The Helmfile stack uses an observability profile to select the default metrics
+components and monitor targets:
+
+| Profile | Shared monitor defaults | Function Autoscaler | NVCA observability defaults |
+| --- | --- | --- | --- |
+| `disabled` | None | Not installed | Disabled |
+| `control` | Control-plane services | Installed | Disabled |
+| `compute` | NVCA, DCGM, and worker pods | Not installed | Enabled |
+| `all` | Control-plane and compute-plane targets | Installed | Enabled |
+
+The control-plane stack defaults to `control`. The compute-plane stack defaults
+to `compute`. Use `all` when both sets of targets run in the same cluster.
+
+The default `control` profile installs the Prometheus Operator custom resource
+definitions, OpenTelemetry Operator, collector with Target Allocator, default
+control-plane monitors, and VictoriaMetrics. It also installs the Function
+Autoscaler and requires State Metrics.
+
+The bundled VictoriaMetrics instance runs in `monitoring` by default. Set its
+storage class in the Helmfile environment. See
+[Helmfile Installation](./helmfile-installation.md#observability-configuration).
+
+Use `metricsBackend.mode: existing` to connect a customer-managed backend:
+
+```yaml
+metricsBackend:
+  mode: existing
+  type: external
+  remoteWriteEndpoint: https://metrics.example.com/write
+  promqlEndpoint: https://metrics.example.com
+  authentication:
+    mode: none
+```
+
+The collector requires the remote-write endpoint. The `control` and `all`
+profiles also require the PromQL endpoint because the Function Autoscaler
+queries it. The autoscaler supports `none`, `token`, and `mtls` authentication
+for PromQL queries. Configure collector remote-write authentication separately.
+
+Profiles set defaults. Components can use `install`, `existing`, or `disabled`
+mode when another deployment owns them.
+
+The shared collector discovers targets only in its Kubernetes cluster. In a
+split deployment, configure compute-plane collection separately and make any
+worker metrics used for autoscaling available to the control-plane backend. See
+[Cluster Monitoring](./cluster-management/monitoring.md).
 
 ### Logging
 
@@ -134,19 +186,14 @@ Distributed tracing support via OpenTelemetry Protocol (OTLP) is planned for a f
 
 ## Configuration
 
-You configure observability by integrating with your own backend:
+You can use the shared metrics stack or integrate with your own backend.
 
 ### Metrics Scraping
 
-Metrics export is opt-in and disabled by default. Enable it in your Helmfile
-environment before configuring scrape targets:
-
-```yaml
-global:
-  observability:
-    metrics:
-      enabled: true
-```
+The observability profile configures the shared collector and default monitors.
+Some service charts also use `global.observability.metrics.enabled` to enable
+their own metrics exports or PodMonitors. Set it separately when those service
+metrics are needed.
 
 Use Prometheus Operator with the provided ServiceMonitor examples:
 
@@ -342,6 +389,9 @@ For troubleshooting common observability issues:
    kubectl logs -n nvcf deployment/nvcf-api | grep -i metric
    ```
 
+For shared stack or Function Autoscaler issues, see
+[Function Autoscaler Operations](./autoscaling/operations.md).
+
 **Logs not being collected:**
 
 1. Verify log collector DaemonSet is running:
@@ -399,6 +449,9 @@ For troubleshooting common observability issues:
 
 ## Related Documentation
 
+- [Function Autoscaling](./autoscaling/index.md)
+- [Function Autoscaler Observability](./autoscaling/observability.md)
+- [Cluster Monitoring](./cluster-management/monitoring.md)
 - [OpenTelemetry documentation](https://opentelemetry.io/docs/)
 - [Prometheus documentation](https://prometheus.io/docs/)
 
@@ -406,7 +459,7 @@ For troubleshooting common observability issues:
 
 NVCF self-hosted control-plane observability is compatible with:
 
-- Supported versions are the latest Kubernetes minor release and the two prior minor releases (N-2). See official Kubernetes docs for current supported [versions](https://kubernetes.io/releases/version-skew-policy/#supported-versions). 
+- Supported versions are the latest Kubernetes minor release and the two prior minor releases (N-2). See official Kubernetes docs for current supported [versions](https://kubernetes.io/releases/version-skew-policy/#supported-versions).
 - Any Prometheus-compatible metrics collection system
 - Any log aggregation system that can collect from Kubernetes stdout/stderr or read
   from the filesystem (depending on K8s cluster configuration)

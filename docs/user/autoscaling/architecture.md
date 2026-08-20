@@ -1,27 +1,35 @@
 # Function Autoscaler Architecture
 
-The function autoscaler is a Rust service deployed as a horizontally scaled Kubernetes Deployment. It reads utilization and request metrics from a Prometheus-compatible timeseries database, stores discovered functions and coordination state in Cassandra, and writes desired instance counts to the NVCF API. Cassandra lightweight transactions handle leader election and short-lived per-function locks.
+The Function Autoscaler runs as a Kubernetes Deployment in the control-plane
+cluster. It reads metrics from a PromQL-compatible backend, stores coordination
+state in Cassandra, and writes desired instance counts to the NVCF API.
 
-The work is split into two loops. A leader-elected discovery loop scans the timeseries database for active function versions and upserts them into Cassandra. A scaling loop runs on every replica, but each replica only handles the functions whose IDs hash into its assigned buckets, so the active set is sharded across replicas.
+The work is split into two loops. A leader-elected discovery loop scans the
+timeseries database for active function versions and upserts them into
+Cassandra. A scaling loop runs on every replica, but each replica only handles
+the functions whose IDs hash into its assigned buckets, so the active set is
+sharded across replicas.
 
 ## Sequence Diagram
 
 ```mermaid
 sequenceDiagram
-    participant Workers as Workers / Invocation Services
-    participant TSDB as Time Series DB
+    participant Services as NVCF metrics endpoints
+    participant Collector as OpenTelemetry Collector
+    participant TSDB as Metrics backend
     participant Autoscaler as Function Autoscaler
     participant Cassandra as Cassandra
     participant NVCF as NVCF Service
 
-    Workers->>TSDB: Emit utilization and instance metrics
+    Collector->>Services: Scrape selected metrics
+    Collector->>TSDB: Remote write
 
-    Note over Autoscaler,Cassandra: Discovery loop (~15s, leader-elected)
+    Note over Autoscaler,Cassandra: Periodic discovery loop, leader-elected
     Autoscaler->>TSDB: Query active functions
     TSDB-->>Autoscaler: Function set
     Autoscaler->>Cassandra: Upsert newly discovered functions
 
-    Note over Autoscaler,NVCF: Scaling loop (~30s, per-bucket)
+    Note over Autoscaler,NVCF: Periodic scaling loop, per-bucket
     Autoscaler->>Cassandra: Read active functions for this node's buckets
     Autoscaler->>TSDB: Query current instances and utilization history
     TSDB-->>Autoscaler: Metrics
@@ -32,22 +40,43 @@ sequenceDiagram
     Autoscaler->>Cassandra: Write predicted count, refresh function TTL
 ```
 
-The discovery loop runs on one leader-elected replica. The scaling loop runs on every replica, but each replica only processes the function buckets assigned to it.
+The discovery loop runs on one leader-elected replica. The scaling loop runs on
+every replica, but each replica only processes its assigned function buckets.
 
-## Timeseries Database
+## Deployment order
 
-The function autoscaler is a read-only client of a Prometheus-compatible timeseries store. It calls the `/api/v1/query_range` HTTP endpoint and uses PromQL for every metric query, so any backend that implements that interface works: upstream Prometheus, Thanos, Grafana Mimir, or VictoriaMetrics. The reference NVCF deployments point at VictoriaMetrics via the `timeseries_db_url` setting.
+With the default `control` profile, the observability stage installs the shared
+metrics components and backend. The final control-plane stage installs State
+Metrics, then the Function Autoscaler. The autoscaler depends on State Metrics.
 
-The function autoscaler does not run a scrape config of its own and does not write samples. Before it can do anything useful, the rest of the data plane has to be feeding the same store:
+The shared metrics stage is skipped for `disabled`. The Function Autoscaler is
+installed only for `control` and `all`.
 
-- Worker pods export utilization and instance count metrics (`nvcf_worker_service_worker_thread_busy_seconds_total`, `nvcf_worker_service_worker_thread_count_total`, instance gauges).
-- Invocation services and the gRPC proxy export request counters (`function_request`, `function_request_total`) labeled by `function_id`, `function_version_id`, and `nca_id`. These labels are how the discovery loop finds active function versions.
+## Metrics backend
 
-For a self-hosted control plane, you need three things in place before bringing the function autoscaler online:
+The autoscaler is a read-only client of a PromQL-compatible backend. It uses
+range queries to discover active functions and read instance, request, and
+utilization metrics.
 
-1. A Prometheus-compatible store reachable from the function autoscaler pod.
-2. A scrape configuration (or remote-write feed) covering the worker pods and the invocation-plane services.
-3. The resulting query endpoint passed in as `timeseries_db_url`. The function autoscaler reports `not ready` on its readiness probe until that endpoint responds.
+The autoscaler does not scrape metrics. The metrics for the selected invocation
+path must reach the backend that it queries. These include:
+
+- State Metrics instance, concurrency, request latency, and function metadata.
+- Invocation Service and gRPC Proxy request counters used to discover active
+  function versions.
+- Worker thread count and busy-time metrics used for worker-based utilization.
+- LLM API Gateway request duration metrics used for LLM functions.
+
+For a split deployment, any worker metrics used for scaling must reach the
+backend that the autoscaler queries. See
+[Cluster Monitoring](../cluster-management/monitoring.md) for compute-plane
+metrics endpoints.
+
+The backend can be bundled VictoriaMetrics or an existing PromQL-compatible
+service. See [Observability Configuration](../observability.md) for backend,
+endpoint, and authentication settings.
+
+The autoscaler reports `not ready` until the query endpoint responds.
 
 ## Coordination and Self-Healing
 
@@ -62,3 +91,4 @@ Coordination relies on Cassandra TTLs to recover from failures without operator 
 - [Configure Autoscaling](../configure-autoscaling.md) for setting per-function scaling bounds, factors, thresholds, and stickiness via the NVCF API.
 - [Function Autoscaler Operations](./operations.md) for health endpoints and common issues.
 - [Function Autoscaler Observability](./observability.md) for emitted metrics, traces, and logs.
+- [Observability Configuration](../observability.md) for profiles and metrics backend settings.
