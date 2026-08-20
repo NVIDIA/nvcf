@@ -579,8 +579,14 @@ func (a *Agent) dumpV2NamespaceRoot(
 		return nil, fmt.Errorf("criu-v2 pid1: images dir: %w", err)
 	}
 
+	unixExt, uerr := listeningUnixSocketExternals(procBase, hostPID)
+	if uerr != nil {
+		log.WithError(uerr).Warn("criu-v2 pid1: could not enumerate listening unix sockets; restore may fail on setns")
+	}
+
 	args := namespaceRootDumpArgs(hostPID, rootForDump, imgsDir,
-		resolveCRIUPluginDir(a.config.CRIUPath, log), extMnt, skipMounts, externals, leaveRunning)
+		resolveCRIUPluginDir(a.config.CRIUPath, log), extMnt, skipMounts,
+		append(append([]string{}, externals...), unixExtValues(unixExt)...), leaveRunning)
 
 	log.WithFields(logrus.Fields{
 		"hostPID":    hostPID,
@@ -684,4 +690,59 @@ func namespaceRootDumpArgs(hostPID int, root, imgsDir, pluginDir string, extMnt 
 		args = append(args, "--external", e)
 	}
 	return args
+}
+
+// listeningUnixSocketExternals returns criu --external arguments for the
+// container's listening unix sockets that are bound to a filesystem path.
+//
+// criu recreates such a socket by entering the mount namespace its path lives
+// in. That works when criu runs inside the container, which is what the
+// in-namespace path does and why it needs none of this. Dumping a pid-1
+// workload from outside, criu cannot make that transition and the restore dies:
+//
+//	unix: Opening standalone (stage 0 id 0x205 ino 719101449 peer 0)
+//	Error (criu/namespaces.c:260): Can't setns 46/mnt: Invalid argument
+//
+// Only listening sockets are affected, and only those with a real path.
+// Abstract sockets (leading @, such as the CUDA driver's uvmfd socket) have no
+// filesystem presence and restore without entering a namespace. Connected
+// sockets are left alone deliberately: they carry worker IPC that the workload
+// depends on, which is why the legacy path sets SkipUnixSockets false.
+func listeningUnixSocketExternals(procBase string, hostPID int) ([]string, error) {
+	path := filepath.Join(procBase, strconv.Itoa(hostPID), "net", "unix")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+
+	var ext []string
+	for i, line := range strings.Split(string(data), "\n") {
+		if i == 0 || strings.TrimSpace(line) == "" {
+			continue // header or trailing blank
+		}
+		f := strings.Fields(line)
+		// Num RefCount Protocol Flags Type St Inode Path
+		if len(f) < 8 {
+			continue // no path: abstract or unnamed, nothing to enter a namespace for
+		}
+		const listening = "00010000"
+		if f[3] != listening {
+			continue
+		}
+		if strings.HasPrefix(f[7], "@") {
+			continue // abstract namespace, no filesystem path
+		}
+		ext = append(ext, "--external", fmt.Sprintf("unix[%s]", f[6]))
+	}
+	return ext, nil
+}
+
+// unixExtValues strips the --external flags from listeningUnixSocketExternals,
+// because namespaceRootDumpArgs adds one per value itself.
+func unixExtValues(flagged []string) []string {
+	out := make([]string, 0, len(flagged)/2)
+	for i := 0; i+1 < len(flagged); i += 2 {
+		out = append(out, flagged[i+1])
+	}
+	return out
 }

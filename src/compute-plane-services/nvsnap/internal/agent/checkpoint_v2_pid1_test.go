@@ -18,6 +18,8 @@ limitations under the License.
 package agent
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -163,5 +165,50 @@ func TestNamespaceRootDumpArgsLeaveRunning(t *testing.T) {
 		if found != leave {
 			t.Errorf("leaveRunning=%v produced --leave-running=%v", leave, found)
 		}
+	}
+}
+
+// Only listening, path-bound unix sockets need externalising. Abstract sockets
+// have no filesystem path, and connected sockets carry worker IPC the workload
+// depends on -- the legacy path sets SkipUnixSockets false for that reason.
+func TestListeningUnixSocketExternals(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "222511", "net")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Real shape from a Dynamo worker: header, two listening path sockets, one
+	// listening abstract socket, one connected socket.
+	content := `Num       RefCount Protocol Flags    Type St Inode Path
+0000: 00000002 00000000 00010000 0001 01 719101449 /tmp/2ec060a0-462d
+0000: 00000002 00000000 00010000 0001 01 719101450 /tmp/9941f320-336a
+0000: 00000002 00000000 00010000 0001 01 719069953 @cuda-uvmfd-4026543082-1316@
+0000: 00000003 00000000 00000000 0001 03 719101500 /tmp/connected-one
+`
+	if err := os.WriteFile(filepath.Join(dir, "unix"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := listeningUnixSocketExternals(base, 222511)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{
+		"--external", "unix[719101449]",
+		"--external", "unix[719101450]",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("index %d: got %q want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestListeningUnixSocketExternalsMissingFileIsAnError(t *testing.T) {
+	if _, err := listeningUnixSocketExternals(t.TempDir(), 1); err == nil {
+		t.Error("expected an error when /proc/<pid>/net/unix is unreadable")
 	}
 }
