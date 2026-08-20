@@ -31,7 +31,7 @@ cassandra:
     # repository: must be supplied in additional values
     registry: ""
     repository: ""
-    tag: 5.0.8-nv-0
+    tag: 5.0.8-nv-2.0.1
     pullPolicy: IfNotPresent
 
   replicaCount: 3
