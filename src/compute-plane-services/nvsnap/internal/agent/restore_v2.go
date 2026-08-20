@@ -112,13 +112,15 @@ func (a *Agent) restoreV2(ctx context.Context, metadata *CheckpointMetadata, che
 	// went missing the failure rate was 79% across the single-GPU suite, and it
 	// read as flakiness because whether it fires depends on where the shell's
 	// own forks happened to land. Failing here names the cause instead.
-	if maxPID, perr := placeholderMaxNSPID(procBase, hostPID); perr != nil {
-		log.WithError(perr).Warn("criu-v2: could not verify the placeholder reserved its pid range; continuing")
-	} else if maxPID < reservedPIDFloor {
-		return nil, fmt.Errorf(
-			"criu-v2: placeholder did not reserve its pid range (highest pid %d < %d): "+
-				"the ns_last_pid bump in the restore manifest is missing or failed, and CRIU's "+
-				"exact-pid forks will collide with this pod's own processes", maxPID, reservedPIDFloor)
+	//
+	// Wait rather than sample once: the pod is Running as soon as its shell
+	// starts, but the reservation only lands after that shell finishes sourcing
+	// its login profile, a few hundred forks in these images. Sampling once
+	// races that window and rejects a placeholder that was about to be fine.
+	if maxPID, perr := awaitPlaceholderPIDReservation(procBase, hostPID, log); perr != nil {
+		return nil, perr
+	} else if maxPID > 0 {
+		log.WithField("maxNSPID", maxPID).Info("criu-v2: placeholder reserved its pid range")
 	}
 
 	log.WithFields(logrus.Fields{
@@ -311,4 +313,66 @@ func nsPIDOf(procBase string, pid int) (int, error) {
 		return strconv.Atoi(fields[len(fields)-1])
 	}
 	return 0, fmt.Errorf("no NSpid line for %d", pid)
+}
+
+// pidReservationTimeout bounds how long we wait for the placeholder to push its
+// pid range up. The reservation itself is one write; the wait is for the login
+// shell ahead of it, which forks a few hundred times sourcing profile.d in
+// these images. Generous on purpose: waiting a few extra seconds costs far less
+// than rejecting a placeholder that was seconds from ready.
+const pidReservationTimeout = 90 * time.Second
+
+// awaitPlaceholderPIDReservation blocks until the placeholder's pid allocations
+// clear the dumped range, and returns the highest pid it saw.
+//
+// Returns an error only when the reservation never lands, which means the
+// restore would fail partway through with a clone3 EEXIST that reads as
+// flakiness. Failing here names the cause instead.
+//
+// A procfs read error is not fatal: the pid namespace may still be settling,
+// and treating a transient read as a missing reservation would reintroduce
+// exactly the false negative this function exists to avoid.
+func awaitPlaceholderPIDReservation(procBase string, hostPID int, log *logrus.Entry) (int, error) {
+	return awaitPlaceholderPIDReservationFor(procBase, hostPID, pidReservationTimeout, log)
+}
+
+// awaitPlaceholderPIDReservationFor is the body, with the wait injectable so
+// tests can exercise the timeout path without waiting it out.
+func awaitPlaceholderPIDReservationFor(procBase string, hostPID int, timeout time.Duration, log *logrus.Entry) (int, error) {
+	deadline := time.Now().Add(timeout)
+	var lastSeen int
+	var lastErr error
+	warned := false
+
+	for {
+		maxPID, err := placeholderMaxNSPID(procBase, hostPID)
+		if err == nil {
+			lastSeen = maxPID
+			if maxPID >= reservedPIDFloor {
+				return maxPID, nil
+			}
+		} else {
+			lastErr = err
+		}
+
+		if time.Now().After(deadline) {
+			break
+		}
+		if !warned {
+			// One line, not one per poll: this is the normal startup window.
+			log.WithFields(logrus.Fields{"maxNSPID": lastSeen, "want": reservedPIDFloor}).
+				Info("criu-v2: waiting for the placeholder to reserve its pid range")
+			warned = true
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	if lastSeen == 0 && lastErr != nil {
+		return 0, fmt.Errorf("criu-v2: could not read the placeholder's pid namespace "+
+			"to verify its pid range was reserved: %w", lastErr)
+	}
+	return lastSeen, fmt.Errorf(
+		"criu-v2: placeholder never reserved its pid range (highest pid %d < %d after %s): "+
+			"the ns_last_pid bump is missing or failed, and CRIU's exact-pid forks would "+
+			"collide with this pod's own processes", lastSeen, reservedPIDFloor, timeout)
 }
