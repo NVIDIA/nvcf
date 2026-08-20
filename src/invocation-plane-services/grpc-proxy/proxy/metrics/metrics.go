@@ -203,6 +203,14 @@ var (
 		})
 )
 
+// Outcomes of the shutdown purge of queued stateful work requests.
+const (
+	PurgeSucceeded = "succeeded"
+	PurgeFailed    = "failed"
+)
+
+var PurgeResults = []string{PurgeSucceeded, PurgeFailed}
+
 // Close reasons reported when a worker tunnel goes away. The three "deleted"
 // variants matter: a bare `deleted` cannot distinguish the client hanging up
 // from the worker hanging up from a proxy shutdown, and which side went first
@@ -389,6 +397,17 @@ var (
 			Buckets:   []float64{1, 5, 8, 10, 15, 30, 45, 60, 120, 300, 600, 1800, 3600},
 		})
 
+	// PendingWorkPurgedTotal counts stateful work requests dropped from the
+	// work queue during shutdown because this pod held the only copy of their
+	// worker token. A persistent failed count usually means this service lacks
+	// purge rights on the work queue rather than a transient NATS error.
+	PendingWorkPurgedTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: RootNamespace,
+			Name:      "pending_work_purged_total",
+			Help:      "queued stateful work requests dropped at shutdown, by outcome",
+		}, []string{"result"})
+
 	// ClientConnectionWorkerTunnelsAtClose records how many worker tunnels a
 	// client connection was still holding when it closed. Anything above zero
 	// means that close tore down live tunnels.
@@ -442,6 +461,9 @@ func init() {
 	}
 	for _, reason := range NatsErrorReasons {
 		NatsFailureCounter.WithLabelValues(reason)
+	}
+	for _, result := range PurgeResults {
+		PendingWorkPurgedTotal.WithLabelValues(result)
 	}
 }
 
