@@ -58,14 +58,17 @@ helm template container-cache ./deploy --set service.type=NodePort >/dev/null
 
 echo "Checking containerd pending-restart reporting..."
 # containerd reads registry.config_path only at daemon start and has no config
-# reload, so correcting config.toml does not take effect on its own. Detect that
-# we changed it and report the node; never restart containerd, which would be
-# disruptive on nodes running function workloads.
+# reload, so correcting config.toml does not take effect on its own. Report the
+# node; never restart containerd, which would be disruptive on nodes running
+# function workloads.
 assert_has 'before="$(sha256sum /host/etc/containerd/config.toml | cut -d'"'"' '"'"' -f1)"'
 assert_has 'if [ "${before}" != "${after}" ]; then'
-assert_has 'containerd_restart_pending=true'
 assert_not_has 'systemctl restart containerd'
 assert_not_has 'nsenter'
+# The hash diff is a log signal only. Readiness derived from it reports
+# false-ready after a pod restart, because update_config.py is idempotent and
+# the hashes match even while the running containerd holds the stale config.
+assert_not_has 'containerd_restart_pending'
 
 echo "Checking readiness reflects whether cache routing is live..."
 # A DaemonSet ready count below its desired count is the signal that some nodes
@@ -73,6 +76,29 @@ echo "Checking readiness reflects whether cache routing is live..."
 assert_has 'test -f /tmp/nvcf-cc-ready'
 assert_has 'readinessProbe:'
 assert_has 'touch "${READY_MARKER}"'
+# Readiness comes from live runtime state: containerd's process start time
+# versus the mtime of the config it only reads at startup.
+assert_has 'containerd_config_active() {'
+assert_has 'pgrep -x containerd'
+assert_has 'proc_start_epoch() {'
+assert_has '[ "${start}" -gt "${mtime}" ]'
+# Self-correcting in both directions, so a node that loses activation stops
+# reporting ready.
+assert_has 'rm -f "${READY_MARKER}"'
+# Re-evaluated on a short interval, so a node flips to ready on its own once an
+# operator restarts containerd. The old 24h sleep never re-checked.
+assert_has 'reconcile_ready_marker() {'
+assert_has 'while true; do'
+assert_has 'sleep 60'
+assert_not_has 'sleep 86400'
+# The reconcile loop must only read state. Rewriting host config there races
+# with the OS / container toolkit, so the updater must be invoked exactly once,
+# in the one-shot setup phase above the loop.
+updater_calls="$(grep -F -c -- 'python3 update_config.py' "${OUT_FILE}" || true)"
+if [ "${updater_calls}" != "1" ]; then
+  echo "FAILED: expected update_config.py to be invoked once, found ${updater_calls}" >&2
+  exit 1
+fi
 
 echo "Checking CRI-O reload..."
 # SIGHUP is a documented CRI-O reload, not a kill, so it is safe to signal.
@@ -80,6 +106,11 @@ echo "Checking CRI-O reload..."
 # crio.conf.d drop-in this DaemonSet writes.
 assert_has 'kill -HUP "${crio_pid}"'
 assert_has 'pgrep -x crio'
+# A failed SIGHUP must not mark the node ready: the reload marker is stamped
+# only on success, and readiness compares it against the drop-in mtime.
+assert_has 'touch "${CRIO_RELOAD_MARKER}"'
+assert_has 'crio_config_active() {'
+assert_has '[ "${reloaded}" -ge "${mtime}" ]'
 
 echo "Checking multi-domain NodePort listeners..."
 assert_has 'nodePort: 30346'
