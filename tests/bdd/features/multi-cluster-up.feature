@@ -8,16 +8,18 @@ Feature: Bring up a local multi-cluster NVCF stack with the CLI
   Rule: self-hosted install installs the control plane; compute-plane CLIs register and install each compute cluster
 
     Background:
-      Given environment variable "NVCF_CLI" is set
-      And environment variable "NGC_API_KEY" is set
       # SAMPLE_NGC_ORG / SAMPLE_NGC_TEAM are consumed by
       # `make build-and-deploy-multicluster` (the credential provider
       # validation step) when the `multi-cluster ncp-local compute
       # clusters are running` step runs the build target. Without them,
       # that target fails at CREDENTIAL PROVIDER VALIDATION and skips
       # the gateway API setup.
-      And environment variable "SAMPLE_NGC_ORG" is set
-      And environment variable "SAMPLE_NGC_TEAM" is set
+      Given these environment variables are set:
+        | name            |
+        | NVCF_CLI        |
+        | NGC_API_KEY     |
+        | SAMPLE_NGC_ORG  |
+        | SAMPLE_NGC_TEAM |
       # self-hosted install --env local reads operator-authored local
       # secrets files from both split stacks:
       # deploy/stacks/self-managed/secrets/local-secrets.yaml (control

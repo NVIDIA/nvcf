@@ -157,6 +157,50 @@ func TestEnvironmentVariableIsSet(t *testing.T) {
 	}
 }
 
+func TestEnvironmentVariablesAreSet(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	t.Setenv("BDD_TMP_REQUIRED_ONE", "one")
+	t.Setenv("BDD_TMP_REQUIRED_TWO", "two")
+	table := docTable(t, [][]string{
+		{"name"},
+		{"BDD_TMP_REQUIRED_ONE"},
+		{"BDD_TMP_REQUIRED_TWO"},
+	})
+	if err := sc.environmentVariablesAreSet(table); err != nil {
+		t.Fatalf("require variables: %v", err)
+	}
+}
+
+func TestEnvironmentVariablesAreSetReportsMissingVariable(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	t.Setenv("BDD_TMP_REQUIRED_PRESENT", "present")
+	t.Setenv("BDD_TMP_REQUIRED_MISSING", "")
+	table := docTable(t, [][]string{
+		{"name"},
+		{"BDD_TMP_REQUIRED_PRESENT"},
+		{"BDD_TMP_REQUIRED_MISSING"},
+	})
+	err := sc.environmentVariablesAreSet(table)
+	if err == nil {
+		t.Fatal("expected missing-variable error")
+	}
+	if !strings.Contains(err.Error(), `"BDD_TMP_REQUIRED_MISSING"`) {
+		t.Fatalf("error %q does not name the missing variable", err)
+	}
+}
+
+func TestEnvironmentVariablesAreSetRejectsInvalidTable(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	for _, table := range []*godog.Table{
+		docTable(t, [][]string{{"variable"}, {"BDD_TMP_REQUIRED"}}),
+		docTable(t, [][]string{{"name"}, {""}}),
+	} {
+		if err := sc.environmentVariablesAreSet(table); err == nil {
+			t.Fatal("expected invalid-table error")
+		}
+	}
+}
+
 func TestCommandHasSucceededCachesResolved(t *testing.T) {
 	sc, fake := newScenarioContext(t)
 	t.Setenv("EXAMPLE_VAR", "value")
@@ -529,7 +573,9 @@ func TestRegisterAllRunsAFeatureFile(t *testing.T) {
 	// the regex registrations and the Before hook are both exercised.
 	feature := `Feature: Smoke
   Scenario: register-all smoke
-    Given environment variable "BDD_TMP_SMOKE" is set
+    Given these environment variables are set:
+      | name          |
+      | BDD_TMP_SMOKE |
     When I successfully run command "echo smoke"
     And I successfully run command:
       """
