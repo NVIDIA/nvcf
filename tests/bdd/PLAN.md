@@ -35,6 +35,7 @@ regex restricted to `\$\{[A-Z0-9_]+\}`.
 | Step | Notes |
 |------|-------|
 | `Given environment variable {string} is set` | Fails if the env var is empty. Used at the top of any scenario that interpolates it later. |
+| `Given these environment variables are set:` (table) | Requires a `name` header and one or more variable names. Fails on the first empty variable and names it in the error. |
 | `Given file {string} exists` | Bare-file precondition. Same semantics as `Then file {string} should exist`; use `Given` form for narrative preconditions. |
 
 ### Infrastructure bootstrap (Given)
@@ -163,7 +164,7 @@ them via `${VAR}` in command strings and table cells.
 |-----|--------|----------|
 | `NVCF_CLI` | `go build` of `src/clis/nvcf-cli` at suite start | Absolute path to the freshly built CLI binary. |
 | `REPO_ROOT` | `git rev-parse --show-toplevel` at suite start | Absolute path to the repo root. Required when invoking `make -C deploy/stacks/self-managed` because the Makefile's `-C` changes cwd; relative paths to fixtures from there break. |
-| `NGC_API_KEY` / `SAMPLE_NGC_ORG` / `SAMPLE_NGC_TEAM` | The operator's shell | Passed through unchanged. The `Given environment variable {string} is set` step asserts they are non-empty before any scenario uses them. |
+| `NGC_API_KEY` / `SAMPLE_NGC_ORG` / `SAMPLE_NGC_TEAM` | The operator's shell | Passed through unchanged. An environment-variable precondition step asserts they are non-empty before any scenario uses them. |
 
 Feature files may also export their own env vars at runtime via
 `When I export command output to environment variable {string}`. Those

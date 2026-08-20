@@ -8,9 +8,11 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
   Rule: Operator authors the local Helmfile environment file
 
     Background:
-      Given environment variable "NGC_API_KEY" is set
-      And environment variable "SAMPLE_NGC_ORG" is set
-      And environment variable "SAMPLE_NGC_TEAM" is set
+      Given these environment variables are set:
+        | name            |
+        | NGC_API_KEY     |
+        | SAMPLE_NGC_ORG  |
+        | SAMPLE_NGC_TEAM |
       And I copy the file "tests/bdd/fixtures/self-managed-local-bdd.yaml" to "deploy/stacks/self-managed/environments/local-bdd.yaml"
       # The fixture is a copy of deploy/stacks/self-managed/environments/local.yaml,
       # which already carries every ncp-local local-mode override (storageClass,
@@ -95,8 +97,10 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
   Rule: Helmfile installs NVCA on the same local cluster after registration via the stack Makefile
 
     Background:
-      Given environment variable "NVCF_CLI" is set
-      And environment variable "REPO_ROOT" is set
+      Given these environment variables are set:
+        | name      |
+        | NVCF_CLI  |
+        | REPO_ROOT |
       # This rule depends on the earlier control-plane install scenario
       # in the same feature run. That scenario creates the cluster,
       # pull secrets, and Helmfile control-plane releases. The

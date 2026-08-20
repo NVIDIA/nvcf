@@ -7,10 +7,12 @@ Feature: Install a local single-cluster stack with upstream supporting images
   mirrors.
 
   Background:
-    Given environment variable "NGC_API_KEY" is set
-    And environment variable "SAMPLE_NGC_ORG" is set
-    And environment variable "SAMPLE_NGC_TEAM" is set
-    And environment variable "REPO_ROOT" is set
+    Given these environment variables are set:
+      | name            |
+      | NGC_API_KEY     |
+      | SAMPLE_NGC_ORG  |
+      | SAMPLE_NGC_TEAM |
+      | REPO_ROOT       |
     And file "tools/ncp-local-cluster/secrets/docker-config.json" exists
     # Conflict precheck: ncp-local-cp claims host ports that overlap with the
     # single-cluster topology. Run

@@ -27,9 +27,11 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
   Rule: Helmfile installs the control plane on the control-plane cluster
 
     Background:
-      Given environment variable "NGC_API_KEY" is set
-      And environment variable "SAMPLE_NGC_ORG" is set
-      And environment variable "SAMPLE_NGC_TEAM" is set
+      Given these environment variables are set:
+        | name            |
+        | NGC_API_KEY     |
+        | SAMPLE_NGC_ORG  |
+        | SAMPLE_NGC_TEAM |
       # The multi-cluster fixture starts from local service-DNS
       # endpoint values, then the Background overlays
       # operator-specific registry values before the first Helmfile
@@ -160,8 +162,10 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
   Rule: Helmfile registers and installs NVCA on the compute cluster
 
     Background:
-      Given environment variable "NVCF_CLI" is set
-      And environment variable "REPO_ROOT" is set
+      Given these environment variables are set:
+        | name      |
+        | NVCF_CLI  |
+        | REPO_ROOT |
       # This rule depends on the earlier control-plane scenario in the
       # same feature run. That scenario authors local-bdd.yaml with
       # the compute-reachable endpoints, creates the pull secrets, and

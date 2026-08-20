@@ -20,13 +20,15 @@ Feature: Bring up a local single-cluster NVCF stack with the self-hosted up one-
   Rule: self-hosted up installs the control plane and compute plane in one command
 
     Background:
-      Given environment variable "NVCF_CLI" is set
-      And environment variable "NGC_API_KEY" is set
       # SAMPLE_NGC_ORG / SAMPLE_NGC_TEAM are consumed by the
       # build-and-deploy-cluster credential-provider validation the
       # `a single-cluster ncp-local cluster is running` step runs.
-      And environment variable "SAMPLE_NGC_ORG" is set
-      And environment variable "SAMPLE_NGC_TEAM" is set
+      Given these environment variables are set:
+        | name            |
+        | NVCF_CLI        |
+        | NGC_API_KEY     |
+        | SAMPLE_NGC_ORG  |
+        | SAMPLE_NGC_TEAM |
       # self-hosted up --env local reads operator-authored local secrets
       # from both split stacks:
       # deploy/stacks/self-managed/secrets/local-secrets.yaml.

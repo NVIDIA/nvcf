@@ -60,7 +60,10 @@ func TestConfigMapCarriesSuiteLabelsAndConfig(t *testing.T) {
 }
 
 func TestPodExposesReceiverAndMetricsPorts(t *testing.T) {
-	pod := Pod(testNS, DefaultOptions())
+	pod, err := Pod(testNS, DefaultOptions())
+	if err != nil {
+		t.Fatalf("Pod: %v", err)
+	}
 	if got := pod.Spec.Containers[0].Image; got != DefaultImage {
 		t.Errorf("image = %q, want %q", got, DefaultImage)
 	}
@@ -88,9 +91,77 @@ func TestPodExposesReceiverAndMetricsPorts(t *testing.T) {
 }
 
 func TestPodImageOverride(t *testing.T) {
-	pod := Pod(testNS, Options{Image: "example.invalid/sink:testtag"})
+	pod, err := Pod(testNS, Options{Image: "example.invalid/sink:testtag"})
+	if err != nil {
+		t.Fatalf("Pod: %v", err)
+	}
 	if got := pod.Spec.Containers[0].Image; got != "example.invalid/sink:testtag" {
 		t.Errorf("image override not applied: %q", got)
+	}
+}
+
+func TestPodUnthrottledHasNoResourceLimits(t *testing.T) {
+	pod, err := Pod(testNS, DefaultOptions())
+	if err != nil {
+		t.Fatalf("Pod: %v", err)
+	}
+	res := pod.Spec.Containers[0].Resources
+	if len(res.Limits) != 0 || len(res.Requests) != 0 {
+		t.Errorf("default sink should be unbounded, got requests=%v limits=%v", res.Requests, res.Limits)
+	}
+}
+
+func TestPodCPUThrottleAppliesLimitAndRelaxesProbe(t *testing.T) {
+	pod, err := Pod(testNS, Options{Image: DefaultImage, CPULimit: "20m", MemoryLimit: "256Mi"})
+	if err != nil {
+		t.Fatalf("Pod: %v", err)
+	}
+	res := pod.Spec.Containers[0].Resources
+	if got := res.Limits.Cpu().String(); got != "20m" {
+		t.Errorf("cpu limit = %q, want 20m", got)
+	}
+	if got := res.Requests.Cpu().String(); got != "20m" {
+		t.Errorf("cpu request = %q, want 20m", got)
+	}
+	if got := res.Limits.Memory().String(); got != "256Mi" {
+		t.Errorf("memory limit = %q, want 256Mi", got)
+	}
+	// A throttled sink starts slowly, so the readiness probe must be relaxed
+	// enough to let it come up and stay in the Service.
+	probe := pod.Spec.Containers[0].ReadinessProbe
+	if probe == nil {
+		t.Fatalf("throttled sink should still have a readiness probe")
+	}
+	if probe.FailureThreshold < 10 {
+		t.Errorf("throttled readiness FailureThreshold = %d, want relaxed (>=10)", probe.FailureThreshold)
+	}
+	if probe.TimeoutSeconds < 5 {
+		t.Errorf("throttled readiness TimeoutSeconds = %d, want relaxed (>=5)", probe.TimeoutSeconds)
+	}
+}
+
+func TestPodRejectsInvalidResourceLimits(t *testing.T) {
+	cases := []struct {
+		name string
+		opts Options
+	}{
+		{"malformed cpu", Options{CPULimit: "not-a-quantity"}},
+		{"malformed memory", Options{MemoryLimit: "12notabyte"}},
+		{"zero cpu", Options{CPULimit: "0"}},
+		{"negative cpu", Options{CPULimit: "-10m"}},
+		{"zero memory", Options{MemoryLimit: "0"}},
+		{"negative memory", Options{MemoryLimit: "-1Mi"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pod, err := Pod(testNS, tc.opts)
+			if err == nil {
+				t.Fatalf("expected error for %s, got pod %+v", tc.name, pod)
+			}
+			if pod != nil {
+				t.Errorf("expected nil pod on error, got %+v", pod)
+			}
+		})
 	}
 }
 

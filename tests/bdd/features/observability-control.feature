@@ -5,9 +5,11 @@ Feature: Install local Helmfile observability with the control profile
   so that the control plane has its shared metrics infrastructure and monitors.
 
   Background:
-    Given environment variable "NGC_API_KEY" is set
-    And environment variable "SAMPLE_NGC_ORG" is set
-    And environment variable "SAMPLE_NGC_TEAM" is set
+    Given these environment variables are set:
+      | name            |
+      | NGC_API_KEY     |
+      | SAMPLE_NGC_ORG  |
+      | SAMPLE_NGC_TEAM |
     # Helmfile pulls OCI charts during installation. Keep $NGC_API_KEY unbraced
     # so the BDD runner does not expand it into command logs.
     And command has succeeded:

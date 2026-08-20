@@ -26,6 +26,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -101,7 +102,7 @@ parser. "yaml" emits a multi-document stream and "json" emits an array, so
 		},
 	}
 	cmd.Flags().StringVar(&cfg.shape, "shape", "both", `deployment shape: "container", "helm", or "both"`)
-	cmd.Flags().StringVar(&cfg.profile, "profile", "dev", `execution profile: "dev" or "baseline"`)
+	cmd.Flags().StringVar(&cfg.profile, "profile", "dev", `execution profile: "dev", "baseline", or "nemotron" (large-record shape)`)
 	cmd.Flags().StringVar(&cfg.collectorImage, "collector-image", spec.DefaultCollectorImage, "BYOO collector image reference")
 	cmd.Flags().StringVar(&cfg.namespace, "namespace", "byoo-perf", "namespace for rendered objects")
 	cmd.Flags().StringVar(&cfg.output, "output", "summary", `output format: "summary", "yaml", or "json"`)
@@ -127,6 +128,19 @@ type runConfig struct {
 	k3dCluster     string
 	importImages   bool
 	resultsDir     string
+
+	logChunking          bool
+	logChunkMaxPayload   int
+	collectorMemoryLimit string
+	backpressure         bool
+	sinkCPULimit         string
+	sinkMemoryLimit      string
+
+	// Load overrides. A sentinel (<0) means "use the profile value".
+	logsPerSec          int
+	workers             int
+	payloadBytes        int
+	largeRecordFraction float64
 }
 
 func newRunCmd() *cobra.Command {
@@ -150,7 +164,7 @@ reporting land in a later milestone.`,
 		},
 	}
 	cmd.Flags().StringVar(&cfg.shape, "shape", "both", `deployment shape: "container", "helm", or "both"`)
-	cmd.Flags().StringVar(&cfg.profile, "profile", "dev", `execution profile: "dev" or "baseline"`)
+	cmd.Flags().StringVar(&cfg.profile, "profile", "dev", `execution profile: "dev", "baseline", or "nemotron" (large-record shape)`)
 	cmd.Flags().StringVar(&cfg.mode, "mode", "k3d", `deployment mode: "k3d" (managed local cluster) or "remote" (ambient kubeconfig)`)
 	cmd.Flags().StringVar(&cfg.collectorImage, "collector-image", spec.DefaultCollectorImage, "BYOO collector image reference")
 	cmd.Flags().StringVar(&cfg.sinkImage, "sink-image", sink.DefaultImage, "OTLP sink (collector-contrib) image reference")
@@ -166,6 +180,16 @@ reporting land in a later milestone.`,
 	cmd.Flags().StringVar(&cfg.k3dCluster, "k3d-cluster", "byoo-perf", "name of the managed k3d cluster (k3d mode)")
 	cmd.Flags().BoolVar(&cfg.importImages, "import-images", false, "import the collector/sink/loadgen images from local Docker into the k3d cluster (k3d mode)")
 	cmd.Flags().StringVar(&cfg.resultsDir, "results-dir", "", "directory to write structured JSON results to (one file per shape and repetition)")
+	cmd.Flags().BoolVar(&cfg.logChunking, "log-chunking", false, "enable the collector's log-chunking processor (the code path that splits and buffers oversized log records)")
+	cmd.Flags().IntVar(&cfg.logChunkMaxPayload, "log-chunk-max-payload-bytes", 0, "log-chunking max payload bytes threshold (0 uses the collector default of 262144); implies --log-chunking")
+	cmd.Flags().StringVar(&cfg.collectorMemoryLimit, "collector-memory-limit", "", `override the collector container memory request/limit (e.g. "512Mi"); empty keeps the translated 2Gi`)
+	cmd.Flags().BoolVar(&cfg.backpressure, "backpressure", false, "delete the OTLP sink after the collector is ready so its exporter cannot drain; the retry+sending_queue backs up with chunked payloads (models an unavailable backend)")
+	cmd.Flags().StringVar(&cfg.sinkCPULimit, "sink-cpu-limit", "", `throttle the OTLP sink's CPU (e.g. "20m") so it drains slowly while staying up; backpressures the collector's exporter queue while the generator keeps pushing (models a slow-but-alive backend). Empty leaves the sink unthrottled`)
+	cmd.Flags().StringVar(&cfg.sinkMemoryLimit, "sink-memory-limit", "", `cap the OTLP sink's memory (e.g. "256Mi"); mainly useful with --sink-cpu-limit. Empty leaves it unset`)
+	cmd.Flags().IntVar(&cfg.logsPerSec, "logs-per-sec", -1, "override the profile's logs generation rate (records/sec); <0 uses the profile")
+	cmd.Flags().IntVar(&cfg.workers, "workers", -1, "override the profile's telemetrygen worker count; <0 uses the profile")
+	cmd.Flags().IntVar(&cfg.payloadBytes, "payload-bytes", -1, "override the profile's large-record payload attribute size in bytes; <0 uses the profile")
+	cmd.Flags().Float64Var(&cfg.largeRecordFraction, "large-record-fraction", -1, "override the profile's fraction (0..1) of records that are large; <0 uses the profile")
 	return cmd
 }
 
@@ -204,6 +228,10 @@ func runRun(stdout io.Writer, cfg runConfig) error {
 		return err
 	}
 	prof, err := profile.Lookup(cfg.profile)
+	if err != nil {
+		return err
+	}
+	prof, err = applyLoadOverrides(prof, cfg)
 	if err != nil {
 		return err
 	}
@@ -313,7 +341,11 @@ func runShape(ctx context.Context, stdout io.Writer, client *deploy.Client, cfg 
 
 	// 1. In-cluster OTLP sink the collector exports to.
 	fmt.Fprintf(stdout, "[%s] deploying OTLP sink to namespace %q ...\n", shape, ns)
-	sinkDep, err := client.DeploySink(ctx, ns, sink.Options{Image: cfg.sinkImage})
+	sinkDep, err := client.DeploySink(ctx, ns, sink.Options{
+		Image:       cfg.sinkImage,
+		CPULimit:    cfg.sinkCPULimit,
+		MemoryLimit: cfg.sinkMemoryLimit,
+	})
 	if err != nil {
 		return cleanupAfterErr(ctx, client, cfg, ns, fmt.Errorf("deploy sink for %s: %w", shape, err))
 	}
@@ -346,7 +378,14 @@ func runShape(ctx context.Context, stdout io.Writer, client *deploy.Client, cfg 
 	}
 
 	fmt.Fprintf(stdout, "[%s] deploying collector to namespace %q ...\n", shape, ns)
-	dep, err := client.Deploy(ctx, ns, res, deploy.WithExportCredentials(exportCredentials()))
+	deployOpts := []deploy.DeployOption{deploy.WithExportCredentials(exportCredentials())}
+	if env := collectorEnvOverrides(cfg); len(env) > 0 {
+		deployOpts = append(deployOpts, deploy.WithCollectorEnv(env))
+	}
+	if cfg.collectorMemoryLimit != "" {
+		deployOpts = append(deployOpts, deploy.WithCollectorMemoryLimit(cfg.collectorMemoryLimit))
+	}
+	dep, err := client.Deploy(ctx, ns, res, deployOpts...)
 	if err != nil {
 		return cleanupAfterErr(ctx, client, cfg, ns, fmt.Errorf("deploy %s: %w", shape, err))
 	}
@@ -376,6 +415,20 @@ func runShape(ctx context.Context, stdout io.Writer, client *deploy.Client, cfg 
 	}
 	fmt.Fprintf(stdout, "  sink metrics    : %s\n", sinkDep.MetricsEndpoint)
 
+	// Backpressure: with the collector healthy and ready, remove the sink pod
+	// (keep its Service) so the export target resolves but refuses connections.
+	// The collector keeps accepting/chunking load while its exporter cannot
+	// drain, so retry_on_failure and the sending_queue fill with buffered
+	// payloads and memory climbs. This models a slow/unavailable telemetry
+	// backend and makes the memory-exhaustion point deterministic rather than
+	// dependent on CPU headroom.
+	if cfg.backpressure && !cfg.skipLoad {
+		fmt.Fprintf(stdout, "[%s] backpressure: deleting sink pod %q so the collector exporter queue backs up ...\n", shape, sinkDep.PodName)
+		if err := client.DeletePod(ctx, ns, sinkDep.PodName); err != nil {
+			return cleanupAfterErr(ctx, client, cfg, ns, fmt.Errorf("backpressure: delete sink pod for %s shape: %w", shape, err))
+		}
+	}
+
 	// 3. Drive load through the collector and measure over the window.
 	if !cfg.skipLoad {
 		grpcEndpoint := dep.Endpoints["otlp-grpc"]
@@ -387,12 +440,16 @@ func runShape(ctx context.Context, stdout io.Writer, client *deploy.Client, cfg 
 			return cleanupAfterErr(ctx, client, cfg, ns, fmt.Errorf("collector container exposes no %q port for %s shape", "metrics", shape))
 		}
 		lgOpts := loadgen.Options{
-			Image:         cfg.loadgenImage,
-			Endpoint:      grpcEndpoint,
-			Insecure:      true,
-			Duration:      loadDuration,
-			LogsPerSec:    prof.LogRecordsPerSec,
-			MetricsPerSec: prof.MetricDataPointsPerSec,
+			Image:               cfg.loadgenImage,
+			Endpoint:            grpcEndpoint,
+			Insecure:            true,
+			Duration:            loadDuration,
+			LogsPerSec:          prof.LogRecordsPerSec,
+			MetricsPerSec:       prof.MetricDataPointsPerSec,
+			Workers:             prof.Workers,
+			LogBodyBytes:        prof.LogBodyBytes,
+			LogPayloadBytes:     prof.LogPayloadBytes,
+			LargeRecordFraction: prof.LargeRecordFraction,
 		}
 		// Execute one load+measure cycle per repetition so a "baseline" run
 		// honors the profile's repetition count instead of collapsing to a
@@ -670,6 +727,54 @@ func exportCredentials() map[string]string {
 		"perf-logs":    "perf",
 		"perf-metrics": "perf",
 	}
+}
+
+// applyLoadOverrides returns prof with any load knobs the user set on the CLI
+// applied over the profile defaults. Sentinels (<0) leave the profile value.
+// Overrides are validated so out-of-range values fail fast with a clear error
+// instead of producing a malformed workload or an unbounded allocation.
+func applyLoadOverrides(prof profile.Profile, cfg runConfig) (profile.Profile, error) {
+	if cfg.logsPerSec >= 0 {
+		prof.LogRecordsPerSec = cfg.logsPerSec
+	}
+	if cfg.workers >= 0 {
+		prof.Workers = cfg.workers
+	}
+	if cfg.payloadBytes >= 0 {
+		if cfg.payloadBytes > loadgen.MaxLogPayloadBytes {
+			return profile.Profile{}, fmt.Errorf("--payload-bytes %d exceeds the maximum of %d bytes", cfg.payloadBytes, loadgen.MaxLogPayloadBytes)
+		}
+		prof.LogPayloadBytes = cfg.payloadBytes
+	}
+	// A negative sentinel means "use the profile"; any supplied value must be a
+	// finite fraction in [0,1]. NaN fails every comparison, so reject it up front
+	// rather than letting it slip through the sentinel check.
+	switch f := cfg.largeRecordFraction; {
+	case math.IsNaN(f):
+		return profile.Profile{}, fmt.Errorf("--large-record-fraction must be in [0,1], got NaN")
+	case f < 0:
+		// sentinel: leave the profile value in place.
+	case f > 1:
+		return profile.Profile{}, fmt.Errorf("--large-record-fraction must be in [0,1], got %v", f)
+	default:
+		prof.LargeRecordFraction = f
+	}
+	return prof, nil
+}
+
+// collectorEnvOverrides returns the collector env overrides implied by the run
+// flags. Enabling log chunking (directly or by setting a payload threshold)
+// turns on the collector's logchunk processor, the code path that splits and
+// buffers oversized records under a large-record workload.
+func collectorEnvOverrides(cfg runConfig) map[string]string {
+	env := map[string]string{}
+	if cfg.logChunking || cfg.logChunkMaxPayload > 0 {
+		env["BYOO_LOG_CHUNKING_ENABLED"] = "true"
+	}
+	if cfg.logChunkMaxPayload > 0 {
+		env["BYOO_LOG_CHUNK_MAX_PAYLOAD_BYTES"] = strconv.Itoa(cfg.logChunkMaxPayload)
+	}
+	return env
 }
 
 // cleanupAfterErr cleans up the namespace (unless --retain) and returns the
