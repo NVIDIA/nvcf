@@ -146,10 +146,6 @@ impl BackendTunnelStartup {
 
 impl PylonStartupPlan {
     pub(crate) fn from_args(args: &Args) -> Result<Self> {
-        ensure!(
-            args.input_tps_capacity_window_ms > 0,
-            "--input-tps-capacity-window-ms must be greater than zero"
-        );
         let model_initialization = model_initialization_from_args(args)?;
         let model_source = model_source_from_args(args)?;
         Ok(Self {
@@ -534,7 +530,6 @@ pub(crate) fn stats_collector_config_from_args(
     upstream: &str,
 ) -> StatsCollectorConfig {
     StatsCollectorConfig {
-        input_tps_capacity_window: Duration::from_millis(args.input_tps_capacity_window_ms),
         openai_fallback_stats_enabled: args.engine_stats_stream == EngineStatsStreamMode::Off,
         // Mock benchmark backends can expose live KV-cache occupancy over HTTP;
         // real upstreams usually do not, so polling is explicit.

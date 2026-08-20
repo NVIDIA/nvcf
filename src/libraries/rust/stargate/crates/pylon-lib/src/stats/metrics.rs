@@ -151,7 +151,7 @@ metrics! {
         float_gauge output_tps("model_output_tps", "Current output TPS by model", ["model"]);
         float_gauge embedding_item_tps("model_embedding_item_tps", "Current embeddings item throughput by model", ["model"]);
         float_gauge last_mean_input_tps("model_last_mean_input_tps", "Last valid mean input TPS by model", ["model"]);
-        float_gauge max_input_tps("model_max_input_tps", "Time-windowed max input TPS by model", ["model"]);
+        float_gauge max_input_tps("model_max_input_tps", "Generation max input TPS by model", ["model"]);
         float_gauge max_output_tps("model_max_output_tps", "Observed max output TPS by model", ["model"]);
         float_gauge max_embedding_item_tps("model_max_embedding_item_tps", "Observed max embeddings item throughput by model", ["model"]);
         float_gauge queue_size("model_queue_size", "Current queued request count by model", ["model"]);

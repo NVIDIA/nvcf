@@ -207,13 +207,7 @@ impl StatsAggregator {
             }
         }
         if input_sample.is_some_and(|sample| {
-            apply_input_throughput_sample(
-                &self.config,
-                model_state,
-                pinned_input_tps,
-                TokioInstant::now(),
-                sample,
-            )
+            apply_input_throughput_sample(&self.config, model_state, pinned_input_tps, sample)
         }) {
             push_changed_model(&mut changed_models, observation.model_id.clone());
         }

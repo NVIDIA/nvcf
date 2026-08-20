@@ -25,8 +25,6 @@ use crate::{CurrentModelStats, PylonRuntimeState, RequestObservationEvent};
 use stargate_runtime::OwnedTask;
 
 use super::aggregator::{ENGINE_STATS_SOURCE, KvCacheStatsSnapshot, StatsAggregator};
-use super::token_metrics::DEFAULT_INPUT_TPS_CAPACITY_WINDOW;
-
 const DEFAULT_OBSERVATION_CHANNEL_CAPACITY: usize = 1024;
 const DEFAULT_SMOOTHING_WINDOW_SIZE: usize = 8;
 const DEFAULT_MIN_INPUT_TOKENS: u64 = 1;
@@ -42,7 +40,6 @@ const DEFAULT_ENGINE_STATS_SWEEP_INTERVAL: Duration = Duration::from_secs(1);
 pub struct StatsCollectorConfig {
     pub observation_channel_capacity: usize,
     pub smoothing_window_size: usize,
-    pub input_tps_capacity_window: Duration,
     pub min_input_tokens: u64,
     pub min_output_tokens: u64,
     pub duration_floor: Duration,
@@ -60,7 +57,6 @@ impl Default for StatsCollectorConfig {
         Self {
             observation_channel_capacity: DEFAULT_OBSERVATION_CHANNEL_CAPACITY,
             smoothing_window_size: DEFAULT_SMOOTHING_WINDOW_SIZE,
-            input_tps_capacity_window: DEFAULT_INPUT_TPS_CAPACITY_WINDOW,
             min_input_tokens: DEFAULT_MIN_INPUT_TOKENS,
             min_output_tokens: DEFAULT_MIN_OUTPUT_TOKENS,
             duration_floor: DEFAULT_DURATION_FLOOR,
@@ -1257,7 +1253,7 @@ mod tests {
     #[test]
     fn pinned_configured_input_tps_is_preserved_across_engine_stats_updates() {
         let mut aggregator = test_aggregator_with_initialization(
-            config!(input_tps_capacity_window: seconds(1)),
+            StatsCollectorConfig::default(),
             ModelStatsInitialization::ConfiguredInputTps {
                 input_tps: 2_200.0,
                 pin: true,
@@ -1297,22 +1293,15 @@ mod tests {
     }
 
     #[test]
-    fn unpinned_seed_expires_and_empty_restart_has_no_max() {
-        let config = config!(input_tps_capacity_window: seconds(1));
-        let mut initialized = test_aggregator_with_initialization(
-            config.clone(),
-            ModelStatsInitialization::ConfiguredInputTps {
-                input_tps: 100.0,
-                pin: false,
-            },
-        );
+    fn max_input_tps_persists_for_the_generation() {
+        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        aggregator.stream("req-a", (0, 0), false, Duration::ZERO);
+        aggregator.stream("req-a", (20, 0), false, milliseconds(100));
+        aggregator.stream("req-a", (30, 0), false, milliseconds(200));
 
-        let expired = published_stats(initialized.sweep(seconds(2)));
-        assert_eq!(expired.last_mean_input_tps, 100.0);
-        assert_eq!(expired.max_input_tps, None);
-
-        let restarted = test_aggregator(config);
-        assert_eq!(restarted.snapshot("model-a").max_input_tps, None);
+        assert_eq!(aggregator.snapshot("model-a").max_input_tps, Some(200.0));
+        aggregator.sweep(seconds(24 * 60 * 60));
+        assert_eq!(aggregator.snapshot("model-a").max_input_tps, Some(200.0));
     }
 
     #[test]
@@ -1930,21 +1919,25 @@ mod tests {
     }
 
     #[test]
-    fn stats_aggregator_publishes_and_expires_windowed_max_input_tps() {
+    fn stats_aggregator_publishes_generation_max_input_tps() {
         let mut aggregator = test_aggregator(config!(
-            input_tps_capacity_window: seconds(1),
             engine_stats_request_ttl: Duration::ZERO,
             engine_stats_model_ttl: Duration::ZERO,
         ));
-        aggregator.stream("req-window-max", (0, 0), false, Duration::ZERO);
+        aggregator.stream("req-generation-max", (0, 0), false, Duration::ZERO);
 
-        let stats =
-            published_stats(aggregator.stream("req-window-max", (10, 0), false, milliseconds(100)));
+        let stats = published_stats(aggregator.stream(
+            "req-generation-max",
+            (10, 0),
+            false,
+            milliseconds(100),
+        ));
         assert_eq!(stats.last_mean_input_tps, 0.0);
         assert_eq!(stats.max_input_tps, Some(100.0));
 
-        let expired = published_stats(aggregator.sweep(seconds(2)));
-        assert_eq!(expired.max_input_tps, None);
+        let updates = aggregator.stream("req-generation-max", (15, 0), false, milliseconds(200));
+        assert!(updates.is_empty());
+        assert_eq!(aggregator.snapshot("model-a").max_input_tps, Some(100.0));
     }
 
     #[test]
@@ -2553,7 +2546,6 @@ mod tests {
     fn records_metrics_when_configured() {
         let metrics = PylonMetrics::new().expect("metrics should initialize");
         let config = config!(
-            input_tps_capacity_window: seconds(1),
             engine_stats_request_ttl: Duration::ZERO,
             engine_stats_model_ttl: Duration::ZERO,
         );
@@ -2591,7 +2583,7 @@ mod tests {
             publish_model_stats_update(&runtime_state, model_id, stats);
         }
         let body = metrics.gather_text().expect("metrics should encode");
-        assert!(!body.contains(r#"pylon_model_max_input_tps{model="model-a"}"#));
+        assert!(body.contains(r#"pylon_model_max_input_tps{model="model-a"} 10"#));
     }
 
     #[test]
