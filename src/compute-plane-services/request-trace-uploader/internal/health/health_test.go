@@ -4,6 +4,7 @@
 package health
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,18 +13,18 @@ import (
 func TestEndpoints(t *testing.T) {
 	h := New()
 	live := httptest.NewRecorder()
-	h.Live(live, httptest.NewRequest(http.MethodGet, "/livez", nil))
+	h.Live(live, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/livez", nil))
 	if live.Code != http.StatusOK {
 		t.Fatalf("live status = %d, want %d", live.Code, http.StatusOK)
 	}
 	ready := httptest.NewRecorder()
-	h.Ready(ready, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	h.Ready(ready, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/readyz", nil))
 	if ready.Code != http.StatusServiceUnavailable {
 		t.Fatalf("initial ready status = %d, want %d", ready.Code, http.StatusServiceUnavailable)
 	}
 	h.SetReady(true)
 	ready = httptest.NewRecorder()
-	h.Ready(ready, httptest.NewRequest(http.MethodGet, "/readyz", nil))
+	h.Ready(ready, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/readyz", nil))
 	if ready.Code != http.StatusOK {
 		t.Fatalf("ready status = %d, want %d", ready.Code, http.StatusOK)
 	}
