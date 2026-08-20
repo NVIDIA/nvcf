@@ -141,7 +141,7 @@ func (a *Agent) stageV2Bundle(root string, log *logrus.Entry) error {
 
 // dumpV2 stages the bundle and runs CRIU dump inside the container's
 // namespaces. On success the image files have been moved into checkpointDir.
-func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerInfo, checkpointDir, sourceUpperdir string, gpuPIDs []int, leaveRunning bool, log *logrus.Entry) (dumpMountPoints []string, err error) {
+func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerInfo, checkpointDir, sourceUpperdir string, gpuPIDs []int, leaveRunning bool, log *logrus.Entry) (dumpMountPoints []string, tcpClose bool, err error) {
 	hostPID := int(containerInfo.PID)
 	procBase := "/proc"
 	if _, err := os.Stat("/host/proc"); err == nil {
@@ -151,20 +151,20 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 
 	// 1. Stage the bundle into the container rootfs.
 	if err := a.stageV2Bundle(root, log); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
 	// 2. Fresh in-container images dir.
 	imgsDir := filepath.Join(root, strings.TrimPrefix(v2ImagesDirInContainer, "/"))
 	_ = os.RemoveAll(imgsDir)
 	if err := os.MkdirAll(imgsDir, 0o755); err != nil {
-		return nil, fmt.Errorf("images dir: %w", err)
+		return nil, false, fmt.Errorf("images dir: %w", err)
 	}
 
 	// 3. NVIDIA device externals from the container's /dev view.
 	externals, err := nvidiaDevExternals(filepath.Join(root, "dev"))
 	if err != nil {
-		return nil, fmt.Errorf("device externals: %w", err)
+		return nil, false, fmt.Errorf("device externals: %w", err)
 	}
 
 	// 4. Dump target: CRIU's -t is resolved in the entered pid namespace.
@@ -195,7 +195,7 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	}
 	nsPID, err := nsPidOf(procBase, targetHostPID)
 	if err != nil {
-		return nil, fmt.Errorf("resolve ns pid of %d: %w", targetHostPID, err)
+		return nil, false, fmt.Errorf("resolve ns pid of %d: %w", targetHostPID, err)
 	}
 	log.WithFields(logrus.Fields{
 		"targetHostPID": targetHostPID,
@@ -240,7 +240,8 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	// Gated on nsPID: a workload launched under our setsid convention is a
 	// session leader, never pid 1, and keeps the in-namespace path unchanged.
 	if nsPID == 1 {
-		return a.dumpV2NamespaceRoot(ctx, containerInfo, checkpointDir, sourceUpperdir, hostPID, externals, leaveRunning, log)
+		mps, nsErr := a.dumpV2NamespaceRoot(ctx, containerInfo, checkpointDir, sourceUpperdir, hostPID, externals, leaveRunning, log)
+		return mps, true, nsErr
 	}
 
 	args := []string{
@@ -379,16 +380,16 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 			// Join rather than format moveErr with %v: a caller inspecting
 			// this with errors.Is/As needs to reach both the dump failure and
 			// the harvest failure, not just the first one.
-			return nil, fmt.Errorf("criu-v2 dump (output: %s; dump.log tail: %s): %w",
+			return nil, false, fmt.Errorf("criu-v2 dump (output: %s; dump.log tail: %s): %w",
 				strings.TrimSpace(string(out)), tail, errors.Join(runErr, moveErr))
 		}
-		return nil, fmt.Errorf("criu-v2 dump: %w (output: %s; dump.log tail: %s)", runErr, strings.TrimSpace(string(out)), tail)
+		return nil, false, fmt.Errorf("criu-v2 dump: %w (output: %s; dump.log tail: %s)", runErr, strings.TrimSpace(string(out)), tail)
 	}
 	if moveErr != nil {
-		return nil, fmt.Errorf("criu-v2: move images: %w", moveErr)
+		return nil, false, fmt.Errorf("criu-v2: move images: %w", moveErr)
 	}
 	log.Info("criu-v2: dump complete, images moved to checkpoint dir")
-	return dumpMountPoints, nil
+	return dumpMountPoints, false, nil
 }
 
 // gpuDevPatterns are the character devices a GPU workload may hold open that

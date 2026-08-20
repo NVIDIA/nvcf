@@ -142,6 +142,11 @@ type CRIUOptionsUsed struct {
 	SkipFsnotify    bool     `json:"skipFsnotify"`
 	LeaveRunning    bool     `json:"leaveRunning"`
 	TCPEstablished  bool     `json:"tcpEstablished"`
+	// TCPClose mirrors the agent's marker. criu demands the same choice at
+	// restore as at dump and refuses otherwise ("Need to set the --tcp-close
+	// options"). It cannot be inferred from TCPEstablished, which is false both
+	// for a tcp-close dump and for a path that never set the option.
+	TCPClose bool `json:"tcpClose,omitempty"`
 }
 
 // RestoreHints provides guidance to the restore process
@@ -1026,6 +1031,18 @@ timeout 120
 	}
 	fmt.Printf("CRIU WorkDir: %s (fd=%d) — restore.log + IPC will land here\n", criuRestoreWorkDir, workDirFile.Fd())
 
+	// criu demands the same TCP choice at restore as at dump. A capture taken
+	// with --tcp-close cannot be restored with tcp-established:
+	//
+	//	Error (criu/image.c:110): Need to set the --tcp-close options.
+	//
+	// The pid-1 capture path uses --tcp-close because it pairs with
+	// --empty-ns net, so read the marker rather than assuming either way.
+	tcpClose := meta != nil && meta.CRIUOptions != nil && meta.CRIUOptions.TCPClose
+	if tcpClose {
+		fmt.Println("Checkpoint was taken with --tcp-close; restoring connections as closed")
+	}
+
 	criuOpts := &criurpc.CriuOpts{
 		ImagesDirFd: proto.Int32(int32(imageDir.Fd())),
 		WorkDirFd:   proto.Int32(int32(workDirFile.Fd())),
@@ -1052,8 +1069,8 @@ timeout 120
 		// - TcpEstablished=true: Required when checkpoint was made with tcp-established
 		// - TcpClose=false: Preserve established connections - the loopback alias for old
 		//   pod IP allows intra-process connections (e.g., vLLM TCPStore) to continue working
-		TcpEstablished: proto.Bool(true),
-		TcpClose:       proto.Bool(false),
+		TcpEstablished: proto.Bool(!tcpClose),
+		TcpClose:       proto.Bool(tcpClose),
 
 		// External Unix socket handling
 		ExtUnixSk: proto.Bool(true),
