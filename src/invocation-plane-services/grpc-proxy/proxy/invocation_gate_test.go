@@ -18,6 +18,7 @@ package proxy
 
 import (
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -43,20 +44,21 @@ func TestInvocationGateDrainWaitsForAdmittedInvocation(t *testing.T) {
 	gate := newInvocationGate()
 	require.True(t, gate.begin())
 
-	released := make(chan struct{})
+	const held = 100 * time.Millisecond
+	var finished atomic.Bool
 	go func() {
-		time.Sleep(100 * time.Millisecond)
-		close(released)
+		time.Sleep(held)
+		// Set before end so that observing "not finished" after the drain
+		// returns can only mean the drain did not wait.
+		finished.Store(true)
 		gate.end()
 	}()
 
+	start := time.Now()
 	gate.closeAndDrain(5 * time.Second)
 
-	select {
-	case <-released:
-	default:
-		t.Fatal("drain returned before the admitted invocation finished")
-	}
+	assert.True(t, finished.Load(), "drain returned before the admitted invocation finished")
+	assert.GreaterOrEqual(t, time.Since(start), held, "drain returned without waiting out the invocation")
 }
 
 // A stuck invocation must not hold shutdown open indefinitely.
