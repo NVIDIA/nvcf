@@ -281,12 +281,23 @@ func TestProxy_ReconnectSubjectIsAnsweredBeforeFirstTunnel(t *testing.T) {
 	// Retry only to absorb the scheduling gap before Proxy runs at all. What is
 	// being asserted is that the answer, once the session is running, is an
 	// acknowledgement and never "no responders".
+	// testify runs the condition on its own goroutine, so the last error is
+	// captured under a lock and reported after Eventually returns rather than
+	// being passed as a message argument, which would be evaluated up front and
+	// always read nil.
+	var lastErrMu sync.Mutex
 	var lastErr error
 	require.Eventually(t, func() bool {
-		_, lastErr = nc.Request("stateful_session.reconnect."+requestId, reconnectBody, 2*time.Second)
-		return lastErr == nil
+		_, reqErr := nc.Request("stateful_session.reconnect."+requestId, reconnectBody, 2*time.Second)
+		lastErrMu.Lock()
+		lastErr = reqErr
+		lastErrMu.Unlock()
+		return reqErr == nil
 	}, 15*time.Second, 50*time.Millisecond,
-		"reconnect subject should be acknowledged while the first CONNECT is still outstanding, last error: %v", lastErr)
+		"reconnect subject should be acknowledged while the first CONNECT is still outstanding")
+	lastErrMu.Lock()
+	require.NoError(t, lastErr)
+	lastErrMu.Unlock()
 
 	// Cancel first so the CONNECT retry loop stops, then drop the stalled conns
 	// to release the read that cancellation cannot reach.
@@ -296,5 +307,77 @@ func TestProxy_ReconnectSubjectIsAnsweredBeforeFirstTunnel(t *testing.T) {
 	case <-proxyDone:
 	case <-time.After(15 * time.Second):
 		t.Fatal("Proxy did not return after teardown")
+	}
+}
+
+// A session ends when its connections close, with nothing cancelling the work
+// request's context. Proxy has to return on its own at that point, so the
+// reconnect listener must never be something the session waits on: the listener
+// only exits once that context is cancelled, and the cancellation happens after
+// Proxy returns. Counting it would deadlock every stateful session, and no
+// other test covers this because they all cancel at teardown.
+func TestProxy_ReturnsWhenConnectionsCloseWithoutExternalCancel(t *testing.T) {
+	setupLogger()
+	allowInsecure(t)
+
+	cluster, err := testutils.NewNatsSuperCluster(t)
+	require.NoError(t, err)
+	defer cluster.Shutdown()
+
+	nc, err := nats.Connect(cluster.Clusters[0].Servers[0].ClientURL())
+	require.NoError(t, err)
+	defer nc.Close()
+	js, err := jetstream.New(nc)
+	require.NoError(t, err)
+	region := cluster.Clusters[0].Region
+
+	serverConns, _, _, server := mockGrpcProxy()
+	defer server.Close()
+
+	inferenceServer := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(w, r.Body)
+	}))
+	protocols := &http.Protocols{}
+	protocols.SetUnencryptedHTTP2(true)
+	protocols.SetHTTP1(true)
+	inferenceServer.Config.Protocols = protocols
+	inferenceServer.Start()
+	defer inferenceServer.Close()
+
+	httpProxy, err := NewHttpProxy(nc, js, uuid.New().String(), uuid.New().String(),
+		func(request *httputil.ProxyRequest) {
+			request.Out.URL.Scheme = "http"
+			request.Out.URL.Host = inferenceServer.Listener.Addr().String()
+		}, nil, nil,
+		// No-op disconnect callback so the test does not sit through the
+		// reconnect wait; the teardown path under test is the same.
+		func(ctx context.Context, reqId string, err error) {})
+	require.NoError(t, err)
+	defer httpProxy.Close()
+
+	work := &pb.WorkerInvokeFunctionRequest{
+		RequestId: uuid.New().String(),
+		StatefulConfig: &pb.WorkerInvokeFunctionRequest_StatefulConfig{
+			ConnectionConfigs: []*pb.WorkerInvokeFunctionRequest_StatefulConfig_ConnectionConfig{
+				{Config: &pb.WorkerInvokeFunctionRequest_StatefulConfig_ConnectionConfig_Http3Config{
+					Http3Config: &pb.WorkerInvokeFunctionRequest_StatefulConfig_ConnectionConfig_HTTP3ConnectionConfig{
+						ProxyURI:                "https://localhost:10084/v1/proxy",
+						ProxyAuthorizationToken: "dummy-token",
+					}}},
+			},
+		},
+	}
+
+	// Deliberately not cancelled anywhere in this test.
+	proxyDone := make(chan error, 1)
+	go func() { proxyDone <- httpProxy.Proxy(context.Background(), work, region) }()
+
+	serverConn := <-serverConns
+	_ = serverConn.Close()
+
+	select {
+	case <-proxyDone:
+	case <-time.After(20 * time.Second):
+		t.Fatal("Proxy did not return after its only tunnel closed")
 	}
 }

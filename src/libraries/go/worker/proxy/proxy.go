@@ -194,6 +194,64 @@ func (p *HttpProxy) Close() error {
 	return p.handler.Close()
 }
 
+// sessionConns tracks the connections serving one stateful session.
+//
+// The reconnect listener can register a connection at any moment, including
+// the instant the last existing one finishes. A sync.WaitGroup cannot express
+// that safely: the counter would go from zero back to one while Wait was
+// already returning, which is the misuse the race detector reports. Holding a
+// WaitGroup reference for the listener itself does not work either, because
+// the listener only exits once the session context is cancelled and that
+// cancellation happens after the wait returns, so the two deadlock.
+//
+// Registering a connection and declaring the session over therefore happen
+// under one lock, and the listener is never counted.
+type sessionConns struct {
+	mu     sync.Mutex
+	cond   *sync.Cond
+	active int
+	sealed bool
+}
+
+func newSessionConns() *sessionConns {
+	s := &sessionConns{}
+	s.cond = sync.NewCond(&s.mu)
+	return s
+}
+
+// add registers a connection, reporting false once the session has been sealed
+// and no further connections will be served.
+func (s *sessionConns) add() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sealed {
+		return false
+	}
+	s.active++
+	return true
+}
+
+func (s *sessionConns) done() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.active--
+	if s.active == 0 {
+		s.cond.Broadcast()
+	}
+}
+
+// waitAndSeal blocks until every registered connection has finished, then seals
+// under the same lock so a reconnect cannot register after the session has been
+// declared over.
+func (s *sessionConns) waitAndSeal() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for s.active > 0 {
+		s.cond.Wait()
+	}
+	s.sealed = true
+}
+
 func (p *HttpProxy) Proxy(ctx context.Context, work *pb.WorkerInvokeFunctionRequest, trackingRegion string) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -209,7 +267,7 @@ func (p *HttpProxy) Proxy(ctx context.Context, work *pb.WorkerInvokeFunctionRequ
 	// exit once all connections have completed successfully,
 	// or 30 seconds after the last connection fails in order to wait for reconnects
 	var lastConnErr atomic.Pointer[error]
-	wg := sync.WaitGroup{}
+	conns := newSessionConns()
 
 	// Subscribe before the first CONNECT, not after it. The proxy decides
 	// whether a session is still alive by whether anything is subscribed to
@@ -223,7 +281,7 @@ func (p *HttpProxy) Proxy(ctx context.Context, work *pb.WorkerInvokeFunctionRequ
 		// but it can still serve the connection it is about to open.
 		zap.L().Error("failed to listen for stateful session reconnects", zap.String("req id", work.RequestId), zap.Error(err))
 	} else {
-		go p.serveStatefulReconnects(ctx, span, work, subscription, &wg, &lastConnErr)
+		go p.serveStatefulReconnects(ctx, span, work, subscription, conns, &lastConnErr)
 	}
 
 	clientConn, err := getClientConnFromProxy(ctx, work, p.h3)
@@ -241,9 +299,9 @@ func (p *HttpProxy) Proxy(ctx context.Context, work *pb.WorkerInvokeFunctionRequ
 		zap.L().Info("stateful work request shutting down", zap.String("req id", work.RequestId))
 	}()
 
-	wg.Add(1)
+	conns.add()
 	go func() {
-		defer wg.Done()
+		defer conns.done()
 		err := p.listener.ServeConn(handlerConn)
 		if err != nil {
 			_ = handlerConn.Close()
@@ -254,14 +312,14 @@ func (p *HttpProxy) Proxy(ctx context.Context, work *pb.WorkerInvokeFunctionRequ
 		p.disconnectCallback(ctx, work.RequestId, err)
 	}()
 
-	wg.Wait()
+	conns.waitAndSeal()
 	if err := lastConnErr.Load(); err != nil {
 		return *err
 	}
 	return nil
 }
 
-func (p *HttpProxy) serveStatefulReconnects(ctx context.Context, span trace.Span, work *pb.WorkerInvokeFunctionRequest, subscription *nats.Subscription, wg *sync.WaitGroup, lastConnErr *atomic.Pointer[error]) {
+func (p *HttpProxy) serveStatefulReconnects(ctx context.Context, span trace.Span, work *pb.WorkerInvokeFunctionRequest, subscription *nats.Subscription, conns *sessionConns, lastConnErr *atomic.Pointer[error]) {
 	zap.L().Info("listening for stateful reconnects", zap.String("req id", work.RequestId))
 	defer func() { _ = subscription.Unsubscribe() }()
 	for ctx.Err() == nil {
@@ -295,9 +353,15 @@ func (p *HttpProxy) serveStatefulReconnects(ctx context.Context, span trace.Span
 		if err := msg.Respond(nil); err != nil {
 			zap.L().Warn("failed to ack stateful session reconnect", zap.String("req id", work.RequestId), zap.Error(err))
 		}
-		wg.Add(1)
+		if !conns.add() {
+			// The session finished while this reconnect was in flight, so
+			// there is nothing left to attach it to. Stop listening rather
+			// than serve a connection nobody is waiting on.
+			zap.L().Info("stateful session already finished, ignoring reconnect", zap.String("req id", work.RequestId))
+			return
+		}
 		go func() {
-			defer wg.Done()
+			defer conns.done()
 			clientConn, err := getClientConnFromProxy(ctx, &work, p.h3)
 			if err != nil {
 				_ = traceError(span, err)

@@ -6,7 +6,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-    http://www.apache.org/licenses/LICENSE-2.0
+	http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -363,7 +363,7 @@ func (f *FunctionInvoker) joinExistingSession(ctx context.Context, requestId uui
 			zap.String("function_id", proxyAuthResponse.FunctionId))
 		return fmt.Errorf("%w for request id %s", ErrSessionNotFound, requestId)
 	default:
-		return fmt.Errorf("failed to publish function invocation request to nats: %w", err)
+		return fmt.Errorf("failed to send stateful session reconnect request to nats: %w", err)
 	}
 }
 

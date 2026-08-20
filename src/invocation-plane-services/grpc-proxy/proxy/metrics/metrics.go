@@ -6,7 +6,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-    http://www.apache.org/licenses/LICENSE-2.0
+	http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -301,15 +301,15 @@ var WorkerConnectionCloseReasons = []string{
 // Outcomes of a worker CONNECT to /v1/proxy. Every terminal path in
 // HijackHandler maps to exactly one of these.
 const (
-	ConnectAccepted            = "accepted"
-	ConnectNotHijackable       = "rejected_not_hijackable"    // 500
-	ConnectMissingAuth         = "rejected_missing_auth"      // 401
-	ConnectMissingRequestID    = "rejected_missing_requestid" // 400
-	ConnectInvalidRequestID    = "rejected_invalid_requestid" // 400
-	ConnectTokenExpired        = "rejected_token_expired"     // 403, token was issued but has aged out
-	ConnectTokenUnknown        = "rejected_token_unknown"     // 403, token was never issued by this pod
-	ConnectRequestIDMismatch   = "rejected_requestid_mismatch"// 403, token valid but bound to another request
-	ConnectHijackFailed        = "rejected_hijack_failed"     // 500
+	ConnectAccepted          = "accepted"
+	ConnectNotHijackable     = "rejected_not_hijackable"     // 500
+	ConnectMissingAuth       = "rejected_missing_auth"       // 401
+	ConnectMissingRequestID  = "rejected_missing_requestid"  // 400
+	ConnectInvalidRequestID  = "rejected_invalid_requestid"  // 400
+	ConnectTokenExpired      = "rejected_token_expired"      // 403, token was issued but has aged out
+	ConnectTokenUnknown      = "rejected_token_unknown"      // 403, token was never issued by this pod
+	ConnectRequestIDMismatch = "rejected_requestid_mismatch" // 403, token valid but bound to another request
+	ConnectHijackFailed      = "rejected_hijack_failed"      // 500
 )
 
 var ConnectResults = []string{
@@ -331,7 +331,7 @@ const (
 	RejoinAcked        = "acked"         // worker acknowledged the reconnect
 	RejoinAssumedLive  = "assumed_live"  // subscribed but did not ack, worker predates the ack
 	RejoinNoResponders = "no_responders" // nothing subscribed, session is unrecoverable
-	RejoinFailed       = "failed"        // publish itself failed
+	RejoinFailed       = "failed"        // the reconnect request itself failed
 )
 
 var RejoinResults = []string{
