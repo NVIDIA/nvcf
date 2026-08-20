@@ -125,6 +125,20 @@ func TestNamespaceRootDumpArgsSkipsUnexternalisedMounts(t *testing.T) {
 	}
 }
 
+// --empty-ns net and --tcp-established contradict each other: restoring a live
+// connection needs a reachable network and the empty namespace has none. The
+// restore failed with "Can't connect inet socket back: Network is unreachable".
+func TestNamespaceRootDumpArgsClosesTCPRatherThanRestoringIt(t *testing.T) {
+	args := namespaceRootDumpArgs(1, "/r", "/imgs", "/plugins", nil, nil, nil, false)
+	joined := argsString(args)
+	if !strings.Contains(joined, "--tcp-close") {
+		t.Errorf("--tcp-close missing: %s", joined)
+	}
+	if strings.Contains(joined, "--tcp-established") {
+		t.Errorf("--tcp-established cannot coexist with --empty-ns net: %s", joined)
+	}
+}
+
 func TestNamespaceRootDumpArgsLeaveRunning(t *testing.T) {
 	for _, leave := range []bool{true, false} {
 		args := namespaceRootDumpArgs(1, "/r", "/imgs", "/plugins", nil, nil, nil, leave)

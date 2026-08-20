@@ -629,6 +629,8 @@ func (a *Agent) dumpV2NamespaceRoot(
 //   - device externals are bare values and each needs its own --external flag
 //   - mounts buildDumpExtMnt declines to externalise must be passed as
 //     --skip-mnt, not silently dropped
+//   - --tcp-close pairs with --empty-ns net; --tcp-established cannot, because
+//     an empty net namespace has nothing to reconnect through
 func namespaceRootDumpArgs(hostPID int, root, imgsDir, pluginDir string, extMnt []criu.ExtMountMap, skipMounts, deviceExternals []string, leaveRunning bool) []string {
 	args := []string{
 		"dump",
@@ -637,7 +639,19 @@ func namespaceRootDumpArgs(hostPID int, root, imgsDir, pluginDir string, extMnt 
 		"-D", imgsDir,
 		"-o", "dump.log", "-v4",
 		"--empty-ns", "net",
-		"--shell-job", "--tcp-established", "--ext-unix-sk",
+		// --tcp-close, not --tcp-established. Restoring live TCP connections
+		// requires a reachable network, and --empty-ns net deliberately gives
+		// the restored tree an empty one, so the two contradict:
+		//
+		//	Error (soccr/soccr.c:529): Can't connect inet socket back:
+		//	Network is unreachable
+		//
+		// Dropping the connections is also what the workload expects. The agent
+		// already destroys external TCP before a capture (nvsnap#187), and
+		// Dynamo's discovery is readiness-driven, so a worker that comes back
+		// with closed sockets re-registers rather than resuming mid-connection.
+		"--tcp-close",
+		"--shell-job", "--ext-unix-sk",
 		"--link-remap", "--ghost-links", "--ghost-limit", "1073741824",
 		"--libdir", pluginDir,
 		"--skip-in-flight",
