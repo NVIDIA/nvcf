@@ -53,8 +53,14 @@ func createH3RoundTripper() *h3ConnectionCache {
 		QUICConfig: &quic.Config{
 			// TODO we are fully relying on client side timeouts for connection issue detection
 			// TODO https://github.com/quic-go/quic-go/issues/153 is not implemented
-			KeepAlivePeriod:       3 * time.Second,
-			MaxIdleTimeout:        8 * time.Second,
+			KeepAlivePeriod: 3 * time.Second,
+			MaxIdleTimeout:  8 * time.Second,
+			// Set explicitly. Left unset this defaults to 5s inside quic-go,
+			// which is what a dial to a proxy pod that no longer exists costs
+			// before it gives up, six times over per work request. The dial
+			// either completes across the cluster network in well under a
+			// second or it is never going to.
+			HandshakeIdleTimeout:  handshakeIdleTimeout,
 			MaxIncomingStreams:    math.MaxInt,
 			MaxIncomingUniStreams: math.MaxInt,
 		},
@@ -63,7 +69,11 @@ func createH3RoundTripper() *h3ConnectionCache {
 	if utils.LevelFromEnv().Level() == zap.DebugLevel {
 		h3.QUICConfig.Tracer = qlog.DefaultConnectionTracer
 	}
-	return &h3ConnectionCache{wrappedTransport: h3, clients: make(map[string]*roundTripperWithCount)}
+	return &h3ConnectionCache{
+		wrappedTransport: h3,
+		clients:          make(map[string]*roundTripperWithCount),
+		breaker:          newHostBreaker(),
+	}
 }
 
 // mostly copied from http3.Transport because we need to hijack the http3 client stream
@@ -74,6 +84,8 @@ type h3ConnectionCache struct {
 	quicTransport    *quic.Transport
 	mutex            sync.Mutex
 	clients          map[string]*roundTripperWithCount
+	// breaker carries its own lock and is never held together with mutex.
+	breaker *hostBreaker
 }
 
 func (t *h3ConnectionCache) getDialedClient(ctx context.Context, hostname string) (rtc *roundTripperWithCount, isReused bool, err error) {
@@ -96,6 +108,13 @@ func (t *h3ConnectionCache) getDialedClient(ctx context.Context, hostname string
 }
 
 func (t *h3ConnectionCache) getClient(ctx context.Context, hostname string) (rtc *roundTripperWithCount, isReused bool, err error) {
+	// Refuse hosts that have just failed repeatedly, before spending a dial
+	// timeout finding out again. Checked outside t.mutex: the breaker has its
+	// own lock and the two are never held together.
+	if err := t.breaker.allow(hostname); err != nil {
+		return nil, false, err
+	}
+
 	t.mutex.Lock()
 	defer t.mutex.Unlock()
 
@@ -119,7 +138,17 @@ func (t *h3ConnectionCache) getClient(ctx context.Context, hostname string) (rtc
 			conn, rt, err := t.dial(ctx, hostname)
 			if err != nil {
 				cl.dialErr = err
+				if t.breaker.recordFailure(hostname) {
+					zap.L().Warn("no longer dialling proxy host after repeated failures",
+						zap.String("hostname", hostname),
+						zap.Duration("for", hostOpenDuration),
+						zap.Error(err))
+				}
 				return
+			}
+			if t.breaker.recordSuccess(hostname) {
+				zap.L().Info("proxy host is accepting connections again, resuming dials",
+					zap.String("hostname", hostname))
 			}
 			cl.conn = conn
 			cl.clientConn = rt

@@ -64,6 +64,10 @@ import (
 const (
 	retryConnectDelay          = 10 * time.Millisecond
 	reconnectOnErrWaitDuration = 30 * time.Second
+	// handshakeIdleTimeout bounds a single QUIC dial. See the note where the
+	// QUIC config is built: this used to be unset, so a dead host cost the
+	// quic-go default of 5s per attempt and 30s per work request.
+	handshakeIdleTimeout = 2 * time.Second
 )
 
 var ErrAuth = backoff.Permanent(errors.New("permanent auth error"))
