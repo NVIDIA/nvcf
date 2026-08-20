@@ -28,8 +28,6 @@ pub struct ActiveFunctionDetails {
     pub nca_id: Option<String>,
     pub last_updated_at: Option<DateTime<Utc>>,
     pub num_workers: Option<i32>,
-    pub last_predicted_desired_instance_count: Option<i32>,
-    pub last_predicted_error_code: Option<String>,
 }
 
 impl ActiveFunctionDetails {
@@ -40,8 +38,6 @@ impl ActiveFunctionDetails {
             nca_id: Some(nca_id),
             last_updated_at: Some(Utc::now()),
             num_workers: None,
-            last_predicted_desired_instance_count: None,
-            last_predicted_error_code: None,
         }
     }
 

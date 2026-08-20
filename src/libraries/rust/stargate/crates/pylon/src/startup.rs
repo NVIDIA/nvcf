@@ -115,6 +115,7 @@ pub(crate) struct PylonStartupPlan {
     metrics_addr: SocketAddr,
     auth_token_provider: Option<Arc<AuthTokenProvider>>,
     backend_tunnel: BackendTunnelStartup,
+    tls_reload_interval: Duration,
 }
 
 enum BackendTunnelStartup {
@@ -169,6 +170,7 @@ impl PylonStartupPlan {
             metrics_addr: format!("{}:{}", args.metrics_host, args.metrics_port).parse()?,
             auth_token_provider: auth_token_provider_from_args(args),
             backend_tunnel: BackendTunnelStartup::from_args(args)?,
+            tls_reload_interval: stargate_tls::DEFAULT_TLS_RELOAD_INTERVAL,
         })
     }
 
@@ -360,8 +362,38 @@ async fn start_pylon_runtime(args: &Args, plan: &PylonStartupPlan) -> Result<Run
         stats_update_rx,
         runtime_state.clone(),
     );
-    let tls_cert_pem = args.tls_cert_path.as_ref().map(std::fs::read).transpose()?;
-    let tls_key_pem = args.tls_key_path.as_ref().map(std::fs::read).transpose()?;
+    // The direct tunnel serves an identity, so it loads through a reloader. Other
+    // modes only read the certificate as a trust bundle, which does not reload yet.
+    let server_identity_reloader = if plan.direct_tunnel_listen_addr().is_some() {
+        match (&args.tls_cert_path, &args.tls_key_path) {
+            (Some(cert_path), Some(key_path)) => Some(
+                stargate_tls::ServerIdentityReloader::load(cert_path.into(), key_path.into())
+                    .context("load initial Pylon TLS server identity")?,
+            ),
+            (None, None) => None,
+            (Some(_), None) => anyhow::bail!("--tls-key-path is required with --tls-cert-path"),
+            (None, Some(_)) => anyhow::bail!("--tls-cert-path is required with --tls-key-path"),
+        }
+    } else {
+        None
+    };
+    // Take the served pair from the reloader that validated and owns it. Two
+    // independent reads could straddle a rotation, which would leave the
+    // reloader treating the served identity as already current and never
+    // installing the replacement.
+    let (tls_cert_pem, tls_key_pem) = match server_identity_reloader
+        .as_ref()
+        .map(stargate_tls::ServerIdentityReloader::current_identity)
+    {
+        Some(stargate_tls::ServerTlsIdentity::Provided { cert_pem, key_pem }) => {
+            (Some(cert_pem.clone()), Some(key_pem.clone()))
+        }
+        // Other modes read the certificate only as an outbound trust bundle.
+        Some(stargate_tls::ServerTlsIdentity::SelfSigned) | None => (
+            args.tls_cert_path.as_ref().map(std::fs::read).transpose()?,
+            None,
+        ),
+    };
     let forwarding =
         tunnel_forwarding_config_from_plan(plan, runtime_state.clone(), metrics.clone());
     let tunnel = start_direct_tunnel_from_plan(
@@ -370,6 +402,7 @@ async fn start_pylon_runtime(args: &Args, plan: &PylonStartupPlan) -> Result<Run
         &forwarding,
         tls_cert_pem.as_deref(),
         tls_key_pem,
+        server_identity_reloader,
     )
     .await?;
     if matches!(
@@ -392,7 +425,7 @@ async fn start_pylon_runtime(args: &Args, plan: &PylonStartupPlan) -> Result<Run
         },
         runtime_state.clone(),
         &stats_collector,
-        Some(metrics),
+        Some(metrics.clone()),
     )
     .await
     .context("pylon initial model initialization failed")?;
@@ -449,12 +482,14 @@ async fn start_direct_tunnel_from_plan(
     forwarding: &TunnelForwardingConfig,
     tls_cert_pem: Option<&[u8]>,
     tls_key_pem: Option<Vec<u8>>,
+    server_identity_reloader: Option<stargate_tls::ServerIdentityReloader>,
 ) -> Result<Option<QuicHttpTunnelHandle>> {
-    let Some(tunnel_config) =
+    let Some(mut tunnel_config) =
         direct_tunnel_config(args, plan, forwarding, tls_cert_pem, tls_key_pem)
     else {
         return Ok(None);
     };
+    tunnel_config.server_identity_reloader = server_identity_reloader;
     let tunnel = start_quic_http_tunnel(tunnel_config).await?;
     info!(addr = %tunnel.listen_addr(), url = %format!("quic://{}", tunnel.listen_addr()), "QUIC tunnel listening");
     Ok(Some(tunnel))
@@ -481,6 +516,8 @@ fn direct_tunnel_config(
         forwarding: forwarding.clone(),
         tls_cert_pem: tls_cert_pem.map(Vec::from),
         tls_key_pem,
+        server_identity_reloader: None,
+        tls_reload_interval: plan.tls_reload_interval,
         tunnel_protocol: args.tunnel_protocol,
     })
 }
@@ -1113,7 +1150,7 @@ mod tests {
     async fn reverse_mode_direct_tunnel_startup_returns_no_tunnel_without_binding() {
         let (args, plan) = startup(&["--backend-connectivity", "reverse"]);
         let forwarding = test_forwarding(&plan);
-        let tunnel = start_direct_tunnel_from_plan(&args, &plan, &forwarding, None, None)
+        let tunnel = start_direct_tunnel_from_plan(&args, &plan, &forwarding, None, None, None)
             .await
             .expect("reverse mode should not start a direct tunnel");
 
@@ -1125,7 +1162,7 @@ mod tests {
     async fn direct_mode_direct_tunnel_startup_binds_and_reports_quic_url() {
         let (args, plan) = startup(&["--quic-listen-addr", "127.0.0.1:0"]);
         let forwarding = test_forwarding(&plan);
-        let tunnel = start_direct_tunnel_from_plan(&args, &plan, &forwarding, None, None)
+        let tunnel = start_direct_tunnel_from_plan(&args, &plan, &forwarding, None, None, None)
             .await
             .expect("direct mode should bind a direct tunnel")
             .expect("direct mode should return the tunnel handle");

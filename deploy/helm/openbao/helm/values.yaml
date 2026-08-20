@@ -46,7 +46,7 @@ openbao:
     image:
       registry: ""
       repository: ""
-      tag: 0.16.2
+      tag: 0.18.0
       pullPolicy: IfNotPresent
     issuerDiscovery:
       enabled: false

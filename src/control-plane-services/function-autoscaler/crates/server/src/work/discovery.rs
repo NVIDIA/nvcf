@@ -84,6 +84,7 @@ impl DiscoveryShard {
 enum InvocationMetricSource {
     InvocationService,
     GrpcProxy,
+    LlmGateway,
 }
 
 impl InvocationMetricSource {
@@ -91,6 +92,7 @@ impl InvocationMetricSource {
         match self {
             Self::InvocationService => "invocation_service",
             Self::GrpcProxy => "grpc_proxy",
+            Self::LlmGateway => "llm_gateway",
         }
     }
 
@@ -98,6 +100,7 @@ impl InvocationMetricSource {
         match self {
             Self::InvocationService => 0,
             Self::GrpcProxy => 1,
+            Self::LlmGateway => 2,
         }
     }
 }
@@ -185,6 +188,25 @@ fn get_timeseries_db_query(
     template.replace("{env_filter}", &selector)
 }
 
+fn llm_gateway_discovery_query(env: &str, ignore_env: bool, shard: DiscoveryShard) -> String {
+    let function_id_regex = shard.function_id_regex();
+    let env_matcher = if ignore_env {
+        String::new()
+    } else {
+        let metric_env = MetricEnvironments::from_config(env);
+        format!(r#", aws_env="{}""#, metric_env.aws)
+    };
+    format!(
+        r#"(sum by(function_id) (
+            increase(llm_api_gateway_http_requests_total{{function_id=~"{function_id_regex}", function_id!="none"{env_matcher}}}[5m])
+        ) > 0)
+        * on(function_id) group_right(function_version_id, nca_id)
+        max by(function_id, function_version_id, nca_id) (
+            nvcf_function_info{{function_id=~"{function_id_regex}"{env_matcher}}}
+        )"#
+    )
+}
+
 fn recent_invocation_queries(
     env: &str,
     ignore_env: bool,
@@ -196,7 +218,7 @@ fn recent_invocation_queries(
         DiscoveryShard::ALL.into_iter().map(Some).collect()
     };
 
-    let mut queries = Vec::with_capacity(shards.len() * 2);
+    let mut queries = Vec::with_capacity(shards.len() * 3);
     for shard in shards {
         queries.push(RecentInvocationQuery {
             source: InvocationMetricSource::InvocationService,
@@ -220,6 +242,14 @@ fn recent_invocation_queries(
                 shard,
             ),
         });
+        if function_version_filter.is_none() {
+            let shard = shard.expect("discovery queries are sharded");
+            queries.push(RecentInvocationQuery {
+                source: InvocationMetricSource::LlmGateway,
+                shard: Some(shard),
+                query: llm_gateway_discovery_query(env, ignore_env, shard),
+            });
+        }
     }
     queries
 }
@@ -536,9 +566,10 @@ async fn get_recently_invoked_functions_with_semaphore(
         "Executing PromQL queries for recently invoked functions"
     );
 
-    // Discovery runs eight queries (two sources across four shards) through one
-    // shared concurrency bound. Per-function scaling remains two unsharded
-    // queries. Every query is polled even when another source or shard fails.
+    // Discovery runs twelve queries (three sources across four shards) through
+    // one shared concurrency bound. Per-version invocation checks remain two
+    // unsharded queries. Every query is polled even when another source or
+    // shard fails.
     let mut query_results = stream::iter(queries.into_iter().map(|query_spec| {
         let query_semaphore = query_semaphore.clone();
         async move {
@@ -631,8 +662,6 @@ async fn get_recently_invoked_functions_with_semaphore(
                         nca_id: Some(nca_id.clone()),
                         last_updated_at: Some(end_time),
                         num_workers: None, // Recently invoked functions start with unknown worker count
-                        last_predicted_desired_instance_count: None,
-                        last_predicted_error_code: None,
                     };
 
                     tracing::debug!(
@@ -769,8 +798,6 @@ pub async fn get_functions_with_workers(
                     nca_id: Some(nca_id),
                     last_updated_at: Some(end_time),
                     num_workers,
-                    last_predicted_desired_instance_count: None,
-                    last_predicted_error_code: None,
                 };
 
                 let existing = by_key.get(&key).and_then(|d| d.num_workers);
@@ -890,8 +917,6 @@ pub async fn get_functions_with_active_instances(
                             nca_id: Some(nca_id.clone()),
                             last_updated_at: Some(end_time),
                             num_workers: Some(-1), // BYOC functions have num_workers = -1
-                            last_predicted_desired_instance_count: None,
-                            last_predicted_error_code: None,
                         };
 
                         tracing::debug!(
@@ -963,9 +988,9 @@ mod tests {
     }
 
     #[test]
-    fn discovery_queries_cover_four_fixed_shards_for_both_sources() {
-        let queries = recent_invocation_queries("prd", false, None);
-        assert_eq!(queries.len(), 8);
+    fn discovery_queries_cover_four_fixed_shards_for_all_sources() {
+        let queries = recent_invocation_queries("prod", false, None);
+        assert_eq!(queries.len(), 12);
 
         for shard in DiscoveryShard::ALL {
             let matcher = format!(r#"function_id=~"{}""#, shard.function_id_regex());
@@ -973,11 +998,29 @@ mod tests {
                 .iter()
                 .filter(|query| query.shard == Some(shard))
                 .collect();
-            assert_eq!(shard_queries.len(), 2);
+            assert_eq!(shard_queries.len(), 3);
+
             for query in shard_queries {
-                assert_eq!(query.query.matches(&matcher).count(), 4);
-                assert_eq!(query.query.matches(r#"aws_env="prd""#).count(), 4);
+                if matches!(query.source, InvocationMetricSource::LlmGateway) {
+                    assert_eq!(query.query.matches(&matcher).count(), 2);
+                    assert_eq!(query.query.matches(r#"aws_env="prd""#).count(), 2);
+                    assert!(query.query.contains("llm_api_gateway_http_requests_total"));
+                } else {
+                    assert_eq!(query.query.matches(&matcher).count(), 4);
+                    assert_eq!(query.query.matches(r#"aws_env="prd""#).count(), 4);
+                }
             }
+        }
+    }
+
+    #[test]
+    fn gateway_discovery_omits_environment_when_configured() {
+        let queries = recent_invocation_queries("stg", true, None);
+        for query in queries
+            .iter()
+            .filter(|query| matches!(query.source, InvocationMetricSource::LlmGateway))
+        {
+            assert!(!query.query.contains("aws_env"));
         }
     }
 

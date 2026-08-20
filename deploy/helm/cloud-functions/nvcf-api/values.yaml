@@ -41,6 +41,8 @@ api:
 
   # Post-install hook job for creating NVCF account
   accountBootstrap:
+    # Set false to skip the account-bootstrap hook (runs on post-install and post-upgrade; e.g. when accounts are provisioned via the API).
+    enabled: true
     image:
       registry: ""
       repository: ""
@@ -235,7 +237,7 @@ api:
       nvcf:
         sidecars:
           inference-container: nvcr.io/nvidia/tritonserver:23.04-py3
-          init-container: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf-worker-init-oss:1.0.9
+          init-container: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf-worker-init-oss:1.2.0
           utils-container-image:
             go: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf-worker-utils-oss:1.0.4
           otel-container: dummy

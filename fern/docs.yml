@@ -13,6 +13,9 @@ metadata:
 
 global-theme: nvidia
 
+css:
+  - custom.css
+
 logo:
   href: /nvcf/overview
   right-text: Cloud Functions

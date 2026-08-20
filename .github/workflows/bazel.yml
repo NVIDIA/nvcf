@@ -90,6 +90,8 @@ jobs:
         run: |
           bash tools/ci/test-bazel-cache-upload-mode
           bash tools/ci/test-bazel-remote-probe
+          bash tools/ci/test-bazel-lock-touches-java
+          python3 tools/ci/test-bazel-lock-touches-java-properties
 
       - name: Compute changed subtrees
         id: detect
@@ -195,12 +197,21 @@ jobs:
 
           run_all=false
           changed=""
+          # The endpoints the path list was derived from. The content checks
+          # below must compare exactly these two revisions, not re-derive a
+          # range of their own, or they could answer about a different diff
+          # than the one that selected the rows.
+          diff_base=""
+          diff_head=""
           case "$EVENT" in
             workflow_dispatch) run_all=true ;;
             pull_request)
               if ! changed=$(git diff --name-only "origin/${BASE_REF}...HEAD" 2>/dev/null); then
                 echo "diff vs origin/${BASE_REF} failed; running full matrix"
                 run_all=true
+              else
+                diff_base=$(git merge-base "origin/${BASE_REF}" HEAD 2>/dev/null || true)
+                diff_head=$(git rev-parse HEAD 2>/dev/null || true)
               fi
               ;;
             merge_group)
@@ -219,6 +230,9 @@ jobs:
               elif ! changed=$(git diff --name-only "${MERGE_BASE_SHA}...${HEAD_SHA}" 2>/dev/null); then
                 echo "diff ${MERGE_BASE_SHA}...${HEAD_SHA} failed; running full matrix"
                 run_all=true
+              else
+                diff_base=$(git merge-base "${MERGE_BASE_SHA}" "${HEAD_SHA}" 2>/dev/null || true)
+                diff_head="${HEAD_SHA}"
               fi
               ;;
             *)
@@ -227,6 +241,9 @@ jobs:
               elif ! changed=$(git diff --name-only "${BEFORE_SHA}..${HEAD_SHA}" 2>/dev/null); then
                 echo "diff ${BEFORE_SHA}..${HEAD_SHA} failed (rewritten history?); running full matrix"
                 run_all=true
+              else
+                diff_base="${BEFORE_SHA}"
+                diff_head="${HEAD_SHA}"
               fi
               ;;
           esac
@@ -274,15 +291,70 @@ jobs:
             tools/bazel/java/
             tools/ci/stage-bazel-java-artifacts
           )
+          # Two of these globs fire far more often than they carry Java
+          # meaning, so a path hit on them is confirmed against content before
+          # it schedules all seven Java rows.
+          #
+          # NVIDIA/nvcf#777 is the case: its whole lock delta was one Rust
+          # crate_universe extension and its MODULE.bazel delta was a single
+          # blank line, yet it scheduled every Java row. Those rows run on
+          # GitHub-hosted runners at max-parallel 4 and were the queue entry's
+          # long pole, cloud-functions alone taking 19 minutes, rebuilding from
+          # near scratch because a repin invalidates external repository state.
+          #
+          # Both checks fail closed. Without a usable diff range, or on any
+          # error, the path hit stands and Java runs.
+          java_content_gated() {
+            case "$1" in MODULE.bazel|MODULE.bazel.lock) return 0 ;; *) return 1 ;; esac
+          }
+          java_hit_is_real() {
+            local f="$1"
+            if [ -z "$diff_base" ] || [ -z "$diff_head" ]; then
+              echo "  no diff range for $f; treating as Java-relevant"
+              return 0
+            fi
+            case "$f" in
+              MODULE.bazel)
+                # Whitespace and blank-line edits cannot change resolution.
+                if git diff --quiet --ignore-all-space --ignore-blank-lines \
+                     "$diff_base" "$diff_head" -- MODULE.bazel 2>/dev/null; then
+                  echo "  MODULE.bazel changed only in whitespace; not Java-relevant"
+                  return 1
+                fi
+                return 0
+                ;;
+              MODULE.bazel.lock)
+                local verdict
+                verdict=$(python3 tools/ci/bazel-lock-touches-java "$diff_base" "$diff_head" 2>&1 >/dev/null || true)
+                [ -n "$verdict" ] && echo "  $verdict"
+                if [ "$(python3 tools/ci/bazel-lock-touches-java "$diff_base" "$diff_head" 2>/dev/null)" = "false" ]; then
+                  return 1
+                fi
+                return 0
+                ;;
+            esac
+            return 0
+          }
+
           java_shared_changed=false
           if [ "$run_all" != "true" ]; then
             for g in "${JAVA_SHARED_GLOBS[@]}"; do
+              # The prefix test means the MODULE.bazel glob also matches
+              # MODULE.bazel.lock, so match the gated files exactly and let the
+              # lock be judged by its own entry.
+              if java_content_gated "$g"; then
+                printf '%s\n' "$changed" | grep -qxF "$g" || continue
+                java_hit_is_real "$g" || continue
+                java_shared_changed=true
+                break
+              fi
               if printf '%s\n' "$changed" | awk -v p="$g" 'index($0, p) == 1 { f = 1 } END { exit !f }'; then
                 java_shared_changed=true
                 break
               fi
             done
           fi
+          echo "java_shared_changed=$java_shared_changed"
 
           # Rows with ci_lane=docker-host own requires-docker (Testcontainers)
           # tests. They run directly on the GitHub host where a Docker daemon is

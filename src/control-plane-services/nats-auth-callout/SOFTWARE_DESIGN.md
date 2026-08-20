@@ -169,7 +169,6 @@ config:
   url: "https://auth.service.com/validate"
   timeout: "30s"
   retry_attempts: 3
-  insecure_skip_verify: false
 ```
 
 **Authentication Flow**:
@@ -202,7 +201,7 @@ config:
 
 **Key Features**:
 - Configurable retry logic with exponential backoff
-- TLS configuration options
+- TLS certificate and hostname verification for HTTPS endpoints
 - Flexible payload handling
 - Error mapping to appropriate HTTP status codes
 

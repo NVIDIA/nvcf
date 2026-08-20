@@ -9,13 +9,13 @@ global:
   # =============================================================================
   # Helm Chart Sources Configuration
   # =============================================================================
-  # Option A — HTTP Helm repository (e.g. NGC public catalog):
+  # Option A: HTTP Helm repository (e.g. NGC public catalog):
   #   sources:
   #     url: "https://helm.ngc.nvidia.com/nvidia/nvcf"
   #     username: "$oauthtoken"
   #     password: "YOUR_NGC_API_KEY"
   #
-  # Option B — OCI registry (e.g. ECR or a private NGC org after mirroring):
+  # Option B: OCI registry (e.g. ECR or a private NGC org after mirroring):
   #   sources:
   #     registry: "nvcr.io"           # or <account>.dkr.ecr.<region>.amazonaws.com
   #     repository: "YOUR_ORG/YOUR_TEAM"
@@ -233,9 +233,14 @@ cassandra:
 
 certManager:
   # cert-manager controller required to reconcile Certificate resources for
-  # the self-managed PKI stack (ClusterIssuer/nvcf-openbao-pki + per-service
-  # Certificates land in subsequent MRs). The bundled helm-nvcf-cert-manager
-  # chart ships installCRDs=true by default.
+  # the self-managed PKI stack. Enabling addons.llm.pki with the managed
+  # issuer creates ClusterIssuer/nvcf-openbao-pki, which is cluster-scoped
+  # and has no namespace. The nvcf-pki Helm release that creates it and the
+  # cert-manager ServiceAccount it authenticates as both live in the
+  # cert-manager namespace. The bundled helm-nvcf-cert-manager chart ships
+  # installCRDs=true by default. Set this to false when cert-manager is
+  # installed outside this stack; that external installation must still
+  # provide ServiceAccount/cert-manager in the cert-manager namespace.
   enabled: true
 
 openbao:
@@ -286,23 +291,42 @@ addons:
   # LLM addon: gateway + request router (stargate) for LLM function invocation
   llm:
     enabled: false
-    # OpenBao-issued QUIC TLS certificate for the request router (Stargate).
-    # When enabled, the chart provisions an NVCF service-issuing PKI hierarchy
-    # in OpenBao via a Helm pre-install/pre-upgrade Job, requests a Certificate
-    # against the nvcf-openbao-pki ClusterIssuer, and mounts the resulting
-    # Secret into the request-router pod. Disabled by default; opt in per env.
+    # QUIC TLS certificate for the request router (Stargate). Disabled by
+    # default; opt in per env.
+    #
+    # mode selects who owns the server identity:
+    #   certManager    - the chart requests a Certificate from the configured
+    #                    issuer and mounts the resulting Secret. Managed mode
+    #                    also provisions the OpenBao service-issuing hierarchy
+    #                    and defaults to ClusterIssuer/nvcf-openbao-pki.
+    #   existingSecret - the chart mounts a Secret you created and manages no
+    #                    issuance. Requires secretName. clusterIssuer.enabled,
+    #                    dnsNames, and allowedDomains must be unset because
+    #                    they only steer stack-managed issuance. You own
+    #                    issuance, renewal, rotation, and recovery, and the
+    #                    stack validates neither the SANs nor the expiry.
     pki:
       enabled: false
-      # REQUIRED when enabled. Comma-separated DNS suffixes the OpenBao PKI
-      # role accepts. Typically the customer domain plus cluster.local for
-      # in-cluster service identity.
+      mode: certManager
+      # REQUIRED for a managed issuer. Comma-separated DNS suffixes the
+      # OpenBao PKI role accepts. Typically the customer domain plus
+      # cluster.local for in-cluster service identity.
       allowedDomains: ""
-      # REQUIRED when enabled. SANs requested on the issued certificate.
+      # REQUIRED for mode certManager. SANs requested on the issued
+      # certificate. Must be empty for mode existingSecret.
       dnsNames: []
-      # Optional overrides; defaults are usually correct.
+      # REQUIRED for mode existingSecret; the kubernetes.io/tls Secret in the
+      # nvcf namespace holding the tls.crt and tls.key entries. Optional for
+      # mode certManager, where it names the Secret cert-manager writes.
       # secretName: stargate-quic-tls
+      # Optional overrides; defaults are usually correct.
       # issuerKind: ClusterIssuer
       # issuerName: nvcf-openbao-pki
+      # Stack management defaults to true only for the default
+      # ClusterIssuer/nvcf-openbao-pki configuration. Set this explicitly to
+      # manage a custom ClusterIssuer. Leave it false for an external issuer.
+      # clusterIssuer:
+      #   enabled: true
       # namespace: vault-system
       # mountPath: /etc/stargate/tls
       # certPath: /etc/stargate/tls/tls.crt
