@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "upload",
+    srcs = ["client.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/upload",
+    visibility = ["//src/compute-plane-services/request-trace-uploader:__subpackages__"],
+    deps = ["//src/compute-plane-services/request-trace-uploader/internal/segment"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":upload",
+    visibility = ["//src/compute-plane-services/request-trace-uploader:__subpackages__"],
+)
