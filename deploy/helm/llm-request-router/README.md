@@ -83,6 +83,53 @@ Important settings to review before deployment:
 
 The default values include development-oriented placeholders. Override them before using the chart in any shared or production environment.
 
+## Split-Cluster Worker Access
+
+Remote pylons need one shared seed and one address per Stargate replica. The
+shared Service is only the `WatchStargates` bootstrap address. After discovery,
+each pylon registers directly with every returned replica over TCP and opens a
+reverse QUIC tunnel to that same replica over UDP.
+
+Enable per-replica Services with:
+
+```yaml
+llmRequestRouter:
+  service:
+    annotations: {}
+  externalAccess:
+    enabled: true
+    domain: router.region-a.example
+    service:
+      type: LoadBalancer
+      annotations: {}
+  discovery:
+    remoteStargateURLs:
+      - http://router-seed.region-b.example:50071
+```
+
+For a StatefulSet pod named `llm-request-router-0`, this configuration
+advertises these dial addresses:
+
+- TCP registration: `llm-request-router-0.router.region-a.example:50071`
+- UDP reverse QUIC: `llm-request-router-0.router.region-a.example:50072`
+
+The external names are dial-only. The internal advertised hostname remains
+the gRPC authority and the QUIC SNI. Keep the internal exact and wildcard names
+in `certificate.dnsNames`; do not add the external domain to the router
+certificate.
+
+The infrastructure provider must create the DNS records and transparently
+forward both protocols to the matching per-pod Service. Do not terminate TLS,
+change the HTTP/2 authority, or route several replicas behind one endpoint.
+Use a region-unique external domain if `remoteStargateURLs` connects router
+meshes from more than one region. The chart does not create DNS records or
+provider load balancers beyond the requested Kubernetes Service type.
+
+In the self-managed stack,
+`global.workerEndpoints.llmRequestRouterAddress` remains the single shared seed.
+Configure `addons.llm.requestRouter.externalAccess` separately for the
+per-replica paths.
+
 ## Load Balancer Configuration
 
 The chart can pass a Stargate load-balancer config in either of two ways:

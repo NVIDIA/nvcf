@@ -38,14 +38,14 @@ The function container must expose the declared OpenAI-compatible paths on its i
 
 ### Multi-Cluster View
 
-In a global deployment, DNS or a custom front door selects a regional
-`llm.invocation.<domain>` endpoint. The LLM Gateway can use NATS for
-cross-cluster usage-state chatter. LLM worker request streams still use the
-request router and worker gateway path, not NATS worker streams. The
-worker-gateway arrows show that routers can target local or remote worker
-gateways when those workers are registered into the router mesh.
+In a split-cluster deployment, the LLM API Gateway and request routers run in
+the control cluster while pylons and model servers run in a compute cluster.
+Pylons use one shared router seed for discovery, then connect to distinct TCP
+registration and UDP reverse-tunnel addresses for every router replica. The
+provider-owned addresses are dial-only. The internal router hostname remains
+the gRPC authority and QUIC certificate identity.
 
-![LLM multi-cluster invocation path](images/nvcf-llm-multicluster-invocation.svg)
+![LLM split-cluster invocation path](images/nvcf-llm-multicluster-invocation.svg)
 
 ## Function Configuration
 

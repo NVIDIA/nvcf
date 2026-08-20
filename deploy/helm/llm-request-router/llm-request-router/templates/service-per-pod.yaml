@@ -13,35 +13,37 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+{{- $externalAccess := .Values.llmRequestRouter.externalAccess | default dict }}
+{{- if $externalAccess.enabled }}
+{{- include "llm-request-router.validateExternalAccess" . }}
+{{- $service := $externalAccess.service | default dict }}
+{{- $fullname := include "llm-request-router.fullname" . }}
+{{- range $ordinal := until (int $.Values.llmRequestRouter.replicaCount) }}
+---
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "llm-request-router.fullname" . }}
-  namespace: {{ include "llm-request-router.namespace" . }}
+  name: {{ printf "%s-%d" $fullname $ordinal }}
+  namespace: {{ include "llm-request-router.namespace" $ }}
   labels:
-    {{- include "llm-request-router.labels" . | nindent 4 }}
-  {{- with .Values.llmRequestRouter.service.annotations }}
+    {{- include "llm-request-router.labels" $ | nindent 4 }}
+  {{- with $service.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
-  type: {{ .Values.llmRequestRouter.service.type }}
+  type: {{ $service.type | default "LoadBalancer" }}
   selector:
-    {{- include "llm-request-router.selectorLabels" . | nindent 4 }}
+    {{- include "llm-request-router.selectorLabels" $ | nindent 4 }}
+    statefulset.kubernetes.io/pod-name: {{ printf "%s-%d" $fullname $ordinal }}
   ports:
     - name: grpc
-      port: {{ .Values.llmRequestRouter.service.grpcPort }}
+      port: {{ $.Values.llmRequestRouter.service.grpcPort }}
       targetPort: grpc
       protocol: TCP
-    {{- if (dig "metrics" "enabled" false .Values.llmRequestRouter) }}
-    - name: metrics
-      port: {{ .Values.llmRequestRouter.service.metricsPort }}
-      targetPort: metrics
-      protocol: TCP
-    {{- end }}
-    {{- if .Values.llmRequestRouter.transport.reverseTunnelListenAddr }}
     - name: quic
-      port: {{ .Values.llmRequestRouter.service.reverseTunnelPort }}
+      port: {{ $.Values.llmRequestRouter.service.reverseTunnelPort }}
       targetPort: reverse
       protocol: UDP
-    {{- end }}
+{{- end }}
+{{- end }}

@@ -82,15 +82,37 @@ GKE overlay uses the Terraform-managed shared internal VIP
 `ip-us-central1-stargate-backend` (`10.69.170.115`) with TCP `443` for gRPC
 registration/watch and UDP `8080` for Raw QUIC reverse tunnels.
 
-Remote backend clusters that reach Stargate through split internal load
-balancers should point pylon `--stargate-address` at the gRPC/TCP endpoint.
-Stargate should set `--grpc-pylon-dial-addr` to the same gRPC/TCP endpoint so
-`StargateInfo.grpc_pylon_dial_addr` tells pylon where to dial while
-`advertise_addr` remains the per-pod gRPC authority/SNI routing identity.
-Stargate should also set `--reverse-tunnel-pylon-dial-addr` to the QUIC/UDP
-endpoint so `InferenceServerAck.reverse_tunnel_pylon_dial_addr` tells pylon
-where to dial while `reverse_tunnel_target` remains the per-pod QUIC
-SNI/routing identity.
+### Split-Cluster Replica Addressing
+
+Point pylon `--stargate-address` at one worker-reachable TCP seed. That seed is
+used for `WatchStargates`; it is not the address used for every registration.
+
+`--grpc-pylon-dial-addr` controls the TCP dial address published in each
+`StargateInfo`:
+
+- A literal address preserves the shared-address behavior.
+- An address containing `{stargate_id}` is rendered for each discovered
+  Stargate. Entries without a Stargate ID are omitted.
+- An empty value leaves the override disabled.
+
+Pylon dials `StargateInfo.grpc_pylon_dial_addr` but retains
+`StargateInfo.advertise_addr` as the HTTP/2 authority. After registration,
+pylon dials `InferenceServerAck.reverse_tunnel_pylon_dial_addr` over UDP but
+retains `reverse_tunnel_target` as the QUIC SNI and routing identity. This lets
+the dial path use provider-owned names while the certificate covers only the
+internal advertised identity.
+
+For example, a router can use:
+
+```text
+--grpc-pylon-dial-addr={stargate_id}.router.region-a.example:50071
+--reverse-tunnel-pylon-dial-addr=llm-request-router-0.router.region-a.example:50072
+```
+
+The provider must give every replica distinct TCP and UDP endpoints and use
+transparent L4 forwarding. It must not terminate TLS, rewrite authority, or
+combine replicas behind an SNI demultiplexer. Use a region-unique external
+domain when remote watch URLs join multiple regional router meshes.
 
 When a reverse-tunnel dial address resolves to more than one socket address,
 pylon and the WebTransport router try IPv4 candidates first for compatibility,
@@ -99,8 +121,9 @@ candidates sequentially and bind each QUIC client endpoint in the matching
 address family. This is deterministic failover, not a racing Happy Eyeballs
 strategy.
 
-The local overlay mirrors the split with ClusterIP Services whose service ports
-(`443` and `8080`) differ from the router pod ports (`50071` and `50072`).
+The local k3d overlay exposes control-cluster router Services as NodePorts and
+creates selectorless compute-cluster aliases. Each per-replica alias has its
+own ClusterIP while keeping public ports `50071` and `50072`.
 
 ### Development-Only Built-In Peer Relay
 

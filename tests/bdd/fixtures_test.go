@@ -157,6 +157,11 @@ func TestSelfManagedLocalBDDMultiFixtureWiresGRPCWorkerCallback(t *testing.T) {
 	fixture := string(fixtureBytes)
 	for _, want := range []string{
 		"workerConnectBaseURL: http://grpc.nvcf.svc.cluster.local:10086",
+		"llmRequestRouterAddress: llm-request-router.nvcf.svc.cluster.local:50071",
+		"allowedDomains: cluster.local",
+		`"*.llm-request-router-headless.nvcf.svc.cluster.local"`,
+		"domain: nvcf-llm-router.svc.cluster.local",
+		"type: NodePort",
 		"chart: ../../../helm/gateway-routes/chart",
 		`version: ""`,
 		"grpcWorker:",
@@ -166,6 +171,17 @@ func TestSelfManagedLocalBDDMultiFixtureWiresGRPCWorkerCallback(t *testing.T) {
 		if !strings.Contains(fixture, want) {
 			t.Fatalf("multi-cluster stack fixture missing %q", want)
 		}
+	}
+}
+
+func TestComputePlaneLocalBDDMultiFixtureRequiresTrustedStargateQUIC(t *testing.T) {
+	fixtureBytes, err := os.ReadFile("fixtures/nvcf-compute-plane-local-bdd-multi.yaml")
+	if err != nil {
+		t.Fatalf("read multi-cluster compute fixture: %v", err)
+	}
+	fixture := string(fixtureBytes)
+	if !strings.Contains(fixture, "stargateQUICInsecure: false") {
+		t.Fatal("multi-cluster compute fixture must require trusted Stargate QUIC")
 	}
 }
 

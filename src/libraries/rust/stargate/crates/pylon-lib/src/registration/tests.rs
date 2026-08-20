@@ -310,10 +310,51 @@ fn reverse_tunnel_config_uses_registration_upstream_and_preserves_forwarding() {
 #[test]
 fn stargate_grpc_endpoint_rejects_empty_authority_and_formats_dial_overrides() {
     assert!(StargateGrpcEndpoint::new(" ", "stargate-grpc-lb:443").is_none());
+    let endpoint = grpc_endpoint_with_dial("router-a:50071", "stargate-grpc-lb:443");
     assert_eq!(
-        grpc_endpoint_with_dial("router-a:50071", "stargate-grpc-lb:443").to_string(),
+        endpoint.to_string(),
         "router-a:50071 via stargate-grpc-lb:443"
     );
+    assert_eq!(endpoint.dial_endpoint(), "http://stargate-grpc-lb:443");
+    assert_eq!(endpoint.authority_endpoint(), "http://router-a:50071");
+}
+
+#[test]
+fn regional_dial_addresses_keep_duplicate_stargate_ids_distinct() {
+    let region_a = watch_endpoint_snapshot_from_response(
+        "seed.region-a:50071",
+        WatchStargatesResponse {
+            stargates: vec![stargate_info(
+                "llm-request-router-0",
+                "llm-request-router-0.headless.nvcf.svc.cluster.local:50071",
+                "llm-request-router-0.router.region-a.example:50071",
+            )],
+            watch_stargate_urls: Vec::new(),
+        },
+    );
+    let region_b = watch_endpoint_snapshot_from_response(
+        "seed.region-b:50071",
+        WatchStargatesResponse {
+            stargates: vec![stargate_info(
+                "llm-request-router-0",
+                "llm-request-router-0.headless.nvcf.svc.cluster.local:50071",
+                "llm-request-router-0.router.region-b.example:50071",
+            )],
+            watch_stargate_urls: Vec::new(),
+        },
+    );
+
+    let routers = active_registration_routers([&region_a, &region_b]);
+
+    assert_eq!(routers.len(), 2);
+    assert!(routers.contains(&grpc_endpoint_with_dial(
+        "llm-request-router-0.headless.nvcf.svc.cluster.local:50071",
+        "llm-request-router-0.router.region-a.example:50071",
+    )));
+    assert!(routers.contains(&grpc_endpoint_with_dial(
+        "llm-request-router-0.headless.nvcf.svc.cluster.local:50071",
+        "llm-request-router-0.router.region-b.example:50071",
+    )));
 }
 
 #[test]
