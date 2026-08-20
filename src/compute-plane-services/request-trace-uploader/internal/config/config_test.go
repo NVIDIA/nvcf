@@ -62,6 +62,27 @@ func TestLoadRejectsInvalidDroppedNCAID(t *testing.T) {
 	}
 }
 
+func TestConfigDropsNCAID(t *testing.T) {
+	cfg, _, err := Load(testLookup(map[string]string{
+		EnvTraceDir:        "/records",
+		EnvTraceFilePrefix: "request-trace",
+		EnvAuditFilePrefix: "request-audit",
+		EnvDroppedNCAIDs:   "customer",
+	}))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.DropsNCAID("nca-customer-nca") {
+		t.Error("DropsNCAID(wrapper) = false, want true")
+	}
+	if cfg.DropsNCAID("CUSTOMER") {
+		t.Error("DropsNCAID(case changed) = true, want false")
+	}
+	if cfg.DropsNCAID("") {
+		t.Error("DropsNCAID(empty) = true, want false")
+	}
+}
+
 func TestLoadFallsBackForInvalidPolicy(t *testing.T) {
 	cfg, warnings, err := Load(testLookup(map[string]string{
 		EnvTraceDir:            "/records",
