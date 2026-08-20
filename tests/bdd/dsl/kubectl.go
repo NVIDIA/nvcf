@@ -22,34 +22,50 @@ import (
 	"strings"
 )
 
-// ServiceMonitorExistenceCommand builds one kubectl get command whose
-// successful exit proves every named ServiceMonitor exists.
-func ServiceMonitorExistenceCommand(namespace, kubeContext string, names []string) (string, error) {
+// KubernetesResource identifies one resource by kind and name.
+type KubernetesResource struct {
+	Kind string
+	Name string
+}
+
+// KubernetesResourceGetCommand builds an explicit-context kubectl get for one
+// resource. ignoreNotFound makes a missing resource produce empty name output.
+func KubernetesResourceGetCommand(namespace, kubeContext string, resource KubernetesResource, ignoreNotFound bool) (string, error) {
 	namespace = strings.TrimSpace(Interpolate(namespace))
 	kubeContext = strings.TrimSpace(Interpolate(kubeContext))
+	kind := strings.TrimSpace(Interpolate(resource.Kind))
+	name := strings.TrimSpace(Interpolate(resource.Name))
 	if namespace == "" {
 		return "", fmt.Errorf("namespace is empty")
 	}
 	if kubeContext == "" {
 		return "", fmt.Errorf("kube context is empty")
 	}
-	if len(names) == 0 {
-		return "", fmt.Errorf("ServiceMonitor names are empty")
+	if kind == "" {
+		return "", fmt.Errorf("kubernetes resource kind is empty")
+	}
+	if name == "" {
+		return "", fmt.Errorf("kubernetes resource name is empty")
 	}
 
-	args := []string{"kubectl", "get"}
-	for _, rawName := range names {
-		name := strings.TrimSpace(Interpolate(rawName))
-		if name == "" {
-			return "", fmt.Errorf("ServiceMonitor name is empty")
-		}
-		args = append(args, quoteCommandArg("servicemonitor/"+name))
-	}
-	args = append(args,
+	args := []string{
+		"kubectl", "get", quoteCommandArg(strings.ToLower(kind) + "/" + name),
 		"--namespace", quoteCommandArg(namespace),
 		"--context", quoteCommandArg(kubeContext),
-	)
+	}
+	if ignoreNotFound {
+		args = append(args, "--ignore-not-found")
+	}
+	args = append(args, "-o", "name")
 	return strings.Join(args, " "), nil
+}
+
+// KubernetesResourceAbsent requires empty output from an ignore-not-found get.
+func KubernetesResourceAbsent(raw string, resource KubernetesResource) error {
+	if strings.TrimSpace(raw) != "" {
+		return fmt.Errorf("kubernetes resource %s/%s exists, want absent", resource.Kind, resource.Name)
+	}
+	return nil
 }
 
 // KubectlApplyCommand builds a kubectl apply command for a manifest file.

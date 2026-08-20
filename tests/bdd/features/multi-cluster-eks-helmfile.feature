@@ -355,8 +355,9 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
       # operator propagated it to nvca-system. Asserting propagation here
       # catches a broken propagation that the node image cache would
       # otherwise mask under imagePullPolicy IfNotPresent.
-      When I run command "kubectl --context ${EKS_COMPUTE_CONTEXT} get secret nvcr-pull-secret -n nvca-system"
-      Then the command exit code should be 0
+      Then these Kubernetes resources should exist in namespace "nvca-system" using context "${EKS_COMPUTE_CONTEXT}":
+        | kind   | name             |
+        | Secret | nvcr-pull-secret |
 
   Rule: Helmfile-installed multi-cluster NVCF can run workloads
 

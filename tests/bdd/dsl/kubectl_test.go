@@ -19,25 +19,58 @@ package dsl
 
 import "testing"
 
-func TestServiceMonitorExistenceCommandBuildsSingleExplicitGet(t *testing.T) {
-	names := []string{
-		"nvcf-default-monitors-state-metrics",
-		"nvcf-default-monitors-grpc-proxy",
-	}
-
-	got, err := ServiceMonitorExistenceCommand("monitoring", "k3d-ncp-local", names)
+func TestKubernetesResourceGetCommandBuildsExplicitExistenceGet(t *testing.T) {
+	resource := KubernetesResource{Kind: "ServiceMonitor", Name: "nvcf-default-monitors-state-metrics"}
+	got, err := KubernetesResourceGetCommand("monitoring", "k3d-ncp-local", resource, false)
 	if err != nil {
 		t.Fatalf("build command: %v", err)
 	}
-	want := "kubectl get servicemonitor/nvcf-default-monitors-state-metrics servicemonitor/nvcf-default-monitors-grpc-proxy --namespace monitoring --context k3d-ncp-local"
+	want := "kubectl get servicemonitor/nvcf-default-monitors-state-metrics --namespace monitoring --context k3d-ncp-local -o name"
 	if got != want {
 		t.Fatalf("command = %q, want %q", got, want)
 	}
 }
 
-func TestServiceMonitorExistenceCommandRejectsEmptyNames(t *testing.T) {
-	if _, err := ServiceMonitorExistenceCommand("monitoring", "k3d-ncp-local", nil); err == nil {
-		t.Fatal("expected empty names error")
+func TestKubernetesResourceGetCommandBuildsIgnoreNotFoundGet(t *testing.T) {
+	resource := KubernetesResource{Kind: "PodMonitor", Name: "nvcf-default-monitors-worker"}
+	got, err := KubernetesResourceGetCommand("monitoring", "k3d-ncp-local", resource, true)
+	if err != nil {
+		t.Fatalf("build command: %v", err)
+	}
+	want := "kubectl get podmonitor/nvcf-default-monitors-worker --namespace monitoring --context k3d-ncp-local --ignore-not-found -o name"
+	if got != want {
+		t.Fatalf("command = %q, want %q", got, want)
+	}
+}
+
+func TestKubernetesResourceGetCommandRejectsMissingTargets(t *testing.T) {
+	tests := []struct {
+		name        string
+		namespace   string
+		kubeContext string
+		resource    KubernetesResource
+	}{
+		{name: "namespace", kubeContext: "k3d-ncp-local", resource: KubernetesResource{Kind: "Secret", Name: "pull-secret"}},
+		{name: "context", namespace: "monitoring", resource: KubernetesResource{Kind: "Secret", Name: "pull-secret"}},
+		{name: "kind", namespace: "monitoring", kubeContext: "k3d-ncp-local", resource: KubernetesResource{Name: "pull-secret"}},
+		{name: "name", namespace: "monitoring", kubeContext: "k3d-ncp-local", resource: KubernetesResource{Kind: "Secret"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := KubernetesResourceGetCommand(test.namespace, test.kubeContext, test.resource, false); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
+func TestKubernetesResourceAbsentRejectsNameOutput(t *testing.T) {
+	resource := KubernetesResource{Kind: "Secret", Name: "nvcr-pull-secret"}
+	if err := KubernetesResourceAbsent("secret/nvcr-pull-secret\n", resource); err == nil {
+		t.Fatal("expected existing resource error")
+	}
+	if err := KubernetesResourceAbsent("\n", resource); err != nil {
+		t.Fatalf("empty output should prove absence: %v", err)
 	}
 }
 
