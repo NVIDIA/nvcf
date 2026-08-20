@@ -174,6 +174,7 @@ func TestEnvironmentVariablesAreSet(t *testing.T) {
 func TestEnvironmentVariablesAreSetReportsMissingVariable(t *testing.T) {
 	sc, _ := newScenarioContext(t)
 	t.Setenv("BDD_TMP_REQUIRED_PRESENT", "present")
+	t.Setenv("BDD_TMP_REQUIRED_MISSING", "")
 	table := docTable(t, [][]string{
 		{"name"},
 		{"BDD_TMP_REQUIRED_PRESENT"},

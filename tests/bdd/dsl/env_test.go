@@ -32,6 +32,7 @@ func TestRequireEnvironmentVariables(t *testing.T) {
 
 func TestRequireEnvironmentVariablesReportsMissingName(t *testing.T) {
 	t.Setenv("BDD_ENV_PRESENT", "present")
+	t.Setenv("BDD_ENV_MISSING_EXACT", "")
 	err := RequireEnvironmentVariables([]string{"BDD_ENV_PRESENT", "BDD_ENV_MISSING_EXACT"})
 	if err == nil {
 		t.Fatal("expected missing-variable error")
