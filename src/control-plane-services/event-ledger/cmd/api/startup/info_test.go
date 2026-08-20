@@ -61,7 +61,7 @@ func TestRegisterUnauthenticatedRoutes_Info(t *testing.T) {
 	registerUnauthenticatedRoutes(router, &service.Server{}, infoMiddleware)
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/info", nil)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/info", nil)
 	router.ServeHTTP(w, r)
 
 	assert.True(t, mwApplied, "/info should be wrapped with the injected middleware")
@@ -90,7 +90,7 @@ func TestRegisterUnauthenticatedRoutes_Info_RejectsNonGET(t *testing.T) {
 	} {
 		t.Run(method, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			r := httptest.NewRequest(method, "/info", nil)
+			r := httptest.NewRequestWithContext(t.Context(), method, "/info", nil)
 			router.ServeHTTP(w, r)
 
 			assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
