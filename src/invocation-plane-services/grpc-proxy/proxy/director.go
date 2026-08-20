@@ -89,6 +89,7 @@ type StreamDirector struct {
 	workerAuth      *ttlcache.Cache[string, workerAuthInfo]  // auth -> request + function info
 	issuedTokens    *ttlcache.Cache[string, issuedTokenInfo] // diagnostic only, see issuedTokenInfo
 	pendingWork     *ttlcache.Cache[uuid.UUID, pendingWorkInfo]
+	invocations     *invocationGate
 	workers         *ttlcache.Cache[workerConnectionKey, *worker.WorkerConnection]
 	functionInvoker FunctionInvoker
 	cors            *cors.Cors
@@ -269,6 +270,7 @@ func NewStreamDirector(functionInvoker FunctionInvoker) *StreamDirector {
 		shuttingDown:    shuttingDown,
 		issuedTokens:    issuedTokenCache,
 		pendingWork:     pendingWorkCache,
+		invocations:     newInvocationGate(),
 		workerAuth:      workerAuthCache,
 		functionInvoker: functionInvoker,
 		cors:            cors.New(middleware.DefaultCorsOptions),
@@ -356,6 +358,9 @@ const (
 	pendingWorkRetention = 30 * time.Minute
 	// pendingWorkCacheCapacity bounds the pending work cache.
 	pendingWorkCacheCapacity = 50000
+	// invocationDrainTimeout bounds how long shutdown waits for invocations
+	// that are already past admission to finish publishing their work request.
+	invocationDrainTimeout = 5 * time.Second
 	// pendingWorkPurgeTimeout bounds the whole shutdown purge. Shutdown must not
 	// block on the work queue, so this is a best-effort budget.
 	pendingWorkPurgeTimeout = 10 * time.Second
@@ -415,6 +420,9 @@ func (s *StreamDirector) Close() error {
 	// Mark first: DeleteAll evicts every entry, and without this those
 	// evictions would be misreported as client or worker initiated.
 	s.shuttingDown.Store(true)
+	// Stop admitting invocations and let the ones already running finish
+	// publishing, so the purge below sees every request this pod created.
+	s.invocations.closeAndDrain(invocationDrainTimeout)
 	// Before the caches go away, drop the queued work this pod can no longer
 	// authenticate. Best effort: a failure here must not hold up shutdown.
 	s.purgePendingWork()
@@ -614,6 +622,17 @@ func (s *StreamDirector) getAndInitWorkerConnection(ctx context.Context, conn *w
 
 		// Capture API-provided function info in closure
 		var apiFunctionId, apiFunctionVersionId string
+
+		// An invocation records its pending work before it publishes the work
+		// request, so a shutdown landing between those two steps would purge
+		// nothing and then leave the published request behind with no token to
+		// authenticate it. Admission is closed before shutdown purges, and
+		// shutdown waits for whatever is already past this point, so no
+		// invocation can publish after the purge has taken its snapshot.
+		if !s.invocations.begin() {
+			return nil, nverrors.NewNVError(errors.New("proxy is shutting down")).WithCode(grpcCodes.Unavailable)
+		}
+		defer s.invocations.end()
 
 		invokeResponse, cancelInvokingWorker, err := s.functionInvoker.InvokeStatefulFunction(ctx, conn, auth, functionId, functionVersionId, requestId, func(workerAuthToken string, requestId uuid.UUID, apiFunc string, apiFuncVersion string) {
 			// Populate workerAuth cache BEFORE worker is notified (atomicity guarantee)
