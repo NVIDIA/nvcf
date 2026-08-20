@@ -118,15 +118,14 @@ Feature: Install local Helmfile observability with the compute profile
       kubectl --context k3d-ncp-local-compute-1 delete pod --namespace nvca-system --selector app.kubernetes.io/name=nvca --wait=false
       """
 
-    When I run command "helm list --all-namespaces --kube-context k3d-ncp-local-compute-1 -o json"
-    Then the json output should contain rows:
-      | name                     | namespace     | status   |
-      | prometheus-operator-crds | monitoring    | deployed |
-      | opentelemetry-operator   | monitoring    | deployed |
-      | victoria-metrics         | monitoring    | deployed |
-      | otel-collector           | monitoring    | deployed |
-      | default-monitors         | monitoring    | deployed |
-      | nvca-operator            | nvca-operator | deployed |
+    Then these Helm releases should be deployed using context "k3d-ncp-local-compute-1":
+      | name                     | namespace     |
+      | prometheus-operator-crds | monitoring    |
+      | opentelemetry-operator   | monitoring    |
+      | victoria-metrics         | monitoring    |
+      | otel-collector           | monitoring    |
+      | default-monitors         | monitoring    |
+      | nvca-operator            | nvca-operator |
 
     When I run command "kubectl rollout status deployment/nvca-operator -n nvca-operator --context k3d-ncp-local-compute-1 --timeout=10m"
     Then the command exit code should be 0
