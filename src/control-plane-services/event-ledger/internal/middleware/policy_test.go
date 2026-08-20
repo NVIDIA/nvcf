@@ -719,18 +719,20 @@ func TestPolicyAuthInputFields(t *testing.T) {
 func TestNewPolicyMiddlewareRejectsJWTShapedTokenWhenParsingFails(t *testing.T) {
 	client := &rejectingJWTPolicyClient{}
 	logger := otelzap.New(zaptest.NewLogger(t))
-	policyMiddleware := NewPolicyMiddleware(
-		client,
-		"test-service",
+	policyMiddleware := NewPolicyMiddleware(client, "test-service", logger)
+
+	jwtOpts := NewJWTParserOptions(
 		"https://issuer.test/.well-known/jwks.json",
+		nil,
 		time.Minute,
-		jwk.NewCache(context.Background()),
 		&config.HTTPClientConfig{},
-		logger,
 	)
+	jwtMiddleware := NewParseJWTMiddleware(jwtOpts, jwk.NewCache(context.Background()))
+
+	dualAuth := NewDualAuthMiddleware(jwtMiddleware, policyMiddleware)
 
 	handlerCalled := false
-	handler := policyMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := dualAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		handlerCalled = true
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -747,15 +749,7 @@ func TestNewPolicyMiddlewareRejectsJWTShapedTokenWhenParsingFails(t *testing.T) 
 }
 
 func TestNewPolicyMiddlewareRejectsRequestsWithNilClientAndLogger(t *testing.T) {
-	policyMiddleware := NewPolicyMiddleware(
-		nil,
-		"test-service",
-		"",
-		0,
-		nil,
-		&config.HTTPClientConfig{},
-		nil,
-	)
+	policyMiddleware := NewPolicyMiddleware(nil, "test-service", nil)
 
 	handlerCalled := false
 	handler := policyMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

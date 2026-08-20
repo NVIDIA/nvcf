@@ -177,8 +177,6 @@ func runService(cfg config.Config) error {
 	authRouter.Use(tracingMW)
 	authRouter.Use(loggerMW)
 
-	// If we're not using Policy, we need to handle scope checks locally in our middleware
-	// We assume we're using Policy by default
 	var requireLocalScopeCheck = false
 
 	if cfg.Auth.Enabled {
@@ -295,14 +293,25 @@ func runService(cfg config.Config) error {
 			policyMiddleware := middleware.NewPolicyMiddleware(
 				policyClient,
 				"nv-cloud-functions",
-				cfg.Auth.JWKSetUrl,
-				cacheDuration,
-				jwkCache,
-				&cfg.HTTP,
 				logger,
 			)
 
-			authRouter.Use(policyMiddleware)
+			var jwtMiddleware mux.MiddlewareFunc
+			if cfg.Auth.JWKSetUrl != "" {
+				jwtOpts := middleware.NewJWTParserOptions(cfg.Auth.JWKSetUrl, nil, cacheDuration, &cfg.HTTP)
+				jwtOpts.Issuer = cfg.Auth.Issuer
+				jwtOpts.Audience = cfg.Auth.Audience
+				jwtMiddleware = middleware.NewParseJWTMiddleware(jwtOpts, jwkCache)
+			}
+
+			jwtPath := jwtMiddleware
+			if !cfg.SelfManaged && jwtMiddleware != nil {
+				jwtPath = middleware.ChainMiddleware(jwtMiddleware, policyMiddleware)
+			} else if cfg.SelfManaged {
+				requireLocalScopeCheck = true
+			}
+
+			authRouter.Use(middleware.NewDualAuthMiddleware(jwtPath, policyMiddleware))
 		default:
 			// This should never be reached since ValidateAuthConfig handles invalid providers
 			logger.Error("auth is enabled but no valid auth provider was provided")

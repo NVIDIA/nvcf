@@ -35,8 +35,9 @@ func TestAPIKeysClient_PolicyConfig(t *testing.T) {
 }
 
 func TestAPIKeysClient_Evaluate(t *testing.T) {
+	// api-keys-api returns result.allowed, not result.allow.
 	allowResponse := map[string]any{
-		"result": map[string]any{"allow": true},
+		"result": map[string]any{"allowed": true, "ncaId": "nca-1", "ownerId": "owner-1"},
 	}
 
 	tests := []struct {
