@@ -562,7 +562,7 @@ func (a *Agent) dumpV2NamespaceRoot(
 		procBase = "/host/proc"
 	}
 
-	extMnt, mountPoints, _, rootForDump, err := a.buildDumpExtMnt(hostPID, containerInfo.RootFS)
+	extMnt, mountPoints, skipMounts, rootForDump, err := a.buildDumpExtMnt(hostPID, containerInfo.RootFS)
 	if err != nil {
 		return nil, fmt.Errorf("criu-v2 pid1: build external mounts: %w", err)
 	}
@@ -579,7 +579,7 @@ func (a *Agent) dumpV2NamespaceRoot(
 	}
 
 	args := namespaceRootDumpArgs(hostPID, rootForDump, imgsDir,
-		resolveCRIUPluginDir(a.config.CRIUPath, log), extMnt, externals, leaveRunning)
+		resolveCRIUPluginDir(a.config.CRIUPath, log), extMnt, skipMounts, externals, leaveRunning)
 
 	log.WithFields(logrus.Fields{
 		"hostPID":    hostPID,
@@ -616,7 +616,9 @@ func (a *Agent) dumpV2NamespaceRoot(
 //   - the external mount cookie is the mountpoint itself, because restore
 //     rebuilds mappings keyed by mountpoint; a mangled cookie never resolves
 //   - device externals are bare values and each needs its own --external flag
-func namespaceRootDumpArgs(hostPID int, root, imgsDir, pluginDir string, extMnt []criu.ExtMountMap, deviceExternals []string, leaveRunning bool) []string {
+//   - mounts buildDumpExtMnt declines to externalise must be passed as
+//     --skip-mnt, not silently dropped
+func namespaceRootDumpArgs(hostPID int, root, imgsDir, pluginDir string, extMnt []criu.ExtMountMap, skipMounts, deviceExternals []string, leaveRunning bool) []string {
 	args := []string{
 		"dump",
 		"-t", strconv.Itoa(hostPID),
@@ -637,6 +639,14 @@ func namespaceRootDumpArgs(hostPID int, root, imgsDir, pluginDir string, extMnt 
 	}
 	for _, m := range extMnt {
 		args = append(args, "--external", fmt.Sprintf("mnt[%s]:%s", m.Key, m.Val))
+	}
+	// buildDumpExtMnt deliberately does not externalise every mount. Some are
+	// re-injected by nvidia-CDI on the restore side, so the recorded mount is
+	// obsolete by then (different driver version, different firmware
+	// subdirectory). Those must be skipped rather than declared, or the dump
+	// fails with "<mount> doesn't have a proper root mount".
+	for _, mp := range skipMounts {
+		args = append(args, "--skip-mnt", mp)
 	}
 	// deviceExternals are bare values ("dev[195/0]:nvidia0"), matching what
 	// nvidiaDevExternals returns; each needs its own --external flag. Appending

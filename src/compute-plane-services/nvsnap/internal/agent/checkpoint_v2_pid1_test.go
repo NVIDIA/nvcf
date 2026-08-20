@@ -41,7 +41,7 @@ func hasFlagPair(args []string, flag, value string) bool {
 // stops writing a pid namespace and restore refuses the tree with
 // "This process tree can only be restored in a new pid namespace".
 func TestNamespaceRootDumpArgsStaysOutsideTheTargetNamespace(t *testing.T) {
-	args := namespaceRootDumpArgs(4242, "/some/root", "/imgs", "/plugins", nil, nil, false)
+	args := namespaceRootDumpArgs(4242, "/some/root", "/imgs", "/plugins", nil, nil, nil, false)
 
 	if got := args[0]; got != "dump" {
 		t.Errorf("argv should start with the criu subcommand, got %q", got)
@@ -65,7 +65,7 @@ func TestNamespaceRootDumpArgsStaysOutsideTheTargetNamespace(t *testing.T) {
 // recreate eth0, whose veth peer lives on the host, and fail with
 // "net: Unknown peer net namespace".
 func TestNamespaceRootDumpArgsDoesNotRecordTheNetNamespace(t *testing.T) {
-	args := namespaceRootDumpArgs(1, "/r", "/imgs", "/plugins", nil, nil, false)
+	args := namespaceRootDumpArgs(1, "/r", "/imgs", "/plugins", nil, nil, nil, false)
 	if !hasFlagPair(args, "--empty-ns", "net") {
 		t.Errorf("--empty-ns net missing: %s", argsString(args))
 	}
@@ -80,7 +80,7 @@ func TestNamespaceRootDumpArgsKeysExternalMountsByMountpoint(t *testing.T) {
 		{Key: "/run/nvidia/driver/lib/firmware/nvidia/gsp_ga10x.bin", Val: "/run/nvidia/driver/lib/firmware/nvidia/gsp_ga10x.bin"},
 		{Key: "/dev/shm", Val: "/dev/shm"},
 	}
-	args := namespaceRootDumpArgs(1, "/r", "/imgs", "/plugins", ext, nil, false)
+	args := namespaceRootDumpArgs(1, "/r", "/imgs", "/plugins", ext, nil, nil, false)
 
 	for _, m := range ext {
 		want := "mnt[" + m.Key + "]:" + m.Val
@@ -97,7 +97,7 @@ func TestNamespaceRootDumpArgsKeysExternalMountsByMountpoint(t *testing.T) {
 // the broken behaviour, so it passed while the dump failed.
 func TestNamespaceRootDumpArgsFlagsEachDeviceExternal(t *testing.T) {
 	devs := []string{"dev[195/255]:nvidiactl", "dev[508/0]:nvidia-uvm"}
-	args := namespaceRootDumpArgs(1, "/r", "/imgs", "/plugins", nil, devs, false)
+	args := namespaceRootDumpArgs(1, "/r", "/imgs", "/plugins", nil, nil, devs, false)
 
 	for _, d := range devs {
 		if !hasFlagPair(args, "--external", d) {
@@ -112,9 +112,22 @@ func TestNamespaceRootDumpArgsFlagsEachDeviceExternal(t *testing.T) {
 	}
 }
 
+// Mounts that buildDumpExtMnt declines to externalise must reach criu as
+// --skip-mnt. Dropping them made the dump fail with "doesn't have a proper
+// root mount" on the nvidia firmware binds.
+func TestNamespaceRootDumpArgsSkipsUnexternalisedMounts(t *testing.T) {
+	skips := []string{"/etc/hostname", "/run/nvidia/driver/lib/firmware/nvidia/gsp_tu10x.bin"}
+	args := namespaceRootDumpArgs(1, "/r", "/imgs", "/plugins", nil, skips, nil, false)
+	for _, mp := range skips {
+		if !hasFlagPair(args, "--skip-mnt", mp) {
+			t.Errorf("missing --skip-mnt %q in: %s", mp, argsString(args))
+		}
+	}
+}
+
 func TestNamespaceRootDumpArgsLeaveRunning(t *testing.T) {
 	for _, leave := range []bool{true, false} {
-		args := namespaceRootDumpArgs(1, "/r", "/imgs", "/plugins", nil, nil, leave)
+		args := namespaceRootDumpArgs(1, "/r", "/imgs", "/plugins", nil, nil, nil, leave)
 		found := false
 		for _, a := range args {
 			if a == "--leave-running" {
