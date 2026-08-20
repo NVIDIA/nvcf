@@ -64,6 +64,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/containerd"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/criu"
 )
 
 // CapturePathCRIUV2 is the request value selecting the in-namespace CRIU
@@ -140,7 +141,7 @@ func (a *Agent) stageV2Bundle(root string, log *logrus.Entry) error {
 
 // dumpV2 stages the bundle and runs CRIU dump inside the container's
 // namespaces. On success the image files have been moved into checkpointDir.
-func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerInfo, checkpointDir, sourceUpperdir string, gpuPIDs []int, leaveRunning bool, log *logrus.Entry) error {
+func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerInfo, checkpointDir, sourceUpperdir string, gpuPIDs []int, leaveRunning bool, log *logrus.Entry) (dumpMountPoints []string, err error) {
 	hostPID := int(containerInfo.PID)
 	procBase := "/proc"
 	if _, err := os.Stat("/host/proc"); err == nil {
@@ -150,20 +151,20 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 
 	// 1. Stage the bundle into the container rootfs.
 	if err := a.stageV2Bundle(root, log); err != nil {
-		return err
+		return nil, err
 	}
 
 	// 2. Fresh in-container images dir.
 	imgsDir := filepath.Join(root, strings.TrimPrefix(v2ImagesDirInContainer, "/"))
 	_ = os.RemoveAll(imgsDir)
 	if err := os.MkdirAll(imgsDir, 0o755); err != nil {
-		return fmt.Errorf("images dir: %w", err)
+		return nil, fmt.Errorf("images dir: %w", err)
 	}
 
 	// 3. NVIDIA device externals from the container's /dev view.
 	externals, err := nvidiaDevExternals(filepath.Join(root, "dev"))
 	if err != nil {
-		return fmt.Errorf("device externals: %w", err)
+		return nil, fmt.Errorf("device externals: %w", err)
 	}
 
 	// 4. Dump target: CRIU's -t is resolved in the entered pid namespace.
@@ -194,7 +195,7 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	}
 	nsPID, err := nsPidOf(procBase, targetHostPID)
 	if err != nil {
-		return fmt.Errorf("resolve ns pid of %d: %w", targetHostPID, err)
+		return nil, fmt.Errorf("resolve ns pid of %d: %w", targetHostPID, err)
 	}
 	log.WithFields(logrus.Fields{
 		"targetHostPID": targetHostPID,
@@ -212,6 +213,36 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 	// -r/-w: root and cwd must follow the entered mount namespace — without
 	// them nsenter keeps the agent's root and the staged bundle path
 	// resolves against the wrong filesystem ("No such file or directory").
+	// A workload that runs as pid 1 -- the ordinary case for a Kubernetes
+	// container, and what Dynamo does -- cannot be dumped this way. criu only
+	// records a pid namespace when it is not itself a member of it, and the
+	// nsenter below joins the target's. Without that record, restore refuses:
+	//
+	//	Error (criu/cr-restore.c:2092): This process tree can only be restored
+	//	in a new pid namespace.
+	//
+	// So for pid 1 run criu from the agent's own namespaces instead, reaching
+	// the container through --root, which is the shape runc checkpoint uses.
+	// Measured on a Dynamo vLLM worker: criu then logs "Will take pid namespace
+	// in the image" and the dump completes.
+	//
+	// Two things follow from being outside the container:
+	//
+	//   - Mounts no longer resolve implicitly, so every mountpoint must be
+	//     declared external. buildDumpExtMnt derives that list from the
+	//     target's own mountinfo; the same list goes into the metadata so
+	//     restore can rebuild the mappings.
+	//   - criu would record the net namespace and try to recreate eth0 on
+	//     restore, whose veth peer lives on the host ("Unknown peer net
+	//     namespace"). Kubernetes owns the pod network via CNI, so do not
+	//     record it. runc does the same for CNI-managed containers.
+	//
+	// Gated on nsPID: a workload launched under our setsid convention is a
+	// session leader, never pid 1, and keeps the in-namespace path unchanged.
+	if nsPID == 1 {
+		return a.dumpV2NamespaceRoot(ctx, containerInfo, checkpointDir, sourceUpperdir, hostPID, externals, leaveRunning, log)
+	}
+
 	args := []string{
 		"-t", strconv.Itoa(hostPID), "-m", "-p", "-n", "-i", "-u", "-r", "-w", "--",
 		v2BinDirInContainer + "/criu", "dump",
@@ -348,16 +379,16 @@ func (a *Agent) dumpV2(ctx context.Context, containerInfo *containerd.ContainerI
 			// Join rather than format moveErr with %v: a caller inspecting
 			// this with errors.Is/As needs to reach both the dump failure and
 			// the harvest failure, not just the first one.
-			return fmt.Errorf("criu-v2 dump (output: %s; dump.log tail: %s): %w",
+			return nil, fmt.Errorf("criu-v2 dump (output: %s; dump.log tail: %s): %w",
 				strings.TrimSpace(string(out)), tail, errors.Join(runErr, moveErr))
 		}
-		return fmt.Errorf("criu-v2 dump: %w (output: %s; dump.log tail: %s)", runErr, strings.TrimSpace(string(out)), tail)
+		return nil, fmt.Errorf("criu-v2 dump: %w (output: %s; dump.log tail: %s)", runErr, strings.TrimSpace(string(out)), tail)
 	}
 	if moveErr != nil {
-		return fmt.Errorf("criu-v2: move images: %w", moveErr)
+		return nil, fmt.Errorf("criu-v2: move images: %w", moveErr)
 	}
 	log.Info("criu-v2: dump complete, images moved to checkpoint dir")
-	return nil
+	return dumpMountPoints, nil
 }
 
 // gpuDevPatterns are the character devices a GPU workload may hold open that
@@ -504,3 +535,107 @@ func tailOfFile(path string, n int) string {
 	return strings.Join(lines, " | ")
 }
 
+// dumpV2NamespaceRoot dumps a container whose workload is pid 1.
+//
+// The counterpart of the in-namespace path in dumpV2, and the difference is
+// where criu runs. Here it stays in the agent's namespaces and reaches the
+// container through --root, so it is not a member of the pid namespace it has
+// to record. That is what makes the capture restorable at all: a tree
+// containing pid 1 can only be restored into a fresh namespace, and criu
+// cannot describe a namespace it is inside.
+//
+// Returns the mountpoints declared external, which the caller stores in the
+// checkpoint metadata. Restore rebuilds its ExtMnt mappings from that list;
+// without it the mappings are derived from whatever pod the restore lands in,
+// whose mount set does not match the source's.
+func (a *Agent) dumpV2NamespaceRoot(
+	ctx context.Context,
+	containerInfo *containerd.ContainerInfo,
+	checkpointDir, sourceUpperdir string,
+	hostPID int,
+	externals []string,
+	leaveRunning bool,
+	log *logrus.Entry,
+) ([]string, error) {
+	procBase := "/proc"
+	if _, err := os.Stat("/host/proc"); err == nil {
+		procBase = "/host/proc"
+	}
+
+	extMnt, mountPoints, _, rootForDump, err := a.buildDumpExtMnt(hostPID, containerInfo.RootFS)
+	if err != nil {
+		return nil, fmt.Errorf("criu-v2 pid1: build external mounts: %w", err)
+	}
+	if rootForDump == "" {
+		// /proc/<pid>/root is a magic symlink. criu resolves it for a dump,
+		// but a restore cannot bind-mount it, so prefer a real path when
+		// buildDumpExtMnt found one.
+		rootForDump = filepath.Join(procBase, strconv.Itoa(hostPID), "root")
+	}
+
+	imgsDir := filepath.Join(checkpointDir, "imgs")
+	if err := os.MkdirAll(imgsDir, 0o755); err != nil {
+		return nil, fmt.Errorf("criu-v2 pid1: images dir: %w", err)
+	}
+
+	args := namespaceRootDumpArgs(hostPID, rootForDump, imgsDir,
+		resolveCRIUPluginDir(a.config.CRIUPath, log), extMnt, externals, leaveRunning)
+
+	log.WithFields(logrus.Fields{
+		"hostPID":    hostPID,
+		"root":       rootForDump,
+		"extMounts":  len(extMnt),
+		"dumpTarget": "namespace-root",
+	}).Info("criu-v2: dumping pid-1 workload from the agent's namespaces")
+
+	cmd := exec.CommandContext(ctx, a.config.CRIUPath, args...)
+	cmd.Env = []string{
+		"PATH=" + filepath.Dir(a.config.CRIUPath) + ":/usr/sbin:/usr/bin:/sbin:/bin",
+		"HOME=/root",
+	}
+	out, runErr := cmd.CombinedOutput()
+	if runErr != nil {
+		tail := tailOfFile(filepath.Join(imgsDir, "dump.log"), 8)
+		return nil, fmt.Errorf("criu-v2 pid1 dump: %w (output: %s; dump.log tail: %s)",
+			runErr, strings.TrimSpace(string(out)), tail)
+	}
+	return mountPoints, nil
+}
+
+// namespaceRootDumpArgs builds the criu argv for dumping a pid-1 workload from
+// outside the container's namespaces.
+//
+// Split out from dumpV2NamespaceRoot so the argument contract can be tested
+// without a live container. Three details in here are load-bearing and were
+// each established by a failed dump:
+//
+//   - no nsenter and no -p: criu must not be a member of the pid namespace it
+//     records, or it never writes one and restore refuses the tree
+//   - --empty-ns net: otherwise restore tries to recreate eth0 whose veth peer
+//     is on the host
+//   - the external mount cookie is the mountpoint itself, because restore
+//     rebuilds mappings keyed by mountpoint; a mangled cookie never resolves
+func namespaceRootDumpArgs(hostPID int, root, imgsDir, pluginDir string, extMnt []criu.ExtMountMap, deviceExternals []string, leaveRunning bool) []string {
+	args := []string{
+		"dump",
+		"-t", strconv.Itoa(hostPID),
+		"--root", root,
+		"-D", imgsDir,
+		"-o", "dump.log", "-v4",
+		"--empty-ns", "net",
+		"--shell-job", "--tcp-established", "--ext-unix-sk",
+		"--link-remap", "--ghost-links", "--ghost-limit", "1073741824",
+		"--libdir", pluginDir,
+		"--skip-in-flight",
+		"--manage-cgroups=ignore",
+		"--file-locks",
+		"--timeout", "1200",
+	}
+	if leaveRunning {
+		args = append(args, "--leave-running")
+	}
+	for _, m := range extMnt {
+		args = append(args, "--external", fmt.Sprintf("mnt[%s]:%s", m.Key, m.Val))
+	}
+	return append(args, deviceExternals...)
+}

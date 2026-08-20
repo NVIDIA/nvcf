@@ -2405,7 +2405,12 @@ func (a *Agent) Checkpoint(ctx context.Context, req CheckpointRequest) (*Checkpo
 		// legacy path — the artifact contract is identical.
 		_, criuSpan := tracing.Tracer().Start(ctx, "checkpoint.criu_dump")
 		criuSpan.SetAttributes(attribute.String("nvsnap.criu.mode", "v2-inns"))
-		if err := a.dumpV2(ctx, containerInfo, checkpointDir, sourceUpperdir, gpuPIDs, req.LeaveRunning, log); err != nil {
+		v2MountPoints, err := a.dumpV2(ctx, containerInfo, checkpointDir, sourceUpperdir, gpuPIDs, req.LeaveRunning, log)
+		// Non-empty only for a pid-1 workload, where the dump runs outside the
+		// container's pid namespace and declares mounts external. Restore then
+		// needs the same list to rebuild ExtMnt mappings.
+		dumpMountPoints = v2MountPoints
+		if err != nil {
 			criuSpan.RecordError(err)
 			criuSpan.SetStatus(codes.Error, "CRIU dump failed (criu-v2)")
 			criuSpan.End()
