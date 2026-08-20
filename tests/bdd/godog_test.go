@@ -280,6 +280,8 @@ func TestSingleClusterUpFeatureFileWiresToSteps(t *testing.T) {
 	writeProfileHandoffArtifact(t, suite.Config.RepoRoot)
 	writeSingleClusterComputeRegisterValues(t, suite.Config.RepoRoot)
 	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
+	seedComputePlaneLocalBDDFixture(t, suite.Config.RepoRoot)
 
 	sc := steps.NewScenarioContext(suite)
 	featurePath := mustResolveFeaturePath(t, "single-cluster-up.feature")
@@ -361,6 +363,8 @@ func TestMultiClusterUpFeatureFileWiresToSteps(t *testing.T) {
 	writeMulticlusterProfileHandoffArtifact(t, suite.Config.RepoRoot)
 	writeMulticlusterComputeRegisterValues(t, suite.Config.RepoRoot, "nvcf-compute-plane", "ncp-local-compute-1")
 	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+	seedHelmfileLocalBDDMultiFixture(t, suite.Config.RepoRoot)
+	seedComputePlaneLocalBDDMultiFixture(t, suite.Config.RepoRoot)
 
 	sc := steps.NewScenarioContext(suite)
 	featurePath := mustResolveFeaturePath(t, "multi-cluster-up.feature")
