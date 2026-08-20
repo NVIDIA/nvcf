@@ -70,7 +70,7 @@ pub enum LoadBalancerAlgorithm {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum PulsarRendezvousWeight {
+pub(crate) enum PulsarRendezvousWeight {
     #[default]
     LastMeanInputTps,
     MaxInputTps,
@@ -294,10 +294,6 @@ pub struct LoadBalancerAlgorithmConfig {
 impl LoadBalancerAlgorithmConfig {
     pub fn algorithm(&self) -> LoadBalancerAlgorithm {
         self.settings.algorithm()
-    }
-
-    pub fn pulsar_rendezvous_weight(&self) -> PulsarRendezvousWeight {
-        self.rendezvous_weight
     }
 
     pub fn requires_cache_affinity_key(&self) -> bool {

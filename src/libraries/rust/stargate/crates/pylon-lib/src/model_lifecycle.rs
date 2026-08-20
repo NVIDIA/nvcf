@@ -47,7 +47,7 @@ pub enum ModelSource {
 #[derive(Clone, Debug)]
 pub enum ModelInitialization {
     Calibration(CalibrationConfig),
-    ConfiguredInputTps { input_tps: f64, pin: bool },
+    ConfiguredInputTps { input_tps: f64 },
     Uncalibrated,
 }
 
@@ -348,10 +348,9 @@ impl ModelLifecycleSupervisor {
                 ModelInitialization::Calibration(_) | ModelInitialization::Uncalibrated => {
                     ModelStatsInitialization::Empty
                 }
-                ModelInitialization::ConfiguredInputTps { input_tps, pin } => {
+                ModelInitialization::ConfiguredInputTps { input_tps } => {
                     ModelStatsInitialization::ConfiguredInputTps {
                         input_tps: *input_tps,
-                        pin: *pin,
                     }
                 }
             };
@@ -1014,10 +1013,7 @@ mod tests {
                 poll_interval: Duration::from_millis(10),
                 request_timeout: Duration::from_secs(1),
             }),
-            initialization: ModelInitialization::ConfiguredInputTps {
-                input_tps: 123.0,
-                pin: false,
-            },
+            initialization: ModelInitialization::ConfiguredInputTps { input_tps: 123.0 },
             bringup: BringupConfig {
                 enabled: false,
                 ..BringupConfig::default()
@@ -1135,10 +1131,7 @@ mod tests {
                     "model-a".to_string(),
                     "model-b".to_string(),
                 ])),
-                initialization: ModelInitialization::ConfiguredInputTps {
-                    input_tps: 123.0,
-                    pin: false,
-                },
+                initialization: ModelInitialization::ConfiguredInputTps { input_tps: 123.0 },
                 bringup: BringupConfig {
                     enabled: false,
                     ..BringupConfig::default()
@@ -1201,10 +1194,7 @@ mod tests {
             ModelLifecycleConfig {
                 upstream_http_base_url: upstream.to_string(),
                 source: ModelSource::Static(BTreeSet::from(["model-a".to_string()])),
-                initialization: ModelInitialization::ConfiguredInputTps {
-                    input_tps: 123.0,
-                    pin: false,
-                },
+                initialization: ModelInitialization::ConfiguredInputTps { input_tps: 123.0 },
                 bringup: BringupConfig {
                     active_canary_interval: Duration::ZERO,
                     ..BringupConfig::default()
@@ -1242,10 +1232,7 @@ mod tests {
             ModelLifecycleConfig {
                 upstream_http_base_url: "http://127.0.0.1:1".to_string(),
                 source: ModelSource::Static(BTreeSet::from(["model-a".to_string()])),
-                initialization: ModelInitialization::ConfiguredInputTps {
-                    input_tps: 123.0,
-                    pin: false,
-                },
+                initialization: ModelInitialization::ConfiguredInputTps { input_tps: 123.0 },
                 bringup: BringupConfig {
                     active_canary_interval: Duration::ZERO,
                     ..BringupConfig::default()
@@ -1317,10 +1304,7 @@ mod tests {
             config: ModelLifecycleConfig {
                 upstream_http_base_url: "http://127.0.0.1:1".to_string(),
                 source: ModelSource::Static(BTreeSet::new()),
-                initialization: ModelInitialization::ConfiguredInputTps {
-                    input_tps: 123.0,
-                    pin: false,
-                },
+                initialization: ModelInitialization::ConfiguredInputTps { input_tps: 123.0 },
                 bringup: BringupConfig {
                     enabled: false,
                     ..BringupConfig::default()
@@ -1512,10 +1496,7 @@ mod tests {
             ModelLifecycleConfig {
                 upstream_http_base_url: upstream.base_url.clone(),
                 source: ModelSource::Static(BTreeSet::from(["model-a".to_string()])),
-                initialization: ModelInitialization::ConfiguredInputTps {
-                    input_tps: 123.0,
-                    pin: false,
-                },
+                initialization: ModelInitialization::ConfiguredInputTps { input_tps: 123.0 },
                 bringup: BringupConfig {
                     enabled: false,
                     ..BringupConfig::default()

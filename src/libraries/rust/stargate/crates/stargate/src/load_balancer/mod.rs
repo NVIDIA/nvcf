@@ -44,12 +44,12 @@ pub(crate) use algorithm::input_work_seconds_for_request;
 pub(super) use algorithm::{HashInputBuilder, cache_affinity_key_is_cacheable, input_work_units};
 pub use cluster_comparator::ClusterComparator;
 pub(super) use cluster_comparator::{Ttft, ttft};
+pub(crate) use config::PulsarRendezvousWeight;
 pub use config::{
     LoadBalancerAlgorithm, LoadBalancerAlgorithmConfig, LoadBalancerAlgorithmOverride,
     LoadBalancerAlgorithmSettings, LoadBalancerConfig, LoadBalancerModelConfig,
     LoadBalancerRequestPolicy, LoadBalancerRoutingAlgorithmError, LoadBalancerSeedError,
-    MAX_POWER_OF_N_SAMPLE_COUNT, PowerOfNAlgorithmConfig, PulsarRendezvousWeight,
-    WaitAndWidenAlgorithmConfig,
+    MAX_POWER_OF_N_SAMPLE_COUNT, PowerOfNAlgorithmConfig, WaitAndWidenAlgorithmConfig,
 };
 pub use factory::create_load_balancer_with_config;
 pub use request::{LoadBalancerCandidateChoice, LoadBalancerRequest};

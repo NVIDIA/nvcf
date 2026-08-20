@@ -109,7 +109,7 @@ impl StatsCollectorHandle {
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum ModelStatsInitialization {
     Empty,
-    ConfiguredInputTps { input_tps: f64, pin: bool },
+    ConfiguredInputTps { input_tps: f64 },
 }
 
 enum StatsCollectorCommand {
@@ -636,7 +636,7 @@ mod tests {
             }
         }
 
-        async fn begin_configured_model(&self, model_id: &str, input_tps: f64, pin: bool) {
+        async fn begin_configured_model(&self, model_id: &str, input_tps: f64) {
             let generation = ModelGeneration::new(model_id, 0);
             assert!(self.runtime_state.begin_generation(generation.clone()));
             assert!(
@@ -644,7 +644,7 @@ mod tests {
                     .control()
                     .begin_generation(
                         generation,
-                        ModelStatsInitialization::ConfiguredInputTps { input_tps, pin }
+                        ModelStatsInitialization::ConfiguredInputTps { input_tps }
                     )
                     .await
                     .expect("collector should acknowledge configured generation")
@@ -1251,35 +1251,10 @@ mod tests {
     }
 
     #[test]
-    fn pinned_configured_input_tps_is_preserved_across_engine_stats_updates() {
+    fn configured_input_tps_moves_with_the_first_real_sample() {
         let mut aggregator = test_aggregator_with_initialization(
             StatsCollectorConfig::default(),
-            ModelStatsInitialization::ConfiguredInputTps {
-                input_tps: 2_200.0,
-                pin: true,
-            },
-        );
-        let stats = aggregator.stream_stats("req-a", (0, 0), false, Duration::ZERO);
-        assert_eq!(stats.last_mean_input_tps, 2_200.0);
-        assert_eq!(stats.max_input_tps, Some(2_200.0));
-        for tick in 1..=5 {
-            aggregator.stream("req-a", (tick * 10, 0), false, milliseconds(tick * 100));
-        }
-        let stats = aggregator.snapshot("model-a");
-        assert_eq!(stats.last_mean_input_tps, 2_200.0);
-        assert_eq!(stats.max_input_tps, Some(2_200.0));
-        aggregator.sweep(seconds(2));
-        assert_eq!(aggregator.snapshot("model-a").max_input_tps, Some(2_200.0));
-    }
-
-    #[test]
-    fn unpinned_configured_input_tps_moves_with_the_first_real_sample() {
-        let mut aggregator = test_aggregator_with_initialization(
-            StatsCollectorConfig::default(),
-            ModelStatsInitialization::ConfiguredInputTps {
-                input_tps: 100.0,
-                pin: false,
-            },
+            ModelStatsInitialization::ConfiguredInputTps { input_tps: 100.0 },
         );
         let bootstrapped = aggregator.snapshot("model-a");
         assert_eq!(bootstrapped.last_mean_input_tps, 100.0);
@@ -2507,9 +2482,7 @@ mod tests {
     #[tokio::test]
     async fn stats_collector_bootstraps_input_tps_for_queue_admission() {
         let collector = RunningCollector::spawn_empty(StatsCollectorConfig::default(), None, false);
-        collector
-            .begin_configured_model("model-a", 2_200.0, false)
-            .await;
+        collector.begin_configured_model("model-a", 2_200.0).await;
         let stats = collector
             .wait_for_stats("bootstrap TPS stats should be published", |stats| {
                 stats.last_mean_input_tps == 2_200.0
@@ -2545,10 +2518,7 @@ mod tests {
     #[test]
     fn records_metrics_when_configured() {
         let metrics = PylonMetrics::new().expect("metrics should initialize");
-        let config = config!(
-            engine_stats_request_ttl: Duration::ZERO,
-            engine_stats_model_ttl: Duration::ZERO,
-        );
+        let config = StatsCollectorConfig::default();
         let (runtime_state, _observation_rx) = PylonRuntimeState::observed(
             stargate_proto::pb::InferenceServerStatus::Unknown,
             &["model-a".to_string()],
@@ -2578,12 +2548,6 @@ mod tests {
         assert!(body.contains(r#"pylon_model_last_mean_input_tps{model="model-a"} 10"#));
         assert!(body.contains(r#"pylon_model_max_input_tps{model="model-a"} 10"#));
         assert!(body.contains(r#"pylon_model_output_tps{model="model-a"} 5"#));
-
-        for (model_id, stats) in aggregator.sweep_stale(TokioInstant::now() + seconds(2)) {
-            publish_model_stats_update(&runtime_state, model_id, stats);
-        }
-        let body = metrics.gather_text().expect("metrics should encode");
-        assert!(body.contains(r#"pylon_model_max_input_tps{model="model-a"} 10"#));
     }
 
     #[test]
@@ -2618,10 +2582,7 @@ mod tests {
             control
                 .begin_generation(
                     first.clone(),
-                    ModelStatsInitialization::ConfiguredInputTps {
-                        input_tps: 100.0,
-                        pin: false,
-                    },
+                    ModelStatsInitialization::ConfiguredInputTps { input_tps: 100.0 },
                 )
                 .await
                 .expect("stats collector should acknowledge initialization")

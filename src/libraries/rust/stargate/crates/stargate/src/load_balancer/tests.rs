@@ -968,7 +968,7 @@ fn pulsar_rendezvous_weight_parses_for_both_pulsar_variants() {
             r#"{{"algorithm":"{algorithm}","rendezvous_weight":"max-input-tps"}}"#
         ));
         assert_eq!(
-            config.pulsar_rendezvous_weight(),
+            config.rendezvous_weight,
             PulsarRendezvousWeight::MaxInputTps
         );
     }
@@ -978,7 +978,7 @@ fn pulsar_rendezvous_weight_parses_for_both_pulsar_variants() {
         LoadBalancerAlgorithm::PulsarWaitAndWiden,
     ] {
         assert_eq!(
-            LoadBalancerAlgorithmConfig::from(algorithm).pulsar_rendezvous_weight(),
+            LoadBalancerAlgorithmConfig::from(algorithm).rendezvous_weight,
             PulsarRendezvousWeight::LastMeanInputTps
         );
     }
@@ -2452,7 +2452,12 @@ fn pulsar_ranking_returns_candidate_slice_indices() {
         work_candidate("fast", 5, 10.0, 0),
     ];
 
-    let ranking = pulsar_ranked_indices(config.seed(), &request, &candidates);
+    let ranking = pulsar_ranked_indices(
+        config.seed(),
+        PulsarRendezvousWeight::default(),
+        &request,
+        &candidates,
+    );
 
     assert_eq!(ranking.len(), 2);
     assert_eq!(

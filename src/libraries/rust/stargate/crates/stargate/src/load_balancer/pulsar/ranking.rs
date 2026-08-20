@@ -18,7 +18,6 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use parking_lot::RwLock;
-use stargate_protocol::common::valid_last_mean_input_tps;
 use xxhash_rust::xxh3::xxh3_64;
 
 use crate::load_balancer::{
@@ -282,16 +281,7 @@ impl PulsarScorer {
     }
 }
 
-#[cfg(test)]
 pub(in crate::load_balancer) fn pulsar_ranked_indices(
-    seed: Option<&str>,
-    request: &LoadBalancerRequest<'_>,
-    candidates: &[RoutedClusterSnapshot],
-) -> Vec<usize> {
-    pulsar_ranked_indices_with_weight(seed, PulsarRendezvousWeight::default(), request, candidates)
-}
-
-pub(super) fn pulsar_ranked_indices_with_weight(
     seed: Option<&str>,
     selector: PulsarRendezvousWeight,
     request: &LoadBalancerRequest<'_>,
@@ -331,10 +321,6 @@ pub(super) fn pulsar_weight(
         PulsarRendezvousWeight::MaxInputTps => candidate.stats.max_input_tps,
     }?;
     (value > 0.0 && value.is_finite()).then_some(value)
-}
-
-pub(super) fn has_valid_mean_input_tps(candidate: &RoutedClusterSnapshot) -> bool {
-    valid_last_mean_input_tps(candidate.stats.last_mean_input_tps)
 }
 
 const PULSAR_HASH_VERSION: u8 = 1;

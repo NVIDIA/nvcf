@@ -295,8 +295,7 @@ fn build_compose_spec(
             "--min-update-interval-ms" => "100",
             "--disable-bringup",
             "--active-canary-interval-ms=0",
-            "--initial-input-tps" => pylon.last_mean_input_tps.to_string(),
-            "--benchmark-pin-input-tps",
+            "--initial-input-tps" => pylon.initial_input_tps.to_string(),
         ]);
         if let Some(pylon_queue_admission) = &algorithm.pylon_queue_admission {
             client_command.extend(pylon_queue_admission.pylon_args());
@@ -351,8 +350,7 @@ backends:
   count: 2
   profile:
     name: balanced
-    service_time_ms: { ttft_mean: 150, ttft_jitter_ms: 10, decode_tokens_per_s: 50 }
-    registration: { last_mean_input_tps: 100.0 }
+    service_time_ms: { ttft_mean: 150, ttft_jitter_ms: 10, decode_tokens_per_s: 50, prefill_tokens_per_s: 100.0 }
 traffic_pattern:
   kind: uniform
   routing_keys: 2
@@ -566,7 +564,7 @@ algorithms:
             Some("100")
         );
         assert!(
-            client
+            !client
                 .command
                 .iter()
                 .any(|candidate| candidate == "--benchmark-pin-input-tps")

@@ -55,7 +55,6 @@ pub(super) struct ModelMetricsState {
 pub(super) struct GenerationMetricsState {
     pub(super) generation: ModelGeneration,
     pub(super) metrics: ModelMetricsState,
-    pub(super) pinned_input_tps: Option<f64>,
 }
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 pub(super) struct KvCacheStatsSnapshot {
@@ -237,16 +236,17 @@ impl StatsAggregator {
         if self.per_model.contains_key(generation.model_id()) {
             return None;
         }
-        let mut metrics = ModelMetricsState::default();
-        let pinned_input_tps = match initialization {
-            super::collector::ModelStatsInitialization::Empty => None,
-            super::collector::ModelStatsInitialization::ConfiguredInputTps { input_tps, pin } => {
+        let metrics = match initialization {
+            super::collector::ModelStatsInitialization::Empty => ModelMetricsState::default(),
+            super::collector::ModelStatsInitialization::ConfiguredInputTps { input_tps } => {
                 let input_tps_distribution = TpsDistribution::bootstrap(input_tps)
                     .expect("configured input TPS must be positive and finite");
-                metrics.last_mean_input_tps = input_tps;
-                metrics.input_tps_distribution = input_tps_distribution;
-                metrics.aggregate_state_counted = true;
-                pin.then_some(input_tps)
+                ModelMetricsState {
+                    last_mean_input_tps: input_tps,
+                    input_tps_distribution,
+                    aggregate_state_counted: true,
+                    ..ModelMetricsState::default()
+                }
             }
         };
         self.aggregate_model_state_count += usize::from(metrics.aggregate_state_counted);
@@ -255,7 +255,6 @@ impl StatsAggregator {
             GenerationMetricsState {
                 generation: generation.clone(),
                 metrics,
-                pinned_input_tps,
             },
         );
         let stats = self.snapshot(generation.model_id());
@@ -643,7 +642,6 @@ impl StatsAggregator {
                 dirty |= apply_input_throughput_sample(
                     config,
                     model_state,
-                    generation_state.pinned_input_tps,
                     InputThroughputSample {
                         units,
                         duration,
@@ -799,7 +797,6 @@ fn adjust_live_count(count: &mut usize, delta: isize) {
 pub(super) fn apply_input_throughput_sample(
     config: &StatsCollectorConfig,
     model_state: &mut ModelMetricsState,
-    pinned_input_tps: Option<f64>,
     sample: InputThroughputSample,
 ) -> bool {
     if sample.units < config.min_input_tokens {
@@ -815,19 +812,17 @@ pub(super) fn apply_input_throughput_sample(
     };
     let previous_max = model_state.input_tps_distribution.max;
     model_state.input_tps_distribution.update(input_tps);
-    let max_changed =
-        pinned_input_tps.is_none() && model_state.input_tps_distribution.max != previous_max;
+    let max_changed = model_state.input_tps_distribution.max != previous_max;
     let mean_input_tps = model_state.input_tps_distribution.mean;
     if !model_state.input_tps_distribution.has_sufficient_data()
         || !valid_last_mean_input_tps(mean_input_tps)
     {
         return max_changed;
     }
-    let last_mean_input_tps = pinned_input_tps.unwrap_or(mean_input_tps);
-    if model_state.last_mean_input_tps == last_mean_input_tps {
+    if model_state.last_mean_input_tps == mean_input_tps {
         return max_changed;
     }
-    model_state.last_mean_input_tps = last_mean_input_tps;
+    model_state.last_mean_input_tps = mean_input_tps;
     true
 }
 
