@@ -69,11 +69,13 @@ cassandra:
       repository: {{ .Values.global.image.repository }}/alpine-k8s
   image:
     registry: {{ .Values.global.image.registry }}
-    repository: {{ .Values.global.image.repository }}/bitnami-cassandra
-  dynamicSeedDiscovery:
-    image:
-      registry: {{ .Values.global.image.registry }}
-      repository: {{ .Values.global.image.repository }}/bitnami-cassandra
+    # The Apache-based chart publishes its image as "cassandra", not
+    # "bitnami-cassandra". Tag knob follows the migrations pattern above so
+    # environments can override the chart default.
+    repository: {{ .Values.global.image.repository }}/cassandra
+    {{- if dig "cassandra" "image" "tag" "" .Values }}
+    tag: {{ dig "cassandra" "image" "tag" "" .Values }}
+    {{- end }}
 
 # cert-manager subchart image overrides. The helm-nvcf-cert-manager wrapper
 # passes these through to the upstream cert-manager subchart under the
