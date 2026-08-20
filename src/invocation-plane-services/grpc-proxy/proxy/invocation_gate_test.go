@@ -46,6 +46,10 @@ func TestInvocationGateDrainWaitsForAdmittedInvocation(t *testing.T) {
 
 	const held = 100 * time.Millisecond
 	var finished atomic.Bool
+	// Recorded before the goroutine starts. Taking it afterwards allows the
+	// sleep to begin first, which makes the measured elapsed time slightly
+	// shorter than held and fails the assertion for no real reason.
+	start := time.Now()
 	go func() {
 		time.Sleep(held)
 		// Set before end so that observing "not finished" after the drain
@@ -54,7 +58,6 @@ func TestInvocationGateDrainWaitsForAdmittedInvocation(t *testing.T) {
 		gate.end()
 	}()
 
-	start := time.Now()
 	gate.closeAndDrain(5 * time.Second)
 
 	assert.True(t, finished.Load(), "drain returned before the admitted invocation finished")
