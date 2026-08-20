@@ -158,6 +158,18 @@ functionAutoscaler:
     # environment label.
     ignoreEnv: true
 
+# Image overrides for the API account-bootstrap job. alpine-k8s is not
+# republished under the public nvidia/nvcf catalog, so a public-catalog
+# install must point it at its upstream Docker Hub source:
+# api:
+#   accountBootstrap:
+#     image:
+#       registry: docker.io
+#       repository: alpine/k8s
+#       tag: "1.36.1"
+# Leave unset to keep the mirrored default,
+# <global.image.registry>/<global.image.repository>/alpine-k8s.
+
 accounts:
   limits:
     maxFunctions: 10

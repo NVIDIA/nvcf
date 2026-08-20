@@ -377,11 +377,14 @@ api:
         llm-request-router:
           worker-address: {{ $llmRequestRouterWorkerAddress | quote }}
   {{- end }}
+  # alpine-k8s is not republished under the public nvidia/nvcf catalog; a
+  # public-catalog install points this at docker.io/alpine/k8s. Override the
+  # keys below in your environment file instead of editing this template.
   accountBootstrap:
     image:
-      registry: {{ .Values.global.image.registry }}
-      repository: {{ .Values.global.image.repository }}/alpine-k8s
-      tag: 1.36.1
+      registry: {{ dig "api" "accountBootstrap" "image" "registry" .Values.global.image.registry .Values }}
+      repository: {{ dig "api" "accountBootstrap" "image" "repository" (printf "%s/alpine-k8s" .Values.global.image.repository) .Values }}
+      tag: {{ dig "api" "accountBootstrap" "image" "tag" "1.36.1" .Values | quote }}
       pullPolicy: IfNotPresent
 
     registryCredentials: []
