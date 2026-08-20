@@ -18,6 +18,7 @@ const (
 	EnvTraceDir             = "TRACE_DIR"
 	EnvTraceFilePrefix      = "TRACE_FILE_PREFIX"
 	EnvAuditFilePrefix      = "AUDIT_FILE_PREFIX"
+	EnvDroppedNCAIDs        = "VLLM_DROP_PAYLOAD_NCA_IDS"
 	EnvSecretsFile          = "KRATOS_SECRETS_FILE"
 	EnvStateDir             = "REQUEST_TRACE_UPLOADER_STATE_DIR"
 	EnvQuarantineDir        = "REQUEST_TRACE_UPLOADER_QUARANTINE_DIR"
@@ -52,14 +53,18 @@ type Config struct {
 	TraceDir        string
 	TraceFilePrefix string
 	AuditFilePrefix string
-	SecretsFile     string
-	StateDir        string
-	QuarantineDir   string
-	MetricsAddr     string
-	UploadInterval  time.Duration
-	StatusInterval  time.Duration
-	StatusTimeout   time.Duration
-	RetryPolicy     RetryPolicy
+	// DroppedNCAIDs identifies NCA IDs whose audit request payloads,
+	// response payloads, and non-NCA headers must not be exported. The current
+	// scaffold only validates this value. The transform stage applies it.
+	DroppedNCAIDs  []string
+	SecretsFile    string
+	StateDir       string
+	QuarantineDir  string
+	MetricsAddr    string
+	UploadInterval time.Duration
+	StatusInterval time.Duration
+	StatusTimeout  time.Duration
+	RetryPolicy    RetryPolicy
 }
 
 // RetryPolicy bounds each remote operation. The initial scaffold validates but
@@ -99,6 +104,10 @@ func Load(lookup LookupFunc) (Config, []string, error) {
 	}
 	if tracePrefix == auditPrefix {
 		return Config{}, nil, fmt.Errorf("%s and %s must differ", EnvTraceFilePrefix, EnvAuditFilePrefix)
+	}
+	droppedNCAIDs, err := ncaIDList(lookup, EnvDroppedNCAIDs)
+	if err != nil {
+		return Config{}, nil, err
 	}
 
 	warnings := make([]string, 0)
@@ -142,6 +151,7 @@ func Load(lookup LookupFunc) (Config, []string, error) {
 		TraceDir:        traceDir,
 		TraceFilePrefix: tracePrefix,
 		AuditFilePrefix: auditPrefix,
+		DroppedNCAIDs:   droppedNCAIDs,
 		SecretsFile:     strings.TrimSpace(secretsFile),
 		StateDir:        stateDir,
 		QuarantineDir:   quarantineDir,
@@ -194,6 +204,40 @@ func requiredName(lookup LookupFunc, name string) (string, error) {
 		return "", fmt.Errorf("%s must not contain a path separator", name)
 	}
 	return value, nil
+}
+
+func ncaIDList(lookup LookupFunc, name string) ([]string, error) {
+	value, ok := lookup(name)
+	if !ok || strings.TrimSpace(value) == "" {
+		return nil, nil
+	}
+
+	ids := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, item := range strings.Split(value, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		id := normalizeNCAID(item)
+		if id == "" {
+			return nil, fmt.Errorf("%s contains an invalid NCA ID", name)
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+func normalizeNCAID(value string) string {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(value, "nca-") && strings.HasSuffix(value, "-nca") {
+		value = strings.TrimSuffix(strings.TrimPrefix(value, "nca-"), "-nca")
+	}
+	return strings.TrimSpace(value)
 }
 
 func valueOrDefault(lookup LookupFunc, name, fallback string) string {
