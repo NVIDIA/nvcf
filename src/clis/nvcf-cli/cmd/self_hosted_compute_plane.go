@@ -132,7 +132,7 @@ func runSelfHostedComputePlaneInstall(c *cobra.Command, _ []string) error {
 		Stdout:          c.OutOrStdout(),
 		Stderr:          c.ErrOrStderr(),
 		Ctx:             c.Context(),
-		ExtraEnv:        computePlaneInstallEnv(clusterName, ncaID),
+		ExtraEnv:        computePlaneInstallEnv(clusterName, ncaID, filepath.Dir(valuesPath)),
 	})
 }
 
@@ -234,10 +234,14 @@ func inferClusterNameFromValuesPath(path string) string {
 	return ""
 }
 
-func computePlaneInstallEnv(clusterName, ncaID string) []string {
+func computePlaneInstallEnv(clusterName, ncaID, outputDir string) []string {
 	return []string{
 		"CLUSTER_NAME=" + clusterName,
 		"NCA_ID=" + ncaID,
+		// The worker helmfile resolves the registration values at
+		// $OUTPUT_DIR/$CLUSTER_NAME-register-values.yaml via requiredEnv, so
+		// point it at the directory holding the --values file.
+		"OUTPUT_DIR=" + outputDir,
 	}
 }
 
