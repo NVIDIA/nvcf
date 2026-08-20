@@ -4,11 +4,14 @@
 package service
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/config"
 
@@ -50,16 +53,41 @@ func TestInitializeReadinessAndDiscovery(t *testing.T) {
 		"/metrics": http.StatusOK,
 	} {
 		response := httptest.NewRecorder()
-		svc.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		svc.Handler().ServeHTTP(response, httptest.NewRequestWithContext(context.Background(), http.MethodGet, path, nil))
 		if response.Code != want {
 			t.Errorf("%s status = %d, want %d", path, response.Code, want)
 		}
+	}
+	metricsResponse := httptest.NewRecorder()
+	svc.Handler().ServeHTTP(metricsResponse, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/metrics", nil))
+	if !strings.Contains(metricsResponse.Body.String(), "nvcf_dynamo_request_trace_uploader_pending_segments 1\n") {
+		t.Fatalf("pending segment metric = %q, want one closed segment", metricsResponse.Body.String())
 	}
 	if _, err := os.Stat(cfg.StateDir); err != nil {
 		t.Errorf("state directory: %v", err)
 	}
 	if _, err := os.Stat(cfg.QuarantineDir); err != nil {
 		t.Errorf("quarantine directory: %v", err)
+	}
+}
+
+func TestHTTPServerTimeouts(t *testing.T) {
+	svc, err := New(config.Config{MetricsAddr: ":8011"}, prometheus.NewRegistry())
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	server := svc.httpServer()
+	if server.ReadHeaderTimeout != 5*time.Second {
+		t.Errorf("ReadHeaderTimeout = %v, want %v", server.ReadHeaderTimeout, 5*time.Second)
+	}
+	if server.ReadTimeout != 15*time.Second {
+		t.Errorf("ReadTimeout = %v, want %v", server.ReadTimeout, 15*time.Second)
+	}
+	if server.WriteTimeout != 15*time.Second {
+		t.Errorf("WriteTimeout = %v, want %v", server.WriteTimeout, 15*time.Second)
+	}
+	if server.IdleTimeout != 60*time.Second {
+		t.Errorf("IdleTimeout = %v, want %v", server.IdleTimeout, 60*time.Second)
 	}
 }
 

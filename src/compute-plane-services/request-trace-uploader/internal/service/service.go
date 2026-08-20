@@ -35,7 +35,7 @@ type Service struct {
 func New(cfg config.Config, registry *prometheus.Registry) (*Service, error) {
 	m, err := metrics.New(registry)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create uploader metrics: %w", err)
 	}
 	return &Service{
 		config:     cfg,
@@ -70,7 +70,7 @@ func (s *Service) Initialize() error {
 		return fmt.Errorf("close uploader secret file: %w", err)
 	}
 	if err := s.Refresh(); err != nil {
-		return err
+		return fmt.Errorf("refresh local segment state: %w", err)
 	}
 	s.health.SetReady(true)
 	return nil
@@ -80,7 +80,7 @@ func (s *Service) Initialize() error {
 func (s *Service) Refresh() error {
 	segments, err := segment.Discover(s.config.TraceDir, s.config.TraceFilePrefix, s.config.AuditFilePrefix)
 	if err != nil {
-		return err
+		return fmt.Errorf("discover request trace segments: %w", err)
 	}
 	var bytes int64
 	var oldest time.Time
@@ -109,9 +109,9 @@ func (s *Service) Refresh() error {
 // Run starts the HTTP server and periodically refreshes local discovery.
 func (s *Service) Run(ctx context.Context) error {
 	if err := s.Initialize(); err != nil {
-		return err
+		return fmt.Errorf("initialize request-trace uploader: %w", err)
 	}
-	server := &http.Server{Addr: s.config.MetricsAddr, Handler: s.Handler()}
+	server := s.httpServer()
 	errs := make(chan error, 1)
 	go func() {
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -137,5 +137,16 @@ func (s *Service) Run(ctx context.Context) error {
 				return fmt.Errorf("refresh request trace segments: %w", err)
 			}
 		}
+	}
+}
+
+func (s *Service) httpServer() *http.Server {
+	return &http.Server{
+		Addr:              s.config.MetricsAddr,
+		Handler:           s.Handler(),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 }
