@@ -1096,6 +1096,7 @@ vanityGateway:
   config:
     mappingPath: {{ dig "addons" "vanityGateway" "config" "mappingPath" "/etc/vanity-gateway/config/config.yaml" .Values | quote }}
     nvcfApiEndpoint: {{ dig "addons" "vanityGateway" "config" "nvcfApiEndpoint" "http://invocation.nvcf.svc.cluster.local:8080" .Values | quote }}
+    llmGatewayEndpoint: {{ dig "addons" "vanityGateway" "config" "llmGatewayEndpoint" "http://llm-api-gateway.nvcf.svc.cluster.local:8080" .Values | quote }}
     {{- if .Values.global.observability.tracing.enabled }}
     otelExporterOtlpEndpoint: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
     {{- else }}
