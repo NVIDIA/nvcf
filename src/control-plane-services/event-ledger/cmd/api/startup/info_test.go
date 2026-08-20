@@ -46,13 +46,26 @@ func TestRegisterUnauthenticatedRoutes_Info(t *testing.T) {
 		golibversion.GitHash = prevHash
 	})
 
+	// A recording middleware confirms registerUnauthenticatedRoutes actually
+	// wraps /info with the injected middleware (tracing + logging in production).
+	mwApplied := false
+	infoMiddleware := func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mwApplied = true
+			w.Header().Set("X-Info-Middleware", "applied")
+			h.ServeHTTP(w, r)
+		})
+	}
+
 	router := mux.NewRouter()
-	registerUnauthenticatedRoutes(router, &service.Server{}, func(h http.Handler) http.Handler { return h })
+	registerUnauthenticatedRoutes(router, &service.Server{}, infoMiddleware)
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/info", nil)
 	router.ServeHTTP(w, r)
 
+	assert.True(t, mwApplied, "/info should be wrapped with the injected middleware")
+	assert.Equal(t, "applied", w.Header().Get("X-Info-Middleware"))
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
 
