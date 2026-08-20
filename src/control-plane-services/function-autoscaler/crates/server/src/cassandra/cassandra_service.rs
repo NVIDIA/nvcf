@@ -20,7 +20,7 @@ use crate::models::{
     ActiveFunction, ActiveFunctionDetails, DistributedLock, DistributedLockResult, NodeHealth,
 };
 use crate::secrets::secrets_config::CassandraSslCertificates;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use base64::Engine;
 use chrono::Utc;
@@ -388,8 +388,7 @@ impl CassandraServiceManager {
         page_size: i32,
     ) -> Result<Vec<ActiveFunction>> {
         let session = self.get_session().await?;
-        let stmt =
-            get_select_recently_invoked_functions_in_token_range_stmt(&self.config.keyspace);
+        let stmt = get_select_recently_invoked_functions_in_token_range_stmt(&self.config.keyspace);
 
         with_cassandra_timing("get_active_functions_with_token_range", || async {
             let mut prepared_statement = session.prepare(stmt).await?;
@@ -486,14 +485,11 @@ impl CassandraServiceManager {
                             (&function_id, &function_version_id, &nca_id, last_updated_at),
                         )
                         .await
-                        .map_err(|e| {
-                            tracing::error!(
-                                "Failed to insert function {}:{} to Cassandra: {}",
-                                function_id,
-                                function_version_id,
-                                e
-                            );
-                            anyhow::Error::from(e)
+                        .with_context(|| {
+                            format!(
+                                "inserting function {}:{} into recently_invoked_functions",
+                                function_id, function_version_id
+                            )
                         })
                 }
             })
