@@ -54,14 +54,13 @@ Feature: Install local Helmfile observability with the control profile
   Scenario: Control profile installs shared infrastructure and control monitors
     When I successfully run command "make -C deploy/stacks/self-managed install HELMFILE_ENV=local-bdd-observability-control"
 
-    When I run command "helm list --all-namespaces --kube-context k3d-ncp-local -o json"
-    Then the json output should contain rows:
-      | name                     | namespace  | status   |
-      | prometheus-operator-crds | monitoring | deployed |
-      | opentelemetry-operator   | monitoring | deployed |
-      | victoria-metrics         | monitoring | deployed |
-      | otel-collector           | monitoring | deployed |
-      | default-monitors         | monitoring | deployed |
+    Then these Helm releases should be deployed using context "k3d-ncp-local":
+      | name                     | namespace  |
+      | prometheus-operator-crds | monitoring |
+      | opentelemetry-operator   | monitoring |
+      | victoria-metrics         | monitoring |
+      | otel-collector           | monitoring |
+      | default-monitors         | monitoring |
 
     When I successfully run command "kubectl get opentelemetrycollector nvcf-observability -n monitoring --context k3d-ncp-local -o jsonpath='{.spec.targetAllocator.enabled}'"
     And the command output should contain "true"

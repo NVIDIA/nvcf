@@ -104,15 +104,14 @@ Feature: Install local Helmfile observability for both planes
 
     # Revision 1 proves the compute install did not reinstall or upgrade the
     # shared observability releases created by the control-plane install.
-    When I run command "helm list --all-namespaces --kube-context k3d-ncp-local -o json"
-    Then the json output should contain rows:
-      | name                     | namespace     | revision | status   |
-      | prometheus-operator-crds | monitoring    | 1        | deployed |
-      | opentelemetry-operator   | monitoring    | 1        | deployed |
-      | victoria-metrics         | monitoring    | 1        | deployed |
-      | otel-collector           | monitoring    | 1        | deployed |
-      | default-monitors         | monitoring    | 1        | deployed |
-      | nvca-operator            | nvca-operator | 1        | deployed |
+    Then these Helm releases should be deployed using context "k3d-ncp-local":
+      | name                     | namespace     | revision |
+      | prometheus-operator-crds | monitoring    | 1        |
+      | opentelemetry-operator   | monitoring    | 1        |
+      | victoria-metrics         | monitoring    | 1        |
+      | otel-collector           | monitoring    | 1        |
+      | default-monitors         | monitoring    | 1        |
+      | nvca-operator            | nvca-operator | 1        |
 
     When I run command "kubectl rollout status deployment/nvca-operator -n nvca-operator --context k3d-ncp-local --timeout=10m"
     Then the command exit code should be 0

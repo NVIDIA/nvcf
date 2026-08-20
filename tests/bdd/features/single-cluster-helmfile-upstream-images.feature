@@ -110,14 +110,13 @@ Feature: Install a local single-cluster stack with upstream supporting images
     When I run command "env HELM_REGISTRY_CONFIG=${REPO_ROOT}/tools/ncp-local-cluster/secrets/docker-config.json make -C deploy/stacks/self-managed install HELMFILE_ENV=local-bdd HELMFILE_SELECTOR=name=api"
     Then the command exit code should be 0
 
-    When I run command "helm list --all-namespaces -o json"
-    Then the json output should contain rows:
-      | name                      | namespace        | status   |
-      | nats                      | nats-system      | deployed |
-      | cassandra                 | cassandra-system | deployed |
-      | ess-api                   | ess              | deployed |
-      | nats-auth-callout-service | nats-system      | deployed |
-      | api                       | nvcf             | deployed |
+    Then these Helm releases should be deployed using context "k3d-ncp-local":
+      | name                      | namespace        |
+      | nats                      | nats-system      |
+      | cassandra                 | cassandra-system |
+      | ess-api                   | ess              |
+      | nats-auth-callout-service | nats-system      |
+      | api                       | nvcf             |
 
     When I run command:
       """

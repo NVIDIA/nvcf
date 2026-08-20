@@ -305,9 +305,9 @@ func TestSingleClusterUpFeatureFileWiresToSteps(t *testing.T) {
 
 // TestSingleClusterUpOneClickFeatureFileWiresToSteps runs the
 // self-hosted up one-click feature against a fake CommandRunner. The
-// helm-list canned outputs carry --kube-context k3d-ncp-local so the
-// control-plane and nvca-operator json-rows assertions have something to
-// parse; the conflict-precheck k3d-get returns exit 1.
+// helm-list canned output carries --kube-context k3d-ncp-local so the
+// control-plane and nvca-operator assertions have something to parse;
+// the conflict-precheck k3d-get returns exit 1.
 func TestSingleClusterUpOneClickFeatureFileWiresToSteps(t *testing.T) {
 	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
 	t.Setenv("NGC_API_KEY", "test-key")
@@ -315,7 +315,6 @@ func TestSingleClusterUpOneClickFeatureFileWiresToSteps(t *testing.T) {
 	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
 		"helm list --all-namespaces --kube-context k3d-ncp-local -o json": {ExitCode: 0, Stdout: helmListAllNamespacesJSON()},
-		"helm list -n nvca-operator --kube-context k3d-ncp-local -o json": {ExitCode: 0, Stdout: helmListNVCAJSON()},
 		// Conflict precheck: feature asserts the multi-cluster
 		// control-plane is absent.
 		"k3d cluster get ncp-local-cp": {ExitCode: 1},
@@ -389,8 +388,7 @@ func TestMultiClusterUpFeatureFileWiresToSteps(t *testing.T) {
 // single-cluster-helmfile.feature against a fake runner. The fixture
 // the feature copies from is seeded into the wiring suite's RepoRoot
 // so the I copy / I update yaml chain has a real source file. The
-// fake runner is pre-loaded with canned JSON for the `helm list` step
-// so the json-rows assertion has something to parse.
+// fake runner is pre-loaded with canned JSON for the Helm release assertion.
 func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	t.Setenv("NGC_API_KEY", "test-key")
 	t.Setenv("SAMPLE_NGC_ORG", "test-org")
@@ -398,8 +396,7 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
-		"helm list --all-namespaces -o json": {ExitCode: 0, Stdout: helmListAllNamespacesJSON()},
-		"helm list -n nvca-operator -o json": {ExitCode: 0, Stdout: helmListNVCAJSON()},
+		"helm list --all-namespaces --kube-context k3d-ncp-local -o json": {ExitCode: 0, Stdout: helmListAllNamespacesJSON()},
 		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke --request-body '{\"message\":\"bdd-echo\",\"repeats\":1}' --timeout 120 --poll-duration 5": {
 			ExitCode: 0,
 			Stdout:   "Function invocation completed!\n\nResponse:\n{\"rawResponse\":\"bdd-echo\"}\n",
@@ -835,7 +832,7 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
 		"helm list --all-namespaces --kube-context k3d-ncp-local-cp -o json":        {ExitCode: 0, Stdout: helmListAllNamespacesJSON()},
-		"helm list -n nvca-operator --kube-context k3d-ncp-local-compute-1 -o json": {ExitCode: 0, Stdout: helmListNVCAJSON()},
+		"helm list --all-namespaces --kube-context k3d-ncp-local-compute-1 -o json": {ExitCode: 0, Stdout: helmListNVCAJSON()},
 		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke --request-body '{\"message\":\"bdd-echo\",\"repeats\":1}' --timeout 120 --poll-duration 5": {
 			ExitCode: 0,
 			Stdout:   "Function invocation completed!\n\nResponse:\n{\"rawResponse\":\"bdd-echo\"}\n",
@@ -929,7 +926,7 @@ func TestSingleClusterHelmfileUpstreamImagesFeatureFileWiresToSteps(t *testing.T
 	upstreamReloader := "docker.io/natsio/nats-server-config-reloader:0.23.0"
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
 		"k3d cluster get ncp-local-cp": {ExitCode: 1},
-		"helm list --all-namespaces -o json": {
+		"helm list --all-namespaces --kube-context k3d-ncp-local -o json": {
 			ExitCode: 0,
 			Stdout:   helmListAllNamespacesJSON(),
 		},
@@ -1070,7 +1067,8 @@ func helmListAllNamespacesJSON() string {
 {"name":"nats-auth-callout-service","namespace":"nats-system","status":"deployed"},
 {"name":"ingress","namespace":"envoy-gateway-system","status":"deployed"},
 {"name":"llm-request-router","namespace":"nvcf","status":"deployed"},
-{"name":"llm-api-gateway","namespace":"nvcf","status":"deployed"}
+{"name":"llm-api-gateway","namespace":"nvcf","status":"deployed"},
+{"name":"nvca-operator","namespace":"nvca-operator","status":"deployed"}
 ]`
 }
 
@@ -1349,8 +1347,6 @@ func TestSingleClusterEKSHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		"helm list --all-namespaces --kube-context " + eksContext + " -o json": {ExitCode: 0, Stdout: helmListAllNamespacesJSON()},
 		// @control-plane: httproute jsonpath assertion expects api.<gw>.
 		"kubectl --context " + eksContext + " get httproute nvcf-api -n envoy-gateway -o jsonpath={.spec.hostnames[0]}": {ExitCode: 0, Stdout: "api." + wiringGatewayLB},
-		// @nvca-registration: helm list confirms nvca-operator deployed.
-		"helm list -n nvca-operator --kube-context " + eksContext + " -o json": {ExitCode: 0, Stdout: helmListNVCAJSON()},
 	}))
 	seedStackBaseYaml(t, suite.Config.RepoRoot)
 	seedComputePlaneBaseYaml(t, suite.Config.RepoRoot)
@@ -1447,7 +1443,7 @@ func TestMultiClusterEKSHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	NVCT_GLOBAL_FQDN_GRPC: http://worker-tasks.` + wiringGatewayDomain + `
 `},
 		// compute nvca-operator helm list assertion.
-		"helm list -n nvca-operator --kube-context " + computeContext + " -o json": {ExitCode: 0, Stdout: helmListNVCAJSON()},
+		"helm list --all-namespaces --kube-context " + computeContext + " -o json": {ExitCode: 0, Stdout: helmListNVCAJSON()},
 		// @function-lifecycle: function invoke returns the echo payload.
 		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/out/nvcf-cli-eks-bdd-multi.yaml function invoke --request-body '{\"message\":\"bdd-echo\",\"repeats\":1}' --timeout 120 --poll-duration 5": {
 			ExitCode: 0,

@@ -23,11 +23,13 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
         | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
         | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
         | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+        | observability.profile           | disabled                             |
       And I copy the file "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" to "deploy/stacks/nvcf-compute-plane/environments/local-bdd.yaml"
       And I update yaml file "deploy/stacks/nvcf-compute-plane/environments/local-bdd.yaml" with keys:
-        | global.imagePullSecrets[0].name               | nvcr-pull-secret                                                    |
-        | global.helm.sources.repository                | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                |
-        | global.image.repository                       | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                |
+        | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
+        | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+        | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+        | observability.profile           | disabled                             |
       And I copy the file "deploy/stacks/self-managed/secrets/secrets.yaml.template" to "deploy/stacks/self-managed/secrets/local-bdd-secrets.yaml"
       # Only ${VAR} is interpolated; bare $oauthtoken stays literal.
       And I substitute "REPLACE_WITH_BASE64_DOCKER_CREDENTIAL" in file "deploy/stacks/self-managed/secrets/local-bdd-secrets.yaml" with base64 of "$oauthtoken:${NGC_API_KEY}"
@@ -72,27 +74,26 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
 
       Then the command exit code should be 0
 
-      When I run command "helm list --all-namespaces -o json"
-      Then the json output should contain rows:
-        | name                      | namespace            | status   |
-        | nats                      | nats-system          | deployed |
-        | cert-manager              | cert-manager         | deployed |
-        | openbao-server            | vault-system         | deployed |
-        | cassandra                 | cassandra-system     | deployed |
-        | api-keys                  | api-keys             | deployed |
-        | sis                       | sis                  | deployed |
-        | api                       | nvcf                 | deployed |
-        | nvct-api                  | nvcf                 | deployed |
-        | invocation-service        | nvcf                 | deployed |
-        | grpc-proxy                | nvcf                 | deployed |
-        | ess-api                   | ess                  | deployed |
-        | notary-service            | nvcf                 | deployed |
-        | admin-issuer-proxy        | api-keys             | deployed |
-        | reval                     | nvcf                 | deployed |
-        | nats-auth-callout-service | nats-system          | deployed |
-        | ingress                   | envoy-gateway-system | deployed |
-        | llm-request-router        | nvcf                 | deployed |
-        | llm-api-gateway           | nvcf                 | deployed |
+      Then these Helm releases should be deployed using context "k3d-ncp-local":
+        | name                      | namespace            |
+        | nats                      | nats-system          |
+        | cert-manager              | cert-manager         |
+        | openbao-server            | vault-system         |
+        | cassandra                 | cassandra-system     |
+        | api-keys                  | api-keys             |
+        | sis                       | sis                  |
+        | api                       | nvcf                 |
+        | nvct-api                  | nvcf                 |
+        | invocation-service        | nvcf                 |
+        | grpc-proxy                | nvcf                 |
+        | ess-api                   | ess                  |
+        | notary-service            | nvcf                 |
+        | admin-issuer-proxy        | api-keys             |
+        | reval                     | nvcf                 |
+        | nats-auth-callout-service | nats-system          |
+        | ingress                   | envoy-gateway-system |
+        | llm-request-router        | nvcf                 |
+        | llm-api-gateway           | nvcf                 |
 
   Rule: Helmfile installs NVCA on the same local cluster after registration via the stack Makefile
 
@@ -137,10 +138,9 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
         """
       Then the command exit code should be 0
 
-      When I run command "helm list -n nvca-operator -o json"
-      Then the json output should contain rows:
-        | name          | namespace     | status   |
-        | nvca-operator | nvca-operator | deployed |
+      Then these Helm releases should be deployed using context "k3d-ncp-local":
+        | name          | namespace     |
+        | nvca-operator | nvca-operator |
 
       When I run command "kubectl rollout status deployment/nvca-operator -n nvca-operator --timeout=10m"
       Then the command exit code should be 0
