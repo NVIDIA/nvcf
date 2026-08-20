@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// request-trace-uploader validates and observes Dynamo request-trace segments.
+// request-trace-uploader validates and discovers Dynamo request-trace segments.
 package main
 
 import (
@@ -14,8 +14,6 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/config"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/service"
-
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 func main() {
@@ -28,7 +26,7 @@ func main() {
 		slog.Warn("request trace uploader configuration fallback", "setting", warning)
 	}
 
-	svc, err := service.New(cfg, prometheus.NewRegistry())
+	svc, err := service.New(cfg)
 	if err != nil {
 		slog.Error("create request trace uploader service", "error", err)
 		os.Exit(1)

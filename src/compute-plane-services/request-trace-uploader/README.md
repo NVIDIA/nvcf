@@ -12,10 +12,10 @@ by the Dynamo writer.
 ## Initial scaffold
 
 This initial implementation validates the sidecar configuration, verifies its
-secret-file mount, creates state and quarantine directories, exposes health and
-Prometheus metrics, and discovers the current backlog. It intentionally does
-not transform records, submit uploads, poll remote status, delete source files,
-or publish a release image.
+secret-file mount, creates state and quarantine directories, exposes health,
+and verifies local segment discovery. It intentionally does not export logs,
+traces, or metrics, transform records, submit uploads, poll remote status,
+delete source files, or publish a release image.
 
 The `internal/upload` package defines the future upload-client boundary. The
 real adapter and durable journal are separate follow-up work.
@@ -31,12 +31,12 @@ The scaffold retains the current file contract:
   payloads. Bare IDs and `nca-<id>-nca` are equivalent. The future
   transform retains correlation metadata and the normalized NCA ID, but removes
   request and response payloads plus non-NCA headers before upload.
-- `KRATOS_SECRETS_FILE`: readable mounted secret file; default
+- `REQUEST_TRACE_UPLOADER_SECRETS_FILE`: readable mounted secret file; default
   `/var/secrets/secrets.json`
 
 It also accepts these bounded operational settings:
 
-- `METRICS_ADDR`: default `:8011`
+- `HEALTH_ADDR`: default `:8011`
 - `UPLOAD_INTERVAL_SECONDS`: default `30`
 - `STATUS_INTERVAL_SECONDS`: default `5`
 - `STATUS_TIMEOUT_SECONDS`: default `900`

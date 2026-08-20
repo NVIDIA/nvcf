@@ -10,38 +10,25 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/config"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/health"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/metrics"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/segment"
-
-	"github.com/prometheus/client_golang/prometheus"
 )
 
-// Service owns local readiness checks, discovery metrics, and the sidecar HTTP
-// server. It intentionally does not submit or delete request-trace segments.
+// Service owns local readiness checks and the sidecar HTTP server. It
+// intentionally does not submit or delete request-trace segments.
 type Service struct {
-	config       config.Config
-	health       *health.Handler
-	metrics      *metrics.Metrics
-	discovered   map[string]struct{}
-	discoveredMu sync.Mutex
+	config config.Config
+	health *health.Handler
 }
 
-// New creates a request-trace uploader service using registry.
-func New(cfg config.Config, registry *prometheus.Registry) (*Service, error) {
-	m, err := metrics.New(registry)
-	if err != nil {
-		return nil, fmt.Errorf("create uploader metrics: %w", err)
-	}
+// New creates a request-trace uploader service.
+func New(cfg config.Config) (*Service, error) {
 	return &Service{
-		config:     cfg,
-		health:     health.New(),
-		metrics:    m,
-		discovered: make(map[string]struct{}),
+		config: cfg,
+		health: health.New(),
 	}, nil
 }
 
@@ -50,7 +37,6 @@ func (s *Service) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /livez", s.health.Live)
 	mux.HandleFunc("GET /readyz", s.health.Ready)
-	mux.Handle("GET /metrics", s.metrics.Handler())
 	return mux
 }
 
@@ -76,32 +62,11 @@ func (s *Service) Initialize() error {
 	return nil
 }
 
-// Refresh updates discovery and backlog metrics without changing source files.
+// Refresh verifies that local request-trace segment discovery succeeds without
+// changing source files.
 func (s *Service) Refresh() error {
-	segments, err := segment.Discover(s.config.TraceDir, s.config.TraceFilePrefix, s.config.AuditFilePrefix)
-	if err != nil {
+	if _, err := segment.Discover(s.config.TraceDir, s.config.TraceFilePrefix, s.config.AuditFilePrefix); err != nil {
 		return fmt.Errorf("discover request trace segments: %w", err)
-	}
-	var bytes int64
-	var oldest time.Time
-	for _, item := range segments {
-		bytes += item.Size
-		if oldest.IsZero() || item.ModTime.Before(oldest) {
-			oldest = item.ModTime
-		}
-		s.discoveredMu.Lock()
-		if _, exists := s.discovered[item.Path]; !exists {
-			s.metrics.SegmentsTotal.WithLabelValues(string(item.CaptureType), "discovered").Inc()
-			s.discovered[item.Path] = struct{}{}
-		}
-		s.discoveredMu.Unlock()
-	}
-	s.metrics.PendingSegments.Set(float64(len(segments)))
-	s.metrics.PendingBytes.Set(float64(bytes))
-	if oldest.IsZero() {
-		s.metrics.OldestPendingSeconds.Set(0)
-	} else {
-		s.metrics.OldestPendingSeconds.Set(time.Since(oldest).Seconds())
 	}
 	return nil
 }
@@ -142,7 +107,7 @@ func (s *Service) Run(ctx context.Context) error {
 
 func (s *Service) httpServer() *http.Server {
 	return &http.Server{
-		Addr:              s.config.MetricsAddr,
+		Addr:              s.config.HealthAddr,
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,

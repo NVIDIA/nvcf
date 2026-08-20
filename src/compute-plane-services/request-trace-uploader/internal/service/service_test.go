@@ -9,13 +9,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/config"
-
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 func TestInitializeReadinessAndDiscovery(t *testing.T) {
@@ -37,10 +34,10 @@ func TestInitializeReadinessAndDiscovery(t *testing.T) {
 		SecretsFile:     secretsFile,
 		StateDir:        filepath.Join(root, "state"),
 		QuarantineDir:   filepath.Join(root, "quarantine"),
-		MetricsAddr:     ":8011",
+		HealthAddr:      ":8011",
 		UploadInterval:  config.DefaultUploadInterval,
 	}
-	svc, err := New(cfg, prometheus.NewRegistry())
+	svc, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -50,18 +47,13 @@ func TestInitializeReadinessAndDiscovery(t *testing.T) {
 	for path, want := range map[string]int{
 		"/livez":   http.StatusOK,
 		"/readyz":  http.StatusOK,
-		"/metrics": http.StatusOK,
+		"/metrics": http.StatusNotFound,
 	} {
 		response := httptest.NewRecorder()
 		svc.Handler().ServeHTTP(response, httptest.NewRequestWithContext(context.Background(), http.MethodGet, path, nil))
 		if response.Code != want {
 			t.Errorf("%s status = %d, want %d", path, response.Code, want)
 		}
-	}
-	metricsResponse := httptest.NewRecorder()
-	svc.Handler().ServeHTTP(metricsResponse, httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/metrics", nil))
-	if !strings.Contains(metricsResponse.Body.String(), "nvcf_dynamo_request_trace_uploader_pending_segments 1\n") {
-		t.Fatalf("pending segment metric = %q, want one closed segment", metricsResponse.Body.String())
 	}
 	if _, err := os.Stat(cfg.StateDir); err != nil {
 		t.Errorf("state directory: %v", err)
@@ -72,7 +64,7 @@ func TestInitializeReadinessAndDiscovery(t *testing.T) {
 }
 
 func TestHTTPServerTimeouts(t *testing.T) {
-	svc, err := New(config.Config{MetricsAddr: ":8011"}, prometheus.NewRegistry())
+	svc, err := New(config.Config{HealthAddr: ":8011"})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -100,7 +92,7 @@ func TestInitializeRejectsUnreadableSecret(t *testing.T) {
 		SecretsFile:     filepath.Join(root, "missing.json"),
 		StateDir:        filepath.Join(root, "state"),
 		QuarantineDir:   filepath.Join(root, "quarantine"),
-	}, prometheus.NewRegistry())
+	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}

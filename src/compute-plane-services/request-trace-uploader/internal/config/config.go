@@ -19,10 +19,10 @@ const (
 	EnvTraceFilePrefix      = "TRACE_FILE_PREFIX"
 	EnvAuditFilePrefix      = "AUDIT_FILE_PREFIX"
 	EnvDroppedNCAIDs        = "REQUEST_TRACE_UPLOADER_DROP_NCA_IDS"
-	EnvSecretsFile          = "KRATOS_SECRETS_FILE"
+	EnvSecretsFile          = "REQUEST_TRACE_UPLOADER_SECRETS_FILE"
 	EnvStateDir             = "REQUEST_TRACE_UPLOADER_STATE_DIR"
 	EnvQuarantineDir        = "REQUEST_TRACE_UPLOADER_QUARANTINE_DIR"
-	EnvMetricsAddr          = "METRICS_ADDR"
+	EnvHealthAddr           = "HEALTH_ADDR"
 	EnvUploadInterval       = "UPLOAD_INTERVAL_SECONDS"
 	EnvStatusInterval       = "STATUS_INTERVAL_SECONDS"
 	EnvStatusTimeout        = "STATUS_TIMEOUT_SECONDS"
@@ -33,7 +33,7 @@ const (
 	EnvRetryMaximumBackoff  = "REQUEST_TRACE_UPLOADER_RETRY_MAX_BACKOFF"
 	EnvRetryMultiplier      = "REQUEST_TRACE_UPLOADER_RETRY_MULTIPLIER"
 	DefaultSecretsFile      = "/var/secrets/secrets.json"
-	DefaultMetricsAddr      = ":8011"
+	DefaultHealthAddr       = ":8011"
 	DefaultUploadInterval   = 30 * time.Second
 	DefaultStatusInterval   = 5 * time.Second
 	DefaultStatusTimeout    = 15 * time.Minute
@@ -60,7 +60,7 @@ type Config struct {
 	SecretsFile    string
 	StateDir       string
 	QuarantineDir  string
-	MetricsAddr    string
+	HealthAddr     string
 	UploadInterval time.Duration
 	StatusInterval time.Duration
 	StatusTimeout  time.Duration
@@ -120,9 +120,9 @@ func Load(lookup LookupFunc) (Config, []string, error) {
 		return Config{}, nil, err
 	}
 	secretsFile := valueOrDefault(lookup, EnvSecretsFile, DefaultSecretsFile)
-	metricsAddr := valueOrDefault(lookup, EnvMetricsAddr, DefaultMetricsAddr)
-	if strings.TrimSpace(metricsAddr) == "" {
-		return Config{}, nil, fmt.Errorf("%s must not be empty", EnvMetricsAddr)
+	healthAddr := valueOrDefault(lookup, EnvHealthAddr, DefaultHealthAddr)
+	if strings.TrimSpace(healthAddr) == "" {
+		return Config{}, nil, fmt.Errorf("%s must not be empty", EnvHealthAddr)
 	}
 
 	uploadInterval := durationSeconds(lookup, EnvUploadInterval, DefaultUploadInterval, time.Second, 24*time.Hour, &warnings)
@@ -155,7 +155,7 @@ func Load(lookup LookupFunc) (Config, []string, error) {
 		SecretsFile:     strings.TrimSpace(secretsFile),
 		StateDir:        stateDir,
 		QuarantineDir:   quarantineDir,
-		MetricsAddr:     strings.TrimSpace(metricsAddr),
+		HealthAddr:      strings.TrimSpace(healthAddr),
 		UploadInterval:  uploadInterval,
 		StatusInterval:  statusInterval,
 		StatusTimeout:   statusTimeout,
