@@ -41,32 +41,77 @@ Two rules follow, and no result counts without both:
 - Agent build and chart values recorded for every run. A result attributed to
   the wrong build is worse than no result.
 
-## Established, and what is still assumed
+## Established from source
 
-Established from source:
+Each of these was read from the Dynamo operator and runtime, not assumed.
 
-- Component-level `annotations` on a `DynamoGraphDeployment` reach pod metadata.
-  The operator merges them in `GetDCDKubeAnnotations`
-  (`deploy/operator/internal/dynamo/v1beta1_helpers.go`), whose comments state
-  the destination is generated pod metadata. So `nvsnap.io/restore-from` on a
-  component will reach the pod and trigger our webhook.
+### Worker identity is addressable per request
+
+`lib/llm/src/protocols/common/extensions.rs` maps request headers onto routing
+extensions:
+
+    x-dynamo-worker-instance-id   -> backend_instance_id, decode_worker_id
+    x-dynamo-prefill-instance-id  -> prefill_worker_id
+
+This is stronger than being able to observe which worker served a request. It
+lets us pin a request to a specific instance, so a request aimed at a restored
+worker either succeeds through that worker or fails. It cannot be quietly
+served by a healthy peer.
+
+That defeats the masking problem directly, and it is the single most important
+finding for this plan. Every rung below uses pinning rather than post-hoc
+attribution.
+
+### Discovery on Kubernetes is readiness-driven, not lease-driven
+
+The operator sets `DYN_DISCOVERY_BACKEND=kubernetes` for pods, so the etcd lease
+path (10 second TTL, endpoints deleted on expiry) does not apply to our
+deployments. Instead, per the operator's service-discovery documentation:
+
+- Each pod runs a discovery daemon watching EndpointSlices and
+  `DynamoWorkerMetadata` CRs.
+- A pod is discoverable only when it is ready in an EndpointSlice AND has a
+  corresponding CR.
+- The CR is named after the pod and carries an owner reference, so it is
+  garbage collected when the pod is deleted.
+- Readiness for a worker means its `generate` endpoint is healthy.
+
+The consequences for checkpoint/restore are favourable and specific:
+
+- Restore in place keeps the pod, so its CR survives and no re-registration is
+  required.
+- A frozen process fails its readiness probe, leaves the EndpointSlice, and
+  traffic reroutes. That is orderly rather than an error path.
+- On restore the probe passes again and the worker returns to the EndpointSlice.
+
+So the recovery mechanism we depend on already exists and is the same one
+Dynamo uses for ordinary pod churn. Deleting the pod, by contrast, destroys the
+CR by garbage collection, which is a second reason not to use our harness's
+delete-and-replace model.
+
+### Transport and capture constraints
+
 - The sample's prefill worker publishes KV events over ZMQ and transfers KV via
   the NIXL connector. NIXL stages transfer metadata through the pod's
   `/dev/shm`, which nvsnap already captures and replays.
-- CRIU cannot dump processes using RDMA (checkpoint-restore/criu#267). If NIXL
-  is on an RDMA transport, process capture of that worker is not possible.
+- CRIU cannot dump processes using RDMA (checkpoint-restore/criu#267). NIXL runs
+  over UCX, which selects a transport at runtime, so whether a worker is
+  capturable at all depends on what UCX picks on the target hardware. This is a
+  runtime check, not a source question, and it must be answered at rung 0.
 
-Still assumed, and each is a gate rather than a detail:
+## Still assumed
 
-- That a Dynamo worker rejoins cleanly after an abrupt restart. If it does, we
-  can drop NIXL, ZMQ and coordination state at capture and let it re-establish,
-  as we already do for external TCP. If it does not, rungs 2 and beyond need a
-  different design. Answer this from the Dynamo source before designing rung 2.
-- That a worker can reach ready as a standalone pod against a shared etcd and
-  NATS, rather than requiring operator launch and Grove gang membership. This
-  decides whether rungs 1 and 2 can use plain pods or must drive the CRD.
+- That a worker can reach ready as a standalone pod rather than requiring
+  operator launch and Grove gang membership. `DYN_DISCOVERY_BACKEND` is
+  configurable (kubernetes, etcd, memory, nats, file), so a standalone worker
+  against a memory or etcd backend is plausible, but unproven. This decides
+  whether rungs 1 and 2 can use plain pods or must drive the CRD.
 - That restoring in place into an operator-owned pod does not trip
-  reconciliation.
+  reconciliation. The discovery mechanism above suggests it should not, since
+  nothing is deleted, but the operator may still react to a pod going
+  NotReady for the duration of a capture.
+- That a restored process re-establishes its ZMQ KV-events publisher and NIXL
+  agent state. Discovery recovering does not imply these do.
 
 ## Why restore must happen in place
 
@@ -84,19 +129,22 @@ deleted, so the operator has nothing to reconcile.
 This also means rungs 4 and 5 exercise the production path rather than a
 test-only convention, which is worth more than the convenience of the harness.
 
-## Instrumentation required before rung 1
+## Instrumentation
 
-None of the rungs are meaningful without a way to answer "which worker served
-this request". Establish one and verify it against a healthy deployment first.
-Candidates, in order of preference:
+Use request pinning, established above. For each rung:
 
-1. Worker instance identity from Dynamo's coordination state (etcd), correlated
-   with the pod that served the request.
-2. A response header or field naming the worker.
-3. Worker logs, correlated by request id.
+- Send the verification request with `x-dynamo-worker-instance-id` set to the
+  restored worker's instance id (and `x-dynamo-prefill-instance-id` for
+  disaggregated rungs).
+- A pinned request that succeeds proves the restored worker served it. A pinned
+  request that fails is a real failure rather than a reroute.
+- Record the instance id before capture and confirm it after restore. An
+  instance id that changed is itself a finding: it means the worker
+  re-registered as a new instance rather than resuming.
 
-If none of these can distinguish workers, the whole plan is unsound and must be
-reworked before any capture is attempted.
+Verify pinning works against a healthy deployment at rung 0, before any capture.
+If a pinned request can still be served by another worker, this plan's central
+assumption is wrong and the design must change.
 
 ## Ladder
 
