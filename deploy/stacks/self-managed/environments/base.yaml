@@ -168,6 +168,16 @@ accounts:
 # These static global values are processed in the values template
 nats:
   enabled: true
+  # Image overrides for the NATS config reloader. The reloader is not
+  # republished under the public nvidia/nvcf catalog, so a public-catalog
+  # install must point it at its upstream Docker Hub source:
+  # reloader:
+  #   image:
+  #     registry: docker.io
+  #     repository: natsio/nats-server-config-reloader
+  #     tag: "0.23.0"
+  # Leave unset to keep the mirrored default,
+  # <global.image.registry>/<global.image.repository>/nats-server-config-reloader.
   # PDB: the upstream NATS chart enables a disruption budget by default.
   # Override here to disable it or adjust the minAvailable threshold.
   podDisruptionBudget:

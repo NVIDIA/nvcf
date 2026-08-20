@@ -203,11 +203,15 @@ nats:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/nats-server
       tag: 2.11.17-alpine3.22
+  # The config reloader is not republished under the public nvidia/nvcf
+  # catalog, so a public-catalog install has to point it back at Docker Hub
+  # (docker.io/natsio/nats-server-config-reloader). Override the keys below
+  # in your environment file instead of editing this template.
   reloader:
     image:
-      registry: {{ .Values.global.image.registry }}
-      repository: {{ .Values.global.image.repository }}/nats-server-config-reloader
-      tag: "0.23.0"
+      registry: {{ dig "nats" "reloader" "image" "registry" .Values.global.image.registry .Values }}
+      repository: {{ dig "nats" "reloader" "image" "repository" (printf "%s/nats-server-config-reloader" .Values.global.image.repository) .Values }}
+      tag: {{ dig "nats" "reloader" "image" "tag" "0.23.0" .Values | quote }}
   natsBox:
     container:
       image:
