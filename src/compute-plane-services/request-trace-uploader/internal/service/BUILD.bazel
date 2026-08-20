@@ -1,0 +1,31 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "service",
+    srcs = ["service.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/service",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src/compute-plane-services/request-trace-uploader/internal/config",
+        "//src/compute-plane-services/request-trace-uploader/internal/health",
+        "//src/compute-plane-services/request-trace-uploader/internal/metrics",
+        "//src/compute-plane-services/request-trace-uploader/internal/segment",
+        "@com_github_prometheus_client_golang//prometheus",
+    ],
+)
+
+go_test(
+    name = "service_test",
+    srcs = ["service_test.go"],
+    embed = [":service"],
+    deps = [
+        "//src/compute-plane-services/request-trace-uploader/internal/config",
+        "@com_github_prometheus_client_golang//prometheus",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":service",
+    visibility = ["//src/compute-plane-services/request-trace-uploader:__subpackages__"],
+)
