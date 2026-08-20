@@ -1058,7 +1058,12 @@ timeout 120
 		RstSibling: proto.Bool(true),
 
 		// Mount namespace compatibility mode for cross-container restore
-		MntnsCompatMode: proto.Bool(true),
+		// The compatibility mount engine suits legacy captures, which record
+		// no mount namespace of their own. A pid-1 capture records a full one,
+		// and rebuilding it under the compat engine left criu unable to enter
+		// it ("Can't setns <n>/mnt: Invalid argument") while restoring a
+		// listening unix socket bound to a path inside. Use mount-v2 there.
+		MntnsCompatMode: proto.Bool(!tcpClose),
 
 		// Network namespace handling:
 		// InheritFd maps dump-time external netns to this pod's netns (key=extNetNs).

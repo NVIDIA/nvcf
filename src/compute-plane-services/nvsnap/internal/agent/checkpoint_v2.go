@@ -632,8 +632,8 @@ func (a *Agent) dumpV2NamespaceRoot(
 //     --skip-mnt, not silently dropped
 //   - --tcp-close pairs with --empty-ns net; --tcp-established cannot, because
 //     an empty net namespace has nothing to reconnect through
-//   - --mntns-compat-mode matches the restore side's MntnsCompatMode; the two
-//     mount engines must agree or criu cannot re-enter the namespace
+//   - the mount engine is a RESTORE-only choice; criu rejects
+//     --mntns-compat-mode on dump ("only valid on restore")
 func namespaceRootDumpArgs(hostPID int, root, imgsDir, pluginDir string, extMnt []criu.ExtMountMap, skipMounts, deviceExternals []string, leaveRunning bool) []string {
 	args := []string{
 		"dump",
@@ -642,15 +642,6 @@ func namespaceRootDumpArgs(hostPID int, root, imgsDir, pluginDir string, extMnt 
 		"-D", imgsDir,
 		"-o", "dump.log", "-v4",
 		"--empty-ns", "net",
-		// Match the restore side, which sets MntnsCompatMode. criu defaults to
-		// the mount-v2 engine; restore-entrypoint asks for the compatibility
-		// engine, and a namespace recorded by one and rebuilt by the other
-		// fails when criu tries to enter it:
-		//
-		//	Can't setns 46/mnt: Invalid argument
-		//	Unable to open fd=55 id=0x205   (a listening unix socket whose
-		//	                                 path lives in that namespace)
-		"--mntns-compat-mode",
 		// --tcp-close, not --tcp-established. Restoring live TCP connections
 		// requires a reachable network, and --empty-ns net deliberately gives
 		// the restored tree an empty one, so the two contradict:
