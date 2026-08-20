@@ -162,6 +162,7 @@ The following tables list the complete artifact inventory.
 | --- | --- | --- | --- | --- | --- |
 | `admin-token-issuer-proxy` | `1.0.2` | Optional | Proxies admin token requests for the reference architecture. | `nvcr.io/nvidia/nvcf/admin-token-issuer-proxy:1.0.2` |  |
 | `alpine-k8s` | `1.36.1` | Required | Provides Kubernetes command-line utilities for deployment jobs. | `docker.io/alpine/k8s:1.36.1` | [GitHub](https://github.com/alpine-docker/k8s) |
+| `cassandra` | `5.0.8-nv-2.0.1` | Required | Stores NVCF account, function, cluster, and service state. | `nvcr.io/nvidia/nvcf/cassandra:5.0.8-nv-2.0.1` | [Upstream](https://github.com/apache/cassandra) |
 | `cert-manager-cainjector` | `v1.20.2` | Required | Injects certificate authority data into Kubernetes resources. | `nvcr.io/nvidia/nvcf/cert-manager-cainjector:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
 | `cert-manager-controller` | `v1.20.2` | Required | Reconciles certificates and issuers for the control plane. | `nvcr.io/nvidia/nvcf/cert-manager-controller:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
 | `cert-manager-startupapicheck` | `v1.20.2` | Required | Verifies that the cert-manager API is ready. | `nvcr.io/nvidia/nvcf/cert-manager-startupapicheck:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
@@ -220,7 +221,6 @@ These Early Access artifacts have known CVE impact. Use only the QA-qualified ve
 
 | Artifact | Version | Required | Description | Distribution | Source code |
 | --- | --- | --- | --- | --- | --- |
-| `bitnami-cassandra` | `5.0.6-nv-1` | Required | Stores NVCF account, function, cluster, and service state during Early Access. | `nvcr.io/0833294136851237/selfhosted-ga/bitnami-cassandra:5.0.6-nv-1-ea` | [Upstream](https://github.com/bitnami/containers/tree/main/bitnami/cassandra) |
 | `nvcf-cassandra-migrations` | `0.8.1` | Required | Applies the Cassandra schemas required by Early Access NVCF services. | `nvcr.io/0833294136851237/selfhosted-ga/nvcf-cassandra-migrations:0.8.1-ea` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/migrations/cassandra) |
 
 ### Tools and deployment resources
