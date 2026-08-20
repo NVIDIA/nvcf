@@ -599,6 +599,17 @@ func (a *Agent) dumpV2NamespaceRoot(
 		return nil, fmt.Errorf("criu-v2 pid1 dump: %w (output: %s; dump.log tail: %s)",
 			runErr, strings.TrimSpace(string(out)), tail)
 	}
+
+	// The artifact contract is that images sit directly in checkpointDir; the
+	// validator looks for inventory.img and friends there, and the in-namespace
+	// path moves them for the same reason. Writing to a subdirectory and
+	// leaving them makes a successful dump fail validation with
+	// "missing required checkpoint files".
+	if moveErr := moveDirContents(imgsDir, checkpointDir); moveErr != nil {
+		return nil, fmt.Errorf("criu-v2 pid1: move images into %s: %w", checkpointDir, moveErr)
+	}
+	_ = os.RemoveAll(imgsDir)
+
 	return mountPoints, nil
 }
 
