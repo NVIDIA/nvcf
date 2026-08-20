@@ -567,6 +567,41 @@ func TestServiceMonitorsShouldExistRunsSingleExplicitGet(t *testing.T) {
 	}
 }
 
+func TestHelmReleasesShouldBeDeployedRunsSingleExplicitList(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0, Stdout: `[{"name":"nats","namespace":"nats-system","revision":"1","status":"deployed"}]`}
+	table := docTable(t, [][]string{
+		{"name", "namespace", "revision"},
+		{"nats", "nats-system", "1"},
+	})
+
+	if err := sc.helmReleasesShouldBeDeployed(context.Background(), "k3d-ncp-local", table); err != nil {
+		t.Fatalf("assert Helm releases: %v", err)
+	}
+	if len(fake.runs) != 1 {
+		t.Fatalf("runs = %d, want 1", len(fake.runs))
+	}
+	want := "helm list --all-namespaces --kube-context k3d-ncp-local -o json"
+	if fake.runs[0].command != want {
+		t.Fatalf("command = %q, want %q", fake.runs[0].command, want)
+	}
+}
+
+func TestHelmReleaseTableAcceptsNameAndNamespace(t *testing.T) {
+	table := docTable(t, [][]string{
+		{"name", "namespace"},
+		{"nats", "nats-system"},
+	})
+
+	got, err := tableToHelmReleaseExpectations(table)
+	if err != nil {
+		t.Fatalf("parse table: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "nats" || got[0].Namespace != "nats-system" || got[0].Revision != "" {
+		t.Fatalf("expectations = %#v", got)
+	}
+}
+
 func TestRegisterAllRunsAFeatureFile(t *testing.T) {
 	// End-to-end smoke check that RegisterAll wires every category. A
 	// minimal in-memory feature is driven through a Godog TestSuite so

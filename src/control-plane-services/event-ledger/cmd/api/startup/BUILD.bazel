@@ -31,6 +31,7 @@ go_library(
         "@com_github_lestrrat_go_jwx_v2//jwk",
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/auth",
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/clients",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/version",
         "@com_github_spf13_cobra//:cobra",
         "@com_github_spf13_viper//:viper",
         "@com_github_uptrace_opentelemetry_go_extra_otelzap//:otelzap",
@@ -47,10 +48,16 @@ alias(
 
 go_test(
     name = "startup_test",
-    srcs = ["root_cmd_test.go"],
+    srcs = [
+        "info_test.go",
+        "root_cmd_test.go",
+    ],
     embed = [":startup"],
     deps = [
+        "//src/control-plane-services/event-ledger/cmd/api/service",
         "//src/control-plane-services/event-ledger/internal/config",
+        "@com_github_gorilla_mux//:mux",
+        "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/version",
         "@com_github_spf13_cobra//:cobra",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",

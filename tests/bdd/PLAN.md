@@ -137,6 +137,7 @@ refactor in every consumer; that is a feature.
 | `Then the rendered manifests in {string} should contain:` (table) | Requires a `text` header and one or more fixed strings. Recursively inspects regular files under the repo-relative directory and fails if any listed string is absent. `${VAR}` expansion applies to the path and table values. |
 | `Then the rendered manifests in {string} under directories matching {string} should contain:` (table) | Positive rendered-manifest assertion scoped to files below a directory whose name matches the supplied shell pattern, such as `*-nats`. The render directory, directory-name pattern, and table values support `${VAR}` expansion. |
 | `Then the rendered manifests in {string} should not contain:` (table) | Requires a `text` header and one or more fixed strings. Recursively inspects regular files under the repo-relative directory and fails if any listed string appears. `${VAR}` expansion applies to the path and table values. |
+| `Then these Helm releases should be deployed using context {string}:` (table) | Requires `name` and `namespace` headers, with an optional `revision` header. Runs one explicit-context, all-namespaces `helm list` and asserts that every listed release has status `deployed`; non-empty revision cells are also matched. |
 | `Then these ServiceMonitors should exist in namespace {string} using context {string}:` (table) | Requires a `name` header and one or more names. Runs one `kubectl get` with every named ServiceMonitor; exit code 0 proves every listed resource exists. |
 
 #### YAML comparison semantics
@@ -256,8 +257,9 @@ Going away in `tests/bdd`:
   `Template`, `HelmfileTemplate`, `RegisterCluster`,
   `InstallNvcaOperator`). Replaced by `When I run command "make ..."`.
 - The Helm release readback methods (`HelmReleaseDeployed`,
-  `NVCAOperatorReady`, `NVCAAgentReady`). Replaced by `helm list -o json`
-  + `kubectl rollout status` / `kubectl wait` directly in Gherkin.
+  `NVCAOperatorReady`, `NVCAAgentReady`). Release deployment checks use the
+  table-driven Helm assertion; readiness remains explicit through
+  `kubectl rollout status` / `kubectl wait` in Gherkin.
 - The `harness.CLIHarness` interface and its five domain methods
   (`SelfHostedUp`, `SelfHostedInstallControlPlane`,
   `SelfHostedComputePlaneRegister`, `SelfHostedComputePlaneInstall`,
@@ -459,6 +461,21 @@ func FilesDoNotContain(root string, needles []string) error
 // fixed string is absent. A non-empty directoryNamePattern limits the search
 // to files below a directory whose name matches the shell pattern.
 func FilesContain(root, directoryNamePattern string, needles []string) error
+
+// HelmListCommand builds an explicit-context, all-namespaces Helm list command.
+func HelmListCommand(kubeContext string) (string, error)
+
+// HelmReleaseExpectation identifies a deployed Helm release and optionally
+// pins the expected revision.
+type HelmReleaseExpectation struct {
+    Name      string
+    Namespace string
+    Revision  string
+}
+
+// HelmReleasesDeployed asserts that every expected release exists in Helm's
+// JSON output with status deployed and, when provided, the expected revision.
+func HelmReleasesDeployed(raw string, expected []HelmReleaseExpectation) error
 
 // ServiceMonitorExistenceCommand builds one kubectl get command whose
 // successful exit proves every named ServiceMonitor exists.

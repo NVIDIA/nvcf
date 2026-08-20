@@ -24,6 +24,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -146,6 +147,45 @@ func TestNVCFCLILocalFixtureTargetsLocalGRPCGateway(t *testing.T) {
 	}
 	if got, want := fixture["base_grpc_url"], "localhost:10081"; got != want {
 		t.Fatalf("base_grpc_url = %v, want %q", got, want)
+	}
+}
+
+func TestComputePlaneLocalBDDFixturesDisableResourceSizingFeatureGates(t *testing.T) {
+	want := []string{
+		"-InfraResourceOverhead",
+		"-EnforceHelmFunctionResourceLimits",
+		"-EnforceContainerFunctionResourceLimits",
+		"-EnforceHelmTaskResourceLimits",
+		"-EnforceContainerTaskResourceLimits",
+	}
+
+	for _, fixturePath := range []string{
+		"fixtures/nvcf-compute-plane-local-bdd.yaml",
+		"fixtures/nvcf-compute-plane-local-bdd-multi.yaml",
+	} {
+		t.Run(filepath.Base(fixturePath), func(t *testing.T) {
+			fixtureBytes, err := os.ReadFile(fixturePath)
+			if err != nil {
+				t.Fatalf("read compute-plane fixture %s: %v", fixturePath, err)
+			}
+			var fixture struct {
+				Global struct {
+					NVCAOperator struct {
+						SelfManaged struct {
+							FeatureGateValues []string `yaml:"featureGateValues"`
+						} `yaml:"selfManaged"`
+					} `yaml:"nvcaOperator"`
+				} `yaml:"global"`
+			}
+			if err := yaml.Unmarshal(fixtureBytes, &fixture); err != nil {
+				t.Fatalf("parse compute-plane fixture %s: %v", fixturePath, err)
+			}
+
+			got := fixture.Global.NVCAOperator.SelfManaged.FeatureGateValues
+			if !slices.Equal(got, want) {
+				t.Fatalf("featureGateValues = %q, want %q", got, want)
+			}
+		})
 	}
 }
 

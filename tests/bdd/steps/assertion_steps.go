@@ -45,6 +45,7 @@ func registerAssertionSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^the rendered manifests in "([^"]*)" should contain:$`, sc.renderedManifestsShouldContain)
 	ctx.Step(`^the rendered manifests in "([^"]*)" under directories matching "([^"]*)" should contain:$`, sc.renderedManifestsUnderMatchingDirectoriesShouldContain)
 	ctx.Step(`^the rendered manifests in "([^"]*)" should not contain:$`, sc.renderedManifestsShouldNotContain)
+	ctx.Step(`^these Helm releases should be deployed using context "([^"]*)":$`, sc.helmReleasesShouldBeDeployed)
 	ctx.Step(`^these ServiceMonitors should exist in namespace "([^"]*)" using context "([^"]*)":$`, sc.serviceMonitorsShouldExist)
 }
 
@@ -194,6 +195,54 @@ func tableToSingleColumn(table *godog.Table, header string) ([]string, error) {
 		values = append(values, value)
 	}
 	return values, nil
+}
+
+func (sc *ScenarioContext) helmReleasesShouldBeDeployed(ctx context.Context, kubeContext string, table *godog.Table) error {
+	expected, err := tableToHelmReleaseExpectations(table)
+	if err != nil {
+		return err
+	}
+	command, err := dsl.HelmListCommand(kubeContext)
+	if err != nil {
+		return err
+	}
+	if err := sc.runAndRecord(ctx, command); err != nil {
+		return err
+	}
+	if err := sc.commandExitCodeShouldBe(0); err != nil {
+		return err
+	}
+	return dsl.HelmReleasesDeployed(sc.LastResult.Stdout, expected)
+}
+
+func tableToHelmReleaseExpectations(table *godog.Table) ([]dsl.HelmReleaseExpectation, error) {
+	if table == nil || len(table.Rows) < 2 {
+		return nil, fmt.Errorf("table must have name and namespace headers and at least one data row")
+	}
+	headers := table.Rows[0].Cells
+	withRevision := len(headers) == 3
+	if len(headers) != 2 && !withRevision {
+		return nil, fmt.Errorf("table headers must be name, namespace, and optional revision")
+	}
+	if strings.TrimSpace(headers[0].Value) != "name" || strings.TrimSpace(headers[1].Value) != "namespace" || withRevision && strings.TrimSpace(headers[2].Value) != "revision" {
+		return nil, fmt.Errorf("table headers must be name, namespace, and optional revision")
+	}
+
+	expected := make([]dsl.HelmReleaseExpectation, 0, len(table.Rows)-1)
+	for index, row := range table.Rows[1:] {
+		if len(row.Cells) != len(headers) {
+			return nil, fmt.Errorf("row %d has %d cells, expected %d", index+1, len(row.Cells), len(headers))
+		}
+		release := dsl.HelmReleaseExpectation{
+			Name:      row.Cells[0].Value,
+			Namespace: row.Cells[1].Value,
+		}
+		if withRevision {
+			release.Revision = row.Cells[2].Value
+		}
+		expected = append(expected, release)
+	}
+	return expected, nil
 }
 
 func (sc *ScenarioContext) serviceMonitorsShouldExist(ctx context.Context, namespace, kubeContext string, table *godog.Table) error {
