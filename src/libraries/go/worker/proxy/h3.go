@@ -163,6 +163,7 @@ func (t *h3ConnectionCache) getClient(ctx context.Context, hostname string) (rtc
 	case <-cl.dialing:
 		if cl.dialErr != nil {
 			delete(t.clients, hostname)
+			cl.closeTransport()
 			return nil, false, cl.dialErr
 		}
 		select {
@@ -240,11 +241,19 @@ func (t *h3ConnectionCache) resolveUDPAddr(ctx context.Context, network, addr st
 
 func (t *h3ConnectionCache) removeClient(hostname string) {
 	t.mutex.Lock()
-	defer t.mutex.Unlock()
 	if t.clients == nil {
+		t.mutex.Unlock()
 		return
 	}
+	cl := t.clients[hostname]
 	delete(t.clients, hostname)
+	t.mutex.Unlock()
+
+	// Dropping the host has to drop its socket too, otherwise the source port
+	// is never released and every retry leaks one.
+	if cl != nil {
+		cl.closeTransport()
+	}
 }
 
 // Close closes the QUIC connections that this Transport has used.
@@ -269,8 +278,9 @@ type roundTripperWithCount struct {
 	// so that one unreachable proxy pod cannot take QUIC to every other pod
 	// down with it, and so that discarding a failed host also discards the
 	// source port it was using. See the note on newHostTransport.
-	transport  *quic.Transport
-	clientConn *http3.ClientConn
+	transport     *quic.Transport
+	transportOnce sync.Once
+	clientConn    *http3.ClientConn
 
 	useCount        atomic.Int64
 	removeFromCache func()
@@ -286,13 +296,25 @@ func (r *roundTripperWithCount) Close() error {
 	// Closing the socket is the point, not just tidiness: a new one is opened
 	// from a different source port, which is what lets a load balancer that
 	// pinned this flow to a dead target route the next attempt somewhere else.
-	// Deliberately not set to nil: the field is written once at construction so
-	// that it can be read without synchronisation from the dial goroutine.
-	if r.transport != nil {
+	r.closeTransport()
+	return connErr
+}
+
+// closeTransport releases this host's UDP socket. Idempotent, because a host is
+// dropped from the cache by several paths and the socket must be released
+// exactly once by whichever gets there first. Leaking it would be worse than
+// the shared socket this replaced: a dial storm would leak one per failure.
+//
+// It deliberately does not wait on dialing. Callers hold the cache lock, and a
+// dial still in flight is one whose host is being discarded anyway.
+func (r *roundTripperWithCount) closeTransport() {
+	r.transportOnce.Do(func() {
+		if r.transport == nil {
+			return
+		}
 		_ = r.transport.Close()
 		_ = r.transport.Conn.Close()
-	}
-	return connErr
+	})
 }
 
 // An addrList represents a list of network endpoint addresses.
