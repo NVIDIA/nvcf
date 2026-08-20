@@ -90,14 +90,25 @@ func TestNamespaceRootDumpArgsKeysExternalMountsByMountpoint(t *testing.T) {
 	}
 }
 
-// Device externals are passed through unchanged; they are built elsewhere and
-// this function must not reorder or rewrite them.
-func TestNamespaceRootDumpArgsPassesDeviceExternalsThrough(t *testing.T) {
-	devs := []string{"--external", "dev[195/255]:nvidiactl", "--external", "dev[508/0]:nvidia-uvm"}
+// nvidiaDevExternals returns BARE values ("dev[195/0]:nvidia0"), not flag
+// pairs. Each needs its own --external. An earlier version of this function
+// appended them raw and criu rejected the whole command with "excessive
+// parameters for command dump" -- and the first version of this test asserted
+// the broken behaviour, so it passed while the dump failed.
+func TestNamespaceRootDumpArgsFlagsEachDeviceExternal(t *testing.T) {
+	devs := []string{"dev[195/255]:nvidiactl", "dev[508/0]:nvidia-uvm"}
 	args := namespaceRootDumpArgs(1, "/r", "/imgs", "/plugins", nil, devs, false)
 
-	if !strings.HasSuffix(argsString(args), argsString(devs)) {
-		t.Errorf("device externals should be appended verbatim, got: %s", argsString(args))
+	for _, d := range devs {
+		if !hasFlagPair(args, "--external", d) {
+			t.Errorf("device external %q needs its own --external flag: %s", d, argsString(args))
+		}
+	}
+	// No bare value may appear without a preceding flag.
+	for i, a := range args {
+		if strings.HasPrefix(a, "dev[") && (i == 0 || args[i-1] != "--external") {
+			t.Errorf("bare positional device external at %d: %s", i, argsString(args))
+		}
 	}
 }
 

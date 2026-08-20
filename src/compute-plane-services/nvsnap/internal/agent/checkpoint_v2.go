@@ -615,6 +615,7 @@ func (a *Agent) dumpV2NamespaceRoot(
 //     is on the host
 //   - the external mount cookie is the mountpoint itself, because restore
 //     rebuilds mappings keyed by mountpoint; a mangled cookie never resolves
+//   - device externals are bare values and each needs its own --external flag
 func namespaceRootDumpArgs(hostPID int, root, imgsDir, pluginDir string, extMnt []criu.ExtMountMap, deviceExternals []string, leaveRunning bool) []string {
 	args := []string{
 		"dump",
@@ -637,5 +638,12 @@ func namespaceRootDumpArgs(hostPID int, root, imgsDir, pluginDir string, extMnt 
 	for _, m := range extMnt {
 		args = append(args, "--external", fmt.Sprintf("mnt[%s]:%s", m.Key, m.Val))
 	}
-	return append(args, deviceExternals...)
+	// deviceExternals are bare values ("dev[195/0]:nvidia0"), matching what
+	// nvidiaDevExternals returns; each needs its own --external flag. Appending
+	// them raw makes criu see positional arguments and refuse the whole command
+	// with "excessive parameters for command dump".
+	for _, e := range deviceExternals {
+		args = append(args, "--external", e)
+	}
+	return args
 }
