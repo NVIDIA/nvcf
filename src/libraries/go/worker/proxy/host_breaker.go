@@ -51,6 +51,14 @@ const (
 	hostIdleRetention = 5 * time.Minute
 	// hostBreakerCapacity is a hard bound on the table.
 	hostBreakerCapacity = 4096
+	// hostProbeTimeout bounds a granted half-open probe. The probe token and
+	// the dial are not strictly paired: the caller asks permission on every
+	// request but only dials when the connection cache has no entry for the
+	// host, so a granted token can be dropped without ever being reported.
+	// Without a deadline that would refuse the host forever, and idle eviction
+	// cannot recover it because a refused call still counts as activity.
+	// Comfortably longer than a dial, which is bounded by handshakeIdleTimeout.
+	hostProbeTimeout = 10 * time.Second
 )
 
 // hostBreaker refuses to dial proxy hosts that have just failed repeatedly.
@@ -77,10 +85,11 @@ type hostState struct {
 	consecutiveFailures int
 	// openedAt is the zero time while the breaker is closed.
 	openedAt time.Time
-	// probing is set while a single half-open dial is in flight, so one caller
-	// probes and the rest are still refused.
-	probing  bool
-	lastSeen time.Time
+	// probeStartedAt is set while a single half-open dial is in flight, so one
+	// caller probes and the rest are still refused. It is a time rather than a
+	// flag so an unreported probe expires instead of wedging the host.
+	probeStartedAt time.Time
+	lastSeen       time.Time
 }
 
 func newHostBreaker() *hostBreaker {
@@ -110,11 +119,12 @@ func (b *hostBreaker) allow(host string) error {
 		return errHostRefused
 	}
 	// Half-open: exactly one dial is let through to find out whether the host
-	// is back. Everything else keeps being refused until it reports.
-	if st.probing {
+	// is back. Everything else keeps being refused until it reports or the
+	// probe times out.
+	if !st.probeStartedAt.IsZero() && now.Sub(st.probeStartedAt) < hostProbeTimeout {
 		return errHostRefused
 	}
-	st.probing = true
+	st.probeStartedAt = now
 	return nil
 }
 
@@ -131,10 +141,10 @@ func (b *hostBreaker) recordFailure(host string) (opened bool) {
 	}
 	st.lastSeen = now
 
-	if st.probing {
+	if !st.probeStartedAt.IsZero() {
 		// The probe failed, so the host is still gone. Restart the clock
 		// without letting the failure count run away.
-		st.probing = false
+		st.probeStartedAt = time.Time{}
 		st.openedAt = now
 		return false
 	}
@@ -160,7 +170,7 @@ func (b *hostBreaker) recordSuccess(host string) (closed bool) {
 	wasOpen := !st.openedAt.IsZero()
 	st.consecutiveFailures = 0
 	st.openedAt = time.Time{}
-	st.probing = false
+	st.probeStartedAt = time.Time{}
 	st.lastSeen = b.now()
 	return wasOpen
 }

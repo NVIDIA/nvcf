@@ -138,6 +138,12 @@ func (t *h3ConnectionCache) getClient(ctx context.Context, hostname string) (rtc
 			conn, rt, err := t.dial(ctx, hostname)
 			if err != nil {
 				cl.dialErr = err
+				// Drop the failed entry now rather than leaving it for whichever
+				// caller happens to look next. While the breaker is open nobody
+				// reaches the cache, so a stale entry would survive the whole
+				// window and then be handed to the probe, which would return it
+				// without ever dialling.
+				cl.removeFromCache()
 				if t.breaker.recordFailure(hostname) {
 					zap.L().Warn("no longer dialling proxy host after repeated failures",
 						zap.String("hostname", hostname),

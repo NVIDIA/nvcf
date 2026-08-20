@@ -199,3 +199,35 @@ func TestHostBreakerConcurrentUse(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// A probe that is granted but never reports must not refuse the host forever.
+// The dial and the probe token are not strictly paired: getClient calls allow
+// on every request but only dials when the host has no cache entry, so a
+// granted token can be dropped on the floor.
+func TestHostBreakerProbeThatNeverReportsDoesNotWedgeTheHost(t *testing.T) {
+	b, clock := newTestBreaker()
+	const host = "10-0-0-10.example:443"
+	for i := 0; i < hostFailureThreshold; i++ {
+		require.NoError(t, b.allow(host))
+		b.recordFailure(host)
+	}
+	clock.add(hostOpenDuration + time.Second)
+	require.NoError(t, b.allow(host), "probe should be granted")
+
+	// The probe never reports. Traffic keeps arriving, which is the real
+	// condition: each refused call refreshes lastSeen, so idle eviction never
+	// fires and cannot rescue the state. The host must still be offered further
+	// probes rather than being refused for good.
+	granted := 0
+	for i := 0; i < 200; i++ {
+		clock.add(time.Second)
+		if b.allow(host) == nil {
+			granted++
+		}
+	}
+	assert.NotZero(t, granted,
+		"a probe that never reported has refused the host permanently under continuous traffic")
+	// Bounded too: one probe per timeout window, not a probe per request.
+	assert.LessOrEqual(t, granted, int(200*time.Second/hostProbeTimeout)+1,
+		"probes should be rate limited to one per timeout window")
+}
