@@ -667,6 +667,70 @@ func TestKillForceDeletesFinalizedRequest(t *testing.T) {
 	}
 }
 
+// TestKillReportsTerminatingWhenFinalizerBlocksDeletion is a regression test
+// for the false-positive "[deleted]" report: when Delete is accepted but a
+// finalizer keeps the object present (the real-world behavior when NVCA has
+// not evicted the workload yet), the fake dynamic client's default tracker
+// removes the object immediately regardless of finalizers, so a delete
+// reactor is used to simulate the object surviving Delete, mirroring a real
+// API server with a finalizer still set.
+func TestKillReportsTerminatingWhenFinalizerBlocksDeletion(t *testing.T) {
+	orig := killDeletionPollInterval
+	killDeletionPollInterval = time.Millisecond
+	t.Cleanup(func() { killDeletionPollInterval = orig })
+
+	cr := icmsRequestWithFinalizers(testRequestsNS, "r1", "fn-1", "v1", "nvca.finalizers.nvidia.io")
+	m, dc, _ := newFakeMaintainer([]runtime.Object{defaultBackend(), cr}, nil)
+	dc.PrependReactor("delete", "icmsrequests", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		// Simulate the real API server: the delete is accepted (no error)
+		// but the object, carrying a finalizer, is not actually removed.
+		return true, nil, nil
+	})
+
+	res, err := m.KillFunction(context.Background(), "fn-1", "v1", KillOptions{
+		BackendNS: testBackendNS,
+		Timeout:   5 * time.Millisecond,
+	})
+	if err == nil {
+		t.Fatal("expected an error reporting the request is still terminating")
+	}
+	if !strings.Contains(err.Error(), "terminating") {
+		t.Errorf("error = %q, want it to mention terminating", err.Error())
+	}
+	if res.TerminatingCount != 1 || res.FailedCount != 0 {
+		t.Fatalf("TerminatingCount/FailedCount = %d/%d, want 1/0", res.TerminatingCount, res.FailedCount)
+	}
+	if len(res.Affected) != 1 || !res.Affected[0].Terminating || res.Affected[0].Error != "" {
+		t.Fatalf("affected = %+v, want a single non-error Terminating entry", res.Affected)
+	}
+	if !icmsExists(t, dc, testRequestsNS, "r1") {
+		t.Error("r1 must still exist: it was never actually removed, only marked for deletion")
+	}
+}
+
+// TestKillWithinTimeoutReportsDeletedNotTerminating confirms the happy path
+// still reports plain "deleted" (not terminating) when the object disappears
+// before the deadline: the poll loop must not itself introduce a false
+// negative on a normal, fast reconcile.
+func TestKillWithinTimeoutReportsDeletedNotTerminating(t *testing.T) {
+	orig := killDeletionPollInterval
+	killDeletionPollInterval = time.Millisecond
+	t.Cleanup(func() { killDeletionPollInterval = orig })
+
+	m, _, _ := newFakeMaintainer(killSeed(), nil)
+
+	res, err := m.KillFunction(context.Background(), "fn-1", "v2", KillOptions{
+		BackendNS: testBackendNS,
+		Timeout:   50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("KillFunction returned error: %v", err)
+	}
+	if res.TerminatingCount != 0 || len(res.Affected) != 1 || res.Affected[0].Terminating {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+}
+
 func TestResolveClusterAppliesNamespaceDefaults(t *testing.T) {
 	// Backend with no system/requests namespace set.
 	b := backendObj(testBackendNS, testClusterID, testCluster, "", "")
