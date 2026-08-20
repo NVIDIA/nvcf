@@ -18,7 +18,7 @@ const (
 	EnvTraceDir             = "TRACE_DIR"
 	EnvTraceFilePrefix      = "TRACE_FILE_PREFIX"
 	EnvAuditFilePrefix      = "AUDIT_FILE_PREFIX"
-	EnvDroppedNCAIDs        = "VLLM_DROP_PAYLOAD_NCA_IDS"
+	EnvDroppedNCAIDs        = "REQUEST_TRACE_UPLOADER_DROP_NCA_IDS"
 	EnvSecretsFile          = "KRATOS_SECRETS_FILE"
 	EnvStateDir             = "REQUEST_TRACE_UPLOADER_STATE_DIR"
 	EnvQuarantineDir        = "REQUEST_TRACE_UPLOADER_QUARANTINE_DIR"
@@ -219,7 +219,7 @@ func ncaIDList(lookup LookupFunc, name string) ([]string, error) {
 		if item == "" {
 			continue
 		}
-		id := normalizeNCAID(item)
+		id := NormalizeNCAID(item)
 		if id == "" {
 			return nil, fmt.Errorf("%s contains an invalid NCA ID", name)
 		}
@@ -232,12 +232,27 @@ func ncaIDList(lookup LookupFunc, name string) ([]string, error) {
 	return ids, nil
 }
 
-func normalizeNCAID(value string) string {
+// NormalizeNCAID returns the canonical form used by the payload drop list.
+func NormalizeNCAID(value string) string {
 	value = strings.TrimSpace(value)
 	if strings.HasPrefix(value, "nca-") && strings.HasSuffix(value, "-nca") {
 		value = strings.TrimSuffix(strings.TrimPrefix(value, "nca-"), "-nca")
 	}
 	return strings.TrimSpace(value)
+}
+
+// DropsNCAID reports whether the configured payload drop list contains value.
+func (cfg Config) DropsNCAID(value string) bool {
+	value = NormalizeNCAID(value)
+	if value == "" {
+		return false
+	}
+	for _, id := range cfg.DroppedNCAIDs {
+		if id == value {
+			return true
+		}
+	}
+	return false
 }
 
 func valueOrDefault(lookup LookupFunc, name, fallback string) string {
