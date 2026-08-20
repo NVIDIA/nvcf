@@ -9,7 +9,6 @@ go_library(
     deps = [
         "//src/compute-plane-services/request-trace-uploader/internal/config",
         "//src/compute-plane-services/request-trace-uploader/internal/service",
-        "@com_github_prometheus_client_golang//prometheus",
     ],
 )
 

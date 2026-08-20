@@ -9,7 +9,6 @@ not publish or delete source segments until a supported upload adapter lands.
 - `internal/config/`: current sidecar contract and bounded policy parsing
 - `internal/segment/`: closed trace/audit segment discovery
 - `internal/health/`: liveness and readiness handlers
-- `internal/metrics/`: Prometheus metrics and handler
 - `internal/upload/`: future upload-client boundary
 - `internal/service/`: startup, recovery scan, and HTTP server
 
@@ -27,4 +26,6 @@ Run `bazel run //:gazelle` after changing Go imports or Bazel metadata.
 - Preserve the existing `trace` and `audit` capture-type names.
 - Treat the highest indexed segment for each prefix as active.
 - Do not add a release entry until an approved upload adapter exists.
+- Do not add a Prometheus scrape endpoint. The later observability increment
+  exports logs, traces, and metrics through BYOO OTLP endpoints.
 - Do not log request payloads, credentials, paths, or remote upload IDs.
