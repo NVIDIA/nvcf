@@ -52,14 +52,16 @@ Feature: Install a single-cluster NVCF stack on a pre-provisioned EKS cluster wi
   #   --compute-context ${EKS_CONTEXT}
 
   Background:
-    Given environment variable "REPO_ROOT" is set
-    And environment variable "NVCF_CLI" is set
-    And environment variable "NGC_API_KEY" is set
-    And environment variable "SAMPLE_NGC_ORG" is set
-    And environment variable "SAMPLE_NGC_TEAM" is set
-    And environment variable "EKS_CONTEXT" is set
-    And environment variable "EKS_CLUSTER_NAME" is set
-    And environment variable "EKS_REGION" is set
+    Given these environment variables are set:
+      | name             |
+      | REPO_ROOT        |
+      | NVCF_CLI         |
+      | NGC_API_KEY      |
+      | SAMPLE_NGC_ORG   |
+      | SAMPLE_NGC_TEAM  |
+      | EKS_CONTEXT      |
+      | EKS_CLUSTER_NAME |
+      | EKS_REGION       |
     # Helmfile pulls OCI charts through helm, so host-side helm
     # registry auth must be present before any helmfile sync.
     # Keep $NGC_API_KEY unbraced so the BDD runner does not expand

@@ -8,16 +8,18 @@ Feature: Bring up a local single-cluster NVCF stack with the CLI
   Rule: install --control-plane installs the CP; compute-plane register/install completes the worker layer
 
     Background:
-      Given environment variable "NVCF_CLI" is set
-      And environment variable "NGC_API_KEY" is set
       # SAMPLE_NGC_ORG / SAMPLE_NGC_TEAM are consumed by
       # `make build-and-deploy-cluster` (the credential provider
       # validation step) when the `a single-cluster ncp-local cluster is
       # running` step runs the build target. Without them, that target
       # fails at CREDENTIAL PROVIDER VALIDATION and skips the gateway
       # API setup.
-      And environment variable "SAMPLE_NGC_ORG" is set
-      And environment variable "SAMPLE_NGC_TEAM" is set
+      Given these environment variables are set:
+        | name            |
+        | NVCF_CLI        |
+        | NGC_API_KEY     |
+        | SAMPLE_NGC_ORG  |
+        | SAMPLE_NGC_TEAM |
       # self-hosted install --env local reads operator-authored local
       # secrets files from both split stacks:
       # deploy/stacks/self-managed/secrets/local-secrets.yaml (control
