@@ -27,6 +27,10 @@ The scaffold retains the current file contract:
 - `TRACE_DIR`: absolute directory containing trace and audit segments
 - `TRACE_FILE_PREFIX`: trace segment prefix
 - `AUDIT_FILE_PREFIX`: audit segment prefix
+- `VLLM_DROP_PAYLOAD_NCA_IDS`: optional CSV NCA ID drop list for audit
+  payloads. Bare IDs and `nca-<id>-nca` are equivalent. The future
+  transform retains correlation metadata and the normalized NCA ID, but removes
+  request and response payloads plus non-NCA headers before upload.
 - `KRATOS_SECRETS_FILE`: readable mounted secret file; default
   `/var/secrets/secrets.json`
 

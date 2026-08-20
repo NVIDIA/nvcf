@@ -4,6 +4,7 @@
 package config
 
 import (
+	"reflect"
 	"testing"
 	"time"
 )
@@ -28,6 +29,36 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.StateDir != "/records/request-trace-uploader-state" || cfg.QuarantineDir != "/records/request-trace-uploader-quarantine" {
 		t.Fatalf("unexpected derived directories: state=%q quarantine=%q", cfg.StateDir, cfg.QuarantineDir)
+	}
+}
+
+func TestLoadNormalizesDroppedNCAIDs(t *testing.T) {
+	cfg, warnings, err := Load(testLookup(map[string]string{
+		EnvTraceDir:        "/records",
+		EnvTraceFilePrefix: "request-trace",
+		EnvAuditFilePrefix: "request-audit",
+		EnvDroppedNCAIDs:   "  first, nca-second-nca, first, , third ",
+	}))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want none", warnings)
+	}
+	if want := []string{"first", "second", "third"}; !reflect.DeepEqual(cfg.DroppedNCAIDs, want) {
+		t.Errorf("DroppedNCAIDs = %v, want %v", cfg.DroppedNCAIDs, want)
+	}
+}
+
+func TestLoadRejectsInvalidDroppedNCAID(t *testing.T) {
+	_, _, err := Load(testLookup(map[string]string{
+		EnvTraceDir:        "/records",
+		EnvTraceFilePrefix: "request-trace",
+		EnvAuditFilePrefix: "request-audit",
+		EnvDroppedNCAIDs:   "nca--nca",
+	}))
+	if err == nil {
+		t.Fatal("Load() error = nil, want invalid NCA ID error")
 	}
 }
 
