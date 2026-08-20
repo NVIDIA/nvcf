@@ -5,3 +5,4 @@ include Makefile.dist
 test:
 	@tests/llm-router-worker-address.sh
 	@tests/pdb-value-wiring.sh
+	@tests/image-override-wiring.sh

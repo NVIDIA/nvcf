@@ -60,9 +60,14 @@ See [Image Mirroring](./image-mirroring.md) for additional registry examples.
 ### Use upstream container images
 
 You can configure a chart to pull a supporting image directly from its
-upstream registry. For example, replace the `nats.reloader.image` block in
-`deploy/stacks/self-managed/global.yaml.gotmpl` to pull the NATS configuration
-reloader from Docker Hub:
+upstream registry. Set the override in your environment file
+(`deploy/stacks/self-managed/environments/<environment>.yaml`). You do not
+need to edit `deploy/stacks/self-managed/global.yaml.gotmpl`.
+
+The NATS configuration reloader and the account-bootstrap Kubernetes
+utilities are not republished under the public `nvidia/nvcf` catalog. On a
+public-catalog install, point both at their upstream Docker Hub source unless
+you have already mirrored them into your own registry:
 
 ```yaml
 nats:
@@ -71,17 +76,7 @@ nats:
       registry: docker.io
       repository: natsio/nats-server-config-reloader
       tag: "0.23.0"
-```
 
-Use the version listed in the artifact table. Verify that your cluster can
-reach the upstream registry. If the registry requires authentication, add its
-pull secret to `global.imagePullSecrets`.
-
-To pull the API account-bootstrap Kubernetes utilities from their upstream
-image, replace the `api.accountBootstrap.image` block in
-`global.yaml.gotmpl`:
-
-```yaml
 api:
   accountBootstrap:
     image:
@@ -89,6 +84,31 @@ api:
       repository: alpine/k8s
       tag: "1.36.1"
 ```
+
+The Cassandra server and its dynamic seed discovery container take the same
+override keys. Set them when your registry uses a different path or tag than
+the `cassandra` default under `global.image.repository`:
+
+```yaml
+cassandra:
+  image:
+    registry: nvcr.io
+    repository: nvidia/nvcf/cassandra
+  dynamicSeedDiscovery:
+    image:
+      registry: nvcr.io
+      repository: nvidia/nvcf/cassandra
+```
+
+Every `registry`, `repository`, and `tag` key is optional. Any key you leave
+unset keeps its default: `registry` and `repository` fall back to
+`global.image.registry` and `global.image.repository`, and `tag` falls back to
+the version the stack pins, or to the chart's own default when the stack pins
+none.
+
+Use the version listed in the artifact table. Verify that your cluster can
+reach the upstream registry. If the registry requires authentication, add its
+pull secret to `global.imagePullSecrets`.
 
 The current Cassandra initialization hook uses the
 `nvcf-cassandra-migrations` image, and the current NATS chart renders NKeys as
