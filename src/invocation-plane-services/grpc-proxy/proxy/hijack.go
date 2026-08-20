@@ -174,6 +174,9 @@ func (s *StreamDirector) HijackHandler(w http.ResponseWriter, r *http.Request) {
 	// already been sent away, so no point in keeping the auth around.
 	// also need to make sure we don't allow reconnects to guard against replay attacks with 0-rtt.
 	s.workerAuth.Delete(auth)
+	// The worker is attached, so this request is no longer queued and must not
+	// be purged if this pod shuts down. The session can reattach elsewhere.
+	s.pendingWork.Delete(parsedRequestId)
 }
 
 // networkPeerAddress returns the transport-level remote host of the tunnel connection and

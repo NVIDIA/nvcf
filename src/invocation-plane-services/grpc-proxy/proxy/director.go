@@ -69,10 +69,26 @@ type issuedTokenInfo struct {
 	mintedAt time.Time
 }
 
+// pendingWorkInfo identifies a stateful work request this pod has issued a
+// worker token for but has not yet seen a CONNECT for. The token lives only in
+// this pod's memory, so if the pod goes away the queued request can never
+// authenticate; the entry is what lets shutdown find it and drop it.
+type pendingWorkInfo struct {
+	functionVersionId string
+}
+
+// pendingWorkPurger removes a queued stateful work request. Implemented by the
+// function invoker and asserted optionally, so an invoker that cannot reach the
+// work queue (tests, alternative implementations) simply skips the purge.
+type pendingWorkPurger interface {
+	PurgePendingWork(ctx context.Context, requestId uuid.UUID, functionVersionId string) error
+}
+
 type StreamDirector struct {
 	shuttingDown    *atomic.Bool
 	workerAuth      *ttlcache.Cache[string, workerAuthInfo]  // auth -> request + function info
 	issuedTokens    *ttlcache.Cache[string, issuedTokenInfo] // diagnostic only, see issuedTokenInfo
+	pendingWork     *ttlcache.Cache[uuid.UUID, pendingWorkInfo]
 	workers         *ttlcache.Cache[workerConnectionKey, *worker.WorkerConnection]
 	functionInvoker FunctionInvoker
 	cors            *cors.Cors
@@ -107,6 +123,17 @@ func NewStreamDirector(functionInvoker FunctionInvoker) *StreamDirector {
 		ttlcache.WithDisableTouchOnHit[string, issuedTokenInfo](),
 	)
 	go issuedTokenCache.Start()
+
+	// Sessions waiting on a worker CONNECT. Retention is deliberately much
+	// longer than the token TTL: the point is to still know about a request
+	// whose token has already aged out, because that request is still sitting
+	// in the work queue. Bounded so it cannot grow without limit.
+	pendingWorkCache := ttlcache.New(
+		ttlcache.WithTTL[uuid.UUID, pendingWorkInfo](pendingWorkRetention),
+		ttlcache.WithCapacity[uuid.UUID, pendingWorkInfo](pendingWorkCacheCapacity),
+		ttlcache.WithDisableTouchOnHit[uuid.UUID, pendingWorkInfo](),
+	)
+	go pendingWorkCache.Start()
 
 	// Set immediately before DeleteAll in Close so the eviction handler can
 	// report shutdown rather than attributing a drain to a client or worker.
@@ -241,6 +268,7 @@ func NewStreamDirector(functionInvoker FunctionInvoker) *StreamDirector {
 		workers:         cache,
 		shuttingDown:    shuttingDown,
 		issuedTokens:    issuedTokenCache,
+		pendingWork:     pendingWorkCache,
 		workerAuth:      workerAuthCache,
 		functionInvoker: functionInvoker,
 		cors:            cors.New(middleware.DefaultCorsOptions),
@@ -321,16 +349,80 @@ const (
 	issuedTokenRetention = 15 * time.Minute
 	// issuedTokenCacheCapacity bounds the diagnostic cache.
 	issuedTokenCacheCapacity = 50000
+	// pendingWorkRetention is how long a session waiting on a worker CONNECT is
+	// remembered. It has to outlast the token by a wide margin, because the
+	// queued request this refers to survives its token and is exactly what
+	// shutdown needs to clean up.
+	pendingWorkRetention = 30 * time.Minute
+	// pendingWorkCacheCapacity bounds the pending work cache.
+	pendingWorkCacheCapacity = 50000
+	// pendingWorkPurgeTimeout bounds the whole shutdown purge. Shutdown must not
+	// block on the work queue, so this is a best-effort budget.
+	pendingWorkPurgeTimeout = 10 * time.Second
 )
+
+// purgePendingWork drops the work requests for sessions that never got a
+// worker CONNECT. Their tokens exist only in this pod's memory, so once it is
+// gone every one of them is guaranteed to be rejected; leaving them queued
+// means each is still pulled, still takes a concurrency slot, and still fails.
+//
+// Sessions with a worker already attached are deliberately not touched. Those
+// can reattach through another pod, and their work request has already left the
+// queue anyway.
+func (s *StreamDirector) purgePendingWork() {
+	purger, ok := s.functionInvoker.(pendingWorkPurger)
+	if !ok {
+		return
+	}
+	pending := s.pendingWork.Items()
+	if len(pending) == 0 {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), pendingWorkPurgeTimeout)
+	defer cancel()
+
+	var purged, failed int
+	for requestId, item := range pending {
+		if ctx.Err() != nil {
+			// Out of budget. Report what is left rather than trailing off
+			// silently, so a shutdown that could not finish is visible.
+			failed += len(pending) - purged - failed
+			break
+		}
+		if err := purger.PurgePendingWork(ctx, requestId, item.Value().functionVersionId); err != nil {
+			failed++
+			// Expected when this service has no rights on the work queue, so
+			// this stays a warning: the purge is an optimisation and shutdown
+			// is still correct without it.
+			zap.L().Warn("failed to purge pending stateful work request on shutdown",
+				zap.Stringer("request_id", requestId),
+				zap.String("function_version_id", item.Value().functionVersionId),
+				zap.Error(err))
+			continue
+		}
+		purged++
+	}
+
+	metrics.PendingWorkPurgedTotal.WithLabelValues(metrics.PurgeSucceeded).Add(float64(purged))
+	metrics.PendingWorkPurgedTotal.WithLabelValues(metrics.PurgeFailed).Add(float64(failed))
+	zap.L().Info("purged pending stateful work requests on shutdown",
+		zap.Int("purged", purged),
+		zap.Int("failed", failed))
+}
 
 func (s *StreamDirector) Close() error {
 	// Mark first: DeleteAll evicts every entry, and without this those
 	// evictions would be misreported as client or worker initiated.
 	s.shuttingDown.Store(true)
+	// Before the caches go away, drop the queued work this pod can no longer
+	// authenticate. Best effort: a failure here must not hold up shutdown.
+	s.purgePendingWork()
 	s.workers.DeleteAll()
 	s.workers.Stop()
 	s.workerAuth.Stop()
 	s.issuedTokens.Stop()
+	s.pendingWork.Stop()
 	if s.functionInvoker != nil {
 		if closer, ok := s.functionInvoker.(io.Closer); ok {
 			_ = closer.Close()
@@ -532,6 +624,11 @@ func (s *StreamDirector) getAndInitWorkerConnection(ctx context.Context, conn *w
 				functionVersionId: apiFuncVersion,
 				mintedAt:          now,
 			}, ttlcache.DefaultTTL)
+			// Remembered until the worker CONNECTs back, so that a shutdown can
+			// find the requests whose tokens are about to be lost with this pod
+			// and drop them from the work queue instead of leaving them to be
+			// pulled and rejected.
+			s.pendingWork.Set(requestId, pendingWorkInfo{functionVersionId: apiFuncVersion}, ttlcache.DefaultTTL)
 			// Diagnostic shadow record, longer lived than the auth entry, so a
 			// later rejection can say "expired N seconds ago" instead of just
 			// "not found". Never consulted when granting access.

@@ -21,6 +21,7 @@ go_library(
         "function_invoker.go",
         "nats.go",
         "nats_tracing.go",
+        "pending_work.go",
         "sleep.go",
         "stateful_session_request_registration.go",
     ],
@@ -57,9 +58,13 @@ alias(
 
 go_test(
     name = "invocation_test",
-    srcs = ["nats_test.go"],
+    srcs = [
+        "nats_test.go",
+        "pending_work_test.go",
+    ],
     embed = [":invocation"],
     deps = [
+        "@com_github_google_uuid//:uuid",
         "@com_github_nats_io_nkeys//:nkeys",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
