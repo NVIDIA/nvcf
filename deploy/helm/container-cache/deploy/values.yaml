@@ -28,7 +28,7 @@ images:
   # Name of the container image containing Nginx Prometheus exporter.
   exporter: nvcr.io/nv-ngc-devops/nginx-prometheus-exporter:1.0
   # Certificate bundle used for cache certificates.
-  certificates: nvcr.io/nv-ngc-devops/nvcf-proxy-tls-certs:v1.2.10
+  certificates: nvcr.io/nv-ngc-devops/nvcf-proxy-tls-certs:v1.2.11
   # Optional pull secrets for private registries.
   secrets:
     - nvidia-ngcuser-pull-secret
