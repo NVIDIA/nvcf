@@ -68,15 +68,15 @@ cassandra:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/alpine-k8s
   image:
-    registry: {{ dig "cassandra" "image" "registry" .Values.global.image.registry .Values }}
-    repository: {{ dig "cassandra" "image" "repository" (printf "%s/cassandra" .Values.global.image.repository) .Values }}
+    registry: {{ dig "cassandra" "image" "registry" "" .Values | default .Values.global.image.registry }}
+    repository: {{ dig "cassandra" "image" "repository" "" .Values | default (printf "%s/cassandra" .Values.global.image.repository) }}
     {{- if dig "cassandra" "image" "tag" "" .Values }}
     tag: {{ dig "cassandra" "image" "tag" "" .Values }}
     {{- end }}
   dynamicSeedDiscovery:
     image:
-      registry: {{ dig "cassandra" "dynamicSeedDiscovery" "image" "registry" .Values.global.image.registry .Values }}
-      repository: {{ dig "cassandra" "dynamicSeedDiscovery" "image" "repository" (printf "%s/cassandra" .Values.global.image.repository) .Values }}
+      registry: {{ dig "cassandra" "dynamicSeedDiscovery" "image" "registry" "" .Values | default .Values.global.image.registry }}
+      repository: {{ dig "cassandra" "dynamicSeedDiscovery" "image" "repository" "" .Values | default (printf "%s/cassandra" .Values.global.image.repository) }}
       {{- if dig "cassandra" "dynamicSeedDiscovery" "image" "tag" "" .Values }}
       tag: {{ dig "cassandra" "dynamicSeedDiscovery" "image" "tag" "" .Values }}
       {{- end }}
@@ -209,9 +209,9 @@ nats:
   # in your environment file instead of editing this template.
   reloader:
     image:
-      registry: {{ dig "nats" "reloader" "image" "registry" .Values.global.image.registry .Values }}
-      repository: {{ dig "nats" "reloader" "image" "repository" (printf "%s/nats-server-config-reloader" .Values.global.image.repository) .Values }}
-      tag: {{ dig "nats" "reloader" "image" "tag" "0.23.0" .Values | quote }}
+      registry: {{ dig "nats" "reloader" "image" "registry" "" .Values | default .Values.global.image.registry }}
+      repository: {{ dig "nats" "reloader" "image" "repository" "" .Values | default (printf "%s/nats-server-config-reloader" .Values.global.image.repository) }}
+      tag: {{ dig "nats" "reloader" "image" "tag" "" .Values | default "0.23.0" | quote }}
   natsBox:
     container:
       image:
@@ -382,9 +382,9 @@ api:
   # keys below in your environment file instead of editing this template.
   accountBootstrap:
     image:
-      registry: {{ dig "api" "accountBootstrap" "image" "registry" .Values.global.image.registry .Values }}
-      repository: {{ dig "api" "accountBootstrap" "image" "repository" (printf "%s/alpine-k8s" .Values.global.image.repository) .Values }}
-      tag: {{ dig "api" "accountBootstrap" "image" "tag" "1.36.1" .Values | quote }}
+      registry: {{ dig "api" "accountBootstrap" "image" "registry" "" .Values | default .Values.global.image.registry }}
+      repository: {{ dig "api" "accountBootstrap" "image" "repository" "" .Values | default (printf "%s/alpine-k8s" .Values.global.image.repository) }}
+      tag: {{ dig "api" "accountBootstrap" "image" "tag" "" .Values | default "1.36.1" | quote }}
       pullPolicy: IfNotPresent
 
     registryCredentials: []
