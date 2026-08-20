@@ -66,12 +66,32 @@ func createH3RoundTripper() *h3ConnectionCache {
 	return &h3ConnectionCache{wrappedTransport: h3, clients: make(map[string]*roundTripperWithCount)}
 }
 
+// newHostTransport opens a UDP socket for one proxy host.
+//
+// A socket per host rather than one shared by all of them, because the source
+// port is what a UDP load balancer hashes on. Sharing one socket means every
+// proxy pod is reached over a single balancer flow, so if that flow is pinned
+// to an instance that has gone away, QUIC to every pod fails at once and keeps
+// failing for as long as traffic continues: the flow never idles out and
+// therefore never re-hashes. Restarting the whole worker was the only way back,
+// which is why replacing function instances has been the standard remedy.
+//
+// Per host, a failed host is discarded together with its socket, and the next
+// attempt arrives from a new source port that the balancer is free to place on
+// a healthy instance. It also isolates hosts from one another.
+func newHostTransport() (*quic.Transport, error) {
+	udpConn, err := net.ListenUDP("udp", nil)
+	if err != nil {
+		return nil, err
+	}
+	return &quic.Transport{Conn: udpConn}, nil
+}
+
 // mostly copied from http3.Transport because we need to hijack the http3 client stream
 // and when doing that we can't use the built in http3.Transport.RoundTrip function which caches
 // connections.
 type h3ConnectionCache struct {
 	wrappedTransport *http3.Transport
-	quicTransport    *quic.Transport
 	mutex            sync.Mutex
 	clients          map[string]*roundTripperWithCount
 }
@@ -103,9 +123,17 @@ func (t *h3ConnectionCache) getClient(ctx context.Context, hostname string) (rtc
 	if !ok {
 		ctx, cancel := context.WithCancel(ctx)
 		removeOnce := sync.Once{}
+		var hostTransport *quic.Transport
+		if t.wrappedTransport.Dial == nil {
+			hostTransport, err = newHostTransport()
+			if err != nil {
+				return nil, false, err
+			}
+		}
 		cl = &roundTripperWithCount{
-			dialing: make(chan struct{}),
-			cancel:  cancel,
+			dialing:   make(chan struct{}),
+			cancel:    cancel,
+			transport: hostTransport,
 			// may be called multiple times if many callers detect failure
 			removeFromCache: func() {
 				removeOnce.Do(func() {
@@ -116,7 +144,7 @@ func (t *h3ConnectionCache) getClient(ctx context.Context, hostname string) (rtc
 		go func() {
 			defer close(cl.dialing)
 			defer cancel()
-			conn, rt, err := t.dial(ctx, hostname)
+			conn, rt, err := t.dial(ctx, hostname, cl)
 			if err != nil {
 				cl.dialErr = err
 				return
@@ -149,7 +177,7 @@ func (t *h3ConnectionCache) getClient(ctx context.Context, hostname string) (rtc
 	return cl, isReused, nil
 }
 
-func (t *h3ConnectionCache) dial(ctx context.Context, hostname string) (*quic.Conn, *http3.ClientConn, error) {
+func (t *h3ConnectionCache) dial(ctx context.Context, hostname string, cl *roundTripperWithCount) (*quic.Conn, *http3.ClientConn, error) {
 	var tlsConf *tls.Config
 	if t.wrappedTransport.TLSClientConfig == nil {
 		tlsConf = &tls.Config{}
@@ -169,24 +197,20 @@ func (t *h3ConnectionCache) dial(ctx context.Context, hostname string) (*quic.Co
 
 	dial := t.wrappedTransport.Dial
 	if dial == nil {
-		if t.quicTransport == nil {
-			udpConn, err := net.ListenUDP("udp", nil)
-			if err != nil {
-				return nil, nil, err
-			}
-			t.quicTransport = &quic.Transport{Conn: udpConn}
-		}
 		dial = func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
 			network := "udp"
 			udpAddr, err := t.resolveUDPAddr(ctx, network, addr)
 			if err != nil {
 				return nil, err
 			}
-			conn, err := t.quicTransport.DialEarly(ctx, udpAddr, tlsCfg, cfg)
+			conn, err := cl.transport.DialEarly(ctx, udpAddr, tlsCfg, cfg)
 			return conn, err
 		}
 	}
-	conn, err := dial(ctx, hostname, tlsConf, t.wrappedTransport.QUICConfig)
+	// Per-dial copy: quic-go's validateConfig writes defaults back into the
+	// Config it is handed, so concurrent dials sharing one pointer race on it.
+	quicConf := *t.wrappedTransport.QUICConfig
+	conn, err := dial(ctx, hostname, tlsConf, &quicConf)
 	if err != nil {
 		zap.L().Warn("failed to dial quic connection", zap.Error(err), zap.String("hostname", hostname))
 		return nil, nil, err
@@ -233,23 +257,19 @@ func (t *h3ConnectionCache) Close() error {
 		}
 	}
 	t.clients = nil
-	if t.quicTransport != nil {
-		if err := t.quicTransport.Close(); err != nil {
-			return err
-		}
-		if err := t.quicTransport.Conn.Close(); err != nil {
-			return err
-		}
-		t.quicTransport = nil
-	}
 	return nil
 }
 
 type roundTripperWithCount struct {
-	cancel     context.CancelFunc
-	dialing    chan struct{} // closed as soon as quic.Dial(Early) returned
-	dialErr    error
-	conn       *quic.Conn
+	cancel  context.CancelFunc
+	dialing chan struct{} // closed as soon as quic.Dial(Early) returned
+	dialErr error
+	conn    *quic.Conn
+	// transport owns this host's UDP socket. Held per host rather than shared
+	// so that one unreachable proxy pod cannot take QUIC to every other pod
+	// down with it, and so that discarding a failed host also discards the
+	// source port it was using. See the note on newHostTransport.
+	transport  *quic.Transport
 	clientConn *http3.ClientConn
 
 	useCount        atomic.Int64
@@ -259,10 +279,20 @@ type roundTripperWithCount struct {
 func (r *roundTripperWithCount) Close() error {
 	r.cancel()
 	<-r.dialing
+	var connErr error
 	if r.conn != nil {
-		return r.conn.CloseWithError(0, "")
+		connErr = r.conn.CloseWithError(0, "")
 	}
-	return nil
+	// Closing the socket is the point, not just tidiness: a new one is opened
+	// from a different source port, which is what lets a load balancer that
+	// pinned this flow to a dead target route the next attempt somewhere else.
+	// Deliberately not set to nil: the field is written once at construction so
+	// that it can be read without synchronisation from the dial goroutine.
+	if r.transport != nil {
+		_ = r.transport.Close()
+		_ = r.transport.Conn.Close()
+	}
+	return connErr
 }
 
 // An addrList represents a list of network endpoint addresses.
