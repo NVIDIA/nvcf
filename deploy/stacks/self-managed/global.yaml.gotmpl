@@ -69,9 +69,6 @@ cassandra:
       repository: {{ .Values.global.image.repository }}/alpine-k8s
   image:
     registry: {{ .Values.global.image.registry }}
-    # The Apache-based chart publishes its image as "cassandra", not
-    # "bitnami-cassandra". Tag knob follows the migrations pattern above so
-    # environments can override the chart default.
     repository: {{ .Values.global.image.repository }}/cassandra
     {{- if dig "cassandra" "image" "tag" "" .Values }}
     tag: {{ dig "cassandra" "image" "tag" "" .Values }}
