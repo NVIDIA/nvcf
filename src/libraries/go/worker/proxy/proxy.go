@@ -206,6 +206,26 @@ func (p *HttpProxy) Proxy(ctx context.Context, work *pb.WorkerInvokeFunctionRequ
 	// doesn't make it in time.
 	go p.keepaliveReconnectRegistration(ctx, work, trackingRegion)
 
+	// exit once all connections have completed successfully,
+	// or 30 seconds after the last connection fails in order to wait for reconnects
+	var lastConnErr atomic.Pointer[error]
+	wg := sync.WaitGroup{}
+
+	// Subscribe before the first CONNECT, not after it. The proxy decides
+	// whether a session is still alive by whether anything is subscribed to
+	// this subject, so any window where the session exists but the
+	// subscription does not is a window where a rejoin can be misread as a
+	// dead session. Subscribing here closes that window for the whole of
+	// session establishment, including the CONNECT retries below.
+	subscription, err := p.nc.SubscribeSync("stateful_session.reconnect." + work.RequestId)
+	if err != nil {
+		// Not fatal. Without the subscription the session cannot be rejoined,
+		// but it can still serve the connection it is about to open.
+		zap.L().Error("failed to listen for stateful session reconnects", zap.String("req id", work.RequestId), zap.Error(err))
+	} else {
+		go p.serveStatefulReconnects(ctx, span, work, subscription, &wg, &lastConnErr)
+	}
+
 	clientConn, err := getClientConnFromProxy(ctx, work, p.h3)
 	if err != nil {
 		return traceError(span, err)
@@ -221,10 +241,6 @@ func (p *HttpProxy) Proxy(ctx context.Context, work *pb.WorkerInvokeFunctionRequ
 		zap.L().Info("stateful work request shutting down", zap.String("req id", work.RequestId))
 	}()
 
-	// exit once all connections have completed successfully,
-	// or 30 seconds after the last connection fails in order to wait for reconnects
-	var lastConnErr atomic.Pointer[error]
-	wg := sync.WaitGroup{}
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -238,67 +254,71 @@ func (p *HttpProxy) Proxy(ctx context.Context, work *pb.WorkerInvokeFunctionRequ
 		p.disconnectCallback(ctx, work.RequestId, err)
 	}()
 
-	go func() {
-		zap.L().Info("listening for stateful reconnects", zap.String("req id", work.RequestId))
-		subscription, err := p.nc.SubscribeSync("stateful_session.reconnect." + work.RequestId)
-		if err != nil {
-			zap.L().Error("failed to listen for stateful session reconnects", zap.String("req id", work.RequestId), zap.Error(err))
-			return
-		}
-		defer func() { _ = subscription.Unsubscribe() }()
-		for ctx.Err() == nil {
-			var msg *nats.Msg
-			err = backoff.Retry(func() error {
-				nextMsg, err := subscription.NextMsgWithContext(ctx)
-				if err != nil {
-					if !errors.Is(err, context.Canceled) {
-						zap.L().Warn("failed to get next stateful session reconnect message", zap.String("req id", work.RequestId), zap.Error(err))
-					}
-					return err
-				}
-				msg = nextMsg
-				return nil
-			}, backoff.WithContext(backoff.NewExponentialBackOff(backoff.WithMaxElapsedTime(0)), ctx))
-			if err != nil {
-				return
-			}
-			var work pb.WorkerInvokeFunctionRequest
-			err = proto.Unmarshal(msg.Data, &work)
-			if err != nil {
-				zap.L().Warn("malformed stateful session reconnect message", zap.String("req id", work.RequestId), zap.Error(err))
-				continue
-			}
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				clientConn, err := getClientConnFromProxy(ctx, &work, p.h3)
-				if err != nil {
-					_ = traceError(span, err)
-					return
-				}
-				handlerConn, err := handlerisolationconn.NewHandlerConn(clientConn, p.handlerPool)
-				if err != nil {
-					_ = traceError(span, err)
-					return
-				}
-				zap.L().Info("connected to nvcf stateful proxy (reconnect)", zap.String("req id", work.RequestId))
-				err = p.listener.ServeConn(handlerConn)
-				if err != nil {
-					_ = handlerConn.Close()
-				}
-				err = traceError(span, err)
-				lastConnErr.Store(&err)
-				zap.L().Info("connection closed. triggering callback.", zap.String("req id", work.RequestId))
-				p.disconnectCallback(ctx, work.RequestId, err)
-			}()
-		}
-	}()
-
 	wg.Wait()
 	if err := lastConnErr.Load(); err != nil {
 		return *err
 	}
 	return nil
+}
+
+func (p *HttpProxy) serveStatefulReconnects(ctx context.Context, span trace.Span, work *pb.WorkerInvokeFunctionRequest, subscription *nats.Subscription, wg *sync.WaitGroup, lastConnErr *atomic.Pointer[error]) {
+	zap.L().Info("listening for stateful reconnects", zap.String("req id", work.RequestId))
+	defer func() { _ = subscription.Unsubscribe() }()
+	for ctx.Err() == nil {
+		var msg *nats.Msg
+		err := backoff.Retry(func() error {
+			nextMsg, err := subscription.NextMsgWithContext(ctx)
+			if err != nil {
+				if !errors.Is(err, context.Canceled) {
+					zap.L().Warn("failed to get next stateful session reconnect message", zap.String("req id", work.RequestId), zap.Error(err))
+				}
+				return err
+			}
+			msg = nextMsg
+			return nil
+		}, backoff.WithContext(backoff.NewExponentialBackOff(backoff.WithMaxElapsedTime(0)), ctx))
+		if err != nil {
+			return
+		}
+		var work pb.WorkerInvokeFunctionRequest
+		err = proto.Unmarshal(msg.Data, &work)
+		if err != nil {
+			zap.L().Warn("malformed stateful session reconnect message", zap.String("req id", work.RequestId), zap.Error(err))
+			continue
+		}
+		// Acknowledge receipt, as the polling listener does. The proxy uses
+		// this to tell a live session from one whose worker is gone; without
+		// it the proxy has to fall back on subscription interest alone and
+		// waits out its probe deadline on every rejoin. A failed ack is not
+		// a reason to drop the reconnect: the proxy treats an unanswered
+		// probe as live, so carry on and serve it.
+		if err := msg.Respond(nil); err != nil {
+			zap.L().Warn("failed to ack stateful session reconnect", zap.String("req id", work.RequestId), zap.Error(err))
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			clientConn, err := getClientConnFromProxy(ctx, &work, p.h3)
+			if err != nil {
+				_ = traceError(span, err)
+				return
+			}
+			handlerConn, err := handlerisolationconn.NewHandlerConn(clientConn, p.handlerPool)
+			if err != nil {
+				_ = traceError(span, err)
+				return
+			}
+			zap.L().Info("connected to nvcf stateful proxy (reconnect)", zap.String("req id", work.RequestId))
+			err = p.listener.ServeConn(handlerConn)
+			if err != nil {
+				_ = handlerConn.Close()
+			}
+			err = traceError(span, err)
+			lastConnErr.Store(&err)
+			zap.L().Info("connection closed. triggering callback.", zap.String("req id", work.RequestId))
+			p.disconnectCallback(ctx, work.RequestId, err)
+		}()
+	}
 }
 
 func (p *HttpProxy) keepaliveReconnectRegistration(ctx context.Context, work *pb.WorkerInvokeFunctionRequest, trackingRegion string) {

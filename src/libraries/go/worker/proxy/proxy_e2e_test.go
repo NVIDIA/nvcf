@@ -25,6 +25,7 @@ import (
 	"net/http/httptest"
 	"net/http/httputil"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -181,6 +182,118 @@ func TestProxy_EndToEnd(t *testing.T) {
 	case <-proxyDone:
 		// Proxy returned. Error is acceptable here since we forcibly tore the
 		// connection down; we only assert it terminates.
+	case <-time.After(15 * time.Second):
+		t.Fatal("Proxy did not return after teardown")
+	}
+}
+
+// The proxy decides whether a stateful session still exists by asking whether
+// anything answers on its reconnect subject: no responders means no worker can
+// ever serve it, so the client is told to start a new session. Two properties
+// have to hold for that to be safe, and this test pins both while the initial
+// CONNECT is deliberately left hanging.
+//
+// The session must be answerable before its first tunnel is up, otherwise a
+// rejoin arriving during session establishment reads as a dead session and
+// severs a session that was only starting. And the listener must reply, so the
+// proxy gets its answer immediately rather than waiting out a probe deadline.
+func TestProxy_ReconnectSubjectIsAnsweredBeforeFirstTunnel(t *testing.T) {
+	setupLogger()
+	allowInsecure(t)
+
+	cluster, err := testutils.NewNatsSuperCluster(t)
+	require.NoError(t, err)
+	defer cluster.Shutdown()
+
+	nc, err := nats.Connect(cluster.Clusters[0].Servers[0].ClientURL())
+	require.NoError(t, err)
+	defer nc.Close()
+	js, err := jetstream.New(nc)
+	require.NoError(t, err)
+
+	region := cluster.Clusters[0].Region
+
+	// A listener that accepts and then never answers, so the worker's first
+	// CONNECT stays outstanding for the whole test and the window under test
+	// stays open rather than being raced.
+	stalledProxy, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = stalledProxy.Close() }()
+
+	// Accepted conns are tracked so they can be closed during teardown.
+	// tcpConnect's response read is not context aware, so cancelling the proxy
+	// context alone will not unblock a CONNECT that is waiting on a reply.
+	var stalledMu sync.Mutex
+	var stalledConns []net.Conn
+	closeStalledConns := func() {
+		stalledMu.Lock()
+		defer stalledMu.Unlock()
+		for _, conn := range stalledConns {
+			_ = conn.Close()
+		}
+		stalledConns = nil
+	}
+	defer closeStalledConns()
+	go func() {
+		for {
+			conn, acceptErr := stalledProxy.Accept()
+			if acceptErr != nil {
+				return
+			}
+			stalledMu.Lock()
+			stalledConns = append(stalledConns, conn)
+			stalledMu.Unlock()
+		}
+	}()
+
+	httpProxy, err := NewHttpProxy(nc, js, uuid.New().String(), uuid.New().String(),
+		func(request *httputil.ProxyRequest) {}, nil, nil, nil)
+	require.NoError(t, err)
+	defer httpProxy.Close()
+
+	requestId := uuid.New().String()
+	work := &pb.WorkerInvokeFunctionRequest{
+		RequestId: requestId,
+		NcaId:     "nca-1",
+		StatefulConfig: &pb.WorkerInvokeFunctionRequest_StatefulConfig{
+			ConnectionConfigs: []*pb.WorkerInvokeFunctionRequest_StatefulConfig_ConnectionConfig{
+				{
+					Config: &pb.WorkerInvokeFunctionRequest_StatefulConfig_ConnectionConfig_Http1Config{
+						Http1Config: &pb.WorkerInvokeFunctionRequest_StatefulConfig_ConnectionConfig_HTTP1ConnectionConfig{
+							ProxyURI:                "http://" + stalledProxy.Addr().String() + "/v1/proxy",
+							ProxyAuthorizationToken: "dummy-token",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	proxyCtx, proxyCancel := context.WithCancel(t.Context())
+	proxyDone := make(chan error, 1)
+	go func() {
+		proxyDone <- httpProxy.Proxy(proxyCtx, work, region)
+	}()
+
+	reconnectBody, err := proto.Marshal(work)
+	require.NoError(t, err)
+
+	// Retry only to absorb the scheduling gap before Proxy runs at all. What is
+	// being asserted is that the answer, once the session is running, is an
+	// acknowledgement and never "no responders".
+	var lastErr error
+	require.Eventually(t, func() bool {
+		_, lastErr = nc.Request("stateful_session.reconnect."+requestId, reconnectBody, 2*time.Second)
+		return lastErr == nil
+	}, 15*time.Second, 50*time.Millisecond,
+		"reconnect subject should be acknowledged while the first CONNECT is still outstanding, last error: %v", lastErr)
+
+	// Cancel first so the CONNECT retry loop stops, then drop the stalled conns
+	// to release the read that cancellation cannot reach.
+	proxyCancel()
+	closeStalledConns()
+	select {
+	case <-proxyDone:
 	case <-time.After(15 * time.Second):
 		t.Fatal("Proxy did not return after teardown")
 	}

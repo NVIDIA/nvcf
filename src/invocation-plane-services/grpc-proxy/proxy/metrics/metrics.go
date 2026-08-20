@@ -324,6 +324,23 @@ var ConnectResults = []string{
 	ConnectHijackFailed,
 }
 
+// Outcomes of asking the worker that owns an existing session to open a new
+// tunnel. RejoinNoResponders is the one that matters: it is the only signal
+// the proxy has that a session can never be served again.
+const (
+	RejoinAcked        = "acked"         // worker acknowledged the reconnect
+	RejoinAssumedLive  = "assumed_live"  // subscribed but did not ack, worker predates the ack
+	RejoinNoResponders = "no_responders" // nothing subscribed, session is unrecoverable
+	RejoinFailed       = "failed"        // publish itself failed
+)
+
+var RejoinResults = []string{
+	RejoinAcked,
+	RejoinAssumedLive,
+	RejoinNoResponders,
+	RejoinFailed,
+}
+
 var (
 	// WorkerConnectTotal counts every CONNECT attempt by outcome. Splitting
 	// the 403s into expired / unknown / mismatch is the point: they are
@@ -385,6 +402,17 @@ var (
 			Help:      "worker tunnels still attached to a client connection when it closed",
 			Buckets:   []float64{0, 1, 2, 3, 5, 10, 25, 50, 100},
 		})
+
+	// StatefulRejoinTotal counts attempts to hand an existing session back to
+	// its worker. A sustained no_responders rate means clients are holding
+	// cookies for sessions whose workers are gone; before this was measured
+	// those rejoins were published into a dead subject and silently dropped.
+	StatefulRejoinTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: RootNamespace,
+			Name:      "stateful_rejoin_total",
+			Help:      "attempts to rejoin an existing stateful session, by outcome",
+		}, []string{"result"})
 )
 
 func init() {
@@ -405,6 +433,9 @@ func init() {
 	}
 	for _, code := range CloseCodes {
 		WorkerConnectionCloseCodeTotal.WithLabelValues(code)
+	}
+	for _, result := range RejoinResults {
+		StatefulRejoinTotal.WithLabelValues(result)
 	}
 }
 

@@ -304,21 +304,93 @@ func (f *FunctionInvoker) tryRegionForLLS(ctx context.Context, region string, re
 	return err
 }
 
+const (
+	// reconnectAckTimeout bounds one attempt to hand a session back to its
+	// worker. Only the no-responders answer is acted on and the NATS server
+	// produces that from interest state without waiting for anyone, so this
+	// deadline is reached only when a worker is subscribed but predates the
+	// acknowledgement in its reconnect listener. Kept short because until
+	// those workers roll over it is added to every rejoin.
+	reconnectAckTimeout = 500 * time.Millisecond
+	// reconnectNoRespondersRetryDelay separates the two liveness probes. A
+	// single no-responders answer can reflect a momentary gap in interest
+	// propagation rather than a dead worker, and the cost of believing it is
+	// severing a live session, so it has to be seen twice.
+	reconnectNoRespondersRetryDelay = 250 * time.Millisecond
+)
+
+// joinExistingSession asks the worker holding requestId to open another tunnel.
+//
+// This is a request rather than a publish so that a session whose worker is
+// gone is detectable. A publish always succeeds, so the proxy reported a
+// healthy rejoin, waited for a worker that could not arrive, and left the
+// client holding a session cookie it would present again on every retry, with
+// no error surfaced anywhere. That is the state that could only be cleared by
+// restarting the function. The stateless path already works this way: see
+// polling_request in the invocation service, which maps NoResponders onto
+// "no worker picked this up".
 func (f *FunctionInvoker) joinExistingSession(ctx context.Context, requestId uuid.UUID, proxyAuthResponse *pb.ProxyAuthResponse, workerAuthToken string) error {
 	marshalledInvokeFunctionRequest, err := f.marshalStatefulSessionRequest(requestId, proxyAuthResponse, workerAuthToken)
 	if err != nil {
 		return err
 	}
 	subject := reconnectSubject(requestId)
-	err = f.nc.PublishMsg(&nats.Msg{
-		Subject: subject,
-		Header:  otelHeaders(ctx),
-		Data:    marshalledInvokeFunctionRequest,
-	})
-	if err != nil {
+	span := trace.SpanFromContext(ctx)
+
+	result, err := f.probeSessionWorker(ctx, subject, marshalledInvokeFunctionRequest)
+	if result == metrics.RejoinNoResponders {
+		// Confirm before acting: see reconnectNoRespondersRetryDelay.
+		SleepWithContext(ctx, reconnectNoRespondersRetryDelay)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		result, err = f.probeSessionWorker(ctx, subject, marshalledInvokeFunctionRequest)
+	}
+
+	metrics.StatefulRejoinTotal.WithLabelValues(result).Inc()
+	span.SetAttributes(attribute.String("rejoin_result", result))
+
+	switch result {
+	case metrics.RejoinAcked, metrics.RejoinAssumedLive:
+		return nil
+	case metrics.RejoinNoResponders:
+		// Nothing is subscribed to this session's reconnect subject, so no
+		// worker can ever serve it. Reporting it as a missing session makes
+		// the director clear the client's request id cookie, and the client's
+		// next request opens a fresh session without any operator action.
+		zap.L().Info("no worker subscribed for existing stateful session, asking client to start a new one",
+			zap.Stringer("request_id", requestId),
+			zap.String("function_id", proxyAuthResponse.FunctionId))
+		return fmt.Errorf("%w for request id %s", ErrSessionNotFound, requestId)
+	default:
 		return fmt.Errorf("failed to publish function invocation request to nats: %w", err)
 	}
-	return nil
+}
+
+// probeSessionWorker sends the reconnect message once and classifies the answer.
+func (f *FunctionInvoker) probeSessionWorker(ctx context.Context, subject string, payload []byte) (string, error) {
+	requestCtx, cancel := context.WithTimeout(ctx, reconnectAckTimeout)
+	defer cancel()
+
+	_, err := f.nc.RequestMsgWithContext(requestCtx, &nats.Msg{
+		Subject: subject,
+		Header:  otelHeaders(ctx),
+		Data:    payload,
+	})
+	switch {
+	case err == nil:
+		return metrics.RejoinAcked, nil
+	case errors.Is(err, nats.ErrNoResponders):
+		return metrics.RejoinNoResponders, err
+	case errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil:
+		// Our own deadline, not the caller's. A worker is subscribed but did
+		// not acknowledge, which is how a worker built before the reconnect
+		// acknowledgement behaves. Interest is sufficient proof the session is
+		// live, so treat it exactly as the previous publish did.
+		return metrics.RejoinAssumedLive, nil
+	default:
+		return metrics.RejoinFailed, err
+	}
 }
 
 func otelHeaders(ctx context.Context) nats.Header {
