@@ -338,8 +338,12 @@ func (p *HttpProxy) serveStatefulReconnects(ctx context.Context, span trace.Span
 		if err != nil {
 			return
 		}
-		var work pb.WorkerInvokeFunctionRequest
-		err = proto.Unmarshal(msg.Data, &work)
+		// Named apart from the work parameter on purpose. Shadowing it meant the
+		// malformed-payload log below reported the request id of the payload
+		// that had just failed to parse, so the field was always empty for
+		// exactly the message an operator needs to trace.
+		var reconnectWork pb.WorkerInvokeFunctionRequest
+		err = proto.Unmarshal(msg.Data, &reconnectWork)
 		if err != nil {
 			zap.L().Warn("malformed stateful session reconnect message", zap.String("req id", work.RequestId), zap.Error(err))
 			continue
@@ -362,7 +366,7 @@ func (p *HttpProxy) serveStatefulReconnects(ctx context.Context, span trace.Span
 		}
 		go func() {
 			defer conns.done()
-			clientConn, err := getClientConnFromProxy(ctx, &work, p.h3)
+			clientConn, err := getClientConnFromProxy(ctx, &reconnectWork, p.h3)
 			if err != nil {
 				_ = traceError(span, err)
 				return
