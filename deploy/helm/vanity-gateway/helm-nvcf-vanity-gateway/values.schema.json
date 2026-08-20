@@ -110,6 +110,9 @@
             "nvcfApiEndpoint": {
               "$ref": "#/definitions/nonEmptyString"
             },
+            "llmGatewayEndpoint": {
+              "type": "string"
+            },
             "otelExporterOtlpEndpoint": {
               "type": "string"
             },
@@ -140,12 +143,11 @@
                 },
                 "vanity": {
                   "$ref": "#/definitions/vanityRoutes"
+                },
+                "llmGateway": {
+                  "$ref": "#/definitions/llmGatewayRoutes"
                 }
               },
-              "required": [
-                "openai",
-                "vanity"
-              ],
               "additionalProperties": true
             }
           },
@@ -339,6 +341,36 @@
       "required": [
         "path",
         "functionID"
+      ],
+      "additionalProperties": true
+    },
+    "llmGatewayRoutes": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/llmGatewayRoute"
+      }
+    },
+    "llmGatewayRoute": {
+      "type": "object",
+      "properties": {
+        "host": {
+          "$ref": "#/definitions/nonEmptyString"
+        },
+        "customHeaders": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "eol": {
+          "type": "string"
+        },
+        "offlineMessage": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "host"
       ],
       "additionalProperties": true
     }
