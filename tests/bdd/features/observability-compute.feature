@@ -136,19 +136,18 @@ Feature: Install local Helmfile observability with the compute profile
     Then the command exit code should be 0
     And the command output should contain "true"
 
-    Then these ServiceMonitors should exist in namespace "monitoring" using context "k3d-ncp-local-compute-1":
-      | name                          |
-      | nvcf-default-monitors-nvca   |
+    Then these Kubernetes resources should exist in namespace "monitoring" using context "k3d-ncp-local-compute-1":
+      | kind           | name                          |
+      | ServiceMonitor | nvcf-default-monitors-nvca    |
+      | PodMonitor     | nvcf-default-monitors-dcgm    |
+      | PodMonitor     | nvcf-default-monitors-worker  |
 
-    When I run command "kubectl get podmonitor/nvcf-default-monitors-dcgm podmonitor/nvcf-default-monitors-worker --namespace monitoring --context k3d-ncp-local-compute-1"
-    Then the command exit code should be 0
-
-    When I run command "kubectl get servicemonitor --namespace monitoring --context k3d-ncp-local-compute-1 -o name"
-    Then the command exit code should be 0
-    And the command output should not contain "nvcf-default-monitors-state-metrics"
-    And the command output should not contain "nvcf-default-monitors-grpc-proxy"
-    And the command output should not contain "nvcf-default-monitors-llm-api-gateway"
-    And the command output should not contain "nvcf-default-monitors-invocation-service"
+    Then these Kubernetes resources should not exist in namespace "monitoring" using context "k3d-ncp-local-compute-1":
+      | kind           | name                                             |
+      | ServiceMonitor | nvcf-default-monitors-state-metrics              |
+      | ServiceMonitor | nvcf-default-monitors-grpc-proxy                  |
+      | ServiceMonitor | nvcf-default-monitors-llm-api-gateway             |
+      | ServiceMonitor | nvcf-default-monitors-invocation-service          |
 
     When I run command:
       """

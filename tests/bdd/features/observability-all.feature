@@ -122,16 +122,15 @@ Feature: Install local Helmfile observability for both planes
     Then the command exit code should be 0
     And the command output should contain "true"
 
-    Then these ServiceMonitors should exist in namespace "monitoring" using context "k3d-ncp-local":
-      | name                                             |
-      | nvcf-default-monitors-state-metrics              |
-      | nvcf-default-monitors-grpc-proxy                  |
-      | nvcf-default-monitors-llm-api-gateway             |
-      | nvcf-default-monitors-invocation-service          |
-      | nvcf-default-monitors-nvca                        |
-
-    When I run command "kubectl get podmonitor/nvcf-default-monitors-dcgm podmonitor/nvcf-default-monitors-worker --namespace monitoring --context k3d-ncp-local"
-    Then the command exit code should be 0
+    Then these Kubernetes resources should exist in namespace "monitoring" using context "k3d-ncp-local":
+      | kind           | name                                             |
+      | ServiceMonitor | nvcf-default-monitors-state-metrics              |
+      | ServiceMonitor | nvcf-default-monitors-grpc-proxy                  |
+      | ServiceMonitor | nvcf-default-monitors-llm-api-gateway             |
+      | ServiceMonitor | nvcf-default-monitors-invocation-service          |
+      | ServiceMonitor | nvcf-default-monitors-nvca                        |
+      | PodMonitor     | nvcf-default-monitors-dcgm                        |
+      | PodMonitor     | nvcf-default-monitors-worker                      |
 
     When I run command:
       """

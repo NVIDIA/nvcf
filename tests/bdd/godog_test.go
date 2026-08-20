@@ -470,19 +470,17 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 // shared releases and monitor resources through explicit local context calls.
 func TestObservabilityControlFeatureFileWiresToSteps(t *testing.T) {
 	const (
-		registryLoginCommand   = `bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" | helm registry login nvcr.io --username "\$oauthtoken" --password-stdin'`
-		serviceMonitorsCommand = "kubectl get servicemonitor/nvcf-default-monitors-state-metrics" +
-			" servicemonitor/nvcf-default-monitors-grpc-proxy" +
-			" servicemonitor/nvcf-default-monitors-llm-api-gateway" +
-			" servicemonitor/nvcf-default-monitors-invocation-service" +
-			" --namespace monitoring --context k3d-ncp-local"
+		registryLoginCommand    = `bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" | helm registry login nvcr.io --username "\$oauthtoken" --password-stdin'`
+		serviceMonitorCommand   = "kubectl get servicemonitor/nvcf-default-monitors-state-metrics --namespace monitoring --context k3d-ncp-local -o name"
+		absentPodMonitorCommand = "kubectl get podmonitor/nvcf-default-monitors-worker --namespace monitoring --context k3d-ncp-local --ignore-not-found -o name"
 	)
 	t.Setenv("NGC_API_KEY", "test-key")
 	t.Setenv("SAMPLE_NGC_ORG", "test-org")
 	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
 		registryLoginCommand:           {ExitCode: 0},
-		serviceMonitorsCommand:         {ExitCode: 0},
+		serviceMonitorCommand:          {ExitCode: 0},
+		absentPodMonitorCommand:        {ExitCode: 0},
 		"k3d cluster get ncp-local-cp": {ExitCode: 1},
 		"helm list --all-namespaces --kube-context k3d-ncp-local -o json": {
 			ExitCode: 0,
@@ -491,18 +489,6 @@ func TestObservabilityControlFeatureFileWiresToSteps(t *testing.T) {
 		"kubectl get opentelemetrycollector nvcf-observability -n monitoring --context k3d-ncp-local -o jsonpath='{.spec.targetAllocator.enabled}'": {
 			ExitCode: 0,
 			Stdout:   "true",
-		},
-		"kubectl get servicemonitor nvcf-default-monitors-nvca -n monitoring --context k3d-ncp-local": {
-			ExitCode: 1,
-			Stderr:   "Error from server (NotFound): servicemonitors.monitoring.coreos.com \"nvcf-default-monitors-nvca\" not found\n",
-		},
-		"kubectl get podmonitor nvcf-default-monitors-dcgm -n monitoring --context k3d-ncp-local": {
-			ExitCode: 1,
-			Stderr:   "Error from server (NotFound): podmonitors.monitoring.coreos.com \"nvcf-default-monitors-dcgm\" not found\n",
-		},
-		"kubectl get podmonitor nvcf-default-monitors-worker -n monitoring --context k3d-ncp-local": {
-			ExitCode: 1,
-			Stderr:   "Error from server (NotFound): podmonitors.monitoring.coreos.com \"nvcf-default-monitors-worker\" not found\n",
 		},
 	}))
 	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
@@ -529,7 +515,8 @@ func TestObservabilityControlFeatureFileWiresToSteps(t *testing.T) {
 	runs := suite.Runner.(*fakeRunner).runs
 	for _, command := range []string{
 		registryLoginCommand,
-		serviceMonitorsCommand,
+		serviceMonitorCommand,
+		absentPodMonitorCommand,
 	} {
 		if !commandRanExactly(runs, command) {
 			t.Fatalf("exact command was never invoked: %s", command)
@@ -564,14 +551,12 @@ func observabilityControlHelmListJSON() string {
 // cluster and that the compute profile verifies its releases and monitors.
 func TestObservabilityComputeFeatureFileWiresToSteps(t *testing.T) {
 	const (
-		registryLoginCommand  = `bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" | helm registry login nvcr.io --username "\$oauthtoken" --password-stdin'`
-		serviceMonitorCommand = "kubectl get servicemonitor/nvcf-default-monitors-nvca" +
-			" --namespace monitoring --context k3d-ncp-local-compute-1"
-		podMonitorCommand = "kubectl get podmonitor/nvcf-default-monitors-dcgm" +
-			" podmonitor/nvcf-default-monitors-worker" +
-			" --namespace monitoring --context k3d-ncp-local-compute-1"
-		collectorEnabledCommand = `bash -c 'set -eo pipefail; helm get values nvca-operator --namespace nvca-operator --kube-context k3d-ncp-local-compute-1 -o json | jq -r ".selfManaged.otelCollector.enabled"'`
-		serviceKeyCommand       = `bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" |` +
+		registryLoginCommand        = `bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" | helm registry login nvcr.io --username "\$oauthtoken" --password-stdin'`
+		serviceMonitorCommand       = "kubectl get servicemonitor/nvcf-default-monitors-nvca --namespace monitoring --context k3d-ncp-local-compute-1 -o name"
+		podMonitorCommand           = "kubectl get podmonitor/nvcf-default-monitors-worker --namespace monitoring --context k3d-ncp-local-compute-1 -o name"
+		absentServiceMonitorCommand = "kubectl get servicemonitor/nvcf-default-monitors-state-metrics --namespace monitoring --context k3d-ncp-local-compute-1 --ignore-not-found -o name"
+		collectorEnabledCommand     = `bash -c 'set -eo pipefail; helm get values nvca-operator --namespace nvca-operator --kube-context k3d-ncp-local-compute-1 -o json | jq -r ".selfManaged.otelCollector.enabled"'`
+		serviceKeyCommand           = `bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" |` +
 			` kubectl --context k3d-ncp-local-compute-1 create secret generic ngc-service-api-key` +
 			` --namespace nvca-system --from-file=ngc-service-api-key=/dev/stdin --dry-run=client -o yaml |` +
 			` kubectl --context k3d-ncp-local-compute-1 apply -f -'`
@@ -587,6 +572,7 @@ func TestObservabilityComputeFeatureFileWiresToSteps(t *testing.T) {
 		"k3d cluster get ncp-local": {ExitCode: 1},
 		serviceMonitorCommand:       {ExitCode: 0},
 		podMonitorCommand:           {ExitCode: 0},
+		absentServiceMonitorCommand: {ExitCode: 0},
 		collectorEnabledCommand:     {ExitCode: 0, Stdout: "true\n"},
 		"helm list --all-namespaces --kube-context k3d-ncp-local-compute-1 -o json": {
 			ExitCode: 0,
@@ -595,10 +581,6 @@ func TestObservabilityComputeFeatureFileWiresToSteps(t *testing.T) {
 		"kubectl get opentelemetrycollector nvcf-observability -n monitoring --context k3d-ncp-local-compute-1 -o jsonpath='{.spec.targetAllocator.enabled}'": {
 			ExitCode: 0,
 			Stdout:   "true",
-		},
-		"kubectl get servicemonitor --namespace monitoring --context k3d-ncp-local-compute-1 -o name": {
-			ExitCode: 0,
-			Stdout:   "servicemonitor.monitoring.coreos.com/nvcf-default-monitors-nvca\n",
 		},
 		"helm status function-autoscaler --namespace nvcf --kube-context k3d-ncp-local-compute-1": {
 			ExitCode: 1,
@@ -630,6 +612,11 @@ func TestObservabilityComputeFeatureFileWiresToSteps(t *testing.T) {
 	}
 
 	runs := suite.Runner.(*fakeRunner).runs
+	for _, command := range []string{serviceMonitorCommand, podMonitorCommand, absentServiceMonitorCommand} {
+		if !commandRanExactly(runs, command) {
+			t.Fatalf("exact command was never invoked: %s", command)
+		}
+	}
 	if !commandRanThatContains(runs, "kubectl --context k3d-ncp-local-compute-1 delete pod --namespace nvca-system") {
 		t.Fatal("NVCA restart command was never invoked")
 	}
@@ -686,16 +673,9 @@ func observabilityComputeHelmListJSON() string {
 // local context and verifies that one shared stack serves both monitor sets.
 func TestObservabilityAllFeatureFileWiresToSteps(t *testing.T) {
 	const (
-		registryLoginCommand   = `bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" | helm registry login nvcr.io --username "\$oauthtoken" --password-stdin'`
-		serviceMonitorsCommand = "kubectl get servicemonitor/nvcf-default-monitors-state-metrics" +
-			" servicemonitor/nvcf-default-monitors-grpc-proxy" +
-			" servicemonitor/nvcf-default-monitors-llm-api-gateway" +
-			" servicemonitor/nvcf-default-monitors-invocation-service" +
-			" servicemonitor/nvcf-default-monitors-nvca" +
-			" --namespace monitoring --context k3d-ncp-local"
-		podMonitorsCommand = "kubectl get podmonitor/nvcf-default-monitors-dcgm" +
-			" podmonitor/nvcf-default-monitors-worker" +
-			" --namespace monitoring --context k3d-ncp-local"
+		registryLoginCommand    = `bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" | helm registry login nvcr.io --username "\$oauthtoken" --password-stdin'`
+		serviceMonitorCommand   = "kubectl get servicemonitor/nvcf-default-monitors-state-metrics --namespace monitoring --context k3d-ncp-local -o name"
+		podMonitorCommand       = "kubectl get podmonitor/nvcf-default-monitors-worker --namespace monitoring --context k3d-ncp-local -o name"
 		collectorEnabledCommand = `bash -c 'set -eo pipefail; helm get values nvca-operator --namespace nvca-operator --kube-context k3d-ncp-local -o json | jq -r ".selfManaged.otelCollector.enabled"'`
 		serviceKeyCommand       = `bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" |` +
 			` kubectl --context k3d-ncp-local create secret generic ngc-service-api-key` +
@@ -711,8 +691,8 @@ func TestObservabilityAllFeatureFileWiresToSteps(t *testing.T) {
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
 		registryLoginCommand:           {ExitCode: 0},
 		"k3d cluster get ncp-local-cp": {ExitCode: 1},
-		serviceMonitorsCommand:         {ExitCode: 0},
-		podMonitorsCommand:             {ExitCode: 0},
+		serviceMonitorCommand:          {ExitCode: 0},
+		podMonitorCommand:              {ExitCode: 0},
 		collectorEnabledCommand:        {ExitCode: 0, Stdout: "true\n"},
 		serviceKeyCommand:              {ExitCode: 0},
 		restartNVCACommand:             {ExitCode: 0},
@@ -752,8 +732,8 @@ func TestObservabilityAllFeatureFileWiresToSteps(t *testing.T) {
 	runs := suite.Runner.(*fakeRunner).runs
 	for _, command := range []string{
 		registryLoginCommand,
-		serviceMonitorsCommand,
-		podMonitorsCommand,
+		serviceMonitorCommand,
+		podMonitorCommand,
 		collectorEnabledCommand,
 		serviceKeyCommand,
 		restartNVCACommand,
@@ -1427,6 +1407,7 @@ func TestMultiClusterEKSHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		"NVCT_BDD_TASK_BACKEND=" + computeClusterName,
 		"tests/bdd/scripts/run-nvct-task-smoke.sh",
 	}, " ")
+	pullSecretCommand := "kubectl get secret/nvcr-pull-secret --namespace nvca-system --context " + computeContext + " -o name"
 
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
 		// @gateway-setup: control-plane gateway address -> EKS_GATEWAY_ADDR.
@@ -1448,6 +1429,7 @@ func TestMultiClusterEKSHelmfileFeatureFileWiresToSteps(t *testing.T) {
 `},
 		// compute nvca-operator helm list assertion.
 		"helm list --all-namespaces --kube-context " + computeContext + " -o json": {ExitCode: 0, Stdout: helmListNVCAJSON()},
+		pullSecretCommand: {ExitCode: 0},
 		// @function-lifecycle: function invoke returns the echo payload.
 		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/out/nvcf-cli-eks-bdd-multi.yaml function invoke --request-body '{\"message\":\"bdd-echo\",\"repeats\":1}' --timeout 120 --poll-duration 5": {
 			ExitCode: 0,
@@ -1493,6 +1475,9 @@ func TestMultiClusterEKSHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	}
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "deploy/stacks/nvcf-compute-plane install") {
 		t.Fatal("compute-plane install make target was never invoked")
+	}
+	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, pullSecretCommand) {
+		t.Fatal("compute-plane pull-secret propagation assertion was never invoked")
 	}
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "function invoke") {
 		t.Fatal("function invoke CLI command was never invoked")

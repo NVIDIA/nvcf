@@ -138,7 +138,8 @@ refactor in every consumer; that is a feature.
 | `Then the rendered manifests in {string} under directories matching {string} should contain:` (table) | Positive rendered-manifest assertion scoped to files below a directory whose name matches the supplied shell pattern, such as `*-nats`. The render directory, directory-name pattern, and table values support `${VAR}` expansion. |
 | `Then the rendered manifests in {string} should not contain:` (table) | Requires a `text` header and one or more fixed strings. Recursively inspects regular files under the repo-relative directory and fails if any listed string appears. `${VAR}` expansion applies to the path and table values. |
 | `Then these Helm releases should be deployed using context {string}:` (table) | Requires `name` and `namespace` headers, with an optional `revision` header. Runs one explicit-context, all-namespaces `helm list` and asserts that every listed release has status `deployed`; non-empty revision cells are also matched. |
-| `Then these ServiceMonitors should exist in namespace {string} using context {string}:` (table) | Requires a `name` header and one or more names. Runs one `kubectl get` with every named ServiceMonitor; exit code 0 proves every listed resource exists. |
+| `Then these Kubernetes resources should exist in namespace {string} using context {string}:` (table) | Requires `kind` and `name` headers. Gets each named resource with the explicit namespace and context, and reports the row whose resource is missing. |
+| `Then these Kubernetes resources should not exist in namespace {string} using context {string}:` (table) | Requires `kind` and `name` headers. Gets each named resource with `--ignore-not-found` and requires empty name output, so absence does not depend on human-readable error text. |
 
 #### YAML comparison semantics
 
@@ -477,9 +478,18 @@ type HelmReleaseExpectation struct {
 // JSON output with status deployed and, when provided, the expected revision.
 func HelmReleasesDeployed(raw string, expected []HelmReleaseExpectation) error
 
-// ServiceMonitorExistenceCommand builds one kubectl get command whose
-// successful exit proves every named ServiceMonitor exists.
-func ServiceMonitorExistenceCommand(namespace, kubeContext string, names []string) (string, error)
+// KubernetesResource identifies one resource by kind and name.
+type KubernetesResource struct {
+    Kind string
+    Name string
+}
+
+// KubernetesResourceGetCommand builds an explicit-context kubectl get for one
+// resource. ignoreNotFound makes a missing resource produce empty name output.
+func KubernetesResourceGetCommand(namespace, kubeContext string, resource KubernetesResource, ignoreNotFound bool) (string, error)
+
+// KubernetesResourceAbsent requires empty output from an ignore-not-found get.
+func KubernetesResourceAbsent(raw string, resource KubernetesResource) error
 ```
 
 #### steps package

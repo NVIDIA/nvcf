@@ -546,24 +546,99 @@ func TestSingleClusterBootstrapCachesAcrossCalls(t *testing.T) {
 	}
 }
 
-func TestServiceMonitorsShouldExistRunsSingleExplicitGet(t *testing.T) {
+func TestKubernetesResourcesShouldExistRunsExplicitGets(t *testing.T) {
 	sc, fake := newScenarioContext(t)
 	fake.result = harness.Result{ExitCode: 0}
 	table := docTable(t, [][]string{
-		{"name"},
-		{"nvcf-default-monitors-state-metrics"},
-		{"nvcf-default-monitors-grpc-proxy"},
+		{"kind", "name"},
+		{"ServiceMonitor", "nvcf-default-monitors-state-metrics"},
+		{"PodMonitor", "nvcf-default-monitors-worker"},
 	})
 
-	if err := sc.serviceMonitorsShouldExist(context.Background(), "monitoring", "k3d-ncp-local", table); err != nil {
-		t.Fatalf("assert ServiceMonitors: %v", err)
+	if err := sc.kubernetesResourcesShouldExist(context.Background(), "monitoring", "k3d-ncp-local", table); err != nil {
+		t.Fatalf("assert Kubernetes resources: %v", err)
 	}
-	if len(fake.runs) != 1 {
-		t.Fatalf("runs = %d, want 1", len(fake.runs))
+	if len(fake.runs) != 2 {
+		t.Fatalf("runs = %d, want 2", len(fake.runs))
 	}
-	want := "kubectl get servicemonitor/nvcf-default-monitors-state-metrics servicemonitor/nvcf-default-monitors-grpc-proxy --namespace monitoring --context k3d-ncp-local"
-	if fake.runs[0].command != want {
-		t.Fatalf("command = %q, want %q", fake.runs[0].command, want)
+	want := []string{
+		"kubectl get servicemonitor/nvcf-default-monitors-state-metrics --namespace monitoring --context k3d-ncp-local -o name",
+		"kubectl get podmonitor/nvcf-default-monitors-worker --namespace monitoring --context k3d-ncp-local -o name",
+	}
+	for index, run := range fake.runs {
+		if run.command != want[index] {
+			t.Fatalf("command %d = %q, want %q", index+1, run.command, want[index])
+		}
+	}
+}
+
+func TestKubernetesResourcesShouldExistNamesFailingRow(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 1}
+	table := docTable(t, [][]string{
+		{"kind", "name"},
+		{"ServiceMonitor", "missing-monitor"},
+	})
+
+	err := sc.kubernetesResourcesShouldExist(context.Background(), "monitoring", "k3d-ncp-local", table)
+	if err == nil || !strings.Contains(err.Error(), "row 1") || !strings.Contains(err.Error(), "ServiceMonitor/missing-monitor should exist") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestKubernetesResourcesShouldNotExistUsesIgnoreNotFound(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0}
+	table := docTable(t, [][]string{
+		{"kind", "name"},
+		{"Secret", "nvcr-pull-secret"},
+	})
+
+	if err := sc.kubernetesResourcesShouldNotExist(context.Background(), "nvca-system", "k3d-ncp-local", table); err != nil {
+		t.Fatalf("assert Kubernetes resource absence: %v", err)
+	}
+	want := "kubectl get secret/nvcr-pull-secret --namespace nvca-system --context k3d-ncp-local --ignore-not-found -o name"
+	if len(fake.runs) != 1 || fake.runs[0].command != want {
+		t.Fatalf("runs = %#v, want %q", fake.runs, want)
+	}
+}
+
+func TestKubernetesResourcesShouldNotExistNamesExistingResource(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0, Stdout: "secret/nvcr-pull-secret\n"}
+	table := docTable(t, [][]string{
+		{"kind", "name"},
+		{"Secret", "nvcr-pull-secret"},
+	})
+
+	err := sc.kubernetesResourcesShouldNotExist(context.Background(), "nvca-system", "k3d-ncp-local", table)
+	if err == nil || !strings.Contains(err.Error(), "row 1") || !strings.Contains(err.Error(), "Secret/nvcr-pull-secret exists") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestKubernetesResourceTableRejectsEmptyFields(t *testing.T) {
+	for _, row := range [][]string{{"", "name"}, {"Secret", ""}} {
+		table := docTable(t, [][]string{{"kind", "name"}, row})
+		if _, err := tableToKubernetesResources(table); err == nil {
+			t.Fatalf("expected validation error for row %#v", row)
+		}
+	}
+}
+
+func TestKubernetesResourcesValidateAllRowsBeforeRunning(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	table := docTable(t, [][]string{
+		{"kind", "name"},
+		{"Secret", "valid-secret"},
+		{"PodMonitor", ""},
+	})
+
+	if err := sc.kubernetesResourcesShouldExist(context.Background(), "monitoring", "k3d-ncp-local", table); err == nil {
+		t.Fatal("expected validation error")
+	}
+	if len(fake.runs) != 0 {
+		t.Fatalf("runs = %d, want 0 before all rows validate", len(fake.runs))
 	}
 }
 

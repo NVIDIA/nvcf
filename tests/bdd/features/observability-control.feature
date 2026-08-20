@@ -65,19 +65,15 @@ Feature: Install local Helmfile observability with the control profile
     When I successfully run command "kubectl get opentelemetrycollector nvcf-observability -n monitoring --context k3d-ncp-local -o jsonpath='{.spec.targetAllocator.enabled}'"
     And the command output should contain "true"
 
-    Then these ServiceMonitors should exist in namespace "monitoring" using context "k3d-ncp-local":
-      | name                                             |
-      | nvcf-default-monitors-state-metrics              |
-      | nvcf-default-monitors-grpc-proxy                  |
-      | nvcf-default-monitors-llm-api-gateway             |
-      | nvcf-default-monitors-invocation-service          |
+    Then these Kubernetes resources should exist in namespace "monitoring" using context "k3d-ncp-local":
+      | kind           | name                                             |
+      | ServiceMonitor | nvcf-default-monitors-state-metrics              |
+      | ServiceMonitor | nvcf-default-monitors-grpc-proxy                  |
+      | ServiceMonitor | nvcf-default-monitors-llm-api-gateway             |
+      | ServiceMonitor | nvcf-default-monitors-invocation-service          |
 
-    When I run command "kubectl get servicemonitor nvcf-default-monitors-nvca -n monitoring --context k3d-ncp-local"
-    Then the command exit code should be 1
-    And the command output should contain "NotFound"
-    When I run command "kubectl get podmonitor nvcf-default-monitors-dcgm -n monitoring --context k3d-ncp-local"
-    Then the command exit code should be 1
-    And the command output should contain "NotFound"
-    When I run command "kubectl get podmonitor nvcf-default-monitors-worker -n monitoring --context k3d-ncp-local"
-    Then the command exit code should be 1
-    And the command output should contain "NotFound"
+    Then these Kubernetes resources should not exist in namespace "monitoring" using context "k3d-ncp-local":
+      | kind           | name                          |
+      | ServiceMonitor | nvcf-default-monitors-nvca    |
+      | PodMonitor     | nvcf-default-monitors-dcgm    |
+      | PodMonitor     | nvcf-default-monitors-worker  |

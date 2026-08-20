@@ -46,7 +46,8 @@ func registerAssertionSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^the rendered manifests in "([^"]*)" under directories matching "([^"]*)" should contain:$`, sc.renderedManifestsUnderMatchingDirectoriesShouldContain)
 	ctx.Step(`^the rendered manifests in "([^"]*)" should not contain:$`, sc.renderedManifestsShouldNotContain)
 	ctx.Step(`^these Helm releases should be deployed using context "([^"]*)":$`, sc.helmReleasesShouldBeDeployed)
-	ctx.Step(`^these ServiceMonitors should exist in namespace "([^"]*)" using context "([^"]*)":$`, sc.serviceMonitorsShouldExist)
+	ctx.Step(`^these Kubernetes resources should exist in namespace "([^"]*)" using context "([^"]*)":$`, sc.kubernetesResourcesShouldExist)
+	ctx.Step(`^these Kubernetes resources should not exist in namespace "([^"]*)" using context "([^"]*)":$`, sc.kubernetesResourcesShouldNotExist)
 }
 
 func (sc *ScenarioContext) commandExitCodeShouldBe(expected int) error {
@@ -245,19 +246,76 @@ func tableToHelmReleaseExpectations(table *godog.Table) ([]dsl.HelmReleaseExpect
 	return expected, nil
 }
 
-func (sc *ScenarioContext) serviceMonitorsShouldExist(ctx context.Context, namespace, kubeContext string, table *godog.Table) error {
-	names, err := tableToSingleColumn(table, "name")
+func (sc *ScenarioContext) kubernetesResourcesShouldExist(ctx context.Context, namespace, kubeContext string, table *godog.Table) error {
+	resources, err := tableToKubernetesResources(table)
 	if err != nil {
 		return err
 	}
-	command, err := dsl.ServiceMonitorExistenceCommand(namespace, kubeContext, names)
+	for index, resource := range resources {
+		command, err := dsl.KubernetesResourceGetCommand(namespace, kubeContext, resource, false)
+		if err != nil {
+			return fmt.Errorf("row %d (%s/%s): %w", index+1, resource.Kind, resource.Name, err)
+		}
+		if err := sc.runAndRecord(ctx, command); err != nil {
+			return fmt.Errorf("row %d (%s/%s): %w", index+1, resource.Kind, resource.Name, err)
+		}
+		if err := sc.commandExitCodeShouldBe(0); err != nil {
+			return fmt.Errorf("row %d: Kubernetes resource %s/%s should exist: %w", index+1, resource.Kind, resource.Name, err)
+		}
+	}
+	return nil
+}
+
+func (sc *ScenarioContext) kubernetesResourcesShouldNotExist(ctx context.Context, namespace, kubeContext string, table *godog.Table) error {
+	resources, err := tableToKubernetesResources(table)
 	if err != nil {
 		return err
 	}
-	if err := sc.runAndRecordWith(ctx, command, sc.Suite.Runner.Run); err != nil {
-		return err
+	for index, resource := range resources {
+		command, err := dsl.KubernetesResourceGetCommand(namespace, kubeContext, resource, true)
+		if err != nil {
+			return fmt.Errorf("row %d (%s/%s): %w", index+1, resource.Kind, resource.Name, err)
+		}
+		if err := sc.runAndRecord(ctx, command); err != nil {
+			return fmt.Errorf("row %d (%s/%s): %w", index+1, resource.Kind, resource.Name, err)
+		}
+		if err := sc.commandExitCodeShouldBe(0); err != nil {
+			return fmt.Errorf("row %d: Kubernetes resource %s/%s absence check failed: %w", index+1, resource.Kind, resource.Name, err)
+		}
+		if err := dsl.KubernetesResourceAbsent(sc.LastResult.Stdout, resource); err != nil {
+			return fmt.Errorf("row %d: %w", index+1, err)
+		}
 	}
-	return sc.commandExitCodeShouldBe(0)
+	return nil
+}
+
+func tableToKubernetesResources(table *godog.Table) ([]dsl.KubernetesResource, error) {
+	if table == nil || len(table.Rows) < 2 {
+		return nil, fmt.Errorf("table must have kind and name headers and at least one data row")
+	}
+	headers := table.Rows[0].Cells
+	if len(headers) != 2 || strings.TrimSpace(headers[0].Value) != "kind" || strings.TrimSpace(headers[1].Value) != "name" {
+		return nil, fmt.Errorf("table headers must be kind and name")
+	}
+
+	resources := make([]dsl.KubernetesResource, 0, len(table.Rows)-1)
+	for index, row := range table.Rows[1:] {
+		if len(row.Cells) != len(headers) {
+			return nil, fmt.Errorf("row %d has %d cells, expected %d", index+1, len(row.Cells), len(headers))
+		}
+		resource := dsl.KubernetesResource{
+			Kind: strings.TrimSpace(dsl.Interpolate(row.Cells[0].Value)),
+			Name: strings.TrimSpace(dsl.Interpolate(row.Cells[1].Value)),
+		}
+		if resource.Kind == "" {
+			return nil, fmt.Errorf("row %d has an empty kind", index+1)
+		}
+		if resource.Name == "" {
+			return nil, fmt.Errorf("row %d has an empty name", index+1)
+		}
+		resources = append(resources, resource)
+	}
+	return resources, nil
 }
 
 // tableToJSONRows converts a header-first Godog table into a slice of
