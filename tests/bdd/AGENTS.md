@@ -175,6 +175,20 @@ multi-cluster feature:
    ... no matching key(s) found"). Switch the context to the
    compute cluster BEFORE `make register-cluster`, not after.
 
+## Topology-sensitive coverage
+
+Multi-cluster installation and registration do not prove worker traffic.
+Changes to worker endpoints, callbacks, request routers, reverse tunnels,
+transport PKI, or DNS need a split-cluster check that launches a real worker on
+the compute cluster and invokes it through the control plane. Profile and
+render assertions and single-cluster invocations are supplemental.
+
+Probe worker-facing names and ports from the compute cluster. Do not rely on a
+control-plane `*.svc.cluster.local` name crossing the cluster boundary. If the
+topology creates a compute-cluster alias Service and Endpoints for that name,
+probe the alias before invoking. On failure, collect evidence from both
+clusters and identify the first broken hop.
+
 ## Tests
 
 - Every Go file under `tests/bdd/` carries the SPDX header in
