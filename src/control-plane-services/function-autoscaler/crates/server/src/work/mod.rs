@@ -16,7 +16,6 @@
  */
 
 use crate::cassandra::distributed_lock::DistributedLockManager;
-use crate::cassandra::statements::ActiveFunctionTable;
 use crate::health::HealthStatus;
 use crate::metrics;
 use crate::models::NodeHealth;
@@ -88,6 +87,14 @@ use discovery::get_recently_invoked_functions;
 
 const TIMESERIES_DB_QUERY_STEP: StdDuration = StdDuration::from_secs(60); // 1 minute step for TimeseriesDb queries
 pub const CALCULATE_UTILIZATION_LOCK_PREFIX: &str = "util_lock";
+const ACTIVE_FUNCTION_SET_NAME: &str = "RecentlyInvokedFunctions";
+
+fn scaling_lock_name(bucket_index: usize) -> String {
+    format!(
+        "{}_{}_{}",
+        CALCULATE_UTILIZATION_LOCK_PREFIX, bucket_index, ACTIVE_FUNCTION_SET_NAME
+    )
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct MetricEnvironments {
@@ -497,10 +504,6 @@ async fn llm_gateway_recently_invoked(
 }
 
 /// Get current worker count for non-BYOC functions from TimeseriesDb.
-/// We use this instead of details.num_workers because the history table is only updated when
-/// discovery adds or moves a function; if a function stays in the same table, num_workers is
-/// never refreshed and scaling would report stale counts (e.g. 2 when TimeseriesDb shows 3).
-///
 /// Returns `Ok(None)` when no worker series matched the query at all. Callers use that as the
 /// signal to try gateway metrics before control-plane metrics. `Ok(Some(0))` would mean
 /// "series exists but count parsed as 0," which we don't
@@ -751,12 +754,10 @@ pub async fn run_autoscaling_logic_p0(
 ) -> Result<()> {
     tracing::info!("Starting P0 autoscaling logic for env: {}", env);
 
-    // Process recently invoked functions (P0 priority)
-    make_scaling_requests_for_table(
+    make_scaling_requests(
         cassandra_service,
         timeseries_db_client,
         nvcf_api_service,
-        ActiveFunctionTable::RecentlyInvokedFunctions,
         scaling_settings,
         env,
         ignore_env,
@@ -770,13 +771,11 @@ pub async fn run_autoscaling_logic_p0(
     Ok(())
 }
 
-// Function that makes scaling requests for a specific table
 #[allow(clippy::too_many_arguments)]
-async fn make_scaling_requests_for_table(
+async fn make_scaling_requests(
     cassandra_service: Arc<CassandraServiceManager>,
     timeseries_db_client: Arc<TimeseriesDbClient>,
     nvcf_api_service: Arc<NvcfApiService>,
-    table: ActiveFunctionTable,
     scaling_settings: Arc<ScalingSettings>,
     env: &str,
     ignore_env: bool,
@@ -799,14 +798,13 @@ async fn make_scaling_requests_for_table(
     for (bucket_index, (start_token, end_token)) in bucket_ranges.iter() {
         let token_range = [*start_token, *end_token];
         let functions_in_bucket = cassandra_service
-            .get_active_functions_with_token_range(&token_range, page_size, table)
+            .get_active_functions_with_token_range(&token_range, page_size)
             .await?;
 
         tracing::info!(
-            "Processing {} functions in bucket {} for table {:?}",
+            "Processing {} recently invoked functions in bucket {}",
             functions_in_bucket.len(),
-            bucket_index,
-            table
+            bucket_index
         );
 
         if functions_in_bucket.is_empty() {
@@ -814,10 +812,7 @@ async fn make_scaling_requests_for_table(
         }
 
         // Try to acquire distributed lock for this bucket
-        let lock_name = format!(
-            "{}_{}_{:?}",
-            CALCULATE_UTILIZATION_LOCK_PREFIX, bucket_index, table
-        );
+        let lock_name = scaling_lock_name(*bucket_index);
         if let Ok(Some(_lock_guard)) = lock_manager
             .try_acquire(
                 lock_name,
@@ -1049,7 +1044,7 @@ async fn make_scaling_requests_for_table(
 
     if let Some((bucket_index, error)) = first_task_error {
         Err(error.context(format!(
-            "{task_failures} per-function scaling task(s) failed for table {table:?}; first failure was in bucket {bucket_index}"
+            "{task_failures} per-function scaling task(s) failed; first failure was in bucket {bucket_index}"
         )))
     } else {
         Ok(())
@@ -1120,6 +1115,11 @@ mod tests {
     use super::*;
     use crate::timeseries_db::TimeseriesDbSettings;
     use uuid::Uuid;
+
+    #[test]
+    fn scaling_lock_name_preserves_existing_coordination_key() {
+        assert_eq!(scaling_lock_name(7), "util_lock_7_RecentlyInvokedFunctions");
+    }
 
     // ---- Helpers for the metric-acquisition tests ----
 
