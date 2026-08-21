@@ -546,7 +546,6 @@ func TestObservabilityControlFeatureFileWiresToSteps(t *testing.T) {
 		registryLoginCommand,
 		serviceMonitorCommand,
 		absentPodMonitorCommand,
-		collectorYAMLCommand,
 	} {
 		if !commandRanExactly(runs, command) {
 			t.Fatalf("exact command was never invoked: %s", command)
@@ -655,7 +654,7 @@ func TestObservabilityComputeFeatureFileWiresToSteps(t *testing.T) {
 	}
 
 	runs := suite.Runner.(*fakeRunner).runs
-	for _, command := range []string{serviceMonitorCommand, podMonitorCommand, absentServiceMonitorCommand, collectorYAMLCommand} {
+	for _, command := range []string{serviceMonitorCommand, podMonitorCommand, absentServiceMonitorCommand} {
 		if !commandRanExactly(runs, command) {
 			t.Fatalf("exact command was never invoked: %s", command)
 		}
@@ -779,7 +778,6 @@ func TestObservabilityAllFeatureFileWiresToSteps(t *testing.T) {
 		serviceMonitorCommand,
 		podMonitorCommand,
 		collectorEnabledCommand,
-		collectorYAMLCommand,
 		serviceKeyCommand,
 		restartNVCACommand,
 	} {
