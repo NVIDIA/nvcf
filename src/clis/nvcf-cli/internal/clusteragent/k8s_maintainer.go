@@ -494,15 +494,17 @@ func (m *k8sMaintainer) waitForICMSRequestGone(ctx context.Context, namespace, n
 				// The caller's own context ended, not our synthetic deadline.
 				return false, ctx.Err()
 			}
-			if localDeadlineExceeded {
+			if localDeadlineExceeded && errors.Is(err, context.DeadlineExceeded) {
 				// Our per-Get deadline (== the overall deadline) is what ended
 				// the call: treat exactly like a timeout that elapsed between
-				// polls. Checking getCtx.Err() rather than
-				// errors.Is(err, context.DeadlineExceeded) matters here: a
-				// client/transport-level timeout unrelated to getCtx can also
-				// produce a context.DeadlineExceeded-shaped error before our
-				// deadline is actually reached, and that must still surface
-				// as a real error, not a false "still terminating".
+				// polls. Both checks matter: getCtx.Err() alone would also
+				// match an unrelated client/transport-level timeout that
+				// races with our deadline; errors.Is(err, ...) alone would
+				// also match a spurious deadline-shaped error the transport
+				// returns well before our deadline actually elapses. Only
+				// requiring both guards against silently discarding a real,
+				// unrelated error (e.g. Forbidden) that happens to land in
+				// the same instant our deadline fires.
 				return true, nil
 			}
 			return false, err

@@ -863,6 +863,45 @@ func TestKillClassifiesOnlyLocalDeadlineAsTerminating(t *testing.T) {
 	}
 }
 
+// TestKillPreservesUnrelatedErrorRacingWithLocalDeadline is a regression
+// test for the inverse edge case: even when our own synthetic deadline has
+// genuinely elapsed (a vanishingly small Timeout guarantees getCtx.Err() ==
+// DeadlineExceeded by the time it's checked), an unrelated error returned by
+// the same Get call (e.g. Forbidden) must not be discarded and silently
+// replaced with a "still terminating" result. Both localDeadlineExceeded and
+// errors.Is(err, context.DeadlineExceeded) must hold before that happens.
+func TestKillPreservesUnrelatedErrorRacingWithLocalDeadline(t *testing.T) {
+	cr := icmsRequestWithFinalizers(testRequestsNS, "r1", "fn-1", "v1", "nvca.finalizers.nvidia.io")
+	m, dc, _ := newFakeMaintainer([]runtime.Object{defaultBackend(), cr}, nil)
+	dc.PrependReactor("delete", "icmsrequests", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, nil
+	})
+	wantErr := errors.New("forbidden")
+	dc.PrependReactor("get", "icmsrequests", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if ga, ok := action.(k8stesting.GetAction); ok && ga.GetName() == "r1" {
+			return true, nil, wantErr
+		}
+		return false, nil, nil
+	})
+
+	_, err := m.KillFunction(context.Background(), "fn-1", "v1", KillOptions{
+		BackendNS: testBackendNS,
+		// A vanishingly small timeout: our own getCtx deadline will have
+		// elapsed by the time we check getCtx.Err(), but the reactor's
+		// "forbidden" error has nothing to do with that deadline.
+		Timeout: time.Nanosecond,
+	})
+	if err == nil {
+		t.Fatal("expected the unrelated Get error to surface")
+	}
+	if !strings.Contains(err.Error(), "forbidden") {
+		t.Errorf("expected the original cause (%v) to be preserved, got: %v", wantErr, err)
+	}
+	if strings.Contains(err.Error(), "still terminating") {
+		t.Errorf("an unrelated error racing with the local deadline must not be misreported as terminating, got: %v", err)
+	}
+}
+
 func TestResolveClusterAppliesNamespaceDefaults(t *testing.T) {
 	// Backend with no system/requests namespace set.
 	b := backendObj(testBackendNS, testClusterID, testCluster, "", "")
