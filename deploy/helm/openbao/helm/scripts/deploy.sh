@@ -187,6 +187,37 @@ initialize_cluster() {
     done
     log_info "All OpenBao pods are ready"
 
+    # Idempotency guard. This script runs as a post-install Job whose pod is
+    # retried by the Kubernetes Job controller (backoffLimit defaults to 6, so
+    # up to 7 attempts within a single helm install). If an earlier attempt
+    # already ran `bao operator init` (for example it initialized the cluster
+    # and then failed later during the raft bootstrap), re-running it returns
+    # HTTP 400 "Vault is already initialized" and the attempt bails out, so the
+    # bootstrap can never finish. Treat an already-initialized cluster as
+    # success and reuse the stored secrets, letting the retry pick up where the
+    # previous attempt stopped.
+    local init_status=$(kubectl exec ${statefulset}-0 -c openbao -n ${namespace} -- \
+        bao status -format=json 2>/dev/null | jq -r '.initialized')
+    if [ "${init_status}" = "true" ]; then
+        log_info "OpenBao cluster already initialized; skipping 'bao operator init'"
+        # "Secret exists" is not a sufficient check: the unseal secret is
+        # pre-created empty and only patched with the real key later, so
+        # present-but-empty is a reachable state. These helpers return "" both
+        # when the secret is missing and when its value is empty. Without this
+        # check we would fall through to `bao operator unseal ""` and report a
+        # far less actionable error. An initialized cluster whose keys were
+        # never persisted cannot be recovered.
+        local stored_unseal_key=$(get_unseal_key "${namespace}" "${statefulset}")
+        local stored_root_token=$(get_root_token "${namespace}" "${statefulset}")
+        if [ -z "${stored_unseal_key}" ] || [ -z "${stored_root_token}" ]; then
+            log_error "Cluster is initialized but its stored unseal key and/or root token are missing or empty."
+            log_error "The generated keys are unrecoverable. Run ./cleanup.sh and reinstall."
+            return 1
+        fi
+        log_success "Reusing unseal key and root token from '${statefulset}-unseal' and '${statefulset}-root-token'"
+        return 0
+    fi
+
     log_info "Initializing OpenBao cluster"
     local init_output=$(kubectl exec ${statefulset}-0 -c openbao -n ${namespace} -- \
         bao operator init \
@@ -225,6 +256,83 @@ get_unseal_key() {
     kubectl get secret ${statefulset}-unseal -n ${namespace} -o jsonpath='{.data.unseal_key}' | base64 -d
 }
 
+# Wait until the bootstrap node (pod 0) has won leader election and can serve
+# raft challenges. After being unsealed the node must become the active leader
+# before any peer joins; joining earlier returns HTTP 500 "failed to join raft
+# cluster: failed to get raft challenge". This replaces a fixed `sleep 5` that
+# raced leader election.
+wait_for_active_leader() {
+    local namespace=$1
+    local statefulset=$2
+    local timeout=${3:-120}
+    local pod="${statefulset}-0"
+    local end=$((SECONDS + timeout))
+
+    log_info "Waiting for ${pod} to become the active Raft leader (timeout: ${timeout}s)..."
+    while true; do
+        local status_json=$(kubectl exec "${pod}" -c openbao -n "${namespace}" -- \
+            bao status -format=json 2>/dev/null)
+        # Read these with plain accessors, never `.field // empty`: jq's `//`
+        # treats boolean false the same as null, so `.sealed // empty` yields
+        # "" for an unsealed node and this loop would never see sealed=false.
+        local initialized=$(echo "${status_json}" | jq -r '.initialized')
+        local sealed=$(echo "${status_json}" | jq -r '.sealed')
+        local ha_mode=$(echo "${status_json}" | jq -r '.ha_mode')
+        if [ "${initialized}" = "true" ] && [ "${sealed}" = "false" ] && [ "${ha_mode}" = "active" ]; then
+            log_success "${pod} is unsealed and active (ha_mode=active)"
+            return 0
+        fi
+        if [ $SECONDS -gt $end ]; then
+            log_error "Timeout waiting for ${pod} to become active leader (initialized=${initialized:-?}, sealed=${sealed:-?}, ha_mode=${ha_mode:-?})"
+            return 1
+        fi
+        log_info "  ${pod} not ready yet (sealed=${sealed:-?}, ha_mode=${ha_mode:-?}); retrying in 3s..."
+        sleep 3
+    done
+}
+
+# True when the pod is already unsealed, and therefore already a working member
+# of the raft cluster. Lets a retry skip peers a previous attempt finished.
+is_pod_unsealed() {
+    local namespace=$1
+    local pod=$2
+    local sealed=$(kubectl exec "${pod}" -c openbao -n "${namespace}" -- \
+        bao status -format=json 2>/dev/null | jq -r '.sealed')
+    [ "${sealed}" = "false" ]
+}
+
+# Join a peer to the raft cluster, retrying the transient "failed to get raft
+# challenge" 500 that can still occur for a few seconds after the leader goes
+# active. Treats an already-joined node as success so retries are idempotent.
+raft_join_with_retry() {
+    local namespace=$1
+    local statefulset=$2
+    local pod=$3
+    local attempts=${4:-12}
+    local i=1
+    # Declare before assigning: with `local out=$(...)` the `local` builtin is
+    # the executed command, so $? would capture the assignment status (always 0)
+    # rather than the kubectl/bao exit code, masking real join failures.
+    local out rc
+    while [ $i -le $attempts ]; do
+        out=$(kubectl exec "${pod}" -c openbao -n "${namespace}" -- \
+            bao operator raft join "http://${statefulset}-0.${statefulset}-internal:8200" 2>&1)
+        rc=$?
+        echo "${out}"
+        if [ $rc -eq 0 ]; then
+            return 0
+        fi
+        if echo "${out}" | grep -qi "already"; then
+            log_info "${pod} is already a member of the Raft cluster"
+            return 0
+        fi
+        log_warn "raft join attempt ${i}/${attempts} for ${pod} failed; retrying in 5s..."
+        sleep 5
+        i=$((i + 1))
+    done
+    return 1
+}
+
 # Step 4: Unseal the cluster
 unseal_cluster() {
     local namespace=$1
@@ -233,30 +341,49 @@ unseal_cluster() {
 
     log_section "Unsealing OpenBao cluster"
 
-    # First unseal the primary node (pod 0)
+    # get_unseal_key returns "" when the secret is missing or still holds the
+    # empty placeholder. initialize_cluster rejects that state before we get
+    # here, but check anyway so this never degrades into
+    # `bao operator unseal ""` and its low-signal error.
+    if [ -z "${unseal_key}" ]; then
+        log_error "No unseal key stored in secret '${statefulset}-unseal'; cannot unseal the cluster."
+        log_error "If the cluster is already initialized the generated keys are unrecoverable. Run ./cleanup.sh and reinstall."
+        return 1
+    fi
+
+    # First unseal the primary node (pod 0). Unsealing an already-unsealed node
+    # is a no-op that exits 0, so this is safe to re-run.
     log_info "Unsealing primary pod ${statefulset}-0"
-    if ! kubectl exec ${statefulset}-0 -n ${namespace} -- \
+    if ! kubectl exec ${statefulset}-0 -c openbao -n ${namespace} -- \
         bao operator unseal ${unseal_key}; then
         log_error "Failed to unseal primary pod ${statefulset}-0"
         return 1
     fi
 
-    # Wait a moment for the primary to be ready
-    sleep 5
+    # Wait for the primary to win leader election and start serving raft
+    # challenges before any peer joins.
+    if ! wait_for_active_leader "${namespace}" "${statefulset}"; then
+        return 1
+    fi
 
     # Join and unseal remaining pods
     for i in {1..2}; do
-        log_info "Joining pod ${statefulset}-${i} to Raft cluster"
-        if ! kubectl exec ${statefulset}-${i} -c openbao -n ${namespace} -- \
-            bao operator raft join http://${statefulset}-0.${statefulset}-internal:8200; then
-            log_error "Failed to join pod ${statefulset}-${i} to Raft cluster"
+        local pod="${statefulset}-${i}"
+        if is_pod_unsealed "${namespace}" "${pod}"; then
+            log_info "Pod ${pod} already unsealed and joined; skipping"
+            continue
+        fi
+
+        log_info "Joining pod ${pod} to Raft cluster"
+        if ! raft_join_with_retry "${namespace}" "${statefulset}" "${pod}"; then
+            log_error "Failed to join pod ${pod} to Raft cluster"
             return 1
         fi
 
-        log_info "Unsealing pod ${statefulset}-${i}"
-        if ! kubectl exec ${statefulset}-${i} -c openbao -n ${namespace} -- \
+        log_info "Unsealing pod ${pod}"
+        if ! kubectl exec ${pod} -c openbao -n ${namespace} -- \
             bao operator unseal ${unseal_key}; then
-            log_error "Failed to unseal pod ${statefulset}-${i}"
+            log_error "Failed to unseal pod ${pod}"
             return 1
         fi
     done
