@@ -39,5 +39,6 @@ apikeys:
   service-id-map:
     nvcf: ${NVCF_SERVICE_ID:nvidia-cloud-functions-ncp-service-id-aketm}
     nvct: ${NVCT_SERVICE_ID:nvidia-cloud-tasks-ncp-service-id-nvcttasks}
+    event-ledger: ${EVENT_LEDGER_SERVICE_ID:nvidia-cloud-events-ncp-service-id-ckozoh6f}
   key-prefix: nvapi-nvcf-stg-
   keep-after-expired-duration: P2D

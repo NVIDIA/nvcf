@@ -59,6 +59,16 @@ class ConfigTest extends BaseIntegrationTest {
     }
 
     @Test
+    void serviceIdMapShouldContainRegisteredServices() {
+        assertThat(environment.getProperty("apikeys.service-id-map.nvcf"))
+                .isEqualTo("nvidia-cloud-functions-ncp-service-id-aketm");
+        assertThat(environment.getProperty("apikeys.service-id-map.nvct"))
+                .isEqualTo("nvidia-cloud-tasks-ncp-service-id-nvcttasks");
+        assertThat(environment.getProperty("apikeys.service-id-map.event-ledger"))
+                .isEqualTo("nvidia-cloud-events-ncp-service-id-ckozoh6f");
+    }
+
+    @Test
     void shouldBeAbleToEncryptAndDecrypt() {
         String encryptedText = jwtService.encryptWithKeyId("92f5fb39-0b6b-4472-9b88-0575870294c0",
                                                            "text");
