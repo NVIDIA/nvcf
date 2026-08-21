@@ -475,7 +475,8 @@ func (c K8sComputeBackend) applyFunctionCreationMessage(ctx context.Context, req
 		return c.bk8s.ApplyICMSRequestStatusChange(ctx, req)
 	}
 
-	c.bk8s.eventRecorder.Eventf(req, corev1.EventTypeNormal, string(types.EventCategoryInstanceCreation), "Creating %v requested instances", instCount)
+	c.bk8s.EmitICMSEventf(req, corev1.EventTypeNormal, string(types.EventCategoryInstanceCreation),
+		"Creating %v requested instances", nil, instCount)
 
 	labelsForReq := nvcatypes.GetLabelsForRequest(req, c.bk8s.featureFlagFetcher)
 	annosForReq := nvcatypes.GetAnnotationsForRequest(req)
@@ -674,7 +675,7 @@ func (c K8sComputeBackend) setupContainerModelCaching(ctx context.Context,
 	switch mc {
 	case ModelCachingCompleted:
 		log.Infof("model caching completed, starting worker creation")
-		c.bk8s.eventRecorder.Eventf(req, corev1.EventTypeNormal, string(types.EventCategoryModelCaching), "%v ready for instance", roPVCName)
+		c.bk8s.EmitICMSEventf(req, corev1.EventTypeNormal, string(types.EventCategoryModelCaching), "%v ready for instance", nil, roPVCName)
 		// Modify the pod volume to be that of the ROPVCName
 		mf = func(pod *corev1.Pod) {
 			for id := range pod.Spec.Volumes {
@@ -702,8 +703,8 @@ func (c K8sComputeBackend) setupContainerModelCaching(ctx context.Context,
 		}
 		return nil, "", fmt.Errorf("model caching is still in progress")
 	case ModelCachingFailed:
-		c.bk8s.eventRecorder.Event(req, corev1.EventTypeWarning,
-			string(types.EventCategoryModelCaching), "Caching setup failed, resort to non-cached workers")
+		c.bk8s.EmitICMSEvent(req, corev1.EventTypeWarning,
+			string(types.EventCategoryModelCaching), "Caching setup failed, resort to non-cached workers", nil)
 		log.Warnf("model caching failed, NVCA will create non-cached workers")
 	}
 	return func(*corev1.Pod) {}, "", nil
@@ -814,8 +815,8 @@ func (c K8sComputeBackend) doHelmChartStorageRequests(ctx context.Context,
 		case nvcav1new.StorageFailed:
 			switch st.Spec.Type {
 			case nvcav1new.ModelCacheRequest:
-				c.bk8s.eventRecorder.Event(req, corev1.EventTypeWarning,
-					string(types.EventCategoryModelCaching), "Caching setup failed, resort to non-cached workers")
+				c.bk8s.EmitICMSEvent(req, corev1.EventTypeWarning,
+					string(types.EventCategoryModelCaching), "Caching setup failed, resort to non-cached workers", nil)
 				log.Error("Model cache storage failed, model caching will be disabled")
 				metrics.EventErrorTotal.WithLabelValues(metrics.WithDefaultLabelValues(EventPVCModelCachingError)...).Inc()
 				metrics.EventErrorTotal.WithLabelValues(metrics.WithDefaultLabelValues(EventModelCachingFailed)...).Inc()
@@ -1083,8 +1084,8 @@ func (c K8sComputeBackend) CreatePodArtifactInstances(ctx context.Context, pod *
 			LastReportedTimestamp: nil,
 		})
 
-		c.bk8s.eventRecorder.Eventf(req, corev1.EventTypeNormal,
-			string(types.EventCategoryInstanceCreation), "Created %v Instance %v", nvcav2beta1.InstanceTypePod, pod.Name)
+		c.bk8s.EmitICMSEventf(req, corev1.EventTypeNormal,
+			string(types.EventCategoryInstanceCreation), "Created %v Instance %v", instanceUpdate(pod.Name), nvcav2beta1.InstanceTypePod, pod.Name)
 	}
 
 	if len(newActiveInstances) != 0 {
@@ -1122,8 +1123,8 @@ func (c K8sComputeBackend) purgeInstanceID(ctx context.Context, req *nvcav2beta1
 		ms.Name = id
 		if err := c.clients.HelmV2.Get(ctx, client.ObjectKeyFromObject(ms), ms); err != nil {
 			if !apierrors.IsNotFound(err) {
-				c.bk8s.eventRecorder.Eventf(req, corev1.EventTypeWarning,
-					string(types.EventCategoryInstanceTermination), "Failed to get instance %v", id)
+				c.bk8s.EmitICMSEventf(req, corev1.EventTypeWarning,
+					string(types.EventCategoryInstanceTermination), "Failed to get instance %v", instanceUpdate(id), id)
 				log.WithError(err).Errorf("failed to get miniservice instance %v, for request %v/%v",
 					id, req.Namespace, req.Name)
 				return false
@@ -1132,8 +1133,8 @@ func (c K8sComputeBackend) purgeInstanceID(ctx context.Context, req *nvcav2beta1
 		} else if ms.DeletionTimestamp == nil {
 			if err := c.clients.HelmV2.Delete(ctx, ms); err != nil {
 				if !apierrors.IsNotFound(err) {
-					c.bk8s.eventRecorder.Eventf(req, corev1.EventTypeWarning,
-						string(types.EventCategoryInstanceTermination), "Failed to stop instance %v", id)
+					c.bk8s.EmitICMSEventf(req, corev1.EventTypeWarning,
+						string(types.EventCategoryInstanceTermination), "Failed to stop instance %v", instanceUpdate(id), id)
 					log.WithError(err).Errorf("failed to terminate miniservice instance %v, for request %v/%v",
 						id, req.Namespace, req.Name)
 					return false
@@ -1141,8 +1142,8 @@ func (c K8sComputeBackend) purgeInstanceID(ctx context.Context, req *nvcav2beta1
 				log.Debug("Miniservice not found, report as terminated")
 			} else {
 				log.Debug("Terminated miniservice")
-				c.bk8s.eventRecorder.Eventf(req, corev1.EventTypeNormal, string(types.EventCategoryInstanceTermination),
-					"Stopped instance %v", id)
+				c.bk8s.EmitICMSEventf(req, corev1.EventTypeNormal, string(types.EventCategoryInstanceTermination),
+					"Stopped instance %v", instanceUpdate(id), id)
 			}
 		}
 
@@ -1160,15 +1161,15 @@ func (c K8sComputeBackend) purgeInstanceID(ctx context.Context, req *nvcav2beta1
 		err := c.clients.K8s.CoreV1().Pods(c.bk8s.podInstanceNamespace).Delete(ctx, id, metav1.DeleteOptions{})
 		if err != nil && !apierrors.IsNotFound(err) {
 			log.WithError(err).Errorf("failed to terminate instance %v, for request %v/%v", id, req.Namespace, req.Name)
-			c.bk8s.eventRecorder.Eventf(req, corev1.EventTypeWarning,
-				string(types.EventCategoryInstanceTermination), "Failed to stop instance %v/%v", c.bk8s.podInstanceNamespace, id)
+			c.bk8s.EmitICMSEventf(req, corev1.EventTypeWarning,
+				string(types.EventCategoryInstanceTermination), "Failed to stop instance %v/%v", instanceUpdate(id), c.bk8s.podInstanceNamespace, id)
 			return false
 		} else if err != nil && apierrors.IsNotFound(err) {
 			log.Debug("Pod not found, report as terminated")
 		} else {
 			log.Debug("Terminated Pod")
-			c.bk8s.eventRecorder.Eventf(req, corev1.EventTypeNormal,
-				string(types.EventCategoryInstanceTermination), "Stopped instance %v/%v", c.bk8s.podInstanceNamespace, id)
+			c.bk8s.EmitICMSEventf(req, corev1.EventTypeNormal,
+				string(types.EventCategoryInstanceTermination), "Stopped instance %v/%v", instanceUpdate(id), c.bk8s.podInstanceNamespace, id)
 		}
 
 		if _, ok := terminatedInstances[id]; !ok {
@@ -1611,12 +1612,15 @@ func (c K8sComputeBackend) GetICMSRequestUpdatesForCreatePodRequest(ctx context.
 				srUpdateInfo.Payload.HealthInfo.ErrorLog = "Container arguments are malformed: " + errMalformedArgsSubstring
 			}
 
+			failureCategory := nvcametrics.ICMSInstanceStateToFailureCategory(srUpdateInfo.Payload.TerminationCause)
+			srUpdateInfo.Payload.FailureCategory = string(failureCategory)
+
 			if m := nvcametrics.FromContext(ctx); m != nil {
 				m.RecordWorkloadStatus(
 					workloadtypes.WorkloadTypeContainer,
 					nvcametrics.ActionToWorkloadKind(req.Spec.Action),
 					workloadtypes.WorkloadStatusFailure,
-					nvcametrics.ICMSInstanceStateToFailureCategory(srUpdateInfo.Payload.TerminationCause),
+					failureCategory,
 				)
 			}
 
@@ -1732,22 +1736,32 @@ func (c K8sComputeBackend) GetICMSRequestUpdatesForCreatePodRequest(ctx context.
 		}
 
 		// Record workload result metric on terminal state transitions.
+		// Default to the explicit success category so a running transition
+		// without a metrics provider still stamps failure_category, matching the
+		// MiniService path which always sets failureCategory before the metric
+		// call regardless of whether a metrics provider is present; needsPurge
+		// overrides it below.
+		failureCategory := workloadtypes.FailureCategoryNone
 		if m := nvcametrics.FromContext(ctx); m != nil {
 			if needsPurge {
+				failureCategory = nvcametrics.ICMSInstanceStateToFailureCategory(tc)
 				m.RecordWorkloadStatus(
 					workloadtypes.WorkloadTypeContainer,
 					nvcametrics.ActionToWorkloadKind(req.Spec.Action),
 					workloadtypes.WorkloadStatusFailure,
-					nvcametrics.ICMSInstanceStateToFailureCategory(tc),
+					failureCategory,
 				)
 			} else if is == types.ICMSInstanceRunning && st.LastReportedStatus != string(types.ICMSInstanceRunning) {
+				failureCategory = workloadtypes.FailureCategoryNone
 				m.RecordWorkloadStatus(
 					workloadtypes.WorkloadTypeContainer,
 					nvcametrics.ActionToWorkloadKind(req.Spec.Action),
 					workloadtypes.WorkloadStatusSuccess,
-					workloadtypes.FailureCategoryNone,
+					failureCategory,
 				)
 			}
+		} else if needsPurge {
+			failureCategory = nvcametrics.ICMSInstanceStateToFailureCategory(tc)
 		}
 
 		return types.ICMSRequestUpdateInfo{
@@ -1763,8 +1777,9 @@ func (c K8sComputeBackend) GetICMSRequestUpdatesForCreatePodRequest(ctx context.
 					ErrorLog:    fPL,
 					ErrorSource: errSource,
 				},
-				SystemFailure: string(tc),
-				InstanceIPs:   instanceIPs,
+				SystemFailure:   string(tc),
+				InstanceIPs:     instanceIPs,
+				FailureCategory: string(failureCategory),
 			},
 		}, nil
 	}
@@ -1929,6 +1944,8 @@ func (c K8sComputeBackend) GetICMSRequestUpdatesForTerminationRequest(ctx contex
 				updateInfo.Payload.Status = types.ICMSRequestInstanceTerminatedByService
 				updateInfo.Payload.TerminationCause = types.ICMSInstanceTerminatedServiceMaintenance
 				updateInfo.Payload.SystemFailure = string(types.ICMSInstanceTerminatedServiceMaintenance)
+				updateInfo.Payload.FailureCategory = string(nvcametrics.ICMSInstanceStateToFailureCategory(
+					types.ICMSInstanceTerminatedServiceMaintenance))
 			}
 
 			icmsRequestUpdates = append(icmsRequestUpdates, updateInfo)
