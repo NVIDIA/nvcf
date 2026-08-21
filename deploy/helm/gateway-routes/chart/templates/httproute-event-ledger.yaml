@@ -35,33 +35,10 @@ spec:
     - {{ tpl . $ | quote }}
     {{- end }}
   rules:
-    # Namespace-scoped read endpoints (stats + events). Write endpoints are
-    # intentionally absent — they are reachable only via in-cluster Service DNS.
     - matches:
         - path:
             type: PathPrefix
-            value: /v3/ledger/namespace
-          method: GET
-      backendRefs:
-        - name: {{ .Values.nvcfGatewayRoutes.routes.eventLedger.backend.name }}
-          namespace: {{ .Values.nvcfGatewayRoutes.routes.eventLedger.backend.namespace }}
-          port: {{ .Values.nvcfGatewayRoutes.routes.eventLedger.backend.port }}
-    # Authenticated dependency-status endpoint.
-    - matches:
-        - path:
-            type: Exact
-            value: /status
-          method: GET
-      backendRefs:
-        - name: {{ .Values.nvcfGatewayRoutes.routes.eventLedger.backend.name }}
-          namespace: {{ .Values.nvcfGatewayRoutes.routes.eventLedger.backend.namespace }}
-          port: {{ .Values.nvcfGatewayRoutes.routes.eventLedger.backend.port }}
-    # Unauthenticated liveness endpoint.
-    - matches:
-        - path:
-            type: Exact
-            value: /health
-          method: GET
+            value: /
       backendRefs:
         - name: {{ .Values.nvcfGatewayRoutes.routes.eventLedger.backend.name }}
           namespace: {{ .Values.nvcfGatewayRoutes.routes.eventLedger.backend.namespace }}
