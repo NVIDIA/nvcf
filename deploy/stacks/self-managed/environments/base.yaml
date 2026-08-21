@@ -158,6 +158,18 @@ functionAutoscaler:
     # environment label.
     ignoreEnv: true
 
+# Image overrides for the API account-bootstrap job. alpine-k8s is not
+# republished under the public nvidia/nvcf catalog, so a public-catalog
+# install must point it at its upstream Docker Hub source:
+# api:
+#   accountBootstrap:
+#     image:
+#       registry: docker.io
+#       repository: alpine/k8s
+#       tag: "1.36.1"
+# Leave unset to keep the mirrored default,
+# <global.image.registry>/<global.image.repository>/alpine-k8s.
+
 accounts:
   limits:
     maxFunctions: 10
@@ -168,6 +180,16 @@ accounts:
 # These static global values are processed in the values template
 nats:
   enabled: true
+  # Image overrides for the NATS config reloader. The reloader is not
+  # republished under the public nvidia/nvcf catalog, so a public-catalog
+  # install must point it at its upstream Docker Hub source:
+  # reloader:
+  #   image:
+  #     registry: docker.io
+  #     repository: natsio/nats-server-config-reloader
+  #     tag: "0.23.0"
+  # Leave unset to keep the mirrored default,
+  # <global.image.registry>/<global.image.repository>/nats-server-config-reloader.
   # PDB: the upstream NATS chart enables a disruption budget by default.
   # Override here to disable it or adjust the minAvailable threshold.
   podDisruptionBudget:
@@ -191,6 +213,18 @@ cassandra:
   # Do not use small for default cloud installs. Cassandra can OOM during
   # first boot and leave migrations in a failed or dirty state.
   resourcesPreset: "xlarge"
+  # Image overrides for the Cassandra server and dynamicSeedDiscovery containers.
+  # The default image name is `cassandra` under global.image.repository.
+  # Override here when pulling from a registry that uses a different path or tag.
+  # image:
+  #   registry: ""         # defaults to global.image.registry
+  #   repository: ""       # defaults to <global.image.repository>/cassandra
+  #   tag: ""              # defaults to the chart appVersion
+  # dynamicSeedDiscovery:
+  #   image:
+  #     registry: ""
+  #     repository: ""
+  #     tag: ""
   # PDB: disabled by default. Recommended for production 3-node clusters.
   # Set exactly one of minAvailable or maxUnavailable.
   podDisruptionBudget:

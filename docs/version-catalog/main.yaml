@@ -137,10 +137,9 @@ publications:
     version: 2.5.4-nv-1.3.0
     published_version: 2.5.4-nv-1.3.0-ea
     registry: selfhosted-ga
-  - name: bitnami-cassandra
-    version: 5.0.6-nv-1
-    published_version: 5.0.6-nv-1-ea
-    registry: selfhosted-ga
+  - name: cassandra
+    version: 5.0.8-nv-2.0.1
+    registry: public-images
   - name: nvcf-cassandra-migrations
     version: 0.8.1
     published_version: 0.8.1-ea
@@ -551,12 +550,12 @@ manifest:
       kind: service-image
       requirement: optional
       description: Exports NVCF resource state as Prometheus metrics.
-    - artifact_id: bitnami-cassandra
+    - artifact_id: cassandra
       plane: control
-      kind: ea-cve
+      kind: service-image
       requirement: required
-      description: Stores NVCF account, function, cluster, and service state during Early Access.
-      upstream_url: https://github.com/bitnami/containers/tree/main/bitnami/cassandra
+      description: Stores NVCF account, function, cluster, and service state.
+      upstream_url: https://github.com/apache/cassandra
     - artifact_id: nvcf-cassandra-migrations
       plane: control
       kind: ea-cve
@@ -739,10 +738,10 @@ artifacts:
     registry: staging
     repository_name: k8s
     version: 1.36.1
-  - name: bitnami-cassandra
+  - name: cassandra
     type: image
     registry: staging
-    version: 5.0.6-nv-1
+    version: 5.0.8-nv-2.0.1
   - name: cert-manager-cainjector
     type: image
     registry: staging
