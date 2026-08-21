@@ -1319,6 +1319,8 @@ nvcfGatewayRoutes:
         {{ dig "ingress" "gatewayApi" "routes" "nvcfUi" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
     eventLedger:
       enabled: {{ dig "addons" "eventLedger" "enabled" false .Values }}
+      routeAnnotations:
+        {{ dig "ingress" "gatewayApi" "routes" "eventLedger" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
     grpc:
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "grpc" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}

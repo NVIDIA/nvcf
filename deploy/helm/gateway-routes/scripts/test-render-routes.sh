@@ -114,6 +114,15 @@ assert_resource_field "$default_render" HTTPRoute sis gateway '.spec.rules[0].ba
 assert_resource_field "$default_render" HTTPRoute sis gateway '.spec.rules[0].backendRefs[0].namespace' sis
 assert_resource_field "$default_render" HTTPRoute sis gateway '.spec.rules[0].backendRefs[0].port' 8080
 
+assert_resource_count "$default_render" HTTPRoute event-ledger gateway 1
+assert_resource_field "$default_render" HTTPRoute event-ledger gateway '.metadata.labels."app.kubernetes.io/component"' event-ledger-route
+assert_resource_field "$default_render" HTTPRoute event-ledger gateway '.spec.hostnames[0]' events.localhost
+assert_resource_field "$default_render" HTTPRoute event-ledger gateway '.spec.rules[0].matches[0].path.type' PathPrefix
+assert_resource_field "$default_render" HTTPRoute event-ledger gateway '.spec.rules[0].matches[0].path.value' /
+assert_resource_field "$default_render" HTTPRoute event-ledger gateway '.spec.rules[0].backendRefs[0].name' event-ledger
+assert_resource_field "$default_render" HTTPRoute event-ledger gateway '.spec.rules[0].backendRefs[0].namespace' nvcf
+assert_resource_field "$default_render" HTTPRoute event-ledger gateway '.spec.rules[0].backendRefs[0].port' 8080
+
 assert_resource_count "$default_render" HTTPRoute reval gateway 1
 assert_resource_field "$default_render" HTTPRoute reval gateway '.metadata.labels."app.kubernetes.io/component"' reval-route
 assert_resource_field "$default_render" HTTPRoute reval gateway '.spec.hostnames[0]' reval.localhost
@@ -123,9 +132,11 @@ assert_resource_field "$default_render" HTTPRoute reval gateway '.spec.rules[0].
 
 helm template nvcf-gateway-routes "$repo_root/chart" \
   --set nvcfGatewayRoutes.routes.reval.enabled=false \
+  --set nvcfGatewayRoutes.routes.eventLedger.enabled=false \
   > "$disabled_render"
 
 assert_resource_count "$disabled_render" HTTPRoute reval gateway 0
+assert_resource_count "$disabled_render" HTTPRoute event-ledger gateway 0
 
 # Default-enabled TCPRoute.
 assert_resource_count "$default_render" TCPRoute grpc gateway 1
