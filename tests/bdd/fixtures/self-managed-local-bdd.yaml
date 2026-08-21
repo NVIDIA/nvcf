@@ -51,9 +51,8 @@ openbao:
 # endpoint because the current binary has no OpenTelemetry TLS provider. Keep
 # worker telemetry on HTTP in this fixture until Pylon supports HTTPS OTLP.
 #
-# The LLM router client sidecar image defaults to the literal "dummy" in
-# the self-managed API profile; LLM-type function pods cannot pull it.
-# The feature Background overlays the org/team placeholders below.
+# The LLM router client sidecar image defaults to "dummy" in the
+# self-managed API profile; the Background overlays the placeholders.
 api:
   env:
     MANAGEMENT_OTLP_TRACING_ENDPOINT: http://dummy:8282

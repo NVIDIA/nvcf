@@ -181,10 +181,8 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       Then the command exit code should be 0
       And the command output should contain "bdd-echo"
 
-      # Remove the deployment so its worker pod (whose utils sidecar
-      # requests 4 CPU) frees the GPU node for the later scenarios.
-      # The local sizing cannot hold every scenario's deployment at
-      # once.
+      # Remove the deployment: the local sizing cannot hold every
+      # scenario's deployment at once.
       When I run command:
         """
         ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function delete --deployment-only
@@ -218,25 +216,19 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       Then the command exit code should be 0
       And the command output should contain "bdd-grpc-echo"
 
-      # Free the GPU node for the LLM scenario; see the HTTP scenario's
-      # cleanup comment.
+      # Free the GPU node for the LLM scenario.
       When I run command:
         """
         ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function delete --deployment-only
         """
       Then the command exit code should be 0
 
-    # The LLM scenario proves the serve path the @llm-gateway scenario
-    # only installs: an LLM-type function is routed through the
-    # llm-api-gateway and llm-request-router instead of the standard
-    # invocation path. For LLM functions the CLI overrides the request
-    # Host header with the LLM gateway host derived from the profile's
-    # invoke host (invocation.localhost -> llm.localhost) and rewrites
-    # the request body model to <functionId>/<model>, so the scenario
-    # only supplies the OpenAI-compatible path and the model name.
-    # Depends on the earlier control-plane install and NVCA
-    # registration scenarios in this feature run; not a standalone
-    # tag target.
+    # Proves the serve path the @llm-gateway scenario only installs:
+    # LLM-type functions route through llm-api-gateway and
+    # llm-request-router. The CLI maps invocation.localhost to the
+    # llm.localhost gateway host and rewrites the body model to
+    # <functionId>/<model>. Depends on the earlier install and
+    # registration scenarios; not a standalone tag target.
     @llm-function-type
     Scenario: Operator creates, deploys, and invokes an LLM-type OpenAI-compatible sample function
       When I run command:
@@ -257,10 +249,8 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
         """
       Then the command exit code should be 0
 
-      # The gateway path answers synchronously, so no --poll-duration
-      # (the echo scenarios poll the 202 queue path). The sample always
-      # answers with its fixed load-testing message, so the assertion
-      # checks that content rather than only the envelope shape.
+      # The gateway answers synchronously (no queue polling). The
+      # sample always returns its fixed load-testing message.
       When I run command:
         """
         ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke --inference-url /v1/chat/completions --model-name openai-compatible-sample --request-body '{"messages":[{"role":"user","content":"bdd-llm-echo"}]}' --timeout 120
@@ -269,9 +259,8 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       And the command output should contain "chat.completion"
       And the command output should contain "fixed 128-byte response"
 
-      # The gateway must reject requests that carry no API key. curl
-      # reports only the status code so the assertion cannot match
-      # response-body noise.
+      # curl reports only the status code so the assertion cannot
+      # match response-body noise.
       When I run command:
         """
         curl -s -o /dev/null -w "%{http_code}" -X POST http://llm.localhost:8080/v1/chat/completions -H "Content-Type: application/json" -d '{"model":"unauthenticated/check","messages":[]}'
@@ -279,8 +268,7 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       Then the command exit code should be 0
       And the command output should contain "401"
 
-      # Leave the cluster's GPU capacity free, same as the echo
-      # scenarios.
+      # Leave the GPU capacity free, same as the echo scenarios.
       When I run command:
         """
         ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function delete --deployment-only
