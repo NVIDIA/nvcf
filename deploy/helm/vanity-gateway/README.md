@@ -81,9 +81,12 @@ Important settings to review before deployment:
 - `vanityGateway.replicaCount`, resource requests, and limits for your
   environment
 - `vanityGateway.config.nvcfApiEndpoint` for the invocation endpoint
+- `vanityGateway.config.llmGatewayEndpoint` for the LLM Gateway endpoint, used
+  only by hosts declared under `mappingConfig.v2config.llmGateway`
 - `vanityGateway.config.otelExporterOtlpEndpoint` for trace export, empty by
   default
-- `vanityGateway.mappingConfig.v2config` for the OpenAI and vanity route tables
+- `vanityGateway.mappingConfig.v2config` for the OpenAI, vanity, and LLM Gateway
+  route tables
 - `vanityGateway.serviceMonitor.enabled` for Prometheus Operator scraping
 
 ### Ports
@@ -103,7 +106,7 @@ or the pod is killed mid-drain.
 
 ## Route mapping
 
-`vanityGateway.mappingConfig.v2config` has two sections:
+`vanityGateway.mappingConfig.v2config` has three sections:
 
 - `openai`: per-endpoint model routes, keyed by endpoint (`chatCompletions`,
   `completions`, `embeddings`, `responses`, and the image endpoints). Each route
@@ -112,9 +115,14 @@ or the pod is killed mid-drain.
   `shadowCancelOnClientDisconnect`.
 - `vanity`: host-based routes, each requiring a `host` and a `paths` map. Each
   path requires `path` and `functionID`.
+- `llmGateway`: hosts that proxy the LLM Gateway's OpenAI-compatible routes,
+  each requiring only a `host`. Requests are forwarded unchanged, so an entry
+  carries no function or model selection. Declaring one makes
+  `vanityGateway.config.llmGatewayEndpoint` required at startup.
 
-Both sections are empty by default. `vanityGateway.config.shadowMaxConcurrent`
-bounds concurrent shadow requests across all routes.
+All three sections are empty by default.
+`vanityGateway.config.shadowMaxConcurrent` bounds concurrent shadow requests
+across all routes.
 
 ## Notes
 
