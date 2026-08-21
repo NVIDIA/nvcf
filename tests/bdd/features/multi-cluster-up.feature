@@ -157,8 +157,8 @@ Feature: Bring up a local multi-cluster NVCF stack with the CLI
       And file "deploy/stacks/nvcf-compute-plane/out/ncp-local-compute-1-register-values.yaml" should exist
       # Subset match (should contain, not should match) because the
       # values file carries non-deterministic IDs alongside the
-      # deterministic block. The IDs are asserted by individual
-      # should-not-be-empty steps below.
+      # deterministic block. The generated values are asserted as
+      # non-empty keys below.
       And yaml file "deploy/stacks/nvcf-compute-plane/out/ncp-local-compute-1-register-values.yaml" should contain:
         """
         clusterName: ncp-local-compute-1
@@ -169,9 +169,11 @@ Feature: Bring up a local multi-cluster NVCF stack with the CLI
           revalServiceURL: http://reval.localhost:8080
           natsURL: nats://nats.localhost:4222
         """
-      And yaml file "deploy/stacks/nvcf-compute-plane/out/ncp-local-compute-1-register-values.yaml" key "clusterID" should not be empty
-      And yaml file "deploy/stacks/nvcf-compute-plane/out/ncp-local-compute-1-register-values.yaml" key "clusterGroupID" should not be empty
-      And yaml file "deploy/stacks/nvcf-compute-plane/out/ncp-local-compute-1-register-values.yaml" key "selfManaged.identitySource" should not be empty
+      And yaml file "deploy/stacks/nvcf-compute-plane/out/ncp-local-compute-1-register-values.yaml" should have non-empty keys:
+        | key                        |
+        | clusterID                  |
+        | clusterGroupID             |
+        | selfManaged.identitySource |
 
     @nvca-registration
     Scenario: Operator installs the first compute plane

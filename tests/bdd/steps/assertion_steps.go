@@ -37,6 +37,7 @@ func registerAssertionSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^file "([^"]*)" should exist$`, sc.fileShouldExist)
 	ctx.Step(`^yaml file "([^"]*)" key "([^"]*)" should equal "([^"]*)"$`, sc.yamlFileKeyShouldEqual)
 	ctx.Step(`^yaml file "([^"]*)" key "([^"]*)" should not be empty$`, sc.yamlFileKeyShouldNotBeEmpty)
+	ctx.Step(`^yaml file "([^"]*)" should have non-empty keys:$`, sc.yamlFileShouldHaveNonEmptyKeys)
 	ctx.Step(`^yaml file "([^"]*)" should match:$`, sc.yamlFileShouldMatch)
 	ctx.Step(`^yaml file "([^"]*)" key "([^"]*)" should match:$`, sc.yamlFileKeyShouldMatch)
 	ctx.Step(`^yaml file "([^"]*)" should contain:$`, sc.yamlFileShouldContain)
@@ -127,6 +128,14 @@ func (sc *ScenarioContext) yamlFileKeyShouldNotBeEmpty(path, key string) error {
 		return fmt.Errorf("%s key %q is empty", resolvedPath, key)
 	}
 	return nil
+}
+
+func (sc *ScenarioContext) yamlFileShouldHaveNonEmptyKeys(path string, table *godog.Table) error {
+	keys, err := tableToSingleColumn(table, "key")
+	if err != nil {
+		return err
+	}
+	return dsl.RequireNonEmptyYAMLKeys(sc.resolvePath(dsl.Interpolate(path)), keys)
 }
 
 func (sc *ScenarioContext) yamlFileShouldMatch(path string, doc *godog.DocString) error {

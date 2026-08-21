@@ -325,8 +325,10 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
         selfManaged:
           identitySource: psat
         """
-      And yaml file "deploy/stacks/nvcf-compute-plane/registration/${EKS_COMPUTE_CLUSTER_NAME}-register-values.yaml" key "clusterID" should not be empty
-      And yaml file "deploy/stacks/nvcf-compute-plane/registration/${EKS_COMPUTE_CLUSTER_NAME}-register-values.yaml" key "clusterGroupID" should not be empty
+      And yaml file "deploy/stacks/nvcf-compute-plane/registration/${EKS_COMPUTE_CLUSTER_NAME}-register-values.yaml" should have non-empty keys:
+        | key            |
+        | clusterID      |
+        | clusterGroupID |
 
       # The register-values URLs stay as cluster register's bare-ELB
       # output. Gateway HTTPRoute matching is handled by the chart-native

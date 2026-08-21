@@ -129,6 +129,7 @@ refactor in every consumer; that is a feature.
 | `Then file {string} should exist` | |
 | `Then yaml file {string} key {string} should equal {string}` | Reads the YAML file, walks the dotted key path, compares to the value (with `${VAR}` expansion). |
 | `Then yaml file {string} key {string} should not be empty` | Same key resolution; passes if the resolved value is non-empty. Use for non-deterministic outputs (cluster IDs, identity sources) where exact-value assertions are wrong. |
+| `Then yaml file {string} should have non-empty keys:` (table) | Requires a `key` header and one or more dotted key paths. Each key must exist and resolve to a non-empty value; failures distinguish a missing key from an empty value. |
 | `Then yaml file {string} should match:` (docstring) | Parses the docstring as YAML, parses the file as YAML, and asserts strict equality of the two trees. Every key in expected must exist in actual and vice versa. `${VAR}` expansion applies to the docstring before parsing. See "YAML comparison semantics" below for tree rules. |
 | `Then yaml file {string} key {string} should match:` (docstring) | Same as above but compares only the subtree at the dotted key path. |
 | `Then yaml file {string} should contain:` (docstring) | Subset variant: every key in expected must exist in actual with the same value; extra keys in actual are allowed. Use this when the file has dynamic or future-additive fields. `${VAR}` expansion applies. |

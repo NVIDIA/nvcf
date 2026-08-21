@@ -803,8 +803,59 @@ controlPlane:
 	if err := sc.yamlFileKeyShouldNotBeEmpty(rel, "controlPlane.clusterName"); err != nil {
 		t.Fatalf("not empty: %v", err)
 	}
+	nonEmptyKeys := docTable(t, [][]string{
+		{"key"},
+		{"controlPlane.clusterName"},
+		{"controlPlane.endpoints.inCluster.icmsURL"},
+	})
+	if err := sc.yamlFileShouldHaveNonEmptyKeys(rel, nonEmptyKeys); err != nil {
+		t.Fatalf("non-empty keys: %v", err)
+	}
 	if err := sc.yamlFileKeyShouldContain(rel, "controlPlane.endpoints.inCluster", &godog.DocString{Content: "icmsURL: http://api.sis:8080\n"}); err != nil {
 		t.Fatalf("contain: %v", err)
+	}
+}
+
+func TestYAMLFileShouldHaveNonEmptyKeysValidatesTable(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+
+	tests := []struct {
+		name  string
+		table *godog.Table
+		want  string
+	}{
+		{
+			name: "no data rows",
+			table: docTable(t, [][]string{
+				{"key"},
+			}),
+			want: "at least one data row",
+		},
+		{
+			name: "wrong header",
+			table: docTable(t, [][]string{
+				{"name"},
+				{"clusterID"},
+			}),
+			want: `table header must be "key"`,
+		},
+		{
+			name: "empty key",
+			table: docTable(t, [][]string{
+				{"key"},
+				{""},
+			}),
+			want: "empty key value",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := sc.yamlFileShouldHaveNonEmptyKeys("registration.yaml", tc.table)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want error containing %q", err, tc.want)
+			}
+		})
 	}
 }
 
