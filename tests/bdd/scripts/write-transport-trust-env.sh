@@ -2,18 +2,14 @@
 # SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Reads the NVCF root CA public certificate from OpenBao and writes the
-# worker transport trust configuration into a compute-plane Helmfile
-# environment file, replacing that file's agentConfig block. The
-# fingerprint uses the canonical nvcf-trust-bundle-v1 algorithm (same
-# as nvcf-cli and NVCA): sha256 of "nvcf-trust-bundle-v1\n" plus the
-# sorted, deduplicated lowercase-hex sha256 digests of each
-# certificate's DER bytes, one per line, each line LF-terminated.
+# Reads the NVCF root CA public certificate from OpenBao and replaces
+# the agentConfig block of a compute-plane Helmfile environment file
+# with the transportTLS bundle configuration. The fingerprint follows
+# the canonical nvcf-trust-bundle-v1 algorithm (same as nvcf-cli and
+# NVCA, which recomputes it and fails closed on divergence).
 #
-# The CA certificate is public material; the OpenBao root token is
-# read from its Kubernetes Secret and used only inside this script's
-# curl invocation over a port-forward. It never appears in the BDD
-# command logs (the harness logs only the script invocation).
+# The CA is public material; the OpenBao root token is used only
+# inside this script and never appears in the BDD command logs.
 #
 # Usage: write-transport-trust-env.sh <compute-env-file>
 
@@ -71,8 +67,8 @@ if [[ -z "$ca_pem" ]] || ! grep -q "BEGIN CERTIFICATE" <<<"$ca_pem"; then
   exit 1
 fi
 
-# nvcf-trust-bundle-v1 canonical fingerprint. The root read returns a
-# single certificate, but implement the full contract anyway.
+# Canonical fingerprint: sorted deduplicated lowercase-hex
+# sha256(DER) per cert, under a version header, then sha256.
 cert_hashes="$(python3 - "$ca_pem" <<'PYEOF'
 import subprocess, sys
 

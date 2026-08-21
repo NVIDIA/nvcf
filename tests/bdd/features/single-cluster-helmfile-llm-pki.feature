@@ -5,18 +5,13 @@ Feature: Install a local single-cluster NVCF stack with PKI-secured LLM transpor
   so that an LLM function answers invocations over a QUIC tunnel whose
   trust chain is issued by the stack's own PKI.
 
-  # This feature owns its Helmfile environment (local-bdd-pki) so the
-  # default fixtures and the non-PKI features stay unchanged. PKI
-  # enablement is an install-time value: addons.llm.pki.enabled gates
-  # the nvcf-pki release and the stargate Certificate at render.
-  # The compute plane's trust configuration is written by
-  # tests/bdd/scripts/write-transport-trust-env.sh after the control
-  # plane is installed, because the trust bundle (the OpenBao root CA
-  # public cert plus its nvcf-trust-bundle-v1 fingerprint) only exists
-  # once OpenBao is up. The script replaces the fixture's agentConfig
-  # block, which also drops stargateQUICInsecure: the tunnel runs in
-  # secure mode and NVCA rejects bundle trust combined with insecure
-  # QUIC.
+  # Owns its own Helmfile environment (local-bdd-pki) so the default
+  # fixtures and the non-PKI features stay unchanged; PKI enablement
+  # is an install-time value. The trust bundle (OpenBao root CA plus
+  # nvcf-trust-bundle-v1 fingerprint) only exists after the control
+  # plane is up, so a helper script writes it into the compute
+  # environment between install and register. That rewrite drops
+  # stargateQUICInsecure: the tunnel runs in secure mode.
 
   Rule: Helmfile installs the control plane with the LLM PKI addon
 
@@ -27,12 +22,11 @@ Feature: Install a local single-cluster NVCF stack with PKI-secured LLM transpor
         | SAMPLE_NGC_ORG  |
         | SAMPLE_NGC_TEAM |
       And I copy the file "tests/bdd/fixtures/self-managed-local-bdd.yaml" to "deploy/stacks/self-managed/environments/local-bdd-pki.yaml"
-      # PKI render contract: dnsNames must cover the router's
-      # advertised hostname (single replica advertises its plain
-      # service DNS name); allowedDomains constrains the OpenBao
-      # signing role; the PKI provisioning hook needs the
-      # nvcf-openbao-migrations tag (same image the openbao chart
-      # runs, whose published default is pinned here).
+      # PKI render requirements: dnsNames must cover the router's
+      # advertised hostname (a single replica advertises its plain
+      # service DNS name), allowedDomains constrains the OpenBao
+      # signing role, and the provisioning hook needs the
+      # nvcf-openbao-migrations tag (no default propagates from env).
       And I update yaml file "deploy/stacks/self-managed/environments/local-bdd-pki.yaml" with keys:
         | global.imagePullSecrets[0].name               | nvcr-pull-secret                                                   |
         | global.helm.sources.repository                | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                               |
@@ -128,9 +122,8 @@ Feature: Install a local single-cluster NVCF stack with PKI-secured LLM transpor
       Then the command exit code should be 0
       And file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-register-values.yaml" should exist
 
-      # Fetch the root CA public cert from OpenBao, compute the
-      # canonical fingerprint, and write the transportTLS bundle block
-      # into the compute environment authored by the Background.
+      # Fetch the root CA from OpenBao and write the transportTLS
+      # bundle block into the compute environment.
       When I run command:
         """
         tests/bdd/scripts/write-transport-trust-env.sh deploy/stacks/nvcf-compute-plane/environments/local-bdd-pki.yaml
@@ -156,12 +149,10 @@ Feature: Install a local single-cluster NVCF stack with PKI-secured LLM transpor
 
   Rule: An LLM function answers invocations over the secured tunnel
 
-    # Depends on the earlier install and registration scenarios in this
-    # feature run; not a standalone tag target. The scenario body is
-    # the same as the non-PKI feature's LLM scenario: the invoke
-    # succeeding here proves the trust chain end to end, because the
-    # worker's tunnel to stargate runs in secure mode and validates
-    # the served certificate chain against the injected root.
+    # Depends on the earlier scenarios in this feature run; not a
+    # standalone tag target. Same body as the non-PKI LLM scenario:
+    # the invoke succeeding over the secure tunnel is the trust-chain
+    # proof.
     @llm-function-type
     Scenario: Operator creates, deploys, and invokes an LLM-type function over the secured tunnel
       When I run command:

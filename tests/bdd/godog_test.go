@@ -492,13 +492,10 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	}
 }
 
-// TestSingleClusterHelmfilePKIFeatureFileWiresToSteps runs the PKI
-// Helmfile feature against a fake runner. The feature authors its own
-// local-bdd-pki environment from the same fixtures the non-PKI feature
-// uses and distributes the trust bundle via the helper script, so the
-// wiring test only needs canned results for the script, the LLM
-// invoke, and the no-auth curl.
-func TestSingleClusterHelmfilePKIFeatureFileWiresToSteps(t *testing.T) {
+// TestSingleClusterHelmfileLLMPKIFeatureFileWiresToSteps runs the
+// LLM PKI Helmfile feature against a fake runner, with canned results
+// for the trust script, the LLM invoke, and the no-auth curl.
+func TestSingleClusterHelmfileLLMPKIFeatureFileWiresToSteps(t *testing.T) {
 	t.Setenv("NGC_API_KEY", "test-key")
 	t.Setenv("SAMPLE_NGC_ORG", "test-org")
 	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
@@ -532,10 +529,10 @@ func TestSingleClusterHelmfilePKIFeatureFileWiresToSteps(t *testing.T) {
 	writeHelmfileRegisterValues(t, suite.Config.RepoRoot)
 
 	sc := steps.NewScenarioContext(suite)
-	featurePath := mustResolveFeaturePath(t, "single-cluster-helmfile-pki.feature")
+	featurePath := mustResolveFeaturePath(t, "single-cluster-helmfile-llm-pki.feature")
 	var out strings.Builder
 	status := godog.TestSuite{
-		Name: "single-cluster-helmfile-pki-wiring",
+		Name: "single-cluster-helmfile-llm-pki-wiring",
 		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
 			steps.RegisterAll(ctx, sc)
 		},
@@ -1629,13 +1626,13 @@ func TestSingleClusterHelmfile(t *testing.T) {
 	runLiveFeature(t, "single-cluster-helmfile.feature")
 }
 
-// TestSingleClusterHelmfilePKI is the live entry point for the
+// TestSingleClusterHelmfileLLMPKI is the live entry point for the
 // PKI-secured LLM transport Helmfile feature. Skipped under -short.
-func TestSingleClusterHelmfilePKI(t *testing.T) {
+func TestSingleClusterHelmfileLLMPKI(t *testing.T) {
 	if testing.Short() {
 		t.Skip("live run skipped under -short")
 	}
-	runLiveFeature(t, "single-cluster-helmfile-pki.feature")
+	runLiveFeature(t, "single-cluster-helmfile-llm-pki.feature")
 }
 
 // TestObservabilityControl is the live entry point for the control
