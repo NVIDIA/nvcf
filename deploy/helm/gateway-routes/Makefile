@@ -14,12 +14,15 @@
 # limitations under the License.
 
 
-.PHONY: test test-render-routes test-vanity-gateway-route
+.PHONY: test test-render-routes test-vanity-gateway-route check-llm-worker-routes
 
-test: test-render-routes test-vanity-gateway-route
+test: test-render-routes test-vanity-gateway-route check-llm-worker-routes
 
 test-render-routes:
 	@sh ./scripts/test-render-routes.sh
 
 test-vanity-gateway-route:
 	@sh ./scripts/test-vanity-gateway-route.sh
+
+check-llm-worker-routes:
+	@sh ./scripts/check-llm-worker-routes.sh

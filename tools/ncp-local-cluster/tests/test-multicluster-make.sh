@@ -82,6 +82,9 @@ EOF
 assert_missing_docker_config_blocks_target start
 assert_missing_docker_config_blocks_target build-and-deploy-cluster
 
+fake_gpu_count="$(yq -r '.topology.nodePools.default.gpuCount' "$ROOT_DIR/apps/fake-gpu-operator/values.yaml")"
+assert_eq "2" "$fake_gpu_count" "fake GPU count"
+
 print_directory_clusters="$(MAKEFLAGS=--print-directory; export MAKEFLAGS; run_make print-compute-clusters)"
 assert_eq "ncp-local-compute-1" "$print_directory_clusters" "print-directory compute cluster output"
 if ! grep -q '\$(MAKE) --no-print-directory -s print-compute-clusters' "$ROOT_DIR/Makefile"; then
@@ -140,6 +143,12 @@ fi
 if ! grep -q '\${CONTROL_PLANE_GRPC_WORKER_PORT}:10086' "$ROOT_DIR/k3d-config-control-plane.yaml"; then
   fail "control-plane k3d config must expose CONTROL_PLANE_GRPC_WORKER_PORT to Gateway port 10086"
 fi
+if ! grep -q '\${CONTROL_PLANE_LLM_GRPC_PORT}:50071' "$ROOT_DIR/k3d-config-control-plane.yaml"; then
+  fail "control-plane k3d config must expose CONTROL_PLANE_LLM_GRPC_PORT to the LLM TCP Gateway listener"
+fi
+if ! grep -q '\${CONTROL_PLANE_LLM_QUIC_PORT}:50072' "$ROOT_DIR/k3d-config-control-plane.yaml"; then
+  fail "control-plane k3d config must expose CONTROL_PLANE_LLM_QUIC_PORT to the LLM UDP Gateway listener"
+fi
 if ! grep -q '10081:10081' "$ROOT_DIR/k3d-config.yaml"; then
   fail "single-cluster k3d config must expose the stack-owned grpc-gw TCP listener on host port 10081"
 fi
@@ -170,6 +179,15 @@ if ! grep -R -q 'name: grpc-gw' "$ROOT_DIR/apps/envoy-gateway"; then
 fi
 if ! grep -R -q 'name: worker-tcp' "$ROOT_DIR/apps/envoy-gateway/gateway-grpc.yaml"; then
   fail "control-plane Gateway must define the grpc-proxy worker TCP listener"
+fi
+if ! grep -R -q 'name: llm-grpc' "$ROOT_DIR/apps/envoy-gateway/gateway-grpc.yaml"; then
+  fail "control-plane Gateway must define the LLM worker TCP listener"
+fi
+if ! grep -R -q 'name: llm-quic' "$ROOT_DIR/apps/envoy-gateway/gateway-grpc.yaml"; then
+  fail "control-plane Gateway must define the LLM worker UDP listener"
+fi
+if ! awk '/name: llm-quic/{found=1; next} found && /protocol: UDP/{ok=1; exit} END{exit !ok}' "$ROOT_DIR/apps/envoy-gateway/gateway-grpc.yaml"; then
+  fail "LLM reverse-tunnel Gateway listener must use UDP"
 fi
 if ! grep -q 'kubectl apply -k .*apps/envoy-gateway' "$ROOT_DIR/scripts/setup-gateway-api.sh"; then
   fail "gateway setup must apply the full envoy-gateway kustomization"
@@ -205,6 +223,18 @@ if ! grep -q 'CONTROL_PLANE_GRPC_WORKER_PORT ?= 10086' "$ROOT_DIR/Makefile"; the
 fi
 if ! grep -q 'CONTROL_PLANE_GRPC_WORKER_PORT="$(CONTROL_PLANE_GRPC_WORKER_PORT)"' "$ROOT_DIR/Makefile"; then
   fail "Makefile must pass CONTROL_PLANE_GRPC_WORKER_PORT to the control-plane k3d config"
+fi
+if ! grep -q 'CONTROL_PLANE_LLM_GRPC_PORT ?= 50071' "$ROOT_DIR/Makefile"; then
+  fail "Makefile must define the host port for the LLM worker TCP listener"
+fi
+if ! grep -q 'CONTROL_PLANE_LLM_QUIC_PORT ?= 50072' "$ROOT_DIR/Makefile"; then
+  fail "Makefile must define the host port for the LLM worker UDP listener"
+fi
+if ! grep -q 'CONTROL_PLANE_LLM_GRPC_PORT="$(CONTROL_PLANE_LLM_GRPC_PORT)"' "$ROOT_DIR/Makefile"; then
+  fail "Makefile must pass CONTROL_PLANE_LLM_GRPC_PORT to the control-plane k3d config"
+fi
+if ! grep -q 'CONTROL_PLANE_LLM_QUIC_PORT="$(CONTROL_PLANE_LLM_QUIC_PORT)"' "$ROOT_DIR/Makefile"; then
+  fail "Makefile must pass CONTROL_PLANE_LLM_QUIC_PORT to the control-plane k3d config"
 fi
 if ! grep -q 'CONTROL_PLANE_LB_NATS_PORT=4222' "$ROOT_DIR/Makefile"; then
   fail "Makefile must pass the control-plane NATS container port to endpoint configuration"

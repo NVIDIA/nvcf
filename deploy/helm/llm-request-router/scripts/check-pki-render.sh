@@ -290,6 +290,15 @@ if render_certificate_case \
   fail "advertised hostname containing non-DNS braces unexpectedly rendered"
 fi
 
+invalid_underscore_error="${tmp_dir}/invalid-underscore.err"
+if render_certificate_case \
+  /dev/null \
+  "router_name.example.internal" \
+  "*.example.internal" \
+  2> "${invalid_underscore_error}"; then
+  fail "advertised hostname containing an underscore unexpectedly rendered"
+fi
+
 # Pass 3: existing-Secret identity mode. The operator owns issuance, so the
 # chart must mount the pre-created Secret without rendering a Certificate or
 # the OpenBao provisioning hook.
@@ -429,5 +438,80 @@ fi
 grep -Fq \
   'llmRequestRouter.tls.mode must be certManager or existingSecret, got "externalSecret"' \
   "${invalid_mode_error}" || fail "unknown mode render did not return the expected guard message"
+
+# The OpenBao signing role is created with allow_subdomains=true and
+# allow_bare_domains=false, so a SAN outside allowed_domains renders cleanly and
+# then fails at cert-manager issuance. Catch it at render instead. These cases
+# pin the coverage rules, including the ones that must NOT fail: a wrong guard
+# here would block valid deployments, which is worse than the trap it replaces.
+assert_allowed_domains_case() {
+  local description="$1"
+  local expectation="$2"
+  local allowed_domains="$3"
+  local dns_name="$4"
+  local advertised_hostname_template="${5:-}"
+  local case_values="${tmp_dir}/allowed-domains-values.yaml"
+  local case_error="${tmp_dir}/allowed-domains.err"
+
+  cat > "${case_values}" <<EOF
+llmRequestRouter:
+  image:
+    repository: nvcf/stargate
+  backendRouter:
+    enabled: true
+  certificate:
+    enabled: true
+    issuerRef:
+      name: nvcf-openbao-pki
+    dnsNames: ["${dns_name}"]
+  tls:
+    certPath: /etc/stargate/tls/tls.crt
+    keyPath: /etc/stargate/tls/tls.key
+    quicInsecure: false
+  pki:
+    enabled: true
+    allowedDomains: "${allowed_domains}"
+    image:
+      repository: nvcf-openbao-migrations
+      tag: "1"
+EOF
+
+  if [ -n "${advertised_hostname_template}" ]; then
+    cat >> "${case_values}" <<EOF
+  kubernetes:
+    advertisedHostnameTemplate: "${advertised_hostname_template}"
+EOF
+  fi
+
+  if helm template llm-request-router ./llm-request-router \
+    --namespace nvcf \
+    --values ./llm-request-router/values.yaml \
+    --values "${case_values}" \
+    > /dev/null 2> "${case_error}"; then
+    [ "${expectation}" = "pass" ] || fail "${description} unexpectedly rendered"
+  else
+    [ "${expectation}" = "fail" ] || fail "${description} unexpectedly failed to render"
+    grep -Fq "is not covered by llmRequestRouter.pki.allowedDomains" "${case_error}" ||
+      fail "${description} did not return the allowed-domains guard message"
+  fi
+}
+
+# Must render: these are valid deployments.
+assert_allowed_domains_case "documented customer-domain plus cluster.local" \
+  pass "example.com,cluster.local" "llm-request-router.nvcf.svc.cluster.local"
+assert_allowed_domains_case "whitespace around the comma separators" \
+  pass " example.com , cluster.local " "llm-request-router.nvcf.svc.cluster.local"
+assert_allowed_domains_case "allowed domain deeper in the suffix" \
+  pass "svc.cluster.local" "llm-request-router.nvcf.svc.cluster.local"
+assert_allowed_domains_case "direct wildcard covering the advertised pod hostname" \
+  pass "example.com" "*.example.com" "{pod_name}.example.com"
+
+# Must fail: issuance would be rejected.
+assert_allowed_domains_case "no overlap with the certificate names" \
+  fail "example.com" "llm-request-router.nvcf.svc.cluster.local"
+assert_allowed_domains_case "name that ends with the domain but is not a subdomain" \
+  fail "cluster.local" "evilcluster.local"
+assert_allowed_domains_case "bare domain, which the role refuses to issue" \
+  fail "llm-request-router-headless.nvcf.svc.cluster.local" "llm-request-router-headless.nvcf.svc.cluster.local"
 
 echo "PKI render checks passed"
