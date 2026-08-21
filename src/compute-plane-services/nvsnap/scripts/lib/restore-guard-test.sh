@@ -90,6 +90,73 @@ mk_kubectl "printf -- '--pod-cache-dir=/var/lib/containerd/nvsnap-cache\n'"
 got=$(PATH="$TMP/bin:$PATH" agent_pod_cache_dir)
 if [ "$got" = "/var/lib/containerd/nvsnap-cache" ]; then ok "follows a non-default cache dir"; else bad "follows a non-default cache dir (got '$got')"; fi
 
+echo "assert_restore_admitted"
+
+# Stubs kubectl to return a fixed pod. The guard reads the pod as JSON, so the
+# fixture is the whole input -- no cluster is involved.
+mk_pod() { printf '#!/bin/sh\ncat <<'"'"'JSON'"'"'\n%s\nJSON\n' "$1" > "$TMP/bin/kubectl"; chmod +x "$TMP/bin/kubectl"; }
+admitted() { PATH="$TMP/bin:$PATH" assert_restore_admitted vllm-restored default "$1" "$2" >/dev/null 2>&1; }
+
+VALID='{"spec":{"containers":[{"name":"vllm",
+  "env":[{"name":"HF_HOME","value":"/opt/nvsnap/hf"}],
+  "volumeMounts":[{"mountPath":"/opt/nvsnap"}]}]}}'
+
+mk_pod "$VALID"
+admitted vllm /opt/nvsnap
+check "accepts a decorated restore pod" 0 $?
+
+# An agent with no --pod-cache-dir means cachedir capture is not configured at
+# all, so there is nothing a restore could have come from.
+mk_pod "$VALID"
+admitted vllm ""
+check "rejects an empty cache dir" 1 $?
+
+# Falling back to containers[0] would let a decorated sidecar vouch for a
+# workload that is cold-starting, so a missing container fails closed.
+mk_pod "$VALID"
+admitted engine /opt/nvsnap
+check "rejects a missing restore container" 1 $?
+
+mk_pod '{"spec":{"containers":[{"name":"vllm",
+  "env":[{"name":"HF_HOME","value":"/opt/nvsnap/hf"}],
+  "volumeMounts":[{"mountPath":"/var/tmp"}]}]}}'
+admitted vllm /opt/nvsnap
+check "rejects an unmounted cache dir" 1 $?
+
+# Absent cache env is a failure, not "nothing to check": a restore pod that
+# inherited none of the stamped variables is not restoring from anything.
+mk_pod '{"spec":{"containers":[{"name":"vllm",
+  "env":[{"name":"PATH","value":"/usr/bin"}],
+  "volumeMounts":[{"mountPath":"/opt/nvsnap"}]}]}}'
+admitted vllm /opt/nvsnap
+check "rejects a pod with no cache env" 1 $?
+
+mk_pod '{"spec":{"containers":[{"name":"vllm",
+  "env":[{"name":"HF_HOME","value":"/root/.cache/huggingface"}],
+  "volumeMounts":[{"mountPath":"/opt/nvsnap"}]}]}}'
+admitted vllm /opt/nvsnap
+check "rejects cache env pointing outside the cache dir" 1 $?
+
+# Prefix matching alone would accept a sibling directory whose name merely
+# starts with the cache dir.
+mk_pod '{"spec":{"containers":[{"name":"vllm",
+  "env":[{"name":"HF_HOME","value":"/opt/nvsnap-other/hf"}],
+  "volumeMounts":[{"mountPath":"/opt/nvsnap"}]}]}}'
+admitted vllm /opt/nvsnap
+check "rejects a sibling dir that shares the cache dir prefix" 1 $?
+
+# NIM images stamp NIM_CACHE_PATH instead of HF_HOME; either satisfies the guard.
+mk_pod '{"spec":{"containers":[{"name":"nim",
+  "env":[{"name":"NIM_CACHE_PATH","value":"/opt/nvsnap/nim"}],
+  "volumeMounts":[{"mountPath":"/opt/nvsnap"}]}]}}'
+admitted nim /opt/nvsnap
+check "accepts NIM_CACHE_PATH in place of HF_HOME" 0 $?
+
+# A trailing slash is a spelling of the same path, not a different one.
+mk_pod "$VALID"
+admitted vllm /opt/nvsnap/
+check "treats a trailing slash as the same cache dir" 0 $?
+
 echo
 echo "$PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

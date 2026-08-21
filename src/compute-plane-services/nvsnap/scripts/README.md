@@ -70,7 +70,7 @@ than what you asked for.
 | agent version | deployed image != `versions.sh` | numbers would be attributed to the wrong build |
 | image exists | tag missing from the registry | catches a failed push before a 30 min run |
 | placeholder | any `__NAME__` token survived substitution, not just `__CAPTURE_HASH__` | the webhook ignores the pod and it cold-starts |
-| restore admitted | cache dir not mounted, or cache env points outside it | the pod cold-starts while looking like a restore |
+| restore admitted | the agent has no `--pod-cache-dir`, the named container is absent, the cache dir is not mounted, neither `HF_HOME` nor `NIM_CACHE_PATH` is set, or one of them points outside the cache dir | the pod cold-starts while looking like a restore |
 
 The placeholder guard rejects any unresolved `__[A-Z_]+__` token, not only
 `__CAPTURE_HASH__`, because a manifest that still carries `__NODE_NAME__` or
@@ -84,8 +84,19 @@ declined still starts, still serves, and passes every functional check -- it
 just fetches its model again. Without the guard the run reports a restore time
 that is really a cold start, and in `test-bench.sh` that number is published.
 
+Two of its conditions are easy to misread as "nothing to check". Absent cache
+env is a failure, not a pass: a restore pod that inherited none of the stamped
+variables is not restoring from anything. And the named container must exist --
+falling back to the first container would let a decorated sidecar vouch for a
+workload that is cold-starting. Both fail closed.
+
 Shared implementation: `scripts/lib/restore-guard.sh`, sourced by both scripts
-so the contract cannot drift between them.
+so the contract cannot drift between them. `scripts/lib/restore-guard-test.sh`
+covers it with fixtures and needs no cluster:
+
+```sh
+scripts/lib/restore-guard-test.sh
+```
 
 ## When a run fails
 
