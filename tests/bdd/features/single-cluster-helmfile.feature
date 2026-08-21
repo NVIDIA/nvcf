@@ -210,10 +210,11 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
     # The LLM scenario proves the serve path the @llm-gateway scenario
     # only installs: an LLM-type function is routed through the
     # llm-api-gateway and llm-request-router instead of the standard
-    # invocation path. The CLI derives the gateway host from the invoke
-    # URL (invocation.localhost -> llm.localhost) and rewrites the
-    # request body model to <functionId>/<model>, so the scenario only
-    # supplies the OpenAI-compatible path and the model name.
+    # invocation path. For LLM functions the CLI overrides the request
+    # Host header with the LLM gateway host derived from the profile's
+    # invoke host (invocation.localhost -> llm.localhost) and rewrites
+    # the request body model to <functionId>/<model>, so the scenario
+    # only supplies the OpenAI-compatible path and the model name.
     # Depends on the earlier control-plane install and NVCA
     # registration scenarios in this feature run; not a standalone
     # tag target.
@@ -237,12 +238,17 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
         """
       Then the command exit code should be 0
 
+      # The gateway path answers synchronously, so no --poll-duration
+      # (the echo scenarios poll the 202 queue path). "choices" guards
+      # against a degenerate empty envelope; the assertion is tightened
+      # to the sample's reply content once the live run pins it.
       When I run command:
         """
         ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke --inference-url /v1/chat/completions --model-name openai-compatible-sample --request-body '{"messages":[{"role":"user","content":"bdd-llm-echo"}]}' --timeout 120
         """
       Then the command exit code should be 0
       And the command output should contain "chat.completion"
+      And the command output should contain "choices"
 
       # The gateway must reject requests that carry no API key. curl
       # reports only the status code so the assertion cannot match
@@ -251,4 +257,5 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
         """
         curl -s -o /dev/null -w "%{http_code}" -X POST http://llm.localhost:8080/v1/chat/completions -H "Content-Type: application/json" -d '{"model":"unauthenticated/check","messages":[]}'
         """
-      Then the command output should contain "401"
+      Then the command exit code should be 0
+      And the command output should contain "401"
