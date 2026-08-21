@@ -134,9 +134,12 @@ Feature: Install local Helmfile observability with the compute profile
     When I run command "kubectl wait nvcfbackend ncp-local-compute-1 -n nvca-operator --context k3d-ncp-local-compute-1 --for=jsonpath={.status.agentStatus}=healthy --timeout=10m"
     Then the command exit code should be 0
 
-    When I run command "kubectl get opentelemetrycollector nvcf-observability -n monitoring --context k3d-ncp-local-compute-1 -o jsonpath='{.spec.targetAllocator.enabled}'"
-    Then the command exit code should be 0
-    And the command output should contain "true"
+    Then Kubernetes resource "OpenTelemetryCollector/nvcf-observability" in namespace "monitoring" using context "k3d-ncp-local-compute-1" should contain:
+      """
+      spec:
+        targetAllocator:
+          enabled: true
+      """
 
     Then these Kubernetes resources should exist in namespace "monitoring" using context "k3d-ncp-local-compute-1":
       | kind           | name                          |

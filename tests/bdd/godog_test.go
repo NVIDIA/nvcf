@@ -501,6 +501,7 @@ func TestObservabilityControlFeatureFileWiresToSteps(t *testing.T) {
 		registryLoginCommand    = `bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" | helm registry login nvcr.io --username "\$oauthtoken" --password-stdin'`
 		serviceMonitorCommand   = "kubectl get servicemonitor/nvcf-default-monitors-state-metrics --namespace monitoring --context k3d-ncp-local -o name"
 		absentPodMonitorCommand = "kubectl get podmonitor/nvcf-default-monitors-worker --namespace monitoring --context k3d-ncp-local --ignore-not-found -o name"
+		collectorYAMLCommand    = "kubectl get opentelemetrycollector/nvcf-observability --namespace monitoring --context k3d-ncp-local -o yaml"
 	)
 	t.Setenv("NGC_API_KEY", "test-key")
 	t.Setenv("SAMPLE_NGC_ORG", "test-org")
@@ -514,9 +515,9 @@ func TestObservabilityControlFeatureFileWiresToSteps(t *testing.T) {
 			ExitCode: 0,
 			Stdout:   observabilityControlHelmListJSON(),
 		},
-		"kubectl get opentelemetrycollector nvcf-observability -n monitoring --context k3d-ncp-local -o jsonpath='{.spec.targetAllocator.enabled}'": {
+		collectorYAMLCommand: {
 			ExitCode: 0,
-			Stdout:   "true",
+			Stdout:   observabilityCollectorYAML(),
 		},
 	}))
 	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
@@ -573,6 +574,18 @@ func observabilityControlHelmListJSON() string {
 ]`
 }
 
+func observabilityCollectorYAML() string {
+	return `apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: nvcf-observability
+  namespace: monitoring
+spec:
+  targetAllocator:
+    enabled: true
+`
+}
+
 // TestObservabilityComputeFeatureFileWiresToSteps runs the live-install
 // observability-compute feature against a fake runner. It checks that every
 // cluster operation is explicitly routed to the local control or compute
@@ -584,6 +597,7 @@ func TestObservabilityComputeFeatureFileWiresToSteps(t *testing.T) {
 		podMonitorCommand           = "kubectl get podmonitor/nvcf-default-monitors-worker --namespace monitoring --context k3d-ncp-local-compute-1 -o name"
 		absentServiceMonitorCommand = "kubectl get servicemonitor/nvcf-default-monitors-state-metrics --namespace monitoring --context k3d-ncp-local-compute-1 --ignore-not-found -o name"
 		collectorEnabledCommand     = `bash -c 'set -eo pipefail; helm get values nvca-operator --namespace nvca-operator --kube-context k3d-ncp-local-compute-1 -o json | jq -r ".selfManaged.otelCollector.enabled"'`
+		collectorYAMLCommand        = "kubectl get opentelemetrycollector/nvcf-observability --namespace monitoring --context k3d-ncp-local-compute-1 -o yaml"
 		serviceKeyCommand           = `bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" |` +
 			` kubectl --context k3d-ncp-local-compute-1 create secret generic ngc-service-api-key` +
 			` --namespace nvca-system --from-file=ngc-service-api-key=/dev/stdin --dry-run=client -o yaml |` +
@@ -606,9 +620,9 @@ func TestObservabilityComputeFeatureFileWiresToSteps(t *testing.T) {
 			ExitCode: 0,
 			Stdout:   observabilityComputeHelmListJSON(),
 		},
-		"kubectl get opentelemetrycollector nvcf-observability -n monitoring --context k3d-ncp-local-compute-1 -o jsonpath='{.spec.targetAllocator.enabled}'": {
+		collectorYAMLCommand: {
 			ExitCode: 0,
-			Stdout:   "true",
+			Stdout:   observabilityCollectorYAML(),
 		},
 		"helm status function-autoscaler --namespace nvcf --kube-context k3d-ncp-local-compute-1": {
 			ExitCode: 1,
@@ -705,6 +719,7 @@ func TestObservabilityAllFeatureFileWiresToSteps(t *testing.T) {
 		serviceMonitorCommand   = "kubectl get servicemonitor/nvcf-default-monitors-state-metrics --namespace monitoring --context k3d-ncp-local -o name"
 		podMonitorCommand       = "kubectl get podmonitor/nvcf-default-monitors-worker --namespace monitoring --context k3d-ncp-local -o name"
 		collectorEnabledCommand = `bash -c 'set -eo pipefail; helm get values nvca-operator --namespace nvca-operator --kube-context k3d-ncp-local -o json | jq -r ".selfManaged.otelCollector.enabled"'`
+		collectorYAMLCommand    = "kubectl get opentelemetrycollector/nvcf-observability --namespace monitoring --context k3d-ncp-local -o yaml"
 		serviceKeyCommand       = `bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" |` +
 			` kubectl --context k3d-ncp-local create secret generic ngc-service-api-key` +
 			` --namespace nvca-system --from-file=ngc-service-api-key=/dev/stdin --dry-run=client -o yaml |` +
@@ -728,9 +743,9 @@ func TestObservabilityAllFeatureFileWiresToSteps(t *testing.T) {
 			ExitCode: 0,
 			Stdout:   observabilityAllHelmListJSON(),
 		},
-		"kubectl get opentelemetrycollector nvcf-observability -n monitoring --context k3d-ncp-local -o jsonpath='{.spec.targetAllocator.enabled}'": {
+		collectorYAMLCommand: {
 			ExitCode: 0,
-			Stdout:   "true",
+			Stdout:   observabilityCollectorYAML(),
 		},
 	}))
 	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
@@ -1325,7 +1340,7 @@ selfManaged:
 // Helmfile feature against a fake CommandRunner. The fakeRunner
 // returns ExitCode 0 for unknown commands by default, so only the
 // commands with assertion-driven output (gateway-address jsonpath,
-// helm list JSON, httproute hostname) need canned responses. The
+// helm list JSON, HTTPRoute YAML) need canned responses. The
 // I export step records the gateway jsonpath stdout into the env
 // Ledger; subsequent ${EKS_GATEWAY_ADDR} interpolations then use the
 // exported value, which is what the @control-plane httproute
@@ -1357,8 +1372,8 @@ func TestSingleClusterEKSHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		"kubectl --context " + eksContext + " get gateway nvcf-gateway -n envoy-gateway -o jsonpath={.status.addresses[0].value}": {ExitCode: 0, Stdout: wiringGatewayLB},
 		// @control-plane: helm list assertion covers the 16 deployed releases.
 		"helm list --all-namespaces --kube-context " + eksContext + " -o json": {ExitCode: 0, Stdout: helmListAllNamespacesJSON()},
-		// @control-plane: httproute jsonpath assertion expects api.<gw>.
-		"kubectl --context " + eksContext + " get httproute nvcf-api -n envoy-gateway -o jsonpath={.spec.hostnames[0]}": {ExitCode: 0, Stdout: "api." + wiringGatewayLB},
+		// @control-plane: HTTPRoute subset assertion expects api.<gw>.
+		"kubectl get httproute/nvcf-api --namespace envoy-gateway --context " + eksContext + " -o yaml": {ExitCode: 0, Stdout: "spec:\n  hostnames:\n    - api." + wiringGatewayLB + "\n"},
 	}))
 	seedStackBaseYaml(t, suite.Config.RepoRoot)
 	seedComputePlaneBaseYaml(t, suite.Config.RepoRoot)
@@ -1398,7 +1413,7 @@ func TestSingleClusterEKSHelmfileFeatureFileWiresToSteps(t *testing.T) {
 // TestMultiClusterEKSHelmfileFeatureFileWiresToSteps runs the
 // multi-cluster EKS Helmfile feature against a fake CommandRunner.
 // Canned outputs cover the control-plane gateway-address jsonpath, the
-// control-plane helm-list, the api HTTPRoute hostname, the compute
+// control-plane helm-list, the API HTTPRoute and ConfigMaps, the compute
 // nvca-operator helm-list, and the function invoke. The helm-list keys
 // carry distinct --kube-context values so the test exercises the
 // control-plane vs compute split. @gateway-setup's export step captures
@@ -1443,18 +1458,22 @@ func TestMultiClusterEKSHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		"tests/bdd/scripts/resolve-gateway-domain.sh " + wiringGatewayLB:                                                         {ExitCode: 0, Stdout: wiringGatewayDomain},
 		// control-plane helm list assertion.
 		"helm list --all-namespaces --kube-context " + cpContext + " -o json": {ExitCode: 0, Stdout: helmListAllNamespacesJSON()},
-		// control-plane api HTTPRoute hostname assertion.
-		"kubectl --context " + cpContext + " get httproute nvcf-api -n envoy-gateway -o jsonpath={.spec.hostnames[0]}": {ExitCode: 0, Stdout: "api." + wiringGatewayDomain},
+		// control-plane API HTTPRoute hostname assertion.
+		"kubectl get httproute/nvcf-api --namespace envoy-gateway --context " + cpContext + " -o yaml": {ExitCode: 0, Stdout: "spec:\n  hostnames:\n    - api." + wiringGatewayDomain + "\n"},
 		// control-plane API environment config assertions.
-		"kubectl --context " + cpContext + " get configmap nvcf-api-env -n nvcf -o yaml": {ExitCode: 0, Stdout: `data:
-	NVCF_FQDN: http://api.` + wiringGatewayDomain + `
-	NVCF_GLOBAL_FQDN_GRPC: http://worker-api.` + wiringGatewayDomain + `
-	NVCF_NATS_WORKER_URL: nats://` + wiringGatewayLB + `:4222
-`},
-		"kubectl --context " + cpContext + " get configmap nvct-api-env -n nvcf -o yaml": {ExitCode: 0, Stdout: `data:
-	NVCT_FQDN: http://tasks.` + wiringGatewayDomain + `
-	NVCT_GLOBAL_FQDN_GRPC: http://worker-tasks.` + wiringGatewayDomain + `
-`},
+		"kubectl get configmap/nvcf-api-env --namespace nvcf --context " + cpContext + " -o yaml": {
+			ExitCode: 0,
+			Stdout: "data:\n" +
+				"  NVCF_FQDN: http://api." + wiringGatewayDomain + "\n" +
+				"  NVCF_GLOBAL_FQDN_GRPC: http://worker-api." + wiringGatewayDomain + "\n" +
+				"  NVCF_NATS_WORKER_URL: nats://" + wiringGatewayLB + ":4222\n",
+		},
+		"kubectl get configmap/nvct-api-env --namespace nvcf --context " + cpContext + " -o yaml": {
+			ExitCode: 0,
+			Stdout: "data:\n" +
+				"  NVCT_FQDN: http://tasks." + wiringGatewayDomain + "\n" +
+				"  NVCT_GLOBAL_FQDN_GRPC: http://worker-tasks." + wiringGatewayDomain + "\n",
+		},
 		// compute nvca-operator helm list assertion.
 		"helm list --all-namespaces --kube-context " + computeContext + " -o json": {ExitCode: 0, Stdout: helmListNVCAJSON()},
 		pullSecretCommand: {ExitCode: 0},

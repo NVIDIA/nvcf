@@ -31,25 +31,13 @@ type KubernetesResource struct {
 // KubernetesResourceGetCommand builds an explicit-context kubectl get for one
 // resource. ignoreNotFound makes a missing resource produce empty name output.
 func KubernetesResourceGetCommand(namespace, kubeContext string, resource KubernetesResource, ignoreNotFound bool) (string, error) {
-	namespace = strings.TrimSpace(Interpolate(namespace))
-	kubeContext = strings.TrimSpace(Interpolate(kubeContext))
-	kind := strings.TrimSpace(Interpolate(resource.Kind))
-	name := strings.TrimSpace(Interpolate(resource.Name))
-	if namespace == "" {
-		return "", fmt.Errorf("namespace is empty")
-	}
-	if kubeContext == "" {
-		return "", fmt.Errorf("kube context is empty")
-	}
-	if kind == "" {
-		return "", fmt.Errorf("kubernetes resource kind is empty")
-	}
-	if name == "" {
-		return "", fmt.Errorf("kubernetes resource name is empty")
+	namespace, kubeContext, resource, err := resolveKubernetesResource(namespace, kubeContext, resource)
+	if err != nil {
+		return "", err
 	}
 
 	args := []string{
-		"kubectl", "get", quoteCommandArg(strings.ToLower(kind) + "/" + name),
+		"kubectl", "get", quoteCommandArg(strings.ToLower(resource.Kind) + "/" + resource.Name),
 		"--namespace", quoteCommandArg(namespace),
 		"--context", quoteCommandArg(kubeContext),
 	}
@@ -58,6 +46,42 @@ func KubernetesResourceGetCommand(namespace, kubeContext string, resource Kubern
 	}
 	args = append(args, "-o", "name")
 	return strings.Join(args, " "), nil
+}
+
+// KubernetesResourceYAMLGetCommand builds an explicit-context kubectl get
+// whose stdout is the named resource serialized as YAML.
+func KubernetesResourceYAMLGetCommand(namespace, kubeContext string, resource KubernetesResource) (string, error) {
+	namespace, kubeContext, resource, err := resolveKubernetesResource(namespace, kubeContext, resource)
+	if err != nil {
+		return "", err
+	}
+	args := []string{
+		"kubectl", "get", quoteCommandArg(strings.ToLower(resource.Kind) + "/" + resource.Name),
+		"--namespace", quoteCommandArg(namespace),
+		"--context", quoteCommandArg(kubeContext),
+		"-o", "yaml",
+	}
+	return strings.Join(args, " "), nil
+}
+
+func resolveKubernetesResource(namespace, kubeContext string, resource KubernetesResource) (string, string, KubernetesResource, error) {
+	namespace = strings.TrimSpace(Interpolate(namespace))
+	kubeContext = strings.TrimSpace(Interpolate(kubeContext))
+	resource.Kind = strings.TrimSpace(Interpolate(resource.Kind))
+	resource.Name = strings.TrimSpace(Interpolate(resource.Name))
+	if namespace == "" {
+		return "", "", KubernetesResource{}, fmt.Errorf("namespace is empty")
+	}
+	if kubeContext == "" {
+		return "", "", KubernetesResource{}, fmt.Errorf("kube context is empty")
+	}
+	if resource.Kind == "" {
+		return "", "", KubernetesResource{}, fmt.Errorf("kubernetes resource kind is empty")
+	}
+	if resource.Name == "" {
+		return "", "", KubernetesResource{}, fmt.Errorf("kubernetes resource name is empty")
+	}
+	return namespace, kubeContext, resource, nil
 }
 
 // KubernetesResourceAbsent requires empty output from an ignore-not-found get.

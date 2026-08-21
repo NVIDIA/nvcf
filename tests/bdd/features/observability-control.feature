@@ -62,8 +62,12 @@ Feature: Install local Helmfile observability with the control profile
       | otel-collector           | monitoring |
       | default-monitors         | monitoring |
 
-    When I successfully run command "kubectl get opentelemetrycollector nvcf-observability -n monitoring --context k3d-ncp-local -o jsonpath='{.spec.targetAllocator.enabled}'"
-    And the command output should contain "true"
+    Then Kubernetes resource "OpenTelemetryCollector/nvcf-observability" in namespace "monitoring" using context "k3d-ncp-local" should contain:
+      """
+      spec:
+        targetAllocator:
+          enabled: true
+      """
 
     Then these Kubernetes resources should exist in namespace "monitoring" using context "k3d-ncp-local":
       | kind           | name                                             |
