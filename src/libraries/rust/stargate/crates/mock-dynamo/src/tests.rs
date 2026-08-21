@@ -631,6 +631,116 @@ async fn chat_completion_retains_prefix_only_after_modeled_prefill_completes() {
     );
 }
 
+#[tokio::test(start_paused = true)]
+async fn non_streaming_chat_reports_input_when_prefill_completes() {
+    let state = AppState {
+        prefill_tokens_per_s: 100.0,
+        ttft: Duration::from_secs(10),
+        ..test_state()
+    };
+    let mut stats_events = state.stats_events.subscribe();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-request-id",
+        HeaderValue::from_static("req-prefill-stats"),
+    );
+    headers.insert("x-input-tokens", HeaderValue::from_static("100"));
+    let mut chat_request = request(Some(1));
+    chat_request.stream = Some(false);
+
+    let request = tokio::spawn(chat_completions(State(state), headers, Json(chat_request)));
+    let StatsStreamEvent::Stats {
+        tokens_processed,
+        tokens_generated,
+        finished,
+        ..
+    } = stats_events
+        .recv()
+        .await
+        .expect("baseline event should arrive")
+    else {
+        panic!("expected a stats event");
+    };
+    assert_eq!(tokens_processed, Some(0));
+    assert_eq!(tokens_generated, Some(0));
+    assert!(!finished);
+
+    tokio::time::advance(Duration::from_millis(999)).await;
+    assert!(matches!(
+        stats_events.try_recv(),
+        Err(broadcast::error::TryRecvError::Empty)
+    ));
+    tokio::time::advance(Duration::from_millis(1)).await;
+
+    let StatsStreamEvent::Stats {
+        tokens_processed,
+        tokens_generated,
+        finished,
+        ..
+    } = stats_events
+        .recv()
+        .await
+        .expect("prefill event should arrive")
+    else {
+        panic!("expected a stats event");
+    };
+    assert_eq!(tokens_processed, Some(100));
+    assert_eq!(tokens_generated, Some(0));
+    assert!(!finished);
+    assert!(
+        !request.is_finished(),
+        "TTFT should still delay the response"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn responses_reports_input_without_waiting_for_stream_polling() {
+    let state = AppState {
+        prefill_tokens_per_s: 100.0,
+        ttft: Duration::from_secs(10),
+        ..test_state()
+    };
+    let mut stats_events = state.stats_events.subscribe();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-request-id",
+        HeaderValue::from_static("req-response-prefill"),
+    );
+    headers.insert("x-input-tokens", HeaderValue::from_static("100"));
+    let response_request = ResponsesRequest {
+        stream: Some(true),
+        model: Some("dummy-model".to_string()),
+        max_output_tokens: Some(1),
+        input: None,
+    };
+
+    let request = tokio::spawn(responses(State(state), headers, Json(response_request)));
+    stats_events
+        .recv()
+        .await
+        .expect("baseline event should arrive");
+    tokio::time::advance(Duration::from_secs(1)).await;
+    let StatsStreamEvent::Stats {
+        tokens_processed,
+        tokens_generated,
+        finished,
+        ..
+    } = stats_events
+        .recv()
+        .await
+        .expect("prefill event should arrive")
+    else {
+        panic!("expected a stats event");
+    };
+
+    assert_eq!(tokens_processed, Some(100));
+    assert_eq!(tokens_generated, Some(0));
+    assert!(!finished);
+    request
+        .await
+        .expect("responses request should return a stream");
+}
+
 #[test]
 fn kv_cache_evicts_least_recently_used_entry() {
     let mut cache = KvCacheState::new(300);

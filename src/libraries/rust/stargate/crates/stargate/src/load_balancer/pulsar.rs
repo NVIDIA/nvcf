@@ -17,13 +17,15 @@ mod ranking;
 
 use std::sync::Arc;
 
+use stargate_protocol::common::valid_last_mean_input_tps;
+
 use super::{
     LoadBalancer, LoadBalancerAlgorithmConfig, LoadBalancerCandidateChoice, LoadBalancerRequest,
 };
 use crate::routing_state::RoutedClusterSnapshot;
 use ranking::{
     PulsarRankingLookup, PulsarRankingStore, PulsarScorer, ScoredCandidate,
-    compare_ranked_candidate, has_valid_input_capacity,
+    compare_ranked_candidate,
 };
 
 #[cfg(test)]
@@ -56,11 +58,12 @@ impl LoadBalancer for PulsarLoadBalancer {
         request: &LoadBalancerRequest<'_>,
         candidates: &[RoutedClusterSnapshot],
     ) -> Option<LoadBalancerCandidateChoice> {
-        let (lookup, cached_choice) =
-            self.rankings
-                .lookup_choice(request, candidates, |ranking| {
-                    self.choose_from_ranked_indices(request, candidates, ranking)
-                })?;
+        let (lookup, cached_choice) = self.rankings.lookup_choice(
+            self.config.rendezvous_weight,
+            request,
+            candidates,
+            |ranking| self.choose_from_ranked_indices(request, candidates, ranking),
+        )?;
         match lookup {
             PulsarRankingLookup::Hit => cached_choice,
             PulsarRankingLookup::MissCacheable => {
@@ -70,9 +73,13 @@ impl LoadBalancer for PulsarLoadBalancer {
                 }
                 let choice = self.choose_from_ranked_indices(request, candidates, &ranking);
                 self.rankings
-                    .insert_or_choose_existing(request, candidates, ranking, |cached| {
-                        self.choose_from_ranked_indices(request, candidates, cached)
-                    })
+                    .insert_or_choose_existing(
+                        self.config.rendezvous_weight,
+                        request,
+                        candidates,
+                        ranking,
+                        |cached| self.choose_from_ranked_indices(request, candidates, cached),
+                    )
                     .or(choice)
             }
             PulsarRankingLookup::MissBypass => self.choose_by_score_scan(request, candidates),
@@ -116,7 +123,12 @@ impl PulsarLoadBalancer {
         request: &LoadBalancerRequest<'_>,
         candidates: &[RoutedClusterSnapshot],
     ) -> Vec<usize> {
-        ranking::pulsar_ranked_indices(self.config.seed(), request, candidates)
+        ranking::pulsar_ranked_indices(
+            self.config.seed(),
+            self.config.rendezvous_weight,
+            request,
+            candidates,
+        )
     }
 
     fn choose_by_score_scan(
@@ -124,7 +136,8 @@ impl PulsarLoadBalancer {
         request: &LoadBalancerRequest<'_>,
         candidates: &[RoutedClusterSnapshot],
     ) -> Option<LoadBalancerCandidateChoice> {
-        let mut scorer = PulsarScorer::new(self.config.seed(), request);
+        let mut scorer =
+            PulsarScorer::new(self.config.seed(), request, self.config.rendezvous_weight);
         let mut best_overall = None;
         let mut best_feasible = None;
         for (candidate_index, candidate) in candidates.iter().enumerate() {
@@ -182,7 +195,8 @@ impl PulsarLoadBalancer {
         chosen: &RoutedClusterSnapshot,
         chosen_score: f64,
     ) -> (usize, bool) {
-        let mut scorer = PulsarScorer::new(self.config.seed(), request);
+        let mut scorer =
+            PulsarScorer::new(self.config.seed(), request, self.config.rendezvous_weight);
         let mut rank_depth = 1;
         let mut skipped_for_kv_free_tokens = false;
         for candidate in candidates {
@@ -201,7 +215,7 @@ impl PulsarLoadBalancer {
 
     #[cfg(test)]
     pub(super) fn weight(&self, candidate: &RoutedClusterSnapshot) -> Option<f64> {
-        ranking::pulsar_weight(candidate)
+        ranking::pulsar_weight(self.config.rendezvous_weight, candidate)
     }
 
     pub(super) fn feasibility(
@@ -218,7 +232,7 @@ pub(super) fn input_work_admission_candidate(
     request: &LoadBalancerRequest<'_>,
     candidate: &RoutedClusterSnapshot,
 ) -> bool {
-    has_valid_input_capacity(candidate)
+    valid_last_mean_input_tps(candidate.stats.last_mean_input_tps)
         && candidate_feasibility(config, request, candidate).is_eligible()
 }
 

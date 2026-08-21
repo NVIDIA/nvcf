@@ -40,8 +40,6 @@ backends:
       decode_jitter_ms: 3
       prefill_tokens_per_s: 4500
       decode_tokens_per_s: 95
-    registration:
-      last_mean_input_tps: 130
 
 traffic_pattern:
   kind: zipf_hotset

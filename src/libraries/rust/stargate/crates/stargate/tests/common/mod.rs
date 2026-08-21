@@ -1271,10 +1271,7 @@ pub async fn start_and_register_backend_with_bringup(
         ModelLifecycleConfig {
             upstream_http_base_url: upstream_http_base_url.clone(),
             source: ModelSource::Static(BTreeSet::from([model.to_string()])),
-            initialization: ModelInitialization::ConfiguredInputTps {
-                input_tps: 1.0,
-                pin: true,
-            },
+            initialization: ModelInitialization::ConfiguredInputTps { input_tps: 1.0 },
             bringup,
             health_paths: pylon_lib::UpstreamHealthPaths::default(),
             startup_health_wait: std::time::Duration::ZERO,

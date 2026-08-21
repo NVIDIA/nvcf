@@ -157,7 +157,6 @@ impl StatsAggregator {
         let Some(generation_state) = self.per_model.get_mut(&observation.model_id) else {
             return changed_models;
         };
-        let pinned_input_tps = generation_state.pinned_input_tps;
         let model_state = &mut generation_state.metrics;
         model_state.chunk_usage_stats_observed |= observation.output_tokens_from_chunk_usage;
         let record_sample = |samples, sum: &mut f64, max: &mut f64, sample| {
@@ -200,9 +199,9 @@ impl StatsAggregator {
                 }
             }
         }
-        if input_sample.is_some_and(|sample| {
-            apply_input_throughput_sample(&self.config, model_state, pinned_input_tps, sample)
-        }) {
+        if input_sample
+            .is_some_and(|sample| apply_input_throughput_sample(&self.config, model_state, sample))
+        {
             push_changed_model(&mut changed_models, observation.model_id.clone());
         }
         changed_models

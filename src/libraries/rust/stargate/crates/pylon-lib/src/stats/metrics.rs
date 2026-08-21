@@ -165,6 +165,7 @@ metrics! {
         float_gauge output_tps("model_output_tps", "Current output TPS by model", ["model"]);
         float_gauge embedding_item_tps("model_embedding_item_tps", "Current embeddings item throughput by model", ["model"]);
         float_gauge last_mean_input_tps("model_last_mean_input_tps", "Last valid mean input TPS by model", ["model"]);
+        float_gauge max_input_tps("model_max_input_tps", "Generation max input TPS by model", ["model"]);
         float_gauge max_output_tps("model_max_output_tps", "Observed max output TPS by model", ["model"]);
         float_gauge max_embedding_item_tps("model_max_embedding_item_tps", "Observed max embeddings item throughput by model", ["model"]);
         float_gauge queue_size("model_queue_size", "Current queued request count by model", ["model"]);
@@ -350,6 +351,12 @@ impl PylonMetrics {
         ] {
             gauge.with_label_values(&[model_id]).set(value);
         }
+        match stats.max_input_tps {
+            Some(value) => self.max_input_tps.with_label_values(&[model_id]).set(value),
+            None => {
+                let _ = self.max_input_tps.remove_label_values(&[model_id]);
+            }
+        }
         for (gauge, values) in [
             (&self.stats_capability, &stats.stats_capabilities),
             (&self.stats_source, &stats.stats_sources),
@@ -391,6 +398,7 @@ impl PylonMetrics {
             &self.output_tps,
             &self.embedding_item_tps,
             &self.last_mean_input_tps,
+            &self.max_input_tps,
             &self.max_output_tps,
             &self.max_embedding_item_tps,
             &self.queue_size,
@@ -828,6 +836,7 @@ mod tests {
         let metrics = PylonMetrics::new().expect("metrics should initialize");
         let stats = CurrentModelStats {
             last_mean_input_tps: 12.0,
+            max_input_tps: Some(13.0),
             stats_capabilities: vec!["input_tps".to_string()],
             stats_sources: vec!["engine_stats_stream".to_string()],
             ..CurrentModelStats::default()
@@ -995,6 +1004,7 @@ mod tests {
                 output_tps: 20.0,
                 embedding_item_tps: 25.0,
                 last_mean_input_tps: 30.0,
+                max_input_tps: Some(35.0),
                 max_output_tps: 40.0,
                 max_embedding_item_tps: 45.0,
                 queue_size: 2,
@@ -1014,6 +1024,7 @@ mod tests {
                 r#"pylon_model_output_tps{model="model-a"} 20"#,
                 r#"pylon_model_embedding_item_tps{model="model-a"} 25"#,
                 r#"pylon_model_last_mean_input_tps{model="model-a"} 30"#,
+                r#"pylon_model_max_input_tps{model="model-a"} 35"#,
                 r#"pylon_model_max_embedding_item_tps{model="model-a"} 45"#,
                 r#"pylon_model_queue_size{model="model-a"} 2"#,
                 r#"pylon_model_queued_input_tokens{model="model-a"} 17"#,
@@ -1022,6 +1033,10 @@ mod tests {
                 r#"pylon_model_stats_source{model="model-a",source="engine_stats_stream"} 1"#,
             ],
         );
+
+        metrics.observe_model_stats("model-a", &CurrentModelStats::default());
+        let body = metrics.gather_text().expect("metrics should encode");
+        assert!(!body.contains(r#"pylon_model_max_input_tps{model="model-a"}"#));
     }
 
     #[test]

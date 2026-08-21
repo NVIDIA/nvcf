@@ -563,8 +563,8 @@ pub fn topology_for(backends: &BackendConfig) -> RoutingTopology {
     for index in 0..backends.count {
         let capacity = backends
             .profile_for_index(index)
-            .registration
-            .last_mean_input_tps;
+            .service_time_ms
+            .prefill_tokens_per_s;
         if capacity > 0.0 && capacity.is_finite() {
             let backend_id = format!("backend-{index}");
             let cluster_id = backends.effective_cluster_id_for_index(index);
@@ -660,9 +660,7 @@ fn percentile(values: &[u64], q: f64) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{
-        BackendProfile, BackendProfileGroup, RegistrationConfig, ServiceTimeConfig,
-    };
+    use crate::config::{BackendProfile, BackendProfileGroup, ServiceTimeConfig};
 
     fn result(backend: &str, ttft: u64, ttlt: u64) -> RequestResult {
         RequestResult {
@@ -705,7 +703,7 @@ mod tests {
         default_tps: f64,
         groups: &[(usize, f64)],
     ) -> BackendConfig {
-        let profile = |last_mean_input_tps| BackendProfile {
+        let profile = |prefill_tokens_per_s| BackendProfile {
             name: "test".to_string(),
             weight: 1.0,
             max_concurrent_requests: None,
@@ -715,10 +713,7 @@ mod tests {
                 ttft_jitter_ms: 0,
                 decode_tokens_per_s: 1,
                 decode_jitter_ms: 0,
-                prefill_tokens_per_s: None,
-            },
-            registration: RegistrationConfig {
-                last_mean_input_tps,
+                prefill_tokens_per_s,
             },
         };
         BackendConfig {

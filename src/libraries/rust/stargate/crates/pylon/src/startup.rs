@@ -635,10 +635,6 @@ fn model_initialization_from_args(args: &Args) -> Result<ModelInitialization> {
             .is_none_or(|input_tps| input_tps.is_finite() && input_tps > 0.0),
         "initial input TPS must be finite and positive"
     );
-    ensure!(
-        !args.benchmark_pin_input_tps || args.initial_input_tps.is_some(),
-        "--benchmark-pin-input-tps requires --initial-input-tps"
-    );
     if args.do_calibration {
         ensure!(
             args.calibration_requests > 0,
@@ -654,10 +650,7 @@ fn model_initialization_from_args(args: &Args) -> Result<ModelInitialization> {
     }
 
     Ok(match args.initial_input_tps {
-        Some(input_tps) => ModelInitialization::ConfiguredInputTps {
-            input_tps,
-            pin: args.benchmark_pin_input_tps,
-        },
+        Some(input_tps) => ModelInitialization::ConfiguredInputTps { input_tps },
         None => ModelInitialization::Uncalibrated,
     })
 }
@@ -1053,10 +1046,7 @@ mod tests {
             ModelLifecycleConfig {
                 upstream_http_base_url: "http://127.0.0.1:1".to_string(),
                 source: ModelSource::Static(BTreeSet::new()),
-                initialization: ModelInitialization::ConfiguredInputTps {
-                    input_tps: 1.0,
-                    pin: false,
-                },
+                initialization: ModelInitialization::ConfiguredInputTps { input_tps: 1.0 },
                 bringup: BringupConfig {
                     enabled: false,
                     ..BringupConfig::default()
@@ -1410,10 +1400,7 @@ mod tests {
             ModelLifecycleConfig {
                 upstream_http_base_url: plan.upstream.clone(),
                 source: ModelSource::Static(BTreeSet::from(["model-a".to_string()])),
-                initialization: ModelInitialization::ConfiguredInputTps {
-                    input_tps: 1_000.0,
-                    pin: false,
-                },
+                initialization: ModelInitialization::ConfiguredInputTps { input_tps: 1_000.0 },
                 bringup: BringupConfig {
                     enabled: false,
                     ..BringupConfig::default()
