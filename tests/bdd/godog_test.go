@@ -492,6 +492,82 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	}
 }
 
+// TestSingleClusterHelmfilePKIFeatureFileWiresToSteps runs the PKI
+// Helmfile feature against a fake runner. The feature authors its own
+// local-bdd-pki environment from the same fixtures the non-PKI feature
+// uses and distributes the trust bundle via the helper script, so the
+// wiring test only needs canned results for the script, the LLM
+// invoke, and the no-auth curl.
+func TestSingleClusterHelmfilePKIFeatureFileWiresToSteps(t *testing.T) {
+	t.Setenv("NGC_API_KEY", "test-key")
+	t.Setenv("SAMPLE_NGC_ORG", "test-org")
+	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
+	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
+	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
+		"helm list --all-namespaces --kube-context k3d-ncp-local -o json": {ExitCode: 0, Stdout: helmListAllNamespacesJSON()},
+		"tests/bdd/scripts/write-transport-trust-env.sh deploy/stacks/nvcf-compute-plane/environments/local-bdd-pki.yaml": {
+			ExitCode: 0,
+			Stdout:   "wrote transportTLS bundle config (fingerprint sha256:abc) to deploy/stacks/nvcf-compute-plane/environments/local-bdd-pki.yaml\n",
+		},
+		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke" +
+			" --inference-url /v1/chat/completions --model-name openai-compatible-sample" +
+			" --request-body '{\"messages\":[{\"role\":\"user\",\"content\":\"bdd-pki-llm\"}]}' --timeout 120": {
+			ExitCode: 0,
+			Stdout: "Function invocation completed!\n\nResponse:\n" +
+				`{"object":"chat.completion","choices":[{"message":{"content":"This is a fixed 128-byte response from an NVCF-hosted OpenAI-compatible sample, used for load testing and throughput benchmarks."}}]}` +
+				"\n",
+		},
+		`curl -s -o /dev/null -w "%{http_code}" -X POST http://llm.localhost:8080/v1/chat/completions -H "Content-Type: application/json" -d '{"model":"unauthenticated/check","messages":[]}'`: {
+			ExitCode: 0,
+			Stdout:   "401",
+		},
+		// Conflict precheck: feature asserts the conflicting
+		// multi-cluster control-plane is absent.
+		"k3d cluster get ncp-local-cp": {ExitCode: 1},
+	}))
+	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
+	seedComputePlaneLocalBDDFixture(t, suite.Config.RepoRoot)
+	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+	writeHelmfileRegisterValues(t, suite.Config.RepoRoot)
+
+	sc := steps.NewScenarioContext(suite)
+	featurePath := mustResolveFeaturePath(t, "single-cluster-helmfile-pki.feature")
+	var out strings.Builder
+	status := godog.TestSuite{
+		Name: "single-cluster-helmfile-pki-wiring",
+		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
+			steps.RegisterAll(ctx, sc)
+		},
+		Options: &godog.Options{
+			Format: "pretty",
+			Paths:  []string{featurePath},
+			Strict: true,
+			Output: &out,
+		},
+	}.Run()
+	if status != 0 {
+		t.Fatalf("godog suite status = %d\n%s", status, out.String())
+	}
+	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "install HELMFILE_ENV=local-bdd-pki") {
+		t.Fatal("PKI helmfile install make target was never invoked")
+	}
+	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "kubectl wait clusterissuer nvcf-openbao-pki") {
+		t.Fatal("cluster issuer readiness wait was never invoked")
+	}
+	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "write-transport-trust-env.sh") {
+		t.Fatal("trust distribution script was never invoked")
+	}
+	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
+		"function create --name bdd-pki-openai-compatible-sample",
+		"--function-type LLM") {
+		t.Fatal("LLM sample function was not created with the LLM function type")
+	}
+	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "http://llm.localhost:8080/v1/chat/completions") {
+		t.Fatal("unauthenticated LLM gateway check was never invoked")
+	}
+}
+
 // TestObservabilityControlFeatureFileWiresToSteps runs the live-install
 // observability-control feature against a fake runner. It checks the
 // single-cluster Helmfile path renders and verifies the profile-selected
@@ -1065,6 +1141,7 @@ func helmListAllNamespacesJSON() string {
 {"name":"nats","namespace":"nats-system","status":"deployed"},
 {"name":"cert-manager","namespace":"cert-manager","status":"deployed"},
 {"name":"openbao-server","namespace":"vault-system","status":"deployed"},
+{"name":"nvcf-pki","namespace":"cert-manager","status":"deployed"},
 {"name":"cassandra","namespace":"cassandra-system","status":"deployed"},
 {"name":"api-keys","namespace":"api-keys","status":"deployed"},
 {"name":"sis","namespace":"sis","status":"deployed"},
@@ -1550,6 +1627,15 @@ func TestSingleClusterHelmfile(t *testing.T) {
 		t.Skip("live run skipped under -short")
 	}
 	runLiveFeature(t, "single-cluster-helmfile.feature")
+}
+
+// TestSingleClusterHelmfilePKI is the live entry point for the
+// PKI-secured LLM transport Helmfile feature. Skipped under -short.
+func TestSingleClusterHelmfilePKI(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live run skipped under -short")
+	}
+	runLiveFeature(t, "single-cluster-helmfile-pki.feature")
 }
 
 // TestObservabilityControl is the live entry point for the control

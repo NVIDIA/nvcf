@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Reads the NVCF root CA public certificate from OpenBao and writes the
+# worker transport trust configuration into a compute-plane Helmfile
+# environment file, replacing that file's agentConfig block. The
+# fingerprint uses the canonical nvcf-trust-bundle-v1 algorithm (same
+# as nvcf-cli and NVCA): sha256 of "nvcf-trust-bundle-v1\n" plus the
+# sorted, deduplicated lowercase-hex sha256 digests of each
+# certificate's DER bytes, one per line, each line LF-terminated.
+#
+# The CA certificate is public material; the OpenBao root token is
+# read from its Kubernetes Secret and passed to curl inside a
+# port-forward session, never printed.
+#
+# Usage: write-transport-trust-env.sh <compute-env-file>
+
+set -euo pipefail
+
+ENV_FILE="${1:?usage: write-transport-trust-env.sh <compute-env-file>}"
+OPENBAO_NAMESPACE="${OPENBAO_NAMESPACE:-vault-system}"
+OPENBAO_SERVICE="${OPENBAO_SERVICE:-openbao-server}"
+OPENBAO_SECRET_NAME="${OPENBAO_SECRET_NAME:-openbao-server-root-token}"
+ROOT_PKI_PATH="${ROOT_PKI_PATH:-services/all/pki/root}"
+LOCAL_PORT="${LOCAL_PORT:-18200}"
+
+for tool in kubectl curl openssl python3; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "required tool not found: $tool" >&2
+    exit 127
+  fi
+done
+
+if [[ ! -f "$ENV_FILE" ]]; then
+  echo "compute environment file not found: $ENV_FILE" >&2
+  exit 1
+fi
+if [[ "$(grep -c '^agentConfig:' "$ENV_FILE")" != "1" ]]; then
+  echo "expected exactly one top-level agentConfig block in $ENV_FILE" >&2
+  exit 1
+fi
+
+root_token="$(kubectl get secret "$OPENBAO_SECRET_NAME" -n "$OPENBAO_NAMESPACE" \
+  -o jsonpath='{.data.root_token}' | base64 -d)"
+if [[ -z "$root_token" ]]; then
+  echo "empty OpenBao root token from secret $OPENBAO_NAMESPACE/$OPENBAO_SECRET_NAME" >&2
+  exit 1
+fi
+
+# Port-forward instead of kubectl run: no pod churn and no attach race.
+kubectl port-forward -n "$OPENBAO_NAMESPACE" "svc/$OPENBAO_SERVICE" \
+  "$LOCAL_PORT:8200" >/dev/null 2>&1 &
+pf_pid=$!
+trap 'kill "$pf_pid" 2>/dev/null || true' EXIT
+
+ca_pem=""
+for _ in $(seq 1 20); do
+  if ca_pem="$(curl -sSf "http://127.0.0.1:$LOCAL_PORT/v1/$ROOT_PKI_PATH/cert/ca" \
+      -H "X-Vault-Token: $root_token" 2>/dev/null \
+      | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["certificate"])')"; then
+    break
+  fi
+  ca_pem=""
+  sleep 1
+done
+if [[ -z "$ca_pem" ]] || ! grep -q "BEGIN CERTIFICATE" <<<"$ca_pem"; then
+  echo "failed to read root CA PEM from OpenBao at $ROOT_PKI_PATH/cert/ca" >&2
+  exit 1
+fi
+
+# nvcf-trust-bundle-v1 canonical fingerprint. The root read returns a
+# single certificate, but implement the full contract anyway.
+cert_hashes="$(python3 - "$ca_pem" <<'PYEOF'
+import subprocess, sys
+
+pem = sys.argv[1]
+blocks, current, inside = [], [], False
+for line in pem.splitlines():
+    if "-----BEGIN CERTIFICATE-----" in line:
+        inside, current = True, [line]
+    elif "-----END CERTIFICATE-----" in line and inside:
+        current.append(line)
+        blocks.append("\n".join(current) + "\n")
+        inside = False
+    elif inside:
+        current.append(line)
+
+hashes = []
+for block in blocks:
+    der = subprocess.run(
+        ["openssl", "x509", "-outform", "DER"],
+        input=block.encode(), capture_output=True, check=True).stdout
+    digest = subprocess.run(
+        ["openssl", "dgst", "-sha256", "-r"],
+        input=der, capture_output=True, check=True).stdout.split()[0].decode()
+    if digest not in hashes:
+        hashes.append(digest)
+
+for h in sorted(hashes):
+    print(h)
+PYEOF
+)"
+if [[ -z "$cert_hashes" ]]; then
+  echo "no certificate hashes computed from the root CA PEM" >&2
+  exit 1
+fi
+fingerprint="sha256:$(printf 'nvcf-trust-bundle-v1\n%s\n' "$cert_hashes" \
+  | openssl dgst -sha256 -r | cut -d' ' -f1)"
+
+# Replace the trailing agentConfig block. The suite authors this file
+# from a fixture whose agentConfig block is the final top-level key.
+tmp="$(mktemp "${TMPDIR:-/tmp}/compute-env.XXXXXX")"
+sed '/^agentConfig:/,$d' "$ENV_FILE" >"$tmp"
+{
+  echo "agentConfig:"
+  echo "  mergeConfig: |"
+  echo "    cluster:"
+  echo "      validationPolicy:"
+  echo "        name: Unrestricted"
+  echo "    workload:"
+  echo "      transportTLS:"
+  echo "        trustMode: bundle"
+  echo "        trustBundleFingerprint: $fingerprint"
+  echo "        trustBundlePem: |"
+  while IFS= read -r line; do
+    echo "          $line"
+  done <<<"$ca_pem"
+} >>"$tmp"
+mv "$tmp" "$ENV_FILE"
+
+echo "wrote transportTLS bundle config (fingerprint $fingerprint) to $ENV_FILE"
