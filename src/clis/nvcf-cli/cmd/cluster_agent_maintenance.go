@@ -55,9 +55,10 @@ var clusterAgentCordonDrainCmd = &cobra.Command{
 deployments, let in-flight requests complete, and scale all function instances
 to zero.
 
-This sets the CordonAndDrainMaintenance feature flag and maintenanceMode on the
-NVCA agent-config ConfigMap and restarts the NVCA deployment. The command returns
-once NVCA has been told to drain (and, by default, once the restart rolls out);
+This sets the CordonAndDrainMaintenance feature flag on the NVCFBackend CR's
+spec.overrides.featureGate.values; the NVCA operator's own reconcile then
+regenerates agent-config and restarts NVCA. The command returns once the CR
+update is accepted (and, by default, once the operator's rollout completes);
 use "cluster agent list-functions --phase DRAINING" to watch instances wind down.
 
 Select the cluster with --compute-plane-context, as with the inspection commands.`,
@@ -71,7 +72,8 @@ var clusterAgentUncordonCmd = &cobra.Command{
 	SilenceUsage: true,
 	Args:         cobra.NoArgs,
 	Long: `Reverse a cordon-and-drain: remove the CordonAndDrainMaintenance feature
-flag and maintenanceMode from the NVCA agent-config ConfigMap and restart NVCA so
+flag from the NVCFBackend CR's spec.overrides.featureGate.values; the NVCA
+operator's own reconcile then regenerates agent-config and restarts NVCA so
 the cluster accepts new deployments again.`,
 	RunE: runClusterAgentUncordon,
 }
@@ -447,13 +449,13 @@ func printDrainResult(cmd *cobra.Command, res *clusteragent.DrainResult, drain b
 		return
 	}
 	if res.DryRun {
-		fmt.Fprintln(w, "  would update agent-config and restart NVCA")
+		fmt.Fprintln(w, "  would update the NVCFBackend CR; the NVCA operator would then roll out the change")
 		return
 	}
 	if drain {
-		fmt.Fprintf(w, "  agent-config updated (maintenanceMode=%s); NVCA restart triggered\n", orDash(res.Mode))
+		fmt.Fprintf(w, "  NVCFBackend updated (maintenanceMode=%s)\n", orDash(res.Mode))
 	} else {
-		fmt.Fprintln(w, "  agent-config updated (maintenance cleared); NVCA restart triggered")
+		fmt.Fprintln(w, "  NVCFBackend updated (maintenance cleared)")
 	}
 	switch {
 	case res.RolloutComplete:

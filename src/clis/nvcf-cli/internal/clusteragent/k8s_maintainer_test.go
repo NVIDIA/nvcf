@@ -20,6 +20,7 @@ package clusteragent
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -112,83 +113,133 @@ func icmsRequestWithFinalizers(ns, name, fid, vid string, finalizers ...string) 
 	return u
 }
 
-func readConfig(t *testing.T, cs *k8sfake.Clientset, systemNS string) string {
-	t.Helper()
-	cm, err := cs.CoreV1().ConfigMaps(systemNS).Get(context.Background(), agentConfigConfigMapName, metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("reading agent-config back: %v", err)
-	}
-	return cm.Data[agentConfigKey]
-}
-
-func deployAnnotations(t *testing.T, cs *k8sfake.Clientset, systemNS string) map[string]string {
-	t.Helper()
-	d, err := cs.AppsV1().Deployments(systemNS).Get(context.Background(), nvcaDeploymentName, metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("reading deployment back: %v", err)
-	}
-	return d.Spec.Template.Annotations
-}
-
 // --- Drain / Undrain ---
 
-func TestDrainAddsMaintenanceAndRestarts(t *testing.T) {
-	cfg := "agent:\n  featureFlags:\n  - LogPosting\n"
-	m, _, cs := newFakeMaintainer(
-		[]runtime.Object{defaultBackend()},
-		[]runtime.Object{agentConfigObj(testSystemNS, cfg), nvcaDeployObj(testSystemNS, 1, true)},
+// backendObjWithOverrideValues seeds an NVCFBackend CR with a pre-existing
+// spec.overrides.featureGate.values list, simulating a cluster already
+// carrying prior CLI-set overrides.
+func backendObjWithOverrideValues(backendNS, clusterID, clusterName, systemNS, requestsNS string, overrideValues ...string) *unstructured.Unstructured {
+	b := backendObj(backendNS, clusterID, clusterName, systemNS, requestsNS)
+	vals := make([]interface{}, len(overrideValues))
+	for i, v := range overrideValues {
+		vals[i] = v
+	}
+	b.Object["spec"].(map[string]interface{})["overrides"] = map[string]interface{}{
+		"featureGate": map[string]interface{}{"values": vals},
+	}
+	return b
+}
+
+// backendObjWithBaseValues seeds an NVCFBackend CR with a pre-existing
+// spec.featureGate.values list (the base spec, not overrides), simulating a
+// cluster whose base spec already sets a maintenance flag directly.
+func backendObjWithBaseValues(backendNS, clusterID, clusterName, systemNS, requestsNS string, baseValues ...string) *unstructured.Unstructured {
+	b := backendObj(backendNS, clusterID, clusterName, systemNS, requestsNS)
+	vals := make([]interface{}, len(baseValues))
+	for i, v := range baseValues {
+		vals[i] = v
+	}
+	b.Object["spec"].(map[string]interface{})["featureGate"] = map[string]interface{}{"values": vals}
+	return b
+}
+
+// backendOverrideValues reads spec.overrides.featureGate.values back off the
+// single NVCFBackend CR in backendNS, the same field patchMaintenanceFeatureFlag
+// writes.
+func backendOverrideValues(t *testing.T, dc *dynamicfake.FakeDynamicClient, backendNS string) []string {
+	t.Helper()
+	list, err := dc.Resource(nvcfBackendGVR).Namespace(backendNS).List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatalf("listing NVCFBackend: %v", err)
+	}
+	if len(list.Items) == 0 {
+		t.Fatalf("no NVCFBackend found in namespace %q", backendNS)
+	}
+	values, _, err := unstructured.NestedStringSlice(list.Items[0].Object, "spec", "overrides", "featureGate", "values")
+	if err != nil {
+		t.Fatalf("reading spec.overrides.featureGate.values: %v", err)
+	}
+	return values
+}
+
+func TestDrainPatchesNVCFBackendOverrides(t *testing.T) {
+	m, dc, _ := newFakeMaintainer(
+		[]runtime.Object{backendObjWithOverrideValues(testBackendNS, testClusterID, testCluster, testSystemNS, testRequestsNS, "LogPosting")},
+		nil,
 	)
 
-	res, err := m.Drain(context.Background(), DrainOptions{BackendNS: testBackendNS, Timeout: time.Second})
+	res, err := m.Drain(context.Background(), DrainOptions{BackendNS: testBackendNS})
 	if err != nil {
 		t.Fatalf("Drain returned error: %v", err)
 	}
-	if !res.ConfigChanged || !res.RolloutTriggered || !res.RolloutComplete {
+	if !res.ConfigChanged || !res.RolloutTriggered {
 		t.Fatalf("unexpected result: %+v", res)
 	}
 	if res.Mode != maintenanceModeCordonAndDrain {
 		t.Errorf("Mode = %q, want %q", res.Mode, maintenanceModeCordonAndDrain)
 	}
-
-	got := readConfig(t, cs, testSystemNS)
-	if !strings.Contains(got, "- "+cordonAndDrainFeatureFlag) {
-		t.Errorf("config missing feature flag:\n%s", got)
+	got := backendOverrideValues(t, dc, testBackendNS)
+	if !slices.Contains(got, cordonAndDrainFeatureFlag) {
+		t.Errorf("overrides missing feature flag: %v", got)
 	}
-	if !strings.Contains(got, "maintenanceMode: "+maintenanceModeCordonAndDrain) {
-		t.Errorf("config missing maintenanceMode:\n%s", got)
-	}
-	if !strings.Contains(got, "- LogPosting") {
-		t.Errorf("config dropped the pre-existing LogPosting flag:\n%s", got)
-	}
-	if _, ok := deployAnnotations(t, cs, testSystemNS)[restartedAtAnnotation]; !ok {
-		t.Errorf("deployment was not restarted (no %s annotation)", restartedAtAnnotation)
+	if !slices.Contains(got, "LogPosting") {
+		t.Errorf("drain dropped the pre-existing LogPosting override: %v", got)
 	}
 }
 
 func TestDrainIdempotent(t *testing.T) {
-	cfg := "agent:\n  maintenanceMode: CordonAndDrain\n  featureFlags:\n  - CordonAndDrainMaintenance\n"
-	m, _, cs := newFakeMaintainer(
-		[]runtime.Object{defaultBackend()},
-		[]runtime.Object{agentConfigObj(testSystemNS, cfg), nvcaDeployObj(testSystemNS, 1, true)},
+	m, dc, _ := newFakeMaintainer(
+		[]runtime.Object{backendObjWithOverrideValues(testBackendNS, testClusterID, testCluster, testSystemNS, testRequestsNS, cordonAndDrainFeatureFlag)},
+		nil,
 	)
 
-	res, err := m.Drain(context.Background(), DrainOptions{BackendNS: testBackendNS, Timeout: time.Second})
+	res, err := m.Drain(context.Background(), DrainOptions{BackendNS: testBackendNS})
 	if err != nil {
 		t.Fatalf("Drain returned error: %v", err)
 	}
 	if res.ConfigChanged || res.RolloutTriggered {
 		t.Fatalf("expected no-op, got %+v", res)
 	}
-	if _, ok := deployAnnotations(t, cs, testSystemNS)[restartedAtAnnotation]; ok {
-		t.Error("idempotent drain must not restart NVCA")
+	before := backendOverrideValues(t, dc, testBackendNS)
+	if !slices.Equal(before, []string{cordonAndDrainFeatureFlag}) {
+		t.Errorf("idempotent drain must not touch overrides, got %v", before)
+	}
+}
+
+func TestDrainConflictsWithBaseCordonMaintenance(t *testing.T) {
+	m, dc, _ := newFakeMaintainer(
+		[]runtime.Object{backendObjWithBaseValues(testBackendNS, testClusterID, testCluster, testSystemNS, testRequestsNS, cordonMaintenanceFeatureFlag)},
+		nil,
+	)
+
+	_, err := m.Drain(context.Background(), DrainOptions{BackendNS: testBackendNS})
+	if err == nil {
+		t.Fatal("expected an error: base spec already sets CordonMaintenance, which the operator prefers over CordonAndDrainMaintenance")
+	}
+	if got := backendOverrideValues(t, dc, testBackendNS); len(got) != 0 {
+		t.Errorf("overrides mutated despite conflict: %v", got)
+	}
+}
+
+func TestUndrainConflictsWithBaseCordonAndDrain(t *testing.T) {
+	m, dc, _ := newFakeMaintainer(
+		[]runtime.Object{backendObjWithBaseValues(testBackendNS, testClusterID, testCluster, testSystemNS, testRequestsNS, cordonAndDrainFeatureFlag)},
+		nil,
+	)
+
+	_, err := m.Undrain(context.Background(), DrainOptions{BackendNS: testBackendNS})
+	if err == nil {
+		t.Fatal("expected an error: base spec already sets CordonAndDrainMaintenance, which the operator keeps regardless of overrides")
+	}
+	if got := backendOverrideValues(t, dc, testBackendNS); len(got) != 0 {
+		t.Errorf("overrides mutated despite conflict: %v", got)
 	}
 }
 
 func TestDrainDryRunMutatesNothing(t *testing.T) {
-	cfg := "agent:\n  featureFlags:\n  - LogPosting\n"
-	m, _, cs := newFakeMaintainer(
-		[]runtime.Object{defaultBackend()},
-		[]runtime.Object{agentConfigObj(testSystemNS, cfg), nvcaDeployObj(testSystemNS, 1, true)},
+	m, dc, _ := newFakeMaintainer(
+		[]runtime.Object{backendObjWithOverrideValues(testBackendNS, testClusterID, testCluster, testSystemNS, testRequestsNS, "LogPosting")},
+		nil,
 	)
 
 	res, err := m.Drain(context.Background(), DrainOptions{BackendNS: testBackendNS, DryRun: true})
@@ -198,81 +249,180 @@ func TestDrainDryRunMutatesNothing(t *testing.T) {
 	if !res.DryRun || !res.ConfigChanged || res.RolloutTriggered {
 		t.Fatalf("unexpected dry-run result: %+v", res)
 	}
-	if got := readConfig(t, cs, testSystemNS); got != cfg {
-		t.Errorf("dry-run mutated config:\n%s", got)
-	}
-	if _, ok := deployAnnotations(t, cs, testSystemNS)[restartedAtAnnotation]; ok {
-		t.Error("dry-run must not restart NVCA")
+	got := backendOverrideValues(t, dc, testBackendNS)
+	if !slices.Equal(got, []string{"LogPosting"}) {
+		t.Errorf("dry-run mutated overrides: %v", got)
 	}
 }
 
 func TestDrainExpectClusterID(t *testing.T) {
-	cfg := "agent:\n"
-	newM := func() (*k8sMaintainer, *k8sfake.Clientset) {
-		m, _, cs := newFakeMaintainer(
-			[]runtime.Object{defaultBackend()},
-			[]runtime.Object{agentConfigObj(testSystemNS, cfg), nvcaDeployObj(testSystemNS, 1, true)},
-		)
-		return m, cs
+	newM := func() (*k8sMaintainer, *dynamicfake.FakeDynamicClient) {
+		m, dc, _ := newFakeMaintainer([]runtime.Object{defaultBackend()}, nil)
+		return m, dc
 	}
 
 	t.Run("mismatch aborts before any write", func(t *testing.T) {
-		m, cs := newM()
-		_, err := m.Drain(context.Background(), DrainOptions{BackendNS: testBackendNS, ExpectClusterID: "wrong-id", Timeout: time.Second})
+		m, dc := newM()
+		_, err := m.Drain(context.Background(), DrainOptions{BackendNS: testBackendNS, ExpectClusterID: "wrong-id"})
 		if err == nil {
 			t.Fatal("expected refusal on cluster-id mismatch")
 		}
-		if got := readConfig(t, cs, testSystemNS); got != cfg {
-			t.Errorf("config mutated despite mismatch:\n%s", got)
+		if got := backendOverrideValues(t, dc, testBackendNS); len(got) != 0 {
+			t.Errorf("overrides mutated despite mismatch: %v", got)
 		}
 	})
 
 	t.Run("matches by id", func(t *testing.T) {
 		m, _ := newM()
-		if _, err := m.Drain(context.Background(), DrainOptions{BackendNS: testBackendNS, ExpectClusterID: testClusterID, Timeout: time.Second}); err != nil {
+		if _, err := m.Drain(context.Background(), DrainOptions{BackendNS: testBackendNS, ExpectClusterID: testClusterID}); err != nil {
 			t.Fatalf("expected match by id to proceed: %v", err)
 		}
 	})
 
 	t.Run("matches by name", func(t *testing.T) {
 		m, _ := newM()
-		if _, err := m.Drain(context.Background(), DrainOptions{BackendNS: testBackendNS, ExpectClusterID: testCluster, Timeout: time.Second}); err != nil {
+		if _, err := m.Drain(context.Background(), DrainOptions{BackendNS: testBackendNS, ExpectClusterID: testCluster}); err != nil {
 			t.Fatalf("expected match by name to proceed: %v", err)
 		}
 	})
 }
 
-func TestDrainMissingAgentConfig(t *testing.T) {
-	m, _, _ := newFakeMaintainer(
-		[]runtime.Object{defaultBackend()},
-		[]runtime.Object{nvcaDeployObj(testSystemNS, 1, true)},
-	)
-	_, err := m.Drain(context.Background(), DrainOptions{BackendNS: testBackendNS})
-	if err == nil || !strings.Contains(err.Error(), "agent-config ConfigMap not found") {
-		t.Fatalf("expected a clear missing-configmap error, got %v", err)
-	}
-}
-
 func TestDrainNoBackend(t *testing.T) {
-	m, _, _ := newFakeMaintainer(
-		nil,
-		[]runtime.Object{agentConfigObj(testSystemNS, "agent:\n"), nvcaDeployObj(testSystemNS, 1, true)},
-	)
+	m, _, _ := newFakeMaintainer(nil, nil)
 	if _, err := m.Drain(context.Background(), DrainOptions{BackendNS: testBackendNS}); err == nil {
 		t.Fatal("expected error when no NVCFBackend exists")
 	}
 }
 
-func TestDrainRolloutTimeoutIsWarningNotError(t *testing.T) {
+func TestUndrainRemovesOverride(t *testing.T) {
+	m, dc, _ := newFakeMaintainer(
+		[]runtime.Object{backendObjWithOverrideValues(testBackendNS, testClusterID, testCluster, testSystemNS, testRequestsNS, cordonAndDrainFeatureFlag, "LogPosting")},
+		nil,
+	)
+
+	res, err := m.Undrain(context.Background(), DrainOptions{BackendNS: testBackendNS})
+	if err != nil {
+		t.Fatalf("Undrain returned error: %v", err)
+	}
+	if !res.ConfigChanged || !res.RolloutTriggered {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+	got := backendOverrideValues(t, dc, testBackendNS)
+	if slices.Contains(got, cordonAndDrainFeatureFlag) {
+		t.Errorf("undrain left the feature flag: %v", got)
+	}
+	if !slices.Contains(got, "LogPosting") {
+		t.Errorf("undrain removed an unrelated override: %v", got)
+	}
+}
+
+func TestUndrainIdempotent(t *testing.T) {
+	m, dc, _ := newFakeMaintainer(
+		[]runtime.Object{backendObjWithOverrideValues(testBackendNS, testClusterID, testCluster, testSystemNS, testRequestsNS, "LogPosting")},
+		nil,
+	)
+	res, err := m.Undrain(context.Background(), DrainOptions{BackendNS: testBackendNS})
+	if err != nil {
+		t.Fatalf("Undrain returned error: %v", err)
+	}
+	if res.ConfigChanged || res.RolloutTriggered {
+		t.Fatalf("expected no-op undrain, got %+v", res)
+	}
+	got := backendOverrideValues(t, dc, testBackendNS)
+	if !slices.Equal(got, []string{"LogPosting"}) {
+		t.Errorf("idempotent undrain must not touch overrides, got %v", got)
+	}
+}
+
+// --- Drain / Undrain: waiting for the NVCA operator's own reconcile ---
+//
+// These tests simulate the operator's effect by pre-seeding agent-config and
+// the NVCA Deployment directly, since no real operator runs against the fake
+// client. That is also what makes them regression tests for the original
+// bug: waitForMaintenanceRollout must not report success just because the
+// Deployment trivially already satisfies the completion check before the
+// operator has done anything (see TestDrainRolloutTimesOutWhenConfigNeverUpdates).
+
+func TestDrainReportsRolloutCompleteWhenOperatorHasAlreadyReconciled(t *testing.T) {
+	// Simulates the operator having already regenerated agent-config and
+	// rolled out NVCA by the time the CLI's first poll runs.
+	cfg := "agent:\n  featureFlags:\n  - " + cordonAndDrainFeatureFlag + "\n"
+	m, _, _ := newFakeMaintainer(
+		[]runtime.Object{defaultBackend()},
+		[]runtime.Object{agentConfigObj(testSystemNS, cfg), nvcaDeployObj(testSystemNS, 1, true)},
+	)
+
+	res, err := m.Drain(context.Background(), DrainOptions{BackendNS: testBackendNS, Timeout: time.Second})
+	if err != nil {
+		t.Fatalf("Drain returned error: %v", err)
+	}
+	if !res.RolloutComplete {
+		t.Fatalf("expected rollout to be reported complete, got %+v", res)
+	}
+}
+
+func TestDrainDoesNotFalselyReportCompleteWhenConfigHasNoFeatureFlagsSection(t *testing.T) {
+	// Regression test for a false-positive in the config membership check:
+	// a config with no featureFlags: (or even agent:) section at all must
+	// not be misread as "already has the flag". Deployment looks complete,
+	// so this isolates the config-side check specifically.
 	prev := rolloutPollInterval
 	rolloutPollInterval = time.Millisecond
 	t.Cleanup(func() { rolloutPollInterval = prev })
 
-	cfg := "agent:\n"
-	m, _, cs := newFakeMaintainer(
+	cfg := "other:\n  x: y\n"
+	m, _, _ := newFakeMaintainer(
 		[]runtime.Object{defaultBackend()},
-		// Deployment never reaches the complete state.
-		[]runtime.Object{agentConfigObj(testSystemNS, cfg), nvcaDeployObj(testSystemNS, 1, false)},
+		[]runtime.Object{agentConfigObj(testSystemNS, cfg), nvcaDeployObj(testSystemNS, 1, true)},
+	)
+
+	res, err := m.Drain(context.Background(), DrainOptions{BackendNS: testBackendNS, Timeout: 10 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("timeout must not be a hard error: %v", err)
+	}
+	if res.RolloutComplete {
+		t.Fatal("must not report complete: agent-config has no featureFlags section, so the flag cannot be present")
+	}
+}
+
+func TestDrainDoesNotFalselyReportCompleteWhenDeploymentMissing(t *testing.T) {
+	// Regression test: a missing nvca Deployment must not be treated as a
+	// trivially-satisfied rollout. Otherwise a stale agent-config left over
+	// from a prior install (matching the requested flag state) combined with
+	// no running nvca workload would be misreported as a complete rollout.
+	prev := rolloutPollInterval
+	rolloutPollInterval = time.Millisecond
+	t.Cleanup(func() { rolloutPollInterval = prev })
+
+	cfg := "agent:\n  featureFlags:\n  - " + cordonAndDrainFeatureFlag + "\n"
+	m, _, _ := newFakeMaintainer(
+		[]runtime.Object{defaultBackend()},
+		[]runtime.Object{agentConfigObj(testSystemNS, cfg)},
+	)
+
+	res, err := m.Drain(context.Background(), DrainOptions{BackendNS: testBackendNS, Timeout: 10 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("timeout must not be a hard error: %v", err)
+	}
+	if res.RolloutComplete {
+		t.Fatal("must not report complete: the nvca Deployment does not exist")
+	}
+}
+
+func TestDrainRolloutTimesOutWhenConfigNeverUpdates(t *testing.T) {
+	// Regression test for the original bug: the Deployment already looks
+	// "complete" from a prior rollout (this is exactly the trivially-true
+	// state that misled the old Deployment-only check), but agent-config
+	// was never regenerated with the flag, i.e. the operator never actually
+	// reconciled the CR change. The wait must not report success.
+	prev := rolloutPollInterval
+	rolloutPollInterval = time.Millisecond
+	t.Cleanup(func() { rolloutPollInterval = prev })
+
+	cfg := "agent:\n  featureFlags:\n  - LogPosting\n"
+	m, dc, _ := newFakeMaintainer(
+		[]runtime.Object{defaultBackend()},
+		[]runtime.Object{agentConfigObj(testSystemNS, cfg), nvcaDeployObj(testSystemNS, 1, true)},
 	)
 
 	res, err := m.Drain(context.Background(), DrainOptions{BackendNS: testBackendNS, Timeout: 10 * time.Millisecond})
@@ -282,16 +432,40 @@ func TestDrainRolloutTimeoutIsWarningNotError(t *testing.T) {
 	if !res.ConfigChanged || !res.RolloutTriggered || res.RolloutComplete {
 		t.Fatalf("unexpected result: %+v", res)
 	}
-	if !strings.Contains(res.Message, "did not complete") {
+	if !strings.Contains(res.Message, "has not finished") {
 		t.Errorf("message = %q, want a timeout note", res.Message)
 	}
-	// Config was still persisted.
-	if got := readConfig(t, cs, testSystemNS); !strings.Contains(got, cordonAndDrainFeatureFlag) {
-		t.Errorf("config not persisted on timeout:\n%s", got)
+	// The CR patch itself is still what we're verifying was submitted.
+	got := backendOverrideValues(t, dc, testBackendNS)
+	if !slices.Contains(got, cordonAndDrainFeatureFlag) {
+		t.Errorf("overrides not patched: %v", got)
 	}
 }
 
-func TestWaitForRolloutWaitsForObservedGeneration(t *testing.T) {
+func TestDrainRolloutTimesOutWhenDeploymentNeverStabilizes(t *testing.T) {
+	// The inverse partial case: agent-config already reflects the flag (the
+	// operator started reconciling), but the Deployment rollout has not
+	// stabilized yet.
+	prev := rolloutPollInterval
+	rolloutPollInterval = time.Millisecond
+	t.Cleanup(func() { rolloutPollInterval = prev })
+
+	cfg := "agent:\n  featureFlags:\n  - " + cordonAndDrainFeatureFlag + "\n"
+	m, _, _ := newFakeMaintainer(
+		[]runtime.Object{defaultBackend()},
+		[]runtime.Object{agentConfigObj(testSystemNS, cfg), nvcaDeployObj(testSystemNS, 1, false)},
+	)
+
+	res, err := m.Drain(context.Background(), DrainOptions{BackendNS: testBackendNS, Timeout: 10 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("timeout must not be a hard error: %v", err)
+	}
+	if res.RolloutComplete {
+		t.Fatal("expected timeout while the Deployment has not stabilized")
+	}
+}
+
+func TestWaitForMaintenanceRolloutWaitsForObservedGeneration(t *testing.T) {
 	prev := rolloutPollInterval
 	rolloutPollInterval = time.Millisecond
 	t.Cleanup(func() { rolloutPollInterval = prev })
@@ -301,87 +475,46 @@ func TestWaitForRolloutWaitsForObservedGeneration(t *testing.T) {
 	d := nvcaDeployObj(testSystemNS, 1, true)
 	d.Generation = 3
 	d.Status.ObservedGeneration = 2
-	m, _, _ := newFakeMaintainer(nil, []runtime.Object{d})
+	cfg := "agent:\n  featureFlags:\n  - " + cordonAndDrainFeatureFlag + "\n"
+	m, _, _ := newFakeMaintainer(nil, []runtime.Object{agentConfigObj(testSystemNS, cfg), d})
 
-	if err := m.waitForRollout(context.Background(), testSystemNS, 10*time.Millisecond); err == nil {
+	if err := m.waitForMaintenanceRollout(context.Background(), testBackendNS, testSystemNS, 10*time.Millisecond, true); err == nil {
 		t.Fatal("expected timeout while ObservedGeneration < Generation, got nil")
 	}
 }
 
 func TestDrainForceSkipsRolloutWait(t *testing.T) {
-	cfg := "agent:\n"
 	m, _, _ := newFakeMaintainer(
 		[]runtime.Object{defaultBackend()},
-		[]runtime.Object{agentConfigObj(testSystemNS, cfg), nvcaDeployObj(testSystemNS, 1, false)},
+		[]runtime.Object{agentConfigObj(testSystemNS, "agent:\n"), nvcaDeployObj(testSystemNS, 1, false)},
 	)
 	res, err := m.Drain(context.Background(), DrainOptions{BackendNS: testBackendNS, Force: true, Timeout: time.Hour})
 	if err != nil {
 		t.Fatalf("Drain --force returned error: %v", err)
 	}
 	if !res.RolloutTriggered || res.RolloutComplete {
-		t.Fatalf("force should trigger rollout but not wait: %+v", res)
+		t.Fatalf("force should submit the CR change but not wait: %+v", res)
 	}
 }
 
-func TestDrainForceRetriggersRolloutWhenConfigAlreadySet(t *testing.T) {
-	// Simulate a prior run that patched the config but failed before triggering
-	// the rollout. The config is already in the target state (changed=false),
-	// but --force must bypass the idempotency guard and trigger the rollout.
-	cfg := "agent:\n  maintenanceMode: CordonAndDrain\n  featureFlags:\n  - CordonAndDrainMaintenance\n"
+func TestDrainForceHasNoEffectWhenAlreadyInDesiredState(t *testing.T) {
+	// Unlike the old ConfigMap/Deployment-restart mechanism, there is no
+	// separate "restart" action for --force to retrigger once the CR is
+	// already in the desired state: the operator owns the actual rollout,
+	// and re-submitting an unchanged CR produces no new reconcile.
 	m, _, _ := newFakeMaintainer(
-		[]runtime.Object{defaultBackend()},
-		[]runtime.Object{agentConfigObj(testSystemNS, cfg), nvcaDeployObj(testSystemNS, 1, false)},
+		[]runtime.Object{backendObjWithOverrideValues(testBackendNS, testClusterID, testCluster, testSystemNS, testRequestsNS, cordonAndDrainFeatureFlag)},
+		nil,
 	)
 	res, err := m.Drain(context.Background(), DrainOptions{BackendNS: testBackendNS, Force: true})
 	if err != nil {
 		t.Fatalf("Drain --force returned error: %v", err)
 	}
-	if res.ConfigChanged {
-		t.Errorf("expected no config change (already set), got ConfigChanged=true")
-	}
-	if !res.RolloutTriggered {
-		t.Errorf("--force should trigger rollout even when config is unchanged: %+v", res)
-	}
-}
-
-func TestUndrainRemovesMaintenance(t *testing.T) {
-	cfg := "agent:\n  maintenanceMode: CordonAndDrain\n  featureFlags:\n  - CordonAndDrainMaintenance\n  - LogPosting\n"
-	m, _, cs := newFakeMaintainer(
-		[]runtime.Object{defaultBackend()},
-		[]runtime.Object{agentConfigObj(testSystemNS, cfg), nvcaDeployObj(testSystemNS, 1, true)},
-	)
-
-	res, err := m.Undrain(context.Background(), DrainOptions{BackendNS: testBackendNS, Timeout: time.Second})
-	if err != nil {
-		t.Fatalf("Undrain returned error: %v", err)
-	}
-	if !res.ConfigChanged || !res.RolloutTriggered {
-		t.Fatalf("unexpected result: %+v", res)
-	}
-	got := readConfig(t, cs, testSystemNS)
-	if strings.Contains(got, cordonAndDrainFeatureFlag) {
-		t.Errorf("undrain left the feature flag:\n%s", got)
-	}
-	if strings.Contains(got, "maintenanceMode:") {
-		t.Errorf("undrain left maintenanceMode:\n%s", got)
-	}
-	if !strings.Contains(got, "- LogPosting") {
-		t.Errorf("undrain removed an unrelated flag:\n%s", got)
-	}
-}
-
-func TestUndrainIdempotent(t *testing.T) {
-	cfg := "agent:\n  featureFlags:\n  - LogPosting\n"
-	m, _, _ := newFakeMaintainer(
-		[]runtime.Object{defaultBackend()},
-		[]runtime.Object{agentConfigObj(testSystemNS, cfg), nvcaDeployObj(testSystemNS, 1, true)},
-	)
-	res, err := m.Undrain(context.Background(), DrainOptions{BackendNS: testBackendNS})
-	if err != nil {
-		t.Fatalf("Undrain returned error: %v", err)
-	}
 	if res.ConfigChanged || res.RolloutTriggered {
-		t.Fatalf("expected no-op undrain, got %+v", res)
+		t.Fatalf("expected a no-op, got %+v", res)
+	}
+	if res.Message != "already in the requested state; no change" {
+		t.Errorf("Message = %q", res.Message)
 	}
 }
 
@@ -433,58 +566,57 @@ func TestAddFeatureFlagToConfig(t *testing.T) {
 	}
 }
 
-func TestAddMaintenanceModeToConfig(t *testing.T) {
-	t.Run("replaces existing", func(t *testing.T) {
-		in := "agent:\n  maintenanceMode: CordonOnly\n"
-		want := "agent:\n  maintenanceMode: CordonAndDrain\n"
-		if got := addMaintenanceModeToConfig(in, maintenanceModeCordonAndDrain); got != want {
-			t.Errorf("got %q want %q", got, want)
-		}
-	})
-	t.Run("inserts when absent", func(t *testing.T) {
-		in := "agent:\n  logLevel: info\n"
-		want := "agent:\n  maintenanceMode: CordonAndDrain\n  logLevel: info\n"
-		if got := addMaintenanceModeToConfig(in, maintenanceModeCordonAndDrain); got != want {
-			t.Errorf("got %q want %q", got, want)
-		}
-	})
-}
-
-func TestRemoveAndClearHelpers(t *testing.T) {
-	t.Run("remove feature flag", func(t *testing.T) {
-		in := "agent:\n  featureFlags:\n  - CordonAndDrainMaintenance\n  - LogPosting\n"
-		want := "agent:\n  featureFlags:\n  - LogPosting\n"
-		if got := removeFeatureFlagFromConfig(in, cordonAndDrainFeatureFlag); got != want {
-			t.Errorf("got %q want %q", got, want)
-		}
-	})
-	t.Run("remove absent flag is unchanged", func(t *testing.T) {
-		in := "agent:\n  featureFlags:\n  - LogPosting\n"
-		if got := removeFeatureFlagFromConfig(in, cordonAndDrainFeatureFlag); got != in {
-			t.Errorf("got %q want %q", got, in)
-		}
-	})
-	t.Run("remove last flag drops orphaned featureFlags key", func(t *testing.T) {
-		in := "agent:\n  featureFlags:\n  - CordonAndDrainMaintenance\n  logLevel: info\n"
-		want := "agent:\n  logLevel: info\n"
-		if got := removeFeatureFlagFromConfig(in, cordonAndDrainFeatureFlag); got != want {
-			t.Errorf("got %q want %q", got, want)
-		}
-	})
-	t.Run("remove scoped to featureFlags section only", func(t *testing.T) {
-		in := "other:\n- CordonAndDrainMaintenance\nagent:\n  featureFlags:\n  - CordonAndDrainMaintenance\n  - LogPosting\n"
-		want := "other:\n- CordonAndDrainMaintenance\nagent:\n  featureFlags:\n  - LogPosting\n"
-		if got := removeFeatureFlagFromConfig(in, cordonAndDrainFeatureFlag); got != want {
-			t.Errorf("got %q want %q", got, want)
-		}
-	})
-	t.Run("clear maintenance mode", func(t *testing.T) {
-		in := "agent:\n  maintenanceMode: CordonAndDrain\n  logLevel: info\n"
-		want := "agent:\n  logLevel: info\n"
-		if got := clearMaintenanceModeFromConfig(in); got != want {
-			t.Errorf("got %q want %q", got, want)
-		}
-	})
+// TestConfigHasFeatureFlag is a regression test for a false-positive in the
+// prior membership check, which inferred "flag present" from
+// addFeatureFlagToConfig returning its input unchanged. That mutator also
+// returns its input unchanged when there is no featureFlags: (or even
+// agent:) section to insert into at all, which would misreport an absent
+// flag as present. configHasFeatureFlag must not have that false-positive
+// path: it only ever returns true when the flag is actually listed.
+func TestConfigHasFeatureFlag(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{
+			name: "present in featureFlags section",
+			in:   "agent:\n  featureFlags:\n  - CordonAndDrainMaintenance\n  - LogPosting\n",
+			want: true,
+		},
+		{
+			name: "absent from populated featureFlags section",
+			in:   "agent:\n  featureFlags:\n  - LogPosting\n",
+			want: false,
+		},
+		{
+			name: "no featureFlags or agent section at all: must not false-positive",
+			in:   "other:\n  x: y\n",
+			want: false,
+		},
+		{
+			name: "agent section present but no featureFlags key: must not false-positive",
+			in:   "agent:\n  logLevel: info\n",
+			want: false,
+		},
+		{
+			name: "empty config: must not false-positive",
+			in:   "",
+			want: false,
+		},
+		{
+			name: "flag in another section is not treated as a match",
+			in:   "other:\n- CordonAndDrainMaintenance\nagent:\n  featureFlags:\n  - LogPosting\n",
+			want: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := configHasFeatureFlag(tc.in, cordonAndDrainFeatureFlag); got != tc.want {
+				t.Errorf("configHasFeatureFlag(%q) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
 }
 
 // --- Kill ---

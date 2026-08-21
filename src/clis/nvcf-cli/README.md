@@ -1730,14 +1730,21 @@ cluster identity and the system and requests namespaces.
 
 ### How drain works
 
-`cordon-and-drain` adds the `CordonAndDrainMaintenance` feature flag and sets
-`maintenanceMode: CordonAndDrain` on the NVCA `agent-config` ConfigMap, then
-restarts the NVCA deployment so the change takes effect. `uncordon` reverses
-both. The command returns once NVCA has been told to drain and (unless `--force`)
-the restart has rolled out; it does not wait for every instance to reach zero.
-Watch progress with `cluster agent list-functions --phase DRAINING`. `--timeout`
-bounds the rollout wait (default 5m); a timeout is reported as a warning because
-the config change is already persisted and re-running is a no-op.
+`cordon-and-drain` adds the `CordonAndDrainMaintenance` feature flag to the
+`NVCFBackend` CR's `spec.overrides.featureGate.values`. `uncordon` removes it.
+The CLI never edits the NVCA `agent-config` ConfigMap or restarts the NVCA
+deployment directly: the NVCA operator treats `agent-config` as fully
+generated from the CR and reverts any direct edit on its next reconcile, so
+the CLI's job is only to submit the desired state and let the operator's own
+reconcile regenerate `agent-config` and roll NVCA out. The command returns
+once the CR update is accepted and (unless `--force` or `--timeout 0`) the
+operator's rollout has completed; it does not wait for every instance to
+reach zero. Watch progress with `cluster agent list-functions --phase
+DRAINING`. `--timeout` bounds the wait for the operator's rollout (default
+5m); `--force` or `--timeout 0` skip the wait entirely and return right after
+the CR update, leaving the operator's reconciliation to finish
+asynchronously. A timeout is reported as a warning because the CR change is
+already persisted and re-running is a no-op.
 
 ### How kill works
 
@@ -1762,9 +1769,10 @@ All maintenance commands accept `--dry-run` to preview without mutating, and
 name matches (guards against a wrong `--compute-plane-context`). `kill-function`
 and `kill-all` accept `--reason` for an audit note, and `--json` for automation.
 
-These commands need write access to the target cluster: get/update on the
-`agent-config` ConfigMap and the `nvca` Deployment for drain, and list/delete
-(and update, with `--force`) on `ICMSRequest` CRs for kill.
+These commands need write access to the target cluster: list/update on the
+`NVCFBackend` CR for drain (plus read access to the `agent-config` ConfigMap
+and the `nvca` Deployment, to wait for the NVCA operator's rollout), and
+list/delete (and update, with `--force`) on `ICMSRequest` CRs for kill.
 
 ### Examples
 
