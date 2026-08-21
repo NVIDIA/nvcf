@@ -129,8 +129,10 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
           revalServiceURL: http://reval.localhost:8080
           natsURL: nats://nats.localhost:4222
         """
-      And yaml file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-register-values.yaml" key "clusterID" should not be empty
-      And yaml file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-register-values.yaml" key "clusterGroupID" should not be empty
+      And yaml file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-register-values.yaml" should have non-empty keys:
+        | key            |
+        | clusterID      |
+        | clusterGroupID |
 
       When I run command:
         """

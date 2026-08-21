@@ -90,8 +90,10 @@ Feature: Install local Helmfile observability with the compute profile
       """
     Then the command exit code should be 0
     And file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-compute-1-register-values.yaml" should exist
-    And yaml file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-compute-1-register-values.yaml" key "clusterID" should not be empty
-    And yaml file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-compute-1-register-values.yaml" key "clusterGroupID" should not be empty
+    And yaml file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-compute-1-register-values.yaml" should have non-empty keys:
+      | key            |
+      | clusterID      |
+      | clusterGroupID |
 
     When I run command:
       """

@@ -174,8 +174,8 @@ Feature: Bring up a local single-cluster NVCF stack with the CLI
 
       # Subset match (should contain, not should match) because the
       # values file carries non-deterministic IDs alongside the
-      # deterministic block. The IDs are asserted by individual
-      # should-not-be-empty steps below.
+      # deterministic block. The generated values are asserted as
+      # non-empty keys below.
       #
       # The values file uses in-cluster URLs because compute-plane
       # register resolves the URL layer from the kube-context: when
@@ -195,6 +195,8 @@ Feature: Bring up a local single-cluster NVCF stack with the CLI
           revalServiceURL: http://reval.nvcf.svc.cluster.local:8080
           natsURL: nats://nats.nats-system.svc.cluster.local:4222
         """
-      And yaml file "deploy/stacks/nvcf-compute-plane/out/ncp-local-register-values.yaml" key "clusterID" should not be empty
-      And yaml file "deploy/stacks/nvcf-compute-plane/out/ncp-local-register-values.yaml" key "clusterGroupID" should not be empty
-      And yaml file "deploy/stacks/nvcf-compute-plane/out/ncp-local-register-values.yaml" key "selfManaged.identitySource" should not be empty
+      And yaml file "deploy/stacks/nvcf-compute-plane/out/ncp-local-register-values.yaml" should have non-empty keys:
+        | key                        |
+        | clusterID                  |
+        | clusterGroupID             |
+        | selfManaged.identitySource |
