@@ -125,8 +125,8 @@ func (c K8sComputeBackend) applyMiniServiceCreationMessage(ctx context.Context,
 		return err
 	}
 
-	c.bk8s.eventRecorder.Eventf(req, corev1.EventTypeNormal, string(nvcatypes.EventCategoryInstanceCreation),
-		"Creating %v requested instances", instCount)
+	c.bk8s.EmitICMSEventf(req, corev1.EventTypeNormal, string(nvcatypes.EventCategoryInstanceCreation),
+		"Creating %v requested instances", nil, instCount)
 
 	labelsForReq := nvcatypes.GetLabelsForRequest(req, c.bk8s.featureFlagFetcher)
 	annosForReq := nvcatypes.GetAnnotationsForRequest(req)
@@ -167,8 +167,8 @@ func (c K8sComputeBackend) applyMiniServiceCreationMessage(ctx context.Context,
 	}
 
 	log.Debugf("Successfully created MiniService instance %s", instanceID)
-	c.bk8s.eventRecorder.Eventf(req, corev1.EventTypeNormal,
-		string(nvcatypes.EventCategoryInstanceCreation), "Created %v Instance %v", instance.Type, instance.ID)
+	c.bk8s.EmitICMSEventf(req, corev1.EventTypeNormal,
+		string(nvcatypes.EventCategoryInstanceCreation), "Created %v Instance %v", instanceUpdate(instance.ID), instance.Type, instance.ID)
 
 	// update timestamp only once for InProgress
 	if req.Status.RequestStatus != nvcav2beta1.ICMSRequestStatusInProgress &&
@@ -221,6 +221,7 @@ func (c K8sComputeBackend) GetICMSRequestUpdatesForMiniServiceRequest(ctx contex
 		if c.bk8s.shouldReportInstanceStatusHeartbeat(ctx, req, st.ID,
 			string(nvcatypes.ICMSInstanceTerminated), st.LastReportedStatus, st.LastReportedTimestamp) {
 			log.WithError(err).Warnf("Instance is not running, report it as killed")
+			failureCategory := nvcametrics.ICMSInstanceStateToFailureCategory(nvcatypes.ICMSInstanceFailedNotFound)
 			updateInfo.Payload = nvcatypes.ICMSInstanceStatusUpdateRequest{
 				Status:           nvcatypes.ICMSRequestInstanceTerminatedByService,
 				InstanceState:    nvcatypes.ICMSInstanceTerminated,
@@ -228,13 +229,14 @@ func (c K8sComputeBackend) GetICMSRequestUpdatesForMiniServiceRequest(ctx contex
 				RequestState:     nvcatypes.ICMSInstanceRequestClosed,
 				TerminationCause: nvcatypes.ICMSInstanceFailedNotFound,
 				SystemFailure:    string(nvcatypes.ICMSInstanceFailedNotFound),
+				FailureCategory:  string(failureCategory),
 			}
 			if metrics != nil {
 				metrics.RecordWorkloadStatus(
 					workloadtypes.WorkloadTypeHelm,
 					nvcametrics.ActionToWorkloadKind(req.Spec.Action),
 					workloadtypes.WorkloadStatusFailure,
-					nvcametrics.ICMSInstanceStateToFailureCategory(nvcatypes.ICMSInstanceFailedNotFound),
+					failureCategory,
 				)
 			}
 			return updateInfo, nil
@@ -397,6 +399,7 @@ func (c K8sComputeBackend) GetICMSRequestUpdatesForMiniServiceRequest(ctx contex
 			}
 		}
 
+		updateInfo.Payload.FailureCategory = string(failureCategory)
 		return updateInfo, nil
 	}
 
@@ -416,6 +419,7 @@ func (c K8sComputeBackend) GetICMSRequestUpdatesForMiniServiceRequest(ctx contex
 			updateInfo.Payload.Action = common.TerminationAction
 			updateInfo.Payload.RequestState = nvcatypes.ICMSInstanceRequestClosed
 			updateInfo.Payload.TerminationCause = storageReqState
+			updateInfo.Payload.FailureCategory = string(nvcametrics.ICMSInstanceStateToFailureCategory(storageReqState))
 
 			// Let the miniservice controller handle top-level resource deletion.
 			if err := c.clients.HelmV2.Delete(ctx, ms); err != nil && !apierrors.IsNotFound(err) {
