@@ -106,11 +106,12 @@ echo "Checking CRI-O reload..."
 # crio.conf.d drop-in this DaemonSet writes.
 assert_has 'kill -HUP "${crio_pid}"'
 assert_has 'pgrep -x crio'
-# A failed SIGHUP must not mark the node ready: the reload marker is stamped
-# only on success, and readiness compares it against the drop-in mtime.
-assert_has 'touch "${CRIO_RELOAD_MARKER}"'
-assert_has 'crio_config_active() {'
-assert_has '[ "${reloaded}" -ge "${mtime}" ]'
+# Readiness must not depend on CRI-O. It reloads registry config in place and
+# auto_reload_registries makes it watch the drop-in, so it has no equivalent of
+# containerd's read-once config_path gap. A SIGHUP we could not deliver is
+# logged, not folded into the readiness marker.
+assert_not_has 'CRIO_RELOAD_MARKER'
+assert_not_has 'crio_config_active'
 
 echo "Checking multi-domain NodePort listeners..."
 assert_has 'nodePort: 30346'

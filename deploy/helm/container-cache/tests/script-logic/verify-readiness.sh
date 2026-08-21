@@ -66,18 +66,15 @@ set_mtime() { touch -d "@$2" "$1"; }
 # Stubs for the two host lookups the helpers make. Shell functions take
 # precedence over PATH, so the shipped `pgrep -x <name>` calls land here.
 CONTAINERD_PID=""
-CRIO_PID=""
 pgrep() {
   case "$2" in
     containerd) [ -n "${CONTAINERD_PID}" ] && echo "${CONTAINERD_PID}" ;;
-    crio)       [ -n "${CRIO_PID}" ] && echo "${CRIO_PID}" ;;
     *)          return 1 ;;
   esac
 }
 getconf() { echo "${HZ}"; }
 
 READY_MARKER="${FAKE}/ready"
-CRIO_RELOAD_MARKER="${FAKE}/crio-reloaded"
 
 # shellcheck source=/dev/null
 source "${HELPERS}"
@@ -122,37 +119,22 @@ assert_not_ready "config rewritten after the restart"
 echo "4. no containerd process: a leftover config.toml does not hold the node"
 CONTAINERD_PID=""
 reconcile_ready_marker
-assert_ready "CRI-O-only node with a leftover config.toml"
+assert_ready "no containerd process, leftover config.toml"
 
-echo "5. failed CRI-O reload: not ready"
-rm -f "${CONTAINERD}"
-CONTAINERD_PID=""
+echo "5. readiness ignores CRI-O entirely"
+# CRI-O reloads registry config in place and auto_reload_registries makes it
+# watch the drop-in, so it has no equivalent of containerd's read-once
+# config_path gap. A node running only CRI-O must never be held not-ready.
 : > "${CRIO_DROPIN}"
 set_mtime "${CRIO_DROPIN}" 1000200
-CRIO_PID=200
-write_proc_stat 200 crio 1000100   # CRI-O predates the drop-in
-rm -f "${CRIO_RELOAD_MARKER}"      # SIGHUP failed, so nothing was stamped
 reconcile_ready_marker
-assert_not_ready "failed CRI-O SIGHUP"
+assert_ready "CRI-O-only node"
 
-echo "6. successful CRI-O reload: ready without a restart"
-touch "${CRIO_RELOAD_MARKER}"
-set_mtime "${CRIO_RELOAD_MARKER}" 1000250
-reconcile_ready_marker
-assert_ready "successful CRI-O SIGHUP"
-
-echo "7. CRI-O restarted after the drop-in was written: ready without a reload"
-rm -f "${CRIO_RELOAD_MARKER}"
-write_proc_stat 201 crio 1000300
-CRIO_PID=201
-reconcile_ready_marker
-assert_ready "CRI-O restarted after the drop-in"
-
-echo "8. both runtimes present: the inactive one wins"
+echo "6. containerd still governs when both are present"
 : > "${CONTAINERD}"
 set_mtime "${CONTAINERD}" 1000500
 CONTAINERD_PID=100   # started at 1000100, before the config
 reconcile_ready_marker
-assert_not_ready "containerd inactive while CRI-O is active"
+assert_not_ready "containerd inactive"
 
 echo "Readiness logic checks passed."

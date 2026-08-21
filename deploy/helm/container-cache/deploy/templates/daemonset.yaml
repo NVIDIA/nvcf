@@ -105,11 +105,7 @@ spec:
           # so `kubectl get ds` counts exactly the nodes whose cache routing is
           # in effect.
           READY_MARKER=/tmp/nvcf-cc-ready
-          # Touched only when a SIGHUP to CRI-O succeeds. CRI-O reloads registry
-          # config in place, so its start time alone cannot tell us whether the
-          # drop-in is live; the successful-reload timestamp can.
-          CRIO_RELOAD_MARKER=/tmp/nvcf-cc-crio-reloaded
-          rm -f "${READY_MARKER}" "${CRIO_RELOAD_MARKER}"
+          rm -f "${READY_MARKER}"
 {{- $crioPorts := include "nvcf-container-cache.crioRegistryPorts" . | fromYaml -}}
 {{- if $crioPorts }}
 {{- range $name, $val := $crioPorts }}
@@ -251,11 +247,6 @@ spec:
             if [ -n "${crio_pid}" ]; then
               if kill -HUP "${crio_pid}" 2>/dev/null; then
                 echo "Reloaded CRI-O registry config (SIGHUP)."
-                # Stamp the reload so readiness can tell a landed reload from a
-                # failed one. A failed SIGHUP leaves no marker, so the node
-                # reports not-ready instead of silently claiming the mirror is
-                # live.
-                touch "${CRIO_RELOAD_MARKER}"
               else
                 echo "Could not signal CRI-O; the drop-in applies on its next reload." >&2
               fi
@@ -320,28 +311,14 @@ spec:
             [ "${start}" -gt "${mtime}" ]
           }
 
-          # CRI-O does reload registry config, so a start-time comparison on its
-          # own would wrongly report every node that reloaded instead of
-          # restarting. The drop-in is live if CRI-O started after it was
-          # written, or if a SIGHUP we sent landed after the last write.
-          crio_config_active() {
-            local pid start mtime reloaded
-            local dropin=/host/etc/containers/registries.conf.d/nvcf-container-cache.conf
-            pid="$(pgrep -x crio | head -1 || true)"
-            # CRI-O is not running here, so it cannot be holding stale config.
-            [ -n "${pid}" ] || return 0
-            mtime="$(file_mtime_epoch "${dropin}")" || return 1
-            start="$(proc_start_epoch "${pid}")" || return 1
-            if [ "${start}" -gt "${mtime}" ]; then
-              return 0
-            fi
-            reloaded="$(file_mtime_epoch "${CRIO_RELOAD_MARKER}")" || return 1
-            [ "${reloaded}" -ge "${mtime}" ]
-          }
-
+          # Only containerd is checked. It is the sole runtime that can be left
+          # holding config it will never read: registry.config_path is read at
+          # startup and it has no reload. CRI-O reloads registry config in
+          # place, and auto_reload_registries makes it watch the drop-in, so it
+          # has no equivalent gap for readiness to report. A SIGHUP we could not
+          # deliver is logged above rather than folded in here.
           registry_config_active() {
-            containerd_config_active || return 1
-            crio_config_active || return 1
+            containerd_config_active
           }
 
           # Add the marker when the runtime has the config, remove it when it
