@@ -19,6 +19,7 @@ package clusteragent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -728,6 +729,94 @@ func TestKillWithinTimeoutReportsDeletedNotTerminating(t *testing.T) {
 	}
 	if res.TerminatingCount != 0 || len(res.Affected) != 1 || res.Affected[0].Terminating {
 		t.Fatalf("unexpected result: %+v", res)
+	}
+}
+
+// TestKillNegativeTimeoutRejected is a regression test: --timeout=-1s parses
+// to a valid negative time.Duration with no error from the flag layer, so
+// negative values must be rejected explicitly rather than silently falling
+// back to DefaultKillTimeout like zero does.
+func TestKillNegativeTimeoutRejected(t *testing.T) {
+	m, dc, _ := newFakeMaintainer(killSeed(), nil)
+
+	_, err := m.KillAll(context.Background(), KillOptions{BackendNS: testBackendNS, Timeout: -1 * time.Second})
+	if err == nil {
+		t.Fatal("expected an error for a negative --timeout")
+	}
+	if !strings.Contains(err.Error(), "negative") {
+		t.Errorf("error = %q, want it to mention the timeout must not be negative", err.Error())
+	}
+	if !icmsExists(t, dc, testRequestsNS, "r1") {
+		t.Error("KillAll must not delete anything when --timeout validation fails")
+	}
+}
+
+// simulatedDeleteError is a typed error a delete reactor can inject, so tests
+// can confirm the aggregate error returned by Kill* still lets a caller reach
+// the original cause via errors.As instead of only a flattened string.
+type simulatedDeleteError struct{ detail string }
+
+func (e *simulatedDeleteError) Error() string { return "simulated delete failure: " + e.detail }
+
+// TestKillAggregateErrorWrapsUnderlyingCause is a regression test: the
+// aggregate error from a partial kill failure must still let
+// errors.As reach the original per-item error, not just a summary string.
+func TestKillAggregateErrorWrapsUnderlyingCause(t *testing.T) {
+	m, dc, _ := newFakeMaintainer(killSeed(), nil)
+	want := &simulatedDeleteError{detail: "r2"}
+	dc.PrependReactor("delete", "icmsrequests", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if da, ok := action.(k8stesting.DeleteAction); ok && da.GetName() == "r2" {
+			return true, nil, want
+		}
+		return false, nil, nil
+	})
+
+	_, err := m.KillAll(context.Background(), KillOptions{BackendNS: testBackendNS})
+	if err == nil {
+		t.Fatal("expected aggregate error on partial failure")
+	}
+	var got *simulatedDeleteError
+	if !errors.As(err, &got) {
+		t.Fatalf("errors.As could not find the underlying cause in: %v", err)
+	}
+	if got != want {
+		t.Errorf("recovered cause = %+v, want %+v", got, want)
+	}
+}
+
+// TestKillTimeoutShorterThanPollIntervalIsHonored is a regression test: the
+// deletion wait must not sleep through a poll interval longer than the
+// configured --timeout before reporting Terminating. Uses a long poll
+// interval and a short timeout, and asserts the call returns well within the
+// poll interval.
+func TestKillTimeoutShorterThanPollIntervalIsHonored(t *testing.T) {
+	orig := killDeletionPollInterval
+	killDeletionPollInterval = time.Minute
+	t.Cleanup(func() { killDeletionPollInterval = orig })
+
+	cr := icmsRequestWithFinalizers(testRequestsNS, "r1", "fn-1", "v1", "nvca.finalizers.nvidia.io")
+	m, dc, _ := newFakeMaintainer([]runtime.Object{defaultBackend(), cr}, nil)
+	dc.PrependReactor("delete", "icmsrequests", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		// Delete is accepted but the object is never actually removed,
+		// simulating a finalizer the fake tracker can't model natively.
+		return true, nil, nil
+	})
+
+	start := time.Now()
+	res, err := m.KillFunction(context.Background(), "fn-1", "v1", KillOptions{
+		BackendNS: testBackendNS,
+		Timeout:   10 * time.Millisecond,
+	})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected an error reporting the request is still terminating")
+	}
+	if res.TerminatingCount != 1 {
+		t.Fatalf("TerminatingCount = %d, want 1", res.TerminatingCount)
+	}
+	if elapsed >= killDeletionPollInterval {
+		t.Errorf("elapsed = %s, want well under the %s poll interval: the wait must be bounded by --timeout, not the poll interval", elapsed, killDeletionPollInterval)
 	}
 }
 

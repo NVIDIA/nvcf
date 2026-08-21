@@ -114,7 +114,9 @@ type DrainResult struct {
 
 // KilledRequest is one ICMSRequest targeted by a kill operation.
 //
-//   - Error set: the delete call itself failed.
+//   - Error set: the delete operation failed. This covers the delete call
+//     itself, the --force finalizer strip that precedes it, and the
+//     post-delete existence check, not just the Delete API call.
 //   - Terminating true (Error empty): the delete was accepted and
 //     deletionTimestamp was set, but the object still existed with its
 //     finalizer when the wait timed out. NVCA has not finished evicting the

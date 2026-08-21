@@ -19,6 +19,7 @@ package clusteragent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -324,8 +325,11 @@ func (m *k8sMaintainer) KillFunction(ctx context.Context, functionID, versionID 
 	if err != nil {
 		return nil, err
 	}
+	if err := validateKillTimeout(opts.Timeout); err != nil {
+		return nil, err
+	}
 
-	result, err := m.killMatching(ctx, target, opts, func(fid, vid string) bool {
+	result, failures, err := m.killMatching(ctx, target, opts, func(fid, vid string) bool {
 		return fid == functionID && (versionID == "" || vid == versionID)
 	})
 	if err != nil {
@@ -337,7 +341,7 @@ func (m *k8sMaintainer) KillFunction(ctx context.Context, functionID, versionID 
 		}
 		return nil, fmt.Errorf("no scheduled function found for function %s in namespace %s", functionID, target.RequestsNamespace)
 	}
-	return result, aggregateKillError(result)
+	return result, aggregateKillError(result, failures)
 }
 
 // KillAll terminates every ICMSRequest on the cluster. An empty cluster returns
@@ -347,12 +351,24 @@ func (m *k8sMaintainer) KillAll(ctx context.Context, opts KillOptions) (*KillRes
 	if err != nil {
 		return nil, err
 	}
+	if err := validateKillTimeout(opts.Timeout); err != nil {
+		return nil, err
+	}
 
-	result, err := m.killMatching(ctx, target, opts, func(string, string) bool { return true })
+	result, failures, err := m.killMatching(ctx, target, opts, func(string, string) bool { return true })
 	if err != nil {
 		return nil, err
 	}
-	return result, aggregateKillError(result)
+	return result, aggregateKillError(result, failures)
+}
+
+// validateKillTimeout rejects a negative --timeout. Zero is valid: it means
+// "use DefaultKillTimeout" (handled in killMatching).
+func validateKillTimeout(timeout time.Duration) error {
+	if timeout < 0 {
+		return fmt.Errorf("--timeout must not be negative, got %s", timeout)
+	}
+	return nil
 }
 
 // killMatching lists ICMSRequests in the requests namespace, selects the ones
@@ -362,10 +378,14 @@ func (m *k8sMaintainer) KillAll(ctx context.Context, opts KillOptions) (*KillRes
 // recorded in the NVCFBackend CR's requestsNamespace field. The inspector's
 // all-namespace scan is a visibility-only read path that tolerates stale state;
 // kill operations use the authoritative namespace to avoid accidental cross-cluster deletions.
-func (m *k8sMaintainer) killMatching(ctx context.Context, target *ClusterTarget, opts KillOptions, match func(functionID, versionID string) bool) (*KillResult, error) {
+// The second return value collects the underlying error for each per-item
+// delete failure (distinct from the KilledRequest.Error strings, which exist
+// for JSON/text output). Callers wrap these into the aggregate error so
+// errors.Is/errors.As can still reach the original cause.
+func (m *k8sMaintainer) killMatching(ctx context.Context, target *ClusterTarget, opts KillOptions, match func(functionID, versionID string) bool) (*KillResult, []error, error) {
 	items, err := listICMSRequests(ctx, m.dc, target.RequestsNamespace)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	sortICMSRequests(items)
 
@@ -379,10 +399,11 @@ func (m *k8sMaintainer) killMatching(ctx context.Context, target *ClusterTarget,
 	}
 
 	timeout := opts.Timeout
-	if timeout <= 0 {
+	if timeout == 0 {
 		timeout = DefaultKillTimeout
 	}
 
+	var failures []error
 	for i := range items {
 		fid, vid := functionIdentity(items[i].Object)
 		if !match(fid, vid) {
@@ -400,6 +421,7 @@ func (m *k8sMaintainer) killMatching(ctx context.Context, target *ClusterTarget,
 			case err != nil:
 				killed.Error = err.Error()
 				result.FailedCount++
+				failures = append(failures, fmt.Errorf("%s/%s: %w", killed.Namespace, killed.Name, err))
 			case terminating:
 				// The delete was accepted (deletionTimestamp set) but NVCA had not
 				// removed its finalizer and evicted the workload by the deadline.
@@ -415,7 +437,7 @@ func (m *k8sMaintainer) killMatching(ctx context.Context, target *ClusterTarget,
 		}
 		result.Affected = append(result.Affected, killed)
 	}
-	return result, nil
+	return result, failures, nil
 }
 
 // deleteICMSRequest deletes one ICMSRequest and waits up to timeout for it to
@@ -450,24 +472,44 @@ func (m *k8sMaintainer) deleteICMSRequest(ctx context.Context, namespace, name s
 // waitForICMSRequestGone polls until the ICMSRequest is gone or timeout
 // elapses. It returns (true, nil) rather than an error on timeout: the
 // request was validly accepted for deletion, it just has not finished yet.
+// Both the Get call and the poll sleep are bounded by the deadline, so a slow
+// or blocked API call cannot make the wait overrun the configured timeout,
+// and a timeout shorter than killDeletionPollInterval is still honored
+// instead of sleeping through the whole poll interval regardless.
 func (m *k8sMaintainer) waitForICMSRequestGone(ctx context.Context, namespace, name string, timeout time.Duration) (bool, error) {
 	deadline := time.Now().Add(timeout)
 	for {
-		_, err := m.dc.Resource(icmsRequestGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+		getCtx, cancel := context.WithDeadline(ctx, deadline)
+		_, err := m.dc.Resource(icmsRequestGVR).Namespace(namespace).Get(getCtx, name, metav1.GetOptions{})
+		cancel()
 		if err != nil {
 			if apierrors.IsNotFound(err) {
 				return false, nil
 			}
+			if ctx.Err() != nil {
+				// The caller's own context ended, not our synthetic deadline.
+				return false, ctx.Err()
+			}
+			if errors.Is(err, context.DeadlineExceeded) {
+				// Our per-Get deadline (== the overall deadline) fired mid-call:
+				// treat exactly like a timeout that elapsed between polls.
+				return true, nil
+			}
 			return false, err
 		}
 
-		if time.Now().After(deadline) {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
 			return true, nil
+		}
+		wait := killDeletionPollInterval
+		if remaining < wait {
+			wait = remaining
 		}
 		select {
 		case <-ctx.Done():
 			return false, ctx.Err()
-		case <-time.After(killDeletionPollInterval):
+		case <-time.After(wait):
 		}
 	}
 }
@@ -497,10 +539,14 @@ func (m *k8sMaintainer) stripFinalizers(ctx context.Context, namespace, name str
 	})
 }
 
-func aggregateKillError(result *KillResult) error {
+// aggregateKillError summarizes a kill outcome. failures carries the
+// underlying per-item errors (wrapped with %w by the caller), so a caller
+// inspecting the returned error with errors.Is/errors.As can still reach the
+// original cause behind the summary text.
+func aggregateKillError(result *KillResult, failures []error) error {
 	switch {
 	case result.FailedCount > 0:
-		return fmt.Errorf("failed to terminate %d of %d ICMSRequest(s)", result.FailedCount, len(result.Affected))
+		return fmt.Errorf("failed to terminate %d of %d ICMSRequest(s): %w", result.FailedCount, len(result.Affected), errors.Join(failures...))
 	case result.TerminatingCount > 0:
 		return fmt.Errorf("%d of %d ICMSRequest(s) still terminating: NVCA has not finished evicting the workload; re-check with cluster agent get-function", result.TerminatingCount, len(result.Affected))
 	default:
