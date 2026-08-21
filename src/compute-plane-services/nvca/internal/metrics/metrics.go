@@ -1310,6 +1310,16 @@ func clusterValidatorCheckKeys() []string {
 		"gpu_operator",
 		"configurable_netpol",
 		"netpol_enforcement",
+		// Control-plane-specific keys (only populated when VALIDATOR_ROLE=control-plane).
+		"default_storage_class",
+		"gateway_api_crds",
+		"envoy_gateway",
+		"gateway_routes",
+		"external_lb",
+		"node_to_node",
+		// HA readiness keys (CP Resilience SDD).
+		"tier1_deployments",
+		"tier2_statefulsets",
 	}
 }
 
