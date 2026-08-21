@@ -28,6 +28,7 @@ tasks/                      NVCT task load tests
 | `supreme_large_response_test.js` | Large payload responses. |
 | `oai_compatible_llm_stream_load_test.js` | Streaming OpenAI-compatible LLM completions. |
 | `oai_compatible_llm_load_test.js` | Non-streaming OpenAI-compatible LLM completions. |
+| `oai_compatible_responses_sse_load_test.js` | Streaming OpenAI Responses API benchmark with TTFT, ITL, and throughput metrics. |
 | `oai_list_models_load_test.js` | OpenAI-compatible model listing endpoint. |
 | `sdxl_load_test.js` | Stable Diffusion XL image generation. |
 | `nvcf_health_load_test.js` | NVCF health endpoint. |
@@ -96,7 +97,26 @@ These helpers use the `ngc` CLI today and target cloud NVCF. Porting them to sel
 | Variable | Description |
 |----------|-------------|
 | `OAI_COMPAT_URL` | OpenAI-compatible API endpoint. |
+| `TOKEN` | Optional Bearer token. Non-loopback endpoints must use HTTPS. |
 | `LLM_MODEL_NAME` | Model identifier. |
+| `OPENAI_RESPONSES_PROFILE` | `calibration` (default) or `load` for the Responses SSE benchmark. |
+| `OPENAI_RESPONSES_VUS` | Virtual users for the Responses SSE benchmark. Defaults to 1 for calibration and 10 for load. |
+| `OPENAI_RESPONSES_ITERATIONS` | Per-VU iterations for calibration. Defaults to 10. |
+| `OPENAI_RESPONSES_MAX_DURATION` | Maximum duration for calibration. Defaults to `10m`. |
+| `OPENAI_RESPONSES_DURATION` | Test duration for load. Defaults to `30s`. |
+| `OPENAI_RESPONSES_TOKENS_PER_CHUNK` | Declared synthetic tokens in each output chunk. Defaults to 1. |
+| `OPENAI_RESPONSES_EXPECTED_DELTAS` | Required text-delta count. Defaults to the configured output chunks for calibration and is disabled for load. |
+| `OPENAI_RESPONSES_CALIBRATION_TOLERANCE_MS` | Allowed early-observation tolerance for calibration timing checks. Defaults to 10 ms. |
+| `OPENAI_RESPONSES_INPUT` | Responses API input string. Defaults to `benchmark`. |
+| `LOAD_TESTER_QUEUE_DELAY_MS` | Maps to `X-Load-Tester-Queue-Delay-Ms`. Sent by default only in calibration. |
+| `LOAD_TESTER_TTFT_MS` | Maps to `X-Load-Tester-TTFT-Ms`. Sent by default only in calibration. |
+| `LOAD_TESTER_TTFT_JITTER_MS` | Maps to `X-Load-Tester-TTFT-Jitter-Ms`. Sent by default only in calibration. |
+| `LOAD_TESTER_ITL_MS` | Maps to `X-Load-Tester-ITL-Ms`. Sent by default only in calibration. |
+| `LOAD_TESTER_ITL_JITTER_MS` | Maps to `X-Load-Tester-ITL-Jitter-Ms`. Sent by default only in calibration. |
+| `LOAD_TESTER_OUTPUT_CHUNKS` | Maps to `X-Load-Tester-Output-Chunks`. Defaults to 8 and must not exceed the sample's startup chunk limit. |
+| `LOAD_TESTER_CHUNK` | Maps to `X-Load-Tester-Chunk`. Defaults to `xxxx`. |
+| `LOAD_TESTER_STREAM_ERROR_AFTER_CHUNKS` | Maps to `X-Load-Tester-Stream-Error-After-Chunks` for failure-path validation. |
+| `LOAD_TESTER_STREAM_TRUNCATE_AFTER_CHUNKS` | Maps to `X-Load-Tester-Stream-Truncate-After-Chunks` for truncated-stream validation. |
 
 ### Multi-Endpoint Tests
 
@@ -158,6 +178,79 @@ Then run with the local binary:
   --config functions/test-configs/k6_sse_streaming_test_config.json \
   -e TOKEN=$TOKEN -e HTTP_SUPREME_NVCF_URL=$HTTP_SUPREME_NVCF_URL
 ```
+
+### OpenAI Responses SSE Benchmark
+
+`oai_compatible_responses_sse_load_test.js` measures two start latencies: the
+first SSE event and the first `response.output_text.delta`. It records one ITL
+sample between each pair of text-delta events, then reports output chunks per
+second and declared tokens per second. The output chunk and declared token
+counters also provide aggregate rates for streams whose delta timestamps share
+the same millisecond. A stream succeeds only after HTTP 200,
+`response.completed`, no transport or protocol error, and an optional expected
+delta count. For this script, `OAI_COMPAT_URL` must be the full
+`/v1/responses` endpoint URL.
+
+Metrics:
+
+- `openai_responses_first_sse_event_ms`, `openai_responses_ttft_ms`, and `openai_responses_itl_ms`
+- `openai_responses_output_chunks_per_second` and `openai_responses_declared_tokens_per_second`
+- `openai_responses_stream_duration_ms`, `openai_responses_stream_success`, and stream outcome counters
+
+The default calibration profile sends eight `xxxx` chunks with 200 ms TTFT and
+50 ms ITL. It validates that those delays are not observed materially early:
+
+```bash
+./k6 run functions/oai_compatible_responses_sse_load_test.js \
+  -e OAI_COMPAT_URL=http://127.0.0.1:8000/v1/responses
+```
+
+The load profile leaves queue, TTFT, and ITL delays unset unless their
+`LOAD_TESTER_*` variables are supplied:
+
+```bash
+./k6 run functions/oai_compatible_responses_sse_load_test.js \
+  -e OAI_COMPAT_URL=$OAI_COMPAT_URL \
+  -e OPENAI_RESPONSES_PROFILE=load \
+  -e OPENAI_RESPONSES_VUS=10 \
+  -e OPENAI_RESPONSES_DURATION=30s
+```
+
+For a 60-second per-connection capacity run at 5 ms ITL, start the sample with
+`LOAD_TESTER_MAX_OUTPUT_CHUNKS=12000`, then use calibration mode with 12000
+chunks and two iterations per VU. Raise the generator file-descriptor limit
+before a high-concurrency run. Set `OAI_COMPAT_URL` to the full
+`/v1/responses` endpoint.
+
+```bash
+ulimit -n 65536
+
+./k6 run functions/oai_compatible_responses_sse_load_test.js \
+  --summary-export responses-sse-summary.json \
+  -e OAI_COMPAT_URL=$OAI_COMPAT_URL \
+  -e OPENAI_RESPONSES_PROFILE=calibration \
+  -e OPENAI_RESPONSES_VUS=1024 \
+  -e OPENAI_RESPONSES_ITERATIONS=2 \
+  -e OPENAI_RESPONSES_MAX_DURATION=5m \
+  -e OPENAI_RESPONSES_EXPECTED_DELTAS=12000 \
+  -e OPENAI_RESPONSES_CALIBRATION_TOLERANCE_MS=1 \
+  -e LOAD_TESTER_QUEUE_DELAY_MS=0 \
+  -e LOAD_TESTER_TTFT_MS=1 \
+  -e LOAD_TESTER_TTFT_JITTER_MS=0 \
+  -e LOAD_TESTER_ITL_MS=5 \
+  -e LOAD_TESTER_ITL_JITTER_MS=0 \
+  -e LOAD_TESTER_CHUNK=xxxx \
+  -e LOAD_TESTER_OUTPUT_CHUNKS=12000
+```
+
+The high-concurrency profile opens a new connection for each iteration. Check
+generator file descriptors, sockets, CPU, and network saturation before
+interpreting a failure as target capacity.
+
+`openai_responses_declared_tokens_per_second` is synthetic. It multiplies the
+observed chunk rate by `OPENAI_RESPONSES_TOKENS_PER_CHUNK`; `xxxx` is not a
+tokenizer-derived token. Use `openai_responses_output_chunks_per_second` when
+the chunk-to-token mapping is unknown.
 
 ## Resources
 
