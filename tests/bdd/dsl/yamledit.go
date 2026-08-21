@@ -122,9 +122,9 @@ func RequireNonEmptyYAMLKeys(path string, keys []string) error {
 // parsing so ${VAR} cells resolve at compare time. On mismatch the
 // returned error names the first differing path.
 func MatchYAMLSubtree(filePath, keyPath, expectedYAML string, mode MatchMode) error {
-	var expected any
-	if err := yaml.Unmarshal([]byte(Interpolate(expectedYAML)), &expected); err != nil {
-		return fmt.Errorf("parse expected yaml: %w", err)
+	expected, err := parseExpectedYAML(expectedYAML)
+	if err != nil {
+		return err
 	}
 	root, err := readYAMLAny(filePath)
 	if err != nil {
@@ -143,6 +143,30 @@ func MatchYAMLSubtree(filePath, keyPath, expectedYAML string, mode MatchMode) er
 		actual = got
 	}
 	return deepCompare(expected, actual, mode, keyPath)
+}
+
+// MatchYAMLDocument compares expectedYAML to an actual YAML document already
+// held in memory. Expected values are interpolated before parsing. Mismatch
+// errors identify the first differing path without including either value, so
+// callers can safely compare Kubernetes resources that may contain secrets.
+func MatchYAMLDocument(actualYAML, expectedYAML string, mode MatchMode) error {
+	expected, err := parseExpectedYAML(expectedYAML)
+	if err != nil {
+		return err
+	}
+	var actual any
+	if err := yaml.Unmarshal([]byte(actualYAML), &actual); err != nil {
+		return fmt.Errorf("parse actual yaml: invalid YAML")
+	}
+	return deepCompare(expected, actual, mode, "")
+}
+
+func parseExpectedYAML(expectedYAML string) (any, error) {
+	var expected any
+	if err := yaml.Unmarshal([]byte(Interpolate(expectedYAML)), &expected); err != nil {
+		return nil, fmt.Errorf("parse expected yaml: %w", err)
+	}
+	return expected, nil
 }
 
 // SubstituteFile replaces every occurrence of placeholder in the file at
@@ -414,7 +438,7 @@ func deepCompare(expected, actual any, mode MatchMode, path string) error {
 		return compareLists(expectedList, actualList, mode, path)
 	}
 	if !reflect.DeepEqual(expected, actual) {
-		return fmt.Errorf("%s: expected %v, got %v", displayPath(path), expected, actual)
+		return fmt.Errorf("%s: values differ", displayPath(path))
 	}
 	return nil
 }

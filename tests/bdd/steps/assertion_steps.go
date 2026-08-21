@@ -49,6 +49,7 @@ func registerAssertionSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^these Helm releases should be deployed using context "([^"]*)":$`, sc.helmReleasesShouldBeDeployed)
 	ctx.Step(`^these Kubernetes resources should exist in namespace "([^"]*)" using context "([^"]*)":$`, sc.kubernetesResourcesShouldExist)
 	ctx.Step(`^these Kubernetes resources should not exist in namespace "([^"]*)" using context "([^"]*)":$`, sc.kubernetesResourcesShouldNotExist)
+	ctx.Step(`^Kubernetes resource "([^"/]+)/([^"]+)" in namespace "([^"]*)" using context "([^"]*)" should contain:$`, sc.kubernetesResourceShouldContain)
 }
 
 func (sc *ScenarioContext) commandExitCodeShouldBe(expected int) error {
@@ -294,6 +295,24 @@ func (sc *ScenarioContext) kubernetesResourcesShouldNotExist(ctx context.Context
 		if err := dsl.KubernetesResourceAbsent(sc.LastResult.Stdout, resource); err != nil {
 			return fmt.Errorf("row %d: %w", index+1, err)
 		}
+	}
+	return nil
+}
+
+func (sc *ScenarioContext) kubernetesResourceShouldContain(ctx context.Context, kind, name, namespace, kubeContext string, doc *godog.DocString) error {
+	resource := dsl.KubernetesResource{Kind: kind, Name: name}
+	command, err := dsl.KubernetesResourceYAMLGetCommand(namespace, kubeContext, resource)
+	if err != nil {
+		return err
+	}
+	if err := sc.runAndRecord(ctx, command); err != nil {
+		return err
+	}
+	if err := sc.commandExitCodeShouldBe(0); err != nil {
+		return fmt.Errorf("kubernetes resource %s/%s could not be read: %w", kind, name, err)
+	}
+	if err := dsl.MatchYAMLDocument(sc.LastResult.Stdout, doc.Content, dsl.MatchSubset); err != nil {
+		return fmt.Errorf("kubernetes resource %s/%s does not contain the expected YAML subset: %w", kind, name, err)
 	}
 	return nil
 }

@@ -642,6 +642,60 @@ func TestKubernetesResourcesValidateAllRowsBeforeRunning(t *testing.T) {
 	}
 }
 
+func TestKubernetesResourceShouldContainRunsExplicitYAMLGet(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0, Stdout: `spec:
+  targetAllocator:
+    enabled: true
+`}
+	doc := &godog.DocString{Content: `spec:
+  targetAllocator:
+    enabled: true
+`}
+
+	if err := sc.kubernetesResourceShouldContain(
+		context.Background(),
+		"OpenTelemetryCollector",
+		"nvcf-observability",
+		"monitoring",
+		"k3d-ncp-local",
+		doc,
+	); err != nil {
+		t.Fatalf("assert Kubernetes resource YAML: %v", err)
+	}
+	want := "kubectl get opentelemetrycollector/nvcf-observability --namespace monitoring --context k3d-ncp-local -o yaml"
+	if len(fake.runs) != 1 || fake.runs[0].command != want {
+		t.Fatalf("runs = %#v, want %q", fake.runs, want)
+	}
+}
+
+func TestKubernetesResourceShouldContainFailureDoesNotExposeResourceValues(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0, Stdout: `data:
+  token: actual-secret-value
+`}
+	doc := &godog.DocString{Content: `data:
+  token: expected-secret-value
+`}
+
+	err := sc.kubernetesResourceShouldContain(
+		context.Background(),
+		"Secret",
+		"credentials",
+		"nvcf",
+		"k3d-ncp-local",
+		doc,
+	)
+	if err == nil {
+		t.Fatal("expected mismatch")
+	}
+	for _, sensitive := range []string{"actual-secret-value", "expected-secret-value"} {
+		if strings.Contains(err.Error(), sensitive) {
+			t.Fatalf("error %q exposes %q", err, sensitive)
+		}
+	}
+}
+
 func TestHelmReleasesShouldBeDeployedRunsSingleExplicitList(t *testing.T) {
 	sc, fake := newScenarioContext(t)
 	fake.result = harness.Result{ExitCode: 0, Stdout: `[{"name":"nats","namespace":"nats-system","revision":"1","status":"deployed"}]`}

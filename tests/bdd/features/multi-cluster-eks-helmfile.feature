@@ -220,8 +220,12 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
 
       # Confirm gateway-routes templated global.domain into the api
       # HTTPRoute hostname on the control-plane cluster.
-      When I run command "kubectl --context ${EKS_CONTEXT} get httproute nvcf-api -n envoy-gateway -o jsonpath={.spec.hostnames[0]}"
-      Then the command output should contain "api.${EKS_GATEWAY_DOMAIN}"
+      Then Kubernetes resource "HTTPRoute/nvcf-api" in namespace "envoy-gateway" using context "${EKS_CONTEXT}" should contain:
+        """
+        spec:
+          hostnames:
+            - api.${EKS_GATEWAY_DOMAIN}
+        """
 
       # Confirm the optional API GRPCRoutes are accepted and point at
       # resolved backends. These route flags are authored in the EKS env
@@ -241,14 +245,20 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
 
       # Confirm Helmfile passed the worker-facing endpoints into the
       # environment ConfigMaps consumed by the API deployments.
-      When I run command "kubectl --context ${EKS_CONTEXT} get configmap nvcf-api-env -n nvcf -o yaml"
-      Then the command output should contain "NVCF_FQDN: http://api.${EKS_GATEWAY_DOMAIN}"
-      And the command output should contain "NVCF_GLOBAL_FQDN_GRPC: http://worker-api.${EKS_GATEWAY_DOMAIN}"
-      And the command output should contain "NVCF_NATS_WORKER_URL: nats://${EKS_GATEWAY_ADDR}:4222"
+      Then Kubernetes resource "ConfigMap/nvcf-api-env" in namespace "nvcf" using context "${EKS_CONTEXT}" should contain:
+        """
+        data:
+          NVCF_FQDN: http://api.${EKS_GATEWAY_DOMAIN}
+          NVCF_GLOBAL_FQDN_GRPC: http://worker-api.${EKS_GATEWAY_DOMAIN}
+          NVCF_NATS_WORKER_URL: nats://${EKS_GATEWAY_ADDR}:4222
+        """
 
-      When I run command "kubectl --context ${EKS_CONTEXT} get configmap nvct-api-env -n nvcf -o yaml"
-      Then the command output should contain "NVCT_FQDN: http://tasks.${EKS_GATEWAY_DOMAIN}"
-      And the command output should contain "NVCT_GLOBAL_FQDN_GRPC: http://worker-tasks.${EKS_GATEWAY_DOMAIN}"
+      Then Kubernetes resource "ConfigMap/nvct-api-env" in namespace "nvcf" using context "${EKS_CONTEXT}" should contain:
+        """
+        data:
+          NVCT_FQDN: http://tasks.${EKS_GATEWAY_DOMAIN}
+          NVCT_GLOBAL_FQDN_GRPC: http://worker-tasks.${EKS_GATEWAY_DOMAIN}
+        """
 
   Rule: Helmfile registers and installs NVCA on the compute EKS cluster
 
