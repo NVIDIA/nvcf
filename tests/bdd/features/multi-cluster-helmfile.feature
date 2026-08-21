@@ -104,6 +104,39 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
         | llm-request-router        | nvcf                 |
         | llm-api-gateway           | nvcf                 |
 
+      # NVCF API must advertise the compute-reachable alias, not the
+      # control-plane pod or headless Service address. The same DNS name is a
+      # normal Service on the control plane and an Endpoints-backed alias on
+      # the compute plane.
+      When I run command "kubectl --context k3d-ncp-local-cp get configmap/nvcf-api-remote-config -n nvcf -o yaml"
+      Then the command exit code should be 0
+      And the command output should contain "worker-address: llm-request-router.nvcf.svc.cluster.local:50071"
+
+      # The dial address chooses the cross-cluster network path. Stargate's
+      # per-pod authority remains the gRPC authority and reverse QUIC SNI, so
+      # the managed certificate covers the stable Service and headless pod
+      # wildcard without relying on public DNS.
+      Then Kubernetes resource "Certificate/stargate-quic-tls" in namespace "nvcf" using context "k3d-ncp-local-cp" should contain:
+        """
+        spec:
+          secretName: stargate-quic-tls
+          dnsNames:
+            - llm-request-router.nvcf.svc.cluster.local
+            - "*.llm-request-router-headless.nvcf.svc.cluster.local"
+        """
+
+      When I run command:
+        """
+        kubectl --context k3d-ncp-local-cp wait tcproute/llm-worker-grpc udproute/llm-worker-quic -n envoy-gateway-system --for=jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}'=True --timeout=2m
+        """
+      Then the command exit code should be 0
+
+      When I run command:
+        """
+        kubectl --context k3d-ncp-local-cp wait tcproute/llm-worker-grpc udproute/llm-worker-quic -n envoy-gateway-system --for=jsonpath='{.status.parents[0].conditions[?(@.type=="ResolvedRefs")].status}'=True --timeout=2m
+        """
+      Then the command exit code should be 0
+
       # These routes are installed by ncp-local before the Helmfile
       # stack, then become fully resolved once the control-plane
       # Services exist. Check route status here so Gateway wiring

@@ -872,6 +872,14 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
 		"helm list --all-namespaces --kube-context k3d-ncp-local-cp -o json":        {ExitCode: 0, Stdout: helmListAllNamespacesJSON()},
 		"helm list --all-namespaces --kube-context k3d-ncp-local-compute-1 -o json": {ExitCode: 0, Stdout: helmListNVCAJSON()},
+		"kubectl --context k3d-ncp-local-cp get configmap/nvcf-api-remote-config -n nvcf -o yaml": {
+			ExitCode: 0,
+			Stdout:   "data:\n  application-custom.yaml: |\n    nvcf:\n      llm-request-router:\n        worker-address: llm-request-router.nvcf.svc.cluster.local:50071\n",
+		},
+		"kubectl get certificate/stargate-quic-tls --namespace nvcf --context k3d-ncp-local-cp -o yaml": {
+			ExitCode: 0,
+			Stdout:   "spec:\n  secretName: stargate-quic-tls\n  dnsNames:\n    - llm-request-router.nvcf.svc.cluster.local\n    - '*.llm-request-router-headless.nvcf.svc.cluster.local'\n",
+		},
 		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke --request-body '{\"message\":\"bdd-echo\",\"repeats\":1}' --timeout 120 --poll-duration 5": {
 			ExitCode: 0,
 			Stdout:   "Function invocation completed!\n\nResponse:\n{\"rawResponse\":\"bdd-echo\"}\n",
@@ -894,9 +902,11 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	seedComputePlaneLocalBDDMultiFixture(t, suite.Config.RepoRoot)
 	assertFileContains(t, filepath.Join(suite.Config.RepoRoot, "tests/bdd/fixtures/self-managed-local-bdd-multi.yaml"),
 		"workerConnectBaseURL: http://grpc.nvcf.svc.cluster.local:10086",
-		"chart: ../../../helm/gateway-routes/chart",
-		`version: ""`,
+		"chartPath: ../../../helm/gateway-routes/chart",
+		"chartPath: ../../../helm/llm-request-router/llm-request-router",
+		"llmRequestRouterAddress: llm-request-router.nvcf.svc.cluster.local:50071",
 		"grpcWorker:",
+		"llmWorker:",
 		"enabled: true",
 		"listenerName: worker-tcp",
 	)
@@ -920,6 +930,32 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	}.Run()
 	if status != 0 {
 		t.Fatalf("godog suite status = %d\n%s", status, out.String())
+	}
+	environmentPath := filepath.Join(suite.Config.RepoRoot, "deploy", "stacks", "self-managed", "environments", "local-bdd.yaml")
+	for _, assertion := range []struct {
+		key  string
+		want string
+	}{
+		{key: "global.workerEndpoints.llmRequestRouterAddress", want: "llm-request-router.nvcf.svc.cluster.local:50071"},
+		{key: "addons.llm.requestRouter.chartPath", want: "../../../helm/llm-request-router/llm-request-router"},
+		{key: "addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress", want: "llm-request-router.nvcf.svc.cluster.local:50071"},
+		{key: "addons.llm.requestRouter.backendRouter.pylonReverseTunnelDialAddress", want: "llm-request-router.nvcf.svc.cluster.local:50072"},
+		{key: "addons.llm.pki.allowedDomains", want: "cluster.local"},
+		{key: "addons.llm.pki.dnsNames[0]", want: "llm-request-router.nvcf.svc.cluster.local"},
+		{key: "addons.llm.pki.dnsNames[1]", want: "*.llm-request-router-headless.nvcf.svc.cluster.local"},
+		{key: "ingress.gatewayApi.chartPath", want: "../../../helm/gateway-routes/chart"},
+		{key: "ingress.gatewayApi.routes.llmWorker.enabled", want: "true"},
+		{key: "ingress.gatewayApi.routes.llmWorker.backend.namespace", want: "nvcf"},
+		{key: "ingress.gatewayApi.gateways.llmGrpc.listenerName", want: "llm-grpc"},
+		{key: "ingress.gatewayApi.gateways.llmQuic.listenerName", want: "llm-quic"},
+	} {
+		got, found, err := dsl.ReadYAMLKey(environmentPath, assertion.key)
+		if err != nil {
+			t.Fatalf("read multi-cluster override %s: %v", assertion.key, err)
+		}
+		if !found || got != assertion.want {
+			t.Fatalf("multi-cluster override %s = %q, found = %t; want %q", assertion.key, got, found, assertion.want)
+		}
 	}
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "deploy/stacks/nvcf-compute-plane install") {
 		t.Fatal("compute-plane install make target was never invoked")
@@ -1215,6 +1251,7 @@ func seedHelmfileLocalBDDMultiFixture(t *testing.T, repoRoot string) {
   workerEndpoints:
     essServiceURL: http://ess-api.ess.svc.cluster.local:8080
     invocationServiceURL: http://invocation.nvcf.svc.cluster.local:8080
+    llmRequestRouterAddress: llm-request-router.nvcf.svc.cluster.local:50071
   nvcaOperator:
     selfManaged:
       icmsServiceURL: http://api.sis.svc.cluster.local:8080
@@ -1223,16 +1260,35 @@ func seedHelmfileLocalBDDMultiFixture(t *testing.T, repoRoot string) {
 addons:
   llm:
     enabled: true
+    requestRouter:
+      chartPath: ../../../helm/llm-request-router/llm-request-router
+      backendRouter:
+        pylonGrpcDialAddress: llm-request-router.nvcf.svc.cluster.local:50071
+        pylonReverseTunnelDialAddress: llm-request-router.nvcf.svc.cluster.local:50072
+    pki:
+      enabled: true
+      allowedDomains: cluster.local
+      dnsNames:
+        - llm-request-router.nvcf.svc.cluster.local
+        - "*.llm-request-router-headless.nvcf.svc.cluster.local"
 grpcproxy:
   workerConnectBaseURL: http://grpc.nvcf.svc.cluster.local:10086
 ingress:
   gatewayApi:
-    chart: ../../../helm/gateway-routes/chart
-    version: ""
+    chartPath: ../../../helm/gateway-routes/chart
+    gateways:
+      llmGrpc:
+        listenerName: llm-grpc
+      llmQuic:
+        listenerName: llm-quic
     routes:
       grpcWorker:
         enabled: true
         listenerName: worker-tcp
+      llmWorker:
+        enabled: true
+        backend:
+          namespace: nvcf
 `)
 }
 
