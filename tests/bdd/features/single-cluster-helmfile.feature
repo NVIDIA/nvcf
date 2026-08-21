@@ -258,16 +258,16 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       Then the command exit code should be 0
 
       # The gateway path answers synchronously, so no --poll-duration
-      # (the echo scenarios poll the 202 queue path). "choices" guards
-      # against a degenerate empty envelope; the assertion is tightened
-      # to the sample's reply content once the live run pins it.
+      # (the echo scenarios poll the 202 queue path). The sample always
+      # answers with its fixed load-testing message, so the assertion
+      # checks that content rather than only the envelope shape.
       When I run command:
         """
         ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke --inference-url /v1/chat/completions --model-name openai-compatible-sample --request-body '{"messages":[{"role":"user","content":"bdd-llm-echo"}]}' --timeout 120
         """
       Then the command exit code should be 0
       And the command output should contain "chat.completion"
-      And the command output should contain "choices"
+      And the command output should contain "fixed 128-byte response"
 
       # The gateway must reject requests that carry no API key. curl
       # reports only the status code so the assertion cannot match
