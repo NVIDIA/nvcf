@@ -89,7 +89,6 @@ type StreamDirector struct {
 	workerAuth      *ttlcache.Cache[string, workerAuthInfo]  // auth -> request + function info
 	issuedTokens    *ttlcache.Cache[string, issuedTokenInfo] // diagnostic only, see issuedTokenInfo
 	pendingWork     *ttlcache.Cache[uuid.UUID, pendingWorkInfo]
-	invocations     *invocationGate
 	workers         *ttlcache.Cache[workerConnectionKey, *worker.WorkerConnection]
 	functionInvoker FunctionInvoker
 	cors            *cors.Cors
@@ -130,8 +129,11 @@ func NewStreamDirector(functionInvoker FunctionInvoker) *StreamDirector {
 	// whose token has already aged out, because that request is still sitting
 	// in the work queue. Bounded so it cannot grow without limit.
 	pendingWorkCache := ttlcache.New(
-		ttlcache.WithTTL[uuid.UUID, pendingWorkInfo](pendingWorkRetention),
-		ttlcache.WithCapacity[uuid.UUID, pendingWorkInfo](pendingWorkCacheCapacity),
+		// Deliberately reuses the issued-token retention and capacity rather
+		// than introducing its own. This tracks the same population from the
+		// same call site, and the codebase does not need another timeout.
+		ttlcache.WithTTL[uuid.UUID, pendingWorkInfo](issuedTokenRetention),
+		ttlcache.WithCapacity[uuid.UUID, pendingWorkInfo](issuedTokenCacheCapacity),
 		ttlcache.WithDisableTouchOnHit[uuid.UUID, pendingWorkInfo](),
 	)
 	go pendingWorkCache.Start()
@@ -270,7 +272,6 @@ func NewStreamDirector(functionInvoker FunctionInvoker) *StreamDirector {
 		shuttingDown:    shuttingDown,
 		issuedTokens:    issuedTokenCache,
 		pendingWork:     pendingWorkCache,
-		invocations:     newInvocationGate(),
 		workerAuth:      workerAuthCache,
 		functionInvoker: functionInvoker,
 		cors:            cors.New(middleware.DefaultCorsOptions),
@@ -351,23 +352,19 @@ const (
 	issuedTokenRetention = 15 * time.Minute
 	// issuedTokenCacheCapacity bounds the diagnostic cache.
 	issuedTokenCacheCapacity = 50000
-	// pendingWorkRetention is how long a session waiting on a worker CONNECT is
-	// remembered. It has to outlast the token by a wide margin, because the
-	// queued request this refers to survives its token and is exactly what
-	// shutdown needs to clean up.
-	pendingWorkRetention = 30 * time.Minute
-	// pendingWorkCacheCapacity bounds the pending work cache.
-	pendingWorkCacheCapacity = 50000
-	// invocationDrainTimeout bounds how long shutdown waits for invocations
-	// that are already past admission to finish publishing their work request.
-	invocationDrainTimeout = 5 * time.Second
-	// pendingWorkPurgeTimeout bounds the whole shutdown purge. Shutdown must not
-	// block on the work queue, so this is a best-effort budget.
-	pendingWorkPurgeTimeout = 10 * time.Second
 )
 
 // purgePendingWork drops the work requests for sessions that never got a
-// worker CONNECT. Their tokens exist only in this pod's memory, so once it is
+// worker CONNECT.
+//
+// Best effort by design. A session records its pending work just before the
+// invocation publishes the work request, so a shutdown landing precisely
+// between those two steps will miss that one request. Closing that window
+// needs an admission gate and a drain timeout, which is more machinery and
+// another tunable than the gap justifies: a missed request is simply left as
+// it is today, and today every one of them is left.
+//
+// Their tokens exist only in this pod's memory, so once it is
 // gone every one of them is guaranteed to be rejected; leaving them queued
 // means each is still pulled, still takes a concurrency slot, and still fails.
 //
@@ -384,7 +381,7 @@ func (s *StreamDirector) purgePendingWork() {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), pendingWorkPurgeTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), consts.Timeout)
 	defer cancel()
 
 	var purged, failed int
@@ -420,9 +417,6 @@ func (s *StreamDirector) Close() error {
 	// Mark first: DeleteAll evicts every entry, and without this those
 	// evictions would be misreported as client or worker initiated.
 	s.shuttingDown.Store(true)
-	// Stop admitting invocations and let the ones already running finish
-	// publishing, so the purge below sees every request this pod created.
-	s.invocations.closeAndDrain(invocationDrainTimeout)
 	// Before the caches go away, drop the queued work this pod can no longer
 	// authenticate. Best effort: a failure here must not hold up shutdown.
 	s.purgePendingWork()
@@ -622,17 +616,6 @@ func (s *StreamDirector) getAndInitWorkerConnection(ctx context.Context, conn *w
 
 		// Capture API-provided function info in closure
 		var apiFunctionId, apiFunctionVersionId string
-
-		// An invocation records its pending work before it publishes the work
-		// request, so a shutdown landing between those two steps would purge
-		// nothing and then leave the published request behind with no token to
-		// authenticate it. Admission is closed before shutdown purges, and
-		// shutdown waits for whatever is already past this point, so no
-		// invocation can publish after the purge has taken its snapshot.
-		if !s.invocations.begin() {
-			return nil, nverrors.NewNVError(errors.New("proxy is shutting down")).WithCode(grpcCodes.Unavailable)
-		}
-		defer s.invocations.end()
 
 		invokeResponse, cancelInvokingWorker, err := s.functionInvoker.InvokeStatefulFunction(ctx, conn, auth, functionId, functionVersionId, requestId, func(workerAuthToken string, requestId uuid.UUID, apiFunc string, apiFuncVersion string) {
 			// Populate workerAuth cache BEFORE worker is notified (atomicity guarantee)
