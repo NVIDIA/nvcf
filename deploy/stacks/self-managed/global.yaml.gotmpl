@@ -359,13 +359,15 @@ api:
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
   {{- end }}
-  {{- if $llmEnabled }}
   remoteConfig:
     configData:
       nvcf:
+        worker:
+          delegated-token-enabled: true
+        {{- if $llmEnabled }}
         llm-request-router:
           worker-address: {{ $llmRequestRouterWorkerAddress | quote }}
-  {{- end }}
+        {{- end }}
   accountBootstrap:
     image:
       registry: {{ .Values.global.image.registry }}
@@ -497,6 +499,7 @@ nvctApi:
     NVCT_ESS_BASE_URL: {{ . | quote }}
     NVCT_ESS_WORKER_BASE_URL: {{ . | quote }}
     {{- end }}
+    NVCT_WORKER_DELEGATED_TOKEN_ENABLED: "true"
     {{- with dig "nvctApi" "icmsBaseUrl" nil .Values }}
     NVCT_ICMS_BASE_URL: {{ . | quote }}
     {{- end }}
