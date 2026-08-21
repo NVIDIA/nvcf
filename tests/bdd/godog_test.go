@@ -474,7 +474,7 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	}
 	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
 		"function create --name bdd-openai-compatible-sample",
-		"nvcf-openai-compatible-sample:1.0.0",
+		"nvcf-openai-compatible-sample:local",
 		"--function-type LLM",
 		"--llm-model") {
 		t.Fatal("LLM sample function was not created with the LLM function type and model config")

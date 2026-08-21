@@ -222,7 +222,7 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
     Scenario: Operator creates, deploys, and invokes an LLM-type OpenAI-compatible sample function
       When I run command:
         """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function create --name bdd-openai-compatible-sample --image nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/nvcf-openai-compatible-sample:1.0.0 --function-type LLM --inference-url /v1/chat/completions --inference-port 8000 --health-uri /health --health-port 8000 --health-timeout PT30S --llm-model 'name=openai-compatible-sample,uris=/v1/chat/completions|/v1/embeddings,routingMethod=round_robin'
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function create --name bdd-openai-compatible-sample --image nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/nvcf-openai-compatible-sample:local --function-type LLM --inference-url /v1/chat/completions --inference-port 8000 --health-uri /health --health-port 8000 --health-timeout PT30S --llm-model 'name=openai-compatible-sample,uris=/v1/chat/completions|/v1/embeddings,routingMethod=round_robin'
         """
       Then the command exit code should be 0
 
