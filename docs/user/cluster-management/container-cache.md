@@ -301,15 +301,17 @@ service:
   port: 30345
 ```
 
-The container runtime on each node reaches the cache at `${NODE_IP}:${port}`
-from the host network namespace, where cluster service DNS and ClusterIP
-addresses are not dependable, so the port must be published on every node.
+The service is always `NodePort` and the type is not configurable. The container
+runtime on each node reaches the cache at `${NODE_IP}:${port}` from the host
+network namespace, where cluster service DNS and ClusterIP addresses are not
+dependable, so the port must be published on every node.
 
-Setting `service.type` to anything other than `NodePort` fails the render with
-an explicit error. A ClusterIP service publishes no node port, so the registry
-mirror written to each node would point at a port nothing listens on, and image
-pulls would fall back to the upstream registry with no error and no cache
-involvement.
+`service.type` was never a safe setting. A ClusterIP service publishes no node
+port, so the registry mirror written to each node points at a port nothing
+listens on, and image pulls fall back to the upstream registry with no error and
+no cache involvement, which looks identical to a working cache until you check
+cache metrics. The chart now fails the render on any value other than `NodePort`
+so a leftover override cannot silently disable caching.
 
 ### Metrics Configuration
 

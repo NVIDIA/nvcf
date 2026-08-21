@@ -300,10 +300,13 @@ Key behaviors:
 The service is always `NodePort` and the type is not configurable. The host
 container runtime reaches the cache at `${NODE_IP}:${port}` from the host
 network namespace, where cluster service DNS and ClusterIP addresses are not
-dependable, so the port has to be published on every node. Setting
-`service.type` to anything other than `NodePort` fails the render: a ClusterIP
-service publishes no node port, so the mirror endpoint would point at a closed
-port and every pull would fall back to the upstream registry with no error.
+dependable, so the port has to be published on every node.
+
+`service.type` was never a safe setting, so the render now fails on any value
+other than `NodePort`. A ClusterIP service publishes no node port, so the mirror
+endpoint points at a closed port and every pull falls back to the upstream
+registry with no error, which is indistinguishable from a working cache until
+you check cache metrics.
 
 ### CRI-O
 
