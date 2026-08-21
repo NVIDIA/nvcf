@@ -25,7 +25,7 @@ import (
 // AgentMaintainer performs maintenance mutations against a compute-plane
 // cluster's NVCA. It is the write-side counterpart to AgentInspector: drain
 // and undrain toggle the CordonAndDrainMaintenance feature gate on the
-// NVCFBackend CR (spec.overrides.featureGate.values) — the NVCA operator
+// NVCFBackend CR (spec.overrides.featureGate.values). The NVCA operator
 // treats the agent-config ConfigMap as a fully generated artifact rebuilt
 // from that CR on every reconcile, so editing the ConfigMap directly gets
 // silently reverted on the operator's next reconcile. Patching the CR lets

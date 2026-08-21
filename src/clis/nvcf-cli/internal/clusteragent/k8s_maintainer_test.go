@@ -130,6 +130,19 @@ func backendObjWithOverrideValues(backendNS, clusterID, clusterName, systemNS, r
 	return b
 }
 
+// backendObjWithBaseValues seeds an NVCFBackend CR with a pre-existing
+// spec.featureGate.values list (the base spec, not overrides), simulating a
+// cluster whose base spec already sets a maintenance flag directly.
+func backendObjWithBaseValues(backendNS, clusterID, clusterName, systemNS, requestsNS string, baseValues ...string) *unstructured.Unstructured {
+	b := backendObj(backendNS, clusterID, clusterName, systemNS, requestsNS)
+	vals := make([]interface{}, len(baseValues))
+	for i, v := range baseValues {
+		vals[i] = v
+	}
+	b.Object["spec"].(map[string]interface{})["featureGate"] = map[string]interface{}{"values": vals}
+	return b
+}
+
 // backendOverrideValues reads spec.overrides.featureGate.values back off the
 // single NVCFBackend CR in backendNS, the same field patchMaintenanceFeatureFlag
 // writes.
@@ -190,6 +203,36 @@ func TestDrainIdempotent(t *testing.T) {
 	before := backendOverrideValues(t, dc, testBackendNS)
 	if !slices.Equal(before, []string{cordonAndDrainFeatureFlag}) {
 		t.Errorf("idempotent drain must not touch overrides, got %v", before)
+	}
+}
+
+func TestDrainConflictsWithBaseCordonMaintenance(t *testing.T) {
+	m, dc, _ := newFakeMaintainer(
+		[]runtime.Object{backendObjWithBaseValues(testBackendNS, testClusterID, testCluster, testSystemNS, testRequestsNS, cordonMaintenanceFeatureFlag)},
+		nil,
+	)
+
+	_, err := m.Drain(context.Background(), DrainOptions{BackendNS: testBackendNS})
+	if err == nil {
+		t.Fatal("expected an error: base spec already sets CordonMaintenance, which the operator prefers over CordonAndDrainMaintenance")
+	}
+	if got := backendOverrideValues(t, dc, testBackendNS); len(got) != 0 {
+		t.Errorf("overrides mutated despite conflict: %v", got)
+	}
+}
+
+func TestUndrainConflictsWithBaseCordonAndDrain(t *testing.T) {
+	m, dc, _ := newFakeMaintainer(
+		[]runtime.Object{backendObjWithBaseValues(testBackendNS, testClusterID, testCluster, testSystemNS, testRequestsNS, cordonAndDrainFeatureFlag)},
+		nil,
+	)
+
+	_, err := m.Undrain(context.Background(), DrainOptions{BackendNS: testBackendNS})
+	if err == nil {
+		t.Fatal("expected an error: base spec already sets CordonAndDrainMaintenance, which the operator keeps regardless of overrides")
+	}
+	if got := backendOverrideValues(t, dc, testBackendNS); len(got) != 0 {
+		t.Errorf("overrides mutated despite conflict: %v", got)
 	}
 }
 
@@ -315,6 +358,30 @@ func TestDrainReportsRolloutCompleteWhenOperatorHasAlreadyReconciled(t *testing.
 	}
 	if !res.RolloutComplete {
 		t.Fatalf("expected rollout to be reported complete, got %+v", res)
+	}
+}
+
+func TestDrainDoesNotFalselyReportCompleteWhenConfigHasNoFeatureFlagsSection(t *testing.T) {
+	// Regression test for a false-positive in the config membership check:
+	// a config with no featureFlags: (or even agent:) section at all must
+	// not be misread as "already has the flag". Deployment looks complete,
+	// so this isolates the config-side check specifically.
+	prev := rolloutPollInterval
+	rolloutPollInterval = time.Millisecond
+	t.Cleanup(func() { rolloutPollInterval = prev })
+
+	cfg := "other:\n  x: y\n"
+	m, _, _ := newFakeMaintainer(
+		[]runtime.Object{defaultBackend()},
+		[]runtime.Object{agentConfigObj(testSystemNS, cfg), nvcaDeployObj(testSystemNS, 1, true)},
+	)
+
+	res, err := m.Drain(context.Background(), DrainOptions{BackendNS: testBackendNS, Timeout: 10 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("timeout must not be a hard error: %v", err)
+	}
+	if res.RolloutComplete {
+		t.Fatal("must not report complete: agent-config has no featureFlags section, so the flag cannot be present")
 	}
 }
 
@@ -470,6 +537,59 @@ func TestAddFeatureFlagToConfig(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := addFeatureFlagToConfig(tc.in, cordonAndDrainFeatureFlag); got != tc.want {
 				t.Errorf("got:\n%q\nwant:\n%q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestConfigHasFeatureFlag is a regression test for a false-positive in the
+// prior membership check, which inferred "flag present" from
+// addFeatureFlagToConfig returning its input unchanged. That mutator also
+// returns its input unchanged when there is no featureFlags: (or even
+// agent:) section to insert into at all, which would misreport an absent
+// flag as present. configHasFeatureFlag must not have that false-positive
+// path: it only ever returns true when the flag is actually listed.
+func TestConfigHasFeatureFlag(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{
+			name: "present in featureFlags section",
+			in:   "agent:\n  featureFlags:\n  - CordonAndDrainMaintenance\n  - LogPosting\n",
+			want: true,
+		},
+		{
+			name: "absent from populated featureFlags section",
+			in:   "agent:\n  featureFlags:\n  - LogPosting\n",
+			want: false,
+		},
+		{
+			name: "no featureFlags or agent section at all: must not false-positive",
+			in:   "other:\n  x: y\n",
+			want: false,
+		},
+		{
+			name: "agent section present but no featureFlags key: must not false-positive",
+			in:   "agent:\n  logLevel: info\n",
+			want: false,
+		},
+		{
+			name: "empty config: must not false-positive",
+			in:   "",
+			want: false,
+		},
+		{
+			name: "flag in another section is not treated as a match",
+			in:   "other:\n- CordonAndDrainMaintenance\nagent:\n  featureFlags:\n  - LogPosting\n",
+			want: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := configHasFeatureFlag(tc.in, cordonAndDrainFeatureFlag); got != tc.want {
+				t.Errorf("configHasFeatureFlag(%q) = %v, want %v", tc.in, got, tc.want)
 			}
 		})
 	}

@@ -1767,9 +1767,10 @@ All maintenance commands accept `--dry-run` to preview without mutating, and
 name matches (guards against a wrong `--compute-plane-context`). `kill-function`
 and `kill-all` accept `--reason` for an audit note, and `--json` for automation.
 
-These commands need write access to the target cluster: get/update on the
-`agent-config` ConfigMap and the `nvca` Deployment for drain, and list/delete
-(and update, with `--force`) on `ICMSRequest` CRs for kill.
+These commands need write access to the target cluster: list/update on the
+`NVCFBackend` CR for drain (plus read access to the `agent-config` ConfigMap
+and the `nvca` Deployment, to wait for the NVCA operator's rollout), and
+list/delete (and update, with `--force`) on `ICMSRequest` CRs for kill.
 
 ### Examples
 

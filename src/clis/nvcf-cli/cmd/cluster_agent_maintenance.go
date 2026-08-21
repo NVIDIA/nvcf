@@ -453,9 +453,9 @@ func printDrainResult(cmd *cobra.Command, res *clusteragent.DrainResult, drain b
 		return
 	}
 	if drain {
-		fmt.Fprintf(w, "  NVCFBackend updated (maintenanceMode=%s); waiting for the NVCA operator's rollout\n", orDash(res.Mode))
+		fmt.Fprintf(w, "  NVCFBackend updated (maintenanceMode=%s)\n", orDash(res.Mode))
 	} else {
-		fmt.Fprintln(w, "  NVCFBackend updated (maintenance cleared); waiting for the NVCA operator's rollout")
+		fmt.Fprintln(w, "  NVCFBackend updated (maintenance cleared)")
 	}
 	switch {
 	case res.RolloutComplete:

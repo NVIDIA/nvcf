@@ -49,6 +49,7 @@ const (
 	agentConfigKey                = "config.yaml"
 	nvcaDeploymentName            = "nvca"
 	cordonAndDrainFeatureFlag     = "CordonAndDrainMaintenance"
+	cordonMaintenanceFeatureFlag  = "CordonMaintenance"
 	maintenanceModeCordonAndDrain = "CordonAndDrain"
 
 	// Namespace defaults applied when the NVCFBackend CR leaves them empty,
@@ -170,6 +171,10 @@ func (m *k8sMaintainer) setMaintenance(ctx context.Context, opts DrainOptions, d
 		result.Mode = maintenanceModeCordonAndDrain
 	}
 
+	if err := m.checkMaintenanceConflict(ctx, opts.BackendNS, drain); err != nil {
+		return nil, err
+	}
+
 	if opts.DryRun {
 		has, err := m.nvcfBackendHasMaintenanceFlag(ctx, opts.BackendNS)
 		if err != nil {
@@ -200,7 +205,12 @@ func (m *k8sMaintainer) setMaintenance(ctx context.Context, opts DrainOptions, d
 	}
 	result.RolloutTriggered = true
 
-	if !opts.Force && opts.Timeout > 0 {
+	switch {
+	case opts.Force:
+		result.Message = "NVCFBackend updated; not waiting for the NVCA operator's rollout (--force)"
+	case opts.Timeout <= 0:
+		result.Message = "NVCFBackend updated; not waiting for the NVCA operator's rollout (--timeout 0)"
+	default:
 		if err := m.waitForMaintenanceRollout(ctx, opts.BackendNS, systemNS, opts.Timeout, drain); err != nil {
 			result.Message = fmt.Sprintf("NVCFBackend updated, but the NVCA operator has not finished reconciling and rolling out the change: %v", err)
 			return result, nil
@@ -223,6 +233,37 @@ func (m *k8sMaintainer) nvcfBackendHasMaintenanceFlag(ctx context.Context, backe
 		return false, fmt.Errorf("reading NVCFBackend spec.overrides.featureGate.values: %w", err)
 	}
 	return slices.Contains(values, cordonAndDrainFeatureFlag), nil
+}
+
+// checkMaintenanceConflict reads the NVCFBackend CR's base
+// spec.featureGate.values and returns an error if the operator's
+// mergeOverrides logic would keep the requested drain/undrain from ever
+// taking effect, even though patching spec.overrides would succeed:
+//
+//   - drain: if the base spec already sets cordonMaintenanceFeatureFlag, the
+//     operator prefers CordonMaintenance over CordonAndDrainMaintenance
+//     whenever both are present in the merged result, so adding
+//     cordonAndDrainFeatureFlag to the overrides would be silently dropped.
+//   - undrain: if the base spec already sets cordonAndDrainFeatureFlag, the
+//     operator's merge keeps a maintenance flag that was present in either
+//     the base spec or the overrides, so removing it from overrides alone
+//     would not clear it from the merged result.
+func (m *k8sMaintainer) checkMaintenanceConflict(ctx context.Context, backendNS string, drain bool) error {
+	obj, err := m.getNVCFBackendObject(ctx, backendNS)
+	if err != nil {
+		return err
+	}
+	baseValues, _, err := unstructured.NestedStringSlice(obj.Object, "spec", "featureGate", "values")
+	if err != nil {
+		return fmt.Errorf("reading NVCFBackend spec.featureGate.values: %w", err)
+	}
+	switch {
+	case drain && slices.Contains(baseValues, cordonMaintenanceFeatureFlag):
+		return fmt.Errorf("cannot drain: NVCFBackend spec.featureGate.values already sets %q, which the NVCA operator prefers over %q, so drain would have no effect; remove %q from the base spec first", cordonMaintenanceFeatureFlag, cordonAndDrainFeatureFlag, cordonMaintenanceFeatureFlag)
+	case !drain && slices.Contains(baseValues, cordonAndDrainFeatureFlag):
+		return fmt.Errorf("cannot undrain: NVCFBackend spec.featureGate.values already sets %q, which the NVCA operator keeps regardless of overrides, so undrain would have no effect; remove %q from the base spec first", cordonAndDrainFeatureFlag, cordonAndDrainFeatureFlag)
+	}
+	return nil
 }
 
 // patchMaintenanceFeatureFlag adds or removes cordonAndDrainFeatureFlag on
@@ -322,11 +363,7 @@ func (m *k8sMaintainer) waitForMaintenanceRollout(ctx context.Context, backendNS
 	for {
 		configReady := false
 		if _, cur, err := m.getAgentConfig(ctx, systemNS); err == nil {
-			// addFeatureFlagToConfig is idempotent: it returns cur unchanged
-			// exactly when the flag is already present, so this doubles as a
-			// membership check without a separate parser.
-			hasFlag := addFeatureFlagToConfig(cur, cordonAndDrainFeatureFlag) == cur
-			configReady = hasFlag == drain
+			configReady = configHasFeatureFlag(cur, cordonAndDrainFeatureFlag) == drain
 		}
 
 		rolloutReady := false
@@ -503,6 +540,36 @@ func aggregateKillError(result *KillResult) error {
 // of the file. A structured re-marshal was rejected because it reorders keys and
 // drops comments. Missing sections degrade to a no-op rather than corrupting the
 // file.
+
+// configHasFeatureFlag reports whether featureFlag is listed in the
+// featureFlags: section of configYAML. Unlike checking
+// addFeatureFlagToConfig's return value for a no-op, this is a pure
+// membership check: addFeatureFlagToConfig also returns configYAML
+// unchanged when there is no featureFlags: (or even agent:) section to
+// insert into at all, which would misreport an absent flag as present.
+func configHasFeatureFlag(configYAML, featureFlag string) bool {
+	inFlags := false
+	for _, line := range strings.Split(configYAML, "\n") {
+		trimmed := strings.TrimLeft(line, " \t")
+		if trimmed == "featureFlags:" {
+			inFlags = true
+			continue
+		}
+		if !inFlags {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "- ") {
+			if trimmed == "- "+featureFlag {
+				return true
+			}
+			continue
+		}
+		if trimmed != "" {
+			inFlags = false
+		}
+	}
+	return false
+}
 
 func addFeatureFlagToConfig(configYAML, featureFlag string) string {
 	lines := strings.Split(configYAML, "\n")
