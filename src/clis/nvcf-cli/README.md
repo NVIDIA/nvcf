@@ -1737,12 +1737,14 @@ deployment directly: the NVCA operator treats `agent-config` as fully
 generated from the CR and reverts any direct edit on its next reconcile, so
 the CLI's job is only to submit the desired state and let the operator's own
 reconcile regenerate `agent-config` and roll NVCA out. The command returns
-once the CR update is accepted and (unless `--force`) the operator's rollout
-has completed; it does not wait for every instance to reach zero. Watch
-progress with `cluster agent list-functions --phase DRAINING`. `--timeout`
-bounds the wait for the operator's rollout (default 5m); a timeout is
-reported as a warning because the CR change is already persisted and
-re-running is a no-op.
+once the CR update is accepted and (unless `--force` or `--timeout 0`) the
+operator's rollout has completed; it does not wait for every instance to
+reach zero. Watch progress with `cluster agent list-functions --phase
+DRAINING`. `--timeout` bounds the wait for the operator's rollout (default
+5m); `--force` or `--timeout 0` skip the wait entirely and return right after
+the CR update, leaving the operator's reconciliation to finish
+asynchronously. A timeout is reported as a warning because the CR change is
+already persisted and re-running is a no-op.
 
 ### How kill works
 

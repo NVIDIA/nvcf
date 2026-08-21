@@ -385,6 +385,30 @@ func TestDrainDoesNotFalselyReportCompleteWhenConfigHasNoFeatureFlagsSection(t *
 	}
 }
 
+func TestDrainDoesNotFalselyReportCompleteWhenDeploymentMissing(t *testing.T) {
+	// Regression test: a missing nvca Deployment must not be treated as a
+	// trivially-satisfied rollout. Otherwise a stale agent-config left over
+	// from a prior install (matching the requested flag state) combined with
+	// no running nvca workload would be misreported as a complete rollout.
+	prev := rolloutPollInterval
+	rolloutPollInterval = time.Millisecond
+	t.Cleanup(func() { rolloutPollInterval = prev })
+
+	cfg := "agent:\n  featureFlags:\n  - " + cordonAndDrainFeatureFlag + "\n"
+	m, _, _ := newFakeMaintainer(
+		[]runtime.Object{defaultBackend()},
+		[]runtime.Object{agentConfigObj(testSystemNS, cfg)},
+	)
+
+	res, err := m.Drain(context.Background(), DrainOptions{BackendNS: testBackendNS, Timeout: 10 * time.Millisecond})
+	if err != nil {
+		t.Fatalf("timeout must not be a hard error: %v", err)
+	}
+	if res.RolloutComplete {
+		t.Fatal("must not report complete: the nvca Deployment does not exist")
+	}
+}
+
 func TestDrainRolloutTimesOutWhenConfigNeverUpdates(t *testing.T) {
 	// Regression test for the original bug: the Deployment already looks
 	// "complete" from a prior rollout (this is exactly the trivially-true

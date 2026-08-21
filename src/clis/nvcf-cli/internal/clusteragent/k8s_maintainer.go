@@ -370,7 +370,7 @@ func (m *k8sMaintainer) waitForMaintenanceRollout(ctx context.Context, backendNS
 		deploy, err := m.cs.AppsV1().Deployments(systemNS).Get(ctx, nvcaDeploymentName, metav1.GetOptions{})
 		switch {
 		case apierrors.IsNotFound(err):
-			rolloutReady = true
+			rolloutReady = false
 		case err == nil:
 			desired := int32(1)
 			if deploy.Spec.Replicas != nil {
