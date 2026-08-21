@@ -291,8 +291,9 @@ addons:
   # LLM addon: gateway + request router (stargate) for LLM function invocation
   llm:
     enabled: false
-    # QUIC TLS certificate for the request router (Stargate). Disabled by
-    # default; opt in per env.
+    # QUIC TLS certificate for the request router (Stargate). Managed PKI is
+    # active by default whenever addons.llm.enabled is true. Set enabled=false
+    # only when an environment deliberately supplies another transport policy.
     #
     # mode selects who owns the server identity:
     #   certManager    - the chart requests a Certificate from the configured
@@ -306,15 +307,15 @@ addons:
     #                    issuance, renewal, rotation, and recovery, and the
     #                    stack validates neither the SANs nor the expiry.
     pki:
-      enabled: false
+      enabled: true
       mode: certManager
-      # REQUIRED for a managed issuer. Comma-separated DNS suffixes the
-      # OpenBao PKI role accepts. Typically the customer domain plus
-      # cluster.local for in-cluster service identity.
-      allowedDomains: ""
-      # REQUIRED for mode certManager. SANs requested on the issued
-      # certificate. Must be empty for mode existingSecret.
-      dnsNames: []
+      # Comma-separated DNS suffixes the managed OpenBao role accepts.
+      allowedDomains: cluster.local
+      # SANs for both the stable Service and authority/SNI-selected Stargate
+      # pod identities. Must be empty for mode existingSecret.
+      dnsNames:
+        - llm-request-router.nvcf.svc.cluster.local
+        - "*.llm-request-router-headless.nvcf.svc.cluster.local"
       # REQUIRED for mode existingSecret; the kubernetes.io/tls Secret in the
       # nvcf namespace holding the tls.crt and tls.key entries. Optional for
       # mode certManager, where it names the Secret cert-manager writes.
@@ -332,8 +333,8 @@ addons:
       # certPath: /etc/stargate/tls/tls.crt
       # keyPath: /etc/stargate/tls/tls.key
       # Image defaults to ${global.image.registry}/${global.image.repository}/nvcf-openbao-migrations.
-      # tag falls back to openbao.migrations.image.tag if unset here, so the
-      # operator can pin both in one place.
+      # tag falls back to openbao.migrations.image.tag and then 0.16.2 if
+      # neither location is set.
       # image:
       #   registry: ""
       #   repository: ""

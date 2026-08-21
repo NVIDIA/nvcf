@@ -997,13 +997,10 @@ llmRequestRouter:
     quicInsecure: false
   {{- if $managedIssuer }}
   {{- $allowedDomains := required "addons.llm.pki.allowedDomains is required when addons.llm.pki.clusterIssuer management is enabled" (dig "addons" "llm" "pki" "allowedDomains" "" .Values) }}
-  {{- /* Provisioning hook reuses the same image the k8s-openbao chart drives;
-       fall back to openbao.migrations.image.tag so operators set the version
-       in one place. */ -}}
-  {{- $pkiImageTag := dig "addons" "llm" "pki" "image" "tag" (dig "openbao" "migrations" "image" "tag" "" .Values) .Values }}
-  {{- if not $pkiImageTag }}
-  {{- fail "addons.llm.pki.image.tag (or openbao.migrations.image.tag) is required when addons.llm.pki.clusterIssuer management is enabled" }}
-  {{- end }}
+  {{- /* Provisioning reuses the OpenBao migrations image. Prefer an explicit
+       PKI tag, then the OpenBao migrations tag, and finally the compatible
+       stack default so a normal environment need not duplicate chart values. */ -}}
+  {{- $pkiImageTag := dig "addons" "llm" "pki" "image" "tag" (dig "openbao" "migrations" "image" "tag" "" .Values) .Values | default "0.16.2" }}
   pki:
     enabled: true
     namespace: {{ dig "addons" "llm" "pki" "namespace" "vault-system" .Values | quote }}
