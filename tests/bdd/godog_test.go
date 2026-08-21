@@ -482,6 +482,9 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "function invoke --inference-url /v1/chat/completions --model-name openai-compatible-sample") {
 		t.Fatal("LLM function invoke CLI command was never invoked")
 	}
+	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "function delete --deployment-only") {
+		t.Fatal("function deployment cleanup was never invoked")
+	}
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "http://llm.localhost:8080/v1/chat/completions") {
 		t.Fatal("unauthenticated LLM gateway check was never invoked")
 	}

@@ -20,10 +20,11 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       # ingress.gatewayApi.*). The Background only overlays the operator-specific
       # values that vary per NGC org and pull-secret name.
       And I update yaml file "deploy/stacks/self-managed/environments/local-bdd.yaml" with keys:
-        | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
-        | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
-        | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
-        | observability.profile           | disabled                             |
+        | global.imagePullSecrets[0].name               | nvcr-pull-secret                                                   |
+        | global.helm.sources.repository                | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                               |
+        | global.image.repository                       | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                               |
+        | api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE | nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/stargate-client:0.2.0 |
+        | observability.profile                         | disabled                                                           |
       And I copy the file "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" to "deploy/stacks/nvcf-compute-plane/environments/local-bdd.yaml"
       And I update yaml file "deploy/stacks/nvcf-compute-plane/environments/local-bdd.yaml" with keys:
         | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
@@ -180,6 +181,16 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       Then the command exit code should be 0
       And the command output should contain "bdd-echo"
 
+      # Remove the deployment so its worker pod (whose utils sidecar
+      # requests 4 CPU) frees the GPU node for the later scenarios.
+      # The local sizing cannot hold every scenario's deployment at
+      # once.
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function delete --deployment-only
+        """
+      Then the command exit code should be 0
+
     @function-lifecycle @grpc
     Scenario: Operator creates, deploys, and invokes the gRPC Load Tester Supreme sample function
       When I run command:
@@ -206,6 +217,14 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
         """
       Then the command exit code should be 0
       And the command output should contain "bdd-grpc-echo"
+
+      # Free the GPU node for the LLM scenario; see the HTTP scenario's
+      # cleanup comment.
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function delete --deployment-only
+        """
+      Then the command exit code should be 0
 
     # The LLM scenario proves the serve path the @llm-gateway scenario
     # only installs: an LLM-type function is routed through the
@@ -259,3 +278,11 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
         """
       Then the command exit code should be 0
       And the command output should contain "401"
+
+      # Leave the cluster's GPU capacity free, same as the echo
+      # scenarios.
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function delete --deployment-only
+        """
+      Then the command exit code should be 0
