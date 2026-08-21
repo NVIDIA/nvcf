@@ -146,6 +146,7 @@ jobs:
           worker-init|src/compute-plane-services/worker-init|false|go-root|build-container
           worker-llm-credentials|src/compute-plane-services/worker-llm-credentials|false|go-root|build-container
           worker-task|src/compute-plane-services/worker-task|false|go-root|build-container
+          request-trace-uploader|src/compute-plane-services/request-trace-uploader|false|go-root|build-container
           worker-utils|src/compute-plane-services/worker-utils|false|go-root|build-container
           function-autoscaler|src/control-plane-services/function-autoscaler|false|go-root|build-container
           helm-reval|src/control-plane-services/helm-reval|false|go-root|build-container
