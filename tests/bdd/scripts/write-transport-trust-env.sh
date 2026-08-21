@@ -11,8 +11,9 @@
 # certificate's DER bytes, one per line, each line LF-terminated.
 #
 # The CA certificate is public material; the OpenBao root token is
-# read from its Kubernetes Secret and passed to curl inside a
-# port-forward session, never printed.
+# read from its Kubernetes Secret and used only inside this script's
+# curl invocation over a port-forward. It never appears in the BDD
+# command logs (the harness logs only the script invocation).
 #
 # Usage: write-transport-trust-env.sh <compute-env-file>
 
@@ -52,7 +53,8 @@ fi
 kubectl port-forward -n "$OPENBAO_NAMESPACE" "svc/$OPENBAO_SERVICE" \
   "$LOCAL_PORT:8200" >/dev/null 2>&1 &
 pf_pid=$!
-trap 'kill "$pf_pid" 2>/dev/null || true' EXIT
+tmp=""
+trap 'kill "$pf_pid" 2>/dev/null || true; [[ -n "$tmp" ]] && rm -f "$tmp"' EXIT
 
 ca_pem=""
 for _ in $(seq 1 20); do
@@ -108,10 +110,25 @@ fi
 fingerprint="sha256:$(printf 'nvcf-trust-bundle-v1\n%s\n' "$cert_hashes" \
   | openssl dgst -sha256 -r | cut -d' ' -f1)"
 
-# Replace the trailing agentConfig block. The suite authors this file
-# from a fixture whose agentConfig block is the final top-level key.
+# Replace the agentConfig block wherever it sits. The suite's yaml
+# editing step re-marshals the file with sorted top-level keys, so the
+# block's position is not stable: drop lines from ^agentConfig: until
+# the next top-level key, keep everything else, and append the new
+# block at the end.
 tmp="$(mktemp "${TMPDIR:-/tmp}/compute-env.XXXXXX")"
-sed '/^agentConfig:/,$d' "$ENV_FILE" >"$tmp"
+awk '
+  /^agentConfig:/ { skipping = 1; next }
+  skipping && /^[^ \t#]/ { skipping = 0 }
+  !skipping { print }
+' "$ENV_FILE" >"$tmp"
+if grep -q '^agentConfig:' "$tmp"; then
+  echo "failed to strip the agentConfig block from $ENV_FILE" >&2
+  exit 1
+fi
+if ! grep -q '^global:' "$tmp"; then
+  echo "agentConfig strip removed unrelated top-level keys from $ENV_FILE" >&2
+  exit 1
+fi
 {
   echo "agentConfig:"
   echo "  mergeConfig: |"
