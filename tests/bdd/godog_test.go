@@ -415,7 +415,9 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 			" --inference-url /v1/chat/completions --model-name openai-compatible-sample" +
 			" --request-body '{\"messages\":[{\"role\":\"user\",\"content\":\"bdd-llm-echo\"}]}' --timeout 120": {
 			ExitCode: 0,
-			Stdout:   "Function invocation completed!\n\nResponse:\n{\"object\":\"chat.completion\",\"choices\":[{\"message\":{\"content\":\"This is a fixed 128-byte response from an NVCF-hosted OpenAI-compatible sample, used for load testing and throughput benchmarks.\"}}]}\n",
+			Stdout: "Function invocation completed!\n\nResponse:\n" +
+				`{"object":"chat.completion","choices":[{"message":{"content":"This is a fixed 128-byte response from an NVCF-hosted OpenAI-compatible sample, used for load testing and throughput benchmarks."}}]}` +
+				"\n",
 		},
 		`curl -s -o /dev/null -w "%{http_code}" -X POST http://llm.localhost:8080/v1/chat/completions -H "Content-Type: application/json" -d '{"model":"unauthenticated/check","messages":[]}'`: {
 			ExitCode: 0,
