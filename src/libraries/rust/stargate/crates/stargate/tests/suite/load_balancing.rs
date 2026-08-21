@@ -403,7 +403,7 @@ fn float_eq(actual: f64, expected: f64) -> bool {
 }
 
 #[tokio::test]
-async fn power_of_two_prefers_less_input_work() {
+async fn power_of_n_prefers_lower_ttft() {
     let stargate = RunningStargate::start("test-sg-p2c", None).await;
     let mut low =
         RegisteredBackend::active(stargate.grpc_addr, "p2c-model", "inst-low-headroom").await;
@@ -412,7 +412,8 @@ async fn power_of_two_prefers_less_input_work() {
 
     wait_for_routing(stargate.http_addr, "p2c-model", Duration::from_secs(5)).await;
 
-    // More pending prompt work should lose when both clusters report the same service rate.
+    // More pending prompt work increases estimated queue delay and TTFT when both clusters
+    // report the same service rate.
     low.set_stats(CurrentModelStats {
         output_tps: 50.0,
         last_mean_input_tps: 1000.0,
@@ -425,7 +426,7 @@ async fn power_of_two_prefers_less_input_work() {
         ..CurrentModelStats::default()
     });
 
-    // Less pending prompt work should win.
+    // Less pending prompt work should have the lower TTFT.
     high.set_stats(CurrentModelStats {
         output_tps: 50.0,
         last_mean_input_tps: 1000.0,
@@ -456,7 +457,7 @@ async fn power_of_two_prefers_less_input_work() {
     )
     .await;
 
-    // With exactly 2 candidates, p2c samples both and picks the lower work-time candidate.
+    // With exactly 2 candidates, power-of-n samples both and picks the lower TTFT candidate.
     assert_all_probes_routed_to(
         stargate.http_addr,
         "p2c-model",
@@ -476,7 +477,7 @@ async fn input_work_admission_rejects_overloaded_pool_and_registered_unavailable
     let stargate = RunningStargate::start(
         "test-sg-input-work-admission",
         Some(
-            r#"{"models": {"admission-model": {"algorithm": "power-of-two", "max_input_work_seconds": 0.5}}}"#,
+            r#"{"models": {"admission-model": {"algorithm": "power-of-n", "max_input_work_seconds": 0.5}}}"#,
         ),
     )
     .await;
@@ -655,7 +656,7 @@ async fn random_load_balancing_uses_all_instances() {
 }
 
 #[tokio::test]
-async fn power_of_two_uses_cluster_aggregated_metrics_and_backend_round_robin() {
+async fn power_of_n_uses_cluster_aggregated_metrics_and_backend_round_robin() {
     let stargate = RunningStargate::start("test-sg-p2c-clusters", None).await;
     let state = stargate.handle.state();
     let mut shared_a = RegisteredBackend::active_in_cluster(
@@ -847,12 +848,10 @@ async fn power_of_two_uses_cluster_aggregated_metrics_and_backend_round_robin() 
 }
 
 #[tokio::test]
-async fn wait_and_widen_load_balancing_prefers_lower_estimated_ttft() {
+async fn wait_and_widen_load_balancing_prefers_lower_ttft() {
     let stargate = RunningStargate::start(
         "test-sg-wait-and-widen",
-        Some(
-            r#"{"default": "power-of-two", "models": {"wait-and-widen-model": "wait-and-widen"}}"#,
-        ),
+        Some(r#"{"default": "power-of-n", "models": {"wait-and-widen-model": "wait-and-widen"}}"#),
     )
     .await;
 
@@ -909,10 +908,7 @@ async fn wait_and_widen_load_balancing_prefers_lower_estimated_ttft() {
         poll.tick().await;
     }
 
-    assert!(
-        stable_fast,
-        "expected wait-and-widen to prefer lower estimated TTFT"
-    );
+    assert!(stable_fast, "expected wait-and-widen to prefer lower TTFT");
 
     stop_backends(&mut backends);
     stargate.shutdown().await;
@@ -923,7 +919,7 @@ async fn wait_and_widen_waits_for_later_bucket_when_fastest_is_full() {
     let stargate = RunningStargate::start(
         "test-sg-wait-and-widen-wait",
         Some(
-            r#"{"default": "power-of-two", "models": {"wait-and-widen-wait-model": "wait-and-widen"}}"#,
+            r#"{"default": "power-of-n", "models": {"wait-and-widen-wait-model": "wait-and-widen"}}"#,
         ),
     )
     .await;
@@ -991,7 +987,7 @@ async fn wait_and_widen_cache_affinity_prefers_stable_subset_then_falls_back() {
         "test-sg-wait-and-widen-affinity",
         Some(
             r#"{
-            "default": "power-of-two",
+            "default": "power-of-n",
             "models": {
                 "wait-and-widen-affinity-model": {
                     "algorithm": "wait-and-widen",
@@ -1123,7 +1119,7 @@ async fn wait_and_widen_requires_cache_affinity_key_when_configured() {
         "test-sg-wait-and-widen-affinity-required",
         Some(
             r#"{
-            "default": "power-of-two",
+            "default": "power-of-n",
             "models": {
                 "wait-and-widen-affinity-required-model": {
                     "algorithm": "wait-and-widen",
@@ -1204,10 +1200,11 @@ async fn wait_and_widen_priority_header_uses_matching_queue_estimate() {
         "test-sg-wait-and-widen-priority",
         Some(
             r#"{
-            "default": "power-of-two",
+            "default": "power-of-n",
             "models": {
                 "wait-and-widen-priority-model": {
                     "algorithm": "wait-and-widen",
+                    "comparator": "queue-time",
                     "n": 2
                 }
             }
@@ -1220,12 +1217,12 @@ async fn wait_and_widen_priority_header_uses_matching_queue_estimate() {
         (
             "wait-and-widen-priority-specific-low",
             100_u64,
-            HashMap::from([(4_u32, 5_u64)]),
+            HashMap::from([(0_u32, 1000_u64), (4_u32, 5_u64)]),
         ),
         (
             "wait-and-widen-priority-specific-high",
             0_u64,
-            HashMap::from([(4_u32, 500_u64)]),
+            HashMap::from([(0_u32, 0_u64), (4_u32, 500_u64)]),
         ),
     ];
     let mut backends = Vec::new();
@@ -1311,7 +1308,7 @@ async fn pulsar_routes_same_affinity_key_consistently() {
         "test-sg-pulsar",
         Some(
             r#"{
-            "default": "power-of-two",
+            "default": "power-of-n",
             "models": {
                 "pulsar-model": {
                     "algorithm": "pulsar",

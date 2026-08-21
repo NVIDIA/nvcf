@@ -1,9 +1,10 @@
 # Strict Infrastructure-Level Gherkin DSL
 
 This is the complete set of step definitions for `tests/bdd`. Every
-new step must reuse one of these patterns. Step handlers do not contain
-domain-specific validation logic; that lives in Gherkin via CLI invocations
-and output assertions.
+new step must reuse one of these patterns. Shared steps may hide repeated
+command and output-format mechanics, but their Gherkin must keep meaningful
+targets, values, contexts, and timeouts visible. Step handlers do not contain
+domain-specific validation logic.
 
 ## Vocabulary
 
@@ -34,6 +35,7 @@ regex restricted to `\$\{[A-Z0-9_]+\}`.
 | Step | Notes |
 |------|-------|
 | `Given environment variable {string} is set` | Fails if the env var is empty. Used at the top of any scenario that interpolates it later. |
+| `Given these environment variables are set:` (table) | Requires a `name` header and one or more variable names. Fails on the first empty variable and names it in the error. |
 | `Given file {string} exists` | Bare-file precondition. Same semantics as `Then file {string} should exist`; use `Given` form for narrative preconditions. |
 
 ### Infrastructure bootstrap (Given)
@@ -112,6 +114,8 @@ refactor in every consumer; that is a feature.
 |------|-------|
 | `When I run command {string}` | Single-line command. `${VAR}` expansion applies. Captures exit code + stdout + stderr in scenario state. The most recent run is the one assertions reference. |
 | `When I run command:` (docstring) | Multi-line form for commands that don't fit on one line. Same recording semantics. |
+| `When I successfully run command {string}` | Single-line command that must exit 0. Preserves the command result for later output assertions and records the resolved command in the successful-command cache. |
+| `When I successfully run command:` (docstring) | Multi-line form for commands that must exit 0. Uses the same result recording, interpolation, logging, and cache semantics as the single-line form. |
 | `When I run command with a terminal:` (docstring) | Same as the docstring form, but stdin is attached to a pseudo-terminal so the child sees a TTY on fd 0. For commands that gate interactive-only behavior on a TTY, such as `nvcf-cli self-hosted up` (its auth-gate mints the admin token only when stdin is a terminal). No input is written; stdout and stderr are captured separately as usual. |
 | `When I export command output to environment variable {string}` | Exports the previous command's trimmed stdout under the named env var. Fails the step unless the prior command exited 0 and produced non-empty stdout. Snapshotted by the env Ledger; restored at suite teardown. |
 
@@ -130,8 +134,12 @@ refactor in every consumer; that is a feature.
 | `Then yaml file {string} should contain:` (docstring) | Subset variant: every key in expected must exist in actual with the same value; extra keys in actual are allowed. Use this when the file has dynamic or future-additive fields. `${VAR}` expansion applies. |
 | `Then yaml file {string} key {string} should contain:` (docstring) | Subset semantics scoped to the subtree at the dotted key path. |
 | `Then the json output should contain rows:` (table) | Parses the last command's stdout as JSON (expected: array of objects). For each table row, asserts an object matching every column value exists in the array. Extra objects are allowed; ordering is not asserted. |
+| `Then the rendered manifests in {string} should contain:` (table) | Requires a `text` header and one or more fixed strings. Recursively inspects regular files under the repo-relative directory and fails if any listed string is absent. `${VAR}` expansion applies to the path and table values. |
+| `Then the rendered manifests in {string} under directories matching {string} should contain:` (table) | Positive rendered-manifest assertion scoped to files below a directory whose name matches the supplied shell pattern, such as `*-nats`. The render directory, directory-name pattern, and table values support `${VAR}` expansion. |
 | `Then the rendered manifests in {string} should not contain:` (table) | Requires a `text` header and one or more fixed strings. Recursively inspects regular files under the repo-relative directory and fails if any listed string appears. `${VAR}` expansion applies to the path and table values. |
-| `Then these ServiceMonitors should exist in namespace {string} using context {string}:` (table) | Requires a `name` header and one or more names. Runs one `kubectl get` with every named ServiceMonitor; exit code 0 proves every listed resource exists. |
+| `Then these Helm releases should be deployed using context {string}:` (table) | Requires `name` and `namespace` headers, with an optional `revision` header. Runs one explicit-context, all-namespaces `helm list` and asserts that every listed release has status `deployed`; non-empty revision cells are also matched. |
+| `Then these Kubernetes resources should exist in namespace {string} using context {string}:` (table) | Requires `kind` and `name` headers. Gets each named resource with the explicit namespace and context, and reports the row whose resource is missing. |
+| `Then these Kubernetes resources should not exist in namespace {string} using context {string}:` (table) | Requires `kind` and `name` headers. Gets each named resource with `--ignore-not-found` and requires empty name output, so absence does not depend on human-readable error text. |
 
 #### YAML comparison semantics
 
@@ -158,7 +166,7 @@ them via `${VAR}` in command strings and table cells.
 |-----|--------|----------|
 | `NVCF_CLI` | `go build` of `src/clis/nvcf-cli` at suite start | Absolute path to the freshly built CLI binary. |
 | `REPO_ROOT` | `git rev-parse --show-toplevel` at suite start | Absolute path to the repo root. Required when invoking `make -C deploy/stacks/self-managed` because the Makefile's `-C` changes cwd; relative paths to fixtures from there break. |
-| `NGC_API_KEY` / `SAMPLE_NGC_ORG` / `SAMPLE_NGC_TEAM` | The operator's shell | Passed through unchanged. The `Given environment variable {string} is set` step asserts they are non-empty before any scenario uses them. |
+| `NGC_API_KEY` / `SAMPLE_NGC_ORG` / `SAMPLE_NGC_TEAM` | The operator's shell | Passed through unchanged. An environment-variable precondition step asserts they are non-empty before any scenario uses them. |
 
 Feature files may also export their own env vars at runtime via
 `When I export command output to environment variable {string}`. Those
@@ -227,10 +235,10 @@ do so via another `When I run command "rm ..."`.
 
 ## Why this list
 
-The promise of the DSL is that any future feature file can be written
-using only these steps. If a new scenario needs something the catalog
-doesn't cover, the right move is almost always to express it as a
-`When I run command` + an output assertion, not to add a new step.
+The promise of the DSL is that any future feature file can be written using
+only these steps. Add a shared step when a repeated action or observable keeps
+its meaningful inputs visible and hides only command or output-format
+mechanics. Otherwise use `When I run command` plus an output assertion.
 
 The infrastructure-bootstrap Givens (cluster up, image pull secret) and
 the single `Given command has succeeded:` carry-over are the only places
@@ -250,8 +258,9 @@ Going away in `tests/bdd`:
   `Template`, `HelmfileTemplate`, `RegisterCluster`,
   `InstallNvcaOperator`). Replaced by `When I run command "make ..."`.
 - The Helm release readback methods (`HelmReleaseDeployed`,
-  `NVCAOperatorReady`, `NVCAAgentReady`). Replaced by `helm list -o json`
-  + `kubectl rollout status` / `kubectl wait` directly in Gherkin.
+  `NVCAOperatorReady`, `NVCAAgentReady`). Release deployment checks use the
+  table-driven Helm assertion; readiness remains explicit through
+  `kubectl rollout status` / `kubectl wait` in Gherkin.
 - The `harness.CLIHarness` interface and its five domain methods
   (`SelfHostedUp`, `SelfHostedInstallControlPlane`,
   `SelfHostedComputePlaneRegister`, `SelfHostedComputePlaneInstall`,
@@ -449,9 +458,38 @@ func JSONContainsRows(raw string, rows []map[string]string) error
 // fails if any interpolated fixed string appears.
 func FilesDoNotContain(root string, needles []string) error
 
-// ServiceMonitorExistenceCommand builds one kubectl get command whose
-// successful exit proves every named ServiceMonitor exists.
-func ServiceMonitorExistenceCommand(namespace, kubeContext string, names []string) (string, error)
+// FilesContain recursively inspects regular files under root and fails if any
+// fixed string is absent. A non-empty directoryNamePattern limits the search
+// to files below a directory whose name matches the shell pattern.
+func FilesContain(root, directoryNamePattern string, needles []string) error
+
+// HelmListCommand builds an explicit-context, all-namespaces Helm list command.
+func HelmListCommand(kubeContext string) (string, error)
+
+// HelmReleaseExpectation identifies a deployed Helm release and optionally
+// pins the expected revision.
+type HelmReleaseExpectation struct {
+    Name      string
+    Namespace string
+    Revision  string
+}
+
+// HelmReleasesDeployed asserts that every expected release exists in Helm's
+// JSON output with status deployed and, when provided, the expected revision.
+func HelmReleasesDeployed(raw string, expected []HelmReleaseExpectation) error
+
+// KubernetesResource identifies one resource by kind and name.
+type KubernetesResource struct {
+    Kind string
+    Name string
+}
+
+// KubernetesResourceGetCommand builds an explicit-context kubectl get for one
+// resource. ignoreNotFound makes a missing resource produce empty name output.
+func KubernetesResourceGetCommand(namespace, kubeContext string, resource KubernetesResource, ignoreNotFound bool) (string, error)
+
+// KubernetesResourceAbsent requires empty output from an ignore-not-found get.
+func KubernetesResourceAbsent(raw string, resource KubernetesResource) error
 ```
 
 #### steps package

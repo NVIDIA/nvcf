@@ -137,7 +137,7 @@ public class MockIcmsServer {
         mockIcmsServer = new WireMockServer(config);
         mockIcmsServer.stubFor(post(urlPathEqualTo("/v1/si"))
                                       .withQueryParam("Action",
-                                                      new EqualToPattern("RequestInstances"))
+                                                      new EqualToPattern("RequestInstancesForTask"))
                                       .willReturn(aResponse().withStatus(200)
                                                           .withTransformers(instanceRequestExtension.getName())
                                                           .withHeader(CONTENT_TYPE, APPLICATION_JSON_VALUE)

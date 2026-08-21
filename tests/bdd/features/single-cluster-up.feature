@@ -8,16 +8,18 @@ Feature: Bring up a local single-cluster NVCF stack with the CLI
   Rule: install --control-plane installs the CP; compute-plane register/install completes the worker layer
 
     Background:
-      Given environment variable "NVCF_CLI" is set
-      And environment variable "NGC_API_KEY" is set
       # SAMPLE_NGC_ORG / SAMPLE_NGC_TEAM are consumed by
       # `make build-and-deploy-cluster` (the credential provider
       # validation step) when the `a single-cluster ncp-local cluster is
       # running` step runs the build target. Without them, that target
       # fails at CREDENTIAL PROVIDER VALIDATION and skips the gateway
       # API setup.
-      And environment variable "SAMPLE_NGC_ORG" is set
-      And environment variable "SAMPLE_NGC_TEAM" is set
+      Given these environment variables are set:
+        | name            |
+        | NVCF_CLI        |
+        | NGC_API_KEY     |
+        | SAMPLE_NGC_ORG  |
+        | SAMPLE_NGC_TEAM |
       # self-hosted install --env local reads operator-authored local
       # secrets files from both split stacks:
       # deploy/stacks/self-managed/secrets/local-secrets.yaml (control
@@ -29,6 +31,27 @@ Feature: Bring up a local single-cluster NVCF stack with the CLI
       # teardown, so the working tree stays clean.
       And I copy the file "deploy/stacks/self-managed/secrets/secrets.yaml.template" to "deploy/stacks/self-managed/secrets/local-secrets.yaml"
       And I substitute "REPLACE_WITH_BASE64_DOCKER_CREDENTIAL" in file "deploy/stacks/self-managed/secrets/local-secrets.yaml" with base64 of "$oauthtoken:${NGC_API_KEY}"
+      # --env local also reads operator-authored environment values from
+      # both split stacks: deploy/stacks/<stack>/environments/local.yaml.
+      # Neither file is tracked, so author both from the BDD fixtures.
+      # observability.profile is disabled because this workflow runs
+      # 'helmfile apply', whose diff phase validates rendered manifests
+      # against the live cluster (--dry-run=server); on a fresh cluster
+      # the ServiceMonitor CRDs do not exist yet and the diff fails
+      # before anything installs. The Helmfile workflow (helmfile sync)
+      # has no diff phase and keeps the default profile.
+      And I copy the file "tests/bdd/fixtures/self-managed-local-bdd.yaml" to "deploy/stacks/self-managed/environments/local.yaml"
+      And I update yaml file "deploy/stacks/self-managed/environments/local.yaml" with keys:
+        | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
+        | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+        | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+        | observability.profile           | disabled                             |
+      And I copy the file "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" to "deploy/stacks/nvcf-compute-plane/environments/local.yaml"
+      And I update yaml file "deploy/stacks/nvcf-compute-plane/environments/local.yaml" with keys:
+        | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
+        | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+        | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+        | observability.profile           | disabled                             |
       # Conflict precheck: ncp-local-cp's k3d serverlb claims
       # 0.0.0.0:8080/8443/10081, NATS on 4222, and the worker
       # callback port 10086, overlapping host ports single-cluster

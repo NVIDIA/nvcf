@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/strategicpatch"
 )
 
@@ -181,10 +182,24 @@ func TestValidateConfigRejectsInvalidInstalledBundleMountPaths(t *testing.T) {
 }
 
 func TestInjectIntoPodSpecOnlyMutatesLLMWorker(t *testing.T) {
+	llmWorkerResources := corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("500m"),
+			corev1.ResourceMemory: resource.MustParse("512Mi"),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("1"),
+			corev1.ResourceMemory: resource.MustParse("1Gi"),
+		},
+	}
 	podSpec := &corev1.PodSpec{
 		InitContainers: []corev1.Container{testWorkerInitContainer()},
 		Containers: []corev1.Container{
-			{Name: function.LLMWorkerContainerName, Image: "nvcr.io/nvcf/llm-worker:test"},
+			{
+				Name:      function.LLMWorkerContainerName,
+				Image:     "nvcr.io/nvcf/llm-worker:test",
+				Resources: llmWorkerResources,
+			},
 			{Name: "inference", Image: "nvcr.io/customer/inference:test"},
 			{Name: "smb-server", Image: "nvcr.io/nvcf/smb-server:test"},
 		},
@@ -203,7 +218,9 @@ func TestInjectIntoPodSpecOnlyMutatesLLMWorker(t *testing.T) {
 	require.NotNil(t, trustBundleVolume.ConfigMap.Optional)
 	assert.False(t, *trustBundleVolume.ConfigMap.Optional)
 	assert.NotNil(t, findTestVolume(podSpec, MergedCertsVolumeName))
-	assert.NotNil(t, findTestInitContainer(podSpec, InstallContainerName))
+	installContainer := findTestInitContainer(podSpec, InstallContainerName)
+	require.NotNil(t, installContainer)
+	assert.Equal(t, llmWorkerResources, installContainer.Resources)
 
 	llmWorker := findTestContainer(podSpec, function.LLMWorkerContainerName)
 	require.NotNil(t, llmWorker)

@@ -5,9 +5,11 @@ Feature: Install local Helmfile observability with the control profile
   so that the control plane has its shared metrics infrastructure and monitors.
 
   Background:
-    Given environment variable "NGC_API_KEY" is set
-    And environment variable "SAMPLE_NGC_ORG" is set
-    And environment variable "SAMPLE_NGC_TEAM" is set
+    Given these environment variables are set:
+      | name            |
+      | NGC_API_KEY     |
+      | SAMPLE_NGC_ORG  |
+      | SAMPLE_NGC_TEAM |
     # Helmfile pulls OCI charts during installation. Keep $NGC_API_KEY unbraced
     # so the BDD runner does not expand it into command logs.
     And command has succeeded:
@@ -21,7 +23,6 @@ Feature: Install local Helmfile observability with the control profile
       | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | observability.profile           | control                              |
-      | functionAutoscaler.chartVersion | 0.2.0                                |
       | functionAutoscaler.image.tag    | 1.18.10                              |
     # Set the shared observability stack environment.
     And I copy the file "tests/bdd/fixtures/self-managed-local-bdd.yaml" to "deploy/stacks/observability/environments/local-bdd-observability-control.yaml"
@@ -51,35 +52,28 @@ Feature: Install local Helmfile observability with the control profile
       | monitoring       |
 
   Scenario: Control profile installs shared infrastructure and control monitors
-    When I run command "make -C deploy/stacks/self-managed install HELMFILE_ENV=local-bdd-observability-control"
-    Then the command exit code should be 0
+    When I successfully run command "make -C deploy/stacks/self-managed install HELMFILE_ENV=local-bdd-observability-control"
 
-    When I run command "helm list --all-namespaces --kube-context k3d-ncp-local -o json"
-    Then the json output should contain rows:
-      | name                     | namespace  | status   |
-      | prometheus-operator-crds | monitoring | deployed |
-      | opentelemetry-operator   | monitoring | deployed |
-      | victoria-metrics         | monitoring | deployed |
-      | otel-collector           | monitoring | deployed |
-      | default-monitors         | monitoring | deployed |
+    Then these Helm releases should be deployed using context "k3d-ncp-local":
+      | name                     | namespace  |
+      | prometheus-operator-crds | monitoring |
+      | opentelemetry-operator   | monitoring |
+      | victoria-metrics         | monitoring |
+      | otel-collector           | monitoring |
+      | default-monitors         | monitoring |
 
-    When I run command "kubectl get opentelemetrycollector nvcf-observability -n monitoring --context k3d-ncp-local -o jsonpath='{.spec.targetAllocator.enabled}'"
-    Then the command exit code should be 0
+    When I successfully run command "kubectl get opentelemetrycollector nvcf-observability -n monitoring --context k3d-ncp-local -o jsonpath='{.spec.targetAllocator.enabled}'"
     And the command output should contain "true"
 
-    Then these ServiceMonitors should exist in namespace "monitoring" using context "k3d-ncp-local":
-      | name                                             |
-      | nvcf-default-monitors-state-metrics              |
-      | nvcf-default-monitors-grpc-proxy                  |
-      | nvcf-default-monitors-llm-api-gateway             |
-      | nvcf-default-monitors-invocation-service          |
+    Then these Kubernetes resources should exist in namespace "monitoring" using context "k3d-ncp-local":
+      | kind           | name                                             |
+      | ServiceMonitor | nvcf-default-monitors-state-metrics              |
+      | ServiceMonitor | nvcf-default-monitors-grpc-proxy                  |
+      | ServiceMonitor | nvcf-default-monitors-llm-api-gateway             |
+      | ServiceMonitor | nvcf-default-monitors-invocation-service          |
 
-    When I run command "kubectl get servicemonitor nvcf-default-monitors-nvca -n monitoring --context k3d-ncp-local"
-    Then the command exit code should be 1
-    And the command output should contain "NotFound"
-    When I run command "kubectl get podmonitor nvcf-default-monitors-dcgm -n monitoring --context k3d-ncp-local"
-    Then the command exit code should be 1
-    And the command output should contain "NotFound"
-    When I run command "kubectl get podmonitor nvcf-default-monitors-worker -n monitoring --context k3d-ncp-local"
-    Then the command exit code should be 1
-    And the command output should contain "NotFound"
+    Then these Kubernetes resources should not exist in namespace "monitoring" using context "k3d-ncp-local":
+      | kind           | name                          |
+      | ServiceMonitor | nvcf-default-monitors-nvca    |
+      | PodMonitor     | nvcf-default-monitors-dcgm    |
+      | PodMonitor     | nvcf-default-monitors-worker  |

@@ -26,6 +26,7 @@ RELEASE_RULES = [
     {"type": "build", "release": False},
 ]
 VERSION_PLACEHOLDER = "${version}"
+UPSTREAM_VERSION_PLACEHOLDER = "${upstream_version}"
 INITIAL_RELEASE_VERSION = "0.1.0"
 INITIAL_RELEASE_FLOOR_VERSION = "0.0.0"
 
@@ -125,27 +126,71 @@ def default_tag_format(service):
     return f"v{VERSION_PLACEHOLDER}"
 
 
-def tag_format(service):
+def tag_format_template(service):
     return service.get("tag_format") or default_tag_format(service)
 
 
-def tag_prefix(service):
-    value = tag_format(service)
+def tag_upstream_version(service, root=None):
+    source_file = str(service.get("tag_upstream_version_file") or "").strip()
+    if not source_file:
+        return ""
+
+    source_root = root or repo_root()
+    source_path = source_root / service["path"] / source_file
+    if not source_path.is_file():
+        raise SystemExit(f"{service['id']}: tag_upstream_version_file {source_file} not found")
+
+    pattern = str(service.get("tag_upstream_version_pattern") or rf"v?(?P<version>{STABLE_SEMVER_PATTERN})")
+    match = re.search(pattern, source_path.read_text())
+    if not match:
+        raise SystemExit(f"{service['id']}: no upstream version found in {source_file}")
+    try:
+        version = match.group("version")
+    except IndexError as exc:
+        raise SystemExit(
+            f"{service['id']}: tag_upstream_version_pattern must have a named version group"
+        ) from exc
+    if not re.fullmatch(STABLE_SEMVER_PATTERN, version):
+        raise SystemExit(f"{service['id']}: upstream version is not stable SemVer: {version}")
+    return version
+
+
+def tag_format(service, root=None):
+    value = tag_format_template(service)
+    if UPSTREAM_VERSION_PLACEHOLDER in value:
+        value = value.replace(UPSTREAM_VERSION_PLACEHOLDER, tag_upstream_version(service, root))
+    return value
+
+
+def tag_prefix(service, root=None):
+    value = tag_format(service, root)
     if not value.endswith(VERSION_PLACEHOLDER):
         raise SystemExit(f"{service['id']}: tag_format must end with {VERSION_PLACEHOLDER}: {value}")
     return value[: -len(VERSION_PLACEHOLDER)]
 
 
-def tag_prefixes(service):
-    prefixes = [tag_prefix(service)]
+def legacy_tag_prefixes(service):
+    prefixes = []
     legacy = (service.get("legacy_tag_prefix") or "").strip()
-    if legacy and legacy not in prefixes:
+    if legacy:
         prefixes.append(legacy)
+    for value in service.get("legacy_tag_prefixes") or []:
+        prefix = str(value).strip()
+        if prefix and prefix not in prefixes:
+            prefixes.append(prefix)
     return prefixes
 
 
-def tag_for_version(service, version):
-    return tag_format(service).replace(VERSION_PLACEHOLDER, version, 1)
+def tag_prefixes(service, root=None):
+    prefixes = [tag_prefix(service, root)]
+    for prefix in legacy_tag_prefixes(service):
+        if prefix not in prefixes:
+            prefixes.append(prefix)
+    return prefixes
+
+
+def tag_for_version(service, version, root=None):
+    return tag_format(service, root).replace(VERSION_PLACEHOLDER, version, 1)
 
 
 def find_service(metadata, selector):
@@ -156,15 +201,31 @@ def find_service(metadata, selector):
     raise SystemExit(f"unknown service {selector!r}; expected one of: {choices}")
 
 
-def version_from_tag(service, tag):
-    for prefix in tag_prefixes(service):
+def tag_version_match(service, tag):
+    template = tag_format_template(service)
+    if template.count(VERSION_PLACEHOLDER) != 1 or not template.endswith(VERSION_PLACEHOLDER):
+        raise SystemExit(f"{service['id']}: tag_format must end with {VERSION_PLACEHOLDER}: {template}")
+    pattern = re.escape(template)
+    pattern = pattern.replace(
+        re.escape(UPSTREAM_VERSION_PLACEHOLDER),
+        rf"(?P<upstream_version>{STABLE_SEMVER_PATTERN})",
+    )
+    pattern = pattern.replace(re.escape(VERSION_PLACEHOLDER), rf"(?P<version>{SEMVER_PATTERN})")
+    return re.fullmatch(pattern, tag)
+
+
+def version_from_tag(service, tag, root=None):
+    match = tag_version_match(service, tag)
+    if match:
+        return match.group("version")
+    for prefix in legacy_tag_prefixes(service):
         if tag.startswith(prefix):
             return tag[len(prefix) :]
     return ""
 
 
-def tag_exists_for_version(service, version):
-    for prefix in tag_prefixes(service):
+def tag_exists_for_version(service, version, root=None):
+    for prefix in tag_prefixes(service, root):
         tag = f"{prefix}{version}"
         existing = run(["git", "rev-parse", "-q", "--verify", f"refs/tags/{tag}"], capture=True, check=False).strip()
         if existing:
@@ -173,7 +234,7 @@ def tag_exists_for_version(service, version):
 
 
 def existing_tag_for_version(root, service, version):
-    for prefix in tag_prefixes(service):
+    for prefix in tag_prefixes(service, root):
         tag = f"{prefix}{version}"
         existing = run(
             ["git", "rev-parse", "-q", "--verify", f"refs/tags/{tag}"],
@@ -190,16 +251,16 @@ def tag_sha(root, tag):
     return run(["git", "rev-list", "-n", "1", tag], cwd=root, capture=True).strip()
 
 
-def service_tags_matching_suffix(service, suffix):
+def service_tags_matching_suffix(service, suffix, root=None):
     tags = []
-    for prefix in tag_prefixes(service):
-        raw = run(["git", "tag", "-l", f"{prefix}{suffix}"], capture=True)
+    for prefix in tag_prefixes(service, root):
+        raw = run(["git", "tag", "-l", f"{prefix}{suffix}"], cwd=root, capture=True)
         tags.extend(line.strip() for line in raw.splitlines() if line.strip())
     return sorted(set(tags))
 
 
 def existing_matching_tag_at_sha(root, service, suffix, sha):
-    for tag in service_tags_matching_suffix(service, suffix):
+    for tag in service_tags_matching_suffix(service, suffix, root):
         if tag_sha(root, tag) == sha:
             return tag
     return ""
@@ -301,8 +362,15 @@ def ensure_git_identity(root):
         run(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], cwd=root)
 
 
-def latest_service_tag_for_prefix(prefix):
-    raw = run(["git", "tag", "-l", f"{prefix}*"], capture=True)
+def current_service_tags(root, service):
+    template = tag_format_template(service)
+    tag_glob = template.replace(UPSTREAM_VERSION_PLACEHOLDER, "*").replace(VERSION_PLACEHOLDER, "*")
+    raw = run(["git", "tag", "-l", tag_glob], cwd=root, capture=True)
+    return [tag.strip() for tag in raw.splitlines() if tag_version_match(service, tag.strip())]
+
+
+def latest_service_tag_for_prefix(prefix, root=None):
+    raw = run(["git", "tag", "-l", f"{prefix}*"], cwd=root, capture=True)
     candidates = []
     for line in raw.splitlines():
         tag = line.strip()
@@ -313,36 +381,62 @@ def latest_service_tag_for_prefix(prefix):
     return sorted(candidates, key=lambda item: semverish_sort_key(item[0]))[-1][1]
 
 
-def latest_service_tag(service, root=None):
+def latest_current_service_tag(root, service):
     candidates = []
-    for prefix in tag_prefixes(service):
-        raw = run(["git", "tag", "-l", f"{prefix}*"], cwd=root, capture=True)
-        for line in raw.splitlines():
-            tag = line.strip()
-            if tag:
-                candidates.append((tag[len(prefix) :], tag))
+    for tag in current_service_tags(root, service):
+        version = version_from_tag(service, tag, root)
+        if version:
+            candidates.append((version, tag))
     if not candidates:
         return ""
     return sorted(candidates, key=lambda item: semverish_sort_key(item[0]))[-1][1]
 
 
-def synthesize_current_prefix_anchor(service):
-    current_prefix = tag_prefix(service)
-    legacy_prefix = (service.get("legacy_tag_prefix") or "").strip()
-    if not legacy_prefix or legacy_prefix == current_prefix:
+def latest_service_tag(service, root=None):
+    source_root = root or repo_root()
+    candidates = []
+    for tag in current_service_tags(source_root, service):
+        version = version_from_tag(service, tag, source_root)
+        if version:
+            candidates.append((version, tag))
+    if service.get("reset_release_history"):
+        return sorted(candidates, key=lambda item: semverish_sort_key(item[0]))[-1][1] if candidates else ""
+
+    for prefix in legacy_tag_prefixes(service):
+        raw = run(["git", "tag", "-l", f"{prefix}*"], cwd=source_root, capture=True)
+        for line in raw.splitlines():
+            tag = line.strip()
+            version = tag[len(prefix) :] if tag.startswith(prefix) else ""
+            if re.fullmatch(SEMVER_PATTERN, version):
+                candidates.append((version, tag))
+    if not candidates:
+        return ""
+    return sorted(candidates, key=lambda item: semverish_sort_key(item[0]))[-1][1]
+
+
+def synthesize_current_prefix_anchor(root, service):
+    current_tag = latest_current_service_tag(root, service)
+    if not current_tag and not service.get("reset_release_history"):
+        legacy_tags = []
+        for prefix in legacy_tag_prefixes(service):
+            tag = latest_service_tag_for_prefix(prefix, root)
+            if tag:
+                legacy_tags.append((tag[len(prefix) :], tag))
+        if legacy_tags:
+            current_tag = sorted(legacy_tags, key=lambda item: semverish_sort_key(item[0]))[-1][1]
+
+    if not current_tag:
         return
-    if latest_service_tag_for_prefix(current_prefix):
+
+    version = version_from_tag(service, current_tag, root)
+    if not re.fullmatch(SEMVER_PATTERN, version):
         return
-    legacy_tag = latest_service_tag_for_prefix(legacy_prefix)
-    if not legacy_tag:
+    anchor = tag_for_version(service, version, root)
+    if run(["git", "rev-parse", "-q", "--verify", f"refs/tags/{anchor}"], cwd=root, capture=True, check=False).strip():
         return
-    version = legacy_tag[len(legacy_prefix) :]
-    anchor = tag_for_version(service, version)
-    if run(["git", "rev-parse", "-q", "--verify", f"refs/tags/{anchor}"], capture=True, check=False).strip():
-        return
-    sha = run(["git", "rev-list", "-n", "1", legacy_tag], capture=True).strip()
-    run(["git", "tag", anchor, sha])
-    print(f"[github-release] {service['id']}: synthesized local compatibility anchor {anchor} -> {legacy_tag} ({sha})")
+    sha = tag_sha(root, current_tag)
+    run(["git", "tag", anchor, sha], cwd=root)
+    print(f"[github-release] {service['id']}: synthesized local compatibility anchor {anchor} -> {current_tag} ({sha})")
 
 
 def initial_floor_version(service):
@@ -355,26 +449,46 @@ def initial_floor_version(service):
     return floor
 
 
-def synthesize_initial_version_anchor(root, service):
-    if latest_service_tag(service):
-        return
-    floor = initial_floor_version(service)
-    anchor = tag_for_version(service, floor)
-    if run(["git", "rev-parse", "-q", "--verify", f"refs/tags/{anchor}"], cwd=root, capture=True, check=False).strip():
-        return
+def initial_version_anchor_sha(root, service):
+    marker_file = str(service.get("release_history_marker_file") or "").strip()
+    if marker_file:
+        marker_path = f"{service['path'].rstrip('/')}/{marker_file}"
+        commits = run(
+            ["git", "rev-list", "--reverse", "HEAD", "--", marker_path],
+            cwd=root,
+            capture=True,
+        ).splitlines()
+        if not commits:
+            raise SystemExit(f"{service['id']}: release_history_marker_file {marker_file} has no history")
+        return run(
+            ["git", "rev-parse", "-q", "--verify", f"{commits[0]}^"],
+            cwd=root,
+            capture=True,
+            check=False,
+        ).strip() or commits[0]
 
     first_commits = run(["git", "rev-list", "--reverse", "HEAD", "--", service["path"]], cwd=root, capture=True).splitlines()
     if first_commits:
-        sha = run(
+        return run(
             ["git", "rev-parse", "-q", "--verify", f"{first_commits[0]}^"],
             cwd=root,
             capture=True,
             check=False,
         ).strip() or first_commits[0]
-    else:
-        roots = run(["git", "rev-list", "--max-parents=0", "HEAD"], cwd=root, capture=True).splitlines()
-        sha = roots[-1] if roots else ""
 
+    roots = run(["git", "rev-list", "--max-parents=0", "HEAD"], cwd=root, capture=True).splitlines()
+    return roots[-1] if roots else ""
+
+
+def synthesize_initial_version_anchor(root, service):
+    if latest_service_tag(service, root):
+        return
+    floor = initial_floor_version(service)
+    anchor = tag_for_version(service, floor, root)
+    if run(["git", "rev-parse", "-q", "--verify", f"refs/tags/{anchor}"], cwd=root, capture=True, check=False).strip():
+        return
+
+    sha = initial_version_anchor_sha(root, service)
     if not sha:
         return
     run(["git", "tag", anchor, sha], cwd=root)
@@ -387,7 +501,7 @@ def synthesize_initial_version_anchor(root, service):
 
 def only_generated_changes(root, service, generated_paths):
     service_path = service["path"]
-    last_tag = latest_service_tag(service)
+    last_tag = latest_service_tag(service, root)
     log_range = f"{last_tag}..HEAD" if last_tag else "HEAD"
     raw = run(
         ["git", "log", log_range, "--name-only", "--pretty=format:", "--", service_path],
@@ -520,7 +634,7 @@ def create_release(tag, title, notes, draft, dry_run):
 
 
 def publish_tag_for_version(root, service, version, dry_run, draft, reason):
-    tag = tag_for_version(service, version)
+    tag = tag_for_version(service, version, root)
     head = run(["git", "rev-parse", "--verify", "HEAD^{commit}"], cwd=root, capture=True).strip()
     current = run(["git", "rev-parse", "-q", "--verify", f"refs/tags/{tag}"], cwd=root, capture=True, check=False).strip()
     if current:
@@ -529,7 +643,7 @@ def publish_tag_for_version(root, service, version, dry_run, draft, reason):
             print(f"[github-release] {service['id']}: {tag} already points at HEAD; skipping")
             return
         raise SystemExit(f"{service['id']}: {tag} already exists at {existing_sha}, not {head}")
-    for prefix in tag_prefixes(service):
+    for prefix in tag_prefixes(service, root):
         existing = f"{prefix}{version}"
         if existing == tag:
             continue
@@ -682,7 +796,7 @@ def publish_framework_dependency_release(root, service, components, dry_run, dra
         )
         return False
 
-    current_version = version_from_tag(service, last_tag)
+    current_version = version_from_tag(service, last_tag, root)
     if not re.fullmatch(STABLE_SEMVER_PATTERN, current_version):
         print(
             f"[github-release] {service['id']}: last tag {last_tag} is not a stable X.Y.Z; "
@@ -744,9 +858,9 @@ def finish_semantic_release(root, service, components, exit_code, output, dry_ru
     if outcome == "released":
         version = parse_next_version(output)
         if dry_run:
-            print(f"[github-release] {service['id']}: would create {tag_for_version(service, version)}")
+            print(f"[github-release] {service['id']}: would create {tag_for_version(service, version, root)}")
         else:
-            print(f"[github-release] {service['id']}: semantic-release created {tag_for_version(service, version)}")
+            print(f"[github-release] {service['id']}: semantic-release created {tag_for_version(service, version, root)}")
         return outcome
     if outcome == "stale-checkout":
         # No fan-out: semantic-release never judged the commits, so a dependency
@@ -1013,13 +1127,13 @@ def auto_release(args):
                     root, service, java_components, dry_run=dry_run, draft=draft
                 )
                 continue
-            synthesize_current_prefix_anchor(service)
+            synthesize_current_prefix_anchor(root, service)
             synthesize_initial_version_anchor(root, service)
 
             write_semantic_release_files(
                 service_dir,
                 service["service_name"],
-                tag_format(service),
+                tag_format(service, root),
                 publish=not dry_run,
                 draft=draft,
             )
@@ -1084,7 +1198,7 @@ def auto_release(args):
         )
 
 
-def parse_release_tag(tag, metadata):
+def parse_release_tag(tag, metadata, root=None):
     path_match = re.fullmatch(rf"(?P<package>[A-Za-z0-9._/-]+)/v(?P<version>{SEMVER_PATTERN})", tag)
     if path_match and not path_match.group("package").startswith("/"):
         return {
@@ -1094,16 +1208,13 @@ def parse_release_tag(tag, metadata):
         }
 
     for service in metadata.get("services", []):
-        for prefix in tag_prefixes(service):
-            if not tag.startswith(prefix):
-                continue
-            version = tag[len(prefix) :]
-            if re.fullmatch(SEMVER_PATTERN, version):
-                return {
-                    "kind": "service",
-                    "package": service["service_name"],
-                    "version": version,
-                }
+        version = version_from_tag(service, tag, root)
+        if re.fullmatch(SEMVER_PATTERN, version):
+            return {
+                "kind": "service",
+                "package": service["service_name"],
+                "version": version,
+            }
     return {}
 
 
@@ -1123,7 +1234,7 @@ def tag_release(args):
 
     auto_tagging_enabled, dry_run = github_release_mode()
     draft = bool_env("NVCF_GITHUB_RELEASE_DRAFT", False)
-    parsed = parse_release_tag(tag, metadata)
+    parsed = parse_release_tag(tag, metadata, root)
     if not parsed:
         print(f"[github-release] {tag} is not a supported release tag; skipping")
         return
@@ -1201,7 +1312,7 @@ def anchor_release(args):
     if not re.fullmatch(SEMVER_PATTERN, version):
         raise SystemExit(f"{args.service}: unsupported SemVer {args.version!r}")
 
-    tag = tag_for_version(service, version)
+    tag = tag_for_version(service, version, root)
     sha = run(["git", "rev-parse", "--verify", f"{args.ref}^{{commit}}"], cwd=root, capture=True).strip()
 
     if not args.no_fetch_notes and not args.dry_run:

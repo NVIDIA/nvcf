@@ -7,11 +7,13 @@ Feature: Install local Helmfile observability with the compute profile
   control-plane-only observability components.
 
   Background:
-    Given environment variable "NGC_API_KEY" is set
-    And environment variable "SAMPLE_NGC_ORG" is set
-    And environment variable "SAMPLE_NGC_TEAM" is set
-    And environment variable "NVCF_CLI" is set
-    And environment variable "REPO_ROOT" is set
+    Given these environment variables are set:
+      | name            |
+      | NGC_API_KEY     |
+      | SAMPLE_NGC_ORG  |
+      | SAMPLE_NGC_TEAM |
+      | NVCF_CLI        |
+      | REPO_ROOT       |
     # Helmfile pulls OCI charts during installation. Keep $NGC_API_KEY unbraced
     # so the BDD runner does not expand it into command logs.
     And command has succeeded:
@@ -116,15 +118,14 @@ Feature: Install local Helmfile observability with the compute profile
       kubectl --context k3d-ncp-local-compute-1 delete pod --namespace nvca-system --selector app.kubernetes.io/name=nvca --wait=false
       """
 
-    When I run command "helm list --all-namespaces --kube-context k3d-ncp-local-compute-1 -o json"
-    Then the json output should contain rows:
-      | name                     | namespace     | status   |
-      | prometheus-operator-crds | monitoring    | deployed |
-      | opentelemetry-operator   | monitoring    | deployed |
-      | victoria-metrics         | monitoring    | deployed |
-      | otel-collector           | monitoring    | deployed |
-      | default-monitors         | monitoring    | deployed |
-      | nvca-operator            | nvca-operator | deployed |
+    Then these Helm releases should be deployed using context "k3d-ncp-local-compute-1":
+      | name                     | namespace     |
+      | prometheus-operator-crds | monitoring    |
+      | opentelemetry-operator   | monitoring    |
+      | victoria-metrics         | monitoring    |
+      | otel-collector           | monitoring    |
+      | default-monitors         | monitoring    |
+      | nvca-operator            | nvca-operator |
 
     When I run command "kubectl rollout status deployment/nvca-operator -n nvca-operator --context k3d-ncp-local-compute-1 --timeout=10m"
     Then the command exit code should be 0
@@ -135,19 +136,18 @@ Feature: Install local Helmfile observability with the compute profile
     Then the command exit code should be 0
     And the command output should contain "true"
 
-    Then these ServiceMonitors should exist in namespace "monitoring" using context "k3d-ncp-local-compute-1":
-      | name                          |
-      | nvcf-default-monitors-nvca   |
+    Then these Kubernetes resources should exist in namespace "monitoring" using context "k3d-ncp-local-compute-1":
+      | kind           | name                          |
+      | ServiceMonitor | nvcf-default-monitors-nvca    |
+      | PodMonitor     | nvcf-default-monitors-dcgm    |
+      | PodMonitor     | nvcf-default-monitors-worker  |
 
-    When I run command "kubectl get podmonitor/nvcf-default-monitors-dcgm podmonitor/nvcf-default-monitors-worker --namespace monitoring --context k3d-ncp-local-compute-1"
-    Then the command exit code should be 0
-
-    When I run command "kubectl get servicemonitor --namespace monitoring --context k3d-ncp-local-compute-1 -o name"
-    Then the command exit code should be 0
-    And the command output should not contain "nvcf-default-monitors-state-metrics"
-    And the command output should not contain "nvcf-default-monitors-grpc-proxy"
-    And the command output should not contain "nvcf-default-monitors-llm-api-gateway"
-    And the command output should not contain "nvcf-default-monitors-invocation-service"
+    Then these Kubernetes resources should not exist in namespace "monitoring" using context "k3d-ncp-local-compute-1":
+      | kind           | name                                             |
+      | ServiceMonitor | nvcf-default-monitors-state-metrics              |
+      | ServiceMonitor | nvcf-default-monitors-grpc-proxy                  |
+      | ServiceMonitor | nvcf-default-monitors-llm-api-gateway             |
+      | ServiceMonitor | nvcf-default-monitors-invocation-service          |
 
     When I run command:
       """

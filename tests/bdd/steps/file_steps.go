@@ -38,6 +38,7 @@ func registerFileSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^I substitute "([^"]*)" in file "([^"]*)" with base64 of "([^"]*)"$`, sc.iSubstituteBase64)
 	ctx.Step(`^I substitute a block in file "([^"]*)":$`, sc.iSubstituteBlock)
 	ctx.Step(`^environment variable "([^"]*)" is set$`, sc.environmentVariableIsSet)
+	ctx.Step(`^these environment variables are set:$`, sc.environmentVariablesAreSet)
 	ctx.Step(`^file "([^"]*)" exists$`, sc.fileShouldExist)
 }
 
@@ -98,10 +99,15 @@ func (sc *ScenarioContext) iSubstituteBlock(path string, doc *godog.DocString) e
 // The scenario writer uses this to surface missing prerequisites
 // before any later step interpolates a blank value.
 func (sc *ScenarioContext) environmentVariableIsSet(name string) error {
-	if os.Getenv(name) == "" {
-		return fmt.Errorf("environment variable %q is not set", name)
+	return dsl.RequireEnvironmentVariables([]string{name})
+}
+
+func (sc *ScenarioContext) environmentVariablesAreSet(table *godog.Table) error {
+	names, err := tableToSingleColumn(table, "name")
+	if err != nil {
+		return err
 	}
-	return nil
+	return dsl.RequireEnvironmentVariables(names)
 }
 
 // fileShouldExist is shared by the bare "file ... exists" Given/Then

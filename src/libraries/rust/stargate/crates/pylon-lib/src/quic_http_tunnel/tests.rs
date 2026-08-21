@@ -16,9 +16,9 @@
 use super::backend::{DEFAULT_PRIORITY_CEILING, UpstreamBackend, dynamo};
 use super::core::{
     MAX_SPECULATIVE_REQUEST_BODY_PREALLOC_BYTES, TunnelServerApp, extend_body_from_buf,
-    is_health_request_path, otel_parent_from_headers, pylon_upstream_parent_context,
-    request_body_buffer, request_body_capacity, should_forward_header,
-    should_forward_response_header,
+    health_probe_path_and_query, is_health_request_path, otel_parent_from_headers,
+    pylon_upstream_parent_context, request_body_buffer, request_body_capacity,
+    should_forward_header, should_forward_response_header,
 };
 use super::endpoint::{
     build_trusted_client_config, derive_sni, make_server_config, target_authority,
@@ -30,6 +30,7 @@ use super::reverse::{
 use super::*;
 use std::collections::BTreeMap;
 use std::error::Error as _;
+use std::fs;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -61,6 +62,7 @@ use crate::request_observer::{
 use crate::request_quality_monitor::RequestQualityMonitorConfig;
 use crate::runtime_state::ModelGeneration;
 use crate::stats::PylonMetrics;
+use crate::upstream_health::UpstreamHealthPaths;
 use crate::{PylonRuntimeState, StatsCollectorConfig, start_stats_collector};
 
 #[derive(Clone, Default)]
@@ -921,6 +923,21 @@ fn assert_queue_mismatch_response(response: &TunnelResponse, raw_quic: bool) {
         std::str::from_utf8(&response.body)
             .unwrap()
             .contains("queue_estimate_mismatch")
+    );
+}
+
+#[test]
+fn health_probe_path_keeps_the_query_string() {
+    let health_paths = UpstreamHealthPaths::default();
+    health_paths.mark_resolved(1);
+
+    assert_eq!(
+        health_probe_path_and_query(&health_paths, "/health?probe=1"),
+        "/v1/health/ready?probe=1"
+    );
+    assert_eq!(
+        health_probe_path_and_query(&health_paths, "/health"),
+        "/v1/health/ready"
     );
 }
 
@@ -1790,6 +1807,27 @@ async fn quic_tunnel_health_requests_carry_no_derived_priority() {
 
     let response_headers = tunnel.response_head(StatusCode::OK).await;
     assert_eq!(response_headers["x-echo-dynamo-priority"], "absent");
+
+    tunnel.shutdown().await;
+}
+
+#[tokio::test]
+async fn quic_tunnel_health_probes_follow_the_resolved_upstream_path() {
+    let (mut config, _metrics) = metered_test_tunnel_config_for(
+        Router::new().route("/v1/health/ready", axum::routing::get(|| async { "ok" })),
+    )
+    .await;
+    let health_paths = UpstreamHealthPaths::default();
+    health_paths.mark_resolved(1);
+    config.forwarding.upstream_health_paths = health_paths;
+    let mut tunnel = RawTunnelTest::start(config).await;
+
+    let mut headers = HeaderMap::new();
+    headers.insert("x-method", "GET".parse().unwrap());
+    headers.insert("x-path", "/health".parse().unwrap());
+    tunnel.send(headers, b"").await;
+
+    tunnel.response_head(StatusCode::OK).await;
 
     tunnel.shutdown().await;
 }
@@ -3318,4 +3356,59 @@ fn make_server_config_uses_provided_cert() {
         TunnelTransportProtocol::RawQuic,
     );
     assert!(result.is_ok());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn direct_tunnel_reloads_server_identity_for_new_connections() -> Result<()> {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let root = std::env::temp_dir().join(format!(
+        "pylon-tls-reload-{}-{}",
+        std::process::id(),
+        std::thread::current().name().unwrap_or("test")
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir(&root)?;
+    let cert_path = root.join("tls.crt");
+    let key_path = root.join("tls.key");
+    let (first_cert, first_key) = stargate_tls::generate_self_signed_cert()?;
+    let (second_cert, second_key) = stargate_tls::generate_self_signed_cert()?;
+    fs::write(&cert_path, &first_cert)?;
+    fs::write(&key_path, &first_key)?;
+
+    let mut config = test_tunnel_config("http://127.0.0.1:1");
+    config.tls_cert_pem = Some(first_cert.clone());
+    config.tls_key_pem = Some(first_key);
+    config.server_identity_reloader = Some(stargate_tls::ServerIdentityReloader::load(
+        cert_path.clone(),
+        key_path.clone(),
+    )?);
+    config.tls_reload_interval = Duration::from_millis(10);
+    let tunnel = start_quic_http_tunnel(config).await?;
+
+    async fn connect(addr: SocketAddr, cert_pem: &[u8]) -> Result<quinn::Connection> {
+        let mut endpoint = Endpoint::client("127.0.0.1:0".parse()?)?;
+        endpoint.set_default_client_config(
+            stargate_tls::build_trusted_quic_client_config_with_alpn(cert_pem, Vec::new())?,
+        );
+        Ok(endpoint.connect(addr, "localhost")?.await?)
+    }
+
+    connect(tunnel.listen_addr(), &first_cert).await?;
+    fs::write(&cert_path, &second_cert)?;
+    fs::write(&key_path, second_key)?;
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if connect(tunnel.listen_addr(), &second_cert).await.is_ok() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    assert!(connect(tunnel.listen_addr(), &first_cert).await.is_err());
+
+    tunnel.shutdown().await;
+    fs::remove_dir_all(root)?;
+    Ok(())
 }

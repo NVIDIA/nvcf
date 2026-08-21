@@ -2255,7 +2255,7 @@ async fn registered_backend_rtt_means_drive_cluster_load_balancer_selection() {
         ..LoadBalancerAlgorithmConfig::default()
     };
     let router = LoadBalancerRouter::from_config(&LoadBalancerConfig {
-        default: LoadBalancerAlgorithm::PowerOfTwo,
+        default: LoadBalancerAlgorithm::PowerOfN,
         request_algorithms: HashMap::new(),
         models: HashMap::from([(
             model_id.to_string(),

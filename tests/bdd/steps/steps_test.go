@@ -157,6 +157,50 @@ func TestEnvironmentVariableIsSet(t *testing.T) {
 	}
 }
 
+func TestEnvironmentVariablesAreSet(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	t.Setenv("BDD_TMP_REQUIRED_ONE", "one")
+	t.Setenv("BDD_TMP_REQUIRED_TWO", "two")
+	table := docTable(t, [][]string{
+		{"name"},
+		{"BDD_TMP_REQUIRED_ONE"},
+		{"BDD_TMP_REQUIRED_TWO"},
+	})
+	if err := sc.environmentVariablesAreSet(table); err != nil {
+		t.Fatalf("require variables: %v", err)
+	}
+}
+
+func TestEnvironmentVariablesAreSetReportsMissingVariable(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	t.Setenv("BDD_TMP_REQUIRED_PRESENT", "present")
+	t.Setenv("BDD_TMP_REQUIRED_MISSING", "")
+	table := docTable(t, [][]string{
+		{"name"},
+		{"BDD_TMP_REQUIRED_PRESENT"},
+		{"BDD_TMP_REQUIRED_MISSING"},
+	})
+	err := sc.environmentVariablesAreSet(table)
+	if err == nil {
+		t.Fatal("expected missing-variable error")
+	}
+	if !strings.Contains(err.Error(), `"BDD_TMP_REQUIRED_MISSING"`) {
+		t.Fatalf("error %q does not name the missing variable", err)
+	}
+}
+
+func TestEnvironmentVariablesAreSetRejectsInvalidTable(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	for _, table := range []*godog.Table{
+		docTable(t, [][]string{{"variable"}, {"BDD_TMP_REQUIRED"}}),
+		docTable(t, [][]string{{"name"}, {""}}),
+	} {
+		if err := sc.environmentVariablesAreSet(table); err == nil {
+			t.Fatal("expected invalid-table error")
+		}
+	}
+}
+
 func TestCommandHasSucceededCachesResolved(t *testing.T) {
 	sc, fake := newScenarioContext(t)
 	t.Setenv("EXAMPLE_VAR", "value")
@@ -199,6 +243,52 @@ func TestIRunCommandRecordsResult(t *testing.T) {
 	}
 	if sc.LastResult.Stdout != "ok" {
 		t.Fatalf("last stdout = %q", sc.LastResult.Stdout)
+	}
+}
+
+func TestISuccessfullyRunCommandLineRecordsResultAndCaches(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("EXAMPLE_VAR", "value")
+	fake.result = harness.Result{ExitCode: 0, Stdout: "ok"}
+	if err := sc.iSuccessfullyRunCommandLine(context.Background(), "echo ${EXAMPLE_VAR}"); err != nil {
+		t.Fatalf("run successfully: %v", err)
+	}
+	if sc.LastResult.Stdout != "ok" {
+		t.Fatalf("last stdout = %q", sc.LastResult.Stdout)
+	}
+	if sc.LastCommand != "echo value" {
+		t.Fatalf("last command = %q, want resolved command", sc.LastCommand)
+	}
+	if !sc.Suite.Cache.Has("echo value") {
+		t.Fatal("successful command was not recorded in cache")
+	}
+}
+
+func TestISuccessfullyRunCommandDocPreservesOutput(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0, Stdout: "rendered output"}
+	doc := &godog.DocString{Content: "make template"}
+	if err := sc.iSuccessfullyRunCommandDoc(context.Background(), doc); err != nil {
+		t.Fatalf("run successfully: %v", err)
+	}
+	if err := sc.commandOutputShouldContain("rendered output"); err != nil {
+		t.Fatalf("assert preserved output: %v", err)
+	}
+}
+
+func TestISuccessfullyRunCommandRejectsNonZeroExit(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 2, Stderr: "failed"}
+	fake.err = errors.New("command failed: exit status 2")
+	err := sc.iSuccessfullyRunCommandLine(context.Background(), "make install")
+	if err == nil {
+		t.Fatal("expected non-zero command to fail the step")
+	}
+	if sc.LastResult.ExitCode != 2 {
+		t.Fatalf("last exit code = %d, want 2", sc.LastResult.ExitCode)
+	}
+	if sc.Suite.Cache.Has("make install") {
+		t.Fatal("failed command was recorded in cache")
 	}
 }
 
@@ -456,24 +546,134 @@ func TestSingleClusterBootstrapCachesAcrossCalls(t *testing.T) {
 	}
 }
 
-func TestServiceMonitorsShouldExistRunsSingleExplicitGet(t *testing.T) {
+func TestKubernetesResourcesShouldExistRunsExplicitGets(t *testing.T) {
 	sc, fake := newScenarioContext(t)
 	fake.result = harness.Result{ExitCode: 0}
 	table := docTable(t, [][]string{
-		{"name"},
-		{"nvcf-default-monitors-state-metrics"},
-		{"nvcf-default-monitors-grpc-proxy"},
+		{"kind", "name"},
+		{"ServiceMonitor", "nvcf-default-monitors-state-metrics"},
+		{"PodMonitor", "nvcf-default-monitors-worker"},
 	})
 
-	if err := sc.serviceMonitorsShouldExist(context.Background(), "monitoring", "k3d-ncp-local", table); err != nil {
-		t.Fatalf("assert ServiceMonitors: %v", err)
+	if err := sc.kubernetesResourcesShouldExist(context.Background(), "monitoring", "k3d-ncp-local", table); err != nil {
+		t.Fatalf("assert Kubernetes resources: %v", err)
+	}
+	if len(fake.runs) != 2 {
+		t.Fatalf("runs = %d, want 2", len(fake.runs))
+	}
+	want := []string{
+		"kubectl get servicemonitor/nvcf-default-monitors-state-metrics --namespace monitoring --context k3d-ncp-local -o name",
+		"kubectl get podmonitor/nvcf-default-monitors-worker --namespace monitoring --context k3d-ncp-local -o name",
+	}
+	for index, run := range fake.runs {
+		if run.command != want[index] {
+			t.Fatalf("command %d = %q, want %q", index+1, run.command, want[index])
+		}
+	}
+}
+
+func TestKubernetesResourcesShouldExistNamesFailingRow(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 1}
+	table := docTable(t, [][]string{
+		{"kind", "name"},
+		{"ServiceMonitor", "missing-monitor"},
+	})
+
+	err := sc.kubernetesResourcesShouldExist(context.Background(), "monitoring", "k3d-ncp-local", table)
+	if err == nil || !strings.Contains(err.Error(), "row 1") || !strings.Contains(err.Error(), "ServiceMonitor/missing-monitor should exist") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestKubernetesResourcesShouldNotExistUsesIgnoreNotFound(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0}
+	table := docTable(t, [][]string{
+		{"kind", "name"},
+		{"Secret", "nvcr-pull-secret"},
+	})
+
+	if err := sc.kubernetesResourcesShouldNotExist(context.Background(), "nvca-system", "k3d-ncp-local", table); err != nil {
+		t.Fatalf("assert Kubernetes resource absence: %v", err)
+	}
+	want := "kubectl get secret/nvcr-pull-secret --namespace nvca-system --context k3d-ncp-local --ignore-not-found -o name"
+	if len(fake.runs) != 1 || fake.runs[0].command != want {
+		t.Fatalf("runs = %#v, want %q", fake.runs, want)
+	}
+}
+
+func TestKubernetesResourcesShouldNotExistNamesExistingResource(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0, Stdout: "secret/nvcr-pull-secret\n"}
+	table := docTable(t, [][]string{
+		{"kind", "name"},
+		{"Secret", "nvcr-pull-secret"},
+	})
+
+	err := sc.kubernetesResourcesShouldNotExist(context.Background(), "nvca-system", "k3d-ncp-local", table)
+	if err == nil || !strings.Contains(err.Error(), "row 1") || !strings.Contains(err.Error(), "Secret/nvcr-pull-secret exists") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestKubernetesResourceTableRejectsEmptyFields(t *testing.T) {
+	for _, row := range [][]string{{"", "name"}, {"Secret", ""}} {
+		table := docTable(t, [][]string{{"kind", "name"}, row})
+		if _, err := tableToKubernetesResources(table); err == nil {
+			t.Fatalf("expected validation error for row %#v", row)
+		}
+	}
+}
+
+func TestKubernetesResourcesValidateAllRowsBeforeRunning(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	table := docTable(t, [][]string{
+		{"kind", "name"},
+		{"Secret", "valid-secret"},
+		{"PodMonitor", ""},
+	})
+
+	if err := sc.kubernetesResourcesShouldExist(context.Background(), "monitoring", "k3d-ncp-local", table); err == nil {
+		t.Fatal("expected validation error")
+	}
+	if len(fake.runs) != 0 {
+		t.Fatalf("runs = %d, want 0 before all rows validate", len(fake.runs))
+	}
+}
+
+func TestHelmReleasesShouldBeDeployedRunsSingleExplicitList(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0, Stdout: `[{"name":"nats","namespace":"nats-system","revision":"1","status":"deployed"}]`}
+	table := docTable(t, [][]string{
+		{"name", "namespace", "revision"},
+		{"nats", "nats-system", "1"},
+	})
+
+	if err := sc.helmReleasesShouldBeDeployed(context.Background(), "k3d-ncp-local", table); err != nil {
+		t.Fatalf("assert Helm releases: %v", err)
 	}
 	if len(fake.runs) != 1 {
 		t.Fatalf("runs = %d, want 1", len(fake.runs))
 	}
-	want := "kubectl get servicemonitor/nvcf-default-monitors-state-metrics servicemonitor/nvcf-default-monitors-grpc-proxy --namespace monitoring --context k3d-ncp-local"
+	want := "helm list --all-namespaces --kube-context k3d-ncp-local -o json"
 	if fake.runs[0].command != want {
 		t.Fatalf("command = %q, want %q", fake.runs[0].command, want)
+	}
+}
+
+func TestHelmReleaseTableAcceptsNameAndNamespace(t *testing.T) {
+	table := docTable(t, [][]string{
+		{"name", "namespace"},
+		{"nats", "nats-system"},
+	})
+
+	got, err := tableToHelmReleaseExpectations(table)
+	if err != nil {
+		t.Fatalf("parse table: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "nats" || got[0].Namespace != "nats-system" || got[0].Revision != "" {
+		t.Fatalf("expectations = %#v", got)
 	}
 }
 
@@ -483,13 +683,19 @@ func TestRegisterAllRunsAFeatureFile(t *testing.T) {
 	// the regex registrations and the Before hook are both exercised.
 	feature := `Feature: Smoke
   Scenario: register-all smoke
-    Given environment variable "BDD_TMP_SMOKE" is set
-    When I run command "echo smoke"
-    Then the command exit code should be 0
+    Given these environment variables are set:
+      | name          |
+      | BDD_TMP_SMOKE |
+    When I successfully run command "echo smoke"
+    And I successfully run command:
+      """
+      echo documented
+      """
+    Then the command output should contain "documented"
 `
 	t.Setenv("BDD_TMP_SMOKE", "ready")
 	sc, fake := newScenarioContext(t)
-	fake.result = harness.Result{ExitCode: 0, Stdout: "smoke\n"}
+	fake.result = harness.Result{ExitCode: 0, Stdout: "smoke documented\n"}
 
 	suite := godog.TestSuite{
 		Name: "smoke",
@@ -641,6 +847,50 @@ func TestRenderedManifestsShouldNotContainAcceptsExplicitMarkers(t *testing.T) {
 	})
 
 	if err := sc.renderedManifestsShouldNotContain("out/rendered", table); err != nil {
+		t.Fatalf("assert rendered manifests: %v", err)
+	}
+	if len(fake.runs) != 0 {
+		t.Fatalf("runs = %d, want 0", len(fake.runs))
+	}
+}
+
+func TestRenderedManifestsShouldContainAcceptsExplicitMarkers(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	renderDir := filepath.Join(sc.Suite.Config.RepoRoot, "out", "rendered")
+	if err := os.MkdirAll(renderDir, 0o755); err != nil {
+		t.Fatalf("create render directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(renderDir, "collector.yaml"), []byte("kind: OpenTelemetryCollector\n"), 0o644); err != nil {
+		t.Fatalf("write rendered manifest: %v", err)
+	}
+	table := docTable(t, [][]string{
+		{"text"},
+		{"kind: OpenTelemetryCollector"},
+	})
+
+	if err := sc.renderedManifestsShouldContain("out/rendered", table); err != nil {
+		t.Fatalf("assert rendered manifests: %v", err)
+	}
+	if len(fake.runs) != 0 {
+		t.Fatalf("runs = %d, want 0", len(fake.runs))
+	}
+}
+
+func TestRenderedManifestsUnderMatchingDirectoriesShouldContainAcceptsExplicitMarkers(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	renderDir := filepath.Join(sc.Suite.Config.RepoRoot, "out", "rendered", "01-nats", "templates")
+	if err := os.MkdirAll(renderDir, 0o755); err != nil {
+		t.Fatalf("create render directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(renderDir, "nats.yaml"), []byte("image: docker.io/natsio/reloader:0.23.0\n"), 0o644); err != nil {
+		t.Fatalf("write rendered manifest: %v", err)
+	}
+	table := docTable(t, [][]string{
+		{"text"},
+		{"docker.io/natsio/reloader:0.23.0"},
+	})
+
+	if err := sc.renderedManifestsUnderMatchingDirectoriesShouldContain("out/rendered", "*-nats", table); err != nil {
 		t.Fatalf("assert rendered manifests: %v", err)
 	}
 	if len(fake.runs) != 0 {

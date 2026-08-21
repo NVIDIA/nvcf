@@ -18,6 +18,13 @@ nodeSelector: {}
 # Number of replicas to create of container-cache.
 replicaCount: 1
 
+podDisruptionBudget:
+  enabled: false
+  # minAvailable and maxUnavailable are mutually exclusive; set exactly one.
+  # Accepts an integer or a percentage string (e.g. 1 or "50%").
+  minAvailable: ""
+  maxUnavailable: ""
+
 # Domain(s) of target hosts where the proxy passes requests (comma-separated).
 targetHost: nvcr.io,stg.nvcr.io
 
@@ -28,7 +35,7 @@ images:
   # Name of the container image containing Nginx Prometheus exporter.
   exporter: nvcr.io/nv-ngc-devops/nginx-prometheus-exporter:1.0
   # Certificate bundle used for cache certificates.
-  certificates: nvcr.io/nv-ngc-devops/nvcf-proxy-tls-certs:v1.2.10
+  certificates: nvcr.io/nv-ngc-devops/nvcf-proxy-tls-certs:v1.2.11
   # Optional pull secrets for private registries.
   secrets:
     - nvidia-ngcuser-pull-secret
@@ -142,8 +149,13 @@ persistentVolumeClaim:
   freeProxyPct: 15
 
 # Service configuration.
+#
+# The service type is not configurable: it is always NodePort. The host
+# container runtime reaches the cache at ${NODE_IP}:${port} from the host
+# network namespace, so the port has to be published on every node. Setting
+# service.type to anything else fails the render rather than installing a cache
+# that pulls silently bypass.
 service:
-  type: NodePort
   port: 30345
 
 # Proxy service (nvcf-proxy-cache ClusterIP) configuration.

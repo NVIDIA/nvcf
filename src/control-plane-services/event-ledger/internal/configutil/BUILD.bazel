@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "configutil",
+    srcs = ["utils.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/configutil",
+    visibility = ["//src/control-plane-services/event-ledger:__subpackages__"],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":configutil",
+    visibility = ["//src/control-plane-services/event-ledger:__subpackages__"],
+)

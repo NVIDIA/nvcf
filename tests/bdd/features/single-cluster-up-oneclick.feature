@@ -20,13 +20,15 @@ Feature: Bring up a local single-cluster NVCF stack with the self-hosted up one-
   Rule: self-hosted up installs the control plane and compute plane in one command
 
     Background:
-      Given environment variable "NVCF_CLI" is set
-      And environment variable "NGC_API_KEY" is set
       # SAMPLE_NGC_ORG / SAMPLE_NGC_TEAM are consumed by the
       # build-and-deploy-cluster credential-provider validation the
       # `a single-cluster ncp-local cluster is running` step runs.
-      And environment variable "SAMPLE_NGC_ORG" is set
-      And environment variable "SAMPLE_NGC_TEAM" is set
+      Given these environment variables are set:
+        | name            |
+        | NVCF_CLI        |
+        | NGC_API_KEY     |
+        | SAMPLE_NGC_ORG  |
+        | SAMPLE_NGC_TEAM |
       # self-hosted up --env local reads operator-authored local secrets
       # from both split stacks:
       # deploy/stacks/self-managed/secrets/local-secrets.yaml.
@@ -79,21 +81,19 @@ Feature: Bring up a local single-cluster NVCF stack with the self-hosted up one-
       Then the command exit code should be 0
 
       # Control plane releases are deployed on the single k3d cluster.
-      When I run command "helm list --all-namespaces --kube-context k3d-ncp-local -o json"
-      Then the json output should contain rows:
-        | name           | namespace        | status   |
-        | nats           | nats-system      | deployed |
-        | cassandra      | cassandra-system | deployed |
-        | openbao-server | vault-system     | deployed |
-        | api-keys       | api-keys         | deployed |
-        | sis            | sis              | deployed |
-        | api            | nvcf             | deployed |
+      Then these Helm releases should be deployed using context "k3d-ncp-local":
+        | name           | namespace        |
+        | nats           | nats-system      |
+        | cassandra      | cassandra-system |
+        | openbao-server | vault-system     |
+        | api-keys       | api-keys         |
+        | sis            | sis              |
+        | api            | nvcf             |
 
       # The compute plane (NVCA operator) is deployed on the same cluster.
-      When I run command "helm list -n nvca-operator --kube-context k3d-ncp-local -o json"
-      Then the json output should contain rows:
-        | name          | namespace     | status   |
-        | nvca-operator | nvca-operator | deployed |
+      Then these Helm releases should be deployed using context "k3d-ncp-local":
+        | name          | namespace     |
+        | nvca-operator | nvca-operator |
 
       # The agent registered by up reports healthy.
       When I run command "kubectl wait nvcfbackend ncp-local -n nvca-operator --context k3d-ncp-local --for=jsonpath={.status.agentStatus}=healthy --timeout=10m"

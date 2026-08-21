@@ -192,7 +192,7 @@ struct Args {
     /// Skip QUIC TLS certificate verification for outbound connections and relays.
     #[arg(long, default_value_t = false, env = "STARGATE_QUIC_INSECURE")]
     quic_insecure: bool,
-    /// Path to load balancer config JSON file. If omitted, uses power-of-two
+    /// Path to load balancer config JSON file. If omitted, uses power-of-n
     /// with every built-in algorithm selectable per request.
     #[arg(long, value_name = "PATH")]
     lb_config_path: Option<String>,
@@ -794,7 +794,7 @@ mod tests {
         .expect("reverse listener arguments should parse");
         let err = proxy_transport_config_from_args(&args)
             .expect_err("reverse listener server TLS still needs a complete PEM pair");
-        assert_error_contains(&err, "TLS key PEM is required");
+        assert_error_contains(&err, "--tls-key-path is required with --tls-cert-path");
     }
 
     #[test]

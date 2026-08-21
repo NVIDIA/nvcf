@@ -19,10 +19,17 @@ llmRequestRouter:
   # the StatefulSet and headless service.
   replicaCount: 3
 
+  podDisruptionBudget:
+    enabled: false
+    # minAvailable and maxUnavailable are mutually exclusive; set exactly one.
+    # Accepts an integer or a percentage string (e.g. 1 or "50%").
+    minAvailable: ""
+    maxUnavailable: ""
+
   image:
     registry: ""
     repository: ""
-    tag: "0.3.2"
+    tag: "0.9.0"
     pullPolicy: IfNotPresent
 
   imagePullSecrets: []
@@ -77,6 +84,9 @@ llmRequestRouter:
   affinity: {}
 
   kubernetes:
+    # Supports {pod_name} and {namespace}. When certificate.enabled is true,
+    # certificate.dnsNames must cover the resolved hostname with an exact name
+    # or a valid leftmost wildcard that matches one DNS label.
     advertisedHostnameTemplate: ""
 
   certificate:
@@ -85,6 +95,7 @@ llmRequestRouter:
     issuerRef:
       kind: ClusterIssuer
       name: ""
+    # Wildcards use the form *.example.internal and cover one label only.
     dnsNames: []
     usages:
       - server auth
@@ -164,6 +175,26 @@ llmRequestRouter:
     audience: ""
 
   tls:
+    # Source of the QUIC server identity.
+    #   certManager    - certificate.enabled controls cert-manager issuance and
+    #                    the chart mounts the Secret cert-manager writes.
+    #   existingSecret - mount a pre-created TLS Secret. The chart renders no
+    #                    Certificate and adds no issuer dependency. secretName,
+    #                    certPath, and keyPath are required, certificate.enabled
+    #                    must stay false, and the operator owns issuance,
+    #                    renewal, rotation, and recovery.
+    mode: certManager
+    # Secret holding the server certificate. It must provide the tls.crt and
+    # tls.key entries, as a kubernetes.io/tls Secret does.
+    # The mount directory is polled every 30 seconds for certificate and key
+    # updates, which apply to new connections without a pod restart. Keep both
+    # files in one Secret so Kubernetes projects one atomic generation.
+    #
+    # Trust bundles do not reload yet, so changing one still needs a rolling
+    # restart of Pylon, which verifies this certificate over the reverse tunnel.
+    # Point Pylon at the root CA rather than an intermediate: intermediates are
+    # renewed far more often, and trusting the root keeps those renewals
+    # restart-free. See the Transport TLS Rotation runbook.
     secretName: ""
     mountPath: ""
     certPath: ""

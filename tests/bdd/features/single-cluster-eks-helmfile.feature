@@ -52,14 +52,16 @@ Feature: Install a single-cluster NVCF stack on a pre-provisioned EKS cluster wi
   #   --compute-context ${EKS_CONTEXT}
 
   Background:
-    Given environment variable "REPO_ROOT" is set
-    And environment variable "NVCF_CLI" is set
-    And environment variable "NGC_API_KEY" is set
-    And environment variable "SAMPLE_NGC_ORG" is set
-    And environment variable "SAMPLE_NGC_TEAM" is set
-    And environment variable "EKS_CONTEXT" is set
-    And environment variable "EKS_CLUSTER_NAME" is set
-    And environment variable "EKS_REGION" is set
+    Given these environment variables are set:
+      | name             |
+      | REPO_ROOT        |
+      | NVCF_CLI         |
+      | NGC_API_KEY      |
+      | SAMPLE_NGC_ORG   |
+      | SAMPLE_NGC_TEAM  |
+      | EKS_CONTEXT      |
+      | EKS_CLUSTER_NAME |
+      | EKS_REGION       |
     # Helmfile pulls OCI charts through helm, so host-side helm
     # registry auth must be present before any helmfile sync.
     # Keep $NGC_API_KEY unbraced so the BDD runner does not expand
@@ -182,25 +184,24 @@ Feature: Install a single-cluster NVCF stack on a pre-provisioned EKS cluster wi
       When I run command "make -C deploy/stacks/self-managed install HELMFILE_ENV=eks-bdd"
       Then the command exit code should be 0
 
-      When I run command "helm list --all-namespaces --kube-context ${EKS_CONTEXT} -o json"
-      Then the json output should contain rows:
-        | name                      | namespace            | status   |
-        | nats                      | nats-system          | deployed |
-        | cert-manager              | cert-manager         | deployed |
-        | openbao-server            | vault-system         | deployed |
-        | cassandra                 | cassandra-system     | deployed |
-        | api-keys                  | api-keys             | deployed |
-        | sis                       | sis                  | deployed |
-        | api                       | nvcf                 | deployed |
-        | nvct-api                  | nvcf                 | deployed |
-        | invocation-service        | nvcf                 | deployed |
-        | grpc-proxy                | nvcf                 | deployed |
-        | ess-api                   | ess                  | deployed |
-        | notary-service            | nvcf                 | deployed |
-        | admin-issuer-proxy        | api-keys             | deployed |
-        | reval                     | nvcf                 | deployed |
-        | nats-auth-callout-service | nats-system          | deployed |
-        | ingress                   | envoy-gateway-system | deployed |
+      Then these Helm releases should be deployed using context "${EKS_CONTEXT}":
+        | name                      | namespace            |
+        | nats                      | nats-system          |
+        | cert-manager              | cert-manager         |
+        | openbao-server            | vault-system         |
+        | cassandra                 | cassandra-system     |
+        | api-keys                  | api-keys             |
+        | sis                       | sis                  |
+        | api                       | nvcf                 |
+        | nvct-api                  | nvcf                 |
+        | invocation-service        | nvcf                 |
+        | grpc-proxy                | nvcf                 |
+        | ess-api                   | ess                  |
+        | notary-service            | nvcf                 |
+        | admin-issuer-proxy        | api-keys             |
+        | reval                     | nvcf                 |
+        | nats-auth-callout-service | nats-system          |
+        | ingress                   | envoy-gateway-system |
 
       # Verify gateway-routes templated global.domain into the api
       # HTTPRoute hostname. Confirms the env-file global.domain value
@@ -266,10 +267,9 @@ Feature: Install a single-cluster NVCF stack on a pre-provisioned EKS cluster wi
         """
       Then the command exit code should be 0
 
-      When I run command "helm list -n nvca-operator --kube-context ${EKS_CONTEXT} -o json"
-      Then the json output should contain rows:
-        | name          | namespace     | status   |
-        | nvca-operator | nvca-operator | deployed |
+      Then these Helm releases should be deployed using context "${EKS_CONTEXT}":
+        | name          | namespace     |
+        | nvca-operator | nvca-operator |
 
       When I run command "kubectl rollout status deployment/nvca-operator -n nvca-operator --context ${EKS_CONTEXT} --timeout=10m"
       Then the command exit code should be 0

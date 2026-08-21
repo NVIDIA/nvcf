@@ -133,6 +133,57 @@
             "description": "Replica count for the operator deployment",
             "default": 1
         },
+        "podDisruptionBudget": {
+            "type": "object",
+            "description": "PodDisruptionBudget configuration for the NVCA Operator.",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "description": "Enable a PodDisruptionBudget for the NVCA Operator.",
+                    "default": false
+                },
+                "minAvailable": {
+                    "description": "Minimum available pods. Set exactly one of minAvailable or maxUnavailable when enabled.",
+                    "default": "",
+                    "oneOf": [
+                        {
+                            "type": "integer",
+                            "minimum": 0
+                        },
+                        {
+                            "type": "string",
+                            "enum": [
+                                ""
+                            ]
+                        },
+                        {
+                            "type": "string",
+                            "pattern": "^(100|[1-9]?[0-9])%$"
+                        }
+                    ]
+                },
+                "maxUnavailable": {
+                    "description": "Maximum unavailable pods. Set exactly one of minAvailable or maxUnavailable when enabled.",
+                    "default": "",
+                    "oneOf": [
+                        {
+                            "type": "integer",
+                            "minimum": 0
+                        },
+                        {
+                            "type": "string",
+                            "enum": [
+                                ""
+                            ]
+                        },
+                        {
+                            "type": "string",
+                            "pattern": "^(100|[1-9]?[0-9])%$"
+                        }
+                    ]
+                }
+            }
+        },
         "systemNamespace": {
             "type": "string",
             "description": "Namespace in which NVCFBackend objects are created.",
@@ -387,7 +438,7 @@
                         "imageTag": {
                             "type": "string",
                             "description": "BYOO OpenTelemetry Collector image tag.",
-                            "default": "0.157.11"
+                            "default": "0.157.0-nv-0.1.1"
                         }
                     }
                 },
@@ -585,6 +636,11 @@
         "vaultConfig": {
             "type": "object",
             "properties": {
+                "address": {
+                    "type": "string",
+                    "description": "Vault server URL for Helm-managed clusters. Required when helmManaged.oAuthClientID is set; must be HTTP(S), without credentials, query, or fragment.",
+                    "default": ""
+                },
                 "oAuthClientMountPathTemplate": {
                     "type": "string",
                     "description": "Template for constructing the OAuth client mount path in Vault. Use %s as placeholder for clientID. Example: \"nvidia/services/oauth/clients/%s/kv/secret\"",
