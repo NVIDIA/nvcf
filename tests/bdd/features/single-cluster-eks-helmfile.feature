@@ -251,8 +251,10 @@ Feature: Install a single-cluster NVCF stack on a pre-provisioned EKS cluster wi
         selfManaged:
           identitySource: psat
         """
-      And yaml file "deploy/stacks/nvcf-compute-plane/registration/${EKS_CLUSTER_NAME}-register-values.yaml" key "clusterID" should not be empty
-      And yaml file "deploy/stacks/nvcf-compute-plane/registration/${EKS_CLUSTER_NAME}-register-values.yaml" key "clusterGroupID" should not be empty
+      And yaml file "deploy/stacks/nvcf-compute-plane/registration/${EKS_CLUSTER_NAME}-register-values.yaml" should have non-empty keys:
+        | key            |
+        | clusterID      |
+        | clusterGroupID |
 
       # The register-values URLs stay as cluster register's bare-ELB
       # output (http://${EKS_GATEWAY_ADDR}, nats://${EKS_GATEWAY_ADDR}:4222).

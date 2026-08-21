@@ -113,6 +113,34 @@ list:
 	}
 }
 
+func TestRequireNonEmptyYAMLKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "registration.yaml")
+	writeFile(t, path, `clusterID: cluster-123
+clusterGroupID: ""
+selfManaged:
+  identitySource: psat
+`)
+
+	if err := RequireNonEmptyYAMLKeys(path, []string{"clusterID", "selfManaged.identitySource"}); err != nil {
+		t.Fatalf("non-empty keys: %v", err)
+	}
+
+	t.Run("missing key", func(t *testing.T) {
+		err := RequireNonEmptyYAMLKeys(path, []string{"clusterID", "missingID"})
+		if err == nil || !strings.Contains(err.Error(), `row 2`) || !strings.Contains(err.Error(), `key "missingID" is missing`) {
+			t.Fatalf("err = %v, want row-specific missing-key error", err)
+		}
+	})
+
+	t.Run("empty value", func(t *testing.T) {
+		err := RequireNonEmptyYAMLKeys(path, []string{"clusterGroupID"})
+		if err == nil || !strings.Contains(err.Error(), `row 1`) || !strings.Contains(err.Error(), `key "clusterGroupID" is empty`) {
+			t.Fatalf("err = %v, want row-specific empty-value error", err)
+		}
+	})
+}
+
 func TestMatchYAMLSubtreeExactAndSubset(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "profile.yaml")

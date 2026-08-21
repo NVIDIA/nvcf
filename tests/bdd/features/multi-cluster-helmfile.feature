@@ -202,8 +202,10 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
         selfManaged:
           identitySource: psat
         """
-      And yaml file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-compute-1-register-values.yaml" key "clusterID" should not be empty
-      And yaml file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-compute-1-register-values.yaml" key "clusterGroupID" should not be empty
+      And yaml file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-compute-1-register-values.yaml" should have non-empty keys:
+        | key            |
+        | clusterID      |
+        | clusterGroupID |
 
       And the "nvcr-pull-secret" image pull secret exists in namespaces:
         | nvca-operator |
