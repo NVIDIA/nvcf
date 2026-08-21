@@ -1730,14 +1730,19 @@ cluster identity and the system and requests namespaces.
 
 ### How drain works
 
-`cordon-and-drain` adds the `CordonAndDrainMaintenance` feature flag and sets
-`maintenanceMode: CordonAndDrain` on the NVCA `agent-config` ConfigMap, then
-restarts the NVCA deployment so the change takes effect. `uncordon` reverses
-both. The command returns once NVCA has been told to drain and (unless `--force`)
-the restart has rolled out; it does not wait for every instance to reach zero.
-Watch progress with `cluster agent list-functions --phase DRAINING`. `--timeout`
-bounds the rollout wait (default 5m); a timeout is reported as a warning because
-the config change is already persisted and re-running is a no-op.
+`cordon-and-drain` adds the `CordonAndDrainMaintenance` feature flag to the
+`NVCFBackend` CR's `spec.overrides.featureGate.values`. `uncordon` removes it.
+The CLI never edits the NVCA `agent-config` ConfigMap or restarts the NVCA
+deployment directly: the NVCA operator treats `agent-config` as fully
+generated from the CR and reverts any direct edit on its next reconcile, so
+the CLI's job is only to submit the desired state and let the operator's own
+reconcile regenerate `agent-config` and roll NVCA out. The command returns
+once the CR update is accepted and (unless `--force`) the operator's rollout
+has completed; it does not wait for every instance to reach zero. Watch
+progress with `cluster agent list-functions --phase DRAINING`. `--timeout`
+bounds the wait for the operator's rollout (default 5m); a timeout is
+reported as a warning because the CR change is already persisted and
+re-running is a no-op.
 
 ### How kill works
 
