@@ -595,6 +595,12 @@ func (a *Agent) dumpV2NamespaceRoot(
 		"dumpTarget": "namespace-root",
 	}).Info("criu-v2: dumping pid-1 workload from the agent's namespaces")
 
+	// The exact argv is the first thing needed to reproduce a dump failure by
+	// hand, and it is otherwise unrecoverable after the fact. The in-namespace
+	// path logs it for the same reason; omitting it here meant debugging a
+	// missing --external flag with no way to see whether it was ever passed.
+	log.WithField("argv", strings.Join(args, " ")).Info("criu-v2 pid1: dump argv")
+
 	cmd := exec.CommandContext(ctx, a.config.CRIUPath, args...)
 	cmd.Env = []string{
 		"PATH=" + filepath.Dir(a.config.CRIUPath) + ":/usr/sbin:/usr/bin:/sbin:/bin",
