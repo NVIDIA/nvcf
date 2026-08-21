@@ -28,15 +28,14 @@ Feature: Install a local single-cluster NVCF stack with PKI-secured LLM transpor
       # signing role, and the provisioning hook needs the
       # nvcf-openbao-migrations tag (no default propagates from env).
       And I update yaml file "deploy/stacks/self-managed/environments/local-bdd-pki.yaml" with keys:
-        | global.imagePullSecrets[0].name               | nvcr-pull-secret                                                   |
-        | global.helm.sources.repository                | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                               |
-        | global.image.repository                       | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                               |
-        | api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE | nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/stargate-client:0.2.0 |
-        | addons.llm.pki.enabled                        | true                                                               |
-        | addons.llm.pki.dnsNames[0]                    | llm-request-router.nvcf.svc.cluster.local                          |
-        | addons.llm.pki.allowedDomains                 | nvcf.svc.cluster.local                                             |
-        | addons.llm.pki.image.tag                      | 0.16.2                                                             |
-        | observability.profile                         | disabled                                                           |
+        | global.imagePullSecrets[0].name | nvcr-pull-secret                          |
+        | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}      |
+        | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}      |
+        | addons.llm.pki.enabled          | true                                      |
+        | addons.llm.pki.dnsNames[0]      | llm-request-router.nvcf.svc.cluster.local |
+        | addons.llm.pki.allowedDomains   | nvcf.svc.cluster.local                    |
+        | addons.llm.pki.image.tag        | 0.16.2                                    |
+        | observability.profile           | disabled                                  |
       And I copy the file "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" to "deploy/stacks/nvcf-compute-plane/environments/local-bdd-pki.yaml"
       And I update yaml file "deploy/stacks/nvcf-compute-plane/environments/local-bdd-pki.yaml" with keys:
         | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
