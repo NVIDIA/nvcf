@@ -1742,10 +1742,15 @@ the config change is already persisted and re-running is a no-op.
 ### How kill works
 
 `kill-function` and `kill-all` delete the matching `ICMSRequest` CRs; the NVCA
-reconciler detects the deletion and evicts the workloads. Deletion is
-asynchronous, so the command returns once the delete is accepted. `--force`
-additionally strips finalizers so a request stuck `Terminating` is removed even
-when NVCA is not running to process its finalizer.
+reconciler detects the deletion and evicts the workloads. Deleting a CR only
+accepts the deletion; the object stays `Terminating` behind its finalizer
+until NVCA finishes evicting the workload and removes it. The command polls
+for the CR to actually disappear before reporting success: a request removed
+within `--timeout` (default 60s) is reported `deleted`, and one still present
+when the timeout elapses is reported `terminating` instead, with a non-zero
+exit code. `--force` additionally strips finalizers so a request stuck
+`Terminating` is removed even when NVCA is not running to process its
+finalizer.
 
 ### Confirmation and safety
 
@@ -1760,7 +1765,9 @@ connected cluster. When the cluster has no name, it falls back to the cluster id
 All maintenance commands accept `--dry-run` to preview without mutating, and
 `--expect-cluster-id <id>` to refuse to act unless the connected cluster's id or
 name matches (guards against a wrong `--compute-plane-context`). `kill-function`
-and `kill-all` accept `--reason` for an audit note, and `--json` for automation.
+and `kill-all` accept `--reason` for an audit note, `--timeout` to bound how
+long to wait for NVCA to finish evicting a terminated request (default 60s),
+and `--json` for automation.
 
 These commands need write access to the target cluster: get/update on the
 `agent-config` ConfigMap and the `nvca` Deployment for drain, and list/delete
