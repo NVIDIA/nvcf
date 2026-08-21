@@ -46,9 +46,9 @@ them. On success they clean up.
 
 Which path runs is decided by GPU count, not by the manifest:
 
-- **1 GPU** -> `criu-v2`: CRIU + cuda-checkpoint of the live process, GPU state
+- 1 GPU -> `criu-v2`: CRIU + cuda-checkpoint of the live process, GPU state
   included.
-- **2+ GPUs** -> `cachedir`: capture the pod's cache mount (model weights,
+- 2+ GPUs -> `cachedir`: capture the pod's cache mount (model weights,
   compiled kernels). No process state. Multi-GPU CRIU does not work.
 
 Override with `CAPTURE_PATH=criu-v2` or `CAPTURE_PATH=rootfs` when you need the
@@ -69,8 +69,15 @@ than what you asked for.
 |---|---|---|
 | agent version | deployed image != `versions.sh` | numbers would be attributed to the wrong build |
 | image exists | tag missing from the registry | catches a failed push before a 30 min run |
-| placeholder | `__CAPTURE_HASH__` survived substitution | the webhook ignores the pod and it cold-starts |
+| placeholder | any `__NAME__` token survived substitution, not just `__CAPTURE_HASH__` | the webhook ignores the pod and it cold-starts |
 | restore admitted | cache dir not mounted, or cache env points outside it | the pod cold-starts while looking like a restore |
+
+The placeholder guard rejects any unresolved `__[A-Z_]+__` token, not only
+`__CAPTURE_HASH__`, because a manifest that still carries `__NODE_NAME__` or
+`__CHECKPOINT_ID__` is just as unusable. Tokens named inside comments are
+ignored deliberately: templates explain their own placeholders, and a guard
+that fails a correctly substituted manifest is worse than the problem it
+was added for.
 
 The restore-admitted guard is the one worth understanding. A pod the webhook
 declined still starts, still serves, and passes every functional check -- it
@@ -91,9 +98,16 @@ kubectl logs -n nvsnap-system -l app=nvsnap-agent -c agent --since=30m | grep -i
 Capture and restore logs land next to the checkpoint on the node:
 
 ```sh
-AGENT=$(kubectl get pods -n nvsnap-system -l app=nvsnap-agent -o name | head -1)
-kubectl exec -n nvsnap-system ${AGENT#pod/} -c agent -- \
-    sh -c 'ls -1dt /var/lib/containerd/nvsnap-cache/*/ | head -3'
+# Read the cache dir from the deployed agent rather than assuming it, and use
+# the node the workload actually ran on -- a different agent pod sees a
+# different disk.
+. scripts/lib/restore-guard.sh
+CACHE=$(agent_pod_cache_dir)
+NODE=$(kubectl get pod <workload-pod> -n nvsnap-system -o jsonpath='{.spec.nodeName}')
+AGENT=$(kubectl get pods -n nvsnap-system -l app=nvsnap-agent -o wide \
+    | awk -v n="$NODE" '$7==n {print $1}' | head -1)
+kubectl exec -n nvsnap-system "$AGENT" -c agent -- \
+    sh -c "ls -1dt $CACHE/*/ | head -3"
 ```
 
 Copy anything you need out before re-running: a second run may reuse or replace

@@ -40,9 +40,18 @@ assert_no_placeholders() {
 # asserting a hardcoded default. Empty output means cachedir capture is not
 # configured, which callers should treat as fatal for a restore test.
 agent_pod_cache_dir() {
+    # Emit one arg per line rather than rendering the whole array. The array
+    # form prints as "[--a --pod-cache-dir=/x --b]", which is space-separated
+    # rather than comma-separated, so splitting on commas does nothing and a
+    # greedy match runs past the value into the following arguments -- for
+    # "[--pod-cache-dir=/var/lib/x --other]" it would yield "/var/lib/x --other]".
     kubectl get ds nvsnap-agent -n nvsnap-system \
-        -o jsonpath='{.spec.template.spec.containers[0].args}' 2>/dev/null \
-        | tr ',' '\n' | sed -n 's|.*--pod-cache-dir=\([^"]*\).*|\1|p' | head -1
+        -o jsonpath='{range .spec.template.spec.containers[0].args[*]}{@}{"\n"}{end}' 2>/dev/null \
+        | while IFS= read -r arg; do
+              case "$arg" in
+                  --pod-cache-dir=*) printf '%s\n' "${arg#--pod-cache-dir=}"; break ;;
+              esac
+          done
 }
 
 # assert_restore_admitted <pod> <namespace> <container> <pod-cache-dir>
