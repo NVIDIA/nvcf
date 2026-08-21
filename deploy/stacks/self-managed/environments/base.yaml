@@ -480,3 +480,73 @@ grpcproxy:
   # on a control-plane-local API service address.
   nvcfGrpcServiceURL: ""
   workerConnectBaseURL: ""
+
+# =============================================================================
+# Control-plane high availability
+# =============================================================================
+# Resilience settings are exposed as a single highAvailability: block in
+# self-managed Helmfile environment values.
+# deploy/stacks/self-managed/global.yaml.gotmpl maps highAvailability.* onto
+# chart values (replicaCount, affinity, topology spread, PDB, update strategy).
+#
+# deploy/stacks/self-managed/
+# ├── environments/<env>.yaml     # highAvailability: configuration
+# └── global.yaml.gotmpl          # value mapping to charts
+#
+# Profile                          Behavior
+# production                       Full P0 defaults; requires ≥3 schedulable nodes
+# staging                          Same shape; soft anti-affinity for smaller pools
+# single-node                      Single replicas; hard anti-affinity disabled (local / CI / BDD)
+#
+# In-scope charts MUST expose the required value hooks. The local BDD fixture
+# SHALL remain on single-node.
+# =============================================================================
+highAvailability:
+  enabled: false
+  profile: single-node           # production | staging | single-node
+
+  tier1:
+    replicaCount: 2
+    podAntiAffinity:
+      enabled: true
+      type: preferred
+    topologySpread:
+      enabled: true
+      maxSkew: 1
+      topologyKey: topology.kubernetes.io/zone
+      whenUnsatisfiable: ScheduleAnyway
+    podDisruptionBudget:
+      enabled: true
+      minAvailable: 1
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+
+  nats:
+    replicas: 3
+    jetstream:
+      replicaFactor: 2
+    podDisruptionBudget:
+      enabled: true
+      merge:
+        spec:
+          minAvailable: 2
+
+  openbao:
+    ha:
+      enabled: true
+      replicas: 3
+    injector:
+      replicas: 2
+
+  cassandra:
+    replicaCount: 3
+    # Multi-AZ (production two-site): NetworkTopologyStrategy with RF per DC;
+    # clients use LOCAL_QUORUM so reads/writes do not wait on the remote AZ.
+    # Single-DC: SimpleStrategy with RF=3 and QUORUM is fine.
+    replicationFactor: 3
+    replicationStrategy: NetworkTopologyStrategy
+    consistencyLevel: LOCAL_QUORUM
+    podDisruptionBudget:
+      enabled: true
+      minAvailable: 2
