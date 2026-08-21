@@ -894,8 +894,8 @@ func TestKillPreservesUnrelatedErrorRacingWithLocalDeadline(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected the unrelated Get error to surface")
 	}
-	if !strings.Contains(err.Error(), "forbidden") {
-		t.Errorf("expected the original cause (%v) to be preserved, got: %v", wantErr, err)
+	if !errors.Is(err, wantErr) {
+		t.Errorf("expected errors.Is to reach the original cause (%v), got: %v", wantErr, err)
 	}
 	if strings.Contains(err.Error(), "still terminating") {
 		t.Errorf("an unrelated error racing with the local deadline must not be misreported as terminating, got: %v", err)
