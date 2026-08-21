@@ -52,4 +52,49 @@ grep -q 'set $cc_hash_key "$request_method|$uri|$arg_versionId|$http_range"' "$T
 grep -q 'proxy_set_header X-NVCF-CC-Relayed "1"' "$TMP/on.yaml" || fail "relay hop must emit the one-hop marker"
 grep -q 'ngx.req.get_headers()\["X-NVCF-CC-Relayed"\]' "$TMP/on.yaml" || fail "cc-route.lua must reject an inbound relay marker (serve locally, prevents relay loops)"
 
+echo "7. enabled: the peer hop reuses connections"
+# Both halves are required. A keepalive pool with no `Connection ""` is dead
+# weight, because nginx then sends its default `Connection: close` and every
+# relayed request re-handshakes TLS. The header must be repeated inside
+# @cc_relay specifically: declaring any proxy_set_header in a location cancels
+# inheritance of the server-level set.
+[ "$(count 'keepalive [0-9]+;' "$TMP/on.yaml")" = 3 ] || fail "each cc_owner upstream needs a keepalive pool"
+awk '/location @cc_relay/,/^ *}$/' "$TMP/on.yaml" | grep -q 'proxy_set_header Connection ""' \
+  || fail '@cc_relay must repeat Connection "" or the keepalive pool is never used'
+
+echo "8. enabled: hot objects replicate locally after relayCacheMinUses"
+awk '/location @cc_relay/,/^ *}$/' "$TMP/on.yaml" | grep -q 'proxy_cache_min_uses 3' \
+  || fail "relay must cache locally after the configured use threshold"
+awk '/location @cc_relay/,/^ *}$/' "$TMP/on.yaml" | grep -q 'proxy_cache_key \$cc_hash_key' \
+  || fail "relay cache key must match the owner's identity, not the default key"
+
+echo "8b. relayCacheMinUses=0 restores strict single-copy relaying"
+helm template t "$CHART_DIR" --set consistentHashRouting.enabled=true --set replicaCount=3 \
+  --set consistentHashRouting.relayCacheMinUses=0 > "$TMP/on-nocache.yaml" 2>/dev/null
+awk '/location @cc_relay/,/^ *}$/' "$TMP/on-nocache.yaml" | grep -q 'proxy_cache off' \
+  || fail "relayCacheMinUses=0 must leave the relay a pure stream"
+if awk '/location @cc_relay/,/^ *}$/' "$TMP/on-nocache.yaml" | grep -q 'proxy_cache_min_uses'; then
+  fail "relayCacheMinUses=0 must not emit proxy_cache_min_uses"
+fi
+
+echo "9. relay cost is observable, and duration buckets outlast a whole transfer"
+# Without the route label a relayed request is indistinguishable from a local
+# hit, which is what made the relay's latency cost unmeasurable.
+grep -q '"cache_status", "http_status", "route"' "$TMP/on.yaml" \
+  || fail "request/throughput metrics must carry the route label"
+grep -q 'local route = "local"' "$TMP/on.yaml" || fail "route must default to local"
+grep -q 'route = "relayed"' "$TMP/on.yaml" || fail "relayed requests must be labelled"
+grep -q 'route = "peer"' "$TMP/on.yaml" || fail "requests served for a peer must be labelled"
+# The objects here are whole model files, so a 10s ceiling put a large share of
+# traffic in +Inf and histogram_quantile then reports the bucket edge, not a
+# latency.
+grep -q 'proxy_cache_request_duration_seconds' "$TMP/on.yaml" || fail "duration histogram missing"
+awk '/proxy_cache_request_duration_seconds/{print; exit}' "$TMP/on.yaml" | grep -q '600' \
+  || fail "duration buckets must extend past a full object transfer"
+
+echo "9b. route label renders even with routing disabled (no undeclared-variable read)"
+grep -q 'local route = "local"' "$TMP/off.yaml" || fail "route label must still render when routing is off"
+[ "$(count 'ngx.var.cc_owner' "$TMP/off.yaml")" = 0 ] \
+  || fail "must not read the routing variable when it is undeclared (OpenResty raises)"
+
 echo "PASS: all consistent-hash routing render assertions hold"
