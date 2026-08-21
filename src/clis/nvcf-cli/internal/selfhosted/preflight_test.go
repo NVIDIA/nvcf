@@ -408,7 +408,10 @@ func TestRunPreflightForRole_LocalOnly(t *testing.T) {
 func TestRunPreflightForRole_ControlPlaneAddsClusterCategory(t *testing.T) {
 	sink := &captureSink{}
 	cfg := PreflightConfig{Tools: []BinarySpec{passingToolSpec("kubectl", "1.30.0")}}
-	res := RunPreflightForRole(context.Background(), cfg, RoleControlPlane, RoleConfig{KubeContext: "admin@cp"}, sink)
+	// No StaleNamespaceProber and no ClusterValidator: the control-plane
+	// category is empty but the category itself still fires (CategoryCompleted
+	// is always emitted).
+	RunPreflightForRole(context.Background(), cfg, RoleControlPlane, RoleConfig{KubeContext: "admin@cp"}, sink)
 
 	seen := map[string]bool{}
 	for _, e := range sink.events {
@@ -417,14 +420,27 @@ func TestRunPreflightForRole_ControlPlaneAddsClusterCategory(t *testing.T) {
 		}
 	}
 	assert.True(t, seen["local-host-tools"], "expected local-host-tools category")
-	assert.True(t, seen["control-plane-cluster"], "expected control-plane-cluster category")
+	assert.True(t, seen["control-plane-cluster"], "expected control-plane-cluster category even with no checks configured")
+}
+
+func TestRunPreflightForRole_ControlPlaneWithValidatorAddsClusterValidatorCheck(t *testing.T) {
+	sink := &captureSink{}
+	cfg := PreflightConfig{Tools: []BinarySpec{passingToolSpec("kubectl", "1.30.0")}}
+	cv := func(_ context.Context, p ClusterValidatorParams) ClusterValidatorResult {
+		return ClusterValidatorResult{Passed: true}
+	}
+	res := RunPreflightForRole(context.Background(), cfg, RoleControlPlane, RoleConfig{
+		KubeContext:           "admin@cp",
+		ClusterValidator:      cv,
+		ClusterValidatorImage: "nvcf-validator:1.0",
+	}, sink)
 
 	var gotCheckIDs []string
 	for _, r := range res {
 		gotCheckIDs = append(gotCheckIDs, r.ID)
 	}
-	assert.Contains(t, gotCheckIDs, "gateway-api-crds")
-	assert.Contains(t, gotCheckIDs, "default-storageclass")
+	assert.Contains(t, gotCheckIDs, "cluster-validator",
+		"cluster-validator check must appear when ClusterValidator is configured for control-plane role")
 }
 
 func TestRunPreflightForRole_ComputePlaneWithoutSISURL(t *testing.T) {
