@@ -206,3 +206,49 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
         """
       Then the command exit code should be 0
       And the command output should contain "bdd-grpc-echo"
+
+    # The LLM scenario proves the serve path the @llm-gateway scenario
+    # only installs: an LLM-type function is routed through the
+    # llm-api-gateway and llm-request-router instead of the standard
+    # invocation path. The CLI derives the gateway host from the invoke
+    # URL (invocation.localhost -> llm.localhost) and rewrites the
+    # request body model to <functionId>/<model>, so the scenario only
+    # supplies the OpenAI-compatible path and the model name.
+    # Depends on the earlier control-plane install and NVCA
+    # registration scenarios in this feature run; not a standalone
+    # tag target.
+    @llm-function-type
+    Scenario: Operator creates, deploys, and invokes an LLM-type OpenAI-compatible sample function
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function create --name bdd-openai-compatible-sample --image nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/nvcf-openai-compatible-sample:1.0.0 --function-type LLM --inference-url /v1/chat/completions --inference-port 8000 --health-uri /health --health-port 8000 --health-timeout PT30S --llm-model 'name=openai-compatible-sample,uris=/v1/chat/completions|/v1/embeddings,routingMethod=round_robin'
+        """
+      Then the command exit code should be 0
+
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function deploy create --gpu H100 --instance-type NCP.GPU.H100_8x --backend ncp-local --regions us-west-1 --min-instances 1 --max-instances 1 --timeout 900
+        """
+      Then the command exit code should be 0
+
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml api-key generate --description bdd-openai-compatible-sample --for function --scopes invoke_function,list_functions,queue_details,list_functions_details
+        """
+      Then the command exit code should be 0
+
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke --inference-url /v1/chat/completions --model-name openai-compatible-sample --request-body '{"messages":[{"role":"user","content":"bdd-llm-echo"}]}' --timeout 120
+        """
+      Then the command exit code should be 0
+      And the command output should contain "chat.completion"
+
+      # The gateway must reject requests that carry no API key. curl
+      # reports only the status code so the assertion cannot match
+      # response-body noise.
+      When I run command:
+        """
+        curl -s -o /dev/null -w "%{http_code}" -X POST http://llm.localhost:8080/v1/chat/completions -H "Content-Type: application/json" -d '{"model":"unauthenticated/check","messages":[]}'
+        """
+      Then the command output should contain "401"
