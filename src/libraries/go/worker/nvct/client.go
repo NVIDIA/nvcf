@@ -100,12 +100,21 @@ func CreateClient(nvctFqdn string, nvctWorkerToken string, instanceId string, ta
 		zap.L().Info("no cached token found - using environment token")
 	}
 
+	nvctTokenProvider := auth.NewSettableTokenSource(oauth2.StaticTokenSource(nvctToken))
+
+	// Prefer a mounted projected ServiceAccount Token (PSAT) over the bootstrap token
+	// when running on a self-hosted cluster with worker identity enabled.
+	if mountedSrc, err := token.NewMountedJWTSource(); err == nil {
+		zap.L().Info("mounted JWT found; using projected ServiceAccount token as NVCT credential")
+		nvctTokenProvider.SetTokenSource(mountedSrc)
+	}
+
 	return &Client{
 		Client: workerClient,
 		regionalNvctClients: map[string]pb.WorkerClient{
 			nvctFqdn: workerClient,
 		},
-		NvctTokenProvider: auth.NewSettableTokenSource(oauth2.StaticTokenSource(nvctToken)),
+		NvctTokenProvider: nvctTokenProvider,
 		instanceId:        instanceId,
 		taskId:            taskId,
 		instanceType:      instanceType,
