@@ -481,6 +481,10 @@ func (m *k8sMaintainer) waitForICMSRequestGone(ctx context.Context, namespace, n
 	for {
 		getCtx, cancel := context.WithDeadline(ctx, deadline)
 		_, err := m.dc.Resource(icmsRequestGVR).Namespace(namespace).Get(getCtx, name, metav1.GetOptions{})
+		// Read getCtx.Err() before cancel(): cancel() makes every derived
+		// context report Canceled regardless of why it actually ended, so
+		// this is the only point where it still reflects the real cause.
+		localDeadlineExceeded := getCtx.Err() == context.DeadlineExceeded
 		cancel()
 		if err != nil {
 			if apierrors.IsNotFound(err) {
@@ -490,9 +494,15 @@ func (m *k8sMaintainer) waitForICMSRequestGone(ctx context.Context, namespace, n
 				// The caller's own context ended, not our synthetic deadline.
 				return false, ctx.Err()
 			}
-			if errors.Is(err, context.DeadlineExceeded) {
-				// Our per-Get deadline (== the overall deadline) fired mid-call:
-				// treat exactly like a timeout that elapsed between polls.
+			if localDeadlineExceeded {
+				// Our per-Get deadline (== the overall deadline) is what ended
+				// the call: treat exactly like a timeout that elapsed between
+				// polls. Checking getCtx.Err() rather than
+				// errors.Is(err, context.DeadlineExceeded) matters here: a
+				// client/transport-level timeout unrelated to getCtx can also
+				// produce a context.DeadlineExceeded-shaped error before our
+				// deadline is actually reached, and that must still surface
+				// as a real error, not a false "still terminating".
 				return true, nil
 			}
 			return false, err

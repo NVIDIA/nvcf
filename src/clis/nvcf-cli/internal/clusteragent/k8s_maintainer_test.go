@@ -802,10 +802,17 @@ func TestKillTimeoutShorterThanPollIntervalIsHonored(t *testing.T) {
 		return true, nil, nil
 	})
 
+	const timeout = 10 * time.Millisecond
+	// Generous scheduling tolerance so this doesn't flake under CI load, but
+	// still tight enough to prove the wait tracks --timeout rather than the
+	// 1-minute killDeletionPollInterval: prior to the fix this took the full
+	// poll interval to return.
+	const tolerance = 2 * time.Second
+
 	start := time.Now()
 	res, err := m.KillFunction(context.Background(), "fn-1", "v1", KillOptions{
 		BackendNS: testBackendNS,
-		Timeout:   10 * time.Millisecond,
+		Timeout:   timeout,
 	})
 	elapsed := time.Since(start)
 
@@ -815,8 +822,44 @@ func TestKillTimeoutShorterThanPollIntervalIsHonored(t *testing.T) {
 	if res.TerminatingCount != 1 {
 		t.Fatalf("TerminatingCount = %d, want 1", res.TerminatingCount)
 	}
-	if elapsed >= killDeletionPollInterval {
-		t.Errorf("elapsed = %s, want well under the %s poll interval: the wait must be bounded by --timeout, not the poll interval", elapsed, killDeletionPollInterval)
+	if elapsed >= timeout+tolerance {
+		t.Errorf("elapsed = %s, want close to the configured --timeout of %s (+%s tolerance): the wait must be bounded by --timeout, not the poll interval", elapsed, timeout, tolerance)
+	}
+}
+
+// TestKillClassifiesOnlyLocalDeadlineAsTerminating is a regression test: a
+// context.DeadlineExceeded-shaped error from the Get call must only be
+// treated as "still terminating" when it actually came from
+// waitForICMSRequestGone's own synthetic per-Get deadline. An unrelated
+// transport/client-level timeout that happens to produce the same error
+// shape, well before that deadline, must still surface as a real error
+// instead of being silently reported as a successful (if incomplete)
+// termination wait.
+func TestKillClassifiesOnlyLocalDeadlineAsTerminating(t *testing.T) {
+	cr := icmsRequestWithFinalizers(testRequestsNS, "r1", "fn-1", "v1", "nvca.finalizers.nvidia.io")
+	m, dc, _ := newFakeMaintainer([]runtime.Object{defaultBackend(), cr}, nil)
+	dc.PrependReactor("delete", "icmsrequests", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, nil
+	})
+	dc.PrependReactor("get", "icmsrequests", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if ga, ok := action.(k8stesting.GetAction); ok && ga.GetName() == "r1" {
+			// Simulate a spurious client/transport timeout unrelated to our
+			// own deadline: it arrives immediately, long before the
+			// generous Timeout below could have elapsed.
+			return true, nil, context.DeadlineExceeded
+		}
+		return false, nil, nil
+	})
+
+	_, err := m.KillFunction(context.Background(), "fn-1", "v1", KillOptions{
+		BackendNS: testBackendNS,
+		Timeout:   time.Hour,
+	})
+	if err == nil {
+		t.Fatal("expected the spurious Get error to surface as a real failure")
+	}
+	if strings.Contains(err.Error(), "still terminating") {
+		t.Errorf("a spurious transport timeout must not be misreported as the deletion deadline elapsing, got: %v", err)
 	}
 }
 
