@@ -37,11 +37,11 @@ Feature: Install local Helmfile observability for both planes
     # Configure NVCA to join the same cluster and enable its collector.
     And I copy the file "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" to "deploy/stacks/nvcf-compute-plane/environments/local-bdd-observability-all.yaml"
     And I update yaml file "deploy/stacks/nvcf-compute-plane/environments/local-bdd-observability-all.yaml" with keys:
-      | global.imagePullSecrets[0].name                               | nvcr-pull-secret                                                  |
-      | global.helm.sources.repository                                | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                              |
-      | global.image.repository                                       | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                              |
-      | global.nvcaOperator.selfManaged.otelCollector.imageRepository | nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/nvcf-otel-collector |
-      | observability.profile                                         | all                                                               |
+      | global.imagePullSecrets[0].name                       | nvcr-pull-secret                     |
+      | global.helm.sources.repository                        | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+      | global.image.repository                               | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+      | global.nvcaOperator.selfManaged.otelCollector.enabled | true                                 |
+      | observability.profile                                 | all                                  |
     And I copy the file "deploy/stacks/self-managed/secrets/secrets.yaml.template" to "deploy/stacks/self-managed/secrets/local-bdd-observability-all-secrets.yaml"
     And I substitute "REPLACE_WITH_BASE64_DOCKER_CREDENTIAL" in file "deploy/stacks/self-managed/secrets/local-bdd-observability-all-secrets.yaml" with base64 of "$oauthtoken:${NGC_API_KEY}"
     # Conflict precheck: the split topology claims host ports used by the
@@ -143,3 +143,10 @@ Feature: Install local Helmfile observability for both planes
       """
     Then the command exit code should be 0
     And the command output should contain "true"
+
+    When I run command:
+      """
+      bash -c 'set -eo pipefail; helm get values nvca-operator --namespace nvca-operator --kube-context k3d-ncp-local -o json | jq -r ".selfManaged.otelCollector.imageRepository"'
+      """
+    Then the command exit code should be 0
+    And the command output should contain "nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/nvcf-otel-collector"
