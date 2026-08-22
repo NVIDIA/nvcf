@@ -21,10 +21,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/sirupsen/logrus"
 	"go.opentelemetry.io/otel/attribute"
@@ -306,6 +308,11 @@ func (c *Capturer) Capture(ctx context.Context, req CaptureRequest) (checkpoints
 	} else {
 		log.Warn("could not read source /proc/<pid>/cmdline; restore will rely on the pod's command/args")
 	}
+	entryRuntimeDirs := readEntryRuntimeDirs(procRoot, entryPID)
+	if len(entryRuntimeDirs) > 0 {
+		log.WithField("runtime_dirs", len(entryRuntimeDirs)).
+			Debug("recorded source runtime directories for restore")
+	}
 
 	// Authoritative capture-method stamp so the restore side dispatches
 	// deterministically (no inferring from manifest shape — the
@@ -344,6 +351,7 @@ func (c *Capturer) Capture(ctx context.Context, req CaptureRequest) (checkpoints
 		TotalSizeBytes:     totalSize,
 		FileCount:          totalFiles,
 		EntryArgv:          entryArgv,
+		EntryRuntimeDirs:   entryRuntimeDirs,
 	}
 	if c.NodeName != "" {
 		manifest.CapturedOnNodes = []string{c.NodeName}
@@ -634,6 +642,83 @@ func (c *Capturer) logger() logrus.FieldLogger {
 // NUL-terminated args. Best-effort: returns nil on any read error or
 // empty cmdline (kernel threads, races), in which case the restore
 // webhook falls back to the restored pod's explicit command/args.
+// runtimeDirRoots are the ephemeral trees a container conventionally creates
+// socket/PID directories in before the workload starts. Deliberately narrow:
+// these hold runtime scaffolding rather than data, so recreating them empty is
+// cheap and cannot mask a missing volume. /tmp is excluded -- it is large,
+// noisy, and its contents are not addressable the way a socket path is.
+var runtimeDirRoots = []string{"/run", "/var/run"}
+
+const (
+	// Bounds on the recorded set. A runtime tree is normally a handful of
+	// shallow directories; anything beyond this is a workload using /run as
+	// scratch, which we do not try to reproduce.
+	maxRuntimeDirs  = 64
+	maxRuntimeDepth = 4
+)
+
+// readEntryRuntimeDirs records directories under the source container's
+// ephemeral runtime roots so restore can recreate them. See the
+// EntryRuntimeDirs doc comment for why argv cannot supply this.
+//
+// Best-effort throughout: a container with no /run, an unreadable tree, or a
+// racing teardown yields fewer entries rather than a failed capture.
+func readEntryRuntimeDirs(procRoot string, pid int) []checkpointstore.EntryRuntimeDir {
+	containerRoot := filepath.Join(procRoot, strconv.Itoa(pid), "root")
+	var out []checkpointstore.EntryRuntimeDir
+	seen := make(map[string]bool) // /var/run is usually a symlink to /run
+
+	for _, root := range runtimeDirRoots {
+		// Walk the /proc/<pid>/root path as-is. It must NOT be canonicalized:
+		// /proc/<pid>/root is a magic link, so EvalSymlinks (and realpath, and
+		// anything else that resolves it) rewrites it to the equivalent HOST
+		// path, which silently takes the walk outside the container's view and
+		// would record the node's own runtime tree as if it were the pod's.
+		//
+		// WalkDir does not follow symlinks, which also gives the /var/run ->
+		// /run dedupe for free: on a distro where /var/run is a symlink it is
+		// reported once as a non-directory and never descended into.
+		hostRoot := filepath.Join(containerRoot, root)
+		_ = filepath.WalkDir(hostRoot, func(p string, d fs.DirEntry, err error) error {
+			if err != nil || !d.IsDir() {
+				return nil //nolint:nilerr // unreadable subtree is not fatal
+			}
+			rel, rerr := filepath.Rel(hostRoot, p)
+			if rerr != nil || rel == "." {
+				return nil
+			}
+			if strings.Count(rel, string(filepath.Separator)) >= maxRuntimeDepth {
+				return fs.SkipDir
+			}
+			// Stop the whole walk at the cap rather than skipping entries: a
+			// workload can put a large tree under /run, and continuing to
+			// traverse it would add capture latency for entries we discard.
+			if len(out) >= maxRuntimeDirs {
+				return fs.SkipAll
+			}
+			inContainer := filepath.Join(root, rel)
+			if seen[inContainer] {
+				return nil
+			}
+			info, ierr := d.Info()
+			if ierr != nil {
+				return nil
+			}
+			rd := checkpointstore.EntryRuntimeDir{
+				Path: inContainer,
+				Mode: uint32(info.Mode().Perm()),
+			}
+			if st, ok := info.Sys().(*syscall.Stat_t); ok {
+				rd.UID, rd.GID = st.Uid, st.Gid
+			}
+			seen[inContainer] = true
+			out = append(out, rd)
+			return nil
+		})
+	}
+	return out
+}
+
 func readEntryArgv(procRoot string, pid int) []string {
 	data, err := os.ReadFile(filepath.Join(procRoot, strconv.Itoa(pid), "cmdline"))
 	if err != nil || len(data) == 0 {
