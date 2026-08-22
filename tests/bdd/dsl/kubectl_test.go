@@ -99,6 +99,68 @@ func TestKubernetesResourceAbsentRejectsNameOutput(t *testing.T) {
 	}
 }
 
+func TestKubernetesDeploymentRolloutCommandBuildsExplicitWait(t *testing.T) {
+	t.Setenv("BDD_KUBE_CONTEXT", "k3d-ncp-local")
+	got, err := KubernetesDeploymentRolloutCommand("nvca-operator", "nvca-operator", "${BDD_KUBE_CONTEXT}", "10m")
+	if err != nil {
+		t.Fatalf("build command: %v", err)
+	}
+	want := "kubectl rollout status deployment/nvca-operator -n nvca-operator --context k3d-ncp-local --timeout=10m"
+	if got != want {
+		t.Fatalf("command = %q, want %q", got, want)
+	}
+}
+
+func TestNVCFBackendAgentStatusCommandBuildsExplicitWait(t *testing.T) {
+	t.Setenv("BDD_BACKEND_NAME", "ncp-local-compute-1")
+	got, err := NVCFBackendAgentStatusCommand("${BDD_BACKEND_NAME}", "nvca-operator", "k3d-ncp-local-compute-1", "healthy", "10m")
+	if err != nil {
+		t.Fatalf("build command: %v", err)
+	}
+	want := "kubectl wait nvcfbackend ncp-local-compute-1 -n nvca-operator --context k3d-ncp-local-compute-1 --for=jsonpath={.status.agentStatus}=healthy --timeout=10m"
+	if got != want {
+		t.Fatalf("command = %q, want %q", got, want)
+	}
+}
+
+func TestKubernetesWaitCommandsRejectMissingInputs(t *testing.T) {
+	tests := []struct {
+		name        string
+		resource    string
+		namespace   string
+		kubeContext string
+		status      string
+		timeout     string
+	}{
+		{name: "resource", namespace: "nvca-operator", kubeContext: "k3d-ncp-local", status: "healthy", timeout: "10m"},
+		{name: "namespace", resource: "ncp-local", kubeContext: "k3d-ncp-local", status: "healthy", timeout: "10m"},
+		{name: "context", resource: "ncp-local", namespace: "nvca-operator", status: "healthy", timeout: "10m"},
+		{name: "status", resource: "ncp-local", namespace: "nvca-operator", kubeContext: "k3d-ncp-local", timeout: "10m"},
+		{name: "timeout", resource: "ncp-local", namespace: "nvca-operator", kubeContext: "k3d-ncp-local", status: "healthy"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := NVCFBackendAgentStatusCommand(test.resource, test.namespace, test.kubeContext, test.status, test.timeout); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+	if _, err := KubernetesDeploymentRolloutCommand("", "nvca-operator", "k3d-ncp-local", "10m"); err == nil {
+		t.Fatal("expected empty deployment name error")
+	}
+}
+
+func TestKubernetesWaitCommandsQuoteArguments(t *testing.T) {
+	got, err := NVCFBackendAgentStatusCommand("backend name", "operator namespace", "context name", "not ready", "10 m")
+	if err != nil {
+		t.Fatalf("build command: %v", err)
+	}
+	want := "kubectl wait nvcfbackend 'backend name' -n 'operator namespace' --context 'context name' --for=jsonpath={.status.agentStatus}='not ready' '--timeout=10 m'"
+	if got != want {
+		t.Fatalf("command = %q, want %q", got, want)
+	}
+}
+
 func TestKubectlApplyCommandTargetsExplicitContext(t *testing.T) {
 	got, err := KubectlApplyCommand("/tmp/bdd manifests/secret.yaml", "k3d-ncp-local-compute-1")
 	if err != nil {

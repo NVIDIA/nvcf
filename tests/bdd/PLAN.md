@@ -142,6 +142,8 @@ refactor in every consumer; that is a feature.
 | `Then these Helm releases should be deployed using context {string}:` (table) | Requires `name` and `namespace` headers, with an optional `revision` header. Runs one explicit-context, all-namespaces `helm list` and asserts that every listed release has status `deployed`; non-empty revision cells are also matched. |
 | `Then these Kubernetes resources should exist in namespace {string} using context {string}:` (table) | Requires `kind` and `name` headers. Gets each named resource with the explicit namespace and context, and reports the row whose resource is missing. |
 | `Then these Kubernetes resources should not exist in namespace {string} using context {string}:` (table) | Requires `kind` and `name` headers. Gets each named resource with `--ignore-not-found` and requires empty name output, so absence does not depend on human-readable error text. |
+| `Then deployment {string} in namespace {string} using context {string} should complete rollout within {string}` | Runs `kubectl rollout status` for the named deployment with the explicit namespace, context, and timeout. Failure messages name the deployment without printing command output. |
+| `Then NVCFBackend {string} in namespace {string} using context {string} should report agent status {string} within {string}` | Waits for the named backend's `status.agentStatus` to equal the visible value using the explicit namespace, context, and timeout. Failure messages name the backend without printing resource output. |
 
 #### YAML comparison semantics
 
@@ -261,8 +263,8 @@ Going away in `tests/bdd`:
   `InstallNvcaOperator`). Replaced by `When I run command "make ..."`.
 - The Helm release readback methods (`HelmReleaseDeployed`,
   `NVCAOperatorReady`, `NVCAAgentReady`). Release deployment checks use the
-  table-driven Helm assertion; readiness remains explicit through
-  `kubectl rollout status` / `kubectl wait` in Gherkin.
+  table-driven Helm assertion. NVCA readiness uses explicit-context deployment
+  rollout and NVCFBackend agent-status assertion steps.
 - The `harness.CLIHarness` interface and its five domain methods
   (`SelfHostedUp`, `SelfHostedInstallControlPlane`,
   `SelfHostedComputePlaneRegister`, `SelfHostedComputePlaneInstall`,
