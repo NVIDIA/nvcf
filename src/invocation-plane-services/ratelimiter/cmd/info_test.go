@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	golibversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
@@ -41,7 +42,7 @@ func TestNewHealthServeMux_Info(t *testing.T) {
 		golibversion.GitHash = ""
 	})
 
-	mux := newHealthServeMux(nil)
+	mux := newHealthServeMux(nil, &atomic.Bool{})
 	require.NotNil(t, mux)
 
 	w := httptest.NewRecorder()
@@ -59,7 +60,7 @@ func TestNewHealthServeMux_Info(t *testing.T) {
 }
 
 func TestNewHealthServeMux_Info_RejectsNonGET(t *testing.T) {
-	mux := newHealthServeMux(nil)
+	mux := newHealthServeMux(nil, &atomic.Bool{})
 	require.NotNil(t, mux)
 
 	for _, method := range []string{
