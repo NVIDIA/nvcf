@@ -90,7 +90,9 @@ helmDefaults:
 {{- $nvcaOp := dig "nvcaOperator" dict .Values.global }}
 {{- $selfManaged := dig "selfManaged" dict $nvcaOp }}
 {{- $otelCollector := dig "otelCollector" dict $selfManaged }}
-{{- $otelCollectorEnabled := dig "enabled" $computeObservabilityEnabled $otelCollector }}
+{{- $otelCollectorEnabled := dig "enabled" false $otelCollector }}
+{{- $defaultOTelCollectorImageRepository := printf "%s/%s/nvcf-otel-collector" .Values.global.image.registry .Values.global.image.repository }}
+{{- $otelCollectorImageRepository := dig "imageRepository" $defaultOTelCollectorImageRepository $otelCollector }}
 
 {{- $featureGateValues := dig "featureGateValues" list $selfManaged }}
 {{- $kaiSchedulerEnabled := dig "addons" "kaiScheduler" "enabled" false .Values }}
@@ -224,9 +226,7 @@ releases:
                 "dynamoOperatorEnabled" $dynamoOperatorEnabled) | nindent 10 }}
           otelCollector:
             enabled: {{ $otelCollectorEnabled }}
-            {{- with dig "imageRepository" "" $otelCollector }}
-            imageRepository: {{ . | quote }}
-            {{- end }}
+            imageRepository: {{ $otelCollectorImageRepository | quote }}
             {{- with dig "imageTag" "" $otelCollector }}
             imageTag: {{ . | quote }}
             {{- end }}

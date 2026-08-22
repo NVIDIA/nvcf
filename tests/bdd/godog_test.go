@@ -627,7 +627,7 @@ func TestObservabilityComputeFeatureFileWiresToSteps(t *testing.T) {
 		serviceMonitorCommand:       {ExitCode: 0},
 		podMonitorCommand:           {ExitCode: 0},
 		absentServiceMonitorCommand: {ExitCode: 0},
-		collectorValuesCommand:      {ExitCode: 0, Stdout: "selfManaged:\n  otelCollector:\n    enabled: true\n"},
+		collectorValuesCommand:      {ExitCode: 0, Stdout: "selfManaged:\n  otelCollector:\n    enabled: true\n    imageRepository: nvcr.io/test-org/test-team/nvcf-otel-collector\n"},
 		"helm list --all-namespaces --kube-context k3d-ncp-local-compute-1 -o json": {
 			ExitCode: 0,
 			Stdout:   observabilityComputeHelmListJSON(),
@@ -699,7 +699,7 @@ func TestObservabilityComputeFeatureFileWiresToSteps(t *testing.T) {
 	}
 	computeEnvironmentPath := filepath.Join(suite.Config.RepoRoot, "deploy", "stacks", "nvcf-compute-plane", "environments", "local-bdd-observability-compute.yaml")
 	for key, want := range map[string]string{
-		"global.nvcaOperator.selfManaged.otelCollector.imageRepository": "nvcr.io/test-org/test-team/nvcf-otel-collector",
+		"global.nvcaOperator.selfManaged.otelCollector.enabled": "true",
 	} {
 		got, found, err := dsl.ReadYAMLKey(computeEnvironmentPath, key)
 		if err != nil {
@@ -727,12 +727,12 @@ func observabilityComputeHelmListJSON() string {
 // local context and verifies that one shared stack serves both monitor sets.
 func TestObservabilityAllFeatureFileWiresToSteps(t *testing.T) {
 	const (
-		registryLoginCommand    = "helm registry login nvcr.io --username '$oauthtoken' --password-stdin"
-		serviceMonitorCommand   = "kubectl get servicemonitor/nvcf-default-monitors-state-metrics --namespace monitoring --context k3d-ncp-local -o name"
-		podMonitorCommand       = "kubectl get podmonitor/nvcf-default-monitors-worker --namespace monitoring --context k3d-ncp-local -o name"
-		collectorValuesCommand  = "helm get values nvca-operator --namespace nvca-operator --kube-context k3d-ncp-local -o yaml"
-		collectorYAMLCommand    = "kubectl get opentelemetrycollector/nvcf-observability --namespace monitoring --context k3d-ncp-local -o yaml"
-		serviceKeyCommand       = `bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" |` +
+		registryLoginCommand   = "helm registry login nvcr.io --username '$oauthtoken' --password-stdin"
+		serviceMonitorCommand  = "kubectl get servicemonitor/nvcf-default-monitors-state-metrics --namespace monitoring --context k3d-ncp-local -o name"
+		podMonitorCommand      = "kubectl get podmonitor/nvcf-default-monitors-worker --namespace monitoring --context k3d-ncp-local -o name"
+		collectorValuesCommand = "helm get values nvca-operator --namespace nvca-operator --kube-context k3d-ncp-local -o yaml"
+		collectorYAMLCommand   = "kubectl get opentelemetrycollector/nvcf-observability --namespace monitoring --context k3d-ncp-local -o yaml"
+		serviceKeyCommand      = `bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" |` +
 			` kubectl --context k3d-ncp-local create secret generic ngc-service-api-key` +
 			` --namespace nvca-system --from-file=ngc-service-api-key=/dev/stdin --dry-run=client -o yaml |` +
 			` kubectl --context k3d-ncp-local apply -f -'`
@@ -748,7 +748,7 @@ func TestObservabilityAllFeatureFileWiresToSteps(t *testing.T) {
 		"k3d cluster get ncp-local-cp": {ExitCode: 1},
 		serviceMonitorCommand:          {ExitCode: 0},
 		podMonitorCommand:              {ExitCode: 0},
-		collectorValuesCommand:         {ExitCode: 0, Stdout: "selfManaged:\n  otelCollector:\n    enabled: true\n"},
+		collectorValuesCommand:         {ExitCode: 0, Stdout: "selfManaged:\n  otelCollector:\n    enabled: true\n    imageRepository: nvcr.io/test-org/test-team/nvcf-otel-collector\n"},
 		serviceKeyCommand:              {ExitCode: 0},
 		restartNVCACommand:             {ExitCode: 0},
 		"helm list --all-namespaces --kube-context k3d-ncp-local -o json": {
@@ -832,7 +832,7 @@ func TestObservabilityAllFeatureFileWiresToSteps(t *testing.T) {
 		want  string
 	}{
 		{stack: "self-managed", key: "functionAutoscaler.image.tag", want: "1.18.10"},
-		{stack: "nvcf-compute-plane", key: "global.nvcaOperator.selfManaged.otelCollector.imageRepository", want: "nvcr.io/test-org/test-team/nvcf-otel-collector"},
+		{stack: "nvcf-compute-plane", key: "global.nvcaOperator.selfManaged.otelCollector.enabled", want: "true"},
 	}
 	for _, assertion := range assertions {
 		environmentPath := filepath.Join(suite.Config.RepoRoot, "deploy", "stacks", assertion.stack, "environments", "local-bdd-observability-all.yaml")
