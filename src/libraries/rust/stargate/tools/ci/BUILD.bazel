@@ -4,6 +4,7 @@
 exports_files(
     [
         "image_entrypoint_mode_test.sh",
+        "test-oci-image-contains-path.sh",
     ],
     visibility = ["//visibility:public"],
 )
