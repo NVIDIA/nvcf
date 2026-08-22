@@ -63,6 +63,49 @@ static const char *state_name(CUprocessState s)
     }
 }
 
+/* ---- multi-pid batching --------------------------------------------------
+ *
+ * The CRIU plugin drives this one pid per exec, so an N-rank job means N
+ * separate processes with N driver attaches and, more importantly, N gaps
+ * between them. On a multi-GPU job those gaps are where collective traffic
+ * resumes between one rank being locked and the next, which is the shape of
+ * the documented "hangs on 2nd rank (lock timeout)" failure.
+ *
+ * Accepting several pids in one invocation removes the gaps and lets the
+ * ordering be stated explicitly (see the "save" action). A single --pid still
+ * behaves exactly as before, so the plugin's calls are unaffected.
+ */
+#define MAX_PIDS 512
+static int g_pids[MAX_PIDS];
+static unsigned int g_pid_count;
+
+static int add_pids(const char *spec)
+{
+    char *dup = strdup(spec);
+    if (!dup) {
+        fprintf(stderr, "error: out of memory\n");
+        return -1;
+    }
+    int rc = 0;
+    char *save = NULL;
+    for (char *tok = strtok_r(dup, ",", &save); tok; tok = strtok_r(NULL, ",", &save)) {
+        int pid = atoi(tok);
+        if (pid <= 0) {
+            fprintf(stderr, "error: invalid pid '%s'\n", tok);
+            rc = -1;
+            break;
+        }
+        if (g_pid_count >= MAX_PIDS) {
+            fprintf(stderr, "error: more than %d pids\n", MAX_PIDS);
+            rc = -1;
+            break;
+        }
+        g_pids[g_pid_count++] = pid;
+    }
+    free(dup);
+    return rc;
+}
+
 /* ---- GPU migration (--gpu-map) ------------------------------------------
  *
  * The driver identifies devices by UUID, not by index: an index is only
@@ -260,6 +303,38 @@ static int do_get_restore_tid(int pid)
     return 0;
 }
 
+/* save: lock EVERY pid, then checkpoint every pid, from this one process.
+ *
+ * The two-phase order is the point, not an implementation detail. Locking rank
+ * 0 while rank 1 is still running leaves rank 1 free to post a collective that
+ * rank 0 will never service, and rank 1's own lock then waits on an operation
+ * that cannot complete. Locking all ranks first makes that window empty.
+ *
+ * On any lock failure every already-locked pid is unlocked again, so a failed
+ * attempt leaves the job running rather than wedged half-locked.
+ */
+static int do_save_all(unsigned int timeout_ms)
+{
+    unsigned int locked = 0;
+    for (; locked < g_pid_count; locked++) {
+        if (do_lock(g_pids[locked], timeout_ms) != 0) {
+            fprintf(stderr, "save: lock failed on pid %d (%u/%u locked); rolling back\n",
+                    g_pids[locked], locked, g_pid_count);
+            for (unsigned int j = 0; j < locked; j++)
+                (void)do_unlock(g_pids[j]);
+            return 1;
+        }
+    }
+    for (unsigned int i = 0; i < g_pid_count; i++) {
+        if (do_checkpoint(g_pids[i]) != 0) {
+            fprintf(stderr, "save: checkpoint failed on pid %d (%u/%u checkpointed)\n",
+                    g_pids[i], i, g_pid_count);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* toggle: running -> (lock, checkpoint); checkpointed -> (restore, unlock) */
 static int do_toggle(int pid, unsigned int timeout_ms)
 {
@@ -288,10 +363,14 @@ static void usage(const char *p)
         "Operations:\n"
         "  --get-state       --pid <pid>\n"
         "  --action lock|checkpoint|restore|unlock|resume --pid <pid> [--timeout <ms>]\n"
+        "  --action save     --pid <pid> --pid <pid> ...  (lock all, then checkpoint all)\n"
         "  --toggle          --pid <pid>\n"
         "  --get-restore-tid --pid <pid>\n"
         "Options:\n"
-        "  --pid|-p <pid>        target pid\n"
+        "  --pid|-p <pid>        target pid; repeatable, or comma-separated.\n"
+        "                        Several pids are driven from this one process,\n"
+        "                        which is what 'save' needs to lock every rank\n"
+        "                        before any of them is checkpointed.\n"
         "  --timeout|-t <ms>     lock timeout in milliseconds (0 = no timeout)\n"
         "  --gpu-map <spec>      GPU migration on restore (driver r580+).\n"
         "                        <spec> = <old>:<new>[,<old>:<new>...]\n"
@@ -303,7 +382,6 @@ static void usage(const char *p)
 
 int main(int argc, char **argv)
 {
-    int pid = -1;
     unsigned int timeout_ms = 0;
     const char *action = NULL;
     const char *gpu_map = NULL;
@@ -324,7 +402,7 @@ int main(int argc, char **argv)
     while ((c = getopt_long(argc, argv, "a:p:t:m:sgrh", opts, NULL)) != -1) {
         switch (c) {
         case 'a': action = optarg; break;
-        case 'p': pid = atoi(optarg); break;
+        case 'p': if (add_pids(optarg) < 0) return 2; break;
         case 't': timeout_ms = (unsigned int)strtoul(optarg, NULL, 10); break;
         case 'm': gpu_map = optarg; break;
         case 's': get_state = 1; break;
@@ -335,7 +413,7 @@ int main(int argc, char **argv)
         }
     }
 
-    if (pid <= 0) {
+    if (g_pid_count == 0) {
         fprintf(stderr, "error: --pid <pid> is required\n");
         usage(argv[0]);
         return 2;
@@ -355,9 +433,24 @@ int main(int argc, char **argv)
     if (gpu_map && parse_gpu_map(gpu_map) < 0)
         return 2;
 
-    if (get_state)  return do_get_state(pid);
-    if (get_tid)    return do_get_restore_tid(pid);
-    if (toggle)     return do_toggle(pid, timeout_ms);
+    /* One pid: identical to before, including exit codes, so the CRIU plugin
+     * is unaffected. Several: apply in the given order and fail on the first
+     * error, except for "save" which owns its own ordering and rollback. */
+    if (get_state) {
+        for (unsigned int i = 0; i < g_pid_count; i++)
+            if (do_get_state(g_pids[i]) != 0) return 1;
+        return 0;
+    }
+    if (get_tid) {
+        for (unsigned int i = 0; i < g_pid_count; i++)
+            if (do_get_restore_tid(g_pids[i]) != 0) return 1;
+        return 0;
+    }
+    if (toggle) {
+        for (unsigned int i = 0; i < g_pid_count; i++)
+            if (do_toggle(g_pids[i], timeout_ms) != 0) return 1;
+        return 0;
+    }
 
     if (!action) {
         fprintf(stderr, "error: one of --action/--get-state/--toggle/--get-restore-tid required\n");
@@ -370,11 +463,19 @@ int main(int argc, char **argv)
     if (g_pairs_count && (!strcmp(action, "lock") || !strcmp(action, "checkpoint")))
         fprintf(stderr, "warning: --gpu-map has no effect on '%s'; it applies at restore\n", action);
 
-    if (!strcmp(action, "lock"))       return do_lock(pid, timeout_ms);
-    if (!strcmp(action, "checkpoint")) return do_checkpoint(pid);
-    if (!strcmp(action, "restore"))    return do_restore(pid);
-    if (!strcmp(action, "unlock"))     return do_unlock(pid);
-    if (!strcmp(action, "resume"))     return do_resume(pid);
+    if (!strcmp(action, "save"))       return do_save_all(timeout_ms);
+
+    for (unsigned int i = 0; i < g_pid_count; i++) {
+        int rc;
+        if      (!strcmp(action, "lock"))       rc = do_lock(g_pids[i], timeout_ms);
+        else if (!strcmp(action, "checkpoint")) rc = do_checkpoint(g_pids[i]);
+        else if (!strcmp(action, "restore"))    rc = do_restore(g_pids[i]);
+        else if (!strcmp(action, "unlock"))     rc = do_unlock(g_pids[i]);
+        else if (!strcmp(action, "resume"))     rc = do_resume(g_pids[i]);
+        else break;
+        if (rc) return rc;
+        if (i + 1 == g_pid_count) return 0;
+    }
 
     fprintf(stderr, "error: unknown action '%s'\n", action);
     usage(argv[0]);
