@@ -12,8 +12,19 @@
  *   --toggle          --pid <pid>
  *   --get-restore-tid --pid <pid>
  *
- * Single-GPU scope: the 12.x CUcheckpointRestoreArgs has no gpuPairs field, so
- * no GPU migration (that is a CUDA 13 / r580 feature for the multi-GPU phase).
+ * Plus one operation upstream's CLI does not expose:
+ *
+ *   --gpu-map <old>:<new>[,<old>:<new>...]
+ *
+ * GPU migration (driver r580+): restore a checkpoint onto different physical
+ * GPUs than it was captured on, by mapping each source device UUID to a target
+ * device UUID. This is what lets a restore be scheduled wherever there is
+ * capacity instead of being pinned to the GPU slot it was captured from.
+ * Applies to restore, resume, and the restore half of toggle; ignored (with a
+ * diagnostic) on lock/checkpoint, which have no such argument.
+ *
+ * Requires CUDA 13 headers: 12.x declares CUcheckpointRestoreArgs as an opaque
+ * reserved[8] and has no gpuPairs member to populate.
  *
  * Build (in an env with cuda.h and the driver's libcuda.so):
  *   gcc -O2 nvsnap-cuda-checkpoint.c -o nvsnap-cuda-checkpoint -lcuda
@@ -21,6 +32,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <getopt.h>
 #include <cuda.h>
 
@@ -51,6 +63,135 @@ static const char *state_name(CUprocessState s)
     }
 }
 
+/* ---- GPU migration (--gpu-map) ------------------------------------------
+ *
+ * The driver identifies devices by UUID, not by index: an index is only
+ * meaningful relative to one process's CUDA_VISIBLE_DEVICES on one node, and
+ * the whole point of migration is that the target node's enumeration differs.
+ * Indices are still accepted as a convenience for same-node testing and are
+ * resolved to UUIDs here, before they can be misread anywhere else.
+ */
+static CUcheckpointGpuPair *g_pairs;
+static unsigned int g_pairs_count;
+
+static int hex_nibble(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static int uuid_from_index(int idx, CUuuid *out)
+{
+    CUdevice dev;
+    CUresult r = cuDeviceGet(&dev, idx);
+    if (r != CUDA_SUCCESS) {
+        fprintf(stderr, "--gpu-map: no device at index %d: \"%s\"\n", idx, cu_str(r));
+        return -1;
+    }
+    r = cuDeviceGetUuid(out, dev);
+    if (r != CUDA_SUCCESS) {
+        fprintf(stderr, "--gpu-map: cannot read UUID of device %d: \"%s\"\n", idx, cu_str(r));
+        return -1;
+    }
+    return 0;
+}
+
+/* Accepts a decimal device index, or a UUID as 32 hex digits with an optional
+ * "GPU-" prefix and optional dashes -- the forms nvidia-smi and the k8s device
+ * plugin emit, so an operator can paste either without reformatting. */
+static int parse_gpu_id(const char *s, CUuuid *out)
+{
+    if (!s || !*s) {
+        fprintf(stderr, "--gpu-map: empty device id\n");
+        return -1;
+    }
+
+    const char *p = s;
+    int all_digits = 1;
+    for (const char *q = s; *q; q++) {
+        if (!isdigit((unsigned char)*q)) { all_digits = 0; break; }
+    }
+    if (all_digits)
+        return uuid_from_index(atoi(s), out);
+
+    if (!strncmp(p, "GPU-", 4) || !strncmp(p, "gpu-", 4))
+        p += 4;
+
+    int n = 0;
+    for (; *p && n < 16; p++) {
+        if (*p == '-') continue;
+        int hi = hex_nibble(*p);
+        int lo = (p[1] && p[1] != '-') ? hex_nibble(p[1]) : -1;
+        if (hi < 0 || lo < 0) {
+            fprintf(stderr, "--gpu-map: malformed device id '%s'\n", s);
+            return -1;
+        }
+        out->bytes[n++] = (char)((hi << 4) | lo);
+        p++;
+    }
+    if (n != 16) {
+        fprintf(stderr, "--gpu-map: device id '%s' is not 32 hex digits\n", s);
+        return -1;
+    }
+    return 0;
+}
+
+/* spec: "old:new[,old:new...]". Every GPU visible to the target process must
+ * appear, including ones it never touched -- the driver rejects a partial map
+ * rather than leaving unlisted devices alone, so a short map fails at restore
+ * with a considerably less obvious error than this one. */
+static int parse_gpu_map(const char *spec)
+{
+    unsigned int cap = 1;
+    for (const char *q = spec; *q; q++)
+        if (*q == ',') cap++;
+
+    g_pairs = calloc(cap, sizeof(*g_pairs));
+    if (!g_pairs) {
+        fprintf(stderr, "--gpu-map: out of memory\n");
+        return -1;
+    }
+
+    char *dup = strdup(spec);
+    if (!dup) {
+        fprintf(stderr, "--gpu-map: out of memory\n");
+        return -1;
+    }
+
+    int rc = 0;
+    char *save = NULL;
+    for (char *tok = strtok_r(dup, ",", &save); tok; tok = strtok_r(NULL, ",", &save)) {
+        char *colon = strchr(tok, ':');
+        if (!colon) {
+            fprintf(stderr, "--gpu-map: expected <old>:<new>, got '%s'\n", tok);
+            rc = -1;
+            break;
+        }
+        *colon = '\0';
+        if (parse_gpu_id(tok, &g_pairs[g_pairs_count].oldUuid) < 0 ||
+            parse_gpu_id(colon + 1, &g_pairs[g_pairs_count].newUuid) < 0) {
+            rc = -1;
+            break;
+        }
+        g_pairs_count++;
+    }
+    free(dup);
+    if (rc < 0)
+        return rc;
+
+    int visible = 0;
+    if (cuDeviceGetCount(&visible) == CUDA_SUCCESS && (unsigned int)visible != g_pairs_count) {
+        fprintf(stderr,
+                "--gpu-map: %u pair(s) given but %d GPU(s) are visible; every visible "
+                "GPU must be mapped (use i:i for the ones that do not move)\n",
+                g_pairs_count, visible);
+        return -1;
+    }
+    return 0;
+}
+
 static int do_lock(int pid, unsigned int timeout_ms)
 {
     CUcheckpointLockArgs a = {0};
@@ -69,6 +210,12 @@ static int do_checkpoint(int pid)
 static int do_restore(int pid)
 {
     CUcheckpointRestoreArgs a = {0};
+    /* Left zeroed when no map was given, which is the non-migrating restore
+     * the driver has always done -- the field is additive, not a mode switch. */
+    if (g_pairs_count) {
+        a.gpuPairs = g_pairs;
+        a.gpuPairsCount = g_pairs_count;
+    }
     CUresult r = cuCheckpointProcessRestore(pid, &a);
     return r == CUDA_SUCCESS ? 0 : err_action("restore", pid, r);
 }
@@ -146,6 +293,11 @@ static void usage(const char *p)
         "Options:\n"
         "  --pid|-p <pid>        target pid\n"
         "  --timeout|-t <ms>     lock timeout in milliseconds (0 = no timeout)\n"
+        "  --gpu-map <spec>      GPU migration on restore (driver r580+).\n"
+        "                        <spec> = <old>:<new>[,<old>:<new>...]\n"
+        "                        each side is a device index or a UUID\n"
+        "                        (32 hex digits, optional GPU- prefix/dashes).\n"
+        "                        Every visible GPU must appear; use i:i to pin.\n"
         "  --help|-h\n");
 }
 
@@ -154,12 +306,14 @@ int main(int argc, char **argv)
     int pid = -1;
     unsigned int timeout_ms = 0;
     const char *action = NULL;
+    const char *gpu_map = NULL;
     int get_state = 0, toggle = 0, get_tid = 0;
 
     static struct option opts[] = {
         {"action",         required_argument, 0, 'a'},
         {"pid",            required_argument, 0, 'p'},
         {"timeout",        required_argument, 0, 't'},
+        {"gpu-map",        required_argument, 0, 'm'},
         {"get-state",      no_argument,       0, 's'},
         {"toggle",         no_argument,       0, 'g'},
         {"get-restore-tid",no_argument,       0, 'r'},
@@ -167,11 +321,12 @@ int main(int argc, char **argv)
         {0,0,0,0}
     };
     int c;
-    while ((c = getopt_long(argc, argv, "a:p:t:sgrh", opts, NULL)) != -1) {
+    while ((c = getopt_long(argc, argv, "a:p:t:m:sgrh", opts, NULL)) != -1) {
         switch (c) {
         case 'a': action = optarg; break;
         case 'p': pid = atoi(optarg); break;
         case 't': timeout_ms = (unsigned int)strtoul(optarg, NULL, 10); break;
+        case 'm': gpu_map = optarg; break;
         case 's': get_state = 1; break;
         case 'g': toggle = 1; break;
         case 'r': get_tid = 1; break;
@@ -194,6 +349,12 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    /* Parsed after cuInit: index forms and the visible-GPU count both need the
+     * driver up. Rejecting a bad map here, before any state transition, keeps a
+     * typo from leaving the target process locked or half-restored. */
+    if (gpu_map && parse_gpu_map(gpu_map) < 0)
+        return 2;
+
     if (get_state)  return do_get_state(pid);
     if (get_tid)    return do_get_restore_tid(pid);
     if (toggle)     return do_toggle(pid, timeout_ms);
@@ -203,6 +364,12 @@ int main(int argc, char **argv)
         usage(argv[0]);
         return 2;
     }
+    /* Say so rather than silently ignoring it: a map on the capture half is
+     * almost always someone expecting migration to be chosen at checkpoint
+     * time, and finding out at restore is far more expensive. */
+    if (g_pairs_count && (!strcmp(action, "lock") || !strcmp(action, "checkpoint")))
+        fprintf(stderr, "warning: --gpu-map has no effect on '%s'; it applies at restore\n", action);
+
     if (!strcmp(action, "lock"))       return do_lock(pid, timeout_ms);
     if (!strcmp(action, "checkpoint")) return do_checkpoint(pid);
     if (!strcmp(action, "restore"))    return do_restore(pid);
