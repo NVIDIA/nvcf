@@ -57,6 +57,16 @@ type RootfsCaptureConfig struct {
 	// replays the env stamped into the manifest.
 	PodCacheEnvFile string
 
+	// AllowWholeRootfs permits capture to run with PodCacheDir empty, i.e.
+	// capturing the whole container rootfs instead of just the cache mount.
+	//
+	// Off by default, and the agent refuses to start capture without it,
+	// because the failure mode is silent: whole-rootfs looks like a working
+	// capture, and the difference only surfaces later as restores that
+	// behave unlike the ones that were benchmarked. Requiring an explicit
+	// opt-in makes running it a decision rather than an oversight.
+	AllowWholeRootfs bool
+
 	// CMNamespace is the K8s namespace ConfigMaps are written to so
 	// any node's webhook can resolve a hash. Default "nvsnap-system".
 	CMNamespace string
@@ -83,6 +93,19 @@ type RootfsCaptureConfig struct {
 func (a *Agent) startRootfsCapture(ctx context.Context, cfg RootfsCaptureConfig) (checkpointstore.Backend, error) {
 	if !cfg.Enabled {
 		return nil, nil
+	}
+	// Refuse whole-rootfs capture unless explicitly allowed. Capturing the
+	// entire container rootfs still "works" -- it produces a capture, restores
+	// succeed, and nothing looks wrong -- so a cluster that lost its cachedir
+	// setting would keep running and silently diverge from every workload and
+	// benchmark that assumes cachedir. Fail at startup, where an operator sees
+	// it, rather than at restore time, where it looks like a performance
+	// mystery.
+	if cfg.PodCacheDir == "" && !cfg.AllowWholeRootfs {
+		return nil, fmt.Errorf("rootfs capture is enabled without --pod-cache-dir: " +
+			"whole-rootfs capture is not supported for normal use. Set --pod-cache-dir " +
+			"(e.g. /opt/nvsnap) to capture the cache mount, or pass --allow-whole-rootfs " +
+			"to override deliberately")
 	}
 	if cfg.CacheDir == "" {
 		cfg.CacheDir = "/var/lib/nvsnap/cache"

@@ -20,7 +20,7 @@
 #                 --no-enable-prefix-caching
 #   Hardware    : 4x H100 (one node, TP=4)
 #
-# Multi-GPU → rootfs capture path per CLAUDE.md rule 20. No CRIU init
+# Multi-GPU → cachedir capture path per CLAUDE.md rule 20. No CRIU init
 # container ladder; just the workload + nvsnap.io/capture=true label.
 # The agent's rootfsonly.Watcher snapshots the overlay upperdir after
 # the readiness probe passes + 60s warmup.
@@ -33,10 +33,10 @@ metadata:
     app: bench-gpt-oss-120b
     nvsnap.io/bench: "pdf-matrix"
     nvsnap.io/bench-row: "llm-medium"
-    nvsnap.io/capture: "true"   # opt-in to rootfs capture (multi-GPU only)
+    nvsnap.io/capture: "true"   # opt-in to cachedir capture (multi-GPU only)
   annotations:
     nvsnap.io/desc: "PDF bench: openai/gpt-oss-120b TP=4 on vllm:v0.20.0"
-    nvsnap.io/path: "rootfs"
+    nvsnap.io/path: "cachedir"
 spec:
   tolerations:
     - key: "nvidia.com/gpu"
