@@ -669,6 +669,19 @@ func TestKubernetesResourceShouldContainRunsExplicitYAMLGet(t *testing.T) {
 	}
 }
 
+func TestDeploymentShouldCompleteRolloutRunsExplicitWait(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0}
+
+	if err := sc.deploymentShouldCompleteRollout(context.Background(), "nvca-operator", "nvca-operator", "k3d-ncp-local", "10m"); err != nil {
+		t.Fatalf("wait for deployment rollout: %v", err)
+	}
+	want := "kubectl rollout status deployment/nvca-operator -n nvca-operator --context k3d-ncp-local --timeout=10m"
+	if len(fake.runs) != 1 || fake.runs[0].command != want {
+		t.Fatalf("runs = %#v, want %q", fake.runs, want)
+	}
+}
+
 func TestKubernetesResourceShouldContainFailureDoesNotExposeResourceValues(t *testing.T) {
 	sc, fake := newScenarioContext(t)
 	fake.result = harness.Result{ExitCode: 0, Stdout: `data:
@@ -693,6 +706,55 @@ func TestKubernetesResourceShouldContainFailureDoesNotExposeResourceValues(t *te
 		if strings.Contains(err.Error(), sensitive) {
 			t.Fatalf("error %q exposes %q", err, sensitive)
 		}
+	}
+}
+
+func TestNVCFBackendShouldReportAgentStatusRunsExplicitWait(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0}
+
+	if err := sc.nvcfBackendShouldReportAgentStatus(context.Background(), "ncp-local", "nvca-operator", "k3d-ncp-local", "healthy", "10m"); err != nil {
+		t.Fatalf("wait for NVCFBackend status: %v", err)
+	}
+	want := "kubectl wait nvcfbackend ncp-local -n nvca-operator --context k3d-ncp-local --for=jsonpath={.status.agentStatus}=healthy --timeout=10m"
+	if len(fake.runs) != 1 || fake.runs[0].command != want {
+		t.Fatalf("runs = %#v, want %q", fake.runs, want)
+	}
+}
+
+func TestKubernetesReadinessFailuresNameTargetWithoutCommandOutput(t *testing.T) {
+	secretOutput := "registry-token-value"
+	for _, test := range []struct {
+		name string
+		run  func(*ScenarioContext) error
+		want string
+	}{
+		{
+			name: "deployment",
+			run: func(sc *ScenarioContext) error {
+				return sc.deploymentShouldCompleteRollout(context.Background(), "nvca-operator", "nvca-operator", "k3d-ncp-local", "10m")
+			},
+			want: "deployment \"nvca-operator\" did not complete rollout",
+		},
+		{
+			name: "backend",
+			run: func(sc *ScenarioContext) error {
+				return sc.nvcfBackendShouldReportAgentStatus(context.Background(), "ncp-local", "nvca-operator", "k3d-ncp-local", "healthy", "10m")
+			},
+			want: "NVCFBackend \"ncp-local\" did not report agent status \"healthy\"",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sc, fake := newScenarioContext(t)
+			fake.result = harness.Result{ExitCode: 1, Stdout: secretOutput, Stderr: secretOutput}
+			err := test.run(sc)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want target context", err)
+			}
+			if strings.Contains(err.Error(), secretOutput) {
+				t.Fatalf("error leaked command output: %v", err)
+			}
+		})
 	}
 }
 

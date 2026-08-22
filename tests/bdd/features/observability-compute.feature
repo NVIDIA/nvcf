@@ -129,10 +129,8 @@ Feature: Install local Helmfile observability with the compute profile
       | default-monitors         | monitoring    |
       | nvca-operator            | nvca-operator |
 
-    When I run command "kubectl rollout status deployment/nvca-operator -n nvca-operator --context k3d-ncp-local-compute-1 --timeout=10m"
-    Then the command exit code should be 0
-    When I run command "kubectl wait nvcfbackend ncp-local-compute-1 -n nvca-operator --context k3d-ncp-local-compute-1 --for=jsonpath={.status.agentStatus}=healthy --timeout=10m"
-    Then the command exit code should be 0
+    Then deployment "nvca-operator" in namespace "nvca-operator" using context "k3d-ncp-local-compute-1" should complete rollout within "10m"
+    Then NVCFBackend "ncp-local-compute-1" in namespace "nvca-operator" using context "k3d-ncp-local-compute-1" should report agent status "healthy" within "10m"
 
     Then Kubernetes resource "OpenTelemetryCollector/nvcf-observability" in namespace "monitoring" using context "k3d-ncp-local-compute-1" should contain:
       """

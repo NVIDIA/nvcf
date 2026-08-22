@@ -220,8 +220,7 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
         | name          | namespace     |
         | nvca-operator | nvca-operator |
 
-      When I run command "kubectl rollout status deployment/nvca-operator -n nvca-operator --context k3d-ncp-local-compute-1 --timeout=10m"
-      Then the command exit code should be 0
+      Then deployment "nvca-operator" in namespace "nvca-operator" using context "k3d-ncp-local-compute-1" should complete rollout within "10m"
 
       # The default NVCFBackend CR is created on the compute cluster
       # by the nvca-operator helm chart at install time (helm reports
@@ -229,8 +228,7 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
       # its own .status.agentStatus locally. The NVCFBackend CRD is
       # therefore only registered on k3d-ncp-local-compute-1, not on
       # k3d-ncp-local-cp. Wait on the compute cluster.
-      When I run command "kubectl wait nvcfbackend ncp-local-compute-1 -n nvca-operator --context k3d-ncp-local-compute-1 --for=jsonpath={.status.agentStatus}=healthy --timeout=10m"
-      Then the command exit code should be 0
+      Then NVCFBackend "ncp-local-compute-1" in namespace "nvca-operator" using context "k3d-ncp-local-compute-1" should report agent status "healthy" within "10m"
 
   Rule: Helmfile-installed multi-cluster NVCF can run workloads
 
