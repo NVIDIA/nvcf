@@ -6,14 +6,13 @@ large model and resource files. The first workload downloads an artifact set,
 and later workloads can mount the populated cache instead of downloading
 another copy.
 
-This page describes the Helm model cache behavior in NVCA 3.2.5.
+This page describes the Helm model cache behavior in NVCA 3.2.
 
 ## Before You Begin
 
 Model caching requires both of these conditions:
 
-- The function or task includes model or resource artifacts, and the control
-  plane requests caching for them.
+- The function or task includes model or resource artifacts.
 - The `CachingSupport` cluster feature is enabled. See
   [Caching Support](./configuration.md#caching-support).
 
@@ -66,7 +65,7 @@ NVCA uses the first matching backend in this order:
 | --- | --- | --- | --- |
 | 1 | `nvcf-sc-30` exists | NVMesh | Durable reuse across namespaces |
 | 2 | `nvcf-miniservice-sc` exists | Operator-provided shared filesystem | Durable reuse across namespaces |
-| 3 | `HelmSharedStorage` is enabled | NVCA-managed Samba | Durable reuse across namespaces |
+| 3 | `nvcf-sc` and the SMB CSI driver are available, and `HelmSharedStorage` is enabled | NVCA-managed Samba | Durable reuse across namespaces |
 | 4 | No shared backend is available | `emptyDir` | Pod-local caching only |
 
 NVCA does not create `nvcf-miniservice-sc`. If you provide this StorageClass,
@@ -85,9 +84,9 @@ NVCA adds one `model-data` volume to the Helm workload and mounts it at:
 - `/config/models`
 - `/config/resources`
 
-Each workload namespace receives its own read-only claim or attachment. The
-attachment mechanism depends on the backend, but the paths inside the workload
-do not change:
+For durable backends, each workload namespace receives its own read-only claim
+or attachment. The attachment mechanism depends on the backend, but the paths
+inside the workload do not change:
 
 - NVMesh readers use namespace-specific secondary volume handles derived from
   the same primary volume.
@@ -148,6 +147,53 @@ Inspect the writer, coordination, and durable storage resources:
 kubectl get jobs,leases,pvc -n nvca-modelcache-init
 ```
 
-For durable reuse, verify that later workloads with the same cache handle do not
-create another writer Job and that each workload receives a read-only
-attachment.
+For each workload namespace, list the cache backend and the namespace-local
+read-only PVC:
+
+```bash
+workload_namespace="<workload-namespace>"
+
+kubectl get storagerequests.nvca.nvcf.nvidia.io \
+  -n "$workload_namespace" \
+  -o custom-columns='NAME:.metadata.name,TYPE:.spec.type,PHASE:.status.phase,BACKEND:.spec.modelCache.backend,READ-ONLY-PVC:.status.modelCache.readOnlyPVCName'
+```
+
+For a `modelcache` row with a durable backend, confirm that the phase is `Ready`
+and that `READ-ONLY-PVC` contains a claim name. Verify that the claim is bound:
+
+```bash
+read_only_pvc="<read-only-pvc-name>"
+kubectl get pvc "$read_only_pvc" -n "$workload_namespace" -o wide
+```
+
+Inspect the workload's `model-data` volume. A durable attachment returns the
+claim name followed by `true`:
+
+```bash
+pod_name="<workload-pod-name>"
+
+kubectl get pod "$pod_name" -n "$workload_namespace" \
+  -o jsonpath='{.spec.volumes[?(@.name=="model-data")].persistentVolumeClaim.claimName}{"\t"}{.spec.volumes[?(@.name=="model-data")].persistentVolumeClaim.readOnly}{"\n"}'
+```
+
+Inspect the PersistentVolume (PV) bound to the claim when you need to confirm
+the backend-specific attachment:
+
+```bash
+persistent_volume="$(kubectl get pvc "$read_only_pvc" \
+  -n "$workload_namespace" -o jsonpath='{.spec.volumeName}')"
+
+kubectl get pv "$persistent_volume" -o yaml
+```
+
+The PV identifies the attachment type:
+
+- An NVMesh reader has a namespace-specific CSI volume handle derived from the
+  primary volume.
+- A Samba reader uses the `smb.csi.k8s.io` driver and points to the cache
+  handle's SMB share.
+- A shared-filesystem reader is provisioned through `nvcf-miniservice-sc`.
+
+Repeat these checks for every workload namespace. Later workloads with the same
+cache handle should receive their own read-only attachment without creating
+another writer Job.
