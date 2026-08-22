@@ -64,14 +64,16 @@ NVCA uses the first matching backend in this order:
 | Priority | Cluster condition | Backend | Reuse behavior |
 | --- | --- | --- | --- |
 | 1 | `nvcf-sc-30` exists | NVMesh | Durable reuse across namespaces |
-| 2 | `nvcf-miniservice-sc` exists | Operator-provided shared filesystem | Durable reuse across namespaces |
+| 2 | `nvcf-miniservice-sc` exists and supports `ReadOnlyMany` or `ReadWriteMany` | Operator-provided shared filesystem | Durable reuse across namespaces |
 | 3 | `nvcf-sc` and the SMB CSI driver are available, and `HelmSharedStorage` is enabled | NVCA-managed Samba | Durable reuse across namespaces |
 | 4 | No shared backend is available | `emptyDir` | Pod-local caching only |
 
 NVCA does not create `nvcf-miniservice-sc`. If you provide this StorageClass,
-separate claims must expose the same underlying cached data. A provisioner that
-creates an isolated directory, access point, or subvolume for every claim does
-not provide cross-namespace reuse through this backend.
+it must support `ReadOnlyMany` or `ReadWriteMany`, and separate claims must
+expose the same underlying cached data. NVCA prefers `ReadOnlyMany` for reader
+claims and uses `ReadWriteMany` as a fallback. A provisioner that creates an
+isolated directory, access point, or subvolume for every claim does not provide
+cross-namespace reuse through this backend.
 
 The Samba backend creates a separate Samba server and `nvcf-sc` backing volume
 for each cache handle. Readers mount the same SMB share with read-only
@@ -84,9 +86,9 @@ NVCA adds one `model-data` volume to the Helm workload and mounts it at:
 - `/config/models`
 - `/config/resources`
 
-For durable backends, each workload namespace receives its own read-only claim
-or attachment. The attachment mechanism depends on the backend, but the paths
-inside the workload do not change:
+For durable backends, each workload namespace receives its own reader claim or
+attachment. The workload mounts the cache read-only. The attachment mechanism
+depends on the backend, but the paths inside the workload do not change:
 
 - NVMesh readers use namespace-specific secondary volume handles derived from
   the same primary volume.
@@ -148,22 +150,22 @@ kubectl get jobs,leases,pvc -n nvca-modelcache-init
 ```
 
 For each workload namespace, list the cache backend and the namespace-local
-read-only PVC:
+reader PVC:
 
 ```bash
 workload_namespace="<workload-namespace>"
 
 kubectl get storagerequests.nvca.nvcf.nvidia.io \
   -n "$workload_namespace" \
-  -o custom-columns='NAME:.metadata.name,TYPE:.spec.type,PHASE:.status.phase,BACKEND:.spec.modelCache.backend,READ-ONLY-PVC:.status.modelCache.readOnlyPVCName'
+  -o custom-columns='NAME:.metadata.name,TYPE:.spec.type,PHASE:.status.phase,BACKEND:.spec.modelCache.backend,READER-PVC:.status.modelCache.readOnlyPVCName'
 ```
 
 For a `modelcache` row with a durable backend, confirm that the phase is `Ready`
-and that `READ-ONLY-PVC` contains a claim name. Verify that the claim is bound:
+and that `READER-PVC` contains a claim name. Verify that the claim is bound:
 
 ```bash
-read_only_pvc="<read-only-pvc-name>"
-kubectl get pvc "$read_only_pvc" -n "$workload_namespace" -o wide
+reader_pvc="<reader-pvc-name>"
+kubectl get pvc "$reader_pvc" -n "$workload_namespace" -o wide
 ```
 
 Inspect the workload's `model-data` volume. A durable attachment returns the
@@ -180,7 +182,7 @@ Inspect the PersistentVolume (PV) bound to the claim when you need to confirm
 the backend-specific attachment:
 
 ```bash
-persistent_volume="$(kubectl get pvc "$read_only_pvc" \
+persistent_volume="$(kubectl get pvc "$reader_pvc" \
   -n "$workload_namespace" -o jsonpath='{.spec.volumeName}')"
 
 kubectl get pv "$persistent_volume" -o yaml
