@@ -546,21 +546,25 @@ func TestSingleClusterHelmfileLLMPKIFeatureFileWiresToSteps(t *testing.T) {
 	if status != 0 {
 		t.Fatalf("godog suite status = %d\n%s", status, out.String())
 	}
-	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "install HELMFILE_ENV=local-bdd-pki") {
+	runs := suite.Runner.(*fakeRunner).runs
+	if !commandRanThatContains(runs, "install HELMFILE_ENV=local-bdd-pki") {
 		t.Fatal("PKI helmfile install make target was never invoked")
 	}
-	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "kubectl wait clusterissuer nvcf-openbao-pki") {
+	if !commandRanThatContainsAll(runs, "nvcf-compute-plane install", "HELMFILE_ENV=local-bdd-pki") {
+		t.Fatal("compute-plane install was never invoked with the PKI environment")
+	}
+	if !commandRanThatContains(runs, "kubectl wait clusterissuer nvcf-openbao-pki") {
 		t.Fatal("cluster issuer readiness wait was never invoked")
 	}
-	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "write-transport-trust-env.sh") {
+	if !commandRanThatContains(runs, "write-transport-trust-env.sh") {
 		t.Fatal("trust distribution script was never invoked")
 	}
-	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
+	if !commandRanThatContainsAll(runs,
 		"function create --name bdd-pki-openai-compatible-sample",
 		"--function-type LLM") {
 		t.Fatal("LLM sample function was not created with the LLM function type")
 	}
-	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "http://llm.localhost:8080/v1/chat/completions") {
+	if !commandRanThatContains(runs, "http://llm.localhost:8080/v1/chat/completions") {
 		t.Fatal("unauthenticated LLM gateway check was never invoked")
 	}
 }

@@ -50,12 +50,16 @@ kubectl port-forward -n "$OPENBAO_NAMESPACE" "svc/$OPENBAO_SERVICE" \
   "$LOCAL_PORT:8200" >/dev/null 2>&1 &
 pf_pid=$!
 tmp=""
-trap 'kill "$pf_pid" 2>/dev/null || true; [[ -n "$tmp" ]] && rm -f "$tmp"' EXIT
+# The token travels via a mode-600 curl config, never in argv.
+curl_config="$(mktemp "${TMPDIR:-/tmp}/openbao-curl.XXXXXX")"
+chmod 600 "$curl_config"
+printf 'header = "X-Vault-Token: %s"\n' "$root_token" >"$curl_config"
+trap 'kill "$pf_pid" 2>/dev/null || true; rm -f "$curl_config"; [[ -n "$tmp" ]] && rm -f "$tmp"' EXIT
 
 ca_pem=""
 for _ in $(seq 1 20); do
-  if ca_pem="$(curl -sSf "http://127.0.0.1:$LOCAL_PORT/v1/$ROOT_PKI_PATH/cert/ca" \
-      -H "X-Vault-Token: $root_token" 2>/dev/null \
+  if ca_pem="$(curl -sSf --config "$curl_config" \
+      "http://127.0.0.1:$LOCAL_PORT/v1/$ROOT_PKI_PATH/cert/ca" 2>/dev/null \
       | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["certificate"])')"; then
     break
   fi
