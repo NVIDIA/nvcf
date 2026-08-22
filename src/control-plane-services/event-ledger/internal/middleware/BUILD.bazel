@@ -6,6 +6,7 @@ go_library(
         "body_limit.go",
         "constants.go",
         "cors.go",
+        "dual_auth.go",
         "http_client.go",
         "jwt.go",
         "metrics.go",
@@ -47,6 +48,7 @@ alias(
 go_test(
     name = "middleware_test",
     srcs = [
+        "dual_auth_test.go",
         "jwt_test.go",
         "metrics_test.go",
         "policy_test.go",
@@ -63,7 +65,9 @@ go_test(
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/clients/pdp_types",
         "@com_github_prometheus_client_golang//prometheus/promhttp",
         "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
         "@com_github_uptrace_opentelemetry_go_extra_otelzap//:otelzap",
+        "@org_golang_google_protobuf//types/known/structpb",
         "@org_uber_go_zap//zaptest",
     ],
 )
