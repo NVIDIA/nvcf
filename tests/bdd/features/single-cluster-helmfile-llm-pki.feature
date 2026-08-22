@@ -25,10 +25,8 @@ Feature: Install a local single-cluster NVCF stack with PKI-secured LLM transpor
       # PKI render requirements: dnsNames must cover the router's
       # advertised hostname (a single replica advertises its plain
       # service DNS name), allowedDomains constrains the OpenBao
-      # signing role, and the migrations tag pins the image both the
-      # core migrations and the PKI provisioning hook run (the hook
-      # cannot see the openbao chart's default, so the environment
-      # must set it).
+      # signing role, and the provisioning hook needs the
+      # nvcf-openbao-migrations tag (no default propagates from env).
       And I update yaml file "deploy/stacks/self-managed/environments/local-bdd-pki.yaml" with keys:
         | global.imagePullSecrets[0].name | nvcr-pull-secret                          |
         | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}      |
@@ -36,7 +34,7 @@ Feature: Install a local single-cluster NVCF stack with PKI-secured LLM transpor
         | addons.llm.pki.enabled          | true                                      |
         | addons.llm.pki.dnsNames[0]      | llm-request-router.nvcf.svc.cluster.local |
         | addons.llm.pki.allowedDomains   | nvcf.svc.cluster.local                    |
-        | openbao.migrations.image.tag    | 0.16.2                                    |
+        | addons.llm.pki.image.tag        | 0.16.2                                    |
         | observability.profile           | disabled                                  |
       And I copy the file "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" to "deploy/stacks/nvcf-compute-plane/environments/local-bdd-pki.yaml"
       And I update yaml file "deploy/stacks/nvcf-compute-plane/environments/local-bdd-pki.yaml" with keys:
