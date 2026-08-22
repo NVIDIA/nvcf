@@ -167,6 +167,18 @@ func TestImageContainsPathUsesReachableManifests(t *testing.T) {
 			t.Fatal("a target removed by a later opaque-directory whiteout made the check pass")
 		}
 	})
+
+	t.Run("rejects target removed by a later root opaque whiteout", func(t *testing.T) {
+		layout := newLayoutBuilder(t)
+		lower := layout.addLayer(strings.TrimPrefix(target, "/"))
+		upper := layout.addLayer(".wh..wh..opq")
+		manifest := layout.addManifest(lower, upper)
+		layout.writeIndex(manifest)
+
+		if err := imageContainsPath(layout.root, target); err == nil {
+			t.Fatal("a target removed by a later root opaque whiteout made the check pass")
+		}
+	})
 }
 
 func TestImageContainsPathVerifiesDescriptors(t *testing.T) {
@@ -368,6 +380,9 @@ func whiteoutRemovesPath(entryPath, requiredPath string) bool {
 	directory, name := pathpkg.Split(entryPath)
 	directory = strings.TrimSuffix(directory, "/")
 	if name == ".wh..wh..opq" {
+		if directory == "" {
+			return requiredPath != ""
+		}
 		return requiredPath != directory && strings.HasPrefix(requiredPath, directory+"/")
 	}
 	if !strings.HasPrefix(name, ".wh.") {
