@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.nvidia.nvcf.service.scheduler;
+package com.nvidia.nvcf.service.function;
 
 import static com.nvidia.nvcf.util.TestConstants.TEST_DEPLOYMENT_ID;
 import static com.nvidia.nvcf.util.TestConstants.TEST_FUNCTION_ID;
@@ -37,7 +37,6 @@ import com.nvidia.nvcf.rest.account.TestAccountService;
 import com.nvidia.nvcf.rest.function.deployment.TestDeploymentService;
 import com.nvidia.nvcf.rest.queue.TestQueueService;
 import com.nvidia.nvcf.service.common.TestCommonService;
-import com.nvidia.nvcf.service.function.FunctionDeploymentContext;
 import com.nvidia.nvcf.util.MockEssServer;
 import com.nvidia.nvcf.util.MockIcmsServer;
 import java.util.List;
@@ -62,7 +61,7 @@ import tools.jackson.databind.json.JsonMapper;
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = "spring.profiles.active=test")
 @ContextConfiguration(initializers = IntegrationTestConfiguration.Initializer.class)
-class GracefulCleanDeploymentTaskTest {
+class GracefulDeploymentCleanupServiceTest {
 
     @Autowired
     private TestDeploymentService testService;
@@ -83,7 +82,7 @@ class GracefulCleanDeploymentTaskTest {
     private FunctionsDeploymentRepository deploymentRepository;
 
     @Autowired
-    private GracefulCleanDeploymentTask gracefulCleanDeploymentTask;
+    private GracefulDeploymentCleanupService gracefulDeploymentCleanupService;
 
     @Autowired
     private JsonMapper jsonMapper;
@@ -128,7 +127,7 @@ class GracefulCleanDeploymentTaskTest {
 
     @SneakyThrows
     @Test
-    void gracefullyDeletingDeploymentTestAssumingQueueDrained() {
+    void shouldCleanupInactiveDeploymentWhenQueueIsDrained() {
         // Create functions with ACTIVE status.
         var entity1 = testService.createTestFunctionEntity(TEST_FUNCTION_ID, TEST_VERSION_ID_1,
                                                            TEST_NCA_ID, TEST_FUNCTION_NAME,
@@ -156,8 +155,8 @@ class GracefulCleanDeploymentTaskTest {
         var deploymentContext1 = new FunctionDeploymentContext(deploymentEntity1.get(), List.of());
         var deploymentContext2 = new FunctionDeploymentContext(deploymentEntity2.get(), List.of());
 
-        gracefulCleanDeploymentTask.runUnchecked(entity1, deploymentContext1);
-        gracefulCleanDeploymentTask.runUnchecked(entity2, deploymentContext2);
+        gracefulDeploymentCleanupService.cleanup(entity1, deploymentContext1);
+        gracefulDeploymentCleanupService.cleanup(entity2, deploymentContext2);
 
         // Verify entry in the deployment table is deleted.
         deploymentEntity1 = deploymentRepository.getByKeyFunctionVersionId(TEST_VERSION_ID_1);
