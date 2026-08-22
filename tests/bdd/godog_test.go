@@ -322,6 +322,8 @@ func TestSingleClusterUpOneClickFeatureFileWiresToSteps(t *testing.T) {
 		"k3d cluster get ncp-local-cp": {ExitCode: 1},
 	}))
 	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
+	seedComputePlaneLocalBDDFixture(t, suite.Config.RepoRoot)
 
 	sc := steps.NewScenarioContext(suite)
 	featurePath := mustResolveFeaturePath(t, "single-cluster-up-oneclick.feature")
