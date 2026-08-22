@@ -354,14 +354,12 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
         | name          | namespace     |
         | nvca-operator | nvca-operator |
 
-      When I run command "kubectl rollout status deployment/nvca-operator -n nvca-operator --context ${EKS_COMPUTE_CONTEXT} --timeout=10m"
-      Then the command exit code should be 0
+      Then deployment "nvca-operator" in namespace "nvca-operator" using context "${EKS_COMPUTE_CONTEXT}" should complete rollout within "10m"
 
       # Wait for the NVCFBackend on the compute cluster to report the
       # agent healthy. The agent reaching ICMS healthy confirms the
       # cross-cluster Host-header + registration wiring works.
-      When I run command "kubectl wait nvcfbackend ${EKS_COMPUTE_CLUSTER_NAME} -n nvca-operator --context ${EKS_COMPUTE_CONTEXT} --for=jsonpath={.status.agentStatus}=healthy --timeout=10m"
-      Then the command exit code should be 0
+      Then NVCFBackend "${EKS_COMPUTE_CLUSTER_NAME}" in namespace "nvca-operator" using context "${EKS_COMPUTE_CONTEXT}" should report agent status "healthy" within "10m"
 
       # The pull secret is created only in nvca-operator; confirm the
       # operator propagated it to nvca-system. Asserting propagation here

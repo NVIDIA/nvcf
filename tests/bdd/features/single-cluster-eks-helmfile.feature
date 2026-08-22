@@ -277,13 +277,11 @@ Feature: Install a single-cluster NVCF stack on a pre-provisioned EKS cluster wi
         | name          | namespace     |
         | nvca-operator | nvca-operator |
 
-      When I run command "kubectl rollout status deployment/nvca-operator -n nvca-operator --context ${EKS_CONTEXT} --timeout=10m"
-      Then the command exit code should be 0
+      Then deployment "nvca-operator" in namespace "nvca-operator" using context "${EKS_CONTEXT}" should complete rollout within "10m"
 
       # With chart-native Host headers the agent dials the bare-ELB URLs
       # (which DNS-resolve) and sends the gateway-matching Host header, so
       # the former dig + hostAliases patch + nvca rollout restart is no
       # longer needed. The operator brings the agent up directly; wait for
       # the NVCFBackend to report the agent healthy.
-      When I run command "kubectl wait nvcfbackend ${EKS_CLUSTER_NAME} -n nvca-operator --context ${EKS_CONTEXT} --for=jsonpath={.status.agentStatus}=healthy --timeout=10m"
-      Then the command exit code should be 0
+      Then NVCFBackend "${EKS_CLUSTER_NAME}" in namespace "nvca-operator" using context "${EKS_CONTEXT}" should report agent status "healthy" within "10m"
