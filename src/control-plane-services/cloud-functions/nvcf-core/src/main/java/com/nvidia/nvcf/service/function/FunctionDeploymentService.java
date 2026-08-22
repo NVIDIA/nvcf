@@ -317,7 +317,7 @@ public class FunctionDeploymentService {
                                                                    function, deployment);
             } else {
                 // Only audit Function status update. The deployment will be deleted in the
-                // async GracefulCleanDeploymentTask and the corresponding audit log will be
+                // GracefulDeploymentCleanupService and the corresponding audit log will be
                 // created from there.
                 functionAuditService.auditFunctionUpdate(payloadBuilder, functionJsonBefore,
                                                          function);
@@ -448,37 +448,36 @@ public class FunctionDeploymentService {
     }
 
     public FunctionEntity transitionFunctionToActive(
-            @NonNull UUID functionId,
-            @NonNull UUID functionVersionId,
-            @NonNull UUID deploymentId) {
-        var optFunction = functionLookupService.lookupUsingFunctionIdAndVersionId(
-                functionId, functionVersionId);
-        var function =
-                optFunction.filter(
-                                func -> BUSY_STATUSES.contains(func.getFunctionStatus()))
-                        .orElseThrow(() -> {
-                            var mesg = format(MESG_FUNCTION_NOT_BUSY_TO_ACTIVATE, functionId,
-                                    functionVersionId);
-                            log.error(mesg);
-                            return new IllegalArgumentException(mesg);
-                        });
+            FunctionEntity function,
+            FunctionDeploymentEntity deployment) {
+        var functionId = function.getFunctionId();
+        var versionId = function.getFunctionVersionId();
+
+        if (!BUSY_STATUSES.contains(function.getFunctionStatus())) {
+            var mesg = format(MESG_FUNCTION_NOT_BUSY_TO_ACTIVATE, functionId, versionId);
+            log.error(mesg);
+            throw new IllegalArgumentException(mesg);
+        }
+
+        var deploymentId = deployment.getDeploymentId();
         var jsonBefore = jsonMapper.valueToTree(function);
 
         function.setFunctionStatus(ACTIVE);
         functionsRepository.insert(function);
 
-        var summary = SUMMARY_ACTIVATE_FUNCTION.formatted(functionId, functionVersionId);
+        var summary = SUMMARY_ACTIVATE_FUNCTION.formatted(functionId, versionId);
         functionAuditService.auditFunctionUpdate(summary, STATE_ACTIVATED, jsonBefore, function);
-        log.info(MESG_FUNCTION_DEPLOYMENT_OPERATION, functionId, functionVersionId,
+        log.info(MESG_FUNCTION_DEPLOYMENT_OPERATION, functionId, versionId,
                  deploymentId, "Activating");
         return function;
     }
 
     public FunctionEntity transitionDeployingFunctionToError(
-            @NonNull UUID functionId,
-            @NonNull UUID functionVersionId,
-            @NonNull UUID deploymentId) {
-        var function = getDeployingFunctionOrThrow(functionId, functionVersionId);
+            FunctionEntity function,
+            FunctionDeploymentEntity deployment) {
+        var functionId = function.getFunctionId();
+        var versionId = function.getFunctionVersionId();
+        var deploymentId = deployment.getDeploymentId();
         var jsonBefore = jsonMapper.valueToTree(function);
 
         // Once we set the function status to ERROR we'll no longer attempt to
@@ -487,89 +486,84 @@ public class FunctionDeploymentService {
         function.setFunctionStatus(FunctionStatus.ERROR);
         functionsRepository.insert(function);
 
-        var summary = SUMMARY_ERROR_FUNCTION.formatted(functionId, functionVersionId);
+        var summary = SUMMARY_ERROR_FUNCTION.formatted(functionId, versionId);
         functionAuditService.auditFunctionUpdate(summary, STATE_ERROR, jsonBefore, function);
-        log.info(MESG_FUNCTION_DEPLOYMENT_OPERATION, functionId, functionVersionId,
+        log.info(MESG_FUNCTION_DEPLOYMENT_OPERATION, functionId, versionId,
                  deploymentId, "Error");
         return function;
     }
 
     public FunctionEntity transitionFunctionToDegrading(
-            @NonNull UUID functionId,
-            @NonNull UUID functionVersionId,
-            @NonNull UUID deploymentId) {
-        var optFunction = functionLookupService.lookupUsingFunctionIdAndVersionId(
-                functionId, functionVersionId);
-        var function =
-                optFunction.filter(
-                                func -> BUSY_STATUSES.contains(func.getFunctionStatus()))
-                        .orElseThrow(() -> {
-                            var mesg = format(MESG_FUNCTION_NOT_BUSY_TO_DEGRADING, functionId,
-                                    functionVersionId);
-                            log.error(mesg);
-                            return new IllegalArgumentException(mesg);
-                        });
+            FunctionEntity function,
+            FunctionDeploymentEntity deployment) {
+        var functionId = function.getFunctionId();
+        var versionId = function.getFunctionVersionId();
+
+        if (!BUSY_STATUSES.contains(function.getFunctionStatus())) {
+            var mesg = format(MESG_FUNCTION_NOT_BUSY_TO_DEGRADING, functionId, versionId);
+            log.error(mesg);
+            throw new IllegalArgumentException(mesg);
+        }
+
+        var deploymentId = deployment.getDeploymentId();
         var jsonBefore = jsonMapper.valueToTree(function);
 
         function.setFunctionStatus(DEGRADING);
         functionsRepository.insert(function);
 
-        var summary = SUMMARY_DEGRADING_FUNCTION.formatted(functionId, functionVersionId);
+        var summary = SUMMARY_DEGRADING_FUNCTION.formatted(functionId, versionId);
         functionAuditService.auditFunctionUpdate(summary, STATE_DEGRADING, jsonBefore, function);
-        log.info(MESG_FUNCTION_DEPLOYMENT_OPERATION, functionId, functionVersionId,
+        log.info(MESG_FUNCTION_DEPLOYMENT_OPERATION, functionId, versionId,
                  deploymentId, "Degrading");
         return function;
     }
 
     public FunctionEntity transitionFunctionToDegraded(
-            @NonNull UUID functionId,
-            @NonNull UUID functionVersionId,
-            @NonNull UUID deploymentId) {
-        var optFunction = functionLookupService.lookupUsingFunctionIdAndVersionId(
-                functionId, functionVersionId);
-        var function =
-                optFunction.filter(
-                                func -> BUSY_STATUSES.contains(func.getFunctionStatus()))
-                        .orElseThrow(() -> {
-                            var mesg = format(MESG_FUNCTION_NOT_BUSY_TO_DEGRADED, functionId,
-                                    functionVersionId);
-                            log.error(mesg);
-                            return new IllegalArgumentException(mesg);
-                        });
+            FunctionEntity function,
+            FunctionDeploymentEntity deployment) {
+        var functionId = function.getFunctionId();
+        var versionId = function.getFunctionVersionId();
+
+        if (!BUSY_STATUSES.contains(function.getFunctionStatus())) {
+            var mesg = format(MESG_FUNCTION_NOT_BUSY_TO_DEGRADED, functionId, versionId);
+            log.error(mesg);
+            throw new IllegalArgumentException(mesg);
+        }
+
+        var deploymentId = deployment.getDeploymentId();
         var jsonBefore = jsonMapper.valueToTree(function);
 
         function.setFunctionStatus(DEGRADED);
         functionsRepository.insert(function);
 
-        var summary = SUMMARY_DEGRADED_FUNCTION.formatted(functionId, functionVersionId);
+        var summary = SUMMARY_DEGRADED_FUNCTION.formatted(functionId, versionId);
         functionAuditService.auditFunctionUpdate(summary, STATE_DEGRADED, jsonBefore, function);
-        log.info(MESG_FUNCTION_DEPLOYMENT_OPERATION, functionId, functionVersionId,
+        log.info(MESG_FUNCTION_DEPLOYMENT_OPERATION, functionId, versionId,
                  deploymentId, "Degraded");
         return function;
     }
 
     private FunctionEntity transitionFunctionToInactive(
-            @NonNull UUID functionId,
-            @NonNull UUID functionVersionId,
-            @NonNull UUID deploymentId) {
-        var optFunction = functionLookupService.lookupUsingFunctionIdAndVersionId(
-                functionId, functionVersionId);
-        var function =
-                optFunction.filter(func -> func.getFunctionStatus() == ERROR)
-                        .orElseThrow(() -> {
-                            var mesg = format(MESG_FUNCTION_CANNOT_INACTIVATE, functionId,
-                                              functionVersionId);
-                            log.error(mesg);
-                            return new IllegalArgumentException(mesg);
-                        });
+            FunctionEntity function,
+            FunctionDeploymentEntity deployment) {
+        var functionId = function.getFunctionId();
+        var versionId = function.getFunctionVersionId();
+
+        if (function.getFunctionStatus() != ERROR) {
+            var mesg = format(MESG_FUNCTION_CANNOT_INACTIVATE, functionId, versionId);
+            log.error(mesg);
+            throw new IllegalArgumentException(mesg);
+        }
+
+        var deploymentId = deployment.getDeploymentId();
         var jsonBefore = jsonMapper.valueToTree(function);
 
         function.setFunctionStatus(INACTIVE);
         functionsRepository.insert(function);
 
-        var summary = SUMMARY_INACTIVATE_FUNCTION.formatted(functionId, functionVersionId);
+        var summary = SUMMARY_INACTIVATE_FUNCTION.formatted(functionId, versionId);
         functionAuditService.auditFunctionUpdate(summary, STATE_INACTIVE, jsonBefore, function);
-        log.info(MESG_FUNCTION_DEPLOYMENT_OPERATION, functionId, functionVersionId,
+        log.info(MESG_FUNCTION_DEPLOYMENT_OPERATION, functionId, versionId,
                  deploymentId, "Inactivating");
         return function;
     }
@@ -588,7 +582,7 @@ public class FunctionDeploymentService {
                              " version '{}', deployment '{}'",
                      functionId, versionId, deployment.getDeploymentId());
             try {
-                transitionFunctionToInactive(functionId, versionId, deploymentId);
+                transitionFunctionToInactive(function, deployment);
 
                 deleteFunctionRequestQueue(versionId);
                 deploymentBatchWriter.deleteDeployment(function.getNcaId(), versionId,

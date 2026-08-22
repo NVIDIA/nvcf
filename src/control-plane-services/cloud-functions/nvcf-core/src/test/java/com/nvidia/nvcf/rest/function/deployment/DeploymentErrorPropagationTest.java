@@ -50,8 +50,8 @@ import com.nvidia.nvcf.rest.function.management.dto.FunctionStatusEnum;
 import com.nvidia.nvcf.rest.queue.TestQueueService;
 import com.nvidia.nvcf.service.common.TestCommonService;
 import com.nvidia.nvcf.service.function.FunctionDeploymentLookupService;
+import com.nvidia.nvcf.service.function.FunctionDeploymentReconciliationService;
 import com.nvidia.nvcf.service.function.FunctionLookupService;
-import com.nvidia.nvcf.service.scheduler.InstanceManagementTask;
 import com.nvidia.nvcf.util.MockEssServer;
 import com.nvidia.nvcf.util.MockIcmsServer;
 import com.nvidia.nvcf.util.MockIcmsServer.IcmsInstancesContext;
@@ -101,7 +101,7 @@ class DeploymentErrorPropagationTest {
     private FunctionDeploymentLookupService functionDeploymentLookupService;
 
     @Autowired
-    private InstanceManagementTask instanceManagementTask;
+    private FunctionDeploymentReconciliationService functionDeploymentReconciliationService;
 
     @Autowired
     private JsonMapper jsonMapper;
@@ -198,7 +198,8 @@ class DeploymentErrorPropagationTest {
         assertThat(function).isPresent();
         assertThat(deploymentContext).isPresent();
 
-        instanceManagementTask.runUnchecked(function.get(), deploymentContext.get());
+        functionDeploymentReconciliationService.reconcile(
+                function.get(), deploymentContext.get());
         assertWorkloadInstancesEndpointUsed();
 
         var dto = testService.getFunctionDeployment(TEST_NCA_ID, TEST_FUNCTION_ID,
@@ -230,7 +231,8 @@ class DeploymentErrorPropagationTest {
         assertThat(function).isPresent();
         assertThat(deploymentContext).isPresent();
 
-        instanceManagementTask.runUnchecked(function.get(), deploymentContext.get());
+        functionDeploymentReconciliationService.reconcile(
+                function.get(), deploymentContext.get());
         assertWorkloadInstancesEndpointUsed();
 
         var dto = testService.getFunctionDeployment(TEST_NCA_ID, TEST_FUNCTION_ID,
@@ -250,7 +252,8 @@ class DeploymentErrorPropagationTest {
         assertThat(function).isPresent();
         assertThat(deploymentContext2).isPresent();
 
-        instanceManagementTask.runUnchecked(function.get(), deploymentContext2.get());
+        functionDeploymentReconciliationService.reconcile(
+                function.get(), deploymentContext2.get());
         assertWorkloadInstancesEndpointUsed();
 
         dto = testService.getFunctionDeployment(TEST_NCA_ID, TEST_FUNCTION_ID,
@@ -270,7 +273,8 @@ class DeploymentErrorPropagationTest {
         assertThat(function).isPresent();
         assertThat(deploymentContext3).isPresent();
 
-        instanceManagementTask.runUnchecked(function.get(), deploymentContext3.get());
+        functionDeploymentReconciliationService.reconcile(
+                function.get(), deploymentContext3.get());
         assertWorkloadInstancesEndpointUsed();
 
         dto = testService.getFunctionDeployment(TEST_NCA_ID, TEST_FUNCTION_ID,

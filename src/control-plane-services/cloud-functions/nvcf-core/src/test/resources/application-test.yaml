@@ -226,15 +226,12 @@ nvcf:
   account:
     max-functions-allowed: 50
     max-tasks-allowed: 50
-  scheduled-tasks:
+  scheduler:
     enabled: false
-    lock-consistency: QUORUM
-    deployment-tasks:
+    lock:
+      consistency: QUORUM
+    function-deployments:
       fixed-delay: PT2S
-      graceful-clean-deployment-task:
-        enabled: false
-    clean-nats-streams-task:
-      enabled: false
   notary:
     jwt:
       issuer-uri: http://localhost:9097

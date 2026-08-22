@@ -14,27 +14,20 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.nvidia.nvcf.service.scheduler;
+package com.nvidia.nvcf.service.function;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.nvidia.nvcf.persistence.function.DeploymentBatchWriter;
 import com.nvidia.nvcf.persistence.function.entity.FunctionDeploymentEntity;
 import com.nvidia.nvcf.persistence.function.entity.FunctionEntity;
 import com.nvidia.nvcf.persistence.function.entity.FunctionStatus;
-import com.nvidia.nvcf.service.function.FunctionAuditService;
-import com.nvidia.nvcf.service.function.FunctionDeploymentContext;
-import com.nvidia.nvcf.service.function.FunctionDeploymentService;
 import com.nvidia.nvcf.service.instance.InstanceService;
 import com.nvidia.nvcf.service.worker.WorkerNatsService;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.cloud.context.config.annotation.RefreshScope;
 import org.springframework.stereotype.Service;
 
 @Slf4j
 @Service
-@RefreshScope
-public class GracefulCleanDeploymentTask {
+public class GracefulDeploymentCleanupService {
 
     private static final String MESG_FUNC_STATUS_NOT_INACTIVE =
             "Function id '{}, version '{}': Function is not inactive - No cleaning needed";
@@ -50,18 +43,13 @@ public class GracefulCleanDeploymentTask {
     private final FunctionDeploymentService functionDeploymentService;
     private final WorkerNatsService workerNatsService;
     private final FunctionAuditService functionAuditService;
-    private final boolean enabled;
 
-    public GracefulCleanDeploymentTask(
+    public GracefulDeploymentCleanupService(
             InstanceService instanceService,
-            @Value("${nvcf.scheduled-tasks.deployment-tasks.graceful-clean-deployment-task"
-                    + ".enabled:true}")
-            boolean enabled,
             DeploymentBatchWriter deploymentBatchWriter,
             FunctionDeploymentService functionDeploymentService,
             WorkerNatsService workerNatsService,
             FunctionAuditService functionAuditService) {
-        this.enabled = enabled;
         this.deploymentBatchWriter = deploymentBatchWriter;
         this.instanceService = instanceService;
         this.functionDeploymentService = functionDeploymentService;
@@ -69,23 +57,10 @@ public class GracefulCleanDeploymentTask {
         this.functionAuditService = functionAuditService;
     }
 
-    public FunctionEntity run(
-            FunctionEntity function,
-            FunctionDeploymentContext deploymentContext) {
-        if (!enabled) {
-            log.info("Task for gracefully cleaning the deployment is disabled");
-            return function;
-        }
-
-        return runUnchecked(function, deploymentContext);
-    }
-
-    @VisibleForTesting
-    FunctionEntity runUnchecked(
+    public FunctionEntity cleanup(
             FunctionEntity function,
             FunctionDeploymentContext deploymentContext) {
         var functionDeployment = deploymentContext.deployment();
-        log.info("Task for gracefully cleaning the deployment is enabled");
         var functionId = functionDeployment.getFunctionId();
         var versionId = functionDeployment.getKey().getFunctionVersionId();
 

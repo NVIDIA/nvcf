@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.nvidia.nvcf.service.scheduler;
+package com.nvidia.nvcf.service.function;
 
 import static com.nvidia.nvcf.rest.function.management.dto.FunctionStatusEnum.ACTIVE;
 import static com.nvidia.nvcf.rest.function.management.dto.FunctionStatusEnum.DEPLOYING;
@@ -49,6 +49,7 @@ import com.nvidia.nvcf.IntegrationTestConfiguration;
 import com.nvidia.nvcf.NvcfTestApp;
 import com.nvidia.nvcf.icms.allocator.IcmsAllocatorService;
 import com.nvidia.nvcf.icms.client.IcmsClient;
+import com.nvidia.nvcf.persistence.function.entity.FunctionEntity;
 import com.nvidia.nvcf.persistence.function.entity.FunctionStatus;
 import com.nvidia.nvcf.persistence.function.entity.GpuSpecificationEntity;
 import com.nvidia.nvcf.persistence.function.entity.GpuSpecificationKey;
@@ -103,7 +104,7 @@ import tools.jackson.databind.json.JsonMapper;
         properties = "spring.profiles.active=test")
 @ContextConfiguration(initializers = IntegrationTestConfiguration.Initializer.class)
 @ExtendWith(MockitoExtension.class)
-class InstanceManagementTaskTest {
+class FunctionDeploymentReconciliationServiceTest {
 
     @Autowired
     private TestDeploymentService testService;
@@ -136,9 +137,6 @@ class InstanceManagementTaskTest {
     private InstanceService instanceService;
 
     @Autowired
-    private InstanceManagementTaskHelper taskHelper;
-
-    @Autowired
     private JsonMapper jsonMapper;
 
     @Value("${nvcf.ess.base-url}")
@@ -153,7 +151,7 @@ class InstanceManagementTaskTest {
     @Value("${nvcf.registries.recognized.container.ngc.hostname}")
     private String ngcContainerRegistryUrl;
 
-    private InstanceManagementTask instanceManagementTask;
+    private FunctionDeploymentReconciliationService functionDeploymentReconciliationService;
 
     @BeforeAll
     void beforeAll() {
@@ -167,11 +165,27 @@ class InstanceManagementTaskTest {
 
     @BeforeEach
     void beforeEach() {
-        instanceManagementTask = new InstanceManagementTask(
+        functionDeploymentReconciliationService = new FunctionDeploymentReconciliationService(
                 icmsClient, functionDeploymentService, instanceService,
-                icmsAllocatorService, taskHelper);
+                icmsAllocatorService);
         // reset, not clearInvocations: stubbings must not leak between tests either
         Mockito.reset(icmsAllocatorService);
+    }
+
+    @Test
+    void shouldSkipReconciliationForCleanupStatuses() {
+        for (var status : List.of(FunctionStatus.INACTIVE, FunctionStatus.ERROR)) {
+            var function = Mockito.mock(FunctionEntity.class);
+            Mockito.when(function.getNcaId()).thenReturn(TEST_NCA_ID);
+            Mockito.when(function.getFunctionId()).thenReturn(TEST_FUNCTION_ID);
+            Mockito.when(function.getFunctionVersionId()).thenReturn(TEST_VERSION_ID_1);
+            Mockito.when(function.getFunctionStatus()).thenReturn(status);
+
+            var result = functionDeploymentReconciliationService.reconcile(
+                    function, Mockito.mock(FunctionDeploymentContext.class));
+
+            assertThat(result).isSameAs(function);
+        }
     }
 
     @AfterAll
@@ -307,7 +321,8 @@ class InstanceManagementTaskTest {
         assertThat(deploymentContext).isPresent();
 
         // act
-        instanceManagementTask.run(func.get(), deploymentContext.get());
+        functionDeploymentReconciliationService.reconcile(
+                func.get(), deploymentContext.get());
 
         // validate
         var resultFunction =
@@ -320,9 +335,9 @@ class InstanceManagementTaskTest {
     @Test
     void shouldUpdateRunningFunctionStatusWhenRemoteInstanceLookupFails() {
         var failingIcmsClient = Mockito.mock(IcmsClient.class);
-        var taskWithFailingRemoteCall = new InstanceManagementTask(
+        var serviceWithFailingRemoteCall = new FunctionDeploymentReconciliationService(
                 failingIcmsClient, functionDeploymentService, instanceService,
-                icmsAllocatorService, taskHelper);
+                icmsAllocatorService);
         var gpuSpec = GpuSpecificationEntity.builder()
                 .key(GpuSpecificationKey.builder()
                              .ncaId(TEST_NCA_ID)
@@ -350,7 +365,7 @@ class InstanceManagementTaskTest {
         assertThat(function).isPresent();
         assertThat(deploymentContext).isPresent();
 
-        taskWithFailingRemoteCall.runUnchecked(function.get(), deploymentContext.get());
+        serviceWithFailingRemoteCall.reconcile(function.get(), deploymentContext.get());
 
         var resultFunction =
                 functionLookupService.lookupUsingFunctionIdAndVersionId(TEST_FUNCTION_ID,
@@ -399,7 +414,8 @@ class InstanceManagementTaskTest {
         assertThat(function).isPresent();
         assertThat(deploymentContext).isPresent();
 
-        instanceManagementTask.runUnchecked(function.get(), deploymentContext.get());
+        functionDeploymentReconciliationService.reconcile(
+                function.get(), deploymentContext.get());
 
         // 8 required - 6 starting or running = 2, so allocation really was attempted and
         // really did fail; without this the assertion below would also hold if allocation
@@ -419,9 +435,9 @@ class InstanceManagementTaskTest {
     @Test
     void shouldTransitionDeployingFunctionToErrorWhenRemoteInstanceLookupFails() {
         var failingIcmsClient = Mockito.mock(IcmsClient.class);
-        var taskWithFailingRemoteCall = new InstanceManagementTask(
+        var serviceWithFailingRemoteCall = new FunctionDeploymentReconciliationService(
                 failingIcmsClient, functionDeploymentService, instanceService,
-                icmsAllocatorService, taskHelper);
+                icmsAllocatorService);
         var gpuSpec = GpuSpecificationEntity.builder()
                 .key(GpuSpecificationKey.builder()
                              .ncaId(TEST_NCA_ID)
@@ -449,7 +465,7 @@ class InstanceManagementTaskTest {
         assertThat(function).isPresent();
         assertThat(deploymentContext).isPresent();
 
-        taskWithFailingRemoteCall.runUnchecked(function.get(), deploymentContext.get());
+        serviceWithFailingRemoteCall.reconcile(function.get(), deploymentContext.get());
 
         var resultFunction =
                 functionLookupService.lookupUsingFunctionIdAndVersionId(TEST_FUNCTION_ID,
@@ -552,7 +568,8 @@ class InstanceManagementTaskTest {
         assertThat(deploymentContext).isPresent();
 
         // Enable async task and invoke it synchronously.
-        instanceManagementTask.runUnchecked(function.get(), deploymentContext.get());
+        functionDeploymentReconciliationService.reconcile(
+                function.get(), deploymentContext.get());
 
         var dto = testService.getFunctionDeployment(TestConstants.TEST_NCA_ID, TEST_FUNCTION_ID,
                                                     TEST_VERSION_ID_1);
@@ -621,7 +638,8 @@ class InstanceManagementTaskTest {
         assertThat(deploymentContext).isPresent();
 
         // Enable async task and invoke it synchronously.
-        instanceManagementTask.runUnchecked(function.get(), deploymentContext.get());
+        functionDeploymentReconciliationService.reconcile(
+                function.get(), deploymentContext.get());
 
         // Check the deployment.
         var dto = testService.getFunctionDeployment(TEST_NCA_ID, TEST_FUNCTION_ID,
@@ -658,7 +676,8 @@ class InstanceManagementTaskTest {
         assertThat(deploymentContextFirst).isPresent();
 
         // Re-enable async task and invoke it synchronously.
-        instanceManagementTask.runUnchecked(function.get(), deploymentContextFirst.get());
+        functionDeploymentReconciliationService.reconcile(
+                function.get(), deploymentContextFirst.get());
 
         // Check the deployment.
         dto = testService.getFunctionDeployment(TEST_NCA_ID, TEST_FUNCTION_ID,
@@ -694,7 +713,8 @@ class InstanceManagementTaskTest {
         assertThat(deploymentContextSecond).isPresent();
 
         // Re-enable async task and invoke it synchronously.
-        instanceManagementTask.runUnchecked(function.get(), deploymentContextSecond.get());
+        functionDeploymentReconciliationService.reconcile(
+                function.get(), deploymentContextSecond.get());
 
         // Check the deployment.
         dto = testService.getFunctionDeployment(TEST_NCA_ID, TEST_FUNCTION_ID,
@@ -785,7 +805,8 @@ class InstanceManagementTaskTest {
         assertThat(deploymentContext).isPresent();
 
         // Re-enable async task and invoke it synchronously.
-        instanceManagementTask.runUnchecked(function.get(), deploymentContext.get());
+        functionDeploymentReconciliationService.reconcile(
+                function.get(), deploymentContext.get());
 
         var deploymentId = deploymentContext.get().deployment().getDeploymentId();
         // If the same method was invoked twice, Mockito cannot find by argument correct method.

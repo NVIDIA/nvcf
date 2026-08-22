@@ -202,6 +202,7 @@ NVCF_CORE_TEST_DEPS = [
     "@nv_third_party_deps//:jakarta_annotation_jakarta_annotation_api",
     "@nv_third_party_deps//:jakarta_validation_jakarta_validation_api",
     "@nv_third_party_deps//:net_devh_grpc_server_spring_boot_starter",
+    "@nv_third_party_deps//:net_javacrumbs_shedlock_shedlock_core",
     "@nv_third_party_deps//:net_minidev_json_smart",
     "@nv_third_party_deps//:org_apache_commons_commons_lang3",
     "@nv_third_party_deps//:org_apache_logging_log4j_log4j_api",
