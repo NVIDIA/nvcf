@@ -37,14 +37,51 @@ type document struct {
 	Layers    json.RawMessage `json:"layers,omitempty"`
 }
 
+type layerPathState struct {
+	present      bool
+	removesLower bool
+}
+
 func TestStargateImageContainsRouter(t *testing.T) {
 	if *imageLayout == "" || *imagePath == "" {
 		t.Skip("Bazel supplies the assembled OCI image layout and required path")
 	}
 
-	if err := imageContainsPath(*imageLayout, *imagePath); err != nil {
+	if err := imageContainsPath(resolveRunfile(*imageLayout), *imagePath); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestResolveRunfile(t *testing.T) {
+	const (
+		workspace = "_main"
+		relative  = "src/libraries/rust/stargate/crates/stargate/image_pre_transitioned"
+	)
+
+	runfilesDir := t.TempDir()
+	t.Setenv("TEST_SRCDIR", runfilesDir)
+	t.Setenv("TEST_WORKSPACE", workspace)
+
+	want := filepath.Join(runfilesDir, workspace, relative)
+	if got := resolveRunfile(relative); got != want {
+		t.Fatalf("resolveRunfile(%q) = %q, want %q", relative, got, want)
+	}
+}
+
+func resolveRunfile(path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	if _, err := os.Stat(path); err == nil {
+		return path
+	}
+
+	runfilesDir := os.Getenv("TEST_SRCDIR")
+	workspace := os.Getenv("TEST_WORKSPACE")
+	if runfilesDir != "" && workspace != "" {
+		return filepath.Join(runfilesDir, workspace, path)
+	}
+	return path
 }
 
 func TestImageContainsPathUsesReachableManifests(t *testing.T) {
@@ -96,6 +133,81 @@ func TestImageContainsPathUsesReachableManifests(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+
+	t.Run("accepts path in a gzip-compressed layer", func(t *testing.T) {
+		layout := newLayoutBuilder(t)
+		manifest := layout.addManifest(layout.addGzipLayer(strings.TrimPrefix(target, "/")))
+		layout.writeIndex(manifest)
+
+		if err := imageContainsPath(layout.root, target); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("rejects target removed by a later file whiteout", func(t *testing.T) {
+		layout := newLayoutBuilder(t)
+		lower := layout.addLayer(strings.TrimPrefix(target, "/"))
+		upper := layout.addLayer("usr/local/bin/.wh.stargate-k8s-router")
+		manifest := layout.addManifest(lower, upper)
+		layout.writeIndex(manifest)
+
+		if err := imageContainsPath(layout.root, target); err == nil {
+			t.Fatal("a target removed by a later file whiteout made the check pass")
+		}
+	})
+
+	t.Run("rejects target removed by a later opaque-directory whiteout", func(t *testing.T) {
+		layout := newLayoutBuilder(t)
+		lower := layout.addLayer(strings.TrimPrefix(target, "/"))
+		upper := layout.addLayer("usr/local/bin/.wh..wh..opq")
+		manifest := layout.addManifest(lower, upper)
+		layout.writeIndex(manifest)
+
+		if err := imageContainsPath(layout.root, target); err == nil {
+			t.Fatal("a target removed by a later opaque-directory whiteout made the check pass")
+		}
+	})
+}
+
+func TestImageContainsPathVerifiesDescriptors(t *testing.T) {
+	const target = "/usr/local/bin/stargate-k8s-router"
+
+	t.Run("rejects tampered manifest blob", func(t *testing.T) {
+		layout := newLayoutBuilder(t)
+		manifest := layout.addManifest(layout.addLayer(strings.TrimPrefix(target, "/")))
+		layout.writeIndex(manifest)
+		layout.overwriteBlob(manifest, bytes.Repeat([]byte{' '}, manifest.Size))
+
+		err := imageContainsPath(layout.root, target)
+		if err == nil || !strings.Contains(err.Error(), "digest mismatch") {
+			t.Fatalf("tampered manifest error = %v, want digest mismatch", err)
+		}
+	})
+
+	t.Run("rejects tampered layer blob", func(t *testing.T) {
+		layout := newLayoutBuilder(t)
+		layer := layout.addLayer(strings.TrimPrefix(target, "/"))
+		manifest := layout.addManifest(layer)
+		layout.writeIndex(manifest)
+		layout.overwriteBlob(layer, bytes.Repeat([]byte{0}, layer.Size))
+
+		err := imageContainsPath(layout.root, target)
+		if err == nil || !strings.Contains(err.Error(), "digest mismatch") {
+			t.Fatalf("tampered layer error = %v, want digest mismatch", err)
+		}
+	})
+
+	t.Run("rejects descriptor size mismatch", func(t *testing.T) {
+		layout := newLayoutBuilder(t)
+		manifest := layout.addManifest(layout.addLayer(strings.TrimPrefix(target, "/")))
+		manifest.Size++
+		layout.writeIndex(manifest)
+
+		err := imageContainsPath(layout.root, target)
+		if err == nil || !strings.Contains(err.Error(), "size mismatch") {
+			t.Fatalf("descriptor size error = %v, want size mismatch", err)
+		}
+	})
 }
 
 func imageContainsPath(layout, requiredPath string) error {
@@ -128,7 +240,7 @@ func imageContainsPath(layout, requiredPath string) error {
 		}
 		visited[desc.Digest] = true
 
-		contents, err := readBlob(layout, desc.Digest)
+		contents, err := readBlob(layout, desc)
 		if err != nil {
 			return err
 		}
@@ -155,14 +267,21 @@ func imageContainsPath(layout, requiredPath string) error {
 			if err := json.Unmarshal(doc.Layers, &layers); err != nil {
 				return fmt.Errorf("parse layers in %s: %w", desc.Digest, err)
 			}
+			found := false
 			for _, layer := range layers {
-				found, err := layerContainsPath(layout, layer.Digest, requiredPath)
+				state, err := inspectLayerPath(layout, layer, requiredPath)
 				if err != nil {
 					return fmt.Errorf("inspect layer %s from manifest %s: %w", layer.Digest, desc.Digest, err)
 				}
-				if found {
-					return nil
+				if state.removesLower {
+					found = false
 				}
+				if state.present {
+					found = true
+				}
+			}
+			if found {
+				return nil
 			}
 			return fmt.Errorf("missing /%s in OCI image manifest %s", requiredPath, desc.Digest)
 		default:
@@ -181,65 +300,82 @@ func imageContainsPath(layout, requiredPath string) error {
 	return nil
 }
 
-func readBlob(layout, digest string) ([]byte, error) {
-	algorithm, encoded, ok := strings.Cut(digest, ":")
+func readBlob(layout string, desc descriptor) ([]byte, error) {
+	algorithm, encoded, ok := strings.Cut(desc.Digest, ":")
 	if !ok || algorithm != "sha256" || len(encoded) != sha256.Size*2 {
-		return nil, fmt.Errorf("unsupported OCI digest %q", digest)
+		return nil, fmt.Errorf("unsupported OCI digest %q", desc.Digest)
 	}
 	if _, err := hex.DecodeString(encoded); err != nil {
-		return nil, fmt.Errorf("invalid OCI digest %q: %w", digest, err)
+		return nil, fmt.Errorf("invalid OCI digest %q: %w", desc.Digest, err)
 	}
 
 	contents, err := os.ReadFile(filepath.Join(layout, "blobs", algorithm, encoded))
 	if err != nil {
-		return nil, fmt.Errorf("read referenced OCI blob %s: %w", digest, err)
+		return nil, fmt.Errorf("read referenced OCI blob %s: %w", desc.Digest, err)
+	}
+	if len(contents) != desc.Size {
+		return nil, fmt.Errorf("OCI blob %s size mismatch: got %d, want %d", desc.Digest, len(contents), desc.Size)
+	}
+	actual := sha256.Sum256(contents)
+	if hex.EncodeToString(actual[:]) != encoded {
+		return nil, fmt.Errorf("OCI blob %s digest mismatch", desc.Digest)
 	}
 	return contents, nil
 }
 
-func layerContainsPath(layout, digest, requiredPath string) (bool, error) {
-	algorithm, encoded, ok := strings.Cut(digest, ":")
-	if !ok || algorithm != "sha256" || len(encoded) != sha256.Size*2 {
-		return false, fmt.Errorf("unsupported OCI digest %q", digest)
-	}
-	if _, err := hex.DecodeString(encoded); err != nil {
-		return false, fmt.Errorf("invalid OCI digest %q: %w", digest, err)
-	}
-
-	file, err := os.Open(filepath.Join(layout, "blobs", algorithm, encoded))
+func inspectLayerPath(layout string, desc descriptor, requiredPath string) (layerPathState, error) {
+	contents, err := readBlob(layout, desc)
 	if err != nil {
-		return false, err
+		return layerPathState{}, err
 	}
-	defer file.Close()
 
-	buffered := bufio.NewReader(file)
+	buffered := bufio.NewReader(bytes.NewReader(contents))
 	reader := io.Reader(buffered)
 	magic, err := buffered.Peek(2)
 	if err != nil && err != io.EOF {
-		return false, err
+		return layerPathState{}, err
 	}
 	if len(magic) == 2 && magic[0] == 0x1f && magic[1] == 0x8b {
 		compressed, err := gzip.NewReader(buffered)
 		if err != nil {
-			return false, err
+			return layerPathState{}, err
 		}
 		defer compressed.Close()
 		reader = compressed
 	}
 
+	var state layerPathState
 	archive := tar.NewReader(reader)
 	for {
 		header, err := archive.Next()
 		if err == io.EOF {
-			return false, nil
+			return state, nil
 		}
 		if err != nil {
-			return false, err
+			return layerPathState{}, err
 		}
-		if normalizeTarPath(header.Name) == requiredPath {
-			return true, nil
+		entryPath := normalizeTarPath(header.Name)
+		if entryPath == requiredPath {
+			state.present = true
+		}
+		if whiteoutRemovesPath(entryPath, requiredPath) {
+			state.removesLower = true
 		}
 	}
+}
+
+func whiteoutRemovesPath(entryPath, requiredPath string) bool {
+	directory, name := pathpkg.Split(entryPath)
+	directory = strings.TrimSuffix(directory, "/")
+	if name == ".wh..wh..opq" {
+		return requiredPath != directory && strings.HasPrefix(requiredPath, directory+"/")
+	}
+	if !strings.HasPrefix(name, ".wh.") {
+		return false
+	}
+
+	removedPath := pathpkg.Join(directory, strings.TrimPrefix(name, ".wh."))
+	return requiredPath == removedPath || strings.HasPrefix(requiredPath, removedPath+"/")
 }
 
 func normalizeTarPath(value string) string {
@@ -274,7 +410,33 @@ func (b *layoutBuilder) addBlob(contents []byte, mediaType string) descriptor {
 	}
 }
 
+func (b *layoutBuilder) overwriteBlob(desc descriptor, contents []byte) {
+	b.t.Helper()
+	encoded := strings.TrimPrefix(desc.Digest, "sha256:")
+	if err := os.WriteFile(filepath.Join(b.root, "blobs", "sha256", encoded), contents, 0o644); err != nil {
+		b.t.Fatal(err)
+	}
+}
+
 func (b *layoutBuilder) addLayer(paths ...string) descriptor {
+	b.t.Helper()
+	return b.addBlob(b.layerTar(paths...), "application/vnd.oci.image.layer.v1.tar")
+}
+
+func (b *layoutBuilder) addGzipLayer(paths ...string) descriptor {
+	b.t.Helper()
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	if _, err := writer.Write(b.layerTar(paths...)); err != nil {
+		b.t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		b.t.Fatal(err)
+	}
+	return b.addBlob(compressed.Bytes(), "application/vnd.oci.image.layer.v1.tar+gzip")
+}
+
+func (b *layoutBuilder) layerTar(paths ...string) []byte {
 	b.t.Helper()
 	var contents bytes.Buffer
 	archive := tar.NewWriter(&contents)
@@ -291,7 +453,7 @@ func (b *layoutBuilder) addLayer(paths ...string) descriptor {
 	if err := archive.Close(); err != nil {
 		b.t.Fatal(err)
 	}
-	return b.addBlob(contents.Bytes(), "application/vnd.oci.image.layer.v1.tar")
+	return contents.Bytes()
 }
 
 func (b *layoutBuilder) addManifest(layers ...descriptor) descriptor {
