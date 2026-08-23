@@ -278,6 +278,15 @@ func assertICMSLane(t *testing.T, config string) {
 	require.GreaterOrEqual(t, fvIdx, 0, "function-version-id lift statement missing")
 	require.GreaterOrEqual(t, taskIdx, 0, "task-id lift statement missing")
 	assert.Less(t, fvIdx, taskIdx, "task-id must override namespace after function-version-id")
+	// Assert complete source-to-destination mapping for the two non-obvious attributes.
+	regionIdx := indexOfContaining(liftStmts, `"nvcf.nvidia.io/region"`)
+	if assert.GreaterOrEqual(t, regionIdx, 0, "region lift statement missing") {
+		assert.Contains(t, liftStmts[regionIdx], `set(log.attributes["region"]`)
+	}
+	statusIdx := indexOfContaining(liftStmts, `"nvcf.nvidia.io/status"`)
+	if assert.GreaterOrEqual(t, statusIdx, 0, "status lift statement missing") {
+		assert.Contains(t, liftStmts[statusIdx], `set(log.attributes["icms_status"]`)
+	}
 
 	synthProc, ok := processors["transform/synth-icms-event-name"].(map[string]any)
 	require.True(t, ok, "transform/synth-icms-event-name processor must be declared")
@@ -287,13 +296,15 @@ func assertICMSLane(t *testing.T, config string) {
 	}
 	stateIdx := indexOfContaining(synthStmts,
 		`Concat(["ICMSRequest", log.attributes["k8s.event.reason"], log.attributes["instance_state"]]`)
-	assert.GreaterOrEqual(t, stateIdx, 0, "state-qualified event_name branch missing")
+	// Use require so a missing branch stops execution before the indexed access below.
+	require.GreaterOrEqual(t, stateIdx, 0, "state-qualified event_name branch missing")
 	// Empty instance_state must fall through to the reason-only branch, not produce a trailing dot.
 	assert.Contains(t, synthStmts[stateIdx], `instance_state"] != ""`,
 		"state-qualified branch must guard against empty instance_state")
 	reasonOnlyIdx := indexOfContaining(synthStmts,
 		`Concat(["ICMSRequest", log.attributes["k8s.event.reason"]]`)
-	assert.GreaterOrEqual(t, reasonOnlyIdx, 0, "reason-only event_name branch missing")
+	// Use require so a missing branch stops execution before the indexed access below.
+	require.GreaterOrEqual(t, reasonOnlyIdx, 0, "reason-only event_name branch missing")
 	// Empty instance_state (not just nil) must also trigger the reason-only branch so
 	// events with an empty annotation do not lose their event_name and get dropped by
 	// filter/required-fields.
@@ -316,14 +327,15 @@ func assertICMSLane(t *testing.T, config string) {
 		assert.Contains(t, pipelineProcs, required, "logs/icms-events pipeline missing processor %q", required)
 	}
 	assert.Contains(t, icmsPipeline["exporters"], "otlphttp/fnds")
-	// Verify critical processor ordering: normalize sets k8s.event.reason before
-	// filter/icms-events reads it; lift populates instance_state before synth reads it.
+	// Verify critical processor ordering.
 	normalizeIdx := indexOfContaining(pipelineProcs, "transform/normalize")
 	filterIdx := indexOfContaining(pipelineProcs, "filter/icms-events")
 	liftIdx := indexOfContaining(pipelineProcs, "transform/lift-icms-annotations")
-	synthIdx := indexOfContaining(pipelineProcs, "transform/synth-icms-event-name")
+	synthProcIdx := indexOfContaining(pipelineProcs, "transform/synth-icms-event-name")
+	requiredFieldsIdx := indexOfContaining(pipelineProcs, "filter/required-fields")
 	assert.Less(t, normalizeIdx, filterIdx, "transform/normalize must run before filter/icms-events")
-	assert.Less(t, liftIdx, synthIdx, "transform/lift-icms-annotations must run before transform/synth-icms-event-name")
+	assert.Less(t, liftIdx, synthProcIdx, "transform/lift-icms-annotations must run before transform/synth-icms-event-name")
+	assert.Less(t, synthProcIdx, requiredFieldsIdx, "transform/synth-icms-event-name must run before filter/required-fields")
 }
 
 func indexOfContaining(items []string, sub string) int {
