@@ -234,6 +234,8 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
     # This scenario intentionally has no Background. It depends on the
     # earlier control-plane install and NVCA registration scenarios in
     # this feature run, and is not a standalone tag target.
+    # Failing until GitHub issue #1098 is resolved and the fix from GitHub
+    # issue #1032 is consumed by the self-managed stack.
     @nvct-task-api
     Scenario: Operator launches an NVCT task and waits for it to complete
       When I run command:

@@ -411,6 +411,8 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
       Then the command exit code should be 0
       And the command output should contain "bdd-echo"
 
+    # Failing until GitHub issue #1098 is resolved and the fix from GitHub
+    # issue #1032 is consumed by the self-managed stack.
     @nvct-task-api
     Scenario: User launches an NVCT task on the compute cluster and waits for completion
       Given command has succeeded:
