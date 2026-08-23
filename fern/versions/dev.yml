@@ -83,6 +83,8 @@ navigation:
       - section: NVCF Caches
         skip-slug: true
         contents:
+          - page: Helm Model Caching
+            path: ../../docs/user/cluster-management/model-cache.md
           - page: Container Cache
             path: ../../docs/user/cluster-management/container-cache.md
           - page: GXCache

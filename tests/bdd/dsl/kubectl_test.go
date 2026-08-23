@@ -43,6 +43,31 @@ func TestKubernetesResourceGetCommandBuildsIgnoreNotFoundGet(t *testing.T) {
 	}
 }
 
+func TestKubernetesResourceYAMLGetCommandBuildsExplicitGet(t *testing.T) {
+	resource := KubernetesResource{Kind: "OpenTelemetryCollector", Name: "nvcf-observability"}
+	got, err := KubernetesResourceYAMLGetCommand("monitoring", "k3d-ncp-local", resource)
+	if err != nil {
+		t.Fatalf("build command: %v", err)
+	}
+	want := "kubectl get opentelemetrycollector/nvcf-observability --namespace monitoring --context k3d-ncp-local -o yaml"
+	if got != want {
+		t.Fatalf("command = %q, want %q", got, want)
+	}
+}
+
+func TestKubernetesResourceYAMLGetCommandInterpolatesExplicitTargets(t *testing.T) {
+	t.Setenv("BDD_TEST_CONTEXT", "k3d-ncp-local-compute-1")
+	resource := KubernetesResource{Kind: "ConfigMap", Name: "nvcf-api-env"}
+	got, err := KubernetesResourceYAMLGetCommand("nvcf", "${BDD_TEST_CONTEXT}", resource)
+	if err != nil {
+		t.Fatalf("build command: %v", err)
+	}
+	want := "kubectl get configmap/nvcf-api-env --namespace nvcf --context k3d-ncp-local-compute-1 -o yaml"
+	if got != want {
+		t.Fatalf("command = %q, want %q", got, want)
+	}
+}
+
 func TestKubernetesResourceGetCommandRejectsMissingTargets(t *testing.T) {
 	tests := []struct {
 		name        string

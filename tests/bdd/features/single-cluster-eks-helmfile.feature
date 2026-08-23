@@ -209,8 +209,12 @@ Feature: Install a single-cluster NVCF stack on a pre-provisioned EKS cluster wi
       # HTTPRoute. A mismatch here means a future chart change has
       # decoupled global.domain from the hostnames downstream services
       # rely on for SNI/Host routing.
-      When I run command "kubectl --context ${EKS_CONTEXT} get httproute nvcf-api -n envoy-gateway -o jsonpath={.spec.hostnames[0]}"
-      Then the command output should contain "api.${EKS_GATEWAY_ADDR}"
+      Then Kubernetes resource "HTTPRoute/nvcf-api" in namespace "envoy-gateway" using context "${EKS_CONTEXT}" should contain:
+        """
+        spec:
+          hostnames:
+            - api.${EKS_GATEWAY_ADDR}
+        """
 
     @nvca-registration
     Scenario: User registers the EKS cluster and installs the NVCA operator there

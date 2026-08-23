@@ -203,6 +203,43 @@ func TestMatchYAMLSubtreeInterpolatesExpected(t *testing.T) {
 	}
 }
 
+func TestMatchYAMLDocumentSubsetInterpolatesExpected(t *testing.T) {
+	t.Setenv("BDD_TEST_GATEWAY", "gateway.example.invalid")
+	actual := `apiVersion: v1
+kind: ConfigMap
+data:
+  API_URL: http://gateway.example.invalid
+  EXTRA: preserved
+`
+	expected := `data:
+  API_URL: http://${BDD_TEST_GATEWAY}
+`
+	if err := MatchYAMLDocument(actual, expected, MatchSubset); err != nil {
+		t.Fatalf("document subset: %v", err)
+	}
+}
+
+func TestMatchYAMLDocumentMismatchDoesNotExposeValues(t *testing.T) {
+	actual := `data:
+  token: actual-secret-value
+`
+	expected := `data:
+  token: expected-secret-value
+`
+	err := MatchYAMLDocument(actual, expected, MatchSubset)
+	if err == nil {
+		t.Fatal("expected mismatch")
+	}
+	if !strings.Contains(err.Error(), "data.token") {
+		t.Fatalf("error %q does not name the mismatched path", err)
+	}
+	for _, sensitive := range []string{"actual-secret-value", "expected-secret-value"} {
+		if strings.Contains(err.Error(), sensitive) {
+			t.Fatalf("error %q exposes %q", err, sensitive)
+		}
+	}
+}
+
 func TestSubstituteFileReplacesPlaceholder(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "secrets.yaml")
