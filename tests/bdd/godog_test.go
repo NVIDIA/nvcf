@@ -608,7 +608,7 @@ func TestObservabilityComputeFeatureFileWiresToSteps(t *testing.T) {
 		serviceMonitorCommand       = "kubectl get servicemonitor/nvcf-default-monitors-nvca --namespace monitoring --context k3d-ncp-local-compute-1 -o name"
 		podMonitorCommand           = "kubectl get podmonitor/nvcf-default-monitors-worker --namespace monitoring --context k3d-ncp-local-compute-1 -o name"
 		absentServiceMonitorCommand = "kubectl get servicemonitor/nvcf-default-monitors-state-metrics --namespace monitoring --context k3d-ncp-local-compute-1 --ignore-not-found -o name"
-		collectorEnabledCommand     = `bash -c 'set -eo pipefail; helm get values nvca-operator --namespace nvca-operator --kube-context k3d-ncp-local-compute-1 -o json | jq -r ".selfManaged.otelCollector.enabled"'`
+		collectorValuesCommand      = "helm get values nvca-operator --namespace nvca-operator --kube-context k3d-ncp-local-compute-1 -o yaml"
 		collectorYAMLCommand        = "kubectl get opentelemetrycollector/nvcf-observability --namespace monitoring --context k3d-ncp-local-compute-1 -o yaml"
 		serviceKeyCommand           = `bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" |` +
 			` kubectl --context k3d-ncp-local-compute-1 create secret generic ngc-service-api-key` +
@@ -627,7 +627,7 @@ func TestObservabilityComputeFeatureFileWiresToSteps(t *testing.T) {
 		serviceMonitorCommand:       {ExitCode: 0},
 		podMonitorCommand:           {ExitCode: 0},
 		absentServiceMonitorCommand: {ExitCode: 0},
-		collectorEnabledCommand:     {ExitCode: 0, Stdout: "true\n"},
+		collectorValuesCommand:      {ExitCode: 0, Stdout: "selfManaged:\n  otelCollector:\n    enabled: true\n"},
 		"helm list --all-namespaces --kube-context k3d-ncp-local-compute-1 -o json": {
 			ExitCode: 0,
 			Stdout:   observabilityComputeHelmListJSON(),
@@ -666,7 +666,7 @@ func TestObservabilityComputeFeatureFileWiresToSteps(t *testing.T) {
 	}
 
 	runs := suite.Runner.(*fakeRunner).runs
-	for _, command := range []string{serviceMonitorCommand, podMonitorCommand, absentServiceMonitorCommand} {
+	for _, command := range []string{serviceMonitorCommand, podMonitorCommand, absentServiceMonitorCommand, collectorValuesCommand} {
 		if !commandRanExactly(runs, command) {
 			t.Fatalf("exact command was never invoked: %s", command)
 		}
@@ -730,7 +730,7 @@ func TestObservabilityAllFeatureFileWiresToSteps(t *testing.T) {
 		registryLoginCommand    = "helm registry login nvcr.io --username '$oauthtoken' --password-stdin"
 		serviceMonitorCommand   = "kubectl get servicemonitor/nvcf-default-monitors-state-metrics --namespace monitoring --context k3d-ncp-local -o name"
 		podMonitorCommand       = "kubectl get podmonitor/nvcf-default-monitors-worker --namespace monitoring --context k3d-ncp-local -o name"
-		collectorEnabledCommand = `bash -c 'set -eo pipefail; helm get values nvca-operator --namespace nvca-operator --kube-context k3d-ncp-local -o json | jq -r ".selfManaged.otelCollector.enabled"'`
+		collectorValuesCommand  = "helm get values nvca-operator --namespace nvca-operator --kube-context k3d-ncp-local -o yaml"
 		collectorYAMLCommand    = "kubectl get opentelemetrycollector/nvcf-observability --namespace monitoring --context k3d-ncp-local -o yaml"
 		serviceKeyCommand       = `bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" |` +
 			` kubectl --context k3d-ncp-local create secret generic ngc-service-api-key` +
@@ -748,7 +748,7 @@ func TestObservabilityAllFeatureFileWiresToSteps(t *testing.T) {
 		"k3d cluster get ncp-local-cp": {ExitCode: 1},
 		serviceMonitorCommand:          {ExitCode: 0},
 		podMonitorCommand:              {ExitCode: 0},
-		collectorEnabledCommand:        {ExitCode: 0, Stdout: "true\n"},
+		collectorValuesCommand:         {ExitCode: 0, Stdout: "selfManaged:\n  otelCollector:\n    enabled: true\n"},
 		serviceKeyCommand:              {ExitCode: 0},
 		restartNVCACommand:             {ExitCode: 0},
 		"helm list --all-namespaces --kube-context k3d-ncp-local -o json": {
@@ -789,7 +789,7 @@ func TestObservabilityAllFeatureFileWiresToSteps(t *testing.T) {
 		registryLoginCommand,
 		serviceMonitorCommand,
 		podMonitorCommand,
-		collectorEnabledCommand,
+		collectorValuesCommand,
 		serviceKeyCommand,
 		restartNVCACommand,
 	} {

@@ -1086,6 +1086,65 @@ func TestHelmReleasesShouldBeDeployedRunsSingleExplicitList(t *testing.T) {
 	}
 }
 
+func TestHelmReleaseShouldContainValuesRunsExplicitYAMLGet(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("BDD_TMP_RELEASE", "nvca-operator")
+	fake.result = harness.Result{ExitCode: 0, Stdout: `selfManaged:
+  otelCollector:
+    enabled: true
+    imageTag: 0.157.9
+`}
+	doc := &godog.DocString{Content: `selfManaged:
+  otelCollector:
+    enabled: true
+`}
+
+	if err := sc.helmReleaseShouldContainValues(
+		context.Background(),
+		"${BDD_TMP_RELEASE}",
+		"nvca-operator",
+		"k3d-ncp-local",
+		doc,
+	); err != nil {
+		t.Fatalf("assert Helm release values: %v", err)
+	}
+	want := "helm get values nvca-operator --namespace nvca-operator --kube-context k3d-ncp-local -o yaml"
+	if len(fake.runs) != 1 || fake.runs[0].command != want {
+		t.Fatalf("runs = %#v, want %q", fake.runs, want)
+	}
+}
+
+func TestHelmReleaseShouldContainValuesFailureDoesNotExposeValues(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0, Stdout: `selfManaged:
+  registryCredential: actual-secret-value
+`}
+	doc := &godog.DocString{Content: `selfManaged:
+  registryCredential: expected-secret-value
+`}
+
+	err := sc.helmReleaseShouldContainValues(
+		context.Background(),
+		"nvca-operator",
+		"nvca-operator",
+		"k3d-ncp-local",
+		doc,
+	)
+	if err == nil {
+		t.Fatal("expected mismatch")
+	}
+	for _, want := range []string{`helm release "nvca-operator"`, "selfManaged.registryCredential"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not contain %q", err, want)
+		}
+	}
+	for _, sensitive := range []string{"actual-secret-value", "expected-secret-value"} {
+		if strings.Contains(err.Error(), sensitive) {
+			t.Fatalf("error %q exposes %q", err, sensitive)
+		}
+	}
+}
+
 func TestHelmReleaseTableAcceptsNameAndNamespace(t *testing.T) {
 	table := docTable(t, [][]string{
 		{"name", "namespace"},

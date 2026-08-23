@@ -63,6 +63,40 @@ func TestHelmListCommandRejectsEmptyContext(t *testing.T) {
 	}
 }
 
+func TestHelmReleaseValuesCommandInterpolatesExplicitTargets(t *testing.T) {
+	t.Setenv("BDD_TMP_RELEASE", "nvca operator")
+	t.Setenv("BDD_TMP_NAMESPACE", "nvca-operator")
+	t.Setenv("BDD_TMP_CONTEXT", "k3d-ncp-local")
+
+	got, err := HelmReleaseValuesCommand("${BDD_TMP_RELEASE}", "${BDD_TMP_NAMESPACE}", "${BDD_TMP_CONTEXT}")
+	if err != nil {
+		t.Fatalf("build command: %v", err)
+	}
+	want := "helm get values 'nvca operator' --namespace nvca-operator --kube-context k3d-ncp-local -o yaml"
+	if got != want {
+		t.Fatalf("command = %q, want %q", got, want)
+	}
+}
+
+func TestHelmReleaseValuesCommandRejectsEmptyTargets(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		release     string
+		namespace   string
+		kubeContext string
+	}{
+		{name: "release", namespace: "nvca-operator", kubeContext: "k3d-ncp-local"},
+		{name: "namespace", release: "nvca-operator", kubeContext: "k3d-ncp-local"},
+		{name: "context", release: "nvca-operator", namespace: "nvca-operator"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := HelmReleaseValuesCommand(test.release, test.namespace, test.kubeContext); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
 func TestHelmReleasesDeployedMatchesOptionalRevision(t *testing.T) {
 	expected := []HelmReleaseExpectation{{Name: "nats", Namespace: "nats-system", Revision: "2"}}
 	if err := HelmReleasesDeployed(deployedHelmReleases, expected); err != nil {

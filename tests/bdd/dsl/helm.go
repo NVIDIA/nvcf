@@ -61,6 +61,29 @@ func HelmListCommand(kubeContext string) (string, error) {
 	return "helm list --all-namespaces --kube-context " + quoteCommandArg(kubeContext) + " -o json", nil
 }
 
+// HelmReleaseValuesCommand builds an explicit-context Helm values read whose
+// stdout is YAML suitable for subset matching.
+func HelmReleaseValuesCommand(release, namespace, kubeContext string) (string, error) {
+	release = strings.TrimSpace(Interpolate(release))
+	namespace = strings.TrimSpace(Interpolate(namespace))
+	kubeContext = strings.TrimSpace(Interpolate(kubeContext))
+	if release == "" {
+		return "", fmt.Errorf("helm release name is empty")
+	}
+	if namespace == "" {
+		return "", fmt.Errorf("helm release %q namespace is empty", release)
+	}
+	if kubeContext == "" {
+		return "", fmt.Errorf("kube context is empty")
+	}
+	return strings.Join([]string{
+		"helm", "get", "values", quoteCommandArg(release),
+		"--namespace", quoteCommandArg(namespace),
+		"--kube-context", quoteCommandArg(kubeContext),
+		"-o", "yaml",
+	}, " "), nil
+}
+
 // HelmReleasesDeployed asserts that every expected release exists in Helm's
 // JSON output with status deployed and, when provided, the expected revision.
 func HelmReleasesDeployed(raw string, expected []HelmReleaseExpectation) error {
