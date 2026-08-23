@@ -65,7 +65,7 @@ NVCA uses the first matching backend in this order:
 | --- | --- | --- | --- |
 | 1 | `nvcf-sc-30` exists | NVMesh | Durable reuse across namespaces |
 | 2 | `nvcf-miniservice-sc` exists and supports `ReadOnlyMany` or `ReadWriteMany` | Operator-provided shared filesystem | Durable reuse across namespaces |
-| 3 | `nvcf-sc` and the SMB CSI driver are available, and `HelmSharedStorage` is enabled | NVCA-managed Samba | Durable reuse across namespaces |
+| 3 | `HelmSharedStorage` is enabled | NVCA-managed Samba | Durable reuse across namespaces |
 | 4 | No shared backend is available | `emptyDir` | Pod-local caching only |
 
 NVCA does not create `nvcf-miniservice-sc`. If you provide this StorageClass,
