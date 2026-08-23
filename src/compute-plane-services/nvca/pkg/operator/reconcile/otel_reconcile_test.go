@@ -241,8 +241,14 @@ func assertICMSLane(t *testing.T, config string) {
 	icmsFilter, ok := processors["filter/icms-events"].(map[string]any)
 	require.True(t, ok, "filter/icms-events processor must be declared")
 	records := icmsFilter["logs"].(map[string]any)["log_record"].([]any)
-	require.Len(t, records, 1)
-	assert.Contains(t, records[0].(string), `"ICMSRequest"`, "filter/icms-events must drop non-ICMSRequest events")
+	require.Len(t, records, 2, "filter/icms-events must have kind and reason drop conditions")
+	// First condition must drop non-ICMSRequest kinds (exclusion, not inclusion).
+	assert.Contains(t, records[0].(string), `!= "ICMSRequest"`, "filter/icms-events kind condition must drop non-ICMSRequest events")
+	// Second condition must allowlist the four supported reasons via not(...in[...]).
+	assert.Contains(t, records[1].(string), "not(", "filter/icms-events reason condition must use not() to drop unsupported reasons")
+	for _, reason := range []string{"InstanceCreation", "InstanceStatusUpdate", "InstanceTermination", "ModelCaching"} {
+		assert.Contains(t, records[1].(string), reason, "filter/icms-events allowlist must include reason %q", reason)
+	}
 
 	liftProc, ok := processors["transform/lift-icms-annotations"].(map[string]any)
 	require.True(t, ok, "transform/lift-icms-annotations processor must be declared")
@@ -300,6 +306,14 @@ func assertICMSLane(t *testing.T, config string) {
 		assert.Contains(t, pipelineProcs, required, "logs/icms-events pipeline missing processor %q", required)
 	}
 	assert.Contains(t, icmsPipeline["exporters"], "otlphttp/fnds")
+	// Verify critical processor ordering: normalize sets k8s.event.reason before
+	// filter/icms-events reads it; lift populates instance_state before synth reads it.
+	normalizeIdx := indexOfContaining(pipelineProcs, "transform/normalize")
+	filterIdx := indexOfContaining(pipelineProcs, "filter/icms-events")
+	liftIdx := indexOfContaining(pipelineProcs, "transform/lift-icms-annotations")
+	synthIdx := indexOfContaining(pipelineProcs, "transform/synth-icms-event-name")
+	assert.Less(t, normalizeIdx, filterIdx, "transform/normalize must run before filter/icms-events")
+	assert.Less(t, liftIdx, synthIdx, "transform/lift-icms-annotations must run before transform/synth-icms-event-name")
 }
 
 func indexOfContaining(items []string, sub string) int {
