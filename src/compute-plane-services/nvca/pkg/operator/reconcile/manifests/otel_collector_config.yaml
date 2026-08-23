@@ -143,6 +143,8 @@ processors:
       - set(log.attributes["instance_state"], log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/instance-state"]) where log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/instance-state"] != nil
       - set(log.attributes["failure_category"], log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/failure-category"]) where log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/failure-category"] != nil
       - set(log.attributes["termination_cause"], log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/termination-cause"]) where log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/termination-cause"] != nil
+      - set(log.attributes["region"], log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/region"]) where log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/region"] != nil
+      - set(log.attributes["icms_status"], log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/status"]) where log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/status"] != nil
       - set(log.attributes["source"], "nvca")
 
   # ICMS lane: synthesize event_name = "ICMSRequest.<reason>[.<instance_state>]".

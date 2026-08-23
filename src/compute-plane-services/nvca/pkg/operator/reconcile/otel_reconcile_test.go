@@ -267,6 +267,8 @@ func assertICMSLane(t *testing.T, config string) {
 		"nvcf.nvidia.io/instance-state",
 		"nvcf.nvidia.io/failure-category",
 		"nvcf.nvidia.io/termination-cause",
+		"nvcf.nvidia.io/region",
+		"nvcf.nvidia.io/status",
 	} {
 		assert.GreaterOrEqual(t, indexOfContaining(liftStmts, key), 0,
 			"lift-icms-annotations must reference annotation %q", key)
