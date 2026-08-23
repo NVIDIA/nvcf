@@ -107,6 +107,25 @@ case "$WORKLOAD" in
         SOURCE_MANIFEST="$PROJECT_ROOT/deploy/k8s/workloads/vllm-mp.yaml"
         RESTORE_MANIFEST_TEMPLATE="$PROJECT_ROOT/deploy/k8s/workloads/vllm-mp-restore.yaml"
         ;;
+    vllm-tp2-criu)
+        # Multi-GPU on the criu-v2 engine. Separate from vllm-tp2 (which stays
+        # on the rootfs/cachedir path) so the two do not share a manifest.
+        # Needs the agent started with NVSNAP_MULTI_GPU_CRIU=1 and the run
+        # invoked with CAPTURE_PATH=criu-v2. Every cross-GPU transport is off
+        # in the manifest: cuda-checkpoint blocks if any peer mapping exists.
+        # See docs/proposals/multi-gpu-criu-v2.md.
+        POD_NAME="vllm-tp2-criu"
+        CONTAINER_NAME="vllm"
+        RESTORE_POD_NAME="vllm-tp2-criu-restored"
+        RESTORE_CONTAINER_NAME="restore"
+        PORT=8000
+        MODEL="TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+        INFER_ENDPOINT="/v1/completions"
+        INFER_DATA='{"model":"TinyLlama/TinyLlama-1.1B-Chat-v1.0","prompt":"Hello","max_tokens":5}'
+        POST_INFER_DATA='{"model":"TinyLlama/TinyLlama-1.1B-Chat-v1.0","prompt":"The meaning of life is","max_tokens":10}'
+        SOURCE_MANIFEST="$PROJECT_ROOT/deploy/k8s/workloads/vllm-tp2-criu.yaml"
+        RESTORE_MANIFEST_TEMPLATE="$PROJECT_ROOT/deploy/k8s/workloads/vllm-tp2-criu-restore.yaml"
+        ;;
     vllm-tp2)
         # E1 multi-GPU ladder: TinyLlama TP=2 eager. Force the CRIU engine
         # with CAPTURE_PATH=criu-v2 (multi-GPU otherwise defaults to rootfs).
