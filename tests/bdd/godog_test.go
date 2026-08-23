@@ -224,8 +224,8 @@ selfManaged:
 // the suite's RepoRoot. The body is not a faithful copy of the real
 // stack templates (which have richer schemas with several placeholders);
 // it only carries the single REPLACE_WITH_BASE64_DOCKER_CREDENTIAL token
-// the feature substitutes, which is sufficient to exercise the I copy
-// and I substitute steps against a fake CommandRunner.
+// the self-managed secrets step renders, which is sufficient to exercise
+// the file preparation path against a fake CommandRunner.
 func seedStackSecretsTemplate(t *testing.T, repoRoot string) {
 	t.Helper()
 	templatePath := filepath.Join(repoRoot, "deploy", "stacks", "self-managed", "secrets", "secrets.yaml.template")

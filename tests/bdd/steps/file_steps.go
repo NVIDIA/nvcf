@@ -18,7 +18,6 @@ limitations under the License.
 package steps
 
 import (
-	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
@@ -35,7 +34,7 @@ import (
 func registerFileSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^I copy the file "([^"]*)" to "([^"]*)"$`, sc.iCopyFile)
 	ctx.Step(`^I update yaml file "([^"]*)" with keys:$`, sc.iUpdateYAMLFile)
-	ctx.Step(`^I substitute "([^"]*)" in file "([^"]*)" with base64 of "([^"]*)"$`, sc.iSubstituteBase64)
+	ctx.Step(`^I prepare self-managed secrets file "([^"]*)" from template "([^"]*)" using the current NGC registry credential$`, sc.iPrepareSelfManagedSecretsFile)
 	ctx.Step(`^I substitute a block in file "([^"]*)":$`, sc.iSubstituteBlock)
 	ctx.Step(`^environment variable "([^"]*)" is set$`, sc.environmentVariableIsSet)
 	ctx.Step(`^these environment variables are set:$`, sc.environmentVariablesAreSet)
@@ -67,22 +66,15 @@ func (sc *ScenarioContext) iUpdateYAMLFile(path string, table *godog.Table) erro
 	return dsl.UpdateYAMLKeys(resolved, keys)
 }
 
-// iSubstituteBase64 expands ${VAR} inside source, base64-encodes the
-// result, and replaces every occurrence of placeholder in path. The
-// handler never returns the substituted value to its caller so the
-// secret material does not leak into logs. Go's base64.StdEncoding
-// emits the encoded string on a single line with no line wrapping --
-// equivalent to `base64 -w0` -- so the resulting value can be sed-
-// substituted into the secrets template without the sed-substitution
-// breaking on embedded newlines.
-func (sc *ScenarioContext) iSubstituteBase64(placeholder, path, source string) error {
-	resolvedPath := sc.resolvePath(dsl.Interpolate(path))
-	if err := sc.Suite.Ledger.Snapshot(resolvedPath); err != nil {
+// iPrepareSelfManagedSecretsFile snapshots the destination before rendering
+// the explicit template with the current NGC registry credential.
+func (sc *ScenarioContext) iPrepareSelfManagedSecretsFile(dest, template string) error {
+	resolvedDest := sc.resolvePath(dsl.Interpolate(dest))
+	resolvedTemplate := sc.resolvePath(dsl.Interpolate(template))
+	if err := sc.Suite.Ledger.Snapshot(resolvedDest); err != nil {
 		return err
 	}
-	resolvedSource := dsl.Interpolate(source)
-	encoded := base64.StdEncoding.EncodeToString([]byte(resolvedSource))
-	return dsl.SubstituteFile(resolvedPath, placeholder, encoded)
+	return prepareSelfManagedSecretsFile(resolvedTemplate, resolvedDest, os.Getenv("NGC_API_KEY"))
 }
 
 // iSubstituteBlock snapshots path before delegating the exact multi-line
@@ -155,6 +147,28 @@ func copyFile(src, dest string) error {
 	}
 	if err := out.Close(); err != nil {
 		return fmt.Errorf("close %s: %w", dest, err)
+	}
+	return nil
+}
+
+func prepareSelfManagedSecretsFile(template, dest, apiKey string) error {
+	body, err := os.ReadFile(template)
+	if err != nil {
+		return fmt.Errorf("read secrets template %s: %w", template, err)
+	}
+	rendered, err := dsl.RenderSelfManagedSecrets(body, apiKey)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(template)
+	if err != nil {
+		return fmt.Errorf("stat secrets template %s: %w", template, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", filepath.Dir(dest), err)
+	}
+	if err := os.WriteFile(dest, rendered, info.Mode().Perm()); err != nil {
+		return fmt.Errorf("write self-managed secrets %s: %w", dest, err)
 	}
 	return nil
 }

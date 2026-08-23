@@ -44,8 +44,7 @@ Feature: Install local Helmfile observability with the compute profile
       | global.image.repository                                       | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                              |
       | global.nvcaOperator.selfManaged.otelCollector.imageRepository | nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/nvcf-otel-collector |
       | observability.profile                                         | compute                                                           |
-    And I copy the file "deploy/stacks/self-managed/secrets/secrets.yaml.template" to "deploy/stacks/self-managed/secrets/local-bdd-observability-compute-secrets.yaml"
-    And I substitute "REPLACE_WITH_BASE64_DOCKER_CREDENTIAL" in file "deploy/stacks/self-managed/secrets/local-bdd-observability-compute-secrets.yaml" with base64 of "$oauthtoken:${NGC_API_KEY}"
+    And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-bdd-observability-compute-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
     # Conflict precheck: single-cluster ncp-local claims host ports used by the
     # split topology. From the repository root, run
     # `make -C tools/ncp-local-cluster destroy CLUSTER_NAME=ncp-local`

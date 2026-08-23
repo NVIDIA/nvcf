@@ -31,9 +31,7 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
         | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
         | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
         | observability.profile           | disabled                             |
-      And I copy the file "deploy/stacks/self-managed/secrets/secrets.yaml.template" to "deploy/stacks/self-managed/secrets/local-bdd-secrets.yaml"
-      # Only ${VAR} is interpolated; bare $oauthtoken stays literal.
-      And I substitute "REPLACE_WITH_BASE64_DOCKER_CREDENTIAL" in file "deploy/stacks/self-managed/secrets/local-bdd-secrets.yaml" with base64 of "$oauthtoken:${NGC_API_KEY}"
+      And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-bdd-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
 
     Scenario: Operator validates the authored Helmfile environment renders
       When I run command "make -C deploy/stacks/self-managed template HELMFILE_ENV=local-bdd"

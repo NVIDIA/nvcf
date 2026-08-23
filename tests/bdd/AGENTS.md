@@ -26,9 +26,9 @@ assertion as the escape hatch for uncommon or command-specific behavior.
   `CommandCache`, `Suite`. Step handlers depend on these; nothing else
   does.
 - `dsl/` owns pure helpers: `${VAR}` interpolation, dotted-path YAML
-  upsert and read, YAML subtree match/contain, kubectl manifest
-  builders, JSON row matching. Every helper is unit-testable in
-  isolation. No I/O coordination, no Godog dependency.
+  upsert and read, YAML subtree match/contain, self-managed secrets
+  rendering, kubectl manifest builders, JSON row matching. Every helper
+  is unit-testable in isolation. No I/O coordination, no Godog dependency.
 - `steps/` owns Godog step handlers and `ScenarioContext`. Each
   handler is one or two lines plus a delegate to a `dsl` helper or
   `Suite.Runner`.
@@ -45,9 +45,9 @@ logic into `dsl/`.
   a bare `$word` is left literal. Implementations must not use
   `os.ExpandEnv`. Expansion lives in `dsl.Interpolate`.
 - File-mutating steps (`I copy the file`, `I update yaml file`,
-  `I substitute`) snapshot the destination through `Suite.Ledger`
-  before the first write. Suite teardown restores every snapshotted
-  path.
+  `I prepare self-managed secrets file`, `I substitute a block`)
+  snapshot the destination through `Suite.Ledger` before the first write.
+  Suite teardown restores every snapshotted path.
 - `Given command has succeeded:` keys on the fully resolved command
   text. Two scenarios whose pre-interpolation text matches but whose
   env vars differ must miss the cache. The cache lives in
