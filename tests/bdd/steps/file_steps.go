@@ -66,15 +66,47 @@ func (sc *ScenarioContext) iUpdateYAMLFile(path string, table *godog.Table) erro
 	return dsl.UpdateYAMLKeys(resolved, keys)
 }
 
-// iPrepareSelfManagedSecretsFile snapshots the destination before rendering
-// the explicit template with the current NGC registry credential.
+// iPrepareSelfManagedSecretsFile delegates the secrets-file operation so the
+// registered Godog handler remains declarative.
 func (sc *ScenarioContext) iPrepareSelfManagedSecretsFile(dest, template string) error {
+	return sc.prepareSelfManagedSecretsFile(dest, template)
+}
+
+// prepareSelfManagedSecretsFile resolves paths, snapshots the destination,
+// renders the current credential, and replaces the destination with mode 0600.
+func (sc *ScenarioContext) prepareSelfManagedSecretsFile(dest, template string) error {
 	resolvedDest := sc.resolvePath(dsl.Interpolate(dest))
 	resolvedTemplate := sc.resolvePath(dsl.Interpolate(template))
 	if err := sc.Suite.Ledger.Snapshot(resolvedDest); err != nil {
 		return err
 	}
-	return prepareSelfManagedSecretsFile(resolvedTemplate, resolvedDest, os.Getenv("NGC_API_KEY"))
+	body, err := os.ReadFile(resolvedTemplate)
+	if err != nil {
+		return fmt.Errorf("read secrets template %s: %w", resolvedTemplate, err)
+	}
+	rendered, err := dsl.RenderSelfManagedSecrets(body, os.Getenv("NGC_API_KEY"))
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(resolvedDest), 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", filepath.Dir(resolvedDest), err)
+	}
+	out, err := os.OpenFile(resolvedDest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return fmt.Errorf("create self-managed secrets %s: %w", resolvedDest, err)
+	}
+	if err := out.Chmod(0o600); err != nil {
+		_ = out.Close()
+		return fmt.Errorf("secure self-managed secrets %s: %w", resolvedDest, err)
+	}
+	if _, err := out.Write(rendered); err != nil {
+		_ = out.Close()
+		return fmt.Errorf("write self-managed secrets %s: %w", resolvedDest, err)
+	}
+	if err := out.Close(); err != nil {
+		return fmt.Errorf("close self-managed secrets %s: %w", resolvedDest, err)
+	}
+	return nil
 }
 
 // iSubstituteBlock snapshots path before delegating the exact multi-line
@@ -147,28 +179,6 @@ func copyFile(src, dest string) error {
 	}
 	if err := out.Close(); err != nil {
 		return fmt.Errorf("close %s: %w", dest, err)
-	}
-	return nil
-}
-
-func prepareSelfManagedSecretsFile(template, dest, apiKey string) error {
-	body, err := os.ReadFile(template)
-	if err != nil {
-		return fmt.Errorf("read secrets template %s: %w", template, err)
-	}
-	rendered, err := dsl.RenderSelfManagedSecrets(body, apiKey)
-	if err != nil {
-		return err
-	}
-	info, err := os.Stat(template)
-	if err != nil {
-		return fmt.Errorf("stat secrets template %s: %w", template, err)
-	}
-	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-		return fmt.Errorf("mkdir %s: %w", filepath.Dir(dest), err)
-	}
-	if err := os.WriteFile(dest, rendered, info.Mode().Perm()); err != nil {
-		return fmt.Errorf("write self-managed secrets %s: %w", dest, err)
 	}
 	return nil
 }

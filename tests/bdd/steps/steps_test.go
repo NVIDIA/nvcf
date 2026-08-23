@@ -104,7 +104,7 @@ func TestIPrepareSelfManagedSecretsFileRendersInterpolatedPaths(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(templateAbs), 0o755); err != nil {
 		t.Fatalf("mkdir template: %v", err)
 	}
-	if err := os.WriteFile(templateAbs, []byte("registryCredential: REPLACE_WITH_BASE64_DOCKER_CREDENTIAL\n"), 0o600); err != nil {
+	if err := os.WriteFile(templateAbs, []byte("registryCredential: REPLACE_WITH_BASE64_DOCKER_CREDENTIAL\n"), 0o644); err != nil {
 		t.Fatalf("seed template: %v", err)
 	}
 
@@ -150,6 +150,13 @@ func TestIPrepareSelfManagedSecretsFileRestoresExistingDestination(t *testing.T)
 
 	if err := sc.iPrepareSelfManagedSecretsFile(destRel, templateRel); err != nil {
 		t.Fatalf("prepare secrets: %v", err)
+	}
+	renderedInfo, err := os.Stat(destAbs)
+	if err != nil {
+		t.Fatalf("stat rendered destination: %v", err)
+	}
+	if renderedInfo.Mode().Perm() != 0o600 {
+		t.Fatalf("rendered destination mode = %o, want 600", renderedInfo.Mode().Perm())
 	}
 	if err := sc.Suite.Ledger.RestoreAll(); err != nil {
 		t.Fatalf("restore: %v", err)
