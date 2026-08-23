@@ -29,12 +29,26 @@ Feature: Bring up a local single-cluster NVCF stack with the self-hosted up one-
         | NGC_API_KEY     |
         | SAMPLE_NGC_ORG  |
         | SAMPLE_NGC_TEAM |
-      # self-hosted up --env local reads operator-authored local secrets
-      # from both split stacks:
-      # deploy/stacks/self-managed/secrets/local-secrets.yaml.
-      # Only secrets.yaml.template is tracked in each stack. Author both
-      # files from the templates; the Ledger restores or removes them at
+      # self-hosted up --env local reads operator-authored environment
+      # values from both split stacks. Author both local.yaml files from
+      # the tracked BDD fixtures; the Ledger restores or removes them at
       # suite teardown.
+      And I copy the file "tests/bdd/fixtures/self-managed-local-bdd.yaml" to "deploy/stacks/self-managed/environments/local.yaml"
+      And I update yaml file "deploy/stacks/self-managed/environments/local.yaml" with keys:
+        | global.imagePullSecrets[0].name               | nvcr-pull-secret                                                   |
+        | global.helm.sources.repository                | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                               |
+        | global.image.repository                       | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                               |
+        | api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE | nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/stargate-client:0.2.0 |
+        | observability.profile                         | disabled                                                           |
+      And I copy the file "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" to "deploy/stacks/nvcf-compute-plane/environments/local.yaml"
+      And I update yaml file "deploy/stacks/nvcf-compute-plane/environments/local.yaml" with keys:
+        | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
+        | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+        | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+        | observability.profile           | disabled                             |
+      # The control-plane stack also requires an operator-authored local
+      # secrets file. Author it from the tracked template; the Ledger gives
+      # it the same restore-or-remove behavior as the environment files.
       And I copy the file "deploy/stacks/self-managed/secrets/secrets.yaml.template" to "deploy/stacks/self-managed/secrets/local-secrets.yaml"
       And I substitute "REPLACE_WITH_BASE64_DOCKER_CREDENTIAL" in file "deploy/stacks/self-managed/secrets/local-secrets.yaml" with base64 of "$oauthtoken:${NGC_API_KEY}"
       # Conflict precheck: ncp-local-cp's k3d serverlb claims
