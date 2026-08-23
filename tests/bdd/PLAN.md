@@ -57,7 +57,7 @@ implementation detail, not a license to omit the precondition.
 | `Given a single-cluster ncp-local cluster is running` | `make -C tools/ncp-local-cluster build-and-deploy-cluster`. Runs once per suite. |
 | `Given multi-cluster ncp-local compute clusters are running:` (table, see below) | Wraps `make -C tools/ncp-local-cluster build-and-deploy-multicluster COMPUTE_CLUSTER_COUNT=N`. Runs once per suite. |
 | `Given Helm is authenticated to OCI registry {string} using the current NGC API key` | Runs `helm registry login` once per explicit, interpolated registry. The current `NGC_API_KEY` is supplied through sensitive stdin and is redacted from captured output, command logs, and failures. |
-| `Given the {string} image pull secret exists in namespaces:` (table) | `kubectl create namespace <ns>` + `kubectl create secret docker-registry` for each row. Hidden because the docker-registry secret syntax leaks the API key to argv. |
+| `Given the {string} image pull secret exists in namespaces:` (table) | Applies one namespace manifest and one docker-registry secret manifest for each row. Hidden because direct docker-registry secret commands leak the API key to argv. |
 
 Compute-cluster table contract for the multi-cluster bootstrap Given:
 

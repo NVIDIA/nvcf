@@ -55,8 +55,9 @@ logic into `dsl/`.
 - Bootstrap Givens (`a single-cluster ncp-local cluster is running`,
   `multi-cluster ncp-local compute clusters are running:`, `Helm is
   authenticated to OCI registry ...`, `the ... image pull secret exists in
-  namespaces:`) each wrap exactly one Make target, one Helm invocation, or one
-  `kubectl apply` per row. Caching is idempotent per suite; the underlying
+  namespaces:`) each wrap exactly one Make target or one Helm invocation. The
+  image pull secret Given applies one namespace manifest and one docker-registry
+  secret manifest per row. Caching is idempotent per suite; the underlying
   bootstrap runs at most once even if multiple scenarios name the Given.
 - The Helm OCI registry authentication Given reads `NGC_API_KEY` from the
   process environment and passes it only through
