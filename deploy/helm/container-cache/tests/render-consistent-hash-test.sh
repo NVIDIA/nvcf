@@ -85,6 +85,11 @@ grep -q '"cache_status", "http_status", "route"' "$TMP/on.yaml" \
 grep -q 'local route = "local"' "$TMP/on.yaml" || fail "route must default to local"
 grep -q 'route = "relayed"' "$TMP/on.yaml" || fail "relayed requests must be labelled"
 grep -q 'route = "peer"' "$TMP/on.yaml" || fail "requests served for a peer must be labelled"
+# A relay that serves from its own replica never contacts the owner, so it must
+# not be counted as a peer hop. Without this the label overstates relay traffic
+# and hides the replication that removed the hop.
+grep -q 'if cache_status == "HIT" then' "$TMP/on.yaml" \
+  || fail "a relay-served cache hit must be classified local, not relayed"
 # The objects here are whole model files, so a 10s ceiling put a large share of
 # traffic in +Inf and histogram_quantile then reports the bucket edge, not a
 # latency.
