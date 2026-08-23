@@ -63,6 +63,23 @@ fi
 cat > "$TMP/run.lua" <<'LUA'
 local block = ...
 local recorded = {}
+
+-- Stub of the shared dictionary the admission cap uses. Only get/set/incr are
+-- referenced by the shipped code.
+local store = {}
+ngx = { shared = { asset_labels = {
+  get  = function(self, k) return store[k] end,
+  set  = function(self, k, v) store[k] = v end,
+  incr = function(self, k, delta, init)
+    if store[k] == nil then
+      if init == nil then return nil, "not found" end
+      store[k] = init
+    end
+    store[k] = store[k] + delta
+    return store[k]
+  end,
+} } }
+local function reset_admissions() store = {} end
 proxy_asset_requests = { inc = function(self, n, labels)
   recorded.req = { n = n, source = labels[1], asset = labels[2], status = labels[3] }
 end }
@@ -175,6 +192,27 @@ if r13.req and #r13.req.asset > 120 then
   print(string.format("FAIL: asset label not truncated: %d chars", #r13.req.asset))
   failures = failures + 1
 end
+
+-- Admission cap. The asset comes from a client-controlled path, so the number
+-- of distinct values must be bounded, not merely small in practice.
+reset_admissions()
+local admitted, folded = 0, 0
+for i = 1, 80 do
+  local r = classify(string.format("/org/o%d/team/t/modelsv2/m%d/blobs/x", i, i), ngc_host, "HIT", 1)
+  if r.req.asset == "other" then folded = folded + 1 else admitted = admitted + 1 end
+end
+if admitted == 80 then
+  print("FAIL: asset admission is uncapped; 80 distinct values all became labels")
+  failures = failures + 1
+end
+if folded == 0 then
+  print("FAIL: nothing folded into 'other' once the cap was reached")
+  failures = failures + 1
+end
+
+-- An already-admitted asset keeps its label after the cap is reached.
+local again = classify("/org/o1/team/t/modelsv2/m1/blobs/x", ngc_host, "HIT", 1)
+check("admitted assets keep their label past the cap", again.req.asset, "o1/t/m1")
 
 if failures > 0 then
   print(string.format("\n%d assertion(s) failed", failures))

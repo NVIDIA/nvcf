@@ -59,8 +59,15 @@ asset_guard='if request_uri ~= nil and not string.find(request_uri, "manifest") 
 grep -F -q -- "$asset_guard" "$OUT" \
   || fail "asset counters must use a guard free of cache_status, or they inherit the drop"
 
-echo "6. label values are bounded"
+echo "6. label values and label COUNT are both bounded"
 has 'if #asset > 120 then asset = asset:sub(1, 120) end'
+# Truncation bounds the length of one value. The asset is derived from a
+# client-controlled path and host, so the number of distinct values has to be
+# capped too, or the series count is unbounded.
+has 'ngx.shared.asset_labels'
+has 'asset = "other"'
+grep -F -q 'lua_shared_dict asset_labels' "$OUT" \
+  || fail "the admission dictionary must be declared or the cap cannot work"
 
 echo "7. manifest traffic stays excluded, as it is for the other metrics"
 n_manifest="$(grep -c 'string.find(request_uri, "manifest")' "$OUT" || true)"
