@@ -63,13 +63,9 @@ Feature: Install a single-cluster NVCF stack on a pre-provisioned EKS cluster wi
       | EKS_CLUSTER_NAME |
       | EKS_REGION       |
     # Helmfile pulls OCI charts through helm, so host-side helm
-    # registry auth must be present before any helmfile sync.
-    # Keep $NGC_API_KEY unbraced so the BDD runner does not expand
-    # the secret into command logs; bash expands it at execution time.
-    And command has succeeded:
-      """
-      bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" | helm registry login nvcr.io --username "\$oauthtoken" --password-stdin'
-      """
+    # Registry authentication must be present before any helmfile sync. The
+    # current API key is passed through sensitive stdin.
+    And Helm is authenticated to OCI registry "nvcr.io" using the current NGC API key
     # Create NGC dockerconfig registry credentials
     And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/eks-bdd-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
     And I run command "kubectl --context ${EKS_CONTEXT} get nodes -o name"

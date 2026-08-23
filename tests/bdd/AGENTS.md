@@ -53,11 +53,16 @@ logic into `dsl/`.
   env vars differ must miss the cache. The cache lives in
   `Suite.Cache`.
 - Bootstrap Givens (`a single-cluster ncp-local cluster is running`,
-  `multi-cluster ncp-local compute clusters are running:`, `the ...
-  image pull secret exists in namespaces:`) each wrap exactly one
-  Make target or one `kubectl apply` per row. Caching is idempotent
-  per suite; the underlying Make runs at most once even if multiple
-  scenarios name the Given.
+  `multi-cluster ncp-local compute clusters are running:`, `Helm is
+  authenticated to OCI registry ...`, `the ... image pull secret exists in
+  namespaces:`) each wrap exactly one Make target or one Helm invocation. The
+  image pull secret Given applies one namespace manifest and one docker-registry
+  secret manifest per row. Caching is idempotent per suite; the underlying
+  bootstrap runs at most once even if multiple scenarios name the Given.
+- The Helm OCI registry authentication Given reads `NGC_API_KEY` from the
+  process environment and passes it only through
+  `CommandRunner.RunWithSensitiveStdin`. The key must never be interpolated
+  into command text, argv, command logs, captured output, or failure messages.
 - Features that bring up a `tools/ncp-local-cluster` topology must
   include a conflict precheck in their Background before the
   bootstrap Given, asserting the OTHER topology is absent. Use

@@ -11,12 +11,9 @@ Feature: Render local Helmfile stacks with observability disabled
       | SAMPLE_NGC_ORG  |
       | SAMPLE_NGC_TEAM |
       | REPO_ROOT       |
-    # Helmfile pulls OCI charts during rendering. Keep $NGC_API_KEY unbraced
-    # so the BDD runner does not expand it into command logs.
-    And command has succeeded:
-      """
-      bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" | helm registry login nvcr.io --username "\$oauthtoken" --password-stdin'
-      """
+    # Helmfile pulls OCI charts during rendering. Authenticate before render
+    # without exposing the current API key in command arguments or logs.
+    And Helm is authenticated to OCI registry "nvcr.io" using the current NGC API key
     # Create the self-managed stack environment used by the control-plane render.
     And I prepare Helmfile environment "local-bdd-observability-disabled" for stack "self-managed" from fixture "tests/bdd/fixtures/self-managed-local-bdd.yaml" with values:
       | global.imagePullSecrets[0].name | nvcr-pull-secret                     |

@@ -38,6 +38,20 @@ type helmRelease struct {
 	Status    string `json:"status"`
 }
 
+// HelmRegistryLoginCommand builds a Helm OCI registry login command whose
+// password must be supplied on stdin by the caller.
+func HelmRegistryLoginCommand(registry string) (string, error) {
+	registry = strings.TrimSpace(Interpolate(registry))
+	if registry == "" {
+		return "", fmt.Errorf("OCI registry is empty")
+	}
+	return strings.Join([]string{
+		"helm", "registry", "login", quoteCommandArg(registry),
+		"--username", quoteCommandArg("$oauthtoken"),
+		"--password-stdin",
+	}, " "), nil
+}
+
 // HelmListCommand builds an explicit-context, all-namespaces Helm list command.
 func HelmListCommand(kubeContext string) (string, error) {
 	kubeContext = strings.TrimSpace(Interpolate(kubeContext))

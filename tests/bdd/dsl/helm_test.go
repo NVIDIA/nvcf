@@ -27,6 +27,24 @@ const deployedHelmReleases = `[
   {"name":"api","namespace":"nvcf","revision":3,"status":"failed"}
 ]`
 
+func TestHelmRegistryLoginCommandInterpolatesRegistry(t *testing.T) {
+	t.Setenv("BDD_TMP_REGISTRY", "nvcr.io")
+	got, err := HelmRegistryLoginCommand("${BDD_TMP_REGISTRY}")
+	if err != nil {
+		t.Fatalf("build command: %v", err)
+	}
+	want := "helm registry login nvcr.io --username '$oauthtoken' --password-stdin"
+	if got != want {
+		t.Fatalf("command = %q, want %q", got, want)
+	}
+}
+
+func TestHelmRegistryLoginCommandRejectsEmptyRegistry(t *testing.T) {
+	if _, err := HelmRegistryLoginCommand(""); err == nil {
+		t.Fatal("expected empty registry error")
+	}
+}
+
 func TestHelmListCommandUsesExplicitContext(t *testing.T) {
 	t.Setenv("BDD_TMP_CONTEXT", "k3d-ncp-local")
 	got, err := HelmListCommand("${BDD_TMP_CONTEXT}")

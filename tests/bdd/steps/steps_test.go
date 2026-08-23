@@ -34,7 +34,8 @@ import (
 )
 
 type recordedRun struct {
-	command string
+	command        string
+	sensitiveStdin string
 }
 
 type fakeRunner struct {
@@ -45,6 +46,15 @@ type fakeRunner struct {
 
 func (f *fakeRunner) Run(_ context.Context, command string) (harness.Result, error) {
 	f.runs = append(f.runs, recordedRun{command: command})
+	return f.result, f.err
+}
+
+func (f *fakeRunner) RunWithSensitiveStdin(
+	_ context.Context,
+	command,
+	sensitiveStdin string,
+) (harness.Result, error) {
+	f.runs = append(f.runs, recordedRun{command: command, sensitiveStdin: sensitiveStdin})
 	return f.result, f.err
 }
 
@@ -777,6 +787,70 @@ func TestSingleClusterBootstrapCachesAcrossCalls(t *testing.T) {
 	}
 	if len(fake.runs) != 1 {
 		t.Fatalf("runs = %d, want 1 (cache should suppress the second call)", len(fake.runs))
+	}
+}
+
+func TestHelmRegistryAuthenticationUsesSensitiveStdinAndCaches(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NGC_API_KEY", "super-secret-token")
+	t.Setenv("BDD_TMP_REGISTRY", "nvcr.io")
+
+	for i := 0; i < 2; i++ {
+		if err := sc.helmIsAuthenticatedToOCIRegistry(context.Background(), "${BDD_TMP_REGISTRY}"); err != nil {
+			t.Fatalf("authenticate call %d: %v", i+1, err)
+		}
+	}
+	if len(fake.runs) != 1 {
+		t.Fatalf("runs = %d, want 1", len(fake.runs))
+	}
+	wantCommand := "helm registry login nvcr.io --username '$oauthtoken' --password-stdin"
+	if fake.runs[0].command != wantCommand {
+		t.Fatalf("command = %q, want %q", fake.runs[0].command, wantCommand)
+	}
+	if fake.runs[0].sensitiveStdin != "super-secret-token" {
+		t.Fatal("NGC API key was not supplied through sensitive stdin")
+	}
+	if strings.Contains(fake.runs[0].command, "super-secret-token") {
+		t.Fatalf("NGC API key leaked into command: %q", fake.runs[0].command)
+	}
+	if sc.LastResult.ExitCode != 0 {
+		t.Fatalf("cached result exit code = %d, want 0", sc.LastResult.ExitCode)
+	}
+}
+
+func TestHelmRegistryAuthenticationRedactsFailure(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	const apiKey = "super-secret-token"
+	t.Setenv("NGC_API_KEY", apiKey)
+	fake.result = harness.Result{ExitCode: 1, Stderr: "unauthorized: " + apiKey}
+	fake.err = errors.New("login failed for " + apiKey)
+
+	err := sc.helmIsAuthenticatedToOCIRegistry(context.Background(), "nvcr.io")
+	if err == nil {
+		t.Fatal("expected authentication failure")
+	}
+	for label, value := range map[string]string{
+		"returned error": err.Error(),
+		"LastErr":        sc.LastErr.Error(),
+		"stderr":         sc.LastResult.Stderr,
+	} {
+		if strings.Contains(value, apiKey) {
+			t.Fatalf("%s leaked NGC API key: %q", label, value)
+		}
+	}
+	if !strings.Contains(err.Error(), "exit code 1") || !strings.Contains(err.Error(), "unauthorized") {
+		t.Fatalf("error lacks useful diagnostics: %v", err)
+	}
+}
+
+func TestHelmRegistryAuthenticationRequiresAPIKey(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NGC_API_KEY", "")
+	if err := sc.helmIsAuthenticatedToOCIRegistry(context.Background(), "nvcr.io"); err == nil {
+		t.Fatal("expected error when NGC_API_KEY is unset")
+	}
+	if len(fake.runs) != 0 {
+		t.Fatalf("runs = %d, want 0", len(fake.runs))
 	}
 }
 
