@@ -20,17 +20,14 @@ Feature: Bring up a local multi-cluster NVCF stack with the CLI
         | NGC_API_KEY     |
         | SAMPLE_NGC_ORG  |
         | SAMPLE_NGC_TEAM |
-      # self-hosted install --env local reads operator-authored local
-      # secrets files from both split stacks:
-      # deploy/stacks/self-managed/secrets/local-secrets.yaml (control
-      # plane). Only secrets.yaml.template is tracked in each
-      # stack. Author both files from the canonical templates before
-      # running install/register. Ledger snapshots whatever
+      # self-hosted install --env local reads the operator-authored
+      # control-plane secrets file. Only secrets.yaml.template is tracked.
+      # Prepare local-secrets.yaml from that template before running
+      # install/register. Ledger snapshots whatever
       # local-secrets.yaml state existed before the first write (its
       # prior contents or absence) and restores or removes it at suite
       # teardown.
-      And I copy the file "deploy/stacks/self-managed/secrets/secrets.yaml.template" to "deploy/stacks/self-managed/secrets/local-secrets.yaml"
-      And I substitute "REPLACE_WITH_BASE64_DOCKER_CREDENTIAL" in file "deploy/stacks/self-managed/secrets/local-secrets.yaml" with base64 of "$oauthtoken:${NGC_API_KEY}"
+      And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
       # --env local also reads operator-authored environment values from
       # both split stacks: deploy/stacks/<stack>/environments/local.yaml.
       # Neither file is tracked, so author both from the BDD multi-cluster

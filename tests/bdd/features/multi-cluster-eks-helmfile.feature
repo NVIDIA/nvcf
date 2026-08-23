@@ -73,8 +73,7 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
       bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" | helm registry login nvcr.io --username "\$oauthtoken" --password-stdin'
       """
     # Create NGC dockerconfig registry credentials.
-    And I copy the file "deploy/stacks/self-managed/secrets/secrets.yaml.template" to "deploy/stacks/self-managed/secrets/eks-bdd-multi-secrets.yaml"
-    And I substitute "REPLACE_WITH_BASE64_DOCKER_CREDENTIAL" in file "deploy/stacks/self-managed/secrets/eks-bdd-multi-secrets.yaml" with base64 of "$oauthtoken:${NGC_API_KEY}"
+    And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/eks-bdd-multi-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
     # Both clusters must be reachable before we start.
     And I run command "kubectl --context ${EKS_CONTEXT} get nodes -o name"
     And the command exit code should be 0
@@ -412,6 +411,8 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
       Then the command exit code should be 0
       And the command output should contain "bdd-echo"
 
+    # Failing until GitHub issue #1098 is resolved and the fix from GitHub
+    # issue #1032 is consumed by the self-managed stack.
     @nvct-task-api
     Scenario: User launches an NVCT task on the compute cluster and waits for completion
       Given command has succeeded:

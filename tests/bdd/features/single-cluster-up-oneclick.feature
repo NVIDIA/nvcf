@@ -49,8 +49,7 @@ Feature: Bring up a local single-cluster NVCF stack with the self-hosted up one-
       # The control-plane stack also requires an operator-authored local
       # secrets file. Author it from the tracked template; the Ledger gives
       # it the same restore-or-remove behavior as the environment files.
-      And I copy the file "deploy/stacks/self-managed/secrets/secrets.yaml.template" to "deploy/stacks/self-managed/secrets/local-secrets.yaml"
-      And I substitute "REPLACE_WITH_BASE64_DOCKER_CREDENTIAL" in file "deploy/stacks/self-managed/secrets/local-secrets.yaml" with base64 of "$oauthtoken:${NGC_API_KEY}"
+      And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
       # Conflict precheck: ncp-local-cp's k3d serverlb claims
       # 0.0.0.0:8080/8443/10081, NATS on 4222, and the worker
       # callback port 10086, overlapping host ports single-cluster

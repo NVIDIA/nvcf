@@ -10,7 +10,7 @@ domain-specific validation logic.
 
 The vocabulary is restricted to four categories:
 
-1. File operations: copy, edit YAML, substitute strings.
+1. File operations: copy, edit YAML, substitute blocks, prepare secrets.
 2. Environment preconditions: env vars set, files exist, infrastructure
    reachable.
 3. Command execution: exec a shell command and capture exit code, stdout,
@@ -105,7 +105,7 @@ refactor in every consumer; that is a feature.
 |------|-------|
 | `And I copy the file {string} to {string}` | Both paths are repo-relative. |
 | `And I update yaml file {string} with keys:` (two-column table of dotted-path and value) | Path supports dotted notation and `[n]` indices (e.g. `global.imagePullSecrets[0].name`). Missing intermediate maps and missing list indices are upserted: writing `global.imagePullSecrets[0].name` against a file that has neither `global.imagePullSecrets` nor any list entry creates both. Existing scalars at intermediate positions cause the step to fail rather than silently overwrite a non-map. Value cells expand `${VAR}` from `os.Environ`. |
-| `And I substitute {string} in file {string} with base64 of {string}` | Used for credential rendering; the third arg expands `${VAR}` then base64-encodes. The handler never logs the substituted value. |
+| `And I prepare self-managed secrets file {string} from template {string} using the current NGC registry credential` | The destination and template are explicit repo-relative paths with `${VAR}` interpolation. Replaces the template's registry credential placeholder with base64 of the current `$oauthtoken:<NGC_API_KEY>` credential and writes the destination with mode `0600`. The destination is ledger-backed, and secret material never enters Gherkin, command logs, or failure messages. |
 | `And I substitute a block in file {string}:` (docstring) | The docstring contains an old block and replacement block separated by exactly one `---` line. `${VAR}` interpolation applies before an exact, ledger-backed replacement. Missing or malformed old blocks fail. |
 
 ### Command execution (When)
@@ -213,7 +213,8 @@ contract verified in `src/clis/nvcf-cli/cmd/`):
 
 Every step that writes into a path under the repo working tree
 (`I copy the file ... to ...`, `I update yaml file ...`,
-`I substitute ... in file ...`) registers that path with the runner's
+`I prepare self-managed secrets file ...`, `I substitute a block ...`)
+registers that path with the runner's
 restoration ledger:
 
 - Before the first write, the runner snapshots the file (exists/not,
@@ -448,9 +449,14 @@ const (
 // names the first path that differed.
 func MatchYAMLSubtree(filePath, keyPath, expectedYAML string, mode MatchMode) error
 
+// RenderSelfManagedSecrets replaces the secrets-template registry credential
+// placeholder with base64 of `$oauthtoken:<NGC_API_KEY>`. It fails without
+// returning raw or encoded credential material when the key or placeholder is
+// missing.
+func RenderSelfManagedSecrets(template []byte, apiKey string) ([]byte, error)
+
 // SubstituteFile replaces every occurrence of placeholder with
-// replacement in the named file. Used for credential rendering.
-// Never logs placeholder or replacement.
+// replacement in the named file. Never logs placeholder or replacement.
 func SubstituteFile(path, placeholder, replacement string) error
 
 // JSONContainsRows parses raw as a JSON array of objects, and for each

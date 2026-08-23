@@ -19,6 +19,7 @@ package steps
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"io"
 	"os"
@@ -90,6 +91,136 @@ func TestICopyFileSnapshotsAndCopies(t *testing.T) {
 	}
 	if _, err := os.Stat(destAbs); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("dest should be deleted: %v", err)
+	}
+}
+
+func TestIPrepareSelfManagedSecretsFileRendersInterpolatedPaths(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NGC_API_KEY", "test-api-key")
+	t.Setenv("BDD_TMP_SECRETS_NAME", "local-bdd-secrets.yaml")
+	t.Setenv("BDD_TMP_TEMPLATE_NAME", "secrets.yaml.template")
+	templateRel := "templates/${BDD_TMP_TEMPLATE_NAME}"
+	templateAbs := filepath.Join(sc.Suite.Config.RepoRoot, "templates", "secrets.yaml.template")
+	if err := os.MkdirAll(filepath.Dir(templateAbs), 0o755); err != nil {
+		t.Fatalf("mkdir template: %v", err)
+	}
+	if err := os.WriteFile(templateAbs, []byte("registryCredential: REPLACE_WITH_BASE64_DOCKER_CREDENTIAL\n"), 0o644); err != nil {
+		t.Fatalf("seed template: %v", err)
+	}
+
+	destRel := "secrets/${BDD_TMP_SECRETS_NAME}"
+	if err := sc.iPrepareSelfManagedSecretsFile(destRel, templateRel); err != nil {
+		t.Fatalf("prepare secrets: %v", err)
+	}
+	destAbs := filepath.Join(sc.Suite.Config.RepoRoot, "secrets", "local-bdd-secrets.yaml")
+	got, err := os.ReadFile(destAbs)
+	if err != nil {
+		t.Fatalf("read destination: %v", err)
+	}
+	wantCredential := base64.StdEncoding.EncodeToString([]byte("$oauthtoken:test-api-key"))
+	if string(got) != "registryCredential: "+wantCredential+"\n" {
+		t.Fatalf("destination body does not contain the expected encoded credential")
+	}
+	info, err := os.Stat(destAbs)
+	if err != nil {
+		t.Fatalf("stat destination: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("destination mode = %o, want 600", info.Mode().Perm())
+	}
+	if len(fake.runs) != 0 {
+		t.Fatalf("secret preparation wrote %d command log entries, want 0", len(fake.runs))
+	}
+}
+
+func TestIPrepareSelfManagedSecretsFileRestoresExistingDestination(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	t.Setenv("NGC_API_KEY", "test-api-key")
+	templateRel := "secrets.yaml.template"
+	templateAbs := filepath.Join(sc.Suite.Config.RepoRoot, templateRel)
+	if err := os.WriteFile(templateAbs, []byte("registryCredential: REPLACE_WITH_BASE64_DOCKER_CREDENTIAL\n"), 0o600); err != nil {
+		t.Fatalf("seed template: %v", err)
+	}
+	destRel := "local-secrets.yaml"
+	destAbs := filepath.Join(sc.Suite.Config.RepoRoot, destRel)
+	original := []byte("operator-authored: original\n")
+	if err := os.WriteFile(destAbs, original, 0o640); err != nil {
+		t.Fatalf("seed destination: %v", err)
+	}
+
+	if err := sc.iPrepareSelfManagedSecretsFile(destRel, templateRel); err != nil {
+		t.Fatalf("prepare secrets: %v", err)
+	}
+	renderedInfo, err := os.Stat(destAbs)
+	if err != nil {
+		t.Fatalf("stat rendered destination: %v", err)
+	}
+	if renderedInfo.Mode().Perm() != 0o600 {
+		t.Fatalf("rendered destination mode = %o, want 600", renderedInfo.Mode().Perm())
+	}
+	if err := sc.Suite.Ledger.RestoreAll(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	got, err := os.ReadFile(destAbs)
+	if err != nil {
+		t.Fatalf("read restored destination: %v", err)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("restored body = %q, want original", got)
+	}
+	info, err := os.Stat(destAbs)
+	if err != nil {
+		t.Fatalf("stat restored destination: %v", err)
+	}
+	if info.Mode().Perm() != 0o640 {
+		t.Fatalf("restored mode = %o, want 640", info.Mode().Perm())
+	}
+}
+
+func TestIPrepareSelfManagedSecretsFileRestoresAbsentDestination(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	t.Setenv("NGC_API_KEY", "test-api-key")
+	templateRel := "secrets.yaml.template"
+	templateAbs := filepath.Join(sc.Suite.Config.RepoRoot, templateRel)
+	if err := os.WriteFile(templateAbs, []byte("registryCredential: REPLACE_WITH_BASE64_DOCKER_CREDENTIAL\n"), 0o600); err != nil {
+		t.Fatalf("seed template: %v", err)
+	}
+	destRel := "generated/local-secrets.yaml"
+	destAbs := filepath.Join(sc.Suite.Config.RepoRoot, destRel)
+
+	if err := sc.iPrepareSelfManagedSecretsFile(destRel, templateRel); err != nil {
+		t.Fatalf("prepare secrets: %v", err)
+	}
+	if err := sc.Suite.Ledger.RestoreAll(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if _, err := os.Stat(destAbs); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("generated destination should be removed: %v", err)
+	}
+}
+
+func TestIPrepareSelfManagedSecretsFileFailureHidesCredentialMaterial(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	apiKey := "sensitive-test-api-key"
+	t.Setenv("NGC_API_KEY", apiKey)
+	templateRel := "secrets.yaml.template"
+	templateAbs := filepath.Join(sc.Suite.Config.RepoRoot, templateRel)
+	if err := os.WriteFile(templateAbs, []byte("registryCredential: missing\n"), 0o600); err != nil {
+		t.Fatalf("seed template: %v", err)
+	}
+
+	err := sc.iPrepareSelfManagedSecretsFile("local-secrets.yaml", templateRel)
+	if err == nil {
+		t.Fatal("expected missing-placeholder error")
+	}
+	encoded := base64.StdEncoding.EncodeToString([]byte("$oauthtoken:" + apiKey))
+	for _, secret := range []string{apiKey, encoded} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("error leaked credential material: %v", err)
+		}
+	}
+	if len(fake.runs) != 0 {
+		t.Fatalf("failed secret preparation wrote %d command log entries, want 0", len(fake.runs))
 	}
 }
 
@@ -829,23 +960,6 @@ func TestRegisterAllRunsAFeatureFile(t *testing.T) {
 	}
 	if status := suite.Run(); status != 0 {
 		t.Fatalf("suite status = %d", status)
-	}
-}
-
-func TestISubstituteBase64DoesNotReturnSecretMaterial(t *testing.T) {
-	sc, _ := newScenarioContext(t)
-	rel := "secrets.yaml"
-	abs := filepath.Join(sc.Suite.Config.RepoRoot, rel)
-	if err := os.WriteFile(abs, []byte("token: REPLACE_ME\n"), 0o600); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	t.Setenv("BDD_TMP_API_KEY", "real-secret-token")
-	if err := sc.iSubstituteBase64("REPLACE_ME", rel, "${BDD_TMP_API_KEY}"); err != nil {
-		t.Fatalf("substitute: %v", err)
-	}
-	got, _ := os.ReadFile(abs)
-	if strings.Contains(string(got), "real-secret-token") {
-		t.Fatalf("raw secret leaked into file body:\n%s", got)
 	}
 }
 
