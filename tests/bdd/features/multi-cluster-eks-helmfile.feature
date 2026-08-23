@@ -132,8 +132,7 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
     #    the agent config. The agent dials the bare-ELB service URLs
     #    (which DNS-resolve) and sends these hostnames as the HTTP Host
     #    header so the control-plane gateway HTTPRoutes match.
-    When I copy the file "deploy/stacks/self-managed/environments/base.yaml" to "deploy/stacks/self-managed/environments/eks-bdd-multi.yaml"
-    And I update yaml file "deploy/stacks/self-managed/environments/eks-bdd-multi.yaml" with keys:
+    When I prepare Helmfile environment "eks-bdd-multi" for stack "self-managed" from fixture "deploy/stacks/self-managed/environments/base.yaml" with values:
       | global.helm.sources.repository                                 | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository                                        | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.imagePullSecrets[0].name                                | nvcr-pull-secret                     |
@@ -164,8 +163,7 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
       | openbao.migrations.issuerDiscovery.enabled                     | true                                 |
     Then yaml file "deploy/stacks/self-managed/environments/eks-bdd-multi.yaml" key "global.domain" should equal "${EKS_GATEWAY_DOMAIN}"
 
-    When I copy the file "deploy/stacks/nvcf-compute-plane/environments/base.yaml" to "deploy/stacks/nvcf-compute-plane/environments/eks-bdd-multi.yaml"
-    And I update yaml file "deploy/stacks/nvcf-compute-plane/environments/eks-bdd-multi.yaml" with keys:
+    When I prepare Helmfile environment "eks-bdd-multi" for stack "nvcf-compute-plane" from fixture "deploy/stacks/nvcf-compute-plane/environments/base.yaml" with values:
       | global.helm.sources.repository                                 | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository                                        | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.imagePullSecrets[0].name                                | nvcr-pull-secret                     |

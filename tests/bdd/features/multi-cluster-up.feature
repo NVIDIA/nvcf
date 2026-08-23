@@ -38,14 +38,12 @@ Feature: Bring up a local multi-cluster NVCF stack with the CLI
       # on a fresh cluster the ServiceMonitor CRDs do not exist yet and
       # the diff fails before anything installs. The Helmfile workflow
       # (helmfile sync) has no diff phase and keeps the default profile.
-      And I copy the file "tests/bdd/fixtures/self-managed-local-bdd-multi.yaml" to "deploy/stacks/self-managed/environments/local.yaml"
-      And I update yaml file "deploy/stacks/self-managed/environments/local.yaml" with keys:
+      And I prepare Helmfile environment "local" for stack "self-managed" from fixture "tests/bdd/fixtures/self-managed-local-bdd-multi.yaml" with values:
         | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
         | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
         | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
         | observability.profile           | disabled                             |
-      And I copy the file "tests/bdd/fixtures/nvcf-compute-plane-local-bdd-multi.yaml" to "deploy/stacks/nvcf-compute-plane/environments/local.yaml"
-      And I update yaml file "deploy/stacks/nvcf-compute-plane/environments/local.yaml" with keys:
+      And I prepare Helmfile environment "local" for stack "nvcf-compute-plane" from fixture "tests/bdd/fixtures/nvcf-compute-plane-local-bdd-multi.yaml" with values:
         | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
         | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
         | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |

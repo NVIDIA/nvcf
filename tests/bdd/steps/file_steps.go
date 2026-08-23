@@ -34,11 +34,40 @@ import (
 func registerFileSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^I copy the file "([^"]*)" to "([^"]*)"$`, sc.iCopyFile)
 	ctx.Step(`^I update yaml file "([^"]*)" with keys:$`, sc.iUpdateYAMLFile)
+	ctx.Step(`^I prepare Helmfile environment "([^"]*)" for stack "([^"]*)" from fixture "([^"]*)" with values:$`, sc.iPrepareHelmfileEnvironment)
 	ctx.Step(`^I prepare self-managed secrets file "([^"]*)" from template "([^"]*)" using the current NGC registry credential$`, sc.iPrepareSelfManagedSecretsFile)
 	ctx.Step(`^I substitute a block in file "([^"]*)":$`, sc.iSubstituteBlock)
 	ctx.Step(`^environment variable "([^"]*)" is set$`, sc.environmentVariableIsSet)
 	ctx.Step(`^these environment variables are set:$`, sc.environmentVariablesAreSet)
 	ctx.Step(`^file "([^"]*)" exists$`, sc.fileShouldExist)
+}
+
+// iPrepareHelmfileEnvironment delegates named environment preparation so the
+// registered Godog handler remains declarative.
+func (sc *ScenarioContext) iPrepareHelmfileEnvironment(environment, stack, fixture string, table *godog.Table) error {
+	return sc.prepareHelmfileEnvironment(environment, stack, fixture, table)
+}
+
+// prepareHelmfileEnvironment validates and derives the destination from the
+// suite repository root, then snapshots, copies, and updates it.
+func (sc *ScenarioContext) prepareHelmfileEnvironment(environment, stack, fixture string, table *godog.Table) error {
+	resolvedEnvironment := dsl.Interpolate(environment)
+	resolvedStack := dsl.Interpolate(stack)
+	dest, err := dsl.HelmfileEnvironmentPath(sc.Suite.Config.RepoRoot, resolvedStack, resolvedEnvironment)
+	if err != nil {
+		return err
+	}
+	keys, err := tableToKeyValuePairs(table)
+	if err != nil {
+		return err
+	}
+	if err := sc.Suite.Ledger.Snapshot(dest); err != nil {
+		return err
+	}
+	if err := copyFile(sc.resolvePath(dsl.Interpolate(fixture)), dest); err != nil {
+		return err
+	}
+	return dsl.UpdateYAMLKeys(dest, keys)
 }
 
 // iCopyFile copies src to dest, recording dest with the Ledger before

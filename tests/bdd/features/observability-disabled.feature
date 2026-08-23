@@ -18,16 +18,14 @@ Feature: Render local Helmfile stacks with observability disabled
       bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" | helm registry login nvcr.io --username "\$oauthtoken" --password-stdin'
       """
     # Create the self-managed stack environment used by the control-plane render.
-    And I copy the file "tests/bdd/fixtures/self-managed-local-bdd.yaml" to "deploy/stacks/self-managed/environments/local-bdd-observability-disabled.yaml"
-    And I update yaml file "deploy/stacks/self-managed/environments/local-bdd-observability-disabled.yaml" with keys:
+    And I prepare Helmfile environment "local-bdd-observability-disabled" for stack "self-managed" from fixture "tests/bdd/fixtures/self-managed-local-bdd.yaml" with values:
       | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
       | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | observability.profile           | disabled                             |
     And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-bdd-observability-disabled-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
     # Create the compute-plane stack environment used by the worker render.
-    And I copy the file "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" to "deploy/stacks/nvcf-compute-plane/environments/local-bdd-observability-disabled.yaml"
-    And I update yaml file "deploy/stacks/nvcf-compute-plane/environments/local-bdd-observability-disabled.yaml" with keys:
+    And I prepare Helmfile environment "local-bdd-observability-disabled" for stack "nvcf-compute-plane" from fixture "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" with values:
       | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
       | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |

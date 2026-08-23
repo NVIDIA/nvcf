@@ -94,6 +94,109 @@ func TestICopyFileSnapshotsAndCopies(t *testing.T) {
 	}
 }
 
+func TestIPrepareHelmfileEnvironmentCopiesUpdatesAndRestoresAbsentDestination(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	t.Setenv("BDD_TMP_ENV_FIXTURE", "fixtures/base.yaml")
+	t.Setenv("SAMPLE_NGC_ORG", "test-org")
+	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+	fixtureAbs := filepath.Join(sc.Suite.Config.RepoRoot, "fixtures", "base.yaml")
+	if err := os.MkdirAll(filepath.Dir(fixtureAbs), 0o755); err != nil {
+		t.Fatalf("mkdir fixture: %v", err)
+	}
+	if err := os.WriteFile(fixtureAbs, []byte("global:\n  storageClass: local-path\n"), 0o644); err != nil {
+		t.Fatalf("seed fixture: %v", err)
+	}
+	table := docTable(t, [][]string{
+		{"global.imagePullSecrets[0].name", "nvcr-pull-secret"},
+		{"global.image.repository", "${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}"},
+	})
+
+	if err := sc.iPrepareHelmfileEnvironment("local-bdd", "self-managed", "${BDD_TMP_ENV_FIXTURE}", table); err != nil {
+		t.Fatalf("prepare environment: %v", err)
+	}
+	dest := filepath.Join(sc.Suite.Config.RepoRoot, "deploy", "stacks", "self-managed", "environments", "local-bdd.yaml")
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read destination: %v", err)
+	}
+	for _, want := range []string{"storageClass: local-path", "name: nvcr-pull-secret", "repository: test-org/test-team"} {
+		if !strings.Contains(string(got), want) {
+			t.Fatalf("destination missing %q:\n%s", want, got)
+		}
+	}
+
+	if err := sc.Suite.Ledger.RestoreAll(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if _, err := os.Stat(dest); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("generated destination should be removed: %v", err)
+	}
+}
+
+func TestIPrepareHelmfileEnvironmentRestoresExistingDestination(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	fixture := "fixtures/base.yaml"
+	fixtureAbs := filepath.Join(sc.Suite.Config.RepoRoot, fixture)
+	if err := os.MkdirAll(filepath.Dir(fixtureAbs), 0o755); err != nil {
+		t.Fatalf("mkdir fixture: %v", err)
+	}
+	if err := os.WriteFile(fixtureAbs, []byte("global: {}\n"), 0o644); err != nil {
+		t.Fatalf("seed fixture: %v", err)
+	}
+	dest := filepath.Join(sc.Suite.Config.RepoRoot, "deploy", "stacks", "observability", "environments", "existing.yaml")
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		t.Fatalf("mkdir destination: %v", err)
+	}
+	original := []byte("operatorAuthored: true\n")
+	if err := os.WriteFile(dest, original, 0o640); err != nil {
+		t.Fatalf("seed destination: %v", err)
+	}
+	table := docTable(t, [][]string{{"observability.mode", "install"}})
+
+	if err := sc.iPrepareHelmfileEnvironment("existing", "observability", fixture, table); err != nil {
+		t.Fatalf("prepare environment: %v", err)
+	}
+	if err := sc.Suite.Ledger.RestoreAll(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read restored destination: %v", err)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("restored body = %q, want %q", got, original)
+	}
+	info, err := os.Stat(dest)
+	if err != nil {
+		t.Fatalf("stat restored destination: %v", err)
+	}
+	if info.Mode().Perm() != 0o640 {
+		t.Fatalf("restored mode = %o, want 640", info.Mode().Perm())
+	}
+}
+
+func TestIPrepareHelmfileEnvironmentRejectsInvalidNamesBeforeWriting(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	table := docTable(t, [][]string{{"global.image.registry", "nvcr.io"}})
+	for _, tc := range []struct {
+		name        string
+		environment string
+		stack       string
+	}{
+		{name: "unsupported stack", environment: "local", stack: "unknown"},
+		{name: "unsafe environment", environment: "../local", stack: "self-managed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := sc.iPrepareHelmfileEnvironment(tc.environment, tc.stack, "missing.yaml", table); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+	if _, err := os.Stat(filepath.Join(sc.Suite.Config.RepoRoot, "deploy")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("validation failure should not create deploy tree: %v", err)
+	}
+}
+
 func TestIPrepareSelfManagedSecretsFileRendersInterpolatedPaths(t *testing.T) {
 	sc, fake := newScenarioContext(t)
 	t.Setenv("NGC_API_KEY", "test-api-key")

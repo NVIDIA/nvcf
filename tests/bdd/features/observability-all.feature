@@ -20,23 +20,20 @@ Feature: Install local Helmfile observability for both planes
       bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" | helm registry login nvcr.io --username "\$oauthtoken" --password-stdin'
       """
     # Configure the control-plane stack and its shared observability child.
-    And I copy the file "tests/bdd/fixtures/self-managed-local-bdd.yaml" to "deploy/stacks/self-managed/environments/local-bdd-observability-all.yaml"
-    And I update yaml file "deploy/stacks/self-managed/environments/local-bdd-observability-all.yaml" with keys:
+    And I prepare Helmfile environment "local-bdd-observability-all" for stack "self-managed" from fixture "tests/bdd/fixtures/self-managed-local-bdd.yaml" with values:
       | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
       | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | observability.profile           | all                                  |
       | functionAutoscaler.image.tag    | 1.18.10                              |
     # Give the shared observability Helmfile the same named environment.
-    And I copy the file "tests/bdd/fixtures/self-managed-local-bdd.yaml" to "deploy/stacks/observability/environments/local-bdd-observability-all.yaml"
-    And I update yaml file "deploy/stacks/observability/environments/local-bdd-observability-all.yaml" with keys:
+    And I prepare Helmfile environment "local-bdd-observability-all" for stack "observability" from fixture "tests/bdd/fixtures/self-managed-local-bdd.yaml" with values:
       | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
       | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | observability.profile           | all                                  |
     # Configure NVCA to join the same cluster and enable its collector.
-    And I copy the file "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" to "deploy/stacks/nvcf-compute-plane/environments/local-bdd-observability-all.yaml"
-    And I update yaml file "deploy/stacks/nvcf-compute-plane/environments/local-bdd-observability-all.yaml" with keys:
+    And I prepare Helmfile environment "local-bdd-observability-all" for stack "nvcf-compute-plane" from fixture "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" with values:
       | global.imagePullSecrets[0].name                               | nvcr-pull-secret                                                  |
       | global.helm.sources.repository                                | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                              |
       | global.image.repository                                       | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                              |
