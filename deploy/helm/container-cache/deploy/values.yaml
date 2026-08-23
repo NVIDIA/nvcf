@@ -198,16 +198,6 @@ consistentHashRouting:
   peerKeepaliveConnections: 32
   peerKeepaliveTimeout: 60s
   peerKeepaliveRequests: 1000
-  # Replicate an object locally after this many requests arrive here for an
-  # object owned by another pod, so hot objects stop paying the relay hop while
-  # one-off objects still live only on their owner. Storage is bounded by the
-  # same min_free eviction as every other zone, and the extra copies are by
-  # definition the objects being requested most.
-  #
-  # 0 disables local replication and restores the strict single-copy behavior,
-  # where every request for a non-owned object relays for the object's whole
-  # lifetime.
-  relayCacheMinUses: 3
 
 # Metrics configuration.
 metrics:

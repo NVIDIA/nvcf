@@ -52,6 +52,12 @@ grep -q 'set $cc_hash_key "$request_method|$uri|$arg_versionId|$http_range"' "$T
 grep -q 'proxy_set_header X-NVCF-CC-Relayed "1"' "$TMP/on.yaml" || fail "relay hop must emit the one-hop marker"
 grep -q 'ngx.req.get_headers()\["X-NVCF-CC-Relayed"\]' "$TMP/on.yaml" || fail "cc-route.lua must reject an inbound relay marker (serve locally, prevents relay loops)"
 
+# The relay block is matched repeatedly below. Capture it once rather than
+# piping awk into `grep -q`: grep exits on first match, awk takes SIGPIPE, and
+# `set -o pipefail` then reports the pipeline as failed even though it matched.
+relay_block="$(awk '/location @cc_relay/,/^ *}$/' "$TMP/on.yaml")"
+relay_has() { grep -F -q -- "$1" <<<"$relay_block"; }
+
 echo "7. enabled: the peer hop reuses connections"
 # Both halves are required. A keepalive pool with no `Connection ""` is dead
 # weight, because nginx then sends its default `Connection: close` and every
@@ -59,23 +65,21 @@ echo "7. enabled: the peer hop reuses connections"
 # @cc_relay specifically: declaring any proxy_set_header in a location cancels
 # inheritance of the server-level set.
 [ "$(count 'keepalive [0-9]+;' "$TMP/on.yaml")" = 3 ] || fail "each cc_owner upstream needs a keepalive pool"
-awk '/location @cc_relay/,/^ *}$/' "$TMP/on.yaml" | grep -q 'proxy_set_header Connection ""' \
+relay_has 'proxy_set_header Connection ""' \
   || fail '@cc_relay must repeat Connection "" or the keepalive pool is never used'
 
-echo "8. enabled: hot objects replicate locally after relayCacheMinUses"
-awk '/location @cc_relay/,/^ *}$/' "$TMP/on.yaml" | grep -q 'proxy_cache_min_uses 3' \
-  || fail "relay must cache locally after the configured use threshold"
-awk '/location @cc_relay/,/^ *}$/' "$TMP/on.yaml" | grep -q 'proxy_cache_key \$cc_hash_key' \
-  || fail "relay cache key must match the owner's identity, not the default key"
-
-echo "8b. relayCacheMinUses=0 restores strict single-copy relaying"
-helm template t "$CHART_DIR" --set consistentHashRouting.enabled=true --set replicaCount=3 \
-  --set consistentHashRouting.relayCacheMinUses=0 > "$TMP/on-nocache.yaml" 2>/dev/null
-awk '/location @cc_relay/,/^ *}$/' "$TMP/on-nocache.yaml" | grep -q 'proxy_cache off' \
-  || fail "relayCacheMinUses=0 must leave the relay a pure stream"
-if awk '/location @cc_relay/,/^ *}$/' "$TMP/on-nocache.yaml" | grep -q 'proxy_cache_min_uses'; then
-  fail "relayCacheMinUses=0 must not emit proxy_cache_min_uses"
+echo "8. the relay never writes a local copy"
+# The hash exists to keep exactly one copy of an object in the tier. Caching on
+# the relay would remove the peer hop for hot objects but put a second copy of
+# them on disk, so it stays off.
+relay_has 'proxy_cache off' \
+  || fail "the relay must not cache; that would break the single-copy property"
+if relay_has 'proxy_cache_min_uses'; then
+  fail "relay-side caching must not render"
 fi
+# It must also not spool a large relayed body to local disk.
+relay_has 'proxy_max_temp_file_size 0' \
+  || fail "the relay must stream, not spool to disk"
 
 echo "9. relay cost is observable, and duration buckets outlast a whole transfer"
 # Without the route label a relayed request is indistinguishable from a local
@@ -85,11 +89,6 @@ grep -q '"cache_status", "http_status", "route"' "$TMP/on.yaml" \
 grep -q 'local route = "local"' "$TMP/on.yaml" || fail "route must default to local"
 grep -q 'route = "relayed"' "$TMP/on.yaml" || fail "relayed requests must be labelled"
 grep -q 'route = "peer"' "$TMP/on.yaml" || fail "requests served for a peer must be labelled"
-# A relay that serves from its own replica never contacts the owner, so it must
-# not be counted as a peer hop. Without this the label overstates relay traffic
-# and hides the replication that removed the hop.
-grep -q 'if cache_status == "HIT" then' "$TMP/on.yaml" \
-  || fail "a relay-served cache hit must be classified local, not relayed"
 # The objects here are whole model files, so a 10s ceiling put a large share of
 # traffic in +Inf and histogram_quantile then reports the bucket edge, not a
 # latency.
