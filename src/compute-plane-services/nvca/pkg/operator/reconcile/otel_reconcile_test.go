@@ -289,9 +289,14 @@ func assertICMSLane(t *testing.T, config string) {
 	// Empty instance_state must fall through to the reason-only branch, not produce a trailing dot.
 	assert.Contains(t, synthStmts[stateIdx], `instance_state"] != ""`,
 		"state-qualified branch must guard against empty instance_state")
-	assert.GreaterOrEqual(t, indexOfContaining(synthStmts,
-		`Concat(["ICMSRequest", log.attributes["k8s.event.reason"]]`), 0,
-		"reason-only event_name branch missing")
+	reasonOnlyIdx := indexOfContaining(synthStmts,
+		`Concat(["ICMSRequest", log.attributes["k8s.event.reason"]]`)
+	assert.GreaterOrEqual(t, reasonOnlyIdx, 0, "reason-only event_name branch missing")
+	// Empty instance_state (not just nil) must also trigger the reason-only branch so
+	// events with an empty annotation do not lose their event_name and get dropped by
+	// filter/required-fields.
+	assert.Contains(t, synthStmts[reasonOnlyIdx], `instance_state"] == ""`,
+		"reason-only branch must accept empty instance_state, not only nil")
 
 	pipelines := full["service"].(map[string]any)["pipelines"].(map[string]any)
 	icmsPipeline, ok := pipelines["logs/icms-events"].(map[string]any)
