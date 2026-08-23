@@ -151,7 +151,7 @@ processors:
   transform/synth-icms-event-name:
     error_mode: ignore
     log_statements:
-      - set(log.attributes["event_name"], Concat(["ICMSRequest", log.attributes["k8s.event.reason"], log.attributes["instance_state"]], ".")) where log.attributes["k8s.event.reason"] != nil and log.attributes["instance_state"] != nil
+      - set(log.attributes["event_name"], Concat(["ICMSRequest", log.attributes["k8s.event.reason"], log.attributes["instance_state"]], ".")) where log.attributes["k8s.event.reason"] != nil and log.attributes["instance_state"] != nil and log.attributes["instance_state"] != ""
       - set(log.attributes["event_name"], Concat(["ICMSRequest", log.attributes["k8s.event.reason"]], ".")) where log.attributes["k8s.event.reason"] != nil and log.attributes["instance_state"] == nil
 
 extensions:

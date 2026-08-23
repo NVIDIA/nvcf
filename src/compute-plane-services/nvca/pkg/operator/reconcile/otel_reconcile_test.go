@@ -283,9 +283,12 @@ func assertICMSLane(t *testing.T, config string) {
 	for _, s := range synthProc["log_statements"].([]any) {
 		synthStmts = append(synthStmts, s.(string))
 	}
-	assert.GreaterOrEqual(t, indexOfContaining(synthStmts,
-		`Concat(["ICMSRequest", log.attributes["k8s.event.reason"], log.attributes["instance_state"]]`), 0,
-		"state-qualified event_name branch missing")
+	stateIdx := indexOfContaining(synthStmts,
+		`Concat(["ICMSRequest", log.attributes["k8s.event.reason"], log.attributes["instance_state"]]`)
+	assert.GreaterOrEqual(t, stateIdx, 0, "state-qualified event_name branch missing")
+	// Empty instance_state must fall through to the reason-only branch, not produce a trailing dot.
+	assert.Contains(t, synthStmts[stateIdx], `instance_state"] != ""`,
+		"state-qualified branch must guard against empty instance_state")
 	assert.GreaterOrEqual(t, indexOfContaining(synthStmts,
 		`Concat(["ICMSRequest", log.attributes["k8s.event.reason"]]`), 0,
 		"reason-only event_name branch missing")
