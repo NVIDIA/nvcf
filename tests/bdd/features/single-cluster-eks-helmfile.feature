@@ -125,8 +125,7 @@ Feature: Install a single-cluster NVCF stack on a pre-provisioned EKS cluster wi
     #    hostnames as the HTTP Host header so the gateway HTTPRoutes match.
     #    This replaces the former @nvca-registration URL-rewrite + hostAliases
     #    workaround.
-    When I copy the file "deploy/stacks/self-managed/environments/base.yaml" to "deploy/stacks/self-managed/environments/eks-bdd.yaml"
-    And I update yaml file "deploy/stacks/self-managed/environments/eks-bdd.yaml" with keys:
+    When I prepare Helmfile environment "eks-bdd" for stack "self-managed" from fixture "deploy/stacks/self-managed/environments/base.yaml" with values:
       | global.helm.sources.repository                   | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository                          | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.imagePullSecrets[0].name                  | nvcr-pull-secret                     |
@@ -148,8 +147,7 @@ Feature: Install a single-cluster NVCF stack on a pre-provisioned EKS cluster wi
 
     # The compute-plane Helmfile is a separate bundle, so give it an
     # environment file with the same registry and control-plane endpoints.
-    When I copy the file "deploy/stacks/nvcf-compute-plane/environments/base.yaml" to "deploy/stacks/nvcf-compute-plane/environments/eks-bdd.yaml"
-    And I update yaml file "deploy/stacks/nvcf-compute-plane/environments/eks-bdd.yaml" with keys:
+    When I prepare Helmfile environment "eks-bdd" for stack "nvcf-compute-plane" from fixture "deploy/stacks/nvcf-compute-plane/environments/base.yaml" with values:
       | global.helm.sources.repository                                 | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository                                        | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.imagePullSecrets[0].name                                | nvcr-pull-secret                     |

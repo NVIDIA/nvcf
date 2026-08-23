@@ -33,15 +33,13 @@ Feature: Bring up a local single-cluster NVCF stack with the self-hosted up one-
       # values from both split stacks. Author both local.yaml files from
       # the tracked BDD fixtures; the Ledger restores or removes them at
       # suite teardown.
-      And I copy the file "tests/bdd/fixtures/self-managed-local-bdd.yaml" to "deploy/stacks/self-managed/environments/local.yaml"
-      And I update yaml file "deploy/stacks/self-managed/environments/local.yaml" with keys:
+      And I prepare Helmfile environment "local" for stack "self-managed" from fixture "tests/bdd/fixtures/self-managed-local-bdd.yaml" with values:
         | global.imagePullSecrets[0].name               | nvcr-pull-secret                                                   |
         | global.helm.sources.repository                | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                               |
         | global.image.repository                       | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                               |
         | api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE | nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/stargate-client:0.2.0 |
         | observability.profile                         | disabled                                                           |
-      And I copy the file "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" to "deploy/stacks/nvcf-compute-plane/environments/local.yaml"
-      And I update yaml file "deploy/stacks/nvcf-compute-plane/environments/local.yaml" with keys:
+      And I prepare Helmfile environment "local" for stack "nvcf-compute-plane" from fixture "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" with values:
         | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
         | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
         | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |

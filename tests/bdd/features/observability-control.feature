@@ -17,16 +17,14 @@ Feature: Install local Helmfile observability with the control profile
       bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" | helm registry login nvcr.io --username "\$oauthtoken" --password-stdin'
       """
     # Set the self-managed stack environment.
-    And I copy the file "tests/bdd/fixtures/self-managed-local-bdd.yaml" to "deploy/stacks/self-managed/environments/local-bdd-observability-control.yaml"
-    And I update yaml file "deploy/stacks/self-managed/environments/local-bdd-observability-control.yaml" with keys:
+    And I prepare Helmfile environment "local-bdd-observability-control" for stack "self-managed" from fixture "tests/bdd/fixtures/self-managed-local-bdd.yaml" with values:
       | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
       | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | observability.profile           | control                              |
       | functionAutoscaler.image.tag    | 1.18.10                              |
     # Set the shared observability stack environment.
-    And I copy the file "tests/bdd/fixtures/self-managed-local-bdd.yaml" to "deploy/stacks/observability/environments/local-bdd-observability-control.yaml"
-    And I update yaml file "deploy/stacks/observability/environments/local-bdd-observability-control.yaml" with keys:
+    And I prepare Helmfile environment "local-bdd-observability-control" for stack "observability" from fixture "tests/bdd/fixtures/self-managed-local-bdd.yaml" with values:
       | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
       | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
