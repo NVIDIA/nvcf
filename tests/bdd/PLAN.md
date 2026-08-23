@@ -41,9 +41,10 @@ regex restricted to `\$\{[A-Z0-9_]+\}`.
 ### Infrastructure bootstrap (Given)
 
 These are the only Givens that hide a CLI invocation, and each one wraps
-exactly one Make target or one composite of `kubectl` calls. They contain
-no business logic. Spelling them out in raw `make` calls would balloon
-the feature file without adding coverage.
+exactly one Make target, one Helm authentication command, or one composite of
+`kubectl` calls. They contain no business logic. Spelling out their stable
+command and secret-handling mechanics would balloon the feature file without
+adding coverage.
 
 The bootstrap Givens are idempotent and cached per suite. The first
 scenario that names the Given runs the underlying Make target; later
@@ -55,6 +56,7 @@ implementation detail, not a license to omit the precondition.
 |------|-------|
 | `Given a single-cluster ncp-local cluster is running` | `make -C tools/ncp-local-cluster build-and-deploy-cluster`. Runs once per suite. |
 | `Given multi-cluster ncp-local compute clusters are running:` (table, see below) | Wraps `make -C tools/ncp-local-cluster build-and-deploy-multicluster COMPUTE_CLUSTER_COUNT=N`. Runs once per suite. |
+| `Given Helm is authenticated to OCI registry {string} using the current NGC API key` | Runs `helm registry login` once per explicit, interpolated registry. The current `NGC_API_KEY` is supplied through sensitive stdin and is redacted from captured output, command logs, and failures. |
 | `Given the {string} image pull secret exists in namespaces:` (table) | `kubectl create namespace <ns>` + `kubectl create secret docker-registry` for each row. Hidden because the docker-registry secret syntax leaks the API key to argv. |
 
 Compute-cluster table contract for the multi-cluster bootstrap Given:
@@ -246,11 +248,12 @@ only these steps. Add a shared step when a repeated action or observable keeps
 its meaningful inputs visible and hides only command or output-format
 mechanics. Otherwise use `When I run command` plus an output assertion.
 
-The infrastructure-bootstrap Givens (cluster up, image pull secret) and
-the single `Given command has succeeded:` carry-over are the only places
-where the strict DSL bends to share state across scenarios. Each one's
-hidden work is one CLI invocation, visible by either the wrapped Make
-target or the docstring command text.
+The infrastructure-bootstrap Givens (cluster up, Helm registry
+authentication, image pull secret) and the single
+`Given command has succeeded:` carry-over are the only places where the strict
+DSL bends to share state across scenarios. Each one's hidden work is one CLI
+invocation, visible through the named operator action, explicit target, wrapped
+Make target, or docstring command text.
 
 ## What this displaces from tests/bdd
 

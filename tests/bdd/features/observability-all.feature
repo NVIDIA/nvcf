@@ -13,12 +13,9 @@ Feature: Install local Helmfile observability for both planes
       | SAMPLE_NGC_TEAM |
       | NVCF_CLI        |
       | REPO_ROOT       |
-    # Helmfile pulls OCI charts during installation. Keep $NGC_API_KEY unbraced
-    # so the BDD runner does not expand it into command logs.
-    And command has succeeded:
-      """
-      bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" | helm registry login nvcr.io --username "\$oauthtoken" --password-stdin'
-      """
+    # Helmfile pulls OCI charts during installation. Authenticate before sync
+    # without exposing the current API key in command arguments or logs.
+    And Helm is authenticated to OCI registry "nvcr.io" using the current NGC API key
     # Configure the control-plane stack and its shared observability child.
     And I prepare Helmfile environment "local-bdd-observability-all" for stack "self-managed" from fixture "tests/bdd/fixtures/self-managed-local-bdd.yaml" with values:
       | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
