@@ -28,6 +28,13 @@ type KubernetesResource struct {
 	Name string
 }
 
+type kubernetesWaitTarget struct {
+	name        string
+	namespace   string
+	kubeContext string
+	timeout     string
+}
+
 // KubernetesResourceGetCommand builds an explicit-context kubectl get for one
 // resource. ignoreNotFound makes a missing resource produce empty name output.
 func KubernetesResourceGetCommand(namespace, kubeContext string, resource KubernetesResource, ignoreNotFound bool) (string, error) {
@@ -90,6 +97,63 @@ func KubernetesResourceAbsent(raw string, resource KubernetesResource) error {
 		return fmt.Errorf("kubernetes resource %s/%s exists, want absent", resource.Kind, resource.Name)
 	}
 	return nil
+}
+
+// KubernetesDeploymentRolloutCommand builds an explicit-context rollout wait
+// for one deployment.
+func KubernetesDeploymentRolloutCommand(name, namespace, kubeContext, timeout string) (string, error) {
+	target, err := resolveKubernetesWaitTarget("deployment", name, namespace, kubeContext, timeout)
+	if err != nil {
+		return "", err
+	}
+	return strings.Join([]string{
+		"kubectl", "rollout", "status", quoteCommandArg("deployment/" + target.name),
+		"-n", quoteCommandArg(target.namespace),
+		"--context", quoteCommandArg(target.kubeContext),
+		quoteCommandArg("--timeout=" + target.timeout),
+	}, " "), nil
+}
+
+// NVCFBackendAgentStatusCommand builds an explicit-context wait for one
+// backend's agent status.
+func NVCFBackendAgentStatusCommand(name, namespace, kubeContext, agentStatus, timeout string) (string, error) {
+	target, err := resolveKubernetesWaitTarget("NVCFBackend", name, namespace, kubeContext, timeout)
+	if err != nil {
+		return "", err
+	}
+	agentStatus = strings.TrimSpace(Interpolate(agentStatus))
+	if agentStatus == "" {
+		return "", fmt.Errorf("NVCFBackend agent status is empty")
+	}
+	return strings.Join([]string{
+		"kubectl", "wait", "nvcfbackend", quoteCommandArg(target.name),
+		"-n", quoteCommandArg(target.namespace),
+		"--context", quoteCommandArg(target.kubeContext),
+		"--for=jsonpath={.status.agentStatus}=" + quoteCommandArg(agentStatus),
+		quoteCommandArg("--timeout=" + target.timeout),
+	}, " "), nil
+}
+
+func resolveKubernetesWaitTarget(resourceType, name, namespace, kubeContext, timeout string) (kubernetesWaitTarget, error) {
+	target := kubernetesWaitTarget{
+		name:        strings.TrimSpace(Interpolate(name)),
+		namespace:   strings.TrimSpace(Interpolate(namespace)),
+		kubeContext: strings.TrimSpace(Interpolate(kubeContext)),
+		timeout:     strings.TrimSpace(Interpolate(timeout)),
+	}
+	if target.name == "" {
+		return kubernetesWaitTarget{}, fmt.Errorf("%s name is empty", resourceType)
+	}
+	if target.namespace == "" {
+		return kubernetesWaitTarget{}, fmt.Errorf("namespace is empty")
+	}
+	if target.kubeContext == "" {
+		return kubernetesWaitTarget{}, fmt.Errorf("kube context is empty")
+	}
+	if target.timeout == "" {
+		return kubernetesWaitTarget{}, fmt.Errorf("timeout is empty")
+	}
+	return target, nil
 }
 
 // KubectlApplyCommand builds a kubectl apply command for a manifest file.

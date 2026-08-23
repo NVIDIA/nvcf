@@ -50,6 +50,8 @@ func registerAssertionSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^these Kubernetes resources should exist in namespace "([^"]*)" using context "([^"]*)":$`, sc.kubernetesResourcesShouldExist)
 	ctx.Step(`^these Kubernetes resources should not exist in namespace "([^"]*)" using context "([^"]*)":$`, sc.kubernetesResourcesShouldNotExist)
 	ctx.Step(`^Kubernetes resource "([^"/]+)/([^"]+)" in namespace "([^"]*)" using context "([^"]*)" should contain:$`, sc.kubernetesResourceShouldContain)
+	ctx.Step(`^deployment "([^"]*)" in namespace "([^"]*)" using context "([^"]*)" should complete rollout within "([^"]*)"$`, sc.deploymentShouldCompleteRollout)
+	ctx.Step(`^NVCFBackend "([^"]*)" in namespace "([^"]*)" using context "([^"]*)" should report agent status "([^"]*)" within "([^"]*)"$`, sc.nvcfBackendShouldReportAgentStatus)
 }
 
 func (sc *ScenarioContext) commandExitCodeShouldBe(expected int) error {
@@ -313,6 +315,28 @@ func (sc *ScenarioContext) kubernetesResourceShouldContain(ctx context.Context, 
 	}
 	if err := dsl.MatchYAMLDocument(sc.LastResult.Stdout, doc.Content, dsl.MatchSubset); err != nil {
 		return fmt.Errorf("kubernetes resource %s/%s does not contain the expected YAML subset: %w", kind, name, err)
+	}
+	return nil
+}
+
+func (sc *ScenarioContext) deploymentShouldCompleteRollout(ctx context.Context, name, namespace, kubeContext, timeout string) error {
+	command, err := dsl.KubernetesDeploymentRolloutCommand(name, namespace, kubeContext, timeout)
+	if err != nil {
+		return err
+	}
+	if err := sc.runSuccessfully(ctx, command); err != nil {
+		return fmt.Errorf("deployment %q did not complete rollout: %w", dsl.Interpolate(name), err)
+	}
+	return nil
+}
+
+func (sc *ScenarioContext) nvcfBackendShouldReportAgentStatus(ctx context.Context, name, namespace, kubeContext, agentStatus, timeout string) error {
+	command, err := dsl.NVCFBackendAgentStatusCommand(name, namespace, kubeContext, agentStatus, timeout)
+	if err != nil {
+		return err
+	}
+	if err := sc.runSuccessfully(ctx, command); err != nil {
+		return fmt.Errorf("NVCFBackend %q did not report agent status %q: %w", dsl.Interpolate(name), dsl.Interpolate(agentStatus), err)
 	}
 	return nil
 }

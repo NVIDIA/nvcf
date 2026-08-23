@@ -145,11 +145,9 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
         | name          | namespace     |
         | nvca-operator | nvca-operator |
 
-      When I run command "kubectl rollout status deployment/nvca-operator -n nvca-operator --timeout=10m"
-      Then the command exit code should be 0
+      Then deployment "nvca-operator" in namespace "nvca-operator" using context "k3d-ncp-local" should complete rollout within "10m"
 
-      When I run command "kubectl wait nvcfbackend ncp-local -n nvca-operator --for=jsonpath={.status.agentStatus}=healthy --timeout=10m"
-      Then the command exit code should be 0
+      Then NVCFBackend "ncp-local" in namespace "nvca-operator" using context "k3d-ncp-local" should report agent status "healthy" within "10m"
 
   Rule: Helmfile-installed local NVCF can run a sample function
 

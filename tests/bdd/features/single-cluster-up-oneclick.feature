@@ -96,5 +96,4 @@ Feature: Bring up a local single-cluster NVCF stack with the self-hosted up one-
         | nvca-operator | nvca-operator |
 
       # The agent registered by up reports healthy.
-      When I run command "kubectl wait nvcfbackend ncp-local -n nvca-operator --context k3d-ncp-local --for=jsonpath={.status.agentStatus}=healthy --timeout=10m"
-      Then the command exit code should be 0
+      Then NVCFBackend "ncp-local" in namespace "nvca-operator" using context "k3d-ncp-local" should report agent status "healthy" within "10m"
