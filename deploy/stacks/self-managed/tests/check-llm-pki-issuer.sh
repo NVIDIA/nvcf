@@ -403,6 +403,18 @@ render_list secure-defaults \
 expect_enabled secure-defaults true
 render_default_router secure-defaults
 secure_defaults_manifests="$work_dir/secure-defaults.router-manifests.yaml"
+secure_defaults_issuer_kind="$(
+  yq ea -r 'select(.kind == "Certificate") | .spec.issuerRef.kind' \
+    "$secure_defaults_manifests"
+)"
+secure_defaults_issuer_name="$(
+  yq ea -r 'select(.kind == "Certificate") | .spec.issuerRef.name' \
+    "$secure_defaults_manifests"
+)"
+test "$secure_defaults_issuer_kind" = "ClusterIssuer" ||
+  fail "secure defaults did not render Certificate issuer kind ClusterIssuer"
+test "$secure_defaults_issuer_name" = "nvcf-openbao-pki" ||
+  fail "secure defaults did not render Certificate issuer name nvcf-openbao-pki"
 secure_defaults_dns_names="$(
   yq ea -r 'select(.kind == "Certificate") | .spec.dnsNames[]' \
     "$secure_defaults_manifests"
