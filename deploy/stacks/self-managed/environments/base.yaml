@@ -329,9 +329,10 @@ addons:
     #                    also provisions the OpenBao service-issuing hierarchy
     #                    and defaults to ClusterIssuer/nvcf-openbao-pki.
     #   existingSecret - the chart mounts a Secret you created and manages no
-    #                    issuance. Requires secretName. clusterIssuer.enabled,
-    #                    dnsNames, and allowedDomains must be unset because
-    #                    they only steer stack-managed issuance. You own
+    #                    issuance. Requires secretName. The stable-base
+    #                    dnsNames and allowedDomains defaults are tolerated
+    #                    because Helmfile cannot clear inherited empty lists;
+    #                    any changed managed value is rejected. You own
     #                    issuance, renewal, rotation, and recovery, and the
     #                    stack validates neither the SANs nor the expiry.
     pki:
@@ -345,7 +346,8 @@ addons:
       # path only: Pylon preserves the advertised per-pod hostname as gRPC
       # authority and QUIC SNI, so a load-balancer hostname or IP does not need
       # to be added here. Add SANs only when advertisedHostnameTemplate changes
-      # those identities. Must be empty for mode existingSecret.
+      # those identities. In existingSecret mode, only these unchanged
+      # stable-base defaults are tolerated; custom values are rejected.
       dnsNames:
         - llm-request-router.nvcf.svc.cluster.local
         - "*.llm-request-router-headless.nvcf.svc.cluster.local"
