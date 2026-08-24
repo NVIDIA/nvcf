@@ -50,6 +50,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -1386,7 +1387,7 @@ func Test_validateVolumes(t *testing.T) {
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			gotErrs := validateVolumes(tt.volumes, false)
+			gotErrs := validateVolumes(tt.volumes, false, zap.NewNop())
 			assert.Equal(t, tt.expErrs, gotErrs)
 			for _, err := range gotErrs {
 				_ = err.Error()
@@ -1403,12 +1404,12 @@ func Test_validateVolumes_RejectPVCs(t *testing.T) {
 	wantErr := fmt.Errorf("PersistentVolumeClaims are not supported in NVCF helm charts. Please remove all PVC definitions before deploying.")
 
 	t.Run("pvc rejected when RejectPVCs=true", func(t *testing.T) {
-		errs := validateVolumes([]corev1.Volume{pvcVol}, true)
+		errs := validateVolumes([]corev1.Volume{pvcVol}, true, zap.NewNop())
 		assert.Equal(t, []error{wantErr}, errs)
 	})
 
 	t.Run("pvc allowed when RejectPVCs=false", func(t *testing.T) {
-		errs := validateVolumes([]corev1.Volume{pvcVol}, false)
+		errs := validateVolumes([]corev1.Volume{pvcVol}, false, zap.NewNop())
 		assert.Nil(t, errs)
 	})
 }

@@ -101,3 +101,29 @@ func TestParseConfigFiles_SkipsEmptyAfterTrim(t *testing.T) {
 	require.NoError(t, config.ParseConfigFiles([]string{"", "  ", path}, v, nopLogger()))
 	assert.Equal(t, 7777, v.GetInt("http.api-port"))
 }
+
+func TestRejectPVCs_ConfigFile(t *testing.T) {
+	path := writeYAML(t, "reject-pvcs: true\n")
+	v := viper.New()
+	require.NoError(t, config.ParseConfigFiles([]string{path}, v, nopLogger()))
+	var cfg config.RevalConfig
+	require.NoError(t, v.Unmarshal(&cfg))
+	assert.True(t, cfg.RejectPVCs)
+}
+
+func TestRejectPVCs_EnvVar(t *testing.T) {
+	t.Setenv("REVAL_REJECT_PVCS", "true")
+	v := viper.New()
+	v.AutomaticEnv()
+	v.SetEnvPrefix("REVAL")
+	var cfg config.RevalConfig
+	require.NoError(t, v.Unmarshal(&cfg))
+	assert.True(t, cfg.RejectPVCs)
+}
+
+func TestRejectPVCs_DefaultsFalse(t *testing.T) {
+	v := viper.New()
+	var cfg config.RevalConfig
+	require.NoError(t, v.Unmarshal(&cfg))
+	assert.False(t, cfg.RejectPVCs)
+}
