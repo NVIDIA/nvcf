@@ -78,8 +78,9 @@ It may also include `instance_id`, `deployment_id`, `gpu_specification_id`, and
 
 ### Read events
 
-Pass the same context fields as query parameters. Values may contain letters,
-numbers, and dashes.
+Pass the same context fields as query parameters. Context values may contain
+letters, numbers, and dashes. Instance IDs may also contain dots between
+non-empty segments.
 
 ```bash
 curl 'http://localhost:8080/v3/ledger/namespace/example/events?instance_id=instance-1'
