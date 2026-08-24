@@ -18,7 +18,7 @@ use crate::{
     nats::NatsService,
     nvcf_api::NVCFService,
     rate_limit::RateLimitService,
-    routes::{self, function_id_headers, split_hostname, tlb_handler},
+    routes::{self, request_function_routing, tlb_handler},
     s3::S3Service,
     secrets::secret_provider::SecretFileWatcher,
     settings::AppConfig,
@@ -32,7 +32,6 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use axum_extra::extract::Host;
 use axum_prometheus::{EndpointLabel, PrometheusMetricLayerBuilder};
 use hyper::StatusCode;
 use problem_details::ProblemDetails;
@@ -192,24 +191,19 @@ pub async fn app(
 
     let host_router = Router::new()
         // docs say not to have just a fallback, but I can't figure out how to name the handler type to pass it to axum::serve.
-        .fallback(
-            |hostname: Option<Host>, mut request: http::Request<Body>| async move {
-                // check for headers too. we don't have wildcard dns yet, so we need to use headers to test.
-                if let Some((function_id, function_version_id)) =
-                    function_id_headers(request.headers())
-                        .or_else(|| hostname.and_then(|hostname| split_hostname(&hostname.0)))
-                {
-                    if let Some(function_id) = function_id {
-                        request.extensions_mut().insert(function_id);
-                    }
-                    if let Some(function_version_id) = function_version_id {
-                        request.extensions_mut().insert(function_version_id);
-                    }
-                    return tlb_router.oneshot(request).await;
+        .fallback(|mut request: http::Request<Body>| async move {
+            // Check explicit function headers first because wildcard DNS isn't available everywhere.
+            if let Some((function_id, function_version_id)) = request_function_routing(&request) {
+                if let Some(function_id) = function_id {
+                    request.extensions_mut().insert(function_id);
                 }
-                path_based_router.oneshot(request).await
-            },
-        );
+                if let Some(function_version_id) = function_version_id {
+                    request.extensions_mut().insert(function_version_id);
+                }
+                return tlb_router.oneshot(request).await;
+            }
+            path_based_router.oneshot(request).await
+        });
 
     Ok(host_router)
 }

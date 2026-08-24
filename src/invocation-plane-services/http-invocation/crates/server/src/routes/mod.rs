@@ -34,4 +34,4 @@ pub use health::get_health;
 pub use post_exec::exec;
 pub use post_exec::{InvokeFunctionResponse, InvokeStatus};
 pub use post_pexec::pexec;
-pub use tlb::{function_id_headers, split_hostname, tlb_handler};
+pub use tlb::{function_id_headers, request_function_routing, split_hostname, tlb_handler};

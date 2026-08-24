@@ -111,6 +111,24 @@ pub fn function_id_headers(
     None
 }
 
+pub fn request_function_routing<B>(
+    request: &http::Request<B>,
+) -> Option<(Option<FunctionId>, Option<FunctionVersionId>)> {
+    function_id_headers(request.headers()).or_else(|| {
+        request
+            .uri()
+            .authority()
+            .map(http::uri::Authority::as_str)
+            .or_else(|| {
+                request
+                    .headers()
+                    .get(http::header::HOST)
+                    .and_then(|host| host.to_str().ok())
+            })
+            .and_then(split_hostname)
+    })
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -158,6 +176,68 @@ mod test {
         assert_eq!(
             split_hostname(&hostname),
             Some((Some(expected_func_id), Some(expected_version_id)))
+        );
+    }
+
+    #[test]
+    fn test_request_function_routing_ignores_forwarded_host() {
+        let expected_id = uuid!("00000000-0000-0000-0000-000000000000");
+        let forwarded_id = uuid!("11111111-1111-1111-1111-111111111111");
+        let request = http::Request::builder()
+            .uri(format!("https://{expected_id}.example.com/invoke"))
+            .header("forwarded", format!("host={forwarded_id}.example.com"))
+            .body(())
+            .unwrap();
+
+        assert_eq!(
+            request_function_routing(&request),
+            Some((Some(FunctionId(expected_id)), None))
+        );
+    }
+
+    #[test]
+    fn test_request_function_routing_ignores_x_forwarded_host() {
+        let expected_id = uuid!("00000000-0000-0000-0000-000000000000");
+        let forwarded_id = uuid!("11111111-1111-1111-1111-111111111111");
+        let request = http::Request::builder()
+            .uri("/invoke")
+            .header(http::header::HOST, format!("{expected_id}.example.com"))
+            .header("x-forwarded-host", format!("{forwarded_id}.example.com"))
+            .body(())
+            .unwrap();
+
+        assert_eq!(
+            request_function_routing(&request),
+            Some((Some(FunctionId(expected_id)), None))
+        );
+    }
+
+    #[test]
+    fn test_request_function_routing_ignores_forwarded_headers_without_authority() {
+        let forwarded_id = uuid!("11111111-1111-1111-1111-111111111111");
+        let request = http::Request::builder()
+            .uri("/invoke")
+            .header("forwarded", format!("host={forwarded_id}.example.com"))
+            .header("x-forwarded-host", format!("{forwarded_id}.example.com"))
+            .body(())
+            .unwrap();
+
+        assert_eq!(request_function_routing(&request), None);
+    }
+
+    #[test]
+    fn test_request_function_routing_prefers_function_id_header() {
+        let expected_id = uuid!("00000000-0000-0000-0000-000000000000");
+        let authority_id = uuid!("11111111-1111-1111-1111-111111111111");
+        let request = http::Request::builder()
+            .uri(format!("https://{authority_id}.example.com/invoke"))
+            .header("function-id", expected_id.to_string())
+            .body(())
+            .unwrap();
+
+        assert_eq!(
+            request_function_routing(&request),
+            Some((Some(FunctionId(expected_id)), None))
         );
     }
 }
