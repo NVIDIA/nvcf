@@ -18,13 +18,18 @@ package invocation
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"io"
 	"math/rand"
+	"net"
 	"strings"
 	"time"
 
-	"github.com/NVIDIA/nvcf-go/pkg/nvkit/auth"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nkeys"
 	"go.uber.org/zap"
@@ -64,8 +69,11 @@ func NewNatsConnection(natsFqdn, nKeySeed, serviceName, ssaFqdn, secretsPath str
 			metrics.NatsReconnectCounter.Inc()
 		}), nats.Name(serviceName),
 		nats.ErrorHandler(func(nc *nats.Conn, sub *nats.Subscription, err error) {
-			zap.L().Warn("nats connection error", zap.Error(err))
-			metrics.NatsErrorCounter.Inc()
+			recordNatsAsyncError(err)
+		}), nats.ReconnectErrHandler(func(conn *nats.Conn, err error) {
+			recordNatsFailure("nats reconnect failed", err)
+		}), nats.DisconnectErrHandler(func(conn *nats.Conn, err error) {
+			recordNatsDisconnect(err)
 		}), nats.ConnectHandler(func(conn *nats.Conn) {
 			zap.L().Info("connected to nats", zap.String("server", conn.ConnectedServerName()), zap.String("cluster", conn.ConnectedClusterName()))
 		}))
@@ -74,6 +82,78 @@ func NewNatsConnection(natsFqdn, nKeySeed, serviceName, ssaFqdn, secretsPath str
 	}
 	metrics.SetNatsStatsConnection(nc)
 	return nc, nil
+}
+
+func recordNatsDisconnect(err error) {
+	if err == nil {
+		zap.L().Info("disconnected from nats")
+	} else {
+		zap.L().Warn("disconnected from nats", zap.Error(err))
+	}
+	metrics.NatsDisconnectCounter.Inc()
+}
+
+func recordNatsAsyncError(err error) {
+	metrics.NatsErrorCounter.Inc()
+	recordNatsFailure("nats connection error", err)
+}
+
+func recordNatsFailure(message string, err error) {
+	reason := natsErrorReason(err)
+	zap.L().Warn(message, zap.String("reason", reason), zap.Error(err))
+	metrics.NatsFailureCounter.WithLabelValues(reason).Inc()
+}
+
+func natsErrorReason(err error) string {
+	var certificateInvalid x509.CertificateInvalidError
+	if errors.As(err, &certificateInvalid) {
+		if certificateInvalid.Reason == x509.Expired {
+			return metrics.NatsErrorReasonCertificateExpired
+		}
+		return metrics.NatsErrorReasonTLSVerification
+	}
+
+	var unknownAuthority x509.UnknownAuthorityError
+	var hostnameError x509.HostnameError
+	var certificateVerification *tls.CertificateVerificationError
+	if errors.As(err, &unknownAuthority) || errors.As(err, &hostnameError) || errors.As(err, &certificateVerification) {
+		return metrics.NatsErrorReasonTLSVerification
+	}
+
+	errorText := strings.ToLower(errString(err))
+	if strings.Contains(errorText, "certificate has expired") || strings.Contains(errorText, "expired certificate") {
+		return metrics.NatsErrorReasonCertificateExpired
+	}
+	if errors.Is(err, nats.ErrSecureConnRequired) || errors.Is(err, nats.ErrSecureConnWanted) ||
+		strings.Contains(errorText, "tls") || strings.Contains(errorText, "x509") {
+		return metrics.NatsErrorReasonTLS
+	}
+
+	if errors.Is(err, nats.ErrAuthorization) || errors.Is(err, nats.ErrAuthExpired) ||
+		errors.Is(err, nats.ErrAuthRevoked) || errors.Is(err, nats.ErrAccountAuthExpired) {
+		return metrics.NatsErrorReasonAuthentication
+	}
+
+	var networkError net.Error
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, nats.ErrTimeout) ||
+		(errors.As(err, &networkError) && networkError.Timeout()) {
+		return metrics.NatsErrorReasonTimeout
+	}
+
+	if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, nats.ErrConnectionClosed) || errors.Is(err, nats.ErrConnectionReconnecting) ||
+		errors.Is(err, nats.ErrDisconnected) || errors.Is(err, nats.ErrNoServers) ||
+		errors.Is(err, nats.ErrStaleConnection) || errors.As(err, &networkError) {
+		return metrics.NatsErrorReasonConnection
+	}
+	return metrics.NatsErrorReasonOther
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func newNkeyAuthOption(nKeySeed string) (nats.Option, error) {

@@ -5,12 +5,12 @@ go_library(
     srcs = ["sloghandler_slog.go"],
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/k8s.io/klog/v2/internal/sloghandler",
     importpath = "k8s.io/klog/v2/internal/sloghandler",
-    visibility = ["//vendor/k8s.io/klog/v2:__subpackages__"],
-    deps = ["//vendor/k8s.io/klog/v2/internal/severity"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/k8s.io/klog/v2:__subpackages__"],
+    deps = ["//src/compute-plane-services/nvca/vendor/k8s.io/klog/v2/internal/severity"],
 )
 
 alias(
     name = "go_default_library",
     actual = ":sloghandler",
-    visibility = ["//vendor/k8s.io/klog/v2:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/k8s.io/klog/v2:__subpackages__"],
 )

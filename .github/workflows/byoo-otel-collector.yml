@@ -92,34 +92,11 @@ jobs:
             exit 0
           fi
 
-          if printf "%s\n" "$changed" | grep -qE '^(src/compute-plane-services/byoo-otel-collector/|tools/ci/check-byoo-otel-collector-version|tools/ci/test-check-byoo-otel-collector-version|\.github/workflows/byoo-otel-collector\.yml$)'; then
+          if printf "%s\n" "$changed" | grep -qE '^(src/compute-plane-services/byoo-otel-collector/|tests/perf/byoo-otel-collector/|\.github/workflows/byoo-otel-collector\.yml$)'; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
-
-  version:
-    name: check VERSION update
-    needs: detect
-    if: needs.detect.outputs.changed == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Run version gate tests
-        run: ./tools/ci/test-check-byoo-otel-collector-version
-
-      - name: Check BYOO OTel collector VERSION changed
-        env:
-          EVENT: ${{ github.event_name }}
-          BEFORE_SHA: ${{ github.event.before }}
-          HEAD_SHA: ${{ github.sha }}
-          BASE_REF: ${{ github.base_ref }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
-        run: ./tools/ci/check-byoo-otel-collector-version
 
   validate:
     name: validate configs (${{ matrix.mode }})
@@ -150,3 +127,26 @@ jobs:
           GOCACHE: ${{ runner.temp }}/go-cache
           GO_BUILD_P: "1"
         run: ./scripts/validate-otelconfig.sh "${{ matrix.mode }}"
+
+  perf:
+    name: perf module (build/vet/test)
+    needs: detect
+    if: needs.detect.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # The perf suite is a standalone module; use its own go.mod so the
+          # toolchain matches what the module declares.
+          go-version-file: tests/perf/byoo-otel-collector/go.mod
+
+      # The perf module is intentionally excluded from go.work and has no Bazel
+      # targets, so neither the Bazel lane nor the recursive workspace build
+      # covers it. Run it explicitly with GOWORK=off.
+      - name: Build, vet, and test the perf module
+        working-directory: tests/perf/byoo-otel-collector
+        env:
+          GOCACHE: ${{ runner.temp }}/go-cache
+        run: GOWORK=off go build ./... && GOWORK=off go vet ./... && GOWORK=off go test ./...

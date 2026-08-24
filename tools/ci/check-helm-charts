@@ -1,0 +1,217 @@
+#!/usr/bin/env bash
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Lint and render every chart that has a CI values file.
+#
+# tools/ci/helm-validate-values/<name>.yaml holds the CI-only values for one
+# chart. The chart directory is not derivable from the file name, so the
+# mapping is spelled out in chart_map below. Both directions are checked: a
+# values file with no entry fails, and an entry whose chart directory is gone
+# fails. Otherwise a new values file could land with nothing validating it.
+#
+# Every chart runs even after one fails, so a single run reports every broken
+# chart instead of only the first.
+#
+# Usage:
+#   tools/ci/check-helm-charts
+#   tools/ci/check-helm-charts --values-dir DIR --chart-root DIR
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/../.." && pwd)"
+values_dir="${repo_root}/tools/ci/helm-validate-values"
+chart_root="${repo_root}/deploy/helm"
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --values-dir) values_dir="$2"; shift 2 ;;
+        --chart-root) chart_root="$2"; shift 2 ;;
+        -h|--help)
+            echo "usage: check-helm-charts [--values-dir DIR] [--chart-root DIR]"
+            exit 0
+            ;;
+        *) echo "check-helm-charts: unknown argument '$1'" >&2; exit 2 ;;
+    esac
+done
+
+# "<values file stem> <chart directory relative to deploy/helm>"
+chart_map=(
+    "admin-token-issuer-proxy admin-token-issuer-proxy/chart"
+    "api-keys-colocated       api-keys-colocated/api-keys"
+    "cassandra                cassandra/helm"
+    "cloud-functions          cloud-functions/nvcf-api"
+    "ess                      encrypted-secret-store/ess-api"
+    "gateway-routes-vanity    gateway-routes/chart"
+    "grpc-proxy               grpc-proxy/grpc-proxy"
+    "llm-api-gateway          llm-api-gateway/llm-api-gateway"
+    "llm-request-router       llm-request-router/llm-request-router"
+    "notary                   notary/nvcf-notary-service"
+    "nvca-operator            nvca-operator/nvca-operator"
+    "openbao                  openbao/helm"
+    "ratelimiter              ratelimiter/nvcf-ratelimiter"
+    "vanity-gateway           vanity-gateway/helm-nvcf-vanity-gateway"
+)
+
+chart_for() {  # chart_for <values stem> -> chart directory relative to chart_root
+    local stem="$1" entry
+    for entry in "${chart_map[@]}"; do
+        if [ "${entry%% *}" = "${stem}" ]; then
+            printf '%s' "${entry##* }"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# Wiring: every values file maps to a chart, and every mapping is still live.
+# ---------------------------------------------------------------------------
+
+if [ ! -d "${values_dir}" ]; then
+    echo "check-helm-charts: values directory not found: ${values_dir}" >&2
+    exit 1
+fi
+
+stems=()
+while IFS= read -r path; do
+    stems+=("$(basename "${path}" .yaml)")
+done < <(find "${values_dir}" -maxdepth 1 -type f -name '*.yaml' | sort)
+
+if [ "${#stems[@]}" -eq 0 ]; then
+    echo "check-helm-charts: no values files in ${values_dir}" >&2
+    exit 1
+fi
+
+wiring_errors=0
+
+for stem in "${stems[@]}"; do
+    if ! chart_for "${stem}" >/dev/null; then
+        echo "check-helm-charts: ${stem}.yaml has no chart mapping." >&2
+        echo "  Add \"${stem} <chart dir under deploy/helm>\" to chart_map in ${BASH_SOURCE[0]}." >&2
+        wiring_errors=1
+    fi
+done
+
+for entry in "${chart_map[@]}"; do
+    stem="${entry%% *}"
+    chart_dir="${chart_root}/${entry##* }"
+    if [ ! -f "${values_dir}/${stem}.yaml" ]; then
+        echo "check-helm-charts: chart_map entry '${stem}' has no ${values_dir}/${stem}.yaml." >&2
+        echo "  Remove the stale entry or restore the values file." >&2
+        wiring_errors=1
+    fi
+    if [ ! -f "${chart_dir}/Chart.yaml" ]; then
+        echo "check-helm-charts: chart_map entry '${stem}' points at ${chart_dir}, which has no Chart.yaml." >&2
+        echo "  Update the entry to the chart's current directory." >&2
+        wiring_errors=1
+    fi
+done
+
+if [ "${wiring_errors}" -ne 0 ]; then
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Lint and render.
+# ---------------------------------------------------------------------------
+
+if ! command -v helm >/dev/null 2>&1; then
+    echo "check-helm-charts: 'helm' not found on PATH." >&2
+    echo "  Install helm v3.x from https://helm.sh/docs/intro/install/." >&2
+    exit 1
+fi
+
+# helm dependency build writes charts/*.tgz into the working tree, and adds to
+# an existing charts/ directory rather than replacing it. deploy/helm already
+# has charts/ directories holding vendored subchart sources, so removing the
+# whole directory is not safe. Record the archives present before each fetch
+# and delete only the ones this run added, plus any charts/ directory it
+# created outright. A dirty tree then never leaks into a commit.
+created_dirs=()
+fetched_archives=()
+
+archives_in() {  # archives_in <chart dir> -> one archive path per line
+    find "$1/charts" -maxdepth 1 -type f -name '*.tgz' 2>/dev/null | sort
+}
+
+record_new_archives() {  # record_new_archives <chart dir> <before list>
+    local chart_dir="$1" before="$2" archive
+    while IFS= read -r archive; do
+        [ -n "${archive}" ] || continue
+        case $'\n'"${before}"$'\n' in
+            *$'\n'"${archive}"$'\n'*) continue ;;
+        esac
+        fetched_archives+=("${archive}")
+    done < <(archives_in "${chart_dir}")
+}
+
+cleanup() {
+    local path
+    for path in ${fetched_archives[@]+"${fetched_archives[@]}"}; do
+        rm -f "${path}"
+    done
+    for path in ${created_dirs[@]+"${created_dirs[@]}"}; do
+        rm -rf "${path}"
+    done
+}
+trap cleanup EXIT
+
+run_step() {  # run_step <label> <command...> -> 0 on success, prints output on failure
+    local label="$1"; shift
+    local output status=0
+    output="$("$@" 2>&1)" || status=$?
+    if [ "${status}" -ne 0 ]; then
+        printf 'FAIL %s\n' "${label}"
+        printf '%s\n' "${output}" | sed 's/^/     /'
+        return 1
+    fi
+    return 0
+}
+
+failed=()
+
+for stem in "${stems[@]}"; do
+    chart_dir="${chart_root}/$(chart_for "${stem}")"
+    values_file="${values_dir}/${stem}.yaml"
+    chart_failed=0
+
+    if grep -qE '^dependencies:' "${chart_dir}/Chart.yaml"; then
+        # The chart declares subcharts. helm lint only warns when they are
+        # absent, so without this fetch helm template fails on a missing
+        # dependency and lint alone would not have caught it.
+        before_archives=""
+        if [ -d "${chart_dir}/charts" ]; then
+            before_archives="$(archives_in "${chart_dir}")"
+        else
+            created_dirs+=("${chart_dir}/charts")
+        fi
+        run_step "${stem}: helm dependency build" \
+            helm dependency build "${chart_dir}" || chart_failed=1
+        # Record after a failed fetch too. helm can leave a partial download
+        # behind on error.
+        record_new_archives "${chart_dir}" "${before_archives}"
+    fi
+
+    if [ "${chart_failed}" -eq 0 ]; then
+        run_step "${stem}: helm lint" \
+            helm lint "${chart_dir}" -f "${values_file}" || chart_failed=1
+        run_step "${stem}: helm template" \
+            helm template "${stem}" "${chart_dir}" -f "${values_file}" || chart_failed=1
+    fi
+
+    if [ "${chart_failed}" -eq 0 ]; then
+        printf 'ok   %s (%s)\n' "${stem}" "$(chart_for "${stem}")"
+    else
+        failed+=("${stem}")
+    fi
+done
+
+echo
+if [ "${#failed[@]}" -ne 0 ]; then
+    printf 'check-helm-charts: %d of %d charts failed: %s\n' \
+        "${#failed[@]}" "${#stems[@]}" "${failed[*]}" >&2
+    exit 1
+fi
+
+printf 'check-helm-charts: %d charts linted and rendered\n' "${#stems[@]}"

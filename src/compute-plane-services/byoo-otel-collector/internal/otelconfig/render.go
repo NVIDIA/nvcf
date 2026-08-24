@@ -542,10 +542,7 @@ func addWorkloadMetricsDropLabelsProcessor(otelConfig *OpenTelemetryConfig, labe
 
 func addMetricSubsetExporter(otelConfig *OpenTelemetryConfig) {
 	otelConfig.Exporters[metricSubsetExporterID] = map[string]interface{}{
-		"endpoint": fmt.Sprintf("${env:OTEL_POD_IP:-0.0.0.0}:%d", defaultMetricSubsetPort),
-		"resource_to_telemetry_conversion": map[string]interface{}{
-			"enabled": true,
-		},
+		"endpoint":            fmt.Sprintf("${env:OTEL_POD_IP:-0.0.0.0}:%d", defaultMetricSubsetPort),
 		"send_timestamps":     true,
 		"metric_expiration":   "5m",
 		"enable_open_metrics": true,
@@ -919,7 +916,9 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 	if tmplConfig.DebugMode {
 		applyDebugMode(otelConfig)
 	}
-	applyOTelCollectorConfig(otelConfig, tmplConfig.OTelCollector)
+	if err := applyOTelCollectorConfig(otelConfig, tmplConfig.OTelCollector); err != nil {
+		return fmt.Errorf("apply BYOO OTel collector config: %w", err)
+	}
 
 	return nil
 }

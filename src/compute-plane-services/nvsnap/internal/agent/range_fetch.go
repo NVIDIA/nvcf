@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"syscall"
 )
 
 // Phase 2 of the 16-node distribution plan (TRANSPORT-ARCHITECTURE.md):
@@ -118,7 +119,15 @@ func downloadSingleStream(
 }
 
 func writeBodyAtomic(body io.Reader, expectedSize int64, tmp, dstPath string) error {
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	// O_NOFOLLOW: joinWithinRoot resolved the deepest existing ancestor, but
+	// that check and this open are separate syscalls. Refusing to follow a
+	// final-component symlink closes the window an attacker is most likely to
+	// win. A swapped *parent* directory is still theoretically possible; it
+	// requires the ability to create symlinks inside the checkpoint dir, and
+	// nothing in the fetch path creates one -- every entry lands as a regular
+	// file through this call -- so reaching that state already means root on
+	// the node.
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC|syscall.O_NOFOLLOW, 0o644)
 	if err != nil {
 		return err
 	}
@@ -160,7 +169,8 @@ func downloadRangeChunked(
 	expectedSize int64,
 	tmp, dstPath string,
 ) error {
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	// O_NOFOLLOW as above: never write through a final-component symlink.
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC|syscall.O_NOFOLLOW, 0o644)
 	if err != nil {
 		return err
 	}

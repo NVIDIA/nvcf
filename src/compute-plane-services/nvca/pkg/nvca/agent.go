@@ -29,6 +29,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	nvcffndsclient "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/fnds/client"
+	cmnhttp "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/http"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/common"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/tracing"
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
@@ -40,6 +41,7 @@ import (
 	"github.com/sourcegraph/conc/pool"
 	"go.opentelemetry.io/otel"
 	otelattr "go.opentelemetry.io/otel/attribute"
+	metricnoop "go.opentelemetry.io/otel/metric/noop"
 	otelpropagation "go.opentelemetry.io/otel/propagation"
 	oteltrace "go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
@@ -55,6 +57,8 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
 	nvcalogging "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/logging"
 	nvcametrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/clientmetrics"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics/semconv/msgsemconv"
 	mscontroller "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/miniservice"
 	nvcaotel "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/otel"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
@@ -224,6 +228,10 @@ type AgentOptions struct {
 	LowLatencyStreamingEnabled          bool
 	PVCRebindEnabled                    bool
 	MultiNodeWorkloadsEnabled           bool
+	// ClientMetricsEnabled turns on the OTel-based semconv metrics for outbound
+	// dependency clients. When false, the metrics pipeline installs a no-op meter
+	// provider and instrumented clients emit nothing.
+	ClientMetricsEnabled bool
 
 	// MaintenanceMode indicates the operational mode of NVCA
 	MaintenanceMode types.MaintenanceMode
@@ -359,6 +367,13 @@ type Agent struct {
 	metricsName    string
 	newKubeClients func(ctx context.Context, path string) (*kubeclients.KubeClients, error)
 
+	// clientMetricsShutdown releases the OTel MeterProvider that backs outbound
+	// client metrics. It is a no-op when client metrics are disabled.
+	clientMetricsShutdown func()
+	// clientMetricsRecorder is the shared recorder used to instrument outbound
+	// dependency clients (ICMS, ReVal). It is nil when client metrics are off.
+	clientMetricsRecorder *clientmetrics.Recorder
+
 	icmsClient         ICMSClientInterface
 	fndsClient         fnds.Client
 	queueManager       *QueueManager
@@ -491,6 +506,52 @@ func NewAgent(ctx context.Context, opts *AgentOptions) (*Agent, error) {
 		return nil, errors.New("ICMSURL required for Agent")
 	}
 
+	// Set up the OTel metrics pipeline for outbound dependency clients. When the
+	// ClientMetrics feature flag is off this installs a no-op meter provider so
+	// instrumented clients emit nothing. The exporter registers into the same
+	// Prometheus registry served at /metrics, so OTel series appear alongside the
+	// existing client_golang metrics.
+	metricsRegisterer := prometheus.Registerer(prometheus.DefaultRegisterer)
+	if opts.MetricsRegisterer != nil {
+		metricsRegisterer = opts.MetricsRegisterer
+	}
+	meterProvider, meterShutdown, err := nvcaotel.SetupMeterProvider(nvcaotel.MeterProviderConfig{
+		Enabled:    opts.ClientMetricsEnabled,
+		Registerer: metricsRegisterer,
+	})
+	if err != nil {
+		log.WithError(err).WithFields(logrus.Fields{
+			"clusterID": opts.ClusterID,
+			"ncaID":     opts.NCAId,
+		}).Warn("failed to set up client-metrics meter provider; outbound client metrics disabled")
+		// Fall back to an explicit no-op provider rather than the OTel global.
+		// The global may hold a live provider installed for another signal, and
+		// recording into it would emit client series without the nvca_* default
+		// labels alongside otelhttp's own, which is the two-schemas-in-one-family
+		// problem this pipeline is built to avoid. Matches the disabled path in
+		// SetupMeterProvider.
+		meterProvider, meterShutdown = metricnoop.NewMeterProvider(), func() {}
+	}
+	// The OTel client-metric series carry the same NVCA default labels as the
+	// legacy client_golang metrics.
+	clientMetricsRecorder, err := clientmetrics.NewRecorder(meterProvider, opts.GetOTelAttributes())
+	if err != nil {
+		log.WithError(err).WithFields(logrus.Fields{
+			"clusterID": opts.ClusterID,
+			"ncaID":     opts.NCAId,
+		}).Warn("failed to create client-metrics recorder; outbound client metrics disabled")
+		clientMetricsRecorder = nil
+	}
+
+	// Instrument the OAuth token fetchers through the same recorder. The wrapper
+	// is set on the shared TokenFetcherOptions, so the ICMS, ReVal and FNDS
+	// fetchers (which all derive from it) are covered by one assignment.
+	if opts.ClientMetricsEnabled && clientMetricsRecorder != nil {
+		opts.TokenFetcherOptions.TransportWrapper = func(inner http.RoundTripper) http.RoundTripper {
+			return clientmetrics.NewTransport(inner, clientMetricsRecorder, clientmetrics.PeerServiceAuth)
+		}
+	}
+
 	// Create the token fetcher
 	tokenFetcher, tokenFetcherHealthCheck, err := newTokenFetcher(ctx, "icms", opts.TokenFetcherOptions)
 	if err != nil {
@@ -515,11 +576,21 @@ func NewAgent(ctx context.Context, opts *AgentOptions) (*Agent, error) {
 		opts.NCAId, opts.ClusterName, opts.ClusterGroupName, opts.NVCAAgentVersion,
 		metricsOpts...)
 
+	// icmsHTTPOpts adds the metrics transport wrapper when client metrics are on.
+	var icmsHTTPOpts []cmnhttp.Option
+	if opts.ClientMetricsEnabled && clientMetricsRecorder != nil {
+		icmsHTTPOpts = append(icmsHTTPOpts, cmnhttp.WithTransportWrapper(func(inner http.RoundTripper) http.RoundTripper {
+			return clientmetrics.NewTransport(inner, clientMetricsRecorder, clientmetrics.PeerServiceICMS)
+		}))
+	}
+
 	a := &Agent{
-		AgentOptions: opts,
-		metricsName:  "nvca",
-		metrics:      metrics,
-		tracer:       nvcaotel.NewTracer(),
+		clientMetricsShutdown: meterShutdown,
+		clientMetricsRecorder: clientMetricsRecorder,
+		AgentOptions:          opts,
+		metricsName:           "nvca",
+		metrics:               metrics,
+		tracer:                nvcaotel.NewTracer(),
 		// Lazy readiness check getter to initialize throughout Start().
 		readinessCheckGetter: health.NewLazyReadinessCheckGetter(),
 		// Lazy liveness check getter to initialize throughout Start().
@@ -527,7 +598,7 @@ func NewAgent(ctx context.Context, opts *AgentOptions) (*Agent, error) {
 	}
 
 	a.newKubeClients = defaultNewKubeClients
-	a.icmsClient = NewICMSClientWithHostHeaderOverride(ctx, opts.ClusterID, opts.EffectiveICMSURL(), opts.ICMSHostHeaderOverride, tokenFetcher, a.tracer)
+	a.icmsClient = NewICMSClientWithHostHeaderOverride(ctx, opts.ClusterID, opts.EffectiveICMSURL(), opts.ICMSHostHeaderOverride, tokenFetcher, a.tracer, icmsHTTPOpts...)
 	a.instStatusThreadPool = pool.New().WithMaxGoroutines(ICMSInstanceRequestStatusUpdatesMaxGoroutines)
 	a.ackThreadPool = pool.New().WithMaxGoroutines(ICMSRequestAckMaxGoroutines)
 	// initialize selfDestruct to false
@@ -545,8 +616,17 @@ func NewAgent(ctx context.Context, opts *AgentOptions) (*Agent, error) {
 			return nil, err
 		}
 
+		// Instrument the FNDS client through the same recorder as the other
+		// dependencies, so its series carry peer.service and the NVCA default
+		// labels rather than a second attribute schema.
+		var fndsTransportWrappers []func(http.RoundTripper) http.RoundTripper
+		if opts.ClientMetricsEnabled && a.clientMetricsRecorder != nil {
+			fndsTransportWrappers = append(fndsTransportWrappers, func(inner http.RoundTripper) http.RoundTripper {
+				return clientmetrics.NewTransport(inner, a.clientMetricsRecorder, clientmetrics.PeerServiceFNDS)
+			})
+		}
 		a.fndsClient = nvcffndsclient.NewFndsClient(opts.FunctionDeploymentStagesServiceURL, opts.NCAId, fndsTokenFetcher,
-			nvcffndsclient.WithHTTPClient(fnds.NewHTTPClient()),
+			nvcffndsclient.WithHTTPClient(fnds.NewHTTPClient(fndsTransportWrappers...)),
 		)
 		a.livenessCheckGetter.AddChecker(fndsTokenFetcherHealthCheck)
 	}
@@ -868,6 +948,15 @@ func (a *Agent) registerWithICMS(ctx context.Context, regBackendGPUs []types.Reg
 		return nil, err
 	}
 
+	if a.queueManager != nil {
+		a.queueManager.updateQueues(a.postProcessQueueCredentials(ctx, res.Credentials))
+		log.WithFields(logrus.Fields{
+			"clusterID":      res.ClusterID,
+			"clusterGroupID": res.ClusterGroupID,
+			"ncaID":          a.NCAId,
+		}).Info("Refreshed queue manager with registration credentials")
+	}
+
 	return res, nil
 }
 
@@ -950,6 +1039,16 @@ func (a *Agent) Start(ctx context.Context) error {
 
 	// Initialize tracing; a background goroutine handles shutdown on ctx cancellation.
 	setupTracing(ctx, *a.AgentOptions)
+
+	// Release the client-metrics meter provider on shutdown. Only spawn the
+	// watcher when client metrics are enabled; when disabled the shutdown is a
+	// no-op and no goroutine is needed.
+	if a.ClientMetricsEnabled && a.clientMetricsShutdown != nil {
+		go func() {
+			<-ctx.Done()
+			a.clientMetricsShutdown()
+		}()
+	}
 
 	log.Infof("Starting NVCF Cluster Agent version %s with options: %+v",
 		a.NVCAAgentVersion, a.AgentOptions.sanitizedString())
@@ -1222,11 +1321,21 @@ func (a *Agent) Start(ctx context.Context) error {
 			// multi-replica NVCA can switch to manager-registered leader-
 			// elected startup without touching the updater itself.
 			if source == nvcaconfig.ClusterIssuedTokenSourcePSAT {
+				// The JWKS push is a fifth ICMS route on its own client, so it
+				// needs the metrics wrapper passed in explicitly to appear
+				// alongside register, heartbeat, credentials and instances.
+				var jwksTransportWrapper func(http.RoundTripper) http.RoundTripper
+				if a.ClientMetricsEnabled && a.clientMetricsRecorder != nil {
+					jwksTransportWrapper = func(inner http.RoundTripper) http.RoundTripper {
+						return clientmetrics.NewTransport(inner, a.clientMetricsRecorder, clientmetrics.PeerServiceICMS)
+					}
+				}
 				jwksUpdater, jerr := NewJWKSUpdater(JWKSUpdaterOptions{
 					ICMSURL:                a.EffectiveICMSURL(),
 					ICMSHostHeaderOverride: a.ICMSHostHeaderOverride,
 					ClusterID:              a.ClusterID,
 					TokenPath:              psatPath,
+					TransportWrapper:       jwksTransportWrapper,
 				})
 				if jerr != nil {
 					log.WithError(jerr).Error("Failed to construct JWKS updater")
@@ -1253,6 +1362,26 @@ func (a *Agent) Start(ctx context.Context) error {
 		}
 	} else {
 		queueClient = newQueueClient(a.AgentOptions.EndpointURL)
+	}
+
+	// Instrument the queue client through the shared recorder. NewQueueClient
+	// returns the client unchanged when the recorder is nil, so this is a no-op
+	// with client metrics disabled.
+	if a.ClientMetricsEnabled && a.clientMetricsRecorder != nil {
+		peerService, msgSystem := clientmetrics.PeerServiceSQS, msgsemconv.SystemSQS
+		if a.FeatureFlagFetcher.IsFeatureFlagEnabled(featureflag.SelfHosted) {
+			peerService, msgSystem = clientmetrics.PeerServiceNATS, msgsemconv.SystemNATS
+		}
+		instrumentedQueueClient, qErr := clientmetrics.NewQueueClient(queueClient, a.clientMetricsRecorder, peerService, msgSystem)
+		if qErr != nil {
+			log.WithError(qErr).WithFields(logrus.Fields{
+				"clusterID":   a.ClusterID,
+				"ncaID":       a.NCAId,
+				"peerService": peerService,
+			}).Warn("failed to instrument queue client; queue metrics disabled")
+		} else {
+			queueClient = instrumentedQueueClient
+		}
 	}
 
 	a.queueManager = NewQueueManager(
@@ -1330,6 +1459,14 @@ func (a *Agent) Start(ctx context.Context) error {
 	// Start ticker event dispatchers
 	log.Info("Starting event dispatchers")
 	a.startEventProcessDispatchers(ctx, a.getTickerEvents(ctx))
+
+	// Start the NvSnap Hook B controller (post-Ready checkpoint
+	// reconciler). No-op when NvSnapCheckpointRestore feature flag is
+	// off — see pkg/nvca/nvsnap_controller_start.go. Fire-and-forget;
+	// failure logs but doesn't block agent startup.
+	if err := a.startNvSnapController(ctx, k8sclients, log); err != nil {
+		log.WithError(err).Warn("nvsnap controller start failed (non-fatal)")
+	}
 
 	// Set readiness check only after all critical initialization (including ICMS registration)
 	// has succeeded. This ensures the readiness probe stays not-ready on error returns,
@@ -1533,8 +1670,8 @@ func (a *Agent) PutICMSRequestAcknowledgement(ctx context.Context) error {
 			req.Spec.CreationMsgInfo.InstanceCount,
 			req.Spec.GetTraceContext())
 		if err != nil {
-			a.backendk8scache.eventRecorder.Eventf(req, v1.EventTypeWarning,
-				string(types.EventCategoryInstanceStatusUpdate), "Acknowledgement failed: %v", err)
+			a.backendk8scache.EmitICMSEventf(req, v1.EventTypeWarning,
+				string(types.EventCategoryInstanceStatusUpdate), "Acknowledgement failed: %v", nil, err)
 			log.WithError(err).Error("Failed to acknowledge request")
 
 			// If it has only been five minutes since the request was created, and a 404 is return, retry
@@ -1598,8 +1735,8 @@ func (a *Agent) PutICMSRequestAcknowledgement(ctx context.Context) error {
 				if !ackSR(ctx, req) {
 					return
 				}
-				a.backendk8scache.eventRecorder.Event(req, v1.EventTypeNormal, string(types.EventCategoryInstanceStatusUpdate),
-					"Request accepted for processing")
+				a.backendk8scache.EmitICMSEvent(req, v1.EventTypeNormal, string(types.EventCategoryInstanceStatusUpdate),
+					"Request accepted for processing", nil)
 
 				// If ACK is successful, purge the message now
 				err = a.queueManager.DeleteCreationMessageV2(ctx, req.Spec.MessageReceipt, req.Spec.CreationMsgInfo.QueueURL)
@@ -1659,8 +1796,8 @@ func (a *Agent) putTaskICMSRequestAcknowledgementAfterScheduled(
 			if !ackSR(ctx, req) {
 				return
 			}
-			a.backendk8scache.eventRecorder.Event(req, v1.EventTypeNormal, string(types.EventCategoryInstanceStatusUpdate),
-				"Request accepted for processing")
+			a.backendk8scache.EmitICMSEvent(req, v1.EventTypeNormal, string(types.EventCategoryInstanceStatusUpdate),
+				"Request accepted for processing", nil)
 
 			modify := func(ctx context.Context, sr *nvcav2beta1.ICMSRequest) {
 				sr.Status.LastACKTimestamp = &metav1.Time{Time: core.GetCurrentTime(ctx)}
@@ -1708,8 +1845,8 @@ func (a *Agent) putTaskICMSRequestAcknowledgementAfterScheduled(
 				}
 				return
 			}
-			a.backendk8scache.eventRecorder.Event(req, v1.EventTypeNormal, string(types.EventCategoryInstanceCreation),
-				"Message visibility extended")
+			a.backendk8scache.EmitICMSEvent(req, v1.EventTypeNormal, string(types.EventCategoryInstanceCreation),
+				"Message visibility extended", nil)
 
 			modify := func(ctx context.Context, sr *nvcav2beta1.ICMSRequest) {
 				sr.Status.LastStatusUpdated = &metav1.Time{Time: core.GetCurrentTime(ctx)}
@@ -1965,8 +2102,8 @@ func (a *Agent) PostICMSInstanceRequestStatusUpdates(ctx context.Context) error 
 					}
 					continue
 				}
-				a.backendk8scache.eventRecorder.Eventf(req, v1.EventTypeNormal,
-					string(types.EventCategoryInstanceStatusUpdate), "%v is %v", ru.InstanceID, ruPayload.InstanceState)
+				a.backendk8scache.EmitICMSEventf(req, v1.EventTypeNormal,
+					string(types.EventCategoryInstanceStatusUpdate), "%v is %v", &ru, ru.InstanceID, ruPayload.InstanceState)
 				// successfully posted this update so this has to be updated to Status
 				postedInstanceStatus[ru.InstanceID] = getPostedInstanceStatus(ctx, ru)
 			}

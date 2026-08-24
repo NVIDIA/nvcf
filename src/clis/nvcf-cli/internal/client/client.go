@@ -336,7 +336,7 @@ func LoadConfig() (*Config, error) {
 				missing = append(missing, "NVCF_OAUTH2_TOKEN_ENDPOINT")
 			}
 
-			return nil, fmt.Errorf("missing authentication credentials. Please set NVCF_API_KEY environment variable")
+			return nil, fmt.Errorf("missing authentication credentials, unset: %s", strings.Join(missing, ", "))
 		}
 	}
 

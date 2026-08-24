@@ -154,7 +154,7 @@ For a brand-new keyspace, the conventional sequence is:
 2. `02_init_roles.up.sql` - creates the application role and grants, with the login password supplied by `${SERVICE_ROLE_PASSWORD}`.
 3. `03_init_tables.up.sql` - the canonical schema (UDTs, tables, indexes) for the keyspace.
 
-Subsequent files (`04_*`, `05_*`, `06_*`) are incremental DDL deltas applied as the schema evolves.
+Subsequent files (`04_*` and later) are incremental migrations applied as the schema evolves. Most are DDL; `ess_api/04_*` is a data seed.
 
 The `03_init_tables.up.sql` follows a clean-slate model: it is updated in place when the canonical schema changes rather than accumulating `ALTER TABLE` history. Existing clusters apply only the deltas that postdate their last applied migration.
 

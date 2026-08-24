@@ -4,7 +4,7 @@ go_library(
     name = "logger",
     srcs = ["logger.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/internal/logger",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/byoo-otel-collector:__subpackages__"],
     deps = [
         "@org_uber_go_zap//:zap",
         "@org_uber_go_zap//zapcore",
@@ -14,7 +14,7 @@ go_library(
 alias(
     name = "go_default_library",
     actual = ":logger",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/byoo-otel-collector:__subpackages__"],
 )
 
 go_test(

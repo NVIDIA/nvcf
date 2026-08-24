@@ -5,15 +5,15 @@ go_library(
     srcs = ["unix.go"],
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/grpc/internal/resolver/unix",
     importpath = "google.golang.org/grpc/internal/resolver/unix",
-    visibility = ["//vendor/google.golang.org/grpc:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/google.golang.org/grpc:__subpackages__"],
     deps = [
-        "//vendor/google.golang.org/grpc/internal/transport/networktype",
-        "//vendor/google.golang.org/grpc/resolver",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/internal/transport/networktype",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/grpc/resolver",
     ],
 )
 
 alias(
     name = "go_default_library",
     actual = ":unix",
-    visibility = ["//vendor/google.golang.org/grpc:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/google.golang.org/grpc:__subpackages__"],
 )

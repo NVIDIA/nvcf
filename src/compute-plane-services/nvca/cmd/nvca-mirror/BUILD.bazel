@@ -11,10 +11,10 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/cmd/nvca-mirror",
     visibility = ["//visibility:private"],
     deps = [
-        "//pkg/operator/mirror",
-        "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
-        "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version",
-        "//vendor/github.com/urfave/cli/v2:cli",
+        "//src/compute-plane-services/nvca/pkg/operator/mirror",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version",
+        "//src/compute-plane-services/nvca/vendor/github.com/urfave/cli/v2:cli",
     ],
 )
 

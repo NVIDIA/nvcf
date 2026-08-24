@@ -12,14 +12,14 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/informers/externalversions/nvca/v1",
     visibility = ["//visibility:public"],
     deps = [
-        "//pkg/apis/nvca/v1:nvca",
-        "//pkg/client/clientset/versioned",
-        "//pkg/client/informers/externalversions/internalinterfaces",
-        "//pkg/client/listers/nvca/v1:nvca",
-        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
-        "//vendor/k8s.io/apimachinery/pkg/runtime",
-        "//vendor/k8s.io/apimachinery/pkg/watch",
-        "//vendor/k8s.io/client-go/tools/cache",
+        "//src/compute-plane-services/nvca/pkg/apis/nvca/v1:nvca",
+        "//src/compute-plane-services/nvca/pkg/client/clientset/versioned",
+        "//src/compute-plane-services/nvca/pkg/client/informers/externalversions/internalinterfaces",
+        "//src/compute-plane-services/nvca/pkg/client/listers/nvca/v1:nvca",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/watch",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/cache",
     ],
 )
 

@@ -23,11 +23,11 @@ go_library(
         "service.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/service",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/control-plane-services/nats-auth-callout:__subpackages__"],
     deps = [
-        "//internal/config",
-        "//internal/plugins",
-        "//internal/plugins/types",
+        "//src/control-plane-services/nats-auth-callout/internal/config",
+        "//src/control-plane-services/nats-auth-callout/internal/plugins",
+        "//src/control-plane-services/nats-auth-callout/internal/plugins/types",
         "@com_github_nats_io_jwt_v2//:jwt",
         "@com_github_nats_io_nats_go//:nats_go",
         "@com_github_nats_io_nkeys//:nkeys",
@@ -45,12 +45,12 @@ go_library(
 alias(
     name = "go_default_library",
     actual = ":service",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/control-plane-services/nats-auth-callout:__subpackages__"],
 )
 
 go_test(
     name = "service_test",
     srcs = ["auth_test.go"],
     embed = [":service"],
-    deps = ["//internal/plugins/types"],
+    deps = ["//src/control-plane-services/nats-auth-callout/internal/plugins/types"],
 )

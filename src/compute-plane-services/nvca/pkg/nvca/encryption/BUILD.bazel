@@ -9,14 +9,14 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/encryption",
     visibility = ["//visibility:public"],
     deps = [
-        "//internal/kubeclients",
-        "//internal/metrics",
-        "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
-        "//vendor/github.com/sirupsen/logrus",
-        "//vendor/k8s.io/api/core/v1:core",
-        "//vendor/k8s.io/api/storage/v1:storage",
-        "//vendor/k8s.io/apimachinery/pkg/api/errors",
-        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/internal/kubeclients",
+        "//src/compute-plane-services/nvca/internal/metrics",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core",
+        "//src/compute-plane-services/nvca/vendor/github.com/sirupsen/logrus",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/core/v1:core",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/api/storage/v1:storage",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/api/errors",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
     ],
 )
 
@@ -31,10 +31,10 @@ go_test(
     srcs = ["encrypt_modelcache_test.go"],
     embed = [":encryption"],
     deps = [
-        "//internal/kubeclients",
-        "//vendor/github.com/stretchr/testify/assert",
-        "//vendor/github.com/stretchr/testify/mock",
-        "//vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
-        "//vendor/k8s.io/client-go/kubernetes/fake",
+        "//src/compute-plane-services/nvca/internal/kubeclients",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/mock",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/apis/meta/v1:meta",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/fake",
     ],
 )

@@ -43,8 +43,10 @@ without the `.yaml` suffix.
 ## Observability
 
 The stack defaults `observability.profile` to `compute`. The `compute` and
-`all` profiles enable the NVCA collector and `BYOObservability` feature gate.
-The `control` and `disabled` profiles leave both off.
+`all` profiles enable the `BYOObservability` feature gate. The optional NVCA
+collector stays disabled for every profile until the operator opts in. This
+prevents a self-hosted install from depending on an image that was not mirrored
+into its registry.
 
 One value selects the normal behavior:
 
@@ -53,27 +55,41 @@ observability:
   profile: compute
 ```
 
-Explicit NVCA values override the profile defaults:
+Enable the collector after publishing it under `global.image`. Its repository
+defaults to `${global.image.registry}/${global.image.repository}/nvcf-otel-collector`:
 
 ```yaml
 global:
   nvcaOperator:
     selfManaged:
       otelCollector:
-        enabled: false
-      featureGateValues:
-        - "-BYOObservability"
+        enabled: true
+```
+
+If the collector is published outside that global image path, set its explicit
+repository override while opting in:
+
+```yaml
+global:
+  nvcaOperator:
+    selfManaged:
+      otelCollector:
+        enabled: true
+        imageRepository: nvcr.io/example/collectors/nvcf-otel-collector
 ```
 
 ## Chart and Image Sources
 
 The stack pins the NVCA operator chart in
-`helmfile.d/02-nvca.yaml.gotmpl`. The chart supplies the default NVCA,
-NVCA operator, image credential helper, and shared storage image tags.
+`helmfile.d/02-nvca.yaml.gotmpl`. Compute-plane base values supply the tested
+NVCA, NVCA operator, and OTel collector image tags. The chart supplies the
+image credential helper and shared storage image tags.
 
 Use `global.helm.sources` for chart repository location and `global.image` for
 container image repository location. The stack rewrites repositories through
-those global values, while chart defaults supply the tested image tags.
+those global values. Chart defaults provide fallback versions for values the
+compute-plane stack does not override.
+
 Only set `global.nvcaOperator.selfManaged.imageCredHelper.imageTag` when
 pinning a tested replacement helper image.
 
@@ -89,16 +105,49 @@ make install CLUSTER_NAME=...   # downloads helmfile v1.1.9 + helm v3.15.4 on fi
 
 ## Optional Add-ons
 
-Grove (topology-aware scheduling) and Dynamo (inference framework scheduling) are disabled
-by default. Enable per-environment in `environments/<env>.yaml`:
+The stack can install KAI Scheduler, Grove, and Dynamo. KAI provides resource
+allocation and gang placement, Grove orchestrates related Pod groups, and
+Dynamo describes inference services that Grove manages. GPU clique
+topology-aware scheduling connects those workloads to the cluster's NVLink
+topology.
+
+All add-ons are disabled by default. Grove requires KAI Scheduler, and Dynamo
+requires Grove. Topology-aware scheduling also requires KAI Scheduler. Enable
+the complete stack in `environments/<env>.yaml`:
 
 ```yaml
 addons:
+  topologyAwareScheduling:
+    enabled: true
+  kaiScheduler:
+    enabled: true
   groveOperator:
     enabled: true
   dynamoOperator:
     enabled: true
 ```
+
+Override KAI component resources under `addons.kaiScheduler.<component>.resources`
+(for example `addons.kaiScheduler.scheduler.resources.requests.memory`). Defaults
+are set in `helmfile.d/01-dependencies.yaml.gotmpl`.
+
+`addons.topologyAwareScheduling` installs cluster-scoped KAI `Topology`
+resources from `topologyAwareScheduling.topologies` when KAI is enabled.
+When Grove is also enabled, the same toggle sets Grove
+`topologyAwareScheduling.enabled=true` and installs one
+`ClusterTopologyBinding` per KAI `Topology`. The default topology labels are
+`nvidia.com/gpu.clique` and `kubernetes.io/hostname`, in that order.
+
+Enabling `addons.kaiScheduler.enabled` or `addons.dynamoOperator.enabled` also
+adds the matching NVCA feature gate. Enabling KAI, Grove, or Dynamo permits
+their workload resource types in the NVCA validation policy.
+
+See [Gang Scheduling](../../../docs/user/cluster-management/gang-scheduling.md)
+for atomic workload placement and
+[Topology-Aware Scheduling](../../../docs/user/cluster-management/topology-aware-scheduling.md)
+for GPU clique placement. See
+[KAI Scheduler](../../../docs/user/cluster-management/kai-scheduler.md) for
+queue configuration and standalone installation.
 
 ## Multi-Cluster Example
 

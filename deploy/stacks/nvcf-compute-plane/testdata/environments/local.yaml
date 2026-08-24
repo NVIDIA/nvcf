@@ -18,7 +18,24 @@ global:
       natsURL: nats://nats.nats-system.svc.cluster.local:4222
 
 addons:
+  topologyAwareScheduling:
+    enabled: true
+  kaiScheduler:
+    enabled: true
   groveOperator:
     enabled: true
   dynamoOperator:
     enabled: true
+
+# Operator-supplied validation policy name is kept. Addon defaults (KAI, Grove,
+# Dynamo) are appended and deduplicated against this list.
+agentConfig:
+  mergeConfig: |
+    cluster:
+      validationPolicy:
+        name: Unrestricted
+        allowedExtraKubernetesTypes:
+          - group: foo.com
+            version: v1
+            kind: FooType
+            resource: footypes

@@ -97,15 +97,34 @@ func ReadYAMLKey(path, dottedKey string) (string, bool, error) {
 	return fmt.Sprint(value), true, nil
 }
 
+// RequireNonEmptyYAMLKeys asserts that every dotted key exists in path and
+// resolves to a non-empty scalar representation. The first failing error names
+// the table row and distinguishes a missing key from an empty value.
+func RequireNonEmptyYAMLKeys(path string, keys []string) error {
+	for index, key := range keys {
+		got, found, err := ReadYAMLKey(path, key)
+		if err != nil {
+			return fmt.Errorf("row %d key %q: %w", index+1, key, err)
+		}
+		if !found {
+			return fmt.Errorf("row %d: %s key %q is missing (%s)", index+1, path, key, DescribeMissingKey(path, key))
+		}
+		if got == "" {
+			return fmt.Errorf("row %d: %s key %q is empty", index+1, path, key)
+		}
+	}
+	return nil
+}
+
 // MatchYAMLSubtree compares the subtree at keyPath inside the YAML file
 // at filePath to the parsed expectedYAML. Empty keyPath compares against
 // the whole file. The expected docstring runs through Interpolate before
 // parsing so ${VAR} cells resolve at compare time. On mismatch the
 // returned error names the first differing path.
 func MatchYAMLSubtree(filePath, keyPath, expectedYAML string, mode MatchMode) error {
-	var expected any
-	if err := yaml.Unmarshal([]byte(Interpolate(expectedYAML)), &expected); err != nil {
-		return fmt.Errorf("parse expected yaml: %w", err)
+	expected, err := parseExpectedYAML(expectedYAML)
+	if err != nil {
+		return err
 	}
 	root, err := readYAMLAny(filePath)
 	if err != nil {
@@ -124,6 +143,30 @@ func MatchYAMLSubtree(filePath, keyPath, expectedYAML string, mode MatchMode) er
 		actual = got
 	}
 	return deepCompare(expected, actual, mode, keyPath)
+}
+
+// MatchYAMLDocument compares expectedYAML to an actual YAML document already
+// held in memory. Expected values are interpolated before parsing. Mismatch
+// errors identify the first differing path without including either value, so
+// callers can safely compare Kubernetes resources that may contain secrets.
+func MatchYAMLDocument(actualYAML, expectedYAML string, mode MatchMode) error {
+	expected, err := parseExpectedYAML(expectedYAML)
+	if err != nil {
+		return err
+	}
+	var actual any
+	if err := yaml.Unmarshal([]byte(actualYAML), &actual); err != nil {
+		return fmt.Errorf("parse actual yaml: invalid YAML")
+	}
+	return deepCompare(expected, actual, mode, "")
+}
+
+func parseExpectedYAML(expectedYAML string) (any, error) {
+	var expected any
+	if err := yaml.Unmarshal([]byte(Interpolate(expectedYAML)), &expected); err != nil {
+		return nil, fmt.Errorf("parse expected yaml: %w", err)
+	}
+	return expected, nil
 }
 
 // SubstituteFile replaces every occurrence of placeholder in the file at
@@ -395,7 +438,7 @@ func deepCompare(expected, actual any, mode MatchMode, path string) error {
 		return compareLists(expectedList, actualList, mode, path)
 	}
 	if !reflect.DeepEqual(expected, actual) {
-		return fmt.Errorf("%s: expected %v, got %v", displayPath(path), expected, actual)
+		return fmt.Errorf("%s: values differ", displayPath(path))
 	}
 	return nil
 }

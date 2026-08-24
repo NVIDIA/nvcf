@@ -7,18 +7,18 @@ go_library(
     name = "tokencache",
     srcs = ["tokencache.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/mock/tokencache",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
     deps = [
-        "//internal/mock/utils",
-        "//pkg/nvca/health",
-        "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/oauth",
-        "//vendor/github.com/go-jose/go-jose/v4:go-jose",
-        "//vendor/github.com/go-jose/go-jose/v4/jwt",
+        "//src/compute-plane-services/nvca/internal/mock/utils",
+        "//src/compute-plane-services/nvca/pkg/nvca/health",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/oauth",
+        "//src/compute-plane-services/nvca/vendor/github.com/go-jose/go-jose/v4:go-jose",
+        "//src/compute-plane-services/nvca/vendor/github.com/go-jose/go-jose/v4/jwt",
     ],
 )
 
 alias(
     name = "go_default_library",
     actual = ":tokencache",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
 )

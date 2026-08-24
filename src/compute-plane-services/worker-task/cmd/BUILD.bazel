@@ -21,7 +21,7 @@ go_library(
     srcs = ["main.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/cmd",
     visibility = ["//visibility:private"],
-    deps = ["//service"],
+    deps = ["//src/compute-plane-services/worker-task/service"],
 )
 
 go_binary(

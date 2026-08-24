@@ -19,8 +19,14 @@ environments:
   Every gate in the default set below is enabled unless it is already present or
   explicitly disabled by including "-<gate>" in the input. This keeps the
   defaults intact even when the operator sets a non-empty featureGateValues
-  list, which would otherwise replace the chart default entirely. Input (.) is
-  the raw list; output is the normalized list as YAML.
+  list, which would otherwise replace the chart default entirely.
+
+  Input is a dict:
+    values:                 operator-supplied featureGateValues list
+    byooEnabled:            also enable BYOObservability
+    kaiSchedulerEnabled:    also enable KAIScheduler (addons.kaiScheduler.enabled)
+    dynamoOperatorEnabled:  also enable DynamoOperatorSupport (addons.dynamoOperator.enabled)
+  Output is the normalized list as YAML.
 */}}
 {{- define "nvca-operator.featureGateValues" -}}
 {{- $featureGateValues := dig "values" list . | default list -}}
@@ -34,6 +40,12 @@ environments:
 -}}
 {{- if dig "byooEnabled" false . -}}
 {{- $defaultFeatureGates = append $defaultFeatureGates "BYOObservability" -}}
+{{- end -}}
+{{- if dig "kaiSchedulerEnabled" false . -}}
+{{- $defaultFeatureGates = append $defaultFeatureGates "KAIScheduler" -}}
+{{- end -}}
+{{- if dig "dynamoOperatorEnabled" false . -}}
+{{- $defaultFeatureGates = append $defaultFeatureGates "DynamoOperatorSupport" -}}
 {{- end -}}
 {{- range $gate := $defaultFeatureGates -}}
 {{-   if not (or (has $gate $featureGateValues) (has (printf "-%s" $gate) $featureGateValues)) -}}
@@ -58,7 +70,8 @@ helmDefaults:
     - "--dry-run=server"
 
 {{- $clusterName := requiredEnv "CLUSTER_NAME" }}
-{{- $registrationValuesPath := printf "../out/%s-register-values.yaml" $clusterName }}
+{{- $outputDir := requiredEnv "OUTPUT_DIR" }}
+{{- $registrationValuesPath := printf "%s/%s-register-values.yaml" $outputDir $clusterName }}
 {{- $registrationValues := readFile $registrationValuesPath | fromYaml | default dict }}
 {{- $registrationAgentMergeConfig := dig "agentConfig" "mergeConfig" "" $registrationValues }}
 {{- $environmentAgentMergeConfig := dig "agentConfig" "mergeConfig" "" .Values }}
@@ -74,17 +87,78 @@ helmDefaults:
 {{- if $environmentAgentMergeConfig }}
 {{- $agentMergeConfig = mergeOverwrite $agentMergeConfig ($environmentAgentMergeConfig | fromYaml | default dict) }}
 {{- end }}
+{{- $nvcaOp := dig "nvcaOperator" dict .Values.global }}
+{{- $selfManaged := dig "selfManaged" dict $nvcaOp }}
+{{- $otelCollector := dig "otelCollector" dict $selfManaged }}
+{{- $otelCollectorEnabled := dig "enabled" false $otelCollector }}
+{{- $defaultOTelCollectorImageRepository := printf "%s/%s/nvcf-otel-collector" .Values.global.image.registry .Values.global.image.repository }}
+{{- $otelCollectorImageRepository := dig "imageRepository" $defaultOTelCollectorImageRepository $otelCollector }}
+
+{{- $featureGateValues := dig "featureGateValues" list $selfManaged }}
+{{- $kaiSchedulerEnabled := dig "addons" "kaiScheduler" "enabled" false .Values }}
+{{- $dynamoOperatorEnabled := dig "addons" "dynamoOperator" "enabled" false .Values }}
+
+{{- /*
+  Extra Kubernetes types owned by KAI Scheduler, Grove, and Dynamo. NVCA needs
+  these in its validation policy to render, admit, and garbage collect the
+  objects those controllers create for a Helm function, and the nvca-operator
+  chart derives the matching ClusterRole from the same list. Adding them here
+  means an operator does not have to restate the whole policy just to run
+  multi-node or Dynamo workloads. Entries supplied through registration or
+  environment values always win over these defaults.
+*/}}
+{{- $extraTypes := list }}
+{{- if or $kaiSchedulerEnabled (has "KAIScheduler" $featureGateValues) }}
+{{-   $extraTypes = append $extraTypes (dict "group" "scheduling.run.ai" "version" "v2alpha2" "kind" "PodGroup" "resource" "podgroups") }}
+{{- end }}
+{{- if dig "addons" "groveOperator" "enabled" false .Values }}
+{{-   $extraTypes = concat $extraTypes (list
+        (dict "group" "grove.io" "version" "v1alpha1" "kind" "PodCliqueSet" "resource" "podcliquesets")
+        (dict "group" "grove.io" "version" "v1alpha1" "kind" "PodClique" "resource" "podcliques")
+        (dict "group" "grove.io" "version" "v1alpha1" "kind" "PodCliqueScalingGroup" "resource" "podcliquescalinggroups")
+        (dict "group" "scheduler.grove.io" "version" "v1alpha1" "kind" "PodGang" "resource" "podgangs")
+      ) }}
+{{- end }}
+{{- if or $dynamoOperatorEnabled (has "DynamoOperatorSupport" $featureGateValues) }}
+{{-   $extraTypes = concat $extraTypes (list
+        (dict "group" "nvidia.com" "version" "v1alpha1" "kind" "DynamoCheckpoint" "resource" "dynamocheckpoints")
+        (dict "group" "nvidia.com" "version" "v1alpha1" "kind" "DynamoComponentDeployment" "resource" "dynamocomponentdeployments")
+        (dict "group" "nvidia.com" "version" "v1alpha1" "kind" "DynamoGraphDeployment" "resource" "dynamographdeployments")
+        (dict "group" "nvidia.com" "version" "v1alpha1" "kind" "DynamoGraphDeploymentRequest" "resource" "dynamographdeploymentrequests")
+        (dict "group" "nvidia.com" "version" "v1alpha1" "kind" "DynamoGraphDeploymentScalingAdapter" "resource" "dynamographdeploymentscalingadapters")
+        (dict "group" "nvidia.com" "version" "v1alpha1" "kind" "DynamoModel" "resource" "dynamomodels")
+        (dict "group" "nvidia.com" "version" "v1alpha1" "kind" "DynamoWorkerMetadata" "resource" "dynamoworkermetadatas")
+      ) }}
+{{- end }}
+{{- if $extraTypes }}
+{{-   $validationPolicy := dig "cluster" "validationPolicy" dict $agentMergeConfig }}
+{{-   $allowedTypes := dig "allowedExtraKubernetesTypes" list $validationPolicy }}
+{{-   $seen := dict }}
+{{-   range $allowedTypes }}
+{{-     $seen = set $seen (printf "%s/%s/%s" .group .version .kind) true }}
+{{-   end }}
+{{-   range $extraTypes }}
+{{-     $key := printf "%s/%s/%s" .group .version .kind }}
+{{-     if not (hasKey $seen $key) }}
+{{-       $allowedTypes = append $allowedTypes . }}
+{{-     end }}
+{{-   end }}
+{{-   $validationPolicy = set $validationPolicy "allowedExtraKubernetesTypes" $allowedTypes }}
+{{- /* ReVal only accepts "Default" or "Unrestricted"; an unset name is rejected. */}}
+{{-   if not (dig "name" "" $validationPolicy) }}
+{{-     $validationPolicy = set $validationPolicy "name" "Default" }}
+{{-   end }}
+{{-   $cluster := set (dig "cluster" dict $agentMergeConfig) "validationPolicy" $validationPolicy }}
+{{-   $agentMergeConfig = set $agentMergeConfig "cluster" $cluster }}
+{{- end }}
 
 releases:
 
   - name: nvca-operator
-    # Released chart from nvca-operator-deploy. The chart bakes its own
-    # image.tag + selfManaged.nvcaVersion (set by `make vendor-chart` from
-    # nvca-operator-deploy/.env), so no inline tag override is needed; the
-    # nvca + nvca-operator images are mirrored to the environment registry by
-    # regsync-configs.
+    # Released chart from nvca-operator-deploy. Compute-plane base values own
+    # the operator and NVCA versions used by this stack.
     chart: nvcf/helm-nvca-operator
-    version: 1.14.0
+    version: 1.21.3
     namespace: nvca-operator
     values:
       - ../global.yaml.gotmpl
@@ -92,12 +166,14 @@ releases:
       # `make register-cluster CLUSTER_NAME=<cluster>` — uses
       # selfManaged.clusterId/clusterGroupId schema emitted by nvcf-cli and
       # read by the nvca-operator chart.
-      - {{ $registrationValuesPath }}
+      - {{ $registrationValuesPath | quote }}
       # Resolve operator + nvca images through global.image.{registry,repository}.
-      # The chart's image.tag and selfManaged.nvcaVersion defaults supply the
-      # actual image tag; this block only overrides repository and pullPolicy.
+      # Compute-plane base values supply their image versions.
       - image:
           repository: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/nvca-operator
+          {{- with dig "imageTag" "" $nvcaOp }}
+          tag: {{ . | quote }}
+          {{- end }}
           pullPolicy: IfNotPresent
         nvcaImage:
           repositoryOverride: {{ .Values.global.image.registry }}/{{ .Values.global.image.repository }}/nvca
@@ -109,13 +185,21 @@ releases:
         imagePullSecrets:
         {{- toYaml .Values.global.imagePullSecrets | nindent 10 }}
         {{- end }}
+        {{- /* Self-hosted clusters supply their own registry credentials through
+               global.imagePullSecrets and have no NGC service key to derive one
+               from, so the chart's generated pull secret is disabled here. The
+               chart default stays enabled for ngc-managed installs, which rely
+               on it being generated from ngcConfig.serviceKey. */}}
+        generateImagePullSecret: false
+        ngcConfig:
+          clusterSource: self-managed
         clusterName: {{ requiredEnv "CLUSTER_NAME" }}
         ncaId: {{ requiredEnv "NCA_ID" }}
-        {{- $selfManaged := dig "nvcaOperator" "selfManaged" dict .Values.global }}
-        {{- $otelCollector := dig "otelCollector" dict $selfManaged }}
-        {{- $otelCollectorEnabled := dig "enabled" $computeObservabilityEnabled $otelCollector }}
         selfManaged:
           identitySource: psat
+          {{- with dig "nvcaVersion" "" $selfManaged }}
+          nvcaVersion: {{ . | quote }}
+          {{- end }}
           {{- with dig "icmsServiceURL" "" $selfManaged }}
           icmsServiceURL: {{ . | quote }}
           {{- end }}
@@ -136,13 +220,13 @@ releases:
           {{- end }}
           featureGateValues:
           {{- include "nvca-operator.featureGateValues" (dict
-                "values" (dig "featureGateValues" list $selfManaged)
-                "byooEnabled" $computeObservabilityEnabled) | nindent 10 }}
+                "values" $featureGateValues
+                "byooEnabled" $computeObservabilityEnabled
+                "kaiSchedulerEnabled" $kaiSchedulerEnabled
+                "dynamoOperatorEnabled" $dynamoOperatorEnabled) | nindent 10 }}
           otelCollector:
             enabled: {{ $otelCollectorEnabled }}
-            {{- with dig "imageRepository" "" $otelCollector }}
-            imageRepository: {{ . | quote }}
-            {{- end }}
+            imageRepository: {{ $otelCollectorImageRepository | quote }}
             {{- with dig "imageTag" "" $otelCollector }}
             imageTag: {{ . | quote }}
             {{- end }}
@@ -169,13 +253,12 @@ releases:
         networkPolicy:
 {{ toYaml . | nindent 10 }}
         {{- end }}
-        {{- $nvcaOp := dig "nvcaOperator" dict .Values.global }}
-        {{- if .Values.global.nodeSelector.enabled -}}
+        {{- if .Values.global.nodeSelector.enabled }}
         nodeSelector:
-          key: {{ .Values.global.nodeSelector.key }}
-          value: {{ .Values.global.nodeSelector.value }}
+          key: {{ .Values.global.nodeSelector.key | quote }}
+          value: {{ .Values.global.nodeSelector.value | quote }}
         {{- end }}
-        {{- if not (empty .Values.global.tolerations) -}}
+        {{- if not (empty .Values.global.tolerations) }}
         tolerations:
         {{- toYaml .Values.global.tolerations | nindent 8 }}
         {{- end }}

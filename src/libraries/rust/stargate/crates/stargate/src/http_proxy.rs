@@ -197,7 +197,7 @@ async fn healthz() -> StatusCode {
 }
 
 async fn readyz(State(app): State<ProxyAppState>) -> StatusCode {
-    if app.traffic.shutdown.is_cancelled() {
+    if app.traffic.shutdown.is_cancelled() || !app.metrics.tls_identity_is_ready() {
         return StatusCode::SERVICE_UNAVAILABLE;
     }
 
@@ -239,6 +239,8 @@ mod test_support {
                         direct_quic_connections: 1,
                         tls_cert_pem: None,
                         server_tls_identity: stargate_tls::ServerTlsIdentity::SelfSigned,
+                        server_identity_reloader: None,
+                        tls_reload_interval: stargate_tls::DEFAULT_TLS_RELOAD_INTERVAL,
                         quic_insecure: true,
                         tunnel_protocol: Default::default(),
                     },

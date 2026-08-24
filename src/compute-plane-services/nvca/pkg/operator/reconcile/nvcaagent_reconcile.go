@@ -125,6 +125,7 @@ const (
 	agentConfigFilePath           = agentConfigDir + "/" + agentConfigFile
 	agentConfigConfigMapName      = "agent-config"
 	agentConfigMergeConfigMapName = "agent-config-merge"
+	nvcaOperatorConfigMapName     = "nvca-operator-config"
 	agentConfigVolumeName         = "agent-config"
 
 	// ReVal config.
@@ -493,7 +494,11 @@ func (bc *BackendK8sCache) validateNVCFBackendParams(ctx context.Context, nb *nv
 	return nil
 }
 
-func (bc *BackendK8sCache) setupNVCAAgentInfra(ctx context.Context, nb *nvidiaiov1.NVCFBackend) error {
+func (bc *BackendK8sCache) setupNVCAAgentInfra(
+	ctx context.Context,
+	nb *nvidiaiov1.NVCFBackend,
+	desiredAgentConfigCM *corev1.ConfigMap,
+) error {
 	var err error
 	log := core.GetLogger(ctx)
 	log.Infof("setting-up NVCAAgent infra %v", nvcaoptypes.NVCAModuleName)
@@ -520,11 +525,7 @@ func (bc *BackendK8sCache) setupNVCAAgentInfra(ctx context.Context, nb *nvidiaio
 			nb.Namespace, nb.Name, err)
 	}
 
-	agentCfg, err := bc.newAgentConfig(ctx, nb)
-	if err != nil {
-		return err
-	}
-	if err := bc.setupAgentConfigConfigMap(ctx, nb, agentCfg); err != nil {
+	if err := bc.setupAgentConfigConfigMap(ctx, desiredAgentConfigCM); err != nil {
 		return fmt.Errorf("failed to setup agent config ConfigMap: %w", err)
 	}
 
@@ -799,6 +800,19 @@ func (bc *BackendK8sCache) setupNVCARBAC(ctx context.Context, nb *nvidiaiov1.NVC
 				Resources:     []string{"mutatingwebhookconfigurations", "validatingwebhookconfigurations"},
 				ResourceNames: []string{nvcaoptypes.NVCAModuleName},
 				Verbs:         []string{"get", "list", "watch"},
+			},
+			// NvSnap integration (PR-3 + PR-5): NVCA agent reads and
+			// writes NvSnapFunctionState — cluster-scoped CRD that tracks
+			// per-function-version checkpoint state. Read in Hook A to
+			// decide whether to stamp nvsnap.io/restore-from at pod
+			// apply; written by Hook B's reconciler after a successful
+			// checkpoint. The integration is gated behind
+			// featureflag.NvSnapCheckpointRestore (default off), so this
+			// rule is dormant until that flag is enabled on a cluster.
+			{
+				APIGroups: []string{"nvsnap.nvcf.nvidia.io"},
+				Resources: []string{"nvsnapfunctionstates", "nvsnapfunctionstates/status"},
+				Verbs:     crudVerbs,
 			},
 		},
 	}
@@ -1276,21 +1290,32 @@ func (bc *BackendK8sCache) setupOAuthClientIDSecret(ctx context.Context, nb *nvi
 
 func (bc *BackendK8sCache) setupAgentConfigConfigMap(
 	ctx context.Context,
-	nb *nvidiaiov1.NVCFBackend,
-	cfg nvcaconfig.Config,
+	cm *corev1.ConfigMap,
 ) error {
+	return bc.createOrUpdateConfigMap(ctx, cm)
+}
+
+// newAgentConfigConfigMap generates and maps the NVCA configuration resource
+// to the ConfigMap consumed by the agent. Callers reuse the resulting ConfigMap
+// for both rollout comparison and setup so source data is read once per sync.
+func (bc *BackendK8sCache) newAgentConfigConfigMap(
+	ctx context.Context,
+	nb *nvidiaiov1.NVCFBackend,
+) (*corev1.ConfigMap, error) {
+	cfg, err := bc.newAgentConfig(ctx, nb)
+	if err != nil {
+		return nil, nvcaoperatorerrors.FatalError(err)
+	}
 	mergeCfg, _, err := bc.getAgentConfigToMerge(ctx)
 	if err != nil {
-		return fmt.Errorf("get agent config to merge: %w", err)
+		return nil, fmt.Errorf("get agent config to merge: %w", err)
 	}
-	bc.defaultTransportTLSInstallerImage(nb, &mergeCfg)
-
 	cb, err := encodeAgentConfig(cfg, mergeCfg, nb.Spec.AgentConfig.NATSURL, agentHostOverrideConfig(nb, bc.envType))
 	if err != nil {
-		return fmt.Errorf("encode config: %v", err)
+		return nil, fmt.Errorf("encode config: %w", err)
 	}
 
-	s := &corev1.ConfigMap{
+	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        agentConfigConfigMapName,
 			Namespace:   getSystemNamespace(nb),
@@ -1300,20 +1325,7 @@ func (bc *BackendK8sCache) setupAgentConfigConfigMap(
 		Data: map[string]string{
 			agentConfigFile: string(cb),
 		},
-	}
-
-	return bc.createOrUpdateConfigMap(ctx, s)
-}
-
-func (bc *BackendK8sCache) defaultTransportTLSInstallerImage(nb *nvidiaiov1.NVCFBackend, cfg *nvcaconfig.Config) {
-	if cfg == nil || cfg.Workload.TransportTLS == nil {
-		return
-	}
-	transportTLS := cfg.Workload.TransportTLS
-	if transportTLS.TrustMode != nvcaconfig.TrustModeBundle || strings.TrimSpace(transportTLS.InstallerImage) != "" {
-		return
-	}
-	transportTLS.InstallerImage = bc.getNVCAImagePathFromConfig(nb)
+	}, nil
 }
 
 type agentHostOverrides struct {
@@ -1420,6 +1432,32 @@ func yamlStringNode(value string) *yamlv3.Node {
 }
 
 func (bc *BackendK8sCache) getAgentConfigToMerge(ctx context.Context) (nvcaconfig.Config, bool, error) {
+	mergeCfg, foundMergeCfg, err := bc.getRawAgentConfigToMerge(ctx)
+	if err != nil {
+		return nvcaconfig.Config{}, false, err
+	}
+
+	operatorCfg, foundOperatorCfg, err := bc.getNVCAAgentConfig(ctx)
+	if err != nil {
+		return nvcaconfig.Config{}, false, err
+	}
+	if !foundOperatorCfg {
+		return mergeCfg, foundMergeCfg, nil
+	}
+	if mergeCfg.Workload.TransportTLS != nil {
+		return nvcaconfig.Config{}, false,
+			fmt.Errorf("agent-config-merge and %s both configure workload.transportTLS", nvcaOperatorConfigMapName)
+	}
+
+	mergeCfg.Workload.TransportTLS = operatorCfg.Workload.TransportTLS
+	if err := mergeCfg.Validate(); err != nil {
+		return nvcaconfig.Config{}, false,
+			nvcaoperatorerrors.FatalError(fmt.Errorf("invalid combined NVCA agent configuration: %w", err))
+	}
+	return mergeCfg, true, nil
+}
+
+func (bc *BackendK8sCache) getRawAgentConfigToMerge(ctx context.Context) (nvcaconfig.Config, bool, error) {
 	log := core.GetLogger(ctx)
 	cm, err := bc.clients.K8s.CoreV1().ConfigMaps(bc.operatorNamespace).Get(ctx, agentConfigMergeConfigMapName, metav1.GetOptions{})
 	if err != nil {
@@ -1435,7 +1473,11 @@ func (bc *BackendK8sCache) getAgentConfigToMerge(ctx context.Context) (nvcaconfi
 
 	data := cm.Data[agentConfigFile]
 	cfg, err := nvcaconfig.DecodeConfig([]byte(data))
-	return cfg, true, err
+	if err != nil {
+		return nvcaconfig.Config{}, false,
+			nvcaoperatorerrors.FatalError(fmt.Errorf("invalid %s: %w", agentConfigMergeConfigMapName, err))
+	}
+	return cfg, true, nil
 }
 
 func (bc *BackendK8sCache) getImageRegistryServerFromRepo(nb *nvidiaiov1.NVCFBackend) string {

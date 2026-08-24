@@ -19,9 +19,9 @@ go_library(
     name = "downloader",
     srcs = ["downloader.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-init/internal/downloader",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/worker-init:__subpackages__"],
     deps = [
-        "//internal/metrics",
+        "//src/compute-plane-services/worker-init/internal/metrics",
         "@com_github_cenkalti_backoff_v4//:backoff",
         "@com_github_nvidia_nvcf_src_libraries_go_worker//tracing",
         "@com_github_nvidia_nvcf_src_libraries_go_worker//types",

@@ -253,11 +253,14 @@ classify_language() {
     local ext="${name##*.}"
 
     case "${ext}" in
-        go)         echo "go" ;;
-        py)         echo "python" ;;
-        java)       echo "java" ;;
-        rs)         echo "rust" ;;
-        properties) echo "java-properties" ;;
+        go)             echo "go" ;;
+        py)             echo "python" ;;
+        java)           echo "java" ;;
+        rs)             echo "rust" ;;
+        properties)     echo "java-properties" ;;
+        ts|tsx)         echo "typescript" ;;
+        js|jsx|mjs|cjs) echo "javascript" ;;
+        css)            echo "css" ;;
         yaml|yml|tpl)
             if is_under_chart_root "${filepath}"; then
                 echo "helm"
@@ -558,7 +561,9 @@ while IFS= read -r filepath; do
 
 done < <(find "${FIND_ROOTS[@]}" \( "${PRUNE_ARGS[@]}" \) -prune -o \
     \( -name '*.go' -o -name '*.py' -o -name '*.java' -o -name '*.rs' \
-       -o -name '*.properties' -o -name '*.yaml' -o -name '*.yml' -o -name '*.tpl' \) \
+       -o -name '*.properties' -o -name '*.yaml' -o -name '*.yml' -o -name '*.tpl' \
+       -o -name '*.ts' -o -name '*.tsx' -o -name '*.js' -o -name '*.jsx' \
+       -o -name '*.mjs' -o -name '*.cjs' -o -name '*.css' \) \
     -type f -print 2>/dev/null | LC_ALL=C sort)
 
 # ---------------------------------------------------------------------------

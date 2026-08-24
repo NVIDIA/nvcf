@@ -1528,3 +1528,169 @@ The following metrics have dynamic cardinality based on cluster configuration:
 - **Scheduler workload count** (`nvca_scheduler_workload_count`): 4 series fixed (2 schedulers × 2 workload kinds, pre-initialized)
 
 Total expected cardinality per cluster: **159-254 time series** depending on configuration and active workload count.
+
+## Outbound Client Metrics (OpenTelemetry semconv)
+
+NVCA instruments its outbound dependency calls with OpenTelemetry metrics that
+follow the OpenTelemetry Semantic Conventions. These are produced by a shared
+metrics transport attached to the outbound HTTP clients, not by hand at each call
+site, and are exported through the same `/metrics` endpoint via the OTel to
+Prometheus bridge. They are gated by the `ClientMetrics` feature flag: when it is
+off, client instrumentation receives a no-op meter provider and no series are
+produced.
+
+### `http_client_request_duration_seconds`
+
+Histogram. Duration of an outbound HTTP client call, from which rate, error
+rate, and latency are all derived.
+
+Labels (in addition to the four default labels `nvca_nca_id`,
+`nvca_cluster_name`, `nvca_cluster_group`, `nvca_version`):
+
+| Label | Example | Notes |
+|-------|---------|-------|
+| `peer_service` | `icms`, `reval`, `fnds`, `auth`, `sqs`, `nats` | Which dependency was called. Bounded set. NGC is operator-side (separate pipeline) and not yet wired. |
+| `http_request_method` | `POST` | Request method. |
+| `http_response_status_code` | `200` | Present when a response was received; omitted on a transport failure. |
+| `server_address` | dependency host | Target host. |
+| `url_template` | `v1/nvca/clusters/{clusterId}/heartbeat` | Route shape, opt-in. The ICMS client sets it per operation via request context; high-cardinality path segments (cluster/request/instance IDs) are replaced with placeholders to keep cardinality bounded. Preserves the per-operation breakdown of the legacy `operation` label. |
+| `error_type` | `timeout` | Present only on transport failure (no response). |
+
+```promql
+# Request rate to ICMS
+sum(rate(http_client_request_duration_seconds_count{peer_service="icms"}[5m]))
+
+# Success rate to ICMS (2xx over all)
+sum(rate(http_client_request_duration_seconds_count{peer_service="icms", http_response_status_code=~"2.."}[5m]))
+  / sum(rate(http_client_request_duration_seconds_count{peer_service="icms"}[5m]))
+
+# p95 latency to ICMS
+histogram_quantile(0.95,
+  sum(rate(http_client_request_duration_seconds_bucket{peer_service="icms"}[5m])) by (le))
+```
+
+### `http_client_request_body_size_bytes` and `http_client_response_body_size_bytes`
+
+Histograms of outbound request and response body sizes in bytes, carrying the
+same labels as the duration metric. Sizes come from the declared `Content-Length`;
+a request or response with an unknown length (for example a chunked body) is not
+recorded. NVCA's HTTP dependencies send JSON with `Content-Length` set, so these
+are accurate in practice.
+
+### Before and after (label mapping)
+
+The OTel series are additive: the legacy counters below are unchanged and keep
+being emitted, so dashboards can migrate one panel at a time and be verified
+against both during the transition.
+
+| Dependency | Legacy series | OTel series |
+|---|---|---|
+| ICMS | `nvca_upstream_request_total{operation,status,http_status}`, with a transport failure encoded as `http_status="0"` | `http_client_request_duration_seconds{peer_service="icms",http_request_method,http_response_status_code,url_template,server_address,error_type}` |
+| ReVal | `nvca_miniservice_controller_reval_request_total{endpoint,http_code}` | same schema, `peer_service="reval"` |
+| FNDS | none | same schema, `peer_service="fnds"` |
+| Auth (OAuth token endpoint) | none | same schema, `peer_service="auth"`; covers the ICMS, ReVal and FNDS token fetchers, distinguished by `server_address` |
+| SQS / NATS | none | `messaging_client_operation_duration_seconds{peer_service,messaging_system,messaging_operation_name,messaging_destination_name,error_type}` |
+
+Query translation, using the ICMS success rate as the worked example:
+
+```promql
+# before
+sum(rate(nvca_upstream_request_total{status="success"}[5m]))
+  / sum(rate(nvca_upstream_request_total[5m]))
+
+# after
+sum(rate(http_client_request_duration_seconds_count{peer_service="icms",http_response_status_code=~"2.."}[5m]))
+  / sum(rate(http_client_request_duration_seconds_count{peer_service="icms"}[5m]))
+```
+
+Every legacy ICMS `operation` value has a `url_template` counterpart, including
+`jwks-push`, whose client is built separately from the shared retryable client
+and is instrumented explicitly for that reason. The new series are a superset:
+`v1/si/clusters/{clusterId}/instances` had no legacy counter at all.
+
+The legacy `operation` label maps to `url_template`, and the synthetic
+`http_status="0"` maps to `error_type` (`timeout`, `connection_refused`,
+`canceled`, `other`), which names the failure instead of overloading a status
+code.
+
+### Adding a new dependency
+
+Instrumentation lives in the shared transport and the shared recorder, so
+neither case below adds a meter provider, exporter, registry, or label plumbing.
+
+Case 1: a new HTTP dependency. Add its name to the peer-service constants in
+`internal/metrics/clientmetrics`, then build the client through the shared
+factory with the metrics transport wrapper. That is the whole change; the full
+RED metric set is emitted automatically.
+
+```go
+c := cmnhttp.NewRetryableClient(ctx,
+    cmnhttp.WithTransportWrapper(func(inner http.RoundTripper) http.RoundTripper {
+        return clientmetrics.NewTransport(inner, recorder, clientmetrics.PeerServiceNewDep)
+    }),
+)
+```
+
+Case 2: a new client type (messaging, RPC, or a future protocol). Declare a
+`Family` describing its instruments, resolve it once with `Recorder.Instruments`,
+and record through it. The recorder applies the NVCA default labels; the semconv
+helper builds the attribute set (`msgsemconv` for messaging, `rpcsemconv` for
+RPC).
+
+```go
+// 1. Declare the instrument family once (see MessagingClientFamily for a real one).
+var FooClientFamily = clientmetrics.Family{
+    Duration: clientmetrics.InstrumentSpec{
+        Name:        "foo.client.operation.duration",
+        Unit:        "s",
+        Description: "Duration of foo client operations.",
+        Buckets:     clientmetrics.DurationBucketsSeconds,
+    },
+}
+
+// 2. Resolve it once at construction.
+type instrumentedFooClient struct {
+    inner FooClient
+    insts *clientmetrics.Instruments
+}
+
+func NewInstrumentedFooClient(inner FooClient, rec *clientmetrics.Recorder) (FooClient, error) {
+    if rec == nil {
+        return inner, nil // meter-gated: no recorder, no overhead
+    }
+    insts, err := rec.Instruments(FooClientFamily)
+    if err != nil {
+        return nil, err
+    }
+    return &instrumentedFooClient{inner: inner, insts: insts}, nil
+}
+
+// 3. Record each call.
+func (c *instrumentedFooClient) Call(ctx context.Context, req Req) (Resp, error) {
+    start := time.Now()
+    resp, err := c.inner.Call(ctx, req)
+    c.insts.Record(ctx, clientmetrics.Observation{
+        Duration:     time.Since(start),
+        RequestSize:  -1, // negative means unknown and is not recorded
+        ResponseSize: -1,
+        Attrs:        fooAttrs(req, resp, semconv.ClassifyError(err)),
+    })
+    return resp, err
+}
+```
+
+`internal/metrics/clientmetrics/queueclient.go` is this pattern applied to
+`queue.Client`, and is the reference to copy.
+
+### Cardinality
+
+Bounded. Per dependency, series scale with the number of distinct
+method/status/error-type combinations actually observed, typically a handful.
+`url.template` is opt-in and only set where a safe, low-cardinality template is
+known; raw URLs are never used as labels. The same rule applies to messaging:
+`messaging.destination.name` carries the queue type, never the queue URL.
+
+Histogram buckets are declared explicitly (`DurationBucketsSeconds`,
+`SizeBucketsBytes`) rather than taking the OTel SDK defaults, which are shaped
+for milliseconds and would place every realistic latency in a single bucket of a
+seconds-valued instrument.

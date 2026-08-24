@@ -7,18 +7,18 @@ go_library(
     name = "context",
     srcs = ["context.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/internal/context",
-    visibility = ["//pkg/operator:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/pkg/operator:__subpackages__"],
 )
 
 alias(
     name = "go_default_library",
     actual = ":context",
-    visibility = ["//pkg/operator:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/pkg/operator:__subpackages__"],
 )
 
 go_test(
     name = "context_test",
     srcs = ["context_test.go"],
     embed = [":context"],
-    deps = ["//vendor/github.com/stretchr/testify/assert"],
+    deps = ["//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert"],
 )

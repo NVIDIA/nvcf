@@ -27,6 +27,7 @@ use crate::timeseries_db::{
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use backon::{ExponentialBuilder, Retryable};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use chrono::{DateTime, Duration, Utc};
 use openssl::asn1::Asn1Time;
 use openssl::pkey::PKey;
@@ -57,7 +58,11 @@ fn query_range_url(mut base_url: Url, auth_mode: TimeseriesDbAuthMode) -> Result
     Ok(base_url)
 }
 
-fn mtls_identity(config: &TimeseriesDbSettings, base_url: &Url) -> Result<Identity> {
+fn mtls_identity(
+    config: &TimeseriesDbSettings,
+    base_url: &Url,
+    secrets_watcher: Option<&SecretFileWatcher>,
+) -> Result<Identity> {
     if base_url.scheme() != "https" {
         return Err(anyhow::anyhow!(
             "TimeseriesDb mTLS authentication requires an https URL"
@@ -69,24 +74,7 @@ fn mtls_identity(config: &TimeseriesDbSettings, base_url: &Url) -> Result<Identi
         ));
     }
 
-    let certificate_path = config.client_certificate_path.as_ref().ok_or_else(|| {
-        anyhow::anyhow!("TimeseriesDb mTLS authentication requires client_certificate_path")
-    })?;
-    let private_key_path = config.client_private_key_path.as_ref().ok_or_else(|| {
-        anyhow::anyhow!("TimeseriesDb mTLS authentication requires client_private_key_path")
-    })?;
-    let certificate_pem = std::fs::read(certificate_path).with_context(|| {
-        format!(
-            "Failed to read TimeseriesDb client certificate from {}",
-            certificate_path.display()
-        )
-    })?;
-    let private_key_pem = std::fs::read(private_key_path).with_context(|| {
-        format!(
-            "Failed to read TimeseriesDb client private key from {}",
-            private_key_path.display()
-        )
-    })?;
+    let (certificate_pem, private_key_pem) = mtls_identity_pem(config, secrets_watcher)?;
 
     let certificates = X509::stack_from_pem(&certificate_pem)
         .context("Failed to parse TimeseriesDb client certificate chain")?;
@@ -133,6 +121,75 @@ fn mtls_identity(config: &TimeseriesDbSettings, base_url: &Url) -> Result<Identi
         .context("Failed to encode TimeseriesDb client private key as PKCS#8")?;
     Identity::from_pkcs8_pem(&certificate_pem, &private_key_pem)
         .context("Failed to build TimeseriesDb client identity")
+}
+
+fn mtls_identity_pem(
+    config: &TimeseriesDbSettings,
+    secrets_watcher: Option<&SecretFileWatcher>,
+) -> Result<(Vec<u8>, Vec<u8>)> {
+    match (
+        config.client_certificate_path.as_ref(),
+        config.client_private_key_path.as_ref(),
+    ) {
+        (Some(certificate_path), Some(private_key_path)) => {
+            let certificate_pem = std::fs::read(certificate_path).with_context(|| {
+                format!(
+                    "Failed to read TimeseriesDb client certificate from {}",
+                    certificate_path.display()
+                )
+            })?;
+            let private_key_pem = std::fs::read(private_key_path).with_context(|| {
+                format!(
+                    "Failed to read TimeseriesDb client private key from {}",
+                    private_key_path.display()
+                )
+            })?;
+            Ok((certificate_pem, private_key_pem))
+        }
+        (Some(_), None) => Err(anyhow::anyhow!(
+            "TimeseriesDb mTLS authentication requires client_private_key_path when client_certificate_path is set"
+        )),
+        (None, Some(_)) => Err(anyhow::anyhow!(
+            "TimeseriesDb mTLS authentication requires client_certificate_path when client_private_key_path is set"
+        )),
+        (None, None) => mtls_identity_pem_from_secrets(secrets_watcher),
+    }
+}
+
+fn mtls_identity_pem_from_secrets(
+    secrets_watcher: Option<&SecretFileWatcher>,
+) -> Result<(Vec<u8>, Vec<u8>)> {
+    let secrets_watcher = secrets_watcher.ok_or_else(|| {
+        anyhow::anyhow!(
+            "TimeseriesDb mTLS authentication requires client_certificate_path/client_private_key_path or mTLS credentials in secrets"
+        )
+    })?;
+    let secrets = secrets_watcher.get_config();
+    let timeseries_db_credentials = secrets
+        .timeseries_db
+        .ok_or_else(|| anyhow::anyhow!("TimeseriesDb mTLS credentials not found in secrets"))?;
+
+    let certificate_pem_b64 = timeseries_db_credentials
+        .client_certificate_pem_b64
+        .as_deref()
+        .ok_or_else(|| {
+            anyhow::anyhow!("TimeseriesDb mTLS credentials require client_certificate_pem_b64")
+        })?;
+    let private_key_pem_b64 = timeseries_db_credentials
+        .client_private_key_pem_b64
+        .as_deref()
+        .ok_or_else(|| {
+            anyhow::anyhow!("TimeseriesDb mTLS credentials require client_private_key_pem_b64")
+        })?;
+
+    let certificate_pem = BASE64_STANDARD
+        .decode(certificate_pem_b64)
+        .context("Failed to decode TimeseriesDb client certificate from base64")?;
+    let private_key_pem = BASE64_STANDARD
+        .decode(private_key_pem_b64)
+        .context("Failed to decode TimeseriesDb client private key from base64")?;
+
+    Ok((certificate_pem, private_key_pem))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -193,6 +250,14 @@ impl TimeseriesDbClient {
         config: &TimeseriesDbSettings,
         credential_provider: Option<Arc<dyn CredentialProvider + Send + Sync>>,
     ) -> Result<Self> {
+        Self::new_with_secrets(config, credential_provider, None)
+    }
+
+    pub(crate) fn new_with_secrets(
+        config: &TimeseriesDbSettings,
+        credential_provider: Option<Arc<dyn CredentialProvider + Send + Sync>>,
+        secrets_watcher: Option<Arc<SecretFileWatcher>>,
+    ) -> Result<Self> {
         let base_url = Url::parse(&config.timeseries_db_url).context("Failed to parse base URL")?;
         let auth_mode = config.effective_auth_mode();
 
@@ -205,7 +270,11 @@ impl TimeseriesDbClient {
         let http_timeout = StdDuration::from_secs(config.http_timeout_seconds);
         let mut client_builder = ClientBuilder::new().timeout(http_timeout);
         if auth_mode == TimeseriesDbAuthMode::Mtls {
-            client_builder = client_builder.identity(mtls_identity(config, &base_url)?);
+            client_builder = client_builder.identity(mtls_identity(
+                config,
+                &base_url,
+                secrets_watcher.as_deref(),
+            )?);
         }
 
         let http_client = reqwest_middleware::ClientBuilder::new(
@@ -530,14 +599,17 @@ impl CredentialProvider for AuthnCredentialProvider {
             let timeseries_db_credentials = secrets
                 .timeseries_db
                 .ok_or_else(|| anyhow::anyhow!("TimeseriesDb credentials not found in secrets"))?;
+            let username = timeseries_db_credentials.username.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("TimeseriesDb token credentials require username")
+            })?;
+            let password = timeseries_db_credentials.password.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("TimeseriesDb token credentials require password")
+            })?;
 
             let response = self
                 .http_client
                 .get(&self.authn_url)
-                .basic_auth(
-                    &timeseries_db_credentials.username,
-                    Some(&timeseries_db_credentials.password),
-                )
+                .basic_auth(username, Some(password))
                 .send()
                 .await
                 .context("Failed to send authentication request")?;
@@ -960,6 +1032,34 @@ mod tests {
         let config = write_identity(directory.path(), &certificate, &private_key)?;
 
         let client = TimeseriesDbClient::new(&config, None)?;
+
+        assert_eq!(client.auth_mode, TimeseriesDbAuthMode::Mtls);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn mtls_accepts_identity_from_secret_config() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let secrets_path = directory.path().join("secrets.json");
+        let (certificate, private_key) = generate_client_identity(false)?;
+        let secrets_content = serde_json::json!({
+            "kv": {
+                "timeseries_db": {
+                    "client_certificate_pem_b64": BASE64_STANDARD.encode(&certificate),
+                    "client_private_key_pem_b64": BASE64_STANDARD.encode(&private_key)
+                }
+            }
+        });
+        tokio::fs::write(&secrets_path, secrets_content.to_string()).await?;
+        let secrets_watcher = Arc::new(SecretFileWatcher::new(&secrets_path).await?);
+        let config = TimeseriesDbSettings {
+            timeseries_db_url: "https://metrics.example.test".to_string(),
+            auth_mode: Some(TimeseriesDbAuthMode::Mtls),
+            disable_auth: false,
+            ..Default::default()
+        };
+
+        let client = TimeseriesDbClient::new_with_secrets(&config, None, Some(secrets_watcher))?;
 
         assert_eq!(client.auth_mode, TimeseriesDbAuthMode::Mtls);
         Ok(())

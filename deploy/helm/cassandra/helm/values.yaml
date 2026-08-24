@@ -31,10 +31,17 @@ cassandra:
     # repository: must be supplied in additional values
     registry: ""
     repository: ""
-    tag: 5.0.8-nv-0
+    tag: 5.0.8-nv-2.0.1
     pullPolicy: IfNotPresent
 
   replicaCount: 3
+
+  podDisruptionBudget:
+    enabled: false
+    # minAvailable and maxUnavailable are mutually exclusive; set exactly one.
+    # Accepts an integer or a percentage string (e.g. 1 or "50%").
+    minAvailable: ""
+    maxUnavailable: ""
 
   cluster:
     name: cassandra
@@ -189,7 +196,7 @@ cassandra:
       # repository: must be supplied in additional values
       registry: ""
       repository: ""
-      tag: 0.11.0
+      tag: 0.16.0
       pullPolicy: Always
 
   dbUser:

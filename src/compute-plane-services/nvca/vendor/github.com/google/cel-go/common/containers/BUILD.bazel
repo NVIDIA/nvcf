@@ -6,7 +6,7 @@ go_library(
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/containers",
     importpath = "github.com/google/cel-go/common/containers",
     visibility = ["//visibility:public"],
-    deps = ["//vendor/github.com/google/cel-go/common/ast"],
+    deps = ["//src/compute-plane-services/nvca/vendor/github.com/google/cel-go/common/ast"],
 )
 
 alias(

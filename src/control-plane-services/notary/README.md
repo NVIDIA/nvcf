@@ -46,16 +46,19 @@ the DCO sign-off requirement.
 ## Minimum Requirements
 
 - [Eclipse Temurin OpenJDK 25](https://adoptium.net/temurin/releases/)
-- [Maven 3.8.7](https://maven.apache.org/download.cgi) or higher
+- [Bazelisk](https://github.com/bazelbuild/bazelisk)
 - [Docker](https://docs.docker.com/get-docker/)
 
 ## Building
 
 ```bash
-mvn clean package
+export BAZEL_OUTPUT_USER_ROOT="${TMPDIR:-/tmp}/nvcf-bazel-cache"
+bazel --output_user_root="${BAZEL_OUTPUT_USER_ROOT}" \
+  build //src/control-plane-services/notary/...
 ```
 
-Produces `notary-service/target/app.jar`.
+This produces
+`bazel-bin/src/control-plane-services/notary/notary-service/app.jar`.
 
 ## Running locally
 
@@ -91,7 +94,7 @@ export AUTH_TOKEN_ISSUER=https://your-oauth2-provider.example.com
 export ASSERTION_ISSUER_URL=http://assertion.issuer.test
 export VAULT_SECRETS_JSON_PATH=file:/absolute/path/to/vault-secrets.json
 
-java -jar notary-service/target/app.jar
+java -jar bazel-bin/src/control-plane-services/notary/notary-service/app.jar
 ```
 
 Endpoints:
@@ -134,13 +137,18 @@ IDs in the format `kid-yyyyMMdd-HHmm`.
 ```
 
 Equivalent JVM-side test entrypoints exist in `notary-core` for environments
-where the script is unavailable:
+where the script is unavailable. Select the required method with Bazel:
 
 ```bash
-mvn -q clean test -Dtest=KeyGeneratorTest#generateInitialKeySet
-mvn -q clean test -Dtest=KeyGeneratorTest#generateSigningKey
-mvn -q clean test -Dtest=KeyGeneratorTest#generateInitialKeySetEscaped
+bazel test //src/control-plane-services/notary/notary-core:tests \
+  --cache_test_results=no \
+  --test_output=streamed \
+  --test_arg=--exclude-classname='^(?!com.nvidia.notary.services.KeyGeneratorTest$).*$' \
+  --test_arg=--include-methodname='.*#generateSigningKey$'
 ```
+
+Replace `generateSigningKey` with `generateInitialKeySet` or
+`generateInitialKeySetEscaped` for the other key formats.
 
 ## Monitoring
 
@@ -162,3 +170,27 @@ Per-request log lines on `/sign` look like:
 ```
 
 `com.nvidia.notary` is at `INFO` by default. Override per profile.
+
+## Run the app from IntelliJ IDEA
+
+1. Open the monorepo root as a Bazel project.
+2. Open `Settings` > `Build, Execution, Deployment` > `Build Tools` >
+   `Bazel`.
+3. Set `Project View Path` to
+   `<monorepo-root>/tools/intellij/.managed.bazelproject` and sync the
+   project.
+4. Run `@//src/control-plane-services/notary/notary-service:app_run` from the
+   Bazel tool window or the gutter beside `App.main()`.
+5. Open the generated `Bazel` run configuration. Keep `Run with Bazel`
+   selected and set the environment variables described in `Running locally`.
+6. Add these values to `CLI arguments to your application`, replacing the
+   example root with the absolute path to this checkout:
+
+   ```text
+   --jvm_flag=-Dspring.profiles.active=local
+   --jvm_flag=-Dnv-boot.reloadable-properties.file=file:/absolute/path/to/nvcf/src/control-plane-services/notary/notary-core/src/test/resources/vault-agent/integration-test-vault.json
+   ```
+
+Bazel runs the application from its runfiles tree, so the secrets file must
+use an absolute path. Do not set `-Duser.dir`; it breaks Bazel's relative Java
+classpath.

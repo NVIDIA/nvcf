@@ -53,7 +53,7 @@
                 "imageTag": {
                     "type": "string",
                     "description": "Image tag of OpenTelemetry Collector sidecar.",
-                    "default": "0.143.2"
+                    "default": "0.157.9"
                 },
                 "resources": {
                     "type": "object",
@@ -133,6 +133,57 @@
             "description": "Replica count for the operator deployment",
             "default": 1
         },
+        "podDisruptionBudget": {
+            "type": "object",
+            "description": "PodDisruptionBudget configuration for the NVCA Operator.",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "description": "Enable a PodDisruptionBudget for the NVCA Operator.",
+                    "default": false
+                },
+                "minAvailable": {
+                    "description": "Minimum available pods. Set exactly one of minAvailable or maxUnavailable when enabled.",
+                    "default": "",
+                    "oneOf": [
+                        {
+                            "type": "integer",
+                            "minimum": 0
+                        },
+                        {
+                            "type": "string",
+                            "enum": [
+                                ""
+                            ]
+                        },
+                        {
+                            "type": "string",
+                            "pattern": "^(100|[1-9]?[0-9])%$"
+                        }
+                    ]
+                },
+                "maxUnavailable": {
+                    "description": "Maximum unavailable pods. Set exactly one of minAvailable or maxUnavailable when enabled.",
+                    "default": "",
+                    "oneOf": [
+                        {
+                            "type": "integer",
+                            "minimum": 0
+                        },
+                        {
+                            "type": "string",
+                            "enum": [
+                                ""
+                            ]
+                        },
+                        {
+                            "type": "string",
+                            "pattern": "^(100|[1-9]?[0-9])%$"
+                        }
+                    ]
+                }
+            }
+        },
         "systemNamespace": {
             "type": "string",
             "description": "Namespace in which NVCFBackend objects are created.",
@@ -203,6 +254,51 @@
                     "type": "string",
                     "description": "Merge fields into the generated NVCA config. Must be a string.",
                     "default": ""
+                }
+            }
+        },
+        "operatorConfig": {
+            "type": "object",
+            "properties": {
+                "workload": {
+                    "type": "object",
+                    "properties": {
+                        "transportTLS": {
+                            "type": "object",
+                            "properties": {
+                                "trustBundle": {
+                                    "type": "object",
+                                    "properties": {
+                                        "secretKeyRef": {
+                                            "type": "object",
+                                            "properties": {
+                                                "name": {
+                                                    "type": "string",
+                                                    "description": "Secret containing the workload transport trust bundle. Empty disables Secret-backed transport trust.",
+                                                    "default": ""
+                                                },
+                                                "key": {
+                                                    "type": "string",
+                                                    "description": "Secret data key containing certificate-only PEM.",
+                                                    "default": "ca.crt"
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
+                                "fingerprint": {
+                                    "type": "string",
+                                    "description": "Optional sha256 fingerprint pin for the trust bundle. Empty computes the fingerprint from the selected Secret data.",
+                                    "default": ""
+                                },
+                                "installedBundleMountPath": {
+                                    "type": "string",
+                                    "description": "Optional llm-worker mount path for the installed transport trust bundle. Empty uses /etc/ssl/certs.",
+                                    "default": ""
+                                }
+                            }
+                        }
+                    }
                 }
             }
         },
@@ -327,6 +423,22 @@
                             "type": "string",
                             "description": "Pod label value NVCA applies to profiled function pods. Empty uses the built-in default \"enabled\".",
                             "default": ""
+                        }
+                    }
+                },
+                "byooOtelCollector": {
+                    "type": "object",
+                    "description": "Default BYOO OpenTelemetry Collector image. The repository is derived from image.repository when not set.",
+                    "properties": {
+                        "imageRepository": {
+                            "type": "string",
+                            "description": "Optional BYOO OpenTelemetry Collector image repository. If unset, it is derived from image.repository.",
+                            "default": ""
+                        },
+                        "imageTag": {
+                            "type": "string",
+                            "description": "BYOO OpenTelemetry Collector image tag.",
+                            "default": "0.157.0-nv-0.1.1"
                         }
                     }
                 },
@@ -524,6 +636,11 @@
         "vaultConfig": {
             "type": "object",
             "properties": {
+                "address": {
+                    "type": "string",
+                    "description": "Vault server URL for Helm-managed clusters. Required when helmManaged.oAuthClientID is set; must be HTTP(S), without credentials, query, or fragment.",
+                    "default": ""
+                },
                 "oAuthClientMountPathTemplate": {
                     "type": "string",
                     "description": "Template for constructing the OAuth client mount path in Vault. Use %s as placeholder for clientID. Example: \"nvidia/services/oauth/clients/%s/kv/secret\"",
@@ -627,7 +744,7 @@
                         "imageTag": {
                             "type": "string",
                             "description": "(REQUIRED) Image tag of \"otel-collector\". Only override this if you know what you are doing.",
-                            "default": "0.143.2"
+                            "default": "0.157.9"
                         }
                     }
                 }
@@ -693,7 +810,7 @@
                         "imageTag": {
                             "type": "string",
                             "description": "(REQUIRED) Image tag of \"otel-collector\". Only override this if you know what you are doing.",
-                            "default": "0.143.2"
+                            "default": "0.157.9"
                         }
                     }
                 },

@@ -23,12 +23,12 @@ go_library(
         "types.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins/types",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/control-plane-services/nats-auth-callout:__subpackages__"],
     deps = ["@com_github_nats_io_jwt_v2//:jwt"],
 )
 
 alias(
     name = "go_default_library",
     actual = ":types",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/control-plane-services/nats-auth-callout:__subpackages__"],
 )

@@ -214,6 +214,9 @@ public snapshot; still follow OSS Snapshot Hygiene manually before finishing.
 |-------|----------|---------|
 | `documentation-style` | `ai-tooling/dev/skills/` | Public docs, AGENTS, and skill-writing style |
 | `nvcf-explore-stack` | `ai-tooling/dev/skills/` | Navigate the self-hosted stack topology and dependency graph |
+| `nvca-chart-release` | `ai-tooling/dev/skills/` | Release NVCA Operator chart changes from monorepo source to the vendored Helm chart |
+| `nvca-self-managed-install` | `ai-tooling/dev/skills/` | Install or validate the NVCA Operator chart against a self-managed control plane |
+| `nvca-values-customization` | `ai-tooling/dev/skills/` | Customize NVCA Operator Helm chart values in the monorepo |
 | `nvcf-self-managed-cli` | `ai-tooling/user/skills/` | Install, operate, and manage self-managed NVCF through `nvcf-cli` |
 | `nvcf-self-managed-installation` | `ai-tooling/user/skills/` | Install and deploy the self-managed NVCF stack |
 | `nvcf-self-managed-prerequisite` | `ai-tooling/user/skills/` | Install cluster-level prerequisites such as KAI Scheduler and SMB CSI driver |
@@ -349,6 +352,15 @@ in the Pull Request description (for example: pure documentation, CI-only
 change, or refactor with full existing coverage).
 
 Prefer the repo-native test runner (`make test`, `go test`, `cargo test`, etc.). Run tests before committing. Check coverage requirements in the subtree `AGENTS.md` or CI config.
+
+### Java Bazel test target contract
+
+The `manual` tag placement in `rules/java/defs.bzl` is intentional.
+`nvcf_java_test` creates the native Java target used by IntelliJ and direct test
+runs. Its companion `nvcf_java_coverage_test` remains eligible for wildcard
+selection so each suite runs once and CI receives JUnit and JaCoCo artifacts.
+Do not reverse these tags without also updating `.github/workflows/bazel.yml`,
+Java artifact staging, and `BAZEL.md`.
 
 ## Code Style
 

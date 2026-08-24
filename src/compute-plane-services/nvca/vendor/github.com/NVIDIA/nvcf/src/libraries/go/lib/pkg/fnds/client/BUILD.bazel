@@ -7,10 +7,10 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/fnds/client",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/fnds/common/core/types",
-        "//vendor/github.com/google/uuid",
-        "//vendor/go.opentelemetry.io/contrib/instrumentation/net/http/httptrace/otelhttptrace",
-        "//vendor/go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp",
+        "//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/fnds/common/core/types",
+        "//src/compute-plane-services/nvca/vendor/github.com/google/uuid",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/contrib/instrumentation/net/http/httptrace/otelhttptrace",
+        "//src/compute-plane-services/nvca/vendor/go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp",
     ],
 )
 

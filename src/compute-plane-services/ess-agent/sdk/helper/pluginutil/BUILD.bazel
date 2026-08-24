@@ -17,9 +17,9 @@ go_library(
     importpath = "github.com/hashicorp/vault/sdk/helper/pluginutil",
     visibility = ["//visibility:public"],
     deps = [
-        "//sdk/helper/certutil",
-        "//sdk/helper/consts",
-        "//sdk/helper/wrapping",
+        "//src/compute-plane-services/ess-agent/sdk/helper/certutil",
+        "//src/compute-plane-services/ess-agent/sdk/helper/consts",
+        "//src/compute-plane-services/ess-agent/sdk/helper/wrapping",
         "@com_github_hashicorp_errwrap//:errwrap",
         "@com_github_hashicorp_go_hclog//:go-hclog",
         "@com_github_hashicorp_go_plugin//:go-plugin",
@@ -51,7 +51,7 @@ go_test(
     ],
     embed = [":pluginutil"],
     deps = [
-        "//sdk/helper/wrapping",
+        "//src/compute-plane-services/ess-agent/sdk/helper/wrapping",
         "@com_github_hashicorp_go_hclog//:go-hclog",
         "@com_github_hashicorp_go_plugin//:go-plugin",
         "@com_github_stretchr_testify//mock",

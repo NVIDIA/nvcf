@@ -13,14 +13,6 @@ navigation:
     contents:
       - page: Release Notes Overview
         path: ../../docs/user/release-notes/index.md
-      - page: "0.6.1 Release Notes"
-        path: ../../docs/user/release-notes/0.6.1.md
-      - page: "0.6.0 to 0.6.1 Upgrade"
-        path: ../../docs/user/release-notes/0.6.0-to-0.6.1-upgrade.md
-      - page: "0.6.0 Release Notes"
-        path: ../../docs/user/release-notes/0.6.0.md
-      - page: "0.5.0 to 0.6.0 Upgrade"
-        path: ../../docs/user/release-notes/0.5.0-to-0.6.0-upgrade.md
 
   - section: Before You Deploy
     skip-slug: true
@@ -41,6 +33,8 @@ navigation:
         path: ../../docs/user/helmfile-installation.md
       - page: gRPC Invocation Enablement
         path: ../../docs/user/grpc-invocation-enablement.md
+      - page: CSP End-to-End Example
+        path: ../../docs/user/csp-end-to-end-example-installation.md
 
   - section: GPU Cluster Setup
     skip-slug: true
@@ -55,8 +49,12 @@ navigation:
   - section: Configuration
     skip-slug: true
     contents:
+      - page: NVCF UI
+        path: ../../docs/user/nvcf-ui.md
       - page: Optional Enhancements
         path: ../../docs/user/optional-enhancements.md
+      - page: Pod Disruption Budgets
+        path: ../../docs/user/pod-disruption-budgets.md
       - page: LLM Function Enablement
         path: ../../docs/user/llm-function-enablement.md
       - page: LLM Request Router Load Balancing
@@ -73,6 +71,10 @@ navigation:
         path: ../../docs/user/cluster-management/multi-tenancy.md
       - page: KAI Scheduler
         path: ../../docs/user/cluster-management/kai-scheduler.md
+      - page: Gang Scheduling
+        path: ../../docs/user/cluster-management/gang-scheduling.md
+      - page: Topology-Aware Scheduling
+        path: ../../docs/user/cluster-management/topology-aware-scheduling.md
       - section: Low Latency Streaming
         skip-slug: true
         contents:
@@ -81,6 +83,8 @@ navigation:
       - section: NVCF Caches
         skip-slug: true
         contents:
+          - page: Helm Model Caching
+            path: ../../docs/user/cluster-management/model-cache.md
           - page: Container Cache
             path: ../../docs/user/cluster-management/container-cache.md
           - page: GXCache
@@ -210,6 +214,8 @@ navigation:
         path: ../../docs/user/runbooks/index.md
       - page: Key Rotation
         path: ../../docs/user/runbooks/control-plane-key-rotation-mek.md
+      - page: Transport TLS Rotation
+        path: ../../docs/user/runbooks/transport-tls-rotation.md
       - section: Cache Runbooks
         skip-slug: true
         contents:

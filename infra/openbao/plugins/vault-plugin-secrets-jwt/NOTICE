@@ -1,0 +1,66 @@
+vault-plugin-secrets-jwt
+========================
+
+This directory contains a modified copy of:
+
+    vault-plugin-secrets-jwt
+    https://github.com/outfoxx/vault-plugin-secrets-jwt
+    Copyright 2021 Outfox, Inc.
+    Licensed under the Apache License, Version 2.0
+
+The original Apache License 2.0 text is retained in LICENSE, and the original
+per-file copyright header is retained in HEADER and in every file carrying it.
+Upstream-originated files not listed below are unmodified and remain under
+Outfox, Inc. copyright. Files added by NVIDIA are listed below and are not
+covered by that statement.
+
+Modifications by NVIDIA CORPORATION & AFFILIATES
+------------------------------------------------
+
+As required by section 4(b) of the Apache License, Version 2.0, the following
+changes were made to the original work:
+
+1. plugin/path_roles.go: the guard rejecting a `sub` key in a role's `claims`
+   field is disabled, so `sub` may be configured per role.
+
+2. plugin/path_sign.go: a `logical.ReadOperation` is registered on the signing
+   path, so a token can be issued from the role's stored claims via a read.
+
+3. plugin/path_roles_test.go, plugin/path_sign_test.go: coverage for (1) and
+   (2).
+
+4. plugin/friendlyid.go and plugin/friendlyid_test.go (added by NVIDIA):
+   base62 UUID encoding, written independently from the base62 definition.
+   These replace the previous dependency on github.com/mariuszs/friendlyid-go,
+   which carries no license and is therefore not redistributable. No source
+   was copied from that project.
+
+5. plugin/util.go: unique-id generation now calls the encoder in (4) instead of
+   the removed dependency.
+
+6. go.mod, go.sum: the module path was changed to
+   github.com/NVIDIA/nvcf/infra/openbao/plugins/vault-plugin-secrets-jwt so the
+   module resolves inside this repository. The friendlyid-go requirement was
+   removed. Go, Vault, and security-sensitive dependency versions were updated.
+
+7. plugin/config.go: the unsupported-signature-algorithm error is returned
+   rather than discarded. It previously reported success, so the key was never
+   rotated and the caller could not detect it.
+
+8. plugin/util.go: token ids are generated from a version 4 UUID rather than a
+   version 1 UUID. A v1 UUID encodes the host MAC address and creation
+   timestamp, and this id is published as the token's `jti`.
+
+9. AGENTS.md and CLAUDE.md (added by NVIDIA): repository guidance describing
+   this directory's third-party origin and the rules for changing it. They are
+   not part of the distributed plugin and carry no copyright header.
+
+10. Upstream project machinery not applicable to this repository was omitted:
+   GitHub Actions workflows, goreleaser configuration, the upstream Dockerfile,
+   install script, Makefile and linter configuration. Source, tests, and
+   license material were retained in full.
+
+Files carrying an NVIDIA copyright header are NVIDIA-authored. Every
+upstream-originated file retains the upstream Outfox, Inc. header. AGENTS.md
+and CLAUDE.md carry neither, being repository guidance rather than distributed
+source.

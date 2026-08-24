@@ -25,10 +25,44 @@ import (
 	"testing"
 
 	echo "github.com/labstack/echo/v4"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/nvcf"
 )
+
+func TestNVCFAuthHTTPErrorMapsCodes(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		err        error
+		wantStatus int
+	}{
+		{"invalid argument -> 400", status.Error(codes.InvalidArgument, "bad routing key"), http.StatusBadRequest},
+		{"unauthenticated -> 401", status.Error(codes.Unauthenticated, "auth failed"), http.StatusUnauthorized},
+		{"permission denied -> 403", status.Error(codes.PermissionDenied, "nope"), http.StatusForbidden},
+		{"not found -> 404", status.Error(codes.NotFound, "not found"), http.StatusNotFound},
+		{"deadline -> 504", status.Error(codes.DeadlineExceeded, "slow"), http.StatusGatewayTimeout},
+		{"unavailable -> 503", status.Error(codes.Unavailable, "down"), http.StatusServiceUnavailable},
+		{"internal -> 502", status.Error(codes.Internal, "boom"), http.StatusBadGateway},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			he, ok := nvcfAuthHTTPError(tc.err).(*echo.HTTPError)
+			if !ok {
+				t.Fatalf("want *echo.HTTPError, got %T", nvcfAuthHTTPError(tc.err))
+			}
+			if he.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d", he.Code, tc.wantStatus)
+			}
+		})
+	}
+}
 
 func TestNVCFAuthMiddlewareEnrichesRequestContext(t *testing.T) {
 	t.Parallel()
@@ -390,4 +424,30 @@ func (s *stubInvocationAuthClient) AuthorizeInvocation(
 	s.authorizeToken = clientAuthorizationToken
 	s.authorizeRoutingKey = routingKey
 	return s.authResponse, nil
+}
+
+func TestNVCFAuthHTTPErrorDoesNotLeakTransportDetail(t *testing.T) {
+	t.Parallel()
+
+	// The shape a real dial failure takes. Returned verbatim, it handed callers
+	// the auth service's address and port on a pre-authentication path.
+	transportErr := status.Error(codes.Unavailable,
+		`connection error: desc = "transport: Error while dialing dial tcp 10.0.0.5:9090: connect: connection refused"`)
+
+	for _, err := range []error{
+		transportErr,
+		status.Error(codes.Internal, "panic in authorize: /opt/nvcf/internal/auth.go:412"),
+		status.Error(codes.DeadlineExceeded, "context deadline exceeded talking to auth.nvcf.svc.cluster.local:9090"),
+	} {
+		he, ok := nvcfAuthHTTPError(err).(*echo.HTTPError)
+		if !ok {
+			t.Fatalf("want *echo.HTTPError, got %T", nvcfAuthHTTPError(err))
+		}
+		msg, _ := he.Message.(string)
+		for _, leak := range []string{"10.0.0.5", "9090", "rpc error", "svc.cluster.local", "/opt/nvcf", "dial tcp"} {
+			if strings.Contains(msg, leak) {
+				t.Errorf("response message leaks %q: %s", leak, msg)
+			}
+		}
+	}
 }

@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+repo_root="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 
 root_owned_files=(
   ".bazel_downloader_config"
@@ -34,6 +34,14 @@ while IFS= read -r descriptor; do
     fi
   done
 
+  while IFS= read -r project_pom; do
+    [[ -z "${project_pom}" ]] && continue
+    echo "ERROR: project POM reintroduced: ${project_pom#${repo_root}/}" >&2
+    failed=true
+  done < <(
+    find "${repo_root}/${import_root}" -name pom.xml -print
+  )
+
   while IFS= read -r migration_dir; do
     [[ -z "${migration_dir}" ]] && continue
     echo "ERROR: standalone migration directory reintroduced: ${migration_dir#${repo_root}/}" >&2
@@ -56,7 +64,7 @@ if [[ "${failed}" == true ]]; then
   cat >&2 <<'EOF'
 Imported Java components are packages in the root nvcf Bazel module. Keep
 Bazel root configuration and dependency locks at the repository root, and keep
-standalone migration records out of imported source trees.
+project POMs and standalone migration records out of imported source trees.
 EOF
   exit 1
 fi

@@ -8,11 +8,11 @@ load("//rules/oci:defs.bzl", "rust_oci_image")
 
 # Workspace-local Cargo deps (own-workspace `workspace = true`).
 _WORKSPACE_DEPS = [
-    "//crates/proto:stargate-proto",
-    "//crates/protocol:stargate-protocol",
-    "//crates/stargate-forwarding:stargate-forwarding",
-    "//crates/stargate-runtime:stargate-runtime",
-    "//crates/stargate-tls:stargate-tls",
+    "//src/libraries/rust/stargate/crates/proto:stargate-proto",
+    "//src/libraries/rust/stargate/crates/protocol:stargate-protocol",
+    "//src/libraries/rust/stargate/crates/stargate-forwarding:stargate-forwarding",
+    "//src/libraries/rust/stargate/crates/stargate-runtime:stargate-runtime",
+    "//src/libraries/rust/stargate/crates/stargate-tls:stargate-tls",
 ]
 
 rust_library(
@@ -48,7 +48,7 @@ rust_test(
 # Multi-arch OCI image. distroless/cc base, binary at
 # /usr/local/bin/stargate-k8s-router.
 rust_oci_image(
-    name = "image",
+    name = "stargate-k8s-router-image",
     base = "@distroless_cc",
     binary = ":stargate-k8s-router",
     binary_path = "/usr/local/bin/stargate-k8s-router",
@@ -60,10 +60,10 @@ rust_oci_image(
 # feedback_image_entrypoint_exec_bit.
 sh_test(
     name = "image_entrypoint_mode_test",
-    srcs = ["//tools/ci:image_entrypoint_mode_test.sh"],
+    srcs = ["//src/libraries/rust/stargate/tools/ci:image_entrypoint_mode_test.sh"],
     args = [
-        "$(location :image_layer)",
+        "$(location :stargate-k8s-router-image_layer)",
         "/usr/local/bin/stargate-k8s-router",
     ],
-    data = [":image_layer"],
+    data = [":stargate-k8s-router-image_layer"],
 )

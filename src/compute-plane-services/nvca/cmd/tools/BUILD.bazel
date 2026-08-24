@@ -13,8 +13,8 @@ go_oci_multi_binary_image(
     name = "image",
     base = "@distroless_go",
     binaries = {
-        "//cmd/discover-gpus:discover-gpus": "/usr/bin/discover-gpus",
-        "//cmd/export-cluster-pubkeys:export-cluster-pubkeys": "/usr/bin/export-cluster-pubkeys",
+        "//src/compute-plane-services/nvca/cmd/discover-gpus:discover-gpus": "/usr/bin/discover-gpus",
+        "//src/compute-plane-services/nvca/cmd/export-cluster-pubkeys:export-cluster-pubkeys": "/usr/bin/export-cluster-pubkeys",
     },
     entrypoint = ["/usr/bin/discover-gpus"],
     extra_registries = {

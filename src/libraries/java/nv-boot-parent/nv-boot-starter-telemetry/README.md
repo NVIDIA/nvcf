@@ -3,7 +3,7 @@
 Telemetry client for sending [CloudEvents](https://cloudevents.io/) to a Telemetry server. Uses WebClient with 
 OAuth2 bearer token via ExchangeFilterFunction. 
 
-**Apps must register a `TelemetryProperties` bean in the Spring context.**
+Apps must register a `TelemetryProperties` bean in the Spring context.
 
 ## Adding as a Dependency
 
@@ -95,12 +95,14 @@ and optional `body` (Map for JSON responses, null for 204 No Content).
 Run module tests:
 
 ```bash
-mvn -pl nv-boot-starter-telemetry test
+bazel test \
+  //src/libraries/java/nv-boot-parent/nv-boot-starter-telemetry:tests \
+  --cache_test_results=no
 ```
 
-- **Unit tests** cover validation (`TelemetryClient`, `TelemetryProperties`), `TelemetryResponse`,
+- Unit tests cover validation (`TelemetryClient`, `TelemetryProperties`), `TelemetryResponse`,
   and `CloudEventBuilderProvider` (with `SecurityContextHolder`).
-- **Integration tests** use **WireMock** (`wiremock-standalone`, version from `nv-boot-bom`)
+- Integration tests use WireMock (`wiremock-standalone`, version from `nv-boot-bom`)
   for OAuth2
   token exchange, telemetry POST, and `TelemetryWebClientFactory`;
   `TelemetryAutoConfigurationIntegrationTest` loads a minimal Spring context with

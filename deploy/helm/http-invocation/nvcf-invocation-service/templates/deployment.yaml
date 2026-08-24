@@ -33,7 +33,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
         {{- if .Values.invocation.env }}
-        checksum/config-env: {{ toYaml .Values.invocation.env | sha256sum }}
+        checksum/config-env: {{ dict "env" .Values.invocation.env "tracing" .Values.invocation.tracing | toYaml | sha256sum }}
         {{- end }}
       labels:
         {{- include "nvcf-invocation-service.selectorLabels" . | nindent 8 }}

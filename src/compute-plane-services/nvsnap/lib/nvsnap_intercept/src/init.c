@@ -322,6 +322,8 @@ int nvsnap_init_explicit(void) {
 /* Automatic initialization via constructor */
 __attribute__((constructor(101)))  /* Priority 101 = run early but after libc */
 void nvsnap_init(void) {
+    if (nvsnap_self_disabled())
+        return;
     nvsnap_init_explicit();
 }
 

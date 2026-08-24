@@ -21,7 +21,7 @@ used in Kubernetes Clusters to run NVCF Workloads.
 | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
 | `otelCollector.enabled`                   | Enable OTel collector sidecar for K8s event collection                                                                                                                                                | `false`                    |
 | `otelCollector.imageRepository`           | (OPTIONAL) Image repository of OpenTelemetry Collector sidecar. If not specified, it will be calculated based on image.repository (stg vs prod).                                                      | `""`                       |
-| `otelCollector.imageTag`                  | Image tag of OpenTelemetry Collector sidecar.                                                                                                                                                         | `0.143.2`                  |
+| `otelCollector.imageTag`                  | Image tag of OpenTelemetry Collector sidecar.                                                                                                                                                         | `0.157.9`                  |
 | `otelCollector.resources.limits.cpu`      | CPU limit for the OTel collector container                                                                                                                                                            | `1000m`                    |
 | `otelCollector.resources.limits.memory`   | Memory limit for the OTel collector container                                                                                                                                                         | `1Gi`                      |
 | `otelCollector.resources.requests.cpu`    | CPU request for the OTel collector container                                                                                                                                                          | `200m`                     |
@@ -44,6 +44,10 @@ used in Kubernetes Clusters to run NVCF Workloads.
 | `enableGXCache`                           | Enables GXCache Support in NVCA                                                                                                                                                                       | `true`                     |
 | `ddcsIPAllowList`                         | provides comma separated CIDR ranges to allowList                                                                                                                                                     | `""`                       |
 | `agentConfig.mergeConfig`                 | Merge fields into the generated NVCA config. Must be a string.                                                                                                                                        | `""`                       |
+| `operatorConfig.workload.transportTLS.trustBundle.secretKeyRef.name` | Secret containing the workload transport trust bundle; empty disables the source. Example: `nvcf-trust`. | `""` |
+| `operatorConfig.workload.transportTLS.trustBundle.secretKeyRef.key` | Secret data key containing certificate-only PEM. | `ca.crt` |
+| `operatorConfig.workload.transportTLS.fingerprint` | Optional SHA-256 pin; empty computes the Secret data fingerprint. | `""` |
+| `operatorConfig.workload.transportTLS.installedBundleMountPath` | Optional `llm-worker` mount path for the installed transport trust bundle; empty uses `/etc/ssl/certs`. | `""` |
 
 ### resources Resource requests and limits for the nvca-operator container
 
@@ -53,6 +57,14 @@ used in Kubernetes Clusters to run NVCF Workloads.
 | `resources.limits.memory`   | Memory limit for the nvca-operator container   | `500Mi` |
 | `resources.requests.cpu`    | CPU request for the nvca-operator container    | `50m`   |
 | `resources.requests.memory` | Memory request for the nvca-operator container | `50Mi`  |
+
+### PodDisruptionBudget configuration
+
+| Name                                 | Description                                                                                                              | Value   |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ | ------- |
+| `podDisruptionBudget.enabled`        | Enable a PodDisruptionBudget for the NVCA Operator.                                                                      | `false` |
+| `podDisruptionBudget.minAvailable`   | Minimum available pods. When enabled, set exactly one of this value or `maxUnavailable`. Supports an integer or 0-100%. | `""`    |
+| `podDisruptionBudget.maxUnavailable` | Maximum unavailable pods. When enabled, set exactly one of this value or `minAvailable`. Supports an integer or 0-100%. | `""`    |
 
 ### Agent Container Resource configuration
 
@@ -71,10 +83,12 @@ used in Kubernetes Clusters to run NVCF Workloads.
 | `agent.gpuProfiling.functionIds`     | Comma/space/newline-separated NVCF function IDs (or "*" for all) whose pods NVCA labels for NVIDIA Nsight GPU profiling. Empty disables profiling.                          | `""`                   |
 | `agent.gpuProfiling.labelKey`        | Pod label key NVCA applies to profiled function pods (the label the Nsight Operator watches for). Empty uses the built-in default "nvidia-nsight-profile".                 | `""`                   |
 | `agent.gpuProfiling.labelValue`      | Pod label value NVCA applies to profiled function pods. Empty uses the built-in default "enabled".                                                                         | `""`                   |
+| `agent.byooOtelCollector.imageRepository` | Optional BYOO OpenTelemetry Collector image repository. If unset, it is derived from image.repository.                                                            | `""`                   |
+| `agent.byooOtelCollector.imageTag`   | BYOO OpenTelemetry Collector image tag.                                                                                                                                        | `0.157.0-nv-0.1.1`      |
 | `agent.functionEnvOverrides`         | Map of environment variable overrides for function workloads (e.g., {"INIT_CONTAINER": "nvcr.io/custom/init:v1.0", "UTILS_CONTAINER": "nvcr.io/custom/utils:v1.0"})        | `{}`                   |
 | `agent.taskEnvOverrides`             | Map of environment variable overrides for task workloads (e.g., {"INIT_CONTAINER": "nvcr.io/custom/init:v1.0", "ESS_AGENT_CONTAINER": "nvcr.io/custom/ess:v1.0"})          | `{}`                   |
 | `agent.overrideEnvironmentVariables` | Map of environment variables to override on the NVCA agent container. These take precedence over default values. Example: {"LOG_LEVEL": "debug", "CUSTOM_FLAG": "enabled"} | `{}`                   |
-| `agent.llm.requestRouterAddress`     | Default LLM request-router worker address rendered as STARGATE_ADDRESS for LLM workers                                                                                      | `""`                   |
+| `agent.llm.requestRouterAddress`     | Operator default LLM request-router address. Workers read LLM_REQUEST_ROUTER_ADDRESS from the launch environment; not a runtime fallback                                    | `""`                   |
 | `agent.serviceOAuth`                 | OAuth token and JWKS endpoints used by dependent services                                                                                                                   | See `values.yaml`      |
 
 ### Webhook Container Resource configuration
@@ -101,6 +115,7 @@ used in Kubernetes Clusters to run NVCF Workloads.
 
 | Name                                       | Description                                                                                                                                             | Value |
 | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
+| `vaultConfig.address`                      | Vault server URL for Helm-managed clusters. Required when `helmManaged.oAuthClientID` is set; must be HTTP(S), without credentials, query, or fragment. | `""`  |
 | `vaultConfig.oAuthClientMountPathTemplate` | Template for constructing the OAuth client mount path in Vault. Use %s as placeholder for clientID. Example: "nvidia/services/oauth/clients/%s/kv/secret" | `""`  |
 | `vaultConfig.oAuthClientMountPath`         | (Optional) Full OAuth client mount path. If set, overrides the computed path from template.                                                             | `""`  |
 
@@ -123,7 +138,7 @@ used in Kubernetes Clusters to run NVCF Workloads.
 | `helmManaged.imageCredHelper.imageTag`        | (REQUIRED) Image tag of "nvcf-image-credential-helper". Only override this if you know what you are doing.                                                                           | `0.10.2`   |
 | `helmManaged.otelCollector.enabled`           | Enable OTel collector sidecar for helm-managed clusters                                                                                                                              | `false`   |
 | `helmManaged.otelCollector.imageRepository`   | (OPTIONAL) Image repository of "otel-collector". Only override this if you know what you are doing. If not specified, it will be calculated based on image.repository.               | `""`      |
-| `helmManaged.otelCollector.imageTag`          | (REQUIRED) Image tag of "otel-collector". Only override this if you know what you are doing.                                                                                         | `0.143.2` |
+| `helmManaged.otelCollector.imageTag`          | (REQUIRED) Image tag of "otel-collector". Only override this if you know what you are doing.                                                                                         | `0.157.9` |
 
 ### Self Managed NVCF Backend Configuration
 
@@ -137,7 +152,7 @@ used in Kubernetes Clusters to run NVCF Workloads.
 | `selfManaged.imageCredHelper.imageTag`        | (REQUIRED) Image tag of "nvcf-image-credential-helper". Only override this if you know what you are doing.                                                                           | `0.10.2`                                    |
 | `selfManaged.otelCollector.enabled`           | Enable OTel collector sidecar for self-managed clusters                                                                                                                              | `false`                                    |
 | `selfManaged.otelCollector.imageRepository`   | (OPTIONAL) Image repository of "otel-collector". Only override this if you know what you are doing. If not specified, it will be calculated based on image.repository.               | `""`                                       |
-| `selfManaged.otelCollector.imageTag`          | (REQUIRED) Image tag of "otel-collector". Only override this if you know what you are doing.                                                                                         | `0.143.2`                                  |
+| `selfManaged.otelCollector.imageTag`          | (REQUIRED) Image tag of "otel-collector". Only override this if you know what you are doing.                                                                                         | `0.157.9`                                  |
 | `selfManaged.icmsServiceURL`                  | URL of the SIS/ICMS service for self-managed clusters. Required when ngcConfig.clusterSource is "self-managed".                                                                      | `""`                                      |
 | `selfManaged.icmsServiceHostHeaderOverride`                 | Optional Host header override for selfManaged.icmsServiceURL.                                                                                                                       | `""`                                      |
 | `selfManaged.revalServiceURL`                 | URL of the ReVal service for self-managed clusters. Required when ngcConfig.clusterSource is "self-managed".                                                                         | `""`                                      |

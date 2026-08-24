@@ -7,13 +7,13 @@ go_library(
         "resultstrategy.go",
     ],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/internal/types",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/worker-task:__subpackages__"],
 )
 
 alias(
     name = "go_default_library",
     actual = ":types",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/worker-task:__subpackages__"],
 )
 
 go_test(

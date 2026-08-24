@@ -18,6 +18,7 @@ limitations under the License.
 package otelconfig
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"testing"
@@ -25,6 +26,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"gopkg.in/yaml.v3"
 )
+
+const metricSubsetExampleHeader = "# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.\n# SPDX-License-Identifier: Apache-2.0\n\n"
 
 func TestRenderOtelConfig(t *testing.T) {
 	tests := []struct {
@@ -95,6 +98,30 @@ func TestRenderOtelConfig(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRenderOtelConfigRejectsRecordSamplingOutsideHashSeed(t *testing.T) {
+	samplingPercentage := 10.0
+	_, err := RenderOtelConfigFromBytes(
+		[]byte(`{"telemetries": {"logsTelemetry": {"protocol": "HTTP", "provider": "SPLUNK", "endpoint": "http://example.com", "name": "example-logs"}}}`),
+		TemplateConfig{
+			BackendType:       K8s,
+			WorkloadType:      Container,
+			Namespace:         "foo",
+			FunctionID:        "fake-function-id",
+			FunctionVersionID: "fake-function-version-id",
+			OTelCollector: OTelCollectorConfig{
+				LogSampling: LogSamplingConfig{
+					SamplingPercentage: &samplingPercentage,
+					Mode:               "proportional",
+					AttributeSource:    "record",
+					FromAttribute:      "log.id",
+				},
+			},
+		},
+	)
+
+	assert.ErrorContains(t, err, "attributeSource and fromAttribute require hash_seed mode")
 }
 
 func TestRenderOtelConfigWithMetricSubsetPipeline(t *testing.T) {
@@ -190,7 +217,8 @@ func TestRenderOtelConfigWithMetricSubsetPipelineMatchesExample(t *testing.T) {
 
 	const examplePath = "../../examples/otelconfigs/k8s/config_function_container_metric_subset.yaml"
 	if os.Getenv("UPDATE_METRIC_SUBSET_EXAMPLE") == "true" {
-		if err := os.WriteFile(examplePath, gotCfg, 0o644); err != nil {
+		exampleConfig := append([]byte(metricSubsetExampleHeader), gotCfg...)
+		if err := os.WriteFile(examplePath, exampleConfig, 0o644); err != nil {
 			t.Fatalf("failed to update metric subset example config: %v", err)
 		}
 	}
@@ -198,6 +226,9 @@ func TestRenderOtelConfigWithMetricSubsetPipelineMatchesExample(t *testing.T) {
 	expectedCfg, err := os.ReadFile(examplePath)
 	if err != nil {
 		t.Fatalf("failed to read metric subset example config: %v", err)
+	}
+	if !bytes.HasPrefix(expectedCfg, []byte(metricSubsetExampleHeader)) {
+		t.Fatalf("metric subset example config must begin with the SPDX header")
 	}
 
 	assertYAMLConfigEqual(t, expectedCfg, gotCfg)
@@ -600,6 +631,10 @@ func TestGenerateExportersAndServiceAppliesCollectorOverrides(t *testing.T) {
 	batchSendMaxSize := int64(200)
 	logBatchSendSize := int64(340)
 	logBatchSendMaxSize := int64(340)
+	logSamplingPercentage := 10.0
+	traceSamplingPercentage := 1.0
+	samplingHashSeed := uint32(1234)
+	samplingFailClosed := false
 
 	err := generateExportersAndService(cfg, otelConfig, TemplateConfig{
 		Namespace: "test-namespace",
@@ -637,6 +672,21 @@ func TestGenerateExportersAndServiceAppliesCollectorOverrides(t *testing.T) {
 				Timeout:          "400ms",
 				SendBatchSize:    &logBatchSendSize,
 				SendBatchMaxSize: &logBatchSendMaxSize,
+			},
+			LogSampling: LogSamplingConfig{
+				SamplingPercentage: &logSamplingPercentage,
+				Mode:               "hash_seed",
+				HashSeed:           &samplingHashSeed,
+				FailClosed:         &samplingFailClosed,
+				AttributeSource:    "record",
+				FromAttribute:      "log.id",
+				SamplingPriority:   "sampling.priority",
+			},
+			TraceSampling: SamplingConfig{
+				SamplingPercentage: &traceSamplingPercentage,
+				Mode:               "hash_seed",
+				HashSeed:           &samplingHashSeed,
+				FailClosed:         &samplingFailClosed,
 			},
 		},
 	})
@@ -684,9 +734,94 @@ func TestGenerateExportersAndServiceAppliesCollectorOverrides(t *testing.T) {
 		"timeout":             "400ms",
 		"send_batch_max_size": int64(340),
 	}, otelConfig.Processors["batch/logs"])
-	assert.Equal(t, []string{"memory_limiter", "attributes/add-metadata", "batch/logs"}, otelConfig.Service.Pipelines["logs"].Processors)
+	assert.Equal(t, map[string]interface{}{
+		"sampling_percentage": logSamplingPercentage,
+		"mode":                "hash_seed",
+		"hash_seed":           samplingHashSeed,
+		"fail_closed":         samplingFailClosed,
+		"attribute_source":    "record",
+		"from_attribute":      "log.id",
+		"sampling_priority":   "sampling.priority",
+	}, otelConfig.Processors["probabilistic_sampler/logs"])
+	assert.Equal(t, map[string]interface{}{
+		"sampling_percentage": traceSamplingPercentage,
+		"mode":                "hash_seed",
+		"hash_seed":           samplingHashSeed,
+		"fail_closed":         samplingFailClosed,
+	}, otelConfig.Processors["probabilistic_sampler/traces"])
+	assert.Equal(t, []string{"memory_limiter", "attributes/add-metadata", "probabilistic_sampler/logs", "batch/logs"}, otelConfig.Service.Pipelines["logs"].Processors)
 	assert.Equal(t, []string{"memory_limiter", "filter/metrics", "resource", "metrics_transform", "batch"}, otelConfig.Service.Pipelines["metrics"].Processors)
-	assert.Equal(t, []string{"memory_limiter", "attributes/add-metadata", "batch"}, otelConfig.Service.Pipelines["traces"].Processors)
+	assert.Equal(t, []string{"memory_limiter", "attributes/add-metadata", "probabilistic_sampler/traces", "batch"}, otelConfig.Service.Pipelines["traces"].Processors)
+}
+
+func TestApplyExporterHelperConfigUsesSupportedSettings(t *testing.T) {
+	retryEnabled := true
+	queueConsumers := int64(3)
+	queueSize := int64(2048)
+	otelConfig := &OpenTelemetryConfig{
+		Exporters: map[string]map[string]interface{}{
+			"azuremonitor/example":            {},
+			"datadog/example":                 {},
+			"debug":                           {},
+			"otlp":                            {},
+			"otlp/example":                    {},
+			"otlp_http/example":               {},
+			"prometheus/example":              {},
+			"prometheus_remote_write/example": {},
+			"splunk_hec/example":              {},
+			"unknown/example":                 {},
+		},
+	}
+
+	applyExporterHelperConfig(otelConfig, ExporterHelperConfig{
+		Timeout: "30s",
+		RetryOnFailure: RetryOnFailureConfig{
+			Enabled: &retryEnabled,
+		},
+		SendingQueue: SendingQueueConfig{
+			NumConsumers: &queueConsumers,
+			QueueSize:    &queueSize,
+		},
+	})
+
+	for _, exporterID := range []string{
+		"datadog/example",
+		"otlp",
+		"otlp/example",
+		"otlp_http/example",
+		"splunk_hec/example",
+	} {
+		assert.Equal(t, "30s", otelConfig.Exporters[exporterID]["timeout"], exporterID)
+		assert.Equal(t, map[string]interface{}{"enabled": true}, otelConfig.Exporters[exporterID]["retry_on_failure"], exporterID)
+		assert.Equal(t, map[string]interface{}{
+			"enabled":       true,
+			"num_consumers": int64(3),
+			"queue_size":    int64(2048),
+		}, otelConfig.Exporters[exporterID]["sending_queue"], exporterID)
+	}
+
+	assert.Equal(t, "30s", otelConfig.Exporters["azuremonitor/example"]["timeout"])
+	assert.NotContains(t, otelConfig.Exporters["azuremonitor/example"], "retry_on_failure")
+	assert.Equal(t, map[string]interface{}{
+		"enabled":       true,
+		"num_consumers": int64(3),
+		"queue_size":    int64(2048),
+	}, otelConfig.Exporters["azuremonitor/example"]["sending_queue"])
+
+	assert.Equal(t, "30s", otelConfig.Exporters["prometheus_remote_write/example"]["timeout"])
+	assert.Equal(t, map[string]interface{}{"enabled": true}, otelConfig.Exporters["prometheus_remote_write/example"]["retry_on_failure"])
+	assert.NotContains(t, otelConfig.Exporters["prometheus_remote_write/example"], "sending_queue")
+
+	assert.NotContains(t, otelConfig.Exporters["prometheus/example"], "timeout")
+	assert.NotContains(t, otelConfig.Exporters["prometheus/example"], "retry_on_failure")
+	assert.Equal(t, map[string]interface{}{
+		"enabled":       true,
+		"num_consumers": int64(3),
+		"queue_size":    int64(2048),
+	}, otelConfig.Exporters["prometheus/example"]["sending_queue"])
+
+	assert.Empty(t, otelConfig.Exporters["debug"])
+	assert.Empty(t, otelConfig.Exporters["unknown/example"])
 }
 
 func TestGenerateExportersAndServiceAddsMetricSubsetPipeline(t *testing.T) {
@@ -727,10 +862,7 @@ func TestGenerateExportersAndServiceAddsMetricSubsetPipeline(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, map[string]interface{}{
-		"endpoint": "${env:OTEL_POD_IP:-0.0.0.0}:19091",
-		"resource_to_telemetry_conversion": map[string]interface{}{
-			"enabled": true,
-		},
+		"endpoint":            "${env:OTEL_POD_IP:-0.0.0.0}:19091",
 		"send_timestamps":     true,
 		"metric_expiration":   "5m",
 		"enable_open_metrics": true,

@@ -57,7 +57,7 @@ receivers:
           metrics_path: /federate
           params:
             match[]:
-              - '{job=~"kubelet", namespace="nvcf-backend", pod=~".*fake-instance-id.*", container=~"inference|task|", __name__=~"(container_cpu_cfs_throttled_periods_total|container_cpu_cfs_throttled_seconds_total|container_cpu_usage_seconds_total|container_memory_cache|container_memory_rss|container_memory_swap|container_memory_usage_bytes|container_memory_working_set_bytes|container_fs_limit_bytes|container_fs_usage_bytes|container_fs_reads_bytes_total|container_fs_reads_total|container_fs_writes_bytes_total|container_fs_writes_total|container_network_receive_bytes_total|container_network_receive_errors_total|container_network_receive_packets_dropped_total|container_network_receive_packets_total|container_network_transmit_bytes_total|container_network_transmit_errors_total|container_network_transmit_packets_dropped_total|container_network_transmit_packets_total)"}'
+              - '{job=~"kubelet", namespace="nvcf-backend", pod=~".*fake-instance-id.*", container=~"inference|task|POD|", __name__=~"(container_cpu_cfs_throttled_periods_total|container_cpu_cfs_throttled_seconds_total|container_cpu_usage_seconds_total|container_memory_cache|container_memory_rss|container_memory_swap|container_memory_usage_bytes|container_memory_working_set_bytes|container_fs_limit_bytes|container_fs_usage_bytes|container_fs_reads_bytes_total|container_fs_reads_total|container_fs_writes_bytes_total|container_fs_writes_total|container_network_receive_bytes_total|container_network_receive_errors_total|container_network_receive_packets_dropped_total|container_network_receive_packets_total|container_network_transmit_bytes_total|container_network_transmit_errors_total|container_network_transmit_packets_dropped_total|container_network_transmit_packets_total)"}'
           scrape_interval: 30s
           scrape_timeout: 25s
           static_configs:
@@ -97,7 +97,7 @@ receivers:
         - job_name: opentelemetry-collector
           metric_relabel_configs:
             - action: keep
-              regex: (otelcol_receiver_refused_metric_points_total|otelcol_receiver_refused_spans_total|otelcol_receiver_refused_log_records_total|otelcol_receiver_accepted_metric_points_total|otelcol_receiver_accepted_spans_total|otelcol_receiver_accepted_log_records_total|otelcol_exporter_sent_metric_points_total|otelcol_exporter_sent_spans_total|otelcol_exporter_sent_log_records_total|otelcol_exporter_send_failed_metric_points_total|otelcol_exporter_send_failed_spans_total|otelcol_exporter_send_failed_log_records_total|otelcol_processor_incoming_items_total|otelcol_processor_outgoing_items_total)
+              regex: (otelcol_.*)
               source_labels:
                 - __name__
           scrape_interval: 30s
@@ -110,8 +110,6 @@ exporters:
     enable_open_metrics: true
     endpoint: ${env:OTEL_POD_IP:-0.0.0.0}:19091
     metric_expiration: 5m
-    resource_to_telemetry_conversion:
-      enabled: true
     send_timestamps: true
   prometheus_remote_write/PROMETHEUS-workload-metrics-metrics:
     endpoint: https://workload-metrics.example.invalid/api/v1/write

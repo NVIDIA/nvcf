@@ -35,8 +35,10 @@ def create_oci_image(
         entrypoint,
         visibility,
         registry = None,
+        extra_registries = None,
         tags = None,
         env = None,
+        cmd = None,
         workdir = None):
     """Creates OCI image targets with platform transitions and tarball output.
 
@@ -45,10 +47,12 @@ def create_oci_image(
       - {name}_index: Multi-arch image index (amd64 + arm64)
       - {name}_load: Local docker load target
       - {name}.tar: Tarball filegroup
-      - {name}_push: Push to registry (if registry is set)
+      - {name}_push: Push to `registry` (if set)
+      - {name}_push_{suffix}: Push to each entry in `extra_registries`
 
-    env and workdir are optional and default to leaving the base image's
-    values untouched, so existing callers are unaffected.
+    env, workdir and extra_registries are optional. env and workdir default to
+    leaving the base image's values untouched, so existing callers are
+    unaffected.
     """
     all_tags = ["manual"] + (tags or [])
 
@@ -58,6 +62,7 @@ def create_oci_image(
         base = base,
         tars = tars + COMMON_LAYERS,
         entrypoint = entrypoint,
+        cmd = cmd,
         env = env,
         workdir = workdir,
         visibility = ["//visibility:private"],
@@ -108,7 +113,11 @@ def create_oci_image(
         tags = all_tags,
     )
 
-    if registry:
+    extra_registries = extra_registries or {}
+
+    # The stamped-tag template is shared by every push target, so it is built
+    # once if any destination exists rather than per destination.
+    if registry or extra_registries:
         stamped_tags = name + "_stamped_tags"
         expand_template(
             name = stamped_tags,
@@ -127,11 +136,24 @@ def create_oci_image(
             visibility = ["//visibility:private"],
         )
 
-        oci_push(
-            name = name + "_push",
-            image = name + "_index",
-            remote_tags = stamped_tags,
-            repository = registry,
-            visibility = visibility,
-            tags = all_tags,
-        )
+        if registry:
+            oci_push(
+                name = name + "_push",
+                image = name + "_index",
+                remote_tags = stamped_tags,
+                repository = registry,
+                visibility = visibility,
+                tags = all_tags,
+            )
+
+        # Pushing the _index label, not the single-arch {name}, so each extra
+        # destination receives the multi-arch manifest.
+        for suffix, extra_registry in extra_registries.items():
+            oci_push(
+                name = name + "_push_" + suffix,
+                image = name + "_index",
+                remote_tags = stamped_tags,
+                repository = extra_registry,
+                visibility = visibility,
+                tags = all_tags,
+            )

@@ -24,11 +24,64 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
 )
+
+func TestSelfManagedOpenBaoWebhookDefaultsToIgnore(t *testing.T) {
+	const baseConfigPath = "../../deploy/stacks/self-managed/environments/base.yaml"
+
+	var config struct {
+		OpenBao struct {
+			Injector struct {
+				Webhook map[string]any `yaml:"webhook"`
+			} `yaml:"injector"`
+		} `yaml:"openbao"`
+	}
+
+	baseConfig, err := os.ReadFile(baseConfigPath)
+	if err != nil {
+		t.Fatalf("read self-managed base config: %v", err)
+	}
+	if err := yaml.Unmarshal(baseConfig, &config); err != nil {
+		t.Fatalf("parse self-managed base config: %v", err)
+	}
+
+	webhook := config.OpenBao.Injector.Webhook
+	if got, want := webhook["failurePolicy"], "Ignore"; got != want {
+		t.Fatalf("openbao injector failurePolicy = %q, want %q", got, want)
+	}
+	if selector, exists := webhook["namespaceSelector"]; exists {
+		t.Fatalf("openbao injector namespaceSelector = %#v, want it omitted", selector)
+	}
+}
+
+func TestSelfManagedOpenBaoUIAppendRequiresCompatibleNamespaceExpression(t *testing.T) {
+	const templatePath = "../../deploy/stacks/self-managed/global.yaml.gotmpl"
+
+	templateBytes, err := os.ReadFile(templatePath)
+	if err != nil {
+		t.Fatalf("read self-managed values template: %v", err)
+	}
+	templateBody := string(templateBytes)
+
+	for _, want := range []string{
+		`range $expr := $matchExpressions`,
+		`eq (dig "key" "" $expr) "kubernetes.io/metadata.name"`,
+		`eq (dig "operator" "" $expr) "In"`,
+		`not (has "nvcf-ui" $values)`,
+	} {
+		if !strings.Contains(templateBody, want) {
+			t.Errorf("self-managed values template missing OpenBao selector guard %q", want)
+		}
+	}
+	if strings.Contains(templateBody, `index $matchExpressions 0`) {
+		t.Error("self-managed values template assumes the first OpenBao selector expression accepts namespace values")
+	}
+}
 
 // TestNVCFCLINonlocalFixtureMatchesCLITemplate asserts every top-level
 // key in tests/bdd/fixtures/nvcf-cli-nonlocal.yaml.template is also
@@ -92,12 +145,51 @@ func TestNVCFCLILocalFixtureTargetsLocalGRPCGateway(t *testing.T) {
 	if err := yaml.Unmarshal(fixtureBytes, &fixture); err != nil {
 		t.Fatalf("parse local CLI fixture: %v", err)
 	}
-	if got, want := fixture["base_grpc_url"], "localhost:10081"; got != want {
+	if got, want := fixture["base_grpc_url"], "grpc.localhost:10081"; got != want {
 		t.Fatalf("base_grpc_url = %v, want %q", got, want)
 	}
 }
 
-func TestSelfManagedLocalBDDMultiFixtureWiresGRPCWorkerCallback(t *testing.T) {
+func TestComputePlaneLocalBDDFixturesDisableResourceSizingFeatureGates(t *testing.T) {
+	want := []string{
+		"-InfraResourceOverhead",
+		"-EnforceHelmFunctionResourceLimits",
+		"-EnforceContainerFunctionResourceLimits",
+		"-EnforceHelmTaskResourceLimits",
+		"-EnforceContainerTaskResourceLimits",
+	}
+
+	for _, fixturePath := range []string{
+		"fixtures/nvcf-compute-plane-local-bdd.yaml",
+		"fixtures/nvcf-compute-plane-local-bdd-multi.yaml",
+	} {
+		t.Run(filepath.Base(fixturePath), func(t *testing.T) {
+			fixtureBytes, err := os.ReadFile(fixturePath)
+			if err != nil {
+				t.Fatalf("read compute-plane fixture %s: %v", fixturePath, err)
+			}
+			var fixture struct {
+				Global struct {
+					NVCAOperator struct {
+						SelfManaged struct {
+							FeatureGateValues []string `yaml:"featureGateValues"`
+						} `yaml:"selfManaged"`
+					} `yaml:"nvcaOperator"`
+				} `yaml:"global"`
+			}
+			if err := yaml.Unmarshal(fixtureBytes, &fixture); err != nil {
+				t.Fatalf("parse compute-plane fixture %s: %v", fixturePath, err)
+			}
+
+			got := fixture.Global.NVCAOperator.SelfManaged.FeatureGateValues
+			if !slices.Equal(got, want) {
+				t.Fatalf("featureGateValues = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestSelfManagedLocalBDDMultiFixtureWiresComputeReachableWorkerEndpoints(t *testing.T) {
 	fixtureBytes, err := os.ReadFile("fixtures/self-managed-local-bdd-multi.yaml")
 	if err != nil {
 		t.Fatalf("read multi-cluster stack fixture: %v", err)
@@ -105,11 +197,18 @@ func TestSelfManagedLocalBDDMultiFixtureWiresGRPCWorkerCallback(t *testing.T) {
 	fixture := string(fixtureBytes)
 	for _, want := range []string{
 		"workerConnectBaseURL: http://grpc.nvcf.svc.cluster.local:10086",
-		"chart: ../../../helm/gateway-routes/chart",
-		`version: ""`,
+		"llmRequestRouterAddress: llm-request-router.nvcf.svc.cluster.local:50071",
+		"chartPath: ../../../helm/gateway-routes/chart",
+		"chartPath: ../../../helm/llm-request-router/llm-request-router",
+		"pylonGrpcDialAddress: llm-request-router.nvcf.svc.cluster.local:50071",
+		"pylonReverseTunnelDialAddress: llm-request-router.nvcf.svc.cluster.local:50072",
+		"*.llm-request-router-headless.nvcf.svc.cluster.local",
 		"grpcWorker:",
+		"llmWorker:",
 		"enabled: true",
 		"listenerName: worker-tcp",
+		"listenerName: llm-grpc",
+		"listenerName: llm-quic",
 	} {
 		if !strings.Contains(fixture, want) {
 			t.Fatalf("multi-cluster stack fixture missing %q", want)

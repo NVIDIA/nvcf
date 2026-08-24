@@ -23,18 +23,25 @@ import java.net.URI;
 import lombok.Data;
 import org.springframework.http.HttpHeaders;
 import org.springframework.web.bind.annotation.RequestHeader;
-import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.service.annotation.GetExchange;
+import org.springframework.web.service.annotation.HttpExchange;
 
 public interface NgcContainerRegistryStub {
 
-    @GetExchange("proxy_auth")
-    NgcRegistryAuthResponse proxyAuth(
-            @RequestHeader(HttpHeaders.AUTHORIZATION) String basic,
-            @RequestParam("account") String account,
-            @RequestParam(value = "scope", required = false) String scope);
-
+    /**
+     * Exchanges a credential for a bearer token at the realm a challenge advertised. The URL is
+     * absolute because the realm may point at a different origin than the registry.
+     */
     @GetExchange
+    NgcRegistryAuthResponse fetchToken(
+            URI tokenUrl,
+            @RequestHeader(HttpHeaders.AUTHORIZATION) String basic);
+
+    /**
+     * Checks a manifest with HEAD: existence and pullability are signaled by the status alone,
+     * so the body a GET would carry is never needed.
+     */
+    @HttpExchange(method = "HEAD")
     void validateManifest(
             URI url,
             @RequestHeader(HttpHeaders.AUTHORIZATION) String bearer,

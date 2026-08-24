@@ -5,9 +5,9 @@ name: license-dependencies
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'release-**']
   pull_request:
-    branches: [main]
+    branches: [main, 'release-**']
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
@@ -52,17 +52,56 @@ jobs:
     env:
       GITHUB_TOKEN: ${{ github.token }}
     steps:
+      # Full history so the merge base with the target branch is reachable.
+      # A shallow clone leaves the three-dot diff below with nothing to
+      # compare against, which the scope script then reads as "unknown" and
+      # answers "true", so a mistake here costs time rather than coverage.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      # The job always runs and always reports, so branch protection needs no
+      # companion no-op and no change. Only the expensive steps below are
+      # scoped. On a pull request touching no dependency manifest they are all
+      # skipped and the job finishes in seconds instead of about nine minutes.
+      #
+      # Pull requests only. A push to main, a merge queue entry and a manual
+      # dispatch always run in full, so the default branch is never validated
+      # against a narrowed view of itself.
+      - name: Decide whether dependency docs can have changed
+        id: scope
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "run=true" >> "${GITHUB_OUTPUT}"
+            echo "[scope] ${{ github.event_name }}: running in full"
+            exit 0
+          fi
+          base="origin/${{ github.base_ref }}"
+          # Do not let a failed diff look like an empty change set: feeding no
+          # paths to the scope script makes it answer "true".
+          changed="$(git diff --name-only "${base}...HEAD" || true)"
+          decision="$(printf '%s\n' "${changed}" | ./tools/ci/dependency-docs-scope)"
+          echo "run=${decision}" >> "${GITHUB_OUTPUT}"
+          if [ "${decision}" = "true" ]; then
+            echo "[scope] dependency inputs changed; running the full check"
+          else
+            echo "[scope] no dependency inputs changed; skipping the full check"
+            printf '%s\n' "${changed}" | sed 's/^/  /'
+          fi
+
+      - if: steps.scope.outputs.run == 'true'
+        uses: actions/setup-go@v5
         with:
           go-version-file: tools/go-toolchain/go.mod
 
-      - uses: actions/setup-python@v5
+      - if: steps.scope.outputs.run == 'true'
+        uses: actions/setup-python@v5
         with:
           python-version: '3.x'
 
-      - uses: actions/setup-java@v4
+      - if: steps.scope.outputs.run == 'true'
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '25'
@@ -70,6 +109,7 @@ jobs:
       # The dependency collector builds each registered Java component's
       # runtime inventory. Bazelisk honors the repository's .bazelversion.
       - name: Install Bazelisk
+        if: steps.scope.outputs.run == 'true'
         run: |
           mkdir -p "${RUNNER_TEMP}/bin"
           curl -fsSLo "${RUNNER_TEMP}/bin/bazel" \
@@ -79,13 +119,41 @@ jobs:
           chmod +x "${RUNNER_TEMP}/bin/bazel"
           echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
 
-      - name: Cache Bazel repository and disk caches
-        uses: actions/cache@v4
+      # Restore on every event, but save only from main.
+      #
+      # GitHub scopes a cache entry to the ref that wrote it. A pull_request or
+      # merge_group run writes an entry only that one ref can ever read, so the
+      # copy is used once and then occupies quota until it is evicted. This
+      # cache is ~1.4 GB, and three such copies (main, a PR, a merge-queue ref)
+      # were holding 4.2 GB of the repository's 10 GB limit, evicting the Bazel
+      # build caches that actually make CI fast. Runs on any ref can restore
+      # from the default branch, so saving only on main loses no reuse.
+      #
+      # This mirrors the remote-cache policy in tools/ci/bazel-cache-upload-mode:
+      # untrusted refs read, they do not write.
+      - name: Restore Bazel repository and disk caches
+        if: steps.scope.outputs.run == 'true'
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cache/bazel/*/install
             ~/.cache/bazel/*/cache
           key: dependency-docs-bazel-${{ hashFiles('.bazelversion', 'MODULE.bazel.lock', 'maven_install.json') }}
+          # Without a prefix fallback, any lock bump means a cold build. A
+          # partially stale Bazel disk cache is safe: entries are content
+          # addressed, so Bazel revalidates rather than trusting them blindly.
+          restore-keys: |
+            dependency-docs-bazel-
 
       - name: Run dependency docs freshness check
+        if: steps.scope.outputs.run == 'true'
         run: ./tools/ci/check-dependency-docs
+
+      - name: Save Bazel repository and disk caches
+        if: steps.scope.outputs.run == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/bazel/*/install
+            ~/.cache/bazel/*/cache
+          key: dependency-docs-bazel-${{ hashFiles('.bazelversion', 'MODULE.bazel.lock', 'maven_install.json') }}
