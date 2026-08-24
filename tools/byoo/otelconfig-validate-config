@@ -2,16 +2,37 @@
 
 set -euo pipefail
 
-# `timeout` is a GNU coreutils tool and is not installed on macOS by default.
-if command -v timeout >/dev/null 2>&1; then
-    timeout_cmd=timeout
-elif command -v gtimeout >/dev/null 2>&1; then
-    timeout_cmd=gtimeout
-else
-    echo "error: no 'timeout' command found." >&2
-    echo "       On macOS, run: brew install coreutils" >&2
-    exit 1
-fi
+# `timeout`/`gtimeout` (GNU coreutils) are not installed on macOS by default;
+# fall back to a manual background-process kill when neither is available.
+run_with_timeout() {
+    local seconds="$1"
+    shift
+
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "${seconds}" "$@"
+        return
+    fi
+    if command -v gtimeout >/dev/null 2>&1; then
+        gtimeout "${seconds}" "$@"
+        return
+    fi
+
+    "$@" &
+    local pid=$!
+    (
+        sleep "${seconds}"
+        kill -TERM "${pid}" 2>/dev/null
+        sleep 1
+        kill -KILL "${pid}" 2>/dev/null
+    ) &
+    local timer=$!
+
+    wait "${pid}"
+    local exit_code=$?
+    kill "${timer}" 2>/dev/null || true
+    wait "${timer}" 2>/dev/null || true
+    return "${exit_code}"
+}
 
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
 tool_root="${repo_root}/tools/byoo"
@@ -35,7 +56,7 @@ validate_otel_config() {
     local config_path="$1"
 
     set +e
-    timeout_output=$("${timeout_cmd}" 2 ./_output/bin/otelcol-contrib --config="$config_path" 2>&1)
+    timeout_output=$(run_with_timeout 2 ./_output/bin/otelcol-contrib --config="$config_path" 2>&1)
     exit_code=$?
     set -e
 
