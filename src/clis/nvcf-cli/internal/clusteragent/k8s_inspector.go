@@ -87,7 +87,7 @@ func (k *k8sInspector) ListFunctions(ctx context.Context, opts ListOptions) ([]S
 
 	result := make([]ScheduledFunction, 0, len(items))
 	for i := range items {
-		fid, vid, ok := resolveFunctionIdentity(items[i].Object, items)
+		fid, vid, ok := resolveFunctionIdentity(items[i].Object, items[i].GetNamespace(), items)
 		if !ok {
 			continue
 		}
@@ -124,7 +124,7 @@ func (k *k8sInspector) GetFunction(ctx context.Context, functionID, versionID st
 	sortICMSRequests(items)
 	for i := range items {
 		obj := items[i].Object
-		fid, vid, ok := resolveFunctionIdentity(obj, items)
+		fid, vid, ok := resolveFunctionIdentity(obj, items[i].GetNamespace(), items)
 		if !ok || fid != functionID {
 			continue
 		}
@@ -236,12 +236,14 @@ func functionIdentity(obj map[string]interface{}) (functionID, versionID string)
 // resolveFunctionIdentity returns obj's function identity, falling back to
 // correlation when obj's own spec carries none (always true for termination
 // requests). The fallback matches obj's spec.terminationMsgInfo.instanceIds
-// against another CR's status.instances keys in allItems and borrows that
-// CR's identity: a termination request's instances are also tracked, by the
-// same instance IDs, on the creation request's status.instances map. ok is
-// false when no identity can be established either way, so the caller can
-// omit the record instead of returning one with empty IDs.
-func resolveFunctionIdentity(obj map[string]interface{}, allItems []unstructured.Unstructured) (functionID, versionID string, ok bool) {
+// against another CR's status.instances keys, restricted to candidates in
+// namespace, and borrows that CR's identity: a termination request's
+// instances are also tracked, by the same instance IDs, on the creation
+// request's status.instances map. Restricting to namespace prevents an
+// instance ID collision in another namespace from mislabeling the request.
+// ok is false when no identity can be established either way, so the caller
+// can omit the record instead of returning one with empty IDs.
+func resolveFunctionIdentity(obj map[string]interface{}, namespace string, allItems []unstructured.Unstructured) (functionID, versionID string, ok bool) {
 	if fid, vid := functionIdentity(obj); fid != "" || vid != "" {
 		return fid, vid, true
 	}
@@ -252,6 +254,9 @@ func resolveFunctionIdentity(obj map[string]interface{}, allItems []unstructured
 	}
 
 	for _, other := range allItems {
+		if other.GetNamespace() != namespace {
+			continue
+		}
 		fid, vid := functionIdentity(other.Object)
 		if fid == "" && vid == "" {
 			continue

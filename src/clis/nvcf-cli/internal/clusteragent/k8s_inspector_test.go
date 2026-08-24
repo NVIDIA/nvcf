@@ -247,6 +247,25 @@ func TestListFunctionsOmitsTerminationRequestWithNoRecoverableIdentity(t *testin
 	}
 }
 
+func TestListFunctionsDoesNotRecoverIdentityAcrossNamespaces(t *testing.T) {
+	// Regression test: instance ID correlation must stay scoped to the
+	// termination request's own namespace. If a same-named instance ID
+	// happens to exist in another namespace's creation request, that must
+	// not be treated as a match; the record must be omitted, not mislabeled.
+	insp := newFakeInspector(
+		icmsRequest("ns-other", "r1", "fn-other", "v1", "", statusCompleted, false),
+		icmsTerminationRequest("nvcf-backend", "r2", statusCompleted, "inst-a"),
+	)
+
+	got, err := insp.ListFunctions(context.Background(), ListOptions{PhaseFilter: PhaseDraining})
+	if err != nil {
+		t.Fatalf("ListFunctions returned error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("got %+v, want no DRAINING record: instance ID match in a different namespace must not be used", got)
+	}
+}
+
 func TestGetFunctionMatchesVersion(t *testing.T) {
 	insp := newFakeInspector(
 		icmsRequest("ns-a", "r1", "fn-1", "v1", "", statusCompleted, false),
@@ -262,6 +281,31 @@ func TestGetFunctionMatchesVersion(t *testing.T) {
 	}
 	if len(d.Instances) != 1 || d.Instances[0].ID != "inst-a" {
 		t.Errorf("instances = %+v, want one inst-a", d.Instances)
+	}
+}
+
+func TestGetFunctionRecoversIdentityForTerminationRequestViaInstanceIDs(t *testing.T) {
+	// Regression test: GetFunction must apply the same instance-ID identity
+	// recovery as ListFunctions. sortICMSRequests orders the termination
+	// request (empty direct identity) before the creation request ("fn-1"),
+	// so the scan reaches it first; asserting Action here (not just the
+	// resolved IDs, which the creation request would also satisfy) proves
+	// the termination request itself was matched via correlation, not
+	// skipped in favor of the creation request.
+	insp := newFakeInspector(
+		icmsRequest("nvcf-backend", "r1", "fn-1", "v1", "", statusCompleted, false),
+		icmsTerminationRequest("nvcf-backend", "r2", statusCompleted, "inst-a"),
+	)
+
+	d, err := insp.GetFunction(context.Background(), "fn-1", "v1")
+	if err != nil {
+		t.Fatalf("GetFunction returned error: %v", err)
+	}
+	if d.FunctionID != "fn-1" || d.FunctionVersionID != "v1" {
+		t.Errorf("got %q/%q, want fn-1/v1", d.FunctionID, d.FunctionVersionID)
+	}
+	if d.Action != actionTermination {
+		t.Errorf("Action = %q, want %q: the termination request must be matched via correlation, not skipped", d.Action, actionTermination)
 	}
 }
 
