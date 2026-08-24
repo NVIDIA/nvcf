@@ -38,6 +38,20 @@ type helmRelease struct {
 	Status    string `json:"status"`
 }
 
+// HelmRegistryLoginCommand builds a Helm OCI registry login command whose
+// password must be supplied on stdin by the caller.
+func HelmRegistryLoginCommand(registry string) (string, error) {
+	registry = strings.TrimSpace(Interpolate(registry))
+	if registry == "" {
+		return "", fmt.Errorf("OCI registry is empty")
+	}
+	return strings.Join([]string{
+		"helm", "registry", "login", quoteCommandArg(registry),
+		"--username", quoteCommandArg("$oauthtoken"),
+		"--password-stdin",
+	}, " "), nil
+}
+
 // HelmListCommand builds an explicit-context, all-namespaces Helm list command.
 func HelmListCommand(kubeContext string) (string, error) {
 	kubeContext = strings.TrimSpace(Interpolate(kubeContext))
@@ -45,6 +59,29 @@ func HelmListCommand(kubeContext string) (string, error) {
 		return "", fmt.Errorf("kube context is empty")
 	}
 	return "helm list --all-namespaces --kube-context " + quoteCommandArg(kubeContext) + " -o json", nil
+}
+
+// HelmReleaseValuesCommand builds an explicit-context Helm values read whose
+// stdout is YAML suitable for subset matching.
+func HelmReleaseValuesCommand(release, namespace, kubeContext string) (string, error) {
+	release = strings.TrimSpace(Interpolate(release))
+	namespace = strings.TrimSpace(Interpolate(namespace))
+	kubeContext = strings.TrimSpace(Interpolate(kubeContext))
+	if release == "" {
+		return "", fmt.Errorf("helm release name is empty")
+	}
+	if namespace == "" {
+		return "", fmt.Errorf("helm release %q namespace is empty", release)
+	}
+	if kubeContext == "" {
+		return "", fmt.Errorf("kube context is empty")
+	}
+	return strings.Join([]string{
+		"helm", "get", "values", quoteCommandArg(release),
+		"--namespace", quoteCommandArg(namespace),
+		"--kube-context", quoteCommandArg(kubeContext),
+		"-o", "yaml",
+	}, " "), nil
 }
 
 // HelmReleasesDeployed asserts that every expected release exists in Helm's

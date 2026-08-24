@@ -26,9 +26,9 @@ assertion as the escape hatch for uncommon or command-specific behavior.
   `CommandCache`, `Suite`. Step handlers depend on these; nothing else
   does.
 - `dsl/` owns pure helpers: `${VAR}` interpolation, dotted-path YAML
-  upsert and read, YAML subtree match/contain, kubectl manifest
-  builders, JSON row matching. Every helper is unit-testable in
-  isolation. No I/O coordination, no Godog dependency.
+  upsert and read, YAML subtree match/contain, self-managed secrets
+  rendering, kubectl manifest builders, JSON row matching. Every helper
+  is unit-testable in isolation. No I/O coordination, no Godog dependency.
 - `steps/` owns Godog step handlers and `ScenarioContext`. Each
   handler is one or two lines plus a delegate to a `dsl` helper or
   `Suite.Runner`.
@@ -45,19 +45,24 @@ logic into `dsl/`.
   a bare `$word` is left literal. Implementations must not use
   `os.ExpandEnv`. Expansion lives in `dsl.Interpolate`.
 - File-mutating steps (`I copy the file`, `I update yaml file`,
-  `I substitute`) snapshot the destination through `Suite.Ledger`
-  before the first write. Suite teardown restores every snapshotted
-  path.
+  `I prepare self-managed secrets file`, `I substitute a block`)
+  snapshot the destination through `Suite.Ledger` before the first write.
+  Suite teardown restores every snapshotted path.
 - `Given command has succeeded:` keys on the fully resolved command
   text. Two scenarios whose pre-interpolation text matches but whose
   env vars differ must miss the cache. The cache lives in
   `Suite.Cache`.
 - Bootstrap Givens (`a single-cluster ncp-local cluster is running`,
-  `multi-cluster ncp-local compute clusters are running:`, `the ...
-  image pull secret exists in namespaces:`) each wrap exactly one
-  Make target or one `kubectl apply` per row. Caching is idempotent
-  per suite; the underlying Make runs at most once even if multiple
-  scenarios name the Given.
+  `multi-cluster ncp-local compute clusters are running:`, `Helm is
+  authenticated to OCI registry ...`, `the ... image pull secret exists in
+  namespaces:`) each wrap exactly one Make target or one Helm invocation. The
+  image pull secret Given applies one namespace manifest and one docker-registry
+  secret manifest per row. Caching is idempotent per suite; the underlying
+  bootstrap runs at most once even if multiple scenarios name the Given.
+- The Helm OCI registry authentication Given reads `NGC_API_KEY` from the
+  process environment and passes it only through
+  `CommandRunner.RunWithSensitiveStdin`. The key must never be interpolated
+  into command text, argv, command logs, captured output, or failure messages.
 - Features that bring up a `tools/ncp-local-cluster` topology must
   include a conflict precheck in their Background before the
   bootstrap Given, asserting the OTHER topology is absent. Use

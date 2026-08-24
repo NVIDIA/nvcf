@@ -102,6 +102,10 @@ assert_resource_field "$default_render" HTTPRoute llm-api-gateway gateway '.spec
 assert_resource_field "$default_render" HTTPRoute llm-api-gateway gateway '.spec.rules[0].backendRefs[0].name' llm-api-gateway
 assert_resource_field "$default_render" HTTPRoute llm-api-gateway gateway '.spec.rules[0].backendRefs[0].namespace' nvcf
 assert_resource_field "$default_render" HTTPRoute llm-api-gateway gateway '.spec.rules[0].backendRefs[0].port' 8080
+# A request timeout truncates long-lived SSE responses even when the backend
+# terminates them correctly. The zero duration disables the route-level request
+# deadline while still allowing a caller disconnect to close the downstream request.
+assert_resource_field "$default_render" HTTPRoute llm-api-gateway gateway '.spec.rules[0].timeouts.request' 0s
 
 assert_resource_count "$default_render" HTTPRoute sis gateway 1
 assert_resource_field "$default_render" HTTPRoute sis gateway '.metadata.labels."app.kubernetes.io/component"' sis-route

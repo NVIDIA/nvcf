@@ -65,16 +65,11 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
       | EKS_COMPUTE_CLUSTER_NAME |
       | EKS_REGION               |
     # Helmfile pulls OCI charts through helm, so host-side helm
-    # registry auth must be present before any helmfile sync.
-    # Keep $NGC_API_KEY unbraced so the BDD runner does not expand
-    # the secret into command logs; bash expands it at execution time.
-    And command has succeeded:
-      """
-      bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" | helm registry login nvcr.io --username "\$oauthtoken" --password-stdin'
-      """
+    # Registry authentication must be present before any helmfile sync. The
+    # current API key is passed through sensitive stdin.
+    And Helm is authenticated to OCI registry "nvcr.io" using the current NGC API key
     # Create NGC dockerconfig registry credentials.
-    And I copy the file "deploy/stacks/self-managed/secrets/secrets.yaml.template" to "deploy/stacks/self-managed/secrets/eks-bdd-multi-secrets.yaml"
-    And I substitute "REPLACE_WITH_BASE64_DOCKER_CREDENTIAL" in file "deploy/stacks/self-managed/secrets/eks-bdd-multi-secrets.yaml" with base64 of "$oauthtoken:${NGC_API_KEY}"
+    And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/eks-bdd-multi-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
     # Both clusters must be reachable before we start.
     And I run command "kubectl --context ${EKS_CONTEXT} get nodes -o name"
     And the command exit code should be 0
@@ -133,8 +128,7 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
     #    the agent config. The agent dials the bare-ELB service URLs
     #    (which DNS-resolve) and sends these hostnames as the HTTP Host
     #    header so the control-plane gateway HTTPRoutes match.
-    When I copy the file "deploy/stacks/self-managed/environments/base.yaml" to "deploy/stacks/self-managed/environments/eks-bdd-multi.yaml"
-    And I update yaml file "deploy/stacks/self-managed/environments/eks-bdd-multi.yaml" with keys:
+    When I prepare Helmfile environment "eks-bdd-multi" for stack "self-managed" from fixture "deploy/stacks/self-managed/environments/base.yaml" with values:
       | global.helm.sources.repository                                 | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository                                        | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.imagePullSecrets[0].name                                | nvcr-pull-secret                     |
@@ -165,8 +159,7 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
       | openbao.migrations.issuerDiscovery.enabled                     | true                                 |
     Then yaml file "deploy/stacks/self-managed/environments/eks-bdd-multi.yaml" key "global.domain" should equal "${EKS_GATEWAY_DOMAIN}"
 
-    When I copy the file "deploy/stacks/nvcf-compute-plane/environments/base.yaml" to "deploy/stacks/nvcf-compute-plane/environments/eks-bdd-multi.yaml"
-    And I update yaml file "deploy/stacks/nvcf-compute-plane/environments/eks-bdd-multi.yaml" with keys:
+    When I prepare Helmfile environment "eks-bdd-multi" for stack "nvcf-compute-plane" from fixture "deploy/stacks/nvcf-compute-plane/environments/base.yaml" with values:
       | global.helm.sources.repository                                 | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository                                        | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.imagePullSecrets[0].name                                | nvcr-pull-secret                     |
@@ -220,8 +213,12 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
 
       # Confirm gateway-routes templated global.domain into the api
       # HTTPRoute hostname on the control-plane cluster.
-      When I run command "kubectl --context ${EKS_CONTEXT} get httproute nvcf-api -n envoy-gateway -o jsonpath={.spec.hostnames[0]}"
-      Then the command output should contain "api.${EKS_GATEWAY_DOMAIN}"
+      Then Kubernetes resource "HTTPRoute/nvcf-api" in namespace "envoy-gateway" using context "${EKS_CONTEXT}" should contain:
+        """
+        spec:
+          hostnames:
+            - api.${EKS_GATEWAY_DOMAIN}
+        """
 
       # Confirm the optional API GRPCRoutes are accepted and point at
       # resolved backends. These route flags are authored in the EKS env
@@ -241,14 +238,20 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
 
       # Confirm Helmfile passed the worker-facing endpoints into the
       # environment ConfigMaps consumed by the API deployments.
-      When I run command "kubectl --context ${EKS_CONTEXT} get configmap nvcf-api-env -n nvcf -o yaml"
-      Then the command output should contain "NVCF_FQDN: http://api.${EKS_GATEWAY_DOMAIN}"
-      And the command output should contain "NVCF_GLOBAL_FQDN_GRPC: http://worker-api.${EKS_GATEWAY_DOMAIN}"
-      And the command output should contain "NVCF_NATS_WORKER_URL: nats://${EKS_GATEWAY_ADDR}:4222"
+      Then Kubernetes resource "ConfigMap/nvcf-api-env" in namespace "nvcf" using context "${EKS_CONTEXT}" should contain:
+        """
+        data:
+          NVCF_FQDN: http://api.${EKS_GATEWAY_DOMAIN}
+          NVCF_GLOBAL_FQDN_GRPC: http://worker-api.${EKS_GATEWAY_DOMAIN}
+          NVCF_NATS_WORKER_URL: nats://${EKS_GATEWAY_ADDR}:4222
+        """
 
-      When I run command "kubectl --context ${EKS_CONTEXT} get configmap nvct-api-env -n nvcf -o yaml"
-      Then the command output should contain "NVCT_FQDN: http://tasks.${EKS_GATEWAY_DOMAIN}"
-      And the command output should contain "NVCT_GLOBAL_FQDN_GRPC: http://worker-tasks.${EKS_GATEWAY_DOMAIN}"
+      Then Kubernetes resource "ConfigMap/nvct-api-env" in namespace "nvcf" using context "${EKS_CONTEXT}" should contain:
+        """
+        data:
+          NVCT_FQDN: http://tasks.${EKS_GATEWAY_DOMAIN}
+          NVCT_GLOBAL_FQDN_GRPC: http://worker-tasks.${EKS_GATEWAY_DOMAIN}
+        """
 
   Rule: Helmfile registers and installs NVCA on the compute EKS cluster
 
@@ -325,8 +328,10 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
         selfManaged:
           identitySource: psat
         """
-      And yaml file "deploy/stacks/nvcf-compute-plane/registration/${EKS_COMPUTE_CLUSTER_NAME}-register-values.yaml" key "clusterID" should not be empty
-      And yaml file "deploy/stacks/nvcf-compute-plane/registration/${EKS_COMPUTE_CLUSTER_NAME}-register-values.yaml" key "clusterGroupID" should not be empty
+      And yaml file "deploy/stacks/nvcf-compute-plane/registration/${EKS_COMPUTE_CLUSTER_NAME}-register-values.yaml" should have non-empty keys:
+        | key            |
+        | clusterID      |
+        | clusterGroupID |
 
       # The register-values URLs stay as cluster register's bare-ELB
       # output. Gateway HTTPRoute matching is handled by the chart-native
@@ -342,21 +347,20 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
         | name          | namespace     |
         | nvca-operator | nvca-operator |
 
-      When I run command "kubectl rollout status deployment/nvca-operator -n nvca-operator --context ${EKS_COMPUTE_CONTEXT} --timeout=10m"
-      Then the command exit code should be 0
+      Then deployment "nvca-operator" in namespace "nvca-operator" using context "${EKS_COMPUTE_CONTEXT}" should complete rollout within "10m"
 
       # Wait for the NVCFBackend on the compute cluster to report the
       # agent healthy. The agent reaching ICMS healthy confirms the
       # cross-cluster Host-header + registration wiring works.
-      When I run command "kubectl wait nvcfbackend ${EKS_COMPUTE_CLUSTER_NAME} -n nvca-operator --context ${EKS_COMPUTE_CONTEXT} --for=jsonpath={.status.agentStatus}=healthy --timeout=10m"
-      Then the command exit code should be 0
+      Then NVCFBackend "${EKS_COMPUTE_CLUSTER_NAME}" in namespace "nvca-operator" using context "${EKS_COMPUTE_CONTEXT}" should report agent status "healthy" within "10m"
 
       # The pull secret is created only in nvca-operator; confirm the
       # operator propagated it to nvca-system. Asserting propagation here
       # catches a broken propagation that the node image cache would
       # otherwise mask under imagePullPolicy IfNotPresent.
-      When I run command "kubectl --context ${EKS_COMPUTE_CONTEXT} get secret nvcr-pull-secret -n nvca-system"
-      Then the command exit code should be 0
+      Then these Kubernetes resources should exist in namespace "nvca-system" using context "${EKS_COMPUTE_CONTEXT}":
+        | kind   | name             |
+        | Secret | nvcr-pull-secret |
 
   Rule: Helmfile-installed multi-cluster NVCF can run workloads
 
@@ -401,6 +405,8 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
       Then the command exit code should be 0
       And the command output should contain "bdd-echo"
 
+    # Failing until GitHub issue #1098 is resolved and the fix from GitHub
+    # issue #1032 is consumed by the self-managed stack.
     @nvct-task-api
     Scenario: User launches an NVCT task on the compute cluster and waits for completion
       Given command has succeeded:

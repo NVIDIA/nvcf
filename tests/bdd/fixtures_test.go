@@ -145,7 +145,7 @@ func TestNVCFCLILocalFixtureTargetsLocalGRPCGateway(t *testing.T) {
 	if err := yaml.Unmarshal(fixtureBytes, &fixture); err != nil {
 		t.Fatalf("parse local CLI fixture: %v", err)
 	}
-	if got, want := fixture["base_grpc_url"], "localhost:10081"; got != want {
+	if got, want := fixture["base_grpc_url"], "grpc.localhost:10081"; got != want {
 		t.Fatalf("base_grpc_url = %v, want %q", got, want)
 	}
 }

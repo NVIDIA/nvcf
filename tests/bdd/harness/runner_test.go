@@ -132,3 +132,37 @@ func TestCommandRunnerWritesLogFiles(t *testing.T) {
 		}
 	}
 }
+
+func TestCommandRunnerSensitiveStdinIsRedacted(t *testing.T) {
+	logDir := t.TempDir()
+	runner := NewCommandRunner(t.TempDir(), logDir)
+	const secret = "runner-secret-value"
+	command := `sh -c "value=$(cat); printf '%s' \"$value\"; printf '%s' \"$value\" >&2; exit 1"`
+	result, err := runner.RunWithSensitiveStdin(context.Background(), command, secret)
+	if err == nil {
+		t.Fatal("expected command failure")
+	}
+	for label, value := range map[string]string{
+		"stdout": result.Stdout,
+		"stderr": result.Stderr,
+		"error":  err.Error(),
+	} {
+		if strings.Contains(value, secret) {
+			t.Fatalf("%s leaked sensitive stdin: %q", label, value)
+		}
+	}
+	for label, value := range map[string]string{"stdout": result.Stdout, "stderr": result.Stderr} {
+		if !strings.Contains(value, "[REDACTED]") {
+			t.Fatalf("%s did not preserve a redacted diagnostic: %q", label, value)
+		}
+	}
+	for _, suffix := range []string{".cmd", ".stdout", ".stderr"} {
+		body, readErr := os.ReadFile(filepath.Join(logDir, "0001"+suffix))
+		if readErr != nil {
+			t.Fatalf("read log %s: %v", suffix, readErr)
+		}
+		if strings.Contains(string(body), secret) {
+			t.Fatalf("log %s leaked sensitive stdin: %q", suffix, body)
+		}
+	}
+}
