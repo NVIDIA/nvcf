@@ -19,6 +19,7 @@ package clusteragent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -664,6 +665,240 @@ func TestKillForceDeletesFinalizedRequest(t *testing.T) {
 	}
 	if icmsExists(t, dc, testRequestsNS, "r1") {
 		t.Error("forced kill should have deleted the request")
+	}
+}
+
+// TestKillReportsTerminatingWhenFinalizerBlocksDeletion is a regression test
+// for the false-positive "[deleted]" report: when Delete is accepted but a
+// finalizer keeps the object present (the real-world behavior when NVCA has
+// not evicted the workload yet), the fake dynamic client's default tracker
+// removes the object immediately regardless of finalizers, so a delete
+// reactor is used to simulate the object surviving Delete, mirroring a real
+// API server with a finalizer still set.
+func TestKillReportsTerminatingWhenFinalizerBlocksDeletion(t *testing.T) {
+	orig := killDeletionPollInterval
+	killDeletionPollInterval = time.Millisecond
+	t.Cleanup(func() { killDeletionPollInterval = orig })
+
+	cr := icmsRequestWithFinalizers(testRequestsNS, "r1", "fn-1", "v1", "nvca.finalizers.nvidia.io")
+	m, dc, _ := newFakeMaintainer([]runtime.Object{defaultBackend(), cr}, nil)
+	dc.PrependReactor("delete", "icmsrequests", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		// Simulate the real API server: the delete is accepted (no error)
+		// but the object, carrying a finalizer, is not actually removed.
+		return true, nil, nil
+	})
+
+	res, err := m.KillFunction(context.Background(), "fn-1", "v1", KillOptions{
+		BackendNS: testBackendNS,
+		Timeout:   5 * time.Millisecond,
+	})
+	if err == nil {
+		t.Fatal("expected an error reporting the request is still terminating")
+	}
+	if !strings.Contains(err.Error(), "terminating") {
+		t.Errorf("error = %q, want it to mention terminating", err.Error())
+	}
+	if res.TerminatingCount != 1 || res.FailedCount != 0 {
+		t.Fatalf("TerminatingCount/FailedCount = %d/%d, want 1/0", res.TerminatingCount, res.FailedCount)
+	}
+	if len(res.Affected) != 1 || !res.Affected[0].Terminating || res.Affected[0].Error != "" {
+		t.Fatalf("affected = %+v, want a single non-error Terminating entry", res.Affected)
+	}
+	if !icmsExists(t, dc, testRequestsNS, "r1") {
+		t.Error("r1 must still exist: it was never actually removed, only marked for deletion")
+	}
+}
+
+// TestKillWithinTimeoutReportsDeletedNotTerminating confirms the happy path
+// still reports plain "deleted" (not terminating) when the object disappears
+// before the deadline: the poll loop must not itself introduce a false
+// negative on a normal, fast reconcile.
+func TestKillWithinTimeoutReportsDeletedNotTerminating(t *testing.T) {
+	orig := killDeletionPollInterval
+	killDeletionPollInterval = time.Millisecond
+	t.Cleanup(func() { killDeletionPollInterval = orig })
+
+	m, _, _ := newFakeMaintainer(killSeed(), nil)
+
+	res, err := m.KillFunction(context.Background(), "fn-1", "v2", KillOptions{
+		BackendNS: testBackendNS,
+		Timeout:   50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("KillFunction returned error: %v", err)
+	}
+	if res.TerminatingCount != 0 || len(res.Affected) != 1 || res.Affected[0].Terminating {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+}
+
+// TestKillNegativeTimeoutRejected is a regression test: --timeout=-1s parses
+// to a valid negative time.Duration with no error from the flag layer, so
+// negative values must be rejected explicitly rather than silently falling
+// back to DefaultKillTimeout like zero does.
+func TestKillNegativeTimeoutRejected(t *testing.T) {
+	m, dc, _ := newFakeMaintainer(killSeed(), nil)
+
+	_, err := m.KillAll(context.Background(), KillOptions{BackendNS: testBackendNS, Timeout: -1 * time.Second})
+	if err == nil {
+		t.Fatal("expected an error for a negative --timeout")
+	}
+	if !strings.Contains(err.Error(), "negative") {
+		t.Errorf("error = %q, want it to mention the timeout must not be negative", err.Error())
+	}
+	if !icmsExists(t, dc, testRequestsNS, "r1") {
+		t.Error("KillAll must not delete anything when --timeout validation fails")
+	}
+}
+
+// simulatedDeleteError is a typed error a delete reactor can inject, so tests
+// can confirm the aggregate error returned by Kill* still lets a caller reach
+// the original cause via errors.As instead of only a flattened string.
+type simulatedDeleteError struct{ detail string }
+
+func (e *simulatedDeleteError) Error() string { return "simulated delete failure: " + e.detail }
+
+// TestKillAggregateErrorWrapsUnderlyingCause is a regression test: the
+// aggregate error from a partial kill failure must still let
+// errors.As reach the original per-item error, not just a summary string.
+func TestKillAggregateErrorWrapsUnderlyingCause(t *testing.T) {
+	m, dc, _ := newFakeMaintainer(killSeed(), nil)
+	want := &simulatedDeleteError{detail: "r2"}
+	dc.PrependReactor("delete", "icmsrequests", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if da, ok := action.(k8stesting.DeleteAction); ok && da.GetName() == "r2" {
+			return true, nil, want
+		}
+		return false, nil, nil
+	})
+
+	_, err := m.KillAll(context.Background(), KillOptions{BackendNS: testBackendNS})
+	if err == nil {
+		t.Fatal("expected aggregate error on partial failure")
+	}
+	var got *simulatedDeleteError
+	if !errors.As(err, &got) {
+		t.Fatalf("errors.As could not find the underlying cause in: %v", err)
+	}
+	if got != want {
+		t.Errorf("recovered cause = %+v, want %+v", got, want)
+	}
+}
+
+// TestKillTimeoutShorterThanPollIntervalIsHonored is a regression test: the
+// deletion wait must not sleep through a poll interval longer than the
+// configured --timeout before reporting Terminating. Uses a long poll
+// interval and a short timeout, and asserts the call returns well within the
+// poll interval.
+func TestKillTimeoutShorterThanPollIntervalIsHonored(t *testing.T) {
+	orig := killDeletionPollInterval
+	killDeletionPollInterval = time.Minute
+	t.Cleanup(func() { killDeletionPollInterval = orig })
+
+	cr := icmsRequestWithFinalizers(testRequestsNS, "r1", "fn-1", "v1", "nvca.finalizers.nvidia.io")
+	m, dc, _ := newFakeMaintainer([]runtime.Object{defaultBackend(), cr}, nil)
+	dc.PrependReactor("delete", "icmsrequests", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		// Delete is accepted but the object is never actually removed,
+		// simulating a finalizer the fake tracker can't model natively.
+		return true, nil, nil
+	})
+
+	const timeout = 10 * time.Millisecond
+	// Generous scheduling tolerance so this doesn't flake under CI load, but
+	// still tight enough to prove the wait tracks --timeout rather than the
+	// 1-minute killDeletionPollInterval: prior to the fix this took the full
+	// poll interval to return.
+	const tolerance = 2 * time.Second
+
+	start := time.Now()
+	res, err := m.KillFunction(context.Background(), "fn-1", "v1", KillOptions{
+		BackendNS: testBackendNS,
+		Timeout:   timeout,
+	})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected an error reporting the request is still terminating")
+	}
+	if res.TerminatingCount != 1 {
+		t.Fatalf("TerminatingCount = %d, want 1", res.TerminatingCount)
+	}
+	if elapsed >= timeout+tolerance {
+		t.Errorf("elapsed = %s, want close to the configured --timeout of %s (+%s tolerance): the wait must be bounded by --timeout, not the poll interval", elapsed, timeout, tolerance)
+	}
+}
+
+// TestKillClassifiesOnlyLocalDeadlineAsTerminating is a regression test: a
+// context.DeadlineExceeded-shaped error from the Get call must only be
+// treated as "still terminating" when it actually came from
+// waitForICMSRequestGone's own synthetic per-Get deadline. An unrelated
+// transport/client-level timeout that happens to produce the same error
+// shape, well before that deadline, must still surface as a real error
+// instead of being silently reported as a successful (if incomplete)
+// termination wait.
+func TestKillClassifiesOnlyLocalDeadlineAsTerminating(t *testing.T) {
+	cr := icmsRequestWithFinalizers(testRequestsNS, "r1", "fn-1", "v1", "nvca.finalizers.nvidia.io")
+	m, dc, _ := newFakeMaintainer([]runtime.Object{defaultBackend(), cr}, nil)
+	dc.PrependReactor("delete", "icmsrequests", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, nil
+	})
+	dc.PrependReactor("get", "icmsrequests", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if ga, ok := action.(k8stesting.GetAction); ok && ga.GetName() == "r1" {
+			// Simulate a spurious client/transport timeout unrelated to our
+			// own deadline: it arrives immediately, long before the
+			// generous Timeout below could have elapsed.
+			return true, nil, context.DeadlineExceeded
+		}
+		return false, nil, nil
+	})
+
+	_, err := m.KillFunction(context.Background(), "fn-1", "v1", KillOptions{
+		BackendNS: testBackendNS,
+		Timeout:   time.Hour,
+	})
+	if err == nil {
+		t.Fatal("expected the spurious Get error to surface as a real failure")
+	}
+	if strings.Contains(err.Error(), "still terminating") {
+		t.Errorf("a spurious transport timeout must not be misreported as the deletion deadline elapsing, got: %v", err)
+	}
+}
+
+// TestKillPreservesUnrelatedErrorRacingWithLocalDeadline is a regression
+// test for the inverse edge case: even when our own synthetic deadline has
+// genuinely elapsed (a vanishingly small Timeout guarantees getCtx.Err() ==
+// DeadlineExceeded by the time it's checked), an unrelated error returned by
+// the same Get call (e.g. Forbidden) must not be discarded and silently
+// replaced with a "still terminating" result. Both localDeadlineExceeded and
+// errors.Is(err, context.DeadlineExceeded) must hold before that happens.
+func TestKillPreservesUnrelatedErrorRacingWithLocalDeadline(t *testing.T) {
+	cr := icmsRequestWithFinalizers(testRequestsNS, "r1", "fn-1", "v1", "nvca.finalizers.nvidia.io")
+	m, dc, _ := newFakeMaintainer([]runtime.Object{defaultBackend(), cr}, nil)
+	dc.PrependReactor("delete", "icmsrequests", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, nil
+	})
+	wantErr := errors.New("forbidden")
+	dc.PrependReactor("get", "icmsrequests", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if ga, ok := action.(k8stesting.GetAction); ok && ga.GetName() == "r1" {
+			return true, nil, wantErr
+		}
+		return false, nil, nil
+	})
+
+	_, err := m.KillFunction(context.Background(), "fn-1", "v1", KillOptions{
+		BackendNS: testBackendNS,
+		// A vanishingly small timeout: our own getCtx deadline will have
+		// elapsed by the time we check getCtx.Err(), but the reactor's
+		// "forbidden" error has nothing to do with that deadline.
+		Timeout: time.Nanosecond,
+	})
+	if err == nil {
+		t.Fatal("expected the unrelated Get error to surface")
+	}
+	if !errors.Is(err, wantErr) {
+		t.Errorf("expected errors.Is to reach the original cause (%v), got: %v", wantErr, err)
+	}
+	if strings.Contains(err.Error(), "still terminating") {
+		t.Errorf("an unrelated error racing with the local deadline must not be misreported as terminating, got: %v", err)
 	}
 }
 

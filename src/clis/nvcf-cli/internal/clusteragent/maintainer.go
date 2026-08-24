@@ -22,6 +22,10 @@ import (
 	"time"
 )
 
+// DefaultKillTimeout bounds how long KillFunction/KillAll wait for a deleted
+// ICMSRequest to actually disappear before reporting it as still Terminating.
+const DefaultKillTimeout = 60 * time.Second
+
 // AgentMaintainer performs maintenance mutations against a compute-plane
 // cluster's NVCA. It is the write-side counterpart to AgentInspector: drain and
 // undrain toggle CordonAndDrain maintenance on the NVCA agent-config ConfigMap
@@ -88,6 +92,11 @@ type KillOptions struct {
 	// Force strips finalizers before deleting, so a CR stuck Terminating is
 	// removed even when NVCA is not running to process its finalizer.
 	Force bool
+	// Timeout bounds how long to wait, after issuing the delete, for the
+	// ICMSRequest to actually disappear (NVCA's finalizer removed). A request
+	// still present when the timeout elapses is reported as Terminating, not
+	// deleted. Zero uses DefaultKillTimeout.
+	Timeout time.Duration
 }
 
 // DrainResult is the outcome of a Drain or Undrain.
@@ -103,14 +112,23 @@ type DrainResult struct {
 	Message          string `json:"message,omitempty"`
 }
 
-// KilledRequest is one ICMSRequest targeted by a kill operation. Error is set
-// when that CR failed to delete; otherwise it was deleted (or would be, in a
-// dry run).
+// KilledRequest is one ICMSRequest targeted by a kill operation.
+//
+//   - Error set: the delete operation failed. This covers the delete call
+//     itself, the --force finalizer strip that precedes it, and the
+//     post-delete existence check, not just the Delete API call.
+//   - Terminating true (Error empty): the delete was accepted and
+//     deletionTimestamp was set, but the object still existed with its
+//     finalizer when the wait timed out. NVCA has not finished evicting the
+//     workload; the request is not actually gone yet.
+//   - Neither set: the object was confirmed gone (or, in a dry run, would be
+//     deleted).
 type KilledRequest struct {
 	Namespace         string `json:"namespace"`
 	Name              string `json:"name"`
 	FunctionID        string `json:"functionId,omitempty"`
 	FunctionVersionID string `json:"functionVersionId,omitempty"`
+	Terminating       bool   `json:"terminating,omitempty"`
 	Error             string `json:"error,omitempty"`
 }
 
@@ -122,5 +140,6 @@ type KillResult struct {
 	Reason            string          `json:"reason,omitempty"`
 	Affected          []KilledRequest `json:"affected"`
 	FailedCount       int             `json:"failedCount"`
+	TerminatingCount  int             `json:"terminatingCount"`
 	DryRun            bool            `json:"dryRun"`
 }
