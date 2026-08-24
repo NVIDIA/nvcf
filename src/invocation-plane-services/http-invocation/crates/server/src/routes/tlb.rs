@@ -111,22 +111,27 @@ pub fn function_id_headers(
     None
 }
 
+/// Resolves function routing while preserving proxy-aware hostname routing.
 pub fn request_function_routing<B>(
+    proxy_hostname: Option<&str>,
     request: &http::Request<B>,
 ) -> Option<(Option<FunctionId>, Option<FunctionVersionId>)> {
-    function_id_headers(request.headers()).or_else(|| {
-        request
-            .uri()
-            .authority()
-            .map(http::uri::Authority::as_str)
-            .or_else(|| {
-                request
-                    .headers()
-                    .get(http::header::HOST)
-                    .and_then(|host| host.to_str().ok())
-            })
-            .and_then(split_hostname)
-    })
+    function_id_headers(request.headers())
+        .or_else(|| proxy_hostname.and_then(split_hostname))
+        .or_else(|| {
+            request
+                .uri()
+                .authority()
+                .map(http::uri::Authority::as_str)
+                .and_then(split_hostname)
+        })
+        .or_else(|| {
+            request
+                .headers()
+                .get(http::header::HOST)
+                .and_then(|host| host.to_str().ok())
+                .and_then(split_hostname)
+        })
 }
 
 #[cfg(test)]
@@ -180,49 +185,58 @@ mod test {
     }
 
     #[test]
-    fn test_request_function_routing_ignores_forwarded_host() {
-        let expected_id = uuid!("00000000-0000-0000-0000-000000000000");
-        let forwarded_id = uuid!("11111111-1111-1111-1111-111111111111");
+    fn test_request_function_routing_uses_proxy_hostname() {
+        let authority_id = uuid!("00000000-0000-0000-0000-000000000000");
+        let proxy_id = uuid!("11111111-1111-1111-1111-111111111111");
+        let proxy_hostname = format!("{proxy_id}.example.com");
         let request = http::Request::builder()
-            .uri(format!("https://{expected_id}.example.com/invoke"))
-            .header("forwarded", format!("host={forwarded_id}.example.com"))
+            .uri(format!("https://{authority_id}.example.com/invoke"))
             .body(())
             .unwrap();
 
         assert_eq!(
-            request_function_routing(&request),
+            request_function_routing(Some(&proxy_hostname), &request),
+            Some((Some(FunctionId(proxy_id)), None))
+        );
+    }
+
+    #[test]
+    fn test_request_function_routing_falls_back_from_unroutable_proxy_hostname() {
+        let expected_id = uuid!("00000000-0000-0000-0000-000000000000");
+        let request = http::Request::builder()
+            .uri(format!("https://{expected_id}.example.com/invoke"))
+            .body(())
+            .unwrap();
+
+        assert_eq!(
+            request_function_routing(Some("proxy.example.com"), &request),
             Some((Some(FunctionId(expected_id)), None))
         );
     }
 
     #[test]
-    fn test_request_function_routing_ignores_x_forwarded_host() {
+    fn test_request_function_routing_falls_back_to_host() {
         let expected_id = uuid!("00000000-0000-0000-0000-000000000000");
-        let forwarded_id = uuid!("11111111-1111-1111-1111-111111111111");
         let request = http::Request::builder()
             .uri("/invoke")
             .header(http::header::HOST, format!("{expected_id}.example.com"))
-            .header("x-forwarded-host", format!("{forwarded_id}.example.com"))
             .body(())
             .unwrap();
 
         assert_eq!(
-            request_function_routing(&request),
+            request_function_routing(Some("proxy.example.com"), &request),
             Some((Some(FunctionId(expected_id)), None))
         );
     }
 
     #[test]
-    fn test_request_function_routing_ignores_forwarded_headers_without_authority() {
-        let forwarded_id = uuid!("11111111-1111-1111-1111-111111111111");
-        let request = http::Request::builder()
-            .uri("/invoke")
-            .header("forwarded", format!("host={forwarded_id}.example.com"))
-            .header("x-forwarded-host", format!("{forwarded_id}.example.com"))
-            .body(())
-            .unwrap();
+    fn test_request_function_routing_returns_none_without_a_routable_hostname() {
+        let request = http::Request::builder().uri("/invoke").body(()).unwrap();
 
-        assert_eq!(request_function_routing(&request), None);
+        assert_eq!(
+            request_function_routing(Some("proxy.example.com"), &request),
+            None
+        );
     }
 
     #[test]
@@ -236,7 +250,7 @@ mod test {
             .unwrap();
 
         assert_eq!(
-            request_function_routing(&request),
+            request_function_routing(None, &request),
             Some((Some(FunctionId(expected_id)), None))
         );
     }

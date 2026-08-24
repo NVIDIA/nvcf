@@ -32,6 +32,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use axum_extra::extract::Host;
 use axum_prometheus::{EndpointLabel, PrometheusMetricLayerBuilder};
 use hyper::StatusCode;
 use problem_details::ProblemDetails;
@@ -191,19 +192,24 @@ pub async fn app(
 
     let host_router = Router::new()
         // docs say not to have just a fallback, but I can't figure out how to name the handler type to pass it to axum::serve.
-        .fallback(|mut request: http::Request<Body>| async move {
-            // Check explicit function headers first because wildcard DNS isn't available everywhere.
-            if let Some((function_id, function_version_id)) = request_function_routing(&request) {
-                if let Some(function_id) = function_id {
-                    request.extensions_mut().insert(function_id);
+        .fallback(
+            |hostname: Option<Host>, mut request: http::Request<Body>| async move {
+                // Function headers support API gateway and test routing; hostname is the public interface.
+                if let Some((function_id, function_version_id)) = request_function_routing(
+                    hostname.as_ref().map(|hostname| hostname.0.as_str()),
+                    &request,
+                ) {
+                    if let Some(function_id) = function_id {
+                        request.extensions_mut().insert(function_id);
+                    }
+                    if let Some(function_version_id) = function_version_id {
+                        request.extensions_mut().insert(function_version_id);
+                    }
+                    return tlb_router.oneshot(request).await;
                 }
-                if let Some(function_version_id) = function_version_id {
-                    request.extensions_mut().insert(function_version_id);
-                }
-                return tlb_router.oneshot(request).await;
-            }
-            path_based_router.oneshot(request).await
-        });
+                path_based_router.oneshot(request).await
+            },
+        );
 
     Ok(host_router)
 }
