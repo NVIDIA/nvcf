@@ -1686,6 +1686,13 @@ into three user-facing phases:
 
 Use `--phase` to filter to one of `ACTIVE`, `DEPLOYING`, `DRAINING`, or `FAILED`.
 
+A termination request never carries its own function ID or version ID; NVCA
+relays it verbatim from the upstream message. `list-functions` and
+`get-function` recover it by correlating the termination request's instance
+IDs with the same-namespace creation request's instances. `list-functions`
+omits a `DRAINING` record when identity cannot be recovered this way, rather
+than showing one with empty IDs.
+
 ### Authentication
 
 `status`, `list-functions`, and `get-function` read from the cluster's
