@@ -575,8 +575,20 @@ func configMapUpdateForcesNVCAReconcile(name string) bool {
 		nvcfCustomAnnotationsConfigMapName,
 		nvcfGPUProfilingConfigMapName,
 		nvcfBackendChartDefaultsConfigMapName,
+		agentConfigMergeConfigMapName,
 		nvcaOperatorConfigMapName:
 		return true
+	default:
+		return false
+	}
+}
+
+func (c *BackendK8sCache) backendConfigMapMatchesClusterSource(name string) bool {
+	switch c.clusterSource {
+	case nvcaoptypes.ClusterSourceHelmManaged:
+		return name == nvcfBackendHelmManagedConfigMapName
+	case nvcaoptypes.ClusterSourceSelfHosted:
+		return name == nvcfBackendSelfManagedConfigMapName
 	default:
 		return false
 	}
@@ -623,8 +635,7 @@ func (c *BackendK8sCache) handleConfigMapAdd(ctx context.Context, obj interface{
 	case configMapUpdateForcesNVCAReconcile(cm.Name):
 		log.Info("configmap recreated after informer sync, forcing rollout")
 		return c.syncCurrentBackendForConfigMapChange(ctx, log)
-	case cm.Name == nvcfBackendHelmManagedConfigMapName,
-		cm.Name == nvcfBackendSelfManagedConfigMapName:
+	case c.backendConfigMapMatchesClusterSource(cm.Name):
 		log.Info("backend configmap recreated after informer sync, dispatching cluster reconcile event")
 		c.dispatchReconcileClusterFunc(ctx)
 	case cm.Name == cleanup.ShutdownSentinelConfigMapName:
@@ -663,8 +674,7 @@ func (c *BackendK8sCache) handleConfigMapUpdate(ctx context.Context, oldObj, new
 		}
 		log.Debug("configmap data unchanged, skipping sync of current NVCFBackend")
 		return nil
-	case newCM.Name == nvcfBackendHelmManagedConfigMapName,
-		newCM.Name == nvcfBackendSelfManagedConfigMapName:
+	case c.backendConfigMapMatchesClusterSource(newCM.Name):
 		log.Debugf("found %s configmap update, syncing current NVCFBackend", newCM.Name)
 		diff := cmp.Diff(oldCM.Data, newCM.Data, cmpopts.EquateEmpty())
 		log.WithField("diff", diff).Debugf("configmap data diff")
@@ -679,6 +689,37 @@ func (c *BackendK8sCache) handleConfigMapUpdate(ctx context.Context, oldObj, new
 	case newCM.Name == cleanup.ShutdownSentinelConfigMapName:
 		log.Debugf("found %s configmap update, skipping", newCM.Name)
 		return nil
+	}
+	return nil
+}
+
+func (c *BackendK8sCache) handleConfigMapDelete(ctx context.Context, obj interface{}) error {
+	log := core.GetLogger(ctx)
+	cm, ok := obj.(*corev1.ConfigMap)
+	if !ok {
+		var tombstone cache.DeletedFinalStateUnknown
+		switch deleted := obj.(type) {
+		case cache.DeletedFinalStateUnknown:
+			tombstone = deleted
+		case *cache.DeletedFinalStateUnknown:
+			tombstone = *deleted
+		default:
+			return fmt.Errorf("invalid object received in ConfigMap Delete handler: %T", obj)
+		}
+		cm, ok = tombstone.Obj.(*corev1.ConfigMap)
+		if !ok {
+			return fmt.Errorf("invalid tombstone object received in ConfigMap Delete handler: %T", tombstone.Obj)
+		}
+	}
+
+	log = log.WithField("configmapName", cm.Name)
+	switch {
+	case configMapUpdateForcesNVCAReconcile(cm.Name):
+		log.Info("configmap deleted, forcing rollout")
+		return c.syncCurrentBackendForConfigMapChange(ctx, log)
+	case c.backendConfigMapMatchesClusterSource(cm.Name):
+		log.Info("backend configmap deleted, dispatching cluster reconcile event")
+		c.dispatchReconcileClusterFunc(ctx)
 	}
 	return nil
 }
@@ -708,6 +749,14 @@ func addConfigMapInformers(ctx context.Context, c *BackendK8sCache) error {
 					return c.handleConfigMapUpdate(ctx, oldObj, newObj)
 				}, oteltrace.WithSpanKind(oteltrace.SpanKindConsumer)); err != nil {
 				log.WithError(err).Error("failed to handle ConfigMap update")
+			}
+		},
+		DeleteFunc: func(obj interface{}) {
+			if err := cmnotel.InvokeWithSpan(ctx, c.tracer, "nvca-operator.BackendK8sCache.ConfigMapInformer.DeleteHandler",
+				func(ctx context.Context) error {
+					return c.handleConfigMapDelete(ctx, obj)
+				}, oteltrace.WithSpanKind(oteltrace.SpanKindConsumer)); err != nil {
+				log.WithError(err).Error("failed to handle ConfigMap delete")
 			}
 		},
 	})
