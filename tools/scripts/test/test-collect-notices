@@ -23,7 +23,9 @@ TEMP_DIRS=()
 cleanup() {
     local tmpdir
 
-    for tmpdir in "${TEMP_DIRS[@]}"; do
+    # `${arr[@]+...}` keeps an empty array from tripping `set -u` on bash 3.2,
+    # the default bash on macOS. Bash 4.4 and later allow the plain expansion.
+    for tmpdir in ${TEMP_DIRS[@]+"${TEMP_DIRS[@]}"}; do
         rm -rf "${tmpdir}"
     done
 }

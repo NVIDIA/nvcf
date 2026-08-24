@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# check-license-headers — check source files for Apache 2.0 SPDX headers and
+# check-license-headers: check source files for Apache 2.0 SPDX headers and
 # optionally allow alternate SPDX identifiers under configured directories.
 # Failures are grouped by import path (from imports.yaml) or top-level directory.
 #
@@ -24,6 +24,14 @@
 # If no PATHs are given all files included by .oss-allowlist files are scanned.
 
 set -euo pipefail
+
+# Associative arrays below require bash 4+. macOS ships bash 3.2 by default;
+# install a newer bash with `brew install bash` and re-run.
+if (( BASH_VERSINFO[0] < 4 )); then
+    echo "error: bash 4 or newer is required (found ${BASH_VERSION})." >&2
+    echo "       On macOS, run: brew install bash" >&2
+    exit 1
+fi
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 REPO_ROOT="$(realpath "${REPO_ROOT}")"
@@ -80,7 +88,7 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# Parse imports.yaml → parallel arrays IMPORT_PATHS / IMPORT_REPOS.
+# Parse imports.yaml into parallel arrays IMPORT_PATHS / IMPORT_REPOS.
 # Entries are sorted longest-path-first so the first match wins.
 # ---------------------------------------------------------------------------
 IMPORT_PATHS=()
@@ -107,7 +115,7 @@ load_imports() {
         IMPORT_REPOS+=("${cur_repo}")
     fi
 
-    # Sort longest-first (simple insertion sort — <50 entries).
+    # Sort longest-first (simple insertion sort, <50 entries).
     local i j tmp_p tmp_r
     for (( i=1; i<${#IMPORT_PATHS[@]}; i++ )); do
         tmp_p="${IMPORT_PATHS[i]}"
@@ -465,8 +473,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Resolve requested paths (optional positional args).
+# `${arr[@]+...}` keeps an empty array from tripping `set -u` on bash 3.2, the
+# default bash on macOS. Bash 4.4 and later allow the plain expansion.
 SEARCH_PATHS=()
-for arg in "${PATH_ARGS[@]}"; do
+for arg in ${PATH_ARGS[@]+"${PATH_ARGS[@]}"}; do
     local_path="${arg}"
     # Make absolute
     if [[ "${local_path}" != /* ]]; then
@@ -507,7 +517,7 @@ while IFS= read -r filepath; do
 
     # Skip excluded file names.
     skip=false
-    for sf in "${SKIP_FILE_NAMES[@]}"; do
+    for sf in ${SKIP_FILE_NAMES[@]+"${SKIP_FILE_NAMES[@]}"}; do
         [[ "${name}" == "${sf}" ]] && { skip=true; break; }
     done
     ${skip} && continue

@@ -91,12 +91,14 @@ sort -u -o "${declared_all}" "${declared_all}"
 # Discovery failures must terminate: an unreadable tree that yields a partial
 # inventory would quietly narrow what the guard can see, so `.git` is pruned
 # explicitly rather than suppressing find's errors.
+# `-print` plus a sed strip is used instead of `-printf '%h\n'`, which is a GNU
+# extension that BSD find on macOS does not support.
 if ! ( cd "${root}" && find . -name .git -prune -o \
-        -name MODULE.bazel ! -path './MODULE.bazel' -printf '%h\n' ) > "${found}.raw"; then
+        -name MODULE.bazel ! -path './MODULE.bazel' -print ) > "${found}.raw"; then
     echo "error: failed to enumerate nested modules under ${root}" >&2
     exit 2
 fi
-sed 's|^\./||' "${found}.raw" | sort -u > "${found}"
+sed -e 's|/MODULE\.bazel$||' -e 's|^\./||' "${found}.raw" | sort -u > "${found}"
 
 fail=0
 
@@ -128,9 +130,11 @@ fi
 
 [ "${fail}" -eq 0 ] || exit 1
 
-remaining=$(wc -l < "${declared_ledger}" 2>/dev/null || echo 0)
-exceptions=$(wc -l < "${declared_exception}" 2>/dev/null || echo 0)
-total=$(wc -l < "${found}")
+# BSD `wc -l` pads its count with leading spaces, GNU does not. The arithmetic
+# expansion strips that padding so the counts print the same on both.
+remaining=$(( $(wc -l < "${declared_ledger}" 2>/dev/null || echo 0) ))
+exceptions=$(( $(wc -l < "${declared_exception}" 2>/dev/null || echo 0) ))
+total=$(( $(wc -l < "${found}") ))
 echo "nested modules: ${total} classified"
 echo "  awaiting migration: ${remaining}"
 echo "  permanent exceptions: ${exceptions}"
