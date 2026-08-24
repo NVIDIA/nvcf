@@ -122,6 +122,22 @@ case "$WORKLOAD" in
         SOURCE_MANIFEST="$PROJECT_ROOT/deploy/k8s/workloads/vllm-70b-criu.yaml"
         RESTORE_MANIFEST_TEMPLATE="$PROJECT_ROOT/deploy/k8s/workloads/vllm-70b-criu-restore.yaml"
         ;;
+    sglang-tp2-criu)
+        # SGLang TP=2 on criu-v2. Tests whether the peer-state sever recipe
+        # generalises beyond vLLM. SGLang's --disable-cuda-graph is the
+        # --enforce-eager analogue; the NCCL knobs are engine-independent.
+        POD_NAME="sglang-tp2-criu"
+        CONTAINER_NAME="sglang"
+        RESTORE_POD_NAME="sglang-tp2-criu-restored"
+        RESTORE_CONTAINER_NAME="restore"
+        PORT=30000
+        MODEL="meta-llama/Llama-3.1-8B-Instruct"
+        INFER_ENDPOINT="/v1/completions"
+        INFER_DATA='{"model":"meta-llama/Llama-3.1-8B-Instruct","prompt":"Hello","max_tokens":5}'
+        POST_INFER_DATA='{"model":"meta-llama/Llama-3.1-8B-Instruct","prompt":"The meaning of life is","max_tokens":10}'
+        SOURCE_MANIFEST="$PROJECT_ROOT/deploy/k8s/workloads/sglang-tp2-criu.yaml"
+        RESTORE_MANIFEST_TEMPLATE="$PROJECT_ROOT/deploy/k8s/workloads/sglang-tp2-criu-restore.yaml"
+        ;;
     vllm-tp2-criu)
         # Multi-GPU on the criu-v2 engine. Separate from vllm-tp2 (which stays
         # on the rootfs/cachedir path) so the two do not share a manifest.

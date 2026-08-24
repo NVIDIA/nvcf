@@ -112,6 +112,32 @@ Note also that aborting NCCL communicators does not help here and cannot. NCCL
 has no record of which graphs captured its kernels, so an abort frees the
 resources and leaves the graphs dangling rather than cleaning them.
 
+## SGLang: the recipe does not transfer
+
+Tested 2026-08-24. SGLang TP=2 (Llama-3.1-8B, `--mem-fraction-static 0.6`) with
+what should be the equivalent sever set: `--disable-cuda-graph` in place of
+`--enforce-eager`, plus `--disable-custom-all-reduce` and the same three
+`NCCL_*_DISABLE` env vars, which are engine-independent.
+
+The capture hangs. Not slowly: a `criu` and a `cuda-checkpoint` were still
+wedged three hours later, both blocked in `anon_pipe_read`, CRIU waiting on a
+cuda-checkpoint that never returns. A retry fails earlier with
+`text file busy` because the wedged process still holds the binary, which is a
+useful tell that the first attempt is stuck rather than finished.
+
+So something in SGLang still establishes cross-GPU mappings that those flags do
+not close. The flag names transfer; the coverage does not. Do not assume the
+vLLM recipe generalises to another engine without measuring it.
+
+Worth noting for whoever picks this up: a wedged capture leaves host processes
+behind that block subsequent attempts on that node. Check for `criu` and
+`cuda-checkpoint` in `/host/proc` and kill them before re-running.
+
+NIM was not attempted. `nim-qwen3-32b` defines no command or args, so it runs the
+image entrypoint, and the criu-v2 generator requires the setsid stdio-redirect
+convention. It needs a hand-written command wrapper around the image's
+entrypoint before it can be tested at all.
+
 ## What is still open
 
 Removing the config constraint needs peer mappings gone at capture time without
@@ -155,8 +181,8 @@ with "checkpoint images not visible at /checkpoints inside placeholder".
 ## Scope
 
 Two topologies (TP=2, TP=4) and two model scales (1.1B, 70B) on H100, same-node
-restore. Untested: cross-node restore, TP=8, other engines (SGLang, TRT-LLM,
-NIM), and whether the required flags are the same for any of them.
+restore, vLLM only. SGLang was tested and hangs (above). NIM/TRT-LLM untested.
+Also untested: cross-node restore and TP=8.
 
 Operational note: a cold 70B run does not fit the harness. test-e2e.sh pins
 POD_READY_TIMEOUT to 1800s for any workload matching *70b*, which a 140G model
