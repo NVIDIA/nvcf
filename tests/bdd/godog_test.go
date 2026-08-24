@@ -480,10 +480,14 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		"--health-protocol GRPC --health-uri / --health-port 8001") {
 		t.Fatal("gRPC sample function was not configured with a gRPC health endpoint")
 	}
-	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "api-key generate --description bdd-load-tester-supreme --for function") {
+	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
+		"api-key generate --for function",
+		"--description bdd-load-tester-supreme") {
 		t.Fatal("HTTP sample function API key was not generated for the function service")
 	}
-	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "api-key generate --description bdd-grpc-load-tester-supreme --for function") {
+	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
+		"api-key generate --for function",
+		"--description bdd-grpc-load-tester-supreme") {
 		t.Fatal("gRPC sample function API key was not generated for the function service")
 	}
 	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
@@ -939,10 +943,14 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		"--health-protocol GRPC --health-uri / --health-port 8001") {
 		t.Fatal("gRPC sample function was not configured with a gRPC health endpoint")
 	}
-	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "api-key generate --description bdd-load-tester-supreme --for function") {
+	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
+		"api-key generate --for function",
+		"--description bdd-load-tester-supreme") {
 		t.Fatal("HTTP sample function API key was not generated for the function service")
 	}
-	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "api-key generate --description bdd-grpc-load-tester-supreme --for function") {
+	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
+		"api-key generate --for function",
+		"--description bdd-grpc-load-tester-supreme") {
 		t.Fatal("gRPC sample function API key was not generated for the function service")
 	}
 	if commandRanThatContains(suite.Runner.(*fakeRunner).runs, "api-key generate --description bdd-nvct-task-smoke") {

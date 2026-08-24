@@ -174,26 +174,3 @@ func KubectlApplyCommand(manifestPath, kubeContext string) (string, error) {
 	args = append(args, "apply", "-f", quoteCommandArg(manifestPath))
 	return strings.Join(args, " "), nil
 }
-
-func quoteCommandArg(value string) string {
-	if isCommandArgSafe(value) {
-		return value
-	}
-	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
-}
-
-func isCommandArgSafe(value string) bool {
-	if value == "" {
-		return false
-	}
-	for _, char := range value {
-		if char >= 'a' && char <= 'z' ||
-			char >= 'A' && char <= 'Z' ||
-			char >= '0' && char <= '9' ||
-			strings.ContainsRune("_./:@%+=,-", char) {
-			continue
-		}
-		return false
-	}
-	return true
-}
