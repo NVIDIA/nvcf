@@ -86,10 +86,15 @@ Three of four removals broke it. Not yet isolated individually:
 
 The mechanism explains the shape. NCCL reaches a peer through several
 independent transports (NVLink P2P, shared memory, NVLS multicast) and vLLM adds
-its own (custom all-reduce, symmetric memory). Each creates cross-GPU mappings,
-and the checkpoint blocks if any mapping exists. Closing one door leaves the
-others open, so the requirement is not "tune these flags" but "no peer mappings
-at all". For tensor parallel that means all-reduce over sockets.
+its own (custom all-reduce, symmetric memory). Each creates cross-GPU
+state, and the checkpoint blocks unless all of them are closed. Closing one door
+leaves the others open. For tensor parallel that means all-reduce over sockets.
+
+Correction, measured 2026-08-24: "no peer mappings at all" is too strong and was
+wrong. A passing vLLM rank still holds mappings to the peer GPU's device node
+(3 to its own /dev/nvidia0, 2 to /dev/nvidia1) and captures cleanly regardless.
+Whatever the flags remove, it is not visible as device mappings. The precise
+mechanism is not established.
 
 ## The CUDA graph failure is a different kind of problem
 
@@ -125,9 +130,28 @@ cuda-checkpoint that never returns. A retry fails earlier with
 `text file busy` because the wedged process still holds the binary, which is a
 useful tell that the first attempt is stuck rather than finished.
 
-So something in SGLang still establishes cross-GPU mappings that those flags do
-not close. The flag names transfer; the coverage does not. Do not assume the
-vLLM recipe generalises to another engine without measuring it.
+Two hypotheses were tested and both died:
+
+- Device fds. SGLang processes hold fds on all eight GPUs despite
+  CUDA_VISIBLE_DEVICES=0,1. So does vLLM, with an identical per-device count
+  (23/7 on the assigned pair, 3 on each other GPU). Not the discriminator.
+- Peer device mappings. A passing vLLM rank has 2 mappings to the peer GPU's
+  node; so does SGLang. Not the discriminator either.
+
+The only measured difference is that SGLang holds ~40 /dev/nvidiactl mappings
+per rank against vLLM's ~28. That is a lead, not a cause.
+
+Flag coverage was also verified rather than assumed: --disable-cuda-graph and
+--disable-custom-all-reduce both exist and were accepted, and SGLang's peer
+features (--enable-nccl-nvls, --enable-symm-mem, --enable-torch-symm-mem,
+--enable-p2p-check) are all opt-in and were never enabled, so the NCCL env vars
+were suppressing features that were already inactive. Note also
+--disable-piecewise-cuda-graph and --disable-decode-cuda-graph exist and were
+NOT set; they are unlikely to matter for a capture hang, since graphs fail late
+at restore-inference rather than at capture, but they are untested.
+
+The honest state: the vLLM recipe does not transfer, and why is not known. Do
+not assume it generalises to another engine without measuring.
 
 Worth noting for whoever picks this up: a wedged capture leaves host processes
 behind that block subsequent attempts on that node. Check for `criu` and
