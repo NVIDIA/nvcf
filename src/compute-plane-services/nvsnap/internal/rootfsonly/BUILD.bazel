@@ -34,6 +34,7 @@ go_test(
         "capture_method_test.go",
         "classify_test.go",
         "composer_test.go",
+        "empty_capture_test.go",
         "entry_argv_test.go",
         "entry_runtime_dirs_test.go",
         "enumerate_test.go",

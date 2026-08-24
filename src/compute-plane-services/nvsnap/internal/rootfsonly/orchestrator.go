@@ -215,9 +215,23 @@ func (c *Capturer) Capture(ctx context.Context, req CaptureRequest) (checkpoints
 	})
 
 	// Idempotent: if the backend already has this hash, we're done.
+	//
+	// Backend is a chain (Local -> ConfigMap -> PerCapturePVC) and Stat
+	// answers from the first tier that claims the hash, so the tiers can
+	// disagree: an L2 PVC left behind by an earlier capture will claim a hash
+	// whose manifest tier is gone. Skipping on that claim returns a manifest
+	// describing nothing, which restore cannot use -- and the caller logs it
+	// as a successful commit, so the pod looks captured while being
+	// unrestorable. Re-capture instead, loudly.
 	if existing, err := c.Backend.Stat(ctx, hash); err == nil {
-		log.Info("capture skipped: hash already exists")
-		return existing, nil
+		if usableCapture(existing) {
+			log.Info("capture skipped: hash already exists")
+			return existing, nil
+		}
+		log.WithFields(logrus.Fields{
+			"files": existing.FileCount,
+			"bytes": existing.TotalSizeBytes,
+		}).Warn("existing capture describes no content; re-capturing (backend tiers are inconsistent for this hash)")
 	} else if !errors.Is(err, checkpointstore.ErrNotFound) {
 		return checkpointstore.Manifest{}, fmt.Errorf("backend stat: %w", err)
 	}
@@ -635,6 +649,17 @@ func (c *Capturer) logger() logrus.FieldLogger {
 		return c.Log
 	}
 	return logrus.NewEntry(logrus.New()).WithField("subsys", "rootfsonly")
+}
+
+// usableCapture reports whether a manifest returned by Backend.Stat describes
+// content a restore could actually replay.
+//
+// FileCount and TotalSizeBytes are the only emptiness signal available here.
+// The consequence is that a workload which genuinely captured nothing is
+// re-captured on every pass rather than skipped: cheap, since there is nothing
+// to copy, and preferable to caching a capture that cannot serve a restore.
+func usableCapture(m checkpointstore.Manifest) bool {
+	return m.FileCount > 0 && m.TotalSizeBytes > 0
 }
 
 // readEntryArgv reads the source process's argv from
