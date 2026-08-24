@@ -151,19 +151,6 @@ releases:
     labels:
       release-group: services
 
-  - name: nats-auth-callout-service
-    chart: nvcf/helm-nvcf-nats-auth-callout-service
-    version: 1.1.3
-    namespace: nats-system
-    values:
-      - ../global.yaml.gotmpl
-      {{- if .Values.global.imagePullSecrets }}
-      - imagePullSecrets:
-          {{- toYaml .Values.global.imagePullSecrets | nindent 10 }}
-      {{- end }}
-    labels:
-      release-group: services
-
   - name: llm-request-router
     {{- $llmRequestRouterChartPath := dig "addons" "llm" "requestRouter" "chartPath" "" .Values }}
     chart: {{ $llmRequestRouterChartPath | default "nvcf/helm-nvcf-llm-request-router" | quote }}

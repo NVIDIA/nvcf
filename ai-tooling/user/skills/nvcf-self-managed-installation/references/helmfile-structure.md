@@ -5,7 +5,7 @@
 ```
 nvcf-self-managed-stack/
 |-- helmfile.d/
-|   |-- 01-dependencies.yaml.gotmpl  # NATS, Cassandra, OpenBao
+|   |-- 01-dependencies.yaml.gotmpl  # NATS, Cassandra, OpenBao, NATS auth-callout
 |   |-- 02-core.yaml.gotmpl          # NVCF services + ingress
 |   `-- 03-observability.yaml.gotmpl # Observability stack (optional)
 |-- environments/

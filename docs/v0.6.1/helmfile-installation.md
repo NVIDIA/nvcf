@@ -821,6 +821,7 @@ Phase 1: dependency layer (5-10 minutes)
 - NATS messaging service
 - OpenBao (secrets management)
 - Cassandra (database)
+- NATS auth-callout service
 - Helmfile selector: `release-group=dependencies`
 
 Phase 2: control-plane services (5-10 minutes)
@@ -918,7 +919,7 @@ safely redeploy it individually:
 # Redeploy only Cassandra
 HELMFILE_ENV=<environment-name> helmfile --selector name=cassandra apply
 
-# Redeploy all dependencies (NATS, Cassandra, OpenBao)
+# Redeploy all dependencies (NATS, Cassandra, OpenBao, NATS auth-callout)
 HELMFILE_ENV=<environment-name> helmfile --selector release-group=dependencies apply
 ```
 

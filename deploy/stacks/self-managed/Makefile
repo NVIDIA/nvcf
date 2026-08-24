@@ -11,6 +11,7 @@ test:
 	@tests/llm-pki-openbao-migration.sh
 	@tests/api-keys-startup-probe.sh
 	@tests/llm-pki-release.sh
+	@tests/nats-auth-callout-openbao-order.sh
 	@tests/check-llm-pki-issuer.sh
 	@tests/pdb-value-wiring.sh
 	@tests/invocation-tracing-baggage.sh

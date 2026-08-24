@@ -216,7 +216,7 @@ Helmfile deploys in order with dependencies:
 
 | Phase | Selector | Services | Wait time |
 |-------|----------|----------|-----------|
-| 1 | `release-group=dependencies` | NATS, OpenBao, Cassandra | 5-10 min |
+| 1 | `release-group=dependencies` | NATS, OpenBao, Cassandra, NATS auth-callout | 5-10 min |
 | 2 | `release-group=services` | API, SIS, ESS, invocation, grpc-proxy, notary, api-keys, optional LLM gateway/router, optional Vanity Gateway, NVCF UI when the stack package includes the addon | 5-10 min |
 | 3 | `release-group=ingress` | Gateway routes | 1-2 min |
 | 4 | `release-group=observability` | Observability stack (if enabled) | 1-2 min |

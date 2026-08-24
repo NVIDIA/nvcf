@@ -161,7 +161,7 @@ install: check-versions $(INSTALL_PRE_HOOKS)
 	$(if $(HELMFILE_SELECTOR),@echo "    Selector: $(HELMFILE_SELECTOR)")
 
 	HELMFILE_ENV="$(HELMFILE_ENV)" \
-	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(if $(HELMFILE_SELECTOR),--selector $(HELMFILE_SELECTOR)) sync
+	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(if $(HELMFILE_SELECTOR),--selector $(HELMFILE_SELECTOR) --include-transitive-needs) sync
 
 	@echo ">>> Helmfile sync complete."
 
@@ -175,7 +175,7 @@ apply: check-versions $(APPLY_PRE_HOOKS)
 	$(if $(HELMFILE_SELECTOR),@echo "    Selector: $(HELMFILE_SELECTOR)")
 
 	HELMFILE_ENV="$(HELMFILE_ENV)" \
-	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(if $(HELMFILE_SELECTOR),--selector $(HELMFILE_SELECTOR)) apply
+	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(if $(HELMFILE_SELECTOR),--selector $(HELMFILE_SELECTOR) --include-transitive-needs) apply
 
 	@echo ">>> Helmfile apply complete."
 
