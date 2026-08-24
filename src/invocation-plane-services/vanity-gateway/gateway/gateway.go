@@ -116,7 +116,7 @@ func NewNVCFGateway(logger *logs.ZapLogger, config Config) (*NVCFGateway, error)
 
 	mappings, err := gatewayConfig.SetupConfigWithConfigPathAndTimeout(config.MappingPath, mappingLoadTimeout)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to load mapping configuration: %w", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
