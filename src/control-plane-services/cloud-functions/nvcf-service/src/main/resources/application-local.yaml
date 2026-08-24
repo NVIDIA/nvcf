@@ -81,7 +81,7 @@ nvcf:
   account:
     max-functions-allowed: 50
     max-tasks-allowed: 50
-  scheduled-tasks:
+  scheduler:
     enabled: false
   nats:
     url: nats://127.0.0.1:4222
