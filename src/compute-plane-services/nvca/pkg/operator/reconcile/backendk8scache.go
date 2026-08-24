@@ -583,7 +583,7 @@ func configMapUpdateForcesNVCAReconcile(name string) bool {
 	}
 }
 
-func (c *BackendK8sCache) backendConfigMapMatchesClusterSource(name string) bool {
+func (c *BackendK8sCache) isBackendConfigMapMatchesClusterSource(name string) bool {
 	switch c.clusterSource {
 	case nvcaoptypes.ClusterSourceHelmManaged:
 		return name == nvcfBackendHelmManagedConfigMapName
@@ -635,7 +635,7 @@ func (c *BackendK8sCache) handleConfigMapAdd(ctx context.Context, obj interface{
 	case configMapUpdateForcesNVCAReconcile(cm.Name):
 		log.Info("configmap recreated after informer sync, forcing rollout")
 		return c.syncCurrentBackendForConfigMapChange(ctx, log)
-	case c.backendConfigMapMatchesClusterSource(cm.Name):
+	case c.isBackendConfigMapMatchesClusterSource(cm.Name):
 		log.Info("backend configmap recreated after informer sync, dispatching cluster reconcile event")
 		c.dispatchReconcileClusterFunc(ctx)
 	case cm.Name == cleanup.ShutdownSentinelConfigMapName:
@@ -674,7 +674,7 @@ func (c *BackendK8sCache) handleConfigMapUpdate(ctx context.Context, oldObj, new
 		}
 		log.Debug("configmap data unchanged, skipping sync of current NVCFBackend")
 		return nil
-	case c.backendConfigMapMatchesClusterSource(newCM.Name):
+	case c.isBackendConfigMapMatchesClusterSource(newCM.Name):
 		log.Debugf("found %s configmap update, syncing current NVCFBackend", newCM.Name)
 		diff := cmp.Diff(oldCM.Data, newCM.Data, cmpopts.EquateEmpty())
 		log.WithField("diff", diff).Debugf("configmap data diff")
@@ -717,7 +717,7 @@ func (c *BackendK8sCache) handleConfigMapDelete(ctx context.Context, obj interfa
 	case configMapUpdateForcesNVCAReconcile(cm.Name):
 		log.Info("configmap deleted, forcing rollout")
 		return c.syncCurrentBackendForConfigMapChange(ctx, log)
-	case c.backendConfigMapMatchesClusterSource(cm.Name):
+	case c.isBackendConfigMapMatchesClusterSource(cm.Name):
 		log.Info("backend configmap deleted, dispatching cluster reconcile event")
 		c.dispatchReconcileClusterFunc(ctx)
 	}

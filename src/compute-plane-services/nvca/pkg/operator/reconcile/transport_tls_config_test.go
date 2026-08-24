@@ -785,7 +785,7 @@ func TestBackendConfigMapMatchesClusterSource(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			bc := &BackendK8sCache{clusterSource: tt.clusterSource}
-			assert.Equal(t, tt.want, bc.backendConfigMapMatchesClusterSource(tt.configMapName))
+			assert.Equal(t, tt.want, bc.isBackendConfigMapMatchesClusterSource(tt.configMapName))
 		})
 	}
 }
