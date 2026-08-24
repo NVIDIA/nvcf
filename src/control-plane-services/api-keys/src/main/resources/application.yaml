@@ -175,7 +175,7 @@ apikeys:
   service-id-map:
     nvcf: nvidia-cloud-functions-ncp-service-id-aketm
     nvct: nvidia-cloud-tasks-ncp-service-id-nvcttasks
-    event-ledger: nvidia-cloud-events-ncp-service-id-ckozoh6f
+    event-ledger: nvidia-event-ledger-ncp-service-id-ckozoh6f
   key-prefix: nvcfapi-
   data-domain-key: ${kv.data-domain-key.value}
   keep-after-expired-duration: P2D

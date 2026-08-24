@@ -35,7 +35,7 @@ SERVICE_ACCOUNT_NAME="api-keys-api"
 # and the NVCT_SERVICE_ID env var consumed by NAK and NVCT.
 NVCT_SERVICE_ID="nvidia-cloud-tasks-ncp-service-id-nvcttasks"
 
-EVENT_LEDGER_SERVICE_ID="nvidia-cloud-events-ncp-service-id-ckozoh6f"
+EVENT_LEDGER_SERVICE_ID="nvidia-event-ledger-ncp-service-id-ckozoh6f"
 
 #-------------------------------------------
 # Set defaults for secret paths and policies

@@ -65,7 +65,7 @@ class ConfigTest extends BaseIntegrationTest {
         assertThat(environment.getProperty("apikeys.service-id-map.nvct"))
                 .isEqualTo("nvidia-cloud-tasks-ncp-service-id-nvcttasks");
         assertThat(environment.getProperty("apikeys.service-id-map.event-ledger"))
-                .isEqualTo("nvidia-cloud-events-ncp-service-id-ckozoh6f");
+                .isEqualTo("nvidia-event-ledger-ncp-service-id-ckozoh6f");
     }
 
     @Test
