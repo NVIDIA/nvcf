@@ -14,6 +14,7 @@ This repository ships:
 - Verified `jwker` binary and signed-package `kubectl` copied from downloader stages
 - Optional addons under `addons/` (e.g., LLS / TURN secret rotation)
 - An example Kubernetes Job manifest (`job.yaml`)
+- A Docker-based integration test for the helper functions (`tests/`)
 
 ## Prerequisites
 
@@ -70,6 +71,7 @@ Environment variables consumed by the entrypoint:
 | `DEFAULT_CASSANDRA_PASSWORD` | `ch@ng3m3` (override required) | See above |
 | `NVCF_API_SIDECARS_IMAGE_PULL_SECRET` | `""` | Image pull secret name passed to the NVCF API sidecar mount |
 | `MIGRATIONS_ALLOW_FAILURES` | `false` | Emergency rollback only. When `true`, the entrypoint exits 0 even if core migrations or opted-in addons failed. Default behavior fails the Job non-zero so a misconfigured deployment blocks the Helm hook Job instead of silently leaving OpenBao in a partial state. |
+| `BAO_TRANSIENT_RETRY_BUDGET_SECONDS` | `60` | Total time the helper functions spend retrying kv-v2 operations that fail with the transient storage-upgrade error (see the section below). |
 
 ### Example Kubernetes Job
 
@@ -78,6 +80,32 @@ Environment variables consumed by the entrypoint:
 ```bash
 kubectl apply -f job.yaml
 ```
+
+## Transient kv-v2 upgrade errors
+
+OpenBao rejects kv-v2 reads and writes with HTTP 400 `Upgrading from
+non-versioned to versioned data` while a mount's storage upgrade runs. The
+upgrade starts on every backend setup (fresh enable, version tune, server
+unseal, leader failover) and finishes asynchronously, so operations issued
+right after a mount operation can land inside that window. On a loaded
+cluster the window can outlast several requests.
+
+The helpers in `migrations/utils/functions.sh` handle this window:
+
+- `enable_secrets_mount` waits for a kv-v2 mount to serve requests before
+  returning, including when the mount already existed (a re-run can find a
+  mount whose upgrade re-opened after a server restart).
+- `write_secrets_kv` retries the existence check and the write while they
+  fail with the transient error, backing off at 1s, 2s, 4s, 8s, then 10s,
+  within `BAO_TRANSIENT_RETRY_BUDGET_SECONDS` in total.
+- Existence checks that still fail transiently after the full budget abort
+  the migration rather than writing, so an existing secret is never
+  overwritten because its mount was temporarily unreadable.
+
+All other errors keep failing immediately; the retry never weakens the
+fail-hard Job contract. `tests/kv-write-retry-test.sh` runs these helpers
+against a real OpenBao server in Docker with the upgrade window held open
+and asserts the behavior above.
 
 ## Service onboarding
 
