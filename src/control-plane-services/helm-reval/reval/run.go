@@ -859,7 +859,9 @@ func (h *Handler) validateReleaseObjects(
 			if h.RejectPVCs {
 				errs = append(errs, fmt.Errorf("PersistentVolumeClaims are not supported in NVCF helm charts. Please remove all PVC definitions before deploying."))
 			} else {
-				logger.Warn("PersistentVolumeClaim found in helm chart; PVCs are not officially supported and will be rejected in a future release")
+				logger.Warn("PersistentVolumeClaim found in helm chart; PVCs are not officially supported and will be rejected in a future release",
+					zap.String("pvc", t.Name),
+					zap.String("namespace", t.Namespace))
 			}
 		case *corev1.Pod:
 			errs = append(errs, validatePodSpec(t.Spec, h.RejectPVCs, logger)...)

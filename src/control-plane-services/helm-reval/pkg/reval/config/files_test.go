@@ -18,6 +18,7 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spf13/viper"
@@ -116,6 +117,8 @@ func TestRejectPVCs_EnvVar(t *testing.T) {
 	v := viper.New()
 	v.AutomaticEnv()
 	v.SetEnvPrefix("REVAL")
+	v.SetEnvKeyReplacer(strings.NewReplacer("-", "_", ".", "_"))
+	require.NoError(t, v.BindEnv("reject-pvcs", "REVAL_REJECT_PVCS"))
 	var cfg config.RevalConfig
 	require.NoError(t, v.Unmarshal(&cfg))
 	assert.True(t, cfg.RejectPVCs)
