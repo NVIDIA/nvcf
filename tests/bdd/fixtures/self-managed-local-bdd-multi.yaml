@@ -33,6 +33,10 @@ global:
   workerEndpoints:
     essServiceURL: http://ess-api.ess.svc.cluster.local:8080
     invocationServiceURL: http://invocation.nvcf.svc.cluster.local:8080
+    # This DNS name is local to each cluster. On the compute cluster, the
+    # ncp-local alias Service forwards it to the control-plane load balancer.
+    # NVCF API advertises this value as LLM_REQUEST_ROUTER_ADDRESS.
+    llmRequestRouterAddress: llm-request-router.nvcf.svc.cluster.local:50071
 
 cassandra:
   replicaCount: 1
@@ -67,10 +71,25 @@ addons:
         serviceMonitor:
           enabled: false
     requestRouter:
-      replicaCount: 1
+      # Validate authority/SNI demultiplexing across three concrete Stargates.
+      chartPath: ../../../helm/llm-request-router/llm-request-router
+      replicaCount: 3
+      backendRouter:
+        # These are control-plane-local for Stargate and compute-reachable
+        # through the identically named alias Service in the compute cluster.
+        pylonGrpcDialAddress: llm-request-router.nvcf.svc.cluster.local:50071
+        pylonReverseTunnelDialAddress: llm-request-router.nvcf.svc.cluster.local:50072
       metrics:
         serviceMonitor:
           enabled: false
+    pki:
+      enabled: true
+      allowedDomains: cluster.local
+      # The compute-reachable dial address is deliberately decoupled from the
+      # gRPC authority and QUIC SNI. Pylon preserves the per-Stargate identity.
+      dnsNames:
+        - llm-request-router.nvcf.svc.cluster.local
+        - "*.llm-request-router-headless.nvcf.svc.cluster.local"
 
 grpcproxy:
   workerConnectBaseURL: http://grpc.nvcf.svc.cluster.local:10086
@@ -81,8 +100,7 @@ grpcproxy:
 ingress:
   gatewayApi:
     enabled: true
-    chart: ../../../helm/gateway-routes/chart
-    version: ""
+    chartPath: ../../../helm/gateway-routes/chart
     controllerNamespace: envoy-gateway-system
     gateways:
       shared:
@@ -95,11 +113,23 @@ ingress:
         name: shared-gw
         namespace: envoy-gateway-system
         listenerName: nats
+      llmGrpc:
+        name: grpc-gw
+        namespace: envoy-gateway-system
+        listenerName: llm-grpc
+      llmQuic:
+        name: grpc-gw
+        namespace: envoy-gateway-system
+        listenerName: llm-quic
     routes:
       grpcWorker:
         enabled: true
         listenerName: worker-tcp
       nats:
         enabled: true
-      ess: 
+      llmWorker:
+        enabled: true
+        backend:
+          namespace: nvcf
+      ess:
         enabled: true
