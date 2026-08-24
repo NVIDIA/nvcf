@@ -944,8 +944,9 @@ llmRequestRouter:
   {{- if eq $pkiMode "existingSecret" }}
   {{- /* The operator owns issuance in this mode, so custom values that steer
        stack-managed issuance are mixed-ownership conflicts. The stable base
-       profile's managed defaults are tolerated because Helmfile cannot clear
-       an inherited empty list; any changed value fails loudly. */ -}}
+       profile's managed defaults are tolerated because Helmfile cannot
+       reliably clear inherited values to empty values; any changed value
+       fails loudly. */ -}}
   {{- $existingSecretPkiValues := dig "addons" "llm" "pki" dict .Values }}
   {{- if kindIs "map" $existingSecretPkiValues }}
   {{- $existingSecretClusterIssuer := dig "clusterIssuer" dict $existingSecretPkiValues }}
@@ -964,7 +965,7 @@ llmRequestRouter:
   {{- fail "addons.llm.pki.dnsNames applies only to a stack-issued Certificate; only the unchanged stable-base defaults are allowed when addons.llm.pki.mode is existingSecret" }}
   {{- end }}
   {{- $existingSecretAllowedDomains := dig "addons" "llm" "pki" "allowedDomains" "" .Values }}
-  {{- if and $existingSecretAllowedDomains (ne $existingSecretAllowedDomains "cluster.local") }}
+  {{- if and (ne $existingSecretAllowedDomains nil) (not (and (kindIs "string" $existingSecretAllowedDomains) (eq $existingSecretAllowedDomains "cluster.local"))) }}
   {{- fail "addons.llm.pki.allowedDomains constrains the managed OpenBao signing role; only the unchanged stable-base default is allowed when addons.llm.pki.mode is existingSecret" }}
   {{- end }}
   {{- /* No default: the Secret is the operator's, so guessing a name would

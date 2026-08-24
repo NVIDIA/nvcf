@@ -331,7 +331,8 @@ addons:
     #   existingSecret - the chart mounts a Secret you created and manages no
     #                    issuance. Requires secretName. The stable-base
     #                    dnsNames and allowedDomains defaults are tolerated
-    #                    because Helmfile cannot clear inherited empty lists;
+    #                    because Helmfile cannot reliably clear inherited
+    #                    values to empty values;
     #                    any changed managed value is rejected. You own
     #                    issuance, renewal, rotation, and recovery, and the
     #                    stack validates neither the SANs nor the expiry.
