@@ -41,7 +41,8 @@ import (
 // operator-provided nvcf-miniservice-sc exists, and HelmSharedStorage is enabled.
 //
 // Each cacheHandle gets its OWN Samba server (Deployment + Service) backed by
-// its OWN nvcf-sc (NVMesh) data PVC, sized to the function's cacheSize, and
+// its OWN block-storage data PVC on the model cache storage class
+// (ModelCacheStorageClassName), sized to the function's cacheSize, and
 // exporting a single SMB share. There is no shared/global data PVC: a single
 // fixed-size volume cannot be sized for an unknown set of models, and hot-adding
 // per-handle volumes to one shared server would force pod restarts that drop
@@ -62,9 +63,6 @@ const (
 	SambaModelCacheReadOnlySecretName = "nvcf-helm-cache-smb-ro-creds"
 	// SambaModelCacheShareName is the SMB share each per-handle server exports.
 	SambaModelCacheShareName = "cache"
-	// SambaModelCacheDataStorageClassName is the NVMesh block-storage class
-	// backing each per-handle Samba data PVC (Samba over NVMesh; never ephemeral).
-	SambaModelCacheDataStorageClassName = "nvcf-sc"
 
 	sambaModelCacheDataMountPath = "/shared-data"
 	sambaModelCacheServerPort    = 445
@@ -95,8 +93,8 @@ const (
 )
 
 // defaultSambaModelCacheDataSize backs the per-handle data PVC only when the
-// request carries no cacheSize. nvcf-sc supports expansion, so this is a
-// starting point, not a ceiling.
+// request carries no cacheSize. The model cache class supports expansion, so
+// this is a starting point, not a ceiling.
 var defaultSambaModelCacheDataSize = resource.MustParse("100Gi")
 
 // sambaModelCacheResourceName derives the per-cacheHandle name shared by the
@@ -113,8 +111,9 @@ func sambaModelCacheResourceName(cacheHandle string) string {
 	return fmt.Sprintf("samba-%s-%08x", cacheHandle[:48], h.Sum32())
 }
 
-// SambaModelCacheBackingPVCName is the per-handle nvcf-sc data PVC that holds
-// the cache bytes behind the Samba share. Its existence is the reuse signal.
+// SambaModelCacheBackingPVCName is the per-handle block-storage data PVC that
+// holds the cache bytes behind the Samba share. Its existence is the reuse
+// signal.
 func SambaModelCacheBackingPVCName(cacheHandle string) string {
 	return sambaModelCacheResourceName(cacheHandle)
 }
@@ -127,16 +126,20 @@ func sambaModelCacheWriterPVName(cacheHandle string) string {
 
 // EnsureSambaModelCacheInfra performs the idempotent bootstrap of the per-handle
 // Samba model cache server in the model cache control namespace: the shared
-// RW/RO credentials Secrets, the per-handle nvcf-sc data PVC (sized to size),
-// the per-handle Samba Deployment, its fronting Service, and an ingress
-// NetworkPolicy. It returns ready=true once that Deployment is available. It
-// intentionally creates NO StorageClass; cache volumes are static SMB PVs bound
-// to the per-handle share (see newSambaModelCachePV).
+// RW/RO credentials Secrets, the per-handle data PVC on dataStorageClass (sized
+// to size), the per-handle Samba Deployment, its fronting Service, and an
+// ingress NetworkPolicy. It returns ready=true once that Deployment is
+// available. It intentionally creates NO StorageClass; cache volumes are static
+// SMB PVs bound to the per-handle share (see newSambaModelCachePV).
+//
+// dataStorageClass must be the class SelectHelmCacheBackend verified exists
+// before choosing this backend; empty resolves to the default.
 func EnsureSambaModelCacheInfra(
 	ctx context.Context,
 	c client.Client,
 	cacheHandle string,
 	image string,
+	dataStorageClass string,
 	resources corev1.ResourceRequirements,
 	size resource.Quantity,
 ) (ready bool, err error) {
@@ -158,7 +161,7 @@ func EnsureSambaModelCacheInfra(
 		NewModelCacheInitNamespace(),
 		rwSecret,
 		roSecret,
-		newSambaModelCacheDataPVC(cacheHandle, size),
+		newSambaModelCacheDataPVC(cacheHandle, ModelCacheStorageClassName(dataStorageClass), size),
 		newSambaModelCacheDeployment(cacheHandle, image, resources),
 		newSambaModelCacheService(cacheHandle),
 		newSambaModelCacheNetworkPolicy(cacheHandle),
@@ -226,12 +229,16 @@ func newSambaModelCacheSecrets() (rw, ro *corev1.Secret) {
 		mk(SambaModelCacheReadOnlySecretName, sambaModelCacheROUsername, sambaModelCacheROUID)
 }
 
-// newSambaModelCacheDataPVC builds the per-handle nvcf-sc data PVC. The PVC is
-// not labeled with modelCacheHandleLabelKey on purpose: cleanupInitModelCache
-// deletes the (handle-labeled) ephemeral writer RW PVC, and labeling the durable
-// backing PVC with the same handle would collide with that single-PVC cleanup.
-func newSambaModelCacheDataPVC(cacheHandle string, size resource.Quantity) *corev1.PersistentVolumeClaim {
-	storageClassName := SambaModelCacheDataStorageClassName
+// newSambaModelCacheDataPVC builds the per-handle data PVC on the model cache
+// storage class. The PVC is not labeled with modelCacheHandleLabelKey on
+// purpose: cleanupInitModelCache deletes the (handle-labeled) ephemeral writer
+// RW PVC, and labeling the durable backing PVC with the same handle would
+// collide with that single-PVC cleanup.
+func newSambaModelCacheDataPVC(
+	cacheHandle string,
+	storageClassName string,
+	size resource.Quantity,
+) *corev1.PersistentVolumeClaim {
 	labels := sambaModelCacheSelector(cacheHandle)
 	labels[sambaModelCacheComponentLabelKey] = sambaModelCacheComponentLabelValue
 	return &corev1.PersistentVolumeClaim{

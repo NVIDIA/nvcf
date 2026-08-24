@@ -444,8 +444,9 @@ func (r *Reconciler) doModelCacheSamba(ctx context.Context,
 	// is sized to it, not a global guess.
 	capacity := rwPVC.Spec.Resources.Requests[corev1.ResourceStorage]
 
-	// Ensure the per-handle Samba server + nvcf-sc backing PVC (samba-<handle>,
-	// sized to cacheSize). Idempotent: an existing backing PVC is reused.
+	// Ensure the per-handle Samba server + backing PVC (samba-<handle>, sized to
+	// cacheSize) on the model cache storage class. Idempotent: an existing
+	// backing PVC is reused.
 	smbResources := corev1.ResourceRequirements{
 		Limits:   corev1.ResourceList(r.cfg.Agent.SharedStorage.Server.ContainerResources.Limits),
 		Requests: corev1.ResourceList(r.cfg.Agent.SharedStorage.Server.ContainerResources.Requests),
@@ -455,7 +456,8 @@ func (r *Reconciler) doModelCacheSamba(ctx context.Context,
 	err = nvcaotel.InvokeWithSpan(ctx, modelCacheTracer, "nvca.modelcache.samba.ensure_infra",
 		func(ctx context.Context) error {
 			var e error
-			ready, e = EnsureSambaModelCacheInfra(ctx, r.Client, cacheHandle, r.cfg.Agent.SharedStorage.Server.Image, smbResources, capacity)
+			ready, e = EnsureSambaModelCacheInfra(ctx, r.Client, cacheHandle,
+				r.cfg.Agent.SharedStorage.Server.Image, r.modelCacheStorageClassName(), smbResources, capacity)
 			return e
 		},
 		oteltrace.WithAttributes(otelattr.String("nvcf.modelcache.handle", cacheHandle)),
@@ -675,11 +677,7 @@ func builtinProvisionerMountOptions(provisioner string) ([]string, bool) {
 // volume in a cluster lands on the same class and its provisioner is the one
 // the mount option defaults were resolved from.
 func (r *Reconciler) modelCacheStorageClassName() string {
-	if r.modelCacheStorageClass != "" {
-		return r.modelCacheStorageClass
-	}
-
-	return DefaultModelCacheStorageClassName
+	return ModelCacheStorageClassName(r.modelCacheStorageClass)
 }
 
 // applyModelCacheStorageClass puts the configured storage class on a model cache

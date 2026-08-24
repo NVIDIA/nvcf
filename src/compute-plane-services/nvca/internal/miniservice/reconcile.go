@@ -744,7 +744,8 @@ func (r *Reconciler) doInstall(ctx context.Context,
 	// transient error (timeout, rate-limit) must be retried.
 	cacheBackend := nvcastorage.HelmCacheBackendNone
 	if cacheLaunchRequested(icmsReq) {
-		cacheBackend, err = nvcastorage.SelectHelmCacheBackend(ctx, r.Client, r.FeatureFlagFetcher)
+		cacheBackend, err = nvcastorage.SelectHelmCacheBackend(ctx, r.Client, r.FeatureFlagFetcher,
+			r.ModelCacheStorageClass)
 		if err != nil {
 			return reconcile.Result{}, fmt.Errorf("select helm cache backend: %w", err)
 		}
