@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"time"
 
 	gatewayConfig "ai-api-gateway-service/gateway_config"
 	"ai-api-gateway-service/internal/reloadableconfig"
@@ -42,6 +43,7 @@ type Config struct {
 	TracingAccessToken           string `mapstructure:"TRACING_ACCESS_TOKEN"`
 	SecretsPath                  string `mapstructure:"SECRETS_PATH"`
 	MappingPath                  string `mapstructure:"MAPPING_PATH"`
+	MappingLoadTimeout           string `mapstructure:"MAPPING_LOAD_TIMEOUT"`
 	NvcfApiEndpoint              string `mapstructure:"NVCF_API_ENDPOINT"`
 	PrivateModelNameRegexPattern string `mapstructure:"PRIVATE_MODEL_NAME_REGEX_PATTERN"`
 	PodIP                        string `mapstructure:"POD_IP"`
@@ -86,6 +88,10 @@ func NewNVCFGateway(logger *logs.ZapLogger, config Config) (*NVCFGateway, error)
 	if config.MappingPath == "" {
 		return nil, fmt.Errorf("MAPPING_PATH is required")
 	}
+	mappingLoadTimeout, err := parseMappingLoadTimeout(config.MappingLoadTimeout)
+	if err != nil {
+		return nil, err
+	}
 
 	if config.TracingAccessToken == "" {
 		secrets, _ := os.ReadFile(config.SecretsPath)
@@ -108,7 +114,7 @@ func NewNVCFGateway(logger *logs.ZapLogger, config Config) (*NVCFGateway, error)
 		return nil, fmt.Errorf("failed to setup shadow metrics: %w", err)
 	}
 
-	mappings, err := gatewayConfig.SetupConfigWithConfigPath(config.MappingPath)
+	mappings, err := gatewayConfig.SetupConfigWithConfigPathAndTimeout(config.MappingPath, mappingLoadTimeout)
 	if err != nil {
 		return nil, err
 	}
@@ -164,4 +170,18 @@ func NewNVCFGateway(logger *logs.ZapLogger, config Config) (*NVCFGateway, error)
 			servers.WithAdditionalServers(http2ServerPair),
 		),
 	}, nil
+}
+
+func parseMappingLoadTimeout(raw string) (time.Duration, error) {
+	if raw == "" {
+		return 0, nil
+	}
+	timeout, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("MAPPING_LOAD_TIMEOUT must be a valid duration: %w", err)
+	}
+	if timeout <= 0 {
+		return 0, fmt.Errorf("MAPPING_LOAD_TIMEOUT must be greater than 0")
+	}
+	return timeout, nil
 }

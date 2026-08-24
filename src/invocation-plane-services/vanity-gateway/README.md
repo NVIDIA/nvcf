@@ -43,6 +43,7 @@ Configuration is passed through environment variables.
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
 | `MAPPING_PATH` | Yes | None | Path to the rendered mapping config file. |
+| `MAPPING_LOAD_TIMEOUT` | No | `15s` | Maximum time to wait at startup for `MAPPING_PATH` to appear. Increase this when a ConfigMap projection or remote-config sidecar materializes the file after the main container starts. Duration strings require a unit, such as `2m` or `90s`. |
 | `NVCF_API_ENDPOINT` | No | Service default | Upstream invocation service endpoint. In cluster deployments, this usually points to the in-cluster invocation service. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | Empty | OTLP endpoint for tracing. Empty disables OTLP export. |
 | `TRACING_ACCESS_TOKEN` | No | Empty | Access token for OTLP tracing. Also configurable in the secrets file under `$.tracingAccessToken`. |
@@ -63,8 +64,14 @@ the `v2config` mapping for both OpenAI compatible routes and vanity routes.
 Valid file updates are reloaded and the router is swapped without restarting the
 process. Invalid updates are logged and skipped.
 
-The gateway does not depend on how this file is produced. Self-managed
-deployments can provide it directly with a Kubernetes ConfigMap:
+The gateway does not depend on how this file is produced. Self-managed and
+managed deployments can provide it directly with a Kubernetes ConfigMap, or use
+a sidecar that writes remote configuration to a shared volume. Set
+`MAPPING_LOAD_TIMEOUT` when that file may not exist immediately at process
+startup.
+
+Self-managed deployments can provide the mapping directly with a Kubernetes
+ConfigMap:
 
 ```yaml
 apiVersion: v1

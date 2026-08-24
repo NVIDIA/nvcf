@@ -19,6 +19,7 @@ package gateway
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -29,4 +30,46 @@ func TestNewNVCFGatewayRequiresAPIEndpoint(t *testing.T) {
 	require.Nil(t, gateway)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "NVCF_API_ENDPOINT is required")
+}
+
+func TestParseMappingLoadTimeout(t *testing.T) {
+	tests := []struct {
+		name        string
+		raw         string
+		wantTimeout time.Duration
+		wantErr     string
+	}{
+		{
+			name:        "empty uses default",
+			raw:         "",
+			wantTimeout: 0,
+		},
+		{
+			name:        "duration",
+			raw:         "2m",
+			wantTimeout: 2 * time.Minute,
+		},
+		{
+			name:    "invalid",
+			raw:     "120",
+			wantErr: "MAPPING_LOAD_TIMEOUT must be a valid duration",
+		},
+		{
+			name:    "zero",
+			raw:     "0s",
+			wantErr: "MAPPING_LOAD_TIMEOUT must be greater than 0",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseMappingLoadTimeout(tc.raw)
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.wantTimeout, got)
+		})
+	}
 }
