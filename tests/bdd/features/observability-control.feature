@@ -5,33 +5,28 @@ Feature: Install local Helmfile observability with the control profile
   so that the control plane has its shared metrics infrastructure and monitors.
 
   Background:
-    Given environment variable "NGC_API_KEY" is set
-    And environment variable "SAMPLE_NGC_ORG" is set
-    And environment variable "SAMPLE_NGC_TEAM" is set
-    # Helmfile pulls OCI charts during installation. Keep $NGC_API_KEY unbraced
-    # so the BDD runner does not expand it into command logs.
-    And command has succeeded:
-      """
-      bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" | helm registry login nvcr.io --username "\$oauthtoken" --password-stdin'
-      """
+    Given these environment variables are set:
+      | name            |
+      | NGC_API_KEY     |
+      | SAMPLE_NGC_ORG  |
+      | SAMPLE_NGC_TEAM |
+    # Helmfile pulls OCI charts during installation. Authenticate before sync
+    # without exposing the current API key in command arguments or logs.
+    And Helm is authenticated to OCI registry "nvcr.io" using the current NGC API key
     # Set the self-managed stack environment.
-    And I copy the file "tests/bdd/fixtures/self-managed-local-bdd.yaml" to "deploy/stacks/self-managed/environments/local-bdd-observability-control.yaml"
-    And I update yaml file "deploy/stacks/self-managed/environments/local-bdd-observability-control.yaml" with keys:
+    And I prepare Helmfile environment "local-bdd-observability-control" for stack "self-managed" from fixture "tests/bdd/fixtures/self-managed-local-bdd.yaml" with values:
       | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
       | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | observability.profile           | control                              |
-      | functionAutoscaler.chartVersion | 0.2.0                                |
       | functionAutoscaler.image.tag    | 1.18.10                              |
     # Set the shared observability stack environment.
-    And I copy the file "tests/bdd/fixtures/self-managed-local-bdd.yaml" to "deploy/stacks/observability/environments/local-bdd-observability-control.yaml"
-    And I update yaml file "deploy/stacks/observability/environments/local-bdd-observability-control.yaml" with keys:
+    And I prepare Helmfile environment "local-bdd-observability-control" for stack "observability" from fixture "tests/bdd/fixtures/self-managed-local-bdd.yaml" with values:
       | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
       | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | observability.profile           | control                              |
-    And I copy the file "deploy/stacks/self-managed/secrets/secrets.yaml.template" to "deploy/stacks/self-managed/secrets/local-bdd-observability-control-secrets.yaml"
-    And I substitute "REPLACE_WITH_BASE64_DOCKER_CREDENTIAL" in file "deploy/stacks/self-managed/secrets/local-bdd-observability-control-secrets.yaml" with base64 of "$oauthtoken:${NGC_API_KEY}"
+    And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-bdd-observability-control-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
     # Conflict precheck: ncp-local-cp claims host ports that overlap with this
     # single-cluster topology. From tools/ncp-local-cluster, run
     # `make destroy CLUSTER_NAME=ncp-local-cp` before retrying.
@@ -51,35 +46,32 @@ Feature: Install local Helmfile observability with the control profile
       | monitoring       |
 
   Scenario: Control profile installs shared infrastructure and control monitors
-    When I run command "make -C deploy/stacks/self-managed install HELMFILE_ENV=local-bdd-observability-control"
-    Then the command exit code should be 0
+    When I successfully run command "make -C deploy/stacks/self-managed install HELMFILE_ENV=local-bdd-observability-control"
 
-    When I run command "helm list --all-namespaces --kube-context k3d-ncp-local -o json"
-    Then the json output should contain rows:
-      | name                     | namespace  | status   |
-      | prometheus-operator-crds | monitoring | deployed |
-      | opentelemetry-operator   | monitoring | deployed |
-      | victoria-metrics         | monitoring | deployed |
-      | otel-collector           | monitoring | deployed |
-      | default-monitors         | monitoring | deployed |
+    Then these Helm releases should be deployed using context "k3d-ncp-local":
+      | name                     | namespace  |
+      | prometheus-operator-crds | monitoring |
+      | opentelemetry-operator   | monitoring |
+      | victoria-metrics         | monitoring |
+      | otel-collector           | monitoring |
+      | default-monitors         | monitoring |
 
-    When I run command "kubectl get opentelemetrycollector nvcf-observability -n monitoring --context k3d-ncp-local -o jsonpath='{.spec.targetAllocator.enabled}'"
-    Then the command exit code should be 0
-    And the command output should contain "true"
+    Then Kubernetes resource "OpenTelemetryCollector/nvcf-observability" in namespace "monitoring" using context "k3d-ncp-local" should contain:
+      """
+      spec:
+        targetAllocator:
+          enabled: true
+      """
 
-    Then these ServiceMonitors should exist in namespace "monitoring" using context "k3d-ncp-local":
-      | name                                             |
-      | nvcf-default-monitors-state-metrics              |
-      | nvcf-default-monitors-grpc-proxy                  |
-      | nvcf-default-monitors-llm-api-gateway             |
-      | nvcf-default-monitors-invocation-service          |
+    Then these Kubernetes resources should exist in namespace "monitoring" using context "k3d-ncp-local":
+      | kind           | name                                             |
+      | ServiceMonitor | nvcf-default-monitors-state-metrics              |
+      | ServiceMonitor | nvcf-default-monitors-grpc-proxy                  |
+      | ServiceMonitor | nvcf-default-monitors-llm-api-gateway             |
+      | ServiceMonitor | nvcf-default-monitors-invocation-service          |
 
-    When I run command "kubectl get servicemonitor nvcf-default-monitors-nvca -n monitoring --context k3d-ncp-local"
-    Then the command exit code should be 1
-    And the command output should contain "NotFound"
-    When I run command "kubectl get podmonitor nvcf-default-monitors-dcgm -n monitoring --context k3d-ncp-local"
-    Then the command exit code should be 1
-    And the command output should contain "NotFound"
-    When I run command "kubectl get podmonitor nvcf-default-monitors-worker -n monitoring --context k3d-ncp-local"
-    Then the command exit code should be 1
-    And the command output should contain "NotFound"
+    Then these Kubernetes resources should not exist in namespace "monitoring" using context "k3d-ncp-local":
+      | kind           | name                          |
+      | ServiceMonitor | nvcf-default-monitors-nvca    |
+      | PodMonitor     | nvcf-default-monitors-dcgm    |
+      | PodMonitor     | nvcf-default-monitors-worker  |

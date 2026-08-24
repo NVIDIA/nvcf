@@ -30,6 +30,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/auth"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/clients"
+	golibversion "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/handlers"
 	"github.com/gorilla/mux"
@@ -52,6 +53,16 @@ import (
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/publisher/cloudevents"
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/registrations"
 )
+
+// registerUnauthenticatedRoutes registers routes that must be reachable before
+// (and regardless of) auth middleware: /health for liveness/readiness probes,
+// and /info for build-version discovery. /info is wrapped with tracing and
+// request logging via infoMiddleware; /health probes are left uninstrumented to
+// avoid span and log spam.
+func registerUnauthenticatedRoutes(router *mux.Router, server *service.Server, infoMiddleware func(http.Handler) http.Handler) {
+	router.HandleFunc("/health", server.Health)
+	router.Handle("/info", infoMiddleware(golibversion.Handler()))
+}
 
 func runService(cfg config.Config) error {
 	ctx := context.Background()
@@ -149,16 +160,21 @@ func runService(cfg config.Config) error {
 	router.Use(middleware.BodyLimitMiddleware(10 * 1024 * 1024)) // 10MB limit
 	router.Use(metricsMiddleware)
 
-	router.HandleFunc("/health", server.Health)
-
 	spanNameFormatter := func(operation string, r *http.Request) string {
 		return r.Method + " " + operation // e.g., "GET /api/resource"
 	}
-	authRouter := router.PathPrefix("").Subrouter()
-	authRouter.Use(otelmux.Middleware("deployment-stages", otelmux.WithSpanNameFormatter(spanNameFormatter)))
-
-	// Initialize request logger mw
+	tracingMW := otelmux.Middleware("deployment-stages", otelmux.WithSpanNameFormatter(spanNameFormatter))
 	loggerMW := logging.LoggerMiddleware(logger)
+
+	// /info runs through tracing and request logging (RED metrics already apply
+	// on the base router). /health is left uninstrumented to avoid probe span and
+	// log spam.
+	registerUnauthenticatedRoutes(router, server, func(h http.Handler) http.Handler {
+		return tracingMW(loggerMW(h))
+	})
+
+	authRouter := router.PathPrefix("").Subrouter()
+	authRouter.Use(tracingMW)
 	authRouter.Use(loggerMW)
 
 	// If we're not using Policy, we need to handle scope checks locally in our middleware
@@ -166,14 +182,8 @@ func runService(cfg config.Config) error {
 	var requireLocalScopeCheck = false
 
 	if cfg.Auth.Enabled {
-		// Check for a static policy bearer token before validation so that
-		// ValidateAuthConfig can accurately skip OAuth2 field checks.
-		const policyBearerTokenKey = "policy-bearer-token"
-		_, hasStaticPolicyTokenErr := credentials.ReadTokenFromFile(secretsPath, policyBearerTokenKey)
-		hasStaticPolicyToken := hasStaticPolicyTokenErr == nil
-
 		// Validate auth configuration
-		if err := config.ValidateAuthConfig(cfg.Auth, hasStaticPolicyToken); err != nil {
+		if err := config.ValidateAuthConfig(cfg.Auth, cfg.SelfManaged); err != nil {
 			logger.Error("invalid auth configuration", zap.Error(err))
 			return err
 		}
@@ -237,27 +247,18 @@ func runService(cfg config.Config) error {
 
 			var policyClient policy.Authorizer
 
-			// If a bearer token exists in the secrets file, use it to authenticate
-			// outbound calls to the policy evaluator when no OAuth2 token issuer is available.
+			// Use a static (no-auth) client in self-managed deployments.
 			// Otherwise fall back to the OAuth2 client-credentials flow.
-			if hasStaticPolicyToken {
-				logger.Warn("using static bearer token for policy evaluator",
-					zap.String("secrets_path", secretsPath))
+			if cfg.SelfManaged {
+				logger.Warn("self-managed mode: using api-keys client for policy evaluator")
 
-				tokenReader, err := credentials.NewBearerTokenReader(secretsPath, policyBearerTokenKey)
-				if err != nil {
-					logger.Error("failed to create bearer token reader", zap.Error(err))
-					return fmt.Errorf("failed to create bearer token reader: %w", err)
-				}
-
-				policyClient = policy.NewStaticBearerClient(
+				policyClient = policy.NewApiKeysClient(
 					cfg.Auth.Policy.PolicyEvaluatorAddr,
 					policyConfig,
-					tokenReader,
 					middleware.GetSharedHTTPClient(&cfg.HTTP),
 				)
 			} else {
-				logger.Warn("static bearer token not found, using OAuth2 for policy evaluator",
+				logger.Warn("using OAuth2 for policy evaluator",
 					zap.String("token_issuer", cfg.Auth.Policy.TokenIssuerAddr))
 
 				oidcConfig := &auth.ProviderConfig{

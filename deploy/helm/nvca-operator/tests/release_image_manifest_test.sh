@@ -44,9 +44,9 @@ spec:
               value: "nvcr.io/nvidia/nvcf-byoc/nvca"
           args:
             - --function-env-overrides-b64
-            - "eyJCWU9PX09URUxfQ09MTEVDVE9SX0NPTlRBSU5FUiI6Im52Y3IuaW8vbnZpZGlhL252Y2YtYnlvYy9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTU3LjExIn0="
+            - "eyJCWU9PX09URUxfQ09MTEVDVE9SX0NPTlRBSU5FUiI6Im52Y3IuaW8vbnZpZGlhL252Y2YtYnlvYy9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTU3LjAtbnYtMC4xLjEifQ=="
             - --task-env-overrides-b64
-            - "eyJCWU9PX09URUxfQ09MTEVDVE9SX0NPTlRBSU5FUiI6Im52Y3IuaW8vbnZpZGlhL252Y2YtYnlvYy9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTU3LjExIn0="
+            - "eyJCWU9PX09URUxfQ09MTEVDVE9SX0NPTlRBSU5FUiI6Im52Y3IuaW8vbnZpZGlhL252Y2YtYnlvYy9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTU3LjAtbnYtMC4xLjEifQ=="
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -91,7 +91,7 @@ expected_images=(
   "nvcr.io/nvidia/nvcf-byoc/nvcf-image-credential-helper:0.5.0"
   "nvcr.io/nvidia/nvcf-byoc/nvcf-otel-collector:0.157.9"
   "nvcr.io/nvidia/nvcf-byoc/samba:1.0.5"
-  "nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector:0.157.11"
+  "nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector:0.157.0-nv-0.1.1"
 )
 
 for image in "${expected_images[@]}"; do

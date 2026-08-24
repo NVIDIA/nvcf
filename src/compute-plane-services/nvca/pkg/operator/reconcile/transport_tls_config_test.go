@@ -25,6 +25,7 @@ import (
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 	nvcabelister "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/listers/nvcf/v1"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/cleanup"
+	nvcaoperatorerrors "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/internal/errors"
 	nvcaopotel "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/otel"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
@@ -163,6 +164,71 @@ func TestGetAgentConfigToMerge_RejectsTransportTLSSourceConflict(t *testing.T) {
 	_, _, err = bc.getAgentConfigToMerge(ctx)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "both configure workload.transportTLS")
+}
+
+func TestGetAgentConfigToMerge_RejectsBundleWithQUICInsecureAsFatal(t *testing.T) {
+	ctx := newTestContext()
+	clients := mockKubeClientsForIntegrationTests()
+	bc := &BackendK8sCache{clients: clients, operatorNamespace: NVCAOperatorNamespace}
+
+	_, err := clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(ctx, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: agentConfigMergeConfigMapName},
+		Data: map[string]string{agentConfigFile: `workload:
+  stargateQUICInsecure: true
+  transportTLS:
+    trustMode: bundle
+`},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	_, _, err = bc.getAgentConfigToMerge(ctx)
+	require.Error(t, err)
+	assert.True(t, nvcaoperatorerrors.IsFatal(err), "invalid static agent configuration must not be requeued")
+	assert.Contains(t, err.Error(), "workload.stargateQUICInsecure=true cannot be used with workload.transportTLS.trustMode=bundle")
+	assert.Contains(t, err.Error(), "set workload.stargateQUICInsecure=false or use trustMode=system")
+}
+
+func TestGetAgentConfigToMerge_RejectsSecretBundleWithQUICInsecureAsFatal(t *testing.T) {
+	ctx := newTestContext()
+	clients := mockKubeClientsForIntegrationTests()
+	bc := &BackendK8sCache{clients: clients, operatorNamespace: NVCAOperatorNamespace}
+
+	_, err := clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(ctx, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: agentConfigMergeConfigMapName},
+		Data: map[string]string{agentConfigFile: `workload:
+  stargateQUICInsecure: true
+`},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	createTransportTrustSource(t, ctx, clients)
+
+	_, _, err = bc.getAgentConfigToMerge(ctx)
+	require.Error(t, err)
+	assert.True(t, nvcaoperatorerrors.IsFatal(err), "invalid combined operator configuration must not be requeued")
+	assert.Contains(t, err.Error(), "workload.stargateQUICInsecure=true cannot be used with workload.transportTLS.trustMode=bundle")
+}
+
+func TestGetAgentConfigToMerge_AllowsSystemWithQUICInsecure(t *testing.T) {
+	ctx := newTestContext()
+	clients := mockKubeClientsForIntegrationTests()
+	bc := &BackendK8sCache{clients: clients, operatorNamespace: NVCAOperatorNamespace}
+
+	_, err := clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(ctx, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: agentConfigMergeConfigMapName},
+		Data: map[string]string{agentConfigFile: `workload:
+  stargateQUICInsecure: true
+  transportTLS:
+    trustMode: system
+`},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	cfg, found, err := bc.getAgentConfigToMerge(ctx)
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.True(t, cfg.Workload.StargateQUICInsecure)
+	require.NotNil(t, cfg.Workload.TransportTLS)
+	assert.Equal(t, nvcaconfig.TrustModeSystem, cfg.Workload.TransportTLS.TrustMode)
 }
 
 func TestSecretBackedTransportTLS_RotationUpdatesAgentConfigWithoutMutatingWorkers(t *testing.T) {

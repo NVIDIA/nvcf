@@ -39,6 +39,11 @@ cassandra:
   replicaCount: {{ dig "cassandra" "replicaCount" 3 .Values }}
   resourcesPreset: {{ dig "cassandra" "resourcesPreset" "xlarge" .Values }}
 
+  {{- with dig "cassandra" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
   {{- with include "nvcf.nodeSelector" (dict "type" "cassandra" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}
@@ -63,12 +68,18 @@ cassandra:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/alpine-k8s
   image:
-    registry: {{ .Values.global.image.registry }}
-    repository: {{ .Values.global.image.repository }}/bitnami-cassandra
+    registry: {{ dig "cassandra" "image" "registry" "" .Values | default .Values.global.image.registry }}
+    repository: {{ dig "cassandra" "image" "repository" "" .Values | default (printf "%s/cassandra" .Values.global.image.repository) }}
+    {{- if dig "cassandra" "image" "tag" "" .Values }}
+    tag: {{ dig "cassandra" "image" "tag" "" .Values }}
+    {{- end }}
   dynamicSeedDiscovery:
     image:
-      registry: {{ .Values.global.image.registry }}
-      repository: {{ .Values.global.image.repository }}/bitnami-cassandra
+      registry: {{ dig "cassandra" "dynamicSeedDiscovery" "image" "registry" "" .Values | default .Values.global.image.registry }}
+      repository: {{ dig "cassandra" "dynamicSeedDiscovery" "image" "repository" "" .Values | default (printf "%s/cassandra" .Values.global.image.repository) }}
+      {{- if dig "cassandra" "dynamicSeedDiscovery" "image" "tag" "" .Values }}
+      tag: {{ dig "cassandra" "dynamicSeedDiscovery" "image" "tag" "" .Values }}
+      {{- end }}
 
 # cert-manager subchart image overrides. The helm-nvcf-cert-manager wrapper
 # passes these through to the upstream cert-manager subchart under the
@@ -154,7 +165,7 @@ openbao:
       {{- toYaml $webhook | nindent 6 }}
     {{- end }}
     podDisruptionBudget:
-      minAvailable: 1
+      minAvailable: {{ dig "openbao" "injector" "podDisruptionBudget" "minAvailable" 1 .Values }}
   server:
     image:
       registry: {{ .Values.global.image.registry }}
@@ -172,6 +183,12 @@ openbao:
       {{- end }}
       size: {{ .Values.global.storageSize | default "10Gi" }}
 
+    ha:
+      {{- with dig "openbao" "server" "ha" "disruptionBudget" dict .Values }}
+      disruptionBudget:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
 nats:
   {{- if .Values.global.imagePullSecrets }}
   global:
@@ -186,11 +203,16 @@ nats:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/nats-server
       tag: 2.11.17-alpine3.22
+  # The config reloader is not republished under the public nvidia/nvcf
+  # catalog, so it defaults to its upstream Docker Hub source and a
+  # public-catalog install needs no override. If you mirror the image into
+  # your own registry, set registry and repository below in your environment
+  # file instead of editing this template.
   reloader:
     image:
-      registry: {{ .Values.global.image.registry }}
-      repository: {{ .Values.global.image.repository }}/nats-server-config-reloader
-      tag: "0.23.0"
+      registry: {{ dig "nats" "reloader" "image" "registry" "" .Values | default "docker.io" }}
+      repository: {{ dig "nats" "reloader" "image" "repository" "" .Values | default "natsio/nats-server-config-reloader" }}
+      tag: {{ dig "nats" "reloader" "image" "tag" "" .Values | default "0.23.0" | quote }}
   natsBox:
     container:
       image:
@@ -223,6 +245,11 @@ nats:
           storageClassName: {{ .Values.global.storageClass }}
   {{- end }}
 
+  {{- with dig "nats" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
 apikeys:
   fullnameOverride: api-keys
   {{- if .Values.global.imagePullSecrets }}
@@ -237,6 +264,10 @@ apikeys:
   {{- end }}
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
+  {{- end }}
+  {{- with dig "apikeys" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
   {{- end }}
 
 natsAuthCalloutService:
@@ -347,11 +378,16 @@ api:
         llm-request-router:
           worker-address: {{ $llmRequestRouterWorkerAddress | quote }}
   {{- end }}
+  # alpine-k8s is not republished under the public nvidia/nvcf catalog, so it
+  # defaults to its upstream Docker Hub source and a public-catalog install
+  # needs no override. If you mirror the image into your own registry, set
+  # registry and repository below in your environment file instead of editing
+  # this template.
   accountBootstrap:
     image:
-      registry: {{ .Values.global.image.registry }}
-      repository: {{ .Values.global.image.repository }}/alpine-k8s
-      tag: 1.36.1
+      registry: {{ dig "api" "accountBootstrap" "image" "registry" "" .Values | default "docker.io" }}
+      repository: {{ dig "api" "accountBootstrap" "image" "repository" "" .Values | default "alpine/k8s" }}
+      tag: {{ dig "api" "accountBootstrap" "image" "tag" "" .Values | default "1.36.1" | quote }}
       pullPolicy: IfNotPresent
 
     registryCredentials: []
@@ -399,20 +435,6 @@ api:
     NVCF_ESS_WORKER_BASE_URL: {{ . | quote }}
     NVCF_ESS_BASE_URL: {{ . | quote }}
     {{- end }}
-    NVCF_REGISTRIES_NGC_CONTAINER_REGISTRY_URL: "https://nvcr.io"
-    NVCF_REGISTRIES_NGC_BASE_URL: "https://api.ngc.nvidia.com"
-    NVCF_REGISTRIES_NGC_OAUTH2_BASE_URL: "https://authn.nvidia.com"
-    NVCF_REGISTRIES_NGC_OAUTH2_GROUP_SCOPE: "ngc"
-    NVCF_REGISTRIES_RECOGNIZED_CONTAINER_NGC_HOSTNAME: "nvcr.io"
-    NVCF_REGISTRIES_RECOGNIZED_HELM_NGC_HOSTNAME: "helm.ngc.nvidia.com"
-    NVCF_REGISTRIES_RECOGNIZED_HELM_NGC_OAUTH2_BASE_URL: "https://authn.nvidia.com"
-    NVCF_REGISTRIES_RECOGNIZED_HELM_NGC_OAUTH2_GROUP_SCOPE: "ngc"
-    NVCF_REGISTRIES_RECOGNIZED_MODEL_NGC_HOSTNAME: "api.ngc.nvidia.com"
-    NVCF_REGISTRIES_RECOGNIZED_MODEL_NGC_OAUTH2_BASE_URL: "https://authn.nvidia.com"
-    NVCF_REGISTRIES_RECOGNIZED_MODEL_NGC_OAUTH2_GROUP_SCOPE: "ngc"
-    NVCF_REGISTRIES_RECOGNIZED_RESOURCE_NGC_HOSTNAME: "api.ngc.nvidia.com"
-    NVCF_REGISTRIES_RECOGNIZED_RESOURCE_NGC_OAUTH2_BASE_URL: "https://authn.nvidia.com"
-    NVCF_REGISTRIES_RECOGNIZED_RESOURCE_NGC_OAUTH2_GROUP_SCOPE: "ngc"
     {{- with dig "api" "icmsBaseUrl" nil .Values }}
     NVCF_ICMS_BASE_URL: {{ . | quote }}
     {{- end }}
@@ -459,7 +481,16 @@ invocation:
     {{- with $invocationWorkerBaseURL }}
     WORKER_STREAM_PROPERTIES__SELF_ADDRESS: {{ . | quote }}
     {{- end }}
-  
+  {{- with dig "invocation" "tracing" "baggageAttributeAllowlist" nil .Values }}
+  tracing:
+    baggageAttributeAllowlist:
+    {{- toYaml . | nindent 6 }}
+  {{- end }}
+  {{- with dig "invocation" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+
 nvctApi:
   fullnameOverride: nvct-api
   {{- if .Values.global.imagePullSecrets }}
@@ -534,6 +565,10 @@ grpcproxy:
     RATE_LIMIT_ENABLED: "true"
     RATE_LIMIT_ADDR: "http://ratelimiter.nvcf.svc.cluster.local:7777"
     {{- end }}
+  {{- with dig "grpcproxy" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 
 rateLimiter:
   {{- if .Values.global.imagePullSecrets }}
@@ -552,6 +587,10 @@ rateLimiter:
   env:
     OTEL_EXPORTER_OTLP_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
   {{- end }}
+  {{- with dig "rateLimiter" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 
 ess:
   fullnameOverride: ess-api
@@ -561,7 +600,7 @@ ess:
   {{- end }}
   image:
     registry: {{ .Values.global.image.registry }}
-    repository: {{ .Values.global.image.repository }}/ess-api
+    repository: {{ .Values.global.image.repository }}/nvcf-ess
   {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}
@@ -575,6 +614,10 @@ ess:
     {{- if .Values.global.observability.tracing.enabled }}
     MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
     {{- end }}
+  {{- with dig "ess" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 
 notary:
   fullnameOverride: notary-service
@@ -660,6 +703,10 @@ adminIssuerProxy:
       name: {{ required "ingress.gatewayApi.gateways.shared.name is required" .Values.ingress.gatewayApi.gateways.shared.name }}
     hostname: "api-keys.{{ .Values.global.domain }}"
     path: "/v1/admin/keys"
+  {{- with dig "adminIssuerProxy" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 
 stateMetrics:
   enabled: false
@@ -728,6 +775,10 @@ functionautoscaler:
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
   {{- end }}
+  {{- with dig "functionautoscaler" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 {{- end }}
 
 reval:
@@ -747,6 +798,10 @@ reval:
   {{- end }}
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
+  {{- end }}
+  {{- with dig "reval" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
   {{- end }}
 
 llmApiGateway:
@@ -786,6 +841,10 @@ llmApiGateway:
       {{- if .Values.global.observability.tracing.enabled }}
       endpoint: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
       {{- end }}
+  {{- with dig "llmApiGateway" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 
 llmRequestRouter:
   enabled: {{ dig "addons" "llm" "enabled" false .Values }}
@@ -826,25 +885,108 @@ llmRequestRouter:
        so an operator staging pki.enabled=true ahead of llm.enabled=true
        should not be punished with confusing required errors during render. */ -}}
   {{- if and (dig "addons" "llm" "enabled" false .Values) (dig "addons" "llm" "pki" "enabled" false .Values) }}
+  {{- /* Identity ownership. certManager keeps cert-manager as the owner of
+       issuance and renewal. existingSecret points the router at a Secret the
+       operator already created, so the stack renders no Certificate and pulls
+       in no issuer dependency. Validate the same way as issuerKind: dig only
+       falls back for a missing path, so explicit null and wrongly typed values
+       must be rejected rather than coerced into the default. */ -}}
+  {{- $pkiMode := dig "addons" "llm" "pki" "mode" "certManager" .Values }}
+  {{- if not (kindIs "string" $pkiMode) }}
+  {{- fail "addons.llm.pki.mode must be the string \"certManager\" or \"existingSecret\"" }}
+  {{- end }}
+  {{- if not (has $pkiMode (list "certManager" "existingSecret")) }}
+  {{- fail (printf "addons.llm.pki.mode must be exactly \"certManager\" or \"existingSecret\", got %q" $pkiMode) }}
+  {{- end }}
+  {{- if eq $pkiMode "existingSecret" }}
+  {{- /* The operator owns issuance in this mode, so every value that only
+       steers stack-managed issuance is a mixed-ownership conflict. Fail loudly
+       instead of silently ignoring it: a leftover dnsNames list reads as "the
+       stack still issues my certificate" and would go unnoticed until the
+       certificate expired. */ -}}
+  {{- $existingSecretPkiValues := dig "addons" "llm" "pki" dict .Values }}
+  {{- if kindIs "map" $existingSecretPkiValues }}
+  {{- $existingSecretClusterIssuer := dig "clusterIssuer" dict $existingSecretPkiValues }}
+  {{- if and (kindIs "map" $existingSecretClusterIssuer) (hasKey $existingSecretClusterIssuer "enabled") }}
+  {{- if index $existingSecretClusterIssuer "enabled" }}
+  {{- fail "addons.llm.pki.clusterIssuer.enabled must be false or unset when addons.llm.pki.mode is existingSecret; cert-manager and the operator cannot both own the request-router certificate" }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- $existingSecretDnsNames := dig "addons" "llm" "pki" "dnsNames" (list) .Values }}
+  {{- if not (kindIs "slice" $existingSecretDnsNames) }}
+  {{- fail "addons.llm.pki.dnsNames must be a list when addons.llm.pki.mode is existingSecret" }}
+  {{- end }}
+  {{- if gt (len $existingSecretDnsNames) 0 }}
+  {{- fail "addons.llm.pki.dnsNames applies only to a stack-issued Certificate and must be empty when addons.llm.pki.mode is existingSecret" }}
+  {{- end }}
+  {{- if dig "addons" "llm" "pki" "allowedDomains" "" .Values }}
+  {{- fail "addons.llm.pki.allowedDomains constrains the managed OpenBao signing role only and must be empty when addons.llm.pki.mode is existingSecret" }}
+  {{- end }}
+  {{- /* No default: the Secret is the operator's, so guessing a name would
+       mount the wrong identity or fail at pod start instead of at render. */ -}}
+  {{- $existingSecretName := required "addons.llm.pki.secretName is required when addons.llm.pki.mode is existingSecret" (dig "addons" "llm" "pki" "secretName" "" .Values) }}
+  certificate:
+    enabled: false
+  tls:
+    mode: existingSecret
+    secretName: {{ $existingSecretName | quote }}
+    mountPath: {{ dig "addons" "llm" "pki" "mountPath" "/etc/stargate/tls" .Values | quote }}
+    certPath: {{ dig "addons" "llm" "pki" "certPath" "/etc/stargate/tls/tls.crt" .Values | quote }}
+    keyPath: {{ dig "addons" "llm" "pki" "keyPath" "/etc/stargate/tls/tls.key" .Values | quote }}
+    quicInsecure: false
+  {{- else }}
   {{- $secretName := dig "addons" "llm" "pki" "secretName" "stargate-quic-tls" .Values }}
-  {{- $allowedDomains := required "addons.llm.pki.allowedDomains is required when addons.llm.pki.enabled is true" (dig "addons" "llm" "pki" "allowedDomains" "" .Values) }}
+  {{- /* dig only falls back for a missing path, so explicit null, empty, and
+       wrongly typed values reach these checks. Reject them instead of coercing
+       them: a malformed management flag that silently resolves to false skips
+       the nvcf-pki release in 01-dependencies.yaml.gotmpl while the block
+       below still renders a Certificate referencing the default issuer. Keep
+       this contract identical to the dependency stage. */ -}}
+  {{- $issuerKind := dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values }}
+  {{- $issuerName := dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values }}
+  {{- if not (kindIs "string" $issuerKind) }}
+  {{- fail "addons.llm.pki.issuerKind must be the string \"ClusterIssuer\" or \"Issuer\"" }}
+  {{- end }}
+  {{- if not (has $issuerKind (list "ClusterIssuer" "Issuer")) }}
+  {{- fail (printf "addons.llm.pki.issuerKind must be exactly \"ClusterIssuer\" or \"Issuer\", got %q" $issuerKind) }}
+  {{- end }}
+  {{- if not (kindIs "string" $issuerName) }}
+  {{- fail "addons.llm.pki.issuerName must be a string" }}
+  {{- end }}
+  {{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $issuerName) }}
+  {{- fail (printf "addons.llm.pki.issuerName must be a lowercase RFC 1123 DNS subdomain, got %q" $issuerName) }}
+  {{- end }}
+  {{- if gt (len $issuerName) 253 }}
+  {{- fail "addons.llm.pki.issuerName must be at most 253 characters" }}
+  {{- end }}
+  {{- $managedIssuer := and (eq $issuerKind "ClusterIssuer") (eq $issuerName "nvcf-openbao-pki") }}
+  {{- $pkiValues := dig "addons" "llm" "pki" dict .Values }}
+  {{- if kindIs "map" $pkiValues }}
+  {{- $clusterIssuerValues := dig "clusterIssuer" dict $pkiValues }}
+  {{- if and (kindIs "map" $clusterIssuerValues) (hasKey $clusterIssuerValues "enabled") }}
+  {{- /* index, not get: helmfile overrides sprig's get with a path-based
+       signature that rejects a map as its first argument. */ -}}
+  {{- $manageSetting := index $clusterIssuerValues "enabled" }}
+  {{- if not (kindIs "bool" $manageSetting) }}
+  {{- fail (printf "addons.llm.pki.clusterIssuer.enabled must be a YAML boolean, true or false. Quoted strings, null, and empty values are rejected. Got %q" (toString $manageSetting)) }}
+  {{- end }}
+  {{- $managedIssuer = $manageSetting }}
+  {{- end }}
+  {{- end }}
+  {{- if and $managedIssuer (ne $issuerKind "ClusterIssuer") }}
+  {{- fail "addons.llm.pki.clusterIssuer management supports only issuerKind=ClusterIssuer" }}
+  {{- end }}
   {{- $dnsNames := dig "addons" "llm" "pki" "dnsNames" (list) .Values }}
   {{- if eq (len $dnsNames) 0 }}
   {{- fail "addons.llm.pki.dnsNames must contain at least one DNS name when addons.llm.pki.enabled is true" }}
-  {{- end }}
-  {{- /* Provisioning hook reuses the same image the k8s-openbao chart drives;
-       fall back to openbao.migrations.image.tag so operators set the version
-       in one place. */ -}}
-  {{- $pkiImageTag := dig "addons" "llm" "pki" "image" "tag" (dig "openbao" "migrations" "image" "tag" "" .Values) .Values }}
-  {{- if not $pkiImageTag }}
-  {{- fail "addons.llm.pki.image.tag (or openbao.migrations.image.tag) is required when addons.llm.pki.enabled is true" }}
   {{- end }}
   certificate:
     enabled: true
     secretName: {{ $secretName | quote }}
     issuerRef:
-      kind: {{ dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values | quote }}
-      name: {{ dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values | quote }}
+      kind: {{ $issuerKind | quote }}
+      name: {{ $issuerName | quote }}
     dnsNames:
       {{- toYaml $dnsNames | nindent 6 }}
   tls:
@@ -853,6 +995,15 @@ llmRequestRouter:
     certPath: {{ dig "addons" "llm" "pki" "certPath" "/etc/stargate/tls/tls.crt" .Values | quote }}
     keyPath: {{ dig "addons" "llm" "pki" "keyPath" "/etc/stargate/tls/tls.key" .Values | quote }}
     quicInsecure: false
+  {{- if $managedIssuer }}
+  {{- $allowedDomains := required "addons.llm.pki.allowedDomains is required when addons.llm.pki.clusterIssuer management is enabled" (dig "addons" "llm" "pki" "allowedDomains" "" .Values) }}
+  {{- /* Provisioning hook reuses the same image the k8s-openbao chart drives;
+       fall back to openbao.migrations.image.tag so operators set the version
+       in one place. */ -}}
+  {{- $pkiImageTag := dig "addons" "llm" "pki" "image" "tag" (dig "openbao" "migrations" "image" "tag" "" .Values) .Values }}
+  {{- if not $pkiImageTag }}
+  {{- fail "addons.llm.pki.image.tag (or openbao.migrations.image.tag) is required when addons.llm.pki.clusterIssuer management is enabled" }}
+  {{- end }}
   pki:
     enabled: true
     namespace: {{ dig "addons" "llm" "pki" "namespace" "vault-system" .Values | quote }}
@@ -866,6 +1017,12 @@ llmRequestRouter:
     imagePullSecrets:
       {{- toYaml .Values.global.imagePullSecrets | nindent 6 }}
     {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- end }}
+  {{- with dig "llmRequestRouter" "podDisruptionBudget" dict .Values }}
+  podDisruptionBudget:
+    {{- toYaml . | nindent 4 }}
   {{- end }}
 
 vanityGateway:
@@ -950,7 +1107,7 @@ vanityGateway:
 {{- if dig "addons" "nvcfUi" "enabled" false .Values }}
 {{/* Shared backend coordinates for the services the nvcf-ui proxies to and
      the control-plane health monitor probes. Read the same way gateway-routes
-     is fed — from ingress.gatewayApi.routes.<x>.backend — so the config URLs and
+     is fed from ingress.gatewayApi.routes.<x>.backend so the config URLs and
      component endpoints track any operator override; the dict defaults fill the
      usual case where a route pins no explicit backend. merge lets a partial
      override (e.g. namespace only) keep the remaining default fields. */}}

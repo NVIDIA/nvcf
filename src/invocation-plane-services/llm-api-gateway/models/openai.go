@@ -211,7 +211,7 @@ func (t ContentPartText) String() string {
 
 type ContentPartImageURL struct {
 	URL    string `json:"url"`
-	Detail string `json:"detail"`
+	Detail string `json:"detail,omitempty"`
 	Image  []byte `json:"-"`
 }
 
@@ -300,7 +300,7 @@ type ChatCompletionFunctionChoiceField struct {
 type ChatCompletionRequest struct {
 	Messages            *[]ChatMessage                    `json:"messages"`
 	Model               string                            `json:"model"`
-	Debug               bool                              `json:"debug"`
+	Debug               bool                              `json:"-"`
 	ServiceTier         servicetier.Tier                  `json:"service_tier"`
 	FrequencyPenalty    *float32                          `json:"frequency_penalty"`
 	IncludeReasoning    *bool                             `json:"include_reasoning"`
@@ -319,8 +319,8 @@ type ChatCompletionRequest struct {
 	TopP                *float32                          `json:"top_p"`
 	Tools               *[]ChatTool                       `json:"tools"`
 	Functions           *[]ChatFunctionSpec               `json:"functions"`
-	ToolChoice          ChatCompletionToolChoiceField     `json:"tool_choice"`
-	FunctionChoice      ChatCompletionFunctionChoiceField `json:"function_call"`
+	ToolChoice          ChatCompletionToolChoiceField     `json:"tool_choice,omitzero"`
+	FunctionChoice      ChatCompletionFunctionChoiceField `json:"function_call,omitzero"`
 	ParallelToolCalls   *bool                             `json:"parallel_tool_calls"`
 	PromptCacheKey      *string                           `json:"prompt_cache_key"`
 	User                *string                           `json:"user"`
@@ -476,6 +476,51 @@ func (sf *ChatCompletionStopField) UnmarshalJSON(data []byte) error {
 	}
 }
 
+type outboundContentPart struct {
+	Type     ContentPartType      `json:"type"`
+	Text     string               `json:"text,omitempty"`
+	ImageURL *ContentPartImageURL `json:"image_url,omitempty"`
+	Document *ContentPartDocument `json:"document,omitempty"`
+}
+
+// Decoding always yields a part slice, so rebuild the union on the way out.
+func (content ChatMessageContent) MarshalJSON() ([]byte, error) {
+	if content == nil {
+		return []byte("null"), nil
+	}
+	if len(content) == 1 {
+		if text, ok := content[0].(ContentPartText); ok {
+			return json.Marshal(string(text))
+		}
+	}
+
+	parts := make([]outboundContentPart, 0, len(content))
+	for _, part := range content {
+		switch typed := part.(type) {
+		case ContentPartText:
+			parts = append(parts, outboundContentPart{Type: ContentPartTypeText, Text: string(typed)})
+		case *ContentPartImageURL:
+			if typed == nil {
+				return nil, errors.New("marshal content: nil image_url content part")
+			}
+			parts = append(parts, outboundContentPart{Type: ContentPartTypeImageURL, ImageURL: typed})
+		case ContentPartImageURL:
+			parts = append(parts, outboundContentPart{Type: ContentPartTypeImageURL, ImageURL: &typed})
+		case *ContentPartDocument:
+			if typed == nil {
+				return nil, errors.New("marshal content: nil document content part")
+			}
+			parts = append(parts, outboundContentPart{Type: ContentPartTypeDocument, Document: typed})
+		case ContentPartDocument:
+			parts = append(parts, outboundContentPart{Type: ContentPartTypeDocument, Document: &typed})
+		default:
+			return nil, fmt.Errorf("marshal content: unsupported content part %T", part)
+		}
+	}
+
+	return json.Marshal(parts)
+}
+
 func (content *ChatMessageContent) UnmarshalJSON(data []byte) error {
 	if len(data) == 0 {
 		return nil
@@ -569,6 +614,22 @@ func (content *ChatMessageContent) UnmarshalJSON(data []byte) error {
 	}
 }
 
+// Without this encoding/json writes the Go field names onto the wire.
+func (tcf ChatCompletionToolChoiceField) MarshalJSON() ([]byte, error) {
+	switch {
+	case tcf.String != nil:
+		return json.Marshal(tcf.String)
+	case tcf.ToolChoice != nil:
+		return json.Marshal(tcf.ToolChoice)
+	default:
+		return []byte("null"), nil
+	}
+}
+
+func (tcf ChatCompletionToolChoiceField) IsZero() bool {
+	return tcf.String == nil && tcf.ToolChoice == nil
+}
+
 func (tcf *ChatCompletionToolChoiceField) UnmarshalJSON(data []byte) error {
 	var selection string
 	if err := json.Unmarshal(data, &selection); err == nil {
@@ -586,6 +647,21 @@ func (tcf *ChatCompletionToolChoiceField) UnmarshalJSON(data []byte) error {
 		Field: "tool_choice",
 		Msg:   "Must be either a string or a tool_choice object",
 	}
+}
+
+func (fcf ChatCompletionFunctionChoiceField) MarshalJSON() ([]byte, error) {
+	switch {
+	case fcf.String != nil:
+		return json.Marshal(fcf.String)
+	case fcf.FunctionCall != nil:
+		return json.Marshal(fcf.FunctionCall)
+	default:
+		return []byte("null"), nil
+	}
+}
+
+func (fcf ChatCompletionFunctionChoiceField) IsZero() bool {
+	return fcf.String == nil && fcf.FunctionCall == nil
 }
 
 func (fcf *ChatCompletionFunctionChoiceField) UnmarshalJSON(data []byte) error {

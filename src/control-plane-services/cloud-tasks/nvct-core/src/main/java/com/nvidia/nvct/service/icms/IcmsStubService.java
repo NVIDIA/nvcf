@@ -50,7 +50,7 @@ public interface IcmsStubService {
         UUID requestId;
     }
 
-    @PostExchange(value = "/v1/si?Action=RequestInstances",
+    @PostExchange(value = "/v1/si?Action=RequestInstancesForTask",
             accept = "application/json",
             contentType = "application/x-www-form-urlencoded")
     CreateInstancesResponse createInstance(

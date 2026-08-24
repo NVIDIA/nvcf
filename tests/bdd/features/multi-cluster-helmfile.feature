@@ -27,27 +27,28 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
   Rule: Helmfile installs the control plane on the control-plane cluster
 
     Background:
-      Given environment variable "NGC_API_KEY" is set
-      And environment variable "SAMPLE_NGC_ORG" is set
-      And environment variable "SAMPLE_NGC_TEAM" is set
+      Given these environment variables are set:
+        | name            |
+        | NGC_API_KEY     |
+        | SAMPLE_NGC_ORG  |
+        | SAMPLE_NGC_TEAM |
       # The multi-cluster fixture starts from local service-DNS
       # endpoint values, then the Background overlays
       # operator-specific registry values before the first Helmfile
       # install. Later scenarios reuse that install instead of
       # reinstalling with different secrets or URLs.
-      And I copy the file "tests/bdd/fixtures/self-managed-local-bdd-multi.yaml" to "deploy/stacks/self-managed/environments/local-bdd.yaml"
-      And I update yaml file "deploy/stacks/self-managed/environments/local-bdd.yaml" with keys:
+      And I prepare Helmfile environment "local-bdd" for stack "self-managed" from fixture "tests/bdd/fixtures/self-managed-local-bdd-multi.yaml" with values:
         | global.imagePullSecrets[0].name               | nvcr-pull-secret                                                    |
         | global.helm.sources.repository                | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                |
         | global.image.repository                       | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                |
         | api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE | nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/stargate-client:0.2.0  |
-      And I copy the file "tests/bdd/fixtures/nvcf-compute-plane-local-bdd-multi.yaml" to "deploy/stacks/nvcf-compute-plane/environments/local-bdd.yaml"
-      And I update yaml file "deploy/stacks/nvcf-compute-plane/environments/local-bdd.yaml" with keys:
-        | global.imagePullSecrets[0].name               | nvcr-pull-secret                                                    |
-        | global.helm.sources.repository                | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                |
-        | global.image.repository                       | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                |
-      And I copy the file "deploy/stacks/self-managed/secrets/secrets.yaml.template" to "deploy/stacks/self-managed/secrets/local-bdd-secrets.yaml"
-      And I substitute "REPLACE_WITH_BASE64_DOCKER_CREDENTIAL" in file "deploy/stacks/self-managed/secrets/local-bdd-secrets.yaml" with base64 of "$oauthtoken:${NGC_API_KEY}"
+        | observability.profile                          | disabled                                                            |
+      And I prepare Helmfile environment "local-bdd" for stack "nvcf-compute-plane" from fixture "tests/bdd/fixtures/nvcf-compute-plane-local-bdd-multi.yaml" with values:
+        | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
+        | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+        | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+        | observability.profile           | disabled                             |
+      And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-bdd-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
       # Conflict precheck: single-cluster ncp-local's k3d serverlb
       # claims 0.0.0.0:8080/8443/10081, and ncp-local-cp also
       # needs NATS on 4222 plus the worker callback port 10086.
@@ -82,27 +83,26 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
       When I run command "make -C deploy/stacks/self-managed install HELMFILE_ENV=local-bdd"
       Then the command exit code should be 0
 
-      When I run command "helm list --all-namespaces --kube-context k3d-ncp-local-cp -o json"
-      Then the json output should contain rows:
-        | name                      | namespace            | status   |
-        | nats                      | nats-system          | deployed |
-        | cert-manager              | cert-manager         | deployed |
-        | openbao-server            | vault-system         | deployed |
-        | cassandra                 | cassandra-system     | deployed |
-        | api-keys                  | api-keys             | deployed |
-        | sis                       | sis                  | deployed |
-        | api                       | nvcf                 | deployed |
-        | nvct-api                  | nvcf                 | deployed |
-        | invocation-service        | nvcf                 | deployed |
-        | grpc-proxy                | nvcf                 | deployed |
-        | ess-api                   | ess                  | deployed |
-        | notary-service            | nvcf                 | deployed |
-        | admin-issuer-proxy        | api-keys             | deployed |
-        | reval                     | nvcf                 | deployed |
-        | nats-auth-callout-service | nats-system          | deployed |
-        | ingress                   | envoy-gateway-system | deployed |
-        | llm-request-router        | nvcf                 | deployed |
-        | llm-api-gateway           | nvcf                 | deployed |
+      Then these Helm releases should be deployed using context "k3d-ncp-local-cp":
+        | name                      | namespace            |
+        | nats                      | nats-system          |
+        | cert-manager              | cert-manager         |
+        | openbao-server            | vault-system         |
+        | cassandra                 | cassandra-system     |
+        | api-keys                  | api-keys             |
+        | sis                       | sis                  |
+        | api                       | nvcf                 |
+        | nvct-api                  | nvcf                 |
+        | invocation-service        | nvcf                 |
+        | grpc-proxy                | nvcf                 |
+        | ess-api                   | ess                  |
+        | notary-service            | nvcf                 |
+        | admin-issuer-proxy        | api-keys             |
+        | reval                     | nvcf                 |
+        | nats-auth-callout-service | nats-system          |
+        | ingress                   | envoy-gateway-system |
+        | llm-request-router        | nvcf                 |
+        | llm-api-gateway           | nvcf                 |
 
       # These routes are installed by ncp-local before the Helmfile
       # stack, then become fully resolved once the control-plane
@@ -160,8 +160,10 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
   Rule: Helmfile registers and installs NVCA on the compute cluster
 
     Background:
-      Given environment variable "NVCF_CLI" is set
-      And environment variable "REPO_ROOT" is set
+      Given these environment variables are set:
+        | name      |
+        | NVCF_CLI  |
+        | REPO_ROOT |
       # This rule depends on the earlier control-plane scenario in the
       # same feature run. That scenario authors local-bdd.yaml with
       # the compute-reachable endpoints, creates the pull secrets, and
@@ -197,8 +199,10 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
         selfManaged:
           identitySource: psat
         """
-      And yaml file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-compute-1-register-values.yaml" key "clusterID" should not be empty
-      And yaml file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-compute-1-register-values.yaml" key "clusterGroupID" should not be empty
+      And yaml file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-compute-1-register-values.yaml" should have non-empty keys:
+        | key            |
+        | clusterID      |
+        | clusterGroupID |
 
       And the "nvcr-pull-secret" image pull secret exists in namespaces:
         | nvca-operator |
@@ -209,13 +213,11 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
         """
       Then the command exit code should be 0
 
-      When I run command "helm list -n nvca-operator --kube-context k3d-ncp-local-compute-1 -o json"
-      Then the json output should contain rows:
-        | name          | namespace     | status   |
-        | nvca-operator | nvca-operator | deployed |
+      Then these Helm releases should be deployed using context "k3d-ncp-local-compute-1":
+        | name          | namespace     |
+        | nvca-operator | nvca-operator |
 
-      When I run command "kubectl rollout status deployment/nvca-operator -n nvca-operator --context k3d-ncp-local-compute-1 --timeout=10m"
-      Then the command exit code should be 0
+      Then deployment "nvca-operator" in namespace "nvca-operator" using context "k3d-ncp-local-compute-1" should complete rollout within "10m"
 
       # The default NVCFBackend CR is created on the compute cluster
       # by the nvca-operator helm chart at install time (helm reports
@@ -223,14 +225,15 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
       # its own .status.agentStatus locally. The NVCFBackend CRD is
       # therefore only registered on k3d-ncp-local-compute-1, not on
       # k3d-ncp-local-cp. Wait on the compute cluster.
-      When I run command "kubectl wait nvcfbackend ncp-local-compute-1 -n nvca-operator --context k3d-ncp-local-compute-1 --for=jsonpath={.status.agentStatus}=healthy --timeout=10m"
-      Then the command exit code should be 0
+      Then NVCFBackend "ncp-local-compute-1" in namespace "nvca-operator" using context "k3d-ncp-local-compute-1" should report agent status "healthy" within "10m"
 
   Rule: Helmfile-installed multi-cluster NVCF can run workloads
 
     # This scenario intentionally has no Background. It depends on the
     # earlier control-plane install and NVCA registration scenarios in
     # this feature run, and is not a standalone tag target.
+    # Failing until GitHub issue #1098 is resolved and the fix from GitHub
+    # issue #1032 is consumed by the self-managed stack.
     @nvct-task-api
     Scenario: Operator launches an NVCT task and waits for it to complete
       When I run command:

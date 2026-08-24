@@ -1,4 +1,4 @@
-load("//rules/java:defs.bzl", "nvct_workspace_runfiles")
+load("//rules/java:defs.bzl", "nvcf_workspace_runfiles")
 load("//rules/java:notice.bzl", "nvcf_notice", "nvcf_notice_delta")
 
 package(default_visibility = ["//visibility:public"])
@@ -25,7 +25,7 @@ filegroup(
 # to the runfiles workspace root, the JVM working directory under `bazel test`.
 # Strip the package prefix so these files land root-relative in runfiles; in the
 # standalone repo this package was the repo root, so no strip was needed.
-nvct_workspace_runfiles(
+nvcf_workspace_runfiles(
     name = "integration_local_env",
     srcs = [":integration_local_env_files"],
     strip_prefix = "src/control-plane-services/cloud-tasks/",

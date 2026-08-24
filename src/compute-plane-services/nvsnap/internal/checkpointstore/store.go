@@ -277,7 +277,29 @@ type VolumeMeta struct {
 	// Set by the caller (admission webhook) to the consuming pod's
 	// namespace — K8s only lets a pod mount PVCs in its own ns.
 	Namespace string `json:"namespace,omitempty"`
+
+	// Subpath is where this volume's bytes actually live inside the
+	// captured tree, relative to tree/. It is the same value the writer
+	// passed as CaptureSource.DstSubpath, so the artifact describes its
+	// own layout instead of every consumer re-deriving it from Type.
+	//
+	// A pointer because "" is a real location -- the tree root, which is
+	// what cachedir mode writes -- and must be distinguishable from
+	// "field absent" on a manifest written before this existed. Absent
+	// means fall back to inferring from Type; see VolumeSubpath.
+	//
+	// Inference is what broke cachedir: the writer put the bytes at the
+	// tree root while Type said "emptyDir", so consumers looked under
+	// volumes/<name>/ and the restore pod waited on a mount that could
+	// never appear.
+	Subpath *string `json:"subpath,omitempty"`
 }
+
+// SubpathAt builds a VolumeMeta.Subpath. Prefer it over taking the address
+// of a local: the empty string is a real location (the tree root), so the
+// pointer has to be non-nil even when the subpath is empty, and &"" is not
+// valid Go.
+func SubpathAt(subpath string) *string { return &subpath }
 
 // ExtractPath is a single subpath within a captured rootfs upperdir
 // that the webhook will shadow-mount on restored pods. The same Path
