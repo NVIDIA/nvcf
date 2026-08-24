@@ -235,10 +235,8 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
                 instanceLifecycleService,
                 byocValidationService,
                 icmsConfigurationProperties,
-                instanceValidationService,
                 requestDestinationProvider,
                 clusterTargetingHelper,
-                queueManager,
                 telemetryEventClient,
                 reservationProcessor,
                 computePlatformService);

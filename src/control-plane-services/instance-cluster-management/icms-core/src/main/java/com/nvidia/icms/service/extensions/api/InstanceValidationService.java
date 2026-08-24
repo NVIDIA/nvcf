@@ -16,12 +16,27 @@
  */
 package com.nvidia.icms.service.extensions.api;
 
+import static com.nvidia.icms.util.InstanceServiceUtil.getStringValue;
+
+import com.nvidia.icms.errors.IcmsBadRequestException;
+import com.nvidia.icms.inbound.rest.model.SpotInstanceRequestAction;
 import com.nvidia.icms.inbound.rest.model.swagger.schema.SpotInstanceRequestSchema;
+import jakarta.validation.constraints.NotNull;
+import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.StringUtils;
 
 /**
  * Validates non-BYOC-specific and NVCT task request fields before instance creation.
  */
-public interface InstanceValidationService {
+@Slf4j
+public class InstanceValidationService {
+
+    public static final String NVCT_VALIDATION_ERROR =
+            "%s must be provided when TaskDetails.TaskId is provided";
+
+    public static final String NVCT_DURATION_VALIDATION_ERROR =
+            "LaunchSpecification.TerminationGracePeriodDuration "
+                    + "must not be more than LaunchSpecification.MaxRuntimeDuration";
 
     /**
      * Validates required fields for NVCT task requests (those with a non-blank taskId).
@@ -29,25 +44,47 @@ public interface InstanceValidationService {
      *
      * @param instanceRequest the incoming instance request
      * @throws com.nvidia.icms.errors.IcmsBadRequestException if a required field is absent
-     */
-    void validationForNvct(SpotInstanceRequestSchema instanceRequest);
-
-    /**
-     * Validates that the {@code maxRuntimeDuration} of a task request does not exceed the
-     * backend-specific limit defined in configuration.
-     * No-op for non-task (function) requests.
      *
-     * @param instanceRequest the incoming instance request
-     * @throws com.nvidia.icms.errors.IcmsBadRequestException if the duration exceeds the limit
+     * @Depricated should be removed from interface. We don't want to separate this implementation
+     * for Managed and Selfhosted.
      */
-    void validateMaxRuntimeDuration(SpotInstanceRequestSchema instanceRequest);
+    public static void validationForNvct(@NotNull SpotInstanceRequestSchema spotRequest) {
+        if (StringUtils.isBlank(getStringValue(spotRequest.getTaskId()))) {
+            return;
+        }
 
-    /**
-     * Returns {@code true} if the request has a {@code maxRuntimeDuration} that is present and
-     * strictly less than the backend-specific limit defined in configuration.
-     *
-     * @param instanceRequest the instance request to check
-     * @return {@code true} if the duration is present and within the configured backend limit
-     */
-    boolean isMaxRuntimeDurationValid(SpotInstanceRequestSchema instanceRequest);
+        if (spotRequest.getMaxQueuedDuration() == null ||
+                StringUtils.isBlank(spotRequest.getMaxQueuedDuration().toString())) {
+            throwValidationError("LaunchSpecification.MaxQueuedDuration");
+        }
+        if (spotRequest.getTerminationGracePeriodDuration() == null ||
+                StringUtils.isBlank(spotRequest.getTerminationGracePeriodDuration().toString())) {
+            throwValidationError("LaunchSpecification.TerminationGracePeriodDuration");
+        }
+        if (StringUtils.isBlank(getStringValue(spotRequest.getResultHandlingStrategy()))) {
+            throwValidationError("LaunchSpecification.ResultHandlingStrategy");
+        }
+        if (StringUtils.isBlank(spotRequest.getOwnerNcaIdForTask())) {
+            throwValidationError("TaskDetails.OwnerNcaId");
+        }
+        if (StringUtils.isBlank(spotRequest.getAccountName())) {
+            throwValidationError("TaskDetails.AccountName");
+        }
+
+        // Termination grace period must not exceed max runtime duration
+        if (spotRequest.getMaxRuntimeDuration() != null &&
+                spotRequest.getTerminationGracePeriodDuration().compareTo(spotRequest.getMaxRuntimeDuration()) > 0) {
+            log.error(NVCT_DURATION_VALIDATION_ERROR);
+            throw new IcmsBadRequestException(NVCT_DURATION_VALIDATION_ERROR);
+        }
+
+        spotRequest.setAction(SpotInstanceRequestAction.REQUEST_SPOT_INSTANCES_FOR_TASK);
+    }
+
+    private static void throwValidationError(String fieldName) {
+        String errorMessage = String.format(NVCT_VALIDATION_ERROR, fieldName);
+        log.error(errorMessage);
+        throw new IcmsBadRequestException(errorMessage);
+    }
+
 }
