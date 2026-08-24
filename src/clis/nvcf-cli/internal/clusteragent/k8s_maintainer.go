@@ -200,6 +200,15 @@ func (m *k8sMaintainer) setMaintenance(ctx context.Context, opts DrainOptions, d
 		// approach), since the CLI no longer performs a mutation the
 		// operator could race with; it only submits a desired-state change
 		// the operator's own reconcile owns.
+		//
+		// Behavior change from the old agent-config/Deployment-restart
+		// approach: --force no longer has an effect here. It used to also
+		// retrigger the NVCA restart even when the desired state was
+		// already reached, which let a stuck rollout be kicked by
+		// re-running with --force. Since the CLI no longer performs that
+		// restart directly, there is nothing left for --force to retrigger
+		// when the CR is already in the desired state; only the operator's
+		// own reconcile can recover a stuck rollout now.
 		result.Message = "already in the requested state; no change"
 		return result, nil
 	}

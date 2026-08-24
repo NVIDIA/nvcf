@@ -1746,6 +1746,14 @@ the CR update, leaving the operator's reconciliation to finish
 asynchronously. A timeout is reported as a warning because the CR change is
 already persisted and re-running is a no-op.
 
+`--force` only affects a run that changes the NVCFBackend CR; it has no
+effect when the CR is already in the requested state. In an earlier version
+of this command, `--force` also retriggered the NVCA restart directly, so it
+could be used to kick a stuck rollout even without a state change. The CLI no
+longer performs that restart; the NVCA operator's own reconcile owns it, so
+there is nothing left for `--force` to retrigger once the CR already matches
+the desired state.
+
 ### How kill works
 
 `kill-function` and `kill-all` delete the matching `ICMSRequest` CRs; the NVCA
