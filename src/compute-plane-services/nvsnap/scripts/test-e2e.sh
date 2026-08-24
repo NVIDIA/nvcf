@@ -32,6 +32,7 @@ fi
 # Verify deployed agent matches expected version
 source "$SCRIPT_DIR/versions.sh"
 source "$SCRIPT_DIR/lib/agent-auth.sh"
+source "$SCRIPT_DIR/lib/restore-guard.sh"
 DEPLOYED=$(kubectl get ds nvsnap-agent -n nvsnap-system -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null)
 EXPECTED="${NVSNAP_REGISTRY}/nvsnap-agent:${NVSNAP_APP_VERSION}"
 if [ "$DEPLOYED" != "$EXPECTED" ]; then
@@ -793,6 +794,10 @@ else
         "$RESTORE_MANIFEST_TEMPLATE" > "$RESTORE_MANIFEST"
 fi
 
+# See scripts/lib/restore-guard.sh: a surviving placeholder leaves the webhook
+# nothing to resolve, so the pod cold-starts while looking like a slow restore.
+assert_no_placeholders "$RESTORE_MANIFEST" || exit 1
+
 # Phase 5d: restore goes back to the simple hostPath mount on the
 # capture-source node (or the agent's EnsureLocal cascade materializes
 # it locally on a different target node before the placeholder reads
@@ -828,6 +833,26 @@ if [ "$CAPTURE_PATH" = "criu-v2" ]; then
         fail "criu-v2 agent restore"
     fi
     log_info "criu-v2: agent restore returned: $RESTORE_RESP"
+fi
+
+# Prove the webhook admitted this pod AS A RESTORE before timing anything.
+#
+# A pod the webhook declined still starts, still serves, and still passes every
+# check below -- it just cold-starts, downloading the model again. The timings
+# then describe a cold start wearing a restore label, and nothing in the run
+# says so. (Measured: a 70B "restore" that spent 8m47s downloading weights,
+# because the pod carried no injected cache at all.)
+#
+# The observable signature of a real restore on the rootfs/cachedir path is the
+# injected cache mount plus a cache env that points into it.
+if [ "$CAPTURE_PATH" = "rootfs" ]; then
+    log_info "Verifying the restore pod was admitted as a restore..."
+    POD_CACHE_DIR=$(agent_pod_cache_dir)
+    if ! assert_restore_admitted "$RESTORE_POD_NAME" "$NAMESPACE" \
+            "$RESTORE_CONTAINER_NAME" "$POD_CACHE_DIR"; then
+        fail "Restore pod not admitted as a restore"
+    fi
+    log_info "  verified: $POD_CACHE_DIR is mounted and the cache env points into it"
 fi
 
 log_info "Waiting for restore pod ready (up to ${RESTORE_READY_TIMEOUT}s)..."
