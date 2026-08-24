@@ -188,7 +188,7 @@ Usage: {{ include "nvcaop.byooOtelCollectorImage" . }}
 {{- if .imageRepository -}}
 {{- .imageRepository -}}
 {{- else if hasPrefix "stg.nvcr.io/nvidia/nvcf-byoc" .defaultRepository -}}
-stg.nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector
+stg.nvcr.io/nv-cf/nvcf-core/byoo-otel-collector
 {{- else -}}
 nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector
 {{- end -}}
