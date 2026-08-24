@@ -309,10 +309,17 @@ addons:
     pki:
       enabled: true
       mode: certManager
-      # Comma-separated DNS suffixes the managed OpenBao role accepts.
+      # Comma-separated DNS suffixes the managed OpenBao role accepts. For a
+      # split/multi-cluster deployment, extend this to cover the suffix of each
+      # external router DNS name used by compute workers.
       allowedDomains: cluster.local
       # SANs for both the stable Service and authority/SNI-selected Stargate
-      # pod identities. Must be empty for mode existingSecret.
+      # pod identities. For a split/multi-cluster deployment, also add every
+      # external router DNS name configured through
+      # addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress or
+      # addons.llm.requestRouter.backendRouter.pylonReverseTunnelDialAddress.
+      # The reverse-tunnel hostname is used as QUIC SNI and must match this
+      # Certificate. Must be empty for mode existingSecret.
       dnsNames:
         - llm-request-router.nvcf.svc.cluster.local
         - "*.llm-request-router-headless.nvcf.svc.cluster.local"
