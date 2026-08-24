@@ -27,6 +27,7 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
@@ -68,6 +69,20 @@ const (
 type Options struct {
 	// Image is the collector-contrib image used as the sink.
 	Image string
+
+	// CPULimit, when non-empty, caps the sink container's CPU (e.g. "20m").
+	// Starving the sink's CPU makes it drain OTLP slowly while staying up and
+	// keeping its Service endpoint, which backpressures the BYOO collector's
+	// exporter: the collector keeps accepting load at full rate while its
+	// sending_queue fills with chunked payloads. This models a slow-but-alive
+	// telemetry backend without killing the sink (which would instead
+	// backpressure the load generator itself).
+	CPULimit string
+
+	// MemoryLimit, when non-empty, caps the sink container's memory (e.g.
+	// "256Mi"). Mostly useful alongside CPULimit to keep the throttled sink
+	// small; empty leaves it unset.
+	MemoryLimit string
 }
 
 // DefaultOptions returns the standard sink options.
@@ -132,11 +147,16 @@ func ConfigMap(namespace string) *corev1.ConfigMap {
 	}
 }
 
-// Pod is the sink collector pod.
-func Pod(namespace string, opts Options) *corev1.Pod {
+// Pod is the sink collector pod. It returns an error if the resource-limit
+// options are malformed or non-positive.
+func Pod(namespace string, opts Options) (*corev1.Pod, error) {
 	image := opts.Image
 	if image == "" {
 		image = DefaultImage
+	}
+	resources, err := sinkResources(opts)
+	if err != nil {
+		return nil, err
 	}
 	return &corev1.Pod{
 		TypeMeta:   metav1.TypeMeta{Kind: "Pod", APIVersion: "v1"},
@@ -147,25 +167,17 @@ func Pod(namespace string, opts Options) *corev1.Pod {
 			// of the Service and break the run.
 			RestartPolicy: corev1.RestartPolicyAlways,
 			Containers: []corev1.Container{{
-				Name:  "otlp-sink",
-				Image: image,
-				Args:  []string{fmt.Sprintf("--config=%s/%s", configMountPath, configFileName)},
+				Name:      "otlp-sink",
+				Image:     image,
+				Resources: resources,
+				Args:      []string{fmt.Sprintf("--config=%s/%s", configMountPath, configFileName)},
 				Ports: []corev1.ContainerPort{
 					{Name: PortNameOTLPGRPC, ContainerPort: portOTLPGRPC, Protocol: corev1.ProtocolTCP},
 					{Name: PortNameOTLPHTTP, ContainerPort: portOTLPHTTP, Protocol: corev1.ProtocolTCP},
 					{Name: PortNameMetrics, ContainerPort: portMetrics, Protocol: corev1.ProtocolTCP},
 					{Name: portNameHealth, ContainerPort: portHealth, Protocol: corev1.ProtocolTCP},
 				},
-				ReadinessProbe: &corev1.Probe{
-					ProbeHandler: corev1.ProbeHandler{
-						HTTPGet: &corev1.HTTPGetAction{
-							Path: "/",
-							Port: intstr.FromString(portNameHealth),
-						},
-					},
-					InitialDelaySeconds: 2,
-					PeriodSeconds:       2,
-				},
+				ReadinessProbe: readinessProbe(opts),
 				VolumeMounts: []corev1.VolumeMount{{
 					Name:      configVolumeName,
 					MountPath: configMountPath,
@@ -180,6 +192,77 @@ func Pod(namespace string, opts Options) *corev1.Pod {
 				},
 			}},
 		},
+	}, nil
+}
+
+// sinkResources returns the sink container's resource requirements. With no
+// overrides it returns the zero value (unbounded, as before). When CPULimit or
+// MemoryLimit is set, both request and limit are pinned to that value so the
+// kernel enforces a hard cap; a low CPU cap throttles the sink's drain rate.
+// A malformed or non-positive quantity is reported as an error rather than
+// panicking, so callers (DeploySink) can surface it.
+func sinkResources(opts Options) (corev1.ResourceRequirements, error) {
+	if opts.CPULimit == "" && opts.MemoryLimit == "" {
+		return corev1.ResourceRequirements{}, nil
+	}
+	reqs := corev1.ResourceList{}
+	lims := corev1.ResourceList{}
+	if opts.CPULimit != "" {
+		q, err := parsePositiveQuantity("CPULimit", opts.CPULimit)
+		if err != nil {
+			return corev1.ResourceRequirements{}, err
+		}
+		reqs[corev1.ResourceCPU] = q
+		lims[corev1.ResourceCPU] = q
+	}
+	if opts.MemoryLimit != "" {
+		q, err := parsePositiveQuantity("MemoryLimit", opts.MemoryLimit)
+		if err != nil {
+			return corev1.ResourceRequirements{}, err
+		}
+		reqs[corev1.ResourceMemory] = q
+		lims[corev1.ResourceMemory] = q
+	}
+	return corev1.ResourceRequirements{Requests: reqs, Limits: lims}, nil
+}
+
+// parsePositiveQuantity parses a Kubernetes resource quantity and rejects
+// unparseable or non-positive values with a contextual error.
+func parsePositiveQuantity(field, value string) (resource.Quantity, error) {
+	q, err := resource.ParseQuantity(value)
+	if err != nil {
+		return resource.Quantity{}, fmt.Errorf("sink %s %q: %w", field, value, err)
+	}
+	if q.Sign() <= 0 {
+		return resource.Quantity{}, fmt.Errorf("sink %s %q: must be positive", field, value)
+	}
+	return q, nil
+}
+
+// readinessProbe returns the sink readiness probe. A CPU-throttled sink starts
+// and serves health slowly, so when a CPU cap is set the probe is relaxed
+// (longer period and per-probe timeout) to give the collector-contrib time to
+// come up and stay in the Service; readiness failures never restart the pod.
+func readinessProbe(opts Options) *corev1.Probe {
+	handler := corev1.ProbeHandler{
+		HTTPGet: &corev1.HTTPGetAction{
+			Path: "/",
+			Port: intstr.FromString(portNameHealth),
+		},
+	}
+	if opts.CPULimit != "" {
+		return &corev1.Probe{
+			ProbeHandler:        handler,
+			InitialDelaySeconds: 5,
+			PeriodSeconds:       5,
+			TimeoutSeconds:      5,
+			FailureThreshold:    60,
+		}
+	}
+	return &corev1.Probe{
+		ProbeHandler:        handler,
+		InitialDelaySeconds: 2,
+		PeriodSeconds:       2,
 	}
 }
 

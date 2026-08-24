@@ -1,0 +1,187 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Default values for the nvcf-event-ledger chart. All service-owned keys live
+# under the eventLedger root so the chart's value API is namespaced and will
+# not collide with values from other releases when this chart is composed
+# into the self-hosted stack.
+eventLedger:
+
+  # Namespace to deploy the resources. If empty, the release namespace is used.
+  namespace: ""
+
+  # Override the runtime service identity (resource names / selectors /
+  # container name). Defaults to "event-ledger" so the Service DNS
+  # (event-ledger.<ns>.svc) matches the contract defined in the SADD
+  # (section 3.1), independent of the chart package name or release name.
+  nameOverride: ""
+  fullnameOverride: "event-ledger"
+
+  replicaCount: 1
+
+  image:
+    registry: ""
+    repository: ""
+    # Image name is chart-owned and appended to registry/repository.
+    name: "nvcf-event-ledger"
+    pullPolicy: IfNotPresent
+    tag: "0.1.1"
+    digest: ""
+
+  imagePullSecrets: []
+
+  serviceAccount:
+    create: true
+    automount: false
+    annotations: {}
+    # ServiceAccount name must match the JWT auth role provisioned by the
+    # nvcf-openbao-migrations 22_setup_event-ledger migration. The Vault Agent
+    # Injector will not authenticate the pod to OpenBao unless the SA name
+    # matches the role's bound subject.
+    name: "event-ledger"
+
+  podAnnotations: {}
+  podLabels: {}
+
+  podSecurityContext: {}
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+
+  service:
+    type: ClusterIP
+    ports:
+      - name: api-port
+        port: 8080
+        targetPort: 8080
+        protocol: TCP
+      - name: metrics
+        port: 8081
+        targetPort: 8081
+        protocol: TCP
+
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 250m
+      memory: 256Mi
+
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: api-port
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: api-port
+
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPUUtilizationPercentage: 80
+
+  # Hashicorp Vault Agent Injector wiring. The chart always renders the
+  # vault.hashicorp.com/* pod annotations so the injector mints
+  # /vault/secrets/secrets.json at pod start from the OpenBao secret paths.
+  # The pod's ServiceAccount must be bound to a JWT auth role in OpenBao
+  # provisioned by the nvcf-openbao-migrations event-ledger migration.
+  vault:
+    role: "event-ledger"
+    jwtAuthPath: "auth/jwt"
+    # audience must match the JWT auth role's bound_audiences in OpenBao,
+    # which the 22_setup_event-ledger migration sets to the internal OpenBao URL.
+    audience: "http://openbao-server.vault-system.svc.cluster.local:8200"
+
+  extraVolumes: []
+  extraVolumeMounts: []
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+  priorityClassName: ""
+
+  ports:
+    - name: api-port
+      containerPort: 8080
+      protocol: TCP
+    - name: metrics
+      containerPort: 8081
+      protocol: TCP
+
+  # Environment variables passed to the container.
+  env:
+    # Tracing is opt-in. Leave empty to disable; set to an OTLP collector
+    # endpoint to enable.
+    OTEL_EXPORTER_OTLP_ENDPOINT: ""
+    EVENT_LEDGER_SELF_MANAGED: "true"
+
+  # Application configuration rendered into /etc/event-ledger/config.yaml.
+  # Credentials (username, password) are not set here;
+  # they are injected at runtime by Vault Agent into /vault/secrets/secrets.json
+  # and loaded by the service on startup (cfg.SecretsPath default).
+  config:
+    auth:
+      enabled: true
+      # Use the "policy" provider in self-managed so external read requests
+      # are validated against api-keys-api (section 3.3 of the SADD).
+      provider: "policy"
+      # JWKS endpoint for event-ledger's own JWT engine in OpenBao.
+      # SIS, NVCA, and NVCF-API sign tokens against this engine; event-ledger
+      # fetches these public keys to verify their inbound requests.
+      jwk-set-url: "http://openbao-server.vault-system.svc.cluster.local:8200/v1/services/event-ledger/jwt/jwks"
+      cache-refresh-interval: 900
+      policy:
+        namespace: "event-ledger"
+        policy-fqdn: "apikey.allow"
+        # In-cluster address of the api-keys-api policy evaluator.
+        policy-evaluator-addr: "http://api-keys.api-keys.svc.cluster.local:8080"
+        subject-field: "subject"
+        # api-keys-api expects "apiKey" (not "starfleetApiKey") per SADD §3.3.
+        api-key-field: "apiKey"
+    database:
+      provider: "cassandra"
+      cassandra:
+        hosts:
+          - "cassandra.cassandra-system.svc.cluster.local"
+        port: 9042
+        keyspace: "event_ledger"
+        consistency: "LOCAL_QUORUM"
+        num-conns: 2
+        insecure-skip-verify: false
+    service:
+      api-port: 8080
+      internal-port: 8081
+    # V1 and V2 endpoints are disabled in self-hosted per SADD §3.4.
+    deprecate-endpoints: true
+    publisher:
+      # CloudEvents (Kratos) is not available in self-managed; disable it.
+      cloudevents:
+        enabled: false
+      batched:
+        queue-size: 100000
+        batch-size: 1000
+        batch-interval-seconds: 10
+    logging:
+      level: "info"
+      zap-configuration: "production"
+    telemetry:
+      servicename: "event-ledger-api"
+      environmentname: "self-managed"

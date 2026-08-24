@@ -19,6 +19,7 @@ package steps
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"io"
 	"os"
@@ -33,7 +34,8 @@ import (
 )
 
 type recordedRun struct {
-	command string
+	command        string
+	sensitiveStdin string
 }
 
 type fakeRunner struct {
@@ -44,6 +46,15 @@ type fakeRunner struct {
 
 func (f *fakeRunner) Run(_ context.Context, command string) (harness.Result, error) {
 	f.runs = append(f.runs, recordedRun{command: command})
+	return f.result, f.err
+}
+
+func (f *fakeRunner) RunWithSensitiveStdin(
+	_ context.Context,
+	command,
+	sensitiveStdin string,
+) (harness.Result, error) {
+	f.runs = append(f.runs, recordedRun{command: command, sensitiveStdin: sensitiveStdin})
 	return f.result, f.err
 }
 
@@ -90,6 +101,239 @@ func TestICopyFileSnapshotsAndCopies(t *testing.T) {
 	}
 	if _, err := os.Stat(destAbs); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("dest should be deleted: %v", err)
+	}
+}
+
+func TestIPrepareHelmfileEnvironmentCopiesUpdatesAndRestoresAbsentDestination(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	t.Setenv("BDD_TMP_ENV_FIXTURE", "fixtures/base.yaml")
+	t.Setenv("SAMPLE_NGC_ORG", "test-org")
+	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+	fixtureAbs := filepath.Join(sc.Suite.Config.RepoRoot, "fixtures", "base.yaml")
+	if err := os.MkdirAll(filepath.Dir(fixtureAbs), 0o755); err != nil {
+		t.Fatalf("mkdir fixture: %v", err)
+	}
+	if err := os.WriteFile(fixtureAbs, []byte("global:\n  storageClass: local-path\n"), 0o644); err != nil {
+		t.Fatalf("seed fixture: %v", err)
+	}
+	table := docTable(t, [][]string{
+		{"global.imagePullSecrets[0].name", "nvcr-pull-secret"},
+		{"global.image.repository", "${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}"},
+	})
+
+	if err := sc.iPrepareHelmfileEnvironment("local-bdd", "self-managed", "${BDD_TMP_ENV_FIXTURE}", table); err != nil {
+		t.Fatalf("prepare environment: %v", err)
+	}
+	dest := filepath.Join(sc.Suite.Config.RepoRoot, "deploy", "stacks", "self-managed", "environments", "local-bdd.yaml")
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read destination: %v", err)
+	}
+	for _, want := range []string{"storageClass: local-path", "name: nvcr-pull-secret", "repository: test-org/test-team"} {
+		if !strings.Contains(string(got), want) {
+			t.Fatalf("destination missing %q:\n%s", want, got)
+		}
+	}
+
+	if err := sc.Suite.Ledger.RestoreAll(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if _, err := os.Stat(dest); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("generated destination should be removed: %v", err)
+	}
+}
+
+func TestIPrepareHelmfileEnvironmentRestoresExistingDestination(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	fixture := "fixtures/base.yaml"
+	fixtureAbs := filepath.Join(sc.Suite.Config.RepoRoot, fixture)
+	if err := os.MkdirAll(filepath.Dir(fixtureAbs), 0o755); err != nil {
+		t.Fatalf("mkdir fixture: %v", err)
+	}
+	if err := os.WriteFile(fixtureAbs, []byte("global: {}\n"), 0o644); err != nil {
+		t.Fatalf("seed fixture: %v", err)
+	}
+	dest := filepath.Join(sc.Suite.Config.RepoRoot, "deploy", "stacks", "observability", "environments", "existing.yaml")
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		t.Fatalf("mkdir destination: %v", err)
+	}
+	original := []byte("operatorAuthored: true\n")
+	if err := os.WriteFile(dest, original, 0o640); err != nil {
+		t.Fatalf("seed destination: %v", err)
+	}
+	table := docTable(t, [][]string{{"observability.mode", "install"}})
+
+	if err := sc.iPrepareHelmfileEnvironment("existing", "observability", fixture, table); err != nil {
+		t.Fatalf("prepare environment: %v", err)
+	}
+	if err := sc.Suite.Ledger.RestoreAll(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read restored destination: %v", err)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("restored body = %q, want %q", got, original)
+	}
+	info, err := os.Stat(dest)
+	if err != nil {
+		t.Fatalf("stat restored destination: %v", err)
+	}
+	if info.Mode().Perm() != 0o640 {
+		t.Fatalf("restored mode = %o, want 640", info.Mode().Perm())
+	}
+}
+
+func TestIPrepareHelmfileEnvironmentRejectsInvalidNamesBeforeWriting(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	table := docTable(t, [][]string{{"global.image.registry", "nvcr.io"}})
+	for _, tc := range []struct {
+		name        string
+		environment string
+		stack       string
+	}{
+		{name: "unsupported stack", environment: "local", stack: "unknown"},
+		{name: "unsafe environment", environment: "../local", stack: "self-managed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := sc.iPrepareHelmfileEnvironment(tc.environment, tc.stack, "missing.yaml", table); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+	if _, err := os.Stat(filepath.Join(sc.Suite.Config.RepoRoot, "deploy")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("validation failure should not create deploy tree: %v", err)
+	}
+}
+
+func TestIPrepareSelfManagedSecretsFileRendersInterpolatedPaths(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NGC_API_KEY", "test-api-key")
+	t.Setenv("BDD_TMP_SECRETS_NAME", "local-bdd-secrets.yaml")
+	t.Setenv("BDD_TMP_TEMPLATE_NAME", "secrets.yaml.template")
+	templateRel := "templates/${BDD_TMP_TEMPLATE_NAME}"
+	templateAbs := filepath.Join(sc.Suite.Config.RepoRoot, "templates", "secrets.yaml.template")
+	if err := os.MkdirAll(filepath.Dir(templateAbs), 0o755); err != nil {
+		t.Fatalf("mkdir template: %v", err)
+	}
+	if err := os.WriteFile(templateAbs, []byte("registryCredential: REPLACE_WITH_BASE64_DOCKER_CREDENTIAL\n"), 0o644); err != nil {
+		t.Fatalf("seed template: %v", err)
+	}
+
+	destRel := "secrets/${BDD_TMP_SECRETS_NAME}"
+	if err := sc.iPrepareSelfManagedSecretsFile(destRel, templateRel); err != nil {
+		t.Fatalf("prepare secrets: %v", err)
+	}
+	destAbs := filepath.Join(sc.Suite.Config.RepoRoot, "secrets", "local-bdd-secrets.yaml")
+	got, err := os.ReadFile(destAbs)
+	if err != nil {
+		t.Fatalf("read destination: %v", err)
+	}
+	wantCredential := base64.StdEncoding.EncodeToString([]byte("$oauthtoken:test-api-key"))
+	if string(got) != "registryCredential: "+wantCredential+"\n" {
+		t.Fatalf("destination body does not contain the expected encoded credential")
+	}
+	info, err := os.Stat(destAbs)
+	if err != nil {
+		t.Fatalf("stat destination: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("destination mode = %o, want 600", info.Mode().Perm())
+	}
+	if len(fake.runs) != 0 {
+		t.Fatalf("secret preparation wrote %d command log entries, want 0", len(fake.runs))
+	}
+}
+
+func TestIPrepareSelfManagedSecretsFileRestoresExistingDestination(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	t.Setenv("NGC_API_KEY", "test-api-key")
+	templateRel := "secrets.yaml.template"
+	templateAbs := filepath.Join(sc.Suite.Config.RepoRoot, templateRel)
+	if err := os.WriteFile(templateAbs, []byte("registryCredential: REPLACE_WITH_BASE64_DOCKER_CREDENTIAL\n"), 0o600); err != nil {
+		t.Fatalf("seed template: %v", err)
+	}
+	destRel := "local-secrets.yaml"
+	destAbs := filepath.Join(sc.Suite.Config.RepoRoot, destRel)
+	original := []byte("operator-authored: original\n")
+	if err := os.WriteFile(destAbs, original, 0o640); err != nil {
+		t.Fatalf("seed destination: %v", err)
+	}
+
+	if err := sc.iPrepareSelfManagedSecretsFile(destRel, templateRel); err != nil {
+		t.Fatalf("prepare secrets: %v", err)
+	}
+	renderedInfo, err := os.Stat(destAbs)
+	if err != nil {
+		t.Fatalf("stat rendered destination: %v", err)
+	}
+	if renderedInfo.Mode().Perm() != 0o600 {
+		t.Fatalf("rendered destination mode = %o, want 600", renderedInfo.Mode().Perm())
+	}
+	if err := sc.Suite.Ledger.RestoreAll(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	got, err := os.ReadFile(destAbs)
+	if err != nil {
+		t.Fatalf("read restored destination: %v", err)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("restored body = %q, want original", got)
+	}
+	info, err := os.Stat(destAbs)
+	if err != nil {
+		t.Fatalf("stat restored destination: %v", err)
+	}
+	if info.Mode().Perm() != 0o640 {
+		t.Fatalf("restored mode = %o, want 640", info.Mode().Perm())
+	}
+}
+
+func TestIPrepareSelfManagedSecretsFileRestoresAbsentDestination(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	t.Setenv("NGC_API_KEY", "test-api-key")
+	templateRel := "secrets.yaml.template"
+	templateAbs := filepath.Join(sc.Suite.Config.RepoRoot, templateRel)
+	if err := os.WriteFile(templateAbs, []byte("registryCredential: REPLACE_WITH_BASE64_DOCKER_CREDENTIAL\n"), 0o600); err != nil {
+		t.Fatalf("seed template: %v", err)
+	}
+	destRel := "generated/local-secrets.yaml"
+	destAbs := filepath.Join(sc.Suite.Config.RepoRoot, destRel)
+
+	if err := sc.iPrepareSelfManagedSecretsFile(destRel, templateRel); err != nil {
+		t.Fatalf("prepare secrets: %v", err)
+	}
+	if err := sc.Suite.Ledger.RestoreAll(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if _, err := os.Stat(destAbs); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("generated destination should be removed: %v", err)
+	}
+}
+
+func TestIPrepareSelfManagedSecretsFileFailureHidesCredentialMaterial(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	apiKey := "sensitive-test-api-key"
+	t.Setenv("NGC_API_KEY", apiKey)
+	templateRel := "secrets.yaml.template"
+	templateAbs := filepath.Join(sc.Suite.Config.RepoRoot, templateRel)
+	if err := os.WriteFile(templateAbs, []byte("registryCredential: missing\n"), 0o600); err != nil {
+		t.Fatalf("seed template: %v", err)
+	}
+
+	err := sc.iPrepareSelfManagedSecretsFile("local-secrets.yaml", templateRel)
+	if err == nil {
+		t.Fatal("expected missing-placeholder error")
+	}
+	encoded := base64.StdEncoding.EncodeToString([]byte("$oauthtoken:" + apiKey))
+	for _, secret := range []string{apiKey, encoded} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("error leaked credential material: %v", err)
+		}
+	}
+	if len(fake.runs) != 0 {
+		t.Fatalf("failed secret preparation wrote %d command log entries, want 0", len(fake.runs))
 	}
 }
 
@@ -154,6 +398,50 @@ func TestEnvironmentVariableIsSet(t *testing.T) {
 	}
 	if err := sc.environmentVariableIsSet("BDD_TMP_TEST_UNSET"); err == nil {
 		t.Fatal("expected error for unset var")
+	}
+}
+
+func TestEnvironmentVariablesAreSet(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	t.Setenv("BDD_TMP_REQUIRED_ONE", "one")
+	t.Setenv("BDD_TMP_REQUIRED_TWO", "two")
+	table := docTable(t, [][]string{
+		{"name"},
+		{"BDD_TMP_REQUIRED_ONE"},
+		{"BDD_TMP_REQUIRED_TWO"},
+	})
+	if err := sc.environmentVariablesAreSet(table); err != nil {
+		t.Fatalf("require variables: %v", err)
+	}
+}
+
+func TestEnvironmentVariablesAreSetReportsMissingVariable(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	t.Setenv("BDD_TMP_REQUIRED_PRESENT", "present")
+	t.Setenv("BDD_TMP_REQUIRED_MISSING", "")
+	table := docTable(t, [][]string{
+		{"name"},
+		{"BDD_TMP_REQUIRED_PRESENT"},
+		{"BDD_TMP_REQUIRED_MISSING"},
+	})
+	err := sc.environmentVariablesAreSet(table)
+	if err == nil {
+		t.Fatal("expected missing-variable error")
+	}
+	if !strings.Contains(err.Error(), `"BDD_TMP_REQUIRED_MISSING"`) {
+		t.Fatalf("error %q does not name the missing variable", err)
+	}
+}
+
+func TestEnvironmentVariablesAreSetRejectsInvalidTable(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	for _, table := range []*godog.Table{
+		docTable(t, [][]string{{"variable"}, {"BDD_TMP_REQUIRED"}}),
+		docTable(t, [][]string{{"name"}, {""}}),
+	} {
+		if err := sc.environmentVariablesAreSet(table); err == nil {
+			t.Fatal("expected invalid-table error")
+		}
 	}
 }
 
@@ -502,24 +790,373 @@ func TestSingleClusterBootstrapCachesAcrossCalls(t *testing.T) {
 	}
 }
 
-func TestServiceMonitorsShouldExistRunsSingleExplicitGet(t *testing.T) {
+func TestHelmRegistryAuthenticationUsesSensitiveStdinAndCaches(t *testing.T) {
 	sc, fake := newScenarioContext(t)
-	fake.result = harness.Result{ExitCode: 0}
-	table := docTable(t, [][]string{
-		{"name"},
-		{"nvcf-default-monitors-state-metrics"},
-		{"nvcf-default-monitors-grpc-proxy"},
-	})
+	t.Setenv("NGC_API_KEY", "super-secret-token")
+	t.Setenv("BDD_TMP_REGISTRY", "nvcr.io")
 
-	if err := sc.serviceMonitorsShouldExist(context.Background(), "monitoring", "k3d-ncp-local", table); err != nil {
-		t.Fatalf("assert ServiceMonitors: %v", err)
+	for i := 0; i < 2; i++ {
+		if err := sc.helmIsAuthenticatedToOCIRegistry(context.Background(), "${BDD_TMP_REGISTRY}"); err != nil {
+			t.Fatalf("authenticate call %d: %v", i+1, err)
+		}
 	}
 	if len(fake.runs) != 1 {
 		t.Fatalf("runs = %d, want 1", len(fake.runs))
 	}
-	want := "kubectl get servicemonitor/nvcf-default-monitors-state-metrics servicemonitor/nvcf-default-monitors-grpc-proxy --namespace monitoring --context k3d-ncp-local"
+	wantCommand := "helm registry login nvcr.io --username '$oauthtoken' --password-stdin"
+	if fake.runs[0].command != wantCommand {
+		t.Fatalf("command = %q, want %q", fake.runs[0].command, wantCommand)
+	}
+	if fake.runs[0].sensitiveStdin != "super-secret-token" {
+		t.Fatal("NGC API key was not supplied through sensitive stdin")
+	}
+	if strings.Contains(fake.runs[0].command, "super-secret-token") {
+		t.Fatalf("NGC API key leaked into command: %q", fake.runs[0].command)
+	}
+	if sc.LastResult.ExitCode != 0 {
+		t.Fatalf("cached result exit code = %d, want 0", sc.LastResult.ExitCode)
+	}
+}
+
+func TestHelmRegistryAuthenticationRedactsFailure(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	const apiKey = "super-secret-token"
+	t.Setenv("NGC_API_KEY", apiKey)
+	fake.result = harness.Result{ExitCode: 1, Stderr: "unauthorized: " + apiKey}
+	fake.err = errors.New("login failed for " + apiKey)
+
+	err := sc.helmIsAuthenticatedToOCIRegistry(context.Background(), "nvcr.io")
+	if err == nil {
+		t.Fatal("expected authentication failure")
+	}
+	for label, value := range map[string]string{
+		"returned error": err.Error(),
+		"LastErr":        sc.LastErr.Error(),
+		"stderr":         sc.LastResult.Stderr,
+	} {
+		if strings.Contains(value, apiKey) {
+			t.Fatalf("%s leaked NGC API key: %q", label, value)
+		}
+	}
+	if !strings.Contains(err.Error(), "exit code 1") || !strings.Contains(err.Error(), "unauthorized") {
+		t.Fatalf("error lacks useful diagnostics: %v", err)
+	}
+}
+
+func TestHelmRegistryAuthenticationRequiresAPIKey(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NGC_API_KEY", "")
+	if err := sc.helmIsAuthenticatedToOCIRegistry(context.Background(), "nvcr.io"); err == nil {
+		t.Fatal("expected error when NGC_API_KEY is unset")
+	}
+	if len(fake.runs) != 0 {
+		t.Fatalf("runs = %d, want 0", len(fake.runs))
+	}
+}
+
+func TestKubernetesResourcesShouldExistRunsExplicitGets(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0}
+	table := docTable(t, [][]string{
+		{"kind", "name"},
+		{"ServiceMonitor", "nvcf-default-monitors-state-metrics"},
+		{"PodMonitor", "nvcf-default-monitors-worker"},
+	})
+
+	if err := sc.kubernetesResourcesShouldExist(context.Background(), "monitoring", "k3d-ncp-local", table); err != nil {
+		t.Fatalf("assert Kubernetes resources: %v", err)
+	}
+	if len(fake.runs) != 2 {
+		t.Fatalf("runs = %d, want 2", len(fake.runs))
+	}
+	want := []string{
+		"kubectl get servicemonitor/nvcf-default-monitors-state-metrics --namespace monitoring --context k3d-ncp-local -o name",
+		"kubectl get podmonitor/nvcf-default-monitors-worker --namespace monitoring --context k3d-ncp-local -o name",
+	}
+	for index, run := range fake.runs {
+		if run.command != want[index] {
+			t.Fatalf("command %d = %q, want %q", index+1, run.command, want[index])
+		}
+	}
+}
+
+func TestKubernetesResourcesShouldExistNamesFailingRow(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 1}
+	table := docTable(t, [][]string{
+		{"kind", "name"},
+		{"ServiceMonitor", "missing-monitor"},
+	})
+
+	err := sc.kubernetesResourcesShouldExist(context.Background(), "monitoring", "k3d-ncp-local", table)
+	if err == nil || !strings.Contains(err.Error(), "row 1") || !strings.Contains(err.Error(), "ServiceMonitor/missing-monitor should exist") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestKubernetesResourcesShouldNotExistUsesIgnoreNotFound(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0}
+	table := docTable(t, [][]string{
+		{"kind", "name"},
+		{"Secret", "nvcr-pull-secret"},
+	})
+
+	if err := sc.kubernetesResourcesShouldNotExist(context.Background(), "nvca-system", "k3d-ncp-local", table); err != nil {
+		t.Fatalf("assert Kubernetes resource absence: %v", err)
+	}
+	want := "kubectl get secret/nvcr-pull-secret --namespace nvca-system --context k3d-ncp-local --ignore-not-found -o name"
+	if len(fake.runs) != 1 || fake.runs[0].command != want {
+		t.Fatalf("runs = %#v, want %q", fake.runs, want)
+	}
+}
+
+func TestKubernetesResourcesShouldNotExistNamesExistingResource(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0, Stdout: "secret/nvcr-pull-secret\n"}
+	table := docTable(t, [][]string{
+		{"kind", "name"},
+		{"Secret", "nvcr-pull-secret"},
+	})
+
+	err := sc.kubernetesResourcesShouldNotExist(context.Background(), "nvca-system", "k3d-ncp-local", table)
+	if err == nil || !strings.Contains(err.Error(), "row 1") || !strings.Contains(err.Error(), "Secret/nvcr-pull-secret exists") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestKubernetesResourceTableRejectsEmptyFields(t *testing.T) {
+	for _, row := range [][]string{{"", "name"}, {"Secret", ""}} {
+		table := docTable(t, [][]string{{"kind", "name"}, row})
+		if _, err := tableToKubernetesResources(table); err == nil {
+			t.Fatalf("expected validation error for row %#v", row)
+		}
+	}
+}
+
+func TestKubernetesResourcesValidateAllRowsBeforeRunning(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	table := docTable(t, [][]string{
+		{"kind", "name"},
+		{"Secret", "valid-secret"},
+		{"PodMonitor", ""},
+	})
+
+	if err := sc.kubernetesResourcesShouldExist(context.Background(), "monitoring", "k3d-ncp-local", table); err == nil {
+		t.Fatal("expected validation error")
+	}
+	if len(fake.runs) != 0 {
+		t.Fatalf("runs = %d, want 0 before all rows validate", len(fake.runs))
+	}
+}
+
+func TestKubernetesResourceShouldContainRunsExplicitYAMLGet(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0, Stdout: `spec:
+  targetAllocator:
+    enabled: true
+`}
+	doc := &godog.DocString{Content: `spec:
+  targetAllocator:
+    enabled: true
+`}
+
+	if err := sc.kubernetesResourceShouldContain(
+		context.Background(),
+		"OpenTelemetryCollector",
+		"nvcf-observability",
+		"monitoring",
+		"k3d-ncp-local",
+		doc,
+	); err != nil {
+		t.Fatalf("assert Kubernetes resource YAML: %v", err)
+	}
+	want := "kubectl get opentelemetrycollector/nvcf-observability --namespace monitoring --context k3d-ncp-local -o yaml"
+	if len(fake.runs) != 1 || fake.runs[0].command != want {
+		t.Fatalf("runs = %#v, want %q", fake.runs, want)
+	}
+}
+
+func TestDeploymentShouldCompleteRolloutRunsExplicitWait(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0}
+
+	if err := sc.deploymentShouldCompleteRollout(context.Background(), "nvca-operator", "nvca-operator", "k3d-ncp-local", "10m"); err != nil {
+		t.Fatalf("wait for deployment rollout: %v", err)
+	}
+	want := "kubectl rollout status deployment/nvca-operator -n nvca-operator --context k3d-ncp-local --timeout=10m"
+	if len(fake.runs) != 1 || fake.runs[0].command != want {
+		t.Fatalf("runs = %#v, want %q", fake.runs, want)
+	}
+}
+
+func TestKubernetesResourceShouldContainFailureDoesNotExposeResourceValues(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0, Stdout: `data:
+  token: actual-secret-value
+`}
+	doc := &godog.DocString{Content: `data:
+  token: expected-secret-value
+`}
+
+	err := sc.kubernetesResourceShouldContain(
+		context.Background(),
+		"Secret",
+		"credentials",
+		"nvcf",
+		"k3d-ncp-local",
+		doc,
+	)
+	if err == nil {
+		t.Fatal("expected mismatch")
+	}
+	for _, sensitive := range []string{"actual-secret-value", "expected-secret-value"} {
+		if strings.Contains(err.Error(), sensitive) {
+			t.Fatalf("error %q exposes %q", err, sensitive)
+		}
+	}
+}
+
+func TestNVCFBackendShouldReportAgentStatusRunsExplicitWait(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0}
+
+	if err := sc.nvcfBackendShouldReportAgentStatus(context.Background(), "ncp-local", "nvca-operator", "k3d-ncp-local", "healthy", "10m"); err != nil {
+		t.Fatalf("wait for NVCFBackend status: %v", err)
+	}
+	want := "kubectl wait nvcfbackend ncp-local -n nvca-operator --context k3d-ncp-local --for=jsonpath={.status.agentStatus}=healthy --timeout=10m"
+	if len(fake.runs) != 1 || fake.runs[0].command != want {
+		t.Fatalf("runs = %#v, want %q", fake.runs, want)
+	}
+}
+
+func TestKubernetesReadinessFailuresNameTargetWithoutCommandOutput(t *testing.T) {
+	secretOutput := "registry-token-value"
+	for _, test := range []struct {
+		name string
+		run  func(*ScenarioContext) error
+		want string
+	}{
+		{
+			name: "deployment",
+			run: func(sc *ScenarioContext) error {
+				return sc.deploymentShouldCompleteRollout(context.Background(), "nvca-operator", "nvca-operator", "k3d-ncp-local", "10m")
+			},
+			want: "deployment \"nvca-operator\" did not complete rollout",
+		},
+		{
+			name: "backend",
+			run: func(sc *ScenarioContext) error {
+				return sc.nvcfBackendShouldReportAgentStatus(context.Background(), "ncp-local", "nvca-operator", "k3d-ncp-local", "healthy", "10m")
+			},
+			want: "NVCFBackend \"ncp-local\" did not report agent status \"healthy\"",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sc, fake := newScenarioContext(t)
+			fake.result = harness.Result{ExitCode: 1, Stdout: secretOutput, Stderr: secretOutput}
+			err := test.run(sc)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want target context", err)
+			}
+			if strings.Contains(err.Error(), secretOutput) {
+				t.Fatalf("error leaked command output: %v", err)
+			}
+		})
+	}
+}
+
+func TestHelmReleasesShouldBeDeployedRunsSingleExplicitList(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0, Stdout: `[{"name":"nats","namespace":"nats-system","revision":"1","status":"deployed"}]`}
+	table := docTable(t, [][]string{
+		{"name", "namespace", "revision"},
+		{"nats", "nats-system", "1"},
+	})
+
+	if err := sc.helmReleasesShouldBeDeployed(context.Background(), "k3d-ncp-local", table); err != nil {
+		t.Fatalf("assert Helm releases: %v", err)
+	}
+	if len(fake.runs) != 1 {
+		t.Fatalf("runs = %d, want 1", len(fake.runs))
+	}
+	want := "helm list --all-namespaces --kube-context k3d-ncp-local -o json"
 	if fake.runs[0].command != want {
 		t.Fatalf("command = %q, want %q", fake.runs[0].command, want)
+	}
+}
+
+func TestHelmReleaseShouldContainValuesRunsExplicitYAMLGet(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("BDD_TMP_RELEASE", "nvca-operator")
+	fake.result = harness.Result{ExitCode: 0, Stdout: `selfManaged:
+  otelCollector:
+    enabled: true
+    imageTag: 0.157.9
+`}
+	doc := &godog.DocString{Content: `selfManaged:
+  otelCollector:
+    enabled: true
+`}
+
+	if err := sc.helmReleaseShouldContainValues(
+		context.Background(),
+		"${BDD_TMP_RELEASE}",
+		"nvca-operator",
+		"k3d-ncp-local",
+		doc,
+	); err != nil {
+		t.Fatalf("assert Helm release values: %v", err)
+	}
+	want := "helm get values nvca-operator --namespace nvca-operator --kube-context k3d-ncp-local -o yaml"
+	if len(fake.runs) != 1 || fake.runs[0].command != want {
+		t.Fatalf("runs = %#v, want %q", fake.runs, want)
+	}
+}
+
+func TestHelmReleaseShouldContainValuesFailureDoesNotExposeValues(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0, Stdout: `selfManaged:
+  registryCredential: actual-secret-value
+`}
+	doc := &godog.DocString{Content: `selfManaged:
+  registryCredential: expected-secret-value
+`}
+
+	err := sc.helmReleaseShouldContainValues(
+		context.Background(),
+		"nvca-operator",
+		"nvca-operator",
+		"k3d-ncp-local",
+		doc,
+	)
+	if err == nil {
+		t.Fatal("expected mismatch")
+	}
+	for _, want := range []string{`helm release "nvca-operator"`, "selfManaged.registryCredential"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not contain %q", err, want)
+		}
+	}
+	for _, sensitive := range []string{"actual-secret-value", "expected-secret-value"} {
+		if strings.Contains(err.Error(), sensitive) {
+			t.Fatalf("error %q exposes %q", err, sensitive)
+		}
+	}
+}
+
+func TestHelmReleaseTableAcceptsNameAndNamespace(t *testing.T) {
+	table := docTable(t, [][]string{
+		{"name", "namespace"},
+		{"nats", "nats-system"},
+	})
+
+	got, err := tableToHelmReleaseExpectations(table)
+	if err != nil {
+		t.Fatalf("parse table: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "nats" || got[0].Namespace != "nats-system" || got[0].Revision != "" {
+		t.Fatalf("expectations = %#v", got)
 	}
 }
 
@@ -529,7 +1166,9 @@ func TestRegisterAllRunsAFeatureFile(t *testing.T) {
 	// the regex registrations and the Before hook are both exercised.
 	feature := `Feature: Smoke
   Scenario: register-all smoke
-    Given environment variable "BDD_TMP_SMOKE" is set
+    Given these environment variables are set:
+      | name          |
+      | BDD_TMP_SMOKE |
     When I successfully run command "echo smoke"
     And I successfully run command:
       """
@@ -557,23 +1196,6 @@ func TestRegisterAllRunsAFeatureFile(t *testing.T) {
 	}
 	if status := suite.Run(); status != 0 {
 		t.Fatalf("suite status = %d", status)
-	}
-}
-
-func TestISubstituteBase64DoesNotReturnSecretMaterial(t *testing.T) {
-	sc, _ := newScenarioContext(t)
-	rel := "secrets.yaml"
-	abs := filepath.Join(sc.Suite.Config.RepoRoot, rel)
-	if err := os.WriteFile(abs, []byte("token: REPLACE_ME\n"), 0o600); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	t.Setenv("BDD_TMP_API_KEY", "real-secret-token")
-	if err := sc.iSubstituteBase64("REPLACE_ME", rel, "${BDD_TMP_API_KEY}"); err != nil {
-		t.Fatalf("substitute: %v", err)
-	}
-	got, _ := os.ReadFile(abs)
-	if strings.Contains(string(got), "real-secret-token") {
-		t.Fatalf("raw secret leaked into file body:\n%s", got)
 	}
 }
 
@@ -647,8 +1269,59 @@ controlPlane:
 	if err := sc.yamlFileKeyShouldNotBeEmpty(rel, "controlPlane.clusterName"); err != nil {
 		t.Fatalf("not empty: %v", err)
 	}
+	nonEmptyKeys := docTable(t, [][]string{
+		{"key"},
+		{"controlPlane.clusterName"},
+		{"controlPlane.endpoints.inCluster.icmsURL"},
+	})
+	if err := sc.yamlFileShouldHaveNonEmptyKeys(rel, nonEmptyKeys); err != nil {
+		t.Fatalf("non-empty keys: %v", err)
+	}
 	if err := sc.yamlFileKeyShouldContain(rel, "controlPlane.endpoints.inCluster", &godog.DocString{Content: "icmsURL: http://api.sis:8080\n"}); err != nil {
 		t.Fatalf("contain: %v", err)
+	}
+}
+
+func TestYAMLFileShouldHaveNonEmptyKeysValidatesTable(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+
+	tests := []struct {
+		name  string
+		table *godog.Table
+		want  string
+	}{
+		{
+			name: "no data rows",
+			table: docTable(t, [][]string{
+				{"key"},
+			}),
+			want: "at least one data row",
+		},
+		{
+			name: "wrong header",
+			table: docTable(t, [][]string{
+				{"name"},
+				{"clusterID"},
+			}),
+			want: `table header must be "key"`,
+		},
+		{
+			name: "empty key",
+			table: docTable(t, [][]string{
+				{"key"},
+				{""},
+			}),
+			want: "empty key value",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := sc.yamlFileShouldHaveNonEmptyKeys("registration.yaml", tc.table)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want error containing %q", err, tc.want)
+			}
+		})
 	}
 }
 
