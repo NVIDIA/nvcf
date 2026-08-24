@@ -124,11 +124,9 @@ function configure_auth_jwt() {
 
 ##
 # Check whether a bao command failed because a kv-v2 mount is still running
-# its storage upgrade. OpenBao sets an upgrade flag while a kv-v2 backend is
-# set up (fresh enable, version tune, or re-setup after unseal or leader
-# failover) and clears it asynchronously, so reads and writes issued right
-# after a mount operation can fail with these errors until the window closes.
-# The second message is the variant returned by read-enabled standby nodes.
+# its storage upgrade. OpenBao opens this window on every backend setup and
+# clears it asynchronously. The second message is the read-enabled standby
+# variant.
 #
 # @param output The captured output of the failed command
 #
@@ -144,11 +142,10 @@ function is_transient_bao_error() {
 
 ##
 # Run a bao command, retrying while it fails with a transient kv-v2 upgrade
-# error. Retries back off at 1s, 2s, 4s, 8s, then 10s, bounded by
-# BAO_TRANSIENT_RETRY_BUDGET_SECONDS (default 60) in total. Any other
-# failure returns immediately so real errors stay loud. The command output
-# (stdout and stderr combined) is echoed for the caller to capture; retry
-# notices go to stderr so they do not pollute captured output.
+# error. Backoff 1s, 2s, 4s, 8s, then 10s, bounded by
+# BAO_TRANSIENT_RETRY_BUDGET_SECONDS (default 60) in total; any other
+# failure returns immediately. The command output is echoed for the caller
+# to capture; retry notices go to stderr to keep that output clean.
 #
 # @param ... The command to run
 #
@@ -185,11 +182,10 @@ function retry_transient_bao() {
 }
 
 ##
-# Wait until a kv-v2 mount is serving requests. Polls the mount's config
-# endpoint, which passes through the same upgrade gate as data operations.
+# Wait until a kv-v2 mount is serving requests, by polling the mount's
+# config endpoint (gated by the same upgrade check as data operations).
 # Fails only when the mount is still upgrading after the full retry budget;
-# any other error is left for the caller's next operation to surface with
-# proper context.
+# other errors are left for the caller's next operation to surface.
 #
 # @param mount_path The mount path of the kv-v2 secrets engine
 #
@@ -221,9 +217,8 @@ function enable_secrets_mount() {
     secrets_mounts=$(bao secrets list -format=json 2>/dev/null) || true
     if [[ "$secrets_mounts" == *"\"${mount_path}/\""* ]]; then
         log_info "$mount_type secrets engine already mounted at path '$mount_path'"
-        # A re-run can find the mount present while its storage upgrade is
-        # still in flight: the upgrade re-runs on every backend setup until
-        # its completion marker lands, so wait here as well.
+        # A re-run can find the mount still mid-upgrade (the upgrade re-runs
+        # on every server restart), so wait here too.
         if [[ "$mount_type" == "kv-v2" ]]; then
             wait_kv_mount_ready "$mount_path" || return 1
         fi
@@ -236,8 +231,7 @@ function enable_secrets_mount() {
         return 1
     fi
 
-    # The enable call returns before the backend's storage upgrade finishes,
-    # so an immediate read or write can be rejected. Wait for readiness.
+    # The enable call returns before the backend's storage upgrade finishes.
     if [[ "$mount_type" == "kv-v2" ]]; then
         wait_kv_mount_ready "$mount_path" || return 1
     fi
@@ -394,9 +388,7 @@ function write_secrets_kv() {
 
     log_step "Writing secrets KV to '$mount_path/$secret'"
 
-    # The existence check only matters when overwrite is off; skip it
-    # entirely for overwrite=true callers so they neither stall on it nor
-    # fail on a check whose result they would ignore.
+    # Skip the existence check when overwriting; its result would be ignored.
     if [ "$overwrite" != "true" ]; then
         local get_output
         if get_output=$(retry_transient_bao bao kv get "$mount_path/$secret"); then
@@ -404,9 +396,8 @@ function write_secrets_kv() {
             return 0
         fi
         if is_transient_bao_error "$get_output"; then
-            # The mount is still upgrading after the full retry budget. Do
-            # not treat this as "secret missing": writing now could clobber
-            # an existing secret once the mount recovers.
+            # Still upgrading after the full budget. Not "secret missing":
+            # writing now could clobber an existing secret once it recovers.
             log_error "Error checking secrets KV '$mount_path/$secret': $get_output"
             return 1
         fi

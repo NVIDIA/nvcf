@@ -15,15 +15,10 @@
 # limitations under the License.
 
 # Integration test for the migration helper functions in
-# migrations/utils/functions.sh against a real OpenBao server.
-#
-# OpenBao's kv-v2 backend rejects reads and writes with HTTP 400
-# "Upgrading from non-versioned to versioned data" while its storage
-# upgrade runs. The upgrade is started on every backend setup and cleared
-# asynchronously, so writes issued right after a mount operation can land
-# inside that window. This test opens the window deterministically and
-# asserts the helpers retry through it, preserve skip semantics, and still
-# fail fast on non-transient errors.
+# migrations/utils/functions.sh against a real OpenBao server. Opens the
+# kv-v2 storage-upgrade window (the transient 400) deterministically and
+# asserts the helpers retry through it, preserve skip semantics, and fail
+# fast on non-transient errors.
 #
 # Requires Docker. The OpenBao version is read from the migrations image
 # Dockerfile so the test tracks the shipped server version. Set UTILS_DIR
