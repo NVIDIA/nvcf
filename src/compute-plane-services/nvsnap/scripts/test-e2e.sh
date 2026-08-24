@@ -107,6 +107,21 @@ case "$WORKLOAD" in
         SOURCE_MANIFEST="$PROJECT_ROOT/deploy/k8s/workloads/vllm-mp.yaml"
         RESTORE_MANIFEST_TEMPLATE="$PROJECT_ROOT/deploy/k8s/workloads/vllm-mp-restore.yaml"
         ;;
+    vllm-70b-criu)
+        # Llama-3.1-70B TP=4 on criu-v2. ~270G checkpoint at util 0.85, so the
+        # default 600s CHECKPOINT_TIMEOUT is not enough; the runner raises it.
+        POD_NAME="vllm-70b-criu"
+        CONTAINER_NAME="vllm"
+        RESTORE_POD_NAME="vllm-70b-criu-restored"
+        RESTORE_CONTAINER_NAME="restore"
+        PORT=8000
+        MODEL="meta-llama/Llama-3.1-70B-Instruct"
+        INFER_ENDPOINT="/v1/completions"
+        INFER_DATA='{"model":"meta-llama/Llama-3.1-70B-Instruct","prompt":"Hello","max_tokens":5}'
+        POST_INFER_DATA='{"model":"meta-llama/Llama-3.1-70B-Instruct","prompt":"The meaning of life is","max_tokens":10}'
+        SOURCE_MANIFEST="$PROJECT_ROOT/deploy/k8s/workloads/vllm-70b-criu.yaml"
+        RESTORE_MANIFEST_TEMPLATE="$PROJECT_ROOT/deploy/k8s/workloads/vllm-70b-criu-restore.yaml"
+        ;;
     vllm-tp2-criu)
         # Multi-GPU on the criu-v2 engine. Separate from vllm-tp2 (which stays
         # on the rootfs/cachedir path) so the two do not share a manifest.
@@ -295,7 +310,10 @@ NAMESPACE="nvsnap-system"
 
 # Timeouts (seconds) — 70B needs longer for model download + GPU memory dump/restore
 if [[ "$WORKLOAD" == *"70b"* ]]; then
-    POD_READY_TIMEOUT=1800      # 30min: 70B model download + load
+    # A COLD 70B run does not fit 30min: the HF pull alone is ~140G and a
+    # measured cold start needed >32min just to reach Ready. Warm caches finish
+    # well inside this; the ceiling is here for the cold case.
+    POD_READY_TIMEOUT=${POD_READY_TIMEOUT_OVERRIDE:-4200}   # 70min: 140G pull + load
     MODELS_POLL_TIMEOUT=1200    # 20min
     INFERENCE_POLL_TIMEOUT=300
     RESTORE_READY_TIMEOUT=1200  # 20min: CRIU + 4x GPU memory restore

@@ -17,34 +17,42 @@ capture and restore a TP=2 workload, weights, KV cache and all.
 ## What works
 
 Measured on 8x H100 80GB (p5.48xlarge, NVSwitch), driver 580.126.16, agent
-v0.2.65 with `NVSNAP_MULTI_GPU_CRIU=1`. Workload is TinyLlama-1.1B at
-tensor-parallel-size 2, `--gpu-memory-utilization 0.3`.
+v0.2.65 with `NVSNAP_MULTI_GPU_CRIU=1`.
 
 ```text
-                    run 1     run 2
-pod ready           3m06s     3m00s
-checkpoint          2m34s     2m32s     OK
-restore pod ready   1m00s     1m01s     OK
-post-restore infer  OK        OK
-checkpoint size     56G       56G
+workload                  checkpoint      restore   result
+TinyLlama TP=2            2m34s   56G     1m00s     PASS (x3)
+TinyLlama TP=4            4m16s  110G     1m14s     PASS
+Llama-3.1-70B TP=4        9m56s  290G     2m02s     PASS
 ```
+
+The 70B run is the production-shaped case: four ranks, 76.5G of GPU state each,
+and the restored pod answered a completion correctly.
+
+Restore scales far better than size. 5x the data between TP=2 TinyLlama and 70B
+TP=4 costs 2x the time, and the 70B restore moved 290G in 122s, about 2.4 GB/s.
+Single-GPU restore measures nearer 0.9 GB/s. The per-rank GPU restores are
+therefore overlapping rather than serialising, which contradicts the premise
+behind the deferred per-pid parallelisation work and is worth re-examining
+before anyone invests there.
 
 The engine is criu-v2 plus cuda-checkpoint. No interception library, no patched
 libzmq/libuv, no D2H save. The same path single-GPU uses.
 
-The capture is complete, which matters because an incomplete one looks similar:
+The captures are complete, which matters because an incomplete one looks very
+similar: a partial capture still exits zero and still produces a well-formed
+checkpoint, just a much smaller one.
 
 ```text
-tasks dumped         5    vllm, python3, VLLM::EngineCore, VLLM::Worker_TP x2
-cuda_plugin paused   4 pids
-largest images       28366823424  pages-39.img
-                     28357816320  pages-21.img
+TinyLlama TP=2   5 tasks, cuda_plugin paused 4 pids, 2 x 28.4G images
+TinyLlama TP=4   7 tasks, cuda_plugin paused 6 pids, 4 x 28.4G images
+70B TP=4         7 tasks, cuda_plugin paused 6 pids, 4 x 76.5G images
 ```
 
-Two 28.4G images, one per rank, against a 0.3 x 80G budget per GPU. The size
-arithmetic closes, both TP workers are present, and the agent's own capture
-guard reported "all GPU processes present in the capture". The restored pod
-served live inference.
+Every Worker_TP rank appears in the dumped tree, there is one GPU image per
+rank, and each image matches the per-GPU memory budget. The agent's own capture
+guard reported "all GPU processes present in the capture", and every restored
+pod served live inference.
 
 ## The configuration it requires
 
@@ -129,21 +137,33 @@ the workload being launched to avoid them. Two candidate routes:
 helm upgrade nvsnap deploy/helm/nvsnap -n nvsnap-system -f <values with
   agent.extraEnv NVSNAP_MULTI_GPU_CRIU=1>
 
-CAPTURE_PATH=criu-v2 ./scripts/test-e2e.sh vllm-tp2
+CAPTURE_PATH=criu-v2 ./scripts/test-e2e.sh vllm-tp2-criu
+
+# 70B needs a warm model cache and a raised checkpoint timeout:
+CAPTURE_PATH=criu-v2 CHECKPOINT_TIMEOUT=2400 ./scripts/test-e2e.sh vllm-70b-criu
 ```
 
-The restore placeholder is generated, not hand-written. `vllm-tp2` carries
-`nvsnap.io/path: "criu"` so the generator derives a criu-v2 placeholder with the
-checkpoint hostPath mounted; regenerate with
+`vllm-tp2-criu` and `vllm-70b-criu` are separate manifests from `vllm-tp2` and
+`vllm-70b`, which stay on the rootfs/cachedir path; the two engines no longer
+share a file. The restore placeholder is generated, not hand-written: the source
+carries `nvsnap.io/path: "criu"` so the generator derives a criu-v2 placeholder
+with the checkpoint hostPath mounted. Regenerate with
 `go run ./internal/manifests/gen -dir deploy/k8s/workloads`. Before that
 annotation was set, the manifest was a rootfs/webhook target and restore failed
 with "checkpoint images not visible at /checkpoints inside placeholder".
 
 ## Scope
 
-One workload, one topology, one node. TP=2 TinyLlama on H100, same-node restore.
-Untested: larger tensor-parallel degrees, cross-node restore, other engines
-(SGLang, TRT-LLM, NIM), and whether the required flags are the same for any of
-them. Do not read this as "multi-GPU works". Read it as "multi-GPU capture and
-restore work on criu-v2 when no peer mappings exist, and that condition
-currently has to be arranged by configuration".
+Two topologies (TP=2, TP=4) and two model scales (1.1B, 70B) on H100, same-node
+restore. Untested: cross-node restore, TP=8, other engines (SGLang, TRT-LLM,
+NIM), and whether the required flags are the same for any of them.
+
+Operational note: a cold 70B run does not fit the harness. test-e2e.sh pins
+POD_READY_TIMEOUT to 1800s for any workload matching *70b*, which a 140G model
+pull exceeds, and the checkpoint step needs CHECKPOINT_TIMEOUT well above its
+600s default (the capture alone took 596s). Both are harness constants, not
+mechanism limits.
+
+Do not read this as "multi-GPU works". Read it as "multi-GPU capture and restore
+work on criu-v2 when no peer mappings exist, and that condition currently has to
+be arranged by configuration".
