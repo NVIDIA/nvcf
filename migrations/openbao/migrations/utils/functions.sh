@@ -128,9 +128,14 @@ function configure_auth_jwt() {
 # clears it asynchronously. The second message is the read-enabled standby
 # variant.
 #
+# The API carries no structured code for this condition, so the match is on
+# the message text. If a future OpenBao rewords it, this check misses and
+# callers fail immediately (the pre-retry behavior); the integration test
+# revalidates the match against the pinned server version on every bump.
+#
 # @param output The captured output of the failed command
 #
-function is_transient_bao_error() {
+function is_kv_upgrade_window_error() {
     local output=$1
 
     case "$output" in
@@ -141,18 +146,18 @@ function is_transient_bao_error() {
 }
 
 ##
-# Run a bao command, retrying while it fails with a transient kv-v2 upgrade
+# Run a bao command, retrying while it fails with the kv-v2 upgrade-window
 # error. Backoff 1s, 2s, 4s, 8s, then 10s, bounded by
-# BAO_TRANSIENT_RETRY_BUDGET_SECONDS (default 60) in total; any other
+# BAO_KV_UPGRADE_RETRY_BUDGET_SECONDS (default 60) in total; any other
 # failure returns immediately. The command output is echoed for the caller
 # to capture; retry notices go to stderr to keep that output clean.
 #
 # @param ... The command to run
 #
-function retry_transient_bao() {
-    local budget=${BAO_TRANSIENT_RETRY_BUDGET_SECONDS:-60}
+function retry_on_kv_upgrade_error() {
+    local budget=${BAO_KV_UPGRADE_RETRY_BUDGET_SECONDS:-60}
     if ! [[ "$budget" =~ ^[0-9]+$ ]]; then
-        log_warn "Invalid BAO_TRANSIENT_RETRY_BUDGET_SECONDS '${budget}'; using 60" >&2
+        log_warn "Invalid BAO_KV_UPGRADE_RETRY_BUDGET_SECONDS '${budget}'; using 60" >&2
         budget=60
     fi
     local delay=1
@@ -164,7 +169,7 @@ function retry_transient_bao() {
             echo "$output"
             return 0
         fi
-        if ! is_transient_bao_error "$output"; then
+        if ! is_kv_upgrade_window_error "$output"; then
             echo "$output"
             return 1
         fi
@@ -182,10 +187,11 @@ function retry_transient_bao() {
 }
 
 ##
-# Wait until a kv-v2 mount is serving requests, by polling the mount's
-# config endpoint (gated by the same upgrade check as data operations).
-# Fails only when the mount is still upgrading after the full retry budget;
-# other errors are left for the caller's next operation to surface.
+# Block until a kv-v2 mount is serving requests, by retrying a read of the
+# mount's config endpoint (gated by the same upgrade check as data
+# operations) within the retry budget. Fails only when the mount is still
+# upgrading after the full budget; other errors are left for the caller's
+# next operation to surface.
 #
 # @param mount_path The mount path of the kv-v2 secrets engine
 #
@@ -193,10 +199,10 @@ function wait_kv_mount_ready() {
     local mount_path=$1
 
     local output
-    if output=$(retry_transient_bao bao read "${mount_path}/config"); then
+    if output=$(retry_on_kv_upgrade_error bao read "${mount_path}/config"); then
         return 0
     fi
-    if is_transient_bao_error "$output"; then
+    if is_kv_upgrade_window_error "$output"; then
         log_error "kv-v2 mount '${mount_path}' is still running its storage upgrade after the retry budget: $output"
         return 1
     fi
@@ -391,19 +397,25 @@ function write_secrets_kv() {
     # Skip the existence check when overwriting; its result would be ignored.
     if [ "$overwrite" != "true" ]; then
         local get_output
-        if get_output=$(retry_transient_bao bao kv get "$mount_path/$secret"); then
+        if get_output=$(retry_on_kv_upgrade_error bao kv get "$mount_path/$secret"); then
             log_info "Secrets KV '$secret' already exists in '$mount_path', skipping..."
             return 0
         fi
-        if is_transient_bao_error "$get_output"; then
+        if is_kv_upgrade_window_error "$get_output"; then
             # Still upgrading after the full budget. Not "secret missing":
             # writing now could clobber an existing secret once it recovers.
             log_error "Error checking secrets KV '$mount_path/$secret': $get_output"
             return 1
         fi
+        if [[ "$get_output" != *"No value found"* ]]; then
+            # The read failed for a reason other than "secret does not
+            # exist". Do not write over a secret that could not be read.
+            log_error "Error checking secrets KV '$mount_path/$secret': $get_output"
+            return 1
+        fi
     fi
 
-    if ! output=$(retry_transient_bao bao kv put $mount_path/$secret $value); then
+    if ! output=$(retry_on_kv_upgrade_error bao kv put $mount_path/$secret $value); then
         log_error "Error writing secrets KV to '$mount_path/$secret': $output"
         return 1
     fi

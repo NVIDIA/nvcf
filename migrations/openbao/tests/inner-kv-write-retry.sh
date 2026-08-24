@@ -57,16 +57,16 @@ open_upgrade_window() {
 # S0: the classifier accepts each upgrade-window message independently and
 # rejects other errors. The standby variant cannot be produced by this
 # single-node harness, so it is checked directly here.
-if is_transient_bao_error "Code: 400. Errors: * Upgrading from non-versioned to versioned data. This backend will be unavailable for a brief period and will resume service shortly." \
-    && is_transient_bao_error "Code: 400. Errors: * Waiting for the primary to upgrade from non-versioned to versioned data. This backend will be unavailable for a brief period and will resume service shortly." \
-    && ! is_transient_bao_error "Code: 403. Errors: * permission denied" \
-    && ! is_transient_bao_error "No value found at s1/data/cassandra/creds"; then
+if is_kv_upgrade_window_error "Code: 400. Errors: * Upgrading from non-versioned to versioned data. This backend will be unavailable for a brief period and will resume service shortly." \
+    && is_kv_upgrade_window_error "Code: 400. Errors: * Waiting for the primary to upgrade from non-versioned to versioned data. This backend will be unavailable for a brief period and will resume service shortly." \
+    && ! is_kv_upgrade_window_error "Code: 403. Errors: * permission denied" \
+    && ! is_kv_upgrade_window_error "No value found at s1/data/cassandra/creds"; then
   pass "classifier accepts only the two upgrade-window messages"
 else
   fail "classifier accepts only the two upgrade-window messages"
 fi
 
-# S1 and S2 additionally require that a transient-error retry was actually
+# S1 and S2 additionally require that an upgrade-window retry was actually
 # observed (the helper's retry notice on stderr), so they cannot pass
 # vacuously if the setup failed to hold the upgrade window open.
 

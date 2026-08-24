@@ -71,7 +71,7 @@ Environment variables consumed by the entrypoint:
 | `DEFAULT_CASSANDRA_PASSWORD` | `ch@ng3m3` (override required) | See above |
 | `NVCF_API_SIDECARS_IMAGE_PULL_SECRET` | `""` | Image pull secret name passed to the NVCF API sidecar mount |
 | `MIGRATIONS_ALLOW_FAILURES` | `false` | Emergency rollback only. When `true`, the entrypoint exits 0 even if core migrations or opted-in addons failed. Default behavior fails the Job non-zero so a misconfigured deployment blocks the Helm hook Job instead of silently leaving OpenBao in a partial state. |
-| `BAO_TRANSIENT_RETRY_BUDGET_SECONDS` | `60` | Total time the helper functions retry kv-v2 reads and writes that fail with OpenBao's transient storage-upgrade error (HTTP 400 "Upgrading from non-versioned to versioned data") before failing the migration. Also bounds the readiness wait after enabling a kv-v2 mount. Other errors fail immediately. |
+| `BAO_KV_UPGRADE_RETRY_BUDGET_SECONDS` | `60` | Total time the helper functions retry kv-v2 reads and writes that fail with OpenBao's storage-upgrade error (HTTP 400 "Upgrading from non-versioned to versioned data") before failing the migration. Also bounds the readiness wait after enabling a kv-v2 mount. Other errors fail immediately. |
 
 ### Example Kubernetes Job
 
