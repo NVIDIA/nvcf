@@ -1386,13 +1386,31 @@ func Test_validateVolumes(t *testing.T) {
 
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			gotErrs := validateVolumes(tt.volumes)
+			gotErrs := validateVolumes(tt.volumes, false)
 			assert.Equal(t, tt.expErrs, gotErrs)
 			for _, err := range gotErrs {
 				_ = err.Error()
 			}
 		})
 	}
+}
+
+func Test_validateVolumes_RejectPVCs(t *testing.T) {
+	pvcVol := corev1.Volume{
+		Name:         "pvc",
+		VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{}},
+	}
+	wantErr := fmt.Errorf("PersistentVolumeClaims are not supported in NVCF helm charts. Please remove all PVC definitions before deploying.")
+
+	t.Run("pvc rejected when RejectPVCs=true", func(t *testing.T) {
+		errs := validateVolumes([]corev1.Volume{pvcVol}, true)
+		assert.Equal(t, []error{wantErr}, errs)
+	})
+
+	t.Run("pvc allowed when RejectPVCs=false", func(t *testing.T) {
+		errs := validateVolumes([]corev1.Volume{pvcVol}, false)
+		assert.Nil(t, errs)
+	})
 }
 
 func Test_validateHelmChartURL(t *testing.T) {

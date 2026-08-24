@@ -38,6 +38,11 @@ type RevalConfig struct {
 	PreserveLabels []string `mapstructure:"preserve-labels"`
 	// Configured annotations to preserve
 	PreserveAnnotations []string `mapstructure:"preserve-annotations"`
+	// RejectPVCs controls whether PersistentVolumeClaim resources in helm charts
+	// are rejected at validation time. Defaults to false (warn-only). Set to true
+	// to enforce the restriction after the DGXC SBOM rollout removes default
+	// storage classes from all clusters.
+	RejectPVCs bool `mapstructure:"reject-pvcs"`
 }
 
 type TracingConfig struct {

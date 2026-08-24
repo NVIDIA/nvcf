@@ -98,6 +98,11 @@ type HandlerOptions struct {
 	PreserveLabels []string
 	// Configured annotations to preserve
 	PreserveAnnotations []string
+	// RejectPVCs controls whether PersistentVolumeClaim resources and volume
+	// references in helm charts are rejected at validation time. Defaults to
+	// false (warn-only). Set to true to enforce the restriction once the DGXC
+	// SBOM rollout removes the default storage class from all clusters.
+	RejectPVCs bool
 }
 
 type Config struct {
@@ -850,18 +855,24 @@ func (h *Handler) validateReleaseObjects(
 
 	for _, obj := range objs {
 		switch t := obj.(type) {
+		case *corev1.PersistentVolumeClaim:
+			if h.RejectPVCs {
+				errs = append(errs, fmt.Errorf("PersistentVolumeClaims are not supported in NVCF helm charts. Please remove all PVC definitions before deploying."))
+			} else {
+				logger.Warn("PersistentVolumeClaim found in helm chart; PVCs are not officially supported and will be rejected in a future release")
+			}
 		case *corev1.Pod:
-			errs = append(errs, validatePodSpec(t.Spec)...)
+			errs = append(errs, validatePodSpec(t.Spec, h.RejectPVCs)...)
 		case *appsv1.Deployment:
-			errs = append(errs, validatePodSpec(t.Spec.Template.Spec)...)
+			errs = append(errs, validatePodSpec(t.Spec.Template.Spec, h.RejectPVCs)...)
 		case *appsv1.ReplicaSet:
-			errs = append(errs, validatePodSpec(t.Spec.Template.Spec)...)
+			errs = append(errs, validatePodSpec(t.Spec.Template.Spec, h.RejectPVCs)...)
 		case *appsv1.StatefulSet:
-			errs = append(errs, validatePodSpec(t.Spec.Template.Spec)...)
+			errs = append(errs, validatePodSpec(t.Spec.Template.Spec, h.RejectPVCs)...)
 		case *batchv1.CronJob:
-			errs = append(errs, validatePodSpec(t.Spec.JobTemplate.Spec.Template.Spec)...)
+			errs = append(errs, validatePodSpec(t.Spec.JobTemplate.Spec.Template.Spec, h.RejectPVCs)...)
 		case *batchv1.Job:
-			errs = append(errs, validatePodSpec(t.Spec.Template.Spec)...)
+			errs = append(errs, validatePodSpec(t.Spec.Template.Spec, h.RejectPVCs)...)
 		case *corev1.Service:
 			errs = append(errs, validateServiceSpec(t.Spec)...)
 			if t.Name == cfg.TargetServiceName {
@@ -1095,14 +1106,14 @@ func sanitizeContainerSecurityContext(sc *corev1.SecurityContext) *corev1.Securi
 	return sc
 }
 
-func validatePodSpec(ps corev1.PodSpec) (errs []error) {
+func validatePodSpec(ps corev1.PodSpec, rejectPVCs bool) (errs []error) {
 	for _, c := range append(ps.InitContainers, ps.Containers...) {
 		if strings.TrimSpace(c.Image) == "" {
 			errs = append(errs, fmt.Errorf("container %q has no image", c.Name))
 		}
 	}
 	errs = append(errs, validatePodSpecSecurityFeatures(ps)...)
-	errs = append(errs, validateVolumes(ps.Volumes)...)
+	errs = append(errs, validateVolumes(ps.Volumes, rejectPVCs)...)
 	return errs
 }
 
@@ -1235,13 +1246,18 @@ func mergeSecurityContexts(psc *corev1.PodSecurityContext, sc *corev1.SecurityCo
 	return sc
 }
 
-func validateVolumes(volumes []corev1.Volume) (errs []error) {
+func validateVolumes(volumes []corev1.Volume, rejectPVCs bool) (errs []error) {
 	var badVolumeNames []string
 	for _, vol := range volumes {
+		if vol.PersistentVolumeClaim != nil {
+			if rejectPVCs {
+				errs = append(errs, fmt.Errorf("PersistentVolumeClaims are not supported in NVCF helm charts. Please remove all PVC definitions before deploying."))
+			}
+			continue
+		}
 		switch {
 		case vol.ConfigMap != nil:
 		case vol.Secret != nil:
-		case vol.PersistentVolumeClaim != nil:
 		case vol.EmptyDir != nil:
 			// Assume limits are enforced in backend.
 		case vol.Projected != nil:

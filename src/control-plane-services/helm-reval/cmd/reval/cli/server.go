@@ -109,6 +109,7 @@ func runServer(cfg *config.RevalConfig, v *viper.Viper, factory AuthorizerFactor
 		SkipSanitizeObjectMetadata: cfg.SkipSanitizeObjectMetadata,
 		PreserveLabels:             cfg.PreserveLabels,
 		PreserveAnnotations:        cfg.PreserveAnnotations,
+		RejectPVCs:                 cfg.RejectPVCs,
 	}
 	handler, err := reval.NewHandler(logger, config.ApiSvcName, hopts)
 	if err != nil {
