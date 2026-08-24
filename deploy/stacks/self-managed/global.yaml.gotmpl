@@ -848,7 +848,7 @@ llmApiGateway:
   metrics:
     enabled: {{ dig "addons" "llm" "gateway" "metrics" "enabled" true .Values }}
     serviceMonitor:
-      enabled: {{ dig "addons" "llm" "gateway" "metrics" "serviceMonitor" "enabled" (dig "addons" "llm" "gateway" "metrics" "enabled" true .Values) .Values }}
+      enabled: {{ dig "addons" "llm" "gateway" "metrics" "serviceMonitor" "enabled" (and (ne $observabilityProfile "disabled") .Values.global.observability.metrics.enabled (dig "addons" "llm" "gateway" "metrics" "enabled" true .Values)) .Values }}
   observability:
     tracing:
       enabled: {{ .Values.global.observability.tracing.enabled }}
@@ -911,7 +911,7 @@ llmRequestRouter:
   metrics:
     enabled: {{ dig "addons" "llm" "requestRouter" "metrics" "enabled" true .Values }}
     serviceMonitor:
-      enabled: {{ dig "addons" "llm" "requestRouter" "metrics" "serviceMonitor" "enabled" (dig "addons" "llm" "requestRouter" "metrics" "enabled" true .Values) .Values }}
+      enabled: {{ dig "addons" "llm" "requestRouter" "metrics" "serviceMonitor" "enabled" (and (ne $observabilityProfile "disabled") .Values.global.observability.metrics.enabled (dig "addons" "llm" "requestRouter" "metrics" "enabled" true .Values)) .Values }}
   observability:
     tracing:
       enabled: {{ .Values.global.observability.tracing.enabled }}
