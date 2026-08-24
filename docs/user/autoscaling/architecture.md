@@ -45,9 +45,12 @@ every replica, but each replica only processes its assigned function buckets.
 
 ## Deployment order
 
-With the default `control` profile, the observability stage installs the shared
-metrics components and backend. The final control-plane stage installs State
-Metrics, then the Function Autoscaler. The autoscaler depends on State Metrics.
+With the default `control` profile, the observability stage installs Prometheus
+Operator CRDs, the OpenTelemetry Operator, an OpenTelemetry Collector with
+Target Allocator and discovery RBAC, control-plane monitors, and VictoriaMetrics.
+The final stage installs State Metrics, then the Function Autoscaler. State
+Metrics is the autoscaler's install-order dependency. At runtime, the autoscaler
+also requires Cassandra, the NVCF API, and a reachable PromQL backend.
 
 The shared metrics stage is skipped for `disabled`. The Function Autoscaler is
 installed only for `control` and `all`.
@@ -58,17 +61,23 @@ The autoscaler is a read-only client of a PromQL-compatible backend. It uses
 range queries to discover active functions and read instance, request, and
 utilization metrics.
 
-The autoscaler does not scrape metrics. The metrics for the selected invocation
-path must reach the backend that it queries. These include:
+The autoscaler does not scrape metrics. It selects a metric source for each
+function, and the metrics for that source must reach the backend that it
+queries. The sources are alternatives, not a single required set:
 
-- State Metrics instance, concurrency, request latency, and function metadata.
-- Invocation Service and gRPC Proxy request counters used to discover active
-  function versions.
-- Worker thread count and busy-time metrics used for worker-based utilization.
-- LLM API Gateway request duration metrics used for LLM functions.
+| Metric source | Inputs |
+| --- | --- |
+| Worker threads | Worker thread count and busy time, plus invocation activity |
+| LLM API Gateway | Request count and duration, plus State Metrics instance, concurrency, and function metadata |
+| Control plane | Request latency and activity, plus State Metrics instance and concurrency data |
 
-For a split deployment, any worker metrics used for scaling must reach the
-backend that the autoscaler queries. See
+If worker metrics are unavailable, the autoscaler can use LLM Gateway or
+control-plane metrics when the required inputs are present.
+
+For a split deployment, the compute-plane profile enables the NVCA collector but
+does not automatically route worker metrics to the control-plane backend.
+Configure the compute-plane exporter to send worker metrics to the backend
+queried by the autoscaler, or use a backend reachable from both planes. See
 [Cluster Monitoring](../cluster-management/monitoring.md) for compute-plane
 metrics endpoints.
 

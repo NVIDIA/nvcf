@@ -121,13 +121,23 @@ The control-plane stack defaults to `control`. The compute-plane stack defaults
 to `compute`. Use `all` when both sets of targets run in the same cluster.
 
 The default `control` profile installs the Prometheus Operator custom resource
-definitions, OpenTelemetry Operator, collector with Target Allocator, default
-control-plane monitors, and VictoriaMetrics. It also installs the Function
-Autoscaler and requires State Metrics.
+definitions, OpenTelemetry Operator, collector with Target Allocator and
+discovery RBAC, default control-plane monitors, and VictoriaMetrics. It also
+installs State Metrics, then the Function Autoscaler.
 
-The bundled VictoriaMetrics instance runs in `monitoring` by default. Set its
-storage class in the Helmfile environment. See
-[Helmfile Installation](./helmfile-installation.md#observability-configuration).
+Profiles set defaults. Individual components can use `install`, `existing`, or
+`disabled` where supported. The available layouts are:
+
+| Layout | Configuration |
+| --- | --- |
+| Bundled backend | Use the default `install` modes and review the VictoriaMetrics persistent volume settings. |
+| External backend | Set `metricsBackend.mode: existing` and provide remote-write and PromQL endpoints. |
+| Existing components | Set the applicable `observability.components.*.mode` values to `existing`. |
+| No shared stack | Use the `disabled` profile. The Function Autoscaler is not installed. |
+
+The bundled VictoriaMetrics instance runs in `monitoring` by default. Configure
+its persistent volume in the Helmfile environment if the defaults are not
+suitable. See [Helmfile Installation](./helmfile-installation.md#observability-configuration).
 
 Use `metricsBackend.mode: existing` to connect a customer-managed backend:
 
@@ -145,9 +155,6 @@ The collector requires the remote-write endpoint. The `control` and `all`
 profiles also require the PromQL endpoint because the Function Autoscaler
 queries it. The autoscaler supports `none`, `token`, and `mtls` authentication
 for PromQL queries. Configure collector remote-write authentication separately.
-
-Profiles set defaults. Components can use `install`, `existing`, or `disabled`
-mode when another deployment owns them.
 
 The shared collector discovers targets only in its Kubernetes cluster. In a
 split deployment, configure compute-plane collection separately and make any
