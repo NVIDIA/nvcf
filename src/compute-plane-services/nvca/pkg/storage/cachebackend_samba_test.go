@@ -290,7 +290,7 @@ func TestSambaModelCacheResourceName_LongHandleBounded(t *testing.T) {
 
 // TestEnsureNamespaceLabels_PatchesExistingNamespace verifies that
 // ensureNamespaceLabels adds missing labels to a namespace that already exists
-// without the required keys — the scenario that arises on clusters upgraded
+// without the required keys; the scenario that arises on clusters upgraded
 // from an NVCA version that did not set WorkloadInstanceTypeLabel.
 func TestEnsureNamespaceLabels_PatchesExistingNamespace(t *testing.T) {
 	ctx := context.Background()
