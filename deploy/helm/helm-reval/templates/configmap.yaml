@@ -29,6 +29,9 @@ data:
     {{- if .Values.reval.serviceConfig.skipSanitizeObjectMetadata }}
     skip-sanitize-object-metadata: true
     {{- end }}
+    {{- if .Values.reval.serviceConfig.rejectPVCs }}
+    reject-pvcs: true
+    {{- end }}
     {{- if not (empty .Values.reval.serviceConfig.preserveLabels) }}
     preserve-labels:
     {{- .Values.reval.serviceConfig.preserveLabels | toYaml | nindent 4 }}

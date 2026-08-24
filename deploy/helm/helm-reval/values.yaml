@@ -95,6 +95,12 @@ reval:
     skipSanitizeObjectMetadata: true
     preserveLabels: []
     preserveAnnotations: []
+    # rejectPVCs controls whether PersistentVolumeClaim resources in helm charts
+    # are rejected at validation time. When false (default), PVCs produce a warning
+    # log but pass validation. Set to true to reject charts that define PVCs.
+    # Enable this after all clusters have had their default storage class removed.
+    # Can also be set via the REVAL_REJECT_PVCS environment variable.
+    rejectPVCs: false
 
     http:
       local: false
