@@ -158,6 +158,18 @@ functionAutoscaler:
     # environment label.
     ignoreEnv: true
 
+# Image overrides for the API account-bootstrap job. alpine-k8s is not
+# republished under the public nvidia/nvcf catalog, so it defaults to its
+# upstream source, docker.io/alpine/k8s:1.36.1. Leave these unset unless you
+# have mirrored the image into your own registry, in which case set registry
+# and repository together:
+# api:
+#   accountBootstrap:
+#     image:
+#       registry: <your-registry>
+#       repository: <your-repository>/alpine-k8s
+#       tag: "1.36.1"
+
 accounts:
   limits:
     maxFunctions: 10
@@ -168,6 +180,16 @@ accounts:
 # These static global values are processed in the values template
 nats:
   enabled: true
+  # Image overrides for the NATS config reloader. The reloader is not
+  # republished under the public nvidia/nvcf catalog, so it defaults to its
+  # upstream source, docker.io/natsio/nats-server-config-reloader:0.23.0.
+  # Leave these unset unless you have mirrored the image into your own
+  # registry, in which case set registry and repository together:
+  # reloader:
+  #   image:
+  #     registry: <your-registry>
+  #     repository: <your-repository>/nats-server-config-reloader
+  #     tag: "0.23.0"
   # PDB: the upstream NATS chart enables a disruption budget by default.
   # Override here to disable it or adjust the minAvailable threshold.
   podDisruptionBudget:
@@ -191,6 +213,18 @@ cassandra:
   # Do not use small for default cloud installs. Cassandra can OOM during
   # first boot and leave migrations in a failed or dirty state.
   resourcesPreset: "xlarge"
+  # Image overrides for the Cassandra server and dynamicSeedDiscovery containers.
+  # The default image name is `cassandra` under global.image.repository.
+  # Override here when pulling from a registry that uses a different path or tag.
+  # image:
+  #   registry: ""         # defaults to global.image.registry
+  #   repository: ""       # defaults to <global.image.repository>/cassandra
+  #   tag: ""              # defaults to the chart appVersion
+  # dynamicSeedDiscovery:
+  #   image:
+  #     registry: ""
+  #     repository: ""
+  #     tag: ""
   # PDB: disabled by default. Recommended for production 3-node clusters.
   # Set exactly one of minAvailable or maxUnavailable.
   podDisruptionBudget:
