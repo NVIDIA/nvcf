@@ -942,11 +942,11 @@ llmRequestRouter:
   {{- fail (printf "addons.llm.pki.mode must be exactly \"certManager\" or \"existingSecret\", got %q" $pkiMode) }}
   {{- end }}
   {{- if eq $pkiMode "existingSecret" }}
-  {{- /* The operator owns issuance in this mode, so every value that only
-       steers stack-managed issuance is a mixed-ownership conflict. Fail loudly
-       instead of silently ignoring it: a leftover dnsNames list reads as "the
-       stack still issues my certificate" and would go unnoticed until the
-       certificate expired. */ -}}
+  {{- /* The operator owns issuance in this mode, so custom values that steer
+       stack-managed issuance are mixed-ownership conflicts. The stable base
+       profile's managed defaults are tolerated because Helmfile cannot
+       reliably clear inherited values to empty values; any changed value
+       fails loudly. */ -}}
   {{- $existingSecretPkiValues := dig "addons" "llm" "pki" dict .Values }}
   {{- if kindIs "map" $existingSecretPkiValues }}
   {{- $existingSecretClusterIssuer := dig "clusterIssuer" dict $existingSecretPkiValues }}
@@ -960,11 +960,13 @@ llmRequestRouter:
   {{- if not (kindIs "slice" $existingSecretDnsNames) }}
   {{- fail "addons.llm.pki.dnsNames must be a list when addons.llm.pki.mode is existingSecret" }}
   {{- end }}
-  {{- if gt (len $existingSecretDnsNames) 0 }}
-  {{- fail "addons.llm.pki.dnsNames applies only to a stack-issued Certificate and must be empty when addons.llm.pki.mode is existingSecret" }}
+  {{- $defaultManagedDnsNames := list "llm-request-router.nvcf.svc.cluster.local" "*.llm-request-router-headless.nvcf.svc.cluster.local" }}
+  {{- if and (gt (len $existingSecretDnsNames) 0) (not (deepEqual $existingSecretDnsNames $defaultManagedDnsNames)) }}
+  {{- fail "addons.llm.pki.dnsNames applies only to a stack-issued Certificate; only the unchanged stable-base defaults are allowed when addons.llm.pki.mode is existingSecret" }}
   {{- end }}
-  {{- if dig "addons" "llm" "pki" "allowedDomains" "" .Values }}
-  {{- fail "addons.llm.pki.allowedDomains constrains the managed OpenBao signing role only and must be empty when addons.llm.pki.mode is existingSecret" }}
+  {{- $existingSecretAllowedDomains := dig "addons" "llm" "pki" "allowedDomains" "" .Values }}
+  {{- if and (ne $existingSecretAllowedDomains nil) (not (and (kindIs "string" $existingSecretAllowedDomains) (eq $existingSecretAllowedDomains "cluster.local"))) }}
+  {{- fail "addons.llm.pki.allowedDomains constrains the managed OpenBao signing role; only the unchanged stable-base default is allowed when addons.llm.pki.mode is existingSecret" }}
   {{- end }}
   {{- /* No default: the Secret is the operator's, so guessing a name would
        mount the wrong identity or fail at pod start instead of at render. */ -}}
