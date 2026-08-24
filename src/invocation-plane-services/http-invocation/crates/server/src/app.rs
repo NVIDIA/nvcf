@@ -18,7 +18,7 @@ use crate::{
     nats::NatsService,
     nvcf_api::NVCFService,
     rate_limit::RateLimitService,
-    routes::{self, request_function_routing, tlb_handler},
+    routes::{self, function_id_headers, split_hostname, tlb_handler},
     s3::S3Service,
     secrets::secret_provider::SecretFileWatcher,
     settings::AppConfig,
@@ -194,11 +194,11 @@ pub async fn app(
         // docs say not to have just a fallback, but I can't figure out how to name the handler type to pass it to axum::serve.
         .fallback(
             |hostname: Option<Host>, mut request: http::Request<Body>| async move {
-                // Function headers support API gateway and test routing; hostname is the public interface.
-                if let Some((function_id, function_version_id)) = request_function_routing(
-                    hostname.as_ref().map(|hostname| hostname.0.as_str()),
-                    &request,
-                ) {
+                // check for headers too. we don't have wildcard dns yet, so we need to use headers to test.
+                if let Some((function_id, function_version_id)) =
+                    function_id_headers(request.headers())
+                        .or_else(|| hostname.and_then(|hostname| split_hostname(&hostname.0)))
+                {
                     if let Some(function_id) = function_id {
                         request.extensions_mut().insert(function_id);
                     }
