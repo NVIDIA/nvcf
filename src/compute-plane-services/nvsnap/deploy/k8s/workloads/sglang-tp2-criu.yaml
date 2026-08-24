@@ -71,7 +71,7 @@ spec:
         - { name: PYTHONFAULTHANDLER, value: "1" }
         - { name: PYTHONUNBUFFERED,   value: "1" }
         - { name: NVSNAP_LOG_LEVEL,     value: "3" }
-        - { name: NVSNAP_SECCOMP_ENABLED, value: "0,1" }
+        - { name: NVSNAP_SECCOMP_ENABLED, value: "0" }
         - { name: CUDA_VISIBLE_DEVICES, value: "0,1" }
         # Peer-state sever: cuda-checkpoint blocks if ANY cross-GPU
         # mapping exists. See docs/proposals/multi-gpu-criu-v2.md.
@@ -79,12 +79,12 @@ spec:
         - { name: NCCL_NVLS_DISABLE, value: "1" }
         - { name: NCCL_SHM_DISABLE,  value: "1" }
         - { name: HF_HUB_DISABLE_XET, value: "1" }
-        - { name: HF_HUB_ENABLE_HF_TRANSFER, value: "0,1" }
+        - { name: HF_HUB_ENABLE_HF_TRANSFER, value: "0" }
         # Keep torch off the libuv TCPStore backend. The patched libuv that
         # used to be injected here is gone with the rest of the stack, so stay
         # on the non-libuv path rather than depending on a stock libuv that
         # this workload never exercised.
-        - { name: USE_LIBUV, value: "0,1" }
+        - { name: USE_LIBUV, value: "0" }
         - name: HF_TOKEN
           valueFrom:
             secretKeyRef:

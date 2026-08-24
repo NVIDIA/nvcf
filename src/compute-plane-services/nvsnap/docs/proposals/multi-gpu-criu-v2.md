@@ -150,7 +150,15 @@ what should be the equivalent sever set: `--disable-cuda-graph` in place of
 
 The capture hangs. Not slowly: a `criu` and a `cuda-checkpoint` were still
 wedged three hours later, both blocked in `anon_pipe_read`, CRIU waiting on a
-cuda-checkpoint that never returns. A retry fails earlier with
+cuda-checkpoint that never returns.
+
+Confirmed twice. The first manifest carried three corrupted env values
+(`NVSNAP_SECCOMP_ENABLED`, `USE_LIBUV` and `HF_HUB_ENABLE_HF_TRANSFER` were all
+set to "0,1" instead of "0", collateral from a value-scoped rather than
+key-scoped edit). `USE_LIBUV` in particular is deliberately "0" on the
+single-GPU manifest, so that run could not be trusted. Repeated with the values
+corrected and a 30 minute timeout: identical hang, identical wedged-process
+signature. The confound was real but was not the cause. A retry fails earlier with
 `text file busy` because the wedged process still holds the binary, which is a
 useful tell that the first attempt is stuck rather than finished.
 
