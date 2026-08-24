@@ -43,6 +43,7 @@ func registerAssertionSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^yaml file "([^"]*)" should contain:$`, sc.yamlFileShouldContain)
 	ctx.Step(`^yaml file "([^"]*)" key "([^"]*)" should contain:$`, sc.yamlFileKeyShouldContain)
 	ctx.Step(`^the json output should contain rows:$`, sc.jsonOutputShouldContainRows)
+	ctx.Step(`^Helm release "([^"]*)" in namespace "([^"]*)" using context "([^"]*)" should contain values:$`, sc.helmReleaseShouldContainValues)
 	ctx.Step(`^the rendered manifests in "([^"]*)" should contain:$`, sc.renderedManifestsShouldContain)
 	ctx.Step(`^the rendered manifests in "([^"]*)" under directories matching "([^"]*)" should contain:$`, sc.renderedManifestsUnderMatchingDirectoriesShouldContain)
 	ctx.Step(`^the rendered manifests in "([^"]*)" should not contain:$`, sc.renderedManifestsShouldNotContain)
@@ -50,6 +51,8 @@ func registerAssertionSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^these Kubernetes resources should exist in namespace "([^"]*)" using context "([^"]*)":$`, sc.kubernetesResourcesShouldExist)
 	ctx.Step(`^these Kubernetes resources should not exist in namespace "([^"]*)" using context "([^"]*)":$`, sc.kubernetesResourcesShouldNotExist)
 	ctx.Step(`^Kubernetes resource "([^"/]+)/([^"]+)" in namespace "([^"]*)" using context "([^"]*)" should contain:$`, sc.kubernetesResourceShouldContain)
+	ctx.Step(`^deployment "([^"]*)" in namespace "([^"]*)" using context "([^"]*)" should complete rollout within "([^"]*)"$`, sc.deploymentShouldCompleteRollout)
+	ctx.Step(`^NVCFBackend "([^"]*)" in namespace "([^"]*)" using context "([^"]*)" should report agent status "([^"]*)" within "([^"]*)"$`, sc.nvcfBackendShouldReportAgentStatus)
 }
 
 func (sc *ScenarioContext) commandExitCodeShouldBe(expected int) error {
@@ -226,6 +229,25 @@ func (sc *ScenarioContext) helmReleasesShouldBeDeployed(ctx context.Context, kub
 	return dsl.HelmReleasesDeployed(sc.LastResult.Stdout, expected)
 }
 
+func (sc *ScenarioContext) helmReleaseShouldContainValues(ctx context.Context, release, namespace, kubeContext string, doc *godog.DocString) error {
+	command, err := dsl.HelmReleaseValuesCommand(release, namespace, kubeContext)
+	if err != nil {
+		return err
+	}
+	if err := sc.runAndRecord(ctx, command); err != nil {
+		return err
+	}
+	resolvedRelease := dsl.Interpolate(release)
+	resolvedNamespace := dsl.Interpolate(namespace)
+	if err := sc.commandExitCodeShouldBe(0); err != nil {
+		return fmt.Errorf("helm release %q in namespace %q values could not be read: %w", resolvedRelease, resolvedNamespace, err)
+	}
+	if err := dsl.MatchYAMLDocument(sc.LastResult.Stdout, doc.Content, dsl.MatchSubset); err != nil {
+		return fmt.Errorf("helm release %q in namespace %q values do not contain the expected YAML subset: %w", resolvedRelease, resolvedNamespace, err)
+	}
+	return nil
+}
+
 func tableToHelmReleaseExpectations(table *godog.Table) ([]dsl.HelmReleaseExpectation, error) {
 	if table == nil || len(table.Rows) < 2 {
 		return nil, fmt.Errorf("table must have name and namespace headers and at least one data row")
@@ -313,6 +335,28 @@ func (sc *ScenarioContext) kubernetesResourceShouldContain(ctx context.Context, 
 	}
 	if err := dsl.MatchYAMLDocument(sc.LastResult.Stdout, doc.Content, dsl.MatchSubset); err != nil {
 		return fmt.Errorf("kubernetes resource %s/%s does not contain the expected YAML subset: %w", kind, name, err)
+	}
+	return nil
+}
+
+func (sc *ScenarioContext) deploymentShouldCompleteRollout(ctx context.Context, name, namespace, kubeContext, timeout string) error {
+	command, err := dsl.KubernetesDeploymentRolloutCommand(name, namespace, kubeContext, timeout)
+	if err != nil {
+		return err
+	}
+	if err := sc.runSuccessfully(ctx, command); err != nil {
+		return fmt.Errorf("deployment %q did not complete rollout: %w", dsl.Interpolate(name), err)
+	}
+	return nil
+}
+
+func (sc *ScenarioContext) nvcfBackendShouldReportAgentStatus(ctx context.Context, name, namespace, kubeContext, agentStatus, timeout string) error {
+	command, err := dsl.NVCFBackendAgentStatusCommand(name, namespace, kubeContext, agentStatus, timeout)
+	if err != nil {
+		return err
+	}
+	if err := sc.runSuccessfully(ctx, command); err != nil {
+		return fmt.Errorf("NVCFBackend %q did not report agent status %q: %w", dsl.Interpolate(name), dsl.Interpolate(agentStatus), err)
 	}
 	return nil
 }

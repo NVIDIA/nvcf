@@ -37,21 +37,18 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
       # operator-specific registry values before the first Helmfile
       # install. Later scenarios reuse that install instead of
       # reinstalling with different secrets or URLs.
-      And I copy the file "tests/bdd/fixtures/self-managed-local-bdd-multi.yaml" to "deploy/stacks/self-managed/environments/local-bdd.yaml"
-      And I update yaml file "deploy/stacks/self-managed/environments/local-bdd.yaml" with keys:
+      And I prepare Helmfile environment "local-bdd" for stack "self-managed" from fixture "tests/bdd/fixtures/self-managed-local-bdd-multi.yaml" with values:
         | global.imagePullSecrets[0].name               | nvcr-pull-secret                                                    |
         | global.helm.sources.repository                | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                |
         | global.image.repository                       | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                |
         | api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE | nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/stargate-client:0.2.0  |
         | observability.profile                          | disabled                                                            |
-      And I copy the file "tests/bdd/fixtures/nvcf-compute-plane-local-bdd-multi.yaml" to "deploy/stacks/nvcf-compute-plane/environments/local-bdd.yaml"
-      And I update yaml file "deploy/stacks/nvcf-compute-plane/environments/local-bdd.yaml" with keys:
+      And I prepare Helmfile environment "local-bdd" for stack "nvcf-compute-plane" from fixture "tests/bdd/fixtures/nvcf-compute-plane-local-bdd-multi.yaml" with values:
         | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
         | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
         | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
         | observability.profile           | disabled                             |
-      And I copy the file "deploy/stacks/self-managed/secrets/secrets.yaml.template" to "deploy/stacks/self-managed/secrets/local-bdd-secrets.yaml"
-      And I substitute "REPLACE_WITH_BASE64_DOCKER_CREDENTIAL" in file "deploy/stacks/self-managed/secrets/local-bdd-secrets.yaml" with base64 of "$oauthtoken:${NGC_API_KEY}"
+      And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-bdd-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
       # Conflict precheck: single-cluster ncp-local's k3d serverlb
       # claims 0.0.0.0:8080/8443/10081, and ncp-local-cp also
       # needs NATS on 4222 plus the worker callback port 10086.
@@ -106,6 +103,39 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
         | ingress                   | envoy-gateway-system |
         | llm-request-router        | nvcf                 |
         | llm-api-gateway           | nvcf                 |
+
+      # NVCF API must advertise the compute-reachable alias, not the
+      # control-plane pod or headless Service address. The same DNS name is a
+      # normal Service on the control plane and an Endpoints-backed alias on
+      # the compute plane.
+      When I run command "kubectl --context k3d-ncp-local-cp get configmap/nvcf-api-remote-config -n nvcf -o yaml"
+      Then the command exit code should be 0
+      And the command output should contain "worker-address: llm-request-router.nvcf.svc.cluster.local:50071"
+
+      # The dial address chooses the cross-cluster network path. Stargate's
+      # per-pod authority remains the gRPC authority and reverse QUIC SNI, so
+      # the managed certificate covers the stable Service and headless pod
+      # wildcard without relying on public DNS.
+      Then Kubernetes resource "Certificate/stargate-quic-tls" in namespace "nvcf" using context "k3d-ncp-local-cp" should contain:
+        """
+        spec:
+          secretName: stargate-quic-tls
+          dnsNames:
+            - llm-request-router.nvcf.svc.cluster.local
+            - "*.llm-request-router-headless.nvcf.svc.cluster.local"
+        """
+
+      When I run command:
+        """
+        kubectl --context k3d-ncp-local-cp wait tcproute/llm-worker-grpc udproute/llm-worker-quic -n envoy-gateway-system --for=jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}'=True --timeout=2m
+        """
+      Then the command exit code should be 0
+
+      When I run command:
+        """
+        kubectl --context k3d-ncp-local-cp wait tcproute/llm-worker-grpc udproute/llm-worker-quic -n envoy-gateway-system --for=jsonpath='{.status.parents[0].conditions[?(@.type=="ResolvedRefs")].status}'=True --timeout=2m
+        """
+      Then the command exit code should be 0
 
       # These routes are installed by ncp-local before the Helmfile
       # stack, then become fully resolved once the control-plane
@@ -220,8 +250,7 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
         | name          | namespace     |
         | nvca-operator | nvca-operator |
 
-      When I run command "kubectl rollout status deployment/nvca-operator -n nvca-operator --context k3d-ncp-local-compute-1 --timeout=10m"
-      Then the command exit code should be 0
+      Then deployment "nvca-operator" in namespace "nvca-operator" using context "k3d-ncp-local-compute-1" should complete rollout within "10m"
 
       # The default NVCFBackend CR is created on the compute cluster
       # by the nvca-operator helm chart at install time (helm reports
@@ -229,14 +258,15 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
       # its own .status.agentStatus locally. The NVCFBackend CRD is
       # therefore only registered on k3d-ncp-local-compute-1, not on
       # k3d-ncp-local-cp. Wait on the compute cluster.
-      When I run command "kubectl wait nvcfbackend ncp-local-compute-1 -n nvca-operator --context k3d-ncp-local-compute-1 --for=jsonpath={.status.agentStatus}=healthy --timeout=10m"
-      Then the command exit code should be 0
+      Then NVCFBackend "ncp-local-compute-1" in namespace "nvca-operator" using context "k3d-ncp-local-compute-1" should report agent status "healthy" within "10m"
 
   Rule: Helmfile-installed multi-cluster NVCF can run workloads
 
     # This scenario intentionally has no Background. It depends on the
     # earlier control-plane install and NVCA registration scenarios in
     # this feature run, and is not a standalone tag target.
+    # Failing until GitHub issue #1098 is resolved and the fix from GitHub
+    # issue #1032 is consumed by the self-managed stack.
     @nvct-task-api
     Scenario: Operator launches an NVCT task and waits for it to complete
       When I run command:

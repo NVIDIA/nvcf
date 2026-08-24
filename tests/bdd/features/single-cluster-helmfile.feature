@@ -13,27 +13,23 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
         | NGC_API_KEY     |
         | SAMPLE_NGC_ORG  |
         | SAMPLE_NGC_TEAM |
-      And I copy the file "tests/bdd/fixtures/self-managed-local-bdd.yaml" to "deploy/stacks/self-managed/environments/local-bdd.yaml"
       # The fixture is a copy of deploy/stacks/self-managed/environments/local.yaml,
       # which already carries every ncp-local local-mode override (storageClass,
       # replica counts, NVCA self-managed endpoints, addons.llm.*, agentConfig,
       # ingress.gatewayApi.*). The Background only overlays the operator-specific
       # values that vary per NGC org and pull-secret name.
-      And I update yaml file "deploy/stacks/self-managed/environments/local-bdd.yaml" with keys:
+      And I prepare Helmfile environment "local-bdd" for stack "self-managed" from fixture "tests/bdd/fixtures/self-managed-local-bdd.yaml" with values:
         | global.imagePullSecrets[0].name               | nvcr-pull-secret                                                   |
         | global.helm.sources.repository                | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                               |
         | global.image.repository                       | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                               |
         | api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE | nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/stargate-client:0.2.0 |
         | observability.profile                         | disabled                                                           |
-      And I copy the file "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" to "deploy/stacks/nvcf-compute-plane/environments/local-bdd.yaml"
-      And I update yaml file "deploy/stacks/nvcf-compute-plane/environments/local-bdd.yaml" with keys:
+      And I prepare Helmfile environment "local-bdd" for stack "nvcf-compute-plane" from fixture "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" with values:
         | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
         | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
         | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
         | observability.profile           | disabled                             |
-      And I copy the file "deploy/stacks/self-managed/secrets/secrets.yaml.template" to "deploy/stacks/self-managed/secrets/local-bdd-secrets.yaml"
-      # Only ${VAR} is interpolated; bare $oauthtoken stays literal.
-      And I substitute "REPLACE_WITH_BASE64_DOCKER_CREDENTIAL" in file "deploy/stacks/self-managed/secrets/local-bdd-secrets.yaml" with base64 of "$oauthtoken:${NGC_API_KEY}"
+      And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-bdd-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
 
     Scenario: Operator validates the authored Helmfile environment renders
       When I run command "make -C deploy/stacks/self-managed template HELMFILE_ENV=local-bdd"
@@ -145,11 +141,9 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
         | name          | namespace     |
         | nvca-operator | nvca-operator |
 
-      When I run command "kubectl rollout status deployment/nvca-operator -n nvca-operator --timeout=10m"
-      Then the command exit code should be 0
+      Then deployment "nvca-operator" in namespace "nvca-operator" using context "k3d-ncp-local" should complete rollout within "10m"
 
-      When I run command "kubectl wait nvcfbackend ncp-local -n nvca-operator --for=jsonpath={.status.agentStatus}=healthy --timeout=10m"
-      Then the command exit code should be 0
+      Then NVCFBackend "ncp-local" in namespace "nvca-operator" using context "k3d-ncp-local" should report agent status "healthy" within "10m"
 
   Rule: Helmfile-installed local NVCF can run a sample function
 

@@ -10,7 +10,7 @@ domain-specific validation logic.
 
 The vocabulary is restricted to four categories:
 
-1. File operations: copy, edit YAML, substitute strings.
+1. File operations: copy, edit YAML, substitute blocks, prepare secrets.
 2. Environment preconditions: env vars set, files exist, infrastructure
    reachable.
 3. Command execution: exec a shell command and capture exit code, stdout,
@@ -41,9 +41,10 @@ regex restricted to `\$\{[A-Z0-9_]+\}`.
 ### Infrastructure bootstrap (Given)
 
 These are the only Givens that hide a CLI invocation, and each one wraps
-exactly one Make target or one composite of `kubectl` calls. They contain
-no business logic. Spelling them out in raw `make` calls would balloon
-the feature file without adding coverage.
+exactly one Make target, one Helm authentication command, or one composite of
+`kubectl` calls. They contain no business logic. Spelling out their stable
+command and secret-handling mechanics would balloon the feature file without
+adding coverage.
 
 The bootstrap Givens are idempotent and cached per suite. The first
 scenario that names the Given runs the underlying Make target; later
@@ -55,7 +56,8 @@ implementation detail, not a license to omit the precondition.
 |------|-------|
 | `Given a single-cluster ncp-local cluster is running` | `make -C tools/ncp-local-cluster build-and-deploy-cluster`. Runs once per suite. |
 | `Given multi-cluster ncp-local compute clusters are running:` (table, see below) | Wraps `make -C tools/ncp-local-cluster build-and-deploy-multicluster COMPUTE_CLUSTER_COUNT=N`. Runs once per suite. |
-| `Given the {string} image pull secret exists in namespaces:` (table) | `kubectl create namespace <ns>` + `kubectl create secret docker-registry` for each row. Hidden because the docker-registry secret syntax leaks the API key to argv. |
+| `Given Helm is authenticated to OCI registry {string} using the current NGC API key` | Runs `helm registry login` once per explicit, interpolated registry. The current `NGC_API_KEY` is supplied through sensitive stdin and is redacted from captured output, command logs, and failures. |
+| `Given the {string} image pull secret exists in namespaces:` (table) | Applies one namespace manifest and one docker-registry secret manifest for each row. Hidden because direct docker-registry secret commands leak the API key to argv. |
 
 Compute-cluster table contract for the multi-cluster bootstrap Given:
 
@@ -105,7 +107,8 @@ refactor in every consumer; that is a feature.
 |------|-------|
 | `And I copy the file {string} to {string}` | Both paths are repo-relative. |
 | `And I update yaml file {string} with keys:` (two-column table of dotted-path and value) | Path supports dotted notation and `[n]` indices (e.g. `global.imagePullSecrets[0].name`). Missing intermediate maps and missing list indices are upserted: writing `global.imagePullSecrets[0].name` against a file that has neither `global.imagePullSecrets` nor any list entry creates both. Existing scalars at intermediate positions cause the step to fail rather than silently overwrite a non-map. Value cells expand `${VAR}` from `os.Environ`. |
-| `And I substitute {string} in file {string} with base64 of {string}` | Used for credential rendering; the third arg expands `${VAR}` then base64-encodes. The handler never logs the substituted value. |
+| `And I prepare Helmfile environment {string} for stack {string} from fixture {string} with values:` (two-column table of dotted-path and value) | Validates the stack and environment names, derives `deploy/stacks/<stack>/environments/<environment>.yaml` from the absolute repository root, copies the explicit fixture, and applies the visible values table with the same YAML update and `${VAR}` interpolation behavior. Supported stacks are `self-managed`, `observability`, and `nvcf-compute-plane`. The destination is ledger-backed. |
+| `And I prepare self-managed secrets file {string} from template {string} using the current NGC registry credential` | The destination and template are explicit repo-relative paths with `${VAR}` interpolation. Replaces the template's registry credential placeholder with base64 of the current `$oauthtoken:<NGC_API_KEY>` credential and writes the destination with mode `0600`. The destination is ledger-backed, and secret material never enters Gherkin, command logs, or failure messages. |
 | `And I substitute a block in file {string}:` (docstring) | The docstring contains an old block and replacement block separated by exactly one `---` line. `${VAR}` interpolation applies before an exact, ledger-backed replacement. Missing or malformed old blocks fail. |
 
 ### Command execution (When)
@@ -135,6 +138,7 @@ refactor in every consumer; that is a feature.
 | `Then yaml file {string} should contain:` (docstring) | Subset variant: every key in expected must exist in actual with the same value; extra keys in actual are allowed. Use this when the file has dynamic or future-additive fields. `${VAR}` expansion applies. |
 | `Then yaml file {string} key {string} should contain:` (docstring) | Subset semantics scoped to the subtree at the dotted key path. |
 | `Then the json output should contain rows:` (table) | Parses the last command's stdout as JSON (expected: array of objects). For each table row, asserts an object matching every column value exists in the array. Extra objects are allowed; ordering is not asserted. |
+| `Then Helm release {string} in namespace {string} using context {string} should contain values:` (YAML docstring) | Runs one explicit-context `helm get values -o yaml` for the named release and asserts that its values contain the supplied YAML subset. Extra map keys are allowed; lists remain order- and length-sensitive. Failure messages name the release and first differing path without printing release values. |
 | `Then Kubernetes resource {string} in namespace {string} using context {string} should contain:` (YAML docstring) | The resource is explicit `kind/name`. Runs one `kubectl get -o yaml` against the named context and asserts that the resource YAML contains the supplied YAML subset. Extra map keys are allowed; lists remain order- and length-sensitive. Failure messages name the resource and first differing path without printing resource values. |
 | `Then the rendered manifests in {string} should contain:` (table) | Requires a `text` header and one or more fixed strings. Recursively inspects regular files under the repo-relative directory and fails if any listed string is absent. `${VAR}` expansion applies to the path and table values. |
 | `Then the rendered manifests in {string} under directories matching {string} should contain:` (table) | Positive rendered-manifest assertion scoped to files below a directory whose name matches the supplied shell pattern, such as `*-nats`. The render directory, directory-name pattern, and table values support `${VAR}` expansion. |
@@ -142,6 +146,8 @@ refactor in every consumer; that is a feature.
 | `Then these Helm releases should be deployed using context {string}:` (table) | Requires `name` and `namespace` headers, with an optional `revision` header. Runs one explicit-context, all-namespaces `helm list` and asserts that every listed release has status `deployed`; non-empty revision cells are also matched. |
 | `Then these Kubernetes resources should exist in namespace {string} using context {string}:` (table) | Requires `kind` and `name` headers. Gets each named resource with the explicit namespace and context, and reports the row whose resource is missing. |
 | `Then these Kubernetes resources should not exist in namespace {string} using context {string}:` (table) | Requires `kind` and `name` headers. Gets each named resource with `--ignore-not-found` and requires empty name output, so absence does not depend on human-readable error text. |
+| `Then deployment {string} in namespace {string} using context {string} should complete rollout within {string}` | Runs `kubectl rollout status` for the named deployment with the explicit namespace, context, and timeout. Failure messages name the deployment without printing command output. |
+| `Then NVCFBackend {string} in namespace {string} using context {string} should report agent status {string} within {string}` | Waits for the named backend's `status.agentStatus` to equal the visible value using the explicit namespace, context, and timeout. Failure messages name the backend without printing resource output. |
 
 #### YAML comparison semantics
 
@@ -211,7 +217,8 @@ contract verified in `src/clis/nvcf-cli/cmd/`):
 
 Every step that writes into a path under the repo working tree
 (`I copy the file ... to ...`, `I update yaml file ...`,
-`I substitute ... in file ...`) registers that path with the runner's
+`I prepare self-managed secrets file ...`, `I substitute a block ...`)
+registers that path with the runner's
 restoration ledger:
 
 - Before the first write, the runner snapshots the file (exists/not,
@@ -242,11 +249,12 @@ only these steps. Add a shared step when a repeated action or observable keeps
 its meaningful inputs visible and hides only command or output-format
 mechanics. Otherwise use `When I run command` plus an output assertion.
 
-The infrastructure-bootstrap Givens (cluster up, image pull secret) and
-the single `Given command has succeeded:` carry-over are the only places
-where the strict DSL bends to share state across scenarios. Each one's
-hidden work is one CLI invocation, visible by either the wrapped Make
-target or the docstring command text.
+The infrastructure-bootstrap Givens (cluster up, Helm registry
+authentication, image pull secret) and the single
+`Given command has succeeded:` carry-over are the only places where the strict
+DSL bends to share state across scenarios. Each one's hidden work is one CLI
+invocation, visible through the named operator action, explicit target, wrapped
+Make target, or docstring command text.
 
 ## What this displaces from tests/bdd
 
@@ -261,8 +269,8 @@ Going away in `tests/bdd`:
   `InstallNvcaOperator`). Replaced by `When I run command "make ..."`.
 - The Helm release readback methods (`HelmReleaseDeployed`,
   `NVCAOperatorReady`, `NVCAAgentReady`). Release deployment checks use the
-  table-driven Helm assertion; readiness remains explicit through
-  `kubectl rollout status` / `kubectl wait` in Gherkin.
+  table-driven Helm assertion. NVCA readiness uses explicit-context deployment
+  rollout and NVCFBackend agent-status assertion steps.
 - The `harness.CLIHarness` interface and its five domain methods
   (`SelfHostedUp`, `SelfHostedInstallControlPlane`,
   `SelfHostedComputePlaneRegister`, `SelfHostedComputePlaneInstall`,
@@ -446,9 +454,14 @@ const (
 // names the first path that differed.
 func MatchYAMLSubtree(filePath, keyPath, expectedYAML string, mode MatchMode) error
 
+// RenderSelfManagedSecrets replaces the secrets-template registry credential
+// placeholder with base64 of `$oauthtoken:<NGC_API_KEY>`. It fails without
+// returning raw or encoded credential material when the key or placeholder is
+// missing.
+func RenderSelfManagedSecrets(template []byte, apiKey string) ([]byte, error)
+
 // SubstituteFile replaces every occurrence of placeholder with
-// replacement in the named file. Used for credential rendering.
-// Never logs placeholder or replacement.
+// replacement in the named file. Never logs placeholder or replacement.
 func SubstituteFile(path, placeholder, replacement string) error
 
 // JSONContainsRows parses raw as a JSON array of objects, and for each

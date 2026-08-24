@@ -13,37 +13,30 @@ Feature: Install local Helmfile observability for both planes
       | SAMPLE_NGC_TEAM |
       | NVCF_CLI        |
       | REPO_ROOT       |
-    # Helmfile pulls OCI charts during installation. Keep $NGC_API_KEY unbraced
-    # so the BDD runner does not expand it into command logs.
-    And command has succeeded:
-      """
-      bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" | helm registry login nvcr.io --username "\$oauthtoken" --password-stdin'
-      """
+    # Helmfile pulls OCI charts during installation. Authenticate before sync
+    # without exposing the current API key in command arguments or logs.
+    And Helm is authenticated to OCI registry "nvcr.io" using the current NGC API key
     # Configure the control-plane stack and its shared observability child.
-    And I copy the file "tests/bdd/fixtures/self-managed-local-bdd.yaml" to "deploy/stacks/self-managed/environments/local-bdd-observability-all.yaml"
-    And I update yaml file "deploy/stacks/self-managed/environments/local-bdd-observability-all.yaml" with keys:
+    And I prepare Helmfile environment "local-bdd-observability-all" for stack "self-managed" from fixture "tests/bdd/fixtures/self-managed-local-bdd.yaml" with values:
       | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
       | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | observability.profile           | all                                  |
       | functionAutoscaler.image.tag    | 1.18.10                              |
     # Give the shared observability Helmfile the same named environment.
-    And I copy the file "tests/bdd/fixtures/self-managed-local-bdd.yaml" to "deploy/stacks/observability/environments/local-bdd-observability-all.yaml"
-    And I update yaml file "deploy/stacks/observability/environments/local-bdd-observability-all.yaml" with keys:
+    And I prepare Helmfile environment "local-bdd-observability-all" for stack "observability" from fixture "tests/bdd/fixtures/self-managed-local-bdd.yaml" with values:
       | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
       | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | observability.profile           | all                                  |
     # Configure NVCA to join the same cluster and enable its collector.
-    And I copy the file "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" to "deploy/stacks/nvcf-compute-plane/environments/local-bdd-observability-all.yaml"
-    And I update yaml file "deploy/stacks/nvcf-compute-plane/environments/local-bdd-observability-all.yaml" with keys:
-      | global.imagePullSecrets[0].name                               | nvcr-pull-secret                                                  |
-      | global.helm.sources.repository                                | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                              |
-      | global.image.repository                                       | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                              |
-      | global.nvcaOperator.selfManaged.otelCollector.imageRepository | nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/nvcf-otel-collector |
-      | observability.profile                                         | all                                                               |
-    And I copy the file "deploy/stacks/self-managed/secrets/secrets.yaml.template" to "deploy/stacks/self-managed/secrets/local-bdd-observability-all-secrets.yaml"
-    And I substitute "REPLACE_WITH_BASE64_DOCKER_CREDENTIAL" in file "deploy/stacks/self-managed/secrets/local-bdd-observability-all-secrets.yaml" with base64 of "$oauthtoken:${NGC_API_KEY}"
+    And I prepare Helmfile environment "local-bdd-observability-all" for stack "nvcf-compute-plane" from fixture "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" with values:
+      | global.imagePullSecrets[0].name                       | nvcr-pull-secret                     |
+      | global.helm.sources.repository                        | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+      | global.image.repository                               | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+      | global.nvcaOperator.selfManaged.otelCollector.enabled | true                                 |
+      | observability.profile                                 | all                                  |
+    And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-bdd-observability-all-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
     # Conflict precheck: the split topology claims host ports used by the
     # single-cluster topology. From the repository root, run
     # `make -C tools/ncp-local-cluster destroy-all-ncp-local SHELL=/bin/bash`
@@ -115,10 +108,8 @@ Feature: Install local Helmfile observability for both planes
       | default-monitors         | monitoring    | 1        |
       | nvca-operator            | nvca-operator | 1        |
 
-    When I run command "kubectl rollout status deployment/nvca-operator -n nvca-operator --context k3d-ncp-local --timeout=10m"
-    Then the command exit code should be 0
-    When I run command "kubectl wait nvcfbackend ncp-local -n nvca-operator --context k3d-ncp-local --for=jsonpath={.status.agentStatus}=healthy --timeout=10m"
-    Then the command exit code should be 0
+    Then deployment "nvca-operator" in namespace "nvca-operator" using context "k3d-ncp-local" should complete rollout within "10m"
+    Then NVCFBackend "ncp-local" in namespace "nvca-operator" using context "k3d-ncp-local" should report agent status "healthy" within "10m"
 
     Then Kubernetes resource "OpenTelemetryCollector/nvcf-observability" in namespace "monitoring" using context "k3d-ncp-local" should contain:
       """
@@ -137,9 +128,10 @@ Feature: Install local Helmfile observability for both planes
       | PodMonitor     | nvcf-default-monitors-dcgm                        |
       | PodMonitor     | nvcf-default-monitors-worker                      |
 
-    When I run command:
+    Then Helm release "nvca-operator" in namespace "nvca-operator" using context "k3d-ncp-local" should contain values:
       """
-      bash -c 'set -eo pipefail; helm get values nvca-operator --namespace nvca-operator --kube-context k3d-ncp-local -o json | jq -r ".selfManaged.otelCollector.enabled"'
+      selfManaged:
+        otelCollector:
+          enabled: true
+          imageRepository: nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/nvcf-otel-collector
       """
-    Then the command exit code should be 0
-    And the command output should contain "true"

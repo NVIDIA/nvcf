@@ -27,7 +27,7 @@ OCI_REGISTRY_NAMESPACE ?= <your-org>
 CHART_NAME := $(shell yq -r .name $(helm_dir)/Chart.yaml)
 CHART_VERSION := $(shell yq -r .version $(helm_dir)/Chart.yaml)
 
-.PHONY: install uninstall status lint template validate clean package push-oci test check-pki-render check-multi-replica-render
+.PHONY: install uninstall status lint template validate clean package push-oci test check-pki-render check-multi-replica-render check-backend-router-render
 
 install:
 ifndef values
@@ -65,13 +65,16 @@ template:
 validate: template
 	kubeconform -strict -summary -output pretty -kubernetes-version 1.31.5 bin/manifest.yaml
 
-test: check-pki-render check-multi-replica-render
+test: check-pki-render check-multi-replica-render check-backend-router-render
 
 check-pki-render:
 	sh ./scripts/check-pki-render.sh
 
 check-multi-replica-render:
 	sh ./scripts/check-multi-replica-render.sh
+
+check-backend-router-render:
+	sh ./scripts/check-backend-router-render.sh
 
 clean:
 	rm -rf ./packaged-charts bin

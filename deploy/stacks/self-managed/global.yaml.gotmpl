@@ -68,11 +68,18 @@ cassandra:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/alpine-k8s
   image:
-    registry: {{ .Values.global.image.registry }}
-    repository: {{ .Values.global.image.repository }}/cassandra
+    registry: {{ dig "cassandra" "image" "registry" "" .Values | default .Values.global.image.registry }}
+    repository: {{ dig "cassandra" "image" "repository" "" .Values | default (printf "%s/cassandra" .Values.global.image.repository) }}
     {{- if dig "cassandra" "image" "tag" "" .Values }}
     tag: {{ dig "cassandra" "image" "tag" "" .Values }}
     {{- end }}
+  dynamicSeedDiscovery:
+    image:
+      registry: {{ dig "cassandra" "dynamicSeedDiscovery" "image" "registry" "" .Values | default .Values.global.image.registry }}
+      repository: {{ dig "cassandra" "dynamicSeedDiscovery" "image" "repository" "" .Values | default (printf "%s/cassandra" .Values.global.image.repository) }}
+      {{- if dig "cassandra" "dynamicSeedDiscovery" "image" "tag" "" .Values }}
+      tag: {{ dig "cassandra" "dynamicSeedDiscovery" "image" "tag" "" .Values }}
+      {{- end }}
 
 # cert-manager subchart image overrides. The helm-nvcf-cert-manager wrapper
 # passes these through to the upstream cert-manager subchart under the
@@ -115,11 +122,20 @@ openbao:
       tag: {{ dig "openbao" "migrations" "image" "tag" "" .Values }}
       {{- end }}
 
+    env:
+      {{- with dig "openbao" "migrations" "env" (list) .Values }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+      - name: ADDONS_LLM_ENABLED
+        value: {{ dig "addons" "llm" "enabled" false .Values | quote }}
+      - name: NVCF_SERVICE_PKI_ALLOWED_DOMAINS
+        value: {{ dig "addons" "llm" "pki" "allowedDomains" "" .Values | quote }}
+
     # merge the rest of the user-supplied migrations block, but drop
-    # its image sub-block so we don't clobber the defaults above
+    # image and env sub-blocks so we don't clobber the defaults above.
     {{- with .Values.openbao.migrations }}
     {{- range $key, $value := . }}
-    {{- if ne $key "image" }}
+    {{- if and (ne $key "image") (ne $key "env") }}
     {{ $key }}:
       {{- toYaml $value | nindent 6 }}
     {{- end }}
@@ -196,11 +212,16 @@ nats:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/nats-server
       tag: 2.11.17-alpine3.22
+  # The config reloader is not republished under the public nvidia/nvcf
+  # catalog, so it defaults to its upstream Docker Hub source and a
+  # public-catalog install needs no override. If you mirror the image into
+  # your own registry, set registry and repository below in your environment
+  # file instead of editing this template.
   reloader:
     image:
-      registry: {{ .Values.global.image.registry }}
-      repository: {{ .Values.global.image.repository }}/nats-server-config-reloader
-      tag: "0.23.0"
+      registry: {{ dig "nats" "reloader" "image" "registry" "" .Values | default "docker.io" }}
+      repository: {{ dig "nats" "reloader" "image" "repository" "" .Values | default "natsio/nats-server-config-reloader" }}
+      tag: {{ dig "nats" "reloader" "image" "tag" "" .Values | default "0.23.0" | quote }}
   natsBox:
     container:
       image:
@@ -257,6 +278,10 @@ apikeys:
   podDisruptionBudget:
     {{- toYaml . | nindent 4 }}
   {{- end }}
+  {{- with dig "apikeys" "startupProbe" dict .Values }}
+  startupProbe:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 
 natsAuthCalloutService:
   {{- if .Values.global.imagePullSecrets }}
@@ -272,6 +297,7 @@ natsAuthCalloutService:
 {{- $nvcfWorkerGrpcServiceURL := dig "nvcfGrpcServiceURL" "" $workerEndpoints }}
 {{- $grpcProxyNVCFGrpcServiceURL := dig "grpcproxy" "nvcfGrpcServiceURL" "" .Values | default $nvcfWorkerGrpcServiceURL }}
 {{- $nvcfNatsWorkerServiceURL := dig "nvcfNatsServiceURL" "" $workerEndpoints }}
+{{- $grpcProxyNatsServiceURL := dig "grpcproxy" "natsServiceURL" "" .Values | default "nats://nats.nats-system.svc.cluster.local:4222" }}
 {{- $essWorkerBaseURL := dig "essServiceURL" "" $workerEndpoints }}
 {{- $nvctWorkerServiceURL := dig "nvctServiceURL" "" $workerEndpoints }}
 {{- $nvctWorkerGrpcServiceURL := dig "nvctGrpcServiceURL" "" $workerEndpoints }}
@@ -366,11 +392,16 @@ api:
         llm-request-router:
           worker-address: {{ $llmRequestRouterWorkerAddress | quote }}
   {{- end }}
+  # alpine-k8s is not republished under the public nvidia/nvcf catalog, so it
+  # defaults to its upstream Docker Hub source and a public-catalog install
+  # needs no override. If you mirror the image into your own registry, set
+  # registry and repository below in your environment file instead of editing
+  # this template.
   accountBootstrap:
     image:
-      registry: {{ .Values.global.image.registry }}
-      repository: {{ .Values.global.image.repository }}/alpine-k8s
-      tag: 1.36.1
+      registry: {{ dig "api" "accountBootstrap" "image" "registry" "" .Values | default "docker.io" }}
+      repository: {{ dig "api" "accountBootstrap" "image" "repository" "" .Values | default "alpine/k8s" }}
+      tag: {{ dig "api" "accountBootstrap" "image" "tag" "" .Values | default "1.36.1" | quote }}
       pullPolicy: IfNotPresent
 
     registryCredentials: []
@@ -541,7 +572,7 @@ grpcproxy:
     {{- with $grpcProxyNVCFGrpcServiceURL }}
     NVCF_FQDN_GRPC: {{ . | quote }}
     {{- end }}
-    {{- with $nvcfNatsWorkerServiceURL }}
+    {{- with $grpcProxyNatsServiceURL }}
     NATS_FQDN: {{ . | quote }}
     {{- end }}
     {{- if .Values.rateLimiter.enabled }}
@@ -842,6 +873,35 @@ llmRequestRouter:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}/stargate
+  {{- /*
+  Backend routing follows the LLM addon rather than being separately opted into.
+  A worker holds one registration stream and one reverse tunnel per replica, and
+  those must reach a named replica, so the router is the connection path in
+  every topology. Keeping it always on means single-cluster installs exercise
+  the same path that split-cluster and multi-region installs depend on, instead
+  of that path only appearing where it is hardest to test.
+
+  The dial addresses default to the backend-router Service in-cluster, so no
+  configuration is required. Split-cluster and multi-region operators override
+  addons.llm.requestRouter.backendRouter.pylon*DialAddress with externally
+  reachable addresses.
+  */}}
+  backendRouter:
+    enabled: {{ dig "addons" "llm" "requestRouter" "backendRouter" "enabled" (dig "addons" "llm" "enabled" false .Values) .Values }}
+    replicaCount: {{ dig "addons" "llm" "requestRouter" "backendRouter" "replicaCount" 2 .Values }}
+    image:
+      registry: {{ .Values.global.image.registry }}
+      repository: {{ .Values.global.image.repository }}/stargate
+    {{- with dig "addons" "llm" "requestRouter" "backendRouter" "pylonGrpcDialAddress" "" .Values }}
+    pylonGrpcDialAddress: {{ . | quote }}
+    {{- end }}
+    {{- with dig "addons" "llm" "requestRouter" "backendRouter" "pylonReverseTunnelDialAddress" "" .Values }}
+    pylonReverseTunnelDialAddress: {{ . | quote }}
+    {{- end }}
+    {{- if .Values.global.imagePullSecrets }}
+    imagePullSecrets:
+      {{- toYaml .Values.global.imagePullSecrets | nindent 6 }}
+    {{- end }}
   {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}
@@ -980,13 +1040,10 @@ llmRequestRouter:
     quicInsecure: false
   {{- if $managedIssuer }}
   {{- $allowedDomains := required "addons.llm.pki.allowedDomains is required when addons.llm.pki.clusterIssuer management is enabled" (dig "addons" "llm" "pki" "allowedDomains" "" .Values) }}
-  {{- /* Provisioning hook reuses the same image the k8s-openbao chart drives;
-       fall back to openbao.migrations.image.tag so operators set the version
-       in one place. */ -}}
-  {{- $pkiImageTag := dig "addons" "llm" "pki" "image" "tag" (dig "openbao" "migrations" "image" "tag" "" .Values) .Values }}
-  {{- if not $pkiImageTag }}
-  {{- fail "addons.llm.pki.image.tag (or openbao.migrations.image.tag) is required when addons.llm.pki.clusterIssuer management is enabled" }}
-  {{- end }}
+  {{- /* Provisioning reuses the OpenBao migrations image. Prefer an explicit
+       PKI tag, then the OpenBao migrations tag, and finally the compatible
+       stack default so a normal environment need not duplicate chart values. */ -}}
+  {{- $pkiImageTag := dig "addons" "llm" "pki" "image" "tag" (dig "openbao" "migrations" "image" "tag" "" .Values) .Values | default "0.16.2" }}
   pki:
     enabled: true
     namespace: {{ dig "addons" "llm" "pki" "namespace" "vault-system" .Values | quote }}
@@ -1253,6 +1310,7 @@ nvcfUi:
 nvcfGatewayRoutes:
   {{- $natsRouteEnabled := dig "ingress" "gatewayApi" "routes" "nats" "enabled" false .Values }}
   {{- $essRouteEnabled := dig "ingress" "gatewayApi" "routes" "ess" "enabled" false .Values }}
+  {{- $llmWorkerRouteEnabled := dig "ingress" "gatewayApi" "routes" "llmWorker" "enabled" false .Values }}
   domain: "{{ .Values.global.domain }}"
   gateways:
     shared:
@@ -1266,6 +1324,16 @@ nvcfGatewayRoutes:
       name: {{ required "ingress.gatewayApi.gateways.nats.name is required when ingress.gatewayApi.routes.nats.enabled is true" .Values.ingress.gatewayApi.gateways.nats.name }}
       namespace: {{ required "ingress.gatewayApi.gateways.nats.namespace is required when ingress.gatewayApi.routes.nats.enabled is true" .Values.ingress.gatewayApi.gateways.nats.namespace }}
       listenerName: {{ dig "ingress" "gatewayApi" "gateways" "nats" "listenerName" "nats" .Values }}
+    {{- end }}
+    {{- if $llmWorkerRouteEnabled }}
+    llmGrpc:
+      name: {{ required "ingress.gatewayApi.gateways.llmGrpc.name is required when ingress.gatewayApi.routes.llmWorker.enabled is true" .Values.ingress.gatewayApi.gateways.llmGrpc.name }}
+      namespace: {{ required "ingress.gatewayApi.gateways.llmGrpc.namespace is required when ingress.gatewayApi.routes.llmWorker.enabled is true" .Values.ingress.gatewayApi.gateways.llmGrpc.namespace }}
+      listenerName: {{ dig "ingress" "gatewayApi" "gateways" "llmGrpc" "listenerName" "llm-grpc" .Values }}
+    llmQuic:
+      name: {{ required "ingress.gatewayApi.gateways.llmQuic.name is required when ingress.gatewayApi.routes.llmWorker.enabled is true" .Values.ingress.gatewayApi.gateways.llmQuic.name }}
+      namespace: {{ required "ingress.gatewayApi.gateways.llmQuic.namespace is required when ingress.gatewayApi.routes.llmWorker.enabled is true" .Values.ingress.gatewayApi.gateways.llmQuic.namespace }}
+      listenerName: {{ dig "ingress" "gatewayApi" "gateways" "llmQuic" "listenerName" "llm-quic" .Values }}
     {{- end }}
   routes:
     nvcfApi:
@@ -1329,6 +1397,17 @@ nvcfGatewayRoutes:
       enabled: {{ $natsRouteEnabled }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "nats" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+    llmWorker:
+      enabled: {{ $llmWorkerRouteEnabled }}
+      {{- if $llmWorkerRouteEnabled }}
+      backend:
+        name: {{ dig "ingress" "gatewayApi" "routes" "llmWorker" "backend" "name" "llm-request-router-backend-router" .Values }}
+        namespace: {{ required "ingress.gatewayApi.routes.llmWorker.backend.namespace is required when ingress.gatewayApi.routes.llmWorker.enabled is true" .Values.ingress.gatewayApi.routes.llmWorker.backend.namespace }}
+        grpcPort: {{ dig "ingress" "gatewayApi" "routes" "llmWorker" "backend" "grpcPort" 50071 .Values }}
+        quicPort: {{ dig "ingress" "gatewayApi" "routes" "llmWorker" "backend" "quicPort" 50072 .Values }}
+      {{- end }}
+      routeAnnotations:
+        {{ dig "ingress" "gatewayApi" "routes" "llmWorker" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
     # ESS route attaches to the shared Gateway (backend/hostname come from chart
     # defaults); only the enable flag and annotations are environment-driven.
     ess:

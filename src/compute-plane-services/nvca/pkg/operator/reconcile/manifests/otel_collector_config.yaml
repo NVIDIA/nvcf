@@ -117,6 +117,45 @@ processors:
         - log.attributes["event_name"] == nil
         - log.attributes["event_name"] == ""
 
+  # ICMS lane: keep only ICMSRequest Events with a known reason; everything else
+  # is handled by the Pod lane or is noise that must not reach FnDs.
+  filter/icms-events:
+    error_mode: ignore
+    logs:
+      log_record:
+        - resource.attributes["k8s.object.kind"] != "ICMSRequest"
+        - not(log.attributes["k8s.event.reason"] in ["InstanceCreation", "InstanceStatusUpdate", "InstanceTermination"])
+
+  # ICMS lane: lift nvcf.nvidia.io/* annotations stamped by NVCA (via AnnotatedEventf)
+  # onto ICMSRequest Events into flat log.attributes so the FnDs exporter can read them.
+  # k8sattributes is intentionally omitted: the annotations carry all ledger fields already.
+  transform/lift-icms-annotations:
+    error_mode: ignore
+    log_statements:
+      - set(log.attributes["icms_request_id"], log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/icms-request-id"]) where log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/icms-request-id"] != nil
+      - set(log.attributes["namespace"], log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/function-version-id"]) where log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/function-version-id"] != nil
+      # Tasks are keyed by task-id in FnDs; override function_version_id when present.
+      - set(log.attributes["namespace"], log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/task-id"]) where log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/task-id"] != nil and log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/task-id"] != ""
+      - set(log.attributes["instance_id"], log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/instance-id"]) where log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/instance-id"] != nil
+      - set(log.attributes["cluster_id"], log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/cluster-id"]) where log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/cluster-id"] != nil
+      - set(log.attributes["nca_id"], log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/nca-id"]) where log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/nca-id"] != nil
+      - set(log.attributes["function_id"], log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/function-id"]) where log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/function-id"] != nil
+      - set(log.attributes["instance_state"], log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/instance-state"]) where log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/instance-state"] != nil
+      - set(log.attributes["failure_category"], log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/failure-category"]) where log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/failure-category"] != nil
+      - set(log.attributes["termination_cause"], log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/termination-cause"]) where log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/termination-cause"] != nil
+      - set(log.attributes["region"], log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/region"]) where log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/region"] != nil
+      - set(log.attributes["icms_status"], log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/status"]) where log.body["object"]["metadata"]["annotations"]["nvcf.nvidia.io/status"] != nil
+      - set(log.attributes["source"], "nvca")
+
+  # ICMS lane: synthesize event_name = "ICMSRequest.<reason>[.<instance_state>]".
+  # The state segment is included when the Event carries an instance-state annotation
+  # (instance-level events); request-level events omit it.
+  transform/synth-icms-event-name:
+    error_mode: ignore
+    log_statements:
+      - set(log.attributes["event_name"], Concat(["ICMSRequest", log.attributes["k8s.event.reason"], log.attributes["instance_state"]], ".")) where log.attributes["k8s.event.reason"] != nil and log.attributes["instance_state"] != nil and log.attributes["instance_state"] != ""
+      - set(log.attributes["event_name"], Concat(["ICMSRequest", log.attributes["k8s.event.reason"]], ".")) where log.attributes["k8s.event.reason"] != nil and (log.attributes["instance_state"] == nil or log.attributes["instance_state"] == "")
+
 extensions:
 {{ if .UseOAuth2 }}
   oauth2client:
@@ -181,6 +220,22 @@ service:
         - filter
         - k8sattributes
         - transform
+        - filter/required-fields
+        - batch
+      exporters:
+        - otlphttp/fnds
+
+    logs/icms-events:
+      receivers:
+        - k8sobjects
+      processors:
+        - memory_limiter
+        # normalize runs first to set k8s.object.kind and k8s.event.reason so
+        # filter/icms-events and synth-icms-event-name can read them.
+        - transform/normalize
+        - filter/icms-events
+        - transform/lift-icms-annotations
+        - transform/synth-icms-event-name
         - filter/required-fields
         - batch
       exporters:

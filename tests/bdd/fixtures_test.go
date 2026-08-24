@@ -189,7 +189,7 @@ func TestComputePlaneLocalBDDFixturesDisableResourceSizingFeatureGates(t *testin
 	}
 }
 
-func TestSelfManagedLocalBDDMultiFixtureWiresGRPCWorkerCallback(t *testing.T) {
+func TestSelfManagedLocalBDDMultiFixtureWiresComputeReachableWorkerEndpoints(t *testing.T) {
 	fixtureBytes, err := os.ReadFile("fixtures/self-managed-local-bdd-multi.yaml")
 	if err != nil {
 		t.Fatalf("read multi-cluster stack fixture: %v", err)
@@ -197,11 +197,18 @@ func TestSelfManagedLocalBDDMultiFixtureWiresGRPCWorkerCallback(t *testing.T) {
 	fixture := string(fixtureBytes)
 	for _, want := range []string{
 		"workerConnectBaseURL: http://grpc.nvcf.svc.cluster.local:10086",
-		"chart: ../../../helm/gateway-routes/chart",
-		`version: ""`,
+		"llmRequestRouterAddress: llm-request-router.nvcf.svc.cluster.local:50071",
+		"chartPath: ../../../helm/gateway-routes/chart",
+		"chartPath: ../../../helm/llm-request-router/llm-request-router",
+		"pylonGrpcDialAddress: llm-request-router.nvcf.svc.cluster.local:50071",
+		"pylonReverseTunnelDialAddress: llm-request-router.nvcf.svc.cluster.local:50072",
+		"*.llm-request-router-headless.nvcf.svc.cluster.local",
 		"grpcWorker:",
+		"llmWorker:",
 		"enabled: true",
 		"listenerName: worker-tcp",
+		"listenerName: llm-grpc",
+		"listenerName: llm-quic",
 	} {
 		if !strings.Contains(fixture, want) {
 			t.Fatalf("multi-cluster stack fixture missing %q", want)

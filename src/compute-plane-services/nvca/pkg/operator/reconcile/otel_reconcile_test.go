@@ -162,6 +162,7 @@ func TestGetOTelCollectorConfigData(t *testing.T) {
 			// Assert receiver/pipeline and Pod-lane semantics structurally.
 			assertClusterWideK8sObjects(t, config)
 			assertPodLaneTransforms(t, config)
+			assertICMSLane(t, config)
 		})
 	}
 }
@@ -225,6 +226,117 @@ func assertPodLaneTransforms(t *testing.T, config string) {
 	assert.GreaterOrEqual(t, indexOfContaining(stmts,
 		`Concat(["Pod", log.attributes["k8s.event.reason"]]`), 0,
 		"pod-scoped event_name branch missing")
+}
+
+// assertICMSLane asserts the #814 ICMS lane semantics: a logs/icms-events pipeline
+// is declared alongside the Pod lane, filter/icms-events keeps only ICMSRequest Events,
+// transform/lift-icms-annotations lifts all nvcf.nvidia.io/* annotations, and
+// transform/synth-icms-event-name builds both event_name variants.
+func assertICMSLane(t *testing.T, config string) {
+	t.Helper()
+	var full map[string]any
+	require.NoError(t, yaml.Unmarshal([]byte(config), &full))
+	processors := full["processors"].(map[string]any)
+
+	icmsFilter, ok := processors["filter/icms-events"].(map[string]any)
+	require.True(t, ok, "filter/icms-events processor must be declared")
+	records := icmsFilter["logs"].(map[string]any)["log_record"].([]any)
+	require.Len(t, records, 2, "filter/icms-events must have kind and reason drop conditions")
+	// First condition must drop non-ICMSRequest kinds (exclusion, not inclusion).
+	assert.Contains(t, records[0].(string), `!= "ICMSRequest"`, "filter/icms-events kind condition must drop non-ICMSRequest events")
+	// Second condition must allowlist the three supported reasons via not(...in[...]).
+	assert.Contains(t, records[1].(string), "not(", "filter/icms-events reason condition must use not() to drop unsupported reasons")
+	for _, reason := range []string{"InstanceCreation", "InstanceStatusUpdate", "InstanceTermination"} {
+		assert.Contains(t, records[1].(string), reason, "filter/icms-events allowlist must include reason %q", reason)
+	}
+	assert.NotContains(t, records[1].(string), "ModelCaching", "filter/icms-events must exclude ModelCaching")
+
+	liftProc, ok := processors["transform/lift-icms-annotations"].(map[string]any)
+	require.True(t, ok, "transform/lift-icms-annotations processor must be declared")
+	var liftStmts []string
+	for _, s := range liftProc["log_statements"].([]any) {
+		liftStmts = append(liftStmts, s.(string))
+	}
+	for _, key := range []string{
+		"nvcf.nvidia.io/icms-request-id",
+		"nvcf.nvidia.io/function-version-id",
+		"nvcf.nvidia.io/task-id",
+		"nvcf.nvidia.io/instance-id",
+		"nvcf.nvidia.io/cluster-id",
+		"nvcf.nvidia.io/nca-id",
+		"nvcf.nvidia.io/function-id",
+		"nvcf.nvidia.io/instance-state",
+		"nvcf.nvidia.io/failure-category",
+		"nvcf.nvidia.io/termination-cause",
+		"nvcf.nvidia.io/region",
+		"nvcf.nvidia.io/status",
+	} {
+		assert.GreaterOrEqual(t, indexOfContaining(liftStmts, key), 0,
+			"lift-icms-annotations must reference annotation %q", key)
+	}
+	fvIdx := indexOfContaining(liftStmts, `"nvcf.nvidia.io/function-version-id"`)
+	taskIdx := indexOfContaining(liftStmts, `"nvcf.nvidia.io/task-id"`)
+	require.GreaterOrEqual(t, fvIdx, 0, "function-version-id lift statement missing")
+	require.GreaterOrEqual(t, taskIdx, 0, "task-id lift statement missing")
+	assert.Less(t, fvIdx, taskIdx, "task-id must override namespace after function-version-id")
+	// Assert complete source-to-destination mapping for the two non-obvious attributes.
+	regionIdx := indexOfContaining(liftStmts, `"nvcf.nvidia.io/region"`)
+	if assert.GreaterOrEqual(t, regionIdx, 0, "region lift statement missing") {
+		assert.Contains(t, liftStmts[regionIdx], `set(log.attributes["region"]`)
+	}
+	statusIdx := indexOfContaining(liftStmts, `"nvcf.nvidia.io/status"`)
+	if assert.GreaterOrEqual(t, statusIdx, 0, "status lift statement missing") {
+		assert.Contains(t, liftStmts[statusIdx], `set(log.attributes["icms_status"]`)
+	}
+
+	synthProc, ok := processors["transform/synth-icms-event-name"].(map[string]any)
+	require.True(t, ok, "transform/synth-icms-event-name processor must be declared")
+	var synthStmts []string
+	for _, s := range synthProc["log_statements"].([]any) {
+		synthStmts = append(synthStmts, s.(string))
+	}
+	stateIdx := indexOfContaining(synthStmts,
+		`Concat(["ICMSRequest", log.attributes["k8s.event.reason"], log.attributes["instance_state"]]`)
+	// Use require so a missing branch stops execution before the indexed access below.
+	require.GreaterOrEqual(t, stateIdx, 0, "state-qualified event_name branch missing")
+	// Empty instance_state must fall through to the reason-only branch, not produce a trailing dot.
+	assert.Contains(t, synthStmts[stateIdx], `instance_state"] != ""`,
+		"state-qualified branch must guard against empty instance_state")
+	reasonOnlyIdx := indexOfContaining(synthStmts,
+		`Concat(["ICMSRequest", log.attributes["k8s.event.reason"]]`)
+	// Use require so a missing branch stops execution before the indexed access below.
+	require.GreaterOrEqual(t, reasonOnlyIdx, 0, "reason-only event_name branch missing")
+	// Empty instance_state (not just nil) must also trigger the reason-only branch so
+	// events with an empty annotation do not lose their event_name and get dropped by
+	// filter/required-fields.
+	assert.Contains(t, synthStmts[reasonOnlyIdx], `instance_state"] == ""`,
+		"reason-only branch must accept empty instance_state, not only nil")
+
+	pipelines := full["service"].(map[string]any)["pipelines"].(map[string]any)
+	icmsPipeline, ok := pipelines["logs/icms-events"].(map[string]any)
+	require.True(t, ok, "logs/icms-events pipeline must be declared")
+	assert.Contains(t, icmsPipeline["receivers"], "k8sobjects")
+	var pipelineProcs []string
+	for _, p := range icmsPipeline["processors"].([]any) {
+		pipelineProcs = append(pipelineProcs, p.(string))
+	}
+	for _, required := range []string{
+		"memory_limiter", "transform/normalize", "filter/icms-events",
+		"transform/lift-icms-annotations", "transform/synth-icms-event-name",
+		"filter/required-fields", "batch",
+	} {
+		assert.Contains(t, pipelineProcs, required, "logs/icms-events pipeline missing processor %q", required)
+	}
+	assert.Contains(t, icmsPipeline["exporters"], "otlphttp/fnds")
+	// Verify critical processor ordering.
+	normalizeIdx := indexOfContaining(pipelineProcs, "transform/normalize")
+	filterIdx := indexOfContaining(pipelineProcs, "filter/icms-events")
+	liftIdx := indexOfContaining(pipelineProcs, "transform/lift-icms-annotations")
+	synthProcIdx := indexOfContaining(pipelineProcs, "transform/synth-icms-event-name")
+	requiredFieldsIdx := indexOfContaining(pipelineProcs, "filter/required-fields")
+	assert.Less(t, normalizeIdx, filterIdx, "transform/normalize must run before filter/icms-events")
+	assert.Less(t, liftIdx, synthProcIdx, "transform/lift-icms-annotations must run before transform/synth-icms-event-name")
+	assert.Less(t, synthProcIdx, requiredFieldsIdx, "transform/synth-icms-event-name must run before filter/required-fields")
 }
 
 func indexOfContaining(items []string, sub string) int {

@@ -43,8 +43,10 @@ without the `.yaml` suffix.
 ## Observability
 
 The stack defaults `observability.profile` to `compute`. The `compute` and
-`all` profiles enable the NVCA collector and `BYOObservability` feature gate.
-The `control` and `disabled` profiles leave both off.
+`all` profiles enable the `BYOObservability` feature gate. The optional NVCA
+collector stays disabled for every profile until the operator opts in. This
+prevents a self-hosted install from depending on an image that was not mirrored
+into its registry.
 
 One value selects the normal behavior:
 
@@ -53,16 +55,27 @@ observability:
   profile: compute
 ```
 
-Explicit NVCA values override the profile defaults:
+Enable the collector after publishing it under `global.image`. Its repository
+defaults to `${global.image.registry}/${global.image.repository}/nvcf-otel-collector`:
 
 ```yaml
 global:
   nvcaOperator:
     selfManaged:
       otelCollector:
-        enabled: false
-      featureGateValues:
-        - "-BYOObservability"
+        enabled: true
+```
+
+If the collector is published outside that global image path, set its explicit
+repository override while opting in:
+
+```yaml
+global:
+  nvcaOperator:
+    selfManaged:
+      otelCollector:
+        enabled: true
+        imageRepository: nvcr.io/example/collectors/nvcf-otel-collector
 ```
 
 ## Chart and Image Sources

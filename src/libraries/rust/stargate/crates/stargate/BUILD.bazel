@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+load("@rules_go//go:def.bzl", "go_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("@stargate_crates//:defs.bzl", "aliases", "all_crate_deps")
 load("@rules_rust//cargo:defs.bzl", "cargo_build_script")
@@ -134,14 +135,19 @@ sh_test(
     data = [":image_layer"],
 )
 
-# Composite-image guard. Inspect the assembled OCI layout so removing the
-# router's extra layer fails this test.
-sh_test(
+# Composite-image guard. Inspect every platform manifest reachable from the
+# assembled OCI index so removing the router's extra layer fails this test.
+go_test(
+    name = "image_router_binary_unit_test",
+    srcs = ["image_router_binary_test.go"],
+)
+
+go_test(
     name = "image_router_binary_test",
-    srcs = ["//src/libraries/rust/stargate/tools/ci:test-oci-image-contains-path.sh"],
+    srcs = ["image_router_binary_test.go"],
     args = [
-        "$(location :image)",
-        "/usr/local/bin/stargate-k8s-router",
+        "-image-layout=$(location :image)",
+        "-image-path=/usr/local/bin/stargate-k8s-router",
     ],
     data = [":image"],
 )
