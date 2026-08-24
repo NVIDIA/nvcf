@@ -33,11 +33,11 @@ Feature: Install local Helmfile observability with the compute profile
       | observability.profile           | compute                              |
     # Configure NVCA to use the same compute observability profile.
     And I prepare Helmfile environment "local-bdd-observability-compute" for stack "nvcf-compute-plane" from fixture "tests/bdd/fixtures/nvcf-compute-plane-local-bdd-multi.yaml" with values:
-      | global.imagePullSecrets[0].name                               | nvcr-pull-secret                                                  |
-      | global.helm.sources.repository                                | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                              |
-      | global.image.repository                                       | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                              |
-      | global.nvcaOperator.selfManaged.otelCollector.imageRepository | nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/nvcf-otel-collector |
-      | observability.profile                                         | compute                                                           |
+      | global.imagePullSecrets[0].name                       | nvcr-pull-secret                     |
+      | global.helm.sources.repository                        | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+      | global.image.repository                               | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+      | global.nvcaOperator.selfManaged.otelCollector.enabled | true                                 |
+      | observability.profile                                 | compute                              |
     And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-bdd-observability-compute-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
     # Conflict precheck: single-cluster ncp-local claims host ports used by the
     # split topology. From the repository root, run
@@ -150,6 +150,7 @@ Feature: Install local Helmfile observability with the compute profile
       selfManaged:
         otelCollector:
           enabled: true
+          imageRepository: nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/nvcf-otel-collector
       """
 
     When I run command "helm status function-autoscaler --namespace nvcf --kube-context k3d-ncp-local-compute-1"
