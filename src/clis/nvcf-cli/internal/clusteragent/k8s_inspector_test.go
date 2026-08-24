@@ -93,6 +93,34 @@ func icmsRequest(namespace, name, functionID, versionID, action, status string, 
 	}}
 }
 
+// icmsTerminationRequest builds a TerminateInstances-action ICMSRequest CR
+// the way NVCA actually constructs one: no spec.functionDetails and no
+// deprecated spec.functionId/functionVersionId (NVCA relays the upstream
+// termination message verbatim, which never carries function identity), only
+// spec.terminationMsgInfo.instanceIds and a status.instances map keyed by
+// those same instance IDs.
+func icmsTerminationRequest(namespace, name, status string, instanceIDs ...string) *unstructured.Unstructured {
+	ids := make([]interface{}, len(instanceIDs))
+	instances := map[string]interface{}{}
+	for i, id := range instanceIDs {
+		ids[i] = id
+		instances[id] = map[string]interface{}{"id": id, "type": "Pod", "status": "Terminating"}
+	}
+	return &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "nvca.nvcf.nvidia.io/v2beta1",
+		"kind":       "ICMSRequest",
+		"metadata":   map[string]interface{}{"namespace": namespace, "name": name},
+		"spec": map[string]interface{}{
+			"action":             actionTermination,
+			"terminationMsgInfo": map[string]interface{}{"instanceIds": ids},
+		},
+		"status": map[string]interface{}{
+			"requestStatus": status,
+			"instances":     instances,
+		},
+	}}
+}
+
 func TestStatusExtractsBackendFields(t *testing.T) {
 	insp := newFakeInspector(nvcfBackend("nvca-operator", "backend"))
 
@@ -175,6 +203,47 @@ func TestListFunctionsPhaseFilter(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].FunctionID != "fn-3" {
 		t.Fatalf("phase filter DRAINING = %+v, want only fn-3", got)
+	}
+}
+
+func TestListFunctionsRecoversIdentityForTerminationRequestViaInstanceIDs(t *testing.T) {
+	// Regression test: a TerminateInstances-action
+	// ICMSRequest CR carries no functionId/functionVersionId directly (see
+	// icmsTerminationRequest), but shares an instance ID with the function's
+	// creation-action CR. The DRAINING record must recover the real identity
+	// via that shared instance ID rather than reporting empty strings.
+	insp := newFakeInspector(
+		icmsRequest("nvcf-backend", "r1", "fn-1", "v1", "", statusCompleted, false),
+		icmsTerminationRequest("nvcf-backend", "r2", statusCompleted, "inst-a"),
+	)
+
+	got, err := insp.ListFunctions(context.Background(), ListOptions{PhaseFilter: PhaseDraining})
+	if err != nil {
+		t.Fatalf("ListFunctions returned error: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d functions, want 1 DRAINING record: %+v", len(got), got)
+	}
+	if got[0].FunctionID != "fn-1" || got[0].FunctionVersionID != "v1" {
+		t.Errorf("DRAINING record identity = %q/%q, want fn-1/v1 recovered via instance ID", got[0].FunctionID, got[0].FunctionVersionID)
+	}
+}
+
+func TestListFunctionsOmitsTerminationRequestWithNoRecoverableIdentity(t *testing.T) {
+	// When no other CR's status.instances shares an instance ID with the
+	// termination request, identity truly cannot be recovered. Per the
+	// bug's expected behavior, the CLI must omit the record rather than
+	// return one with empty functionId/functionVersionId.
+	insp := newFakeInspector(
+		icmsTerminationRequest("nvcf-backend", "r1", statusCompleted, "inst-orphan"),
+	)
+
+	got, err := insp.ListFunctions(context.Background(), ListOptions{})
+	if err != nil {
+		t.Fatalf("ListFunctions returned error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("got %+v, want no records for an unrecoverable termination request", got)
 	}
 }
 
