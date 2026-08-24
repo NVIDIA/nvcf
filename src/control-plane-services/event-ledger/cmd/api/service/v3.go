@@ -561,6 +561,14 @@ func (s *Server) processCloudEvents(traceCtx context.Context, cloudEvents []*clo
 
 	acceptedEvents := make([]*EventV3, 0, len(cloudEvents))
 	for _, cloudEvent := range cloudEvents {
+		if cloudEvent == nil {
+			err := errors.New("CloudEvent must not be null")
+			logger.WarnContext(traceCtx, "Skipping null CloudEvent", zap.Error(err))
+			result.FailureCount++
+			result.LastError = err
+			continue
+		}
+
 		event, err := extractCloudEvent(cloudEvent)
 		if err != nil {
 			logger.WarnContext(traceCtx, "Skipping event", zap.Error(err))

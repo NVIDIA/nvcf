@@ -727,6 +727,13 @@ func TestPostCloudEventV3_BatchMissingSpecversion(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "specversion")
 }
 
+func TestPostCloudEventV3_BatchRejectsNullEvent(t *testing.T) {
+	w, _ := executeCloudEventsRequest(t, []byte(`[null]`), "application/cloudevents-batch+json")
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Contains(t, w.Body.String(), "CloudEvent must not be null")
+}
+
 func TestProcessCloudEvents_UsesBulkPersistence(t *testing.T) {
 	mockDB := &mockDBHandlerV3{}
 	server := newServerWithMock(t, mockDB)
