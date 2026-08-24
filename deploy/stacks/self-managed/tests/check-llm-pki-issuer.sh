@@ -195,6 +195,29 @@ render_router() {
     >"$manifests_file"
 }
 
+render_default_router() {
+  local case_name="$1"
+  local values_file="$work_dir/$case_name.router-values.yaml"
+  local manifests_file="$work_dir/$case_name.router-manifests.yaml"
+  local router_chart="$stack_dir/../../helm/llm-request-router/llm-request-router"
+
+  HELMFILE_ENV=base HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" helmfile \
+    --file "$stack_dir/helmfile.d/02-core.yaml.gotmpl" \
+    --environment default \
+    --selector name=llm-request-router \
+    --chart "$router_chart" \
+    --skip-deps \
+    "${core_state_values[@]}" \
+    --state-values-set addons.llm.enabled=true \
+    write-values \
+    --output-file-template "$values_file" >/dev/null
+
+  helm template llm-request-router "$router_chart" \
+    --namespace nvcf \
+    --values "$values_file" \
+    >"$manifests_file"
+}
+
 expect_external_router() {
   local case_name="$1"
   local issuer_kind="$2"
@@ -241,12 +264,19 @@ expect_external_router() {
 }
 
 # existingSecret mode cannot reuse render_router: that helper always passes
-# dnsNames, which this mode rejects as a mixed-ownership conflict.
+# managed issuance values, which this mode rejects as a mixed-ownership
+# conflict. Clear the managed defaults before applying each case override.
 render_existing_secret_router() {
   local case_name="$1"
   shift
   local values_file="$work_dir/$case_name.router-values.yaml"
   local router_chart="$stack_dir/../../helm/llm-request-router/llm-request-router"
+  local ownership_override_file
+  ownership_override_file="$(pki_override "$case_name-existing-secret-ownership" <<'YAML'
+allowedDomains: ""
+dnsNames: []
+YAML
+)"
 
   HELMFILE_ENV=base HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" helmfile \
     --file "$stack_dir/helmfile.d/02-core.yaml.gotmpl" \
@@ -258,6 +288,7 @@ render_existing_secret_router() {
     --state-values-set addons.llm.enabled=true \
     --state-values-set addons.llm.pki.enabled=true \
     --state-values-set-string addons.llm.pki.mode=existingSecret \
+    --state-values-file "$ownership_override_file" \
     "$@" \
     write-values \
     --output-file-template "$values_file" \
@@ -361,10 +392,44 @@ expect_enabled llm-disabled false
 # Case 2: LLM enabled, PKI disabled.
 render_list pki-disabled \
   --state-values-set addons.llm.enabled=true \
+  --state-values-set addons.llm.pki.enabled=false \
   --state-values-set addons.llm.pki.clusterIssuer.enabled=true
 expect_enabled pki-disabled false
 
-# Case 3: LLM and PKI enabled with the default managed ClusterIssuer.
+# Case 3: enabling LLM with no PKI overrides must select the managed issuer and
+# render an identity that covers both the stable and per-pod router names.
+render_list secure-defaults \
+  --state-values-set addons.llm.enabled=true
+expect_enabled secure-defaults true
+render_default_router secure-defaults
+secure_defaults_manifests="$work_dir/secure-defaults.router-manifests.yaml"
+secure_defaults_issuer_kind="$(
+  yq ea -r 'select(.kind == "Certificate") | .spec.issuerRef.kind' \
+    "$secure_defaults_manifests"
+)"
+secure_defaults_issuer_name="$(
+  yq ea -r 'select(.kind == "Certificate") | .spec.issuerRef.name' \
+    "$secure_defaults_manifests"
+)"
+test "$secure_defaults_issuer_kind" = "ClusterIssuer" ||
+  fail "secure defaults did not render Certificate issuer kind ClusterIssuer"
+test "$secure_defaults_issuer_name" = "nvcf-openbao-pki" ||
+  fail "secure defaults did not render Certificate issuer name nvcf-openbao-pki"
+secure_defaults_dns_names="$(
+  yq ea -r 'select(.kind == "Certificate") | .spec.dnsNames[]' \
+    "$secure_defaults_manifests"
+)"
+test "$secure_defaults_dns_names" = "$(printf '%s\n%s' \
+  'llm-request-router.nvcf.svc.cluster.local' \
+  '*.llm-request-router-headless.nvcf.svc.cluster.local')" ||
+  fail "secure defaults did not render the stable and per-pod request-router DNS names"
+grep -Fq 'name: addons-llm-migrations' "$secure_defaults_manifests" ||
+  fail "secure defaults did not render the managed OpenBao provisioning hook"
+if grep -Fq -- '--quic-insecure' "$secure_defaults_manifests"; then
+  fail "secure defaults enabled insecure request-router transport"
+fi
+
+# Case 4: LLM and PKI explicitly enabled with the default managed ClusterIssuer.
 managed_defaults=(
   --state-values-set addons.llm.enabled=true
   --state-values-set addons.llm.pki.enabled=true
