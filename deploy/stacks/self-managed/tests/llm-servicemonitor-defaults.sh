@@ -78,6 +78,10 @@ assert_service_monitor gateway-observability-disabled false llm-api-gateway fals
 assert_service_monitor router-observability-disabled false llm-request-router false
 assert_service_monitor gateway-observability-enabled true llm-api-gateway true
 assert_service_monitor router-observability-enabled true llm-request-router true
+assert_service_monitor gateway-local-metrics-disabled true llm-api-gateway false \
+  --state-values-set addons.llm.gateway.metrics.enabled=false
+assert_service_monitor router-local-metrics-disabled true llm-request-router false \
+  --state-values-set addons.llm.requestRouter.metrics.enabled=false
 assert_service_monitor gateway-explicit-opt-out true llm-api-gateway false \
   --state-values-set addons.llm.gateway.metrics.serviceMonitor.enabled=false
 assert_service_monitor router-explicit-opt-out true llm-request-router false \
