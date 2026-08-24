@@ -30,6 +30,7 @@ use super::reverse::{
 use super::*;
 use std::collections::BTreeMap;
 use std::error::Error as _;
+use std::fs;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -3355,4 +3356,59 @@ fn make_server_config_uses_provided_cert() {
         TunnelTransportProtocol::RawQuic,
     );
     assert!(result.is_ok());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn direct_tunnel_reloads_server_identity_for_new_connections() -> Result<()> {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let root = std::env::temp_dir().join(format!(
+        "pylon-tls-reload-{}-{}",
+        std::process::id(),
+        std::thread::current().name().unwrap_or("test")
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir(&root)?;
+    let cert_path = root.join("tls.crt");
+    let key_path = root.join("tls.key");
+    let (first_cert, first_key) = stargate_tls::generate_self_signed_cert()?;
+    let (second_cert, second_key) = stargate_tls::generate_self_signed_cert()?;
+    fs::write(&cert_path, &first_cert)?;
+    fs::write(&key_path, &first_key)?;
+
+    let mut config = test_tunnel_config("http://127.0.0.1:1");
+    config.tls_cert_pem = Some(first_cert.clone());
+    config.tls_key_pem = Some(first_key);
+    config.server_identity_reloader = Some(stargate_tls::ServerIdentityReloader::load(
+        cert_path.clone(),
+        key_path.clone(),
+    )?);
+    config.tls_reload_interval = Duration::from_millis(10);
+    let tunnel = start_quic_http_tunnel(config).await?;
+
+    async fn connect(addr: SocketAddr, cert_pem: &[u8]) -> Result<quinn::Connection> {
+        let mut endpoint = Endpoint::client("127.0.0.1:0".parse()?)?;
+        endpoint.set_default_client_config(
+            stargate_tls::build_trusted_quic_client_config_with_alpn(cert_pem, Vec::new())?,
+        );
+        Ok(endpoint.connect(addr, "localhost")?.await?)
+    }
+
+    connect(tunnel.listen_addr(), &first_cert).await?;
+    fs::write(&cert_path, &second_cert)?;
+    fs::write(&key_path, second_key)?;
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if connect(tunnel.listen_addr(), &second_cert).await.is_ok() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    assert!(connect(tunnel.listen_addr(), &first_cert).await.is_err());
+
+    tunnel.shutdown().await;
+    fs::remove_dir_all(root)?;
+    Ok(())
 }

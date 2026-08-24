@@ -58,6 +58,14 @@ used in Kubernetes Clusters to run NVCF Workloads.
 | `resources.requests.cpu`    | CPU request for the nvca-operator container    | `50m`   |
 | `resources.requests.memory` | Memory request for the nvca-operator container | `50Mi`  |
 
+### PodDisruptionBudget configuration
+
+| Name                                 | Description                                                                                                              | Value   |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ | ------- |
+| `podDisruptionBudget.enabled`        | Enable a PodDisruptionBudget for the NVCA Operator.                                                                      | `false` |
+| `podDisruptionBudget.minAvailable`   | Minimum available pods. When enabled, set exactly one of this value or `maxUnavailable`. Supports an integer or 0-100%. | `""`    |
+| `podDisruptionBudget.maxUnavailable` | Maximum unavailable pods. When enabled, set exactly one of this value or `minAvailable`. Supports an integer or 0-100%. | `""`    |
+
 ### Agent Container Resource configuration
 
 | Name                                 | Description                                                                                                                                                                | Value                  |
@@ -76,11 +84,11 @@ used in Kubernetes Clusters to run NVCF Workloads.
 | `agent.gpuProfiling.labelKey`        | Pod label key NVCA applies to profiled function pods (the label the Nsight Operator watches for). Empty uses the built-in default "nvidia-nsight-profile".                 | `""`                   |
 | `agent.gpuProfiling.labelValue`      | Pod label value NVCA applies to profiled function pods. Empty uses the built-in default "enabled".                                                                         | `""`                   |
 | `agent.byooOtelCollector.imageRepository` | Optional BYOO OpenTelemetry Collector image repository. If unset, it is derived from image.repository.                                                            | `""`                   |
-| `agent.byooOtelCollector.imageTag`   | BYOO OpenTelemetry Collector image tag.                                                                                                                                        | `0.157.11`              |
+| `agent.byooOtelCollector.imageTag`   | BYOO OpenTelemetry Collector image tag.                                                                                                                                        | `0.157.0-nv-0.1.1`      |
 | `agent.functionEnvOverrides`         | Map of environment variable overrides for function workloads (e.g., {"INIT_CONTAINER": "nvcr.io/custom/init:v1.0", "UTILS_CONTAINER": "nvcr.io/custom/utils:v1.0"})        | `{}`                   |
 | `agent.taskEnvOverrides`             | Map of environment variable overrides for task workloads (e.g., {"INIT_CONTAINER": "nvcr.io/custom/init:v1.0", "ESS_AGENT_CONTAINER": "nvcr.io/custom/ess:v1.0"})          | `{}`                   |
 | `agent.overrideEnvironmentVariables` | Map of environment variables to override on the NVCA agent container. These take precedence over default values. Example: {"LOG_LEVEL": "debug", "CUSTOM_FLAG": "enabled"} | `{}`                   |
-| `agent.llm.requestRouterAddress`     | Default LLM request-router worker address rendered as STARGATE_ADDRESS for LLM workers                                                                                      | `""`                   |
+| `agent.llm.requestRouterAddress`     | Operator default LLM request-router address. Workers read LLM_REQUEST_ROUTER_ADDRESS from the launch environment; not a runtime fallback                                    | `""`                   |
 | `agent.serviceOAuth`                 | OAuth token and JWKS endpoints used by dependent services                                                                                                                   | See `values.yaml`      |
 
 ### Webhook Container Resource configuration

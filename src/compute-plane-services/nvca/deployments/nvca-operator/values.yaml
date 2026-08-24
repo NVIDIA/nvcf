@@ -71,6 +71,14 @@ serviceAccount:
 ## @param replicaCount Replica count for the operator deployment
 replicaCount: 1
 
+## @param podDisruptionBudget PodDisruptionBudget configuration
+podDisruptionBudget:
+  enabled: false
+  # minAvailable and maxUnavailable are mutually exclusive; set exactly one.
+  # Accepts an integer or a percentage string from 0% to 100%.
+  minAvailable: ""
+  maxUnavailable: ""
+
 ## @param systemNamespace Namespace in which NVCFBackend objects are created.
 systemNamespace: nvca-operator
 
@@ -189,7 +197,7 @@ resources:
 ## @param agent.taskEnvOverrides Map of environment variable overrides for task workloads (e.g., {"INIT_CONTAINER": "nvcr.io/custom/init:v1.0", "ESS_AGENT_CONTAINER": "nvcr.io/custom/ess:v1.0"})
 ## @param agent.overrideEnvironmentVariables Map of environment variables to override on the NVCA agent container. These take precedence over default values. Example: {"LOG_LEVEL": "debug", "CUSTOM_FLAG": "enabled"}
 ## @param agent.tolerations K8s tolerations for the NVCA agent pod
-## @param agent.llm.requestRouterAddress Default LLM request-router worker address rendered as STARGATE_ADDRESS for LLM workers
+## @param agent.llm.requestRouterAddress Operator default LLM request-router address. Workers read LLM_REQUEST_ROUTER_ADDRESS from the launch environment; not a runtime fallback
 ## @param agent.serviceOAuth OAuth token and JWKS endpoints used by dependent services
 agent:
   cacheMountOptionsEnabled: true
@@ -214,7 +222,7 @@ agent:
   ## @param agent.byooOtelCollector.imageTag BYOO OpenTelemetry Collector image tag.
   byooOtelCollector:
     imageRepository: ""
-    imageTag: "0.157.11"
+    imageTag: "0.157.0-nv-0.1.1"
   ## Environment variable overrides for function workloads.
   ## Available keys: INIT_CONTAINER, UTILS_CONTAINER, OTEL_CONTAINER, BYOO_OTEL_COLLECTOR_CONTAINER,
   ##                 NICLLS_CONTAINER, ESS_AGENT_CONTAINER, INFERENCE_CONTAINER

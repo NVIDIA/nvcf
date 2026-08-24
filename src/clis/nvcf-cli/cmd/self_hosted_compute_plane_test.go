@@ -117,6 +117,9 @@ func TestComputePlaneInstallTemplatesUserValuesFile(t *testing.T) {
 	assert.Contains(t, out, "arg=--kube-context=gpu-context")
 	assert.Contains(t, out, "env:CLUSTER_NAME=gpu-from-values")
 	assert.Contains(t, out, "env:NCA_ID=nca-from-values")
+	// The worker helmfile reads $OUTPUT_DIR/$CLUSTER_NAME-register-values.yaml,
+	// so install must point OUTPUT_DIR at the directory of --values.
+	assert.Contains(t, out, "env:OUTPUT_DIR="+filepath.Dir(valuesFile))
 	assert.Contains(t, out, "arg="+stackDir)
 	assert.FileExists(t, fakeBin)
 }
@@ -928,6 +931,7 @@ done
 printf 'verb=%s\n' "$last"
 printf 'env:CLUSTER_NAME=%s\n' "$CLUSTER_NAME"
 printf 'env:NCA_ID=%s\n' "$NCA_ID"
+printf 'env:OUTPUT_DIR=%s\n' "$OUTPUT_DIR"
 `
 	require.NoError(t, os.WriteFile(fakeBin, []byte(body), 0o755))
 	t.Setenv("PATH", filepath.Dir(fakeBin)+":"+os.Getenv("PATH"))

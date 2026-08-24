@@ -24,6 +24,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -144,12 +145,51 @@ func TestNVCFCLILocalFixtureTargetsLocalGRPCGateway(t *testing.T) {
 	if err := yaml.Unmarshal(fixtureBytes, &fixture); err != nil {
 		t.Fatalf("parse local CLI fixture: %v", err)
 	}
-	if got, want := fixture["base_grpc_url"], "localhost:10081"; got != want {
+	if got, want := fixture["base_grpc_url"], "grpc.localhost:10081"; got != want {
 		t.Fatalf("base_grpc_url = %v, want %q", got, want)
 	}
 }
 
-func TestSelfManagedLocalBDDMultiFixtureWiresGRPCWorkerCallback(t *testing.T) {
+func TestComputePlaneLocalBDDFixturesDisableResourceSizingFeatureGates(t *testing.T) {
+	want := []string{
+		"-InfraResourceOverhead",
+		"-EnforceHelmFunctionResourceLimits",
+		"-EnforceContainerFunctionResourceLimits",
+		"-EnforceHelmTaskResourceLimits",
+		"-EnforceContainerTaskResourceLimits",
+	}
+
+	for _, fixturePath := range []string{
+		"fixtures/nvcf-compute-plane-local-bdd.yaml",
+		"fixtures/nvcf-compute-plane-local-bdd-multi.yaml",
+	} {
+		t.Run(filepath.Base(fixturePath), func(t *testing.T) {
+			fixtureBytes, err := os.ReadFile(fixturePath)
+			if err != nil {
+				t.Fatalf("read compute-plane fixture %s: %v", fixturePath, err)
+			}
+			var fixture struct {
+				Global struct {
+					NVCAOperator struct {
+						SelfManaged struct {
+							FeatureGateValues []string `yaml:"featureGateValues"`
+						} `yaml:"selfManaged"`
+					} `yaml:"nvcaOperator"`
+				} `yaml:"global"`
+			}
+			if err := yaml.Unmarshal(fixtureBytes, &fixture); err != nil {
+				t.Fatalf("parse compute-plane fixture %s: %v", fixturePath, err)
+			}
+
+			got := fixture.Global.NVCAOperator.SelfManaged.FeatureGateValues
+			if !slices.Equal(got, want) {
+				t.Fatalf("featureGateValues = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestSelfManagedLocalBDDMultiFixtureWiresComputeReachableWorkerEndpoints(t *testing.T) {
 	fixtureBytes, err := os.ReadFile("fixtures/self-managed-local-bdd-multi.yaml")
 	if err != nil {
 		t.Fatalf("read multi-cluster stack fixture: %v", err)
@@ -157,11 +197,18 @@ func TestSelfManagedLocalBDDMultiFixtureWiresGRPCWorkerCallback(t *testing.T) {
 	fixture := string(fixtureBytes)
 	for _, want := range []string{
 		"workerConnectBaseURL: http://grpc.nvcf.svc.cluster.local:10086",
-		"chart: ../../../helm/gateway-routes/chart",
-		`version: ""`,
+		"llmRequestRouterAddress: llm-request-router.nvcf.svc.cluster.local:50071",
+		"chartPath: ../../../helm/gateway-routes/chart",
+		"chartPath: ../../../helm/llm-request-router/llm-request-router",
+		"pylonGrpcDialAddress: llm-request-router.nvcf.svc.cluster.local:50071",
+		"pylonReverseTunnelDialAddress: llm-request-router.nvcf.svc.cluster.local:50072",
+		"*.llm-request-router-headless.nvcf.svc.cluster.local",
 		"grpcWorker:",
+		"llmWorker:",
 		"enabled: true",
 		"listenerName: worker-tcp",
+		"listenerName: llm-grpc",
+		"listenerName: llm-quic",
 	} {
 		if !strings.Contains(fixture, want) {
 			t.Fatalf("multi-cluster stack fixture missing %q", want)

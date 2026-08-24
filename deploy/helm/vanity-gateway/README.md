@@ -118,9 +118,9 @@ bounds concurrent shadow requests across all routes.
 
 ## Notes
 
-- The chart version and appVersion carry the versions of the published artifact
-  this chart was recovered from. They are not in a form the repo release tooling
-  accepts, and no release lane is registered. See `AGENTS.md`.
+- The chart version is `0.0.0` in `Chart.yaml`. The release pipeline packages
+  the chart at the version in its `deploy/helm/vanity-gateway/v<X.Y.Z>` release
+  tag, so the committed value only affects local renders. See `AGENTS.md`.
 - If you publish or mirror the required images into another registry, set the
   image registry, repository, tag, and pull secret values explicitly in your
   override file.

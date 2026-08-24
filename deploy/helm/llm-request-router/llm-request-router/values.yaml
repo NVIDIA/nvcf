@@ -29,7 +29,7 @@ llmRequestRouter:
   image:
     registry: ""
     repository: ""
-    tag: "0.9.0"
+    tag: "0.11.1"
     pullPolicy: IfNotPresent
 
   imagePullSecrets: []
@@ -70,6 +70,70 @@ llmRequestRouter:
     metricsPort: 9090
     reverseTunnelPort: 50072
     headlessName: llm-request-router-headless
+
+  # Routes backend registration and reverse-tunnel traffic to the Stargate pod
+  # named by gRPC authority or QUIC SNI. Enable this when pylons connect through
+  # a shared Gateway or load balancer and request-router replicaCount is greater
+  # than one.
+  backendRouter:
+    enabled: false
+    # The router is the single front door for worker registration and reverse
+    # tunnels in its region, so one replica makes it a single point of failure
+    # for every worker in that region. The router keeps no state beyond the QUIC
+    # sessions it terminates and an EndpointSlice watch, so it scales
+    # horizontally. Two replicas are the default for that reason.
+    #
+    # Each replica terminates QUIC itself and cannot resume a session started on
+    # another replica, so the Service pins clients with sessionAffinity:
+    # ClientIP. Replicas also carry a soft anti-affinity so they prefer separate
+    # nodes; override backendRouter.affinity to change that.
+    replicaCount: 2
+    # Protect the two-replica data path from simultaneous voluntary eviction.
+    # Set exactly one of minAvailable or maxUnavailable when enabled.
+    podDisruptionBudget:
+      enabled: true
+      minAvailable: ""
+      maxUnavailable: 1
+    # Registry, repository, and tag fall back to the main Stargate image
+    # settings, then the chart appVersion. Override only when validating a
+    # different Stargate build; it must contain stargate-k8s-router.
+    image:
+      registry: ""
+      repository: ""
+      tag: ""
+      pullPolicy: ""
+    # Addresses workers dial to reach the router. Both default to the
+    # backend-router Service inside the cluster, which is correct when workers
+    # run alongside the control plane. Override both with externally reachable
+    # addresses when workers run in a separate cluster or region.
+    pylonGrpcDialAddress: ""
+    pylonReverseTunnelDialAddress: ""
+    serviceAccount:
+      create: true
+      annotations: {}
+      name: ""
+    service:
+      grpcPort: 50071
+      reverseTunnelPort: 50072
+      healthPort: 8080
+    podAnnotations: {}
+    podLabels: {}
+    # The router relays every byte of the reverse tunnel, and that tunnel
+    # carries inference traffic rather than only control messages. It is a data
+    # path component, so it is sized closer to the router it fronts than to a
+    # sidecar. CPU is the binding resource: each connection is terminated and
+    # re-originated, so TLS work is paid twice. These values have not been load
+    # validated; revisit them with real token throughput.
+    resources:
+      requests:
+        cpu: 250m
+        memory: 256Mi
+      limits:
+        cpu: "2"
+        memory: 1Gi
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
 
   resources:
     requests:
@@ -121,8 +185,8 @@ llmRequestRouter:
     # suffixes). REQUIRED when enabled. Typically:
     #   "<customer-domain>,cluster.local"
     # so the signing role accepts both the customer's external DNS and
-    # in-cluster service names. Missing value → script aborts non-zero →
-    # entrypoint accumulator → Job fails on backoff exhaustion.
+    # in-cluster service names. Missing value -> script aborts non-zero ->
+    # entrypoint accumulator -> Job fails on backoff exhaustion.
     allowedDomains: ""
     # nvcf-openbao-migrations image. The chart picks up the same image
     # that the k8s-openbao Helm hook uses; supply registry/repository/tag
@@ -175,6 +239,26 @@ llmRequestRouter:
     audience: ""
 
   tls:
+    # Source of the QUIC server identity.
+    #   certManager    - certificate.enabled controls cert-manager issuance and
+    #                    the chart mounts the Secret cert-manager writes.
+    #   existingSecret - mount a pre-created TLS Secret. The chart renders no
+    #                    Certificate and adds no issuer dependency. secretName,
+    #                    certPath, and keyPath are required, certificate.enabled
+    #                    must stay false, and the operator owns issuance,
+    #                    renewal, rotation, and recovery.
+    mode: certManager
+    # Secret holding the server certificate. It must provide the tls.crt and
+    # tls.key entries, as a kubernetes.io/tls Secret does.
+    # The mount directory is polled every 30 seconds for certificate and key
+    # updates, which apply to new connections without a pod restart. Keep both
+    # files in one Secret so Kubernetes projects one atomic generation.
+    #
+    # Trust bundles do not reload yet, so changing one still needs a rolling
+    # restart of Pylon, which verifies this certificate over the reverse tunnel.
+    # Point Pylon at the root CA rather than an intermediate: intermediates are
+    # renewed far more often, and trusting the root keeps those renewals
+    # restart-free. See the Transport TLS Rotation runbook.
     secretName: ""
     mountPath: ""
     certPath: ""

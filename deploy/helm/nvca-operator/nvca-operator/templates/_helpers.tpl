@@ -188,7 +188,7 @@ Usage: {{ include "nvcaop.byooOtelCollectorImage" . }}
 {{- if .imageRepository -}}
 {{- .imageRepository -}}
 {{- else if hasPrefix "stg.nvcr.io/nvidia/nvcf-byoc" .defaultRepository -}}
-stg.nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector
+stg.nvcr.io/nv-cf/nvcf-core/byoo-otel-collector
 {{- else -}}
 nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector
 {{- end -}}
@@ -200,7 +200,7 @@ Get the BYOO OTel collector image when its tag is configured.
 {{- define "nvcaop.byooOtelCollectorImage" -}}
 {{- $agent := .Values.agent | default dict -}}
 {{- $byooOtelCollector := $agent.byooOtelCollector | default dict -}}
-{{- $imageTag := "0.157.11" -}}
+{{- $imageTag := "0.157.0-nv-0.1.1" -}}
 {{- if hasKey $byooOtelCollector "imageTag" -}}
 {{- $imageTag = $byooOtelCollector.imageTag -}}
 {{- end -}}

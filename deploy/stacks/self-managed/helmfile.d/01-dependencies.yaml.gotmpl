@@ -6,6 +6,69 @@ environments:
 
 ---
 
+{{- $llmEnabled := dig "addons" "llm" "enabled" false .Values }}
+{{- $pkiEnabled := dig "addons" "llm" "pki" "enabled" false .Values }}
+{{- $llmPkiActive := and $llmEnabled $pkiEnabled }}
+{{- $issuerKind := dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values }}
+{{- $issuerName := dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values }}
+{{- $manageIssuer := false }}
+{{- /* existingSecret hands issuance to the operator, so the stack must not
+     create an issuer or require OpenBao for one. Validate the mode here as
+     well as in global.yaml.gotmpl so both states reject the same inputs. */ -}}
+{{- $pkiMode := dig "addons" "llm" "pki" "mode" "certManager" .Values }}
+{{- if $llmPkiActive }}
+{{- if not (kindIs "string" $pkiMode) }}
+{{- fail "addons.llm.pki.mode must be the string \"certManager\" or \"existingSecret\"" }}
+{{- end }}
+{{- if not (has $pkiMode (list "certManager" "existingSecret")) }}
+{{- fail (printf "addons.llm.pki.mode must be exactly \"certManager\" or \"existingSecret\", got %q" $pkiMode) }}
+{{- end }}
+{{- end }}
+{{- if and $llmPkiActive (eq ($pkiMode | toString) "certManager") }}
+{{- /* dig only falls back for a missing path, so explicit null, empty, and
+     wrongly typed values reach these checks. Reject them instead of coercing
+     them: a malformed management flag that silently resolves to false skips
+     the nvcf-pki release while global.yaml.gotmpl still renders a Certificate
+     referencing ClusterIssuer/nvcf-openbao-pki, which is the dangling-issuer
+     failure this stack exists to prevent. */ -}}
+{{- if not (kindIs "string" $issuerKind) }}
+{{- fail "addons.llm.pki.issuerKind must be the string \"ClusterIssuer\" or \"Issuer\"" }}
+{{- end }}
+{{- if not (has $issuerKind (list "ClusterIssuer" "Issuer")) }}
+{{- fail (printf "addons.llm.pki.issuerKind must be exactly \"ClusterIssuer\" or \"Issuer\", got %q" $issuerKind) }}
+{{- end }}
+{{- if not (kindIs "string" $issuerName) }}
+{{- fail "addons.llm.pki.issuerName must be a string" }}
+{{- end }}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$" $issuerName) }}
+{{- fail (printf "addons.llm.pki.issuerName must be a lowercase RFC 1123 DNS subdomain, got %q" $issuerName) }}
+{{- end }}
+{{- if gt (len $issuerName) 253 }}
+{{- fail "addons.llm.pki.issuerName must be at most 253 characters" }}
+{{- end }}
+{{- $manageIssuer = and (eq $issuerKind "ClusterIssuer") (eq $issuerName "nvcf-openbao-pki") }}
+{{- $pkiValues := dig "addons" "llm" "pki" dict .Values }}
+{{- if kindIs "map" $pkiValues }}
+{{- $clusterIssuerValues := dig "clusterIssuer" dict $pkiValues }}
+{{- if and (kindIs "map" $clusterIssuerValues) (hasKey $clusterIssuerValues "enabled") }}
+{{- /* index, not get: helmfile overrides sprig's get with a path-based
+     signature that rejects a map as its first argument. */ -}}
+{{- $manageSetting := index $clusterIssuerValues "enabled" }}
+{{- if not (kindIs "bool" $manageSetting) }}
+{{- fail (printf "addons.llm.pki.clusterIssuer.enabled must be a YAML boolean, true or false. Quoted strings, null, and empty values are rejected. Got %q" (toString $manageSetting)) }}
+{{- end }}
+{{- $manageIssuer = $manageSetting }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- $managedIssuer := and $llmPkiActive $manageIssuer }}
+{{- if and $managedIssuer (ne $issuerKind "ClusterIssuer") }}
+{{- fail "addons.llm.pki.clusterIssuer management supports only issuerKind=ClusterIssuer" }}
+{{- end }}
+{{- if and $managedIssuer (not (dig "openbao" "enabled" true .Values)) }}
+{{- fail "openbao.enabled must be true when addons.llm.pki.clusterIssuer management is enabled" }}
+{{- end }}
+
 repositories:
   - name: nvcf
 {{- if dig "global" "helm" "sources" "url" "" .Values }}
@@ -61,11 +124,45 @@ releases:
     condition: openbao.enabled # From defaults.yaml or env overrides
     namespace: vault-system
     <<: *dependency # Inherits base values from the dependency template
+    # Secret values own migrations.env. Apply the generated LLM addition last
+    # so it preserves that list while adding the addon migration switch.
+    values:
+      - ../global.yaml.gotmpl
+      - ../secrets/{{ requiredEnv "HELMFILE_ENV" }}-secrets.yaml
+      - ../openbao-migrations-llm-env.yaml.gotmpl
     needs:
       - nats-system/nats
 
+{{- if $managedIssuer }}
+  - name: nvcf-pki
+    chart: nvcf/helm-nvcf-pki
+    version: 0.1.0
+    namespace: cert-manager
+    values:
+      - clusterIssuer:
+          enabled: true
+          name: {{ $issuerName | quote }}
+          server: "http://openbao-server.vault-system.svc.cluster.local:8200"
+          path: "services/all/pki/nvcf-service-issuing/sign/nvcf-service-server"
+          auth:
+            mountPath: "/v1/auth/jwt"
+            role: "cert-manager"
+            serviceAccount:
+              name: "cert-manager"
+              audience: "http://openbao-server.vault-system.svc.cluster.local:8200"
+    wait: true
+    waitForJobs: true
+    labels:
+      release-group: dependencies
+    needs:
+      - vault-system/openbao-server
+{{- if dig "certManager" "enabled" true .Values }}
+      - cert-manager/cert-manager
+{{- end }}
+{{- end }}
+
   - name: cassandra
-    version: 0.17.0
+    version: 0.20.1
     condition: cassandra.enabled # From defaults.yaml or env overrides
     namespace: cassandra-system
     <<: *dependency # Inherits base values from the dependency template

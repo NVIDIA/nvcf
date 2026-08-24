@@ -1066,7 +1066,8 @@ stack packages that include the NVCF UI addon. If your extracted stack
 package does not contain a `nvcf-ui` release and `nvcfUi` route
 values, skip this section until you use a stack package that includes them.
 
-Enable it only when you need a customer-facing NVCF admin-panel UI
+Enable it only when you need a customer-facing NVCF admin-panel UI.
+For a standalone walkthrough, see [Enabling NVCF UI](./nvcf-ui.md).
 
 <Warning>
 The NVCF UI admin panel is currently unauthenticated. Do not expose it to the
