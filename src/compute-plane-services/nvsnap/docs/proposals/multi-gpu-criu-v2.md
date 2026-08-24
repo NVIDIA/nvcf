@@ -54,6 +54,30 @@ rank, and each image matches the per-GPU memory budget. The agent's own capture
 guard reported "all GPU processes present in the capture", and every restored
 pod served live inference.
 
+## Capture happens on an idle pod, and that is the operating model
+
+Every measurement here captures an engine that has just served a request and is
+now idle, because that is what NVCF does: a pod is checkpointed when it has no
+traffic, and every later pod restores from that same checkpoint. Capture once,
+restore many.
+
+This is worth stating because capture under live traffic behaves differently and
+someone will otherwise rediscover it and file it as a bug. With eight concurrent
+requests in flight against a TP=2 pod, rank 0 locks in about 3 seconds and rank 1
+then times out after 60 with "device not ready". It is a deadlock rather than
+slowness: locking rank 0 stops it servicing the collective rank 1 is blocked on,
+so rank 1's own lock waits on work that can never finish. Locking the ranks
+simultaneously does not help, because the first lock is what creates the
+condition.
+
+None of that applies to the NVCF flow. It would matter for checkpointing a live
+serving pod, which would need the engine's scheduler drained first.
+
+The same model changes which numbers matter. Capture cost is amortised over
+every pod that restores from the artifact, so the 70B's ten minutes is paid once.
+Restore is the hot path, paid per pod, which makes the sub-linear restore scaling
+more valuable here than the capture time is expensive.
+
 ## The configuration it requires
 
 Every cross-GPU transport must be off before capture:
