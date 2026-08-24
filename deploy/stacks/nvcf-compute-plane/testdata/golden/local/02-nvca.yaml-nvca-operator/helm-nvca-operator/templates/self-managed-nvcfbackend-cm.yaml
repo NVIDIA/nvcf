@@ -61,9 +61,9 @@ data:
       imageRepository: "nvcr.io/0651155215864979/ncp-dev/samba"
       imageTag: "1.0.5"
     otelCollector:
-      enabled: true
+      enabled: false
       imageConfig:
-        repository: "nvcr.io/nvidia/nvcf-byoc/nvcf-otel-collector"
+        repository: "nvcr.io/0651155215864979/ncp-dev/nvcf-otel-collector"
         tag: "0.157.9"
     agent:
       natsURL: "nats://nats.nats-system.svc.cluster.local:4222"

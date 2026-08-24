@@ -291,8 +291,37 @@ addons:
   # LLM addon: gateway + request router (stargate) for LLM function invocation
   llm:
     enabled: false
-    # QUIC TLS certificate for the request router (Stargate). Disabled by
-    # default; opt in per env.
+    requestRouter:
+      replicaCount: 3
+      # Set only for source-tree validation. Empty uses the released OCI chart.
+      chartPath: ""
+
+      # Authority and SNI aware backend router. A worker holds one registration
+      # stream and one reverse QUIC tunnel per router replica, and each must
+      # reach the specific replica named by the gRPC authority or QUIC SNI, so
+      # ordinary load balancing cannot carry this traffic. The router reads that
+      # identity and forwards to the named pod.
+      #
+      # Follows addons.llm.enabled by default. It is deliberately not a separate
+      # opt-in: keeping it on in single-cluster installs means they exercise the
+      # same connection path that split-cluster and multi-region installs
+      # depend on.
+      #
+      # Note that the router relays the reverse tunnel, and that tunnel carries
+      # inference traffic, so it sits in the data path and terminates QUIC TLS.
+      backendRouter:
+        # enabled: defaults to addons.llm.enabled
+        replicaCount: 2
+        # Addresses workers dial to reach the router. Both default to the
+        # backend-router Service in-cluster, which is correct when workers run
+        # alongside the control plane. Set both to externally reachable
+        # addresses when workers run in a separate cluster or region.
+        pylonGrpcDialAddress: ""
+        pylonReverseTunnelDialAddress: ""
+
+    # QUIC TLS certificate for the request router (Stargate). Managed PKI is
+    # active by default whenever addons.llm.enabled is true. Set enabled=false
+    # only when an environment deliberately supplies another transport policy.
     #
     # mode selects who owns the server identity:
     #   certManager    - the chart requests a Certificate from the configured
@@ -306,15 +335,20 @@ addons:
     #                    issuance, renewal, rotation, and recovery, and the
     #                    stack validates neither the SANs nor the expiry.
     pki:
-      enabled: false
+      enabled: true
       mode: certManager
-      # REQUIRED for a managed issuer. Comma-separated DNS suffixes the
-      # OpenBao PKI role accepts. Typically the customer domain plus
-      # cluster.local for in-cluster service identity.
-      allowedDomains: ""
-      # REQUIRED for mode certManager. SANs requested on the issued
-      # certificate. Must be empty for mode existingSecret.
-      dnsNames: []
+      # Comma-separated DNS suffixes the managed OpenBao role accepts. Extend
+      # this only when advertisedHostnameTemplate uses another DNS suffix.
+      allowedDomains: cluster.local
+      # SANs for both the stable Service and authority/SNI-selected Stargate
+      # pod identities. Split/multi-cluster dial addresses select the network
+      # path only: Pylon preserves the advertised per-pod hostname as gRPC
+      # authority and QUIC SNI, so a load-balancer hostname or IP does not need
+      # to be added here. Add SANs only when advertisedHostnameTemplate changes
+      # those identities. Must be empty for mode existingSecret.
+      dnsNames:
+        - llm-request-router.nvcf.svc.cluster.local
+        - "*.llm-request-router-headless.nvcf.svc.cluster.local"
       # REQUIRED for mode existingSecret; the kubernetes.io/tls Secret in the
       # nvcf namespace holding the tls.crt and tls.key entries. Optional for
       # mode certManager, where it names the Secret cert-manager writes.
@@ -332,8 +366,8 @@ addons:
       # certPath: /etc/stargate/tls/tls.crt
       # keyPath: /etc/stargate/tls/tls.key
       # Image defaults to ${global.image.registry}/${global.image.repository}/nvcf-openbao-migrations.
-      # tag falls back to openbao.migrations.image.tag if unset here, so the
-      # operator can pin both in one place.
+      # tag falls back to openbao.migrations.image.tag and then 0.16.2 if
+      # neither location is set.
       # image:
       #   registry: ""
       #   repository: ""
@@ -450,6 +484,9 @@ ingress:
   gatewayApi:
     enabled: true
     controllerNamespace: "" # must be set by the environment
+    # Optional path to a local gateway-routes chart. This lets integration
+    # validation deploy route templates that have not been released yet.
+    chartPath: ""
     routes:
       nvcfApi:
         routeAnnotations: {}
@@ -484,6 +521,18 @@ ingress:
       nats:
         enabled: false
         routeAnnotations: {}
+      # Backend-router routes for split-cluster LLM worker registration and
+      # reverse QUIC tunnels. The target router selects the named Stargate pod
+      # by HTTP/2 authority and QUIC SNI.
+      llmWorker:
+        enabled: false
+        backend:
+          name: llm-request-router-backend-router
+          # Required when llmWorker is enabled; normally the NVCF namespace.
+          namespace: ""
+          grpcPort: 50071
+          quicPort: 50072
+        routeAnnotations: {}
       # ESS route. NVCF worker containers fetch function secrets from ess-api.
       # In split/multi-cluster installs ess runs in the control plane, so
       # compute-plane workers reach it through this route. Opt-in per environment.
@@ -501,6 +550,14 @@ ingress:
         name: "" # must be set by the environment when routes.nats.enabled=true
         namespace: "" # must be set by the environment when routes.nats.enabled=true
         listenerName: nats
+      llmGrpc:
+        name: "" # required when routes.llmWorker.enabled=true
+        namespace: "" # required when routes.llmWorker.enabled=true
+        listenerName: llm-grpc
+      llmQuic:
+        name: "" # required when routes.llmWorker.enabled=true
+        namespace: "" # required when routes.llmWorker.enabled=true
+        listenerName: llm-quic
 
 grpcproxy:
   # PDB: disabled by default. Enable when running multiple grpc-proxy replicas.
@@ -513,4 +570,8 @@ grpcproxy:
   # need an external Gateway or load-balancer URL, but grpc-proxy should stay
   # on a control-plane-local API service address.
   nvcfGrpcServiceURL: ""
+  # Optional NATS endpoint used only by grpc-proxy. It defaults to the local
+  # NATS Service even when global.workerEndpoints.nvcfNatsServiceURL points at
+  # an external compute-worker endpoint.
+  natsServiceURL: ""
   workerConnectBaseURL: ""
