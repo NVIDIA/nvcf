@@ -72,12 +72,16 @@ type mockDBHandlerV3 struct {
 	getStatsCalls            int
 	getFilteredStatsCalls    int
 	storedStatsEvents        []data_access.EventV3UpsertRecord
+	upsertEventCalls         int
+	bulkUpsertEventsCalls    int
+	bulkUpsertStatsCalls     int
 	bulkUpsertEventsErr      error
 	bulkUpsertStatsErr       error
 }
 
 // V3 methods
 func (m *mockDBHandlerV3) UpsertEventV3(ctx context.Context, namespace, eventContext, eventName, source string, details json.RawMessage, timestamp time.Time) error {
+	m.upsertEventCalls++
 	m.storedEvents = append(m.storedEvents, struct {
 		namespace string
 		context   string
@@ -100,6 +104,7 @@ func (m *mockDBHandlerV3) UpsertFilteredStatsV3(ctx context.Context, namespace, 
 }
 
 func (m *mockDBHandlerV3) BulkUpsertEventsV3(ctx context.Context, events []data_access.EventV3UpsertRecord) error {
+	m.bulkUpsertEventsCalls++
 	if m.bulkUpsertEventsErr != nil {
 		return m.bulkUpsertEventsErr
 	}
@@ -117,6 +122,7 @@ func (m *mockDBHandlerV3) BulkUpsertEventsV3(ctx context.Context, events []data_
 }
 
 func (m *mockDBHandlerV3) BulkUpsertStatsV3(ctx context.Context, events []data_access.EventV3UpsertRecord) error {
+	m.bulkUpsertStatsCalls++
 	if m.bulkUpsertStatsErr != nil {
 		return m.bulkUpsertStatsErr
 	}
@@ -243,6 +249,22 @@ func createOTLPLogRecord(eventName, namespace, source, instanceID string, extraA
 		Body:           &commonv1.AnyValue{Value: &commonv1.AnyValue_StringValue{StringValue: "Test event"}},
 		Attributes:     attrs,
 	}
+}
+
+func TestEventContextToCanonical_DotSeparatedInstanceID(t *testing.T) {
+	instanceID := "00000000-0000-4000-8000-000000000001.synthetic-instance"
+
+	canonical, err := eventContextToCanonical(ContextV3{InstanceID: instanceID})
+
+	require.NoError(t, err)
+	assert.Equal(t, "instance_id="+instanceID, canonical)
+}
+
+func TestEventContextToCanonical_DotsRemainInvalidForOtherContextFields(t *testing.T) {
+	_, err := eventContextToCanonical(ContextV3{DeploymentID: "deployment.invalid"})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid deployment_id")
 }
 
 // Test that namespace is required
@@ -703,6 +725,41 @@ func TestPostCloudEventV3_BatchMissingSpecversion(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Contains(t, w.Body.String(), "specversion")
+}
+
+func TestProcessCloudEvents_UsesBulkPersistence(t *testing.T) {
+	mockDB := &mockDBHandlerV3{}
+	server := newServerWithMock(t, mockDB)
+	ctx := makeStoreCtx(server)
+
+	makeCloudEvent := func(id, eventType, instanceID string) *cloudevents.Event {
+		event := cloudevents.NewEvent()
+		event.SetSpecVersion(cloudevents.VersionV1)
+		event.SetID(id)
+		event.SetType(eventType)
+		event.SetSource("/test")
+		event.SetTime(time.Now())
+		event.SetExtension("namespace", "test-namespace")
+		event.SetExtension("instanceId", instanceID)
+		require.NoError(t, event.SetData(cloudevents.ApplicationJSON, map[string]string{"status": "ok"}))
+		return &event
+	}
+
+	result := server.processCloudEvents(ctx, []*cloudevents.Event{
+		makeCloudEvent("event-1", "pod.ready", "00000000-0000-4000-8000-000000000001.synthetic-instance"),
+		makeCloudEvent("event-2", "pod.pending", "pod-2"),
+	})
+
+	assert.Equal(t, 2, result.SuccessCount)
+	assert.Equal(t, 0, result.FailureCount)
+	assert.Equal(t, 0, mockDB.upsertEventCalls, "per-event LWT path must not be used")
+	assert.Equal(t, 1, mockDB.bulkUpsertEventsCalls)
+	assert.Equal(t, 1, mockDB.bulkUpsertStatsCalls)
+	require.Len(t, mockDB.storedEvents, 2)
+	contexts := []string{mockDB.storedEvents[0].context, mockDB.storedEvents[1].context}
+	assert.Contains(t, contexts,
+		"instance_id=00000000-0000-4000-8000-000000000001.synthetic-instance",
+	)
 }
 
 // Test GetStatsV3 success
