@@ -2,6 +2,17 @@
 
 set -euo pipefail
 
+# `timeout` is a GNU coreutils tool and is not installed on macOS by default.
+if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=timeout
+elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_cmd=gtimeout
+else
+    echo "error: no 'timeout' command found." >&2
+    echo "       On macOS, run: brew install coreutils" >&2
+    exit 1
+fi
+
 repo_root="$(cd "$(dirname "$0")/../.." && pwd)"
 tool_root="${repo_root}/tools/byoo"
 examples_root="${repo_root}/src/libraries/go/lib/examples/otelconfig/byoo-otel-collector"
@@ -24,7 +35,7 @@ validate_otel_config() {
     local config_path="$1"
 
     set +e
-    timeout_output=$(timeout 2 ./_output/bin/otelcol-contrib --config="$config_path" 2>&1)
+    timeout_output=$("${timeout_cmd}" 2 ./_output/bin/otelcol-contrib --config="$config_path" 2>&1)
     exit_code=$?
     set -e
 
@@ -44,7 +55,10 @@ run_matrix() {
 
     mkdir -p _output/test/
     cp "${templates_dir}/${template_file}" "${templates_dir}/${template_file}.bk"
-    sed -i 's@/var/run/secrets/kubernetes.io/serviceaccount/@_output/test/@g' "${templates_dir}/${template_file}"
+    # A temp-file-and-move avoids the GNU vs BSD `sed -i` argument mismatch.
+    sed 's@/var/run/secrets/kubernetes.io/serviceaccount/@_output/test/@g' \
+        "${templates_dir}/${template_file}" > "${templates_dir}/${template_file}.tmp"
+    mv "${templates_dir}/${template_file}.tmp" "${templates_dir}/${template_file}"
     touch _output/test/token
 
     for input_file in testdata/otelconfig/*.json; do

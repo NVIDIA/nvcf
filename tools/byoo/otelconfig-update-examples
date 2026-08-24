@@ -25,7 +25,9 @@ for input_file in testdata/otelconfig/*.json; do
                 generated_file="_output/byoo-otel-collector/config.${compute_type}_${backend_type}_${req_type}.yaml"
                 target_file="${examples_root}/${backend_type}/config_${compute_type}_${req_type}_${basename}.yaml"
                 cp "${generated_file}" "${target_file}"
-                sed -i "s|${local_secrets_path}|${real_secrets_path}|g" "${target_file}"
+                # A temp-file-and-move avoids the GNU vs BSD `sed -i` argument mismatch.
+                sed "s|${local_secrets_path}|${real_secrets_path}|g" "${target_file}" > "${target_file}.tmp"
+                mv "${target_file}.tmp" "${target_file}"
                 rm "${generated_file}"
             done
         done

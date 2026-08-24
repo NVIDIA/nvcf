@@ -5,6 +5,14 @@
 # Build repo-owned Go modules without a repo-wide go.work.
 set -euo pipefail
 
+# mapfile below requires bash 4+. macOS ships bash 3.2 by default; install a
+# newer bash with `brew install bash` and re-run.
+if (( BASH_VERSINFO[0] < 4 )); then
+    echo "error: bash 4 or newer is required (found ${BASH_VERSION})." >&2
+    echo "       On macOS, run: brew install bash" >&2
+    exit 1
+fi
+
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 build_module() {
