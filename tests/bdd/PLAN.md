@@ -122,6 +122,35 @@ refactor in every consumer; that is a feature.
 | `When I run command with a terminal:` (docstring) | Same as the docstring form, but stdin is attached to a pseudo-terminal so the child sees a TTY on fd 0. For commands that gate interactive-only behavior on a TTY, such as `nvcf-cli self-hosted up` (its auth-gate mints the admin token only when stdin is a terminal). No input is written; stdout and stderr are captured separately as usual. |
 | `When I export command output to environment variable {string}` | Exports the previous command's trimmed stdout under the named env var. Fails the step unless the prior command exited 0 and produced non-empty stdout. Snapshotted by the env Ledger; restored at suite teardown. |
 
+#### Function lifecycle command adapters
+
+These steps hide the repeated executable, config prefix, fixed subcommand, shell
+quoting, and exit-zero assertion. Every meaningful function, deployment, and
+invocation input remains visible. Each action runs exactly one `nvcf-cli`
+command and preserves its result for existing output assertions.
+
+The adapters validate only Gherkin structure. They do not store function
+identity, apply defaults, parse or normalize product values, enforce product
+preconditions, or allowlist CLI options. Supplied arguments reach `nvcf-cli`
+unchanged after `${VAR}` interpolation. The `successfully` wording is the
+deliberate exception that asserts exit code 0. Negative and exit-code-specific
+scenarios use the raw command steps.
+
+CLI option tables have exactly two headers, `option | value`, and at least one
+data row. Each row emits the option and value as separate arguments in its
+original order. Repeated options and empty values are preserved.
+
+| Step | Command |
+|------|---------|
+| `Given I use NVCF CLI config {string}` | Interpolates and stores the supplied config argument without resolving or checking the path. Later lifecycle steps pass it to `--config`. |
+| `When I successfully create function {string} from image {string} with CLI options:` | Runs `function create --name <name> --image <image>` followed by the option rows. |
+| `When I successfully deploy the function selected by NVCF CLI with options:` | Runs `function deploy create` followed by the option rows. Function selection remains owned by CLI state. |
+| `When I successfully generate a function API key with CLI options:` | Runs `api-key generate --for function` followed by the option rows. |
+| `When I successfully invoke the function selected by NVCF CLI over HTTP with timeout {string} seconds and poll duration {string} seconds:` (JSON docstring) | Runs `function invoke` with the exact request body, timeout, and poll duration. |
+| `When I successfully invoke the function selected by NVCF CLI over plaintext gRPC service {string} method {string} with timeout {string} seconds and poll duration {string} seconds:` (JSON docstring) | Runs `function invoke --grpc --grpc-plaintext` with the visible service, method, request, timeout, and poll duration. |
+| `When I successfully invoke model {string} at {string} with timeout {string} seconds:` (JSON docstring) | Runs `function invoke` with the visible model, inference URL, exact request body, and timeout. |
+| `When I successfully undeploy the function selected by NVCF CLI` | Runs `function delete --deployment-only`. Function selection remains owned by CLI state. |
+
 ### Assertions (Then / And)
 
 | Step | Notes |

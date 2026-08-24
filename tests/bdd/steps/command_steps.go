@@ -104,6 +104,16 @@ func (sc *ScenarioContext) runSuccessfully(ctx context.Context, commandText stri
 	return sc.commandExitCodeShouldBe(0)
 }
 
+// runResolvedSuccessfully is the exit-zero path for commands assembled from
+// individually interpolated and quoted arguments. It avoids interpolating the
+// assembled command a second time.
+func (sc *ScenarioContext) runResolvedSuccessfully(ctx context.Context, resolved string) error {
+	if err := sc.runResolvedAndRecord(ctx, resolved); err != nil {
+		return err
+	}
+	return sc.commandExitCodeShouldBe(0)
+}
+
 // runAndRecordWith interpolates, executes via the supplied runner method
 // (Run or RunWithTTY), and stores the Result on the ScenarioContext so
 // later assertions can read it. The non-zero-exit-is-not-a-failure
@@ -111,6 +121,14 @@ func (sc *ScenarioContext) runSuccessfully(ctx context.Context, commandText stri
 // runner method is used.
 func (sc *ScenarioContext) runAndRecordWith(ctx context.Context, commandText string, run func(context.Context, string) (harness.Result, error)) error {
 	resolved := strings.TrimSpace(dsl.Interpolate(commandText))
+	return sc.runResolvedAndRecordWith(ctx, resolved, run)
+}
+
+func (sc *ScenarioContext) runResolvedAndRecord(ctx context.Context, resolved string) error {
+	return sc.runResolvedAndRecordWith(ctx, strings.TrimSpace(resolved), sc.Suite.Runner.Run)
+}
+
+func (sc *ScenarioContext) runResolvedAndRecordWith(ctx context.Context, resolved string, run func(context.Context, string) (harness.Result, error)) error {
 	result, err := run(ctx, resolved)
 	sc.LastResult = result
 	sc.LastErr = err
