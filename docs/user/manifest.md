@@ -57,37 +57,51 @@ global:
 
 See [Image Mirroring](./image-mirroring.md) for additional registry examples.
 
-### Use upstream container images
-
-You can configure a chart to pull a supporting image directly from its
-upstream registry. Set the override in your environment file
-(`deploy/stacks/self-managed/environments/<environment>.yaml`). You do not
-need to edit `deploy/stacks/self-managed/global.yaml.gotmpl`.
+### Supporting images that ship from Docker Hub
 
 The NATS configuration reloader and the account-bootstrap Kubernetes
-utilities are not republished under the public `nvidia/nvcf` catalog. On a
-public-catalog install, point both at their upstream Docker Hub source unless
-you have already mirrored them into your own registry:
+utilities are not republished under the public `nvidia/nvcf` catalog, so they
+default to their upstream Docker Hub source:
+
+| Value | Default image |
+| --- | --- |
+| `nats.reloader.image` | `docker.io/natsio/nats-server-config-reloader:0.23.0` |
+| `api.accountBootstrap.image` | `docker.io/alpine/k8s:1.36.1` |
+
+A public-catalog install needs no configuration for these two images. Verify
+that your cluster can reach Docker Hub. If your egress to Docker Hub is
+authenticated or rate-limited, add the pull secret to
+`global.imagePullSecrets`.
+
+If you have mirrored both images into your own registry, redirect them from
+your environment file
+(`deploy/stacks/self-managed/environments/<environment>.yaml`). Set `registry`
+and `repository` together, because each key falls back to its own Docker Hub
+default rather than to `global.image`. You do not need to edit
+`deploy/stacks/self-managed/global.yaml.gotmpl`.
 
 ```yaml
 nats:
   reloader:
     image:
-      registry: docker.io
-      repository: natsio/nats-server-config-reloader
+      registry: <your-registry>
+      repository: <your-repository>/nats-server-config-reloader
       tag: "0.23.0"
 
 api:
   accountBootstrap:
     image:
-      registry: docker.io
-      repository: alpine/k8s
+      registry: <your-registry>
+      repository: <your-repository>/alpine-k8s
       tag: "1.36.1"
 ```
 
+### Override the Cassandra images
+
 The Cassandra server and its dynamic seed discovery container take the same
-override keys. Set them when your registry uses a different path or tag than
-the `cassandra` default under `global.image.repository`:
+override keys, but they default to `global.image`. Set them when your registry
+uses a different path or tag than the `cassandra` default under
+`global.image.repository`:
 
 ```yaml
 cassandra:
@@ -101,14 +115,15 @@ cassandra:
 ```
 
 Every `registry`, `repository`, and `tag` key is optional. Any key you leave
-unset keeps its default: `registry` and `repository` fall back to
-`global.image.registry` and `global.image.repository`, and `tag` falls back to
-the version the stack pins, or to the chart's own default when the stack pins
-none.
+unset keeps its default: for Cassandra, `registry` and `repository` fall back
+to `global.image.registry` and `global.image.repository`; for the reloader and
+account-bootstrap images they fall back to the Docker Hub coordinates above.
+`tag` falls back to the version the stack pins, or to the chart's own default
+when the stack pins none.
 
 Use the version listed in the artifact table. Verify that your cluster can
-reach the upstream registry. If the registry requires authentication, add its
-pull secret to `global.imagePullSecrets`.
+reach the registry you point each image at. If it requires authentication, add
+its pull secret to `global.imagePullSecrets`.
 
 The current Cassandra initialization hook uses the
 `nvcf-cassandra-migrations` image, and the current NATS chart renders NKeys as

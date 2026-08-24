@@ -204,13 +204,14 @@ nats:
       repository: {{ .Values.global.image.repository }}/nats-server
       tag: 2.11.17-alpine3.22
   # The config reloader is not republished under the public nvidia/nvcf
-  # catalog, so a public-catalog install has to point it back at Docker Hub
-  # (docker.io/natsio/nats-server-config-reloader). Override the keys below
-  # in your environment file instead of editing this template.
+  # catalog, so it defaults to its upstream Docker Hub source and a
+  # public-catalog install needs no override. If you mirror the image into
+  # your own registry, set registry and repository below in your environment
+  # file instead of editing this template.
   reloader:
     image:
-      registry: {{ dig "nats" "reloader" "image" "registry" "" .Values | default .Values.global.image.registry }}
-      repository: {{ dig "nats" "reloader" "image" "repository" "" .Values | default (printf "%s/nats-server-config-reloader" .Values.global.image.repository) }}
+      registry: {{ dig "nats" "reloader" "image" "registry" "" .Values | default "docker.io" }}
+      repository: {{ dig "nats" "reloader" "image" "repository" "" .Values | default "natsio/nats-server-config-reloader" }}
       tag: {{ dig "nats" "reloader" "image" "tag" "" .Values | default "0.23.0" | quote }}
   natsBox:
     container:
@@ -377,13 +378,15 @@ api:
         llm-request-router:
           worker-address: {{ $llmRequestRouterWorkerAddress | quote }}
   {{- end }}
-  # alpine-k8s is not republished under the public nvidia/nvcf catalog; a
-  # public-catalog install points this at docker.io/alpine/k8s. Override the
-  # keys below in your environment file instead of editing this template.
+  # alpine-k8s is not republished under the public nvidia/nvcf catalog, so it
+  # defaults to its upstream Docker Hub source and a public-catalog install
+  # needs no override. If you mirror the image into your own registry, set
+  # registry and repository below in your environment file instead of editing
+  # this template.
   accountBootstrap:
     image:
-      registry: {{ dig "api" "accountBootstrap" "image" "registry" "" .Values | default .Values.global.image.registry }}
-      repository: {{ dig "api" "accountBootstrap" "image" "repository" "" .Values | default (printf "%s/alpine-k8s" .Values.global.image.repository) }}
+      registry: {{ dig "api" "accountBootstrap" "image" "registry" "" .Values | default "docker.io" }}
+      repository: {{ dig "api" "accountBootstrap" "image" "repository" "" .Values | default "alpine/k8s" }}
       tag: {{ dig "api" "accountBootstrap" "image" "tag" "" .Values | default "1.36.1" | quote }}
       pullPolicy: IfNotPresent
 

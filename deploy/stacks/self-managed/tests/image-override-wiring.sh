@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Test that the supporting-image overrides thread from an environment file
 # through global.yaml.gotmpl into the rendered chart values, and that leaving
-# them unset keeps the mirrored <global.image.repository>/<name> default.
+# them unset keeps each image's default.
 #
+# Cassandra defaults to the mirrored <global.image.repository>/cassandra path.
 # The NATS config reloader and the account-bootstrap alpine-k8s image are not
-# republished under the public nvidia/nvcf catalog, so a public-catalog install
-# has to redirect them to Docker Hub without editing the template.
+# republished under the public nvidia/nvcf catalog, so they default to their
+# upstream Docker Hub source and a public-catalog install needs no override;
+# a mirror install redirects them from its environment file.
 set -euo pipefail
 
 stack_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -97,7 +99,8 @@ assert_repository_count() {
 }
 
 # ---------------------------------------------------------------------------
-# 1. No overrides — every image keeps its mirrored global.image default
+# 1. No overrides — Cassandra keeps its global.image default, and the two
+#    images nvidia/nvcf does not republish keep their Docker Hub default
 # ---------------------------------------------------------------------------
 write_env <<'EOF'
 global:
@@ -108,9 +111,16 @@ EOF
 
 render_values "$work_dir/default-values.yaml"
 assert_image "$work_dir/default-values.yaml" \
-  test/nvcf/nats-server-config-reloader nvcr.io 0.23.0 "nats.reloader default"
+  natsio/nats-server-config-reloader docker.io 0.23.0 "nats.reloader default"
 assert_image "$work_dir/default-values.yaml" \
-  test/nvcf/alpine-k8s nvcr.io 1.36.1 "api.accountBootstrap default"
+  alpine/k8s docker.io 1.36.1 "api.accountBootstrap default"
+assert_absent "$work_dir/default-values.yaml" \
+  test/nvcf/nats-server-config-reloader "nats.reloader default"
+# The only remaining mirrored alpine-k8s paths are the inert
+# cassandra.initialization and nats.nkeyJob values; accountBootstrap is not
+# one of them any more.
+assert_repository_count "$work_dir/default-values.yaml" \
+  test/nvcf/alpine-k8s 2 "api.accountBootstrap default"
 assert_image "$work_dir/default-values.yaml" \
   test/nvcf/cassandra nvcr.io "" "cassandra default"
 # Cassandra server + dynamicSeedDiscovery.
@@ -138,15 +148,15 @@ cassandra:
 nats:
   reloader:
     image:
-      registry: docker.io
-      repository: natsio/nats-server-config-reloader
-      tag: "0.23.0"
+      registry: mirror.example.com
+      repository: mirror/nats-server-config-reloader
+      tag: "0.23.0-mirror"
 api:
   accountBootstrap:
     image:
-      registry: docker.io
-      repository: alpine/k8s
-      tag: "1.36.1"
+      registry: mirror.example.com
+      repository: mirror/alpine-k8s
+      tag: "1.36.1-mirror"
 EOF
 
 render_values "$work_dir/override-values.yaml"
@@ -155,16 +165,21 @@ assert_image "$work_dir/override-values.yaml" \
 assert_image "$work_dir/override-values.yaml" \
   mirror/cassandra-seeds seeds.example.com 5.0.8-nv-2.0.2 "cassandra.dynamicSeedDiscovery full override"
 assert_image "$work_dir/override-values.yaml" \
-  natsio/nats-server-config-reloader docker.io 0.23.0 "nats.reloader full override"
+  mirror/nats-server-config-reloader mirror.example.com 0.23.0-mirror "nats.reloader full override"
 assert_image "$work_dir/override-values.yaml" \
-  alpine/k8s docker.io 1.36.1 "api.accountBootstrap full override"
+  mirror/alpine-k8s mirror.example.com 1.36.1-mirror "api.accountBootstrap full override"
 assert_absent "$work_dir/override-values.yaml" \
   test/nvcf/cassandra "cassandra full override"
 assert_absent "$work_dir/override-values.yaml" \
-  test/nvcf/nats-server-config-reloader "nats.reloader full override"
+  natsio/nats-server-config-reloader "nats.reloader full override"
+assert_absent "$work_dir/override-values.yaml" \
+  alpine/k8s "api.accountBootstrap full override"
 
 # ---------------------------------------------------------------------------
-# 3. Partial override — an unset key keeps its default
+# 3. Partial override — an unset key keeps its own default. Each key falls
+#    back independently: cassandra to global.image, the reloader and
+#    account-bootstrap images to their Docker Hub coordinates, so a mirror
+#    install sets registry and repository together.
 # ---------------------------------------------------------------------------
 write_env <<'EOF'
 global:
@@ -193,9 +208,9 @@ assert_image "$work_dir/partial-values.yaml" \
 assert_image "$work_dir/partial-values.yaml" \
   mirror/cassandra-seeds nvcr.io "" "cassandra.dynamicSeedDiscovery repository-only override"
 assert_image "$work_dir/partial-values.yaml" \
-  mirror/nats-server-config-reloader nvcr.io 0.23.0 "nats.reloader repository-only override"
+  mirror/nats-server-config-reloader docker.io 0.23.0 "nats.reloader repository-only override"
 assert_image "$work_dir/partial-values.yaml" \
-  mirror/alpine-k8s nvcr.io 1.36.1 "api.accountBootstrap repository-only override"
+  mirror/alpine-k8s docker.io 1.36.1 "api.accountBootstrap repository-only override"
 
 # Tag-only override: the repository still resolves from global.image.
 write_env <<'EOF'
@@ -250,32 +265,21 @@ grep -q 'repository: ""' "$work_dir/empty-values.yaml" &&
 grep -q 'registry: ""' "$work_dir/empty-values.yaml" &&
   fail "explicit empty: an empty registry reached the chart values"
 assert_image "$work_dir/empty-values.yaml" \
-  test/nvcf/nats-server-config-reloader nvcr.io 0.23.0 "nats.reloader explicit empty"
+  natsio/nats-server-config-reloader docker.io 0.23.0 "nats.reloader explicit empty"
 assert_image "$work_dir/empty-values.yaml" \
-  test/nvcf/alpine-k8s nvcr.io 1.36.1 "api.accountBootstrap explicit empty"
+  alpine/k8s docker.io 1.36.1 "api.accountBootstrap explicit empty"
 assert_repository_count "$work_dir/empty-values.yaml" \
   test/nvcf/cassandra 2 "cassandra explicit empty"
 
 # ---------------------------------------------------------------------------
-# 5. Public-catalog install — the images nvidia/nvcf does not republish
+# 5. Public-catalog install — no override needed for the images nvidia/nvcf
+#    does not republish
 # ---------------------------------------------------------------------------
 write_env <<'EOF'
 global:
   image:
     registry: nvcr.io
     repository: nvidia/nvcf
-nats:
-  reloader:
-    image:
-      registry: docker.io
-      repository: natsio/nats-server-config-reloader
-      tag: "0.23.0"
-api:
-  accountBootstrap:
-    image:
-      registry: docker.io
-      repository: alpine/k8s
-      tag: "1.36.1"
 EOF
 
 render_values "$work_dir/public-catalog-values.yaml"
@@ -290,5 +294,36 @@ assert_image "$work_dir/public-catalog-values.yaml" \
   nvidia/nvcf/cassandra nvcr.io "" "cassandra public catalog"
 # alpine-k8s is intentionally still resolved from global.image.repository for
 # cassandra.initialization and nats.nkeyJob; those values are inert today.
+
+# ---------------------------------------------------------------------------
+# 6. Mirror install — an operator that copied both images into one registry
+#    redirects them from the environment file
+# ---------------------------------------------------------------------------
+write_env <<'EOF'
+global:
+  image:
+    registry: mirror.example.com
+    repository: mirror/nvcf
+nats:
+  reloader:
+    image:
+      registry: mirror.example.com
+      repository: mirror/nvcf/nats-server-config-reloader
+api:
+  accountBootstrap:
+    image:
+      registry: mirror.example.com
+      repository: mirror/nvcf/alpine-k8s
+EOF
+
+render_values "$work_dir/mirror-values.yaml"
+assert_image "$work_dir/mirror-values.yaml" \
+  mirror/nvcf/nats-server-config-reloader mirror.example.com 0.23.0 "nats.reloader mirror install"
+assert_image "$work_dir/mirror-values.yaml" \
+  mirror/nvcf/alpine-k8s mirror.example.com 1.36.1 "api.accountBootstrap mirror install"
+assert_absent "$work_dir/mirror-values.yaml" \
+  natsio/nats-server-config-reloader "nats.reloader mirror install"
+assert_absent "$work_dir/mirror-values.yaml" \
+  alpine/k8s "api.accountBootstrap mirror install"
 
 echo "image-override-wiring: OK"
