@@ -21,7 +21,7 @@ metadata:
   name: nvca-operator-pre-delete-cleanup
   namespace: nvca-operator
   labels:
-    helm.sh/chart: helm-nvca-operator-1.19.0
+    helm.sh/chart: helm-nvca-operator-1.21.3
     app.kubernetes.io/name: nvca-operator
     app.kubernetes.io/instance: nvca-operator
     app.kubernetes.io/version: "3.0.4"
@@ -39,7 +39,7 @@ kind: ClusterRole
 metadata:
   name: nvca-operator-pre-delete-cleanup
   labels:
-    helm.sh/chart: helm-nvca-operator-1.19.0
+    helm.sh/chart: helm-nvca-operator-1.21.3
     app.kubernetes.io/name: nvca-operator
     app.kubernetes.io/instance: nvca-operator
     app.kubernetes.io/version: "3.0.4"
@@ -140,7 +140,7 @@ kind: ClusterRoleBinding
 metadata:
   name: nvca-operator-pre-delete-cleanup
   labels:
-    helm.sh/chart: helm-nvca-operator-1.19.0
+    helm.sh/chart: helm-nvca-operator-1.21.3
     app.kubernetes.io/name: nvca-operator
     app.kubernetes.io/instance: nvca-operator
     app.kubernetes.io/version: "3.0.4"

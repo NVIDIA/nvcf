@@ -206,13 +206,17 @@ pub fn load_app_config(config_file: Option<&str>) -> Result<AppConfig, config::C
             config::FileFormat::Json,
         ))
         .add_source(config::File::with_name(&path).required(required))
-        .add_source(
-            config::Environment::default()
-                .separator("__")
-                .try_parsing(true),
-        )
+        .add_source(environment_source())
         .build()
         .and_then(|c| c.try_deserialize::<AppConfig>())
+}
+
+fn environment_source() -> config::Environment {
+    config::Environment::default()
+        .separator("__")
+        .try_parsing(true)
+        .list_separator(",")
+        .with_list_parse_key("server.tracing.baggage_attribute_allowlist")
 }
 
 /// Load application config from a YAML file and environment variable overrides.
@@ -339,5 +343,31 @@ mod tests {
         // Verify that AppConfig includes the grpc_client field with proper defaults
         assert_eq!(config.grpc_client.connect_timeout, Duration::from_secs(4));
         assert_eq!(config.grpc_client.request_timeout, Duration::from_secs(10));
+    }
+
+    #[test]
+    fn environment_source_parses_baggage_attribute_allowlist() {
+        #[derive(Deserialize)]
+        struct EnvironmentSettings {
+            server: ServerSettings,
+        }
+
+        let mut env = std::collections::HashMap::new();
+        env.insert(
+            "SERVER__TRACING__BAGGAGE_ATTRIBUTE_ALLOWLIST".to_string(),
+            "allowed.one,allowed.two".to_string(),
+        );
+
+        let settings = config::Config::builder()
+            .add_source(environment_source().source(Some(env)))
+            .build()
+            .unwrap()
+            .try_deserialize::<EnvironmentSettings>()
+            .unwrap();
+
+        assert_eq!(
+            settings.server.tracing.baggage_attribute_allowlist,
+            vec!["allowed.one", "allowed.two"]
+        );
     }
 }

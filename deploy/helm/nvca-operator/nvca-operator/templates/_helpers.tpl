@@ -98,6 +98,29 @@ Validate imagePullSecretName is specified when generateImagePullSecret is false
 {{- end -}}
 
 {{/*
+Reject transport trust settings that explicitly disable QUIC verification.
+*/}}
+{{- define "nvcaop.validateTransportTrust" -}}
+{{- $agentConfig := .Values.agentConfig | default dict -}}
+{{- $mergeConfigData := $agentConfig.mergeConfig | default "" -}}
+{{- $mergeConfig := dict -}}
+{{- if $mergeConfigData -}}
+{{- $mergeConfig = $mergeConfigData | fromYaml -}}
+{{- end -}}
+{{- $mergeWorkload := $mergeConfig.workload | default dict -}}
+{{- $mergeTransportTLS := $mergeWorkload.transportTLS | default dict -}}
+{{- $operatorConfig := .Values.operatorConfig | default dict -}}
+{{- $operatorWorkload := $operatorConfig.workload | default dict -}}
+{{- $operatorTransportTLS := $operatorWorkload.transportTLS | default dict -}}
+{{- $trustBundle := $operatorTransportTLS.trustBundle | default dict -}}
+{{- $secretKeyRef := $trustBundle.secretKeyRef | default dict -}}
+{{- $bundleConfigured := or (eq ($mergeTransportTLS.trustMode | default "") "bundle") (ne ($secretKeyRef.name | default "") "") -}}
+{{- if and ($mergeWorkload.stargateQUICInsecure | default false) $bundleConfigured -}}
+{{- fail "workload.stargateQUICInsecure=true cannot be used with workload.transportTLS.trustMode=bundle; set workload.stargateQUICInsecure=false or use trustMode=system" -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 ImagePullSecret for images.
 */}}
 {{- define "nvcaop.generatedImagePullSecret" }}
@@ -165,7 +188,7 @@ Usage: {{ include "nvcaop.byooOtelCollectorImage" . }}
 {{- if .imageRepository -}}
 {{- .imageRepository -}}
 {{- else if hasPrefix "stg.nvcr.io/nvidia/nvcf-byoc" .defaultRepository -}}
-stg.nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector
+stg.nvcr.io/nv-cf/nvcf-core/byoo-otel-collector
 {{- else -}}
 nvcr.io/nvidia/nvcf-byoc/byoo-otel-collector
 {{- end -}}
@@ -177,7 +200,7 @@ Get the BYOO OTel collector image when its tag is configured.
 {{- define "nvcaop.byooOtelCollectorImage" -}}
 {{- $agent := .Values.agent | default dict -}}
 {{- $byooOtelCollector := $agent.byooOtelCollector | default dict -}}
-{{- $imageTag := "0.157.11" -}}
+{{- $imageTag := "0.157.0-nv-0.1.1" -}}
 {{- if hasKey $byooOtelCollector "imageTag" -}}
 {{- $imageTag = $byooOtelCollector.imageTag -}}
 {{- end -}}

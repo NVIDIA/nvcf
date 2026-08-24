@@ -17,6 +17,7 @@ use axum::http::HeaderMap;
 use tracing::{Span, field};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
+use crate::load_balancer::ClusterComparator;
 use crate::routing_state::{RoutedClusterSnapshot, RoutedInferenceServerSnapshot};
 use crate::telemetry::parent_context_from_headers;
 
@@ -59,6 +60,7 @@ pub(super) fn proxy_openai_request_span(headers: &HeaderMap) -> Span {
         routing.num_candidates = field::Empty,
         routing.sample_count_configured = field::Empty,
         routing.sample_count_effective = field::Empty,
+        routing.comparator = field::Empty,
         routing.rank_depth = field::Empty,
         routing.selected_after_kv_free_tokens_skip = field::Empty,
         routing.retry_attempts = field::Empty,
@@ -107,6 +109,7 @@ pub(super) struct RoutingTraceFields<'a> {
     pub(super) num_candidates: usize,
     pub(super) rank_depth: usize,
     pub(super) selected_after_kv_free_tokens_skip: bool,
+    pub(super) comparator: Option<ClusterComparator>,
     pub(super) cluster: &'a RoutedClusterSnapshot,
     pub(super) chosen: &'a RoutedInferenceServerSnapshot,
 }
@@ -135,6 +138,10 @@ pub(super) fn record_routing_to_span(span: &Span, routing: RoutingTraceFields<'_
         "selected_inst.rtt_ms" = routing.cluster.rtt.as_secs_f64() * 1000.0,
         "selected_inst.snapshot_age_ms" = routing.cluster.snapshot_updated_at.elapsed().as_secs_f64() * 1000.0,
     );
+
+    if let Some(comparator) = routing.comparator {
+        span.record("routing.comparator", comparator.as_str());
+    }
 }
 
 #[cfg(test)]
@@ -169,7 +176,7 @@ mod tests {
     }
 
     #[test]
-    fn proxy_span_declares_load_balancer_sample_count_fields() {
+    fn proxy_span_declares_load_balancer_fields() {
         let span = proxy_openai_request_span(&HeaderMap::new());
         let fields = span
             .metadata()
@@ -178,5 +185,6 @@ mod tests {
 
         assert!(fields.field("routing.sample_count_configured").is_some());
         assert!(fields.field("routing.sample_count_effective").is_some());
+        assert!(fields.field("routing.comparator").is_some());
     }
 }

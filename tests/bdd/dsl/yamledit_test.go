@@ -113,6 +113,34 @@ list:
 	}
 }
 
+func TestRequireNonEmptyYAMLKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "registration.yaml")
+	writeFile(t, path, `clusterID: cluster-123
+clusterGroupID: ""
+selfManaged:
+  identitySource: psat
+`)
+
+	if err := RequireNonEmptyYAMLKeys(path, []string{"clusterID", "selfManaged.identitySource"}); err != nil {
+		t.Fatalf("non-empty keys: %v", err)
+	}
+
+	t.Run("missing key", func(t *testing.T) {
+		err := RequireNonEmptyYAMLKeys(path, []string{"clusterID", "missingID"})
+		if err == nil || !strings.Contains(err.Error(), `row 2`) || !strings.Contains(err.Error(), `key "missingID" is missing`) {
+			t.Fatalf("err = %v, want row-specific missing-key error", err)
+		}
+	})
+
+	t.Run("empty value", func(t *testing.T) {
+		err := RequireNonEmptyYAMLKeys(path, []string{"clusterGroupID"})
+		if err == nil || !strings.Contains(err.Error(), `row 1`) || !strings.Contains(err.Error(), `key "clusterGroupID" is empty`) {
+			t.Fatalf("err = %v, want row-specific empty-value error", err)
+		}
+	})
+}
+
 func TestMatchYAMLSubtreeExactAndSubset(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "profile.yaml")
@@ -172,6 +200,59 @@ func TestMatchYAMLSubtreeInterpolatesExpected(t *testing.T) {
 `
 	if err := MatchYAMLSubtree(path, "", expected, MatchSubset); err != nil {
 		t.Fatalf("interpolated match: %v", err)
+	}
+}
+
+func TestMatchYAMLDocumentSubsetInterpolatesExpected(t *testing.T) {
+	t.Setenv("BDD_TEST_GATEWAY", "gateway.example.invalid")
+	actual := `apiVersion: v1
+kind: ConfigMap
+data:
+  API_URL: http://gateway.example.invalid
+  EXTRA: preserved
+`
+	expected := `data:
+  API_URL: http://${BDD_TEST_GATEWAY}
+`
+	if err := MatchYAMLDocument(actual, expected, MatchSubset); err != nil {
+		t.Fatalf("document subset: %v", err)
+	}
+}
+
+func TestMatchYAMLDocumentHelmValuesSubset(t *testing.T) {
+	t.Setenv("BDD_TMP_COLLECTOR_ENABLED", "true")
+	actual := `selfManaged:
+  otelCollector:
+    enabled: true
+    imageTag: 0.157.9
+`
+	expected := `selfManaged:
+  otelCollector:
+    enabled: ${BDD_TMP_COLLECTOR_ENABLED}
+`
+	if err := MatchYAMLDocument(actual, expected, MatchSubset); err != nil {
+		t.Fatalf("Helm values subset: %v", err)
+	}
+}
+
+func TestMatchYAMLDocumentMismatchDoesNotExposeValues(t *testing.T) {
+	actual := `data:
+  token: actual-secret-value
+`
+	expected := `data:
+  token: expected-secret-value
+`
+	err := MatchYAMLDocument(actual, expected, MatchSubset)
+	if err == nil {
+		t.Fatal("expected mismatch")
+	}
+	if !strings.Contains(err.Error(), "data.token") {
+		t.Fatalf("error %q does not name the mismatched path", err)
+	}
+	for _, sensitive := range []string{"actual-secret-value", "expected-secret-value"} {
+		if strings.Contains(err.Error(), sensitive) {
+			t.Fatalf("error %q exposes %q", err, sensitive)
+		}
 	}
 }
 

@@ -240,6 +240,48 @@ async fn test_bidi_streaming_fully_streamed() -> anyhow::Result<()> {
     bidi_streaming_test(config).await
 }
 
+#[tokio::test]
+async fn test_fully_streamed_pexec_forwards_invocation_region() -> anyhow::Result<()> {
+    let (_localstack, _nats, _mock_nvcf_api, mut config) = fixtures().await;
+    config.nats_properties.region = "server-region".into();
+    config.worker_stream_properties.stream_full_request = true;
+    let mut app = app(config.clone(), None).await?;
+    let app = ServiceExt::<http::Request<Body>>::ready(&mut app).await?;
+    let _worker = Worker::new(
+        config.nats_properties.clone(),
+        WorkerProperties {
+            function_id: FUNCTION_ID,
+            function_version_id: VERSION_ID_1,
+            instance_id: INSTANCE_ID.into(),
+        },
+        Box::new(ReturnRequestHandler {}),
+        PublishMode::Attach(app.clone()),
+    )
+    .await?
+    .into_background_task();
+
+    let request = axum::http::Request::builder()
+        .method(Method::POST)
+        .uri(format!(
+            "/v2/nvcf/pexec/functions/{FUNCTION_ID}/versions/{VERSION_ID_1}"
+        ))
+        .header(header::AUTHORIZATION, format!("Bearer {API_KEY}"))
+        .header("NVCF-INVOCATION-REGION", "client-region")
+        .body(Body::from("a body"))?;
+    let response = app.call(request).await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let response_body = response.into_body().collect().await?.to_bytes();
+    let parsed_request: JsonHttpRequest = serde_json::from_slice(&response_body)?;
+    let regions: Vec<_> = parsed_request
+        .headers
+        .iter()
+        .filter(|(key, _)| key.eq_ignore_ascii_case("nvcf-invocation-region"))
+        .map(|(_, value)| value.as_str())
+        .collect();
+    assert_eq!(regions, ["server-region"]);
+    Ok(())
+}
+
 async fn bidi_streaming_test(config: AppConfig) -> Result<(), Error> {
     let mut app = app(config.clone(), None).await?;
     let app = ServiceExt::<http::Request<Body>>::ready(&mut app).await?;

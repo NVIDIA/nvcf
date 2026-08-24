@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vanity-gateway.fullname" . }}-env
+  labels:
+    {{- include "vanity-gateway.labels" . | nindent 4 }}
+data:
+  MAPPING_PATH: {{ .Values.vanityGateway.config.mappingPath | quote }}
+  NVCF_API_ENDPOINT: {{ .Values.vanityGateway.config.nvcfApiEndpoint | quote }}
+  OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.vanityGateway.config.otelExporterOtlpEndpoint | quote }}
+  SECRETS_PATH: {{ .Values.vanityGateway.config.secretsPath | quote }}
+  PRIVATE_MODEL_NAME_REGEX_PATTERN: {{ .Values.vanityGateway.config.privateModelNameRegexPattern | quote }}
+  AWS_REGION: {{ .Values.vanityGateway.config.awsRegion | quote }}
+  SHADOW_MAX_CONCURRENT: {{ .Values.vanityGateway.config.shadowMaxConcurrent | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vanity-gateway.fullname" . }}-config
+  labels:
+    {{- include "vanity-gateway.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    {{- toYaml .Values.vanityGateway.mappingConfig | nindent 4 }}

@@ -48,6 +48,10 @@ type Result struct {
 // calling here; the runner sees only the resolved argv.
 type CommandRunner interface {
 	Run(ctx context.Context, commandText string) (Result, error)
+	// RunWithSensitiveStdin supplies sensitiveStdin on the child's stdin.
+	// The value is redacted from captured output, command logs, and returned
+	// errors. Callers must still keep it out of commandText and argv.
+	RunWithSensitiveStdin(ctx context.Context, commandText, sensitiveStdin string) (Result, error)
 	// RunWithTTY runs commandText with stdin attached to a pseudo-terminal
 	// so the child process sees a terminal on fd 0 (term.IsTerminal(0) is
 	// true). It is for commands that gate interactive-only behavior on a
@@ -83,19 +87,38 @@ func NewCommandRunner(cwd, logDir string) CommandRunner {
 // A non-zero exit code is reported through the returned error along
 // with a populated Result.
 func (r *execRunner) Run(ctx context.Context, commandText string) (Result, error) {
-	return r.run(ctx, commandText, false)
+	return r.run(ctx, commandText, runOptions{})
+}
+
+// RunWithSensitiveStdin is Run with sensitiveStdin connected to the child's
+// stdin and redacted from every value returned or persisted by the runner.
+func (r *execRunner) RunWithSensitiveStdin(
+	ctx context.Context,
+	commandText,
+	sensitiveStdin string,
+) (Result, error) {
+	return r.run(ctx, commandText, runOptions{
+		stdin:           sensitiveStdin,
+		sensitiveValues: []string{sensitiveStdin},
+	})
 }
 
 // RunWithTTY is Run with the child's stdin attached to a pty slave so it
 // observes a terminal on fd 0. See the CommandRunner interface comment.
 func (r *execRunner) RunWithTTY(ctx context.Context, commandText string) (Result, error) {
-	return r.run(ctx, commandText, true)
+	return r.run(ctx, commandText, runOptions{withTTY: true})
 }
 
-func (r *execRunner) run(ctx context.Context, commandText string, withTTY bool) (Result, error) {
+type runOptions struct {
+	withTTY         bool
+	stdin           string
+	sensitiveValues []string
+}
+
+func (r *execRunner) run(ctx context.Context, commandText string, options runOptions) (Result, error) {
 	argv, err := shlex.Split(commandText)
 	if err != nil {
-		return Result{}, fmt.Errorf("parse command %q: %w", commandText, err)
+		return Result{}, fmt.Errorf("parse command %q: %w", redactSensitive(commandText, options.sensitiveValues), err)
 	}
 	if len(argv) == 0 {
 		return Result{}, errors.New("empty command")
@@ -106,7 +129,7 @@ func (r *execRunner) run(ctx context.Context, commandText string, withTTY bool) 
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	var ptmx *os.File
-	if withTTY {
+	if options.withTTY {
 		// Attach stdin to a pty slave so term.IsTerminal(0) is true in the
 		// child. Keep the master open until the command exits so Linux keeps
 		// fd 0 attached to a live terminal; callers use ctx to bound commands
@@ -114,7 +137,7 @@ func (r *execRunner) run(ctx context.Context, commandText string, withTTY bool) 
 		var pts *os.File
 		ptmxFile, ptsFile, ptyErr := pty.Open()
 		if ptyErr != nil {
-			return Result{}, fmt.Errorf("open pty for %q: %w", commandText, ptyErr)
+			return Result{}, fmt.Errorf("open pty for %q: %w", redactSensitive(commandText, options.sensitiveValues), ptyErr)
 		}
 		ptmx = ptmxFile
 		pts = ptsFile
@@ -125,25 +148,45 @@ func (r *execRunner) run(ctx context.Context, commandText string, withTTY bool) 
 				_ = ptmx.Close()
 			}
 		}()
+	} else if options.stdin != "" {
+		cmd.Stdin = strings.NewReader(options.stdin)
 	}
 	runErr := cmd.Start()
 	if runErr == nil {
 		runErr = cmd.Wait()
 	}
 	result := Result{
-		Stdout: stdout.String(),
-		Stderr: stderr.String(),
+		Stdout: redactSensitive(stdout.String(), options.sensitiveValues),
+		Stderr: redactSensitive(stderr.String(), options.sensitiveValues),
 	}
 	if cmd.ProcessState != nil {
 		result.ExitCode = cmd.ProcessState.ExitCode()
 	} else {
 		result.ExitCode = -1
 	}
-	r.writeLog(commandText, argv, result)
+	redactedCommand := redactSensitive(commandText, options.sensitiveValues)
+	redactedArgv := make([]string, len(argv))
+	for i, arg := range argv {
+		redactedArgv[i] = redactSensitive(arg, options.sensitiveValues)
+	}
+	r.writeLog(redactedCommand, redactedArgv, result)
 	if runErr != nil {
-		return result, fmt.Errorf("command %q failed: %w", commandText, runErr)
+		return result, fmt.Errorf(
+			"command %q failed: %w",
+			redactedCommand,
+			errors.New(redactSensitive(runErr.Error(), options.sensitiveValues)),
+		)
 	}
 	return result, nil
+}
+
+func redactSensitive(value string, sensitiveValues []string) string {
+	for _, sensitive := range sensitiveValues {
+		if sensitive != "" {
+			value = strings.ReplaceAll(value, sensitive, "[REDACTED]")
+		}
+	}
+	return value
 }
 
 func (r *execRunner) writeLog(commandText string, argv []string, result Result) {

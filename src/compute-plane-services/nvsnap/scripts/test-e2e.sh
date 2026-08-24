@@ -538,6 +538,19 @@ else
 fi
 log_info "Capture path: $CAPTURE_PATH"
 
+# RESTORE_CONTAINER_NAME defaults to "restore" per workload, which is right
+# for criu-v2: that restore pod is a placeholder whose only container is the
+# bash reaper the agent restores into.
+#
+# The cachedir path has no placeholder. Its restore target is a customer-shaped
+# pod running the real workload, so the container carries the engine's name and
+# an exec against "restore" hits a container that does not exist. The pod then
+# passes its readiness probe (an httpGet on /v1/models) while every post-restore
+# poll fails, which reads as "restored but not serving" when it is serving fine.
+if [ "$CAPTURE_PATH" = "rootfs" ]; then
+    RESTORE_CONTAINER_NAME="$CONTAINER_NAME"
+fi
+
 # On the rootfs/cachedir path, prefer a dedicated <workload>-rootfs-restore.yaml
 # if one exists: the CRIU restore template chains restore-entrypoint and waits
 # for a CRIU dump that never appears on the rootfs path. The rootfs variant is a

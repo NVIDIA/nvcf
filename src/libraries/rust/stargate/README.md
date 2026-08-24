@@ -30,6 +30,14 @@ set. Every Pylon must also select exactly one local stats initialization source:
 [Pylon onboarding](docs/operations/pylon-onboarding.md) for the complete
 lifecycle and calibration contract.
 
+Pylon gates startup on an upstream health probe. It tries `/health` and then
+`/v1/health/ready`, reuses whichever path answers first, and forwards Stargate's
+`/health` RTT probe to that same path, so engines that serve only the
+OpenAI-style ready endpoint work without extra configuration. The repeatable
+`--upstream-health-path` puts your own paths ahead of those defaults, which stay
+in place as a fallback, and `--upstream-health-wait-ms` bounds how long startup
+retries the probe (default 60000; `0` probes once and exits).
+
 Use [docs/README.md](docs/README.md) as the docs entrypoint.
 Use [local quickstart](docs/getting-started/local-quickstart.md) to run the local stack.
 
@@ -82,6 +90,10 @@ load-balancer topology for production backend traffic.
 - `crates/protocol`: tunnel framing
 - `crates/mock-dynamo`: local OpenAI-style backend
 - `crates/stargate-bench`: benchmark runner
+
+The versioned Stargate runtime image also includes
+`/usr/local/bin/stargate-k8s-router`. Kubernetes deployments can run the main
+Stargate process and the backend router from the same immutable image tag.
 
 ## Benchmarks
 

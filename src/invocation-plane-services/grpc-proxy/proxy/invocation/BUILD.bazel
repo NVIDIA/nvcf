@@ -60,7 +60,10 @@ go_test(
     srcs = ["nats_test.go"],
     embed = [":invocation"],
     deps = [
+        "//src/invocation-plane-services/grpc-proxy/proxy/metrics",
+        "@com_github_nats_io_nats_go//:nats_go",
         "@com_github_nats_io_nkeys//:nkeys",
+        "@com_github_prometheus_client_golang//prometheus/testutil",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//require",
     ],

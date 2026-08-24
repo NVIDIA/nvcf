@@ -663,7 +663,8 @@ func (r *Reconciler) doInstall(ctx context.Context,
 		return reconcile.Result{}, err
 	}
 
-	if err := r.prepareTransportTLSForWorkloads(ctx, ms, workloadObjs); err != nil {
+	transportTLSObjs := append([]client.Object{utilsPod}, workloadObjs...)
+	if err := r.prepareTransportTLSForWorkloads(ctx, ms, transportTLSObjs); err != nil {
 		return reconcile.Result{}, err
 	}
 

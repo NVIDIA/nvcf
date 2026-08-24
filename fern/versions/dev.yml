@@ -49,8 +49,12 @@ navigation:
   - section: Configuration
     skip-slug: true
     contents:
+      - page: NVCF UI
+        path: ../../docs/user/nvcf-ui.md
       - page: Optional Enhancements
         path: ../../docs/user/optional-enhancements.md
+      - page: Pod Disruption Budgets
+        path: ../../docs/user/pod-disruption-budgets.md
       - page: LLM Function Enablement
         path: ../../docs/user/llm-function-enablement.md
       - page: LLM Request Router Load Balancing
@@ -79,6 +83,8 @@ navigation:
       - section: NVCF Caches
         skip-slug: true
         contents:
+          - page: Helm Model Caching
+            path: ../../docs/user/cluster-management/model-cache.md
           - page: Container Cache
             path: ../../docs/user/cluster-management/container-cache.md
           - page: GXCache
@@ -208,6 +214,8 @@ navigation:
         path: ../../docs/user/runbooks/index.md
       - page: Key Rotation
         path: ../../docs/user/runbooks/control-plane-key-rotation-mek.md
+      - page: Transport TLS Rotation
+        path: ../../docs/user/runbooks/transport-tls-rotation.md
       - section: Cache Runbooks
         skip-slug: true
         contents:

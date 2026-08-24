@@ -87,6 +87,12 @@ for profile in default disabled control compute all; do
   esac
 done
 
+expected_nvca_version="3.2.7"
+test "$(operator_image_tag "$work_dir/default.yaml")" = "$expected_nvca_version" ||
+  fail "default operator image tag is not $expected_nvca_version"
+test "$(nvca_version "$work_dir/default.yaml")" = "$expected_nvca_version" ||
+  fail "default NVCA version is not $expected_nvca_version"
+
 render_values compute "$work_dir/compute-overrides.yaml" \
   --state-values-set-string global.nvcaOperator.imageTag=operator-test-tag \
   --state-values-set-string global.nvcaOperator.selfManaged.nvcaVersion=nvca-test-tag \

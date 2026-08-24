@@ -1,5 +1,5 @@
 load("@rules_java//java:defs.bzl", "java_library")
-load("//rules/java:defs.bzl", "nv_boot_library", "nv_boot_library_test", "nv_boot_runtime_classpath_test")
+load("//rules/java:defs.bzl", "nvcf_java_coverage_test", "nvcf_java_test", "nv_boot_library", "nv_boot_runtime_classpath_test")
 
 CORE_REQUIRED_DEPS = [
     "@nv_third_party_deps//:com_github_ben_manes_caffeine_guava",
@@ -61,10 +61,9 @@ nv_boot_runtime_classpath_test(
     ],
 )
 
-nv_boot_library_test(
+nvcf_java_test(
     name = "tests",
     srcs = glob(["src/test/java/**/*.java"]),
-    coverage_library = ":nv_boot_starter_core",
     resource_strip_prefix = "src/libraries/java/nv-boot-parent/nv-boot-starter-core/src/test/resources",
     resources = glob(["src/test/resources/**"]),
     deps = [
@@ -75,4 +74,10 @@ nv_boot_library_test(
         "@nv_third_party_deps//:org_springframework_boot_spring_boot_webmvc_test",
         "@nv_third_party_deps//:org_springframework_boot_spring_boot_webtestclient",
     ] + CORE_REQUIRED_DEPS + CORE_OPTIONAL_COMPILE_DEPS,
+)
+
+nvcf_java_coverage_test(
+    name = "tests_coverage",
+    coverage_target = ":nv_boot_starter_core",
+    test = ":tests",
 )
