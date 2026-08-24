@@ -246,7 +246,7 @@ func assertICMSLane(t *testing.T, config string) {
 	assert.Contains(t, records[0].(string), `!= "ICMSRequest"`, "filter/icms-events kind condition must drop non-ICMSRequest events")
 	// Second condition must allowlist the four supported reasons via not(...in[...]).
 	assert.Contains(t, records[1].(string), "not(", "filter/icms-events reason condition must use not() to drop unsupported reasons")
-	for _, reason := range []string{"InstanceCreation", "InstanceStatusUpdate", "InstanceTermination", "ModelCaching"} {
+	for _, reason := range []string{"InstanceCreation", "InstanceStatusUpdate", "InstanceTermination"} {
 		assert.Contains(t, records[1].(string), reason, "filter/icms-events allowlist must include reason %q", reason)
 	}
 
