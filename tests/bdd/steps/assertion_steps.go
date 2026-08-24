@@ -43,6 +43,7 @@ func registerAssertionSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^yaml file "([^"]*)" should contain:$`, sc.yamlFileShouldContain)
 	ctx.Step(`^yaml file "([^"]*)" key "([^"]*)" should contain:$`, sc.yamlFileKeyShouldContain)
 	ctx.Step(`^the json output should contain rows:$`, sc.jsonOutputShouldContainRows)
+	ctx.Step(`^Helm release "([^"]*)" in namespace "([^"]*)" using context "([^"]*)" should contain values:$`, sc.helmReleaseShouldContainValues)
 	ctx.Step(`^the rendered manifests in "([^"]*)" should contain:$`, sc.renderedManifestsShouldContain)
 	ctx.Step(`^the rendered manifests in "([^"]*)" under directories matching "([^"]*)" should contain:$`, sc.renderedManifestsUnderMatchingDirectoriesShouldContain)
 	ctx.Step(`^the rendered manifests in "([^"]*)" should not contain:$`, sc.renderedManifestsShouldNotContain)
@@ -226,6 +227,25 @@ func (sc *ScenarioContext) helmReleasesShouldBeDeployed(ctx context.Context, kub
 		return err
 	}
 	return dsl.HelmReleasesDeployed(sc.LastResult.Stdout, expected)
+}
+
+func (sc *ScenarioContext) helmReleaseShouldContainValues(ctx context.Context, release, namespace, kubeContext string, doc *godog.DocString) error {
+	command, err := dsl.HelmReleaseValuesCommand(release, namespace, kubeContext)
+	if err != nil {
+		return err
+	}
+	if err := sc.runAndRecord(ctx, command); err != nil {
+		return err
+	}
+	resolvedRelease := dsl.Interpolate(release)
+	resolvedNamespace := dsl.Interpolate(namespace)
+	if err := sc.commandExitCodeShouldBe(0); err != nil {
+		return fmt.Errorf("helm release %q in namespace %q values could not be read: %w", resolvedRelease, resolvedNamespace, err)
+	}
+	if err := dsl.MatchYAMLDocument(sc.LastResult.Stdout, doc.Content, dsl.MatchSubset); err != nil {
+		return fmt.Errorf("helm release %q in namespace %q values do not contain the expected YAML subset: %w", resolvedRelease, resolvedNamespace, err)
+	}
+	return nil
 }
 
 func tableToHelmReleaseExpectations(table *godog.Table) ([]dsl.HelmReleaseExpectation, error) {

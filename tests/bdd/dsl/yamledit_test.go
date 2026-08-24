@@ -219,6 +219,22 @@ data:
 	}
 }
 
+func TestMatchYAMLDocumentHelmValuesSubset(t *testing.T) {
+	t.Setenv("BDD_TMP_COLLECTOR_ENABLED", "true")
+	actual := `selfManaged:
+  otelCollector:
+    enabled: true
+    imageTag: 0.157.9
+`
+	expected := `selfManaged:
+  otelCollector:
+    enabled: ${BDD_TMP_COLLECTOR_ENABLED}
+`
+	if err := MatchYAMLDocument(actual, expected, MatchSubset); err != nil {
+		t.Fatalf("Helm values subset: %v", err)
+	}
+}
+
 func TestMatchYAMLDocumentMismatchDoesNotExposeValues(t *testing.T) {
 	actual := `data:
   token: actual-secret-value

@@ -128,9 +128,9 @@ Feature: Install local Helmfile observability for both planes
       | PodMonitor     | nvcf-default-monitors-dcgm                        |
       | PodMonitor     | nvcf-default-monitors-worker                      |
 
-    When I run command:
+    Then Helm release "nvca-operator" in namespace "nvca-operator" using context "k3d-ncp-local" should contain values:
       """
-      bash -c 'set -eo pipefail; helm get values nvca-operator --namespace nvca-operator --kube-context k3d-ncp-local -o json | jq -r ".selfManaged.otelCollector.enabled"'
+      selfManaged:
+        otelCollector:
+          enabled: true
       """
-    Then the command exit code should be 0
-    And the command output should contain "true"

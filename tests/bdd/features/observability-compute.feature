@@ -145,12 +145,12 @@ Feature: Install local Helmfile observability with the compute profile
       | ServiceMonitor | nvcf-default-monitors-llm-api-gateway             |
       | ServiceMonitor | nvcf-default-monitors-invocation-service          |
 
-    When I run command:
+    Then Helm release "nvca-operator" in namespace "nvca-operator" using context "k3d-ncp-local-compute-1" should contain values:
       """
-      bash -c 'set -eo pipefail; helm get values nvca-operator --namespace nvca-operator --kube-context k3d-ncp-local-compute-1 -o json | jq -r ".selfManaged.otelCollector.enabled"'
+      selfManaged:
+        otelCollector:
+          enabled: true
       """
-    Then the command exit code should be 0
-    And the command output should contain "true"
 
     When I run command "helm status function-autoscaler --namespace nvcf --kube-context k3d-ncp-local-compute-1"
     Then the command exit code should be 1
