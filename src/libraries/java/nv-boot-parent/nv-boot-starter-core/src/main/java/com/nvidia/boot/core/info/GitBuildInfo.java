@@ -75,7 +75,7 @@ public class GitBuildInfo {
                 return PropertiesLoaderUtils.loadProperties(resource);
             }
         } catch (IOException e) {
-            log.warn("Failed to load '{}'", GIT_PROPERTIES_FILE);
+            log.warn("Failed to load '{}'", GIT_PROPERTIES_FILE, e);
         }
         return new Properties();
     }
