@@ -100,6 +100,24 @@ User wants to bring up self-hosted NVCF on a fresh Kubernetes cluster (or k3d fo
 
    Before applying the example on EKS, determine whether the cluster uses
    [EKS Auto Mode](https://docs.aws.amazon.com/eks/latest/userguide/auto-configure-nlb.html).
+   Use the EKS API and the in-cluster controller Deployment instead of guessing
+   from the cluster age or existing Services:
+
+   ```sh
+   export EKS_CLUSTER_NAME="<cluster-name>"
+
+   aws eks describe-cluster --name "$EKS_CLUSTER_NAME" \
+     --query 'cluster.kubernetesNetworkConfig.elasticLoadBalancing.enabled' \
+     --output text
+   kubectl -n kube-system get deployment aws-load-balancer-controller
+   ```
+
+   An EKS API result of `True` selects EKS Auto Mode. Otherwise, a successful
+   Deployment lookup selects the AWS Load Balancer Controller. If neither is
+   present, confirm that the cluster intentionally uses the legacy AWS cloud
+   provider Service controller, or install the AWS Load Balancer Controller,
+   before applying the example.
+
    For EKS Auto Mode, replace the AWS Load Balancer Controller annotation map
    with:
 
@@ -143,6 +161,8 @@ User wants to bring up self-hosted NVCF on a fresh Kubernetes cluster (or k3d fo
      -o jsonpath='{.status.addresses[0].value}')"
    export GRPC_GATEWAY_ADDR="$(kubectl -n "$GRPC_GATEWAY_NAMESPACE" get "gateway/$GRPC_GATEWAY_NAME" \
      -o jsonpath='{.status.addresses[0].value}')"
+   test -n "$GATEWAY_ADDR"
+   test -n "$GRPC_GATEWAY_ADDR"
    export STACK_DOMAIN="$GATEWAY_ADDR"
    ```
 

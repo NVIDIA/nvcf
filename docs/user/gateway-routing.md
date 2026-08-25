@@ -462,6 +462,14 @@ To use a different Gateway API implementation instead of Envoy Gateway:
            name: your-gateway-name       # Can be same Gateway with different listener
            namespace: your-namespace
            listenerName: nats            # TCP listener name for NATS
+         llmGrpc:
+           name: your-llm-grpc-gateway   # Gateway with the TCP port 50071 listener
+           namespace: your-namespace
+           listenerName: llm-grpc
+         llmQuic:
+           name: your-llm-quic-gateway   # Gateway with the UDP port 50072 listener
+           namespace: your-namespace
+           listenerName: llm-quic
    ```
 
 The `nvcf-gateway-routes` chart creates the enabled routes and attaches them to

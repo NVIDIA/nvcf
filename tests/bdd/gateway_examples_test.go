@@ -146,9 +146,18 @@ func TestRemoteGatewayExamplesConfigureAWSNLBOnEnvoyService(t *testing.T) {
 			if gateway == nil {
 				t.Fatalf("Gateway nvcf-gateway not found in an applied manifest")
 			}
-			for annotation := range gateway.Metadata.Annotations {
-				if strings.HasPrefix(annotation, "service.beta.kubernetes.io/") {
-					t.Errorf("Gateway metadata contains Service annotation %q; configure the generated Service through EnvoyProxy", annotation)
+			for i := range resources {
+				if resources[i].Kind != "Gateway" {
+					continue
+				}
+				for annotation := range resources[i].Metadata.Annotations {
+					if strings.HasPrefix(annotation, "service.beta.kubernetes.io/") {
+						t.Errorf(
+							"Gateway %s metadata contains Service annotation %q; configure the generated Service through EnvoyProxy",
+							resources[i].Metadata.Name,
+							annotation,
+						)
+					}
 				}
 			}
 		})
