@@ -64,23 +64,8 @@ render_chart_values cassandra "$cassandra_values"
 render_chart_values openbao-server "$openbao_values"
 
 cassandra_password="$(yq -r '.cassandra.serviceRolePassword // ""' "$cassandra_values")"
-openbao_password_count="$(yq -r '
-  [.openbao.migrations.env[] |
-    select(.name == "DEFAULT_CASSANDRA_PASSWORD")] |
-  length
-' "$openbao_values")"
-test "$openbao_password_count" = "1" ||
-  fail "OpenBao migrations must receive exactly one application-role password"
-openbao_password="$(yq -r '
-  .openbao.migrations.env[] |
-  select(.name == "DEFAULT_CASSANDRA_PASSWORD") |
-  .value
-' "$openbao_values")"
-
 test -n "$cassandra_password" ||
   fail "Cassandra migrations received no application-role password"
-test -n "$openbao_password" ||
-  fail "OpenBao migrations received no application-role password"
 
 cassandra_manifest="$work_dir/cassandra-manifest.yaml"
 helm template cassandra "$helm_dir/cassandra/helm" \
@@ -98,7 +83,51 @@ test -n "$cassandra_job_password" ||
   fail "Cassandra migration Job received no application-role password"
 test "$cassandra_job_password" = "$cassandra_password" ||
   fail "Cassandra migration Job did not receive the rendered stack password"
-test "$cassandra_job_password" = "$openbao_password" ||
+
+# The wrapper chart's migration Job does not depend on upstream OpenBao
+# templates. Supply an empty dependency chart in the isolated copy so this
+# focused render stays offline while exercising the real wrapper template.
+openbao_chart="$work_dir/openbao-chart"
+cp -R "$helm_dir/openbao/helm" "$openbao_chart"
+mkdir -p "$openbao_chart/charts/openbao"
+openbao_dependency_version="$(yq -r '
+  .dependencies[] |
+  select(.name == "openbao") |
+  .version
+' "$openbao_chart/Chart.yaml")"
+test -n "$openbao_dependency_version" ||
+  fail "OpenBao wrapper chart has no OpenBao dependency version"
+printf '%s\n' \
+  'apiVersion: v2' \
+  'name: openbao' \
+  "version: $openbao_dependency_version" >"$openbao_chart/charts/openbao/Chart.yaml"
+
+openbao_manifest="$work_dir/openbao-manifest.yaml"
+helm template openbao-server "$openbao_chart" \
+  --namespace vault-system \
+  --values "$openbao_values" \
+  --show-only templates/hook-post-02-migrations.yaml >"$openbao_manifest" ||
+  fail "OpenBao migration Job did not render"
+openbao_job_password_count="$(yq -r '
+  [.spec.template.spec.containers[] |
+    select(.name == "bao-migrations") |
+    .env[] |
+    select(.name == "DEFAULT_CASSANDRA_PASSWORD")] |
+  length
+' "$openbao_manifest")"
+test "$openbao_job_password_count" = "1" ||
+  fail "OpenBao migration Job must receive exactly one application-role password"
+openbao_job_password="$(yq -r '
+  .spec.template.spec.containers[] |
+  select(.name == "bao-migrations") |
+  .env[] |
+  select(.name == "DEFAULT_CASSANDRA_PASSWORD") |
+  .value
+' "$openbao_manifest")"
+
+test -n "$openbao_job_password" ||
+  fail "OpenBao migration Job received no application-role password"
+test "$cassandra_job_password" = "$openbao_job_password" ||
   fail "Cassandra and OpenBao migrations received different application-role passwords"
 
 echo "cassandra-openbao-credential-wiring: all checks passed"
