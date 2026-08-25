@@ -178,10 +178,10 @@ func EnsureSambaModelCacheInfra(
 	// set WorkloadInstanceTypeLabel) must be patched explicitly.
 	ns := NewModelCacheInitNamespace()
 	if err := ensureCreated(ctx, c, ns); err != nil {
-		return false, fmt.Errorf("ensure samba model cache %T: %w", ns, err)
+		return state, fmt.Errorf("ensure samba model cache %T: %w", ns, err)
 	}
 	if err := ensureNamespaceLabels(ctx, c, ns); err != nil {
-		return false, fmt.Errorf("patch samba model cache %T labels: %w", ns, err)
+		return state, fmt.Errorf("patch samba model cache %T labels: %w", ns, err)
 	}
 
 	objs := []client.Object{
