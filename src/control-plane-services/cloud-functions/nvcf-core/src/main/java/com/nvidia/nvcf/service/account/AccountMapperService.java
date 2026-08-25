@@ -52,7 +52,6 @@ public class AccountMapperService {
     private static final String MESG_MISSING_REGISTRY_CREDENTIALS =
             "Account '%s': Missing registry credentials";
 
-    private final RegistryFunctionMapperService registryFunctionMapperService;
     private final TelemetryMapperService telemetryMapperService;
     private final FunctionsRepository functionsRepository;
 
@@ -144,7 +143,7 @@ public class AccountMapperService {
     private List<RegistryCredentialDto> toRegistryCredentialDtos(
             List<RegistryCredentialDetailsDto> registryCredentialDetailsDtos) {
         var registryCredentials = registryCredentialDetailsDtos.stream()
-                .map(registryFunctionMapperService::toRegistryCredentialDto)
+                .map(RegistryFunctionMapperService::toRegistryCredentialDtoWithoutSecret)
                 .filter(Objects::nonNull)
                 .toList();
 
