@@ -1804,13 +1804,23 @@ func assertFunctionDeploymentsUseInstanceType(t *testing.T, runs []string, want 
 			continue
 		}
 		count++
-		if !strings.Contains(command, "--instance-type "+want) {
+		if !commandOptionEquals(command, "--instance-type", want) {
 			t.Fatalf("function deployment command did not use instance type %s: %s", want, command)
 		}
 	}
 	if count != wantCount {
 		t.Fatalf("function deployment commands = %d, want %d", count, wantCount)
 	}
+}
+
+func commandOptionEquals(command, option, want string) bool {
+	fields := strings.Fields(command)
+	for index := 0; index+1 < len(fields); index++ {
+		if fields[index] == option {
+			return fields[index+1] == want
+		}
+	}
+	return false
 }
 
 func commandRanExactly(runs []string, want string) bool {
