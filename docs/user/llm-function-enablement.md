@@ -496,16 +496,21 @@ kubectl -n nvcf wait --for=condition=Ready \
   --timeout=2m
 ```
 
-Verify the request-router `Certificate`, its issuer reference, and the SANs.
-The commands read only the public certificate:
+Set `REQUEST_ROUTER_TLS_NAME` to the value of
+`addons.llm.pki.secretName`. Its default is `stargate-quic-tls`. In
+`certManager` mode, verify the request-router `Certificate` and its issuer
+reference. The `existingSecret` mode does not render a `Certificate`, so skip
+the first two commands in that mode. The final command applies to both modes
+and reads only the public certificate:
 
 ```bash
+export REQUEST_ROUTER_TLS_NAME="<configured-request-router-tls-name>"
 kubectl -n nvcf wait --for=condition=Ready \
-  certificate/stargate-quic-tls \
+  "certificate/$REQUEST_ROUTER_TLS_NAME" \
   --timeout=2m
-kubectl -n nvcf get certificate stargate-quic-tls \
+kubectl -n nvcf get certificate "$REQUEST_ROUTER_TLS_NAME" \
   -o jsonpath='{.spec.issuerRef.kind}{"/"}{.spec.issuerRef.name}{"\n"}'
-kubectl -n nvcf get secret stargate-quic-tls \
+kubectl -n nvcf get secret "$REQUEST_ROUTER_TLS_NAME" \
   -o jsonpath='{.data.tls\.crt}' \
   | base64 --decode \
   | openssl x509 -noout -subject -issuer -dates -ext subjectAltName
@@ -635,7 +640,9 @@ Use this order for an upgrade from plaintext transport:
 5. Apply the remaining control-plane stack. The managed router hook prepares
    the OpenBao signing path before cert-manager reconciles the request-router
    `Certificate`.
-6. Wait for the issuer and `Certificate/stargate-quic-tls` to become ready.
+6. Wait for the issuer and the `Certificate` named by
+   `addons.llm.pki.secretName` to become ready. The default name is
+   `stargate-quic-tls`.
 7. Export or update the control-plane profile, register each compute plane
    again, and install the refreshed registration values.
 8. Recreate the LLM functions and verify the certificate SAN, trust-bundle
@@ -649,9 +656,9 @@ Use this order for a safe rollback:
    plane again, and recreate the LLM workers with the combined trust bundle.
 3. Set `addons.llm.pki.issuerKind` and `issuerName` to the replacement, set
    `clusterIssuer.enabled: false`, and apply the control-plane stack.
-4. Wait for `Certificate/stargate-quic-tls` to become ready, confirm a
-   successful `server_identity` reload, and verify the replacement TLS data
-   path with a new connection.
+4. Wait for the `Certificate` named by `addons.llm.pki.secretName` to become
+   ready, confirm a successful `server_identity` reload, and verify the
+   replacement TLS data path with a new connection.
 5. Remove the old root from the compute-plane profile, register each compute
    plane again, and recreate the workers.
 6. Confirm that no `Certificate` references the old issuer:

@@ -862,7 +862,8 @@ llmApiGateway:
 
 {{- $pylonGrpcDialAddress := dig "addons" "llm" "requestRouter" "backendRouter" "pylonGrpcDialAddress" "" .Values | default "" | toString | trim }}
 {{- $pylonReverseTunnelDialAddress := dig "addons" "llm" "requestRouter" "backendRouter" "pylonReverseTunnelDialAddress" "" .Values | default "" | toString | trim }}
-{{- if and $llmEnabled (ne (empty $pylonGrpcDialAddress) (empty $pylonReverseTunnelDialAddress)) }}
+{{- $backendRouterEnabled := dig "addons" "llm" "requestRouter" "backendRouter" "enabled" $llmEnabled .Values }}
+{{- if and $llmEnabled $backendRouterEnabled (ne (empty $pylonGrpcDialAddress) (empty $pylonReverseTunnelDialAddress)) }}
 {{- fail "addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress and addons.llm.requestRouter.backendRouter.pylonReverseTunnelDialAddress must either both be set or both be omitted" }}
 {{- end }}
 
@@ -893,7 +894,7 @@ llmRequestRouter:
   reachable addresses.
   */}}
   backendRouter:
-    enabled: {{ dig "addons" "llm" "requestRouter" "backendRouter" "enabled" (dig "addons" "llm" "enabled" false .Values) .Values }}
+    enabled: {{ $backendRouterEnabled }}
     replicaCount: {{ dig "addons" "llm" "requestRouter" "backendRouter" "replicaCount" 2 .Values }}
     image:
       registry: {{ .Values.global.image.registry }}

@@ -85,6 +85,17 @@ func TestRemoteGatewayExamplesConfigureAWSNLBOnEnvoyService(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read %s: %v", example.path, err)
 			}
+			providerProbe := bytes.Index(body, []byte("aws eks describe-cluster"))
+			defaultControllerConfig := bytes.Index(
+				body,
+				[]byte(`service.beta.kubernetes.io/aws-load-balancer-type: "external"`),
+			)
+			if providerProbe < 0 || defaultControllerConfig < 0 || providerProbe > defaultControllerConfig {
+				t.Errorf(
+					"%s does not select the EKS Service controller before presenting the applied EnvoyProxy",
+					example.path,
+				)
+			}
 			for _, guard := range []string{
 				`test -n "$GATEWAY_ADDR" || exit 1`,
 				`test -n "$GRPC_GATEWAY_ADDR" || exit 1`,

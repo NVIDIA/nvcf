@@ -184,4 +184,26 @@ assert_partial_backend_override_rejected \
 test "$partial_override_failures" -eq 0 ||
   fail "$partial_override_failures partial backend-router override case(s) were not rejected"
 
+disabled_environment_name="${environment_name}-backend-router-disabled"
+disabled_environment_file="$test_stack_dir/environments/$disabled_environment_name.yaml"
+cp "$environment_file" "$disabled_environment_file"
+printf '{}\n' >"$test_stack_dir/secrets/$disabled_environment_name-secrets.yaml"
+yq -i \
+  '.addons.llm.requestRouter.backendRouter.enabled = false |
+   del(.addons.llm.requestRouter.backendRouter.pylonReverseTunnelDialAddress)' \
+  "$disabled_environment_file"
+
+HELMFILE_ENV="$disabled_environment_name" \
+  HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
+  helmfile \
+    --file "$test_stack_dir/helmfile.d/02-core.yaml.gotmpl" \
+    --environment default \
+    --selector name=llm-request-router \
+    write-values \
+    --output-file-template "$work_dir/backend-router-disabled-values.yaml"
+
+assert_file_value "$work_dir/backend-router-disabled-values.yaml" \
+  '.llmRequestRouter.backendRouter.enabled' \
+  'false'
+
 echo "llm-router-split-cluster: all checks passed"

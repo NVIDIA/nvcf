@@ -32,7 +32,57 @@ User wants to bring up self-hosted NVCF on a fresh Kubernetes cluster (or k3d fo
    helm upgrade --install eg oci://docker.io/envoyproxy/gateway-helm \
      --version v1.1.3 \
      -n envoy-gateway-system
+   ```
 
+   Before applying the `EnvoyProxy`, determine which Service controller owns
+   load balancers on EKS. Do not apply the manifest until you have selected the
+   matching `envoyService` configuration. Use the EKS API and the in-cluster
+   controller Deployment instead of guessing from the cluster age or existing
+   Services:
+
+   ```sh
+   export EKS_CLUSTER_NAME="<cluster-name>"
+
+   aws eks describe-cluster --name "$EKS_CLUSTER_NAME" \
+     --query 'cluster.kubernetesNetworkConfig.elasticLoadBalancing.enabled' \
+     --output text
+   kubectl -n kube-system get deployment aws-load-balancer-controller
+   ```
+
+   An EKS API result of `True` selects
+   [EKS Auto Mode](https://docs.aws.amazon.com/eks/latest/userguide/auto-configure-nlb.html).
+   Otherwise, a successful Deployment lookup selects the AWS Load Balancer
+   Controller. If neither is present, confirm that the cluster intentionally
+   uses the legacy AWS cloud provider Service controller, or install the AWS
+   Load Balancer Controller, before applying the example.
+
+   The applied manifest below is for the AWS Load Balancer Controller. For EKS
+   Auto Mode, replace its `envoyService` map before applying it with:
+
+   ```yaml
+   envoyService:
+     loadBalancerClass: eks.amazonaws.com/nlb
+     annotations:
+       service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+   ```
+
+   For the legacy AWS cloud provider Service controller, replace the map with:
+
+   ```yaml
+   envoyService:
+     annotations:
+       service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+   ```
+
+   The legacy controller creates an internet-facing load balancer by default.
+   Do not combine the legacy `nlb` selector with the AWS Load Balancer
+   Controller target type and scheme annotations. It supports an NLB Service
+   whose ports use only TCP or only UDP, but rejects one Service that combines
+   TCP and UDP ports. Use the AWS Load Balancer Controller when the generated
+   Envoy Service combines protocols. On non-AWS clusters, replace the map with
+   the provider's Service configuration before applying it.
+
+   ```sh
    # Non-EKS-Auto-Mode example: use AWS LBC with instance targets.
    kubectl apply -f - <<EOF
    apiVersion: gateway.envoyproxy.io/v1alpha1
@@ -97,49 +147,6 @@ User wants to bring up self-hosted NVCF on a fresh Kubernetes cluster (or k3d fo
    `EnvoyProxy.spec.provider.kubernetes.envoyService.annotations`. Envoy Gateway
    copies them to the generated Envoy Service. Do not put Service annotations
    on the `Gateway` resource.
-
-   Before applying the example on EKS, determine whether the cluster uses
-   [EKS Auto Mode](https://docs.aws.amazon.com/eks/latest/userguide/auto-configure-nlb.html).
-   Use the EKS API and the in-cluster controller Deployment instead of guessing
-   from the cluster age or existing Services:
-
-   ```sh
-   export EKS_CLUSTER_NAME="<cluster-name>"
-
-   aws eks describe-cluster --name "$EKS_CLUSTER_NAME" \
-     --query 'cluster.kubernetesNetworkConfig.elasticLoadBalancing.enabled' \
-     --output text
-   kubectl -n kube-system get deployment aws-load-balancer-controller
-   ```
-
-   An EKS API result of `True` selects EKS Auto Mode. Otherwise, a successful
-   Deployment lookup selects the AWS Load Balancer Controller. If neither is
-   present, confirm that the cluster intentionally uses the legacy AWS cloud
-   provider Service controller, or install the AWS Load Balancer Controller,
-   before applying the example.
-
-   For EKS Auto Mode, replace the AWS Load Balancer Controller annotation map
-   with:
-
-   ```yaml
-   envoyService:
-     loadBalancerClass: eks.amazonaws.com/nlb
-     annotations:
-       service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
-   ```
-
-   For a cluster that does not use EKS Auto Mode, the applied example uses the
-   AWS Load Balancer Controller. If that cluster uses the legacy AWS cloud
-   provider Service controller instead, use only
-   `service.beta.kubernetes.io/aws-load-balancer-type: "nlb"` in the
-   `envoyService.annotations` map. The legacy controller creates an
-   internet-facing load balancer by default. Do not combine the legacy `nlb`
-   selector with the AWS Load Balancer Controller target type and scheme
-   annotations. The legacy controller supports an NLB Service whose ports use
-   only TCP or only UDP, but rejects one Service that combines TCP and UDP
-   ports. Use the AWS Load Balancer Controller when the generated Envoy Service
-   combines protocols. Replace the annotations with the provider's Service
-   annotations on non-AWS clusters.
 
    Capture the Gateway values and write the CLI config:
 

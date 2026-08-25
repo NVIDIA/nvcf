@@ -75,10 +75,57 @@ handle ingress traffic. It does not control Envoy Gateway controller pods.
 
 Service annotations on a `Gateway` do not configure the Envoy data-plane
 Service. Set them in `EnvoyProxy.spec.provider.kubernetes.envoyService` so
-Envoy Gateway copies them to the generated Service. The example is for an EKS
-cluster that does not use EKS Auto Mode. It uses the
+Envoy Gateway copies them to the generated Service.
+
+Before applying the `EnvoyProxy` on EKS, determine which Service controller
+owns load balancers. Do not apply the manifest until you have selected the
+matching `envoyService` configuration:
+
+```bash
+export EKS_CLUSTER_NAME="<cluster-name>"
+
+aws eks describe-cluster --name "$EKS_CLUSTER_NAME" \
+  --query 'cluster.kubernetesNetworkConfig.elasticLoadBalancing.enabled' \
+  --output text
+kubectl -n kube-system get deployment aws-load-balancer-controller
+```
+
+An EKS API result of `True` selects
+[EKS Auto Mode](https://docs.aws.amazon.com/eks/latest/userguide/auto-configure-nlb.html).
+Otherwise, a successful Deployment lookup selects the AWS Load Balancer
+Controller. If neither is present, confirm that the cluster intentionally uses
+the legacy AWS cloud provider Service controller, or install the AWS Load
+Balancer Controller, before applying the example.
+
+The applied manifest below uses the
 [AWS Load Balancer Controller](https://kubernetes-sigs.github.io/aws-load-balancer-controller/latest/guide/service/nlb/)
 with instance targets and an internet-facing Network Load Balancer (NLB).
+For EKS Auto Mode, replace its `envoyService` map before applying it with:
+
+```yaml
+envoyService:
+  loadBalancerClass: eks.amazonaws.com/nlb
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+```
+
+For the legacy AWS cloud provider Service controller, replace the map with:
+
+```yaml
+envoyService:
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+```
+
+The legacy controller creates an internet-facing load balancer by default. Add
+`service.beta.kubernetes.io/aws-load-balancer-internal: "true"` for an internal
+NLB. Do not combine the legacy `nlb` controller selector with the AWS Load
+Balancer Controller target type and scheme annotations. The legacy controller
+supports an NLB Service whose ports use only TCP or only UDP, but rejects one
+Service that combines TCP and UDP ports. Use the AWS Load Balancer Controller
+when the generated Envoy Service combines protocols. For another cloud
+provider, replace the `envoyService` map with that provider's Service
+configuration before applying it.
 
 Create the `GatewayClass` with a `parametersRef` that points to the
 `EnvoyProxy` resource:
@@ -115,37 +162,6 @@ spec:
     namespace: envoy-gateway-system
 EOF
 ```
-
-For [EKS Auto Mode](https://docs.aws.amazon.com/eks/latest/userguide/auto-configure-nlb.html),
-replace the AWS Load Balancer Controller annotation map with the Auto Mode
-Service class and its documented internet-facing scheme annotation:
-
-```yaml
-envoyService:
-  loadBalancerClass: eks.amazonaws.com/nlb
-  annotations:
-    service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
-```
-
-For a cluster that does not use EKS Auto Mode and uses the legacy AWS cloud
-provider Service controller instead of the AWS Load Balancer Controller,
-replace the three annotations with:
-
-```yaml
-envoyService:
-  annotations:
-    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
-```
-
-The legacy controller creates an internet-facing load balancer by default. Add
-`service.beta.kubernetes.io/aws-load-balancer-internal: "true"` for an internal
-NLB. Do not combine the legacy `nlb` controller selector with the AWS Load
-Balancer Controller target type and scheme annotations. The legacy controller
-supports an NLB Service whose ports use only TCP or only UDP, but rejects one
-Service that combines TCP and UDP ports. Use the AWS Load Balancer Controller
-when the generated Envoy Service combines protocols. For another cloud provider,
-replace the annotations under `envoyService` with that provider's Service
-annotations.
 
 ### Create Gateway
 
