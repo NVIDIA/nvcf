@@ -29,6 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/cmd/api/service"
+	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/middleware"
 )
 
 // TestRegisterUnauthenticatedRoutes_Info verifies GET /info returns the stamped
@@ -87,6 +88,38 @@ func TestRegisterUnauthenticatedRoutes_Info_RejectsNonGET(t *testing.T) {
 		http.MethodPut,
 		http.MethodPatch,
 		http.MethodDelete,
+		http.MethodOptions,
+	} {
+		t.Run(method, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			r := httptest.NewRequestWithContext(t.Context(), method, "/info", nil)
+			router.ServeHTTP(w, r)
+
+			assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
+			assert.Equal(t, http.MethodGet, w.Header().Get("Allow"))
+			assert.Empty(t, w.Body.String())
+		})
+	}
+}
+
+// TestRegisterUnauthenticatedRoutes_Info_RejectsNonGET_WithCORSMiddleware
+// wires /info through middleware.EnableCORS the same way runService does, to
+// guard against regressions where the CORS preflight short-circuit swallows
+// OPTIONS /info before it reaches the go-lib handler's 405 enforcement
+// (see NVBug 6664046: OPTIONS /info returned 204 instead of 405 in staging
+// because the plain-router test above doesn't apply the production
+// middleware chain).
+func TestRegisterUnauthenticatedRoutes_Info_RejectsNonGET_WithCORSMiddleware(t *testing.T) {
+	router := mux.NewRouter()
+	router.Use(middleware.EnableCORS)
+	registerUnauthenticatedRoutes(router, &service.Server{}, func(h http.Handler) http.Handler { return h })
+
+	for _, method := range []string{
+		http.MethodPost,
+		http.MethodPut,
+		http.MethodPatch,
+		http.MethodDelete,
+		http.MethodOptions,
 	} {
 		t.Run(method, func(t *testing.T) {
 			w := httptest.NewRecorder()
