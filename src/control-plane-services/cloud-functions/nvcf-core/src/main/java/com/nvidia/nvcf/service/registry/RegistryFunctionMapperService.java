@@ -28,7 +28,7 @@ import com.nvidia.nvcf.rest.registry.dto.AddRegistryCredentialRequest;
 import com.nvidia.nvcf.rest.registry.dto.ProvisionedByEnum;
 import com.nvidia.nvcf.rest.registry.dto.RegistryCredentialDetailsDto;
 import com.nvidia.nvcf.rest.registry.dto.RegistryCredentialDto;
-import com.nvidia.nvcf.rest.registry.dto.RegistryCredentialDtoWithID;
+import com.nvidia.nvcf.rest.registry.dto.TempRegistryCredentialDetailsDto;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Base64;
@@ -95,27 +95,34 @@ public class RegistryFunctionMapperService {
     }
 
     /**
-     * Maps a registry credential detail to the account details response DTO, including its id.
-     * Fetches the secret from ESS and returns {@code null} when the secret is unavailable
-     * (logged at error level if the credential still exists in the DB, otherwise at debug level
-     * for a stale cache entry).
+     * Maps a registry credential detail to the temporary account details response DTO, carrying
+     * over every field plus the resolved secret. Fetches the secret from ESS and returns
+     * {@code null} when the secret is unavailable (logged at error level if the credential still
+     * exists in the DB, otherwise at debug level for a stale cache entry).
      *
      * @param registryCredentialDetailsDto the registry credential detail to map
      * @return the response DTO with the credential id and secret, or {@code null} if no secret
      */
-    public RegistryCredentialDtoWithID toRegistryCredentialDtoWithID(
+    public TempRegistryCredentialDetailsDto toTempRegistryCredentialDetailsDto(
             RegistryCredentialDetailsDto registryCredentialDetailsDto) {
         var registryCredentialId = registryCredentialDetailsDto.registryCredentialId();
-        var hostname = registryCredentialDetailsDto.registryHostname();
         var ncaId = registryCredentialDetailsDto.ncaId();
-        var artifactTypes = registryCredentialDetailsDto.artifactTypes();
 
         return registryCredentialEssService
                 .getRegistryCredentialSecret(ncaId, registryCredentialId)
-                .map(secret -> RegistryCredentialDtoWithID.builder()
+                .map(secret -> TempRegistryCredentialDetailsDto.builder()
                         .registryCredentialId(registryCredentialId)
-                        .registryHostname(hostname)
-                        .artifactTypes(artifactTypes)
+                        .ncaId(ncaId)
+                        .registryCredentialName(registryCredentialDetailsDto.registryCredentialName())
+                        .registryName(registryCredentialDetailsDto.registryName())
+                        .registryHostname(registryCredentialDetailsDto.registryHostname())
+                        .artifactTypes(registryCredentialDetailsDto.artifactTypes())
+                        .tags(registryCredentialDetailsDto.tags())
+                        .description(registryCredentialDetailsDto.description())
+                        .provisionedBy(registryCredentialDetailsDto.provisionedBy())
+                        .keyType(registryCredentialDetailsDto.keyType())
+                        .lastUpdatedAt(registryCredentialDetailsDto.lastUpdatedAt())
+                        .createdAt(registryCredentialDetailsDto.createdAt())
                         .secret(secret)
                         .build())
                 .orElseGet(() -> {

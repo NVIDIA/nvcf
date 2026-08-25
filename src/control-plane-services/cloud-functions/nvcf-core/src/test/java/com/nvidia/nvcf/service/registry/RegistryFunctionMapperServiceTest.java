@@ -74,7 +74,7 @@ class RegistryFunctionMapperServiceTest {
 
     /** Verifies the credential id and secret are populated when the ESS secret is available. */
     @Test
-    void shouldPopulateRegistryCredentialIdWhenMappingToRegistryCredentialDtoWithID() {
+    void shouldPopulateRegistryCredentialIdWhenMappingToTempRegistryCredentialDetailsDto() {
         var registryCredentialId = UUID.randomUUID();
         var ncaId = "account-id";
         var detailsDto = RegistryCredentialDetailsDto.builder()
@@ -88,7 +88,7 @@ class RegistryFunctionMapperServiceTest {
         when(registryCredentialEssService.getRegistryCredentialSecret(ncaId, registryCredentialId))
                 .thenReturn(Optional.of(secret("$oauthtoken:nvapi-key")));
 
-        var result = mapper().toRegistryCredentialDtoWithID(detailsDto);
+        var result = mapper().toTempRegistryCredentialDetailsDto(detailsDto);
 
         assertThat(result).isNotNull();
         assertThat(result.registryCredentialId()).isEqualTo(registryCredentialId);
@@ -98,7 +98,7 @@ class RegistryFunctionMapperServiceTest {
 
     /** Verifies mapping returns {@code null} when the ESS secret cannot be retrieved. */
     @Test
-    void shouldReturnNullRegistryCredentialDtoWithIDWhenEssSecretIsUnavailable() {
+    void shouldReturnNullTempRegistryCredentialDetailsDtoWhenEssSecretIsUnavailable() {
         var registryCredentialId = UUID.randomUUID();
         var ncaId = "account-id";
         var detailsDto = RegistryCredentialDetailsDto.builder()
@@ -112,7 +112,7 @@ class RegistryFunctionMapperServiceTest {
         when(registryCredentialEssService.getRegistryCredentialSecret(ncaId, registryCredentialId))
                 .thenReturn(Optional.empty());
 
-        var result = mapper().toRegistryCredentialDtoWithID(detailsDto);
+        var result = mapper().toTempRegistryCredentialDetailsDto(detailsDto);
 
         assertThat(result).isNull();
     }

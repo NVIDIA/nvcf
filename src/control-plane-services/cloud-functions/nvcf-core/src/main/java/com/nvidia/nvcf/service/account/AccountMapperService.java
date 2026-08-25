@@ -27,7 +27,7 @@ import com.nvidia.nvcf.rest.account.dto.AccountDetailsDto;
 import com.nvidia.nvcf.rest.account.dto.AccountDto;
 import com.nvidia.nvcf.rest.account.dto.CreateAccountRequest;
 import com.nvidia.nvcf.rest.registry.dto.RegistryCredentialDetailsDto;
-import com.nvidia.nvcf.rest.registry.dto.RegistryCredentialDtoWithID;
+import com.nvidia.nvcf.rest.registry.dto.TempRegistryCredentialDetailsDto;
 import com.nvidia.nvcf.service.registry.RegistryFunctionMapperService;
 import com.nvidia.nvcf.service.telemetry.TelemetryMapperService;
 import com.nvidia.nvcf.configuration.account.AccountLimitsProperties;
@@ -148,10 +148,10 @@ public class AccountMapperService {
      * @return the response DTOs, or {@code null} when the account has no registry credentials
      */
     @Nullable
-    private List<RegistryCredentialDtoWithID> toRegistryCredentialDtos(
+    private List<TempRegistryCredentialDetailsDto> toRegistryCredentialDtos(
             List<RegistryCredentialDetailsDto> registryCredentialDetailsDtos) {
         var registryCredentials = registryCredentialDetailsDtos.stream()
-                .map(registryFunctionMapperService::toRegistryCredentialDtoWithID)
+                .map(registryFunctionMapperService::toTempRegistryCredentialDetailsDto)
                 .filter(Objects::nonNull)
                 .toList();
 

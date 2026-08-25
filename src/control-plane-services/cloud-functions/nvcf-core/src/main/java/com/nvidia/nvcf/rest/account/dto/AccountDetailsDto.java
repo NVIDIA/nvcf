@@ -16,7 +16,7 @@
  */
 package com.nvidia.nvcf.rest.account.dto;
 
-import com.nvidia.nvcf.rest.registry.dto.RegistryCredentialDtoWithID;
+import com.nvidia.nvcf.rest.registry.dto.TempRegistryCredentialDetailsDto;
 import com.nvidia.nvcf.rest.telemetry.dto.TelemetryDto;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.annotation.Nullable;
@@ -28,7 +28,7 @@ import lombok.Builder;
 
 /**
  * Account details returned by the hidden GET account endpoint. The {@code registryCredentials}
- * use {@link RegistryCredentialDtoWithID} so consumers receive each credential id.
+ * use {@link TempRegistryCredentialDetailsDto} so consumers receive each credential id.
  */
 @Builder
 @Schema(description = "Data Transfer Object(DTO) representing an account")
@@ -47,7 +47,7 @@ public record AccountDetailsDto(
         @Nullable List<TelemetryDto> telemetries,
 
         @Schema(description = "Registry credentials associated with the account")
-        @Nullable List<RegistryCredentialDtoWithID> registryCredentials,
+        @Nullable List<TempRegistryCredentialDetailsDto> registryCredentials,
 
         @Schema(description = "Maximum number of functions allowed for Account")
         @NotNull Integer maxFunctionsAllowed,
