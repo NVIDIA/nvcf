@@ -45,7 +45,7 @@ The vendoring script already applies defaults such as:
 
 - `ngcConfig.clusterSource = "self-managed"`
 - `ngcConfig.serviceKey = "dummy-api-key"`
-- `image.tag = "$NVCA_OPERATOR_VERSION"`
+- `image.tag` remains empty so templates use the published chart version
 - `selfManaged.nvcaVersion = "$NVCA_VERSION"`
 - `generateImagePullSecret = false`
 - `selfManaged.sharedStorage.imageTag = "$NVCA_SHARED_STORAGE_IMAGE_TAG"`
