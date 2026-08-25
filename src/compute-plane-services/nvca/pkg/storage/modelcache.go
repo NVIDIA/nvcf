@@ -687,12 +687,22 @@ func builtinProvisionerMountOptions(provisioner string) ([]string, bool) {
 }
 
 // modelCacheStorageClassName returns the storage class NVCA uses for model cache
-// volumes: the configured override when set, otherwise the default. NVCA owns
-// this choice rather than taking it from the request spec, so every model cache
-// volume in a cluster lands on the same class and its provisioner is the one
-// the mount option defaults were resolved from.
+// volumes: the reconciler override when set (tests), otherwise the agent config
+// value, otherwise the default. NVCA owns this choice rather than taking it from
+// the request spec, so every model cache volume in a cluster lands on the same
+// class and its provisioner is the one the mount option defaults were resolved
+// from.
+//
+// The config value is the single production source: model cache backend
+// selection reads the same field before choosing a backend that provisions on
+// this class, so the class that is checked cannot drift from the class the
+// volume is created on.
 func (r *Reconciler) modelCacheStorageClassName() string {
-	return ModelCacheStorageClassName(r.modelCacheStorageClass)
+	if r.modelCacheStorageClass != "" {
+		return r.modelCacheStorageClass
+	}
+
+	return ModelCacheStorageClassName(r.cfg.Agent.ModelCacheStorageClassName)
 }
 
 // applyModelCacheStorageClass puts the configured storage class on a model cache

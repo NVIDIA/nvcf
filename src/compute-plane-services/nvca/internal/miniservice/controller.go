@@ -125,12 +125,6 @@ type ControllerOptions struct {
 	// NsightProfilingAllowlist tracks which functions should have NVIDIA Nsight GPU
 	// profiling enabled. Shared with BackendK8sCache.
 	NsightProfilingAllowlist *profiling.Allowlist
-	// ModelCacheStorageClass is the storage class model cache volumes are
-	// provisioned on. It must match the storage controller's
-	// WithModelCacheStorageClass, because model cache backend selection checks
-	// this class exists before choosing a backend that provisions on it. Empty
-	// resolves to storage.DefaultModelCacheStorageClassName.
-	ModelCacheStorageClass string
 
 	// Internal use.
 	cacheDir string

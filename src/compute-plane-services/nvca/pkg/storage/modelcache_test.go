@@ -748,23 +748,39 @@ func TestModelCacheStorageClassName(t *testing.T) {
 	tests := []struct {
 		name       string
 		configured string
+		agentCfg   string
 		want       string
 	}{
 		{
-			name:       "unset falls back to the default",
-			configured: "",
-			want:       DefaultModelCacheStorageClassName,
+			name: "unset falls back to the default",
+			want: DefaultModelCacheStorageClassName,
 		},
 		{
-			name:       "configured value wins",
+			name:       "reconciler override wins",
 			configured: "custom-sc",
+			want:       "custom-sc",
+		},
+		{
+			// The production source: the same field model cache backend
+			// selection reads, so the checked class cannot drift from the
+			// class the volume is provisioned on.
+			name:     "agent config value is used when there is no override",
+			agentCfg: "cfg-sc",
+			want:     "cfg-sc",
+		},
+		{
+			name:       "reconciler override beats the agent config value",
+			configured: "custom-sc",
+			agentCfg:   "cfg-sc",
 			want:       "custom-sc",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := &Reconciler{modelCacheStorageClass: tt.configured}
+			nvcaCfg := nvcaconfig.Config{}
+			nvcaCfg.Agent.ModelCacheStorageClassName = tt.agentCfg
+			r := &Reconciler{modelCacheStorageClass: tt.configured, cfg: nvcaCfg}
 			if got := r.modelCacheStorageClassName(); got != tt.want {
 				t.Errorf("modelCacheStorageClassName() = %q, want %q", got, tt.want)
 			}

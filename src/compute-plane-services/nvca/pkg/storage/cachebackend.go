@@ -89,8 +89,9 @@ func ModelCacheStorageClassName(override string) string {
 //  3. HelmSharedStorage on, model cache class present -> NVCA deploys Samba -> Samba
 //  4. otherwise             -> per-pod emptyDir fallback  -> Ephemeral
 //
-// modelCacheStorageClass is the override the storage controller was built with
-// (WithModelCacheStorageClass); empty resolves to the default.
+// modelCacheStorageClass is Agent.ModelCacheStorageClassName, the same config
+// value the storage controller provisions model cache volumes with; empty
+// resolves to the default.
 func SelectHelmCacheBackend(
 	ctx context.Context,
 	c client.Client,

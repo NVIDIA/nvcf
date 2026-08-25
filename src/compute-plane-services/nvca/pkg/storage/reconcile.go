@@ -116,8 +116,10 @@ func WithCSIVolumeMountOptions(mntOptions []string) ReconcilerOption {
 }
 
 // WithModelCacheStorageClass overrides the storage class whose provisioner
-// decides which mount option defaults model cache volumes get. Defaults to
-// DefaultModelCacheStorageClassName when unset.
+// decides which mount option defaults model cache volumes get. It takes
+// precedence over Agent.ModelCacheStorageClassName, which is the production
+// source; unset, the config value and then
+// DefaultModelCacheStorageClassName apply.
 func WithModelCacheStorageClass(name string) ReconcilerOption {
 	return func(r *Reconciler) {
 		if name != "" {

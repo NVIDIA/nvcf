@@ -608,6 +608,11 @@ type AgentConfig struct {
 	// CSIVolumeMountOptions for PVC provisioning
 	CSIVolumeMountOptions []string `yaml:",omitempty"`
 
+	// ModelCacheStorageClassName is the storage class model cache volumes are provisioned on. Empty uses the
+	// default. Both the storage controller (which creates the volumes) and model cache backend selection (which
+	// checks the class exists before choosing a backend that needs it) read this one value.
+	ModelCacheStorageClassName string `yaml:",omitempty"`
+
 	// Function Deployment Stages service config
 	FunctionDeploymentStagesServiceURL string `yaml:",omitempty"`
 	// Function Deployment Stages OAuth endpoints are selected from FunctionDeploymentStagesServiceURL.
