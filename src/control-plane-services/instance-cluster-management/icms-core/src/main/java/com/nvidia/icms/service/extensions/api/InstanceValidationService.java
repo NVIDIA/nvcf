@@ -24,10 +24,12 @@ import com.nvidia.icms.inbound.rest.model.swagger.schema.SpotInstanceRequestSche
 import jakarta.validation.constraints.NotNull;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
+import org.springframework.stereotype.Service;
 
 /**
  * Validates non-BYOC-specific and NVCT task request fields before instance creation.
  */
+@Service
 @Slf4j
 public class InstanceValidationService {
 
@@ -48,7 +50,7 @@ public class InstanceValidationService {
      * @Depricated should be removed from interface. We don't want to separate this implementation
      * for Managed and Selfhosted.
      */
-    public static void validationForNvct(@NotNull SpotInstanceRequestSchema spotRequest) {
+    public void validationForNvct(@NotNull SpotInstanceRequestSchema spotRequest) {
         if (StringUtils.isBlank(getStringValue(spotRequest.getTaskId()))) {
             return;
         }

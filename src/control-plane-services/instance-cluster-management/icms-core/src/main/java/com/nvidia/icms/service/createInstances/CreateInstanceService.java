@@ -63,6 +63,7 @@ public class CreateInstanceService {
     private final TelemetryEventClient telemetryEventClient;
     private final ReservationProcessor reservationProcessor;
     private final ComputePlatformService computePlatformService;
+    private final InstanceValidationService instanceValidationService;
 
     public CreateSpotInstancesResponse processInstanceRequest(
             @NotNull String customer,
@@ -71,7 +72,7 @@ public class CreateInstanceService {
         logIncomingInstanceCreationRequest(instanceRequest);
 
         // Validations for taskId
-        InstanceValidationService.validationForNvct(instanceRequest);
+        instanceValidationService.validationForNvct(instanceRequest);
 
         byocValidationService.validateNotEmpty(instanceRequest.getNcaId(), instanceRequest.getGpu());
 

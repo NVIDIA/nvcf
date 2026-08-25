@@ -57,7 +57,6 @@ import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.CloudHealthEntity;
 import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.CloudHealthKey;
 import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.GpuCapacity;
 import com.nvidia.icms.outbound.cassandra.request.InstanceRequestV2Repository;
-import com.nvidia.icms.outbound.sqs.QueueManager;
 import com.nvidia.icms.outbound.sqs.model.CapacityType;
 import com.nvidia.icms.service.InstanceServiceHelper;
 import com.nvidia.icms.service.extensions.api.InstanceValidationService;
@@ -180,9 +179,6 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
     AwsConfigurationProperties awsConfigurationProperties;
 
     @Mock
-    QueueManager queueManager;
-
-    @Mock
     ReservationProcessor reservationProcessor;
 
     UnifiedErrorReporter unifiedErrorReporter;
@@ -239,7 +235,8 @@ class CreateInstanceServiceTest extends CreateInstancesTestBase {
                 clusterTargetingHelper,
                 telemetryEventClient,
                 reservationProcessor,
-                computePlatformService);
+                computePlatformService,
+                instanceValidationService);
 
         lenient().when(awsConfigurationProperties.getQueuePerInstanceNameFormat()).thenReturn("sqs_%s.fifo");
     }
