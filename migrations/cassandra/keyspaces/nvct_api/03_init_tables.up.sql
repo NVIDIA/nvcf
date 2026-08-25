@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS nvct_api.tasks_v2 (
     results_location               TEXT,
     status                         TEXT,
     telemetries                    FROZEN<telemetries_udt>,
+    health                         TEXT,
     health_info                    FROZEN<health_udt>,
     percent_complete               INT,
     last_updated_at                TIMESTAMP,

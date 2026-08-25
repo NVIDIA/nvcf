@@ -47,8 +47,6 @@ public class InstanceValidationService {
      * @param instanceRequest the incoming instance request
      * @throws com.nvidia.icms.errors.IcmsBadRequestException if a required field is absent
      *
-     * @Depricated should be removed from interface. We don't want to separate this implementation
-     * for Managed and Selfhosted.
      */
     public void validationForNvct(@NotNull SpotInstanceRequestSchema spotRequest) {
         if (StringUtils.isBlank(getStringValue(spotRequest.getTaskId()))) {
@@ -88,5 +86,4 @@ public class InstanceValidationService {
         log.error(errorMessage);
         throw new IcmsBadRequestException(errorMessage);
     }
-
 }
