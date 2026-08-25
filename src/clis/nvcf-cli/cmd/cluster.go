@@ -35,7 +35,7 @@ var clusterCmd = &cobra.Command{
 
 Available subcommands:
 - list: List available cluster groups
-- registration: Manage self-hosted cluster registrations`,
+- list-registered: List self-hosted cluster registrations`,
 }
 
 var clusterListCmd = &cobra.Command{

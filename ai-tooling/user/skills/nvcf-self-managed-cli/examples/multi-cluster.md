@@ -24,7 +24,7 @@ for CTX in admin@gpu-east-1 admin@gpu-west-1 admin@gpu-eu-1; do
 done
 
 # 3. Verify all compute planes registered:
-nvcf-cli cluster registration list --nca-id=$NCA_ID --icms-url=$ICMS --json \
+nvcf-cli cluster list-registered --nca-id=$NCA_ID --icms-url=$ICMS --json \
   | jq '.clusters[] | {name: .clusterName, status, nvcaVersion}'
 ```
 
@@ -81,7 +81,7 @@ The `clusters` array (using cluster names, not IDs) limits scheduling to those c
 
 ```sh
 # List all registered compute planes:
-nvcf-cli cluster registration list --nca-id=$NCA_ID --icms-url=$ICMS --json \
+nvcf-cli cluster list-registered --nca-id=$NCA_ID --icms-url=$ICMS --json \
   | jq -r '.clusters[].clusterName' > clusters.txt
 
 # Status snapshot per compute plane (assuming each context name matches):

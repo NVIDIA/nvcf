@@ -27,20 +27,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var clusterRegistrationCmd = &cobra.Command{
-	Use:          "registration",
-	Short:        "Manage self-hosted cluster registrations",
-	SilenceUsage: true,
-}
-
-var clusterRegistrationListCmd = &cobra.Command{
-	Use:          "list",
+var clusterListRegisteredCmd = &cobra.Command{
+	Use:          "list-registered",
 	Short:        "List self-hosted cluster registrations from ICMS",
 	SilenceUsage: true,
-	RunE:         runClusterRegistrationList,
+	RunE:         runClusterListRegistered,
 }
 
-func runClusterRegistrationList(cmd *cobra.Command, _ []string) error {
+func runClusterListRegistered(cmd *cobra.Command, _ []string) error {
 	ncaID, _ := cmd.Flags().GetString(clusterFlagNcaID)
 
 	config, err := client.LoadConfig()

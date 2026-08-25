@@ -550,12 +550,12 @@ register values feed the operator install and when host-header overrides are req
 List the self-hosted cluster registrations stored in ICMS with the admin token:
 
 ```bash
-./nvcf-cli cluster registration list \
+./nvcf-cli cluster list-registered \
   --nca-id <nca-id> \
   --icms-url "http://<GATEWAY_ADDR>"
 ```
 
-Use `--json` for machine-readable output. `cluster registration list` is distinct
+Use `--json` for machine-readable output. `cluster list-registered` is distinct
 from `cluster list`, which lists NVCF cluster groups and requires API credentials
 with the corresponding NVCF API scope.
 
@@ -1084,7 +1084,7 @@ Registry credential changes take up to about 5 minutes to take effect for task c
 | `function list`, `function list-ids`, `function list-versions`, `function get` | `NVCF_TOKEN` or `NVCF_API_KEY` | `list_functions` or `list_functions_details` | `NVCF_API_KEY` |
 | `function queue status`, `function queue position`, `function queue details` | `NVCF_TOKEN` or `NVCF_API_KEY` | `queue_details` | `NVCF_API_KEY` |
 | `registry-credential` commands | `NVCF_TOKEN` or `NVCF_API_KEY` | `manage_registry_credentials` | `NVCF_TOKEN` |
-| Self-hosted cluster register, registration list, rotate, delete | `NVCF_TOKEN` | `cluster-management` | `NVCF_TOKEN` |
+| Self-hosted cluster register, list-registered, rotate, delete | `NVCF_TOKEN` | `cluster-management` | `NVCF_TOKEN` |
 | `task create` | `NVCF_NVCT_API_KEY` | `launch_task` | `NVCF_NVCT_API_KEY` |
 | `task list` | `NVCF_NVCT_API_KEY` | `list_tasks` | `NVCF_NVCT_API_KEY` |
 | `task get` | `NVCF_NVCT_API_KEY` | `task_details` | `NVCF_NVCT_API_KEY` |

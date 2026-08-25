@@ -29,7 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestClusterRegistrationListUsesICMSWithAdminToken(t *testing.T) {
+func TestClusterListRegisteredUsesICMSWithAdminToken(t *testing.T) {
 	t.Setenv("NVCF_TOKEN", "admin-token")
 	t.Setenv("NVCF_API_KEY", "")
 	viper.Reset()
@@ -44,9 +44,9 @@ func TestClusterRegistrationListUsesICMSWithAdminToken(t *testing.T) {
 	}))
 	defer server.Close()
 
-	cmd, _, err := clusterCmd.Find([]string{"registration", "list"})
+	cmd, _, err := clusterCmd.Find([]string{"list-registered"})
 	require.NoError(t, err)
-	require.Equal(t, "list", cmd.Name())
+	require.Equal(t, "list-registered", cmd.Name())
 	require.NoError(t, cmd.Flags().Set(clusterFlagNcaID, "nvcf-default"))
 	require.NoError(t, cmd.Flags().Set(clusterFlagICMSURL, server.URL))
 	jsonOutput = false
