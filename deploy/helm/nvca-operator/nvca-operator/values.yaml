@@ -19,7 +19,7 @@
 ## @param image.pullPolicy K8s ImagePullPolicy
 image:
   repository: ""
-  tag: "3.0.4"
+  tag: ""
   pullPolicy: IfNotPresent
 ## @param nvcaImage.repositoryOverride (Optional) Full NVCA container registry path, without tag. Only set this if the default needs to be overridden, for example "stg.nvcr.io/nvidia/nvcf-byoc/nvca". The tag is set in the cluster config
 ## @param nvcaImage.pullPolicy K8s ImagePullPolicy
