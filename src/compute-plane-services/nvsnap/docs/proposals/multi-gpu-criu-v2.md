@@ -10,7 +10,7 @@ default. The constraint is the finding, not a detail.
 Multi-GPU CRIU was previously refused outright in the agent, with the reasoning
 recorded in the code: cuda-checkpoint blocks on peer state, the D2H path could
 never reconstruct CUDA context state on restore, so multi-GPU had to use the
-rootfs/cachedir path. The first half of that is true and remains true. The
+cachedir path. The first half of that is true and remains true. The
 conclusion drawn from it was too strong: with peer state absent, criu-v2 does
 capture and restore a TP=2 workload, weights, KV cache and all.
 
@@ -20,10 +20,11 @@ Measured on 8x H100 80GB (p5.48xlarge, NVSwitch), driver 580.126.16, agent
 v0.2.65 with `NVSNAP_MULTI_GPU_CRIU=1`.
 
 ```text
-workload                  checkpoint      restore   result
-TinyLlama TP=2            2m34s   56G     1m00s     PASS (x3)
-TinyLlama TP=4            4m16s  110G     1m14s     PASS
-Llama-3.1-70B TP=4        9m56s  290G     2m02s     PASS
+workload                       engine    checkpoint      restore   result
+TinyLlama TP=2                 vLLM      2m34s   56G     1m00s     PASS (x3)
+TinyLlama TP=4                 vLLM      4m16s  110G     1m14s     PASS
+Llama-3.1-70B TP=4             vLLM      9m56s  290G     2m02s     PASS
+Qwen3-32B TP=2 (NIM)           TRT-LLM   3m03s  103G     1m55s     PASS
 ```
 
 The 70B run is the production-shaped case: four ranks, 76.5G of GPU state each,
@@ -189,10 +190,39 @@ Worth noting for whoever picks this up: a wedged capture leaves host processes
 behind that block subsequent attempts on that node. Check for `criu` and
 `cuda-checkpoint` in `/host/proc` and kill them before re-running.
 
-NIM was not attempted. `nim-qwen3-32b` defines no command or args, so it runs the
-image entrypoint, and the criu-v2 generator requires the setsid stdio-redirect
-convention. It needs a hand-written command wrapper around the image's
-entrypoint before it can be tested at all.
+NIM does work, which makes the SGLang failure engine-specific rather than a
+property of anything but vLLM. See below.
+
+## NIM works, and needed three fixes that generalise
+
+Qwen3-32B TP=2 on TRT-LLM captures and restores. Its process shape differs from
+vLLM's: `start_server.sh`, an `orted` MPI daemon, and four python3 ranks, with
+asymmetric GPU images (83.5G and 24.7G) rather than vLLM's even per-rank split.
+
+Three things had to be fixed, and each was a general defect rather than a NIM
+quirk:
+
+1. The stock image has no command, so it runs
+   `/opt/nvidia/nvidia_entrypoint.sh` with cmd `bash -c $SERVER_START_SCRIPT_PATH`.
+   criu-v2 needs the setsid convention, so the manifest reproduces the image's
+   own startup inside it rather than replacing it.
+
+2. Stdio cannot go to `/tmp`. `isRuntimeGeneratedPath` treats `/tmp` as
+   runtime-generated and drops it from the rootfs diff, so the placeholder
+   restores an empty file and CRIU refuses:
+   `File tmp/nim.out has bad size 0 (expect 21443)`. It also cannot go to the
+   container root, because the image runs as uid 1000. `/opt/nim` satisfies both.
+
+3. The placeholder must run as root. It writes
+   `/proc/sys/kernel/ns_last_pid`, and privileged does not confer root, so an
+   image defaulting to a non-root uid silently fails that write and the restore
+   dies with `Can't fork for 336: File exists`. The generator now emits
+   `runAsUser: 0` for every placeholder, and the bump's failure message is loud
+   rather than parenthetical. The restored workload's own uid comes from the
+   checkpoint, so this does not change what it runs as.
+
+Point 3 was previously known only as a NIM-specific note on one hand-written
+manifest. It is a property of any non-root image, and belonged in the generator.
 
 ## What is still open
 
@@ -226,12 +256,12 @@ CAPTURE_PATH=criu-v2 CHECKPOINT_TIMEOUT=2400 ./scripts/test-e2e.sh vllm-70b-criu
 ```
 
 `vllm-tp2-criu` and `vllm-70b-criu` are separate manifests from `vllm-tp2` and
-`vllm-70b`, which stay on the rootfs/cachedir path; the two engines no longer
+`vllm-70b`, which stay on the cachedir path; the two engines no longer
 share a file. The restore placeholder is generated, not hand-written: the source
 carries `nvsnap.io/path: "criu"` so the generator derives a criu-v2 placeholder
 with the checkpoint hostPath mounted. Regenerate with
 `go run ./internal/manifests/gen -dir deploy/k8s/workloads`. Before that
-annotation was set, the manifest was a rootfs/webhook target and restore failed
+annotation was set, the manifest was a cachedir/webhook target and restore failed
 with "checkpoint images not visible at /checkpoints inside placeholder".
 
 ## Scope

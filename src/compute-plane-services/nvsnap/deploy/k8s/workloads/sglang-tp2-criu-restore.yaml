@@ -38,7 +38,7 @@ spec:
           set -e
           # Push this pod's own pid allocations high so the low pid range the
           # dump captured stays free for CRIU's exact-pid forks.
-          echo 100000 > /proc/sys/kernel/ns_last_pid || echo "(ns_last_pid bump failed)"
+          echo 100000 > /proc/sys/kernel/ns_last_pid || echo "WARNING: ns_last_pid bump FAILED - restore will hit pid collisions"
           # Restored workload stdio is a plain-file fd on /sglang.out (the
           # source manifest's setsid convention); surface it via kubelet.
           touch /sglang.out
@@ -59,6 +59,14 @@ spec:
         failureThreshold: 60
       securityContext:
         privileged: true
+        # Root, regardless of what the source image runs as. The placeholder has
+        # to write /proc/sys/kernel/ns_last_pid, and privileged does not confer
+        # root: an image defaulting to a non-root uid (NIM runs as 1000) fails
+        # that write, leaves its pid range unreserved, and the restore then dies
+        # with "Can't fork for <pid>: File exists". The placeholder is a throwaway
+        # reaper and the restored workload's own uid comes from the checkpoint,
+        # so this does not change what the workload runs as.
+        runAsUser: 0
       resources:
         limits:
           nvidia.com/gpu: "2"

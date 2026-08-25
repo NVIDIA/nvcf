@@ -122,6 +122,23 @@ case "$WORKLOAD" in
         SOURCE_MANIFEST="$PROJECT_ROOT/deploy/k8s/workloads/vllm-70b-criu.yaml"
         RESTORE_MANIFEST_TEMPLATE="$PROJECT_ROOT/deploy/k8s/workloads/vllm-70b-criu-restore.yaml"
         ;;
+    nim-qwen3-32b-criu)
+        # NIM (TRT-LLM) TP=2 on criu-v2. Tests whether multi-GPU criu-v2 works
+        # on an engine other than vLLM. No CUDA-graph disable: TRT-LLM sets
+        # graphs at engine build and the image exposes no env for it, which is
+        # acceptable for capture since graphs fail at restore-inference.
+        POD_NAME="nim-qwen3-32b-criu"
+        CONTAINER_NAME="nim"
+        RESTORE_POD_NAME="nim-qwen3-32b-criu-restored"
+        RESTORE_CONTAINER_NAME="restore"
+        PORT=8000
+        MODEL="qwen/qwen3-32b"
+        INFER_ENDPOINT="/v1/completions"
+        INFER_DATA='{"model":"qwen/qwen3-32b","prompt":"Hello","max_tokens":5}'
+        POST_INFER_DATA='{"model":"qwen/qwen3-32b","prompt":"The meaning of life is","max_tokens":10}'
+        SOURCE_MANIFEST="$PROJECT_ROOT/deploy/k8s/workloads/nim-qwen3-32b-criu.yaml"
+        RESTORE_MANIFEST_TEMPLATE="$PROJECT_ROOT/deploy/k8s/workloads/nim-qwen3-32b-criu-restore.yaml"
+        ;;
     sglang-tp2-criu)
         # SGLang TP=2 on criu-v2. Tests whether the peer-state sever recipe
         # generalises beyond vLLM. SGLang's --disable-cuda-graph is the
@@ -334,17 +351,17 @@ if [[ "$WORKLOAD" == *"70b"* ]]; then
     INFERENCE_POLL_TIMEOUT=300
     RESTORE_READY_TIMEOUT=1200  # 20min: CRIU + 4x GPU memory restore
 elif [[ "$WORKLOAD" == trtllm-* ]]; then
-    POD_READY_TIMEOUT=1800      # 30min: ~25GB image pull + TRT engine compilation
+    POD_READY_TIMEOUT=${POD_READY_TIMEOUT_OVERRIDE:-1800}   # 30min: ~25GB image pull + TRT engine compilation
     MODELS_POLL_TIMEOUT=1200    # 20min
     INFERENCE_POLL_TIMEOUT=300
     RESTORE_READY_TIMEOUT=600   # 10min
-elif [[ "$WORKLOAD" == *"qwen32b"* ]]; then
-    POD_READY_TIMEOUT=1800      # 30min: ~64GB fp16 model download + load
+elif [[ "$WORKLOAD" == *"qwen32b"* || "$WORKLOAD" == *"qwen3-32b"* ]]; then
+    POD_READY_TIMEOUT=${POD_READY_TIMEOUT_OVERRIDE:-1800}   # 30min: ~64GB fp16 model download + load
     MODELS_POLL_TIMEOUT=1200    # 20min
     INFERENCE_POLL_TIMEOUT=300
     RESTORE_READY_TIMEOUT=1200  # 20min: CRIU restore of ~64GB host-staged GPU memory
 else
-    POD_READY_TIMEOUT=600       # 10min
+    POD_READY_TIMEOUT=${POD_READY_TIMEOUT_OVERRIDE:-600}    # 10min
     MODELS_POLL_TIMEOUT=600
     INFERENCE_POLL_TIMEOUT=300
     RESTORE_READY_TIMEOUT=600   # 10min

@@ -1,0 +1,113 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# nim-qwen3-32b-criu SOURCE pod: Qwen3-32B TP=2 on the criu-v2 engine.
+#
+# Separate from nim-qwen3-32b, which stays on the cachedir path. The two
+# engines do not share a manifest.
+#
+# The stock NIM image has no command: it runs /opt/nvidia/nvidia_entrypoint.sh
+# with cmd `bash -c $SERVER_START_SCRIPT_PATH`. criu-v2 needs the setsid
+# convention instead (workload in its own session, stdio to a rootfs file), so
+# the command below reproduces the image's own startup inside that convention
+# rather than replacing it: the entrypoint still runs, and still execs the
+# server start script the image names.
+#
+# Stdio goes to /opt/nim/nim.out rather than /nim.out because the image runs as
+# uid 1000 (nvs) and cannot write the container root. Same reason NIM's restore
+# placeholder needs runAsUser 0 for the pid reservation: privileged does not
+# confer root.
+#
+# Peer-state sever: cuda-checkpoint blocks if cross-GPU state exists. The NCCL
+# knobs are engine-independent so they apply here as they do to vLLM. There is
+# no CUDA-graph disable: TRT-LLM configures graphs at engine build time and the
+# image exposes no env for it. That is deliberate for a first run, because graphs
+# fail late (restore inference) rather than at capture, so their absence does not
+# block finding out whether capture works at all.
+# See docs/proposals/multi-gpu-criu-v2.md.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nim-qwen3-32b-criu
+  namespace: nvsnap-system
+  labels:
+    app: nim-qwen3-32b-criu
+    nvsnap.io/demo: "true"
+  annotations:
+    nvsnap.io/demo-name: "NIM criu-v2"
+    nvsnap.io/desc: "criu-v2 Qwen3-32B multi-GPU TP=2"
+    nvsnap.io/model: "qwen/qwen3-32b"
+    nvsnap.io/port: "8000"
+    nvsnap.io/gpus: "2"
+    nvsnap.io/path: "criu"
+spec:
+  tolerations:
+    - key: "nvidia.com/gpu"
+      operator: "Exists"
+      effect: "NoSchedule"
+
+  imagePullSecrets:
+    - name: nvsnap-pull-secret
+    - name: nim-pull-secret
+
+  containers:
+    - name: nim
+      image: nvcr.io/nim/qwen/qwen3-32b:1.0.0
+      imagePullPolicy: IfNotPresent
+      command: ["/bin/bash", "-lc"]
+      args:
+        - |
+          set -e
+          # criu-v2 convention: the workload runs in its own session via setsid,
+          # so the agent dumps the GPU leader's session rather than container
+          # init, which cannot be restored into a placeholder whose pid 1 is
+          # already occupied. bash stays pid 1 to reap orphans and tails the
+          # output file so kubectl logs keeps working.
+          nohup setsid /opt/nvidia/nvidia_entrypoint.sh \
+            /bin/bash -c "$SERVER_START_SCRIPT_PATH" > /opt/nim/nim.out 2>&1 < /dev/null &
+          tail -F /opt/nim/nim.out &
+          while true; do sleep 30; done
+      env:
+        - name: NGC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: ngc-api-key
+              key: NGC_API_KEY
+        - { name: NIM_CACHE_PATH, value: "/opt/nim/.cache" }
+        - { name: HF_HUB_DISABLE_XET, value: "1" }
+        - { name: CUDA_VISIBLE_DEVICES, value: "0,1" }
+        # Peer-state sever (see header).
+        - { name: NCCL_P2P_DISABLE,  value: "1" }
+        - { name: NCCL_NVLS_DISABLE, value: "1" }
+        - { name: NCCL_SHM_DISABLE,  value: "1" }
+      ports:
+        - containerPort: 8000
+          name: http
+      readinessProbe:
+        httpGet: { path: /v1/health/ready, port: 8000 }
+        initialDelaySeconds: 60
+        periodSeconds: 15
+        failureThreshold: 80
+      resources:
+        limits:
+          nvidia.com/gpu: "2"
+        requests:
+          nvidia.com/gpu: "2"
+      securityContext:
+        privileged: true
+      volumeMounts:
+        - { name: shm, mountPath: /dev/shm }
+        - { name: nim-cache, mountPath: /opt/nim/.cache }
+
+  volumes:
+    - name: shm
+      emptyDir: { medium: Memory, sizeLimit: 16Gi }
+    - name: nim-cache
+      # emptyDir, despite the ~62G re-download per run. A hostPath is created
+      # root-owned by DirectoryOrCreate and NIM runs as uid 1000, which fails at
+      # manifest download with "Permission denied (os error 13)". Making it
+      # persistent needs an initContainer to chown, which is not worth coupling
+      # to the question this workload exists to answer.
+      emptyDir: {}
+
+  restartPolicy: Never
