@@ -31,11 +31,11 @@ Feature: Install local Helmfile observability for both planes
       | observability.profile           | all                                  |
     # Configure NVCA to join the same cluster and enable its collector.
     And I prepare Helmfile environment "local-bdd-observability-all" for stack "nvcf-compute-plane" from fixture "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" with values:
-      | global.imagePullSecrets[0].name                               | nvcr-pull-secret                                                  |
-      | global.helm.sources.repository                                | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                              |
-      | global.image.repository                                       | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                              |
-      | global.nvcaOperator.selfManaged.otelCollector.imageRepository | nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/nvcf-otel-collector |
-      | observability.profile                                         | all                                                               |
+      | global.imagePullSecrets[0].name                       | nvcr-pull-secret                     |
+      | global.helm.sources.repository                        | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+      | global.image.repository                               | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
+      | global.nvcaOperator.selfManaged.otelCollector.enabled | true                                 |
+      | observability.profile                                 | all                                  |
     And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-bdd-observability-all-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
     # Conflict precheck: the split topology claims host ports used by the
     # single-cluster topology. From the repository root, run
@@ -133,4 +133,5 @@ Feature: Install local Helmfile observability for both planes
       selfManaged:
         otelCollector:
           enabled: true
+          imageRepository: nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/nvcf-otel-collector
       """

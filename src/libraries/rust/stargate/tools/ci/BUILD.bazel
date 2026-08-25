@@ -2,9 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 exports_files(
-    [
-        "image_entrypoint_mode_test.sh",
-        "test-oci-image-contains-path.sh",
-    ],
+    ["image_entrypoint_mode_test.sh"],
     visibility = ["//visibility:public"],
 )

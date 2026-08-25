@@ -82,6 +82,9 @@ EOF
 assert_missing_docker_config_blocks_target start
 assert_missing_docker_config_blocks_target build-and-deploy-cluster
 
+fake_gpu_count="$(yq -r '.topology.nodePools.default.gpuCount' "$ROOT_DIR/apps/fake-gpu-operator/values.yaml")"
+assert_eq "2" "$fake_gpu_count" "fake GPU count"
+
 print_directory_clusters="$(MAKEFLAGS=--print-directory; export MAKEFLAGS; run_make print-compute-clusters)"
 assert_eq "ncp-local-compute-1" "$print_directory_clusters" "print-directory compute cluster output"
 if ! grep -q '\$(MAKE) --no-print-directory -s print-compute-clusters' "$ROOT_DIR/Makefile"; then
@@ -140,6 +143,12 @@ fi
 if ! grep -q '\${CONTROL_PLANE_GRPC_WORKER_PORT}:10086' "$ROOT_DIR/k3d-config-control-plane.yaml"; then
   fail "control-plane k3d config must expose CONTROL_PLANE_GRPC_WORKER_PORT to Gateway port 10086"
 fi
+if ! grep -q '\${CONTROL_PLANE_LLM_GRPC_PORT}:50071' "$ROOT_DIR/k3d-config-control-plane.yaml"; then
+  fail "control-plane k3d config must expose CONTROL_PLANE_LLM_GRPC_PORT to the LLM TCP Gateway listener"
+fi
+if ! grep -q '\${CONTROL_PLANE_LLM_QUIC_PORT}:50072' "$ROOT_DIR/k3d-config-control-plane.yaml"; then
+  fail "control-plane k3d config must expose CONTROL_PLANE_LLM_QUIC_PORT to the LLM UDP Gateway listener"
+fi
 if ! grep -q '10081:10081' "$ROOT_DIR/k3d-config.yaml"; then
   fail "single-cluster k3d config must expose the stack-owned grpc-gw TCP listener on host port 10081"
 fi
@@ -154,6 +163,15 @@ if ! grep -q 'service-grpc.yaml' "$ROOT_DIR/apps/compute-control-plane-endpoints
 fi
 if ! grep -q 'targetPort: worker-tcp' "$ROOT_DIR/apps/compute-control-plane-endpoints/service-grpc.yaml"; then
   fail "compute grpc-proxy alias Service must expose the worker TCP port"
+fi
+if ! grep -q 'service-llm-request-router.yaml' "$ROOT_DIR/apps/compute-control-plane-endpoints/kustomization.yaml"; then
+  fail "compute control-plane endpoint aliases must include the LLM request-router Service"
+fi
+if ! grep -q 'targetPort: llm-grpc' "$ROOT_DIR/apps/compute-control-plane-endpoints/service-llm-request-router.yaml"; then
+  fail "compute LLM request-router alias Service must expose the registration port"
+fi
+if ! grep -A4 'targetPort: llm-quic' "$ROOT_DIR/apps/compute-control-plane-endpoints/service-llm-request-router.yaml" | grep -q 'protocol: UDP'; then
+  fail "compute LLM request-router alias Service must expose the reverse-tunnel UDP port"
 fi
 
 if ! grep -q 'name: nats' "$ROOT_DIR/apps/envoy-gateway/gateway.yaml"; then
@@ -170,6 +188,15 @@ if ! grep -R -q 'name: grpc-gw' "$ROOT_DIR/apps/envoy-gateway"; then
 fi
 if ! grep -R -q 'name: worker-tcp' "$ROOT_DIR/apps/envoy-gateway/gateway-grpc.yaml"; then
   fail "control-plane Gateway must define the grpc-proxy worker TCP listener"
+fi
+if ! grep -R -q 'name: llm-grpc' "$ROOT_DIR/apps/envoy-gateway/gateway-grpc.yaml"; then
+  fail "control-plane Gateway must define the LLM worker TCP listener"
+fi
+if ! grep -R -q 'name: llm-quic' "$ROOT_DIR/apps/envoy-gateway/gateway-grpc.yaml"; then
+  fail "control-plane Gateway must define the LLM worker UDP listener"
+fi
+if ! awk '/name: llm-quic/{found=1; next} found && /protocol: UDP/{ok=1; exit} END{exit !ok}' "$ROOT_DIR/apps/envoy-gateway/gateway-grpc.yaml"; then
+  fail "LLM reverse-tunnel Gateway listener must use UDP"
 fi
 if ! grep -q 'kubectl apply -k .*apps/envoy-gateway' "$ROOT_DIR/scripts/setup-gateway-api.sh"; then
   fail "gateway setup must apply the full envoy-gateway kustomization"
@@ -206,11 +233,29 @@ fi
 if ! grep -q 'CONTROL_PLANE_GRPC_WORKER_PORT="$(CONTROL_PLANE_GRPC_WORKER_PORT)"' "$ROOT_DIR/Makefile"; then
   fail "Makefile must pass CONTROL_PLANE_GRPC_WORKER_PORT to the control-plane k3d config"
 fi
+if ! grep -q 'CONTROL_PLANE_LLM_GRPC_PORT ?= 50071' "$ROOT_DIR/Makefile"; then
+  fail "Makefile must define the host port for the LLM worker TCP listener"
+fi
+if ! grep -q 'CONTROL_PLANE_LLM_QUIC_PORT ?= 50072' "$ROOT_DIR/Makefile"; then
+  fail "Makefile must define the host port for the LLM worker UDP listener"
+fi
+if ! grep -q 'CONTROL_PLANE_LLM_GRPC_PORT="$(CONTROL_PLANE_LLM_GRPC_PORT)"' "$ROOT_DIR/Makefile"; then
+  fail "Makefile must pass CONTROL_PLANE_LLM_GRPC_PORT to the control-plane k3d config"
+fi
+if ! grep -q 'CONTROL_PLANE_LLM_QUIC_PORT="$(CONTROL_PLANE_LLM_QUIC_PORT)"' "$ROOT_DIR/Makefile"; then
+  fail "Makefile must pass CONTROL_PLANE_LLM_QUIC_PORT to the control-plane k3d config"
+fi
 if ! grep -q 'CONTROL_PLANE_LB_NATS_PORT=4222' "$ROOT_DIR/Makefile"; then
   fail "Makefile must pass the control-plane NATS container port to endpoint configuration"
 fi
 if ! grep -q 'CONTROL_PLANE_LB_GRPC_WORKER_PORT=10086' "$ROOT_DIR/Makefile"; then
   fail "Makefile must pass the grpc-proxy worker container port to endpoint configuration"
+fi
+if ! grep -q 'CONTROL_PLANE_LB_LLM_GRPC_PORT=50071' "$ROOT_DIR/Makefile"; then
+  fail "Makefile must pass the LLM registration container port to endpoint configuration"
+fi
+if ! grep -q 'CONTROL_PLANE_LB_LLM_QUIC_PORT=50072' "$ROOT_DIR/Makefile"; then
+  fail "Makefile must pass the LLM reverse-tunnel container port to endpoint configuration"
 fi
 dns_target="$(awk '/^configure-compute-control-plane-dns:/{show=1} /^deploy-compute-control-plane-endpoints:/{show=0} show{print}' "$ROOT_DIR/Makefile")"
 if grep -q 'CLUSTER_NAME' <<<"$dns_target"; then
@@ -272,7 +317,7 @@ if grep -q "sis.nvcf-control-plane.test" <<<"$rendered_routes"; then
   fail "custom control-plane routes must not keep the default domain"
 fi
 
-endpoints_yaml="$(CONTROL_PLANE_DOMAIN="$custom_domain" CONTROL_PLANE_LB_IP=172.18.0.7 CONTROL_PLANE_LB_HTTP_PORT=18080 CONTROL_PLANE_LB_GRPC_PORT=19090 CONTROL_PLANE_LB_GRPC_WORKER_PORT=20086 CONTROL_PLANE_LB_NATS_PORT=14222 CLUSTER_NAME=ncp-local-compute-1 "$ROOT_DIR/scripts/configure-control-plane-endpoints.sh" --dry-run)"
+endpoints_yaml="$(CONTROL_PLANE_DOMAIN="$custom_domain" CONTROL_PLANE_LB_IP=172.18.0.7 CONTROL_PLANE_LB_HTTP_PORT=18080 CONTROL_PLANE_LB_GRPC_PORT=19090 CONTROL_PLANE_LB_GRPC_WORKER_PORT=20086 CONTROL_PLANE_LB_LLM_GRPC_PORT=25071 CONTROL_PLANE_LB_LLM_QUIC_PORT=25072 CONTROL_PLANE_LB_NATS_PORT=14222 CLUSTER_NAME=ncp-local-compute-1 "$ROOT_DIR/scripts/configure-control-plane-endpoints.sh" --dry-run)"
 if ! grep -q "ip: 172.18.0.7" <<<"$endpoints_yaml"; then
   fail "compute endpoint dry-run must point at the control-plane load balancer container IP"
 fi
@@ -293,6 +338,15 @@ if ! grep -A10 "name: grpc" <<<"$endpoints_yaml" | grep -q "port: 20086"; then
 fi
 if ! grep -q "port: 14222" <<<"$endpoints_yaml"; then
   fail "compute NATS endpoint dry-run must use CONTROL_PLANE_LB_NATS_PORT"
+fi
+if ! grep -A14 "name: llm-request-router" <<<"$endpoints_yaml" | grep -q "port: 25071"; then
+  fail "compute LLM request-router endpoint dry-run must use CONTROL_PLANE_LB_LLM_GRPC_PORT"
+fi
+if ! grep -A14 "name: llm-request-router" <<<"$endpoints_yaml" | grep -q "port: 25072"; then
+  fail "compute LLM request-router endpoint dry-run must use CONTROL_PLANE_LB_LLM_QUIC_PORT"
+fi
+if ! grep -A14 "name: llm-request-router" <<<"$endpoints_yaml" | grep -q "protocol: UDP"; then
+  fail "compute LLM request-router endpoint dry-run must preserve UDP for reverse QUIC"
 fi
 
 fake_bin="$(mktemp -d)"

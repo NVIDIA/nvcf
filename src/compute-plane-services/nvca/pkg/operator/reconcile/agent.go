@@ -634,8 +634,9 @@ func (a *Agent) Start(ctx context.Context) error {
 func (a *Agent) dispatchReconcileCluster(ctx context.Context) {
 	log := core.GetLogger(ctx)
 
-	if a.ClusterSource != nvcaoptypes.ClusterSourceHelmManaged {
-		log.Debug("cluster source is not helm managed, skipping reconcile")
+	if a.ClusterSource != nvcaoptypes.ClusterSourceHelmManaged &&
+		a.ClusterSource != nvcaoptypes.ClusterSourceSelfHosted {
+		log.Debug("cluster source is not ConfigMap managed, skipping reconcile")
 		return
 	}
 
