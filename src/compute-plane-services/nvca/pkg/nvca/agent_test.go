@@ -65,6 +65,7 @@ import (
 	nvcaerrors "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/errors"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/health"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/queue"
+	mockqueue "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/queue/mock"
 	natsqueue "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/queue/nats"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
@@ -109,8 +110,8 @@ func TestAgentApis(t *testing.T) {
 		NamespaceLabels:                labels.Set{"foo": "bar"},
 		K8sVersion:                     "1.27.8",
 		CredRenewInterval:              DefaultCredRenewInterval,
-		HeartbeatInterval:              DefaultHeartBeatInterval,
-		SyncQueueInterval:              defaultSyncQueueInterval,
+		HeartbeatInterval:              365 * 24 * time.Hour,
+		SyncQueueInterval:              365 * 24 * time.Hour,
 		SyncRequestStatusInterval:      DefaultSyncRequestStatusInterval,
 		PeriodicInstanceStatusInterval: DefaultPeriodicInstanceStatusInterval,
 		SyncAcknowledgeRequestInterval: ackReqInterval,
@@ -190,6 +191,419 @@ func TestAgentApis(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, is.Status, string(types.ICMSInstanceTerminated))
 	assert.Equal(t, is.LastReportedStatus, string(types.ICMSInstanceTerminated))
+}
+
+type blockingRecordingICMSClient struct {
+	*mockICMSClient
+
+	mu                   sync.Mutex
+	registrationRequests []types.ICMSRegistrationRequest
+	results              []blockingRegistrationResult
+	registrationStarted  chan int
+}
+
+type registrationResult struct {
+	response *types.ICMSRegistrationResponse
+	err      error
+}
+
+type blockingRegistrationResult struct {
+	registrationResult
+	release     chan struct{}
+	releaseOnce sync.Once
+}
+
+func newBlockingRecordingICMSClient(results ...registrationResult) *blockingRecordingICMSClient {
+	blockingResults := make([]blockingRegistrationResult, len(results))
+	for i, result := range results {
+		blockingResults[i] = blockingRegistrationResult{
+			registrationResult: result,
+			release:            make(chan struct{}),
+		}
+	}
+	return &blockingRecordingICMSClient{
+		mockICMSClient:      &mockICMSClient{},
+		results:             blockingResults,
+		registrationStarted: make(chan int, len(results)),
+	}
+}
+
+func (m *blockingRecordingICMSClient) Register(
+	ctx context.Context,
+	req *types.ICMSRegistrationRequest,
+) (*types.ICMSRegistrationResponse, error) {
+	requestCopy := *req
+	requestCopy.BackendGPUs = append([]types.RegistrationGPU(nil), req.BackendGPUs...)
+	for i := range requestCopy.BackendGPUs {
+		requestCopy.BackendGPUs[i].InstanceTypes = append(
+			[]types.RegistrationInstanceType(nil),
+			req.BackendGPUs[i].InstanceTypes...,
+		)
+	}
+
+	m.mu.Lock()
+	attempt := len(m.registrationRequests)
+	m.registrationRequests = append(m.registrationRequests, requestCopy)
+	if attempt >= len(m.results) {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("unexpected ICMS registration attempt %d", attempt)
+	}
+	result := &m.results[attempt]
+	m.mu.Unlock()
+	m.registrationStarted <- attempt
+
+	select {
+	case <-result.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+
+	return result.response, result.err
+}
+
+func (m *blockingRecordingICMSClient) release(attempt int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := &m.results[attempt]
+	result.releaseOnce.Do(func() { close(result.release) })
+}
+
+func (m *blockingRecordingICMSClient) requests() []types.ICMSRegistrationRequest {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]types.ICMSRegistrationRequest(nil), m.registrationRequests...)
+}
+
+func requireRegistrationAttempt(t *testing.T, client *blockingRecordingICMSClient, expected int) {
+	t.Helper()
+	select {
+	case attempt := <-client.registrationStarted:
+		require.Equal(t, expected, attempt)
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for ICMS registration attempt %d", expected)
+	}
+}
+
+func requireNoRegistrationAttempt(t *testing.T, client *blockingRecordingICMSClient, wait time.Duration) {
+	t.Helper()
+	select {
+	case attempt := <-client.registrationStarted:
+		t.Fatalf("unexpected ICMS registration attempt %d while another registration is in flight", attempt)
+	case <-time.After(wait):
+	}
+}
+
+func newGracefulNoGPUTestAgent(
+	t *testing.T,
+	ctx context.Context,
+	icmsClient ICMSClientInterface,
+) (*Agent, *kubeclients.KubeClients) {
+	t.Helper()
+	oldSyncInterval := syncICMSRegistrationInterval
+	// Callers use a fixed random seed, keeping periodic registration outside the test window.
+	syncICMSRegistrationInterval = 365 * 24 * time.Hour
+	t.Cleanup(func() { syncICMSRegistrationInterval = oldSyncInterval })
+
+	featureFlags := &featureflagmock.Fetcher{}
+	featureFlags.SetFeatureFlags(featureflag.GracefulNoGPU)
+	agentOpts := AgentOptions{
+		TokenFetcherOptions: nvcaauth.TokenFetcherOptions{
+			OAuthTokenScope:      "byoc_registration",
+			OAuthClientID:        "foo",
+			OAuthClientSecretKey: "bar",
+		},
+		NCAId:                          "randomNCAId123",
+		ClusterName:                    "bartnvbackend",
+		ClusterID:                      "clusterid-1",
+		ClusterDescription:             "this is a test cluster",
+		ClusterGroupName:               "group of all A30",
+		ComputeBackend:                 "k8s",
+		CloudProvider:                  "on-prem",
+		NamespaceLabels:                labels.Set{"foo": "bar"},
+		K8sVersion:                     "1.27.8",
+		CredRenewInterval:              DefaultCredRenewInterval,
+		HeartbeatInterval:              DefaultHeartBeatInterval,
+		SyncQueueInterval:              defaultSyncQueueInterval,
+		SyncRequestStatusInterval:      DefaultSyncRequestStatusInterval,
+		PeriodicInstanceStatusInterval: DefaultPeriodicInstanceStatusInterval,
+		SyncAcknowledgeRequestInterval: ackReqInterval,
+		DynamicGPUDiscoveryEnabled:     true,
+		MultipleGPUTypesAllowed:        true,
+		UniformInstanceLabelsEnabled:   true,
+		GPUPollInterval:                10 * time.Millisecond,
+		GPUDebounceTime:                time.Millisecond,
+		FeatureFlagFetcher:             featureFlags,
+		MetricsRegisterer:              prometheus.NewRegistry(),
+	}
+
+	agent := newMockAgent(t, ctx, agentOpts)
+	// Isolate startup readiness from the immediate heartbeat and queue-sync events.
+	delete(agent.resourceEventWorkerQueues, EventTickUpdateHeartbeat)
+	delete(agent.resourceEventWorkerQueues, EventTickSyncSQSQueue)
+	oldNewQueueClient := newQueueClient
+	newQueueClient = func(string) queue.Client {
+		return &mockqueue.Client{Use10MillisForWaits: true}
+	}
+	t.Cleanup(func() { newQueueClient = oldNewQueueClient })
+	k8sClients := mockKubeClientsDynamicGPUs()
+	agent.newKubeClients = func(context.Context, string) (*kubeclients.KubeClients, error) {
+		return k8sClients, nil
+	}
+	agent.newBackendK8sCacheBuilder = func() *BackendK8sCacheBuilder {
+		builder := NewBackendk8sCacheBuilder()
+		builder.addSharedClusterNodePublisher = mockAddSharedClusterNodePublisherFunc
+		return builder
+	}
+	agent.icmsClient = icmsClient
+	return agent, k8sClients
+}
+
+func requireHTTPStatusEventually(t *testing.T, address, path string, expected int) {
+	t.Helper()
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		resp, err := http.Get("http://" + address + path)
+		if !assert.NoError(ct, err) {
+			return
+		}
+		assert.NoError(ct, resp.Body.Close())
+		assert.Equal(ct, expected, resp.StatusCode)
+	}, 5*time.Second, 10*time.Millisecond)
+}
+
+func requireHTTPStatus(t *testing.T, address, path string, expected int) {
+	t.Helper()
+	resp, err := http.Get("http://" + address + path)
+	require.NoError(t, err)
+	require.NoError(t, resp.Body.Close())
+	require.Equal(t, expected, resp.StatusCode)
+}
+
+func requireRefreshedReadinessStatus(
+	t *testing.T,
+	ctx context.Context,
+	agent *Agent,
+	expected int,
+) {
+	t.Helper()
+	_, err := agent.backendHealthCache.RefreshStatus(ctx)
+	require.NoError(t, err)
+	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPReadinessRoutePath, expected)
+}
+
+func TestAgentStartGracefulNoGPURecoversWhenGPUAppears(t *testing.T) {
+	ctx, cancel := context.WithCancel(core.WithRandomSeed(newTestContext(), 42))
+	t.Cleanup(cancel)
+
+	recoveredCredentials := getTestQueueCreds(true)
+	icmsClient := newBlockingRecordingICMSClient(registrationResult{
+		response: &types.ICMSRegistrationResponse{
+			ClusterID:      "registered-cluster-id",
+			ClusterGroupID: "registered-cluster-group-id",
+			Credentials:    recoveredCredentials,
+		},
+	})
+	agent, k8sClients := newGracefulNoGPUTestAgent(t, ctx, icmsClient)
+
+	require.NoError(t, agent.Start(ctx))
+	requireHTTPStatus(t, agent.NVCASvcAddress, health.HTTPReadinessRoutePath, http.StatusServiceUnavailable)
+	requireHTTPStatus(t, agent.NVCASvcAddress, health.HTTPLivenessRoutePath, http.StatusOK)
+	require.NotNil(t, agent.gpuMonitor)
+	require.NotNil(t, agent.queueManager)
+	assert.False(t, agent.gpuMonitor.HasGPUs())
+	assert.True(t, agent.queueManager.IsPaused())
+	assert.Empty(t, icmsClient.requests())
+	assert.Empty(t, agent.queueManager.getCreateQueue(testGPUNameDefault).QueueURL)
+
+	_, err := k8sClients.K8s.CoreV1().Nodes().Create(ctx, functionNode.DeepCopy(), metav1.CreateOptions{})
+	require.NoError(t, err)
+	requireRegistrationAttempt(t, icmsClient, 0)
+
+	assert.True(t, agent.queueManager.IsPaused(), "queue must remain paused while registration is in flight")
+	assert.Empty(t, agent.queueManager.getCreateQueue(testGPUNameDefault).QueueURL)
+	requireRefreshedReadinessStatus(t, ctx, agent, http.StatusServiceUnavailable)
+	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPLivenessRoutePath, http.StatusOK)
+	requests := icmsClient.requests()
+	require.Len(t, requests, 1)
+	assert.Equal(t, []types.RegistrationGPU{{
+		Name: "A100",
+		InstanceTypes: []types.RegistrationInstanceType{{
+			Name:          "ON-PREM.GPU.A100_1x",
+			Value:         "ON-PREM.GPU.A100",
+			Description:   "A100-SXM4-40GB (ampere family) on a Google-Compute-Engine machine",
+			Default:       true,
+			CPUCores:      6,
+			CPU:           "6",
+			SystemMemory:  "32Gi",
+			GPUCount:      1,
+			GPUMemory:     "40Gi",
+			Storage:       "512Gi",
+			CPUArch:       "unknown",
+			OS:            "unknown",
+			DriverVersion: "unknown",
+			NodeType:      types.RegistrationInstanceTypeNodeTypeSingle,
+			MaxInstances:  1,
+		}},
+	}}, requests[0].BackendGPUs)
+
+	icmsClient.release(0)
+
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.True(ct, agent.gpuMonitor.HasGPUs())
+		assert.False(ct, agent.queueManager.IsPaused())
+		assert.Equal(ct, recoveredCredentials.CreationQueues[testGPUNameDefault],
+			agent.queueManager.getCreateQueue(testGPUNameDefault))
+		assert.Equal(ct, recoveredCredentials.TerminationQueue, agent.queueManager.getTermQueue())
+	}, 5*time.Second, 10*time.Millisecond)
+	requireRefreshedReadinessStatus(t, ctx, agent, http.StatusOK)
+	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPLivenessRoutePath, http.StatusOK)
+
+	require.NoError(t, k8sClients.K8s.CoreV1().Nodes().Delete(ctx, functionNode.Name, metav1.DeleteOptions{}))
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.False(ct, agent.gpuMonitor.HasGPUs())
+		assert.True(ct, agent.queueManager.IsPaused())
+	}, 5*time.Second, 10*time.Millisecond)
+	requireRefreshedReadinessStatus(t, ctx, agent, http.StatusServiceUnavailable)
+	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPLivenessRoutePath, http.StatusOK)
+	require.Len(t, icmsClient.requests(), 1)
+}
+
+func TestAgentStartGracefulNoGPURegistrationFailureRetriesBeforeResuming(t *testing.T) {
+	ctx, cancel := context.WithCancel(core.WithRandomSeed(newTestContext(), 42))
+	t.Cleanup(cancel)
+
+	recoveredCredentials := getTestQueueCreds(true)
+	icmsClient := newBlockingRecordingICMSClient(
+		registrationResult{err: fmt.Errorf("registration unavailable")},
+		registrationResult{response: &types.ICMSRegistrationResponse{
+			ClusterID:      "registered-cluster-id",
+			ClusterGroupID: "registered-cluster-group-id",
+			Credentials:    recoveredCredentials,
+		}},
+	)
+	agent, k8sClients := newGracefulNoGPUTestAgent(t, ctx, icmsClient)
+	require.NoError(t, agent.Start(ctx))
+	requireHTTPStatus(t, agent.NVCASvcAddress, health.HTTPReadinessRoutePath, http.StatusServiceUnavailable)
+	requireHTTPStatus(t, agent.NVCASvcAddress, health.HTTPLivenessRoutePath, http.StatusOK)
+
+	_, err := k8sClients.K8s.CoreV1().Nodes().Create(ctx, functionNode.DeepCopy(), metav1.CreateOptions{})
+	require.NoError(t, err)
+	requireRegistrationAttempt(t, icmsClient, 0)
+	assert.True(t, agent.queueManager.IsPaused(), "queue must remain paused while registration is in flight")
+
+	icmsClient.release(0)
+	requireRegistrationAttempt(t, icmsClient, 1)
+	assert.True(t, agent.queueManager.IsPaused(), "queue must remain paused while registration retry is in flight")
+	assert.Empty(t, agent.queueManager.getCreateQueue(testGPUNameDefault).QueueURL)
+	requireRefreshedReadinessStatus(t, ctx, agent, http.StatusServiceUnavailable)
+	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPLivenessRoutePath, http.StatusOK)
+
+	icmsClient.release(1)
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.False(ct, agent.queueManager.IsPaused())
+		assert.Equal(ct, recoveredCredentials.CreationQueues[testGPUNameDefault],
+			agent.queueManager.getCreateQueue(testGPUNameDefault))
+		assert.Equal(ct, recoveredCredentials.TerminationQueue, agent.queueManager.getTermQueue())
+	}, 5*time.Second, 10*time.Millisecond)
+	requireRefreshedReadinessStatus(t, ctx, agent, http.StatusOK)
+	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPLivenessRoutePath, http.StatusOK)
+	require.Len(t, icmsClient.requests(), 2)
+}
+
+func TestAgentStartGracefulNoGPUSerializesPeriodicRegistrationBeforeRecovery(t *testing.T) {
+	ctx, cancel := context.WithCancel(core.WithRandomSeed(newTestContext(), 42))
+	t.Cleanup(cancel)
+
+	initialCredentials := getTestQueueCreds(false)
+	stalePeriodicCredentials := getTestQueueCreds(false)
+	recoveredGPU := types.GPUName("AD102GL")
+	recoveredQueue := getTestCreationMessageQueueInfo(true)
+	recoveredQueue.GPU = string(recoveredGPU)
+	recoveredCredentials := getTestQueueCreds(true)
+	recoveredCredentials.CreationQueues = types.CreationQueueInfoSet{
+		recoveredGPU: recoveredQueue,
+	}
+	icmsClient := newBlockingRecordingICMSClient(
+		registrationResult{response: &types.ICMSRegistrationResponse{
+			ClusterID:      "registered-cluster-id",
+			ClusterGroupID: "registered-cluster-group-id",
+			Credentials:    initialCredentials,
+		}},
+		registrationResult{response: &types.ICMSRegistrationResponse{
+			ClusterID:      "registered-cluster-id",
+			ClusterGroupID: "registered-cluster-group-id",
+			Credentials:    stalePeriodicCredentials,
+		}},
+		registrationResult{response: &types.ICMSRegistrationResponse{
+			ClusterID:      "registered-cluster-id",
+			ClusterGroupID: "registered-cluster-group-id",
+			Credentials:    recoveredCredentials,
+		}},
+	)
+	agent, k8sClients := newGracefulNoGPUTestAgent(t, ctx, icmsClient)
+	_, err := k8sClients.K8s.CoreV1().Nodes().Create(ctx, functionNode.DeepCopy(), metav1.CreateOptions{})
+	require.NoError(t, err)
+	icmsClient.release(0)
+	require.NoError(t, agent.Start(ctx))
+	requireRegistrationAttempt(t, icmsClient, 0)
+	assert.False(t, agent.queueManager.IsPaused())
+
+	periodicDone := make(chan error, 1)
+	go func() {
+		periodicDone <- agent.syncICMSRegistration(ctx)
+	}()
+	requireRegistrationAttempt(t, icmsClient, 1)
+	requests := icmsClient.requests()
+	require.Len(t, requests, 2)
+	require.Len(t, requests[1].BackendGPUs, 1)
+	assert.Equal(t, "A100", requests[1].BackendGPUs[0].Name)
+
+	require.NoError(t, k8sClients.K8s.CoreV1().Nodes().Delete(ctx, functionNode.Name, metav1.DeleteOptions{}))
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.False(ct, agent.gpuMonitor.HasGPUs())
+		assert.True(ct, agent.queueManager.IsPaused())
+	}, 5*time.Second, 10*time.Millisecond)
+
+	recoveryNode := functionNode.DeepCopy()
+	recoveryNode.Name = "node-2"
+	recoveryNode.Labels[nodefeatures.UniformInstanceTypeLabelKey] = "ON-PREM.GPU.AD102GL"
+	recoveryNode.Labels["nvidia.com/gpu.family"] = "volta"
+	recoveryNode.Labels["nvidia.com/gpu.memory"] = "32768"
+	recoveryNode.Labels["nvidia.com/gpu.product"] = "V100-SXM2-32GB"
+	recoveryNode.Labels["nvca.nvcf.nvidia.io/gpu.product"] = string(recoveredGPU)
+	lossGeneration := agent.gpuRegistrationGeneration.Load()
+	_, err = k8sClients.K8s.CoreV1().Nodes().Create(ctx, recoveryNode, metav1.CreateOptions{})
+	require.NoError(t, err)
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.True(ct, agent.gpuMonitor.HasGPUs())
+		assert.Greater(ct, agent.gpuRegistrationGeneration.Load(), lossGeneration)
+	}, 5*time.Second, 10*time.Millisecond)
+	requireNoRegistrationAttempt(t, icmsClient, 250*time.Millisecond)
+	assert.True(t, agent.queueManager.IsPaused())
+	assert.Empty(t, agent.queueManager.getCreateQueue(recoveredGPU).QueueURL)
+
+	icmsClient.release(1)
+	select {
+	case periodicErr := <-periodicDone:
+		require.NoError(t, periodicErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for periodic registration to complete")
+	}
+	requireRegistrationAttempt(t, icmsClient, 2)
+	requests = icmsClient.requests()
+	require.Len(t, requests, 3)
+	require.Len(t, requests[2].BackendGPUs, 1)
+	assert.Equal(t, recoveredGPU, types.GPUName(requests[2].BackendGPUs[0].Name))
+	assert.True(t, agent.queueManager.IsPaused())
+	assert.Empty(t, agent.queueManager.getCreateQueue(recoveredGPU).QueueURL)
+
+	icmsClient.release(2)
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.False(ct, agent.queueManager.IsPaused())
+		assert.Equal(ct, recoveredQueue, agent.queueManager.getCreateQueue(recoveredGPU))
+		assert.Equal(ct, recoveredCredentials.TerminationQueue, agent.queueManager.getTermQueue())
+	}, 5*time.Second, 10*time.Millisecond)
+	requireRefreshedReadinessStatus(t, ctx, agent, http.StatusOK)
+	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPLivenessRoutePath, http.StatusOK)
 }
 
 func TestAgentRegisterWithICMSUpdatesQueueManagerCredentials(t *testing.T) {

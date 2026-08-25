@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -86,6 +87,8 @@ const (
 
 	ICMSRequestAckMaxGoroutines                   = 20
 	ICMSInstanceRequestStatusUpdatesMaxGoroutines = 20
+
+	gracefulNoGPURegistrationComponentName = "icmsregistration"
 )
 
 // Controller tick types.
@@ -364,8 +367,9 @@ type ICMSClientInterface interface {
 type Agent struct {
 	*AgentOptions
 
-	metricsName    string
-	newKubeClients func(ctx context.Context, path string) (*kubeclients.KubeClients, error)
+	metricsName               string
+	newKubeClients            func(ctx context.Context, path string) (*kubeclients.KubeClients, error)
+	newBackendK8sCacheBuilder func() *BackendK8sCacheBuilder
 
 	// clientMetricsShutdown releases the OTel MeterProvider that backs outbound
 	// client metrics. It is a no-op when client metrics are disabled.
@@ -383,7 +387,13 @@ type Agent struct {
 
 	// gpuMonitor monitors GPU availability and controls queue processing
 	// when GracefulNoGPU feature flag is enabled.
-	gpuMonitor *GPUMonitor
+	gpuMonitor                *GPUMonitor
+	gpuRegistrationMu         sync.Mutex
+	gpuRegistrationReady      atomic.Bool
+	gpuRegistrationGeneration atomic.Uint64
+	gpuRegistrationRequests   chan struct{}
+	// Serializes GPU inventory snapshots through ICMS response and queue credential application.
+	registrationOperationMu sync.Mutex
 
 	startControllerManager func(context.Context, *kubeclients.KubeClients) error
 
@@ -408,6 +418,109 @@ type Agent struct {
 	// selfDestruct tracks if self-destruct has been triggered by ICMS.
 	// When true, the agent stops all ICMS communication.
 	selfDestruct *atomic.Bool
+}
+
+func (a *Agent) getGracefulNoGPURegistrationStatus(context.Context) (types.AgentHealth, error) {
+	component := types.ComponentHealth{
+		Status:      types.HealthStatusHealthy,
+		StatusLevel: types.StatusLevelError,
+	}
+	if !a.gpuRegistrationReady.Load() {
+		component.Status = types.HealthStatusUnhealthy
+		component.Errors = []string{"waiting for successful ICMS registration after GPU discovery"}
+	}
+
+	return types.AgentHealth{
+		Components: map[string]types.ComponentHealth{
+			gracefulNoGPURegistrationComponentName: component,
+		},
+	}, nil
+}
+
+func (a *Agent) handleGracefulNoGPUStateChange(ctx context.Context, hasGPUs bool) {
+	log := core.GetLogger(ctx)
+	a.gpuRegistrationGeneration.Add(1)
+
+	a.gpuRegistrationMu.Lock()
+	a.gpuRegistrationReady.Store(false)
+	a.queueManager.Pause()
+	a.gpuRegistrationMu.Unlock()
+
+	if !hasGPUs {
+		log.Warn("GPUs no longer available - pausing queue manager")
+		return
+	}
+
+	log.Info("GPUs detected - waiting for successful ICMS registration before resuming queue manager")
+	select {
+	case a.gpuRegistrationRequests <- struct{}{}:
+	default:
+	}
+}
+
+func (a *Agent) runGracefulNoGPURegistration(ctx context.Context) {
+	retryInterval := a.GPUPollInterval
+	if retryInterval <= 0 {
+		retryInterval = DefaultGPUPollInterval
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-a.gpuRegistrationRequests:
+		}
+
+		for !a.gpuRegistrationReady.Load() && a.gpuMonitor.HasGPUs() {
+			if !a.tryGracefulNoGPURegistration(ctx) {
+				break
+			}
+
+			retryTimer := time.NewTimer(retryInterval)
+			select {
+			case <-ctx.Done():
+				retryTimer.Stop()
+				return
+			case <-a.gpuRegistrationRequests:
+				retryTimer.Stop()
+			case <-retryTimer.C:
+			}
+		}
+	}
+}
+
+// tryGracefulNoGPURegistration returns true when registration should be retried.
+func (a *Agent) tryGracefulNoGPURegistration(ctx context.Context) bool {
+	log := core.GetLogger(ctx)
+	a.registrationOperationMu.Lock()
+	defer a.registrationOperationMu.Unlock()
+	if ctx.Err() != nil {
+		return false
+	}
+
+	generation := a.gpuRegistrationGeneration.Load()
+	if !a.gpuMonitor.HasGPUs() {
+		return false
+	}
+
+	log.Info("Registering with ICMS after GPUs became available")
+	if _, err := a.RegisterWithICMS(ctx); err != nil {
+		log.WithError(err).Error("Failed to register with ICMS after GPUs became available; will retry")
+		return a.gpuMonitor.HasGPUs()
+	}
+
+	a.gpuRegistrationMu.Lock()
+	defer a.gpuRegistrationMu.Unlock()
+	if !a.gpuMonitor.HasGPUs() || generation != a.gpuRegistrationGeneration.Load() {
+		log.Warn("GPU availability changed during ICMS registration - keeping queue manager paused")
+		return a.gpuMonitor.HasGPUs()
+	}
+
+	// RegisterWithICMS installs the returned queue credentials before it returns.
+	a.gpuRegistrationReady.Store(true)
+	a.queueManager.Resume()
+	log.Info("Successfully registered with ICMS after GPUs became available")
+	return false
 }
 
 func (o *AgentOptions) sanitizedString() string {
@@ -598,6 +711,7 @@ func NewAgent(ctx context.Context, opts *AgentOptions) (*Agent, error) {
 	}
 
 	a.newKubeClients = defaultNewKubeClients
+	a.newBackendK8sCacheBuilder = NewBackendk8sCacheBuilder
 	a.icmsClient = NewICMSClientWithHostHeaderOverride(ctx, opts.ClusterID, opts.EffectiveICMSURL(), opts.ICMSHostHeaderOverride, tokenFetcher, a.tracer, icmsHTTPOpts...)
 	a.instStatusThreadPool = pool.New().WithMaxGoroutines(ICMSInstanceRequestStatusUpdatesMaxGoroutines)
 	a.ackThreadPool = pool.New().WithMaxGoroutines(ICMSRequestAckMaxGoroutines)
@@ -1127,7 +1241,7 @@ func (a *Agent) Start(ctx context.Context) error {
 	infraOverheadGetter := enforce.NewInfraOverheadGetter(a.FeatureFlagFetcher, a.Config, enforce.GetRuntimeClassK8sClient(k8sclients.K8s))
 
 	log.Info("Configuring backendk8scache")
-	backendk8scache, _, err := NewBackendk8sCacheBuilder().
+	backendk8scache, _, err := a.newBackendK8sCacheBuilder().
 		WithConfig(a.Config).
 		WithClusterProvider(a.CloudProvider).
 		WithClusterRegion(a.ClusterRegion).
@@ -1194,6 +1308,8 @@ func (a *Agent) Start(ctx context.Context) error {
 			gpus, gpuErr := nfClient.GetAllBackendGPUs(ctx)
 			hasGPUs := gpuErr == nil && len(gpus) > 0
 			a.gpuMonitor.SetHasGPUs(hasGPUs)
+			a.gpuRegistrationReady.Store(hasGPUs)
+			a.gpuRegistrationRequests = make(chan struct{}, 1)
 			if hasGPUs {
 				log.Info("GPUs found during startup, proceeding normally")
 			} else {
@@ -1208,6 +1324,8 @@ func (a *Agent) Start(ctx context.Context) error {
 	// Add GPU monitor to status updaters for readiness checks when GracefulNoGPU is enabled
 	if a.gpuMonitor != nil {
 		statusUpdaters = append(statusUpdaters, a.gpuMonitor)
+		statusUpdaters = append(statusUpdaters,
+			health.GetComponentStatusFunc(a.getGracefulNoGPURegistrationStatus))
 	}
 	if a.FeatureFlagFetcher.IsAttributeEnabled(featureflag.AttrHostIsolation) {
 		statusUpdaters = append(statusUpdaters, hostisolation.NewStatusGetter(
@@ -1239,6 +1357,9 @@ func (a *Agent) Start(ctx context.Context) error {
 
 	if skipHealthWait {
 		log.Warn("GracefulNoGPU enabled with no GPUs - skipping health wait, readiness will report not-ready")
+		if _, refreshErr := a.backendHealthCache.RefreshStatus(ctx); refreshErr != nil {
+			log.WithError(refreshErr).Warn("Failed to prime health status while waiting for GPUs; continuing startup")
+		}
 	} else {
 		log.WithFields(logrus.Fields{
 			"interval": healthInterval,
@@ -1403,25 +1524,10 @@ func (a *Agent) Start(ctx context.Context) error {
 			a.queueManager.Pause()
 		}
 
+		go a.runGracefulNoGPURegistration(ctx)
+
 		// Set up GPU state change callback
-		a.gpuMonitor.SetOnGPUStateChange(func(callbackCtx context.Context, hasGPUs bool) {
-			callbackLog := core.GetLogger(callbackCtx)
-			if hasGPUs {
-				callbackLog.Info("GPUs detected - resuming queue manager and registering with ICMS")
-				// Resume queue processing
-				a.queueManager.Resume()
-				// Register/re-register with ICMS to update GPU inventory.
-				if _, regErr := a.RegisterWithICMS(callbackCtx); regErr != nil {
-					callbackLog.WithError(regErr).Error("Failed to register with ICMS after GPUs became available")
-				} else {
-					callbackLog.Info("Successfully registered with ICMS after GPUs became available")
-				}
-			} else {
-				callbackLog.Warn("GPUs no longer available - pausing queue manager")
-				// Pause queue processing (allows termination messages, blocks creation)
-				a.queueManager.Pause()
-			}
-		})
+		a.gpuMonitor.SetOnGPUStateChange(a.handleGracefulNoGPUStateChange)
 
 		// Start the GPU monitor polling loop
 		log.Info("Starting GPU monitor")

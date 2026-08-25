@@ -74,6 +74,12 @@ func (a *Agent) initICMSRegistrationSyncer(ctx context.Context) error {
 		var lastRegTime = core.GetCurrentTime(ctx)
 
 		a.syncICMSRegistration = func(ctx context.Context) error {
+			a.registrationOperationMu.Lock()
+			defer a.registrationOperationMu.Unlock()
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+
 			if timeSinceLastUpdate := core.GetCurrentTime(ctx).Sub(lastRegTime); timeSinceLastUpdate < time.Hour {
 				return nil
 			}
@@ -98,6 +104,12 @@ func (a *Agent) initICMSRegistrationSyncer(ctx context.Context) error {
 	var lastRegTime = core.GetCurrentTime(ctx)
 
 	a.syncICMSRegistration = func(ctx context.Context) error {
+		a.registrationOperationMu.Lock()
+		defer a.registrationOperationMu.Unlock()
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		regBackendGPUs, err := a.getRegistrationGPUs(ctx)
 		if err != nil {
 			return err
