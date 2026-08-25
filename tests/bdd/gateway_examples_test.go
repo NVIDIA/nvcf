@@ -86,11 +86,15 @@ func TestRemoteGatewayExamplesConfigureAWSNLBOnEnvoyService(t *testing.T) {
 				t.Fatalf("read %s: %v", example.path, err)
 			}
 			providerProbe := bytes.Index(body, []byte("aws eks describe-cluster"))
-			defaultControllerConfig := bytes.Index(
-				body,
-				[]byte(`service.beta.kubernetes.io/aws-load-balancer-type: "external"`),
-			)
-			if providerProbe < 0 || defaultControllerConfig < 0 || providerProbe > defaultControllerConfig {
+			envoyProxyResource := bytes.Index(body, []byte("kind: EnvoyProxy"))
+			envoyProxyApply := -1
+			if envoyProxyResource >= 0 {
+				envoyProxyApply = bytes.LastIndex(
+					body[:envoyProxyResource],
+					[]byte("kubectl apply -f - <<EOF"),
+				)
+			}
+			if providerProbe < 0 || envoyProxyApply < 0 || providerProbe > envoyProxyApply {
 				t.Errorf(
 					"%s does not select the EKS Service controller before presenting the applied EnvoyProxy",
 					example.path,
