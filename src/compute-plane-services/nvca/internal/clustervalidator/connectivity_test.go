@@ -55,40 +55,52 @@ func writeTestCA(t *testing.T, path string) {
 	require.NoError(t, os.WriteFile(path, pemBytes, 0o600))
 }
 
-func TestInClusterTLSConfig_MissingCA_FailsClosed(t *testing.T) {
-	orig := inClusterCAPath
-	t.Cleanup(func() { inClusterCAPath = orig })
-	inClusterCAPath = filepath.Join(t.TempDir(), "does-not-exist.crt")
+func TestInClusterTLSConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		setupCA func(t *testing.T, path string)
+		wantOK  bool
+	}{
+		{
+			name:    "missing CA fails closed",
+			setupCA: func(t *testing.T, path string) {},
+			wantOK:  false,
+		},
+		{
+			name: "invalid CA fails closed",
+			setupCA: func(t *testing.T, path string) {
+				require.NoError(t, os.WriteFile(path, []byte("not a certificate"), 0o600))
+			},
+			wantOK: false,
+		},
+		{
+			name: "valid CA verifies TLS",
+			setupCA: func(t *testing.T, path string) {
+				writeTestCA(t, path)
+			},
+			wantOK: true,
+		},
+	}
 
-	cfg, ok := inClusterTLSConfig()
-	assert.False(t, ok)
-	assert.Nil(t, cfg)
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			orig := inClusterCAPath
+			t.Cleanup(func() { inClusterCAPath = orig })
+			path := filepath.Join(t.TempDir(), "ca.crt")
+			tt.setupCA(t, path)
+			inClusterCAPath = path
 
-func TestInClusterTLSConfig_InvalidCA_FailsClosed(t *testing.T) {
-	orig := inClusterCAPath
-	t.Cleanup(func() { inClusterCAPath = orig })
-	path := filepath.Join(t.TempDir(), "invalid.crt")
-	require.NoError(t, os.WriteFile(path, []byte("not a certificate"), 0o600))
-	inClusterCAPath = path
-
-	cfg, ok := inClusterTLSConfig()
-	assert.False(t, ok)
-	assert.Nil(t, cfg)
-}
-
-func TestInClusterTLSConfig_ValidCA_VerifiesTLS(t *testing.T) {
-	orig := inClusterCAPath
-	t.Cleanup(func() { inClusterCAPath = orig })
-	path := filepath.Join(t.TempDir(), "ca.crt")
-	writeTestCA(t, path)
-	inClusterCAPath = path
-
-	cfg, ok := inClusterTLSConfig()
-	require.True(t, ok)
-	require.NotNil(t, cfg)
-	assert.False(t, cfg.InsecureSkipVerify)
-	assert.NotNil(t, cfg.RootCAs)
+			cfg, ok := inClusterTLSConfig()
+			assert.Equal(t, tt.wantOK, ok)
+			if !tt.wantOK {
+				assert.Nil(t, cfg)
+				return
+			}
+			require.NotNil(t, cfg)
+			assert.False(t, cfg.InsecureSkipVerify)
+			assert.NotNil(t, cfg.RootCAs)
+		})
+	}
 }
 
 func TestProbeKubernetesAPIServiceIP_MissingCA_ReturnsFalse(t *testing.T) {
