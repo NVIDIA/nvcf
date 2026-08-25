@@ -48,7 +48,8 @@ public class GitBuildInfo {
 
     GitBuildInfo(Properties gitProperties) {
         this.version = resolveVersion(gitProperties);
-        this.commit = gitProperties.getProperty("git.commit.id.full", UNKNOWN);
+        this.commit = StringUtils.defaultIfBlank(
+                gitProperties.getProperty("git.commit.id.full"), UNKNOWN);
     }
 
     public String version() {

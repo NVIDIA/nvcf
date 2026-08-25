@@ -56,4 +56,15 @@ class GitBuildInfoTest {
         assertThat(gitBuildInfo.version()).isEqualTo("unknown");
         assertThat(gitBuildInfo.commit()).isEqualTo("unknown");
     }
+
+    @Test
+    void fallsBackToUnknownWhenCommitFullIsBlank() {
+        var properties = new Properties();
+        properties.setProperty("git.closest.tag.name", "v1.2.3");
+        properties.setProperty("git.commit.id.full", "   ");
+
+        var gitBuildInfo = new GitBuildInfo(properties);
+
+        assertThat(gitBuildInfo.commit()).isEqualTo("unknown");
+    }
 }
