@@ -226,6 +226,27 @@ LLM workers in another cluster or region need a TCP path for gRPC registration
 and watches, plus a UDP path for the reverse QUIC tunnel. These paths are
 separate from the `grpcWorker` callback route.
 
+```mermaid
+flowchart LR
+    Worker["LLM worker sidecar"]
+    TcpListener["Gateway TCP listener<br/>llmGrpc"]
+    TcpRoute["TCPRoute<br/>llm-worker-grpc"]
+    UdpListener["Gateway UDP listener<br/>llmQuic"]
+    UdpRoute["UDPRoute<br/>llm-worker-quic"]
+    Service["Service<br/>llm-request-router-backend-router"]
+    Backend["Backend router"]
+    Router["LLM request-router pod"]
+
+    Worker -->|"gRPC registration and watches"| TcpListener
+    TcpListener --> TcpRoute
+    TcpRoute -->|"TCP 50071"| Service
+    Worker -->|"QUIC reverse tunnel"| UdpListener
+    UdpListener --> UdpRoute
+    UdpRoute -->|"UDP 50072"| Service
+    Service --> Backend
+    Backend --> Router
+```
+
 The following example uses separate Gateways so the infrastructure can create
 one TCP load balancer and one UDP load balancer. A provider that supports mixed
 TCP and UDP listeners can use one Gateway for both listeners. In that case,

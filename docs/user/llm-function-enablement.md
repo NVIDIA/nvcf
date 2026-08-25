@@ -592,9 +592,10 @@ For remote workers, also verify the LLM `TCPRoute`, `UDPRoute`, and
 
 ## Certificate Renewal
 
-cert-manager renews the request-router certificate and updates
-`Secret/stargate-quic-tls`. With `mode: existingSecret` there is no renewal
-loop and you update the Secret yourself.
+cert-manager renews the request-router certificate and updates the Secret named
+by `addons.llm.pki.secretName`. The default is `Secret/stargate-quic-tls`.
+With `mode: existingSecret` there is no renewal loop and you update the
+configured Secret yourself.
 
 Hot reload requires `helm-nvcf-llm-request-router` 1.10.0 or later and Stargate
 0.11.1 or later. The request router polls the mounted server certificate and
@@ -756,6 +757,7 @@ For transport TLS failures, check:
   `Issuer` must be in `nvcf`.
 - SAN mismatch: compare the request router's
   `--advertised-hostname-template` with the SANs in
+  the Secret named by `addons.llm.pki.secretName`. The default is
   `Secret/stargate-quic-tls`. The external `--stargate-address` is a dial
   endpoint and does not replace the advertised QUIC identity.
 - Expired or not-yet-valid certificate: inspect the certificate dates and the
