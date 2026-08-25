@@ -452,11 +452,11 @@ func (r *Reconciler) doModelCacheSamba(ctx context.Context,
 		Requests: corev1.ResourceList(r.cfg.Agent.SharedStorage.Server.ContainerResources.Requests),
 		Claims:   r.cfg.Agent.SharedStorage.Server.ContainerResources.Claims,
 	}
-	var ready bool
+	var infra SambaModelCacheInfraState
 	err = nvcaotel.InvokeWithSpan(ctx, modelCacheTracer, "nvca.modelcache.samba.ensure_infra",
 		func(ctx context.Context) error {
 			var e error
-			ready, e = EnsureSambaModelCacheInfra(ctx, r.Client, cacheHandle,
+			infra, e = EnsureSambaModelCacheInfra(ctx, r.Client, cacheHandle,
 				r.cfg.Agent.SharedStorage.Server.Image, r.modelCacheStorageClassName(), smbResources, capacity)
 			return e
 		},
@@ -472,10 +472,25 @@ func (r *Reconciler) doModelCacheSamba(ctx context.Context,
 			log.V(1).Info("Transient error ensuring Samba model cache infra, requeuing", "error", err.Error())
 			return reconcile.Result{Requeue: true}, nil
 		}
-		return reconcile.Result{}, r.terminalErrorWithMetricErr("samba_infra_failed", fmt.Errorf("ensure samba model cache infra: %w", err))
+		return reconcile.Result{}, r.terminalErrorWithMetricErr(modelcachetypes.ReasonSambaInfraFailed,
+			fmt.Errorf("ensure samba model cache infra: %w", err))
 	}
-	if !ready {
-		log.V(1).Info("Samba model cache server not ready, requeuing")
+	if !infra.Ready {
+		// Bound the bootstrap. The backing PVC can stay Pending for good (no
+		// capacity, provisioner down), and nothing downstream fails that wait:
+		// the request would requeue forever and hold the install in
+		// CacheInProgress. Failing the request lets the miniservice reconciler
+		// continue the install without a cache. This bounds server start-up
+		// only; the model download that follows is bounded separately by
+		// InitCacheJobFailureThreshold.
+		waited := r.nowFunc().Sub(infra.CreatedAt)
+		if !infra.CreatedAt.IsZero() && waited > r.k8sTimeConfig.SambaModelCacheReadyThreshold {
+			return reconcile.Result{}, r.terminalErrorWithMetricErr(modelcachetypes.ReasonSambaInfraTimeout,
+				fmt.Errorf("samba model cache server for handle %s still unavailable after %s, "+
+					"its backing PVC on storage class %s may be unbindable",
+					cacheHandle, waited.Round(time.Second), r.modelCacheStorageClassName()))
+		}
+		log.V(1).Info("Samba model cache server not ready, requeuing", "waited", waited.Round(time.Second))
 		return reconcile.Result{RequeueAfter: defaultRequeueDelay}, nil
 	}
 

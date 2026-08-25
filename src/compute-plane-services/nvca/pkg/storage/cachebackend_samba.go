@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"strconv"
+	"time"
 
 	"github.com/google/uuid"
 	appsv1 "k8s.io/api/apps/v1"
@@ -124,13 +125,26 @@ func sambaModelCacheWriterPVName(cacheHandle string) string {
 	return "samba-rw-pv-" + cacheHandle
 }
 
+// SambaModelCacheInfraState reports the bootstrap state of a handle's Samba
+// server.
+type SambaModelCacheInfraState struct {
+	// Ready is true once the per-handle Samba Deployment has an available
+	// replica.
+	Ready bool
+	// CreatedAt is when the per-handle Samba Deployment was created. Callers
+	// bound how long a bootstrap may stay unready with it: the backing PVC can
+	// fail to bind for good (no capacity, provisioner down) and nothing else on
+	// the Samba path ever fails that wait.
+	CreatedAt time.Time
+}
+
 // EnsureSambaModelCacheInfra performs the idempotent bootstrap of the per-handle
 // Samba model cache server in the model cache control namespace: the shared
 // RW/RO credentials Secrets, the per-handle data PVC on dataStorageClass (sized
 // to size), the per-handle Samba Deployment, its fronting Service, and an
-// ingress NetworkPolicy. It returns ready=true once that Deployment is
-// available. It intentionally creates NO StorageClass; cache volumes are static
-// SMB PVs bound to the per-handle share (see newSambaModelCachePV).
+// ingress NetworkPolicy. It reports Ready once that Deployment is available. It
+// intentionally creates NO StorageClass; cache volumes are static SMB PVs bound
+// to the per-handle share (see newSambaModelCachePV).
 //
 // dataStorageClass must be the class SelectHelmCacheBackend verified exists
 // before choosing this backend; empty resolves to the default.
@@ -142,15 +156,15 @@ func EnsureSambaModelCacheInfra(
 	dataStorageClass string,
 	resources corev1.ResourceRequirements,
 	size resource.Quantity,
-) (ready bool, err error) {
+) (state SambaModelCacheInfraState, err error) {
 	log := logf.FromContext(ctx).WithValues("backend", HelmCacheBackendSamba,
 		"namespace", ModelCacheInitNamespace, "cacheHandle", cacheHandle)
 
 	if image == "" {
-		return false, fmt.Errorf("samba model cache server image is not configured")
+		return state, fmt.Errorf("samba model cache server image is not configured")
 	}
 	if cacheHandle == "" {
-		return false, fmt.Errorf("samba model cache cacheHandle is not set")
+		return state, fmt.Errorf("samba model cache cacheHandle is not set")
 	}
 	if size.IsZero() {
 		size = defaultSambaModelCacheDataSize
@@ -168,20 +182,22 @@ func EnsureSambaModelCacheInfra(
 	}
 	for _, obj := range objs {
 		if err := ensureCreated(ctx, c, obj); err != nil {
-			return false, fmt.Errorf("ensure samba model cache %T: %w", obj, err)
+			return state, fmt.Errorf("ensure samba model cache %T: %w", obj, err)
 		}
 	}
 
 	dep := &appsv1.Deployment{}
 	if err := c.Get(ctx, client.ObjectKey{Namespace: ModelCacheInitNamespace, Name: sambaModelCacheResourceName(cacheHandle)}, dep); err != nil {
-		return false, fmt.Errorf("get samba deployment: %w", err)
+		return state, fmt.Errorf("get samba deployment: %w", err)
 	}
+	state.CreatedAt = dep.CreationTimestamp.Time
 	if dep.Status.AvailableReplicas < 1 {
 		log.V(1).Info("Samba model cache server not yet available, waiting")
-		return false, nil
+		return state, nil
 	}
 	log.V(1).Info("Samba model cache server ready")
-	return true, nil
+	state.Ready = true
+	return state, nil
 }
 
 // ensureCreated creates obj, treating AlreadyExists as success so the bootstrap

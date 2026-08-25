@@ -1681,6 +1681,81 @@ func TestDoModelCacheSharedFS_Validation(t *testing.T) {
 	}
 }
 
+// TestDoModelCacheSamba_UnreadyServerIsBounded proves a Samba server that never
+// becomes available stops the request instead of requeuing forever: within the
+// threshold it requeues, past it the request fails terminally so the miniservice
+// reconciler continues the install without a cache. This bounds server start-up
+// only, not the model download that follows.
+func TestDoModelCacheSamba_UnreadyServerIsBounded(t *testing.T) {
+	handle := "unreadyhandle"
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	timeConfig := (&k8sutil.TimeConfig{}).Complete()
+
+	tests := []struct {
+		name          string
+		deploymentAge time.Duration
+		wantTerminal  bool
+	}{
+		{
+			name:          "within the threshold requeues",
+			deploymentAge: timeConfig.SambaModelCacheReadyThreshold - time.Minute,
+			wantTerminal:  false,
+		},
+		{
+			name:          "past the threshold fails the request",
+			deploymentAge: timeConfig.SambaModelCacheReadyThreshold + time.Minute,
+			wantTerminal:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Seeded with an explicit creation timestamp: the fake client does
+			// not stamp one, and the reconciler measures the wait from it.
+			dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+				Name:              sambaModelCacheResourceName(handle),
+				Namespace:         ModelCacheInitNamespace,
+				CreationTimestamp: metav1.NewTime(now.Add(-tt.deploymentAge)),
+			}}
+			nvcaCfg := nvcaconfig.Config{}
+			nvcaCfg.Agent.SharedStorage.Server.Image = "samba:test"
+			r := &Reconciler{
+				Client:        fake.NewClientBuilder().WithScheme(mgrScheme).WithObjects(dep).Build(),
+				cfg:           nvcaCfg,
+				metrics:       newTestMetrics(),
+				fff:           &featureflagmock.Fetcher{},
+				nowFunc:       func() time.Time { return now },
+				k8sTimeConfig: timeConfig,
+			}
+			icms := &nvcav2beta1.ICMSRequest{}
+			icms.Name, icms.Namespace = "icms-1", types.DefaultICMSRequestNamespace
+			icms.Spec = newModelCacheICMSSpec(handle)
+			st := nvcav1new.StorageRequest{
+				ObjectMeta: metav1.ObjectMeta{Name: nvcav1new.ModelCacheRequest.Name(), Namespace: "ns1"},
+			}
+			stCopy := &nvcav1new.StorageRequest{
+				ObjectMeta: st.ObjectMeta,
+				Spec: nvcav1new.StorageRequestSpec{
+					ModelCache: &nvcav1new.ModelCacheSpec{
+						CacheHandle: handle,
+						Backend:     string(HelmCacheBackendSamba),
+					},
+				},
+			}
+
+			res, err := r.doModelCacheSamba(context.Background(), st, stCopy, icms)
+			if !tt.wantTerminal {
+				require.NoError(t, err)
+				assert.Equal(t, defaultRequeueDelay, res.RequeueAfter, "keeps waiting within the threshold")
+				return
+			}
+			require.Error(t, err)
+			assert.True(t, isTerminal(err), "an unready server past the threshold must not retry forever")
+			assert.Contains(t, err.Error(), handle)
+		})
+	}
+}
+
 // TestDoCleanupModelCacheNVMesh_RequeuesWhileWriterVolumeAttached proves the
 // cleanup never blocks the single reconcile worker polling for volume detach:
 // while the writer volume is still attached read-write it requeues (does not
