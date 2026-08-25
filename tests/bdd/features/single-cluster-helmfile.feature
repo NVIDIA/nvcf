@@ -165,7 +165,7 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       And I successfully deploy the function selected by NVCF CLI with options:
         | option          | value               |
         | --gpu           | H100                |
-        | --instance-type | NCP.GPU.H100_8x     |
+        | --instance-type | NCP.GPU.H100_1x     |
         | --backend       | ncp-local           |
         | --regions       | us-west-1           |
         | --min-instances | 1                   |
@@ -203,7 +203,7 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       And I successfully deploy the function selected by NVCF CLI with options:
         | option          | value               |
         | --gpu           | H100                |
-        | --instance-type | NCP.GPU.H100_8x     |
+        | --instance-type | NCP.GPU.H100_1x     |
         | --backend       | ncp-local           |
         | --regions       | us-west-1           |
         | --min-instances | 1                   |
@@ -247,7 +247,7 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       And I successfully deploy the function selected by NVCF CLI with options:
         | option          | value               |
         | --gpu           | H100                |
-        | --instance-type | NCP.GPU.H100_8x     |
+        | --instance-type | NCP.GPU.H100_1x     |
         | --backend       | ncp-local           |
         | --regions       | us-west-1           |
         | --min-instances | 1                   |

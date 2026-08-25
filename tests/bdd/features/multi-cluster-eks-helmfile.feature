@@ -224,17 +224,10 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
       # resolved backends. These route flags are authored in the EKS env
       # file because worker pods need externally reachable API gRPC
       # endpoints on the compute cluster.
-      When I run command:
-        """
-        kubectl --context ${EKS_CONTEXT} wait grpcroute/nvcf-api-grpc grpcroute/nvct-api-grpc -n envoy-gateway --for=jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}'=True --timeout=2m
-        """
-      Then the command exit code should be 0
-
-      When I run command:
-        """
-        kubectl --context ${EKS_CONTEXT} wait grpcroute/nvcf-api-grpc grpcroute/nvct-api-grpc -n envoy-gateway --for=jsonpath='{.status.parents[0].conditions[?(@.type=="ResolvedRefs")].status}'=True --timeout=2m
-        """
-      Then the command exit code should be 0
+      Then these Gateway API routes should be accepted and resolved using context "${EKS_CONTEXT}" within "2m":
+        | kind      | name          | namespace     | parent       |
+        | GRPCRoute | nvcf-api-grpc | envoy-gateway | nvcf-gateway |
+        | GRPCRoute | nvct-api-grpc | envoy-gateway | nvcf-gateway |
 
       # Confirm Helmfile passed the worker-facing endpoints into the
       # environment ConfigMaps consumed by the API deployments.
@@ -422,7 +415,7 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
 
       When I run command:
         """
-        env NVCT_BDD_STATE_PATH=${HOME}/.nvcf-cli.nvcf-cli-eks-bdd-multi.state NVCT_BDD_API_KEYS_URL=http://${EKS_GATEWAY_ADDR}/v1/keys NVCT_BDD_API_KEYS_HOST=api-keys.${EKS_GATEWAY_DOMAIN} NVCT_BDD_TASKS_URL=http://${EKS_GATEWAY_ADDR}/v1/nvct/tasks NVCT_BDD_TASKS_HOST=tasks.${EKS_GATEWAY_DOMAIN} NVCT_BDD_TASK_BACKEND=${EKS_COMPUTE_CLUSTER_NAME} tests/bdd/scripts/run-nvct-task-smoke.sh
+        env NVCT_BDD_STATE_PATH=${HOME}/.nvcf-cli.nvcf-cli-eks-bdd-multi.state NVCT_BDD_API_KEYS_URL=http://${EKS_GATEWAY_ADDR}/v1/keys NVCT_BDD_API_KEYS_HOST=api-keys.${EKS_GATEWAY_DOMAIN} NVCT_BDD_TASKS_URL=http://${EKS_GATEWAY_ADDR}/v1/nvct/tasks NVCT_BDD_TASKS_HOST=tasks.${EKS_GATEWAY_DOMAIN} NVCT_BDD_TASK_BACKEND=${EKS_COMPUTE_CLUSTER_NAME} NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_8x tests/bdd/scripts/run-nvct-task-smoke.sh
         """
       Then the command exit code should be 0
       And the command output should contain "COMPLETED"
