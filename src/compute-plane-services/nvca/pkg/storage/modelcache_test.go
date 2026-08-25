@@ -702,7 +702,7 @@ func TestResolveCacheMountOptions(t *testing.T) {
 				WithScheme(mgrScheme).
 				WithObjects(newMountOptionDefaultsObjects(tt.provisioner, tt.cmData)...).
 				Build()
-			r := &Reconciler{Client: c, csiVolumeMountOptions: tt.configured}
+			r := newMountOptionsReconciler(t, c, tt.configured)
 			pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "secondary-pv-test"}}
 
 			if got := r.resolveCacheMountOptions(context.Background(), pv); !slices.Equal(got, tt.want) {
@@ -720,7 +720,7 @@ func TestResolveCacheMountOptions_ConfigMapEditTakesEffect(t *testing.T) {
 		WithScheme(mgrScheme).
 		WithObjects(newMountOptionDefaultsObjects(NVMeshStorageClassProvisioner, nvmeshMountOptionDefaults)...).
 		Build()
-	r := &Reconciler{Client: c}
+	r := newMountOptionsReconciler(t, c, nil)
 	pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "secondary-pv-test"}}
 
 	want := []string{"ro", "norecovery", "nouuid"}
@@ -744,48 +744,69 @@ func TestResolveCacheMountOptions_ConfigMapEditTakesEffect(t *testing.T) {
 	}
 }
 
-func TestModelCacheStorageClassName(t *testing.T) {
+// TestModelCacheStorageClassResolvedOnce covers the storage class NewReconciler
+// resolves for the life of the reconciler: the option override first (tests),
+// then the agent config value, then the default. The config value is the single
+// production source, read here and by model cache backend selection, so the
+// class that is checked cannot drift from the class volumes are created on.
+func TestModelCacheStorageClassResolvedOnce(t *testing.T) {
 	tests := []struct {
-		name       string
-		configured string
-		agentCfg   string
-		want       string
+		name     string
+		override string
+		agentCfg string
+		want     string
 	}{
 		{
 			name: "unset falls back to the default",
 			want: DefaultModelCacheStorageClassName,
 		},
 		{
-			name:       "reconciler override wins",
-			configured: "custom-sc",
-			want:       "custom-sc",
+			name:     "option override wins",
+			override: "custom-sc",
+			want:     "custom-sc",
 		},
 		{
-			// The production source: the same field model cache backend
-			// selection reads, so the checked class cannot drift from the
-			// class the volume is provisioned on.
 			name:     "agent config value is used when there is no override",
 			agentCfg: "cfg-sc",
 			want:     "cfg-sc",
 		},
 		{
-			name:       "reconciler override beats the agent config value",
-			configured: "custom-sc",
-			agentCfg:   "cfg-sc",
-			want:       "custom-sc",
+			name:     "option override beats the agent config value",
+			override: "custom-sc",
+			agentCfg: "cfg-sc",
+			want:     "custom-sc",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			nvcaCfg := nvcaconfig.Config{}
-			nvcaCfg.Agent.ModelCacheStorageClassName = tt.agentCfg
-			r := &Reconciler{modelCacheStorageClass: tt.configured, cfg: nvcaCfg}
-			if got := r.modelCacheStorageClassName(); got != tt.want {
-				t.Errorf("modelCacheStorageClassName() = %q, want %q", got, tt.want)
+			r := newModelCacheStorageClassReconciler(t, tt.agentCfg, tt.override)
+			if got := r.modelCacheStorageClass; got != tt.want {
+				t.Errorf("modelCacheStorageClass = %q, want %q", got, tt.want)
 			}
 		})
 	}
+}
+
+// newModelCacheStorageClassReconciler builds a Reconciler the way production
+// does, so the storage class resolution under test is the real one.
+func newModelCacheStorageClassReconciler(t *testing.T, agentCfg, override string) *Reconciler {
+	t.Helper()
+	nvcaCfg := nvcaconfig.Config{}
+	nvcaCfg.Agent.ModelCache.StorageClassName = agentCfg
+	return NewReconciler(nvcaCfg,
+		fake.NewClientBuilder().WithScheme(mgrScheme).Build(),
+		nil, nil, "my-cluster", "us-west-1", (&k8sutil.TimeConfig{}).Complete(),
+		WithModelCacheStorageClass(override))
+}
+
+// newMountOptionsReconciler builds a Reconciler through NewReconciler for the
+// mount option tests. They resolve defaults from the model cache storage class,
+// which only NewReconciler fills in.
+func newMountOptionsReconciler(t *testing.T, c client.Client, configured []string) *Reconciler {
+	t.Helper()
+	return NewReconciler(nvcaconfig.Config{}, c, nil, nil, "my-cluster", "us-west-1",
+		(&k8sutil.TimeConfig{}).Complete(), WithCSIVolumeMountOptions(configured))
 }
 
 func TestApplyModelCacheStorageClass(t *testing.T) {
@@ -835,7 +856,7 @@ func TestApplyModelCacheStorageClass(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "rw-pvc-test"},
 				Spec:       corev1.PersistentVolumeClaimSpec{StorageClassName: tt.specSC},
 			}
-			r := &Reconciler{modelCacheStorageClass: tt.configured}
+			r := newModelCacheStorageClassReconciler(t, "", tt.configured)
 
 			r.applyModelCacheStorageClass(context.Background(), pvc)
 
@@ -968,7 +989,7 @@ func TestReconcileSecondaryPVMountOptions(t *testing.T) {
 			}
 			objs := append(newMountOptionDefaultsObjects(tt.provisioner, tt.cmData), pv)
 			c := fake.NewClientBuilder().WithScheme(mgrScheme).WithObjects(objs...).Build()
-			r := &Reconciler{Client: c, csiVolumeMountOptions: tt.configured}
+			r := newMountOptionsReconciler(t, c, tt.configured)
 
 			stored := &corev1.PersistentVolume{}
 			if err := c.Get(context.Background(), client.ObjectKey{Name: "secondary-pv-test"}, stored); err != nil {

@@ -452,12 +452,12 @@ func (r *Reconciler) doModelCacheSamba(ctx context.Context,
 		Requests: corev1.ResourceList(r.cfg.Agent.SharedStorage.Server.ContainerResources.Requests),
 		Claims:   r.cfg.Agent.SharedStorage.Server.ContainerResources.Claims,
 	}
-	var infra SambaModelCacheInfraState
+	var infraState SambaModelCacheInfraState
 	err = nvcaotel.InvokeWithSpan(ctx, modelCacheTracer, "nvca.modelcache.samba.ensure_infra",
 		func(ctx context.Context) error {
 			var e error
-			infra, e = EnsureSambaModelCacheInfra(ctx, r.Client, cacheHandle,
-				r.cfg.Agent.SharedStorage.Server.Image, r.modelCacheStorageClassName(), smbResources, capacity)
+			infraState, e = EnsureSambaModelCacheInfra(ctx, r.Client, cacheHandle,
+				r.cfg.Agent.SharedStorage.Server.Image, r.modelCacheStorageClass, smbResources, capacity)
 			return e
 		},
 		oteltrace.WithAttributes(otelattr.String("nvcf.modelcache.handle", cacheHandle)),
@@ -475,7 +475,7 @@ func (r *Reconciler) doModelCacheSamba(ctx context.Context,
 		return reconcile.Result{}, r.terminalErrorWithMetricErr(modelcachetypes.ReasonSambaInfraFailed,
 			fmt.Errorf("ensure samba model cache infra: %w", err))
 	}
-	if !infra.Ready {
+	if !infraState.Ready {
 		// Bound the bootstrap. The backing PVC can stay Pending for good (no
 		// capacity, provisioner down), and nothing downstream fails that wait:
 		// the request would requeue forever and hold the install in
@@ -483,12 +483,12 @@ func (r *Reconciler) doModelCacheSamba(ctx context.Context,
 		// continue the install without a cache. This bounds server start-up
 		// only; the model download that follows is bounded separately by
 		// InitCacheJobFailureThreshold.
-		waited := r.nowFunc().Sub(infra.CreatedAt)
-		if !infra.CreatedAt.IsZero() && waited > r.k8sTimeConfig.SambaModelCacheReadyThreshold {
+		waited := r.nowFunc().Sub(infraState.CreatedAt)
+		if !infraState.CreatedAt.IsZero() && waited > r.k8sTimeConfig.SambaModelCacheReadyThreshold {
 			return reconcile.Result{}, r.terminalErrorWithMetricErr(modelcachetypes.ReasonSambaInfraTimeout,
 				fmt.Errorf("samba model cache server for handle %s still unavailable after %s, "+
 					"its backing PVC on storage class %s may be unbindable",
-					cacheHandle, waited.Round(time.Second), r.modelCacheStorageClassName()))
+					cacheHandle, waited.Round(time.Second), r.modelCacheStorageClass))
 		}
 		log.V(1).Info("Samba model cache server not ready, requeuing", "waited", waited.Round(time.Second))
 		return reconcile.Result{RequeueAfter: defaultRequeueDelay}, nil
@@ -686,25 +686,6 @@ func builtinProvisionerMountOptions(provisioner string) ([]string, bool) {
 	return splitMountOptions(NVMeshCacheMountOptions), true
 }
 
-// modelCacheStorageClassName returns the storage class NVCA uses for model cache
-// volumes: the reconciler override when set (tests), otherwise the agent config
-// value, otherwise the default. NVCA owns this choice rather than taking it from
-// the request spec, so every model cache volume in a cluster lands on the same
-// class and its provisioner is the one the mount option defaults were resolved
-// from.
-//
-// The config value is the single production source: model cache backend
-// selection reads the same field before choosing a backend that provisions on
-// this class, so the class that is checked cannot drift from the class the
-// volume is created on.
-func (r *Reconciler) modelCacheStorageClassName() string {
-	if r.modelCacheStorageClass != "" {
-		return r.modelCacheStorageClass
-	}
-
-	return ModelCacheStorageClassName(r.cfg.Agent.ModelCacheStorageClassName)
-}
-
 // applyModelCacheStorageClass puts the configured storage class on a model cache
 // PVC, replacing whatever the request spec carried. NVCA owns this choice so
 // every model cache volume lands on the class whose provisioner the mount option
@@ -713,7 +694,7 @@ func (r *Reconciler) modelCacheStorageClassName() string {
 // Encryption overrides the result afterwards with its own per-NCA class, which
 // is created for that request.
 func (r *Reconciler) applyModelCacheStorageClass(ctx context.Context, pvc *corev1.PersistentVolumeClaim) {
-	scName := r.modelCacheStorageClassName()
+	scName := r.modelCacheStorageClass
 	if pvc.Spec.StorageClassName != nil && *pvc.Spec.StorageClassName == scName {
 		return
 	}
@@ -734,7 +715,7 @@ func (r *Reconciler) modelCacheProvisionerName(ctx context.Context) (string, boo
 	}
 
 	log := logf.FromContext(ctx)
-	scName := r.modelCacheStorageClassName()
+	scName := r.modelCacheStorageClass
 
 	sc := &storagev1.StorageClass{}
 	if err := r.Client.Get(ctx, client.ObjectKey{Name: scName}, sc); err != nil {

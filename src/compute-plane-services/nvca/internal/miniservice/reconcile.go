@@ -747,7 +747,7 @@ func (r *Reconciler) doInstall(ctx context.Context,
 		// Same config value the storage controller provisions cache volumes
 		// with, so the class checked here is the class they land on.
 		cacheBackend, err = nvcastorage.SelectHelmCacheBackend(ctx, r.Client, r.FeatureFlagFetcher,
-			r.cfg.Agent.ModelCacheStorageClassName)
+			r.cfg.Agent.ModelCache.StorageClassName)
 		if err != nil {
 			return reconcile.Result{}, fmt.Errorf("select helm cache backend: %w", err)
 		}
