@@ -47,6 +47,18 @@ func TestClusterListRegisteredUsesICMSWithAdminToken(t *testing.T) {
 	cmd, _, err := clusterCmd.Find([]string{"list-registered"})
 	require.NoError(t, err)
 	require.Equal(t, "list-registered", cmd.Name())
+	ncaIDFlag := cmd.Flags().Lookup(clusterFlagNcaID)
+	icmsURLFlag := cmd.Flags().Lookup(clusterFlagICMSURL)
+	require.NotNil(t, ncaIDFlag)
+	require.NotNil(t, icmsURLFlag)
+	ncaIDValue, ncaIDChanged := ncaIDFlag.Value.String(), ncaIDFlag.Changed
+	icmsURLValue, icmsURLChanged := icmsURLFlag.Value.String(), icmsURLFlag.Changed
+	t.Cleanup(func() {
+		require.NoError(t, ncaIDFlag.Value.Set(ncaIDValue))
+		ncaIDFlag.Changed = ncaIDChanged
+		require.NoError(t, icmsURLFlag.Value.Set(icmsURLValue))
+		icmsURLFlag.Changed = icmsURLChanged
+	})
 	require.NoError(t, cmd.Flags().Set(clusterFlagNcaID, "nvcf-default"))
 	require.NoError(t, cmd.Flags().Set(clusterFlagICMSURL, server.URL))
 	jsonOutput = false
