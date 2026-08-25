@@ -186,6 +186,10 @@ func TestTranslateHelmChartLLM_AddsRouterAndCredentialContainers(t *testing.T) {
 	assert.Equal(t, "grpc.example.com", credentialEnv["NVCF_FQDN_GRPC"])
 	assert.Equal(t, ConfigDirPath, credentialEnv["SHARED_CONFIG_DIR"])
 	assert.Equal(t, "/var/run/llm/worker-token", credentialEnv["WORKER_TOKEN_PATH"])
+	assert.NotContains(t, credentialEnv, "ESS_ASSERTION_TOKEN_PATH")
+	for _, mount := range credentialManager.VolumeMounts {
+		assert.NotEqual(t, common.EssDataVolumeName, mount.Name)
+	}
 
 	require.NotNil(t, findVolumeByName(t, utilsPod.Spec.Volumes, "llm").EmptyDir)
 }
@@ -239,8 +243,111 @@ func TestTranslateContainerLLM_AddsRouterAndCredentialContainers(t *testing.T) {
 
 	credentialManager := findContainerByName(t, pod.Spec.Containers, "llm-credential-manager")
 	assert.Equal(t, "nvcr.io/nvidia/credential-manager:latest", credentialManager.Image)
-	assert.Equal(t, "worker-token", envSliceToMap(credentialManager.Env)["NVCF_WORKER_TOKEN"])
+	credentialEnv := envSliceToMap(credentialManager.Env)
+	assert.Equal(t, "worker-token", credentialEnv["NVCF_WORKER_TOKEN"])
+	assert.NotContains(t, credentialEnv, "ESS_ASSERTION_TOKEN_PATH")
+	for _, mount := range credentialManager.VolumeMounts {
+		assert.NotEqual(t, common.EssDataVolumeName, mount.Name)
+	}
 	require.NotNil(t, findVolumeByName(t, pod.Spec.Volumes, "llm").EmptyDir)
+}
+
+func TestTranslateHelmChartLLMWithSecretsSharesAssertionTokenWithCredentialManager(t *testing.T) {
+	msg := newHelmFunctionMessage()
+	msg.Details.FunctionType = FunctionTypeLLM
+	msg.LaunchSpecification.EnvironmentB64 = encodeTextEnv(map[string]string{
+		common.UtilsImageEnv:                "utils:latest",
+		common.InitImageEnv:                 "init:latest",
+		common.ESSAgentContainerEnv:         "ess:latest",
+		common.SecretsAssertionTokenEnv:     "worker-init-assertion",
+		"LLM_REQUEST_ROUTER_ADDRESS":        "llm-router.example.com:443",
+		"INFERENCE_PORT":                    "8080",
+		"HELM_CHART_INFERENCE_SERVICE_NAME": "inference-svc",
+		"NVCF_WORKER_TOKEN":                 "worker-token",
+		"NVCF_FQDN_GRPC":                    "grpc.example.com",
+		"FUNCTION_ID":                       "function-id",
+		"FUNCTION_VERSION_ID":               "function-version-id",
+		"NCA_ID":                            "nca-id",
+	})
+
+	objs, err := Translate(msg, TranslateConfig{TranslateConfig: newFunctionTranslateConfig(nil)})
+	require.NoError(t, err)
+
+	utilsPod := findPodByName(t, objs, common.UtilsPodName)
+	credentialManager := findContainerByName(t, utilsPod.Spec.Containers, "llm-credential-manager")
+	credentialEnv := envSliceToMap(credentialManager.Env)
+	assert.Equal(t, "/config/ess-agent/jwt.token", credentialEnv["ESS_ASSERTION_TOKEN_PATH"])
+	assert.NotContains(t, credentialEnv, common.SecretsAssertionTokenEnv)
+	assert.Contains(t, credentialManager.VolumeMounts, corev1.VolumeMount{
+		Name:      common.EssDataVolumeName,
+		MountPath: common.EssConfigDir,
+	})
+	essContainer := findContainerByName(t, utilsPod.Spec.Containers, "ess")
+	assert.Contains(t, essContainer.VolumeMounts, corev1.VolumeMount{
+		Name:      common.EssDataVolumeName,
+		MountPath: common.EssConfigDir,
+	})
+	require.NotNil(t, findVolumeByName(t, utilsPod.Spec.Volumes, common.EssDataVolumeName).EmptyDir)
+}
+
+func TestTranslateContainerLLMWithSecretsSharesAssertionTokenWithCredentialManager(t *testing.T) {
+	msg := newContainerFunctionMessage()
+	msg.Details.FunctionType = FunctionTypeLLM
+	msg.LaunchSpecification.EnvironmentB64 = encodeTextEnv(map[string]string{
+		common.ContainerFunctionImageEnv: "function:latest",
+		common.UtilsImageEnv:             "utils:latest",
+		common.InitImageEnv:              "init:latest",
+		common.ESSAgentContainerEnv:      "ess:latest",
+		common.SecretsAssertionTokenEnv:  "worker-init-assertion",
+		"LLM_REQUEST_ROUTER_ADDRESS":     "llm-router.example.com:443",
+		"INFERENCE_PORT":                 "8080",
+		"NVCF_WORKER_TOKEN":              "worker-token",
+		"NVCF_FQDN_GRPC":                 "grpc.example.com",
+		"FUNCTION_ID":                    "function-id",
+		"FUNCTION_VERSION_ID":            "function-version-id",
+		"NCA_ID":                         "nca-id",
+	})
+
+	objs, err := Translate(msg, TranslateConfig{TranslateConfig: newFunctionTranslateConfig(nil)})
+	require.NoError(t, err)
+
+	pod := findPodByName(t, objs, "0-request")
+	credentialManager := findContainerByName(t, pod.Spec.Containers, "llm-credential-manager")
+	credentialEnv := envSliceToMap(credentialManager.Env)
+	assert.Equal(t, "/config/ess-agent/jwt.token", credentialEnv["ESS_ASSERTION_TOKEN_PATH"])
+	assert.NotContains(t, credentialEnv, common.SecretsAssertionTokenEnv)
+	assert.Contains(t, credentialManager.VolumeMounts, corev1.VolumeMount{
+		Name:      common.EssDataVolumeName,
+		MountPath: common.EssConfigDir,
+	})
+	essContainer := findContainerByName(t, pod.Spec.Containers, "ess")
+	assert.Contains(t, essContainer.VolumeMounts, corev1.VolumeMount{
+		Name:      common.EssDataVolumeName,
+		MountPath: common.EssConfigDir,
+	})
+	require.NotNil(t, findVolumeByName(t, pod.Spec.Volumes, common.EssDataVolumeName).EmptyDir)
+}
+
+func TestTranslateNonLLMFunctionsDoNotAddCredentialManager(t *testing.T) {
+	for _, functionType := range []string{FunctionTypeDefault, FunctionTypeStreaming} {
+		t.Run(functionType, func(t *testing.T) {
+			msg := newContainerFunctionMessage()
+			msg.Details.FunctionType = functionType
+			msg.LaunchSpecification.EnvironmentB64 = encodeTextEnv(map[string]string{
+				common.ContainerFunctionImageEnv: "function:latest",
+				common.UtilsImageEnv:             "utils:latest",
+				common.NICLLSUtilsImageEnv:       "lls-utils:latest",
+				common.InitImageEnv:              "init:latest",
+			})
+
+			objs, err := Translate(msg, TranslateConfig{TranslateConfig: newFunctionTranslateConfig(nil)})
+			require.NoError(t, err)
+			pod := findPodByName(t, objs, "0-request")
+			for _, container := range pod.Spec.Containers {
+				assert.NotEqual(t, "llm-credential-manager", container.Name)
+			}
+		})
+	}
 }
 
 func TestTranslateContainerWithCacheAndSecrets(t *testing.T) {

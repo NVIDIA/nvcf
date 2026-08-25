@@ -480,10 +480,14 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		"--health-protocol GRPC --health-uri / --health-port 8001") {
 		t.Fatal("gRPC sample function was not configured with a gRPC health endpoint")
 	}
-	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "api-key generate --description bdd-load-tester-supreme --for function") {
+	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
+		"api-key generate --for function",
+		"--description bdd-load-tester-supreme") {
 		t.Fatal("HTTP sample function API key was not generated for the function service")
 	}
-	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "api-key generate --description bdd-grpc-load-tester-supreme --for function") {
+	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
+		"api-key generate --for function",
+		"--description bdd-grpc-load-tester-supreme") {
 		t.Fatal("gRPC sample function API key was not generated for the function service")
 	}
 	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
@@ -499,6 +503,7 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "function delete --deployment-only") {
 		t.Fatal("function deployment cleanup was never invoked")
 	}
+	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 3)
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "http://llm.localhost:8080/v1/chat/completions") {
 		t.Fatal("unauthenticated LLM gateway check was never invoked")
 	}
@@ -869,6 +874,7 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
 	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
+	const taskSmokeCommand = "env NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x tests/bdd/scripts/run-nvct-task-smoke.sh"
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
 		"helm list --all-namespaces --kube-context k3d-ncp-local-cp -o json":        {ExitCode: 0, Stdout: helmListAllNamespacesJSON()},
 		"helm list --all-namespaces --kube-context k3d-ncp-local-compute-1 -o json": {ExitCode: 0, Stdout: helmListNVCAJSON()},
@@ -890,7 +896,7 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 			ExitCode: 0,
 			Stdout:   "Function invocation completed!\n\nResponse:\n{\"message\":\"bdd-grpc-echo\"}\n",
 		},
-		"tests/bdd/scripts/run-nvct-task-smoke.sh": {
+		taskSmokeCommand: {
 			ExitCode: 0,
 			Stdout:   "Task bdd-nvct-task-smoke status: COMPLETED\n",
 		},
@@ -975,18 +981,23 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		"--health-protocol GRPC --health-uri / --health-port 8001") {
 		t.Fatal("gRPC sample function was not configured with a gRPC health endpoint")
 	}
-	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "api-key generate --description bdd-load-tester-supreme --for function") {
+	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
+		"api-key generate --for function",
+		"--description bdd-load-tester-supreme") {
 		t.Fatal("HTTP sample function API key was not generated for the function service")
 	}
-	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "api-key generate --description bdd-grpc-load-tester-supreme --for function") {
+	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
+		"api-key generate --for function",
+		"--description bdd-grpc-load-tester-supreme") {
 		t.Fatal("gRPC sample function API key was not generated for the function service")
 	}
 	if commandRanThatContains(suite.Runner.(*fakeRunner).runs, "api-key generate --description bdd-nvct-task-smoke") {
 		t.Fatal("NVCT task smoke should not use nvcf-cli api-key generate because it emits function resources")
 	}
-	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "tests/bdd/scripts/run-nvct-task-smoke.sh") {
-		t.Fatal("NVCT task API smoke script was never invoked")
+	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, taskSmokeCommand) {
+		t.Fatal("NVCT task API smoke script was not invoked with the local instance type")
 	}
+	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 2)
 }
 
 // TestSingleClusterHelmfileUpstreamImagesFeatureFileWiresToSteps runs the
@@ -1525,6 +1536,7 @@ func TestMultiClusterEKSHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		"NVCT_BDD_TASKS_URL=http://" + wiringGatewayLB + "/v1/nvct/tasks",
 		"NVCT_BDD_TASKS_HOST=tasks." + wiringGatewayDomain,
 		"NVCT_BDD_TASK_BACKEND=" + computeClusterName,
+		"NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_8x",
 		"tests/bdd/scripts/run-nvct-task-smoke.sh",
 	}, " ")
 	pullSecretCommand := "kubectl get secret/nvcr-pull-secret --namespace nvca-system --context " + computeContext + " -o name"
@@ -1609,9 +1621,10 @@ func TestMultiClusterEKSHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "function invoke") {
 		t.Fatal("function invoke CLI command was never invoked")
 	}
-	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "tests/bdd/scripts/run-nvct-task-smoke.sh") {
-		t.Fatal("NVCT task API smoke script was never invoked")
+	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, taskSmokeCommand) {
+		t.Fatal("NVCT task API smoke script was not invoked with the EKS instance type")
 	}
+	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_8x", 1)
 }
 
 // TestSingleClusterUp is the live entry point for the single-cluster
@@ -1778,6 +1791,33 @@ func commandRanThatContains(runs []string, needle string) bool {
 	for _, run := range runs {
 		if strings.Contains(run, needle) {
 			return true
+		}
+	}
+	return false
+}
+
+func assertFunctionDeploymentsUseInstanceType(t *testing.T, runs []string, want string, wantCount int) {
+	t.Helper()
+	count := 0
+	for _, command := range runs {
+		if !strings.Contains(command, " function deploy create ") {
+			continue
+		}
+		count++
+		if !commandOptionEquals(command, "--instance-type", want) {
+			t.Fatalf("function deployment command did not use instance type %s: %s", want, command)
+		}
+	}
+	if count != wantCount {
+		t.Fatalf("function deployment commands = %d, want %d", count, wantCount)
+	}
+}
+
+func commandOptionEquals(command, option, want string) bool {
+	fields := strings.Fields(command)
+	for index := 0; index+1 < len(fields); index++ {
+		if fields[index] == option {
+			return fields[index+1] == want
 		}
 	}
 	return false

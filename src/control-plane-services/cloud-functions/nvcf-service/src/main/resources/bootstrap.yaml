@@ -16,6 +16,7 @@ spring:
   application:
     name: nvcf-api
     env: default
+    region: default
     version: ${SPRING_APPLICATION_VERSION:0.0.1-dummy-version}
     host:
       id: ${HOSTNAME:${spring.application.name}-${random.int}-host}

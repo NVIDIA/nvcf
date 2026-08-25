@@ -20,6 +20,14 @@ meaningful target, value, context, and timeout visible while hiding only
 command or output-format mechanics. Keep `When I run command` plus an
 assertion as the escape hatch for uncommon or command-specific behavior.
 
+Function lifecycle steps are a narrow command-adapter exception. They store
+only the selected `nvcf-cli` config, pass visible arguments to one CLI command,
+and preserve the real command result. They do not store function identity,
+apply defaults, parse or normalize product values, or enforce product
+preconditions. Their `successfully` wording asserts exit code 0 to keep happy
+paths compact. Use raw command steps for negative and exit-code-specific cases
+so `nvcf-cli` and the NVCF API remain the product-validation boundary.
+
 ## Layering
 
 - `harness/` owns suite lifecycle: `Config`, `CommandRunner`, `Ledger`,
@@ -44,6 +52,13 @@ logic into `dsl/`.
 - `${VAR}` interpolation is the only env-var form the DSL recognizes;
   a bare `$word` is left literal. Implementations must not use
   `os.ExpandEnv`. Expansion lives in `dsl.Interpolate`.
+- Function lifecycle CLI option tables preserve row order, repeated options,
+  empty values, and product-invalid values. Only the `option | value` table
+  structure is validated before the command runs.
+- Gateway API route readiness tables expose each route's kind, name,
+  namespace, and intended Gateway parent plus the shared context and timeout.
+  The step requires `Accepted=True` and `ResolvedRefs=True` for that parent but
+  does not allowlist route kinds or duplicate Gateway API validation.
 - File-mutating steps (`I copy the file`, `I update yaml file`,
   `I prepare self-managed secrets file`, `I substitute a block`)
   snapshot the destination through `Suite.Ledger` before the first write.
