@@ -35,7 +35,7 @@ images:
   # Name of the container image containing Nginx Prometheus exporter.
   exporter: nvcr.io/nv-ngc-devops/nginx-prometheus-exporter:1.0
   # Certificate bundle used for cache certificates.
-  certificates: nvcr.io/nv-ngc-devops/nvcf-proxy-tls-certs:v1.2.10
+  certificates: nvcr.io/nv-ngc-devops/nvcf-proxy-tls-certs:v1.2.11
   # Optional pull secrets for private registries.
   secrets:
     - nvidia-ngcuser-pull-secret
@@ -149,8 +149,13 @@ persistentVolumeClaim:
   freeProxyPct: 15
 
 # Service configuration.
+#
+# The service type is not configurable: it is always NodePort. The host
+# container runtime reaches the cache at ${NODE_IP}:${port} from the host
+# network namespace, so the port has to be published on every node. Setting
+# service.type to anything else fails the render rather than installing a cache
+# that pulls silently bypass.
 service:
-  type: NodePort
   port: 30345
 
 # Proxy service (nvcf-proxy-cache ClusterIP) configuration.
@@ -191,11 +196,37 @@ consistentHashRouting:
   # Owner pods are in-cluster peers, so this stays short: a slow connect means
   # the owner is down, and failing over fast is correct.
   relayConnectTimeout: 2s
+  # Idle connections kept open to each owner pod. Without a pool every relayed
+  # request pays a fresh TCP and TLS handshake to the peer, which is worst for
+  # the many small Range requests the hash spreads across owners. Cheap: these
+  # are in-cluster peers and the pool is per worker process.
+  peerKeepaliveConnections: 32
+  peerKeepaliveTimeout: 60s
+  peerKeepaliveRequests: 1000
 
 # Metrics configuration.
 metrics:
   cacheMetricsStorageSize: 300m
   throughputHistogramBuckets: 25000000, 30000000, 35000000, 40000000, 50000000, 60000000, 80000000, 100000000
+  # Request-duration buckets. These requests are whole model-file transfers, not
+  # API calls, so tens of seconds is normal and the top bucket has to cover a
+  # full object. If the largest finite bucket is below real traffic, everything
+  # above it lands in +Inf and histogram_quantile clamps to that edge, reporting
+  # the bucket boundary instead of a latency.
+  durationHistogramBuckets: 0.005, 0.01, 0.02, 0.03, 0.05, 0.075, 0.1, 0.2, 0.3, 0.4, 0.5, 0.75, 1, 1.5, 2, 3, 4, 5, 10, 15, 30, 60, 120, 300, 600
+  # Response-size buckets, with resolution across the range model objects
+  # actually occupy. A 100MB -> 1GB -> 10GB ladder puts nearly all traffic in
+  # one bucket and hides the distribution entirely.
+  # Maximum distinct `asset` label values admitted to the per-asset counters.
+  # The asset is derived from a client-controlled request path and host, so it
+  # is capped rather than assumed small: once this many distinct values have
+  # been seen, further ones are recorded as "other". Raise it if a fleet
+  # legitimately serves more assets than this and the series count is
+  # acceptable.
+  maxAssetLabels: 50
+  # Shared dictionary holding the admitted asset names. One small key each.
+  assetLabelDictSize: 1m
+  responseSizeHistogramBuckets: 1000, 2000, 4000, 8000, 16000, 32000, 64000, 128000, 256000, 1048576, 10485760, 104857600, 268435456, 536870912, 805306368, 1073741824, 2147483648, 5368709120, 10737418240, 107374182400
 
 # Custom annotations and labels for pods.
 podAnnotations: {}

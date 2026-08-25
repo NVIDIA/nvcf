@@ -20,17 +20,14 @@ Feature: Bring up a local multi-cluster NVCF stack with the CLI
         | NGC_API_KEY     |
         | SAMPLE_NGC_ORG  |
         | SAMPLE_NGC_TEAM |
-      # self-hosted install --env local reads operator-authored local
-      # secrets files from both split stacks:
-      # deploy/stacks/self-managed/secrets/local-secrets.yaml (control
-      # plane). Only secrets.yaml.template is tracked in each
-      # stack. Author both files from the canonical templates before
-      # running install/register. Ledger snapshots whatever
+      # self-hosted install --env local reads the operator-authored
+      # control-plane secrets file. Only secrets.yaml.template is tracked.
+      # Prepare local-secrets.yaml from that template before running
+      # install/register. Ledger snapshots whatever
       # local-secrets.yaml state existed before the first write (its
       # prior contents or absence) and restores or removes it at suite
       # teardown.
-      And I copy the file "deploy/stacks/self-managed/secrets/secrets.yaml.template" to "deploy/stacks/self-managed/secrets/local-secrets.yaml"
-      And I substitute "REPLACE_WITH_BASE64_DOCKER_CREDENTIAL" in file "deploy/stacks/self-managed/secrets/local-secrets.yaml" with base64 of "$oauthtoken:${NGC_API_KEY}"
+      And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
       # --env local also reads operator-authored environment values from
       # both split stacks: deploy/stacks/<stack>/environments/local.yaml.
       # Neither file is tracked, so author both from the BDD multi-cluster
@@ -41,14 +38,12 @@ Feature: Bring up a local multi-cluster NVCF stack with the CLI
       # on a fresh cluster the ServiceMonitor CRDs do not exist yet and
       # the diff fails before anything installs. The Helmfile workflow
       # (helmfile sync) has no diff phase and keeps the default profile.
-      And I copy the file "tests/bdd/fixtures/self-managed-local-bdd-multi.yaml" to "deploy/stacks/self-managed/environments/local.yaml"
-      And I update yaml file "deploy/stacks/self-managed/environments/local.yaml" with keys:
+      And I prepare Helmfile environment "local" for stack "self-managed" from fixture "tests/bdd/fixtures/self-managed-local-bdd-multi.yaml" with values:
         | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
         | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
         | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
         | observability.profile           | disabled                             |
-      And I copy the file "tests/bdd/fixtures/nvcf-compute-plane-local-bdd-multi.yaml" to "deploy/stacks/nvcf-compute-plane/environments/local.yaml"
-      And I update yaml file "deploy/stacks/nvcf-compute-plane/environments/local.yaml" with keys:
+      And I prepare Helmfile environment "local" for stack "nvcf-compute-plane" from fixture "tests/bdd/fixtures/nvcf-compute-plane-local-bdd-multi.yaml" with values:
         | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
         | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
         | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
@@ -157,8 +152,8 @@ Feature: Bring up a local multi-cluster NVCF stack with the CLI
       And file "deploy/stacks/nvcf-compute-plane/out/ncp-local-compute-1-register-values.yaml" should exist
       # Subset match (should contain, not should match) because the
       # values file carries non-deterministic IDs alongside the
-      # deterministic block. The IDs are asserted by individual
-      # should-not-be-empty steps below.
+      # deterministic block. The generated values are asserted as
+      # non-empty keys below.
       And yaml file "deploy/stacks/nvcf-compute-plane/out/ncp-local-compute-1-register-values.yaml" should contain:
         """
         clusterName: ncp-local-compute-1
@@ -169,9 +164,11 @@ Feature: Bring up a local multi-cluster NVCF stack with the CLI
           revalServiceURL: http://reval.localhost:8080
           natsURL: nats://nats.localhost:4222
         """
-      And yaml file "deploy/stacks/nvcf-compute-plane/out/ncp-local-compute-1-register-values.yaml" key "clusterID" should not be empty
-      And yaml file "deploy/stacks/nvcf-compute-plane/out/ncp-local-compute-1-register-values.yaml" key "clusterGroupID" should not be empty
-      And yaml file "deploy/stacks/nvcf-compute-plane/out/ncp-local-compute-1-register-values.yaml" key "selfManaged.identitySource" should not be empty
+      And yaml file "deploy/stacks/nvcf-compute-plane/out/ncp-local-compute-1-register-values.yaml" should have non-empty keys:
+        | key                        |
+        | clusterID                  |
+        | clusterGroupID             |
+        | selfManaged.identitySource |
 
     @nvca-registration
     Scenario: Operator installs the first compute plane

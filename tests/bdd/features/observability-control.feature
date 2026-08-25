@@ -10,29 +10,23 @@ Feature: Install local Helmfile observability with the control profile
       | NGC_API_KEY     |
       | SAMPLE_NGC_ORG  |
       | SAMPLE_NGC_TEAM |
-    # Helmfile pulls OCI charts during installation. Keep $NGC_API_KEY unbraced
-    # so the BDD runner does not expand it into command logs.
-    And command has succeeded:
-      """
-      bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" | helm registry login nvcr.io --username "\$oauthtoken" --password-stdin'
-      """
+    # Helmfile pulls OCI charts during installation. Authenticate before sync
+    # without exposing the current API key in command arguments or logs.
+    And Helm is authenticated to OCI registry "nvcr.io" using the current NGC API key
     # Set the self-managed stack environment.
-    And I copy the file "tests/bdd/fixtures/self-managed-local-bdd.yaml" to "deploy/stacks/self-managed/environments/local-bdd-observability-control.yaml"
-    And I update yaml file "deploy/stacks/self-managed/environments/local-bdd-observability-control.yaml" with keys:
+    And I prepare Helmfile environment "local-bdd-observability-control" for stack "self-managed" from fixture "tests/bdd/fixtures/self-managed-local-bdd.yaml" with values:
       | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
       | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | observability.profile           | control                              |
       | functionAutoscaler.image.tag    | 1.18.10                              |
     # Set the shared observability stack environment.
-    And I copy the file "tests/bdd/fixtures/self-managed-local-bdd.yaml" to "deploy/stacks/observability/environments/local-bdd-observability-control.yaml"
-    And I update yaml file "deploy/stacks/observability/environments/local-bdd-observability-control.yaml" with keys:
+    And I prepare Helmfile environment "local-bdd-observability-control" for stack "observability" from fixture "tests/bdd/fixtures/self-managed-local-bdd.yaml" with values:
       | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
       | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | observability.profile           | control                              |
-    And I copy the file "deploy/stacks/self-managed/secrets/secrets.yaml.template" to "deploy/stacks/self-managed/secrets/local-bdd-observability-control-secrets.yaml"
-    And I substitute "REPLACE_WITH_BASE64_DOCKER_CREDENTIAL" in file "deploy/stacks/self-managed/secrets/local-bdd-observability-control-secrets.yaml" with base64 of "$oauthtoken:${NGC_API_KEY}"
+    And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-bdd-observability-control-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
     # Conflict precheck: ncp-local-cp claims host ports that overlap with this
     # single-cluster topology. From tools/ncp-local-cluster, run
     # `make destroy CLUSTER_NAME=ncp-local-cp` before retrying.
@@ -62,8 +56,12 @@ Feature: Install local Helmfile observability with the control profile
       | otel-collector           | monitoring |
       | default-monitors         | monitoring |
 
-    When I successfully run command "kubectl get opentelemetrycollector nvcf-observability -n monitoring --context k3d-ncp-local -o jsonpath='{.spec.targetAllocator.enabled}'"
-    And the command output should contain "true"
+    Then Kubernetes resource "OpenTelemetryCollector/nvcf-observability" in namespace "monitoring" using context "k3d-ncp-local" should contain:
+      """
+      spec:
+        targetAllocator:
+          enabled: true
+      """
 
     Then these Kubernetes resources should exist in namespace "monitoring" using context "k3d-ncp-local":
       | kind           | name                                             |

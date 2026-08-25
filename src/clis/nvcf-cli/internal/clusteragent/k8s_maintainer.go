@@ -19,7 +19,9 @@ package clusteragent
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -28,6 +30,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -35,16 +38,20 @@ import (
 )
 
 // Maintenance constants. These mirror the NVCA operator contract defined in
-// nvca/pkg/operator/cleanup/cleanup.go and pkg/operator/types/types.go. Drain
-// flips CordonAndDrain maintenance on the agent-config ConfigMap and restarts
-// the NVCA Deployment; the operator picks the change up on the rollout.
+// nvca/pkg/operator/reconcile/backendk8scache.go. Drain adds the
+// CordonAndDrainMaintenance flag to the NVCFBackend CR's
+// spec.overrides.featureGate.values; the operator's own reconcile loop
+// regenerates agent-config from the CR and rolls out NVCA itself. The CLI
+// never writes agent-config or the NVCA Deployment directly: the operator
+// treats both as generated artifacts and reverts direct edits on its next
+// reconcile (informer resync, CR change, or operator restart).
 const (
 	agentConfigConfigMapName      = "agent-config"
 	agentConfigKey                = "config.yaml"
 	nvcaDeploymentName            = "nvca"
 	cordonAndDrainFeatureFlag     = "CordonAndDrainMaintenance"
+	cordonMaintenanceFeatureFlag  = "CordonMaintenance"
 	maintenanceModeCordonAndDrain = "CordonAndDrain"
-	restartedAtAnnotation         = "kubectl.kubernetes.io/restartedAt"
 
 	// Namespace defaults applied when the NVCFBackend CR leaves them empty,
 	// matching DefaultNVCASystemNamespace / DefaultNVCARequestsNamespace upstream.
@@ -55,6 +62,11 @@ const (
 // rolloutPollInterval bounds how often waitForRollout polls the Deployment. It
 // is a var so tests can shorten it.
 var rolloutPollInterval = 2 * time.Second
+
+// killDeletionPollInterval bounds how often deleteICMSRequest polls for the
+// ICMSRequest to actually disappear after Delete is called. It is a var so
+// tests can shorten it.
+var killDeletionPollInterval = 2 * time.Second
 
 // k8sMaintainer mutates NVCA state on a compute-plane cluster. It uses the
 // dynamic client for the ICMSRequest and NVCFBackend custom resources and the
@@ -73,6 +85,23 @@ func NewK8sMaintainer(dc dynamic.Interface, cs kubernetes.Interface) AgentMainta
 // ResolveCluster reads the NVCFBackend CR and returns the cluster identity and
 // namespace layout, applying defaults for unset namespaces.
 func (m *k8sMaintainer) ResolveCluster(ctx context.Context, backendNS string) (*ClusterTarget, error) {
+	item, err := m.getNVCFBackendObject(ctx, backendNS)
+	if err != nil {
+		return nil, err
+	}
+
+	obj := item.Object
+	return &ClusterTarget{
+		ClusterID:         firstNonEmpty(nestedString(obj, "spec", "clusterConfig", "clusterId"), nestedString(obj, "spec", "clusterConfig", "clusterID")),
+		ClusterName:       nestedString(obj, "spec", "clusterConfig", "clusterName"),
+		SystemNamespace:   firstNonEmpty(nestedString(obj, "spec", "clusterConfig", "systemNamespace"), defaultSystemNamespace),
+		RequestsNamespace: firstNonEmpty(nestedString(obj, "spec", "clusterConfig", "requestsNamespace"), defaultRequestsNamespace),
+	}, nil
+}
+
+// getNVCFBackendObject fetches the single NVCFBackend CR in backendNS. The
+// NVCA operator contract guarantees exactly one per compute-plane cluster.
+func (m *k8sMaintainer) getNVCFBackendObject(ctx context.Context, backendNS string) (*unstructured.Unstructured, error) {
 	list, err := m.dc.Resource(nvcfBackendGVR).Namespace(backendNS).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, wrapCRDError(err, "NVCFBackend", backendNS)
@@ -80,14 +109,7 @@ func (m *k8sMaintainer) ResolveCluster(ctx context.Context, backendNS string) (*
 	if len(list.Items) == 0 {
 		return nil, fmt.Errorf("no NVCFBackend resource found in namespace %q; is this context pointed at an NVCF compute-plane cluster (try --backend-namespace)?", backendNS)
 	}
-
-	obj := list.Items[0].Object
-	return &ClusterTarget{
-		ClusterID:         firstNonEmpty(nestedString(obj, "spec", "clusterConfig", "clusterId"), nestedString(obj, "spec", "clusterConfig", "clusterID")),
-		ClusterName:       nestedString(obj, "spec", "clusterConfig", "clusterName"),
-		SystemNamespace:   firstNonEmpty(nestedString(obj, "spec", "clusterConfig", "systemNamespace"), defaultSystemNamespace),
-		RequestsNamespace: firstNonEmpty(nestedString(obj, "spec", "clusterConfig", "requestsNamespace"), defaultRequestsNamespace),
-	}, nil
+	return &list.Items[0], nil
 }
 
 // resolveAndVerify is the common preamble: resolve the cluster, then enforce the
@@ -151,54 +173,61 @@ func (m *k8sMaintainer) setMaintenance(ctx context.Context, opts DrainOptions, d
 		SystemNamespace: systemNS,
 		DryRun:          opts.DryRun,
 	}
-
-	var transform func(string) string
 	if drain {
 		result.Mode = maintenanceModeCordonAndDrain
-		transform = func(y string) string {
-			return addMaintenanceModeToConfig(addFeatureFlagToConfig(y, cordonAndDrainFeatureFlag), maintenanceModeCordonAndDrain)
-		}
-	} else {
-		transform = func(y string) string {
-			return clearMaintenanceModeFromConfig(removeFeatureFlagFromConfig(y, cordonAndDrainFeatureFlag))
-		}
+	}
+
+	if err := m.checkMaintenanceConflict(ctx, opts.BackendNS, drain); err != nil {
+		return nil, err
 	}
 
 	if opts.DryRun {
-		_, cur, err := m.getAgentConfig(ctx, systemNS)
+		has, err := m.nvcfBackendHasMaintenanceFlag(ctx, opts.BackendNS)
 		if err != nil {
 			return nil, err
 		}
-		result.ConfigChanged = transform(cur) != cur
+		result.ConfigChanged = has != drain
 		if result.ConfigChanged {
-			result.Message = "dry run: would update agent-config and restart NVCA"
+			result.Message = "dry run: would update the NVCFBackend CR; the NVCA operator would then regenerate agent-config and roll out NVCA"
 		} else {
 			result.Message = "dry run: already in the requested state; no change"
 		}
 		return result, nil
 	}
 
-	changed, err := m.patchAgentConfig(ctx, systemNS, transform)
+	changed, err := m.patchMaintenanceFeatureFlag(ctx, opts.BackendNS, drain)
 	if err != nil {
 		return nil, err
 	}
 	result.ConfigChanged = changed
-	if !changed && !opts.Force {
-		// Idempotent: skip the rollout so an in-flight drain is not disrupted.
-		// Use --force to retry the restart if a previous run failed after the
-		// config patch but before the rollout completed.
+	if !changed {
+		// Idempotent: nothing to wait for. Re-running the same command is
+		// always safe here (unlike the old ConfigMap/Deployment-restart
+		// approach), since the CLI no longer performs a mutation the
+		// operator could race with; it only submits a desired-state change
+		// the operator's own reconcile owns.
+		//
+		// Behavior change from the old agent-config/Deployment-restart
+		// approach: --force no longer has an effect here. It used to also
+		// retrigger the NVCA restart even when the desired state was
+		// already reached, which let a stuck rollout be kicked by
+		// re-running with --force. Since the CLI no longer performs that
+		// restart directly, there is nothing left for --force to retrigger
+		// when the CR is already in the desired state; only the operator's
+		// own reconcile can recover a stuck rollout now.
 		result.Message = "already in the requested state; no change"
 		return result, nil
 	}
-
-	if err := m.triggerRollout(ctx, systemNS); err != nil {
-		return result, fmt.Errorf("agent-config updated but failed to restart NVCA: %w\n(re-run with --force to retry the restart)", err)
-	}
 	result.RolloutTriggered = true
 
-	if !opts.Force && opts.Timeout > 0 {
-		if err := m.waitForRollout(ctx, systemNS, opts.Timeout); err != nil {
-			result.Message = fmt.Sprintf("agent-config updated and restart triggered, but the rollout did not complete in time: %v", err)
+	switch {
+	case opts.Force:
+		result.Message = "NVCFBackend updated; not waiting for the NVCA operator's rollout (--force)"
+	case opts.Timeout <= 0:
+		result.Message = "NVCFBackend updated; not waiting for the NVCA operator's rollout (--timeout 0)"
+	default:
+		if err := m.waitForMaintenanceRollout(ctx, opts.BackendNS, systemNS, opts.Timeout, drain); err != nil {
+			result.Message = fmt.Sprintf("NVCFBackend updated, but the NVCA operator has not finished reconciling and rolling out the change: %v", err)
 			return result, nil
 		}
 		result.RolloutComplete = true
@@ -206,8 +235,115 @@ func (m *k8sMaintainer) setMaintenance(ctx context.Context, opts DrainOptions, d
 	return result, nil
 }
 
+// nvcfBackendHasMaintenanceFlag reports whether the NVCFBackend CR's
+// spec.overrides.featureGate.values in backendNS currently contains
+// cordonAndDrainFeatureFlag.
+func (m *k8sMaintainer) nvcfBackendHasMaintenanceFlag(ctx context.Context, backendNS string) (bool, error) {
+	obj, err := m.getNVCFBackendObject(ctx, backendNS)
+	if err != nil {
+		return false, err
+	}
+	values, _, err := unstructured.NestedStringSlice(obj.Object, "spec", "overrides", "featureGate", "values")
+	if err != nil {
+		return false, fmt.Errorf("reading NVCFBackend spec.overrides.featureGate.values: %w", err)
+	}
+	return slices.Contains(values, cordonAndDrainFeatureFlag), nil
+}
+
+// checkMaintenanceConflict reads the NVCFBackend CR's base
+// spec.featureGate.values and returns an error if the operator's
+// mergeOverrides logic would keep the requested drain/undrain from ever
+// taking effect, even though patching spec.overrides would succeed:
+//
+//   - drain: if the base spec already sets cordonMaintenanceFeatureFlag, the
+//     operator prefers CordonMaintenance over CordonAndDrainMaintenance
+//     whenever both are present in the merged result, so adding
+//     cordonAndDrainFeatureFlag to the overrides would be silently dropped.
+//   - undrain: if the base spec already sets cordonAndDrainFeatureFlag, the
+//     operator's merge keeps a maintenance flag that was present in either
+//     the base spec or the overrides, so removing it from overrides alone
+//     would not clear it from the merged result.
+func (m *k8sMaintainer) checkMaintenanceConflict(ctx context.Context, backendNS string, drain bool) error {
+	obj, err := m.getNVCFBackendObject(ctx, backendNS)
+	if err != nil {
+		return err
+	}
+	baseValues, _, err := unstructured.NestedStringSlice(obj.Object, "spec", "featureGate", "values")
+	if err != nil {
+		return fmt.Errorf("reading NVCFBackend spec.featureGate.values: %w", err)
+	}
+	switch {
+	case drain && slices.Contains(baseValues, cordonMaintenanceFeatureFlag):
+		return fmt.Errorf("cannot drain: NVCFBackend spec.featureGate.values already sets %q, which the NVCA operator prefers over %q, so drain would have no effect; remove %q from the base spec first", cordonMaintenanceFeatureFlag, cordonAndDrainFeatureFlag, cordonMaintenanceFeatureFlag)
+	case !drain && slices.Contains(baseValues, cordonAndDrainFeatureFlag):
+		return fmt.Errorf("cannot undrain: NVCFBackend spec.featureGate.values already sets %q, which the NVCA operator keeps regardless of overrides, so undrain would have no effect; remove %q from the base spec first", cordonAndDrainFeatureFlag, cordonAndDrainFeatureFlag)
+	}
+	return nil
+}
+
+// patchMaintenanceFeatureFlag adds or removes cordonAndDrainFeatureFlag on
+// the NVCFBackend CR's spec.overrides.featureGate.values, retrying on update
+// conflicts. It reports whether the value actually changed.
+//
+// This patches the NVCFBackend CR rather than agent-config directly: the
+// NVCA operator treats agent-config as a fully generated artifact rebuilt
+// from this CR on every reconcile (informer resync, CR change, operator
+// restart), so a direct ConfigMap edit gets silently reverted on the
+// operator's next reconcile. Patching spec.overrides here (rather than the
+// base spec.featureGate) lets the operator's own additive merge apply it and
+// its reconcile regenerate agent-config correctly and roll out NVCA itself.
+func (m *k8sMaintainer) patchMaintenanceFeatureFlag(ctx context.Context, backendNS string, drain bool) (bool, error) {
+	changed := false
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		obj, err := m.getNVCFBackendObject(ctx, backendNS)
+		if err != nil {
+			return err
+		}
+		values, _, err := unstructured.NestedStringSlice(obj.Object, "spec", "overrides", "featureGate", "values")
+		if err != nil {
+			return fmt.Errorf("reading NVCFBackend spec.overrides.featureGate.values: %w", err)
+		}
+		next := setMaintenanceFeatureFlag(values, drain)
+		if slices.Equal(values, next) {
+			changed = false
+			return nil
+		}
+		if err := unstructured.SetNestedStringSlice(obj.Object, next, "spec", "overrides", "featureGate", "values"); err != nil {
+			return fmt.Errorf("writing NVCFBackend spec.overrides.featureGate.values: %w", err)
+		}
+		if _, err := m.dc.Resource(nvcfBackendGVR).Namespace(backendNS).Update(ctx, obj, metav1.UpdateOptions{}); err != nil {
+			return err
+		}
+		changed = true
+		return nil
+	})
+	return changed, err
+}
+
+// setMaintenanceFeatureFlag returns values with cordonAndDrainFeatureFlag
+// added (drain) or removed (undrain), preserving the order and content of
+// every other entry.
+func setMaintenanceFeatureFlag(values []string, drain bool) []string {
+	next := make([]string, 0, len(values)+1)
+	has := false
+	for _, v := range values {
+		if v == cordonAndDrainFeatureFlag {
+			has = true
+			if !drain {
+				continue
+			}
+		}
+		next = append(next, v)
+	}
+	if drain && !has {
+		next = append(next, cordonAndDrainFeatureFlag)
+	}
+	return next
+}
+
 // getAgentConfig fetches the agent-config ConfigMap and its config.yaml payload,
-// translating common failures into actionable messages.
+// translating common failures into actionable messages. It is read-only: the
+// CLI never writes this ConfigMap (see patchMaintenanceFeatureFlag).
 func (m *k8sMaintainer) getAgentConfig(ctx context.Context, systemNS string) (*corev1.ConfigMap, string, error) {
 	cm, err := m.cs.CoreV1().ConfigMaps(systemNS).Get(ctx, agentConfigConfigMapName, metav1.GetOptions{})
 	if err != nil {
@@ -227,82 +363,46 @@ func (m *k8sMaintainer) getAgentConfig(ctx context.Context, systemNS string) (*c
 	return cm, cur, nil
 }
 
-// patchAgentConfig reads, transforms, and writes config.yaml under retry-on-
-// conflict. It reports whether the transform actually changed the content.
-func (m *k8sMaintainer) patchAgentConfig(ctx context.Context, systemNS string, transform func(string) string) (bool, error) {
-	changed := false
-	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		cm, cur, err := m.getAgentConfig(ctx, systemNS)
-		if err != nil {
-			return err
-		}
-		next := transform(cur)
-		if next == cur {
-			changed = false
-			return nil
-		}
-		if cm.Data == nil {
-			cm.Data = map[string]string{}
-		}
-		cm.Data[agentConfigKey] = next
-		if _, err := m.cs.CoreV1().ConfigMaps(systemNS).Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
-			return err
-		}
-		changed = true
-		return nil
-	})
-	return changed, err
-}
-
-// triggerRollout restarts the NVCA Deployment by stamping the standard restart
-// annotation on its pod template, mirroring triggerNVCARollout in the operator.
-func (m *k8sMaintainer) triggerRollout(ctx context.Context, systemNS string) error {
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		deploy, err := m.cs.AppsV1().Deployments(systemNS).Get(ctx, nvcaDeploymentName, metav1.GetOptions{})
-		if err != nil {
-			if apierrors.IsNotFound(err) {
-				return fmt.Errorf("NVCA deployment %s/%s not found", systemNS, nvcaDeploymentName)
-			}
-			return fmt.Errorf("failed to get NVCA deployment %s/%s: %w", systemNS, nvcaDeploymentName, err)
-		}
-		if deploy.Spec.Template.Annotations == nil {
-			deploy.Spec.Template.Annotations = map[string]string{}
-		}
-		deploy.Spec.Template.Annotations[restartedAtAnnotation] = time.Now().UTC().Format(time.RFC3339)
-		_, err = m.cs.AppsV1().Deployments(systemNS).Update(ctx, deploy, metav1.UpdateOptions{})
-		return err
-	})
-}
-
-// waitForRollout polls until the NVCA Deployment rollout completes or the
-// timeout elapses, mirroring waitForDeploymentRollout in the operator.
-func (m *k8sMaintainer) waitForRollout(ctx context.Context, systemNS string, timeout time.Duration) error {
+// waitForMaintenanceRollout polls until the NVCA operator has both
+// regenerated agent-config to reflect the new maintenance state and rolled
+// the NVCA Deployment out to match, or timeout elapses.
+//
+// Both conditions are checked together deliberately: checking only the
+// Deployment's rollout status is not sufficient, because immediately after
+// patching the CR the Deployment may still trivially satisfy the "rollout
+// complete" condition from before the operator has even started reconciling
+// the change, which would report success without the operator having done
+// anything yet.
+func (m *k8sMaintainer) waitForMaintenanceRollout(ctx context.Context, backendNS, systemNS string, timeout time.Duration, drain bool) error {
 	deadline := time.Now().Add(timeout)
 	for {
-		deploy, err := m.cs.AppsV1().Deployments(systemNS).Get(ctx, nvcaDeploymentName, metav1.GetOptions{})
-		if err != nil {
-			if apierrors.IsNotFound(err) {
-				return nil
-			}
-			return fmt.Errorf("failed to get NVCA deployment %s/%s: %w", systemNS, nvcaDeploymentName, err)
+		configReady := false
+		if _, cur, err := m.getAgentConfig(ctx, systemNS); err == nil {
+			configReady = configHasFeatureFlag(cur, cordonAndDrainFeatureFlag) == drain
 		}
 
-		desired := int32(1)
-		if deploy.Spec.Replicas != nil {
-			desired = *deploy.Spec.Replicas
+		rolloutReady := false
+		deploy, err := m.cs.AppsV1().Deployments(systemNS).Get(ctx, nvcaDeploymentName, metav1.GetOptions{})
+		switch {
+		case apierrors.IsNotFound(err):
+			rolloutReady = false
+		case err == nil:
+			desired := int32(1)
+			if deploy.Spec.Replicas != nil {
+				desired = *deploy.Spec.Replicas
+			}
+			rolloutReady = deploy.Status.ObservedGeneration >= deploy.Generation &&
+				deploy.Status.UpdatedReplicas == desired &&
+				deploy.Status.AvailableReplicas == desired &&
+				deploy.Status.UnavailableReplicas == 0
 		}
-		// ObservedGeneration must catch up to the spec generation first, otherwise
-		// the status still reflects the previous rollout and we could report
-		// completion before the restart we just triggered has even begun.
-		if deploy.Status.ObservedGeneration >= deploy.Generation &&
-			deploy.Status.UpdatedReplicas == desired &&
-			deploy.Status.AvailableReplicas == desired &&
-			deploy.Status.UnavailableReplicas == 0 {
+
+		if configReady && rolloutReady {
 			return nil
 		}
 
 		if time.Now().After(deadline) {
-			return fmt.Errorf("timeout waiting for NVCA deployment %s/%s rollout", systemNS, nvcaDeploymentName)
+			return fmt.Errorf("timeout waiting for the NVCA operator to reconcile NVCFBackend %s and roll out %s/%s", backendNS, systemNS, nvcaDeploymentName)
 		}
 		select {
 		case <-ctx.Done():
@@ -319,8 +419,11 @@ func (m *k8sMaintainer) KillFunction(ctx context.Context, functionID, versionID 
 	if err != nil {
 		return nil, err
 	}
+	if err := validateKillTimeout(opts.Timeout); err != nil {
+		return nil, err
+	}
 
-	result, err := m.killMatching(ctx, target, opts, func(fid, vid string) bool {
+	result, failures, err := m.killMatching(ctx, target, opts, func(fid, vid string) bool {
 		return fid == functionID && (versionID == "" || vid == versionID)
 	})
 	if err != nil {
@@ -332,7 +435,7 @@ func (m *k8sMaintainer) KillFunction(ctx context.Context, functionID, versionID 
 		}
 		return nil, fmt.Errorf("no scheduled function found for function %s in namespace %s", functionID, target.RequestsNamespace)
 	}
-	return result, aggregateKillError(result)
+	return result, aggregateKillError(result, failures)
 }
 
 // KillAll terminates every ICMSRequest on the cluster. An empty cluster returns
@@ -342,12 +445,24 @@ func (m *k8sMaintainer) KillAll(ctx context.Context, opts KillOptions) (*KillRes
 	if err != nil {
 		return nil, err
 	}
+	if err := validateKillTimeout(opts.Timeout); err != nil {
+		return nil, err
+	}
 
-	result, err := m.killMatching(ctx, target, opts, func(string, string) bool { return true })
+	result, failures, err := m.killMatching(ctx, target, opts, func(string, string) bool { return true })
 	if err != nil {
 		return nil, err
 	}
-	return result, aggregateKillError(result)
+	return result, aggregateKillError(result, failures)
+}
+
+// validateKillTimeout rejects a negative --timeout. Zero is valid: it means
+// "use DefaultKillTimeout" (handled in killMatching).
+func validateKillTimeout(timeout time.Duration) error {
+	if timeout < 0 {
+		return fmt.Errorf("--timeout must not be negative, got %s", timeout)
+	}
+	return nil
 }
 
 // killMatching lists ICMSRequests in the requests namespace, selects the ones
@@ -357,10 +472,14 @@ func (m *k8sMaintainer) KillAll(ctx context.Context, opts KillOptions) (*KillRes
 // recorded in the NVCFBackend CR's requestsNamespace field. The inspector's
 // all-namespace scan is a visibility-only read path that tolerates stale state;
 // kill operations use the authoritative namespace to avoid accidental cross-cluster deletions.
-func (m *k8sMaintainer) killMatching(ctx context.Context, target *ClusterTarget, opts KillOptions, match func(functionID, versionID string) bool) (*KillResult, error) {
+// The second return value collects the underlying error for each per-item
+// delete failure (distinct from the KilledRequest.Error strings, which exist
+// for JSON/text output). Callers wrap these into the aggregate error so
+// errors.Is/errors.As can still reach the original cause.
+func (m *k8sMaintainer) killMatching(ctx context.Context, target *ClusterTarget, opts KillOptions, match func(functionID, versionID string) bool) (*KillResult, []error, error) {
 	items, err := listICMSRequests(ctx, m.dc, target.RequestsNamespace)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	sortICMSRequests(items)
 
@@ -373,6 +492,12 @@ func (m *k8sMaintainer) killMatching(ctx context.Context, target *ClusterTarget,
 		Affected:          []KilledRequest{},
 	}
 
+	timeout := opts.Timeout
+	if timeout == 0 {
+		timeout = DefaultKillTimeout
+	}
+
+	var failures []error
 	for i := range items {
 		fid, vid := functionIdentity(items[i].Object)
 		if !match(fid, vid) {
@@ -385,10 +510,19 @@ func (m *k8sMaintainer) killMatching(ctx context.Context, target *ClusterTarget,
 			FunctionVersionID: vid,
 		}
 		if !opts.DryRun {
-			if err := m.deleteICMSRequest(ctx, killed.Namespace, killed.Name, opts.Force); err != nil {
+			terminating, err := m.deleteICMSRequest(ctx, killed.Namespace, killed.Name, opts.Force, timeout)
+			switch {
+			case err != nil:
 				killed.Error = err.Error()
 				result.FailedCount++
-			} else {
+				failures = append(failures, fmt.Errorf("%s/%s: %w", killed.Namespace, killed.Name, err))
+			case terminating:
+				// The delete was accepted (deletionTimestamp set) but NVCA had not
+				// removed its finalizer and evicted the workload by the deadline.
+				// This is not a failure to report deletion as complete when it is not.
+				killed.Terminating = true
+				result.TerminatingCount++
+			default:
 				// Audit line for the termination, including the operator-supplied
 				// reason. Carried in the result too, but this emits it to logs.
 				logging.Info("terminated ICMSRequest %s/%s (function=%s version=%s) reason=%q",
@@ -397,23 +531,93 @@ func (m *k8sMaintainer) killMatching(ctx context.Context, target *ClusterTarget,
 		}
 		result.Affected = append(result.Affected, killed)
 	}
-	return result, nil
+	return result, failures, nil
 }
 
-// deleteICMSRequest deletes one ICMSRequest. When force is set, it first strips
-// finalizers so a CR stuck Terminating is removed even if NVCA is not running.
-// A NotFound on delete is treated as success (the reconciler raced us).
-func (m *k8sMaintainer) deleteICMSRequest(ctx context.Context, namespace, name string, force bool) error {
+// deleteICMSRequest deletes one ICMSRequest and waits up to timeout for it to
+// actually disappear. When force is set, it first strips finalizers so a CR
+// stuck Terminating is removed even if NVCA is not running.
+//
+// Delete() only guarantees the deletion was accepted: when the object carries
+// a finalizer (nvca.finalizers.nvidia.io), the API server sets
+// deletionTimestamp and returns success while the object, and the pod it
+// owns, keep running until the NVCA reconciler removes the finalizer. Callers
+// must not treat a nil error from Delete alone as "the resource is gone."
+//
+// Returns (terminating=true, nil) when the delete was accepted but the object
+// still existed when the wait deadline elapsed. A NotFound at any point
+// (delete or poll) is treated as success (the reconciler raced us).
+func (m *k8sMaintainer) deleteICMSRequest(ctx context.Context, namespace, name string, force bool, timeout time.Duration) (bool, error) {
 	if force {
 		if err := m.stripFinalizers(ctx, namespace, name); err != nil {
-			return err
+			return false, err
 		}
 	}
 	err := m.dc.Resource(icmsRequestGVR).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{})
-	if err != nil && !apierrors.IsNotFound(err) {
-		return err
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
 	}
-	return nil
+	return m.waitForICMSRequestGone(ctx, namespace, name, timeout)
+}
+
+// waitForICMSRequestGone polls until the ICMSRequest is gone or timeout
+// elapses. It returns (true, nil) rather than an error on timeout: the
+// request was validly accepted for deletion, it just has not finished yet.
+// Both the Get call and the poll sleep are bounded by the deadline, so a slow
+// or blocked API call cannot make the wait overrun the configured timeout,
+// and a timeout shorter than killDeletionPollInterval is still honored
+// instead of sleeping through the whole poll interval regardless.
+func (m *k8sMaintainer) waitForICMSRequestGone(ctx context.Context, namespace, name string, timeout time.Duration) (bool, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		getCtx, cancel := context.WithDeadline(ctx, deadline)
+		_, err := m.dc.Resource(icmsRequestGVR).Namespace(namespace).Get(getCtx, name, metav1.GetOptions{})
+		// Read getCtx.Err() before cancel(): cancel() makes every derived
+		// context report Canceled regardless of why it actually ended, so
+		// this is the only point where it still reflects the real cause.
+		localDeadlineExceeded := getCtx.Err() == context.DeadlineExceeded
+		cancel()
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				return false, nil
+			}
+			if ctx.Err() != nil {
+				// The caller's own context ended, not our synthetic deadline.
+				return false, ctx.Err()
+			}
+			if localDeadlineExceeded && errors.Is(err, context.DeadlineExceeded) {
+				// Our per-Get deadline (== the overall deadline) is what ended
+				// the call: treat exactly like a timeout that elapsed between
+				// polls. Both checks matter: getCtx.Err() alone would also
+				// match an unrelated client/transport-level timeout that
+				// races with our deadline; errors.Is(err, ...) alone would
+				// also match a spurious deadline-shaped error the transport
+				// returns well before our deadline actually elapses. Only
+				// requiring both guards against silently discarding a real,
+				// unrelated error (e.g. Forbidden) that happens to land in
+				// the same instant our deadline fires.
+				return true, nil
+			}
+			return false, err
+		}
+
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return true, nil
+		}
+		wait := killDeletionPollInterval
+		if remaining < wait {
+			wait = remaining
+		}
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-time.After(wait):
+		}
+	}
 }
 
 // stripFinalizers clears the finalizers on an ICMSRequest, mirroring the
@@ -441,11 +645,19 @@ func (m *k8sMaintainer) stripFinalizers(ctx context.Context, namespace, name str
 	})
 }
 
-func aggregateKillError(result *KillResult) error {
-	if result.FailedCount == 0 {
+// aggregateKillError summarizes a kill outcome. failures carries the
+// underlying per-item errors (wrapped with %w by the caller), so a caller
+// inspecting the returned error with errors.Is/errors.As can still reach the
+// original cause behind the summary text.
+func aggregateKillError(result *KillResult, failures []error) error {
+	switch {
+	case result.FailedCount > 0:
+		return fmt.Errorf("failed to terminate %d of %d ICMSRequest(s): %w", result.FailedCount, len(result.Affected), errors.Join(failures...))
+	case result.TerminatingCount > 0:
+		return fmt.Errorf("%d of %d ICMSRequest(s) still terminating: NVCA has not finished evicting the workload; re-check with cluster agent get-function", result.TerminatingCount, len(result.Affected))
+	default:
 		return nil
 	}
-	return fmt.Errorf("failed to terminate %d of %d ICMSRequest(s)", result.FailedCount, len(result.Affected))
 }
 
 // --- agent-config YAML edits ---
@@ -455,6 +667,36 @@ func aggregateKillError(result *KillResult) error {
 // of the file. A structured re-marshal was rejected because it reorders keys and
 // drops comments. Missing sections degrade to a no-op rather than corrupting the
 // file.
+
+// configHasFeatureFlag reports whether featureFlag is listed in the
+// featureFlags: section of configYAML. Unlike checking
+// addFeatureFlagToConfig's return value for a no-op, this is a pure
+// membership check: addFeatureFlagToConfig also returns configYAML
+// unchanged when there is no featureFlags: (or even agent:) section to
+// insert into at all, which would misreport an absent flag as present.
+func configHasFeatureFlag(configYAML, featureFlag string) bool {
+	inFlags := false
+	for _, line := range strings.Split(configYAML, "\n") {
+		trimmed := strings.TrimLeft(line, " \t")
+		if trimmed == "featureFlags:" {
+			inFlags = true
+			continue
+		}
+		if !inFlags {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "- ") {
+			if trimmed == "- "+featureFlag {
+				return true
+			}
+			continue
+		}
+		if trimmed != "" {
+			inFlags = false
+		}
+	}
+	return false
+}
 
 func addFeatureFlagToConfig(configYAML, featureFlag string) string {
 	lines := strings.Split(configYAML, "\n")
@@ -494,79 +736,6 @@ func addFeatureFlagToConfig(configYAML, featureFlag string) string {
 	}
 
 	return configYAML
-}
-
-func removeFeatureFlagFromConfig(configYAML, featureFlag string) string {
-	lines := strings.Split(configYAML, "\n")
-
-	// Remove the flag only within the featureFlags: section.
-	inFlags := false
-	without := make([]string, 0, len(lines))
-	for _, line := range lines {
-		trimmed := strings.TrimLeft(line, " \t")
-		if trimmed == "featureFlags:" {
-			inFlags = true
-		} else if inFlags && !strings.HasPrefix(trimmed, "- ") && trimmed != "" {
-			inFlags = false
-		}
-		if inFlags && trimmed == "- "+featureFlag {
-			continue
-		}
-		without = append(without, line)
-	}
-
-	// Drop an orphaned featureFlags: key whose list is now empty.
-	out := make([]string, 0, len(without))
-	for i, line := range without {
-		if strings.TrimLeft(line, " \t") == "featureFlags:" {
-			hasItem := false
-			for j := i + 1; j < len(without); j++ {
-				trimmed := strings.TrimLeft(without[j], " \t")
-				if trimmed == "" {
-					continue
-				}
-				hasItem = strings.HasPrefix(trimmed, "- ")
-				break
-			}
-			if !hasItem {
-				continue
-			}
-		}
-		out = append(out, line)
-	}
-	return strings.Join(out, "\n")
-}
-
-func addMaintenanceModeToConfig(configYAML, maintenanceMode string) string {
-	lines := strings.Split(configYAML, "\n")
-
-	for i, line := range lines {
-		if strings.HasPrefix(strings.TrimLeft(line, " \t"), "maintenanceMode:") {
-			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
-			lines[i] = indent + "maintenanceMode: " + maintenanceMode
-			return strings.Join(lines, "\n")
-		}
-	}
-
-	for i, line := range lines {
-		if strings.TrimRight(line, " \t\r") == "agent:" {
-			lines = insertAfter(lines, i, "  maintenanceMode: "+maintenanceMode)
-			break
-		}
-	}
-	return strings.Join(lines, "\n")
-}
-
-func clearMaintenanceModeFromConfig(configYAML string) string {
-	lines := strings.Split(configYAML, "\n")
-	out := make([]string, 0, len(lines))
-	for _, line := range lines {
-		if strings.HasPrefix(strings.TrimLeft(line, " \t"), "maintenanceMode:") {
-			continue
-		}
-		out = append(out, line)
-	}
-	return strings.Join(out, "\n")
 }
 
 func insertAfter(lines []string, index int, newLine string) []string {

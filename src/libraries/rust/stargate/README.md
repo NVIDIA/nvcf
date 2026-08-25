@@ -91,6 +91,10 @@ load-balancer topology for production backend traffic.
 - `crates/mock-dynamo`: local OpenAI-style backend
 - `crates/stargate-bench`: benchmark runner
 
+The versioned Stargate runtime image also includes
+`/usr/local/bin/stargate-k8s-router`. Kubernetes deployments can run the main
+Stargate process and the backend router from the same immutable image tag.
+
 ## Benchmarks
 
 ```bash

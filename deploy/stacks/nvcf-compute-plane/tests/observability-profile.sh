@@ -57,6 +57,14 @@ collector_image_tag() {
   ' "$1"
 }
 
+collector_image_repository() {
+  awk '
+    /^selfManaged:$/ { self_managed = 1; next }
+    self_managed && /^  otelCollector:$/ { collector = 1; next }
+    collector && /^    imageRepository:/ { gsub(/"/, "", $2); print $2; exit }
+  ' "$1"
+}
+
 operator_image_tag() {
   awk '
     /^image:$/ { image = 1; next }
@@ -76,22 +84,26 @@ for profile in default disabled control compute all; do
   render_values "$profile" "$values"
 
   case "$profile" in
-    default|compute|all)
-      test "$(collector_enabled "$values")" = "true" ||
-        fail "$profile profile did not enable the NVCA collector"
-      ;;
-    disabled|control)
+    default|disabled|control|compute|all)
       test "$(collector_enabled "$values")" = "false" ||
-        fail "$profile profile enabled the NVCA collector"
+        fail "$profile profile enabled the self-managed NVCA collector by default"
       ;;
   esac
 done
 
-expected_nvca_version="3.2.7"
+expected_nvca_version="3.2.12"
 test "$(operator_image_tag "$work_dir/default.yaml")" = "$expected_nvca_version" ||
   fail "default operator image tag is not $expected_nvca_version"
 test "$(nvca_version "$work_dir/default.yaml")" = "$expected_nvca_version" ||
   fail "default NVCA version is not $expected_nvca_version"
+
+render_values compute "$work_dir/ncp-dev-default.yaml" \
+  --state-values-set-string global.image.registry=nvcr.io \
+  --state-values-set-string global.image.repository=0651155215864979/ncp-dev
+
+test "$(collector_image_repository "$work_dir/ncp-dev-default.yaml")" = \
+  "nvcr.io/0651155215864979/ncp-dev/nvcf-otel-collector" ||
+  fail "collector image repository did not inherit the global image repository"
 
 render_values compute "$work_dir/compute-overrides.yaml" \
   --state-values-set-string global.nvcaOperator.imageTag=operator-test-tag \

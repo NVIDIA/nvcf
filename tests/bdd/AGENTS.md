@@ -20,15 +20,23 @@ meaningful target, value, context, and timeout visible while hiding only
 command or output-format mechanics. Keep `When I run command` plus an
 assertion as the escape hatch for uncommon or command-specific behavior.
 
+Function lifecycle steps are a narrow command-adapter exception. They store
+only the selected `nvcf-cli` config, pass visible arguments to one CLI command,
+and preserve the real command result. They do not store function identity,
+apply defaults, parse or normalize product values, or enforce product
+preconditions. Their `successfully` wording asserts exit code 0 to keep happy
+paths compact. Use raw command steps for negative and exit-code-specific cases
+so `nvcf-cli` and the NVCF API remain the product-validation boundary.
+
 ## Layering
 
 - `harness/` owns suite lifecycle: `Config`, `CommandRunner`, `Ledger`,
   `CommandCache`, `Suite`. Step handlers depend on these; nothing else
   does.
 - `dsl/` owns pure helpers: `${VAR}` interpolation, dotted-path YAML
-  upsert and read, YAML subtree match/contain, kubectl manifest
-  builders, JSON row matching. Every helper is unit-testable in
-  isolation. No I/O coordination, no Godog dependency.
+  upsert and read, YAML subtree match/contain, self-managed secrets
+  rendering, kubectl manifest builders, JSON row matching. Every helper
+  is unit-testable in isolation. No I/O coordination, no Godog dependency.
 - `steps/` owns Godog step handlers and `ScenarioContext`. Each
   handler is one or two lines plus a delegate to a `dsl` helper or
   `Suite.Runner`.
@@ -44,20 +52,32 @@ logic into `dsl/`.
 - `${VAR}` interpolation is the only env-var form the DSL recognizes;
   a bare `$word` is left literal. Implementations must not use
   `os.ExpandEnv`. Expansion lives in `dsl.Interpolate`.
+- Function lifecycle CLI option tables preserve row order, repeated options,
+  empty values, and product-invalid values. Only the `option | value` table
+  structure is validated before the command runs.
+- Gateway API route readiness tables expose each route's kind, name,
+  namespace, and intended Gateway parent plus the shared context and timeout.
+  The step requires `Accepted=True` and `ResolvedRefs=True` for that parent but
+  does not allowlist route kinds or duplicate Gateway API validation.
 - File-mutating steps (`I copy the file`, `I update yaml file`,
-  `I substitute`) snapshot the destination through `Suite.Ledger`
-  before the first write. Suite teardown restores every snapshotted
-  path.
+  `I prepare self-managed secrets file`, `I substitute a block`)
+  snapshot the destination through `Suite.Ledger` before the first write.
+  Suite teardown restores every snapshotted path.
 - `Given command has succeeded:` keys on the fully resolved command
   text. Two scenarios whose pre-interpolation text matches but whose
   env vars differ must miss the cache. The cache lives in
   `Suite.Cache`.
 - Bootstrap Givens (`a single-cluster ncp-local cluster is running`,
-  `multi-cluster ncp-local compute clusters are running:`, `the ...
-  image pull secret exists in namespaces:`) each wrap exactly one
-  Make target or one `kubectl apply` per row. Caching is idempotent
-  per suite; the underlying Make runs at most once even if multiple
-  scenarios name the Given.
+  `multi-cluster ncp-local compute clusters are running:`, `Helm is
+  authenticated to OCI registry ...`, `the ... image pull secret exists in
+  namespaces:`) each wrap exactly one Make target or one Helm invocation. The
+  image pull secret Given applies one namespace manifest and one docker-registry
+  secret manifest per row. Caching is idempotent per suite; the underlying
+  bootstrap runs at most once even if multiple scenarios name the Given.
+- The Helm OCI registry authentication Given reads `NGC_API_KEY` from the
+  process environment and passes it only through
+  `CommandRunner.RunWithSensitiveStdin`. The key must never be interpolated
+  into command text, argv, command logs, captured output, or failure messages.
 - Features that bring up a `tools/ncp-local-cluster` topology must
   include a conflict precheck in their Background before the
   bootstrap Given, asserting the OTHER topology is absent. Use
