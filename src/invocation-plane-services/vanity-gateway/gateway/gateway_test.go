@@ -32,44 +32,13 @@ func TestNewNVCFGatewayRequiresAPIEndpoint(t *testing.T) {
 	require.Contains(t, err.Error(), "NVCF_API_ENDPOINT is required")
 }
 
-func TestParseMappingLoadTimeout(t *testing.T) {
-	tests := []struct {
-		name        string
-		raw         string
-		wantTimeout time.Duration
-		wantErr     string
-	}{
-		{
-			name:        "empty uses default",
-			raw:         "",
-			wantTimeout: 0,
-		},
-		{
-			name:        "duration",
-			raw:         "2m",
-			wantTimeout: 2 * time.Minute,
-		},
-		{
-			name:    "invalid",
-			raw:     "120",
-			wantErr: "MAPPING_LOAD_TIMEOUT must be a valid duration",
-		},
-		{
-			name:    "zero",
-			raw:     "0s",
-			wantErr: "MAPPING_LOAD_TIMEOUT must be greater than 0",
-		},
-	}
+func TestNewNVCFGatewayRejectsNegativeMappingLoadTimeout(t *testing.T) {
+	gateway, err := NewNVCFGateway(nil, Config{
+		NvcfApiEndpoint:    "https://api.example.com",
+		MappingPath:        "config.yaml",
+		MappingLoadTimeout: -5 * time.Second,
+	})
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := parseMappingLoadTimeout(tc.raw)
-			if tc.wantErr != "" {
-				require.ErrorContains(t, err, tc.wantErr)
-				return
-			}
-			require.NoError(t, err)
-			require.Equal(t, tc.wantTimeout, got)
-		})
-	}
+	require.Nil(t, gateway)
+	require.ErrorContains(t, err, "MAPPING_LOAD_TIMEOUT must not be negative")
 }

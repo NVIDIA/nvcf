@@ -39,16 +39,16 @@ import (
 )
 
 type Config struct {
-	OTELExporterOTLPEndpoint     string `mapstructure:"OTEL_EXPORTER_OTLP_ENDPOINT"`
-	TracingAccessToken           string `mapstructure:"TRACING_ACCESS_TOKEN"`
-	SecretsPath                  string `mapstructure:"SECRETS_PATH"`
-	MappingPath                  string `mapstructure:"MAPPING_PATH"`
-	MappingLoadTimeout           string `mapstructure:"MAPPING_LOAD_TIMEOUT"`
-	NvcfApiEndpoint              string `mapstructure:"NVCF_API_ENDPOINT"`
-	PrivateModelNameRegexPattern string `mapstructure:"PRIVATE_MODEL_NAME_REGEX_PATTERN"`
-	PodIP                        string `mapstructure:"POD_IP"`
-	AWSRegion                    string `mapstructure:"AWS_REGION"`
-	ShadowMaxConcurrent          int    `mapstructure:"SHADOW_MAX_CONCURRENT"`
+	OTELExporterOTLPEndpoint     string        `mapstructure:"OTEL_EXPORTER_OTLP_ENDPOINT"`
+	TracingAccessToken           string        `mapstructure:"TRACING_ACCESS_TOKEN"`
+	SecretsPath                  string        `mapstructure:"SECRETS_PATH"`
+	MappingPath                  string        `mapstructure:"MAPPING_PATH"`
+	MappingLoadTimeout           time.Duration `mapstructure:"MAPPING_LOAD_TIMEOUT"`
+	NvcfApiEndpoint              string        `mapstructure:"NVCF_API_ENDPOINT"`
+	PrivateModelNameRegexPattern string        `mapstructure:"PRIVATE_MODEL_NAME_REGEX_PATTERN"`
+	PodIP                        string        `mapstructure:"POD_IP"`
+	AWSRegion                    string        `mapstructure:"AWS_REGION"`
+	ShadowMaxConcurrent          int           `mapstructure:"SHADOW_MAX_CONCURRENT"`
 }
 
 type NVCFGateway struct {
@@ -88,9 +88,8 @@ func NewNVCFGateway(logger *logs.ZapLogger, config Config) (*NVCFGateway, error)
 	if config.MappingPath == "" {
 		return nil, fmt.Errorf("MAPPING_PATH is required")
 	}
-	mappingLoadTimeout, err := parseMappingLoadTimeout(config.MappingLoadTimeout)
-	if err != nil {
-		return nil, err
+	if config.MappingLoadTimeout < 0 {
+		return nil, fmt.Errorf("MAPPING_LOAD_TIMEOUT must not be negative")
 	}
 
 	if config.TracingAccessToken == "" {
@@ -114,7 +113,7 @@ func NewNVCFGateway(logger *logs.ZapLogger, config Config) (*NVCFGateway, error)
 		return nil, fmt.Errorf("failed to setup shadow metrics: %w", err)
 	}
 
-	mappings, err := gatewayConfig.SetupConfigWithConfigPathAndTimeout(config.MappingPath, mappingLoadTimeout)
+	mappings, err := gatewayConfig.SetupConfigWithConfigPathAndTimeout(config.MappingPath, config.MappingLoadTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load mapping configuration: %w", err)
 	}
@@ -170,18 +169,4 @@ func NewNVCFGateway(logger *logs.ZapLogger, config Config) (*NVCFGateway, error)
 			servers.WithAdditionalServers(http2ServerPair),
 		),
 	}, nil
-}
-
-func parseMappingLoadTimeout(raw string) (time.Duration, error) {
-	if raw == "" {
-		return 0, nil
-	}
-	timeout, err := time.ParseDuration(raw)
-	if err != nil {
-		return 0, fmt.Errorf("MAPPING_LOAD_TIMEOUT must be a valid duration: %w", err)
-	}
-	if timeout <= 0 {
-		return 0, fmt.Errorf("MAPPING_LOAD_TIMEOUT must be greater than 0")
-	}
-	return timeout, nil
 }
