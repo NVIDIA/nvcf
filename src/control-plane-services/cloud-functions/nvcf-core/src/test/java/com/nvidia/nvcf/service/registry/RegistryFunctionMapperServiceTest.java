@@ -20,12 +20,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;
 
 import com.nvidia.boot.registries.service.registry.RegistryMapperService;
+import com.nvidia.boot.registries.service.registry.dto.ArtifactTypeEnum;
 import com.nvidia.nvcf.persistence.registry.RegistryCredentialsByAccountRepository;
 import com.nvidia.nvcf.persistence.registry.entity.ArtifactType;
 import com.nvidia.nvcf.persistence.registry.entity.ProvisionedBy;
 import com.nvidia.nvcf.persistence.registry.entity.RegistryCredentialByAccountEntity;
 import com.nvidia.nvcf.persistence.registry.entity.RegistryCredentialByAccountKey;
 import com.nvidia.nvcf.rest.function.management.dto.SecretDto;
+import com.nvidia.nvcf.rest.registry.dto.RegistryCredentialDetailsDto;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.Optional;
@@ -68,6 +70,49 @@ class RegistryFunctionMapperServiceTest {
         var result = mapper().toRegistryCredentialDetailsDto(entity);
 
         assertThat(result.keyType()).isEqualTo(expectedKeyType);
+    }
+
+    @Test
+    void shouldPopulateRegistryCredentialIdWhenMappingToTempRegistryCredentialDetailsDto() {
+        var registryCredentialId = UUID.randomUUID();
+        var ncaId = "account-id";
+        var detailsDto = RegistryCredentialDetailsDto.builder()
+                .registryCredentialId(registryCredentialId)
+                .ncaId(ncaId)
+                .registryName("ngc")
+                .registryHostname("nvcr.io")
+                .registryCredentialName("registry-credential")
+                .artifactTypes(Set.of(ArtifactTypeEnum.CONTAINER))
+                .build();
+        when(registryCredentialEssService.getRegistryCredentialSecret(ncaId, registryCredentialId))
+                .thenReturn(Optional.of(secret("$oauthtoken:nvapi-key")));
+
+        var result = mapper().toTempRegistryCredentialDetailsDto(detailsDto);
+
+        assertThat(result).isNotNull();
+        assertThat(result.registryCredentialId()).isEqualTo(registryCredentialId);
+        assertThat(result.registryHostname()).isEqualTo("nvcr.io");
+        assertThat(result.secret()).isNotNull();
+    }
+
+    @Test
+    void shouldReturnNullTempRegistryCredentialDetailsDtoWhenEssSecretIsUnavailable() {
+        var registryCredentialId = UUID.randomUUID();
+        var ncaId = "account-id";
+        var detailsDto = RegistryCredentialDetailsDto.builder()
+                .registryCredentialId(registryCredentialId)
+                .ncaId(ncaId)
+                .registryName("ngc")
+                .registryHostname("nvcr.io")
+                .registryCredentialName("registry-credential")
+                .artifactTypes(Set.of(ArtifactTypeEnum.CONTAINER))
+                .build();
+        when(registryCredentialEssService.getRegistryCredentialSecret(ncaId, registryCredentialId))
+                .thenReturn(Optional.empty());
+
+        var result = mapper().toTempRegistryCredentialDetailsDto(detailsDto);
+
+        assertThat(result).isNull();
     }
 
     @Test
