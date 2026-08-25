@@ -5,7 +5,7 @@ Run a full NVCF self-hosted stack on your laptop using
 local-k3d tooling lives at `tools/ncp-local-cluster/` in this repo.
 
 <Info>
-This setup is for **local development only**. It uses fake GPUs, a single
+This setup is only for local development. It uses fake GPUs, a single
 Cassandra replica, and ephemeral storage. Do not use this for production
 workloads.
 </Info>
@@ -32,17 +32,17 @@ Four canonical flows are covered below: pick a topology from
 
 ## Topologies
 
-**Single-cluster** brings up one k3d cluster named `ncp-local`. Control
+Single-cluster topology: This brings up one k3d cluster named `ncp-local`. Control
 plane and compute plane share the cluster. The fastest path for
 function-lifecycle testing and basic install validation.
 
-**Multi-cluster** brings up `ncp-local-cp` plus `ncp-local-compute-N`
+Multi-cluster topology: This brings up `ncp-local-cp` plus `ncp-local-compute-N`
 (N=1 by default). Control plane lives on the cp cluster; compute plane on
 the compute cluster. Required when you need to exercise cross-cluster
 registration, the OIDC/JWKS discovery flow, or the `.test` hostname
 routing the cp Gateway exposes to compute workers.
 
-The two topologies are **mutually exclusive**: both claim host ports
+The two topologies cannot run at the same time. Both claim host ports
 8080/8443/4222. Destroy one before bringing up the other:
 
 ```bash
@@ -55,14 +55,21 @@ make -C tools/ncp-local-cluster destroy-multicluster
 
 ## Install paths
 
-**CLI** drives the install through `nvcf-cli self-hosted install
+CLI path: The CLI drives the install through `nvcf-cli self-hosted install
 --control-plane` (writes a control-plane profile YAML), `nvcf-cli init`
 (mints the admin JWT against the live api-keys service), and
-`nvcf-cli compute-plane register/install` (writes compute-plane values
-and applies them). The CLI manages URL block selection (in-cluster vs
-cross-cluster reachable) based on the kube contexts you pass.
+`nvcf-cli self-hosted compute-plane register` (writes compute-plane values),
+followed by `nvcf-cli self-hosted compute-plane install` (applies them). The
+CLI manages URL block selection (in-cluster vs cross-cluster reachable) based
+on the kube contexts you pass.
 
-**Helmfile** drives the install through split Make targets:
+Repository-built CLI binaries do not contain the stack OCI defaults injected
+into packaged releases. Pass
+`--control-plane-stack deploy/stacks/self-managed` and
+`--compute-plane-stack deploy/stacks/nvcf-compute-plane` in the CLI path. Use
+both directories from the same checkout.
+
+Helmfile path: Helmfile drives the install through split Make targets:
 `deploy/stacks/self-managed/Makefile` for control plane (`make template`,
 `make install`) and `deploy/stacks/nvcf-compute-plane/Makefile` for
 compute plane (`make register-cluster`, `make install`). The operator authors
@@ -82,7 +89,7 @@ the rationale.
 - `helmfile` >= 1.1.0, < 1.2.0 (Helmfile flows only)
 - `helm-diff` plugin (Helmfile flows only):
   `helm plugin install https://github.com/databus23/helm-diff`
-- An **NGC API key** with access to the NVCF chart and image registry.
+- An NGC API key with access to the NVCF chart and image registry.
 - `nvcf-cli` built from this repo:
 
   ```bash

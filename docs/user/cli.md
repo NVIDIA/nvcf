@@ -53,6 +53,21 @@ remote cache for this build:
 bazel build --remote_cache= //src/clis/nvcf-cli:nvcf-cli
 ```
 
+Repository builds do not embed the stack OCI defaults supplied to packaged CLI
+releases. Pass the matching stack paths when you run self-hosted commands from
+a source checkout:
+
+```bash
+nvcf-cli self-hosted \
+  --control-plane-stack deploy/stacks/self-managed \
+  --compute-plane-stack deploy/stacks/nvcf-compute-plane \
+  <subcommand>
+```
+
+Use both stacks from the same checkout. A command only needs the stack it
+operates on, but keeping both flags in a multi-plane workflow makes the source
+selection explicit.
+
 ### Download from NGC
 
 The CLI is available as a resource from NGC. See
@@ -462,11 +477,13 @@ Use these commands to install and inspect self-hosted NVCF deployments. For the 
 | `self-hosted uninstall --compute-plane --cluster-name <cluster-name>` | Remove compute-plane components for the GPU cluster. |
 | `self-hosted uninstall --control-plane` | Remove control-plane components. |
 
-Bundle source overrides:
+Bundle sources:
 
 - `--control-plane-stack` selects the control-plane stack bundle.
 - `--compute-plane-stack` selects the compute-plane stack bundle.
 - Both flags accept local paths, git URLs, and `oci://` references.
+- Packaged binaries can include immutable OCI defaults injected by the release
+  build. Repository builds require explicit stack flags.
 
 `self-hosted up` supports only a single local k3d cluster. It requires
 `--env local`, a current `k3d-*` kube context, and no split-context flags. For
