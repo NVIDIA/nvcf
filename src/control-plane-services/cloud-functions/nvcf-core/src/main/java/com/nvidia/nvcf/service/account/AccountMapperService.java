@@ -76,7 +76,7 @@ public class AccountMapperService {
             AccountEntity accountEntity,
             Stream<TelemetryByAccountEntity> telemetryByAccountEntities,
             List<RegistryCredentialDetailsDto> registryCredentialDetailsDtos) {
-        var registryCredentials = toRegistryCredentialDtos(registryCredentialDetailsDtos);
+        var registryCredentials = toRegistryCredentialDetailsDtos(registryCredentialDetailsDtos);
         var ncaId = accountEntity.getNcaId();
         var telemetryDtos = telemetryMapperService.toTelemetryDtos(telemetryByAccountEntities);
         var currentNumberOfFunctions = (int) functionsRepository.countByNcaId(ncaId);
@@ -140,15 +140,8 @@ public class AccountMapperService {
         return Optional.of(clientEntity);
     }
 
-    /**
-     * Maps registry credential details to the account details response DTOs, including credential
-     * ids. Entries without an available secret are dropped.
-     *
-     * @param registryCredentialDetailsDtos the registry credential details for the account
-     * @return the response DTOs, or {@code null} when the account has no registry credentials
-     */
     @Nullable
-    private List<TempRegistryCredentialDetailsDto> toRegistryCredentialDtos(
+    private List<TempRegistryCredentialDetailsDto> toRegistryCredentialDetailsDtos(
             List<RegistryCredentialDetailsDto> registryCredentialDetailsDtos) {
         var registryCredentials = registryCredentialDetailsDtos.stream()
                 .map(registryFunctionMapperService::toTempRegistryCredentialDetailsDto)

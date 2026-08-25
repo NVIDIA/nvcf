@@ -26,10 +26,6 @@ import java.util.List;
 import java.util.Set;
 import lombok.Builder;
 
-/**
- * Account details returned by the hidden GET account endpoint. The {@code registryCredentials}
- * use {@link TempRegistryCredentialDetailsDto} so consumers receive each credential id.
- */
 @Builder
 @Schema(description = "Data Transfer Object(DTO) representing an account")
 public record AccountDetailsDto(

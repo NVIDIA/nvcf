@@ -372,10 +372,6 @@ class AccountControllerTest {
         return Stream.concat(jwtCases, apiKeyCases);
     }
 
-    /**
-     * Verifies the account details endpoint returns the account, and that each returned registry
-     * credential carries a non-null id and secret.
-     */
     @SneakyThrows
     @ParameterizedTest
     @MethodSource("getAccountsDetailsArgs")

@@ -28,12 +28,6 @@ import java.util.Set;
 import java.util.UUID;
 import lombok.Builder;
 
-/**
- * Temporary registry credential DTO for the hidden account details response. It mirrors
- * {@link RegistryCredentialDetailsDto} and adds the resolved {@code secret}. It exists only so the
- * account details endpoint consumed by Cloud Tasks can return the credential id alongside the
- * secret, and is expected to be removed in a follow-up PR once the response shape is finalized.
- */
 @Builder(toBuilder = true)
 @Schema(description = "Temporary registry credential details, including the resolved secret")
 public record TempRegistryCredentialDetailsDto(
