@@ -55,19 +55,41 @@ make -C tools/ncp-local-cluster destroy-multicluster
 
 ## Install paths
 
-CLI path: The CLI drives the install through `nvcf-cli self-hosted install
---control-plane` (writes a control-plane profile YAML), `nvcf-cli init`
-(mints the admin JWT against the live api-keys service), and
-`nvcf-cli self-hosted compute-plane register` (writes compute-plane values),
-followed by `nvcf-cli self-hosted compute-plane install` (applies them). The
-CLI manages URL block selection (in-cluster vs cross-cluster reachable) based
-on the kube contexts you pass.
+CLI path: The profile-and-values workflow installs the control plane, writes a
+control-plane profile, registers the compute plane, and installs the generated
+compute-plane values. For a repository-built CLI, run these commands from the
+repository root:
+
+```bash
+nvcf-cli self-hosted \
+  --control-plane-stack deploy/stacks/self-managed \
+  install --control-plane
+
+nvcf-cli init
+
+nvcf-cli self-hosted \
+  --compute-plane-stack deploy/stacks/nvcf-compute-plane \
+  compute-plane register \
+  --control-plane-profile deploy/stacks/self-managed/out/control-plane-profile.yaml \
+  --cluster-name <cluster-name> \
+  --kube-context <compute-plane-context>
+
+nvcf-cli self-hosted \
+  --compute-plane-stack deploy/stacks/nvcf-compute-plane \
+  compute-plane install \
+  --values deploy/stacks/nvcf-compute-plane/out/<cluster-name>-register-values.yaml \
+  --kube-context <compute-plane-context>
+```
+
+The alternative `self-hosted install --compute-plane` command registers the
+cluster itself before applying the compute-plane manifests. Do not run
+`cluster register` before that combined command. Use one compute-plane workflow
+or the other.
 
 Repository-built CLI binaries do not contain the stack OCI defaults injected
-into packaged releases. Pass
-`--control-plane-stack deploy/stacks/self-managed` and
-`--compute-plane-stack deploy/stacks/nvcf-compute-plane` in the CLI path. Use
-both directories from the same checkout.
+into packaged releases. The commands above pass the required stack explicitly.
+Use both stack directories from the same checkout. The CLI selects in-cluster
+or cross-cluster URLs from the kube contexts you pass.
 
 Helmfile path: Helmfile drives the install through split Make targets:
 `deploy/stacks/self-managed/Makefile` for control plane (`make template`,

@@ -473,15 +473,30 @@ Use these commands to install and inspect self-hosted NVCF deployments. For the 
 | `self-hosted up --cluster-name <cluster-name> --nca-id <nca-id> --region <region>` | Run the local k3d fresh-install flow. |
 | `self-hosted status` | Show a deployment health summary. |
 | `self-hosted install --control-plane` | Run the control-plane installation primitive. |
-| `self-hosted install --compute-plane --cluster-name <cluster-name>` | Run the compute-plane installation primitive for a registered GPU cluster. |
+| `self-hosted install --compute-plane --cluster-name <cluster-name>` | Register a GPU cluster and install its compute-plane manifests in one command. |
+| `self-hosted compute-plane register` | Register a GPU cluster from a control-plane profile and write compute-plane values. |
+| `self-hosted compute-plane install --values <path>` | Install compute-plane manifests from values written by `compute-plane register`. |
 | `self-hosted uninstall --compute-plane --cluster-name <cluster-name>` | Remove compute-plane components for the GPU cluster. |
 | `self-hosted uninstall --control-plane` | Remove control-plane components. |
+
+Choose one compute-plane workflow:
+
+1. Run `self-hosted compute-plane register`, then run
+   `self-hosted compute-plane install` with the generated values file. This is
+   the profile-and-values workflow.
+2. Run `self-hosted install --compute-plane` to register the cluster and apply
+   the compute-plane manifests in one command.
+
+Do not run `cluster register` before `self-hosted install --compute-plane`. The
+combined install command performs registration itself.
 
 Bundle sources:
 
 - `--control-plane-stack` selects the control-plane stack bundle.
 - `--compute-plane-stack` selects the compute-plane stack bundle.
 - Both flags accept local paths, git URLs, and `oci://` references.
+- The control-plane and compute-plane sources must come from the same checkout
+  or release. Do not combine stack revisions.
 - Packaged binaries can include immutable OCI defaults injected by the release
   build. Repository builds require explicit stack flags.
 
