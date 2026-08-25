@@ -345,8 +345,8 @@ export GATEWAY_ADDR="$(kubectl -n "$HTTP_GATEWAY_NAMESPACE" get "gateway/$HTTP_G
 export GRPC_GATEWAY_ADDR="$(kubectl -n "$GRPC_GATEWAY_NAMESPACE" get "gateway/$GRPC_GATEWAY_NAME" \
   -o jsonpath='{.status.addresses[0].value}')"
 
-test -n "$GATEWAY_ADDR"
-test -n "$GRPC_GATEWAY_ADDR"
+test -n "$GATEWAY_ADDR" || exit 1
+test -n "$GRPC_GATEWAY_ADDR" || exit 1
 ```
 
 Use `GATEWAY_ADDR` as the route hostname suffix for test environments without

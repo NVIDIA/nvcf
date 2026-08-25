@@ -161,8 +161,8 @@ User wants to bring up self-hosted NVCF on a fresh Kubernetes cluster (or k3d fo
      -o jsonpath='{.status.addresses[0].value}')"
    export GRPC_GATEWAY_ADDR="$(kubectl -n "$GRPC_GATEWAY_NAMESPACE" get "gateway/$GRPC_GATEWAY_NAME" \
      -o jsonpath='{.status.addresses[0].value}')"
-   test -n "$GATEWAY_ADDR"
-   test -n "$GRPC_GATEWAY_ADDR"
+   test -n "$GATEWAY_ADDR" || exit 1
+   test -n "$GRPC_GATEWAY_ADDR" || exit 1
    export STACK_DOMAIN="$GATEWAY_ADDR"
    ```
 

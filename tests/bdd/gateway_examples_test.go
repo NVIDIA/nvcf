@@ -85,6 +85,14 @@ func TestRemoteGatewayExamplesConfigureAWSNLBOnEnvoyService(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read %s: %v", example.path, err)
 			}
+			for _, guard := range []string{
+				`test -n "$GATEWAY_ADDR" || exit 1`,
+				`test -n "$GRPC_GATEWAY_ADDR" || exit 1`,
+			} {
+				if !bytes.Contains(body, []byte(guard)) {
+					t.Errorf("%s does not fail explicitly when a documented Gateway address is empty", example.path)
+				}
+			}
 
 			resources, err := documentedApplyResources(body)
 			if err != nil {
@@ -182,6 +190,9 @@ func documentedApplyResources(markdown []byte) ([]documentedResource, error) {
 			manifest.WriteString(scanner.Text())
 			manifest.WriteByte('\n')
 		}
+		if err := scanner.Err(); err != nil {
+			return nil, fmt.Errorf("scan kubectl apply manifest: %w", err)
+		}
 		if !foundEnd {
 			return nil, fmt.Errorf("kubectl apply heredoc has no EOF terminator")
 		}
@@ -204,6 +215,16 @@ func documentedApplyResources(markdown []byte) ([]documentedResource, error) {
 		return nil, fmt.Errorf("scan Markdown: %w", err)
 	}
 	return resources, nil
+}
+
+func TestDocumentedApplyResourcesPreservesScannerErrors(t *testing.T) {
+	markdown := "kubectl apply -f - <<EOF\n" +
+		strings.Repeat("x", bufio.MaxScanTokenSize+1) + "\nEOF\n"
+
+	_, err := documentedApplyResources([]byte(markdown))
+	if err == nil || !strings.Contains(err.Error(), "scan kubectl apply manifest:") {
+		t.Fatalf("documentedApplyResources() error = %v, want wrapped scanner error", err)
+	}
 }
 
 func findDocumentedResource(resources []documentedResource, kind, name string) *documentedResource {
