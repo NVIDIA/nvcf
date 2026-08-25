@@ -105,10 +105,9 @@ func TestRegisterUnauthenticatedRoutes_Info_RejectsNonGET(t *testing.T) {
 // TestRegisterUnauthenticatedRoutes_Info_RejectsNonGET_WithCORSMiddleware
 // wires /info through middleware.EnableCORS the same way runService does, to
 // guard against regressions where the CORS preflight short-circuit swallows
-// OPTIONS /info before it reaches the go-lib handler's 405 enforcement
-// (see NVBug 6664046: OPTIONS /info returned 204 instead of 405 in staging
-// because the plain-router test above doesn't apply the production
-// middleware chain).
+// OPTIONS /info before it reaches the go-lib handler's 405 enforcement. The
+// plain-router test above does not apply the production middleware chain, so
+// it cannot catch this class of bug on its own.
 func TestRegisterUnauthenticatedRoutes_Info_RejectsNonGET_WithCORSMiddleware(t *testing.T) {
 	router := mux.NewRouter()
 	router.Use(middleware.EnableCORS)
