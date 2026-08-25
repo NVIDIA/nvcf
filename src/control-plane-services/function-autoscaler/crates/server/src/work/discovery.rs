@@ -15,9 +15,7 @@
  * limitations under the License.
  */
 
-use crate::cassandra::{
-    cassandra_service::CassandraServiceManager, statements::ActiveFunctionTable,
-};
+use crate::cassandra::cassandra_service::CassandraServiceManager;
 use crate::metrics;
 use crate::models::ActiveFunctionDetails;
 use crate::timeseries_db::timeseries_db_client::TimeseriesDbClient;
@@ -277,11 +275,7 @@ async fn fetch_function_state(
     let page_size = 2000;
 
     let db_recently_invoked = cassandra_service
-        .get_active_functions_with_token_range(
-            &range,
-            page_size,
-            ActiveFunctionTable::RecentlyInvokedFunctions,
-        )
+        .get_active_functions_with_token_range(&range, page_size)
         .await?;
 
     let timeseries_db_active_functions =
@@ -429,10 +423,7 @@ async fn execute_function_actions(
     );
 
     cassandra_service
-        .add_new_active_functions_batch(
-            &actions.add_recently_invoked,
-            ActiveFunctionTable::RecentlyInvokedFunctions,
-        )
+        .add_new_active_functions_batch(&actions.add_recently_invoked)
         .await?;
 
     for function in &actions.add_recently_invoked {
