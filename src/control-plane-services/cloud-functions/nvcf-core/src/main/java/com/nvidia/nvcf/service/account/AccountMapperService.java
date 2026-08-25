@@ -140,6 +140,13 @@ public class AccountMapperService {
         return Optional.of(clientEntity);
     }
 
+    /**
+     * Maps registry credential details to the account details response DTOs, including credential
+     * ids. Entries without an available secret are dropped.
+     *
+     * @param registryCredentialDetailsDtos the registry credential details for the account
+     * @return the response DTOs, or {@code null} when the account has no registry credentials
+     */
     @Nullable
     private List<RegistryCredentialDtoWithID> toRegistryCredentialDtos(
             List<RegistryCredentialDetailsDto> registryCredentialDetailsDtos) {

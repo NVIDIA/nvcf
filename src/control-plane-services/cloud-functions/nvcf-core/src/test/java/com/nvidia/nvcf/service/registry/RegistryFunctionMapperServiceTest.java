@@ -72,6 +72,7 @@ class RegistryFunctionMapperServiceTest {
         assertThat(result.keyType()).isEqualTo(expectedKeyType);
     }
 
+    /** Verifies the credential id and secret are populated when the ESS secret is available. */
     @Test
     void shouldPopulateRegistryCredentialIdWhenMappingToRegistryCredentialDtoWithID() {
         var registryCredentialId = UUID.randomUUID();
@@ -95,6 +96,7 @@ class RegistryFunctionMapperServiceTest {
         assertThat(result.secret()).isNotNull();
     }
 
+    /** Verifies mapping returns {@code null} when the ESS secret cannot be retrieved. */
     @Test
     void shouldReturnNullRegistryCredentialDtoWithIDWhenEssSecretIsUnavailable() {
         var registryCredentialId = UUID.randomUUID();

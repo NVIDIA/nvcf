@@ -94,6 +94,15 @@ public class RegistryFunctionMapperService {
                 });
     }
 
+    /**
+     * Maps a registry credential detail to the account details response DTO, including its id.
+     * Fetches the secret from ESS and returns {@code null} when the secret is unavailable
+     * (logged at error level if the credential still exists in the DB, otherwise at debug level
+     * for a stale cache entry).
+     *
+     * @param registryCredentialDetailsDto the registry credential detail to map
+     * @return the response DTO with the credential id and secret, or {@code null} if no secret
+     */
     public RegistryCredentialDtoWithID toRegistryCredentialDtoWithID(
             RegistryCredentialDetailsDto registryCredentialDetailsDto) {
         var registryCredentialId = registryCredentialDetailsDto.registryCredentialId();
