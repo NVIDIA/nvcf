@@ -551,10 +551,10 @@ List the self-hosted cluster registrations stored in ICMS with the admin token:
 
 ```bash
 ./nvcf-cli cluster list-registered \
-  --nca-id <nca-id> \
   --icms-url "http://<GATEWAY_ADDR>"
 ```
 
+The NCA ID defaults to `nvcf-default`; use `--nca-id <nca-id>` to override it.
 Use `--json` for machine-readable output. `cluster list-registered` is distinct
 from `cluster list`, which lists NVCF cluster groups and requires API credentials
 with the corresponding NVCF API scope.

@@ -59,7 +59,6 @@ func TestClusterListRegisteredUsesICMSWithAdminToken(t *testing.T) {
 		require.NoError(t, icmsURLFlag.Value.Set(icmsURLValue))
 		icmsURLFlag.Changed = icmsURLChanged
 	})
-	require.NoError(t, cmd.Flags().Set(clusterFlagNcaID, "nvcf-default"))
 	require.NoError(t, cmd.Flags().Set(clusterFlagICMSURL, server.URL))
 	jsonOutput = false
 	t.Cleanup(func() { jsonOutput = false })
@@ -67,6 +66,7 @@ func TestClusterListRegisteredUsesICMSWithAdminToken(t *testing.T) {
 	var output bytes.Buffer
 	cmd.SetOut(&output)
 	t.Cleanup(func() { cmd.SetOut(nil) })
+	require.NoError(t, cmd.ValidateRequiredFlags())
 	require.NoError(t, cmd.RunE(cmd, nil))
 	assert.True(t, strings.Contains(output.String(), "test-compute-plane"), output.String())
 }

@@ -87,9 +87,8 @@ func initClusterRegistrationCmds() {
 	clusterCmd.AddCommand(clusterRotateCmd)
 	clusterCmd.AddCommand(clusterDeleteCmd)
 	clusterCmd.AddCommand(clusterListRegisteredCmd)
-	clusterListRegisteredCmd.Flags().String(clusterFlagNcaID, "", "NCA/tenant ID (required)")
+	clusterListRegisteredCmd.Flags().String(clusterFlagNcaID, "nvcf-default", "NCA/tenant ID")
 	addClusterICMSURLFlags(clusterListRegisteredCmd)
-	_ = clusterListRegisteredCmd.MarkFlagRequired(clusterFlagNcaID)
 
 	// Register flags
 	clusterRegisterCmd.Flags().String("name", "", "Cluster name (required)")
