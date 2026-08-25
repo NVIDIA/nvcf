@@ -33,10 +33,10 @@ import org.springframework.stereotype.Service;
 @Slf4j
 public class InstanceValidationService {
 
-    public static final String NVCT_VALIDATION_ERROR =
+    public static final String TASK_VALIDATION_ERROR =
             "%s must be provided when TaskDetails.TaskId is provided";
 
-    public static final String NVCT_DURATION_VALIDATION_ERROR =
+    public static final String TASK_DURATION_VALIDATION_ERROR =
             "LaunchSpecification.TerminationGracePeriodDuration "
                     + "must not be more than LaunchSpecification.MaxRuntimeDuration";
 
@@ -48,20 +48,18 @@ public class InstanceValidationService {
      * @throws com.nvidia.icms.errors.IcmsBadRequestException if a required field is absent
      *
      */
-    public void validationForNvct(@NotNull SpotInstanceRequestSchema spotRequest) {
+    public void validateTaskWorkload(@NotNull SpotInstanceRequestSchema spotRequest) {
         if (StringUtils.isBlank(getStringValue(spotRequest.getTaskId()))) {
             return;
         }
 
-        if (spotRequest.getMaxQueuedDuration() == null ||
-                StringUtils.isBlank(spotRequest.getMaxQueuedDuration().toString())) {
+        if (spotRequest.getMaxQueuedDuration() == null) {
             throwValidationError("LaunchSpecification.MaxQueuedDuration");
         }
-        if (spotRequest.getTerminationGracePeriodDuration() == null ||
-                StringUtils.isBlank(spotRequest.getTerminationGracePeriodDuration().toString())) {
+        if (spotRequest.getTerminationGracePeriodDuration() == null) {
             throwValidationError("LaunchSpecification.TerminationGracePeriodDuration");
         }
-        if (StringUtils.isBlank(getStringValue(spotRequest.getResultHandlingStrategy()))) {
+        if (spotRequest.getResultHandlingStrategy() != null) {
             throwValidationError("LaunchSpecification.ResultHandlingStrategy");
         }
         if (StringUtils.isBlank(spotRequest.getOwnerNcaIdForTask())) {
@@ -73,16 +71,17 @@ public class InstanceValidationService {
 
         // Termination grace period must not exceed max runtime duration
         if (spotRequest.getMaxRuntimeDuration() != null &&
-                spotRequest.getTerminationGracePeriodDuration().compareTo(spotRequest.getMaxRuntimeDuration()) > 0) {
-            log.error(NVCT_DURATION_VALIDATION_ERROR);
-            throw new IcmsBadRequestException(NVCT_DURATION_VALIDATION_ERROR);
+                spotRequest.getTerminationGracePeriodDuration()
+                        .compareTo(spotRequest.getMaxRuntimeDuration()) > 0) {
+            log.error(TASK_DURATION_VALIDATION_ERROR);
+            throw new IcmsBadRequestException(TASK_DURATION_VALIDATION_ERROR);
         }
 
         spotRequest.setAction(SpotInstanceRequestAction.REQUEST_SPOT_INSTANCES_FOR_TASK);
     }
 
     private static void throwValidationError(String fieldName) {
-        String errorMessage = String.format(NVCT_VALIDATION_ERROR, fieldName);
+        String errorMessage = String.format(TASK_VALIDATION_ERROR, fieldName);
         log.error(errorMessage);
         throw new IcmsBadRequestException(errorMessage);
     }

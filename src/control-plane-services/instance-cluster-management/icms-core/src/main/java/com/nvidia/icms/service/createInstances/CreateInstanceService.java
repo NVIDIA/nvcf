@@ -72,7 +72,7 @@ public class CreateInstanceService {
         logIncomingInstanceCreationRequest(instanceRequest);
 
         // Validations for taskId
-        instanceValidationService.validationForNvct(instanceRequest);
+        instanceValidationService.validateTaskWorkload(instanceRequest);
 
         byocValidationService.validateNotEmpty(instanceRequest.getNcaId(), instanceRequest.getGpu());
 
