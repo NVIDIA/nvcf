@@ -34,7 +34,8 @@ var clusterCmd = &cobra.Command{
 	Long: `Manage and query cluster resources and GPU availability.
 
 Available subcommands:
-- list: List available cluster groups`,
+- list: List available cluster groups
+- registration: Manage self-hosted cluster registrations`,
 }
 
 var clusterListCmd = &cobra.Command{

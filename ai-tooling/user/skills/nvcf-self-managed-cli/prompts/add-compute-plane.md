@@ -7,7 +7,7 @@ User has a working NVCF control plane (running somewhere) and wants to register 
 - **kubectl context for the new compute plane** in their `KUBECONFIG`.
 - **Public ICMS URL** of the existing control plane (e.g. `https://icms.nvcf.example.com`).
 - **Admin JWT** for the control plane's account, OR ability to mint one via `nvcf-cli init` against the control plane's public api endpoint. (Admin tokens come from the API Keys service via the public api gateway — kubectl access to the control plane is NOT required to obtain one.)
-- **A unique `--cluster-name`** that doesn't collide with already-registered clusters. Use `nvcf-cli cluster list` from a control-plane context to check.
+- A unique `--cluster-name` that doesn't collide with already-registered clusters. Use `nvcf-cli cluster registration list --nca-id=$NCA_ID --icms-url=$ICMS` to check.
 
 ## Steps
 
@@ -53,4 +53,4 @@ User has a working NVCF control plane (running somewhere) and wants to register 
 - **Re-registering the same cluster** (re-running on the same compute plane that was previously registered): expected, no-op semantics.
 - **Different physical cluster but same name**: the second attempt will reuse the ICMS row, but the new compute plane's JWKS will be silently *replaced* — the old compute plane's NVCA agent will start failing PSAT auth. **Confirm with the user** that they meant to overwrite.
 
-When in doubt, run `nvcf-cli cluster list` first and ask the user before proceeding with a name that already exists.
+When in doubt, run `nvcf-cli cluster registration list --nca-id=$NCA_ID --icms-url=$ICMS` first and ask the user before proceeding with a name that already exists.
