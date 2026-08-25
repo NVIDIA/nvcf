@@ -125,70 +125,21 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
             - "*.llm-request-router-headless.nvcf.svc.cluster.local"
         """
 
-      When I run command:
-        """
-        kubectl --context k3d-ncp-local-cp wait tcproute/llm-worker-grpc udproute/llm-worker-quic -n envoy-gateway-system --for=jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}'=True --timeout=2m
-        """
-      Then the command exit code should be 0
-
-      When I run command:
-        """
-        kubectl --context k3d-ncp-local-cp wait tcproute/llm-worker-grpc udproute/llm-worker-quic -n envoy-gateway-system --for=jsonpath='{.status.parents[0].conditions[?(@.type=="ResolvedRefs")].status}'=True --timeout=2m
-        """
-      Then the command exit code should be 0
-
       # These routes are installed by ncp-local before the Helmfile
       # stack, then become fully resolved once the control-plane
       # Services exist. Check route status here so Gateway wiring
       # failures point at the route layer instead of surfacing only
       # during function invocation.
-      When I run command:
-        """
-        kubectl --context k3d-ncp-local-cp wait httproute/nvcf-api-control-plane httproute/invocation-control-plane httproute/reval-control-plane -n nvcf --for=jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}'=True --timeout=2m
-        """
-      Then the command exit code should be 0
-
-      When I run command:
-        """
-        kubectl --context k3d-ncp-local-cp wait httproute/nvcf-api-control-plane httproute/invocation-control-plane httproute/reval-control-plane -n nvcf --for=jsonpath='{.status.parents[0].conditions[?(@.type=="ResolvedRefs")].status}'=True --timeout=2m
-        """
-      Then the command exit code should be 0
-
-      When I run command:
-        """
-        kubectl --context k3d-ncp-local-cp wait httproute/ess-control-plane -n ess --for=jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}'=True --timeout=2m
-        """
-      Then the command exit code should be 0
-
-      When I run command:
-        """
-        kubectl --context k3d-ncp-local-cp wait httproute/ess-control-plane -n ess --for=jsonpath='{.status.parents[0].conditions[?(@.type=="ResolvedRefs")].status}'=True --timeout=2m
-        """
-      Then the command exit code should be 0
-
-      When I run command:
-        """
-        kubectl --context k3d-ncp-local-cp wait httproute/sis-control-plane -n sis --for=jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}'=True --timeout=2m
-        """
-      Then the command exit code should be 0
-
-      When I run command:
-        """
-        kubectl --context k3d-ncp-local-cp wait httproute/sis-control-plane -n sis --for=jsonpath='{.status.parents[0].conditions[?(@.type=="ResolvedRefs")].status}'=True --timeout=2m
-        """
-      Then the command exit code should be 0
-
-      When I run command:
-        """
-        kubectl --context k3d-ncp-local-cp wait grpcroute/nvcf-api-control-plane-grpc -n nvcf --for=jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}'=True --timeout=2m
-        """
-      Then the command exit code should be 0
-
-      When I run command:
-        """
-        kubectl --context k3d-ncp-local-cp wait grpcroute/nvcf-api-control-plane-grpc -n nvcf --for=jsonpath='{.status.parents[0].conditions[?(@.type=="ResolvedRefs")].status}'=True --timeout=2m
-        """
-      Then the command exit code should be 0
+      Then these Gateway API routes should be accepted and resolved using context "k3d-ncp-local-cp" within "2m":
+        | kind      | name                            | namespace            |
+        | TCPRoute  | llm-worker-grpc                 | envoy-gateway-system |
+        | UDPRoute  | llm-worker-quic                 | envoy-gateway-system |
+        | HTTPRoute | nvcf-api-control-plane          | nvcf                 |
+        | HTTPRoute | invocation-control-plane        | nvcf                 |
+        | HTTPRoute | reval-control-plane             | nvcf                 |
+        | HTTPRoute | ess-control-plane               | ess                  |
+        | HTTPRoute | sis-control-plane               | sis                  |
+        | GRPCRoute | nvcf-api-control-plane-grpc    | nvcf                 |
 
   Rule: Helmfile registers and installs NVCA on the compute cluster
 

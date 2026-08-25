@@ -177,6 +177,7 @@ original order. Repeated options and empty values are preserved.
 | `Then these Kubernetes resources should not exist in namespace {string} using context {string}:` (table) | Requires `kind` and `name` headers. Gets each named resource with `--ignore-not-found` and requires empty name output, so absence does not depend on human-readable error text. |
 | `Then deployment {string} in namespace {string} using context {string} should complete rollout within {string}` | Runs `kubectl rollout status` for the named deployment with the explicit namespace, context, and timeout. Failure messages name the deployment without printing command output. |
 | `Then NVCFBackend {string} in namespace {string} using context {string} should report agent status {string} within {string}` | Waits for the named backend's `status.agentStatus` to equal the visible value using the explicit namespace, context, and timeout. Failure messages name the backend without printing resource output. |
+| `Then these Gateway API routes should be accepted and resolved using context {string} within {string}:` (table) | Requires `kind`, `name`, and `namespace` headers. Waits for every named route to report both `Accepted=True` and `ResolvedRefs=True` using the explicit context and timeout. The route kind is passed through without an allowlist. Failures name the table row, route, namespace, and unmet condition without printing resource output. |
 
 #### YAML comparison semantics
 

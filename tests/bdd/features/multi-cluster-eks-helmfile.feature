@@ -224,17 +224,10 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
       # resolved backends. These route flags are authored in the EKS env
       # file because worker pods need externally reachable API gRPC
       # endpoints on the compute cluster.
-      When I run command:
-        """
-        kubectl --context ${EKS_CONTEXT} wait grpcroute/nvcf-api-grpc grpcroute/nvct-api-grpc -n envoy-gateway --for=jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}'=True --timeout=2m
-        """
-      Then the command exit code should be 0
-
-      When I run command:
-        """
-        kubectl --context ${EKS_CONTEXT} wait grpcroute/nvcf-api-grpc grpcroute/nvct-api-grpc -n envoy-gateway --for=jsonpath='{.status.parents[0].conditions[?(@.type=="ResolvedRefs")].status}'=True --timeout=2m
-        """
-      Then the command exit code should be 0
+      Then these Gateway API routes should be accepted and resolved using context "${EKS_CONTEXT}" within "2m":
+        | kind      | name          | namespace     |
+        | GRPCRoute | nvcf-api-grpc | envoy-gateway |
+        | GRPCRoute | nvct-api-grpc | envoy-gateway |
 
       # Confirm Helmfile passed the worker-facing endpoints into the
       # environment ConfigMaps consumed by the API deployments.

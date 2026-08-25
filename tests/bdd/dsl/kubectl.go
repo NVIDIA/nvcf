@@ -28,6 +28,15 @@ type KubernetesResource struct {
 	Name string
 }
 
+// GatewayAPIRoute identifies one Gateway API route by kind, name, and
+// namespace. The kind remains caller-supplied so the helper works with every
+// route kind supported by the installed Gateway API implementation.
+type GatewayAPIRoute struct {
+	Kind      string
+	Name      string
+	Namespace string
+}
+
 type kubernetesWaitTarget struct {
 	name        string
 	namespace   string
@@ -132,6 +141,35 @@ func NVCFBackendAgentStatusCommand(name, namespace, kubeContext, agentStatus, ti
 		"--for=jsonpath={.status.agentStatus}=" + quoteCommandArg(agentStatus),
 		quoteCommandArg("--timeout=" + target.timeout),
 	}, " "), nil
+}
+
+// GatewayAPIRouteConditionWaitCommand builds an explicit-context wait for one
+// condition on one Gateway API route.
+func GatewayAPIRouteConditionWaitCommand(route GatewayAPIRoute, kubeContext, condition, timeout string) (string, error) {
+	target, err := resolveKubernetesWaitTarget(route.Kind, route.Name, route.Namespace, kubeContext, timeout)
+	if err != nil {
+		return "", err
+	}
+	route.Kind = strings.TrimSpace(Interpolate(route.Kind))
+	condition = strings.TrimSpace(condition)
+	if route.Kind == "" {
+		return "", fmt.Errorf("gateway API route kind is empty")
+	}
+	if condition == "" {
+		return "", fmt.Errorf("gateway API route condition is empty")
+	}
+
+	conditionExpression := fmt.Sprintf(
+		`--for=jsonpath={.status.parents[0].conditions[?(@.type==%q)].status}=True`,
+		condition,
+	)
+	return BuildCommand(
+		"kubectl", "wait", strings.ToLower(route.Kind)+"/"+target.name,
+		"-n", target.namespace,
+		"--context", target.kubeContext,
+		conditionExpression,
+		"--timeout="+target.timeout,
+	), nil
 }
 
 func resolveKubernetesWaitTarget(resourceType, name, namespace, kubeContext, timeout string) (kubernetesWaitTarget, error) {
