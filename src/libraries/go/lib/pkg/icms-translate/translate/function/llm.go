@@ -42,6 +42,9 @@ const (
 
 	llmDirMountPath    = "/var/run/llm"
 	llmWorkerTokenPath = llmDirMountPath + "/worker-token"
+
+	essAssertionTokenPathEnv = "ESS_ASSERTION_TOKEN_PATH"
+	essAssertionTokenPath    = common.EssConfigDir + "/jwt.token"
 )
 
 func normalizeLLMRequestRouterAddressEnvAliases(envSet map[string]string) {
@@ -235,6 +238,28 @@ func newLLMCredentialManagerContainer(allEnvSet map[string]string, _ TranslateCo
 			Value: llmWorkerTokenPath,
 		},
 	)
+	volumeMounts := []corev1.VolumeMount{
+		{
+			Name:      "llm",
+			MountPath: llmDirMountPath,
+		},
+		// config-data backs SHARED_CONFIG_DIR. The credential manager
+		// creates and caches the worker token here, so it must be mounted.
+		{
+			Name:      "config-data",
+			MountPath: ConfigDirPath,
+		},
+	}
+	if allEnvSet[common.SecretsAssertionTokenEnv] != "" {
+		envs = append(envs, corev1.EnvVar{
+			Name:  essAssertionTokenPathEnv,
+			Value: essAssertionTokenPath,
+		})
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      common.EssDataVolumeName,
+			MountPath: common.EssConfigDir,
+		})
+	}
 
 	c := corev1.Container{
 		Name:            "llm-credential-manager",
@@ -251,18 +276,7 @@ func newLLMCredentialManagerContainer(allEnvSet map[string]string, _ TranslateCo
 				corev1.ResourceMemory: *resource.NewQuantity(128*1<<20, resource.BinarySI),
 			},
 		},
-		VolumeMounts: []corev1.VolumeMount{
-			{
-				Name:      "llm",
-				MountPath: llmDirMountPath,
-			},
-			// config-data backs SHARED_CONFIG_DIR. The credential manager
-			// creates and caches the worker token here, so it must be mounted.
-			{
-				Name:      "config-data",
-				MountPath: ConfigDirPath,
-			},
-		},
+		VolumeMounts: volumeMounts,
 	}
 	return c, nil
 }
