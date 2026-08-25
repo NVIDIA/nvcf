@@ -7,10 +7,11 @@
     "name": "%s",
     "registryCredentials": [
       {
+        "registryCredentialId": "11111111-0000-0000-0000-000000000001",
         "registryHostname": "docker.io",
         "secret": {
-          "name": "docker-container-registry-credential",
-          "value": "dXNlcm5hbWU6ZG9ja2VyLXBhdC1wYXNzd29yZA=="
+          "name": "should-not-be-used",
+          "value": "aWdub3JlZDppZ25vcmVk"
         },
         "artifactTypes": [
           "CONTAINER",
@@ -18,10 +19,11 @@
         ]
       },
       {
+        "registryCredentialId": "11111111-0000-0000-0000-000000000002",
         "registryHostname": "779846807323.dkr.ecr.us-west-2.amazonaws.com",
         "secret": {
-          "name": "ecr-container-registry-credential",
-          "value": "YWNjZXNzLWtleS1pZC0xOnNlY3JldC1hY2Nlc3Mta2V5LTE="
+          "name": "should-not-be-used",
+          "value": "aWdub3JlZDppZ25vcmVk"
         },
         "artifactTypes": [
           "CONTAINER",
@@ -29,10 +31,11 @@
         ]
       },
       {
+        "registryCredentialId": "11111111-0000-0000-0000-000000000003",
         "registryHostname": "public.ecr.aws",
         "secret": {
-          "name": "ecr-container-registry-credential",
-          "value": "YWNjZXNzLWtleS1pZC0xOnNlY3JldC1hY2Nlc3Mta2V5LTE="
+          "name": "should-not-be-used",
+          "value": "aWdub3JlZDppZ25vcmVk"
         },
         "artifactTypes": [
           "CONTAINER",
@@ -40,10 +43,11 @@
         ]
       },
       {
+        "registryCredentialId": "11111111-0000-0000-0000-000000000004",
         "registryHostname": "test-volcengine-registry-cn-beijing.cr.volces.com",
         "secret": {
-          "name": "ve-registry-credential",
-          "value": "dm9sY2VuZ2luZS1hY2Nlc3Mta2V5LTE6dm9sY2VuZ2luZS1zZWNyZXQta2V5LTE="
+          "name": "should-not-be-used",
+          "value": "aWdub3JlZDppZ25vcmVk"
         },
         "artifactTypes": [
           "CONTAINER",
@@ -51,10 +55,11 @@
         ]
       },
       {
+        "registryCredentialId": "11111111-0000-0000-0000-000000000005",
         "registryHostname": "test1-bmfvajfxgfcrhba5.azurecr.io",
         "secret": {
-          "name": "acr-registry-credential-1",
-          "value": "YWNyLWNsaWVudC1pZC0xOmFjci1jbGllbnQtc2VjcmV0LTE="
+          "name": "should-not-be-used",
+          "value": "aWdub3JlZDppZ25vcmVk"
         },
         "artifactTypes": [
           "CONTAINER",
@@ -62,10 +67,11 @@
         ]
       },
       {
+        "registryCredentialId": "11111111-0000-0000-0000-000000000006",
         "registryHostname": "demo.goharbor.io",
         "secret": {
-          "name": "harbor-registry-credential",
-          "value": "aGFyYm9yLXJvYm90LWFjY291bnQ6aGFyYm9yLXJvYm90LXBhc3N3b3Jk"
+          "name": "should-not-be-used",
+          "value": "aWdub3JlZDppZ25vcmVk"
         },
         "artifactTypes": [
           "CONTAINER",
@@ -73,10 +79,11 @@
         ]
       },
       {
+        "registryCredentialId": "11111111-0000-0000-0000-000000000007",
         "registryHostname": "artifactorytest12345.jfrog.io",
         "secret": {
-          "name": "artifactory-registry-credential",
-          "value": "YXJ0aWZhY3RvcnktdXNlcm5hbWU6YXJ0aWZhY3RvcnktcGFzc3dvcmQ="
+          "name": "should-not-be-used",
+          "value": "aWdub3JlZDppZ25vcmVk"
         },
         "artifactTypes": [
           "CONTAINER",
@@ -84,30 +91,33 @@
         ]
       },
       {
+        "registryCredentialId": "11111111-0000-0000-0000-000000000008",
         "registryHostname": "stg.nvcr.io",
         "secret": {
-          "name": "ngc-container-registry-credential",
-          "value": "JG9hdXRodG9rZW46bnZhcGktc3RnLXRlc3QtY29udGFpbmVyLXJlZ2lzdHJ5LWNyZWQ="
+          "name": "should-not-be-used",
+          "value": "aWdub3JlZDppZ25vcmVk"
         },
         "artifactTypes": [
           "CONTAINER"
         ]
       },
       {
+        "registryCredentialId": "11111111-0000-0000-0000-000000000009",
         "registryHostname": "localhost-ngc",
         "secret": {
-          "name": "ngc-container-registry-credential",
-          "value": "JG9hdXRodG9rZW46bnZhcGktc3RnLXRlc3QtY29udGFpbmVyLXJlZ2lzdHJ5LWNyZWQ="
+          "name": "should-not-be-used",
+          "value": "aWdub3JlZDppZ25vcmVk"
         },
         "artifactTypes": [
           "CONTAINER"
         ]
       },
       {
+        "registryCredentialId": "11111111-0000-0000-0000-000000000010",
         "registryHostname": "api.stg.ngc.nvidia.com",
         "secret": {
-          "name": "ngc-model-resource-registry-credential",
-          "value": "JG9hdXRodG9rZW46bnZhcGktc3RnLXRlc3QtbW9kZWwtcmVnaXN0cnktY3JlZA=="
+          "name": "should-not-be-used",
+          "value": "aWdub3JlZDppZ25vcmVk"
         },
         "artifactTypes": [
           "MODEL",
@@ -115,10 +125,11 @@
         ]
       },
       {
+        "registryCredentialId": "11111111-0000-0000-0000-000000000011",
         "registryHostname": "localhost-ngc",
         "secret": {
-          "name": "ngc-model-resource-registry-credential",
-          "value": "JG9hdXRodG9rZW46bnZhcGktc3RnLXRlc3QtbW9kZWwtcmVnaXN0cnktY3JlZA=="
+          "name": "should-not-be-used",
+          "value": "aWdub3JlZDppZ25vcmVk"
         },
         "artifactTypes": [
           "MODEL",
@@ -126,20 +137,22 @@
         ]
       },
       {
+        "registryCredentialId": "11111111-0000-0000-0000-000000000012",
         "registryHostname": "helm.stg.ngc.nvidia.com",
         "secret": {
-          "name": "ngc-helm-registry-credential",
-          "value": "JG9hdXRodG9rZW46bnZhcGktc3RnLXRlc3QtaGVsbS1yZWdpc3RyeS1jcmVk"
+          "name": "should-not-be-used",
+          "value": "aWdub3JlZDppZ25vcmVk"
         },
         "artifactTypes": [
           "HELM"
         ]
       },
       {
+        "registryCredentialId": "11111111-0000-0000-0000-000000000013",
         "registryHostname": "localhost-ngc",
         "secret": {
-          "name": "ngc-helm-registry-credential",
-          "value": "JG9hdXRodG9rZW46bnZhcGktc3RnLXRlc3QtaGVsbS1yZWdpc3RyeS1jcmVk"
+          "name": "should-not-be-used",
+          "value": "aWdub3JlZDppZ25vcmVk"
         },
         "artifactTypes": [
           "HELM"

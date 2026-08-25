@@ -26,6 +26,7 @@ import com.nvidia.boot.registries.service.registry.dto.ArtifactTypeEnum;
 import com.nvidia.nvct.persistence.task.entity.TaskEntity;
 import com.nvidia.nvct.service.account.AccountService;
 import com.nvidia.nvct.service.account.dto.RegistryCredentialDto;
+import com.nvidia.nvct.service.ess.EssService;
 import com.nvidia.nvct.service.registry.dto.DockerConfigJsonAuthDto;
 import com.nvidia.nvct.service.registry.dto.DockerConfigJsonDto;
 import com.nvidia.nvct.service.registry.dto.K8sSecretsDto;
@@ -35,6 +36,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -59,6 +61,7 @@ public class RegistryCredentialService {
     private final AccountService accountService;
     private final RegistryMapperService registryMapperService;
     private final RegistryTaskMapperService registryTaskMapperService;
+    private final EssService essService;
     private final JsonMapper jsonMapper;
     private final String sidecarImagePullSecret;
     private final String sidecarRegistryHostname;
@@ -67,6 +70,7 @@ public class RegistryCredentialService {
             AccountService accountService,
             RegistryMapperService registryMapperService,
             RegistryTaskMapperService registryTaskMapperService,
+            EssService essService,
             JsonMapper jsonMapper,
             @Value("${nvct.sidecars.image-pull-secret}")
             String sidecarImagePullSecret,
@@ -75,6 +79,7 @@ public class RegistryCredentialService {
         this.accountService = accountService;
         this.registryTaskMapperService = registryTaskMapperService;
         this.registryMapperService = registryMapperService;
+        this.essService = essService;
         this.jsonMapper = jsonMapper;
         this.sidecarImagePullSecret = sidecarImagePullSecret;
         this.sidecarRegistryHostname = sidecarRegistryHostname;
@@ -100,10 +105,11 @@ public class RegistryCredentialService {
             return Collections.emptyList();
         }
         var normalizedHostname = registryMapperService.toNormalizedHostname(hostname);
-        return account.registryCredentials().stream()
+        var registryCredentials = account.registryCredentials().stream()
                 .filter(rc -> rc.artifactTypes().contains(artifactTypeEnum) &&
                         rc.registryHostname().equals(normalizedHostname))
                 .toList();
+        return hydrateSecretsFromEss(task.getNcaId(), registryCredentials);
     }
 
     private List<RegistryCredentialDto> getRegistryCredentials(
@@ -113,10 +119,31 @@ public class RegistryCredentialService {
         if (CollectionUtils.isEmpty(account.registryCredentials())) {
             return Collections.emptyList();
         }
-        return account.registryCredentials().stream()
+        var registryCredentials = account.registryCredentials().stream()
                 .filter(regCred -> !Sets
                         .intersection(regCred.artifactTypes(), artifactTypeEnums)
                         .isEmpty())
+                .toList();
+        return hydrateSecretsFromEss(task.getNcaId(), registryCredentials);
+    }
+
+    // The Get Account Details response no longer supplies the registry credential secret.
+    // Resolve it directly from ESS using the account id and the registry credential id.
+    private List<RegistryCredentialDto> hydrateSecretsFromEss(
+            String ncaId,
+            List<RegistryCredentialDto> registryCredentials) {
+        return registryCredentials.stream()
+                .map(registryCredential -> essService
+                        .getRegistryCredentialSecret(
+                                ncaId, registryCredential.registryCredentialId())
+                        .map(secret -> registryCredential.toBuilder().secret(secret).build())
+                        .orElseGet(() -> {
+                            log.error("Account '{}': No secret found in ESS for registry "
+                                              + "credential '{}'",
+                                      ncaId, registryCredential.registryCredentialId());
+                            return null;
+                        }))
+                .filter(Objects::nonNull)
                 .toList();
     }
 

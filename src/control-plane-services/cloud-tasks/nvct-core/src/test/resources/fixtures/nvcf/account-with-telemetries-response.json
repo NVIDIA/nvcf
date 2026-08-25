@@ -40,20 +40,22 @@
     ],
     "registryCredentials": [
       {
+        "registryCredentialId": "11111111-0000-0000-0000-000000000008",
         "registryHostname": "stg.nvcr.io",
         "secret": {
-          "name": "ngc-container-registry-credential",
-          "value": "JG9hdXRodG9rZW46bnZhcGktc3RnLXRlc3QtY29udGFpbmVyLXJlZ2lzdHJ5LWNyZWQ="
+          "name": "should-not-be-used",
+          "value": "aWdub3JlZDppZ25vcmVk"
         },
         "artifactTypes": [
           "CONTAINER"
         ]
       },
       {
+        "registryCredentialId": "11111111-0000-0000-0000-000000000010",
         "registryHostname": "api.stg.ngc.nvidia.com",
         "secret": {
-          "name": "ngc-model-resource-registry-credential",
-          "value": "JG9hdXRodG9rZW46bnZhcGktc3RnLXRlc3QtbW9kZWwtcmVnaXN0cnktY3JlZA=="
+          "name": "should-not-be-used",
+          "value": "aWdub3JlZDppZ25vcmVk"
         },
         "artifactTypes": [
           "MODEL",
@@ -61,10 +63,11 @@
         ]
       },
       {
+        "registryCredentialId": "11111111-0000-0000-0000-000000000012",
         "registryHostname": "helm.stg.ngc.nvidia.com",
         "secret": {
-          "name": "ngc-helm-registry-credential",
-          "value": "JG9hdXRodG9rZW46bnZhcGktc3RnLXRlc3QtY29udGFpbmVyLXJlZ2lzdHJ5LWNyZWQ="
+          "name": "should-not-be-used",
+          "value": "aWdub3JlZDppZ25vcmVk"
         },
         "artifactTypes": [
           "HELM"
