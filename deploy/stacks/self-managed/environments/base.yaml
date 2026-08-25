@@ -49,13 +49,11 @@ global:
   # =============================================================================
   # Worker Sidecar Registry Configuration
   # =============================================================================
-  # Registry host and repository the control plane advertises to workers for the
-  # worker sidecar images (NVCF_SIDECARS_* / NVCT_SIDECARS_*). Leave unset to
-  # inherit global.image, so a mirror-everything install is unchanged. Set these
-  # to source only the worker sidecars from a separate registry/org — for
-  # example a private NGC org that also holds deployment-specific sidecars —
-  # while control-plane images stay on global.image (e.g. the public catalog).
-  # Provide the matching sidecar pull credential separately.
+  # Registry host/repository advertised to workers for the worker sidecar images
+  # (NVCF_SIDECARS_* / NVCT_SIDECARS_*). Unset inherits global.image. Set these to
+  # source the worker sidecars from a separate registry/org (e.g. a private NGC
+  # org) while control-plane images stay on global.image. Supply the matching
+  # sidecar pull credential separately.
   # =============================================================================
   # sidecars:
   #   hostname: nvcr.io

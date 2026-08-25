@@ -82,7 +82,7 @@ assert_sidecars() {
 }
 
 # ---------------------------------------------------------------------------
-# 1. No override — the sidecars inherit global.image
+# 1. No override: the sidecars inherit global.image
 # ---------------------------------------------------------------------------
 write_env <<'EOF'
 global:
@@ -95,7 +95,7 @@ render_values "$work_dir/default-values.yaml"
 assert_sidecars "$work_dir/default-values.yaml" nvcr.io test/nvcf "no override"
 
 # ---------------------------------------------------------------------------
-# 2. Full override — global.sidecars redirects both host and repository
+# 2. Full override: global.sidecars redirects both host and repository
 # ---------------------------------------------------------------------------
 write_env <<'EOF'
 global:
@@ -111,7 +111,7 @@ render_values "$work_dir/override-values.yaml"
 assert_sidecars "$work_dir/override-values.yaml" private.nvcr.io my-org/nvcf-core "full override"
 
 # ---------------------------------------------------------------------------
-# 3. Partial override — an unset key falls back to global.image independently
+# 3. Partial override: an unset key falls back to global.image independently
 # ---------------------------------------------------------------------------
 write_env <<'EOF'
 global:

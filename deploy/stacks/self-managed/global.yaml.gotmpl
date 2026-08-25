@@ -293,14 +293,9 @@ natsAuthCalloutService:
     repository: {{ .Values.global.image.repository }}/nvcf-nats-auth-callout-service
 
 {{- $workerEndpoints := dig "global" "workerEndpoints" dict .Values }}
-{{- /*
-  Worker sidecar registry host/repository. Default to global.image so a
-  mirror-everything install renders unchanged. Override global.sidecars.*
-  to source only the worker sidecars from a separate registry/org (for
-  example a private NGC org) while control-plane images stay on the public
-  catalog. Shared by the NVCF (NVCF_SIDECARS_*) and NVCT (NVCT_SIDECARS_*)
-  env blocks below.
-*/}}
+{{- /* Worker sidecar registry host/repository, shared by the NVCF and NVCT env
+       below. Unset inherits global.image; global.sidecars.* sources the worker
+       sidecars from a separate registry/org while control-plane images stay put. */}}
 {{- $sidecarsHost := dig "global" "sidecars" "hostname" "" .Values | default .Values.global.image.registry }}
 {{- $sidecarsRepo := dig "global" "sidecars" "repository" "" .Values | default .Values.global.image.repository }}
 {{- $nvcfWorkerServiceURL := dig "nvcfServiceURL" "" $workerEndpoints }}
