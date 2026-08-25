@@ -13,7 +13,7 @@ can run across NVCF compute clusters.
 
 ## Key Functionality
 
-- Discovers active functions from invocation and worker metrics in the
+- Discovers active functions from control-plane request metrics in the
   timeseries database and persists the active set in Cassandra.
 - Periodically computes a desired instance count per function from recent
   utilization and the function's scaling policy.

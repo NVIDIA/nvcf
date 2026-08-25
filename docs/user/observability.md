@@ -157,9 +157,8 @@ queries it. The autoscaler supports `none`, `token`, and `mtls` authentication
 for PromQL queries. Configure collector remote-write authentication separately.
 
 The shared collector discovers targets only in its Kubernetes cluster. In a
-split deployment, configure compute-plane collection separately and make any
-worker metrics used for autoscaling available to the control-plane backend. See
-[Cluster Monitoring](./cluster-management/monitoring.md).
+split deployment, configure compute-plane collection separately. See [Cluster
+Monitoring](./cluster-management/monitoring.md).
 
 ### Logging
 
@@ -247,7 +246,7 @@ Queue depth per function:
 sum by (function_id, name) (nvcf_function_queue_depth)
 ```
 
-Function request latency (p50 and p95) over a 5 minute window:
+Function request latency (p50 and p95) over a 5-minute window:
 
 ```promql
 # p50

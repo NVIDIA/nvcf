@@ -5,12 +5,6 @@ The self-managed stack deploys the Function Autoscaler for the `control` and
 [Observability Configuration](../observability.md) for profile and metrics
 backend settings.
 
-Apply an environment change from the self-managed stack directory:
-
-```bash
-make apply HELMFILE_ENV=<environment-name>
-```
-
 ## Verify the deployment
 
 Check State Metrics and the Function Autoscaler:
@@ -63,7 +57,7 @@ failures change readiness instead.
 | `cassandra_client` is unhealthy | Check contact-point DNS, credentials, and the configured TLS files. |
 | `timeseries_db_client` is unhealthy | Check the resolved PromQL endpoint, authentication mode, credentials, and backend retention. |
 | Scaling decisions are not applied | Check NVCF API authentication and function status. |
-| Discovery does not find active functions | Confirm the backend contains the request and worker metrics listed in [Architecture](./architecture.md#metrics-backend). Check the discovery lock metrics and TTL. |
+| Discovery does not find active functions | Confirm the backend contains the request and State Metrics data listed in [Architecture](./architecture.md#metrics-backend). Check the discovery lock metrics and TTL. |
 
 ## See also
 
