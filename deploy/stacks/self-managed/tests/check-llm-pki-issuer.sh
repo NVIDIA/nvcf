@@ -265,18 +265,14 @@ expect_external_router() {
 
 # existingSecret mode cannot reuse render_router: that helper always passes
 # managed issuance values, which this mode rejects as a mixed-ownership
-# conflict. Clear the managed defaults before applying each case override.
+# conflict. This helper models the stable base profile, whose unchanged managed
+# defaults are tolerated because Helmfile cannot reliably clear inherited
+# values to empty values.
 render_existing_secret_router() {
   local case_name="$1"
   shift
   local values_file="$work_dir/$case_name.router-values.yaml"
   local router_chart="$stack_dir/../../helm/llm-request-router/llm-request-router"
-  local ownership_override_file
-  ownership_override_file="$(pki_override "$case_name-existing-secret-ownership" <<'YAML'
-allowedDomains: ""
-dnsNames: []
-YAML
-)"
 
   HELMFILE_ENV=base HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" helmfile \
     --file "$stack_dir/helmfile.d/02-core.yaml.gotmpl" \
@@ -288,7 +284,6 @@ YAML
     --state-values-set addons.llm.enabled=true \
     --state-values-set addons.llm.pki.enabled=true \
     --state-values-set-string addons.llm.pki.mode=existingSecret \
-    --state-values-file "$ownership_override_file" \
     "$@" \
     write-values \
     --output-file-template "$values_file" \
@@ -772,9 +767,9 @@ expect_router_failure existing-secret-managed-issuer \
   --state-values-set addons.llm.pki.clusterIssuer.enabled=true
 
 expect_router_failure existing-secret-dns-names \
-  'addons.llm.pki.dnsNames applies only to a stack-issued Certificate and must be empty when addons.llm.pki.mode is existingSecret' \
+  'addons.llm.pki.dnsNames applies only to a stack-issued Certificate; only the unchanged stable-base defaults are allowed when addons.llm.pki.mode is existingSecret' \
   --state-values-set-string addons.llm.pki.secretName=operator-quic-tls \
-  --state-values-set-string 'addons.llm.pki.dnsNames[0]=llm-request-router.nvcf.svc.cluster.local'
+  --state-values-set-string 'addons.llm.pki.dnsNames[0]=custom-router.example.invalid'
 
 expect_router_failure existing-secret-scalar-dns-names \
   'addons.llm.pki.dnsNames must be a list when addons.llm.pki.mode is existingSecret' \
@@ -782,9 +777,47 @@ expect_router_failure existing-secret-scalar-dns-names \
   --state-values-set-string addons.llm.pki.dnsNames=llm-request-router.nvcf.svc.cluster.local
 
 expect_router_failure existing-secret-allowed-domains \
-  'addons.llm.pki.allowedDomains constrains the managed OpenBao signing role only and must be empty when addons.llm.pki.mode is existingSecret' \
+  'addons.llm.pki.allowedDomains constrains the managed OpenBao signing role; only the unchanged stable-base default is allowed when addons.llm.pki.mode is existingSecret' \
   --state-values-set-string addons.llm.pki.secretName=operator-quic-tls \
   --state-values-set-string addons.llm.pki.allowedDomains=nvcf.svc.cluster.local
+
+# allowedDomains is optional in existingSecret mode, but any supplied value
+# other than the inherited stable-base string must fail rather than being
+# silently treated as absent by template truthiness.
+existing_secret_allowed_domains_error='addons.llm.pki.allowedDomains constrains the managed OpenBao signing role; only the unchanged stable-base default is allowed when addons.llm.pki.mode is existingSecret'
+expect_router_failure existing-secret-allowed-domains-false \
+  "$existing_secret_allowed_domains_error" \
+  --state-values-set-string addons.llm.pki.secretName=operator-quic-tls \
+  --state-values-file "$(pki_override existing-secret-allowed-domains-false <<'YAML'
+allowedDomains: false
+YAML
+)"
+
+expect_router_failure existing-secret-allowed-domains-zero \
+  "$existing_secret_allowed_domains_error" \
+  --state-values-set-string addons.llm.pki.secretName=operator-quic-tls \
+  --state-values-file "$(pki_override existing-secret-allowed-domains-zero <<'YAML'
+allowedDomains: 0
+YAML
+)"
+
+render_existing_secret_router existing-secret-allowed-domains-null \
+  --state-values-set openbao.enabled=false \
+  --state-values-set-string addons.llm.pki.secretName=operator-quic-tls \
+  --state-values-file "$(pki_override existing-secret-allowed-domains-null <<'YAML'
+allowedDomains: null
+YAML
+)" || fail "existing-secret allowedDomains null router render failed"
+expect_existing_secret_router existing-secret-allowed-domains-null operator-quic-tls
+
+render_existing_secret_router existing-secret-allowed-domains-default \
+  --state-values-set openbao.enabled=false \
+  --state-values-set-string addons.llm.pki.secretName=operator-quic-tls \
+  --state-values-file "$(pki_override existing-secret-allowed-domains-default <<'YAML'
+allowedDomains: cluster.local
+YAML
+)" || fail "existing-secret allowedDomains stable-base router render failed"
+expect_existing_secret_router existing-secret-allowed-domains-default operator-quic-tls
 
 # Without a Secret name the chart would silently leave the router on plaintext
 # QUIC, so the stack must fail at render instead.

@@ -17,7 +17,10 @@ limitations under the License.
 
 package dsl
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestKubernetesResourceGetCommandBuildsExplicitExistenceGet(t *testing.T) {
 	resource := KubernetesResource{Kind: "ServiceMonitor", Name: "nvcf-default-monitors-state-metrics"}
@@ -120,6 +123,94 @@ func TestNVCFBackendAgentStatusCommandBuildsExplicitWait(t *testing.T) {
 	want := "kubectl wait nvcfbackend ncp-local-compute-1 -n nvca-operator --context k3d-ncp-local-compute-1 --for=jsonpath={.status.agentStatus}=healthy --timeout=10m"
 	if got != want {
 		t.Fatalf("command = %q, want %q", got, want)
+	}
+}
+
+func TestGatewayAPIRouteConditionWaitCommandBuildsExplicitWait(t *testing.T) {
+	t.Setenv("BDD_GATEWAY_CONTEXT", "k3d-ncp-local-cp")
+	route := GatewayAPIRoute{
+		Kind:      "HTTPRoute",
+		Name:      "nvcf-api-control-plane",
+		Namespace: "nvcf",
+		Parent:    "shared-gw",
+	}
+	got, err := GatewayAPIRouteConditionWaitCommand(route, "${BDD_GATEWAY_CONTEXT}", "Accepted", "2m")
+	if err != nil {
+		t.Fatalf("build command: %v", err)
+	}
+	want := `kubectl wait httproute/nvcf-api-control-plane -n nvcf --context k3d-ncp-local-cp '--for=jsonpath={.status.parents[?(@.parentRef.name=="shared-gw")].conditions[?(@.type=="Accepted")].status}=True' --timeout=2m`
+	if got != want {
+		t.Fatalf("command = %q, want %q", got, want)
+	}
+}
+
+func TestGatewayAPIRouteConditionWaitCommandPreservesCallerSuppliedRouteKind(t *testing.T) {
+	for _, kind := range []string{"GRPCRoute", "TCPRoute", "UDPRoute"} {
+		t.Run(kind, func(t *testing.T) {
+			route := GatewayAPIRoute{Kind: kind, Name: "worker-route", Namespace: "gateway-system", Parent: "worker-gateway"}
+			got, err := GatewayAPIRouteConditionWaitCommand(route, "k3d-ncp-local-cp", "ResolvedRefs", "2m")
+			if err != nil {
+				t.Fatalf("build command: %v", err)
+			}
+			wantTarget := "kubectl wait " + strings.ToLower(kind) + "/worker-route "
+			if !strings.HasPrefix(got, wantTarget) {
+				t.Fatalf("command = %q, want prefix %q", got, wantTarget)
+			}
+		})
+	}
+}
+
+func TestGatewayAPIRouteConditionWaitCommandRejectsMissingInputs(t *testing.T) {
+	tests := []struct {
+		name        string
+		route       GatewayAPIRoute
+		kubeContext string
+		condition   string
+		timeout     string
+	}{
+		{name: "kind", route: GatewayAPIRoute{Name: "api", Namespace: "nvcf", Parent: "gateway"}, kubeContext: "k3d-ncp-local", condition: "Accepted", timeout: "2m"},
+		{name: "name", route: GatewayAPIRoute{Kind: "HTTPRoute", Namespace: "nvcf", Parent: "gateway"}, kubeContext: "k3d-ncp-local", condition: "Accepted", timeout: "2m"},
+		{name: "namespace", route: GatewayAPIRoute{Kind: "HTTPRoute", Name: "api", Parent: "gateway"}, kubeContext: "k3d-ncp-local", condition: "Accepted", timeout: "2m"},
+		{name: "parent", route: GatewayAPIRoute{Kind: "HTTPRoute", Name: "api", Namespace: "nvcf"}, kubeContext: "k3d-ncp-local", condition: "Accepted", timeout: "2m"},
+		{name: "context", route: GatewayAPIRoute{Kind: "HTTPRoute", Name: "api", Namespace: "nvcf", Parent: "gateway"}, condition: "Accepted", timeout: "2m"},
+		{name: "condition", route: GatewayAPIRoute{Kind: "HTTPRoute", Name: "api", Namespace: "nvcf", Parent: "gateway"}, kubeContext: "k3d-ncp-local", timeout: "2m"},
+		{name: "timeout", route: GatewayAPIRoute{Kind: "HTTPRoute", Name: "api", Namespace: "nvcf", Parent: "gateway"}, kubeContext: "k3d-ncp-local", condition: "Accepted"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := GatewayAPIRouteConditionWaitCommand(test.route, test.kubeContext, test.condition, test.timeout); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
+func TestGatewayAPIRouteReadinessWaitsPlansBothConditions(t *testing.T) {
+	routes := []GatewayAPIRoute{
+		{Kind: "HTTPRoute", Name: "api", Namespace: "nvcf", Parent: "shared-gw"},
+		{Kind: "GRPCRoute", Name: "api-grpc", Namespace: "nvcf", Parent: "api-grpc-gw"},
+	}
+	waits, err := GatewayAPIRouteReadinessWaits(routes, "k3d-ncp-local-cp", "2m")
+	if err != nil {
+		t.Fatalf("plan route waits: %v", err)
+	}
+	if len(waits) != 4 {
+		t.Fatalf("waits = %d, want 4", len(waits))
+	}
+	want := []struct {
+		row       int
+		condition string
+		parent    string
+	}{
+		{row: 1, condition: "Accepted", parent: "shared-gw"},
+		{row: 2, condition: "Accepted", parent: "api-grpc-gw"},
+		{row: 1, condition: "ResolvedRefs", parent: "shared-gw"},
+		{row: 2, condition: "ResolvedRefs", parent: "api-grpc-gw"},
+	}
+	for index, wait := range waits {
+		if wait.Row != want[index].row || wait.Condition != want[index].condition || wait.Route.Parent != want[index].parent {
+			t.Fatalf("wait %d = %#v, want row=%d condition=%q parent=%q", index+1, wait, want[index].row, want[index].condition, want[index].parent)
+		}
 	}
 }
 
