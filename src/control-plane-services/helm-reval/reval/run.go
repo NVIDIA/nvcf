@@ -360,7 +360,7 @@ func (h *Handler) runValidate(
 	inObjs []runtime.Object,
 ) (result Result, err error) {
 	if len(cfg.ValidatePolicies) == 0 {
-		if err := checkTypes(logger, inObjs); err != nil {
+		if err := checkTypes(logger, inObjs, h.RejectPVCs); err != nil {
 			result.ValidationErrors = []error{err}
 			return result, nil
 		}
@@ -387,7 +387,7 @@ func (h *Handler) runValidate(
 		vpr := ValidationPolicyResult{
 			ID: vp.ID,
 		}
-		if err := checkTypes(logger, inObjs, vp.ExtraGVKs...); err != nil {
+		if err := checkTypes(logger, inObjs, h.RejectPVCs, vp.ExtraGVKs...); err != nil {
 			vpr.ValidationErrors = []error{err}
 			result.ValidationPolicies = append(result.ValidationPolicies, vpr)
 			continue
@@ -428,7 +428,7 @@ func (h *Handler) runRender(
 	inObjs []runtime.Object,
 	out io.Writer,
 ) (result Result, err error) {
-	if err := checkTypes(logger, inObjs, cfg.RenderPolicy.ExtraGVKs...); err != nil {
+	if err := checkTypes(logger, inObjs, h.RejectPVCs, cfg.RenderPolicy.ExtraGVKs...); err != nil {
 		return Result{
 			Valid:            false,
 			ValidationErrors: []error{err},
@@ -855,14 +855,6 @@ func (h *Handler) validateReleaseObjects(
 
 	for _, obj := range objs {
 		switch t := obj.(type) {
-		case *corev1.PersistentVolumeClaim:
-			if h.RejectPVCs {
-				errs = append(errs, fmt.Errorf("PersistentVolumeClaims are not supported in NVCF helm charts. Please remove all PVC definitions before deploying."))
-			} else {
-				logger.Warn("PersistentVolumeClaim found in helm chart; PVCs are not officially supported and will be rejected in a future release",
-					zap.String("pvc", t.Name),
-					zap.String("namespace", t.Namespace))
-			}
 		case *corev1.Pod:
 			errs = append(errs, validatePodSpec(t.Spec, h.RejectPVCs, logger)...)
 		case *appsv1.Deployment:

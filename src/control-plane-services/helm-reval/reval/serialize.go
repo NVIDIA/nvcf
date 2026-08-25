@@ -159,6 +159,7 @@ func (s *serializerImpl) decode(
 func checkTypes(
 	logger *zap.Logger,
 	objs []runtime.Object,
+	rejectPVCs bool,
 	extraGVKs ...schema.GroupVersionKind,
 ) error {
 	logger.Debug("Checking object types")
@@ -174,9 +175,17 @@ func checkTypes(
 	for _, obj := range objs {
 		// Validate allowed types.
 		switch t := obj.(type) {
+		case *corev1.PersistentVolumeClaim:
+			if rejectPVCs {
+				return fmt.Errorf("PersistentVolumeClaims are not supported in NVCF helm charts. Please remove all PVC definitions before deploying.")
+			}
+			logger.Warn("PersistentVolumeClaim found in helm chart; PVCs are not officially supported and will be rejected in a future release",
+				zap.String("pvc", t.Name),
+				zap.String("namespace", t.Namespace))
+			continue
 		case *corev1.Pod, *appsv1.Deployment, *appsv1.ReplicaSet, *appsv1.StatefulSet,
 			*batchv1.Job, *batchv1.CronJob, *corev1.Service,
-			*corev1.ConfigMap, *corev1.Secret, *corev1.PersistentVolumeClaim:
+			*corev1.ConfigMap, *corev1.Secret:
 		case *corev1.ServiceAccount, *rbacv1.RoleBinding, *rbacv1.Role:
 			// These types are allowed for backwards-compatibility but will be disallowed in the future,
 			// so log an error for observability without failing.

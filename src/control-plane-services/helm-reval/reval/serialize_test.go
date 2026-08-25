@@ -159,10 +159,11 @@ metadata:
 
 func Test_checkTypes(t *testing.T) {
 	type spec struct {
-		name      string
-		inObjs    []runtime.Object
-		extraGVKs []schema.GroupVersionKind
-		expErr    string
+		name       string
+		inObjs     []runtime.Object
+		extraGVKs  []schema.GroupVersionKind
+		rejectPVCs bool
+		expErr     string
 	}
 
 	for _, tt := range []spec{
@@ -248,10 +249,31 @@ func Test_checkTypes(t *testing.T) {
 			},
 			expErr: `unsupported types: ["x-foo.mycompany.com/v1.MyKind"]`,
 		},
+		{
+			name: "pvc allowed when rejectPVCs=false",
+			inObjs: []runtime.Object{
+				&corev1.PersistentVolumeClaim{
+					TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "PersistentVolumeClaim"},
+					ObjectMeta: metav1.ObjectMeta{Name: "my-pvc", Namespace: "default"},
+				},
+			},
+			rejectPVCs: false,
+		},
+		{
+			name: "pvc rejected when rejectPVCs=true",
+			inObjs: []runtime.Object{
+				&corev1.PersistentVolumeClaim{
+					TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "PersistentVolumeClaim"},
+					ObjectMeta: metav1.ObjectMeta{Name: "my-pvc", Namespace: "default"},
+				},
+			},
+			rejectPVCs: true,
+			expErr:     "PersistentVolumeClaims are not supported in NVCF helm charts. Please remove all PVC definitions before deploying.",
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			logger := zaptest.NewLogger(t, zaptest.Level(zapcore.PanicLevel))
-			gotErr := checkTypes(logger, tt.inObjs, tt.extraGVKs...)
+			gotErr := checkTypes(logger, tt.inObjs, tt.rejectPVCs, tt.extraGVKs...)
 			if tt.expErr != "" {
 				assert.EqualError(t, gotErr, tt.expErr)
 			} else {
