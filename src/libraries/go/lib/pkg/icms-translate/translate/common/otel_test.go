@@ -512,9 +512,9 @@ func TestNewOTelContainer(t *testing.T) {
 			assert.Equal(t, []corev1.Capability{"NET_RAW"}, container.SecurityContext.Capabilities.Drop)
 
 			assert.NotNil(t, container.Resources)
-			assert.Equal(t, "500m", container.Resources.Limits.Cpu().String())
+			assert.Equal(t, "1", container.Resources.Limits.Cpu().String())
 			assert.Equal(t, "2Gi", container.Resources.Limits.Memory().String())
-			assert.Equal(t, "500m", container.Resources.Requests.Cpu().String())
+			assert.Equal(t, "1", container.Resources.Requests.Cpu().String())
 			assert.Equal(t, "2Gi", container.Resources.Requests.Memory().String())
 
 			assert.NotNil(t, container.ReadinessProbe)
