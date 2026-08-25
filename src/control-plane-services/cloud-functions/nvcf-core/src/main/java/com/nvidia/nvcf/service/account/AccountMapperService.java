@@ -27,7 +27,7 @@ import com.nvidia.nvcf.rest.account.dto.AccountDetailsDto;
 import com.nvidia.nvcf.rest.account.dto.AccountDto;
 import com.nvidia.nvcf.rest.account.dto.CreateAccountRequest;
 import com.nvidia.nvcf.rest.registry.dto.RegistryCredentialDetailsDto;
-import com.nvidia.nvcf.rest.registry.dto.RegistryCredentialDto;
+import com.nvidia.nvcf.rest.registry.dto.RegistryCredentialDtoWithID;
 import com.nvidia.nvcf.service.registry.RegistryFunctionMapperService;
 import com.nvidia.nvcf.service.telemetry.TelemetryMapperService;
 import com.nvidia.nvcf.configuration.account.AccountLimitsProperties;
@@ -141,10 +141,10 @@ public class AccountMapperService {
     }
 
     @Nullable
-    private List<RegistryCredentialDto> toRegistryCredentialDtos(
+    private List<RegistryCredentialDtoWithID> toRegistryCredentialDtos(
             List<RegistryCredentialDetailsDto> registryCredentialDetailsDtos) {
         var registryCredentials = registryCredentialDetailsDtos.stream()
-                .map(registryFunctionMapperService::toRegistryCredentialDto)
+                .map(registryFunctionMapperService::toRegistryCredentialDtoWithID)
                 .filter(Objects::nonNull)
                 .toList();
 

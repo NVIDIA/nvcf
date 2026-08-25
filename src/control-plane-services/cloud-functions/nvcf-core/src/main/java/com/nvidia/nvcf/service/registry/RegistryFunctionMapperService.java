@@ -28,6 +28,7 @@ import com.nvidia.nvcf.rest.registry.dto.AddRegistryCredentialRequest;
 import com.nvidia.nvcf.rest.registry.dto.ProvisionedByEnum;
 import com.nvidia.nvcf.rest.registry.dto.RegistryCredentialDetailsDto;
 import com.nvidia.nvcf.rest.registry.dto.RegistryCredentialDto;
+import com.nvidia.nvcf.rest.registry.dto.RegistryCredentialDtoWithID;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Base64;
@@ -69,6 +70,41 @@ public class RegistryFunctionMapperService {
         return registryCredentialEssService
                 .getRegistryCredentialSecret(ncaId, registryCredentialId)
                 .map(secret -> RegistryCredentialDto.builder()
+                        .registryHostname(hostname)
+                        .artifactTypes(artifactTypes)
+                        .secret(secret)
+                        .build())
+                .orElseGet(() -> {
+                    // Secret not found in ESS. Check if the registry credential still exists in DB.
+                    // If registry credential still exists in db, it's probably because of the
+                    // db replication delay after deletion. Log instead of throwing an error.
+                    var existsInDb = registryCredentialsByAccountRepository
+                            .findByKeyNcaIdAndKeyRegistryCredentialId(ncaId, registryCredentialId)
+                            .isPresent();
+                    if (existsInDb) {
+                        var mesg = MESG_MISSING_REGISTRY_SECRET
+                                .formatted(ncaId, registryCredentialId);
+                        log.error(mesg);
+                    } else {
+                        // If the registry credential doesn't exist in the DB
+                        // it was perhaps deleted and cache has a stale entry
+                        log.debug(MESG_STALE_CACHED_ENTRY, ncaId, registryCredentialId);
+                    }
+                    return null;
+                });
+    }
+
+    public RegistryCredentialDtoWithID toRegistryCredentialDtoWithID(
+            RegistryCredentialDetailsDto registryCredentialDetailsDto) {
+        var registryCredentialId = registryCredentialDetailsDto.registryCredentialId();
+        var hostname = registryCredentialDetailsDto.registryHostname();
+        var ncaId = registryCredentialDetailsDto.ncaId();
+        var artifactTypes = registryCredentialDetailsDto.artifactTypes();
+
+        return registryCredentialEssService
+                .getRegistryCredentialSecret(ncaId, registryCredentialId)
+                .map(secret -> RegistryCredentialDtoWithID.builder()
+                        .registryCredentialId(registryCredentialId)
                         .registryHostname(hostname)
                         .artifactTypes(artifactTypes)
                         .secret(secret)
