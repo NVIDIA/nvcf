@@ -131,15 +131,15 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
       # failures point at the route layer instead of surfacing only
       # during function invocation.
       Then these Gateway API routes should be accepted and resolved using context "k3d-ncp-local-cp" within "2m":
-        | kind      | name                            | namespace            |
-        | TCPRoute  | llm-worker-grpc                 | envoy-gateway-system |
-        | UDPRoute  | llm-worker-quic                 | envoy-gateway-system |
-        | HTTPRoute | nvcf-api-control-plane          | nvcf                 |
-        | HTTPRoute | invocation-control-plane        | nvcf                 |
-        | HTTPRoute | reval-control-plane             | nvcf                 |
-        | HTTPRoute | ess-control-plane               | ess                  |
-        | HTTPRoute | sis-control-plane               | sis                  |
-        | GRPCRoute | nvcf-api-control-plane-grpc    | nvcf                 |
+        | kind      | name                        | namespace            | parent      |
+        | TCPRoute  | llm-worker-grpc             | envoy-gateway-system | grpc-gw     |
+        | UDPRoute  | llm-worker-quic             | envoy-gateway-system | grpc-gw     |
+        | HTTPRoute | nvcf-api-control-plane      | nvcf                 | shared-gw   |
+        | HTTPRoute | invocation-control-plane    | nvcf                 | shared-gw   |
+        | HTTPRoute | reval-control-plane         | nvcf                 | shared-gw   |
+        | HTTPRoute | ess-control-plane           | ess                  | shared-gw   |
+        | HTTPRoute | sis-control-plane           | sis                  | shared-gw   |
+        | GRPCRoute | nvcf-api-control-plane-grpc | nvcf                 | api-grpc-gw |
 
   Rule: Helmfile registers and installs NVCA on the compute cluster
 

@@ -28,13 +28,23 @@ type KubernetesResource struct {
 	Name string
 }
 
-// GatewayAPIRoute identifies one Gateway API route by kind, name, and
-// namespace. The kind remains caller-supplied so the helper works with every
-// route kind supported by the installed Gateway API implementation.
+// GatewayAPIRoute identifies one Gateway API route and the Gateway parent
+// whose status conditions must be ready. The kind remains caller-supplied so
+// the helper works with every route kind supported by the installed Gateway
+// API implementation.
 type GatewayAPIRoute struct {
 	Kind      string
 	Name      string
 	Namespace string
+	Parent    string
+}
+
+// GatewayAPIRouteWait describes one command in a route-readiness plan.
+type GatewayAPIRouteWait struct {
+	Row       int
+	Route     GatewayAPIRoute
+	Condition string
+	Command   string
 }
 
 type kubernetesWaitTarget struct {
@@ -151,16 +161,21 @@ func GatewayAPIRouteConditionWaitCommand(route GatewayAPIRoute, kubeContext, con
 		return "", err
 	}
 	route.Kind = strings.TrimSpace(Interpolate(route.Kind))
+	route.Parent = strings.TrimSpace(Interpolate(route.Parent))
 	condition = strings.TrimSpace(condition)
 	if route.Kind == "" {
 		return "", fmt.Errorf("gateway API route kind is empty")
+	}
+	if route.Parent == "" {
+		return "", fmt.Errorf("gateway API route parent is empty")
 	}
 	if condition == "" {
 		return "", fmt.Errorf("gateway API route condition is empty")
 	}
 
 	conditionExpression := fmt.Sprintf(
-		`--for=jsonpath={.status.parents[0].conditions[?(@.type==%q)].status}=True`,
+		`--for=jsonpath={.status.parents[?(@.parentRef.name==%q)].conditions[?(@.type==%q)].status}=True`,
+		route.Parent,
 		condition,
 	)
 	return BuildCommand(
@@ -170,6 +185,28 @@ func GatewayAPIRouteConditionWaitCommand(route GatewayAPIRoute, kubeContext, con
 		conditionExpression,
 		"--timeout="+target.timeout,
 	), nil
+}
+
+// GatewayAPIRouteReadinessWaits plans the Accepted and ResolvedRefs waits for
+// every route. Conditions remain grouped so every route is accepted before
+// backend-reference resolution is checked.
+func GatewayAPIRouteReadinessWaits(routes []GatewayAPIRoute, kubeContext, timeout string) ([]GatewayAPIRouteWait, error) {
+	waits := make([]GatewayAPIRouteWait, 0, len(routes)*2)
+	for _, condition := range []string{"Accepted", "ResolvedRefs"} {
+		for index, route := range routes {
+			command, err := GatewayAPIRouteConditionWaitCommand(route, kubeContext, condition, timeout)
+			if err != nil {
+				return nil, fmt.Errorf("route row %d condition %s: %w", index+1, condition, err)
+			}
+			waits = append(waits, GatewayAPIRouteWait{
+				Row:       index + 1,
+				Route:     route,
+				Condition: condition,
+				Command:   command,
+			})
+		}
+	}
+	return waits, nil
 }
 
 func resolveKubernetesWaitTarget(resourceType, name, namespace, kubeContext, timeout string) (kubernetesWaitTarget, error) {

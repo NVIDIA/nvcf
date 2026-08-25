@@ -225,9 +225,9 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
       # file because worker pods need externally reachable API gRPC
       # endpoints on the compute cluster.
       Then these Gateway API routes should be accepted and resolved using context "${EKS_CONTEXT}" within "2m":
-        | kind      | name          | namespace     |
-        | GRPCRoute | nvcf-api-grpc | envoy-gateway |
-        | GRPCRoute | nvct-api-grpc | envoy-gateway |
+        | kind      | name          | namespace     | parent       |
+        | GRPCRoute | nvcf-api-grpc | envoy-gateway | nvcf-gateway |
+        | GRPCRoute | nvct-api-grpc | envoy-gateway | nvcf-gateway |
 
       # Confirm Helmfile passed the worker-facing endpoints into the
       # environment ConfigMaps consumed by the API deployments.

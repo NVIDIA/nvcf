@@ -367,33 +367,21 @@ func (sc *ScenarioContext) gatewayAPIRoutesShouldBeAcceptedAndResolved(ctx conte
 	if err != nil {
 		return err
 	}
-
-	type routeWait struct {
-		row       int
-		route     dsl.GatewayAPIRoute
-		condition string
-		command   string
-	}
-	waits := make([]routeWait, 0, len(routes)*2)
-	for _, condition := range []string{"Accepted", "ResolvedRefs"} {
-		for index, route := range routes {
-			command, err := dsl.GatewayAPIRouteConditionWaitCommand(route, kubeContext, condition, timeout)
-			if err != nil {
-				return fmt.Errorf("row %d (%s/%s in namespace %s), condition %s: %w", index+1, route.Kind, route.Name, route.Namespace, condition, err)
-			}
-			waits = append(waits, routeWait{row: index + 1, route: route, condition: condition, command: command})
-		}
+	waits, err := dsl.GatewayAPIRouteReadinessWaits(routes, kubeContext, timeout)
+	if err != nil {
+		return err
 	}
 
 	for _, wait := range waits {
-		if err := sc.runResolvedSuccessfully(ctx, wait.command); err != nil {
+		if err := sc.runResolvedSuccessfully(ctx, wait.Command); err != nil {
 			return fmt.Errorf(
-				"row %d: Gateway API route %s/%s in namespace %q did not report condition %q: %w",
-				wait.row,
-				wait.route.Kind,
-				wait.route.Name,
-				wait.route.Namespace,
-				wait.condition,
+				"row %d: Gateway API route %s/%s in namespace %q for parent %q did not report condition %q: %w",
+				wait.Row,
+				wait.Route.Kind,
+				wait.Route.Name,
+				wait.Route.Namespace,
+				wait.Route.Parent,
+				wait.Condition,
 				err,
 			)
 		}
@@ -432,14 +420,15 @@ func tableToKubernetesResources(table *godog.Table) ([]dsl.KubernetesResource, e
 
 func tableToGatewayAPIRoutes(table *godog.Table) ([]dsl.GatewayAPIRoute, error) {
 	if table == nil || len(table.Rows) < 2 {
-		return nil, fmt.Errorf("table must have kind, name, and namespace headers and at least one data row")
+		return nil, fmt.Errorf("table must have kind, name, namespace, and parent headers and at least one data row")
 	}
 	headers := table.Rows[0].Cells
-	if len(headers) != 3 ||
+	if len(headers) != 4 ||
 		strings.TrimSpace(headers[0].Value) != "kind" ||
 		strings.TrimSpace(headers[1].Value) != "name" ||
-		strings.TrimSpace(headers[2].Value) != "namespace" {
-		return nil, fmt.Errorf("table headers must be kind, name, and namespace")
+		strings.TrimSpace(headers[2].Value) != "namespace" ||
+		strings.TrimSpace(headers[3].Value) != "parent" {
+		return nil, fmt.Errorf("table headers must be kind, name, namespace, and parent")
 	}
 
 	routes := make([]dsl.GatewayAPIRoute, 0, len(table.Rows)-1)
@@ -451,6 +440,7 @@ func tableToGatewayAPIRoutes(table *godog.Table) ([]dsl.GatewayAPIRoute, error) 
 			Kind:      strings.TrimSpace(dsl.Interpolate(row.Cells[0].Value)),
 			Name:      strings.TrimSpace(dsl.Interpolate(row.Cells[1].Value)),
 			Namespace: strings.TrimSpace(dsl.Interpolate(row.Cells[2].Value)),
+			Parent:    strings.TrimSpace(dsl.Interpolate(row.Cells[3].Value)),
 		}
 		if route.Kind == "" {
 			return nil, fmt.Errorf("row %d has an empty kind", index+1)
@@ -460,6 +450,9 @@ func tableToGatewayAPIRoutes(table *godog.Table) ([]dsl.GatewayAPIRoute, error) 
 		}
 		if route.Namespace == "" {
 			return nil, fmt.Errorf("row %d has an empty namespace", index+1)
+		}
+		if route.Parent == "" {
+			return nil, fmt.Errorf("row %d has an empty parent", index+1)
 		}
 		routes = append(routes, route)
 	}

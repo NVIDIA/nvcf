@@ -1042,19 +1042,19 @@ func TestGatewayAPIRoutesShouldBeAcceptedAndResolvedRunsExplicitWaits(t *testing
 	fake.result = harness.Result{ExitCode: 0}
 	t.Setenv("BDD_ROUTE_NAMESPACE", "nvcf")
 	table := docTable(t, [][]string{
-		{"kind", "name", "namespace"},
-		{"HTTPRoute", "nvcf-api-control-plane", "${BDD_ROUTE_NAMESPACE}"},
-		{"GRPCRoute", "nvcf-api-control-plane-grpc", "nvcf"},
+		{"kind", "name", "namespace", "parent"},
+		{"HTTPRoute", "nvcf-api-control-plane", "${BDD_ROUTE_NAMESPACE}", "shared-gw"},
+		{"GRPCRoute", "nvcf-api-control-plane-grpc", "nvcf", "api-grpc-gw"},
 	})
 
 	if err := sc.gatewayAPIRoutesShouldBeAcceptedAndResolved(context.Background(), "k3d-ncp-local-cp", "2m", table); err != nil {
 		t.Fatalf("wait for Gateway API routes: %v", err)
 	}
 	want := []string{
-		`kubectl wait httproute/nvcf-api-control-plane -n nvcf --context k3d-ncp-local-cp '--for=jsonpath={.status.parents[0].conditions[?(@.type=="Accepted")].status}=True' --timeout=2m`,
-		`kubectl wait grpcroute/nvcf-api-control-plane-grpc -n nvcf --context k3d-ncp-local-cp '--for=jsonpath={.status.parents[0].conditions[?(@.type=="Accepted")].status}=True' --timeout=2m`,
-		`kubectl wait httproute/nvcf-api-control-plane -n nvcf --context k3d-ncp-local-cp '--for=jsonpath={.status.parents[0].conditions[?(@.type=="ResolvedRefs")].status}=True' --timeout=2m`,
-		`kubectl wait grpcroute/nvcf-api-control-plane-grpc -n nvcf --context k3d-ncp-local-cp '--for=jsonpath={.status.parents[0].conditions[?(@.type=="ResolvedRefs")].status}=True' --timeout=2m`,
+		`kubectl wait httproute/nvcf-api-control-plane -n nvcf --context k3d-ncp-local-cp '--for=jsonpath={.status.parents[?(@.parentRef.name=="shared-gw")].conditions[?(@.type=="Accepted")].status}=True' --timeout=2m`,
+		`kubectl wait grpcroute/nvcf-api-control-plane-grpc -n nvcf --context k3d-ncp-local-cp '--for=jsonpath={.status.parents[?(@.parentRef.name=="api-grpc-gw")].conditions[?(@.type=="Accepted")].status}=True' --timeout=2m`,
+		`kubectl wait httproute/nvcf-api-control-plane -n nvcf --context k3d-ncp-local-cp '--for=jsonpath={.status.parents[?(@.parentRef.name=="shared-gw")].conditions[?(@.type=="ResolvedRefs")].status}=True' --timeout=2m`,
+		`kubectl wait grpcroute/nvcf-api-control-plane-grpc -n nvcf --context k3d-ncp-local-cp '--for=jsonpath={.status.parents[?(@.parentRef.name=="api-grpc-gw")].conditions[?(@.type=="ResolvedRefs")].status}=True' --timeout=2m`,
 	}
 	if len(fake.runs) != len(want) {
 		t.Fatalf("runs = %d, want %d", len(fake.runs), len(want))
@@ -1076,16 +1076,16 @@ func TestGatewayAPIRoutesShouldBeAcceptedAndResolvedNamesFailingRowAndCondition(
 		{ExitCode: 1, Stdout: secretOutput, Stderr: secretOutput},
 	}
 	table := docTable(t, [][]string{
-		{"kind", "name", "namespace"},
-		{"HTTPRoute", "nvcf-api-control-plane", "nvcf"},
-		{"GRPCRoute", "nvcf-api-control-plane-grpc", "nvcf"},
+		{"kind", "name", "namespace", "parent"},
+		{"HTTPRoute", "nvcf-api-control-plane", "nvcf", "shared-gw"},
+		{"GRPCRoute", "nvcf-api-control-plane-grpc", "nvcf", "api-grpc-gw"},
 	})
 
 	err := sc.gatewayAPIRoutesShouldBeAcceptedAndResolved(context.Background(), "k3d-ncp-local-cp", "2m", table)
 	if err == nil {
 		t.Fatal("expected route readiness failure")
 	}
-	for _, want := range []string{"row 2", "GRPCRoute/nvcf-api-control-plane-grpc", `namespace "nvcf"`, `condition "ResolvedRefs"`} {
+	for _, want := range []string{"row 2", "GRPCRoute/nvcf-api-control-plane-grpc", `namespace "nvcf"`, `parent "api-grpc-gw"`, `condition "ResolvedRefs"`} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error = %q, want %q", err, want)
 		}
@@ -1096,9 +1096,9 @@ func TestGatewayAPIRoutesShouldBeAcceptedAndResolvedNamesFailingRowAndCondition(
 }
 
 func TestGatewayAPIRouteTableRejectsEmptyFieldsBeforeRunning(t *testing.T) {
-	for _, row := range [][]string{{"", "route", "nvcf"}, {"HTTPRoute", "", "nvcf"}, {"HTTPRoute", "route", ""}} {
+	for _, row := range [][]string{{"", "route", "nvcf", "gateway"}, {"HTTPRoute", "", "nvcf", "gateway"}, {"HTTPRoute", "route", "", "gateway"}, {"HTTPRoute", "route", "nvcf", ""}} {
 		sc, fake := newScenarioContext(t)
-		table := docTable(t, [][]string{{"kind", "name", "namespace"}, {"HTTPRoute", "valid", "nvcf"}, row})
+		table := docTable(t, [][]string{{"kind", "name", "namespace", "parent"}, {"HTTPRoute", "valid", "nvcf", "gateway"}, row})
 		if err := sc.gatewayAPIRoutesShouldBeAcceptedAndResolved(context.Background(), "k3d-ncp-local-cp", "2m", table); err == nil {
 			t.Fatalf("expected validation error for row %#v", row)
 		}

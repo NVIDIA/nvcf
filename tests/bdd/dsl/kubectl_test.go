@@ -132,12 +132,13 @@ func TestGatewayAPIRouteConditionWaitCommandBuildsExplicitWait(t *testing.T) {
 		Kind:      "HTTPRoute",
 		Name:      "nvcf-api-control-plane",
 		Namespace: "nvcf",
+		Parent:    "shared-gw",
 	}
 	got, err := GatewayAPIRouteConditionWaitCommand(route, "${BDD_GATEWAY_CONTEXT}", "Accepted", "2m")
 	if err != nil {
 		t.Fatalf("build command: %v", err)
 	}
-	want := `kubectl wait httproute/nvcf-api-control-plane -n nvcf --context k3d-ncp-local-cp '--for=jsonpath={.status.parents[0].conditions[?(@.type=="Accepted")].status}=True' --timeout=2m`
+	want := `kubectl wait httproute/nvcf-api-control-plane -n nvcf --context k3d-ncp-local-cp '--for=jsonpath={.status.parents[?(@.parentRef.name=="shared-gw")].conditions[?(@.type=="Accepted")].status}=True' --timeout=2m`
 	if got != want {
 		t.Fatalf("command = %q, want %q", got, want)
 	}
@@ -146,7 +147,7 @@ func TestGatewayAPIRouteConditionWaitCommandBuildsExplicitWait(t *testing.T) {
 func TestGatewayAPIRouteConditionWaitCommandPreservesCallerSuppliedRouteKind(t *testing.T) {
 	for _, kind := range []string{"GRPCRoute", "TCPRoute", "UDPRoute"} {
 		t.Run(kind, func(t *testing.T) {
-			route := GatewayAPIRoute{Kind: kind, Name: "worker-route", Namespace: "gateway-system"}
+			route := GatewayAPIRoute{Kind: kind, Name: "worker-route", Namespace: "gateway-system", Parent: "worker-gateway"}
 			got, err := GatewayAPIRouteConditionWaitCommand(route, "k3d-ncp-local-cp", "ResolvedRefs", "2m")
 			if err != nil {
 				t.Fatalf("build command: %v", err)
@@ -167,12 +168,13 @@ func TestGatewayAPIRouteConditionWaitCommandRejectsMissingInputs(t *testing.T) {
 		condition   string
 		timeout     string
 	}{
-		{name: "kind", route: GatewayAPIRoute{Name: "api", Namespace: "nvcf"}, kubeContext: "k3d-ncp-local", condition: "Accepted", timeout: "2m"},
-		{name: "name", route: GatewayAPIRoute{Kind: "HTTPRoute", Namespace: "nvcf"}, kubeContext: "k3d-ncp-local", condition: "Accepted", timeout: "2m"},
-		{name: "namespace", route: GatewayAPIRoute{Kind: "HTTPRoute", Name: "api"}, kubeContext: "k3d-ncp-local", condition: "Accepted", timeout: "2m"},
-		{name: "context", route: GatewayAPIRoute{Kind: "HTTPRoute", Name: "api", Namespace: "nvcf"}, condition: "Accepted", timeout: "2m"},
-		{name: "condition", route: GatewayAPIRoute{Kind: "HTTPRoute", Name: "api", Namespace: "nvcf"}, kubeContext: "k3d-ncp-local", timeout: "2m"},
-		{name: "timeout", route: GatewayAPIRoute{Kind: "HTTPRoute", Name: "api", Namespace: "nvcf"}, kubeContext: "k3d-ncp-local", condition: "Accepted"},
+		{name: "kind", route: GatewayAPIRoute{Name: "api", Namespace: "nvcf", Parent: "gateway"}, kubeContext: "k3d-ncp-local", condition: "Accepted", timeout: "2m"},
+		{name: "name", route: GatewayAPIRoute{Kind: "HTTPRoute", Namespace: "nvcf", Parent: "gateway"}, kubeContext: "k3d-ncp-local", condition: "Accepted", timeout: "2m"},
+		{name: "namespace", route: GatewayAPIRoute{Kind: "HTTPRoute", Name: "api", Parent: "gateway"}, kubeContext: "k3d-ncp-local", condition: "Accepted", timeout: "2m"},
+		{name: "parent", route: GatewayAPIRoute{Kind: "HTTPRoute", Name: "api", Namespace: "nvcf"}, kubeContext: "k3d-ncp-local", condition: "Accepted", timeout: "2m"},
+		{name: "context", route: GatewayAPIRoute{Kind: "HTTPRoute", Name: "api", Namespace: "nvcf", Parent: "gateway"}, condition: "Accepted", timeout: "2m"},
+		{name: "condition", route: GatewayAPIRoute{Kind: "HTTPRoute", Name: "api", Namespace: "nvcf", Parent: "gateway"}, kubeContext: "k3d-ncp-local", timeout: "2m"},
+		{name: "timeout", route: GatewayAPIRoute{Kind: "HTTPRoute", Name: "api", Namespace: "nvcf", Parent: "gateway"}, kubeContext: "k3d-ncp-local", condition: "Accepted"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -180,6 +182,35 @@ func TestGatewayAPIRouteConditionWaitCommandRejectsMissingInputs(t *testing.T) {
 				t.Fatal("expected validation error")
 			}
 		})
+	}
+}
+
+func TestGatewayAPIRouteReadinessWaitsPlansBothConditions(t *testing.T) {
+	routes := []GatewayAPIRoute{
+		{Kind: "HTTPRoute", Name: "api", Namespace: "nvcf", Parent: "shared-gw"},
+		{Kind: "GRPCRoute", Name: "api-grpc", Namespace: "nvcf", Parent: "api-grpc-gw"},
+	}
+	waits, err := GatewayAPIRouteReadinessWaits(routes, "k3d-ncp-local-cp", "2m")
+	if err != nil {
+		t.Fatalf("plan route waits: %v", err)
+	}
+	if len(waits) != 4 {
+		t.Fatalf("waits = %d, want 4", len(waits))
+	}
+	want := []struct {
+		row       int
+		condition string
+		parent    string
+	}{
+		{row: 1, condition: "Accepted", parent: "shared-gw"},
+		{row: 2, condition: "Accepted", parent: "api-grpc-gw"},
+		{row: 1, condition: "ResolvedRefs", parent: "shared-gw"},
+		{row: 2, condition: "ResolvedRefs", parent: "api-grpc-gw"},
+	}
+	for index, wait := range waits {
+		if wait.Row != want[index].row || wait.Condition != want[index].condition || wait.Route.Parent != want[index].parent {
+			t.Fatalf("wait %d = %#v, want row=%d condition=%q parent=%q", index+1, wait, want[index].row, want[index].condition, want[index].parent)
+		}
 	}
 }
 

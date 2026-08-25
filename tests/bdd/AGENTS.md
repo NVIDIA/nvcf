@@ -55,10 +55,10 @@ logic into `dsl/`.
 - Function lifecycle CLI option tables preserve row order, repeated options,
   empty values, and product-invalid values. Only the `option | value` table
   structure is validated before the command runs.
-- Gateway API route readiness tables expose each route's kind, name, and
-  namespace plus the shared context and timeout. The step requires
-  `Accepted=True` and `ResolvedRefs=True` but does not allowlist route kinds or
-  duplicate Gateway API validation.
+- Gateway API route readiness tables expose each route's kind, name,
+  namespace, and intended Gateway parent plus the shared context and timeout.
+  The step requires `Accepted=True` and `ResolvedRefs=True` for that parent but
+  does not allowlist route kinds or duplicate Gateway API validation.
 - File-mutating steps (`I copy the file`, `I update yaml file`,
   `I prepare self-managed secrets file`, `I substitute a block`)
   snapshot the destination through `Suite.Ledger` before the first write.
