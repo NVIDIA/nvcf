@@ -222,7 +222,7 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
     Scenario: Operator launches an NVCT task and waits for it to complete
       When I run command:
         """
-        tests/bdd/scripts/run-nvct-task-smoke.sh
+        env NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x tests/bdd/scripts/run-nvct-task-smoke.sh
         """
       Then the command exit code should be 0
       And the command output should contain "COMPLETED"
@@ -242,7 +242,7 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
       And I successfully deploy the function selected by NVCF CLI with options:
         | option          | value               |
         | --gpu           | H100                |
-        | --instance-type | NCP.GPU.H100_8x     |
+        | --instance-type | NCP.GPU.H100_1x     |
         | --backend       | ncp-local-compute-1 |
         | --regions       | us-west-1           |
         | --min-instances | 1                   |
@@ -276,7 +276,7 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
       And I successfully deploy the function selected by NVCF CLI with options:
         | option          | value               |
         | --gpu           | H100                |
-        | --instance-type | NCP.GPU.H100_8x     |
+        | --instance-type | NCP.GPU.H100_1x     |
         | --backend       | ncp-local-compute-1 |
         | --regions       | us-west-1           |
         | --min-instances | 1                   |

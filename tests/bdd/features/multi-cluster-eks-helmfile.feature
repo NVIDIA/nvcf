@@ -415,7 +415,7 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
 
       When I run command:
         """
-        env NVCT_BDD_STATE_PATH=${HOME}/.nvcf-cli.nvcf-cli-eks-bdd-multi.state NVCT_BDD_API_KEYS_URL=http://${EKS_GATEWAY_ADDR}/v1/keys NVCT_BDD_API_KEYS_HOST=api-keys.${EKS_GATEWAY_DOMAIN} NVCT_BDD_TASKS_URL=http://${EKS_GATEWAY_ADDR}/v1/nvct/tasks NVCT_BDD_TASKS_HOST=tasks.${EKS_GATEWAY_DOMAIN} NVCT_BDD_TASK_BACKEND=${EKS_COMPUTE_CLUSTER_NAME} tests/bdd/scripts/run-nvct-task-smoke.sh
+        env NVCT_BDD_STATE_PATH=${HOME}/.nvcf-cli.nvcf-cli-eks-bdd-multi.state NVCT_BDD_API_KEYS_URL=http://${EKS_GATEWAY_ADDR}/v1/keys NVCT_BDD_API_KEYS_HOST=api-keys.${EKS_GATEWAY_DOMAIN} NVCT_BDD_TASKS_URL=http://${EKS_GATEWAY_ADDR}/v1/nvct/tasks NVCT_BDD_TASKS_HOST=tasks.${EKS_GATEWAY_DOMAIN} NVCT_BDD_TASK_BACKEND=${EKS_COMPUTE_CLUSTER_NAME} NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_8x tests/bdd/scripts/run-nvct-task-smoke.sh
         """
       Then the command exit code should be 0
       And the command output should contain "COMPLETED"
