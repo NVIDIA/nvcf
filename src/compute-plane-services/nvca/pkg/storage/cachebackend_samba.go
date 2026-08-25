@@ -154,8 +154,20 @@ func EnsureSambaModelCacheInfra(
 	}
 
 	rwSecret, roSecret := newSambaModelCacheSecrets()
+
+	// Ensure the namespace first and patch required labels onto it if it already
+	// exists. ensureCreated treats AlreadyExists as success without updating, so
+	// pre-existing namespaces (e.g. from a previous NVCA version that did not
+	// set WorkloadInstanceTypeLabel) must be patched explicitly.
+	ns := NewModelCacheInitNamespace()
+	if err := ensureCreated(ctx, c, ns); err != nil {
+		return false, fmt.Errorf("ensure samba model cache %T: %w", ns, err)
+	}
+	if err := ensureNamespaceLabels(ctx, c, ns); err != nil {
+		return false, fmt.Errorf("patch samba model cache %T labels: %w", ns, err)
+	}
+
 	objs := []client.Object{
-		NewModelCacheInitNamespace(),
 		rwSecret,
 		roSecret,
 		newSambaModelCacheDataPVC(cacheHandle, size),
@@ -188,6 +200,40 @@ func ensureCreated(ctx context.Context, c client.Client, obj client.Object) erro
 		return err
 	}
 	return nil
+}
+
+// ensureNamespaceLabels patches the labels from want onto the live namespace.
+// It is a no-op when all required labels are already present with the correct
+// values, so it is safe to call on every reconcile. NotFound is treated as a
+// no-op: the namespace was just created by ensureCreated with the correct
+// labels and does not need patching.
+func ensureNamespaceLabels(ctx context.Context, c client.Client, want *corev1.Namespace) error {
+	live := &corev1.Namespace{}
+	if err := c.Get(ctx, client.ObjectKey{Name: want.Name}, live); err != nil {
+		if k8serrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	// Check whether all required labels are already present with correct values.
+	allPresent := true
+	for k, v := range want.Labels {
+		if live.Labels[k] != v {
+			allPresent = false
+			break
+		}
+	}
+	if allPresent {
+		return nil
+	}
+	patched := live.DeepCopy()
+	if patched.Labels == nil {
+		patched.Labels = make(map[string]string, len(want.Labels))
+	}
+	for k, v := range want.Labels {
+		patched.Labels[k] = v
+	}
+	return c.Patch(ctx, patched, client.MergeFrom(live))
 }
 
 // sambaModelCacheSelector is the unique pod selector for a handle's Samba server.

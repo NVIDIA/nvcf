@@ -51,6 +51,13 @@ const (
 	withoutHttpServer = false
 )
 
+var workerEnvAliases = map[string][]string{
+	"TASK_ID":     {"NVCT_TASK_ID"},
+	"TASK_NAME":   {"NVCT_TASK_NAME"},
+	"NCA_ID":      {"NVCT_NCA_ID"},
+	"INSTANCE_ID": {"NVCT_INSTANCE_ID"},
+}
+
 // ------------------------------------------------------------------------
 
 // Run is the entrypoint for the NVCT worker service.
@@ -87,9 +94,9 @@ func NewRootCommand(ctx context.Context, logger *logs.ZapLogger, startupTime tim
 			if err != nil {
 				return sharedTypes.NewInternalError(err)
 			}
-			cmd.Flags().VisitAll(func(flag *pflag.Flag) {
-				v.MustBindEnv(flag.Name)
-			})
+			if err := bindWorkerConfigEnvs(v, cmd.Flags()); err != nil {
+				return sharedTypes.NewInternalError(err)
+			}
 
 			v.SetDefault("NVCT_RESULT_HANDLING_STRATEGY", "NONE")
 
@@ -149,6 +156,20 @@ func NewRootCommand(ctx context.Context, logger *logs.ZapLogger, startupTime tim
 	}
 
 	return rootCmd
+}
+
+func bindWorkerConfigEnvs(v *viper.Viper, flags *pflag.FlagSet) error {
+	var bindErr error
+	flags.VisitAll(func(flag *pflag.Flag) {
+		if bindErr != nil {
+			return
+		}
+
+		envNames := append([]string{flag.Name}, workerEnvAliases[flag.Name]...)
+		bindArgs := append([]string{flag.Name}, envNames...)
+		bindErr = v.BindEnv(bindArgs...)
+	})
+	return bindErr
 }
 
 func viperDecoderConfig() viper.DecoderConfigOption {

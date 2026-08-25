@@ -317,7 +317,7 @@ public class FunctionDeploymentService {
                                                                    function, deployment);
             } else {
                 // Only audit Function status update. The deployment will be deleted in the
-                // async GracefulCleanDeploymentTask and the corresponding audit log will be
+                // GracefulDeploymentCleanupService and the corresponding audit log will be
                 // created from there.
                 functionAuditService.auditFunctionUpdate(payloadBuilder, functionJsonBefore,
                                                          function);
@@ -458,7 +458,7 @@ public class FunctionDeploymentService {
                                 func -> BUSY_STATUSES.contains(func.getFunctionStatus()))
                         .orElseThrow(() -> {
                             var mesg = format(MESG_FUNCTION_NOT_BUSY_TO_ACTIVATE, functionId,
-                                    functionVersionId);
+                                              functionVersionId);
                             log.error(mesg);
                             return new IllegalArgumentException(mesg);
                         });
@@ -505,7 +505,7 @@ public class FunctionDeploymentService {
                                 func -> BUSY_STATUSES.contains(func.getFunctionStatus()))
                         .orElseThrow(() -> {
                             var mesg = format(MESG_FUNCTION_NOT_BUSY_TO_DEGRADING, functionId,
-                                    functionVersionId);
+                                              functionVersionId);
                             log.error(mesg);
                             return new IllegalArgumentException(mesg);
                         });
@@ -532,7 +532,7 @@ public class FunctionDeploymentService {
                                 func -> BUSY_STATUSES.contains(func.getFunctionStatus()))
                         .orElseThrow(() -> {
                             var mesg = format(MESG_FUNCTION_NOT_BUSY_TO_DEGRADED, functionId,
-                                    functionVersionId);
+                                              functionVersionId);
                             log.error(mesg);
                             return new IllegalArgumentException(mesg);
                         });

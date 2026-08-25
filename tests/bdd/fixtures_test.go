@@ -244,6 +244,7 @@ func TestNVCTTaskSmokeUsesTaskSimpleSample(t *testing.T) {
 		"Key-Issuer-Service",
 		"NVCT_BDD_STATE_PATH",
 		"NVCT_BDD_TASKS_HOST",
+		"NVCT_BDD_TASK_INSTANCE_TYPE must be set",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("NVCT task smoke script does not reference %q", want)
@@ -257,6 +258,9 @@ func TestNVCTTaskSmokeUsesTaskSimpleSample(t *testing.T) {
 	}
 	if strings.Contains(script, "docker.io/library/busybox") {
 		t.Fatal("NVCT task smoke script still uses the synthetic busybox sample")
+	}
+	if strings.Contains(script, "NVCT_BDD_TASK_INSTANCE_TYPE:-") {
+		t.Fatal("NVCT task smoke script has a topology-dependent instance type default")
 	}
 }
 
