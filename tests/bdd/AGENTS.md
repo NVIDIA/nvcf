@@ -42,6 +42,9 @@ so `nvcf-cli` and the NVCF API remain the product-validation boundary.
   `Suite.Runner`.
 - `godog_test.go` owns the live entry points and the fake-runner
   wiring tests.
+- `live/` owns the separate portable runner. It may reuse `harness`, `dsl`,
+  and `steps`, but must not add target modes or feature selection to
+  `godog_test.go`.
 
 A step handler that does anything beyond argv assembly, ledger
 snapshot, runner invocation, and result capture is a smell. Move the
@@ -113,6 +116,9 @@ logic into `dsl/`.
   `tools/ncp-local-cluster/Makefile` and
   `deploy/stacks/self-managed/Makefile` are intentionally maintained
   so an operator can clean by hand without involving `go test`.
+- The portable `live/` suite rejects `BDD_CLEANUP_MODE`. Those cleanup
+  commands are specific to ncp-local. Remote and production targets must never
+  inherit local cleanup behavior.
 - Cleanup belongs in `harness/cleanup.go`, never in `steps/`. Do not
   introduce a `Given the cluster is freshly destroyed` Given or
   similar; the conflict precheck inside every feature Background is
@@ -223,9 +229,36 @@ multi-cluster feature:
   check that a destructive command was issued. Do not deep-equality
   the recorder; consolidating equivalent steps in the future must not
   break these tests.
+- Portable wiring tests live in `live/` and use the same fake
+  `CommandRunner`. Portable features run one file per Godog phase. The runner
+  restores step-exported environment values and ledger-backed files between
+  files so one selectable smoke cannot become an undocumented provider for the
+  next.
 - Live entry points (`TestSingleClusterUp`, `TestMultiClusterUp`,
   `TestSingleClusterHelmfile`) skip under `-short`. They build the
   CLI and exercise real `make`/`kubectl`/`helm` against k3d.
+
+## Portable live features
+
+- Target YAML is versioned, non-secret data. It supplies execution coordinates
+  and workload inputs only. It must not select features or contain destructive
+  consent.
+- Features are selected by the operator independently of the target. One
+  optional provider runs before one or more smoke features. Do not rely on
+  Godog file ordering.
+- Every portable smoke is independently selectable. It declares required
+  target fields through environment preconditions and does not depend on an
+  earlier feature's exported variables or files.
+- Every Kubernetes command exposes both kubeconfig and context in Gherkin.
+  Ambient current context is not portable and is unsafe for remote targets.
+- Cluster-wide mutations require separate invocation-time consent and use the
+  product's expected-cluster identity guard before mutation.
+- Register compensation before its destructive command. Keep the action,
+  target, and timeout visible. Compensation handlers hide only reverse-order
+  execution and continue-after-failure mechanics.
+- Do not add capability auto-detection, target-based feature skipping, or
+  product validation to the runner. Missing inputs fail the feature's visible
+  preconditions; unsupported behavior fails through the real CLI or API.
 
 ## Style
 

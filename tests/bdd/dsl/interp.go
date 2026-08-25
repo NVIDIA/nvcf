@@ -21,8 +21,11 @@ limitations under the License.
 package dsl
 
 import (
+	"fmt"
 	"os"
 	"regexp"
+	"sort"
+	"strings"
 )
 
 // braced matches the only environment variable form the DSL recognizes:
@@ -40,4 +43,28 @@ func Interpolate(s string) string {
 		name := match[2 : len(match)-1]
 		return os.Getenv(name)
 	})
+}
+
+// InterpolateRequired expands the same syntax as Interpolate but rejects an
+// unset or empty referenced variable. Use it for lifecycle coordinates where
+// an empty expansion could point a mutation or restoration at the wrong path.
+func InterpolateRequired(s string) (string, error) {
+	missingSet := make(map[string]struct{})
+	resolved := braced.ReplaceAllStringFunc(s, func(match string) string {
+		name := match[2 : len(match)-1]
+		value := os.Getenv(name)
+		if value == "" {
+			missingSet[name] = struct{}{}
+		}
+		return value
+	})
+	if len(missingSet) == 0 {
+		return resolved, nil
+	}
+	missing := make([]string, 0, len(missingSet))
+	for name := range missingSet {
+		missing = append(missing, name)
+	}
+	sort.Strings(missing)
+	return "", fmt.Errorf("required interpolation variables are empty: %s", strings.Join(missing, ", "))
 }

@@ -12,7 +12,7 @@ in `AGENTS.md`.
 ```
 features/   Gherkin feature files: single-cluster CLI, multi-cluster CLI,
             single/multi-cluster Helmfile (k3d), and single/multi-cluster
-            EKS Helmfile (non-local).
+            EKS Helmfile (non-local), plus target-neutral smoke features.
 fixtures/   Starting environment YAML and CLI config the features copy from.
 harness/    Suite lifecycle: Config, CommandRunner, Ledger, CommandCache,
             Suite. Builds nvcf-cli at suite start; exports NVCF_CLI and
@@ -22,6 +22,9 @@ dsl/        Pure helpers: ${VAR} interpolation, dotted-path YAML upsert
             row matching, kubectl manifest builders.
 steps/      Godog step handlers. Every handler is a thin wrapper around a
             dsl helper or CommandRunner.Run; no domain validation.
+live/       Separate portable runner for optional provider plus independently
+            selectable smoke features. See live/README.md.
+targets/    Versioned, non-secret execution coordinates for portable smokes.
 godog_test.go
             Live entry points (TestSingleClusterUp, TestSingleClusterUpOneClick,
             TestMultiClusterUp, TestSingleClusterHelmfile, TestMultiClusterHelmfile,
@@ -44,9 +47,14 @@ cd tests/bdd
 go test -short ./...
 ```
 
-Live runs build nvcf-cli, bring up a real k3d cluster, and exercise the
-feature end to end. They require an NGC API key and sample registry
-coordinates.
+To run one smoke feature against an already installed local or remote target,
+or to compose a provider with several target-neutral smokes, see
+`live/README.md`.
+
+The install-suite live runs build nvcf-cli, bring up a real k3d cluster, and
+exercise the feature end to end. They require an NGC API key and sample
+registry coordinates. The portable live runner attaches to the target selected
+in its target file.
 
 Each `-run` argument is anchored with `^...$` so the live entry point
 runs without also matching its `...FeatureFileWiresToSteps` wiring

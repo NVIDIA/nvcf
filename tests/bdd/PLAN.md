@@ -119,6 +119,8 @@ refactor in every consumer; that is a feature.
 | `When I run command:` (docstring) | Multi-line form for commands that don't fit on one line. Same recording semantics. |
 | `When I successfully run command {string}` | Single-line command that must exit 0. Preserves the command result for later output assertions and records the resolved command in the successful-command cache. |
 | `When I successfully run command:` (docstring) | Multi-line form for commands that must exit 0. Uses the same result recording, interpolation, logging, and cache semantics as the single-line form. |
+| `And after this scenario I successfully run command within {string}:` (docstring) | Registers the visible command as bounded scenario compensation. Compensations run in reverse registration order after success or failure, continue past failures, and preserve product behavior in the command text. |
+| `Then within {string} this command should succeed, checking every {string}:` (docstring) | Repeats the visible command after product-level nonzero exits until it exits 0 or the visible timeout expires. Runner failures stop immediately. The successful result remains available to output assertions. |
 | `When I run command with a terminal:` (docstring) | Same as the docstring form, but stdin is attached to a pseudo-terminal so the child sees a TTY on fd 0. For commands that gate interactive-only behavior on a TTY, such as `nvcf-cli self-hosted up` (its auth-gate mints the admin token only when stdin is a terminal). No input is written; stdout and stderr are captured separately as usual. |
 | `When I export command output to environment variable {string}` | Exports the previous command's trimmed stdout under the named env var. Fails the step unless the prior command exited 0 and produced non-empty stdout. Snapshotted by the env Ledger; restored at suite teardown. |
 
@@ -158,6 +160,7 @@ original order. Repeated options and empty values are preserved.
 | `Then the command exit code should be {int}` | Last-run exit code. |
 | `Then the command output should contain {string}` | Substring match on combined stdout + stderr. |
 | `Then the command output should not contain {string}` | Negative substring match. |
+| `Then the JSON command output should contain:` (JSON docstring) | Parses the last command's stdout and the expected docstring as JSON, then requires the typed expected object fields while allowing additional actual fields. Lists remain order- and length-sensitive. |
 | `Then file {string} should exist` | |
 | `Then yaml file {string} key {string} should equal {string}` | Reads the YAML file, walks the dotted key path, compares to the value (with `${VAR}` expansion). |
 | `Then yaml file {string} key {string} should not be empty` | Same key resolution; passes if the resolved value is non-empty. Use for non-deterministic outputs (cluster IDs, identity sources) where exact-value assertions are wrong. |
@@ -206,10 +209,18 @@ them via `${VAR}` in command strings and table cells.
 | `REPO_ROOT` | `git rev-parse --show-toplevel` at suite start | Absolute path to the repo root. Required when invoking `make -C deploy/stacks/self-managed` because the Makefile's `-C` changes cwd; relative paths to fixtures from there break. |
 | `NGC_API_KEY` / `SAMPLE_NGC_ORG` / `SAMPLE_NGC_TEAM` | The operator's shell | Passed through unchanged. An environment-variable precondition step asserts they are non-empty before any scenario uses them. |
 
+The portable live runner additionally maps its selected target to stable
+`BDD_NVCF_*`, `BDD_COMPUTE_*`, `BDD_NVCA_*`, and `BDD_WORKLOAD_*` variables.
+It runs each selected feature separately and restores step-exported environment
+variables and ledger-backed file changes between features. CLI state and the
+successful bootstrap command cache remain suite-scoped. See `live/README.md`
+for the target schema and safety contract.
+
 Feature files may also export their own env vars at runtime via
 `When I export command output to environment variable {string}`. Those
-are snapshotted by the env Ledger and restored at teardown so they do
-not leak into later test binaries in the same `go test` invocation.
+are snapshotted by the env Ledger and restored at teardown. The portable live
+runner restores them after each selected feature so they cannot become an
+implicit input to another smoke.
 The EKS Helmfile feature exports `EKS_GATEWAY_ADDR` this way from
 `kubectl get gateway` after the Gateway resource is Programmed.
 
@@ -255,8 +266,9 @@ restoration ledger:
   body, mode) in memory. Repeat writes against the same path during a
   suite do not overwrite the snapshot; only the first write records.
 - At suite teardown, the runner restores every registered path to its
-  pre-suite state. Files that did not exist before are deleted; files
-  that did are rewritten with the original bytes and mode.
+  pre-suite state. The portable live runner performs the same restoration
+  between selected features. Files that did not exist before are deleted;
+  files that did are rewritten with the original bytes and mode.
 - `Config.LedgerDir` (`out/<run-id>/originals/`) is reserved for an
   on-disk variant if very large fixtures ever push memory limits.
   Today the directory is created but unused.
@@ -344,6 +356,7 @@ old `tests/bdd` tree.
 tests/bdd/
   features/                      (Gherkin, already committed)
   fixtures/                      (sample env + CLI config, already committed)
+  targets/                       (non-secret portable live coordinates)
   STEPS.md                       (this document)
 
   harness/                       (phase 1)
@@ -351,6 +364,8 @@ tests/bdd/
     runner.go                    (CommandRunner around infra.Runner)
     ledger.go                    (file restoration ledger)
     cache.go                     (command-success cache)
+    deferred.go                  (bounded scenario compensation stack)
+    eventually.go                (bounded command retry)
     suite.go                     (lifecycle: build CLI, set env, teardown)
 
   dsl/                           (phase 1)
@@ -364,6 +379,8 @@ tests/bdd/
     command_steps.go             (I run command / command has succeeded)
     assertion_steps.go           (exit code, output contains, file/yaml/json)
     infra_steps.go               (cluster bootstrap, image pull secret)
+
+  live/                          (portable target loader and phased runner)
 
   godog_test.go                  (phase 3 and 4: TestSingleClusterUp,
                                   TestMultiClusterUp, TestSingleClusterHelmfile,
@@ -432,14 +449,17 @@ func (c *CommandCache) Has(commandText string) bool
 // Suite is the top-level lifecycle owner. Built once per go test
 // invocation; runs one or more feature files.
 type Suite struct {
-    Config Config
-    Runner CommandRunner
-    Ledger *Ledger
-    Cache  *CommandCache
+    Config    Config
+    Runner    CommandRunner
+    Ledger    *Ledger
+    EnvLedger *EnvLedger
+    Cache     *CommandCache
 }
 
 func NewSuite(t *testing.T) (*Suite, error) // builds nvcf-cli, sets NVCF_CLI + REPO_ROOT
-func (s *Suite) Teardown() error            // calls Ledger.RestoreAll
+func NewSuiteWithOptions(t *testing.T, options SuiteOptions) (*Suite, error)
+func (s *Suite) RestoreFeatureState() error // restores step-owned files and env vars
+func (s *Suite) Teardown() error            // also restores the exact CLI state file
 ```
 
 #### dsl package

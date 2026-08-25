@@ -37,7 +37,7 @@ import (
 // ScenarioContext holds the per-scenario state Godog hands to each
 // handler. The Suite pointer is shared across scenarios in the same
 // suite (so the Ledger and CommandCache persist); LastResult,
-// LastErr, and LastCommand are reset per scenario inside the Before
+// LastErr, LastCommand, and Deferred are reset per scenario inside the Before
 // hook installed by RegisterAll. LastCommand tracks the resolved text
 // of the most recent command executed in this scenario. A successful-run step
 // or an explicit "the command exit code should be 0" assertion uses it to seed
@@ -46,6 +46,7 @@ import (
 // command.
 type ScenarioContext struct {
 	Suite         *harness.Suite
+	Deferred      *harness.DeferredCommands
 	LastResult    harness.Result
 	LastErr       error
 	LastCommand   string
@@ -56,7 +57,7 @@ type ScenarioContext struct {
 // caller (typically a Godog scenario initializer) is responsible for
 // creating one ScenarioContext per scenario.
 func NewScenarioContext(suite *harness.Suite) *ScenarioContext {
-	return &ScenarioContext{Suite: suite}
+	return &ScenarioContext{Suite: suite, Deferred: harness.NewDeferredCommands()}
 }
 
 // RegisterAll wires every step from every category to ctx so a single
@@ -67,7 +68,11 @@ func RegisterAll(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 		sc.LastErr = nil
 		sc.LastCommand = ""
 		sc.NVCFCLIConfig = ""
+		sc.Deferred.Reset()
 		return c, nil
+	})
+	ctx.After(func(c context.Context, _ *godog.Scenario, _ error) (context.Context, error) {
+		return c, sc.Deferred.Run(c, sc.Suite.Runner, sc.Suite.Config.CommandLogDir)
 	})
 	// Godog's default pretty formatter buffers the scenario block until
 	// every step finishes, which makes hangs invisible during a live

@@ -32,11 +32,21 @@ import (
 // environment, and exposes the Ledger, EnvLedger, and CommandCache
 // that step handlers share across scenarios.
 type Suite struct {
-	Config    Config
-	Runner    CommandRunner
-	Ledger    *Ledger
-	EnvLedger *EnvLedger
-	Cache     *CommandCache
+	Config          Config
+	Runner          CommandRunner
+	Ledger          *Ledger
+	EnvLedger       *EnvLedger
+	Cache           *CommandCache
+	lifecycleLedger *Ledger
+}
+
+// SuiteOptions makes lifecycle side effects explicit. CLIStatePath is the
+// exact nvcf-cli state file the suite may mutate. CleanupMode controls only
+// the ncp-local pre-suite cleanup hook and must remain unset for attached
+// remote targets.
+type SuiteOptions struct {
+	CLIStatePath string
+	CleanupMode  CleanupMode
 }
 
 // NewSuite resolves Config, creates the run-id directory tree, builds
@@ -45,6 +55,31 @@ type Suite struct {
 // initializer.
 func NewSuite(t *testing.T) (*Suite, error) {
 	t.Helper()
+	mode, err := ResolveCleanupMode()
+	if err != nil {
+		return nil, err
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("resolve home dir: %w", err)
+	}
+	return NewSuiteWithOptions(t, SuiteOptions{
+		CLIStatePath: filepath.Join(home, ".nvcf-cli.nvcf-cli-local.state"),
+		CleanupMode:  mode,
+	})
+}
+
+// NewSuiteWithOptions builds the shared harness with explicit lifecycle
+// inputs. Portable live suites use it to protect the state file selected by
+// their target and to avoid inheriting local cleanup by accident.
+func NewSuiteWithOptions(t *testing.T, options SuiteOptions) (*Suite, error) {
+	t.Helper()
+	if options.CLIStatePath == "" {
+		return nil, errors.New("CLI state path must not be empty")
+	}
+	if !filepath.IsAbs(options.CLIStatePath) {
+		return nil, errors.New("CLI state path must be absolute")
+	}
 	cfg, err := ResolveConfig()
 	if err != nil {
 		return nil, err
@@ -64,11 +99,12 @@ func NewSuite(t *testing.T) (*Suite, error) {
 	t.Setenv("NVCF_CLI", cfg.CLIPath)
 	t.Setenv("REPO_ROOT", cfg.RepoRoot)
 	suite := &Suite{
-		Config:    cfg,
-		Runner:    runner,
-		Ledger:    NewLedger(cfg.LedgerDir),
-		EnvLedger: NewEnvLedger(),
-		Cache:     NewCommandCache(),
+		Config:          cfg,
+		Runner:          runner,
+		Ledger:          NewLedger(filepath.Join(cfg.LedgerDir, "features")),
+		EnvLedger:       NewEnvLedger(),
+		Cache:           NewCommandCache(),
+		lifecycleLedger: NewLedger(filepath.Join(cfg.LedgerDir, "lifecycle")),
 	}
 	// Pre-suite destructive cleanup (BDD_CLEANUP_MODE) runs BEFORE
 	// snapshotting the CLI state file. Rationale: any destructive
@@ -77,13 +113,9 @@ func NewSuite(t *testing.T) (*Suite, error) {
 	// snapshotting the pre-cleanup state would preserve nothing useful.
 	// Cleanup never touches ~/.nvcf-cli.<config>.state, so the snapshot
 	// taken after cleanup is the right baseline for teardown to
-	// restore. ResolveCleanupMode rejects unknown values; a typo
-	// aborts the suite before any work runs.
-	mode, err := ResolveCleanupMode()
-	if err != nil {
-		return nil, err
-	}
-	if err := suite.RunPreSuiteCleanup(context.Background(), mode); err != nil {
+	// restore. Callers must pass a mode resolved through ResolveCleanupMode so
+	// an invalid operator value cannot silently become no cleanup.
+	if err := suite.RunPreSuiteCleanup(context.Background(), options.CleanupMode); err != nil {
 		return nil, err
 	}
 	// nvcf-cli init writes its state file to ~/.nvcf-cli.<config-name>.state
@@ -94,31 +126,39 @@ func NewSuite(t *testing.T) (*Suite, error) {
 	// kubectl, docker, and helm all resolve their config under $HOME
 	// and pointing HOME at an empty directory breaks the bootstrap
 	// Givens that bring up the cluster.
-	if err := suite.snapshotCLIStateFile("nvcf-cli-local"); err != nil {
+	if err := suite.snapshotCLIStateFile(options.CLIStatePath); err != nil {
 		return nil, err
 	}
 	return suite, nil
 }
 
-// snapshotCLIStateFile records the pre-suite contents of the CLI state
-// file the BDD scenarios mutate through nvcf-cli init. The contextName
-// must match the basename (sans extension) of the --config file the
-// features pass to nvcf-cli; today every feature uses
-// tests/bdd/fixtures/nvcf-cli-local.yaml, so this is hardcoded. If a
-// future feature introduces a second config, this call must be extended.
-func (s *Suite) snapshotCLIStateFile(contextName string) error {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("resolve home dir: %w", err)
-	}
-	statePath := filepath.Join(home, fmt.Sprintf(".nvcf-cli.%s.state", contextName))
-	return s.Ledger.Snapshot(statePath)
+// snapshotCLIStateFile records the exact state file selected by the suite
+// caller. The harness does not duplicate nvcf-cli's config-name-to-state-path
+// rules because those rules belong to the CLI and may change independently.
+func (s *Suite) snapshotCLIStateFile(statePath string) error {
+	return s.lifecycleLedger.Snapshot(statePath)
 }
 
-// Teardown restores every file the Ledger tracked and every env var
-// the EnvLedger tracked. Live entry points should defer it.
+// RestoreFeatureState restores file and environment mutations made through
+// steps, then starts clean ledgers for another independently selectable
+// feature. It does not restore suite-owned CLI state.
+func (s *Suite) RestoreFeatureState() error {
+	if err := errors.Join(s.Ledger.RestoreAll(), s.EnvLedger.RestoreAll()); err != nil {
+		return err
+	}
+	s.Ledger = NewLedger(filepath.Join(s.Config.LedgerDir, "features"))
+	s.EnvLedger = NewEnvLedger()
+	return nil
+}
+
+// Teardown restores feature mutations and suite-owned CLI state. Live entry
+// points should defer it.
 func (s *Suite) Teardown() error {
-	return errors.Join(s.Ledger.RestoreAll(), s.EnvLedger.RestoreAll())
+	var lifecycleErr error
+	if s.lifecycleLedger != nil {
+		lifecycleErr = s.lifecycleLedger.RestoreAll()
+	}
+	return errors.Join(s.Ledger.RestoreAll(), s.EnvLedger.RestoreAll(), lifecycleErr)
 }
 
 // buildCLI invokes `go build` directly via exec.Command rather than

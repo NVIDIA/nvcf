@@ -40,6 +40,8 @@ func registerCommandSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^I run command with a terminal:$`, sc.iRunCommandWithTTYDoc)
 	ctx.Step(`^command has succeeded:$`, sc.commandHasSucceededDoc)
 	ctx.Step(`^I export command output to environment variable "([^"]*)"$`, sc.iExportCommandOutputToEnv)
+	ctx.Step(`^after this scenario I successfully run command within "([^"]+)":$`, sc.afterScenarioISuccessfullyRunCommand)
+	ctx.Step(`^within "([^"]+)" this command should succeed, checking every "([^"]+)":$`, sc.commandShouldSucceedWithin)
 }
 
 func (sc *ScenarioContext) iRunCommandLine(ctx context.Context, commandText string) error {
@@ -73,6 +75,28 @@ func (sc *ScenarioContext) iRunCommandWithTTYDoc(ctx context.Context, doc *godog
 // caching path.
 func (sc *ScenarioContext) commandHasSucceededDoc(ctx context.Context, doc *godog.DocString) error {
 	return sc.cachedRun(ctx, doc.Content)
+}
+
+func (sc *ScenarioContext) afterScenarioISuccessfullyRunCommand(_ context.Context, timeout string, doc *godog.DocString) error {
+	resolved := strings.TrimSpace(dsl.Interpolate(doc.Content))
+	return sc.Deferred.Add(resolved, timeout)
+}
+
+func (sc *ScenarioContext) commandShouldSucceedWithin(
+	ctx context.Context,
+	timeout string,
+	interval string,
+	doc *godog.DocString,
+) error {
+	resolved := strings.TrimSpace(dsl.Interpolate(doc.Content))
+	result, err := harness.RunUntilSuccess(ctx, sc.Suite.Runner, resolved, timeout, interval)
+	sc.LastResult = result
+	sc.LastErr = err
+	sc.LastCommand = resolved
+	if err != nil {
+		return err
+	}
+	return sc.commandExitCodeShouldBe(0)
 }
 
 // runAndRecord is used by the When-form steps. It interpolates,

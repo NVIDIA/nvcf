@@ -22,6 +22,21 @@ import (
 	"fmt"
 )
 
+// MatchJSONDocument compares an expected JSON document to command output.
+// MatchSubset requires every expected object field while allowing additional
+// actual fields. Mismatch errors identify paths without printing values.
+func MatchJSONDocument(actualJSON, expectedJSON string, mode MatchMode) error {
+	var expected any
+	if err := json.Unmarshal([]byte(Interpolate(expectedJSON)), &expected); err != nil {
+		return fmt.Errorf("parse expected json: invalid JSON")
+	}
+	var actual any
+	if err := json.Unmarshal([]byte(actualJSON), &actual); err != nil {
+		return fmt.Errorf("parse command output: invalid JSON")
+	}
+	return deepCompare(expected, actual, mode, "")
+}
+
 // JSONContainsRows parses raw as a JSON array of objects and, for each
 // row map, asserts that an object matching every (key, value) pair in
 // the row exists in the array. Extra objects in the array are

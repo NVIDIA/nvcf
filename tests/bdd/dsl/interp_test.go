@@ -46,3 +46,17 @@ func TestInterpolateBracedOnly(t *testing.T) {
 		})
 	}
 }
+
+func TestInterpolateRequired(t *testing.T) {
+	t.Setenv("BDD_REQUIRED", "value")
+	got, err := InterpolateRequired("prefix-${BDD_REQUIRED}")
+	if err != nil {
+		t.Fatalf("interpolate: %v", err)
+	}
+	if got != "prefix-value" {
+		t.Fatalf("got %q", got)
+	}
+	if _, err := InterpolateRequired("${BDD_REQUIRED_MISSING}/state"); err == nil {
+		t.Fatal("expected missing variable error")
+	}
+}
