@@ -170,6 +170,11 @@ workers in a compute cluster to reach grpc-proxy in the control-plane cluster,
 complete [gRPC Invocation Enablement](./grpc-invocation-enablement.md) before
 you deploy or sync the control plane.
 
+Remote LLM workers use separate gRPC and reverse QUIC paths. Complete
+[LLM worker listeners](./gateway-routing.md#llm-worker-listeners) and
+[Remote compute clusters and regions](./llm-function-enablement.md#remote-compute-clusters-and-regions)
+before applying the control plane.
+
 <Warning>
 The Gateway address is embedded throughout your deployment. The `domain` value
 in your environment file, the Gateway API HTTPRoutes/TCPRoutes, and service
@@ -334,10 +339,10 @@ ingress:
 When `addons.llm` is enabled, the stack defaults
 `global.workerEndpoints.llmRequestRouterAddress` to
 `llm-request-router.nvcf.svc.cluster.local:50071`. Colocated workers require no
-additional configuration. For a split deployment, override this value with a
-request-router host and port that worker pods can reach. See
-[LLM Function Enablement](./llm-function-enablement.md) for the complete addon
-configuration.
+additional configuration. For a split deployment, this address alone is not
+enough. Configure the paired backend-router gRPC and reverse QUIC dial
+addresses, Gateway routes, DNS, and trust described in
+[Remote compute clusters and regions](./llm-function-enablement.md#remote-compute-clusters-and-regions).
 
 #### `domain` and `ingress` Configuration
 

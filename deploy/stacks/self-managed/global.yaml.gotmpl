@@ -860,6 +860,12 @@ llmApiGateway:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 
+{{- $pylonGrpcDialAddress := dig "addons" "llm" "requestRouter" "backendRouter" "pylonGrpcDialAddress" "" .Values | default "" | toString | trim }}
+{{- $pylonReverseTunnelDialAddress := dig "addons" "llm" "requestRouter" "backendRouter" "pylonReverseTunnelDialAddress" "" .Values | default "" | toString | trim }}
+{{- if and $llmEnabled (ne (empty $pylonGrpcDialAddress) (empty $pylonReverseTunnelDialAddress)) }}
+{{- fail "addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress and addons.llm.requestRouter.backendRouter.pylonReverseTunnelDialAddress must either both be set or both be omitted" }}
+{{- end }}
+
 llmRequestRouter:
   enabled: {{ dig "addons" "llm" "enabled" false .Values }}
   fullnameOverride: llm-request-router
@@ -892,10 +898,10 @@ llmRequestRouter:
     image:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/stargate
-    {{- with dig "addons" "llm" "requestRouter" "backendRouter" "pylonGrpcDialAddress" "" .Values }}
+    {{- with $pylonGrpcDialAddress }}
     pylonGrpcDialAddress: {{ . | quote }}
     {{- end }}
-    {{- with dig "addons" "llm" "requestRouter" "backendRouter" "pylonReverseTunnelDialAddress" "" .Values }}
+    {{- with $pylonReverseTunnelDialAddress }}
     pylonReverseTunnelDialAddress: {{ . | quote }}
     {{- end }}
     {{- if .Values.global.imagePullSecrets }}
