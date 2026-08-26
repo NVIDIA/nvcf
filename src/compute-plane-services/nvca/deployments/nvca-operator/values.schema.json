@@ -387,7 +387,7 @@
                         "imageTag": {
                             "type": "string",
                             "description": "BYOO OpenTelemetry Collector image tag.",
-                            "default": "0.157.0-nv-0.1.1"
+                            "default": "0.157.0-nv-0.2.1"
                         }
                     }
                 },
