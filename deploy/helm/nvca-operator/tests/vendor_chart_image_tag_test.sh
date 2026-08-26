@@ -44,6 +44,22 @@ if [[ -n "${actual_tag}" ]]; then
   exit 1
 fi
 
+# Operator, nvca-mirror, and the pre-delete cleanup job all render
+# .Values.image.repository, so a single image reference is expected three
+# times. clusterValidator renders a distinct repository (see
+# nvcaop.clusterValidatorRepository) in two places: the deployment's
+# initContainer and its own CronJob. Checking counts, not just presence,
+# means a regression in any one of the five call sites fails the test
+# instead of hiding behind the other four.
+assert_image_count() {
+  local manifest="$1" expected_image="$2" expected_count="$3" label="$4" actual_count
+  actual_count="$(grep -cF "image: ${expected_image}" "${manifest}" || true)"
+  if [[ "${actual_count}" -ne "${expected_count}" ]]; then
+    echo "expected ${expected_count} occurrence(s) of '${expected_image}' in the ${label} manifest, got ${actual_count}" >&2
+    exit 1
+  fi
+}
+
 # Chart version deliberately differs from the operator version here, mirroring
 # a chart-only republish (EGX_NVCA_OPERATOR_CHART_VERSION override in the
 # byocdev job). The image tag must follow appVersion, not this field, or a
@@ -52,17 +68,16 @@ yq eval -i '.version = "3.2.11-chart-only-1"' "${chart_root}/nvca-operator/Chart
 manifest="${tmp_dir}/manifest.yaml"
 helm template nvca-operator "${chart_root}/nvca-operator" \
   --set-string image.repository=registry.example.test/nvca-operator \
+  --set clusterValidator.enabled=true \
   --set-string selfManaged.icmsServiceURL=http://icms.example.invalid:8080 \
   --set-string selfManaged.revalServiceURL=http://reval.example.invalid:8080 \
   --set-string selfManaged.natsURL=nats://nats.example.invalid:4222 \
   > "${manifest}"
 
-if ! grep -Fq 'image: registry.example.test/nvca-operator:3.2.11' "${manifest}"; then
-  echo "expected image.tag to fall back to appVersion (3.2.11), not the chart version (3.2.11-chart-only-1)" >&2
-  exit 1
-fi
-if grep -Fq 'image: registry.example.test/nvca-operator:3.2.11-chart-only-1' "${manifest}"; then
-  echo "image.tag fell back to the chart version instead of appVersion -- this is the reuse-values hazard this test guards against" >&2
+assert_image_count "${manifest}" "registry.example.test/nvca-operator:3.2.11" 3 "fresh"
+assert_image_count "${manifest}" "nvcr.io/nvidia/nvcf-byoc/cluster-validator:3.2.11" 2 "fresh"
+if grep -Fq ':3.2.11-chart-only-1' "${manifest}"; then
+  echo "an image fell back to the chart version instead of appVersion -- this is the reuse-values hazard this test guards against" >&2
   exit 1
 fi
 
@@ -83,15 +98,14 @@ EOF
 reuse_manifest="${tmp_dir}/reuse-manifest.yaml"
 helm template nvca-operator "${chart_root}/nvca-operator" \
   --set-string image.repository=registry.example.test/nvca-operator \
+  --set clusterValidator.enabled=true \
   --set-string selfManaged.icmsServiceURL=http://icms.example.invalid:8080 \
   --set-string selfManaged.revalServiceURL=http://reval.example.invalid:8080 \
   --set-string selfManaged.natsURL=nats://nats.example.invalid:4222 \
   --values "${reused_values}" \
   > "${reuse_manifest}"
 
-if ! grep -Fq 'image: registry.example.test/nvca-operator:3.2.11' "${reuse_manifest}"; then
-  echo "expected a --reuse-values upgrade to still resolve image.tag through appVersion" >&2
-  exit 1
-fi
+assert_image_count "${reuse_manifest}" "registry.example.test/nvca-operator:3.2.11" 3 "reused"
+assert_image_count "${reuse_manifest}" "nvcr.io/nvidia/nvcf-byoc/cluster-validator:3.2.11" 2 "reused"
 
 echo "vendor_chart_image_tag_test.sh keeps image.tag empty for appVersion fallback, including across --reuse-values upgrades"
