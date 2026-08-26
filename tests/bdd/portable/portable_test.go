@@ -15,7 +15,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package live
+package portable
 
 import (
 	"fmt"
@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cucumber/godog"
 
@@ -30,8 +31,8 @@ import (
 	"nvcf-bdd/steps"
 )
 
-// TestComposableLive runs an optional provider phase and one or more portable
-// smoke features through one shared suite. It skips under -short.
+// TestComposableLive runs a committed ordered plan against one selected target
+// through a shared, isolated suite. It skips under -short.
 func TestComposableLive(t *testing.T) {
 	if testing.Short() {
 		t.Skip("live run skipped under -short")
@@ -42,7 +43,7 @@ func TestComposableLive(t *testing.T) {
 	}
 	targetPath := strings.TrimSpace(os.Getenv("BDD_TARGET_FILE"))
 	if targetPath == "" {
-		t.Fatal("BDD_TARGET_FILE must name a live target")
+		t.Fatal("BDD_TARGET_FILE must name a portable target")
 	}
 	if !filepath.IsAbs(targetPath) {
 		targetPath = filepath.Join(config.RepoRoot, targetPath)
@@ -51,9 +52,19 @@ func TestComposableLive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load target: %v", err)
 	}
-	plan, err := LoadPlan(config.RepoRoot)
+	planPath := strings.TrimSpace(os.Getenv("BDD_PLAN_FILE"))
+	if planPath == "" {
+		t.Fatal("BDD_PLAN_FILE must name a committed portable plan")
+	}
+	if !filepath.IsAbs(planPath) {
+		planPath = filepath.Join(config.RepoRoot, planPath)
+	}
+	plan, err := LoadPlan(config.RepoRoot, planPath)
 	if err != nil {
 		t.Fatalf("load plan: %v", err)
+	}
+	if err := plan.ValidateConsent(target); err != nil {
+		t.Fatalf("validate plan consent: %v", err)
 	}
 	cleanupMode, err := harness.ResolveCleanupMode()
 	if err != nil {
@@ -64,58 +75,48 @@ func TestComposableLive(t *testing.T) {
 	}
 
 	suite, err := harness.NewSuiteWithOptions(t, harness.SuiteOptions{
-		CLIStatePath: target.NVCF.CLIState,
-		CleanupMode:  cleanupMode,
+		CLIConfigPath:   target.Env[cliConfigEnvironment],
+		IsolateCLIState: true,
+		CleanupMode:     cleanupMode,
 	})
 	if err != nil {
-		t.Fatalf("new live suite: %v", err)
+		t.Fatalf("new portable suite: %v", err)
 	}
 	defer func() {
 		if err := suite.Teardown(); err != nil {
 			t.Errorf("teardown: %v", err)
 		}
 	}()
-	runID := fmt.Sprintf("%s-%d", filepath.Base(suite.Config.OutDir), os.Getpid())
-	for name, value := range target.Environment(runID) {
+	runID := fmt.Sprintf("%d-%d", time.Now().UnixNano(), os.Getpid())
+	environment := target.Environment(runID)
+	environment[cliConfigEnvironment] = suite.CLIConfigPath
+	for name, value := range environment {
 		t.Setenv(name, value)
 	}
 
-	if plan.ProviderFeature != "" {
-		runFeature(t, suite, "provider", plan.ProviderFeature)
-		restoreFeatureState(t, suite)
-	}
-	for index, path := range plan.SmokeFeatures {
-		runFeature(t, suite, fmt.Sprintf("smoke-%d", index+1), path)
+	for index, phase := range plan.Phases {
+		runFeature(t, suite, fmt.Sprintf("phase-%d-%s", index+1, phase.Name), phase.Feature, phase.Tags)
 		restoreFeatureState(t, suite)
 	}
 }
 
-func runFeature(t *testing.T, suite *harness.Suite, name, path string) {
+func runFeature(t *testing.T, suite *harness.Suite, name, path, tags string) {
 	t.Helper()
 	scenario := steps.NewScenarioContext(suite)
-	status := godog.TestSuite{
-		Name: "bdd-live-" + name,
-		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
-			steps.RegisterAll(ctx, scenario)
-		},
-		Options: &godog.Options{
-			Format:        "pretty",
-			Paths:         []string{path},
-			Strict:        true,
-			StopOnFailure: true,
-			Concurrency:   1,
-		},
-	}.Run()
-	if status != 0 {
-		t.Fatalf("%s phase status = %d", name, status)
-	}
+	harness.RunFeature(t, harness.FeatureRunOptions{
+		Name: "bdd-portable-" + name,
+		Path: path,
+		Tags: tags,
+	}, func(ctx *godog.ScenarioContext) {
+		steps.RegisterAll(ctx, scenario)
+	})
 	fmt.Fprintf(os.Stderr, ">>> completed %s phase\n", name)
 }
 
 // restoreFeatureState prevents exported values and file mutations from
 // becoming undocumented inputs to the next independently selectable feature.
-// The built CLI, its state file, and successful command cache remain
-// suite-scoped.
+// The built CLI remains suite-scoped. Isolated CLI state, the successful-command
+// cache, and feature-owned ledgers return to their baseline between phases.
 func restoreFeatureState(t *testing.T, suite *harness.Suite) {
 	t.Helper()
 	if err := suite.RestoreFeatureState(); err != nil {

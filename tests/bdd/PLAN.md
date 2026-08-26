@@ -119,7 +119,7 @@ refactor in every consumer; that is a feature.
 | `When I run command:` (docstring) | Multi-line form for commands that don't fit on one line. Same recording semantics. |
 | `When I successfully run command {string}` | Single-line command that must exit 0. Preserves the command result for later output assertions and records the resolved command in the successful-command cache. |
 | `When I successfully run command:` (docstring) | Multi-line form for commands that must exit 0. Uses the same result recording, interpolation, logging, and cache semantics as the single-line form. |
-| `And after this scenario I successfully run command within {string}:` (docstring) | Registers the visible command as bounded scenario compensation. Compensations run in reverse registration order after success or failure, continue past failures, and preserve product behavior in the command text. |
+| `And after this scenario I successfully run command within {string}:` (docstring) | Interpolates and registers the visible command as bounded scenario compensation. Export dynamic identities before this step. Compensations are persisted to the run output, execute in reverse registration order after success or failure, continue past failures, and preserve product behavior in the command text. |
 | `Then within {string} this command should succeed, checking every {string}:` (docstring) | Repeats the visible command after product-level nonzero exits until it exits 0 or the visible timeout expires. Runner failures stop immediately. The successful result remains available to output assertions. |
 | `When I run command with a terminal:` (docstring) | Same as the docstring form, but stdin is attached to a pseudo-terminal so the child sees a TTY on fd 0. For commands that gate interactive-only behavior on a TTY, such as `nvcf-cli self-hosted up` (its auth-gate mints the admin token only when stdin is a terminal). No input is written; stdout and stderr are captured separately as usual. |
 | `When I export command output to environment variable {string}` | Exports the previous command's trimmed stdout under the named env var. Fails the step unless the prior command exited 0 and produced non-empty stdout. Snapshotted by the env Ledger; restored at suite teardown. |
@@ -209,17 +209,18 @@ them via `${VAR}` in command strings and table cells.
 | `REPO_ROOT` | `git rev-parse --show-toplevel` at suite start | Absolute path to the repo root. Required when invoking `make -C deploy/stacks/self-managed` because the Makefile's `-C` changes cwd; relative paths to fixtures from there break. |
 | `NGC_API_KEY` / `SAMPLE_NGC_ORG` / `SAMPLE_NGC_TEAM` | The operator's shell | Passed through unchanged. An environment-variable precondition step asserts they are non-empty before any scenario uses them. |
 
-The portable live runner additionally maps its selected target to stable
-`BDD_NVCF_*`, `BDD_COMPUTE_*`, `BDD_NVCA_*`, and `BDD_WORKLOAD_*` variables.
-It runs each selected feature separately and restores step-exported environment
-variables and ledger-backed file changes between features. CLI state and the
-successful bootstrap command cache remain suite-scoped. See `live/README.md`
-for the target schema and safety contract.
+The portable live runner exports every entry from its selected target's open
+`env` map. It runs each ordered plan phase separately, restores CLI state,
+step-exported environment variables, and ledger-backed files, and resets the
+successful command cache between phases. The harness copies the source CLI
+config and state into a unique suite session, so concurrent targets do not
+share mutable selection state. See `portable/README.md` for the target, plan, and
+safety contracts.
 
 Feature files may also export their own env vars at runtime via
 `When I export command output to environment variable {string}`. Those
 are snapshotted by the env Ledger and restored at teardown. The portable live
-runner restores them after each selected feature so they cannot become an
+runner restores them after each selected plan phase so they cannot become an
 implicit input to another smoke.
 The EKS Helmfile feature exports `EKS_GATEWAY_ADDR` this way from
 `kubectl get gateway` after the Gateway resource is Programmed.
@@ -267,7 +268,7 @@ restoration ledger:
   suite do not overwrite the snapshot; only the first write records.
 - At suite teardown, the runner restores every registered path to its
   pre-suite state. The portable live runner performs the same restoration
-  between selected features. Files that did not exist before are deleted;
+  between ordered plan phases. Files that did not exist before are deleted;
   files that did are rewritten with the original bytes and mode.
 - `Config.LedgerDir` (`out/<run-id>/originals/`) is reserved for an
   on-disk variant if very large fixtures ever push memory limits.
@@ -357,6 +358,7 @@ tests/bdd/
   features/                      (Gherkin, already committed)
   fixtures/                      (sample env + CLI config, already committed)
   targets/                       (non-secret portable live coordinates)
+  plans/                         (committed portable feature compositions)
   STEPS.md                       (this document)
 
   harness/                       (phase 1)
@@ -366,7 +368,8 @@ tests/bdd/
     cache.go                     (command-success cache)
     deferred.go                  (bounded scenario compensation stack)
     eventually.go                (bounded command retry)
-    suite.go                     (lifecycle: build CLI, set env, teardown)
+    feature.go                   (one-feature Godog process mechanics)
+    suite.go                     (lifecycle, CLI state isolation, teardown)
 
   dsl/                           (phase 1)
     interp.go                    (${VAR} regex interpolation)
@@ -380,7 +383,7 @@ tests/bdd/
     assertion_steps.go           (exit code, output contains, file/yaml/json)
     infra_steps.go               (cluster bootstrap, image pull secret)
 
-  live/                          (portable target loader and phased runner)
+  portable/                      (portable target, plan, and phased runner)
 
   godog_test.go                  (phase 3 and 4: TestSingleClusterUp,
                                   TestMultiClusterUp, TestSingleClusterHelmfile,
@@ -438,8 +441,8 @@ func NewLedger(snapshotsDir string) *Ledger
 func (l *Ledger) Snapshot(path string) error
 func (l *Ledger) RestoreAll() error
 
-// CommandCache records successful command runs keyed by the
-// pre-interpolation command text. Used by Given command has succeeded.
+// CommandCache records successful command runs keyed by fully resolved
+// command text. Used by Given command has succeeded.
 type CommandCache struct{ /* unexported */ }
 
 func NewCommandCache() *CommandCache
@@ -458,7 +461,7 @@ type Suite struct {
 
 func NewSuite(t *testing.T) (*Suite, error) // builds nvcf-cli, sets NVCF_CLI + REPO_ROOT
 func NewSuiteWithOptions(t *testing.T, options SuiteOptions) (*Suite, error)
-func (s *Suite) RestoreFeatureState() error // restores step-owned files and env vars
+func (s *Suite) RestoreFeatureState() error // restores feature state and resets cache
 func (s *Suite) Teardown() error            // also restores the exact CLI state file
 ```
 

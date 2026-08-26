@@ -30,9 +30,10 @@ so `nvcf-cli` and the NVCF API remain the product-validation boundary.
 
 ## Layering
 
-- `harness/` owns suite lifecycle: `Config`, `CommandRunner`, `Ledger`,
-  `CommandCache`, `Suite`. Step handlers depend on these; nothing else
-  does.
+- `harness/` owns shared process mechanics: `Config`, `CommandRunner`,
+  `Ledger`, `CommandCache`, `DeferredCommands`, `Suite`, CLI state isolation,
+  and one-feature Godog execution. It does not register steps or select
+  features.
 - `dsl/` owns pure helpers: `${VAR}` interpolation, dotted-path YAML
   upsert and read, YAML subtree match/contain, self-managed secrets
   rendering, kubectl manifest builders, JSON row matching. Every helper
@@ -42,9 +43,10 @@ so `nvcf-cli` and the NVCF API remain the product-validation boundary.
   `Suite.Runner`.
 - `godog_test.go` owns the live entry points and the fake-runner
   wiring tests.
-- `live/` owns the separate portable runner. It may reuse `harness`, `dsl`,
-  and `steps`, but must not add target modes or feature selection to
-  `godog_test.go`.
+- `portable/` owns the separate attach-mode runner. It strictly loads non-secret
+  targets and committed ordered plans, validates invocation-time consent, and
+  restores feature state between phases. It may reuse `harness`, `dsl`, and
+  `steps`, but must not add target modes or plan selection to `godog_test.go`.
 
 A step handler that does anything beyond argv assembly, ledger
 snapshot, runner invocation, and result capture is a smell. Move the
@@ -70,6 +72,10 @@ logic into `dsl/`.
   text. Two scenarios whose pre-interpolation text matches but whose
   env vars differ must miss the cache. The cache lives in
   `Suite.Cache`.
+- Scenario compensation interpolates when its step runs. Export any dynamic
+  identity before registering a compensation that references it. The pending
+  stack is written to `out/<run-id>/pending-compensations.sh`; a failed
+  recovery leaves the script in place for an operator.
 - Bootstrap Givens (`a single-cluster ncp-local cluster is running`,
   `multi-cluster ncp-local compute clusters are running:`, `Helm is
   authenticated to OCI registry ...`, `the ... image pull secret exists in
@@ -96,16 +102,14 @@ logic into `dsl/`.
   worker callback path. Leaving the wrong topology running causes the
   bootstrap Make target to fail deep inside k3d with a generic port-bind
   error; the precheck surfaces this immediately.
-- `harness.NewSuite` snapshots `~/.nvcf-cli.nvcf-cli-local.state`
-  through the Ledger so the admin JWT `nvcf-cli init` writes during a
-  live run is restored (or removed) at suite teardown. HOME is
-  intentionally NOT isolated: k3d, kubectl, docker, and helm all
-  resolve their config under `$HOME`, and pointing HOME at an empty
-  per-run directory breaks the bootstrap Givens. Subsequent
-  self-hosted commands read the JWT back from the state file, so the
-  token never appears in argv or per-command logs. Do not introduce
-  step handlers that capture secrets into env vars; relying on the
-  state file keeps the JWT out of `<seq>.cmd` lines.
+- `harness.NewSuite` derives the state path from the selected CLI config
+  basename and snapshots that exact file through the lifecycle Ledger. The
+  portable runner copies the source config and current state into a unique
+  session first, so concurrent target runs cannot share function or task
+  selection state. HOME is intentionally not isolated: k3d, kubectl, docker,
+  and helm resolve their config there. Subsequent self-hosted commands read the
+  JWT from the selected state file, so the token never appears in argv or
+  command logs. Do not capture secrets into env vars.
 - Pre-suite destructive cleanup is governed by the single env var
   `BDD_CLEANUP_MODE`. Valid values: `stack-single`, `stack-multi`,
   `topology-single`, `topology-multi`, or unset. Unknown values fail
@@ -116,7 +120,7 @@ logic into `dsl/`.
   `tools/ncp-local-cluster/Makefile` and
   `deploy/stacks/self-managed/Makefile` are intentionally maintained
   so an operator can clean by hand without involving `go test`.
-- The portable `live/` suite rejects `BDD_CLEANUP_MODE`. Those cleanup
+- The `portable/` suite rejects `BDD_CLEANUP_MODE`. Those cleanup
   commands are specific to ncp-local. Remote and production targets must never
   inherit local cleanup behavior.
 - Cleanup belongs in `harness/cleanup.go`, never in `steps/`. Do not
@@ -229,23 +233,26 @@ multi-cluster feature:
   check that a destructive command was issued. Do not deep-equality
   the recorder; consolidating equivalent steps in the future must not
   break these tests.
-- Portable wiring tests live in `live/` and use the same fake
-  `CommandRunner`. Portable features run one file per Godog phase. The runner
-  restores step-exported environment values and ledger-backed files between
-  files so one selectable smoke cannot become an undocumented provider for the
-  next.
+- Portable wiring tests live in `portable/` and match every step in
+  `features/smoke/*.feature` against the registered catalog. They do not fake
+  product responses. Portable features run one file per Godog phase. The
+  runner resets the command cache and restores CLI state, step-exported
+  environment values, and ledger-backed files between phases.
 - Live entry points (`TestSingleClusterUp`, `TestMultiClusterUp`,
   `TestSingleClusterHelmfile`) skip under `-short`. They build the
   CLI and exercise real `make`/`kubectl`/`helm` against k3d.
 
 ## Portable live features
 
-- Target YAML is versioned, non-secret data. It supplies execution coordinates
-  and workload inputs only. It must not select features or contain destructive
-  consent.
-- Features are selected by the operator independently of the target. One
-  optional provider runs before one or more smoke features. Do not rely on
-  Godog file ordering.
+- Target YAML is versioned, non-secret data. Its strict top-level shape carries
+  a name and an open `env` map. It must not select features, set runner-owned
+  values, or contain destructive consent.
+- Plan YAML is versioned, committed selection. It contains an ordered list of
+  independently executed feature phases. Do not rely on Godog file ordering or
+  encode plans in comma-separated process environment values.
+- A phase marked `mutatesTopology: true` must declare an invocation-time
+  consent comparison. Validate every phase's consent against target data before
+  building the CLI or executing a feature.
 - Every portable smoke is independently selectable. It declares required
   target fields through environment preconditions and does not depend on an
   earlier feature's exported variables or files.

@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+version: 1
+name: cluster-maintenance
+phases:
+  - name: cluster-maintenance
+    feature: smoke/cluster-maintenance.feature
+    tags: "@portable-smoke"
+    mutatesTopology: false
+    consent:
+      environment: BDD_ALLOW_CLUSTER_MAINTENANCE
+      equalsTargetEnvironment: BDD_COMPUTE_CLUSTER

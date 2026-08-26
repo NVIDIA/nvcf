@@ -27,7 +27,7 @@ import (
 	"nvcf-bdd/dsl"
 )
 
-func registerNVCFCLISteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
+func registerNVCFCLISteps(ctx StepRegistrar, sc *ScenarioContext) {
 	ctx.Step(`^I use NVCF CLI config "([^"]*)"$`, sc.iUseNVCFCLIConfig)
 	ctx.Step(`^I successfully create function "([^"]*)" from image "([^"]*)" with CLI options:$`, sc.iSuccessfullyCreateFunction)
 	ctx.Step(`^I successfully deploy the function selected by NVCF CLI with options:$`, sc.iSuccessfullyDeploySelectedFunction)

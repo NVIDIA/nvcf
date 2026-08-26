@@ -30,7 +30,7 @@ import (
 // registerAssertionSteps hooks Then/And forms that read scenario
 // state (last command result, file contents) and compare to expected
 // values from the feature file.
-func registerAssertionSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
+func registerAssertionSteps(ctx StepRegistrar, sc *ScenarioContext) {
 	ctx.Step(`^the command exit code should be (\d+)$`, sc.commandExitCodeShouldBe)
 	ctx.Step(`^the command output should contain "([^"]*)"$`, sc.commandOutputShouldContain)
 	ctx.Step(`^the command output should not contain "([^"]*)"$`, sc.commandOutputShouldNotContain)

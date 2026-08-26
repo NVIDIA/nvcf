@@ -23,6 +23,13 @@ Feature: Preserve function availability through compute-cluster maintenance
         | BDD_ALLOW_CLUSTER_MAINTENANCE |
       And I use NVCF CLI config "${BDD_NVCF_CLI_CONFIG}"
 
+      # Attach mode assumes authentication already exists for the selected
+      # CLI config. Prove the target API is reachable before creating work.
+      When I successfully run command:
+        """
+        ${NVCF_CLI} --config "${BDD_NVCF_CLI_CONFIG}" --json cluster list
+        """
+
       # The product guard proves that the explicit kubeconfig and context
       # resolve to the cluster the operator approved before any mutation.
       When I successfully run command:
@@ -45,11 +52,23 @@ Feature: Preserve function availability through compute-cluster maintenance
         | --health-port    | 8000    |
         | --health-timeout | PT30S   |
 
-      # Remove the test function even when a later maintenance assertion
-      # fails. The selected function identity remains owned by nvcf-cli.
+      # Resolve both identifiers before registering cleanup. The compensation
+      # never relies on mutable CLI selected-function state from another smoke.
+      When I successfully run command:
+        """
+        /bin/sh -c "'${NVCF_CLI}' --config '${BDD_NVCF_CLI_CONFIG}' --json function list | jq -er '.functions[] | select(.name == \"bdd-maintenance-${BDD_RUN_ID}\") | .id'"
+        """
+      And I export command output to environment variable "BDD_FUNCTION_ID"
+
+      When I successfully run command:
+        """
+        /bin/sh -c "'${NVCF_CLI}' --config '${BDD_NVCF_CLI_CONFIG}' --json function list | jq -er '.functions[] | select(.name == \"bdd-maintenance-${BDD_RUN_ID}\") | .versionId'"
+        """
+      And I export command output to environment variable "BDD_FUNCTION_VERSION_ID"
+
       And after this scenario I successfully run command within "5m":
         """
-        ${NVCF_CLI} --config "${BDD_NVCF_CLI_CONFIG}" function delete
+        ${NVCF_CLI} --config "${BDD_NVCF_CLI_CONFIG}" function delete --function-id "${BDD_FUNCTION_ID}" --version-id "${BDD_FUNCTION_VERSION_ID}"
         """
 
       And I successfully deploy the function selected by NVCF CLI with options:
@@ -66,14 +85,6 @@ Feature: Preserve function availability through compute-cluster maintenance
         | option        | value                                                                                 |
         | --description | bdd-maintenance-${BDD_RUN_ID}                                                         |
         | --scopes      | invoke_function,list_functions,queue_details,list_functions_details,delete_function |
-
-      # Resolve the new function through the public API. The cluster-agent
-      # checks below then select only this function on a shared target.
-      When I successfully run command:
-        """
-        /bin/sh -c "'${NVCF_CLI}' --config '${BDD_NVCF_CLI_CONFIG}' --json function list | jq -er '.functions[] | select(.name == \"bdd-maintenance-${BDD_RUN_ID}\") | .id'"
-        """
-      And I export command output to environment variable "BDD_FUNCTION_ID"
 
       Then within "10m" this command should succeed, checking every "10s":
         """

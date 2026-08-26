@@ -26,6 +26,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/cucumber/godog"
@@ -53,11 +54,22 @@ type ScenarioContext struct {
 	NVCFCLIConfig string
 }
 
+// StepRegistrar is the narrow registration surface shared by Godog and the
+// syntax-only feature catalog test.
+type StepRegistrar interface {
+	Step(expr, stepFunc interface{})
+}
+
 // NewScenarioContext wraps suite in a fresh per-scenario state. The
 // caller (typically a Godog scenario initializer) is responsible for
 // creating one ScenarioContext per scenario.
 func NewScenarioContext(suite *harness.Suite) *ScenarioContext {
-	return &ScenarioContext{Suite: suite, Deferred: harness.NewDeferredCommands()}
+	return &ScenarioContext{
+		Suite: suite,
+		Deferred: harness.NewDeferredCommands(
+			filepath.Join(suite.Config.OutDir, "pending-compensations.sh"),
+		),
+	}
 }
 
 // RegisterAll wires every step from every category to ctx so a single
@@ -82,6 +94,13 @@ func RegisterAll(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 		fmt.Fprintf(os.Stderr, ">>> %s\n", st.Text)
 		return c, nil
 	})
+	RegisterSteps(ctx, sc)
+}
+
+// RegisterSteps registers the strict vocabulary without installing scenario
+// hooks. Godog uses it through RegisterAll; syntax tests use it to detect
+// undefined or ambiguous feature steps without faking product behavior.
+func RegisterSteps(ctx StepRegistrar, sc *ScenarioContext) {
 	registerFileSteps(ctx, sc)
 	registerCommandSteps(ctx, sc)
 	registerNVCFCLISteps(ctx, sc)

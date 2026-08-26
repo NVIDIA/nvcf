@@ -20,13 +20,15 @@ package harness
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
 func TestDeferredCommandsRunInReverseOrder(t *testing.T) {
 	runner := &recordingRunner{}
-	deferred := NewDeferredCommands()
+	deferred := NewDeferredCommands("")
 	for _, command := range []string{"delete function", "uncordon cluster"} {
 		if err := deferred.Add(command, "1s"); err != nil {
 			t.Fatalf("add %q: %v", command, err)
@@ -49,7 +51,7 @@ func TestDeferredCommandsRunInReverseOrder(t *testing.T) {
 
 func TestDeferredCommandsContinueAfterFailure(t *testing.T) {
 	runner := &sequenceRunner{results: []Result{{ExitCode: 2}, {ExitCode: 0}}}
-	deferred := NewDeferredCommands()
+	deferred := NewDeferredCommands("")
 	if err := deferred.Add("second", "1s"); err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +69,7 @@ func TestDeferredCommandsContinueAfterFailure(t *testing.T) {
 
 func TestDeferredCommandsReportExecutionFailureWithoutCommandText(t *testing.T) {
 	runner := &errorRunner{err: errors.New("parse failed")}
-	deferred := NewDeferredCommands()
+	deferred := NewDeferredCommands("")
 	if err := deferred.Add("restore secret target", "1s"); err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +88,7 @@ func TestDeferredCommandsRejectInvalidInputs(t *testing.T) {
 		"invalid timeout": {"restore", "never"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := NewDeferredCommands().Add(input[0], input[1]); err == nil {
+			if err := NewDeferredCommands("").Add(input[0], input[1]); err == nil {
 				t.Fatal("expected deferred command error")
 			}
 		})
@@ -95,7 +97,7 @@ func TestDeferredCommandsRejectInvalidInputs(t *testing.T) {
 
 func TestDeferredCommandsRunAfterScenarioContextCancellation(t *testing.T) {
 	runner := &recordingRunner{}
-	deferred := NewDeferredCommands()
+	deferred := NewDeferredCommands("")
 	if err := deferred.Add("restore", "1s"); err != nil {
 		t.Fatal(err)
 	}
@@ -106,6 +108,49 @@ func TestDeferredCommandsRunAfterScenarioContextCancellation(t *testing.T) {
 	}
 	if len(runner.runs) != 1 {
 		t.Fatalf("runs=%v want compensation attempt", runner.runs)
+	}
+}
+
+func TestDeferredCommandsPersistRecoveryUntilSuccessfulRun(t *testing.T) {
+	recoveryPath := filepath.Join(t.TempDir(), "pending-compensations.sh")
+	deferred := NewDeferredCommands(recoveryPath)
+	if err := deferred.Add("delete function --function-id function-1", "1s"); err != nil {
+		t.Fatal(err)
+	}
+	if err := deferred.Add("uncordon cluster", "1s"); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(recoveryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Index(string(raw), "uncordon cluster") > strings.Index(string(raw), "delete function") {
+		t.Fatalf("recovery script is not in execution order:\n%s", raw)
+	}
+	if err := deferred.Run(context.Background(), &recordingRunner{}, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(recoveryPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("successful recovery left script behind: %v", err)
+	}
+}
+
+func TestDeferredCommandsKeepFailedRecovery(t *testing.T) {
+	recoveryPath := filepath.Join(t.TempDir(), "pending-compensations.sh")
+	deferred := NewDeferredCommands(recoveryPath)
+	if err := deferred.Add("uncordon cluster", "1s"); err != nil {
+		t.Fatal(err)
+	}
+	runner := &sequenceRunner{results: []Result{{ExitCode: 2}}}
+	if err := deferred.Run(context.Background(), runner, t.TempDir()); err == nil {
+		t.Fatal("expected failed compensation")
+	}
+	raw, err := os.ReadFile(recoveryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "uncordon cluster") {
+		t.Fatalf("failed recovery was not retained:\n%s", raw)
 	}
 }
 

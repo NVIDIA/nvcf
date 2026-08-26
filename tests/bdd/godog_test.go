@@ -1727,7 +1727,11 @@ func TestSingleClusterEKSHelmfile(t *testing.T) {
 	if testing.Short() {
 		t.Skip("live run skipped under -short")
 	}
-	runLiveFeature(t, "single-cluster-eks-helmfile.feature")
+	runLiveFeatureWithConfig(
+		t,
+		"single-cluster-eks-helmfile.feature",
+		filepath.Join("tests", "bdd", "out", "nvcf-cli-eks-bdd.yaml"),
+	)
 }
 
 // TestMultiClusterEKSHelmfile is the live entry point for the
@@ -1739,7 +1743,11 @@ func TestMultiClusterEKSHelmfile(t *testing.T) {
 	if testing.Short() {
 		t.Skip("live run skipped under -short")
 	}
-	runLiveFeature(t, "multi-cluster-eks-helmfile.feature")
+	runLiveFeatureWithConfig(
+		t,
+		"multi-cluster-eks-helmfile.feature",
+		filepath.Join("tests", "bdd", "out", "nvcf-cli-eks-bdd-multi.yaml"),
+	)
 }
 
 // runLiveFeature is the shared live-run path: build CLI, register
@@ -1750,13 +1758,35 @@ func runLiveFeature(t *testing.T, feature string) {
 	runLiveFeatureTags(t, feature, "")
 }
 
+func runLiveFeatureWithConfig(t *testing.T, feature, cliConfigPath string) {
+	t.Helper()
+	runLiveFeatureTagsWithConfig(t, feature, "", cliConfigPath)
+}
+
 // runLiveFeatureTags is runLiveFeature with an optional godog tag
 // expression (for example "~@skip" to exclude a scenario from the
 // live run while leaving it in the feature file for documentation and
 // for the wiring test). An empty tags string runs every scenario.
 func runLiveFeatureTags(t *testing.T, feature, tags string) {
 	t.Helper()
-	suite, err := harness.NewSuite(t)
+	runLiveFeatureTagsWithConfig(
+		t,
+		feature,
+		tags,
+		filepath.Join("tests", "bdd", "fixtures", "nvcf-cli-local.yaml"),
+	)
+}
+
+func runLiveFeatureTagsWithConfig(t *testing.T, feature, tags, cliConfigPath string) {
+	t.Helper()
+	cleanupMode, err := harness.ResolveCleanupMode()
+	if err != nil {
+		t.Fatalf("resolve cleanup: %v", err)
+	}
+	suite, err := harness.NewSuiteWithOptions(t, harness.SuiteOptions{
+		CLIConfigPath: cliConfigPath,
+		CleanupMode:   cleanupMode,
+	})
 	if err != nil {
 		t.Fatalf("new suite: %v", err)
 	}
@@ -1767,22 +1797,13 @@ func runLiveFeatureTags(t *testing.T, feature, tags string) {
 	}()
 	sc := steps.NewScenarioContext(suite)
 	featurePath := mustResolveFeaturePath(t, feature)
-	status := godog.TestSuite{
+	harness.RunFeature(t, harness.FeatureRunOptions{
 		Name: "bdd-live-" + feature,
-		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
-			steps.RegisterAll(ctx, sc)
-		},
-		Options: &godog.Options{
-			Format:        "pretty",
-			Paths:         []string{featurePath},
-			Tags:          tags,
-			Strict:        true,
-			StopOnFailure: true,
-		},
-	}.Run()
-	if status != 0 {
-		t.Fatalf("godog suite status = %d", status)
-	}
+		Path: featurePath,
+		Tags: tags,
+	}, func(ctx *godog.ScenarioContext) {
+		steps.RegisterAll(ctx, sc)
+	})
 }
 
 // commandRanThatContains scans the captured fake runs for a substring

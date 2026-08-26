@@ -32,7 +32,7 @@ import (
 // registerCommandSteps hooks the run/has-succeeded/export handlers.
 // The run forms (single-line and docstring) route through runCommand
 // so the recording and caching paths are identical.
-func registerCommandSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
+func registerCommandSteps(ctx StepRegistrar, sc *ScenarioContext) {
 	ctx.Step(`^I run command "([^"]*)"$`, sc.iRunCommandLine)
 	ctx.Step(`^I run command:$`, sc.iRunCommandDoc)
 	ctx.Step(`^I successfully run command "([^"]*)"$`, sc.iSuccessfullyRunCommandLine)
