@@ -61,20 +61,46 @@ excluded=0
 declaration_only=0
 
 for m in "${modules[@]}"; do
+  # A module must at least be readable. `go mod edit -json` is what separates
+  # the two ways a module can have nothing to list: it succeeds on a valid
+  # go.mod with no source, and fails on a malformed one.
+  #
+  # `go list ./...` cannot make that distinction. It exits non-zero and prints
+  # nothing in BOTH cases, so testing its output or its status alone reports a
+  # module with a broken go.mod as "declaration only" and passes it. That is the
+  # exact failure this check exists to catch.
+  if ! out=$(go mod edit -C "${m}" -json 2>&1); then
+    echo "FAIL  ${m}: go.mod is not readable" >&2
+    printf '%s\n' "${out}" >&2
+    failures=$((failures + 1))
+    continue
+  fi
+
   # tools/go-toolchain declares the Go version and contains no source at all, on
-  # purpose: rules_go's from_file requires a file named exactly go.mod. Building
-  # it errors with "matched no packages", which is not a failure, so a module
-  # with nothing to build is recognised rather than special-cased by name.
-  if [ -z "$(go list -C "${m}" ./... 2>/dev/null)" ]; then
-    echo "ok    ${m} (declaration only, no packages to build)"
+  # purpose: rules_go's from_file requires a file named exactly go.mod.
+  if [ -z "$(find "${m}" -name '*.go' -not -path '*/vendor/*' -print -quit)" ]; then
+    echo "ok    ${m} (declaration only, no Go source)"
     declaration_only=$((declaration_only + 1))
     continue
   fi
-  # -o a scratch directory. Plain `go build ./...` writes each main package's
-  # executable into the working directory, which with -C is the module itself,
-  # so running this check would leave binaries behind and, for
-  # tools/changelog-site, rewrite one that is committed.
-  if ! out=$(go build -C "${m}" -o "${build_out}/" ./... 2>&1); then
+
+  # Where the build output goes depends on whether the module has a main
+  # package, and getting it wrong breaks one case or the other.
+  #
+  # With a main package, plain `go build ./...` writes the executable into the
+  # working directory, which under -C is the module itself. That leaves binaries
+  # behind and, for tools/changelog-site, rewrites one that is committed, so the
+  # output goes to a scratch directory.
+  #
+  # With no main package, `go build -o <dir> ./...` is itself an error: "no main
+  # packages to build". A library-only module under tools/ is perfectly valid,
+  # so it gets a plain build, whose object output Go discards on its own.
+  if [ -n "$(go list -C "${m}" -f '{{if eq .Name "main"}}x{{end}}' ./... 2>/dev/null)" ]; then
+    out=$(go build -C "${m}" -o "${build_out}/" ./... 2>&1)
+  else
+    out=$(go build -C "${m}" ./... 2>&1)
+  fi
+  if [ $? -ne 0 ]; then
     echo "FAIL  ${m}: build" >&2
     printf '%s\n' "${out}" >&2
     failures=$((failures + 1))

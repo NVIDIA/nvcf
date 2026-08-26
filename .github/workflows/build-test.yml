@@ -133,6 +133,9 @@ jobs:
       # The repo tooling modules carry tests that no workflow ran, so a pull
       # request could break them and still go green. tools/docs-version-sync
       # reached main with three failing tests that way.
+      - name: Test the checker
+        run: tools/ci/test-check-go-tools
+
       - name: Build, vet, and test the Go modules under tools/
         run: tools/ci/check-go-tools
 
