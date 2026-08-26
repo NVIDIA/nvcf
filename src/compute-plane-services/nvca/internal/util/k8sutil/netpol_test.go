@@ -289,7 +289,11 @@ func TestEnsureNetworkPoliciesSharedPodInstanceNamespaceDoesNotDeleteUnownedPoli
 	)
 	require.NoError(t, err)
 
-	_, err = k8sClient.NetworkingV1().NetworkPolicies(namespace).Get(ctx, AllowEgressIntraNamespaceNetworkPolicyName, metav1.GetOptions{})
+	_, err = k8sClient.NetworkingV1().NetworkPolicies(namespace).Get(
+		ctx,
+		AllowEgressIntraNamespaceNetworkPolicyName,
+		metav1.GetOptions{},
+	)
 	require.NoError(t, err, "shared pod instance namespace reconcile must not delete a policy it doesn't own")
 }
 
