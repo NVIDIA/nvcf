@@ -904,7 +904,10 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 				`{"object":"chat.completion","choices":[{"message":{"content":"This is a fixed 128-byte response for routing and contract validation, not token-generation capacity."}}]}` +
 				"\n",
 		},
-		`curl -s --connect-timeout 5 --max-time 30 -o /dev/null -w "%{http_code}" -X POST http://llm.localhost:8080/v1/chat/completions -H "Content-Type: application/json" -H "traceparent: 00-00000000000000000000000000001019-0000000000001019-01" -d '{"model":"unauthenticated/check","messages":[]}'`: {
+		`curl -s --connect-timeout 5 --max-time 30 -o /dev/null -w "%{http_code}" -X POST ` +
+			`http://llm.localhost:8080/v1/chat/completions -H "Content-Type: application/json" ` +
+			`-H "traceparent: 00-00000000000000000000000000001019-0000000000001019-01" ` +
+			`-d '{"model":"unauthenticated/check","messages":[]}'`: {
 			ExitCode: 0,
 			Stdout:   "401",
 		},
