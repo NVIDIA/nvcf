@@ -490,23 +490,27 @@ func (c *Client) executeKubectlRun(ctx context.Context, name string, args []stri
 	if err != nil {
 		if c.config.Debug {
 			logging.Debug("kubectl run failed with error: %s", err)
-			logging.Debug("kubectl raw output:\n%s", string(output))
+			logging.Debug("kubectl raw output received (%s)", kubectlOutputMetadata(string(output)))
 		}
 		return "", fmt.Errorf("kubectl run failed: %s\nOutput: %s", err, string(output))
 	}
 
 	if c.config.Debug {
-		logging.Debug("kubectl raw output (length: %d bytes):\n%s", len(output), string(output))
+		logging.Debug("kubectl raw output received (%s)", kubectlOutputMetadata(string(output)))
 	}
 
 	// Filter out kubectl deletion messages and return only the actual command output
 	cleanOutput := c.filterKubectlOutput(string(output))
 
 	if c.config.Debug {
-		logging.Debug("kubectl filtered output (length: %d bytes):\n%s", len(cleanOutput), cleanOutput)
+		logging.Debug("kubectl filtered output produced (%s)", kubectlOutputMetadata(cleanOutput))
 	}
 
 	return strings.TrimSpace(cleanOutput), nil
+}
+
+func kubectlOutputMetadata(output string) string {
+	return fmt.Sprintf("%d bytes", len(output))
 }
 
 // filterKubectlOutput filters out kubectl messages and returns only the actual command output
@@ -542,6 +546,7 @@ func (c *Client) filterKubectlOutput(output string) string {
 		if strings.Contains(line, "All commands and output from this session will be recorded") ||
 			strings.Contains(line, "If you don't see a command prompt") ||
 			strings.HasPrefix(line, "Warning:") ||
+			strings.HasPrefix(line, "warning:") ||
 			strings.HasPrefix(line, "Error from server:") {
 			continue
 		}
