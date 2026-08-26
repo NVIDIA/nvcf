@@ -48,7 +48,7 @@ vanityGateway:
   config:
     mappingPath: /etc/vanity-gateway/config/config.yaml
     nvcfApiEndpoint: http://invocation.nvcf.svc.cluster.local:8080
-    # Used only by hosts declared under mappingConfig.v2config.llmGateway.
+    # Used only by openai models that set functionType: LLM.
     llmGatewayEndpoint: http://llm-api-gateway.nvcf.svc.cluster.local:8080
     otelExporterOtlpEndpoint: ""
     secretsPath: ""
