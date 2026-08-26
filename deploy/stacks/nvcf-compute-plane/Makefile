@@ -182,15 +182,7 @@ test-nvca-entrypoints: render-local
 	@tests/nvca-entrypoints.sh "$(DIST_DIR)/out"
 
 test-local: test-observability-profile test-register-cluster test-kube-context test-nvca-entrypoints
-	@echo ">>> Comparing $(DIST_DIR)/out against golden $(GOLDEN_LOCAL_DIR)..."
-	@if ! tests/compare-golden.sh "$(GOLDEN_LOCAL_DIR)" "$(DIST_DIR)/out"; then \
-		echo ""; \
-		echo "ERROR: rendered output in $(DIST_DIR)/out differs from golden $(GOLDEN_LOCAL_DIR)."; \
-		echo "       Review the diff above. If the change is intentional, refresh the golden files:"; \
-		echo "         make generate-golden"; \
-		exit 1; \
-	fi
-	@echo ">>> Local render matches golden $(GOLDEN_LOCAL_DIR)."
+	@tests/verify-golden.sh "$(GOLDEN_LOCAL_DIR)" "$(DIST_DIR)/out"
 
 generate-golden: render-local
 	@echo ">>> Updating golden $(GOLDEN_LOCAL_DIR) from $(DIST_DIR)/out..."
