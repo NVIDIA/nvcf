@@ -17,7 +17,7 @@
 package com.nvidia.nvct.service.registry;
 
 import com.nvidia.boot.registries.service.registry.RegistryMapperService;
-import com.nvidia.nvct.service.account.dto.RegistryCredentialDto;
+import com.nvidia.nvct.service.account.dto.RegistryCredentialDetailsDto;
 import java.util.stream.Stream;
 import lombok.AllArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -27,8 +27,8 @@ import org.springframework.stereotype.Service;
 public class RegistryTaskMapperService {
     private final RegistryMapperService registryMapperService;
 
-    public Stream<RegistryCredentialDto> expandRegistryCredentialWithCanaryHostname(
-            RegistryCredentialDto registryCredentialDto) {
+    public Stream<RegistryCredentialDetailsDto> expandRegistryCredentialWithCanaryHostname(
+            RegistryCredentialDetailsDto registryCredentialDto) {
         var originalHostname = registryCredentialDto.registryHostname();
         var canaryHostname = registryMapperService.toCanaryHostname(originalHostname);
 
@@ -40,8 +40,8 @@ public class RegistryTaskMapperService {
                 toRegistryCredentialDtoWithCanaryHostname(registryCredentialDto));
     }
 
-    public RegistryCredentialDto toRegistryCredentialDtoWithCanaryHostname(
-            RegistryCredentialDto registryDetailsDto) {
+    public RegistryCredentialDetailsDto toRegistryCredentialDtoWithCanaryHostname(
+            RegistryCredentialDetailsDto registryDetailsDto) {
         return registryDetailsDto.toBuilder()
                 .registryHostname(registryMapperService
                                           .toCanaryHostname(registryDetailsDto.registryHostname()))

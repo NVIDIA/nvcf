@@ -56,7 +56,7 @@ import com.nvidia.nvct.rest.task.dto.GpuSpecificationDto;
 import com.nvidia.nvct.rest.task.dto.HelmValidationPolicyDto;
 import com.nvidia.nvct.rest.task.dto.SecretDto;
 import com.nvidia.nvct.rest.task.dto.ValidationPolicyNameEnum;
-import com.nvidia.nvct.service.account.dto.RegistryCredentialDto;
+import com.nvidia.nvct.service.account.dto.RegistryCredentialDetailsDto;
 import io.grpc.Metadata;
 import io.grpc.Metadata.Key;
 import java.net.URI;
@@ -459,8 +459,8 @@ public class TestConstants {
     public static final String BASE64_SIDECAR_REGISTRY_CRED = Base64.getEncoder().encodeToString(
             "$oauthtoken:nvapi-stg-test-sidecar-cred".getBytes(
                     StandardCharsets.UTF_8));
-    public static final RegistryCredentialDto TEST_NGC_CONTAINER_REGISTRY =
-            RegistryCredentialDto.builder()
+    public static final RegistryCredentialDetailsDto TEST_NGC_CONTAINER_REGISTRY =
+            RegistryCredentialDetailsDto.builder()
                     .registryCredentialId(REGISTRY_CRED_ID_TEST_NGC_CONTAINER)
                     .artifactTypes(Set.of(ArtifactTypeEnum.CONTAINER))
                     .registryHostname(TEST_CONTAINER_REGISTRY)
@@ -469,8 +469,8 @@ public class TestConstants {
                                     .value(new StringNode(BASE64_CONTAINER_REGISTRY_CRED))
                                     .build())
                     .build();
-    public static final RegistryCredentialDto TEST_NGC_MODEL_REGISTRY =
-            RegistryCredentialDto.builder()
+    public static final RegistryCredentialDetailsDto TEST_NGC_MODEL_REGISTRY =
+            RegistryCredentialDetailsDto.builder()
                     .registryCredentialId(REGISTRY_CRED_ID_TEST_NGC_MODEL)
                     .artifactTypes(Set.of(ArtifactTypeEnum.MODEL))
                     .registryHostname(TEST_ARTIFACT_REGISTRY)
@@ -479,8 +479,8 @@ public class TestConstants {
                                     .value(new StringNode(BASE64_MODEL_REGISTRY_CRED))
                                     .build())
                     .build();
-    public static final RegistryCredentialDto
-            TEST_NGC_HELM_REGISTRY = RegistryCredentialDto.builder()
+    public static final RegistryCredentialDetailsDto
+            TEST_NGC_HELM_REGISTRY = RegistryCredentialDetailsDto.builder()
             .registryCredentialId(REGISTRY_CRED_ID_TEST_NGC_HELM)
             .artifactTypes(Set.of(ArtifactTypeEnum.HELM))
             .registryHostname(TEST_HELM_REGISTRY)
@@ -491,8 +491,8 @@ public class TestConstants {
             .build();
     public static final String BASE64_ENCODED_DOCKER_CRED = Base64.getEncoder()
             .encodeToString("username:docker-pat-password".getBytes(UTF_8));
-    public static final RegistryCredentialDto
-            TEST_DOCKER_CONTAINER_REGISTRY = RegistryCredentialDto.builder()
+    public static final RegistryCredentialDetailsDto
+            TEST_DOCKER_CONTAINER_REGISTRY = RegistryCredentialDetailsDto.builder()
             .registryCredentialId(REGISTRY_CRED_ID_TEST_DOCKER)
             .artifactTypes(Set.of(ArtifactTypeEnum.CONTAINER))
             .registryHostname("docker.io")

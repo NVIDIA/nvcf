@@ -44,7 +44,7 @@
         "registryHostname": "stg.nvcr.io",
         "secret": {
           "name": "should-not-be-used",
-          "value": "aWdub3JlZDppZ25vcmVk"
+          "value": "JG9hdXRodG9rZW46bnZhcGktc2hvdWxkLW5vdC1iZS11c2Vk"
         },
         "artifactTypes": [
           "CONTAINER"
@@ -55,7 +55,7 @@
         "registryHostname": "api.stg.ngc.nvidia.com",
         "secret": {
           "name": "should-not-be-used",
-          "value": "aWdub3JlZDppZ25vcmVk"
+          "value": "JG9hdXRodG9rZW46bnZhcGktc2hvdWxkLW5vdC1iZS11c2Vk"
         },
         "artifactTypes": [
           "MODEL",
@@ -67,7 +67,7 @@
         "registryHostname": "helm.stg.ngc.nvidia.com",
         "secret": {
           "name": "should-not-be-used",
-          "value": "aWdub3JlZDppZ25vcmVk"
+          "value": "JG9hdXRodG9rZW46bnZhcGktc2hvdWxkLW5vdC1iZS11c2Vk"
         },
         "artifactTypes": [
           "HELM"
