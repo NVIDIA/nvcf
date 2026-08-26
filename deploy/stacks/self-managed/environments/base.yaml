@@ -46,6 +46,19 @@ global:
     registry: nvcr.io
     repository: YOUR_ORG/YOUR_TEAM
 
+  # =============================================================================
+  # Worker Sidecar Registry Configuration
+  # =============================================================================
+  # Registry host/repository advertised to workers for the worker sidecar images
+  # (NVCF_SIDECARS_* / NVCT_SIDECARS_*). Unset inherits global.image. Set these to
+  # source the worker sidecars from a separate registry/org (e.g. a private NGC
+  # org) while control-plane images stay on global.image. Supply the matching
+  # sidecar pull credential separately.
+  # =============================================================================
+  # sidecars:
+  #   hostname: nvcr.io
+  #   repository: YOUR_ORG/YOUR_TEAM
+
   # Worker-facing endpoints advertised by control-plane services into launched
   # workload pods. Leave empty to use service defaults; set per environment when
   # workers run in a different cluster or DNS domain from the control plane.

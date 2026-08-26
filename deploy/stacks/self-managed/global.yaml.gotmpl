@@ -293,6 +293,11 @@ natsAuthCalloutService:
     repository: {{ .Values.global.image.repository }}/nvcf-nats-auth-callout-service
 
 {{- $workerEndpoints := dig "global" "workerEndpoints" dict .Values }}
+{{- /* Worker sidecar registry host/repository, shared by the NVCF and NVCT env
+       below. Unset inherits global.image; global.sidecars.* sources the worker
+       sidecars from a separate registry/org while control-plane images stay put. */}}
+{{- $sidecarsHost := dig "global" "sidecars" "hostname" "" .Values | default .Values.global.image.registry }}
+{{- $sidecarsRepo := dig "global" "sidecars" "repository" "" .Values | default .Values.global.image.repository }}
 {{- $nvcfWorkerServiceURL := dig "nvcfServiceURL" "" $workerEndpoints }}
 {{- $nvcfWorkerGrpcServiceURL := dig "nvcfGrpcServiceURL" "" $workerEndpoints }}
 {{- $grpcProxyNVCFGrpcServiceURL := dig "grpcproxy" "nvcfGrpcServiceURL" "" .Values | default $nvcfWorkerGrpcServiceURL }}
@@ -433,8 +438,8 @@ api:
 
   env:
     NVCF_NATS_REGION_PLACEMENT_TAG: "dc"
-    NVCF_SIDECARS_HOSTNAME: {{ .Values.global.image.registry }}
-    NVCF_SIDECARS_REPOSITORY: {{ .Values.global.image.repository }}
+    NVCF_SIDECARS_HOSTNAME: {{ $sidecarsHost }}
+    NVCF_SIDECARS_REPOSITORY: {{ $sidecarsRepo }}
     {{- with $nvcfWorkerServiceURL }}
     NVCF_FQDN: {{ . | quote }}
     {{- end }}
@@ -516,8 +521,8 @@ nvctApi:
     repository: {{ .Values.global.image.repository }}/nvct-service-oss
 
   env:
-    NVCT_SIDECARS_HOSTNAME: {{ .Values.global.image.registry }}
-    NVCT_SIDECARS_REPOSITORY: {{ .Values.global.image.repository }}
+    NVCT_SIDECARS_HOSTNAME: {{ $sidecarsHost }}
+    NVCT_SIDECARS_REPOSITORY: {{ $sidecarsRepo }}
     {{- with $nvctWorkerServiceURL }}
     NVCT_FQDN: {{ . | quote }}
     {{- end }}
