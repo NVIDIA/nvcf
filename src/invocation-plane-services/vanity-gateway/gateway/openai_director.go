@@ -90,19 +90,23 @@ type OpenAIError struct {
 }
 
 type FunctionInfo struct {
-	functionId                     string
-	functionVersionId              string
-	pathOverride                   *string
-	usePexec                       bool
-	sessionTimeout                 config.SessionTimeoutSeconds
-	customHeaders                  config.CustomHeaders
-	eol                            time.Time
-	offlineMessage                 string
-	tooManyRequestsMessage         string
-	shadowModelNames               []string
-	shadowPercentage               int
-	shadowSamplingMethod           config.ShadowSamplingMethod
-	shadowCancelOnClientDisconnect bool
+	functionId             string
+	functionVersionId      string
+	pathOverride           *string
+	usePexec               bool
+	sessionTimeout         config.SessionTimeoutSeconds
+	customHeaders          config.CustomHeaders
+	eol                    time.Time
+	offlineMessage         string
+	tooManyRequestsMessage string
+	shadows                []shadowConfig
+}
+
+type shadowConfig struct {
+	modelName                string
+	percentage               int
+	samplingMethod           config.ShadowSamplingMethod
+	cancelOnClientDisconnect bool
 }
 
 type ModelMapping struct {
@@ -123,19 +127,16 @@ type ModelListResponse struct {
 }
 
 type ModelNameToFunctionIdVersionId struct {
-	FunctionId                     string
-	FunctionVersionId              string
-	OutgoingPathOverride           string
-	UsePexec                       bool
-	SessionTimeout                 config.SessionTimeoutSeconds
-	CustomHeaders                  config.CustomHeaders
-	EOL                            time.Time
-	OfflineMessage                 string
-	TooManyRequestsMessage         string
-	ShadowModelNames               []string
-	ShadowPercentage               *int
-	ShadowSamplingMethod           config.ShadowSamplingMethod
-	ShadowCancelOnClientDisconnect bool
+	FunctionId             string
+	FunctionVersionId      string
+	OutgoingPathOverride   string
+	UsePexec               bool
+	SessionTimeout         config.SessionTimeoutSeconds
+	CustomHeaders          config.CustomHeaders
+	EOL                    time.Time
+	OfflineMessage         string
+	TooManyRequestsMessage string
+	Shadows                []shadowConfig
 }
 
 type openAIRequestBody struct {
@@ -236,21 +237,18 @@ func buildModelMapping(
 		if entry.OutgoingPathOverride != "" {
 			pathOverride = &entry.OutgoingPathOverride
 		}
-		initializeShadowDropMetrics(entry.ShadowModelNames)
+		initializeShadowDropMetrics(shadowModelNames(entry.Shadows))
 		modelNameToNVCFUrl[modelName] = FunctionInfo{
-			functionId:                     entry.FunctionId,
-			functionVersionId:              entry.FunctionVersionId,
-			pathOverride:                   pathOverride,
-			usePexec:                       entry.UsePexec,
-			sessionTimeout:                 entry.SessionTimeout,
-			customHeaders:                  entry.CustomHeaders,
-			eol:                            entry.EOL,
-			offlineMessage:                 entry.OfflineMessage,
-			tooManyRequestsMessage:         entry.TooManyRequestsMessage,
-			shadowModelNames:               entry.ShadowModelNames,
-			shadowPercentage:               defaultShadowPercentage(entry.ShadowPercentage),
-			shadowSamplingMethod:           defaultShadowSamplingMethod(entry.ShadowSamplingMethod),
-			shadowCancelOnClientDisconnect: entry.ShadowCancelOnClientDisconnect,
+			functionId:             entry.FunctionId,
+			functionVersionId:      entry.FunctionVersionId,
+			pathOverride:           pathOverride,
+			usePexec:               entry.UsePexec,
+			sessionTimeout:         entry.SessionTimeout,
+			customHeaders:          entry.CustomHeaders,
+			eol:                    entry.EOL,
+			offlineMessage:         entry.OfflineMessage,
+			tooManyRequestsMessage: entry.TooManyRequestsMessage,
+			shadows:                entry.Shadows,
 		}
 
 		// build the modelInfo list and modelName to modelInfo map
@@ -400,19 +398,16 @@ func convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping map[string]co
 	modelNameToFunctionIdVersionId := make(map[string]ModelNameToFunctionIdVersionId)
 	for _, entry := range mapping {
 		modelNameToFunctionIdVersionId[entry.ModelName] = ModelNameToFunctionIdVersionId{
-			FunctionId:                     entry.FunctionID,
-			FunctionVersionId:              entry.FunctionVersionID,
-			OutgoingPathOverride:           entry.OutgoingPathOverride,
-			UsePexec:                       entry.UsePexec,
-			SessionTimeout:                 entry.SessionTimeout,
-			CustomHeaders:                  entry.CustomHeaders,
-			EOL:                            entry.EOL,
-			OfflineMessage:                 entry.OfflineMessage,
-			TooManyRequestsMessage:         entry.TooManyRequestsMessage,
-			ShadowModelNames:               effectiveShadowModelNames(entry.ShadowModelName, entry.ShadowModelNames),
-			ShadowPercentage:               entry.ShadowPercentage,
-			ShadowSamplingMethod:           entry.ShadowSamplingMethod,
-			ShadowCancelOnClientDisconnect: entry.ShadowCancelOnClientDisconnect,
+			FunctionId:             entry.FunctionID,
+			FunctionVersionId:      entry.FunctionVersionID,
+			OutgoingPathOverride:   entry.OutgoingPathOverride,
+			UsePexec:               entry.UsePexec,
+			SessionTimeout:         entry.SessionTimeout,
+			CustomHeaders:          entry.CustomHeaders,
+			EOL:                    entry.EOL,
+			OfflineMessage:         entry.OfflineMessage,
+			TooManyRequestsMessage: entry.TooManyRequestsMessage,
+			Shadows:                normalizeShadowConfigs(entry.EffectiveShadows()),
 		}
 	}
 
@@ -433,15 +428,31 @@ func defaultShadowSamplingMethod(shadowSamplingMethod config.ShadowSamplingMetho
 	return shadowSamplingMethod
 }
 
-func effectiveShadowModelNames(legacyModelName string, modelNames []string) []string {
-	if legacyModelName == "" && len(modelNames) == 0 {
+func normalizeShadowConfigs(shadows []config.ShadowConfig) []shadowConfig {
+	if len(shadows) == 0 {
 		return nil
 	}
-	shadowModelNames := make([]string, 0, len(modelNames)+1)
-	if legacyModelName != "" {
-		shadowModelNames = append(shadowModelNames, legacyModelName)
+	result := make([]shadowConfig, 0, len(shadows))
+	for _, shadow := range shadows {
+		result = append(result, shadowConfig{
+			modelName:                shadow.ModelName,
+			percentage:               defaultShadowPercentage(shadow.Percentage),
+			samplingMethod:           defaultShadowSamplingMethod(shadow.SamplingMethod),
+			cancelOnClientDisconnect: shadow.CancelOnClientDisconnect,
+		})
 	}
-	return append(shadowModelNames, modelNames...)
+	return result
+}
+
+func shadowModelNames(shadows []shadowConfig) []string {
+	if len(shadows) == 0 {
+		return nil
+	}
+	modelNames := make([]string, 0, len(shadows))
+	for _, shadow := range shadows {
+		modelNames = append(modelNames, shadow.modelName)
+	}
+	return modelNames
 }
 
 func (d *OpenAIDirector) ServeCompletions(writer http.ResponseWriter, request *http.Request) {
@@ -660,12 +671,12 @@ func (d *OpenAIDirector) dispatchShadowIfNeeded(resolved resolvedOpenAIRequest, 
 	if d.shadower == nil {
 		return func(error) {}
 	}
-	if !shouldDispatchShadow(resolved.request, resolved.functionInfo, d.randomShadowBucket) {
+	shadows := admittedShadows(resolved.request, resolved.functionInfo.shadows, d.randomShadowBucket)
+	if len(shadows) == 0 {
 		return func(error) {}
 	}
 
-	shadowModelNames := resolved.functionInfo.shadowModelNames
-	shadowCtx, finishShadowPrimary := shadowContext(resolved.request, resolved.functionInfo.shadowCancelOnClientDisconnect)
+	targetModelNames := shadowModelNames(shadows)
 
 	// Clone body only for shadowed requests — avoids allocation on the hot path.
 	rawBody, err := io.ReadAll(resolved.request.Body)
@@ -673,13 +684,13 @@ func (d *OpenAIDirector) dispatchShadowIfNeeded(resolved resolvedOpenAIRequest, 
 	if err != nil {
 		recordShadowDispatchSummary(
 			resolved.request.Context(),
-			shadowModelNames,
+			targetModelNames,
 			0,
-			len(shadowModelNames),
-			repeatedStrings(shadowDroppedReasonBodyReadError, len(shadowModelNames)),
-			shadowModelNames,
+			len(targetModelNames),
+			repeatedStrings(shadowDroppedReasonBodyReadError, len(targetModelNames)),
+			targetModelNames,
 		)
-		return finishShadowPrimary
+		return func(error) {}
 	}
 	// Reset primary request body (pool buffer released above).
 	resolved.request.Body = io.NopCloser(bytes.NewReader(rawBody))
@@ -696,24 +707,21 @@ func (d *OpenAIDirector) dispatchShadowIfNeeded(resolved resolvedOpenAIRequest, 
 	droppedCount := 0
 	var droppedReasons []string
 	var droppedTargetModels []string
-	for _, shadowModelName := range shadowModelNames {
-		// Rewrite model field in the shadow body.
-		shadowBody, err := rewriteShadowRequestModel(rawBody, shadowModelName)
+	finishers := make([]func(error), 0, len(shadows))
+	for _, shadow := range shadows {
+		shadowBody, err := rewriteShadowRequestModel(rawBody, shadow.modelName)
 		if err != nil {
-			recordShadowDispatchSummary(
-				resolved.request.Context(),
-				shadowModelNames,
-				0,
-				len(shadowModelNames),
-				repeatedStrings(shadowDroppedReasonBodyRewriteError, len(shadowModelNames)),
-				shadowModelNames,
-			)
-			return finishShadowPrimary
+			droppedCount++
+			droppedReasons = append(droppedReasons, shadowDroppedReasonBodyRewriteError)
+			droppedTargetModels = append(droppedTargetModels, shadow.modelName)
+			continue
 		}
 
 		// Build shadow request with the rewritten body and recursion guard.
+		shadowCtx, finishShadow := shadowContext(resolved.request, shadow.cancelOnClientDisconnect)
+		finishers = append(finishers, finishShadow)
 		shadowReq := newShadowRequest(resolved.request, shadowBody, shadowCtx)
-		handler := newShadowReplayHandler(shadowModelName, replayHandler)
+		handler := newShadowReplayHandler(shadow.modelName, replayHandler)
 
 		// Shadow admission errors are logged by TrafficShadower and summarized below.
 		// They must not affect the primary request.
@@ -722,14 +730,14 @@ func (d *OpenAIDirector) dispatchShadowIfNeeded(resolved resolvedOpenAIRequest, 
 			droppedCount++
 			if reason := shadowDroppedReason(err); reason != "" {
 				droppedReasons = append(droppedReasons, reason)
-				droppedTargetModels = append(droppedTargetModels, shadowModelName)
+				droppedTargetModels = append(droppedTargetModels, shadow.modelName)
 			}
 			continue
 		}
 		dispatchedCount++
 	}
-	recordShadowDispatchSummary(resolved.request.Context(), shadowModelNames, dispatchedCount, droppedCount, droppedReasons, droppedTargetModels)
-	return finishShadowPrimary
+	recordShadowDispatchSummary(resolved.request.Context(), targetModelNames, dispatchedCount, droppedCount, droppedReasons, droppedTargetModels)
+	return finishShadows(finishers)
 }
 
 func (d *OpenAIDirector) randomShadowBucket() int {
@@ -739,18 +747,50 @@ func (d *OpenAIDirector) randomShadowBucket() int {
 	return rand.IntN(100)
 }
 
-func shouldDispatchShadow(req *http.Request, info FunctionInfo, randomBucket func() int) bool {
-	if len(info.shadowModelNames) == 0 {
-		return false
+func admittedShadows(req *http.Request, shadows []shadowConfig, randomBucket func() int) []shadowConfig {
+	var admitted []shadowConfig
+	var requestRandomBucket int
+	randomBucketSet := false
+	var credentialBucket int
+	credentialBucketSet := false
+	credentialValid := false
+
+	for _, shadow := range shadows {
+		if shadow.percentage >= 100 {
+			admitted = append(admitted, shadow)
+			continue
+		}
+		if shadow.samplingMethod == config.ShadowSamplingMethodPerBearerKey {
+			if !credentialBucketSet {
+				credential, ok := bearerCredential(req)
+				credentialValid = ok
+				if ok {
+					credentialBucket = shadowBucketForBearerCredential(credential)
+				}
+				credentialBucketSet = true
+			}
+			if credentialValid && credentialBucket < shadow.percentage {
+				admitted = append(admitted, shadow)
+			}
+			continue
+		}
+		if !randomBucketSet {
+			requestRandomBucket = randomBucket()
+			randomBucketSet = true
+		}
+		if requestRandomBucket < shadow.percentage {
+			admitted = append(admitted, shadow)
+		}
 	}
-	if info.shadowPercentage >= 100 {
-		return true
+	return admitted
+}
+
+func finishShadows(finishers []func(error)) func(error) {
+	return func(proxyErr error) {
+		for _, finish := range finishers {
+			finish(proxyErr)
+		}
 	}
-	if info.shadowSamplingMethod == config.ShadowSamplingMethodPerBearerKey {
-		credential, ok := bearerCredential(req)
-		return ok && shadowBucketForBearerCredential(credential) < info.shadowPercentage
-	}
-	return randomBucket() < info.shadowPercentage
 }
 
 func bearerCredential(req *http.Request) ([]byte, bool) {

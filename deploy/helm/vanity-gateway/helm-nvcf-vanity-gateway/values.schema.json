@@ -219,10 +219,10 @@
           "$ref": "#/definitions/openAIEndpointRoutes"
         },
         "imageEdits": {
-          "$ref": "#/definitions/openAIEndpointRoutes"
+          "$ref": "#/definitions/openAIMultipartEndpointRoutes"
         },
         "imageVariations": {
-          "$ref": "#/definitions/openAIEndpointRoutes"
+          "$ref": "#/definitions/openAIMultipartEndpointRoutes"
         }
       },
       "additionalProperties": {
@@ -233,6 +233,12 @@
       "type": "object",
       "additionalProperties": {
         "$ref": "#/definitions/openAIModelRoute"
+      }
+    },
+    "openAIMultipartEndpointRoutes": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/openAIMultipartModelRoute"
       }
     },
     "openAIModelRoute": {
@@ -271,10 +277,19 @@
             "$ref": "#/definitions/nonEmptyString"
           }
         },
+        "shadows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/shadowTarget"
+          }
+        },
         "shadowPercentage": {
           "type": "integer",
           "minimum": 1,
           "maximum": 100
+        },
+        "shadowSamplingMethod": {
+          "$ref": "#/definitions/legacyShadowSamplingMethod"
         },
         "shadowCancelOnClientDisconnect": {
           "type": "boolean"
@@ -284,7 +299,128 @@
         "modelName",
         "functionID"
       ],
+      "allOf": [
+        {
+          "not": {
+            "allOf": [
+              {
+                "required": [
+                  "shadows"
+                ]
+              },
+              {
+                "anyOf": [
+                  {
+                    "required": [
+                      "shadowModelName"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "shadowModelNames"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "shadowPercentage"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "shadowSamplingMethod"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "shadowCancelOnClientDisconnect"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
       "additionalProperties": true
+    },
+    "openAIMultipartModelRoute": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/openAIModelRoute"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "shadows": {
+              "maxItems": 0
+            },
+            "shadowModelName": {
+              "maxLength": 0
+            },
+            "shadowModelNames": {
+              "maxItems": 0
+            },
+            "shadowSamplingMethod": {
+              "enum": [
+                "",
+                null
+              ]
+            },
+            "shadowCancelOnClientDisconnect": {
+              "enum": [
+                false
+              ]
+            }
+          },
+          "not": {
+            "required": [
+              "shadowPercentage"
+            ]
+          }
+        }
+      ]
+    },
+    "shadowSamplingMethod": {
+      "type": "string",
+      "enum": [
+        "random",
+        "perBearerKey"
+      ]
+    },
+    "legacyShadowSamplingMethod": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "",
+        "random",
+        "perBearerKey",
+        null
+      ]
+    },
+    "shadowTarget": {
+      "type": "object",
+      "properties": {
+        "modelName": {
+          "$ref": "#/definitions/nonEmptyString"
+        },
+        "percentage": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        },
+        "samplingMethod": {
+          "$ref": "#/definitions/shadowSamplingMethod"
+        },
+        "cancelOnClientDisconnect": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "modelName"
+      ],
+      "additionalProperties": false
     },
     "vanityRoutes": {
       "type": "object",

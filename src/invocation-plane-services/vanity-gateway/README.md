@@ -142,10 +142,11 @@ v2config:
           X-Provider-Feature: enabled
           X-Request-Source: vanity-gateway
         tooManyRequestsMessage: "Try again later or use a partner endpoint."
-        shadowModelNames:
-          - private/meta/llama-3.1-8b-shadow
-        shadowPercentage: 10
-        shadowSamplingMethod: perBearerKey
+        shadows:
+          - modelName: private/meta/llama-3.1-8b-shadow
+            percentage: 10
+            samplingMethod: perBearerKey
+            cancelOnClientDisconnect: false
       private_meta_llama-3_1-8b-shadow:
         modelName: private/meta/llama-3.1-8b-shadow
         functionID: 00000000-0000-0000-0000-000000000002
@@ -188,11 +189,16 @@ v2config:
 | `eol` | No | RFC3339 timestamp. Future dates add a `Deprecation` header; past dates return `410 Gone` and hide the model from `/v1/models`. |
 | `offlineMessage` | No | Non-empty value returns `503 Service Unavailable` with this message. |
 | `tooManyRequestsMessage` | No | Message appended to upstream `429 Too Many Requests` responses for this model. |
-| `shadowModelName` | No | Legacy single shadow target. Prefer `shadowModelNames` for new config. |
-| `shadowModelNames` | No | Additional model names in the same OpenAI section that receive shadow traffic. Not supported for multipart image edit or variation endpoints. |
-| `shadowPercentage` | No | Percentage of primary requests to shadow, from `1` to `100`. Defaults to `100` when shadow targets exist. |
-| `shadowSamplingMethod` | No | Shadow admission method. Allowed values are `random` and `perBearerKey`. Missing or empty defaults to `random`. Requires at least one shadow target. Not supported for multipart image edit or variation endpoints. |
-| `shadowCancelOnClientDisconnect` | No | When `true`, cancels shadow work if the primary request context is canceled. Requires at least one shadow target. |
+| `shadows` | No | List of per-target shadow configs. It cannot be combined with any legacy top-level shadow field. Not supported for multipart image edit or variation endpoints. |
+| `shadows[].modelName` | Yes | Target model name in the same OpenAI section. It cannot match the primary model or another shadow target. |
+| `shadows[].percentage` | No | Percentage of primary requests sent to this target, from `1` to `100`. Defaults to `100`. |
+| `shadows[].samplingMethod` | No | Admission method for this target. Allowed values are `random` and `perBearerKey`. Defaults to `random`. |
+| `shadows[].cancelOnClientDisconnect` | No | When `true`, cancels this target if the client disconnects or cancels the request, or if the primary proxy encounters a transport or response-write failure or panics before normal completion. Defaults to `false`. |
+| `shadowModelName` | No | Legacy single shadow target. Prefer `shadows` for new config. |
+| `shadowModelNames` | No | Legacy list of additional shadow targets. Targets must be in the same OpenAI section. |
+| `shadowPercentage` | No | Legacy percentage applied to every legacy target, from `1` to `100`. Defaults to `100`. |
+| `shadowSamplingMethod` | No | Legacy admission method applied to every legacy target. Allowed values are `random` and `perBearerKey`. Missing, empty, or `null` defaults to `random`. |
+| `shadowCancelOnClientDisconnect` | No | Legacy cancellation policy applied to every legacy target. It uses the same disconnect, client cancellation, transport failure, response-write failure, and panic behavior. Defaults to `false`. |
 
 ### Shadow Traffic Support
 
@@ -203,9 +209,21 @@ section as the primary model. The gateway rewrites the request `model` field to
 the shadow target and marks the replay with `NVCF-Shadow: true` so shadow
 requests do not recursively shadow.
 
-`shadowSamplingMethod` controls how `shadowPercentage` admits requests. The
-default method, `random`, draws a request-local bucket from `0` to `99` and
-admits the request when `bucket < shadowPercentage`.
+Each `shadows` entry has its own `percentage`, `samplingMethod`, and
+`cancelOnClientDisconnect` policy. The gateway evaluates each target against
+its policy. This allows one primary model to shadow different request
+percentages to different targets.
+
+Legacy top-level shadow fields remain supported. The gateway combines
+`shadowModelName` and `shadowModelNames` into one target list and applies the
+top-level `shadowPercentage`, `shadowSamplingMethod`, and
+`shadowCancelOnClientDisconnect` policy to every target. A model entry cannot
+combine `shadows` with any legacy top-level shadow field. Config validation
+rejects the mixed form.
+
+The default sampling method, `random`, draws one request-local bucket from `0`
+to `99` for each primary request. Every `random` shadow on that request uses the
+same bucket and admits the request when `bucket < percentage`.
 
 The `perBearerKey` method makes admission sticky by bearer credential. It
 requires exactly one `Authorization` header whose value starts with the
@@ -214,22 +232,28 @@ only the `Bearer` scheme and following separator whitespace, then hashes the
 complete remaining credential as opaque UTF-8 bytes. It computes SHA-256, reads
 the first 8 digest bytes as a big-endian `uint64`, sets
 `bucket = value % 100`, and admits the request when
-`bucket < shadowPercentage`. Bearer credential prefixes such as `nvapi`,
+`bucket < percentage`. Every `perBearerKey` shadow on the request uses the same
+credential bucket. Bearer credential prefixes such as `nvapi`,
 `nvapi-stg`, and `nvapi-nvcf` remain part of the credential and are not
 stripped. Missing, malformed, duplicate, or non-Bearer authorization skips
-shadow dispatch when `shadowPercentage` is below `100`.
+each `perBearerKey` target whose `percentage` is below `100`. It does not affect
+targets that use `random`.
 
 `perBearerKey` is key-level sampling. It is not true user or session sampling
 and can skew shadow volume when a few bearer keys dominate traffic.
 
 Shadow traffic is not supported for multipart image endpoints: `imageEdits` and
-`imageVariations`. Config validation rejects shadow fields in those sections.
+`imageVariations`. Config validation rejects effective shadow settings in those
+sections. Legacy zero-value settings and an empty `shadows` list remain accepted
+as no-ops.
 
 Admitted shadow requests are bounded by `SHADOW_MAX_CONCURRENT` and the gateway
 shadow timeout. Normal primary response completion does not cancel shadow work.
-When `shadowCancelOnClientDisconnect` is `true`, the gateway cancels shadow work
-only if the client disconnects or cancels the primary request before the primary
-response completes.
+When a target's `cancelOnClientDisconnect` is `true`, the gateway cancels only
+that target if the client disconnects or cancels the request, or if the primary
+proxy encounters a transport or response-write failure or panics before normal
+completion. Other targets continue under their own policies. An HTTP error
+status alone does not trigger cancellation.
 
 ### Vanity Mapping Fields
 

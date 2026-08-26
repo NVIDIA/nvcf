@@ -18,6 +18,7 @@ limitations under the License.
 package gateway
 
 import (
+	config "ai-api-gateway-service/gateway_config"
 	"bytes"
 	"context"
 	"net/http"
@@ -30,6 +31,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
@@ -83,9 +85,8 @@ func TestShadowSpanIsolation(t *testing.T) {
 
 	modelMapping := map[string]FunctionInfo{
 		"primary-model": {
-			functionId:       "func-primary",
-			shadowModelNames: []string{"shadow-model"},
-			shadowPercentage: 100,
+			functionId: "func-primary",
+			shadows:    testShadowConfigs([]string{"shadow-model"}, 100),
 		},
 		"shadow-model": {
 			functionId: "func-shadow",
@@ -107,9 +108,12 @@ func TestShadowSpanIsolation(t *testing.T) {
 	resolved := resolvedOpenAIRequest{
 		request: req,
 		functionInfo: FunctionInfo{
-			shadowModelNames:               []string{"shadow-model"},
-			shadowPercentage:               100,
-			shadowCancelOnClientDisconnect: true, // attached mode
+			shadows: testShadowConfigsWithPolicy(
+				[]string{"shadow-model"},
+				100,
+				config.ShadowSamplingMethodRandom,
+				true, // attached mode
+			),
 		},
 	}
 	director.dispatchShadowIfNeeded(resolved, modelMapping)
@@ -173,10 +177,13 @@ func TestDetachedShadowKeepsParentSpanContext(t *testing.T) {
 
 	modelMapping := map[string]FunctionInfo{
 		"primary-model": {
-			functionId:                     "func-primary",
-			shadowModelNames:               []string{"shadow-model"},
-			shadowPercentage:               100,
-			shadowCancelOnClientDisconnect: false, // detached
+			functionId: "func-primary",
+			shadows: testShadowConfigsWithPolicy(
+				[]string{"shadow-model"},
+				100,
+				config.ShadowSamplingMethodRandom,
+				false, // detached
+			),
 		},
 		"shadow-model": {
 			functionId: "func-shadow",
@@ -197,9 +204,7 @@ func TestDetachedShadowKeepsParentSpanContext(t *testing.T) {
 	resolved := resolvedOpenAIRequest{
 		request: req,
 		functionInfo: FunctionInfo{
-			shadowModelNames:               []string{"shadow-model"},
-			shadowPercentage:               100,
-			shadowCancelOnClientDisconnect: false,
+			shadows: testShadowConfigs([]string{"shadow-model"}, 100),
 		},
 	}
 	director.dispatchShadowIfNeeded(resolved, modelMapping)
@@ -250,9 +255,8 @@ func TestShadowSpanRecordsTimeoutError(t *testing.T) {
 
 	modelMapping := map[string]FunctionInfo{
 		"primary-model": {
-			functionId:       "func-primary",
-			shadowModelNames: []string{"shadow-model"},
-			shadowPercentage: 100,
+			functionId: "func-primary",
+			shadows:    testShadowConfigs([]string{"shadow-model"}, 100),
 		},
 		"shadow-model": {
 			functionId: "func-shadow",
@@ -273,8 +277,7 @@ func TestShadowSpanRecordsTimeoutError(t *testing.T) {
 	resolved := resolvedOpenAIRequest{
 		request: req,
 		functionInfo: FunctionInfo{
-			shadowModelNames: []string{"shadow-model"},
-			shadowPercentage: 100,
+			shadows: testShadowConfigs([]string{"shadow-model"}, 100),
 		},
 	}
 	director.dispatchShadowIfNeeded(resolved, modelMapping)
@@ -330,9 +333,8 @@ func TestShadowSpanRecordsHTTPError(t *testing.T) {
 
 	modelMapping := map[string]FunctionInfo{
 		"primary-model": {
-			functionId:       "func-primary",
-			shadowModelNames: []string{"shadow-model"},
-			shadowPercentage: 100,
+			functionId: "func-primary",
+			shadows:    testShadowConfigs([]string{"shadow-model"}, 100),
 		},
 		"shadow-model": {
 			functionId: "func-shadow",
@@ -353,8 +355,7 @@ func TestShadowSpanRecordsHTTPError(t *testing.T) {
 	resolved := resolvedOpenAIRequest{
 		request: req,
 		functionInfo: FunctionInfo{
-			shadowModelNames: []string{"shadow-model"},
-			shadowPercentage: 100,
+			shadows: testShadowConfigs([]string{"shadow-model"}, 100),
 		},
 	}
 	director.dispatchShadowIfNeeded(resolved, modelMapping)
@@ -397,9 +398,8 @@ func TestShadowAdmissionAttributes(t *testing.T) {
 
 	modelMapping := map[string]FunctionInfo{
 		"primary-model": {
-			functionId:       "func-primary",
-			shadowModelNames: []string{"shadow-model"},
-			shadowPercentage: 100,
+			functionId: "func-primary",
+			shadows:    testShadowConfigs([]string{"shadow-model"}, 100),
 		},
 		"shadow-model": {
 			functionId: "func-shadow",
@@ -418,7 +418,7 @@ func TestShadowAdmissionAttributes(t *testing.T) {
 
 		director.dispatchShadowIfNeeded(resolvedOpenAIRequest{
 			request:      req,
-			functionInfo: FunctionInfo{shadowModelNames: []string{"shadow-model"}, shadowPercentage: 100},
+			functionInfo: FunctionInfo{shadows: testShadowConfigs([]string{"shadow-model"}, 100)},
 		}, modelMapping)
 
 		assert.Eventually(t, func() bool {
@@ -470,7 +470,7 @@ func TestShadowAdmissionAttributes(t *testing.T) {
 
 		director.dispatchShadowIfNeeded(resolvedOpenAIRequest{
 			request:      req,
-			functionInfo: FunctionInfo{shadowModelNames: []string{"shadow-model"}, shadowPercentage: 100},
+			functionInfo: FunctionInfo{shadows: testShadowConfigs([]string{"shadow-model"}, 100)},
 		}, modelMapping)
 
 		primarySpan.End()
@@ -497,6 +497,119 @@ func TestShadowAdmissionAttributes(t *testing.T) {
 	})
 }
 
+func TestPerTargetSamplingRecordsOnlyAdmittedShadow(t *testing.T) {
+	tp, exp := newTestTracerProvider()
+	defer tp.Shutdown(context.Background())
+	metricReader := sdkmetric.NewManualReader()
+	metricProvider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(metricReader))
+	t.Cleanup(func() {
+		require.NoError(t, metricProvider.Shutdown(context.Background()))
+	})
+	counter, err := newShadowDroppedCounter(metricProvider.Meter(shadowMetricsScope))
+	require.NoError(t, err)
+	previousCounter := shadowDroppedCounter
+	shadowDroppedCounter = counter
+	t.Cleanup(func() {
+		shadowDroppedCounter = previousCounter
+	})
+	initializeShadowDropMetrics([]string{"shadow-admitted", "shadow-sampled-out"})
+
+	tracer := tp.Tracer("test")
+	replayedFunctions := make(chan string, 2)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		replayedFunctions <- r.Header.Get("function-id")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	vanity, err := NewVanityDirector(upstream.URL, http.DefaultTransport)
+	require.NoError(t, err)
+
+	randomCalls := 0
+	director := &OpenAIDirector{
+		shadower:       NewTrafficShadower(2, 30*time.Second),
+		vanityDirector: vanity,
+		shadowRandomBucket: func() int {
+			randomCalls++
+			return 39
+		},
+	}
+	modelMapping := map[string]FunctionInfo{
+		"shadow-admitted":    {functionId: "func-admitted"},
+		"shadow-sampled-out": {functionId: "func-sampled-out"},
+	}
+
+	ctx, primarySpan := tracer.Start(context.Background(), "primary_partial_shadow")
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		bytes.NewBufferString(`{"model":"primary-model"}`))
+	req = req.WithContext(ctx)
+	req.Header.Set("Content-Type", "application/json")
+
+	finishPrimary := director.dispatchShadowIfNeeded(resolvedOpenAIRequest{
+		request: req,
+		functionInfo: FunctionInfo{shadows: []shadowConfig{
+			{
+				modelName:      "shadow-admitted",
+				percentage:     40,
+				samplingMethod: config.ShadowSamplingMethodRandom,
+			},
+			{
+				modelName:      "shadow-sampled-out",
+				percentage:     39,
+				samplingMethod: config.ShadowSamplingMethodRandom,
+			},
+		}},
+	}, modelMapping)
+	assert.Equal(t, 1, randomCalls)
+
+	select {
+	case functionID := <-replayedFunctions:
+		assert.Equal(t, "func-admitted", functionID)
+	case <-time.After(time.Second):
+		t.Fatal("admitted shadow did not replay")
+	}
+	select {
+	case functionID := <-replayedFunctions:
+		t.Fatalf("sampled-out shadow replayed with function ID %q", functionID)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	assert.Eventually(t, func() bool {
+		tp.ForceFlush(context.Background())
+		return len(spansByName(exp.GetSpans(), shadowReplaySpanName)) == 1
+	}, 5*time.Second, 50*time.Millisecond)
+
+	finishPrimary(nil)
+	primarySpan.End()
+	tp.ForceFlush(context.Background())
+
+	primarySpans := spansByName(exp.GetSpans(), "primary_partial_shadow")
+	require.Len(t, primarySpans, 1)
+
+	dispatchedCount, ok := spanAttr(primarySpans[0], traceAttrShadowDispatchedCount)
+	require.True(t, ok)
+	assert.Equal(t, int64(1), dispatchedCount.AsInt64())
+
+	droppedCount, ok := spanAttr(primarySpans[0], traceAttrShadowDroppedCount)
+	require.True(t, ok)
+	assert.Equal(t, int64(0), droppedCount.AsInt64())
+
+	targetModels, ok := spanAttr(primarySpans[0], traceAttrShadowTargetModels)
+	require.True(t, ok)
+	assert.Equal(t, []string{"shadow-admitted"}, targetModels.AsStringSlice())
+
+	_, hasDroppedReasons := spanAttr(primarySpans[0], traceAttrShadowDroppedReasons)
+	assert.False(t, hasDroppedReasons)
+	_, hasDroppedTargetModels := spanAttr(primarySpans[0], traceAttrShadowDroppedTargetModels)
+	assert.False(t, hasDroppedTargetModels)
+
+	dropCounts := collectShadowDroppedCounts(t, metricReader)
+	require.Len(t, dropCounts, len(shadowDroppedReasons)*2)
+	for labels, count := range dropCounts {
+		assert.Zero(t, count, "unexpected drop count for model %s and reason %s", labels.model, labels.reason)
+	}
+}
+
 func TestMultiShadowDispatchRecordsAggregatePrimarySpanAttributes(t *testing.T) {
 	tp, exp := newTestTracerProvider()
 	defer tp.Shutdown(context.Background())
@@ -515,9 +628,8 @@ func TestMultiShadowDispatchRecordsAggregatePrimarySpanAttributes(t *testing.T) 
 
 	modelMapping := map[string]FunctionInfo{
 		"primary-model": {
-			functionId:       "func-primary",
-			shadowModelNames: []string{"shadow-a", "shadow-b"},
-			shadowPercentage: 100,
+			functionId: "func-primary",
+			shadows:    testShadowConfigs([]string{"shadow-a", "shadow-b"}, 100),
 		},
 		"shadow-a": {functionId: "func-shadow-a"},
 		"shadow-b": {functionId: "func-shadow-b"},
@@ -533,7 +645,7 @@ func TestMultiShadowDispatchRecordsAggregatePrimarySpanAttributes(t *testing.T) 
 
 	director.dispatchShadowIfNeeded(resolvedOpenAIRequest{
 		request:      req,
-		functionInfo: FunctionInfo{shadowModelNames: []string{"shadow-a", "shadow-b"}, shadowPercentage: 100},
+		functionInfo: FunctionInfo{shadows: testShadowConfigs([]string{"shadow-a", "shadow-b"}, 100)},
 	}, modelMapping)
 
 	primarySpan.End()
@@ -590,9 +702,8 @@ func TestMultiShadowDispatchRecordsAllDroppedReasonsAndTargets(t *testing.T) {
 
 	modelMapping := map[string]FunctionInfo{
 		"primary-model": {
-			functionId:       "func-primary",
-			shadowModelNames: []string{"shadow-a", "shadow-b"},
-			shadowPercentage: 100,
+			functionId: "func-primary",
+			shadows:    testShadowConfigs([]string{"shadow-a", "shadow-b"}, 100),
 		},
 		"shadow-a": {functionId: "func-shadow-a"},
 		"shadow-b": {functionId: "func-shadow-b"},
@@ -620,7 +731,7 @@ func TestMultiShadowDispatchRecordsAllDroppedReasonsAndTargets(t *testing.T) {
 
 	director.dispatchShadowIfNeeded(resolvedOpenAIRequest{
 		request:      req,
-		functionInfo: FunctionInfo{shadowModelNames: []string{"shadow-a", "shadow-b"}, shadowPercentage: 100},
+		functionInfo: FunctionInfo{shadows: testShadowConfigs([]string{"shadow-a", "shadow-b"}, 100)},
 	}, modelMapping)
 
 	primarySpan.End()
