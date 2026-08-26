@@ -87,10 +87,17 @@ Every cross-GPU transport must be off before capture:
 --enforce-eager
 --disable-custom-all-reduce
 NCCL_P2P_DISABLE=1
-NCCL_NVLS_DISABLE=1
+NCCL_NVLS_ENABLE=0
 NCCL_SHM_DISABLE=1
 VLLM_ALLREDUCE_USE_SYMM_MEM=0
 ```
+
+This set previously carried `NCCL_NVLS_DISABLE=1`, which is not an NCCL
+variable at all. Grepping the shipped `libnccl.so.2` finds `NCCL_P2P_DISABLE`,
+`NCCL_SHM_DISABLE`, `NCCL_CUMEM_ENABLE` and `NCCL_NVLS_ENABLE`, but no
+`NCCL_NVLS_DISABLE`. It had been a no-op for as long as it had been set, which
+is why the bisect below could never attribute anything to it. The real knob is
+`NCCL_NVLS_ENABLE=0`, and the capture path is verified against that spelling.
 
 ## The set is not padding: bisect results
 

@@ -76,7 +76,7 @@ spec:
         # Peer-state sever: cuda-checkpoint blocks if ANY cross-GPU
         # mapping exists. See docs/proposals/multi-gpu-criu-v2.md.
         - { name: NCCL_P2P_DISABLE,  value: "1" }
-        - { name: NCCL_NVLS_DISABLE, value: "1" }
+        - { name: NCCL_NVLS_ENABLE,  value: "0" }
         - { name: NCCL_SHM_DISABLE,  value: "1" }
         - { name: HF_HUB_DISABLE_XET, value: "1" }
         - { name: HF_HUB_ENABLE_HF_TRANSFER, value: "0" }

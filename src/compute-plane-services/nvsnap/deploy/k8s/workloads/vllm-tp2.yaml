@@ -90,7 +90,7 @@ spec:
         # P2P/NVLS/SHM transports + vLLM symm-mem all-reduce. Together with
         # --disable-custom-all-reduce above, no cross-GPU peer mappings exist.
         - { name: NCCL_P2P_DISABLE,  value: "1" }
-        - { name: NCCL_NVLS_DISABLE, value: "1" }
+        - { name: NCCL_NVLS_ENABLE,  value: "0" }
         - { name: NCCL_SHM_DISABLE,  value: "1" }
         - { name: VLLM_ALLREDUCE_USE_SYMM_MEM, value: "0" }
         - { name: USE_LIBUV, value: "1" }
