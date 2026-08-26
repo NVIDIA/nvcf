@@ -489,10 +489,9 @@ func (c *Client) executeKubectlRun(ctx context.Context, name string, args []stri
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		if c.config.Debug {
-			logging.Debug("kubectl run failed with error: %s", err)
 			logging.Debug("kubectl raw output received (%s)", kubectlOutputMetadata(string(output)))
 		}
-		return "", fmt.Errorf("kubectl run failed: %s\nOutput: %s", err, string(output))
+		return "", fmt.Errorf("kubectl run failed: %w\nOutput: %s", err, string(output))
 	}
 
 	if c.config.Debug {

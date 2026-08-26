@@ -18,8 +18,10 @@ limitations under the License.
 package openbao
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"os/exec"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -102,4 +104,15 @@ func TestKubectlOutputMetadataDoesNotExposeCertificate(t *testing.T) {
 
 	assert.Equal(t, "59 bytes", metadata)
 	assert.NotContains(t, metadata, "CERTIFICATE")
+}
+
+func TestExecuteKubectlRunPreservesCommandError(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	c := NewClient(&Config{}, nil)
+	_, err := c.executeKubectlRun(context.Background(), "test", nil)
+	require.Error(t, err)
+
+	var execErr *exec.Error
+	require.ErrorAs(t, err, &execErr)
 }
