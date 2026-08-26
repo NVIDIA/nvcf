@@ -142,7 +142,8 @@ func TestK8sComputeBackendEnsureNetPolicy(t *testing.T) {
 
 				// Check for the intra-namespace egress policy
 				if hasIntraNamespaceAccess {
-					intraEgressNP, err := clients.K8s.NetworkingV1().NetworkPolicies(namespace).Get(ctx, k8sutil.AllowEgressIntraNamespaceNetworkPolicyName, metav1.GetOptions{})
+					intraEgressNP, err := clients.K8s.NetworkingV1().NetworkPolicies(namespace).Get(
+						ctx, k8sutil.AllowEgressIntraNamespaceNetworkPolicyName, metav1.GetOptions{})
 					if assert.NoError(c, err) {
 						assert.Equal(c, []netv1.PolicyType{"Egress"}, intraEgressNP.Spec.PolicyTypes)
 						if !assert.Len(c, intraEgressNP.Spec.Egress, 1) {
@@ -156,8 +157,10 @@ func TestK8sComputeBackendEnsureNetPolicy(t *testing.T) {
 						assert.Equal(c, namespace, peer.NamespaceSelector.MatchLabels[k8sutil.K8sNameLabelKey])
 					}
 				} else {
-					_, err := clients.K8s.NetworkingV1().NetworkPolicies(namespace).Get(ctx, k8sutil.AllowEgressIntraNamespaceNetworkPolicyName, metav1.GetOptions{})
-					assert.True(c, errors.IsNotFound(err), "allow-egress-intra-namespace should not be created for the shared pod instance namespace")
+					_, err := clients.K8s.NetworkingV1().NetworkPolicies(namespace).Get(
+						ctx, k8sutil.AllowEgressIntraNamespaceNetworkPolicyName, metav1.GetOptions{})
+					assert.True(c, errors.IsNotFound(err),
+						"allow-egress-intra-namespace should not be created for the shared pod instance namespace")
 				}
 
 				ingressNP, err := clients.K8s.NetworkingV1().NetworkPolicies(namespace).Get(ctx,

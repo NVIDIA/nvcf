@@ -217,14 +217,17 @@ func TestEnsureNetworkPoliciesFunctionNamespaceAllowsIntraNamespaceAccess(t *tes
 	)
 	require.NoError(t, err)
 
-	ingressNP, err := k8sClient.NetworkingV1().NetworkPolicies(namespace).Get(ctx, MonitoringIngressNetworkPolicyName, metav1.GetOptions{})
+	ingressNP, err := k8sClient.NetworkingV1().NetworkPolicies(namespace).Get(
+		ctx, MonitoringIngressNetworkPolicyName, metav1.GetOptions{})
 	require.NoError(t, err)
-	require.Len(t, ingressNP.Spec.Ingress, 2, "allow-ingress-monitoring should have the ConfigMap-defined rule plus the same-namespace rule")
+	require.Len(t, ingressNP.Spec.Ingress, 2,
+		"allow-ingress-monitoring should have the ConfigMap-defined rule plus the same-namespace rule")
 	sameNSRule := ingressNP.Spec.Ingress[1]
 	require.Len(t, sameNSRule.From, 1)
 	assert.Equal(t, namespace, sameNSRule.From[0].NamespaceSelector.MatchLabels[K8sNameLabelKey])
 
-	egressNP, err := k8sClient.NetworkingV1().NetworkPolicies(namespace).Get(ctx, AllowEgressIntraNamespaceNetworkPolicyName, metav1.GetOptions{})
+	egressNP, err := k8sClient.NetworkingV1().NetworkPolicies(namespace).Get(
+		ctx, AllowEgressIntraNamespaceNetworkPolicyName, metav1.GetOptions{})
 	require.NoError(t, err, "allow-egress-intra-namespace should be created for function namespaces")
 	require.Len(t, egressNP.Spec.Egress, 1)
 	require.Len(t, egressNP.Spec.Egress[0].To, 1)
@@ -254,14 +257,17 @@ func TestEnsureNetworkPoliciesSharedPodInstanceNamespaceDoesNotAllowIntraNamespa
 	)
 	require.NoError(t, err)
 
-	ingressNP, err := k8sClient.NetworkingV1().NetworkPolicies(namespace).Get(ctx, MonitoringIngressNetworkPolicyName, metav1.GetOptions{})
+	ingressNP, err := k8sClient.NetworkingV1().NetworkPolicies(namespace).Get(
+		ctx, MonitoringIngressNetworkPolicyName, metav1.GetOptions{})
 	require.NoError(t, err)
 	require.Len(t, ingressNP.Spec.Ingress, 1, "allow-ingress-monitoring should only have the ConfigMap-defined rule")
 	assert.Equal(t, "bar", ingressNP.Spec.Ingress[0].From[0].NamespaceSelector.MatchLabels["foo"])
 
-	_, err = k8sClient.NetworkingV1().NetworkPolicies(namespace).Get(ctx, AllowEgressIntraNamespaceNetworkPolicyName, metav1.GetOptions{})
+	_, err = k8sClient.NetworkingV1().NetworkPolicies(namespace).Get(
+		ctx, AllowEgressIntraNamespaceNetworkPolicyName, metav1.GetOptions{})
 	require.Error(t, err)
-	assert.True(t, apierrors.IsNotFound(err), "allow-egress-intra-namespace should not be created for the shared pod instance namespace")
+	assert.True(t, apierrors.IsNotFound(err),
+		"allow-egress-intra-namespace should not be created for the shared pod instance namespace")
 }
 
 // TestEnsureNetworkPoliciesSharedPodInstanceNamespaceDoesNotDeleteUnownedPolicy
