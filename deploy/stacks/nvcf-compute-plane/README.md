@@ -15,14 +15,17 @@ ML-framework operators (Grove, Dynamo) onto GPU clusters registered with an NVCF
 ## Quickstart
 
 ```sh
-# 1. Register the cluster with ICMS (idempotent)
+# 1. Export the control-plane profile from the self-managed control-plane stack.
+nvcf-cli self-hosted \
+  --control-plane-stack ../self-managed \
+  control-plane profile export
+
+# 2. Register the cluster with the generated profile.
 make register-cluster \
   CLUSTER_NAME=gpu-east \
-  NCA_ID=nvcf-default \
-  CLUSTER_REGION=us-west-1 \
-  ICMS_URL=https://sis.your-nvcf.example.com
+  CLUSTER_REGION=us-west-1
 
-# 2. Deploy the compute plane
+# 3. Deploy the compute plane.
 make install \
   CLUSTER_NAME=gpu-east \
   HELMFILE_ENV=<env>
@@ -35,10 +38,18 @@ that cluster so multiple clusters can be managed from a single checkout.
 `install`, `apply`, and `template` copy that file into `out/` before running
 Helmfile.
 
-`HELMFILE_ENV` maps to `environments/<env>.yaml`. Source checkouts include a
-`local` environment for development. Release archives ship `base.yaml`; create
-an environment file for your registry and service endpoints, then pass its name
-without the `.yaml` suffix.
+By default, `register-cluster` reads
+`../self-managed/out/control-plane-profile.yaml`. Set
+`CONTROL_PLANE_PROFILE=/path/to/control-plane-profile.yaml` when the control
+and compute stacks are not sibling directories. The profile is the canonical
+handoff for account identity, service endpoints, Host overrides, and transport
+trust. The Makefile does not require a separate `nvcf-cli-local.yaml`.
+
+`HELMFILE_ENV` maps to `environments/<env>.yaml`. Create that environment file
+with the artifact registry and any deployment-specific overrides before
+installing. Local-development guides provide canonical fixtures rather than an
+implicit `local.yaml`. Release archives ship `base.yaml`; pass the environment
+name without the `.yaml` suffix.
 
 ## Observability
 

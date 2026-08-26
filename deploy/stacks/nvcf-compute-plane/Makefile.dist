@@ -43,6 +43,9 @@ NAMESPACES := nvca-operator grove-system dynamo-system kai-scheduler
 # the wrong cluster's JWKS/issuer (PSAT auth failure at runtime).
 KUBECONFIG_FILE ?=
 KUBECONFIG_FLAG = $(if $(KUBECONFIG_FILE),--kubeconfig $(KUBECONFIG_FILE))
+COMPUTE_KUBE_CONTEXT ?=
+HELMFILE_KUBE_CONTEXT_FLAG = $(if $(COMPUTE_KUBE_CONTEXT),--kube-context "$(COMPUTE_KUBE_CONTEXT)")
+KUBECTL_CONTEXT_FLAG = $(if $(COMPUTE_KUBE_CONTEXT),--context "$(COMPUTE_KUBE_CONTEXT)")
 
 # PATH and HELM_PLUGINS override for development mode (when using local binaries)
 ifdef DEV_MODE
@@ -165,6 +168,7 @@ template: clean check-versions check-cluster-name
 	@echo "    Output:      $(OUTPUT_DIR)"
 	@echo "    Values:      $(REGISTRATION_VALUES_DIR)"
 	$(if $(KUBECONFIG_FILE),@echo "    Kubeconfig:  $(KUBECONFIG_FILE)")
+	$(if $(COMPUTE_KUBE_CONTEXT),@echo "    Kube context: $(COMPUTE_KUBE_CONTEXT)")
 
 	mkdir -p "$(OUTPUT_DIR)"
 	cp $(REGISTRATION_VALUES_DIR)/$(CLUSTER_NAME)-register-values.yaml $(OUTPUT_DIR)/
@@ -173,7 +177,7 @@ template: clean check-versions check-cluster-name
 	CLUSTER_NAME="$(CLUSTER_NAME)" \
 	NCA_ID="${NCA_ID}" \
 	OUTPUT_DIR="$(abspath $(OUTPUT_DIR))" \
-	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) template \
+	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(HELMFILE_KUBE_CONTEXT_FLAG) template \
 		--output-dir "$(OUTPUT_DIR)" \
 		$(if $(OUTPUT_DIR_TEMPLATE),--output-dir-template '$(OUTPUT_DIR_TEMPLATE)')
 
@@ -188,6 +192,7 @@ install: check-versions check-cluster-name $(INSTALL_PRE_HOOKS)
 	@echo ">>> Installing compute-plane for cluster '$(CLUSTER_NAME)'..."
 	@echo "    Environment: $(HELMFILE_ENV)"
 	$(if $(KUBECONFIG_FILE),@echo "    Kubeconfig:  $(KUBECONFIG_FILE)")
+	$(if $(COMPUTE_KUBE_CONTEXT),@echo "    Kube context: $(COMPUTE_KUBE_CONTEXT)")
 	$(if $(HELMFILE_SELECTOR),@echo "    Selector:    $(HELMFILE_SELECTOR)")
 
 	mkdir -p "$(OUTPUT_DIR)"
@@ -197,7 +202,7 @@ install: check-versions check-cluster-name $(INSTALL_PRE_HOOKS)
 	CLUSTER_NAME="$(CLUSTER_NAME)" \
 	NCA_ID="${NCA_ID}" \
 	OUTPUT_DIR="$(abspath $(OUTPUT_DIR))" \
-	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(if $(HELMFILE_SELECTOR),--selector $(HELMFILE_SELECTOR)) sync
+	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(HELMFILE_KUBE_CONTEXT_FLAG) $(if $(HELMFILE_SELECTOR),--selector $(HELMFILE_SELECTOR)) sync
 
 	@echo ">>> Compute-plane install complete."
 
@@ -212,6 +217,7 @@ apply: check-versions check-cluster-name $(APPLY_PRE_HOOKS)
 	@echo ">>> Applying compute-plane for cluster '$(CLUSTER_NAME)'..."
 	@echo "    Environment: $(HELMFILE_ENV)"
 	$(if $(KUBECONFIG_FILE),@echo "    Kubeconfig:  $(KUBECONFIG_FILE)")
+	$(if $(COMPUTE_KUBE_CONTEXT),@echo "    Kube context: $(COMPUTE_KUBE_CONTEXT)")
 	$(if $(HELMFILE_SELECTOR),@echo "    Selector:    $(HELMFILE_SELECTOR)")
 
 	mkdir -p "$(OUTPUT_DIR)"
@@ -221,7 +227,7 @@ apply: check-versions check-cluster-name $(APPLY_PRE_HOOKS)
 	CLUSTER_NAME="$(CLUSTER_NAME)" \
 	NCA_ID="${NCA_ID}" \
 	OUTPUT_DIR="$(abspath $(OUTPUT_DIR))" \
-	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(if $(HELMFILE_SELECTOR),--selector $(HELMFILE_SELECTOR)) apply
+	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(HELMFILE_KUBE_CONTEXT_FLAG) $(if $(HELMFILE_SELECTOR),--selector $(HELMFILE_SELECTOR)) apply
 
 	@echo ">>> Helmfile apply complete."
 
@@ -229,21 +235,22 @@ destroy: check-versions check-cluster-name
 	@echo ">>> Destroying compute-plane releases for cluster '$(CLUSTER_NAME)'..."
 	@echo "    Environment: $(HELMFILE_ENV)"
 	$(if $(KUBECONFIG_FILE),@echo "    Kubeconfig:  $(KUBECONFIG_FILE)")
+	$(if $(COMPUTE_KUBE_CONTEXT),@echo "    Kube context: $(COMPUTE_KUBE_CONTEXT)")
 	$(if $(HELMFILE_SELECTOR),@echo "    Selector:    $(HELMFILE_SELECTOR)")
 
 	HELMFILE_ENV="$(HELMFILE_ENV)" \
 	CLUSTER_NAME="$(CLUSTER_NAME)" \
 	NCA_ID="${NCA_ID}" \
 	OUTPUT_DIR="$(abspath $(OUTPUT_DIR))" \
-	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(if $(HELMFILE_SELECTOR),--selector $(HELMFILE_SELECTOR)) destroy
+	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(HELMFILE_KUBE_CONTEXT_FLAG) $(if $(HELMFILE_SELECTOR),--selector $(HELMFILE_SELECTOR)) destroy
 
 	@echo ">>> Helmfile destroy complete."
 
 ifndef HELMFILE_SELECTOR
 	@echo ">>> Deleting namespaces... $(NAMESPACES)"
 	@for ns in $(NAMESPACES); do \
-		if kubectl $(KUBECONFIG_FLAG) get namespace "$$ns" >/dev/null 2>&1; then \
-			kubectl $(KUBECONFIG_FLAG) delete namespace "$$ns" --wait=true; \
+		if kubectl $(KUBECONFIG_FLAG) $(KUBECTL_CONTEXT_FLAG) get namespace "$$ns" >/dev/null 2>&1; then \
+			kubectl $(KUBECONFIG_FLAG) $(KUBECTL_CONTEXT_FLAG) delete namespace "$$ns" --wait=true; \
 		fi; \
 	done
 	@echo ">>> Namespace cleanup complete."
@@ -257,20 +264,19 @@ clean:
 	@echo ">>> Clean complete."
 
 # --- nvcf-cli Configuration (for register-cluster) ---
-# Default to a sibling checkout; override on the command line for CI or
-# non-standard workspace layouts:
+# Default to the nvcf-cli source in this monorepo; override on the command line
+# for release archives or non-standard workspace layouts:
 #   make register-cluster NVCF_CLI=/path/to/nvcf-cli
-NVCF_CLI_REPO ?= $(MAKEFILE_DIR)/../cli
+NVCF_CLI_REPO ?= $(shell cd "$(MAKEFILE_DIR)/../../.." && pwd)/src/clis/nvcf-cli
 NVCF_CLI ?= $(NVCF_CLI_REPO)/nvcf-cli
-NVCF_CLI_CONFIG ?= $(MAKEFILE_DIR)/nvcf-cli-local.yaml
+CONTROL_PLANE_PROFILE ?= $(shell dirname "$(MAKEFILE_DIR)")/self-managed/out/control-plane-profile.yaml
 
 # --- Cluster Registration Settings ---
 NCA_ID          ?= nvcf-default
 CLUSTER_REGION  ?= us-west-1
-ICMS_URL        ?= http://sis.localhost:8080
 REGISTER_VALUES ?= $(REGISTRATION_VALUES_DIR)/$(CLUSTER_NAME)-register-values.yaml
 
-.PHONY: ensure-nvcf-cli register-cluster
+.PHONY: ensure-nvcf-cli check-control-plane-profile register-cluster
 
 ensure-nvcf-cli:
 	@if [ ! -f "$(NVCF_CLI)" ]; then \
@@ -281,40 +287,26 @@ ensure-nvcf-cli:
 		echo ">>> nvcf-cli found at $(NVCF_CLI)"; \
 	fi
 
-register-cluster: check-cluster-name ensure-nvcf-cli
-	@# Always re-register and rewrite the file; --ignore-existing makes this
-	@# idempotent at ICMS while ensuring the values file reflects the live cluster
-	@# state (prevents stale clusterId after a cluster nuke).
-	@mkdir -p "$(dir $(REGISTER_VALUES))"
-	@echo ">>> Generating admin token..."
-	@"$(NVCF_CLI)" --config "$(NVCF_CLI_CONFIG)" init
-	@echo ">>> Registering cluster '$(CLUSTER_NAME)' (idempotent via --ignore-existing)..."
-	$(if $(KUBECONFIG_FILE),@echo "    Kubeconfig:  $(KUBECONFIG_FILE)")
-	@raw="$(REGISTER_VALUES).raw.tmp"; \
-	tmp="$(REGISTER_VALUES).tmp"; \
-	rm -f "$$raw" "$$tmp"; \
-	"$(NVCF_CLI)" --config "$(NVCF_CLI_CONFIG)" cluster register \
-		--name "$(CLUSTER_NAME)" \
-		--nca-id "$(NCA_ID)" \
-		--region "$(CLUSTER_REGION)" \
-		--icms-url "$(ICMS_URL)" \
-		$(if $(KUBECONFIG_FILE),--kubeconfig "$(KUBECONFIG_FILE)") \
-		--ignore-existing > "$$raw"; \
-	rc=$$?; \
-	cat "$$raw" >&2; \
-	if [ $$rc -ne 0 ]; then \
-		echo "ERROR: nvcf-cli cluster register failed (rc=$$rc); keeping previous $(REGISTER_VALUES)" >&2; \
-		rm -f "$$raw" "$$tmp"; \
-		exit $$rc; \
-	fi; \
-	sed -n '/^clusterID:/,$$p' "$$raw" > "$$tmp"; \
-	if [ ! -s "$$tmp" ] || ! grep -q "clusterID:" "$$tmp"; then \
-		echo "ERROR: cluster register output missing clusterID; keeping previous $(REGISTER_VALUES)" >&2; \
-		rm -f "$$raw" "$$tmp"; \
+check-control-plane-profile:
+	@if [ ! -f "$(CONTROL_PLANE_PROFILE)" ]; then \
+		echo "ERROR: Generated control-plane profile not found at $(CONTROL_PLANE_PROFILE)" >&2; \
+		echo "       Export it with 'nvcf-cli self-hosted control-plane profile export' first." >&2; \
 		exit 1; \
-	fi; \
-	mv "$$tmp" "$(REGISTER_VALUES)"; \
-	rm -f "$$raw"
+	fi
+
+register-cluster: check-cluster-name check-control-plane-profile ensure-nvcf-cli
+	@mkdir -p "$(dir $(REGISTER_VALUES))"
+	@echo ">>> Registering cluster '$(CLUSTER_NAME)' from the generated control-plane profile..."
+	$(if $(KUBECONFIG_FILE),@echo "    Kubeconfig:  $(KUBECONFIG_FILE)")
+	$(if $(COMPUTE_KUBE_CONTEXT),@echo "    Kube context: $(COMPUTE_KUBE_CONTEXT)")
+	@$(if $(KUBECONFIG_FILE),KUBECONFIG="$(KUBECONFIG_FILE)") "$(NVCF_CLI)" self-hosted \
+		--compute-plane-stack "$(MAKEFILE_DIR)" \
+		compute-plane register \
+		--control-plane-profile "$(CONTROL_PLANE_PROFILE)" \
+		--cluster-name "$(CLUSTER_NAME)" \
+		--region "$(CLUSTER_REGION)" \
+		--output "$(REGISTER_VALUES)" \
+		$(if $(COMPUTE_KUBE_CONTEXT),--kube-context "$(COMPUTE_KUBE_CONTEXT)")
 	@echo ">>> Helm values written to $(REGISTER_VALUES)"
 
 # Help target is conditionally defined to avoid warnings when included by dev Makefile
@@ -328,12 +320,12 @@ help:
 	@echo "  CLUSTER_NAME       Name of the GPU cluster to target"
 	@echo ""
 	@echo "Workflow:"
-	@echo "  1. make register-cluster CLUSTER_NAME=<name>   Register cluster with ICMS"
+	@echo "  1. make register-cluster CLUSTER_NAME=<name>   Register from the generated profile"
 	@echo "  2. make install CLUSTER_NAME=<name> HELMFILE_ENV=<env>"
 	@echo "                                                Deploy nvca-operator"
 	@echo ""
 	@echo "Targets:"
-	@echo "  register-cluster   Register/refresh cluster with ICMS (idempotent)"
+	@echo "  register-cluster   Register cluster from the generated control-plane profile"
 	@echo "  template           Generate Kubernetes manifests without applying"
 	@echo "  install            Initial deployment to cluster (helmfile sync)"
 	@echo "  apply              Update existing deployment (helmfile apply)"
@@ -347,9 +339,10 @@ help:
 	@echo "                     multi-cluster setups so registration reads JWKS"
 	@echo "                     from the correct cluster)"
 	@echo "  OUTPUT_DIR         Output and Helmfile handoff directory (default: ./out)"
-	@echo "  NCA_ID             NCA identifier (default: $(NCA_ID))"
+	@echo "  CONTROL_PLANE_PROFILE  Generated control-plane profile (default:"
+	@echo "                         ../self-managed/out/control-plane-profile.yaml)"
+	@echo "  COMPUTE_KUBE_CONTEXT   Optional kubeconfig context for registration and install"
 	@echo "  CLUSTER_REGION     Cluster region (default: $(CLUSTER_REGION))"
-	@echo "  ICMS_URL           ICMS endpoint (default: $(ICMS_URL))"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make register-cluster CLUSTER_NAME=gpu-east KUBECONFIG_FILE=~/.kube/gpu-east.yaml"
