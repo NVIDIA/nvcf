@@ -128,9 +128,11 @@ create the matching `TCPRoute`, `UDPRoute`, and `ReferenceGrant` resources.
 The Gateway implementation must support Gateway API `UDPRoute`.
 
 When QUIC verification is enabled, the mounted certificate must cover the
-worker-facing reverse-tunnel hostname and the per-pod hostname template. The
-default template is
-`{pod_name}.llm-request-router-headless.<namespace>.svc.cluster.local`.
+advertised per-pod hostname produced by
+`llmRequestRouter.kubernetes.advertisedHostnameTemplate`. The default template
+is `{pod_name}.llm-request-router-headless.<namespace>.svc.cluster.local`. The
+external `pylonReverseTunnelDialAddress` selects the UDP network path and needs
+a SAN only when the advertised identity is also changed to that hostname.
 
 Stargate and the backend router poll the mounted TLS certificate and key and
 reload the server identity for new connections. Client trust-bundle changes
