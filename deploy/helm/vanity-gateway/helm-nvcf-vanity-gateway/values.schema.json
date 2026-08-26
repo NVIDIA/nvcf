@@ -143,9 +143,6 @@
                 },
                 "vanity": {
                   "$ref": "#/definitions/vanityRoutes"
-                },
-                "llmGateway": {
-                  "$ref": "#/definitions/llmGatewayRoutes"
                 }
               },
               "additionalProperties": true
@@ -200,13 +197,82 @@
                 "properties": {
                   "v2config": {
                     "properties": {
-                      "llmGateway": {
-                        "type": "object",
-                        "minProperties": 1
+                      "openai": {
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "chatCompletions": {
+                                "not": {
+                                  "additionalProperties": {
+                                    "not": {
+                                      "properties": {
+                                        "functionType": {
+                                          "const": "LLM"
+                                        }
+                                      },
+                                      "required": [
+                                        "functionType"
+                                      ]
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            "required": [
+                              "chatCompletions"
+                            ]
+                          },
+                          {
+                            "properties": {
+                              "responses": {
+                                "not": {
+                                  "additionalProperties": {
+                                    "not": {
+                                      "properties": {
+                                        "functionType": {
+                                          "const": "LLM"
+                                        }
+                                      },
+                                      "required": [
+                                        "functionType"
+                                      ]
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            "required": [
+                              "responses"
+                            ]
+                          },
+                          {
+                            "properties": {
+                              "embeddings": {
+                                "not": {
+                                  "additionalProperties": {
+                                    "not": {
+                                      "properties": {
+                                        "functionType": {
+                                          "const": "LLM"
+                                        }
+                                      },
+                                      "required": [
+                                        "functionType"
+                                      ]
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            "required": [
+                              "embeddings"
+                            ]
+                          }
+                        ]
                       }
                     },
                     "required": [
-                      "llmGateway"
+                      "openai"
                     ]
                   }
                 },
@@ -326,6 +392,11 @@
         },
         "shadowCancelOnClientDisconnect": {
           "type": "boolean"
+        },
+        "functionType": {
+          "enum": [
+            "LLM"
+          ]
         }
       },
       "required": [
@@ -387,36 +458,6 @@
       "required": [
         "path",
         "functionID"
-      ],
-      "additionalProperties": true
-    },
-    "llmGatewayRoutes": {
-      "type": "object",
-      "additionalProperties": {
-        "$ref": "#/definitions/llmGatewayRoute"
-      }
-    },
-    "llmGatewayRoute": {
-      "type": "object",
-      "properties": {
-        "host": {
-          "$ref": "#/definitions/nonEmptyString"
-        },
-        "customHeaders": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
-        "eol": {
-          "type": "string"
-        },
-        "offlineMessage": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "host"
       ],
       "additionalProperties": true
     }
