@@ -703,7 +703,8 @@ func TestRunShutdownCleanup_StripsICMSRequestFinalizersAfterDrain(t *testing.T) 
 	require.Empty(t, resp.Error)
 
 	_, err := dynamicClient.Resource(icmsGVR).Namespace(DefaultNVCARequestsNamespace).Get(ctx, "sr-1", metav1.GetOptions{})
-	assert.True(t, k8serrors.IsNotFound(err), "ICMSRequest should be deleted once its finalizer is stripped, even on the forced-cleanup (drain-timeout) path")
+	assert.True(t, k8serrors.IsNotFound(err),
+		"ICMSRequest should be deleted once its finalizer is stripped, even on the forced-cleanup (drain-timeout) path")
 }
 
 func TestNewShutdownHandler_MultipleBackends(t *testing.T) {
