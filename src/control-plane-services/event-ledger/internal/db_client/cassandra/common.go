@@ -481,7 +481,32 @@ func NewCassandraProvider(logger *otelzap.Logger) *CassandraProvider {
 	return &CassandraProvider{logger: logger}
 }
 
+func validateCassandraTLSConfig(cassandraConfig config.CassandraConfig) error {
+	pathConfigured := cassandraConfig.PubKeyPath != "" ||
+		cassandraConfig.PrivKeyPath != "" ||
+		cassandraConfig.CACertPath != ""
+	base64Configured := cassandraConfig.PubKeyB64 != "" ||
+		cassandraConfig.PrivKeyB64 != "" ||
+		cassandraConfig.CACertB64 != ""
+
+	if pathConfigured && base64Configured {
+		return fmt.Errorf("cassandra TLS configuration cannot mix file paths and base64 values")
+	}
+	if pathConfigured && (cassandraConfig.PubKeyPath == "" || cassandraConfig.PrivKeyPath == "") {
+		return fmt.Errorf("cassandra TLS file configuration requires both pub-key-path and priv-key-path")
+	}
+	if base64Configured && (cassandraConfig.PubKeyB64 == "" || cassandraConfig.PrivKeyB64 == "") {
+		return fmt.Errorf("cassandra TLS base64 configuration requires both pub-key-b64 and priv-key-b64")
+	}
+
+	return nil
+}
+
 func (p *CassandraProvider) NewConnection(config config.DBConfig) (data_access.DBHandler, error) {
+	if err := validateCassandraTLSConfig(config.CassandraConfig); err != nil {
+		return nil, err
+	}
+
 	cluster := gocql.NewCluster()
 	cluster.Hosts = config.CassandraConfig.Hosts
 	cluster.Port = config.CassandraConfig.Port
@@ -523,8 +548,7 @@ func (p *CassandraProvider) NewConnection(config config.DBConfig) (data_access.D
 			config.CassandraConfig.InsecureSkipVerify,
 		)
 		if err != nil {
-			p.logger.Warn("failed to create tls config", zap.Error(err))
-			return nil, err
+			return nil, fmt.Errorf("create Cassandra TLS config: %w", err)
 		}
 		cluster.SslOpts = &gocql.SslOptions{
 			Config:                 sslOpts,

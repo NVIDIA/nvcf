@@ -170,7 +170,7 @@ type DBConfig struct {
 	CassandraConfig CassandraConfig `mapstructure:"cassandra"`
 }
 
-ok type CassandraConfig struct {
+type CassandraConfig struct {
 	Hosts              []string `mapstructure:"hosts"`
 	Port               int      `mapstructure:"port"`
 	Keyspace           string   `mapstructure:"keyspace"`
