@@ -15,7 +15,7 @@
 ## @section NVCA Operator parameters
 
 ## @param image.repository NVCA Operator container registry path, without tag
-## @param image.tag NVCA Operator container image tag. This defaults to the chart version
+## @param image.tag NVCA Operator container image tag. This defaults to the chart's appVersion
 ## @param image.pullPolicy K8s ImagePullPolicy
 image:
   repository: ""
@@ -405,7 +405,7 @@ clusterValidator:
   enabled: false
   image:
     repository: ""
-    tag: "" # defaults to .Chart.Version (same as nvca-operator)
+    tag: "" # defaults to .Chart.AppVersion (same as nvca-operator)
     pullPolicy: IfNotPresent
   schedule: "0 */3 * * *"
   configMapName: "cluster-validator-network-checks"
