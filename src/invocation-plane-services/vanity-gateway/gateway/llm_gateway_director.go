@@ -51,6 +51,11 @@ func NewLLMGatewayDirector(endpoint string, transport http.RoundTripper) (*LLMGa
 	if err != nil || endpointUrl.Scheme == "" || endpointUrl.Host == "" {
 		return nil, fmt.Errorf("invalid LLM Gateway endpoint: %s", endpoint)
 	}
+	// The proxy preserves the caller's path, so a base path would be dropped
+	// here while the health check keeps it. Reject it rather than diverge.
+	if endpointUrl.Path != "" && endpointUrl.Path != "/" {
+		return nil, fmt.Errorf("LLM Gateway endpoint must not set a path: %s", endpoint)
+	}
 	return &LLMGatewayDirector{
 		rp:     newGatewayReverseProxy(transport),
 		host:   endpointUrl.Host,

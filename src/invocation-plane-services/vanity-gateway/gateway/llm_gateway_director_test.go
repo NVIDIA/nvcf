@@ -425,3 +425,61 @@ func TestBuildChiMux_LLMGatewayRejectsSelfProxyingHost(t *testing.T) {
 		})
 	}
 }
+
+func TestNewLLMGatewayDirectorRejectsEndpointPath(t *testing.T) {
+	for _, endpoint := range []string{"http://llm.test/llm", "http://llm.test:8080/v1"} {
+		t.Run(endpoint, func(t *testing.T) {
+			director, err := NewLLMGatewayDirector(endpoint, http.DefaultTransport)
+			require.Error(t, err)
+			assert.Nil(t, director)
+			assert.ErrorContains(t, err, "must not set a path")
+		})
+	}
+
+	director, err := NewLLMGatewayDirector("http://llm.test:8080/", http.DefaultTransport)
+	require.NoError(t, err, "a bare trailing slash is not a path prefix")
+	assert.NotNil(t, director)
+}
+
+// The two upstreams expose different health paths: the invocation service
+// serves /health, the LLM Gateway serves /healthz.
+func TestBuildChiMux_HealthProbesUseUpstreamSpecificPaths(t *testing.T) {
+	nvcfPaths := make(chan string, 4)
+	nvcfBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		nvcfPaths <- r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(nvcfBackend.Close)
+
+	llmPaths := make(chan string, 4)
+	llmBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		llmPaths <- r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(llmBackend.Close)
+
+	mux, err := buildChiMux(llmGatewayMappings(config.LLMGatewayEntry{Host: llmHost}), Config{
+		NvcfApiEndpoint:              nvcfBackend.URL,
+		LLMGatewayEndpoint:           llmBackend.URL,
+		PrivateModelNameRegexPattern: "^$",
+	})
+	require.NoError(t, err)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req.Host = llmHost
+	mux.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	assertPath := func(t *testing.T, paths <-chan string, want string) {
+		t.Helper()
+		select {
+		case got := <-paths:
+			assert.Equal(t, want, got)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for a probe of %q", want)
+		}
+	}
+	assertPath(t, nvcfPaths, "/health")
+	assertPath(t, llmPaths, "/healthz")
+}
