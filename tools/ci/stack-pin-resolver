@@ -1,220 +1,34 @@
-#!/usr/bin/env python3
+#!/usr/bin/env bash
 # SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Resolve which self-managed stack pins a released chart, and edit them.
+#
+# Stable CI entrypoint for the Go tool in tools/stack-pin-resolver.
+#
+# The wrapper exists for two reasons.
+#
+# The repository root. `go run -C <dir>` leaves the process running with that
+# directory as its working directory, so the tool cannot find the helmfiles or
+# the release metadata on its own. Resolving the root from this script's own
+# location means callers do not have to pass it.
+#
+# The exit code. `go run` does NOT propagate the program's status: it prints
+# "exit status N" and exits 1, collapsing every non-zero code into one. This
+# tool only uses 0 and 1 today, so nothing is lost yet, but building the binary
+# keeps that from becoming a trap the first time a distinct code is added.
+#
+# Run the tests with: go test -C tools/stack-pin-resolver ./...
+set -euo pipefail
 
-    stack-pin-resolver --audit
-    stack-pin-resolver --tag deploy/helm/nats/v0.8.0 [--write]
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+bin_dir="$(mktemp -d)"
+trap 'rm -rf "${bin_dir}"' EXIT
 
---audit enumerates every release in the stack and reports the chart each one
-pins. It exits non-zero when any release cannot be resolved.
+go build -C "${repo_root}/tools/stack-pin-resolver" -o "${bin_dir}/stack-pin-resolver" .
 
---tag takes a chart release tag and reports the pins that should move. With
---write it edits them in place.
-
-Why an audit mode exists at all: the failure this guards against is silence. A
-chart releases, nothing in the stack resolves to it, no pin moves, and the run
-reports success. That is how nvcf-unbound went unpublished for weeks, and a
-bumper that iterates only over what it understands would reproduce it exactly.
-So resolution is enumerated over the whole stack and an unresolved release is an
-error, not a skipped iteration.
-
-Resolution has three steps, all from data already declared in the repository:
-
-  released tag   deploy/helm/<dir>/v<version>
-  -> chart path  deploy/helm/<dir>          (the tag prefix)
-  -> chart name  tools/ci/github-release-subprojects.json, the service_name of
-                 the entry whose path matches
-  -> stack pins  the helmfile releases naming that chart
-
-The helmfile names a chart in one of three ways, and the third cannot be
-resolved by reading the file:
-
-  explicit    chart: nvcf/helm-reval
-  convention  no chart: line, inherits a template of the form
-              nvcf/helm-nvcf-{{ .Release.Name }}
-  templated   chart: {{ ... }} with anything else inside
-
-A templated chart line is reported as unresolved rather than guessed at.
-"""
-
-import argparse
-import json
-import pathlib
-import re
-import sys
-
-HELMFILE_DIR = pathlib.Path("deploy/stacks/self-managed/helmfile.d")
-RELEASE_METADATA = pathlib.Path("tools/ci/github-release-subprojects.json")
-
-# A release block starts at "- name:" and runs to the next one.
-RELEASE_RE = re.compile(r"^\s+- name:\s*(\S+)(.*?)(?=^\s+- name:|\Z)", re.M | re.S)
-CHART_RE = re.compile(r"^\s+chart:\s*(.+?)\s*$", re.M)
-VERSION_RE = re.compile(r"^(\s+version:\s*)([0-9][^\s]*)(\s*)$", re.M)
-# The shared template that most releases inherit. The inner braces are escaped
-# in the source because helmfile passes the expression through to helm.
-TEMPLATE_CHART_RE = re.compile(r"helm-nvcf-\{\{.*?\.Release\.Name.*?\}\}")
-# An override-with-default line names the real chart inside the default:
-#   chart: {{ $someVar | default "nvcf/helm-nvcf-llm-request-router" | quote }}
-# The default is the chart used unless an operator overrides it, so it is the
-# one an automated bump should follow.
-DEFAULT_CHART_RE = re.compile(r'default\s+"([^"]+)"')
-
-
-class Unresolved(Exception):
-    pass
-
-
-def chart_name_for_release(release_name, body):
-    """The chart a stack release pins, or raise Unresolved."""
-    m = CHART_RE.search(body)
-    if not m:
-        # No chart line: inherits the shared template, which appends the
-        # release name to a fixed prefix.
-        return f"helm-nvcf-{release_name}"
-    value = m.group(1)
-    if "{{" not in value:
-        return value.split("/")[-1]
-    if TEMPLATE_CHART_RE.search(value):
-        return f"helm-nvcf-{release_name}"
-    default = DEFAULT_CHART_RE.search(value)
-    if default:
-        return default.group(1).split("/")[-1]
-    raise Unresolved(f"chart line is templated and not a known form: {value}")
-
-
-def load_stack():
-    """Every release in the stack: name, file, chart (or the Unresolved reason),
-    pinned version."""
-    out = []
-    for path in sorted(HELMFILE_DIR.glob("*.yaml.gotmpl")):
-        text = path.read_text()
-        for m in RELEASE_RE.finditer(text):
-            name, body = m.group(1), m.group(2)
-            ver = VERSION_RE.search(body)
-            if not ver:
-                # Not a pin. The shared templates block and the repositories
-                # block both match the release shape but carry no version.
-                continue
-            try:
-                chart, reason = chart_name_for_release(name, body), None
-            except Unresolved as exc:
-                chart, reason = None, str(exc)
-            out.append(
-                {
-                    "release": name,
-                    "file": path.name,
-                    "chart": chart,
-                    "unresolved": reason,
-                    "version": ver.group(2) if ver else None,
-                }
-            )
-    return out
-
-
-def chart_name_for_path(chart_path):
-    """The published chart name for a chart directory, from release metadata."""
-    meta = json.loads(RELEASE_METADATA.read_text())
-    for entry in meta.get("services", []):
-        if entry.get("path") == chart_path:
-            name = entry.get("service_name")
-            if not name:
-                raise Unresolved(f"{chart_path} has no service_name in release metadata")
-            return name
-    raise Unresolved(f"no release-metadata entry with path {chart_path}")
-
-
-def parse_tag(tag):
-    """deploy/helm/<dir>/v<version> -> (chart path, version)."""
-    m = re.fullmatch(r"(deploy/helm/.+)/v(.+)", tag)
-    if not m:
-        raise Unresolved(f"not a chart release tag: {tag}")
-    return m.group(1), m.group(2)
-
-
-def audit():
-    releases = load_stack()
-    bad = [r for r in releases if r["unresolved"]]
-    for r in releases:
-        state = r["unresolved"] or f"-> {r['chart']}"
-        print(f"{r['release']:28} {str(r['version'] or '-'):20} {state}")
-    print(f"\n{len(releases)} releases, {len(bad)} unresolved")
-    if bad:
-        print("\nUnresolved releases cannot receive an automated bump:", file=sys.stderr)
-        for r in bad:
-            print(f"  {r['release']} ({r['file']}): {r['unresolved']}", file=sys.stderr)
-        return 1
-    return 0
-
-
-def bump(tag, write):
-    chart_path, version = parse_tag(tag)
-    chart = chart_name_for_path(chart_path)
-
-    releases = load_stack()
-    unresolved = [r for r in releases if r["unresolved"]]
-    if unresolved:
-        # Refuse to act on a partially understood stack. A release we cannot
-        # read might be the one that pins this chart.
-        print("refusing to bump: the stack has unresolved releases", file=sys.stderr)
-        for r in unresolved:
-            print(f"  {r['release']} ({r['file']}): {r['unresolved']}", file=sys.stderr)
-        return 1
-
-    targets = [r for r in releases if r["chart"] == chart]
-    if not targets:
-        print(f"no stack release pins {chart} (from {tag})", file=sys.stderr)
-        return 1
-
-    changed = 0
-    for r in targets:
-        if r["version"] == version:
-            print(f"{r['release']}: already {version}")
-            continue
-        print(f"{r['release']}: {r['version']} -> {version}")
-        changed += 1
-        if write:
-            path = HELMFILE_DIR / r["file"]
-            text = path.read_text()
-            block = RELEASE_RE.search(text) and None
-            # Rewrite only the version line inside this release's own block.
-            def rewrite(match):
-                if match.group(1) != r["release"]:
-                    return match.group(0)
-                body = VERSION_RE.sub(
-                    lambda v: f"{v.group(1)}{version}{v.group(3)}", match.group(2), count=1
-                )
-                return f"{match.group(0)[:match.group(0).index(match.group(2))]}{body}"
-
-            path.write_text(RELEASE_RE.sub(rewrite, text))
-    if changed == 0:
-        print("nothing to change")
-    return 0
-
-
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--audit", action="store_true")
-    ap.add_argument("--tag")
-    ap.add_argument("--write", action="store_true")
-    ap.add_argument("--root", default=".")
-    args = ap.parse_args()
-
-    import os
-
-    os.chdir(args.root)
-
-    try:
-        if args.audit:
-            return audit()
-        if args.tag:
-            return bump(args.tag, args.write)
-    except Unresolved as exc:
-        print(f"unresolved: {exc}", file=sys.stderr)
-        return 1
-    ap.print_help()
-    return 1
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
+# Not exec, so the trap above still runs, and not under errexit, so the exit
+# code reaches the caller rather than aborting the shell first.
+set +e
+"${bin_dir}/stack-pin-resolver" --root "${repo_root}" "$@"
+status=$?
+set -e
+exit "${status}"

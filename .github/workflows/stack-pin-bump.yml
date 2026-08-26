@@ -50,11 +50,17 @@ jobs:
           # from today's main.
           ref: ${{ github.event.repository.default_branch }}
 
+      - uses: actions/setup-go@v5
+        with:
+          # Derived from the anchor, never a literal: tools/ci/check-go-version
+          # fails any workflow that pins one.
+          go-version-file: tools/go-toolchain/go.mod
+
       - name: Test the resolver
         # The resolver decides which line in the shipped stack gets rewritten,
         # so its tests run here rather than somewhere that might not be
         # reached. A test that gates nothing is not a test.
-        run: bash tools/ci/test-stack-pin-resolver
+        run: go test -C tools/stack-pin-resolver ./...
 
       - name: Select the tag
         id: tag
@@ -74,14 +80,14 @@ jobs:
         if: steps.tag.outputs.applies == 'true'
         # Runs before the edit so an unresolvable release fails the job with a
         # name attached, rather than being quietly skipped over.
-        run: python3 tools/ci/stack-pin-resolver --audit
+        run: tools/ci/stack-pin-resolver --audit
 
       - name: Apply the bump
         id: bump
         if: steps.tag.outputs.applies == 'true'
         run: |
           set -euo pipefail
-          python3 tools/ci/stack-pin-resolver --tag "${{ steps.tag.outputs.tag }}" --write
+          tools/ci/stack-pin-resolver --tag "${{ steps.tag.outputs.tag }}" --write
           # Scoped to the same paths the commit below stages. Repo-wide, any
           # unrelated modification in the workspace would set changed=true and
           # the commit would then abort with nothing staged.
