@@ -1,0 +1,218 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# When a service release is published, open a pull request moving the charts
+# that deploy it to that version.
+#
+# This is the first hop of the service to chart to stack cascade. The second is
+# stack-pin-bump.yml: merging this pull request does not by itself move the
+# stack, because a chart version only reaches the stack once the chart is
+# released. Cutting that chart release stays a human decision, and publishing
+# it is what triggers the stack bump.
+#
+# Which charts deploy the released service is declared, not derived; see
+# tools/ci/chart-service-edge for why deriving it is wrong. A service whose
+# charts have not declared the edge yet bumps nothing and says so.
+
+name: chart version bump
+
+on:
+  release:
+    types: [published]
+  # Manual entry point for re-running a release whose bump did not land, and
+  # for exercising the job without cutting a tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: >-
+          Service release tag, for example
+          src/control-plane-services/notary/v1.9.0
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  # One bump at a time. Several releases landing together refresh the same
+  # pull request rather than racing on the same files.
+  group: chart-version-bump
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The default for a release event is the tagged commit, but the pull
+          # request targets the default branch. Bumping the tag's tree would
+          # carry whatever the chart looked like then onto a branch cut from
+          # today's main.
+          ref: ${{ github.event.repository.default_branch }}
+
+      - uses: actions/setup-go@v5
+        with:
+          # Derived from the anchor, never a literal: tools/ci/check-go-version
+          # fails any workflow that pins one.
+          go-version-file: tools/go-toolchain/go.mod
+
+      - name: Test the bumper
+        # The bumper rewrites version fields in shipped charts, so its tests run
+        # here rather than somewhere that might not be reached. A test that
+        # gates nothing is not a test.
+        run: go test -C tools/chart-version-bumper ./...
+
+      - name: Select the tag
+        id: tag
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.inputs.tag || github.event.release.tag_name }}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          # Chart releases move stack pins, which is stack-pin-bump.yml's job.
+          # Everything else is a service release and is this job's business:
+          # a tag that names no known service fails below rather than here, so
+          # a service missing from the release metadata is visible.
+          case "${tag}" in
+            deploy/helm/*/v*) echo "applies=false" >> "${GITHUB_OUTPUT}"
+                              echo "${tag} is a chart release; stack-pin-bump.yml handles it" ;;
+            */v*)             echo "applies=true"  >> "${GITHUB_OUTPUT}" ;;
+            *)                echo "applies=false" >> "${GITHUB_OUTPUT}"
+                              echo "${tag} is not a subtree release tag; nothing to do" ;;
+          esac
+
+      - name: Check the chart to service edges
+        if: steps.tag.outputs.applies == 'true'
+        # Report-only. Runs here so the undeclared charts are listed in the same
+        # log as a bump that reached fewer charts than someone expected.
+        run: tools/ci/chart-service-edge --audit
+
+      - name: Apply the bump
+        id: bump
+        if: steps.tag.outputs.applies == 'true'
+        run: |
+          set +e
+          set -uo pipefail
+          # +e, deliberately. GitHub invokes this as `bash -e`, and the bumper
+          # exits 3 when a chart's appVersion and image tag disagree even though
+          # it still applied every chart it could move safely. Aborting here
+          # would throw those away and leave the refusal as the only outcome.
+          tools/ci/chart-version-bumper \
+            --tag "${{ steps.tag.outputs.tag }}" --write 2>/tmp/refusals
+          status=$?
+          cat /tmp/refusals >&2
+          # The exit code, not whether stderr is empty. SystemExit writes its
+          # message to stderr too, so an unresolvable tag looks exactly like a
+          # refused chart there. 3 means the charts that could move did; any
+          # other non-zero means nothing moved and the run should stop.
+          if [ "${status}" -ne 0 ] && [ "${status}" -ne 3 ]; then
+            echo "bumper failed (exit ${status}); no chart was changed" >&2
+            exit "${status}"
+          fi
+          if [ "${status}" -eq 3 ]; then
+            {
+              echo "refused<<CHART_BUMP_REFUSALS"
+              cat /tmp/refusals
+              echo "CHART_BUMP_REFUSALS"
+            } >> "${GITHUB_OUTPUT}"
+          fi
+          # Scoped to the same paths the commit below stages. Repo-wide, any
+          # unrelated modification in the workspace would set changed=true and
+          # the commit would then abort with nothing staged.
+          if git diff --quiet -- deploy/helm; then
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+            echo "no chart moved"
+          else
+            echo "changed=true" >> "${GITHUB_OUTPUT}"
+            git --no-pager diff --stat -- deploy/helm
+          fi
+
+      - name: Open or refresh the pull request
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          REFUSED: ${{ steps.bump.outputs.refused }}
+        run: |
+          set -euo pipefail
+          branch="chore/chart-version-bumps"
+          git config user.name "nvcf-release-bot"
+          git config user.email "svc-nvcf-release@nvidia.com"
+
+          # A fixed branch, refreshed. Several releases landing close together
+          # then produce one pull request carrying all of their bumps instead
+          # of a pile that conflict with each other.
+          git fetch origin "${branch}" || true
+          if git rev-parse --verify -q "origin/${branch}" >/dev/null; then
+            git stash push --quiet
+            git checkout -B "${branch}" "origin/${branch}"
+            git stash pop --quiet || true
+          else
+            git checkout -B "${branch}"
+          fi
+
+          git add deploy/helm
+          # Separate -m flags rather than an embedded multi-line string: the
+          # continuation lines of one would have to sit at column zero, which
+          # ends the YAML block scalar this script lives in.
+          git commit \
+            -m "chore(charts): bump for ${TAG}" \
+            -m "Opened by the chart version bump workflow on release of ${TAG}." \
+            -m "Co-authored-by: Balaji Ganesan <bganesan@nvidia.com>"
+          git push --force-with-lease origin "${branch}"
+
+          notes=""
+          if [ -n "${REFUSED}" ]; then
+            notes="$(printf '%s\n' \
+              "" \
+              "Some charts were not bumped:" \
+              "" \
+              '```' \
+              "${REFUSED}" \
+              '```' \
+              "" \
+              "A chart is refused when its \`appVersion\` and image tag disagree, or when the tag is floating. Reconciling those two fields is a decision, so it is left to a person rather than resolved during an automated bump.")"
+          fi
+
+          body="$(printf '%s\n' \
+            "Opened by \`.github/workflows/chart-version-bump.yml\` when \`${TAG}\` was published." \
+            "" \
+            "The released tag carries the version, so this is a direct update rather than a lookup of the newest published image." \
+            "" \
+            "Merging this does not move the self-managed stack. A chart version reaches the stack only once the chart itself is released, and publishing that chart release is what triggers \`stack-pin-bump.yml\`." \
+            "" \
+            "Release notes: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${TAG}" \
+            "${notes}" \
+            "" \
+            "If this pull request sits unmerged, later service releases add their bumps to the same branch, so merging it applies all of them." \
+            "" \
+            "Github commit:" \
+            "chore(charts): bump chart versions for released services" \
+            "" \
+            "Co-authored-by: Balaji Ganesan <bganesan@nvidia.com>")"
+
+          if gh pr view "${branch}" --json number >/dev/null 2>&1; then
+            gh pr edit "${branch}" --body "${body}"
+            echo "refreshed the existing pull request"
+          else
+            gh pr create --base main --head "${branch}" \
+              --title "chore(charts): bump chart versions for released services" \
+              --body "${body}"
+          fi
+
+      - name: Surface refusals
+        if: steps.bump.outputs.refused != ''
+        # Last, so it does not stop the safe bumps from being opened. A chart
+        # that wanted a bump and could not take one is a finding, and a green
+        # run would bury it.
+        env:
+          # Via env, not ${{ }} interpolation: expanding it into the script body
+          # is the standard Actions injection shape, even for text this
+          # repository produced.
+          REFUSED: ${{ steps.bump.outputs.refused }}
+        run: |
+          echo "::error::charts refused the bump:"
+          printf '%s\n' "${REFUSED}"
+          exit 1
