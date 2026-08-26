@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -77,6 +78,11 @@ type ModelFunctionDetails struct {
 	ShadowPercentage               *int                  `json:"shadowPercentage,omitempty"` // 1-100 when set; omitted defaults to 100
 	ShadowSamplingMethod           ShadowSamplingMethod  `json:"shadowSamplingMethod,omitempty"`
 	ShadowCancelOnClientDisconnect bool                  `json:"shadowCancelOnClientDisconnect,omitempty"` // cancel shadow when primary completes; default false
+	FunctionType                   FunctionType          `json:"functionType,omitempty"`
+}
+
+func (m ModelFunctionDetails) TargetsLLMGateway() bool {
+	return m.FunctionType == FunctionTypeLLM
 }
 
 func (m *ModelFunctionDetails) UnmarshalJSON(data []byte) error {
@@ -131,15 +137,17 @@ type VanityEntry struct {
 	Paths map[string]PathFunctionDetails `json:"paths"`
 }
 
-// LLMGatewayEntry serves the LLM Gateway's OpenAI-compatible routes on Host.
-// The gateway proxies them verbatim, so an entry carries no function or model
-// selection: the LLM Gateway resolves the function from the request model.
-type LLMGatewayEntry struct {
-	Host           string        `json:"host"`
-	CustomHeaders  CustomHeaders `json:"customHeaders,omitempty"`
-	EOL            time.Time     `json:"eol,omitempty"`
-	OfflineMessage string        `json:"offlineMessage,omitempty"`
-}
+// FunctionType selects which upstream serves a model. The empty value keeps the
+// historical behavior of invoking the function through the NVCF invocation API.
+type FunctionType string
+
+const (
+	FunctionTypeDefault FunctionType = ""
+	FunctionTypeLLM     FunctionType = "LLM"
+)
+
+// llmGatewaySections are the OpenAI-compatible sections the LLM Gateway serves.
+var llmGatewaySections = []string{"chatCompletions", "responses", "embeddings"}
 
 type V2Config struct {
 	OpenAI struct {
@@ -152,8 +160,7 @@ type V2Config struct {
 		ImageEdits       map[string]ModelFunctionDetails `json:"imageEdits"`
 		ImageVariations  map[string]ModelFunctionDetails `json:"imageVariations"`
 	} `json:"openai"`
-	Vanity     map[string]VanityEntry     `json:"vanity"`
-	LLMGateway map[string]LLMGatewayEntry `json:"llmGateway"`
+	Vanity map[string]VanityEntry `json:"vanity"`
 }
 
 // sharedNotifications is a package-level channel shared across all config instances.
@@ -251,11 +258,7 @@ func (c *GatewayConfig) Validate() error {
 		}
 	}
 
-	if err := c.validateVanityConfig(); err != nil {
-		return err
-	}
-
-	return c.validateLLMGatewayConfig()
+	return c.validateVanityConfig()
 }
 
 func (c *GatewayConfig) openAISections() map[string]map[string]ModelFunctionDetails {
@@ -282,6 +285,9 @@ func validateOpenAISection(sectionName string, entries map[string]ModelFunctionD
 			return fmt.Errorf("%s: sessionTimeout must be greater than or equal to 0", location)
 		}
 		if err := validateCustomHeaders(location, entry.CustomHeaders); err != nil {
+			return err
+		}
+		if err := validateFunctionType(location, sectionName, entry); err != nil {
 			return err
 		}
 	}
@@ -446,57 +452,57 @@ func (c *GatewayConfig) validateVanityConfig() error {
 	return nil
 }
 
-// validateLLMGatewayConfig checks the hosts that proxy to the LLM Gateway. The
-// gateway registers a fixed route set on each of them, so the only things an
-// entry can get wrong are the host itself and the static headers.
-func (c *GatewayConfig) validateLLMGatewayConfig() error {
-	for entryKey, entry := range c.LLMGateway {
-		location := "llmGateway." + entryKey
-		if entry.Host == "" {
-			return fmt.Errorf("%s: host is required", location)
-		}
-		if err := validateCustomHeaders(location, entry.CustomHeaders); err != nil {
-			return err
-		}
-		for name := range entry.CustomHeaders {
-			if _, ok := llmGatewayReservedCustomHeaderNames[strings.ToLower(name)]; ok {
-				return fmt.Errorf("%s: customHeaders cannot set %q; the LLM Gateway rejects requests carrying it", location, name)
-			}
-		}
+// validateLLMGatewayModel checks a model routed to the LLM Gateway. The gateway
+// rewrites the request model to functionID/modelName and forwards it, so the
+// invocation-only fields are meaningless here.
+func validateLLMGatewayModel(location string, sectionName string, entry ModelFunctionDetails) error {
+	if !slices.Contains(llmGatewaySections, sectionName) {
+		return fmt.Errorf("%s: functionType %q is only supported in %s", location, FunctionTypeLLM, strings.Join(llmGatewaySections, ", "))
 	}
-
-	return c.validateHostUniqueness()
-}
-
-// validateHostUniqueness rejects a host claimed by more than one section.
-// Registration is a plain map assignment keyed by host, so a collision would
-// silently drop one section's routes.
-func (c *GatewayConfig) validateHostUniqueness() error {
-	owners := make(map[string]string, len(c.LLMGateway)+len(c.Vanity)+1)
-	if c.OpenAI.Host != "" {
-		owners[c.OpenAI.Host] = "openai"
+	if entry.FunctionID == "" {
+		return fmt.Errorf("%s: functionID is required for functionType %q", location, FunctionTypeLLM)
 	}
-	for vanityName, vanity := range c.Vanity {
-		if vanity.Host == "" {
-			continue
-		}
-		if owner, ok := owners[vanity.Host]; ok {
-			return fmt.Errorf("vanity.%s: host %q is already served by %s", vanityName, vanity.Host, owner)
-		}
-		owners[vanity.Host] = "vanity." + vanityName
+	if entry.UsePexec {
+		return fmt.Errorf("%s: usePexec is unsupported for functionType %q", location, FunctionTypeLLM)
 	}
-	for entryKey, entry := range c.LLMGateway {
-		if owner, ok := owners[entry.Host]; ok {
-			return fmt.Errorf("llmGateway.%s: host %q is already served by %s", entryKey, entry.Host, owner)
+	if entry.OutgoingPathOverride != "" {
+		return fmt.Errorf("%s: outgoingPathOverride is unsupported for functionType %q", location, FunctionTypeLLM)
+	}
+	if entry.SessionTimeout != 0 {
+		return fmt.Errorf("%s: sessionTimeout is unsupported for functionType %q", location, FunctionTypeLLM)
+	}
+	if entry.ShadowModelName != "" || len(entry.ShadowModelNames) > 0 {
+		return fmt.Errorf("%s: shadow traffic is unsupported for functionType %q", location, FunctionTypeLLM)
+	}
+	for name := range entry.CustomHeaders {
+		if _, ok := llmGatewayReservedCustomHeaderNames[strings.ToLower(name)]; ok {
+			return fmt.Errorf("%s: customHeaders cannot set %q for functionType %q; the LLM Gateway rejects requests carrying it", location, name, FunctionTypeLLM)
 		}
-		owners[entry.Host] = "llmGateway." + entryKey
 	}
 	return nil
 }
 
-// HasLLMGatewayRoute reports whether any host proxies to the LLM Gateway.
+func validateFunctionType(location string, sectionName string, entry ModelFunctionDetails) error {
+	switch entry.FunctionType {
+	case FunctionTypeDefault:
+		return nil
+	case FunctionTypeLLM:
+		return validateLLMGatewayModel(location, sectionName, entry)
+	default:
+		return fmt.Errorf("%s: functionType must be %q when set", location, FunctionTypeLLM)
+	}
+}
+
+// HasLLMGatewayRoute reports whether any model is routed to the LLM Gateway.
 func (c *GatewayConfig) HasLLMGatewayRoute() bool {
-	return len(c.LLMGateway) > 0
+	for _, entries := range c.openAISections() {
+		for _, entry := range entries {
+			if entry.TargetsLLMGateway() {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func SetupConfigWithConfigPath(path string) (rc.ReloadableConfig[GatewayConfig], error) {

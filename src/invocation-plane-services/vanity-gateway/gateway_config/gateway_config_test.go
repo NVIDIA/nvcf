@@ -868,148 +868,110 @@ func TestGatewayConfigValidateRejectsVanityShadowSamplingMethod(t *testing.T) {
 	assert.ErrorContains(t, err, "shadow config is unsupported for vanity routes")
 }
 
-func llmGatewayConfig(entry LLMGatewayEntry) *GatewayConfig {
+func llmModelConfig(section string, entry ModelFunctionDetails) *GatewayConfig {
 	cfg := &GatewayConfig{}
-	cfg.LLMGateway = map[string]LLMGatewayEntry{"llm_example": entry}
+	cfg.OpenAI.Host = "api.example.com"
+	entries := map[string]ModelFunctionDetails{"m": entry}
+	switch section {
+	case "chatCompletions":
+		cfg.OpenAI.ChatCompletions = entries
+	case "responses":
+		cfg.OpenAI.Responses = entries
+	case "embeddings":
+		cfg.OpenAI.Embeddings = entries
+	case "completions":
+		cfg.OpenAI.Completions = entries
+	case "imageGenerations":
+		cfg.OpenAI.ImageGenerations = entries
+	}
 	return cfg
 }
 
-func TestGatewayConfigValidateAcceptsLLMGatewayEntry(t *testing.T) {
-	cfg := llmGatewayConfig(LLMGatewayEntry{
-		Host:           "llm.example.com",
-		CustomHeaders:  CustomHeaders{"X-Provider-Feature": "enabled"},
-		OfflineMessage: "",
-	})
-
-	require.NoError(t, cfg.Validate())
-	assert.True(t, cfg.HasLLMGatewayRoute())
+func llmModel() ModelFunctionDetails {
+	return ModelFunctionDetails{ModelName: "meta/llama", FunctionID: "func-id", FunctionType: FunctionTypeLLM}
 }
 
-func TestGatewayConfigHasLLMGatewayRouteFalseWhenSectionEmpty(t *testing.T) {
-	cfg := &GatewayConfig{}
-	cfg.Vanity = map[string]VanityEntry{
-		"example": {
-			Host:  "ai.example.com",
-			Paths: map[string]PathFunctionDetails{"sample": {Path: "/v1/example/infer", FunctionID: "func-id"}},
-		},
+func TestGatewayConfigValidateAcceptsLLMFunctionTypeInSupportedSections(t *testing.T) {
+	for _, section := range llmGatewaySections {
+		t.Run(section, func(t *testing.T) {
+			cfg := llmModelConfig(section, llmModel())
+			require.NoError(t, cfg.Validate())
+			assert.True(t, cfg.HasLLMGatewayRoute())
+		})
 	}
+}
 
+func TestGatewayConfigValidateRejectsLLMFunctionTypeInUnsupportedSections(t *testing.T) {
+	for _, section := range []string{"completions", "imageGenerations"} {
+		t.Run(section, func(t *testing.T) {
+			err := llmModelConfig(section, llmModel()).Validate()
+			require.Error(t, err)
+			assert.ErrorContains(t, err, `functionType "LLM" is only supported in`)
+		})
+	}
+}
+
+func TestGatewayConfigValidateRejectsUnknownFunctionType(t *testing.T) {
+	entry := llmModel()
+	entry.FunctionType = FunctionType("llmGateway")
+	err := llmModelConfig("chatCompletions", entry).Validate()
+	require.Error(t, err)
+	assert.ErrorContains(t, err, `functionType must be "LLM" when set`)
+}
+
+func TestGatewayConfigValidateRejectsInvocationOnlyFieldsOnLLMModels(t *testing.T) {
+	pct := 50
+	tests := []struct {
+		name    string
+		mutate  func(e *ModelFunctionDetails)
+		wantErr string
+	}{
+		{"functionID missing", func(e *ModelFunctionDetails) { e.FunctionID = "" }, "functionID is required"},
+		{"usePexec", func(e *ModelFunctionDetails) { e.UsePexec = true }, "usePexec is unsupported"},
+		{"outgoingPathOverride", func(e *ModelFunctionDetails) { e.OutgoingPathOverride = "/x" }, "outgoingPathOverride is unsupported"},
+		{"sessionTimeout", func(e *ModelFunctionDetails) { e.SessionTimeout = 900 }, "sessionTimeout is unsupported"},
+		{"shadowModelName", func(e *ModelFunctionDetails) { e.ShadowModelName = "other"; e.ShadowPercentage = &pct }, "shadow traffic is unsupported"},
+		{"X-Priority header", func(e *ModelFunctionDetails) { e.CustomHeaders = CustomHeaders{"X-Priority": "5"} }, "the LLM Gateway rejects requests carrying it"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			entry := llmModel()
+			tc.mutate(&entry)
+			err := llmModelConfig("chatCompletions", entry).Validate()
+			require.Error(t, err)
+			assert.ErrorContains(t, err, tc.wantErr)
+		})
+	}
+}
+
+func TestGatewayConfigValidateAllowsInvocationFieldsOnDefaultModels(t *testing.T) {
+	entry := ModelFunctionDetails{ModelName: "meta/llama", FunctionID: "func-id", UsePexec: true, SessionTimeout: 900}
+	cfg := llmModelConfig("chatCompletions", entry)
 	require.NoError(t, cfg.Validate())
 	assert.False(t, cfg.HasLLMGatewayRoute())
 }
 
-func TestGatewayConfigValidateRejectsLLMGatewayEntryWithoutHost(t *testing.T) {
-	err := llmGatewayConfig(LLMGatewayEntry{}).Validate()
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "llmGateway.llm_example: host is required")
-}
-
-func TestGatewayConfigValidateRejectsPriorityHeaderOnLLMGatewayEntry(t *testing.T) {
-	for _, name := range []string{"X-Priority", "x-priority"} {
-		t.Run(name, func(t *testing.T) {
-			cfg := llmGatewayConfig(LLMGatewayEntry{
-				Host:          "llm.example.com",
-				CustomHeaders: CustomHeaders{name: "high"},
-			})
-
-			err := cfg.Validate()
-			require.Error(t, err)
-			assert.ErrorContains(t, err, "the LLM Gateway rejects requests carrying it")
-		})
-	}
-}
-
-func TestGatewayConfigValidateRejectsReservedHeaderOnLLMGatewayEntry(t *testing.T) {
-	cfg := llmGatewayConfig(LLMGatewayEntry{
-		Host:          "llm.example.com",
-		CustomHeaders: CustomHeaders{"Authorization": "Bearer nope"},
-	})
-
-	err := cfg.Validate()
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "cannot set reserved header")
-}
-
-func TestGatewayConfigValidateRejectsDuplicateHostsAcrossSections(t *testing.T) {
-	tests := []struct {
-		name        string
-		mutate      func(cfg *GatewayConfig)
-		wantMessage string
-	}{
-		{
-			name:        "llmGateway collides with openai",
-			mutate:      func(cfg *GatewayConfig) { cfg.OpenAI.Host = "shared.example.com" },
-			wantMessage: `host "shared.example.com" is already served by openai`,
-		},
-		{
-			name: "llmGateway collides with vanity",
-			mutate: func(cfg *GatewayConfig) {
-				cfg.Vanity = map[string]VanityEntry{
-					"example": {
-						Host:  "shared.example.com",
-						Paths: map[string]PathFunctionDetails{"sample": {Path: "/v1/example/infer", FunctionID: "func-id"}},
-					},
-				}
-			},
-			wantMessage: `host "shared.example.com" is already served by vanity.example`,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := llmGatewayConfig(LLMGatewayEntry{Host: "shared.example.com"})
-			tc.mutate(cfg)
-
-			err := cfg.Validate()
-			require.Error(t, err)
-			assert.ErrorContains(t, err, tc.wantMessage)
-		})
-	}
-}
-
-func TestGatewayConfigValidateRejectsDuplicateHostAcrossTwoLLMGatewayEntries(t *testing.T) {
-	cfg := &GatewayConfig{}
-	cfg.LLMGateway = map[string]LLMGatewayEntry{
-		"first":  {Host: "llm.example.com"},
-		"second": {Host: "llm.example.com"},
-	}
-
-	err := cfg.Validate()
-	require.Error(t, err)
-	assert.ErrorContains(t, err, `host "llm.example.com" is already served by llmGateway.`)
-}
-
-func TestGatewayConfigValidateAllowsEmptyOpenAIHostAlongsideLLMGateway(t *testing.T) {
-	cfg := llmGatewayConfig(LLMGatewayEntry{Host: "llm.example.com"})
-
-	require.NoError(t, cfg.Validate())
-}
-
-func TestGatewayConfigLoadAcceptsLLMGatewaySection(t *testing.T) {
+func TestGatewayConfigLoadAcceptsLLMFunctionType(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.yaml")
 	err := os.WriteFile(configPath, []byte(`
 v2config:
-  vanity:
-    example:
-      host: ai.example.com
-      paths:
-        infer:
-          path: /v1/example/infer
-          functionID: func-id
-  llmGateway:
-    llm_example:
-      host: llm.example.com
-      offlineMessage: ""
-      customHeaders:
-        X-Provider-Feature: enabled
+  openai:
+    host: api.example.com
+    chatCompletions:
+      llama:
+        modelName: meta/llama-3.3-70b
+        functionID: func-id
+        functionType: LLM
+      phi:
+        modelName: microsoft/phi-2
+        functionID: other-id
 `), 0600)
 	require.NoError(t, err)
 
 	loaded, err := SetupConfigWithConfigPath(configPath)
 	require.NoError(t, err)
-
 	cfg := loaded.Get()
-	require.True(t, cfg.HasLLMGatewayRoute())
-	assert.Equal(t, "llm.example.com", cfg.LLMGateway["llm_example"].Host)
-	assert.Equal(t, "enabled", cfg.LLMGateway["llm_example"].CustomHeaders["X-Provider-Feature"])
+	assert.True(t, cfg.HasLLMGatewayRoute())
+	assert.True(t, cfg.OpenAI.ChatCompletions["llama"].TargetsLLMGateway())
+	assert.False(t, cfg.OpenAI.ChatCompletions["phi"].TargetsLLMGateway())
 }

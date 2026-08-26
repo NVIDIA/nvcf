@@ -75,15 +75,15 @@ func buildChiMux(mappings *config.GatewayConfig, serverConfig Config) (*chi.Mux,
 	var llmGatewayDirector *LLMGatewayDirector
 	if mappings.HasLLMGatewayRoute() {
 		if serverConfig.LLMGatewayEndpoint == "" {
-			return nil, fmt.Errorf("LLM_GATEWAY_ENDPOINT is required when v2config.llmGateway declares a host")
+			return nil, fmt.Errorf("LLM_GATEWAY_ENDPOINT is required when a model sets functionType LLM")
 		}
 		llmGatewayEndpoint = serverConfig.LLMGatewayEndpoint
 		llmGatewayDirector, err = NewLLMGatewayDirector(llmGatewayEndpoint, transport)
 		if err != nil {
 			return nil, err
 		}
-		if err := rejectSelfProxyingHosts(mappings, llmGatewayDirector.UpstreamHostname()); err != nil {
-			return nil, err
+		if hostWithoutPort(mappings.OpenAI.Host) == llmGatewayDirector.UpstreamHostname() {
+			return nil, fmt.Errorf("openai.host %q is the LLM Gateway endpoint; the gateway would proxy to itself", mappings.OpenAI.Host)
 		}
 	}
 
@@ -103,7 +103,7 @@ func buildChiMux(mappings *config.GatewayConfig, serverConfig Config) (*chi.Mux,
 	}
 	shadower := NewTrafficShadower(shadowMaxConcurrent, requestTimeout)
 
-	openAIDirector, err := NewOpenAIDirectorV2(mappings, re, vanityDirector, shadower)
+	openAIDirector, err := NewOpenAIDirectorV2(mappings, re, vanityDirector, llmGatewayDirector, shadower)
 	if err != nil {
 		return nil, err
 	}
@@ -125,7 +125,6 @@ func buildChiMux(mappings *config.GatewayConfig, serverConfig Config) (*chi.Mux,
 
 	registerOpenAI(hostRouter, mappings, openAIDirector, healthManager, serverTelemetry)
 	registerVanity(hostRouter, mappings, vanityDirector, healthManager, serverTelemetry)
-	registerLLMGateway(hostRouter, mappings, llmGatewayDirector, healthManager, serverTelemetry)
 
 	r.Use(hostRouter.Handler)
 	r.With(serverTelemetry).Get(healthPath, healthManager.HandlerFunc)
@@ -166,48 +165,6 @@ func registerVanity(hostRouter *middleware.HostRouter, mappings *config.GatewayC
 		r.Get("/info", golibversion.Handler().ServeHTTP)
 		r.Get("/v1/status/{requestId}", vanityDirector.ServePolling)
 		hostRouter.Register(vanity.Host, chimiddleware.New(r))
-	}
-}
-
-// rejectSelfProxyingHosts fails the build when a configured host resolves to the
-// LLM Gateway endpoint itself. The proxy clears request.Host, so the outbound
-// Host header becomes the endpoint host, and a match would loop indefinitely
-// rather than fail cleanly.
-func rejectSelfProxyingHosts(mappings *config.GatewayConfig, upstreamHostname string) error {
-	for entryKey, entry := range mappings.LLMGateway {
-		if hostWithoutPort(entry.Host) == upstreamHostname {
-			return fmt.Errorf("llmGateway.%s: host %q is the LLM Gateway endpoint; the gateway would proxy to itself", entryKey, entry.Host)
-		}
-	}
-	return nil
-}
-
-// llmGatewaySupportedPaths are the OpenAI-compatible routes the LLM Gateway
-// registers. Hosts in the llmGateway section serve exactly these.
-var llmGatewaySupportedPaths = []string{
-	"/v1/chat/completions",
-	"/v1/embeddings",
-	"/v1/responses",
-}
-
-// domains that proxy the LLM Gateway's OpenAI-compatible routes
-func registerLLMGateway(hostRouter *middleware.HostRouter, mappings *config.GatewayConfig, llmGatewayDirector *LLMGatewayDirector, healthManager *health.Health, serverTelemetry func(http.Handler) http.Handler) {
-	for _, entry := range mappings.LLMGateway {
-		target := LLMGatewayRequest{
-			CustomHeaders:  entry.CustomHeaders,
-			EOL:            entry.EOL,
-			OfflineMessage: entry.OfflineMessage,
-		}
-		r := chi.NewRouter()
-		r.Use(serverTelemetry)
-		for _, path := range llmGatewaySupportedPaths {
-			r.Method(http.MethodPost, path, chimiddleware.RequestSize(maxRequestSize)(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-				llmGatewayDirector.ServeProxy(target, writer, request)
-			})))
-		}
-		r.Get(healthPath, healthManager.HandlerFunc)
-		r.Get("/info", golibversion.Handler().ServeHTTP)
-		hostRouter.Register(entry.Host, chimiddleware.New(r))
 	}
 }
 

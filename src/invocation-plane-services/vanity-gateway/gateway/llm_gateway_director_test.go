@@ -31,7 +31,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const llmHost = "llm.test"
+const (
+	openAIHost    = "api.test"
+	publicModel   = "meta/llama-3.3-70b"
+	llmFunctionID = "func-id-1"
+)
 
 type capturedRequest struct {
 	path    string
@@ -55,16 +59,26 @@ func captureServer(t *testing.T, requests chan<- capturedRequest, handler http.H
 	return server
 }
 
-func llmGatewayMappings(entry config.LLMGatewayEntry) *config.GatewayConfig {
+// llmMappings routes one public model to the LLM Gateway on the openai host.
+func llmMappings(entry config.ModelFunctionDetails) *config.GatewayConfig {
 	mappings := &config.GatewayConfig{}
-	mappings.LLMGateway = map[string]config.LLMGatewayEntry{"llm_example": entry}
+	mappings.OpenAI.Host = openAIHost
+	mappings.OpenAI.ChatCompletions = map[string]config.ModelFunctionDetails{"llm": entry}
 	return mappings
 }
 
-func llmGatewayMux(t *testing.T, mappings *config.GatewayConfig, llmEndpoint string) http.Handler {
+func llmModelEntry() config.ModelFunctionDetails {
+	return config.ModelFunctionDetails{
+		ModelName:    publicModel,
+		FunctionID:   llmFunctionID,
+		FunctionType: config.FunctionTypeLLM,
+	}
+}
+
+func openAIMux(t *testing.T, mappings *config.GatewayConfig, nvcfEndpoint, llmEndpoint string) http.Handler {
 	t.Helper()
 	mux, err := buildChiMux(mappings, Config{
-		NvcfApiEndpoint:              "http://nvcf.invalid",
+		NvcfApiEndpoint:              nvcfEndpoint,
 		LLMGatewayEndpoint:           llmEndpoint,
 		PrivateModelNameRegexPattern: "^$",
 	})
@@ -72,10 +86,10 @@ func llmGatewayMux(t *testing.T, mappings *config.GatewayConfig, llmEndpoint str
 	return mux
 }
 
-func llmGatewayRequest(t *testing.T, path string, body string) *http.Request {
+func openAIRequest(t *testing.T, path, body string) *http.Request {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(body))
-	req.Host = llmHost
+	req.Host = openAIHost
 	return req
 }
 
@@ -101,125 +115,101 @@ func TestNewLLMGatewayDirectorRejectsInvalidEndpoint(t *testing.T) {
 	}
 }
 
-func TestBuildChiMux_LLMGatewayServesSupportedRoutes(t *testing.T) {
-	requests := make(chan capturedRequest, 1)
-	backend := captureServer(t, requests, nil)
-	mux := llmGatewayMux(t, llmGatewayMappings(config.LLMGatewayEntry{Host: llmHost}), backend.URL)
-
-	for _, path := range llmGatewaySupportedPaths {
-		t.Run(path, func(t *testing.T) {
-			rec := httptest.NewRecorder()
-			mux.ServeHTTP(rec, llmGatewayRequest(t, path, `{"model":"func-id/meta/llama"}`))
-
-			require.Equal(t, http.StatusOK, rec.Code)
-			assert.Equal(t, path, awaitRequest(t, requests).path)
+func TestNewLLMGatewayDirectorRejectsEndpointPath(t *testing.T) {
+	for _, endpoint := range []string{"http://llm.test/llm", "http://llm.test:8080/v1"} {
+		t.Run(endpoint, func(t *testing.T) {
+			director, err := NewLLMGatewayDirector(endpoint, http.DefaultTransport)
+			require.Error(t, err)
+			assert.Nil(t, director)
+			assert.ErrorContains(t, err, "must not set a path")
 		})
 	}
+
+	director, err := NewLLMGatewayDirector("http://llm.test:8080/", http.DefaultTransport)
+	require.NoError(t, err, "a bare trailing slash is not a path prefix")
+	assert.NotNil(t, director)
 }
 
-func TestBuildChiMux_LLMGatewayDoesNotServeUnsupportedRoutes(t *testing.T) {
-	requests := make(chan capturedRequest, 1)
-	backend := captureServer(t, requests, nil)
-	mux := llmGatewayMux(t, llmGatewayMappings(config.LLMGatewayEntry{Host: llmHost}), backend.URL)
-
-	for _, path := range []string{"/v1/completions", "/v1/models", "/v1/images/generations"} {
-		t.Run(path, func(t *testing.T) {
-			rec := httptest.NewRecorder()
-			mux.ServeHTTP(rec, llmGatewayRequest(t, path, `{}`))
-
-			assert.Equal(t, http.StatusNotFound, rec.Code)
-			assert.Empty(t, requests, "unsupported routes must not reach the LLM Gateway")
-		})
-	}
-}
-
-func TestBuildChiMux_LLMGatewayAndVanityCoexist(t *testing.T) {
+// The caller sends the public model name; the gateway adds the function ID so
+// the LLM Gateway can route it. Callers never see the function ID.
+func TestOpenAIDirector_LLMModelRewritesModelAndRoutesToLLMGateway(t *testing.T) {
 	nvcfRequests := make(chan capturedRequest, 1)
 	nvcfBackend := captureServer(t, nvcfRequests, nil)
 	llmRequests := make(chan capturedRequest, 1)
 	llmBackend := captureServer(t, llmRequests, nil)
 
-	mappings := llmGatewayMappings(config.LLMGatewayEntry{Host: llmHost})
-	mappings.Vanity = map[string]config.VanityEntry{
-		"example": {
-			Host: "vanity.test",
-			Paths: map[string]config.PathFunctionDetails{
-				"infer": {Path: "/v1/example/infer", FunctionID: "vanity-func"},
-			},
-		},
-	}
+	mux := openAIMux(t, llmMappings(llmModelEntry()), nvcfBackend.URL, llmBackend.URL)
 
-	mux, err := buildChiMux(mappings, Config{
-		NvcfApiEndpoint:              nvcfBackend.URL,
-		LLMGatewayEndpoint:           llmBackend.URL,
-		PrivateModelNameRegexPattern: "^$",
-	})
-	require.NoError(t, err)
-
-	chatRec := httptest.NewRecorder()
-	mux.ServeHTTP(chatRec, llmGatewayRequest(t, "/v1/chat/completions", `{"model":"func-id/meta/llama"}`))
-	require.Equal(t, http.StatusOK, chatRec.Code)
-
-	llmReceived := awaitRequest(t, llmRequests)
-	assert.Equal(t, "/v1/chat/completions", llmReceived.path)
-	assert.Empty(t, llmReceived.headers.Get("function-id"))
-
-	inferReq := httptest.NewRequest(http.MethodPost, "/v1/example/infer", bytes.NewBufferString(`{}`))
-	inferReq.Host = "vanity.test"
-	inferRec := httptest.NewRecorder()
-	mux.ServeHTTP(inferRec, inferReq)
-	require.Equal(t, http.StatusOK, inferRec.Code)
-
-	nvcfReceived := awaitRequest(t, nvcfRequests)
-	assert.Equal(t, "/v1/example/infer", nvcfReceived.path)
-	assert.Equal(t, "vanity-func", nvcfReceived.headers.Get("function-id"))
-	assert.Empty(t, llmRequests)
-}
-
-func TestBuildChiMux_LLMGatewayForwardsRequestUnchanged(t *testing.T) {
-	requests := make(chan capturedRequest, 1)
-	backend := captureServer(t, requests, nil)
-	mux := llmGatewayMux(t, llmGatewayMappings(config.LLMGatewayEntry{Host: llmHost}), backend.URL)
-
-	body := `{"model":"func-id/meta/llama-3.3-70b","messages":[{"role":"user","content":"hi"}]}`
-	req := llmGatewayRequest(t, "/v1/chat/completions", body)
-	req.Header.Set("Authorization", "Bearer caller-token")
-	req.Header.Set("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
 	rec := httptest.NewRecorder()
-
-	mux.ServeHTTP(rec, req)
+	mux.ServeHTTP(rec, openAIRequest(t, "/v1/chat/completions",
+		`{"model":"`+publicModel+`","messages":[{"role":"user","content":"hi"}]}`))
 	require.Equal(t, http.StatusOK, rec.Code)
 
-	received := awaitRequest(t, requests)
-	assert.Equal(t, body, received.body, "request body must reach the LLM Gateway unmodified")
-	assert.Equal(t, "Bearer caller-token", received.headers.Get("Authorization"))
-	assert.Equal(t, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", received.headers.Get("traceparent"))
-	assert.Empty(t, received.headers.Get("function-id"))
-	assert.Empty(t, received.headers.Get("function-version-id"))
+	received := awaitRequest(t, llmRequests)
+	assert.Equal(t, "/v1/chat/completions", received.path)
+	assert.Contains(t, received.body, `"model":"`+llmFunctionID+"/"+publicModel+`"`,
+		"model must be rewritten to functionID/modelName")
+	assert.Contains(t, received.body, `"messages"`, "the rest of the body must survive the rewrite")
+	assert.Empty(t, received.headers.Get("function-id"), "function selection is carried in the model, not headers")
 	assert.Empty(t, received.headers.Get("NVCF-POLL-SECONDS"))
+	assert.Empty(t, nvcfRequests, "an LLM model must not reach the invocation service")
 }
 
-func TestBuildChiMux_LLMGatewayAppliesCustomHeaders(t *testing.T) {
+func TestOpenAIDirector_DefaultModelStillRoutesToInvocationService(t *testing.T) {
+	nvcfRequests := make(chan capturedRequest, 1)
+	nvcfBackend := captureServer(t, nvcfRequests, nil)
+	llmRequests := make(chan capturedRequest, 1)
+	llmBackend := captureServer(t, llmRequests, nil)
+
+	mappings := llmMappings(llmModelEntry())
+	mappings.OpenAI.ChatCompletions["plain"] = config.ModelFunctionDetails{
+		ModelName:  "microsoft/phi-2",
+		FunctionID: "plain-func",
+	}
+	mux := openAIMux(t, mappings, nvcfBackend.URL, llmBackend.URL)
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, openAIRequest(t, "/v1/chat/completions",
+		`{"model":"microsoft/phi-2","messages":[{"role":"user","content":"hi"}]}`))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	received := awaitRequest(t, nvcfRequests)
+	assert.Equal(t, "plain-func", received.headers.Get("function-id"))
+	assert.Contains(t, received.body, `"model":"microsoft/phi-2"`, "a default model is not rewritten")
+	assert.Empty(t, llmRequests, "a default model must not reach the LLM Gateway")
+}
+
+func TestOpenAIDirector_LLMModelAppliesCustomHeaders(t *testing.T) {
 	requests := make(chan capturedRequest, 1)
 	backend := captureServer(t, requests, nil)
-	mappings := llmGatewayMappings(config.LLMGatewayEntry{
-		Host:          llmHost,
-		CustomHeaders: config.CustomHeaders{"X-Provider-Feature": "enabled"},
-	})
-	mux := llmGatewayMux(t, mappings, backend.URL)
 
-	req := llmGatewayRequest(t, "/v1/embeddings", `{}`)
+	entry := llmModelEntry()
+	entry.CustomHeaders = config.CustomHeaders{"X-Provider-Feature": "enabled"}
+	mux := openAIMux(t, llmMappings(entry), "http://nvcf.invalid", backend.URL)
+
+	req := openAIRequest(t, "/v1/chat/completions", `{"model":"`+publicModel+`"}`)
+	req.Header.Set("Authorization", "Bearer caller-token")
 	req.Header.Set("X-Provider-Feature", "caller-value")
 	rec := httptest.NewRecorder()
 
 	mux.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 
-	assert.Equal(t, "enabled", awaitRequest(t, requests).headers.Get("X-Provider-Feature"))
+	received := awaitRequest(t, requests)
+	assert.Equal(t, "enabled", received.headers.Get("X-Provider-Feature"))
+	assert.Equal(t, "Bearer caller-token", received.headers.Get("Authorization"))
 }
 
-func TestBuildChiMux_LLMGatewayRequiresEndpoint(t *testing.T) {
-	_, err := buildChiMux(llmGatewayMappings(config.LLMGatewayEntry{Host: llmHost}), Config{
+func TestOpenAIDirector_UnknownModelStill404s(t *testing.T) {
+	mux := openAIMux(t, llmMappings(llmModelEntry()), "http://nvcf.invalid", "http://llm.invalid")
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, openAIRequest(t, "/v1/chat/completions", `{"model":"nope/not-configured"}`))
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestBuildChiMux_LLMModelRequiresEndpoint(t *testing.T) {
+	_, err := buildChiMux(llmMappings(llmModelEntry()), Config{
 		NvcfApiEndpoint:              "http://nvcf.invalid",
 		PrivateModelNameRegexPattern: "^$",
 	})
@@ -227,94 +217,32 @@ func TestBuildChiMux_LLMGatewayRequiresEndpoint(t *testing.T) {
 	assert.ErrorContains(t, err, "LLM_GATEWAY_ENDPOINT is required")
 }
 
-func TestBuildChiMux_LLMGatewayEndpointNotRequiredWithoutSection(t *testing.T) {
-	requests := make(chan capturedRequest, 1)
-	backend := captureServer(t, requests, nil)
-
-	mappings := &config.GatewayConfig{}
-	mappings.Vanity = map[string]config.VanityEntry{
-		"example": {
-			Host:  "vanity.test",
-			Paths: map[string]config.PathFunctionDetails{"infer": {Path: "/v1/example/infer", FunctionID: "vanity-func"}},
-		},
-	}
-
-	mux, err := buildChiMux(mappings, Config{
-		NvcfApiEndpoint:              backend.URL,
-		PrivateModelNameRegexPattern: "^$",
-	})
-	require.NoError(t, err)
-
-	req := httptest.NewRequest(http.MethodPost, "/v1/example/infer", bytes.NewBufferString(`{}`))
-	req.Host = "vanity.test"
-	rec := httptest.NewRecorder()
-
-	mux.ServeHTTP(rec, req)
-	assert.Equal(t, http.StatusOK, rec.Code)
-}
-
-func TestLLMGatewayDirectorOfflineMessageReturns503(t *testing.T) {
-	requests := make(chan capturedRequest, 1)
-	backend := captureServer(t, requests, nil)
-	mappings := llmGatewayMappings(config.LLMGatewayEntry{
-		Host:           llmHost,
-		OfflineMessage: "temporarily offline",
-	})
-	mux := llmGatewayMux(t, mappings, backend.URL)
-
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, llmGatewayRequest(t, "/v1/chat/completions", `{}`))
-
-	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
-	assert.Contains(t, rec.Body.String(), "temporarily offline")
-	assert.Empty(t, requests, "offline hosts must not reach the LLM Gateway")
-}
-
-func TestLLMGatewayDirectorEOLHandling(t *testing.T) {
+func TestOpenAIDirector_LLMModelOfflineAndEOL(t *testing.T) {
 	tests := []struct {
-		name           string
-		eol            time.Time
-		wantStatus     int
-		wantDeprecated bool
+		name       string
+		mutate     func(e *config.ModelFunctionDetails)
+		wantStatus int
 	}{
-		{name: "future EOL adds Deprecation header", eol: time.Now().Add(24 * time.Hour), wantStatus: http.StatusOK, wantDeprecated: true},
-		{name: "expired EOL returns 410", eol: time.Now().Add(-24 * time.Hour), wantStatus: http.StatusGone},
+		{"offline", func(e *config.ModelFunctionDetails) { e.OfflineMessage = "temporarily offline" }, http.StatusServiceUnavailable},
+		{"expired eol", func(e *config.ModelFunctionDetails) { e.EOL = time.Now().Add(-24 * time.Hour) }, http.StatusGone},
 	}
-
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			requests := make(chan capturedRequest, 1)
 			backend := captureServer(t, requests, nil)
-			mux := llmGatewayMux(t, llmGatewayMappings(config.LLMGatewayEntry{Host: llmHost, EOL: tc.eol}), backend.URL)
+			entry := llmModelEntry()
+			tc.mutate(&entry)
+			mux := openAIMux(t, llmMappings(entry), "http://nvcf.invalid", backend.URL)
 
 			rec := httptest.NewRecorder()
-			mux.ServeHTTP(rec, llmGatewayRequest(t, "/v1/chat/completions", `{}`))
-
+			mux.ServeHTTP(rec, openAIRequest(t, "/v1/chat/completions", `{"model":"`+publicModel+`"}`))
 			assert.Equal(t, tc.wantStatus, rec.Code)
-			if tc.wantDeprecated {
-				assert.Equal(t, tc.eol.Format(time.RFC3339), rec.Header().Get("Deprecation"))
-			} else {
-				assert.Empty(t, rec.Header().Get("Deprecation"))
-			}
+			assert.Empty(t, requests, "the request must not reach the LLM Gateway")
 		})
 	}
 }
 
-func TestLLMGatewayDirectorUpstreamFailureReturns502(t *testing.T) {
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	endpoint := backend.URL
-	backend.Close()
-
-	mux := llmGatewayMux(t, llmGatewayMappings(config.LLMGatewayEntry{Host: llmHost}), endpoint)
-
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, llmGatewayRequest(t, "/v1/chat/completions", `{}`))
-
-	assert.Equal(t, http.StatusBadGateway, rec.Code)
-	assert.Equal(t, "application/problem+json", rec.Header().Get("Content-Type"))
-}
-
-func TestLLMGatewayDirectorStreamsResponseIncrementally(t *testing.T) {
+func TestOpenAIDirector_LLMModelStreamsResponseIncrementally(t *testing.T) {
 	release := make(chan struct{})
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -329,13 +257,14 @@ func TestLLMGatewayDirectorStreamsResponseIncrementally(t *testing.T) {
 	}))
 	t.Cleanup(backend.Close)
 
-	mux := llmGatewayMux(t, llmGatewayMappings(config.LLMGatewayEntry{Host: llmHost}), backend.URL)
+	mux := openAIMux(t, llmMappings(llmModelEntry()), "http://nvcf.invalid", backend.URL)
 	proxy := httptest.NewServer(mux)
 	t.Cleanup(proxy.Close)
 
-	req, err := http.NewRequest(http.MethodPost, proxy.URL+"/v1/chat/completions", bytes.NewBufferString(`{"stream":true}`))
+	req, err := http.NewRequest(http.MethodPost, proxy.URL+"/v1/chat/completions",
+		bytes.NewBufferString(`{"model":"`+publicModel+`","stream":true}`))
 	require.NoError(t, err)
-	req.Host = llmHost
+	req.Host = openAIHost
 
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
@@ -353,96 +282,7 @@ func TestLLMGatewayDirectorStreamsResponseIncrementally(t *testing.T) {
 	assert.Contains(t, string(rest), "data: [DONE]")
 }
 
-// The openai section and the llmGateway section both serve
-// /v1/chat/completions. They never compete, because routing selects a host
-// first and each host owns a separate route table.
-func TestBuildChiMux_SamePathOnOpenAIAndLLMGatewayHosts(t *testing.T) {
-	nvcfRequests := make(chan capturedRequest, 1)
-	nvcfBackend := captureServer(t, nvcfRequests, nil)
-	llmRequests := make(chan capturedRequest, 1)
-	llmBackend := captureServer(t, llmRequests, nil)
-
-	mappings := llmGatewayMappings(config.LLMGatewayEntry{Host: llmHost})
-	mappings.OpenAI.Host = "openai.test"
-	mappings.OpenAI.ChatCompletions = map[string]config.ModelFunctionDetails{
-		"llama": {ModelName: "meta/llama-3.3-70b", FunctionID: "openai-func"},
-	}
-
-	mux, err := buildChiMux(mappings, Config{
-		NvcfApiEndpoint:              nvcfBackend.URL,
-		LLMGatewayEndpoint:           llmBackend.URL,
-		PrivateModelNameRegexPattern: "^$",
-	})
-	require.NoError(t, err)
-
-	openAIReq := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"meta/llama-3.3-70b"}`))
-	openAIReq.Host = "openai.test"
-	openAIRec := httptest.NewRecorder()
-	mux.ServeHTTP(openAIRec, openAIReq)
-	require.Equal(t, http.StatusOK, openAIRec.Code)
-
-	openAIReceived := awaitRequest(t, nvcfRequests)
-	assert.Equal(t, "openai-func", openAIReceived.headers.Get("function-id"))
-	assert.Empty(t, llmRequests, "the openai host must not reach the LLM Gateway")
-
-	llmRec := httptest.NewRecorder()
-	mux.ServeHTTP(llmRec, llmGatewayRequest(t, "/v1/chat/completions", `{"model":"func-id/meta/llama-3.3-70b"}`))
-	require.Equal(t, http.StatusOK, llmRec.Code)
-
-	llmReceived := awaitRequest(t, llmRequests)
-	assert.Equal(t, `{"model":"func-id/meta/llama-3.3-70b"}`, llmReceived.body)
-	assert.Empty(t, llmReceived.headers.Get("function-id"))
-	assert.Empty(t, nvcfRequests, "the llmGateway host must not reach the invocation service")
-}
-
-func TestBuildChiMux_LLMGatewayRejectsSelfProxyingHost(t *testing.T) {
-	tests := []struct {
-		name     string
-		host     string
-		endpoint string
-		wantErr  bool
-	}{
-		{name: "host matches endpoint with port", host: "llm.test", endpoint: "http://llm.test:8080", wantErr: true},
-		{name: "host matches endpoint without port", host: "llm.test", endpoint: "http://llm.test", wantErr: true},
-		{name: "host carries a port too", host: "llm.test:443", endpoint: "http://llm.test:8080", wantErr: true},
-		{name: "distinct host and endpoint", host: "llm.test", endpoint: "http://llm-api-gateway.nvcf.svc.cluster.local:8080", wantErr: false},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := buildChiMux(llmGatewayMappings(config.LLMGatewayEntry{Host: tc.host}), Config{
-				NvcfApiEndpoint:              "http://nvcf.invalid",
-				LLMGatewayEndpoint:           tc.endpoint,
-				PrivateModelNameRegexPattern: "^$",
-			})
-
-			if !tc.wantErr {
-				require.NoError(t, err)
-				return
-			}
-			require.Error(t, err)
-			assert.ErrorContains(t, err, "the gateway would proxy to itself")
-		})
-	}
-}
-
-func TestNewLLMGatewayDirectorRejectsEndpointPath(t *testing.T) {
-	for _, endpoint := range []string{"http://llm.test/llm", "http://llm.test:8080/v1"} {
-		t.Run(endpoint, func(t *testing.T) {
-			director, err := NewLLMGatewayDirector(endpoint, http.DefaultTransport)
-			require.Error(t, err)
-			assert.Nil(t, director)
-			assert.ErrorContains(t, err, "must not set a path")
-		})
-	}
-
-	director, err := NewLLMGatewayDirector("http://llm.test:8080/", http.DefaultTransport)
-	require.NoError(t, err, "a bare trailing slash is not a path prefix")
-	assert.NotNil(t, director)
-}
-
-// The two upstreams expose different health paths: the invocation service
-// serves /health, the LLM Gateway serves /healthz.
+// The invocation service serves /health; the LLM Gateway serves /healthz.
 func TestBuildChiMux_HealthProbesUseUpstreamSpecificPaths(t *testing.T) {
 	nvcfPaths := make(chan string, 4)
 	nvcfBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -458,16 +298,11 @@ func TestBuildChiMux_HealthProbesUseUpstreamSpecificPaths(t *testing.T) {
 	}))
 	t.Cleanup(llmBackend.Close)
 
-	mux, err := buildChiMux(llmGatewayMappings(config.LLMGatewayEntry{Host: llmHost}), Config{
-		NvcfApiEndpoint:              nvcfBackend.URL,
-		LLMGatewayEndpoint:           llmBackend.URL,
-		PrivateModelNameRegexPattern: "^$",
-	})
-	require.NoError(t, err)
+	mux := openAIMux(t, llmMappings(llmModelEntry()), nvcfBackend.URL, llmBackend.URL)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
-	req.Host = llmHost
+	req.Host = openAIHost
 	mux.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 
