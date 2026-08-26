@@ -21,9 +21,14 @@ var (
 	// Split so the value can be validated separately from the line shape. A
 	// version line whose value is not a version is reported, not skipped.
 	versionLineRE = regexp.MustCompile(`^(\s+version:\s*)(.*?)(\s*)$`)
-	// Quoted or bare. Nothing in the stack is quoted today, but a value that
-	// gains quotes must not silently stop being recognised as a pin.
-	versionValueRE = regexp.MustCompile(`^"?v?[0-9][^"\s]*"?$`)
+	// Bare, or quoted on both ends. Nothing in the stack is quoted today, but a
+	// value that gains quotes must not silently stop being recognised as a pin.
+	//
+	// Optional quotes on each end independently would accept `"1.0.0` and
+	// `1.0.0"`, which are malformed YAML. Treating those as a valid pin means
+	// the rewrite replaces the line and quietly launders the error away instead
+	// of stopping and reporting it.
+	versionValueRE = regexp.MustCompile(`^(?:v?[0-9][^"\s]*|"v?[0-9][^"\s]*")$`)
 	// The shared template most releases inherit. The inner braces are escaped
 	// in the helmfile source because helmfile passes the expression through to
 	// helm.

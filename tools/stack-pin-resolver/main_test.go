@@ -429,3 +429,40 @@ func TestQuotedVersionIsStillAPin(t *testing.T) {
 		t.Fatalf("want it counted as a resolved pin:\n%s", out)
 	}
 }
+
+func TestUnmatchedQuotesAreNotAPin(t *testing.T) {
+	// `"1.0.0` and `1.0.0"` are malformed YAML. Accepting either as a pin means
+	// the rewrite replaces the line and launders the error away rather than
+	// reporting it, so both must land in the unresolved bucket.
+	for _, bad := range []string{`"1.0.0`, `1.0.0"`} {
+		body := "releases:\n  - name: alpha\n    version: " + bad + "\n"
+		f := newStack(t, stackMeta, map[string]string{"00-stack.yaml.gotmpl": body})
+		code, out, errOut := f.audit(t)
+		if code != 1 {
+			t.Errorf("version %s must fail the audit, got %d", bad, code)
+		}
+		if !strings.Contains(out, "1 releases, 1 unresolved") {
+			t.Errorf("version %s must be counted unresolved:\n%s", bad, out)
+		}
+		if !strings.Contains(errOut, "not a recognisable pin") {
+			t.Errorf("version %s: want the unreadable-pin reason, got %q", bad, errOut)
+		}
+		// And nothing may be written for it.
+		if c, _, _ := f.bump(t, "deploy/helm/alpha/v2.0.0", true); c != 1 {
+			t.Errorf("version %s: bump must refuse, got %d", bad, c)
+		}
+		if f.read(t, "00-stack.yaml.gotmpl") != body {
+			t.Errorf("version %s: the helmfile was rewritten", bad)
+		}
+	}
+}
+
+func TestBareAndFullyQuotedVersionsBothResolve(t *testing.T) {
+	for _, good := range []string{`1.0.0`, `"1.0.0"`, `v1.0.0`, `"v1.0.0"`} {
+		body := "releases:\n  - name: alpha\n    version: " + good + "\n"
+		f := newStack(t, stackMeta, map[string]string{"00-stack.yaml.gotmpl": body})
+		if code, out, errOut := f.audit(t); code != 0 {
+			t.Errorf("version %s should resolve, got %d\n%s%s", good, code, out, errOut)
+		}
+	}
+}
