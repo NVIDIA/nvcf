@@ -141,8 +141,13 @@ jobs:
           # Separate -m flags rather than an embedded multi-line string: the
           # continuation lines of one would have to sit at column zero, which
           # ends the YAML block scalar this script lives in.
+          # fix, not chore. deploy/stacks/self-managed is itself a release
+          # subproject, and tools/ci/github-release feeds RELEASE_RULES to
+          # semantic-release, where chore carries "release": false. A chore
+          # commit would move the pin on main without ever cutting a stack
+          # release, so nothing downstream would see the new pin.
           git commit \
-            -m "chore(stack): pin ${TAG#deploy/helm/}" \
+            -m "fix(stack): pin ${TAG#deploy/helm/}" \
             -m "Opened by the stack pin bump workflow on release of ${TAG}."
           git push --force-with-lease origin "${branch}"
 
@@ -156,7 +161,7 @@ jobs:
             "If this pull request sits unmerged, later chart releases add their bumps to the same branch, so merging it applies all of them." \
             "" \
             "Github commit:" \
-            "chore(stack): pin ${TAG#deploy/helm/}" \
+            "fix(stack): pin ${TAG#deploy/helm/}" \
             "")"
 
           # gh api, not `gh pr edit`. Against this repository `gh pr edit` fails
@@ -170,6 +175,6 @@ jobs:
             echo "refreshed pull request #${number}"
           else
             gh pr create --base main --head "${branch}" \
-              --title "chore(stack): bump self-managed stack chart pins" \
+              --title "fix(stack): bump self-managed stack chart pins" \
               --body "${body}"
           fi
