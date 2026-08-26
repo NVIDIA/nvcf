@@ -284,7 +284,6 @@ The NVCA operator requires outbound network connectivity to pull images, charts,
 | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | allow-egress-gxcache                      | Allows egress traffic to the GX Cache namespace for caching operations (only relevant for NVIDIA managed clusters)                                         |
 | allow-egress-internet-no- internal-no-api | Allows egress traffic to the public internet (0.0.0.0/0) but blocks traffic to common private IP ranges. Also allows DNS resolution via kube-dns.          |
-| allow-egress-intra-namespace              | Controls pod-to-pod communication within the same namespace. This policy is only applied to function namespaces and not to shared pod instance namespaces. |
 | allow-egress-nvcf-cache                   | Allows egress traffic to NVCF cache services (only relevant for NVIDIA managed clusters)                                                                   |
 | allow-egress-prometheus- nvcf-byoo        | Allows egress traffic to Prometheus monitoring endpoints (only relevant for NVIDIA managed clusters)                                                       |
 | allow-ingress-monitoring                  | Allows ingress traffic for monitoring services                                                                                                             |
