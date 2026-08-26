@@ -275,7 +275,7 @@ The NVCA operator requires outbound network connectivity to pull images, charts,
 | allow-egress-intra-namespace | Allows pod-to-pod communication within the same namespace. Applied only to per-instance function namespaces (for example a MiniService's utils pod reaching its own inference pod), never to the shared `nvcf-backend` namespace. |
 | allow-egress-nvcf-cache | Allows egress traffic to NVCF cache services (only relevant for NVIDIA managed clusters) |
 | allow-egress-prometheus-nvcf-byoo | Allows egress traffic to Prometheus monitoring endpoints (only relevant for NVIDIA managed clusters) |
-| allow-ingress-monitoring | Allows ingress traffic for monitoring services. In per-instance function namespaces, also allows same-namespace ingress (paired with allow-egress-intra-namespace); never in the shared `nvcf-backend` namespace. |
+| allow-ingress-monitoring | Allows ingress from the `monitoring` namespace on supported monitoring ports. In per-instance function namespaces, also allows same-namespace ingress (paired with allow-egress-intra-namespace); same-namespace ingress is not added to the shared `nvcf-backend` namespace. |
 | allow-ingress-monitoring-dcgm | Allows ingress traffic for DCGM monitoring |
 | allow-ingress-monitoring-gxcache | Allows ingress traffic for GX Cache monitoring (only relevant for NVIDIA managed clusters) |
 
