@@ -24,7 +24,6 @@ import com.datastax.oss.driver.api.core.CqlSession;
 import com.nvidia.nvct.IntegrationTestConfiguration;
 import com.nvidia.nvct.NvctTestApp;
 import com.nvidia.nvct.grpc.TestTaskService;
-import com.nvidia.nvct.persistence.task.entity.HealthUdt;
 import com.nvidia.nvct.persistence.task.entity.TaskEntity;
 import com.nvidia.nvct.persistence.task.entity.TaskStatus;
 import com.nvidia.nvct.rest.task.dto.HealthDto;
@@ -201,7 +200,7 @@ class TasksRepositoryTest {
         tasksRepository.save(task);
 
         var row = cqlSession.execute(
-                "SELECT health, health_info FROM tasks_v2 WHERE task_id = ?", taskId).one();
+                "SELECT health FROM tasks_v2 WHERE task_id = ?", taskId).one();
         assertThat(row).isNotNull();
         assertThat(row.getString(TaskEntity.COLUMN_HEALTH))
                 .doesNotContain("sis_request_id")
@@ -220,7 +219,7 @@ class TasksRepositoryTest {
         taskService.updateTask(taskId, TaskStatus.ERRORED, updatedHealthInfo);
 
         row = cqlSession.execute(
-                "SELECT health, health_info FROM tasks_v2 WHERE task_id = ?", taskId).one();
+                "SELECT health FROM tasks_v2 WHERE task_id = ?", taskId).one();
         assertThat(row).isNotNull();
         assertThat(row.getString(TaskEntity.COLUMN_HEALTH)).contains("updated-error");
 
