@@ -93,6 +93,7 @@ func EnsureNetworkPoliciesFunctionNamespace(
 		ffFetcher,
 		k8sClient,
 		crClient,
+		true,
 		extraNPs...,
 	)
 }
@@ -111,6 +112,7 @@ func EnsureNetworkPoliciesSharedPodInstanceNamespace(
 		ffFetcher,
 		k8sClient,
 		crClient,
+		false,
 	)
 }
 
@@ -121,6 +123,12 @@ func ensureNetworkPolicies(
 	ffFetcher featureflag.Fetcher,
 	k8sClient k8sclient.Interface,
 	crClient client.Client,
+	// cleanupLegacyIntraNamespaceEgress is true only for function namespaces
+	// (EnsureNetworkPoliciesFunctionNamespace), the only reconcile path that
+	// ever created AllowEgressIntraNamespaceNetworkPolicyName. Shared pod
+	// instance namespaces never owned that policy, so they must not delete a
+	// same-named policy they don't manage.
+	cleanupLegacyIntraNamespaceEgress bool,
 	extraNPs ...*netv1.NetworkPolicy,
 ) error {
 	log := core.GetLogger(ctx)
@@ -217,10 +225,13 @@ func ensureNetworkPolicies(
 	// MonitoringIngressNetworkPolicyName, it let any pod in a function
 	// namespace reach any other pod in that namespace on any port. Neither
 	// is created here anymore, but namespaces reconciled by an older build
-	// may still have this policy left over, so remove it explicitly.
-	if _, wanted := newNetworkPolicies[AllowEgressIntraNamespaceNetworkPolicyName]; !wanted {
-		if err := deleteNetworkPolicyIfExists(ctx, namespace, AllowEgressIntraNamespaceNetworkPolicyName, k8sClient, crClient); err != nil {
-			errs = append(errs, err)
+	// may still have this policy left over, so remove it explicitly. Scoped
+	// to function namespaces only; see cleanupLegacyIntraNamespaceEgress.
+	if cleanupLegacyIntraNamespaceEgress {
+		if _, wanted := newNetworkPolicies[AllowEgressIntraNamespaceNetworkPolicyName]; !wanted {
+			if err := deleteNetworkPolicyIfExists(ctx, namespace, AllowEgressIntraNamespaceNetworkPolicyName, k8sClient, crClient); err != nil {
+				errs = append(errs, err)
+			}
 		}
 	}
 
@@ -240,20 +251,16 @@ func deleteNetworkPolicyIfExists(ctx context.Context,
 	k8sClient k8sclient.Interface,
 	crClient client.Client,
 ) error {
-	log := core.GetLogger(ctx)
-
 	if crClient != nil {
 		np := &netv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace}}
 		if err := crClient.Delete(ctx, np); err != nil && !apierrors.IsNotFound(err) {
-			log.WithError(err).Errorf("delete NetworkPolicy %s in namespace %s", name, namespace)
-			return fmt.Errorf("delete NetworkPolicy %s in namespace %s: %v", name, namespace, err)
+			return fmt.Errorf("delete NetworkPolicy %s in namespace %s: %w", name, namespace, err)
 		}
 		return nil
 	}
 
 	if err := k8sClient.NetworkingV1().NetworkPolicies(namespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		log.WithError(err).Errorf("delete NetworkPolicy %s in namespace %s", name, namespace)
-		return fmt.Errorf("delete NetworkPolicy %s in namespace %s: %v", name, namespace, err)
+		return fmt.Errorf("delete NetworkPolicy %s in namespace %s: %w", name, namespace, err)
 	}
 	return nil
 }

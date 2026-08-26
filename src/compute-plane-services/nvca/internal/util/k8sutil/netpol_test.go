@@ -259,6 +259,40 @@ func TestEnsureNetworkPoliciesCleansUpLegacyIntraNamespaceEgressPolicy(t *testin
 	assert.True(t, apierrors.IsNotFound(err), "leftover allow-egress-intra-namespace should be deleted on reconcile")
 }
 
+// TestEnsureNetworkPoliciesSharedPodInstanceNamespaceDoesNotDeleteUnownedPolicy
+// verifies that EnsureNetworkPoliciesSharedPodInstanceNamespace never owned
+// AllowEgressIntraNamespaceNetworkPolicyName (only
+// EnsureNetworkPoliciesFunctionNamespace ever created it), so it must not
+// delete a same-named policy in a shared pod instance namespace.
+func TestEnsureNetworkPoliciesSharedPodInstanceNamespaceDoesNotDeleteUnownedPolicy(t *testing.T) {
+	featureFlagFetcher := &featureflagmock.Fetcher{}
+	ctx := context.Background()
+	namespace := "test-namespace"
+	npCM := newNetworkPolicyConfigMap("nvca-system")
+	k8sClient := k8sfake.NewSimpleClientset(&netv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      AllowEgressIntraNamespaceNetworkPolicyName,
+			Namespace: namespace,
+		},
+		Spec: netv1.NetworkPolicySpec{
+			PolicyTypes: []netv1.PolicyType{netv1.PolicyTypeEgress},
+		},
+	})
+
+	err := EnsureNetworkPoliciesSharedPodInstanceNamespace(
+		ctx,
+		namespace,
+		npCM.Data,
+		featureFlagFetcher,
+		k8sClient,
+		nil,
+	)
+	require.NoError(t, err)
+
+	_, err = k8sClient.NetworkingV1().NetworkPolicies(namespace).Get(ctx, AllowEgressIntraNamespaceNetworkPolicyName, metav1.GetOptions{})
+	require.NoError(t, err, "shared pod instance namespace reconcile must not delete a policy it doesn't own")
+}
+
 func TestEnsureNetworkPoliciesWithCustomPolicies(t *testing.T) {
 	// Mock feature flag fetcher
 	featureFlagFetcher := &featureflagmock.Fetcher{
