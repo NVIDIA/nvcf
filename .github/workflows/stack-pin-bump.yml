@@ -43,6 +43,12 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The default for a release event is the tagged commit, but the pull
+          # request targets the default branch. Pinning against the tag's tree
+          # would carry whatever the stack looked like then onto a branch cut
+          # from today's main.
+          ref: ${{ github.event.repository.default_branch }}
 
       - name: Test the resolver
         # The resolver decides which line in the shipped stack gets rewritten,
@@ -76,12 +82,15 @@ jobs:
         run: |
           set -euo pipefail
           python3 tools/ci/stack-pin-resolver --tag "${{ steps.tag.outputs.tag }}" --write
-          if git diff --quiet; then
+          # Scoped to the same paths the commit below stages. Repo-wide, any
+          # unrelated modification in the workspace would set changed=true and
+          # the commit would then abort with nothing staged.
+          if git diff --quiet -- deploy/stacks/self-managed/helmfile.d; then
             echo "changed=false" >> "${GITHUB_OUTPUT}"
             echo "stack already pins this version"
           else
             echo "changed=true" >> "${GITHUB_OUTPUT}"
-            git --no-pager diff --stat
+            git --no-pager diff --stat -- deploy/stacks/self-managed/helmfile.d
           fi
 
       - name: Open or refresh the pull request
