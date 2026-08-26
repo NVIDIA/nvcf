@@ -216,6 +216,32 @@ func TestSelfManagedLocalBDDMultiFixtureWiresComputeReachableWorkerEndpoints(t *
 	}
 }
 
+func TestSelfManagedLocalBDDMultiFixtureUsesPlaintextNVCFGRPC(t *testing.T) {
+	const fixturePath = "fixtures/self-managed-local-bdd-multi.yaml"
+
+	fixtureBytes, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatalf("read multi-cluster stack fixture: %v", err)
+	}
+	var fixture struct {
+		Addons struct {
+			LLM struct {
+				Gateway struct {
+					Auth struct {
+						GRPCInsecure bool `yaml:"grpcInsecure"`
+					} `yaml:"auth"`
+				} `yaml:"gateway"`
+			} `yaml:"llm"`
+		} `yaml:"addons"`
+	}
+	if err := yaml.Unmarshal(fixtureBytes, &fixture); err != nil {
+		t.Fatalf("parse multi-cluster stack fixture: %v", err)
+	}
+	if !fixture.Addons.LLM.Gateway.Auth.GRPCInsecure {
+		t.Fatal("multi-cluster stack fixture must use plaintext NVCF API gRPC")
+	}
+}
+
 func TestNVCTTaskSmokeUsesTaskSimpleSample(t *testing.T) {
 	for _, path := range []string{
 		"../../examples/task-samples/task-simple-sample/Dockerfile",
