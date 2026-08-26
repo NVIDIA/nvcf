@@ -260,6 +260,9 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
         """
       Then the command output should contain "bdd-echo"
 
+      # Keep the simulated GPU capacity available for the next scenario.
+      And I successfully undeploy the function selected by NVCF CLI
+
     @function-lifecycle @grpc
     Scenario: Operator creates, deploys, and invokes the gRPC Load Tester Supreme sample function
       Given I use NVCF CLI config "${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml"
@@ -293,3 +296,59 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
         {"message":"bdd-grpc-echo"}
         """
       Then the command output should contain "bdd-grpc-echo"
+
+      # Keep the simulated GPU capacity available for the LLM scenario.
+      And I successfully undeploy the function selected by NVCF CLI
+
+    # This fixed-response sample proves the multi-cluster LLM routing and
+    # request/response contract. It is not a token-generation capacity test.
+    # The compute fixture deliberately retains stargateQUICInsecure; secured
+    # split-cluster transport coverage remains a separate scenario.
+    # The scenario depends on the earlier control-plane install and compute
+    # registration scenarios and is not a standalone tag target.
+    @llm-function-type
+    Scenario: Operator creates, deploys, and invokes an LLM-type OpenAI-compatible sample function
+      Given I use NVCF CLI config "${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml"
+
+      When I successfully create function "bdd-multi-openai-compatible-sample" from image "nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/nvcf-openai-compatible-sample:local" with CLI options:
+        | option           | value                                                                                               |
+        | --function-type  | LLM                                                                                                 |
+        | --inference-url  | /v1/chat/completions                                                                                |
+        | --inference-port | 8000                                                                                                |
+        | --health-uri     | /health                                                                                             |
+        | --health-port    | 8000                                                                                                |
+        | --health-timeout | PT30S                                                                                               |
+        | --llm-model      | name=openai-compatible-sample,uris=/v1/chat/completions\|/v1/embeddings,routingMethod=round_robin |
+
+      And I successfully deploy the function selected by NVCF CLI with options:
+        | option          | value               |
+        | --gpu           | H100                |
+        | --instance-type | NCP.GPU.H100_1x     |
+        | --backend       | ncp-local-compute-1 |
+        | --regions       | us-west-1           |
+        | --min-instances | 1                   |
+        | --max-instances | 1                   |
+        | --timeout       | 900                 |
+
+      And I successfully generate a function API key with CLI options:
+        | option        | value                                                               |
+        | --description | bdd-multi-openai-compatible-sample                                  |
+        | --scopes      | invoke_function,list_functions,queue_details,list_functions_details |
+
+      When I successfully invoke model "openai-compatible-sample" at "/v1/chat/completions" with timeout "120" seconds:
+        """
+        {"messages":[{"role":"user","content":"bdd-multi-llm-echo"}]}
+        """
+      Then the command output should contain "chat.completion"
+      And the command output should contain "fixed 128-byte response"
+
+      # Authentication remains enforced at the LLM gateway in the split
+      # topology. Only the status code is captured for a stable assertion.
+      When I run command:
+        """
+        curl -s -o /dev/null -w "%{http_code}" -X POST http://llm.localhost:8080/v1/chat/completions -H "Content-Type: application/json" -d '{"model":"unauthenticated/check","messages":[]}'
+        """
+      Then the command exit code should be 0
+      And the command output should contain "401"
+
+      And I successfully undeploy the function selected by NVCF CLI
