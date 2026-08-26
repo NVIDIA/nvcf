@@ -64,7 +64,7 @@ spec:
           {{- end }}
           containers:
             - name: cluster-validator
-              image: {{ include "nvcaop.clusterValidatorRepository" (dict "imageRepository" $cv.image.repository "defaultRepository" .Values.image.repository) }}:{{ default .Chart.Version $cv.image.tag }}
+              image: {{ include "nvcaop.clusterValidatorRepository" (dict "imageRepository" $cv.image.repository "defaultRepository" .Values.image.repository) }}:{{ default .Chart.AppVersion $cv.image.tag }}
               imagePullPolicy: {{ $cv.image.pullPolicy }}
               env:
                 - name: VALIDATOR_CONFIG_NAMESPACE
