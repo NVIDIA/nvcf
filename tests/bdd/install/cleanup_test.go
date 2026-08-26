@@ -15,24 +15,26 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package harness
+package install
 
 import (
 	"context"
 	"testing"
+
+	"nvcf-bdd/harness"
 )
 
 // recordingRunner is a local test double that captures every command
 // text the cleanup hook invokes and returns a configurable Result.
-// Modeled on the fakeRunner pattern in godog_test.go but kept local
+// Modeled on the fakeRunner pattern in install_test.go but kept local
 // to this file so the harness unit tests stay self-contained.
 type recordingRunner struct {
 	runs       []string
-	nextResult Result
+	nextResult harness.Result
 	nextErr    error
 }
 
-func (r *recordingRunner) Run(_ context.Context, command string) (Result, error) {
+func (r *recordingRunner) Run(_ context.Context, command string) (harness.Result, error) {
 	r.runs = append(r.runs, command)
 	return r.nextResult, r.nextErr
 }
@@ -41,32 +43,32 @@ func (r *recordingRunner) RunWithSensitiveStdin(
 	ctx context.Context,
 	command,
 	_ string,
-) (Result, error) {
+) (harness.Result, error) {
 	return r.Run(ctx, command)
 }
 
-func (r *recordingRunner) RunWithTTY(ctx context.Context, command string) (Result, error) {
+func (r *recordingRunner) RunWithTTY(ctx context.Context, command string) (harness.Result, error) {
 	return r.Run(ctx, command)
 }
 
 func TestResolveCleanupMode(t *testing.T) {
 	cases := map[string]struct {
 		envValue string
-		want     CleanupMode
+		want     cleanupMode
 		wantErr  bool
 	}{
-		"unset":               {envValue: "", want: CleanupNone},
-		"stack-single":        {envValue: "stack-single", want: CleanupStackSingle},
-		"stack-multi":         {envValue: "stack-multi", want: CleanupStackMulti},
-		"topology-single":     {envValue: "topology-single", want: CleanupTopologySingle},
-		"topology-multi":      {envValue: "topology-multi", want: CleanupTopologyMulti},
+		"unset":               {envValue: "", want: cleanupNone},
+		"stack-single":        {envValue: "stack-single", want: cleanupStackSingle},
+		"stack-multi":         {envValue: "stack-multi", want: cleanupStackMulti},
+		"topology-single":     {envValue: "topology-single", want: cleanupTopologySingle},
+		"topology-multi":      {envValue: "topology-multi", want: cleanupTopologyMulti},
 		"typo rejected":       {envValue: "stack_single", wantErr: true},
 		"legacy var rejected": {envValue: "fresh-topology", wantErr: true},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv("BDD_CLEANUP_MODE", tc.envValue)
-			got, err := ResolveCleanupMode()
+			got, err := resolveCleanupMode()
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("err=%v wantErr=%v", err, tc.wantErr)
 			}
@@ -79,19 +81,19 @@ func TestResolveCleanupMode(t *testing.T) {
 
 func TestRunPreSuiteCleanup_invokesRightCommand(t *testing.T) {
 	cases := []struct {
-		mode    CleanupMode
+		mode    cleanupMode
 		wantCmd string
 	}{
-		{CleanupTopologySingle, "make -C tools/ncp-local-cluster destroy CLUSTER_NAME=ncp-local"},
-		{CleanupTopologyMulti, "make -C tools/ncp-local-cluster destroy-all-ncp-local SHELL=/bin/bash"},
-		{CleanupStackSingle, "tests/bdd/scripts/destroy-stack.sh single"},
-		{CleanupStackMulti, "tests/bdd/scripts/destroy-stack.sh multi"},
+		{cleanupTopologySingle, "make -C tools/ncp-local-cluster destroy CLUSTER_NAME=ncp-local"},
+		{cleanupTopologyMulti, "make -C tools/ncp-local-cluster destroy-all-ncp-local SHELL=/bin/bash"},
+		{cleanupStackSingle, "tests/bdd/scripts/destroy-stack.sh single"},
+		{cleanupStackMulti, "tests/bdd/scripts/destroy-stack.sh multi"},
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.mode), func(t *testing.T) {
 			runner := &recordingRunner{}
-			suite := &Suite{Runner: runner, Config: Config{CommandLogDir: t.TempDir()}}
-			if err := suite.RunPreSuiteCleanup(context.Background(), tc.mode); err != nil {
+			suite := &harness.Suite{Runner: runner, Config: harness.Config{CommandLogDir: t.TempDir()}}
+			if err := runPreSuiteCleanup(context.Background(), suite, tc.mode); err != nil {
 				t.Fatalf("RunPreSuiteCleanup: %v", err)
 			}
 			if len(runner.runs) != 1 {
@@ -106,19 +108,19 @@ func TestRunPreSuiteCleanup_invokesRightCommand(t *testing.T) {
 
 func TestRunPreSuiteCleanup_noopOnNone(t *testing.T) {
 	runner := &recordingRunner{}
-	suite := &Suite{Runner: runner, Config: Config{CommandLogDir: t.TempDir()}}
-	if err := suite.RunPreSuiteCleanup(context.Background(), CleanupNone); err != nil {
-		t.Fatalf("CleanupNone should be a no-op, got %v", err)
+	suite := &harness.Suite{Runner: runner, Config: harness.Config{CommandLogDir: t.TempDir()}}
+	if err := runPreSuiteCleanup(context.Background(), suite, cleanupNone); err != nil {
+		t.Fatalf("cleanupNone should be a no-op, got %v", err)
 	}
 	if len(runner.runs) != 0 {
-		t.Fatalf("CleanupNone should not invoke the runner, got %v", runner.runs)
+		t.Fatalf("cleanupNone should not invoke the runner, got %v", runner.runs)
 	}
 }
 
 func TestRunPreSuiteCleanup_nonzeroExitFailsSuite(t *testing.T) {
-	runner := &recordingRunner{nextResult: Result{ExitCode: 2}}
-	suite := &Suite{Runner: runner, Config: Config{CommandLogDir: t.TempDir()}}
-	if err := suite.RunPreSuiteCleanup(context.Background(), CleanupStackSingle); err == nil {
+	runner := &recordingRunner{nextResult: harness.Result{ExitCode: 2}}
+	suite := &harness.Suite{Runner: runner, Config: harness.Config{CommandLogDir: t.TempDir()}}
+	if err := runPreSuiteCleanup(context.Background(), suite, cleanupStackSingle); err == nil {
 		t.Fatal("expected error on non-zero exit")
 	}
 }

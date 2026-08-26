@@ -46,33 +46,17 @@ type Suite struct {
 
 // SuiteOptions makes lifecycle side effects explicit. CLIConfigPath selects
 // the CLI state namespace. IsolateCLIState copies that config and its current
-// state into a unique session so concurrent portable runs cannot share mutable
-// CLI selection state. CleanupMode controls only the ncp-local pre-suite hook.
+// state into a unique session so concurrent smoke runs cannot share mutable
+// CLI selection state. BeforeStateSnapshot lets a suite run its own preparation
+// policy before the harness captures CLI state.
 type SuiteOptions struct {
-	CLIConfigPath   string
-	IsolateCLIState bool
-	CleanupMode     CleanupMode
-}
-
-// NewSuite resolves Config, creates the run-id directory tree, builds
-// nvcf-cli into Config.CLIPath, and exports the env vars feature files
-// interpolate. The returned Suite is ready to drive a Godog scenario
-// initializer.
-func NewSuite(t *testing.T) (*Suite, error) {
-	t.Helper()
-	mode, err := ResolveCleanupMode()
-	if err != nil {
-		return nil, err
-	}
-	return NewSuiteWithOptions(t, SuiteOptions{
-		CLIConfigPath: filepath.Join("tests", "bdd", "fixtures", "nvcf-cli-local.yaml"),
-		CleanupMode:   mode,
-	})
+	CLIConfigPath       string
+	IsolateCLIState     bool
+	BeforeStateSnapshot func(context.Context, *Suite) error
 }
 
 // NewSuiteWithOptions builds the shared harness with explicit lifecycle
-// inputs. Portable live suites use it to protect the state file selected by
-// their target and to avoid inheriting local cleanup by accident.
+// inputs. Callers choose their CLI state and preparation policy.
 func NewSuiteWithOptions(t *testing.T, options SuiteOptions) (*Suite, error) {
 	t.Helper()
 	if strings.TrimSpace(options.CLIConfigPath) == "" {
@@ -105,17 +89,10 @@ func NewSuiteWithOptions(t *testing.T, options SuiteOptions) (*Suite, error) {
 		Cache:           NewCommandCache(),
 		lifecycleLedger: NewLedger(filepath.Join(cfg.LedgerDir, "lifecycle")),
 	}
-	// Pre-suite destructive cleanup (BDD_CLEANUP_MODE) runs BEFORE
-	// snapshotting the CLI state file. Rationale: any destructive
-	// mode invalidates the operator's pre-suite admin JWT (the cluster
-	// it points at is gone or the api-keys release was wiped), so
-	// snapshotting the pre-cleanup state would preserve nothing useful.
-	// Cleanup never touches ~/.nvcf-cli.<config>.state, so the snapshot
-	// taken after cleanup is the right baseline for teardown to
-	// restore. Callers must pass a mode resolved through ResolveCleanupMode so
-	// an invalid operator value cannot silently become no cleanup.
-	if err := suite.RunPreSuiteCleanup(context.Background(), options.CleanupMode); err != nil {
-		return nil, err
+	if options.BeforeStateSnapshot != nil {
+		if err := options.BeforeStateSnapshot(context.Background(), suite); err != nil {
+			return nil, err
+		}
 	}
 	if options.IsolateCLIState {
 		if err := suite.prepareIsolatedCLISession(options.CLIConfigPath); err != nil {

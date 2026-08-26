@@ -39,7 +39,7 @@ import (
 // handler. The Suite pointer is shared across scenarios in the same
 // suite (so the Ledger and CommandCache persist); LastResult,
 // LastErr, LastCommand, and Deferred are reset per scenario inside the Before
-// hook installed by RegisterAll. LastCommand tracks the resolved text
+// hook installed by RegisterInstall or RegisterSmoke. LastCommand tracks the resolved text
 // of the most recent command executed in this scenario. A successful-run step
 // or an explicit "the command exit code should be 0" assertion uses it to seed
 // the suite-level CommandCache so a subsequent "Given command has succeeded:"
@@ -72,9 +72,21 @@ func NewScenarioContext(suite *harness.Suite) *ScenarioContext {
 	}
 }
 
-// RegisterAll wires every step from every category to ctx so a single
-// call from a scenario initializer hooks up the whole catalog.
-func RegisterAll(ctx *godog.ScenarioContext, sc *ScenarioContext) {
+// RegisterInstall wires the shared vocabulary plus local installation
+// bootstrap steps. Smoke suites cannot resolve those bootstrap steps.
+func RegisterInstall(ctx *godog.ScenarioContext, sc *ScenarioContext) {
+	registerScenarioHooks(ctx, sc)
+	RegisterInstallSteps(ctx, sc)
+}
+
+// RegisterSmoke wires only target-neutral operator actions and observables.
+// Target provisioning and local cluster bootstrap stay install-only.
+func RegisterSmoke(ctx *godog.ScenarioContext, sc *ScenarioContext) {
+	registerScenarioHooks(ctx, sc)
+	RegisterSmokeSteps(ctx, sc)
+}
+
+func registerScenarioHooks(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Before(func(c context.Context, _ *godog.Scenario) (context.Context, error) {
 		sc.LastResult = harness.Result{}
 		sc.LastErr = nil
@@ -94,17 +106,21 @@ func RegisterAll(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 		fmt.Fprintf(os.Stderr, ">>> %s\n", st.Text)
 		return c, nil
 	})
-	RegisterSteps(ctx, sc)
 }
 
-// RegisterSteps registers the strict vocabulary without installing scenario
-// hooks. Godog uses it through RegisterAll; syntax tests use it to detect
-// undefined or ambiguous feature steps without faking product behavior.
-func RegisterSteps(ctx StepRegistrar, sc *ScenarioContext) {
+// RegisterSmokeSteps registers target-neutral vocabulary without scenario
+// hooks. Syntax tests use it to detect undefined or ambiguous smoke steps.
+func RegisterSmokeSteps(ctx StepRegistrar, sc *ScenarioContext) {
 	registerFileSteps(ctx, sc)
 	registerCommandSteps(ctx, sc)
 	registerNVCFCLISteps(ctx, sc)
 	registerAssertionSteps(ctx, sc)
+}
+
+// RegisterInstallSteps adds local topology bootstrap vocabulary to the shared
+// smoke catalog.
+func RegisterInstallSteps(ctx StepRegistrar, sc *ScenarioContext) {
+	RegisterSmokeSteps(ctx, sc)
 	registerInfraSteps(ctx, sc)
 }
 

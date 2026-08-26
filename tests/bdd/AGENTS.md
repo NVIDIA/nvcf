@@ -41,12 +41,17 @@ so `nvcf-cli` and the NVCF API remain the product-validation boundary.
 - `steps/` owns Godog step handlers and `ScenarioContext`. Each
   handler is one or two lines plus a delegate to a `dsl` helper or
   `Suite.Runner`.
-- `godog_test.go` owns the live entry points and the fake-runner
-  wiring tests.
-- `portable/` owns the separate attach-mode runner. It strictly loads non-secret
-  targets and committed ordered plans, validates invocation-time consent, and
-  restores feature state between phases. It may reuse `harness`, `dsl`, and
-  `steps`, but must not add target modes or plan selection to `godog_test.go`.
+- `install/` owns topology provisioning, stack installation, registration,
+  install verification, ncp-local cleanup policy, and its live entry points.
+- `smoke/` owns attach-mode product smokes, target loading, selection,
+  invocation-time consent, isolated CLI sessions, and restoration between
+  feature files.
+- `fixtures/` contains inputs genuinely shared by both suites. Suite-specific
+  fixtures belong below the owning suite.
+
+Install features register `steps.RegisterInstall`. Smoke features register
+`steps.RegisterSmoke`, which deliberately excludes local topology bootstrap
+steps. Do not make smoke depend on install feature wiring.
 
 A step handler that does anything beyond argv assembly, ledger
 snapshot, runner invocation, and result capture is a smell. Move the
@@ -102,32 +107,34 @@ logic into `dsl/`.
   worker callback path. Leaving the wrong topology running causes the
   bootstrap Make target to fail deep inside k3d with a generic port-bind
   error; the precheck surfaces this immediately.
-- `harness.NewSuite` derives the state path from the selected CLI config
+- `harness.NewSuiteWithOptions` derives the state path from the selected CLI config
   basename and snapshots that exact file through the lifecycle Ledger. The
-  portable runner copies the source config and current state into a unique
+  smoke runner copies the source config and current state into a unique
   session first, so concurrent target runs cannot share function or task
   selection state. HOME is intentionally not isolated: k3d, kubectl, docker,
   and helm resolve their config there. Subsequent self-hosted commands read the
   JWT from the selected state file, so the token never appears in argv or
   command logs. Do not capture secrets into env vars.
-- Pre-suite destructive cleanup is governed by the single env var
+- Install-suite pre-run destructive cleanup is governed by the single env var
   `BDD_CLEANUP_MODE`. Valid values: `stack-single`, `stack-multi`,
   `topology-single`, `topology-multi`, or unset. Unknown values fail
   the suite at start; the harness never silently downgrades to
-  no-cleanup. The mode maps to one make target in `harness/cleanup.go`
+  no-cleanup. The mode maps to one command in `install/cleanup.go`
   via `cleanupCommandFor`; that map is the single source of truth.
   Both the env-var path and the Make targets in
   `tools/ncp-local-cluster/Makefile` and
   `deploy/stacks/self-managed/Makefile` are intentionally maintained
   so an operator can clean by hand without involving `go test`.
-- The `portable/` suite rejects `BDD_CLEANUP_MODE`. Those cleanup
+- The `smoke/` suite rejects `BDD_CLEANUP_MODE`. Those cleanup
   commands are specific to ncp-local. Remote and production targets must never
   inherit local cleanup behavior.
-- Cleanup belongs in `harness/cleanup.go`, never in `steps/`. Do not
+- Cleanup policy belongs in `install/cleanup.go`, never in `harness/` or
+  `steps/`. Do not
   introduce a `Given the cluster is freshly destroyed` Given or
   similar; the conflict precheck inside every feature Background is
   the in-band assertion that cleanup worked.
-- Cleanup runs BEFORE the CLI state-file snapshot in `NewSuite`. The
+- Cleanup runs before the CLI state-file snapshot through the install suite's
+  `BeforeStateSnapshot` callback to `NewSuiteWithOptions`. The
   snapshot captures the post-cleanup baseline (typically empty for
   destructive modes); teardown restores to that baseline. For
   destructive modes the operator's pre-suite JWT is intentionally
@@ -228,32 +235,37 @@ multi-cluster feature:
   tests/bdd/scripts/lint.sh
   ```
 
-- Wiring tests in `godog_test.go` exercise feature files against a
+- Wiring tests in `install/install_test.go` exercise install features against a
   fake `CommandRunner`. They assert `status == 0` plus one substring
   check that a destructive command was issued. Do not deep-equality
   the recorder; consolidating equivalent steps in the future must not
   break these tests.
-- Portable wiring tests live in `portable/` and match every step in
-  `features/smoke/*.feature` against the registered catalog. They do not fake
-  product responses. Portable features run one file per Godog phase. The
+- Smoke wiring tests live in `smoke/` and recursively match every step in
+  `smoke/features/**/*.feature` against the smoke catalog. They do not fake
+  product responses. Smoke features run one file per Godog phase. The
   runner resets the command cache and restores CLI state, step-exported
   environment values, and ledger-backed files between phases.
 - Live entry points (`TestSingleClusterUp`, `TestMultiClusterUp`,
   `TestSingleClusterHelmfile`) skip under `-short`. They build the
   CLI and exercise real `make`/`kubectl`/`helm` against k3d.
 
-## Portable live features
+## Smoke features
 
 - Target YAML is versioned, non-secret data. Its strict top-level shape carries
   a name and an open `env` map. It must not select features, set runner-owned
   values, or contain destructive consent.
-- Plan YAML is versioned, committed selection. It contains an ordered list of
-  independently executed feature phases. Do not rely on Godog file ordering or
-  encode plans in comma-separated process environment values.
+- Developers select safe top-level features directly with repeatable
+  `-bdd-feature` flags. Direct selection cannot reach
+  `smoke/features/operations/`.
+- Plan YAML is versioned, committed selection for nightly collections and
+  reviewed operational workflows. Each phase selects one `feature` or a
+  `features` glob. Globs expand in stable order and every file executes as an
+  independently restored run. Do not rely on Godog file ordering or encode
+  selections in comma-separated process environment values.
 - A phase marked `mutatesTopology: true` must declare an invocation-time
   consent comparison. Validate every phase's consent against target data before
   building the CLI or executing a feature.
-- Every portable smoke is independently selectable. It declares required
+- Every smoke is independently selectable. It declares required
   target fields through environment preconditions and does not depend on an
   earlier feature's exported variables or files.
 - Every Kubernetes command exposes both kubeconfig and context in Gherkin.
@@ -289,9 +301,12 @@ multi-cluster feature:
 1. Read `PLAN.md` and confirm every step in your draft is in the
    catalog. If something cannot be expressed, prefer raw `When I run
    command` + an output assertion.
-2. Write the feature file in `features/`.
-3. Seed any handoff artifacts in the matching wiring test inside
-   `godog_test.go`.
+2. Put install workflows in `install/features/`. Put safe attach-mode product
+   smokes in `smoke/features/`; put reviewed operational workflows in
+   `smoke/features/operations/`.
+3. Seed install handoff artifacts in the matching wiring test inside
+   `install/install_test.go`. Smoke wiring is discovered automatically and
+   should not require a Go edit.
 4. Confirm `go test -short ./...` is green.
 
 ## Adding a step

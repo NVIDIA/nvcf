@@ -209,19 +209,19 @@ them via `${VAR}` in command strings and table cells.
 | `REPO_ROOT` | `git rev-parse --show-toplevel` at suite start | Absolute path to the repo root. Required when invoking `make -C deploy/stacks/self-managed` because the Makefile's `-C` changes cwd; relative paths to fixtures from there break. |
 | `NGC_API_KEY` / `SAMPLE_NGC_ORG` / `SAMPLE_NGC_TEAM` | The operator's shell | Passed through unchanged. An environment-variable precondition step asserts they are non-empty before any scenario uses them. |
 
-The portable live runner exports every entry from its selected target's open
-`env` map. It runs each ordered plan phase separately, restores CLI state,
-step-exported environment variables, and ledger-backed files, and resets the
-successful command cache between phases. The harness copies the source CLI
-config and state into a unique suite session, so concurrent targets do not
-share mutable selection state. See `portable/README.md` for the target, plan, and
-safety contracts.
+The smoke runner exports every entry from its selected target's open `env` map.
+It runs each directly selected feature or expanded plan phase separately,
+restores CLI state, step-exported environment variables, and ledger-backed
+files, and resets the successful command cache between features. The harness
+copies the source CLI config and state into a unique suite session, so
+concurrent targets do not share mutable selection state. See `smoke/README.md`
+for the target, selection, and safety contracts.
 
 Feature files may also export their own env vars at runtime via
 `When I export command output to environment variable {string}`. Those
-are snapshotted by the env Ledger and restored at teardown. The portable live
-runner restores them after each selected plan phase so they cannot become an
-implicit input to another smoke.
+are snapshotted by the env Ledger and restored at teardown. The smoke runner
+restores them after each selected feature so they cannot become an implicit
+input to another smoke.
 The EKS Helmfile feature exports `EKS_GATEWAY_ADDR` this way from
 `kubectl get gateway` after the Gateway resource is Programmed.
 
@@ -267,8 +267,8 @@ restoration ledger:
   body, mode) in memory. Repeat writes against the same path during a
   suite do not overwrite the snapshot; only the first write records.
 - At suite teardown, the runner restores every registered path to its
-  pre-suite state. The portable live runner performs the same restoration
-  between ordered plan phases. Files that did not exist before are deleted;
+  pre-suite state. The smoke runner performs the same restoration between
+  selected feature files. Files that did not exist before are deleted;
   files that did are rewritten with the original bytes and mode.
 - `Config.LedgerDir` (`out/<run-id>/originals/`) is reserved for an
   on-disk variant if very large fixtures ever push memory limits.
@@ -355,11 +355,8 @@ old `tests/bdd` tree.
 
 ```
 tests/bdd/
-  features/                      (Gherkin, already committed)
   fixtures/                      (sample env + CLI config, already committed)
-  targets/                       (non-secret portable live coordinates)
-  plans/                         (committed portable feature compositions)
-  STEPS.md                       (this document)
+  PLAN.md                        (step catalog and architecture contract)
 
   harness/                       (phase 1)
     config.go                    (paths, env exports)
@@ -377,17 +374,16 @@ tests/bdd/
     jsoncmp.go                   (json output row matching)
 
   steps/                         (phase 2)
-    context.go                   (ScenarioContext + RegisterAll)
+    context.go                   (ScenarioContext + suite-specific registrars)
     file_steps.go                (I copy / I update yaml / I substitute)
     command_steps.go             (I run command / command has succeeded)
     assertion_steps.go           (exit code, output contains, file/yaml/json)
     infra_steps.go               (cluster bootstrap, image pull secret)
 
-  portable/                      (portable target, plan, and phased runner)
+  install/                       (install features, cleanup policy, live runner)
 
-  godog_test.go                  (phase 3 and 4: TestSingleClusterUp,
-                                  TestMultiClusterUp, TestSingleClusterHelmfile,
-                                  wiring tests with fakes)
+  smoke/                         (smoke features, targets, plans, selection,
+                                  consent, live runner)
 ```
 
 The `tests/bdd/harness` and `tests/bdd/dsl` packages are new
@@ -459,7 +455,6 @@ type Suite struct {
     Cache     *CommandCache
 }
 
-func NewSuite(t *testing.T) (*Suite, error) // builds nvcf-cli, sets NVCF_CLI + REPO_ROOT
 func NewSuiteWithOptions(t *testing.T, options SuiteOptions) (*Suite, error)
 func (s *Suite) RestoreFeatureState() error // restores feature state and resets cache
 func (s *Suite) Teardown() error            // also restores the exact CLI state file
@@ -575,9 +570,11 @@ type ScenarioContext struct {
 
 func NewScenarioContext(suite *harness.Suite) *ScenarioContext
 
-// RegisterAll wires every step from every category to the godog
-// ScenarioContext. Test code calls this once per ScenarioInitializer.
-func RegisterAll(ctx *godog.ScenarioContext, sc *ScenarioContext)
+// RegisterInstall wires the shared vocabulary and local topology bootstrap.
+func RegisterInstall(ctx *godog.ScenarioContext, sc *ScenarioContext)
+
+// RegisterSmoke wires only target-neutral operator actions and observables.
+func RegisterSmoke(ctx *godog.ScenarioContext, sc *ScenarioContext)
 ```
 
 Each `*_steps.go` file holds a small registrar (`registerFileSteps`,
@@ -631,7 +628,7 @@ Acceptance:
 ### Phase 3 (MR 3): suite entry points and first feature
 
 Files:
-- `tests/bdd/godog_test.go` adds `TestSingleClusterUp` plus
+- `tests/bdd/install/install_test.go` adds `TestSingleClusterUp` plus
   `TestSingleClusterUpFeatureFileWiresToSteps`.
 - Wiring test uses a fake CommandRunner that returns canned
   exit-code-0 results so every step resolves.
@@ -640,14 +637,14 @@ Acceptance:
 - `go test ./tests/bdd -run TestSingleClusterUpFeatureFileWiresToSteps`
   passes.
 - The handler chain resolves every step in
-  `features/single-cluster-up.feature` against the registered patterns.
+  `install/features/single-cluster-up.feature` against the registered patterns.
 - `TestSingleClusterUp` is the live entry point; not run in CI but
   documented in AGENTS.md alongside the existing live invocations.
 
 ### Phase 4 (MR 4): remaining features wired
 
 Files:
-- `tests/bdd/godog_test.go` gains `TestMultiClusterUp` and
+- `tests/bdd/install/install_test.go` gains `TestMultiClusterUp` and
   `TestSingleClusterHelmfile`, plus their wiring tests.
 
 Acceptance:

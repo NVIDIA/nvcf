@@ -1,18 +1,17 @@
-# Portable live BDD
+# Smoke BDD
 
-The portable live suite runs a committed smoke plan against an
-operator-selected target. The target can be an existing local installation, a
-remote self-managed cluster, or an NVCF API endpoint without Kubernetes
-coordinates.
+The smoke suite runs selected product features against an operator-selected
+target. The target can be an existing local installation, a remote
+self-managed cluster, or an NVCF API endpoint without Kubernetes coordinates.
 
-This suite is separate from `godog_test.go`. Install features provision and
-verify topology. Portable smoke features exercise product behavior after a
-target is ready. Both entry points reuse the strict step catalog and harness.
+This suite is separate from `install/`. Install features provision and verify
+topology. Smoke features exercise product behavior after a target is ready.
+Both suites reuse the strict step catalog and harness mechanics.
 
 ## Execution model
 
 ```text
-load target and committed plan
+load target and direct features or committed plan
           |
           v
 validate every phase and consent requirement
@@ -41,9 +40,9 @@ Run a retained script from the repository root with `sh <path>`.
 
 ## Target contract
 
-`BDD_TARGET_FILE` selects a versioned YAML document. The top-level schema is
-strict. The `env` map is intentionally open so a new smoke input does not
-require a Go schema change.
+`-bdd-target` selects a versioned YAML document. The top-level schema is strict.
+The `env` map is intentionally open so a new smoke input does not require a Go
+schema change.
 
 ```yaml
 version: 1
@@ -76,31 +75,49 @@ Target files cannot set runner-owned values, cleanup mode, or destructive
 consent. Do not commit credentials, tokens, registry keys, or kubeconfig
 contents.
 
-## Plan contract
+## Selection contract
 
-`BDD_PLAN_FILE` selects a committed, versioned plan. A plan is an ordered list
-of independently executed phases. It is separate from target data, so selecting
-a target cannot select executable specifications.
+Developers select one or more safe smokes directly with repeatable
+`-bdd-feature` flags. Direct paths are relative to
+`tests/bdd/smoke/features/` and may select only top-level feature files.
+
+Nightly CI and reviewed operational workflows use `-bdd-plan`. A plan is a
+committed, versioned list of independently executed phases. It is separate from
+target data, so selecting a target cannot select executable specifications.
 
 ```yaml
 version: 1
 name: cluster-maintenance
 phases:
   - name: cluster-maintenance
-    feature: smoke/cluster-maintenance.feature
-    tags: "@portable-smoke"
+    feature: operations/cluster-maintenance.feature
+    tags: "@smoke"
     mutatesTopology: false
     consent:
       environment: BDD_ALLOW_CLUSTER_MAINTENANCE
       equalsTargetEnvironment: BDD_COMPUTE_CLUSTER
 ```
 
-Feature paths are relative to `tests/bdd/features/`. Absolute paths, traversal,
-missing files, duplicate phases, duplicate features, and unknown plan fields
-fail before execution. A phase marked `mutatesTopology: true` must declare an
-invocation-time consent comparison.
+Each phase selects exactly one `feature` or one `features` glob. A collection
+glob expands in stable path order and each match runs as a separately restored
+feature. Paths are relative to `tests/bdd/smoke/features/`. Absolute paths,
+traversal, missing files, duplicate phases, duplicate features, and unknown plan
+fields fail before execution. A phase marked `mutatesTopology: true` must
+declare an invocation-time consent comparison.
 
-Portable smokes must remain independently selectable. A phase cannot use an
+Safe nightly collection example:
+
+```yaml
+version: 1
+name: nightly
+phases:
+  - name: product-smokes
+    features: "*.feature"
+    tags: "~@skip"
+    mutatesTopology: false
+```
+
+Smokes must remain independently selectable. A phase cannot use an
 exported variable, file mutation, or successful-command cache entry from an
 earlier phase as an undocumented provider.
 
@@ -133,14 +150,26 @@ cd tests/bdd
 KUBECONFIG=/path/to/kubeconfig \
 SAMPLE_NGC_ORG=<org> \
 SAMPLE_NGC_TEAM=<team> \
-BDD_TARGET_FILE=tests/bdd/targets/local-multi.yaml \
-BDD_PLAN_FILE=tests/bdd/plans/cluster-maintenance.yaml \
 BDD_ALLOW_CLUSTER_MAINTENANCE=ncp-local-compute-1 \
-go test ./portable -run '^TestComposableLive$' -timeout 60m -v
+go test ./smoke -run '^TestLive$' -timeout 60m -v -args \
+  -bdd-target tests/bdd/smoke/targets/local-multi.yaml \
+  -bdd-plan tests/bdd/smoke/plans/cluster-maintenance.yaml
 ```
 
-Use `tests/bdd/targets/local-single.yaml` and consent to `ncp-local` for the
-single-cluster topology.
+Use `tests/bdd/smoke/targets/local-single.yaml` and consent to `ncp-local` for
+the single-cluster topology.
+
+For a local one-off, repeat `-bdd-feature` for the safe smokes to run. The
+function and task files below are the planned lifecycle smoke names:
+
+```sh
+cd tests/bdd
+
+go test ./smoke -run '^TestLive$' -timeout 60m -v -args \
+  -bdd-target tests/bdd/smoke/targets/local-multi.yaml \
+  -bdd-feature function-lifecycle.feature \
+  -bdd-feature task-lifecycle.feature
+```
 
 For a remote target, create an untracked target file with the same schema and
 use explicit CLI and Kubernetes coordinates. An API-only target can omit
@@ -150,8 +179,8 @@ Kubernetes and workload inputs when its selected features do not require them.
 
 Plans can represent ordered provisioning phases, but this POC does not commit
 one. Existing local install features rely on `BDD_CLEANUP_MODE`, which the
-portable runner rejects. Provision those targets through the install suite,
-then attach with a portable smoke plan.
+smoke runner rejects. Provision those targets through the install suite, then
+attach with a smoke selection.
 
 A future provisioning-only phase must declare `mutatesTopology: true`, include
 invocation-time consent, establish readiness, and stop before product smoke.

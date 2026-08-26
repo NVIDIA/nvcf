@@ -15,9 +15,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package portable
+package smoke
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -31,9 +32,38 @@ import (
 	"nvcf-bdd/steps"
 )
 
-// TestComposableLive runs a committed ordered plan against one selected target
-// through a shared, isolated suite. It skips under -short.
-func TestComposableLive(t *testing.T) {
+type featureFlag []string
+
+func (f *featureFlag) String() string {
+	return strings.Join(*f, ",")
+}
+
+func (f *featureFlag) Set(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fmt.Errorf("smoke feature path must not be empty")
+	}
+	*f = append(*f, value)
+	return nil
+}
+
+var (
+	targetFlag   string
+	planFlag     string
+	tagsFlag     string
+	featureFlags featureFlag
+)
+
+func init() {
+	flag.StringVar(&targetFlag, "bdd-target", "", "path to a smoke target YAML")
+	flag.StringVar(&planFlag, "bdd-plan", "", "path to a committed smoke plan YAML")
+	flag.StringVar(&tagsFlag, "bdd-tags", "", "Godog tag filter for direct feature selection")
+	flag.Var(&featureFlags, "bdd-feature", "safe smoke feature path; repeat to select several")
+}
+
+// TestLive runs a committed plan or directly selected safe features against
+// one target through a shared, isolated suite. It skips under -short.
+func TestLive(t *testing.T) {
 	if testing.Short() {
 		t.Skip("live run skipped under -short")
 	}
@@ -41,9 +71,9 @@ func TestComposableLive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve harness config: %v", err)
 	}
-	targetPath := strings.TrimSpace(os.Getenv("BDD_TARGET_FILE"))
+	targetPath := strings.TrimSpace(targetFlag)
 	if targetPath == "" {
-		t.Fatal("BDD_TARGET_FILE must name a portable target")
+		t.Fatal("-bdd-target must name a smoke target")
 	}
 	if !filepath.IsAbs(targetPath) {
 		targetPath = filepath.Join(config.RepoRoot, targetPath)
@@ -52,35 +82,23 @@ func TestComposableLive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load target: %v", err)
 	}
-	planPath := strings.TrimSpace(os.Getenv("BDD_PLAN_FILE"))
-	if planPath == "" {
-		t.Fatal("BDD_PLAN_FILE must name a committed portable plan")
-	}
-	if !filepath.IsAbs(planPath) {
-		planPath = filepath.Join(config.RepoRoot, planPath)
-	}
-	plan, err := LoadPlan(config.RepoRoot, planPath)
+	plan, err := LoadSelection(config.RepoRoot, planFlag, featureFlags, tagsFlag)
 	if err != nil {
-		t.Fatalf("load plan: %v", err)
+		t.Fatalf("load smoke selection: %v", err)
 	}
 	if err := plan.ValidateConsent(target); err != nil {
 		t.Fatalf("validate plan consent: %v", err)
 	}
-	cleanupMode, err := harness.ResolveCleanupMode()
-	if err != nil {
-		t.Fatalf("resolve cleanup: %v", err)
-	}
-	if cleanupMode != harness.CleanupNone {
-		t.Fatal("BDD_CLEANUP_MODE is local-install-specific and must be unset for the portable live suite")
+	if strings.TrimSpace(os.Getenv("BDD_CLEANUP_MODE")) != "" {
+		t.Fatal("BDD_CLEANUP_MODE is install-specific and must be unset for the smoke suite")
 	}
 
 	suite, err := harness.NewSuiteWithOptions(t, harness.SuiteOptions{
 		CLIConfigPath:   target.Env[cliConfigEnvironment],
 		IsolateCLIState: true,
-		CleanupMode:     cleanupMode,
 	})
 	if err != nil {
-		t.Fatalf("new portable suite: %v", err)
+		t.Fatalf("new smoke suite: %v", err)
 	}
 	defer func() {
 		if err := suite.Teardown(); err != nil {
@@ -104,11 +122,11 @@ func runFeature(t *testing.T, suite *harness.Suite, name, path, tags string) {
 	t.Helper()
 	scenario := steps.NewScenarioContext(suite)
 	harness.RunFeature(t, harness.FeatureRunOptions{
-		Name: "bdd-portable-" + name,
+		Name: "bdd-smoke-" + name,
 		Path: path,
 		Tags: tags,
 	}, func(ctx *godog.ScenarioContext) {
-		steps.RegisterAll(ctx, scenario)
+		steps.RegisterSmoke(ctx, scenario)
 	})
 	fmt.Fprintf(os.Stderr, ">>> completed %s phase\n", name)
 }

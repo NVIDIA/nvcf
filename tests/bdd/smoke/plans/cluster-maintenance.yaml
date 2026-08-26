@@ -5,8 +5,8 @@ version: 1
 name: cluster-maintenance
 phases:
   - name: cluster-maintenance
-    feature: smoke/cluster-maintenance.feature
-    tags: "@portable-smoke"
+    feature: operations/cluster-maintenance.feature
+    tags: "@smoke"
     mutatesTopology: false
     consent:
       environment: BDD_ALLOW_CLUSTER_MAINTENANCE

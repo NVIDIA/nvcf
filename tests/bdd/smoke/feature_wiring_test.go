@@ -15,7 +15,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package portable
+package smoke
 
 import (
 	"bufio"
@@ -32,17 +32,17 @@ import (
 
 var gherkinStepLine = regexp.MustCompile(`^\s*(?:Given|When|Then|And|But)\s+(.+?)\s*$`)
 
-func TestPortableSmokeFeaturesUseUnambiguousSharedSteps(t *testing.T) {
+func TestSmokeFeaturesUseUnambiguousSharedSteps(t *testing.T) {
 	definitions := &definitionCatalog{}
-	steps.RegisterSteps(definitions, steps.NewScenarioContext(&harness.Suite{
+	steps.RegisterSmokeSteps(definitions, steps.NewScenarioContext(&harness.Suite{
 		Config: harness.Config{OutDir: t.TempDir()},
 	}))
-	paths, err := filepath.Glob(filepath.Join("..", "features", "smoke", "*.feature"))
+	paths, err := smokeFeaturePaths("features")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(paths) == 0 {
-		t.Fatal("no portable smoke features")
+		t.Fatal("no smoke features")
 	}
 	for _, path := range paths {
 		t.Run(filepath.Base(path), func(t *testing.T) {
@@ -54,6 +54,30 @@ func TestPortableSmokeFeaturesUseUnambiguousSharedSteps(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSmokeCatalogExcludesInstallBootstrap(t *testing.T) {
+	definitions := &definitionCatalog{}
+	steps.RegisterSmokeSteps(definitions, steps.NewScenarioContext(&harness.Suite{
+		Config: harness.Config{OutDir: t.TempDir()},
+	}))
+	if matches := definitions.matches("a single-cluster ncp-local cluster is running"); matches != 0 {
+		t.Fatalf("install bootstrap matched %d smoke step definitions", matches)
+	}
+}
+
+func smokeFeaturePaths(root string) ([]string, error) {
+	var paths []string
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Type().IsRegular() && filepath.Ext(path) == ".feature" {
+			paths = append(paths, path)
+		}
+		return nil
+	})
+	return paths, err
 }
 
 type definitionCatalog struct {

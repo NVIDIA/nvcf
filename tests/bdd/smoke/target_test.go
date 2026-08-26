@@ -15,7 +15,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package portable
+package smoke
 
 import (
 	"os"
@@ -66,11 +66,11 @@ name: target
 env:
   BDD_NVCF_CLI_CONFIG: config.yaml
 `,
-		"reserved consent": `version: 1
+		"reserved runner value": `version: 1
 name: target
 env:
   BDD_NVCF_CLI_CONFIG: config.yaml
-  BDD_ALLOW_CLUSTER_MAINTENANCE: cluster
+  BDD_RUN_ID: fixed
 `,
 		"invalid env name": `version: 1
 name: target
@@ -107,9 +107,16 @@ func TestCommittedLocalTargetsMatchSchema(t *testing.T) {
 	t.Setenv("KUBECONFIG", "/tmp/kubeconfig")
 	t.Setenv("SAMPLE_NGC_ORG", "sample-org")
 	t.Setenv("SAMPLE_NGC_TEAM", "sample-team")
-	for _, name := range []string{"local-single.yaml", "local-multi.yaml"} {
-		t.Run(name, func(t *testing.T) {
-			target, err := LoadTarget(filepath.Join("..", "targets", name))
+	paths, err := filepath.Glob(filepath.Join("targets", "*.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) == 0 {
+		t.Fatal("no committed smoke targets")
+	}
+	for _, path := range paths {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			target, err := LoadTarget(path)
 			if err != nil {
 				t.Fatalf("load committed target: %v", err)
 			}

@@ -1,4 +1,4 @@
-@portable-smoke @cluster-maintenance @destructive
+@smoke @cluster-maintenance @destructive
 Feature: Preserve function availability through compute-cluster maintenance
   As an NVCF operator,
   I want maintenance intent to survive NVCA operator reconciliation,

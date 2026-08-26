@@ -15,7 +15,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package portable
+package smoke
 
 import (
 	"os"
@@ -37,11 +37,8 @@ phases:
     consent:
       environment: BDD_ALLOW_TOPOLOGY_MUTATION
       equalsTargetEnvironment: BDD_TARGET_APPROVAL
-  - name: smoke-a
-    feature: smoke/a.feature
-    mutatesTopology: false
-  - name: smoke-b
-    feature: smoke/b.feature
+  - name: nightly
+    features: smoke/*.feature
     mutatesTopology: false
 `)
 	plan, err := LoadPlan(root, path)
@@ -53,6 +50,9 @@ phases:
 	}
 	if plan.Phases[0].Tags != "~@skip" || !plan.Phases[0].MutatesTopology {
 		t.Fatalf("first phase=%+v", plan.Phases[0])
+	}
+	if plan.Phases[1].Name != "nightly-smoke-a" || plan.Phases[2].Name != "nightly-smoke-b" {
+		t.Fatalf("expanded phases=%+v", plan.Phases)
 	}
 }
 
@@ -80,6 +80,37 @@ phases:
     feature: ../outside.feature
     mutatesTopology: false
 `,
+		"both selectors": `version: 1
+name: ambiguous
+phases:
+  - name: smoke
+    feature: smoke.feature
+    features: "*.feature"
+    mutatesTopology: false
+`,
+		"missing selector": `version: 1
+name: missing
+phases:
+  - name: smoke
+    mutatesTopology: false
+`,
+		"unmatched collection": `version: 1
+name: unmatched
+phases:
+  - name: smoke
+    features: "missing/*.feature"
+    mutatesTopology: false
+`,
+		"duplicate feature": `version: 1
+name: duplicate-feature
+phases:
+  - name: first
+    feature: smoke.feature
+    mutatesTopology: false
+  - name: second
+    feature: smoke.feature
+    mutatesTopology: false
+`,
 		"topology without consent": `version: 1
 name: unsafe
 phases:
@@ -101,6 +132,41 @@ phases:
 				t.Fatal("expected plan error")
 			}
 		})
+	}
+}
+
+func TestSelectFeaturesSupportsOneOffSafeSmokes(t *testing.T) {
+	root := seedFeatures(t, "function.feature", "task.feature", "operations/maintenance.feature")
+	plan, err := SelectFeatures(root, []string{"function.feature", "task.feature"}, "@local")
+	if err != nil {
+		t.Fatalf("select: %v", err)
+	}
+	if len(plan.Phases) != 2 || plan.Phases[0].Tags != "@local" {
+		t.Fatalf("plan=%+v", plan)
+	}
+	if _, err := SelectFeatures(root, []string{"operations/maintenance.feature"}, ""); err == nil {
+		t.Fatal("expected operational feature to require a plan")
+	}
+}
+
+func TestLoadSelectionSeparatesPlansFromDirectFeatures(t *testing.T) {
+	root := seedFeatures(t, "function.feature")
+	planPath := writePlan(t, root, `
+version: 1
+name: nightly
+phases:
+  - name: function
+    feature: function.feature
+    mutatesTopology: false
+`)
+	if _, err := LoadSelection(root, planPath, []string{"function.feature"}, ""); err == nil {
+		t.Fatal("expected plan and direct feature conflict")
+	}
+	if _, err := LoadSelection(root, planPath, nil, "@tag"); err == nil {
+		t.Fatal("expected plan and direct tags conflict")
+	}
+	if _, err := LoadSelection(root, "", nil, ""); err == nil {
+		t.Fatal("expected missing selection")
 	}
 }
 
@@ -135,7 +201,7 @@ func TestCommittedPlansMatchSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	paths, err := filepath.Glob(filepath.Join("..", "plans", "*.yaml"))
+	paths, err := filepath.Glob(filepath.Join("plans", "*.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +223,7 @@ func TestCommittedPlansMatchSchema(t *testing.T) {
 
 func writePlan(t *testing.T, root, body string) string {
 	t.Helper()
-	path := filepath.Join(root, "tests", "bdd", "plans", "plan.yaml")
+	path := filepath.Join(root, "tests", "bdd", "smoke", "plans", "plan.yaml")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +237,7 @@ func seedFeatures(t *testing.T, names ...string) string {
 	t.Helper()
 	root := t.TempDir()
 	for _, name := range names {
-		path := filepath.Join(root, "tests", "bdd", "features", name)
+		path := filepath.Join(root, "tests", "bdd", "smoke", "features", name)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatalf("mkdir: %v", err)
 		}

@@ -26,7 +26,7 @@ import (
 )
 
 // FeatureRunOptions carries Godog process mechanics shared by install and
-// portable entry points. Step registration remains owned by the caller.
+// smoke entry points. Step registration remains owned by the caller.
 type FeatureRunOptions struct {
 	Name   string
 	Path   string
