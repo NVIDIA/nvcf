@@ -172,8 +172,19 @@ jobs:
           # Separate -m flags rather than an embedded multi-line string: the
           # continuation lines of one would have to sit at column zero, which
           # ends the YAML block scalar this script lives in.
+          # fix, not chore. tools/ci/github-release feeds RELEASE_RULES to
+          # semantic-release, where chore carries "release": false. A chore
+          # commit therefore cuts no chart release, and since publishing a chart
+          # release is exactly what triggers stack-pin-bump.yml, the cascade
+          # would stop here: the chart would carry the new appVersion on main
+          # and the stack would never learn about it.
+          #
+          # A patch bump of the chart is the right size. The chart's own
+          # templates and values schema have not changed, only the application
+          # version it defaults to, which is the conventional reading of chart
+          # version against appVersion.
           git commit \
-            -m "chore(charts): bump for ${TAG}" \
+            -m "fix(charts): bump for ${TAG}" \
             -m "Opened by the chart version bump workflow on release of ${TAG}."
           git push --force-with-lease origin "${branch}"
 
@@ -203,7 +214,7 @@ jobs:
             "If this pull request sits unmerged, later service releases add their bumps to the same branch, so merging it applies all of them." \
             "" \
             "Github commit:" \
-            "chore(charts): bump chart versions for released services" \
+            "fix(charts): bump chart versions for released services" \
             "")"
 
           # gh api, not `gh pr edit`. Against this repository `gh pr edit` fails
@@ -217,7 +228,7 @@ jobs:
             echo "refreshed pull request #${number}"
           else
             gh pr create --base main --head "${branch}" \
-              --title "chore(charts): bump chart versions for released services" \
+              --title "fix(charts): bump chart versions for released services" \
               --body "${body}"
           fi
 
