@@ -337,22 +337,22 @@ func TestShadowPercentage100(t *testing.T) {
 		"expected all %d requests to be shadowed, got %d", iterations, requestCount.Load())
 }
 
-func TestShouldDispatchShadowPerBearerKeyUsesBearerBucket(t *testing.T) {
+func TestAdmittedShadowsPerBearerKeyUsesBearerBucket(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{}`))
 	req.Header.Set("Authorization", "Bearer test-key")
 
-	info := FunctionInfo{
-		shadowModelNames:     []string{"private/facebook/opt-125m-shadow"},
-		shadowPercentage:     47,
-		shadowSamplingMethod: config.ShadowSamplingMethodPerBearerKey,
+	shadow := shadowConfig{
+		modelName:      "private/facebook/opt-125m-shadow",
+		percentage:     47,
+		samplingMethod: config.ShadowSamplingMethodPerBearerKey,
 	}
-	assert.True(t, shouldDispatchShadow(req, info, fixedRandomBucket(99)))
+	assert.Len(t, admittedShadows(req, []shadowConfig{shadow}, fixedRandomBucket(99)), 1)
 
-	info.shadowPercentage = 46
-	assert.False(t, shouldDispatchShadow(req, info, fixedRandomBucket(0)))
+	shadow.percentage = 46
+	assert.Empty(t, admittedShadows(req, []shadowConfig{shadow}, fixedRandomBucket(0)))
 }
 
-func TestShouldDispatchShadowPerBearerKeySkipsMalformedBearerBelow100(t *testing.T) {
+func TestAdmittedShadowsPerBearerKeySkipsMalformedBearerBelow100(t *testing.T) {
 	tests := []struct {
 		name          string
 		authorization []string
@@ -371,32 +371,32 @@ func TestShouldDispatchShadowPerBearerKeySkipsMalformedBearerBelow100(t *testing
 			for _, value := range tc.authorization {
 				req.Header.Add("Authorization", value)
 			}
-			info := FunctionInfo{
-				shadowModelNames:     []string{"private/facebook/opt-125m-shadow"},
-				shadowPercentage:     99,
-				shadowSamplingMethod: config.ShadowSamplingMethodPerBearerKey,
+			shadow := shadowConfig{
+				modelName:      "private/facebook/opt-125m-shadow",
+				percentage:     99,
+				samplingMethod: config.ShadowSamplingMethodPerBearerKey,
 			}
 
-			assert.False(t, shouldDispatchShadow(req, info, fixedRandomBucket(0)))
+			assert.Empty(t, admittedShadows(req, []shadowConfig{shadow}, fixedRandomBucket(0)))
 		})
 	}
 }
 
-func TestShouldDispatchShadowRandomUsesInjectedBucket(t *testing.T) {
+func TestAdmittedShadowsRandomUsesInjectedBucket(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{}`))
 	req.Header.Set("Authorization", "Bearer test-key")
 
-	info := FunctionInfo{
-		shadowModelNames:     []string{"private/facebook/opt-125m-shadow"},
-		shadowPercentage:     40,
-		shadowSamplingMethod: config.ShadowSamplingMethodRandom,
+	shadow := shadowConfig{
+		modelName:      "private/facebook/opt-125m-shadow",
+		percentage:     40,
+		samplingMethod: config.ShadowSamplingMethodRandom,
 	}
 
-	assert.True(t, shouldDispatchShadow(req, info, fixedRandomBucket(39)))
-	assert.False(t, shouldDispatchShadow(req, info, fixedRandomBucket(40)))
+	assert.Len(t, admittedShadows(req, []shadowConfig{shadow}, fixedRandomBucket(39)), 1)
+	assert.Empty(t, admittedShadows(req, []shadowConfig{shadow}, fixedRandomBucket(40)))
 }
 
-func TestShouldDispatchShadowPerBearerKeyNormalizesBearerScheme(t *testing.T) {
+func TestAdmittedShadowsPerBearerKeyNormalizesBearerScheme(t *testing.T) {
 	tests := []string{
 		"Bearer test-key",
 		"bearer test-key",
@@ -408,15 +408,34 @@ func TestShouldDispatchShadowPerBearerKeyNormalizesBearerScheme(t *testing.T) {
 		t.Run(authorization, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{}`))
 			req.Header.Set("Authorization", authorization)
-			info := FunctionInfo{
-				shadowModelNames:     []string{"private/facebook/opt-125m-shadow"},
-				shadowPercentage:     47,
-				shadowSamplingMethod: config.ShadowSamplingMethodPerBearerKey,
+			shadow := shadowConfig{
+				modelName:      "private/facebook/opt-125m-shadow",
+				percentage:     47,
+				samplingMethod: config.ShadowSamplingMethodPerBearerKey,
 			}
 
-			assert.True(t, shouldDispatchShadow(req, info, fixedRandomBucket(99)))
+			assert.Len(t, admittedShadows(req, []shadowConfig{shadow}, fixedRandomBucket(99)), 1)
 		})
 	}
+}
+
+func TestAdmittedShadowsAppliesEachPolicyWithSharedRequestBuckets(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{}`))
+	req.Header.Set("Authorization", "Bearer test-key")
+
+	randomCalls := 0
+	admitted := admittedShadows(req, []shadowConfig{
+		{modelName: "key-in", percentage: 47, samplingMethod: config.ShadowSamplingMethodPerBearerKey},
+		{modelName: "key-out", percentage: 46, samplingMethod: config.ShadowSamplingMethodPerBearerKey},
+		{modelName: "random-in", percentage: 40, samplingMethod: config.ShadowSamplingMethodRandom},
+		{modelName: "random-out", percentage: 39, samplingMethod: config.ShadowSamplingMethodRandom},
+	}, func() int {
+		randomCalls++
+		return 39
+	})
+
+	assert.Equal(t, []string{"key-in", "random-in"}, shadowModelNames(admitted))
+	assert.Equal(t, 1, randomCalls)
 }
 
 func TestShadowBucketForBearerCredentialFixedVector(t *testing.T) {
