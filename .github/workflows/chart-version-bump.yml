@@ -67,9 +67,15 @@ jobs:
 
       - name: Select the tag
         id: tag
+        env:
+          # Through env like every other step here. A release tag is chosen by
+          # whoever pushes it, so expanding it into the script body is the
+          # standard Actions injection shape.
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
-          tag="${{ github.event.inputs.tag || github.event.release.tag_name }}"
+          tag="${INPUT_TAG:-${RELEASE_TAG}}"
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
           # Chart releases move stack pins, which is stack-pin-bump.yml's job.
           # Everything else is a service release and is this job's business:

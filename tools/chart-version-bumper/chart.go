@@ -97,6 +97,21 @@ func PlanFor(root string, chart Entry, version string) (Plan, error) {
 		return Plan{}, fmt.Errorf("read %s: %w", valuesYAML, err)
 	}
 
+	// Agreement first. A chart may ship several images, and only the tag equal
+	// to appVersion is rewritten, so a floating tag on a different image is none
+	// of this service's business. Checking floating first refused the whole
+	// chart because a sidecar was pinned to latest.
+	for _, t := range tags {
+		if t == current {
+			return Plan{ActionBoth, "appVersion and image tag agree", current, tags}, nil
+		}
+	}
+	if len(tags) == 0 {
+		return Plan{ActionAppVersionOnly, "no image tag set", current, tags}, nil
+	}
+	// No tag agrees, so one of these is this service's image. If any of them
+	// floats there is nothing safe to rewrite: latest is not a pin, and
+	// replacing it with a version is a behaviour change rather than a bump.
 	var floats []string
 	for _, t := range tags {
 		if floating[t] {
@@ -105,14 +120,6 @@ func PlanFor(root string, chart Entry, version string) (Plan, error) {
 	}
 	if len(floats) > 0 {
 		return Plan{ActionRefuse, "image tag is floating (" + strings.Join(floats, ", ") + ")", current, tags}, nil
-	}
-	if len(tags) == 0 {
-		return Plan{ActionAppVersionOnly, "no image tag set", current, tags}, nil
-	}
-	for _, t := range tags {
-		if t == current {
-			return Plan{ActionBoth, "appVersion and image tag agree", current, tags}, nil
-		}
 	}
 	return Plan{
 		ActionRefuse,
@@ -131,6 +138,17 @@ func Apply(root string, chart Entry, version string, p Plan) error {
 	}
 	text := string(b)
 	current := appVersionRE.FindStringSubmatch(text)[2]
+
+	// Read before the first write. Writing Chart.yaml and then failing to read
+	// values.yaml leaves appVersion moved with the image tag behind, which is
+	// exactly the drift state the next run refuses.
+	var vb []byte
+	if p.Action == ActionBoth {
+		vb, err = os.ReadFile(valuesYAML)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", valuesYAML, err)
+		}
+	}
 
 	replaced := false
 	updated := appVersionRE.ReplaceAllStringFunc(text, func(line string) string {
@@ -151,10 +169,6 @@ func Apply(root string, chart Entry, version string, p Plan) error {
 	// Replace only tag lines holding the value appVersion also held. Any other
 	// tag in this file belongs to a different image, and moving it would point
 	// a sidecar at a version that was never built for it.
-	vb, err := os.ReadFile(valuesYAML)
-	if err != nil {
-		return fmt.Errorf("read %s: %w", valuesYAML, err)
-	}
 	matching := regexp.MustCompile(`(?m)^(\s+tag:\s*)"?` + regexp.QuoteMeta(current) + `"?(\s*(?:#.*)?)$`)
 	out := matching.ReplaceAllString(string(vb), fmt.Sprintf(`${1}"%s"${2}`, version))
 	return writeFilePreservingMode(valuesYAML, out)

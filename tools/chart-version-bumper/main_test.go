@@ -333,3 +333,72 @@ func repoRoot(t *testing.T) string {
 	t.Fatalf("could not find %s above the test directory", MetadataPath)
 	return ""
 }
+
+func TestFloatingTagOnAnotherImageDoesNotRefuseTheChart(t *testing.T) {
+	// Only the tag equal to appVersion is rewritten, so a sidecar pinned to
+	// latest is none of this service's business. Checking floating before
+	// agreement refused the whole chart because of an image it never touches.
+	f := newFixture(t, `{"services":[
+	 {"id":"svc","path":"src/svc"},
+	 {"id":"mixed","path":"deploy/helm/mixed","deploys":["svc"]}
+	]}`)
+	f.chart(t, "mixed", "1.0.0", "app:\n  image:\n    tag: \"1.0.0\"\nsidecar:\n  image:\n    tag: \"latest\"")
+
+	code, out, errOut := f.run(t, "src/svc/v2.0.0", true)
+	if code != 0 {
+		t.Fatalf("want a clean bump, got exit %d\n%s%s", code, out, errOut)
+	}
+	values := f.read(t, "mixed", "values.yaml")
+	if !strings.Contains(values, `    tag: "2.0.0"`) {
+		t.Fatalf("the matching tag should have moved:\n%s", values)
+	}
+	if !strings.Contains(values, `    tag: "latest"`) {
+		t.Fatalf("the floating sidecar tag must be left alone:\n%s", values)
+	}
+}
+
+func TestFloatingStillRefusesWhenNoTagAgrees(t *testing.T) {
+	// The other side of the reorder: if nothing agrees with appVersion, one of
+	// these tags is this service's image, and a floating one is not rewritable.
+	f := newFixture(t, `{"services":[
+	 {"id":"svc","path":"src/svc"},
+	 {"id":"floater","path":"deploy/helm/floater","deploys":["svc"]}
+	]}`)
+	f.chart(t, "floater", "1.0.0", "image:\n  tag: \"latest\"")
+	code, _, errOut := f.run(t, "src/svc/v2.0.0", true)
+	if code != RefusedExit {
+		t.Fatalf("want refusal, got %d", code)
+	}
+	if !strings.Contains(errOut, "image tag is floating") {
+		t.Fatalf("want the floating reason:\n%s", errOut)
+	}
+	if got := f.read(t, "floater", "values.yaml"); !strings.Contains(got, `tag: "latest"`) {
+		t.Fatalf("nothing may be written:\n%s", got)
+	}
+}
+
+func TestAMissingValuesFileLeavesChartYamlAlone(t *testing.T) {
+	// Apply reads values.yaml before writing Chart.yaml. Writing first and then
+	// failing the read leaves appVersion moved with the tag behind, which is the
+	// drift state the next run refuses: a partial write that poisons the chart.
+	f := newFixture(t, `{"services":[
+	 {"id":"svc","path":"src/svc"},
+	 {"id":"c","path":"deploy/helm/c","deploys":["svc"]}
+	]}`)
+	f.chart(t, "c", "1.0.0", "image:\n  tag: \"1.0.0\"")
+	before := f.read(t, "c", "Chart.yaml")
+	if err := os.Remove(filepath.Join(f.root, "deploy", "helm", "c", "values.yaml")); err != nil {
+		t.Fatal(err)
+	}
+
+	// With values.yaml gone the chart plans appversion-only, so force the
+	// both-file path directly to exercise the ordering.
+	chart := Entry{ID: "c", Path: "deploy/helm/c", Deploys: []string{"svc"}}
+	err := Apply(f.root, chart, "2.0.0", Plan{Action: ActionBoth, Current: "1.0.0"})
+	if err == nil {
+		t.Fatal("Apply should fail when values.yaml cannot be read")
+	}
+	if after := f.read(t, "c", "Chart.yaml"); after != before {
+		t.Fatalf("Chart.yaml was written despite the failure:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
