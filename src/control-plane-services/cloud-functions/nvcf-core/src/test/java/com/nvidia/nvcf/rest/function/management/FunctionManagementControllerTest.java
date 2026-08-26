@@ -819,6 +819,69 @@ class FunctionManagementControllerTest {
     }
 
     @Test
+    void shouldRejectUnsupportedApiBodyFormatWithGenericProblemDetail() throws JacksonException {
+        var problem = postRawCreateFunctionExpectingBadRequest("""
+                {
+                  "name": "sample-llm-function",
+                  "containerImage": "nvcr.io/example/openai-compatible:latest",
+                  "inferenceUrl": "/",
+                  "functionType": "LLM",
+                  "apiBodyFormat": "OPENAI_CHAT",
+                  "models": [
+                    {
+                      "name": "dummy-model",
+                      "llmConfig": {
+                        "uris": ["/v1/chat/completions"]
+                      }
+                    }
+                  ]
+                }
+                """);
+
+        assertThat(problem.get("detail").asString()).isEqualTo("Failed to read request");
+    }
+
+    @Test
+    void shouldPreserveGenericMalformedRequestProblemDetail() throws JacksonException {
+        var problem = postRawCreateFunctionExpectingBadRequest("{");
+
+        assertThat(problem.get("detail").asString()).isEqualTo("Failed to read request");
+    }
+
+    @ParameterizedTest
+    @CsvSource({"CUSTOM,CUSTOM", "PREDICT_V2,PREDICT_V2", "OMITTED,CUSTOM"})
+    void shouldDeserializeSupportedAndDefaultApiBodyFormats(
+            String serializedValue, String expectedValue) throws JacksonException {
+        var apiBodyFormat = serializedValue.equals("OMITTED")
+                ? ""
+                : ", \"apiBodyFormat\": \"" + serializedValue + "\"";
+        var request = jsonMapper.readValue("""
+                {
+                  "name": "sample-function",
+                  "inferenceUrl": "/",
+                  "containerImage": "nvcr.io/example/openai-compatible:latest"%s
+                }
+                """.formatted(apiBodyFormat), CreateFunctionRequest.class);
+
+        assertThat(request.getApiBodyFormat().toString()).isEqualTo(expectedValue);
+    }
+
+    private ObjectNode postRawCreateFunctionExpectingBadRequest(String requestBody)
+            throws JacksonException {
+        var token = MOCK_OAUTH2_TOKEN_SERVER.getJwt(
+                TEST_CLIENT_SUBJECT, List.of(SCOPE_REGISTER_FUNCTION), 100);
+        var requestEntity = RequestEntity.post(URI.create("/v2/nvcf/functions"))
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("Authorization", "Bearer " + token)
+                .body(requestBody);
+
+        var responseEntity = testRestTemplate.exchange(requestEntity, String.class);
+
+        assertThat(responseEntity.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        return jsonMapper.readValue(responseEntity.getBody(), ObjectNode.class);
+    }
+
+    @Test
     void shouldGetBadRequestOnInvalidUri() throws JacksonException {
         var validUri = "valid_uri";
         var invalidUri = "invalid uri";
