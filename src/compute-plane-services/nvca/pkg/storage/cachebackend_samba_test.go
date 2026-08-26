@@ -287,3 +287,56 @@ func TestSambaModelCacheResourceName_LongHandleBounded(t *testing.T) {
 	// Stable: same input yields same name.
 	assert.Equal(t, name, sambaModelCacheResourceName(long))
 }
+
+// TestEnsureNamespaceLabels_PatchesExistingNamespace verifies that
+// ensureNamespaceLabels adds missing labels to a namespace that already exists
+// without the required keys; the scenario that arises on clusters upgraded
+// from an NVCA version that did not set WorkloadInstanceTypeLabel.
+func TestEnsureNamespaceLabels_PatchesExistingNamespace(t *testing.T) {
+	ctx := context.Background()
+
+	// Existing namespace has only the managed-by label, no workload-instance-type.
+	existing := &corev1.Namespace{}
+	existing.Name = ModelCacheInitNamespace
+	existing.Labels = map[string]string{"app.kubernetes.io/managed-by": "nvca"}
+
+	c := sambaInfraClient(t, existing)
+
+	want := NewModelCacheInitNamespace()
+	require.NoError(t, ensureNamespaceLabels(ctx, c, want))
+
+	got := &corev1.Namespace{}
+	require.NoError(t, c.Get(ctx, client.ObjectKey{Name: ModelCacheInitNamespace}, got))
+	for k, v := range want.Labels {
+		assert.Equal(t, v, got.Labels[k], "label %s must be patched onto existing namespace", k)
+	}
+	// Pre-existing labels must not be removed.
+	assert.Equal(t, "nvca", got.Labels["app.kubernetes.io/managed-by"])
+}
+
+// TestEnsureNamespaceLabels_NoopWhenLabelsPresent verifies that
+// ensureNamespaceLabels is a no-op (no patch call) when all required labels
+// are already present with the correct values.
+func TestEnsureNamespaceLabels_NoopWhenLabelsPresent(t *testing.T) {
+	ctx := context.Background()
+
+	want := NewModelCacheInitNamespace()
+	existing := want.DeepCopy()
+
+	patchCount := 0
+	sch := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(sch))
+	c := fake.NewClientBuilder().
+		WithScheme(sch).
+		WithObjects(existing).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Patch: func(_ context.Context, _ client.WithWatch, _ client.Object, _ client.Patch, _ ...client.PatchOption) error {
+				patchCount++
+				return nil
+			},
+		}).
+		Build()
+
+	require.NoError(t, ensureNamespaceLabels(ctx, c, want))
+	assert.Equal(t, 0, patchCount, "Patch must not be called when all labels are already correct")
+}
