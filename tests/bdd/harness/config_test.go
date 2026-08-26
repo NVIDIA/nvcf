@@ -18,6 +18,8 @@ limitations under the License.
 package harness
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -47,5 +49,22 @@ func TestResolveConfigPopulatesEveryPath(t *testing.T) {
 		if !strings.HasPrefix(path, cfg.RepoRoot) {
 			t.Fatalf("%s not under repo root: %s", name, path)
 		}
+	}
+}
+
+func TestResolveConfigSeparatesConcurrentRuns(t *testing.T) {
+	first, err := ResolveConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := ResolveConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.OutDir == second.OutDir {
+		t.Fatalf("concurrent run directories collided: %s", first.OutDir)
+	}
+	if !strings.HasSuffix(filepath.Base(first.OutDir), fmt.Sprintf("-%d", os.Getpid())) {
+		t.Fatalf("run directory does not include process ID: %s", first.OutDir)
 	}
 }

@@ -26,6 +26,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/cucumber/godog"
@@ -37,8 +38,8 @@ import (
 // ScenarioContext holds the per-scenario state Godog hands to each
 // handler. The Suite pointer is shared across scenarios in the same
 // suite (so the Ledger and CommandCache persist); LastResult,
-// LastErr, and LastCommand are reset per scenario inside the Before
-// hook installed by RegisterAll. LastCommand tracks the resolved text
+// LastErr, LastCommand, and Deferred are reset per scenario inside the Before
+// hook installed by RegisterInstall or RegisterSmoke. LastCommand tracks the resolved text
 // of the most recent command executed in this scenario. A successful-run step
 // or an explicit "the command exit code should be 0" assertion uses it to seed
 // the suite-level CommandCache so a subsequent "Given command has succeeded:"
@@ -46,28 +47,56 @@ import (
 // command.
 type ScenarioContext struct {
 	Suite         *harness.Suite
+	Deferred      *harness.DeferredCommands
 	LastResult    harness.Result
 	LastErr       error
 	LastCommand   string
 	NVCFCLIConfig string
 }
 
+// StepRegistrar is the narrow registration surface shared by Godog and the
+// syntax-only feature catalog test.
+type StepRegistrar interface {
+	Step(expr, stepFunc interface{})
+}
+
 // NewScenarioContext wraps suite in a fresh per-scenario state. The
 // caller (typically a Godog scenario initializer) is responsible for
 // creating one ScenarioContext per scenario.
 func NewScenarioContext(suite *harness.Suite) *ScenarioContext {
-	return &ScenarioContext{Suite: suite}
+	return &ScenarioContext{
+		Suite: suite,
+		Deferred: harness.NewDeferredCommands(
+			filepath.Join(suite.Config.OutDir, "pending-compensations.sh"),
+		),
+	}
 }
 
-// RegisterAll wires every step from every category to ctx so a single
-// call from a scenario initializer hooks up the whole catalog.
-func RegisterAll(ctx *godog.ScenarioContext, sc *ScenarioContext) {
+// RegisterInstall wires the shared vocabulary plus local installation
+// bootstrap steps. Smoke suites cannot resolve those bootstrap steps.
+func RegisterInstall(ctx *godog.ScenarioContext, sc *ScenarioContext) {
+	registerScenarioHooks(ctx, sc)
+	RegisterInstallSteps(ctx, sc)
+}
+
+// RegisterSmoke wires only target-neutral operator actions and observables.
+// Target provisioning and local cluster bootstrap stay install-only.
+func RegisterSmoke(ctx *godog.ScenarioContext, sc *ScenarioContext) {
+	registerScenarioHooks(ctx, sc)
+	RegisterSmokeSteps(ctx, sc)
+}
+
+func registerScenarioHooks(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Before(func(c context.Context, _ *godog.Scenario) (context.Context, error) {
 		sc.LastResult = harness.Result{}
 		sc.LastErr = nil
 		sc.LastCommand = ""
 		sc.NVCFCLIConfig = ""
+		sc.Deferred.Reset()
 		return c, nil
+	})
+	ctx.After(func(c context.Context, _ *godog.Scenario, _ error) (context.Context, error) {
+		return c, sc.Deferred.Run(c, sc.Suite.Runner, sc.Suite.Config.CommandLogDir)
 	})
 	// Godog's default pretty formatter buffers the scenario block until
 	// every step finishes, which makes hangs invisible during a live
@@ -77,10 +106,21 @@ func RegisterAll(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 		fmt.Fprintf(os.Stderr, ">>> %s\n", st.Text)
 		return c, nil
 	})
+}
+
+// RegisterSmokeSteps registers target-neutral vocabulary without scenario
+// hooks. Syntax tests use it to detect undefined or ambiguous smoke steps.
+func RegisterSmokeSteps(ctx StepRegistrar, sc *ScenarioContext) {
 	registerFileSteps(ctx, sc)
 	registerCommandSteps(ctx, sc)
 	registerNVCFCLISteps(ctx, sc)
 	registerAssertionSteps(ctx, sc)
+}
+
+// RegisterInstallSteps adds local topology bootstrap vocabulary to the shared
+// smoke catalog.
+func RegisterInstallSteps(ctx StepRegistrar, sc *ScenarioContext) {
+	RegisterSmokeSteps(ctx, sc)
 	registerInfraSteps(ctx, sc)
 }
 

@@ -30,7 +30,7 @@ import (
 // registerAssertionSteps hooks Then/And forms that read scenario
 // state (last command result, file contents) and compare to expected
 // values from the feature file.
-func registerAssertionSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
+func registerAssertionSteps(ctx StepRegistrar, sc *ScenarioContext) {
 	ctx.Step(`^the command exit code should be (\d+)$`, sc.commandExitCodeShouldBe)
 	ctx.Step(`^the command output should contain "([^"]*)"$`, sc.commandOutputShouldContain)
 	ctx.Step(`^the command output should not contain "([^"]*)"$`, sc.commandOutputShouldNotContain)
@@ -43,6 +43,7 @@ func registerAssertionSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^yaml file "([^"]*)" should contain:$`, sc.yamlFileShouldContain)
 	ctx.Step(`^yaml file "([^"]*)" key "([^"]*)" should contain:$`, sc.yamlFileKeyShouldContain)
 	ctx.Step(`^the json output should contain rows:$`, sc.jsonOutputShouldContainRows)
+	ctx.Step(`^the JSON command output should contain:$`, sc.jsonCommandOutputShouldContain)
 	ctx.Step(`^Helm release "([^"]*)" in namespace "([^"]*)" using context "([^"]*)" should contain values:$`, sc.helmReleaseShouldContainValues)
 	ctx.Step(`^the rendered manifests in "([^"]*)" should contain:$`, sc.renderedManifestsShouldContain)
 	ctx.Step(`^the rendered manifests in "([^"]*)" under directories matching "([^"]*)" should contain:$`, sc.renderedManifestsUnderMatchingDirectoriesShouldContain)
@@ -165,6 +166,10 @@ func (sc *ScenarioContext) jsonOutputShouldContainRows(table *godog.Table) error
 		return err
 	}
 	return dsl.JSONContainsRows(sc.LastResult.Stdout, rows)
+}
+
+func (sc *ScenarioContext) jsonCommandOutputShouldContain(doc *godog.DocString) error {
+	return dsl.MatchJSONDocument(sc.LastResult.Stdout, doc.Content, dsl.MatchSubset)
 }
 
 func (sc *ScenarioContext) renderedManifestsShouldNotContain(path string, table *godog.Table) error {

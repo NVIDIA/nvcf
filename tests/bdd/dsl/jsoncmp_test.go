@@ -25,6 +25,26 @@ const helmListOutput = `[
   {"name": "api", "namespace": "nvcf", "status": "deployed"}
 ]`
 
+func TestMatchJSONDocumentContainsTypedSubset(t *testing.T) {
+	actual := `{"mode":"CordonAndDrain","configChanged":true,"count":0,"extra":"ok"}`
+	expected := `{"mode":"CordonAndDrain","configChanged":true,"count":0}`
+	if err := MatchJSONDocument(actual, expected, MatchSubset); err != nil {
+		t.Fatalf("match: %v", err)
+	}
+}
+
+func TestMatchJSONDocumentRejectsMismatchAndInvalidJSON(t *testing.T) {
+	if err := MatchJSONDocument(`{"configChanged":false}`, `{"configChanged":true}`, MatchSubset); err == nil {
+		t.Fatal("expected typed value mismatch")
+	}
+	if err := MatchJSONDocument("not json", `{}`, MatchSubset); err == nil {
+		t.Fatal("expected actual JSON parse error")
+	}
+	if err := MatchJSONDocument(`{}`, "not json", MatchSubset); err == nil {
+		t.Fatal("expected expected JSON parse error")
+	}
+}
+
 func TestJSONContainsRowsMatchesExpected(t *testing.T) {
 	rows := []map[string]string{
 		{"name": "nats", "namespace": "nats-system", "status": "deployed"},

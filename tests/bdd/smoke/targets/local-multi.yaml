@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+version: 1
+name: ncp-local-multi
+env:
+  BDD_NVCF_CLI_CONFIG: tests/bdd/fixtures/nvcf-cli-local.yaml
+  BDD_COMPUTE_KUBECONFIG: ${KUBECONFIG}
+  BDD_COMPUTE_CONTEXT: k3d-ncp-local-compute-1
+  BDD_COMPUTE_CLUSTER: ncp-local-compute-1
+  BDD_NVCA_BACKEND_NAMESPACE: nvca-operator
+  BDD_NVCA_SYSTEM_NAMESPACE: nvca-system
+  BDD_COMPUTE_REGION: us-west-1
+  BDD_WORKLOAD_GPU: H100
+  BDD_WORKLOAD_INSTANCE_TYPE: NCP.GPU.H100_1x
+  BDD_FUNCTION_IMAGE: nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/load_tester_supreme:0.0.8

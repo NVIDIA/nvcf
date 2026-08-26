@@ -1238,8 +1238,8 @@ func TestHelmReleaseTableAcceptsNameAndNamespace(t *testing.T) {
 	}
 }
 
-func TestRegisterAllRunsAFeatureFile(t *testing.T) {
-	// End-to-end smoke check that RegisterAll wires every category. A
+func TestRegisterInstallRunsAFeatureFile(t *testing.T) {
+	// End-to-end smoke check that RegisterInstall wires every category. A
 	// minimal in-memory feature is driven through a Godog TestSuite so
 	// the regex registrations and the Before hook are both exercised.
 	feature := `Feature: Smoke
@@ -1261,7 +1261,7 @@ func TestRegisterAllRunsAFeatureFile(t *testing.T) {
 	suite := godog.TestSuite{
 		Name: "smoke",
 		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
-			RegisterAll(ctx, sc)
+			RegisterInstall(ctx, sc)
 		},
 		Options: &godog.Options{
 			Format: "progress",

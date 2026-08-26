@@ -119,6 +119,8 @@ refactor in every consumer; that is a feature.
 | `When I run command:` (docstring) | Multi-line form for commands that don't fit on one line. Same recording semantics. |
 | `When I successfully run command {string}` | Single-line command that must exit 0. Preserves the command result for later output assertions and records the resolved command in the successful-command cache. |
 | `When I successfully run command:` (docstring) | Multi-line form for commands that must exit 0. Uses the same result recording, interpolation, logging, and cache semantics as the single-line form. |
+| `And after this scenario I successfully run command within {string}:` (docstring) | Interpolates and registers the visible command as bounded scenario compensation. Export dynamic identities before this step. Compensations are persisted to the run output, execute in reverse registration order after success or failure, continue past failures, and preserve product behavior in the command text. |
+| `Then within {string} this command should succeed, checking every {string}:` (docstring) | Repeats the visible command after product-level nonzero exits until it exits 0 or the visible timeout expires. Runner failures stop immediately. The successful result remains available to output assertions. |
 | `When I run command with a terminal:` (docstring) | Same as the docstring form, but stdin is attached to a pseudo-terminal so the child sees a TTY on fd 0. For commands that gate interactive-only behavior on a TTY, such as `nvcf-cli self-hosted up` (its auth-gate mints the admin token only when stdin is a terminal). No input is written; stdout and stderr are captured separately as usual. |
 | `When I export command output to environment variable {string}` | Exports the previous command's trimmed stdout under the named env var. Fails the step unless the prior command exited 0 and produced non-empty stdout. Snapshotted by the env Ledger; restored at suite teardown. |
 
@@ -158,6 +160,7 @@ original order. Repeated options and empty values are preserved.
 | `Then the command exit code should be {int}` | Last-run exit code. |
 | `Then the command output should contain {string}` | Substring match on combined stdout + stderr. |
 | `Then the command output should not contain {string}` | Negative substring match. |
+| `Then the JSON command output should contain:` (JSON docstring) | Parses the last command's stdout and the expected docstring as JSON, then requires the typed expected object fields while allowing additional actual fields. Lists remain order- and length-sensitive. |
 | `Then file {string} should exist` | |
 | `Then yaml file {string} key {string} should equal {string}` | Reads the YAML file, walks the dotted key path, compares to the value (with `${VAR}` expansion). |
 | `Then yaml file {string} key {string} should not be empty` | Same key resolution; passes if the resolved value is non-empty. Use for non-deterministic outputs (cluster IDs, identity sources) where exact-value assertions are wrong. |
@@ -206,10 +209,19 @@ them via `${VAR}` in command strings and table cells.
 | `REPO_ROOT` | `git rev-parse --show-toplevel` at suite start | Absolute path to the repo root. Required when invoking `make -C deploy/stacks/self-managed` because the Makefile's `-C` changes cwd; relative paths to fixtures from there break. |
 | `NGC_API_KEY` / `SAMPLE_NGC_ORG` / `SAMPLE_NGC_TEAM` | The operator's shell | Passed through unchanged. An environment-variable precondition step asserts they are non-empty before any scenario uses them. |
 
+The smoke runner exports every entry from its selected target's open `env` map.
+It runs each directly selected feature or expanded plan phase separately,
+restores CLI state, step-exported environment variables, and ledger-backed
+files, and resets the successful command cache between features. The harness
+copies the source CLI config and state into a unique suite session, so
+concurrent targets do not share mutable selection state. See `smoke/README.md`
+for the target, selection, and safety contracts.
+
 Feature files may also export their own env vars at runtime via
 `When I export command output to environment variable {string}`. Those
-are snapshotted by the env Ledger and restored at teardown so they do
-not leak into later test binaries in the same `go test` invocation.
+are snapshotted by the env Ledger and restored at teardown. The smoke runner
+restores them after each selected feature so they cannot become an implicit
+input to another smoke.
 The EKS Helmfile feature exports `EKS_GATEWAY_ADDR` this way from
 `kubectl get gateway` after the Gateway resource is Programmed.
 
@@ -255,8 +267,9 @@ restoration ledger:
   body, mode) in memory. Repeat writes against the same path during a
   suite do not overwrite the snapshot; only the first write records.
 - At suite teardown, the runner restores every registered path to its
-  pre-suite state. Files that did not exist before are deleted; files
-  that did are rewritten with the original bytes and mode.
+  pre-suite state. The smoke runner performs the same restoration between
+  selected feature files. Files that did not exist before are deleted;
+  files that did are rewritten with the original bytes and mode.
 - `Config.LedgerDir` (`out/<run-id>/originals/`) is reserved for an
   on-disk variant if very large fixtures ever push memory limits.
   Today the directory is created but unused.
@@ -342,16 +355,18 @@ old `tests/bdd` tree.
 
 ```
 tests/bdd/
-  features/                      (Gherkin, already committed)
   fixtures/                      (sample env + CLI config, already committed)
-  STEPS.md                       (this document)
+  PLAN.md                        (step catalog and architecture contract)
 
   harness/                       (phase 1)
     config.go                    (paths, env exports)
     runner.go                    (CommandRunner around infra.Runner)
     ledger.go                    (file restoration ledger)
     cache.go                     (command-success cache)
-    suite.go                     (lifecycle: build CLI, set env, teardown)
+    deferred.go                  (bounded scenario compensation stack)
+    eventually.go                (bounded command retry)
+    feature.go                   (one-feature Godog process mechanics)
+    suite.go                     (lifecycle, CLI state isolation, teardown)
 
   dsl/                           (phase 1)
     interp.go                    (${VAR} regex interpolation)
@@ -359,15 +374,16 @@ tests/bdd/
     jsoncmp.go                   (json output row matching)
 
   steps/                         (phase 2)
-    context.go                   (ScenarioContext + RegisterAll)
+    context.go                   (ScenarioContext + suite-specific registrars)
     file_steps.go                (I copy / I update yaml / I substitute)
     command_steps.go             (I run command / command has succeeded)
     assertion_steps.go           (exit code, output contains, file/yaml/json)
     infra_steps.go               (cluster bootstrap, image pull secret)
 
-  godog_test.go                  (phase 3 and 4: TestSingleClusterUp,
-                                  TestMultiClusterUp, TestSingleClusterHelmfile,
-                                  wiring tests with fakes)
+  install/                       (install features, cleanup policy, live runner)
+
+  smoke/                         (smoke features, targets, plans, selection,
+                                  consent, live runner)
 ```
 
 The `tests/bdd/harness` and `tests/bdd/dsl` packages are new
@@ -421,8 +437,8 @@ func NewLedger(snapshotsDir string) *Ledger
 func (l *Ledger) Snapshot(path string) error
 func (l *Ledger) RestoreAll() error
 
-// CommandCache records successful command runs keyed by the
-// pre-interpolation command text. Used by Given command has succeeded.
+// CommandCache records successful command runs keyed by fully resolved
+// command text. Used by Given command has succeeded.
 type CommandCache struct{ /* unexported */ }
 
 func NewCommandCache() *CommandCache
@@ -432,14 +448,16 @@ func (c *CommandCache) Has(commandText string) bool
 // Suite is the top-level lifecycle owner. Built once per go test
 // invocation; runs one or more feature files.
 type Suite struct {
-    Config Config
-    Runner CommandRunner
-    Ledger *Ledger
-    Cache  *CommandCache
+    Config    Config
+    Runner    CommandRunner
+    Ledger    *Ledger
+    EnvLedger *EnvLedger
+    Cache     *CommandCache
 }
 
-func NewSuite(t *testing.T) (*Suite, error) // builds nvcf-cli, sets NVCF_CLI + REPO_ROOT
-func (s *Suite) Teardown() error            // calls Ledger.RestoreAll
+func NewSuiteWithOptions(t *testing.T, options SuiteOptions) (*Suite, error)
+func (s *Suite) RestoreFeatureState() error // restores feature state and resets cache
+func (s *Suite) Teardown() error            // also restores the exact CLI state file
 ```
 
 #### dsl package
@@ -552,9 +570,11 @@ type ScenarioContext struct {
 
 func NewScenarioContext(suite *harness.Suite) *ScenarioContext
 
-// RegisterAll wires every step from every category to the godog
-// ScenarioContext. Test code calls this once per ScenarioInitializer.
-func RegisterAll(ctx *godog.ScenarioContext, sc *ScenarioContext)
+// RegisterInstall wires the shared vocabulary and local topology bootstrap.
+func RegisterInstall(ctx *godog.ScenarioContext, sc *ScenarioContext)
+
+// RegisterSmoke wires only target-neutral operator actions and observables.
+func RegisterSmoke(ctx *godog.ScenarioContext, sc *ScenarioContext)
 ```
 
 Each `*_steps.go` file holds a small registrar (`registerFileSteps`,
@@ -608,7 +628,7 @@ Acceptance:
 ### Phase 3 (MR 3): suite entry points and first feature
 
 Files:
-- `tests/bdd/godog_test.go` adds `TestSingleClusterUp` plus
+- `tests/bdd/install/install_test.go` adds `TestSingleClusterUp` plus
   `TestSingleClusterUpFeatureFileWiresToSteps`.
 - Wiring test uses a fake CommandRunner that returns canned
   exit-code-0 results so every step resolves.
@@ -617,14 +637,14 @@ Acceptance:
 - `go test ./tests/bdd -run TestSingleClusterUpFeatureFileWiresToSteps`
   passes.
 - The handler chain resolves every step in
-  `features/single-cluster-up.feature` against the registered patterns.
+  `install/features/single-cluster-up.feature` against the registered patterns.
 - `TestSingleClusterUp` is the live entry point; not run in CI but
   documented in AGENTS.md alongside the existing live invocations.
 
 ### Phase 4 (MR 4): remaining features wired
 
 Files:
-- `tests/bdd/godog_test.go` gains `TestMultiClusterUp` and
+- `tests/bdd/install/install_test.go` gains `TestMultiClusterUp` and
   `TestSingleClusterHelmfile`, plus their wiring tests.
 
 Acceptance:

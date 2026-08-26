@@ -23,6 +23,7 @@ package harness
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -50,7 +51,10 @@ func ResolveConfig() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	runID := time.Now().UTC().Format("20060102-150405")
+	// Include nanoseconds and the process ID so concurrent target runs cannot
+	// share command logs, ledgers, or the built CLI by accident.
+	now := time.Now().UTC()
+	runID := fmt.Sprintf("%s-%d-%d", now.Format("20060102-150405"), now.UnixNano(), os.Getpid())
 	outDir := filepath.Join(repoRoot, "tests", "bdd", "out", runID)
 	return Config{
 		RepoRoot:       repoRoot,

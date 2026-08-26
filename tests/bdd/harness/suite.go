@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -32,19 +33,35 @@ import (
 // environment, and exposes the Ledger, EnvLedger, and CommandCache
 // that step handlers share across scenarios.
 type Suite struct {
-	Config    Config
-	Runner    CommandRunner
-	Ledger    *Ledger
-	EnvLedger *EnvLedger
-	Cache     *CommandCache
+	Config             Config
+	CLIConfigPath      string
+	CLIStatePath       string
+	Runner             CommandRunner
+	Ledger             *Ledger
+	EnvLedger          *EnvLedger
+	Cache              *CommandCache
+	lifecycleLedger    *Ledger
+	featureStateLedger *Ledger
 }
 
-// NewSuite resolves Config, creates the run-id directory tree, builds
-// nvcf-cli into Config.CLIPath, and exports the env vars feature files
-// interpolate. The returned Suite is ready to drive a Godog scenario
-// initializer.
-func NewSuite(t *testing.T) (*Suite, error) {
+// SuiteOptions makes lifecycle side effects explicit. CLIConfigPath selects
+// the CLI state namespace. IsolateCLIState copies that config and its current
+// state into a unique session so concurrent smoke runs cannot share mutable
+// CLI selection state. BeforeStateSnapshot lets a suite run its own preparation
+// policy before the harness captures CLI state.
+type SuiteOptions struct {
+	CLIConfigPath       string
+	IsolateCLIState     bool
+	BeforeStateSnapshot func(context.Context, *Suite) error
+}
+
+// NewSuiteWithOptions builds the shared harness with explicit lifecycle
+// inputs. Callers choose their CLI state and preparation policy.
+func NewSuiteWithOptions(t *testing.T, options SuiteOptions) (*Suite, error) {
 	t.Helper()
+	if strings.TrimSpace(options.CLIConfigPath) == "" {
+		return nil, errors.New("CLI config path must not be empty")
+	}
 	cfg, err := ResolveConfig()
 	if err != nil {
 		return nil, err
@@ -64,61 +81,143 @@ func NewSuite(t *testing.T) (*Suite, error) {
 	t.Setenv("NVCF_CLI", cfg.CLIPath)
 	t.Setenv("REPO_ROOT", cfg.RepoRoot)
 	suite := &Suite{
-		Config:    cfg,
-		Runner:    runner,
-		Ledger:    NewLedger(cfg.LedgerDir),
-		EnvLedger: NewEnvLedger(),
-		Cache:     NewCommandCache(),
+		Config:          cfg,
+		CLIConfigPath:   options.CLIConfigPath,
+		Runner:          runner,
+		Ledger:          NewLedger(filepath.Join(cfg.LedgerDir, "features")),
+		EnvLedger:       NewEnvLedger(),
+		Cache:           NewCommandCache(),
+		lifecycleLedger: NewLedger(filepath.Join(cfg.LedgerDir, "lifecycle")),
 	}
-	// Pre-suite destructive cleanup (BDD_CLEANUP_MODE) runs BEFORE
-	// snapshotting the CLI state file. Rationale: any destructive
-	// mode invalidates the operator's pre-suite admin JWT (the cluster
-	// it points at is gone or the api-keys release was wiped), so
-	// snapshotting the pre-cleanup state would preserve nothing useful.
-	// Cleanup never touches ~/.nvcf-cli.<config>.state, so the snapshot
-	// taken after cleanup is the right baseline for teardown to
-	// restore. ResolveCleanupMode rejects unknown values; a typo
-	// aborts the suite before any work runs.
-	mode, err := ResolveCleanupMode()
-	if err != nil {
+	if options.BeforeStateSnapshot != nil {
+		if err := options.BeforeStateSnapshot(context.Background(), suite); err != nil {
+			return nil, err
+		}
+	}
+	if options.IsolateCLIState {
+		if err := suite.prepareIsolatedCLISession(options.CLIConfigPath); err != nil {
+			return nil, err
+		}
+	} else {
+		statePath, err := CLIStatePathForConfig(options.CLIConfigPath)
+		if err != nil {
+			return nil, err
+		}
+		suite.CLIStatePath = statePath
+	}
+	// HOME remains unchanged because k3d, kubectl, docker, and helm resolve
+	// their own configuration there. Only the exact nvcf-cli state file is
+	// ledger-backed.
+	if err := suite.snapshotCLIStateFile(suite.CLIStatePath); err != nil {
 		return nil, err
 	}
-	if err := suite.RunPreSuiteCleanup(context.Background(), mode); err != nil {
-		return nil, err
-	}
-	// nvcf-cli init writes its state file to ~/.nvcf-cli.<config-name>.state
-	// (state.NewStateManagerForConfig resolves the path under the user's
-	// home). Snapshot that path through the Ledger so teardown restores
-	// whatever the operator had before (or removes the file if it did
-	// not exist). HOME is intentionally not isolated here because k3d,
-	// kubectl, docker, and helm all resolve their config under $HOME
-	// and pointing HOME at an empty directory breaks the bootstrap
-	// Givens that bring up the cluster.
-	if err := suite.snapshotCLIStateFile("nvcf-cli-local"); err != nil {
+	if err := suite.beginFeatureCLIState(); err != nil {
 		return nil, err
 	}
 	return suite, nil
 }
 
-// snapshotCLIStateFile records the pre-suite contents of the CLI state
-// file the BDD scenarios mutate through nvcf-cli init. The contextName
-// must match the basename (sans extension) of the --config file the
-// features pass to nvcf-cli; today every feature uses
-// tests/bdd/fixtures/nvcf-cli-local.yaml, so this is hardcoded. If a
-// future feature introduces a second config, this call must be extended.
-func (s *Suite) snapshotCLIStateFile(contextName string) error {
+// CLIStatePathForConfig mirrors nvcf-cli's documented config-basename state
+// namespace so callers cannot supply a config and restore a different file.
+func CLIStatePathForConfig(configPath string) (string, error) {
+	configPath = strings.TrimSpace(configPath)
+	if configPath == "" {
+		return "", errors.New("CLI config path must not be empty")
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return fmt.Errorf("resolve home dir: %w", err)
+		return "", fmt.Errorf("resolve home dir: %w", err)
 	}
-	statePath := filepath.Join(home, fmt.Sprintf(".nvcf-cli.%s.state", contextName))
-	return s.Ledger.Snapshot(statePath)
+	contextName := filepath.Base(configPath)
+	if ext := filepath.Ext(contextName); ext != "" {
+		contextName = strings.TrimSuffix(contextName, ext)
+	}
+	if contextName == "" || contextName == "default" || contextName == ".nvcf-cli" {
+		return filepath.Join(home, ".nvcf-cli.state"), nil
+	}
+	return filepath.Join(home, fmt.Sprintf(".nvcf-cli.%s.state", contextName)), nil
 }
 
-// Teardown restores every file the Ledger tracked and every env var
-// the EnvLedger tracked. Live entry points should defer it.
+func (s *Suite) prepareIsolatedCLISession(sourceConfigPath string) error {
+	if !filepath.IsAbs(sourceConfigPath) {
+		sourceConfigPath = filepath.Join(s.Config.RepoRoot, sourceConfigPath)
+	}
+	sourceConfig, err := os.ReadFile(sourceConfigPath)
+	if err != nil {
+		return fmt.Errorf("read CLI config for isolated session: %w", err)
+	}
+	runID := filepath.Base(s.Config.OutDir)
+	isolationDir := filepath.Join(s.Config.OutDir, "cli-session")
+	if err := os.MkdirAll(isolationDir, 0o700); err != nil {
+		return fmt.Errorf("mkdir isolated CLI session: %w", err)
+	}
+	isolatedConfigPath := filepath.Join(isolationDir, "nvcf-cli-"+runID+".yaml")
+	if err := os.WriteFile(isolatedConfigPath, sourceConfig, 0o600); err != nil {
+		return fmt.Errorf("write isolated CLI config: %w", err)
+	}
+	sourceStatePath, err := CLIStatePathForConfig(sourceConfigPath)
+	if err != nil {
+		return err
+	}
+	isolatedStatePath, err := CLIStatePathForConfig(isolatedConfigPath)
+	if err != nil {
+		return err
+	}
+	s.CLIConfigPath = isolatedConfigPath
+	s.CLIStatePath = isolatedStatePath
+	if err := s.snapshotCLIStateFile(isolatedStatePath); err != nil {
+		return err
+	}
+	state, err := os.ReadFile(sourceStatePath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read CLI state for isolated session: %w", err)
+	}
+	if err := os.WriteFile(isolatedStatePath, state, 0o600); err != nil {
+		return fmt.Errorf("write isolated CLI state: %w", err)
+	}
+	return nil
+}
+
+// snapshotCLIStateFile records the exact state file selected by the suite
+// caller. The harness does not duplicate nvcf-cli's config-name-to-state-path
+// rules because those rules belong to the CLI and may change independently.
+func (s *Suite) snapshotCLIStateFile(statePath string) error {
+	return s.lifecycleLedger.Snapshot(statePath)
+}
+
+func (s *Suite) beginFeatureCLIState() error {
+	s.featureStateLedger = NewLedger(filepath.Join(s.Config.LedgerDir, "feature-cli-state"))
+	return s.featureStateLedger.Snapshot(s.CLIStatePath)
+}
+
+// RestoreFeatureState restores step-owned files, environment, and the CLI
+// state baseline, then resets the successful-command cache. One independently
+// selectable feature cannot provide selection state or cached setup to another.
+func (s *Suite) RestoreFeatureState() error {
+	if err := errors.Join(s.Ledger.RestoreAll(), s.EnvLedger.RestoreAll(), s.featureStateLedger.RestoreAll()); err != nil {
+		return err
+	}
+	s.Ledger = NewLedger(filepath.Join(s.Config.LedgerDir, "features"))
+	s.EnvLedger = NewEnvLedger()
+	s.Cache = NewCommandCache()
+	return s.beginFeatureCLIState()
+}
+
+// Teardown restores feature mutations and suite-owned CLI state. Live entry
+// points should defer it.
 func (s *Suite) Teardown() error {
-	return errors.Join(s.Ledger.RestoreAll(), s.EnvLedger.RestoreAll())
+	var featureStateErr error
+	if s.featureStateLedger != nil {
+		featureStateErr = s.featureStateLedger.RestoreAll()
+	}
+	var lifecycleErr error
+	if s.lifecycleLedger != nil {
+		lifecycleErr = s.lifecycleLedger.RestoreAll()
+	}
+	return errors.Join(s.Ledger.RestoreAll(), s.EnvLedger.RestoreAll(), featureStateErr, lifecycleErr)
 }
 
 // buildCLI invokes `go build` directly via exec.Command rather than

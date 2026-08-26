@@ -59,7 +59,7 @@ Both opt-in. Default suite behavior is unchanged.
 | `destroy-all-ncp-local` silently depends on `jq`, references a non-existent prerequisite, and hides pipe failures. | Recipe checks `command -v jq` before running. Pipeline runs under `set -o pipefail`. No `ensure-kube-config-dir` reference. Single quoted command list per step. |
 | `_clean-stack-out` uses a repo-rooted path inside a `make -C deploy/stacks/self-managed` recipe. | Path is relative to the recipe's cwd: `out/*.yaml`. |
 | Snapshotting CLI state before cleanup preserves a token that points at a cluster that cleanup destroyed. | Cleanup runs first; the state-file snapshot captures the post-cleanup baseline. For destructive modes the operator's pre-suite token is intentionally not preserved (it was invalidated by cleanup anyway). Documented in README. |
-| Verification matrix mentions a test that did not exist. | `TestMultiClusterHelmfile` is now in `godog_test.go` and shipped on the branch. |
+| Verification matrix mentions a test that did not exist. | `TestMultiClusterHelmfile` is in `install/install_test.go`. |
 | Repo style drift in the plan file itself. | This document has no bold and no em-dash characters. Plain ASCII throughout. |
 
 ## Operator surface
@@ -448,53 +448,27 @@ func cleanupCommandFor(mode CleanupMode) (string, bool) {
 }
 ```
 
-### tests/bdd/harness/suite.go (modified)
+### Shared harness integration
 
-#### Ordering inside NewSuite: cleanup first, then snapshot
+#### Cleanup first, then snapshot
 
 For destructive modes the operator's pre-suite JWT was already
 invalidated by the cleanup, so snapshotting first preserves nothing
 useful. Snapshot-after captures a meaningful baseline (the
 post-cleanup state) that the Ledger restores on teardown.
 
-```go
-func NewSuite(t *testing.T) (*Suite, error) {
-    // ... existing config + dir setup ...
-    runner := NewCommandRunner(cfg.RepoRoot, cfg.CommandLogDir)
-    if err := buildCLI(cfg); err != nil {
-        return nil, err
-    }
-    t.Setenv("NVCF_CLI", cfg.CLIPath)
-    t.Setenv("REPO_ROOT", cfg.RepoRoot)
-
-    suite := &Suite{
-        Config: cfg,
-        Runner: runner,
-        Ledger: NewLedger(cfg.LedgerDir),
-        Cache:  NewCommandCache(),
-    }
-
-    mode, err := ResolveCleanupMode()
-    if err != nil {
-        return nil, err
-    }
-    if err := suite.RunPreSuiteCleanup(context.Background(), mode); err != nil {
-        return nil, err
-    }
-
-    if err := suite.snapshotCLIStateFile("nvcf-cli-local"); err != nil {
-        return nil, err
-    }
-    return suite, nil
-}
-```
+The install runner resolves `BDD_CLEANUP_MODE`, then passes a
+`BeforeStateSnapshot` callback to `harness.NewSuiteWithOptions`. This keeps the
+ncp-local cleanup command map in `install/cleanup.go` while preserving the
+required lifecycle ordering in the shared harness. The smoke suite does not
+provide this callback and rejects `BDD_CLEANUP_MODE`.
 
 The README's cleanup section calls out the consequence: with
 `BDD_CLEANUP_MODE=topology-*`, the operator's pre-suite CLI state is
 not preserved across the run; the JWT that pointed at the now-deleted
 cluster was already useless.
 
-### tests/bdd/harness/cleanup_test.go (new file)
+### tests/bdd/install/cleanup_test.go
 
 ```go
 func TestResolveCleanupMode(t *testing.T) {
@@ -599,7 +573,8 @@ prerequisites. Contents:
 
 Add a rule block after the existing harness-level rules:
 
-- Cleanup belongs in `harness/cleanup.go`, never in `steps/`. No
+- Cleanup policy belongs in `install/cleanup.go`, never in shared `harness/`
+  or `steps/`. No
   domain-named Gherkin Given for destruction.
 - `BDD_CLEANUP_MODE` is the only env var. Unknown values fail
   the suite at start; the harness never silently downgrades to
@@ -614,11 +589,11 @@ Add a rule block after the existing harness-level rules:
 
 ## Wiring-test impact
 
-`newWiringSuite` in `godog_test.go` constructs `Suite` directly and
+`newWiringSuite` in `install/install_test.go` constructs `Suite` directly and
 does not call `NewSuite`. Cleanup never fires in wiring tests; no
 canned responses needed.
 
-`harness/cleanup_test.go` is the new unit-test surface; it stays
+`install/cleanup_test.go` is the unit-test surface; it stays
 self-contained.
 
 ## Live verification matrix
@@ -628,12 +603,12 @@ also match.
 
 | Goal | Setup | Command |
 |------|-------|---------|
-| Topology cleanup wipes stale single-cluster before multi-cluster install | `TestSingleClusterUp` left ncp-local running | `BDD_CLEANUP_MODE=topology-multi go test -run '^TestMultiClusterUp$' -timeout 60m -v` |
-| Topology cleanup wipes stale multi-cluster before single-cluster install | `TestMultiClusterUp` left ncp-local-cp + compute-1 running | `BDD_CLEANUP_MODE=topology-multi go test -run '^TestSingleClusterUp$' -timeout 30m -v` |
-| Stack cleanup allows install-method swap on a retained cluster | `TestSingleClusterUp` left CLI install on ncp-local | `BDD_CLEANUP_MODE=stack-single NGC_API_KEY=... SAMPLE_NGC_ORG=... SAMPLE_NGC_TEAM=... go test -run '^TestSingleClusterHelmfile$' -timeout 90m -v` |
-| Stack cleanup on multi-cluster, retains `eg` in `envoy-gateway-system` | `TestMultiClusterUp` left CLI install on cp+compute | `BDD_CLEANUP_MODE=stack-multi NGC_API_KEY=... SAMPLE_NGC_ORG=... SAMPLE_NGC_TEAM=... go test -run '^TestMultiClusterHelmfile$' -timeout 90m -v` |
-| Invalid mode fails suite immediately | none | `BDD_CLEANUP_MODE=stack_single go test -run '^TestSingleClusterUp$' -v` expect: `NewSuite` error citing the valid set |
-| CleanupNone default | none | `go test -run '^TestSingleClusterUp$' -timeout 30m -v` runs unchanged |
+| Topology cleanup wipes stale single-cluster before multi-cluster install | `TestSingleClusterUp` left ncp-local running | `BDD_CLEANUP_MODE=topology-multi go test ./install -run '^TestMultiClusterUp$' -timeout 60m -v` |
+| Topology cleanup wipes stale multi-cluster before single-cluster install | `TestMultiClusterUp` left ncp-local-cp + compute-1 running | `BDD_CLEANUP_MODE=topology-multi go test ./install -run '^TestSingleClusterUp$' -timeout 30m -v` |
+| Stack cleanup allows install-method swap on a retained cluster | `TestSingleClusterUp` left CLI install on ncp-local | `BDD_CLEANUP_MODE=stack-single NGC_API_KEY=... SAMPLE_NGC_ORG=... SAMPLE_NGC_TEAM=... go test ./install -run '^TestSingleClusterHelmfile$' -timeout 90m -v` |
+| Stack cleanup on multi-cluster, retains `eg` in `envoy-gateway-system` | `TestMultiClusterUp` left CLI install on cp+compute | `BDD_CLEANUP_MODE=stack-multi NGC_API_KEY=... SAMPLE_NGC_ORG=... SAMPLE_NGC_TEAM=... go test ./install -run '^TestMultiClusterHelmfile$' -timeout 90m -v` |
+| Invalid mode fails suite immediately | none | `BDD_CLEANUP_MODE=stack_single go test ./install -run '^TestSingleClusterUp$' -v` expect: suite creation error citing the valid set |
+| CleanupNone default | none | `go test ./install -run '^TestSingleClusterUp$' -timeout 30m -v` runs unchanged |
 | Make targets work standalone | populated multi-cluster | `make -C deploy/stacks/self-managed destroy-stack-multi` |
 | Make targets idempotent on empty state | nothing installed | `make -C deploy/stacks/self-managed destroy-stack-single` and `make -C tools/ncp-local-cluster destroy-all-ncp-local` both exit 0 |
 | Stack cleanup preserves `eg` | post stack-multi cleanup | `kubectl --context k3d-ncp-local-cp -n envoy-gateway-system get deployment eg` returns the deployment, not NotFound |

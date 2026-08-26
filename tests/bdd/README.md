@@ -1,8 +1,7 @@
 # tests/bdd
 
-Strict-DSL BDD suite for local self-managed NVCF workflows. Sits alongside
-the legacy `tests/bdd` while feature parity is verified; once the live runs
-are green this tree replaces it.
+Strict-DSL BDD suites for installing self-managed NVCF and exercising product
+behavior against an existing target.
 
 The contract is in `PLAN.md`. The rules for working in this directory are
 in `AGENTS.md`.
@@ -10,23 +9,19 @@ in `AGENTS.md`.
 ## Directory layout
 
 ```
-features/   Gherkin feature files: single-cluster CLI, multi-cluster CLI,
-            single/multi-cluster Helmfile (k3d), and single/multi-cluster
-            EKS Helmfile (non-local).
+install/    Provisioning and installation features, live entry points, wiring
+            tests, and ncp-local cleanup policy.
+smoke/      Attach-mode product features, targets, committed plans, selection,
+            consent, and isolated live execution. See smoke/README.md.
 fixtures/   Starting environment YAML and CLI config the features copy from.
-harness/    Suite lifecycle: Config, CommandRunner, Ledger, CommandCache,
-            Suite. Builds nvcf-cli at suite start; exports NVCF_CLI and
-            REPO_ROOT into the process env via t.Setenv.
+harness/    Shared process mechanics: run configuration, command execution,
+            ledgers, command cache, compensation recovery, CLI state isolation,
+            and one-feature Godog execution.
 dsl/        Pure helpers: ${VAR} interpolation, dotted-path YAML upsert
             and read, YAML subtree match/contain, base64 substitute, JSON
             row matching, kubectl manifest builders.
 steps/      Godog step handlers. Every handler is a thin wrapper around a
             dsl helper or CommandRunner.Run; no domain validation.
-godog_test.go
-            Live entry points (TestSingleClusterUp, TestSingleClusterUpOneClick,
-            TestMultiClusterUp, TestSingleClusterHelmfile, TestMultiClusterHelmfile,
-            TestSingleClusterEKSHelmfile, TestMultiClusterEKSHelmfile) and
-            wiring tests with a fake CommandRunner.
 .golangci.yml
 .goheader.tmpl
 go.mod / go.sum
@@ -44,9 +39,13 @@ cd tests/bdd
 go test -short ./...
 ```
 
-Live runs build nvcf-cli, bring up a real k3d cluster, and exercise the
-feature end to end. They require an NGC API key and sample registry
-coordinates.
+To run one or more smoke features against an already installed local or remote
+target, or a committed nightly collection, see `smoke/README.md`.
+
+The install-suite live runs build nvcf-cli, bring up a real k3d cluster, and
+exercise the feature end to end. They require an NGC API key and sample
+registry coordinates. The smoke live runner attaches to the target selected
+in its target file.
 
 Each `-run` argument is anchored with `^...$` so the live entry point
 runs without also matching its `...FeatureFileWiresToSteps` wiring
@@ -58,19 +57,19 @@ run look like it succeeded when nothing actually ran.
 cd tests/bdd
 
 # Single-cluster CLI feature (install --control-plane + compute-plane primitives)
-go test -run '^TestSingleClusterUp$' -timeout 30m -v
+go test ./install -run '^TestSingleClusterUp$' -timeout 30m -v
 
 # Single-cluster CLI one-click feature (nvcf-cli self-hosted up; the quickstart).
 # Shares the ncp-local topology with TestSingleClusterUp; run one at a time.
-go test -run '^TestSingleClusterUpOneClick$' -timeout 30m -v
+go test ./install -run '^TestSingleClusterUpOneClick$' -timeout 30m -v
 
 # Multi-cluster CLI feature
-go test -run '^TestMultiClusterUp$' -timeout 60m -v
+go test ./install -run '^TestMultiClusterUp$' -timeout 60m -v
 
 # Single-cluster Helmfile feature (requires NGC_API_KEY, SAMPLE_NGC_ORG,
 # SAMPLE_NGC_TEAM)
 NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
-  go test -run '^TestSingleClusterHelmfile$' -timeout 90m -v
+  go test ./install -run '^TestSingleClusterHelmfile$' -timeout 90m -v
 
 # Focused single-cluster Helmfile feature for the documented public Docker Hub
 # NATS reloader and API bootstrap Alpine Kubernetes utility image. The feature
@@ -79,14 +78,14 @@ NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
 # removes any stale single- or multi-cluster ncp-local topology first.
 BDD_CLEANUP_MODE=topology-multi \
   NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
-  go test -run '^TestSingleClusterHelmfileUpstreamImages$' -timeout 90m -v
+  go test ./install -run '^TestSingleClusterHelmfileUpstreamImages$' -timeout 90m -v
 
 # Multi-cluster Helmfile feature: control-plane install on
 # k3d-ncp-local-cp followed by compute-plane register-cluster + install
 # on k3d-ncp-local-compute-1. Same secrets as the single-cluster
 # Helmfile feature.
 NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
-  go test -run '^TestMultiClusterHelmfile$' -timeout 90m -v
+  go test ./install -run '^TestMultiClusterHelmfile$' -timeout 90m -v
 ```
 
 ### EKS Helmfile features (non-local)
@@ -102,7 +101,7 @@ cd tests/bdd
 # cluster.
 EKS_CONTEXT=<ctx> EKS_CLUSTER_NAME=<name> EKS_REGION=<region> \
   NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
-  go test -run '^TestSingleClusterEKSHelmfile$' -timeout 120m -v
+  go test ./install -run '^TestSingleClusterEKSHelmfile$' -timeout 120m -v
 
 # Multi-cluster EKS Helmfile feature: control plane on EKS_CONTEXT, then
 # register + NVCA + function and task execution on a separate compute EKS
@@ -114,7 +113,7 @@ EKS_CONTEXT=<ctx> EKS_CLUSTER_NAME=<name> EKS_REGION=<region> \
 EKS_CONTEXT=<cp-ctx> EKS_COMPUTE_CONTEXT=<compute-ctx> \
   EKS_COMPUTE_CLUSTER_NAME=<compute-name> EKS_REGION=<region> \
   NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
-  go test -run '^TestMultiClusterEKSHelmfile$' -timeout 150m -v
+  go test ./install -run '^TestMultiClusterEKSHelmfile$' -timeout 150m -v
 ```
 
 Pre-suite cleanup for the EKS features is operator-run (there is no
@@ -132,10 +131,11 @@ golangci-lint run --config .golangci.yml ./...
 
 1. Read `PLAN.md` so you know the catalog. Almost every scenario can be
    written entirely with existing steps.
-2. Write the feature file in `features/`. Stay in the user-mimicking
-   vocabulary: file ops, raw commands, output assertions.
-3. Pre-load any handoff artifacts in the matching wiring test in
-   `godog_test.go` so the assertion path has real bytes to compare.
+2. Write install workflows in `install/features/`. Write independently
+   selectable product smokes in `smoke/features/`.
+3. Pre-load install handoff artifacts in the matching wiring test in
+   `install/install_test.go` so the assertion path has real bytes to compare.
+   Smoke feature wiring is discovered automatically.
 4. If the catalog cannot express a scenario, prefer `When I run command`
    plus an output assertion over adding a new step. New step regexes
    should land in `PLAN.md` before any handler code.
@@ -224,16 +224,16 @@ Common workflows:
 # Switch CLI install -> Helmfile install on the same single cluster
 BDD_CLEANUP_MODE=stack-single \
   NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
-  go test -run '^TestSingleClusterHelmfile$' -timeout 90m -v
+  go test ./install -run '^TestSingleClusterHelmfile$' -timeout 90m -v
 
 # Switch single-cluster -> multi-cluster topology
 BDD_CLEANUP_MODE=topology-multi \
-  go test -run '^TestMultiClusterUp$' -timeout 60m -v
+  go test ./install -run '^TestMultiClusterUp$' -timeout 60m -v
 
 # Switch CLI install -> Helmfile install on the same multi-cluster topology
 BDD_CLEANUP_MODE=stack-multi \
   NGC_API_KEY=<key> SAMPLE_NGC_ORG=<org> SAMPLE_NGC_TEAM=<team> \
-  go test -run '^TestMultiClusterHelmfile$' -timeout 90m -v
+  go test ./install -run '^TestMultiClusterHelmfile$' -timeout 90m -v
 ```
 
 Governing rule:

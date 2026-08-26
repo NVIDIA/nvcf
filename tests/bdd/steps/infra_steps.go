@@ -43,7 +43,7 @@ var computeClusterRE = regexp.MustCompile(computeClusterNamePattern)
 // registerInfraSteps hooks the infrastructure-bootstrap Givens spelled out in
 // PLAN.md. Each wraps one named operator action, Make target, or composite of
 // kubectl calls. Idempotent actions are cached per suite.
-func registerInfraSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
+func registerInfraSteps(ctx StepRegistrar, sc *ScenarioContext) {
 	ctx.Step(`^a single-cluster ncp-local cluster is running$`, sc.singleClusterIsRunning)
 	ctx.Step(`^multi-cluster ncp-local compute clusters are running:$`, sc.multiClusterComputeRunning)
 	ctx.Step(`^Helm is authenticated to OCI registry "([^"]*)" using the current NGC API key$`, sc.helmIsAuthenticatedToOCIRegistry)

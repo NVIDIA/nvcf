@@ -15,9 +15,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package bdd_tmp holds the live BDD entry points and the wiring
-// tests that exercise feature files against fake collaborators.
-package bdd_tmp
+// Package install holds install-oriented live BDD entry points and wiring
+// tests that exercise provisioning features against fake collaborators.
+package install
 
 import (
 	"context"
@@ -270,7 +270,7 @@ func writeRegistrationArtifact(t *testing.T, repoRoot, stackDir, name, body stri
 }
 
 // TestSingleClusterUpFeatureFileWiresToSteps runs the live feature
-// file from tests/bdd/features against a fake CommandRunner. The
+// file from tests/bdd/install/features against a fake CommandRunner. The
 // test asserts the suite reaches the end without unresolved steps and
 // that the expected destructive command (self-hosted up) was invoked
 // at least once. Recorded call counts are intentionally not asserted
@@ -298,7 +298,7 @@ func TestSingleClusterUpFeatureFileWiresToSteps(t *testing.T) {
 	status := godog.TestSuite{
 		Name: "single-cluster-up-wiring",
 		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
-			steps.RegisterAll(ctx, sc)
+			steps.RegisterInstall(ctx, sc)
 		},
 		Options: &godog.Options{
 			Format: "progress",
@@ -341,7 +341,7 @@ func TestSingleClusterUpOneClickFeatureFileWiresToSteps(t *testing.T) {
 	status := godog.TestSuite{
 		Name: "single-cluster-up-oneclick-wiring",
 		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
-			steps.RegisterAll(ctx, sc)
+			steps.RegisterInstall(ctx, sc)
 		},
 		Options: &godog.Options{
 			Format: "pretty",
@@ -383,7 +383,7 @@ func TestMultiClusterUpFeatureFileWiresToSteps(t *testing.T) {
 	status := godog.TestSuite{
 		Name: "multi-cluster-up-wiring",
 		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
-			steps.RegisterAll(ctx, sc)
+			steps.RegisterInstall(ctx, sc)
 		},
 		Options: &godog.Options{
 			Format: "progress",
@@ -450,7 +450,7 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	status := godog.TestSuite{
 		Name: "single-cluster-helmfile-wiring",
 		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
-			steps.RegisterAll(ctx, sc)
+			steps.RegisterInstall(ctx, sc)
 		},
 		Options: &godog.Options{
 			Format: "pretty",
@@ -546,7 +546,7 @@ func TestObservabilityControlFeatureFileWiresToSteps(t *testing.T) {
 	status := godog.TestSuite{
 		Name: "observability-control-wiring",
 		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
-			steps.RegisterAll(ctx, sc)
+			steps.RegisterInstall(ctx, sc)
 		},
 		Options: &godog.Options{
 			Format: "pretty",
@@ -657,7 +657,7 @@ func TestObservabilityComputeFeatureFileWiresToSteps(t *testing.T) {
 	status := godog.TestSuite{
 		Name: "observability-compute-wiring",
 		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
-			steps.RegisterAll(ctx, sc)
+			steps.RegisterInstall(ctx, sc)
 		},
 		Options: &godog.Options{
 			Format: "pretty",
@@ -776,7 +776,7 @@ func TestObservabilityAllFeatureFileWiresToSteps(t *testing.T) {
 	status := godog.TestSuite{
 		Name: "observability-all-wiring",
 		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
-			steps.RegisterAll(ctx, sc)
+			steps.RegisterInstall(ctx, sc)
 		},
 		Options: &godog.Options{
 			Format: "pretty",
@@ -925,7 +925,7 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	status := godog.TestSuite{
 		Name: "multi-cluster-helmfile-wiring",
 		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
-			steps.RegisterAll(ctx, sc)
+			steps.RegisterInstall(ctx, sc)
 		},
 		Options: &godog.Options{
 			Format: "pretty",
@@ -1032,7 +1032,7 @@ func TestSingleClusterHelmfileUpstreamImagesFeatureFileWiresToSteps(t *testing.T
 	status := godog.TestSuite{
 		Name: "single-cluster-helmfile-upstream-images-wiring",
 		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
-			steps.RegisterAll(ctx, sc)
+			steps.RegisterInstall(ctx, sc)
 		},
 		Options: &godog.Options{
 			Format: "pretty",
@@ -1086,7 +1086,7 @@ func TestObservabilityDisabledFeatureFileWiresToSteps(t *testing.T) {
 	status := godog.TestSuite{
 		Name: "observability-disabled-wiring",
 		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
-			steps.RegisterAll(ctx, sc)
+			steps.RegisterInstall(ctx, sc)
 		},
 		Options: &godog.Options{
 			Format: "pretty",
@@ -1112,7 +1112,7 @@ func TestObservabilityDisabledFeatureFileWiresToSteps(t *testing.T) {
 
 func seedObservabilityDisabledRegistrationValuesFixture(t *testing.T, repoRoot string) {
 	t.Helper()
-	fixturePath := filepath.Join("fixtures", "ncp-local-register-values.yaml")
+	fixturePath := filepath.Join("..", "fixtures", "ncp-local-register-values.yaml")
 	body, err := os.ReadFile(fixturePath)
 	if err != nil {
 		t.Fatalf("read registration fixture %s: %v", fixturePath, err)
@@ -1471,7 +1471,7 @@ func TestSingleClusterEKSHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	status := godog.TestSuite{
 		Name: "single-cluster-eks-helmfile-wiring",
 		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
-			steps.RegisterAll(ctx, sc)
+			steps.RegisterInstall(ctx, sc)
 		},
 		Options: &godog.Options{
 			Format: "pretty",
@@ -1588,7 +1588,7 @@ func TestMultiClusterEKSHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	status := godog.TestSuite{
 		Name: "multi-cluster-eks-helmfile-wiring",
 		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
-			steps.RegisterAll(ctx, sc)
+			steps.RegisterInstall(ctx, sc)
 		},
 		Options: &godog.Options{
 			Format: "pretty",
@@ -1727,7 +1727,11 @@ func TestSingleClusterEKSHelmfile(t *testing.T) {
 	if testing.Short() {
 		t.Skip("live run skipped under -short")
 	}
-	runLiveFeature(t, "single-cluster-eks-helmfile.feature")
+	runLiveFeatureWithConfig(
+		t,
+		"single-cluster-eks-helmfile.feature",
+		filepath.Join("tests", "bdd", "out", "nvcf-cli-eks-bdd.yaml"),
+	)
 }
 
 // TestMultiClusterEKSHelmfile is the live entry point for the
@@ -1739,7 +1743,11 @@ func TestMultiClusterEKSHelmfile(t *testing.T) {
 	if testing.Short() {
 		t.Skip("live run skipped under -short")
 	}
-	runLiveFeature(t, "multi-cluster-eks-helmfile.feature")
+	runLiveFeatureWithConfig(
+		t,
+		"multi-cluster-eks-helmfile.feature",
+		filepath.Join("tests", "bdd", "out", "nvcf-cli-eks-bdd-multi.yaml"),
+	)
 }
 
 // runLiveFeature is the shared live-run path: build CLI, register
@@ -1750,13 +1758,37 @@ func runLiveFeature(t *testing.T, feature string) {
 	runLiveFeatureTags(t, feature, "")
 }
 
+func runLiveFeatureWithConfig(t *testing.T, feature, cliConfigPath string) {
+	t.Helper()
+	runLiveFeatureTagsWithConfig(t, feature, "", cliConfigPath)
+}
+
 // runLiveFeatureTags is runLiveFeature with an optional godog tag
 // expression (for example "~@skip" to exclude a scenario from the
 // live run while leaving it in the feature file for documentation and
 // for the wiring test). An empty tags string runs every scenario.
 func runLiveFeatureTags(t *testing.T, feature, tags string) {
 	t.Helper()
-	suite, err := harness.NewSuite(t)
+	runLiveFeatureTagsWithConfig(
+		t,
+		feature,
+		tags,
+		filepath.Join("tests", "bdd", "fixtures", "nvcf-cli-local.yaml"),
+	)
+}
+
+func runLiveFeatureTagsWithConfig(t *testing.T, feature, tags, cliConfigPath string) {
+	t.Helper()
+	cleanupMode, err := resolveCleanupMode()
+	if err != nil {
+		t.Fatalf("resolve cleanup: %v", err)
+	}
+	suite, err := harness.NewSuiteWithOptions(t, harness.SuiteOptions{
+		CLIConfigPath: cliConfigPath,
+		BeforeStateSnapshot: func(ctx context.Context, suite *harness.Suite) error {
+			return runPreSuiteCleanup(ctx, suite, cleanupMode)
+		},
+	})
 	if err != nil {
 		t.Fatalf("new suite: %v", err)
 	}
@@ -1767,22 +1799,13 @@ func runLiveFeatureTags(t *testing.T, feature, tags string) {
 	}()
 	sc := steps.NewScenarioContext(suite)
 	featurePath := mustResolveFeaturePath(t, feature)
-	status := godog.TestSuite{
+	harness.RunFeature(t, harness.FeatureRunOptions{
 		Name: "bdd-live-" + feature,
-		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
-			steps.RegisterAll(ctx, sc)
-		},
-		Options: &godog.Options{
-			Format:        "pretty",
-			Paths:         []string{featurePath},
-			Tags:          tags,
-			Strict:        true,
-			StopOnFailure: true,
-		},
-	}.Run()
-	if status != 0 {
-		t.Fatalf("godog suite status = %d", status)
-	}
+		Path: featurePath,
+		Tags: tags,
+	}, func(ctx *godog.ScenarioContext) {
+		steps.RegisterInstall(ctx, sc)
+	})
 }
 
 // commandRanThatContains scans the captured fake runs for a substring

@@ -31,7 +31,7 @@ import (
 // registerFileSteps hooks the file-operation handlers. Every step that
 // mutates a path under the repo working tree snapshots the destination
 // to the Ledger before its first write so suite teardown can restore.
-func registerFileSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
+func registerFileSteps(ctx StepRegistrar, sc *ScenarioContext) {
 	ctx.Step(`^I copy the file "([^"]*)" to "([^"]*)"$`, sc.iCopyFile)
 	ctx.Step(`^I update yaml file "([^"]*)" with keys:$`, sc.iUpdateYAMLFile)
 	ctx.Step(`^I prepare Helmfile environment "([^"]*)" for stack "([^"]*)" from fixture "([^"]*)" with values:$`, sc.iPrepareHelmfileEnvironment)
