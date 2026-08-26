@@ -81,7 +81,7 @@ func TestEnsureNetworkPolicies(t *testing.T) {
 	require.NoError(t, err)
 	npList1, err := k8sClient.NetworkingV1().NetworkPolicies(namespace).List(ctx, metav1.ListOptions{})
 	require.NoError(t, err)
-	assert.Len(t, npList1.Items, 7)
+	assert.Len(t, npList1.Items, 8)
 	// Try again, no errors or updates.
 	err = EnsureNetworkPoliciesFunctionNamespace(
 		ctx,
@@ -94,7 +94,7 @@ func TestEnsureNetworkPolicies(t *testing.T) {
 	require.NoError(t, err)
 	npList2, err := k8sClient.NetworkingV1().NetworkPolicies(namespace).List(ctx, metav1.ListOptions{})
 	require.NoError(t, err)
-	assert.Len(t, npList2.Items, 7)
+	assert.Len(t, npList2.Items, 8)
 
 	// Ensure with ctrl client.
 	err = EnsureNetworkPoliciesFunctionNamespace(
@@ -109,7 +109,7 @@ func TestEnsureNetworkPolicies(t *testing.T) {
 	npList1 = &netv1.NetworkPolicyList{}
 	err = crClient.List(ctx, npList1, client.InNamespace(namespace))
 	require.NoError(t, err)
-	assert.Len(t, npList1.Items, 7)
+	assert.Len(t, npList1.Items, 8)
 	// Try again, no errors or updates.
 	err = EnsureNetworkPoliciesFunctionNamespace(
 		ctx,
@@ -123,7 +123,7 @@ func TestEnsureNetworkPolicies(t *testing.T) {
 	npList2 = &netv1.NetworkPolicyList{}
 	err = crClient.List(ctx, npList2, client.InNamespace(namespace))
 	require.NoError(t, err)
-	assert.Len(t, npList2.Items, 7)
+	assert.Len(t, npList2.Items, 8)
 
 	// No caching namespaces
 	k8sClient = k8sfake.NewSimpleClientset()
@@ -141,7 +141,7 @@ func TestEnsureNetworkPolicies(t *testing.T) {
 	require.NoError(t, err)
 	npList1, err = k8sClient.NetworkingV1().NetworkPolicies(namespace).List(ctx, metav1.ListOptions{})
 	require.NoError(t, err)
-	assert.Len(t, npList1.Items, 6)
+	assert.Len(t, npList1.Items, 7)
 
 	// Ensure with ctrl client.
 	err = EnsureNetworkPoliciesFunctionNamespace(
@@ -156,7 +156,7 @@ func TestEnsureNetworkPolicies(t *testing.T) {
 	npList1 = &netv1.NetworkPolicyList{}
 	err = crClient.List(ctx, npList1, client.InNamespace(namespace))
 	require.NoError(t, err)
-	assert.Len(t, npList1.Items, 6)
+	assert.Len(t, npList1.Items, 7)
 
 	// No feature flags.
 	featureFlagFetcher.EnabledFFs = nil
@@ -175,7 +175,7 @@ func TestEnsureNetworkPolicies(t *testing.T) {
 	require.NoError(t, err)
 	npList1, err = k8sClient.NetworkingV1().NetworkPolicies(namespace).List(ctx, metav1.ListOptions{})
 	require.NoError(t, err)
-	assert.Len(t, npList1.Items, 3)
+	assert.Len(t, npList1.Items, 4)
 
 	// Ensure with ctrl client.
 	err = EnsureNetworkPoliciesFunctionNamespace(
@@ -190,15 +190,17 @@ func TestEnsureNetworkPolicies(t *testing.T) {
 	npList1 = &netv1.NetworkPolicyList{}
 	err = crClient.List(ctx, npList1, client.InNamespace(namespace))
 	require.NoError(t, err)
-	assert.Len(t, npList1.Items, 3)
+	assert.Len(t, npList1.Items, 4)
 }
 
-// TestEnsureNetworkPoliciesDoesNotOpenIntraNamespaceAccess is a regression
-// test: allow-ingress-monitoring must not gain a same-namespace ingress
-// rule, and allow-egress-intra-namespace must not be created. Together
-// those two used to let any pod in a function namespace reach any other
-// pod in that namespace on any port.
-func TestEnsureNetworkPoliciesDoesNotOpenIntraNamespaceAccess(t *testing.T) {
+// TestEnsureNetworkPoliciesFunctionNamespaceAllowsIntraNamespaceAccess
+// verifies that function namespaces (one MiniService/Helm release per
+// namespace, single-tenant) still get the same-namespace ingress rule on
+// allow-ingress-monitoring and the allow-egress-intra-namespace policy. This
+// is required so a MiniService's utils pod can reach its own inference pod
+// running in a different pod in the same namespace; it's safe because only
+// one tenant's pods ever live in a function namespace.
+func TestEnsureNetworkPoliciesFunctionNamespaceAllowsIntraNamespaceAccess(t *testing.T) {
 	featureFlagFetcher := &featureflagmock.Fetcher{}
 	ctx := context.Background()
 	namespace := "test-namespace"
@@ -217,34 +219,32 @@ func TestEnsureNetworkPoliciesDoesNotOpenIntraNamespaceAccess(t *testing.T) {
 
 	ingressNP, err := k8sClient.NetworkingV1().NetworkPolicies(namespace).Get(ctx, MonitoringIngressNetworkPolicyName, metav1.GetOptions{})
 	require.NoError(t, err)
-	require.Len(t, ingressNP.Spec.Ingress, 1, "allow-ingress-monitoring should only have the ConfigMap-defined rule")
-	assert.Equal(t, "bar", ingressNP.Spec.Ingress[0].From[0].NamespaceSelector.MatchLabels["foo"])
+	require.Len(t, ingressNP.Spec.Ingress, 2, "allow-ingress-monitoring should have the ConfigMap-defined rule plus the same-namespace rule")
+	sameNSRule := ingressNP.Spec.Ingress[1]
+	require.Len(t, sameNSRule.From, 1)
+	assert.Equal(t, namespace, sameNSRule.From[0].NamespaceSelector.MatchLabels[K8sNameLabelKey])
 
-	_, err = k8sClient.NetworkingV1().NetworkPolicies(namespace).Get(ctx, AllowEgressIntraNamespaceNetworkPolicyName, metav1.GetOptions{})
-	require.Error(t, err)
-	assert.True(t, apierrors.IsNotFound(err), "allow-egress-intra-namespace should not be created")
+	egressNP, err := k8sClient.NetworkingV1().NetworkPolicies(namespace).Get(ctx, AllowEgressIntraNamespaceNetworkPolicyName, metav1.GetOptions{})
+	require.NoError(t, err, "allow-egress-intra-namespace should be created for function namespaces")
+	require.Len(t, egressNP.Spec.Egress, 1)
+	require.Len(t, egressNP.Spec.Egress[0].To, 1)
+	assert.Equal(t, namespace, egressNP.Spec.Egress[0].To[0].NamespaceSelector.MatchLabels[K8sNameLabelKey])
 }
 
-// TestEnsureNetworkPoliciesCleansUpLegacyIntraNamespaceEgressPolicy verifies
-// that a leftover allow-egress-intra-namespace policy from a pre-fix
-// reconcile gets deleted on the next reconcile, so already affected
-// namespaces self-heal rather than staying open forever.
-func TestEnsureNetworkPoliciesCleansUpLegacyIntraNamespaceEgressPolicy(t *testing.T) {
+// TestEnsureNetworkPoliciesSharedPodInstanceNamespaceDoesNotAllowIntraNamespaceAccess
+// is a regression test: the namespace shared across every
+// container-function tenant (nvcf-backend) must not get the same-namespace
+// ingress rule on allow-ingress-monitoring, and must never get
+// allow-egress-intra-namespace. Combined, those two would let one tenant's
+// pod reach another tenant's pod on any port.
+func TestEnsureNetworkPoliciesSharedPodInstanceNamespaceDoesNotAllowIntraNamespaceAccess(t *testing.T) {
 	featureFlagFetcher := &featureflagmock.Fetcher{}
 	ctx := context.Background()
-	namespace := "test-namespace"
+	namespace := "nvcf-backend"
 	npCM := newNetworkPolicyConfigMap("nvca-system")
-	k8sClient := k8sfake.NewSimpleClientset(&netv1.NetworkPolicy{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      AllowEgressIntraNamespaceNetworkPolicyName,
-			Namespace: namespace,
-		},
-		Spec: netv1.NetworkPolicySpec{
-			PolicyTypes: []netv1.PolicyType{netv1.PolicyTypeEgress},
-		},
-	})
+	k8sClient := k8sfake.NewSimpleClientset()
 
-	err := EnsureNetworkPoliciesFunctionNamespace(
+	err := EnsureNetworkPoliciesSharedPodInstanceNamespace(
 		ctx,
 		namespace,
 		npCM.Data,
@@ -254,9 +254,14 @@ func TestEnsureNetworkPoliciesCleansUpLegacyIntraNamespaceEgressPolicy(t *testin
 	)
 	require.NoError(t, err)
 
+	ingressNP, err := k8sClient.NetworkingV1().NetworkPolicies(namespace).Get(ctx, MonitoringIngressNetworkPolicyName, metav1.GetOptions{})
+	require.NoError(t, err)
+	require.Len(t, ingressNP.Spec.Ingress, 1, "allow-ingress-monitoring should only have the ConfigMap-defined rule")
+	assert.Equal(t, "bar", ingressNP.Spec.Ingress[0].From[0].NamespaceSelector.MatchLabels["foo"])
+
 	_, err = k8sClient.NetworkingV1().NetworkPolicies(namespace).Get(ctx, AllowEgressIntraNamespaceNetworkPolicyName, metav1.GetOptions{})
 	require.Error(t, err)
-	assert.True(t, apierrors.IsNotFound(err), "leftover allow-egress-intra-namespace should be deleted on reconcile")
+	assert.True(t, apierrors.IsNotFound(err), "allow-egress-intra-namespace should not be created for the shared pod instance namespace")
 }
 
 // TestEnsureNetworkPoliciesSharedPodInstanceNamespaceDoesNotDeleteUnownedPolicy
@@ -335,7 +340,7 @@ func TestEnsureNetworkPoliciesWithCustomPolicies(t *testing.T) {
 	require.NoError(t, err)
 
 	// Should have standard policies + custom policies
-	assert.Len(t, npList.Items, 9) // 7 standard + 2 custom
+	assert.Len(t, npList.Items, 10) // 8 standard + 2 custom
 
 	// Check that custom policies have the correct label
 	customPolicyCount := 0
@@ -394,7 +399,7 @@ func TestEnsureNetworkPoliciesCustomPolicyPruning(t *testing.T) {
 	// Verify custom policies exist
 	npList, err := k8sClient.NetworkingV1().NetworkPolicies(namespace).List(ctx, metav1.ListOptions{})
 	require.NoError(t, err)
-	assert.Len(t, npList.Items, 9) // 7 standard + 2 custom
+	assert.Len(t, npList.Items, 10) // 8 standard + 2 custom
 
 	// Now create a configmap without custom policies
 	npCMNoCustom := newNetworkPolicyConfigMap("nvca-system")
@@ -423,7 +428,7 @@ func TestEnsureNetworkPoliciesCustomPolicyPruning(t *testing.T) {
 	// Verify custom policies were pruned
 	npListAfter, err := k8sClient.NetworkingV1().NetworkPolicies(namespace).List(ctx, metav1.ListOptions{})
 	require.NoError(t, err)
-	assert.Len(t, npListAfter.Items, 7) // Only standard policies remain
+	assert.Len(t, npListAfter.Items, 8) // Only standard policies remain
 
 	// Verify no custom policies exist
 	for _, np := range npListAfter.Items {
@@ -761,7 +766,7 @@ func TestEnsureNetworkPoliciesCustomPolicyNameOverride(t *testing.T) {
 	require.NoError(t, err)
 
 	// Should have standard policies + custom policies
-	assert.Len(t, npList.Items, 8) // 7 standard + 1 custom
+	assert.Len(t, npList.Items, 9) // 8 standard + 1 custom
 
 	// Verify the custom policy has the key name, not the YAML name
 	customPolicyFound := false
@@ -823,7 +828,7 @@ func TestPruneCustomNetworkPoliciesWithCRClient(t *testing.T) {
 	npList := &netv1.NetworkPolicyList{}
 	err = crClient.List(ctx, npList, client.InNamespace(namespace))
 	require.NoError(t, err)
-	assert.Len(t, npList.Items, 9) // 7 standard + 2 custom
+	assert.Len(t, npList.Items, 10) // 8 standard + 2 custom
 
 	// Now create a configmap without custom policies
 	npCMNoCustom := newNetworkPolicyConfigMap("nvca-system")
@@ -843,7 +848,7 @@ func TestPruneCustomNetworkPoliciesWithCRClient(t *testing.T) {
 	npListAfter := &netv1.NetworkPolicyList{}
 	err = crClient.List(ctx, npListAfter, client.InNamespace(namespace))
 	require.NoError(t, err)
-	assert.Len(t, npListAfter.Items, 7) // Only standard policies remain
+	assert.Len(t, npListAfter.Items, 8) // Only standard policies remain
 
 	// Verify no custom policies exist
 	for _, np := range npListAfter.Items {
@@ -954,8 +959,8 @@ spec:
 	err = crClient.List(ctx, npList, client.InNamespace(namespace))
 	require.NoError(t, err)
 
-	// Should have: 7 standard policies + 1 new custom policy + 1 standard policy we created manually
-	assert.Len(t, npList.Items, 9)
+	// Should have: 8 standard policies + 1 new custom policy + 1 standard policy we created manually
+	assert.Len(t, npList.Items, 10)
 
 	// Verify old custom policies were pruned
 	oldCustomPolicy1Exists := false
