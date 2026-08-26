@@ -53,7 +53,15 @@ fi
 # instead of hiding behind the other four.
 assert_image_count() {
   local manifest="$1" expected_image="$2" expected_count="$3" label="$4" actual_count
-  actual_count="$(grep -cF "image: ${expected_image}" "${manifest}" || true)"
+  # awk, not grep -F: grep matches by substring, so an unexpected tag like
+  # "3.2.11-hotfix" would still count as a match for "3.2.11" and mask a
+  # regression. Require the full image field to equal expected_image.
+  actual_count="$(
+    awk -v expected="${expected_image}" '
+      $1 == "image:" && $2 == expected { count++ }
+      END { print count + 0 }
+    ' "${manifest}"
+  )"
   if [[ "${actual_count}" -ne "${expected_count}" ]]; then
     echo "expected ${expected_count} occurrence(s) of '${expected_image}' in the ${label} manifest, got ${actual_count}" >&2
     exit 1
