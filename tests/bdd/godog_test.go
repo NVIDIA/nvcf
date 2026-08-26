@@ -896,6 +896,21 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 			ExitCode: 0,
 			Stdout:   "Function invocation completed!\n\nResponse:\n{\"message\":\"bdd-grpc-echo\"}\n",
 		},
+		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke" +
+			" --inference-url /v1/chat/completions --model-name openai-compatible-sample" +
+			" --request-body '{\"messages\":[{\"role\":\"user\",\"content\":\"bdd-multi-llm-echo\"}]}' --timeout 120": {
+			ExitCode: 0,
+			Stdout: "Function invocation completed!\n\nResponse:\n" +
+				`{"object":"chat.completion","choices":[{"message":{"content":"This is a fixed 128-byte response for routing and contract validation, not token-generation capacity."}}]}` +
+				"\n",
+		},
+		`curl -s --connect-timeout 5 --max-time 30 -o /dev/null -w "%{http_code}" -X POST ` +
+			`http://llm.localhost:8080/v1/chat/completions -H "Content-Type: application/json" ` +
+			`-H "traceparent: 00-00000000000000000000000000001019-0000000000001019-01" ` +
+			`-d '{"model":"unauthenticated/check","messages":[]}'`: {
+			ExitCode: 0,
+			Stdout:   "401",
+		},
 		taskSmokeCommand: {
 			ExitCode: 0,
 			Stdout:   "Task bdd-nvct-task-smoke status: COMPLETED\n",
@@ -991,13 +1006,37 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		"--description bdd-grpc-load-tester-supreme") {
 		t.Fatal("gRPC sample function API key was not generated for the function service")
 	}
+	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
+		"function create --name bdd-multi-openai-compatible-sample",
+		"nvcf-openai-compatible-sample:local",
+		"--function-type LLM",
+		"--llm-model") {
+		t.Fatal("multi-cluster LLM sample function was not created with the LLM function type and model config")
+	}
+	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "function invoke --inference-url /v1/chat/completions --model-name openai-compatible-sample") {
+		t.Fatal("multi-cluster LLM function invoke CLI command was never invoked")
+	}
+	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
+		"api-key generate --for function",
+		"--description bdd-multi-openai-compatible-sample") {
+		t.Fatal("multi-cluster LLM sample function API key was not generated for the function service")
+	}
+	cleanupCount := 0
+	for _, command := range suite.Runner.(*fakeRunner).runs {
+		if strings.Contains(command, "function delete --deployment-only") {
+			cleanupCount++
+		}
+	}
+	if cleanupCount != 3 {
+		t.Fatalf("function deployment cleanup commands = %d, want 3", cleanupCount)
+	}
 	if commandRanThatContains(suite.Runner.(*fakeRunner).runs, "api-key generate --description bdd-nvct-task-smoke") {
 		t.Fatal("NVCT task smoke should not use nvcf-cli api-key generate because it emits function resources")
 	}
 	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, taskSmokeCommand) {
 		t.Fatal("NVCT task API smoke script was not invoked with the local instance type")
 	}
-	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 2)
+	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 3)
 }
 
 // TestSingleClusterHelmfileUpstreamImagesFeatureFileWiresToSteps runs the
