@@ -44,7 +44,11 @@ if [[ -n "${actual_tag}" ]]; then
   exit 1
 fi
 
-yq eval -i '.version = "3.2.11"' "${chart_root}/nvca-operator/Chart.yaml"
+# Chart version deliberately differs from the operator version here, mirroring
+# a chart-only republish (EGX_NVCA_OPERATOR_CHART_VERSION override in the
+# byocdev job). The image tag must follow appVersion, not this field, or a
+# chart-only republish would point at an operator image that was never built.
+yq eval -i '.version = "3.2.11-chart-only-1"' "${chart_root}/nvca-operator/Chart.yaml"
 manifest="${tmp_dir}/manifest.yaml"
 helm template nvca-operator "${chart_root}/nvca-operator" \
   --set-string image.repository=registry.example.test/nvca-operator \
@@ -54,8 +58,40 @@ helm template nvca-operator "${chart_root}/nvca-operator" \
   > "${manifest}"
 
 if ! grep -Fq 'image: registry.example.test/nvca-operator:3.2.11' "${manifest}"; then
-  echo "expected image.tag to fall back to the chart version" >&2
+  echo "expected image.tag to fall back to appVersion (3.2.11), not the chart version (3.2.11-chart-only-1)" >&2
+  exit 1
+fi
+if grep -Fq 'image: registry.example.test/nvca-operator:3.2.11-chart-only-1' "${manifest}"; then
+  echo "image.tag fell back to the chart version instead of appVersion -- this is the reuse-values hazard this test guards against" >&2
   exit 1
 fi
 
-echo "vendor_chart_image_tag_test.sh keeps image.tag empty for chart-version fallback"
+# Regression test: `helm upgrade --reuse-values` carries the
+# previous release's fully-resolved values.yaml forward, but never the
+# previous release's Chart.yaml. Simulating a prior release that reused an
+# empty image.tag (the only value this chart ever ships) must still resolve
+# through the new chart's appVersion, proving the fallback survives upgrades,
+# not just fresh installs.
+reused_values="${tmp_dir}/reused-values.yaml"
+cat > "${reused_values}" <<'EOF'
+image:
+  tag: ""
+clusterValidator:
+  image:
+    tag: ""
+EOF
+reuse_manifest="${tmp_dir}/reuse-manifest.yaml"
+helm template nvca-operator "${chart_root}/nvca-operator" \
+  --set-string image.repository=registry.example.test/nvca-operator \
+  --set-string selfManaged.icmsServiceURL=http://icms.example.invalid:8080 \
+  --set-string selfManaged.revalServiceURL=http://reval.example.invalid:8080 \
+  --set-string selfManaged.natsURL=nats://nats.example.invalid:4222 \
+  --values "${reused_values}" \
+  > "${reuse_manifest}"
+
+if ! grep -Fq 'image: registry.example.test/nvca-operator:3.2.11' "${reuse_manifest}"; then
+  echo "expected a --reuse-values upgrade to still resolve image.tag through appVersion" >&2
+  exit 1
+fi
+
+echo "vendor_chart_image_tag_test.sh keeps image.tag empty for appVersion fallback, including across --reuse-values upgrades"
