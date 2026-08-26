@@ -346,7 +346,7 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
       # topology. Only the status code is captured for a stable assertion.
       When I run command:
         """
-        curl -s -o /dev/null -w "%{http_code}" -X POST http://llm.localhost:8080/v1/chat/completions -H "Content-Type: application/json" -d '{"model":"unauthenticated/check","messages":[]}'
+        curl -s --connect-timeout 5 --max-time 30 -o /dev/null -w "%{http_code}" -X POST http://llm.localhost:8080/v1/chat/completions -H "Content-Type: application/json" -H "traceparent: 00-00000000000000000000000000001019-0000000000001019-01" -d '{"model":"unauthenticated/check","messages":[]}'
         """
       Then the command exit code should be 0
       And the command output should contain "401"
