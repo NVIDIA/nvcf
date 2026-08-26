@@ -222,7 +222,7 @@ agent:
   ## @param agent.byooOtelCollector.imageTag BYOO OpenTelemetry Collector image tag.
   byooOtelCollector:
     imageRepository: ""
-    imageTag: "0.157.0-nv-0.1.1"
+    imageTag: "0.157.0-nv-0.2.1"
   ## Environment variable overrides for function workloads.
   ## Available keys: INIT_CONTAINER, UTILS_CONTAINER, OTEL_CONTAINER, BYOO_OTEL_COLLECTOR_CONTAINER,
   ##                 NICLLS_CONTAINER, ESS_AGENT_CONTAINER, INFERENCE_CONTAINER
