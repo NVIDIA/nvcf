@@ -28,7 +28,7 @@ use crate::common::{
 };
 use axum::body::Body;
 use axum::extract::State;
-use axum::http::{HeaderMap, Response};
+use axum::http::Response;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures::Stream;
@@ -41,9 +41,9 @@ use pylon_lib::{
 };
 use stargate::routing::RoutingTargetKey;
 use stargate::test_support::StargateState;
-use stargate_proto::{dynamo_frontend_stats as stats_proto, pb::InferenceServerStatus};
+use stargate_proto::{dynamo_kv_dc_relay as stats_proto, pb::InferenceServerStatus};
 use tokio::net::TcpListener;
-use tokio::sync::{broadcast, watch};
+use tokio::sync::watch;
 
 #[tokio::test]
 async fn end_to_end_registration_and_proxy() {
@@ -496,7 +496,6 @@ async fn reverse_tunnel_handshake_rejects_non_reverse_instance_id() {
 #[derive(Clone)]
 struct EngineStatsState {
     model: String,
-    stats_tx: broadcast::Sender<stats_proto::StatsUpdate>,
     connected_tx: watch::Sender<bool>,
 }
 
@@ -511,18 +510,16 @@ async fn start_engine_stats_inst(
 ) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let (stats_tx, _) = broadcast::channel(16);
     let (connected_tx, connected_rx) = watch::channel(false);
     let state = EngineStatsState {
         model: model.to_string(),
-        stats_tx,
         connected_tx,
     };
-    let grpc = tonic::service::Routes::new(
-        stats_proto::frontend_stats_server::FrontendStatsServer::new(EngineStatsGrpc {
+    let grpc = tonic::service::Routes::new(stats_proto::kv_dc_relay_server::KvDcRelayServer::new(
+        EngineStatsGrpc {
             state: state.clone(),
-        }),
-    )
+        },
+    ))
     .into_axum_router();
     let app = Router::new()
         .route("/v1/chat/completions", post(engine_stats_chat))
@@ -544,7 +541,6 @@ async fn start_engine_stats_inst(
 }
 
 async fn engine_stats_chat(
-    headers: HeaderMap,
     State(state): State<EngineStatsState>,
     Json(req): Json<ChatRequest>,
 ) -> Response<Body> {
@@ -555,13 +551,7 @@ async fn engine_stats_chat(
             .unwrap();
     }
 
-    let request_id = headers
-        .get("x-request-id")
-        .and_then(|value| value.to_str().ok())
-        .expect("test proxy should send x-request-id");
     let model = state.model.clone();
-    send_engine_stats_event(&state.stats_tx, request_id, &model, Some(1), Some(0), false);
-    send_engine_stats_event(&state.stats_tx, request_id, &model, Some(1), Some(2), true);
 
     let data_chunk = format!(
         r#"{{"object":"chat.completion.chunk","model":"{model}","choices":[{{"delta":{{"content":"Hello from engine stats"}}}}]}}"#
@@ -578,71 +568,131 @@ data: [DONE]\n\n"
         .unwrap()
 }
 
-fn send_engine_stats_event(
-    tx: &broadcast::Sender<stats_proto::StatsUpdate>,
-    request_id: &str,
-    model: &str,
-    tokens_processed: Option<u64>,
-    tokens_generated: Option<u64>,
-    finished: bool,
-) {
-    let _ = tx.send(stats_proto::StatsUpdate {
-        update: Some(stats_proto::stats_update::Update::RequestStats(
-            stats_proto::RequestStats {
-                request_id: request_id.to_string(),
-                model: model.to_string(),
-                tokens_processed,
-                tokens_generated,
-                finished,
-            },
-        )),
-    });
-}
-
 #[derive(Clone)]
 struct EngineStatsGrpc {
     state: EngineStatsState,
 }
 
 #[tonic::async_trait]
-impl stats_proto::frontend_stats_server::FrontendStats for EngineStatsGrpc {
-    type WatchStatsStream =
-        Pin<Box<dyn Stream<Item = Result<stats_proto::StatsUpdate, tonic::Status>> + Send>>;
-    type WatchKvPlacementsStream =
-        Pin<Box<dyn Stream<Item = Result<stats_proto::KvPlacementUpdate, tonic::Status>> + Send>>;
+impl stats_proto::kv_dc_relay_server::KvDcRelay for EngineStatsGrpc {
+    type WatchKvCuckooFilterStream = Pin<
+        Box<dyn Stream<Item = Result<stats_proto::KvCuckooFilterUpdate, tonic::Status>> + Send>,
+    >;
+    type WatchKvUsageStream =
+        Pin<Box<dyn Stream<Item = Result<stats_proto::KvUsageSnapshot, tonic::Status>> + Send>>;
+    type WatchLoadStream =
+        Pin<Box<dyn Stream<Item = Result<stats_proto::LoadSnapshot, tonic::Status>> + Send>>;
 
-    async fn watch_stats(
+    async fn watch_kv_cuckoo_filter(
         &self,
-        _request: tonic::Request<stats_proto::WatchStatsRequest>,
-    ) -> Result<tonic::Response<Self::WatchStatsStream>, tonic::Status> {
-        let _ = self.state.connected_tx.send(true);
-        let mut events = self.state.stats_tx.subscribe();
+        _request: tonic::Request<()>,
+    ) -> Result<tonic::Response<Self::WatchKvCuckooFilterStream>, tonic::Status> {
+        Err(tonic::Status::unimplemented(
+            "the Pylon integration fixture does not model CKF data",
+        ))
+    }
+
+    async fn watch_kv_usage(
+        &self,
+        _request: tonic::Request<()>,
+    ) -> Result<tonic::Response<Self::WatchKvUsageStream>, tonic::Status> {
+        let model = self.state.model.clone();
         let stream = async_stream::stream! {
-            yield Ok(stats_proto::StatsUpdate {
-                update: Some(stats_proto::stats_update::Update::KvStats(
-                    stats_proto::KvStatsSnapshot {
-                        snapshot_id: 1,
-                        observed_at_unix_ms: 1,
-                        models: Vec::new(),
-                    },
-                )),
-            });
             loop {
-                match events.recv().await {
-                    Ok(event) => yield Ok(event),
-                    Err(broadcast::error::RecvError::Lagged(_)) => break,
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
+                yield Ok(stats_proto::KvUsageSnapshot {
+                    metadata: Some(relay_metadata()),
+                    pools: vec![stats_proto::PoolKvUsage {
+                        pool: Some(stats_pool_identity()),
+                        models: vec![stats_model_registration(&model)],
+                        role: stats_proto::WorkerRole::Aggregated as i32,
+                        block_size_tokens: 1,
+                        expected_ranks: 1,
+                        observed_ranks: 1,
+                        capacity_blocks: Some(1_000),
+                        used_blocks: Some(400),
+                        status: stats_proto::DataStatus::Complete as i32,
+                        source_observed_at_unix_ms: 1,
+                    }],
+                });
+                tokio::time::sleep(Duration::from_millis(100)).await;
             }
         };
         Ok(tonic::Response::new(Box::pin(stream)))
     }
 
-    async fn watch_kv_placements(
+    async fn watch_load(
         &self,
-        _request: tonic::Request<stats_proto::WatchKvPlacementsRequest>,
-    ) -> Result<tonic::Response<Self::WatchKvPlacementsStream>, tonic::Status> {
-        Err(tonic::Status::unimplemented("placements are not used here"))
+        _request: tonic::Request<()>,
+    ) -> Result<tonic::Response<Self::WatchLoadStream>, tonic::Status> {
+        let _ = self.state.connected_tx.send(true);
+        let model = self.state.model.clone();
+        let stream = async_stream::stream! {
+            loop {
+                yield Ok(stats_proto::LoadSnapshot {
+                    metadata: Some(relay_metadata()),
+                    window_ms: 1_000,
+                    pools: vec![stats_proto::PoolLoad {
+                        pool: Some(stats_pool_identity()),
+                        role: stats_proto::WorkerRole::Aggregated as i32,
+                        live_workers: Some(1),
+                        active_prefill_tokens: Some(17),
+                        active_decode_blocks: Some(3),
+                        max_concurrency: Some(8),
+                        scheduler_status: stats_proto::DataStatus::Complete as i32,
+                        scheduler_observed_at_unix_ms: 1,
+                    }],
+                    models: vec![stats_proto::ModelLoad {
+                        model: Some(stats_model_registration(&model)),
+                        ready_frontends: Some(1),
+                        pending_first_output_requests: Some(2),
+                        pending_first_output_input_tokens: Some(17),
+                        live_input_tokens: Some(31),
+                        input_processing_requests: Some(1),
+                        output_generation_requests: Some(2),
+                        serving_pools: vec![stats_pool_identity()],
+                        requests_started: 4,
+                        requests_completed: 1,
+                        requests_failed: 0,
+                        requests_cancelled: 0,
+                        input_tokens: Some(31),
+                        output_tokens: 20,
+                        status: stats_proto::DataStatus::Complete as i32,
+                        expected_frontends: 1,
+                        observed_frontends: 1,
+                        source_observed_at_unix_ms: 1,
+                    }],
+                });
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        };
+        Ok(tonic::Response::new(Box::pin(stream)))
+    }
+}
+
+fn relay_metadata() -> stats_proto::RelayMessageMetadata {
+    stats_proto::RelayMessageMetadata {
+        drt_instance_id: 1,
+        relay_incarnation: 1,
+        observed_at_unix_ms: 1,
+    }
+}
+
+fn stats_pool_identity() -> stats_proto::PoolIdentity {
+    stats_proto::PoolIdentity {
+        cache_semantics_digest: vec![1; 16],
+        cache_semantics_source: stats_proto::IdentitySource::DefaultDerived as i32,
+        routing_scope_digest: vec![2; 16],
+        routing_scope_source: stats_proto::IdentitySource::DefaultDerived as i32,
+        dc_id: 1,
+    }
+}
+
+fn stats_model_registration(model: &str) -> stats_proto::ModelRegistration {
+    stats_proto::ModelRegistration {
+        model: model.to_string(),
+        base_model: model.to_string(),
+        adapter: None,
+        aliases: Vec::new(),
     }
 }
 
@@ -685,16 +735,26 @@ async fn wait_for_engine_stats_stream_stats(
     loop {
         let candidates = state.candidates_for_target(&target).await;
         if candidates.iter().any(|candidate| {
-            candidate
-                .stats
-                .stats_capabilities
-                .iter()
-                .any(|capability| capability == "model.throughput.engine_stream")
-                && candidate
-                    .stats
+            let stats = &candidate.stats;
+            stats.output_tps == 20.0
+                && stats.queue_size == 2
+                && stats.queued_input_size == 17
+                && stats.num_running_queries == 3
+                && stats.max_engine_concurrency == 8
+                && stats.total_query_input_size == 31
+                && stats.input_processing_queries == 1
+                && stats.output_generation_queries == 2
+                && stats.kv_cache_capacity_tokens == 1_000
+                && stats.kv_cache_used_tokens == 400
+                && stats.kv_cache_free_tokens == 600
+                && stats
                     .stats_sources
                     .iter()
-                    .any(|source| source == "engine_stats_stream")
+                    .any(|source| source == "dynamo_relay_load")
+                && stats
+                    .stats_sources
+                    .iter()
+                    .any(|source| source == "dynamo_relay_kv_usage")
         }) {
             return;
         }
@@ -712,7 +772,7 @@ async fn wait_for_engine_stats_stream_stats(
                 })
                 .collect::<Vec<_>>();
             panic!(
-                "model '{model_id}' did not report engine stats stream stats within {}s; last_seen={last_seen:?}",
+                "model '{model_id}' did not report canonical Relay stats within {}s; last_seen={last_seen:?}",
                 timeout.as_secs()
             );
         }

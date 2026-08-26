@@ -23,6 +23,7 @@ use stargate_protocol::tunnel_contract::HEADER_STARGATE_UPSTREAM_RETRYABLE;
 const DEFAULT_PYLON_RETRYABLE_UPSTREAM_STATUS_CODES: &str = "429,503";
 const DEFAULT_PYLON_UPSTREAM_RETRY_HEADER: &str = HEADER_STARGATE_UPSTREAM_RETRYABLE;
 const DEFAULT_OTEL_SERVICE_NAME: &str = "pylon";
+const DEFAULT_DYNAMO_RELAY_GRPC_URL: &str = "http://127.0.0.1:50051";
 
 mod startup;
 
@@ -32,6 +33,9 @@ struct Args {
     /// Base URL of the upstream HTTP inference server (for example http://127.0.0.1:8090)
     #[arg(long, value_name = "URL")]
     upstream_http_base_url: String,
+    /// KVDCRelay gRPC URL used for canonical load and KV-usage streams
+    #[arg(long, default_value = DEFAULT_DYNAMO_RELAY_GRPC_URL, value_name = "URL")]
+    dynamo_relay_grpc_url: String,
     /// QUIC tunnel listen address (advertised to stargate in forward mode)
     #[arg(long, default_value = "127.0.0.1:0", value_name = "ADDR")]
     quic_listen_addr: String,
@@ -110,8 +114,8 @@ struct Args {
     /// Timeout for calibration requests in milliseconds
     #[arg(long, default_value_t = 30000, value_name = "MS")]
     bringup_calibration_timeout_ms: u64,
-    /// Engine stats stream source selection mode
-    #[arg(long, default_value_t = EngineStatsStreamMode::Auto, value_name = "MODE")]
+    /// Dynamo Relay aggregate stats stream mode
+    #[arg(long, default_value_t = EngineStatsStreamMode::Required, value_name = "MODE")]
     engine_stats_stream: EngineStatsStreamMode,
     /// Keep --initial-input-tps fixed for deterministic benchmark/test experiments
     #[arg(long, default_value_t = false, hide = true)]
@@ -574,15 +578,12 @@ mod tests {
     }
 
     #[test]
-    fn engine_stats_stream_defaults_to_auto_mode() {
+    fn engine_stats_stream_is_required_by_default() {
         let args = parse_args("");
         let metrics_config = stats_collector_config_from_args(&args);
 
-        assert_eq!(args.engine_stats_stream, EngineStatsStreamMode::Auto);
-        assert!(
-            !metrics_config.openai_fallback_stats_enabled,
-            "auto mode should wait for a permanent unsupported stream response before fallback stats"
-        );
+        assert_eq!(args.engine_stats_stream, EngineStatsStreamMode::Required);
+        assert!(!metrics_config.openai_fallback_stats_enabled);
     }
 
     #[test]

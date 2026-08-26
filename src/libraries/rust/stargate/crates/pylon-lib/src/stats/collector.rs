@@ -31,7 +31,6 @@ const DEFAULT_SMOOTHING_WINDOW_SIZE: usize = 8;
 const DEFAULT_MIN_INPUT_TOKENS: u64 = 1;
 const DEFAULT_MIN_OUTPUT_TOKENS: u64 = 1;
 const DEFAULT_DURATION_FLOOR: Duration = Duration::from_millis(10);
-const DEFAULT_KV_CACHE_STATS_TTL: Duration = Duration::from_secs(5);
 const DEFAULT_ENGINE_STATS_REQUEST_TTL: Duration = Duration::from_secs(300);
 const DEFAULT_ENGINE_STATS_MODEL_TTL: Duration = Duration::from_secs(30);
 const DEFAULT_ENGINE_STATS_SWEEP_INTERVAL: Duration = Duration::from_secs(1);
@@ -43,7 +42,6 @@ pub struct StatsCollectorConfig {
     pub min_input_tokens: u64,
     pub min_output_tokens: u64,
     pub duration_floor: Duration,
-    pub kv_cache_stats_ttl: Duration,
     pub engine_stats_request_ttl: Duration,
     pub engine_stats_model_ttl: Duration,
     pub engine_stats_sweep_interval: Duration,
@@ -58,7 +56,6 @@ impl Default for StatsCollectorConfig {
             min_input_tokens: DEFAULT_MIN_INPUT_TOKENS,
             min_output_tokens: DEFAULT_MIN_OUTPUT_TOKENS,
             duration_floor: DEFAULT_DURATION_FLOOR,
-            kv_cache_stats_ttl: DEFAULT_KV_CACHE_STATS_TTL,
             engine_stats_request_ttl: DEFAULT_ENGINE_STATS_REQUEST_TTL,
             engine_stats_model_ttl: DEFAULT_ENGINE_STATS_MODEL_TTL,
             engine_stats_sweep_interval: DEFAULT_ENGINE_STATS_SWEEP_INTERVAL,
@@ -191,8 +188,8 @@ pub enum StatsUpdateSource {
 pub enum StatsAggregatorUpdate {
     RequestCounters(RequestCounterUpdate),
     KvCache(KvCacheStatsEnvelope),
+    RelayLoad(super::aggregator::RelayLoadStatsEnvelope),
     FinalizeRequest(FinalizeRequestUpdate),
-    EnableOpenAiFallback,
 }
 
 #[derive(Debug, Clone)]
@@ -270,8 +267,7 @@ pub fn start_stats_collector_with_engine_stats(
     stats_update_rx: Option<flume::Receiver<StatsAggregatorUpdate>>,
     runtime_state: PylonRuntimeState,
 ) -> StatsCollectorHandle {
-    // A wired engine stats stream is the throughput source of truth. Auto mode
-    // falls back only after the stream task sends EnableOpenAiFallback.
+    // A wired Relay stream is the aggregate load source of truth.
     config.openai_fallback_stats_enabled &= stats_update_rx.is_none();
     let mut aggregator = StatsAggregator::new(config, runtime_state.clone());
     for model_id in runtime_state.model_ids() {
@@ -373,9 +369,6 @@ async fn run_stats_collector(
                     stats_update_rx = None;
                     continue;
                 };
-                if aggregator.apply_control_update(&update) {
-                    continue;
-                }
                 stats_aggregator_updated_models.clear();
                 aggregator.apply_update_into(update, &mut stats_aggregator_updated_models);
                 if let Some(rx) = &stats_update_rx {
@@ -435,9 +428,7 @@ fn drain_stats_updates(
     latest_by_model: &mut IndexMap<ModelGeneration, CurrentModelStats>,
 ) {
     drain_ready(updates, |update| {
-        if !aggregator.apply_control_update(&update) {
-            aggregator.apply_update_into(update, updated_models);
-        }
+        aggregator.apply_update_into(update, updated_models);
     });
     retain_latest_model_updates(updated_models, latest_by_model);
 }
@@ -505,7 +496,10 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use super::super::aggregator::{KvCacheStatsEnvelope, KvCacheStatsSnapshot, StatsAggregator};
+    use super::super::aggregator::{
+        KvCacheStatsEnvelope, KvCacheStatsSnapshot, RelayLoadStatsEnvelope, RelayLoadStatsSnapshot,
+        StatsAggregator,
+    };
     use super::super::metrics::PylonMetrics;
     use super::super::projection::fallback_update_from_observation;
     use super::*;
@@ -977,6 +971,21 @@ mod tests {
         }
     }
 
+    fn relay_load(
+        input_tps: Option<f64>,
+        source_observed_at_unix_ms: u64,
+    ) -> RelayLoadStatsEnvelope {
+        RelayLoadStatsEnvelope {
+            models: vec![RelayLoadStatsSnapshot {
+                model: "model-a".to_string(),
+                input_tps,
+                source_observed_at_unix_ms,
+                complete: true,
+                ..RelayLoadStatsSnapshot::default()
+            }],
+        }
+    }
+
     fn published_stats(
         updates: Vec<super::super::aggregator::ModelStatsUpdate>,
     ) -> CurrentModelStats {
@@ -1431,7 +1440,42 @@ mod tests {
         let mut aggregator = test_aggregator(StatsCollectorConfig::default());
         aggregator.apply_kv_cache_stats(kv_cache_stats("model-a"));
         let stats = aggregator.stream_stats("req-stream-kv", (0, 10), true, Duration::ZERO);
-        assert_stats!(stats; kv_cache_capacity_tokens: 1_000, kv_cache_used_tokens: 400, kv_cache_free_tokens: 600, stats_capabilities: ["model.throughput.engine_stream", "machine.kv_cache.http"], stats_sources: ["engine_stats_stream", "kv_cache_stats"]);
+        assert_stats!(stats; kv_cache_capacity_tokens: 1_000, kv_cache_used_tokens: 400, kv_cache_free_tokens: 600, stats_capabilities: ["model.throughput.engine_stream", "machine.kv_cache.dynamo_relay"], stats_sources: ["engine_stats_stream", "dynamo_relay_kv_usage"]);
+    }
+
+    #[test]
+    fn relay_exact_input_tps_is_sticky_across_idle_windows() {
+        let mut aggregator = test_aggregator_with_initialization(
+            StatsCollectorConfig::default(),
+            ModelStatsInitialization::ConfiguredInputTps {
+                input_tps: 25.0,
+                pin: false,
+            },
+        );
+        let stats = published_stats(
+            aggregator.apply_update(StatsAggregatorUpdate::RelayLoad(relay_load(Some(40.0), 1))),
+        );
+        assert_eq!(stats.last_mean_input_tps, 40.0);
+
+        let stats = published_stats(
+            aggregator.apply_update(StatsAggregatorUpdate::RelayLoad(relay_load(Some(0.0), 2))),
+        );
+        assert_eq!(stats.last_mean_input_tps, 40.0);
+    }
+
+    #[test]
+    fn pinned_input_tps_overrides_relay_measurements() {
+        let mut aggregator = test_aggregator_with_initialization(
+            StatsCollectorConfig::default(),
+            ModelStatsInitialization::ConfiguredInputTps {
+                input_tps: 25.0,
+                pin: true,
+            },
+        );
+        let stats = published_stats(
+            aggregator.apply_update(StatsAggregatorUpdate::RelayLoad(relay_load(Some(40.0), 1))),
+        );
+        assert_eq!(stats.last_mean_input_tps, 25.0);
     }
 
     #[test]
@@ -1458,7 +1502,7 @@ mod tests {
             .pop()
             .expect("engine counters should publish the complete owned snapshot")
             .1;
-        assert_stats!(stats; output_tps: 10.0, num_running_queries: 1, output_generation_queries: 1, kv_cache_capacity_tokens: 1_000, stats_sources: ["engine_stats_stream", "kv_cache_stats"]);
+        assert_stats!(stats; output_tps: 10.0, num_running_queries: 1, output_generation_queries: 1, kv_cache_capacity_tokens: 1_000, stats_sources: ["engine_stats_stream", "dynamo_relay_kv_usage"]);
     }
 
     #[test]
@@ -1513,41 +1557,6 @@ mod tests {
             apply_stream_observation,
         );
         assert_stats!(stats; last_mean_input_tps: 100.0, embedding_item_tps: 2.0, max_embedding_item_tps: 2.0);
-    }
-
-    #[tokio::test]
-    async fn stats_collector_enables_openai_fallback_only_after_control_update() {
-        let metrics = PylonMetrics::new().expect("metrics should initialize");
-        let config = config!(collector; openai_fallback_stats_enabled: false);
-        let collector = RunningCollector::spawn(config, Some(metrics.clone()), true);
-        let stats = collector
-            .observe_until(
-                trusted_completed_observation("req-fallback-disabled"),
-                "fallback-disabled observation should publish lifecycle-only stats",
-                |_| true,
-            )
-            .await;
-        assert_eq!(stats.output_tps, 0.0);
-        assert!(!stats.stats_sources.contains(&"chunk_usage".to_string()));
-        collector
-            .send_update(StatsAggregatorUpdate::EnableOpenAiFallback)
-            .await;
-        wait_for_metric(
-            &metrics,
-            r#"pylon_engine_stats_source_transitions_total{from="engine_stats_stream",reason="unsupported",to="openai_fallback"} 1"#,
-            "collector should process fallback control update before fallback observations are accepted",
-        )
-        .await;
-        let stats = collector
-            .observe_until(
-                trusted_completed_observation("req-fallback-enabled"),
-                "fallback-enabled observation should publish model stats",
-                |stats| stats.output_tps == 5.0,
-            )
-            .await;
-        assert_eq!(stats.output_tps, 5.0);
-        assert!(stats.stats_sources.contains(&"chunk_usage".to_string()));
-        collector.handle.shutdown().await;
     }
 
     #[tokio::test]
@@ -2272,8 +2281,7 @@ mod tests {
         let mut aggregator = test_aggregator(StatsCollectorConfig::default());
         let mut snapshot = kv_cache_stats("canonical-model");
         snapshot.aliases.push("model-a".to_string());
-        let updates =
-            aggregator.apply_kv_cache_snapshot(kv_cache_envelope(snapshot), TokioInstant::now());
+        let updates = aggregator.apply_kv_cache_snapshot(kv_cache_envelope(snapshot));
         let stats = published_stats(updates);
         assert_stats!(stats; kv_cache_capacity_tokens: 1_000, kv_cache_used_tokens: 400, kv_cache_free_tokens: 600);
         assert!(stats.kv_cache.is_some());
@@ -2281,29 +2289,10 @@ mod tests {
         let mut incomplete = kv_cache_stats("canonical-model");
         incomplete.aliases.push("model-a".to_string());
         incomplete.complete = false;
-        let updates =
-            aggregator.apply_kv_cache_snapshot(kv_cache_envelope(incomplete), TokioInstant::now());
+        let updates = aggregator.apply_kv_cache_snapshot(kv_cache_envelope(incomplete));
         let stats = published_stats(updates);
         assert_stats!(stats; kv_cache_capacity_tokens: 0, kv_cache_used_tokens: 0, kv_cache_free_tokens: 0);
         assert!(stats.kv_cache.is_none());
-    }
-
-    #[test]
-    fn stale_kv_cache_snapshot_expires_without_clearing_request_stats() {
-        let config = config!(kv_cache_stats_ttl: milliseconds(10));
-        let mut aggregator = test_aggregator(config);
-        aggregator.stream("req", (0, 0), false, Duration::ZERO);
-        let request_updates = aggregator.stream("req", (10, 4), false, milliseconds(100));
-        assert_eq!(published_stats(request_updates).output_tps, 40.0);
-
-        let received_at = TokioInstant::now();
-        aggregator
-            .apply_kv_cache_snapshot(kv_cache_envelope(kv_cache_stats("model-a")), received_at);
-        let updates = aggregator.sweep_stale(received_at + milliseconds(11));
-        let stats = published_stats(updates);
-        assert!(stats.kv_cache.is_none());
-        assert_eq!(stats.kv_cache_capacity_tokens, 0);
-        assert_eq!(stats.output_tps, 40.0);
     }
 
     #[tokio::test]

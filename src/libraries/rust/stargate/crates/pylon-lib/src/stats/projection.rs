@@ -101,7 +101,6 @@ impl StatsAggregator {
         let model_state = self.per_model.get_mut(&model_id)?;
         model_state.metrics.kv_cache = valid_kv_cache(&kv_cache).then_some(kv_cache);
         model_state.metrics.kv_cache_stats_observed = true;
-        model_state.metrics.kv_cache_received_at = Some(TokioInstant::now());
         model_state.metrics.stats_observed_at_unix_ms = current_unix_millis();
         let generation = model_state.generation.clone();
         let stats = self.snapshot(&model_id);
@@ -111,7 +110,6 @@ impl StatsAggregator {
     pub(super) fn apply_kv_cache_snapshot(
         &mut self,
         snapshot: KvCacheStatsEnvelope,
-        received_at: TokioInstant,
     ) -> Vec<super::aggregator::ModelStatsUpdate> {
         let model_ids = self.per_model.keys().cloned().collect::<Vec<_>>();
         let mut changed = Vec::new();
@@ -125,12 +123,9 @@ impl StatsAggregator {
                 .get_mut(&model_id)
                 .expect("model id came from the current generation map");
             if model_state.metrics.kv_cache == next {
-                model_state.metrics.kv_cache_received_at = next.as_ref().map(|_| received_at);
                 continue;
             }
             model_state.metrics.kv_cache = next;
-            model_state.metrics.kv_cache_received_at =
-                model_state.metrics.kv_cache.as_ref().map(|_| received_at);
             model_state.metrics.kv_cache_stats_observed |= observed.is_some();
             model_state.metrics.stats_observed_at_unix_ms = current_unix_millis();
             changed.push(model_id);

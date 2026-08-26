@@ -17,8 +17,8 @@ pub mod gateway_pb {
     tonic::include_proto!("llm_gateway");
 }
 
-pub mod dynamo_frontend_stats {
-    tonic::include_proto!("dynamo.frontend.stats.v1");
+pub mod dynamo_kv_dc_relay {
+    tonic::include_proto!("dynamo.kvdc.relay.v1");
 }
 
 pub const REGISTRATION_HEARTBEAT_MS_METADATA: &str = "x-stargate-registration-heartbeat-ms";
@@ -132,7 +132,7 @@ mod tests {
         assert!(plans[1].build_server);
         assert!(plans[1].type_attributes.is_empty());
         assert!(plans[1].field_attributes.is_empty());
-        assert_eq!(plans[2].protos, ["proto/dynamo_frontend_stats.proto"]);
+        assert_eq!(plans[2].protos, ["proto/dynamo_kv_dc_relay.proto"]);
         assert_eq!(plans[2].includes, ["proto"]);
         assert!(plans[2].build_server);
         assert_eq!(crate::build_script::planned_proto_compile_count(), 3);

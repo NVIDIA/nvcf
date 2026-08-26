@@ -541,21 +541,23 @@ fn pylon_dynamo_priority_headers_are_always_emitted() {
 }
 
 #[test]
-fn pylon_translates_platform_request_id_to_dynamo_request_id() {
-    let mut headers = HeaderMap::new();
-    headers.insert("x-request-id", "gateway-request".parse().unwrap());
-    headers.insert("x-model", "gateway-model".parse().unwrap());
-    headers.insert("x-routing-key", "gateway-route".parse().unwrap());
-    headers.insert("request-id", "spoofed-request".parse().unwrap());
-    headers.insert("x-dynamo-request-id", "spoofed-legacy".parse().unwrap());
-
-    dynamo::apply_request_id("gateway-request", &mut headers);
-
-    assert_eq!(headers["x-request-id"], "gateway-request");
-    assert_eq!(headers["request-id"], "gateway-request");
-    assert!(!headers.contains_key("x-dynamo-request-id"));
-    assert!(!headers.contains_key("x-model"));
-    assert!(!headers.contains_key("x-routing-key"));
+fn pylon_consumes_platform_metadata_instead_of_forwarding_it_to_dynamo() {
+    for name in [
+        "request-id",
+        "x-dynamo-request-id",
+        "x-model",
+        "x-routing-key",
+        "x-priority",
+    ] {
+        assert!(dynamo::is_stripped_engine_header(
+            &HeaderName::from_bytes(name.as_bytes()).unwrap()
+        ));
+    }
+    for name in ["x-request-id", "x-input-tokens"] {
+        assert!(!dynamo::is_stripped_engine_header(
+            &HeaderName::from_bytes(name.as_bytes()).unwrap()
+        ));
+    }
 }
 
 #[test]
@@ -1054,20 +1056,16 @@ async fn http3_direct_tunnel_accepts_responses_request_to_upstream() {
     let app = Router::new().route(
         "/v1/responses",
         post(|req: Request| async move {
-            let model = req
-                .headers()
-                .get("x-model")
-                .and_then(|value| value.to_str().ok())
-                .unwrap_or("missing")
-                .to_string();
+            let platform_model_header = req.headers().contains_key("x-model");
             let body = axum::body::to_bytes(req.into_body(), 1024 * 1024)
                 .await
                 .unwrap();
-            (
-                StatusCode::OK,
-                [(reqwest::header::CONTENT_TYPE.as_str(), "application/json")],
-                format!(r#"{{"model":"{model}","body_len":{}}}"#, body.len()),
-            )
+            let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            Json(serde_json::json!({
+                "model": request["model"],
+                "body_len": body.len(),
+                "platform_model_header": platform_model_header,
+            }))
         }),
     );
     let mut config = test_tunnel_config_for(app).await;
@@ -1079,11 +1077,12 @@ async fn http3_direct_tunnel_accepts_responses_request_to_upstream() {
     headers.insert("x-model", "model-h3".parse().unwrap());
     headers.insert("x-input-tokens", "7".parse().unwrap());
     headers.insert("content-type", "application/json".parse().unwrap());
+    let request_body = br#"{"model":"model-h3","input":"hi","stream":true}"#;
     let response = send_direct_http3_json_request(
         tunnel.listen_addr(),
         "/v1/responses?source=http3",
         headers,
-        br#"{"input":"hi","stream":true}"#,
+        request_body,
     )
     .await;
 
@@ -1095,8 +1094,9 @@ async fn http3_direct_tunnel_accepts_responses_request_to_upstream() {
     );
     assert_eq!(
         payload.get("body_len").and_then(serde_json::Value::as_u64),
-        Some(28)
+        Some(request_body.len() as u64)
     );
+    assert_eq!(payload["platform_model_header"], false);
 
     tunnel.shutdown().await;
 }
@@ -1637,16 +1637,17 @@ async fn quic_tunnel_forwards_to_http_backend() {
     let app = Router::new().route(
             "/v1/chat/completions",
             post(|req: Request| async move {
-                let model = req
-                    .headers()
-                    .get("x-model")
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("none");
+                let platform_model_header = req.headers().contains_key("x-model");
                 let saw_expected_queue_header =
                     req.headers().contains_key("x-stargate-expected-queue-ms");
                 let saw_retry_control_header = RETRY_CONTROL_REQUEST_HEADERS
                 .iter()
                 .any(|name| req.headers().contains_key(*name));
+                let body = axum::body::to_bytes(req.into_body(), 1024 * 1024)
+                    .await
+                    .unwrap();
+                let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                let model = request["model"].as_str().unwrap();
                 let mut sse = axum::response::Sse::new(async_stream::stream! {
                     yield Ok::<_, std::convert::Infallible>(
                         Event::default().data(r#"{"object":"chat.completion.chunk","choices":[{"delta":{"content":"ok"}}]}"#)
@@ -1666,6 +1667,10 @@ async fn quic_tunnel_forwards_to_http_backend() {
                     HeaderName::from_static("x-saw-retry-control"),
                     HeaderValue::from_str(&saw_retry_control_header.to_string()).unwrap(),
                 );
+                sse.headers_mut().insert(
+                    HeaderName::from_static("x-saw-platform-model"),
+                    HeaderValue::from_str(&platform_model_header.to_string()).unwrap(),
+                );
                 *sse.status_mut() = StatusCode::OK;
                 sse
             }),
@@ -1682,7 +1687,10 @@ async fn quic_tunnel_forwards_to_http_backend() {
         headers.insert(name, "spoofed".parse().unwrap());
     }
     tunnel
-        .send(headers, br#"{"messages":[],"stream":true}"#)
+        .send(
+            headers,
+            br#"{"model":"model-a","messages":[],"stream":true}"#,
+        )
         .await;
 
     let response_headers = tunnel.response_head(StatusCode::OK).await;
@@ -1703,6 +1711,7 @@ async fn quic_tunnel_forwards_to_http_backend() {
         "false"
     );
     assert_eq!(response_headers["x-saw-retry-control"], "false");
+    assert_eq!(response_headers["x-saw-platform-model"], "false");
 
     let response_text = read_response_text(&mut tunnel.recv).await;
     let events = parse_test_sse_events(&response_text);
@@ -1744,7 +1753,7 @@ fn dynamo_priority_echo_router() -> Router {
             let dynamo_priority = echo_header("x-dynamo-request-priority");
             let dynamo_strict_priority = echo_header("x-dynamo-request-strict-priority");
             let x_request_id = echo_header("x-request-id");
-            let dynamo_request_id = echo_header(dynamo::HEADER_DYNAMO_REQUEST_ID);
+            let dynamo_request_id = echo_header("request-id");
             let platform_routing_identity_present = ["x-model", "x-routing-key"]
                 .into_iter()
                 .any(|name| req.headers().contains_key(name));
@@ -1817,7 +1826,7 @@ async fn quic_tunnel_translates_dynamo_request_headers() {
     );
     assert_eq!(response_headers["x-echo-dynamo-strict-priority"], "0");
     assert_eq!(response_headers["x-echo-request-id"], "req-dynamo-1");
-    assert_eq!(response_headers["x-echo-dynamo-request-id"], "req-dynamo-1");
+    assert_eq!(response_headers["x-echo-dynamo-request-id"], "absent");
     assert_eq!(response_headers["x-saw-platform-routing-identity"], "false");
 
     tunnel.shutdown().await;
@@ -2734,17 +2743,19 @@ async fn assert_direct_embeddings_case(case: DirectEmbeddingsCase) {
             let hits = hits_for_app.clone();
             async move {
                 hits.fetch_add(1, Ordering::Relaxed);
+                let platform_model_header = req.headers().contains_key("x-model");
                 let path = req
                     .uri()
                     .path_and_query()
                     .map_or_else(|| req.uri().path().to_string(), |value| value.to_string());
-                let model = req.headers()["x-model"].to_str().unwrap().to_string();
                 let body = axum::body::to_bytes(req.into_body(), 1024 * 1024)
                     .await
                     .unwrap();
+                let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
                 Json(serde_json::json!({
                     "path": path,
-                    "model": model,
+                    "model": request["model"],
+                    "platform_model_header": platform_model_header,
                     "body": String::from_utf8(body.to_vec()).unwrap(),
                     "object": "list",
                     "data": serde_json::from_str::<serde_json::Value>(case.response_data_json)
@@ -2774,6 +2785,7 @@ async fn assert_direct_embeddings_case(case: DirectEmbeddingsCase) {
     let payload: serde_json::Value = serde_json::from_slice(&response.body).unwrap();
     assert_eq!(payload["path"], case.success_path);
     assert_eq!(payload["model"], "model-embed");
+    assert_eq!(payload["platform_model_header"], false);
     assert_eq!(
         payload["body"],
         String::from_utf8(case.request_body.to_vec()).unwrap()

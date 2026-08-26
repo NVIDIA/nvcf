@@ -62,46 +62,27 @@ pub const DEFAULT_PRIORITY_CEILING: u32 = 3600;
 
 pub(crate) mod dynamo {
     use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-    use stargate_protocol::tunnel_contract::{HEADER_MODEL, HEADER_REQUEST_ID, HEADER_ROUTING_KEY};
+    use stargate_protocol::tunnel_contract::{HEADER_MODEL, HEADER_PRIORITY, HEADER_ROUTING_KEY};
 
     /// Engine priority headers pylon derives; the names stay out of the
     /// shared tunnel contract because only pylon speaks them.
-    pub(crate) const HEADER_DYNAMO_REQUEST_ID: &str = "request-id";
     pub(crate) const HEADER_REQUEST_PRIORITY: &str = "x-dynamo-request-priority";
     pub(crate) const HEADER_REQUEST_STRICT_PRIORITY: &str = "x-dynamo-request-strict-priority";
 
-    /// Denylist of engine headers pylon owns: inbound values are stripped in
-    /// every backend mode so pylon stays their only writer.
-    const STRIPPED_REQUEST_HEADERS: [&str; 4] = [
-        HEADER_DYNAMO_REQUEST_ID,
+    /// Platform metadata is consumed by pylon and never becomes part of the
+    /// Dynamo request. Priority is translated below; request state is local.
+    const STRIPPED_REQUEST_HEADERS: [&str; 7] = [
+        "request-id",
         "x-dynamo-request-id",
+        HEADER_MODEL,
+        HEADER_ROUTING_KEY,
+        HEADER_PRIORITY,
         HEADER_REQUEST_PRIORITY,
         HEADER_REQUEST_STRICT_PRIORITY,
     ];
 
     pub(crate) fn is_stripped_engine_header(name: &HeaderName) -> bool {
         STRIPPED_REQUEST_HEADERS.contains(&name.as_str())
-    }
-
-    /// Translate the validated platform request ID into Dynamo's canonical ID.
-    pub(crate) fn apply_request_id(request_id: &str, upstream_headers: &mut HeaderMap) {
-        for name in [HEADER_DYNAMO_REQUEST_ID, "x-dynamo-request-id"] {
-            upstream_headers.remove(name);
-        }
-        for name in [HEADER_MODEL, HEADER_ROUTING_KEY] {
-            upstream_headers.remove(name);
-        }
-        upstream_headers.insert(
-            HeaderName::from_static(HEADER_DYNAMO_REQUEST_ID),
-            HeaderValue::from_str(request_id)
-                .expect("validated x-request-id should be a valid header value"),
-        );
-        debug_assert_eq!(
-            upstream_headers
-                .get(HEADER_REQUEST_ID)
-                .and_then(|value| value.to_str().ok()),
-            Some(request_id)
-        );
     }
 
     /// Map the platform rank (lower wins, absent = unconfigured) to the

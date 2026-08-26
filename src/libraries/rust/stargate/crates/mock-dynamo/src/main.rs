@@ -128,7 +128,6 @@ async fn main() -> Result<()> {
         .route("/v1/models", get(openai::list_models))
         .route("/v1/responses", post(openai::responses))
         .route("/v1/embeddings", post(openai::embeddings))
-        .route("/v1/stats/stream", get(stats_stream::stats_stream))
         .route("/kv-cache/stats", get(openai::kv_cache_stats))
         .route(
             "/test-control/models/{model}",

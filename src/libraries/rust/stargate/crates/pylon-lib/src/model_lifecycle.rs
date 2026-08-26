@@ -975,8 +975,17 @@ mod tests {
             .iter()
             .map(|model_id| (*model_id).to_string())
             .collect::<Vec<_>>();
-        wait_for("advertised model set should converge", || {
-            runtime_state.advertised_model_ids() == expected
+        wait_for("active model set should converge", || {
+            let mut active = runtime_state
+                .advertised_models()
+                .into_iter()
+                .filter_map(|(model_id, registration)| {
+                    (registration.status == InferenceServerStatus::Active as i32)
+                        .then_some(model_id)
+                })
+                .collect::<Vec<_>>();
+            active.sort_unstable();
+            active == expected
         })
         .await;
     }
@@ -1694,7 +1703,11 @@ mod tests {
 
         upstream.set_models(&["model-a"]).await;
         let retired = upstream.next_calibration().await;
-        assert!(runtime_state.advertised_model_ids().is_empty());
+        assert_eq!(runtime_state.advertised_model_ids(), ["model-a"]);
+        assert_eq!(
+            runtime_state.advertised_models()["model-a"].status,
+            InferenceServerStatus::Inactive as i32
+        );
         upstream.set_models(&[]).await;
         wait_for_generation_retirement(&runtime_state, "model-a").await;
         let polls = upstream.discovery_polls.load(Ordering::SeqCst);
@@ -1789,11 +1802,19 @@ mod tests {
             error_observed,
             "the first failed attempt should be recorded"
         );
-        assert_eq!(runtime_state.advertised_model_ids(), ["model-a"]);
+        assert_eq!(runtime_state.advertised_model_ids(), ["model-a", "model-b"]);
+        assert_eq!(
+            runtime_state.advertised_models()["model-b"].status,
+            InferenceServerStatus::Inactive as i32
+        );
         let second_attempt = upstream.next_calibration().await;
         assert_eq!(second_attempt.model_id(), "model-b");
         assert_eq!(first_attempt, second_attempt);
-        assert_eq!(runtime_state.advertised_model_ids(), ["model-a"]);
+        assert_eq!(runtime_state.advertised_model_ids(), ["model-a", "model-b"]);
+        assert_eq!(
+            runtime_state.advertised_models()["model-b"].status,
+            InferenceServerStatus::Inactive as i32
+        );
         wait_for_calibration_count(&metrics, "model-b", "error", 2).await;
 
         failing.store(false, Ordering::SeqCst);
@@ -2120,7 +2141,11 @@ mod tests {
             runtime_state.current_generation("model-a"),
             Some(generation.clone())
         );
-        assert!(runtime_state.advertised_model_ids().is_empty());
+        assert_eq!(runtime_state.advertised_model_ids(), ["model-a"]);
+        assert_eq!(
+            runtime_state.advertised_models()["model-a"].status,
+            InferenceServerStatus::Inactive as i32
+        );
         wait_for_model_ids(&runtime_state, &["model-a"]).await;
         assert_eq!(
             runtime_state.current_generation("model-a"),

@@ -50,7 +50,7 @@ pub(crate) fn proto_compile_plans() -> [ProtoCompilePlan; 3] {
             field_attributes: &[],
         },
         ProtoCompilePlan {
-            protos: &["proto/dynamo_frontend_stats.proto"],
+            protos: &["proto/dynamo_kv_dc_relay.proto"],
             includes: &["proto"],
             build_server: true,
             type_attributes: &[],
@@ -85,10 +85,10 @@ mod tests {
     }
 
     #[test]
-    fn dynamo_frontend_stats_plan_builds_client_and_server_proto() {
+    fn dynamo_kv_dc_relay_plan_builds_client_and_server_proto() {
         let [_, _, stats_plan] = proto_compile_plans();
 
-        assert_eq!(stats_plan.protos, ["proto/dynamo_frontend_stats.proto"]);
+        assert_eq!(stats_plan.protos, ["proto/dynamo_kv_dc_relay.proto"]);
         assert_eq!(stats_plan.includes, ["proto"]);
         assert!(stats_plan.build_server);
     }
