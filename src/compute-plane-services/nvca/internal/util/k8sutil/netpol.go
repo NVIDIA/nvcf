@@ -87,16 +87,13 @@ func EnsureNetworkPoliciesFunctionNamespace(
 	crClient client.Client,
 	extraNPs ...*netv1.NetworkPolicy,
 ) error {
-	var allExtraNPs []*netv1.NetworkPolicy
-	allExtraNPs = append(allExtraNPs, createIntraNamespaceEgressPolicy(namespace))
-	allExtraNPs = append(allExtraNPs, extraNPs...)
 	return ensureNetworkPolicies(ctx,
 		namespace,
 		nps,
 		ffFetcher,
 		k8sClient,
 		crClient,
-		allExtraNPs...,
+		extraNPs...,
 	)
 }
 
@@ -166,17 +163,6 @@ func ensureNetworkPolicies(
 		newNP.Namespace = namespace
 
 		switch newNP.Name {
-		case MonitoringIngressNetworkPolicyName:
-			snRule := netv1.NetworkPolicyIngressRule{
-				From: []netv1.NetworkPolicyPeer{
-					{
-						NamespaceSelector: &metav1.LabelSelector{
-							MatchLabels: map[string]string{K8sNameLabelKey: namespace},
-						},
-					},
-				},
-			}
-			newNP.Spec.Ingress = append(newNP.Spec.Ingress, snRule)
 		case EgressNVCFCacheNetworkPolicyNameKey:
 			// check if both container-caching & dns-proxy namespaces are present
 			var ccnsErr, pcnsErr error
@@ -225,12 +211,51 @@ func ensureNetworkPolicies(
 			errs = append(errs, err)
 		}
 	}
+	// Clean up the legacy unconditional intra-namespace egress policy this
+	// package used to create for every function namespace: combined with the
+	// same-namespace ingress rule this package used to add to
+	// MonitoringIngressNetworkPolicyName, it let any pod in a function
+	// namespace reach any other pod in that namespace on any port. Neither
+	// is created here anymore, but namespaces reconciled by an older build
+	// may still have this policy left over, so remove it explicitly.
+	if _, wanted := newNetworkPolicies[AllowEgressIntraNamespaceNetworkPolicyName]; !wanted {
+		if err := deleteNetworkPolicyIfExists(ctx, namespace, AllowEgressIntraNamespaceNetworkPolicyName, k8sClient, crClient); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
 	if err := errors.Join(errs...); err != nil {
 		return err
 	}
 
 	// Prune existing network policies that are not in the configmap and are custom network policies
 	return pruneCustomNetworkPolicies(ctx, namespace, k8sClient, crClient, newNetworkPolicies)
+}
+
+// deleteNetworkPolicyIfExists deletes the named NetworkPolicy in namespace,
+// treating "not found" as success.
+func deleteNetworkPolicyIfExists(ctx context.Context,
+	namespace string,
+	name string,
+	k8sClient k8sclient.Interface,
+	crClient client.Client,
+) error {
+	log := core.GetLogger(ctx)
+
+	if crClient != nil {
+		np := &netv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace}}
+		if err := crClient.Delete(ctx, np); err != nil && !apierrors.IsNotFound(err) {
+			log.WithError(err).Errorf("delete NetworkPolicy %s in namespace %s", name, namespace)
+			return fmt.Errorf("delete NetworkPolicy %s in namespace %s: %v", name, namespace, err)
+		}
+		return nil
+	}
+
+	if err := k8sClient.NetworkingV1().NetworkPolicies(namespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		log.WithError(err).Errorf("delete NetworkPolicy %s in namespace %s", name, namespace)
+		return fmt.Errorf("delete NetworkPolicy %s in namespace %s: %v", name, namespace, err)
+	}
+	return nil
 }
 
 func pruneCustomNetworkPolicies(ctx context.Context,
@@ -369,28 +394,6 @@ func getValidNetworkPolicyNames(nps map[string]string) []string {
 	}
 
 	return validNps
-}
-
-func createIntraNamespaceEgressPolicy(namespace string) *netv1.NetworkPolicy {
-	return &netv1.NetworkPolicy{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: AllowEgressIntraNamespaceNetworkPolicyName,
-		},
-		Spec: netv1.NetworkPolicySpec{
-			PolicyTypes: []netv1.PolicyType{netv1.PolicyTypeEgress},
-			Egress: []netv1.NetworkPolicyEgressRule{
-				{
-					To: []netv1.NetworkPolicyPeer{
-						{
-							NamespaceSelector: &metav1.LabelSelector{
-								MatchLabels: map[string]string{K8sNameLabelKey: namespace},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
 }
 
 func createOrUpdateNetworkPolicy(ctx context.Context,

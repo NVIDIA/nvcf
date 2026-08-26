@@ -766,7 +766,7 @@ rules:
 	netPolList := &netv1.NetworkPolicyList{}
 	err = r.Client.List(ctx, netPolList, client.InNamespace(ms.Spec.Namespace))
 	require.NoError(t, err)
-	assert.Len(t, netPolList.Items, 7)
+	assert.Len(t, netPolList.Items, 6)
 
 	// Check that initial resources were not created until after the utils pod's init containers complete.
 	err = r.Client.Get(ctx, client.ObjectKeyFromObject(ms), ms)
@@ -2661,7 +2661,7 @@ rules:
 	netPolList := &netv1.NetworkPolicyList{}
 	err = r.Client.List(ctx, netPolList, client.InNamespace(ms.Spec.Namespace))
 	require.NoError(t, err)
-	assert.Len(t, netPolList.Items, 7)
+	assert.Len(t, netPolList.Items, 6)
 
 	// Check that initial resources were not created until after the utils pod's init containers complete.
 	gotJob := &batchv1.Job{}

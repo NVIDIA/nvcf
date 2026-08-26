@@ -115,7 +115,7 @@ func TestK8sComputeBackendEnsureNetPolicy(t *testing.T) {
 		Start(ctx)
 	require.NoError(t, err)
 
-	checkNS := func(t *testing.T, namespace, expLabelVal string, hasIntraEgressNP bool) {
+	checkNS := func(t *testing.T, namespace, expLabelVal string) {
 		t.Run(fmt.Sprintf("%s:%s", namespace, expLabelVal), func(t *testing.T) {
 			assert.EventuallyWithT(t, func(c *assert.CollectT) {
 				egressNP, err := clients.K8s.NetworkingV1().NetworkPolicies(namespace).Get(ctx,
@@ -133,28 +133,21 @@ func TestK8sComputeBackendEnsureNetPolicy(t *testing.T) {
 					assert.Equal(c, "0.0.0.0/0", peer1.IPBlock.CIDR)
 				}
 
-				// Check for the intra-namespace egress policy
-				if hasIntraEgressNP {
-					intraEgressNP, err := clients.K8s.NetworkingV1().NetworkPolicies(namespace).Get(ctx, k8sutil.AllowEgressIntraNamespaceNetworkPolicyName, metav1.GetOptions{})
-					if assert.NoError(c, err) {
-						assert.Equal(c, []netv1.PolicyType{"Egress"}, intraEgressNP.Spec.PolicyTypes)
-						if !assert.Len(c, intraEgressNP.Spec.Egress, 1) {
-							return
-						}
-						if !assert.Len(c, intraEgressNP.Spec.Egress[0].To, 1) {
-							return
-						}
-						peer := intraEgressNP.Spec.Egress[0].To[0]
-						assert.NotNil(c, peer.NamespaceSelector)
-						assert.Equal(c, namespace, peer.NamespaceSelector.MatchLabels[k8sutil.K8sNameLabelKey])
-					}
-				}
+				// NVCA no longer creates an intra-namespace egress policy:
+				// combined with allow-ingress-monitoring's same-namespace
+				// ingress rule, it allowed any pod in a function namespace
+				// to reach any other pod in that namespace on any port.
+				_, err = clients.K8s.NetworkingV1().NetworkPolicies(namespace).Get(ctx, k8sutil.AllowEgressIntraNamespaceNetworkPolicyName, metav1.GetOptions{})
+				assert.True(c, errors.IsNotFound(err), "allow-egress-intra-namespace should not be created")
 
 				ingressNP, err := clients.K8s.NetworkingV1().NetworkPolicies(namespace).Get(ctx,
 					k8sutil.MonitoringIngressNetworkPolicyName, metav1.GetOptions{})
 				if assert.NoError(c, err) {
 					assert.Equal(c, []netv1.PolicyType{"Ingress"}, ingressNP.Spec.PolicyTypes)
-					if !assert.Len(c, ingressNP.Spec.Ingress, 2) {
+					// Only the ConfigMap-defined rule should be present; NVCA
+					// no longer injects an unscoped same-namespace ingress
+					// rule here.
+					if !assert.Len(c, ingressNP.Spec.Ingress, 1) {
 						return
 					}
 					if !assert.Len(c, ingressNP.Spec.Ingress[0].From, 1) {
@@ -165,18 +158,13 @@ func TestK8sComputeBackendEnsureNetPolicy(t *testing.T) {
 						return
 					}
 					assert.Equal(c, expLabelVal, peer1.NamespaceSelector.MatchLabels["foo"])
-					peer2 := ingressNP.Spec.Ingress[1].From[0]
-					if !assert.NotNil(c, peer2.NamespaceSelector) {
-						return
-					}
-					assert.Equal(c, namespace, peer2.NamespaceSelector.MatchLabels[k8sutil.K8sNameLabelKey])
 				}
 			}, 5*time.Second, 200*time.Millisecond, "namespace: "+namespace)
 		})
 	}
 
-	checkNS(t, b.podInstanceNamespace, "bar", false)
-	checkNS(t, msNS.Name, "bar", true)
+	checkNS(t, b.podInstanceNamespace, "bar")
+	checkNS(t, msNS.Name, "bar")
 
 	// Update and make sure changes are propagated by the informer's event handler.
 	b.ForceSync(ctx)
@@ -198,8 +186,8 @@ spec:
 	require.NoError(t, err)
 	b.ForceSync(ctx)
 
-	checkNS(t, b.podInstanceNamespace, "baz", false)
-	checkNS(t, msNS.Name, "baz", true)
+	checkNS(t, b.podInstanceNamespace, "baz")
+	checkNS(t, msNS.Name, "baz")
 }
 
 func newHelmInstanceRBACConfigMap() *v1.ConfigMap {
