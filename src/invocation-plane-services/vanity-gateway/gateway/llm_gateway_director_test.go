@@ -115,6 +115,25 @@ func TestNewLLMGatewayDirectorRejectsInvalidEndpoint(t *testing.T) {
 	}
 }
 
+func TestNewLLMGatewayDirectorRejectsNonHTTPScheme(t *testing.T) {
+	for _, endpoint := range []string{"ftp://llm.test", "gopher://llm.test:70", "ws://llm.test"} {
+		t.Run(endpoint, func(t *testing.T) {
+			director, err := NewLLMGatewayDirector(endpoint, http.DefaultTransport)
+			require.Error(t, err)
+			assert.Nil(t, director)
+			assert.ErrorContains(t, err, "must use http or https")
+		})
+	}
+
+	for _, endpoint := range []string{"http://llm.test:8080", "https://llm.test"} {
+		t.Run(endpoint, func(t *testing.T) {
+			director, err := NewLLMGatewayDirector(endpoint, http.DefaultTransport)
+			require.NoError(t, err)
+			assert.NotNil(t, director)
+		})
+	}
+}
+
 func TestNewLLMGatewayDirectorRejectsEndpointPath(t *testing.T) {
 	for _, endpoint := range []string{"http://llm.test/llm", "http://llm.test:8080/v1"} {
 		t.Run(endpoint, func(t *testing.T) {

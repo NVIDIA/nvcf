@@ -51,6 +51,11 @@ func NewLLMGatewayDirector(endpoint string, transport http.RoundTripper) (*LLMGa
 	if err != nil || endpointUrl.Scheme == "" || endpointUrl.Host == "" {
 		return nil, fmt.Errorf("invalid LLM Gateway endpoint: %s", endpoint)
 	}
+	// The transport only speaks http and https, so any other scheme parses fine
+	// and then fails every request as a 502 instead of at startup.
+	if endpointUrl.Scheme != "http" && endpointUrl.Scheme != "https" {
+		return nil, fmt.Errorf("LLM Gateway endpoint must use http or https: %s", endpoint)
+	}
 	// The proxy preserves the caller's path, so a base path would be dropped
 	// here while the health check keeps it. Reject it rather than diverge.
 	if endpointUrl.Path != "" && endpointUrl.Path != "/" {
