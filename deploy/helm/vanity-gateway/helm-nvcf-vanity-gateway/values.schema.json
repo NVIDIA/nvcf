@@ -191,7 +191,53 @@
         "config",
         "mappingConfig"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mappingConfig": {
+                "properties": {
+                  "v2config": {
+                    "properties": {
+                      "llmGateway": {
+                        "type": "object",
+                        "minProperties": 1
+                      }
+                    },
+                    "required": [
+                      "llmGateway"
+                    ]
+                  }
+                },
+                "required": [
+                  "v2config"
+                ]
+              }
+            },
+            "required": [
+              "mappingConfig"
+            ]
+          },
+          "then": {
+            "properties": {
+              "config": {
+                "properties": {
+                  "llmGatewayEndpoint": {
+                    "minLength": 1
+                  }
+                },
+                "required": [
+                  "llmGatewayEndpoint"
+                ]
+              }
+            },
+            "required": [
+              "config"
+            ]
+          }
+        }
+      ]
     }
   },
   "definitions": {

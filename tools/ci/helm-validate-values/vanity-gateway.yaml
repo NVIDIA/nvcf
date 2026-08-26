@@ -5,3 +5,15 @@ vanityGateway:
     repository: foo/bar/baz
   serviceMonitor:
     enabled: true
+  # Exercise the llmGateway mapping section so schema regressions surface in CI.
+  # Declaring a host also triggers the conditional requirement on
+  # config.llmGatewayEndpoint, which the chart default satisfies.
+  mappingConfig:
+    v2config:
+      openai: {}
+      vanity: {}
+      llmGateway:
+        example_llm:
+          host: llm.api.example.com
+          customHeaders:
+            X-Provider-Feature: enabled

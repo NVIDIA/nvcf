@@ -117,8 +117,13 @@ or the pod is killed mid-drain.
   path requires `path` and `functionID`.
 - `llmGateway`: hosts that proxy the LLM Gateway's OpenAI-compatible routes,
   each requiring only a `host`. Requests are forwarded unchanged, so an entry
-  carries no function or model selection. Declaring one makes
-  `vanityGateway.config.llmGatewayEndpoint` required at startup.
+  carries no function or model selection. Declaring one requires a non-empty
+  `vanityGateway.config.llmGatewayEndpoint`, which the values schema enforces.
+
+`mappingConfig` is rendered into a ConfigMap, which is not a secret store. Do
+not put credentials in `customHeaders` on any route. Caller `Authorization`
+headers are forwarded to the upstream untouched, so a static credential is not
+needed for authenticated routes.
 
 All three sections are empty by default.
 `vanityGateway.config.shadowMaxConcurrent` bounds concurrent shadow requests
