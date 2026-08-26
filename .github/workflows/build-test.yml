@@ -118,6 +118,24 @@ jobs:
             exit 1
           fi
 
+  go-tools:
+    name: Go tools
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/go-toolchain/go.mod
+
+      # The repo tooling modules carry tests that no workflow ran, so a pull
+      # request could break them and still go green. tools/docs-version-sync
+      # reached main with three failing tests that way.
+      - name: Build, vet, and test the Go modules under tools/
+        run: tools/ci/check-go-tools
+
   github-release-helper:
     name: GitHub release helper
     runs-on: ubuntu-latest
