@@ -18,8 +18,10 @@ limitations under the License.
 package openbao
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"os/exec"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -60,4 +62,57 @@ func TestFilterKubectlOutputPreservesPEMBlockWithKubectlNoise(t *testing.T) {
 	c := NewClient(&Config{}, nil)
 	got := c.filterKubectlOutput("pod \"openbao-pki-root-ca\" deleted\n" + openBaoTestCertPEM + "pod \"openbao-pki-root-ca\" deleted\n")
 	assert.Equal(t, openBaoTestCertPEM[:len(openBaoTestCertPEM)-1], got)
+}
+
+func TestFilterKubectlOutputDropsLowercaseAttachFallbackAfterResponse(t *testing.T) {
+	c := NewClient(&Config{}, nil)
+	response := `{"data":{"certificate":"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"}}`
+	tests := map[string]string{
+		"normal attach": response + "\npod \"openbao-pki-root-ca\" deleted\n",
+		"log fallback": response +
+			"\nwarning: couldn't attach to pod/openbao-pki-root-ca, falling back to streaming logs\n" +
+			"pod \"openbao-pki-root-ca\" deleted\n",
+	}
+
+	for name, output := range tests {
+		t.Run(name, func(t *testing.T) {
+			filtered := c.filterKubectlOutput(output)
+			got, err := rootCAPEMFromOpenBaoResponse(filtered)
+			require.NoError(t, err)
+			assert.Equal(t, openBaoTestCertPEM, got)
+		})
+	}
+}
+
+func TestRootCAPEMFromOpenBaoResponsePreservesCertificateErrors(t *testing.T) {
+	tests := map[string]string{
+		"malformed response":  "not-json",
+		"OpenBao error":       `{"errors":["permission denied"]}`,
+		"missing certificate": `{"data":{}}`,
+	}
+
+	for name, response := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := rootCAPEMFromOpenBaoResponse(response)
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestKubectlOutputMetadataDoesNotExposeCertificate(t *testing.T) {
+	metadata := kubectlOutputMetadata(openBaoTestCertPEM)
+
+	assert.Equal(t, "59 bytes", metadata)
+	assert.NotContains(t, metadata, "CERTIFICATE")
+}
+
+func TestExecuteKubectlRunPreservesCommandError(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	c := NewClient(&Config{}, nil)
+	_, err := c.executeKubectlRun(context.Background(), "test", nil)
+	require.Error(t, err)
+
+	var execErr *exec.Error
+	require.ErrorAs(t, err, &execErr)
 }
