@@ -98,6 +98,9 @@ Commit with a DCO sign-off and a conventional commit message (see [Commit Messag
 - Push your branch and open a PR targeting `main`.
 - Use the [PR template](.github/PULL_REQUEST_TEMPLATE.md) when opening your pull request.
 - Reference the related issue in the PR description with `Fixes #123`.
+- To get a dev image built from your PR, label it `deploy-to-stg`. See
+  [the deploy-to-stg label](docs/dev/deploy-to-stg-label.md). This works only
+  for branches in this repository, not for fork PRs.
 - Someone will review your PR soon!
 
 ---
