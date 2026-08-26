@@ -505,7 +505,7 @@ func (a *Agent) tryGracefulNoGPURegistration(ctx context.Context) bool {
 
 	log.Info("Registering with ICMS after GPUs became available")
 	if _, err := a.RegisterWithICMS(ctx); err != nil {
-		log.WithError(err).Error("Failed to register with ICMS after GPUs became available; will retry")
+		log.WithError(err).Warn("Failed to register with ICMS after GPUs became available; will retry")
 		return a.gpuMonitor.HasGPUs()
 	}
 

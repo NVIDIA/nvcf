@@ -468,7 +468,8 @@ func TestAgentStartGracefulNoGPURecoversWhenGPUAppears(t *testing.T) {
 }
 
 func TestAgentStartGracefulNoGPURegistrationFailureRetriesBeforeResuming(t *testing.T) {
-	ctx, cancel := context.WithCancel(core.WithRandomSeed(newTestContext(), 42))
+	logCtx, logHook := core.WithTestingLogger(newTestContext())
+	ctx, cancel := context.WithCancel(core.WithRandomSeed(logCtx, 42))
 	t.Cleanup(cancel)
 
 	recoveredCredentials := getTestQueueCreds(true)
@@ -492,6 +493,14 @@ func TestAgentStartGracefulNoGPURegistrationFailureRetriesBeforeResuming(t *test
 
 	icmsClient.release(0)
 	requireRegistrationAttempt(t, icmsClient, 1)
+	retryLogs := make([]*logrus.Entry, 0, 1)
+	for _, entry := range logHook.AllEntries() {
+		if entry.Message == "Failed to register with ICMS after GPUs became available; will retry" {
+			retryLogs = append(retryLogs, entry)
+		}
+	}
+	require.Len(t, retryLogs, 1)
+	assert.Equal(t, logrus.WarnLevel, retryLogs[0].Level)
 	assert.True(t, agent.queueManager.IsPaused(), "queue must remain paused while registration retry is in flight")
 	assert.Empty(t, agent.queueManager.getCreateQueue(testGPUNameDefault).QueueURL)
 	requireRefreshedReadinessStatus(t, ctx, agent, http.StatusServiceUnavailable)
