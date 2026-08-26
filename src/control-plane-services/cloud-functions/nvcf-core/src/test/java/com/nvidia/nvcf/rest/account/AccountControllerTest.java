@@ -419,6 +419,11 @@ class AccountControllerTest {
                 .isEqualTo(NvcfConstants.DEFAULT_MAX_REGISTRY_CREDENTIALS_ALLOWED);
         assertThat(responseBody.account().lastUpdatedAt()).isNotNull();
         assertThat(responseBody.account().registryCredentials()).isNotEmpty().hasSize(3);
+        assertThat(responseBody.account().registryCredentials())
+                .allSatisfy(registryCredential -> {
+                    assertThat(registryCredential.registryCredentialId()).isNotNull();
+                    assertThat(registryCredential.secret()).isNotNull();
+                });
     }
 
     Stream<Arguments> getAccountWithTelemetryArgs() {

@@ -125,70 +125,21 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
             - "*.llm-request-router-headless.nvcf.svc.cluster.local"
         """
 
-      When I run command:
-        """
-        kubectl --context k3d-ncp-local-cp wait tcproute/llm-worker-grpc udproute/llm-worker-quic -n envoy-gateway-system --for=jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}'=True --timeout=2m
-        """
-      Then the command exit code should be 0
-
-      When I run command:
-        """
-        kubectl --context k3d-ncp-local-cp wait tcproute/llm-worker-grpc udproute/llm-worker-quic -n envoy-gateway-system --for=jsonpath='{.status.parents[0].conditions[?(@.type=="ResolvedRefs")].status}'=True --timeout=2m
-        """
-      Then the command exit code should be 0
-
       # These routes are installed by ncp-local before the Helmfile
       # stack, then become fully resolved once the control-plane
       # Services exist. Check route status here so Gateway wiring
       # failures point at the route layer instead of surfacing only
       # during function invocation.
-      When I run command:
-        """
-        kubectl --context k3d-ncp-local-cp wait httproute/nvcf-api-control-plane httproute/invocation-control-plane httproute/reval-control-plane -n nvcf --for=jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}'=True --timeout=2m
-        """
-      Then the command exit code should be 0
-
-      When I run command:
-        """
-        kubectl --context k3d-ncp-local-cp wait httproute/nvcf-api-control-plane httproute/invocation-control-plane httproute/reval-control-plane -n nvcf --for=jsonpath='{.status.parents[0].conditions[?(@.type=="ResolvedRefs")].status}'=True --timeout=2m
-        """
-      Then the command exit code should be 0
-
-      When I run command:
-        """
-        kubectl --context k3d-ncp-local-cp wait httproute/ess-control-plane -n ess --for=jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}'=True --timeout=2m
-        """
-      Then the command exit code should be 0
-
-      When I run command:
-        """
-        kubectl --context k3d-ncp-local-cp wait httproute/ess-control-plane -n ess --for=jsonpath='{.status.parents[0].conditions[?(@.type=="ResolvedRefs")].status}'=True --timeout=2m
-        """
-      Then the command exit code should be 0
-
-      When I run command:
-        """
-        kubectl --context k3d-ncp-local-cp wait httproute/sis-control-plane -n sis --for=jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}'=True --timeout=2m
-        """
-      Then the command exit code should be 0
-
-      When I run command:
-        """
-        kubectl --context k3d-ncp-local-cp wait httproute/sis-control-plane -n sis --for=jsonpath='{.status.parents[0].conditions[?(@.type=="ResolvedRefs")].status}'=True --timeout=2m
-        """
-      Then the command exit code should be 0
-
-      When I run command:
-        """
-        kubectl --context k3d-ncp-local-cp wait grpcroute/nvcf-api-control-plane-grpc -n nvcf --for=jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}'=True --timeout=2m
-        """
-      Then the command exit code should be 0
-
-      When I run command:
-        """
-        kubectl --context k3d-ncp-local-cp wait grpcroute/nvcf-api-control-plane-grpc -n nvcf --for=jsonpath='{.status.parents[0].conditions[?(@.type=="ResolvedRefs")].status}'=True --timeout=2m
-        """
-      Then the command exit code should be 0
+      Then these Gateway API routes should be accepted and resolved using context "k3d-ncp-local-cp" within "2m":
+        | kind      | name                        | namespace            | parent      |
+        | TCPRoute  | llm-worker-grpc             | envoy-gateway-system | grpc-gw     |
+        | UDPRoute  | llm-worker-quic             | envoy-gateway-system | grpc-gw     |
+        | HTTPRoute | nvcf-api-control-plane      | nvcf                 | shared-gw   |
+        | HTTPRoute | invocation-control-plane    | nvcf                 | shared-gw   |
+        | HTTPRoute | reval-control-plane         | nvcf                 | shared-gw   |
+        | HTTPRoute | ess-control-plane           | ess                  | shared-gw   |
+        | HTTPRoute | sis-control-plane           | sis                  | shared-gw   |
+        | GRPCRoute | nvcf-api-control-plane-grpc | nvcf                 | api-grpc-gw |
 
   Rule: Helmfile registers and installs NVCA on the compute cluster
 
@@ -271,7 +222,7 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
     Scenario: Operator launches an NVCT task and waits for it to complete
       When I run command:
         """
-        tests/bdd/scripts/run-nvct-task-smoke.sh
+        env NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_1x tests/bdd/scripts/run-nvct-task-smoke.sh
         """
       Then the command exit code should be 0
       And the command output should contain "COMPLETED"
@@ -291,7 +242,7 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
       And I successfully deploy the function selected by NVCF CLI with options:
         | option          | value               |
         | --gpu           | H100                |
-        | --instance-type | NCP.GPU.H100_8x     |
+        | --instance-type | NCP.GPU.H100_1x     |
         | --backend       | ncp-local-compute-1 |
         | --regions       | us-west-1           |
         | --min-instances | 1                   |
@@ -325,7 +276,7 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
       And I successfully deploy the function selected by NVCF CLI with options:
         | option          | value               |
         | --gpu           | H100                |
-        | --instance-type | NCP.GPU.H100_8x     |
+        | --instance-type | NCP.GPU.H100_1x     |
         | --backend       | ncp-local-compute-1 |
         | --regions       | us-west-1           |
         | --min-instances | 1                   |

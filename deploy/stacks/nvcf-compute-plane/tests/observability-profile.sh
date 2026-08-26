@@ -91,7 +91,7 @@ for profile in default disabled control compute all; do
   esac
 done
 
-expected_nvca_version="3.2.7"
+expected_nvca_version="3.2.12"
 test "$(operator_image_tag "$work_dir/default.yaml")" = "$expected_nvca_version" ||
   fail "default operator image tag is not $expected_nvca_version"
 test "$(nvca_version "$work_dir/default.yaml")" = "$expected_nvca_version" ||

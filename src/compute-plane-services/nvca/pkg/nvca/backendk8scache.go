@@ -1530,6 +1530,9 @@ func (c *BackendK8sCache) GetNodeInformer() cache.SharedIndexInformer {
 
 func (c *BackendK8sCache) GetComponentStatus(ctx context.Context) (hs types.AgentHealth, err error) {
 	hs.GPUUsage, err = c.getGPUUsageStats(ctx)
+	if hs.GPUUsage == nil {
+		hs.GPUUsage = map[nvcatypes.GPUName]nvcatypes.GPUResource{}
+	}
 	hs.Status = types.HealthStatusHealthy
 	ch := types.ComponentHealth{
 		Status:      types.HealthStatusHealthy,
@@ -1725,13 +1728,14 @@ func (c *BackendK8sCache) getGPUUsageStats(ctx context.Context) (map[nvcatypes.G
 			continue
 		}
 		for _, it := range regGPU.InstanceTypes {
-			if strings.HasSuffix(it.Name, "_1x") {
-				res := gpuUtil[nvcatypes.GPUName(regGPU.Name)]
-				res.Capacity += it.MaxInstances * it.GPUCount
-				res.Allocated += allocatedGPUs[it.Value]
-				gpuUtil[nvcatypes.GPUName(regGPU.Name)] = res
-				break
+			if it.NodeType != nvcatypes.RegistrationInstanceTypeNodeTypeSingle {
+				continue
 			}
+			res := gpuUtil[nvcatypes.GPUName(regGPU.Name)]
+			res.Capacity += it.MaxInstances * it.GPUCount
+			res.Allocated += allocatedGPUs[it.Value]
+			gpuUtil[nvcatypes.GPUName(regGPU.Name)] = res
+			break
 		}
 	}
 	return gpuUtil, nil
