@@ -63,7 +63,10 @@
       "id": "grpc-proxy-helm",
       "path": "deploy/helm/grpc-proxy",
       "service_name": "helm-nvcf-grpc-proxy",
-      "legacy_tag_prefix": "helm-nvcf-grpc-proxy-v"
+      "legacy_tag_prefix": "helm-nvcf-grpc-proxy-v",
+      "deploys": [
+        "grpc-proxy"
+      ]
     },
     {
       "id": "ratelimiter",
@@ -75,7 +78,10 @@
       "id": "ratelimiter-helm",
       "path": "deploy/helm/ratelimiter",
       "service_name": "helm-nvcf-rate-limiter",
-      "legacy_tag_prefix": "helm-nvcf-rate-limiter-v"
+      "legacy_tag_prefix": "helm-nvcf-rate-limiter-v",
+      "deploys": [
+        "ratelimiter"
+      ]
     },
     {
       "id": "http-invocation",
@@ -99,7 +105,10 @@
       "id": "llm-api-gateway-helm",
       "path": "deploy/helm/llm-api-gateway",
       "service_name": "helm-nvcf-llm-api-gateway",
-      "legacy_tag_prefix": "helm-nvcf-llm-api-gateway-v"
+      "legacy_tag_prefix": "helm-nvcf-llm-api-gateway-v",
+      "deploys": [
+        "llm-api-gateway"
+      ]
     },
     {
       "id": "vanity-gateway",
@@ -116,7 +125,10 @@
     {
       "id": "function-autoscaler-helm",
       "path": "deploy/helm/function-autoscaler",
-      "service_name": "helm-nvcf-function-autoscaler"
+      "service_name": "helm-nvcf-function-autoscaler",
+      "deploys": [
+        "function-autoscaler"
+      ]
     },
     {
       "id": "nats-auth-callout",
@@ -175,7 +187,8 @@
       "id": "nats",
       "path": "deploy/helm/nats",
       "service_name": "helm-nvcf-nats",
-      "legacy_tag_prefix": "helm-nvcf-nats-v"
+      "legacy_tag_prefix": "helm-nvcf-nats-v",
+      "deploys": []
     },
     {
       "id": "admin-token-issuer-proxy",
@@ -205,12 +218,14 @@
       "id": "cert-manager",
       "path": "deploy/helm/cert-manager",
       "service_name": "helm-nvcf-cert-manager",
-      "legacy_tag_prefix": "helm-nvcf-cert-manager-v"
+      "legacy_tag_prefix": "helm-nvcf-cert-manager-v",
+      "deploys": []
     },
     {
       "id": "nvcf-pki",
       "path": "deploy/helm/nvcf-pki",
-      "service_name": "helm-nvcf-pki"
+      "service_name": "helm-nvcf-pki",
+      "deploys": []
     },
     {
       "id": "llm-request-router",
@@ -222,19 +237,26 @@
       "id": "gateway-routes",
       "path": "deploy/helm/gateway-routes",
       "service_name": "nvcf-gateway-routes",
-      "legacy_tag_prefix": "nvcf-gateway-routes-v"
+      "legacy_tag_prefix": "nvcf-gateway-routes-v",
+      "deploys": []
     },
     {
       "id": "vanity-gateway-helm",
       "path": "deploy/helm/vanity-gateway",
       "service_name": "helm-nvcf-vanity-gateway",
-      "initial_version": "0.2.0"
+      "initial_version": "0.2.0",
+      "deploys": [
+        "vanity-gateway"
+      ]
     },
     {
       "id": "nvca-operator",
       "path": "deploy/helm/nvca-operator",
       "service_name": "helm-nvca-operator",
-      "legacy_tag_prefix": "helm-nvca-operator-v"
+      "legacy_tag_prefix": "helm-nvca-operator-v",
+      "deploys": [
+        "nvca"
+      ]
     },
     {
       "id": "cassandra-migrations",
@@ -288,7 +310,10 @@
     {
       "id": "event-ledger-helm",
       "path": "deploy/helm/event-ledger",
-      "service_name": "helm-nvcf-event-ledger"
+      "service_name": "helm-nvcf-event-ledger",
+      "deploys": [
+        "event-ledger"
+      ]
     },
     {
       "id": "ess",
@@ -300,25 +325,37 @@
       "id": "ess-helm",
       "path": "deploy/helm/encrypted-secret-store",
       "service_name": "helm-nvcf-ess-api",
-      "legacy_tag_prefix": "deploy/helm/ess/v"
+      "legacy_tag_prefix": "deploy/helm/ess/v",
+      "deploys": [
+        "ess"
+      ]
     },
     {
       "id": "cloud-tasks-helm",
       "path": "deploy/helm/cloud-tasks",
       "service_name": "helm-nvcf-nvct-api",
-      "initial_version": "1.4.4"
+      "initial_version": "1.4.4",
+      "deploys": [
+        "cloud-tasks"
+      ]
     },
     {
       "id": "notary-helm",
       "path": "deploy/helm/notary",
       "service_name": "helm-nvcf-notary-service",
-      "initial_version": "1.4.2"
+      "initial_version": "1.4.2",
+      "deploys": [
+        "notary"
+      ]
     },
     {
       "id": "cloud-functions-helm",
       "path": "deploy/helm/cloud-functions",
       "service_name": "helm-nvcf-api",
-      "initial_version": "1.23.11"
+      "initial_version": "1.23.11",
+      "deploys": [
+        "cloud-functions"
+      ]
     },
     {
       "id": "instance-cluster-management",
