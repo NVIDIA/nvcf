@@ -16,9 +16,14 @@ import (
 const HelmfileDir = "deploy/stacks/self-managed/helmfile.d"
 
 var (
-	nameRE    = regexp.MustCompile(`^\s+- name:\s*(\S+)`)
-	chartRE   = regexp.MustCompile(`^\s+chart:\s*(.+?)\s*$`)
-	versionRE = regexp.MustCompile(`^(\s+version:\s*)([0-9]\S*)(\s*)$`)
+	nameRE  = regexp.MustCompile(`^(\s+)- name:\s*(\S+)`)
+	chartRE = regexp.MustCompile(`^(\s+)chart:\s*(.+?)\s*$`)
+	// Split so the value can be validated separately from the line shape. A
+	// version line whose value is not a version is reported, not skipped.
+	versionLineRE = regexp.MustCompile(`^(\s+version:\s*)(.*?)(\s*)$`)
+	// Quoted or bare. Nothing in the stack is quoted today, but a value that
+	// gains quotes must not silently stop being recognised as a pin.
+	versionValueRE = regexp.MustCompile(`^"?v?[0-9][^"\s]*"?$`)
 	// The shared template most releases inherit. The inner braces are escaped
 	// in the helmfile source because helmfile passes the expression through to
 	// helm.
@@ -63,7 +68,7 @@ func ChartNameForRelease(releaseName string, body []string) (string, error) {
 	found := false
 	for _, line := range body {
 		if m := chartRE.FindStringSubmatch(line); m != nil {
-			value, found = m[1], true
+			value, found = m[2], true
 			break
 		}
 	}
@@ -114,20 +119,38 @@ func LoadStack(root string) ([]Release, error) {
 		for _, blk := range splitReleases(lines) {
 			body := lines[blk.start : blk.end+1]
 
-			versionLine, version := -1, ""
+			// Only at the release's own field indent. A version: nested deeper
+			// belongs to a values block or a sub-object, and treating it as the
+			// pin would rewrite an unrelated key.
+			fieldIndent := blk.indent + 2
+			versionLine, version, malformed := -1, "", ""
 			for i, line := range body {
-				if m := versionRE.FindStringSubmatch(line); m != nil {
-					versionLine, version = blk.start+i, m[2]
+				m := versionLineRE.FindStringSubmatch(line)
+				if m == nil || len(m[1])-len("version:")-countTrailingSpace(m[1]) != fieldIndent {
+					continue
+				}
+				if !versionValueRE.MatchString(m[2]) {
+					// A release-level version that cannot be read is reported.
+					// Skipping it would drop a real pin silently, which is the
+					// failure this tool exists to prevent.
+					malformed = m[2]
 					break
 				}
+				versionLine, version = blk.start+i, strings.Trim(m[2], `"`)
+				break
 			}
-			if versionLine < 0 {
+			if versionLine < 0 && malformed == "" {
 				// Not a pin. The shared templates block and the repositories
 				// block both match the release shape but carry no version.
 				continue
 			}
 
 			r := Release{Name: blk.name, File: filepath.Base(path), Version: version, VersionLine: versionLine}
+			if malformed != "" {
+				r.Unresolved = fmt.Sprintf("version is not a recognisable pin: %s", malformed)
+				out = append(out, r)
+				continue
+			}
 			chart, err := ChartNameForRelease(blk.name, body)
 			if err != nil {
 				r.Unresolved = err.Error()
@@ -142,6 +165,7 @@ func LoadStack(root string) ([]Release, error) {
 
 type block struct {
 	name       string
+	indent     int
 	start, end int
 }
 
@@ -155,9 +179,19 @@ func splitReleases(lines []string) []block {
 		if n := len(blocks); n > 0 {
 			blocks[n-1].end = i - 1
 		}
-		blocks = append(blocks, block{name: m[1], start: i, end: len(lines) - 1})
+		blocks = append(blocks, block{name: m[2], indent: len(m[1]), start: i, end: len(lines) - 1})
 	}
 	return blocks
+}
+
+// countTrailingSpace counts the run of spaces at the end of s, which is how the
+// indent of a "version:" line is recovered from its captured prefix.
+func countTrailingSpace(s string) int {
+	n := 0
+	for i := len(s) - 1; i >= 0 && s[i] == ' '; i-- {
+		n++
+	}
+	return n
 }
 
 // WritePin replaces the version on a single release's pin line.
@@ -171,7 +205,7 @@ func WritePin(root string, r Release, version string) error {
 	if r.VersionLine < 0 || r.VersionLine >= len(lines) {
 		return fmt.Errorf("%s: pin line %d is out of range for %s", r.Release(), r.VersionLine, path)
 	}
-	m := versionRE.FindStringSubmatch(lines[r.VersionLine])
+	m := versionLineRE.FindStringSubmatch(lines[r.VersionLine])
 	if m == nil {
 		// The file changed under us. Rewriting a line that is no longer a pin
 		// would corrupt the stack, so stop instead.

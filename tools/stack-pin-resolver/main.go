@@ -39,6 +39,13 @@ import (
 
 var tagRE = regexp.MustCompile(`^(deploy/helm/.+)/v(.+)$`)
 
+// The version out of a tag is written verbatim into a shipped helmfile, so it
+// is validated before it gets there rather than after. A tag is attacker
+// influenceable by anyone who can push one, and `.+` would accept a value
+// carrying spaces, quotes or a newline, which would corrupt the file or smuggle
+// in an adjacent key.
+var versionRE = regexp.MustCompile(`^[0-9][A-Za-z0-9._+-]*$`)
+
 func main() {
 	auditMode := flag.Bool("audit", false, "report the chart every stack release pins")
 	tag := flag.String("tag", "", "chart release tag, for example deploy/helm/nats/v0.8.0")
@@ -102,6 +109,9 @@ func Bump(root, tag string, write bool, out, errOut io.Writer) (int, error) {
 		return 1, fmt.Errorf("not a chart release tag: %s", tag)
 	}
 	chartPath, version := m[1], m[2]
+	if !versionRE.MatchString(version) {
+		return 1, fmt.Errorf("tag %s carries a version that is not a plain version string: %q", tag, version)
+	}
 
 	chart, err := ChartNameForPath(root, chartPath)
 	if err != nil {

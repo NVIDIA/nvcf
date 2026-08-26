@@ -328,3 +328,104 @@ func repoRoot(t *testing.T) string {
 	t.Fatalf("could not find %s above the test directory", MetadataPath)
 	return ""
 }
+
+func TestTagVersionIsValidatedBeforeItIsWritten(t *testing.T) {
+	// The version out of a tag is written verbatim into a shipped helmfile, and
+	// anyone who can push a tag chooses it. A value carrying a space, a quote or
+	// a newline would corrupt the file or smuggle in an adjacent key.
+	f := newStack(t, stackMeta, map[string]string{"00-stack.yaml.gotmpl": stackFile})
+	for _, bad := range []string{
+		"deploy/helm/alpha/v2.0.0 extra",
+		`deploy/helm/alpha/v"quoted"`,
+		"deploy/helm/alpha/vlatest",
+		"deploy/helm/alpha/v../../etc/passwd",
+	} {
+		code, _, errOut := f.bump(t, bad, true)
+		if code != 1 {
+			t.Errorf("tag %q must be rejected, got exit %d", bad, code)
+		}
+		if !strings.Contains(errOut, "not a plain version string") {
+			t.Errorf("tag %q: want a version-format error, got %q", bad, errOut)
+		}
+	}
+	// A newline is rejected one step earlier, by the tag pattern itself, since
+	// Go's . does not match one. Asserted separately so the message difference
+	// is deliberate rather than a gap.
+	if code, _, errOut := f.bump(t, "deploy/helm/alpha/v2.0.0\nversion: 9.9.9", true); code != 1 ||
+		!strings.Contains(errOut, "not a chart release tag") {
+		t.Errorf("a tag carrying a newline must be rejected: exit %d, %q", code, errOut)
+	}
+	if f.read(t, "00-stack.yaml.gotmpl") != stackFile {
+		t.Fatal("a rejected tag still wrote to the helmfile")
+	}
+}
+
+func TestNestedVersionKeyIsNotMistakenForThePin(t *testing.T) {
+	// A version: inside a values block sits deeper than the release's own
+	// fields. Matching any indent rewrites an unrelated key and leaves the real
+	// pin untouched.
+	// The nested key comes FIRST, before the release's own pin. Ordered the
+	// other way the loop finds the real pin and stops, so the test passes even
+	// with the indent check removed. Mutation testing caught exactly that.
+	body := `releases:
+  - name: alpha
+    namespace: nvcf
+    values:
+      - image:
+          version: 7.7.7
+    version: 1.0.0
+`
+	f := newStack(t, stackMeta, map[string]string{"00-stack.yaml.gotmpl": body})
+	if code, _, errOut := f.bump(t, "deploy/helm/alpha/v2.0.0", true); code != 0 {
+		t.Fatalf("bump should succeed, got %d: %s", code, errOut)
+	}
+	got := f.read(t, "00-stack.yaml.gotmpl")
+	if !strings.Contains(got, "    version: 2.0.0") {
+		t.Fatalf("the release pin did not move:\n%s", got)
+	}
+	if !strings.Contains(got, "          version: 7.7.7") {
+		t.Fatalf("the nested value must not be touched:\n%s", got)
+	}
+}
+
+func TestUnreadableReleaseVersionIsReportedNotSkipped(t *testing.T) {
+	// Silently skipping a release-level version that cannot be parsed drops a
+	// real pin, which is the failure this tool exists to prevent. A block with
+	// no version at all is still not a pin, and must stay that way.
+	body := `repositories:
+  - name: nvcf
+    url: oci://example.invalid/nvcf
+
+releases:
+  - name: alpha
+    version: {{ .Values.someVersion }}
+`
+	f := newStack(t, stackMeta, map[string]string{"00-stack.yaml.gotmpl": body})
+	code, out, errOut := f.audit(t)
+	if code != 1 {
+		t.Fatalf("an unreadable pin must fail the audit, got %d", code)
+	}
+	if !strings.Contains(out, "1 releases, 1 unresolved") {
+		t.Fatalf("it must be counted, not dropped:\n%s", out)
+	}
+	if !strings.Contains(errOut, "not a recognisable pin") {
+		t.Fatalf("the reason should say the version is unreadable:\n%s", errOut)
+	}
+}
+
+func TestQuotedVersionIsStillAPin(t *testing.T) {
+	// Nothing in the stack is quoted today. If a value gains quotes it must not
+	// silently stop being recognised, which would drop it from every bump.
+	body := `releases:
+  - name: alpha
+    version: "1.0.0"
+`
+	f := newStack(t, stackMeta, map[string]string{"00-stack.yaml.gotmpl": body})
+	code, out, errOut := f.audit(t)
+	if code != 0 {
+		t.Fatalf("a quoted version is still a pin, got %d: %s", code, errOut)
+	}
+	if !strings.Contains(out, "1 releases, 0 unresolved") {
+		t.Fatalf("want it counted as a resolved pin:\n%s", out)
+	}
+}
