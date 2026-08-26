@@ -510,17 +510,25 @@ func (p *CassandraProvider) NewConnection(config config.DBConfig) (data_access.D
 	}
 	if config.CassandraConfig.PubKeyPath != "" && config.CassandraConfig.PrivKeyPath != "" {
 		cluster.SslOpts = &gocql.SslOptions{
-			CertPath: config.CassandraConfig.PubKeyPath,
-			KeyPath:  config.CassandraConfig.PrivKeyPath,
+			CertPath:               config.CassandraConfig.PubKeyPath,
+			KeyPath:                config.CassandraConfig.PrivKeyPath,
+			CaPath:                 config.CassandraConfig.CACertPath,
+			EnableHostVerification: !config.CassandraConfig.InsecureSkipVerify,
 		}
 	} else if config.CassandraConfig.PubKeyB64 != "" && config.CassandraConfig.PrivKeyB64 != "" {
-		sslOpts, err := configutil.GetTLSConfigFromBase64(config.CassandraConfig.PubKeyB64, config.CassandraConfig.PrivKeyB64, config.CassandraConfig.InsecureSkipVerify)
+		sslOpts, err := configutil.GetTLSConfigFromBase64(
+			config.CassandraConfig.PubKeyB64,
+			config.CassandraConfig.PrivKeyB64,
+			config.CassandraConfig.CACertB64,
+			config.CassandraConfig.InsecureSkipVerify,
+		)
 		if err != nil {
 			p.logger.Warn("failed to create tls config", zap.Error(err))
 			return nil, err
 		}
 		cluster.SslOpts = &gocql.SslOptions{
-			Config: sslOpts,
+			Config:                 sslOpts,
+			EnableHostVerification: !config.CassandraConfig.InsecureSkipVerify,
 		}
 	}
 
