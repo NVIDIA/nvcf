@@ -119,6 +119,23 @@ func EnsureNetworkPoliciesSharedPodInstanceNamespace(
 	)
 }
 
+// RemoveLegacyIntraNamespaceEgressPolicy deletes the allow-egress-intra-namespace
+// NetworkPolicy from the shared pod-instance namespace (nvcf-backend) if it still
+// exists from before this policy was scoped out of that namespace. It is meant to
+// be called once, at agent startup, rather than on every reconcile: the policy is
+// not custom-labeled, so the regular ensureNetworkPolicies prune loop never removes
+// it on its own, and clusters that already have it must be migrated explicitly.
+func RemoveLegacyIntraNamespaceEgressPolicy(ctx context.Context, namespace string, k8sClient k8sclient.Interface) error {
+	err := k8sClient.NetworkingV1().NetworkPolicies(namespace).Delete(
+		ctx, AllowEgressIntraNamespaceNetworkPolicyName, metav1.DeleteOptions{},
+	)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete legacy NetworkPolicy %s in namespace %s: %w",
+			AllowEgressIntraNamespaceNetworkPolicyName, namespace, err)
+	}
+	return nil
+}
+
 func ensureNetworkPolicies(
 	ctx context.Context,
 	namespace string,
