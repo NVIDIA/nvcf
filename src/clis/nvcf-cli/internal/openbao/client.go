@@ -429,7 +429,8 @@ func readPKICertificatePEM(
 			return pem, nil
 		}
 		var syntaxErr *json.SyntaxError
-		if !errors.As(err, &syntaxErr) || attempt == attempts {
+		retryable := strings.TrimSpace(output) == "" || errors.As(err, &syntaxErr)
+		if !retryable || attempt == attempts {
 			return "", err
 		}
 		if err := waitForPKICertificateRetry(ctx, retryDelay); err != nil {

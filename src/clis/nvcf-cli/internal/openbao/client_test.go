@@ -117,6 +117,24 @@ func TestReadPKICertificatePEMRetriesMalformedResponse(t *testing.T) {
 	assert.Equal(t, len(responses), attempt)
 }
 
+func TestReadPKICertificatePEMRetriesEmptyResponse(t *testing.T) {
+	responses := []string{
+		"",
+		`{"data":{"certificate":"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"}}`,
+	}
+	attempt := 0
+
+	got, err := readPKICertificatePEM(context.Background(), len(responses), 0, func(context.Context) (string, error) {
+		response := responses[attempt]
+		attempt++
+		return response, nil
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, openBaoTestCertPEM, got)
+	assert.Equal(t, len(responses), attempt)
+}
+
 func TestReadPKICertificatePEMDoesNotRetryOpenBaoError(t *testing.T) {
 	attempt := 0
 
