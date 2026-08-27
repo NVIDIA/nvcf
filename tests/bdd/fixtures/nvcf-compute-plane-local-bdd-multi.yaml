@@ -44,6 +44,10 @@ global:
       revalServiceURL: http://reval.nvcf.svc.cluster.local:8080
       natsURL: nats://nats.nats-system.svc.cluster.local:4222
 
+# Local BDD does not install the optional observability stack.
+observability:
+  profile: disabled
+
 agentConfig:
   mergeConfig: |
     cluster:

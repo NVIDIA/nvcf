@@ -53,13 +53,13 @@ name without the `.yaml` suffix.
 
 ## Observability
 
-The stack defaults `observability.profile` to `disabled`. Set the profile to
-`compute` or `all` to enable the `BYOObservability` feature gate. The optional
-NVCA collector stays disabled for every profile until the operator opts in.
-This prevents a self-hosted install from depending on an image that was not
-mirrored into its registry.
+The stack defaults `observability.profile` to `compute`. The `compute` and
+`all` profiles enable the `BYOObservability` feature gate. The optional NVCA
+collector stays disabled for every profile until the operator opts in. This
+prevents a self-hosted install from depending on an image that was not mirrored
+into its registry.
 
-Enable compute-plane observability explicitly:
+The default profile enables compute-plane observability:
 
 ```yaml
 observability:

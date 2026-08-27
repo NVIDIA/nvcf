@@ -38,6 +38,10 @@ global:
     # NVCF API advertises this value as LLM_REQUEST_ROUTER_ADDRESS.
     llmRequestRouterAddress: llm-request-router.nvcf.svc.cluster.local:50071
 
+# Local BDD does not install the optional observability stack.
+observability:
+  profile: disabled
+
 cassandra:
   replicaCount: 1
   resourcesPreset: "large"
