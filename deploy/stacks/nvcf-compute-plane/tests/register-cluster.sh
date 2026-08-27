@@ -16,6 +16,8 @@ cp "${stack_dir}/Makefile.dist" "${test_dir}/compute-plane/Makefile"
 
 profile="${test_dir}/self-managed/out/control-plane-profile.yaml"
 printf 'generated-control-plane-profile\n' > "${profile}"
+config="${test_dir}/config with spaces.yaml"
+printf 'api:\n  base_url: http://example.invalid\n' > "${config}"
 
 fake_cli="${test_dir}/bin/nvcf-cli"
 record="${test_dir}/cli-args"
@@ -48,10 +50,12 @@ FAKE_CLI_RECORD="${record}" make -C "${test_dir}/compute-plane" register-cluster
   CLUSTER_NAME=gpu-a \
   CLUSTER_REGION=us-east-1 \
   COMPUTE_KUBE_CONTEXT=compute-context \
+  NVCF_CLI_CONFIG="${config}" \
   NVCF_CLI="${fake_cli}"
 
 mapfile -t args < "${record}"
 expected=(
+  --config "${config}"
   self-hosted
   --compute-plane-stack "${test_dir}/compute-plane"
   compute-plane register
@@ -76,6 +80,21 @@ done
 
 values="${test_dir}/compute-plane/registration/gpu-a-register-values.yaml"
 grep -q '^clusterID: generated-id$' "${values}"
+
+no_config_record="${test_dir}/cli-args-no-config"
+FAKE_CLI_RECORD="${no_config_record}" make -C "${test_dir}/compute-plane" register-cluster \
+  CLUSTER_NAME=gpu-b \
+  NVCF_CLI="${fake_cli}"
+mapfile -t no_config_args < "${no_config_record}"
+if [[ "${no_config_args[0]}" != "self-hosted" ]]; then
+  printf 'register-cluster added arguments before self-hosted without NVCF_CLI_CONFIG: %q\n' \
+    "${no_config_args[0]}" >&2
+  exit 1
+fi
+if printf '%s\n' "${no_config_args[@]}" | grep -Fxq -- '--config'; then
+  echo "register-cluster passed --config without NVCF_CLI_CONFIG" >&2
+  exit 1
+fi
 
 rm "${profile}" "${record}"
 if FAKE_CLI_RECORD="${record}" make -C "${test_dir}/compute-plane" register-cluster \

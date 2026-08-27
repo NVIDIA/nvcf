@@ -396,15 +396,8 @@ func (c *Client) generateUserJWTTokenWithSubject(ctx context.Context, vaultToken
 // mount, for example services/all/pki/root/cert/ca. The returned value is PEM
 // text suitable for a public trust bundle.
 func (c *Client) ReadPKICertificatePEM(ctx context.Context, pkiPath string) (string, error) {
-	rootToken, err := c.getOpenBaoRootToken()
-	if err != nil {
-		return "", fmt.Errorf("retrieving OpenBao root token: %w", err)
-	}
 	readURL := strings.TrimRight(c.config.OpenBaoURL, "/") + "/v1/" + strings.Trim(pkiPath, "/") + "/cert/ca"
-	curlArgs := []string{
-		"curl", "-sS", readURL,
-		"-H", "X-Vault-Token: " + rootToken,
-	}
+	curlArgs := []string{"curl", "-sS", readURL}
 	output, err := c.executeKubectlRun(ctx, "openbao-pki-root-ca", curlArgs)
 	if err != nil {
 		return "", fmt.Errorf("reading OpenBao PKI certificate: %w", err)

@@ -21,7 +21,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -115,4 +117,40 @@ func TestExecuteKubectlRunPreservesCommandError(t *testing.T) {
 
 	var execErr *exec.Error
 	require.ErrorAs(t, err, &execErr)
+}
+
+func TestReadPKICertificatePEMUsesPublicEndpointWithoutRootToken(t *testing.T) {
+	testDir := t.TempDir()
+	commandLog := filepath.Join(testDir, "kubectl.log")
+	kubectlPath := filepath.Join(testDir, "kubectl")
+	kubectlScript := `#!/bin/sh
+printf '%s\n' "$*" >> "$KUBECTL_COMMAND_LOG"
+case " $* " in
+  *" get secret "*) exit 91 ;;
+  *" X-Vault-Token: "*) exit 92 ;;
+esac
+printf '%s\n' '{"data":{"certificate":"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"}}'
+`
+	require.NoError(t, os.WriteFile(kubectlPath, []byte(kubectlScript), 0o755))
+	t.Setenv("PATH", testDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("KUBECTL_COMMAND_LOG", commandLog)
+
+	client := NewClient(&Config{
+		OpenBaoURL:        "http://openbao-openbao.nvcf.svc.cluster.local:8200",
+		OpenBaoNamespace:  "openbao",
+		OpenBaoSecretName: "openbao-root-token",
+		ClusterNamespace:  "nvcf",
+		UtilityImage:      "curlimages/curl:latest",
+	}, nil)
+
+	got, err := client.ReadPKICertificatePEM(context.Background(), "services/all/pki/root")
+	require.NoError(t, err)
+	assert.Equal(t, openBaoTestCertPEM, got)
+
+	logBody, err := os.ReadFile(commandLog)
+	require.NoError(t, err)
+	commands := string(logBody)
+	assert.NotContains(t, commands, " get secret ")
+	assert.NotContains(t, commands, "X-Vault-Token")
+	assert.Contains(t, commands, "/v1/services/all/pki/root/cert/ca")
 }

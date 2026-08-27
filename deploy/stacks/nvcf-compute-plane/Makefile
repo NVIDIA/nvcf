@@ -240,6 +240,7 @@ help:
 	@echo "  NCA_ID             NCA identifier (default: $(NCA_ID))"
 	@echo "  CONTROL_PLANE_PROFILE  Generated control-plane profile (default:"
 	@echo "                         ../self-managed/out/control-plane-profile.yaml)"
+	@echo "  NVCF_CLI_CONFIG    Optional CLI config used to select initialized auth state"
 	@echo "  COMPUTE_KUBE_CONTEXT   Optional kubeconfig context for registration and install"
 	@echo "  CLUSTER_REGION     Cluster region (default: $(CLUSTER_REGION))"
 	@echo ""
