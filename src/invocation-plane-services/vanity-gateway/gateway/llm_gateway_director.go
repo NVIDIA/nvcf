@@ -81,6 +81,22 @@ func hostWithoutPort(host string) string {
 	return host
 }
 
+// nvcfRoutingHeaders select which function a request reaches. The invocation
+// path always sets or deletes them, so a caller can never supply its own. The
+// LLM Gateway resolves the function from the model and sets none of them, so
+// they are deleted here rather than forwarded.
+var nvcfRoutingHeaders = []string{
+	"function-id",
+	"function-version-id",
+	"nvcf-function-id",
+}
+
+func stripNVCFRoutingHeaders(request *http.Request) {
+	for _, name := range nvcfRoutingHeaders {
+		request.Header.Del(name)
+	}
+}
+
 func (d *LLMGatewayDirector) ServeProxy(target LLMGatewayRequest, writer http.ResponseWriter, request *http.Request) error {
 	span := trace.SpanFromContext(request.Context())
 	span.SetAttributes(traceAttrEndpointType.String(traceAttrValueEndpointLLMGateway))
@@ -92,6 +108,7 @@ func (d *LLMGatewayDirector) ServeProxy(target LLMGatewayRequest, writer http.Re
 	request.URL.Host = d.host
 	request.URL.Scheme = d.scheme
 	request.Host = ""
+	stripNVCFRoutingHeaders(request)
 	applyCustomHeaders(request, target.CustomHeaders)
 
 	if !target.EOL.IsZero() {

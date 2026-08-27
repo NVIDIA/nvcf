@@ -273,8 +273,12 @@ this host. The gateway looks the model up, rewrites the request `model` to
 `functionID/modelName`, and forwards it to `LLM_GATEWAY_ENDPOINT`, which routes
 on that prefix. Callers never see the function ID.
 
-`function-id`, `function-version-id`, and `NVCF-POLL-SECONDS` are not set on
-these requests, since the LLM Gateway selects the function from the model.
+`function-id`, `function-version-id`, and `nvcf-function-id` are stripped from
+these requests. The LLM Gateway resolves the function from the model, so the
+gateway sets none of them, and a caller-supplied value is removed rather than
+forwarded: the mapping is what decides which function a caller reaches.
+`Authorization`, `NVCF-POLL-SECONDS`, and the caller's other headers pass
+through unchanged.
 
 Config validation rejects `functionType: LLM` outside the three supported
 sections, and rejects `usePexec`, `outgoingPathOverride`, and `sessionTimeout`

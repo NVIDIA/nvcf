@@ -373,3 +373,33 @@ func TestOpenAIDirector_LLMModelShadowsToLLMGateway(t *testing.T) {
 	assert.Contains(t, got[0]+got[1], `"model":"`+llmFunctionID+"/"+shadowModel+`"`)
 	assert.Empty(t, nvcfRequests, "neither request may reach the invocation service")
 }
+
+// A caller must not be able to aim NVCF routing headers at the LLM Gateway. The
+// invocation path always sets or deletes these; this path deletes them because
+// the LLM Gateway resolves the function from the model.
+func TestOpenAIDirector_LLMModelStripsCallerRoutingHeaders(t *testing.T) {
+	llmRequests := make(chan capturedRequest, 1)
+	llmBackend := captureServer(t, llmRequests, nil)
+
+	mux := openAIMux(t, llmMappings(llmModelEntry()), "http://nvcf.invalid", llmBackend.URL)
+
+	req := openAIRequest(t, "/v1/chat/completions", `{"model":"`+publicModel+`"}`)
+	req.Header.Set("function-id", "caller-supplied")
+	req.Header.Set("function-version-id", "caller-supplied")
+	req.Header.Set("nvcf-function-id", "caller-supplied")
+	req.Header.Set("NVCF-POLL-SECONDS", "999")
+	req.Header.Set("Authorization", "Bearer caller-token")
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	received := awaitRequest(t, llmRequests)
+	for _, name := range []string{"function-id", "function-version-id", "nvcf-function-id"} {
+		assert.Empty(t, received.headers.Get(name), "%s must not reach the LLM Gateway", name)
+	}
+	assert.Equal(t, "Bearer caller-token", received.headers.Get("Authorization"),
+		"the caller principal must still be forwarded")
+	assert.Equal(t, "999", received.headers.Get("NVCF-POLL-SECONDS"),
+		"poll seconds is a caller knob the invocation path honors too, not a routing header")
+}
