@@ -1378,7 +1378,7 @@ agentConfig:
       validationPolicy:
         name: Unrestricted
     workload:
-      stargateQUICInsecure: false
+      stargateQUICInsecure: true
 `)
 }
 

@@ -302,6 +302,8 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
 
     # This fixed-response sample proves the multi-cluster LLM routing and
     # request/response contract. It is not a token-generation capacity test.
+    # The compute fixture deliberately retains stargateQUICInsecure; secured
+    # split-cluster transport coverage remains a separate scenario.
     # The scenario depends on the earlier control-plane install and compute
     # registration scenarios and is not a standalone tag target.
     @llm-function-type
