@@ -42,7 +42,7 @@ import com.nvidia.icms.outbound.cassandra.byoc.entity.ClusterEntity;
 import com.nvidia.icms.service.NvcaService;
 import com.nvidia.icms.service.byoc.nvca.ClusterOidcIdentityService;
 import com.nvidia.icms.service.byoc.nvca.NvcaNatsAuthorizationService;
-import com.nvidia.icms.service.byoc.nvca.NvcaTokenVerificationService;
+import com.nvidia.icms.service.byoc.nvca.ClusterOIDCTokenVerificationService;
 import com.nvidia.icms.service.heartbeats.NvcaHeartbeatService;
 import com.nvidia.icms.util.AuthUtils;
 import com.nvidia.icms.util.audit.AuditUtils;
@@ -93,7 +93,7 @@ public class NvcaController {
     private NvcaConfigurationProperties nvcaConfig;
 
     @Autowired
-    private NvcaTokenVerificationService nvcaTokenVerificationService;
+    private ClusterOIDCTokenVerificationService nvcaTokenVerificationService;
 
     @Autowired
     private NvcaNatsAuthorizationService nvcaNatsAuthorizationService;
@@ -285,9 +285,9 @@ public class NvcaController {
             return ResponseEntity.notFound().build();
         }
 
-        NvcaTokenVerificationService.Outcome outcome = nvcaTokenVerificationService.verify(request.getToken());
+        ClusterOIDCTokenVerificationService.Outcome outcome = nvcaTokenVerificationService.verify(request.getToken());
 
-        if (outcome.getReason() == NvcaTokenVerificationService.RejectReason.TOKEN_TOO_LARGE) {
+        if (outcome.getReason() == ClusterOIDCTokenVerificationService.RejectReason.TOKEN_TOO_LARGE) {
             return ResponseEntity.status(431).body(TokenIntrospectResponse.inactive(outcome.getErrorMessage()));
         }
         if (!outcome.isActive()) {
@@ -340,7 +340,7 @@ public class NvcaController {
             return ResponseEntity.status(403).build();
         }
 
-        NvcaTokenVerificationService.Outcome outcome = nvcaTokenVerificationService.verify(request.getPayload());
+        ClusterOIDCTokenVerificationService.Outcome outcome = nvcaTokenVerificationService.verify(request.getPayload());
         if (!outcome.isActive()) {
             // Map rejection reasons to status codes the webhook plugin understands.
             // The plugin treats 401/403 as terminal (no retry) and 431 as "request

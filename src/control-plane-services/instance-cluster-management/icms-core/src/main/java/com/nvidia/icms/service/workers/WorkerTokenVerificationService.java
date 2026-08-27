@@ -18,7 +18,7 @@ package com.nvidia.icms.service.workers;
 
 import com.nvidia.icms.outbound.cassandra.workers.entity.WorkerIdentifierRecord;
 import com.nvidia.icms.outbound.cassandra.workers.entity.WorkerIdentifierUdt;
-import com.nvidia.icms.service.byoc.nvca.NvcaTokenVerificationService;
+import com.nvidia.icms.service.byoc.nvca.ClusterOIDCTokenVerificationService;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -33,7 +33,7 @@ import org.springframework.stereotype.Service;
  * Verification pipeline for worker-presented PSAT / SPIFFE tokens.
  *
  * <p>Delegates cluster JWKS resolution and signature verification to
- * {@link NvcaTokenVerificationService}, then applies worker-specific checks:
+ * {@link ClusterOIDCTokenVerificationService}, then applies worker-specific checks:
  * subject format validation, instance/worker-ID derivation, and identity-set
  * matching against the registration stored during instance status updates.</p>
  *
@@ -45,14 +45,14 @@ import org.springframework.stereotype.Service;
 @RequiredArgsConstructor
 public class WorkerTokenVerificationService {
 
-    static final String TOKEN_TYPE_PSAT = "psat";
-    static final String TOKEN_TYPE_SPIFFE = "spiffe";
+    public static final String TOKEN_TYPE_PSAT = "psat";
+    public static final String TOKEN_TYPE_SPIFFE = "spiffe";
 
     private static final String WORKER_SA_PREFIX = "nvcf-worker-";
     private static final Pattern SPIFFE_INSTANCE_WORKER =
             Pattern.compile(".*/instance/([^/]+)/worker/([^/]+).*");
 
-    private final NvcaTokenVerificationService nvcaTokenVerificationService;
+    private final ClusterOIDCTokenVerificationService nvcaTokenVerificationService;
     private final WorkerIdentifierService workerIdentifierService;
 
     /**
@@ -63,7 +63,7 @@ public class WorkerTokenVerificationService {
      */
     public Outcome verify(String token) {
         // Step 1: cluster JWKS resolution + signature verify (also covers size + audience checks)
-        NvcaTokenVerificationService.Outcome base = nvcaTokenVerificationService.verify(token);
+        ClusterOIDCTokenVerificationService.Outcome base = nvcaTokenVerificationService.verify(token);
         if (!base.isActive()) {
             return Outcome.reject(base.getReason(), base.getErrorMessage());
         }
@@ -78,7 +78,7 @@ public class WorkerTokenVerificationService {
         } else if (sub != null && sub.startsWith("spiffe://")) {
             return verifySpiffe(jwt, clusterId, sub);
         } else {
-            return Outcome.reject(NvcaTokenVerificationService.RejectReason.SIGNATURE_INVALID,
+            return Outcome.reject(ClusterOIDCTokenVerificationService.RejectReason.SIGNATURE_INVALID,
                     "unrecognized subject format");
         }
     }
@@ -89,12 +89,12 @@ public class WorkerTokenVerificationService {
         // sub format: system:serviceaccount:<namespace>:<saName>
         int lastColon = sub.lastIndexOf(':');
         if (lastColon < 0) {
-            return Outcome.reject(NvcaTokenVerificationService.RejectReason.SIGNATURE_INVALID,
+            return Outcome.reject(ClusterOIDCTokenVerificationService.RejectReason.SIGNATURE_INVALID,
                     "malformed SAT subject");
         }
         String saName = sub.substring(lastColon + 1);
         if (!saName.startsWith(WORKER_SA_PREFIX)) {
-            return Outcome.reject(NvcaTokenVerificationService.RejectReason.SIGNATURE_INVALID,
+            return Outcome.reject(ClusterOIDCTokenVerificationService.RejectReason.SIGNATURE_INVALID,
                     "sub does not match worker SA pattern");
         }
         String instanceId = saName.substring(WORKER_SA_PREFIX.length());
@@ -106,7 +106,7 @@ public class WorkerTokenVerificationService {
         String podName = podClaim != null ? (String) podClaim.get("name") : null;
         String podUid = podClaim != null ? (String) podClaim.get("uid") : null;
         if (podName == null || podUid == null) {
-            return Outcome.reject(NvcaTokenVerificationService.RejectReason.SIGNATURE_INVALID,
+            return Outcome.reject(ClusterOIDCTokenVerificationService.RejectReason.SIGNATURE_INVALID,
                     "kubernetes.io pod claims missing");
         }
 
@@ -116,7 +116,7 @@ public class WorkerTokenVerificationService {
         if (record.isEmpty()) {
             log.debug("No worker identifiers registered for cluster={} instance={}",
                     clusterId, instanceId);
-            return Outcome.reject(NvcaTokenVerificationService.RejectReason.SIGNATURE_INVALID,
+            return Outcome.reject(ClusterOIDCTokenVerificationService.RejectReason.SIGNATURE_INVALID,
                     "no worker identifiers registered for instance");
         }
 
@@ -125,7 +125,7 @@ public class WorkerTokenVerificationService {
         // Subject must match the registered sub
         if (!sub.equals(reg.getSub())) {
             log.debug("SAT sub mismatch for cluster={} instance={}", clusterId, instanceId);
-            return Outcome.reject(NvcaTokenVerificationService.RejectReason.SIGNATURE_INVALID,
+            return Outcome.reject(ClusterOIDCTokenVerificationService.RejectReason.SIGNATURE_INVALID,
                     "worker identity not in registered set");
         }
 
@@ -135,7 +135,7 @@ public class WorkerTokenVerificationService {
                 .anyMatch(wi -> podName.equals(wi.getName()) && podUid.equals(wi.getUid()));
         if (!matched) {
             log.debug("SAT pod identity mismatch for cluster={} instance={}", clusterId, instanceId);
-            return Outcome.reject(NvcaTokenVerificationService.RejectReason.SIGNATURE_INVALID,
+            return Outcome.reject(ClusterOIDCTokenVerificationService.RejectReason.SIGNATURE_INVALID,
                     "worker identity not in registered set");
         }
 
@@ -147,7 +147,7 @@ public class WorkerTokenVerificationService {
         // Derive instance ID and worker ID from SPIFFE ID path
         Matcher m = SPIFFE_INSTANCE_WORKER.matcher(sub);
         if (!m.matches()) {
-            return Outcome.reject(NvcaTokenVerificationService.RejectReason.SIGNATURE_INVALID,
+            return Outcome.reject(ClusterOIDCTokenVerificationService.RejectReason.SIGNATURE_INVALID,
                     "SPIFFE ID does not contain /instance/{id}/worker/{wid}");
         }
         String instanceId = m.group(1);
@@ -159,7 +159,7 @@ public class WorkerTokenVerificationService {
         if (record.isEmpty()) {
             log.debug("No worker identifiers registered for cluster={} instance={}",
                     clusterId, instanceId);
-            return Outcome.reject(NvcaTokenVerificationService.RejectReason.SIGNATURE_INVALID,
+            return Outcome.reject(ClusterOIDCTokenVerificationService.RejectReason.SIGNATURE_INVALID,
                     "no worker identifiers registered for instance");
         }
 
@@ -172,7 +172,7 @@ public class WorkerTokenVerificationService {
         if (!matched) {
             log.debug("SPIFFE identity not in registered set for cluster={} instance={}",
                     clusterId, instanceId);
-            return Outcome.reject(NvcaTokenVerificationService.RejectReason.SIGNATURE_INVALID,
+            return Outcome.reject(ClusterOIDCTokenVerificationService.RejectReason.SIGNATURE_INVALID,
                     "worker identity not in registered set");
         }
 
@@ -193,12 +193,12 @@ public class WorkerTokenVerificationService {
         private final String workerId;
         private final String tokenType;
         private final String audience;
-        private final NvcaTokenVerificationService.RejectReason reason;
+        private final ClusterOIDCTokenVerificationService.RejectReason reason;
         private final String errorMessage;
 
         private Outcome(Jwt jwt, String clusterId, String instanceId, String workerId,
                 String tokenType, String audience,
-                NvcaTokenVerificationService.RejectReason reason, String errorMessage) {
+                ClusterOIDCTokenVerificationService.RejectReason reason, String errorMessage) {
             this.jwt = jwt;
             this.clusterId = clusterId;
             this.instanceId = instanceId;
@@ -215,7 +215,7 @@ public class WorkerTokenVerificationService {
                     null, null);
         }
 
-        public static Outcome reject(NvcaTokenVerificationService.RejectReason reason, String message) {
+        public static Outcome reject(ClusterOIDCTokenVerificationService.RejectReason reason, String message) {
             return new Outcome(null, null, null, null, null, null, reason, message);
         }
 
@@ -226,7 +226,7 @@ public class WorkerTokenVerificationService {
         public String getWorkerId() { return workerId; }
         public String getTokenType() { return tokenType; }
         public String getAudience() { return audience; }
-        public NvcaTokenVerificationService.RejectReason getReason() { return reason; }
+        public ClusterOIDCTokenVerificationService.RejectReason getReason() { return reason; }
         public String getErrorMessage() { return errorMessage; }
     }
 }

@@ -27,7 +27,7 @@ import static org.mockito.Mockito.when;
 
 import com.nvidia.icms.outbound.cassandra.workers.entity.WorkerIdentifierRecord;
 import com.nvidia.icms.outbound.cassandra.workers.entity.WorkerIdentifierUdt;
-import com.nvidia.icms.service.byoc.nvca.NvcaTokenVerificationService;
+import com.nvidia.icms.service.byoc.nvca.ClusterOIDCTokenVerificationService;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -52,7 +52,7 @@ class WorkerTokenVerificationServiceTest {
             "spiffe://domain/cluster/c1/instance/" + INSTANCE_ID + "/worker/worker-uuid-001";
 
     @Mock
-    private NvcaTokenVerificationService nvcaTokenVerificationService;
+    private ClusterOIDCTokenVerificationService nvcaTokenVerificationService;
 
     @Mock
     private WorkerIdentifierService workerIdentifierService;
@@ -69,8 +69,8 @@ class WorkerTokenVerificationServiceTest {
     @Test
     void verify_baseRejectsToken_propagatesRejection() {
         when(nvcaTokenVerificationService.verify("tok"))
-                .thenReturn(NvcaTokenVerificationService.Outcome.reject(
-                        NvcaTokenVerificationService.RejectReason.SIGNATURE_INVALID,
+                .thenReturn(ClusterOIDCTokenVerificationService.Outcome.reject(
+                        ClusterOIDCTokenVerificationService.RejectReason.SIGNATURE_INVALID,
                         "JWT verification failed"));
 
         var outcome = service.verify("tok");
@@ -83,14 +83,14 @@ class WorkerTokenVerificationServiceTest {
     @Test
     void verify_unknownCluster_propagatesUnknownClusterReason() {
         when(nvcaTokenVerificationService.verify("tok"))
-                .thenReturn(NvcaTokenVerificationService.Outcome.reject(
-                        NvcaTokenVerificationService.RejectReason.UNKNOWN_CLUSTER,
+                .thenReturn(ClusterOIDCTokenVerificationService.Outcome.reject(
+                        ClusterOIDCTokenVerificationService.RejectReason.UNKNOWN_CLUSTER,
                         "No cluster found"));
 
         var outcome = service.verify("tok");
 
         assertFalse(outcome.isActive());
-        assertEquals(NvcaTokenVerificationService.RejectReason.UNKNOWN_CLUSTER, outcome.getReason());
+        assertEquals(ClusterOIDCTokenVerificationService.RejectReason.UNKNOWN_CLUSTER, outcome.getReason());
     }
 
     // --- PSAT (SAT) flow ---
@@ -245,7 +245,7 @@ class WorkerTokenVerificationServiceTest {
 
     private void stubBaseActive(Jwt jwt) {
         when(nvcaTokenVerificationService.verify("tok"))
-                .thenReturn(NvcaTokenVerificationService.Outcome.active(jwt, CLUSTER_ID));
+                .thenReturn(ClusterOIDCTokenVerificationService.Outcome.active(jwt, CLUSTER_ID));
     }
 
     private void stubWorkerRecord(String sub, List<WorkerIdentifierUdt> identifiers) {

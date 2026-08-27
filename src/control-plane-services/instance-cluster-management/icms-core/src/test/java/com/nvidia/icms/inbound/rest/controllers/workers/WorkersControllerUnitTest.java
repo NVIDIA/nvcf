@@ -19,13 +19,14 @@ package com.nvidia.icms.inbound.rest.controllers.workers;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.when;
 
 import com.nvidia.icms.configuration.nvca.NvcaConfigurationProperties;
 import com.nvidia.icms.inbound.rest.model.workers.WorkerTokenIntrospectRequest;
 import com.nvidia.icms.inbound.rest.model.workers.WorkerTokenIntrospectResponse;
-import com.nvidia.icms.service.byoc.nvca.NvcaTokenVerificationService;
+import com.nvidia.icms.service.byoc.nvca.ClusterOIDCTokenVerificationService;
 import com.nvidia.icms.service.workers.WorkerTokenVerificationService;
 import java.time.Instant;
 import java.util.List;
@@ -63,7 +64,7 @@ class WorkersControllerUnitTest {
 
         when(workerTokenVerificationService.verify("tok"))
                 .thenReturn(rejectedOutcome(
-                        NvcaTokenVerificationService.RejectReason.TOKEN_TOO_LARGE,
+                        ClusterOIDCTokenVerificationService.RejectReason.TOKEN_TOO_LARGE,
                         "JWT exceeds 2048 byte limit"));
 
         var response = controller.introspectWorkerToken(request);
@@ -82,7 +83,7 @@ class WorkersControllerUnitTest {
 
         when(workerTokenVerificationService.verify("tok"))
                 .thenReturn(rejectedOutcome(
-                        NvcaTokenVerificationService.RejectReason.UNKNOWN_CLUSTER,
+                        ClusterOIDCTokenVerificationService.RejectReason.UNKNOWN_CLUSTER,
                         "No cluster found for the provided audience"));
 
         var response = controller.introspectWorkerToken(request);
@@ -101,7 +102,7 @@ class WorkersControllerUnitTest {
         // Service may return a detailed message; controller must coarsen it.
         when(workerTokenVerificationService.verify("bad.token.value"))
                 .thenReturn(rejectedOutcome(
-                        NvcaTokenVerificationService.RejectReason.SIGNATURE_INVALID,
+                        ClusterOIDCTokenVerificationService.RejectReason.SIGNATURE_INVALID,
                         "worker identity not in registered set"));
 
         var response = controller.introspectWorkerToken(request);
@@ -192,7 +193,7 @@ class WorkersControllerUnitTest {
     }
 
     private static WorkerTokenVerificationService.Outcome rejectedOutcome(
-            NvcaTokenVerificationService.RejectReason reason, String message) {
+            ClusterOIDCTokenVerificationService.RejectReason reason, String message) {
         return WorkerTokenVerificationService.Outcome.reject(reason, message);
     }
 

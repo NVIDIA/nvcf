@@ -34,7 +34,7 @@ import org.springframework.stereotype.Service;
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class NvcaTokenVerificationService {
+public class ClusterOIDCTokenVerificationService {
 
     private final AuthManagerResolver authManagerResolver;
     private final ClusterOidcIdentityService clusterOidcIdentityService;
