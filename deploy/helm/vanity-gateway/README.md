@@ -107,11 +107,41 @@ or the pod is killed mid-drain.
 
 - `openai`: per-endpoint model routes, keyed by endpoint (`chatCompletions`,
   `completions`, `embeddings`, `responses`, and the image endpoints). Each route
-  requires `modelName` and `functionID`, and supports shadow-traffic fields such
-  as `shadowModelName`, `shadowPercentage`, and
-  `shadowCancelOnClientDisconnect`.
+  requires `modelName` and `functionID`.
 - `vanity`: host-based routes, each requiring a `host` and a `paths` map. Each
   path requires `path` and `functionID`.
+
+Use `shadows` to set policy for each shadow target:
+
+```yaml
+primary:
+  modelName: example/primary
+  functionID: primary-function-id
+  shadows:
+    - modelName: private/example/shadow-a
+      percentage: 10
+      samplingMethod: perBearerKey
+      cancelOnClientDisconnect: true
+    - modelName: private/example/shadow-b
+      percentage: 50
+      samplingMethod: random
+shadow-a:
+  modelName: private/example/shadow-a
+  functionID: shadow-a-function-id
+shadow-b:
+  modelName: private/example/shadow-b
+  functionID: shadow-b-function-id
+```
+
+Each shadow model must be another model route in the same OpenAI endpoint.
+`percentage` defaults to `100`, `samplingMethod` defaults to `random`, and
+`cancelOnClientDisconnect` defaults to `false`.
+Shadowing is not supported for `imageEdits` or `imageVariations` routes.
+
+Legacy `shadowModelName`, `shadowModelNames`, `shadowPercentage`,
+`shadowSamplingMethod`, and `shadowCancelOnClientDisconnect` fields remain
+supported. Their policy applies to every legacy shadow target. Do not combine
+the `shadows` field with legacy shadow fields on the same route.
 
 Both sections are empty by default. `vanityGateway.config.shadowMaxConcurrent`
 bounds concurrent shadow requests across all routes.

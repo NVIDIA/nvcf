@@ -36,6 +36,35 @@ const (
 	ShadowSamplingMethodPerBearerKey ShadowSamplingMethod = "perBearerKey"
 )
 
+type ShadowConfig struct {
+	ModelName                string               `json:"modelName"`
+	Percentage               *int                 `json:"percentage,omitempty"`
+	SamplingMethod           ShadowSamplingMethod `json:"samplingMethod,omitempty"`
+	CancelOnClientDisconnect bool                 `json:"cancelOnClientDisconnect,omitempty"`
+}
+
+func (s *ShadowConfig) UnmarshalJSON(data []byte) error {
+	fields := map[string]json.RawMessage{}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	for field := range fields {
+		switch field {
+		case "modelName", "percentage", "samplingMethod", "cancelOnClientDisconnect":
+		default:
+			return fmt.Errorf("unknown shadow config field %q", field)
+		}
+	}
+
+	type shadowConfigAlias ShadowConfig
+	var alias shadowConfigAlias
+	if err := json.Unmarshal(data, &alias); err != nil {
+		return err
+	}
+	*s = ShadowConfig(alias)
+	return nil
+}
+
 type CustomHeaders map[string]string
 
 func (h *CustomHeaders) UnmarshalJSON(data []byte) error {
@@ -72,15 +101,23 @@ type ModelFunctionDetails struct {
 	EOL                            time.Time             `json:"eol,omitempty"`            // RFC3339 timestamp (full ISO 8601)
 	OfflineMessage                 string                `json:"offlineMessage,omitempty"` // non-empty = endpoint is offline
 	TooManyRequestsMessage         string                `json:"tooManyRequestsMessage"`
+	Shadows                        []ShadowConfig        `json:"shadows,omitempty"`
 	ShadowModelName                string                `json:"shadowModelName,omitempty"`
 	ShadowModelNames               []string              `json:"shadowModelNames,omitempty"`
 	ShadowPercentage               *int                  `json:"shadowPercentage,omitempty"` // 1-100 when set; omitted defaults to 100
 	ShadowSamplingMethod           ShadowSamplingMethod  `json:"shadowSamplingMethod,omitempty"`
-	ShadowCancelOnClientDisconnect bool                  `json:"shadowCancelOnClientDisconnect,omitempty"` // cancel shadow when primary completes; default false
+	ShadowCancelOnClientDisconnect bool                  `json:"shadowCancelOnClientDisconnect,omitempty"` // cancel shadows on client cancellation or primary proxy failure; default false
+	shadowsPresent                 bool
+	legacyShadowFieldsPresent      bool
 }
 
 func (m *ModelFunctionDetails) UnmarshalJSON(data []byte) error {
 	type modelFunctionDetailsAlias ModelFunctionDetails
+
+	fields := map[string]json.RawMessage{}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
 
 	var alias modelFunctionDetailsAlias
 	if err := json.Unmarshal(data, &alias); err != nil {
@@ -88,7 +125,82 @@ func (m *ModelFunctionDetails) UnmarshalJSON(data []byte) error {
 	}
 
 	*m = ModelFunctionDetails(alias)
+	for field := range fields {
+		switch {
+		case strings.EqualFold(field, "shadows"):
+			m.shadowsPresent = true
+		case strings.EqualFold(field, "shadowModelName"),
+			strings.EqualFold(field, "shadowModelNames"),
+			strings.EqualFold(field, "shadowPercentage"),
+			strings.EqualFold(field, "shadowSamplingMethod"),
+			strings.EqualFold(field, "shadowCancelOnClientDisconnect"):
+			m.legacyShadowFieldsPresent = true
+		}
+	}
 	return nil
+}
+
+func (m ModelFunctionDetails) EffectiveShadows() []ShadowConfig {
+	if len(m.Shadows) > 0 {
+		shadows := make([]ShadowConfig, len(m.Shadows))
+		for i, shadow := range m.Shadows {
+			shadows[i] = cloneShadowConfig(shadow)
+		}
+		return shadows
+	}
+
+	modelNames := make([]string, 0, len(m.ShadowModelNames)+1)
+	if m.ShadowModelName != "" {
+		modelNames = append(modelNames, m.ShadowModelName)
+	}
+	modelNames = append(modelNames, m.ShadowModelNames...)
+	if len(modelNames) == 0 {
+		return nil
+	}
+
+	shadows := make([]ShadowConfig, 0, len(modelNames))
+	for _, modelName := range modelNames {
+		shadows = append(shadows, ShadowConfig{
+			ModelName:                modelName,
+			Percentage:               cloneInt(m.ShadowPercentage),
+			SamplingMethod:           m.ShadowSamplingMethod,
+			CancelOnClientDisconnect: m.ShadowCancelOnClientDisconnect,
+		})
+	}
+	return shadows
+}
+
+func cloneShadowConfig(shadow ShadowConfig) ShadowConfig {
+	shadow.Percentage = cloneInt(shadow.Percentage)
+	return shadow
+}
+
+func cloneInt(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
+func (m ModelFunctionDetails) hasLegacyShadowConfig() bool {
+	return m.ShadowModelName != "" ||
+		len(m.ShadowModelNames) > 0 ||
+		m.ShadowPercentage != nil ||
+		m.ShadowSamplingMethod != "" ||
+		m.ShadowCancelOnClientDisconnect
+}
+
+func (m ModelFunctionDetails) hasShadowsField() bool {
+	return m.shadowsPresent || len(m.Shadows) > 0
+}
+
+func (m ModelFunctionDetails) hasLegacyShadowFields() bool {
+	return m.hasLegacyShadowConfig() || m.legacyShadowFieldsPresent
+}
+
+func (m ModelFunctionDetails) hasMixedShadowFields() bool {
+	return m.hasShadowsField() && m.hasLegacyShadowFields()
 }
 
 type PathFunctionDetails struct {
@@ -192,7 +304,17 @@ func uniqueShadowModelNames(legacyModelName string, modelNames []string) ([]stri
 	return result, nil
 }
 
-func validateOpenAIShadowConfig(location string, entry ModelFunctionDetails) ([]string, error) {
+func validateOpenAIShadowConfig(location string, entry ModelFunctionDetails) ([]ShadowConfig, error) {
+	if entry.hasMixedShadowFields() {
+		return nil, fmt.Errorf("%s: shadows cannot be combined with legacy shadow fields", location)
+	}
+	if entry.hasShadowsField() {
+		if err := validatePerTargetShadowConfigs(location, entry.Shadows); err != nil {
+			return nil, err
+		}
+		return entry.EffectiveShadows(), nil
+	}
+
 	shadowTargets, err := uniqueShadowModelNames(entry.ShadowModelName, entry.ShadowModelNames)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", location, err)
@@ -221,15 +343,44 @@ func validateOpenAIShadowConfig(location string, entry ModelFunctionDetails) ([]
 		}
 	}
 
-	return shadowTargets, nil
+	return entry.EffectiveShadows(), nil
+}
+
+func validatePerTargetShadowConfigs(location string, shadows []ShadowConfig) error {
+	seen := make(map[string]struct{}, len(shadows))
+	for i, shadow := range shadows {
+		shadowLocation := fmt.Sprintf("%s.shadows[%d]", location, i)
+		if shadow.ModelName == "" {
+			return fmt.Errorf("%s: modelName is required", shadowLocation)
+		}
+		if _, ok := seen[shadow.ModelName]; ok {
+			return fmt.Errorf("%s: duplicate shadow target %q", shadowLocation, shadow.ModelName)
+		}
+		seen[shadow.ModelName] = struct{}{}
+
+		if shadow.Percentage != nil {
+			percentage := *shadow.Percentage
+			if percentage < 1 || percentage > 100 {
+				return fmt.Errorf("%s: percentage must be between 1 and 100", shadowLocation)
+			}
+		}
+		if err := validateSamplingMethod(shadowLocation, "samplingMethod", shadow.SamplingMethod); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func validateShadowSamplingMethod(location string, method ShadowSamplingMethod) error {
+	return validateSamplingMethod(location, "shadowSamplingMethod", method)
+}
+
+func validateSamplingMethod(location string, fieldName string, method ShadowSamplingMethod) error {
 	switch method {
 	case "", ShadowSamplingMethodRandom, ShadowSamplingMethodPerBearerKey:
 		return nil
 	default:
-		return fmt.Errorf("%s: shadowSamplingMethod must be %q or %q", location, ShadowSamplingMethodRandom, ShadowSamplingMethodPerBearerKey)
+		return fmt.Errorf("%s: %s must be %q or %q", location, fieldName, ShadowSamplingMethodRandom, ShadowSamplingMethodPerBearerKey)
 	}
 }
 
@@ -295,7 +446,10 @@ func isMultipartOpenAISection(sectionName string) bool {
 
 func validateMultipartOpenAISection(sectionName string, entries map[string]ModelFunctionDetails) error {
 	for modelKey, entry := range entries {
-		if entry.ShadowModelName != "" || len(entry.ShadowModelNames) > 0 || entry.ShadowPercentage != nil || entry.ShadowSamplingMethod != "" || entry.ShadowCancelOnClientDisconnect {
+		if entry.hasMixedShadowFields() {
+			return fmt.Errorf("openai.%s.%s: shadows cannot be combined with legacy shadow fields", sectionName, modelKey)
+		}
+		if len(entry.Shadows) > 0 || entry.hasLegacyShadowConfig() {
 			return fmt.Errorf("openai.%s.%s: shadow config is unsupported for multipart image endpoints", sectionName, modelKey)
 		}
 	}
@@ -309,20 +463,24 @@ func validateOpenAIShadowTargets(sectionName string, entries map[string]ModelFun
 		if err != nil {
 			return err
 		}
-		if err := validateShadowTargetNames(location, sectionName, entry.ModelName, shadowTargets, modelNames); err != nil {
+		if err := validateShadowTargetNames(location, sectionName, entry.ModelName, shadowTargets, modelNames, len(entry.Shadows) > 0); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func validateShadowTargetNames(location string, sectionName string, modelName string, shadowTargets []string, modelNames map[string]struct{}) error {
-	for _, shadowTarget := range shadowTargets {
-		if shadowTarget == modelName {
-			return fmt.Errorf("%s: shadow target cannot reference the same model", location)
+func validateShadowTargetNames(location string, sectionName string, modelName string, shadows []ShadowConfig, modelNames map[string]struct{}, perTarget bool) error {
+	for i, shadow := range shadows {
+		shadowLocation := location
+		if perTarget {
+			shadowLocation = fmt.Sprintf("%s.shadows[%d]", location, i)
 		}
-		if _, ok := modelNames[shadowTarget]; !ok {
-			return fmt.Errorf("%s: shadow target must reference another model in openai.%s", location, sectionName)
+		if shadow.ModelName == modelName {
+			return fmt.Errorf("%s: shadow target cannot reference the same model", shadowLocation)
+		}
+		if _, ok := modelNames[shadow.ModelName]; !ok {
+			return fmt.Errorf("%s: shadow target must reference another model in openai.%s", shadowLocation, sectionName)
 		}
 	}
 	return nil
