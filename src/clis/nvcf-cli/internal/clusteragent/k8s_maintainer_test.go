@@ -1085,6 +1085,55 @@ func TestKillPropagatesMalformedInstanceStatusError(t *testing.T) {
 	}
 }
 
+// TestKillFailsClosedOnUnrecognizedInstanceType is a regression test: an
+// instance whose type is neither Pod nor MiniService (nor unset) must not be
+// silently skipped. Skipping it without an error would let evictInstances
+// report success, and killMatching would proceed to delete the ICMSRequest
+// (stripping the finalizer under --force) while that instance's workload
+// was never touched.
+func TestKillFailsClosedOnUnrecognizedInstanceType(t *testing.T) {
+	cr := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "nvca.nvcf.nvidia.io/v2beta1",
+		"kind":       "ICMSRequest",
+		"metadata": map[string]interface{}{
+			"namespace":  testRequestsNS,
+			"name":       "r1",
+			"finalizers": []interface{}{"nvca.finalizers.nvidia.io"},
+		},
+		"spec": map[string]interface{}{
+			"functionDetails": map[string]interface{}{
+				"functionId":        "fn-1",
+				"functionVersionId": "v1",
+			},
+		},
+		"status": map[string]interface{}{
+			"requestStatus": statusCompleted,
+			"instances": map[string]interface{}{
+				"weird-a": map[string]interface{}{
+					"id":           "weird-a",
+					"instanceType": "SomeFutureType",
+					"status":       "Running",
+				},
+			},
+		},
+	}}
+	m, dc, _ := newFakeMaintainer([]runtime.Object{defaultBackend(), cr}, nil)
+
+	res, err := m.KillFunction(context.Background(), "fn-1", "v1", KillOptions{
+		BackendNS: testBackendNS,
+		Force:     true,
+	})
+	if err == nil {
+		t.Fatal("expected an error: an unrecognized instance type must not be silently skipped")
+	}
+	if res.FailedCount != 1 {
+		t.Fatalf("FailedCount = %d, want 1", res.FailedCount)
+	}
+	if !icmsExists(t, dc, testRequestsNS, "r1") {
+		t.Error("r1 must still exist: eviction must fail closed on an unrecognized instance type, not proceed to delete")
+	}
+}
+
 func TestKillNegativeTimeoutRejected(t *testing.T) {
 	m, dc, _ := newFakeMaintainer(killSeed(), nil)
 

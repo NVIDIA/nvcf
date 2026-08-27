@@ -517,11 +517,10 @@ func (m *k8sMaintainer) killMatching(ctx context.Context, target *ClusterTarget,
 			// proceeding would strip the finalizer and report success while
 			// the workload (pod or MiniService) may still be running.
 			if err := m.evictInstances(ctx, killed.Namespace, &items[i]); err != nil {
-				logging.Warning("failed to evict instances for ICMSRequest %s/%s (function=%s version=%s cluster=%s): %v",
-					killed.Namespace, killed.Name, killed.FunctionID, killed.FunctionVersionID, clusterLabel(target), err)
 				killed.Error = fmt.Sprintf("evicting instances: %v", err)
 				result.FailedCount++
-				failures = append(failures, fmt.Errorf("%s/%s: evicting instances: %w", killed.Namespace, killed.Name, err))
+				failures = append(failures, fmt.Errorf("%s/%s (function=%s version=%s cluster=%s): evicting instances: %w",
+					killed.Namespace, killed.Name, killed.FunctionID, killed.FunctionVersionID, clusterLabel(target), err))
 				result.Affected = append(result.Affected, killed)
 				continue
 			}
@@ -590,6 +589,7 @@ func (m *k8sMaintainer) evictInstances(ctx context.Context, namespace string, ob
 	for id, raw := range instances {
 		inst, ok := raw.(map[string]interface{})
 		if !ok {
+			errs = append(errs, fmt.Errorf("instance %s: status.instances record is not an object", id))
 			continue
 		}
 		// instanceType is the current field; type is a legacy alias some
@@ -607,8 +607,11 @@ func (m *k8sMaintainer) evictInstances(ctx context.Context, namespace string, ob
 			// Cluster-scoped: no .Namespace(...).
 			delErr = m.dc.Resource(miniServiceGVR).Delete(ctx, id, metav1.DeleteOptions{})
 		default:
-			// Unrecognized instance type: leave it for NVCA's own reconcile
-			// rather than guessing which resource kind to delete.
+			// Unrecognized instance type: do not guess which resource kind
+			// to delete. Reported as a failure (rather than silently
+			// skipped) so the caller does not proceed to delete the CR
+			// while this instance's workload was never touched.
+			errs = append(errs, fmt.Errorf("instance %s: unsupported instance type %q", id, instanceType))
 			continue
 		}
 		if delErr != nil && !apierrors.IsNotFound(delErr) {
