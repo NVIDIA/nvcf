@@ -548,33 +548,19 @@ func (m *k8sMaintainer) killMatching(ctx context.Context, target *ClusterTarget,
 	return result, failures, nil
 }
 
-// evictInstances directly terminates the instances an ICMSRequest tracks in
-// status.instances (Pod or MiniService), and marks each one
+// evictInstances deletes the Pod or MiniService backing each instance an
+// ICMSRequest tracks in status.instances, and marks each one
 // lastReportedStatus: "terminated" on that same CR.
 //
-// Deleting the ICMSRequest CR alone never evicts the workload: the NVCA
-// reconciler's deletion-handling branch is a passive gate that only removes
-// the finalizer once AllInstancesTerminatedAndReported is true for that CR's
-// own status.instances (the pod is gone from Kubernetes AND
-// lastReportedStatus == "terminated"). Nothing else in NVCA drives eviction
-// or sets that field for a CLI-initiated kill: the only other code path that
-// sets it is ApplyTerminationMessage, reachable only via a genuine upstream
-// ICMS termination queue message, and it writes to the termination message's
-// own CR, never back onto this one. So without this, the CR (and pod) can
-// stay stuck behind the finalizer forever, regardless of --timeout.
+// NVCA's reconciler only removes the CR's finalizer once
+// AllInstancesTerminatedAndReported is true for that CR's own
+// status.instances; nothing else in NVCA ever makes that true for a
+// CLI-initiated kill, so deleting the CR alone leaves it (and the workload)
+// stuck behind the finalizer forever. Doing both steps here satisfies that
+// precondition, so NVCA's existing reconcile clears the finalizer itself.
 //
-// Performing both steps here satisfies the reconciler's own precondition, so
-// its existing, unmodified logic clears the finalizer itself on its next
-// pass.
-//
-// MiniService (Helm function) instances differ from Pod instances: deleting
-// the MiniService object is itself sufficient to drive real teardown (its
-// own controller, internal/miniservice/reconcile.go, actively deletes the
-// rendered chart's objects, namespace, and cache entries on deletion, unlike
-// ICMSRequest's passive gate), so no separate resource-deletion step is
-// needed beyond the Delete call. The lastReportedStatus patch below is still
-// required for both instance types: AllInstancesTerminatedAndReported checks
-// it after the pod/MiniService-existence check regardless of type.
+// MiniService deletion needs no further cleanup step: its own controller
+// (internal/miniservice/reconcile.go) tears down the chart on delete.
 func (m *k8sMaintainer) evictInstances(ctx context.Context, namespace string, obj *unstructured.Unstructured) error {
 	instances, found, err := unstructured.NestedMap(obj.Object, "status", "instances")
 	if err != nil {
