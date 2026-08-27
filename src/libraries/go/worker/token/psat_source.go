@@ -50,7 +50,14 @@ func NewMountedJWTSource() (*MountedJWTTokenSource, error) {
 	if path == "" {
 		return nil, ErrNoMountedToken
 	}
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, ErrNoMountedToken
+		}
+		return nil, fmt.Errorf("stat mounted JWT: %w", err)
+	}
+	if !info.Mode().IsRegular() {
 		return nil, ErrNoMountedToken
 	}
 	return &MountedJWTTokenSource{path: path}, nil

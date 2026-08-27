@@ -52,6 +52,15 @@ func TestNewMountedJWTSource_FileMissing(t *testing.T) {
 	}
 }
 
+func TestNewMountedJWTSource_NonRegularFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("NVCF_TOKEN_FILE_PATH", dir)
+	_, err := NewMountedJWTSource()
+	if err != ErrNoMountedToken {
+		t.Errorf("expected ErrNoMountedToken for directory path, got %v", err)
+	}
+}
+
 func TestNewMountedJWTSource_FileExists(t *testing.T) {
 	f, err := os.CreateTemp("", "psat-*.jwt")
 	if err != nil {
@@ -158,14 +167,17 @@ func TestParseJWTExpiry_BadFormat(t *testing.T) {
 
 // Exercise that the JSON payload round-trips cleanly (regression for padding issues).
 func TestParseJWTExpiry_PaddingVariants(t *testing.T) {
+	exp := time.Now().Add(time.Hour).Unix()
 	for _, pad := range []string{"", "a", "ab", "abc"} {
-		claims := map[string]int64{"exp": time.Now().Add(time.Hour).Unix()}
-		b, _ := json.Marshal(claims)
-		payload := base64.RawURLEncoding.EncodeToString(b)
-		jwt := "hdr." + payload + ".sig"
-		// Inject a suffix to vary the base64 padding
-		jwt = strings.Replace(jwt, ".sig", pad+".sig", 1)
-		// This should not panic; errors are acceptable for malformed input
-		_ = jwt
+		t.Run("pad="+pad, func(t *testing.T) {
+			claims := map[string]int64{"exp": exp}
+			b, _ := json.Marshal(claims)
+			payload := base64.RawURLEncoding.EncodeToString(b)
+			jwtStr := "hdr." + payload + ".sig"
+			// Inject a suffix to vary the part count (exercises structural validation).
+			jwtStr = strings.Replace(jwtStr, ".sig", pad+".sig", 1)
+			// Must not panic; errors are acceptable for structurally invalid input.
+			_, _ = parseJWTExpiry(jwtStr)
+		})
 	}
 }
