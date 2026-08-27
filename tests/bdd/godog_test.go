@@ -127,6 +127,13 @@ controlPlane:
     reval: reval.localhost
     nats: nats.localhost
     invocation: invocation.localhost
+managementTls:
+  trustMode: bundle
+  caBundlePem: test-ca-bundle
+transportTls:
+  trustMode: bundle
+  trustBundleFingerprint: sha256:test-fingerprint
+  trustBundlePem: test-ca-bundle
 `
 	writeArtifact(t, repoRoot, "self-managed", "control-plane-profile.yaml", body)
 }
@@ -511,7 +518,7 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 
 // TestSingleClusterHelmfileLLMPKIFeatureFileWiresToSteps runs the
 // LLM PKI Helmfile feature against a fake runner, with canned results
-// for the trust script, the LLM invoke, and the no-auth curl.
+// for the LLM invoke and the no-auth curl.
 func TestSingleClusterHelmfileLLMPKIFeatureFileWiresToSteps(t *testing.T) {
 	t.Setenv("NGC_API_KEY", "test-key")
 	t.Setenv("SAMPLE_NGC_ORG", "test-org")
@@ -520,9 +527,9 @@ func TestSingleClusterHelmfileLLMPKIFeatureFileWiresToSteps(t *testing.T) {
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
 		"helm list --all-namespaces --kube-context k3d-ncp-local -o json": {ExitCode: 0, Stdout: helmListAllNamespacesJSON()},
-		"tests/bdd/scripts/write-transport-trust-env.sh deploy/stacks/nvcf-compute-plane/environments/local-bdd-pki.yaml k3d-ncp-local": {
+		"helm get values nvca-operator --namespace nvca-operator --kube-context k3d-ncp-local -o yaml": {
 			ExitCode: 0,
-			Stdout:   "wrote transportTLS bundle config (fingerprint sha256:abc) to deploy/stacks/nvcf-compute-plane/environments/local-bdd-pki.yaml\n",
+			Stdout:   "agentConfig:\n  mergeConfig: |\n    workload:\n      stargateQUICInsecure: false\n      transportTLS:\n        trustMode: bundle\n        trustBundleFingerprint: sha256:test\n",
 		},
 		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke" +
 			" --inference-url /v1/chat/completions --model-name openai-compatible-sample" +
@@ -1490,7 +1497,7 @@ agentConfig:
       validationPolicy:
         name: Unrestricted
     workload:
-      stargateQUICInsecure: true
+      stargateQUICInsecure: false
 `)
 }
 
@@ -1510,7 +1517,7 @@ agentConfig:
       validationPolicy:
         name: Unrestricted
     workload:
-      stargateQUICInsecure: true
+      stargateQUICInsecure: false
 `)
 }
 

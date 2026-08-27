@@ -5,13 +5,10 @@ Feature: Install a local single-cluster NVCF stack with PKI-secured LLM transpor
   so that an LLM function answers invocations over a QUIC tunnel whose
   trust chain is issued by the stack's own PKI.
 
-  # Owns its own Helmfile environment (local-bdd-pki) so the default
-  # fixtures and the non-PKI features stay unchanged; PKI enablement
-  # is an install-time value. The trust bundle (OpenBao root CA plus
-  # nvcf-trust-bundle-v1 fingerprint) only exists after the control
-  # plane is up, so a helper script writes it into the compute
-  # environment between install and register. That rewrite drops
-  # stargateQUICInsecure: the tunnel runs in secure mode.
+  # Owns its own Helmfile environment (local-bdd-pki) for install-time PKI
+  # values. The exported profile carries the OpenBao root CA and fingerprint
+  # into registration values. The shared compute fixture uses secure QUIC so
+  # the registered bundle trust remains active.
 
   Rule: Helmfile installs the control plane with the LLM PKI addon
 
@@ -124,6 +121,18 @@ Feature: Install a local single-cluster NVCF stack with PKI-secured LLM transpor
         """
       Then the command exit code should be 0
       And file "deploy/stacks/self-managed/out/control-plane-profile.yaml" should exist
+      And yaml file "deploy/stacks/self-managed/out/control-plane-profile.yaml" should contain:
+        """
+        managementTls:
+          trustMode: bundle
+        transportTls:
+          trustMode: bundle
+        """
+      And yaml file "deploy/stacks/self-managed/out/control-plane-profile.yaml" should have non-empty keys:
+        | key                                 |
+        | managementTls.caBundlePem           |
+        | transportTls.trustBundleFingerprint |
+        | transportTls.trustBundlePem         |
 
       # The profile carries endpoints and trust, not credentials. Initialize
       # the harness-isolated, config-scoped CLI state before compute-plane
@@ -154,15 +163,6 @@ Feature: Install a local single-cluster NVCF stack with PKI-secured LLM transpor
       Then the command exit code should be 0
       And file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-register-values.yaml" should exist
 
-      # Fetch the root CA from OpenBao and write the transportTLS
-      # bundle block into the compute environment.
-      When I run command:
-        """
-        tests/bdd/scripts/write-transport-trust-env.sh deploy/stacks/nvcf-compute-plane/environments/local-bdd-pki.yaml k3d-ncp-local
-        """
-      Then the command exit code should be 0
-      And the command output should contain "fingerprint sha256:"
-
       When I run command:
         """
         make -C deploy/stacks/nvcf-compute-plane install CLUSTER_NAME=ncp-local HELMFILE_ENV=local-bdd-pki COMPUTE_KUBE_CONTEXT=k3d-ncp-local NVCF_CLI=${NVCF_CLI}
@@ -172,6 +172,12 @@ Feature: Install a local single-cluster NVCF stack with PKI-secured LLM transpor
       Then these Helm releases should be deployed using context "k3d-ncp-local":
         | name          | namespace     |
         | nvca-operator | nvca-operator |
+
+      When I run command "helm get values nvca-operator --namespace nvca-operator --kube-context k3d-ncp-local -o yaml"
+      Then the command exit code should be 0
+      And the command output should contain "stargateQUICInsecure: false"
+      And the command output should contain "trustMode: bundle"
+      And the command output should contain "trustBundleFingerprint: sha256:"
 
       When I run command "kubectl --context k3d-ncp-local rollout status deployment/nvca-operator -n nvca-operator --timeout=10m"
       Then the command exit code should be 0
