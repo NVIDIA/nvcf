@@ -608,7 +608,8 @@ make -C deploy/stacks/nvcf-compute-plane register-cluster \
   CONTROL_PLANE_PROFILE="$(pwd)/deploy/stacks/self-managed/out/control-plane-profile.yaml" \
   KUBECONFIG_FILE=<absolute-path-to-gpu-cluster-kubeconfig> \
   COMPUTE_KUBE_CONTEXT=<gpu-cluster-context> \
-  NVCF_CLI=<absolute-path-to-nvcf-cli>
+  NVCF_CLI=<absolute-path-to-nvcf-cli> \
+  NVCF_CLI_CONFIG=<absolute-path-to-cli-config>
 
 make -C deploy/stacks/nvcf-compute-plane install \
   CLUSTER_NAME=<gpu-cluster-name> \
