@@ -96,7 +96,7 @@ ensure-cluster: ## Create cluster if it doesn't exist, otherwise skip
 	$(call require,kubectl,See https://kubernetes.io/docs/tasks/tools/)
 	@if ! k3d cluster get $(CLUSTER_NAME) >/dev/null 2>&1; then \
 		echo "Creating k3d cluster $(CLUSTER_NAME) using config $(K3D_CONFIG_FILE)..."; \
-		K3D_CLUSTER_NAME="$(CLUSTER_NAME)" \
+		if ! K3D_CLUSTER_NAME="$(CLUSTER_NAME)" \
 			CONTROL_PLANE_HTTP_PORT="$(CONTROL_PLANE_HTTP_PORT)" \
 			CONTROL_PLANE_HTTPS_PORT="$(CONTROL_PLANE_HTTPS_PORT)" \
 			CONTROL_PLANE_GRPC_PORT="$(CONTROL_PLANE_GRPC_PORT)" \
@@ -105,7 +105,10 @@ ensure-cluster: ## Create cluster if it doesn't exist, otherwise skip
 			CONTROL_PLANE_LLM_GRPC_PORT="$(CONTROL_PLANE_LLM_GRPC_PORT)" \
 			CONTROL_PLANE_LLM_QUIC_PORT="$(CONTROL_PLANE_LLM_QUIC_PORT)" \
 			CONTROL_PLANE_NATS_PORT="$(CONTROL_PLANE_NATS_PORT)" \
-			k3d cluster create $(CLUSTER_NAME) --config $(K3D_CONFIG_FILE); \
+			k3d cluster create $(CLUSTER_NAME) --config $(K3D_CONFIG_FILE); then \
+			echo "ERROR Failed to create k3d cluster $(CLUSTER_NAME)." >&2; \
+			exit 1; \
+		fi; \
 		echo "OK Cluster $(CLUSTER_NAME) created."; \
 	else \
 		echo "OK Cluster $(CLUSTER_NAME) already exists. Skipping creation."; \
@@ -133,7 +136,10 @@ start: ensure-docker-config
 	@echo "========== START CLUSTER =========="
 	@$(MAKE) ensure-cluster
 	@echo "Ensuring cluster $(CLUSTER_NAME) is ready..."
-	@k3d cluster start $(CLUSTER_NAME) 2>/dev/null || echo "Cluster already running."
+	@if ! k3d cluster start $(CLUSTER_NAME); then \
+		echo "ERROR Failed to start k3d cluster $(CLUSTER_NAME)." >&2; \
+		exit 1; \
+	fi
 	@echo "OK Cluster $(CLUSTER_NAME) is running."
 	@$(MAKE) ensure-context
 
