@@ -510,6 +510,15 @@ func (m *k8sMaintainer) killMatching(ctx context.Context, target *ClusterTarget,
 			FunctionVersionID: vid,
 		}
 		if !opts.DryRun {
+			// Best-effort: deleting the ICMSRequest CR alone never evicts the
+			// workload (see evictInstances doc comment), so drive the real
+			// eviction ourselves before asking NVCA's reconcile to notice.
+			// A failure here (e.g. missing RBAC) is not fatal on its own;
+			// deleteICMSRequest's poll below will honestly report
+			// "terminating" if the workload is still running as a result.
+			if err := m.evictInstances(ctx, killed.Namespace, &items[i]); err != nil {
+				logging.Warning("failed to evict instances for %s/%s: %v", killed.Namespace, killed.Name, err)
+			}
 			terminating, err := m.deleteICMSRequest(ctx, killed.Namespace, killed.Name, opts.Force, timeout)
 			switch {
 			case err != nil:
@@ -532,6 +541,84 @@ func (m *k8sMaintainer) killMatching(ctx context.Context, target *ClusterTarget,
 		result.Affected = append(result.Affected, killed)
 	}
 	return result, failures, nil
+}
+
+// evictInstances directly terminates the Pod-type instances an ICMSRequest
+// tracks in status.instances, and marks each one lastReportedStatus:
+// "terminated" on that same CR.
+//
+// Deleting the ICMSRequest CR alone never evicts the workload: the NVCA
+// reconciler's deletion-handling branch is a passive gate that only removes
+// the finalizer once AllInstancesTerminatedAndReported is true for that CR's
+// own status.instances (the pod is gone from Kubernetes AND
+// lastReportedStatus == "terminated"). Nothing else in NVCA drives eviction
+// or sets that field for a CLI-initiated kill: the only other code path that
+// sets it is ApplyTerminationMessage, reachable only via a genuine upstream
+// ICMS termination queue message, and it writes to the termination message's
+// own CR, never back onto this one. So without this, the CR (and pod) can
+// stay stuck behind the finalizer forever, regardless of --timeout.
+//
+// Performing both steps here satisfies the reconciler's own precondition, so
+// its existing, unmodified logic clears the finalizer itself on its next
+// pass. MiniService (Helm function) instances are left untouched: the CLI
+// has no existing support for evicting those directly.
+func (m *k8sMaintainer) evictInstances(ctx context.Context, namespace string, obj *unstructured.Unstructured) error {
+	instances, found, err := unstructured.NestedMap(obj.Object, "status", "instances")
+	if err != nil || !found || len(instances) == 0 {
+		return nil
+	}
+
+	var errs []error
+	terminated := map[string]interface{}{}
+	for id, raw := range instances {
+		inst, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if instanceType, _, _ := unstructured.NestedString(inst, "instanceType"); instanceType != "" && instanceType != "Pod" {
+			continue
+		}
+		if err := m.cs.CoreV1().Pods(namespace).Delete(ctx, id, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			errs = append(errs, fmt.Errorf("deleting pod %s: %w", id, err))
+			continue
+		}
+		inst["lastReportedStatus"] = "terminated"
+		terminated[id] = inst
+	}
+	if len(terminated) == 0 {
+		return errors.Join(errs...)
+	}
+
+	err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		latest, err := m.dc.Resource(icmsRequestGVR).Namespace(namespace).Get(ctx, obj.GetName(), metav1.GetOptions{})
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil
+			}
+			return err
+		}
+		existing, _, _ := unstructured.NestedMap(latest.Object, "status", "instances")
+		if existing == nil {
+			existing = map[string]interface{}{}
+		}
+		for id, v := range terminated {
+			existing[id] = v
+		}
+		if err := unstructured.SetNestedMap(latest.Object, existing, "status", "instances"); err != nil {
+			return err
+		}
+		latest.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   icmsRequestGVR.Group,
+			Version: icmsRequestGVR.Version,
+			Kind:    "ICMSRequest",
+		})
+		_, err = m.dc.Resource(icmsRequestGVR).Namespace(namespace).UpdateStatus(ctx, latest, metav1.UpdateOptions{})
+		return err
+	})
+	if err != nil {
+		errs = append(errs, fmt.Errorf("patching instance status: %w", err))
+	}
+	return errors.Join(errs...)
 }
 
 // deleteICMSRequest deletes one ICMSRequest and waits up to timeout for it to

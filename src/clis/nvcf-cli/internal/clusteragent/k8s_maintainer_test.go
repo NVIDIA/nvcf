@@ -868,6 +868,48 @@ func TestKillWithinTimeoutReportsDeletedNotTerminating(t *testing.T) {
 // to a valid negative time.Duration with no error from the flag layer, so
 // negative values must be rejected explicitly rather than silently falling
 // back to DefaultKillTimeout like zero does.
+// TestKillEvictsPodBackedInstanceAndMarksItTerminated is a regression test
+// for the reopened bug: deleting the ICMSRequest CR alone never evicts the
+// workload, because NVCA's reconciler only clears the finalizer once
+// AllInstancesTerminatedAndReported is true for that CR's own
+// status.instances (pod gone from Kubernetes AND lastReportedStatus ==
+// "terminated"), and nothing else in NVCA ever satisfies that for a
+// CLI-initiated kill. Verified live against a real cluster: manually
+// deleting the pod and patching lastReportedStatus is what let NVCA's own
+// unmodified reconcile actually clear the finalizer. This test asserts
+// kill-function performs both steps itself. A delete reactor keeps the CR
+// present after Delete (mirroring TestKillReportsTerminatingWhenFinalizerBlocksDeletion),
+// so the patched status.instances is still inspectable afterward.
+func TestKillEvictsPodBackedInstanceAndMarksItTerminated(t *testing.T) {
+	cr := icmsRequestWithFinalizers(testRequestsNS, "r1", "fn-1", "v1", "nvca.finalizers.nvidia.io")
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "inst-a", Namespace: testRequestsNS}}
+	m, dc, cs := newFakeMaintainer([]runtime.Object{defaultBackend(), cr}, []runtime.Object{pod})
+	dc.PrependReactor("delete", "icmsrequests", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, nil
+	})
+
+	_, err := m.KillFunction(context.Background(), "fn-1", "v1", KillOptions{
+		BackendNS: testBackendNS,
+		Timeout:   5 * time.Millisecond,
+	})
+	if err == nil {
+		t.Fatal("expected an error reporting the request is still terminating (the fake finalizer never actually clears)")
+	}
+
+	if _, err := cs.CoreV1().Pods(testRequestsNS).Get(context.Background(), "inst-a", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("pod inst-a should have been deleted, got err=%v", err)
+	}
+
+	obj, err := dc.Resource(icmsRequestGVR).Namespace(testRequestsNS).Get(context.Background(), "r1", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("getting r1: %v", err)
+	}
+	status, _, _ := unstructured.NestedString(obj.Object, "status", "instances", "inst-a", "lastReportedStatus")
+	if status != "terminated" {
+		t.Errorf("status.instances.inst-a.lastReportedStatus = %q, want %q", status, "terminated")
+	}
+}
+
 func TestKillNegativeTimeoutRejected(t *testing.T) {
 	m, dc, _ := newFakeMaintainer(killSeed(), nil)
 
