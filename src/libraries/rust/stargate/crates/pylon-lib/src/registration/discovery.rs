@@ -51,6 +51,7 @@ const INITIAL_WATCH_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(super) async fn run_watch_stargate_discovery(
     seeds: Vec<String>,
+    grpc_tls_ca_cert_pem: Option<Vec<u8>>,
     topology_tx: watch::Sender<RegistrationRouterTopology>,
     stop: CancellationToken,
 ) {
@@ -90,10 +91,12 @@ pub(super) async fn run_watch_stargate_discovery(
                 .expect("watch endpoint generation counter overflowed");
             let task = OwnedTask::spawn_child("watch stargate endpoint", &stop, {
                 let watch_url = watch_url.clone();
+                let grpc_tls_ca_cert_pem = grpc_tls_ca_cert_pem.clone();
                 let endpoint_updates_tx = endpoint_updates_tx.clone();
                 move |endpoint_stop| {
                     watch_stargate_endpoint(
                         watch_url,
+                        grpc_tls_ca_cert_pem,
                         generation,
                         endpoint_updates_tx,
                         endpoint_stop,
@@ -145,6 +148,7 @@ pub(super) async fn stop_watched_endpoint(endpoint: WatchedEndpoint) {
 
 async fn watch_stargate_endpoint(
     watch_url: String,
+    grpc_tls_ca_cert_pem: Option<Vec<u8>>,
     generation: u64,
     endpoint_updates_tx: mpsc::Sender<WatchEndpointUpdate>,
     stop: CancellationToken,
@@ -157,7 +161,7 @@ async fn watch_stargate_endpoint(
         }
 
         log_stargate_grpc_connect_attempt(&target, "watch_stargates", "lazy");
-        let stream = match target.channel_endpoint() {
+        let stream = match target.channel_endpoint(grpc_tls_ca_cert_pem.as_deref()) {
             Ok(endpoint) => {
                 let mut client = StargateControlPlaneClient::new(endpoint.connect_lazy());
                 tokio::select! {

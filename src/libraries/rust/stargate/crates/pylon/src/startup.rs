@@ -332,6 +332,7 @@ fn engine_stats_exit_is_expected(mode: Option<EngineStatsStreamMode>, result: &T
 }
 
 async fn start_pylon_runtime(args: &Args, plan: &PylonStartupPlan) -> Result<RunningPylon> {
+    let grpc_tls_ca_cert_pem = load_grpc_tls_ca_cert(args)?;
     let metrics = PylonMetrics::new()?;
     metrics.observe_target_info(
         env!("CARGO_PKG_VERSION"),
@@ -437,6 +438,7 @@ async fn start_pylon_runtime(args: &Args, plan: &PylonStartupPlan) -> Result<Run
         forwarding,
         registration_inference_server_url.clone(),
         tls_cert_pem,
+        grpc_tls_ca_cert_pem,
     );
     let mut registration_client = InferenceServerRegistrationClient::default();
     registration_client.start(registration_config)?;
@@ -528,6 +530,7 @@ fn registration_config_from_plan(
     forwarding: TunnelForwardingConfig,
     inference_server_url: String,
     tls_cert_pem: Option<Vec<u8>>,
+    grpc_tls_ca_cert_pem: Option<Vec<u8>>,
 ) -> InferenceServerRegistrationConfig {
     InferenceServerRegistrationConfig {
         seeds: vec![args.stargate_address.clone()],
@@ -537,11 +540,21 @@ fn registration_config_from_plan(
         min_update_interval: Duration::from_millis(args.min_update_interval_ms),
         reverse_tunnel: plan.backend_tunnel.is_reverse(),
         tls_cert_pem,
+        grpc_tls_ca_cert_pem,
         quic_insecure: args.quic_insecure,
         tunnel_protocol: args.tunnel_protocol,
         forwarding,
         auth_token_provider: plan.auth_token_provider.clone(),
     }
+}
+
+fn load_grpc_tls_ca_cert(args: &Args) -> Result<Option<Vec<u8>>> {
+    args.grpc_tls_ca_cert_path
+        .as_ref()
+        .map(|path| {
+            std::fs::read(path).with_context(|| format!("load gRPC TLS CA certificate from {path}"))
+        })
+        .transpose()
 }
 
 fn tunnel_forwarding_config_from_plan(
@@ -1295,6 +1308,7 @@ mod tests {
             forwarding,
             "quic://127.0.0.1:4567".to_string(),
             None,
+            None,
         );
 
         assert_eq!(config.seeds, ["http://stargate:50071"]);
@@ -1347,6 +1361,7 @@ mod tests {
             forwarding,
             "http://127.0.0.1:8090".to_string(),
             Some(b"trusted reverse cert".to_vec()),
+            Some(b"trusted grpc CA".to_vec()),
         );
 
         assert_eq!(config.seeds, ["http://stargate:50071"]);
@@ -1359,6 +1374,10 @@ mod tests {
             config.tls_cert_pem.as_deref(),
             Some(&b"trusted reverse cert"[..])
         );
+        assert_eq!(
+            config.grpc_tls_ca_cert_pem.as_deref(),
+            Some(&b"trusted grpc CA"[..])
+        );
         assert!(config.quic_insecure);
         assert_eq!(config.tunnel_protocol, TunnelTransportProtocol::Http3);
         assert!(Arc::ptr_eq(
@@ -1369,6 +1388,36 @@ mod tests {
             config.auth_token_provider.as_deref(),
             Some(AuthTokenProvider::Static(token)) if token == "token-from-cli"
         ));
+    }
+
+    #[test]
+    fn grpc_tls_ca_bundle_loads_once_from_the_configured_path() {
+        let root = tempfile::tempdir().expect("test directory should create");
+        let path = root.path().join("grpc-ca.pem");
+        std::fs::write(&path, b"test gRPC CA").expect("test CA should write");
+        let path = path.to_string_lossy().into_owned();
+        let (args, _) = startup(&["--grpc-tls-ca-cert-path", &path]);
+
+        assert_eq!(
+            load_grpc_tls_ca_cert(&args)
+                .expect("configured gRPC CA should load")
+                .as_deref(),
+            Some(&b"test gRPC CA"[..])
+        );
+    }
+
+    #[test]
+    fn grpc_tls_ca_load_error_identifies_the_configured_path() {
+        let root = tempfile::tempdir().expect("test directory should create");
+        let path = root.path().join("missing-grpc-ca.pem");
+        let path = path.to_string_lossy().into_owned();
+        let (args, _) = startup(&["--grpc-tls-ca-cert-path", &path]);
+
+        let error = load_grpc_tls_ca_cert(&args).expect_err("missing gRPC CA should fail");
+        let message = format!("{error:#}");
+
+        assert!(message.contains("load gRPC TLS CA certificate"));
+        assert!(message.contains(&path));
     }
 
     #[test]
