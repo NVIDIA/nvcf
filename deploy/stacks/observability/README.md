@@ -19,8 +19,9 @@ observability:
 
 Enabled profiles install Prometheus Operator CRDs, the OpenTelemetry Operator,
 one collector with Target Allocator and discovery RBAC, VictoriaMetrics, and
-the selected monitors. The reusable stack defaults to `disabled`; the
-self-managed stack defaults to `control`.
+the selected monitors. The reusable, self-managed, and compute-plane stacks
+default to `disabled`. Select a profile explicitly to install observability
+components.
 
 Profiles derive the plane behavior internally. There are no
 `planes.control.enabled` or `planes.compute.enabled` values.
