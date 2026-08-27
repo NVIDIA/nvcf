@@ -137,7 +137,7 @@ agent:
     # is no AppVersion fallback (see _helpers.tpl) — empty tag fails
     # the chart render with a clear error rather than templating a
     # known-broken image ref.
-    tag: "v0.1.3"
+    tag: "v0.2.43"
     pullPolicy: Always
 
   # nodeSelector is intentionally empty — GPU detection runs through
@@ -176,19 +176,72 @@ agent:
       effect: NoSchedule
 
   # The agent runs privileged with hostPID/hostNetwork — required to
-  # see host processes (for CRIU) and to expose hostPort 8081 reliably.
-  # Don't disable unless you know what you're trading away.
+  # hostPID is required: CRIU and cuda-checkpoint address target processes by
+  # host PID, and the pre-checkpoint socket sweep opens /proc/<pid>/ns/net.
   hostPID: true
+
+  # hostNetwork is NOT required by any agent capability (GH #490). Everything
+  # that looked like it needed the host netns actually enters the TARGET pod's
+  # namespace: external_tcp.go setns's via /proc/<pid>/ns/net, and CRIU
+  # dump/restore nsenter into the container's netns. The apiserver reaches the
+  # webhook through a Service, not the node IP.
+  #
+  # What it does carry is hostPort 8081 -- which is what binds the agent's
+  # privileged API to every node's IP and makes NetworkPolicy unable to fence
+  # it, since a hostNetwork pod has node identity rather than pod identity.
+  #
+  # Setting this false switches to: peers dial the pod IP (--advertise-ip from
+  # status.podIP), same-node callers use the internalTrafficPolicy:Local
+  # Service, no hostPort is declared, and the restore-pod egress policy
+  # tightens from a node CIDR to a podSelector.
+  #
+  # Still true by default because the flip is a network topology change that
+  # has not been validated on a cluster yet. Do that before flipping.
   hostNetwork: true
 
   # Host paths the agent bind-mounts. Override if your nodes use
   # non-standard layouts (e.g. K3s on a single laptop).
+
+  # Authentication for the agent HTTP API (GH #486).
+  #
+  # The agent API restores and deletes checkpoints, serves any file inside a
+  # checkpoint, and exposes pprof, on a process running privileged with
+  # /var/lib and the containerd root bind-mounted. The DaemonSet binds it to
+  # every node's IP (hostNetwork + hostPort), and NetworkPolicy cannot fence a
+  # hostNetwork pod, so access control has to live in the request path.
+  #
+  # Rollout: enable with mode=permissive first. The agent then counts and logs
+  # unauthenticated callers via nvsnap_agent_auth_total{result="missing"} but
+  # still serves them, so nothing breaks while callers pick up the token.
+  # Switch to required once that series is flat at zero.
+  auth:
+    # Off by default so an upgrade does not lock out callers that have not
+    # been given the token yet. The agent logs a warning while it is off.
+    enabled: false
+    # permissive | required. Ignored when enabled=false.
+    mode: permissive
+    # Leave empty to have the chart generate one and preserve it across
+    # upgrades. Set explicitly to manage or rotate the credential yourself.
+    token: ""
+
   hostPaths:
     checkpoints: /var/lib/containerd/nvsnap-checkpoints
     containerdSock: /run/containerd/containerd.sock
     containerdStorage: /var/lib/containerd
-    nvsnapCache: /var/lib/nvsnap/cache
-    nvsnapStaging: /var/lib/nvsnap/staging
+    # Cache, staging and overlays sit under the containerd root on purpose.
+    # They are the bulk writers -- a 70B cachedir capture is ~132 GB -- and on
+    # a typical GPU node /var/lib is the boot volume (network-backed, ~125
+    # MB/s) while containerd lives on the instance-local NVMe array. Writing
+    # captures to the boot volume was both slow (~28 min for that 132 GB) and
+    # a node-stability risk, since filling the root disk triggers kubelet disk
+    # pressure. Keeping these on containerd's filesystem also puts source and
+    # destination on one filesystem, which is what makes reflink possible.
+    # Override per-cluster if containerd is not on the fastest local disk.
+    nvsnapCache: /var/lib/containerd/nvsnap-cache
+    nvsnapStaging: /var/lib/containerd/nvsnap-staging
+    # Same reasoning, plus overlayfs needs an upperdir on a filesystem with
+    # d_type support -- containerd's own snapshotter filesystem qualifies.
+    nvsnapOverlays: /var/lib/containerd/nvsnap-overlays
     nvidiaRun: /run/nvidia
     hostUsr: /usr
 
@@ -310,7 +363,12 @@ agent:
     # mirrored by the nvsnap-bundle-stage initContainer + the
     # host-bundle hostPath volume in the DaemonSet template (Helm
     # threads the same value into all three).
-    hostBundleRoot: ""
+    # Restore-bundle staging. Same reasoning as agent.hostPaths above: this is
+    # a bulk path on the restore side, so it belongs on containerd's local
+    # disk rather than the boot volume. Set explicitly (not left empty) so the
+    # chart passes --webhook-host-bundle-root and the agent, the DaemonSet
+    # mount and the webhook-injected function-pod mounts all agree on one path.
+    hostBundleRoot: "/var/lib/containerd/nvsnap-bundle"
 
   # Opt-in cross-cluster replication to a managed object store (provider:
   # gcs today, s3 planned). Empty provider/homeBucket disables it entirely.

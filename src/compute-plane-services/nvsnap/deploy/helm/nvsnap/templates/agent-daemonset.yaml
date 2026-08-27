@@ -12,7 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-{{- if .Values.agent.enabled -}}
+{{- if .Values.agent.enabled }}
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -42,9 +42,9 @@ spec:
         {{- toYaml .Values.agent.tolerations | nindent 8 }}
       hostPID: {{ .Values.agent.hostPID }}
       hostNetwork: {{ .Values.agent.hostNetwork }}
-      # ClusterFirstWithHostNet so Service DNS still resolves under
-      # hostNetwork (nvsnap-server.<ns>.svc, nvsnap-blobstore.<ns>.svc).
-      dnsPolicy: ClusterFirstWithHostNet
+      # ClusterFirstWithHostNet is only correct under hostNetwork; with pod
+      # networking it is wrong (it points resolution at the node's resolv.conf).
+      dnsPolicy: {{ if .Values.agent.hostNetwork }}ClusterFirstWithHostNet{{ else }}ClusterFirst{{ end }}
       serviceAccountName: nvsnap-agent
       {{- include "nvsnap.imagePullSecrets" . | nindent 6 }}
       initContainers:
@@ -62,14 +62,12 @@ spec:
             - /criu-bundle/restore-bundle-init.sh
           env:
             - name: NVSNAP_BUNDLE_TOOLS_DST
-              value: {{ printf "%s/nvsnap" (.Values.agent.l2.hostBundleRoot | default "/var/lib/nvsnap/bundle") | quote }}
-            - name: NVSNAP_BUNDLE_LIB_DST
-              value: {{ printf "%s/nvsnap-lib" (.Values.agent.l2.hostBundleRoot | default "/var/lib/nvsnap/bundle") | quote }}
+              value: {{ printf "%s/nvsnap" (.Values.agent.l2.hostBundleRoot | default "/var/lib/containerd/nvsnap-bundle") | quote }}
           volumeMounts:
             - name: host-bundle
               # Mount the parent of {tools,lib} so the script can rename
               # siblings under it atomically.
-              mountPath: {{ .Values.agent.l2.hostBundleRoot | default "/var/lib/nvsnap/bundle" | quote }}
+              mountPath: {{ .Values.agent.l2.hostBundleRoot | default "/var/lib/containerd/nvsnap-bundle" | quote }}
           resources:
             requests:
               cpu: 100m
@@ -82,6 +80,18 @@ spec:
           image: {{ include "nvsnap.agent.image" . }}
           imagePullPolicy: {{ .Values.agent.image.pullPolicy }}
           args:
+            {{- if .Values.agent.auth.enabled }}
+            # permissive counts and logs unauthenticated callers but still
+            # serves them; required returns 401. Roll out on permissive until
+            # nvsnap_agent_auth_total{result="missing"} is zero.
+            - --auth-mode={{ .Values.agent.auth.mode }}
+            {{- end }}
+            {{- if not .Values.agent.hostNetwork }}
+            # Pod networking: the init container reaches its node-local agent
+            # through the internalTrafficPolicy:Local Service instead of the
+            # node IP, so no hostPort is needed (GH #490).
+            - --webhook-agent-base-url=http://nvsnap-agent-local.{{ .Release.Namespace }}.svc.cluster.local:8081
+            {{- end }}
             - --cuda-checkpoint-path=/criu-bundle/cuda-checkpoint
             - --criu-path=/criu-bundle/criu
             # Translate in-container --checkpoint-dir to the host path
@@ -108,7 +118,7 @@ spec:
             # path further down — the webhook patches kubelet pod
             # specs with paths built off this root, and kubelet runs
             # in host namespace.
-            - --overlay-root={{ .Values.agent.hostPaths.nvsnapOverlays | default "/var/lib/nvsnap/overlays" }}
+            - --overlay-root={{ .Values.agent.hostPaths.nvsnapOverlays | default "/var/lib/containerd/nvsnap-overlays" }}
             {{- if .Values.webhook.enabled }}
             # In-agent admission webhook. The Service in webhook.yaml
             # load-balances admission requests across agent pods.
@@ -168,6 +178,24 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: status.hostIP
+            # POD_IP is what peers dial (--advertise-ip). Under hostNetwork
+            # kubelet reports status.podIP as the node IP, so this is correct
+            # in both network modes and needs no conditional (GH #490).
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            {{- if .Values.agent.auth.enabled }}
+            # Shared bearer token for the agent API (GH #486). Env rather than
+            # a flag: flag values are visible in the pod spec and in `ps`.
+            # The agent uses it both to verify inbound requests and to sign
+            # its own peer calls.
+            - name: NVSNAP_AGENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: nvsnap-agent-token
+                  key: token
+            {{- end }}
             {{- if .Values.server.enabled }}
             - name: NVSNAP_CATALOG_URL
               value: "http://nvsnap-server.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.server.service.port }}"
@@ -225,7 +253,13 @@ spec:
             {{- end }}
           ports:
             - containerPort: 8081
+              {{- if .Values.agent.hostNetwork }}
+              # Binds the API to every node's IP. Only declared under
+              # hostNetwork; with pod networking peers dial the pod IP and
+              # same-node callers use the internalTrafficPolicy:Local
+              # Service, so no node-wide listener is needed (GH #490).
               hostPort: 8081
+              {{- end }}
               name: http-api
             {{- if .Values.webhook.enabled }}
             - containerPort: 8443
@@ -276,7 +310,7 @@ spec:
             # namespace — host path and container path must match
             # exactly or kubelet's hostPath type check fails.
             - name: nvsnap-overlays
-              mountPath: {{ .Values.agent.hostPaths.nvsnapOverlays | default "/var/lib/nvsnap/overlays" }}
+              mountPath: {{ .Values.agent.hostPaths.nvsnapOverlays | default "/var/lib/containerd/nvsnap-overlays" }}
               mountPropagation: Bidirectional
             {{- if .Values.webhook.enabled }}
             - name: webhook-tls
@@ -350,7 +384,7 @@ spec:
         # vs 5.5TB local SSD).
         - name: nvsnap-overlays
           hostPath:
-            path: {{ .Values.agent.hostPaths.nvsnapOverlays | default "/var/lib/nvsnap/overlays" }}
+            path: {{ .Values.agent.hostPaths.nvsnapOverlays | default "/var/lib/containerd/nvsnap-overlays" }}
             type: DirectoryOrCreate
         # nvsnap#184: bundle-staging hostPath. The nvsnap-bundle-stage
         # initContainer writes /nvsnap (tools) + /nvsnap-lib (intercept
@@ -359,7 +393,7 @@ spec:
         # restore_entrypoint.go for the inject patches.
         - name: host-bundle
           hostPath:
-            path: {{ .Values.agent.l2.hostBundleRoot | default "/var/lib/nvsnap/bundle" | quote }}
+            path: {{ .Values.agent.l2.hostBundleRoot | default "/var/lib/containerd/nvsnap-bundle" | quote }}
             type: DirectoryOrCreate
         {{- if .Values.webhook.enabled }}
         - name: webhook-tls
@@ -385,4 +419,34 @@ spec:
       targetPort: 8081
       name: http-api
   clusterIP: None
+{{- end }}
+
+{{- if not .Values.agent.hostNetwork }}
+---
+# Node-local Service: the pod-network replacement for hostPort (GH #490).
+#
+# Callers that must reach the agent on THEIR OWN node -- the nvsnap-mount-prep
+# init container is the one that matters -- used to do it via
+# http://$(status.hostIP):8081, which requires the API to be bound to every
+# node's IP. internalTrafficPolicy:Local is the Kubernetes-native way to say
+# the same thing: this ClusterIP only ever routes to the endpoint on the
+# calling node, and has no node-IP listener at all.
+#
+# The headless nvsnap-agent Service above stays for tools that want to address
+# a specific agent; this one is for "whichever agent is on my node".
+apiVersion: v1
+kind: Service
+metadata:
+  name: nvsnap-agent-local
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "nvsnap.agent.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "nvsnap.agent.selectorLabels" . | nindent 4 }}
+  internalTrafficPolicy: Local
+  ports:
+    - port: 8081
+      targetPort: 8081
+      name: http-api
 {{- end }}

@@ -7,6 +7,9 @@
 .idea/
 .vscode/
 *.swp
+# Per-user IntelliJ Bazel plugin project view and its generated project dir
+.bazelproject
+.ijwb/
 
 # AI agent local config (per-user settings, ephemeral plans)
 .claude/settings.local.json
@@ -29,6 +32,9 @@
 /public/
 /tests/bdd/out/
 
+# Maven build output. Bazel is the build path; target/ trees are transient.
+target/
+
 # Transient symlink created by root Makefile's link-secrets target;
 # points at ../../../../secrets/<env>-secrets.yaml (root-level user file).
 deploy/stacks/**/secrets/*-secrets.yaml
@@ -38,6 +44,10 @@ deploy/stacks/**/secrets/*-secrets.yaml
 
 # Packaged Helm charts under examples/ (produced by `helm package`).
 examples/**/*.tgz
+
+# Subchart archives fetched by `helm dependency build` (tools/ci/check-helm-charts
+# cleans up after itself; this is the backstop against committing one by hand).
+deploy/helm/*/*/charts/*.tgz
 
 # Python
 __pycache__/

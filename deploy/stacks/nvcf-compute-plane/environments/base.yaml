@@ -31,14 +31,21 @@ global:
   # NVCA Operator Configuration
   # =============================================================================
   nvcaOperator:
+    imageTag: "3.2.12"
     selfManaged:
-      # ICMS (SIS) service URL — required; set per environment.
+      nvcaVersion: "3.2.12"
+      otelCollector:
+        # Self-hosted registries do not always mirror this optional image.
+        # Enable it only after publishing the collector in global.image.
+        enabled: false
+        imageTag: "0.157.9"
+      # ICMS (SIS) service URL: required; set per environment.
       icmsServiceURL: ""
       icmsServiceHostHeaderOverride: ""
-      # Reval service URL — required; set per environment.
+      # Reval service URL: required; set per environment.
       revalServiceURL: ""
       revalServiceHostHeaderOverride: ""
-      # NATS URL — required; set per environment.
+      # NATS URL: required; set per environment.
       natsURL: ""
       natsHostOverride: ""
       # Feature gates enabled on this cluster. Extra gates set here are added on
@@ -63,17 +70,48 @@ global:
   #   value: worker
   #   effect: NoSchedule
 
+# One profile controls all compute observability defaults.
+observability:
+  profile: compute
+
 # =============================================================================
 # Optional Add-on Operators
 # =============================================================================
 addons:
 
-  # Grove topology-aware scheduling operator (disabled by default)
+  # MNNVL topology-aware scheduling (disabled by default). Enable on
+  # NVLink-optimized clusters so multi-node functions can request clique-level
+  # gang placement. When true and kaiScheduler.enabled, installs KAI Topology
+  # CRs from topologies below. When true and groveOperator.enabled, also sets
+  # Grove topologyAwareScheduling.enabled and installs a ClusterTopologyBinding
+  # that references the KAI Topology. Requires addons.kaiScheduler.enabled.
+  # Function owners opt in per workload with the `kai.scheduler/topology`
+  # annotation naming one of the entries below.
+  topologyAwareScheduling:
+    enabled: false
+    topologies:
+      - name: nvcf-mnnvl-topology
+        # Ordered widest domain first, narrowest last.
+        levels:
+          - nodeLabel: nvidia.com/gpu.clique
+          - nodeLabel: kubernetes.io/hostname
+
+  # KAI Scheduler (disabled by default). Required when enabling Grove or Dynamo.
+  # When enabled, NVCA also gets the KAIScheduler feature gate.
+  # Per-component resource overrides: addons.kaiScheduler.<component>.resources
+  # (requests/limits). Defaults live in helmfile.d/01-dependencies.yaml.gotmpl.
+  kaiScheduler:
+    enabled: false
+
+  # Grove topology-aware scheduling operator (disabled by default).
+  # topologyAwareScheduling.enabled is driven by addons.topologyAwareScheduling
+  # when that top-level toggle is on. Override network settings explicitly
+  # (for example network.autoMNNVLEnabled); they are not set by the topology toggle.
   groveOperator:
     enabled: false
-    topologyAwareScheduling: {}
     network: {}
 
-  # Dynamo inference framework scheduling operator (disabled by default)
+  # Dynamo inference framework scheduling operator (disabled by default).
+  # When enabled, NVCA also gets the DynamoOperatorSupport feature gate.
   dynamoOperator:
     enabled: false

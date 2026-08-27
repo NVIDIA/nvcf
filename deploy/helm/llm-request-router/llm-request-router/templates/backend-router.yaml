@@ -1,0 +1,164 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+{{- if .Values.llmRequestRouter.backendRouter.enabled }}
+{{- include "llm-request-router.validateBackendRouterTls" . }}
+{{- include "llm-request-router.validateBackendRouterServiceAccount" . }}
+{{- $advertisedHostnameTemplate := include "llm-request-router.advertisedHostnameTemplate" . }}
+{{- $tlsSecretName := include "llm-request-router.tlsSecretName" . }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "llm-request-router.backendRouterName" . }}
+  namespace: {{ include "llm-request-router.namespace" . }}
+  labels:
+    {{- include "llm-request-router.backendRouterLabels" . | nindent 4 }}
+spec:
+  {{- /*
+  Each router replica terminates QUIC itself and cannot resume a session that
+  began on another replica. Pin a client to one replica so a rehash mid-session
+  does not cost the worker a stateless reset and reconnect.
+  */}}
+  sessionAffinity: ClientIP
+  selector:
+    {{- include "llm-request-router.backendRouterSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: grpc
+      port: {{ .Values.llmRequestRouter.backendRouter.service.grpcPort }}
+      targetPort: grpc
+      protocol: TCP
+    - name: quic
+      port: {{ .Values.llmRequestRouter.backendRouter.service.reverseTunnelPort }}
+      targetPort: quic
+      protocol: UDP
+    - name: health
+      port: {{ .Values.llmRequestRouter.backendRouter.service.healthPort }}
+      targetPort: health
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "llm-request-router.backendRouterName" . }}
+  namespace: {{ include "llm-request-router.namespace" . }}
+  labels:
+    {{- include "llm-request-router.backendRouterLabels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.llmRequestRouter.backendRouter.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "llm-request-router.backendRouterSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "llm-request-router.backendRouterSelectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: backend-router
+        {{- with .Values.llmRequestRouter.backendRouter.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.llmRequestRouter.backendRouter.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "llm-request-router.backendRouterServiceAccountName" . }}
+      {{- with .Values.llmRequestRouter.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.llmRequestRouter.podSecurityContext | nindent 8 }}
+      containers:
+        - name: backend-router
+          image: {{ include "llm-request-router.backendRouterImage" . }}
+          imagePullPolicy: {{ default .Values.llmRequestRouter.image.pullPolicy .Values.llmRequestRouter.backendRouter.image.pullPolicy }}
+          command:
+            - /usr/local/bin/stargate-k8s-router
+          args:
+            - --listen-addr=0.0.0.0:{{ .Values.llmRequestRouter.backendRouter.service.grpcPort }}
+            - --reverse-tunnel-listen-addr=0.0.0.0:{{ .Values.llmRequestRouter.backendRouter.service.reverseTunnelPort }}
+            - --health-listen-addr=0.0.0.0:{{ .Values.llmRequestRouter.backendRouter.service.healthPort }}
+            - --target-namespace={{ include "llm-request-router.namespace" . }}
+            - --target-service-name={{ include "llm-request-router.fullname" . }}
+            - --advertised-hostname-template={{ $advertisedHostnameTemplate }}
+            - --grpc-port-name=grpc
+            - --quic-port-name=quic
+            - --tunnel-protocol=raw-quic
+            {{- with .Values.llmRequestRouter.tls.certPath }}
+            - --tls-cert-path={{ . }}
+            {{- end }}
+            {{- with .Values.llmRequestRouter.tls.keyPath }}
+            - --tls-key-path={{ . }}
+            {{- end }}
+            {{- if .Values.llmRequestRouter.tls.quicInsecure }}
+            - --quic-insecure
+            {{- end }}
+          ports:
+            - name: grpc
+              containerPort: {{ .Values.llmRequestRouter.backendRouter.service.grpcPort }}
+              protocol: TCP
+            - name: quic
+              containerPort: {{ .Values.llmRequestRouter.backendRouter.service.reverseTunnelPort }}
+              protocol: UDP
+            - name: health
+              containerPort: {{ .Values.llmRequestRouter.backendRouter.service.healthPort }}
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            periodSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: health
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.llmRequestRouter.backendRouter.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.llmRequestRouter.securityContext | nindent 12 }}
+          {{- if and $tlsSecretName .Values.llmRequestRouter.tls.certPath .Values.llmRequestRouter.tls.keyPath }}
+          volumeMounts:
+            - name: stargate-tls
+              mountPath: {{ include "llm-request-router.tlsMountPath" . | quote }}
+              readOnly: true
+          {{- end }}
+      {{- if and $tlsSecretName .Values.llmRequestRouter.tls.certPath .Values.llmRequestRouter.tls.keyPath }}
+      volumes:
+        - name: stargate-tls
+          secret:
+            secretName: {{ $tlsSecretName | quote }}
+            items:
+              - key: tls.crt
+                path: {{ base .Values.llmRequestRouter.tls.certPath | quote }}
+              - key: tls.key
+                path: {{ base .Values.llmRequestRouter.tls.keyPath | quote }}
+      {{- end }}
+      {{- with .Values.llmRequestRouter.backendRouter.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.llmRequestRouter.backendRouter.affinity }}
+      affinity:
+        {{- toYaml .Values.llmRequestRouter.backendRouter.affinity | nindent 8 }}
+      {{- else }}
+      {{- /*
+      Soft, not required: two replicas on one node still survive a pod crash,
+      and a hard constraint would leave the second replica unschedulable on a
+      single-node cluster such as k3d.
+      */}}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    {{- include "llm-request-router.backendRouterSelectorLabels" . | nindent 20 }}
+      {{- end }}
+      {{- with .Values.llmRequestRouter.backendRouter.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

@@ -70,13 +70,14 @@ tonic = "=0.14.6"
 opentelemetry = "=0.32.0"
 opentelemetry-http = "=0.32.0"
 opentelemetry_sdk = { version = "=0.32.1", features = ["rt-tokio"] }
-opentelemetry-otlp = { version = "=0.32.0", default-features = false, features = ["grpc-tonic", "tls-roots", "tls-aws-lc", "trace"] }
+opentelemetry-otlp = { version = "=0.32.0", default-features = false, features = ["grpc-tonic", "tls-roots", "tls-webpki-roots", "tls-aws-lc", "trace"] }
 prometheus = "=0.14.0"
 tracing = "=0.1.44"
 tracing-opentelemetry = "=0.33.0"
 tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "fmt", "registry"] }
 quinn = { version = "=0.11.11", features = ["futures-io"] }
 rustls = "=0.23.41"
+rustls-webpki = "=0.103.9"
 rcgen = "=0.13.2"
 rustls-pemfile = "=2.2.0"
 url = "=2.5.8"
@@ -98,6 +99,7 @@ tower = { version = "=0.5.3", features = ["util"] }
 http = "=1.4.2"
 async-trait = "=0.1.89"
 xxhash-rust = { version = "=0.8.16", features = ["xxh3"] }
+x509-parser = "=0.18.1"
 
 stargate-auth = { path = "crates/stargate-auth" }
 stargate-forwarding = { path = "crates/stargate-forwarding" }

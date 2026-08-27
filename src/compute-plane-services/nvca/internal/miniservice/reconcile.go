@@ -138,6 +138,7 @@ var (
 
 const (
 	InferenceNamespaceEnvKey        = "HELM_CHART_NAMESPACE"
+	miniServiceKind                 = "MiniService"
 	miniServiceUnknownPhase         = "Unknown"
 	miniServiceUnknownFailureReason = "Unknown"
 	miniServicePhaseAttrKey         = "nvca.miniservice.phase"
@@ -458,25 +459,37 @@ func (r *Reconciler) saveWorkloadConfig(
 		return nil
 	}
 
-	base := &v1alpha1.MiniService{
-		TypeMeta: metav1.TypeMeta{
-			APIVersion: v1alpha1.SchemeGroupVersion.String(),
-			Kind:       "MiniService",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:            ms.Name,
-			ResourceVersion: ms.ResourceVersion,
-		},
-		Spec: v1alpha1.MiniServiceSpec{
-			WorkloadConfig: desired.DeepCopy(),
-		},
+	spec := map[string]any{"workloadConfig": nil}
+	if desired != nil {
+		workloadConfig, err := runtime.DefaultUnstructuredConverter.ToUnstructured(desired)
+		if err != nil {
+			return fmt.Errorf("convert miniservice %s workload config: %w", ms.Name, err)
+		}
+		spec["workloadConfig"] = workloadConfig
 	}
-	if err := r.Client.Patch(ctx, base, client.Apply, client.ForceOwnership, client.FieldOwner(managedByValue)); err != nil {
+	// Build the apply payload independently of MiniServiceSpec's compatibility serializer.
+	// This gives the controller ownership of only spec.workloadConfig and prevents zero-valued
+	// namespace, request-name, or Helm fields from entering the SSA request.
+	applyPatch := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": v1alpha1.SchemeGroupVersion.String(),
+		"kind":       miniServiceKind,
+		"metadata": map[string]any{
+			"name": ms.Name,
+		},
+		"spec": spec,
+	}}
+	if err := r.Client.Patch(
+		ctx,
+		applyPatch,
+		client.Apply,
+		client.FieldOwner(managedByValue),
+		client.ForceOwnership,
+	); err != nil {
 		return fmt.Errorf("patch miniservice %s workload config: %w", ms.Name, err)
 	}
 
-	ms.Spec.WorkloadConfig = desired
-	ms.ResourceVersion = base.ResourceVersion
+	ms.Spec.WorkloadConfig = desired.DeepCopy()
+	ms.ResourceVersion = applyPatch.GetResourceVersion()
 	return nil
 }
 
@@ -487,6 +500,16 @@ func (r *Reconciler) saveWorkloadConfig(
 // (observedGeneration is still updated at the end of Reconcile).
 func (r *Reconciler) prepareUpdateIfNeeded(ctx context.Context, ms *v1alpha1.MiniService) error {
 	if ms.Status.ObservedGeneration == 0 || ms.Generation == ms.Status.ObservedGeneration {
+		return nil
+	}
+	// Installing at revision zero means initial object application is still in progress.
+	// doInstall reads the current spec and its render cache is keyed by Helm configuration,
+	// so it can handle spec changes without entering an update path that assumes infra exists.
+	if ms.Status.Phase == v1alpha1.MiniServiceInstalling && ms.Status.Revision == 0 {
+		logf.FromContext(ctx).Info("Spec change detected during initial install, continuing install",
+			"generation", ms.Generation,
+			"observedGeneration", ms.Status.ObservedGeneration,
+		)
 		return nil
 	}
 
@@ -640,7 +663,8 @@ func (r *Reconciler) doInstall(ctx context.Context,
 		return reconcile.Result{}, err
 	}
 
-	if err := r.prepareTransportTLSForWorkloads(ctx, ms, workloadObjs); err != nil {
+	transportTLSObjs := append([]client.Object{utilsPod}, workloadObjs...)
+	if err := r.prepareTransportTLSForWorkloads(ctx, ms, transportTLSObjs); err != nil {
 		return reconcile.Result{}, err
 	}
 
@@ -720,7 +744,10 @@ func (r *Reconciler) doInstall(ctx context.Context,
 	// transient error (timeout, rate-limit) must be retried.
 	cacheBackend := nvcastorage.HelmCacheBackendNone
 	if cacheLaunchRequested(icmsReq) {
-		cacheBackend, err = nvcastorage.SelectHelmCacheBackend(ctx, r.Client, r.FeatureFlagFetcher)
+		// Same config value the storage controller provisions cache volumes
+		// with, so the class checked here is the class they land on.
+		cacheBackend, err = nvcastorage.SelectHelmCacheBackend(ctx, r.Client, r.FeatureFlagFetcher,
+			r.cfg.Agent.ModelCache.StorageClassName)
 		if err != nil {
 			return reconcile.Result{}, fmt.Errorf("select helm cache backend: %w", err)
 		}
@@ -897,7 +924,7 @@ func needsWorkloadUpdate(ms *v1alpha1.MiniService) bool {
 func (r *Reconciler) prepareUpdateWorkload(ctx context.Context,
 	ms *v1alpha1.MiniService,
 	icmsReq *nvcav2beta1.ICMSRequest,
-) ([]client.Object, []v1alpha1.ResourceStatus, string, string, error) {
+) ([]client.Object, []v1alpha1.ResourceStatus, *v1alpha1.WorkloadConfig, string, string, error) {
 	log := logf.FromContext(ctx)
 
 	log.Info("Preparing MiniService workload update", "revision", ms.Status.Revision)
@@ -905,18 +932,18 @@ func (r *Reconciler) prepareUpdateWorkload(ctx context.Context,
 	funcLaunchSpec := icmsReq.Spec.CreationMsgInfo.FunctionLaunchSpecification
 	taskLaunchSpec := icmsReq.Spec.CreationMsgInfo.TaskLaunchSpecification
 	if funcLaunchSpec == nil && taskLaunchSpec == nil {
-		return nil, nil, "", "", reconcile.TerminalError(
+		return nil, nil, nil, "", "", reconcile.TerminalError(
 			fmt.Errorf("both function and task launch specs are empty in ICMSRequest %s", icmsReq.Name))
 	}
 
 	functionName, taskName, err := getFunctionNameAndTaskName(funcLaunchSpec, taskLaunchSpec)
 	if err != nil {
-		return nil, nil, "", "", reconcile.TerminalError(fmt.Errorf("failed to get function name and task name: %w", err))
+		return nil, nil, nil, "", "", reconcile.TerminalError(fmt.Errorf("failed to get function name and task name: %w", err))
 	}
 
 	objsData, isRendered, err := r.getRenderedData(ctx, ms)
 	if err != nil {
-		return nil, nil, "", "", err
+		return nil, nil, nil, "", "", err
 	}
 
 	if !isRendered {
@@ -930,14 +957,14 @@ func (r *Reconciler) prepareUpdateWorkload(ctx context.Context,
 		failed := r.failedWorkloadUpdateRevisionCache[failedWorkloadUpdateRevisionCacheKey]
 		r.failedWorkloadUpdateRevisionCacheLock.RUnlock()
 		if failed != nil {
-			return nil, nil, "", "", failed
+			return nil, nil, nil, "", "", failed
 		}
 
 		if objsData, err = r.render(ctx, ms, icmsReq); err != nil {
 			r.failedWorkloadUpdateRevisionCacheLock.Lock()
 			r.failedWorkloadUpdateRevisionCache[failedWorkloadUpdateRevisionCacheKey] = err
 			r.failedWorkloadUpdateRevisionCacheLock.Unlock()
-			return nil, nil, "", "", err
+			return nil, nil, nil, "", "", err
 		}
 
 		// Clear the cache on a successful render for prior revisions to this MiniService
@@ -949,16 +976,16 @@ func (r *Reconciler) prepareUpdateWorkload(ctx context.Context,
 		r.failedWorkloadUpdateRevisionCacheLock.Unlock()
 
 		if err := r.saveRenderedData(ctx, ms, objsData); err != nil {
-			return nil, nil, "", "", err
+			return nil, nil, nil, "", "", err
 		}
 	}
 
-	workloadObjs, resources, _, err := decodeObjects(ctx, r.Decoder, objsData)
+	workloadObjs, resources, workloadConfig, err := decodeObjects(ctx, r.Decoder, objsData)
 	if err != nil {
-		return nil, nil, "", "", err
+		return nil, nil, nil, "", "", err
 	}
 
-	return workloadObjs, resources, functionName, taskName, nil
+	return workloadObjs, resources, workloadConfig, functionName, taskName, nil
 }
 
 // doUpdateWorkload performs a workload update for a MiniService, doing almost the same operations as doInstall,
@@ -970,7 +997,7 @@ func (r *Reconciler) doUpdateWorkload(ctx context.Context,
 ) (reconcile.Result, error) {
 	log := logf.FromContext(ctx)
 
-	workloadObjs, resources, functionName, taskName, err := r.prepareUpdateWorkload(ctx, ms, icmsReq)
+	workloadObjs, resources, workloadConfig, functionName, taskName, err := r.prepareUpdateWorkload(ctx, ms, icmsReq)
 	if err != nil {
 		// Workload preparation may result in terminal errors that would cause workload cleanup.
 		// To let the un-updated workload continue running, warn the user with a non-terminal error.
@@ -1026,6 +1053,10 @@ func (r *Reconciler) doUpdateWorkload(ctx context.Context,
 			log.Error(err, "Failed to apply workload objects with terminal error. MiniService must be updated with new values to progress update; "+
 				"successfully applied objects prior to this error may need to be cleaned up manually")
 		}
+		return reconcile.Result{}, err
+	}
+
+	if err := r.saveWorkloadConfig(ctx, ms, workloadConfig); err != nil {
 		return reconcile.Result{}, err
 	}
 

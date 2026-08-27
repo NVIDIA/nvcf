@@ -3,6 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "server",
     srcs = [
+        "agent_auth.go",
         "demo.go",
         "lookup.go",
         "manifests.go",
@@ -15,11 +16,11 @@ go_library(
     ],
     embedsrcs = ["openapi.yaml"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/internal/server",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvsnap:__subpackages__"],
     deps = [
-        "//internal/checkpointstore",
-        "//internal/db",
-        "//internal/metrics",
+        "//src/compute-plane-services/nvsnap/internal/checkpointstore",
+        "//src/compute-plane-services/nvsnap/internal/db",
+        "//src/compute-plane-services/nvsnap/internal/metrics",
         "@com_github_gorilla_mux//:mux",
         "@com_github_gorilla_websocket//:websocket",
         "@com_github_sirupsen_logrus//:logrus",
@@ -39,6 +40,7 @@ go_library(
 go_test(
     name = "server_test",
     srcs = [
+        "agent_auth_test.go",
         "checkpoint_status_test.go",
         "delete_cascade_integration_test.go",
         "delete_checkpoint_test.go",
@@ -53,9 +55,9 @@ go_test(
     ],
     embed = [":server"],
     deps = [
-        "//internal/agent",
-        "//internal/checkpointstore",
-        "//internal/db",
+        "//src/compute-plane-services/nvsnap/internal/agent",
+        "//src/compute-plane-services/nvsnap/internal/checkpointstore",
+        "//src/compute-plane-services/nvsnap/internal/db",
         "@com_github_sirupsen_logrus//:logrus",
         "@io_k8s_api//coordination/v1:coordination",
         "@io_k8s_api//core/v1:core",

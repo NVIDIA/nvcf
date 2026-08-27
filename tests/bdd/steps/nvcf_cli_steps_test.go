@@ -1,0 +1,145 @@
+/*
+SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package steps
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/cucumber/godog"
+
+	"nvcf-bdd/harness"
+)
+
+func TestNVCFCLIConfigStoresInterpolatedPathWithoutCheckingIt(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("BDD_CLI_CONFIG_DIR", "/missing config directory")
+
+	if err := sc.iUseNVCFCLIConfig("${BDD_CLI_CONFIG_DIR}/config.yaml"); err != nil {
+		t.Fatalf("select config: %v", err)
+	}
+	if sc.NVCFCLIConfig != "/missing config directory/config.yaml" {
+		t.Fatalf("config = %q", sc.NVCFCLIConfig)
+	}
+	if len(fake.runs) != 0 {
+		t.Fatalf("selecting a config ran %d commands, want 0", len(fake.runs))
+	}
+}
+
+func TestNVCFCLICreatePassesOptionsWithoutProductValidation(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NVCF_CLI", "/tmp/nvcf cli")
+	sc.NVCFCLIConfig = "/tmp/config file.yaml"
+	fake.result = harness.Result{ExitCode: 0}
+	options := docTable(t, [][]string{
+		{"option", "value"},
+		{"--future-option", "not-an-api-value"},
+		{"--llm-model", ""},
+		{"--llm-model", "name=model,uris=/v1/chat|/v1/embed,routingMethod=unknown"},
+	})
+
+	err := sc.iSuccessfullyCreateFunction(
+		context.Background(),
+		"function with spaces",
+		"registry.example/image:tag",
+		options,
+	)
+	if err != nil {
+		t.Fatalf("create function: %v", err)
+	}
+	want := "'/tmp/nvcf cli' --config '/tmp/config file.yaml' function create" +
+		" --name 'function with spaces' --image registry.example/image:tag" +
+		" --future-option not-an-api-value --llm-model ''" +
+		" --llm-model 'name=model,uris=/v1/chat|/v1/embed,routingMethod=unknown'"
+	if len(fake.runs) != 1 || fake.runs[0].command != want {
+		t.Fatalf("runs = %+v, want command %q", fake.runs, want)
+	}
+}
+
+func TestNVCFCLIInvocationAdaptersExposeAllArguments(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(*ScenarioContext) error
+		want string
+	}{
+		{
+			name: "HTTP",
+			run: func(sc *ScenarioContext) error {
+				return sc.iSuccessfullyInvokeFunctionHTTP(context.Background(), "not-seconds", "also-not-seconds", &godog.DocString{Content: `{"message":"value with spaces"}`})
+			},
+			want: `nvcf-cli --config config.yaml function invoke --request-body '{"message":"value with spaces"}' --timeout not-seconds --poll-duration also-not-seconds`,
+		},
+		{
+			name: "gRPC",
+			run: func(sc *ScenarioContext) error {
+				return sc.iSuccessfullyInvokeFunctionGRPC(context.Background(), "Service", "Method", "120", "5", &godog.DocString{Content: `{"message":"grpc"}`})
+			},
+			want: `nvcf-cli --config config.yaml function invoke --grpc --grpc-plaintext --grpc-service Service --grpc-method Method --request-body '{"message":"grpc"}' --timeout 120 --poll-duration 5`,
+		},
+		{
+			name: "model",
+			run: func(sc *ScenarioContext) error {
+				return sc.iSuccessfullyInvokeModel(context.Background(), "model/name", "/v1/chat/completions", "120", &godog.DocString{Content: `{"messages":[]}`})
+			},
+			want: `nvcf-cli --config config.yaml function invoke --inference-url /v1/chat/completions --model-name model/name --request-body '{"messages":[]}' --timeout 120`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sc, fake := newScenarioContext(t)
+			t.Setenv("NVCF_CLI", "nvcf-cli")
+			sc.NVCFCLIConfig = "config.yaml"
+			fake.result = harness.Result{ExitCode: 0}
+
+			if err := test.run(sc); err != nil {
+				t.Fatalf("invoke: %v", err)
+			}
+			if len(fake.runs) != 1 || fake.runs[0].command != test.want {
+				t.Fatalf("runs = %+v, want command %q", fake.runs, test.want)
+			}
+		})
+	}
+}
+
+func TestNVCFCLISuccessStepRequiresExitZero(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NVCF_CLI", "nvcf-cli")
+	sc.NVCFCLIConfig = "config.yaml"
+	fake.result = harness.Result{ExitCode: 22, Stderr: "CLI rejected the request"}
+	fake.err = errors.New("exit status 22")
+	options := docTable(t, [][]string{{"option", "value"}, {"--timeout", "invalid"}})
+
+	err := sc.iSuccessfullyDeploySelectedFunction(context.Background(), options)
+	if err == nil || !strings.Contains(err.Error(), "exit code = 22, want 0") {
+		t.Fatalf("error = %v, want exit-zero assertion failure", err)
+	}
+	if len(fake.runs) != 1 || sc.LastResult.ExitCode != 22 {
+		t.Fatalf("runs = %+v, result = %+v", fake.runs, sc.LastResult)
+	}
+}
+
+func TestNVCFCLIOptionsValidateOnlyTableShape(t *testing.T) {
+	table := docTable(t, [][]string{{"flag", "setting"}, {"--timeout", "120"}})
+	_, err := nvcfCLIOptions(table)
+	if err == nil || !strings.Contains(err.Error(), "headers must be option and value") {
+		t.Fatalf("error = %v, want structural header error", err)
+	}
+}

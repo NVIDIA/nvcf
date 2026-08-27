@@ -20,9 +20,10 @@ on:
         type: choice
         options:
           - branch-cut
+          - self-managed-branch-cut
           - auto
       service:
-        description: Optional service id or service_name for operation=auto. Branch-cut always cuts nvca.
+        description: Optional service id or service_name for operation=auto. Branch-cut operations select a fixed service.
         required: false
         type: string
 
@@ -45,18 +46,41 @@ env:
   GITHUB_TOKEN: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
 
 jobs:
+  # NVIDIA self-hosted runners. Eligible without a conditional because this
+  # workflow has no pull_request trigger: it fires on pushes to main and to
+  # release branches, on tags, and on manual dispatch, all of which run trusted
+  # reviewed code. The bazel matrix needs an event-conditional runs-on for
+  # exactly that reason; this does not.
+  #
+  # cpu4 rather than cpu16: these jobs shell out to the GitHub API to cut tags
+  # and create releases. They are latency-bound, not CPU-bound, and were sitting
+  # in the GitHub-hosted queue behind the build matrix while doing almost no
+  # work.
   service-release:
     name: service release automation
     if: github.ref_type != 'tag' && (github.event_name != 'workflow_dispatch' || inputs.operation == 'auto')
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     permissions:
       contents: write
       packages: read
     steps:
+      # ref is the branch, not the pushed SHA. Two reasons, both about the gap
+      # between when a push happens and when this job actually runs:
+      #
+      # 1. semantic-release refuses to publish from a branch behind its remote.
+      #    A checkout pinned to the pushed SHA goes stale as soon as anything
+      #    else merges, and the release is silently skipped.
+      # 2. The concurrency group cancels queued runs, so a superseded commit
+      #    never gets a run of its own. Only a run that releases from the branch
+      #    tip covers the commits whose runs were cancelled.
+      #
+      # Releasing from the tip is also simply what this job means: cut whatever
+      # tags the branch is currently due, not what it was due minutes ago.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           fetch-tags: true
+          ref: ${{ github.ref_name }}
           token: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
 
       - uses: actions/setup-node@v4
@@ -83,7 +107,7 @@ jobs:
   release-branch-cut:
     name: NVCA release branch cut
     if: github.event_name == 'workflow_dispatch' && inputs.operation == 'branch-cut'
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     permissions:
       contents: write
       pull-requests: write
@@ -112,10 +136,38 @@ jobs:
           fi
           ./tools/ci/github-release branch-cut --service "${NVCF_GITHUB_RELEASE_SERVICE}"
 
+  self-managed-release-branch-cut:
+    name: self-managed stack release branch cut
+    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'self-managed-branch-cut'
+    runs-on: linux-amd64-cpu4
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch }}
+          token: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
+
+      - name: Cut release branch
+        env:
+          NVCF_GITHUB_RELEASE_SERVICE: nvcf-self-managed-stack
+          NV_GITHUB_TOKEN_CONFIGURED: ${{ secrets.NV_GITHUB_TOKEN != '' }}
+          GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [ "${NV_GITHUB_TOKEN_CONFIGURED}" != "true" ]; then
+            echo "ERROR: set secret NV_GITHUB_TOKEN before cutting a GitHub release branch." >&2
+            echo "The default GITHUB_TOKEN cannot trigger CI for the generated VERSION bump PR." >&2
+            exit 1
+          fi
+          ./tools/ci/github-release branch-cut --service "${NVCF_GITHUB_RELEASE_SERVICE}"
+
   tag-release-notes:
     name: tag release notes
     if: github.ref_type == 'tag'
-    runs-on: ubuntu-latest
+    runs-on: linux-amd64-cpu4
     permissions:
       contents: write
     steps:

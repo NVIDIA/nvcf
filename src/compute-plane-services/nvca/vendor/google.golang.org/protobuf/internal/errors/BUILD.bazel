@@ -5,12 +5,12 @@ go_library(
     srcs = ["errors.go"],
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/internal/errors",
     importpath = "google.golang.org/protobuf/internal/errors",
-    visibility = ["//vendor/google.golang.org/protobuf:__subpackages__"],
-    deps = ["//vendor/google.golang.org/protobuf/internal/detrand"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf:__subpackages__"],
+    deps = ["//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/internal/detrand"],
 )
 
 alias(
     name = "go_default_library",
     actual = ":errors",
-    visibility = ["//vendor/google.golang.org/protobuf:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf:__subpackages__"],
 )

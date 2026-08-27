@@ -14,8 +14,14 @@ Bazel currently builds, tests, and packages:
 - `src/libraries/java/nv-boot-parent` (Java framework libraries and tests)
 - `src/control-plane-services/cloud-tasks` (Java libraries, tests, and Spring
   Boot application)
+- `src/control-plane-services/cloud-functions` (Java libraries, tests, and
+  Spring Boot application)
 - `src/control-plane-services/notary` (Java libraries, tests, and Spring Boot
   application)
+- `src/control-plane-services/api-keys` (Java tests and Spring Boot
+  application)
+- `src/control-plane-services/encrypted-secret-store` (Java libraries, tests,
+  and Spring Boot application)
 
 Other upstream-owned subtrees remain excluded until they are onboarded one at
 a time. `nv-boot-parent` and onboarded Java service directories are folded
@@ -70,10 +76,11 @@ The repo expects Bazel 9.1.1 (pinned in `.bazelversion`). Bazelisk handles
 the download automatically; do not install Bazel via apt or brew directly,
 as that pins a different version.
 
-Java targets use Java 25 with the root `.bazelrc` setting
-`--java_runtime_version=local_jdk`. The pinned containerized CI image supplies
-Temurin 25 through `JAVA_HOME`. The Docker-host lane downloads and configures
-Temurin 25 through the workflow's `actions/setup-java@v4` step.
+Java targets use Java 25. The root `.bazelrc` selects the JDK with
+`--java_runtime_version=local_jdk`, and the shared Java macros compile sources
+with `--release 25`. The pinned containerized CI image supplies Temurin 25
+through `JAVA_HOME`. The Docker-host lane downloads and configures Temurin 25
+through the workflow's `actions/setup-java@v4` step.
 
 For local Java work, install an organization-approved full JDK 25 and point
 `JAVA_HOME` at it:
@@ -139,6 +146,48 @@ as:
 //src/control-plane-services/<service-directory>/<module>:<target>
 ```
 
+### Basic Bazel terms
+
+The Java component guides use four related terms:
+
+| Term | Meaning | Example |
+|---|---|---|
+| Macro | A Starlark function that writes one or more rule calls for us | `nvcf_java_test(...)` |
+| Rule | A Bazel building block that knows how to create an output | `java_test(...)` |
+| Target | One named object created by a rule | `tests` |
+| Label | The full Bazel address of a target | `//src/control-plane-services/cloud-functions/nvcf-core:tests` |
+
+For the example above, `nvcf-core/BUILD.bazel` calls the
+`nvcf_java_test(name = "tests", ...)` macro. The shared macro in
+`//rules/java:defs.bzl` calls the standard `java_test` rule. That rule declares
+the `tests` target. The full label tells Bazel both the package directory and
+the target name.
+
+Each Java component's `BAZEL.md` shows the same mapping with names from that
+component.
+
+### Java test and coverage target selection
+
+The shared Java macros use an intentional test-selection contract:
+
+- `nvcf_java_test` creates the native `java_test` target used by IntelliJ and
+  direct test commands. The macro adds `manual` so wildcard target patterns do
+  not select it.
+- `nvcf_java_coverage_test` creates the report-producing wrapper. The macro
+  does not add `manual`, so wildcard test patterns select this target. It runs
+  the native Java target once and writes the JUnit and JaCoCo artifacts used by
+  CI.
+
+This arrangement avoids running the same suite once as a native Java test and
+again for coverage. The IntelliJ project view sets
+`allow_manual_targets_sync: true`, so the `manual` tag does not hide the native
+test target from the IDE.
+
+Do not move `manual` from `nvcf_java_test` to
+`nvcf_java_coverage_test` as an isolated cleanup. Such a change must also
+update target selection in `.github/workflows/bazel.yml`, Java artifact
+staging, and the component test documentation.
+
 Set a portable output root once per local shell:
 
 ```bash
@@ -189,10 +238,11 @@ Its output is:
 bazel-bin/src/control-plane-services/<service-directory>/<spring-boot-app-module>/app.jar
 ```
 
-Real Java test, JUnit, and JaCoCo outputs are under each target's
-`bazel-testlogs/<component>/<module>/tests/test.outputs` directory. The
-component guides provide commands for one module, class, or method and for
-NOTICE, OSRB, Docker, and Maven coexistence:
+Real Java test, JUnit, and JaCoCo outputs are under the report target's
+`bazel-testlogs/<component>/<module>/<report-target>/test.outputs` directory.
+The normal report target name is `tests_coverage`. The component guides
+provide commands for one module, class, or method and for
+NOTICE, OSRB, Docker, and component-specific validation:
 
 ```text
 src/libraries/java/nv-boot-parent/BAZEL.md
@@ -214,6 +264,57 @@ test requires Docker and `ci_lane: build-container` otherwise. Java root scope
 is implicit and is not a descriptor option. The detector supports
 dependency-aware selection, but current policy deliberately runs the full
 matrix on every PR and push for regression safety.
+
+The same descriptor also registers the component with the repository
+dependency collector. Every registered Java component must expose:
+
+```text
+//<component-directory>:runtime_inventory.json
+```
+
+The collector builds all registered inventories and merges the dependencies
+actually used by those runtime targets into root `dependencies.md`:
+
+```bash
+go run ./tools/collect-dependencies
+```
+
+This derives Java dependencies from Bazel runtime inventories and does not
+require project POMs. It does not list every artifact available in
+`maven_install.json`. The root lockfile keeps the complete shared Java graph;
+component runtime inventories identify the used subset. See
+`tools/collect-dependencies/README.md` for the complete model and prerequisites.
+
+## Regenerate `dependencies.md`
+
+Regenerate root `dependencies.md` when:
+
+- a component is added to or removed from the monorepo
+- a Go, Rust, Python, Java, or Helm dependency is added, removed, or upgraded
+- a Java BUILD target changes the component's runtime dependency graph
+- `MODULE.bazel` or `maven_install.json` changes the Java dependency graph
+
+Run this command from the repository root:
+
+```bash
+GITHUB_TOKEN="$(gh auth token)" \
+  go run ./tools/collect-dependencies
+```
+
+The GitHub token provides authenticated license metadata lookups and avoids
+low unauthenticated API limits. If `gh` is unavailable, omit the first line;
+generation still works but may be slower or leave some license metadata
+unresolved.
+
+Component discovery is automatic. Java components are found through
+`bazel-java-ci.json`; the other supported languages are found from their
+dependency manifests. The command may leave `dependencies.md` unchanged when a
+new component uses only dependencies already present in the repository-wide
+rollup.
+
+GitHub Actions regenerates the file and fails when the checked-in copy is
+stale. CI does not commit the update, so include a changed `dependencies.md` in
+the same commit as the dependency or component change.
 
 ## Day-to-day commands
 
@@ -270,7 +371,7 @@ bazel run --stamp //src/clis/nvcf-cli:image_push
 
 The image push uses `tools/workspace_status.sh` to compute tags. With
 `--stamp` enabled, the index is published with `latest`, the version
-(from `git describe` or `mr-<sha>`), and the short commit.
+(`$NVCF_VERSION` on release builds, else `mr-<sha>`), and the short commit.
 
 ### Generate or refresh BUILD files
 
@@ -431,13 +532,20 @@ build).
 
 ## CI
 
-The public GitHub Bazel matrix in `.github/workflows/bazel.yml` consumes
-`ghcr.io/nvidia/nvcf/bazel-ci:0.12.0`. That image is built in the internal
+Every workflow that needs the Bazel toolchain runs in the `bazel-ci` job
+container, sourced from the repository variable `BAZEL_CI_IMAGE` (currently
+`ghcr.io/nvidia/nvcf/bazel-ci`). Each workflow carries the current pin as a
+`||` fallback so CI still runs when the variable is unavailable, for example on
+a fork.
+
+That image is built in the internal
 [`nvcf/bazel-ci-templates`](https://gitlab-master.nvidia.com/nvcf/bazel-ci-templates)
 project, stamped with a version, and mirrored to GHCR. The mirror is currently
 manual; automation is planned. To change the image's Bazel, Java, or operating
 system tooling, update the internal template first, publish and mirror a new
-tag, and only then update the pinned `container.image` in `.github/workflows/bazel.yml`.
+tag, then update the `BAZEL_CI_IMAGE` repository variable. Do not hardcode the
+tag per workflow: it drifted to three different versions across workflows and
+this document before the variable was introduced.
 
 The root `ci/Dockerfile.bazel` and `.github/workflows/bazel-ci-image.yml` were a
 stale, divergent copy (no Java, older Bazel) and have been removed. The image is
@@ -479,7 +587,7 @@ archive/package/publish/ngc-push stages still consume
 
 | Symbol | Source |
 |---|---|
-| `main.Version` | `git describe --tags`, falls back to `mr-<short-sha>`, override via `$NVCF_VERSION` |
+| `main.Version` | `$NVCF_VERSION` when set (release builds), else `mr-<short-sha>` |
 | `main.GitCommit` | `git rev-parse --short HEAD` (with `-dirty` suffix if working tree is dirty) |
 | `main.GitBranch` | `git rev-parse --abbrev-ref HEAD` |
 | `main.BuildDate` | UTC ISO timestamp |
@@ -531,13 +639,10 @@ it in the rules of the Bazel-driven publish job:
 
 Knock-on choices that follow from the cadence:
 
-- Version derivation (`tools/workspace_status.sh`). The CLI uses
-  `git describe --tags --exact-match HEAD || mr-<sha>` because tag-only
-  publish makes that the meaningful version. Per-merge services usually
-  want a SHA-style version (`<short-sha>` or `0.0.0-<short-sha>`) so
-  every main commit produces a distinct OCI tag without semver implication.
-  Either fork `workspace_status.sh` per service or add an env-driven
-  branch (`NVCF_VERSION_STYLE=sha` etc.).
+- Version derivation (`tools/workspace_status.sh`). The version is
+  `$NVCF_VERSION` when set (release builds pass the clean semver) and
+  `mr-<sha>` otherwise, so every non-release build produces a distinct
+  SHA-style OCI tag without semver implication.
 
 - OCI tag set on push. Tag-driven services typically push
   `:latest`, `:<semver>`, `:<short-sha>`. Per-merge services usually

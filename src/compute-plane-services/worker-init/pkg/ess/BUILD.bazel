@@ -21,7 +21,7 @@ go_library(
     name = "ess",
     srcs = ["ess.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-init/pkg/ess",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/worker-init:__subpackages__"],
     deps = [
         "@com_github_hashicorp_hcl_v2//gohcl",
         "@com_github_hashicorp_hcl_v2//hclparse",
@@ -54,5 +54,5 @@ pkg_tar(
     name = "ess_config_layer",
     srcs = [":ess_config_files"],
     extension = "tar.gz",
-    visibility = ["//cmd:__pkg__"],
+    visibility = ["//src/compute-plane-services/worker-init/cmd:__pkg__"],
 )

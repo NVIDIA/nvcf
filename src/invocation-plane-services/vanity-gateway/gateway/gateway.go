@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"time"
 
 	gatewayConfig "ai-api-gateway-service/gateway_config"
 	"ai-api-gateway-service/internal/reloadableconfig"
@@ -38,15 +39,16 @@ import (
 )
 
 type Config struct {
-	OTELExporterOTLPEndpoint     string `mapstructure:"OTEL_EXPORTER_OTLP_ENDPOINT"`
-	TracingAccessToken           string `mapstructure:"TRACING_ACCESS_TOKEN"`
-	SecretsPath                  string `mapstructure:"SECRETS_PATH"`
-	MappingPath                  string `mapstructure:"MAPPING_PATH"`
-	NvcfApiEndpoint              string `mapstructure:"NVCF_API_ENDPOINT"`
-	PrivateModelNameRegexPattern string `mapstructure:"PRIVATE_MODEL_NAME_REGEX_PATTERN"`
-	PodIP                        string `mapstructure:"POD_IP"`
-	AWSRegion                    string `mapstructure:"AWS_REGION"`
-	ShadowMaxConcurrent          int    `mapstructure:"SHADOW_MAX_CONCURRENT"`
+	OTELExporterOTLPEndpoint     string        `mapstructure:"OTEL_EXPORTER_OTLP_ENDPOINT"`
+	TracingAccessToken           string        `mapstructure:"TRACING_ACCESS_TOKEN"`
+	SecretsPath                  string        `mapstructure:"SECRETS_PATH"`
+	MappingPath                  string        `mapstructure:"MAPPING_PATH"`
+	MappingLoadTimeout           time.Duration `mapstructure:"MAPPING_LOAD_TIMEOUT"`
+	NvcfApiEndpoint              string        `mapstructure:"NVCF_API_ENDPOINT"`
+	PrivateModelNameRegexPattern string        `mapstructure:"PRIVATE_MODEL_NAME_REGEX_PATTERN"`
+	PodIP                        string        `mapstructure:"POD_IP"`
+	AWSRegion                    string        `mapstructure:"AWS_REGION"`
+	ShadowMaxConcurrent          int           `mapstructure:"SHADOW_MAX_CONCURRENT"`
 }
 
 type NVCFGateway struct {
@@ -86,6 +88,9 @@ func NewNVCFGateway(logger *logs.ZapLogger, config Config) (*NVCFGateway, error)
 	if config.MappingPath == "" {
 		return nil, fmt.Errorf("MAPPING_PATH is required")
 	}
+	if config.MappingLoadTimeout < 0 {
+		return nil, fmt.Errorf("MAPPING_LOAD_TIMEOUT must not be negative")
+	}
 
 	if config.TracingAccessToken == "" {
 		secrets, _ := os.ReadFile(config.SecretsPath)
@@ -104,10 +109,13 @@ func NewNVCFGateway(logger *logs.ZapLogger, config Config) (*NVCFGateway, error)
 	if err := middleware.SetupHTTPMetrics(); err != nil {
 		return nil, fmt.Errorf("failed to setup HTTP metrics: %w", err)
 	}
+	if err := setupShadowMetrics(); err != nil {
+		return nil, fmt.Errorf("failed to setup shadow metrics: %w", err)
+	}
 
-	mappings, err := gatewayConfig.SetupConfigWithConfigPath(config.MappingPath)
+	mappings, err := gatewayConfig.SetupConfigWithConfigPathAndTimeout(config.MappingPath, config.MappingLoadTimeout)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to load mapping configuration: %w", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

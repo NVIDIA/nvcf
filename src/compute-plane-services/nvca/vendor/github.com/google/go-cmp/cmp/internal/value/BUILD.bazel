@@ -9,11 +9,11 @@ go_library(
     ],
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/github.com/google/go-cmp/cmp/internal/value",
     importpath = "github.com/google/go-cmp/cmp/internal/value",
-    visibility = ["//vendor/github.com/google/go-cmp/cmp:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/github.com/google/go-cmp/cmp:__subpackages__"],
 )
 
 alias(
     name = "go_default_library",
     actual = ":value",
-    visibility = ["//vendor/github.com/google/go-cmp/cmp:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca/vendor/github.com/google/go-cmp/cmp:__subpackages__"],
 )

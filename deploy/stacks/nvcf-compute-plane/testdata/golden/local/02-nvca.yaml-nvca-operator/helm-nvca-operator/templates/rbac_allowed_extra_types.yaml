@@ -1,0 +1,86 @@
+---
+# Source: helm-nvca-operator/templates/rbac_allowed_extra_types.yaml
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: nvca-operator-allowed-extra-types
+  labels:
+    helm.sh/chart: helm-nvca-operator-1.21.3
+    app.kubernetes.io/name: nvca-operator
+    app.kubernetes.io/instance: nvca-operator
+    app.kubernetes.io/version: "3.0.4"
+    app.kubernetes.io/managed-by: Helm
+rules:
+- apiGroups: ["foo.com"]
+  resources: ["footypes"]
+  verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
+- apiGroups: ["scheduling.run.ai"]
+  resources: ["podgroups"]
+  verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
+- apiGroups: ["grove.io"]
+  resources: ["podcliquesets"]
+  verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
+- apiGroups: ["grove.io"]
+  resources: ["podcliques"]
+  verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
+- apiGroups: ["grove.io"]
+  resources: ["podcliquescalinggroups"]
+  verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
+- apiGroups: ["scheduler.grove.io"]
+  resources: ["podgangs"]
+  verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
+- apiGroups: ["nvidia.com"]
+  resources: ["dynamocheckpoints"]
+  verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
+- apiGroups: ["nvidia.com"]
+  resources: ["dynamocomponentdeployments"]
+  verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
+- apiGroups: ["nvidia.com"]
+  resources: ["dynamographdeployments"]
+  verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
+- apiGroups: ["nvidia.com"]
+  resources: ["dynamographdeploymentrequests"]
+  verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
+- apiGroups: ["nvidia.com"]
+  resources: ["dynamographdeploymentscalingadapters"]
+  verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
+- apiGroups: ["nvidia.com"]
+  resources: ["dynamomodels"]
+  verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
+- apiGroups: ["nvidia.com"]
+  resources: ["dynamoworkermetadatas"]
+  verbs: ["get", "list", "watch", "create", "update", "delete", "patch"]
+---
+# Source: helm-nvca-operator/templates/rbac_allowed_extra_types.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: nvca-operator-allowed-extra-types
+  labels:
+    helm.sh/chart: helm-nvca-operator-1.21.3
+    app.kubernetes.io/name: nvca-operator
+    app.kubernetes.io/instance: nvca-operator
+    app.kubernetes.io/version: "3.0.4"
+    app.kubernetes.io/managed-by: Helm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: nvca-operator-allowed-extra-types
+subjects:
+- kind: ServiceAccount
+  name: nvca-operator
+  namespace: nvca-operator

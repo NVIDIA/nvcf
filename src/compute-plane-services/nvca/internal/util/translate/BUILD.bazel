@@ -7,14 +7,14 @@ go_library(
     name = "translate",
     srcs = ["duration.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/translate",
-    visibility = ["//:__subpackages__"],
-    deps = ["//vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/util"],
+    visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
+    deps = ["//src/compute-plane-services/nvca/vendor/github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/util"],
 )
 
 alias(
     name = "go_default_library",
     actual = ":translate",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/nvca:__subpackages__"],
 )
 
 go_test(
@@ -22,7 +22,7 @@ go_test(
     srcs = ["duration_test.go"],
     embed = [":translate"],
     deps = [
-        "//vendor/github.com/stretchr/testify/assert",
-        "//vendor/github.com/stretchr/testify/require",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/assert",
+        "//src/compute-plane-services/nvca/vendor/github.com/stretchr/testify/require",
     ],
 )

@@ -81,6 +81,9 @@ publications:
   - name: notary-service
     version: 1.8.1
     registry: public-images
+  - name: nvcf-ai-api-gateway-service
+    version: 1.32.1
+    registry: public-images
   - name: nvcf-api-keys-service
     version: 1.5.0
     registry: public-images
@@ -88,13 +91,16 @@ publications:
     version: v1.1.36
     registry: public-images
   - name: nvcf-openbao-migrations
-    version: 0.16.1
+    version: 0.16.2
     registry: public-images
   - name: nvcf-proxy-tls-certs
     version: v1.2.10
     registry: public-images
   - name: nvcf-service-oss
     version: 1.9.0-hotfix.1
+    registry: public-images
+  - name: nvcf-state-metrics-service
+    version: 1.23.7
     registry: public-images
   - name: nvcf_worker_init
     version: 1.0.1
@@ -122,9 +128,8 @@ publications:
     published_version: 0.8.3-ea
     registry: selfhosted-ga
   - name: llm-request-router
-    version: 0.3.0
-    published_version: 0.3.0-ea
-    registry: selfhosted-ga
+    version: 0.3.2
+    registry: public-images
   - name: nats-server-config-reloader
     version: 0.23.0
     registry: nats-upstream-images
@@ -132,10 +137,9 @@ publications:
     version: 2.5.4-nv-1.3.0
     published_version: 2.5.4-nv-1.3.0-ea
     registry: selfhosted-ga
-  - name: bitnami-cassandra
-    version: 5.0.6-nv-1
-    published_version: 5.0.6-nv-1-ea
-    registry: selfhosted-ga
+  - name: cassandra
+    version: 5.0.8-nv-2.0.1
+    registry: public-images
   - name: nvcf-cassandra-migrations
     version: 0.8.1
     published_version: 0.8.1-ea
@@ -177,7 +181,7 @@ publications:
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-llm-request-router
-    version: 1.6.3
+    version: 1.10.0
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-nats-auth-callout-service
@@ -200,6 +204,10 @@ publications:
     version: 0.30.23
     registry: public-helm
     chart_format: http
+  - name: helm-nvcf-pki
+    version: 0.1.0
+    registry: public-helm
+    chart_format: http
   - name: helm-nvcf-rate-limiter
     version: 1.0.3
     registry: public-helm
@@ -209,11 +217,15 @@ publications:
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-state-metrics
-    version: 1.0.1
+    version: 1.0.2
+    registry: public-helm
+    chart_format: http
+  - name: helm-nvcf-ui
+    version: 1.1.2
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-vanity-gateway
-    version: 0.1.0-nvcf-10204.1
+    version: 0.3.0
     registry: public-helm
     chart_format: http
   - name: helm-reval
@@ -221,7 +233,7 @@ publications:
     registry: public-helm
     chart_format: http
   - name: nvcf-gateway-routes
-    version: 1.14.0
+    version: 1.16.0
     registry: public-helm
     chart_format: http
   - name: nvcf-container-cache
@@ -244,9 +256,6 @@ version_overrides:
   - name: llm-api-gateway
     version: 0.8.3
     source: supplemental artifact missing from artifacts-0.6.0.txt
-  - name: llm-request-router
-    version: 0.3.0
-    source: helm-nvcf-llm-request-router:1.6.3 (image missing from artifacts-0.6.0.txt)
 manifest:
   entries:
     - artifact_id: helm-nvcf-api-keys
@@ -350,6 +359,12 @@ manifest:
       requirement: optional
       description: Deploys the LLM request router.
       github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/llm-request-router
+    - artifact_id: helm-nvcf-pki
+      plane: control
+      kind: chart
+      requirement: optional
+      description: Provisions the OpenBao-backed ClusterIssuer for NVCF service TLS.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/nvcf-pki
     - artifact_id: helm-nvcf-rate-limiter
       plane: control
       kind: chart
@@ -361,11 +376,17 @@ manifest:
       kind: chart
       requirement: optional
       description: Deploys NVCF state metrics for observability.
+    - artifact_id: helm-nvcf-ui
+      plane: control
+      kind: chart
+      requirement: optional
+      description: Deploys the optional NVCF UI admin panel.
     - artifact_id: helm-nvcf-vanity-gateway
       plane: control
       kind: chart
       requirement: optional
       description: Deploys the optional vanity hostname gateway.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/vanity-gateway
     - artifact_id: nvcf-example-dashboards
       plane: control
       kind: chart
@@ -440,6 +461,12 @@ manifest:
       kind: service-image
       requirement: required
       description: Signs and validates functions and cluster nodes.
+    - artifact_id: nvcf-ai-api-gateway-service
+      plane: control
+      kind: service-image
+      requirement: optional
+      description: Serves the optional vanity hostname gateway.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/vanity-gateway
     - artifact_id: nvcf-api-keys-service
       plane: control
       kind: service-image
@@ -518,12 +545,17 @@ manifest:
       requirement: optional
       description: Routes LLM requests to eligible worker instances.
       github_url: https://github.com/NVIDIA/nvcf/tree/main/src/libraries/rust/stargate
-    - artifact_id: bitnami-cassandra
+    - artifact_id: nvcf-state-metrics-service
       plane: control
-      kind: ea-cve
+      kind: service-image
+      requirement: optional
+      description: Exports NVCF resource state as Prometheus metrics.
+    - artifact_id: cassandra
+      plane: control
+      kind: service-image
       requirement: required
-      description: Stores NVCF account, function, cluster, and service state during Early Access.
-      upstream_url: https://github.com/bitnami/containers/tree/main/bitnami/cassandra
+      description: Stores NVCF account, function, cluster, and service state.
+      upstream_url: https://github.com/apache/cassandra
     - artifact_id: nvcf-cassandra-migrations
       plane: control
       kind: ea-cve
@@ -706,10 +738,10 @@ artifacts:
     registry: staging
     repository_name: k8s
     version: 1.36.1
-  - name: bitnami-cassandra
+  - name: cassandra
     type: image
     registry: staging
-    version: 5.0.6-nv-1
+    version: 5.0.8-nv-2.0.1
   - name: cert-manager-cainjector
     type: image
     registry: staging
@@ -773,7 +805,7 @@ artifacts:
   - name: helm-nvcf-llm-request-router
     type: chart
     registry: staging
-    version: 1.6.3
+    version: 1.10.0
   - name: helm-nvcf-nats-auth-callout-service
     type: chart
     registry: staging
@@ -794,6 +826,10 @@ artifacts:
     type: chart
     registry: staging
     version: 0.30.23
+  - name: helm-nvcf-pki
+    type: chart
+    registry: staging
+    version: 0.1.0
   - name: helm-nvcf-rate-limiter
     type: chart
     registry: staging
@@ -805,11 +841,15 @@ artifacts:
   - name: helm-nvcf-state-metrics
     type: chart
     registry: staging
-    version: 1.0.1
+    version: 1.0.2
+  - name: helm-nvcf-ui
+    type: chart
+    registry: staging
+    version: 1.1.2
   - name: helm-nvcf-vanity-gateway
     type: chart
     registry: staging
-    version: 0.1.0-nvcf-10204.1
+    version: 0.3.0
   - name: helm-reval
     type: chart
     registry: staging
@@ -841,7 +881,7 @@ artifacts:
   - name: nvcf-gateway-routes
     type: chart
     registry: staging
-    version: 1.14.0
+    version: 1.16.0
   - name: nvcf-grpc-proxy
     type: image
     registry: staging
@@ -857,7 +897,7 @@ artifacts:
   - name: nvcf-openbao-migrations
     type: image
     registry: staging
-    version: 0.16.1
+    version: 0.16.2
   - name: nvcf-openbao
     type: image
     registry: staging
@@ -866,6 +906,10 @@ artifacts:
     type: image
     registry: staging
     version: 1.9.0-hotfix.1
+  - name: nvcf-state-metrics-service
+    type: image
+    registry: staging
+    version: 1.23.7
   - name: nvcf_worker_init
     type: image
     registry: staging
@@ -927,7 +971,11 @@ supplemental_artifacts:
     type: image
     registry: staging
     repository_name: stargate
-    version: 0.3.0
+    version: 0.3.2
+  - name: nvcf-ai-api-gateway-service
+    type: image
+    registry: staging
+    version: 1.32.1
   - name: nvcf-image-credential-helper
     type: image
     registry: staging

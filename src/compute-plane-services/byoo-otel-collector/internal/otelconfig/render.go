@@ -68,6 +68,9 @@ type OpenTelemetryConfig struct {
 const (
 	defaultLogChunkMaxPayloadBytes       = 262144
 	minConfiguredLogChunkMaxPayloadBytes = 4
+	defaultLogExporterBatchFlushTimeout  = "200ms"
+	// Leave 100 KB below the 1 MB receiver limit for the export envelope.
+	defaultLogExporterBatchSizeBytes = int64(900_000)
 )
 
 const (
@@ -245,6 +248,12 @@ func resolvedWorkloadMetricsDropLabels(configured string, metricSubsetEnabled bo
 
 	seen := map[string]struct{}{}
 	labels := []string{}
+	if metricSubsetEnabled {
+		for _, label := range defaultWorkloadMetricsDropLabels {
+			seen[label] = struct{}{}
+			labels = append(labels, label)
+		}
+	}
 	for _, label := range strings.Split(configured, ",") {
 		label = strings.TrimSpace(label)
 		if label == "" {
@@ -265,6 +274,18 @@ func logExporterSendingQueue() map[string]interface{} {
 		"num_consumers": 10,
 		"queue_size":    1000,
 	}
+}
+
+func enableChunkedLogExporterBatching(otelConfig *OpenTelemetryConfig, exporterID string) {
+	exporter := otelConfig.Exporters[exporterID]
+	queue := mapFromInterface(exporter["sending_queue"])
+	queue["batch"] = map[string]interface{}{
+		"flush_timeout": defaultLogExporterBatchFlushTimeout,
+		"sizer":         "bytes",
+		"min_size":      defaultLogExporterBatchSizeBytes,
+		"max_size":      defaultLogExporterBatchSizeBytes,
+	}
+	exporter["sending_queue"] = queue
 }
 
 func exporterLogs(config TelemetryConfig, otelConfig *OpenTelemetryConfig) (exporterId string, err error) {
@@ -527,10 +548,7 @@ func addWorkloadMetricsDropLabelsProcessor(otelConfig *OpenTelemetryConfig, labe
 
 func addMetricSubsetExporter(otelConfig *OpenTelemetryConfig) {
 	otelConfig.Exporters[metricSubsetExporterID] = map[string]interface{}{
-		"endpoint": fmt.Sprintf("${env:OTEL_POD_IP:-0.0.0.0}:%d", defaultMetricSubsetPort),
-		"resource_to_telemetry_conversion": map[string]interface{}{
-			"enabled": true,
-		},
+		"endpoint":            fmt.Sprintf("${env:OTEL_POD_IP:-0.0.0.0}:%d", defaultMetricSubsetPort),
 		"send_timestamps":     true,
 		"metric_expiration":   "5m",
 		"enable_open_metrics": true,
@@ -566,7 +584,7 @@ func cloneConfigValue(value interface{}) interface{} {
 	}
 }
 
-func addMetricSubsetPipeline(otelConfig *OpenTelemetryConfig, config MetricSubsetConfig) {
+func addMetricSubsetPipeline(otelConfig *OpenTelemetryConfig, config MetricSubsetConfig, workloadMetricsDropLabelsProcessor string) {
 	addMetricSubsetExporter(otelConfig)
 
 	filterConfig := config.FilterConfig
@@ -592,9 +610,14 @@ func addMetricSubsetPipeline(otelConfig *OpenTelemetryConfig, config MetricSubse
 		"memory_limiter",
 		metricSubsetFilterProcessorID,
 		"resource",
+	}
+	if workloadMetricsDropLabelsProcessor != "" {
+		metricSubsetPipeline.Processors = append(metricSubsetPipeline.Processors, workloadMetricsDropLabelsProcessor)
+	}
+	metricSubsetPipeline.Processors = append(metricSubsetPipeline.Processors,
 		"metrics_transform",
 		metricSubsetBatchProcessorID,
-	}
+	)
 	otelConfig.Service.Pipelines["metrics/metric_subset"] = metricSubsetPipeline
 }
 
@@ -857,6 +880,9 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 				"dry_run":           logChunking.DryRun,
 			}
 			logPipeline.Processors = append(logPipeline.Processors, "logchunk/byoo")
+			if !logChunking.DryRun {
+				enableChunkedLogExporterBatching(otelConfig, exporterId)
+			}
 		}
 		logPipeline.Processors = append(logPipeline.Processors, "batch")
 		otelConfig.Service.Pipelines["logs"] = logPipeline
@@ -873,14 +899,15 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 		metricPipeline.Receivers = []string{"otlp", "prometheus"}
 		metricPipeline.Exporters = []string{exporterId}
 		metricPipeline.Processors = []string{"memory_limiter", "filter/metrics", "resource"}
-		if processorID := addWorkloadMetricsDropLabelsProcessor(otelConfig, tmplConfig.WorkloadMetrics.DropLabels); processorID != "" {
-			metricPipeline.Processors = append(metricPipeline.Processors, processorID)
+		workloadMetricsDropLabelsProcessor := addWorkloadMetricsDropLabelsProcessor(otelConfig, tmplConfig.WorkloadMetrics.DropLabels)
+		if workloadMetricsDropLabelsProcessor != "" {
+			metricPipeline.Processors = append(metricPipeline.Processors, workloadMetricsDropLabelsProcessor)
 		}
 		metricPipeline.Processors = append(metricPipeline.Processors, "metrics_transform", "batch")
 		otelConfig.Service.Pipelines["metrics"] = metricPipeline
 
 		if tmplConfig.MetricSubset.Enabled {
-			addMetricSubsetPipeline(otelConfig, tmplConfig.MetricSubset)
+			addMetricSubsetPipeline(otelConfig, tmplConfig.MetricSubset, workloadMetricsDropLabelsProcessor)
 		}
 	}
 
@@ -901,7 +928,9 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 	if tmplConfig.DebugMode {
 		applyDebugMode(otelConfig)
 	}
-	applyOTelCollectorConfig(otelConfig, tmplConfig.OTelCollector)
+	if err := applyOTelCollectorConfig(otelConfig, tmplConfig.OTelCollector); err != nil {
+		return fmt.Errorf("apply BYOO OTel collector config: %w", err)
+	}
 
 	return nil
 }

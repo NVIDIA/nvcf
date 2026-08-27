@@ -9,10 +9,10 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/informers/externalversions/nvca",
     visibility = ["//visibility:public"],
     deps = [
-        "//pkg/client/informers/externalversions/internalinterfaces",
-        "//pkg/client/informers/externalversions/nvca/v1:nvca",
-        "//pkg/client/informers/externalversions/nvca/v1alpha1",
-        "//pkg/client/informers/externalversions/nvca/v2beta1",
+        "//src/compute-plane-services/nvca/pkg/client/informers/externalversions/internalinterfaces",
+        "//src/compute-plane-services/nvca/pkg/client/informers/externalversions/nvca/v1:nvca",
+        "//src/compute-plane-services/nvca/pkg/client/informers/externalversions/nvca/v1alpha1",
+        "//src/compute-plane-services/nvca/pkg/client/informers/externalversions/nvca/v2beta1",
     ],
 )
 

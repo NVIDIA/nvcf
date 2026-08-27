@@ -19,11 +19,12 @@ package transporttls
 
 import (
 	"fmt"
+	"path"
 	"regexp"
 	"strings"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/transporttls/trustbundle"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/icms-translate/translate/function"
+	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/trustbundle"
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -40,16 +41,18 @@ const (
 	DefaultTrustBundleKey           = "nvcf-ca-bundle.pem"
 	TrustBundleFingerprintKey       = "fingerprint"
 
-	TrustBundleVolumeName = "nvcf-transport-trust-bundle"
-	MergedCertsVolumeName = "nvcf-trust-merged-certs"
-	InstallContainerName  = "nvcf-trust-bundle-install"
-	InstallCommandPath    = "/usr/bin/nvcf-trust-bundle-install"
+	TrustBundleVolumeName   = "nvcf-transport-trust-bundle"
+	MergedCertsVolumeName   = "nvcf-trust-merged-certs"
+	InstallContainerName    = "nvcf-trust-bundle-install"
+	InstallCommandPath      = "/usr/bin/nvcf-trust-bundle-install"
+	WorkerInitContainerName = "init"
 
 	TrustBundleMountPath = "/nvcf/trust"
 	MergedCertsMountPath = "/merged-certs"
 	MergedCertsFile      = "/merged-certs/ca-certificates.crt"
+	InstalledBundleFile  = "ca-certificates.crt"
 	SystemCertDir        = "/etc/ssl/certs"
-	SystemCertFile       = "/etc/ssl/certs/ca-certificates.crt"
+	SystemCertFile       = "/etc/ssl/certs/" + InstalledBundleFile
 	CertPathEnv          = "STARGATE_TLS_CERT_PATH"
 )
 
@@ -65,6 +68,9 @@ func NormalizeConfig(cfg nvcaconfig.TransportTLSConfig) nvcaconfig.TransportTLSC
 	if cfg.TrustBundleKey == "" {
 		cfg.TrustBundleKey = DefaultTrustBundleKey
 	}
+	if cfg.InstalledBundleMountPath == "" {
+		cfg.InstalledBundleMountPath = SystemCertDir
+	}
 	cfg.TrustBundleFingerprint = strings.ToLower(strings.TrimSpace(cfg.TrustBundleFingerprint))
 	return cfg
 }
@@ -74,6 +80,9 @@ func ValidateConfig(cfg nvcaconfig.TransportTLSConfig) error {
 	case TrustModeSystem:
 		return nil
 	case TrustModeBundle:
+		if err := validateInstalledBundleMountPath(cfg.InstalledBundleMountPath); err != nil {
+			return err
+		}
 		if errs := validation.IsDNS1123Subdomain(cfg.TrustBundleConfigMapName); len(errs) > 0 {
 			return fmt.Errorf("transportTls.trustBundleConfigMapName is invalid: %s", strings.Join(errs, "; "))
 		}
@@ -102,6 +111,23 @@ func ValidateConfig(cfg nvcaconfig.TransportTLSConfig) error {
 	}
 }
 
+func validateInstalledBundleMountPath(mountPath string) error {
+	if !path.IsAbs(mountPath) {
+		return fmt.Errorf("transportTls.installedBundleMountPath must be absolute")
+	}
+	if path.Clean(mountPath) != mountPath {
+		return fmt.Errorf("transportTls.installedBundleMountPath must be canonical")
+	}
+	if mountPath == "/" {
+		return fmt.Errorf("transportTls.installedBundleMountPath must not be root")
+	}
+	if mountPath == MergedCertsMountPath || strings.HasPrefix(mountPath, MergedCertsMountPath+"/") ||
+		mountPath == TrustBundleMountPath || strings.HasPrefix(mountPath, TrustBundleMountPath+"/") {
+		return fmt.Errorf("transportTls.installedBundleMountPath uses reserved path %q", mountPath)
+	}
+	return nil
+}
+
 func FingerprintTrustBundle(trustBundlePEM string) (string, error) {
 	return trustbundle.FingerprintPEM(trustBundlePEM)
 }
@@ -123,39 +149,66 @@ func InjectIntoPodSpec(podSpec *corev1.PodSpec, cfg nvcaconfig.TransportTLSConfi
 		return nil
 	}
 
-	installImage, installImagePullPolicy, err := resolveInstallContainerImage(podSpec, cfg)
+	installImage, installImagePullPolicy, err := resolveInstallContainerImage(podSpec)
 	if err != nil {
 		return err
 	}
+	if err := validateInstalledBundleMountConflict(&podSpec.Containers[llmWorkerIdx], cfg.InstalledBundleMountPath); err != nil {
+		return err
+	}
+	llmWorkerResources := *podSpec.Containers[llmWorkerIdx].Resources.DeepCopy()
 	upsertVolumes(podSpec, cfg)
-	upsertInstallContainer(podSpec, installImage, installImagePullPolicy, cfg)
+	upsertInstallContainer(podSpec, installImage, installImagePullPolicy, llmWorkerResources, cfg)
 
 	llmWorker := &podSpec.Containers[llmWorkerIdx]
 	upsertVolumeMount(&llmWorker.VolumeMounts, corev1.VolumeMount{
 		Name:      MergedCertsVolumeName,
-		MountPath: SystemCertDir,
+		MountPath: cfg.InstalledBundleMountPath,
 		ReadOnly:  true,
 	})
 	k8sutil.AddEnvsToContainer(llmWorker, corev1.EnvVar{
 		Name:  CertPathEnv,
-		Value: SystemCertFile,
+		Value: cfg.InstalledBundleMountPath + "/" + InstalledBundleFile,
 	})
 	return nil
 }
 
-func resolveInstallContainerImage(
-	podSpec *corev1.PodSpec,
-	cfg nvcaconfig.TransportTLSConfig,
-) (string, corev1.PullPolicy, error) {
-	if image := strings.TrimSpace(cfg.InstallerImage); image != "" {
-		return image, corev1.PullIfNotPresent, nil
-	}
-	for _, c := range podSpec.InitContainers {
-		if c.Name == InstallContainerName && c.Image != "" {
-			return c.Image, c.ImagePullPolicy, nil
+func validateInstalledBundleMountConflict(container *corev1.Container, mountPath string) error {
+	for _, mount := range container.VolumeMounts {
+		if mount.Name != MergedCertsVolumeName && mountPathsOverlap(mount.MountPath, mountPath) {
+			return fmt.Errorf("transportTls.installedBundleMountPath %q conflicts with volume mount %q on %q",
+				mountPath, mount.Name, container.Name)
 		}
 	}
-	return "", "", fmt.Errorf("transportTls.installerImage is required when injecting the transport trust bundle")
+	return nil
+}
+
+// mountPathsOverlap reports whether either mount hides the other. Kubernetes
+// permits nested mounts, but using them for the NVCA bundle can make its
+// installed certificate file ambiguous or inaccessible to the LLM worker.
+func mountPathsOverlap(first, second string) bool {
+	first = path.Clean(first)
+	second = path.Clean(second)
+
+	if first == "/" || second == "/" {
+		return true
+	}
+	return first == second || strings.HasPrefix(first, second+"/") || strings.HasPrefix(second, first+"/")
+}
+
+func resolveInstallContainerImage(
+	podSpec *corev1.PodSpec,
+) (string, corev1.PullPolicy, error) {
+	for _, c := range podSpec.InitContainers {
+		if c.Name != WorkerInitContainerName {
+			continue
+		}
+		if strings.TrimSpace(c.Image) != "" {
+			return c.Image, c.ImagePullPolicy, nil
+		}
+		break
+	}
+	return "", "", fmt.Errorf("transport TLS injection requires regular init container %q with an image", WorkerInitContainerName)
 }
 
 func upsertVolumes(podSpec *corev1.PodSpec, cfg nvcaconfig.TransportTLSConfig) {
@@ -182,12 +235,14 @@ func upsertInstallContainer(
 	podSpec *corev1.PodSpec,
 	image string,
 	imagePullPolicy corev1.PullPolicy,
+	resources corev1.ResourceRequirements,
 	cfg nvcaconfig.TransportTLSConfig,
 ) {
 	upsertContainer(&podSpec.InitContainers, corev1.Container{
 		Name:            InstallContainerName,
 		Image:           image,
 		ImagePullPolicy: imagePullPolicy,
+		Resources:       resources,
 		Command:         []string{InstallCommandPath},
 		Args: []string{
 			"--system-bundle", SystemCertFile,

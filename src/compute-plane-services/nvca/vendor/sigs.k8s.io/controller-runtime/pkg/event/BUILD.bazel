@@ -9,7 +9,7 @@ go_library(
     importmap = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/event",
     importpath = "sigs.k8s.io/controller-runtime/pkg/event",
     visibility = ["//visibility:public"],
-    deps = ["//vendor/sigs.k8s.io/controller-runtime/pkg/client"],
+    deps = ["//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/client"],
 )
 
 alias(

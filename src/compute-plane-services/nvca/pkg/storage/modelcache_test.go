@@ -22,6 +22,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -559,6 +560,459 @@ func TestGetPrimaryPV(t *testing.T) {
 			_, err := r.getPrimaryPV(context.Background(), st)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("getPrimaryPV() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// newMountOptionDefaultsObjects builds the storage class and ConfigMap that the
+// reconciler consults to decide which mount option defaults apply.
+func newMountOptionDefaultsObjects(provisioner string, cmData map[string]string) []client.Object {
+	objs := []client.Object{}
+	if provisioner != "" {
+		objs = append(objs, &storagev1.StorageClass{
+			ObjectMeta:  metav1.ObjectMeta{Name: DefaultModelCacheStorageClassName},
+			Provisioner: provisioner,
+		})
+	}
+	if cmData != nil {
+		objs = append(objs, &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      DefaultCacheMountOptionsConfigMapName,
+				Namespace: ModelCacheInitNamespace,
+			},
+			Data: cmData,
+		})
+	}
+	return objs
+}
+
+var nvmeshMountOptionDefaults = map[string]string{
+	NVMeshStorageClassProvisioner: NVMeshCacheMountOptions,
+}
+
+func TestResolveCacheMountOptions(t *testing.T) {
+	tests := []struct {
+		name        string
+		provisioner string
+		cmData      map[string]string
+		configured  []string
+		want        []string
+	}{
+		{
+			name:        "nvmesh provisioner gets its defaults when nothing configured",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nvmeshMountOptionDefaults,
+			configured:  nil,
+			want:        []string{"ro", "norecovery", "nouuid"},
+		},
+		{
+			name:        "defaults are kept when configuration omits them",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nvmeshMountOptionDefaults,
+			configured:  []string{"noatime"},
+			want:        []string{"ro", "norecovery", "nouuid", "noatime"},
+		},
+		{
+			name:        "options already configured are not duplicated",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nvmeshMountOptionDefaults,
+			configured:  []string{"nouuid", "noatime"},
+			want:        []string{"ro", "norecovery", "nouuid", "noatime"},
+		},
+		{
+			name:        "configured rw that would negate a required ro is dropped",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nvmeshMountOptionDefaults,
+			configured:  []string{"rw", "noatime"},
+			want:        []string{"ro", "norecovery", "nouuid", "noatime"},
+		},
+		{
+			name:        "every option negating a default is dropped",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nvmeshMountOptionDefaults,
+			configured:  []string{"rw", "recovery", "uuid"},
+			want:        []string{"ro", "norecovery", "nouuid"},
+		},
+		{
+			// doModelCacheNVMesh also serves requests with an empty backend, whose
+			// storage class need not be NVMesh at all.
+			name:        "provisioner absent from the configmap uses configured options",
+			provisioner: "ebs.csi.aws.com",
+			cmData:      nvmeshMountOptionDefaults,
+			configured:  []string{"noatime"},
+			want:        []string{"noatime"},
+		},
+		{
+			name:        "a new provisioner is picked up from the configmap without a code change",
+			provisioner: "some-other.csi.driver",
+			cmData: map[string]string{
+				"some-other.csi.driver": "ro, nouuid ",
+			},
+			configured: []string{"noatime"},
+			want:       []string{"ro", "nouuid", "noatime"},
+		},
+		{
+			// An unreadable ConfigMap is an error state, not a statement about the
+			// provisioner, so a volume is never created without the options its
+			// mount depends on.
+			name:        "missing configmap falls back to the built-in nvmesh defaults",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nil,
+			configured:  []string{"noatime"},
+			want:        []string{"ro", "norecovery", "nouuid", "noatime"},
+		},
+		{
+			// The disabled-flag case: no configured options at all. Without the
+			// built-in fallback this produced a volume with no mount options.
+			name:        "missing configmap with no configured options still gets the defaults",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nil,
+			configured:  nil,
+			want:        []string{"ro", "norecovery", "nouuid"},
+		},
+		{
+			// A readable ConfigMap stays the source of truth: an operator who
+			// removes the entry is respected, no built-in override.
+			name:        "entry removed from a readable configmap is respected",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      map[string]string{"other.csi.driver": "ro"},
+			configured:  []string{"noatime"},
+			want:        []string{"noatime"},
+		},
+		{
+			name:        "missing configmap on a non-nvmesh provisioner uses configured options",
+			provisioner: "ebs.csi.aws.com",
+			cmData:      nil,
+			configured:  []string{"noatime"},
+			want:        []string{"noatime"},
+		},
+		{
+			name:        "missing storage class falls back to configured options",
+			provisioner: "",
+			cmData:      nvmeshMountOptionDefaults,
+			configured:  []string{"noatime"},
+			want:        []string{"noatime"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := fake.NewClientBuilder().
+				WithScheme(mgrScheme).
+				WithObjects(newMountOptionDefaultsObjects(tt.provisioner, tt.cmData)...).
+				Build()
+			r := newMountOptionsReconciler(t, c, tt.configured)
+			pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "secondary-pv-test"}}
+
+			if got := r.resolveCacheMountOptions(context.Background(), pv); !slices.Equal(got, tt.want) {
+				t.Errorf("resolveCacheMountOptions() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// The provisioner is a one time init, but the ConfigMap is read on every use so
+// an operator edit takes effect without restarting the agent.
+func TestResolveCacheMountOptions_ConfigMapEditTakesEffect(t *testing.T) {
+	ctx := context.Background()
+	c := fake.NewClientBuilder().
+		WithScheme(mgrScheme).
+		WithObjects(newMountOptionDefaultsObjects(NVMeshStorageClassProvisioner, nvmeshMountOptionDefaults)...).
+		Build()
+	r := newMountOptionsReconciler(t, c, nil)
+	pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "secondary-pv-test"}}
+
+	want := []string{"ro", "norecovery", "nouuid"}
+	if got := r.resolveCacheMountOptions(ctx, pv); !slices.Equal(got, want) {
+		t.Fatalf("before edit = %v, want %v", got, want)
+	}
+
+	cm := &corev1.ConfigMap{}
+	key := client.ObjectKey{Name: DefaultCacheMountOptionsConfigMapName, Namespace: ModelCacheInitNamespace}
+	if err := c.Get(ctx, key, cm); err != nil {
+		t.Fatalf("get configmap: %v", err)
+	}
+	cm.Data[NVMeshStorageClassProvisioner] = "ro,norecovery,nouuid,noatime"
+	if err := c.Update(ctx, cm); err != nil {
+		t.Fatalf("update configmap: %v", err)
+	}
+
+	want = []string{"ro", "norecovery", "nouuid", "noatime"}
+	if got := r.resolveCacheMountOptions(ctx, pv); !slices.Equal(got, want) {
+		t.Errorf("after edit = %v, want %v (edit did not take effect without a restart)", got, want)
+	}
+}
+
+// TestModelCacheStorageClassResolvedOnce covers the storage class NewReconciler
+// resolves for the life of the reconciler: the option override first (tests),
+// then the agent config value, then the default. The config value is the single
+// production source, read here and by model cache backend selection, so the
+// class that is checked cannot drift from the class volumes are created on.
+func TestModelCacheStorageClassResolvedOnce(t *testing.T) {
+	tests := []struct {
+		name     string
+		override string
+		agentCfg string
+		want     string
+	}{
+		{
+			name: "unset falls back to the default",
+			want: DefaultModelCacheStorageClassName,
+		},
+		{
+			name:     "option override wins",
+			override: "custom-sc",
+			want:     "custom-sc",
+		},
+		{
+			name:     "agent config value is used when there is no override",
+			agentCfg: "cfg-sc",
+			want:     "cfg-sc",
+		},
+		{
+			name:     "option override beats the agent config value",
+			override: "custom-sc",
+			agentCfg: "cfg-sc",
+			want:     "custom-sc",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newModelCacheStorageClassReconciler(t, tt.agentCfg, tt.override)
+			if got := r.modelCacheStorageClass; got != tt.want {
+				t.Errorf("modelCacheStorageClass = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// newModelCacheStorageClassReconciler builds a Reconciler the way production
+// does, so the storage class resolution under test is the real one.
+func newModelCacheStorageClassReconciler(t *testing.T, agentCfg, override string) *Reconciler {
+	t.Helper()
+	nvcaCfg := nvcaconfig.Config{}
+	nvcaCfg.Agent.ModelCache.StorageClassName = agentCfg
+	return NewReconciler(nvcaCfg,
+		fake.NewClientBuilder().WithScheme(mgrScheme).Build(),
+		nil, nil, "my-cluster", "us-west-1", (&k8sutil.TimeConfig{}).Complete(),
+		WithModelCacheStorageClass(override))
+}
+
+// newMountOptionsReconciler builds a Reconciler through NewReconciler for the
+// mount option tests. They resolve defaults from the model cache storage class,
+// which only NewReconciler fills in.
+func newMountOptionsReconciler(t *testing.T, c client.Client, configured []string) *Reconciler {
+	t.Helper()
+	return NewReconciler(nvcaconfig.Config{}, c, nil, nil, "my-cluster", "us-west-1",
+		(&k8sutil.TimeConfig{}).Complete(), WithCSIVolumeMountOptions(configured))
+}
+
+func TestApplyModelCacheStorageClass(t *testing.T) {
+	ptr := func(s string) *string { return &s }
+
+	tests := []struct {
+		name       string
+		configured string
+		specSC     *string
+		want       string
+	}{
+		{
+			name:       "spec value is replaced by the default",
+			configured: "",
+			specSC:     ptr("some-other-sc"),
+			want:       DefaultModelCacheStorageClassName,
+		},
+		{
+			name:       "spec value is replaced by the configured override",
+			configured: "custom-sc",
+			specSC:     ptr("some-other-sc"),
+			want:       "custom-sc",
+		},
+		{
+			name:       "unset spec value is filled in",
+			configured: "custom-sc",
+			specSC:     nil,
+			want:       "custom-sc",
+		},
+		{
+			name:       "matching spec value is left as-is",
+			configured: "custom-sc",
+			specSC:     ptr("custom-sc"),
+			want:       "custom-sc",
+		},
+		{
+			name:       "empty string in the spec is still replaced",
+			configured: "custom-sc",
+			specSC:     ptr(""),
+			want:       "custom-sc",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pvc := &corev1.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{Name: "rw-pvc-test"},
+				Spec:       corev1.PersistentVolumeClaimSpec{StorageClassName: tt.specSC},
+			}
+			r := newModelCacheStorageClassReconciler(t, "", tt.configured)
+
+			r.applyModelCacheStorageClass(context.Background(), pvc)
+
+			if pvc.Spec.StorageClassName == nil {
+				t.Fatalf("storage class was left nil, want %q", tt.want)
+			}
+			if got := *pvc.Spec.StorageClassName; got != tt.want {
+				t.Errorf("storage class = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRedactMountOptionValues(t *testing.T) {
+	tests := []struct {
+		name string
+		opts []string
+		want []string
+	}{
+		{
+			name: "bare flags are kept as-is",
+			opts: []string{"ro", "norecovery", "nouuid"},
+			want: []string{"ro", "norecovery", "nouuid"},
+		},
+		{
+			name: "values are hidden but keys are kept",
+			opts: []string{"ro", "password=hunter2", "vers=3.0"},
+			want: []string{"ro", "password=<redacted>", "vers=<redacted>"},
+		},
+		{
+			name: "an empty value is still redacted",
+			opts: []string{"password="},
+			want: []string{"password=<redacted>"},
+		},
+		{
+			name: "nil stays empty",
+			opts: nil,
+			want: []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := redactMountOptionValues(tt.opts); !slices.Equal(got, tt.want) {
+				t.Errorf("redactMountOptionValues() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestReconcileSecondaryPVMountOptions(t *testing.T) {
+	tests := []struct {
+		name        string
+		provisioner string
+		cmData      map[string]string
+		existing    []string
+		configured  []string
+		want        []string
+		wantPatch   bool
+	}{
+		{
+			name:        "pv missing required options is repaired",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nvmeshMountOptionDefaults,
+			existing:    nil,
+			configured:  nil,
+			want:        []string{"ro", "norecovery", "nouuid"},
+			wantPatch:   true,
+		},
+		{
+			name:        "pv is not stripped when configuration is empty",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nvmeshMountOptionDefaults,
+			existing:    []string{"ro", "norecovery", "nouuid"},
+			configured:  nil,
+			want:        []string{"ro", "norecovery", "nouuid"},
+			wantPatch:   false,
+		},
+		{
+			name:        "pv picks up newly configured options",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nvmeshMountOptionDefaults,
+			existing:    []string{"ro", "norecovery", "nouuid"},
+			configured:  []string{"noatime"},
+			want:        []string{"ro", "norecovery", "nouuid", "noatime"},
+			wantPatch:   true,
+		},
+		{
+			name:        "optional option removed from configuration is removed from the pv",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nvmeshMountOptionDefaults,
+			existing:    []string{"ro", "norecovery", "nouuid", "noatime"},
+			configured:  nil,
+			want:        []string{"ro", "norecovery", "nouuid"},
+			wantPatch:   true,
+		},
+		{
+			name:        "configured rw does not make an existing read-only pv writable",
+			provisioner: NVMeshStorageClassProvisioner,
+			cmData:      nvmeshMountOptionDefaults,
+			existing:    []string{"ro", "norecovery", "nouuid"},
+			configured:  []string{"rw"},
+			want:        []string{"ro", "norecovery", "nouuid"},
+			wantPatch:   false,
+		},
+		{
+			name:        "matching pv is left alone",
+			provisioner: "ebs.csi.aws.com",
+			cmData:      nvmeshMountOptionDefaults,
+			existing:    []string{"noatime"},
+			configured:  []string{"noatime"},
+			want:        []string{"noatime"},
+			wantPatch:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pv := &corev1.PersistentVolume{
+				ObjectMeta: metav1.ObjectMeta{Name: "secondary-pv-test"},
+				Spec: corev1.PersistentVolumeSpec{
+					MountOptions: tt.existing,
+					PersistentVolumeSource: corev1.PersistentVolumeSource{
+						CSI: &corev1.CSIPersistentVolumeSource{
+							Driver:       tt.provisioner,
+							VolumeHandle: "handle",
+						},
+					},
+				},
+			}
+			objs := append(newMountOptionDefaultsObjects(tt.provisioner, tt.cmData), pv)
+			c := fake.NewClientBuilder().WithScheme(mgrScheme).WithObjects(objs...).Build()
+			r := newMountOptionsReconciler(t, c, tt.configured)
+
+			stored := &corev1.PersistentVolume{}
+			if err := c.Get(context.Background(), client.ObjectKey{Name: "secondary-pv-test"}, stored); err != nil {
+				t.Fatalf("get pv before reconcile: %v", err)
+			}
+			rvBefore := stored.ResourceVersion
+
+			if err := r.reconcileSecondaryPVMountOptions(context.Background(), pv); err != nil {
+				t.Fatalf("reconcileSecondaryPVMountOptions() error = %v", err)
+			}
+
+			got := &corev1.PersistentVolume{}
+			if err := c.Get(context.Background(), client.ObjectKey{Name: "secondary-pv-test"}, got); err != nil {
+				t.Fatalf("get pv: %v", err)
+			}
+			if !slices.Equal(got.Spec.MountOptions, tt.want) {
+				t.Errorf("persisted mount options = %v, want %v", got.Spec.MountOptions, tt.want)
+			}
+			// An unchanged PV must not be written, otherwise every reconcile
+			// would issue a patch and churn the API server.
+			if patched := got.ResourceVersion != rvBefore; patched != tt.wantPatch {
+				t.Errorf("patched = %v, want %v (resourceVersion %s -> %s)",
+					patched, tt.wantPatch, rvBefore, got.ResourceVersion)
 			}
 		})
 	}
@@ -1260,6 +1714,81 @@ func TestDoModelCacheSharedFS_Validation(t *testing.T) {
 			_, err := r.doModelCacheSharedFS(context.Background(), st, stCopy, &nvcav2beta1.ICMSRequest{})
 			require.Error(t, err)
 			assert.True(t, isTerminal(err), "validation failure must be terminal")
+		})
+	}
+}
+
+// TestDoModelCacheSamba_UnreadyServerIsBounded proves a Samba server that never
+// becomes available stops the request instead of requeuing forever: within the
+// threshold it requeues, past it the request fails terminally so the miniservice
+// reconciler continues the install without a cache. This bounds server start-up
+// only, not the model download that follows.
+func TestDoModelCacheSamba_UnreadyServerIsBounded(t *testing.T) {
+	handle := "unreadyhandle"
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	timeConfig := (&k8sutil.TimeConfig{}).Complete()
+
+	tests := []struct {
+		name          string
+		deploymentAge time.Duration
+		wantTerminal  bool
+	}{
+		{
+			name:          "within the threshold requeues",
+			deploymentAge: timeConfig.SambaModelCacheReadyThreshold - time.Minute,
+			wantTerminal:  false,
+		},
+		{
+			name:          "past the threshold fails the request",
+			deploymentAge: timeConfig.SambaModelCacheReadyThreshold + time.Minute,
+			wantTerminal:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Seeded with an explicit creation timestamp: the fake client does
+			// not stamp one, and the reconciler measures the wait from it.
+			dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+				Name:              sambaModelCacheResourceName(handle),
+				Namespace:         ModelCacheInitNamespace,
+				CreationTimestamp: metav1.NewTime(now.Add(-tt.deploymentAge)),
+			}}
+			nvcaCfg := nvcaconfig.Config{}
+			nvcaCfg.Agent.SharedStorage.Server.Image = "samba:test"
+			r := &Reconciler{
+				Client:        fake.NewClientBuilder().WithScheme(mgrScheme).WithObjects(dep).Build(),
+				cfg:           nvcaCfg,
+				metrics:       newTestMetrics(),
+				fff:           &featureflagmock.Fetcher{},
+				nowFunc:       func() time.Time { return now },
+				k8sTimeConfig: timeConfig,
+			}
+			icms := &nvcav2beta1.ICMSRequest{}
+			icms.Name, icms.Namespace = "icms-1", types.DefaultICMSRequestNamespace
+			icms.Spec = newModelCacheICMSSpec(handle)
+			st := nvcav1new.StorageRequest{
+				ObjectMeta: metav1.ObjectMeta{Name: nvcav1new.ModelCacheRequest.Name(), Namespace: "ns1"},
+			}
+			stCopy := &nvcav1new.StorageRequest{
+				ObjectMeta: st.ObjectMeta,
+				Spec: nvcav1new.StorageRequestSpec{
+					ModelCache: &nvcav1new.ModelCacheSpec{
+						CacheHandle: handle,
+						Backend:     string(HelmCacheBackendSamba),
+					},
+				},
+			}
+
+			res, err := r.doModelCacheSamba(context.Background(), st, stCopy, icms)
+			if !tt.wantTerminal {
+				require.NoError(t, err)
+				assert.Equal(t, defaultRequeueDelay, res.RequeueAfter, "keeps waiting within the threshold")
+				return
+			}
+			require.Error(t, err)
+			assert.True(t, isTerminal(err), "an unready server past the threshold must not retry forever")
+			assert.Contains(t, err.Error(), handle)
 		})
 	}
 }

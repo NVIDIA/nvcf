@@ -4,11 +4,11 @@ go_library(
     name = "progress",
     srcs = ["progress.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/internal/progress",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/worker-task:__subpackages__"],
     deps = [
-        "//internal/metrics",
-        "//internal/types",
-        "//internal/upload",
+        "//src/compute-plane-services/worker-task/internal/metrics",
+        "//src/compute-plane-services/worker-task/internal/types",
+        "//src/compute-plane-services/worker-task/internal/upload",
         "@com_github_cenkalti_backoff_v4//:backoff",
         "@com_github_fsnotify_fsnotify//:fsnotify",
         "@com_github_google_uuid//:uuid",
@@ -21,7 +21,7 @@ go_library(
 alias(
     name = "go_default_library",
     actual = ":progress",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/worker-task:__subpackages__"],
 )
 
 go_test(
@@ -33,8 +33,8 @@ go_test(
     ],
     embed = [":progress"],
     deps = [
-        "//internal/types",
-        "//internal/upload",
+        "//src/compute-plane-services/worker-task/internal/types",
+        "//src/compute-plane-services/worker-task/internal/upload",
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/logs",
         "@com_github_nvidia_nvcf_src_libraries_go_worker//proto/nvct",
         "@com_github_stretchr_testify//assert",

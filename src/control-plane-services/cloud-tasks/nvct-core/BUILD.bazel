@@ -1,7 +1,14 @@
 load("@com_google_protobuf//bazel:proto_library.bzl", "proto_library")
 load("@rules_java//java:defs.bzl", "java_library")
-load("//rules/java:defs.bzl", "nvct_library", "nvct_library_test")
-load("//rules/java:proto.bzl", "nvct_java_grpc_compile")
+load(
+    "//rules/java:defs.bzl",
+    "NVCF_JAVA_ERROR_PRONE_COMPAT_JAVACOPTS",
+    "NVCF_JAVA_JAVACOPTS",
+    "nvcf_java_coverage_test",
+    "nvcf_java_library",
+    "nvcf_java_test",
+)
+load("//rules/java:proto.bzl", "nvcf_java_grpc_compile")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -19,7 +26,7 @@ proto_library(
     deps = ["@com_google_protobuf//:timestamp_proto"],
 )
 
-nvct_java_grpc_compile(
+nvcf_java_grpc_compile(
     name = "nvct_proto_java_grpc_srcs",
     protos = [":nvct_proto"],
 )
@@ -30,6 +37,7 @@ nvct_java_grpc_compile(
 java_library(
     name = "nvct_proto_java_grpc",
     srcs = [":nvct_proto_java_grpc_srcs"],
+    javacopts = NVCF_JAVA_JAVACOPTS,
     deps = [
         "@nv_third_party_deps//:com_google_guava_guava",
         "@nv_third_party_deps//:com_google_protobuf_protobuf_java",
@@ -50,9 +58,10 @@ java_library(
     ],
 )
 
-nvct_library(
+nvcf_java_library(
     name = "nvct_core",
     srcs = NVCT_CORE_SRCS,
+    javacopts = NVCF_JAVA_ERROR_PRONE_COMPAT_JAVACOPTS,
     deps = [
         ":nvct_proto_java_grpc",
         "@nv_third_party_deps//:com_bucket4j_bucket4j_jdk17_core",
@@ -156,6 +165,7 @@ NVCT_CORE_TEST_DEPS = [
     "//src/libraries/java/nv-boot-parent/nv-boot-starter-registries:nv_boot_starter_registries",
     "//src/libraries/java/nv-boot-parent/nv-boot-starter-reloadable-properties:nv_boot_starter_reloadable_properties",
     "@nv_third_party_deps//:io_grpc_grpc_api",
+    "@nv_third_party_deps//:io_grpc_grpc_services",
     "@nv_third_party_deps//:io_grpc_grpc_stub",
     "@nv_third_party_deps//:io_micrometer_micrometer_core",
     "@nv_third_party_deps//:io_opentelemetry_opentelemetry_api",
@@ -165,6 +175,7 @@ NVCT_CORE_TEST_DEPS = [
     "@nv_third_party_deps//:io_projectreactor_netty_reactor_netty_core",
     "@nv_third_party_deps//:jakarta_annotation_jakarta_annotation_api",
     "@nv_third_party_deps//:jakarta_validation_jakarta_validation_api",
+    "@nv_third_party_deps//:net_devh_grpc_server_spring_boot_starter",
     "@nv_third_party_deps//:net_minidev_json_smart",
     "@nv_third_party_deps//:org_apache_commons_commons_lang3",
     "@nv_third_party_deps//:org_apache_logging_log4j_log4j_api",
@@ -200,21 +211,23 @@ NVCT_CORE_TEST_DEPS = [
     "@nv_third_party_deps//:org_wiremock_wiremock_standalone",
 ]
 
-nvct_library(
+nvcf_java_library(
     name = "nvct_core_test_fixtures",
     srcs = NVCT_CORE_TEST_SRCS,
     deps = NVCT_CORE_TEST_DEPS,
-    # Preserve the classpath layout of the standalone cloud-tasks fixture jar
-    # after moving its sources under this monorepo directory.
+    ide_visible = False,
+    javacopts = NVCF_JAVA_ERROR_PRONE_COMPAT_JAVACOPTS,
+    # Preserve the classpath layout and artifact name used by downstream
+    # Bzlmod consumers.
     resource_strip_prefix = "src/control-plane-services/cloud-tasks",
     resources = NVCT_CORE_TEST_RESOURCES,
 )
 
-nvct_library_test(
+nvcf_java_test(
     name = "tests",
-    coverage_library = ":nvct_core",
     srcs = NVCT_CORE_TEST_SRCS,
     deps = NVCT_CORE_TEST_DEPS,
+    javacopts = NVCF_JAVA_ERROR_PRONE_COMPAT_JAVACOPTS,
     data = [
         "//src/control-plane-services/cloud-tasks:integration_local_env",
     ],
@@ -223,9 +236,24 @@ nvct_library_test(
     # that pause/restart cycle on Linux, so retain the pre-Spring-7 lifecycle.
     jvm_flags = ["-Dspring.test.context.cache.pause=never"],
     resources = NVCT_CORE_TEST_RESOURCES,
+    size = "large",
     tags = [
         "exclusive",
+        "external",
         "requires-docker",
     ],
+    timeout = "long",
+)
+
+nvcf_java_coverage_test(
+    name = "tests_coverage",
+    coverage_target = ":nvct_core",
+    size = "large",
+    tags = [
+        "exclusive",
+        "external",
+        "requires-docker",
+    ],
+    test = ":tests",
     timeout = "long",
 )

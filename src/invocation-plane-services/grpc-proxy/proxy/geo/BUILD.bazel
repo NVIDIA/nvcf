@@ -29,8 +29,8 @@ go_library(
         "@com_github_aws_aws_sdk_go_v2_config//:config",
         "@com_github_aws_aws_sdk_go_v2_service_s3//:s3",
         "@com_github_goccy_go_json//:go-json",
-        "@com_github_nvidia_nvcf_go//pkg/nvkit/auth",
-        "@com_github_nvidia_nvcf_go//pkg/nvkit/clients",
+        "//src/libraries/go/lib/pkg/nvkit/auth",
+        "//src/libraries/go/lib/pkg/nvkit/clients",
         "@io_opentelemetry_go_contrib_instrumentation_github_com_aws_aws_sdk_go_v2_otelaws//:otelaws",
         "@org_uber_go_zap//:zap",
     ],
@@ -74,10 +74,12 @@ go_test(
     local = True,
     # external: testcontainers spins up the localstack Docker container,
     # so the test's effective inputs (Docker daemon, localstack image
-    # tag) live outside Bazel's hermetic action hash. `local = True`
-    # forces local-only execution but does NOT bypass result caching;
-    # the `external` tag is what stops nvcfbarn from pinning a green
-    # forever. requires-docker is kept so callers can filter out
+    # tag) live outside Bazel's hermetic action hash. `local = True` forces
+    # local, unsandboxed execution and, measured on Bazel 9.1.1, also stops
+    # the result being reused from the disk/remote cache. It does not disable
+    # every cache: the `external` tag is what prevents Bazel reusing a
+    # previously cached test result. requires-docker is kept so callers
+    # can filter out
     # docker-needing tests with --test_tag_filters=-requires-docker.
     tags = [
         "external",
@@ -88,7 +90,6 @@ go_test(
         "@com_github_aws_aws_sdk_go_v2_config//:config",
         "@com_github_aws_aws_sdk_go_v2_credentials//:credentials",
         "@com_github_aws_aws_sdk_go_v2_service_s3//:s3",
-        "@com_github_docker_go_connections//nat",
         "@com_github_stretchr_testify//assert",
         "@com_github_stretchr_testify//mock",
         "@com_github_stretchr_testify//require",

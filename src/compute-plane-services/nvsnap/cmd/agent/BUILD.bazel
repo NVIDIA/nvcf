@@ -9,9 +9,9 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvsnap/cmd/agent",
     visibility = ["//visibility:private"],
     deps = [
-        "//internal/agent",
-        "//internal/checkpointstore",
-        "//internal/treecopy",
+        "//src/compute-plane-services/nvsnap/internal/agent",
+        "//src/compute-plane-services/nvsnap/internal/checkpointstore",
+        "//src/compute-plane-services/nvsnap/internal/treecopy",
         "@com_github_sirupsen_logrus//:logrus",
     ],
 )

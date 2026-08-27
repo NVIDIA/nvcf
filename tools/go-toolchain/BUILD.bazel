@@ -1,0 +1,6 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Exposes go.mod so the root MODULE.bazel can read the toolchain version from it
+# via go_sdk.from_file. Nothing here is built.
+exports_files(["go.mod"])

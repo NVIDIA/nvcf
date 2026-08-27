@@ -58,18 +58,30 @@ Set `functionType` to `LLM` and define model routing metadata under `models[].ll
   "inferenceUrl": "/",
   "inferencePort": 8000,
   "functionType": "LLM",
+  "apiBodyFormat": "CUSTOM",
   "models": [
     {
       "name": "dummy-model",
       "llmConfig": {
         "uris": ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"],
-        "routingMethod": "round_robin",
+        "routingMethod": "power_of_two",
         "tokenRateLimit": "1000-S"
       }
     }
   ]
 }
 ```
+
+`apiBodyFormat` accepts `CUSTOM` and `PREDICT_V2`; if omitted, it defaults to
+`CUSTOM`. Use `CUSTOM` for OpenAI-compatible LLM functions. `OPENAI_CHAT` is
+not an accepted value and the create-function API rejects it with
+`400 Bad Request`.
+
+The body-format field does not select the LLM protocol or an OpenAI endpoint.
+`functionType: "LLM"` selects the LLM invocation path, and `llmConfig.uris`
+declares the OpenAI-compatible paths implemented by the container. The client
+request body is the native OpenAI-compatible body for the selected path; the
+gateway does not wrap it in a second NVCF envelope.
 
 `llmConfig.uris` declares the OpenAI-compatible paths the model supports. Supported LLM paths are:
 
@@ -79,7 +91,11 @@ Set `functionType` to `LLM` and define model routing metadata under `models[].ll
 | `/v1/responses` | Supports native Responses API requests. Streaming clients receive server-sent events (SSE). Non-streaming clients receive the terminal Responses JSON object. |
 | `/v1/embeddings` | Supports embeddings requests with string or string array input. |
 
-`llmConfig.routingMethod` accepts `round_robin`, `power_of_two`, `groq_multiregion`, `pulsar`, or `random`.
+`nvcf-cli` accepts `round_robin`, `power_of_two`, `groq_multiregion`,
+`pulsar`, or `random` for `llmConfig.routingMethod`.
+
+For the mapping to Stargate algorithms and the request-router allowlist, see
+[LLM Request Router Load Balancing](./llm-request-router-load-balancing.md).
 
 `llmConfig.tokenRateLimit` applies a per-model token limit. Use one or more comma-separated limits in `<value>-<unit>` format, where `<value>` is a positive integer and `<unit>` is one of `S` (seconds), `M` (minutes), `H` (hours), `D` (days), or `W` (weeks). A single limit is one token budget over one time window, such as `1000-S`. A combined limit is multiple token budgets over distinct time windows, such as `1000-S,5000-M,100000-H,500000-D,1000000-W`; do not repeat a unit in the same value.
 
@@ -92,7 +108,7 @@ The same configuration can be provided with CLI flags:
   --inference-url "/" \
   --inference-port 8000 \
   --function-type LLM \
-  --llm-model "name=dummy-model,uris=/v1/chat/completions|/v1/responses|/v1/embeddings,routingMethod=round_robin,tokenRateLimit=1000-S"
+  --llm-model "name=dummy-model,uris=/v1/chat/completions|/v1/responses|/v1/embeddings,routingMethod=power_of_two,tokenRateLimit=1000-S"
 ```
 
 These per-model routing fields are mutable. Use `nvcf-cli function update --llm-model-update "name=<model>,routingMethod=<method>,tokenRateLimit=<limit>"` or JSON `modelUpdates` to change them without recreating the function version.
@@ -113,6 +129,7 @@ curl -sS -X POST "http://${GATEWAY_ADDR}/v1/chat/completions" \
   -d '{
     "model": "<function-id>/dummy-model",
     "stream": true,
+    "prompt_cache_key": "nvcf-summary-session",
     "messages": [
       {
         "role": "user",
@@ -123,6 +140,47 @@ curl -sS -X POST "http://${GATEWAY_ADDR}/v1/chat/completions" \
 ```
 
 When `stream` is `true`, the gateway relays server-sent events. When `stream` is false or omitted, the gateway returns the final JSON response from the upstream service.
+
+For a non-streaming request, the upstream container must return an
+OpenAI-compatible chat completion. For example:
+
+```json
+{
+  "id": "chatcmpl-example",
+  "object": "chat.completion",
+  "created": 1787745600,
+  "model": "dummy-model",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "NVCF routes GPU-backed inference workloads."
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 12,
+    "completion_tokens": 7,
+    "total_tokens": 19
+  }
+}
+```
+
+For streaming requests, the upstream container returns OpenAI-compatible SSE
+chunks and terminates with `data: [DONE]`. The gateway relays the upstream
+response; it does not synthesize model output or token usage.
+
+### Routing checks versus token-generation tests
+
+An echo or fixed-response workload is useful for verifying function creation,
+authentication, worker registration, routing, streaming transport, and
+failover. It does not generate tokens. Repeated or canned output from such a
+workload cannot measure model token throughput, time to first token, or
+token-generation latency. Capacity and latency claims require a genuine
+token-generating model, with input and output token counts recorded alongside
+concurrency, duration, error rate, throughput, and latency percentiles.
 
 ### Responses
 
@@ -181,18 +239,44 @@ The LLM Gateway supports sticky routing for multi-turn OpenAI-compatible request
 
 Sticky routing is not supported on `/v1/embeddings`.
 
-To keep later requests routed to the same backend, send the `x-multi-turn-session-id` response header value back as the `x-multi-turn-session-id` request header on the next request.
+To identify related requests, set `prompt_cache_key` in the request body. You
+can also send the `x-multi-turn-session-id` response header value back as the
+`x-multi-turn-session-id` request header on the next request.
 
 The gateway chooses the sticky routing key in this order:
 
 | Endpoint | Precedence |
 | --- | --- |
 | `/v1/responses` | `prompt_cache_key`, `conversation.id`, `x-multi-turn-session-id`, input hash fallback |
-| `/v1/chat/completions` | `x-multi-turn-session-id`, messages hash fallback |
+| `/v1/chat/completions` | `prompt_cache_key`, `x-multi-turn-session-id`, messages hash fallback |
 
 For Responses API follow-up calls, `previous_response_id` does not override the sticky routing key. Continue sending `prompt_cache_key`, `conversation.id`, or the returned `x-multi-turn-session-id` header when the next request needs the same backend affinity.
 
-Sticky routing only affects backend selection when the LLM request router is configured with a cache-affinity-aware routing method for the target model. Clients should only use `x-multi-turn-session-id`. The gateway derives and forwards the internal `x-cache-affinity-key`; clients should not send that header.
+The gateway accepts a nonempty `prompt_cache_key` of up to 256 bytes without
+control characters. An empty value is ignored. The gateway preserves the raw
+value in the upstream request body and returns it in
+`x-multi-turn-session-id`. The gateway derives a SHA-256 value for the
+internal `x-cache-affinity-key` header. Clients must not send
+`x-cache-affinity-key`.
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Gateway as LLM API Gateway
+    participant Router as LLM Request Router
+    participant Backend as Model backend
+
+    Client->>Gateway: Chat request with raw prompt_cache_key
+    Note over Gateway: Validate key and derive SHA-256 affinity value
+    Gateway->>Router: Chat JSON and hashed X-Cache-Affinity-Key
+    Router->>Backend: Chat JSON with raw prompt_cache_key
+    Backend-->>Router: Completion response
+    Router-->>Gateway: Completion response
+    Gateway-->>Client: Response and raw x-multi-turn-session-id
+```
+
+Sticky routing only affects backend selection when the LLM request router is
+configured with a cache-affinity-aware routing method for the target model.
 
 ## Metrics
 

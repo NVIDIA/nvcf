@@ -1619,6 +1619,11 @@ func Test_setupNVCARBAC(t *testing.T) {
 				ResourceNames: []string{nvcaoptypes.NVCAModuleName},
 				Verbs:         []string{"get", "list", "watch"},
 			},
+			{
+				APIGroups: []string{"nvsnap.nvcf.nvidia.io"},
+				Resources: []string{"nvsnapfunctionstates", "nvsnapfunctionstates/status"},
+				Verbs:     []string{"get", "list", "watch", "create", "update", "delete", "patch"},
+			},
 			{}, // Node rule, added below
 			{
 				APIGroups: []string{""},
@@ -2035,6 +2040,11 @@ func Test_setupNVCARBAC_ValidationPolicy(t *testing.T) {
 				Verbs:         []string{"get", "list", "watch"},
 			},
 			{
+				APIGroups: []string{"nvsnap.nvcf.nvidia.io"},
+				Resources: []string{"nvsnapfunctionstates", "nvsnapfunctionstates/status"},
+				Verbs:     []string{"get", "list", "watch", "create", "update", "delete", "patch"},
+			},
+			{
 				APIGroups: []string{""},
 				Resources: []string{"nodes"},
 				Verbs:     []string{"get", "list", "watch", "update", "patch"},
@@ -2260,6 +2270,11 @@ func Test_NVLinkOptimized(t *testing.T) {
 				Resources:     []string{"mutatingwebhookconfigurations", "validatingwebhookconfigurations"},
 				ResourceNames: []string{nvcaoptypes.NVCAModuleName},
 				Verbs:         []string{"get", "list", "watch"},
+			},
+			{
+				APIGroups: []string{"nvsnap.nvcf.nvidia.io"},
+				Resources: []string{"nvsnapfunctionstates", "nvsnapfunctionstates/status"},
+				Verbs:     []string{"get", "list", "watch", "create", "update", "delete", "patch"},
 			},
 			{
 				APIGroups: []string{""},
@@ -2852,6 +2867,21 @@ func TestEncodeAgentConfig_MergesBYOOConfig(t *testing.T) {
 						},
 					},
 				},
+				LogSampling: nvcaconfig.BYOOOTelLogSamplingConfig{
+					SamplingPercentage: ptr.To(10.0),
+					Mode:               "hash_seed",
+					HashSeed:           ptr.To(uint32(1234)),
+					FailClosed:         ptr.To(false),
+					AttributeSource:    "record",
+					FromAttribute:      "log.id",
+					SamplingPriority:   "sampling.priority",
+				},
+				TraceSampling: nvcaconfig.BYOOOTelSamplingConfig{
+					SamplingPercentage: ptr.To(1.0),
+					Mode:               "hash_seed",
+					HashSeed:           ptr.To(uint32(1234)),
+					FailClosed:         ptr.To(false),
+				},
 			},
 			BYOODebugMode: nvcaconfig.BYOODebugModeConfig{
 				Enabled: true,
@@ -2883,6 +2913,23 @@ func TestEncodeAgentConfig_MergesBYOOConfig(t *testing.T) {
 	require.NotNil(t, got.Agent.BYOOOTelCollector.ExporterHelper.SendingQueue.Batch.MaxSize)
 	assert.Equal(t, int64(1000000), *got.Agent.BYOOOTelCollector.ExporterHelper.SendingQueue.Batch.MinSize)
 	assert.Equal(t, int64(1000000), *got.Agent.BYOOOTelCollector.ExporterHelper.SendingQueue.Batch.MaxSize)
+	require.NotNil(t, got.Agent.BYOOOTelCollector.LogSampling.SamplingPercentage)
+	assert.Equal(t, 10.0, *got.Agent.BYOOOTelCollector.LogSampling.SamplingPercentage)
+	assert.Equal(t, "hash_seed", got.Agent.BYOOOTelCollector.LogSampling.Mode)
+	require.NotNil(t, got.Agent.BYOOOTelCollector.LogSampling.HashSeed)
+	assert.Equal(t, uint32(1234), *got.Agent.BYOOOTelCollector.LogSampling.HashSeed)
+	require.NotNil(t, got.Agent.BYOOOTelCollector.LogSampling.FailClosed)
+	assert.False(t, *got.Agent.BYOOOTelCollector.LogSampling.FailClosed)
+	assert.Equal(t, "record", got.Agent.BYOOOTelCollector.LogSampling.AttributeSource)
+	assert.Equal(t, "log.id", got.Agent.BYOOOTelCollector.LogSampling.FromAttribute)
+	assert.Equal(t, "sampling.priority", got.Agent.BYOOOTelCollector.LogSampling.SamplingPriority)
+	require.NotNil(t, got.Agent.BYOOOTelCollector.TraceSampling.SamplingPercentage)
+	assert.Equal(t, 1.0, *got.Agent.BYOOOTelCollector.TraceSampling.SamplingPercentage)
+	assert.Equal(t, "hash_seed", got.Agent.BYOOOTelCollector.TraceSampling.Mode)
+	require.NotNil(t, got.Agent.BYOOOTelCollector.TraceSampling.HashSeed)
+	assert.Equal(t, uint32(1234), *got.Agent.BYOOOTelCollector.TraceSampling.HashSeed)
+	require.NotNil(t, got.Agent.BYOOOTelCollector.TraceSampling.FailClosed)
+	assert.False(t, *got.Agent.BYOOOTelCollector.TraceSampling.FailClosed)
 	assert.True(t, got.Agent.BYOODebugMode.Enabled)
 	assert.True(t, got.Agent.BYOOMetricSubset.Enabled)
 	assert.Contains(t, got.Agent.BYOOMetricSubset.FilterConfig, "metric.name")
@@ -4478,7 +4525,7 @@ func TestSetupOTelCollectorConfigMap(t *testing.T) {
 				require.NoError(t, err)
 				assert.NotNil(t, cm)
 				assert.Contains(t, cm.Data, "config.yaml")
-				assert.Contains(t, cm.Data["config.yaml"], "k8s_events")
+				assertClusterWideK8sObjects(t, cm.Data["config.yaml"])
 				assert.Contains(t, cm.Data["config.yaml"], "memory_limiter")
 			} else {
 				_, err := clients.K8s.CoreV1().ConfigMaps(ns).Get(ctx, NVCAOTelCollectorConfigMapName, metav1.GetOptions{})
@@ -5006,10 +5053,10 @@ func Test_setupAgentConfigConfigMap(t *testing.T) {
 		},
 	}
 
-	agentCfg, err := bc.newAgentConfig(ctx, inNVCFBackend)
+	desiredConfigMap, err := bc.newAgentConfigConfigMap(ctx, inNVCFBackend)
 	require.NoError(t, err)
 
-	err = bc.setupAgentConfigConfigMap(ctx, inNVCFBackend, agentCfg)
+	err = bc.setupAgentConfigConfigMap(ctx, desiredConfigMap)
 	require.NoError(t, err)
 
 	gotCM, err := clients.K8s.CoreV1().ConfigMaps(DefaultNVCASystemNamespace).Get(ctx, agentConfigConfigMapName, metav1.GetOptions{})
@@ -5132,7 +5179,6 @@ func TestSetupAgentConfigConfigMapMergesTransportTLSFromAgentConfigMergeConfigMa
 				TrustBundleKey:           "nvcf-ca-bundle.pem",
 				TrustBundleFingerprint:   "sha256:9a7814909424061a68756ee5c26aa1a1491b8d20a7b813fb24fa7e73b2fa1c93",
 				TrustBundlePEM:           "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n",
-				InstallerImage:           "nvcr.io/nvidia/nvcf-byoc/nvca:2.51.0",
 			},
 		},
 	}
@@ -5157,7 +5203,9 @@ func TestSetupAgentConfigConfigMapMergesTransportTLSFromAgentConfigMergeConfigMa
 	require.NoError(t, err)
 	assert.Nil(t, cfg.Workload.TransportTLS)
 
-	err = bc.setupAgentConfigConfigMap(ctx, nb, cfg)
+	desiredConfigMap, err := bc.newAgentConfigConfigMap(ctx, nb)
+	require.NoError(t, err)
+	err = bc.setupAgentConfigConfigMap(ctx, desiredConfigMap)
 	require.NoError(t, err)
 
 	gotCM, err := clients.K8s.CoreV1().ConfigMaps(DefaultNVCASystemNamespace).Get(ctx, agentConfigConfigMapName, metav1.GetOptions{})
@@ -5175,59 +5223,6 @@ func TestSetupAgentConfigConfigMapMergesTransportTLSFromAgentConfigMergeConfigMa
 		gotCfg.Workload.TransportTLS.TrustBundleFingerprint)
 	assert.Equal(t, "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n",
 		gotCfg.Workload.TransportTLS.TrustBundlePEM)
-	assert.Equal(t, "nvcr.io/nvidia/nvcf-byoc/nvca:2.51.0", gotCfg.Workload.TransportTLS.InstallerImage)
-}
-
-func TestSetupAgentConfigConfigMapDefaultsTransportTLSInstallerImageFromNVCFBackend(t *testing.T) {
-	ctx := newTestContext()
-	clients := mockKubeClientsForIntegrationTests()
-	bc := &BackendK8sCache{
-		clients:           clients,
-		envType:           nvidiaiov1.EnvTypeStage,
-		operatorNamespace: NVCAOperatorNamespace,
-	}
-
-	mergeCfg := nvcaconfig.Config{
-		Workload: nvcaconfig.WorkloadConfig{
-			TransportTLS: &nvcaconfig.TransportTLSConfig{
-				TrustMode:                nvcaconfig.TrustModeBundle,
-				TrustBundleConfigMapName: "nvcf-transport-trust-bundle",
-				TrustBundleKey:           "nvcf-ca-bundle.pem",
-				TrustBundleFingerprint:   "sha256:9a7814909424061a68756ee5c26aa1a1491b8d20a7b813fb24fa7e73b2fa1c93",
-				TrustBundlePEM:           "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n",
-			},
-		},
-	}
-	mergeCfgBytes, err := nvcaconfig.EncodeConfig(mergeCfg)
-	require.NoError(t, err)
-
-	_, err = clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Create(ctx, &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      agentConfigMergeConfigMapName,
-			Namespace: NVCAOperatorNamespace,
-		},
-		Data: map[string]string{
-			agentConfigFile: string(mergeCfgBytes),
-		},
-	}, metav1.CreateOptions{})
-	require.NoError(t, err)
-
-	nb := ngcManagedBackendWithAgentConfig(nvidiaiov1.AgentConfig{})
-	nb.Spec.NVCAImageConfig.Repository = "nvcr.io/nvidia/nvcf-byoc/nvca"
-	nb.Spec.Version = "2.51.0"
-
-	cfg, err := bc.newAgentConfig(ctx, nb)
-	require.NoError(t, err)
-	err = bc.setupAgentConfigConfigMap(ctx, nb, cfg)
-	require.NoError(t, err)
-
-	gotCM, err := clients.K8s.CoreV1().ConfigMaps(DefaultNVCASystemNamespace).Get(ctx, agentConfigConfigMapName, metav1.GetOptions{})
-	require.NoError(t, err)
-
-	gotCfg, err := nvcaconfig.DecodeConfig([]byte(gotCM.Data[agentConfigFile]))
-	require.NoError(t, err)
-	require.NotNil(t, gotCfg.Workload.TransportTLS)
-	assert.Equal(t, "nvcr.io/nvidia/nvcf-byoc/nvca:2.51.0", gotCfg.Workload.TransportTLS.InstallerImage)
 }
 
 func TestGetChartDefaultAgentConfig(t *testing.T) {

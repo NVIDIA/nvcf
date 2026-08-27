@@ -8,7 +8,7 @@ go_library(
     srcs = ["errors.go"],
     importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/helm-reval/pkg/reval/authz",
     visibility = ["//visibility:public"],
-    deps = ["//pkg/httpapi"],
+    deps = ["//src/control-plane-services/helm-reval/pkg/httpapi"],
 )
 
 alias(

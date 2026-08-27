@@ -7,9 +7,9 @@ go_library(
     importpath = "k8s.io/client-go/informers/networking",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/k8s.io/client-go/informers/internalinterfaces",
-        "//vendor/k8s.io/client-go/informers/networking/v1:networking",
-        "//vendor/k8s.io/client-go/informers/networking/v1beta1",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/informers/internalinterfaces",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/informers/networking/v1:networking",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/informers/networking/v1beta1",
     ],
 )
 

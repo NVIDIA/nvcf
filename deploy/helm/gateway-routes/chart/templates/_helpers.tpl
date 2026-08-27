@@ -53,6 +53,10 @@ app.kubernetes.io/name: {{ include "nvcf-gateway.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
+{{- define "nvcf-gateway.llmWorkerBackendNamespace" -}}
+{{- required "nvcfGatewayRoutes.routes.llmWorker.backend.namespace is required when llmWorker.enabled is true" .Values.nvcfGatewayRoutes.routes.llmWorker.backend.namespace -}}
+{{- end }}
+
 {{/*
 Validate that enabled HTTPRoutes do not compete for the same hostname and
 root PathPrefix match on the shared Gateway. All HTTPRoute templates in this

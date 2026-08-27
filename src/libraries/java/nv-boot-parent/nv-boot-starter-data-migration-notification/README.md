@@ -4,7 +4,7 @@ CloudEvents-based data migration notifications for NV applications. The starter 
 data migration payloads, serializes them as CloudEvents, and publishes them to NATS using
 a caller-provided `Connection`.
 
-**Apps must register a `DataMigrationNotificationProperties` bean in the Spring context.**
+Apps must register a `DataMigrationNotificationProperties` bean in the Spring context.
 
 ## Adding as a Dependency
 
@@ -66,7 +66,7 @@ context to be able to use this library:
 
 | Bean                                  | Type                                  | Description |
 |---------------------------------------|---------------------------------------|-------------|
-| `dataMigrationNotificationProperties` | `DataMigrationNotificationProperties` | **Required.** Application identity used in CloudEvent source, payloads, and NATS subjects. |
+| `dataMigrationNotificationProperties` | `DataMigrationNotificationProperties` | Required. Application identity used in CloudEvent source, payloads, and NATS subjects. |
 | `jsonMapper`                          | `JsonMapper`                          | Required by `DataMigrationNotificationService`; Spring Boot usually provides this when Jackson is on the classpath. |
 
 The notification module does not own the NATS connection lifecycle. Callers pass a
@@ -183,9 +183,11 @@ publishing.
 Run module tests:
 
 ```bash
-mvn -pl nv-boot-starter-data-migration-notification test
+bazel test \
+  //src/libraries/java/nv-boot-parent/nv-boot-starter-data-migration-notification:tests \
+  --cache_test_results=no
 ```
 
-- **Unit tests** cover `DataMigrationNotificationAutoConfiguration` conditions and backoff.
-- **Unit tests** cover `DataMigrationNotificationService` CloudEvent creation, payload
+- Unit tests cover `DataMigrationNotificationAutoConfiguration` conditions and backoff.
+- Unit tests cover `DataMigrationNotificationService` CloudEvent creation, payload
   generation, NATS subject generation and validation, publish, and flush behavior.

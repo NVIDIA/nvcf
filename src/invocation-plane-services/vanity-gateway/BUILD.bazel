@@ -1,3 +1,4 @@
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 
 # SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
@@ -68,9 +69,12 @@ go_library(
     # VCS build info (absent under Bazel).
     x_defs = {
         "ai-api-gateway-service/gateway.version": "{STABLE_VERSION}",
+        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Service": "nvcf-ai-api-gateway-service",
+        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.Version": "{STABLE_VERSION}",
+        "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version.GitHash": "{STABLE_GIT_COMMIT_FULL}",
     },
     deps = [
-        "//gateway",
+        "//src/invocation-plane-services/vanity-gateway/gateway",
         "@com_github_go_logr_zapr//:zapr",
         "@com_github_nvidia_nvcf_go//pkg/nvkit/config",
         "@com_github_nvidia_nvcf_go//pkg/nvkit/logs",
@@ -99,12 +103,13 @@ go_test(
     data = ["config.yaml"],
     embed = [":ai-api-gateway-service_lib"],
     deps = [
-        "//gateway",
-        "//gateway_config",
+        "//src/invocation-plane-services/vanity-gateway/gateway",
+        "//src/invocation-plane-services/vanity-gateway/gateway_config",
         "@com_github_go_logr_zapr//:zapr",
         "@com_github_goccy_go_json//:go-json",
         "@com_github_magiconair_properties//assert",
         "@com_github_nvidia_nvcf_go//pkg/nvkit/logs",
+        "@com_github_stretchr_testify//require",
         "@in_gopkg_yaml_v3//:yaml_v3",
         "@io_k8s_sigs_controller_runtime//:controller-runtime",
         "@org_golang_x_net//http2",

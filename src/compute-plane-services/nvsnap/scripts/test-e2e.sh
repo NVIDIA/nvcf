@@ -31,6 +31,7 @@ fi
 
 # Verify deployed agent matches expected version
 source "$SCRIPT_DIR/versions.sh"
+source "$SCRIPT_DIR/lib/agent-auth.sh"
 DEPLOYED=$(kubectl get ds nvsnap-agent -n nvsnap-system -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null)
 EXPECTED="${NVSNAP_REGISTRY}/nvsnap-agent:${NVSNAP_APP_VERSION}"
 if [ "$DEPLOYED" != "$EXPECTED" ]; then
@@ -537,6 +538,19 @@ else
 fi
 log_info "Capture path: $CAPTURE_PATH"
 
+# RESTORE_CONTAINER_NAME defaults to "restore" per workload, which is right
+# for criu-v2: that restore pod is a placeholder whose only container is the
+# bash reaper the agent restores into.
+#
+# The cachedir path has no placeholder. Its restore target is a customer-shaped
+# pod running the real workload, so the container carries the engine's name and
+# an exec against "restore" hits a container that does not exist. The pod then
+# passes its readiness probe (an httpGet on /v1/models) while every post-restore
+# poll fails, which reads as "restored but not serving" when it is serving fine.
+if [ "$CAPTURE_PATH" = "rootfs" ]; then
+    RESTORE_CONTAINER_NAME="$CONTAINER_NAME"
+fi
+
 # On the rootfs/cachedir path, prefer a dedicated <workload>-rootfs-restore.yaml
 # if one exists: the CRIU restore template chains restore-entrypoint and waits
 # for a CRIU dump that never appears on the rootfs path. The rootfs variant is a
@@ -625,7 +639,29 @@ if [ "$CAPTURE_PATH" = "rootfs" ]; then
     log_info "Step 7: Waiting for rootfs capture (watcher auto-fires post-Ready + warmup)..."
     POD_UID=$(kubectl get pod $POD_NAME -n $NAMESPACE -o jsonpath='{.metadata.uid}')
     HASH=""
-    DEADLINE=$(( $(date +%s) + 900 ))  # 15 min — large captures take time
+    # Capture time scales with what has to be written, not with wall-clock
+    # patience: a 70B TP=4 cache dir is ~132 GB and takes ~28 min, so the old
+    # flat 15 min failed the test while the agent was still succeeding. Scale
+    # off the declared GPU count (a good enough proxy for model size) and let
+    # the caller override outright.
+    CAPTURE_GPUS=$(kubectl get pod $POD_NAME -n $NAMESPACE \
+        -o jsonpath='{.metadata.annotations.nvsnap\.io/gpus}' 2>/dev/null)
+    # Both inputs are attacker-of-convenience: a hand-edited annotation or a
+    # typo'd env var. Validate rather than feed them to $(( )), which
+    # evaluates a non-numeric string as 0 -- that would make the timeout
+    # 900 + 900*(0-1) = 0 and fail this step instantly, the same
+    # test-fails-while-product-works trap this timeout was added to fix.
+    case "$CAPTURE_GPUS" in
+        '' | *[!0-9]* | 0) CAPTURE_GPUS=1 ;;
+    esac
+    CAPTURE_TIMEOUT="${NVSNAP_CAPTURE_TIMEOUT:-$(( 900 + 900 * (CAPTURE_GPUS - 1) ))}"
+    case "$CAPTURE_TIMEOUT" in
+        '' | *[!0-9]* | 0)
+            log_warn "NVSNAP_CAPTURE_TIMEOUT=${CAPTURE_TIMEOUT} is not a positive integer; using 900s"
+            CAPTURE_TIMEOUT=900
+            ;;
+    esac
+    DEADLINE=$(( $(date +%s) + CAPTURE_TIMEOUT ))
     while [ "$(date +%s)" -lt "$DEADLINE" ]; do
         # Pick the most-recent ConfigMap whose manifest.json source_pod_meta
         # matches this pod (by name + namespace). Multiple may exist if
@@ -658,7 +694,7 @@ if matches:
         sleep 10
     done
     if [ -z "$HASH" ]; then
-        fail "Rootfs capture (no manifest CM appeared within 15min)"
+        fail "Rootfs capture (no manifest CM appeared within $(( CAPTURE_TIMEOUT / 60 ))min)"
     fi
     CHECKPOINT_ID="$HASH"     # downstream uses this name uniformly
     log_info "Capture hash: $HASH"
@@ -799,8 +835,13 @@ if [ "$CAPTURE_PATH" = "criu-v2" ]; then
         --field-selector "spec.nodeName=$POD_NODE" -o jsonpath='{.items[0].metadata.name}')
     [ -n "$AGENT_POD" ] || fail "criu-v2 restore (no agent pod on $POD_NODE)"
     log_info "criu-v2: agent-driven restore via $AGENT_POD (synchronous, up to 21min)..."
+    # curl runs in the pod, but these args are expanded by the local shell
+    # (no sh -c), so the token comes from the Secret rather than the
+    # container's NVSNAP_AGENT_TOKEN. Empty unless auth is enabled.
+    nvsnap_agent_auth_args "$NAMESPACE"
     RESTORE_RESP=$(kubectl exec -n $NAMESPACE "$AGENT_POD" -c agent -- \
         curl -s --max-time 1260 -X POST "http://localhost:8081/v1/restore" \
+        "${NVSNAP_AUTH_ARGS[@]}" \
         -H 'Content-Type: application/json' \
         -d "{\"checkpointId\":\"$CHECKPOINT_ID\",\"placeholderPodName\":\"$RESTORE_POD_NAME\",\"placeholderNamespace\":\"$NAMESPACE\"}") || true
     if ! printf '%s' "$RESTORE_RESP" | grep -q '"newContainerId"'; then

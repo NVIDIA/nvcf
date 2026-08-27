@@ -21,12 +21,12 @@ go_library(
     importpath = "github.com/nats-io/nats.go",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/klauspost/compress/flate",
-        "//vendor/github.com/nats-io/nats.go/encoders/builtin",
-        "//vendor/github.com/nats-io/nats.go/internal/parser",
-        "//vendor/github.com/nats-io/nats.go/util",
-        "//vendor/github.com/nats-io/nkeys",
-        "//vendor/github.com/nats-io/nuid",
+        "//src/compute-plane-services/nvca/vendor/github.com/klauspost/compress/flate",
+        "//src/compute-plane-services/nvca/vendor/github.com/nats-io/nats.go/encoders/builtin",
+        "//src/compute-plane-services/nvca/vendor/github.com/nats-io/nats.go/internal/parser",
+        "//src/compute-plane-services/nvca/vendor/github.com/nats-io/nats.go/util",
+        "//src/compute-plane-services/nvca/vendor/github.com/nats-io/nkeys",
+        "//src/compute-plane-services/nvca/vendor/github.com/nats-io/nuid",
     ],
 )
 

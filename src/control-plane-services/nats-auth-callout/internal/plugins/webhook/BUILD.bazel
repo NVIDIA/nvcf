@@ -19,10 +19,10 @@ go_library(
     name = "webhook",
     srcs = ["webhook.go"],
     importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/nats-auth-callout/internal/plugins/webhook",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/control-plane-services/nats-auth-callout:__subpackages__"],
     deps = [
-        "//internal/config",
-        "//internal/plugins/types",
+        "//src/control-plane-services/nats-auth-callout/internal/config",
+        "//src/control-plane-services/nats-auth-callout/internal/plugins/types",
         "@com_github_hashicorp_go_retryablehttp//:go-retryablehttp",
         "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
         "@org_uber_go_zap//:zap",
@@ -32,7 +32,7 @@ go_library(
 alias(
     name = "go_default_library",
     actual = ":webhook",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/control-plane-services/nats-auth-callout:__subpackages__"],
 )
 
 go_test(
@@ -40,7 +40,7 @@ go_test(
     srcs = ["webhook_test.go"],
     embed = [":webhook"],
     deps = [
-        "//internal/plugins/types",
+        "//src/control-plane-services/nats-auth-callout/internal/plugins/types",
         "@com_github_stretchr_testify//assert",
         "@org_uber_go_zap//zaptest",
     ],

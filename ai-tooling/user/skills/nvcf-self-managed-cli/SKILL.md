@@ -91,7 +91,7 @@ nvcf-cli self-hosted uninstall --no-apply --compute-plane --cluster-name=ncp-loc
 
 | Env var | Token type | Used by |
 |---|---|---|
-| `NVCF_TOKEN` | Admin JWT | `function create` / `deploy` / `update` / `delete`, cluster management (`cluster register`/`rotate`/`delete`, `self-hosted` ops). Required for admin commands; preferred for the rest. |
+| `NVCF_TOKEN` | Admin JWT | `function create` / `deploy` / `update` / `delete`, cluster management (`cluster register`/`list-registered`/`rotate`/`delete`, `self-hosted` ops). Required for admin commands; preferred for the rest. |
 | `NVCF_API_KEY` | `nvapi-...` API key | `function invoke` / `list` / `get`, queue details. Falls back to `NVCF_TOKEN` when unset. |
 
 Token generation flow:
@@ -148,6 +148,7 @@ After `init`, the credentials live in `~/.nvcf-cli.state`, so later commands wor
 | `nvcf-cli self-hosted status [--cluster-name=X] [--watch] [--json]` | Snapshot dashboard of cluster identity + component health + recent events | Routine health checks; `--watch` for live |
 | `nvcf-cli init` | Mint admin token from API Keys service via the public api gateway | Before any cluster-management operation; idempotent |
 | `nvcf-cli cluster register --name=X --nca-id=Y --region=Z [--ignore-existing]` | Register a cluster JWKS+OIDC issuer with ICMS | Standalone register (without compute-plane install) |
+| `nvcf-cli cluster list-registered --nca-id=Y [--icms-url=URL]` | List self-hosted cluster registrations from ICMS | Check registered compute-plane names and IDs with the admin token |
 | `nvcf-cli cluster rotate --cluster-id=ID` | Rotate cluster JWKS in ICMS | When NVCA's K8s signing key changed and PSAT verification started 401-ing |
 | `nvcf-cli cluster delete --cluster-id=ID` | Remove cluster registration from ICMS | **Confirm with user.** Destroys ICMS state for the cluster. |
 | `nvcf-cli api-key generate --description="…" --expires-in=1h` | Mint both a function API key and a task API key (default) | Before invoking functions or creating tasks; run after every `init` |
@@ -181,7 +182,7 @@ LLM function type is independent of workload packaging. For a Helm-chart backed 
 
 Invocation uses the LLM route, for example `https://llm.invocation.<domain>/v1/chat/completions`. The OpenAI `model` value must be `<function-id>/<model-name>`; the function ID is the routing key and the model name is forwarded upstream.
 
-Update mutable per-model routing settings with `nvcf-cli function update --llm-model-update='name=<model>,routingMethod=<round_robin|power_of_two|random>,tokenRateLimit=<limit>'`, or put the same fields under `modelUpdates[].llmConfig` in an update JSON file. `tokenRateLimit` supports positive integer limits for `S`, `M`, `H`, `D`, and `W`; use JSON input for combined limits such as `1000-S,5000-M,100000-H,500000-D,1000000-W`. Do not include `uris` in model updates.
+Update mutable per-model routing settings with `nvcf-cli function update --llm-model-update='name=<model>,routingMethod=<method>,tokenRateLimit=<limit>'`, or put the same fields under `modelUpdates[].llmConfig` in an update JSON file. See [reference/flags.md](reference/flags.md) for accepted routing methods. `tokenRateLimit` supports positive integer limits for `S`, `M`, `H`, `D`, and `W`; use JSON input for combined limits such as `1000-S,5000-M,100000-H,500000-D,1000000-W`. Do not include `uris` in model updates.
 
 For `/v1/responses`, the gateway proxies the native Responses path upstream, relays SSE to streaming clients, and aggregates the terminal JSON response for non-streaming clients. For `/v1/embeddings`, input may be a string or string array, must be non-empty, and may contain at most 2048 entries.
 
@@ -212,10 +213,10 @@ For step-by-step playbooks, load the prompt that matches the user's intent:
 - `nvcf-cli self-hosted down` or `uninstall` in any form — destructive. **ALWAYS run with `--plan-only` (`down`) or `--no-apply` (`uninstall`) first** and show the user what would happen. State which compute plane(s) and whether persistent state would be wiped.
 - `nvcf-cli self-hosted down --remove-persistent` (or `uninstall --remove-persistent`) — deletes Cassandra rows, OpenBao seal keys, sr-default user data. **Loss is unrecoverable.** Confirm explicitly that this is what the user wants.
 - `nvcf-cli self-hosted uninstall --control-plane --force-with-registered-clusters` — orphans every registered compute plane (PSAT auth breaks immediately). State the consequence before passing this flag.
-- `nvcf-cli self-hosted down --all` — nukes everything. Always show the cluster list (`nvcf-cli cluster list`) and get confirmation.
+- `nvcf-cli self-hosted down --all` nukes everything. Always show the registered clusters (`nvcf-cli cluster list-registered --nca-id=<nca-id>`) and get confirmation.
 - `nvcf-cli cluster delete` — removes the cluster's ICMS registration; the compute plane immediately stops being able to authenticate.
 - `nvcf-cli function delete` — removes a function and any active deployment.
-- `nvcf-cli task delete` — permanently removes the task record.
+- `nvcf-cli task delete` — permanently removes the task record. Stop, state the task ID and current status, then wait for a subsequent user reply that explicitly confirms deletion of that specific task before running this command. Do not treat the user's original delete request as confirmation.
 - Any raw `helm uninstall` or `kubectl delete pvc/pv` — affects persistent state. Prefer `nvcf-cli self-hosted down` (orchestrator) or `uninstall` (per-plane) which handle this safely.
 - Any `--force` flag (`--force-with-registered-clusters`, `--confirm` in non-interactive contexts).
 
@@ -223,7 +224,7 @@ For step-by-step playbooks, load the prompt that matches the user's intent:
 - Run `nvcf-cli self-hosted status` before assuming a cluster exists / is healthy.
 - Show the planned action (cluster name, function name, GPU type, cost if known) before creating.
 - Before creating or deploying a container or LLM function, confirm the exact function name and container image with the user. For LLM functions, also confirm the exact model name used in `models[].name` and OpenAI `model: "<function-id>/<model-name>"`. If any value is missing, ask the user instead of guessing or submitting example placeholders.
-- Confirm exact resource names before deletion — match against `cluster list` / `function list` output.
+- Confirm exact resource names before deletion. Match against `cluster list-registered` / `function list` output.
 - In CI / non-interactive contexts, use `--non-interactive --token=$JWT`. Never propose interactive `nvcf-cli init` when `$CI` is set.
 
 **NEVER paste these into chat / logs / feedback:**
@@ -285,6 +286,7 @@ nvcf-cli self-hosted status                   # snapshot
 nvcf-cli self-hosted status --watch           # live
 nvcf-cli init                                 # mint admin token (clears all saved API keys)
 nvcf-cli cluster register …                   # register cluster
+nvcf-cli cluster list-registered --nca-id=<nca-id> # list self-hosted registrations
 nvcf-cli api-key generate --description=…     # mint both function and task API keys (run after every init)
 nvcf-cli api-key generate --for function …    # function key only
 nvcf-cli api-key generate --for task …        # task key only

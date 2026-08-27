@@ -10,8 +10,8 @@ go_library(
     importpath = "github.com/awslabs/amazon-ecr-credential-helper/ecr-login/config",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/mitchellh/go-homedir",
-        "//vendor/github.com/sirupsen/logrus",
+        "//src/compute-plane-services/nvca/vendor/github.com/mitchellh/go-homedir",
+        "//src/compute-plane-services/nvca/vendor/github.com/sirupsen/logrus",
     ],
 )
 

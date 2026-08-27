@@ -53,26 +53,23 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
   #   --compute-context ${EKS_COMPUTE_CONTEXT}
 
   Background:
-    Given environment variable "NVCF_CLI" is set
-    And environment variable "NGC_API_KEY" is set
-    And environment variable "SAMPLE_NGC_ORG" is set
-    And environment variable "SAMPLE_NGC_TEAM" is set
-    And environment variable "REPO_ROOT" is set
-    And environment variable "EKS_CONTEXT" is set
-    And environment variable "EKS_COMPUTE_CONTEXT" is set
-    And environment variable "EKS_COMPUTE_CLUSTER_NAME" is set
-    And environment variable "EKS_REGION" is set
+    Given these environment variables are set:
+      | name                     |
+      | NVCF_CLI                 |
+      | NGC_API_KEY              |
+      | SAMPLE_NGC_ORG           |
+      | SAMPLE_NGC_TEAM          |
+      | REPO_ROOT                |
+      | EKS_CONTEXT              |
+      | EKS_COMPUTE_CONTEXT      |
+      | EKS_COMPUTE_CLUSTER_NAME |
+      | EKS_REGION               |
     # Helmfile pulls OCI charts through helm, so host-side helm
-    # registry auth must be present before any helmfile sync.
-    # Keep $NGC_API_KEY unbraced so the BDD runner does not expand
-    # the secret into command logs; bash expands it at execution time.
-    And command has succeeded:
-      """
-      bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" | helm registry login nvcr.io --username "\$oauthtoken" --password-stdin'
-      """
+    # Registry authentication must be present before any helmfile sync. The
+    # current API key is passed through sensitive stdin.
+    And Helm is authenticated to OCI registry "nvcr.io" using the current NGC API key
     # Create NGC dockerconfig registry credentials.
-    And I copy the file "deploy/stacks/self-managed/secrets/secrets.yaml.template" to "deploy/stacks/self-managed/secrets/eks-bdd-multi-secrets.yaml"
-    And I substitute "REPLACE_WITH_BASE64_DOCKER_CREDENTIAL" in file "deploy/stacks/self-managed/secrets/eks-bdd-multi-secrets.yaml" with base64 of "$oauthtoken:${NGC_API_KEY}"
+    And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/eks-bdd-multi-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
     # Both clusters must be reachable before we start.
     And I run command "kubectl --context ${EKS_CONTEXT} get nodes -o name"
     And the command exit code should be 0
@@ -131,8 +128,7 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
     #    the agent config. The agent dials the bare-ELB service URLs
     #    (which DNS-resolve) and sends these hostnames as the HTTP Host
     #    header so the control-plane gateway HTTPRoutes match.
-    When I copy the file "deploy/stacks/self-managed/environments/base.yaml" to "deploy/stacks/self-managed/environments/eks-bdd-multi.yaml"
-    And I update yaml file "deploy/stacks/self-managed/environments/eks-bdd-multi.yaml" with keys:
+    When I prepare Helmfile environment "eks-bdd-multi" for stack "self-managed" from fixture "deploy/stacks/self-managed/environments/base.yaml" with values:
       | global.helm.sources.repository                                 | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository                                        | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.imagePullSecrets[0].name                                | nvcr-pull-secret                     |
@@ -163,8 +159,7 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
       | openbao.migrations.issuerDiscovery.enabled                     | true                                 |
     Then yaml file "deploy/stacks/self-managed/environments/eks-bdd-multi.yaml" key "global.domain" should equal "${EKS_GATEWAY_DOMAIN}"
 
-    When I copy the file "deploy/stacks/nvcf-compute-plane/environments/base.yaml" to "deploy/stacks/nvcf-compute-plane/environments/eks-bdd-multi.yaml"
-    And I update yaml file "deploy/stacks/nvcf-compute-plane/environments/eks-bdd-multi.yaml" with keys:
+    When I prepare Helmfile environment "eks-bdd-multi" for stack "nvcf-compute-plane" from fixture "deploy/stacks/nvcf-compute-plane/environments/base.yaml" with values:
       | global.helm.sources.repository                                 | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository                                        | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.imagePullSecrets[0].name                                | nvcr-pull-secret                     |
@@ -197,57 +192,59 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
       When I run command "make -C deploy/stacks/self-managed install HELMFILE_ENV=eks-bdd-multi"
       Then the command exit code should be 0
 
-      When I run command "helm list --all-namespaces --kube-context ${EKS_CONTEXT} -o json"
-      Then the json output should contain rows:
-        | name                      | namespace            | status   |
-        | nats                      | nats-system          | deployed |
-        | cert-manager              | cert-manager         | deployed |
-        | openbao-server            | vault-system         | deployed |
-        | cassandra                 | cassandra-system     | deployed |
-        | api-keys                  | api-keys             | deployed |
-        | sis                       | sis                  | deployed |
-        | api                       | nvcf                 | deployed |
-        | nvct-api                  | nvcf                 | deployed |
-        | invocation-service        | nvcf                 | deployed |
-        | grpc-proxy                | nvcf                 | deployed |
-        | ess-api                   | ess                  | deployed |
-        | notary-service            | nvcf                 | deployed |
-        | admin-issuer-proxy        | api-keys             | deployed |
-        | reval                     | nvcf                 | deployed |
-        | nats-auth-callout-service | nats-system          | deployed |
-        | ingress                   | envoy-gateway-system | deployed |
+      Then these Helm releases should be deployed using context "${EKS_CONTEXT}":
+        | name                      | namespace            |
+        | nats                      | nats-system          |
+        | cert-manager              | cert-manager         |
+        | openbao-server            | vault-system         |
+        | cassandra                 | cassandra-system     |
+        | api-keys                  | api-keys             |
+        | sis                       | sis                  |
+        | api                       | nvcf                 |
+        | nvct-api                  | nvcf                 |
+        | invocation-service        | nvcf                 |
+        | grpc-proxy                | nvcf                 |
+        | ess-api                   | ess                  |
+        | notary-service            | nvcf                 |
+        | admin-issuer-proxy        | api-keys             |
+        | reval                     | nvcf                 |
+        | nats-auth-callout-service | nats-system          |
+        | ingress                   | envoy-gateway-system |
 
       # Confirm gateway-routes templated global.domain into the api
       # HTTPRoute hostname on the control-plane cluster.
-      When I run command "kubectl --context ${EKS_CONTEXT} get httproute nvcf-api -n envoy-gateway -o jsonpath={.spec.hostnames[0]}"
-      Then the command output should contain "api.${EKS_GATEWAY_DOMAIN}"
+      Then Kubernetes resource "HTTPRoute/nvcf-api" in namespace "envoy-gateway" using context "${EKS_CONTEXT}" should contain:
+        """
+        spec:
+          hostnames:
+            - api.${EKS_GATEWAY_DOMAIN}
+        """
 
       # Confirm the optional API GRPCRoutes are accepted and point at
       # resolved backends. These route flags are authored in the EKS env
       # file because worker pods need externally reachable API gRPC
       # endpoints on the compute cluster.
-      When I run command:
-        """
-        kubectl --context ${EKS_CONTEXT} wait grpcroute/nvcf-api-grpc grpcroute/nvct-api-grpc -n envoy-gateway --for=jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}'=True --timeout=2m
-        """
-      Then the command exit code should be 0
-
-      When I run command:
-        """
-        kubectl --context ${EKS_CONTEXT} wait grpcroute/nvcf-api-grpc grpcroute/nvct-api-grpc -n envoy-gateway --for=jsonpath='{.status.parents[0].conditions[?(@.type=="ResolvedRefs")].status}'=True --timeout=2m
-        """
-      Then the command exit code should be 0
+      Then these Gateway API routes should be accepted and resolved using context "${EKS_CONTEXT}" within "2m":
+        | kind      | name          | namespace     | parent       |
+        | GRPCRoute | nvcf-api-grpc | envoy-gateway | nvcf-gateway |
+        | GRPCRoute | nvct-api-grpc | envoy-gateway | nvcf-gateway |
 
       # Confirm Helmfile passed the worker-facing endpoints into the
       # environment ConfigMaps consumed by the API deployments.
-      When I run command "kubectl --context ${EKS_CONTEXT} get configmap nvcf-api-env -n nvcf -o yaml"
-      Then the command output should contain "NVCF_FQDN: http://api.${EKS_GATEWAY_DOMAIN}"
-      And the command output should contain "NVCF_GLOBAL_FQDN_GRPC: http://worker-api.${EKS_GATEWAY_DOMAIN}"
-      And the command output should contain "NVCF_NATS_WORKER_URL: nats://${EKS_GATEWAY_ADDR}:4222"
+      Then Kubernetes resource "ConfigMap/nvcf-api-env" in namespace "nvcf" using context "${EKS_CONTEXT}" should contain:
+        """
+        data:
+          NVCF_FQDN: http://api.${EKS_GATEWAY_DOMAIN}
+          NVCF_GLOBAL_FQDN_GRPC: http://worker-api.${EKS_GATEWAY_DOMAIN}
+          NVCF_NATS_WORKER_URL: nats://${EKS_GATEWAY_ADDR}:4222
+        """
 
-      When I run command "kubectl --context ${EKS_CONTEXT} get configmap nvct-api-env -n nvcf -o yaml"
-      Then the command output should contain "NVCT_FQDN: http://tasks.${EKS_GATEWAY_DOMAIN}"
-      And the command output should contain "NVCT_GLOBAL_FQDN_GRPC: http://worker-tasks.${EKS_GATEWAY_DOMAIN}"
+      Then Kubernetes resource "ConfigMap/nvct-api-env" in namespace "nvcf" using context "${EKS_CONTEXT}" should contain:
+        """
+        data:
+          NVCT_FQDN: http://tasks.${EKS_GATEWAY_DOMAIN}
+          NVCT_GLOBAL_FQDN_GRPC: http://worker-tasks.${EKS_GATEWAY_DOMAIN}
+        """
 
   Rule: Helmfile registers and installs NVCA on the compute EKS cluster
 
@@ -324,8 +321,10 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
         selfManaged:
           identitySource: psat
         """
-      And yaml file "deploy/stacks/nvcf-compute-plane/registration/${EKS_COMPUTE_CLUSTER_NAME}-register-values.yaml" key "clusterID" should not be empty
-      And yaml file "deploy/stacks/nvcf-compute-plane/registration/${EKS_COMPUTE_CLUSTER_NAME}-register-values.yaml" key "clusterGroupID" should not be empty
+      And yaml file "deploy/stacks/nvcf-compute-plane/registration/${EKS_COMPUTE_CLUSTER_NAME}-register-values.yaml" should have non-empty keys:
+        | key            |
+        | clusterID      |
+        | clusterGroupID |
 
       # The register-values URLs stay as cluster register's bare-ELB
       # output. Gateway HTTPRoute matching is handled by the chart-native
@@ -337,26 +336,24 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
         """
       Then the command exit code should be 0
 
-      When I run command "helm list -n nvca-operator --kube-context ${EKS_COMPUTE_CONTEXT} -o json"
-      Then the json output should contain rows:
-        | name          | namespace     | status   |
-        | nvca-operator | nvca-operator | deployed |
+      Then these Helm releases should be deployed using context "${EKS_COMPUTE_CONTEXT}":
+        | name          | namespace     |
+        | nvca-operator | nvca-operator |
 
-      When I run command "kubectl rollout status deployment/nvca-operator -n nvca-operator --context ${EKS_COMPUTE_CONTEXT} --timeout=10m"
-      Then the command exit code should be 0
+      Then deployment "nvca-operator" in namespace "nvca-operator" using context "${EKS_COMPUTE_CONTEXT}" should complete rollout within "10m"
 
       # Wait for the NVCFBackend on the compute cluster to report the
       # agent healthy. The agent reaching ICMS healthy confirms the
       # cross-cluster Host-header + registration wiring works.
-      When I run command "kubectl wait nvcfbackend ${EKS_COMPUTE_CLUSTER_NAME} -n nvca-operator --context ${EKS_COMPUTE_CONTEXT} --for=jsonpath={.status.agentStatus}=healthy --timeout=10m"
-      Then the command exit code should be 0
+      Then NVCFBackend "${EKS_COMPUTE_CLUSTER_NAME}" in namespace "nvca-operator" using context "${EKS_COMPUTE_CONTEXT}" should report agent status "healthy" within "10m"
 
       # The pull secret is created only in nvca-operator; confirm the
       # operator propagated it to nvca-system. Asserting propagation here
       # catches a broken propagation that the node image cache would
       # otherwise mask under imagePullPolicy IfNotPresent.
-      When I run command "kubectl --context ${EKS_COMPUTE_CONTEXT} get secret nvcr-pull-secret -n nvca-system"
-      Then the command exit code should be 0
+      Then these Kubernetes resources should exist in namespace "nvca-system" using context "${EKS_COMPUTE_CONTEXT}":
+        | kind   | name             |
+        | Secret | nvcr-pull-secret |
 
   Rule: Helmfile-installed multi-cluster NVCF can run workloads
 
@@ -370,23 +367,30 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
         kubectl wait nvcfbackend ${EKS_COMPUTE_CLUSTER_NAME} -n nvca-operator --context ${EKS_COMPUTE_CONTEXT} --for=jsonpath={.status.agentStatus}=healthy --timeout=10m
         """
 
-      When I run command:
-        """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/out/nvcf-cli-eks-bdd-multi.yaml function create --name bdd-load-tester-supreme --image nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/load_tester_supreme:0.0.8 --inference-url /echo --inference-port 8000 --health-uri /health --health-port 8000 --health-timeout PT30S
-        """
-      Then the command exit code should be 0
+      And I use NVCF CLI config "${REPO_ROOT}/tests/bdd/out/nvcf-cli-eks-bdd-multi.yaml"
 
-      When I run command:
-        """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/out/nvcf-cli-eks-bdd-multi.yaml function deploy create --gpu H100 --instance-type NCP.GPU.H100_8x --backend ${EKS_COMPUTE_CLUSTER_NAME} --regions ${EKS_REGION} --min-instances 1 --max-instances 1 --timeout 900
-        """
-      Then the command exit code should be 0
+      When I successfully create function "bdd-load-tester-supreme" from image "nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/load_tester_supreme:0.0.8" with CLI options:
+        | option           | value   |
+        | --inference-url  | /echo   |
+        | --inference-port | 8000    |
+        | --health-uri     | /health |
+        | --health-port    | 8000    |
+        | --health-timeout | PT30S   |
 
-      When I run command:
-        """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/out/nvcf-cli-eks-bdd-multi.yaml api-key generate --description bdd-load-tester-supreme --for function --scopes invoke_function,list_functions,queue_details,list_functions_details
-        """
-      Then the command exit code should be 0
+      And I successfully deploy the function selected by NVCF CLI with options:
+        | option          | value                       |
+        | --gpu           | H100                        |
+        | --instance-type | NCP.GPU.H100_8x             |
+        | --backend       | ${EKS_COMPUTE_CLUSTER_NAME} |
+        | --regions       | ${EKS_REGION}               |
+        | --min-instances | 1                           |
+        | --max-instances | 1                           |
+        | --timeout       | 900                         |
+
+      And I successfully generate a function API key with CLI options:
+        | option        | value                                                               |
+        | --description | bdd-load-tester-supreme                                            |
+        | --scopes      | invoke_function,list_functions,queue_details,list_functions_details |
 
       # AWS can briefly return NXDOMAIN for a newly provisioned ELB even after
       # earlier successful lookups. Reconfirm system-resolver stability before
@@ -394,13 +398,14 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
       When I run command "tests/bdd/scripts/wait-for-dns.sh ${EKS_GATEWAY_ADDR} 180"
       Then the command exit code should be 0
 
-      When I run command:
+      When I successfully invoke the function selected by NVCF CLI over HTTP with timeout "120" seconds and poll duration "5" seconds:
         """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/out/nvcf-cli-eks-bdd-multi.yaml function invoke --request-body '{"message":"bdd-echo","repeats":1}' --timeout 120 --poll-duration 5
+        {"message":"bdd-echo","repeats":1}
         """
-      Then the command exit code should be 0
-      And the command output should contain "bdd-echo"
+      Then the command output should contain "bdd-echo"
 
+    # Failing until GitHub issue #1098 is resolved and the fix from GitHub
+    # issue #1032 is consumed by the self-managed stack.
     @nvct-task-api
     Scenario: User launches an NVCT task on the compute cluster and waits for completion
       Given command has succeeded:
@@ -410,7 +415,7 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
 
       When I run command:
         """
-        env NVCT_BDD_STATE_PATH=${HOME}/.nvcf-cli.nvcf-cli-eks-bdd-multi.state NVCT_BDD_API_KEYS_URL=http://${EKS_GATEWAY_ADDR}/v1/keys NVCT_BDD_API_KEYS_HOST=api-keys.${EKS_GATEWAY_DOMAIN} NVCT_BDD_TASKS_URL=http://${EKS_GATEWAY_ADDR}/v1/nvct/tasks NVCT_BDD_TASKS_HOST=tasks.${EKS_GATEWAY_DOMAIN} NVCT_BDD_TASK_BACKEND=${EKS_COMPUTE_CLUSTER_NAME} tests/bdd/scripts/run-nvct-task-smoke.sh
+        env NVCT_BDD_STATE_PATH=${HOME}/.nvcf-cli.nvcf-cli-eks-bdd-multi.state NVCT_BDD_API_KEYS_URL=http://${EKS_GATEWAY_ADDR}/v1/keys NVCT_BDD_API_KEYS_HOST=api-keys.${EKS_GATEWAY_DOMAIN} NVCT_BDD_TASKS_URL=http://${EKS_GATEWAY_ADDR}/v1/nvct/tasks NVCT_BDD_TASKS_HOST=tasks.${EKS_GATEWAY_DOMAIN} NVCT_BDD_TASK_BACKEND=${EKS_COMPUTE_CLUSTER_NAME} NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_8x tests/bdd/scripts/run-nvct-task-smoke.sh
         """
       Then the command exit code should be 0
       And the command output should contain "COMPLETED"

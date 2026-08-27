@@ -7,9 +7,9 @@ go_library(
     importpath = "google.golang.org/protobuf/types/known/structpb",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/google.golang.org/protobuf/encoding/protojson",
-        "//vendor/google.golang.org/protobuf/reflect/protoreflect",
-        "//vendor/google.golang.org/protobuf/runtime/protoimpl",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/encoding/protojson",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/reflect/protoreflect",
+        "//src/compute-plane-services/nvca/vendor/google.golang.org/protobuf/runtime/protoimpl",
     ],
 )
 

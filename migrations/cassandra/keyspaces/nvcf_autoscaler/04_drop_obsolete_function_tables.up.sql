@@ -1,0 +1,3 @@
+DROP TABLE IF EXISTS nvcf_autoscaler.recently_invoked_functions_history;
+DROP TABLE IF EXISTS nvcf_autoscaler.running_functions_without_invocations;
+DROP TABLE IF EXISTS nvcf_autoscaler.running_functions_without_invocations_history;

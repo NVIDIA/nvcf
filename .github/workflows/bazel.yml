@@ -27,9 +27,9 @@ name: bazel
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'release-**']
   pull_request:
-    branches: [main]
+    branches: [main, 'release-**']
   merge_group:
     types: [checks_requested]
   workflow_dispatch:
@@ -52,13 +52,19 @@ concurrency:
   group: bazel-${{ github.ref }}
   cancel-in-progress: true
 
-# NOTE: keep the bazel-ci image tag as a string literal in
-# container.image and any tag-bump bookkeeping. GitHub Actions
-# evaluates job-level `container.image` before the workflow-level
-# `env:` context is reliably available, so referencing
-# `${{ env.BAZEL_CI_IMAGE }}` here causes the matrix to expand to
-# zero jobs on push events (validated empirically; PR-event runs
-# happen to work). The duplication is intentional.
+# The bazel-ci job container comes from the repository variable
+# BAZEL_CI_IMAGE, so the image is bumped in one place (repo settings) instead
+# of being edited in every workflow that runs in it.
+#
+# It must be `vars`, NOT `env`. GitHub Actions evaluates job-level
+# `container.image` before the workflow-level `env:` context is reliably
+# available, so `${{ env.BAZEL_CI_IMAGE }}` made the matrix expand to zero jobs
+# on push events (validated empirically; PR-event runs happened to work). The
+# `vars` context does not have that ordering problem.
+#
+# The `||` fallback keeps CI working if the variable is unset or unavailable
+# (for example on a fork). Keep the fallback in step with the variable; it is a
+# safety net, not the source of truth.
 
 jobs:
   detect:
@@ -74,13 +80,26 @@ jobs:
           fetch-depth: 0
 
       - name: Check Java import boundaries
-        run: bash tools/ci/check-java-import-boundaries
+        run: |
+          bash tools/scripts/test/test-check-java-import-boundaries
+          bash tools/ci/check-java-import-boundaries
+
+      # Behavioral tests for the CI shell this workflow depends on. actionlint
+      # covers syntax; these cover the decisions.
+      - name: Test CI shell helpers
+        run: |
+          bash tools/ci/test-bazel-cache-upload-mode
+          bash tools/ci/test-bazel-remote-probe
+          bash tools/ci/test-bazel-lock-touches-java
+          python3 tools/ci/test-bazel-lock-touches-java-properties
 
       - name: Compute changed subtrees
         id: detect
         env:
           EVENT: ${{ github.event_name }}
           BEFORE_SHA: ${{ github.event.before }}
+          # merge_group has no `before`; its payload carries the queue base.
+          MERGE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
           HEAD_SHA: ${{ github.sha }}
           BASE_REF: ${{ github.base_ref }}
         run: |
@@ -97,33 +116,43 @@ jobs:
           #    rendered template assets (empty-YAML-doc skip + stripSPDXHeaders
           #    in golden comparisons), and the version-adaptive completeJob for
           #    envtest Job completion.
-          #  nvsnap (src/compute-plane-services/nvsnap): intentionally NOT a
-          #    matrix row. It is a self-contained Bazel module whose OCI base is
-          #    its own private agent image (not publicly pullable), so it is not
-          #    externally buildable and is built only by its own internal CI.
-          #    Excluded from the public build pending a public base (NVIDIA/nvcf#39).
+            #  nvsnap (src/compute-plane-services/nvsnap): a root-module row.
+            #    Previously excluded on the grounds that its OCI base was a
+            #    private image; that is no longer true, its bases are public
+            #    and digest-pinned. It builds from the repository root scoped
+            #    to its own subtree, the same shape as the Java components.
+            #    Without a row, a change touching only nvsnap selects no row
+            #    and runs no Bazel, which is how its build stayed broken for
+            #    twelve days.
           # Row fields:
           #   id|path|tests_skip|component_kind|ci_lane
           # Static non-Java rows use only the first three fields.
-          ROWS='root|.|false
-          grpc-proxy|src/invocation-plane-services/grpc-proxy|false
-          nats-auth-callout|src/control-plane-services/nats-auth-callout|false
-          ratelimiter|src/invocation-plane-services/ratelimiter|false
-          http-invocation|src/invocation-plane-services/http-invocation|false
-          llm-api-gateway|src/invocation-plane-services/llm-api-gateway|false
-          vanity-gateway|src/invocation-plane-services/vanity-gateway|false
-          nvca|src/compute-plane-services/nvca|false
-          ess-agent|src/compute-plane-services/ess-agent|false
-          image-credential-helper|src/compute-plane-services/image-credential-helper|false
-          byoo-otel-collector|src/compute-plane-services/byoo-otel-collector|false
-          nvcf-unbound|src/compute-plane-services/nvcf-unbound|false
-          worker-init|src/compute-plane-services/worker-init|false
-          worker-llm-credentials|src/compute-plane-services/worker-llm-credentials|false
-          worker-task|src/compute-plane-services/worker-task|false
-          worker-utils|src/compute-plane-services/worker-utils|false
-          function-autoscaler|src/control-plane-services/function-autoscaler|false
-          helm-reval|src/control-plane-services/helm-reval|false
-          stargate|src/libraries/rust/stargate|false'
+          # Order matters: rows are dispatched top-down and max-parallel caps
+          # how many run at once, so a long row placed late waits for a slot
+          # before it even starts. byoo-otel-collector is the longest row (its
+          # collector genrule dominates the build), so it leads. Keep the
+          # longest-first ordering when adding rows.
+          ROWS='byoo-otel-collector|src/compute-plane-services/byoo-otel-collector|false
+          root|.|false
+          grpc-proxy|src/invocation-plane-services/grpc-proxy|false|go-root|docker-host
+          nats-auth-callout|src/control-plane-services/nats-auth-callout|false|go-root|build-container
+          ratelimiter|src/invocation-plane-services/ratelimiter|false|go-root|build-container
+          http-invocation|src/invocation-plane-services/http-invocation|false|go-root|build-container
+          llm-api-gateway|src/invocation-plane-services/llm-api-gateway|false|go-root|build-container
+          vanity-gateway|src/invocation-plane-services/vanity-gateway|false|go-root|build-container
+          nvca|src/compute-plane-services/nvca|false|go-root|build-container
+          ess-agent|src/compute-plane-services/ess-agent|false|go-root|build-container
+          nvcf-unbound|src/compute-plane-services/nvcf-unbound|false|go-root|build-container
+          worker-init|src/compute-plane-services/worker-init|false|go-root|build-container
+          worker-llm-credentials|src/compute-plane-services/worker-llm-credentials|false|go-root|build-container
+          worker-task|src/compute-plane-services/worker-task|false|go-root|build-container
+          worker-utils|src/compute-plane-services/worker-utils|false|go-root|build-container
+          function-autoscaler|src/control-plane-services/function-autoscaler|false|go-root|build-container
+          helm-reval|src/control-plane-services/helm-reval|false|go-root|build-container
+          stargate|src/libraries/rust/stargate|false|go-root|build-container
+          nvsnap|src/compute-plane-services/nvsnap|false|go-root|build-container
+          image-credential-helper|src/compute-plane-services/image-credential-helper|false|go-root|build-container
+            nvcf-ui|src/uis/nvcf-ui|false|go-root|build-container'
 
           # Java rows are discovered from component-local bazel-java-ci.json
           # descriptors. The descriptor's parent directory is the component
@@ -140,6 +169,10 @@ jobs:
                 exit 1
               fi
             done
+            while IFS= read -r project_pom; do
+              echo "::error file=${project_pom}::Java components are Bazel-only; remove imported project POM"
+              exit 1
+            done < <(find "${path}" -name pom.xml -print)
             id="$(jq -er '.id | select(test("^[a-z0-9][a-z0-9-]*$"))' "$manifest")"
             tests_skip="$(jq -er '.tests_skip | if type == "boolean" then tostring else error("tests_skip must be boolean") end' "$manifest")"
             component_kind="$(jq -er '.component_kind | select(. == "java-framework" or . == "java-service")' "$manifest")"
@@ -160,16 +193,46 @@ jobs:
           # ride the root row: discovered Java components and stargate have
           # their own scoped rows, so src/libraries/ is narrowed to
           # src/libraries/go/.
-          ROOT_GLOBS=(MODULE.bazel .bazelrc .bazelversion BUILD.bazel WORKSPACE WORKSPACE.bazel go.work go.work.bazel rules/ platforms/ tools/ ci/ src/clis/ src/libraries/go/ .github/bazel-root-test-quarantine.txt)
+          ROOT_GLOBS=(MODULE.bazel .bazelignore .bazelrc .bazelversion BUILD.bazel WORKSPACE WORKSPACE.bazel go.work go.work.bazel rules/ platforms/ tools/ ci/ src/clis/ src/libraries/go/ .github/bazel-root-test-quarantine.txt)
 
           run_all=false
           changed=""
+          # The endpoints the path list was derived from. The content checks
+          # below must compare exactly these two revisions, not re-derive a
+          # range of their own, or they could answer about a different diff
+          # than the one that selected the rows.
+          diff_base=""
+          diff_head=""
           case "$EVENT" in
             workflow_dispatch) run_all=true ;;
             pull_request)
               if ! changed=$(git diff --name-only "origin/${BASE_REF}...HEAD" 2>/dev/null); then
                 echo "diff vs origin/${BASE_REF} failed; running full matrix"
                 run_all=true
+              else
+                diff_base=$(git merge-base "origin/${BASE_REF}" HEAD 2>/dev/null || true)
+                diff_head=$(git rev-parse HEAD 2>/dev/null || true)
+              fi
+              ;;
+            merge_group)
+              # `github.event.before` does not exist on merge_group, so without
+              # this branch every queue entry fell through to the default arm
+              # and rebuilt all 24 rows regardless of what the pull request
+              # touched. The queue head is the base plus the queued commits, so
+              # diffing from base_sha yields exactly those changes (and, for a
+              # batched entry, every pull request in the batch).
+              if [ -z "${MERGE_BASE_SHA}" ]; then
+                echo "merge_group base_sha missing; running full matrix"
+                run_all=true
+              elif ! git rev-parse --verify -q "${MERGE_BASE_SHA}^{commit}" >/dev/null 2>&1; then
+                echo "merge_group base ${MERGE_BASE_SHA} not in history; running full matrix"
+                run_all=true
+              elif ! changed=$(git diff --name-only "${MERGE_BASE_SHA}...${HEAD_SHA}" 2>/dev/null); then
+                echo "diff ${MERGE_BASE_SHA}...${HEAD_SHA} failed; running full matrix"
+                run_all=true
+              else
+                diff_base=$(git merge-base "${MERGE_BASE_SHA}" "${HEAD_SHA}" 2>/dev/null || true)
+                diff_head="${HEAD_SHA}"
               fi
               ;;
             *)
@@ -178,6 +241,9 @@ jobs:
               elif ! changed=$(git diff --name-only "${BEFORE_SHA}..${HEAD_SHA}" 2>/dev/null); then
                 echo "diff ${BEFORE_SHA}..${HEAD_SHA} failed (rewritten history?); running full matrix"
                 run_all=true
+              else
+                diff_base="${BEFORE_SHA}"
+                diff_head="${HEAD_SHA}"
               fi
               ;;
           esac
@@ -225,37 +291,124 @@ jobs:
             tools/bazel/java/
             tools/ci/stage-bazel-java-artifacts
           )
+          # Two of these globs fire far more often than they carry Java
+          # meaning, so a path hit on them is confirmed against content before
+          # it schedules all seven Java rows.
+          #
+          # NVIDIA/nvcf#777 is the case: its whole lock delta was one Rust
+          # crate_universe extension and its MODULE.bazel delta was a single
+          # blank line, yet it scheduled every Java row. Those rows run on
+          # GitHub-hosted runners at max-parallel 4 and were the queue entry's
+          # long pole, cloud-functions alone taking 19 minutes, rebuilding from
+          # near scratch because a repin invalidates external repository state.
+          #
+          # Both checks fail closed. Without a usable diff range, or on any
+          # error, the path hit stands and Java runs.
+          java_content_gated() {
+            case "$1" in MODULE.bazel|MODULE.bazel.lock) return 0 ;; *) return 1 ;; esac
+          }
+          java_hit_is_real() {
+            local f="$1"
+            if [ -z "$diff_base" ] || [ -z "$diff_head" ]; then
+              echo "  no diff range for $f; treating as Java-relevant"
+              return 0
+            fi
+            case "$f" in
+              MODULE.bazel)
+                # Whitespace and blank-line edits cannot change resolution.
+                if git diff --quiet --ignore-all-space --ignore-blank-lines \
+                     "$diff_base" "$diff_head" -- MODULE.bazel 2>/dev/null; then
+                  echo "  MODULE.bazel changed only in whitespace; not Java-relevant"
+                  return 1
+                fi
+                return 0
+                ;;
+              MODULE.bazel.lock)
+                local verdict
+                verdict=$(python3 tools/ci/bazel-lock-touches-java "$diff_base" "$diff_head" 2>&1 >/dev/null || true)
+                [ -n "$verdict" ] && echo "  $verdict"
+                if [ "$(python3 tools/ci/bazel-lock-touches-java "$diff_base" "$diff_head" 2>/dev/null)" = "false" ]; then
+                  return 1
+                fi
+                return 0
+                ;;
+            esac
+            return 0
+          }
+
           java_shared_changed=false
           if [ "$run_all" != "true" ]; then
             for g in "${JAVA_SHARED_GLOBS[@]}"; do
+              # The prefix test means the MODULE.bazel glob also matches
+              # MODULE.bazel.lock, so match the gated files exactly and let the
+              # lock be judged by its own entry.
+              if java_content_gated "$g"; then
+                printf '%s\n' "$changed" | grep -qxF "$g" || continue
+                java_hit_is_real "$g" || continue
+                java_shared_changed=true
+                break
+              fi
               if printf '%s\n' "$changed" | awk -v p="$g" 'index($0, p) == 1 { f = 1 } END { exit !f }'; then
                 java_shared_changed=true
                 break
               fi
             done
           fi
+          echo "java_shared_changed=$java_shared_changed"
 
           # Rows with ci_lane=docker-host own requires-docker (Testcontainers)
           # tests. They run directly on the GitHub host where a Docker daemon is
           # available, executing their FULL suite with no tag filter. Such a row
           # is not also placed in the build-container matrix.
-          # NOTE: grpc-proxy also owns a requires-docker test but is a nested Rust
-          # module whose test has never run in CI; wiring+validating it is tracked
-          # separately (NVIDIA/nvcf#396) to keep this change scoped to the Java
-          # subtrees. It stays in the build-container matrix for now (build
-          # coverage).
+          # grpc-proxy owns a requires-docker test (proxy/geo:geo_test) and runs in
+          # this docker-host lane (NVIDIA/nvcf#396).
           include="[]"
           include_docker="[]"
           while IFS='|' read -r id path tests_skip component_kind ci_lane; do
             id="$(echo "$id" | xargs)"; [ -z "$id" ] && continue
             component_kind="$(echo "$component_kind" | xargs)"
             ci_lane="$(echo "$ci_lane" | xargs)"
-            # Discovered Java rows belong to the root module. Existing static
-            # non-Java rows retain their module-local behavior.
+            # Components that belong to the root module build from the
+            # repository root and scope to their own subtree. That was
+            # Java-only until nvsnap joined the root module; the discriminator
+            # is module membership, not language. Nested modules keep their
+            # module-local behavior.
             case "$component_kind" in
-              java-*) workdir="."; scope="//${path}/..."; scoped="root" ;;
-              *)      workdir="$path"; scope="//..."; scoped="" ;;
+              java-*|go-root) workdir="."; scope="//${path}/..."; scoped="root" ;;
+              *)              workdir="$path"; scope="//..."; scoped="" ;;
             esac
+            # The root row owns what no other row claims, and nothing more.
+            #
+            # While every service had its own nested module those subtrees sat
+            # in .bazelignore, so `//...` from the repository root simply could
+            # not see them and the root row naturally covered only root-owned
+            # code. Consolidation removed those entries, which silently turned
+            # the root row into a superset of all eighteen service rows: it
+            # rebuilt and retested every service a second time, on one machine,
+            # with their tests running concurrently.
+            #
+            # That is not merely wasted work. Sixty-eight test packages in this
+            # repository bind literal ports, and they overlap heavily across
+            # services (8080 in fifteen packages, 4222 in twelve). Each was safe
+            # while it had a row to itself. Run together they collide, which is
+            # how vanity-gateway's suite began panicking with
+            # "listen tcp 0.0.0.0:10085: bind: address already in use" while its
+            # own row stayed green.
+            #
+            # Subtracting the rows that own a path restores the invariant that
+            # every target is covered by exactly one row, which removes the
+            # duplicate work and the cross-service concurrency together. Fixing
+            # the hard-coded ports is worth doing on its own merits, but it is a
+            # change to sixty-eight packages and does not belong here.
+            if [ "$id" = "root" ]; then
+              excl=""
+              while IFS='|' read -r _oid opath _ots _ock _ocl; do
+                opath="$(echo "$opath" | xargs)"
+                [ -z "$opath" ] || [ "$opath" = "." ] && continue
+                excl="${excl} -//${opath}/..."
+              done <<< "$ROWS"
+              scope="//... ${excl}"
+            fi
             hit=false
             if [ "$run_all" = "true" ]; then
               hit=true
@@ -309,8 +462,32 @@ jobs:
   bazel:
     name: bazel (${{ matrix.subtree.id }})
     needs: detect
-    if: needs.detect.outputs.any == 'true'
-    runs-on: ubuntu-latest
+    # Guard on THIS lane's matrix, not the combined `any`. A change touching
+    # only docker-host subtrees leaves this matrix empty while `any` is still
+    # true; GitHub cannot create a job from an empty matrix vector and resolves
+    # it to `failure`, not `skipped`, which failed the required check on PRs
+    # that had nothing wrong with them. bazel-docker already guards this way.
+    if: needs.detect.outputs.matrix != '[]'
+    # NVIDIA self-hosted runners (nv-cpu-general), not GitHub-hosted. Access is
+    # granted per repository in nv-gha-runners/enterprise-runner-configuration
+    # and expires, so it must be renewed there.
+    #
+    # This is a capacity change, not a tuning one. On GitHub-hosted runners a
+    # merge-queue entry saw twelve rows start immediately and the rest wait 26
+    # to 31 minutes for a runner, against a slowest row of ~650s: the wall clock
+    # was queueing, not work. cpu16 is also 4x the cores of the hosted runner,
+    # so it shortens the critical path as well as the wait, which matters
+    # because the row is a Bazel build that parallelises well.
+    # NVIDIA policy blocks `pull_request` events on self-hosted runners, since a
+    # fork's pull request could otherwise execute untrusted code inside the
+    # network: the job is accepted and then killed at setup with "Workflows
+    # triggered by pull_request events are not allowed to run on self-hosted
+    # runners". Pull requests therefore stay on GitHub-hosted capacity.
+    #
+    # merge_group and push run trusted, already-reviewed code, and the merge
+    # queue is where the starvation actually hurt: twelve rows waited 26 to 31
+    # minutes for a runner against a slowest row of ~650s.
+    runs-on: ${{ github.event_name == 'pull_request' && 'ubuntu-latest' || 'linux-amd64-cpu16' }}
     # Public EC2 Buildbarn cache (grpcs, bearer-token gated). The token is a
     # repo secret, so fork PRs (which never receive secrets) fall back to a
     # cacheless build automatically. The CA cert is a repo variable (public).
@@ -323,7 +500,7 @@ jobs:
       # Bazelisk then selects the root .bazelversion release. Update this tag
       # only after the corresponding internal image has been published and
       # mirrored.
-      image: ghcr.io/nvidia/nvcf/bazel-ci:0.13.0
+      image: ${{ vars.BAZEL_CI_IMAGE || 'ghcr.io/nvidia/nvcf/bazel-ci:0.14.0' }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -334,7 +511,14 @@ jobs:
       # same instant, tripping GitHub's action-download rate limit (HTTP 429 in
       # "Set up job"). Batching keeps the download burst under that limit;
       # change-aware scheduling already keeps most PRs well below the cap.
-      max-parallel: 8
+      #
+      # Raised 8 -> 12 to shorten full-matrix runs: a recent 25-row merge-queue
+      # run needed three waves at 8 and needs two at 12. The bazel-docker matrix
+      # below contributes 4 more, so simultaneous checkouts peak at 16 rather
+      # than the previous 12. If "Set up job" starts failing with HTTP 429 this
+      # is the first knob to walk back; measure with `tools/ci/ci-health --why`,
+      # which reports queue wait separately from execution time.
+      max-parallel: 12
       matrix:
         subtree: ${{ fromJSON(needs.detect.outputs.matrix) }}
     steps:
@@ -363,16 +547,44 @@ jobs:
         working-directory: ${{ matrix.subtree.workdir }}
         run: bazel version
 
-      - name: Cache Bazel repository + disk caches
+      # Cache identity is keyed on the module, not on the row.
+      #
+      # These paths hold the Bazel install base and the repository cache. No
+      # disk_cache is configured, so their content is a pure function of the
+      # two files hashed below and carries nothing row-specific. Keying on
+      # matrix.subtree.id made sense while every subtree had its own nested
+      # MODULE.bazel: the rows genuinely had different dependency closures.
+      #
+      # They no longer do. Every row that builds from the root module hashes
+      # the same root lock and produces byte-identical content, so keying by id
+      # would store ~22 copies of the same multi-gigabyte entry. GitHub's cache
+      # is 10 GB per repository with LRU eviction, so those copies cannot
+      # coexist: they would evict each other on every run and the cache would
+      # stop working for every branch, not just this one. Root-scoped rows
+      # therefore share a single identity, which is what their content already
+      # implies. The literal `root` row lands on the same key by construction,
+      # since it hashes the same files.
+      #
+      # Concurrent saves to one key are safe: the first writer wins and the rest
+      # no-op. Rows with their own module keep a per-row identity.
+      # Restore on every event, save only from main. GitHub scopes a cache
+      # entry to the ref that wrote it, so a pull_request or merge_group run
+      # writes a copy only that ref can read: used once, then holding quota
+      # until evicted. These entries are 1.5-1.9 GB against a 10 GB repository
+      # limit, so PR-scoped copies evict the main entry every other row is
+      # trying to restore. Runs on any ref can restore from the default branch,
+      # so main-only saves lose no reuse. Same read/write split as the remote
+      # cache in tools/ci/bazel-cache-upload-mode.
+      - name: Restore Bazel repository + disk caches
         if: steps.precheck.outputs.skip == 'false'
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cache/bazel/_bazel_${{ env.USER || 'root' }}/install
             ~/.cache/bazel/_bazel_${{ env.USER || 'root' }}/cache
-          key: bazel-${{ matrix.subtree.id }}-${{ hashFiles(format('{0}/MODULE.bazel.lock', matrix.subtree.workdir), format('{0}/.bazelversion', matrix.subtree.workdir)) }}
+          key: bazel-${{ matrix.subtree.workdir == '.' && 'rootmodule' || matrix.subtree.id }}-${{ hashFiles(format('{0}/MODULE.bazel.lock', matrix.subtree.workdir), format('{0}/.bazelversion', matrix.subtree.workdir)) }}
           restore-keys: |
-            bazel-${{ matrix.subtree.id }}-
+            bazel-${{ matrix.subtree.workdir == '.' && 'rootmodule' || matrix.subtree.id }}-
 
       # byoo-otel-collector's binary is built by a no-sandbox genrule that shells
       # out to `go build` (ocb-generated source) and fetches the whole otel
@@ -380,9 +592,9 @@ jobs:
       # dependency graph and the Bazel cache above, so cache the genrule's Go
       # module + build cache separately, keyed on the collector go.sum, so cold
       # runners restore it instead of re-downloading. See NVIDIA/nvcf#373.
-      - name: Cache byoo-otel-collector Go module cache
+      - name: Restore byoo-otel-collector Go module cache
         if: matrix.subtree.id == 'byoo-otel-collector' && steps.precheck.outputs.skip == 'false'
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             ${{ runner.temp }}/byoo-gomodcache
@@ -415,14 +627,14 @@ jobs:
           if [ -n "$CACHE_TOKEN" ] && [ -n "$CACHE_ENDPOINT" ]; then
             printf '%s\n' "${{ vars.BAZEL_REMOTE_CACHE_CA }}" > "$RUNNER_TEMP/cache-ca.pem"
             echo "CACHE_READY=1" >> "$GITHUB_ENV"
-            # Upload results only from main pushes; every other trigger
-            # (PRs) is read-only so it can never poison the cache.
-            if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; then
-              upload=true
-            fi
+            # Who may write to the shared cache lives in a script so it is
+            # testable and stated once; see tools/ci/bazel-cache-upload-mode
+            # and its test for the rationale and the full event matrix.
+            upload="$(bash "$GITHUB_WORKSPACE/tools/ci/bazel-cache-upload-mode")"
             echo "CACHE_UPLOAD=$upload" >> "$GITHUB_ENV"
             # Make the mode visible in the log so a missing warm-write is never
-            # a silent guess: read-only PRs show upload=false, main pushes true.
+            # a silent guess: read-only PRs show upload=false, merge-queue runs
+            # and main pushes true.
             if [ "$upload" = "true" ]; then
               echo "remote cache ready: read-write (warming; upload=true)"
             else
@@ -459,8 +671,13 @@ jobs:
           tfile="$RUNNER_TEMP/targets.txt"
           # SCOPE is //... for standalone-module rows, and //<path>/...
           # for a root-scoped lane so it builds only its own targets out of the
-          # shared root module.
-          full() { printf '%s\n' "$SCOPE" > "$tfile"; echo "targets: $SCOPE (full build)"; }
+          # shared root module. The root row is several patterns in one string
+          # ("//... -//a/... -//b/..."), because it subtracts every other row's
+          # path. --target_pattern_file takes one pattern per line, so SCOPE is
+          # deliberately unquoted here to word-split; quoting it writes the whole
+          # string as a single line and Bazel rejects it as one invalid package
+          # name. The patterns contain no glob characters, so splitting is safe.
+          full() { printf '%s\n' $SCOPE > "$tfile"; echo "targets: $SCOPE (full build)"; }
 
           # Only the root row on a pull_request is a narrowing candidate. Every
           # other trigger (main push warms + uploads the whole closure; dispatch
@@ -532,6 +749,19 @@ jobs:
           # CACHE holds only the cache-specific flags.
           COMMON=()
           if [ "${{ matrix.subtree.id }}" = "byoo-otel-collector" ]; then
+            # --jobs=1 is a memory guard, not a throughput setting. The
+            # collector genrule is analysed in three configurations (host,
+            # //platforms:linux_x86_64, //platforms:linux_arm64) and each
+            # `go build` of the otelcol module peaks at ~6 GB RSS, so two
+            # concurrent instances would not fit a 16 GB runner. Bazel has no
+            # per-action memory throttle for genrules ("resources:memory:N"
+            # and "cpu:N" execution requirements are ignored outside tests,
+            # and so is "exclusive"), so capping Bazel-side concurrency is the
+            # only lever. Per-build parallelism is set inside the genrule
+            # instead (go build -p $(nproc)), which is ~3x faster on a 4-vCPU
+            # runner at the same peak RSS. Nothing else in this module is
+            # expensive (the row's other ~380 actions are cache hits), so the
+            # cap costs nothing elsewhere.
             COMMON+=(--jobs=1)
             # Persist the collector genrule's Go module + build cache across CI
             # runs so cold runners restore instead of re-downloading the whole
@@ -542,6 +772,18 @@ jobs:
             COMMON+=(--action_env="GOMODCACHE=$RUNNER_TEMP/byoo-gomodcache"
                      --action_env="GOCACHE=$RUNNER_TEMP/byoo-gocache"
                      --action_env="GOPATH=$RUNNER_TEMP/byoo-gopath")
+            # Bind the collector genrule's remote-cache key to the host Go
+            # toolchain. The genrule shells out to the image's `go`, which is
+            # not a declared Bazel input, so without this a toolchain bump in
+            # the bazel-ci image would keep serving collector binaries built by
+            # the previous compiler -- including across a Go security patch.
+            # --action_env values are part of the action key, so feeding the
+            # version string through it turns a toolchain change into a cache
+            # miss and a rebuild. Must match on build AND test.
+            byoo_go="$(command -v go || echo /usr/local/go/bin/go)"
+            byoo_go_ver="$("$byoo_go" version 2>/dev/null || echo unknown)"
+            echo "byoo collector toolchain: $byoo_go_ver"
+            COMMON+=(--action_env="BYOO_GO_TOOLCHAIN=$byoo_go_ver")
           fi
           CACHE=(--remote_cache=)
           if [ "${CACHE_READY:-0}" = "1" ]; then
@@ -550,7 +792,7 @@ jobs:
                    --remote_header="authorization=Bearer $CACHE_TOKEN"
                    --remote_cache_compression
                    --remote_download_all
-                   --remote_timeout=120 --remote_retries=5)
+                   --remote_timeout=600 --remote_retries=5)
             # Force the upload flag explicitly. The root module's .bazelrc pins
             # --config=remote, which sets --remote_upload_local_results=false
             # (internal read-only dev cache). Without overriding it back to true
@@ -604,8 +846,17 @@ jobs:
             # a scope's only tests are requires-docker. Filtering
             # them in the query lets such a scope resolve to empty and skip cleanly,
             # matching the tag filter applied to the run below.
+            #
+            # `manual` is excluded for a different reason. Bazel only honours that
+            # tag when expanding wildcard patterns; naming a target explicitly
+            # runs it regardless. Because this step resolves an explicit label
+            # list and passes it to `bazel test`, every manual-tagged test ran in
+            # CI even though `bazel test //...` skips it locally, so the tag was
+            # silently doing nothing here. Ten test targets across the repo carry
+            # it deliberately, with comments saying why. Honouring it restores
+            # that intent and makes CI agree with a local run.
             tests=$(bazel query --noshow_progress --output=label \
-              "tests(set($patterns)) except attr(tags, 'requires-docker', set($patterns))" 2>/dev/null) || tests="__QFAIL__"
+              "tests(set($patterns)) except attr(tags, 'requires-docker', set($patterns)) except attr(tags, 'manual', set($patterns))" 2>/dev/null) || tests="__QFAIL__"
             if [ "$tests" = "__QFAIL__" ]; then
               echo "tests() query failed; falling back to full test set"
               printf '//...\n' > "$ttfile"
@@ -623,11 +874,19 @@ jobs:
           # Root test quarantine: subtract known-flaky packages (nvcf-go owns the
           # test-layer fix; see the file header and NVIDIA/nvcf#284) from the root
           # row's test set. Negative patterns are appended after the positive
-          # patterns so Bazel removes them from the resolved set. The file lives at
-          # the repo root, so it is present only for the root row (whose working
-          # directory is the repo root); other rows have no such file.
+          # patterns so Bazel removes them from the resolved set.
+          #
+          # The row is matched explicitly. This used to rely on the file simply
+          # not resolving from a subtree working directory, which stopped being
+          # true when every migrated service began building from the repository
+          # root: the quarantine then applied to every root-scoped row. It is
+          # inert today because the patterns do not intersect those scopes, but
+          # a future entry that did would silently stop testing a service with
+          # no signal anywhere. An implicit guard that depends on the working
+          # directory is the same trap as a `manual` tag that only holds under
+          # wildcard expansion, so state the intent instead of inferring it.
           qfile=".github/bazel-root-test-quarantine.txt"
-          if [ -f "$qfile" ]; then
+          if [ "${{ matrix.subtree.id }}" = "root" ] && [ -f "$qfile" ]; then
             n=$(grep -cE '^[[:space:]]*-//' "$qfile" || true)
             grep -E '^[[:space:]]*-//' "$qfile" | sed -E 's/^[[:space:]]+//' >> "$ttfile"
             echo "quarantine: subtracted ${n:-0} pattern(s) from the root test set"
@@ -638,12 +897,19 @@ jobs:
           # deferred to that lane (see the bazel-integration job).
           COMMON=(--flaky_test_attempts=3 --test_tag_filters=-requires-docker)
           if [ "${{ matrix.subtree.id }}" = "byoo-otel-collector" ]; then
+            # Memory guard, not throughput. See the build step for the full
+            # rationale (~6 GB peak RSS per collector build, no per-action
+            # memory throttle for genrules).
             COMMON+=(--jobs=1)
             # Match the build step's --action_env so the collector genrule reuses
-            # the cached Go module/build cache instead of re-running (see #373).
+            # the cached Go module/build cache instead of re-running (see #373),
+            # and so the two steps compute the same action key.
             COMMON+=(--action_env="GOMODCACHE=$RUNNER_TEMP/byoo-gomodcache"
                      --action_env="GOCACHE=$RUNNER_TEMP/byoo-gocache"
                      --action_env="GOPATH=$RUNNER_TEMP/byoo-gopath")
+            byoo_go="$(command -v go || echo /usr/local/go/bin/go)"
+            byoo_go_ver="$("$byoo_go" version 2>/dev/null || echo unknown)"
+            COMMON+=(--action_env="BYOO_GO_TOOLCHAIN=$byoo_go_ver")
           fi
           CACHE=(--remote_cache=)
           if [ "${CACHE_READY:-0}" = "1" ]; then
@@ -652,7 +918,7 @@ jobs:
                    --remote_header="authorization=Bearer $CACHE_TOKEN"
                    --remote_cache_compression
                    --remote_download_all
-                   --remote_timeout=120 --remote_retries=5)
+                   --remote_timeout=600 --remote_retries=5)
             # Force the upload flag explicitly. The root module's .bazelrc pins
             # --config=remote, which sets --remote_upload_local_results=false
             # (internal read-only dev cache). Without overriding it back to true
@@ -691,6 +957,24 @@ jobs:
           path: ${{ runner.temp }}/bazel-java-verification/${{ matrix.subtree.id }}
           if-no-files-found: error
           retention-days: 14
+
+      - name: Save Bazel repository + disk caches
+        if: steps.precheck.outputs.skip == 'false' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/bazel/_bazel_${{ env.USER || 'root' }}/install
+            ~/.cache/bazel/_bazel_${{ env.USER || 'root' }}/cache
+          key: bazel-${{ matrix.subtree.workdir == '.' && 'rootmodule' || matrix.subtree.id }}-${{ hashFiles(format('{0}/MODULE.bazel.lock', matrix.subtree.workdir), format('{0}/.bazelversion', matrix.subtree.workdir)) }}
+
+      - name: Save byoo-otel-collector Go module cache
+        if: matrix.subtree.id == 'byoo-otel-collector' && steps.precheck.outputs.skip == 'false' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ runner.temp }}/byoo-gomodcache
+            ${{ runner.temp }}/byoo-gocache
+          key: byoo-gomod-${{ hashFiles('src/compute-plane-services/byoo-otel-collector/otelcol/go.sum') }}
 
   # Docker-host lane. Each subtree that owns requires-docker
   # (Testcontainers) tests runs its FULL suite (unit + Testcontainers) here, in
@@ -743,15 +1027,17 @@ jobs:
       # Cache Bazel's install base + repository cache (external deps: Maven
       # artifacts, toolchains) across runs. Compiled action outputs come from
       # the remote cache below.
-      - name: Cache Bazel repository + disk caches
-        uses: actions/cache@v4
+      # Restore on every event, save only from main; see the matching comment in
+      # the build-container lane above.
+      - name: Restore Bazel repository + disk caches
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cache/bazel/*/install
             ~/.cache/bazel/*/cache
-          key: bazel-docker-${{ matrix.subtree.id }}-${{ hashFiles(format('{0}/MODULE.bazel.lock', matrix.subtree.workdir), format('{0}/.bazelversion', matrix.subtree.workdir)) }}
+          key: bazel-docker-${{ matrix.subtree.workdir == '.' && 'rootmodule' || matrix.subtree.id }}-${{ hashFiles(format('{0}/MODULE.bazel.lock', matrix.subtree.workdir), format('{0}/.bazelversion', matrix.subtree.workdir)) }}
           restore-keys: |
-            bazel-docker-${{ matrix.subtree.id }}-
+            bazel-docker-${{ matrix.subtree.workdir == '.' && 'rootmodule' || matrix.subtree.id }}-
       # Enable the public EC2 Buildbarn remote cache when the token+endpoint are
       # present. Upload only on main pushes so PRs are read-only and cannot
       # poison the shared cache.
@@ -761,7 +1047,7 @@ jobs:
             printf '%s\n' "$CACHE_CA" > "$RUNNER_TEMP/cache-ca.pem"
             echo "CACHE_READY=1" >> "$GITHUB_ENV"
             upload=false
-            if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF" = "refs/heads/main" ]; then upload=true; fi
+            upload="$(bash "$GITHUB_WORKSPACE/tools/ci/bazel-cache-upload-mode")"
             echo "CACHE_UPLOAD=$upload" >> "$GITHUB_ENV"
             echo "remote cache ready (upload=$upload)"
           else
@@ -777,7 +1063,7 @@ jobs:
                    --tls_certificate="$RUNNER_TEMP/cache-ca.pem"
                    --remote_header="authorization=Bearer $CACHE_TOKEN"
                    --remote_cache_compression --remote_download_all
-                   --remote_timeout=120 --remote_retries=5)
+                   --remote_timeout=600 --remote_retries=5)
             if [ "${CACHE_UPLOAD:-false}" = "true" ]; then
               CACHE+=(--remote_upload_local_results=true)
             else
@@ -813,7 +1099,7 @@ jobs:
                    --tls_certificate="$RUNNER_TEMP/cache-ca.pem"
                    --remote_header="authorization=Bearer $CACHE_TOKEN"
                    --remote_cache_compression --remote_download_all
-                   --remote_timeout=120 --remote_retries=5)
+                   --remote_timeout=600 --remote_retries=5)
             if [ "${CACHE_UPLOAD:-false}" = "true" ]; then
               CACHE+=(--remote_upload_local_results=true)
             else
@@ -855,6 +1141,15 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      - name: Save Bazel repository + disk caches
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/bazel/*/install
+            ~/.cache/bazel/*/cache
+          key: bazel-docker-${{ matrix.subtree.workdir == '.' && 'rootmodule' || matrix.subtree.id }}-${{ hashFiles(format('{0}/MODULE.bazel.lock', matrix.subtree.workdir), format('{0}/.bazelversion', matrix.subtree.workdir)) }}
+
   bazel-verification:
     name: bazel required checks
     needs: [detect, bazel, bazel-docker]
@@ -884,8 +1179,14 @@ jobs:
             exit 0
           fi
 
-          if [ "${BAZEL_RESULT}" != "success" ]; then
-            echo "one or more Bazel matrix rows failed, were cancelled, or were skipped"
+          # `skipped` is legitimate here and means the build-container matrix was
+          # empty, i.e. every selected subtree runs in the docker-host lane. The
+          # job's `if` is tied to that matrix being non-empty, so skipped can
+          # only mean "nothing for this lane to do" -- it cannot hide a row that
+          # should have run. The BAZEL_ANY check above already catches the case
+          # where no subtree was selected at all.
+          if [ "${BAZEL_RESULT}" != "success" ] && [ "${BAZEL_RESULT}" != "skipped" ]; then
+            echo "one or more Bazel matrix rows failed or were cancelled"
             exit 1
           fi
 

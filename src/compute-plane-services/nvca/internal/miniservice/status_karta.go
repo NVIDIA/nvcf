@@ -20,6 +20,7 @@ package mscontroller
 import (
 	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"sort"
@@ -32,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/restmapper"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -88,6 +90,25 @@ func GetKartaObjects(ctx context.Context, clients *kubeclients.KubeClients) (kar
 	return kartas, nil
 }
 
+// validateKartaGVK checks that a Karta root component GVK is addressable. An empty Group is only
+// accepted for core API resources such as v1/Pod, which have no group by definition; any other
+// kind with an empty group is malformed. This mirrors Karta's own root component validation.
+func validateKartaGVK(gvk *kartav1alpha1.GroupVersionKind) error {
+	if gvk == nil {
+		return errors.New("has no root component kind")
+	}
+	if gvk.Version == "" || gvk.Kind == "" {
+		return fmt.Errorf("gvk %q is missing version or kind", *gvk)
+	}
+	if gvk.Group == "" && !clientgoscheme.Scheme.Recognizes(schema.GroupVersionKind{
+		Version: gvk.Version,
+		Kind:    gvk.Kind,
+	}) {
+		return fmt.Errorf("gvk %q has an empty group but is not a core API resource", *gvk)
+	}
+	return nil
+}
+
 func loadKartaDefinitions(ctx context.Context, liveKartas []*kartav1alpha1.Karta) (kartas []*kartav1alpha1.Karta, err error) {
 	log := logf.FromContext(ctx)
 
@@ -98,11 +119,8 @@ func loadKartaDefinitions(ctx context.Context, liveKartas []*kartav1alpha1.Karta
 	kartasByGVKs := map[kartav1alpha1.GroupVersionKind]*kartav1alpha1.Karta{}
 	for _, embeddedKarta := range embeddedKartas {
 		gvk := embeddedKarta.Spec.StructureDefinition.RootComponent.Kind
-		if gvk == nil {
-			return nil, fmt.Errorf("embedded karta %s has no root component kind", embeddedKarta.Name)
-		}
-		if gvk.Group == "" || gvk.Version == "" || gvk.Kind == "" {
-			return nil, fmt.Errorf("embedded karta %s gvk %q is missing group, version, or kind", embeddedKarta.Name, *gvk)
+		if err := validateKartaGVK(gvk); err != nil {
+			return nil, fmt.Errorf("embedded karta %s %w", embeddedKarta.Name, err)
 		}
 		if _, ok := kartasByGVKs[*gvk]; ok {
 			return nil, fmt.Errorf("embedded karta %s has duplicate root component kind %s", embeddedKarta.Name, gvk.Kind)
@@ -110,13 +128,13 @@ func loadKartaDefinitions(ctx context.Context, liveKartas []*kartav1alpha1.Karta
 		log.Info("Adding embedded Karta definition", "gvk", *gvk, "name", embeddedKarta.Name)
 		kartasByGVKs[*gvk] = embeddedKarta
 	}
+	// Live Kartas are cluster-owned and may be installed by anything. Skip malformed ones instead
+	// of failing agent startup over an object we would not use anyway.
 	for i, liveKarta := range liveKartas {
 		gvk := liveKarta.Spec.StructureDefinition.RootComponent.Kind
-		if gvk == nil {
-			return nil, fmt.Errorf("karta %s has no root component kind", liveKarta.Name)
-		}
-		if gvk.Group == "" || gvk.Version == "" || gvk.Kind == "" {
-			return nil, fmt.Errorf("karta %s gvk %q is missing group, version, or kind", liveKarta.Name, *gvk)
+		if err := validateKartaGVK(gvk); err != nil {
+			log.Error(err, "Skipping invalid Karta", "name", liveKarta.Name)
+			continue
 		}
 		if _, ok := kartasByGVKs[*gvk]; ok {
 			log.Info("Overriding embedded Karta definition", "gvk", *gvk, "name", liveKarta.Name)

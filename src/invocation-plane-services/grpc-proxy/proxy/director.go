@@ -6,7 +6,7 @@ Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-    http://www.apache.org/licenses/LICENSE-2.0
+	http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -27,11 +27,14 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
-	nverrors "github.com/NVIDIA/nvcf-go/pkg/nvkit/errors"
+	nverrors "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/errors"
 	"github.com/go-chi/cors"
 	"github.com/google/uuid"
 	"github.com/jellydator/ttlcache/v3"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -54,10 +57,22 @@ type workerAuthInfo struct {
 	requestId         uuid.UUID
 	functionId        string
 	functionVersionId string
+	// mintedAt lets a CONNECT report how old the token was when it arrived,
+	// which is the headroom against consts.Timeout.
+	mintedAt time.Time
+}
+
+// issuedTokenInfo is diagnostic only. It outlives the auth entry so a rejected
+// CONNECT can distinguish a token that expired from one this pod never issued.
+// It grants nothing: authentication still reads workerAuth exclusively.
+type issuedTokenInfo struct {
+	mintedAt time.Time
 }
 
 type StreamDirector struct {
-	workerAuth      *ttlcache.Cache[string, workerAuthInfo] // auth -> request + function info
+	shuttingDown    *atomic.Bool
+	workerAuth      *ttlcache.Cache[string, workerAuthInfo]  // auth -> request + function info
+	issuedTokens    *ttlcache.Cache[string, issuedTokenInfo] // diagnostic only, see issuedTokenInfo
 	workers         *ttlcache.Cache[workerConnectionKey, *worker.WorkerConnection]
 	functionInvoker FunctionInvoker
 	cors            *cors.Cors
@@ -82,6 +97,20 @@ func NewStreamDirector(functionInvoker FunctionInvoker) *StreamDirector {
 		ttlcache.WithDisableTouchOnHit[string, workerAuthInfo](),
 	)
 	go workerAuthCache.Start()
+
+	// Diagnostic record of issued tokens, deliberately outliving the auth
+	// entry so a 403 can distinguish expired from never-issued. Bounded in
+	// size so it cannot grow without limit.
+	issuedTokenCache := ttlcache.New(
+		ttlcache.WithTTL[string, issuedTokenInfo](issuedTokenRetention),
+		ttlcache.WithCapacity[string, issuedTokenInfo](issuedTokenCacheCapacity),
+		ttlcache.WithDisableTouchOnHit[string, issuedTokenInfo](),
+	)
+	go issuedTokenCache.Start()
+
+	// Set immediately before DeleteAll in Close so the eviction handler can
+	// report shutdown rather than attributing a drain to a client or worker.
+	shuttingDown := &atomic.Bool{}
 
 	cache := ttlcache.New(
 		ttlcache.WithTTL[workerConnectionKey, *worker.WorkerConnection](consts.Timeout),
@@ -119,47 +148,189 @@ func NewStreamDirector(functionInvoker FunctionInvoker) *StreamDirector {
 				if connAlreadyExisted {
 					zap.L().Error("worker conn already present in cache, closing new worker conn", zap.Stringer("request id", k.requestId))
 					_ = newWorkerConnection.Close()
+				} else {
+					// Counted here rather than at dial so the open and close
+					// counts balance: eviction fires for every entry that
+					// makes it into the cache.
+					metrics.WorkerConnectionOpenedTotal.Inc()
+					metrics.WorkerConnectionsActive.Inc()
 				}
 				return conn
 			}), nil)),
 	)
 	cache.OnEviction(func(ctx context.Context, reason ttlcache.EvictionReason, i *ttlcache.Item[workerConnectionKey, *worker.WorkerConnection]) {
-		reasonStr := mapEvictionReason(reason)
 		wc := i.Value()
-		zap.L().Debug("worker connection cache eviction triggered",
+		reasonStr := resolveCloseReason(reason, wc, shuttingDown.Load())
+		closedAt := wc.ClosedAt()
+		if closedAt.IsZero() {
+			// No transport-level close was stamped, so this eviction is the
+			// first thing that noticed. Attribute it to now rather than
+			// leaving the field empty.
+			closedAt = time.Now()
+		}
+		// held_for is now measured to the close itself rather than to whenever
+		// this callback ran. The callback can lag the close, so the old value
+		// was the tunnel's lifetime plus an unknown amount of cache latency,
+		// which is precisely the error that makes cross-component correlation
+		// hard. Where no close was stamped the fallback above reproduces the
+		// previous behaviour exactly.
+		heldFor := closedAt.Sub(wc.CreatedAt)
+		closeInfo := worker.ClassifyCloseError(wc.CloseError())
+
+		metrics.WorkerConnectionClosedTotal.WithLabelValues(reasonStr).Inc()
+		metrics.WorkerConnectionCloseCodeTotal.WithLabelValues(closeInfo.Code).Inc()
+		metrics.WorkerConnectionsActive.Dec()
+		metrics.WorkerConnectionDurationSeconds.Observe(heldFor.Seconds())
+
+		// Promoted from debug to info: this is the only place the proxy records
+		// WHY it dropped a worker tunnel, and that question is routinely asked
+		// during incidents. At debug it was unavailable in production exactly
+		// when it was needed. The message text is unchanged so existing log
+		// searches keep working.
+		logFields := []zap.Field{
 			zap.Stringer("request_id", i.Key().requestId),
 			zap.String("eviction_reason", reasonStr),
+			zap.String("raw_eviction_reason", mapEvictionReason(reason)),
+			zap.Duration("held_for", heldFor),
+			// Explicit timestamps: the eviction callback can run measurably
+			// after the transport went away, so the log line's own timestamp
+			// cannot be used to correlate against other components.
+			zap.Time("opened_at", wc.CreatedAt),
+			zap.Time("closed_at", closedAt),
+			// What the transport reported, as opposed to which side tore down.
+			zap.String("close_code", closeInfo.Code),
+			zap.String("local_timeout", localTimeoutFor(reasonStr, closeInfo.Code)),
+		}
+		if closeInfo.Detail != "" {
+			logFields = append(logFields, zap.String("close_detail", closeInfo.Detail))
+		}
+		if closeInfo.Remote != nil {
+			// Only QUIC tells us this. Absence means unknown, not local.
+			logFields = append(logFields, zap.Bool("closed_by_peer", *closeInfo.Remote))
+		}
+		logFields = append(logFields,
 			zap.String("function_id", wc.FunctionId),
 			zap.String("function_version_id", wc.FunctionVersionId))
+
+		zap.L().Info("worker connection cache eviction triggered", logFields...)
+
+		// The eviction context is the cache's own, not the session's, so this
+		// span has no parent to attach to. It carries the request id as an
+		// attribute so a dropped session can still be correlated in tracing
+		// without grepping logs. Name follows the service.operation convention
+		// in AGENTS.md and must stay stable so dashboards do not break.
+		_, span := otel.GetTracerProvider().Tracer("proxy-tracer").Start(ctx, "grpc-proxy.worker_connection_cache_eviction",
+			trace.WithAttributes(
+				attribute.Stringer("request_id", i.Key().requestId),
+				attribute.String("eviction_reason", reasonStr),
+				attribute.Float64("held_for_seconds", heldFor.Seconds()),
+				attribute.String("close_code", closeInfo.Code),
+				attribute.String("close_detail", closeInfo.Detail),
+				attribute.String("local_timeout", localTimeoutFor(reasonStr, closeInfo.Code)),
+				attribute.String("closed_at", closedAt.Format(time.RFC3339Nano)),
+				attribute.String("function_id", wc.FunctionId),
+				attribute.String("function_version_id", wc.FunctionVersionId),
+			))
+		span.End()
+
 		_ = wc.Close()
 	})
 	go cache.Start()
 
 	return &StreamDirector{
 		workers:         cache,
+		shuttingDown:    shuttingDown,
+		issuedTokens:    issuedTokenCache,
 		workerAuth:      workerAuthCache,
 		functionInvoker: functionInvoker,
 		cors:            cors.New(middleware.DefaultCorsOptions),
 	}
 }
 
+// Timer names reported in local_timeout. Only the proxy's own timers can be
+// named here.
+const (
+	localTimeoutNone           = ""
+	localTimeoutWorkerCacheTTL = "worker_cache_ttl"
+	localTimeoutTransportIdle  = "transport_idle"
+	localTimeoutQUICIdle       = "quic_idle"
+)
+
+// localTimeoutFor names which of the proxy's own timers fired, where one did.
+//
+// Deliberately conservative. Timers owned by other components on the path
+// cannot be identified from here, and guessing at them would be worse than
+// saying nothing: close_code still characterises those cases. An empty result
+// means "not one of ours", not "no timer".
+func localTimeoutFor(evictionReason, closeCode string) string {
+	if evictionReason == metrics.CloseReasonTTLExpired {
+		// consts.Timeout on the worker connection cache.
+		return localTimeoutWorkerCacheTTL
+	}
+	switch closeCode {
+	case worker.CloseCodeQUICIdleTimeout:
+		// quic-go's MaxIdleTimeout. Either endpoint can own this, so it is
+		// named but not attributed.
+		return localTimeoutQUICIdle
+	case worker.CloseCodeTimeout:
+		// The HTTP/1 and HTTP/2 transports are configured with consts.Timeout
+		// for idle, read and write. A bare net timeout on this path is one of
+		// those.
+		return localTimeoutTransportIdle
+	}
+	return localTimeoutNone
+}
+
+// resolveCloseReason turns a ttlcache eviction into something actionable.
+// EvictionReasonDeleted on its own is ambiguous: it covers the client hanging
+// up, the worker hanging up, and a proxy drain. Whoever initiated the teardown
+// records an origin on the connection first, so prefer that.
+func resolveCloseReason(reason ttlcache.EvictionReason, wc *worker.WorkerConnection, shuttingDown bool) string {
+	mapped := mapEvictionReason(reason)
+	if mapped != metrics.CloseReasonDeleted {
+		return mapped
+	}
+	if shuttingDown {
+		return metrics.CloseReasonShutdown
+	}
+	if origin := wc.CloseOrigin(); origin != "" {
+		return origin
+	}
+	// A delete with no recorded origin means a teardown path is missing
+	// instrumentation. Left distinguishable on purpose so it is visible.
+	return metrics.CloseReasonDeleted
+}
+
 func mapEvictionReason(reason ttlcache.EvictionReason) string {
 	switch reason {
 	case ttlcache.EvictionReasonExpired:
-		return "ttl_expired"
+		return metrics.CloseReasonTTLExpired
 	case ttlcache.EvictionReasonDeleted:
-		return "deleted"
+		return metrics.CloseReasonDeleted
 	case ttlcache.EvictionReasonCapacityReached:
-		return "capacity_reached"
+		return metrics.CloseReasonCapacity
 	default:
-		return "unknown"
+		return metrics.CloseReasonUnknown
 	}
 }
 
+const (
+	// issuedTokenRetention is how long the diagnostic record of an issued
+	// token is kept. Comfortably longer than consts.Timeout so an expired
+	// token is still recognisable as one we issued.
+	issuedTokenRetention = 15 * time.Minute
+	// issuedTokenCacheCapacity bounds the diagnostic cache.
+	issuedTokenCacheCapacity = 50000
+)
+
 func (s *StreamDirector) Close() error {
+	// Mark first: DeleteAll evicts every entry, and without this those
+	// evictions would be misreported as client or worker initiated.
+	s.shuttingDown.Store(true)
 	s.workers.DeleteAll()
 	s.workers.Stop()
 	s.workerAuth.Stop()
+	s.issuedTokens.Stop()
 	if s.functionInvoker != nil {
 		if closer, ok := s.functionInvoker.(io.Closer); ok {
 			_ = closer.Close()
@@ -354,11 +525,18 @@ func (s *StreamDirector) getAndInitWorkerConnection(ctx context.Context, conn *w
 
 		invokeResponse, cancelInvokingWorker, err := s.functionInvoker.InvokeStatefulFunction(ctx, conn, auth, functionId, functionVersionId, requestId, func(workerAuthToken string, requestId uuid.UUID, apiFunc string, apiFuncVersion string) {
 			// Populate workerAuth cache BEFORE worker is notified (atomicity guarantee)
+			now := time.Now()
 			s.workerAuth.Set(workerAuthToken, workerAuthInfo{
 				requestId:         requestId,
 				functionId:        apiFunc,
 				functionVersionId: apiFuncVersion,
+				mintedAt:          now,
 			}, ttlcache.DefaultTTL)
+			// Diagnostic shadow record, longer lived than the auth entry, so a
+			// later rejection can say "expired N seconds ago" instead of just
+			// "not found". Never consulted when granting access.
+			s.issuedTokens.Set(workerAuthToken, issuedTokenInfo{mintedAt: now}, ttlcache.DefaultTTL)
+			metrics.WorkerTokenIssuedTotal.Inc()
 			// Capture the API response values
 			apiFunctionId = apiFunc
 			apiFunctionVersionId = apiFuncVersion

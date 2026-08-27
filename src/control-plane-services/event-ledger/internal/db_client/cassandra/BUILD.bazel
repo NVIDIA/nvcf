@@ -1,0 +1,57 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "cassandra",
+    srcs = [
+        "common.go",
+        "v1.go",
+        "v2.go",
+    ],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/db_client/cassandra",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//src/control-plane-services/event-ledger/common/core/types",
+        "//src/control-plane-services/event-ledger/internal/config",
+        "//src/control-plane-services/event-ledger/internal/configutil",
+        "//src/control-plane-services/event-ledger/internal/data_access",
+        "//src/control-plane-services/event-ledger/internal/observability/common",
+        "//src/control-plane-services/event-ledger/internal/observability/logging",
+        "//src/control-plane-services/event-ledger/pkg/codex",
+        "//src/control-plane-services/event-ledger/pkg/constants",
+        "@com_github_gocql_gocql//:gocql",
+        "@com_github_google_uuid//:uuid",
+        "@com_github_iancoleman_strcase//:strcase",
+        "@com_github_masterminds_squirrel//:squirrel",
+        "@com_github_uptrace_opentelemetry_go_extra_otelzap//:otelzap",
+        "@io_opentelemetry_go_otel//:otel",
+        "@io_opentelemetry_go_otel//attribute",
+        "@io_opentelemetry_go_otel_trace//:trace",
+        "@org_golang_x_sync//errgroup",
+        "@org_golang_x_sync//semaphore",
+        "@org_uber_go_zap//:zap",
+    ],
+)
+
+alias(
+    name = "go_default_library",
+    actual = ":cassandra",
+    visibility = ["//:__subpackages__"],
+)
+
+go_test(
+    name = "cassandra_test",
+    srcs = [
+        "v2_resilience_test.go",
+        "v2_test.go",
+    ],
+    embed = [":cassandra"],
+    deps = [
+        "//src/control-plane-services/event-ledger/internal/data_access",
+        "//src/control-plane-services/event-ledger/internal/observability/logging",
+        "@com_github_gocql_gocql//:gocql",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+        "@com_github_uptrace_opentelemetry_go_extra_otelzap//:otelzap",
+        "@org_uber_go_zap//:zap",
+    ],
+)

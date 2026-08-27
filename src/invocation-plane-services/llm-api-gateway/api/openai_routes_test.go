@@ -30,6 +30,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/config"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/internal/ptr"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/models"
+	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/nvcf"
 	"github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/provider"
 )
 
@@ -194,6 +195,27 @@ func TestOpenAIChatCompletionsReturnsHeaderSessionID(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatCompletionsReturnsPromptCacheKeySessionID(t *testing.T) {
+	t.Parallel()
+
+	e := newTestAPI(config.Default())
+
+	body := `{"model":"fn-alpha/company-name/model-name","messages":[{"role":"user","content":"hello"}],"prompt_cache_key":"chat-prompt-cache-key"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	req.Header.Set(HeaderMultiTurnSessionID, "chat-header-session")
+	rec := httptest.NewRecorder()
+
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if got := rec.Header().Get(HeaderMultiTurnSessionID); got != "chat-prompt-cache-key" {
+		t.Fatalf("%s = %q, want chat-prompt-cache-key", HeaderMultiTurnSessionID, got)
+	}
+}
+
 func TestOpenAIChatCompletionsReturnsGeneratedSessionIDForPayloadFallback(t *testing.T) {
 	t.Parallel()
 
@@ -257,6 +279,51 @@ func TestOpenAIChatCompletionsStreamReturnsSessionHeader(t *testing.T) {
 	}
 	if got := rec.Header().Get(HeaderMultiTurnSessionID); got != "chat-stream-session" {
 		t.Fatalf("%s = %q, want chat-stream-session", HeaderMultiTurnSessionID, got)
+	}
+}
+
+func TestOpenAIChatCompletionsStreamReturnsPromptCacheKeySessionHeader(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Default()
+	handlers := NewHandlers(
+		cfg,
+		&stubResponsesProvider{
+			streamEvents: []provider.StreamEvent{
+				{
+					Chunk: &models.ChatCompletionChunk{
+						Choices: []models.ChatCompletionChunkChoice{
+							{
+								Delta: models.ChatCompletionChunkDelta{
+									Content: ptr.To("hello"),
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		nil,
+		nil,
+	)
+
+	e := echo.New()
+	e.Use(NewContextMiddleware(cfg))
+	handlers.AsOpenAIChatHandlers().RegisterRoutes(e.Group(""))
+
+	body := `{"model":"fn-alpha/company-name/model-name","messages":[{"role":"user","content":"hello"}],"prompt_cache_key":"chat-stream-prompt-cache-key","stream":true}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+	req.Header.Set(HeaderMultiTurnSessionID, "chat-stream-header-session")
+	rec := httptest.NewRecorder()
+
+	e.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if got := rec.Header().Get(HeaderMultiTurnSessionID); got != "chat-stream-prompt-cache-key" {
+		t.Fatalf("%s = %q, want chat-stream-prompt-cache-key", HeaderMultiTurnSessionID, got)
 	}
 }
 
@@ -390,4 +457,75 @@ func newTestAPI(cfg *config.Config) *echo.Echo {
 		),
 	)
 	return e
+}
+
+func TestChatCompletionsModelURIAllowlist(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		uris       []string
+		enforce    bool
+		wantStatus int
+	}{
+		{
+			name:       "rejects undeclared endpoint when enforced",
+			uris:       []string{"/v1/embeddings"},
+			enforce:    true,
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "allows undeclared endpoint in log mode",
+			uris:       []string{"/v1/embeddings"},
+			enforce:    false,
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "allows declared endpoint",
+			uris:       []string{"/v1/chat/completions"},
+			enforce:    true,
+			wantStatus: http.StatusOK,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := config.Default()
+			cfg.ModelURIAllowlistEnabled = tc.enforce
+			e := echo.New()
+			e.Use(NewContextMiddleware(cfg))
+			e.Use(modelSpecsMiddleware(map[string]nvcf.ModelSpec{
+				"company-name/model-name": {URIs: tc.uris},
+			}))
+			RegisterRoutes(
+				e,
+				NewHandlers(
+					cfg,
+					provider.NewEchoProvider(),
+					nil,
+					nil,
+				),
+			)
+
+			req := httptest.NewRequest(
+				http.MethodPost,
+				"/v1/chat/completions",
+				strings.NewReader(`{"model":"fn-chat/company-name/model-name","messages":[{"role":"user","content":"hello"}]}`),
+			)
+			req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+			rec := httptest.NewRecorder()
+
+			e.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			if tc.wantStatus == http.StatusBadRequest &&
+				!strings.Contains(rec.Body.String(), chatCompletionsEndpointPath) {
+				t.Fatalf("response body missing endpoint: %s", rec.Body.String())
+			}
+		})
+	}
 }

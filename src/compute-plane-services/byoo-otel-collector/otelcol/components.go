@@ -19,10 +19,12 @@ import (
 	filterprocessor "github.com/open-telemetry/opentelemetry-collector-contrib/processor/filterprocessor"
 	k8sattributesprocessor "github.com/open-telemetry/opentelemetry-collector-contrib/processor/k8sattributesprocessor"
 	metricstransformprocessor "github.com/open-telemetry/opentelemetry-collector-contrib/processor/metricstransformprocessor"
+	probabilisticsamplerprocessor "github.com/open-telemetry/opentelemetry-collector-contrib/processor/probabilisticsamplerprocessor"
 	resourcedetectionprocessor "github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor"
 	resourceprocessor "github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourceprocessor"
 	transformprocessor "github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor"
 	k8seventsreceiver "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/k8seventsreceiver"
+	k8sobjectsreceiver "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/k8sobjectsreceiver"
 	prometheusreceiver "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/prometheusreceiver"
 	"go.opentelemetry.io/collector/component"
 	"go.opentelemetry.io/collector/connector"
@@ -84,6 +86,7 @@ func components() (otelcol.Factories, error) {
 		otlpreceiver.NewFactory(),
 		prometheusreceiver.NewFactory(),
 		k8seventsreceiver.NewFactory(),
+		k8sobjectsreceiver.NewFactory(),
 	)
 	if err != nil {
 		return otelcol.Factories{}, err
@@ -92,6 +95,7 @@ func components() (otelcol.Factories, error) {
 		otlpreceiver.NewFactory().Type():       "go.opentelemetry.io/collector/receiver/otlpreceiver v0.157.0",
 		prometheusreceiver.NewFactory().Type(): "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/prometheusreceiver v0.157.0",
 		k8seventsreceiver.NewFactory().Type():  "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/k8seventsreceiver v0.157.0",
+		k8sobjectsreceiver.NewFactory().Type(): "github.com/open-telemetry/opentelemetry-collector-contrib/receiver/k8sobjectsreceiver v0.157.0",
 	})
 
 	factories.Exporters, err = otelcol.MakeFactoryMap[exporter.Factory](
@@ -127,6 +131,7 @@ func components() (otelcol.Factories, error) {
 		resourcedetectionprocessor.NewFactory(),
 		filterprocessor.NewFactory(),
 		metricstransformprocessor.NewFactory(),
+		probabilisticsamplerprocessor.NewFactory(),
 		transformprocessor.NewFactory(),
 		logchunkprocessor.NewFactory(),
 	)
@@ -134,16 +139,17 @@ func components() (otelcol.Factories, error) {
 		return otelcol.Factories{}, err
 	}
 	factories.ProcessorModules = makeModulesMap(factories.Processors, map[component.Type]string{
-		batchprocessor.NewFactory().Type():             "go.opentelemetry.io/collector/processor/batchprocessor v0.157.0",
-		memorylimiterprocessor.NewFactory().Type():     "go.opentelemetry.io/collector/processor/memorylimiterprocessor v0.157.0",
-		attributesprocessor.NewFactory().Type():        "github.com/open-telemetry/opentelemetry-collector-contrib/processor/attributesprocessor v0.157.0",
-		k8sattributesprocessor.NewFactory().Type():     "github.com/open-telemetry/opentelemetry-collector-contrib/processor/k8sattributesprocessor v0.157.0",
-		resourceprocessor.NewFactory().Type():          "github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourceprocessor v0.157.0",
-		resourcedetectionprocessor.NewFactory().Type(): "github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor v0.157.0",
-		filterprocessor.NewFactory().Type():            "github.com/open-telemetry/opentelemetry-collector-contrib/processor/filterprocessor v0.157.0",
-		metricstransformprocessor.NewFactory().Type():  "github.com/open-telemetry/opentelemetry-collector-contrib/processor/metricstransformprocessor v0.157.0",
-		transformprocessor.NewFactory().Type():         "github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor v0.157.0",
-		logchunkprocessor.NewFactory().Type():          "github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/otelcol/logchunkprocessor v0.0.0",
+		batchprocessor.NewFactory().Type():                "go.opentelemetry.io/collector/processor/batchprocessor v0.157.0",
+		memorylimiterprocessor.NewFactory().Type():        "go.opentelemetry.io/collector/processor/memorylimiterprocessor v0.157.0",
+		attributesprocessor.NewFactory().Type():           "github.com/open-telemetry/opentelemetry-collector-contrib/processor/attributesprocessor v0.157.0",
+		k8sattributesprocessor.NewFactory().Type():        "github.com/open-telemetry/opentelemetry-collector-contrib/processor/k8sattributesprocessor v0.157.0",
+		resourceprocessor.NewFactory().Type():             "github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourceprocessor v0.157.0",
+		resourcedetectionprocessor.NewFactory().Type():    "github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor v0.157.0",
+		filterprocessor.NewFactory().Type():               "github.com/open-telemetry/opentelemetry-collector-contrib/processor/filterprocessor v0.157.0",
+		metricstransformprocessor.NewFactory().Type():     "github.com/open-telemetry/opentelemetry-collector-contrib/processor/metricstransformprocessor v0.157.0",
+		probabilisticsamplerprocessor.NewFactory().Type(): "github.com/open-telemetry/opentelemetry-collector-contrib/processor/probabilisticsamplerprocessor v0.157.0",
+		transformprocessor.NewFactory().Type():            "github.com/open-telemetry/opentelemetry-collector-contrib/processor/transformprocessor v0.157.0",
+		logchunkprocessor.NewFactory().Type():             "github.com/NVIDIA/nvcf/src/compute-plane-services/byoo-otel-collector/otelcol/logchunkprocessor v0.0.0",
 	})
 
 	factories.Connectors, err = otelcol.MakeFactoryMap[connector.Factory]()

@@ -1,7 +1,7 @@
 
-Lists of 131 third-party dependencies.
-     (EPL-2.0) (LGPL-2.1-only) Logback Classic Module (ch.qos.logback:logback-classic:1.5.34 - http://logback.qos.ch)
-     (EPL-2.0) (LGPL-2.1-only) Logback Core Module (ch.qos.logback:logback-core:1.5.34 - http://logback.qos.ch)
+Lists of 132 third-party dependencies.
+     (EPL-2.0) (LGPL-2.1-only) Logback Classic Module (ch.qos.logback:logback-classic:1.5.37 - http://logback.qos.ch)
+     (EPL-2.0) (LGPL-2.1-only) Logback Core Module (ch.qos.logback:logback-core:1.5.37 - http://logback.qos.ch)
      (The Apache Software License, Version 2.0) Jackson-annotations (com.fasterxml.jackson.core:jackson-annotations:2.21 - https://github.com/FasterXML/jackson)
      (The Apache Software License, Version 2.0) Jackson-core (com.fasterxml.jackson.core:jackson-core:2.21.4 - https://github.com/FasterXML/jackson-core)
      (The Apache Software License, Version 2.0) jackson-databind (com.fasterxml.jackson.core:jackson-databind:2.21.4 - https://github.com/FasterXML/jackson)
@@ -15,7 +15,7 @@ Lists of 131 third-party dependencies.
      (Apache License, Version 2.0) Guava: Google Core Libraries for Java (com.google.guava:guava:33.6.0-jre - https://github.com/google/guava)
      (The Apache Software License, Version 2.0) Guava ListenableFuture only (com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava - https://github.com/google/guava)
      (Apache License, Version 2.0) J2ObjC Annotations (com.google.j2objc:j2objc-annotations:3.1 - https://github.com/google/j2objc/)
-     (The Apache Software License, Version 2.0) Nimbus JOSE+JWT (com.nimbusds:nimbus-jose-jwt:10.4 - https://bitbucket.org/connect2id/nimbus-jose-jwt)
+     (The Apache Software License, Version 2.0) Nimbus JOSE+JWT (com.nimbusds:nimbus-jose-jwt:10.9.1 - https://bitbucket.org/connect2id/nimbus-jose-jwt)
      (The Apache Software License, Version 2.0) okhttp (com.squareup.okhttp3:okhttp-jvm:5.2.1 - https://square.github.io/okhttp/)
      (The Apache Software License, Version 2.0) okio (com.squareup.okio:okio-jvm:3.16.1 - https://github.com/square/okio/)
      (Apache-2.0) Apache Commons Logging (commons-logging:commons-logging:1.4.0 - https://commons.apache.org/proper/commons-logging/)
@@ -59,9 +59,10 @@ Lists of 131 third-party dependencies.
      (Apache-2.0) Apache Commons Lang (org.apache.commons:commons-lang3:3.20.0 - https://commons.apache.org/proper/commons-lang/)
      (Apache-2.0) Apache Log4j API (org.apache.logging.log4j:log4j-api:2.25.4 - https://logging.apache.org/log4j/2.x/)
      (Apache-2.0) Log4j API to SLF4J Adapter (org.apache.logging.log4j:log4j-to-slf4j:2.25.4 - https://logging.apache.org/log4j/2.x/)
-     (Apache License, Version 2.0) tomcat-embed-core (org.apache.tomcat.embed:tomcat-embed-core:11.0.22 - https://tomcat.apache.org/)
-     (Apache License, Version 2.0) tomcat-embed-el (org.apache.tomcat.embed:tomcat-embed-el:11.0.22 - https://tomcat.apache.org/)
-     (Apache License, Version 2.0) tomcat-embed-websocket (org.apache.tomcat.embed:tomcat-embed-websocket:11.0.22 - https://tomcat.apache.org/)
+     (Apache License, Version 2.0) tomcat-embed-core (org.apache.tomcat.embed:tomcat-embed-core:11.0.24 - https://tomcat.apache.org/)
+     (Apache License, Version 2.0) tomcat-embed-el (org.apache.tomcat.embed:tomcat-embed-el:11.0.24 - https://tomcat.apache.org/)
+     (Apache License, Version 2.0) tomcat-embed-websocket (org.apache.tomcat.embed:tomcat-embed-websocket:11.0.24 - https://tomcat.apache.org/)
+     (Apache License, Version 2.0) tomcat-annotations-api (org.apache.tomcat:tomcat-annotations-api:11.0.24 - https://tomcat.apache.org/)
      (Eclipse Public License - v 2.0) AspectJ Weaver (org.aspectj:aspectjweaver:1.9.25.1 - https://www.eclipse.org/aspectj/)
      (Bouncy Castle Licence) Bouncy Castle Provider (org.bouncycastle:bcprov-jdk18on:1.84 - https://www.bouncycastle.org/download/bouncy-castle-java/)
      (Public Domain, per Creative Commons CC0) (BSD-2-Clause) HdrHistogram (org.hdrhistogram:HdrHistogram:2.2.2 - http://hdrhistogram.github.io/HdrHistogram/)

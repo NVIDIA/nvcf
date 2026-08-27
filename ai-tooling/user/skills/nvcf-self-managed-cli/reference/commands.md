@@ -28,7 +28,7 @@ Full subcommand list. Always pair with [flags.md](flags.md) for global flags and
 | Command | Purpose | Notes |
 |---|---|---|
 | `cluster register --name=X --nca-id=Y [--region=Z] [--ignore-existing]` | Register a JWKS+OIDC with ICMS | Used by `up` Phase 5 internally; standalone for manual registration |
-| `cluster list` | List registered clusters | Output is YAML by default; `--json` for machine |
+| `cluster list-registered --nca-id=Y [--icms-url=URL]` | List self-hosted cluster registrations from ICMS | Uses the admin token; `--json` for machine-readable output |
 | `cluster rotate --cluster-id=ID` | Re-fetch JWKS from K8s and PUT to ICMS | After K8s API server signing key rotation |
 | `cluster delete --cluster-id=ID` | Remove ICMS row | **DESTRUCTIVE: confirm with user** |
 
@@ -40,7 +40,7 @@ Full subcommand list. Always pair with [flags.md](flags.md) for global flags and
 | `function list` / `function list-ids` | List functions / IDs only | |
 | `function get --function-id=ID --version-id=VID` | Function metadata | |
 | `function update --function-id=ID --version-id=VID --tags=TAG[,TAG]` | Update function tags | |
-| `function update --function-id=ID --version-id=VID --llm-model-update=SPEC` | Update LLM model routing config | `SPEC` uses `name=<model>,routingMethod=<round_robin|power_of_two|random>,tokenRateLimit=<limit>`; use JSON for combined token limits |
+| `function update --function-id=ID --version-id=VID --llm-model-update=SPEC` | Update LLM model routing config | `SPEC` uses `name=<model>,routingMethod=<method>,tokenRateLimit=<limit>`; accepted methods are listed in [flags.md](flags.md) |
 | `function deploy create --input-file=FILE` | Schedule a deployment | Blocks until ACTIVE (default 900s) |
 | `function deploy get --function-id=ID --version-id=VID [--json]` | Deployment status | `functionStatus: ACTIVE\|DEPLOYING\|ERROR\|FAILED` |
 | `function deploy update --input-file=FILE` | Modify a deployment in place | |
@@ -62,7 +62,7 @@ Task commands require `NVCF_API_KEY` set to a task-scoped key and `NVCF_BASE_NVC
 | `task events [taskId] [--limit=N]` | List lifecycle events for a task | |
 | `task results [taskId]` | List result artifacts for a completed task | Returns empty list when `resultHandlingStrategy` is `NONE`; result upload not yet supported |
 | `task cancel [taskId]` | Cancel a running task | No-op if already in terminal state |
-| `task delete [taskId]` | Delete a task record | **Confirm with user** |
+| `task delete [taskId]` | Delete a task record | **Stop, state task ID + current status, and wait for a subsequent user reply explicitly confirming deletion of that specific task. Do not treat the original delete request as confirmation.** |
 | `task update-secrets [taskId] --secrets NAME=value` | Update secrets on a task; supplied secrets are added or updated by name, existing secrets not in the request are preserved | Values are encrypted at rest |
 | `task bulk --task-ids=ID1[,ID2,…]` | Fetch details for multiple tasks in one request | |
 

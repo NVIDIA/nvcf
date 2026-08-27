@@ -4,14 +4,14 @@ go_library(
     name = "worker",
     srcs = ["worker.go"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/worker-task/internal/worker",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/worker-task:__subpackages__"],
     deps = [
-        "//configs",
-        "//internal/health",
-        "//internal/progress",
-        "//internal/secrets",
-        "//internal/types",
-        "//internal/upload",
+        "//src/compute-plane-services/worker-task/configs",
+        "//src/compute-plane-services/worker-task/internal/health",
+        "//src/compute-plane-services/worker-task/internal/progress",
+        "//src/compute-plane-services/worker-task/internal/secrets",
+        "//src/compute-plane-services/worker-task/internal/types",
+        "//src/compute-plane-services/worker-task/internal/upload",
         "@com_github_google_uuid//:uuid",
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/logs",
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/servers",
@@ -30,7 +30,7 @@ go_library(
 alias(
     name = "go_default_library",
     actual = ":worker",
-    visibility = ["//:__subpackages__"],
+    visibility = ["//src/compute-plane-services/worker-task:__subpackages__"],
 )
 
 go_test(
@@ -41,9 +41,9 @@ go_test(
     ],
     embed = [":worker"],
     deps = [
-        "//configs",
-        "//internal/progress",
-        "//internal/types",
+        "//src/compute-plane-services/worker-task/configs",
+        "//src/compute-plane-services/worker-task/internal/progress",
+        "//src/compute-plane-services/worker-task/internal/types",
         "@com_github_nvidia_nvcf_src_libraries_go_lib//pkg/nvkit/logs",
         "@com_github_nvidia_nvcf_src_libraries_go_worker//metering",
         "@com_github_nvidia_nvcf_src_libraries_go_worker//nvct",

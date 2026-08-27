@@ -85,12 +85,14 @@ public class WebClientUtils {
 
     /**
      * Creates a WebClient with standard boot-exception status handlers and
-     * a timeout filter using an injected builder.
+     * a timeout filter using an injected builder. The builder is cloned before
+     * any handler or connector is added, so callers may pass one builder to
+     * several {@code createWebClient} calls without stacking configurations.
      */
     public static WebClient createWebClient(WebClient.Builder webClientBuilder,
                                             String baseUrl,
                                             Duration timeout) {
-        return webClientBuilder
+        return webClientBuilder.clone()
                 .baseUrl(baseUrl)
                 .defaultStatusHandler(HttpStatusCode::is4xxClientError,
                                       WebClientUtils::handle4xxError)
@@ -104,6 +106,9 @@ public class WebClientUtils {
      * Creates a WebClient with granular Reactor Netty timeout configuration and
      * optional retry on 5xx / IO errors. Each retry attempt gets its own
      * per-attempt timeout (exchangeTimeout). 4xx errors are never retried.
+     * The builder is cloned before any handler or connector is added, so callers
+     * may pass one builder to several {@code createWebClient} calls without
+     * stacking configurations.
      *
      * @param webClientBuilder injected WebClient builder
      * @param baseUrl         base URL for all requests
@@ -134,7 +139,7 @@ public class WebClientUtils {
                 .doOnConnected(conn -> conn.addHandlerLast(
                         new WriteTimeoutHandler(writeTimeout.toSeconds(), TimeUnit.SECONDS)));
 
-        var builder = webClientBuilder
+        var builder = webClientBuilder.clone()
                 .baseUrl(baseUrl)
                 .clientConnector(new ReactorClientHttpConnector(httpClient))
                 .defaultStatusHandler(HttpStatusCode::is4xxClientError,

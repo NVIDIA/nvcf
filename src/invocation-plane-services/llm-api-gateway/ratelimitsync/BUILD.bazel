@@ -21,10 +21,10 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/invocation-plane-services/llm-gateway/ratelimitsync",
     visibility = ["//visibility:public"],
     deps = [
-        "//config",
-        "//pubsub",
-        "//ratelimit",
-        "//util",
+        "//src/invocation-plane-services/llm-api-gateway/config",
+        "//src/invocation-plane-services/llm-api-gateway/pubsub",
+        "//src/invocation-plane-services/llm-api-gateway/ratelimit",
+        "//src/invocation-plane-services/llm-api-gateway/util",
         "@com_github_nats_io_nats_go//:nats_go",
     ],
 )
@@ -39,5 +39,5 @@ go_test(
     name = "ratelimitsync_test",
     srcs = ["runtime_test.go"],
     embed = [":ratelimitsync"],
-    deps = ["//config"],
+    deps = ["//src/invocation-plane-services/llm-api-gateway/config"],
 )

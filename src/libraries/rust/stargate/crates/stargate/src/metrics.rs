@@ -41,6 +41,7 @@ macro_rules! define_stargate_metrics {
         #[derive(Debug)]
         pub struct StargateMetrics {
             registry: Arc<Registry>,
+            tls_identity: Arc<stargate_tls::TlsIdentityStatus>,
             $($counter: IntCounterVec,)*
             $($histogram: HistogramVec,)*
             $($gauge: IntGaugeVec,)*
@@ -82,6 +83,7 @@ macro_rules! define_stargate_metrics {
                 )*
                 Ok(Self {
                     registry,
+                    tls_identity: stargate_tls::TlsIdentityStatus::new(),
                     $($counter,)*
                     $($histogram,)*
                     $($gauge,)*
@@ -102,6 +104,7 @@ define_stargate_metrics! {
         admission_rejections_total("admission_rejections_total", "Total number of requests rejected by local admission control", ["routing_key", "model", "reason"]);
         quic_connection_evictions_total("quic_connection_evictions_total", "Total number of QUIC connection pool evictions", ["inference_server_id", "reason"]);
         quic_hot_path_reconnect_total("quic_hot_path_reconnect_total", "Total number of direct QUIC reconnects attempted on the proxy hot path", ["inference_server_id", "result"]);
+        tls_reloads_total("tls_reloads_total", "TLS material reload attempts by material type and result", ["material_type", "result"]);
     }
     histograms {
         proxy_replay_buffer_bytes("proxy_replay_buffer_bytes", "Bytes currently retained for proxied request body replay", ["model"], [0.0, 1024.0, 4096.0, 16_384.0, 65_536.0, 262_144.0, 1_048_576.0, 4_194_304.0, 16_777_216.0, 67_108_864.0]);
@@ -110,6 +113,7 @@ define_stargate_metrics! {
     }
     gauges {
         active_inference_servers("active_inference_servers", "Active inference servers available for a routing target", ["routing_key", "model"]);
+        tls_certificate_expiry_seconds("tls_certificate_expiry_seconds", "Unix timestamp when the active TLS certificate expires", ["material_type"]);
     }
 }
 
@@ -138,7 +142,38 @@ impl StargateMetrics {
     }
 
     pub fn new_with_prefix(prefix: &str) -> anyhow::Result<Arc<Self>> {
-        Self::register(prefix).map(Arc::new)
+        let metrics = Arc::new(Self::register(prefix)?);
+        for outcome in stargate_tls::TlsReloadOutcome::ALL {
+            metrics
+                .tls_reloads_total
+                .with_label_values(&[stargate_tls::SERVER_IDENTITY_MATERIAL, outcome.as_str()])
+                .inc_by(0);
+        }
+        Ok(metrics)
+    }
+
+    /// Returns the expiry state the TLS reload task publishes to.
+    pub fn tls_identity(&self) -> Arc<stargate_tls::TlsIdentityStatus> {
+        self.tls_identity.clone()
+    }
+
+    /// Republishes the active expiry to the gauge from the shared status.
+    ///
+    /// The reload task publishes to the status before it reports an outcome, so
+    /// calling this from the outcome hook keeps the gauge and readiness aligned.
+    /// A component serving a generated identity has no expiry, so it publishes
+    /// no series rather than a placeholder timestamp.
+    pub fn refresh_tls_certificate_expiry(&self) {
+        if let Some(not_after) = self.tls_identity.active_expiry_unix_seconds() {
+            self.tls_certificate_expiry_seconds
+                .with_label_values(&[stargate_tls::SERVER_IDENTITY_MATERIAL])
+                .set(not_after);
+        }
+    }
+
+    /// Reports whether the active server identity is still inside its validity window.
+    pub fn tls_identity_is_ready(&self) -> bool {
+        self.tls_identity.is_ready()
     }
 
     pub fn registry(&self) -> Arc<Registry> {
@@ -157,6 +192,7 @@ impl StargateMetrics {
         GenericCounter<AtomicU64>, admission_rejections_total(routing_key: Option<&str>, model: &str, reason: &str) => [routing_key.unwrap_or(""), model, reason];
         GenericCounter<AtomicU64>, quic_connection_evictions_total(inference_server_id: &str, reason: &str) => [inference_server_id, reason];
         GenericCounter<AtomicU64>, quic_hot_path_reconnect_total(inference_server_id: &str, result: &str) => [inference_server_id, result];
+        GenericCounter<AtomicU64>, tls_reloads_total(outcome: stargate_tls::TlsReloadOutcome) => [stargate_tls::SERVER_IDENTITY_MATERIAL, outcome.as_str()];
         Histogram, proxy_replay_buffer_bytes(model: &str) => [model];
         Histogram, proxy_duration_seconds(routing_key: Option<&str>, model: &str, inference_server_id: &str) => [routing_key.unwrap_or(""), model, inference_server_id];
         Histogram, routing_duration_seconds(routing_key: Option<&str>, model: &str) => [routing_key.unwrap_or(""), model];
@@ -243,7 +279,7 @@ mod tests {
             .routing_selections_total(
                 Some("routing-a"),
                 "model-a",
-                "pulsar-multiregion",
+                "pulsar-wait-and-widen",
                 "fallback",
             )
             .inc();
@@ -251,7 +287,7 @@ mod tests {
             .routing_kv_free_token_fallback_selections_total(
                 Some("routing-a"),
                 "model-a",
-                "pulsar-multiregion",
+                "pulsar-wait-and-widen",
             )
             .inc();
 

@@ -123,6 +123,8 @@ func shadowContext(req *http.Request, cancelOnClientDisconnect bool) (context.Co
 }
 
 func recordShadowDispatchSummary(ctx context.Context, targetModels []string, dispatchedCount int, droppedCount int, droppedReasons []string, droppedTargetModels []string) {
+	recordShadowDropMetrics(ctx, droppedReasons, droppedTargetModels)
+
 	span := trace.SpanFromContext(ctx)
 	attrs := []attribute.KeyValue{
 		traceAttrShadowDispatched.Bool(dispatchedCount > 0),

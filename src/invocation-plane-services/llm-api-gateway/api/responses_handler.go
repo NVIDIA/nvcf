@@ -43,7 +43,6 @@ import (
 )
 
 const (
-	responsesEndpointPath       = "/v1/responses"
 	headerResponsesInput        = "X-Input-Tokens"
 	headerResponsesEstimate     = "X-Token-Estimate"
 	headerResponsesRequest      = "X-Request-Id"
@@ -125,7 +124,7 @@ func (h *ResponsesHandlers) prepareNativeResponsesRequest(
 	reqCtx.Model = routedModel
 	setRoutingMethodForModel(reqCtx, routedModel)
 
-	if err := requireResponsesURI(reqCtx, routedModel); err != nil {
+	if err := h.handlers.requireModelURIAllowlist(c, routedModel, responsesEndpointPath, true); err != nil {
 		return nil, nil, err
 	}
 
@@ -179,36 +178,6 @@ func (h *ResponsesHandlers) prepareNativeResponsesRequest(
 		MaxOutputTokens: maxOutputTokens,
 		AdmissionPlan:   admissionPlan,
 	}, outboundBody, nil
-}
-
-func requireResponsesURI(reqCtx *requestctx.RequestContext, model string) error {
-	if reqCtx == nil || reqCtx.ModelSpecs == nil {
-		return nil
-	}
-
-	spec, ok := reqCtx.ModelSpecs[model]
-	if !ok || len(spec.URIs) == 0 {
-		return nil
-	}
-
-	for _, uri := range spec.URIs {
-		if normalizeModelURI(uri) == responsesEndpointPath {
-			return nil
-		}
-	}
-
-	return echo.NewHTTPError(
-		http.StatusBadRequest,
-		fmt.Sprintf("model %q does not support %s", model, responsesEndpointPath),
-	)
-}
-
-func normalizeModelURI(uri string) string {
-	uri = strings.TrimSpace(uri)
-	if uri == "" {
-		return ""
-	}
-	return "/" + strings.TrimPrefix(uri, "/")
 }
 
 func rewriteResponsesProxyBody(body []byte, model string, stream bool) ([]byte, error) {

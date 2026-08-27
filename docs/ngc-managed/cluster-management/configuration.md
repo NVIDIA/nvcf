@@ -753,7 +753,26 @@ BYOO collector debug and log chunking example:
                sizer: bytes
                minSize: 1000000
                maxSize: 1000000
+         logSampling:
+           samplingPercentage: 10
+           mode: hash_seed
+           hashSeed: 1234
+           failClosed: false
+           attributeSource: record
+           fromAttribute: log.id
+           samplingPriority: sampling.priority
+         traceSampling:
+           samplingPercentage: 1
+           mode: hash_seed
+           hashSeed: 1234
+           failClosed: false
 ```
+
+`logSampling` and `traceSampling` configure separate probabilistic samplers.
+Both support `samplingPercentage`, `mode`, `hashSeed`, and `failClosed`.
+`logSampling` also supports `attributeSource`, `fromAttribute`, and
+`samplingPriority`. An unset `mode` uses `hash_seed`. Leave either sampling
+percentage unset to keep that signal unsampled.
 
 BYOO metric subset example:
 
@@ -769,9 +788,12 @@ BYOO metric subset example:
              - 'metric.name != "BpsInstrument"'
        byooWorkloadMetrics:
          dropLabels:
-           - metric_subset_enabled
            - custom_label
 ```
+
+When `byooMetricSubset.enabled` is true, `dropLabels` extends the default
+`metric_subset_enabled` label. The configured labels are removed from both the
+primary metrics pipeline and the metric subset endpoint on port `19091`.
 
 **Apply via Helm:**
 

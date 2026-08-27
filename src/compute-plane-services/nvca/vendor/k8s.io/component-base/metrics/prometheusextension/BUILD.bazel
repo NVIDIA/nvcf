@@ -12,8 +12,8 @@ go_library(
     importpath = "k8s.io/component-base/metrics/prometheusextension",
     visibility = ["//visibility:public"],
     deps = [
-        "//vendor/github.com/prometheus/client_golang/prometheus",
-        "//vendor/github.com/prometheus/client_model/go",
+        "//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_golang/prometheus",
+        "//src/compute-plane-services/nvca/vendor/github.com/prometheus/client_model/go",
     ],
 )
 

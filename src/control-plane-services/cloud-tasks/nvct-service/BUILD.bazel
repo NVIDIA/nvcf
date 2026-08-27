@@ -1,5 +1,12 @@
-load("//rules/java:defs.bzl", "nvct_library", "nvct_library_test")
+load(
+    "//rules/java:defs.bzl",
+    "NVCF_JAVA_ERROR_PRONE_COMPAT_JAVACOPTS",
+    "nvcf_java_coverage_test",
+    "nvcf_java_library",
+    "nvcf_java_test",
+)
 load("//rules/java:spring.bzl", "spring_boot_app")
+load("//rules/oci:defs.bzl", "java_image_contract_test", "java_oci_image")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -23,10 +30,11 @@ NVCT_SERVICE_DEPS = [
     "@nv_third_party_deps//:org_springframework_boot_spring_boot_security",
 ]
 
-nvct_library(
+nvcf_java_library(
     name = "app_classes",
     srcs = NVCT_SERVICE_SRCS,
     deps = NVCT_SERVICE_DEPS,
+    javacopts = NVCF_JAVA_ERROR_PRONE_COMPAT_JAVACOPTS,
     resource_strip_prefix = "src/control-plane-services/cloud-tasks/nvct-service/src/main/resources",
     resources = NVCT_SERVICE_RESOURCES,
     visibility = ["//visibility:private"],
@@ -43,10 +51,10 @@ spring_boot_app(
     main_class = "com.nvidia.nvct.App",
 )
 
-nvct_library_test(
+nvcf_java_test(
     name = "tests",
-    coverage_library = ":app_classes",
     srcs = NVCT_SERVICE_TEST_SRCS,
+    javacopts = NVCF_JAVA_ERROR_PRONE_COMPAT_JAVACOPTS,
     deps = [
         ":app_classes",
         "//src/control-plane-services/cloud-tasks/nvct-core:nvct_core",
@@ -68,9 +76,63 @@ nvct_library_test(
         "//src/control-plane-services/cloud-tasks:integration_local_env",
     ],
     resources = NVCT_SERVICE_TEST_RESOURCES,
+    size = "large",
     tags = [
         "exclusive",
+        "external",
         "requires-docker",
     ],
     timeout = "long",
+)
+
+nvcf_java_coverage_test(
+    name = "tests_coverage",
+    coverage_target = ":app_classes",
+    size = "large",
+    tags = [
+        "exclusive",
+        "external",
+        "requires-docker",
+    ],
+    test = ":tests",
+    timeout = "long",
+)
+
+# Release image. Push the _index label (multi-arch amd64 + arm64), never
+# :nvct-service-oss-image, which is the single host-arch image.
+#
+# Runtime parity with the pre-Bazel nvct-service/Dockerfile, which is the
+# contract this image must preserve:
+#   COPY app.jar /usr/share/app.jar
+#   ENV ULIMIT_FLAG=1
+#   ENV JDK_JAVA_OPTIONS="-XX:MaxRAMPercentage=40.0 ..."
+#   WORKDIR /home/app
+#   CMD ["java", "-jar", "/usr/share/app.jar"]
+#
+# ULIMIT_FLAG is load-bearing, not decoration: the base's shelless_ulimit shim
+# reads it, so without it the shim runs and raises nothing. JDK_JAVA_OPTIONS
+# carries the container heap sizing (MaxRAMPercentage), so dropping it silently
+# changes JVM memory behavior in production.
+java_oci_image(
+    name = "nvct-service-oss-image",
+    jar = ":app",
+    jar_path = "/usr/share/app.jar",
+    env = {
+        "ULIMIT_FLAG": "1",
+        "JDK_JAVA_OPTIONS": "-XX:MaxRAMPercentage=40.0 -XX:+EnableDynamicAgentLoading -Dreactor.netty.pool.maxIdleTime=30000 -Dreactor.netty.pool.maxConnections=500",
+    },
+    workdir = "/home/app",
+)
+
+# Runtime-contract guard for the image, shared with every other Java service
+# so the assertions cannot drift apart between them.
+java_image_contract_test(
+    name = "image_contract_test",
+    image = ":nvct-service-oss-image",
+    jar_path = "/usr/share/app.jar",
+    env = {
+        "ULIMIT_FLAG": "1",
+        "JDK_JAVA_OPTIONS": "-XX:MaxRAMPercentage=40.0 -XX:+EnableDynamicAgentLoading -Dreactor.netty.pool.maxIdleTime=30000 -Dreactor.netty.pool.maxConnections=500",
+    },
+    workdir = "/home/app",
 )

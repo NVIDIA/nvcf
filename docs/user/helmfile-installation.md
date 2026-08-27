@@ -170,6 +170,11 @@ workers in a compute cluster to reach grpc-proxy in the control-plane cluster,
 complete [gRPC Invocation Enablement](./grpc-invocation-enablement.md) before
 you deploy or sync the control plane.
 
+Remote LLM workers use separate gRPC and reverse QUIC paths. Complete
+[LLM worker listeners](./gateway-routing.md#llm-worker-listeners) and
+[Remote compute clusters and regions](./llm-function-enablement.md#remote-compute-clusters-and-regions)
+before applying the control plane.
+
 <Warning>
 The Gateway address is embedded throughout your deployment. The `domain` value
 in your environment file, the Gateway API HTTPRoutes/TCPRoutes, and service
@@ -241,6 +246,11 @@ global:
     # ECR Example:
     # registry: <your-account-id>.dkr.ecr.<your-region>.amazonaws.com
     # repository: <your-ecr-repository-name>
+
+  workerEndpoints:
+    # Optional. Empty uses the cluster-local request-router service. Set a
+    # worker-reachable host and port for a split-cluster deployment.
+    llmRequestRouterAddress: ""
 
   nodeSelectors:
     enabled: true # Set true when using dedicated node labels for NVCF workloads
@@ -326,6 +336,13 @@ ingress:
         listenerName: tcp
 ```
 
+When `addons.llm` is enabled, the stack defaults
+`global.workerEndpoints.llmRequestRouterAddress` to
+`llm-request-router.nvcf.svc.cluster.local:50071`. Colocated workers require no
+additional configuration. For a split deployment, this address alone is not
+enough. Configure the paired backend-router gRPC and reverse QUIC dial
+addresses, Gateway routes, DNS, and trust described in
+[Remote compute clusters and regions](./llm-function-enablement.md#remote-compute-clusters-and-regions).
 
 #### `domain` and `ingress` Configuration
 
@@ -1054,7 +1071,8 @@ stack packages that include the NVCF UI addon. If your extracted stack
 package does not contain a `nvcf-ui` release and `nvcfUi` route
 values, skip this section until you use a stack package that includes them.
 
-Enable it only when you need a customer-facing NVCF admin-panel UI
+Enable it only when you need a customer-facing NVCF admin-panel UI.
+For a standalone walkthrough, see [Enabling NVCF UI](./nvcf-ui.md).
 
 <Warning>
 The NVCF UI admin panel is currently unauthenticated. Do not expose it to the
@@ -1270,7 +1288,7 @@ cluster identity values that the operator chart consumes.
 Use `KUBECONFIG_FILE` for multi-cluster installs. It makes both registration and
 Helmfile target the GPU cluster instead of the control-plane cluster.
 For a complete Amazon EKS example, see the
-[CSP End-to-End Example](https://docs.nvidia.com/nvcf/v0.6.0/csp-end-to-end-example).
+[CSP End-to-End Example](./csp-end-to-end-example-installation.md).
 
 The compute-plane Makefile runs `nvcf-cli init` before `cluster register`. Point
 `NVCF_CLI_CONFIG` at a CLI config that can reach the control-plane gateway.
