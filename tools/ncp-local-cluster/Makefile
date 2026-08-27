@@ -559,7 +559,7 @@ build:
 	@mkdir -p $(OUTPUT_DIR)
 	cd $(GO_PROVIDER_PATH) && CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) go build -ldflags='-s -w -extldflags "-static"' -o ../$(PROVIDER_OUTPUT_PATH) ./cmd/$(BINARY_NAME)/main.go
 
-test: test-cluster-lifecycle-make ## Run automated tests with Go coverage summary
+test: ## Run Go tests with coverage summary
 	$(call require,go,See https://go.dev/doc/install)
 	@echo "Running Go tests with coverage inside $(GO_PROVIDER_PATH)..."
 	cd $(GO_PROVIDER_PATH) && go test -race -cover -coverprofile=coverage.out ./... && go tool cover -func=coverage.out

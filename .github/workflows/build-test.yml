@@ -130,6 +130,11 @@ jobs:
         with:
           go-version-file: tools/go-toolchain/go.mod
 
+      - name: Run ncp-local-cluster Makefile tests
+        run: |
+          make -C tools/ncp-local-cluster test-cluster-lifecycle-make
+          make -C tools/ncp-local-cluster test-multicluster-make
+
       # The repo tooling modules carry tests that no workflow ran, so a pull
       # request could break them and still go green. tools/docs-version-sync
       # reached main with three failing tests that way.
