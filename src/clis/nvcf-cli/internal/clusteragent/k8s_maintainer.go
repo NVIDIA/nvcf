@@ -510,14 +510,20 @@ func (m *k8sMaintainer) killMatching(ctx context.Context, target *ClusterTarget,
 			FunctionVersionID: vid,
 		}
 		if !opts.DryRun {
-			// Best-effort: deleting the ICMSRequest CR alone never evicts the
-			// workload (see evictInstances doc comment), so drive the real
-			// eviction ourselves before asking NVCA's reconcile to notice.
-			// A failure here (e.g. missing RBAC) is not fatal on its own;
-			// deleteICMSRequest's poll below will honestly report
-			// "terminating" if the workload is still running as a result.
+			// Deleting the ICMSRequest CR alone never evicts the workload
+			// (see evictInstances doc comment), so drive the real eviction
+			// ourselves first. A failure here must stop this item rather
+			// than fall through to delete: with --force in particular,
+			// proceeding would strip the finalizer and report success while
+			// the workload (pod or MiniService) may still be running.
 			if err := m.evictInstances(ctx, killed.Namespace, &items[i]); err != nil {
-				logging.Warning("failed to evict instances for %s/%s: %v", killed.Namespace, killed.Name, err)
+				logging.Warning("failed to evict instances for ICMSRequest %s/%s (function=%s version=%s cluster=%s): %v",
+					killed.Namespace, killed.Name, killed.FunctionID, killed.FunctionVersionID, clusterLabel(target), err)
+				killed.Error = fmt.Sprintf("evicting instances: %v", err)
+				result.FailedCount++
+				failures = append(failures, fmt.Errorf("%s/%s: evicting instances: %w", killed.Namespace, killed.Name, err))
+				result.Affected = append(result.Affected, killed)
+				continue
 			}
 			terminating, err := m.deleteICMSRequest(ctx, killed.Namespace, killed.Name, opts.Force, timeout)
 			switch {
@@ -543,9 +549,9 @@ func (m *k8sMaintainer) killMatching(ctx context.Context, target *ClusterTarget,
 	return result, failures, nil
 }
 
-// evictInstances directly terminates the Pod-type instances an ICMSRequest
-// tracks in status.instances, and marks each one lastReportedStatus:
-// "terminated" on that same CR.
+// evictInstances directly terminates the instances an ICMSRequest tracks in
+// status.instances (Pod or MiniService), and marks each one
+// lastReportedStatus: "terminated" on that same CR.
 //
 // Deleting the ICMSRequest CR alone never evicts the workload: the NVCA
 // reconciler's deletion-handling branch is a passive gate that only removes
@@ -560,30 +566,56 @@ func (m *k8sMaintainer) killMatching(ctx context.Context, target *ClusterTarget,
 //
 // Performing both steps here satisfies the reconciler's own precondition, so
 // its existing, unmodified logic clears the finalizer itself on its next
-// pass. MiniService (Helm function) instances are left untouched: the CLI
-// has no existing support for evicting those directly.
+// pass.
+//
+// MiniService (Helm function) instances differ from Pod instances: deleting
+// the MiniService object is itself sufficient to drive real teardown (its
+// own controller, internal/miniservice/reconcile.go, actively deletes the
+// rendered chart's objects, namespace, and cache entries on deletion, unlike
+// ICMSRequest's passive gate), so no separate resource-deletion step is
+// needed beyond the Delete call. The lastReportedStatus patch below is still
+// required for both instance types: AllInstancesTerminatedAndReported checks
+// it after the pod/MiniService-existence check regardless of type.
 func (m *k8sMaintainer) evictInstances(ctx context.Context, namespace string, obj *unstructured.Unstructured) error {
 	instances, found, err := unstructured.NestedMap(obj.Object, "status", "instances")
-	if err != nil || !found || len(instances) == 0 {
+	if err != nil {
+		return fmt.Errorf("reading status.instances: %w", err)
+	}
+	if !found || len(instances) == 0 {
 		return nil
 	}
 
 	var errs []error
-	terminated := map[string]interface{}{}
+	terminated := map[string]string{}
 	for id, raw := range instances {
 		inst, ok := raw.(map[string]interface{})
 		if !ok {
 			continue
 		}
-		if instanceType, _, _ := unstructured.NestedString(inst, "instanceType"); instanceType != "" && instanceType != "Pod" {
+		// instanceType is the current field; type is a legacy alias some
+		// older records still carry (see extractInstances in
+		// k8s_inspector.go, which reads both for the same reason).
+		instanceType, _, _ := unstructured.NestedString(inst, "instanceType")
+		if instanceType == "" {
+			instanceType, _, _ = unstructured.NestedString(inst, "type")
+		}
+		var delErr error
+		switch instanceType {
+		case "", "Pod":
+			delErr = m.cs.CoreV1().Pods(namespace).Delete(ctx, id, metav1.DeleteOptions{})
+		case "MiniService":
+			// Cluster-scoped: no .Namespace(...).
+			delErr = m.dc.Resource(miniServiceGVR).Delete(ctx, id, metav1.DeleteOptions{})
+		default:
+			// Unrecognized instance type: leave it for NVCA's own reconcile
+			// rather than guessing which resource kind to delete.
 			continue
 		}
-		if err := m.cs.CoreV1().Pods(namespace).Delete(ctx, id, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-			errs = append(errs, fmt.Errorf("deleting pod %s: %w", id, err))
+		if delErr != nil && !apierrors.IsNotFound(delErr) {
+			errs = append(errs, fmt.Errorf("deleting %s instance %s: %w", firstNonEmpty(instanceType, "Pod"), id, delErr))
 			continue
 		}
-		inst["lastReportedStatus"] = "terminated"
-		terminated[id] = inst
+		terminated[id] = "terminated"
 	}
 	if len(terminated) == 0 {
 		return errors.Join(errs...)
@@ -601,8 +633,17 @@ func (m *k8sMaintainer) evictInstances(ctx context.Context, namespace string, ob
 		if existing == nil {
 			existing = map[string]interface{}{}
 		}
-		for id, v := range terminated {
-			existing[id] = v
+		// Merge lastReportedStatus into whatever is currently on the
+		// server, rather than overwriting the whole instance record with
+		// the pre-eviction snapshot: NVCA may have concurrently updated
+		// other instance fields (attributes, timestamps) since obj was read.
+		for id, status := range terminated {
+			cur, ok := existing[id].(map[string]interface{})
+			if !ok {
+				cur = map[string]interface{}{"id": id}
+			}
+			cur["lastReportedStatus"] = status
+			existing[id] = cur
 		}
 		if err := unstructured.SetNestedMap(latest.Object, existing, "status", "instances"); err != nil {
 			return err

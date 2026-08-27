@@ -1757,20 +1757,20 @@ the desired state.
 ### How kill works
 
 `kill-function` and `kill-all` terminate the matching `ICMSRequest`'s
-Pod-type instances directly, mark them terminated on the CR, then delete the
-CR. Deleting the CR alone never evicts the workload: NVCA's reconciler only
-clears the CR's finalizer once its own `status.instances` shows every
-instance gone and reported terminated, and nothing else in NVCA ever
-produces that for a CLI-initiated kill. Performing the eviction and status
-update directly satisfies that precondition, so NVCA's own reconcile clears
-the finalizer on its next pass. The command polls for the CR to actually
-disappear before reporting success: a request removed within `--timeout`
-(default 60s) is reported `deleted`, and one still present when the timeout
-elapses is reported `terminating` instead, with a non-zero exit code.
-`--force` additionally strips finalizers so a request stuck `Terminating` is
-removed even when NVCA is not running to process its finalizer. MiniService
-(Helm function) instances are not evicted directly; only Pod-type instances
-are.
+instances directly (deleting the Pod for a container function, or the
+`MiniService` object for a Helm function), mark them terminated on the CR,
+then delete the CR. Deleting the CR alone never evicts the workload: NVCA's
+reconciler only clears the CR's finalizer once its own `status.instances`
+shows every instance gone and reported terminated, and nothing else in NVCA
+ever produces that for a CLI-initiated kill. Performing the eviction and
+status update directly satisfies that precondition, so NVCA's own reconcile
+clears the finalizer on its next pass. The command polls for the CR to
+actually disappear before reporting success: a request removed within
+`--timeout` (default 60s) is reported `deleted`, and one still present when
+the timeout elapses is reported `terminating` instead, with a non-zero exit
+code. `--force` additionally strips finalizers so a request stuck
+`Terminating` is removed even when NVCA is not running to process its
+finalizer.
 
 ### Confirmation and safety
 
@@ -1793,8 +1793,8 @@ These commands need write access to the target cluster: list/update on the
 `NVCFBackend` CR for drain (plus read access to the `agent-config` ConfigMap
 and the `nvca` Deployment, to wait for the NVCA operator's rollout), and for
 kill, list/delete (and update, with `--force`) on `ICMSRequest` CRs, update on
-the `ICMSRequest` status subresource, and delete on Pods in the requests
-namespace.
+the `ICMSRequest` status subresource, delete on Pods in the requests
+namespace, and delete on `MiniService` CRs (cluster-scoped).
 
 ### Examples
 

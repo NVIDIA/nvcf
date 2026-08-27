@@ -39,6 +39,10 @@ var (
 	icmsRequestGVR = schema.GroupVersionResource{
 		Group: "nvca.nvcf.nvidia.io", Version: "v2beta1", Resource: "icmsrequests",
 	}
+	// miniServiceGVR is cluster-scoped, unlike NVCFBackend/ICMSRequest.
+	miniServiceGVR = schema.GroupVersionResource{
+		Group: "nvca.nvcf.nvidia.io", Version: "v1alpha1", Resource: "miniservices",
+	}
 )
 
 // k8sInspector reads NVCA state from a compute-plane cluster's Kubernetes API
