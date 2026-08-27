@@ -99,6 +99,36 @@ func TestRootCAPEMFromOpenBaoResponsePreservesCertificateErrors(t *testing.T) {
 	}
 }
 
+func TestReadPKICertificatePEMRetriesMalformedResponse(t *testing.T) {
+	responses := []string{
+		"Internal Server Error",
+		`{"data":{"certificate":"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"}}`,
+	}
+	attempt := 0
+
+	got, err := readPKICertificatePEM(nil, len(responses), 0, func(context.Context) (string, error) {
+		response := responses[attempt]
+		attempt++
+		return response, nil
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, openBaoTestCertPEM, got)
+	assert.Equal(t, len(responses), attempt)
+}
+
+func TestReadPKICertificatePEMDoesNotRetryOpenBaoError(t *testing.T) {
+	attempt := 0
+
+	_, err := readPKICertificatePEM(context.Background(), 3, 0, func(context.Context) (string, error) {
+		attempt++
+		return `{"errors":["permission denied"]}`, nil
+	})
+
+	require.Error(t, err)
+	assert.Equal(t, 1, attempt)
+}
+
 func TestKubectlOutputMetadataDoesNotExposeCertificate(t *testing.T) {
 	metadata := kubectlOutputMetadata(openBaoTestCertPEM)
 
