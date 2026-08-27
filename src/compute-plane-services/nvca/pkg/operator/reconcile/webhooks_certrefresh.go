@@ -199,10 +199,20 @@ func (bc *BackendK8sCache) reusableWebhookCert(
 		log.Info("Generating webhook TLS certs: stored CA cert is outside its validity window")
 		return WebhookCert{}, false, nil
 	}
-	// The serving cert and CA are always written together, so a broken chain means
-	// the stored material is inconsistent; regenerate a matching pair to repair it.
-	if err := servingCert.CheckSignatureFrom(caCert); err != nil {
-		log.WithError(err).Info("Generating webhook TLS certs: stored server cert is not signed by the stored CA")
+	// Verify the serving cert chains to the stored CA, is still valid for the
+	// expected service DNS name, and carries server-auth usage. A stored pair that
+	// fails any of these (broken chain, stale SAN after a cluster/namespace config
+	// change, or a corrupted cert) is unusable and must be regenerated rather than
+	// reused, otherwise real TLS verification fails downstream.
+	roots := x509.NewCertPool()
+	roots.AddCert(caCert)
+	if _, err := servingCert.Verify(x509.VerifyOptions{
+		Roots:       roots,
+		CurrentTime: now,
+		DNSName:     getTLSDNSNames(nb)[0],
+		KeyUsages:   []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}); err != nil {
+		log.WithError(err).Info("Generating webhook TLS certs: stored server cert failed verification against the stored CA")
 		return WebhookCert{}, false, nil
 	}
 	// A stored cert/key pair that doesn't actually match is unusable by the webhook

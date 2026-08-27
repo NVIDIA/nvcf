@@ -278,6 +278,108 @@ func TestEnsureWebhookCert_RegeneratesMismatchedKey(t *testing.T) {
 	assert.NoError(t, servingCert.CheckSignatureFrom(caCert))
 }
 
+// A serving cert whose SAN no longer matches the webhook's expected service DNS
+// name (for example after a cluster/namespace config change) would fail real TLS
+// verification if reused, so it must be regenerated instead.
+func TestEnsureWebhookCert_RegeneratesWrongDNSName(t *testing.T) {
+	ctx := newTestContext()
+	bc, nb := newWebhookCertTestCache()
+	now := time.Now().UTC()
+	ns := getSystemNamespace(nb)
+
+	caPEM, certPEM, keyPEM := makeIdentityCertPair(t, []string{"wrong-service.wrong-namespace.svc"},
+		[]x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth})
+
+	_, err := bc.clients.K8s.CoreV1().Secrets(ns).Create(ctx, &v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: NVCAWebhookTLSCertSecretName, Namespace: ns},
+		Data:       map[string][]byte{TLSCertName: certPEM, TLSKeyName: keyPEM},
+		Type:       v1.SecretTypeTLS,
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	_, err = bc.clients.K8s.CoreV1().Secrets(ns).Create(ctx, &v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: NVCAWebhookTLSCASecretName, Namespace: ns},
+		Data:       map[string][]byte{TLSCAName: caPEM},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	got, err := bc.ensureWebhookCert(ctx, nb, now)
+	require.NoError(t, err)
+	assert.NotEqual(t, certPEM, got.TLSCert, "a cert with the wrong DNS SAN must trigger regeneration")
+}
+
+// A serving cert restricted to ClientAuth (no ServerAuth) can't actually serve
+// the webhook's TLS listener, so it must be regenerated rather than reused.
+func TestEnsureWebhookCert_RegeneratesClientAuthOnlyEKU(t *testing.T) {
+	ctx := newTestContext()
+	bc, nb := newWebhookCertTestCache()
+	now := time.Now().UTC()
+	ns := getSystemNamespace(nb)
+
+	caPEM, certPEM, keyPEM := makeIdentityCertPair(t, getTLSDNSNames(nb), []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth})
+
+	_, err := bc.clients.K8s.CoreV1().Secrets(ns).Create(ctx, &v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: NVCAWebhookTLSCertSecretName, Namespace: ns},
+		Data:       map[string][]byte{TLSCertName: certPEM, TLSKeyName: keyPEM},
+		Type:       v1.SecretTypeTLS,
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	_, err = bc.clients.K8s.CoreV1().Secrets(ns).Create(ctx, &v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: NVCAWebhookTLSCASecretName, Namespace: ns},
+		Data:       map[string][]byte{TLSCAName: caPEM},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	got, err := bc.ensureWebhookCert(ctx, nb, now)
+	require.NoError(t, err)
+	assert.NotEqual(t, certPEM, got.TLSCert, "a cert restricted to ClientAuth must trigger regeneration")
+}
+
+// makeIdentityCertPair builds a CA and a serving certificate signed by it, with
+// a controllable DNS SAN list and ExtKeyUsage, so tests can exercise identity
+// and usage mismatches that CheckSignatureFrom alone wouldn't catch.
+func makeIdentityCertPair(
+	t *testing.T, dnsNames []string, ekus []x509.ExtKeyUsage,
+) (caPEM, servingCertPEM, servingKeyPEM []byte) {
+	t.Helper()
+	now := time.Now().UTC()
+	notBefore := now.AddDate(-1, 0, 0)
+	notAfter := now.AddDate(0, 0, 30)
+
+	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	caTmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "webhooks-ca"},
+		NotBefore:             notBefore,
+		NotAfter:              notAfter,
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	require.NoError(t, err)
+	caCert, err := x509.ParseCertificate(caDER)
+	require.NoError(t, err)
+	caPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
+
+	svcKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	require.NoError(t, err)
+	svcTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: dnsNames[0]},
+		NotBefore:    notBefore,
+		NotAfter:     notAfter,
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  ekus,
+		DNSNames:     dnsNames,
+	}
+	svcDER, err := x509.CreateCertificate(rand.Reader, svcTmpl, caCert, &svcKey.PublicKey, caKey)
+	require.NoError(t, err)
+	servingCertPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: svcDER})
+	servingKeyPEM = pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(svcKey)})
+	return caPEM, servingCertPEM, servingKeyPEM
+}
+
 // makeCertPair builds a CA and a serving certificate signed by it, with
 // independently controllable validity windows, so tests can exercise cases
 // like a still-valid serving cert paired with an expired CA.
