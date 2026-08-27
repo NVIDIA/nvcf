@@ -920,7 +920,6 @@ func TestGatewayConfigValidateRejectsUnknownFunctionType(t *testing.T) {
 }
 
 func TestGatewayConfigValidateRejectsInvocationOnlyFieldsOnLLMModels(t *testing.T) {
-	pct := 50
 	tests := []struct {
 		name    string
 		mutate  func(e *ModelFunctionDetails)
@@ -930,7 +929,6 @@ func TestGatewayConfigValidateRejectsInvocationOnlyFieldsOnLLMModels(t *testing.
 		{"usePexec", func(e *ModelFunctionDetails) { e.UsePexec = true }, "usePexec is unsupported"},
 		{"outgoingPathOverride", func(e *ModelFunctionDetails) { e.OutgoingPathOverride = "/x" }, "outgoingPathOverride is unsupported"},
 		{"sessionTimeout", func(e *ModelFunctionDetails) { e.SessionTimeout = 900 }, "sessionTimeout is unsupported"},
-		{"shadowModelName", func(e *ModelFunctionDetails) { e.ShadowModelName = "other"; e.ShadowPercentage = &pct }, "shadow traffic is unsupported"},
 		{"X-Priority header", func(e *ModelFunctionDetails) { e.CustomHeaders = CustomHeaders{"X-Priority": "5"} }, "the LLM Gateway rejects requests carrying it"},
 	}
 	for _, tc := range tests {
@@ -942,6 +940,22 @@ func TestGatewayConfigValidateRejectsInvocationOnlyFieldsOnLLMModels(t *testing.
 			assert.ErrorContains(t, err, tc.wantErr)
 		})
 	}
+}
+
+func TestGatewayConfigValidateAcceptsShadowTrafficOnLLMModels(t *testing.T) {
+	pct := 50
+	primary := llmModel()
+	primary.ShadowModelNames = []string{"meta/llama-shadow"}
+	primary.ShadowPercentage = &pct
+
+	shadow := llmModel()
+	shadow.ModelName = "meta/llama-shadow"
+
+	cfg := &GatewayConfig{}
+	cfg.OpenAI.Host = "api.example.com"
+	cfg.OpenAI.ChatCompletions = map[string]ModelFunctionDetails{"m": primary, "shadow": shadow}
+
+	require.NoError(t, cfg.Validate())
 }
 
 func TestGatewayConfigValidateAllowsInvocationFieldsOnDefaultModels(t *testing.T) {

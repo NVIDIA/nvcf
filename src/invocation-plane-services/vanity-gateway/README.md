@@ -277,12 +277,17 @@ on that prefix. Callers never see the function ID.
 these requests, since the LLM Gateway selects the function from the model.
 
 Config validation rejects `functionType: LLM` outside the three supported
-sections, and rejects `usePexec`, `outgoingPathOverride`, `sessionTimeout`, and
-shadow traffic on those entries because the LLM Gateway ignores them. An
-`X-Priority` entry in `customHeaders` is rejected too: the LLM Gateway answers
-`400 Bad Request` for any request carrying that header. `eol`, `offlineMessage`,
-and the remaining `customHeaders` behave as they do for other models, and the
-model still appears in `/v1/models`.
+sections, and rejects `usePexec`, `outgoingPathOverride`, and `sessionTimeout`
+on those entries because the LLM Gateway ignores them. An `X-Priority` entry in
+`customHeaders` is rejected too: the LLM Gateway answers `400 Bad Request` for
+any request carrying that header. `eol`, `offlineMessage`, and the remaining
+`customHeaders` behave as they do for other models, and the model still appears
+in `/v1/models`.
+
+Shadow traffic works on these entries. Each shadow target is resolved from the
+same model table as the primary, so it is rewritten and routed by its own
+`functionType`. A shadow of an LLM model reaches the LLM Gateway, and an LLM
+model may shadow a model served by the invocation service, or the reverse.
 
 `LLM_GATEWAY_ENDPOINT` is required whenever a model sets `functionType: LLM`. It
 is the outbound address of the LLM Gateway, so it is a full URL with a scheme

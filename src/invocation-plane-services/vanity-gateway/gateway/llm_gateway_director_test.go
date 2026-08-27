@@ -337,3 +337,39 @@ func TestBuildChiMux_HealthProbesUseUpstreamSpecificPaths(t *testing.T) {
 	assertPath(t, nvcfPaths, "/health")
 	assertPath(t, llmPaths, "/healthz")
 }
+
+func TestOpenAIDirector_LLMModelShadowsToLLMGateway(t *testing.T) {
+	const shadowModel = "meta/llama-3.3-70b-next"
+
+	llmRequests := make(chan capturedRequest, 2)
+	llmBackend := captureServer(t, llmRequests, nil)
+	nvcfRequests := make(chan capturedRequest, 1)
+	nvcfBackend := captureServer(t, nvcfRequests, nil)
+
+	primary := llmModelEntry()
+	primary.ShadowModelNames = []string{shadowModel}
+	shadow := llmModelEntry()
+	shadow.ModelName = shadowModel
+
+	mappings := &config.GatewayConfig{}
+	mappings.OpenAI.Host = openAIHost
+	mappings.OpenAI.ChatCompletions = map[string]config.ModelFunctionDetails{
+		"llm":        primary,
+		"llm-shadow": shadow,
+	}
+	require.NoError(t, mappings.Validate(), "shadow traffic must be valid on LLM models")
+
+	mux := openAIMux(t, mappings, nvcfBackend.URL, llmBackend.URL)
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, openAIRequest(t, "/v1/chat/completions",
+		`{"model":"`+publicModel+`","messages":[{"role":"user","content":"hi"}]}`))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	// Both the primary and the shadow must reach the LLM Gateway, each rewritten
+	// to its own functionID/modelName. Order between them is not guaranteed.
+	got := []string{awaitRequest(t, llmRequests).body, awaitRequest(t, llmRequests).body}
+	assert.Contains(t, got[0]+got[1], `"model":"`+llmFunctionID+"/"+publicModel+`"`)
+	assert.Contains(t, got[0]+got[1], `"model":"`+llmFunctionID+"/"+shadowModel+`"`)
+	assert.Empty(t, nvcfRequests, "neither request may reach the invocation service")
+}

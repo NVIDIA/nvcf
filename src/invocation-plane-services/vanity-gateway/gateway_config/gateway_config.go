@@ -471,9 +471,6 @@ func validateLLMGatewayModel(location string, sectionName string, entry ModelFun
 	if entry.SessionTimeout != 0 {
 		return fmt.Errorf("%s: sessionTimeout is unsupported for functionType %q", location, FunctionTypeLLM)
 	}
-	if entry.ShadowModelName != "" || len(entry.ShadowModelNames) > 0 {
-		return fmt.Errorf("%s: shadow traffic is unsupported for functionType %q", location, FunctionTypeLLM)
-	}
 	for name := range entry.CustomHeaders {
 		if _, ok := llmGatewayReservedCustomHeaderNames[strings.ToLower(name)]; ok {
 			return fmt.Errorf("%s: customHeaders cannot set %q for functionType %q; the LLM Gateway rejects requests carrying it", location, name, FunctionTypeLLM)
