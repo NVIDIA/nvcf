@@ -124,14 +124,11 @@ function configure_auth_jwt() {
 
 ##
 # Check whether a bao command failed because a kv-v2 mount is still running
-# its storage upgrade. OpenBao opens this window on every backend setup and
-# clears it asynchronously. The second message is the read-enabled standby
-# variant.
-#
-# The API carries no structured code for this condition, so the match is on
-# the message text. If a future OpenBao rewords it, this check misses and
-# callers fail immediately (the pre-retry behavior); the integration test
-# revalidates the match against the pinned server version on every bump.
+# its storage upgrade (opened on every backend setup, cleared
+# asynchronously). The second message is the read-enabled standby variant.
+# The API carries no structured code for this, so the match is on message
+# text; a missed match fails hard, and the integration test revalidates
+# the strings against the pinned server version.
 #
 # @param output The captured output of the failed command
 #
@@ -146,16 +143,15 @@ function is_kv_upgrade_window_error() {
 }
 
 ##
-# Block until a kv-v2 mount's data path serves requests, or the budget
-# (BAO_KV_UPGRADE_RETRY_BUDGET_SECONDS, default 60s) expires. This is the
-# single place the migrations wait out the upgrade window; if OpenBao ports
-# the upstream synchronous-upgrade fix (vault-plugin-secrets-kv v0.26.0),
-# delete this function and its call sites in enable_secrets_mount.
+# Block until a kv-v2 mount's data path serves requests, or
+# BAO_KV_UPGRADE_RETRY_BUDGET_SECONDS (default 60) expires. The single
+# place the migrations wait out the upgrade window; delete this function
+# and its call sites in enable_secrets_mount if OpenBao ports the upstream
+# synchronous-upgrade fix (vault-plugin-secrets-kv v0.26.0).
 #
-# Probes the mount's config endpoint, which sits behind the same upgrade
-# gate as the data handlers, backing off 1s, 2s, 4s, 8s, then 10s. Fails
-# only when the mount is still upgrading after the full budget; other
-# errors are left for the caller's next operation to surface.
+# Probes the mount's config endpoint (behind the same upgrade gate as the
+# data handlers), backing off 1s up to 10s. Non-window errors are left
+# for the caller's next operation to surface.
 #
 # @param mount_path The mount path of the kv-v2 secrets engine
 #
@@ -384,9 +380,8 @@ function write_secrets_kv() {
             return 0
         fi
         if [[ "$get_output" != *"No value found"* ]]; then
-            # The read failed for a reason other than "secret does not
-            # exist" (this includes the kv-v2 upgrade-window rejection).
-            # Do not write over a secret that could not be read.
+            # Not a plain "secret does not exist" (includes the upgrade
+            # window): never write over a secret that could not be read.
             log_error "Error checking secrets KV '$mount_path/$secret': $get_output"
             return 1
         fi

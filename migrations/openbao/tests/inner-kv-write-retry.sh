@@ -118,7 +118,7 @@ else
   fail "fresh kv-v2 enable then immediate write"
 fi
 
-# S4: non-transient errors are not retried. A write to a mount that does
+# S4: errors outside the upgrade window fail fast. A write to a mount that does
 # not exist must fail, and fail fast.
 start=${SECONDS}
 if write_secrets_kv "does-not-exist/kv" "foo" "bar=baz"; then

@@ -17,8 +17,8 @@
 # Integration test for the migration helper functions in
 # migrations/utils/functions.sh against a real OpenBao server. Opens the
 # kv-v2 storage-upgrade window (the 400 rejection) deterministically and
-# asserts the helpers retry through it, preserve skip semantics, and fail
-# fast on other errors.
+# asserts the readiness wait rides it out, an unwaited write fails without
+# overwriting, and other errors fail fast.
 #
 # Requires Docker. The OpenBao version is read from the migrations image
 # Dockerfile so the test tracks the shipped server version. Set UTILS_DIR
