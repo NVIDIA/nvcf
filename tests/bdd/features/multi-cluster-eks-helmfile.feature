@@ -6,12 +6,10 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
   register and install the NVCA operator on a separate compute cluster, and
   verify that the compute cluster agent becomes healthy.
 
-  # This feature is values-driven (not profile-driven); see
-  # AGENTS.md "CLI vs Helmfile install paths". It authors the nvcf-cli
-  # config from the gateway address at runtime, then uses the
-  # compute-plane Makefile register-cluster target. That target runs
-  # nvcf-cli init before cluster register and writes the registration
-  # values consumed by Helmfile.
+  # Helmfile installs the control plane from the operator-authored
+  # environment. Registration exports that installed environment as a
+  # control-plane profile, initializes the CLI explicitly, and passes the
+  # profile and CLI config to the compute-plane Make target.
   #
   # Required environment variables (user-supplied):
   #   NVCF_CLI                   built CLI path (harness)
@@ -302,15 +300,28 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
         | invoke_host          | invocation.${EKS_GATEWAY_DOMAIN} |
         | icms_host            | sis.${EKS_GATEWAY_DOMAIN}        |
 
-      # Register the compute cluster with the control plane. The Makefile
-      # runs nvcf-cli init, then cluster register, and writes the returned
-      # Helm values under registration/.
+      # Export the installed control plane with compute-reachable endpoints.
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/out/nvcf-cli-eks-bdd-multi.yaml self-hosted --control-plane-stack deploy/stacks/self-managed --env eks-bdd-multi --control-plane-context ${EKS_CONTEXT} --compute-plane-context ${EKS_COMPUTE_CONTEXT} control-plane profile export --region ${EKS_REGION}
+        """
+      Then the command exit code should be 0
+      And file "deploy/stacks/self-managed/out/control-plane-profile.yaml" should exist
+
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/out/nvcf-cli-eks-bdd-multi.yaml init
+        """
+      Then the command exit code should be 0
+
+      # Register the compute cluster and write the returned Helm values under
+      # registration/.
       When I run command "tests/bdd/scripts/wait-for-dns.sh ${EKS_GATEWAY_ADDR} 180"
       Then the command exit code should be 0
 
       When I run command:
         """
-        make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=${EKS_COMPUTE_CLUSTER_NAME} NCA_ID=nvcf-default CLUSTER_REGION=${EKS_REGION} ICMS_URL=http://${EKS_GATEWAY_ADDR} KUBECONFIG_FILE=${REPO_ROOT}/tests/bdd/out/eks-compute-kubeconfig.yaml NVCF_CLI=${NVCF_CLI} NVCF_CLI_CONFIG=${REPO_ROOT}/tests/bdd/out/nvcf-cli-eks-bdd-multi.yaml
+        make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=${EKS_COMPUTE_CLUSTER_NAME} CLUSTER_REGION=${EKS_REGION} CONTROL_PLANE_PROFILE=${REPO_ROOT}/deploy/stacks/self-managed/out/control-plane-profile.yaml COMPUTE_KUBE_CONTEXT=${EKS_COMPUTE_CONTEXT} KUBECONFIG_FILE=${REPO_ROOT}/tests/bdd/out/eks-compute-kubeconfig.yaml NVCF_CLI=${NVCF_CLI} NVCF_CLI_CONFIG=${REPO_ROOT}/tests/bdd/out/nvcf-cli-eks-bdd-multi.yaml
         """
       Then the command exit code should be 0
       And file "deploy/stacks/nvcf-compute-plane/registration/${EKS_COMPUTE_CLUSTER_NAME}-register-values.yaml" should exist

@@ -518,8 +518,8 @@ func TestNewOTelContainer(t *testing.T) {
 			assert.Equal(t, "2Gi", container.Resources.Requests.Memory().String())
 
 			assert.NotNil(t, container.ReadinessProbe)
-			assert.Equal(t, int32(30), container.ReadinessProbe.InitialDelaySeconds)
-			assert.Equal(t, int32(30), container.ReadinessProbe.PeriodSeconds)
+			assert.Equal(t, int32(5), container.ReadinessProbe.InitialDelaySeconds)
+			assert.Equal(t, int32(5), container.ReadinessProbe.PeriodSeconds)
 			assert.Equal(t, int32(1), container.ReadinessProbe.TimeoutSeconds)
 			assert.Equal(t, int32(3), container.ReadinessProbe.FailureThreshold)
 			assert.Equal(t, int32(1), container.ReadinessProbe.SuccessThreshold)

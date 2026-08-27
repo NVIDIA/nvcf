@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -52,13 +53,15 @@ func sambaInfraClient(t *testing.T, objs ...client.Object) client.Client {
 
 func TestEnsureSambaModelCacheInfra_RequiresImage(t *testing.T) {
 	c := sambaInfraClient(t)
-	_, err := EnsureSambaModelCacheInfra(t.Context(), c, "h1", "", corev1.ResourceRequirements{}, resource.MustParse("1Gi"))
+	_, err := EnsureSambaModelCacheInfra(t.Context(), c, "h1", "", "",
+		corev1.ResourceRequirements{}, resource.MustParse("1Gi"))
 	require.Error(t, err)
 }
 
 func TestEnsureSambaModelCacheInfra_RequiresCacheHandle(t *testing.T) {
 	c := sambaInfraClient(t)
-	_, err := EnsureSambaModelCacheInfra(t.Context(), c, "", "samba:latest", corev1.ResourceRequirements{}, resource.MustParse("1Gi"))
+	_, err := EnsureSambaModelCacheInfra(t.Context(), c, "", "samba:latest", "",
+		corev1.ResourceRequirements{}, resource.MustParse("1Gi"))
 	require.Error(t, err)
 }
 
@@ -70,9 +73,9 @@ func TestEnsureSambaModelCacheInfra_PerHandle_SizedFromCacheSize_NeverCreatesSto
 	name := sambaModelCacheResourceName(handle)
 
 	// First pass: server not yet available -> not ready, but resources created.
-	ready, err := EnsureSambaModelCacheInfra(ctx, c, handle, "samba:latest", corev1.ResourceRequirements{}, size)
+	infra, err := EnsureSambaModelCacheInfra(ctx, c, handle, "samba:latest", "", corev1.ResourceRequirements{}, size)
 	require.NoError(t, err)
-	assert.False(t, ready, "not ready until the per-handle server is available")
+	assert.False(t, infra.Ready, "not ready until the per-handle server is available")
 
 	// Shared RW + RO creds secrets.
 	for _, sname := range []string{SambaModelCacheReadWriteSecretName, SambaModelCacheReadOnlySecretName} {
@@ -81,13 +84,13 @@ func TestEnsureSambaModelCacheInfra_PerHandle_SizedFromCacheSize_NeverCreatesSto
 		assert.NotEmpty(t, s.Data["password"])
 	}
 
-	// Per-handle backing PVC on nvcf-sc, sized to cacheSize, named samba-<handle>,
-	// carrying the GC component label + handle annotation but NOT the cache-handle
-	// label (that would collide with init-writer-PVC cleanup).
+	// Per-handle backing PVC on the model cache class, sized to cacheSize, named
+	// samba-<handle>, carrying the GC component label + handle annotation but NOT
+	// the cache-handle label (that would collide with init-writer-PVC cleanup).
 	pvc := &corev1.PersistentVolumeClaim{}
 	require.NoError(t, c.Get(ctx, client.ObjectKey{Namespace: ModelCacheInitNamespace, Name: SambaModelCacheBackingPVCName(handle)}, pvc))
 	require.NotNil(t, pvc.Spec.StorageClassName)
-	assert.Equal(t, SambaModelCacheDataStorageClassName, *pvc.Spec.StorageClassName)
+	assert.Equal(t, DefaultModelCacheStorageClassName, *pvc.Spec.StorageClassName)
 	assert.True(t, size.Equal(pvc.Spec.Resources.Requests[corev1.ResourceStorage]), "backing PVC sized to cacheSize")
 	assert.Equal(t, sambaModelCacheComponentLabelValue, pvc.Labels[sambaModelCacheComponentLabelKey])
 	assert.Equal(t, handle, pvc.Annotations[sambaModelCacheHandleAnnotationKey])
@@ -111,13 +114,77 @@ func TestEnsureSambaModelCacheInfra_PerHandle_SizedFromCacheSize_NeverCreatesSto
 	// Mark available; second pass -> ready, still no StorageClass.
 	dep.Status.AvailableReplicas = 1
 	require.NoError(t, c.Status().Update(ctx, dep))
-	ready, err = EnsureSambaModelCacheInfra(ctx, c, handle, "samba:latest", corev1.ResourceRequirements{}, size)
+	infra, err = EnsureSambaModelCacheInfra(ctx, c, handle, "samba:latest", "", corev1.ResourceRequirements{}, size)
 	require.NoError(t, err)
-	assert.True(t, ready)
+	assert.True(t, infra.Ready)
 	require.NoError(t, c.List(ctx, scl))
 	assert.Empty(t, scl.Items, "still no StorageClass after the server is ready")
 	err = c.Get(ctx, client.ObjectKey{Name: HelmCacheSharedStorageClassName}, &storagev1.StorageClass{})
 	assert.True(t, apierrors.IsNotFound(err), "nvcf-miniservice-sc must not exist")
+}
+
+// TestEnsureSambaModelCacheInfra_ReportsDeploymentCreationTime proves the
+// bootstrap start time comes back to the caller, which is what bounds how long a
+// handle may sit unready.
+func TestEnsureSambaModelCacheInfra_ReportsDeploymentCreationTime(t *testing.T) {
+	ctx := t.Context()
+	handle := "created-at-handle"
+	created := time.Date(2026, 8, 24, 10, 0, 0, 0, time.UTC)
+	dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+		Name:              sambaModelCacheResourceName(handle),
+		Namespace:         ModelCacheInitNamespace,
+		CreationTimestamp: metav1.NewTime(created),
+	}}
+	c := sambaInfraClient(t, dep)
+
+	infra, err := EnsureSambaModelCacheInfra(ctx, c, handle, "samba:latest", "",
+		corev1.ResourceRequirements{}, resource.MustParse("1Gi"))
+	require.NoError(t, err)
+	assert.False(t, infra.Ready)
+	assert.True(t, created.Equal(infra.CreatedAt), "creation time of the existing Deployment is reported")
+}
+
+// TestEnsureSambaModelCacheInfra_BackingPVCStorageClass proves the backing PVC
+// lands on the configured model cache class, so the class
+// SelectHelmCacheBackend checked for existence is the one the volume needs, and
+// that an empty override resolves to the default rather than leaving the field
+// empty (which would silently pick the cluster's default StorageClass).
+func TestEnsureSambaModelCacheInfra_BackingPVCStorageClass(t *testing.T) {
+	tests := []struct {
+		name     string
+		handle   string
+		override string
+		want     string
+	}{
+		{
+			name:     "override is used",
+			handle:   "override-handle",
+			override: "custom-block-sc",
+			want:     "custom-block-sc",
+		},
+		{
+			name:   "empty override resolves to the default",
+			handle: "default-class-handle",
+			want:   DefaultModelCacheStorageClassName,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := t.Context()
+			c := sambaInfraClient(t)
+
+			_, err := EnsureSambaModelCacheInfra(ctx, c, tt.handle, "samba:latest", tt.override,
+				corev1.ResourceRequirements{}, resource.MustParse("1Gi"))
+			require.NoError(t, err)
+
+			pvc := &corev1.PersistentVolumeClaim{}
+			require.NoError(t, c.Get(ctx,
+				client.ObjectKey{Namespace: ModelCacheInitNamespace, Name: SambaModelCacheBackingPVCName(tt.handle)}, pvc))
+			require.NotNil(t, pvc.Spec.StorageClassName)
+			assert.Equal(t, tt.want, *pvc.Spec.StorageClassName)
+		})
+	}
 }
 
 func TestEnsureSambaModelCacheInfra_Idempotent(t *testing.T) {
@@ -125,9 +192,9 @@ func TestEnsureSambaModelCacheInfra_Idempotent(t *testing.T) {
 	c := sambaInfraClient(t)
 	handle := "idempotent-handle"
 	size := resource.MustParse("1Gi")
-	_, err := EnsureSambaModelCacheInfra(ctx, c, handle, "samba:latest", corev1.ResourceRequirements{}, size)
+	_, err := EnsureSambaModelCacheInfra(ctx, c, handle, "samba:latest", "", corev1.ResourceRequirements{}, size)
 	require.NoError(t, err)
-	_, err = EnsureSambaModelCacheInfra(ctx, c, handle, "samba:latest", corev1.ResourceRequirements{}, size)
+	_, err = EnsureSambaModelCacheInfra(ctx, c, handle, "samba:latest", "", corev1.ResourceRequirements{}, size)
 	require.NoError(t, err)
 	deps := &appsv1.DeploymentList{}
 	require.NoError(t, c.List(ctx, deps, client.InNamespace(ModelCacheInitNamespace)))
@@ -145,9 +212,11 @@ func TestEnsureSambaModelCacheInfra_Idempotent(t *testing.T) {
 func TestEnsureSambaModelCacheInfra_DistinctHandlesDistinctServers(t *testing.T) {
 	ctx := t.Context()
 	c := sambaInfraClient(t)
-	_, err := EnsureSambaModelCacheInfra(ctx, c, "handle-a", "samba:latest", corev1.ResourceRequirements{}, resource.MustParse("1Gi"))
+	_, err := EnsureSambaModelCacheInfra(ctx, c, "handle-a", "samba:latest", "",
+		corev1.ResourceRequirements{}, resource.MustParse("1Gi"))
 	require.NoError(t, err)
-	_, err = EnsureSambaModelCacheInfra(ctx, c, "handle-b", "samba:latest", corev1.ResourceRequirements{}, resource.MustParse("2Gi"))
+	_, err = EnsureSambaModelCacheInfra(ctx, c, "handle-b", "samba:latest", "",
+		corev1.ResourceRequirements{}, resource.MustParse("2Gi"))
 	require.NoError(t, err)
 
 	for _, h := range []string{"handle-a", "handle-b"} {
@@ -180,7 +249,8 @@ func TestDeleteSambaModelCacheInfra(t *testing.T) {
 		},
 	}
 	c := sambaInfraClient(t, rwPV, roPV, otherDriverPV)
-	_, err := EnsureSambaModelCacheInfra(ctx, c, handle, "samba:latest", corev1.ResourceRequirements{}, resource.MustParse("1Gi"))
+	_, err := EnsureSambaModelCacheInfra(ctx, c, handle, "samba:latest", "",
+		corev1.ResourceRequirements{}, resource.MustParse("1Gi"))
 	require.NoError(t, err)
 
 	require.NoError(t, DeleteSambaModelCacheInfra(ctx, c, handle))
@@ -219,7 +289,8 @@ func TestEnsureSambaModelCacheInfra_CreateErrorWrapped(t *testing.T) {
 				return nil
 			},
 		}).Build()
-	_, err := EnsureSambaModelCacheInfra(t.Context(), c, "h1", "samba:latest", corev1.ResourceRequirements{}, resource.MustParse("1Gi"))
+	_, err := EnsureSambaModelCacheInfra(t.Context(), c, "h1", "samba:latest", "",
+		corev1.ResourceRequirements{}, resource.MustParse("1Gi"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ensure samba model cache")
 	assert.Contains(t, err.Error(), "boom")
@@ -239,7 +310,8 @@ func TestEnsureSambaModelCacheInfra_GetDeploymentErrorWrapped(t *testing.T) {
 				return apierrors.NewNotFound(schema.GroupResource{}, key.Name)
 			},
 		}).Build()
-	_, err := EnsureSambaModelCacheInfra(t.Context(), c, "h1", "samba:latest", corev1.ResourceRequirements{}, resource.MustParse("1Gi"))
+	_, err := EnsureSambaModelCacheInfra(t.Context(), c, "h1", "samba:latest", "",
+		corev1.ResourceRequirements{}, resource.MustParse("1Gi"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "get samba deployment")
 }

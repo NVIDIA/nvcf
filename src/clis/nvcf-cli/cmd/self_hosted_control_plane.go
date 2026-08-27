@@ -112,7 +112,7 @@ func runControlPlaneProfileExport(c *cobra.Command, _ []string) error {
 		Env:                 selfHostedEnv,
 		ControlPlaneContext: selfHostedControlPlaneContext,
 		ComputePlaneContext: selfHostedComputePlaneContext,
-		ICMSURL:             resolveICMSURL(selfHostedICMSURL),
+		ICMSURL:             selfHostedICMSURL,
 		NATSURL:             selfHostedNATSURL,
 		SourceRootCA:        true,
 	})

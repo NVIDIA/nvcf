@@ -39,6 +39,10 @@ var (
 	icmsRequestGVR = schema.GroupVersionResource{
 		Group: "nvca.nvcf.nvidia.io", Version: "v2beta1", Resource: "icmsrequests",
 	}
+	// miniServiceGVR is cluster-scoped, unlike NVCFBackend/ICMSRequest.
+	miniServiceGVR = schema.GroupVersionResource{
+		Group: "nvca.nvcf.nvidia.io", Version: "v1alpha1", Resource: "miniservices",
+	}
 )
 
 // k8sInspector reads NVCA state from a compute-plane cluster's Kubernetes API
@@ -87,7 +91,11 @@ func (k *k8sInspector) ListFunctions(ctx context.Context, opts ListOptions) ([]S
 
 	result := make([]ScheduledFunction, 0, len(items))
 	for i := range items {
-		fn := scheduledFunctionFromObj(items[i].Object, items[i].GetNamespace())
+		fid, vid, ok := resolveFunctionIdentity(items[i].Object, items[i].GetNamespace(), items)
+		if !ok {
+			continue
+		}
+		fn := scheduledFunctionFromObj(items[i].Object, items[i].GetNamespace(), fid, vid)
 		if opts.PhaseFilter != "" && fn.Phase != opts.PhaseFilter {
 			continue
 		}
@@ -120,14 +128,14 @@ func (k *k8sInspector) GetFunction(ctx context.Context, functionID, versionID st
 	sortICMSRequests(items)
 	for i := range items {
 		obj := items[i].Object
-		fid, vid := functionIdentity(obj)
-		if fid != functionID {
+		fid, vid, ok := resolveFunctionIdentity(obj, items[i].GetNamespace(), items)
+		if !ok || fid != functionID {
 			continue
 		}
 		if versionID != "" && vid != versionID {
 			continue
 		}
-		return functionDetailFromObj(obj, items[i].GetNamespace()), nil
+		return functionDetailFromObj(obj, items[i].GetNamespace(), fid, vid), nil
 	}
 
 	if versionID != "" {
@@ -182,15 +190,16 @@ func sortICMSRequests(items []unstructured.Unstructured) {
 }
 
 // scheduledFunctionFromObj builds the list-level summary for one ICMSRequest.
-func scheduledFunctionFromObj(obj map[string]interface{}, namespace string) ScheduledFunction {
-	fid, vid := functionIdentity(obj)
+// functionID/versionID are resolved by the caller via resolveFunctionIdentity,
+// since a termination request's own spec never carries them.
+func scheduledFunctionFromObj(obj map[string]interface{}, namespace, functionID, versionID string) ScheduledFunction {
 	action := nestedString(obj, "spec", "action")
 	requestStatus := nestedString(obj, "status", "requestStatus")
 	instances := extractInstances(obj)
 
 	return ScheduledFunction{
-		FunctionID:        fid,
-		FunctionVersionID: vid,
+		FunctionID:        functionID,
+		FunctionVersionID: versionID,
 		Namespace:         namespace,
 		Action:            action,
 		RequestStatus:     requestStatus,
@@ -199,9 +208,9 @@ func scheduledFunctionFromObj(obj map[string]interface{}, namespace string) Sche
 	}
 }
 
-func functionDetailFromObj(obj map[string]interface{}, namespace string) *FunctionDetail {
+func functionDetailFromObj(obj map[string]interface{}, namespace, functionID, versionID string) *FunctionDetail {
 	return &FunctionDetail{
-		ScheduledFunction:  scheduledFunctionFromObj(obj, namespace),
+		ScheduledFunction:  scheduledFunctionFromObj(obj, namespace, functionID, versionID),
 		Instances:          extractInstances(obj),
 		LastStatusUpdated:  nestedString(obj, "status", "lastStatusUpdated"),
 		LastACKTimestamp:   nestedString(obj, "status", "lastACKTimestamp"),
@@ -210,9 +219,12 @@ func functionDetailFromObj(obj map[string]interface{}, namespace string) *Functi
 	}
 }
 
-// functionIdentity reads functionId/functionVersionId, preferring the modern
-// spec.functionDetails fields and falling back to the deprecated top-level
-// spec fields.
+// functionIdentity reads functionId/functionVersionId directly off obj,
+// preferring the modern spec.functionDetails fields and falling back to the
+// deprecated top-level spec fields. A termination-action ICMSRequest CR never
+// carries spec.functionDetails (NVCA only relays it verbatim from the
+// upstream termination message, which does not include it), so this returns
+// empty for those; use resolveFunctionIdentity to recover it.
 func functionIdentity(obj map[string]interface{}) (functionID, versionID string) {
 	functionID = firstNonEmpty(
 		nestedString(obj, "spec", "functionDetails", "functionId"),
@@ -223,6 +235,43 @@ func functionIdentity(obj map[string]interface{}) (functionID, versionID string)
 		nestedString(obj, "spec", "functionVersionId"),
 	)
 	return functionID, versionID
+}
+
+// resolveFunctionIdentity returns obj's function identity, falling back to
+// correlation when obj's own spec carries none (always true for termination
+// requests). The fallback matches obj's spec.terminationMsgInfo.instanceIds
+// against another CR's status.instances keys, restricted to candidates in
+// namespace, and borrows that CR's identity: a termination request's
+// instances are also tracked, by the same instance IDs, on the creation
+// request's status.instances map. Restricting to namespace prevents an
+// instance ID collision in another namespace from mislabeling the request.
+// ok is false when no identity can be established either way, so the caller
+// can omit the record instead of returning one with empty IDs.
+func resolveFunctionIdentity(obj map[string]interface{}, namespace string, allItems []unstructured.Unstructured) (functionID, versionID string, ok bool) {
+	if fid, vid := functionIdentity(obj); fid != "" || vid != "" {
+		return fid, vid, true
+	}
+
+	instanceIDs, _, _ := unstructured.NestedStringSlice(obj, "spec", "terminationMsgInfo", "instanceIds")
+	if len(instanceIDs) == 0 {
+		return "", "", false
+	}
+
+	for _, other := range allItems {
+		if other.GetNamespace() != namespace {
+			continue
+		}
+		fid, vid := functionIdentity(other.Object)
+		if fid == "" && vid == "" {
+			continue
+		}
+		for _, id := range instanceIDs {
+			if _, found, _ := unstructured.NestedMap(other.Object, "status", "instances", id); found {
+				return fid, vid, true
+			}
+		}
+	}
+	return "", "", false
 }
 
 func extractInstances(obj map[string]interface{}) []Instance {
