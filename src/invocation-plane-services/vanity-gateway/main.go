@@ -84,13 +84,19 @@ func NewRootCommand(zapLogger *logs.ZapLogger) *cobra.Command {
 	}
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/"+config.DefaultConfigPath+"/config.yaml)")
 
-	configType := reflect.TypeOf(gateway.Config{})
-	for i := 0; i < configType.NumField(); i++ {
-		field := configType.Field(i)
-		envName := field.Tag.Get("mapstructure")
-		rootCmd.Flags().String(envName, "", "")
-	}
+	registerConfigFlags(rootCmd)
 
 	return rootCmd
 }
 
+// registerConfigFlags declares one flag per gateway.Config field so that
+// PersistentPreRunE can bind each to its environment variable. Values are
+// registered as strings and converted by the viper decode hooks.
+func registerConfigFlags(cmd *cobra.Command) {
+	configType := reflect.TypeOf(gateway.Config{})
+	for i := 0; i < configType.NumField(); i++ {
+		field := configType.Field(i)
+		envName := field.Tag.Get("mapstructure")
+		cmd.Flags().String(envName, "", "")
+	}
+}

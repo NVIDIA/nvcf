@@ -788,9 +788,12 @@ BYOO metric subset example:
              - 'metric.name != "BpsInstrument"'
        byooWorkloadMetrics:
          dropLabels:
-           - metric_subset_enabled
            - custom_label
 ```
+
+When `byooMetricSubset.enabled` is true, `dropLabels` extends the default
+`metric_subset_enabled` label. The configured labels are removed from both the
+primary metrics pipeline and the metric subset endpoint on port `19091`.
 
 **Apply via Helm:**
 

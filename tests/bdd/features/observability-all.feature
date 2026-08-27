@@ -70,7 +70,20 @@ Feature: Install local Helmfile observability for both planes
 
     When I run command:
       """
-      make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=ncp-local KUBECONFIG_FILE=${REPO_ROOT}/tests/bdd/out/ncp-local-observability-all-kubeconfig.yaml NVCF_CLI=${NVCF_CLI} NVCF_CLI_CONFIG=${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml
+      env KUBECONFIG=${REPO_ROOT}/tests/bdd/out/ncp-local-observability-all-kubeconfig.yaml ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml self-hosted --control-plane-stack deploy/stacks/self-managed --env local-bdd-observability-all control-plane profile export --cluster-name ncp-local
+      """
+    Then the command exit code should be 0
+    And file "deploy/stacks/self-managed/out/control-plane-profile.yaml" should exist
+
+    When I run command:
+      """
+      ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml init
+      """
+    Then the command exit code should be 0
+
+    When I run command:
+      """
+      make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=ncp-local CONTROL_PLANE_PROFILE=${REPO_ROOT}/deploy/stacks/self-managed/out/control-plane-profile.yaml COMPUTE_KUBE_CONTEXT=k3d-ncp-local KUBECONFIG_FILE=${REPO_ROOT}/tests/bdd/out/ncp-local-observability-all-kubeconfig.yaml NVCF_CLI=${NVCF_CLI} NVCF_CLI_CONFIG=${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml
       """
     Then the command exit code should be 0
     And file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-register-values.yaml" should exist
