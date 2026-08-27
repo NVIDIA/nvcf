@@ -278,60 +278,59 @@ func TestEnsureWebhookCert_RegeneratesMismatchedKey(t *testing.T) {
 	assert.NoError(t, servingCert.CheckSignatureFrom(caCert))
 }
 
-// A serving cert whose SAN no longer matches the webhook's expected service DNS
-// name (for example after a cluster/namespace config change) would fail real TLS
-// verification if reused, so it must be regenerated instead.
-func TestEnsureWebhookCert_RegeneratesWrongDNSName(t *testing.T) {
-	ctx := newTestContext()
-	bc, nb := newWebhookCertTestCache()
-	now := time.Now().UTC()
-	ns := getSystemNamespace(nb)
+// A stored serving cert whose identity no longer satisfies the webhook's
+// requirements would fail real TLS verification if reused, so it must be
+// regenerated: either the SAN no longer matches the expected service DNS name
+// (e.g. after a cluster/namespace config change), or the cert lacks the
+// ServerAuth usage needed to actually serve the TLS listener.
+func TestEnsureWebhookCert_RegeneratesOnIdentityMismatch(t *testing.T) {
+	tests := []struct {
+		name     string
+		dnsNames []string
+		ekus     []x509.ExtKeyUsage
+	}{
+		{
+			name:     "wrong DNS SAN",
+			dnsNames: []string{"wrong-service.wrong-namespace.svc"},
+			ekus:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		},
+		{
+			name:     "ClientAuth-only EKU",
+			dnsNames: nil, // filled in per-case below with the expected DNS names
+			ekus:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		},
+	}
 
-	caPEM, certPEM, keyPEM := makeIdentityCertPair(t, []string{"wrong-service.wrong-namespace.svc"},
-		[]x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := newTestContext()
+			bc, nb := newWebhookCertTestCache()
+			now := time.Now().UTC()
+			ns := getSystemNamespace(nb)
 
-	_, err := bc.clients.K8s.CoreV1().Secrets(ns).Create(ctx, &v1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: NVCAWebhookTLSCertSecretName, Namespace: ns},
-		Data:       map[string][]byte{TLSCertName: certPEM, TLSKeyName: keyPEM},
-		Type:       v1.SecretTypeTLS,
-	}, metav1.CreateOptions{})
-	require.NoError(t, err)
-	_, err = bc.clients.K8s.CoreV1().Secrets(ns).Create(ctx, &v1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: NVCAWebhookTLSCASecretName, Namespace: ns},
-		Data:       map[string][]byte{TLSCAName: caPEM},
-	}, metav1.CreateOptions{})
-	require.NoError(t, err)
+			dnsNames := tt.dnsNames
+			if dnsNames == nil {
+				dnsNames = getTLSDNSNames(nb)
+			}
+			caPEM, certPEM, keyPEM := makeIdentityCertPair(t, dnsNames, tt.ekus)
 
-	got, err := bc.ensureWebhookCert(ctx, nb, now)
-	require.NoError(t, err)
-	assert.NotEqual(t, certPEM, got.TLSCert, "a cert with the wrong DNS SAN must trigger regeneration")
-}
+			_, err := bc.clients.K8s.CoreV1().Secrets(ns).Create(ctx, &v1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: NVCAWebhookTLSCertSecretName, Namespace: ns},
+				Data:       map[string][]byte{TLSCertName: certPEM, TLSKeyName: keyPEM},
+				Type:       v1.SecretTypeTLS,
+			}, metav1.CreateOptions{})
+			require.NoError(t, err)
+			_, err = bc.clients.K8s.CoreV1().Secrets(ns).Create(ctx, &v1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: NVCAWebhookTLSCASecretName, Namespace: ns},
+				Data:       map[string][]byte{TLSCAName: caPEM},
+			}, metav1.CreateOptions{})
+			require.NoError(t, err)
 
-// A serving cert restricted to ClientAuth (no ServerAuth) can't actually serve
-// the webhook's TLS listener, so it must be regenerated rather than reused.
-func TestEnsureWebhookCert_RegeneratesClientAuthOnlyEKU(t *testing.T) {
-	ctx := newTestContext()
-	bc, nb := newWebhookCertTestCache()
-	now := time.Now().UTC()
-	ns := getSystemNamespace(nb)
-
-	caPEM, certPEM, keyPEM := makeIdentityCertPair(t, getTLSDNSNames(nb), []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth})
-
-	_, err := bc.clients.K8s.CoreV1().Secrets(ns).Create(ctx, &v1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: NVCAWebhookTLSCertSecretName, Namespace: ns},
-		Data:       map[string][]byte{TLSCertName: certPEM, TLSKeyName: keyPEM},
-		Type:       v1.SecretTypeTLS,
-	}, metav1.CreateOptions{})
-	require.NoError(t, err)
-	_, err = bc.clients.K8s.CoreV1().Secrets(ns).Create(ctx, &v1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: NVCAWebhookTLSCASecretName, Namespace: ns},
-		Data:       map[string][]byte{TLSCAName: caPEM},
-	}, metav1.CreateOptions{})
-	require.NoError(t, err)
-
-	got, err := bc.ensureWebhookCert(ctx, nb, now)
-	require.NoError(t, err)
-	assert.NotEqual(t, certPEM, got.TLSCert, "a cert restricted to ClientAuth must trigger regeneration")
+			got, err := bc.ensureWebhookCert(ctx, nb, now)
+			require.NoError(t, err)
+			assert.NotEqual(t, certPEM, got.TLSCert, "an identity-mismatched cert must trigger regeneration")
+		})
+	}
 }
 
 // makeIdentityCertPair builds a CA and a serving certificate signed by it, with
