@@ -171,6 +171,8 @@ nvcf-cli self-hosted \
   --control-plane-stack deploy/stacks/self-managed \
   --env <environment-name> \
   control-plane profile export
+
+nvcf-cli --config <path-to-cli-config> init
 ```
 
 When the LLM add-on is disabled, the generated profile and registration values
@@ -189,8 +191,12 @@ make -C deploy/stacks/nvcf-compute-plane register-cluster \
   CONTROL_PLANE_PROFILE=deploy/stacks/self-managed/out/control-plane-profile.yaml \
   KUBECONFIG_FILE=<gpu-cluster-kubeconfig> \
   COMPUTE_KUBE_CONTEXT=<gpu-cluster-context> \
-  NVCF_CLI=<path-to-nvcf-cli>
+  NVCF_CLI=<path-to-nvcf-cli> \
+  NVCF_CLI_CONFIG=<path-to-cli-config>
 ```
+
+`NVCF_CLI_CONFIG` is optional when the default CLI config is correct. The Make
+target forwards a configured path to registration but does not run `init`.
 
 The target writes
 `registration/<gpu-cluster-name>-register-values.yaml`. It carries the cluster

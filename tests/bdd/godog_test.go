@@ -209,21 +209,21 @@ selfManaged:
 }
 
 // writeHelmfileRegisterValues seeds the compute-plane register-values handoff
-// the single-cluster-helmfile.feature register scenario reads. The stack
-// Makefile passes CLUSTER_NAME separately to helmfile, so the file produced by
-// `make register-cluster` does not carry clusterName at the top level and the
-// selfManaged URLs use the compute-reachable localhost hostnames.
+// the single-cluster-helmfile.feature register scenario reads. Profile-driven
+// registration records clusterName and selects in-cluster endpoints when the
+// compute target is the control-plane cluster.
 func writeHelmfileRegisterValues(t *testing.T, repoRoot string) {
 	t.Helper()
-	body := `clusterID: 11111111-2222-3333-4444-555555555555
+	body := `clusterName: ncp-local
+clusterID: 11111111-2222-3333-4444-555555555555
 clusterGroupID: aaaa-bbbb-cccc-dddd
 ncaID: nvcf-default
 region: us-west-1
 selfManaged:
   identitySource: psat
-  icmsServiceURL: http://sis.localhost:8080
-  revalServiceURL: http://reval.localhost:8080
-  natsURL: nats://nats.localhost:4222
+  icmsServiceURL: http://api.sis.svc.cluster.local:8080
+  revalServiceURL: http://reval.nvcf.svc.cluster.local:8080
+  natsURL: nats://nats.nats-system.svc.cluster.local:4222
 `
 	writeArtifact(t, repoRoot, "nvcf-compute-plane", "ncp-local-register-values.yaml", body)
 	writeRegistrationArtifact(t, repoRoot, "nvcf-compute-plane", "ncp-local-register-values.yaml", body)
@@ -442,6 +442,7 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
 	seedComputePlaneLocalBDDFixture(t, suite.Config.RepoRoot)
 	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+	writeProfileHandoffArtifact(t, suite.Config.RepoRoot)
 	writeHelmfileRegisterValues(t, suite.Config.RepoRoot)
 
 	sc := steps.NewScenarioContext(suite)
@@ -649,6 +650,7 @@ func TestObservabilityComputeFeatureFileWiresToSteps(t *testing.T) {
 	seedHelmfileLocalBDDMultiFixture(t, suite.Config.RepoRoot)
 	seedComputePlaneLocalBDDMultiFixture(t, suite.Config.RepoRoot)
 	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+	writeMulticlusterProfileHandoffArtifact(t, suite.Config.RepoRoot)
 	writeMulticlusterComputeRegisterValues(t, suite.Config.RepoRoot, "nvcf-compute-plane", "ncp-local-compute-1")
 
 	sc := steps.NewScenarioContext(suite)
@@ -768,6 +770,7 @@ func TestObservabilityAllFeatureFileWiresToSteps(t *testing.T) {
 	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
 	seedComputePlaneLocalBDDFixture(t, suite.Config.RepoRoot)
 	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+	writeProfileHandoffArtifact(t, suite.Config.RepoRoot)
 	writeHelmfileRegisterValues(t, suite.Config.RepoRoot)
 
 	sc := steps.NewScenarioContext(suite)
@@ -804,7 +807,10 @@ func TestObservabilityAllFeatureFileWiresToSteps(t *testing.T) {
 	}
 	for _, commandFragment := range []string{
 		"deploy/stacks/self-managed install HELMFILE_ENV=local-bdd-observability-all KUBECONFIG_FILE=/repo-root-placeholder/tests/bdd/out/ncp-local-observability-all-kubeconfig.yaml",
-		"register-cluster CLUSTER_NAME=ncp-local KUBECONFIG_FILE=/repo-root-placeholder/tests/bdd/out/ncp-local-observability-all-kubeconfig.yaml",
+		"register-cluster CLUSTER_NAME=ncp-local" +
+			" CONTROL_PLANE_PROFILE=/repo-root-placeholder/deploy/stacks/self-managed/out/control-plane-profile.yaml" +
+			" COMPUTE_KUBE_CONTEXT=k3d-ncp-local" +
+			" KUBECONFIG_FILE=/repo-root-placeholder/tests/bdd/out/ncp-local-observability-all-kubeconfig.yaml",
 		"deploy/stacks/nvcf-compute-plane install CLUSTER_NAME=ncp-local HELMFILE_ENV=local-bdd-observability-all KUBECONFIG_FILE=/repo-root-placeholder/tests/bdd/out/ncp-local-observability-all-kubeconfig.yaml",
 	} {
 		if !commandRanThatContains(runs, commandFragment) {
@@ -932,6 +938,7 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		"listenerName: worker-tcp",
 	)
 	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+	writeMulticlusterProfileHandoffArtifact(t, suite.Config.RepoRoot)
 	writeMulticlusterComputeRegisterValues(t, suite.Config.RepoRoot, "nvcf-compute-plane", "ncp-local-compute-1")
 
 	sc := steps.NewScenarioContext(suite)
@@ -1502,6 +1509,7 @@ func TestSingleClusterEKSHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	seedComputePlaneBaseYaml(t, suite.Config.RepoRoot)
 	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
 	seedNVCFCLINonlocalTemplate(t, suite.Config.RepoRoot)
+	writeProfileHandoffArtifact(t, suite.Config.RepoRoot)
 	writeEKSRegisterValues(t, suite.Config.RepoRoot, eksClusterName, eksRegion)
 
 	sc := steps.NewScenarioContext(suite)
@@ -1619,6 +1627,7 @@ func TestMultiClusterEKSHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	seedComputePlaneBaseYaml(t, suite.Config.RepoRoot)
 	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
 	seedNVCFCLINonlocalTemplate(t, suite.Config.RepoRoot)
+	writeMulticlusterProfileHandoffArtifact(t, suite.Config.RepoRoot)
 	writeEKSRegisterValues(t, suite.Config.RepoRoot, computeClusterName, eksRegion)
 
 	sc := steps.NewScenarioContext(suite)

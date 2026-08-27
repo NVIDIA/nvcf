@@ -176,16 +176,30 @@ When this succeeds, the following helm releases are deployed:
 ## Step 7: Register the cluster
 
 ```bash
+$(pwd)/nvcf-cli \
+  --config $(pwd)/tests/bdd/fixtures/nvcf-cli-local.yaml \
+  self-hosted \
+  --control-plane-stack deploy/stacks/self-managed \
+  --env local-bdd \
+  control-plane profile export \
+  --cluster-name ncp-local
+
+$(pwd)/nvcf-cli \
+  --config $(pwd)/tests/bdd/fixtures/nvcf-cli-local.yaml \
+  init
+
 make -C deploy/stacks/nvcf-compute-plane register-cluster \
   CLUSTER_NAME=ncp-local \
+  CONTROL_PLANE_PROFILE=$(pwd)/deploy/stacks/self-managed/out/control-plane-profile.yaml \
+  COMPUTE_KUBE_CONTEXT=k3d-ncp-local \
   NVCF_CLI=$(pwd)/nvcf-cli \
   NVCF_CLI_CONFIG=$(pwd)/tests/bdd/fixtures/nvcf-cli-local.yaml
 ```
 
 <Note>
-`make register-cluster` runs `nvcf-cli init` internally before
-`cluster register`, so the Helmfile flow does not need a separate `init`
-step (unlike the CLI flow).
+The profile export captures the installed control plane's endpoints and trust
+material. Run `nvcf-cli init` explicitly. The Make target forwards
+`NVCF_CLI_CONFIG` to registration but does not initialize it.
 </Note>
 
 The target writes the registration handoff file to

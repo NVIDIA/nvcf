@@ -1290,8 +1290,10 @@ Helmfile target the GPU cluster instead of the control-plane cluster.
 For a complete Amazon EKS example, see the
 [CSP End-to-End Example](./csp-end-to-end-example-installation.md).
 
-The compute-plane Makefile runs `nvcf-cli init` before `cluster register`. Point
-`NVCF_CLI_CONFIG` at a CLI config that can reach the control-plane gateway.
+Export the installed control-plane environment before registration. For a
+split-cluster deployment, pass both contexts so the profile contains
+compute-reachable endpoints and reads trust from the control-plane cluster.
+Omit both context flags for a single-cluster deployment.
 
 ```yaml title="nvcf-cli-gpu-register.yaml"
 base_http_url: "http://<GATEWAY_ADDR>"
@@ -1310,16 +1312,29 @@ api_keys_owner_id: "svc@nvcf-api.local"
 client_id: "<nca-id>"
 ```
 
+```bash
+nvcf-cli --config <path-to-nvcf-cli-gpu-register.yaml> self-hosted \
+  --control-plane-stack deploy/stacks/self-managed \
+  --env <environment-name> \
+  --control-plane-context <control-plane-context> \
+  --compute-plane-context <gpu-cluster-context> \
+  control-plane profile export \
+  --cluster-name <control-plane-cluster-name> \
+  --region <region>
+
+nvcf-cli --config <path-to-nvcf-cli-gpu-register.yaml> init
+```
+
 Run the compute-plane target from the repository root. The target writes
 `deploy/stacks/nvcf-compute-plane/registration/<gpu-cluster-name>-register-values.yaml`.
 
 ```bash
 make -C deploy/stacks/nvcf-compute-plane register-cluster \
   CLUSTER_NAME=<gpu-cluster-name> \
-  NCA_ID=<nca-id> \
   CLUSTER_REGION=<region> \
-  ICMS_URL="http://<GATEWAY_ADDR>" \
+  CONTROL_PLANE_PROFILE=deploy/stacks/self-managed/out/control-plane-profile.yaml \
   KUBECONFIG_FILE=<gpu-cluster-kubeconfig> \
+  COMPUTE_KUBE_CONTEXT=<gpu-cluster-context> \
   NVCF_CLI=<path-to-nvcf-cli> \
   NVCF_CLI_CONFIG=<path-to-nvcf-cli-gpu-register.yaml>
 ```

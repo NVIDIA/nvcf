@@ -16,6 +16,8 @@ cp "${stack_dir}/Makefile.dist" "${test_dir}/compute-plane/Makefile"
 
 profile="${test_dir}/self-managed/out/control-plane-profile.yaml"
 printf 'generated-control-plane-profile\n' > "${profile}"
+cli_config="${test_dir}/nvcf cli config.yaml"
+printf 'base_http_url: http://api.example.test\n' > "${cli_config}"
 
 fake_cli="${test_dir}/bin/nvcf-cli"
 record="${test_dir}/cli-args"
@@ -48,10 +50,15 @@ FAKE_CLI_RECORD="${record}" make -C "${test_dir}/compute-plane" register-cluster
   CLUSTER_NAME=gpu-a \
   CLUSTER_REGION=us-east-1 \
   COMPUTE_KUBE_CONTEXT=compute-context \
+  NVCF_CLI_CONFIG="${cli_config}" \
   NVCF_CLI="${fake_cli}"
 
-mapfile -t args < "${record}"
+args=()
+while IFS= read -r arg; do
+  args+=("${arg}")
+done < "${record}"
 expected=(
+  --config "${cli_config}"
   self-hosted
   --compute-plane-stack "${test_dir}/compute-plane"
   compute-plane register
@@ -73,6 +80,16 @@ for i in "${!expected[@]}"; do
     exit 1
   fi
 done
+
+# The config override remains optional for callers that use the default CLI
+# config path or environment-based configuration.
+FAKE_CLI_RECORD="${record}" make -C "${test_dir}/compute-plane" register-cluster \
+  CLUSTER_NAME=gpu-a \
+  NVCF_CLI="${fake_cli}"
+if grep -Fxq -- '--config' "${record}"; then
+  echo "register-cluster unexpectedly passed --config without NVCF_CLI_CONFIG" >&2
+  exit 1
+fi
 
 values="${test_dir}/compute-plane/registration/gpu-a-register-values.yaml"
 grep -q '^clusterID: generated-id$' "${values}"
