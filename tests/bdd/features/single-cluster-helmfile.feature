@@ -108,23 +108,35 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
     Scenario: Operator registers the local cluster and installs the NVCA operator
       When I run command:
         """
-        make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=ncp-local NVCF_CLI=${NVCF_CLI} NVCF_CLI_CONFIG=${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml self-hosted --control-plane-stack deploy/stacks/self-managed --env local-bdd control-plane profile export --cluster-name ncp-local
+        """
+      Then the command exit code should be 0
+      And file "deploy/stacks/self-managed/out/control-plane-profile.yaml" should exist
+
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml init
+        """
+      Then the command exit code should be 0
+
+      When I run command:
+        """
+        make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=ncp-local CONTROL_PLANE_PROFILE=${REPO_ROOT}/deploy/stacks/self-managed/out/control-plane-profile.yaml COMPUTE_KUBE_CONTEXT=k3d-ncp-local NVCF_CLI=${NVCF_CLI} NVCF_CLI_CONFIG=${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml
         """
       Then the command exit code should be 0
       And file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-register-values.yaml" should exist
-      # The single-cluster Makefile passes CLUSTER_NAME separately to
-      # helmfile, so the register-values file does not carry clusterName
-      # at the top level. Assert the deterministic block that is
-      # present plus the non-empty fields.
+      # The target cluster matches controlPlane.clusterName in the exported
+      # profile, so registration selects the in-cluster service endpoints.
       And yaml file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-register-values.yaml" should contain:
         """
+        clusterName: ncp-local
         ncaID: nvcf-default
         region: us-west-1
         selfManaged:
           identitySource: psat
-          icmsServiceURL: http://sis.localhost:8080
-          revalServiceURL: http://reval.localhost:8080
-          natsURL: nats://nats.localhost:4222
+          icmsServiceURL: http://api.sis.svc.cluster.local:8080
+          revalServiceURL: http://reval.nvcf.svc.cluster.local:8080
+          natsURL: nats://nats.nats-system.svc.cluster.local:4222
         """
       And yaml file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-register-values.yaml" should have non-empty keys:
         | key            |

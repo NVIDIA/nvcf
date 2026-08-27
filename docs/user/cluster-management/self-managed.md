@@ -99,6 +99,7 @@ sequenceDiagram
   Operator->>CLI: profile export
   CLI->>CP: read selected environment
   CLI->>Profile: write generated profile
+  Operator->>CLI: init with selected config path
   Operator->>CLI: compute-plane register
   CLI->>Profile: read endpoints and trust
   CLI->>Compute: discover OIDC issuer and JWKS
@@ -171,6 +172,8 @@ nvcf-cli self-hosted \
   --control-plane-stack deploy/stacks/self-managed \
   --env <environment-name> \
   control-plane profile export
+
+nvcf-cli --config <path-to-cli-config> init
 ```
 
 When the LLM add-on is disabled, the generated profile and registration values
@@ -186,11 +189,15 @@ cluster explicitly when the kubeconfig contains multiple contexts.
 make -C deploy/stacks/nvcf-compute-plane register-cluster \
   CLUSTER_NAME=<gpu-cluster-name> \
   CLUSTER_REGION=<region> \
-  CONTROL_PLANE_PROFILE=deploy/stacks/self-managed/out/control-plane-profile.yaml \
-  KUBECONFIG_FILE=<gpu-cluster-kubeconfig> \
+  CONTROL_PLANE_PROFILE="$(pwd)/deploy/stacks/self-managed/out/control-plane-profile.yaml" \
+  KUBECONFIG_FILE=<absolute-path-to-gpu-cluster-kubeconfig> \
   COMPUTE_KUBE_CONTEXT=<gpu-cluster-context> \
-  NVCF_CLI=<path-to-nvcf-cli>
+  NVCF_CLI=<absolute-path-to-nvcf-cli> \
+  NVCF_CLI_CONFIG=<absolute-path-to-cli-config>
 ```
+
+`NVCF_CLI_CONFIG` is optional when the default CLI config is correct. The Make
+target forwards a configured path to registration but does not run `init`.
 
 The target writes
 `registration/<gpu-cluster-name>-register-values.yaml`. It carries the cluster
@@ -384,7 +391,7 @@ make -C deploy/stacks/nvcf-compute-plane install \
   CLUSTER_NAME=<gpu-cluster-name> \
   HELMFILE_ENV=<environment-name> \
   NCA_ID=<nca-id> \
-  KUBECONFIG_FILE=<gpu-cluster-kubeconfig> \
+  KUBECONFIG_FILE=<absolute-path-to-gpu-cluster-kubeconfig> \
   COMPUTE_KUBE_CONTEXT=<gpu-cluster-context>
 ```
 
@@ -598,16 +605,17 @@ the refreshed values:
 make -C deploy/stacks/nvcf-compute-plane register-cluster \
   CLUSTER_NAME=<gpu-cluster-name> \
   CLUSTER_REGION=<region> \
-  CONTROL_PLANE_PROFILE=deploy/stacks/self-managed/out/control-plane-profile.yaml \
-  KUBECONFIG_FILE=<gpu-cluster-kubeconfig> \
+  CONTROL_PLANE_PROFILE="$(pwd)/deploy/stacks/self-managed/out/control-plane-profile.yaml" \
+  KUBECONFIG_FILE=<absolute-path-to-gpu-cluster-kubeconfig> \
   COMPUTE_KUBE_CONTEXT=<gpu-cluster-context> \
-  NVCF_CLI=<path-to-nvcf-cli>
+  NVCF_CLI=<absolute-path-to-nvcf-cli> \
+  NVCF_CLI_CONFIG=<absolute-path-to-cli-config>
 
 make -C deploy/stacks/nvcf-compute-plane install \
   CLUSTER_NAME=<gpu-cluster-name> \
   HELMFILE_ENV=<environment-name> \
   NCA_ID=<nca-id> \
-  KUBECONFIG_FILE=<gpu-cluster-kubeconfig> \
+  KUBECONFIG_FILE=<absolute-path-to-gpu-cluster-kubeconfig> \
   COMPUTE_KUBE_CONTEXT=<gpu-cluster-context>
 ```
 

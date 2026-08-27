@@ -6,22 +6,10 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
   so that I can install the control plane on one cluster and register and
   install the NVCA operator on a separately registered compute cluster.
 
-  # The register-cluster Make target runs `nvcf-cli init` internally
-  # before the cluster register call, so unlike the CLI features this
-  # feature does not need a separate init step. The CLI state file
-  # (~/.nvcf-cli.nvcf-cli-local.state) the init writes is snapshotted
-  # by harness.NewSuite through the Ledger and restored at suite
-  # teardown.
-  #
-  # This feature is values-driven (not profile-driven). The CLI
-  # multi-cluster feature uses `self-hosted install --control-plane`
-  # which writes a profile with both inCluster and computeReachable
-  # URLs, then `compute-plane register --control-plane-profile`
-  # picks the right URL block by kube-context. This Helmfile path
-  # has no profile; the URLs come from the operator-authored env
-  # file (here: fixtures/self-managed-local-bdd-multi.yaml). The
-  # fixture's service-DNS hostnames must match the local stack values
-  # used by the CLI feature.
+  # Helmfile installs the control plane from the operator-authored
+  # environment. Registration then exports that installed environment as a
+  # control-plane profile and passes it to the compute-plane Make target.
+  # The feature runs `nvcf-cli init` explicitly before registration.
   # See tests/bdd/AGENTS.md "CLI vs Helmfile install paths".
 
   Rule: Helmfile installs the control plane on the control-plane cluster
@@ -155,6 +143,19 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
 
     @nvca-registration
     Scenario: Operator registers the compute cluster and installs the NVCA operator there
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml self-hosted --control-plane-stack deploy/stacks/self-managed --env local-bdd --control-plane-context k3d-ncp-local-cp --compute-plane-context k3d-ncp-local-compute-1 control-plane profile export --cluster-name ncp-local-cp
+        """
+      Then the command exit code should be 0
+      And file "deploy/stacks/self-managed/out/control-plane-profile.yaml" should exist
+
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml init
+        """
+      Then the command exit code should be 0
+
       # nvcf-cli cluster register auto-discovers the target cluster's
       # OIDC issuer + JWKS by running a probe Job in the CURRENT
       # kubectl context, then POSTs that identity to ICMS so future
@@ -172,7 +173,7 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
 
       When I run command:
         """
-        make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=ncp-local-compute-1 NVCF_CLI=${NVCF_CLI} NVCF_CLI_CONFIG=${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml
+        make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=ncp-local-compute-1 CONTROL_PLANE_PROFILE=${REPO_ROOT}/deploy/stacks/self-managed/out/control-plane-profile.yaml COMPUTE_KUBE_CONTEXT=k3d-ncp-local-compute-1 NVCF_CLI=${NVCF_CLI} NVCF_CLI_CONFIG=${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml
         """
       Then the command exit code should be 0
       And file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-compute-1-register-values.yaml" should exist
@@ -302,8 +303,8 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
 
     # This fixed-response sample proves the multi-cluster LLM routing and
     # request/response contract. It is not a token-generation capacity test.
-    # The compute fixture deliberately retains stargateQUICInsecure; secured
-    # split-cluster transport coverage remains a separate scenario.
+    # The compute fixture consumes the exported profile bundle with secure
+    # Stargate QUIC transport.
     # The scenario depends on the earlier control-plane install and compute
     # registration scenarios and is not a standalone tag target.
     @llm-function-type

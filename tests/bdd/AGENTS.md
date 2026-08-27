@@ -140,11 +140,11 @@ logic into `dsl/`.
 
 ## CLI vs Helmfile install paths (two intentionally distinct workflows)
 
-The suite exercises two operator workflows that share a stack but
-differ in how endpoint URLs reach the worker layer. Future changes
-to either path should respect the boundary; do not introduce a
-profile dependency into the Helmfile path or a values-file
-dependency into the CLI path.
+The suite exercises two operator workflows that share a stack but differ in
+how the control plane is installed. Future changes must keep the CLI install
+path independent of authored Helmfile values. They must also preserve the
+exported-profile handoff from a Helmfile control-plane install into compute
+registration.
 
 - CLI path (`single-cluster-up.feature`, `multi-cluster-up.feature`)
   is profile-driven. `nvcf-cli self-hosted install --control-plane`
@@ -155,15 +155,19 @@ dependency into the CLI path.
   kube-context, probes JWKS, and emits a values file with the right
   URLs already baked in. The profile is the single source of truth.
 
-- Helmfile path (`single-cluster-helmfile.feature`,
-  `multi-cluster-helmfile.feature`) is values-driven. The operator
-  authors `environments/<env>.yaml` carrying the URLs they want;
-  `make install` runs helmfile sync; `make register-cluster`
-  (older `nvcf-cli cluster register`) calls ICMS with name + nca +
-  region, auto-discovers JWKS from the CURRENT kubectl context,
-  and writes a values file from the ICMS response. There is no
-  profile in this path. Operators are responsible for putting the
-  topology-correct URLs in their environment file.
+- Helmfile control-plane install is values-driven. The operator authors
+  `environments/<env>.yaml`, and `make install` runs Helmfile sync. Before
+  compute registration, export the selected installed environment with
+  `self-hosted --control-plane-stack <path> --env <env> control-plane
+  profile export`. The compute-plane `make register-cluster` target consumes
+  that file through `CONTROL_PLANE_PROFILE` and passes it to `self-hosted
+  compute-plane register`. Run `nvcf-cli init` explicitly before registration.
+  `NVCF_CLI_CONFIG` is optional and only selects the config and state files the
+  registration command reads; the Make target does not run `init`. In a local
+  single-cluster flow, omit both persistent CLI context flags during profile
+  export because the CLI requires either a valid split-cluster pair or neither.
+  Pass `COMPUTE_KUBE_CONTEXT=k3d-ncp-local` to the compute target so registration
+  probes the intended cluster.
 
 For multi-cluster Helmfile the BDD fixture
 `fixtures/self-managed-local-bdd-multi.yaml` carries the same

@@ -405,15 +405,50 @@ func (c *Client) ReadPKICertificatePEM(ctx context.Context, pkiPath string) (str
 		"curl", "-sS", readURL,
 		"-H", "X-Vault-Token: " + rootToken,
 	}
-	output, err := c.executeKubectlRun(ctx, "openbao-pki-root-ca", curlArgs)
-	if err != nil {
-		return "", fmt.Errorf("reading OpenBao PKI certificate: %w", err)
+	return readPKICertificatePEM(ctx, 3, 2*time.Second, func(ctx context.Context) (string, error) {
+		return c.executeKubectlRun(ctx, "openbao-pki-root-ca", curlArgs)
+	})
+}
+
+func readPKICertificatePEM(
+	ctx context.Context,
+	attempts int,
+	retryDelay time.Duration,
+	read func(context.Context) (string, error),
+) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	pem, err := rootCAPEMFromOpenBaoResponse(output)
-	if err != nil {
-		return "", err
+	for attempt := 1; attempt <= attempts; attempt++ {
+		output, err := read(ctx)
+		if err != nil {
+			return "", fmt.Errorf("reading OpenBao PKI certificate: %w", err)
+		}
+		pem, err := rootCAPEMFromOpenBaoResponse(output)
+		if err == nil {
+			return pem, nil
+		}
+		var syntaxErr *json.SyntaxError
+		retryable := strings.TrimSpace(output) == "" || errors.As(err, &syntaxErr)
+		if !retryable || attempt == attempts {
+			return "", err
+		}
+		if err := waitForPKICertificateRetry(ctx, retryDelay); err != nil {
+			return "", err
+		}
 	}
-	return pem, nil
+	return "", fmt.Errorf("read OpenBao PKI certificate without an attempt")
+}
+
+func waitForPKICertificateRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("waiting to retry OpenBao PKI certificate read: %w", ctx.Err())
+	case <-timer.C:
+		return nil
+	}
 }
 
 func rootCAPEMFromOpenBaoResponse(output string) (string, error) {
