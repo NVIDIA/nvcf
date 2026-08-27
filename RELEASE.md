@@ -142,7 +142,19 @@ step tied to a version tag.
 
 ## Backport Policy
 
-No formal backport policy is documented in this repository today. A fix that
-needs to reach an already-cut maintenance branch has to be applied there
-directly (for example by cherry-picking the commit to the `release-*`
-branch), following the same commit and review conventions as `main`.
+Applies only to the four dev-prerelease subprojects (`nvca` and the three
+stacks under `deploy/stacks/`), since those are the only subprojects that
+cut release branches at all (see Release Cadence). Semantic-release
+subprojects have no maintenance branch to backport to; a fix for one of
+them ships by merging to `main` like any other change.
+
+Support window: for each of the four dev-prerelease subprojects, only the
+latest minor release train and the one before it (N and N-1) are
+maintained. A release branch older than N-1 is effectively end of life and
+does not receive further backports.
+
+Mechanism: a fix lands on `main` first. To reach a supported release
+branch, apply it there directly, for example by cherry-picking the commit
+to the `release-*` branch, following the same commit and review
+conventions as `main`. There is no automation that backports a commit for
+you.
