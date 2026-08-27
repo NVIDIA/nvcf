@@ -844,6 +844,13 @@ func (r *Reconciler) doInstall(ctx context.Context,
 		return reconcile.Result{}, reconcile.TerminalError(err)
 	}
 
+	if r.WorkerIdentityEnabled {
+		if err := ensureWorkerIdentity(ctx, r.Client, ms.Spec.Namespace); err != nil {
+			return reconcile.Result{}, fmt.Errorf("ensure worker identity for MiniService %s: %w", ms.Name, err)
+		}
+		injectWorkerTokenVolume(utilsPod, r.ClusterID)
+	}
+
 	infraObjs = append(infraObjs, utilsPod)
 
 	if r.FeatureFlagFetcher.IsAttributeEnabled(featureflag.AttrNVLinkOptimized) {

@@ -126,6 +126,12 @@ type ControllerOptions struct {
 	// profiling enabled. Shared with BackendK8sCache.
 	NsightProfilingAllowlist *profiling.Allowlist
 
+	// WorkerIdentityEnabled gates projected ServiceAccount token provisioning for
+	// MiniService utils pods (self-hosted PSAT mode).
+	WorkerIdentityEnabled bool
+	// ClusterID is the NVCF cluster identifier, used to set the PSAT token audience.
+	ClusterID string
+
 	// Internal use.
 	cacheDir string
 }

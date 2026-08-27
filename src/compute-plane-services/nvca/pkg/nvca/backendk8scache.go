@@ -226,11 +226,6 @@ type BackendK8sCache struct {
 	functionEnvOverrides map[string]string
 	taskEnvOverrides     map[string]string
 
-	// workerIdentityEnabled gates projected ServiceAccount token provisioning
-	// and WorkerAuth registration for container function pods (self-hosted PSAT mode).
-	workerIdentityEnabled bool
-	// clusterID is the NVCF cluster identifier, used to set the PSAT audience.
-	clusterID string
 }
 
 // BackendK8sCacheBuilder builds Backendk8sCache and start related edge K8s
@@ -494,17 +489,6 @@ func (b *BackendK8sCacheBuilder) WithEnvOverrides(functionOverrides, taskOverrid
 	return &next
 }
 
-// WithWorkerIdentity enables projected ServiceAccount token provisioning for container
-// function pods. When enabled, NVCA creates a per-pod worker SA and injects a projected
-// SAT volume so workers can authenticate via ICMS token introspection.
-// Only applies to self-hosted PSAT-mode clusters.
-func (b *BackendK8sCacheBuilder) WithWorkerIdentity(enabled bool, clusterID string) *BackendK8sCacheBuilder {
-	next := *b
-	next.workerIdentityEnabled = enabled
-	next.clusterID = clusterID
-	return &next
-}
-
 //nolint:gocyclo
 func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <-chan *core.Event, error) {
 	log := core.GetLogger(ctx)
@@ -560,8 +544,6 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 		secretMirrorLabelSelector:            b.secretMirrorLabelSelector,
 		functionEnvOverrides:                 b.functionEnvOverrides,
 		taskEnvOverrides:                     b.taskEnvOverrides,
-		workerIdentityEnabled:                b.workerIdentityEnabled,
-		clusterID:                            b.clusterID,
 	}
 
 	go func() {

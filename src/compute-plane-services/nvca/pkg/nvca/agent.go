@@ -1152,11 +1152,6 @@ func (a *Agent) Start(ctx context.Context) error {
 		WithInfraOverheadGetter(infraOverheadGetter).
 		WithSecretMirrorConfig(a.SecretMirrorSourceNamespace, a.SecretMirrorLabelSelector).
 		WithEnvOverrides(a.FunctionEnvOverrides, a.TaskEnvOverrides).
-		WithWorkerIdentity(
-			a.FeatureFlagFetcher.IsFeatureFlagEnabled(featureflag.SelfHosted) &&
-				a.AgentOptions.Config.Authz.ClusterIssuedTokenSource == nvcaconfig.ClusterIssuedTokenSourcePSAT,
-			a.ClusterID,
-		).
 		Start(ctx)
 	if err != nil {
 		log.WithError(err).Error("Failed to configure the Backend K8s Cache")

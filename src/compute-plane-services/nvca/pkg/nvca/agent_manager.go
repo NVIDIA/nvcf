@@ -25,6 +25,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	cmnhttp "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/http"
+	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -200,6 +201,9 @@ func startControllerManagerForAgent(
 			CustomAnnotations:          a.backendk8scache.customAnnotations,
 			Kartas:                     kartas,
 			NsightProfilingAllowlist:   a.backendk8scache.nsightProfilingAllowlist,
+			WorkerIdentityEnabled: a.FeatureFlagFetcher.IsFeatureFlagEnabled(featureflag.SelfHosted) &&
+				a.AgentOptions.Config.Authz.ClusterIssuedTokenSource == nvcaconfig.ClusterIssuedTokenSourcePSAT,
+			ClusterID: a.ClusterID,
 		},
 	); err != nil {
 		log.WithError(err).Error("Failed to create miniservice controller")

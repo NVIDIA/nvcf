@@ -22,6 +22,7 @@ go_library(
         "tokenfetcher.go",
         "translate_workload.go",
         "transport_tls.go",
+        "worker_identity.go",
     ],
     embedsrcs = ["karta/dynamo/nvidia.com_dynamographdeployment_v1alpha1.yaml"],
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/miniservice",

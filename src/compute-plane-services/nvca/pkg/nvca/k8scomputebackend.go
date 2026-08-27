@@ -1022,17 +1022,11 @@ func (c K8sComputeBackend) CreatePodArtifactInstances(ctx context.Context, pod *
 		setTerminationGracePeriodIfNotSet(pod)
 		k8sutil.ApplyCustomAnnotations(pod, c.bk8s.customAnnotations)
 
-		if c.bk8s.workerIdentityEnabled {
-			if _, saErr := ensureWorkerServiceAccount(ctx, c.clients, pod.Namespace, pod.Name); saErr != nil {
-				return nil, fmt.Errorf("ensure worker ServiceAccount for pod %s: %w", pod.Name, saErr)
-			}
-			if rbacErr := ensureWorkerRBAC(ctx, c.clients, pod.Namespace, pod.Name); rbacErr != nil {
-				cleanupWorkerIdentity(ctx, c.clients, pod.Namespace, pod.Name)
-				return nil, fmt.Errorf("ensure worker RBAC for pod %s: %w", pod.Name, rbacErr)
-			}
-			injectWorkerIdentity(pod, c.bk8s.clusterID, pod.Name)
-			plog.Debug("Injected worker identity into pod")
-		}
+		// Container function and task pods use the legacy NVCF-issued worker token
+		// (NVCF_WORKER_TOKEN env var). PSAT-based delegated worker identity is not
+		// provisioned here. When container workloads are migrated to the MiniService
+		// controller, they will inherit PSAT provisioning automatically via the
+		// MiniService reconciler.
 
 		if _, err := c.clients.K8s.CoreV1().Pods(pod.Namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
 			if !apierrors.IsAlreadyExists(err) {
@@ -1155,10 +1149,6 @@ func (c K8sComputeBackend) purgeInstanceID(ctx context.Context, req *nvcav2beta1
 			log.Debug("Terminated Pod")
 			c.bk8s.eventRecorder.Eventf(req, corev1.EventTypeNormal,
 				string(types.EventCategoryInstanceTermination), "Stopped instance %v/%v", c.bk8s.podInstanceNamespace, id)
-		}
-
-		if c.bk8s.workerIdentityEnabled {
-			cleanupWorkerIdentity(ctx, c.clients, c.bk8s.podInstanceNamespace, id)
 		}
 
 		if _, ok := terminatedInstances[id]; !ok {
@@ -1740,11 +1730,6 @@ func (c K8sComputeBackend) GetICMSRequestUpdatesForCreatePodRequest(ctx context.
 			}
 		}
 
-		var workerAuth *types.WorkerAuth
-		if c.bk8s.workerIdentityEnabled && !needsPurge {
-			workerAuth = buildWorkerAuth(ctx, c.clients, c.bk8s.podInstanceNamespace, p)
-		}
-
 		return types.ICMSRequestUpdateInfo{
 			RequestID:  req.Spec.RequestID,
 			InstanceID: id,
@@ -1760,7 +1745,6 @@ func (c K8sComputeBackend) GetICMSRequestUpdatesForCreatePodRequest(ctx context.
 				},
 				SystemFailure: string(tc),
 				InstanceIPs:   instanceIPs,
-				WorkerAuth:    workerAuth,
 			},
 		}, nil
 	}
