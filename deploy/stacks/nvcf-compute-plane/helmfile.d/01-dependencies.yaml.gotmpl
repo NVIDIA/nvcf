@@ -273,12 +273,12 @@ releases:
     # Topology-aware scheduling operator (optional; disabled by default).
     # Enable per-environment: addons.groveOperator.enabled: true
     condition: addons.groveOperator.enabled
-    # Minimum v0.1.0-alpha.11: dynamo-operator 1.4.1 requires the Grove
-    # ClusterTopologyBinding API, only present from v0.1.0-alpha.11 on
-    # (NVIDIA/nvcf#1269, NVBug 6673896). Earlier charts also have no
-    # nodeSelector support and silently drop the nodeSelector set below,
-    # letting the operator schedule onto any node - including one whose
-    # architecture its image does not support.
+    # Minimum v0.1.0-alpha.12-rc1: dynamo-operator 1.4.x's compatibility
+    # matrix requires Grove >= v0.1.0-alpha.12-rc1 for the ClusterTopologyBinding
+    # API (NVIDIA/nvcf#1269). Earlier charts also have no nodeSelector support
+    # and silently drop the nodeSelector set below, letting the operator
+    # schedule onto any node - including one whose architecture its image
+    # does not support.
     chart: nvidia-ai-dynamo-grove/grove-charts
     version: v0.1.0-alpha.12
     namespace: grove-system
@@ -385,8 +385,8 @@ releases:
     # Dynamo inference framework scheduling operator (optional; disabled by default).
     # Enable per-environment: addons.dynamoOperator.enabled: true
     # Minimum 1.4.0: earlier releases speak the legacy Grove ClusterTopology
-    # API, which no longer exists once Grove is on v0.1.0-alpha.11+
-    # (NVIDIA/nvcf#1269, NVBug 6673896).
+    # API, which no longer exists once Grove is on v0.1.0-alpha.12-rc1+
+    # (NVIDIA/nvcf#1269).
     condition: addons.dynamoOperator.enabled
     chart: nvidia-ai-dynamo/dynamo-platform
     version: 1.4.1
