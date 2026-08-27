@@ -108,6 +108,7 @@ the rationale.
 - [k3d](https://k3d.io/#installation) v5.x or later
 - `kubectl`
 - `helm` >= 3.12
+- [Go](https://go.dev/doc/install) >= 1.24.0 (required to build `nvcf-cli`)
 - `helmfile` >= 1.1.0, < 1.2.0 (Helmfile flows only)
 - `helm-diff` plugin (Helmfile flows only):
   `helm plugin install https://github.com/databus23/helm-diff`

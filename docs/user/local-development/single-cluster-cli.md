@@ -25,6 +25,7 @@ Install the following tools:
 - [k3d](https://k3d.io/#installation) v5.x or later
 - `kubectl`
 - `helm` >= 3.12
+- [Go](https://go.dev/doc/install) >= 1.24.0 (required to build `nvcf-cli`)
 - An NGC API key from [ngc.nvidia.com](https://ngc.nvidia.com) with
   access to the NVCF chart and image registry.
 - The NGC organization and team slugs that hold the chart and image
