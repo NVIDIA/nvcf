@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.nvidia.icms.service.extensions.api;
+package com.nvidia.icms.service.internal;
 
 import static com.nvidia.icms.util.InstanceServiceUtil.getStringValue;
 

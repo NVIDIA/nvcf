@@ -31,7 +31,7 @@ import com.nvidia.icms.service.byoc.ByocCreateService;
 import com.nvidia.icms.service.byoc.ByocValidationService;
 import com.nvidia.icms.service.byoc.ClusterTargetingHelper;
 import com.nvidia.icms.service.extensions.api.InstanceLifecycleService;
-import com.nvidia.icms.service.extensions.api.InstanceValidationService;
+import com.nvidia.icms.service.internal.InstanceValidationService;
 import com.nvidia.icms.service.extensions.api.ReservationProcessor;
 import com.nvidia.icms.service.platform.ComputePlatformService;
 import com.nvidia.icms.service.telemetry.TelemetryEventClient;

@@ -31,7 +31,6 @@ import com.nvidia.icms.service.extensions.api.ReservationProcessor;
 import com.nvidia.icms.service.extensions.api.ReservedBackupInstanceProcessor;
 import com.nvidia.icms.service.extensions.api.InstanceTerminationService;
 import com.nvidia.icms.service.extensions.api.UnhealthyInstanceService;
-import com.nvidia.icms.service.extensions.api.InstanceValidationService;
 import com.nvidia.icms.service.extensions.impl.NoOpCloudHealthEventService;
 import com.nvidia.icms.service.extensions.impl.NoOpClusterAuthorizationService;
 import com.nvidia.icms.service.extensions.impl.NoOpClusterRegistrationHandler;

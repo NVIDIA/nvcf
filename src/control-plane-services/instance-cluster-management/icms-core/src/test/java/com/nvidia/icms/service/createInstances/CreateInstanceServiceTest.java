@@ -59,7 +59,7 @@ import com.nvidia.icms.outbound.cassandra.cloudhealth.entity.GpuCapacity;
 import com.nvidia.icms.outbound.cassandra.request.InstanceRequestV2Repository;
 import com.nvidia.icms.outbound.sqs.model.CapacityType;
 import com.nvidia.icms.service.InstanceServiceHelper;
-import com.nvidia.icms.service.extensions.api.InstanceValidationService;
+import com.nvidia.icms.service.internal.InstanceValidationService;
 import com.nvidia.icms.service.byoc.ByocCreateService;
 import com.nvidia.icms.service.byoc.ByocValidationService;
 import com.nvidia.icms.service.byoc.ClusterTargetingHelper;
