@@ -49,6 +49,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
+	netv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -700,6 +701,28 @@ func TestAutoPurgeWorkerDeletion(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NotNil(t, o)
 	}
+}
+
+func TestBackendK8sCacheStartRemovesLegacyIntraNamespaceEgressPolicy(t *testing.T) {
+	ctx, cancel := context.WithCancel(newTestContext())
+	t.Cleanup(cancel)
+
+	legacyNP := &netv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      k8sutil.AllowEgressIntraNamespaceNetworkPolicyName,
+			Namespace: RequestsNamespace,
+		},
+	}
+
+	b := NewBackendk8sCacheBuilder().WithNamespaceLabels(labels.Set{"foo": "bar"})
+	clients := mockKubeClients(legacyNP)
+	bc, _, err := b.WithClients(clients).Start(ctx)
+	require.NoError(t, err)
+
+	_, err = bc.clients.K8s.NetworkingV1().NetworkPolicies(RequestsNamespace).Get(
+		ctx, k8sutil.AllowEgressIntraNamespaceNetworkPolicyName, metav1.GetOptions{},
+	)
+	assert.True(t, apierrors.IsNotFound(err))
 }
 
 func TestCleanupFailedButNoInstances(t *testing.T) {
