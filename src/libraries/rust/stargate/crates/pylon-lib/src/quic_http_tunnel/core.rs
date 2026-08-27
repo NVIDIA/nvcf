@@ -757,7 +757,7 @@ async fn send_upstream_request(
     };
     let mut upstream_headers = HeaderMap::with_capacity(request_headers.len());
     for (name, value) in request_headers {
-        if should_forward_header(name, &app.retry) {
+        if should_forward_header(name, &app.retry, app.upstream_backend) {
             upstream_headers.append(name, value.clone());
         }
     }
@@ -1117,9 +1117,15 @@ pub(super) fn join_base_path(base: &str, path_and_query: &str) -> Result<url::Ur
     .context("join upstream path failed")
 }
 
-pub(super) fn should_forward_header(name: &HeaderName, retry: &PylonRetryConfig) -> bool {
+pub(super) fn should_forward_header(
+    name: &HeaderName,
+    retry: &PylonRetryConfig,
+    upstream_backend: UpstreamBackend,
+) -> bool {
     !is_tunnel_control_header(name, retry)
         && !backend::dynamo::is_stripped_engine_header(name)
+        && (upstream_backend != UpstreamBackend::Dynamo
+            || !backend::dynamo::is_platform_metadata_header(name))
         && !matches!(
             name.as_str(),
             "host" | "x-method" | "x-path" | HEADER_STARGATE_EXPECTED_QUEUE_MS

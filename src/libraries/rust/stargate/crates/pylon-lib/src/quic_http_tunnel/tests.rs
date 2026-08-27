@@ -480,8 +480,6 @@ fn pylon_request_header_filter_strips_tunnel_headers_case_insensitively()
         "X-Method",
         "X-Path",
         "X-Stargate-Expected-Queue-Ms",
-        "Request-Id",
-        "X-Dynamo-Request-Id",
         "X-Dynamo-Request-Priority",
         "X-Dynamo-Request-Strict-Priority",
     ]
@@ -490,12 +488,33 @@ fn pylon_request_header_filter_strips_tunnel_headers_case_insensitively()
     {
         assert!(!should_forward_header(
             &HeaderName::from_bytes(name.as_bytes())?,
-            &retry
+            &retry,
+            UpstreamBackend::Passthrough,
+        ));
+    }
+    for name in [
+        "Request-Id",
+        "X-Dynamo-Request-Id",
+        "X-Model",
+        "X-Routing-Key",
+        "X-Priority",
+    ] {
+        let name = HeaderName::from_bytes(name.as_bytes())?;
+        assert!(should_forward_header(
+            &name,
+            &retry,
+            UpstreamBackend::Passthrough,
+        ));
+        assert!(!should_forward_header(
+            &name,
+            &retry,
+            UpstreamBackend::Dynamo,
         ));
     }
     assert!(should_forward_header(
         &HeaderName::from_bytes(b"X-Request-Id")?,
-        &retry
+        &retry,
+        UpstreamBackend::Dynamo,
     ));
     Ok(())
 }
@@ -549,12 +568,12 @@ fn pylon_consumes_platform_metadata_instead_of_forwarding_it_to_dynamo() {
         "x-routing-key",
         "x-priority",
     ] {
-        assert!(dynamo::is_stripped_engine_header(
+        assert!(dynamo::is_platform_metadata_header(
             &HeaderName::from_bytes(name.as_bytes()).unwrap()
         ));
     }
     for name in ["x-request-id", "x-input-tokens"] {
-        assert!(!dynamo::is_stripped_engine_header(
+        assert!(!dynamo::is_platform_metadata_header(
             &HeaderName::from_bytes(name.as_bytes()).unwrap()
         ));
     }
@@ -1070,7 +1089,6 @@ async fn http3_direct_tunnel_accepts_responses_request_to_upstream() {
     );
     let mut config = test_tunnel_config_for(app).await;
     config.tunnel_protocol = TunnelTransportProtocol::Http3;
-    config.forwarding.upstream_backend = UpstreamBackend::Passthrough;
     let tunnel = start_quic_http_tunnel(config).await.unwrap();
     let mut headers = HeaderMap::new();
     headers.insert("x-request-id", "req-h3-direct".parse().unwrap());
@@ -1676,7 +1694,6 @@ async fn quic_tunnel_forwards_to_http_backend() {
             }),
         );
     let (mut config, _metrics) = metered_test_tunnel_config_for(app).await;
-    config.forwarding.upstream_backend = UpstreamBackend::Passthrough;
     config.forwarding.retry.upstream_retry_header = HeaderName::from_static("x-vendor-retryable");
     let mut tunnel = RawTunnelTest::start(config).await;
 
@@ -2768,7 +2785,6 @@ async fn assert_direct_embeddings_case(case: DirectEmbeddingsCase) {
     let (runtime_state, rx) = observed_runtime(16);
     let mut config = test_tunnel_config_for(app).await;
     config.tunnel_protocol = case.protocol;
-    config.forwarding.upstream_backend = UpstreamBackend::Passthrough;
     config.forwarding.runtime_state = runtime_state;
     let tunnel = start_quic_http_tunnel(config).await.unwrap();
     let client = DirectTunnelClient::connect(case.protocol, tunnel.listen_addr()).await;

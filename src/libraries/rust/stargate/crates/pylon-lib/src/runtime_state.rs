@@ -90,7 +90,7 @@ impl ModelGeneration {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct PylonRuntimeState {
     advertised: Arc<Mutex<AdvertisedRuntimeState>>,
     live_requests: LiveRequestState,
@@ -620,12 +620,6 @@ impl PylonRuntimeState {
     #[cfg(test)]
     pub(crate) fn tracked_request_count(&self) -> usize {
         self.live_requests.tracked_request_count()
-    }
-}
-
-impl Default for PylonRuntimeState {
-    fn default() -> Self {
-        Self::new(InferenceServerStatus::Unknown, &[])
     }
 }
 
