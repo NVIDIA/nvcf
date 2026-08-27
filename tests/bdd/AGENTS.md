@@ -103,6 +103,11 @@ logic into `dsl/`.
   token never appears in argv or per-command logs. Do not introduce
   step handlers that capture secrets into env vars; relying on the
   state file keeps the JWT out of `<seq>.cmd` lines.
+- The live runner installs SIGINT and SIGTERM cleanup before scenarios run.
+  Interrupt cleanup cancels the active step and its Unix process group, waits
+  for that step to stop writing, then restores the same file and environment
+  ledgers while preventing later steps from starting. Ledger-backed generated
+  registry credentials must not remain after an interrupted run.
 - Pre-suite destructive cleanup is governed by the single env var
   `BDD_CLEANUP_MODE`. Valid values: `stack-single`, `stack-multi`,
   `topology-single`, `topology-multi`, or unset. Unknown values fail
@@ -138,7 +143,7 @@ logic into `dsl/`.
   deletion that catches topology infrastructure (`eg` in
   `envoy-gateway-system`, the namespace itself, `cert-manager`).
 
-## CLI vs Helmfile install paths (two intentionally distinct workflows)
+## CLI vs Helmfile install paths
 
 The suite exercises two operator workflows that share a stack but differ in
 how the control plane is installed. Future changes must keep the CLI install
@@ -190,14 +195,15 @@ multi-cluster feature:
    refused` against an in-cluster hostname.
 
 2. Wrong kubectl context when `make register-cluster` runs. The
-   `nvcf-cli cluster register` command auto-discovers OIDC issuer
-   and JWKS from the CURRENT context by spawning a probe Job in
-   that cluster, then registers that identity with ICMS. If the
+   `self-hosted compute-plane register` command discovers OIDC issuer
+   and JWKS from its selected compute context, then registers that
+   identity with ICMS. If the
    context is the cp cluster, ICMS records the cp cluster's JWKS
    for the compute cluster's row. The compute cluster's NVCA agent
    then 401s against ICMS at runtime ("Signed JWT rejected:
    ... no matching key(s) found"). Switch the context to the
-   compute cluster BEFORE `make register-cluster`, not after.
+   compute context explicitly through `COMPUTE_KUBE_CONTEXT` (or a
+   compute-scoped kubeconfig) before `make register-cluster`, not after.
 
 ## Tests
 

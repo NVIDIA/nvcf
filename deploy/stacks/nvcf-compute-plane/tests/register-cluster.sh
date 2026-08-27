@@ -94,6 +94,24 @@ fi
 values="${test_dir}/compute-plane/registration/gpu-a-register-values.yaml"
 grep -q '^clusterID: generated-id$' "${values}"
 
+no_config_record="${test_dir}/cli-args-no-config"
+FAKE_CLI_RECORD="${no_config_record}" make -C "${test_dir}/compute-plane" register-cluster \
+  CLUSTER_NAME=gpu-b \
+  NVCF_CLI="${fake_cli}"
+no_config_args=()
+while IFS= read -r arg; do
+  no_config_args+=("${arg}")
+done < "${no_config_record}"
+if [[ "${no_config_args[0]}" != "self-hosted" ]]; then
+  printf 'register-cluster added arguments before self-hosted without NVCF_CLI_CONFIG: %q\n' \
+    "${no_config_args[0]}" >&2
+  exit 1
+fi
+if printf '%s\n' "${no_config_args[@]}" | grep -Fxq -- '--config'; then
+  echo "register-cluster passed --config without NVCF_CLI_CONFIG" >&2
+  exit 1
+fi
+
 rm "${profile}" "${record}"
 if FAKE_CLI_RECORD="${record}" make -C "${test_dir}/compute-plane" register-cluster \
   CLUSTER_NAME=gpu-a \
