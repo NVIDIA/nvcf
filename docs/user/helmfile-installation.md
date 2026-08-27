@@ -1332,11 +1332,11 @@ Run the compute-plane target from the repository root. The target writes
 make -C deploy/stacks/nvcf-compute-plane register-cluster \
   CLUSTER_NAME=<gpu-cluster-name> \
   CLUSTER_REGION=<region> \
-  CONTROL_PLANE_PROFILE=deploy/stacks/self-managed/out/control-plane-profile.yaml \
-  KUBECONFIG_FILE=<gpu-cluster-kubeconfig> \
+  CONTROL_PLANE_PROFILE="$(pwd)/deploy/stacks/self-managed/out/control-plane-profile.yaml" \
+  KUBECONFIG_FILE=<absolute-path-to-gpu-cluster-kubeconfig> \
   COMPUTE_KUBE_CONTEXT=<gpu-cluster-context> \
-  NVCF_CLI=<path-to-nvcf-cli> \
-  NVCF_CLI_CONFIG=<path-to-nvcf-cli-gpu-register.yaml>
+  NVCF_CLI=<absolute-path-to-nvcf-cli> \
+  NVCF_CLI_CONFIG=<absolute-path-to-nvcf-cli-gpu-register.yaml>
 ```
 
 Install the NVCA operator on that GPU cluster. The `install` target copies the
@@ -1348,7 +1348,7 @@ make -C deploy/stacks/nvcf-compute-plane install \
   CLUSTER_NAME=<gpu-cluster-name> \
   HELMFILE_ENV=<environment-name> \
   NCA_ID=<nca-id> \
-  KUBECONFIG_FILE=<gpu-cluster-kubeconfig>
+  KUBECONFIG_FILE=<absolute-path-to-gpu-cluster-kubeconfig>
 ```
 
 Verify the operator and backend on the GPU cluster:

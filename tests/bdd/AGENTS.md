@@ -140,11 +140,11 @@ logic into `dsl/`.
 
 ## CLI vs Helmfile install paths (two intentionally distinct workflows)
 
-The suite exercises two operator workflows that share a stack but
-differ in how endpoint URLs reach the worker layer. Future changes
-to either path should respect the boundary; do not introduce a
-profile dependency into the Helmfile path or a values-file
-dependency into the CLI path.
+The suite exercises two operator workflows that share a stack but differ in
+how the control plane is installed. Future changes must keep the CLI install
+path independent of authored Helmfile values. They must also preserve the
+exported-profile handoff from a Helmfile control-plane install into compute
+registration.
 
 - CLI path (`single-cluster-up.feature`, `multi-cluster-up.feature`)
   is profile-driven. `nvcf-cli self-hosted install --control-plane`
