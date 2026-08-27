@@ -63,6 +63,13 @@ assert_render_fails() {
   grep -Fq "${expected_error}" "${error_file}" || fail "render did not return expected error: ${expected_error}"
 }
 
+service_field() {
+  local manifest="$1"
+  local service_name="$2"
+  local expression="$3"
+  yq -r "select(.kind == \"Service\" and .metadata.name == \"${service_name}\") | ${expression}" "${manifest}" | head -n1
+}
+
 default_manifest="${tmp_dir}/default.yaml"
 render "${default_manifest}"
 
@@ -77,6 +84,10 @@ render "${default_manifest}"
 [ "$(workload_field "${default_manifest}" Deployment '.spec.updateStrategy // ""')" = "" ] || fail "Deployment must not render StatefulSet updateStrategy"
 default_backend_kind="$(yq -r 'select(.kind == "Deployment" and .metadata.name == "llm-request-router-backend-router") | .kind' "${default_manifest}" | head -n1)"
 [ "${default_backend_kind}" = "Deployment" ] || fail "default multi-replica Deployment did not infer backend-router enablement"
+[ "$(service_field "${default_manifest}" "llm-request-router" '.spec.ports[] | select(.name == "http") | .port')" = "8000" ] || fail "request-facing Service does not expose HTTP port 8000"
+[ "$(service_field "${default_manifest}" "llm-request-router" '.spec.publishNotReadyAddresses')" != "true" ] || fail "request-facing Service must honor pod readiness"
+[ "$(service_field "${default_manifest}" "llm-request-router-headless" '.spec.publishNotReadyAddresses')" = "true" ] || fail "headless discovery Service must publish unready addresses"
+[ -z "$(service_field "${default_manifest}" "llm-request-router-headless" '.spec.ports[] | select(.name == "http") | .port')" ] || fail "headless discovery Service must not expose request-facing HTTP"
 
 default_args="$(workload_args "${default_manifest}" Deployment)"
 default_backend_args="$(backend_router_args "${default_manifest}")"

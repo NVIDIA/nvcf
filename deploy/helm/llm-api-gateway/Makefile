@@ -30,7 +30,7 @@ OCI_REGISTRY_NAMESPACE ?= <your-org>
 CHART_NAME := $(shell yq -r .name $(helm_dir)/Chart.yaml)
 CHART_VERSION := $(shell yq -r .version $(helm_dir)/Chart.yaml)
 
-.PHONY: install uninstall status lint template validate clean package push-oci
+.PHONY: install uninstall status lint template validate test check-request-router-render clean package push-oci
 
 install:
 ifndef values
@@ -67,6 +67,11 @@ template:
 
 validate: template
 	kubeconform -strict -summary -output pretty -kubernetes-version 1.31.5 bin/manifest.yaml
+
+test: check-request-router-render
+
+check-request-router-render:
+	@test "$$(helm template $(release) $(helm_dir) --namespace $(namespace) --values $(values) --set llmApiGateway.image.repository=test | yq -r 'select(.kind == "ConfigMap" and .metadata.name == "$(release)") | .data.STARGATE_URL')" = "http://llm-request-router.nvcf.svc.cluster.local:8000"
 
 clean:
 	rm -rf ./packaged-charts bin

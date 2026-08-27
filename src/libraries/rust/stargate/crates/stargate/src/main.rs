@@ -83,7 +83,7 @@ struct Args {
     /// Self gRPC address published by non-Kubernetes discovery and used as the port source for Kubernetes advertised hostnames.
     #[arg(long, value_name = "ADDR")]
     advertise_addr: SocketAddr,
-    /// DNS name used for Stargate peer discovery. In Kubernetes this should be the headless Service so EndpointSlice readiness controls peer visibility and development-only relay targets.
+    /// DNS name used for Stargate peer discovery. In Kubernetes this should be the headless Service so warming and ready peers remain discoverable.
     #[arg(long, value_name = "DNS_NAME")]
     stargate_discovery_dns_name: String,
     /// Additional recursive WatchStargates seeds for remote regions. Pylons register only to concrete `stargates` entries returned by watch snapshots. Repeatable.

@@ -58,7 +58,7 @@ pub struct StargateRuntimeConfig {
     pub metrics_listen_addr: Option<SocketAddr>,
     /// Discovery address before hostname rendering; outside Kubernetes this is usually `WatchStargates.stargates[*].advertise_addr`.
     pub advertise_addr: SocketAddr,
-    /// Peer-discovery DNS name; in Kubernetes this must be the headless Service controlling ready endpoint visibility.
+    /// Peer-discovery DNS name; in Kubernetes this must be the headless Service publishing warming and ready peers.
     pub stargate_discovery_dns_name: String,
     /// Remote-region recursive watch seeds; pylons register to returned Stargates, not these URLs.
     pub remote_watch_stargate_urls: Vec<String>,
@@ -344,9 +344,7 @@ impl StargateRuntime {
 
         let proxy_router = make_router(ProxyAppState {
             state: service.state(),
-            traffic: ProxyTrafficState {
-                shutdown: tasks.shutdown_signal(),
-            },
+            traffic: ProxyTrafficState::new(tasks.shutdown_signal()),
             quic_proxy,
             lb_router,
             metrics: metrics.clone(),

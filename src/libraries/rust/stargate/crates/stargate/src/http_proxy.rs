@@ -14,7 +14,7 @@
 // limitations under the License.
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::Router;
 use axum::body::Body;
@@ -29,6 +29,8 @@ use crate::load_balancer::LoadBalancerRouter;
 use crate::metrics::StargateMetrics;
 use crate::routing_state::StargateState;
 use crate::tunnel::{QuicHttpProxy, QuicTunnelConfig};
+
+const READINESS_WARMUP: Duration = Duration::from_secs(60);
 
 mod attempt;
 mod diagnostics;
@@ -86,6 +88,20 @@ pub struct ProxyTransportConfig {
 #[derive(Clone)]
 pub struct ProxyTrafficState {
     pub shutdown: CancellationToken,
+    ready_at: Instant,
+}
+
+impl ProxyTrafficState {
+    pub(crate) fn new(shutdown: CancellationToken) -> Self {
+        Self {
+            shutdown,
+            ready_at: Instant::now() + READINESS_WARMUP,
+        }
+    }
+
+    fn is_ready_at(&self, now: Instant) -> bool {
+        !self.shutdown.is_cancelled() && now >= self.ready_at
+    }
 }
 
 #[derive(Clone)]
@@ -197,7 +213,7 @@ async fn healthz() -> StatusCode {
 }
 
 async fn readyz(State(app): State<ProxyAppState>) -> StatusCode {
-    if app.traffic.shutdown.is_cancelled() || !app.metrics.tls_identity_is_ready() {
+    if !app.traffic.is_ready_at(Instant::now()) || !app.metrics.tls_identity_is_ready() {
         return StatusCode::SERVICE_UNAVAILABLE;
     }
 
@@ -209,7 +225,7 @@ mod test_support {
     use axum::extract::State;
     use axum::http::StatusCode;
     use std::sync::Arc;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
     use tokio_util::sync::CancellationToken;
 
     use crate::auth::OpenAuthenticator;
@@ -218,7 +234,9 @@ mod test_support {
     use crate::routing_state::StargateState;
     use crate::tunnel::{QuicHttpProxy, QuicTunnelConfig};
 
-    use super::{DebugConfig, ProxyAppState, ProxyRetryConfig, ProxyTrafficState, readyz};
+    use super::{
+        DebugConfig, ProxyAppState, ProxyRetryConfig, ProxyTrafficState, READINESS_WARMUP, readyz,
+    };
 
     pub(super) fn test_proxy_app_state() -> ProxyAppState {
         test_proxy_app_state_with_lb_config(LoadBalancerConfig::default())
@@ -250,6 +268,7 @@ mod test_support {
             ),
             traffic: ProxyTrafficState {
                 shutdown: CancellationToken::new(),
+                ready_at: Instant::now(),
             },
             lb_router: Arc::new(
                 LoadBalancerRouter::from_config(&lb_config)
@@ -270,5 +289,18 @@ mod test_support {
         app.traffic.shutdown.cancel();
 
         assert_eq!(readyz(State(app)).await, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn readiness_waits_for_the_complete_warmup_interval() {
+        let started_at = Instant::now();
+        let traffic = ProxyTrafficState {
+            shutdown: CancellationToken::new(),
+            ready_at: started_at + READINESS_WARMUP,
+        };
+
+        assert_eq!(READINESS_WARMUP, Duration::from_secs(60));
+        assert!(!traffic.is_ready_at(started_at + Duration::from_secs(59)));
+        assert!(traffic.is_ready_at(started_at + READINESS_WARMUP));
     }
 }
