@@ -18,12 +18,15 @@ package com.nvidia.nvcf.service.token;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.Expiry;
 import com.nvidia.nvcf.icms.client.IcmsClient;
 import com.nvidia.nvcf.icms.client.IcmsStubService;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
+import java.time.Instant;
+import java.util.concurrent.TimeUnit;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -46,13 +49,40 @@ public class WorkerTokenIntrospectionService {
 
     public WorkerTokenIntrospectionService(
             IcmsClient icmsClient,
-            @Value("${nvcf.worker.delegated-token-enabled:false}") boolean enabled) {
+            @Value("${nvcf.worker.delegated-token.enabled:false}") boolean enabled) {
         this.icmsClient = icmsClient;
         this.enabled = enabled;
         this.cache = Caffeine.newBuilder()
                 .maximumSize(10_000)
-                .expireAfterWrite(CACHE_TTL)
-                .<String, IcmsStubService.WorkerTokenIntrospectResult>build();
+                .expireAfter(new Expiry<String, IcmsStubService.WorkerTokenIntrospectResult>() {
+                    @Override
+                    public long expireAfterCreate(
+                            String key, IcmsStubService.WorkerTokenIntrospectResult value,
+                            long currentTime) {
+                        if (value.getExp() != null) {
+                            long remainingMs =
+                                    value.getExp() * 1000L - Instant.now().toEpochMilli();
+                            long cappedMs = Math.max(0, Math.min(CACHE_TTL.toMillis(), remainingMs));
+                            return TimeUnit.MILLISECONDS.toNanos(cappedMs);
+                        }
+                        return CACHE_TTL.toNanos();
+                    }
+
+                    @Override
+                    public long expireAfterUpdate(
+                            String key, IcmsStubService.WorkerTokenIntrospectResult value,
+                            long currentTime, long currentDuration) {
+                        return currentDuration;
+                    }
+
+                    @Override
+                    public long expireAfterRead(
+                            String key, IcmsStubService.WorkerTokenIntrospectResult value,
+                            long currentTime, long currentDuration) {
+                        return currentDuration;
+                    }
+                })
+                .build();
     }
 
     public boolean isEnabled() {

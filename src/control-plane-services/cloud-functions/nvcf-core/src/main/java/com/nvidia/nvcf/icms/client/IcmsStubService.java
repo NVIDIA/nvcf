@@ -421,10 +421,12 @@ public interface IcmsStubService {
         @Nullable String workerId;
         @JsonProperty("token_type")
         @Nullable String tokenType;
+        /** RFC 7662 §2.2: epoch-seconds at which the token expires. Null when unknown. */
+        @Nullable Long exp;
         @Nullable String error;
     }
 
-    @PostExchange(url = "/v1/workers/tokens/introspect",
+    @PostExchange(url = "/v1/icms/workers/tokens/introspect",
                   accept = APPLICATION_JSON_VALUE,
                   contentType = APPLICATION_JSON_VALUE)
     WorkerTokenIntrospectResult introspectWorkerToken(
