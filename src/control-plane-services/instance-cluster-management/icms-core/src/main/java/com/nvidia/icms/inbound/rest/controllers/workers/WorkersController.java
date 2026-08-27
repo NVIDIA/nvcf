@@ -21,7 +21,7 @@ import static org.springframework.http.MediaType.APPLICATION_JSON_VALUE;
 import com.nvidia.icms.configuration.nvca.NvcaConfigurationProperties;
 import com.nvidia.icms.inbound.rest.model.workers.WorkerTokenIntrospectRequest;
 import com.nvidia.icms.inbound.rest.model.workers.WorkerTokenIntrospectResponse;
-import com.nvidia.icms.service.byoc.nvca.NvcaTokenVerificationService;
+import com.nvidia.icms.service.byoc.nvca.ClusterOIDCTokenVerificationService;
 import com.nvidia.icms.service.workers.WorkerTokenVerificationService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -41,9 +41,9 @@ import org.springframework.web.bind.annotation.RestController;
 /**
  * Worker token introspection endpoint (RFC 7662).
  *
- * <p>Public endpoint — no authentication required. Enabled only when
+ * <p>Public endpoint - no authentication required. Enabled only when
  * {@code icms.nvca.oidcClusterIdentityEnabled} is true (self-hosted deployments).
- * Returns HTTP 404 for managed NVCF where the feature flag is off.</p>
+ * Returns HTTP 200 with {@code active=false} when the feature flag is off.</p>
  */
 @Slf4j
 @RequiredArgsConstructor
@@ -58,7 +58,7 @@ public class WorkersController {
     @PostMapping("tokens/introspect")
     @Operation(summary = "Worker token introspection (RFC 7662)",
             description = "Verify a worker PSAT or SPIFFE JWT and return resolved worker identity. "
-                    + "Public endpoint — no authentication required.",
+                    + "Public endpoint - no authentication required.",
             responses = {
                     @ApiResponse(responseCode = "200",
                             description = "Introspection result (active or inactive)"),
@@ -101,7 +101,7 @@ public class WorkersController {
         // not leak to untrusted callers.
         log.debug("Worker token rejected: reason={} detail={}",
                 outcome.getReason(), outcome.getErrorMessage());
-        NvcaTokenVerificationService.RejectReason reason = outcome.getReason();
+        ClusterOIDCTokenVerificationService.RejectReason reason = outcome.getReason();
         if (reason == null) {
             return ResponseEntity.ok(
                     WorkerTokenIntrospectResponse.inactive(GENERIC_REJECTION_MESSAGE));

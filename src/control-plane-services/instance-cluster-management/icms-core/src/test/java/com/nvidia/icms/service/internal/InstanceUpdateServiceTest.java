@@ -58,6 +58,8 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
+import com.nvidia.icms.inbound.rest.model.workers.WorkerAuth;
+import com.nvidia.icms.inbound.rest.model.workers.WorkerIdentifier;
 import com.nvidia.icms.util.GsonCompatMapper;
 import com.nvidia.icms.configuration.bean.IcmsConfigurationProperties;
 import com.nvidia.icms.errors.PreConditionFailedException;
@@ -2105,5 +2107,78 @@ class InstanceUpdateServiceTest {
         
         // Verify telemetry was sent for instance creation
         verify(telemetryEventClient, times(2)).triggerEvent(Mockito.any());
+    }
+
+    @Test
+    void handleWorkerAuth_withNonTerminalStatusAndWorkerAuth_storesWorkerIdentifiers() {
+        var workerAuth = WorkerAuth.builder()
+                .sub("system:serviceaccount:default:worker-pod")
+                .workerIdentifiers(List.of(
+                        WorkerIdentifier.builder().name("worker-pod").uid("uid-abc").build()))
+                .build();
+        var request = getInstanceUpdateRequestForActiveInstance(RUNNING);
+        request.setWorkerAuth(workerAuth);
+
+        doReturn(Optional.of(getInstanceRequestV2Entity(SpotInstanceRequestState.OPEN,
+                SpotRequestStatusCode.PENDING_FULFILLMENT)))
+                .when(instanceRequestV2Repository).findRequestById(DUMMY_REQUEST_ID);
+        when(internalInstanceServiceHelper.validateInstancePlacement(any(), eq(DUMMY_CLUSTER_ID),
+                eq(DUMMY_REQUEST_ID))).thenReturn(getDummyInstancePlacementValidationResponse(
+                request.getPlacement(), CloudProvider.AWS, ResourceProvider.BYOC));
+        when(instanceServiceHelper.parseRequestInfo(any())).thenReturn(getDummyClientRequestModel());
+        when(instanceServiceHelper.getLaunchSpecificationForTelemetry(any()))
+                .thenReturn(getDummyClientRequestModel().getLaunchSpecification());
+        doNothing().when(instanceV2Repository).insert(any());
+
+        instanceUpdateService.updateInstanceStatus(DUMMY_REQUEST_ID, DUMMY_INSTANCE_ID, request,
+                DUMMY_CLUSTER_ID, auditProps);
+
+        verify(workerIdentifierService).storeWorkerIdentifiers(DUMMY_CLUSTER_ID, DUMMY_INSTANCE_ID,
+                workerAuth);
+        verifyNoMoreInteractions(workerIdentifierService);
+    }
+
+    @Test
+    void handleWorkerAuth_withTerminalStatus_deletesWorkerIdentifiers() {
+        var request = getInstanceUpdateRequestForTerminatedState();
+
+        doReturn(Optional.of(getInstanceRequestV2Entity(SpotInstanceRequestState.OPEN,
+                SpotRequestStatusCode.PENDING_FULFILLMENT)))
+                .when(instanceRequestV2Repository).findRequestById(DUMMY_REQUEST_ID);
+        when(internalInstanceServiceHelper.validateInstancePlacement(any(), eq(DUMMY_CLUSTER_ID),
+                eq(DUMMY_REQUEST_ID))).thenReturn(getDummyInstancePlacementValidationResponse(
+                request.getPlacement(), CloudProvider.AWS, ResourceProvider.BYOC));
+        when(instanceV2Repository.findInstanceByCustomerAndId(DUMMY_CUSTOMER_1, DUMMY_INSTANCE_ID))
+                .thenReturn(Optional.of(getInstanceEntityForRunningInstance()));
+        doNothing().when(instanceV2Repository).update(any());
+        when(instanceServiceHelper.getLaunchSpecificationForTelemetry(any()))
+                .thenReturn(getDummyClientRequestModel().getLaunchSpecification());
+
+        instanceUpdateService.updateInstanceStatus(DUMMY_REQUEST_ID, DUMMY_INSTANCE_ID, request,
+                DUMMY_CLUSTER_ID, auditProps);
+
+        verify(workerIdentifierService).deleteWorkerIdentifiers(DUMMY_CLUSTER_ID, DUMMY_INSTANCE_ID);
+        verifyNoMoreInteractions(workerIdentifierService);
+    }
+
+    @Test
+    void handleWorkerAuth_withNonTerminalStatusAndNoWorkerAuth_doesNotCallWorkerIdentifierService() {
+        var request = getInstanceUpdateRequestForActiveInstance(RUNNING);
+
+        doReturn(Optional.of(getInstanceRequestV2Entity(SpotInstanceRequestState.OPEN,
+                SpotRequestStatusCode.PENDING_FULFILLMENT)))
+                .when(instanceRequestV2Repository).findRequestById(DUMMY_REQUEST_ID);
+        when(internalInstanceServiceHelper.validateInstancePlacement(any(), eq(DUMMY_CLUSTER_ID),
+                eq(DUMMY_REQUEST_ID))).thenReturn(getDummyInstancePlacementValidationResponse(
+                request.getPlacement(), CloudProvider.AWS, ResourceProvider.BYOC));
+        when(instanceServiceHelper.parseRequestInfo(any())).thenReturn(getDummyClientRequestModel());
+        when(instanceServiceHelper.getLaunchSpecificationForTelemetry(any()))
+                .thenReturn(getDummyClientRequestModel().getLaunchSpecification());
+        doNothing().when(instanceV2Repository).insert(any());
+
+        instanceUpdateService.updateInstanceStatus(DUMMY_REQUEST_ID, DUMMY_INSTANCE_ID, request,
+                DUMMY_CLUSTER_ID, auditProps);
+
+        verifyNoInteractions(workerIdentifierService);
     }
 }
