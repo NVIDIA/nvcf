@@ -1062,6 +1062,26 @@ class GithubReleaseTest(unittest.TestCase):
                 "the version sort would have bounded the range with an unreachable tag",
             )
 
+    def test_ancestor_service_tag_prefers_the_closest_of_several_prefixes(self):
+        # Services carry legacy prefixes alongside the current one, and the newest
+        # release can sit on either. Taking the first prefix to match would reach
+        # past a closer tag and re-resolve commits an earlier release covered.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.nvca_repo_with_tag(root, "3.2.0")
+            self.commit_backport(root, "fix(nvca): released under the legacy prefix")
+            git(root, "tag", "nvca-v3.2.1")
+            self.commit_backport(root, "fix(nvca): not yet released")
+
+            self.assertEqual(
+                self.github_release.ancestor_service_tag(root, self.NVCA_SERVICE), "nvca-v3.2.1"
+            )
+            self.assertEqual(
+                self.github_release.tag_prefixes(self.NVCA_SERVICE, root),
+                ["src/compute-plane-services/nvca/v", "nvca-v"],
+                "the current prefix is checked first, so a closer legacy tag must still win",
+            )
+
     def test_released_commits_covers_every_merge_since_the_previous_tag(self):
         # The concurrency group cancels queued runs, so one tag can carry several
         # merges. All of them have to be resolved, not just HEAD.

@@ -656,24 +656,28 @@ def release_url(slug, tag):
 
 
 def ancestor_service_tag(root, service):
-    """Newest service tag reachable from HEAD, by ancestry rather than by version sort.
+    """Closest service tag reachable from HEAD, by ancestry rather than by version sort.
 
     Release branches are cut with a synthetic root (see linear_release_branch_base),
     so the highest-sorting tag for a service can be a main-line tag that this branch
     never contained. Ancestry is what actually bounds the commits a release ships.
 
+    Every supported prefix is matched in a single describe so the closest tag wins.
+    Taking the first prefix to match instead would return a more distant tag whenever
+    a service's newest release used another of its prefixes, and the range would then
+    re-resolve commits an earlier release already covered.
+
     Called before the new tag is created, so HEAD itself is never the answer.
     """
+    matches = []
     for prefix in tag_prefixes(service, root):
-        tag = run(
-            ["git", "describe", "--tags", "--abbrev=0", "--match", f"{prefix}*", "HEAD"],
-            cwd=root,
-            capture=True,
-            check=False,
-        ).strip()
-        if tag:
-            return tag
-    return ""
+        matches.extend(["--match", f"{prefix}*"])
+    return run(
+        ["git", "describe", "--tags", "--abbrev=0", *matches, "HEAD"],
+        cwd=root,
+        capture=True,
+        check=False,
+    ).strip()
 
 
 def released_commits(root, since_tag):
