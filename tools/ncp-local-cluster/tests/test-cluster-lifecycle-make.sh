@@ -16,6 +16,8 @@
 
 set -euo pipefail
 
+# Run the real Makefile in an isolated directory. Commands resolved through
+# FAKE_BIN are test doubles, so this test never creates or changes a real cluster.
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_ROOT="$(mktemp -d)"
 FAKE_BIN="${TEST_ROOT}/bin"
@@ -43,6 +45,8 @@ assert_contains() {
   fi
 }
 
+# Match a substring in captured Make output. Use assert_contains above when the
+# expected value must occupy a complete call-log line.
 assert_output_contains() {
   local expected="$1"
   local file="$2"
@@ -54,6 +58,7 @@ assert_output_contains() {
   fi
 }
 
+# Confirm that a failed lifecycle step did not allow a later command to run.
 assert_log_excludes() {
   local unexpected="$1"
   local label="$2"
@@ -64,25 +69,34 @@ assert_log_excludes() {
   fi
 }
 
+# Run the copied Makefile quietly in the sandbox. "$@" forwards the target and
+# every variable assignment supplied by the test scenario.
 run_make() {
   make --no-print-directory -s -C "${TEST_ROOT}" "$@"
 }
 
+# The copied Makefile is the unit under test. The dummy Docker config satisfies
+# the start target's existence check without using real registry credentials.
 mkdir -p "${FAKE_BIN}" "${TEST_ROOT}/secrets"
 cp "${ROOT_DIR}/Makefile" "${TEST_ROOT}/Makefile"
 printf '{}\n' >"${TEST_ROOT}/secrets/docker-config.json"
 : >"${CALL_LOG}"
 
+# Create a controllable k3d test double. The quoted heredoc defers variable
+# expansion until the fake command runs. K3D_*_EXIT values simulate cluster
+# state and failures, while K3D_CALL_LOG records commands and inputs.
 cat >"${FAKE_BIN}/k3d" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
 case "$*" in
   cluster\ get\ *)
+    # Exit 0 means the cluster exists; a nonzero value means it is absent.
     printf 'k3d %s\n' "$*" >>"${K3D_CALL_LOG}"
     exit "${K3D_GET_EXIT:-0}"
     ;;
   cluster\ create\ *)
+    # Record the create command and every value consumed by the k3d config.
     {
       printf 'k3d %s\n' "$*"
       printf 'K3D_CLUSTER_NAME=%s\n' "${K3D_CLUSTER_NAME-}"
@@ -98,6 +112,7 @@ case "$*" in
     exit "${K3D_CREATE_EXIT:-0}"
     ;;
   cluster\ start\ *)
+    # A nonzero value simulates k3d failing to start an existing cluster.
     printf 'k3d %s\n' "$*" >>"${K3D_CALL_LOG}"
     exit "${K3D_START_EXIT:-0}"
     ;;
@@ -111,6 +126,8 @@ case "$*" in
 esac
 EOF
 
+# Provide only the kubectl operations used by ensure-context. Unexpected
+# operations fail the test instead of being silently accepted.
 cat >"${FAKE_BIN}/kubectl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -129,11 +146,13 @@ case "$*" in
 esac
 EOF
 
+# Put the test doubles first in PATH before invoking the copied Makefile.
 chmod +x "${FAKE_BIN}/k3d" "${FAKE_BIN}/kubectl"
 export PATH="${FAKE_BIN}:${PATH}"
 export K3D_CALL_LOG="${CALL_LOG}"
 
-# Cluster creation receives the selected name and every configurable host port.
+# Scenario 1: the cluster is absent and creation succeeds. Verify that
+# ensure-cluster invokes k3d create with the selected name, config, and ports.
 export K3D_GET_EXIT=1
 export K3D_CREATE_EXIT=0
 run_make ensure-cluster \
@@ -159,7 +178,8 @@ assert_contains "CONTROL_PLANE_LLM_GRPC_PORT=25071" "${CALL_LOG}" "LLM gRPC port
 assert_contains "CONTROL_PLANE_LLM_QUIC_PORT=25072" "${CALL_LOG}" "LLM QUIC port environment"
 assert_contains "CONTROL_PLANE_NATS_PORT=14222" "${CALL_LOG}" "NATS port environment"
 
-# A failed create command makes ensure-cluster fail.
+# Scenario 2: the cluster is absent and k3d create fails. Verify that
+# ensure-cluster returns nonzero and reports the failed cluster name.
 : >"${CALL_LOG}"
 create_failure_output="${TEST_ROOT}/create-failure.out"
 export K3D_CREATE_EXIT=23
@@ -172,7 +192,8 @@ assert_output_contains \
   "${create_failure_output}" \
   "ensure-cluster create failure"
 
-# start propagates creation failure and does not attempt startup or context selection.
+# Scenario 3: start needs to create the cluster, but creation fails. Verify that
+# start propagates the failure without attempting startup or context selection.
 : >"${CALL_LOG}"
 start_create_failure_output="${TEST_ROOT}/start-create-failure.out"
 if run_make start CLUSTER_NAME=lifecycle-start-create-failure >"${start_create_failure_output}" 2>&1; then
@@ -182,7 +203,8 @@ fi
 assert_log_excludes "k3d cluster start" "start after create failure"
 assert_log_excludes "kubectl config current-context" "context check after create failure"
 
-# A failed start command makes start fail before ensure-context.
+# Scenario 4: the cluster already exists, but k3d start fails. Verify that start
+# returns nonzero and stops before ensure-context.
 : >"${CALL_LOG}"
 start_failure_output="${TEST_ROOT}/start-failure.out"
 export K3D_GET_EXIT=0
@@ -197,7 +219,8 @@ assert_output_contains \
   "cluster startup failure"
 assert_log_excludes "kubectl config current-context" "context check after startup failure"
 
-# Successful startup reaches ensure-context.
+# Scenario 5: the cluster exists, starts successfully, and already has the
+# expected kubectl context. Verify that the success path reaches ensure-context.
 : >"${CALL_LOG}"
 start_success_output="${TEST_ROOT}/start-success.out"
 export K3D_START_EXIT=0
