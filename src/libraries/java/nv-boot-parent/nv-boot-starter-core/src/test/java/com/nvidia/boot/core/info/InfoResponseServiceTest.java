@@ -19,6 +19,7 @@ package com.nvidia.boot.core.info;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.nvidia.boot.core.info.InfoResponseService.InfoResponse;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.env.MockEnvironment;
 

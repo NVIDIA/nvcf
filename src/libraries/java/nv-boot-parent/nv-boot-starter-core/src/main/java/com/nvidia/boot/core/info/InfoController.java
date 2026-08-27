@@ -17,6 +17,7 @@
 
 package com.nvidia.boot.core.info;
 
+import com.nvidia.boot.core.info.InfoResponseService.InfoResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
