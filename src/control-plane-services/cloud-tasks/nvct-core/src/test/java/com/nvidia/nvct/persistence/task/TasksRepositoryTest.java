@@ -24,7 +24,6 @@ import com.datastax.oss.driver.api.core.CqlSession;
 import com.nvidia.nvct.IntegrationTestConfiguration;
 import com.nvidia.nvct.NvctTestApp;
 import com.nvidia.nvct.grpc.TestTaskService;
-import com.nvidia.nvct.persistence.task.entity.HealthUdt;
 import com.nvidia.nvct.persistence.task.entity.TaskEntity;
 import com.nvidia.nvct.persistence.task.entity.TaskStatus;
 import com.nvidia.nvct.rest.task.dto.HealthDto;
@@ -201,7 +200,7 @@ class TasksRepositoryTest {
         tasksRepository.save(task);
 
         var row = cqlSession.execute(
-                "SELECT health, health_info FROM tasks_v2 WHERE task_id = ?", taskId).one();
+                "SELECT health FROM tasks_v2 WHERE task_id = ?", taskId).one();
         assertThat(row).isNotNull();
         assertThat(row.getString(TaskEntity.COLUMN_HEALTH))
                 .doesNotContain("sis_request_id")
@@ -209,7 +208,6 @@ class TasksRepositoryTest {
                 .contains("\"backend\":\"" + healthInfo.backend() + "\"")
                 .contains("\"instanceType\":\"" + healthInfo.instanceType() + "\"")
                 .contains("\"error\":\"" + healthInfo.error() + "\"");
-        assertThat(row.isNull(TaskEntity.COLUMN_HEALTH_INFO)).isTrue();
 
         var updatedHealthInfo = HealthDto.builder()
                 .backend("GFN")
@@ -221,106 +219,11 @@ class TasksRepositoryTest {
         taskService.updateTask(taskId, TaskStatus.ERRORED, updatedHealthInfo);
 
         row = cqlSession.execute(
-                "SELECT health, health_info FROM tasks_v2 WHERE task_id = ?", taskId).one();
+                "SELECT health FROM tasks_v2 WHERE task_id = ?", taskId).one();
         assertThat(row).isNotNull();
         assertThat(row.getString(TaskEntity.COLUMN_HEALTH)).contains("updated-error");
-        assertThat(row.isNull(TaskEntity.COLUMN_HEALTH_INFO)).isTrue();
 
         var reloadedTask = tasksRepository.getByTaskId(taskId).orElseThrow();
         assertThat(taskMapperService.toTaskDto(reloadedTask).healthInfo()).isEqualTo(updatedHealthInfo);
-    }
-
-    @Test
-    void readFromLegacyHealthInfoColumnWhenHealthColumnIsBlank() {
-        var taskId = UUID.randomUUID();
-        var task = TestUtil.createTaskEntity(taskId, TEST_NCA_ID, "task-1", jsonMapper);
-        task.setHealth(null);
-        tasksRepository.save(task);
-
-        var legacyHealthInfo = HealthUdt.builder()
-                .legacyIcmsRequestId(UUID.randomUUID())
-                .backend("legacy-backend")
-                .gpu("legacy-gpu")
-                .instanceType("legacy-instance")
-                .error("legacy-error")
-                .build();
-        updateLegacyHealthInfo(taskId, legacyHealthInfo);
-
-        var reloadedTask = tasksRepository.getByTaskId(taskId);
-
-        assertThat(reloadedTask).isPresent();
-        assertThat(reloadedTask.get().getHealth()).isNull();
-        assertThat(reloadedTask.get().getLegacyHealthInfo()).isEqualTo(legacyHealthInfo);
-        assertThat(taskMapperService.toTaskDto(reloadedTask.get()).healthInfo())
-                .isEqualTo(HealthDto.builder()
-                                   .backend(legacyHealthInfo.getBackend())
-                                   .gpu(legacyHealthInfo.getGpu())
-                                   .instanceType(legacyHealthInfo.getInstanceType())
-                                   .error(legacyHealthInfo.getError())
-                                   .build());
-    }
-
-    @Test
-    @SneakyThrows
-    void readFirstFromHealthColumnBeforeReadingFromLegacyHealthInfoColumn() {
-        var taskId = UUID.randomUUID();
-        var task = TestUtil.createTaskEntity(taskId, TEST_NCA_ID, "task-1", jsonMapper);
-        task.setHealth(null);
-        tasksRepository.save(task);
-
-        var legacyHealthInfo = HealthUdt.builder()
-                .legacyIcmsRequestId(UUID.randomUUID())
-                .backend("legacy-backend")
-                .gpu("legacy-gpu")
-                .instanceType("legacy-instance")
-                .error("legacy-error")
-                .build();
-        var healthInfo = HealthDto.builder()
-                .backend("new-backend")
-                .gpu("new-gpu")
-                .instanceType("new-instance")
-                .error("new-error")
-                .build();
-        cqlSession.execute(
-                "UPDATE tasks_v2 SET health = ? WHERE task_id = ?",
-                """
-                {
-                  "sis_request_id": "e807603b-5224-4d7e-af7f-740c22c006e0",
-                  "gpu": "%s",
-                  "backend": "%s",
-                  "instanceType": "%s",
-                  "error": "%s"
-                }
-                """.formatted(healthInfo.gpu(),
-                               healthInfo.backend(),
-                               healthInfo.instanceType(),
-                               healthInfo.error()),
-                taskId);
-        updateLegacyHealthInfo(taskId, legacyHealthInfo);
-
-        var reloadedTask = tasksRepository.getByTaskId(taskId);
-
-        assertThat(reloadedTask).isPresent();
-        assertThat(reloadedTask.get().getHealth()).isNotBlank();
-        assertThat(taskMapperService.toTaskDto(reloadedTask.get()).healthInfo()).isEqualTo(healthInfo);
-    }
-
-    private void updateLegacyHealthInfo(UUID taskId, HealthUdt healthInfo) {
-        cqlSession.execute("""
-                UPDATE tasks_v2
-                SET health_info = {
-                    sis_request_id: %s,
-                    gpu: '%s',
-                    backend: '%s',
-                    instance_type: '%s',
-                    error: '%s'
-                }
-                WHERE task_id = %s
-                """.formatted(healthInfo.getLegacyIcmsRequestId(),
-                               healthInfo.getGpu(),
-                               healthInfo.getBackend(),
-                               healthInfo.getInstanceType(),
-                               healthInfo.getError(),
-                               taskId));
     }
 }
