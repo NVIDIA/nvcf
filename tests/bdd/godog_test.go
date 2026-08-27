@@ -127,6 +127,13 @@ controlPlane:
     reval: reval.localhost
     nats: nats.localhost
     invocation: invocation.localhost
+managementTls:
+  trustMode: bundle
+  caBundlePem: test-ca-bundle
+transportTls:
+  trustMode: bundle
+  trustBundleFingerprint: sha256:test-fingerprint
+  trustBundlePem: test-ca-bundle
 `
 	writeArtifact(t, repoRoot, "self-managed", "control-plane-profile.yaml", body)
 }
@@ -1365,7 +1372,7 @@ agentConfig:
       validationPolicy:
         name: Unrestricted
     workload:
-      stargateQUICInsecure: true
+      stargateQUICInsecure: false
 `)
 }
 
@@ -1385,7 +1392,7 @@ agentConfig:
       validationPolicy:
         name: Unrestricted
     workload:
-      stargateQUICInsecure: true
+      stargateQUICInsecure: false
 `)
 }
 
