@@ -45,6 +45,7 @@ func registerAssertionSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^the json output should contain rows:$`, sc.jsonOutputShouldContainRows)
 	ctx.Step(`^Helm release "([^"]*)" in namespace "([^"]*)" using context "([^"]*)" should contain values:$`, sc.helmReleaseShouldContainValues)
 	ctx.Step(`^the rendered manifests in "([^"]*)" should contain:$`, sc.renderedManifestsShouldContain)
+	ctx.Step(`^the rendered manifests in "([^"]*)" should contain Kubernetes resource "([^"/]+)/([^"]+)"$`, sc.renderedManifestsShouldContainKubernetesResource)
 	ctx.Step(`^the rendered manifests in "([^"]*)" under directories matching "([^"]*)" should contain:$`, sc.renderedManifestsUnderMatchingDirectoriesShouldContain)
 	ctx.Step(`^the rendered manifests in "([^"]*)" should not contain:$`, sc.renderedManifestsShouldNotContain)
 	ctx.Step(`^these Helm releases should be deployed using context "([^"]*)":$`, sc.helmReleasesShouldBeDeployed)
@@ -181,6 +182,13 @@ func (sc *ScenarioContext) renderedManifestsShouldContain(path string, table *go
 		return err
 	}
 	return dsl.FilesContain(sc.resolvePath(dsl.Interpolate(path)), "", needles)
+}
+
+func (sc *ScenarioContext) renderedManifestsShouldContainKubernetesResource(path, kind, name string) error {
+	return dsl.RenderedManifestsContainResource(
+		sc.resolvePath(dsl.Interpolate(path)),
+		dsl.KubernetesResource{Kind: kind, Name: name},
+	)
 }
 
 func (sc *ScenarioContext) renderedManifestsUnderMatchingDirectoriesShouldContain(path, pattern string, table *godog.Table) error {

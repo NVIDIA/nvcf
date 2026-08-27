@@ -75,6 +75,30 @@ func TestCommandRunnerRunWithTTYReadHonorsContext(t *testing.T) {
 	}
 }
 
+func TestCommandRunnerContextCancellationStopsChildProcesses(t *testing.T) {
+	testDir := t.TempDir()
+	markerPath := filepath.Join(testDir, "late-child-write")
+	scriptPath := filepath.Join(testDir, "spawn-child.sh")
+	script := `#!/bin/sh
+nohup sh -c 'sleep 0.4; touch "$1"' sh "$1" >/dev/null 2>&1 &
+wait
+`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write child process fixture: %v", err)
+	}
+
+	runner := NewCommandRunner(testDir, "")
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	if _, err := runner.Run(ctx, scriptPath+" "+markerPath); err == nil {
+		t.Fatal("child-spawning command unexpectedly completed")
+	}
+	time.Sleep(500 * time.Millisecond)
+	if _, err := os.Stat(markerPath); !os.IsNotExist(err) {
+		t.Fatalf("child process survived context cancellation and wrote %s: %v", markerPath, err)
+	}
+}
+
 func TestCommandRunnerNonZeroExit(t *testing.T) {
 	runner := NewCommandRunner(t.TempDir(), "")
 	result, err := runner.Run(context.Background(), "false")

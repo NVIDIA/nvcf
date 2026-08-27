@@ -202,15 +202,32 @@ done
 ## Step 9: Register the compute cluster
 
 ```bash
+$(pwd)/nvcf-cli \
+  --config $(pwd)/tests/bdd/fixtures/nvcf-cli-local.yaml \
+  self-hosted \
+  --control-plane-stack deploy/stacks/self-managed \
+  --env local-bdd \
+  --control-plane-context k3d-ncp-local-cp \
+  --compute-plane-context k3d-ncp-local-compute-1 \
+  control-plane profile export \
+  --cluster-name ncp-local-cp
+
+$(pwd)/nvcf-cli \
+  --config $(pwd)/tests/bdd/fixtures/nvcf-cli-local.yaml \
+  init
+
 make -C deploy/stacks/nvcf-compute-plane register-cluster \
   CLUSTER_NAME=ncp-local-compute-1 \
+  CONTROL_PLANE_PROFILE=$(pwd)/deploy/stacks/self-managed/out/control-plane-profile.yaml \
+  COMPUTE_KUBE_CONTEXT=k3d-ncp-local-compute-1 \
   NVCF_CLI=$(pwd)/nvcf-cli \
   NVCF_CLI_CONFIG=$(pwd)/tests/bdd/fixtures/nvcf-cli-local.yaml
 ```
 
 <Note>
-`make register-cluster` runs `nvcf-cli init` internally before
-`cluster register`, so this flow does not need a separate `init` step.
+The profile export uses both contexts to capture compute-reachable endpoints
+and control-plane trust. Run `nvcf-cli init` explicitly. The Make target
+forwards `NVCF_CLI_CONFIG` to registration but does not initialize it.
 </Note>
 
 The target writes the registration handoff file to

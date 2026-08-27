@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.PHONY: help clean build test test-coverage-html test-manual start stop destroy destroy-all-ncp-local status ensure-cluster ensure-context ensure-docker-config validate-compute-clusters print-compute-clusters start-control-plane deploy-control-plane-addons deploy-control-plane-endpoints build-and-deploy-control-plane-cluster destroy-control-plane start-compute-plane deploy-compute-plane-addons configure-compute-control-plane-dns deploy-compute-control-plane-endpoints build-and-deploy-compute-plane-cluster destroy-compute-plane build-and-deploy-multicluster destroy-multicluster test-cluster-lifecycle-make test-multicluster-make setup-gateway-api setup-metallb check-gateway-api deploy-sample deploy-nginx wait-for-nginx wait-for-gateway validate-gateway cleanup-nginx wait-for-deployment validate-deployment cleanup-sample build-and-deploy-cluster build-csi-smb deploy-csi-smb wait-for-csi-smb build-fake-gpu-operator deploy-fake-gpu-operator wait-for-fake-gpu-operator deploy-prometheus-crds uninstall-prometheus-crds deploy-kube-state-metrics wait-for-kube-state-metrics uninstall-kube-state-metrics build-credential-provider-multiarch
+.PHONY: help clean build test test-coverage-html test-manual start stop destroy destroy-all-ncp-local status ensure-cluster ensure-context ensure-docker-config validate-compute-clusters print-compute-clusters start-control-plane deploy-control-plane-addons deploy-control-plane-endpoints build-and-deploy-control-plane-cluster destroy-control-plane start-compute-plane deploy-compute-plane-addons configure-compute-control-plane-dns deploy-compute-control-plane-endpoints build-and-deploy-compute-plane-cluster destroy-compute-plane build-and-deploy-multicluster destroy-multicluster test-cluster-lifecycle-make test-destroy-all-ncp-local test-multicluster-make setup-gateway-api setup-metallb check-gateway-api deploy-sample deploy-nginx wait-for-nginx wait-for-gateway validate-gateway cleanup-nginx wait-for-deployment validate-deployment cleanup-sample build-and-deploy-cluster build-csi-smb deploy-csi-smb wait-for-csi-smb build-fake-gpu-operator deploy-fake-gpu-operator wait-for-fake-gpu-operator deploy-prometheus-crds uninstall-prometheus-crds deploy-kube-state-metrics wait-for-kube-state-metrics uninstall-kube-state-metrics build-credential-provider-multiarch
 
 # === Cluster Configuration ===
 CLUSTER_NAME := ncp-local
@@ -162,8 +162,8 @@ destroy-all-ncp-local: ## Discover and destroy every ncp-local* k3d cluster on t
 		echo "destroy-all-ncp-local requires jq; install it and retry." >&2; \
 		exit 1; \
 	}
-	@set -o pipefail; \
-	NAMES=$$(k3d cluster list -o json | jq -r '.[] | select(.name|startswith("ncp-local")) | .name'); \
+	@CLUSTERS_JSON=$$(k3d cluster list -o json) || exit $$?; \
+	NAMES=$$(printf '%s\n' "$$CLUSTERS_JSON" | jq -r '.[] | select(.name|startswith("ncp-local")) | .name') || exit $$?; \
 	if [ -z "$$NAMES" ]; then \
 		echo "No ncp-local* clusters present."; \
 		exit 0; \
@@ -306,6 +306,9 @@ test-cluster-lifecycle-make: ## Run dry Makefile tests for cluster lifecycle beh
 
 test-multicluster-make: ## Run dry Makefile tests for multi-cluster name derivation
 	@tests/test-multicluster-make.sh
+
+test-destroy-all-ncp-local: ## Run dry Makefile tests for host-wide local-cluster cleanup
+	@tests/test-destroy-all-ncp-local.sh
 
 # --- Load Balancer & Gateway API Setup ---
 setup-gateway-api:

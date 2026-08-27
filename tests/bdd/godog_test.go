@@ -127,6 +127,13 @@ controlPlane:
     reval: reval.localhost
     nats: nats.localhost
     invocation: invocation.localhost
+managementTls:
+  trustMode: bundle
+  caBundlePem: test-ca-bundle
+transportTls:
+  trustMode: bundle
+  trustBundleFingerprint: sha256:test-fingerprint
+  trustBundlePem: test-ca-bundle
 `
 	writeArtifact(t, repoRoot, "self-managed", "control-plane-profile.yaml", body)
 }
@@ -209,21 +216,21 @@ selfManaged:
 }
 
 // writeHelmfileRegisterValues seeds the compute-plane register-values handoff
-// the single-cluster-helmfile.feature register scenario reads. The stack
-// Makefile passes CLUSTER_NAME separately to helmfile, so the file produced by
-// `make register-cluster` does not carry clusterName at the top level and the
-// selfManaged URLs use the compute-reachable localhost hostnames.
+// the single-cluster-helmfile.feature register scenario reads. Profile-driven
+// registration records clusterName and selects in-cluster endpoints when the
+// compute target is the control-plane cluster.
 func writeHelmfileRegisterValues(t *testing.T, repoRoot string) {
 	t.Helper()
-	body := `clusterID: 11111111-2222-3333-4444-555555555555
+	body := `clusterName: ncp-local
+clusterID: 11111111-2222-3333-4444-555555555555
 clusterGroupID: aaaa-bbbb-cccc-dddd
 ncaID: nvcf-default
 region: us-west-1
 selfManaged:
   identitySource: psat
-  icmsServiceURL: http://sis.localhost:8080
-  revalServiceURL: http://reval.localhost:8080
-  natsURL: nats://nats.localhost:4222
+  icmsServiceURL: http://api.sis.svc.cluster.local:8080
+  revalServiceURL: http://reval.nvcf.svc.cluster.local:8080
+  natsURL: nats://nats.nats-system.svc.cluster.local:4222
 `
 	writeArtifact(t, repoRoot, "nvcf-compute-plane", "ncp-local-register-values.yaml", body)
 	writeRegistrationArtifact(t, repoRoot, "nvcf-compute-plane", "ncp-local-register-values.yaml", body)
@@ -442,6 +449,7 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
 	seedComputePlaneLocalBDDFixture(t, suite.Config.RepoRoot)
 	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+	writeProfileHandoffArtifact(t, suite.Config.RepoRoot)
 	writeHelmfileRegisterValues(t, suite.Config.RepoRoot)
 
 	sc := steps.NewScenarioContext(suite)
@@ -507,6 +515,111 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "http://llm.localhost:8080/v1/chat/completions") {
 		t.Fatal("unauthenticated LLM gateway check was never invoked")
 	}
+}
+
+// TestSingleClusterHelmfileLLMPKIFeatureFileWiresToSteps runs the
+// LLM PKI Helmfile feature against a fake runner, with canned results
+// for the LLM invoke and the no-auth curl.
+func TestSingleClusterHelmfileLLMPKIFeatureFileWiresToSteps(t *testing.T) {
+	t.Setenv("NGC_API_KEY", "test-key")
+	t.Setenv("SAMPLE_NGC_ORG", "test-org")
+	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
+	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
+	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
+		"helm list --all-namespaces --kube-context k3d-ncp-local -o json": {ExitCode: 0, Stdout: helmListAllNamespacesJSON()},
+		"helm get values nvca-operator --namespace nvca-operator --kube-context k3d-ncp-local -o yaml": {
+			ExitCode: 0,
+			Stdout:   "agentConfig:\n  mergeConfig: |\n    workload:\n      stargateQUICInsecure: false\n      transportTLS:\n        trustMode: bundle\n        trustBundleFingerprint: sha256:test\n",
+		},
+		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke" +
+			" --inference-url /v1/chat/completions --model-name openai-compatible-sample" +
+			" --request-body '{\"messages\":[{\"role\":\"user\",\"content\":\"bdd-pki-llm\"}]}' --timeout 120": {
+			ExitCode: 0,
+			Stdout: "Function invocation completed!\n\nResponse:\n" +
+				`{"object":"chat.completion","choices":[{"message":{"content":"This is a fixed 128-byte response from an NVCF-hosted OpenAI-compatible sample, used for routing and response-contract validation, not token-generation capacity."}}]}` +
+				"\n",
+		},
+		`curl -s --connect-timeout 5 --max-time 30 -o /dev/null -w "%{http_code}" -X POST ` +
+			`http://llm.localhost:8080/v1/chat/completions -H "Content-Type: application/json" ` +
+			`-H "traceparent: 00-00000000000000000000000000001076-0000000000001076-01" ` +
+			`-d '{"model":"unauthenticated/check","messages":[]}'`: {
+			ExitCode: 0,
+			Stdout:   "401",
+		},
+		// Conflict precheck: feature asserts the conflicting
+		// multi-cluster control-plane is absent.
+		"k3d cluster get ncp-local-cp": {ExitCode: 1},
+	}))
+	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
+	seedComputePlaneLocalBDDFixture(t, suite.Config.RepoRoot)
+	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+	writeProfileHandoffArtifact(t, suite.Config.RepoRoot)
+	writeHelmfileRegisterValues(t, suite.Config.RepoRoot)
+	seedPKIRenderOutput(t, suite.Config.RepoRoot)
+
+	sc := steps.NewScenarioContext(suite)
+	featurePath := mustResolveFeaturePath(t, "single-cluster-helmfile-llm-pki.feature")
+	var out strings.Builder
+	status := godog.TestSuite{
+		Name: "single-cluster-helmfile-llm-pki-wiring",
+		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
+			steps.RegisterAll(ctx, sc)
+		},
+		Options: &godog.Options{
+			Format: "pretty",
+			Paths:  []string{featurePath},
+			Strict: true,
+			Output: &out,
+		},
+	}.Run()
+	if status != 0 {
+		t.Fatalf("godog suite status = %d\n%s", status, out.String())
+	}
+	runs := suite.Runner.(*fakeRunner).runs
+	if !commandRanThatContains(runs, "install HELMFILE_ENV=local-bdd-pki") {
+		t.Fatal("PKI helmfile install make target was never invoked")
+	}
+	profileExport := "/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml" +
+		" self-hosted --control-plane-stack deploy/stacks/self-managed --env local-bdd-pki" +
+		" control-plane profile export --cluster-name ncp-local"
+	initCommand := "/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml init >/dev/null"
+	profileExportIndex := -1
+	initIndex := -1
+	registerIndex := -1
+	for index, command := range runs {
+		if strings.Contains(command, profileExport) {
+			profileExportIndex = index
+		}
+		if strings.Contains(command, initCommand) {
+			initIndex = index
+		}
+		if strings.Contains(command, "register-cluster CLUSTER_NAME=ncp-local") {
+			registerIndex = index
+			if !strings.Contains(command, "CONTROL_PLANE_PROFILE=/repo-root-placeholder/deploy/stacks/self-managed/out/control-plane-profile.yaml") {
+				t.Fatalf("compute-plane registration did not use the exported profile: %s", command)
+			}
+			if !strings.Contains(command, "COMPUTE_KUBE_CONTEXT=k3d-ncp-local") {
+				t.Fatalf("compute-plane registration did not select the local cluster context: %s", command)
+			}
+			if !strings.Contains(command, "NVCF_CLI_CONFIG=/repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml") {
+				t.Fatalf("compute-plane registration did not select the initialized CLI config: %s", command)
+			}
+		}
+	}
+	if profileExportIndex < 0 {
+		t.Fatal("selected Helmfile environment was not exported to a control-plane profile")
+	}
+	if initIndex < 0 {
+		t.Fatal("local admin credentials were not initialized before compute-plane registration")
+	}
+	if registerIndex < 0 {
+		t.Fatal("compute-plane register-cluster make target was never invoked")
+	}
+	if profileExportIndex >= initIndex || initIndex >= registerIndex {
+		t.Fatal("profile export and credential initialization did not precede compute-plane registration")
+	}
+	assertFunctionDeploymentsUseInstanceType(t, runs, "NCP.GPU.H100_1x", 1)
 }
 
 // TestObservabilityControlFeatureFileWiresToSteps runs the live-install
@@ -649,6 +762,7 @@ func TestObservabilityComputeFeatureFileWiresToSteps(t *testing.T) {
 	seedHelmfileLocalBDDMultiFixture(t, suite.Config.RepoRoot)
 	seedComputePlaneLocalBDDMultiFixture(t, suite.Config.RepoRoot)
 	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+	writeMulticlusterProfileHandoffArtifact(t, suite.Config.RepoRoot)
 	writeMulticlusterComputeRegisterValues(t, suite.Config.RepoRoot, "nvcf-compute-plane", "ncp-local-compute-1")
 
 	sc := steps.NewScenarioContext(suite)
@@ -768,6 +882,7 @@ func TestObservabilityAllFeatureFileWiresToSteps(t *testing.T) {
 	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
 	seedComputePlaneLocalBDDFixture(t, suite.Config.RepoRoot)
 	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+	writeProfileHandoffArtifact(t, suite.Config.RepoRoot)
 	writeHelmfileRegisterValues(t, suite.Config.RepoRoot)
 
 	sc := steps.NewScenarioContext(suite)
@@ -804,7 +919,10 @@ func TestObservabilityAllFeatureFileWiresToSteps(t *testing.T) {
 	}
 	for _, commandFragment := range []string{
 		"deploy/stacks/self-managed install HELMFILE_ENV=local-bdd-observability-all KUBECONFIG_FILE=/repo-root-placeholder/tests/bdd/out/ncp-local-observability-all-kubeconfig.yaml",
-		"register-cluster CLUSTER_NAME=ncp-local KUBECONFIG_FILE=/repo-root-placeholder/tests/bdd/out/ncp-local-observability-all-kubeconfig.yaml",
+		"register-cluster CLUSTER_NAME=ncp-local" +
+			" CONTROL_PLANE_PROFILE=/repo-root-placeholder/deploy/stacks/self-managed/out/control-plane-profile.yaml" +
+			" COMPUTE_KUBE_CONTEXT=k3d-ncp-local" +
+			" KUBECONFIG_FILE=/repo-root-placeholder/tests/bdd/out/ncp-local-observability-all-kubeconfig.yaml",
 		"deploy/stacks/nvcf-compute-plane install CLUSTER_NAME=ncp-local HELMFILE_ENV=local-bdd-observability-all KUBECONFIG_FILE=/repo-root-placeholder/tests/bdd/out/ncp-local-observability-all-kubeconfig.yaml",
 	} {
 		if !commandRanThatContains(runs, commandFragment) {
@@ -932,6 +1050,7 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		"listenerName: worker-tcp",
 	)
 	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+	writeMulticlusterProfileHandoffArtifact(t, suite.Config.RepoRoot)
 	writeMulticlusterComputeRegisterValues(t, suite.Config.RepoRoot, "nvcf-compute-plane", "ncp-local-compute-1")
 
 	sc := steps.NewScenarioContext(suite)
@@ -1182,6 +1301,7 @@ func helmListAllNamespacesJSON() string {
 {"name":"nats","namespace":"nats-system","status":"deployed"},
 {"name":"cert-manager","namespace":"cert-manager","status":"deployed"},
 {"name":"openbao-server","namespace":"vault-system","status":"deployed"},
+{"name":"nvcf-pki","namespace":"cert-manager","status":"deployed"},
 {"name":"cassandra","namespace":"cassandra-system","status":"deployed"},
 {"name":"api-keys","namespace":"api-keys","status":"deployed"},
 {"name":"sis","namespace":"sis","status":"deployed"},
@@ -1289,6 +1409,32 @@ image: docker.io/natsio/nats-server-config-reloader:0.23.0
 	}
 }
 
+// seedPKIRenderOutput writes the representative PKI resources asserted by the
+// focused Helmfile feature wiring test.
+func seedPKIRenderOutput(t *testing.T, repoRoot string) {
+	t.Helper()
+	manifest := `kind: ClusterIssuer
+metadata:
+  name: "nvcf-openbao-pki"
+spec:
+  dnsNames:
+    - llm-request-router.nvcf.svc.cluster.local
+env:
+  - name: ADDONS_LLM_ENABLED
+    value: "true"
+  - name: NVCF_SERVICE_PKI_ALLOWED_DOMAINS
+    value: "nvcf.svc.cluster.local"
+image: nvcr.io/test-org/test-team/nvcf-openbao-migrations:0.16.2
+`
+	filePath := filepath.Join(repoRoot, "deploy", "stacks", "self-managed", "out", "01-pki", "templates", "pki.yaml")
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
+		t.Fatalf("mkdir rendered PKI manifest dir: %v", err)
+	}
+	if err := os.WriteFile(filePath, []byte(manifest), 0o644); err != nil {
+		t.Fatalf("write rendered PKI manifest: %v", err)
+	}
+}
+
 // seedHelmfileLocalBDDMultiFixture writes the multi-cluster variant
 // the multi-cluster helmfile feature copies onto the env file. Its
 // workerEndpoints and nvcaOperator.selfManaged URLs use the service
@@ -1378,7 +1524,7 @@ agentConfig:
       validationPolicy:
         name: Unrestricted
     workload:
-      stargateQUICInsecure: true
+      stargateQUICInsecure: false
 `)
 }
 
@@ -1502,6 +1648,7 @@ func TestSingleClusterEKSHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	seedComputePlaneBaseYaml(t, suite.Config.RepoRoot)
 	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
 	seedNVCFCLINonlocalTemplate(t, suite.Config.RepoRoot)
+	writeProfileHandoffArtifact(t, suite.Config.RepoRoot)
 	writeEKSRegisterValues(t, suite.Config.RepoRoot, eksClusterName, eksRegion)
 
 	sc := steps.NewScenarioContext(suite)
@@ -1619,6 +1766,7 @@ func TestMultiClusterEKSHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	seedComputePlaneBaseYaml(t, suite.Config.RepoRoot)
 	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
 	seedNVCFCLINonlocalTemplate(t, suite.Config.RepoRoot)
+	writeMulticlusterProfileHandoffArtifact(t, suite.Config.RepoRoot)
 	writeEKSRegisterValues(t, suite.Config.RepoRoot, computeClusterName, eksRegion)
 
 	sc := steps.NewScenarioContext(suite)
@@ -1701,6 +1849,15 @@ func TestSingleClusterHelmfile(t *testing.T) {
 		t.Skip("live run skipped under -short")
 	}
 	runLiveFeature(t, "single-cluster-helmfile.feature")
+}
+
+// TestSingleClusterHelmfileLLMPKI is the live entry point for the
+// PKI-secured LLM transport Helmfile feature. Skipped under -short.
+func TestSingleClusterHelmfileLLMPKI(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live run skipped under -short")
+	}
+	runLiveFeature(t, "single-cluster-helmfile-llm-pki.feature")
 }
 
 // TestObservabilityControl is the live entry point for the control
@@ -1799,7 +1956,9 @@ func runLiveFeatureTags(t *testing.T, feature, tags string) {
 	if err != nil {
 		t.Fatalf("new suite: %v", err)
 	}
+	stopSignalCleanup := suite.InstallSignalCleanup()
 	defer func() {
+		stopSignalCleanup()
 		if err := suite.Teardown(); err != nil {
 			t.Errorf("teardown: %v", err)
 		}
@@ -1810,6 +1969,18 @@ func runLiveFeatureTags(t *testing.T, feature, tags string) {
 		Name: "bdd-live-" + feature,
 		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
 			steps.RegisterAll(ctx, sc)
+			stepHooks := ctx.StepContext()
+			stepHooks.Before(func(stepContext context.Context, _ *godog.Step) (context.Context, error) {
+				return suite.BeginSignalSafeStep(stepContext)
+			})
+			stepHooks.After(func(
+				stepContext context.Context,
+				_ *godog.Step,
+				_ godog.StepResultStatus,
+				_ error,
+			) (context.Context, error) {
+				return suite.EndSignalSafeStep(stepContext), nil
+			})
 		},
 		Options: &godog.Options{
 			Format:        "pretty",
