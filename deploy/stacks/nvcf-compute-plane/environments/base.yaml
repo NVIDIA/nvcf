@@ -72,7 +72,7 @@ global:
 
 # One profile controls all compute observability defaults.
 observability:
-  profile: compute
+  profile: disabled
 
 # =============================================================================
 # Optional Add-on Operators
