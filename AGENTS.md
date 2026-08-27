@@ -360,10 +360,10 @@ default; see `BAZEL.md` for the full command and flag reference, and use the
 nearest nested `AGENTS.md` for subtree-scoped commands.
 
 ```bash
-bazel test //src/clis/nvcf-cli/... --test_output=streamed  # fast, file-scoped: one package, streamed output
-bazel test //...                                            # full suite: broad or cross-cutting changes
-git diff --check                                            # docs-only: whitespace errors, conflict markers
-fern check                                                   # docs-only: validate Fern nav, links, and config
+bazel test //src/clis/nvcf-cli/... --test_output=streamed    # scoped: the package(s) you changed, streamed output
+bazel test //...                                              # full suite: broad or cross-cutting changes
+git diff --check HEAD                                         # docs-only: whitespace errors, conflict markers
+fern check                                                     # docs-only: validate Fern nav, links, and config
 ```
 
 ### Java Bazel test target contract
