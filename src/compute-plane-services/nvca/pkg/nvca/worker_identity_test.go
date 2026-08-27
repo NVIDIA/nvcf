@@ -194,7 +194,7 @@ func TestEnsureWorkerRBAC_RoleHasEmptyRules(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get Role: %v", err)
 	}
-	// nil and empty slice are both acceptable — neither grants any permissions.
+	// nil and empty slice are both acceptable - neither grants any permissions.
 	if len(role.Rules) != 0 {
 		t.Errorf("Role.Rules should be empty, got: %v", role.Rules)
 	}
@@ -225,7 +225,7 @@ func TestCleanupWorkerIdentity(t *testing.T) {
 }
 
 func TestCleanupWorkerIdentity_ToleratesNotFound(t *testing.T) {
-	// Nothing pre-exists — cleanup should not panic or error.
+	// Nothing pre-exists - cleanup should not panic or error.
 	fakeK8s := fake.NewSimpleClientset()
 	clients := &kubeclients.KubeClients{K8s: fakeK8s}
 	cleanupWorkerIdentity(context.Background(), clients, "nvcf-backend", "inst-004")

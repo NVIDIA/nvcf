@@ -165,6 +165,8 @@ func validateWorkerSARestriction(obj client.Object) []error {
 		ps = &t.Spec
 	case *appsv1.Deployment:
 		ps = &t.Spec.Template.Spec
+	case *appsv1.ReplicaSet:
+		ps = &t.Spec.Template.Spec
 	case *appsv1.StatefulSet:
 		ps = &t.Spec.Template.Spec
 	case *batchv1.Job:
