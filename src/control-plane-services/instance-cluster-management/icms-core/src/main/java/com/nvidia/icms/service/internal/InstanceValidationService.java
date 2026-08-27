@@ -59,7 +59,7 @@ public class InstanceValidationService {
         if (spotRequest.getTerminationGracePeriodDuration() == null) {
             throwValidationError("LaunchSpecification.TerminationGracePeriodDuration");
         }
-        if (spotRequest.getResultHandlingStrategy() != null) {
+        if (spotRequest.getResultHandlingStrategy() == null) {
             throwValidationError("LaunchSpecification.ResultHandlingStrategy");
         }
         if (StringUtils.isBlank(spotRequest.getOwnerNcaIdForTask())) {
