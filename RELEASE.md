@@ -110,12 +110,11 @@ underlying `branch-cut` command refuses to run against a subproject that
 does not use that release model.
 
 `workflow_dispatch` requires GitHub write access to the repository. In this
-repository that access is granted through organization team membership, not
-a hand-maintained list: the `NVIDIA/nvcf-dev` team (the NVCF maintainers)
-holds write access, and `NVIDIA/nvcf-admin` holds admin access. In practice
-this means only NVCF maintainers can cut a release branch for `nvca` or one
-of the three stacks; an external contributor with a fix for an already-cut
-release branch needs a maintainer to either create the branch or merge a
+repository that access is granted through organization team membership:
+maintainers (`NVIDIA/nvcf-dev` and `NVIDIA/nvcf-admin`) can cut a release
+branch for `nvca` or one of the three stacks; an external contributor with
+a fix for an already-cut release branch needs a maintainer to either create
+the branch or merge a
 pull request that targets an existing one. Branch-cut operations
 additionally require the `NV_GITHUB_TOKEN` repository secret to be
 configured, because the default `GITHUB_TOKEN` cannot trigger CI on the
