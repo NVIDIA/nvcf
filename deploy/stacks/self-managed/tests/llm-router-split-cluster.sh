@@ -22,7 +22,7 @@ printf '{}\n' >"$secrets_file"
 printf '%s\n' \
   'global:' \
   '  workerEndpoints:' \
-  '    llmRequestRouterAddress: llm-request-router.nvcf.svc.cluster.local:50071' \
+  '    llmRequestRouterAddress: llm-grpc.example.com:50071' \
   'addons:' \
   '  llm:' \
   '    enabled: true' \
@@ -35,8 +35,8 @@ printf '%s\n' \
   '    requestRouter:' \
   "      chartPath: $router_chart_path" \
   '      backendRouter:' \
-  '        pylonGrpcDialAddress: llm-request-router.nvcf.svc.cluster.local:50071' \
-  '        pylonReverseTunnelDialAddress: llm-request-router.nvcf.svc.cluster.local:50072' \
+  '        pylonGrpcDialAddress: llm-grpc.example.com:50071' \
+  '        pylonReverseTunnelDialAddress: llm-quic.example.com:50072' \
   'ingress:' \
   '  gatewayApi:' \
   '    controllerNamespace: envoy-gateway-system' \
@@ -120,13 +120,13 @@ assert_value '.nvcfGatewayRoutes.gateways.llmQuic.listenerName' 'llm-quic'
 
 assert_file_value "$work_dir/api-values.yaml" \
   '.api.remoteConfig.configData.nvcf.llm-request-router.worker-address' \
-  'llm-request-router.nvcf.svc.cluster.local:50071'
+  'llm-grpc.example.com:50071'
 assert_file_value "$work_dir/router-values.yaml" \
   '.llmRequestRouter.backendRouter.pylonGrpcDialAddress' \
-  'llm-request-router.nvcf.svc.cluster.local:50071'
+  'llm-grpc.example.com:50071'
 assert_file_value "$work_dir/router-values.yaml" \
   '.llmRequestRouter.backendRouter.pylonReverseTunnelDialAddress' \
-  'llm-request-router.nvcf.svc.cluster.local:50072'
+  'llm-quic.example.com:50072'
 assert_file_value "$work_dir/router-values.yaml" \
   '.llmRequestRouter.certificate.dnsNames[0]' \
   'llm-request-router.nvcf.svc.cluster.local'
@@ -138,6 +138,72 @@ assert_file_value "$work_dir/router-values.yaml" \
   'null'
 assert_file_value "$work_dir/router-values.yaml" \
   '.llmRequestRouter.tls.quicInsecure' \
+  'false'
+
+assert_partial_backend_override_rejected() {
+  local missing_key="$1"
+  local case_name="$2"
+  local partial_environment_name="${environment_name}-${case_name}"
+  local partial_environment_file="$test_stack_dir/environments/$partial_environment_name.yaml"
+  local partial_error="$work_dir/$case_name-error.log"
+
+  cp "$environment_file" "$partial_environment_file"
+  printf '{}\n' >"$test_stack_dir/secrets/$partial_environment_name-secrets.yaml"
+  yq -i "del(.addons.llm.requestRouter.backendRouter.${missing_key})" \
+    "$partial_environment_file"
+
+  if HELMFILE_ENV="$partial_environment_name" \
+    HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
+    helmfile \
+      --file "$test_stack_dir/helmfile.d/02-core.yaml.gotmpl" \
+      --environment default \
+      --selector name=llm-request-router \
+      write-values \
+      --output-file-template "$work_dir/$case_name-values.yaml" \
+      >/dev/null 2>"$partial_error"; then
+    echo "llm-router-split-cluster: partial override without $missing_key was accepted" >&2
+    return 1
+  fi
+
+  grep -Fq \
+    'addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress and addons.llm.requestRouter.backendRouter.pylonReverseTunnelDialAddress must either both be set or both be omitted' \
+    "$partial_error" || {
+      echo "llm-router-split-cluster: partial override without $missing_key returned an unexpected error" >&2
+      sed -n '1,80p' "$partial_error" >&2
+      return 1
+    }
+}
+
+partial_override_failures=0
+assert_partial_backend_override_rejected \
+  'pylonReverseTunnelDialAddress' 'missing-reverse-tunnel' ||
+  partial_override_failures=$((partial_override_failures + 1))
+assert_partial_backend_override_rejected \
+  'pylonGrpcDialAddress' 'missing-grpc' ||
+  partial_override_failures=$((partial_override_failures + 1))
+test "$partial_override_failures" -eq 0 ||
+  fail "$partial_override_failures partial backend-router override case(s) were not rejected"
+
+disabled_environment_name="${environment_name}-backend-router-disabled"
+disabled_environment_file="$test_stack_dir/environments/$disabled_environment_name.yaml"
+cp "$environment_file" "$disabled_environment_file"
+printf '{}\n' >"$test_stack_dir/secrets/$disabled_environment_name-secrets.yaml"
+yq -i \
+  '.addons.llm.requestRouter.backendRouter.enabled = false |
+   del(.addons.llm.requestRouter.backendRouter.pylonReverseTunnelDialAddress)' \
+  "$disabled_environment_file"
+
+HELMFILE_ENV="$disabled_environment_name" \
+  HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
+  helmfile \
+    --file "$test_stack_dir/helmfile.d/02-core.yaml.gotmpl" \
+    --environment default \
+    --selector name=llm-request-router \
+    write-values \
+    --output-file-template "$work_dir/backend-router-disabled-values.yaml"
+
+assert_file_value "$work_dir/backend-router-disabled-values.yaml" \
+  '.llmRequestRouter.backendRouter.enabled' \
   'false'
 
 echo "llm-router-split-cluster: all checks passed"

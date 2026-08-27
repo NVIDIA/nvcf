@@ -15,7 +15,7 @@
 ## @section NVCA Operator parameters
 
 ## @param image.repository NVCA Operator container registry path, without tag
-## @param image.tag NVCA Operator container image tag. This defaults to the chart version
+## @param image.tag NVCA Operator container image tag. This defaults to the chart's appVersion
 ## @param image.pullPolicy K8s ImagePullPolicy
 image:
   repository: ""
@@ -203,7 +203,7 @@ agent:
   ## @param agent.byooOtelCollector.imageTag BYOO OpenTelemetry Collector image tag.
   byooOtelCollector:
     imageRepository: ""
-    imageTag: "0.157.0-nv-0.1.1"
+    imageTag: "0.157.0-nv-0.2.1"
   ## Environment variable overrides for function workloads.
   ## Available keys: INIT_CONTAINER, UTILS_CONTAINER, OTEL_CONTAINER, BYOO_OTEL_COLLECTOR_CONTAINER,
   ##                 NICLLS_CONTAINER, ESS_AGENT_CONTAINER, INFERENCE_CONTAINER
@@ -429,7 +429,7 @@ clusterValidator:
   enabled: false
   image:
     repository: ""
-    tag: "" # defaults to .Chart.Version (same as nvca-operator)
+    tag: "" # defaults to .Chart.AppVersion (same as nvca-operator)
     pullPolicy: IfNotPresent
   schedule: "0 */3 * * *"
   configMapName: "cluster-validator-network-checks"

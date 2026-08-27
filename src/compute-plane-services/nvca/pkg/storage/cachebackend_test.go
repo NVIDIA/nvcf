@@ -18,14 +18,18 @@ limitations under the License.
 package storage
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	storagev1 "k8s.io/api/storage/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	featureflagmock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
@@ -57,7 +61,9 @@ func TestSelectHelmCacheBackend(t *testing.T) {
 		name           string
 		flags          []*featureflag.FeatureFlag
 		storageClasses []*storagev1.StorageClass
-		want           HelmCacheBackend
+		// modelCacheClass overrides the class the Samba backing PVC needs.
+		modelCacheClass string
+		want            HelmCacheBackend
 	}{
 		{
 			name:  "caching disabled -> none",
@@ -88,10 +94,33 @@ func TestSelectHelmCacheBackend(t *testing.T) {
 			want: HelmCacheBackendNVMesh,
 		},
 		{
-			name:           "no shared class, HelmSharedStorage on -> samba",
+			name:           "no shared class, HelmSharedStorage on, model cache class present -> samba",
+			flags:          cachingAndSamba,
+			storageClasses: []*storagev1.StorageClass{storageClass(DefaultModelCacheStorageClassName)},
+			want:           HelmCacheBackendSamba,
+		},
+		{
+			// Samba's backing PVC would never bind, and that path has no failure
+			// threshold, so the install would hang instead of degrading.
+			name:           "no shared class, HelmSharedStorage on, no model cache class -> ephemeral",
 			flags:          cachingAndSamba,
 			storageClasses: nil,
-			want:           HelmCacheBackendSamba,
+			want:           HelmCacheBackendEphemeral,
+		},
+		{
+			name:            "samba honors the model cache class override",
+			flags:           cachingAndSamba,
+			storageClasses:  []*storagev1.StorageClass{storageClass("custom-block-sc")},
+			modelCacheClass: "custom-block-sc",
+			want:            HelmCacheBackendSamba,
+		},
+		{
+			// The override moves the check: the default class no longer counts.
+			name:            "override set but only the default class exists -> ephemeral",
+			flags:           cachingAndSamba,
+			storageClasses:  []*storagev1.StorageClass{storageClass(DefaultModelCacheStorageClassName)},
+			modelCacheClass: "custom-block-sc",
+			want:            HelmCacheBackendEphemeral,
 		},
 		{
 			name:           "no shared class, HelmSharedStorage off -> ephemeral",
@@ -100,10 +129,29 @@ func TestSelectHelmCacheBackend(t *testing.T) {
 			want:           HelmCacheBackendEphemeral,
 		},
 		{
-			name:           "nvcf-miniservice-sc takes precedence over samba",
-			flags:          cachingAndSamba,
-			storageClasses: []*storagev1.StorageClass{storageClass(HelmCacheSharedStorageClassName)},
-			want:           HelmCacheBackendSharedFS,
+			name:  "nvcf-miniservice-sc takes precedence over samba",
+			flags: cachingAndSamba,
+			storageClasses: []*storagev1.StorageClass{
+				storageClass(HelmCacheSharedStorageClassName),
+				storageClass(DefaultModelCacheStorageClassName),
+			},
+			want: HelmCacheBackendSharedFS,
+		},
+		{
+			name:  "nvcf-sc-30 takes precedence over samba",
+			flags: cachingAndSamba,
+			storageClasses: []*storagev1.StorageClass{
+				storageClass(NVMeshStorageClassName),
+				storageClass(DefaultModelCacheStorageClassName),
+			},
+			want: HelmCacheBackendNVMesh,
+		},
+		{
+			// Caching off short-circuits before any class lookup.
+			name:           "caching disabled with samba flag on -> none",
+			flags:          []*featureflag.FeatureFlag{&featureflag.HelmSharedStorage.FeatureFlag},
+			storageClasses: []*storagev1.StorageClass{storageClass(DefaultModelCacheStorageClassName)},
+			want:           HelmCacheBackendNone,
 		},
 	}
 
@@ -112,9 +160,42 @@ func TestSelectHelmCacheBackend(t *testing.T) {
 			c := cacheBackendClient(t, tt.storageClasses...).Build()
 			ff := &featureflagmock.Fetcher{EnabledFFs: tt.flags}
 
-			got, err := SelectHelmCacheBackend(t.Context(), c, ff)
+			got, err := SelectHelmCacheBackend(t.Context(), c, ff, tt.modelCacheClass)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestModelCacheStorageClassNameResolution(t *testing.T) {
+	assert.Equal(t, DefaultModelCacheStorageClassName, ModelCacheStorageClassName(""))
+	assert.Equal(t, "custom-block-sc", ModelCacheStorageClassName("custom-block-sc"))
+}
+
+// TestSelectHelmCacheBackend_SambaClassLookupError proves a failed lookup of the
+// Samba backing class surfaces as an error rather than silently degrading to the
+// ephemeral cache: a transient API error must be retried, not treated as an
+// absent StorageClass.
+func TestSelectHelmCacheBackend_SambaClassLookupError(t *testing.T) {
+	sch := runtime.NewScheme()
+	require.NoError(t, storagev1.AddToScheme(sch))
+	c := fake.NewClientBuilder().WithScheme(sch).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey,
+				obj client.Object, opts ...client.GetOption,
+			) error {
+				if key.Name == DefaultModelCacheStorageClassName {
+					return apierrors.NewServiceUnavailable("storageclass lookup failed")
+				}
+				return cl.Get(ctx, key, obj, opts...)
+			},
+		}).Build()
+	ff := &featureflagmock.Fetcher{EnabledFFs: []*featureflag.FeatureFlag{
+		featureflag.CachingSupport,
+		&featureflag.HelmSharedStorage.FeatureFlag,
+	}}
+
+	_, err := SelectHelmCacheBackend(t.Context(), c, ff, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), DefaultModelCacheStorageClassName)
 }
