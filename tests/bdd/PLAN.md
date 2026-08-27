@@ -170,6 +170,7 @@ original order. Repeated options and empty values are preserved.
 | `Then Helm release {string} in namespace {string} using context {string} should contain values:` (YAML docstring) | Runs one explicit-context `helm get values -o yaml` for the named release and asserts that its values contain the supplied YAML subset. Extra map keys are allowed; lists remain order- and length-sensitive. Failure messages name the release and first differing path without printing release values. |
 | `Then Kubernetes resource {string} in namespace {string} using context {string} should contain:` (YAML docstring) | The resource is explicit `kind/name`. Runs one `kubectl get -o yaml` against the named context and asserts that the resource YAML contains the supplied YAML subset. Extra map keys are allowed; lists remain order- and length-sensitive. Failure messages name the resource and first differing path without printing resource values. |
 | `Then the rendered manifests in {string} should contain:` (table) | Requires a `text` header and one or more fixed strings. Recursively inspects regular files under the repo-relative directory and fails if any listed string is absent. `${VAR}` expansion applies to the path and table values. |
+| `Then the rendered manifests in {string} should contain Kubernetes resource {string}` | Parses rendered YAML documents and requires an actual top-level resource matching the explicit `kind/name`. Nested references such as `Certificate.spec.issuerRef` do not satisfy the assertion. `${VAR}` expansion applies to the path, kind, and name. |
 | `Then the rendered manifests in {string} under directories matching {string} should contain:` (table) | Positive rendered-manifest assertion scoped to files below a directory whose name matches the supplied shell pattern, such as `*-nats`. The render directory, directory-name pattern, and table values support `${VAR}` expansion. |
 | `Then the rendered manifests in {string} should not contain:` (table) | Requires a `text` header and one or more fixed strings. Recursively inspects regular files under the repo-relative directory and fails if any listed string appears. `${VAR}` expansion applies to the path and table values. |
 | `Then these Helm releases should be deployed using context {string}:` (table) | Requires `name` and `namespace` headers, with an optional `revision` header. Runs one explicit-context, all-namespaces `helm list` and asserts that every listed release has status `deployed`; non-empty revision cells are also matched. |
@@ -238,6 +239,15 @@ contract verified in `src/clis/nvcf-cli/cmd/`):
   ```
   ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --compute-plane-stack deploy/stacks/nvcf-compute-plane --env local --plain compute-plane register --control-plane-profile <profile-path> --cluster-name <compute> --kube-context k3d-<compute> --region us-west-1 --output <values-path>
   ```
+- Helmfile control-plane profile handoff (single cluster):
+  ```
+  ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --env <env> control-plane profile export --cluster-name <control>
+  make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=<compute> CONTROL_PLANE_PROFILE=<profile-path> COMPUTE_KUBE_CONTEXT=k3d-<compute> NVCF_CLI=${NVCF_CLI}
+  ```
+  The profile export runs after the selected Helmfile environment is installed
+  so endpoint and PKI trust data describe that deployment. A single-cluster
+  export omits both persistent context flags; the CLI accepts a split-cluster
+  pair or neither, and the bootstrap has already selected the local context.
 - `self-hosted compute-plane install`:
   ```
   ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --compute-plane-stack deploy/stacks/nvcf-compute-plane --env local --plain compute-plane install --values <values-path> --kube-context k3d-<compute> --cluster-name <compute>
@@ -257,6 +267,11 @@ restoration ledger:
 - At suite teardown, the runner restores every registered path to its
   pre-suite state. Files that did not exist before are deleted; files
   that did are rewritten with the original bytes and mode.
+- Live entry points cancel and quiesce the active step before restoring the
+  file and environment ledgers and exiting on SIGINT or SIGTERM. On Unix, the
+  command runner cancels the step's process group so shell, make, and kubectl
+  descendants cannot outlive restoration. This includes generated registry
+  credential files.
 - `Config.LedgerDir` (`out/<run-id>/originals/`) is reserved for an
   on-disk variant if very large fixtures ever push memory limits.
   Today the directory is created but unused.
