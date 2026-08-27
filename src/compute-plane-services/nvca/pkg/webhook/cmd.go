@@ -20,9 +20,9 @@ package webhook
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"os"
@@ -36,8 +36,6 @@ import (
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/version"
 	"github.com/bombsimon/logrusr/v4"
-	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -45,11 +43,11 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/klog/v2"
+	"sigs.k8s.io/controller-runtime/pkg/certwatcher"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	nvcametrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
@@ -85,6 +83,12 @@ func NewCommand() *cobra.Command {
 			}
 
 			cfg = setDefaults(cfg.Complete())
+
+			// The system namespace defaults to the pod's namespace so the TLS
+			// secret informer watches the namespace the webhook runs in.
+			if cfg.Agent.SystemNamespace == "" {
+				cfg.Agent.SystemNamespace = os.Getenv("POD_NAMESPACE")
+			}
 
 			log := core.GetLogger(ctx)
 			if log.Logger.Level, err = logrus.ParseLevel(cfg.Agent.LogLevel); err != nil {
@@ -132,15 +136,20 @@ func NewCommand() *cobra.Command {
 				return err
 			}
 
+			cw, err := newCertWatcher(ctx, cfg, k8sClient)
+			if err != nil {
+				return err
+			}
+
 			m := &webhookManager{
 				cfg:              cfg,
-				namespace:        os.Getenv("POD_NAMESPACE"),
 				k8sClient:        k8sClient,
 				dcgmMetrics:      dcgmMetricsCfg,
 				readTimeout:      5 * time.Second,
 				writeTimeout:     10 * time.Second,
 				attrFetcher:      featureflag.DefaultFetcher,
 				addNodePublisher: sharedcluster.AddNodePublisher,
+				cw:               cw,
 			}
 
 			// Start shared cluster only once since the pod affinity webhook is a subscriber
@@ -180,10 +189,6 @@ type webhookManager struct {
 	attrFetcher featureflag.AttributeFetcher
 
 	k8sClient kubernetes.Interface
-	namespace string
-
-	// certMu ensures only one goroutine updates a TLS cert file at a given time.
-	certMu sync.Mutex
 
 	// sharedClusterOn is true when at least one node in the cluster has the "schedule" label,
 	// and false in all other cases.
@@ -197,82 +202,59 @@ type webhookManager struct {
 	kataNonGPURTClassExists *atomic.Bool
 	// Mocked in tests.
 	addNodePublisher func(ctx context.Context, inf cache.SharedIndexInformer) (*atomic.Bool, cache.InformerSynced, error)
+
+	// Watch TLS certs for updates and update stored certificate when it changes.
+	cw certWatcher
 }
 
 func (m *webhookManager) run(ctx context.Context) error {
-	if m.cfg.Webhook.TLSSecretName != "" {
-		return m.runWithReload(ctx)
-	}
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+
 	shutdownCompleted := make(chan struct{})
-	if err := m.startWebhooks(ctx, shutdownCompleted); err != nil {
+	if err := m.startWebhooks(ctx, cancel, shutdownCompleted); err != nil {
 		return err
 	}
 	<-ctx.Done()
 	<-shutdownCompleted
+	// Surface a certificate-watcher failure (for example the TLS secret is missing
+	// at startup) so the process exits non-zero and the container is restarted until
+	// it recovers, instead of serving admission requests with no certificate.
+	if cause := context.Cause(ctx); cause != nil && !errors.Is(cause, context.Canceled) {
+		return cause
+	}
 	return nil
 }
 
-// runWithReload runs the webhook server, restarting it when TLS files are updated.
-func (m *webhookManager) runWithReload(parentCtx context.Context) error {
-	// reloadSignal will ony receive values if a secret is configured.
-	// If not, the webhook server is only shut down when parentCtx is canceled/times out.
-	reloadSignal := make(chan struct{})
-	if err := m.startSecretInformer(parentCtx, resync, reloadSignal); err != nil {
-		return err
-	}
+type certWatcher interface {
+	// Start starts the watch on the certificate and key data. It must block.
+	Start(ctx context.Context) error
+	// GetCertificate fetches the currently loaded certificate, which may be nil.
+	GetCertificate(chi *tls.ClientHelloInfo) (*tls.Certificate, error)
+}
 
-	// Consume the first reload signal from initial informer list.
-	<-reloadSignal
-
-	shutdownCompleted := make(chan struct{})
-	ctx, cancel := context.WithCancel(parentCtx)
-
-	if err := m.startWebhooks(ctx, shutdownCompleted); err != nil {
-		cancel()
-		return err
-	}
-
-	for {
-		select {
-		case <-parentCtx.Done():
-			cancel()
-			<-shutdownCompleted
-			return nil
-		case <-reloadSignal:
-			cancel()
-			<-shutdownCompleted
-			// The port may not be released until a few seconds after shutdown completes.
-			if err := wait.PollUntilContextTimeout(parentCtx,
-				100*time.Millisecond, 10*time.Second, true,
-				func(ctx context.Context) (bool, error) {
-					return isPortFree(ctx, m.cfg.Webhook.SvcAddress), nil
-				}); err != nil {
-				return err
-			}
-			// Start the server with the new cert/key.
-			ctx, cancel = context.WithCancel(parentCtx)
-			if err := m.startWebhooks(ctx, shutdownCompleted); err != nil {
-				cancel()
-				return err
-			}
+func newCertWatcher(ctx context.Context, cfg nvcaconfig.Config, k8sClient kubernetes.Interface) (cw certWatcher, err error) {
+	log := core.GetLogger(ctx)
+	// If a TLS secret is configured, use the secret cert watcher's GetCertificate method
+	// to get the TLS certificate without restarting the server.
+	// Otherwise certificate files are watched by certwatcher and reloaded via GetCertificate.
+	if cfg.Webhook.TLSSecretName != "" {
+		log.WithField("secretName", cfg.Webhook.TLSSecretName).Info("Configuring Secret certificate watcher")
+		cw = newSecretCertWatcher(cfg, k8sClient)
+	} else if cfg.Webhook.TLSCertFile != "" || cfg.Webhook.TLSKeyFile != "" {
+		log.WithFields(logrus.Fields{
+			"certFile": cfg.Webhook.TLSCertFile,
+			"keyFile":  cfg.Webhook.TLSKeyFile,
+		}).Info("Configuring file certificate watcher")
+		if cw, err = certwatcher.New(cfg.Webhook.TLSCertFile, cfg.Webhook.TLSKeyFile); err != nil {
+			return nil, err
 		}
 	}
+	return cw, nil
 }
 
-func isPortFree(ctx context.Context, addr string) bool {
-	conn, err := (&net.Dialer{Timeout: time.Second}).DialContext(ctx, "tcp", addr)
-	if err == nil {
-		_ = conn.Close()
-		return false
-	}
-	return true
-}
-
-func (m *webhookManager) startWebhooks(ctx context.Context, shutdownSignal chan struct{}) error {
+func (m *webhookManager) startWebhooks(ctx context.Context, cancel context.CancelCauseFunc, shutdownSignal chan struct{}) error {
 	log := core.GetLogger(ctx)
-
-	m.certMu.Lock()
-	defer m.certMu.Unlock()
 
 	r := mux.NewRouter()
 
@@ -383,23 +365,31 @@ func (m *webhookManager) startWebhooks(ctx context.Context, shutdownSignal chan 
 		IdleTimeout:  120 * time.Second,
 	}
 
-	listener, err := net.Listen("tcp", m.cfg.Webhook.SvcAddress)
+	var listener net.Listener
+	if m.cw != nil {
+		go func() {
+			if err := m.cw.Start(ctx); err != nil {
+				core.GetLogger(ctx).WithError(err).Error("certificate watcher error")
+				cancel(fmt.Errorf("certificate watcher failed: %w", err))
+			}
+		}()
+		server.TLSConfig = &tls.Config{
+			NextProtos:     []string{"h2"},
+			MinVersion:     tls.VersionTLS12,
+			GetCertificate: m.cw.GetCertificate,
+		}
+		listener, err = tls.Listen("tcp", m.cfg.Webhook.SvcAddress, server.TLSConfig)
+	} else {
+		listener, err = net.Listen("tcp", m.cfg.Webhook.SvcAddress)
+	}
 	if err != nil {
 		return err
 	}
 
 	go func() {
-		logErr := func(err error) {
-			if err != nil && !errors.Is(err, http.ErrServerClosed) {
-				log.Error(err)
-			}
-		}
-		if m.cfg.Webhook.TLSCertFile != "" || m.cfg.Webhook.TLSKeyFile != "" {
-			log.Infof("Serving HTTPS at: %v", listener.Addr())
-			logErr(server.ServeTLS(listener, m.cfg.Webhook.TLSCertFile, m.cfg.Webhook.TLSKeyFile))
-		} else {
-			log.Infof("Serving HTTP at: %v", listener.Addr())
-			logErr(server.Serve(listener))
+		log.Infof("Serving webhooks at: %v", listener.Addr())
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error(err)
 		}
 	}()
 
@@ -426,94 +416,112 @@ func handleWebhook(ctx context.Context, r *mux.Router, path string, wh http.Hand
 	r.Path(path).Handler(wh).Methods("POST")
 }
 
-func (m *webhookManager) startSecretInformer(ctx context.Context,
-	resyncPeriod time.Duration,
-	reloadSignal chan struct{},
-) error {
+type secretCertWatcher struct {
+	cfg          nvcaconfig.Config
+	k8sClient    kubernetes.Interface
+	resyncPeriod time.Duration
+
+	certMu            sync.RWMutex
+	currentCert       *tls.Certificate
+	cachedKeyPEMBlock []byte
+}
+
+func newSecretCertWatcher(cfg nvcaconfig.Config, k8sClient kubernetes.Interface) *secretCertWatcher {
+	return &secretCertWatcher{
+		cfg:          cfg,
+		k8sClient:    k8sClient,
+		resyncPeriod: resync,
+	}
+}
+
+// GetCertificate fetches the currently loaded certificate, which may be nil.
+func (w *secretCertWatcher) GetCertificate(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {
+	w.certMu.RLock()
+	defer w.certMu.RUnlock()
+	return w.currentCert, nil
+}
+
+func (w *secretCertWatcher) Start(ctx context.Context) error {
 	log := core.GetLogger(ctx)
 
 	f := informers.NewSharedInformerFactoryWithOptions(
-		m.k8sClient,
-		resyncPeriod,
-		informers.WithNamespace(m.namespace),
+		w.k8sClient,
+		w.resyncPeriod,
+		informers.WithNamespace(w.cfg.Agent.SystemNamespace),
 		informers.WithTweakListOptions(func(lo *metav1.ListOptions) {
-			lo.FieldSelector = fields.OneTermEqualSelector(metav1.ObjectNameField, m.cfg.Webhook.TLSSecretName).String()
+			lo.FieldSelector = fields.OneTermEqualSelector(metav1.ObjectNameField, w.cfg.Webhook.TLSSecretName).String()
 		}),
 	)
 
+	whmetrics := whmetrics.FromContext(ctx)
+
 	handleSecret := func(sec *v1.Secret) error {
-		m.certMu.Lock()
-		defer m.certMu.Unlock()
-
-		for _, filePath := range []string{m.cfg.Webhook.TLSCertFile, m.cfg.Webhook.TLSKeyFile} {
+		for _, filePath := range []string{w.cfg.Webhook.TLSCertFile, w.cfg.Webhook.TLSKeyFile} {
 			fileName := filepath.Base(filePath)
-
-			log.WithField("file", fileName).Info("Updating TLS file")
 
 			fileData, ok := sec.Data[fileName]
 			if !ok {
+				whmetrics.ReadCertificateErrors.Inc()
 				return fmt.Errorf("key %s not found", fileName)
 			}
 			if len(fileData) == 0 {
+				whmetrics.ReadCertificateErrors.Inc()
 				return fmt.Errorf("key %s has empty data", fileName)
-			}
-
-			tmpFile, err := os.CreateTemp(filepath.Dir(filePath), "*."+fileName)
-			if err != nil {
-				return err
-			}
-			defer tmpFile.Close()
-
-			if _, err := io.Copy(tmpFile, bytes.NewReader(fileData)); err != nil {
-				return err
-			}
-
-			if err := os.Rename(tmpFile.Name(), filePath); err != nil {
-				return err
 			}
 		}
 
-		reloadSignal <- struct{}{}
+		whmetrics.ReadCertificateTotal.Inc()
+		certPEMBlock := sec.Data[filepath.Base(w.cfg.Webhook.TLSCertFile)]
+		keyPEMBlock := sec.Data[filepath.Base(w.cfg.Webhook.TLSKeyFile)]
+
+		cert, err := tls.X509KeyPair(certPEMBlock, keyPEMBlock)
+		if err != nil {
+			whmetrics.ReadCertificateErrors.Inc()
+			return err
+		}
+
+		w.certMu.Lock()
+		if w.currentCert != nil &&
+			bytes.Equal(w.currentCert.Certificate[0], cert.Certificate[0]) &&
+			bytes.Equal(w.cachedKeyPEMBlock, keyPEMBlock) {
+			log.Debug("TLS certificate already cached")
+			w.certMu.Unlock()
+			return nil
+		}
+		w.currentCert = &cert
+		w.cachedKeyPEMBlock = keyPEMBlock
+		log.Info("Updated current TLS certificate")
+		w.certMu.Unlock()
 
 		return nil
 	}
 
 	inf := f.Core().V1().Secrets().Informer()
 	_, err := inf.AddEventHandler(&cache.ResourceEventHandlerFuncs{
-		AddFunc: func(obj interface{}) {
+		AddFunc: func(obj any) {
 			sec, ok := obj.(*v1.Secret)
 			if !ok {
-				log.Errorf("Wrong object in Secret informer Add handler: %v", obj)
+				log.Errorf("Wrong object type in Secret informer Add handler: %T", obj)
 				return
 			}
 
 			log.Infof("Got new TLS Secret %s", sec.Name)
 
 			if err := handleSecret(sec); err != nil {
-				log.WithError(err).Error("Update TLS files")
+				log.WithError(err).Error("Update TLS data")
 			}
 		},
-		UpdateFunc: func(oldObj, newObj interface{}) {
-			oldSec, ok := oldObj.(*v1.Secret)
-			if !ok {
-				log.Errorf("Wrong old object in Secret informer Update handler: %v", oldObj)
-				return
-			}
+		UpdateFunc: func(_, newObj any) {
 			newSec, ok := newObj.(*v1.Secret)
 			if !ok {
-				log.Errorf("Wrong new object in Secret informer Update handler: %v", newObj)
-				return
-			}
-
-			// Ignore non-data-related changes to the Secret.
-			if cmp.Equal(oldSec.Data, newSec.Data, cmpopts.EquateEmpty()) {
+				log.Errorf("Wrong new object type in Secret informer Update handler: %T", newObj)
 				return
 			}
 
 			log.Infof("Got TLS Secret %s update", newSec.Name)
 
 			if err := handleSecret(newSec); err != nil {
-				log.WithError(err).Error("Update TLS files")
+				log.WithError(err).Error("Update TLS data")
 			}
 		},
 	})
@@ -521,8 +529,6 @@ func (m *webhookManager) startSecretInformer(ctx context.Context,
 		log.WithError(err).Error("failed to add event handler for Secrets")
 		return err
 	}
-
-	log.Infof("Starting TLS Secret %s informer", m.cfg.Webhook.TLSSecretName)
 
 	f.Start(ctx.Done())
 
@@ -532,6 +538,16 @@ func (m *webhookManager) startSecretInformer(ctx context.Context,
 		log.Error("Informer cache sync timed out")
 		return fmt.Errorf("timeout while waiting for secret informer sync")
 	}
+
+	// After cache sync, the certificate must be available.
+	// Returning an error will cause the webhook container to restart until the TLS secret is present.
+	if currentCert, _ := w.GetCertificate(nil); currentCert == nil {
+		return fmt.Errorf("TLS certificate not found")
+	}
+
+	log.Info("TLS Secret watcher initialized")
+
+	<-ctx.Done()
 
 	return nil
 }

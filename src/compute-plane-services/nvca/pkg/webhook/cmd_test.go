@@ -40,6 +40,9 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/core"
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
+	"github.com/bombsimon/logrusr/v4"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	admissionv1 "k8s.io/api/admission/v1"
@@ -49,10 +52,13 @@ import (
 	"k8s.io/client-go/kubernetes"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/enforce/kata"
+	whmetrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/webhook/metrics"
 )
 
 func generateTestCertificates(t *testing.T) (caCert, caKey, cert, key []byte) {
@@ -126,10 +132,21 @@ func generateTestCertificates(t *testing.T) (caCert, caKey, cert, key []byte) {
 	return caCertPEM.Bytes(), caKeyPEM.Bytes(), certPEM.Bytes(), keyPEM.Bytes()
 }
 
+func newTestLogger(debug ...bool) *logrus.Entry {
+	log := logrus.New()
+	if len(debug) > 0 && debug[0] {
+		log.SetLevel(logrus.DebugLevel)
+	} else {
+		log.SetOutput(io.Discard)
+	}
+	return logrus.NewEntry(log)
+}
+
 func TestCmd(t *testing.T) {
 	cmd := NewCommand()
 
-	ctx := context.Background()
+	ctx := t.Context()
+	ctx = whmetrics.WithDefaultMetrics(ctx, whmetrics.WithRegisterer(prometheus.NewRegistry()))
 
 	addr := newLocalhostAddr(t)
 
@@ -186,7 +203,7 @@ func TestCmd(t *testing.T) {
 	}()
 
 	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
-		req := newWebhookAdmissionReviewRequestPods(t, addr+"/mutate-pod-nodeaffinity")
+		req := newWebhookAdmissionReviewRequestPods(ct, addr+"/mutate-pod-nodeaffinity")
 		res, err := client.Do(req)
 		if !assert.NoError(ct, err) {
 			return
@@ -265,8 +282,10 @@ func TestCmd(t *testing.T) {
 }
 
 func TestManagerRunTLS(t *testing.T) {
-	ctx := context.Background()
-	ctx = core.WithDefaultLogger(ctx)
+	ctx := t.Context()
+	log := newTestLogger()
+	ctx = core.WithLogger(ctx, log)
+	ctx = whmetrics.WithDefaultMetrics(ctx, whmetrics.WithRegisterer(prometheus.NewRegistry()))
 
 	addr := newLocalhostAddr(t)
 
@@ -288,17 +307,30 @@ func TestManagerRunTLS(t *testing.T) {
 		Transport: trpt1,
 	}
 
-	m := &webhookManager{
-		cfg: nvcaconfig.Config{
-			Webhook: nvcaconfig.WebhookConfig{
-				SvcAddress:  addr,
-				TLSCertFile: certFilePath,
-				TLSKeyFile:  keyFilePath,
-			},
+	cfg := nvcaconfig.Config{
+		Webhook: nvcaconfig.WebhookConfig{
+			SvcAddress:  addr,
+			TLSCertFile: certFilePath,
+			TLSKeyFile:  keyFilePath,
 		},
+	}
+	k8sClient := k8sfake.NewSimpleClientset()
+	// This will create a file-based cert watcher.
+	cw, err := newCertWatcher(ctx, cfg, k8sClient)
+	require.ErrorContains(t, err, "tls.crt: no such file or directory")
+
+	// Create files then run again.
+	require.NoError(t, os.WriteFile(certFilePath, cert1, 0600))
+	require.NoError(t, os.WriteFile(keyFilePath, key1, 0600))
+
+	cw, err = newCertWatcher(ctx, cfg, k8sClient)
+	require.NoError(t, err)
+
+	m := &webhookManager{
+		cfg:          cfg,
 		readTimeout:  100 * time.Millisecond,
 		writeTimeout: 100 * time.Millisecond,
-		k8sClient:    k8sfake.NewSimpleClientset(),
+		k8sClient:    k8sClient,
 		addNodePublisher: func(ctx context.Context, inf cache.SharedIndexInformer) (*atomic.Bool, cache.InformerSynced, error) {
 			return &atomic.Bool{}, nil, nil
 		},
@@ -307,9 +339,10 @@ func TestManagerRunTLS(t *testing.T) {
 				return a.Key == featureflag.AttrKataRuntimeIsolation.Key
 			},
 		},
+		cw: cw,
 	}
 
-	err := m.startSharedClusterPubSub(ctx, 0)
+	err = m.startSharedClusterPubSub(ctx, 0)
 	require.NoError(t, err)
 
 	nonGPURTClass := &nodev1.RuntimeClass{}
@@ -318,7 +351,9 @@ func TestManagerRunTLS(t *testing.T) {
 	require.NoError(t, err)
 	m.startKataRuntimeClassHandler(ctx)
 
-	// Expect initial error when files do not exits.
+	addr = newLocalhostAddr(t)
+	m.cfg.Webhook.SvcAddress = addr
+
 	var runErr error
 	runReturned := make(chan struct{})
 	ctx1, cancel1 := context.WithCancel(ctx)
@@ -326,31 +361,9 @@ func TestManagerRunTLS(t *testing.T) {
 		runErr = m.run(ctx1)
 		runReturned <- struct{}{}
 	}()
-	var clientErr error
+
 	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
 		req := newWebhookAdmissionReviewRequestPods(ct, addr+"/mutate-pod-nodeaffinity")
-		_, clientErr = client.Do(req)
-		assert.ErrorContains(ct, clientErr, "TLS handshake timeout")
-	}, 5*time.Second, 100*time.Millisecond)
-
-	cancel1()
-	<-runReturned
-	assert.NoError(t, runErr)
-
-	// Create files then run again.
-	require.NoError(t, os.WriteFile(certFilePath, cert1, 0600))
-	require.NoError(t, os.WriteFile(keyFilePath, key1, 0600))
-	addr = newLocalhostAddr(t)
-	m.cfg.Webhook.SvcAddress = addr
-
-	ctx2, cancel2 := context.WithCancel(ctx)
-	go func() {
-		runErr = m.run(ctx2)
-		runReturned <- struct{}{}
-	}()
-
-	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
-		req := newWebhookAdmissionReviewRequestPods(t, addr+"/mutate-pod-nodeaffinity")
 		res, err := client.Do(req)
 		if !assert.NoError(ct, err) {
 			return
@@ -362,7 +375,7 @@ func TestManagerRunTLS(t *testing.T) {
 	}, 5*time.Second, 100*time.Millisecond)
 
 	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
-		req := newWebhookAdmissionReviewRequestPods(t, addr+"/mutate-pod-enforcement", &v1.Pod{
+		req := newWebhookAdmissionReviewRequestPods(ct, addr+"/mutate-pod-enforcement", &v1.Pod{
 			Spec: v1.PodSpec{Containers: []v1.Container{{}}},
 		})
 		res, err := client.Do(req)
@@ -389,14 +402,20 @@ func TestManagerRunTLS(t *testing.T) {
 		}
 	}, 5*time.Second, 100*time.Millisecond)
 
-	cancel2()
+	cancel1()
 	<-runReturned
 	assert.NoError(t, runErr)
 }
 
 func TestManagerRunTLSSecretInformer(t *testing.T) {
-	ctx := context.Background()
-	ctx = core.WithDefaultLogger(ctx)
+	ctx := t.Context()
+	log := newTestLogger(true)
+	ctx = core.WithLogger(ctx, log)
+	k8sLogger := logrusr.New(log, logrusr.WithReportCaller())
+	ctrllog.SetLogger(k8sLogger)
+	klog.SetLogger(k8sLogger)
+	ctx = ctrllog.IntoContext(ctx, k8sLogger)
+	ctx = whmetrics.WithDefaultMetrics(ctx, whmetrics.WithRegisterer(prometheus.NewRegistry()))
 
 	certFilePath := filepath.Join(t.TempDir(), "tls.crt")
 	keyFilePath := filepath.Join(t.TempDir(), "tls.key")
@@ -413,21 +432,29 @@ func TestManagerRunTLSSecretInformer(t *testing.T) {
 	trpt1.TLSClientConfig = &tls.Config{
 		RootCAs: rootCAs1,
 	}
-	client := &http.Client{
+	client1 := &http.Client{
 		Transport: trpt1,
 	}
 
-	m := &webhookManager{
-		cfg: nvcaconfig.Config{
-			Webhook: nvcaconfig.WebhookConfig{
-				TLSCertFile:   certFilePath,
-				TLSKeyFile:    keyFilePath,
-				TLSSecretName: "test-tls-secret",
-			},
+	cfg := nvcaconfig.Config{
+		Webhook: nvcaconfig.WebhookConfig{
+			TLSCertFile:   certFilePath,
+			TLSKeyFile:    keyFilePath,
+			TLSSecretName: "test-tls-secret",
 		},
+		Agent: nvcaconfig.AgentConfig{
+			SystemNamespace: "nvca-system",
+		},
+	}
+	k8sClient := k8sfake.NewSimpleClientset()
+	// This will create a secret-based cert watcher.
+	cw, err := newCertWatcher(ctx, cfg, k8sClient)
+	require.NoError(t, err)
+	m := &webhookManager{
+		cfg:          cfg,
 		readTimeout:  100 * time.Millisecond,
 		writeTimeout: 100 * time.Millisecond,
-		k8sClient:    k8sfake.NewSimpleClientset(),
+		k8sClient:    k8sClient,
 		addNodePublisher: func(ctx context.Context, inf cache.SharedIndexInformer) (*atomic.Bool, cache.InformerSynced, error) {
 			return &atomic.Bool{}, nil, nil
 		},
@@ -436,10 +463,10 @@ func TestManagerRunTLSSecretInformer(t *testing.T) {
 				return a.Key == featureflag.AttrKataRuntimeIsolation.Key
 			},
 		},
-		namespace: "nvca-system",
+		cw: cw,
 	}
 
-	err := m.startSharedClusterPubSub(ctx, 0)
+	err = m.startSharedClusterPubSub(ctx, 0)
 	require.NoError(t, err)
 
 	nonGPURTClass := &nodev1.RuntimeClass{}
@@ -448,19 +475,16 @@ func TestManagerRunTLSSecretInformer(t *testing.T) {
 	require.NoError(t, err)
 	m.startKataRuntimeClassHandler(ctx)
 
-	var runErr error
-	runReturned := make(chan struct{})
-
 	require.NoError(t, os.WriteFile(certFilePath, cert1, 0600))
 	require.NoError(t, os.WriteFile(keyFilePath, key1, 0600))
 	m.cfg.Webhook.SvcAddress = newLocalhostAddr(t)
 	webhookEndpoint := m.cfg.Webhook.SvcAddress + "/mutate-pod-nodeaffinity"
 
 	// The secret must exist prior to start.
-	_, err = m.k8sClient.CoreV1().Secrets(m.namespace).Create(ctx, &v1.Secret{
+	_, err = k8sClient.CoreV1().Secrets(cfg.Agent.SystemNamespace).Create(ctx, &v1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      m.cfg.Webhook.TLSSecretName,
-			Namespace: m.namespace,
+			Name:      cfg.Webhook.TLSSecretName,
+			Namespace: cfg.Agent.SystemNamespace,
 		},
 		Data: map[string][]byte{
 			"tls.crt": cert1,
@@ -469,24 +493,30 @@ func TestManagerRunTLSSecretInformer(t *testing.T) {
 	}, metav1.CreateOptions{})
 	require.NoError(t, err)
 
-	ctx2, cancel2 := context.WithCancel(ctx)
-	t.Cleanup(cancel2)
+	var runErr error
+	runReturned := make(chan struct{})
+
+	ctx1, cancel1 := context.WithCancel(ctx)
+	t.Cleanup(cancel1)
 	go func() {
-		runErr = m.run(ctx2)
+		runErr = m.run(ctx1)
 		runReturned <- struct{}{}
 	}()
 
 	// Using the default client should fail with TLS error.
 	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
-		req := newWebhookAdmissionReviewRequestPods(t, webhookEndpoint)
+		req := newWebhookAdmissionReviewRequestPods(ct, webhookEndpoint)
 		_, err := http.DefaultClient.Do(req)
-		assert.EqualError(ct, err, `Post "https://`+webhookEndpoint+`": `+
-			`tls: failed to verify certificate: x509: certificate signed by unknown authority`)
+		// The x509 sub-message differs by platform (Go's verifier says "signed by
+		// unknown authority"; the macOS system verifier says "certificate is not
+		// trusted"), so assert only the stable TLS-verification-failure prefix.
+		assert.ErrorContains(ct, err, "tls: failed to verify certificate")
 	}, 5*time.Second, 100*time.Millisecond)
 
+	client1.CloseIdleConnections()
 	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
-		req := newWebhookAdmissionReviewRequestPods(t, webhookEndpoint)
-		res, err := client.Do(req)
+		req := newWebhookAdmissionReviewRequestPods(ct, webhookEndpoint)
+		res, err := client1.Do(req)
 		if !assert.NoError(ct, err) {
 			return
 		}
@@ -496,10 +526,10 @@ func TestManagerRunTLSSecretInformer(t *testing.T) {
 		}
 	}, 5*time.Second, 100*time.Millisecond)
 
-	_, err = m.k8sClient.CoreV1().Secrets(m.namespace).Update(ctx, &v1.Secret{
+	_, err = k8sClient.CoreV1().Secrets(cfg.Agent.SystemNamespace).Update(ctx, &v1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      m.cfg.Webhook.TLSSecretName,
-			Namespace: m.namespace,
+			Name:      cfg.Webhook.TLSSecretName,
+			Namespace: cfg.Agent.SystemNamespace,
 		},
 		Data: map[string][]byte{
 			"tls.crt": cert2,
@@ -522,8 +552,9 @@ func TestManagerRunTLSSecretInformer(t *testing.T) {
 		Transport: trpt2,
 	}
 
+	client2.CloseIdleConnections()
 	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
-		req := newWebhookAdmissionReviewRequestPods(t, webhookEndpoint)
+		req := newWebhookAdmissionReviewRequestPods(ct, webhookEndpoint)
 		res, err := client2.Do(req)
 		if !assert.NoError(ct, err) {
 			return
@@ -535,14 +566,17 @@ func TestManagerRunTLSSecretInformer(t *testing.T) {
 	}, 5*time.Second, 100*time.Millisecond)
 
 	// Using the old client should fail with TLS error.
-	req := newWebhookAdmissionReviewRequestPods(t, webhookEndpoint)
-	_, err = client.Do(req)
-	require.EqualError(t, err, `Post "https://`+webhookEndpoint+`": `+
-		`tls: failed to verify certificate: x509: certificate signed by unknown authority `+
-		`(possibly because of "crypto/rsa: verification error" while trying to verify `+
-		`candidate authority certificate "webhooks-ca")`)
+	client1.CloseIdleConnections()
+	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
+		req := newWebhookAdmissionReviewRequestPods(ct, webhookEndpoint)
+		_, err := client1.Do(req)
+		assert.EqualError(ct, err, `Post "https://`+webhookEndpoint+`": `+
+			`tls: failed to verify certificate: x509: certificate signed by unknown authority `+
+			`(possibly because of "crypto/rsa: verification error" while trying to verify `+
+			`candidate authority certificate "webhooks-ca")`)
+	}, 5*time.Second, 100*time.Millisecond)
 
-	cancel2()
+	cancel1()
 	<-runReturned
 	assert.NoError(t, runErr)
 }
@@ -596,4 +630,68 @@ func decodePatches(t *testing.T, resBody []byte) (patches []map[string]any, allo
 	require.NoError(t, err)
 
 	return patches, true
+}
+
+// When a TLS secret is configured but does not exist yet (for example on initial
+// deploy, before the reconciler creates it), the secret cert watcher must fail so
+// run() returns an error and the container is restarted until the secret appears,
+// instead of serving admission requests with no certificate.
+func TestManagerRunTLSSecretInformerMissingSecretFailsFast(t *testing.T) {
+	ctx := t.Context()
+	log := newTestLogger()
+	ctx = core.WithLogger(ctx, log)
+	k8sLogger := logrusr.New(log, logrusr.WithReportCaller())
+	ctrllog.SetLogger(k8sLogger)
+	klog.SetLogger(k8sLogger)
+	ctx = ctrllog.IntoContext(ctx, k8sLogger)
+	ctx = whmetrics.WithDefaultMetrics(ctx, whmetrics.WithRegisterer(prometheus.NewRegistry()))
+
+	cfg := nvcaconfig.Config{
+		Webhook: nvcaconfig.WebhookConfig{
+			TLSCertFile:   filepath.Join(t.TempDir(), "tls.crt"),
+			TLSKeyFile:    filepath.Join(t.TempDir(), "tls.key"),
+			TLSSecretName: "test-tls-secret",
+			SvcAddress:    newLocalhostAddr(t),
+		},
+		Agent: nvcaconfig.AgentConfig{
+			SystemNamespace: "nvca-system",
+		},
+	}
+	k8sClient := k8sfake.NewSimpleClientset() // TLS secret intentionally absent.
+	cw, err := newCertWatcher(ctx, cfg, k8sClient)
+	require.NoError(t, err)
+	m := &webhookManager{
+		cfg:          cfg,
+		readTimeout:  100 * time.Millisecond,
+		writeTimeout: 100 * time.Millisecond,
+		k8sClient:    k8sClient,
+		addNodePublisher: func(ctx context.Context, inf cache.SharedIndexInformer) (*atomic.Bool, cache.InformerSynced, error) {
+			return &atomic.Bool{}, nil, nil
+		},
+		attrFetcher: &mockAttrFetcher{
+			attrEnabledFunc: func(a *featureflag.Attribute) bool {
+				return a.Key == featureflag.AttrKataRuntimeIsolation.Key
+			},
+		},
+		cw: cw,
+	}
+
+	require.NoError(t, m.startSharedClusterPubSub(ctx, 0))
+
+	nonGPURTClass := &nodev1.RuntimeClass{}
+	nonGPURTClass.Name = kata.RuntimeClassNameNonGPU
+	_, err = m.k8sClient.NodeV1().RuntimeClasses().Create(ctx, nonGPURTClass, metav1.CreateOptions{})
+	require.NoError(t, err)
+	m.startKataRuntimeClassHandler(ctx)
+
+	runErr := make(chan error, 1)
+	go func() { runErr <- m.run(ctx) }()
+
+	select {
+	case err := <-runErr:
+		require.Error(t, err)
+		assert.ErrorContains(t, err, "certificate watcher failed")
+	case <-time.After(10 * time.Second):
+		t.Fatal("run did not return after the TLS secret watcher failed")
+	}
 }
