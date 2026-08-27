@@ -2049,6 +2049,24 @@ class FunctionManagementControllerTest {
     }
 
 
+    @Test
+    void deleteUndeployedFunction() {
+        testService.createTestFunctionEntity(TEST_FUNCTION_ID, TEST_VERSION_ID_1, TEST_NCA_ID,
+                                             TEST_FUNCTION_NAME);
+        var token = MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
+                                                    List.of(SCOPE_DELETE_FUNCTION), 100);
+        var requestEntity = RequestEntity.delete(
+                        URI.create("/v2/nvcf/functions/" + TEST_FUNCTION_ID
+                                           + "/versions/" + TEST_VERSION_ID_1))
+                .header("Authorization", "Bearer " + token)
+                .build();
+
+        var responseEntity = testRestTemplate.exchange(requestEntity, Void.class);
+
+        assertThat(responseEntity.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        assertThat(functionsRepository.getByFunctionVersionId(TEST_VERSION_ID_1)).isEmpty();
+    }
+
     Stream<Arguments> deleteArgs() {
         var jwtCases = Stream.of(
                 Arguments.of(MOCK_OAUTH2_TOKEN_SERVER.getJwt(TEST_CLIENT_SUBJECT,
