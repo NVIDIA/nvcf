@@ -346,4 +346,13 @@ if grep -Fq "$staged_worker_address" "$work_dir/disabled-api-values.yaml"; then
   fail "disabled LLM supplied a staged worker address to the API chart"
 fi
 
+invalid_disabled_worker_address='not-valid:99999'
+write_environment false "$invalid_disabled_worker_address"
+if ! render_api_values "$work_dir/disabled-invalid-api-values.yaml" >/dev/null 2>&1; then
+  fail "disabled LLM rejected render with an invalid worker address (validation must not run when disabled)"
+fi
+if grep -Fq "$invalid_disabled_worker_address" "$work_dir/disabled-invalid-api-values.yaml"; then
+  fail "disabled LLM passed an invalid worker address through to the API chart"
+fi
+
 echo "llm-router-worker-address: all checks passed"
