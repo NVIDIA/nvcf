@@ -35,6 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/transporttls"
 	nvcav1alpha1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
 )
 
@@ -127,8 +128,11 @@ func TestPrepareTransportTLSForWorkloadsInjectsPodLLMWorker(t *testing.T) {
 	assert.Equal(t, corev1.PullAlways, installer.ImagePullPolicy)
 	llmWorker := findWorkloadContainer(podSpec, function.LLMWorkerContainerName)
 	require.NotNil(t, llmWorker)
-	assert.Equal(t, "/nvcf/transport-tls/ca-certificates.crt",
-		findWorkloadEnvValue(llmWorker, "STARGATE_TLS_CERT_PATH"))
+	expectedBundlePath := "/nvcf/transport-tls/ca-certificates.crt"
+	assert.Equal(t, expectedBundlePath,
+		findWorkloadEnvValue(llmWorker, transporttls.CertPathEnv))
+	assert.Equal(t, expectedBundlePath,
+		findWorkloadEnvValue(llmWorker, transporttls.GrpcTLSCACertPathEnv))
 	mount := findWorkloadVolumeMount(llmWorker, "nvcf-trust-merged-certs")
 	require.NotNil(t, mount)
 	assert.Equal(t, "/nvcf/transport-tls", mount.MountPath)
@@ -136,9 +140,40 @@ func TestPrepareTransportTLSForWorkloadsInjectsPodLLMWorker(t *testing.T) {
 	for _, name := range []string{"inference", "smb-server"} {
 		container := findWorkloadContainer(podSpec, name)
 		require.NotNil(t, container)
-		assert.Empty(t, findWorkloadEnvValue(container, "STARGATE_TLS_CERT_PATH"), name)
+		assert.Empty(t, findWorkloadEnvValue(container, transporttls.CertPathEnv), name)
+		assert.Empty(t, findWorkloadEnvValue(container, transporttls.GrpcTLSCACertPathEnv), name)
 		assert.Nil(t, findWorkloadVolumeMount(container, "nvcf-trust-merged-certs"), name)
 	}
+}
+
+func TestPrepareTransportTLSForWorkloadsSystemDoesNotInjectBundle(t *testing.T) {
+	ctx := newTestContext()
+	ms := &nvcav1alpha1.MiniService{
+		ObjectMeta: metav1.ObjectMeta{Name: "llm-miniservice"},
+		Spec:       nvcav1alpha1.MiniServiceSpec{Namespace: "worker-ns"},
+	}
+	crClient, _ := newFakeClient(mgrScheme, ms)
+	r := newTransportTLSReconciler(crClient, nvcaconfig.TransportTLSConfig{
+		TrustMode: nvcaconfig.TrustModeSystem,
+	})
+	pod := newTransportTLSPod()
+
+	err := r.prepareTransportTLSForWorkloads(ctx, ms, []client.Object{pod})
+
+	require.NoError(t, err)
+	cm := &corev1.ConfigMap{}
+	err = crClient.Get(ctx, client.ObjectKey{
+		Namespace: "worker-ns",
+		Name:      transporttls.DefaultTrustBundleConfigMapName,
+	}, cm)
+	assert.True(t, apierrors.IsNotFound(err))
+	assert.Nil(t, findWorkloadVolume(pod.Spec, transporttls.TrustBundleVolumeName))
+	assert.Nil(t, findWorkloadVolume(pod.Spec, transporttls.MergedCertsVolumeName))
+	assert.Nil(t, findWorkloadInitContainer(pod.Spec, transporttls.InstallContainerName))
+	llmWorker := findWorkloadContainer(pod.Spec, function.LLMWorkerContainerName)
+	require.NotNil(t, llmWorker)
+	assert.Empty(t, findWorkloadEnvValue(llmWorker, transporttls.CertPathEnv))
+	assert.Empty(t, findWorkloadEnvValue(llmWorker, transporttls.GrpcTLSCACertPathEnv))
 }
 
 func TestPrepareTransportTLSForWorkloadsKeepsOwnerRefForSameNamespaceConfigMap(t *testing.T) {

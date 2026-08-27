@@ -33,6 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/transporttls"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
 	featureflagmock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
@@ -95,8 +96,11 @@ func TestCreatePodArtifactInstancesTransportTLSBundleInjectsOnlyLLMWorker(t *tes
 
 	llmWorker := findTransportTLSContainer(createdPod, function.LLMWorkerContainerName)
 	require.NotNil(t, llmWorker)
-	assert.Equal(t, "/nvcf/transport-tls/ca-certificates.crt",
-		findTransportTLSEnvValue(llmWorker, "STARGATE_TLS_CERT_PATH"))
+	expectedBundlePath := "/nvcf/transport-tls/ca-certificates.crt"
+	assert.Equal(t, expectedBundlePath,
+		findTransportTLSEnvValue(llmWorker, transporttls.CertPathEnv))
+	assert.Equal(t, expectedBundlePath,
+		findTransportTLSEnvValue(llmWorker, transporttls.GrpcTLSCACertPathEnv))
 	mount := findTransportTLSVolumeMount(llmWorker, "nvcf-trust-merged-certs")
 	require.NotNil(t, mount)
 	assert.Equal(t, "/nvcf/transport-tls", mount.MountPath)
@@ -104,7 +108,8 @@ func TestCreatePodArtifactInstancesTransportTLSBundleInjectsOnlyLLMWorker(t *tes
 	for _, name := range []string{"inference", "smb-server"} {
 		container := findTransportTLSContainer(createdPod, name)
 		require.NotNil(t, container)
-		assert.Empty(t, findTransportTLSEnvValue(container, "STARGATE_TLS_CERT_PATH"), name)
+		assert.Empty(t, findTransportTLSEnvValue(container, transporttls.CertPathEnv), name)
+		assert.Empty(t, findTransportTLSEnvValue(container, transporttls.GrpcTLSCACertPathEnv), name)
 		assert.Nil(t, findTransportTLSVolumeMount(container, "nvcf-trust-merged-certs"), name)
 	}
 }
@@ -132,7 +137,8 @@ func TestCreatePodArtifactInstancesTransportTLSSystemDoesNotInjectBundle(t *test
 	llmWorker := findTransportTLSContainer(createdPod, function.LLMWorkerContainerName)
 	require.NotNil(t, llmWorker)
 	assert.Contains(t, llmWorker.Args, "--quic-insecure")
-	assert.Empty(t, findTransportTLSEnvValue(llmWorker, "STARGATE_TLS_CERT_PATH"))
+	assert.Empty(t, findTransportTLSEnvValue(llmWorker, transporttls.CertPathEnv))
+	assert.Empty(t, findTransportTLSEnvValue(llmWorker, transporttls.GrpcTLSCACertPathEnv))
 }
 
 func TestCreatePodArtifactInstancesTransportTLSBundleRejectsQUICInsecureTerminal(t *testing.T) {
