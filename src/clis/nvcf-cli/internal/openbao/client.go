@@ -396,24 +396,52 @@ func (c *Client) generateUserJWTTokenWithSubject(ctx context.Context, vaultToken
 // mount, for example services/all/pki/root/cert/ca. The returned value is PEM
 // text suitable for a public trust bundle.
 func (c *Client) ReadPKICertificatePEM(ctx context.Context, pkiPath string) (string, error) {
-	rootToken, err := c.getOpenBaoRootToken()
-	if err != nil {
-		return "", fmt.Errorf("retrieving OpenBao root token: %w", err)
-	}
 	readURL := strings.TrimRight(c.config.OpenBaoURL, "/") + "/v1/" + strings.Trim(pkiPath, "/") + "/cert/ca"
-	curlArgs := []string{
-		"curl", "-sS", readURL,
-		"-H", "X-Vault-Token: " + rootToken,
+	curlArgs := []string{"curl", "-sS", readURL}
+	return readPKICertificatePEM(ctx, 3, 2*time.Second, func(ctx context.Context) (string, error) {
+		return c.executeKubectlRun(ctx, "openbao-pki-root-ca", curlArgs)
+	})
+}
+
+func readPKICertificatePEM(
+	ctx context.Context,
+	attempts int,
+	retryDelay time.Duration,
+	read func(context.Context) (string, error),
+) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	output, err := c.executeKubectlRun(ctx, "openbao-pki-root-ca", curlArgs)
-	if err != nil {
-		return "", fmt.Errorf("reading OpenBao PKI certificate: %w", err)
+	for attempt := 1; attempt <= attempts; attempt++ {
+		output, err := read(ctx)
+		if err != nil {
+			return "", fmt.Errorf("reading OpenBao PKI certificate: %w", err)
+		}
+		pem, err := rootCAPEMFromOpenBaoResponse(output)
+		if err == nil {
+			return pem, nil
+		}
+		var syntaxErr *json.SyntaxError
+		retryable := strings.TrimSpace(output) == "" || errors.As(err, &syntaxErr)
+		if !retryable || attempt == attempts {
+			return "", err
+		}
+		if err := waitForPKICertificateRetry(ctx, retryDelay); err != nil {
+			return "", err
+		}
 	}
-	pem, err := rootCAPEMFromOpenBaoResponse(output)
-	if err != nil {
-		return "", err
+	return "", fmt.Errorf("read OpenBao PKI certificate without an attempt")
+}
+
+func waitForPKICertificateRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("waiting to retry OpenBao PKI certificate read: %w", ctx.Err())
+	case <-timer.C:
+		return nil
 	}
-	return pem, nil
 }
 
 func rootCAPEMFromOpenBaoResponse(output string) (string, error) {
@@ -489,24 +517,27 @@ func (c *Client) executeKubectlRun(ctx context.Context, name string, args []stri
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		if c.config.Debug {
-			logging.Debug("kubectl run failed with error: %s", err)
-			logging.Debug("kubectl raw output:\n%s", string(output))
+			logging.Debug("kubectl raw output received (%s)", kubectlOutputMetadata(string(output)))
 		}
-		return "", fmt.Errorf("kubectl run failed: %s\nOutput: %s", err, string(output))
+		return "", fmt.Errorf("kubectl run failed: %w\nOutput: %s", err, string(output))
 	}
 
 	if c.config.Debug {
-		logging.Debug("kubectl raw output (length: %d bytes):\n%s", len(output), string(output))
+		logging.Debug("kubectl raw output received (%s)", kubectlOutputMetadata(string(output)))
 	}
 
 	// Filter out kubectl deletion messages and return only the actual command output
 	cleanOutput := c.filterKubectlOutput(string(output))
 
 	if c.config.Debug {
-		logging.Debug("kubectl filtered output (length: %d bytes):\n%s", len(cleanOutput), cleanOutput)
+		logging.Debug("kubectl filtered output produced (%s)", kubectlOutputMetadata(cleanOutput))
 	}
 
 	return strings.TrimSpace(cleanOutput), nil
+}
+
+func kubectlOutputMetadata(output string) string {
+	return fmt.Sprintf("%d bytes", len(output))
 }
 
 // filterKubectlOutput filters out kubectl messages and returns only the actual command output
@@ -542,6 +573,7 @@ func (c *Client) filterKubectlOutput(output string) string {
 		if strings.Contains(line, "All commands and output from this session will be recorded") ||
 			strings.Contains(line, "If you don't see a command prompt") ||
 			strings.HasPrefix(line, "Warning:") ||
+			strings.HasPrefix(line, "warning:") ||
 			strings.HasPrefix(line, "Error from server:") {
 			continue
 		}

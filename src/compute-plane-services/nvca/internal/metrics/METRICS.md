@@ -593,6 +593,8 @@ rate(nvca_k8s_api_failure_total[5m]) > 0.1
 | `scheduling_timeout` | Pod scheduling timeout |
 | `admission_rejected` | Pod admission rejected |
 | `init_job_failed` | Generic init job failure (fallback) |
+| `samba_infra_failed` | Per-handle Samba server bootstrap failed |
+| `samba_infra_timeout` | Per-handle Samba server never became available (usually an unbindable backing PVC) |
 
 **Usage:**
 
