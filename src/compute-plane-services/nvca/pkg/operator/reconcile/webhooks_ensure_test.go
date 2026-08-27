@@ -164,7 +164,7 @@ func TestEnsureWebhookCert_RegeneratesExpiredCA(t *testing.T) {
 	now := time.Now().UTC()
 	ns := getSystemNamespace(nb)
 
-	caPEM, certPEM, keyPEM := makeCertPair(t, now.AddDate(0, 0, -1), now.AddDate(0, 0, 30))
+	caPEM, certPEM, keyPEM := makeCertPair(t, now.AddDate(-1, 0, 0), now.AddDate(0, 0, -1), now.AddDate(0, 0, 30))
 
 	_, err := bc.clients.K8s.CoreV1().Secrets(ns).Create(ctx, &v1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: NVCAWebhookTLSCertSecretName, Namespace: ns},
@@ -183,19 +183,116 @@ func TestEnsureWebhookCert_RegeneratesExpiredCA(t *testing.T) {
 	assert.NotEqual(t, certPEM, got.TLSCert, "an expired CA must trigger regeneration")
 }
 
+// A serving cert whose validity hasn't started yet (clock skew or a bad
+// manually-provisioned secret) must not be reused: the API server rejects an
+// admission call signed with a not-yet-valid cert the same way it rejects an
+// expired one.
+func TestEnsureWebhookCert_RegeneratesFutureNotBefore(t *testing.T) {
+	ctx := newTestContext()
+	bc, nb := newWebhookCertTestCache()
+	now := time.Now().UTC()
+	ns := getSystemNamespace(nb)
+
+	caPEM, certPEM, keyPEM := makeCertPair(t, now.AddDate(-1, 0, 0), now.AddDate(0, 0, 1), now.AddDate(0, 0, 30))
+
+	_, err := bc.clients.K8s.CoreV1().Secrets(ns).Create(ctx, &v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: NVCAWebhookTLSCertSecretName, Namespace: ns},
+		Data:       map[string][]byte{TLSCertName: certPEM, TLSKeyName: keyPEM},
+		Type:       v1.SecretTypeTLS,
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	_, err = bc.clients.K8s.CoreV1().Secrets(ns).Create(ctx, &v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: NVCAWebhookTLSCASecretName, Namespace: ns},
+		Data:       map[string][]byte{TLSCAName: caPEM},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	got, err := bc.ensureWebhookCert(ctx, nb, now)
+	require.NoError(t, err)
+	assert.NotEqual(t, certPEM, got.TLSCert, "a not-yet-valid cert must trigger regeneration")
+}
+
+// The exact NotAfter instant is treated as already expired, matching the
+// inclusive boundary x509 verification uses, so a cert reused right at that
+// instant doesn't slip through and get rejected by the API server anyway.
+func TestEnsureWebhookCert_RegeneratesAtExactNotAfter(t *testing.T) {
+	ctx := newTestContext()
+	bc, nb := newWebhookCertTestCache()
+	now := time.Now().UTC()
+	ns := getSystemNamespace(nb)
+
+	caPEM, certPEM, keyPEM := makeCertPair(t, now.AddDate(-1, 0, 0), now.AddDate(-1, 0, 0), now)
+
+	_, err := bc.clients.K8s.CoreV1().Secrets(ns).Create(ctx, &v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: NVCAWebhookTLSCertSecretName, Namespace: ns},
+		Data:       map[string][]byte{TLSCertName: certPEM, TLSKeyName: keyPEM},
+		Type:       v1.SecretTypeTLS,
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	_, err = bc.clients.K8s.CoreV1().Secrets(ns).Create(ctx, &v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: NVCAWebhookTLSCASecretName, Namespace: ns},
+		Data:       map[string][]byte{TLSCAName: caPEM},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	got, err := bc.ensureWebhookCert(ctx, nb, now)
+	require.NoError(t, err)
+	assert.NotEqual(t, certPEM, got.TLSCert, "a cert at its exact NotAfter instant must trigger regeneration")
+}
+
+// A serving cert whose private key doesn't actually match it (e.g. a corrupted
+// or manually-mismatched secret) is unusable by the webhook server, which
+// rejects it in tls.X509KeyPair. Reusing it would leave the pod unable to
+// serve any admission requests, so it must be regenerated.
+func TestEnsureWebhookCert_RegeneratesMismatchedKey(t *testing.T) {
+	ctx := newTestContext()
+	bc, nb := newWebhookCertTestCache()
+	now := time.Now().UTC()
+	ns := getSystemNamespace(nb)
+
+	stored, err := generateWebhookCerts(nb, now)
+	require.NoError(t, err)
+	other, err := generateWebhookCerts(nb, now)
+	require.NoError(t, err)
+
+	_, err = bc.clients.K8s.CoreV1().Secrets(ns).Create(ctx, &v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: NVCAWebhookTLSCertSecretName, Namespace: ns},
+		Data:       map[string][]byte{TLSCertName: stored.TLSCert, TLSKeyName: other.TLSKey},
+		Type:       v1.SecretTypeTLS,
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+	_, err = bc.clients.K8s.CoreV1().Secrets(ns).Create(ctx, &v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: NVCAWebhookTLSCASecretName, Namespace: ns},
+		Data:       map[string][]byte{TLSCAName: stored.CACertBytes},
+	}, metav1.CreateOptions{})
+	require.NoError(t, err)
+
+	got, err := bc.ensureWebhookCert(ctx, nb, now)
+	require.NoError(t, err)
+	assert.NotEqual(t, stored.TLSCert, got.TLSCert, "a cert/key mismatch must trigger regeneration")
+
+	servingCert, err := parseCertPEM(got.TLSCert)
+	require.NoError(t, err)
+	caCert, err := parseCertPEM(got.CACertBytes)
+	require.NoError(t, err)
+	assert.NoError(t, servingCert.CheckSignatureFrom(caCert))
+}
+
 // makeCertPair builds a CA and a serving certificate signed by it, with
-// independently controllable expiries, so tests can exercise the case where the
-// serving cert is still valid but the CA has expired.
-func makeCertPair(t *testing.T, caNotAfter, servingNotAfter time.Time) (caPEM, servingCertPEM, servingKeyPEM []byte) {
+// independently controllable validity windows, so tests can exercise cases
+// like a still-valid serving cert paired with an expired CA.
+func makeCertPair(
+	t *testing.T, caNotAfter, servingNotBefore, servingNotAfter time.Time,
+) (caPEM, servingCertPEM, servingKeyPEM []byte) {
 	t.Helper()
-	notBefore := time.Now().UTC().AddDate(-1, 0, 0)
+	caNotBefore := time.Now().UTC().AddDate(-1, 0, 0)
 
 	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
 	caTmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: "webhooks-ca"},
-		NotBefore:             notBefore,
+		NotBefore:             caNotBefore,
 		NotAfter:              caNotAfter,
 		IsCA:                  true,
 		BasicConstraintsValid: true,
@@ -212,7 +309,7 @@ func makeCertPair(t *testing.T, caNotAfter, servingNotAfter time.Time) (caPEM, s
 	svcTmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(2),
 		Subject:      pkix.Name{CommonName: "nvca.nvca-system.svc"},
-		NotBefore:    notBefore,
+		NotBefore:    servingNotBefore,
 		NotAfter:     servingNotAfter,
 		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 		DNSNames:     []string{"nvca.nvca-system.svc"},

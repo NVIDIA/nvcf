@@ -565,15 +565,13 @@ func TestManagerRunTLSSecretInformer(t *testing.T) {
 		}
 	}, 5*time.Second, 100*time.Millisecond)
 
-	// Using the old client should fail with TLS error.
+	// Using the old client should fail with TLS error. The x509 sub-message differs
+	// by platform (see the earlier assertion), so check only the stable prefix.
 	client1.CloseIdleConnections()
 	assert.EventuallyWithT(t, func(ct *assert.CollectT) {
 		req := newWebhookAdmissionReviewRequestPods(ct, webhookEndpoint)
 		_, err := client1.Do(req)
-		assert.EqualError(ct, err, `Post "https://`+webhookEndpoint+`": `+
-			`tls: failed to verify certificate: x509: certificate signed by unknown authority `+
-			`(possibly because of "crypto/rsa: verification error" while trying to verify `+
-			`candidate authority certificate "webhooks-ca")`)
+		assert.ErrorContains(ct, err, "tls: failed to verify certificate")
 	}, 5*time.Second, 100*time.Millisecond)
 
 	cancel1()

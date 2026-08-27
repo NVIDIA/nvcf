@@ -19,6 +19,7 @@ package operator
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
@@ -187,15 +188,15 @@ func (bc *BackendK8sCache) reusableWebhookCert(
 		log.WithError(err).Info("Generating webhook TLS certs: stored CA cert is not parseable")
 		return WebhookCert{}, false, nil
 	}
-	if now.After(servingCert.NotAfter) {
-		log.Info("Generating webhook TLS certs: stored server cert has expired")
+	if !certValidAt(servingCert, now) {
+		log.Info("Generating webhook TLS certs: stored server cert is outside its validity window")
 		return WebhookCert{}, false, nil
 	}
-	// The CA is written to the webhook caBundle; an expired CA is rejected by the
-	// API server ("x509: certificate has expired"), so it must be regenerated even
-	// when the serving cert still has time left.
-	if now.After(caCert.NotAfter) {
-		log.Info("Generating webhook TLS certs: stored CA cert has expired")
+	// The CA is written to the webhook caBundle; an out-of-window CA is rejected by
+	// the API server ("x509: certificate has expired or is not yet valid"), so it
+	// must be regenerated even when the serving cert still has time left.
+	if !certValidAt(caCert, now) {
+		log.Info("Generating webhook TLS certs: stored CA cert is outside its validity window")
 		return WebhookCert{}, false, nil
 	}
 	// The serving cert and CA are always written together, so a broken chain means
@@ -204,6 +205,19 @@ func (bc *BackendK8sCache) reusableWebhookCert(
 		log.WithError(err).Info("Generating webhook TLS certs: stored server cert is not signed by the stored CA")
 		return WebhookCert{}, false, nil
 	}
+	// A stored cert/key pair that doesn't actually match is unusable by the webhook
+	// server (tls.X509KeyPair rejects it), so verify the pairing here rather than
+	// discovering it only when the server tries to load the Secret.
+	if _, err := tls.X509KeyPair(tlsCert, tlsKey); err != nil {
+		log.WithError(err).Info("Generating webhook TLS certs: stored server cert does not match the stored key")
+		return WebhookCert{}, false, nil
+	}
 
 	return WebhookCert{CACertBytes: caBytes, TLSCert: tlsCert, TLSKey: tlsKey}, true, nil
+}
+
+// certValidAt reports whether now falls within cert's validity window,
+// treating the exact NotAfter instant as already expired.
+func certValidAt(cert *x509.Certificate, now time.Time) bool {
+	return !now.Before(cert.NotBefore) && now.Before(cert.NotAfter)
 }

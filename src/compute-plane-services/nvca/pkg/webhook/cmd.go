@@ -239,6 +239,9 @@ func newCertWatcher(ctx context.Context, cfg nvcaconfig.Config, k8sClient kubern
 	// to get the TLS certificate without restarting the server.
 	// Otherwise certificate files are watched by certwatcher and reloaded via GetCertificate.
 	if cfg.Webhook.TLSSecretName != "" {
+		if cfg.Agent.SystemNamespace == "" {
+			return nil, fmt.Errorf("agent system namespace is required to watch TLS secret %s", cfg.Webhook.TLSSecretName)
+		}
 		log.WithField("secretName", cfg.Webhook.TLSSecretName).Info("Configuring Secret certificate watcher")
 		cw = newSecretCertWatcher(cfg, k8sClient)
 	} else if cfg.Webhook.TLSCertFile != "" || cfg.Webhook.TLSKeyFile != "" {
@@ -390,6 +393,7 @@ func (m *webhookManager) startWebhooks(ctx context.Context, cancel context.Cance
 		log.Infof("Serving webhooks at: %v", listener.Addr())
 		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error(err)
+			cancel(fmt.Errorf("webhook server failed: %w", err))
 		}
 	}()
 
