@@ -13,12 +13,16 @@ authoritative behavior; this document summarizes it for contributors.
 ## Release Cadence
 
 Releases are commit-triggered, not calendar-triggered. There is no fixed
-weekly or monthly cadence.
+weekly or monthly cadence. On every push to `main`, the `service-release` job
+runs `./tools/ci/github-release auto`. Each subproject registered in
+[`tools/ci/github-release-subprojects.json`](tools/ci/github-release-subprojects.json)
+uses exactly one of two release models. They are mutually exclusive: the
+automation branches on a subproject's `dev_prerelease` flag and only ever
+runs one path for it, never both.
 
-On every push to `main`, the `service-release` job runs
-`./tools/ci/github-release auto`. For each subproject, this walks the commits
-since its last release tag and applies semantic-release-style analysis to
-decide whether to cut a new version:
+Semantic-release model (most subprojects, for example `src/clis/nvcf-cli`):
+walks the commits since the subproject's last release tag and decides
+whether to cut a new version.
 
 - Commits typed `feat`, `fix`, or `perf` (the "customer" commit types defined
   in [`CONTRIBUTING.md`](CONTRIBUTING.md#how-to-select-a-commit-type)) trigger
@@ -27,24 +31,32 @@ decide whether to cut a new version:
   or `revert` (the "foundational" types) do not trigger a release on their
   own.
 
-Some subprojects also publish a `-dev.N` prerelease tag on every push to
-`main`, independent of commit type. In practice this means prerelease tags
-land many times per day during active development, while stable tags land
-only when a release-worthy commit merges. For example, at the time of
+Dev-prerelease model (only `nvca` and the three Helm stacks under
+`deploy/stacks/`: `nvcf-compute-plane`, `self-managed`, and `observability`):
+a push to `main` never cuts a stable release, regardless of commit type. It
+only bumps a `-dev.N` prerelease tag off the stable base version recorded in
+the subproject's `VERSION` file. In practice this means dev prereleases land
+many times per day during active development; for example, at the time of
 writing, `src/compute-plane-services/nvca` had cut five `-dev.N` prereleases
-in a single day alongside its normal stable-tag history.
+in a single day. A stable release for one of these four subprojects is cut
+only when a commit lands on that subproject's release branch (see Branch
+Naming), which bumps the patch version automatically. Until a release branch
+exists for one of these subprojects, only dev prereleases accumulate; there
+is no stable-release path on `main` for them.
 
 Release notes are generated from commit messages (semantic-release
-conventions) and attached to the GitHub Release for each tag.
+conventions) and attached to the GitHub Release for each tag, dev
+prereleases included.
 
 ## Branch Naming
 
 - `main`: the active development branch. All pull requests target `main`,
   except hotfixes (see [`CONTRIBUTING.md`](CONTRIBUTING.md#step-2-create-a-branch)).
 - `release-<service-path>/vMAJOR.MINOR`: a maintenance branch for one
-  subproject's release train. Pushes to a branch matching `release-**/v*`
-  run the same release automation, scoped to that subproject, so patch fixes
-  on a maintenance train publish their own tags.
+  subproject's release train, used by the dev-prerelease release model (see
+  Release Cadence). Pushes to a branch matching `release-**/v*` run the same
+  release automation, scoped to that subproject, so patch fixes on a
+  maintenance train publish their own stable tags.
 
 Real examples from this repository:
 
@@ -55,19 +67,30 @@ Real examples from this repository:
 The separator between the service id and the version can vary by how a
 subproject registers its release metadata; for example
 `release-nvcf-cassandra-migrations-v0.10` uses a flattened id instead of a
-path segment. Check a subproject's entry in the release metadata consumed by
-`tools/ci/github-release` if you need the exact branch name it expects.
+path segment. That branch also predates this subproject's current
+configuration, which does not use the dev-prerelease model, so treat it as
+historical evidence of the naming pattern rather than a live example. Check
+a subproject's entry in
+[`tools/ci/github-release-subprojects.json`](tools/ci/github-release-subprojects.json)
+for its current release model and exact branch name.
 
 Tags follow the matching format `<service-path>/vMAJOR.MINOR.PATCH`, for
-example `src/clis/nvcf-cli/v1.15.11` and
-`src/compute-plane-services/nvca/v3.3.0-dev.184`.
+example `src/clis/nvcf-cli/v1.15.11` (semantic-release model) and
+`src/compute-plane-services/nvca/v3.3.0-dev.184` (dev-prerelease model).
 
 ## Who Can Trigger a Release
 
-Automatic: any contributor whose reviewed pull request merges to `main` has
-triggered a release for the subprojects their commits touch, as long as at
-least one commit is a `feat`, `fix`, or `perf` type. No separate release
-action is needed after merge.
+Automatic, semantic-release subprojects: any contributor whose reviewed pull
+request merges to `main` has triggered a release for the subprojects their
+commits touch, as long as at least one commit is a `feat`, `fix`, or `perf`
+type. No separate release action is needed after merge.
+
+Automatic, dev-prerelease subprojects (`nvca` and the three stacks under
+`deploy/stacks/`): merging any pull request to `main` only produces a dev
+prerelease tag, regardless of commit type. Triggering an actual stable
+release for one of these subprojects requires a commit to land on that
+subproject's release branch instead of `main`. See Manual below for who can
+create that branch in the first place.
 
 Manual: `.github/workflows/release-tags.yml` also accepts a
 `workflow_dispatch` trigger with three operations:
@@ -79,8 +102,18 @@ Manual: `.github/workflows/release-tags.yml` also accepts a
 - `self-managed-branch-cut`: the same branch-cut flow for the
   `nvcf-self-managed-stack` service.
 
-`workflow_dispatch` requires GitHub write access to the repository; there is
-no separate, smaller list of named release managers. Branch-cut operations
+Both branch-cut operations only work for a dev-prerelease subproject; the
+underlying `branch-cut` command refuses to run against a subproject that
+does not use that release model.
+
+`workflow_dispatch` requires GitHub write access to the repository. In this
+repository that access is granted through organization team membership, not
+a hand-maintained list: the `NVIDIA/nvcf-dev` team (the NVCF maintainers)
+holds write access, and `NVIDIA/nvcf-admin` holds admin access. In practice
+this means only NVCF maintainers can cut a release branch for `nvca` or one
+of the three stacks; an external contributor with a fix for an already-cut
+release branch needs a maintainer to either create the branch or merge a
+pull request that targets an existing one. Branch-cut operations
 additionally require the `NV_GITHUB_TOKEN` repository secret to be
 configured, because the default `GITHUB_TOKEN` cannot trigger CI on the
 generated version-bump pull request. Area ownership for review is defined in
