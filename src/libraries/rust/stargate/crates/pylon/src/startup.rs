@@ -552,7 +552,18 @@ fn load_grpc_tls_ca_cert(args: &Args) -> Result<Option<Vec<u8>>> {
     args.grpc_tls_ca_cert_path
         .as_ref()
         .map(|path| {
-            std::fs::read(path).with_context(|| format!("load gRPC TLS CA certificate from {path}"))
+            let pem = std::fs::read(path)
+                .with_context(|| format!("load gRPC TLS CA certificate from {path}"))?;
+            let certificates = rustls_pemfile::certs(&mut pem.as_slice())
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .with_context(|| format!("parse gRPC TLS CA certificate from {path}"))?;
+            let mut root_store = rustls::RootCertStore::empty();
+            let (valid, _) = root_store.add_parsable_certificates(certificates);
+            ensure!(
+                valid > 0,
+                "gRPC TLS CA certificate file {path} contains no valid certificates"
+            );
+            Ok(pem)
         })
         .transpose()
 }
@@ -1394,7 +1405,15 @@ mod tests {
     fn grpc_tls_ca_bundle_loads_once_from_the_configured_path() {
         let root = tempfile::tempdir().expect("test directory should create");
         let path = root.path().join("grpc-ca.pem");
-        std::fs::write(&path, b"test gRPC CA").expect("test CA should write");
+        let mut params = rcgen::CertificateParams::default();
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let key = rcgen::KeyPair::generate().expect("test CA key should generate");
+        let pem = params
+            .self_signed(&key)
+            .expect("test CA certificate should generate")
+            .pem()
+            .into_bytes();
+        std::fs::write(&path, &pem).expect("test CA should write");
         let path = path.to_string_lossy().into_owned();
         let (args, _) = startup(&["--grpc-tls-ca-cert-path", &path]);
 
@@ -1402,8 +1421,31 @@ mod tests {
             load_grpc_tls_ca_cert(&args)
                 .expect("configured gRPC CA should load")
                 .as_deref(),
-            Some(&b"test gRPC CA"[..])
+            Some(pem.as_slice())
         );
+    }
+
+    #[test]
+    fn grpc_tls_ca_load_error_rejects_empty_and_malformed_bundles() {
+        for (name, pem) in [
+            ("empty", &b""[..]),
+            (
+                "malformed",
+                &b"-----BEGIN CERTIFICATE-----\ndGVzdA==\n-----END CERTIFICATE-----\n"[..],
+            ),
+        ] {
+            let root = tempfile::tempdir().expect("test directory should create");
+            let path = root.path().join(format!("{name}-grpc-ca.pem"));
+            std::fs::write(&path, pem).expect("test CA should write");
+            let path = path.to_string_lossy().into_owned();
+            let (args, _) = startup(&["--grpc-tls-ca-cert-path", &path]);
+
+            let error = load_grpc_tls_ca_cert(&args).expect_err("invalid gRPC CA should fail");
+            let message = format!("{error:#}");
+
+            assert!(message.contains("contains no valid certificates"));
+            assert!(message.contains(&path));
+        }
     }
 
     #[test]
