@@ -28,13 +28,8 @@ import org.springframework.core.env.Environment;
 public class InfoConfiguration {
 
     @Bean
-    public GitBuildInfo gitBuildInfo() {
-        return new GitBuildInfo();
-    }
-
-    @Bean
-    public InfoResponseService infoResponseService(Environment environment, GitBuildInfo gitBuildInfo) {
-        return new InfoResponseService(environment, gitBuildInfo);
+    public InfoResponseService infoResponseService(Environment environment) {
+        return new InfoResponseService(environment);
     }
 
     @Bean

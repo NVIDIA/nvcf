@@ -20,19 +20,22 @@ package com.nvidia.boot.core.info;
 import lombok.RequiredArgsConstructor;
 import org.springframework.core.env.Environment;
 
-/** Builds the {@link InfoResponse} served by {@link InfoController}. */
+/**
+ * Builds the {@link InfoResponse} served by {@link InfoController}, reading {@code version} and
+ * {@code commit} from the {@code nv-boot-git-properties} {@link Environment} property source
+ * that {@code BootCoreEnvironmentPostProcessor} populates from {@code git.properties} at startup.
+ */
 @RequiredArgsConstructor
 public class InfoResponseService {
 
     private static final String UNKNOWN = "unknown";
 
     private final Environment environment;
-    private final GitBuildInfo gitBuildInfo;
 
     public InfoResponse getInfo() {
         return new InfoResponse(
                 environment.getProperty("spring.application.name", UNKNOWN),
-                gitBuildInfo.version(),
-                gitBuildInfo.commit());
+                environment.getProperty("spring.application.version", UNKNOWN),
+                environment.getProperty("app.git.commit.full", UNKNOWN));
     }
 }

@@ -18,37 +18,28 @@
 package com.nvidia.boot.core.info;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
-import java.util.Properties;
 import org.junit.jupiter.api.Test;
-import org.springframework.core.env.Environment;
+import org.springframework.mock.env.MockEnvironment;
 
 class InfoResponseServiceTest {
 
     @Test
-    void buildsResponseFromApplicationNameAndGitBuildInfo() {
-        var environment = mock(Environment.class);
-        when(environment.getProperty("spring.application.name", "unknown")).thenReturn("nvcf-ess");
+    void buildsResponseFromEnvironmentProperties() {
+        var environment = new MockEnvironment()
+                .withProperty("spring.application.name", "nvcf-ess")
+                .withProperty("spring.application.version", "v1.2.3")
+                .withProperty("app.git.commit.full", "77c5d932abcdef1234567890abcdef1234567890");
 
-        var properties = new Properties();
-        properties.setProperty("git.closest.tag.name", "v1.2.3");
-        properties.setProperty("git.commit.id.full", "77c5d932abcdef1234567890abcdef1234567890");
-        var gitBuildInfo = new GitBuildInfo(properties);
-
-        var service = new InfoResponseService(environment, gitBuildInfo);
+        var service = new InfoResponseService(environment);
 
         assertThat(service.getInfo())
                 .isEqualTo(new InfoResponse("nvcf-ess", "v1.2.3", "77c5d932abcdef1234567890abcdef1234567890"));
     }
 
     @Test
-    void fallsBackToUnknownServiceNameWhenApplicationNameMissing() {
-        var environment = mock(Environment.class);
-        when(environment.getProperty("spring.application.name", "unknown")).thenReturn("unknown");
-
-        var service = new InfoResponseService(environment, new GitBuildInfo(new Properties()));
+    void fallsBackToUnknownWhenPropertiesAbsent() {
+        var service = new InfoResponseService(new MockEnvironment());
 
         assertThat(service.getInfo()).isEqualTo(new InfoResponse("unknown", "unknown", "unknown"));
     }
