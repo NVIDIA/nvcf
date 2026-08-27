@@ -59,7 +59,7 @@ collector stays disabled for every profile until the operator opts in. This
 prevents a self-hosted install from depending on an image that was not mirrored
 into its registry.
 
-The default profile enables compute-plane observability:
+One value selects the normal behavior:
 
 ```yaml
 observability:
