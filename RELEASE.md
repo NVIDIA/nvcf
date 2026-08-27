@@ -20,9 +20,10 @@ uses exactly one of two release models. They are mutually exclusive: the
 automation branches on a subproject's `dev_prerelease` flag and only ever
 runs one path for it, never both.
 
-Semantic-release model (most subprojects, for example `src/clis/nvcf-cli`):
-walks the commits since the subproject's last release tag and decides
-whether to cut a new version.
+### Semantic-release model
+
+Most subprojects, for example `src/clis/nvcf-cli`. Walks the commits since
+the subproject's last release tag and decides whether to cut a new version.
 
 - Commits typed `feat`, `fix`, or `perf` (the "customer" commit types defined
   in [`CONTRIBUTING.md`](CONTRIBUTING.md#how-to-select-a-commit-type)) trigger
@@ -31,10 +32,12 @@ whether to cut a new version.
   or `revert` (the "foundational" types) do not trigger a release on their
   own.
 
-Dev-prerelease model (only `nvca` and the three Helm stacks under
-`deploy/stacks/`: `nvcf-compute-plane`, `self-managed`, and `observability`):
-a push to `main` never cuts a stable release, regardless of commit type. It
-only bumps a `-dev.N` prerelease tag off the stable base version recorded in
+### Dev-prerelease model
+
+Only `nvca` and the three Helm stacks under `deploy/stacks/`:
+`nvcf-compute-plane`, `self-managed`, and `observability`. A push to `main`
+never cuts a stable release, regardless of commit type. It only bumps a
+`-dev.N` prerelease tag off the stable base version recorded in
 the subproject's `VERSION` file. In practice this means dev prereleases land
 many times per day during active development; for example, at the time of
 writing, `src/compute-plane-services/nvca` had cut five `-dev.N` prereleases
