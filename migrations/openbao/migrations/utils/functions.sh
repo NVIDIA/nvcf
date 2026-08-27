@@ -146,18 +146,25 @@ function is_kv_upgrade_window_error() {
 }
 
 ##
-# Run a bao command, retrying while it fails with the kv-v2 upgrade-window
-# error. Backoff 1s, 2s, 4s, 8s, then 10s, bounded by
-# BAO_KV_UPGRADE_RETRY_BUDGET_SECONDS (default 60) in total; any other
-# failure returns immediately. The command output is echoed for the caller
-# to capture; retry notices go to stderr to keep that output clean.
+# Block until a kv-v2 mount's data path serves requests, or the budget
+# (BAO_KV_UPGRADE_RETRY_BUDGET_SECONDS, default 60s) expires. This is the
+# single place the migrations wait out the upgrade window; if OpenBao ports
+# the upstream synchronous-upgrade fix (vault-plugin-secrets-kv v0.26.0),
+# delete this function and its call sites in enable_secrets_mount.
 #
-# @param ... The command to run
+# Probes the mount's config endpoint, which sits behind the same upgrade
+# gate as the data handlers, backing off 1s, 2s, 4s, 8s, then 10s. Fails
+# only when the mount is still upgrading after the full budget; other
+# errors are left for the caller's next operation to surface.
 #
-function retry_on_kv_upgrade_error() {
+# @param mount_path The mount path of the kv-v2 secrets engine
+#
+function wait_kv_v2_mount_data_path_ready() {
+    local mount_path=$1
+
     local budget=${BAO_KV_UPGRADE_RETRY_BUDGET_SECONDS:-60}
     if ! [[ "$budget" =~ ^[0-9]+$ ]]; then
-        log_warn "Invalid BAO_KV_UPGRADE_RETRY_BUDGET_SECONDS '${budget}'; using 60" >&2
+        log_warn "Invalid BAO_KV_UPGRADE_RETRY_BUDGET_SECONDS '${budget}'; using 60"
         budget=60
     fi
     local delay=1
@@ -165,48 +172,23 @@ function retry_on_kv_upgrade_error() {
     local output
 
     while true; do
-        if output=$("$@" 2>&1); then
-            echo "$output"
+        if output=$(bao read "${mount_path}/config" 2>&1); then
             return 0
         fi
         if ! is_kv_upgrade_window_error "$output"; then
-            echo "$output"
-            return 1
+            return 0
         fi
         if (( SECONDS - start + delay > budget )); then
-            echo "$output"
+            log_error "kv-v2 mount '${mount_path}' is still running its storage upgrade after ${budget}s: $output"
             return 1
         fi
-        log_info "OpenBao kv-v2 upgrade in progress; retrying in ${delay}s..." >&2
+        log_info "kv-v2 upgrade in progress on '${mount_path}'; retrying in ${delay}s..."
         sleep "$delay"
         delay=$((delay * 2))
         if (( delay > 10 )); then
             delay=10
         fi
     done
-}
-
-##
-# Block until a kv-v2 mount is serving requests, by retrying a read of the
-# mount's config endpoint (gated by the same upgrade check as data
-# operations) within the retry budget. Fails only when the mount is still
-# upgrading after the full budget; other errors are left for the caller's
-# next operation to surface.
-#
-# @param mount_path The mount path of the kv-v2 secrets engine
-#
-function wait_kv_mount_ready() {
-    local mount_path=$1
-
-    local output
-    if output=$(retry_on_kv_upgrade_error bao read "${mount_path}/config"); then
-        return 0
-    fi
-    if is_kv_upgrade_window_error "$output"; then
-        log_error "kv-v2 mount '${mount_path}' is still running its storage upgrade after the retry budget: $output"
-        return 1
-    fi
-    return 0
 }
 
 ##
@@ -226,7 +208,7 @@ function enable_secrets_mount() {
         # A re-run can find the mount still mid-upgrade (the upgrade re-runs
         # on every server restart), so wait here too.
         if [[ "$mount_type" == "kv-v2" ]]; then
-            wait_kv_mount_ready "$mount_path" || return 1
+            wait_kv_v2_mount_data_path_ready "$mount_path" || return 1
         fi
         return 0
     fi
@@ -239,7 +221,7 @@ function enable_secrets_mount() {
 
     # The enable call returns before the backend's storage upgrade finishes.
     if [[ "$mount_type" == "kv-v2" ]]; then
-        wait_kv_mount_ready "$mount_path" || return 1
+        wait_kv_v2_mount_data_path_ready "$mount_path" || return 1
     fi
 
     log_success "$mount_type secrets engine enabled at path '$mount_path'"
@@ -397,25 +379,20 @@ function write_secrets_kv() {
     # Skip the existence check when overwriting; its result would be ignored.
     if [ "$overwrite" != "true" ]; then
         local get_output
-        if get_output=$(retry_on_kv_upgrade_error bao kv get "$mount_path/$secret"); then
+        if get_output=$(bao kv get "$mount_path/$secret" 2>&1); then
             log_info "Secrets KV '$secret' already exists in '$mount_path', skipping..."
             return 0
         fi
-        if is_kv_upgrade_window_error "$get_output"; then
-            # Still upgrading after the full budget. Not "secret missing":
-            # writing now could clobber an existing secret once it recovers.
-            log_error "Error checking secrets KV '$mount_path/$secret': $get_output"
-            return 1
-        fi
         if [[ "$get_output" != *"No value found"* ]]; then
             # The read failed for a reason other than "secret does not
-            # exist". Do not write over a secret that could not be read.
+            # exist" (this includes the kv-v2 upgrade-window rejection).
+            # Do not write over a secret that could not be read.
             log_error "Error checking secrets KV '$mount_path/$secret': $get_output"
             return 1
         fi
     fi
 
-    if ! output=$(retry_on_kv_upgrade_error bao kv put $mount_path/$secret $value); then
+    if ! output=$(bao kv put $mount_path/$secret $value 2>&1); then
         log_error "Error writing secrets KV to '$mount_path/$secret': $output"
         return 1
     fi

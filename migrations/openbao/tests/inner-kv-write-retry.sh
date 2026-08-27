@@ -66,26 +66,29 @@ else
   fail "classifier accepts only the two upgrade-window messages"
 fi
 
-# S1 and S2 additionally require that an upgrade-window retry was actually
-# observed (the helper's retry notice on stderr), so they cannot pass
-# vacuously if the setup failed to hold the upgrade window open.
+# S1 requires that the wait actually observed the upgrade window (its
+# retry notice), so it cannot pass vacuously if the setup failed to hold
+# the window open.
 
-# S1: a write issued inside the upgrade window succeeds.
+# S1: the readiness wait blocks through the upgrade window, after which a
+# plain write succeeds.
 open_upgrade_window s1 || { echo "setup failed for s1" >&2; exit 2; }
-s1_out=$(write_secrets_kv "s1" "cassandra/creds" "username=x password=y" 2>&1)
-s1_rc=$?
-if [ "${s1_rc}" -eq 0 ] \
-    && grep -q "retrying in" <<<"${s1_out}" \
+s1_wait_out=$(wait_kv_v2_mount_data_path_ready "s1" 2>&1)
+s1_wait_rc=$?
+if [ "${s1_wait_rc}" -eq 0 ] \
+    && grep -q "retrying in" <<<"${s1_wait_out}" \
+    && write_secrets_kv "s1" "cassandra/creds" "username=x password=y" \
     && [ "$(bao kv get -field=username s1/cassandra/creds)" = "x" ]; then
-  pass "write inside the upgrade window succeeds after observed retry"
+  pass "readiness wait rides out the upgrade window, then the write succeeds"
 else
-  echo "${s1_out}"
-  fail "write inside the upgrade window succeeds after observed retry"
+  echo "${s1_wait_out}"
+  fail "readiness wait rides out the upgrade window, then the write succeeds"
 fi
 
-# S2: an existing secret is not overwritten when the existence check runs
-# inside the upgrade window. Before the retry fix, the transient 400 on
-# the get was read as "secret missing".
+# S2: a write issued inside the upgrade window without the readiness wait
+# fails safely: the migration aborts and the existing secret is not
+# overwritten. Before the fix, the 400 on the existence check was read as
+# "secret missing" and the write went through.
 bao secrets enable -path=s2 kv >/dev/null || { echo "setup failed for s2" >&2; exit 2; }
 curl -sf -o /dev/null -X POST -H "X-Vault-Token: ${BAO_TOKEN}" \
   -d '{"username":"original"}' "${BAO_ADDR}/v1/s2/cassandra/creds" \
@@ -94,13 +97,14 @@ seed_keys s2 "${KEYS}" || { echo "setup failed for s2" >&2; exit 2; }
 bao secrets tune -version=2 s2 >/dev/null || { echo "setup failed for s2" >&2; exit 2; }
 s2_out=$(write_secrets_kv "s2" "cassandra/creds" "username=replacement" 2>&1)
 s2_rc=$?
-if [ "${s2_rc}" -eq 0 ] \
-    && grep -q "retrying in" <<<"${s2_out}" \
+wait_kv_v2_mount_data_path_ready "s2" >/dev/null 2>&1
+if [ "${s2_rc}" -ne 0 ] \
+    && grep -q "Upgrading from non-versioned" <<<"${s2_out}" \
     && [ "$(bao kv get -field=username s2/cassandra/creds)" = "original" ]; then
-  pass "existing secret preserved across the upgrade window after observed retry"
+  pass "unwaited write inside the window aborts and preserves the secret"
 else
   echo "${s2_out}"
-  fail "existing secret preserved across the upgrade window after observed retry"
+  fail "unwaited write inside the window aborts and preserves the secret"
 fi
 
 # S3: the production sequence, a fresh kv-v2 enable followed by an
