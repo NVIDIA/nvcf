@@ -52,10 +52,6 @@ data:
             kind: PodCliqueScalingGroup
             resource: podcliquescalinggroups
             version: v1alpha1
-          - group: grove.io
-            kind: ClusterTopologyBinding
-            resource: clustertopologybindings
-            version: v1alpha1
           - group: scheduler.grove.io
             kind: PodGang
             resource: podgangs
