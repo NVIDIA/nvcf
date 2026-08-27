@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.PHONY: help clean build test test-coverage-html test-manual start stop destroy destroy-all-ncp-local status ensure-cluster ensure-context ensure-docker-config validate-compute-clusters print-compute-clusters start-control-plane deploy-control-plane-addons deploy-control-plane-endpoints build-and-deploy-control-plane-cluster destroy-control-plane start-compute-plane deploy-compute-plane-addons configure-compute-control-plane-dns deploy-compute-control-plane-endpoints build-and-deploy-compute-plane-cluster destroy-compute-plane build-and-deploy-multicluster destroy-multicluster test-multicluster-make setup-gateway-api setup-metallb check-gateway-api deploy-sample deploy-nginx wait-for-nginx wait-for-gateway validate-gateway cleanup-nginx wait-for-deployment validate-deployment cleanup-sample build-and-deploy-cluster build-csi-smb deploy-csi-smb wait-for-csi-smb build-fake-gpu-operator deploy-fake-gpu-operator wait-for-fake-gpu-operator deploy-prometheus-crds uninstall-prometheus-crds deploy-kube-state-metrics wait-for-kube-state-metrics uninstall-kube-state-metrics build-credential-provider-multiarch
+.PHONY: help clean build test test-coverage-html test-manual start stop destroy destroy-all-ncp-local status ensure-cluster ensure-context ensure-docker-config validate-compute-clusters print-compute-clusters start-control-plane deploy-control-plane-addons deploy-control-plane-endpoints build-and-deploy-control-plane-cluster destroy-control-plane start-compute-plane deploy-compute-plane-addons configure-compute-control-plane-dns deploy-compute-control-plane-endpoints build-and-deploy-compute-plane-cluster destroy-compute-plane build-and-deploy-multicluster destroy-multicluster test-cluster-lifecycle-make test-multicluster-make setup-gateway-api setup-metallb check-gateway-api deploy-sample deploy-nginx wait-for-nginx wait-for-gateway validate-gateway cleanup-nginx wait-for-deployment validate-deployment cleanup-sample build-and-deploy-cluster build-csi-smb deploy-csi-smb wait-for-csi-smb build-fake-gpu-operator deploy-fake-gpu-operator wait-for-fake-gpu-operator deploy-prometheus-crds uninstall-prometheus-crds deploy-kube-state-metrics wait-for-kube-state-metrics uninstall-kube-state-metrics build-credential-provider-multiarch
 
 # === Cluster Configuration ===
 CLUSTER_NAME := ncp-local
@@ -301,6 +301,9 @@ destroy-multicluster: validate-compute-clusters ## Destroy the default control-p
 		$(MAKE) CLUSTER_NAME="$$cluster" destroy || true; \
 	done
 
+test-cluster-lifecycle-make: ## Run dry Makefile tests for cluster lifecycle behavior
+	@tests/test-cluster-lifecycle-make.sh
+
 test-multicluster-make: ## Run dry Makefile tests for multi-cluster name derivation
 	@tests/test-multicluster-make.sh
 
@@ -556,7 +559,7 @@ build:
 	@mkdir -p $(OUTPUT_DIR)
 	cd $(GO_PROVIDER_PATH) && CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) go build -ldflags='-s -w -extldflags "-static"' -o ../$(PROVIDER_OUTPUT_PATH) ./cmd/$(BINARY_NAME)/main.go
 
-test: ## Run Go tests with coverage summary
+test: test-cluster-lifecycle-make ## Run automated tests with Go coverage summary
 	$(call require,go,See https://go.dev/doc/install)
 	@echo "Running Go tests with coverage inside $(GO_PROVIDER_PATH)..."
 	cd $(GO_PROVIDER_PATH) && go test -race -cover -coverprofile=coverage.out ./... && go tool cover -func=coverage.out

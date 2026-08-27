@@ -16,6 +16,7 @@ Run Makefile-only validation from `tools/ncp-local-cluster`:
 ```bash
 make validate-compute-clusters
 make print-compute-clusters
+make test-cluster-lifecycle-make
 make test-multicluster-make
 ```
 
