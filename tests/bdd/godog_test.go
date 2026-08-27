@@ -1358,7 +1358,7 @@ agentConfig:
       validationPolicy:
         name: Unrestricted
     workload:
-      stargateQUICInsecure: true
+      stargateQUICInsecure: false
 `)
 }
 
@@ -1378,7 +1378,7 @@ agentConfig:
       validationPolicy:
         name: Unrestricted
     workload:
-      stargateQUICInsecure: true
+      stargateQUICInsecure: false
 `)
 }
 
