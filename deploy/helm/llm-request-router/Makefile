@@ -71,10 +71,10 @@ check-pki-render:
 	sh ./scripts/check-pki-render.sh
 
 check-multi-replica-render:
-	sh ./scripts/check-multi-replica-render.sh
+	bash ./scripts/check-multi-replica-render.sh
 
 check-backend-router-render:
-	sh ./scripts/check-backend-router-render.sh
+	bash ./scripts/check-backend-router-render.sh
 
 clean:
 	rm -rf ./packaged-charts bin

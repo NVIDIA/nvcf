@@ -38,6 +38,7 @@ use tracing::{debug, error, info};
 use tracing_subscriber::EnvFilter;
 
 const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 5_000;
+const DEFAULT_WATCH_HEARTBEAT_MS: u64 = 5_000;
 const DEFAULT_RELAY_MAX_IDLE_TIMEOUT_MS: u64 = 300_000;
 const DEFAULT_RELAY_KEEP_ALIVE_MS: u64 = 10_000;
 
@@ -68,12 +69,20 @@ struct Args {
         value_name = "TEMPLATE"
     )]
     advertised_hostname_template: String,
+    /// Endpoint Pylon dials for every Stargate identity advertised by WatchStargates.
+    #[arg(long, value_name = "URI")]
+    grpc_pylon_dial_addr: String,
+    #[arg(long, default_value_t = 50071, value_name = "PORT")]
+    advertised_grpc_port: u16,
     #[arg(long, default_value = "grpc", value_name = "NAME")]
     grpc_port_name: String,
     #[arg(long, default_value = "quic", value_name = "NAME")]
     quic_port_name: String,
     #[arg(long, default_value_t = DEFAULT_CONNECT_TIMEOUT_MS, value_name = "MS")]
     connect_timeout_ms: u64,
+    /// Maximum interval between unchanged WatchStargates snapshots.
+    #[arg(long, default_value_t = DEFAULT_WATCH_HEARTBEAT_MS, value_name = "MS")]
+    watch_heartbeat_ms: u64,
     #[arg(long, default_value_t = DEFAULT_RELAY_MAX_IDLE_TIMEOUT_MS, value_name = "MS")]
     relay_idle_timeout_ms: u64,
     /// QUIC keepalive interval for relayed reverse tunnels; 0 disables keepalive
@@ -108,6 +117,18 @@ enum RouterTunnelConfig {
 
 impl RouterStartupConfig {
     fn from_args(args: Args) -> Result<Self> {
+        ensure!(
+            !args.grpc_pylon_dial_addr.trim().is_empty(),
+            "--grpc-pylon-dial-addr must not be empty"
+        );
+        ensure!(
+            args.advertised_grpc_port > 0,
+            "--advertised-grpc-port must be greater than 0"
+        );
+        ensure!(
+            args.watch_heartbeat_ms > 0,
+            "--watch-heartbeat-ms must be greater than 0"
+        );
         let relay_endpoint_config = relay_endpoint_config_from_args(&args)?;
         let server_identity_reloader = server_identity_reloader_from_args(&args)?;
         // Read the mounted pair once. The reloader validated and owns these
@@ -125,8 +146,11 @@ impl RouterStartupConfig {
         };
         let grpc = GrpcRouterConfig {
             advertised_hostname_template: args.advertised_hostname_template.clone(),
+            advertised_grpc_port: args.advertised_grpc_port,
+            grpc_pylon_dial_addr: args.grpc_pylon_dial_addr,
             target_namespace: args.target_namespace.clone(),
             connect_timeout: Duration::from_millis(args.connect_timeout_ms),
+            watch_heartbeat_interval: Duration::from_millis(args.watch_heartbeat_ms),
         };
         let tunnel = match args.tunnel_protocol {
             RouterTunnelProtocol::RawQuic => {
@@ -338,9 +362,12 @@ fn log_startup(config: &RouterStartupConfig) {
         target_namespace = %config.grpc.target_namespace,
         target_service_name = %config.target_build_config.service_name,
         advertised_hostname_template = %config.grpc.advertised_hostname_template,
+        advertised_grpc_port = config.grpc.advertised_grpc_port,
+        grpc_pylon_dial_addr = %config.grpc.grpc_pylon_dial_addr,
         grpc_port_name = %config.target_build_config.grpc_port_name,
         quic_port_name = %config.target_build_config.quic_port_name,
         connect_timeout_ms = config.grpc.connect_timeout.as_millis(),
+        watch_heartbeat_ms = config.grpc.watch_heartbeat_interval.as_millis(),
         relay_idle_timeout_ms = relay_idle_timeout.as_millis(),
         relay_keep_alive_ms = relay_keep_alive.map_or(0, |duration| duration.as_millis()),
         quic_insecure,
@@ -401,9 +428,15 @@ mod tests {
     use super::*;
 
     fn router_argv<'a>(extra: &'a [&'a str]) -> impl Iterator<Item = &'a str> {
-        ["stargate-k8s-router", "--target-namespace", "prod"]
-            .into_iter()
-            .chain(extra.iter().copied())
+        [
+            "stargate-k8s-router",
+            "--target-namespace",
+            "prod",
+            "--grpc-pylon-dial-addr",
+            "https://stargate-router.example:443",
+        ]
+        .into_iter()
+        .chain(extra.iter().copied())
     }
 
     fn router_args(extra: &[&str]) -> Args {
@@ -450,6 +483,33 @@ mod tests {
     }
 
     #[test]
+    fn router_cli_requires_a_nonempty_pylon_grpc_dial_address() {
+        let missing = Args::try_parse_from(["stargate-k8s-router", "--target-namespace", "prod"]);
+        assert!(missing.is_err(), "Pylon dial address must be required");
+
+        let mut empty_args = router_args(&[]);
+        empty_args.grpc_pylon_dial_addr.clear();
+        let empty = RouterStartupConfig::from_args(empty_args)
+            .err()
+            .expect("empty Pylon dial address must be rejected");
+        assert_eq!(
+            empty.to_string(),
+            "--grpc-pylon-dial-addr must not be empty"
+        );
+    }
+
+    #[test]
+    fn router_cli_rejects_a_zero_watch_heartbeat() {
+        let error = RouterStartupConfig::from_args(router_args(&["--watch-heartbeat-ms", "0"]))
+            .err()
+            .expect("zero Watch heartbeat must be rejected");
+        assert_eq!(
+            error.to_string(),
+            "--watch-heartbeat-ms must be greater than 0"
+        );
+    }
+
+    #[test]
     fn raw_quic_rejects_the_webtransport_only_upstream_trust_option() {
         let upstream_ca = test_file(b"upstream-ca-bytes");
         let args = router_args(&["--upstream-tls-cert-path", test_file_path(&upstream_ca)]);
@@ -483,12 +543,16 @@ mod tests {
             "stargate-ready",
             "--advertised-hostname-template",
             "{pod_name}.{namespace}.example",
+            "--advertised-grpc-port",
+            "41071",
             "--grpc-port-name",
             "grpc-control",
             "--quic-port-name",
             "quic-tunnel",
             "--connect-timeout-ms",
             "2500",
+            "--watch-heartbeat-ms",
+            "1750",
             "--relay-idle-timeout-ms",
             "20000",
             "--relay-keep-alive-ms",
@@ -510,7 +574,16 @@ mod tests {
             config.grpc.advertised_hostname_template,
             "{pod_name}.{namespace}.example"
         );
+        assert_eq!(config.grpc.advertised_grpc_port, 41071);
+        assert_eq!(
+            config.grpc.grpc_pylon_dial_addr,
+            "https://stargate-router.example:443"
+        );
         assert_eq!(config.grpc.connect_timeout, Duration::from_millis(2500));
+        assert_eq!(
+            config.grpc.watch_heartbeat_interval,
+            Duration::from_millis(1750)
+        );
         assert_eq!(
             config.target_build_config,
             TargetBuildConfig {

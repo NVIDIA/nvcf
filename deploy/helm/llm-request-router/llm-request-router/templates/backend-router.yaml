@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-{{- if .Values.llmRequestRouter.backendRouter.enabled }}
+{{- if eq (include "llm-request-router.backendRouterEnabled" .) "true" }}
 {{- include "llm-request-router.validateBackendRouterTls" . }}
 {{- include "llm-request-router.validateBackendRouterServiceAccount" . }}
 {{- $advertisedHostnameTemplate := include "llm-request-router.advertisedHostnameTemplate" . }}
@@ -81,6 +81,9 @@ spec:
             - --target-namespace={{ include "llm-request-router.namespace" . }}
             - --target-service-name={{ include "llm-request-router.fullname" . }}
             - --advertised-hostname-template={{ $advertisedHostnameTemplate }}
+            - --advertised-grpc-port={{ .Values.llmRequestRouter.service.grpcPort }}
+            - --grpc-pylon-dial-addr={{ include "llm-request-router.backendRouterGrpcDialAddress" . }}
+            - --watch-heartbeat-ms={{ .Values.llmRequestRouter.discovery.watchHeartbeatMs }}
             - --grpc-port-name=grpc
             - --quic-port-name=quic
             - --tunnel-protocol=raw-quic
