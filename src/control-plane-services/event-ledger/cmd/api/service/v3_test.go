@@ -251,6 +251,20 @@ func createOTLPLogRecord(eventName, namespace, source, instanceID string, extraA
 	}
 }
 
+func makeCloudEvent(t *testing.T, id, eventType, instanceID string, timestamp time.Time) *cloudevents.Event {
+	t.Helper()
+	event := cloudevents.NewEvent()
+	event.SetSpecVersion(cloudevents.VersionV1)
+	event.SetID(id)
+	event.SetType(eventType)
+	event.SetSource("/test")
+	event.SetTime(timestamp)
+	event.SetExtension("namespace", "test-namespace")
+	event.SetExtension("instanceId", instanceID)
+	require.NoError(t, event.SetData(cloudevents.ApplicationJSON, map[string]string{"status": "ok"}))
+	return &event
+}
+
 func TestEventContextToCanonical_DotSeparatedInstanceID(t *testing.T) {
 	instanceID := "00000000-0000-4000-8000-000000000001.synthetic-instance"
 
@@ -738,23 +752,11 @@ func TestProcessCloudEvents_UsesBulkPersistence(t *testing.T) {
 	mockDB := &mockDBHandlerV3{}
 	server := newServerWithMock(t, mockDB)
 	ctx := makeStoreCtx(server)
-
-	makeCloudEvent := func(id, eventType, instanceID string) *cloudevents.Event {
-		event := cloudevents.NewEvent()
-		event.SetSpecVersion(cloudevents.VersionV1)
-		event.SetID(id)
-		event.SetType(eventType)
-		event.SetSource("/test")
-		event.SetTime(time.Now())
-		event.SetExtension("namespace", "test-namespace")
-		event.SetExtension("instanceId", instanceID)
-		require.NoError(t, event.SetData(cloudevents.ApplicationJSON, map[string]string{"status": "ok"}))
-		return &event
-	}
+	now := time.Now()
 
 	result := server.processCloudEvents(ctx, []*cloudevents.Event{
-		makeCloudEvent("event-1", "pod.ready", "00000000-0000-4000-8000-000000000001.synthetic-instance"),
-		makeCloudEvent("event-2", "pod.pending", "pod-2"),
+		makeCloudEvent(t, "event-1", "pod.ready", "00000000-0000-4000-8000-000000000001.synthetic-instance", now),
+		makeCloudEvent(t, "event-2", "pod.pending", "pod-2", now),
 	})
 
 	assert.Equal(t, 2, result.SuccessCount)
@@ -767,6 +769,41 @@ func TestProcessCloudEvents_UsesBulkPersistence(t *testing.T) {
 	assert.Contains(t, contexts,
 		"instance_id=00000000-0000-4000-8000-000000000001.synthetic-instance",
 	)
+}
+
+func TestProcessCloudEvents_DeduplicatesStorageWithoutChangingResultCounts(t *testing.T) {
+	mockDB := &mockDBHandlerV3{}
+	server := newServerWithMock(t, mockDB)
+	ctx := makeStoreCtx(server)
+	latestTimestamp := time.Now()
+
+	result := server.processCloudEvents(ctx, []*cloudevents.Event{
+		makeCloudEvent(t, "event-1", "pod.ready", "pod-1", latestTimestamp.Add(-time.Minute)),
+		makeCloudEvent(t, "event-2", "pod.ready", "pod-1", latestTimestamp),
+	})
+
+	assert.Equal(t, 2, result.SuccessCount)
+	assert.Equal(t, 0, result.FailureCount)
+	assert.Len(t, result.ProcessedEvents, 2)
+	require.Len(t, mockDB.storedEvents, 1)
+	assert.Equal(t, latestTimestamp, mockDB.storedEvents[0].timestamp)
+}
+
+func TestProcessCloudEvents_StatsFailureCountsAcceptedEvents(t *testing.T) {
+	mockDB := &mockDBHandlerV3{bulkUpsertStatsErr: fmt.Errorf("stats unavailable")}
+	server := newServerWithMock(t, mockDB)
+	ctx := makeStoreCtx(server)
+	latestTimestamp := time.Now()
+
+	result := server.processCloudEvents(ctx, []*cloudevents.Event{
+		makeCloudEvent(t, "event-1", "pod.ready", "pod-1", latestTimestamp.Add(-time.Minute)),
+		makeCloudEvent(t, "event-2", "pod.ready", "pod-1", latestTimestamp),
+	})
+
+	assert.Equal(t, 0, result.SuccessCount)
+	assert.Equal(t, 2, result.FailureCount)
+	assert.ErrorContains(t, result.LastError, "stats unavailable")
+	require.Len(t, mockDB.storedEvents, 1)
 }
 
 // Test GetStatsV3 success
