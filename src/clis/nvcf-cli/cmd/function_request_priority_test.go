@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strings"
 	"testing"
 
@@ -124,6 +125,56 @@ func TestLoadCreateConfigAppliesRequestPriorityFlags(t *testing.T) {
 		t.Fatalf("load create config: %v", err)
 	}
 	assertPriorityConfig(t, config.LLMInvocationConfig, 0, map[string]uint32{"nca-1": 3})
+}
+
+func TestCreateRequestIncludesRepeatedPerAccountPriorityFlags(t *testing.T) {
+	originalFlags := createFlags
+	t.Cleanup(func() { createFlags = originalFlags })
+
+	cmd := &cobra.Command{}
+	cmd.Flags().Uint32Var(&createFlags.llmDefaultPriority, "llm-default-priority", 0, "")
+	cmd.Flags().StringArrayVar(&createFlags.llmPerAccountPriorities, "llm-per-account-priority", nil, "")
+	if err := cmd.Flags().Set("llm-default-priority", "7"); err != nil {
+		t.Fatalf("set default priority: %v", err)
+	}
+	if err := cmd.Flags().Set("llm-per-account-priority", "nca-a:3"); err != nil {
+		t.Fatalf("set first per-account priority: %v", err)
+	}
+	if err := cmd.Flags().Set("llm-per-account-priority", "nca-b:5"); err != nil {
+		t.Fatalf("set second per-account priority: %v", err)
+	}
+
+	config, err := loadCreateConfig(cmd)
+	if err != nil {
+		t.Fatalf("load create config: %v", err)
+	}
+	request, _, err := buildCreateFunctionRequest(config)
+	if err != nil {
+		t.Fatalf("build create request: %v", err)
+	}
+	payload, err := json.Marshal(request)
+	if err != nil {
+		t.Fatalf("marshal create request: %v", err)
+	}
+
+	var decoded struct {
+		LLMInvocationConfig struct {
+			Priority struct {
+				DefaultPriority    uint32            `json:"defaultPriority"`
+				PerAccountPriority map[string]uint32 `json:"perAccountPriority"`
+			} `json:"priority"`
+		} `json:"llmInvocationConfig"`
+	}
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("unmarshal create request: %v", err)
+	}
+	if got := decoded.LLMInvocationConfig.Priority.DefaultPriority; got != 7 {
+		t.Fatalf("defaultPriority = %d, want 7", got)
+	}
+	wantOverrides := map[string]uint32{"nca-a": 3, "nca-b": 5}
+	if got := decoded.LLMInvocationConfig.Priority.PerAccountPriority; !maps.Equal(got, wantOverrides) {
+		t.Fatalf("perAccountPriority = %#v, want %#v", got, wantOverrides)
+	}
 }
 
 func TestLoadUpdateConfigAppliesRequestPriorityFlags(t *testing.T) {
