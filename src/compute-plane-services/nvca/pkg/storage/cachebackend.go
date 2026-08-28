@@ -78,6 +78,22 @@ func ModelCacheStorageClassName(override string) string {
 	return DefaultModelCacheStorageClassName
 }
 
+// nvmeshModelCacheStorageClassName resolves the storage class NVMesh model
+// cache volumes are provisioned on: the override when set, otherwise
+// NVMeshStorageClassName. NVCA only reaches the NVMesh reconciliation path
+// (doModelCacheNVMesh) once SelectHelmCacheBackend has already confirmed
+// NVMeshStorageClassName exists in the cluster, so defaulting to it here
+// keeps the volume's storage class aligned with the backend that was
+// actually selected, instead of falling back to the Samba-oriented
+// DefaultModelCacheStorageClassName.
+func nvmeshModelCacheStorageClassName(override string) string {
+	if override != "" {
+		return override
+	}
+
+	return NVMeshStorageClassName
+}
+
 // SelectHelmCacheBackend resolves the Helm model-cache storage backend. All
 // caching is gated on CachingSupport; the mechanism is then chosen by which
 // storage class the cluster provides, falling back to Samba (when
