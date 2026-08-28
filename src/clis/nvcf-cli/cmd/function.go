@@ -42,11 +42,13 @@ import (
 )
 
 const (
-	errCreateNVCFClientFmt = "failed to create NVCF client: %w"
-	errLoadConfigFmt       = "failed to load configuration: %w"
-	errParseInputFileFmt   = "failed to parse JSON file '%s': %w"
-	errReadInputFileFmt    = "failed to read input file '%s': %w"
-	inputFileFlag          = "input-file"
+	errCreateNVCFClientFmt    = "failed to create NVCF client: %w"
+	errLoadConfigFmt          = "failed to load configuration: %w"
+	errParseInputFileFmt      = "failed to parse JSON file '%s': %w"
+	errReadInputFileFmt       = "failed to read input file '%s': %w"
+	inputFileFlag             = "input-file"
+	llmDefaultPriorityFlag    = "llm-default-priority"
+	llmPerAccountPriorityFlag = "llm-per-account-priority"
 )
 
 // ============================================================================
@@ -496,10 +498,6 @@ var createFlags struct {
 	llmModels []string
 	resources []string
 
-	// Function-level LLM invocation configuration
-	llmDefaultPriority      uint32
-	llmPerAccountPriorities []string
-
 	// Rate limiting
 	rateLimit         string
 	rateLimitExempted []string
@@ -539,13 +537,11 @@ var invokeFlags struct {
 }
 
 var updateFlags struct {
-	inputFile               string
-	functionID              string
-	versionID               string
-	tags                    []string
-	llmModelUpdates         []string
-	llmDefaultPriority      uint32
-	llmPerAccountPriorities []string
+	inputFile       string
+	functionID      string
+	versionID       string
+	tags            []string
+	llmModelUpdates []string
 }
 
 // ============================================================================
@@ -593,8 +589,8 @@ func init() {
 	createCmd.Flags().StringSliceVar(&createFlags.secrets, "secrets", []string{}, "Secrets in name=value format (e.g., API_KEY=secret123,DB_PASSWORD=pass456)")
 	createCmd.Flags().StringSliceVar(&createFlags.models, "models", []string{}, "Model artifacts (format: name:version:uri)")
 	createCmd.Flags().StringArrayVar(&createFlags.llmModels, "llm-model", []string{}, "LLM model config (format: name=<model>,uris=<uri>|<uri>,routingMethod=<round_robin|power_of_two|wait_and_widen|pulsar_wait_and_widen|groq_multiregion|pulsar|random>,tokenRateLimit=<limit>)")
-	createCmd.Flags().Uint32Var(&createFlags.llmDefaultPriority, "llm-default-priority", 0, "Function-level default request priority (lower is higher; range: 0-4294967295)")
-	createCmd.Flags().StringArrayVar(&createFlags.llmPerAccountPriorities, "llm-per-account-priority", []string{}, "Per-account request priority override (format: <nca-id>:<priority>; requires default priority; lower is higher; range: 0-4294967295; repeatable; supports up to 64 distinct NCA ID overrides)")
+	createCmd.Flags().Uint32(llmDefaultPriorityFlag, 0, "Function-level default request priority (lower is higher; range: 0-4294967295)")
+	createCmd.Flags().StringArray(llmPerAccountPriorityFlag, []string{}, "Per-account request priority override (format: <nca-id>:<priority>; requires default priority; lower is higher; range: 0-4294967295; repeatable; supports up to 64 distinct NCA ID overrides)")
 	createCmd.Flags().StringSliceVar(&createFlags.resources, "resources", []string{}, "Resource artifacts (format: name:version:uri)")
 	createCmd.Flags().StringVar(&createFlags.rateLimit, "rate-limit", "", "Rate limit pattern (e.g., '100-S', '50-M', '10-H', '5-D')")
 	createCmd.Flags().StringSliceVar(&createFlags.rateLimitExempted, "rate-limit-exempted", []string{}, "NCA IDs exempted from rate limiting")
@@ -636,8 +632,8 @@ func init() {
 	updateCmd.Flags().StringVar(&updateFlags.versionID, "version-id", "", "Version ID (required)")
 	updateCmd.Flags().StringSliceVar(&updateFlags.tags, "tags", []string{}, "Function tags (comma-separated)")
 	updateCmd.Flags().StringArrayVar(&updateFlags.llmModelUpdates, "llm-model-update", []string{}, "LLM model update (format: name=<model>,routingMethod=<round_robin|power_of_two|wait_and_widen|pulsar_wait_and_widen|groq_multiregion|pulsar|random>,tokenRateLimit=<limit>)")
-	updateCmd.Flags().Uint32Var(&updateFlags.llmDefaultPriority, "llm-default-priority", 0, "Function-level default request priority (lower is higher; range: 0-4294967295; replaces existing priority config)")
-	updateCmd.Flags().StringArrayVar(&updateFlags.llmPerAccountPriorities, "llm-per-account-priority", []string{}, "Per-account request priority override (format: <nca-id>:<priority>; requires default priority; lower is higher; range: 0-4294967295; repeatable; supports up to 64 distinct NCA ID overrides)")
+	updateCmd.Flags().Uint32(llmDefaultPriorityFlag, 0, "Function-level default request priority (lower is higher; range: 0-4294967295; replaces existing priority config)")
+	updateCmd.Flags().StringArray(llmPerAccountPriorityFlag, []string{}, "Per-account request priority override (format: <nca-id>:<priority>; requires default priority; lower is higher; range: 0-4294967295; repeatable; supports up to 64 distinct NCA ID overrides)")
 }
 
 // ============================================================================
@@ -1159,57 +1155,62 @@ func applyCreateFlagOverrides(cmd *cobra.Command, config *CreateConfig) error {
 	applyCreateHelmFlagOverrides(cmd, config)
 	applyCreateRateLimitFlagOverrides(cmd, config)
 	applyCreateTelemetryFlagOverrides(cmd, config)
-	if err := applyCreateRequestPriorityFlagOverrides(cmd, config); err != nil {
+	mergedConfig, err := mergeRequestPriorityFlagOverrides(cmd, config.LLMInvocationConfig)
+	if err != nil {
 		return err
 	}
+	config.LLMInvocationConfig = mergedConfig
 
 	if err := applyCreateContainerEnvFlag(cmd, config); err != nil {
 		return err
 	}
 	return applyCreateArtifactFlagOverrides(cmd, config)
 }
-
-func applyCreateRequestPriorityFlagOverrides(cmd *cobra.Command, config *CreateConfig) error {
-	return applyRequestPriorityFlagOverrides(
-		cmd.Flags().Changed("llm-default-priority"),
-		createFlags.llmDefaultPriority,
-		cmd.Flags().Changed("llm-per-account-priority"),
-		createFlags.llmPerAccountPriorities,
-		&config.LLMInvocationConfig,
-	)
-}
-
-func applyRequestPriorityFlagOverrides(
-	defaultChanged bool,
-	defaultPriority uint32,
-	perAccountChanged bool,
-	perAccountValues []string,
-	target **LLMInvocationConfigInput,
-) error {
+func mergeRequestPriorityFlagOverrides(
+	cmd *cobra.Command,
+	current *LLMInvocationConfigInput,
+) (*LLMInvocationConfigInput, error) {
+	flags := cmd.Flags()
+	defaultChanged := flags.Changed(llmDefaultPriorityFlag)
+	perAccountChanged := flags.Changed(llmPerAccountPriorityFlag)
 	if !defaultChanged && !perAccountChanged {
-		return nil
+		return current, nil
 	}
 
-	config := *target
-	if config == nil {
-		config = &LLMInvocationConfigInput{}
+	mergedConfig := &LLMInvocationConfigInput{}
+	if current != nil {
+		*mergedConfig = *current
 	}
-	if config.Priority == nil {
-		config.Priority = &PriorityInput{}
+
+	mergedPriority := &PriorityInput{}
+	if mergedConfig.Priority != nil {
+		*mergedPriority = *mergedConfig.Priority
 	}
+	mergedConfig.Priority = mergedPriority
+
 	if defaultChanged {
-		value := defaultPriority
-		config.Priority.DefaultPriority = &value
+		value, err := flags.GetUint32(llmDefaultPriorityFlag)
+		if err != nil {
+			return nil, err
+		}
+		mergedPriority.DefaultPriority = &value
 	}
 	if perAccountChanged {
-		overrides, err := parsePerAccountPriorities(perAccountValues)
+		values, err := flags.GetStringArray(llmPerAccountPriorityFlag)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		config.Priority.PerAccountPriority = overrides
+		overrides, err := parsePerAccountPriorities(values)
+		if err != nil {
+			return nil, err
+		}
+		mergedPriority.PerAccountPriority = overrides
 	}
-	*target = config
-	return validateLLMInvocationConfig(config)
+
+	if err := validateLLMInvocationConfig(mergedConfig); err != nil {
+		return nil, err
+	}
+	return mergedConfig, nil
 }
 
 func applyCreateRequiredFlagOverrides(cmd *cobra.Command, config *CreateConfig) {
@@ -1589,18 +1590,11 @@ func loadUpdateConfig(cmd *cobra.Command) (*UpdateConfig, error) {
 		config.ModelUpdates = append(config.ModelUpdates, updates...)
 	}
 
-	priorityFlagsChanged := cmd.Flags().Changed("llm-default-priority") || cmd.Flags().Changed("llm-per-account-priority")
-	if priorityFlagsChanged {
-		if err := applyRequestPriorityFlagOverrides(
-			cmd.Flags().Changed("llm-default-priority"),
-			updateFlags.llmDefaultPriority,
-			cmd.Flags().Changed("llm-per-account-priority"),
-			updateFlags.llmPerAccountPriorities,
-			&config.LLMInvocationConfig,
-		); err != nil {
-			return nil, err
-		}
+	mergedConfig, err := mergeRequestPriorityFlagOverrides(cmd, config.LLMInvocationConfig)
+	if err != nil {
+		return nil, err
 	}
+	config.LLMInvocationConfig = mergedConfig
 
 	return config, nil
 }

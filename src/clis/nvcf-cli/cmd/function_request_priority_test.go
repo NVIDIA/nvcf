@@ -111,14 +111,12 @@ func TestLoadCreateConfigAppliesRequestPriorityFlags(t *testing.T) {
 	t.Cleanup(func() { createFlags = originalFlags })
 
 	cmd := newPriorityFlagTestCommand()
-	if err := cmd.Flags().Set("llm-default-priority", "0"); err != nil {
+	if err := cmd.Flags().Set(llmDefaultPriorityFlag, "0"); err != nil {
 		t.Fatalf("set default priority: %v", err)
 	}
-	if err := cmd.Flags().Set("llm-per-account-priority", "nca-1:3"); err != nil {
+	if err := cmd.Flags().Set(llmPerAccountPriorityFlag, "nca-1:3"); err != nil {
 		t.Fatalf("set per-account priority: %v", err)
 	}
-	createFlags.llmDefaultPriority = 0
-	createFlags.llmPerAccountPriorities = []string{"nca-1:3"}
 
 	config, err := loadCreateConfig(cmd)
 	if err != nil {
@@ -131,16 +129,14 @@ func TestCreateRequestIncludesRepeatedPerAccountPriorityFlags(t *testing.T) {
 	originalFlags := createFlags
 	t.Cleanup(func() { createFlags = originalFlags })
 
-	cmd := &cobra.Command{}
-	cmd.Flags().Uint32Var(&createFlags.llmDefaultPriority, "llm-default-priority", 0, "")
-	cmd.Flags().StringArrayVar(&createFlags.llmPerAccountPriorities, "llm-per-account-priority", nil, "")
-	if err := cmd.Flags().Set("llm-default-priority", "7"); err != nil {
+	cmd := newPriorityFlagTestCommand()
+	if err := cmd.Flags().Set(llmDefaultPriorityFlag, "7"); err != nil {
 		t.Fatalf("set default priority: %v", err)
 	}
-	if err := cmd.Flags().Set("llm-per-account-priority", "nca-a:3"); err != nil {
+	if err := cmd.Flags().Set(llmPerAccountPriorityFlag, "nca-a:3"); err != nil {
 		t.Fatalf("set first per-account priority: %v", err)
 	}
-	if err := cmd.Flags().Set("llm-per-account-priority", "nca-b:5"); err != nil {
+	if err := cmd.Flags().Set(llmPerAccountPriorityFlag, "nca-b:5"); err != nil {
 		t.Fatalf("set second per-account priority: %v", err)
 	}
 
@@ -182,14 +178,12 @@ func TestLoadUpdateConfigAppliesRequestPriorityFlags(t *testing.T) {
 	t.Cleanup(func() { updateFlags = originalFlags })
 
 	cmd := newPriorityFlagTestCommand()
-	if err := cmd.Flags().Set("llm-default-priority", "7"); err != nil {
+	if err := cmd.Flags().Set(llmDefaultPriorityFlag, "7"); err != nil {
 		t.Fatalf("set default priority: %v", err)
 	}
-	if err := cmd.Flags().Set("llm-per-account-priority", "nca-1:3"); err != nil {
+	if err := cmd.Flags().Set(llmPerAccountPriorityFlag, "nca-1:3"); err != nil {
 		t.Fatalf("set per-account priority: %v", err)
 	}
-	updateFlags.llmDefaultPriority = 7
-	updateFlags.llmPerAccountPriorities = []string{"nca-1:3"}
 
 	config, err := loadUpdateConfig(cmd)
 	if err != nil {
@@ -201,11 +195,76 @@ func TestLoadUpdateConfigAppliesRequestPriorityFlags(t *testing.T) {
 func TestRequestPriorityFlagsPreserveInputFileFieldsWhenOmitted(t *testing.T) {
 	t.Parallel()
 
-	config := &CreateConfig{LLMInvocationConfig: priorityConfig(7, map[string]uint32{"nca-1": 3})}
-	if err := applyCreateRequestPriorityFlagOverrides(&cobra.Command{}, config); err != nil {
-		t.Fatalf("apply priority flags: %v", err)
+	current := priorityConfig(7, map[string]uint32{"nca-1": 3})
+	mergedConfig, err := mergeRequestPriorityFlagOverrides(&cobra.Command{}, current)
+	if err != nil {
+		t.Fatalf("merge priority flags: %v", err)
 	}
-	assertPriorityConfig(t, config.LLMInvocationConfig, 7, map[string]uint32{"nca-1": 3})
+	assertPriorityConfig(t, mergedConfig, 7, map[string]uint32{"nca-1": 3})
+}
+
+func TestMergeRequestPriorityFlagOverridesPreservesUnchangedFields(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name          string
+		flag          string
+		value         string
+		wantDefault   uint32
+		wantOverrides map[string]uint32
+	}{
+		{
+			name:          "default priority override preserves per-account priorities",
+			flag:          llmDefaultPriorityFlag,
+			value:         "0",
+			wantDefault:   0,
+			wantOverrides: map[string]uint32{"nca-1": 3},
+		},
+		{
+			name:          "per-account override preserves default priority",
+			flag:          llmPerAccountPriorityFlag,
+			value:         "nca-2:5",
+			wantDefault:   7,
+			wantOverrides: map[string]uint32{"nca-2": 5},
+		},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			cmd := newPriorityFlagTestCommand()
+			if err := cmd.Flags().Set(test.flag, test.value); err != nil {
+				t.Fatalf("set %s: %v", test.flag, err)
+			}
+
+			current := priorityConfig(7, map[string]uint32{"nca-1": 3})
+			mergedConfig, err := mergeRequestPriorityFlagOverrides(cmd, current)
+			if err != nil {
+				t.Fatalf("merge priority flags: %v", err)
+			}
+
+			assertPriorityConfig(t, mergedConfig, test.wantDefault, test.wantOverrides)
+			assertPriorityConfig(t, current, 7, map[string]uint32{"nca-1": 3})
+		})
+	}
+}
+
+func TestMergeRequestPriorityFlagOverridesDoesNotMutateCurrentConfigOnError(t *testing.T) {
+	t.Parallel()
+
+	cmd := newPriorityFlagTestCommand()
+	if err := cmd.Flags().Set(llmDefaultPriorityFlag, "0"); err != nil {
+		t.Fatalf("set default priority: %v", err)
+	}
+	if err := cmd.Flags().Set(llmPerAccountPriorityFlag, "nca-2:not-a-number"); err != nil {
+		t.Fatalf("set per-account priority: %v", err)
+	}
+
+	current := priorityConfig(7, map[string]uint32{"nca-1": 3})
+	if _, err := mergeRequestPriorityFlagOverrides(cmd, current); err == nil {
+		t.Fatal("merge priority flags succeeded, want error")
+	}
+	assertPriorityConfig(t, current, 7, map[string]uint32{"nca-1": 3})
 }
 
 func TestValidateLLMInvocationConfigRejectsPerAccountWithoutDefault(t *testing.T) {
@@ -271,7 +330,7 @@ func TestDefaultPriorityFlagRejectsInvalidValues(t *testing.T) {
 			t.Parallel()
 
 			cmd := newPriorityFlagTestCommand()
-			if err := cmd.Flags().Set("llm-default-priority", value); err == nil {
+			if err := cmd.Flags().Set(llmDefaultPriorityFlag, value); err == nil {
 				t.Fatalf("setting default priority to %q succeeded, want error", value)
 			}
 		})
@@ -365,8 +424,8 @@ func TestPrintRequestPriority(t *testing.T) {
 
 func newPriorityFlagTestCommand() *cobra.Command {
 	cmd := &cobra.Command{}
-	cmd.Flags().Uint32("llm-default-priority", 0, "")
-	cmd.Flags().StringArray("llm-per-account-priority", nil, "")
+	cmd.Flags().Uint32(llmDefaultPriorityFlag, 0, "")
+	cmd.Flags().StringArray(llmPerAccountPriorityFlag, nil, "")
 	return cmd
 }
 
