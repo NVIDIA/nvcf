@@ -1059,7 +1059,7 @@ llmRequestRouter:
   {{- /* Provisioning reuses the OpenBao migrations image. Prefer an explicit
        PKI tag, then the OpenBao migrations tag, and finally the compatible
        stack default so a normal environment need not duplicate chart values. */ -}}
-  {{- $pkiImageTag := dig "addons" "llm" "pki" "image" "tag" (dig "openbao" "migrations" "image" "tag" "" .Values) .Values | default "0.19.1" }}
+  {{- $pkiImageTag := dig "addons" "llm" "pki" "image" "tag" (dig "openbao" "migrations" "image" "tag" "" .Values) .Values | default "0.16.2" }}
   pki:
     enabled: true
     namespace: {{ dig "addons" "llm" "pki" "namespace" "vault-system" .Values | quote }}
@@ -1176,11 +1176,10 @@ vanityGateway:
 {{- $vanityBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "vanityGateway" "backend" dict .Values)) (dict "name" "vanity-gateway" "namespace" "nvcf" "port" 8080) }}
 {{- $essBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "ess" "backend" dict .Values)) (dict "name" "ess-api" "namespace" "ess" "port" 8080) }}
 {{- $apiKeysBackend := merge (deepCopy (dig "ingress" "gatewayApi" "routes" "apiKeys" "backend" dict .Values)) (dict "name" "api-keys" "namespace" "api-keys" "port" 8080) }}
-{{/* openbao-migrations image tag: 0.19.1 is the default, 0.16.2 the floor.
-     An operator may pin a different tag via
-     addons.nvcfUi.openbaoMigrations.image.tag, but anything older than the
-     floor is ignored (the migrations job needs >= 0.16.2). */}}
-{{- $nvcfUiOpenbaoMigrationsTag := "0.19.1" }}
+{{/* openbao-migrations image tag: 0.16.2 is the floor. An operator may pin a
+     newer tag via addons.nvcfUi.openbaoMigrations.image.tag, but anything older
+     than the floor is ignored (the migrations job needs >= 0.16.2). */}}
+{{- $nvcfUiOpenbaoMigrationsTag := "0.16.2" }}
 {{- $nvcfUiMigrationsTagOverride := dig "addons" "nvcfUi" "openbaoMigrations" "image" "tag" "" .Values }}
 {{- if and $nvcfUiMigrationsTagOverride (semverCompare ">=0.16.2" $nvcfUiMigrationsTagOverride) }}
 {{- $nvcfUiOpenbaoMigrationsTag = $nvcfUiMigrationsTagOverride }}

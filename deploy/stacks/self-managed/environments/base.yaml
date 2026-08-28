@@ -387,7 +387,7 @@ addons:
       # certPath: /etc/stargate/tls/tls.crt
       # keyPath: /etc/stargate/tls/tls.key
       # Image defaults to ${global.image.registry}/${global.image.repository}/nvcf-openbao-migrations.
-      # tag falls back to openbao.migrations.image.tag and then 0.19.1 if
+      # tag falls back to openbao.migrations.image.tag and then 0.16.2 if
       # neither location is set.
       # image:
       #   registry: ""
