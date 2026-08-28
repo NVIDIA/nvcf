@@ -103,6 +103,33 @@ func TestMaintenanceModeFeatureFlags(t *testing.T) {
 	assert.Equal(t, CordonAndDrainMaintenance, flag)
 }
 
+func TestHelmModelCachingFeatureFlag(t *testing.T) {
+	// Helm model caching must be opted into: the declared default is off.
+	require.NotNil(t, HelmModelCaching.defaultValue)
+	assert.False(t, *HelmModelCaching.defaultValue, "HelmModelCaching must default to off")
+
+	_ = parseFlags(fmt.Sprintf("-%s,-%s", CachingSupport.Key, HelmModelCaching.Key))
+	assert.False(t, HelmModelCaching.Enabled())
+
+	_ = parseFlags(fmt.Sprintf("+%s", HelmModelCaching.Key))
+	assert.True(t, HelmModelCaching.Enabled())
+
+	_ = parseFlags(fmt.Sprintf("-%s", HelmModelCaching.Key))
+	assert.False(t, HelmModelCaching.Enabled())
+
+	// CachingSupport is the parent gate, but it must not imply the Helm sub-gate.
+	_ = parseFlags(fmt.Sprintf("+%s", CachingSupport.Key))
+	assert.True(t, CachingSupport.Enabled())
+	assert.False(t, HelmModelCaching.Enabled())
+
+	flag, err := Get(HelmModelCaching.Key)
+	require.NoError(t, err)
+	assert.Equal(t, HelmModelCaching, flag)
+
+	// Reset for other tests.
+	_ = parseFlags(fmt.Sprintf("-%s,-%s", CachingSupport.Key, HelmModelCaching.Key))
+}
+
 func TestHelmAllowCPUNodesFeatureFlag(t *testing.T) {
 	// Reset flags to defaults
 	_ = parseFlags("-HelmAllowCPUNodes,-HelmResourceConstraints")
