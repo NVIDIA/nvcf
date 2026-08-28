@@ -293,6 +293,7 @@ func runService(cfg config.Config) error {
 				opts := middleware.NewJWTParserOptions(cfg.Auth.JWKSetUrl, nil, cacheDuration, &cfg.HTTP)
 				opts.Issuer = cfg.Auth.Issuer
 				opts.Audience = cfg.Auth.Audience
+				opts.RequireExpiration = true
 				jwtOpts = &opts
 			}
 
