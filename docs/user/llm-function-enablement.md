@@ -62,8 +62,10 @@ verification. Pylon reads the file once during startup. An unreadable path
 fails startup with the configured path in the error. Invalid PEM, untrusted
 chains, and hostname mismatches prevent the gRPC watch and registration
 connections. Replace or rotate the bundle with a rolling restart of the worker
-pods. The dial address must be an `https://` URI. A scheme-less `host:port`
-address preserves Pylon's existing plaintext HTTP behavior, even on port 443.
+pods. The `pylonGrpcDialAddress` override must be an explicit `https://` URI
+when a custom CA is configured. The separate
+`global.workerEndpoints.llmRequestRouterAddress` input remains a scheme-less
+`host:port` initial address.
 
 For gRPC, TLS SNI and hostname verification always use the external HTTPS dial
 hostname. After discovery, Pylon separately sends the concrete request-router
@@ -215,7 +217,7 @@ addons:
     enabled: true
     requestRouter:
       backendRouter:
-        pylonGrpcDialAddress: llm-grpc.example.com:50071
+        pylonGrpcDialAddress: https://llm-grpc.example.com:50071
         pylonReverseTunnelDialAddress: llm-quic.example.com:50072
 
 ingress:
@@ -241,11 +243,32 @@ both to use the in-cluster backend-router Service. Helmfile rendering rejects a
 partial override. The gRPC worker address normally uses the same TCP endpoint
 as `pylonGrpcDialAddress`.
 
-The scheme-less self-managed worker address in this example is plaintext gRPC.
-Port 443 alone does not make it HTTPS, and the self-managed profile validator
-accepts `host:port`, not a URI. The public ACM and private-CA NLB listener modes
-described above apply when the deployment supplies Pylon an `https://` dial
-URI through a supported configuration path.
+To recursively discover request routers in another region, set explicit remote
+Watch dial URIs on the self-managed operator surface:
+
+```yaml
+addons:
+  llm:
+    requestRouter:
+      discovery:
+        remoteWatchUrls:
+          - https://region-b-watch.example.com:50071
+```
+
+Each URI must use `https://`. Development-only plaintext endpoints require an
+explicit `http://` URI and
+`addons.llm.requestRouter.discovery.allowInsecureRemoteWatchHttp: true`.
+Scheme-less and unsupported endpoints are rejected rather than defaulting to
+plaintext. For an HTTPS URI, the dial hostname selects TLS SNI. Identities
+advertised by the remote Watch response remain the HTTP/2 authorities used for
+registration.
+
+The scheme-less `global.workerEndpoints.llmRequestRouterAddress` in this
+example is the self-managed profile's initial `host:port` input. The
+`pylonGrpcDialAddress` override requires an explicit `http://` or `https://`
+URI; this example uses HTTPS. Port 443 alone does not select TLS. The public ACM
+and private-CA NLB listener modes described above require an `https://` dial
+URI.
 
 For an HTTPS dial URI, the gRPC dial hostname is the TLS SNI and must be a SAN
 on the NLB listener certificate. It does not replace the advertised
@@ -840,10 +863,15 @@ For transport TLS failures, check:
   cluster clock. Renew the certificate and use the
   [transport TLS rotation runbook](./runbooks/transport-tls-rotation.md) to
   verify that the replacement becomes active.
-- Missing trust bundle: verify `ConfigMap/nvcf-transport-trust-bundle`, compare
-  its fingerprint with the compute-plane profile, and confirm both
-  `STARGATE_TLS_CERT_PATH` and `STARGATE_GRPC_TLS_CA_CERT_PATH` in the
-  `llm-worker` container. Restart the worker after changing either bundle.
+- System trust mode: confirm `STARGATE_TLS_CERT_PATH` and
+  `STARGATE_GRPC_TLS_CA_CERT_PATH` are both unset so Pylon uses its enabled
+  system and public roots.
+- Bundle trust mode: verify `ConfigMap/nvcf-transport-trust-bundle`, compare its
+  fingerprint with the compute-plane profile, and confirm
+  `STARGATE_TLS_CERT_PATH` in the `llm-worker` container. The
+  `STARGATE_GRPC_TLS_CA_CERT_PATH` override is optional; when unset, the gRPC
+  registration and watch paths reuse the existing Stargate bundle. Restart the
+  worker after changing either bundle.
 
 Useful logs:
 

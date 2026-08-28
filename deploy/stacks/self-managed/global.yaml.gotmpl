@@ -878,6 +878,10 @@ llmRequestRouter:
   replicaCount: {{ dig "addons" "llm" "requestRouter" "replicaCount" 3 .Values }}
   workload:
     kind: {{ dig "addons" "llm" "requestRouter" "workload" "kind" "Deployment" .Values | quote }}
+  {{- with dig "addons" "llm" "requestRouter" "discovery" dict .Values }}
+  discovery:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   service:
     grpcPort: {{ $llmRequestRouterGrpcPort }}
   {{- if .Values.global.imagePullSecrets }}

@@ -40,6 +40,10 @@ exposes a dashed-IP SRV alias. A multi-replica StatefulSet can instead run
 without the backend router and retain direct headless Service SRV discovery.
 `llmRequestRouter.discovery.watchHeartbeatMs` controls the maximum interval
 between unchanged Watch snapshots from both Stargate and the backend router.
+`llmRequestRouter.discovery.remoteWatchUrls` accepts only explicit `https://`
+Watch URIs. Development plaintext endpoints require an explicit `http://` URI
+and `allowInsecureRemoteWatchHttp=true`; scheme-less and unsupported values are
+rejected instead of defaulting to plaintext.
 
 `llmRequestRouter.kubernetes.advertisedHostnameTemplate` supports the Stargate
 placeholders `{pod_name}` and `{namespace}`. Stargate resolves both placeholders
@@ -133,7 +137,7 @@ dial addresses to the external endpoints that workers can resolve:
 llmRequestRouter:
   backendRouter:
     enabled: true
-    pylonGrpcDialAddress: llm-router.example.com:443
+    pylonGrpcDialAddress: https://llm-router.example.com:443
     pylonReverseTunnelDialAddress: llm-router.example.com:8080
 ```
 

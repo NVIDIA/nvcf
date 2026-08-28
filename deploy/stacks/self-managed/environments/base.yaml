@@ -314,6 +314,15 @@ addons:
         # window; Kubernetes cannot mutate one workload kind into the other.
         kind: Deployment
 
+      discovery:
+        disableDnsDiscovery: false
+        # Maximum interval between unchanged local and remote Watch snapshots.
+        watchHeartbeatMs: 5000
+        # Recursive Watch endpoints require an explicit HTTPS URI. Plaintext
+        # HTTP is available only through the development-only opt-in below.
+        remoteWatchUrls: []
+        allowInsecureRemoteWatchHttp: false
+
       # Authority and SNI aware backend router. A worker holds one registration
       # stream and one reverse QUIC tunnel per router replica, and each must
       # reach the specific replica named by the gRPC authority or QUIC SNI, so

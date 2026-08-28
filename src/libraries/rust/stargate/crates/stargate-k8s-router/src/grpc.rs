@@ -13,6 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeSet;
 use std::pin::Pin;
 use std::time::Duration;
 
@@ -61,6 +62,7 @@ pub struct GrpcRouterConfig {
     pub advertised_hostname_template: String,
     pub advertised_grpc_port: u16,
     pub grpc_pylon_dial_addr: String,
+    pub remote_watch_urls: Vec<String>,
     pub target_namespace: String,
     pub connect_timeout: Duration,
     pub watch_heartbeat_interval: Duration,
@@ -72,6 +74,7 @@ pub struct RouterControlPlane {
     advertised_hostname_template: String,
     advertised_grpc_port: u16,
     grpc_pylon_dial_addr: String,
+    remote_watch_urls: Vec<String>,
     target_namespace: String,
     watch_heartbeat_interval: Duration,
     hostname_matcher: Option<HostnameMatcher>,
@@ -89,6 +92,12 @@ impl RouterControlPlane {
             advertised_hostname_template: config.advertised_hostname_template,
             advertised_grpc_port: config.advertised_grpc_port,
             grpc_pylon_dial_addr: config.grpc_pylon_dial_addr,
+            remote_watch_urls: config
+                .remote_watch_urls
+                .into_iter()
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
             target_namespace: config.target_namespace,
             watch_heartbeat_interval: config.watch_heartbeat_interval,
             hostname_matcher,
@@ -101,6 +110,7 @@ impl RouterControlPlane {
         let advertised_hostname_template = self.advertised_hostname_template.clone();
         let advertised_grpc_port = self.advertised_grpc_port;
         let grpc_pylon_dial_addr = self.grpc_pylon_dial_addr.clone();
+        let remote_watch_urls = self.remote_watch_urls.clone();
         let target_namespace = self.target_namespace.clone();
         let watch_heartbeat_interval = self.watch_heartbeat_interval;
         Box::pin(async_stream::try_stream! {
@@ -118,6 +128,7 @@ impl RouterControlPlane {
                         advertised_grpc_port,
                         &grpc_pylon_dial_addr,
                         &target_namespace,
+                        &remote_watch_urls,
                     );
                 }
                 loop {
@@ -139,6 +150,7 @@ impl RouterControlPlane {
                                 advertised_grpc_port,
                                 &grpc_pylon_dial_addr,
                                 &target_namespace,
+                                &remote_watch_urls,
                             );
                         }
                     }
@@ -260,6 +272,7 @@ fn watch_response_from_snapshot(
     advertised_grpc_port: u16,
     grpc_pylon_dial_addr: &str,
     target_namespace: &str,
+    remote_watch_urls: &[String],
 ) -> WatchStargatesResponse {
     let stargates = snapshot
         .ready_targets()
@@ -281,7 +294,7 @@ fn watch_response_from_snapshot(
         .collect();
     WatchStargatesResponse {
         stargates,
-        watch_stargate_urls: Vec::new(),
+        watch_stargate_urls: remote_watch_urls.to_vec(),
     }
 }
 
@@ -533,6 +546,7 @@ mod tests {
             advertised_hostname_template: "{pod_name}.stargate.external".to_string(),
             advertised_grpc_port: 50071,
             grpc_pylon_dial_addr: "https://stargate-router.external:443".to_string(),
+            remote_watch_urls: Vec::new(),
             target_namespace: String::new(),
             connect_timeout: Duration::from_secs(2),
             watch_heartbeat_interval: Duration::from_secs(5),
@@ -614,10 +628,12 @@ mod tests {
         let recorder_b = Recorder::default();
         let fake_a = start_fake_stargate("stargate-0", recorder_a.clone()).await;
         let fake_b = start_fake_stargate("stargate-1", recorder_b.clone()).await;
-        let router = start_router(snapshot(&[
-            ("stargate-0", fake_a.addr),
-            ("stargate-1", fake_b.addr),
-        ]))
+        let mut config = router_config();
+        config.remote_watch_urls = vec!["https://region-b.example.test:50071".to_string()];
+        let router = start_router_with_config(
+            snapshot(&[("stargate-0", fake_a.addr), ("stargate-1", fake_b.addr)]),
+            config,
+        )
         .await;
 
         let mut client = router.client("stargate.stargate-local.svc.cluster.local");
@@ -641,6 +657,10 @@ mod tests {
         assert!(first.stargates.iter().all(|stargate| {
             stargate.grpc_pylon_dial_addr == "https://stargate-router.external:443"
         }));
+        assert_eq!(
+            first.watch_stargate_urls,
+            ["https://region-b.example.test:50071"]
+        );
         assert_eq!(recorder_a.watch_hits.load(Ordering::Relaxed), 0);
         assert_eq!(recorder_b.watch_hits.load(Ordering::Relaxed), 0);
     }
@@ -717,6 +737,7 @@ mod tests {
                     .to_string(),
                 advertised_grpc_port: 50071,
                 grpc_pylon_dial_addr: "https://stargate-router.external:443".to_string(),
+                remote_watch_urls: Vec::new(),
                 target_namespace: "prod".to_string(),
                 connect_timeout: Duration::from_secs(2),
                 watch_heartbeat_interval: Duration::from_secs(5),
