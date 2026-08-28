@@ -649,8 +649,10 @@ nvcf-cli self-hosted \
   --cluster-name <compute-plane-cluster-name>
 ```
 
-Existing LLM function pods keep their current sidecar arguments. Recreate or
-redeploy those functions after refreshing the compute plane.
+Existing LLM function versions retain the worker-sidecar image metadata
+captured when the version is created. Replacing pods or redeploying the same
+version does not apply a new Pylon image. After updating the control plane,
+create and deploy a new function version.
 
 After deploying an LLM function, verify the workload trust bundle. Compare
 only `.data.fingerprint` with `transportTls.trustBundleFingerprint` in the
