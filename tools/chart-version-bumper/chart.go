@@ -41,7 +41,11 @@ var floating = map[string]bool{
 var (
 	appVersionRE = regexp.MustCompile(`(?m)^(appVersion:\s*)"?([^"\s#]+)"?(.*)$`)
 	tagLineRE    = regexp.MustCompile(`^(\s+)tag:\s*"?([^"\s#]*)"?`)
-	keyLineRE    = regexp.MustCompile(`^(\s*)([A-Za-z0-9_.-]+):`)
+	// An image: key carrying a value on the same line, rather than opening a
+	// block. Covers a flow mapping, image: { tag: "1.0.0" }, and a plain scalar
+	// reference, image: registry/name:tag.
+	inlineImageRE = regexp.MustCompile(`(?m)^\s*image:[ \t]*[^ \t\n#].*$`)
+	keyLineRE     = regexp.MustCompile(`^(\s*)([A-Za-z0-9_.-]+):`)
 )
 
 // An imageTag is a tag: entry that sits directly under an image: key, together
@@ -126,6 +130,20 @@ func PlanFor(root string, chart Entry, version string) (Plan, error) {
 
 	var tags []string
 	if vb, err := os.ReadFile(valuesYAML); err == nil {
+		// An image declared inline rather than as a block is refused, not parsed.
+		// imageTags finds nothing in it, which would look identical to a chart
+		// that sets no tag at all: appVersion would move on its own and the
+		// deployed image would stay where it was. A silent half-bump is worse
+		// than a stop, and a YAML parser is a large answer to a shape no chart
+		// here uses.
+		if m := inlineImageRE.FindString(string(vb)); m != "" {
+			return Plan{
+				ActionRefuse,
+				fmt.Sprintf("image is declared inline (%s), so its tag cannot be located", strings.TrimSpace(m)),
+				current,
+				nil,
+			}, nil
+		}
 		for _, it := range imageTags(strings.Split(string(vb), "\n")) {
 			tags = append(tags, it.value)
 		}

@@ -486,3 +486,47 @@ func TestImageTagNestedDeeperIsStillFound(t *testing.T) {
 		t.Fatalf("nested image tag did not move:\n%s", got)
 	}
 }
+
+func TestInlineImageMappingRefusesRatherThanHalfBumping(t *testing.T) {
+	// `image: { tag: "1.0.0" }` is valid YAML that the line scan cannot see. Read
+	// as "no image tag set", appVersion would move on its own and the deployed
+	// image would stay where it was: a chart that looks bumped and is not.
+	for _, values := range []string{
+		`image: { tag: "1.0.0" }`,
+		`image: registry.example/app:1.0.0`,
+		"app:\n  image: { repository: \"r\", tag: \"1.0.0\" }",
+	} {
+		f := newFixture(t, `{"services":[
+		 {"id":"svc","path":"src/svc"},
+		 {"id":"c","path":"deploy/helm/c","deploys":["svc"]}
+		]}`)
+		f.chart(t, "c", "1.0.0", values)
+		before := f.read(t, "c", "Chart.yaml")
+
+		code, _, errOut := f.run(t, "src/svc/v2.0.0", true)
+		if code != RefusedExit {
+			t.Errorf("values %q: want refusal, got exit %d", values, code)
+		}
+		if !strings.Contains(errOut, "declared inline") {
+			t.Errorf("values %q: want the inline reason, got %q", values, errOut)
+		}
+		if after := f.read(t, "c", "Chart.yaml"); after != before {
+			t.Errorf("values %q: appVersion moved despite the refusal:\n%s", values, after)
+		}
+	}
+}
+
+func TestBlockImageIsStillAccepted(t *testing.T) {
+	// The refusal must not catch the ordinary block form, which every chart uses.
+	f := newFixture(t, `{"services":[
+	 {"id":"svc","path":"src/svc"},
+	 {"id":"c","path":"deploy/helm/c","deploys":["svc"]}
+	]}`)
+	f.chart(t, "c", "1.0.0", "image:\n  repository: \"\"\n  tag: \"1.0.0\"")
+	if code, out, errOut := f.run(t, "src/svc/v2.0.0", true); code != 0 {
+		t.Fatalf("block form must still bump, got %d\n%s%s", code, out, errOut)
+	}
+	if got := f.read(t, "c", "values.yaml"); !strings.Contains(got, `tag: "2.0.0"`) {
+		t.Fatalf("image tag did not move:\n%s", got)
+	}
+}
