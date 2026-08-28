@@ -311,7 +311,7 @@ var AllMaintenanceModes = []MaintenanceMode{
 type HealthStatusRequest struct {
 	Status              HealthStatus            `json:"status,omitempty"`
 	UpgradeStatus       NVCAUpgradeStatus       `json:"upgradeStatus,omitempty"`
-	GPUUsage            map[GPUName]GPUResource `json:"gpuUsage,omitempty"`
+	GPUUsage            map[GPUName]GPUResource `json:"gpuUsage"`
 	ClusterOwnerNCAID   string                  `json:"clusterOwnerNcaID,omitempty"`
 	NVCAAgentVersion    string                  `json:"nvcaAgentVersion,omitempty"`
 	NVCAOperatorVersion string                  `json:"nvcaOperatorVersion,omitempty"`

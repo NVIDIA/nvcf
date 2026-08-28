@@ -79,7 +79,7 @@ spec:
       # CronJob, which runs as that SA.
       initContainers:
       - name: cluster-validator
-        image: {{ include "nvcaop.clusterValidatorRepository" (dict "imageRepository" $cv.image.repository "defaultRepository" .Values.image.repository) }}:{{ default .Chart.Version $cv.image.tag }}
+        image: {{ include "nvcaop.clusterValidatorRepository" (dict "imageRepository" $cv.image.repository "defaultRepository" .Values.image.repository) }}:{{ default .Chart.AppVersion $cv.image.tag }}
         imagePullPolicy: {{ $cv.image.pullPolicy }}
         env:
         - name: VALIDATOR_CONFIG_NAMESPACE
@@ -256,7 +256,7 @@ spec:
           - --task-env-overrides-b64
           - {{ $taskEnvOverrides | toJson | b64enc | quote }}
           {{- end }}
-        image: {{ .Values.image.repository }}:{{ default .Chart.Version .Values.image.tag }}
+        image: {{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         securityContext:
           # Set here so openbao injection can copy it upon injection
@@ -302,7 +302,7 @@ spec:
             cpu: {{ ((((.Values.agent).resources).limits).cpu) | default "500m" | quote }}
             memory: {{ ((((.Values.agent).resources).limits).memory) | default "500Mi" | quote }}
       - name: nvca-mirror
-        image: {{ .Values.image.repository }}:{{ default .Chart.Version .Values.image.tag }}
+        image: {{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         securityContext:
           runAsUser: 1000

@@ -15,30 +15,46 @@ ML-framework operators (Grove, Dynamo) onto GPU clusters registered with an NVCF
 ## Quickstart
 
 ```sh
-# 1. Register the cluster with ICMS (idempotent)
+# 1. Export the control-plane profile from the self-managed control-plane stack.
+nvcf-cli self-hosted \
+  --control-plane-stack ../self-managed \
+  control-plane profile export
+
+# 2. Initialize the CLI config used for registration.
+nvcf-cli --config <path-to-config> init
+
+# 3. Register the cluster with the generated profile.
 make register-cluster \
   CLUSTER_NAME=gpu-east \
-  NCA_ID=nvcf-default \
   CLUSTER_REGION=us-west-1 \
-  ICMS_URL=https://sis.your-nvcf.example.com
+  NVCF_CLI_CONFIG=<path-to-config>
 
-# 2. Deploy the compute plane
+# 4. Deploy the compute plane.
 make install \
   CLUSTER_NAME=gpu-east \
   HELMFILE_ENV=<env>
 ```
 
-Repeat steps 1-2 for each GPU cluster (see [this example](#multi-cluster-example)).
+Repeat steps 1 and 3 for each GPU cluster (see [this example](#multi-cluster-example)).
 The `CLUSTER_NAME` variable scopes all state to
 that cluster so multiple clusters can be managed from a single checkout.
 `register-cluster` writes `registration/<cluster>-register-values.yaml`.
 `install`, `apply`, and `template` copy that file into `out/` before running
 Helmfile.
 
-`HELMFILE_ENV` maps to `environments/<env>.yaml`. Source checkouts include a
-`local` environment for development. Release archives ship `base.yaml`; create
-an environment file for your registry and service endpoints, then pass its name
-without the `.yaml` suffix.
+By default, `register-cluster` reads
+`../self-managed/out/control-plane-profile.yaml`. Set
+`CONTROL_PLANE_PROFILE=/path/to/control-plane-profile.yaml` when the control
+and compute stacks are not sibling directories. The profile is the canonical
+handoff for account identity, service endpoints, Host overrides, and transport
+trust. Set `NVCF_CLI_CONFIG` when registration must use a non-default CLI
+config. The Makefile forwards the path to `nvcf-cli` but does not run `init`.
+
+`HELMFILE_ENV` maps to `environments/<env>.yaml`. Create that environment file
+with the artifact registry and any deployment-specific overrides before
+installing. Local-development guides provide canonical fixtures rather than an
+implicit `local.yaml`. Release archives ship `base.yaml`; pass the environment
+name without the `.yaml` suffix.
 
 ## Observability
 

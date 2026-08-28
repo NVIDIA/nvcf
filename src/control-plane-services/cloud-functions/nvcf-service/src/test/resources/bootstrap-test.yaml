@@ -15,6 +15,7 @@
 spring:
   application:
     env: test
+    region: test
     host:
       dc: region-1
 

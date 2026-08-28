@@ -426,14 +426,25 @@ func (c *GatewayConfig) validateVanityConfig() error {
 }
 
 func SetupConfigWithConfigPath(path string) (rc.ReloadableConfig[GatewayConfig], error) {
-	config, err := rc.SetupConfig[GatewayConfig](path,
+	return SetupConfigWithConfigPathAndTimeout(path, 0)
+}
+
+func SetupConfigWithConfigPathAndTimeout(path string, loadTimeout time.Duration) (rc.ReloadableConfig[GatewayConfig], error) {
+	opts := []rc.ConfigOption[GatewayConfig]{
 		rc.WithValidateFunc(func(c *GatewayConfig) error {
 			return c.Validate()
 		}),
 		rc.WithPostLoadFunc(func(c *GatewayConfig) error {
 			notifySharedReload()
 			return nil
-		}))
+		}),
+	}
+	if loadTimeout > 0 {
+		opts = append(opts, rc.WithInitialLoadTimeout[GatewayConfig](loadTimeout))
+	}
+
+	config, err := rc.SetupConfig[GatewayConfig](path,
+		opts...)
 	return config, err
 }
 

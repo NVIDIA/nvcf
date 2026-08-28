@@ -181,7 +181,7 @@ publications:
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-llm-request-router
-    version: 1.6.6
+    version: 1.10.0
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-nats-auth-callout-service
@@ -233,7 +233,7 @@ publications:
     registry: public-helm
     chart_format: http
   - name: nvcf-gateway-routes
-    version: 1.15.0
+    version: 1.16.0
     registry: public-helm
     chart_format: http
   - name: nvcf-container-cache
@@ -805,7 +805,7 @@ artifacts:
   - name: helm-nvcf-llm-request-router
     type: chart
     registry: staging
-    version: 1.6.6
+    version: 1.10.0
   - name: helm-nvcf-nats-auth-callout-service
     type: chart
     registry: staging
@@ -881,7 +881,7 @@ artifacts:
   - name: nvcf-gateway-routes
     type: chart
     registry: staging
-    version: 1.15.0
+    version: 1.16.0
   - name: nvcf-grpc-proxy
     type: image
     registry: staging

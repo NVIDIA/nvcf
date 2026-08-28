@@ -159,6 +159,7 @@ func TestRenderOtelConfigWithMetricSubsetPipeline(t *testing.T) {
 		"memory_limiter",
 		metricSubsetFilterProcessorID,
 		"resource",
+		workloadMetricsDropLabelsProcessorID,
 		"metrics_transform",
 		metricSubsetBatchProcessorID,
 	}, otelConfig.Service.Pipelines["metrics/metric_subset"].Processors)
@@ -856,7 +857,7 @@ func TestGenerateExportersAndServiceAddsMetricSubsetPipeline(t *testing.T) {
 			FilterConfig: filterConfig,
 		},
 		WorkloadMetrics: WorkloadMetricsConfig{
-			DropLabels: []string{"metric_subset_enabled"},
+			DropLabels: []string{"metric_subset_enabled", "custom_label"},
 		},
 	})
 
@@ -888,6 +889,10 @@ func TestGenerateExportersAndServiceAddsMetricSubsetPipeline(t *testing.T) {
 				"key":    "metric_subset_enabled",
 				"action": "delete",
 			},
+			{
+				"key":    "custom_label",
+				"action": "delete",
+			},
 		},
 	}, otelConfig.Processors[workloadMetricsDropLabelsProcessorID])
 
@@ -898,6 +903,7 @@ func TestGenerateExportersAndServiceAddsMetricSubsetPipeline(t *testing.T) {
 		"memory_limiter",
 		metricSubsetFilterProcessorID,
 		"resource",
+		workloadMetricsDropLabelsProcessorID,
 		"metrics_transform",
 		metricSubsetBatchProcessorID,
 	}, metricSubsetPipeline.Processors)

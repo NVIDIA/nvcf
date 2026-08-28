@@ -64,6 +64,14 @@ helmDefaults:
   createNamespace: true
   devel: true
   timeout: 900
+  # deleteWait/deleteTimeout govern `helm uninstall` (helmfile destroy), which
+  # is a separate code path from timeout/wait above (those only apply to
+  # install/upgrade). Without them, `helm uninstall` gets no --timeout flag at
+  # all and falls back to Helm's 5m hook-wait default, well under the
+  # nvca-operator pre-delete hook's ~10m worst-case cordon-and-drain budget
+  # (see deployments/nvca-operator/values.yaml gracefulShutdown.cleanupTimeoutSeconds).
+  deleteWait: true
+  deleteTimeout: 900
   wait: true
   waitForJobs: true
   diffArgs:

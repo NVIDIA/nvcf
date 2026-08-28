@@ -20,6 +20,14 @@ meaningful target, value, context, and timeout visible while hiding only
 command or output-format mechanics. Keep `When I run command` plus an
 assertion as the escape hatch for uncommon or command-specific behavior.
 
+Function lifecycle steps are a narrow command-adapter exception. They store
+only the selected `nvcf-cli` config, pass visible arguments to one CLI command,
+and preserve the real command result. They do not store function identity,
+apply defaults, parse or normalize product values, or enforce product
+preconditions. Their `successfully` wording asserts exit code 0 to keep happy
+paths compact. Use raw command steps for negative and exit-code-specific cases
+so `nvcf-cli` and the NVCF API remain the product-validation boundary.
+
 ## Layering
 
 - `harness/` owns suite lifecycle: `Config`, `CommandRunner`, `Ledger`,
@@ -44,6 +52,13 @@ logic into `dsl/`.
 - `${VAR}` interpolation is the only env-var form the DSL recognizes;
   a bare `$word` is left literal. Implementations must not use
   `os.ExpandEnv`. Expansion lives in `dsl.Interpolate`.
+- Function lifecycle CLI option tables preserve row order, repeated options,
+  empty values, and product-invalid values. Only the `option | value` table
+  structure is validated before the command runs.
+- Gateway API route readiness tables expose each route's kind, name,
+  namespace, and intended Gateway parent plus the shared context and timeout.
+  The step requires `Accepted=True` and `ResolvedRefs=True` for that parent but
+  does not allowlist route kinds or duplicate Gateway API validation.
 - File-mutating steps (`I copy the file`, `I update yaml file`,
   `I prepare self-managed secrets file`, `I substitute a block`)
   snapshot the destination through `Suite.Ledger` before the first write.
@@ -88,6 +103,11 @@ logic into `dsl/`.
   token never appears in argv or per-command logs. Do not introduce
   step handlers that capture secrets into env vars; relying on the
   state file keeps the JWT out of `<seq>.cmd` lines.
+- The live runner installs SIGINT and SIGTERM cleanup before scenarios run.
+  Interrupt cleanup cancels the active step and its Unix process group, waits
+  for that step to stop writing, then restores the same file and environment
+  ledgers while preventing later steps from starting. Ledger-backed generated
+  registry credentials must not remain after an interrupted run.
 - Pre-suite destructive cleanup is governed by the single env var
   `BDD_CLEANUP_MODE`. Valid values: `stack-single`, `stack-multi`,
   `topology-single`, `topology-multi`, or unset. Unknown values fail
@@ -123,13 +143,13 @@ logic into `dsl/`.
   deletion that catches topology infrastructure (`eg` in
   `envoy-gateway-system`, the namespace itself, `cert-manager`).
 
-## CLI vs Helmfile install paths (two intentionally distinct workflows)
+## CLI vs Helmfile install paths
 
-The suite exercises two operator workflows that share a stack but
-differ in how endpoint URLs reach the worker layer. Future changes
-to either path should respect the boundary; do not introduce a
-profile dependency into the Helmfile path or a values-file
-dependency into the CLI path.
+The suite exercises two operator workflows that share a stack but differ in
+how the control plane is installed. Future changes must keep the CLI install
+path independent of authored Helmfile values. They must also preserve the
+exported-profile handoff from a Helmfile control-plane install into compute
+registration.
 
 - CLI path (`single-cluster-up.feature`, `multi-cluster-up.feature`)
   is profile-driven. `nvcf-cli self-hosted install --control-plane`
@@ -140,15 +160,19 @@ dependency into the CLI path.
   kube-context, probes JWKS, and emits a values file with the right
   URLs already baked in. The profile is the single source of truth.
 
-- Helmfile path (`single-cluster-helmfile.feature`,
-  `multi-cluster-helmfile.feature`) is values-driven. The operator
-  authors `environments/<env>.yaml` carrying the URLs they want;
-  `make install` runs helmfile sync; `make register-cluster`
-  (older `nvcf-cli cluster register`) calls ICMS with name + nca +
-  region, auto-discovers JWKS from the CURRENT kubectl context,
-  and writes a values file from the ICMS response. There is no
-  profile in this path. Operators are responsible for putting the
-  topology-correct URLs in their environment file.
+- Helmfile control-plane install is values-driven. The operator authors
+  `environments/<env>.yaml`, and `make install` runs Helmfile sync. Before
+  compute registration, export the selected installed environment with
+  `self-hosted --control-plane-stack <path> --env <env> control-plane
+  profile export`. The compute-plane `make register-cluster` target consumes
+  that file through `CONTROL_PLANE_PROFILE` and passes it to `self-hosted
+  compute-plane register`. Run `nvcf-cli init` explicitly before registration.
+  `NVCF_CLI_CONFIG` is optional and only selects the config and state files the
+  registration command reads; the Make target does not run `init`. In a local
+  single-cluster flow, omit both persistent CLI context flags during profile
+  export because the CLI requires either a valid split-cluster pair or neither.
+  Pass `COMPUTE_KUBE_CONTEXT=k3d-ncp-local` to the compute target so registration
+  probes the intended cluster.
 
 For multi-cluster Helmfile the BDD fixture
 `fixtures/self-managed-local-bdd-multi.yaml` carries the same
@@ -171,14 +195,15 @@ multi-cluster feature:
    refused` against an in-cluster hostname.
 
 2. Wrong kubectl context when `make register-cluster` runs. The
-   `nvcf-cli cluster register` command auto-discovers OIDC issuer
-   and JWKS from the CURRENT context by spawning a probe Job in
-   that cluster, then registers that identity with ICMS. If the
+   `self-hosted compute-plane register` command discovers OIDC issuer
+   and JWKS from its selected compute context, then registers that
+   identity with ICMS. If the
    context is the cp cluster, ICMS records the cp cluster's JWKS
    for the compute cluster's row. The compute cluster's NVCA agent
    then 401s against ICMS at runtime ("Signed JWT rejected:
    ... no matching key(s) found"). Switch the context to the
-   compute cluster BEFORE `make register-cluster`, not after.
+   compute context explicitly through `COMPUTE_KUBE_CONTEXT` (or a
+   compute-scoped kubeconfig) before `make register-cluster`, not after.
 
 ## Tests
 

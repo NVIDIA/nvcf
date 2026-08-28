@@ -34,7 +34,7 @@ public class DistributedLockConfiguration {
     public LockProvider lockProvider(
             CqlSession cqlSession,
             // higher quorum for cross region locks
-            @Value("${nvcf.scheduled-tasks.lock-consistency:EACH_QUORUM}") DefaultConsistencyLevel consistencyLevel) {
+            @Value("${nvcf.scheduler.lock.consistency:EACH_QUORUM}") DefaultConsistencyLevel consistencyLevel) {
         return new CassandraLockProvider(
                 CassandraLockProvider.Configuration.builder()
                         .withCqlSession(cqlSession)

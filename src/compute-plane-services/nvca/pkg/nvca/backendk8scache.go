@@ -745,6 +745,15 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 			}
 		}
 
+		// One-time migration for clusters that already had the intra-namespace
+		// egress policy in the shared pod-instance namespace before it was scoped
+		// out; ensureNetworkPolicies above does not remove it on its own. Best
+		// effort: failing to remove a leftover policy should not block agent
+		// startup, since it does not affect the agent's ability to operate.
+		if err := k8sutil.RemoveLegacyIntraNamespaceEgressPolicy(ctx, c.podInstanceNamespace, c.clients.K8s); err != nil {
+			log.WithError(err).Warnf("failed to remove legacy NetworkPolicy in namespace %s", c.podInstanceNamespace)
+		}
+
 		// add configMapInformers for Network Policy for k8s backend only
 		if err := addConfigMapInformers(ctx, c); err != nil {
 			return nil, nil, err
@@ -1530,6 +1539,9 @@ func (c *BackendK8sCache) GetNodeInformer() cache.SharedIndexInformer {
 
 func (c *BackendK8sCache) GetComponentStatus(ctx context.Context) (hs types.AgentHealth, err error) {
 	hs.GPUUsage, err = c.getGPUUsageStats(ctx)
+	if hs.GPUUsage == nil {
+		hs.GPUUsage = map[nvcatypes.GPUName]nvcatypes.GPUResource{}
+	}
 	hs.Status = types.HealthStatusHealthy
 	ch := types.ComponentHealth{
 		Status:      types.HealthStatusHealthy,
@@ -1725,13 +1737,14 @@ func (c *BackendK8sCache) getGPUUsageStats(ctx context.Context) (map[nvcatypes.G
 			continue
 		}
 		for _, it := range regGPU.InstanceTypes {
-			if strings.HasSuffix(it.Name, "_1x") {
-				res := gpuUtil[nvcatypes.GPUName(regGPU.Name)]
-				res.Capacity += it.MaxInstances * it.GPUCount
-				res.Allocated += allocatedGPUs[it.Value]
-				gpuUtil[nvcatypes.GPUName(regGPU.Name)] = res
-				break
+			if it.NodeType != nvcatypes.RegistrationInstanceTypeNodeTypeSingle {
+				continue
 			}
+			res := gpuUtil[nvcatypes.GPUName(regGPU.Name)]
+			res.Capacity += it.MaxInstances * it.GPUCount
+			res.Allocated += allocatedGPUs[it.Value]
+			gpuUtil[nvcatypes.GPUName(regGPU.Name)] = res
+			break
 		}
 	}
 	return gpuUtil, nil

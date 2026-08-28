@@ -38,9 +38,13 @@ import (
 	"ai-api-gateway-service/gateway"
 	gatewayConfig "ai-api-gateway-service/gateway_config"
 
+	"github.com/NVIDIA/nvcf-go/pkg/nvkit/config"
 	"github.com/go-logr/zapr"
 	"github.com/goccy/go-json"
 	"github.com/magiconair/properties/assert"
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"golang.org/x/net/http2"
@@ -2286,5 +2290,39 @@ func testShadowCancelledOnClientDisconnect(t *testing.T, _ http.Client) {
 
 		// Shadow should be cancelled because the client disconnected
 		waitForSlowShadowSignal(t, &slowShadowCanceledSignal, "shadow was not cancelled after client disconnect")
+	})
+}
+
+func TestConfigDecodesMappingLoadTimeout(t *testing.T) {
+	decode := func(t *testing.T) (gateway.Config, error) {
+		cmd := &cobra.Command{Use: "gateway"}
+		registerConfigFlags(cmd)
+		v, err := config.InitConfig(cmd, "", "", "")
+		if err != nil {
+			return gateway.Config{}, err
+		}
+		cmd.Flags().VisitAll(func(f *pflag.Flag) { v.MustBindEnv(f.Name) })
+		c := gateway.Config{}
+		return c, v.Unmarshal(&c)
+	}
+
+	t.Run("unset falls through to the service default", func(t *testing.T) {
+		c, err := decode(t)
+		require.NoError(t, err)
+		require.Equal(t, time.Duration(0), c.MappingLoadTimeout)
+	})
+
+	t.Run("duration string is converted", func(t *testing.T) {
+		t.Setenv("MAPPING_LOAD_TIMEOUT", "2m")
+		c, err := decode(t)
+		require.NoError(t, err)
+		require.Equal(t, 2*time.Minute, c.MappingLoadTimeout)
+	})
+
+	t.Run("value without a unit is rejected", func(t *testing.T) {
+		t.Setenv("MAPPING_LOAD_TIMEOUT", "120")
+		_, err := decode(t)
+		require.ErrorContains(t, err, "MAPPING_LOAD_TIMEOUT")
+		require.ErrorContains(t, err, "missing unit in duration")
 	})
 }

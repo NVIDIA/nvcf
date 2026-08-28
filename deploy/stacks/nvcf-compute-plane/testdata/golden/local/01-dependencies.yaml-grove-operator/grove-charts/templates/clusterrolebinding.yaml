@@ -5,7 +5,7 @@ kind: ClusterRoleBinding
 metadata:
   name: grove:system:grove-operator
   labels:
-    chart: "grove-charts-v0.1.0-alpha.11"
+    chart: "grove-charts-v0.1.0-alpha.12"
     release: "grove-operator"
     app.kubernetes.io/component: operator-clusterrolebinding
     app.kubernetes.io/name: grove-operator
