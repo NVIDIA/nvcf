@@ -97,6 +97,24 @@ func TestMakeStorageRequests_BackendHandling(t *testing.T) {
 		assert.Empty(t, sts, "cacheLaunchRequested gates durable backends like the ephemeral path")
 	})
 
+	t.Run("none backend emits no ModelCacheRequest", func(t *testing.T) {
+		// SelectHelmCacheBackend returns None when CachingSupport or the
+		// HelmModelCaching sub-gate is off; a valid cache spec must still
+		// produce no ModelCacheRequest.
+		icmsReq := &nvcav2beta1.ICMSRequest{}
+		icmsReq.Spec.Action = common.FunctionCreationAction
+		icmsReq.Spec.CreationMsgInfo.FunctionLaunchSpecification = &function.LaunchSpecification{
+			CacheLaunchSpecification: &common.CacheLaunchSpecification{
+				CacheArtifacts: true,
+				CacheHandle:    "h1",
+				CacheSize:      262144000,
+			},
+		}
+		sts, err := r.makeStorageRequests(icmsReq, nil, job, pvc, nvcastorage.HelmCacheBackendNone)
+		require.NoError(t, err)
+		assert.Empty(t, sts)
+	})
+
 	t.Run("ephemeral backend emits no ModelCacheRequest", func(t *testing.T) {
 		icmsReq := &nvcav2beta1.ICMSRequest{}
 		icmsReq.Spec.Action = common.FunctionCreationAction
