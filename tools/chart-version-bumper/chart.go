@@ -40,8 +40,46 @@ var floating = map[string]bool{
 // style across the whole file for the sake of one value.
 var (
 	appVersionRE = regexp.MustCompile(`(?m)^(appVersion:\s*)"?([^"\s#]+)"?(.*)$`)
-	tagRE        = regexp.MustCompile(`(?m)^\s+tag:\s*"?([^"\s#]*)"?`)
+	tagLineRE    = regexp.MustCompile(`^(\s+)tag:\s*"?([^"\s#]*)"?`)
+	keyLineRE    = regexp.MustCompile(`^(\s*)([A-Za-z0-9_.-]+):`)
 )
+
+// An imageTag is a tag: entry that sits directly under an image: key, together
+// with the line it was found on.
+type imageTag struct {
+	line  int
+	value string
+}
+
+// imageTags returns the tag: entries that belong to an image block.
+//
+// Matching every indented tag: key instead would reach unrelated fields. A
+// values.yaml may carry a tag: that is not an image tag at all, and one of those
+// holding the same string as appVersion would be selected and rewritten, while
+// one holding something else could refuse a chart whose image tag was fine.
+// Ownership is decided by where the key sits, not by what it is called.
+func imageTags(lines []string) []imageTag {
+	var out []imageTag
+	for i, l := range lines {
+		m := tagLineRE.FindStringSubmatch(l)
+		if m == nil || m[2] == "" {
+			continue
+		}
+		indent := len(m[1])
+		// The nearest preceding key at a smaller indent is this key's parent.
+		for j := i - 1; j >= 0; j-- {
+			pm := keyLineRE.FindStringSubmatch(lines[j])
+			if pm == nil || len(pm[1]) >= indent {
+				continue
+			}
+			if pm[2] == "image" {
+				out = append(out, imageTag{line: i, value: m[2]})
+			}
+			break
+		}
+	}
+	return out
+}
 
 // A Plan is what to do for one chart.
 type Plan struct {
@@ -88,10 +126,8 @@ func PlanFor(root string, chart Entry, version string) (Plan, error) {
 
 	var tags []string
 	if vb, err := os.ReadFile(valuesYAML); err == nil {
-		for _, hit := range tagRE.FindAllStringSubmatch(string(vb), -1) {
-			if hit[1] != "" {
-				tags = append(tags, hit[1])
-			}
+		for _, it := range imageTags(strings.Split(string(vb), "\n")) {
+			tags = append(tags, it.value)
 		}
 	} else if !os.IsNotExist(err) {
 		return Plan{}, fmt.Errorf("read %s: %w", valuesYAML, err)
@@ -179,9 +215,19 @@ func Apply(root string, chart Entry, version string, p Plan) error {
 	// Replace only tag lines holding the value appVersion also held. Any other
 	// tag in this file belongs to a different image, and moving it would point
 	// a sidecar at a version that was never built for it.
-	matching := regexp.MustCompile(`(?m)^(\s+tag:\s*)"?` + regexp.QuoteMeta(current) + `"?(\s*(?:#.*)?)$`)
-	out := matching.ReplaceAllString(string(vb), fmt.Sprintf(`${1}"%s"${2}`, version))
-	return writeFilePreservingMode(valuesYAML, out)
+	// Rewrite by line, and only lines imageTags identified. A regex over the
+	// whole file would reach a tag: outside an image block that happens to hold
+	// the same value.
+	lines := strings.Split(string(vb), "\n")
+	for _, it := range imageTags(lines) {
+		if it.value != current {
+			continue
+		}
+		m := tagLineRE.FindStringSubmatch(lines[it.line])
+		suffix := lines[it.line][len(m[0]):]
+		lines[it.line] = fmt.Sprintf("%stag: %q%s", m[1], version, suffix)
+	}
+	return writeFilePreservingMode(valuesYAML, strings.Join(lines, "\n"))
 }
 
 func writeFilePreservingMode(path, content string) error {

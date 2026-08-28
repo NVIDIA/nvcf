@@ -428,3 +428,61 @@ func TestAMissingValuesFileLeavesChartYamlAlone(t *testing.T) {
 		t.Fatalf("Chart.yaml was written despite the failure:\nbefore:\n%s\nafter:\n%s", before, after)
 	}
 }
+
+func TestNonImageTagIsNotTreatedAsAnImageTag(t *testing.T) {
+	// A tag: outside an image block is not an image tag. Matching every
+	// indented tag: key would select this one, because its value equals
+	// appVersion, and rewrite a field that has nothing to do with the image.
+	f := newFixture(t, `{"services":[
+	 {"id":"svc","path":"src/svc"},
+	 {"id":"c","path":"deploy/helm/c","deploys":["svc"]}
+	]}`)
+	f.chart(t, "c", "1.0.0",
+		"release:\n  tag: \"1.0.0\"\nimage:\n  tag: \"1.0.0\"")
+
+	if code, out, errOut := f.run(t, "src/svc/v2.0.0", true); code != 0 {
+		t.Fatalf("one image tag means an unambiguous bump, got %d\n%s%s", code, out, errOut)
+	}
+	values := f.read(t, "c", "values.yaml")
+	if !strings.Contains(values, "release:\n  tag: \"1.0.0\"") {
+		t.Fatalf("the non-image tag must be left alone:\n%s", values)
+	}
+	if !strings.Contains(values, "image:\n  tag: \"2.0.0\"") {
+		t.Fatalf("the image tag should have moved:\n%s", values)
+	}
+}
+
+func TestNonImageTagDoesNotCauseAFalseRefusal(t *testing.T) {
+	// The other direction. A non-image tag holding something else would look
+	// like a second image, and the chart would be refused as ambiguous even
+	// though its only real image tag agrees with appVersion.
+	f := newFixture(t, `{"services":[
+	 {"id":"svc","path":"src/svc"},
+	 {"id":"c","path":"deploy/helm/c","deploys":["svc"]}
+	]}`)
+	f.chart(t, "c", "1.0.0",
+		"metadata:\n  tag: \"someLabel\"\nimage:\n  tag: \"1.0.0\"")
+
+	code, out, errOut := f.run(t, "src/svc/v2.0.0", false)
+	if code != 0 {
+		t.Fatalf("want a clean plan, got exit %d\n%s%s", code, out, errOut)
+	}
+	if !strings.Contains(out, "appVersion and image tag agree") {
+		t.Fatalf("want the agreement plan:\n%s", out)
+	}
+}
+
+func TestImageTagNestedDeeperIsStillFound(t *testing.T) {
+	// The image block is often nested under a component key.
+	f := newFixture(t, `{"services":[
+	 {"id":"svc","path":"src/svc"},
+	 {"id":"c","path":"deploy/helm/c","deploys":["svc"]}
+	]}`)
+	f.chart(t, "c", "1.0.0", "app:\n  image:\n    repository: \"\"\n    tag: \"1.0.0\"")
+	if code, out, errOut := f.run(t, "src/svc/v2.0.0", true); code != 0 {
+		t.Fatalf("want a clean bump, got %d\n%s%s", code, out, errOut)
+	}
+	if got := f.read(t, "c", "values.yaml"); !strings.Contains(got, `    tag: "2.0.0"`) {
+		t.Fatalf("nested image tag did not move:\n%s", got)
+	}
+}
