@@ -30,7 +30,7 @@ Feature: Install a local single-cluster NVCF stack with PKI-secured LLM transpor
         | global.imagePullSecrets[0].name               | nvcr-pull-secret                                                         |
         | global.helm.sources.repository                | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                     |
         | global.image.repository                       | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                     |
-        | api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE | nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/stargate-client:0.2.0       |
+        | api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE | nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/pylon:0.14.1                |
         | addons.llm.requestRouter.chartPath             | ../../../helm/llm-request-router/llm-request-router                      |
         | addons.llm.pki.enabled                         | true                                                                      |
         | addons.llm.pki.dnsNames[0]                     | llm-request-router.nvcf.svc.cluster.local                                |

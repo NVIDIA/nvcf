@@ -477,7 +477,7 @@ assert_manifest_arg() {
     fail "published request-router chart did not render argument $expected"
 }
 
-assert_manifest_arg '--grpc-pylon-dial-addr=llm-grpc.example.com:50071'
+assert_manifest_arg '--grpc-pylon-dial-addr=https://llm-grpc.example.com:50071'
 assert_manifest_arg '--reverse-tunnel-pylon-dial-addr=llm-quic.example.com:50072'
 assert_manifest_arg '--tls-cert-path=/etc/stargate/tls/tls.crt'
 assert_manifest_arg '--tls-key-path=/etc/stargate/tls/tls.key'

@@ -116,6 +116,18 @@ published_source_args=(
   --state-values-set-string "global.helm.sources.repository=$published_chart_repository"
 )
 published_values_args=(
+  --state-values-set-string global.workerEndpoints.llmRequestRouterAddress=https://llm-grpc.example.com:50071
+  --state-values-set addons.llm.enabled=true
+  --state-values-set addons.llm.pki.enabled=true
+  --state-values-set addons.llm.pki.allowedDomains=cluster.local
+  --state-values-set-string addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress=https://llm-grpc.example.com:50071
+  --state-values-set-string addons.llm.requestRouter.backendRouter.pylonReverseTunnelDialAddress=llm-quic.example.com:50072
+  --state-values-set addons.llm.requestRouter.grpcTls.enabled=true
+  --state-values-set addons.llm.requestRouter.grpcTls.mode=certManager
+  --state-values-set addons.llm.requestRouter.grpcTls.secretName=llm-grpc-tls
+  --state-values-set addons.llm.requestRouter.grpcTls.dnsNames[0]=llm-grpc.example.com
+  --state-values-set addons.llm.requestRouter.grpcTls.issuerRef.kind=ClusterIssuer
+  --state-values-set addons.llm.requestRouter.grpcTls.issuerRef.name=nvcf-openbao-pki
   --state-values-set ingress.gatewayApi.enabled=true
   --state-values-set ingress.gatewayApi.controllerNamespace=gateway
   --state-values-set ingress.gatewayApi.gateways.shared.name=shared-gw
@@ -181,7 +193,7 @@ assert_route_contract() {
     fail "$kind/$name selected the wrong backend port"
 }
 
-assert_route_contract TCPRoute llm-worker-grpc llm-grpc-gw llm-grpc 50071
+assert_route_contract GRPCRoute llm-worker-grpc llm-grpc-gw llm-grpc 50071
 assert_route_contract UDPRoute llm-worker-quic llm-quic-gw llm-quic 50072
 
 echo "gateway-routes-local-chart: all checks passed"
