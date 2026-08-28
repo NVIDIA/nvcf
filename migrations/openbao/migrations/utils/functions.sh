@@ -149,8 +149,9 @@ function is_kv_upgrade_window_error() {
 # and its call sites in enable_secrets_mount if OpenBao ports the upstream
 # synchronous-upgrade fix (vault-plugin-secrets-kv v0.26.0).
 #
-# Probes the mount's config endpoint (behind the same upgrade gate as the
-# data handlers), backing off 1s up to 10s. Non-window errors are left
+# Probes the mount's config path, not the data path; both are gated by
+# the same upgrade check, so a successful config read implies the data
+# path is serving. Backs off 1s up to 10s. Non-window errors are left
 # for the caller's next operation to surface.
 #
 # @param mount_path The mount path of the kv-v2 secrets engine
@@ -201,8 +202,9 @@ function enable_secrets_mount() {
     secrets_mounts=$(bao secrets list -format=json 2>/dev/null) || true
     if [[ "$secrets_mounts" == *"\"${mount_path}/\""* ]]; then
         log_info "$mount_type secrets engine already mounted at path '$mount_path'"
-        # A re-run can find the mount still mid-upgrade (the upgrade re-runs
-        # on every server restart), so wait here too.
+        # A rerun can find a kv-v2 mount already registered while its
+        # initial storage upgrade is still in progress or incomplete, so
+        # wait here too.
         if [[ "$mount_type" == "kv-v2" ]]; then
             wait_kv_v2_mount_data_path_ready "$mount_path" || return 1
         fi
