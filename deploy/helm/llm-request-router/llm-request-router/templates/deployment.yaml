@@ -17,6 +17,7 @@
 {{- if not (has $workloadKind (list "Deployment" "StatefulSet")) -}}
 {{- fail (printf "llmRequestRouter.workload.kind must be Deployment or StatefulSet, got %q" $workloadKind) -}}
 {{- end }}
+{{- include "llm-request-router.validateRemoteWatchUrls" . }}
 apiVersion: apps/v1
 kind: {{ $workloadKind }}
 metadata:
@@ -123,6 +124,12 @@ spec:
             {{- end }}
             {{- with dig "discovery" "watchHeartbeatMs" "" .Values.llmRequestRouter }}
             - --watch-heartbeat-ms={{ . }}
+            {{- end }}
+            {{- range .Values.llmRequestRouter.discovery.remoteWatchUrls }}
+            - --remote-stargate-url={{ . }}
+            {{- end }}
+            {{- if .Values.llmRequestRouter.discovery.allowInsecureRemoteWatchHttp }}
+            - --allow-insecure-remote-watch-http
             {{- end }}
             - --shutdown-drain-timeout-ms={{ .Values.llmRequestRouter.shutdown.drainTimeoutMs }}
             - --quic-connect-timeout-ms={{ .Values.llmRequestRouter.transport.quicConnectTimeoutMs }}

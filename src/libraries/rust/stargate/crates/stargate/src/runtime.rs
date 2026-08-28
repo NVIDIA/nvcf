@@ -23,7 +23,7 @@ use anyhow::{Context, Result, ensure};
 use tracing::info;
 
 use stargate_forwarding::ForwardingResolver;
-use stargate_protocol::BackendConnectivity;
+use stargate_protocol::{BackendConnectivity, parse_explicit_http_uri};
 pub use stargate_runtime::CriticalTaskFailure;
 use stargate_runtime::CriticalTaskGroup;
 
@@ -240,6 +240,18 @@ impl StargateRuntime {
     }
 
     pub async fn start(self) -> Result<StargateHandle> {
+        if let Some(grpc_pylon_dial_addr) = self
+            .config
+            .grpc_pylon_dial_addr
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            ensure!(
+                parse_explicit_http_uri(grpc_pylon_dial_addr).is_ok(),
+                "Pylon gRPC dial address must be an explicit http:// or https:// URI"
+            );
+        }
         let grpc_listen_addr = self.listeners.grpc_addr();
         let model_discovery_listen_addr = self.listeners.model_discovery_addr();
         let http_listen_addr = self.listeners.http_addr();
@@ -668,6 +680,41 @@ mod tests {
         };
 
         assert!(error.to_string().contains("gRPC"));
+    }
+
+    #[tokio::test]
+    async fn runtime_rejects_a_scheme_less_pylon_grpc_dial_override() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+        let active_calls = Arc::new(AtomicUsize::new(0));
+        let mut config = test_runtime_config("test-invalid-pylon-grpc-dial");
+        config.grpc_pylon_dial_addr = Some("stargate-router.example:443".to_string());
+        let listeners =
+            BoundStargateListeners::bind(&mut config).expect("test listeners should bind");
+        let runtime = StargateRuntime::new(
+            config,
+            Box::new(BlockingDiscovery {
+                active_calls,
+                self_info: StargateInfo::default(),
+            }),
+            listeners,
+            None,
+        );
+
+        let error = match runtime.start().await {
+            Ok(handle) => {
+                handle.begin_shutdown();
+                let _ = handle.wait_for_shutdown(Duration::from_secs(2)).await;
+                panic!("scheme-less Pylon gRPC dial override should fail startup")
+            }
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("Pylon gRPC dial address must be an explicit http:// or https:// URI"),
+            "unexpected error: {error}"
+        );
     }
 
     #[tokio::test]

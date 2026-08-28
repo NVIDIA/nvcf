@@ -22,8 +22,10 @@ use tokio_util::sync::CancellationToken;
 
 use stargate_proto::pb::stargate_control_plane_client::StargateControlPlaneClient;
 use stargate_proto::pb::{WatchStargatesRequest, WatchStargatesResponse};
+use stargate_protocol::parse_explicit_http_uri;
 
 use stargate_runtime::{OwnedTask, TASK_SHUTDOWN_TIMEOUT};
+use tracing::warn;
 
 use super::grpc_endpoint::{StargateGrpcEndpoint, log_stargate_grpc_connect_attempt};
 use super::topology::{RegistrationRouterTopology, publish_registration_router_topology};
@@ -239,7 +241,7 @@ pub(super) fn apply_watch_endpoint_update(
 }
 
 pub(super) fn watch_endpoint_snapshot_from_response(
-    _watch_url: &str,
+    watch_url: &str,
     response: WatchStargatesResponse,
 ) -> WatchEndpointSnapshot {
     WatchEndpointSnapshot {
@@ -248,7 +250,24 @@ pub(super) fn watch_endpoint_snapshot_from_response(
             .into_iter()
             .filter_map(stargate_info_registration_router)
             .collect(),
-        watch_urls: normalize_string_set(response.watch_stargate_urls),
+        watch_urls: response
+            .watch_stargate_urls
+            .into_iter()
+            .filter_map(
+                |remote_watch_url| match parse_explicit_http_uri(&remote_watch_url) {
+                    Ok(remote_watch_url) => Some(remote_watch_url),
+                    Err(error) => {
+                        warn!(
+                            source_watch_url = watch_url,
+                            rejected_watch_url = remote_watch_url.trim(),
+                            %error,
+                            "ignoring invalid recursive Stargate Watch URI"
+                        );
+                        None
+                    }
+                },
+            )
+            .collect(),
     }
 }
 

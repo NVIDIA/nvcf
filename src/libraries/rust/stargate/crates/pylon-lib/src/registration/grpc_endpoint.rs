@@ -16,6 +16,7 @@
 use std::fmt;
 
 use anyhow::Context;
+use stargate_protocol::parse_explicit_http_uri;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
 
 use super::normalize_addr;
@@ -39,7 +40,7 @@ impl StargateGrpcEndpoint {
         let dial_addr = if dial_addr.is_empty() {
             authority_addr.clone()
         } else {
-            dial_addr
+            parse_explicit_http_uri(&dial_addr).ok()?
         };
         Some(Self {
             authority_addr,

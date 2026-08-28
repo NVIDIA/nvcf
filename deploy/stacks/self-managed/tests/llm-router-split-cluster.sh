@@ -35,7 +35,7 @@ printf '%s\n' \
   '    requestRouter:' \
   "      chartPath: $router_chart_path" \
   '      backendRouter:' \
-  '        pylonGrpcDialAddress: llm-grpc.example.com:50071' \
+  '        pylonGrpcDialAddress: https://llm-grpc.example.com:50071' \
   '        pylonReverseTunnelDialAddress: llm-quic.example.com:50072' \
   'ingress:' \
   '  gatewayApi:' \
@@ -123,7 +123,7 @@ assert_file_value "$work_dir/api-values.yaml" \
   'llm-grpc.example.com:50071'
 assert_file_value "$work_dir/router-values.yaml" \
   '.llmRequestRouter.backendRouter.pylonGrpcDialAddress' \
-  'llm-grpc.example.com:50071'
+  'https://llm-grpc.example.com:50071'
 assert_file_value "$work_dir/router-values.yaml" \
   '.llmRequestRouter.backendRouter.pylonReverseTunnelDialAddress' \
   'llm-quic.example.com:50072'
@@ -139,6 +139,13 @@ assert_file_value "$work_dir/router-values.yaml" \
 assert_file_value "$work_dir/router-values.yaml" \
   '.llmRequestRouter.tls.quicInsecure' \
   'false'
+
+helm template llm-request-router "$router_chart_path" \
+  --namespace nvcf \
+  --values "$work_dir/router-values.yaml" \
+  >"$work_dir/router-manifest.yaml"
+test -s "$work_dir/router-manifest.yaml" ||
+  fail "request-router source chart did not render from generated stack values"
 
 assert_partial_backend_override_rejected() {
   local missing_key="$1"

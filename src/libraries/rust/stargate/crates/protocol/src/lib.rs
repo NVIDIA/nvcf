@@ -46,6 +46,77 @@ pub use webtransport_http::{
 pub const HTTP3_ALPN: &[u8] = b"h3";
 pub const WEBTRANSPORT_BIDI_STREAM_TYPE: u64 = 0x41;
 
+const EXPLICIT_HTTP_URI_ERROR: &str = "URI must be an explicit http:// or https:// authority";
+
+/// Parses an HTTP(S) dial URI without inventing a transport scheme.
+///
+/// gRPC control-plane endpoints are authorities, not HTTP resource paths. Keeping this
+/// validation shared prevents a scheme-less remote Watch address from silently becoming
+/// plaintext in one component while another component treats it as TLS.
+pub fn parse_explicit_http_uri(value: &str) -> Result<String, String> {
+    let value = value.trim();
+    let uri = value
+        .parse::<http::Uri>()
+        .map_err(|_| EXPLICIT_HTTP_URI_ERROR.to_string())?;
+    if !matches!(uri.scheme_str(), Some("http" | "https")) {
+        return Err(EXPLICIT_HTTP_URI_ERROR.to_string());
+    }
+    let authority = uri
+        .authority()
+        .filter(|authority| !authority.host().is_empty())
+        .ok_or_else(|| EXPLICIT_HTTP_URI_ERROR.to_string())?;
+    if authority.as_str().contains('@') {
+        return Err(EXPLICIT_HTTP_URI_ERROR.to_string());
+    }
+    let has_explicit_port = authority
+        .as_str()
+        .strip_prefix(authority.host())
+        .is_some_and(|suffix| suffix.starts_with(':'));
+    if has_explicit_port && authority.port_u16().is_none() {
+        return Err(EXPLICIT_HTTP_URI_ERROR.to_string());
+    }
+    if uri
+        .path_and_query()
+        .is_some_and(|path_and_query| path_and_query.as_str() != "/")
+    {
+        return Err(EXPLICIT_HTTP_URI_ERROR.to_string());
+    }
+    Ok(value.to_string())
+}
+
+#[cfg(test)]
+mod explicit_http_uri_tests {
+    use super::parse_explicit_http_uri;
+
+    #[test]
+    fn accepts_only_explicit_http_authority_uris() {
+        for valid in [
+            "https://region-b.example.test:50071",
+            "http://127.0.0.1:50071",
+            "https://[::1]",
+            "https://[::1]:50071/",
+        ] {
+            assert_eq!(parse_explicit_http_uri(valid).as_deref(), Ok(valid));
+        }
+
+        for invalid in [
+            "region-b.example.test:50071",
+            "ftp://region-b.example.test:50071",
+            "https://",
+            "https://user@region-b.example.test:50071",
+            "https://region-b.example.test:50071/watch",
+            "https://region-b.example.test:50071?region=b",
+            "https://region-b.example.test:",
+            "https://region-b.example.test:65536",
+        ] {
+            assert!(
+                parse_explicit_http_uri(invalid).is_err(),
+                "unexpected valid URI: {invalid}"
+            );
+        }
+    }
+}
+
 /// Which side establishes the long-lived tunnel connection.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum BackendConnectivity {

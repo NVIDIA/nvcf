@@ -241,7 +241,7 @@ async fn tls_connect_error(server: &TestTlsControlPlane, ca_cert_pem: Option<&[u
 }
 
 fn grpc_endpoint(authority_addr: &str) -> StargateGrpcEndpoint {
-    StargateGrpcEndpoint::new(authority_addr.to_string(), authority_addr.to_string())
+    StargateGrpcEndpoint::new(authority_addr.to_string(), "")
         .expect("test endpoint authority should be non-empty")
 }
 
@@ -522,10 +522,11 @@ fn reverse_tunnel_config_uses_registration_upstream_and_preserves_forwarding() {
 
 #[test]
 fn stargate_grpc_endpoint_rejects_empty_authority_and_formats_dial_overrides() {
-    assert!(StargateGrpcEndpoint::new(" ", "stargate-grpc-lb:443").is_none());
+    assert!(StargateGrpcEndpoint::new(" ", "https://stargate-grpc-lb:443").is_none());
+    assert!(StargateGrpcEndpoint::new("router-a:50071", "stargate-grpc-lb:443").is_none());
     assert_eq!(
-        grpc_endpoint_with_dial("router-a:50071", "stargate-grpc-lb:443").to_string(),
-        "router-a:50071 via stargate-grpc-lb:443"
+        grpc_endpoint_with_dial("router-a:50071", "https://stargate-grpc-lb:443").to_string(),
+        "router-a:50071 via https://stargate-grpc-lb:443"
     );
 }
 
@@ -745,9 +746,9 @@ fn watch_response_separates_registration_routers_from_recursive_seeds() {
             stargates: vec![stargate_info(
                 "stargate-0",
                 "stargate-0.region-a:50071",
-                "lb.region-a:443",
+                "https://lb.region-a:443",
             )],
-            watch_stargate_urls: vec!["stargate.region-b:50071".to_string()],
+            watch_stargate_urls: vec!["https://stargate.region-b:50071".to_string()],
         },
     );
 
@@ -755,12 +756,37 @@ fn watch_response_separates_registration_routers_from_recursive_seeds() {
         snapshot.registration_routers,
         BTreeMap::from([(
             "stargate-0".to_string(),
-            grpc_endpoint_with_dial("stargate-0.region-a:50071", "lb.region-a:443")
+            grpc_endpoint_with_dial("stargate-0.region-a:50071", "https://lb.region-a:443")
         )])
     );
     assert_eq!(
         snapshot.watch_urls,
-        BTreeSet::from(["stargate.region-b:50071".to_string()])
+        BTreeSet::from(["https://stargate.region-b:50071".to_string()])
+    );
+}
+
+#[test]
+fn watch_response_rejects_non_uri_recursive_seeds() {
+    let snapshot = watch_endpoint_snapshot_from_response(
+        "seed-a",
+        WatchStargatesResponse {
+            stargates: vec![],
+            watch_stargate_urls: vec![
+                "https://stargate.region-b:50071".to_string(),
+                " http://127.0.0.1:50071 ".to_string(),
+                "stargate.region-c:50071".to_string(),
+                "ftp://stargate.region-d:50071".to_string(),
+                "https://".to_string(),
+            ],
+        },
+    );
+
+    assert_eq!(
+        snapshot.watch_urls,
+        BTreeSet::from([
+            "http://127.0.0.1:50071".to_string(),
+            "https://stargate.region-b:50071".to_string(),
+        ])
     );
 }
 

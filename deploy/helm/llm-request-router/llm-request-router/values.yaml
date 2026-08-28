@@ -119,10 +119,10 @@ llmRequestRouter:
       repository: ""
       tag: ""
       pullPolicy: ""
-    # Addresses workers dial to reach the router. Both default to the
-    # backend-router Service inside the cluster, which is correct when workers
-    # run alongside the control plane. Override both with externally reachable
-    # addresses when workers run in a separate cluster or region.
+    # Addresses workers dial to reach the router. The gRPC address is an
+    # explicit HTTP(S) URI; the reverse-tunnel address remains host:port. Both
+    # default to the backend-router Service inside the cluster. Override both
+    # with externally reachable addresses for a separate cluster or region.
     pylonGrpcDialAddress: ""
     pylonReverseTunnelDialAddress: ""
     serviceAccount:
@@ -238,6 +238,10 @@ llmRequestRouter:
     # Maximum interval between unchanged WatchStargates snapshots. This is
     # shared by Stargate and the EndpointSlice backend router.
     watchHeartbeatMs: 5000
+    # Recursive remote Watch endpoints must include their HTTP transport
+    # scheme. HTTPS is required unless the development-only opt-in is enabled.
+    remoteWatchUrls: []
+    allowInsecureRemoteWatchHttp: false
 
   transport:
     quicConnectTimeoutMs: 2000

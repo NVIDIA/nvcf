@@ -84,6 +84,12 @@ spec:
             - --advertised-grpc-port={{ .Values.llmRequestRouter.service.grpcPort }}
             - --grpc-pylon-dial-addr={{ include "llm-request-router.backendRouterGrpcDialAddress" . }}
             - --watch-heartbeat-ms={{ .Values.llmRequestRouter.discovery.watchHeartbeatMs }}
+            {{- range .Values.llmRequestRouter.discovery.remoteWatchUrls }}
+            - --remote-stargate-url={{ . }}
+            {{- end }}
+            {{- if .Values.llmRequestRouter.discovery.allowInsecureRemoteWatchHttp }}
+            - --allow-insecure-remote-watch-http
+            {{- end }}
             - --grpc-port-name=grpc
             - --quic-port-name=quic
             - --tunnel-protocol=raw-quic
