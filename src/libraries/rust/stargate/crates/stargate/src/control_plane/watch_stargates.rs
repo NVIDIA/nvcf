@@ -154,12 +154,12 @@ fn normalize_remote_watch_urls(
     excluded_endpoint_keys: &BTreeSet<String>,
 ) -> Vec<String> {
     let mut deduped: BTreeMap<String, String> = BTreeMap::new();
-    for raw_url in urls {
+    for (rejected_watch_url_index, raw_url) in urls.into_iter().enumerate() {
         let url = match parse_explicit_http_uri(&raw_url) {
             Ok(url) => url,
             Err(error) => {
                 warn!(
-                    rejected_watch_url = raw_url.trim(),
+                    rejected_watch_url_index,
                     %error,
                     "ignoring invalid remote Stargate Watch URI"
                 );

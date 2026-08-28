@@ -86,6 +86,9 @@ impl StargateGrpcEndpoint {
                         .ca_certificate(Certificate::from_pem(ca_cert_pem)),
                 )
                 .context("configure custom CA for stargate gRPC endpoint")?,
+            (Some("http"), Some(_)) => {
+                anyhow::bail!("custom CA for stargate gRPC requires an HTTPS dial endpoint")
+            }
             _ => Endpoint::new(dial_uri).context("configure stargate gRPC endpoint")?,
         };
         if let Some(origin) = origin {

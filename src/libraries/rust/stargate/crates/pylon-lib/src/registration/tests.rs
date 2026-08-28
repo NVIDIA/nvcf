@@ -531,6 +531,23 @@ fn stargate_grpc_endpoint_rejects_empty_authority_and_formats_dial_overrides() {
 }
 
 #[test]
+fn stargate_grpc_endpoint_rejects_custom_ca_for_plaintext_http() {
+    let endpoint = grpc_endpoint_with_dial("router-a:50071", "http://stargate-grpc-lb:50071");
+
+    let error = endpoint
+        .channel_endpoint(Some(b"private CA contents must not be logged"))
+        .err()
+        .expect("custom CA with plaintext HTTP should be rejected");
+
+    assert!(
+        error
+            .to_string()
+            .contains("custom CA for stargate gRPC requires an HTTPS dial endpoint"),
+        "unexpected error: {error:#}"
+    );
+}
+
+#[test]
 fn stargate_grpc_origin_keeps_dial_scheme_when_authority_scheme_differs() {
     for (dial, authority, expected) in [
         (

@@ -68,11 +68,15 @@ pub fn parse_explicit_http_uri(value: &str) -> Result<String, String> {
     if authority.as_str().contains('@') {
         return Err(EXPLICIT_HTTP_URI_ERROR.to_string());
     }
-    let has_explicit_port = authority
-        .as_str()
-        .strip_prefix(authority.host())
-        .is_some_and(|suffix| suffix.starts_with(':'));
-    if has_explicit_port && authority.port_u16().is_none() {
+    let authority_value = authority.as_str();
+    let has_explicit_port = if authority_value.starts_with('[') {
+        authority_value
+            .split_once(']')
+            .is_some_and(|(_, suffix)| suffix.starts_with(':'))
+    } else {
+        authority_value.contains(':')
+    };
+    if has_explicit_port && authority.port_u16().filter(|port| *port > 0).is_none() {
         return Err(EXPLICIT_HTTP_URI_ERROR.to_string());
     }
     if uri
@@ -106,6 +110,8 @@ mod explicit_http_uri_tests {
             "https://user@region-b.example.test:50071",
             "https://region-b.example.test:50071/watch",
             "https://region-b.example.test:50071?region=b",
+            "https://region-b.example.test:0",
+            "https://[::1]:0",
             "https://region-b.example.test:",
             "https://region-b.example.test:65536",
         ] {

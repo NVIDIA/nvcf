@@ -253,13 +253,16 @@ pub(super) fn watch_endpoint_snapshot_from_response(
         watch_urls: response
             .watch_stargate_urls
             .into_iter()
+            .enumerate()
             .filter_map(
-                |remote_watch_url| match parse_explicit_http_uri(&remote_watch_url) {
+                |(rejected_watch_url_index, remote_watch_url)| match parse_explicit_http_uri(
+                    &remote_watch_url,
+                ) {
                     Ok(remote_watch_url) => Some(remote_watch_url),
                     Err(error) => {
                         warn!(
                             source_watch_url = watch_url,
-                            rejected_watch_url = remote_watch_url.trim(),
+                            rejected_watch_url_index,
                             %error,
                             "ignoring invalid recursive Stargate Watch URI"
                         );
