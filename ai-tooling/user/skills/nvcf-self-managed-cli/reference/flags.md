@@ -88,23 +88,6 @@ Extended duration units: `s` (seconds), `m` (minutes), `h` (hours), `d` (days), 
 In JSON and inline specs, LLM functions set `functionType: "LLM"` and model routing metadata under `models[].llmConfig`. `llmConfig.uris` declares the OpenAI-compatible upstream paths exposed by the model. Current supported paths are `/v1/chat/completions`, `/v1/responses`, and `/v1/embeddings`. `llmConfig.routingMethod` accepts `round_robin`, `power_of_two`, `groq_multiregion`, `pulsar`, or `random`.
 `llmConfig.tokenRateLimit` accepts one or more comma-separated positive integer token limits in `<value>-<unit>` format. Supported units are `S` (seconds), `M` (minutes), `H` (hours), `D` (days), and `W` (weeks). Use distinct units when combining limits, for example `1000-S,5000-M,100000-H,500000-D,1000000-W` in input JSON.
 
-Function-level request priority uses this JSON shape:
-
-```json
-{
-  "llmInvocationConfig": {
-    "priority": {
-      "defaultPriority": 7,
-      "perAccountPriority": {
-        "nca-id": 3
-      }
-    }
-  }
-}
-```
-
-Priority values range from `0` through `4294967295`. Lower values have higher priority, and `0` is highest. An explicit `0` is distinct from an omitted priority. `defaultPriority` is required when `perAccountPriority` has entries.
-
 Helm chart packaging is independent of `functionType`. For a Helm-chart backed LLM function, set `functionType: "LLM"`, `helmChart`, `helmChartServiceName`, and `models[].llmConfig` in the same create request. `inferencePort` must be the Kubernetes Service port exposed by `helmChartServiceName`.
 
 LLM invocation requests use `model: "<function-id>/<model-name>"`. The function ID selects the NVCF function, and the model name is forwarded upstream. Chat completions and Responses API requests can use `x-multi-turn-session-id` for session stickiness; embeddings requests do not.
@@ -119,8 +102,6 @@ LLM invocation requests use `model: "<function-id>/<model-name>"`. The function 
 | `--llm-per-account-priority NCA-ID:PRIORITY` | Per-account priority override; repeatable, maximum 64. Requires a default priority. | - |
 
 In JSON, `function update` accepts `modelUpdates[]` entries with `modelName` and `llmConfig.routingMethod` and/or `llmConfig.tokenRateLimit`. `uris` are create-time model metadata and are not part of model updates.
-
-When `llmInvocationConfig` is present in an update, it replaces the complete function-level priority configuration. Specify every default and per-account value to retain. Omitting the field preserves the current configuration. Use `--input-file` with `"llmInvocationConfig": {}` to clear it.
 
 ## `function deploy create`-specific
 

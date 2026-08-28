@@ -690,7 +690,16 @@ API key, which `api-key generate` mints automatically alongside the function key
   --inference-url "/" \
   --inference-port 8000 \
   --function-type LLM \
-  --llm-model "name=dummy-model,uris=/v1/chat/completions|/v1/responses|/v1/embeddings,routingMethod=round_robin,tokenRateLimit=1000-S" \
+  --llm-model "name=dummy-model,uris=/v1/chat/completions|/v1/responses|/v1/embeddings,routingMethod=round_robin,tokenRateLimit=1000-S"
+
+# Create an LLM function with request priority
+./nvcf-cli function create \
+  --name "my-priority-llm-function" \
+  --image "nvcr.io/example/openai-compatible:latest" \
+  --inference-url "/" \
+  --inference-port 8000 \
+  --function-type LLM \
+  --llm-model "name=dummy-model,uris=/v1/chat/completions" \
   --llm-default-priority 7 \
   --llm-per-account-priority "nca-id:3"
 ```
@@ -754,14 +763,6 @@ LLM functions use `functionType: "LLM"` and define model routing metadata under 
   "inferenceUrl": "/",
   "inferencePort": 8000,
   "functionType": "LLM",
-  "llmInvocationConfig": {
-    "priority": {
-      "defaultPriority": 7,
-      "perAccountPriority": {
-        "nca-id": 3
-      }
-    }
-  },
   "models": [
     {
       "name": "dummy-model",
@@ -778,8 +779,6 @@ LLM functions use `functionType: "LLM"` and define model routing metadata under 
 For LLM models, `llmConfig.routingMethod` accepts `round_robin`, `power_of_two`, `groq_multiregion`, `pulsar`, or `random`.
 Supported LLM paths are `/v1/chat/completions`, `/v1/responses`, and `/v1/embeddings`.
 `llmConfig.tokenRateLimit` accepts one or more comma-separated positive integer token limits in `<value>-<unit>` format. Supported units are `S` (seconds), `M` (minutes), `H` (hours), `D` (days), and `W` (weeks). Use `1000-S` for a single limit, or `1000-S,5000-M,100000-H,500000-D,1000000-W` for a combined limit with distinct units. Use JSON input for combined limits because inline CLI model specs use commas as field separators.
-
-Request priorities are unsigned 32-bit integers from `0` through `4294967295`. Lower values have higher priority, and an explicit `0` is distinct from an omitted priority. If `perAccountPriority` has entries, `defaultPriority` is required.
 
 #### Deploy Function
 
@@ -932,16 +931,6 @@ LLM model updates can also be provided in the input file:
       }
     }
   ]
-}
-```
-
-`llmInvocationConfig` is a full replacement when it is present in an update. Specify every default and per-account value to retain. Omitting the field preserves the current configuration. To clear it, use `--input-file` with an empty `llmInvocationConfig` object:
-
-```json
-{
-  "functionId": "<function-id>",
-  "versionId": "<version-id>",
-  "llmInvocationConfig": {}
 }
 ```
 
