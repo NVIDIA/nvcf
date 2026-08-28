@@ -243,6 +243,26 @@ both to use the in-cluster backend-router Service. Helmfile rendering rejects a
 partial override. The gRPC worker address normally uses the same TCP endpoint
 as `pylonGrpcDialAddress`.
 
+To recursively discover request routers in another region, set explicit remote
+Watch dial URIs on the self-managed operator surface:
+
+```yaml
+addons:
+  llm:
+    requestRouter:
+      discovery:
+        remoteWatchUrls:
+          - https://region-b-watch.example.com:50071
+```
+
+Each URI must use `https://`. Development-only plaintext endpoints require an
+explicit `http://` URI and
+`addons.llm.requestRouter.discovery.allowInsecureRemoteWatchHttp: true`.
+Scheme-less and unsupported endpoints are rejected rather than defaulting to
+plaintext. For an HTTPS URI, the dial hostname selects TLS SNI. Identities
+advertised by the remote Watch response remain the HTTP/2 authorities used for
+registration.
+
 The scheme-less `global.workerEndpoints.llmRequestRouterAddress` in this
 example is the self-managed profile's initial `host:port` input. The
 `pylonGrpcDialAddress` override requires an explicit `http://` or `https://`
