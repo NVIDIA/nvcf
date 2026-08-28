@@ -237,37 +237,8 @@ def tag_exists_for_version(service, version, root=None):
     return ""
 
 
-def existing_tag_for_version(root, service, version):
-    for prefix in tag_prefixes(service, root):
-        tag = f"{prefix}{version}"
-        existing = run(
-            ["git", "rev-parse", "-q", "--verify", f"refs/tags/{tag}"],
-            cwd=root,
-            capture=True,
-            check=False,
-        ).strip()
-        if existing:
-            return tag
-    return ""
-
-
 def tag_sha(root, tag):
     return run(["git", "rev-list", "-n", "1", tag], cwd=root, capture=True).strip()
-
-
-def service_tags_matching_suffix(service, suffix, root=None):
-    tags = []
-    for prefix in tag_prefixes(service, root):
-        raw = run(["git", "tag", "-l", f"{prefix}{suffix}"], cwd=root, capture=True)
-        tags.extend(line.strip() for line in raw.splitlines() if line.strip())
-    return sorted(set(tags))
-
-
-def existing_matching_tag_at_sha(root, service, suffix, sha):
-    for tag in service_tags_matching_suffix(service, suffix, root):
-        if tag_sha(root, tag) == sha:
-            return tag
-    return ""
 
 
 def current_branch(root):
@@ -275,95 +246,6 @@ def current_branch(root):
         return os.environ["GITHUB_REF_NAME"]
     branch = run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=root, capture=True, check=False).strip()
     return "" if branch == "HEAD" else branch
-
-
-def service_release_branch(service, version):
-    train = ".".join(version.split(".")[:2])
-    return f"release-{tag_prefix(service)}{train}"
-
-
-def service_version_bump_branch(service, version):
-    major, minor, _patch = [int(part) for part in version.split(".")]
-    return f"release-bump/{service['id']}/v{major}.{minor}-to-v{major}.{minor + 1}"
-
-
-def next_release_train_version(version):
-    major, minor, _patch = [int(part) for part in version.split(".")]
-    return f"{major}.{minor + 1}.0"
-
-
-def remote_branch_sha(root, branch):
-    raw = run(["git", "ls-remote", "--heads", "origin", branch], cwd=root, capture=True).strip()
-    if not raw:
-        return ""
-    return raw.split()[0]
-
-
-def commit_tree(root, ref):
-    return run(["git", "rev-parse", "--verify", f"{ref}^{{tree}}"], cwd=root, capture=True).strip()
-
-
-def linear_release_branch_base(root, base_sha):
-    merges = run(
-        ["git", "rev-list", "--topo-order", "--reverse", "--merges", base_sha],
-        cwd=root,
-        capture=True,
-    ).splitlines()
-    if not merges:
-        return base_sha
-
-    # Keep the selected tree but root the release branch before the first merge
-    # in its history so the release ruleset sees only a linear commit graph.
-    first_merge = merges[0]
-    linear_parent = run(
-        ["git", "rev-parse", "--verify", f"{first_merge}^1"], cwd=root, capture=True
-    ).strip()
-    return run(
-        [
-            "git",
-            "commit-tree",
-            commit_tree(root, base_sha),
-            "-p",
-            linear_parent,
-            "-m",
-            "chore(release): snapshot default branch for linear history",
-        ],
-        cwd=root,
-        capture=True,
-    ).strip()
-
-
-def open_pr_url(root, source_branch, target_branch):
-    raw = run(
-        [
-            "gh",
-            "pr",
-            "list",
-            "--state",
-            "open",
-            "--head",
-            source_branch,
-            "--base",
-            target_branch,
-            "--json",
-            "url",
-        ],
-        cwd=root,
-        capture=True,
-    )
-    prs = json.loads(raw or "[]")
-    if prs:
-        return prs[0].get("url", "")
-    return ""
-
-
-def ensure_git_identity(root):
-    name = run(["git", "config", "--get", "user.name"], cwd=root, capture=True, check=False).strip()
-    email = run(["git", "config", "--get", "user.email"], cwd=root, capture=True, check=False).strip()
-    if not name:
-        run(["git", "config", "user.name", "github-actions[bot]"], cwd=root)
-    if not email:
-        run(["git", "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com"], cwd=root)
 
 
 def current_service_tags(root, service):
@@ -595,33 +477,6 @@ def stale_checkout_output(output):
     return "is behind the remote" in output
 
 
-def validate_version_file(root, service):
-    service_dir = root / service["path"]
-    version_file = service.get("version_file") or ""
-    version_path = service_dir / version_file
-    if not version_path.is_file():
-        raise SystemExit(f"{service['id']}: version_file {version_file} not found")
-
-    version = version_path.read_text().strip().lstrip("v")
-    if not re.fullmatch(SEMVER_PATTERN, version):
-        raise SystemExit(f"{service['id']}: {version_file} does not contain a supported SemVer: {version}")
-
-    source_file = service.get("version_major_minor_source_file") or ""
-    if source_file:
-        source_path = service_dir / source_file
-        if not source_path.is_file():
-            raise SystemExit(f"{service['id']}: version_major_minor_source_file {source_file} not found")
-        source = re.search(r"v?(\d+\.\d+\.\d+)", source_path.read_text())
-        if not source:
-            raise SystemExit(f"{service['id']}: no semantic version found in {source_file}")
-        if ".".join(source.group(1).split(".")[:2]) != ".".join(version.split("-")[0].split(".")[:2]):
-            raise SystemExit(
-                f"{service['id']}: {version_file}={version} does not match "
-                f"{source_file} major/minor {source.group(1)}"
-            )
-    return version
-
-
 def create_release(tag, title, notes, draft, dry_run):
     """Create the GitHub release. True when this call created it, False otherwise."""
     if dry_run:
@@ -658,9 +513,9 @@ def release_url(slug, tag):
 def ancestor_service_tag(root, service):
     """Closest service tag reachable from HEAD, by ancestry rather than by version sort.
 
-    Release branches are cut with a synthetic root (see linear_release_branch_base),
-    so the highest-sorting tag for a service can be a main-line tag that this branch
-    never contained. Ancestry is what actually bounds the commits a release ships.
+    The highest-sorting tag for a service can sit on a maintenance branch this one
+    never contained, so a version sort can name a tag that is not in this history.
+    Ancestry is what actually bounds the commits a release ships.
 
     Every supported prefix is matched in a single describe so the closest tag wins.
     Taking the first prefix to match instead would return a more distant tag whenever
@@ -1009,64 +864,6 @@ def finish_semantic_release(root, service, components, exit_code, output, dry_ru
     return outcome
 
 
-def publish_version_file_release(root, service, dry_run, draft):
-    version = validate_version_file(root, service)
-    existing = existing_tag_for_version(root, service, version)
-    if existing:
-        existing_sha = tag_sha(root, existing)
-        print(f"[github-release] {service['id']}: {existing} already exists at {existing_sha}; skipping")
-        return
-    publish_tag_for_version(root, service, version, dry_run, draft, f"{service.get('version_file') or 'version file'}")
-
-
-def publish_dev_prerelease(root, service, dry_run, draft):
-    base_version = validate_version_file(root, service)
-    if "-" in base_version:
-        raise SystemExit(f"{service['id']}: dev_prerelease version_file must contain a stable X.Y.Z base, got {base_version}")
-
-    branch = current_branch(root)
-    default_branch = os.environ.get("GITHUB_DEFAULT_BRANCH", "main")
-    head = run(["git", "rev-parse", "--verify", "HEAD^{commit}"], cwd=root, capture=True).strip()
-    if branch == default_branch:
-        existing_at_head = existing_matching_tag_at_sha(root, service, f"{base_version}-dev.*", head)
-        if existing_at_head:
-            print(f"[github-release] {service['id']}: {existing_at_head} already points at HEAD; skipping")
-            return
-        last_dev = -1
-        pattern = re.compile(rf"^{re.escape(base_version)}-dev\.(\d+)$")
-        for tag in service_tags_matching_suffix(service, f"{base_version}-dev.*"):
-            match = pattern.fullmatch(version_from_tag(service, tag))
-            if match:
-                last_dev = max(last_dev, int(match.group(1)))
-        version = f"{base_version}-dev.{last_dev + 1}"
-        publish_tag_for_version(root, service, version, dry_run, draft, f"{service.get('version_file') or 'version file'} dev prerelease")
-        return
-
-    branch_prefix = f"release-{tag_prefix(service)}"
-    if branch.startswith(branch_prefix):
-        train = branch[len(branch_prefix) :]
-        if not re.fullmatch(r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)", train):
-            raise SystemExit(f"{service['id']}: release branch {branch} must end with X.Y")
-        if ".".join(base_version.split(".")[:2]) != train:
-            raise SystemExit(f"{service['id']}: {service.get('version_file')}={base_version} does not match release branch train {train}")
-
-        existing_at_head = existing_matching_tag_at_sha(root, service, f"{train}.*", head)
-        if existing_at_head and "-" not in version_from_tag(service, existing_at_head):
-            print(f"[github-release] {service['id']}: {existing_at_head} already points at HEAD; skipping")
-            return
-        last_patch = -1
-        pattern = re.compile(rf"^{re.escape(train)}\.(\d+)$")
-        for tag in service_tags_matching_suffix(service, f"{train}.*"):
-            match = pattern.fullmatch(version_from_tag(service, tag))
-            if match:
-                last_patch = max(last_patch, int(match.group(1)))
-        version = base_version if last_patch < 0 else f"{train}.{last_patch + 1}"
-        publish_tag_for_version(root, service, version, dry_run, draft, f"{service.get('version_file') or 'version file'} release branch")
-        return
-
-    print(f"[github-release] {service['id']}: dev prerelease tags only publish on {default_branch} or release branches; branch={branch or '<detached>'}; skipping")
-
-
 def service_matches_filter(service, service_filter):
     return not service_filter or service_filter in {service["id"], service["service_name"]}
 
@@ -1074,135 +871,10 @@ def service_matches_filter(service, service_filter):
 def should_process_auto_service(service, service_filter, branch, default_branch):
     if not service_matches_filter(service, service_filter):
         return False
-    if not branch or branch == default_branch:
-        return True
-    return bool(service.get("dev_prerelease")) and branch.startswith(f"release-{tag_prefix(service)}")
-
-
-def release_branch_pr_body(service, release_branch, base_sha, version_file_path, current_version, next_version, target_branch):
-    service_name = service.get("service_name") or service["id"]
-    return "\n".join(
-        [
-            "## TL;DR",
-            "",
-            f"Cuts the {service_name} release train.",
-            "",
-            "## Additional Details",
-            "",
-            f"- Created release branch `{release_branch}` from the selected default branch content at `{base_sha}`.",
-            f"- Advances `{version_file_path}` from `{current_version}` to `{next_version}` on `{target_branch}`.",
-            "- The release branch push runs release automation for the first stable tag from the branch VERSION file.",
-            "",
-            "## For QA",
-            "",
-            "- Generated by `tools/ci/github-release branch-cut`.",
-            "",
-            "## Issues",
-            "",
-            "NO-REF",
-            "",
-            "## Checklist",
-            "- [x] I am familiar with the [Contributing Guidelines](../CONTRIBUTING.md).",
-            "- [x] I have signed off my commits for Developer Certificate of Origin (DCO) compliance.",
-            "- [x] New or existing tests cover these changes.",
-            "- [x] The documentation is up to date with these changes.",
-            "",
-        ]
-    )
-
-
-def branch_cut(args):
-    root = repo_root()
-    metadata = load_metadata(root, args.metadata)
-    service = find_service(metadata, args.service)
-    if not service.get("dev_prerelease"):
-        raise SystemExit(f"{service['id']}: branch-cut requires release.dev_prerelease")
-    if not service.get("version_file"):
-        raise SystemExit(f"{service['id']}: branch-cut requires release.version_file")
-
-    current_version = validate_version_file(root, service)
-    if not re.fullmatch(STABLE_SEMVER_PATTERN, current_version):
-        raise SystemExit(f"{service['id']}: branch-cut requires a stable X.Y.Z version_file, got {current_version}")
-
-    target_branch = args.target_branch or os.environ.get("GITHUB_DEFAULT_BRANCH", "main")
-    base_sha = run(["git", "rev-parse", "--verify", f"{args.ref}^{{commit}}"], cwd=root, capture=True).strip()
-    release_branch = service_release_branch(service, current_version)
-    bump_branch = service_version_bump_branch(service, current_version)
-    next_version = next_release_train_version(current_version)
-    version_file_path = f"{service['path'].rstrip('/')}/{service['version_file']}"
-    base_tree = commit_tree(root, base_sha)
-
-    print(
-        f"[github-release] {service['id']}: branch-cut base={base_sha} "
-        f"release_branch={release_branch} bump_branch={bump_branch} "
-        f"{version_file_path}={current_version}->{next_version}"
-    )
-
-    if args.dry_run:
-        print(f"[github-release] dry-run: would create {release_branch} from {base_sha}'s tree")
-        print(f"[github-release] dry-run: would create {bump_branch} with {version_file_path}={next_version}")
-        print(f"[github-release] dry-run: would open PR from {bump_branch} to {target_branch}")
-        return
-
-    existing_release_sha = remote_branch_sha(root, release_branch)
-    if existing_release_sha:
-        existing_release_tree = commit_tree(root, existing_release_sha)
-        if existing_release_tree != base_tree:
-            raise SystemExit(
-                f"{release_branch} already exists with tree {existing_release_tree}, "
-                f"not selected base tree {base_tree}"
-            )
-        print(f"[github-release] {release_branch} already has the selected base tree")
-        bump_base = existing_release_sha
-    else:
-        ensure_git_identity(root)
-        release_base = linear_release_branch_base(root, base_sha)
-        run(["git", "push", "origin", f"{release_base}:refs/heads/{release_branch}"], cwd=root)
-        print(f"[github-release] created {release_branch} from selected base {base_sha}")
-        bump_base = release_base
-
-    existing_pr = open_pr_url(root, bump_branch, target_branch)
-    if existing_pr:
-        print(f"[github-release] existing VERSION bump PR: {existing_pr}")
-        return
-
-    if remote_branch_sha(root, bump_branch):
-        raise SystemExit(f"{bump_branch} already exists but has no open PR to {target_branch}")
-
-    ensure_git_identity(root)
-    run(["git", "switch", "-C", bump_branch, bump_base], cwd=root)
-    version_path = root / version_file_path
-    version_path.write_text(f"{next_version}\n")
-    run(["git", "add", version_file_path], cwd=root)
-    run(["git", "commit", "-s", "-m", f"chore({service['id']}): advance release train to v{next_version}"], cwd=root)
-    run(["git", "push", "origin", f"HEAD:refs/heads/{bump_branch}"], cwd=root)
-    print(f"[github-release] created {bump_branch} with {version_file_path}={next_version}")
-
-    body = release_branch_pr_body(
-        service,
-        release_branch,
-        base_sha,
-        version_file_path,
-        current_version,
-        next_version,
-        target_branch,
-    )
-    run(
-        [
-            "gh",
-            "pr",
-            "create",
-            "--head",
-            bump_branch,
-            "--base",
-            target_branch,
-            "--title",
-            f"chore({service['id']}): advance release train to v{next_version.rsplit('.', 1)[0]}",
-            "--body",
-            body,
-        ],
-        cwd=root,
-    )
+    # Releases are cut from the default branch only. Pushes to a maintenance
+    # `release-*` branch still build and test, but the tag on such a branch is
+    # cut by hand.
+    return not branch or branch == default_branch
 
 
 def auto_release(args):
@@ -1243,14 +915,6 @@ def auto_release(args):
 
         print(f"::group::github-release {service['id']}")
         try:
-            if service.get("dev_prerelease"):
-                publish_dev_prerelease(root, service, dry_run=dry_run, draft=draft)
-                continue
-
-            if service.get("version_file"):
-                publish_version_file_release(root, service, dry_run=dry_run, draft=draft)
-                continue
-
             if only_generated_changes(root, service, generated_paths):
                 # A shared Java framework change lands outside every service
                 # directory, so semantic-release (scoped to the service path by
@@ -1522,13 +1186,6 @@ def main():
     anchor.add_argument("--dry-run", action="store_true", help="show the tag/note that would be created")
     anchor.add_argument("--no-fetch-notes", action="store_true", help="do not fetch refs/notes/semantic-release before adding a note")
     anchor.set_defaults(func=anchor_release)
-
-    branch = subparsers.add_parser("branch-cut", help="cut a release branch and open the next-train VERSION bump PR")
-    branch.add_argument("--service", required=True, help="dev-prerelease service id, service_name, or path")
-    branch.add_argument("--ref", default="HEAD", help="GitHub commit/ref to cut from, defaults to HEAD")
-    branch.add_argument("--target-branch", default="", help="default branch for the VERSION bump PR, defaults to GITHUB_DEFAULT_BRANCH or main")
-    branch.add_argument("--dry-run", action="store_true", help="show the branches and PR that would be created")
-    branch.set_defaults(func=branch_cut)
 
     args = parser.parse_args()
     args.func(args)

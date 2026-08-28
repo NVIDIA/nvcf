@@ -421,30 +421,36 @@ Useful local test variables:
 
 ## Versioning & Tag Formats
 
-This project uses [Semantic Versioning](https://semver.org/) with a `v` prefix for git tags.
+NVCA uses [Semantic Versioning](https://semver.org/). Tags are path-scoped,
+because every subproject in this monorepo shares one tag namespace:
 
-**Supported tag formats:**
-
-| Format | Description | Example | Audience |
-|--------|-------------|---------|----------|
-| `vMAJOR.MINOR.PATCH` | Release version | `v1.20.0` | QA / Production |
-| `vMAJOR.MINOR.PATCH-dev.N` | Dev/prerelease build | `v1.20.0-dev.0` | Dev |
-| `vMAJOR.MINOR.PATCH-rc.N` | Release candidate (stage) | `v1.20.0-rc.1` | QA |
-
-**Version precedence (lowest to highest):**
-- `v1.20.0-dev.0` < `v1.20.0-dev.1` < `v1.20.0-rc.1` < `v1.20.0`
-
-**Creating tags:**
-```bash
-# Release tag
-git tag v1.20.0
-
-# Dev build tag
-git tag v1.20.0-dev.0
+```text
+src/compute-plane-services/nvca/vMAJOR.MINOR.PATCH
 ```
 
-**CI behavior:**
-- Tags should trigger release validation in the hosting environment.
+Do not create a bare `vMAJOR.MINOR.PATCH` tag. That was the convention in the
+standalone NVCA repository and it collides with every other subproject here.
+
+Supported tag formats:
+
+| Format | Description | Example |
+|--------|-------------|---------|
+| `<path>/vMAJOR.MINOR.PATCH` | Release version | `src/compute-plane-services/nvca/v3.4.0` |
+| `<path>/vMAJOR.MINOR.PATCH-rc.N` | Release candidate | `src/compute-plane-services/nvca/v3.4.0-rc.1` |
+
+Version precedence, lowest to highest: `3.4.0-rc.1` < `3.4.0`.
+
+Creating tags: do not. Release automation cuts the tag when a `feat`, `fix`,
+or `perf` commit touching this subtree merges to `main`. See
+[RELEASE.md](../../../RELEASE.md) at the repository root for the full model,
+including how to hand-cut a patch on a maintenance branch.
+
+NVCA previously cut `-dev.N` prereleases from a `VERSION` file on every push
+to `main`. That model is retired: the `VERSION` file is gone and the existing
+`-dev.N` tags remain only as history.
+
+CI behavior:
+- Tags trigger release validation in the hosting environment.
 - Keep GitHub-facing documentation free of internal CI pipeline commands and generated pipeline artifacts.
 
 ## Observability

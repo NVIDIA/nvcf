@@ -52,6 +52,10 @@ image release pipeline.
 
 ## Service auto-tags
 
+Releases are cut from the default branch only. A push to a `release-*`
+maintenance branch still runs the build, test, lint, and scan
+workflows, but cuts no tag; a patch on such a branch is tagged by hand.
+
 On `main` branch pushes, the workflow runs:
 
 ```bash
@@ -68,7 +72,6 @@ intentionally contains only public release metadata:
   yet
 - legacy service tag prefix, when a release line still needs old-tag
   compatibility
-- version-file hints for services that do not use semantic-release
 - generated/mechanical file basenames to ignore for release decisions
 
 It does not contain internal runner tags, Vault paths, NGC registry
@@ -95,40 +98,29 @@ uses those old tags as version anchors but creates any new tags with
 the path-scoped tag derived from the service path, unless the metadata
 declares an explicit `tag_format` override.
 
-Services that declare both `version_file` and `dev_prerelease`, such
-as NVCA and `nvcf-compute-plane-stack`, do not use semantic-release
-for the next version. On `main`, the GitHub workflow reads the stable
-base version from the version file and creates the next path-format dev
-prerelease tag:
+NVCA and the three stacks under `deploy/stacks/` used to opt out of
+this, reading a stable base version from a `VERSION` file and cutting
+`-dev.N` prereleases on `main`. They no longer do. Every registered
+service now takes its next version from semantic-release, the `VERSION`
+files are gone, and the `-dev.N` tags already published stay in the
+repository as history. See "Retiring the version-file model" below for
+the anchors that carried those version lines across.
 
-```text
-src/compute-plane-services/nvca/v<X.Y.Z>-dev.N
-```
-
-On a matching release branch, the workflow creates the next stable
-patch tag for that train.
-
-Every stable release the workflow creates from a version file comments
-the version it shipped on the pull requests that release covers, which
-is the note `@semantic-release/github` posts for the services it
-manages:
+Every release the workflow creates comments the version it shipped on
+the pull requests that release covers, which is the note
+`@semantic-release/github` posts for the services it manages:
 
 ```text
 This PR is included in version 3.2.14.
 ```
 
-Dev prerelease tags stay silent, and a re-run over a release that
-already exists does not comment again. The commented range starts at
-the closest release tag reachable from the branch rather than the
-highest-sorting tag, because a release branch is cut with a synthetic
-root and never contained most default-branch tags. It covers every
-commit since that tag rather than only the tagged commit, because the
-workflow's concurrency group cancels queued runs and a superseded push
-is first tagged by the next run to finish.
-
-The self-managed stack is not in this auto-tag set until it has a
-monorepo version source. Its release config currently keeps default
-branch release tagging disabled.
+A re-run over a release that already exists does not comment again. The
+commented range starts at the closest release tag reachable from the
+branch rather than the highest-sorting tag, because the highest tag can
+sit on a maintenance branch this history never contained. It covers
+every commit since that tag rather than only the tagged commit, because
+the workflow's concurrency group cancels queued runs and a superseded
+push is first tagged by the next run to finish.
 
 For `nvcf-compute-plane-stack`, GitHub-created
 `deploy/stacks/nvcf-compute-plane/v*` tags are mirrored. The scheduled
@@ -237,6 +229,11 @@ Package metadata uses SemVer without the leading `v`:
 
 ## Release branches
 
+Release automation does not cut or tag these branches; it runs on the
+default branch only. The convention below is what the `tag` command
+reports in release notes, and what a maintainer follows when creating a
+maintenance branch or tagging a patch on one.
+
 Release branch names use:
 
 ```text
@@ -252,6 +249,51 @@ Examples:
 | `nvcf-ratelimiter-v1.15.1` | `release-nvcf-ratelimiter-v1.15` |
 
 Slashes remain branch namespace separators.
+
+## Retiring the version-file model
+
+NVCA, `nvcf-compute-plane-stack`, `nvcf-self-managed-stack`, and
+`nvcf-observability-stack` used to declare `version_file` and
+`dev_prerelease`. On `main` they cut `<path>/v<X.Y.Z>-dev.N` from a
+`VERSION` file, and a stable version only appeared on a release branch.
+They now use semantic-release like every other service.
+
+`initial_version` alone could not carry those version lines across.
+The floor is only synthesized when a service has no tags at all, and
+each of the four had hundreds of `-dev.N` tags. Their stable tags were
+also unreachable from `main`: the NVCA 3.2 line lives on
+`release-src/compute-plane-services/nvca/v3.2`, and two of the stacks
+had no stable tag at all. Left alone, semantic-release would have
+restarted each line at `0.1.0`.
+
+Each line was carried across with one `anchor` per service, at the
+version its `VERSION` file last held:
+
+| Service | Anchored version |
+| --- | --- |
+| `nvca` | `3.3.0` |
+| `nvcf-compute-plane-stack` | `0.2.0` |
+| `nvcf-self-managed-stack` | `0.8.0` |
+| `nvcf-observability-stack` | `0.0.0` |
+
+Anchor each one on the newest commit that touched its own subtree, not
+on the commit its newest `-dev.N` tag points at. All four services
+received a dev tag on every default-branch push, so their newest dev
+tags share one commit, and `refs/notes/semantic-release` holds one note
+per commit. Anchoring them all on that shared commit would fail on the
+second service.
+
+```bash
+sha="$(git log -n1 --format=%H origin/main -- src/compute-plane-services/nvca)"
+./tools/ci/github-release anchor --service nvca --version 3.3.0 --ref "${sha}" --dry-run
+./tools/ci/github-release anchor --service nvca --version 3.3.0 --ref "${sha}" --push
+```
+
+`anchor` writes a tag and a note; it does not create a GitHub Release.
+The internal release dispatcher reacts to Releases, so an anchor starts
+no image pipeline. The first real release for each service is the next
+bump above its anchor, for example `3.3.1` for an NVCA `fix` or `3.4.0`
+for a `feat`.
 
 ## Cutover anchors
 
