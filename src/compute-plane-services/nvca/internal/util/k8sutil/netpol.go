@@ -96,6 +96,7 @@ func EnsureNetworkPoliciesFunctionNamespace(
 		ffFetcher,
 		k8sClient,
 		crClient,
+		true,
 		allExtraNPs...,
 	)
 }
@@ -114,7 +115,25 @@ func EnsureNetworkPoliciesSharedPodInstanceNamespace(
 		ffFetcher,
 		k8sClient,
 		crClient,
+		false,
 	)
+}
+
+// RemoveLegacyIntraNamespaceEgressPolicy deletes the allow-egress-intra-namespace
+// NetworkPolicy from the shared pod-instance namespace (nvcf-backend) if it still
+// exists from before this policy was scoped out of that namespace. It is meant to
+// be called once, at agent startup, rather than on every reconcile: the policy is
+// not custom-labeled, so the regular ensureNetworkPolicies prune loop never removes
+// it on its own, and clusters that already have it must be migrated explicitly.
+func RemoveLegacyIntraNamespaceEgressPolicy(ctx context.Context, namespace string, k8sClient k8sclient.Interface) error {
+	err := k8sClient.NetworkingV1().NetworkPolicies(namespace).Delete(
+		ctx, AllowEgressIntraNamespaceNetworkPolicyName, metav1.DeleteOptions{},
+	)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete legacy NetworkPolicy %s in namespace %s: %w",
+			AllowEgressIntraNamespaceNetworkPolicyName, namespace, err)
+	}
+	return nil
 }
 
 func ensureNetworkPolicies(
@@ -124,6 +143,16 @@ func ensureNetworkPolicies(
 	ffFetcher featureflag.Fetcher,
 	k8sClient k8sclient.Interface,
 	crClient client.Client,
+	// isMiniServiceNamespace is true for function namespaces (one MiniService
+	// per namespace, via EnsureNetworkPoliciesFunctionNamespace). A
+	// same-namespace allow is safe there because only one tenant's pods ever
+	// live in the namespace, e.g. a MiniService's utils pod reaching its own
+	// inference pod on a different pod in the same namespace. It is false for
+	// the namespace shared across every container-function tenant on the
+	// cluster (nvcf-backend, via EnsureNetworkPoliciesSharedPodInstanceNamespace),
+	// where the same allow would let one customer's pod reach another
+	// customer's pod.
+	isMiniServiceNamespace bool,
 	extraNPs ...*netv1.NetworkPolicy,
 ) error {
 	log := core.GetLogger(ctx)
@@ -167,16 +196,18 @@ func ensureNetworkPolicies(
 
 		switch newNP.Name {
 		case MonitoringIngressNetworkPolicyName:
-			snRule := netv1.NetworkPolicyIngressRule{
-				From: []netv1.NetworkPolicyPeer{
-					{
-						NamespaceSelector: &metav1.LabelSelector{
-							MatchLabels: map[string]string{K8sNameLabelKey: namespace},
+			if isMiniServiceNamespace {
+				snRule := netv1.NetworkPolicyIngressRule{
+					From: []netv1.NetworkPolicyPeer{
+						{
+							NamespaceSelector: &metav1.LabelSelector{
+								MatchLabels: map[string]string{K8sNameLabelKey: namespace},
+							},
 						},
 					},
-				},
+				}
+				newNP.Spec.Ingress = append(newNP.Spec.Ingress, snRule)
 			}
-			newNP.Spec.Ingress = append(newNP.Spec.Ingress, snRule)
 		case EgressNVCFCacheNetworkPolicyNameKey:
 			// check if both container-caching & dns-proxy namespaces are present
 			var ccnsErr, pcnsErr error
