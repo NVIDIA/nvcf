@@ -63,6 +63,9 @@ jobs:
     permissions:
       contents: write
       packages: read
+      # Releases comment the version they shipped on the pull requests that went
+      # into them. Needed for the github.token fallback; a PAT carries its own.
+      pull-requests: write
     steps:
       # ref is the branch, not the pushed SHA. Two reasons, both about the gap
       # between when a push happens and when this job actually runs:
