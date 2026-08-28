@@ -9,10 +9,10 @@ metadata:
     app.kubernetes.io/created-by: dynamo-operator
     app.kubernetes.io/part-of: dynamo-operator
     control-plane: controller-manager
-    helm.sh/chart: dynamo-operator-1.2.1
+    helm.sh/chart: dynamo-operator-1.4.1
     app.kubernetes.io/name: dynamo-operator
     app.kubernetes.io/instance: dynamo-operator
-    app.kubernetes.io/version: "1.2.1"
+    app.kubernetes.io/version: "1.4.1"
     app.kubernetes.io/managed-by: Helm
 spec:
   type: ClusterIP

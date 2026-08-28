@@ -147,6 +147,7 @@ go_test(
         "webhook_miniservice_mutating_test.go",
         "webhooks_cert_test.go",
         "webhooks_certrefresh_test.go",
+        "webhooks_ensure_test.go",
         "webhooks_test.go",
     ],
     data = glob(["testdata/**"]) + [
@@ -218,6 +219,7 @@ go_test(
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/fake",
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/rest",
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/restmapper",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/testing",
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/cache",
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/tools/record",
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/util/workqueue",

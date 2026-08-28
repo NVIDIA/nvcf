@@ -77,17 +77,20 @@ expect "missing values directory fails" 1 "values directory not found"
 
 fake_values_dir=""
 fake_chart_root=""
+fake_chart_count=0
 
-make_fake_tree() {  # sets $fake_values_dir and $fake_chart_root from the real chart_map
+make_fake_tree() {  # sets $fake_values_dir, $fake_chart_root, and $fake_chart_count from the real chart_map
     local stem rel
     fake_values_dir="$(mktemp -d)"
     fake_chart_root="$(mktemp -d)"
+    fake_chart_count=0
     while read -r stem rel; do
         [ -n "${stem}" ] || continue
         : >"${fake_values_dir}/${stem}.yaml"
         mkdir -p "${fake_chart_root}/${rel}"
         printf 'apiVersion: v2\nname: %s\nversion: 0.0.0\n' "${stem}" \
             >"${fake_chart_root}/${rel}/Chart.yaml"
+        fake_chart_count=$((fake_chart_count + 1))
     done < <(sed -n '/^chart_map=(/,/^)/p' "${script}" | sed -n 's/^ *"\(.*\)"$/\1/p')
     if [ ! -f "${fake_chart_root}/openbao/helm/Chart.yaml" ]; then
         printf 'FAIL fake tree: chart_map did not yield the expected entries\n'
@@ -124,7 +127,7 @@ run_with_fake_helm() {  # run_with_fake_helm -> sets $out and $rc
 make_fake_tree
 printf 'dependencies:\n  - name: openbao\n' >>"${fake_chart_root}/openbao/helm/Chart.yaml"
 run_with_fake_helm
-expect "fetched charts directory is removed" 0 "14 charts linted and rendered"
+expect "fetched charts directory is removed" 0 "${fake_chart_count} charts linted and rendered"
 if [ -e "${fake_chart_root}/openbao/helm/charts" ]; then
     printf 'FAIL created charts directory left behind\n'
     fail=1
@@ -141,7 +144,7 @@ printf 'dependencies:\n  - name: openbao\n' >>"${fake_chart_root}/openbao/helm/C
 mkdir -p "${fake_chart_root}/openbao/helm/charts/vendored-subchart"
 : >"${fake_chart_root}/openbao/helm/charts/vendored-0.1.0.tgz"
 run_with_fake_helm
-expect "existing charts directory run succeeds" 0 "14 charts linted and rendered"
+expect "existing charts directory run succeeds" 0 "${fake_chart_count} charts linted and rendered"
 if [ -e "${fake_chart_root}/openbao/helm/charts/fetched-0.1.0.tgz" ]; then
     printf 'FAIL fetched archive left in an existing charts directory\n'
     fail=1
