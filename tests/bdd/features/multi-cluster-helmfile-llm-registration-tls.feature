@@ -88,6 +88,7 @@ Feature: Register an LLM worker securely with every router in a local split-clus
         grpcurl -plaintext -max-time 5 -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates
         """
       Then the command exit code should be 1
+      And the command output should contain "does not look like a TLS handshake"
 
       # WatchStargates is a long-lived stream. Normalize grpcurl's deadline
       # exit after it prints the initial snapshot.

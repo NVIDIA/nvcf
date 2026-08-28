@@ -1278,6 +1278,9 @@ func TestMultiClusterHelmfileLLMRegistrationTLSFeatureFileWiresToSteps(t *testin
 	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, tlsWatchCommand) {
 		t.Fatal("WatchStargates was not observed over the trusted TLS listener")
 	}
+	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, plaintextWatchCommand) {
+		t.Fatal("plaintext WatchStargates rejection was not exercised")
+	}
 }
 
 // TestSingleClusterHelmfileUpstreamImagesFeatureFileWiresToSteps runs the
