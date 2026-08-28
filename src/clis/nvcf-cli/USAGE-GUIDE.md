@@ -752,7 +752,16 @@ curl -X POST https://api.nvcf.nvidia.com/v2/nvcf/accounts/nvcf-default/registry-
   --inference-port 8000 \
   --inference-url / \
   --function-type LLM \
-  --llm-model "name=dummy-model,uris=/v1/chat/completions|/v1/responses|/v1/embeddings,routingMethod=round_robin,tokenRateLimit=1000-S" \
+  --llm-model "name=dummy-model,uris=/v1/chat/completions|/v1/responses|/v1/embeddings,routingMethod=round_robin,tokenRateLimit=1000-S"
+
+# Create an LLM function with request priority
+./nvcf-cli function create \
+  --name my-priority-llm-function \
+  --image nvcr.io/example/openai-compatible:latest \
+  --inference-port 8000 \
+  --inference-url / \
+  --function-type LLM \
+  --llm-model "name=dummy-model,uris=/v1/chat/completions" \
   --llm-default-priority 7 \
   --llm-per-account-priority "nca-id:3"
 ```
