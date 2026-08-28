@@ -40,6 +40,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
@@ -4426,9 +4427,9 @@ func TestGetGPUUsageStats_FallbackToNonSuffixSingleType(t *testing.T) {
 		Status: corev1.NodeStatus{
 			Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}},
 			Allocatable: corev1.ResourceList{
-				corev1.ResourceCPU:              resource.MustParse("5"),
-				corev1.ResourceMemory:           resource.MustParse("32Gi"),
-				corev1.ResourceEphemeralStorage: resource.MustParse("256Gi"),
+				corev1.ResourceCPU:                               resource.MustParse("5"),
+				corev1.ResourceMemory:                            resource.MustParse("32Gi"),
+				corev1.ResourceEphemeralStorage:                  resource.MustParse("256Gi"),
 				corev1.ResourceName(nodefeatures.GPUResourceKey): resource.MustParse("4"),
 			},
 		},
@@ -5459,4 +5460,28 @@ func TestUpdateSchedulerWorkloadMetrics(t *testing.T) {
 		vals = getGaugeValues(reg)
 		assert.Equal(t, float64(1), vals[gaugeKey{"kai-scheduler", "function"}])
 	})
+}
+
+func TestEnsureModelCacheNamespaceLabel_PatchesWithCorrectPayload(t *testing.T) {
+	namespace := "nvca-modelcache-init"
+	expectedPatch := []byte(fmt.Sprintf(`[{"op": "add", "path": "/metadata/labels/%s", "value": %q}]`,
+		strings.ReplaceAll(nvcatypes.WorkloadInstanceTypeLabel, "/", "~1"),
+		nvcatypes.WorkloadInstanceTypeValueMiniService))
+
+	nsPatcher := &mockNamespacePatcher{}
+	nsPatcher.On("Patch", mock.Anything, namespace, apitypes.JSONPatchType, expectedPatch, metav1.PatchOptions{}).
+		Return(&corev1.Namespace{}, nil)
+
+	err := ensureModelCacheNamespaceLabel(context.Background(), nsPatcher, namespace)
+	assert.NoError(t, err)
+	nsPatcher.AssertExpectations(t)
+}
+
+func TestEnsureModelCacheNamespaceLabel_PatchError(t *testing.T) {
+	nsPatcher := &mockNamespacePatcher{}
+	nsPatcher.On("Patch", mock.Anything, mock.Anything, apitypes.JSONPatchType, mock.Anything, metav1.PatchOptions{}).
+		Return(nil, fmt.Errorf("patch error"))
+
+	err := ensureModelCacheNamespaceLabel(context.Background(), nsPatcher, "nvca-modelcache-init")
+	assert.Error(t, err)
 }
