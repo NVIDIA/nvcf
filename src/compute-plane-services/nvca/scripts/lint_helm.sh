@@ -91,6 +91,111 @@ assert_pre_delete_cleanup_rbac() {
     "pre-delete cleanup hook RBAC is kept for the running Job"
 }
 
+assert_storage_capability_catalog() (
+  local service_chart="${repo_root}/deployments/nvca-operator"
+  local release_chart="${repo_root}/../../../deploy/helm/nvca-operator/nvca-operator"
+  local catalog="files/nvcf-storage-capabilities-v1alpha1.yaml"
+  local schema="files/nvcf-storage-capabilities-v1alpha1.schema.json"
+  local template="templates/storage-capabilities-configmap.yaml"
+  local rendered missing_chart schema_python tmpdir invalid_catalog schema_check
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "${tmpdir}"' EXIT
+  missing_chart="${tmpdir}/missing-chart"
+  schema_python="${tmpdir}/venv/bin/python"
+  python3 -m venv --system-site-packages "${tmpdir}/venv"
+  "${schema_python}" -m pip install --disable-pip-version-check --quiet \
+    --requirement "${repo_root}/scripts/requirements-lint.txt"
+  schema_check='import json,sys,yaml,jsonschema; schema=json.load(open(sys.argv[1])); jsonschema.Draft202012Validator.check_schema(schema); jsonschema.Draft202012Validator(schema).validate(yaml.safe_load(open(sys.argv[2])))'
+
+  for relative in "${catalog}" "${schema}" "${template}"; do
+    diff -u "${service_chart}/${relative}" "${release_chart}/${relative}"
+  done
+
+  rendered="${tmpdir}/rendered.yaml"
+  helm template test-release "${service_chart}" --namespace nvca-system \
+    --set "ngcConfig.serviceKey=fakekey" \
+    --show-only "${template}" >"${rendered}"
+  assert_eq "nvcf-storage-capabilities" "$(yq -r ".metadata.name" "${rendered}")" \
+    "storage capability ConfigMap uses the stable name"
+  assert_eq "nvca-system" "$(yq -r ".metadata.namespace" "${rendered}")" \
+    "storage capability ConfigMap is owned by the chart release namespace"
+  assert_eq "$(<"${service_chart}/${catalog}")" \
+    "$(yq -r ".data.\"storage-provider-capabilities.yaml\"" "${rendered}")" \
+    "storage capability ConfigMap embeds the exact catalog payload"
+  "${schema_python}" -c "${schema_check}" \
+    "${service_chart}/${schema}" "${service_chart}/${catalog}"
+
+  invalid_catalog="${tmpdir}/invalid-catalog.yaml"
+  for mutation in \
+    'del(.drivers."csi.weka.io".accessModes)' \
+    '.drivers."csi.weka.io".accessModes = null'; do
+    yq "${mutation}" "${service_chart}/${catalog}" >"${invalid_catalog}"
+    if "${schema_python}" -c "${schema_check}" \
+      "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+      echo "Expected schema to reject missing or null accessModes" >&2
+      return 1
+    fi
+  done
+  echo "PASS: schema rejects missing and null accessModes"
+
+  yq '.drivers."nvmesh-csi.excelero.com".accessModes = ["ReadWriteOnce"]' \
+    "${service_chart}/${catalog}" >"${invalid_catalog}"
+  if "${schema_python}" -c "${schema_check}" \
+    "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    echo "Expected schema to reject an NVMesh transition without ReadOnlyMany" >&2
+    return 1
+  fi
+  echo "PASS: schema rejects an NVMesh transition without ReadOnlyMany"
+
+  yq '(.drivers."csi.weka.io".accessModes = ["ReadWriteOnce", "ReadOnlyMany"]) |
+      (.drivers."csi.weka.io".transitions.regularModelCache = "nvmesh")' \
+    "${service_chart}/${catalog}" >"${invalid_catalog}"
+  if "${schema_python}" -c "${schema_check}" \
+    "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    echo "Expected schema to reject an NVMesh transition on another provisioner" >&2
+    return 1
+  fi
+  echo "PASS: schema rejects an NVMesh transition on another provisioner"
+
+  yq '.drivers."csi.weka.io".transitions.containerCache = "disabled"' \
+    "${service_chart}/${catalog}" >"${invalid_catalog}"
+  if "${schema_python}" -c "${schema_check}" \
+    "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    echo "Expected schema to reject a container-cache transition" >&2
+    return 1
+  fi
+  echo "PASS: schema rejects a container-cache transition"
+
+  yq '.drivers."csi.weka.io".unexpected = true' \
+    "${service_chart}/${catalog}" >"${invalid_catalog}"
+  if "${schema_python}" -c "${schema_check}" \
+    "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    echo "Expected schema to reject an unknown driver field" >&2
+    return 1
+  fi
+  echo "PASS: schema rejects an unknown driver field"
+
+  helm template test-release "${release_chart}" --namespace nvca-system \
+    --show-only "${template}" >"${rendered}"
+  assert_eq "nvca-system" "$(yq -r ".metadata.namespace" "${rendered}")" \
+    "release-chart storage capability ConfigMap is owned by the release namespace"
+  assert_eq "$(<"${service_chart}/${catalog}")" \
+    "$(yq -r ".data.\"storage-provider-capabilities.yaml\"" "${rendered}")" \
+    "release chart embeds the exact catalog payload"
+
+  mkdir -p "${missing_chart}"
+  cp -a "${service_chart}/." "${missing_chart}/"
+  rm -f "${missing_chart}/${catalog}"
+  if helm template test-release "${missing_chart}" --set "ngcConfig.serviceKey=fakekey" >"${rendered}" 2>&1; then
+    echo "Expected rendering without the storage capability catalog to fail" >&2
+    return 1
+  fi
+  grep -q "required NVCF storage capability catalog" "${rendered}"
+  echo "PASS: storage capability catalog schema, render, payload, and chart parity"
+)
+
+assert_storage_capability_catalog
+
 # The Bazel-built NVCA operator image is distroless, so the rendered workload
 # commands must execute the packaged binaries directly. A /tini wrapper would
 # fail at container startup because that binary is not present in the image.

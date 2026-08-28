@@ -1,0 +1,56 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# This public catalog is owned by NVCA and installed with the NVCA chart.
+# accessModes lists only modes demonstrated for the exact tested provider.
+# A disabled transition means that the end-to-end workflow is not qualified.
+# The catalog is not yet wired into NVCA reconciliation or backend selection.
+apiVersion: storage.nvcf.nvidia.com/v1alpha1
+kind: StorageCapabilityCatalog
+drivers:
+  nvmesh-csi.excelero.com:
+    provider: nvmesh
+    accessModes:
+      - ReadWriteOnce
+      - ReadOnlyMany
+    transitions:
+      regularModelCache: nvmesh
+      helmModelCache: nvmesh
+  csi.weka.io:
+    provider: weka
+    # Fresh RWX and ROX claims were tested. Cross-namespace cache lifecycle is
+    # not yet qualified, so both transitions remain disabled.
+    accessModes:
+      - ReadWriteMany
+      - ReadOnlyMany
+    transitions:
+      regularModelCache: disabled
+      helmModelCache: disabled
+  fss.csi.oraclecloud.com:
+    provider: ociFss
+    # Only an RWX claim was tested. Its readers used read-only Pod mounts; that
+    # is not evidence that a ReadOnlyMany claim is supported.
+    accessModes:
+      - ReadWriteMany
+    transitions:
+      regularModelCache: disabled
+      helmModelCache: disabled
+  lustre.csi.oraclecloud.com:
+    provider: ociLustre
+    # No PVC access mode has been qualified in an NVCF cache workflow.
+    accessModes: []
+    transitions:
+      regularModelCache: disabled
+      helmModelCache: disabled

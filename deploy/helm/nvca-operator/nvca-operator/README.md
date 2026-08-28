@@ -3,6 +3,12 @@
 NVCF Cluster Agent (NVCA) Operator installs and manages reconfiguration, upgrades, and health checks of NVCA
 used in Kubernetes Clusters to run NVCF Workloads.
 
+## Storage capability catalog
+
+The chart installs the versioned `nvcf-storage-capabilities` ConfigMap in the Helm release namespace. The public catalog and JSON Schema contain only the PVC access modes demonstrated for each CSI provisioner and the transition strategy for regular and Helm model cache. A `disabled` transition means that workflow is not qualified. Container cache is outside NVCA and is not part of this catalog.
+
+This release does not wire the catalog into backend selection. Runtime use requires a durable cache plan and safe legacy-request migration so retries and agent restarts cannot change backends. Managed deployments will inspect the exact `nvcf-sc` StorageClass when that follow-up is implemented. Editing this ConfigMap does not enable a storage backend today.
+
 ## Parameters
 
 ### NVCA Operator parameters

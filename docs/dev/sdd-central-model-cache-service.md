@@ -6,13 +6,22 @@ Implemented in NVCA. This document describes the model cache design as built in
 `pkg/storage` (the model cache StorageRequest controller), `pkg/webhook`
 (workload volume injection), and `internal/metrics` (observability).
 
+The target provider-neutral design is documented in
+[Storage-Agnostic Cache Architecture](sdd-storage-agnostic-cache-architecture.md).
+The catalog is not wired into runtime selection, so this document remains the
+current implementation reference until that migration is complete. The current
+webhook does not set every model-cache volume mount read-only; the target design
+defines the required fix and qualification test. The stable deployment contract
+is `StorageClass/nvcf-sc`; the extra class-name checks below are legacy runtime
+behavior, not the target provider-selection contract.
+
 ## Goal
 
 A function or task can declare a model cache by `cacheHandle`. The first workload
 that needs a given handle downloads the model once; every later workload for the
-same handle, in any namespace, attaches the already-downloaded copy read-only
-instead of downloading again. Caching is best-effort: if the cache cannot be
-provisioned the workload still runs, just without a shared cache.
+same handle, in any namespace, attaches the already-downloaded copy through a
+reader volume instead of downloading again. Caching is best-effort: if the cache
+cannot be provisioned the workload still runs, just without a shared cache.
 
 The service is folded into NVCA rather than run as a standalone operator. It
 reuses NVCA's existing machinery: a control namespace, a per-cacheHandle
@@ -28,28 +37,36 @@ and the mutating webhook that mounts the cache into workload pods.
 - Backend: the storage mechanism used to hold and share the cache. One of
   `nvmesh`, `sharedfs`, `samba`, `ephemeral`.
 - Writer: the single init Job that downloads the model into the backend.
-- Reader: the per-namespace read-only volume a workload mounts.
-- Durable marker: a cluster-scoped object whose existence means "this handle is
+- Reader: the per-namespace volume intended to expose populated cache data. The
+  current webhook marks the PVC source read-only but not every matching
+  `volumeMount`.
+- Durable marker: a durable Kubernetes object whose existence means "this handle is
   populated", used so any namespace and any agent restart can detect a populated
   cache without depending on in-memory state.
 
 ## Backend selection
 
-The miniservice reconciler selects a backend once per request via
-`SelectHelmCacheBackend` (`pkg/storage/cachebackend.go`) and stamps it on the
-`StorageRequest.spec.modelCache.backend`. Selection is deterministic on cluster
-state and feature flags:
+The current miniservice reconciler calls `SelectHelmCacheBackend`
+(`pkg/storage/cachebackend.go`) during each install reconcile and stamps the
+result on `StorageRequest.spec.modelCache.backend`. It does not persist an
+immutable plan before side effects. Selection uses cluster state, feature flags,
+and legacy class-name sentinels:
 
-1. `CachingSupport` disabled: no cache (`none`).
-2. `nvcf-sc-30` StorageClass exists (NVMesh 3.x): `nvmesh`.
+1. `CachingSupport` or `HelmModelCaching` disabled: no cache (`none`).
+2. Legacy `nvcf-sc-30` sentinel exists: `nvmesh`.
 3. `nvcf-miniservice-sc` StorageClass exists (operator-provided third-party shared
    storage): `sharedfs`.
-4. `HelmSharedStorage` flag enabled: `samba`.
+4. `HelmSharedStorage` enabled and the configured model-cache backing class exists: `samba`.
 5. Otherwise: `ephemeral`.
 
 NVCA never creates `nvcf-miniservice-sc`. That StorageClass is exclusively the
 operator's signal that third-party shared storage is present (branch 3 above).
 The Samba backend (branch 4) is self-contained and creates no StorageClass.
+
+This decision tree describes compatibility code in public NVCA main. Target
+selection reads `nvcf-sc`, finds its provisioner in the catalog, and persists a
+shared cache binding. NVMesh uses transition `nvmesh` for both regular and Helm
+model cache. Samba remains only a legacy fallback; it is not an NVMesh transition.
 
 ## Lifecycle shared by all shared backends
 
@@ -93,15 +110,16 @@ the init lease or any in-memory fan-out, both of which are lost on restart.
   namespace) plus a read-only PVC.
 - samba: a static SMB CSI PV pointing at the per-handle Samba share, read-only,
   plus a read-only PVC.
-- sharedfs: a read-only PVC on the shared class; the class itself shares data
-  across namespaces, so no per-namespace PV plumbing is needed.
+- sharedfs: a separately provisioned read-only PVC on the shared class. Current
+  code assumes it resolves to the writer's data, which is not guaranteed by a
+  StorageClass or provisioner alone.
 
-## Samba backend (Samba over NVMesh)
+## Legacy Samba fallback
 
-Selected when no NVMesh 3.x or operator shared storage exists but
-`HelmSharedStorage` is on. NVMesh block storage is ReadWriteOnce, so it cannot be
-shared read-only across namespaces directly. The Samba backend re-exports an
-`nvcf-sc` volume over SMB, which supports ReadWriteMany and ReadOnlyMany.
+Current compatibility code selects this backend when neither legacy class
+sentinel is present and `HelmSharedStorage` is on. It re-exports an `nvcf-sc`
+volume over SMB for cross-namespace readers. It is not the target NVMesh
+transition.
 
 Each cacheHandle gets its own Samba server and its own backing volume. There is
 no single shared server or global data PVC: a single fixed-size volume cannot be
@@ -131,8 +149,9 @@ character name limit a stable hashed suffix is used.
 The mutating webhook (`pkg/webhook/helm_storage_webhook.go`) injects the cache
 into workload pods. When a pod carries the
 `nvca.nvcf.nvidia.io/storage-modelcache-pvc-name` annotation the webhook adds a
-`model-data` volume bound to the read-only cache PVC and mounts it at the model
-paths.
+`model-data` volume bound to the cache PVC and mounts it at the model paths. The
+PVC volume source is marked read-only; current matching `volumeMount` entries
+are not, which the target design requires NVCA to fix before qualification.
 
 The shared-storage volumes use a drop-and-re-add pattern on every admission. The
 model cache volume participates in the same drop-and-re-add
@@ -198,11 +217,10 @@ child span around per-handle Samba provisioning.
   separately provisioned PVCs on the same StorageClass do not share data on
   provisioners that create per-claim access points, subvolumes, or
   directories (EFS access points, CephFS subvolumes, some NFS provisioners).
-  Classes backed by a single share (for example an SMB class pointing at one
-  server share) work. The capability probe validates bindability, not
-  data-sharing; the fast-follow is a write-through-one-claim /
-  read-through-another probe, and deriving reader PVs from the writer's bound
-  volume where the driver supports it.
+  A class backed by one share may expose the same data, but class presence does
+  not prove that identity. The capability probe validates bindability, not
+  data-sharing; target qualification requires a no-copy cross-namespace data
+  identity and read-only enforcement tests.
 - The per-handle Samba infrastructure is create-once: image, resource, and
   cache-size changes do not reconcile onto an existing server or expand its
   backing PVC.

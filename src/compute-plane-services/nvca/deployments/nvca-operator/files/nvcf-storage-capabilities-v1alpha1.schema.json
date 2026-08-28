@@ -1,0 +1,101 @@
+{
+  "$comment": "SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved. SPDX-License-Identifier: Apache-2.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nvcf.nvidia.com/schemas/storage-capability-catalog-v1alpha1.json",
+  "title": "NVCF storage capability catalog",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "drivers"],
+  "properties": {
+    "apiVersion": {"const": "storage.nvcf.nvidia.com/v1alpha1"},
+    "kind": {"const": "StorageCapabilityCatalog"},
+    "drivers": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"type": "string", "minLength": 1, "pattern": "\\S"},
+      "properties": {
+        "nvmesh-csi.excelero.com": {"$ref": "#/$defs/driver"}
+      },
+      "additionalProperties": {"$ref": "#/$defs/disabledDriver"}
+    }
+  },
+  "$defs": {
+    "accessMode": {
+      "type": "string",
+      "enum": ["ReadWriteOnce", "ReadOnlyMany", "ReadWriteMany"]
+    },
+    "transitionStrategy": {
+      "type": "string",
+      "enum": ["disabled", "nvmesh"]
+    },
+    "transitions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["regularModelCache", "helmModelCache"],
+      "properties": {
+        "regularModelCache": {"$ref": "#/$defs/transitionStrategy"},
+        "helmModelCache": {"$ref": "#/$defs/transitionStrategy"}
+      }
+    },
+    "driver": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "accessModes", "transitions"],
+      "properties": {
+        "provider": {"type": "string", "minLength": 1, "pattern": "\\S"},
+        "accessModes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/accessMode"}
+        },
+        "transitions": {"$ref": "#/$defs/transitions"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "transitions": {
+                "anyOf": [
+                  {
+                    "properties": {"regularModelCache": {"const": "nvmesh"}},
+                    "required": ["regularModelCache"]
+                  },
+                  {
+                    "properties": {"helmModelCache": {"const": "nvmesh"}},
+                    "required": ["helmModelCache"]
+                  }
+                ]
+              }
+            },
+            "required": ["transitions"]
+          },
+          "then": {
+            "properties": {
+              "accessModes": {
+                "allOf": [
+                  {"contains": {"const": "ReadWriteOnce"}},
+                  {"contains": {"const": "ReadOnlyMany"}}
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "disabledDriver": {
+      "allOf": [
+        {"$ref": "#/$defs/driver"},
+        {
+          "properties": {
+            "transitions": {
+              "properties": {
+                "regularModelCache": {"const": "disabled"},
+                "helmModelCache": {"const": "disabled"}
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}
