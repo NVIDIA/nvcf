@@ -30,6 +30,8 @@ Feature: Reject insecure or invalid LLM worker registration
         | observability.profile                                      | disabled                                                             |
       And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-bdd-registration-tls-fail-closed-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
       And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-bdd-registration-tls-invalid-authority-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
+      When I run command "/bin/sh -c 'command -v grpcurl >/dev/null'"
+      Then the command exit code should be 0
       When I run command "k3d cluster get ncp-local"
       Then the command exit code should be 1
       And multi-cluster ncp-local compute clusters are running:
@@ -65,7 +67,7 @@ Feature: Reject insecure or invalid LLM worker registration
       # expected DNS identity, and HTTP/2 application protocol.
       When I run command:
         """
-        /bin/bash -c 'openssl s_client -connect 127.0.0.1:50071 -servername llm-request-router.nvcf.svc.cluster.local -alpn h2 -verify_return_error -CAfile <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf -o jsonpath="{.data.ca\.crt}" | base64 -d) </dev/null 2>&1'
+        /bin/bash -c 'openssl s_client -connect 127.0.0.1:50071 -servername llm-request-router.nvcf.svc.cluster.local -verify_hostname llm-request-router.nvcf.svc.cluster.local -alpn h2 -verify_return_error -CAfile <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf -o jsonpath="{.data.ca\.crt}" | base64 -d) </dev/null 2>&1'
         """
       Then the command exit code should be 0
       And the command output should contain "Verify return code: 0 (ok)"
@@ -73,30 +75,30 @@ Feature: Reject insecure or invalid LLM worker registration
 
       When I run command:
         """
-        /bin/bash -c 'set -u; cert_dir=$(mktemp -d); trap '\''rm -rf "$cert_dir"'\'' EXIT; openssl req -x509 -newkey rsa:2048 -nodes -subj /CN=wrong-root -keyout "$cert_dir/key.pem" -out "$cert_dir/ca.pem" -days 1 >/dev/null 2>&1; grpcurl -max-time 5 -cacert "$cert_dir/ca.pem" -authority llm-request-router.nvcf.svc.cluster.local -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates >/dev/null 2>&1; rc=$?; [ "$rc" -ne 0 ] && printf "wrong-root-rejected\n"'
+        /bin/bash -c 'set -u; cert_dir=$(mktemp -d); trap '\''rm -rf "$cert_dir"'\'' EXIT; openssl req -x509 -newkey rsa:2048 -nodes -subj /CN=wrong-root -keyout "$cert_dir/key.pem" -out "$cert_dir/ca.pem" -days 1 >/dev/null 2>&1 || exit; if diagnostic=$(grpcurl -max-time 5 -cacert "$cert_dir/ca.pem" -authority llm-request-router.nvcf.svc.cluster.local -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates 2>&1); then printf "wrong root was trusted\n" >&2; exit 1; fi; case "$diagnostic" in *"certificate signed by unknown authority"*) printf "wrong-root-rejected\n" ;; *) printf "%s\n" "$diagnostic" >&2; exit 1 ;; esac'
         """
       Then the command exit code should be 0
 
       When I run command:
         """
-        /bin/bash -c 'grpcurl -max-time 5 -cacert <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf -o jsonpath="{.data.ca\.crt}" | base64 -d) -authority wrong-host.nvcf.svc.cluster.local -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates >/dev/null 2>&1; rc=$?; [ "$rc" -ne 0 ] && printf "wrong-host-rejected\n"'
+        /bin/bash -c 'if diagnostic=$(grpcurl -max-time 5 -cacert <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf -o jsonpath="{.data.ca\.crt}" | base64 -d) -authority wrong-host.nvcf.svc.cluster.local -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates 2>&1); then printf "wrong hostname was accepted\n" >&2; exit 1; fi; case "$diagnostic" in *"not wrong-host.nvcf.svc.cluster.local"*) printf "wrong-host-rejected\n" ;; *) printf "%s\n" "$diagnostic" >&2; exit 1 ;; esac'
         """
       Then the command exit code should be 0
 
       When I run command:
         """
-        /bin/bash -c 'grpcurl -max-time 5 -authority llm-request-router.nvcf.svc.cluster.local -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates >/dev/null 2>&1; rc=$?; [ "$rc" -ne 0 ] && printf "missing-trust-rejected\n"'
+        /bin/bash -c 'if diagnostic=$(grpcurl -max-time 5 -authority llm-request-router.nvcf.svc.cluster.local -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates 2>&1); then printf "missing trust was accepted\n" >&2; exit 1; fi; case "$diagnostic" in *"certificate signed by unknown authority"*) printf "missing-trust-rejected\n" ;; *) printf "%s\n" "$diagnostic" >&2; exit 1 ;; esac'
         """
       Then the command exit code should be 0
 
       When I run command:
         """
-        /bin/bash -c 'grpcurl -plaintext -max-time 5 -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates >/dev/null 2>&1; rc=$?; [ "$rc" -ne 0 ] && printf "plaintext-rejected\n"'
+        /bin/bash -c 'if diagnostic=$(grpcurl -plaintext -max-time 5 -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates 2>&1); then printf "plaintext was accepted\n" >&2; exit 1; fi; case "$diagnostic" in *"context deadline exceeded"*|*"error reading server preface"*) printf "plaintext-rejected\n" ;; *) printf "%s\n" "$diagnostic" >&2; exit 1 ;; esac'
         """
       Then the command exit code should be 0
 
       When I run command:
         """
-        /bin/sh -c 'make -C deploy/stacks/self-managed template HELMFILE_ENV=local-bdd-registration-tls-invalid-authority >/dev/null 2>&1; rc=$?; [ "$rc" -ne 0 ] && printf "invalid-authority-rejected\n"'
+        /bin/sh -c 'if diagnostic=$(make -C deploy/stacks/self-managed template HELMFILE_ENV=local-bdd-registration-tls-invalid-authority 2>&1); then printf "invalid authority was accepted\n" >&2; exit 1; fi; case "$diagnostic" in *"global.workerEndpoints.llmRequestRouterAddress must use optional http:// or https:// followed by DNS-or-IPv4:port or [IPv6]:port with port 1-65535"*) printf "invalid-authority-rejected\n" ;; *) printf "%s\n" "$diagnostic" >&2; exit 1 ;; esac'
         """
       Then the command exit code should be 0

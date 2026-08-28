@@ -1214,11 +1214,14 @@ func TestMultiClusterHelmfileLLMRegistrationTLSFailClosedFeatureFileWiresToSteps
 	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
 
 	const tlsHandshakeCommand = `/bin/bash -c 'openssl s_client -connect 127.0.0.1:50071 ` +
-		`-servername llm-request-router.nvcf.svc.cluster.local -alpn h2 -verify_return_error ` +
+		`-servername llm-request-router.nvcf.svc.cluster.local ` +
+		`-verify_hostname llm-request-router.nvcf.svc.cluster.local -alpn h2 -verify_return_error ` +
 		`-CAfile <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf ` +
 		`-o jsonpath="{.data.ca\.crt}" | base64 -d) </dev/null 2>&1'`
+	const grpcurlPreflightCommand = `/bin/sh -c 'command -v grpcurl >/dev/null'`
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
 		"k3d cluster get ncp-local": {ExitCode: 1},
+		grpcurlPreflightCommand:     {ExitCode: 0},
 		tlsHandshakeCommand: {
 			ExitCode: 0,
 			Stdout:   "ALPN protocol: h2\nVerify return code: 0 (ok)\n",
@@ -1245,15 +1248,31 @@ func TestMultiClusterHelmfileLLMRegistrationTLSFailClosedFeatureFileWiresToSteps
 	if status != 0 {
 		t.Fatalf("godog suite status = %d\n%s", status, out.String())
 	}
-	for _, marker := range []string{
-		"wrong-root-rejected",
-		"wrong-host-rejected",
-		"missing-trust-rejected",
-		"plaintext-rejected",
-		"invalid-authority-rejected",
+	runs := suite.Runner.(*fakeRunner).runs
+	if !commandRanExactly(runs, grpcurlPreflightCommand) {
+		t.Fatal("grpcurl availability was not checked before the live probes")
+	}
+	for _, assertion := range []struct {
+		marker     string
+		diagnostic string
+	}{
+		{marker: "wrong-root-rejected", diagnostic: "certificate signed by unknown authority"},
+		{marker: "wrong-host-rejected", diagnostic: "not wrong-host.nvcf.svc.cluster.local"},
+		{marker: "missing-trust-rejected", diagnostic: "certificate signed by unknown authority"},
+		{marker: "plaintext-rejected", diagnostic: "context deadline exceeded"},
+		{
+			marker: "invalid-authority-rejected",
+			diagnostic: "global.workerEndpoints.llmRequestRouterAddress must use " +
+				"optional http:// or https:// followed by DNS-or-IPv4:port or [IPv6]:port " +
+				"with port 1-65535",
+		},
 	} {
-		if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, marker) {
-			t.Fatalf("negative registration command containing %q was not invoked", marker)
+		if !commandRanThatContainsAll(runs, assertion.marker, assertion.diagnostic) {
+			t.Fatalf(
+				"negative registration command containing %q did not require diagnostic %q",
+				assertion.marker,
+				assertion.diagnostic,
+			)
 		}
 	}
 	validEnvironment := filepath.Join(
