@@ -245,7 +245,10 @@ These paths are separate from the `grpcWorker` callback route.
 ```mermaid
 flowchart LR
     Worker["LLM worker sidecar"]
-    HttpsListener["Gateway HTTPS listener<br/>llmGrpc"]
+    subgraph GatewayTls["Gateway TLS termination"]
+        Certificate["TLS Secret<br/>dedicated gRPC certificate"]
+        HttpsListener["Gateway HTTPS listener<br/>llmGrpc"]
+    end
     GrpcRoute["GRPCRoute<br/>llm-worker-grpc"]
     UdpListener["Gateway UDP listener<br/>llmQuic"]
     UdpRoute["UDPRoute<br/>llm-worker-quic"]
@@ -253,9 +256,10 @@ flowchart LR
     Backend["Backend router"]
     Router["LLM request-router pod"]
 
-    Worker -->|"TLS + gRPC registration and watches"| HttpsListener
+    Certificate -.->|"server identity"| HttpsListener
+    Worker -->|"TLS + gRPC registration and watches<br/>public hostname SNI"| HttpsListener
     HttpsListener --> GrpcRoute
-    GrpcRoute -->|"h2c 50071"| Service
+    GrpcRoute -->|"h2c 50071<br/>Stargate :authority preserved"| Service
     Worker -->|"QUIC reverse tunnel"| UdpListener
     UdpListener --> UdpRoute
     UdpRoute -->|"UDP 50072"| Service
@@ -353,8 +357,9 @@ addons:
 The gateway-routes chart creates `GRPCRoute/llm-worker-grpc`,
 `UDPRoute/llm-worker-quic`,
 `ReferenceGrant/allow-llm-worker-routes`, a dedicated gRPC `Certificate`, and
-an Envoy `BackendTrafficPolicy` with gRPC stream timeouts disabled. Both routes
-target `Service/llm-request-router-backend-router` in the `nvcf` namespace on
+an Envoy `BackendTrafficPolicy` with the gRPC request timeout disabled. Both
+routes target `Service/llm-request-router-backend-router` in the `nvcf`
+namespace on
 ports `50071` and `50072`. The Service remains `ClusterIP` by design. Do not change
 it to `LoadBalancer` or `NodePort`; the Gateway data-plane Service owns external
 exposure.

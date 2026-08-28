@@ -134,8 +134,8 @@ Cross-namespace routing is supported via `ReferenceGrant` resources rendered int
   `grpcTls.mode=certManager` creates the named Secret through a dedicated
   `Certificate` in the gRPC Gateway namespace. `mode=existingSecret` expects
   the operator to create that Secret. The HTTPS listener must reference the
-  same Secret. The Envoy `BackendTrafficPolicy` sets both the request timeout
-  and maximum stream duration to `0s` for Watch and Register streams.
+  same Secret. The Envoy `BackendTrafficPolicy` sets the request timeout to
+  `0s` for Watch and Register streams.
   Plaintext is intended only for development and requires
   `grpcTls.allowInsecureHttp=true`; it renders the legacy `TCPRoute`.
   Keep the HTTPS and UDP Gateways separate when the infrastructure requires
