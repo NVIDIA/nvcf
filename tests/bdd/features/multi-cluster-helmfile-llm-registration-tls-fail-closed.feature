@@ -30,7 +30,7 @@ Feature: Reject insecure or invalid LLM worker registration
         | observability.profile                                      | disabled                                                             |
       And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-bdd-registration-tls-fail-closed-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
       And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-bdd-registration-tls-invalid-authority-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
-      When I run command "command -v grpcurl"
+      When I run command "/bin/sh -c 'command -v grpcurl >/dev/null'"
       Then the command exit code should be 0
       When I run command "k3d cluster get ncp-local"
       Then the command exit code should be 1

@@ -1170,9 +1170,10 @@ func TestMultiClusterHelmfileLLMRegistrationTLSFailClosedFeatureFileWiresToSteps
 		`-verify_hostname llm-request-router.nvcf.svc.cluster.local -alpn h2 -verify_return_error ` +
 		`-CAfile <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf ` +
 		`-o jsonpath="{.data.ca\.crt}" | base64 -d) </dev/null 2>&1'`
+	const grpcurlPreflightCommand = `/bin/sh -c 'command -v grpcurl >/dev/null'`
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
 		"k3d cluster get ncp-local": {ExitCode: 1},
-		"command -v grpcurl":        {ExitCode: 0},
+		grpcurlPreflightCommand:     {ExitCode: 0},
 		tlsHandshakeCommand: {
 			ExitCode: 0,
 			Stdout:   "ALPN protocol: h2\nVerify return code: 0 (ok)\n",
@@ -1200,7 +1201,7 @@ func TestMultiClusterHelmfileLLMRegistrationTLSFailClosedFeatureFileWiresToSteps
 		t.Fatalf("godog suite status = %d\n%s", status, out.String())
 	}
 	runs := suite.Runner.(*fakeRunner).runs
-	if !commandRanExactly(runs, "command -v grpcurl") {
+	if !commandRanExactly(runs, grpcurlPreflightCommand) {
 		t.Fatal("grpcurl availability was not checked before the live probes")
 	}
 	for _, assertion := range []struct {
