@@ -48,6 +48,14 @@ its pod template. New installations default to a Deployment; existing
 installations can pin a StatefulSet. After a ConfigMap-only update, restart the
 selected workload so every replica loads the same configuration.
 
+Existing StatefulSet installations must set
+`addons.llm.requestRouter.workload.kind=StatefulSet` before upgrading. Changing
+the workload kind is a controlled migration, not an in-place Kubernetes kind
+mutation. A plain Helm upgrade across workload kinds can temporarily run both
+the Deployment and StatefulSet; use the chart migration procedure to remove or
+rename the old workload and verify that only the selected kind owns the router
+Pods before scaling it.
+
 ## Distinguish router algorithms from nvcf-cli routing methods
 
 Algorithm availability is enforced at separate layers:
