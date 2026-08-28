@@ -208,15 +208,19 @@ func TestChartReleaseTagIsNotAServiceRelease(t *testing.T) {
 	}
 }
 
-func TestWriteMovesAppVersionAndOnlyTheMatchingTag(t *testing.T) {
+func TestApplyRewritesOnlyTheTagLinesMatchingAppVersion(t *testing.T) {
+	// Apply is exercised directly. PlanFor refuses a multi-image chart now, but
+	// the line-scoped rewrite is still the mechanism that protects a sidecar if
+	// a chart ever gains a way to name its service image, so it stays covered.
 	f := newFixture(t, `{"services":[
 	 {"id":"svc","path":"src/svc"},
 	 {"id":"multi","path":"deploy/helm/multi","deploys":["svc"]}
 	]}`)
 	f.chart(t, "multi", "1.0.0", "app:\n  image:\n    tag: \"1.0.0\"\nsidecar:\n  image:\n    tag: \"3.3.3\"")
 
-	if code, _, errOut := f.run(t, "src/svc/v2.0.0", true); code != 0 {
-		t.Fatalf("write should succeed, got %d: %s", code, errOut)
+	chart := Entry{ID: "multi", Path: "deploy/helm/multi", Deploys: []string{"svc"}}
+	if err := Apply(f.root, chart, "2.0.0", Plan{Action: ActionBoth, Current: "1.0.0"}); err != nil {
+		t.Fatalf("Apply: %v", err)
 	}
 	if got := f.read(t, "multi", "Chart.yaml"); !strings.Contains(got, `appVersion: "2.0.0"`) {
 		t.Fatalf("appVersion did not move:\n%s", got)
@@ -227,6 +231,51 @@ func TestWriteMovesAppVersionAndOnlyTheMatchingTag(t *testing.T) {
 	}
 	if !strings.Contains(values, `    tag: "3.3.3"`) {
 		t.Fatalf("the sidecar tag must be left alone, it belongs to another image:\n%s", values)
+	}
+}
+
+func TestMultipleImagesRefuseBecauseOwnershipIsUnknown(t *testing.T) {
+	// A tag equal to appVersion is not evidence that it is the service's image.
+	// This is the case that makes it not evidence: appVersion has fallen behind
+	// the service image at 2.0.0 and instead matches an unrelated sidecar at
+	// 1.0.0. Treating agreement as ownership moves the sidecar to the released
+	// version and leaves the service image untouched, which is a wrong edit that
+	// reads as a routine bump.
+	f := newFixture(t, `{"services":[
+	 {"id":"svc","path":"src/svc"},
+	 {"id":"drifted","path":"deploy/helm/drifted","deploys":["svc"]}
+	]}`)
+	f.chart(t, "drifted", "1.0.0",
+		"service:\n  image:\n    tag: \"2.0.0\"\nsidecar:\n  image:\n    tag: \"1.0.0\"\nother:\n  image:\n    tag: \"latest\"")
+	before := f.read(t, "drifted", "values.yaml")
+
+	code, _, errOut := f.run(t, "src/svc/v3.0.0", true)
+	if code != RefusedExit {
+		t.Fatalf("want refusal, got exit %d", code)
+	}
+	if !strings.Contains(errOut, "cannot be identified") {
+		t.Fatalf("the refusal should say ownership is unknown:\n%s", errOut)
+	}
+	if after := f.read(t, "drifted", "values.yaml"); after != before {
+		t.Fatalf("nothing may be written:\n%s", after)
+	}
+	if got := f.read(t, "drifted", "Chart.yaml"); !strings.Contains(got, `appVersion: "1.0.0"`) {
+		t.Fatalf("appVersion must not move either:\n%s", got)
+	}
+}
+
+func TestSingleFloatingTagStillRefuses(t *testing.T) {
+	f := newFixture(t, `{"services":[
+	 {"id":"svc","path":"src/svc"},
+	 {"id":"floater","path":"deploy/helm/floater","deploys":["svc"]}
+	]}`)
+	f.chart(t, "floater", "1.0.0", "image:\n  tag: \"latest\"")
+	code, _, errOut := f.run(t, "src/svc/v2.0.0", true)
+	if code != RefusedExit {
+		t.Fatalf("want refusal, got %d", code)
+	}
+	if !strings.Contains(errOut, "image tag is floating") {
+		t.Fatalf("want the floating reason:\n%s", errOut)
 	}
 }
 
@@ -332,29 +381,6 @@ func repoRoot(t *testing.T) string {
 	}
 	t.Fatalf("could not find %s above the test directory", MetadataPath)
 	return ""
-}
-
-func TestFloatingTagOnAnotherImageDoesNotRefuseTheChart(t *testing.T) {
-	// Only the tag equal to appVersion is rewritten, so a sidecar pinned to
-	// latest is none of this service's business. Checking floating before
-	// agreement refused the whole chart because of an image it never touches.
-	f := newFixture(t, `{"services":[
-	 {"id":"svc","path":"src/svc"},
-	 {"id":"mixed","path":"deploy/helm/mixed","deploys":["svc"]}
-	]}`)
-	f.chart(t, "mixed", "1.0.0", "app:\n  image:\n    tag: \"1.0.0\"\nsidecar:\n  image:\n    tag: \"latest\"")
-
-	code, out, errOut := f.run(t, "src/svc/v2.0.0", true)
-	if code != 0 {
-		t.Fatalf("want a clean bump, got exit %d\n%s%s", code, out, errOut)
-	}
-	values := f.read(t, "mixed", "values.yaml")
-	if !strings.Contains(values, `    tag: "2.0.0"`) {
-		t.Fatalf("the matching tag should have moved:\n%s", values)
-	}
-	if !strings.Contains(values, `    tag: "latest"`) {
-		t.Fatalf("the floating sidecar tag must be left alone:\n%s", values)
-	}
 }
 
 func TestFloatingStillRefusesWhenNoTagAgrees(t *testing.T) {

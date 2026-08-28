@@ -97,29 +97,39 @@ func PlanFor(root string, chart Entry, version string) (Plan, error) {
 		return Plan{}, fmt.Errorf("read %s: %w", valuesYAML, err)
 	}
 
-	// Agreement first. A chart may ship several images, and only the tag equal
-	// to appVersion is rewritten, so a floating tag on a different image is none
-	// of this service's business. Checking floating first refused the whole
-	// chart because a sidecar was pinned to latest.
-	for _, t := range tags {
-		if t == current {
-			return Plan{ActionBoth, "appVersion and image tag agree", current, tags}, nil
-		}
-	}
 	if len(tags) == 0 {
 		return Plan{ActionAppVersionOnly, "no image tag set", current, tags}, nil
 	}
-	// No tag agrees, so one of these is this service's image. If any of them
-	// floats there is nothing safe to rewrite: latest is not a pin, and
-	// replacing it with a version is a behaviour change rather than a bump.
-	var floats []string
-	for _, t := range tags {
-		if floating[t] {
-			floats = append(floats, t)
-		}
+
+	// More than one image, and nothing says which belongs to the released
+	// service. A tag equal to appVersion is not evidence of ownership: a chart
+	// whose appVersion has fallen behind its own image can still match an
+	// unrelated sidecar that happens to sit on that version, and the bump would
+	// then move the sidecar and leave the service image alone. That is a wrong
+	// edit dressed as a routine version bump, which is the failure this tool
+	// exists to avoid, so it refuses instead.
+	//
+	// Every chart with a declared service edge currently ships zero or one image
+	// tag, so nothing is blocked by this today. Charts that grow a second image
+	// need a way to name the service's own tag before they can be bumped.
+	if len(tags) > 1 {
+		return Plan{
+			ActionRefuse,
+			fmt.Sprintf("chart declares %d image tags (%s) and none is marked as this service's, so the one to move cannot be identified",
+				len(tags), strings.Join(tags, ", ")),
+			current,
+			tags,
+		}, nil
 	}
-	if len(floats) > 0 {
-		return Plan{ActionRefuse, "image tag is floating (" + strings.Join(floats, ", ") + ")", current, tags}, nil
+
+	// Exactly one image, so agreement is unambiguous evidence.
+	if floating[tags[0]] {
+		// latest is not a pin, and replacing it with a version is a behaviour
+		// change rather than a bump.
+		return Plan{ActionRefuse, "image tag is floating (" + tags[0] + ")", current, tags}, nil
+	}
+	if tags[0] == current {
+		return Plan{ActionBoth, "appVersion and image tag agree", current, tags}, nil
 	}
 	return Plan{
 		ActionRefuse,
