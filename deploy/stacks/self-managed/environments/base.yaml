@@ -171,10 +171,14 @@ functionAutoscaler:
     # environment label.
     ignoreEnv: true
 
-# API environment entries are merged over the stack defaults. Use this map for
-# chart-supported runtime overrides such as a mirrored worker-sidecar image.
+# API environment entries are merged over the stack defaults. Remote config is
+# passed to the API chart and overrides its packaged application profile. When
+# the LLM addon is enabled, the stack defaults the Pylon image from
+# global.sidecars (or global.image) at version 0.14.1.
 api:
   env: {}
+  remoteConfig:
+    configData: {}
 
 # Image overrides for the API account-bootstrap job. alpine-k8s is not
 # republished under the public nvidia/nvcf catalog, so it defaults to its

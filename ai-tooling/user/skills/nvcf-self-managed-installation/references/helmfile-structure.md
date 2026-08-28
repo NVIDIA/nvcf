@@ -208,9 +208,16 @@ repository, set the generated worker sidecar image explicitly:
 
 ```yaml
 api:
-  env:
-    NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE: <registry>/<repository>/pylon:0.14.1
+  remoteConfig:
+    configData:
+      nvcf:
+        sidecars:
+          llm-router-client-image: <registry>/<repository>/pylon:0.14.1
 ```
+
+The legacy `api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE` path is deprecated.
+The stack translates it for one compatibility window, but new configurations
+must use the remote-config path. Conflicting values fail rendering.
 
 Render and apply the updated control-plane environment, then refresh every
 registered compute plane using the same handoff used for its installation so
@@ -226,9 +233,11 @@ Use the complete compute-plane install command from
 CLI-profile installation must remain profile-driven; a Helmfile installation
 must remain values-driven.
 
-Existing LLM function pods keep their existing sidecar arguments. Recreate or
-redeploy those functions after the compute-plane refresh. Verify the control
-plane, route, and worker sidecar:
+Existing LLM function versions retain the worker-sidecar image metadata
+captured when the version is created. Replacing pods or redeploying the same
+version does not apply a new Pylon image. After the control-plane update,
+create and deploy a new function version. Verify the control plane, route, and
+worker sidecar:
 
 ```bash
 kubectl get deploy -n nvcf llm-api-gateway

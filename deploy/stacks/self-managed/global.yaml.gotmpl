@@ -376,6 +376,78 @@ natsAuthCalloutService:
 {{- end }}
 {{- $nvcfApiGrpcRouteHostnames := dig "ingress" "gatewayApi" "routes" "nvcfApi" "grpc" "hostnames" (list) .Values | default (list (printf "api-grpc.%s" .Values.global.domain)) }}
 {{- $nvctApiGrpcRouteHostnames := dig "ingress" "gatewayApi" "routes" "nvctApi" "grpc" "hostnames" (list) .Values | default (list (printf "tasks-grpc.%s" .Values.global.domain)) }}
+{{- $configuredApiEnv := dig "api" "env" dict .Values }}
+{{- if not (kindIs "map" $configuredApiEnv) }}
+{{- fail "api.env must be a map" }}
+{{- end }}
+{{- $renderedApiEnv := deepCopy $configuredApiEnv }}
+{{- $legacyPylonEnvKey := "NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE" }}
+{{- $legacyPylonImageConfigured := hasKey $renderedApiEnv $legacyPylonEnvKey }}
+{{- $legacyPylonImage := "" }}
+{{- if $legacyPylonImageConfigured }}
+{{- $legacyPylonImage = index $renderedApiEnv $legacyPylonEnvKey }}
+{{- if not (kindIs "string" $legacyPylonImage) }}
+{{- fail "api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE must be a string" }}
+{{- end }}
+{{- if eq (trim $legacyPylonImage) "" }}
+{{- fail "api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE must be a non-empty string" }}
+{{- end }}
+{{- $_ := unset $renderedApiEnv $legacyPylonEnvKey }}
+{{- end }}
+{{- $configuredApiRemoteConfigData := dig "api" "remoteConfig" "configData" dict .Values }}
+{{- if not (kindIs "map" $configuredApiRemoteConfigData) }}
+{{- fail "api.remoteConfig.configData must be a map" }}
+{{- end }}
+{{- $apiRemoteConfigData := deepCopy $configuredApiRemoteConfigData }}
+{{- $configuredNvcfRemoteConfig := dict }}
+{{- if hasKey $apiRemoteConfigData "nvcf" }}
+{{- $configuredNvcfRemoteConfig = index $apiRemoteConfigData "nvcf" }}
+{{- if not (kindIs "map" $configuredNvcfRemoteConfig) }}
+{{- fail "api.remoteConfig.configData.nvcf must be a map" }}
+{{- end }}
+{{- end }}
+{{- $configuredSidecarsRemoteConfig := dict }}
+{{- if hasKey $configuredNvcfRemoteConfig "sidecars" }}
+{{- $configuredSidecarsRemoteConfig = index $configuredNvcfRemoteConfig "sidecars" }}
+{{- if not (kindIs "map" $configuredSidecarsRemoteConfig) }}
+{{- fail "api.remoteConfig.configData.nvcf.sidecars must be a map" }}
+{{- end }}
+{{- end }}
+{{- $pylonRemoteConfigKey := "llm-router-client-image" }}
+{{- $configuredPylonImagePresent := hasKey $configuredSidecarsRemoteConfig $pylonRemoteConfigKey }}
+{{- $configuredPylonImage := "" }}
+{{- if $configuredPylonImagePresent }}
+{{- $configuredPylonImage = index $configuredSidecarsRemoteConfig $pylonRemoteConfigKey }}
+{{- if not (kindIs "string" $configuredPylonImage) }}
+{{- fail "api.remoteConfig.configData.nvcf.sidecars.llm-router-client-image must be a string" }}
+{{- end }}
+{{- if eq (trim $configuredPylonImage) "" }}
+{{- fail "api.remoteConfig.configData.nvcf.sidecars.llm-router-client-image must be a non-empty string" }}
+{{- end }}
+{{- end }}
+{{- if and $legacyPylonImageConfigured $configuredPylonImagePresent (ne $legacyPylonImage $configuredPylonImage) }}
+{{- fail "api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE is deprecated and conflicts with api.remoteConfig.configData.nvcf.sidecars.llm-router-client-image" }}
+{{- end }}
+{{- $effectivePylonImage := "" }}
+{{- if $configuredPylonImagePresent }}
+{{- $effectivePylonImage = $configuredPylonImage }}
+{{- else if $legacyPylonImageConfigured }}
+{{- $effectivePylonImage = $legacyPylonImage }}
+{{- else if $llmEnabled }}
+{{- $effectivePylonImage = printf "%s/%s/pylon:0.14.1" $sidecarsHost $sidecarsRepo }}
+{{- end }}
+{{- $stackApiRemoteConfigData := dict }}
+{{- $stackNvcfRemoteConfig := dict }}
+{{- if or $llmEnabled $legacyPylonImageConfigured }}
+{{- $_ := set $stackNvcfRemoteConfig "sidecars" (dict $pylonRemoteConfigKey $effectivePylonImage) }}
+{{- end }}
+{{- if $llmEnabled }}
+{{- $_ := set $stackNvcfRemoteConfig "llm-request-router" (dict "worker-address" $llmRequestRouterWorkerAddress) }}
+{{- end }}
+{{- if $stackNvcfRemoteConfig }}
+{{- $_ := set $stackApiRemoteConfigData "nvcf" $stackNvcfRemoteConfig }}
+{{- end }}
+{{- $apiRemoteConfigData = mergeOverwrite $apiRemoteConfigData $stackApiRemoteConfigData }}
 api:
   fullnameOverride: nvcf-api
   {{- if .Values.global.imagePullSecrets }}
@@ -396,12 +468,10 @@ api:
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
   {{- end }}
-  {{- if $llmEnabled }}
+  {{- if $apiRemoteConfigData }}
   remoteConfig:
     configData:
-      nvcf:
-        llm-request-router:
-          worker-address: {{ $llmRequestRouterWorkerAddress | quote }}
+      {{- toYaml $apiRemoteConfigData | nindent 6 }}
   {{- end }}
   # alpine-k8s is not republished under the public nvidia/nvcf catalog, so it
   # defaults to its upstream Docker Hub source and a public-catalog install
@@ -477,11 +547,7 @@ api:
   {{- if .Values.global.observability.tracing.enabled }}
   {{- $_ := set $apiEnv "MANAGEMENT_OTLP_TRACING_ENDPOINT" (printf "%s://%s:%v/v1/traces" .Values.global.observability.tracing.collectorProtocol .Values.global.observability.tracing.collectorEndpoint .Values.global.observability.tracing.collectorPort) }}
   {{- end }}
-  {{- $configuredApiEnv := dig "api" "env" dict .Values }}
-  {{- if not (kindIs "map" $configuredApiEnv) }}
-  {{- fail "api.env must be a map" }}
-  {{- end }}
-  {{- $apiEnv = mergeOverwrite $apiEnv (deepCopy $configuredApiEnv) }}
+  {{- $apiEnv = mergeOverwrite $apiEnv $renderedApiEnv }}
   env:
     {{- toYaml $apiEnv | nindent 4 }}
 

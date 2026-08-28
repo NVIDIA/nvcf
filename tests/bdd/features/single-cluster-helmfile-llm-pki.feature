@@ -30,7 +30,7 @@ Feature: Install a local single-cluster NVCF stack with PKI-secured LLM transpor
         | global.imagePullSecrets[0].name               | nvcr-pull-secret                                                         |
         | global.helm.sources.repository                | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                     |
         | global.image.repository                       | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                     |
-        | api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE | nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/pylon:0.14.1                |
+        | api.remoteConfig.configData.nvcf.sidecars.llm-router-client-image | nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/pylon:0.14.1                |
         | addons.llm.requestRouter.chartPath             | ../../../helm/llm-request-router/llm-request-router                      |
         | addons.llm.pki.enabled                         | true                                                                      |
         | addons.llm.pki.dnsNames[0]                     | llm-request-router.nvcf.svc.cluster.local                                |
@@ -117,6 +117,7 @@ Feature: Install a local single-cluster NVCF stack with PKI-secured LLM transpor
       When I run command "kubectl --context k3d-ncp-local get configmap/nvcf-api-remote-config -n nvcf -o yaml"
       Then the command exit code should be 0
       And the command output should contain "worker-address: llm-request-router.nvcf.svc.cluster.local:50071"
+      And the command output should contain "llm-router-client-image: nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/pylon:0.14.1"
 
       Then these Kubernetes resources should not exist in namespace "envoy-gateway-system" using context "k3d-ncp-local":
         | kind                 | name                         |
