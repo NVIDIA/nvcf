@@ -22,6 +22,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cucumber/godog"
 
@@ -116,6 +117,55 @@ func TestNVCFCLIInvocationAdaptersExposeAllArguments(t *testing.T) {
 				t.Fatalf("runs = %+v, want command %q", fake.runs, test.want)
 			}
 		})
+	}
+}
+
+func TestNVCFCLIModelInvocationRetriesNoEligibleCandidates(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NVCF_CLI", "nvcf-cli")
+	sc.NVCFCLIConfig = "config.yaml"
+	fake.runResults = []harness.Result{
+		{ExitCode: 1, Stderr: `API error 404: {"code":"no_eligible_candidates"}`},
+		{ExitCode: 0, Stdout: `{"object":"chat.completion"}`},
+	}
+
+	previousInterval := modelInvocationRetryInterval
+	modelInvocationRetryInterval = time.Nanosecond
+	t.Cleanup(func() { modelInvocationRetryInterval = previousInterval })
+
+	err := sc.iSuccessfullyInvokeModel(
+		context.Background(),
+		"model/name",
+		"/v1/chat/completions",
+		"1",
+		&godog.DocString{Content: `{"messages":[]}`},
+	)
+	if err != nil {
+		t.Fatalf("invoke model: %v", err)
+	}
+	if len(fake.runs) != 2 {
+		t.Fatalf("runs = %d, want 2", len(fake.runs))
+	}
+}
+
+func TestNVCFCLIModelInvocationDoesNotRetryOtherErrors(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NVCF_CLI", "nvcf-cli")
+	sc.NVCFCLIConfig = "config.yaml"
+	fake.result = harness.Result{ExitCode: 1, Stderr: "API error 401: unauthorized"}
+
+	err := sc.iSuccessfullyInvokeModel(
+		context.Background(),
+		"model/name",
+		"/v1/chat/completions",
+		"1",
+		&godog.DocString{Content: `{"messages":[]}`},
+	)
+	if err == nil || !strings.Contains(err.Error(), "exit code = 1, want 0") {
+		t.Fatalf("error = %v, want exit-zero assertion failure", err)
+	}
+	if len(fake.runs) != 1 {
+		t.Fatalf("runs = %d, want 1", len(fake.runs))
 	}
 }
 
