@@ -18,6 +18,7 @@ test:
 	@tests/invocation-tracing-baggage.sh
 	@tests/image-override-wiring.sh
 	@tests/sidecar-registry-wiring.sh
+	@tests/api-env-wiring.sh
 
 test-published-charts:
 	@: "$${NVCF_PUBLISHED_CHART_REGISTRY:?NVCF_PUBLISHED_CHART_REGISTRY is required}"

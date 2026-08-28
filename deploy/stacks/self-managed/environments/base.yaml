@@ -171,12 +171,16 @@ functionAutoscaler:
     # environment label.
     ignoreEnv: true
 
+# API environment entries are merged over the stack defaults. Use this map for
+# chart-supported runtime overrides such as a mirrored worker-sidecar image.
+api:
+  env: {}
+
 # Image overrides for the API account-bootstrap job. alpine-k8s is not
 # republished under the public nvidia/nvcf catalog, so it defaults to its
 # upstream source, docker.io/alpine/k8s:1.36.1. Leave these unset unless you
 # have mirrored the image into your own registry, in which case set registry
 # and repository together:
-# api:
 #   accountBootstrap:
 #     image:
 #       registry: <your-registry>
