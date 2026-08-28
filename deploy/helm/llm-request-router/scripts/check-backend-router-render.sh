@@ -197,6 +197,10 @@ assert_contains "--target-service-name=llm-request-router" \
   "backend router must watch the readiness-respecting request-router Service"
 assert_contains "--advertised-hostname-template={pod_name}.llm-request-router-headless.nvcf.svc.cluster.local" \
   "backend router authority and SNI template must match Stargate"
+assert_contains "--advertised-grpc-port=50071" \
+  "backend router Watch snapshots must advertise the Stargate gRPC port"
+assert_contains "--grpc-pylon-dial-addr=llm-router.example.invalid:443" \
+  "backend router Watch snapshots must preserve the Pylon dial endpoint"
 assert_contains "- '*.llm-request-router-headless.nvcf.svc.cluster.local'" \
   "request-router certificate must cover pod-specific backend routing hostnames"
 assert_contains "image: registry.example.invalid/nvcf/stargate:next" \
@@ -219,6 +223,7 @@ helm template llm-request-router "$chart_dir" \
   --namespace nvcf \
   --set llmRequestRouter.image.registry=registry.example.invalid \
   --set llmRequestRouter.image.repository=nvcf/stargate \
+  --set llmRequestRouter.replicaCount=1 \
   --set llmRequestRouter.backendRouter.enabled=false \
   >"$disabled"
 
@@ -326,6 +331,7 @@ fi
 assert_render_fails "llmRequestRouter.certificate.dnsNames is required when certificate.enabled is true" \
   --set llmRequestRouter.image.registry=registry.example.invalid \
   --set llmRequestRouter.image.repository=nvcf/stargate \
+  --set llmRequestRouter.replicaCount=1 \
   --set llmRequestRouter.backendRouter.enabled=false \
   --set llmRequestRouter.certificate.enabled=true \
   --set llmRequestRouter.certificate.issuerRef.name=test-issuer
@@ -371,6 +377,7 @@ assert_render_fails "llmRequestRouter.tls.certPath and llmRequestRouter.tls.keyP
 assert_render_fails "llmRequestRouter.tls.certPath and llmRequestRouter.tls.keyPath must use the same directory" \
   --set llmRequestRouter.image.registry=registry.example.invalid \
   --set llmRequestRouter.image.repository=nvcf/stargate \
+  --set llmRequestRouter.replicaCount=1 \
   --set llmRequestRouter.backendRouter.enabled=false \
   --set llmRequestRouter.tls.secretName=stargate-quic-tls \
   --set llmRequestRouter.tls.certPath=/etc/stargate/tls/tls.crt \

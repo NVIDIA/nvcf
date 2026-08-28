@@ -72,7 +72,7 @@ impl TargetSnapshot {
         self.ready_targets().map_or(0, <[PodTarget]>::len)
     }
 
-    fn ready_targets(&self) -> Option<&[PodTarget]> {
+    pub fn ready_targets(&self) -> Option<&[PodTarget]> {
         self.ready.as_deref()
     }
 }
@@ -187,7 +187,6 @@ fn endpoint_pod_name(endpoint: &Endpoint) -> Option<&str> {
         .as_ref()
         .filter(|target| target.kind.as_deref().is_none_or(|kind| kind == "Pod"))
         .and_then(|target| target.name.as_deref())
-        .or(endpoint.hostname.as_deref())
 }
 
 fn socket_addr(address: &str, port: u16) -> String {
@@ -340,6 +339,28 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_normalizes_duplicate_pod_targets_across_slices() {
+        let first = slice(
+            "slice-a",
+            vec![endpoint("request-router-abc", "10.0.0.10", None)],
+        );
+        let replacement = slice(
+            "slice-b",
+            vec![endpoint("request-router-abc", "10.0.0.11", None)],
+        );
+
+        let snapshot = snapshot_from_slices([&first, &replacement], &config());
+
+        assert_eq!(snapshot.ready_count(), 1);
+        assert_eq!(
+            snapshot
+                .target_for_pod("request-router-abc")
+                .map(|target| target.grpc_addr),
+            Some("10.0.0.11:50071".to_string())
+        );
+    }
+
+    #[test]
     fn snapshot_includes_ready_pod_targets() {
         let slice = slice(
             "slice-a",
@@ -357,6 +378,40 @@ mod tests {
             snapshot.target_for_pod("stargate-0"),
             Some(target("stargate-0", "10.0.0.10"))
         );
+    }
+
+    #[test]
+    fn snapshot_uses_target_ref_name_instead_of_endpoint_hostname_alias() {
+        let mut pod = endpoint("request-router-7d9c6f64f5-mz2qk", "10.0.0.10", None);
+        pod.hostname = Some("10-0-0-10".to_string());
+        let slice = slice("slice-a", vec![pod]);
+
+        let snapshot = snapshot_from_slices([&slice], &config());
+
+        assert_eq!(snapshot.ready_count(), 1);
+        assert!(
+            snapshot
+                .target_for_pod("request-router-7d9c6f64f5-mz2qk")
+                .is_some()
+        );
+        assert!(snapshot.target_for_pod("10-0-0-10").is_none());
+    }
+
+    #[test]
+    fn snapshot_ignores_hostname_alias_without_pod_target_ref() {
+        let slice = slice(
+            "slice-a",
+            vec![Endpoint {
+                addresses: vec!["10.0.0.10".to_string()],
+                hostname: Some("10-0-0-10".to_string()),
+                ..Endpoint::default()
+            }],
+        );
+
+        let snapshot = snapshot_from_slices([&slice], &config());
+
+        assert_eq!(snapshot.ready_count(), 0);
+        assert!(snapshot.target_for_pod("10-0-0-10").is_none());
     }
 
     #[test]

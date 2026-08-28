@@ -308,6 +308,11 @@ addons:
       replicaCount: 3
       # Set only for source-tree validation. Empty uses the released OCI chart.
       chartPath: ""
+      workload:
+        # Deployment matches managed NVCF. Existing installations can pin
+        # StatefulSet and migrate workload kinds in a controlled maintenance
+        # window; Kubernetes cannot mutate one workload kind into the other.
+        kind: Deployment
 
       # Authority and SNI aware backend router. A worker holds one registration
       # stream and one reverse QUIC tunnel per router replica, and each must

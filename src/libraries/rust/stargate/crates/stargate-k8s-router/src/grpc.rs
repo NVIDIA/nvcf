@@ -14,18 +14,17 @@
 // limitations under the License.
 
 use std::pin::Pin;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use futures::Stream;
-use stargate_forwarding::{HostnameMatcher, forward_stream_messages};
+use stargate_forwarding::{HostnameMatcher, forward_stream_messages, render_hostname};
 use stargate_proto::pb::stargate_control_plane_client::StargateControlPlaneClient;
 use stargate_proto::pb::stargate_control_plane_server::{
     StargateControlPlane, StargateControlPlaneServer,
 };
 use stargate_proto::pb::{
-    InferenceServerAck, InferenceServerRegistration, WatchStargatesRequest, WatchStargatesResponse,
+    InferenceServerAck, InferenceServerRegistration, StargateInfo, WatchStargatesRequest,
+    WatchStargatesResponse,
 };
 use tokio::net::TcpListener;
 use tokio::sync::watch;
@@ -60,16 +59,23 @@ impl From<&PodTarget> for GrpcTarget {
 #[derive(Clone, Debug)]
 pub struct GrpcRouterConfig {
     pub advertised_hostname_template: String,
+    pub advertised_grpc_port: u16,
+    pub grpc_pylon_dial_addr: String,
     pub target_namespace: String,
     pub connect_timeout: Duration,
+    pub watch_heartbeat_interval: Duration,
 }
 
 #[derive(Clone)]
 pub struct RouterControlPlane {
     connect_timeout: Duration,
+    advertised_hostname_template: String,
+    advertised_grpc_port: u16,
+    grpc_pylon_dial_addr: String,
+    target_namespace: String,
+    watch_heartbeat_interval: Duration,
     hostname_matcher: Option<HostnameMatcher>,
     targets: watch::Receiver<TargetSnapshot>,
-    round_robin: Arc<AtomicUsize>,
 }
 
 impl RouterControlPlane {
@@ -80,36 +86,65 @@ impl RouterControlPlane {
         );
         Self {
             connect_timeout: config.connect_timeout,
+            advertised_hostname_template: config.advertised_hostname_template,
+            advertised_grpc_port: config.advertised_grpc_port,
+            grpc_pylon_dial_addr: config.grpc_pylon_dial_addr,
+            target_namespace: config.target_namespace,
+            watch_heartbeat_interval: config.watch_heartbeat_interval,
             hostname_matcher,
             targets,
-            round_robin: Arc::new(AtomicUsize::new(0)),
         }
     }
 
-    fn target_for_watch<'a, T>(
-        &self,
-        request: &Request<T>,
-        snapshot: &'a TargetSnapshot,
-    ) -> Result<&'a PodTarget, Status> {
-        if let Some(pod_name) =
-            request
-                .extensions()
-                .get::<http::uri::Authority>()
-                .and_then(|authority| {
-                    self.hostname_matcher
-                        .as_ref()?
-                        .extract_pod(authority.host())
-                })
-        {
-            return snapshot.target_for_pod_ref(pod_name).ok_or_else(|| {
-                Status::unavailable(format!("target stargate {pod_name} is not ready"))
-            });
-        }
-
-        let offset = self.round_robin.fetch_add(1, Ordering::Relaxed);
-        snapshot
-            .first_ready_ref(offset)
-            .ok_or_else(|| Status::unavailable("no ready stargate targets"))
+    fn watch_stargates_stream(&self) -> WatchStargatesStream {
+        let mut targets = self.targets.clone();
+        let advertised_hostname_template = self.advertised_hostname_template.clone();
+        let advertised_grpc_port = self.advertised_grpc_port;
+        let grpc_pylon_dial_addr = self.grpc_pylon_dial_addr.clone();
+        let target_namespace = self.target_namespace.clone();
+        let watch_heartbeat_interval = self.watch_heartbeat_interval;
+        Box::pin(async_stream::try_stream! {
+            let mut heartbeat = tokio::time::interval(watch_heartbeat_interval);
+            heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let mut last_snapshot = None;
+            loop {
+                let snapshot = targets.borrow_and_update().clone();
+                if snapshot.is_initialized() {
+                    last_snapshot = Some(snapshot.clone());
+                    heartbeat.reset();
+                    yield watch_response_from_snapshot(
+                        &snapshot,
+                        &advertised_hostname_template,
+                        advertised_grpc_port,
+                        &grpc_pylon_dial_addr,
+                        &target_namespace,
+                    );
+                }
+                loop {
+                    tokio::select! {
+                        changed = targets.changed() => {
+                            if changed.is_err() {
+                                return;
+                            }
+                            break;
+                        }
+                        _ = heartbeat.tick(), if last_snapshot.is_some() => {
+                            let snapshot = last_snapshot
+                                .as_ref()
+                                .expect("heartbeat branch requires an initialized snapshot");
+                            heartbeat.reset();
+                            yield watch_response_from_snapshot(
+                                snapshot,
+                                &advertised_hostname_template,
+                                advertised_grpc_port,
+                                &grpc_pylon_dial_addr,
+                                &target_namespace,
+                            );
+                        }
+                    }
+                }
+            }
+        })
     }
 
     fn target_for_registration<'a, T>(
@@ -163,23 +198,9 @@ impl StargateControlPlane for RouterControlPlane {
 
     async fn watch_stargates(
         &self,
-        request: Request<WatchStargatesRequest>,
+        _request: Request<WatchStargatesRequest>,
     ) -> Result<Response<Self::WatchStargatesStream>, Status> {
-        let target = {
-            let snapshot = self.targets.borrow();
-            GrpcTarget::from(self.target_for_watch(&request, &snapshot)?)
-        };
-        info!(
-            target_pod = %target.pod_name,
-            target_addr = %target.grpc_addr,
-            "forwarding WatchStargates to stargate target"
-        );
-
-        let mut peer_client = self.connect_target_addr(&target.grpc_addr).await?;
-        Ok(peer_client
-            .watch_stargates(request)
-            .await?
-            .map(|stream| Box::pin(stream) as WatchStargatesStream))
+        Ok(Response::new(self.watch_stargates_stream()))
     }
 
     async fn register_inference_server(
@@ -233,6 +254,37 @@ impl StargateControlPlane for RouterControlPlane {
     }
 }
 
+fn watch_response_from_snapshot(
+    snapshot: &TargetSnapshot,
+    advertised_hostname_template: &str,
+    advertised_grpc_port: u16,
+    grpc_pylon_dial_addr: &str,
+    target_namespace: &str,
+) -> WatchStargatesResponse {
+    let stargates = snapshot
+        .ready_targets()
+        .unwrap_or_default()
+        .iter()
+        .map(|target| {
+            let hostname = render_hostname(
+                advertised_hostname_template,
+                &target.pod_name,
+                target_namespace,
+            );
+            StargateInfo {
+                stargate_id: target.pod_name.clone(),
+                advertise_addr: format!("{hostname}:{advertised_grpc_port}"),
+                http_advertise_addr: String::new(),
+                grpc_pylon_dial_addr: grpc_pylon_dial_addr.to_string(),
+            }
+        })
+        .collect();
+    WatchStargatesResponse {
+        stargates,
+        watch_stargate_urls: Vec::new(),
+    }
+}
+
 pub async fn serve_grpc_router(
     listener: TcpListener,
     config: GrpcRouterConfig,
@@ -260,7 +312,8 @@ pub async fn serve_grpc_router(
 mod tests {
     use std::hint::black_box;
     use std::net::SocketAddr;
-    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
     use std::time::Instant;
 
     use crate::perf_tests::assert_twenty_percent_faster;
@@ -446,6 +499,13 @@ mod tests {
         config: GrpcRouterConfig,
     ) -> RunningServer {
         let (_tx, rx) = watch::channel(snapshot);
+        start_router_with_receiver(rx, config).await
+    }
+
+    async fn start_router_with_receiver(
+        rx: watch::Receiver<TargetSnapshot>,
+        config: GrpcRouterConfig,
+    ) -> RunningServer {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind router");
         let addr = listener.local_addr().expect("router local addr");
         let shutdown = CancellationToken::new();
@@ -471,8 +531,11 @@ mod tests {
     fn router_config() -> GrpcRouterConfig {
         GrpcRouterConfig {
             advertised_hostname_template: "{pod_name}.stargate.external".to_string(),
+            advertised_grpc_port: 50071,
+            grpc_pylon_dial_addr: "https://stargate-router.external:443".to_string(),
             target_namespace: String::new(),
             connect_timeout: Duration::from_secs(2),
+            watch_heartbeat_interval: Duration::from_secs(5),
         }
     }
 
@@ -546,7 +609,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn watch_stargates_with_target_authority_routes_to_that_target() {
+    async fn watch_stargates_builds_one_canonical_identity_per_ready_target() {
         let recorder_a = Recorder::default();
         let recorder_b = Recorder::default();
         let fake_a = start_fake_stargate("stargate-0", recorder_a.clone()).await;
@@ -557,50 +620,90 @@ mod tests {
         ]))
         .await;
 
-        let mut client = router.client("stargate-1.stargate.external");
+        let mut client = router.client("stargate.stargate-local.svc.cluster.local");
         let response = watch_once(&mut client).await;
-        assert_eq!(response.metadata().get("x-upstream").unwrap(), "watch");
         let first = first_message(response).await;
 
-        assert_eq!(first.stargates[0].stargate_id, "stargate-1");
+        assert_eq!(
+            first
+                .stargates
+                .iter()
+                .map(|stargate| (
+                    stargate.stargate_id.as_str(),
+                    stargate.advertise_addr.as_str()
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("stargate-0", "stargate-0.stargate.external:50071"),
+                ("stargate-1", "stargate-1.stargate.external:50071"),
+            ]
+        );
+        assert!(first.stargates.iter().all(|stargate| {
+            stargate.grpc_pylon_dial_addr == "https://stargate-router.external:443"
+        }));
         assert_eq!(recorder_a.watch_hits.load(Ordering::Relaxed), 0);
-        assert_eq!(recorder_b.watch_hits.load(Ordering::Relaxed), 1);
+        assert_eq!(recorder_b.watch_hits.load(Ordering::Relaxed), 0);
     }
 
     #[tokio::test]
-    async fn watch_stargates_without_target_authority_uses_ready_round_robin_target() {
-        let recorder_a = Recorder::default();
-        let fake_a = start_fake_stargate("stargate-0", recorder_a.clone()).await;
-        let router = start_router(snapshot(&[("stargate-0", fake_a.addr)])).await;
-
-        let mut client = router.client("stargate.stargate-local.svc.cluster.local");
-        let response = watch_once(&mut client).await;
-        let first = first_message(response).await;
-
-        assert_eq!(first.stargates[0].stargate_id, "stargate-0");
-        assert_eq!(recorder_a.watch_hits.load(Ordering::Relaxed), 1);
-    }
-
-    #[tokio::test]
-    async fn watch_stargates_without_target_authority_round_robins_ready_targets() {
+    async fn watch_stargates_stream_replaces_removed_targets() {
         let recorder_a = Recorder::default();
         let recorder_b = Recorder::default();
         let fake_a = start_fake_stargate("stargate-0", recorder_a.clone()).await;
         let fake_b = start_fake_stargate("stargate-1", recorder_b.clone()).await;
-        let router = start_router(snapshot(&[
+        let (targets_tx, targets_rx) = watch::channel(snapshot(&[
             ("stargate-0", fake_a.addr),
             ("stargate-1", fake_b.addr),
-        ]))
-        .await;
+        ]));
+        let router = start_router_with_receiver(targets_rx, router_config()).await;
 
         let mut client = router.client("stargate.stargate-local.svc.cluster.local");
-        for _ in 0..2 {
-            let response = watch_once(&mut client).await;
-            first_message(response).await;
-        }
+        let response = watch_once(&mut client).await;
+        let mut stream = response.into_inner();
+        let first = stream
+            .message()
+            .await
+            .expect("first snapshot read should succeed")
+            .expect("first snapshot should be published");
+        assert_eq!(first.stargates.len(), 2);
 
-        assert_eq!(recorder_a.watch_hits.load(Ordering::Relaxed), 1);
-        assert_eq!(recorder_b.watch_hits.load(Ordering::Relaxed), 1);
+        targets_tx
+            .send(snapshot(&[("stargate-1", fake_b.addr)]))
+            .expect("updated snapshot should publish");
+        let replacement = stream
+            .message()
+            .await
+            .expect("replacement snapshot read should succeed")
+            .expect("replacement snapshot should be published");
+
+        assert_eq!(replacement.stargates.len(), 1);
+        assert_eq!(replacement.stargates[0].stargate_id, "stargate-1");
+        assert_eq!(recorder_a.watch_hits.load(Ordering::Relaxed), 0);
+        assert_eq!(recorder_b.watch_hits.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn watch_stargates_heartbeats_an_unchanged_snapshot() {
+        let (targets_tx, targets_rx) = watch::channel(synthetic_snapshot(1));
+        let mut config = router_config();
+        config.watch_heartbeat_interval = Duration::from_millis(25);
+        let router = start_router_with_receiver(targets_rx, config).await;
+
+        let mut client = router.client("stargate.stargate-local.svc.cluster.local");
+        let mut stream = watch_once(&mut client).await.into_inner();
+        let first = stream
+            .message()
+            .await
+            .expect("initial snapshot read should succeed")
+            .expect("initial snapshot should be published");
+        let heartbeat = tokio::time::timeout(Duration::from_millis(250), stream.message())
+            .await
+            .expect("unchanged snapshot heartbeat should arrive")
+            .expect("heartbeat read should succeed")
+            .expect("heartbeat should contain a snapshot");
+
+        assert_eq!(heartbeat, first);
+        drop(targets_tx);
     }
 
     #[tokio::test]
@@ -612,8 +715,11 @@ mod tests {
             GrpcRouterConfig {
                 advertised_hostname_template: "{pod_name}.{namespace}.stargate.external"
                     .to_string(),
+                advertised_grpc_port: 50071,
+                grpc_pylon_dial_addr: "https://stargate-router.external:443".to_string(),
                 target_namespace: "prod".to_string(),
                 connect_timeout: Duration::from_secs(2),
+                watch_heartbeat_interval: Duration::from_secs(5),
             },
         )
         .await;
@@ -698,15 +804,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn watch_stargates_returns_unavailable_for_unready_target_pod() {
+    async fn watch_stargates_publishes_initialized_empty_snapshot() {
         let router = start_router(TargetSnapshot::initialized([])).await;
 
         let mut client = router.client("stargate-9.stargate.external");
-        let error = client
+        let response = client
             .watch_stargates(WatchStargatesRequest {})
             .await
-            .expect_err("missing target should be unavailable");
+            .expect("initialized empty snapshot should be routable");
+        let snapshot = first_message(response).await;
 
-        assert_eq!(error.code(), tonic::Code::Unavailable);
+        assert!(snapshot.stargates.is_empty());
     }
 }

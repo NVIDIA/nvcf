@@ -3,7 +3,7 @@
 
 {{- $metricsEnabled := dig "metrics" "enabled" false .Values.llmRequestRouter }}
 {{- $serviceMonitorEnabled := dig "metrics" "serviceMonitor" "enabled" false .Values.llmRequestRouter }}
-{{- if and .Values.llmRequestRouter.backendRouter.enabled $metricsEnabled $serviceMonitorEnabled }}
+{{- if and (eq (include "llm-request-router.backendRouterEnabled" .) "true") $metricsEnabled $serviceMonitorEnabled }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:

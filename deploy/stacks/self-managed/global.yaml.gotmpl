@@ -876,6 +876,8 @@ llmRequestRouter:
   enabled: {{ dig "addons" "llm" "enabled" false .Values }}
   fullnameOverride: llm-request-router
   replicaCount: {{ dig "addons" "llm" "requestRouter" "replicaCount" 3 .Values }}
+  workload:
+    kind: {{ dig "addons" "llm" "requestRouter" "workload" "kind" "Deployment" .Values | quote }}
   service:
     grpcPort: {{ $llmRequestRouterGrpcPort }}
   {{- if .Values.global.imagePullSecrets }}
