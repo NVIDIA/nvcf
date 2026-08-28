@@ -41,9 +41,9 @@ router instance that issued the tunnel target.
 {{- if le $watchHeartbeatMs 0 }}
 {{- fail "llmRequestRouter.discovery.watchHeartbeatMs must be greater than 0" }}
 {{- end }}
-{{- $readinessWarmupMs := .Values.llmRequestRouter.readiness.warmupMs | int }}
-{{- if lt $readinessWarmupMs 0 }}
-{{- fail "llmRequestRouter.readiness.warmupMs must be greater than or equal to 0" }}
+{{- $readinessWarmupMs := .Values.llmRequestRouter.readiness.warmupMs | toString }}
+{{- if not (regexMatch "^[0-9]+$" $readinessWarmupMs) }}
+{{- fail "llmRequestRouter.readiness.warmupMs must be a non-negative integer" }}
 {{- end }}
 {{- if and (eq $workloadKind "Deployment") (gt $replicaCount 1) (not $backendRouterEnabled) }}
 {{- fail "llmRequestRouter.backendRouter.enabled must be true when llmRequestRouter.workload.kind is Deployment and replicaCount is greater than 1" }}
@@ -136,7 +136,7 @@ spec:
             - --allow-insecure-remote-watch-http
             {{- end }}
             - --shutdown-drain-timeout-ms={{ .Values.llmRequestRouter.shutdown.drainTimeoutMs }}
-            - --readiness-warmup-ms={{ .Values.llmRequestRouter.readiness.warmupMs }}
+            - --readiness-warmup-ms={{ $readinessWarmupMs }}
             - --quic-connect-timeout-ms={{ .Values.llmRequestRouter.transport.quicConnectTimeoutMs }}
             - --quic-request-timeout-ms={{ .Values.llmRequestRouter.transport.quicRequestTimeoutMs }}
             - --metrics-port={{ .Values.llmRequestRouter.service.metricsPort }}

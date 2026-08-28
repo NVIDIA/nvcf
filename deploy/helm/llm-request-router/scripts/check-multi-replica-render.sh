@@ -166,8 +166,12 @@ render "${custom_warmup_manifest}" \
 custom_warmup_args="$(workload_args "${custom_warmup_manifest}" Deployment)"
 printf '%s\n' "${custom_warmup_args}" | grep -qx -- '--readiness-warmup-ms=1234' || fail "custom readiness warm-up did not reach Stargate args"
 
-assert_render_fails "llmRequestRouter.readiness.warmupMs must be greater than or equal to 0" \
+assert_render_fails "llmRequestRouter.readiness.warmupMs must be a non-negative integer" \
   --set llmRequestRouter.readiness.warmupMs=-1
+assert_render_fails "llmRequestRouter.readiness.warmupMs must be a non-negative integer" \
+  --set-string llmRequestRouter.readiness.warmupMs=-0.5
+assert_render_fails "llmRequestRouter.readiness.warmupMs must be a non-negative integer" \
+  --set-string llmRequestRouter.readiness.warmupMs=invalid
 
 assert_render_fails "llmRequestRouter.discovery.remoteWatchUrls requires https://; set allowInsecureRemoteWatchHttp=true only for development plaintext endpoints" \
   --set-string 'llmRequestRouter.discovery.remoteWatchUrls[0]=http://127.0.0.1:50071'
