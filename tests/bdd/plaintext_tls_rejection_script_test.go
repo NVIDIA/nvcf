@@ -26,7 +26,7 @@ import (
 func TestPlaintextTLSRejectionAcceptsObservedGrpcurlDeadline(t *testing.T) {
 	cmd := exec.Command("bash", "scripts/assert-grpcurl-plaintext-tls-rejection.sh")
 	cmd.Stdin = strings.NewReader(
-		`Failed to dial target host "127.0.0.1:50443": context deadline exceeded`,
+		`Failed to dial target host "127.0.0.1:50071": context deadline exceeded`,
 	)
 
 	output, err := cmd.CombinedOutput()
@@ -38,12 +38,32 @@ func TestPlaintextTLSRejectionAcceptsObservedGrpcurlDeadline(t *testing.T) {
 	}
 }
 
+func TestPlaintextTLSRejectionRejectsSnapshotThenRPCDeadline(t *testing.T) {
+	cmd := exec.Command("bash", "scripts/assert-grpcurl-plaintext-tls-rejection.sh")
+	cmd.Stdin = strings.NewReader(`{
+  "stargates": []
+}
+ERROR:
+  Code: DeadlineExceeded
+  Message: context deadline exceeded`)
+
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("successful plaintext snapshot followed by RPC deadline was accepted: %s", output)
+	}
+	if strings.Contains(string(output), "plaintext-watch-rejected=") {
+		t.Fatalf("successful plaintext snapshot emitted success marker: %s", output)
+	}
+}
+
 func TestPlaintextTLSRejectionRejectsUnrelatedGrpcurlFailures(t *testing.T) {
 	for name, diagnostic := range map[string]string{
-		"binary missing":     "bash: grpcurl: command not found",
-		"connection refused": "Failed to dial target host 127.0.0.1:50071: connection refused",
-		"proto import":       "Failed to process proto source files.: missing.proto does not reside in any import path",
-		"usage":              "flag provided but not defined: -bad-flag",
+		"binary missing":            "bash: grpcurl: command not found",
+		"connection refused":        "Failed to dial target host 127.0.0.1:50071: connection refused",
+		"dial timeout plus output":  "Failed to dial target host \"127.0.0.1:50071\": context deadline exceeded\n{}",
+		"proto import":              "Failed to process proto source files.: missing.proto does not reside in any import path",
+		"usage":                     "flag provided but not defined: -bad-flag",
+		"wrong target dial timeout": "Failed to dial target host \"127.0.0.1:50443\": context deadline exceeded",
 	} {
 		t.Run(name, func(t *testing.T) {
 			cmd := exec.Command("bash", "scripts/assert-grpcurl-plaintext-tls-rejection.sh")
