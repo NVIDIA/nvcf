@@ -51,14 +51,9 @@ openbao:
 # endpoint because the current binary has no OpenTelemetry TLS provider. Keep
 # worker telemetry on HTTP in this fixture until Pylon supports HTTPS OTLP.
 #
-# The API remote ConfigMap has higher precedence than environment variables,
-# so the Pylon image uses the chart-native remote-config property.
+# The stack derives the Pylon image from the effective sidecar registry and
+# repository when the LLM addon is enabled.
 api:
-  remoteConfig:
-    configData:
-      nvcf:
-        sidecars:
-          llm-router-client-image: nvcr.io/REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM/pylon:0.14.1
   env:
     MANAGEMENT_OTLP_TRACING_ENDPOINT: http://dummy:8282
 

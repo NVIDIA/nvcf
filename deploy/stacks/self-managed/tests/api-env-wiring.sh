@@ -159,6 +159,25 @@ render_api_values "$default_values" >/dev/null
 assert_yaml_value "$default_values" "$remote_pylon_expression" \
   registry.example.test/team/sidecars/pylon:0.14.1 "computed Pylon default"
 
+# Local BDD fixtures rely on the same computed default after their registry
+# paths are configured. They must not carry unresolved fixture placeholders
+# into the higher-precedence API remote ConfigMap.
+for fixture_name in self-managed-local-bdd.yaml self-managed-local-bdd-multi.yaml; do
+  cp "$repo_dir/tests/bdd/fixtures/$fixture_name" "$environment_file"
+  yq -i \
+    '.global.helm.sources.repository = "sample-org/sample-team" |
+     .global.image.repository = "sample-org/sample-team"' \
+    "$environment_file"
+
+  fixture_values="$work_dir/${fixture_name%.yaml}-values.yaml"
+  render_api_values "$fixture_values" >/dev/null
+  fixture_pylon_image="$(yq -r "$remote_pylon_expression" "$fixture_values")"
+  [[ "$fixture_pylon_image" != *REPLACE_WITH_* ]] ||
+    fail "$fixture_name Pylon property retained an unresolved fixture placeholder"
+  [[ "$fixture_pylon_image" == nvcr.io/sample-org/sample-team/pylon:0.14.1 ]] ||
+    fail "$fixture_name Pylon property: expected computed 0.14.1 image, got $fixture_pylon_image"
+done
+
 # The deprecated env key remains accepted for one compatibility window, but
 # translates into remote config and never reaches the API environment.
 write_environment <<'EOF'
