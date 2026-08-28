@@ -533,6 +533,7 @@ func TestNewPolicyMiddlewareDeniesWhenEvaluatorRejectsMissingScopes(t *testing.T
 	recorder, _ := servePolicy(t, denying, req)
 	assert.Equal(t, http.StatusForbidden, recorder.Code)
 	assert.Contains(t, recorder.Body.String(), http.StatusText(http.StatusForbidden))
+	require.NotNil(t, denying.lastReq)
 	_, exists := denying.lastReq.Input["scopes"]
 	assert.False(t, exists)
 }
