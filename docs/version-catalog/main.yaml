@@ -115,7 +115,7 @@ publications:
     version: 1.5.9-hotfix.1
     registry: public-images
   - name: pylon
-    version: 0.3.1
+    version: 0.14.1
     registry: public-images
   - name: spot
     version: 1.563.1-hotfix.1
@@ -128,7 +128,7 @@ publications:
     published_version: 0.8.3-ea
     registry: selfhosted-ga
   - name: llm-request-router
-    version: 0.3.2
+    version: 0.14.1
     registry: public-images
   - name: nats-server-config-reloader
     version: 0.23.0
@@ -181,7 +181,7 @@ publications:
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-llm-request-router
-    version: 1.10.0
+    version: 1.12.0
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-nats-auth-callout-service
@@ -201,7 +201,7 @@ publications:
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-openbao-server
-    version: 0.30.23
+    version: 0.32.1
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-pki
@@ -233,7 +233,7 @@ publications:
     registry: public-helm
     chart_format: http
   - name: nvcf-gateway-routes
-    version: 1.16.0
+    version: 1.17.0
     registry: public-helm
     chart_format: http
   - name: nvcf-container-cache
@@ -805,7 +805,7 @@ artifacts:
   - name: helm-nvcf-llm-request-router
     type: chart
     registry: staging
-    version: 1.10.0
+    version: 1.12.0
   - name: helm-nvcf-nats-auth-callout-service
     type: chart
     registry: staging
@@ -825,7 +825,7 @@ artifacts:
   - name: helm-nvcf-openbao-server
     type: chart
     registry: staging
-    version: 0.30.23
+    version: 0.32.1
   - name: helm-nvcf-pki
     type: chart
     registry: staging
@@ -881,7 +881,7 @@ artifacts:
   - name: nvcf-gateway-routes
     type: chart
     registry: staging
-    version: 1.16.0
+    version: 1.17.0
   - name: nvcf-grpc-proxy
     type: image
     registry: staging
@@ -933,7 +933,7 @@ artifacts:
   - name: pylon
     type: image
     registry: staging
-    version: 0.3.1
+    version: 0.14.1
   - name: reval-server
     type: image
     registry: staging
@@ -971,7 +971,7 @@ supplemental_artifacts:
     type: image
     registry: staging
     repository_name: stargate
-    version: 0.3.2
+    version: 0.14.1
   - name: nvcf-ai-api-gateway-service
     type: image
     registry: staging

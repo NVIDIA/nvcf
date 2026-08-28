@@ -568,7 +568,7 @@ sidecar image passed to generated LLM workers:
 ```yaml
 api:
   env:
-    NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE: <registry>/<repository>/pylon:0.2.1
+    NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE: <registry>/<repository>/pylon:0.14.1
 ```
 
 The LLM API Gateway and request router images are resolved from the same stack
