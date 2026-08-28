@@ -392,6 +392,7 @@ natsAuthCalloutService:
 {{- if eq (trim $legacyPylonImage) "" }}
 {{- fail "api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE must be a non-empty string" }}
 {{- end }}
+{{- $legacyPylonImage = trim $legacyPylonImage }}
 {{- $_ := unset $renderedApiEnv $legacyPylonEnvKey }}
 {{- end }}
 {{- $configuredApiRemoteConfigData := dig "api" "remoteConfig" "configData" dict .Values }}
@@ -424,6 +425,8 @@ natsAuthCalloutService:
 {{- if eq (trim $configuredPylonImage) "" }}
 {{- fail "api.remoteConfig.configData.nvcf.sidecars.llm-router-client-image must be a non-empty string" }}
 {{- end }}
+{{- $configuredPylonImage = trim $configuredPylonImage }}
+{{- $_ := set $configuredSidecarsRemoteConfig $pylonRemoteConfigKey $configuredPylonImage }}
 {{- end }}
 {{- if and $legacyPylonImageConfigured $configuredPylonImagePresent (ne $legacyPylonImage $configuredPylonImage) }}
 {{- fail "api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE is deprecated and conflicts with api.remoteConfig.configData.nvcf.sidecars.llm-router-client-image" }}

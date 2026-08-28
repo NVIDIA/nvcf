@@ -212,9 +212,9 @@ api:
     configData:
       nvcf:
         sidecars:
-          llm-router-client-image: compatible.example.test/team/pylon:0.14.1
+          llm-router-client-image: " compatible.example.test/team/pylon:0.14.1 "
   env:
-    NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE: compatible.example.test/team/pylon:0.14.1
+    NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE: "  compatible.example.test/team/pylon:0.14.1  "
 EOF
 
 compatible_values="$work_dir/compatible-values.yaml"
@@ -223,6 +223,43 @@ assert_yaml_value "$compatible_values" "$remote_pylon_expression" \
   compatible.example.test/team/pylon:0.14.1 "same-value Pylon compatibility"
 assert_env_absent "$compatible_values" NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE \
   "same-value Pylon compatibility"
+
+# Valid configured images are normalized at the remote-config boundary even
+# when the LLM addon is disabled and no stack-owned LLM overlay is rendered.
+write_environment <<'EOF'
+global:
+  image:
+    registry: nvcr.io
+    repository: nvidia/nvcf
+api:
+  remoteConfig:
+    configData:
+      nvcf:
+        sidecars:
+          llm-router-client-image: "  canonical.example.test/team/pylon:0.14.1  "
+EOF
+
+normalized_canonical_values="$work_dir/normalized-canonical-values.yaml"
+render_api_values "$normalized_canonical_values" >/dev/null
+assert_yaml_value "$normalized_canonical_values" "$remote_pylon_expression" \
+  canonical.example.test/team/pylon:0.14.1 "normalized chart-native Pylon value"
+
+write_environment <<'EOF'
+global:
+  image:
+    registry: nvcr.io
+    repository: nvidia/nvcf
+api:
+  env:
+    NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE: "  legacy-normalized.example.test/team/pylon:0.14.1  "
+EOF
+
+normalized_legacy_values="$work_dir/normalized-legacy-values.yaml"
+render_api_values "$normalized_legacy_values" >/dev/null
+assert_yaml_value "$normalized_legacy_values" "$remote_pylon_expression" \
+  legacy-normalized.example.test/team/pylon:0.14.1 "normalized legacy Pylon value"
+assert_env_absent "$normalized_legacy_values" NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE \
+  "normalized legacy Pylon value"
 
 # Explicit empty values cannot suppress the safe default or create an invalid
 # worker-sidecar reference in higher-precedence remote config.
