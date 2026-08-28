@@ -2054,6 +2054,7 @@ async fn transport_local_shared_cluster_failover_stays_within_selected_cluster()
             },
             auth_token_provider: None,
             tls_cert_pem: None,
+            grpc_tls_ca_cert_pem: None,
             quic_insecure: true,
             tunnel_protocol: Default::default(),
         },

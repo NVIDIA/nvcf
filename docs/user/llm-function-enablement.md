@@ -33,21 +33,55 @@ When enabled, the stack creates:
 
 ## Production TLS Configuration
 
-Production deployments must secure the QUIC transport between each LLM worker
-and the request router. The request router presents a certificate issued by
-cert-manager, or one you issue yourself and supply in a pre-created Secret.
-Each compute plane receives the public root CA certificate and uses the
-combined system and private trust bundle in the `llm-worker` sidecar.
+Production deployments secure two independent worker-to-router paths:
 
-The external dial endpoints and the request-router TLS identity are separate.
+| Path | TLS identity | Pylon trust input |
+| --- | --- | --- |
+| gRPC registration and watches | The external HTTPS dial hostname, normally an NLB DNS name | Enabled system and public roots, augmented by the gRPC override or the reverse-mode QUIC trust bundle |
+| QUIC reverse tunnel | The advertised request-router pod hostname | `--tls-cert-path` for the existing QUIC identity or trust input |
+
+The current production gRPC design uses a public ACM certificate on the NLB
+TLS listener. The NLB certificate covers the public gRPC dial hostname. An
+unmanaged Pylon process, or one using NVCA system trust mode, can leave both
+trust paths unset so Tonic uses its enabled system and public roots. In reverse
+mode, Pylon reuses `--tls-cert-path` as gRPC trust when the gRPC-specific
+override is unset. NVCA bundle mode points both options at its merged CA file.
+
+`--grpc-tls-ca-cert-path` or `STARGATE_GRPC_TLS_CA_CERT_PATH` is the optional
+gRPC-specific override. A configured custom bundle augments the enabled system
+and public roots. It does not replace them. In direct mode,
+`--tls-cert-path` is the Pylon QUIC server identity and is never treated as a
+gRPC CA bundle.
+
+A private-CA certificate on the NLB listener is a supported alternative. Give
+Pylon the CA bundle with `--grpc-tls-ca-cert-path <path>` or
+`STARGATE_GRPC_TLS_CA_CERT_PATH=<path>`. The input is a PEM bundle containing
+the CA certificates required by the selected certificate chain, including a
+private root when applicable. It does not disable certificate or hostname
+verification. Pylon reads the file once during startup. An unreadable path
+fails startup with the configured path in the error. Invalid PEM, untrusted
+chains, and hostname mismatches prevent the gRPC watch and registration
+connections. Replace or rotate the bundle with a rolling restart of the worker
+pods. The dial address must be an `https://` URI. A scheme-less `host:port`
+address preserves Pylon's existing plaintext HTTP behavior, even on port 443.
+
+For gRPC, TLS SNI and hostname verification always use the external HTTPS dial
+hostname. After discovery, Pylon separately sends the concrete request-router
+pod hostname as the HTTP/2 `:authority` so `stargate-k8s-router` can select the
+pod. The authority override does not become the TLS SNI. A gRPC NLB leaf
+certificate therefore needs the public NLB DNS SAN, not Kubernetes-internal
+pod SANs.
+
+The QUIC identity remains separate. The request router presents a certificate
+issued by cert-manager, or one you issue and supply in a pre-created Secret.
 For a single-cluster deployment, workers dial
 `llm-request-router.nvcf.svc.cluster.local:50071`. For remote workers, the
-backend router preserves the advertised request-router pod hostname as the QUIC
-Server Name Indication (SNI) while it sends traffic through an external UDP
-endpoint. The certificate must cover that advertised hostname. The default
-wildcard SAN is `*.llm-request-router-headless.nvcf.svc.cluster.local`.
-An external load-balancer hostname does not need to be a certificate SAN just
-because workers use it as a dial endpoint.
+backend router preserves the advertised request-router pod hostname as the
+QUIC SNI while it sends traffic through an external UDP endpoint. The QUIC
+certificate must cover that advertised hostname. The default wildcard SAN is
+`*.llm-request-router-headless.nvcf.svc.cluster.local`. It does not need the
+external UDP load-balancer hostname. Do not reuse the gRPC NLB leaf certificate
+as the QUIC leaf certificate.
 
 ### Managed OpenBao issuer
 
@@ -165,7 +199,7 @@ backend-router endpoints.
 
 | Path | Worker-facing values | Gateway route and backend | Terminating component |
 | --- | --- | --- | --- |
-| gRPC registration and watches | `global.workerEndpoints.llmRequestRouterAddress` for the initial connection, then `pylonGrpcDialAddress` | `llmGrpc` TCP listener and `TCPRoute` to `llm-request-router-backend-router:50071` | The backend router accepts gRPC, selects a request-router pod from the HTTP/2 authority, and proxies the stream. |
+| gRPC registration and watches | `global.workerEndpoints.llmRequestRouterAddress` for the initial connection, then `pylonGrpcDialAddress` | `llmGrpc` TCP listener and `TCPRoute` to `llm-request-router-backend-router:50071` | The backend router selects a request-router pod from the HTTP/2 authority and proxies the stream. An HTTPS dial URI also verifies its external hostname. |
 | Reverse inference tunnel | `pylonReverseTunnelDialAddress` | `llmQuic` UDP listener and `UDPRoute` to `llm-request-router-backend-router:50072` | The backend router terminates the worker-facing QUIC connection, selects a request-router pod from SNI, and forwards the tunnel. |
 
 Configure distinct TCP and UDP endpoints when the infrastructure uses separate
@@ -207,10 +241,18 @@ both to use the in-cluster backend-router Service. Helmfile rendering rejects a
 partial override. The gRPC worker address normally uses the same TCP endpoint
 as `pylonGrpcDialAddress`.
 
-The dial hostnames select network paths. They do not replace the advertised
-request-router pod hostname used for QUIC SNI. Keep the default wildcard SAN,
-or issue a certificate that covers a customized advertised hostname. Every
-compute cluster must trust the issuing CA as described in
+The scheme-less self-managed worker address in this example is plaintext gRPC.
+Port 443 alone does not make it HTTPS, and the self-managed profile validator
+accepts `host:port`, not a URI. The public ACM and private-CA NLB listener modes
+described above apply when the deployment supplies Pylon an `https://` dial
+URI through a supported configuration path.
+
+For an HTTPS dial URI, the gRPC dial hostname is the TLS SNI and must be a SAN
+on the NLB listener certificate. It does not replace the advertised
+request-router pod hostname used as the HTTP/2 authority or as the QUIC SNI.
+Keep the default wildcard SAN on the separate QUIC leaf, or issue a certificate
+that covers a customized advertised hostname. Every compute cluster must trust
+the required issuing CAs as described in
 [Compute-plane trust](#compute-plane-trust). Server certificate and key updates
 follow [Certificate Renewal](#certificate-renewal). A CA or trust-bundle change
 requires a worker rollout.
@@ -439,6 +481,25 @@ agentConfig:
 Use only public CA certificates in `trustBundlePem`. Do not add a private key,
 leaf certificate, or OpenBao token.
 
+In bundle mode, NVCA creates one merged system and private CA file in the
+`llm-worker` container and explicitly points both Pylon trust inputs at it:
+
+```text
+STARGATE_TLS_CERT_PATH=/etc/ssl/certs/ca-certificates.crt
+STARGATE_GRPC_TLS_CA_CERT_PATH=/etc/ssl/certs/ca-certificates.crt
+```
+
+Sharing this CA bundle does not couple the protocols or reuse a leaf
+certificate. `STARGATE_TLS_CERT_PATH` retains its QUIC meaning.
+`STARGATE_GRPC_TLS_CA_CERT_PATH` applies only to Stargate gRPC HTTPS. The bundle
+can contain roots for both independent leaf-certificate hierarchies. In system
+trust mode, NVCA injects neither variable and Pylon keeps Tonic's default HTTPS
+root behavior.
+
+For an unmanaged Pylon process, set the equivalent
+`--grpc-tls-ca-cert-path <path>` option directly. The file is read once at
+startup and is not reloaded.
+
 When replacing a local plaintext configuration, also set this in the
 compute-plane Helmfile environment:
 
@@ -566,7 +627,8 @@ kubectl -n nvcf-backend get pod <function-pod> \
 kubectl -n nvcf-backend get pod <function-pod> \
   -o jsonpath='{range .spec.containers[?(@.name=="llm-worker")].args[*]}{.}{"\n"}{end}'
 kubectl -n nvcf-backend get pod <function-pod> \
-  -o jsonpath='{range .spec.containers[?(@.name=="llm-worker")].env[?(@.name=="STARGATE_TLS_CERT_PATH")]}{.name}{"="}{.value}{"\n"}{end}'
+  -o jsonpath='{range .spec.containers[?(@.name=="llm-worker")].env[*]}{.name}{"="}{.value}{"\n"}{end}' \
+  | grep -E '^STARGATE_(GRPC_TLS_CA_CERT_PATH|TLS_CERT_PATH)='
 ```
 
 The worker args must contain
@@ -578,6 +640,7 @@ contain:
 
 ```text
 STARGATE_TLS_CERT_PATH=/etc/ssl/certs/ca-certificates.crt
+STARGATE_GRPC_TLS_CA_CERT_PATH=/etc/ssl/certs/ca-certificates.crt
 ```
 
 Also verify the control-plane components:
@@ -610,10 +673,11 @@ remain open. If a replacement is invalid, the router rejects it and keeps the
 last-known-good identity. Older chart releases and Stargate image overrides
 older than 0.11.1 require a request-router restart after the Secret update.
 
-This reload contract covers the server certificate and private key only. A
-trust-bundle change, including a root CA rotation, requires a rolling restart of
-the LLM worker pods. Renewing an intermediate under an already-trusted root does
-not change the trust bundle and does not require a worker-pod restart. Follow
+This reload contract covers the server certificate and private key only. Pylon
+loads both its gRPC CA bundle and QUIC trust bundle at startup. A trust-bundle
+change, including a root CA rotation, requires a rolling restart of the LLM
+worker pods. Renewing an intermediate under an already-trusted root does not
+change the trust bundle and does not require a worker-pod restart. Follow
 the [transport TLS rotation runbook](./runbooks/transport-tls-rotation.md) for
 the atomic Secret update, reload checks, trust-bundle rollout order, and
 recovery procedure.
@@ -759,21 +823,27 @@ mean the router knows the target but has no active eligible backend. Check:
 
 For transport TLS failures, check:
 
-- Unknown issuer: inspect the `Certificate` Ready condition and verify
+- gRPC unknown issuer: for a public ACM NLB certificate, verify the system and
+  public root store. For a private-CA NLB certificate, verify
+  `STARGATE_GRPC_TLS_CA_CERT_PATH` and the CA chain in that PEM bundle.
+- QUIC unknown issuer: inspect the `Certificate` Ready condition and verify
   `issuerRef.kind`, `issuerRef.name`, and the issuer namespace. A namespaced
   `Issuer` must be in `nvcf`.
-- SAN mismatch: compare the request router's
-  `--advertised-hostname-template` with the SANs in
-  the Secret named by `addons.llm.pki.secretName`. The default is
-  `Secret/stargate-quic-tls`. The external `--stargate-address` is a dial
-  endpoint and does not replace the advertised QUIC identity.
+- gRPC SAN mismatch: compare the external HTTPS dial hostname with the public
+  DNS SANs on the NLB listener certificate. The internal pod authority is not
+  the gRPC TLS identity.
+- QUIC SAN mismatch: compare the request router's
+  `--advertised-hostname-template` with the SANs in the Secret named by
+  `addons.llm.pki.secretName`. The default is `Secret/stargate-quic-tls`. The
+  external UDP dial endpoint does not replace the advertised QUIC identity.
 - Expired or not-yet-valid certificate: inspect the certificate dates and the
   cluster clock. Renew the certificate and use the
   [transport TLS rotation runbook](./runbooks/transport-tls-rotation.md) to
   verify that the replacement becomes active.
 - Missing trust bundle: verify `ConfigMap/nvcf-transport-trust-bundle`, compare
-  its fingerprint with the compute-plane profile, and confirm
-  `STARGATE_TLS_CERT_PATH` in the `llm-worker` container.
+  its fingerprint with the compute-plane profile, and confirm both
+  `STARGATE_TLS_CERT_PATH` and `STARGATE_GRPC_TLS_CA_CERT_PATH` in the
+  `llm-worker` container. Restart the worker after changing either bundle.
 
 Useful logs:
 

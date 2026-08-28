@@ -54,6 +54,7 @@ const (
 	SystemCertDir        = "/etc/ssl/certs"
 	SystemCertFile       = "/etc/ssl/certs/" + InstalledBundleFile
 	CertPathEnv          = "STARGATE_TLS_CERT_PATH"
+	GrpcTLSCACertPathEnv = "STARGATE_GRPC_TLS_CA_CERT_PATH"
 )
 
 var fingerprintPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
@@ -166,10 +167,11 @@ func InjectIntoPodSpec(podSpec *corev1.PodSpec, cfg nvcaconfig.TransportTLSConfi
 		MountPath: cfg.InstalledBundleMountPath,
 		ReadOnly:  true,
 	})
-	k8sutil.AddEnvsToContainer(llmWorker, corev1.EnvVar{
-		Name:  CertPathEnv,
-		Value: cfg.InstalledBundleMountPath + "/" + InstalledBundleFile,
-	})
+	installedBundleFile := cfg.InstalledBundleMountPath + "/" + InstalledBundleFile
+	k8sutil.AddEnvsToContainer(llmWorker,
+		corev1.EnvVar{Name: CertPathEnv, Value: installedBundleFile},
+		corev1.EnvVar{Name: GrpcTLSCACertPathEnv, Value: installedBundleFile},
+	)
 	return nil
 }
 
