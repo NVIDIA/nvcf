@@ -41,6 +41,15 @@ assert_contains() {
   fi
 }
 
+assert_not_contains() {
+  local pattern="$1"
+  local message="$2"
+  if grep -Fq -- "$pattern" "$rendered"; then
+    echo "FAIL: ${message}" >&2
+    exit 1
+  fi
+}
+
 assert_contains "kind: GRPCRoute" \
   "secure LLM worker routing must expose gRPC registration through a GRPCRoute"
 assert_contains "kind: UDPRoute" \
@@ -49,8 +58,8 @@ assert_contains "kind: BackendTrafficPolicy" \
   "secure LLM worker routing must disable Envoy timeouts for streaming RPCs"
 assert_contains "requestTimeout: 0s" \
   "secure LLM worker routing must disable the request timeout"
-assert_contains "maxStreamDuration: 0s" \
-  "secure LLM worker routing must disable the maximum stream duration"
+assert_not_contains "maxStreamDuration:" \
+  "secure LLM worker routing must stay compatible with the pinned Envoy Gateway v1.5 CRD"
 assert_contains "kind: Certificate" \
   "cert-manager mode must issue the dedicated gRPC listener certificate"
 assert_contains 'secretName: "llm-request-router-grpc-tls"' \

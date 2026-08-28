@@ -19,5 +19,4 @@ spec:
   timeout:
     http:
       requestTimeout: 0s
-      maxStreamDuration: 0s
 {{- end }}

@@ -755,15 +755,17 @@ kubectl -n nvcf get referencegrant allow-llm-worker-routes -o yaml
 kubectl -n "$LLM_GRPC_GATEWAY_NAMESPACE" get certificate llm-grpc-tls
 kubectl -n "$LLM_GRPC_GATEWAY_NAMESPACE" get backendtrafficpolicy \
   llm-worker-grpc-streams \
-  -o jsonpath='{.spec.timeout.http.requestTimeout}{"\t"}{.spec.timeout.http.maxStreamDuration}{"\n"}'
+  -o jsonpath='{.spec.timeout.http.requestTimeout}{"\n"}'
 kubectl -n nvcf get service llm-request-router-backend-router \
   -o jsonpath='{.spec.type}{"\t"}{range .spec.ports[*]}{.port}{"/"}{.protocol}{" "}{end}{"\n"}'
 ```
 
 Each route parent must report `Accepted=True` and `ResolvedRefs=True`. The
 Service type must remain `ClusterIP`, with TCP port `50071` and UDP port
-`50072`. In cert-manager mode the dedicated certificate must be Ready; both
-policy values must be `0s`. Also wait for each referenced Gateway to report
+`50072`. In cert-manager mode the dedicated certificate must be Ready, and
+the request timeout must be `0s`. This is the Envoy Gateway v1.5-compatible
+setting that disables the default 15-second timeout for streaming gRPC calls.
+Also wait for each referenced Gateway to report
 `Programmed=True` and confirm that its status contains an external address.
 Verify the public certificate and ALPN without disabling validation:
 

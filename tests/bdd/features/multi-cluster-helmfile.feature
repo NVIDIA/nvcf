@@ -174,7 +174,6 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
           timeout:
             http:
               requestTimeout: 0s
-              maxStreamDuration: 0s
         """
       # These routes are installed by ncp-local before the Helmfile
       # stack, then become fully resolved once the control-plane
