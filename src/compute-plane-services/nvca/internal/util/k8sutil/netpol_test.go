@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	netv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
@@ -190,6 +191,121 @@ func TestEnsureNetworkPolicies(t *testing.T) {
 	err = crClient.List(ctx, npList1, client.InNamespace(namespace))
 	require.NoError(t, err)
 	assert.Len(t, npList1.Items, 4)
+}
+
+// TestEnsureNetworkPoliciesFunctionNamespaceAllowsIntraNamespaceAccess
+// verifies that function namespaces (one MiniService/Helm release per
+// namespace, single-tenant) still get the same-namespace ingress rule on
+// allow-ingress-monitoring and the allow-egress-intra-namespace policy. This
+// is required so a MiniService's utils pod can reach its own inference pod
+// running in a different pod in the same namespace; it's safe because only
+// one tenant's pods ever live in a function namespace.
+func TestEnsureNetworkPoliciesFunctionNamespaceAllowsIntraNamespaceAccess(t *testing.T) {
+	featureFlagFetcher := &featureflagmock.Fetcher{}
+	ctx := context.Background()
+	namespace := "test-namespace"
+	npCM := newNetworkPolicyConfigMap("nvca-system")
+	k8sClient := k8sfake.NewSimpleClientset()
+
+	err := EnsureNetworkPoliciesFunctionNamespace(
+		ctx,
+		namespace,
+		npCM.Data,
+		featureFlagFetcher,
+		k8sClient,
+		nil,
+	)
+	require.NoError(t, err)
+
+	ingressNP, err := k8sClient.NetworkingV1().NetworkPolicies(namespace).Get(
+		ctx, MonitoringIngressNetworkPolicyName, metav1.GetOptions{})
+	require.NoError(t, err)
+	require.Len(t, ingressNP.Spec.Ingress, 2,
+		"allow-ingress-monitoring should have the ConfigMap-defined rule plus the same-namespace rule")
+	sameNSRule := ingressNP.Spec.Ingress[1]
+	require.Len(t, sameNSRule.From, 1)
+	assert.Equal(t, namespace, sameNSRule.From[0].NamespaceSelector.MatchLabels[K8sNameLabelKey])
+
+	egressNP, err := k8sClient.NetworkingV1().NetworkPolicies(namespace).Get(
+		ctx, AllowEgressIntraNamespaceNetworkPolicyName, metav1.GetOptions{})
+	require.NoError(t, err, "allow-egress-intra-namespace should be created for function namespaces")
+	require.Len(t, egressNP.Spec.Egress, 1)
+	require.Len(t, egressNP.Spec.Egress[0].To, 1)
+	assert.Equal(t, namespace, egressNP.Spec.Egress[0].To[0].NamespaceSelector.MatchLabels[K8sNameLabelKey])
+}
+
+// TestEnsureNetworkPoliciesSharedPodInstanceNamespaceDoesNotAllowIntraNamespaceAccess
+// is a regression test: the namespace shared across every
+// container-function tenant (nvcf-backend) must not get the same-namespace
+// ingress rule on allow-ingress-monitoring, and must never get
+// allow-egress-intra-namespace. Combined, those two would let one tenant's
+// pod reach another tenant's pod on any port.
+func TestEnsureNetworkPoliciesSharedPodInstanceNamespaceDoesNotAllowIntraNamespaceAccess(t *testing.T) {
+	featureFlagFetcher := &featureflagmock.Fetcher{}
+	ctx := context.Background()
+	namespace := "nvcf-backend"
+	npCM := newNetworkPolicyConfigMap("nvca-system")
+	k8sClient := k8sfake.NewSimpleClientset()
+
+	err := EnsureNetworkPoliciesSharedPodInstanceNamespace(
+		ctx,
+		namespace,
+		npCM.Data,
+		featureFlagFetcher,
+		k8sClient,
+		nil,
+	)
+	require.NoError(t, err)
+
+	ingressNP, err := k8sClient.NetworkingV1().NetworkPolicies(namespace).Get(
+		ctx, MonitoringIngressNetworkPolicyName, metav1.GetOptions{})
+	require.NoError(t, err)
+	require.Len(t, ingressNP.Spec.Ingress, 1, "allow-ingress-monitoring should only have the ConfigMap-defined rule")
+	assert.Equal(t, "bar", ingressNP.Spec.Ingress[0].From[0].NamespaceSelector.MatchLabels["foo"])
+
+	_, err = k8sClient.NetworkingV1().NetworkPolicies(namespace).Get(
+		ctx, AllowEgressIntraNamespaceNetworkPolicyName, metav1.GetOptions{})
+	require.Error(t, err)
+	assert.True(t, apierrors.IsNotFound(err),
+		"allow-egress-intra-namespace should not be created for the shared pod instance namespace")
+}
+
+// TestEnsureNetworkPoliciesSharedPodInstanceNamespaceDoesNotDeleteUnownedPolicy
+// verifies that EnsureNetworkPoliciesSharedPodInstanceNamespace never owned
+// AllowEgressIntraNamespaceNetworkPolicyName (only
+// EnsureNetworkPoliciesFunctionNamespace ever created it), so it must not
+// delete a same-named policy in a shared pod instance namespace.
+func TestEnsureNetworkPoliciesSharedPodInstanceNamespaceDoesNotDeleteUnownedPolicy(t *testing.T) {
+	featureFlagFetcher := &featureflagmock.Fetcher{}
+	ctx := context.Background()
+	namespace := "test-namespace"
+	npCM := newNetworkPolicyConfigMap("nvca-system")
+	k8sClient := k8sfake.NewSimpleClientset(&netv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      AllowEgressIntraNamespaceNetworkPolicyName,
+			Namespace: namespace,
+		},
+		Spec: netv1.NetworkPolicySpec{
+			PolicyTypes: []netv1.PolicyType{netv1.PolicyTypeEgress},
+		},
+	})
+
+	err := EnsureNetworkPoliciesSharedPodInstanceNamespace(
+		ctx,
+		namespace,
+		npCM.Data,
+		featureFlagFetcher,
+		k8sClient,
+		nil,
+	)
+	require.NoError(t, err)
+
+	_, err = k8sClient.NetworkingV1().NetworkPolicies(namespace).Get(
+		ctx,
+		AllowEgressIntraNamespaceNetworkPolicyName,
+		metav1.GetOptions{},
+	)
+	require.NoError(t, err, "shared pod instance namespace reconcile must not delete a policy it doesn't own")
 }
 
 func TestEnsureNetworkPoliciesWithCustomPolicies(t *testing.T) {
