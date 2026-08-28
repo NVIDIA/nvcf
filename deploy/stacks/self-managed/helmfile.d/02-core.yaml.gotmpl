@@ -217,7 +217,7 @@ releases:
     {{- $gatewayRoutesChartPath := dig "ingress" "gatewayApi" "chartPath" "" .Values }}
     chart: {{ $gatewayRoutesChartPath | default "nvcf/nvcf-gateway-routes" | quote }}
     {{- if not $gatewayRoutesChartPath }}
-    version: 1.16.0
+    version: 1.17.0
     {{- end }}
     needs:
       - nvcf/notary-service
