@@ -122,6 +122,42 @@ assert_value() {
   assert_file_value "$values_file" "$path" "$expected"
 }
 
+assert_manifest_value() {
+  local file="$1"
+  local expression="$2"
+  local expected="$3"
+  local actual
+
+  actual="$(yq ea -r "$expression" "$file")"
+  test "$actual" = "$expected" ||
+    fail "expected $expression in $(basename "$file") to be $expected, got $actual"
+}
+
+assert_resource_count() {
+  local file="$1"
+  local kind="$2"
+  local name="$3"
+  local namespace="$4"
+  local expected="$5"
+  local expression
+
+  expression="[select(.kind == \"$kind\" and .metadata.name == \"$name\" and .metadata.namespace == \"$namespace\")] | length"
+  assert_manifest_value "$file" "$expression" "$expected"
+}
+
+assert_resource_field() {
+  local file="$1"
+  local kind="$2"
+  local name="$3"
+  local namespace="$4"
+  local field="$5"
+  local expected="$6"
+  local expression
+
+  expression="select(.kind == \"$kind\" and .metadata.name == \"$name\" and .metadata.namespace == \"$namespace\") | $field"
+  assert_manifest_value "$file" "$expression" "$expected"
+}
+
 assert_value '.nvcfGatewayRoutes.routes.llmWorker.enabled' 'true'
 assert_value '.nvcfGatewayRoutes.routes.llmWorker.backend.namespace' 'nvcf'
 assert_value '.nvcfGatewayRoutes.gateways.llmGrpc.name' 'llm-grpc-gw'
@@ -172,12 +208,45 @@ helm template nvcf-gateway-routes "$gateway_chart_path" \
   >"$work_dir/gateway-manifest.yaml"
 test -s "$work_dir/gateway-manifest.yaml" ||
   fail "gateway-routes source chart did not render from generated stack values"
-grep -Fq 'kind: GRPCRoute' "$work_dir/gateway-manifest.yaml" ||
-  fail "generated stack values did not render the secure LLM GRPCRoute"
-grep -Fq 'kind: Certificate' "$work_dir/gateway-manifest.yaml" ||
-  fail "generated stack values did not render the dedicated gRPC Certificate"
-grep -Fq 'kind: BackendTrafficPolicy' "$work_dir/gateway-manifest.yaml" ||
-  fail "generated stack values did not render the gRPC stream timeout policy"
+
+gateway_manifest="$work_dir/gateway-manifest.yaml"
+gateway_namespace='envoy-gateway-system'
+
+assert_resource_count "$gateway_manifest" GRPCRoute llm-worker-grpc "$gateway_namespace" 1
+assert_resource_field "$gateway_manifest" GRPCRoute llm-worker-grpc "$gateway_namespace" \
+  '.metadata.labels."app.kubernetes.io/component"' 'llm-worker-grpc-route'
+assert_resource_field "$gateway_manifest" GRPCRoute llm-worker-grpc "$gateway_namespace" \
+  '.spec.parentRefs[0].name' 'llm-grpc-gw'
+assert_resource_field "$gateway_manifest" GRPCRoute llm-worker-grpc "$gateway_namespace" \
+  '.spec.parentRefs[0].namespace' "$gateway_namespace"
+assert_resource_field "$gateway_manifest" GRPCRoute llm-worker-grpc "$gateway_namespace" \
+  '.spec.parentRefs[0].sectionName' 'llm-grpc'
+assert_resource_field "$gateway_manifest" GRPCRoute llm-worker-grpc "$gateway_namespace" \
+  '.spec.rules[0].backendRefs[0].name' 'llm-request-router-backend-router'
+assert_resource_field "$gateway_manifest" GRPCRoute llm-worker-grpc "$gateway_namespace" \
+  '.spec.rules[0].backendRefs[0].namespace' 'nvcf'
+assert_resource_field "$gateway_manifest" GRPCRoute llm-worker-grpc "$gateway_namespace" \
+  '.spec.rules[0].backendRefs[0].port' '50071'
+
+assert_resource_count "$gateway_manifest" Certificate llm-grpc-tls "$gateway_namespace" 1
+assert_resource_field "$gateway_manifest" Certificate llm-grpc-tls "$gateway_namespace" \
+  '.spec.secretName' 'llm-grpc-tls'
+assert_resource_field "$gateway_manifest" Certificate llm-grpc-tls "$gateway_namespace" \
+  '.spec.dnsNames[0]' 'llm-grpc.example.com'
+assert_resource_field "$gateway_manifest" Certificate llm-grpc-tls "$gateway_namespace" \
+  '.spec.issuerRef.kind' 'ClusterIssuer'
+assert_resource_field "$gateway_manifest" Certificate llm-grpc-tls "$gateway_namespace" \
+  '.spec.issuerRef.name' 'nvcf-openbao-pki'
+
+assert_resource_count "$gateway_manifest" BackendTrafficPolicy llm-worker-grpc-streams "$gateway_namespace" 1
+assert_resource_field "$gateway_manifest" BackendTrafficPolicy llm-worker-grpc-streams "$gateway_namespace" \
+  '.spec.targetRefs[0].group' 'gateway.networking.k8s.io'
+assert_resource_field "$gateway_manifest" BackendTrafficPolicy llm-worker-grpc-streams "$gateway_namespace" \
+  '.spec.targetRefs[0].kind' 'GRPCRoute'
+assert_resource_field "$gateway_manifest" BackendTrafficPolicy llm-worker-grpc-streams "$gateway_namespace" \
+  '.spec.targetRefs[0].name' 'llm-worker-grpc'
+assert_resource_field "$gateway_manifest" BackendTrafficPolicy llm-worker-grpc-streams "$gateway_namespace" \
+  '.spec.timeout.http.requestTimeout' '0s'
 
 assert_partial_backend_override_rejected() {
   local missing_key="$1"
