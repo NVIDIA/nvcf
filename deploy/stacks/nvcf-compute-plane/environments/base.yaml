@@ -31,14 +31,21 @@ global:
   # NVCA Operator Configuration
   # =============================================================================
   nvcaOperator:
+    imageTag: "3.2.12"
     selfManaged:
-      # ICMS (SIS) service URL — required; set per environment.
+      nvcaVersion: "3.2.12"
+      otelCollector:
+        # Self-hosted registries do not always mirror this optional image.
+        # Enable it only after publishing the collector in global.image.
+        enabled: false
+        imageTag: "0.157.9"
+      # ICMS (SIS) service URL: required; set per environment.
       icmsServiceURL: ""
       icmsServiceHostHeaderOverride: ""
-      # Reval service URL — required; set per environment.
+      # Reval service URL: required; set per environment.
       revalServiceURL: ""
       revalServiceHostHeaderOverride: ""
-      # NATS URL — required; set per environment.
+      # NATS URL: required; set per environment.
       natsURL: ""
       natsHostOverride: ""
       # Feature gates enabled on this cluster. Extra gates set here are added on

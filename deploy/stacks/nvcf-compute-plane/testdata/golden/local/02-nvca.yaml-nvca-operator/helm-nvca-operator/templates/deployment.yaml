@@ -21,7 +21,7 @@ metadata:
   name: nvca-operator
   namespace: nvca-operator
   labels:
-    helm.sh/chart: helm-nvca-operator-1.14.0
+    helm.sh/chart: helm-nvca-operator-1.21.3
     app.kubernetes.io/name: nvca-operator
     app.kubernetes.io/instance: nvca-operator
     app.kubernetes.io/version: "3.0.4"
@@ -47,6 +47,17 @@ spec:
         runAsUser: 1000
         runAsGroup: 1010
         fsGroup: 1010
+        # Defense in depth: enforce non-root + seccomp at the pod
+        # level. runAsUser=1000 already guarantees non-root; setting
+        # runAsNonRoot=true makes the constraint explicit (kubelet
+        # will reject the pod if the image's USER somehow goes back
+        # to root). seccompProfile=RuntimeDefault blocks the
+        # ~40 syscalls Docker's default seccomp profile blocks
+        # (clock_settime, modify_ldt, …) — safe for any normal Go
+        # operator.
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       terminationGracePeriodSeconds: 600
       containers:
       - name: nvca-operator
@@ -84,7 +95,7 @@ spec:
         - name: OTEL_COLLECTOR_IMAGE_REPO
           value: "nvcr.io/nvidia/nvcf-byoc/nvcf-otel-collector"
         - name: OTEL_COLLECTOR_IMAGE_TAG
-          value: "0.143.2"
+          value: "0.157.9"
         - name: OTEL_COLLECTOR_RESOURCES_B64
           value: "eyJsaW1pdHMiOnsiY3B1IjoiMTAwMG0iLCJtZW1vcnkiOiIxR2kifSwicmVxdWVzdHMiOnsiY3B1IjoiMjAwbSIsIm1lbW9yeSI6IjI1Nk1pIn19"
         - name: OPERATOR_NAMESPACE
@@ -92,8 +103,6 @@ spec:
             fieldRef:
               fieldPath: metadata.namespace
         args:
-          - /tini
-          - --
           - /usr/bin/nvca-operator
           - --nca-id
           - "nvcf-default"
@@ -117,7 +126,11 @@ spec:
           - --nvca-cache-mount-options-enabled
           - --nvca-cache-mount-options
           - "ro,norecovery,nouuid"
-        image: nvcr.io/0651155215864979/ncp-dev/nvca-operator:3.0.4
+          - --function-env-overrides-b64
+          - "eyJCWU9PX09URUxfQ09MTEVDVE9SX0NPTlRBSU5FUiI6Im52Y3IuaW8vbnZpZGlhL252Y2YtYnlvYy9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTU3LjAtbnYtMC4xLjEifQ=="
+          - --task-env-overrides-b64
+          - "eyJCWU9PX09URUxfQ09MTEVDVE9SX0NPTlRBSU5FUiI6Im52Y3IuaW8vbnZpZGlhL252Y2YtYnlvYy9ieW9vLW90ZWwtY29sbGVjdG9yOjAuMTU3LjAtbnYtMC4xLjEifQ=="
+        image: nvcr.io/0651155215864979/ncp-dev/nvca-operator:3.2.12
         imagePullPolicy: IfNotPresent
         securityContext:
           # Set here so openbao injection can copy it upon injection
@@ -163,7 +176,7 @@ spec:
             cpu: "1000m"
             memory: "4Gi"
       - name: nvca-mirror
-        image: nvcr.io/0651155215864979/ncp-dev/nvca-operator:3.0.4
+        image: nvcr.io/0651155215864979/ncp-dev/nvca-operator:3.2.12
         imagePullPolicy: IfNotPresent
         securityContext:
           runAsUser: 1000
@@ -173,8 +186,6 @@ spec:
             drop:
               - "ALL"
         args:
-          - /tini
-          - --
           - /usr/bin/nvca-mirror
           - run
           - --target-namespace

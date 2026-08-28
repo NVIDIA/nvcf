@@ -36,3 +36,15 @@ spec:
       allowedRoutes:
         namespaces:
           from: All
+    - name: llm-grpc
+      protocol: TCP
+      port: 50071
+      allowedRoutes:
+        namespaces:
+          from: All
+    - name: llm-quic
+      protocol: UDP
+      port: 50072
+      allowedRoutes:
+        namespaces:
+          from: All

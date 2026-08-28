@@ -68,4 +68,10 @@ public class GpuReservation {
     @NotNull(message = "gpuUsageByInstanceType must not be null")
     @Schema(description = "Reserved GPU usage and availability per instance type")
     GpuUsageByInstanceType gpuUsageByInstanceType;
+
+    // Nullable so reporters that predate this field keep passing validation.
+    @Nullable
+    @Schema(description = "When true, no backup instances are scheduled in another zone "
+            + "if the reservation's primary zone becomes unhealthy")
+    Boolean reservationBackUpDisabled;
 }

@@ -19,4 +19,5 @@ go_test(
     # maintained by hand; `# keep` stops the next gazelle run dropping it.
     data = ["//src/compute-plane-services/nvsnap/deploy/k8s/workloads:workload_manifests"],  # keep
     embed = [":manifests"],
+    deps = ["@io_k8s_sigs_yaml//:yaml"],
 )

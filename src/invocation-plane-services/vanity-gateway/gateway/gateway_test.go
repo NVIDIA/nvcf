@@ -19,6 +19,7 @@ package gateway
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -29,4 +30,15 @@ func TestNewNVCFGatewayRequiresAPIEndpoint(t *testing.T) {
 	require.Nil(t, gateway)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "NVCF_API_ENDPOINT is required")
+}
+
+func TestNewNVCFGatewayRejectsNegativeMappingLoadTimeout(t *testing.T) {
+	gateway, err := NewNVCFGateway(nil, Config{
+		NvcfApiEndpoint:    "https://api.example.com",
+		MappingPath:        "config.yaml",
+		MappingLoadTimeout: -5 * time.Second,
+	})
+
+	require.Nil(t, gateway)
+	require.ErrorContains(t, err, "MAPPING_LOAD_TIMEOUT must not be negative")
 }

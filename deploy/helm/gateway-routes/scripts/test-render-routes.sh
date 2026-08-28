@@ -102,6 +102,10 @@ assert_resource_field "$default_render" HTTPRoute llm-api-gateway gateway '.spec
 assert_resource_field "$default_render" HTTPRoute llm-api-gateway gateway '.spec.rules[0].backendRefs[0].name' llm-api-gateway
 assert_resource_field "$default_render" HTTPRoute llm-api-gateway gateway '.spec.rules[0].backendRefs[0].namespace' nvcf
 assert_resource_field "$default_render" HTTPRoute llm-api-gateway gateway '.spec.rules[0].backendRefs[0].port' 8080
+# A request timeout truncates long-lived SSE responses even when the backend
+# terminates them correctly. The zero duration disables the route-level request
+# deadline while still allowing a caller disconnect to close the downstream request.
+assert_resource_field "$default_render" HTTPRoute llm-api-gateway gateway '.spec.rules[0].timeouts.request' 0s
 
 assert_resource_count "$default_render" HTTPRoute sis gateway 1
 assert_resource_field "$default_render" HTTPRoute sis gateway '.metadata.labels."app.kubernetes.io/component"' sis-route
@@ -160,6 +164,9 @@ assert_resource_count "$default_render" GRPCRoute nvcf-api-grpc gateway 0
 assert_resource_count "$default_render" GRPCRoute nvct-api-grpc gateway 0
 assert_resource_count "$default_render" TCPRoute grpc-worker gateway 0
 assert_resource_count "$default_render" TCPRoute nats gateway 0
+assert_resource_count "$default_render" TCPRoute llm-worker-grpc gateway 0
+assert_resource_count "$default_render" UDPRoute llm-worker-quic gateway 0
+assert_resource_count "$default_render" ReferenceGrant allow-llm-worker-routes nvcf 0
 assert_resource_count "$default_render" ReferenceGrant allow-tcproute-to-nats nats-system 0
 
 helm template nvcf-gateway-routes "$repo_root/chart" \
@@ -168,6 +175,8 @@ helm template nvcf-gateway-routes "$repo_root/chart" \
   --set nvcfGatewayRoutes.routes.nvctApi.grpc.enabled=true \
   --set nvcfGatewayRoutes.routes.grpcWorker.enabled=true \
   --set nvcfGatewayRoutes.routes.nats.enabled=true \
+  --set nvcfGatewayRoutes.routes.llmWorker.enabled=true \
+  --set nvcfGatewayRoutes.routes.llmWorker.backend.namespace=nvcf \
   --set nvcfGatewayRoutes.gateways.nats.name=nats-gateway \
   --set nvcfGatewayRoutes.gateways.nats.namespace=gateway \
   --set nvcfGatewayRoutes.gateways.nats.listenerName=nats \
@@ -220,6 +229,32 @@ assert_resource_field "$enabled_render" TCPRoute nats gateway '.spec.rules[0].ba
 assert_resource_field "$enabled_render" TCPRoute nats gateway '.spec.rules[0].backendRefs[0].port' 4222
 assert_resource_field "$enabled_render" TCPRoute nats gateway '.spec.hostnames' null
 assert_resource_field "$enabled_render" TCPRoute nats gateway '.metadata.annotations' null
+
+assert_resource_count "$enabled_render" TCPRoute llm-worker-grpc gateway 1
+assert_resource_field "$enabled_render" TCPRoute llm-worker-grpc gateway '.metadata.labels."app.kubernetes.io/component"' llm-worker-grpc-route
+assert_resource_field "$enabled_render" TCPRoute llm-worker-grpc gateway '.spec.parentRefs[0].name' llm-grpc-gateway
+assert_resource_field "$enabled_render" TCPRoute llm-worker-grpc gateway '.spec.parentRefs[0].namespace' gateway
+assert_resource_field "$enabled_render" TCPRoute llm-worker-grpc gateway '.spec.parentRefs[0].sectionName' llm-grpc
+assert_resource_field "$enabled_render" TCPRoute llm-worker-grpc gateway '.spec.rules[0].backendRefs[0].name' llm-request-router-backend-router
+assert_resource_field "$enabled_render" TCPRoute llm-worker-grpc gateway '.spec.rules[0].backendRefs[0].namespace' nvcf
+assert_resource_field "$enabled_render" TCPRoute llm-worker-grpc gateway '.spec.rules[0].backendRefs[0].port' 50071
+
+assert_resource_count "$enabled_render" UDPRoute llm-worker-quic gateway 1
+assert_resource_field "$enabled_render" UDPRoute llm-worker-quic gateway '.metadata.labels."app.kubernetes.io/component"' llm-worker-quic-route
+assert_resource_field "$enabled_render" UDPRoute llm-worker-quic gateway '.spec.parentRefs[0].name' llm-quic-gateway
+assert_resource_field "$enabled_render" UDPRoute llm-worker-quic gateway '.spec.parentRefs[0].namespace' gateway
+assert_resource_field "$enabled_render" UDPRoute llm-worker-quic gateway '.spec.parentRefs[0].sectionName' llm-quic
+assert_resource_field "$enabled_render" UDPRoute llm-worker-quic gateway '.spec.rules[0].backendRefs[0].name' llm-request-router-backend-router
+assert_resource_field "$enabled_render" UDPRoute llm-worker-quic gateway '.spec.rules[0].backendRefs[0].namespace' nvcf
+assert_resource_field "$enabled_render" UDPRoute llm-worker-quic gateway '.spec.rules[0].backendRefs[0].port' 50072
+
+assert_resource_count "$enabled_render" ReferenceGrant allow-llm-worker-routes nvcf 1
+assert_resource_field "$enabled_render" ReferenceGrant allow-llm-worker-routes nvcf '.spec.from[0].kind' TCPRoute
+assert_resource_field "$enabled_render" ReferenceGrant allow-llm-worker-routes nvcf '.spec.from[0].namespace' gateway
+assert_resource_field "$enabled_render" ReferenceGrant allow-llm-worker-routes nvcf '.spec.from[1].kind' UDPRoute
+assert_resource_field "$enabled_render" ReferenceGrant allow-llm-worker-routes nvcf '.spec.from[1].namespace' gateway
+assert_resource_field "$enabled_render" ReferenceGrant allow-llm-worker-routes nvcf '.spec.to[0].kind' Service
+assert_resource_field "$enabled_render" ReferenceGrant allow-llm-worker-routes nvcf '.spec.to[0].name' llm-request-router-backend-router
 
 assert_resource_count "$enabled_render" ReferenceGrant allow-tcproute-to-nats nats-system 1
 assert_resource_field "$enabled_render" ReferenceGrant allow-tcproute-to-nats nats-system '.spec.from[0].kind' TCPRoute

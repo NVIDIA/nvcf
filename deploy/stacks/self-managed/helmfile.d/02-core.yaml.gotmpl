@@ -56,7 +56,7 @@ releases:
       - template: service
 
   - name: api
-    version: 1.23.9
+    version: 1.25.1
     namespace: nvcf
     inherit:
       - template: service
@@ -79,7 +79,7 @@ releases:
       - nvcf/api
 
   - name: grpc-proxy
-    version: 1.6.7
+    version: 1.7.1
     namespace: nvcf
     inherit:
       - template: service
@@ -99,7 +99,7 @@ releases:
       - nvcf/api
 
   - name: ess-api
-    version: 1.7.0
+    version: 1.7.2
     namespace: ess
     inherit:
       - template: service
@@ -165,8 +165,11 @@ releases:
       release-group: services
 
   - name: llm-request-router
-    chart: nvcf/helm-nvcf-llm-request-router
-    version: 1.6.6
+    {{- $llmRequestRouterChartPath := dig "addons" "llm" "requestRouter" "chartPath" "" .Values }}
+    chart: {{ $llmRequestRouterChartPath | default "nvcf/helm-nvcf-llm-request-router" | quote }}
+    {{- if not $llmRequestRouterChartPath }}
+    version: 1.10.0
+    {{- end }}
     namespace: nvcf
     condition: addons.llm.enabled
     values:
@@ -178,7 +181,7 @@ releases:
 
   - name: llm-api-gateway
     chart: nvcf/helm-nvcf-llm-api-gateway
-    version: 1.0.1
+    version: 1.4.1
     namespace: nvcf
     condition: addons.llm.enabled
     values:
@@ -189,7 +192,7 @@ releases:
       release-group: services
 
   - name: vanity-gateway
-    version: 0.1.0-nvcf-10204.1
+    version: 0.3.0
     namespace: nvcf
     condition: addons.vanityGateway.enabled
     inherit:
@@ -211,8 +214,11 @@ releases:
 
   # --- Gateway API Ingress ---
   - name: ingress
-    chart: nvcf/nvcf-gateway-routes
-    version: 1.15.0
+    {{- $gatewayRoutesChartPath := dig "ingress" "gatewayApi" "chartPath" "" .Values }}
+    chart: {{ $gatewayRoutesChartPath | default "nvcf/nvcf-gateway-routes" | quote }}
+    {{- if not $gatewayRoutesChartPath }}
+    version: 1.16.0
+    {{- end }}
     needs:
       - nvcf/notary-service
       - api-keys/api-keys

@@ -1,0 +1,91 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+spring:
+  cassandra:
+    contact-points: 127.0.0.1
+    # Expect local_env/docker-compose.yml (9042:9042); port defaults from application.yaml.
+    username: cassandra
+    password: cassandra
+
+management:
+  tracing:
+    export:
+      enabled: false
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          endpoint: https://dummy:8282
+
+logging:
+  level:
+    com.nvidia: DEBUG
+    com.nvidia.nvcf.configuration: INFO
+    org.springframework.web: DEBUG
+    org.springframework.data.cassandra.core.cql.CqlTemplate: DEBUG
+
+nvcf:
+  llm-request-router:
+    worker-address: llm-request-router.nvcf.svc.cluster.local:50071
+  sidecars:
+    inference-container: stg.nvcr.io/nvidia/tritonserver:23.04-py3
+    init-container: stg.nvcr.io/nv-cf/nvcf-core/nvcf_worker_init:0.7.0
+    utils-container-image:
+      go: stg.nvcr.io/nv-cf/nvcf-core/nvcf_worker_utils:2.2.1
+    otel-container: docker.io/otel/opentelemetry-collector:0.74.0
+    niclls-container: stg.nvcr.io/nv-cf/nvcf-core/niclls:0.0.1
+    ess-agent-container: stg.nvcr.io/nv-cf/nvcf-core/ess-agent:0.0.4
+    otel-collector-container: stg.nvcr.io/nv-cf/nvcf-core/byoo-otel-collector:1.2.3
+    llm-credential-manager-image: stg.nvcr.io/nv-cf/nvcf-core/llm-credential-manager:0.1.0
+    llm-router-client-image: stg.nvcr.io/nv-cf/nvcf-core/llm-worker:0.1.0
+  aws:
+    region: us-east-1
+    endpoint: http://localhost:4566
+    s3:
+      provisioned-region: us-east-1
+      results:
+        bucket-name: b-strap-results
+        role-arn: arn:aws:iam::000000000000:role/strap-s3-presigned-download-url
+      assets:
+        bucket-name: b-strap-assets
+  ess:
+    enabled: false
+    base-url: http://localhost:9098
+  notary:
+    audiences:
+      ess: ess-api
+      nvcf: nvcf-api
+      sbs: sbs-api
+      turn: turn-api
+    base-url: http://localhost:9097
+  reval:
+    base-url: http://localhost:9099
+  icms:
+    allocator:
+      enabled: false
+    base-url: http://localhost:9096
+  api-keys:
+    base-url: http://localhost:9093
+  account:
+    max-functions-allowed: 50
+    max-tasks-allowed: 50
+  scheduler:
+    enabled: false
+  nats:
+    url: nats://127.0.0.1:4222
+    worker-url: nats://127.0.0.1:4222
+    replicas: 1
+    oauth2-properties:
+      enabled: false

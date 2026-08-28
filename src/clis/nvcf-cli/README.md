@@ -1686,6 +1686,13 @@ into three user-facing phases:
 
 Use `--phase` to filter to one of `ACTIVE`, `DEPLOYING`, `DRAINING`, or `FAILED`.
 
+A termination request never carries its own function ID or version ID; NVCA
+relays it verbatim from the upstream message. `list-functions` and
+`get-function` recover it by correlating the termination request's instance
+IDs against every other same-namespace `ICMSRequest`'s instances. `list-functions`
+omits a `DRAINING` record when identity cannot be recovered this way, rather
+than showing one with empty IDs.
+
 ### Authentication
 
 `status`, `list-functions`, and `get-function` read from the cluster's
@@ -1730,22 +1737,47 @@ cluster identity and the system and requests namespaces.
 
 ### How drain works
 
-`cordon-and-drain` adds the `CordonAndDrainMaintenance` feature flag and sets
-`maintenanceMode: CordonAndDrain` on the NVCA `agent-config` ConfigMap, then
-restarts the NVCA deployment so the change takes effect. `uncordon` reverses
-both. The command returns once NVCA has been told to drain and (unless `--force`)
-the restart has rolled out; it does not wait for every instance to reach zero.
-Watch progress with `cluster agent list-functions --phase DRAINING`. `--timeout`
-bounds the rollout wait (default 5m); a timeout is reported as a warning because
-the config change is already persisted and re-running is a no-op.
+`cordon-and-drain` adds the `CordonAndDrainMaintenance` feature flag to the
+`NVCFBackend` CR's `spec.overrides.featureGate.values`. `uncordon` removes it.
+The CLI never edits the NVCA `agent-config` ConfigMap or restarts the NVCA
+deployment directly: the NVCA operator treats `agent-config` as fully
+generated from the CR and reverts any direct edit on its next reconcile, so
+the CLI's job is only to submit the desired state and let the operator's own
+reconcile regenerate `agent-config` and roll NVCA out. The command returns
+once the CR update is accepted and (unless `--force` or `--timeout 0`) the
+operator's rollout has completed; it does not wait for every instance to
+reach zero. Watch progress with `cluster agent list-functions --phase
+DRAINING`. `--timeout` bounds the wait for the operator's rollout (default
+5m); `--force` or `--timeout 0` skip the wait entirely and return right after
+the CR update, leaving the operator's reconciliation to finish
+asynchronously. A timeout is reported as a warning because the CR change is
+already persisted and re-running is a no-op.
+
+`--force` only affects a run that changes the NVCFBackend CR; it has no
+effect when the CR is already in the requested state. In an earlier version
+of this command, `--force` also retriggered the NVCA restart directly, so it
+could be used to kick a stuck rollout even without a state change. The CLI no
+longer performs that restart; the NVCA operator's own reconcile owns it, so
+there is nothing left for `--force` to retrigger once the CR already matches
+the desired state.
 
 ### How kill works
 
-`kill-function` and `kill-all` delete the matching `ICMSRequest` CRs; the NVCA
-reconciler detects the deletion and evicts the workloads. Deletion is
-asynchronous, so the command returns once the delete is accepted. `--force`
-additionally strips finalizers so a request stuck `Terminating` is removed even
-when NVCA is not running to process its finalizer.
+`kill-function` and `kill-all` terminate the matching `ICMSRequest`'s
+instances directly (deleting the Pod for a container function, or the
+`MiniService` object for a Helm function), mark them terminated on the CR,
+then delete the CR. Deleting the CR alone never evicts the workload: NVCA's
+reconciler only clears the CR's finalizer once its own `status.instances`
+shows every instance gone and reported terminated, and nothing else in NVCA
+ever produces that for a CLI-initiated kill. Performing the eviction and
+status update directly satisfies that precondition, so NVCA's own reconcile
+clears the finalizer on its next pass. The command polls for the CR to
+actually disappear before reporting success: a request removed within
+`--timeout` (default 60s) is reported `deleted`, and one still present when
+the timeout elapses is reported `terminating` instead, with a non-zero exit
+code. `--force` additionally strips finalizers so a request stuck
+`Terminating` is removed even when NVCA is not running to process its
+finalizer.
 
 ### Confirmation and safety
 
@@ -1760,11 +1792,16 @@ connected cluster. When the cluster has no name, it falls back to the cluster id
 All maintenance commands accept `--dry-run` to preview without mutating, and
 `--expect-cluster-id <id>` to refuse to act unless the connected cluster's id or
 name matches (guards against a wrong `--compute-plane-context`). `kill-function`
-and `kill-all` accept `--reason` for an audit note, and `--json` for automation.
+and `kill-all` accept `--reason` for an audit note, `--timeout` to bound how
+long to wait for NVCA to finish evicting a terminated request (default 60s),
+and `--json` for automation.
 
-These commands need write access to the target cluster: get/update on the
-`agent-config` ConfigMap and the `nvca` Deployment for drain, and list/delete
-(and update, with `--force`) on `ICMSRequest` CRs for kill.
+These commands need write access to the target cluster: list/update on the
+`NVCFBackend` CR for drain (plus read access to the `agent-config` ConfigMap
+and the `nvca` Deployment, to wait for the NVCA operator's rollout), and for
+kill, list/delete (and update, with `--force`) on `ICMSRequest` CRs, update on
+the `ICMSRequest` status subresource, delete on Pods in the requests
+namespace, and delete on `MiniService` CRs (cluster-scoped).
 
 ### Examples
 

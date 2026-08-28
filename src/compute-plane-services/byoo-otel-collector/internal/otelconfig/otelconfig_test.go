@@ -212,7 +212,7 @@ func TestGetTemplateConfig(t *testing.T) {
 				"NVCF_ZONE_NAME":                    "zone-1",
 				"BYOO_METRIC_SUBSET_ENABLED":        "true",
 				"BYOO_METRIC_SUBSET_FILTER_CONFIG":  "error_mode: ignore\nmetric_conditions:\n  - 'metric.name == \"drop\"'\n",
-				"BYOO_WORKLOAD_METRICS_DROP_LABELS": "metric_subset_enabled, custom_label, metric_subset_enabled",
+				"BYOO_WORKLOAD_METRICS_DROP_LABELS": "custom_label",
 			},
 			expectErr: false,
 			expect: func(t *testing.T, cfg TemplateConfig) {

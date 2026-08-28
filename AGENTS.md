@@ -353,6 +353,15 @@ change, or refactor with full existing coverage).
 
 Prefer the repo-native test runner (`make test`, `go test`, `cargo test`, etc.). Run tests before committing. Check coverage requirements in the subtree `AGENTS.md` or CI config.
 
+### Java Bazel test target contract
+
+The `manual` tag placement in `rules/java/defs.bzl` is intentional.
+`nvcf_java_test` creates the native Java target used by IntelliJ and direct test
+runs. Its companion `nvcf_java_coverage_test` remains eligible for wildcard
+selection so each suite runs once and CI receives JUnit and JaCoCo artifacts.
+Do not reverse these tags without also updating `.github/workflows/bazel.yml`,
+Java artifact staging, and `BAZEL.md`.
+
 ## Code Style
 
 Write self-documenting code. Add comments only when the logic is non-obvious. Match the existing package structure, naming, and error-handling conventions of each subtree instead of imposing a new framework.

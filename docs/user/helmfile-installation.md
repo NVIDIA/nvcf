@@ -170,6 +170,11 @@ workers in a compute cluster to reach grpc-proxy in the control-plane cluster,
 complete [gRPC Invocation Enablement](./grpc-invocation-enablement.md) before
 you deploy or sync the control plane.
 
+Remote LLM workers use separate gRPC and reverse QUIC paths. Complete
+[LLM worker listeners](./gateway-routing.md#llm-worker-listeners) and
+[Remote compute clusters and regions](./llm-function-enablement.md#remote-compute-clusters-and-regions)
+before applying the control plane.
+
 <Warning>
 The Gateway address is embedded throughout your deployment. The `domain` value
 in your environment file, the Gateway API HTTPRoutes/TCPRoutes, and service
@@ -334,10 +339,10 @@ ingress:
 When `addons.llm` is enabled, the stack defaults
 `global.workerEndpoints.llmRequestRouterAddress` to
 `llm-request-router.nvcf.svc.cluster.local:50071`. Colocated workers require no
-additional configuration. For a split deployment, override this value with a
-request-router host and port that worker pods can reach. See
-[LLM Function Enablement](./llm-function-enablement.md) for the complete addon
-configuration.
+additional configuration. For a split deployment, this address alone is not
+enough. Configure the paired backend-router gRPC and reverse QUIC dial
+addresses, Gateway routes, DNS, and trust described in
+[Remote compute clusters and regions](./llm-function-enablement.md#remote-compute-clusters-and-regions).
 
 #### `domain` and `ingress` Configuration
 
@@ -1066,7 +1071,8 @@ stack packages that include the NVCF UI addon. If your extracted stack
 package does not contain a `nvcf-ui` release and `nvcfUi` route
 values, skip this section until you use a stack package that includes them.
 
-Enable it only when you need a customer-facing NVCF admin-panel UI
+Enable it only when you need a customer-facing NVCF admin-panel UI.
+For a standalone walkthrough, see [Enabling NVCF UI](./nvcf-ui.md).
 
 <Warning>
 The NVCF UI admin panel is currently unauthenticated. Do not expose it to the
@@ -1284,8 +1290,10 @@ Helmfile target the GPU cluster instead of the control-plane cluster.
 For a complete Amazon EKS example, see the
 [CSP End-to-End Example](./csp-end-to-end-example-installation.md).
 
-The compute-plane Makefile runs `nvcf-cli init` before `cluster register`. Point
-`NVCF_CLI_CONFIG` at a CLI config that can reach the control-plane gateway.
+Export the installed control-plane environment before registration. For a
+split-cluster deployment, pass both contexts so the profile contains
+compute-reachable endpoints and reads trust from the control-plane cluster.
+Omit both context flags for a single-cluster deployment.
 
 ```yaml title="nvcf-cli-gpu-register.yaml"
 base_http_url: "http://<GATEWAY_ADDR>"
@@ -1304,18 +1312,31 @@ api_keys_owner_id: "svc@nvcf-api.local"
 client_id: "<nca-id>"
 ```
 
+```bash
+nvcf-cli --config <path-to-nvcf-cli-gpu-register.yaml> self-hosted \
+  --control-plane-stack deploy/stacks/self-managed \
+  --env <environment-name> \
+  --control-plane-context <control-plane-context> \
+  --compute-plane-context <gpu-cluster-context> \
+  control-plane profile export \
+  --cluster-name <control-plane-cluster-name> \
+  --region <region>
+
+nvcf-cli --config <path-to-nvcf-cli-gpu-register.yaml> init
+```
+
 Run the compute-plane target from the repository root. The target writes
 `deploy/stacks/nvcf-compute-plane/registration/<gpu-cluster-name>-register-values.yaml`.
 
 ```bash
 make -C deploy/stacks/nvcf-compute-plane register-cluster \
   CLUSTER_NAME=<gpu-cluster-name> \
-  NCA_ID=<nca-id> \
   CLUSTER_REGION=<region> \
-  ICMS_URL="http://<GATEWAY_ADDR>" \
-  KUBECONFIG_FILE=<gpu-cluster-kubeconfig> \
-  NVCF_CLI=<path-to-nvcf-cli> \
-  NVCF_CLI_CONFIG=<path-to-nvcf-cli-gpu-register.yaml>
+  CONTROL_PLANE_PROFILE="$(pwd)/deploy/stacks/self-managed/out/control-plane-profile.yaml" \
+  KUBECONFIG_FILE=<absolute-path-to-gpu-cluster-kubeconfig> \
+  COMPUTE_KUBE_CONTEXT=<gpu-cluster-context> \
+  NVCF_CLI=<absolute-path-to-nvcf-cli> \
+  NVCF_CLI_CONFIG=<absolute-path-to-nvcf-cli-gpu-register.yaml>
 ```
 
 Install the NVCA operator on that GPU cluster. The `install` target copies the
@@ -1327,7 +1348,7 @@ make -C deploy/stacks/nvcf-compute-plane install \
   CLUSTER_NAME=<gpu-cluster-name> \
   HELMFILE_ENV=<environment-name> \
   NCA_ID=<nca-id> \
-  KUBECONFIG_FILE=<gpu-cluster-kubeconfig>
+  KUBECONFIG_FILE=<absolute-path-to-gpu-cluster-kubeconfig>
 ```
 
 Verify the operator and backend on the GPU cluster:

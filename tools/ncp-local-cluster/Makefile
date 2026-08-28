@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.PHONY: help clean build test test-coverage-html test-manual start stop destroy destroy-all-ncp-local status ensure-cluster ensure-context ensure-docker-config validate-compute-clusters print-compute-clusters start-control-plane deploy-control-plane-addons deploy-control-plane-endpoints build-and-deploy-control-plane-cluster destroy-control-plane start-compute-plane deploy-compute-plane-addons configure-compute-control-plane-dns deploy-compute-control-plane-endpoints build-and-deploy-compute-plane-cluster destroy-compute-plane build-and-deploy-multicluster destroy-multicluster test-multicluster-make setup-gateway-api setup-metallb check-gateway-api deploy-sample deploy-nginx wait-for-nginx wait-for-gateway validate-gateway cleanup-nginx wait-for-deployment validate-deployment cleanup-sample build-and-deploy-cluster build-csi-smb deploy-csi-smb wait-for-csi-smb build-fake-gpu-operator deploy-fake-gpu-operator wait-for-fake-gpu-operator deploy-prometheus-crds uninstall-prometheus-crds deploy-kube-state-metrics wait-for-kube-state-metrics uninstall-kube-state-metrics build-credential-provider-multiarch
+.PHONY: help clean build test test-coverage-html test-manual start stop destroy destroy-all-ncp-local status ensure-cluster ensure-context ensure-docker-config validate-compute-clusters print-compute-clusters start-control-plane deploy-control-plane-addons deploy-control-plane-endpoints build-and-deploy-control-plane-cluster destroy-control-plane start-compute-plane deploy-compute-plane-addons configure-compute-control-plane-dns deploy-compute-control-plane-endpoints build-and-deploy-compute-plane-cluster destroy-compute-plane build-and-deploy-multicluster destroy-multicluster test-destroy-all-ncp-local test-multicluster-make setup-gateway-api setup-metallb check-gateway-api deploy-sample deploy-nginx wait-for-nginx wait-for-gateway validate-gateway cleanup-nginx wait-for-deployment validate-deployment cleanup-sample build-and-deploy-cluster build-csi-smb deploy-csi-smb wait-for-csi-smb build-fake-gpu-operator deploy-fake-gpu-operator wait-for-fake-gpu-operator deploy-prometheus-crds uninstall-prometheus-crds deploy-kube-state-metrics wait-for-kube-state-metrics uninstall-kube-state-metrics build-credential-provider-multiarch
 
 # === Cluster Configuration ===
 CLUSTER_NAME := ncp-local
@@ -36,6 +36,8 @@ CONTROL_PLANE_HTTPS_PORT ?= 8443
 CONTROL_PLANE_GRPC_PORT ?= 9090
 CONTROL_PLANE_GRPC_PROXY_PORT ?= 10081
 CONTROL_PLANE_GRPC_WORKER_PORT ?= 10086
+CONTROL_PLANE_LLM_GRPC_PORT ?= 50071
+CONTROL_PLANE_LLM_QUIC_PORT ?= 50072
 CONTROL_PLANE_NATS_PORT ?= 4222
 CONTROL_PLANE_DOMAIN ?= nvcf-control-plane.test
 COMPUTE_CLUSTER_PREFIX ?= ncp-local-compute
@@ -100,6 +102,8 @@ ensure-cluster: ## Create cluster if it doesn't exist, otherwise skip
 			CONTROL_PLANE_GRPC_PORT="$(CONTROL_PLANE_GRPC_PORT)" \
 			CONTROL_PLANE_GRPC_PROXY_PORT="$(CONTROL_PLANE_GRPC_PROXY_PORT)" \
 			CONTROL_PLANE_GRPC_WORKER_PORT="$(CONTROL_PLANE_GRPC_WORKER_PORT)" \
+			CONTROL_PLANE_LLM_GRPC_PORT="$(CONTROL_PLANE_LLM_GRPC_PORT)" \
+			CONTROL_PLANE_LLM_QUIC_PORT="$(CONTROL_PLANE_LLM_QUIC_PORT)" \
 			CONTROL_PLANE_NATS_PORT="$(CONTROL_PLANE_NATS_PORT)" \
 			k3d cluster create $(CLUSTER_NAME) --config $(K3D_CONFIG_FILE); \
 		echo "OK Cluster $(CLUSTER_NAME) created."; \
@@ -152,8 +156,8 @@ destroy-all-ncp-local: ## Discover and destroy every ncp-local* k3d cluster on t
 		echo "destroy-all-ncp-local requires jq; install it and retry." >&2; \
 		exit 1; \
 	}
-	@set -o pipefail; \
-	NAMES=$$(k3d cluster list -o json | jq -r '.[] | select(.name|startswith("ncp-local")) | .name'); \
+	@CLUSTERS_JSON=$$(k3d cluster list -o json) || exit $$?; \
+	NAMES=$$(printf '%s\n' "$$CLUSTERS_JSON" | jq -r '.[] | select(.name|startswith("ncp-local")) | .name') || exit $$?; \
 	if [ -z "$$NAMES" ]; then \
 		echo "No ncp-local* clusters present."; \
 		exit 0; \
@@ -251,6 +255,8 @@ deploy-compute-control-plane-endpoints: ## Deploy compute-cluster aliases for co
 		CONTROL_PLANE_LB_HTTP_PORT=80 \
 		CONTROL_PLANE_LB_GRPC_PORT=9090 \
 		CONTROL_PLANE_LB_GRPC_WORKER_PORT=10086 \
+		CONTROL_PLANE_LB_LLM_GRPC_PORT=50071 \
+		CONTROL_PLANE_LB_LLM_QUIC_PORT=50072 \
 		CONTROL_PLANE_LB_NATS_PORT=4222 \
 		CLUSTER_NAME="$(COMPUTE_CLUSTER_NAME)" \
 		bash ./scripts/configure-control-plane-endpoints.sh
@@ -291,6 +297,9 @@ destroy-multicluster: validate-compute-clusters ## Destroy the default control-p
 
 test-multicluster-make: ## Run dry Makefile tests for multi-cluster name derivation
 	@tests/test-multicluster-make.sh
+
+test-destroy-all-ncp-local: ## Run dry Makefile tests for host-wide local-cluster cleanup
+	@tests/test-destroy-all-ncp-local.sh
 
 # --- Load Balancer & Gateway API Setup ---
 setup-gateway-api:

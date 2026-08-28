@@ -702,7 +702,7 @@ func TestResolveCacheMountOptions(t *testing.T) {
 				WithScheme(mgrScheme).
 				WithObjects(newMountOptionDefaultsObjects(tt.provisioner, tt.cmData)...).
 				Build()
-			r := &Reconciler{Client: c, csiVolumeMountOptions: tt.configured}
+			r := newMountOptionsReconciler(t, c, tt.configured)
 			pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "secondary-pv-test"}}
 
 			if got := r.resolveCacheMountOptions(context.Background(), pv); !slices.Equal(got, tt.want) {
@@ -720,7 +720,7 @@ func TestResolveCacheMountOptions_ConfigMapEditTakesEffect(t *testing.T) {
 		WithScheme(mgrScheme).
 		WithObjects(newMountOptionDefaultsObjects(NVMeshStorageClassProvisioner, nvmeshMountOptionDefaults)...).
 		Build()
-	r := &Reconciler{Client: c}
+	r := newMountOptionsReconciler(t, c, nil)
 	pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "secondary-pv-test"}}
 
 	want := []string{"ro", "norecovery", "nouuid"}
@@ -744,32 +744,69 @@ func TestResolveCacheMountOptions_ConfigMapEditTakesEffect(t *testing.T) {
 	}
 }
 
-func TestModelCacheStorageClassName(t *testing.T) {
+// TestModelCacheStorageClassResolvedOnce covers the storage class NewReconciler
+// resolves for the life of the reconciler: the option override first (tests),
+// then the agent config value, then the default. The config value is the single
+// production source, read here and by model cache backend selection, so the
+// class that is checked cannot drift from the class volumes are created on.
+func TestModelCacheStorageClassResolvedOnce(t *testing.T) {
 	tests := []struct {
-		name       string
-		configured string
-		want       string
+		name     string
+		override string
+		agentCfg string
+		want     string
 	}{
 		{
-			name:       "unset falls back to the default",
-			configured: "",
-			want:       DefaultModelCacheStorageClassName,
+			name: "unset falls back to the default",
+			want: DefaultModelCacheStorageClassName,
 		},
 		{
-			name:       "configured value wins",
-			configured: "custom-sc",
-			want:       "custom-sc",
+			name:     "option override wins",
+			override: "custom-sc",
+			want:     "custom-sc",
+		},
+		{
+			name:     "agent config value is used when there is no override",
+			agentCfg: "cfg-sc",
+			want:     "cfg-sc",
+		},
+		{
+			name:     "option override beats the agent config value",
+			override: "custom-sc",
+			agentCfg: "cfg-sc",
+			want:     "custom-sc",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := &Reconciler{modelCacheStorageClass: tt.configured}
-			if got := r.modelCacheStorageClassName(); got != tt.want {
-				t.Errorf("modelCacheStorageClassName() = %q, want %q", got, tt.want)
+			r := newModelCacheStorageClassReconciler(t, tt.agentCfg, tt.override)
+			if got := r.modelCacheStorageClass; got != tt.want {
+				t.Errorf("modelCacheStorageClass = %q, want %q", got, tt.want)
 			}
 		})
 	}
+}
+
+// newModelCacheStorageClassReconciler builds a Reconciler the way production
+// does, so the storage class resolution under test is the real one.
+func newModelCacheStorageClassReconciler(t *testing.T, agentCfg, override string) *Reconciler {
+	t.Helper()
+	nvcaCfg := nvcaconfig.Config{}
+	nvcaCfg.Agent.ModelCache.StorageClassName = agentCfg
+	return NewReconciler(nvcaCfg,
+		fake.NewClientBuilder().WithScheme(mgrScheme).Build(),
+		nil, nil, "my-cluster", "us-west-1", (&k8sutil.TimeConfig{}).Complete(),
+		WithModelCacheStorageClass(override))
+}
+
+// newMountOptionsReconciler builds a Reconciler through NewReconciler for the
+// mount option tests. They resolve defaults from the model cache storage class,
+// which only NewReconciler fills in.
+func newMountOptionsReconciler(t *testing.T, c client.Client, configured []string) *Reconciler {
+	t.Helper()
+	return NewReconciler(nvcaconfig.Config{}, c, nil, nil, "my-cluster", "us-west-1",
+		(&k8sutil.TimeConfig{}).Complete(), WithCSIVolumeMountOptions(configured))
 }
 
 func TestApplyModelCacheStorageClass(t *testing.T) {
@@ -819,7 +856,7 @@ func TestApplyModelCacheStorageClass(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Name: "rw-pvc-test"},
 				Spec:       corev1.PersistentVolumeClaimSpec{StorageClassName: tt.specSC},
 			}
-			r := &Reconciler{modelCacheStorageClass: tt.configured}
+			r := newModelCacheStorageClassReconciler(t, "", tt.configured)
 
 			r.applyModelCacheStorageClass(context.Background(), pvc)
 
@@ -952,7 +989,7 @@ func TestReconcileSecondaryPVMountOptions(t *testing.T) {
 			}
 			objs := append(newMountOptionDefaultsObjects(tt.provisioner, tt.cmData), pv)
 			c := fake.NewClientBuilder().WithScheme(mgrScheme).WithObjects(objs...).Build()
-			r := &Reconciler{Client: c, csiVolumeMountOptions: tt.configured}
+			r := newMountOptionsReconciler(t, c, tt.configured)
 
 			stored := &corev1.PersistentVolume{}
 			if err := c.Get(context.Background(), client.ObjectKey{Name: "secondary-pv-test"}, stored); err != nil {
@@ -1677,6 +1714,81 @@ func TestDoModelCacheSharedFS_Validation(t *testing.T) {
 			_, err := r.doModelCacheSharedFS(context.Background(), st, stCopy, &nvcav2beta1.ICMSRequest{})
 			require.Error(t, err)
 			assert.True(t, isTerminal(err), "validation failure must be terminal")
+		})
+	}
+}
+
+// TestDoModelCacheSamba_UnreadyServerIsBounded proves a Samba server that never
+// becomes available stops the request instead of requeuing forever: within the
+// threshold it requeues, past it the request fails terminally so the miniservice
+// reconciler continues the install without a cache. This bounds server start-up
+// only, not the model download that follows.
+func TestDoModelCacheSamba_UnreadyServerIsBounded(t *testing.T) {
+	handle := "unreadyhandle"
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	timeConfig := (&k8sutil.TimeConfig{}).Complete()
+
+	tests := []struct {
+		name          string
+		deploymentAge time.Duration
+		wantTerminal  bool
+	}{
+		{
+			name:          "within the threshold requeues",
+			deploymentAge: timeConfig.SambaModelCacheReadyThreshold - time.Minute,
+			wantTerminal:  false,
+		},
+		{
+			name:          "past the threshold fails the request",
+			deploymentAge: timeConfig.SambaModelCacheReadyThreshold + time.Minute,
+			wantTerminal:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Seeded with an explicit creation timestamp: the fake client does
+			// not stamp one, and the reconciler measures the wait from it.
+			dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{
+				Name:              sambaModelCacheResourceName(handle),
+				Namespace:         ModelCacheInitNamespace,
+				CreationTimestamp: metav1.NewTime(now.Add(-tt.deploymentAge)),
+			}}
+			nvcaCfg := nvcaconfig.Config{}
+			nvcaCfg.Agent.SharedStorage.Server.Image = "samba:test"
+			r := &Reconciler{
+				Client:        fake.NewClientBuilder().WithScheme(mgrScheme).WithObjects(dep).Build(),
+				cfg:           nvcaCfg,
+				metrics:       newTestMetrics(),
+				fff:           &featureflagmock.Fetcher{},
+				nowFunc:       func() time.Time { return now },
+				k8sTimeConfig: timeConfig,
+			}
+			icms := &nvcav2beta1.ICMSRequest{}
+			icms.Name, icms.Namespace = "icms-1", types.DefaultICMSRequestNamespace
+			icms.Spec = newModelCacheICMSSpec(handle)
+			st := nvcav1new.StorageRequest{
+				ObjectMeta: metav1.ObjectMeta{Name: nvcav1new.ModelCacheRequest.Name(), Namespace: "ns1"},
+			}
+			stCopy := &nvcav1new.StorageRequest{
+				ObjectMeta: st.ObjectMeta,
+				Spec: nvcav1new.StorageRequestSpec{
+					ModelCache: &nvcav1new.ModelCacheSpec{
+						CacheHandle: handle,
+						Backend:     string(HelmCacheBackendSamba),
+					},
+				},
+			}
+
+			res, err := r.doModelCacheSamba(context.Background(), st, stCopy, icms)
+			if !tt.wantTerminal {
+				require.NoError(t, err)
+				assert.Equal(t, defaultRequeueDelay, res.RequeueAfter, "keeps waiting within the threshold")
+				return
+			}
+			require.Error(t, err)
+			assert.True(t, isTerminal(err), "an unready server past the threshold must not retry forever")
+			assert.Contains(t, err.Error(), handle)
 		})
 	}
 }

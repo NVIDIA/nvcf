@@ -57,38 +57,73 @@ global:
 
 See [Image Mirroring](./image-mirroring.md) for additional registry examples.
 
-### Use upstream container images
+### Supporting images that ship from Docker Hub
 
-You can configure a chart to pull a supporting image directly from its
-upstream registry. For example, replace the `nats.reloader.image` block in
-`deploy/stacks/self-managed/global.yaml.gotmpl` to pull the NATS configuration
-reloader from Docker Hub:
+The NATS configuration reloader and the account-bootstrap Kubernetes
+utilities are not republished under the public `nvidia/nvcf` catalog, so they
+default to their upstream Docker Hub source:
+
+| Value | Default image |
+| --- | --- |
+| `nats.reloader.image` | `docker.io/natsio/nats-server-config-reloader:0.23.0` |
+| `api.accountBootstrap.image` | `docker.io/alpine/k8s:1.36.1` |
+
+A public-catalog install needs no configuration for these two images. Verify
+that your cluster can reach Docker Hub. If your egress to Docker Hub is
+authenticated or rate-limited, add the pull secret to
+`global.imagePullSecrets`.
+
+If you have mirrored both images into your own registry, redirect them from
+your environment file
+(`deploy/stacks/self-managed/environments/<environment>.yaml`). Set `registry`
+and `repository` together, because each key falls back to its own Docker Hub
+default rather than to `global.image`. You do not need to edit
+`deploy/stacks/self-managed/global.yaml.gotmpl`.
 
 ```yaml
 nats:
   reloader:
     image:
-      registry: docker.io
-      repository: natsio/nats-server-config-reloader
+      registry: <your-registry>
+      repository: <your-repository>/nats-server-config-reloader
       tag: "0.23.0"
-```
 
-Use the version listed in the artifact table. Verify that your cluster can
-reach the upstream registry. If the registry requires authentication, add its
-pull secret to `global.imagePullSecrets`.
-
-To pull the API account-bootstrap Kubernetes utilities from their upstream
-image, replace the `api.accountBootstrap.image` block in
-`global.yaml.gotmpl`:
-
-```yaml
 api:
   accountBootstrap:
     image:
-      registry: docker.io
-      repository: alpine/k8s
+      registry: <your-registry>
+      repository: <your-repository>/alpine-k8s
       tag: "1.36.1"
 ```
+
+### Override the Cassandra images
+
+The Cassandra server and its dynamic seed discovery container take the same
+override keys, but they default to `global.image`. Set them when your registry
+uses a different path or tag than the `cassandra` default under
+`global.image.repository`:
+
+```yaml
+cassandra:
+  image:
+    registry: nvcr.io
+    repository: nvidia/nvcf/cassandra
+  dynamicSeedDiscovery:
+    image:
+      registry: nvcr.io
+      repository: nvidia/nvcf/cassandra
+```
+
+Every `registry`, `repository`, and `tag` key is optional. Any key you leave
+unset keeps its default: for Cassandra, `registry` and `repository` fall back
+to `global.image.registry` and `global.image.repository`; for the reloader and
+account-bootstrap images they fall back to the Docker Hub coordinates above.
+`tag` falls back to the version the stack pins, or to the chart's own default
+when the stack pins none.
+
+Use the version listed in the artifact table. Verify that your cluster can
+reach the registry you point each image at. If it requires authentication, add
+its pull secret to `global.imagePullSecrets`.
 
 The current Cassandra initialization hook uses the
 `nvcf-cassandra-migrations` image, and the current NATS chart renders NKeys as
@@ -119,7 +154,7 @@ The following tables list the complete artifact inventory.
 | `helm-nvcf-grpc-proxy` | `1.6.7` | Required | Deploys the gRPC proxy service. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-grpc-proxy:1.6.7` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/grpc-proxy) |
 | `helm-nvcf-invocation-service` | `1.5.5` | Required | Deploys the HTTP invocation service. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-invocation-service:1.5.5` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/http-invocation) |
 | `helm-nvcf-llm-api-gateway` | `1.2.0` | Optional | Deploys the OpenAI-compatible LLM API gateway. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-llm-api-gateway:1.2.0` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/llm-api-gateway) |
-| `helm-nvcf-llm-request-router` | `1.6.3` | Optional | Deploys the LLM request router. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-llm-request-router:1.6.3` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/llm-request-router) |
+| `helm-nvcf-llm-request-router` | `1.10.0` | Optional | Deploys the LLM request router. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-llm-request-router:1.10.0` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/llm-request-router) |
 | `helm-nvcf-nats` | `0.7.1` | Required | Deploys NATS messaging for the control plane. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-nats:0.7.1` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/nats) / [Upstream](https://github.com/nats-io/k8s) |
 | `helm-nvcf-nats-auth-callout-service` | `1.1.3` | Required | Deploys the NATS authorization callout service. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-nats-auth-callout-service:1.1.3` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/nats-auth-callout) |
 | `helm-nvcf-notary-service` | `1.4.2` | Required | Deploys the notary service for signing and validation. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-notary-service:1.4.2` |  |
@@ -128,12 +163,12 @@ The following tables list the complete artifact inventory.
 | `helm-nvcf-pki` | `0.1.0` | Optional | Provisions the OpenBao-backed ClusterIssuer for NVCF service TLS. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-pki:0.1.0` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/nvcf-pki) |
 | `helm-nvcf-rate-limiter` | `1.0.3` | Optional | Deploys request rate limiting for supported invocation paths. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-rate-limiter:1.0.3` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/ratelimiter) |
 | `helm-nvcf-sis` | `1.18.3` | Required | Deploys the Spot Instance Service. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-sis:1.18.3` |  |
-| `helm-nvcf-state-metrics` | `1.0.1` | Optional | Deploys NVCF state metrics for observability. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-state-metrics:1.0.1` |  |
+| `helm-nvcf-state-metrics` | `1.0.2` | Optional | Deploys NVCF state metrics for observability. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-state-metrics:1.0.2` |  |
 | `helm-nvcf-ui` | `1.1.2` | Optional | Deploys the optional NVCF UI admin panel. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-ui:1.1.2` |  |
-| `helm-nvcf-vanity-gateway` | `0.1.0-nvcf-10204.1` | Optional | Deploys the optional vanity hostname gateway. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-vanity-gateway:0.1.0-nvcf-10204.1` |  |
+| `helm-nvcf-vanity-gateway` | `0.3.0` | Optional | Deploys the optional vanity hostname gateway. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-nvcf-vanity-gateway:0.3.0` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/vanity-gateway) |
 | `helm-reval` | `1.3.8` | Required | Deploys the function revalidation service. | `https://helm.ngc.nvidia.com/nvidia/nvcf/helm-reval:1.3.8` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/helm-reval) |
 | `nvcf-example-dashboards` | `1.6.0` | Optional | Deploys example Grafana dashboards for NVCF telemetry. | `https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-example-dashboards:1.6.0` |  |
-| `nvcf-gateway-routes` | `1.15.0` | Optional | Deploys Gateway API routes for the reference architecture. | `https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-gateway-routes:1.15.0` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/gateway-routes) |
+| `nvcf-gateway-routes` | `1.16.0` | Optional | Deploys Gateway API routes for the reference architecture. | `https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-gateway-routes:1.16.0` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/deploy/helm/gateway-routes) |
 | `nvcf-observability-reference-stack` | `1.10.0` | Optional | Deploys a reference observability backend for evaluation. | `https://helm.ngc.nvidia.com/nvidia/nvcf/nvcf-observability-reference-stack:1.10.0` |  |
 
 ### Control plane services and images
@@ -142,17 +177,19 @@ The following tables list the complete artifact inventory.
 | --- | --- | --- | --- | --- | --- |
 | `admin-token-issuer-proxy` | `1.0.2` | Optional | Proxies admin token requests for the reference architecture. | `nvcr.io/nvidia/nvcf/admin-token-issuer-proxy:1.0.2` |  |
 | `alpine-k8s` | `1.36.1` | Required | Provides Kubernetes command-line utilities for deployment jobs. | `docker.io/alpine/k8s:1.36.1` | [GitHub](https://github.com/alpine-docker/k8s) |
+| `cassandra` | `5.0.8-nv-2.0.1` | Required | Stores NVCF account, function, cluster, and service state. | `nvcr.io/nvidia/nvcf/cassandra:5.0.8-nv-2.0.1` | [Upstream](https://github.com/apache/cassandra) |
 | `cert-manager-cainjector` | `v1.20.2` | Required | Injects certificate authority data into Kubernetes resources. | `nvcr.io/nvidia/nvcf/cert-manager-cainjector:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
 | `cert-manager-controller` | `v1.20.2` | Required | Reconciles certificates and issuers for the control plane. | `nvcr.io/nvidia/nvcf/cert-manager-controller:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
 | `cert-manager-startupapicheck` | `v1.20.2` | Required | Verifies that the cert-manager API is ready. | `nvcr.io/nvidia/nvcf/cert-manager-startupapicheck:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
 | `cert-manager-webhook` | `v1.20.2` | Required | Validates and converts cert-manager API resources. | `nvcr.io/nvidia/nvcf/cert-manager-webhook:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
 | `ess-api` | `v0.57.26` | Required | Provides encrypted application secrets to NVCF workloads. | `nvcr.io/nvidia/nvcf/ess-api:v0.57.26` |  |
 | `llm-api-gateway` | `0.8.3` | Optional | Exposes OpenAI-compatible APIs for LLM functions. | `nvcr.io/0833294136851237/selfhosted-ga/llm-api-gateway:0.8.3-ea` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/llm-api-gateway) |
-| `llm-request-router` | `0.3.0` | Optional | Routes LLM requests to eligible worker instances. | `nvcr.io/0833294136851237/selfhosted-ga/stargate:0.3.0-ea` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/libraries/rust/stargate) |
+| `llm-request-router` | `0.3.2` | Optional | Routes LLM requests to eligible worker instances. | `nvcr.io/nvidia/nvcf/stargate:0.3.2` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/libraries/rust/stargate) |
 | `nats-box` | `0.19.7-nonroot` | Required | Provides NATS administration and diagnostic utilities. | `nvcr.io/nvidia/nvcf/nats-box:0.19.7-nonroot` | [Upstream](https://github.com/nats-io/nats-box) |
 | `nats-server` | `2.11.17-alpine3.22` | Required | Provides messaging for function deployment and invocation. | `nvcr.io/nvidia/nvcf/nats-server:2.11.17-alpine3.22` | [Upstream](https://github.com/nats-io/nats-server) |
 | `nats-server-config-reloader` | `0.23.0` | Required | Reloads NATS server configuration when mounted settings change. | `docker.io/natsio/nats-server-config-reloader:0.23.0` | [Upstream](https://github.com/nats-io/k8s) |
 | `notary-service` | `1.8.1` | Required | Signs and validates functions and cluster nodes. | `nvcr.io/nvidia/nvcf/notary-service:1.8.1` |  |
+| `nvcf-ai-api-gateway-service` | `1.32.1` | Optional | Serves the optional vanity hostname gateway. | `nvcr.io/nvidia/nvcf/nvcf-ai-api-gateway-service:1.32.1` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/vanity-gateway) |
 | `nvcf-api-keys-service` | `1.5.0` | Required | Creates and manages NVCF API keys. | `nvcr.io/nvidia/nvcf/nvcf-api-keys-service:1.5.0` |  |
 | `nvcf-grpc-proxy` | `1.29.1` | Required | Proxies bidirectional gRPC traffic between the control and compute planes. | `nvcr.io/nvidia/nvcf/nvcf-grpc-proxy:1.29.1` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/grpc-proxy) |
 | `nvcf-invocation-service` | `0.8.5` | Required | Routes stateless HTTP function invocation requests. | `nvcr.io/nvidia/nvcf/nvcf-invocation-service:0.8.5` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/http-invocation) |
@@ -160,6 +197,7 @@ The following tables list the complete artifact inventory.
 | `nvcf-openbao` | `2.5.4-nv-1.3.0` | Required | Stores and manages control-plane secrets. | `nvcr.io/0833294136851237/selfhosted-ga/nvcf-openbao:2.5.4-nv-1.3.0-ea` | [Upstream](https://github.com/openbao/openbao) |
 | `nvcf-openbao-migrations` | `0.16.2` | Required | Applies the OpenBao configuration required by NVCF. | `nvcr.io/nvidia/nvcf/nvcf-openbao-migrations:0.16.2` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/migrations/openbao) |
 | `nvcf-service-oss` | `1.9.0-hotfix.1` | Required | Provides the primary NVCF control-plane API. | `nvcr.io/nvidia/nvcf/nvcf-service-oss:1.9.0-hotfix.1` |  |
+| `nvcf-state-metrics-service` | `1.23.7` | Optional | Exports NVCF resource state as Prometheus metrics. | `nvcr.io/nvidia/nvcf/nvcf-state-metrics-service:1.23.7` |  |
 | `nvct-service-oss` | `1.5.9-hotfix.1` | Required | Provides tenant-scoped NVCF control-plane operations. | `nvcr.io/nvidia/nvcf/nvct-service-oss:1.5.9-hotfix.1` |  |
 | `oss-vault-k8s` | `1.7.4` | Required | Integrates Kubernetes workloads with OpenBao secrets. | `nvcr.io/nvidia/nvcf/oss-vault-k8s:1.7.4` |  |
 | `reval-server` | `0.2.2` | Required | Revalidates function state in the background. | `nvcr.io/nvidia/nvcf/reval-server:0.2.2` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/control-plane-services/helm-reval) |
@@ -198,7 +236,6 @@ These Early Access artifacts have known CVE impact. Use only the QA-qualified ve
 
 | Artifact | Version | Required | Description | Distribution | Source code |
 | --- | --- | --- | --- | --- | --- |
-| `bitnami-cassandra` | `5.0.6-nv-1` | Required | Stores NVCF account, function, cluster, and service state during Early Access. | `nvcr.io/0833294136851237/selfhosted-ga/bitnami-cassandra:5.0.6-nv-1-ea` | [Upstream](https://github.com/bitnami/containers/tree/main/bitnami/cassandra) |
 | `nvcf-cassandra-migrations` | `0.8.1` | Required | Applies the Cassandra schemas required by Early Access NVCF services. | `nvcr.io/0833294136851237/selfhosted-ga/nvcf-cassandra-migrations:0.8.1-ea` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/migrations/cassandra) |
 
 ### Tools and deployment resources

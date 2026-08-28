@@ -23,6 +23,7 @@ import (
 	"crypto/tls"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -116,6 +117,9 @@ func TestComputePlaneInstallTemplatesUserValuesFile(t *testing.T) {
 	assert.Contains(t, out, "arg=--kube-context=gpu-context")
 	assert.Contains(t, out, "env:CLUSTER_NAME=gpu-from-values")
 	assert.Contains(t, out, "env:NCA_ID=nca-from-values")
+	// The worker helmfile reads $OUTPUT_DIR/$CLUSTER_NAME-register-values.yaml,
+	// so install must point OUTPUT_DIR at the directory of --values.
+	assert.Contains(t, out, "env:OUTPUT_DIR="+filepath.Dir(valuesFile))
 	assert.Contains(t, out, "arg="+stackDir)
 	assert.FileExists(t, fakeBin)
 }
@@ -839,6 +843,62 @@ func TestReadNVCAValuesMetadata(t *testing.T) {
 		assert.NotContains(t, transportTLS, "installerImage")
 	})
 
+	t.Run("bundle transport trust with QUIC insecure is rejected", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "insecure-nvca-values.yaml")
+		body := `clusterName: gpu-insecure
+agentConfig:
+  mergeConfig: |
+    workload:
+      stargateQUICInsecure: true
+      transportTLS:
+        trustMode: bundle
+`
+		require.NoError(t, os.WriteFile(path, []byte(body), 0o644))
+
+		_, err := readNVCAValuesMetadata(path)
+		require.ErrorContains(t, err, "workload.stargateQUICInsecure=true cannot be used with workload.transportTLS.trustMode=bundle")
+		require.ErrorContains(t, err, "set workload.stargateQUICInsecure=false or use trustMode=system")
+	})
+
+	for _, tc := range []struct {
+		name        string
+		mergeConfig string
+	}{
+		{
+			name: "system transport trust with QUIC insecure is accepted",
+			mergeConfig: `workload:
+  stargateQUICInsecure: true
+  transportTLS:
+    trustMode: system
+`,
+		},
+		{
+			name: "bundle transport trust with QUIC insecure false is accepted",
+			mergeConfig: `workload:
+  stargateQUICInsecure: false
+  transportTLS:
+    trustMode: bundle
+`,
+		},
+		{
+			name: "bundle transport trust with QUIC insecure unset is accepted",
+			mergeConfig: `workload:
+  transportTLS:
+    trustMode: bundle
+`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "compatible-nvca-values.yaml")
+			body := "clusterName: gpu-compatible\nagentConfig:\n  mergeConfig: |\n    " +
+				strings.ReplaceAll(tc.mergeConfig, "\n", "\n    ")
+			require.NoError(t, os.WriteFile(path, []byte(body), 0o644))
+
+			_, err := readNVCAValuesMetadata(path)
+			require.NoError(t, err)
+		})
+	}
+
 	t.Run("typo in known field surfaces a decode error", func(t *testing.T) {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "typo-nvca-values.yaml")
@@ -871,6 +931,7 @@ done
 printf 'verb=%s\n' "$last"
 printf 'env:CLUSTER_NAME=%s\n' "$CLUSTER_NAME"
 printf 'env:NCA_ID=%s\n' "$NCA_ID"
+printf 'env:OUTPUT_DIR=%s\n' "$OUTPUT_DIR"
 `
 	require.NoError(t, os.WriteFile(fakeBin, []byte(body), 0o755))
 	t.Setenv("PATH", filepath.Dir(fakeBin)+":"+os.Getenv("PATH"))

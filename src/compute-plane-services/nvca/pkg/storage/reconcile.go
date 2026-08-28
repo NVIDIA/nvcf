@@ -115,9 +115,10 @@ func WithCSIVolumeMountOptions(mntOptions []string) ReconcilerOption {
 	}
 }
 
-// WithModelCacheStorageClass overrides the storage class whose provisioner
-// decides which mount option defaults model cache volumes get. Defaults to
-// DefaultModelCacheStorageClassName when unset.
+// WithModelCacheStorageClass overrides the storage class model cache volumes
+// are provisioned on. It takes precedence over Agent.ModelCache.StorageClassName,
+// which is the production source; unset, the config value and then
+// DefaultModelCacheStorageClassName apply.
 func WithModelCacheStorageClass(name string) ReconcilerOption {
 	return func(r *Reconciler) {
 		if name != "" {
@@ -178,24 +179,29 @@ func NewReconciler(
 	opts ...ReconcilerOption,
 ) *Reconciler {
 	reconciler := &Reconciler{
-		cfg:                  cfg,
-		Client:               client,
-		Decoder:              decoder,
-		clusterName:          clusterName,
-		clusterRegion:        clusterRegion,
-		eventRecorder:        eventRecorder,
-		ICMSRequestNamespace: nvcatypes.DefaultICMSRequestNamespace,
-		k8sTimeConfig:        k8sTimeConfig,
-		tracer:               nvcaotel.NewTracer(),
-		nowFunc:              time.Now,
-		randReader:           rand.Reader,
-		fff:                  featureflag.DefaultFetcher,
-		initStatuses:         newInitStatusCache(client),
+		cfg:                    cfg,
+		Client:                 client,
+		Decoder:                decoder,
+		clusterName:            clusterName,
+		clusterRegion:          clusterRegion,
+		eventRecorder:          eventRecorder,
+		ICMSRequestNamespace:   nvcatypes.DefaultICMSRequestNamespace,
+		k8sTimeConfig:          k8sTimeConfig,
+		modelCacheStorageClass: cfg.Agent.ModelCache.StorageClassName,
+		tracer:                 nvcaotel.NewTracer(),
+		nowFunc:                time.Now,
+		randReader:             rand.Reader,
+		fff:                    featureflag.DefaultFetcher,
+		initStatuses:           newInitStatusCache(client),
 	}
 
 	for _, opt := range opts {
 		opt(reconciler)
 	}
+
+	// Resolve the model cache storage class once: it cannot change for the life
+	// of the reconciler, so every later use reads the field directly.
+	reconciler.modelCacheStorageClass = ModelCacheStorageClassName(reconciler.modelCacheStorageClass)
 
 	return reconciler
 }
@@ -214,11 +220,17 @@ type Reconciler struct {
 	k8sTimeConfig         *k8sutil.TimeConfig
 	csiVolumeMountOptions []string
 
-	// modelCacheStorageClass is the storage class whose provisioner selects the
-	// mount option defaults, and cacheMountOptionsConfigMap holds those defaults
-	// per provisioner. modelCacheProvisioner is the one time init: a
-	// StorageClass provisioner is immutable, so it is read once and kept. The
-	// ConfigMap is read on each use so operator edits take effect.
+	// modelCacheStorageClass is the storage class model cache volumes are
+	// provisioned on and whose provisioner selects the mount option defaults.
+	// NewReconciler resolves it once (option, then Agent.ModelCache, then the
+	// default), so it is always a concrete class name. NVCA owns this choice
+	// rather than taking it from the request spec, so every model cache volume
+	// in a cluster lands on the same class; model cache backend selection reads
+	// the same config value before choosing a backend that needs the class.
+	// cacheMountOptionsConfigMap holds the mount option defaults per
+	// provisioner. modelCacheProvisioner is the one time init: a StorageClass
+	// provisioner is immutable, so it is read once and kept. The ConfigMap is
+	// read on each use so operator edits take effect.
 	modelCacheStorageClass     string
 	cacheMountOptionsConfigMap string
 	modelCacheProvisioner      atomic.Pointer[string]

@@ -801,6 +801,19 @@ func (bc *BackendK8sCache) setupNVCARBAC(ctx context.Context, nb *nvidiaiov1.NVC
 				ResourceNames: []string{nvcaoptypes.NVCAModuleName},
 				Verbs:         []string{"get", "list", "watch"},
 			},
+			// NvSnap integration (PR-3 + PR-5): NVCA agent reads and
+			// writes NvSnapFunctionState — cluster-scoped CRD that tracks
+			// per-function-version checkpoint state. Read in Hook A to
+			// decide whether to stamp nvsnap.io/restore-from at pod
+			// apply; written by Hook B's reconciler after a successful
+			// checkpoint. The integration is gated behind
+			// featureflag.NvSnapCheckpointRestore (default off), so this
+			// rule is dormant until that flag is enabled on a cluster.
+			{
+				APIGroups: []string{"nvsnap.nvcf.nvidia.io"},
+				Resources: []string{"nvsnapfunctionstates", "nvsnapfunctionstates/status"},
+				Verbs:     crudVerbs,
+			},
 		},
 	}
 
@@ -1437,6 +1450,10 @@ func (bc *BackendK8sCache) getAgentConfigToMerge(ctx context.Context) (nvcaconfi
 	}
 
 	mergeCfg.Workload.TransportTLS = operatorCfg.Workload.TransportTLS
+	if err := mergeCfg.Validate(); err != nil {
+		return nvcaconfig.Config{}, false,
+			nvcaoperatorerrors.FatalError(fmt.Errorf("invalid combined NVCA agent configuration: %w", err))
+	}
 	return mergeCfg, true, nil
 }
 
@@ -1456,7 +1473,11 @@ func (bc *BackendK8sCache) getRawAgentConfigToMerge(ctx context.Context) (nvcaco
 
 	data := cm.Data[agentConfigFile]
 	cfg, err := nvcaconfig.DecodeConfig([]byte(data))
-	return cfg, true, err
+	if err != nil {
+		return nvcaconfig.Config{}, false,
+			nvcaoperatorerrors.FatalError(fmt.Errorf("invalid %s: %w", agentConfigMergeConfigMapName, err))
+	}
+	return cfg, true, nil
 }
 
 func (bc *BackendK8sCache) getImageRegistryServerFromRepo(nb *nvidiaiov1.NVCFBackend) string {

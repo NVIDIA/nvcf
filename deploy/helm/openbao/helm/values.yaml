@@ -46,7 +46,7 @@ openbao:
     image:
       registry: ""
       repository: ""
-      tag: 0.16.2
+      tag: 0.18.0
       pullPolicy: IfNotPresent
     issuerDiscovery:
       enabled: false
@@ -83,6 +83,14 @@ openbao:
     ha:
       enabled: true
       replicas: 3
+
+      # Pod disruption budget for the HA server StatefulSet.
+      # The upstream chart enables this by default; maxUnavailable defaults to
+      # (replicas/2)-1 when null.
+      disruptionBudget:
+        enabled: true
+        maxUnavailable: null
+
       raft:
         enabled: true
         config: |

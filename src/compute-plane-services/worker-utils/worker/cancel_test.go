@@ -20,12 +20,18 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 // Worker stub with just the fields the cancel handler touches.
@@ -79,6 +85,103 @@ func TestHandleCancelMessage_IgnoresUnknownRequest(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("ctx should not have been cancelled for unknown request id")
 	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+// An upstream cancel is expected teardown and must stay out of the error
+// stream. Anything else must still be reported at error level.
+func TestLogWorkRequestResult_Levels(t *testing.T) {
+	tests := []struct {
+		name  string
+		err   error
+		level zapcore.Level
+		msg   string
+	}{
+		{
+			name: "nil error logs nothing",
+			err:  nil,
+		},
+		{
+			name:  "upstream cancel is demoted to debug",
+			err:   fmt.Errorf("failed to send POST request: %w", ErrUpstreamCancel),
+			level: zapcore.DebugLevel,
+			msg:   "request aborted by upstream cancel",
+		},
+		{
+			name:  "unrelated failure stays at error",
+			err:   errors.New("inference container exploded"),
+			level: zapcore.ErrorLevel,
+			msg:   "failed to handle request",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			core, logs := observer.New(zapcore.DebugLevel)
+			defer zap.ReplaceGlobals(zap.New(core))()
+
+			logWorkRequestResult(tc.err, "req-123")
+
+			if tc.err == nil {
+				if logs.Len() != 0 {
+					t.Fatalf("expected no log lines, got %v", logs.All())
+				}
+				return
+			}
+
+			entries := logs.All()
+			if len(entries) != 1 {
+				t.Fatalf("expected exactly 1 log line, got %v", entries)
+			}
+			if entries[0].Level != tc.level {
+				t.Errorf("level = %v, want %v", entries[0].Level, tc.level)
+			}
+			if entries[0].Message != tc.msg {
+				t.Errorf("message = %q, want %q", entries[0].Message, tc.msg)
+			}
+		})
+	}
+}
+
+// The cancel arrives while an HTTP send is in flight, so the error the worker
+// classifies is a *url.Error produced by net/http rather than the bare
+// sentinel. Guard that the cause still survives errors.Is through that wrapping.
+func TestLogWorkRequestResult_RealCancelledRequest(t *testing.T) {
+	// hold the response open until the client goes away so the cancel lands
+	// mid-flight, and so Close does not wait on a sleeping handler
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel(ErrUpstreamCancel)
+	}()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL, nil)
+	if err != nil {
+		t.Fatalf("building request: %v", err)
+	}
+	//nolint:bodyclose // the request is cancelled, so there is no body to close
+	_, doErr := http.DefaultClient.Do(req)
+	if doErr == nil {
+		t.Fatal("expected the in-flight request to fail")
+	}
+	wrapped := fmt.Errorf("failed to send POST request: %w", doErr)
+
+	core, logs := observer.New(zapcore.DebugLevel)
+	defer zap.ReplaceGlobals(zap.New(core))()
+
+	logWorkRequestResult(wrapped, "req-123")
+
+	entries := logs.All()
+	if len(entries) != 1 {
+		t.Fatalf("expected exactly 1 log line, got %v", entries)
+	}
+	if entries[0].Level != zapcore.DebugLevel {
+		t.Errorf("level = %v, want debug (got message %q)", entries[0].Level, entries[0].Message)
 	}
 }
 

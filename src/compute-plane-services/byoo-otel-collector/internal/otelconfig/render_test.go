@@ -159,6 +159,7 @@ func TestRenderOtelConfigWithMetricSubsetPipeline(t *testing.T) {
 		"memory_limiter",
 		metricSubsetFilterProcessorID,
 		"resource",
+		workloadMetricsDropLabelsProcessorID,
 		"metrics_transform",
 		metricSubsetBatchProcessorID,
 	}, otelConfig.Service.Pipelines["metrics/metric_subset"].Processors)
@@ -754,6 +755,76 @@ func TestGenerateExportersAndServiceAppliesCollectorOverrides(t *testing.T) {
 	assert.Equal(t, []string{"memory_limiter", "attributes/add-metadata", "probabilistic_sampler/traces", "batch"}, otelConfig.Service.Pipelines["traces"].Processors)
 }
 
+func TestApplyExporterHelperConfigUsesSupportedSettings(t *testing.T) {
+	retryEnabled := true
+	queueConsumers := int64(3)
+	queueSize := int64(2048)
+	otelConfig := &OpenTelemetryConfig{
+		Exporters: map[string]map[string]interface{}{
+			"azuremonitor/example":            {},
+			"datadog/example":                 {},
+			"debug":                           {},
+			"otlp":                            {},
+			"otlp/example":                    {},
+			"otlp_http/example":               {},
+			"prometheus/example":              {},
+			"prometheus_remote_write/example": {},
+			"splunk_hec/example":              {},
+			"unknown/example":                 {},
+		},
+	}
+
+	applyExporterHelperConfig(otelConfig, ExporterHelperConfig{
+		Timeout: "30s",
+		RetryOnFailure: RetryOnFailureConfig{
+			Enabled: &retryEnabled,
+		},
+		SendingQueue: SendingQueueConfig{
+			NumConsumers: &queueConsumers,
+			QueueSize:    &queueSize,
+		},
+	})
+
+	for _, exporterID := range []string{
+		"datadog/example",
+		"otlp",
+		"otlp/example",
+		"otlp_http/example",
+		"splunk_hec/example",
+	} {
+		assert.Equal(t, "30s", otelConfig.Exporters[exporterID]["timeout"], exporterID)
+		assert.Equal(t, map[string]interface{}{"enabled": true}, otelConfig.Exporters[exporterID]["retry_on_failure"], exporterID)
+		assert.Equal(t, map[string]interface{}{
+			"enabled":       true,
+			"num_consumers": int64(3),
+			"queue_size":    int64(2048),
+		}, otelConfig.Exporters[exporterID]["sending_queue"], exporterID)
+	}
+
+	assert.Equal(t, "30s", otelConfig.Exporters["azuremonitor/example"]["timeout"])
+	assert.NotContains(t, otelConfig.Exporters["azuremonitor/example"], "retry_on_failure")
+	assert.Equal(t, map[string]interface{}{
+		"enabled":       true,
+		"num_consumers": int64(3),
+		"queue_size":    int64(2048),
+	}, otelConfig.Exporters["azuremonitor/example"]["sending_queue"])
+
+	assert.Equal(t, "30s", otelConfig.Exporters["prometheus_remote_write/example"]["timeout"])
+	assert.Equal(t, map[string]interface{}{"enabled": true}, otelConfig.Exporters["prometheus_remote_write/example"]["retry_on_failure"])
+	assert.NotContains(t, otelConfig.Exporters["prometheus_remote_write/example"], "sending_queue")
+
+	assert.NotContains(t, otelConfig.Exporters["prometheus/example"], "timeout")
+	assert.NotContains(t, otelConfig.Exporters["prometheus/example"], "retry_on_failure")
+	assert.Equal(t, map[string]interface{}{
+		"enabled":       true,
+		"num_consumers": int64(3),
+		"queue_size":    int64(2048),
+	}, otelConfig.Exporters["prometheus/example"]["sending_queue"])
+
+	assert.Empty(t, otelConfig.Exporters["debug"])
+	assert.Empty(t, otelConfig.Exporters["unknown/example"])
+}
+
 func TestGenerateExportersAndServiceAddsMetricSubsetPipeline(t *testing.T) {
 	cfg := TelemetryConfig{
 		Telemetries: Telemetries{
@@ -786,7 +857,7 @@ func TestGenerateExportersAndServiceAddsMetricSubsetPipeline(t *testing.T) {
 			FilterConfig: filterConfig,
 		},
 		WorkloadMetrics: WorkloadMetricsConfig{
-			DropLabels: []string{"metric_subset_enabled"},
+			DropLabels: []string{"metric_subset_enabled", "custom_label"},
 		},
 	})
 
@@ -818,6 +889,10 @@ func TestGenerateExportersAndServiceAddsMetricSubsetPipeline(t *testing.T) {
 				"key":    "metric_subset_enabled",
 				"action": "delete",
 			},
+			{
+				"key":    "custom_label",
+				"action": "delete",
+			},
 		},
 	}, otelConfig.Processors[workloadMetricsDropLabelsProcessorID])
 
@@ -828,6 +903,7 @@ func TestGenerateExportersAndServiceAddsMetricSubsetPipeline(t *testing.T) {
 		"memory_limiter",
 		metricSubsetFilterProcessorID,
 		"resource",
+		workloadMetricsDropLabelsProcessorID,
 		"metrics_transform",
 		metricSubsetBatchProcessorID,
 	}, metricSubsetPipeline.Processors)

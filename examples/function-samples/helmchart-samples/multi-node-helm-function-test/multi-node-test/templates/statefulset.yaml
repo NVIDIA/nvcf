@@ -45,6 +45,14 @@ spec:
     metadata:
       {{- with $profile.podAnnotations }}
       annotations:
+        # Legacy NVCA placement on an NVLink-optimized cluster:
+        # - Set dra.nvcf.nvidia.io/required-nvlink-domain-index to a logical group index,
+        #   such as "0", for required pod affinity among Pods with the same value.
+        # - Omit dra.nvcf.nvidia.io/required-nvlink-domain-index for preferred
+        #   same-clique placement.
+        # These options are best-effort without KAI Scheduler or Grove
+        # topology-aware scheduling. Different indices do not guarantee
+        # placement in different physical NVLink partitions.
         {{- toYaml . | nindent 8 }}
       {{- end }}
       labels:

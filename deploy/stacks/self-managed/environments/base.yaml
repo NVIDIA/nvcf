@@ -9,13 +9,13 @@ global:
   # =============================================================================
   # Helm Chart Sources Configuration
   # =============================================================================
-  # Option A — HTTP Helm repository (e.g. NGC public catalog):
+  # Option A: HTTP Helm repository (e.g. NGC public catalog):
   #   sources:
   #     url: "https://helm.ngc.nvidia.com/nvidia/nvcf"
   #     username: "$oauthtoken"
   #     password: "YOUR_NGC_API_KEY"
   #
-  # Option B — OCI registry (e.g. ECR or a private NGC org after mirroring):
+  # Option B: OCI registry (e.g. ECR or a private NGC org after mirroring):
   #   sources:
   #     registry: "nvcr.io"           # or <account>.dkr.ecr.<region>.amazonaws.com
   #     repository: "YOUR_ORG/YOUR_TEAM"
@@ -45,6 +45,19 @@ global:
   image:
     registry: nvcr.io
     repository: YOUR_ORG/YOUR_TEAM
+
+  # =============================================================================
+  # Worker Sidecar Registry Configuration
+  # =============================================================================
+  # Registry host/repository advertised to workers for the worker sidecar images
+  # (NVCF_SIDECARS_* / NVCT_SIDECARS_*). Unset inherits global.image. Set these to
+  # source the worker sidecars from a separate registry/org (e.g. a private NGC
+  # org) while control-plane images stay on global.image. Supply the matching
+  # sidecar pull credential separately.
+  # =============================================================================
+  # sidecars:
+  #   hostname: nvcr.io
+  #   repository: YOUR_ORG/YOUR_TEAM
 
   # Worker-facing endpoints advertised by control-plane services into launched
   # workload pods. Leave empty to use service defaults; set per environment when
@@ -144,7 +157,6 @@ observability:
 
 # Defaults consumed only for the control and all observability profiles.
 functionAutoscaler:
-  chartVersion: "0.2.1"
   region: local
   cassandra:
     contactPoints: cassandra.cassandra-system.svc.cluster.local
@@ -159,6 +171,18 @@ functionAutoscaler:
     # environment label.
     ignoreEnv: true
 
+# Image overrides for the API account-bootstrap job. alpine-k8s is not
+# republished under the public nvidia/nvcf catalog, so it defaults to its
+# upstream source, docker.io/alpine/k8s:1.36.1. Leave these unset unless you
+# have mirrored the image into your own registry, in which case set registry
+# and repository together:
+# api:
+#   accountBootstrap:
+#     image:
+#       registry: <your-registry>
+#       repository: <your-repository>/alpine-k8s
+#       tag: "1.36.1"
+
 accounts:
   limits:
     maxFunctions: 10
@@ -169,6 +193,23 @@ accounts:
 # These static global values are processed in the values template
 nats:
   enabled: true
+  # Image overrides for the NATS config reloader. The reloader is not
+  # republished under the public nvidia/nvcf catalog, so it defaults to its
+  # upstream source, docker.io/natsio/nats-server-config-reloader:0.23.0.
+  # Leave these unset unless you have mirrored the image into your own
+  # registry, in which case set registry and repository together:
+  # reloader:
+  #   image:
+  #     registry: <your-registry>
+  #     repository: <your-repository>/nats-server-config-reloader
+  #     tag: "0.23.0"
+  # PDB: the upstream NATS chart enables a disruption budget by default.
+  # Override here to disable it or adjust the minAvailable threshold.
+  podDisruptionBudget:
+    enabled: false
+    merge:
+      spec:
+        minAvailable: 2
 
 cassandra:
   enabled: true
@@ -185,12 +226,34 @@ cassandra:
   # Do not use small for default cloud installs. Cassandra can OOM during
   # first boot and leave migrations in a failed or dirty state.
   resourcesPreset: "xlarge"
+  # Image overrides for the Cassandra server and dynamicSeedDiscovery containers.
+  # The default image name is `cassandra` under global.image.repository.
+  # Override here when pulling from a registry that uses a different path or tag.
+  # image:
+  #   registry: ""         # defaults to global.image.registry
+  #   repository: ""       # defaults to <global.image.repository>/cassandra
+  #   tag: ""              # defaults to the chart appVersion
+  # dynamicSeedDiscovery:
+  #   image:
+  #     registry: ""
+  #     repository: ""
+  #     tag: ""
+  # PDB: disabled by default. Recommended for production 3-node clusters.
+  # Set exactly one of minAvailable or maxUnavailable.
+  podDisruptionBudget:
+    enabled: false
+    minAvailable: 2   # keep at least 2 of 3 nodes up during any disruption
 
 certManager:
   # cert-manager controller required to reconcile Certificate resources for
-  # the self-managed PKI stack (ClusterIssuer/nvcf-openbao-pki + per-service
-  # Certificates land in subsequent MRs). The bundled helm-nvcf-cert-manager
-  # chart ships installCRDs=true by default.
+  # the self-managed PKI stack. Enabling addons.llm.pki with the managed
+  # issuer creates ClusterIssuer/nvcf-openbao-pki, which is cluster-scoped
+  # and has no namespace. The nvcf-pki Helm release that creates it and the
+  # cert-manager ServiceAccount it authenticates as both live in the
+  # cert-manager namespace. The bundled helm-nvcf-cert-manager chart ships
+  # installCRDs=true by default. Set this to false when cert-manager is
+  # installed outside this stack; that external installation must still
+  # provide ServiceAccount/cert-manager in the cert-manager namespace.
   enabled: true
 
 openbao:
@@ -221,6 +284,16 @@ openbao:
       #         - nats-system
       #         - nvcf
       #         - sis
+    # PDB for the injector Deployment. minAvailable: 1 by default (always active).
+    podDisruptionBudget:
+      minAvailable: 1
+  server:
+    ha:
+      # PDB for the HA Raft StatefulSet. The upstream chart enables this by
+      # default with maxUnavailable derived from replica count.
+      disruptionBudget:
+        enabled: false
+        maxUnavailable: 1
 
 addons:
   # LLS/TURN Low-Latency Streaming addon
@@ -231,30 +304,86 @@ addons:
   # LLM addon: gateway + request router (stargate) for LLM function invocation
   llm:
     enabled: false
-    # OpenBao-issued QUIC TLS certificate for the request router (Stargate).
-    # When enabled, the chart provisions an NVCF service-issuing PKI hierarchy
-    # in OpenBao via a Helm pre-install/pre-upgrade Job, requests a Certificate
-    # against the nvcf-openbao-pki ClusterIssuer, and mounts the resulting
-    # Secret into the request-router pod. Disabled by default; opt in per env.
+    requestRouter:
+      replicaCount: 3
+      # Set only for source-tree validation. Empty uses the released OCI chart.
+      chartPath: ""
+
+      # Authority and SNI aware backend router. A worker holds one registration
+      # stream and one reverse QUIC tunnel per router replica, and each must
+      # reach the specific replica named by the gRPC authority or QUIC SNI, so
+      # ordinary load balancing cannot carry this traffic. The router reads that
+      # identity and forwards to the named pod.
+      #
+      # Follows addons.llm.enabled by default. It is deliberately not a separate
+      # opt-in: keeping it on in single-cluster installs means they exercise the
+      # same connection path that split-cluster and multi-region installs
+      # depend on.
+      #
+      # Note that the router relays the reverse tunnel, and that tunnel carries
+      # inference traffic, so it sits in the data path and terminates QUIC TLS.
+      backendRouter:
+        # enabled: defaults to addons.llm.enabled
+        replicaCount: 2
+        # Addresses workers dial to reach the router. Both default to the
+        # backend-router Service in-cluster, which is correct when workers run
+        # alongside the control plane. Set both to externally reachable
+        # addresses when workers run in a separate cluster or region.
+        pylonGrpcDialAddress: ""
+        pylonReverseTunnelDialAddress: ""
+
+    # QUIC TLS certificate for the request router (Stargate). Managed PKI is
+    # active by default whenever addons.llm.enabled is true. Set enabled=false
+    # only when an environment deliberately supplies another transport policy.
+    #
+    # mode selects who owns the server identity:
+    #   certManager    - the chart requests a Certificate from the configured
+    #                    issuer and mounts the resulting Secret. Managed mode
+    #                    also provisions the OpenBao service-issuing hierarchy
+    #                    and defaults to ClusterIssuer/nvcf-openbao-pki.
+    #   existingSecret - the chart mounts a Secret you created and manages no
+    #                    issuance. Requires secretName. The stable-base
+    #                    dnsNames and allowedDomains defaults are tolerated
+    #                    because Helmfile cannot reliably clear inherited
+    #                    values to empty values;
+    #                    any changed managed value is rejected. You own
+    #                    issuance, renewal, rotation, and recovery, and the
+    #                    stack validates neither the SANs nor the expiry.
     pki:
-      enabled: false
-      # REQUIRED when enabled. Comma-separated DNS suffixes the OpenBao PKI
-      # role accepts. Typically the customer domain plus cluster.local for
-      # in-cluster service identity.
-      allowedDomains: ""
-      # REQUIRED when enabled. SANs requested on the issued certificate.
-      dnsNames: []
-      # Optional overrides; defaults are usually correct.
+      enabled: true
+      mode: certManager
+      # Comma-separated DNS suffixes the managed OpenBao role accepts. Extend
+      # this only when advertisedHostnameTemplate uses another DNS suffix.
+      allowedDomains: cluster.local
+      # SANs for both the stable Service and authority/SNI-selected Stargate
+      # pod identities. Split/multi-cluster dial addresses select the network
+      # path only: Pylon preserves the advertised per-pod hostname as gRPC
+      # authority and QUIC SNI, so a load-balancer hostname or IP does not need
+      # to be added here. Add SANs only when advertisedHostnameTemplate changes
+      # those identities. In existingSecret mode, only these unchanged
+      # stable-base defaults are tolerated; custom values are rejected.
+      dnsNames:
+        - llm-request-router.nvcf.svc.cluster.local
+        - "*.llm-request-router-headless.nvcf.svc.cluster.local"
+      # REQUIRED for mode existingSecret; the kubernetes.io/tls Secret in the
+      # nvcf namespace holding the tls.crt and tls.key entries. Optional for
+      # mode certManager, where it names the Secret cert-manager writes.
       # secretName: stargate-quic-tls
+      # Optional overrides; defaults are usually correct.
       # issuerKind: ClusterIssuer
       # issuerName: nvcf-openbao-pki
+      # Stack management defaults to true only for the default
+      # ClusterIssuer/nvcf-openbao-pki configuration. Set this explicitly to
+      # manage a custom ClusterIssuer. Leave it false for an external issuer.
+      # clusterIssuer:
+      #   enabled: true
       # namespace: vault-system
       # mountPath: /etc/stargate/tls
       # certPath: /etc/stargate/tls/tls.crt
       # keyPath: /etc/stargate/tls/tls.key
       # Image defaults to ${global.image.registry}/${global.image.repository}/nvcf-openbao-migrations.
-      # tag falls back to openbao.migrations.image.tag if unset here, so the
-      # operator can pin both in one place.
+      # tag falls back to openbao.migrations.image.tag and then 0.16.2 if
+      # neither location is set.
       # image:
       #   registry: ""
       #   repository: ""
@@ -315,12 +444,65 @@ stateMetrics:
 rateLimiter:
   enabled: true
   replicaCount: 1
+  # PDB: enable when replicaCount > 1.
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
+
+# PDB knobs for control-plane services. Disabled by default.
+# Set enabled: true for any service running more than one replica.
+
+apikeys:
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
+
+ess:
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
+
+invocation:
+  env:
+    NATS_PROPERTIES__REGION: local
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
+
+adminIssuerProxy:
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
+
+functionautoscaler:
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
+
+reval:
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
+
+# LLM addon services (active only when addons.llm.enabled: true):
+llmApiGateway:
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
+
+llmRequestRouter:
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
 
 # Ingress Gateway Configuration
 ingress:
   gatewayApi:
     enabled: true
     controllerNamespace: "" # must be set by the environment
+    # Optional path to a local gateway-routes chart. This lets integration
+    # validation deploy route templates that have not been released yet.
+    chartPath: ""
     routes:
       nvcfApi:
         routeAnnotations: {}
@@ -355,6 +537,18 @@ ingress:
       nats:
         enabled: false
         routeAnnotations: {}
+      # Backend-router routes for split-cluster LLM worker registration and
+      # reverse QUIC tunnels. The target router selects the named Stargate pod
+      # by HTTP/2 authority and QUIC SNI.
+      llmWorker:
+        enabled: false
+        backend:
+          name: llm-request-router-backend-router
+          # Required when llmWorker is enabled; normally the NVCF namespace.
+          namespace: ""
+          grpcPort: 50071
+          quicPort: 50072
+        routeAnnotations: {}
       # ESS route. NVCF worker containers fetch function secrets from ess-api.
       # In split/multi-cluster installs ess runs in the control plane, so
       # compute-plane workers reach it through this route. Opt-in per environment.
@@ -372,12 +566,28 @@ ingress:
         name: "" # must be set by the environment when routes.nats.enabled=true
         namespace: "" # must be set by the environment when routes.nats.enabled=true
         listenerName: nats
+      llmGrpc:
+        name: "" # required when routes.llmWorker.enabled=true
+        namespace: "" # required when routes.llmWorker.enabled=true
+        listenerName: llm-grpc
+      llmQuic:
+        name: "" # required when routes.llmWorker.enabled=true
+        namespace: "" # required when routes.llmWorker.enabled=true
+        listenerName: llm-quic
 
 grpcproxy:
+  # PDB: disabled by default. Enable when running multiple grpc-proxy replicas.
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
   # Optional NVCF API gRPC endpoint used only by grpc-proxy.
   # Leave empty when grpc-proxy can use the same endpoint advertised to workers
   # through global.workerEndpoints.nvcfGrpcServiceURL. Set this when workers
   # need an external Gateway or load-balancer URL, but grpc-proxy should stay
   # on a control-plane-local API service address.
   nvcfGrpcServiceURL: ""
+  # Optional NATS endpoint used only by grpc-proxy. It defaults to the local
+  # NATS Service even when global.workerEndpoints.nvcfNatsServiceURL points at
+  # an external compute-worker endpoint.
+  natsServiceURL: ""
   workerConnectBaseURL: ""
