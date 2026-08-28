@@ -1372,7 +1372,8 @@ func TestMultiClusterHelmfileLLMRegistrationTLSFeatureFileWiresToSteps(t *testin
 			`-o jsonpath="{.data.ca\.crt}" | base64 -d) ` +
 			`-authority llm-request-router.nvcf.svc.cluster.local ` +
 			`-import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto ` +
-			`127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates'`
+			`127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates; ` +
+			`rc=$?; [ "$rc" -ne 0 ]'`
 		pylonMetricsCommand = `/bin/sh -c 'set -eu; for attempt in $(seq 1 120); do ` +
 			`row=$(kubectl --context k3d-ncp-local-compute-1 get pods -A -o json | ` +
 			`jq -r "[.items[] | select(any(.spec.containers[]?; .name == \"llm-worker\")) | ` +
@@ -1405,7 +1406,7 @@ func TestMultiClusterHelmfileLLMRegistrationTLSFeatureFileWiresToSteps(t *testin
 		},
 		plaintextWatchCommand: {ExitCode: 1, Stderr: "tls: first record does not look like a TLS handshake"},
 		tlsWatchCommand: {
-			ExitCode: 1,
+			ExitCode: 0,
 			Stdout: `{
   "stargates": [
     {"stargateId": "llm-request-router-0", "grpcPylonDialAddr": "https://llm-request-router.nvcf.svc.cluster.local:50071"},
