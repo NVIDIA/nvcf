@@ -233,10 +233,11 @@ func TestSelfManagedLocalBDDMultiFixtureWiresComputeReachableWorkerEndpoints(t *
 	fixture := string(fixtureBytes)
 	for _, want := range []string{
 		"workerConnectBaseURL: http://grpc.nvcf.svc.cluster.local:10086",
-		"llmRequestRouterAddress: llm-request-router.nvcf.svc.cluster.local:50071",
+		"llmRequestRouterAddress: https://llm-request-router.nvcf.svc.cluster.local:50071",
 		"chartPath: ../../../helm/gateway-routes/chart",
 		"chartPath: ../../../helm/llm-request-router/llm-request-router",
-		"pylonGrpcDialAddress: llm-request-router.nvcf.svc.cluster.local:50071",
+		"pylonGrpcDialAddress: https://llm-request-router.nvcf.svc.cluster.local:50071",
+		"secretName: llm-request-router-grpc-tls",
 		"pylonReverseTunnelDialAddress: llm-request-router.nvcf.svc.cluster.local:50072",
 		"*.llm-request-router-headless.nvcf.svc.cluster.local",
 		"grpcWorker:",

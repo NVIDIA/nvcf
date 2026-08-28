@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+{{- if and .Values.nvcfGatewayRoutes.enabled .Values.nvcfGatewayRoutes.routes.llmWorker.enabled .Values.llmRequestRouter.grpcTls.enabled }}
+{{- include "nvcf-gateway.validateLLMWorkerGrpcTls" . }}
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: {{ .Values.nvcfGatewayRoutes.routes.llmWorker.name }}-grpc-streams
+  namespace: {{ .Values.nvcfGatewayRoutes.gateways.llmGrpc.namespace }}
+  labels:
+    {{- include "nvcf-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/component: llm-worker-grpc-stream-policy
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: GRPCRoute
+      name: {{ .Values.nvcfGatewayRoutes.routes.llmWorker.name }}-grpc
+  timeout:
+    http:
+      requestTimeout: 0s
+      maxStreamDuration: 0s
+{{- end }}

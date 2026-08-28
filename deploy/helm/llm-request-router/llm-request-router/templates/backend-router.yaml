@@ -27,6 +27,7 @@ spec:
       port: {{ .Values.llmRequestRouter.backendRouter.service.grpcPort }}
       targetPort: grpc
       protocol: TCP
+      appProtocol: kubernetes.io/h2c
     - name: quic
       port: {{ .Values.llmRequestRouter.backendRouter.service.reverseTunnelPort }}
       targetPort: quic

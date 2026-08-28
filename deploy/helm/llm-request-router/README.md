@@ -158,10 +158,19 @@ namespaced Role to it when
 When `rbac.create=false`, grant `get`, `list`, and `watch` on
 `discovery.k8s.io/endpointslices` to that account outside this chart.
 
-Route TCP port `50071` and UDP port `50072` to the
+Route HTTPS gRPC traffic on port `50071` and UDP traffic on port `50072` to the
 `llm-request-router-backend-router` Service. The NVCF gateway-routes chart can
-create the matching `TCPRoute`, `UDPRoute`, and `ReferenceGrant` resources.
-The Gateway implementation must support Gateway API `UDPRoute`.
+terminate TLS on a dedicated HTTPS listener and create the matching
+`GRPCRoute`, `UDPRoute`, `ReferenceGrant`, gRPC `Certificate`, and stream
+timeout policy. The gRPC route forwards h2c to the Service. The Gateway
+implementation must support Gateway API `GRPCRoute` and `UDPRoute`. A legacy
+plaintext `TCPRoute` is available only with an explicit development opt-in.
+
+Use the same explicit `https://host:port` URI for the API worker bootstrap and
+`pylonGrpcDialAddress`. The external hostname is used for TLS SNI and server
+verification. The selected Stargate identity remains the HTTP/2 `:authority`,
+so the secure `GRPCRoute` intentionally has no hostname match. The gRPC
+listener certificate is distinct from the request-router QUIC certificate.
 
 When QUIC verification is enabled, the mounted certificate must cover the
 advertised per-pod hostname produced by

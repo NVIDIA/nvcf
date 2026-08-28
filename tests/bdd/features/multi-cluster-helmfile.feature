@@ -98,7 +98,7 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
       # the compute plane.
       When I run command "kubectl --context k3d-ncp-local-cp get configmap/nvcf-api-remote-config -n nvcf -o yaml"
       Then the command exit code should be 0
-      And the command output should contain "worker-address: llm-request-router.nvcf.svc.cluster.local:50071"
+      And the command output should contain "worker-address: https://llm-request-router.nvcf.svc.cluster.local:50071"
 
       # The dial address chooses the cross-cluster network path. Stargate's
       # per-pod authority remains the gRPC authority and reverse QUIC SNI, so
@@ -113,6 +113,69 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
             - "*.llm-request-router-headless.nvcf.svc.cluster.local"
         """
 
+      # gRPC TLS is a separate listener identity from reverse QUIC. The
+      # Certificate is written in the Gateway namespace because the HTTPS
+      # listener consumes its Secret there.
+      Then Kubernetes resource "Certificate/llm-request-router-grpc-tls" in namespace "envoy-gateway-system" using context "k3d-ncp-local-cp" should contain:
+        """
+        spec:
+          secretName: llm-request-router-grpc-tls
+          dnsNames:
+            - llm-request-router.nvcf.svc.cluster.local
+          issuerRef:
+            kind: ClusterIssuer
+            name: nvcf-openbao-pki
+        """
+
+      Then Kubernetes resource "Gateway/grpc-gw" in namespace "envoy-gateway-system" using context "k3d-ncp-local-cp" should contain:
+        """
+        spec:
+          gatewayClassName: eg
+          listeners:
+            - name: tcp
+              protocol: TCP
+              port: 10081
+              allowedRoutes:
+                namespaces:
+                  from: All
+            - name: worker-tcp
+              protocol: TCP
+              port: 10086
+              allowedRoutes:
+                namespaces:
+                  from: All
+            - name: llm-grpc
+              protocol: HTTPS
+              port: 50071
+              tls:
+                mode: Terminate
+                certificateRefs:
+                  - group: ""
+                    kind: Secret
+                    name: llm-request-router-grpc-tls
+              allowedRoutes:
+                namespaces:
+                  from: All
+            - name: llm-quic
+              protocol: UDP
+              port: 50072
+              allowedRoutes:
+                namespaces:
+                  from: All
+        """
+
+      Then Kubernetes resource "BackendTrafficPolicy/llm-worker-grpc-streams" in namespace "envoy-gateway-system" using context "k3d-ncp-local-cp" should contain:
+        """
+        spec:
+          targetRefs:
+            - group: gateway.networking.k8s.io
+              kind: GRPCRoute
+              name: llm-worker-grpc
+          timeout:
+            http:
+              requestTimeout: 0s
+              maxStreamDuration: 0s
+        """
       # These routes are installed by ncp-local before the Helmfile
       # stack, then become fully resolved once the control-plane
       # Services exist. Check route status here so Gateway wiring
@@ -120,7 +183,7 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
       # during function invocation.
       Then these Gateway API routes should be accepted and resolved using context "k3d-ncp-local-cp" within "2m":
         | kind      | name                        | namespace            | parent      |
-        | TCPRoute  | llm-worker-grpc             | envoy-gateway-system | grpc-gw     |
+        | GRPCRoute | llm-worker-grpc             | envoy-gateway-system | grpc-gw     |
         | UDPRoute  | llm-worker-quic             | envoy-gateway-system | grpc-gw     |
         | HTTPRoute | nvcf-api-control-plane      | nvcf                 | shared-gw   |
         | HTTPRoute | invocation-control-plane    | nvcf                 | shared-gw   |
@@ -128,6 +191,9 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
         | HTTPRoute | ess-control-plane           | ess                  | shared-gw   |
         | HTTPRoute | sis-control-plane           | sis                  | shared-gw   |
         | GRPCRoute | nvcf-api-control-plane-grpc | nvcf                 | api-grpc-gw |
+
+      When I run command "kubectl --context k3d-ncp-local-cp wait certificate llm-request-router-grpc-tls -n envoy-gateway-system --for=condition=Ready --timeout=5m"
+      Then the command exit code should be 0
 
   Rule: Helmfile registers and installs NVCA on the compute cluster
 

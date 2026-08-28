@@ -75,6 +75,14 @@ Feature: Install a local single-cluster NVCF stack with PKI-secured LLM transpor
         | name: NVCF_SERVICE_PKI_ALLOWED_DOMAINS              |
         | value: "nvcf.svc.cluster.local"                   |
         | nvcf-openbao-migrations:0.16.2                     |
+      # A colocated worker uses the in-cluster h2c Service directly. The
+      # dedicated HTTPS identity and route belong only to an explicitly
+      # enabled remote-worker ingress.
+      And the rendered manifests in "deploy/stacks/self-managed/out" should not contain:
+        | text                                |
+        | name: llm-worker-grpc               |
+        | name: llm-request-router-grpc-tls   |
+        | name: llm-worker-grpc-streams       |
 
     @llm-pki-install
     Scenario: Operator installs the control plane with the PKI addon enabled
@@ -103,6 +111,16 @@ Feature: Install a local single-cluster NVCF stack with PKI-secured LLM transpor
         | ingress                   | envoy-gateway-system |
         | llm-request-router        | nvcf                 |
         | llm-api-gateway           | nvcf                 |
+
+      When I run command "kubectl --context k3d-ncp-local get configmap/nvcf-api-remote-config -n nvcf -o yaml"
+      Then the command exit code should be 0
+      And the command output should contain "worker-address: llm-request-router.nvcf.svc.cluster.local:50071"
+
+      Then these Kubernetes resources should not exist in namespace "envoy-gateway-system" using context "k3d-ncp-local":
+        | kind                 | name                         |
+        | GRPCRoute            | llm-worker-grpc              |
+        | Certificate          | llm-request-router-grpc-tls  |
+        | BackendTrafficPolicy | llm-worker-grpc-streams      |
 
       # The issuer and the stargate leaf are functional gates for the
       # secure tunnel: the router cannot serve TLS before cert-manager

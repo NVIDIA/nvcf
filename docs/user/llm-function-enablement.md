@@ -201,21 +201,33 @@ backend-router endpoints.
 
 | Path | Worker-facing values | Gateway route and backend | Terminating component |
 | --- | --- | --- | --- |
-| gRPC registration and watches | `global.workerEndpoints.llmRequestRouterAddress` for the initial connection, then `pylonGrpcDialAddress` | `llmGrpc` TCP listener and `TCPRoute` to `llm-request-router-backend-router:50071` | The backend router selects a request-router pod from the HTTP/2 authority and proxies the stream. An HTTPS dial URI also verifies its external hostname. |
+| gRPC registration and watches | `global.workerEndpoints.llmRequestRouterAddress` for the initial connection, then `pylonGrpcDialAddress` | `llmGrpc` HTTPS listener and `GRPCRoute` to `llm-request-router-backend-router:50071` over h2c | The Gateway terminates TLS. The backend router selects a request-router pod from the HTTP/2 authority and proxies the stream. |
 | Reverse inference tunnel | `pylonReverseTunnelDialAddress` | `llmQuic` UDP listener and `UDPRoute` to `llm-request-router-backend-router:50072` | The backend router terminates the worker-facing QUIC connection, selects a request-router pod from SNI, and forwards the tunnel. |
 
-Configure distinct TCP and UDP endpoints when the infrastructure uses separate
+Configure distinct HTTPS and UDP endpoints when the infrastructure uses separate
 Gateways or load balancers:
 
 ```yaml
 global:
   workerEndpoints:
-    llmRequestRouterAddress: llm-grpc.example.com:50071
+    llmRequestRouterAddress: https://llm-grpc.example.com:50071
 
 addons:
   llm:
     enabled: true
+    pki:
+      # Include the external gRPC suffix when using the stack-managed issuer.
+      allowedDomains: cluster.local,example.com
     requestRouter:
+      grpcTls:
+        enabled: true
+        mode: certManager
+        secretName: llm-grpc-tls
+        dnsNames:
+          - llm-grpc.example.com
+        issuerRef:
+          kind: ClusterIssuer
+          name: nvcf-openbao-pki
       backendRouter:
         pylonGrpcDialAddress: https://llm-grpc.example.com:50071
         pylonReverseTunnelDialAddress: llm-quic.example.com:50072
@@ -240,8 +252,12 @@ ingress:
 
 Set both `pylonGrpcDialAddress` and `pylonReverseTunnelDialAddress`, or omit
 both to use the in-cluster backend-router Service. Helmfile rendering rejects a
-partial override. The gRPC worker address normally uses the same TCP endpoint
-as `pylonGrpcDialAddress`.
+partial override. The gRPC worker address normally uses the same HTTPS endpoint
+as `pylonGrpcDialAddress`. A secure external route requires the same explicit
+`https://` URI in both values and `grpcTls.enabled: true`. Development-only
+plaintext requires `http://` in both values and
+`grpcTls.allowInsecureHttp: true`; a scheme-less external route is rejected.
+Port 443 alone does not make a connection secure.
 
 To recursively discover request routers in another region, set explicit remote
 Watch dial URIs on the self-managed operator surface:
@@ -263,16 +279,24 @@ plaintext. For an HTTPS URI, the dial hostname selects TLS SNI. Identities
 advertised by the remote Watch response remain the HTTP/2 authorities used for
 registration.
 
-The scheme-less `global.workerEndpoints.llmRequestRouterAddress` in this
-example is the self-managed profile's initial `host:port` input. The
-`pylonGrpcDialAddress` override requires an explicit `http://` or `https://`
-URI; this example uses HTTPS. Port 443 alone does not select TLS. The public ACM
-and private-CA NLB listener modes described above require an `https://` dial
-URI.
+With `grpcTls.mode: certManager`, the gateway-routes chart creates a dedicated
+`Certificate` in the gRPC Gateway namespace. With `mode: existingSecret`, the
+operator must create the named TLS Secret in that namespace. In both modes the
+Gateway HTTPS listener must reference the same Secret. This identity is
+separate from the QUIC certificate on port 50072. The operator must ensure an
+existing certificate covers the external dial hostname; `dnsNames` is required
+only when the chart requests the certificate.
 
 For an HTTPS dial URI, the gRPC dial hostname is the TLS SNI and must be a SAN
-on the NLB listener certificate. It does not replace the advertised
+on the Gateway listener certificate. It does not replace the advertised
 request-router pod hostname used as the HTTP/2 authority or as the QUIC SNI.
+The dedicated HTTPS listener and LLM `GRPCRoute` therefore do not set
+`hostname` or `hostnames`. The listener serves the dedicated certificate for
+normal public-SNI verification, while the backend router receives the selected
+Stargate identity in `:authority`. Setting the listener hostname to the public
+dial name would also constrain `:authority` and reject these streams. Envoy
+Gateway's route-scoped traffic policy disables the request and maximum stream
+durations for long-lived Watch and Register streams.
 Keep the default wildcard SAN on the separate QUIC leaf, or issue a certificate
 that covers a customized advertised hostname. Every compute cluster must trust
 the required issuing CAs as described in
@@ -671,13 +695,14 @@ Also verify the control-plane components:
 ```bash
 kubectl get deployment -n nvcf llm-api-gateway
 kubectl get deployment -n nvcf llm-request-router-backend-router
-kubectl get statefulset -n nvcf llm-request-router
+kubectl get deployment,statefulset -n nvcf llm-request-router
 kubectl get service -n nvcf llm-request-router-backend-router
 kubectl get pods -n nvcf | grep -E 'llm-api-gateway|llm-request-router'
 kubectl get httproute -A | grep llm
 ```
 
-For remote workers, also verify the LLM `TCPRoute`, `UDPRoute`, and
+For remote workers, also verify the LLM `GRPCRoute`, `UDPRoute`, dedicated
+gRPC `Certificate`, stream timeout policy, and
 `ReferenceGrant` as described in
 [Gateway Routing and DNS](./gateway-routing.md#verify-llm-worker-routes).
 
