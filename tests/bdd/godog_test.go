@@ -1206,6 +1206,91 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 3)
 }
 
+// TestMultiClusterHelmfileLLMRegistrationMultiregionFeatureFileWiresToSteps
+// runs the secure recursive-discovery feature against a fake runner. The
+// observations cover distinct Deployment and StatefulSet router identities,
+// the HTTPS remote Watch URI, and Pylon's combined registration topology.
+func TestMultiClusterHelmfileLLMRegistrationMultiregionFeatureFileWiresToSteps(t *testing.T) {
+	t.Setenv("NGC_API_KEY", "test-key")
+	t.Setenv("SAMPLE_NGC_ORG", "test-org")
+	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
+	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
+
+	const (
+		regionAWatchCommand = `/bin/bash -c 'set -eu; output=$(grpcurl -max-time 3 -cacert <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf -o jsonpath="{.data.ca\.crt}" | base64 -d) -authority llm-request-router.nvcf.svc.cluster.local -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates 2>&1 || true); pods=$(kubectl --context k3d-ncp-local-cp get pods -n nvcf -l app.kubernetes.io/instance=llm-request-router,app.kubernetes.io/name=llm-request-router -o jsonpath="{range .items[*]}{.metadata.name}{\"\\n\"}{end}"); count=0; while IFS= read -r pod; do [ -z "$pod" ] && continue; printf "%s" "$output" | grep -Fq "$pod"; count=$((count + 1)); done <<<"$pods"; [ "$count" -eq 3 ]; printf "%s" "$output" | grep -Fq "https://region-b-watch.nvcf.svc.cluster.local:50071"; printf "region-a-deployment=%s remote-watch=https\n" "$count"'`
+		regionBWatchCommand = `/bin/bash -c 'set -eu; output=$(grpcurl -max-time 3 -cacert <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf -o jsonpath="{.data.ca\.crt}" | base64 -d) -authority region-b-watch.nvcf.svc.cluster.local -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates 2>&1 || true); printf "%s" "$output" | grep -Fq "llm-request-router-region-b-0"; printf "%s" "$output" | grep -Fq "llm-request-router-region-b-1"; printf "region-b-statefulset=2 tls=https\n"'`
+		pylonMetricsCommand = `/bin/sh -c 'set -eu; for attempt in $(seq 1 120); do row=$(kubectl --context k3d-ncp-local-compute-1 get pods -A -o json | jq -r "[.items[] | select(any(.spec.containers[]?; .name == \"llm-worker\")) | [.metadata.namespace,.metadata.name] | @tsv] | first // empty"); if [ -n "$row" ]; then ns=$(printf "%s" "$row" | cut -f1); pod=$(printf "%s" "$row" | cut -f2); metrics=$(kubectl --context k3d-ncp-local-compute-1 get --raw "/api/v1/namespaces/$ns/pods/$pod:9089/proxy/metrics" 2>/dev/null || true); registration=$(printf "%s\n" "$metrics" | grep -c "^pylon_registration_stream_connected.* 1$" || true); reverse=$(printf "%s\n" "$metrics" | grep -c "^pylon_reverse_tunnel_connected.* 1$" || true); if [ "$registration" -eq 5 ] && [ "$reverse" -ge 3 ]; then printf "registration=%s reverse=%s regions=2\n" "$registration" "$reverse"; exit 0; fi; fi; sleep 5; done; exit 1'`
+		invokeCommand       = "/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke" +
+			" --inference-url /v1/chat/completions --model-name openai-compatible-sample" +
+			" --request-body '{\"messages\":[{\"role\":\"user\",\"content\":\"bdd-registration-multiregion\"}]}' --timeout 120"
+	)
+
+	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
+		"k3d cluster get ncp-local": {ExitCode: 1},
+		regionAWatchCommand: {
+			ExitCode: 0,
+			Stdout:   "region-a-deployment=3 remote-watch=https\n",
+		},
+		regionBWatchCommand: {
+			ExitCode: 0,
+			Stdout:   "region-b-statefulset=2 tls=https\n",
+		},
+		pylonMetricsCommand: {ExitCode: 0, Stdout: "registration=5 reverse=3 regions=2\n"},
+		invokeCommand: {
+			ExitCode: 0,
+			Stdout: "Function invocation completed!\n\nResponse:\n" +
+				`{"object":"chat.completion","choices":[{"message":{"content":"This is a fixed 128-byte response for routing and contract validation."}}]}` +
+				"\n",
+		},
+	}))
+	seedHelmfileLocalBDDMultiFixture(t, suite.Config.RepoRoot)
+	seedComputePlaneLocalBDDMultiFixture(t, suite.Config.RepoRoot)
+	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+	writeProfileHandoffArtifact(t, suite.Config.RepoRoot)
+	writeMulticlusterComputeRegisterValues(t, suite.Config.RepoRoot, "nvcf-compute-plane", "ncp-local-compute-1")
+	writeArtifact(
+		t,
+		suite.Config.RepoRoot,
+		"self-managed",
+		"registration-multiregion-rendered.yaml",
+		"kind: Deployment\n"+
+			"--remote-stargate-url=https://region-b-watch.nvcf.svc.cluster.local:50071\n",
+	)
+
+	sc := steps.NewScenarioContext(suite)
+	featurePath := mustResolveFeaturePath(t, "multi-cluster-helmfile-llm-registration-multiregion.feature")
+	var out strings.Builder
+	status := godog.TestSuite{
+		Name: "multi-cluster-helmfile-llm-registration-multiregion-wiring",
+		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
+			steps.RegisterAll(ctx, sc)
+		},
+		Options: &godog.Options{
+			Format: "pretty",
+			Paths:  []string{featurePath},
+			Strict: true,
+			Output: &out,
+		},
+	}.Run()
+	if status != 0 {
+		t.Fatalf("godog suite status = %d\n%s", status, out.String())
+	}
+	for _, command := range []string{regionAWatchCommand, regionBWatchCommand, pylonMetricsCommand} {
+		if !commandRanExactly(suite.Runner.(*fakeRunner).runs, command) {
+			t.Fatalf("exact multi-region observation command was not invoked: %s", command)
+		}
+	}
+	if !commandRanThatContainsAll(
+		suite.Runner.(*fakeRunner).runs,
+		"function create --name bdd-registration-multiregion",
+		"--function-type LLM",
+		"--llm-model",
+	) {
+		t.Fatal("multi-region sample was not created as an LLM function")
+	}
+}
+
 // TestSingleClusterHelmfileUpstreamImagesFeatureFileWiresToSteps runs the
 // focused upstream-image feature against a fake runner. The seeded global
 // template contains the exact documentation blocks so the ledger-backed
@@ -1969,6 +2054,16 @@ func TestMultiClusterHelmfile(t *testing.T) {
 		t.Skip("live run skipped under -short")
 	}
 	runLiveFeature(t, "multi-cluster-helmfile.feature")
+}
+
+// TestMultiClusterHelmfileLLMRegistrationMultiregion is the live entry point
+// for secure recursive registration across two local logical regions.
+// Skipped under -short.
+func TestMultiClusterHelmfileLLMRegistrationMultiregion(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live run skipped under -short")
+	}
+	runLiveFeature(t, "multi-cluster-helmfile-llm-registration-multiregion.feature")
 }
 
 // TestSingleClusterEKSHelmfile is the live entry point for the
