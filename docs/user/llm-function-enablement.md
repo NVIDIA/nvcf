@@ -849,9 +849,9 @@ For transport TLS failures, check:
 - Bundle trust mode: verify `ConfigMap/nvcf-transport-trust-bundle`, compare its
   fingerprint with the compute-plane profile, and confirm
   `STARGATE_TLS_CERT_PATH` in the `llm-worker` container. The
-  `STARGATE_GRPC_TLS_CA_CERT_PATH` override is optional; when unset, reverse
-  mode reuses the existing Stargate bundle. Restart the worker after changing
-  either bundle.
+  `STARGATE_GRPC_TLS_CA_CERT_PATH` override is optional; when unset, the gRPC
+  registration and watch paths reuse the existing Stargate bundle. Restart the
+  worker after changing either bundle.
 
 Useful logs:
 
