@@ -68,6 +68,7 @@ type OpenAIDirector struct {
 	imageVariations    ModelMapping
 	allPublicModels    []ModelInfo // list of models used for the /v1/models
 	vanityDirector     *VanityDirector
+	llmGatewayDirector *LLMGatewayDirector
 	shadower           *TrafficShadower
 	shadowRandomBucket func() int
 
@@ -103,6 +104,11 @@ type FunctionInfo struct {
 	shadowPercentage               int
 	shadowSamplingMethod           config.ShadowSamplingMethod
 	shadowCancelOnClientDisconnect bool
+	functionType                   config.FunctionType
+}
+
+func (f FunctionInfo) targetsLLMGateway() bool {
+	return f.functionType == config.FunctionTypeLLM
 }
 
 type ModelMapping struct {
@@ -136,6 +142,7 @@ type ModelNameToFunctionIdVersionId struct {
 	ShadowPercentage               *int
 	ShadowSamplingMethod           config.ShadowSamplingMethod
 	ShadowCancelOnClientDisconnect bool
+	FunctionType                   config.FunctionType
 }
 
 type openAIRequestBody struct {
@@ -146,6 +153,7 @@ type openAIRequestBody struct {
 type resolvedOpenAIRequest struct {
 	request      *http.Request
 	functionInfo FunctionInfo
+	modelName    string
 }
 
 type primaryProxyObserver struct {
@@ -251,6 +259,7 @@ func buildModelMapping(
 			shadowPercentage:               defaultShadowPercentage(entry.ShadowPercentage),
 			shadowSamplingMethod:           defaultShadowSamplingMethod(entry.ShadowSamplingMethod),
 			shadowCancelOnClientDisconnect: entry.ShadowCancelOnClientDisconnect,
+			functionType:                   entry.FunctionType,
 		}
 
 		// build the modelInfo list and modelName to modelInfo map
@@ -267,7 +276,7 @@ func buildModelMapping(
 	return ModelMapping{modelNameToNVCFUrl, modelNameToModelInfo}, nil
 }
 
-func NewOpenAIDirectorV2(mapping *config.GatewayConfig, privateModelMatcher *regexp.Regexp, vanityDirector *VanityDirector, shadower *TrafficShadower) (*OpenAIDirector, error) {
+func NewOpenAIDirectorV2(mapping *config.GatewayConfig, privateModelMatcher *regexp.Regexp, vanityDirector *VanityDirector, llmGatewayDirector *LLMGatewayDirector, shadower *TrafficShadower) (*OpenAIDirector, error) {
 	chatCompletions, err := buildModelMapping(convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping.OpenAI.ChatCompletions), privateModelMatcher)
 	if err != nil {
 		return nil, err
@@ -324,16 +333,17 @@ func NewOpenAIDirectorV2(mapping *config.GatewayConfig, privateModelMatcher *reg
 	})
 
 	return &OpenAIDirector{
-		chatCompletions:  chatCompletions,
-		completions:      completions,
-		embeddings:       embeddings,
-		responses:        responses,
-		imageGenerations: imageGenerations,
-		imageEdits:       imageEdits,
-		imageVariations:  imageVariations,
-		allPublicModels:  allModels,
-		vanityDirector:   vanityDirector,
-		shadower:         shadower,
+		chatCompletions:    chatCompletions,
+		completions:        completions,
+		embeddings:         embeddings,
+		responses:          responses,
+		imageGenerations:   imageGenerations,
+		imageEdits:         imageEdits,
+		imageVariations:    imageVariations,
+		allPublicModels:    allModels,
+		vanityDirector:     vanityDirector,
+		llmGatewayDirector: llmGatewayDirector,
+		shadower:           shadower,
 	}, nil
 }
 
@@ -413,6 +423,7 @@ func convertIntoModelNameToFunctionIdAndVersionIdMappingV2(mapping map[string]co
 			ShadowPercentage:               entry.ShadowPercentage,
 			ShadowSamplingMethod:           entry.ShadowSamplingMethod,
 			ShadowCancelOnClientDisconnect: entry.ShadowCancelOnClientDisconnect,
+			FunctionType:                   entry.FunctionType,
 		}
 	}
 
@@ -650,6 +661,7 @@ func (d *OpenAIDirector) resolveModelMappedRequest(writer http.ResponseWriter, r
 	return resolvedOpenAIRequest{
 		request:      request,
 		functionInfo: nvcfUrl,
+		modelName:    body.Model,
 	}, false
 }
 
@@ -784,10 +796,49 @@ func shadowBucketForBearerCredential(credential []byte) int {
 	return int(binary.BigEndian.Uint64(digest[:8]) % 100)
 }
 
+// proxyToLLMGateway rewrites the request model to the functionID/modelName form
+// the LLM Gateway routes on, so vanity callers never see the function ID.
+func (d *OpenAIDirector) proxyToLLMGateway(writer http.ResponseWriter, resolved resolvedOpenAIRequest) error {
+	if d.llmGatewayDirector == nil {
+		writeBadGatewayProblem(writer, resolved.request, fmt.Errorf("LLM Gateway upstream is not configured"))
+		return nil
+	}
+
+	body, err := io.ReadAll(resolved.request.Body)
+	_ = resolved.request.Body.Close()
+	if err != nil {
+		writeBadGatewayProblem(writer, resolved.request, fmt.Errorf("failed to read request body: %w", err))
+		return nil
+	}
+
+	rewritten, err := rewriteShadowRequestModel(body, resolved.functionInfo.functionId+"/"+resolved.modelName)
+	if err != nil {
+		writeBadGatewayProblem(writer, resolved.request, err)
+		return nil
+	}
+
+	resolved.request.Body = io.NopCloser(bytes.NewReader(rewritten))
+	resolved.request.ContentLength = int64(len(rewritten))
+
+	return d.llmGatewayDirector.ServeProxy(
+		LLMGatewayRequest{
+			CustomHeaders:  resolved.functionInfo.customHeaders,
+			EOL:            resolved.functionInfo.eol,
+			OfflineMessage: resolved.functionInfo.offlineMessage,
+		},
+		writer,
+		resolved.request,
+	)
+}
+
 func (d *OpenAIDirector) proxyResolvedRequest(writer http.ResponseWriter, resolved resolvedOpenAIRequest) error {
 	if resolved.functionInfo.sessionTimeout > 0 {
 		span := trace.SpanFromContext(resolved.request.Context())
 		span.SetAttributes(traceAttrSessionTimeoutSeconds.Int(int(resolved.functionInfo.sessionTimeout)))
+	}
+
+	if resolved.functionInfo.targetsLLMGateway() {
+		return d.proxyToLLMGateway(writer, resolved)
 	}
 
 	observer := &primaryProxyObserver{}

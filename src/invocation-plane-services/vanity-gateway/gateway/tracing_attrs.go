@@ -37,7 +37,8 @@ const (
 	traceAttrShadowTargetModel         attribute.Key = "shadow.target_model"
 	traceAttrShadowTargetModels        attribute.Key = "shadow.target_models"
 
-	traceAttrValueEndpointOpenAI = "openai"
+	traceAttrValueEndpointOpenAI     = "openai"
+	traceAttrValueEndpointLLMGateway = "llm_gateway"
 
 	shadowDroppedReasonBodyReadError    = "body_read_error"
 	shadowDroppedReasonBodyRewriteError = "body_rewrite_error"
