@@ -16,7 +16,8 @@
 use std::time::Duration;
 
 use crate::common::{
-    init_crypto, make_stargate_runtime, start_and_register_backend, wait_for_routing,
+    init_crypto, make_stargate_runtime, make_stargate_runtime_with_readiness_warmup,
+    start_and_register_backend, wait_for_routing,
 };
 
 #[tokio::test]
@@ -33,6 +34,25 @@ async fn healthz_returns_200() {
         .await
         .expect("healthz request failed");
     assert_eq!(resp.status(), 200);
+
+    handle.begin_shutdown();
+    handle.wait_for_shutdown(Duration::from_secs(5)).await;
+}
+
+#[tokio::test]
+async fn readyz_returns_200_when_warmup_is_disabled() {
+    init_crypto();
+
+    let (_grpc_addr, http_addr, runtime) =
+        make_stargate_runtime_with_readiness_warmup("test-sg-readyz-no-warmup", Duration::ZERO);
+    let handle = runtime.start().await.expect("stargate failed to start");
+
+    let response = reqwest::Client::new()
+        .get(format!("http://{http_addr}/readyz"))
+        .send()
+        .await
+        .expect("readyz request failed");
+    assert_eq!(response.status(), 200);
 
     handle.begin_shutdown();
     handle.wait_for_shutdown(Duration::from_secs(5)).await;

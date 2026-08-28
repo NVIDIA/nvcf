@@ -702,7 +702,16 @@ fn reverse_tunnel_config(
 }
 
 pub fn make_stargate_runtime(id: &str) -> (SocketAddr, SocketAddr, StargateRuntime) {
-    make_stargate_runtime_with_lb(id, None)
+    make_stargate_runtime_with_readiness_warmup(id, stargate::runtime::DEFAULT_READINESS_WARMUP)
+}
+
+pub fn make_stargate_runtime_with_readiness_warmup(
+    id: &str,
+    readiness_warmup: Duration,
+) -> (SocketAddr, SocketAddr, StargateRuntime) {
+    let mut config = base_ephemeral_config(id);
+    config.readiness_warmup = readiness_warmup;
+    build_test_runtime(id, config, TestDiscovery::SelfOnly, None).standard()
 }
 
 pub fn make_stargate_runtime_for_tunnel_case(
