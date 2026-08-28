@@ -37,27 +37,33 @@ Production deployments secure two independent worker-to-router paths:
 
 | Path | TLS identity | Pylon trust input |
 | --- | --- | --- |
-| gRPC registration and watches | The external HTTPS dial hostname, normally an NLB DNS name | Tonic's enabled system and public roots by default, or `--grpc-tls-ca-cert-path` for a private CA |
+| gRPC registration and watches | The external HTTPS dial hostname, normally an NLB DNS name | Enabled system and public roots, augmented by the gRPC override or the reverse-mode QUIC trust bundle |
 | QUIC reverse tunnel | The advertised request-router pod hostname | `--tls-cert-path` for the existing QUIC identity or trust input |
 
 The current production gRPC design uses a public ACM certificate on the NLB
 TLS listener. The NLB certificate covers the public gRPC dial hostname. An
-unmanaged Pylon process, or one using NVCA system trust mode, leaves
-`--grpc-tls-ca-cert-path` unset so Tonic uses its enabled system and public
-roots. NVCA bundle mode instead points the option at its merged CA file. That
-file includes system roots, so it also validates the public ACM chain.
+unmanaged Pylon process, or one using NVCA system trust mode, can leave both
+trust paths unset so Tonic uses its enabled system and public roots. In reverse
+mode, Pylon reuses `--tls-cert-path` as gRPC trust when the gRPC-specific
+override is unset. NVCA bundle mode points both options at its merged CA file.
+
+`--grpc-tls-ca-cert-path` or `STARGATE_GRPC_TLS_CA_CERT_PATH` is the optional
+gRPC-specific override. A configured custom bundle augments the enabled system
+and public roots. It does not replace them. In direct mode,
+`--tls-cert-path` is the Pylon QUIC server identity and is never treated as a
+gRPC CA bundle.
 
 A private-CA certificate on the NLB listener is a supported alternative. Give
 Pylon the CA bundle with `--grpc-tls-ca-cert-path <path>` or
 `STARGATE_GRPC_TLS_CA_CERT_PATH=<path>`. The input is a PEM bundle containing
-one or more public CA certificates. It does not disable certificate or
-hostname verification. Pylon reads the file once during startup. An unreadable
-path fails startup with the configured path in the error. Invalid PEM,
-untrusted chains, and hostname mismatches prevent the gRPC watch and
-registration connections. Replace or rotate the bundle with a rolling restart
-of the worker pods. The dial address must be an `https://` URI. A scheme-less
-`host:port` address preserves Pylon's existing plaintext HTTP behavior, even on
-port 443.
+the CA certificates required by the selected certificate chain, including a
+private root when applicable. It does not disable certificate or hostname
+verification. Pylon reads the file once during startup. An unreadable path
+fails startup with the configured path in the error. Invalid PEM, untrusted
+chains, and hostname mismatches prevent the gRPC watch and registration
+connections. Replace or rotate the bundle with a rolling restart of the worker
+pods. The dial address must be an `https://` URI. A scheme-less `host:port`
+address preserves Pylon's existing plaintext HTTP behavior, even on port 443.
 
 For gRPC, TLS SNI and hostname verification always use the external HTTPS dial
 hostname. After discovery, Pylon separately sends the concrete request-router
