@@ -1158,6 +1158,83 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 3)
 }
 
+// TestMultiClusterHelmfileLLMRegistrationTLSFailClosedFeatureFileWiresToSteps
+// runs the negative TLS registration matrix against a fake runner.
+func TestMultiClusterHelmfileLLMRegistrationTLSFailClosedFeatureFileWiresToSteps(t *testing.T) {
+	t.Setenv("NGC_API_KEY", "test-key")
+	t.Setenv("SAMPLE_NGC_ORG", "test-org")
+	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+
+	const tlsHandshakeCommand = `/bin/bash -c 'openssl s_client -connect 127.0.0.1:50071 ` +
+		`-servername llm-request-router.nvcf.svc.cluster.local -alpn h2 -verify_return_error ` +
+		`-CAfile <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf ` +
+		`-o jsonpath="{.data.ca\.crt}" | base64 -d) </dev/null 2>&1'`
+	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
+		"k3d cluster get ncp-local": {ExitCode: 1},
+		tlsHandshakeCommand: {
+			ExitCode: 0,
+			Stdout:   "ALPN protocol: h2\nVerify return code: 0 (ok)\n",
+		},
+	}))
+	seedHelmfileLocalBDDMultiFixture(t, suite.Config.RepoRoot)
+	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+
+	sc := steps.NewScenarioContext(suite)
+	featurePath := mustResolveFeaturePath(t, "multi-cluster-helmfile-llm-registration-tls-fail-closed.feature")
+	var out strings.Builder
+	status := godog.TestSuite{
+		Name: "multi-cluster-helmfile-llm-registration-tls-fail-closed-wiring",
+		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
+			steps.RegisterAll(ctx, sc)
+		},
+		Options: &godog.Options{
+			Format: "pretty",
+			Paths:  []string{featurePath},
+			Strict: true,
+			Output: &out,
+		},
+	}.Run()
+	if status != 0 {
+		t.Fatalf("godog suite status = %d\n%s", status, out.String())
+	}
+	for _, marker := range []string{
+		"wrong-root-rejected",
+		"wrong-host-rejected",
+		"missing-trust-rejected",
+		"plaintext-rejected",
+		"invalid-authority-rejected",
+	} {
+		if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, marker) {
+			t.Fatalf("negative registration command containing %q was not invoked", marker)
+		}
+	}
+	validEnvironment := filepath.Join(
+		suite.Config.RepoRoot,
+		"deploy", "stacks", "self-managed", "environments",
+		"local-bdd-registration-tls-fail-closed.yaml",
+	)
+	invalidEnvironment := filepath.Join(
+		suite.Config.RepoRoot,
+		"deploy", "stacks", "self-managed", "environments",
+		"local-bdd-registration-tls-invalid-authority.yaml",
+	)
+	for _, assertion := range []struct {
+		path string
+		want string
+	}{
+		{path: validEnvironment, want: "https://llm-request-router.nvcf.svc.cluster.local:50071"},
+		{path: invalidEnvironment, want: "https://llm_request_router.nvcf.svc.cluster.local:50071"},
+	} {
+		got, found, err := dsl.ReadYAMLKey(assertion.path, "global.workerEndpoints.llmRequestRouterAddress")
+		if err != nil {
+			t.Fatalf("read worker endpoint override: %v", err)
+		}
+		if !found || got != assertion.want {
+			t.Fatalf("worker endpoint = %q, found = %t; want %q", got, found, assertion.want)
+		}
+	}
+}
+
 // TestSingleClusterHelmfileUpstreamImagesFeatureFileWiresToSteps runs the
 // focused upstream-image feature against a fake runner. The seeded global
 // template contains the exact documentation blocks so the ledger-backed
@@ -1915,6 +1992,15 @@ func TestMultiClusterHelmfile(t *testing.T) {
 		t.Skip("live run skipped under -short")
 	}
 	runLiveFeature(t, "multi-cluster-helmfile.feature")
+}
+
+// TestMultiClusterHelmfileLLMRegistrationTLSFailClosed is the live entry
+// point for the negative TLS registration matrix. Skipped under -short.
+func TestMultiClusterHelmfileLLMRegistrationTLSFailClosed(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live run skipped under -short")
+	}
+	runLiveFeature(t, "multi-cluster-helmfile-llm-registration-tls-fail-closed.feature")
 }
 
 // TestSingleClusterEKSHelmfile is the live entry point for the
