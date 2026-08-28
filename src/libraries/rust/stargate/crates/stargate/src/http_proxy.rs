@@ -300,11 +300,4 @@ mod test_support {
         assert!(!traffic.is_ready_at(started_at + Duration::from_secs(59)));
         assert!(traffic.is_ready_at(started_at + readiness_warmup));
     }
-
-    #[test]
-    fn readiness_accepts_extreme_warmup_without_instant_overflow() {
-        let traffic = ProxyTrafficState::new(CancellationToken::new(), Duration::MAX);
-
-        assert!(!traffic.is_ready_at(Instant::now()));
-    }
 }

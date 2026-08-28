@@ -2,14 +2,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-import argparse
 import json
 import os
-import re
 import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -61,10 +60,6 @@ def run(
     return result
 
 
-def output(command: list[str]) -> str:
-    return run(command, capture=True).stdout.strip()
-
-
 def require_tools() -> None:
     missing = [
         tool
@@ -83,7 +78,7 @@ def retry(description: str, timeout_seconds: float, check) -> object:
             result = check()
             if result is not None and result is not False:
                 return result
-        except (TestFailure, json.JSONDecodeError) as error:
+        except TestFailure as error:
             last_error = error
         time.sleep(0.5)
     detail = f": {last_error}" if last_error else ""
@@ -91,19 +86,16 @@ def retry(description: str, timeout_seconds: float, check) -> object:
 
 
 class KubernetesTest:
-    def __init__(self, cluster_name: str, warmup_ms: int, keep_cluster: bool):
-        self.cluster_name = cluster_name
-        self.context = f"kind-{cluster_name}"
-        self.warmup_ms = warmup_ms
-        self.keep_cluster = keep_cluster
+    def __init__(self, kubeconfig: Path):
+        self.cluster_name = f"stargate-readiness-{os.getpid()}-{time.monotonic_ns()}"
+        self.kubeconfig = kubeconfig
         self.cluster_created = False
         self.repo_root = Path(__file__).resolve().parents[4]
         self.chart_dir = (
             self.repo_root / "deploy/helm/llm-request-router/llm-request-router"
         )
         self.image_context = self.repo_root / "src/libraries/rust/stargate"
-        image_suffix = cluster_name.removeprefix("stargate-readiness-")
-        self.image_tag = image_suffix
+        self.image_tag = self.cluster_name.removeprefix("stargate-readiness-")
         self.stargate_repository = "stargate-readiness-stargate"
         self.pylon_repository = "stargate-readiness-pylon"
         self.mock_repository = "stargate-readiness-mock-dynamo"
@@ -121,7 +113,7 @@ class KubernetesTest:
         check: bool = True,
     ):
         return run(
-            ["kubectl", "--context", self.context, *args],
+            ["kubectl", "--kubeconfig", str(self.kubeconfig), *args],
             input_text=input_text,
             capture=capture,
             check=check,
@@ -170,14 +162,19 @@ class KubernetesTest:
         )
 
     def create_cluster(self) -> None:
-        existing = set(output(["kind", "get", "clusters"]).splitlines())
-        if self.cluster_name in existing:
-            raise TestFailure(
-                f"refusing to reuse existing kind cluster {self.cluster_name}"
-            )
         self.cluster_created = True
         run(
-            ["kind", "create", "cluster", "--name", self.cluster_name, "--wait", "120s"]
+            [
+                "kind",
+                "create",
+                "cluster",
+                "--name",
+                self.cluster_name,
+                "--kubeconfig",
+                str(self.kubeconfig),
+                "--wait",
+                "120s",
+            ]
         )
         for image in (
             self.stargate_image,
@@ -204,12 +201,11 @@ class KubernetesTest:
         run(
             [
                 "helm",
-                "upgrade",
-                "--install",
+                "install",
                 RELEASE,
                 str(self.chart_dir),
-                "--kube-context",
-                self.context,
+                "--kubeconfig",
+                str(self.kubeconfig),
                 "--namespace",
                 NAMESPACE,
                 "--create-namespace",
@@ -231,8 +227,6 @@ class KubernetesTest:
                 "llmRequestRouter.vault.noVaultAnnotations=true",
                 "--set-string",
                 "llmRequestRouter.auth.workerAuthEndpoint=",
-                "--set",
-                f"llmRequestRouter.readiness.warmupMs={self.warmup_ms}",
             ]
         )
         self.kubectl(
@@ -244,26 +238,20 @@ class KubernetesTest:
             "--timeout=60s",
         )
 
-    def workload_pod(self) -> dict:
-        pods = self.kubectl_json(
-            "-n",
-            NAMESPACE,
-            "get",
-            "pods",
-            "-l",
-            f"app.kubernetes.io/name={STARGATE_SERVICE},app.kubernetes.io/instance={RELEASE}",
-            "-o",
-            "json",
-        )["items"]
-        if len(pods) != 1:
-            return {}
-        return pods[0]
-
     def wait_for_running_workload(self) -> dict:
         def running_pod():
-            pod = self.workload_pod()
-            if pod and pod.get("status", {}).get("phase") == "Running":
-                return pod
+            pods = self.kubectl_json(
+                "-n",
+                NAMESPACE,
+                "get",
+                "pods",
+                "-l",
+                f"app.kubernetes.io/name={STARGATE_SERVICE},app.kubernetes.io/instance={RELEASE}",
+                "-o",
+                "json",
+            )["items"]
+            if len(pods) == 1 and pods[0].get("status", {}).get("phase") == "Running":
+                return pods[0]
             return None
 
         return retry("Stargate pod to be running", 30, running_pod)
@@ -527,14 +515,18 @@ class KubernetesTest:
     def cleanup(self) -> None:
         if not self.cluster_created:
             return
-        if self.keep_cluster:
-            print(
-                f"Keeping kind cluster {self.cluster_name}; delete it with: "
-                f"kind delete cluster --name {self.cluster_name}",
-                flush=True,
-            )
-            return
-        run(["kind", "delete", "cluster", "--name", self.cluster_name], check=False)
+        run(
+            [
+                "kind",
+                "delete",
+                "cluster",
+                "--name",
+                self.cluster_name,
+                "--kubeconfig",
+                str(self.kubeconfig),
+            ],
+            check=False,
+        )
 
     def execute(self) -> None:
         self.build_images()
@@ -556,43 +548,11 @@ class KubernetesTest:
             self.cleanup()
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Test Stargate readiness warmup against a disposable kind cluster."
-    )
-    parser.add_argument(
-        "--cluster-name",
-        default=f"stargate-readiness-{os.getpid()}",
-        help="unique kind cluster name",
-    )
-    parser.add_argument(
-        "--warmup-ms",
-        type=int,
-        default=60_000,
-        help="Stargate readiness warmup used by the test",
-    )
-    parser.add_argument(
-        "--keep-cluster",
-        action="store_true",
-        help="keep the test-created cluster for debugging",
-    )
-    args = parser.parse_args()
-    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,40}", args.cluster_name):
-        parser.error(
-            "--cluster-name must be a lowercase DNS label of at most 41 characters"
-        )
-    if args.warmup_ms < 30_000:
-        parser.error(
-            "--warmup-ms must be at least 30000 to leave time for warming assertions"
-        )
-    return args
-
-
 def main() -> int:
-    args = parse_args()
     try:
         require_tools()
-        KubernetesTest(args.cluster_name, args.warmup_ms, args.keep_cluster).execute()
+        with tempfile.TemporaryDirectory(prefix="stargate-readiness-") as directory:
+            KubernetesTest(Path(directory) / "kubeconfig").execute()
     except (OSError, TestFailure) as error:
         print(f"FAIL: {error}", file=sys.stderr)
         return 1
