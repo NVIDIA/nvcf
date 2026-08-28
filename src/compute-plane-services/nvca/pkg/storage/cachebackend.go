@@ -30,14 +30,15 @@ import (
 )
 
 // HelmCacheBackend identifies the storage backend selected for the Helm model
-// cache. The backend is resolved from the CachingSupport gate plus the storage
-// classes available in the cluster, replacing the old HelmCachingSupport flag.
+// cache. The backend is resolved from the CachingSupport and HelmModelCaching
+// gates plus the storage classes available in the cluster.
 // The type and values live in pkg/types so metrics can share them; they are
 // aliased here for the storage-facing API.
 type HelmCacheBackend = nvcatypes.HelmCacheBackend
 
 const (
-	// HelmCacheBackendNone means caching is disabled (CachingSupport off).
+	// HelmCacheBackendNone means caching is disabled (CachingSupport or
+	// HelmModelCaching off).
 	HelmCacheBackendNone = nvcatypes.HelmCacheBackendNone
 	// HelmCacheBackendNVMesh uses NVMesh 3.x cross-namespace PV sharing
 	// (the existing doModelCacheNVMesh path).
@@ -64,9 +65,10 @@ const (
 )
 
 // SelectHelmCacheBackend resolves the Helm model-cache storage backend. All
-// caching is gated on CachingSupport; the mechanism is then chosen by which
-// storage class the cluster provides, falling back to Samba (when
-// HelmSharedStorage is enabled) and finally to a per-pod ephemeral cache:
+// caching is gated on CachingSupport plus the HelmModelCaching sub-gate; the
+// mechanism is then chosen by which storage class the cluster provides,
+// falling back to Samba (when HelmSharedStorage is enabled) and finally to a
+// per-pod ephemeral cache:
 //
 //  1. nvcf-sc-30 present    -> NVMesh 3.x installed      -> NVMesh
 //  2. nvcf-miniservice-sc present  -> operator shared storage   -> SharedFS
@@ -77,7 +79,8 @@ func SelectHelmCacheBackend(
 	c client.Client,
 	ff featureflag.Fetcher,
 ) (HelmCacheBackend, error) {
-	if !ff.IsFeatureFlagEnabled(featureflag.CachingSupport) {
+	if !ff.IsFeatureFlagEnabled(featureflag.CachingSupport) ||
+		!ff.IsFeatureFlagEnabled(featureflag.HelmModelCaching) {
 		return HelmCacheBackendNone, nil
 	}
 

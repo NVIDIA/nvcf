@@ -34,8 +34,13 @@ var (
 )
 
 var (
-	LogPosting                    = newFeatureFlag("LogPosting", newBool(false))
-	CachingSupport                = newFeatureFlag("CachingSupport", newBool(false))
+	LogPosting     = newFeatureFlag("LogPosting", newBool(false))
+	CachingSupport = newFeatureFlag("CachingSupport", newBool(false))
+	// HelmModelCaching gates model caching for Helm-based workloads. It is a
+	// sub-gate of CachingSupport: both must be on before a backend is selected
+	// in storage.SelectHelmCacheBackend. When off, no ModelCacheRequest is
+	// created and no ephemeral model-cache-init container is injected.
+	HelmModelCaching              = newFeatureFlag("HelmModelCaching", newBool(false))
 	NVMeshEncryption              = newFeatureFlag("NVMeshEncryption", newBool(false))
 	PeriodicInstanceStatusUpdate  = newFeatureFlag("PeriodicInstanceStatusUpdate", newBool(true))
 	HelmRBACEnforcement           = newFeatureFlag("HelmRBACEnforcement", newBool(true))
