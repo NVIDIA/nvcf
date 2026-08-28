@@ -46,3 +46,17 @@ func ensureGXCacheNamespaceLabels(ctx context.Context, nsPatcher k8sNamespacePat
 	_, err := nsPatcher.Patch(ctx, namespace, k8sapitypes.JSONPatchType, patchData, metav1.PatchOptions{})
 	return err
 }
+
+// ensureModelCacheNamespaceLabel patches WorkloadInstanceTypeLabel onto the
+// model-cache init namespace so the Kyverno add-unbound-dns policy injects
+// the nvcf-unbound nameserver into writer job pods. Called at NVCA startup so
+// the label is applied immediately on upgrade, before any model cache reconcile
+// runs. JSON patch "add" is idempotent: it inserts the key when absent and
+// updates it when present, so re-running on an already-labelled namespace is safe.
+func ensureModelCacheNamespaceLabel(ctx context.Context, nsPatcher k8sNamespacePatcher, namespace string) error {
+	key := strings.ReplaceAll(nvcatypes.WorkloadInstanceTypeLabel, "/", "~1")
+	patchData := []byte(fmt.Sprintf(`[{"op": "add", "path": "/metadata/labels/%s", "value": %q}]`,
+		key, nvcatypes.WorkloadInstanceTypeValueMiniService))
+	_, err := nsPatcher.Patch(ctx, namespace, k8sapitypes.JSONPatchType, patchData, metav1.PatchOptions{})
+	return err
+}

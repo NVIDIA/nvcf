@@ -730,6 +730,13 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 		if err != nil && !k8serrors.IsAlreadyExists(err) {
 			return nil, nil, fmt.Errorf("failed to create model cache init namespace: %w", err)
 		}
+		// Patch WorkloadInstanceTypeLabel onto the namespace so the Kyverno
+		// add-unbound-dns policy injects nvcf-unbound nameservers into writer
+		// job pods. Done here (not only in Create) so pre-existing namespaces
+		// on upgraded clusters receive the label immediately at startup.
+		if err := ensureModelCacheNamespaceLabel(ctx, c.clients.K8s.CoreV1().Namespaces(), mcInitNamespace.Name); err != nil {
+			return nil, nil, fmt.Errorf("failed to patch model cache init namespace labels: %w", err)
+		}
 
 		// Network policies must exist in all workload namespaces;
 		// the Helm handler methods will do this for each new namespace.
