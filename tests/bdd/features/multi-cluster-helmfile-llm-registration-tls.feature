@@ -20,6 +20,7 @@ Feature: Register an LLM worker securely with every router in a local split-clus
         | global.image.repository                                  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                       |
         | global.workerEndpoints.llmRequestRouterAddress           | https://llm-request-router.nvcf.svc.cluster.local:50071                       |
         | api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE            | nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/stargate-client:0.2.0          |
+        | addons.llm.requestRouter.workload.kind                    | StatefulSet                                                                 |
         | addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress | https://llm-request-router.nvcf.svc.cluster.local:50071                     |
         | observability.profile                                    | disabled                                                                     |
       And I prepare Helmfile environment "local-bdd-registration-tls" for stack "nvcf-compute-plane" from fixture "tests/bdd/fixtures/nvcf-compute-plane-local-bdd-multi.yaml" with values:
