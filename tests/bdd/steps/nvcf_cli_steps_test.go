@@ -148,6 +148,70 @@ func TestNVCFCLIModelInvocationRetriesNoEligibleCandidates(t *testing.T) {
 	}
 }
 
+func TestNVCFCLIModelInvocationDoesNotRetryWhenWaitReachesDeadline(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NVCF_CLI", "nvcf-cli")
+	sc.NVCFCLIConfig = "config.yaml"
+	fake.runResults = []harness.Result{
+		{ExitCode: 1, Stderr: `API error 404: {"code":"no_eligible_candidates"}`},
+		{ExitCode: 0, Stdout: `{"object":"chat.completion"}`},
+	}
+
+	previousInterval := modelInvocationRetryInterval
+	modelInvocationRetryInterval = time.Second
+	t.Cleanup(func() { modelInvocationRetryInterval = previousInterval })
+
+	err := sc.iSuccessfullyInvokeModel(
+		context.Background(),
+		"model/name",
+		"/v1/chat/completions",
+		"0.05",
+		&godog.DocString{Content: `{"messages":[]}`},
+	)
+	if err == nil || !strings.Contains(err.Error(), "exit code = 1, want 0") {
+		t.Fatalf("error = %v, want initial eligibility failure", err)
+	}
+	if len(fake.runs) != 1 {
+		t.Fatalf("runs = %d, want no attempt after retry deadline", len(fake.runs))
+	}
+}
+
+func TestNVCFCLIModelInvocationBoundsAttemptByRetryDeadline(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NVCF_CLI", "nvcf-cli")
+	sc.NVCFCLIConfig = "config.yaml"
+
+	var observedBudget time.Duration
+	fake.runHook = func(ctx context.Context, _ int) (harness.Result, error) {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			return harness.Result{}, errors.New("attempt context has no deadline")
+		}
+		observedBudget = time.Until(deadline)
+		<-ctx.Done()
+		return harness.Result{ExitCode: -1}, ctx.Err()
+	}
+
+	parentCtx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	t.Cleanup(cancel)
+	err := sc.iSuccessfullyInvokeModel(
+		parentCtx,
+		"model/name",
+		"/v1/chat/completions",
+		"0.05",
+		&godog.DocString{Content: `{"messages":[]}`},
+	)
+	if err == nil {
+		t.Fatal("invoke model succeeded, want deadline failure")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want deadline exceeded", err)
+	}
+	if observedBudget <= 0 || observedBudget > 100*time.Millisecond {
+		t.Fatalf("attempt context budget = %s, want retry budget near 50ms", observedBudget)
+	}
+}
+
 func TestNVCFCLIModelInvocationDoesNotRetryOtherErrors(t *testing.T) {
 	sc, fake := newScenarioContext(t)
 	t.Setenv("NVCF_CLI", "nvcf-cli")

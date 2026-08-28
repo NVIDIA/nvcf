@@ -113,9 +113,15 @@ func (sc *ScenarioContext) iSuccessfullyInvokeModel(
 	}
 	retryFor, retryTimeoutErr := time.ParseDuration(timeout + "s")
 	deadline := time.Now().Add(retryFor)
+	retryCtx := ctx
+	if retryTimeoutErr == nil && retryFor > 0 {
+		var cancel context.CancelFunc
+		retryCtx, cancel = context.WithDeadline(ctx, deadline)
+		defer cancel()
+	}
 
 	for {
-		err := sc.runNVCFCLI(ctx, args...)
+		err := sc.runNVCFCLI(retryCtx, args...)
 		if err == nil {
 			return nil
 		}
@@ -131,10 +137,22 @@ func (sc *ScenarioContext) iSuccessfullyInvokeModel(
 		waitFor := min(modelInvocationRetryInterval, remaining)
 		timer := time.NewTimer(waitFor)
 		select {
-		case <-ctx.Done():
+		case <-retryCtx.Done():
 			timer.Stop()
-			return ctx.Err()
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return err
 		case <-timer.C:
+		}
+		if time.Until(deadline) <= 0 {
+			return err
+		}
+		if retryCtx.Err() != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return err
 		}
 	}
 }
