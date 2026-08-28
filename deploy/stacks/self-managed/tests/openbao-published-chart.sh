@@ -11,8 +11,10 @@ test_stacks_dir="$work_dir/stacks"
 test_stack_dir="$test_stacks_dir/self-managed"
 environment_name="openbao-published-chart-test"
 secrets_file="$test_stack_dir/secrets/$environment_name-secrets.yaml"
-published_chart_registry="${NVCF_PUBLISHED_CHART_REGISTRY:-nvcr.io}"
-published_chart_repository="${NVCF_PUBLISHED_CHART_REPOSITORY:-nvidia/nvcf}"
+: "${NVCF_PUBLISHED_CHART_REGISTRY:?NVCF_PUBLISHED_CHART_REGISTRY is required}"
+: "${NVCF_PUBLISHED_CHART_REPOSITORY:?NVCF_PUBLISHED_CHART_REPOSITORY is required}"
+published_chart_registry="$NVCF_PUBLISHED_CHART_REGISTRY"
+published_chart_repository="$NVCF_PUBLISHED_CHART_REPOSITORY"
 published_chart_version=0.32.1
 trap 'rm -rf "$work_dir"' EXIT
 
