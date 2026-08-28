@@ -114,6 +114,7 @@ struct Args {
     /// Tunnel protocol served by this UDP listener. HTTP/3 without WebTransport is unsupported.
     #[arg(long, default_value = "raw-quic", value_name = "PROTOCOL")]
     tunnel_protocol: RouterTunnelProtocol,
+    /// CA bundle used to verify the selected upstream Stargate pod.
     #[arg(long, env = "STARGATE_UPSTREAM_TLS_CERT_PATH", value_name = "PATH")]
     upstream_tls_cert_path: Option<String>,
 }
@@ -165,8 +166,9 @@ impl RouterStartupConfig {
         let server_identity_reloader = server_identity_reloader_from_args(&args)?;
         // Read the mounted pair once. The reloader validated and owns these
         // bytes, so the listener identity and the reload baseline cannot come
-        // from different projected generations. `tls_cert_pem` doubles as the
-        // startup-only outbound trust bundle.
+        // from different projected generations. Raw QUIC retains the serving
+        // certificate as a compatibility fallback when no dedicated upstream
+        // trust bundle is configured.
         let (tls_cert_pem, tls_key_pem) = match server_identity_reloader
             .as_ref()
             .map(stargate_tls::ServerIdentityReloader::current_identity)
@@ -176,6 +178,7 @@ impl RouterStartupConfig {
             }
             Some(stargate_tls::ServerTlsIdentity::SelfSigned) | None => (None, None),
         };
+        let upstream_tls_cert_pem = read_optional_file(args.upstream_tls_cert_path.as_deref())?;
         let grpc = GrpcRouterConfig {
             advertised_hostname_template: args.advertised_hostname_template.clone(),
             advertised_grpc_port: args.advertised_grpc_port,
@@ -186,25 +189,20 @@ impl RouterStartupConfig {
             watch_heartbeat_interval: Duration::from_millis(args.watch_heartbeat_ms),
         };
         let tunnel = match args.tunnel_protocol {
-            RouterTunnelProtocol::RawQuic => {
-                ensure!(
-                    args.upstream_tls_cert_path.is_none(),
-                    "--upstream-tls-cert-path is only supported with --tunnel-protocol=webtransport"
-                );
-                RouterTunnelConfig::RawQuic(QuicRouterConfig {
-                    listen_addr: args.reverse_tunnel_listen_addr,
-                    advertised_hostname_template: grpc.advertised_hostname_template.clone(),
-                    target_namespace: grpc.target_namespace.clone(),
-                    connect_timeout: grpc.connect_timeout,
-                    relay_max_idle_timeout: relay_endpoint_config.max_idle_timeout,
-                    relay_keep_alive_interval: relay_endpoint_config.keep_alive_interval,
-                    tls_cert_pem,
-                    tls_key_pem,
-                    server_identity_reloader,
-                    tls_reload_interval: stargate_tls::DEFAULT_TLS_RELOAD_INTERVAL,
-                    quic_insecure: args.quic_insecure,
-                })
-            }
+            RouterTunnelProtocol::RawQuic => RouterTunnelConfig::RawQuic(QuicRouterConfig {
+                listen_addr: args.reverse_tunnel_listen_addr,
+                advertised_hostname_template: grpc.advertised_hostname_template.clone(),
+                target_namespace: grpc.target_namespace.clone(),
+                connect_timeout: grpc.connect_timeout,
+                relay_max_idle_timeout: relay_endpoint_config.max_idle_timeout,
+                relay_keep_alive_interval: relay_endpoint_config.keep_alive_interval,
+                tls_cert_pem,
+                tls_key_pem,
+                upstream_tls_cert_pem,
+                server_identity_reloader,
+                tls_reload_interval: stargate_tls::DEFAULT_TLS_RELOAD_INTERVAL,
+                quic_insecure: args.quic_insecure,
+            }),
             RouterTunnelProtocol::WebTransport => {
                 RouterTunnelConfig::WebTransport(WebTransportRouterConfig {
                     listen_addr: args.reverse_tunnel_listen_addr,
@@ -217,9 +215,7 @@ impl RouterStartupConfig {
                     tls_key_pem,
                     server_identity_reloader,
                     tls_reload_interval: stargate_tls::DEFAULT_TLS_RELOAD_INTERVAL,
-                    upstream_tls_cert_pem: read_optional_file(
-                        args.upstream_tls_cert_path.as_deref(),
-                    )?,
+                    upstream_tls_cert_pem,
                     quic_insecure: args.quic_insecure,
                 })
             }
@@ -609,16 +605,34 @@ mod tests {
     }
 
     #[test]
-    fn raw_quic_rejects_the_webtransport_only_upstream_trust_option() {
+    fn raw_quic_keeps_upstream_trust_separate_from_the_serving_identity() {
+        install_default_crypto_provider();
+        let (cert_pem, key_pem) =
+            stargate_tls::generate_self_signed_cert().expect("test identity should generate");
+        let cert = test_file(&cert_pem);
+        let key = test_file(&key_pem);
         let upstream_ca = test_file(b"upstream-ca-bytes");
-        let args = router_args(&["--upstream-tls-cert-path", test_file_path(&upstream_ca)]);
+        let config = startup_config(&[
+            "--tls-cert-path",
+            test_file_path(&cert),
+            "--tls-key-path",
+            test_file_path(&key),
+            "--upstream-tls-cert-path",
+            test_file_path(&upstream_ca),
+        ]);
 
-        let error = RouterStartupConfig::from_args(args)
-            .err()
-            .expect("Raw QUIC must reject a WebTransport-only trust option");
+        let RouterTunnelConfig::RawQuic(tunnel) = config.tunnel else {
+            panic!("default startup configuration must use Raw QUIC");
+        };
         assert_eq!(
-            error.to_string(),
-            "--upstream-tls-cert-path is only supported with --tunnel-protocol=webtransport"
+            tunnel.tls_cert_pem.as_deref(),
+            Some(cert_pem.as_slice()),
+            "the serving identity certificate must stay worker-facing"
+        );
+        assert_eq!(
+            tunnel.upstream_tls_cert_pem.as_deref(),
+            Some(&b"upstream-ca-bytes"[..]),
+            "the explicit CA bundle must configure the upstream Raw QUIC client"
         );
     }
 
