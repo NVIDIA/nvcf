@@ -300,7 +300,7 @@ func requireScopes(requiredScopes Scopes, scopeRequirement ScopeRequirement) fun
 			claims, ok := r.Context().Value(claimsContextKey).(jwt.MapClaims)
 			if !ok {
 				// API keys carry no scopes.
-				if IsPDPAuthorized(parentCtx) {
+				if isPDPAuthorized(parentCtx) {
 					next.ServeHTTP(w, r)
 					return
 				}

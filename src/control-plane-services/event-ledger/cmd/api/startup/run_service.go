@@ -288,30 +288,24 @@ func runService(cfg config.Config) error {
 				}
 			}
 
-			// Create Policy middleware with the client
-			// The underlying HTTP client will be refreshed automatically when credentials change
-			policyMiddleware := middleware.NewPolicyMiddleware(
+			var jwtOpts *middleware.JWTParserOptions
+			if cfg.Auth.JWKSetUrl != "" {
+				opts := middleware.NewJWTParserOptions(cfg.Auth.JWKSetUrl, nil, cacheDuration, &cfg.HTTP)
+				opts.Issuer = cfg.Auth.Issuer
+				opts.Audience = cfg.Auth.Audience
+				jwtOpts = &opts
+			}
+
+			requireLocalScopeCheck = cfg.SelfManaged
+
+			authRouter.Use(middleware.NewAuthMiddleware(
 				policyClient,
 				"nv-cloud-functions",
+				jwtOpts,
+				jwkCache,
+				cfg.SelfManaged,
 				logger,
-			)
-
-			var jwtMiddleware mux.MiddlewareFunc
-			if cfg.Auth.JWKSetUrl != "" {
-				jwtOpts := middleware.NewJWTParserOptions(cfg.Auth.JWKSetUrl, nil, cacheDuration, &cfg.HTTP)
-				jwtOpts.Issuer = cfg.Auth.Issuer
-				jwtOpts.Audience = cfg.Auth.Audience
-				jwtMiddleware = middleware.NewParseJWTMiddleware(jwtOpts, jwkCache)
-			}
-
-			jwtPath := jwtMiddleware
-			if !cfg.SelfManaged && jwtMiddleware != nil {
-				jwtPath = middleware.ChainMiddleware(jwtMiddleware, policyMiddleware)
-			} else if cfg.SelfManaged {
-				requireLocalScopeCheck = true
-			}
-
-			authRouter.Use(middleware.NewDualAuthMiddleware(jwtPath, policyMiddleware))
+			))
 		default:
 			// This should never be reached since ValidateAuthConfig handles invalid providers
 			logger.Error("auth is enabled but no valid auth provider was provided")

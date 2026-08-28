@@ -28,6 +28,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/control-plane-services/event-ledger/internal/policy"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/mux"
+	"github.com/lestrrat-go/jwx/v2/jwk"
 	"github.com/uptrace/opentelemetry-go-extra/otelzap"
 	"go.uber.org/zap"
 
@@ -182,7 +183,7 @@ func mergePolicyClaims(jwtClaims map[string]interface{}, authResponse PolicyAuth
 	return claims
 }
 
-func NewPolicyMiddleware(policyClient policy.Authorizer, serviceName string, logger *otelzap.Logger) mux.MiddlewareFunc {
+func newPolicyMiddleware(policyClient policy.Authorizer, serviceName string, logger *otelzap.Logger) mux.MiddlewareFunc {
 	if policyClient == nil {
 		if logger != nil {
 			logger.Error("policy client is nil - denying requests")
@@ -322,7 +323,7 @@ func NewPolicyMiddleware(policyClient policy.Authorizer, serviceName string, log
 			// 9. Authorization succeeded - enrich context with user info
 			logger.InfoContext(traceCtx, "policy: authorization successful")
 
-			var requestCtx = MarkPDPAuthorized(r.Context())
+			var requestCtx = markPDPAuthorized(r.Context())
 			// Create enriched context
 			if authResponse.ActorID != "" {
 				requestCtx = context.WithValue(requestCtx, policyActorIDContextKey, authResponse.ActorID)
@@ -348,6 +349,73 @@ func NewPolicyMiddleware(policyClient policy.Authorizer, serviceName string, log
 			// Tracing is now handled by external library
 			r = r.WithContext(requestCtx)
 			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+const pdpAuthorizedContextKey contextKey = "pdp_authorized"
+
+func markPDPAuthorized(ctx context.Context) context.Context {
+	return context.WithValue(ctx, pdpAuthorizedContextKey, true)
+}
+
+func isPDPAuthorized(ctx context.Context) bool {
+	authorized, ok := ctx.Value(pdpAuthorizedContextKey).(bool)
+	return ok && authorized
+}
+
+func bearerToken(r *http.Request) string {
+	authHeader := r.Header.Get("Authorization")
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		return ""
+	}
+	return strings.TrimPrefix(authHeader, "Bearer ")
+}
+
+func chainMiddleware(first, second mux.MiddlewareFunc) mux.MiddlewareFunc {
+	return func(next http.Handler) http.Handler {
+		return first(second(next))
+	}
+}
+
+// NewAuthMiddleware dispatches each request to one of two authorization paths
+// based on whether the bearer token is JWT-shaped.
+//
+// A JWT is always verified locally against jwtOpts first. In self-managed
+// deployments that is the entire check: the caller's per-route scope
+// requirement then decides access, and the token never reaches policyClient.
+// In managed deployments, the verified JWT is additionally sent to
+// policyClient for an allow/deny decision.
+//
+// Anything else is treated as an opaque API key and sent to policyClient
+// directly. policyClient's evaluation contract only accepts an API key, which
+// is why a JWT cannot be routed through it in self-managed deployments.
+func NewAuthMiddleware(policyClient policy.Authorizer, serviceName string, jwtOpts *JWTParserOptions, jwkCache *jwk.Cache, selfManaged bool, logger *otelzap.Logger) mux.MiddlewareFunc {
+	apiKeyAuth := newPolicyMiddleware(policyClient, serviceName, logger)
+
+	var jwtVerify mux.MiddlewareFunc
+	if jwtOpts != nil {
+		jwtVerify = NewParseJWTMiddleware(*jwtOpts, jwkCache)
+	}
+	if jwtVerify == nil {
+		return apiKeyAuth
+	}
+
+	jwtAuth := jwtVerify
+	if !selfManaged {
+		jwtAuth = chainMiddleware(jwtVerify, apiKeyAuth)
+	}
+
+	return func(next http.Handler) http.Handler {
+		jwtChain := jwtAuth(next)
+		apiKeyChain := apiKeyAuth(next)
+
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if isJWTShapedToken(bearerToken(r)) {
+				jwtChain.ServeHTTP(w, r)
+				return
+			}
+			apiKeyChain.ServeHTTP(w, r)
 		})
 	}
 }
