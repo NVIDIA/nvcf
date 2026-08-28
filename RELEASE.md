@@ -112,7 +112,11 @@ does not use that release model.
 `workflow_dispatch` requires GitHub write access to the repository. In this
 repository that access is granted through organization team membership:
 maintainers (`NVIDIA/nvcf-dev` and `NVIDIA/nvcf-admin`) can cut a release
-branch for `nvca` or one of the three stacks; an external contributor with
+branch. Only `nvca` and `nvcf-self-managed-stack` have a dedicated
+`workflow_dispatch` operation; for `nvcf-compute-plane-stack` and
+`nvcf-observability-stack`, a maintainer runs
+`tools/ci/github-release branch-cut --service <id>` directly, since no CI
+job wires up that operation for them yet. An external contributor with
 a fix for an already-cut release branch needs a maintainer to either create
 the branch or merge a
 pull request that targets an existing one. Branch-cut operations
