@@ -440,10 +440,13 @@ Supported tag formats:
 
 Version precedence, lowest to highest: `3.4.0-rc.1` < `3.4.0`.
 
-Creating tags: do not. Release automation cuts the tag when a `feat`, `fix`,
-or `perf` commit touching this subtree merges to `main`. See
-[RELEASE.md](../../../RELEASE.md) at the repository root for the full model,
-including how to hand-cut a patch on a maintenance branch.
+Creating tags on `main`: do not. Release automation cuts the tag when a
+`feat`, `fix`, or `perf` commit touching this subtree merges to `main`.
+
+On a `release-*` maintenance branch there is no automation, so a maintainer
+does create and push the patch tag by hand. See
+[RELEASE.md](../../../RELEASE.md) at the repository root for that procedure
+and the full model.
 
 NVCA previously cut `-dev.N` prereleases from a `VERSION` file on every push
 to `main`. That model is retired: the `VERSION` file is gone and the existing
