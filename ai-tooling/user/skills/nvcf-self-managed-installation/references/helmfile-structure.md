@@ -209,7 +209,7 @@ repository, set the generated worker sidecar image explicitly:
 ```yaml
 api:
   env:
-    NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE: <registry>/<repository>/pylon:0.2.1
+    NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE: <registry>/<repository>/pylon:0.14.1
 ```
 
 Render and apply the updated control-plane environment, then refresh every
