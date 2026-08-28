@@ -20,10 +20,10 @@ kind: ConfigMap
 metadata:
   name: dynamo-operator-config
   labels:
-    helm.sh/chart: dynamo-operator-1.2.1
+    helm.sh/chart: dynamo-operator-1.4.1
     app.kubernetes.io/name: dynamo-operator
     app.kubernetes.io/instance: dynamo-operator
-    app.kubernetes.io/version: "1.2.1"
+    app.kubernetes.io/version: "1.4.1"
     app.kubernetes.io/managed-by: Helm
 data:
   config.yaml: |
@@ -44,11 +44,15 @@ data:
     orchestrators:
       kaiScheduler:
         enabled: false
+      volcanoScheduler:
+        enabled: false
       grove:
         enabled: true
         terminationDelay: "4h"
     infrastructure:
       natsAddress: "nats://dynamo-operator-nats.dynamo-system.svc.cluster.local:4222"
+    serviceMesh:
+      enabled: false
     rbac:
       plannerClusterRoleName: dynamo-operator-planner
       dgdrProfilingClusterRoleName: dynamo-operator-dgdr-profiling

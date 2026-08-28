@@ -1,12 +1,12 @@
 ---
-# Source: dynamo-platform/charts/dynamo-operator/templates/gpu-discovery-rbac.yaml
-# Grants the operator read-only node access for GPU hardware discovery.
+# Source: dynamo-platform/charts/dynamo-operator/templates/topology-label-rbac.yaml
+# Grants the operator read-only node access for topology label copy.
 # Nodes are cluster-scoped resources that cannot be granted via a namespace-scoped Role,
-# so they are always provided as a dedicated ClusterRole when GPU discovery is enabled.
+# so this is always provided as a dedicated ClusterRole.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: dynamo-operator-dynamo-system-gpu-discovery
+  name: dynamo-operator-dynamo-system-topology-label
   labels:
     helm.sh/chart: dynamo-operator-1.4.1
     app.kubernetes.io/name: dynamo-operator
@@ -16,16 +16,13 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["nodes"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["get", "list"]
+    verbs: ["get"]
 ---
-# Source: dynamo-platform/charts/dynamo-operator/templates/gpu-discovery-rbac.yaml
+# Source: dynamo-platform/charts/dynamo-operator/templates/topology-label-rbac.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: dynamo-operator-dynamo-system-gpu-discovery
+  name: dynamo-operator-dynamo-system-topology-label
   labels:
     helm.sh/chart: dynamo-operator-1.4.1
     app.kubernetes.io/name: dynamo-operator
@@ -35,14 +32,14 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: dynamo-operator-dynamo-system-gpu-discovery
+  name: dynamo-operator-dynamo-system-topology-label
 subjects:
   - kind: ServiceAccount
     name: dynamo-operator-controller-manager
     namespace: dynamo-system
 ---
-# Source: dynamo-platform/charts/dynamo-operator/templates/gpu-discovery-rbac.yaml
-# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# Source: dynamo-platform/charts/dynamo-operator/templates/topology-label-rbac.yaml
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
