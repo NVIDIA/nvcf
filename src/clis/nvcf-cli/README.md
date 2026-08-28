@@ -618,7 +618,9 @@ export NVCF_TOKEN="nvapi-your-function-creation-token"
   --inference-url "/" \
   --inference-port 8000 \
   --function-type "LLM" \
-  --llm-model "name=dummy-model,uris=/v1/chat/completions|/v1/responses|/v1/embeddings,routingMethod=round_robin,tokenRateLimit=1000-S"
+  --llm-model "name=dummy-model,uris=/v1/chat/completions|/v1/responses|/v1/embeddings,routingMethod=round_robin,tokenRateLimit=1000-S" \
+  --llm-default-priority 7 \
+  --llm-per-account-priority "nca-id:3"
 ```
 
 **Required flags:**
@@ -637,6 +639,14 @@ export NVCF_TOKEN="nvapi-your-function-creation-token"
   "functionType": "LLM",
   "description": "Example LLM function from JSON config",
   "tags": ["example", "demo"],
+  "llmInvocationConfig": {
+    "priority": {
+      "defaultPriority": 7,
+      "perAccountPriority": {
+        "nca-id": 3
+      }
+    }
+  },
   "health": {
     "protocol": "HTTP",
     "uri": "/health",
@@ -673,6 +683,8 @@ request.
 `tokenRateLimit` supports positive integer token limits for `S`, `M`, `H`, `D`, and `W`.
 Use `1000-S` for a single inline CLI limit. Use JSON input for combined limits, such as `1000-S,5000-M,100000-H,500000-D,1000000-W`, because inline model specs use commas as field separators.
 Supported LLM paths are `/v1/chat/completions`, `/v1/responses`, and `/v1/embeddings`.
+
+Request priorities are unsigned 32-bit integers from `0` through `4294967295`. Lower values have higher priority, and `0` is the highest priority. An explicit `0` is distinct from an omitted priority. `--llm-per-account-priority` is repeatable and requires `--llm-default-priority` or a `defaultPriority` value in the input file.
 
 #### **Deploy a Function** *Uses `NVCF_TOKEN` (with `NVCF_API_KEY` fallback)*
 
@@ -746,6 +758,19 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"  # optional fallback
   --version-id "ver-12345678-1234-1234-1234-123456789abc" \
   --llm-model-update "name=dummy-model,routingMethod=round_robin,tokenRateLimit=1000-S"
 
+# Replace the function-level request priority configuration
+./nvcf-cli function update \
+  --function-id "func-12345678-1234-1234-1234-123456789abc" \
+  --version-id "ver-12345678-1234-1234-1234-123456789abc" \
+  --llm-default-priority 7 \
+  --llm-per-account-priority "nca-id:3"
+
+# Clear the function-level request priority configuration
+./nvcf-cli function update \
+  --function-id "func-12345678-1234-1234-1234-123456789abc" \
+  --version-id "ver-12345678-1234-1234-1234-123456789abc" \
+  --clear-llm-priority
+
 # Update function deployment specifications
 ./nvcf-cli function deploy update \
   --function-id "func-12345678-1234-1234-1234-123456789abc" \
@@ -765,6 +790,11 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"  # optional fallback
   "functionId": "func-12345678-1234-1234-1234-123456789abc",
   "versionId": "ver-12345678-1234-1234-1234-123456789abc",
   "tags": ["production", "ml-model", "updated"],
+  "llmInvocationConfig": {
+    "priority": {
+      "defaultPriority": 0
+    }
+  },
   "modelUpdates": [
     {
       "modelName": "dummy-model",
@@ -776,6 +806,8 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"  # optional fallback
   ]
 }
 ```
+
+An update that includes `llmInvocationConfig` replaces the complete function-level priority configuration. Specify every default and per-account value to retain. Omitting the field preserves the current configuration. Use `--clear-llm-priority` or set `"llmInvocationConfig": {}` in the update file to clear it.
 
 **Update Deployment JSON format (`update-deployment.json`):**
 ```json

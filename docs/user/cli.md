@@ -690,7 +690,9 @@ API key, which `api-key generate` mints automatically alongside the function key
   --inference-url "/" \
   --inference-port 8000 \
   --function-type LLM \
-  --llm-model "name=dummy-model,uris=/v1/chat/completions|/v1/responses|/v1/embeddings,routingMethod=round_robin,tokenRateLimit=1000-S"
+  --llm-model "name=dummy-model,uris=/v1/chat/completions|/v1/responses|/v1/embeddings,routingMethod=round_robin,tokenRateLimit=1000-S" \
+  --llm-default-priority 7 \
+  --llm-per-account-priority "nca-id:3"
 ```
 
 All `function create` flags:
@@ -716,6 +718,8 @@ All `function create` flags:
 | `--tags` | Comma-separated tags |
 | `--models` | Model artifacts in `name:version:uri` format (repeatable) |
 | `--llm-model` | LLM model config in `name=MODEL,uris=URI\|URI,routingMethod=round_robin\|power_of_two\|groq_multiregion\|pulsar\|random,tokenRateLimit=LIMIT` format (repeatable). Token limits use `<value>-<unit>` with `S`, `M`, `H`, `D`, or `W`, for example `1000-S`. Use JSON input for combined token limits because inline model specs use commas as field separators. |
+| `--llm-default-priority` | Function-level default request priority. Lower values have higher priority, and `0` is highest. |
+| `--llm-per-account-priority` | Per-account override in `<nca-id>:<priority>` format (repeatable, maximum 64). Requires a default priority. |
 | `--resources` | Resource artifacts in `name:version:uri` format (repeatable) |
 | `--helm-chart` | Helm chart specification |
 | `--helm-chart-service` | Helm chart service name |
@@ -750,6 +754,14 @@ LLM functions use `functionType: "LLM"` and define model routing metadata under 
   "inferenceUrl": "/",
   "inferencePort": 8000,
   "functionType": "LLM",
+  "llmInvocationConfig": {
+    "priority": {
+      "defaultPriority": 7,
+      "perAccountPriority": {
+        "nca-id": 3
+      }
+    }
+  },
   "models": [
     {
       "name": "dummy-model",
@@ -766,6 +778,8 @@ LLM functions use `functionType: "LLM"` and define model routing metadata under 
 For LLM models, `llmConfig.routingMethod` accepts `round_robin`, `power_of_two`, `groq_multiregion`, `pulsar`, or `random`.
 Supported LLM paths are `/v1/chat/completions`, `/v1/responses`, and `/v1/embeddings`.
 `llmConfig.tokenRateLimit` accepts one or more comma-separated positive integer token limits in `<value>-<unit>` format. Supported units are `S` (seconds), `M` (minutes), `H` (hours), `D` (days), and `W` (weeks). Use `1000-S` for a single limit, or `1000-S,5000-M,100000-H,500000-D,1000000-W` for a combined limit with distinct units. Use JSON input for combined limits because inline CLI model specs use commas as field separators.
+
+Request priorities are unsigned 32-bit integers from `0` through `4294967295`. Lower values have higher priority, and an explicit `0` is distinct from an omitted priority. If `perAccountPriority` has entries, `defaultPriority` is required.
 
 #### Deploy Function
 
@@ -889,6 +903,19 @@ Example deployment JSON:
   --version-id <version-id> \
   --llm-model-update "name=dummy-model,routingMethod=round_robin,tokenRateLimit=1000-S"
 
+# Replace the function-level request priority configuration
+./nvcf-cli function update \
+  --function-id <function-id> \
+  --version-id <version-id> \
+  --llm-default-priority 7 \
+  --llm-per-account-priority "nca-id:3"
+
+# Clear the function-level request priority configuration
+./nvcf-cli function update \
+  --function-id <function-id> \
+  --version-id <version-id> \
+  --clear-llm-priority
+
 # Update from JSON file
 ./nvcf-cli function update \
   --function-id <function-id> \
@@ -911,6 +938,16 @@ LLM model updates can also be provided in the input file:
       }
     }
   ]
+}
+```
+
+`llmInvocationConfig` is a full replacement when it is present in an update. Specify every default and per-account value to retain. Omitting the field preserves the current configuration. Use `--clear-llm-priority` or an empty `llmInvocationConfig` object to clear it:
+
+```json
+{
+  "functionId": "<function-id>",
+  "versionId": "<version-id>",
+  "llmInvocationConfig": {}
 }
 ```
 

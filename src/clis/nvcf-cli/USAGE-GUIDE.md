@@ -752,7 +752,9 @@ curl -X POST https://api.nvcf.nvidia.com/v2/nvcf/accounts/nvcf-default/registry-
   --inference-port 8000 \
   --inference-url / \
   --function-type LLM \
-  --llm-model "name=dummy-model,uris=/v1/chat/completions|/v1/responses|/v1/embeddings,routingMethod=round_robin,tokenRateLimit=1000-S"
+  --llm-model "name=dummy-model,uris=/v1/chat/completions|/v1/responses|/v1/embeddings,routingMethod=round_robin,tokenRateLimit=1000-S" \
+  --llm-default-priority 7 \
+  --llm-per-account-priority "nca-id:3"
 ```
 
 **Secrets Format:**
@@ -799,6 +801,14 @@ curl -X POST https://api.nvcf.nvidia.com/v2/nvcf/accounts/nvcf-default/registry-
   "inferenceUrl": "/",
   "inferencePort": 8000,
   "functionType": "LLM",
+  "llmInvocationConfig": {
+    "priority": {
+      "defaultPriority": 7,
+      "perAccountPriority": {
+        "nca-id": 3
+      }
+    }
+  },
   "models": [
     {
       "name": "dummy-model",
@@ -816,6 +826,8 @@ For LLM models, `llmConfig.routingMethod` accepts the API/auth spellings
 `round_robin`, `power_of_two`, `groq_multiregion`, `pulsar`, or `random`. The
 CLI validates these values before sending the create request.
 Supported LLM paths are `/v1/chat/completions`, `/v1/responses`, and `/v1/embeddings`.
+
+Request priorities are unsigned 32-bit integers from `0` through `4294967295`. Lower values have higher priority, and `0` is the highest priority. An explicit `0` is distinct from an omitted priority. Per-account overrides require a default priority.
 
 ### 5. List Functions
 
@@ -1036,6 +1048,29 @@ When `--json` is set:
   --function-id "550e8400-e29b-41d4-a716-446655440000" \
   --version-id "01234567-89ab-cdef-0123-456789abcdef" \
   --llm-model-update "name=dummy-model,routingMethod=round_robin,tokenRateLimit=1000-S"
+
+# Replace the function-level request priority configuration
+./nvcf-cli function update \
+  --function-id "550e8400-e29b-41d4-a716-446655440000" \
+  --version-id "01234567-89ab-cdef-0123-456789abcdef" \
+  --llm-default-priority 7 \
+  --llm-per-account-priority "nca-id:3"
+
+# Clear the function-level request priority configuration
+./nvcf-cli function update \
+  --function-id "550e8400-e29b-41d4-a716-446655440000" \
+  --version-id "01234567-89ab-cdef-0123-456789abcdef" \
+  --clear-llm-priority
+```
+
+When an update includes `llmInvocationConfig`, it replaces the complete function-level priority configuration. Specify every default and per-account value to retain. Omitting the field preserves the current configuration. An empty object clears it:
+
+```json
+{
+  "functionId": "550e8400-e29b-41d4-a716-446655440000",
+  "versionId": "01234567-89ab-cdef-0123-456789abcdef",
+  "llmInvocationConfig": {}
+}
 ```
 
 ### Delete Function or Deployment
@@ -1373,4 +1408,3 @@ nvcf-cli task delete    # DELETE - permanent
 ```
 
 `task delete` clears the saved task from state when it matches.
-

@@ -303,6 +303,9 @@ func TestLoadCreateConfigAppendsLLMModelFlag(t *testing.T) {
 		llmModels []string
 		resources []string
 
+		llmDefaultPriority      uint32
+		llmPerAccountPriorities []string
+
 		rateLimit         string
 		rateLimitExempted []string
 		rateLimitSync     bool
