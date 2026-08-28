@@ -40,7 +40,8 @@ make setup-gateway-api
 This will:
 1. Install Gateway API CRDs (v1.2.1)
 2. Install/upgrade Envoy Gateway v1.5.4 from OCI registry (`oci://docker.io/envoyproxy/gateway-helm`) in the `envoy-gateway-system` namespace
-3. Apply GatewayClass and Gateway resources
+3. Apply GatewayClass and Gateway resources, including the HTTPS gRPC and UDP
+   reverse-tunnel listeners used by split-cluster LLM tests
 4. Verify GatewayClass is available
 
 ## Verification
@@ -140,6 +141,8 @@ If `make validate-gateway` fails:
 
 - `gatewayclass.yaml`: Defines the Envoy Gateway GatewayClass (`eg`)
 - `gateway.yaml`: Defines the default Gateway resource (`shared-gw`) in `envoy-gateway-system` namespace
+- `gateway-grpc.yaml`: Defines the gRPC Gateways, including the LLM HTTPS
+  listener on port 50071 and separate QUIC UDP listener on port 50072
 - `kustomization.yaml`: Kustomize configuration for easy deployment
 
 ## Installation Details
