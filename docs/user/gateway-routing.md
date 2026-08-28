@@ -496,8 +496,12 @@ To use a different Gateway API implementation instead of Envoy Gateway:
 
 4. Create a `Gateway` with `http` (port 80), `tcp` (port 10081), and `nats`
    (port 4222) listeners. Add `worker-tcp` (port 10086) only when enabling
-   split or multi-cluster gRPC invocation. Add `llm-grpc` (TCP port 50071) and
-   `llm-quic` (UDP port 50072) when remote LLM workers use the Gateway.
+   split or multi-cluster gRPC invocation. When remote LLM workers use the
+   Gateway securely, add `llm-grpc` as an HTTPS listener on port 50071 with a
+   TLS certificate reference, plus `llm-quic` as a UDP listener on port 50072.
+   The rendered `GRPCRoute` attaches to the HTTPS listener. Use a TCP
+   `llm-grpc` listener only for the explicit plaintext development mode with
+   `llmRequestRouter.grpcTls.allowInsecureHttp: true`.
 
 5. Update your install configuration to reference your Gateway:
 
@@ -763,6 +767,7 @@ kubectl -n "$LLM_QUIC_GATEWAY_NAMESPACE" get udproute llm-worker-quic \
 kubectl -n nvcf get referencegrant allow-llm-worker-routes -o yaml
 # cert-manager mode only
 kubectl -n "$LLM_GRPC_GATEWAY_NAMESPACE" get certificate llm-grpc-tls
+# secure mode only (grpcTls.enabled: true)
 kubectl -n "$LLM_GRPC_GATEWAY_NAMESPACE" get backendtrafficpolicy \
   llm-worker-grpc-streams \
   -o jsonpath='{.spec.timeout.http.requestTimeout}{"\n"}'
@@ -772,9 +777,11 @@ kubectl -n nvcf get service llm-request-router-backend-router \
 
 Each route parent must report `Accepted=True` and `ResolvedRefs=True`. The
 Service type must remain `ClusterIP`, with TCP port `50071` and UDP port
-`50072`. In cert-manager mode the dedicated certificate must be Ready, and
-the request timeout must be `0s`. This is the Envoy Gateway v1.5-compatible
-setting that disables the default 15-second timeout for streaming gRPC calls.
+`50072`. In cert-manager mode the dedicated certificate must be Ready. In
+secure mode the request timeout must be `0s`; plaintext mode does not render
+the `BackendTrafficPolicy`. The zero timeout is the Envoy Gateway
+v1.5-compatible setting that disables the default 15-second timeout for
+streaming gRPC calls.
 Also wait for each referenced Gateway to report
 `Programmed=True` and confirm that its status contains an external address.
 Verify the public certificate and ALPN without disabling validation:
