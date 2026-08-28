@@ -11,6 +11,12 @@ Stargate Kubernetes backend router for worker gRPC registration and reverse
 QUIC tunnels through a shared Gateway or load balancer. The backend router
 selects the correct Stargate pod from gRPC authority and QUIC SNI.
 
+The `llm-request-router` Service carries API Gateway HTTP requests and honors
+pod readiness. The `llm-request-router-headless` Service publishes gRPC and
+QUIC addresses for warming and ready pods, so Pylons can register and establish
+tunnels before a new replica receives request traffic. The backend router and
+direct multi-replica discovery use the headless Service.
+
 A Vault Agent sidecar is configured to fetch a service token from a Vault or
 OpenBao backend. The application reads `nvcfApiToken` from
 `/vault/secrets/secrets.json` and attaches it as a Bearer token to outgoing
@@ -115,6 +121,7 @@ Important settings to review before deployment:
 - `llmRequestRouter.replicaCount`, resource requests, and limits for your environment
 - `llmRequestRouter.service.*` for HTTP, gRPC, metrics, and headless service ports
 - `llmRequestRouter.backendRouter.*` for multi-replica worker gRPC and reverse-tunnel routing
+- `llmRequestRouter.readiness.warmupMs` for the startup readiness delay in milliseconds (default: `60000`; `0` disables the timed delay)
 - `llmRequestRouter.metrics.enabled` to expose the metrics port on the Service (default: `false`)
 - `llmRequestRouter.metrics.serviceMonitor.enabled` to create a Prometheus `ServiceMonitor` (requires `metrics.enabled`)
 - `llmRequestRouter.certificate.*` to let cert-manager issue the Stargate QUIC server certificate
@@ -147,11 +154,12 @@ chart appVersion. That image must contain
 `/usr/local/bin/stargate-k8s-router`; override `backendRouter.image.*` only to
 validate a different Stargate build.
 
-The backend router watches EndpointSlices and publishes those ready targets
-directly through `WatchStargates`. It uses the same snapshot for gRPC and QUIC
-forwarding, so a removed or replaced Pod cannot remain as a discovery-only
-target. The chart creates a dedicated ServiceAccount by default and binds a
-namespaced Role to it when
+The backend router watches the headless Service's EndpointSlices and publishes
+their non-terminating targets directly through `WatchStargates`, including
+warming pods published by `publishNotReadyAddresses`. It uses the same snapshot
+for gRPC and QUIC forwarding, so a removed or replaced Pod cannot remain as a
+discovery-only target. The chart creates a dedicated ServiceAccount by default
+and binds a namespaced Role to it when
 `llmRequestRouter.rbac.create=true`. When
 `llmRequestRouter.backendRouter.serviceAccount.create=false`, set
 `llmRequestRouter.backendRouter.serviceAccount.name` to an existing account.

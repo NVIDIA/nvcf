@@ -911,6 +911,8 @@ llmRequestRouter:
   {{- end }}
   service:
     grpcPort: {{ $llmRequestRouterGrpcPort }}
+  readiness:
+    warmupMs: {{ dig "addons" "llm" "requestRouter" "readiness" "warmupMs" 60000 .Values }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
     {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
@@ -1282,8 +1284,8 @@ nvcfUi:
       - name: llm-request-router
         namespace: nvcf
         endpoints:
-          - llm-request-router-headless.nvcf.svc.cluster.local:8000/healthz
-          - llm-request-router-headless.nvcf.svc.cluster.local:8000/readyz
+          - llm-request-router.nvcf.svc.cluster.local:8000/healthz
+          - llm-request-router.nvcf.svc.cluster.local:8000/readyz
       {{- end }}
       - name: reval
         namespace: nvcf

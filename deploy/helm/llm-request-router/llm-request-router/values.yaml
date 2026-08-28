@@ -252,6 +252,10 @@ llmRequestRouter:
   shutdown:
     drainTimeoutMs: 30000
 
+  readiness:
+    # Set to 0 to disable the startup warm-up.
+    warmupMs: 60000
+
   loadBalancer:
     configPath: ""
     config: ""
