@@ -80,7 +80,9 @@ impl StargateGrpcEndpoint {
         let mut endpoint = match (dial_uri.scheme_str(), grpc_tls_ca_cert_pem) {
             (Some("https"), Some(ca_cert_pem)) => Endpoint::from(dial_uri)
                 .tls_config(
-                    ClientTlsConfig::new().ca_certificate(Certificate::from_pem(ca_cert_pem)),
+                    ClientTlsConfig::new()
+                        .with_enabled_roots()
+                        .ca_certificate(Certificate::from_pem(ca_cert_pem)),
                 )
                 .context("configure custom CA for stargate gRPC endpoint")?,
             _ => Endpoint::new(dial_uri).context("configure stargate gRPC endpoint")?,

@@ -59,7 +59,7 @@ struct Args {
     /// Path to the QUIC server identity in direct mode or trust anchor in reverse mode
     #[arg(long, env = "STARGATE_TLS_CERT_PATH", value_name = "PATH")]
     tls_cert_path: Option<String>,
-    /// Path to a PEM CA bundle used to verify Stargate gRPC HTTPS endpoints
+    /// Optional PEM CA bundle override used to verify Stargate gRPC HTTPS endpoints
     #[arg(long, env = "STARGATE_GRPC_TLS_CA_CERT_PATH", value_name = "PATH")]
     grpc_tls_ca_cert_path: Option<String>,
     /// Path to the QUIC server private key in direct mode

@@ -20,19 +20,23 @@ closed, so an ordinary leaf renewal causes no traffic interruption.
 
 ## Scope
 
-Trust bundles do not reload yet. Pylon has two independent outbound trust
-inputs:
+Trust bundles do not reload yet. Pylon uses this outbound trust precedence:
 
-- `--grpc-tls-ca-cert-path` or `STARGATE_GRPC_TLS_CA_CERT_PATH` verifies the
-  Stargate gRPC HTTPS endpoint.
-- `--tls-cert-path` or `STARGATE_TLS_CERT_PATH` retains its existing QUIC
-  identity or trust meaning.
+- `--grpc-tls-ca-cert-path` or `STARGATE_GRPC_TLS_CA_CERT_PATH` is the optional
+  gRPC-specific override.
+- Reverse-mode Pylon otherwise reuses `--tls-cert-path` or
+  `STARGATE_TLS_CERT_PATH` for gRPC and QUIC trust.
+- When neither applies, gRPC HTTPS uses enabled system and public roots.
+
+Custom gRPC roots augment the enabled system and public roots. They do not
+replace them. Direct-mode Pylon uses `--tls-cert-path` as its QUIC server
+identity and never treats that identity as a gRPC CA bundle.
 
 Managed bundle mode explicitly points both settings at the same merged system
 and private CA file. This reuses CA roots only. It does not reuse or couple the
 gRPC NLB leaf certificate and the Kubernetes-internal QUIC leaf certificate.
-Pylon reads both trust bundles at startup, so changing the shared file requires
-a rolling restart of the worker pods.
+Pylon reads the selected trust inputs at startup, so changing the shared file
+requires a rolling restart of the worker pods.
 
 The current production gRPC design uses a public ACM certificate on the NLB TLS
 listener. It normally needs no custom gRPC CA bundle. A private-CA NLB listener

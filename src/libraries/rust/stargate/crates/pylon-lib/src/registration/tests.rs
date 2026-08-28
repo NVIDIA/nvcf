@@ -54,9 +54,9 @@ use super::urls::infer_upstream_http_base_url;
 use super::*;
 
 const TEST_WAIT: Duration = Duration::from_secs(1);
-const TEST_ROUTER_AUTHORITY: &str =
-    "stargate-0.llm-request-router-headless.nvcf.svc.cluster.local:50071";
+const TEST_ROUTER_AUTHORITY: &str = "router-0.router-headless.example.invalid:50071";
 const DEFAULT_ROOT_TEST_DIAL_URL_ENV: &str = "PYLON_DEFAULT_ROOT_TEST_DIAL_URL";
+const CUSTOM_ROOT_TEST_CA_PATH_ENV: &str = "PYLON_CUSTOM_ROOT_TEST_CA_PATH";
 
 type TestWatchStream =
     Pin<Box<dyn Stream<Item = Result<WatchStargatesResponse, Status>> + Send + 'static>>;
@@ -632,6 +632,74 @@ async fn https_without_custom_ca_uses_configured_native_roots() {
     assert!(
         output.status.success(),
         "default-root child test failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "default-root child test did not run exactly one test:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn custom_grpc_ca_augments_configured_native_roots() {
+    if let (Ok(dial_url), Ok(custom_ca_path)) = (
+        std::env::var(DEFAULT_ROOT_TEST_DIAL_URL_ENV),
+        std::env::var(CUSTOM_ROOT_TEST_CA_PATH_ENV),
+    ) {
+        let custom_ca = std::fs::read(custom_ca_path).expect("custom CA file should be readable");
+        let endpoint = StargateGrpcEndpoint::new(dial_url, "")
+            .expect("default-root test endpoint should build");
+        endpoint
+            .channel_endpoint(Some(&custom_ca))
+            .expect("augmented-root test endpoint should configure")
+            .connect()
+            .await
+            .expect("native root should remain enabled beside the custom CA");
+        return;
+    }
+
+    let server_ca = TestCertificateAuthority::new("default-roots-test-ca");
+    let custom_ca = TestCertificateAuthority::new("custom-roots-test-ca");
+    let server = TestTlsControlPlane::spawn(&server_ca, "localhost").await;
+    let server_ca_file = tempfile::NamedTempFile::new().expect("CA file should be created");
+    std::fs::write(server_ca_file.path(), server_ca.pem()).expect("CA file should be written");
+    let custom_ca_file = tempfile::NamedTempFile::new().expect("CA file should be created");
+    std::fs::write(custom_ca_file.path(), custom_ca.pem()).expect("CA file should be written");
+    let test_binary = std::env::current_exe().expect("test binary path should resolve");
+    let dial_url = server.dial_url.clone();
+    let server_ca_path = server_ca_file.path().to_path_buf();
+    let custom_ca_path = custom_ca_file.path().to_path_buf();
+
+    let output = tokio::task::spawn_blocking(move || {
+        Command::new(test_binary)
+            .args([
+                "--exact",
+                "registration::tests::custom_grpc_ca_augments_configured_native_roots",
+                "--nocapture",
+            ])
+            .env(DEFAULT_ROOT_TEST_DIAL_URL_ENV, dial_url)
+            .env(CUSTOM_ROOT_TEST_CA_PATH_ENV, custom_ca_path)
+            .env("SSL_CERT_FILE", server_ca_path)
+            .env_remove("SSL_CERT_DIR")
+            .output()
+            .expect("augmented-root child test should run")
+    })
+    .await
+    .expect("augmented-root child test should join");
+
+    assert!(
+        output.status.success(),
+        "augmented-root child test failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "augmented-root child test did not run exactly one test:\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
