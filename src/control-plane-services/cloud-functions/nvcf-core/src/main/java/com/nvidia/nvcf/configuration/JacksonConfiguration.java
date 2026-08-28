@@ -54,6 +54,7 @@ public class JacksonConfiguration {
                 .changeDefaultPropertyInclusion(v -> v.withValueInclusion(JsonInclude.Include.NON_NULL))
                 .enable(StreamWriteFeature.STRICT_DUPLICATE_DETECTION)
                 .enable(MapperFeature.ACCEPT_CASE_INSENSITIVE_ENUMS)
+                .disable(DeserializationFeature.ACCEPT_FLOAT_AS_INT)
                 .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
                 .enable(EnumFeature.READ_UNKNOWN_ENUM_VALUES_USING_DEFAULT_VALUE)
                 .build();
