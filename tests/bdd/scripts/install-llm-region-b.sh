@@ -98,7 +98,8 @@ if [[ -z "${control_plane_ip}" ]]; then
   exit 1
 fi
 
-kubectl --context "${compute_context}" apply -f - <<YAML
+for alias_context in "${control_context}" "${compute_context}"; do
+  kubectl --context "${alias_context}" apply -f - <<YAML
 apiVersion: v1
 kind: Service
 metadata:
@@ -131,6 +132,7 @@ subsets:
         port: 50072
         protocol: UDP
 YAML
+done
 
 kubectl --context "${control_context}" rollout status \
   statefulset/llm-request-router-region-b --namespace "${namespace}" --timeout=10m

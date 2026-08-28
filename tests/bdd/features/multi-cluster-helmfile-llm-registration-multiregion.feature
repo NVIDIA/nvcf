@@ -23,7 +23,8 @@ Feature: Register an LLM worker securely with routers in two local regions
         | addons.llm.requestRouter.discovery.remoteWatchUrls[0]             | https://region-b-watch.nvcf.svc.cluster.local:50071                                    |
         | addons.llm.requestRouter.grpcTls.dnsNames[1]                      | region-b-watch.nvcf.svc.cluster.local                                                  |
         | addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress       | https://llm-request-router.nvcf.svc.cluster.local:50071                                |
-        | addons.llm.pki.dnsNames[2]                                        | *.llm-request-router-region-b-headless.nvcf.svc.cluster.local                          |
+        | addons.llm.pki.dnsNames[2]                                        | region-b-watch.nvcf.svc.cluster.local                                                  |
+        | addons.llm.pki.dnsNames[3]                                        | *.llm-request-router-region-b-headless.nvcf.svc.cluster.local                          |
         | observability.profile                                             | disabled                                                                               |
       And I prepare Helmfile environment "local-bdd-registration-multiregion" for stack "nvcf-compute-plane" from fixture "tests/bdd/fixtures/nvcf-compute-plane-local-bdd-multi.yaml" with values:
         | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
@@ -63,6 +64,9 @@ Feature: Register an LLM worker securely with routers in two local regions
       Then the command exit code should be 0
       When I run command "kubectl --context k3d-ncp-local-cp wait certificate llm-request-router-grpc-tls -n envoy-gateway-system --for=condition=Ready --timeout=5m"
       Then the command exit code should be 0
+      When I run command "kubectl --context k3d-ncp-local-cp get certificate llm-request-router-grpc-tls -n envoy-gateway-system -o jsonpath={.spec.dnsNames}"
+      Then the command exit code should be 0
+      And the command output should contain "region-b-watch.nvcf.svc.cluster.local"
       When I run command "kubectl --context k3d-ncp-local-cp rollout status deployment/llm-request-router -n nvcf --timeout=10m"
       Then the command exit code should be 0
 
@@ -82,7 +86,7 @@ Feature: Register an LLM worker securely with routers in two local regions
       # identities and never relies on a dashed-IP SRV alias.
       When I run command:
         """
-        /bin/bash -c 'set -eu; output=$(grpcurl -max-time 3 -cacert <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf -o jsonpath="{.data.ca\.crt}" | base64 -d) -authority region-b-watch.nvcf.svc.cluster.local -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates 2>&1 || true); printf "%s" "$output" | grep -Fq "llm-request-router-region-b-0"; printf "%s" "$output" | grep -Fq "llm-request-router-region-b-1"; printf "region-b-statefulset=2 tls=https\n"'
+        /bin/bash -c 'set -eu; output=$(grpcurl -max-time 3 -cacert <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf -o jsonpath="{.data.ca\.crt}" | base64 -d) -authority region-b-watch.nvcf.svc.cluster.local -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates 2>&1 || true); identities=$(printf "%s\n" "$output" | grep -Eo "llm-request-router-region-b-[0-9]+" | sort -u || true); expected=$(printf "llm-request-router-region-b-0\nllm-request-router-region-b-1\n"); [ "$identities" = "$expected" ]; count=$(printf "%s\n" "$identities" | grep -c .); [ "$count" -eq 2 ]; ! printf "%s" "$output" | grep -Eq "([0-9]{1,3}-){3}[0-9]{1,3}\."; printf "region-b-statefulset=%s tls=https\n" "$count"'
         """
       Then the command exit code should be 0
       And the command output should contain "region-b-statefulset=2 tls=https"
