@@ -18,6 +18,7 @@ release ?= llm-api-gateway
 namespace ?= nvcf
 helm_dir ?= ./llm-api-gateway
 values := $(helm_dir)/values.yaml
+request_router_helm_dir := ../llm-request-router/llm-request-router
 
 # OPTIONAL for deploy target: Path to an additional Helm values file.
 additional_values ?=
@@ -71,7 +72,13 @@ validate: template
 test: check-request-router-render
 
 check-request-router-render:
-	@test "$$(helm template $(release) $(helm_dir) --namespace $(namespace) --values $(values) --set llmApiGateway.image.repository=test | yq -r 'select(.kind == "ConfigMap" and .metadata.name == "$(release)") | .data.STARGATE_URL')" = "http://llm-request-router.nvcf.svc.cluster.local:8000"
+	@router_manifest="$$(helm template llm-request-router $(request_router_helm_dir) --namespace $(namespace) --set llmRequestRouter.image.repository=test)"; \
+	request_router_name="$$(printf '%s\n' "$$router_manifest" | yq -r 'select(.kind == "Service") | select(.spec.ports[]?.name == "http") | .metadata.name')"; \
+	request_router_namespace="$$(printf '%s\n' "$$router_manifest" | yq -r 'select(.kind == "Service") | select(.spec.ports[]?.name == "http") | .metadata.namespace')"; \
+	request_router_port="$$(printf '%s\n' "$$router_manifest" | yq -r 'select(.kind == "Service") | .spec.ports[]? | select(.name == "http") | .port')"; \
+	expected_url="http://$$request_router_name.$$request_router_namespace.svc.cluster.local:$$request_router_port"; \
+	actual_url="$$(helm template $(release) $(helm_dir) --namespace $(namespace) --values $(values) --set llmApiGateway.image.repository=test | yq -r 'select(.kind == "ConfigMap" and .metadata.name == "$(release)") | .data.STARGATE_URL')"; \
+	test "$$actual_url" = "$$expected_url"
 
 clean:
 	rm -rf ./packaged-charts bin

@@ -310,7 +310,6 @@ addons:
       chartPath: ""
       readiness:
         warmupMs: 60000
-
       workload:
         # Deployment matches managed NVCF. Existing installations can pin
         # StatefulSet and migrate workload kinds in a controlled maintenance
