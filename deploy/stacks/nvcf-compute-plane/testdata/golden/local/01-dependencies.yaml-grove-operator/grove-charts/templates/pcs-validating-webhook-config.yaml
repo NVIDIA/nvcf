@@ -5,7 +5,7 @@ kind: ValidatingWebhookConfiguration
 metadata:
   name: podcliqueset-validating-webhook
   labels:
-    chart: "grove-charts-v0.1.0-alpha.11"
+    chart: "grove-charts-v0.1.0-alpha.12"
     release: "grove-operator"
     app.kubernetes.io/component: operator-pcs-validating-webhook
     app.kubernetes.io/name: pcs-validating-webhook

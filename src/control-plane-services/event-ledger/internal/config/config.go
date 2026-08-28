@@ -180,8 +180,10 @@ type CassandraConfig struct {
 	NumConns           int      `mapstructure:"num-conns"`
 	PubKeyB64          string   `mapstructure:"pub-key-b64"`
 	PrivKeyB64         string   `mapstructure:"priv-key-b64"`
+	CACertB64          string   `mapstructure:"ca-cert-b64"`
 	PubKeyPath         string   `mapstructure:"pub-key-path"`
 	PrivKeyPath        string   `mapstructure:"priv-key-path"`
+	CACertPath         string   `mapstructure:"ca-cert-path"`
 	InsecureSkipVerify bool     `mapstructure:"insecure-skip-verify"`
 }
 

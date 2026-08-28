@@ -14,6 +14,7 @@ This repository ships:
 - Verified `jwker` binary and signed-package `kubectl` copied from downloader stages
 - Optional addons under `addons/` (e.g., LLS / TURN secret rotation)
 - An example Kubernetes Job manifest (`job.yaml`)
+- A Docker-based integration test for the helper functions (`tests/`)
 
 ## Prerequisites
 
@@ -70,6 +71,7 @@ Environment variables consumed by the entrypoint:
 | `DEFAULT_CASSANDRA_PASSWORD` | `ch@ng3m3` (override required) | See above |
 | `NVCF_API_SIDECARS_IMAGE_PULL_SECRET` | `""` | Image pull secret name passed to the NVCF API sidecar mount |
 | `MIGRATIONS_ALLOW_FAILURES` | `false` | Emergency rollback only. When `true`, the entrypoint exits 0 even if core migrations or opted-in addons failed. Default behavior fails the Job non-zero so a misconfigured deployment blocks the Helm hook Job instead of silently leaving OpenBao in a partial state. |
+| `BAO_KV_UPGRADE_RETRY_BUDGET_SECONDS` | `60` | Total time `enable_secrets_mount` waits for a kv-v2 mount's storage upgrade (HTTP 400 "Upgrading from non-versioned to versioned data") to finish before failing the migration. Errors outside that wait fail immediately. |
 
 ### Example Kubernetes Job
 
