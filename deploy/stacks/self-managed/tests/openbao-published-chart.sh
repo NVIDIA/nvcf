@@ -74,8 +74,9 @@ expected_password="$(yq -r '
   select(.name == "DEFAULT_CASSANDRA_PASSWORD") |
   .value
 ' "$openbao_values")"
-test -n "$expected_password" && test "$expected_password" != 'null' ||
+if test -z "$expected_password" || test "$expected_password" = 'null'; then
   fail "rendered stack values contain no DEFAULT_CASSANDRA_PASSWORD"
+fi
 
 published_manifest="$work_dir/openbao-published-manifest.yaml"
 published_chart="oci://${published_chart_registry}/${published_chart_repository}/helm-nvcf-openbao-server"
