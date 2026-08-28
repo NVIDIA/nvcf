@@ -5485,3 +5485,32 @@ func TestEnsureModelCacheNamespaceLabel_PatchError(t *testing.T) {
 	err := ensureModelCacheNamespaceLabel(context.Background(), nsPatcher, "nvca-modelcache-init")
 	assert.Error(t, err)
 }
+
+// TestEnsureModelCacheNamespaceLabel_IdempotentWhenLabelPresent confirms that
+// ensureModelCacheNamespaceLabel always issues the JSON patch "add" operation,
+// even when the label is already set. RFC 6902 §4.1 specifies that "add" on an
+// existing object key replaces its value, so the call is safe and idempotent
+// regardless of whether the namespace was freshly created or already labelled.
+func TestEnsureModelCacheNamespaceLabel_IdempotentWhenLabelPresent(t *testing.T) {
+	namespace := "nvca-modelcache-init"
+	expectedPatch := []byte(fmt.Sprintf(`[{"op": "add", "path": "/metadata/labels/%s", "value": %q}]`,
+		strings.ReplaceAll(nvcatypes.WorkloadInstanceTypeLabel, "/", "~1"),
+		nvcatypes.WorkloadInstanceTypeValueMiniService))
+
+	// Simulate a namespace that already carries the correct label; the API
+	// server accepts the patch (replace is a no-op at the state level).
+	alreadyLabelled := &corev1.Namespace{}
+	alreadyLabelled.Labels = map[string]string{
+		nvcatypes.WorkloadInstanceTypeLabel: nvcatypes.WorkloadInstanceTypeValueMiniService,
+	}
+
+	nsPatcher := &mockNamespacePatcher{}
+	nsPatcher.On("Patch", mock.Anything, namespace, apitypes.JSONPatchType, expectedPatch, metav1.PatchOptions{}).
+		Return(alreadyLabelled, nil)
+
+	err := ensureModelCacheNamespaceLabel(context.Background(), nsPatcher, namespace)
+	assert.NoError(t, err)
+	// Patch must have been called exactly once — not skipped because the label
+	// was already present.
+	nsPatcher.AssertNumberOfCalls(t, "Patch", 1)
+}
