@@ -16,179 +16,90 @@
  */
 package com.nvidia.icms.outbound.nats;
 
-import static com.nvidia.icms.outbound.nats.CoreNatsStreamRegistrar.CREATE_NVCA_STREAM_NAME;
-import static com.nvidia.icms.outbound.nats.CoreNatsStreamRegistrar.TERMINATE_NVCA_STREAM_NAME;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-import com.nvidia.icms.configuration.bean.NatsConfigurationProperties;
+import com.nvidia.icms.configuration.nats.NatsConfigurationProperties;
 import com.nvidia.icms.integration.IntegrationTest;
-import com.nvidia.icms.util.TestUtil;
-import io.nats.client.ConsumerContext;
-import io.nats.client.JetStreamApiException;
-import io.nats.client.api.StreamInfo;
-import java.io.IOException;
+import com.nvidia.icms.configuration.nats.NatsConfiguration.FixedNatsPool;
+import com.nvidia.icms.configuration.nats.NatsConfiguration;
+import io.micrometer.tracing.Tracer;
+import io.nats.client.Connection;
+import io.nats.client.api.RetentionPolicy;
+import io.nats.client.api.StorageType;
 import java.time.Duration;
-import java.util.List;
+import java.util.Optional;
+import lombok.SneakyThrows;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
-import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationContext;
 
-/**
- * Integration tests for the {@link NatsStreamManager} class.
- * This class validates the creation, deletion, retrieval, and management of NATS streams and consumers.
- */
 class NatsStreamManagerIntegrationTest extends IntegrationTest {
 
     @Mock
     private NatsConfigurationProperties natsConfigurationProperties;
 
+    private FixedNatsPool fixedNatsPool;
     private NatsStreamManager natsStreamManager;
 
-    /**
-     * Sets up the test environment by initializing mocks and the NatsStreamManager instance.
-     */
+    @SneakyThrows
     @BeforeEach
     void setUp() {
         MockitoAnnotations.openMocks(this);
-
         when(natsConfigurationProperties.getNatsUrl()).thenReturn(NATS_URL);
         when(natsConfigurationProperties.getConnectionTimeout()).thenReturn(Duration.ofSeconds(5));
         when(natsConfigurationProperties.getPingInterval()).thenReturn(Duration.ofSeconds(10));
         when(natsConfigurationProperties.getReconnectWait()).thenReturn(Duration.ofSeconds(1));
         when(natsConfigurationProperties.getReconnectJitter()).thenReturn(Duration.ZERO);
+        when(natsConfigurationProperties.getNkeySeed()).thenReturn(Optional.empty());
         when(natsConfigurationProperties.getMessageTtl()).thenReturn(Duration.ofHours(24));
-        when(natsConfigurationProperties.isCreateNatsStreams()).thenReturn(false);
         when(natsConfigurationProperties.isNatsEnabled()).thenReturn(true);
+        when(natsConfigurationProperties.getMaxPoolSize()).thenReturn(1);
 
-        NatsConnectionFactory natsConnectionFactory = new NatsConnectionFactory(
+        try {
+            var applicationContext = mock(ApplicationContext.class);
+            when(applicationContext.getBean(Connection.class)).thenAnswer(ignored ->
+                    new NatsConfiguration().natsConnection(
+                            natsConfigurationProperties, mock(Tracer.class)));
+            fixedNatsPool = new FixedNatsPool(applicationContext, natsConfigurationProperties);
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+        natsStreamManager = new NatsStreamManager(
+                new NatsResourceService(fixedNatsPool),
                 natsConfigurationProperties);
-        natsStreamManager = new NatsStreamManager(natsConnectionFactory,
-                                                  natsConfigurationProperties,
-                                                  List.of(new CoreNatsStreamRegistrar()));
     }
 
-    /**
-     * Validates that all required NATS streams are created successfully.
-     */
+    @AfterEach
+    void tearDown() throws Exception {
+        if (fixedNatsPool != null) {
+            fixedNatsPool.close();
+        }
+    }
+
     @Test
-    void validateNatsStreams_createsAllStreams()
-            throws IOException, InterruptedException {
+    void validateNatsStreams_createsNvcaStreamsWithExistingConfiguration() throws Exception {
         natsStreamManager.validateNatsStreams();
 
-        StreamInfo createNvcaStream = natsStreamManager.getStream(CREATE_NVCA_STREAM_NAME);
-        StreamInfo terminateNvcaStream = natsStreamManager.getStream(TERMINATE_NVCA_STREAM_NAME);
+        var management = fixedNatsPool.borrowJetStreamManagement();
+        var createStream = management.getStreamInfo(NatsStreamManager.CREATE_NVCA_STREAM_NAME);
+        var terminateStream = management.getStreamInfo(NatsStreamManager.TERMINATE_NVCA_STREAM_NAME);
 
-        assertNotNull(createNvcaStream);
-        assertNotNull(terminateNvcaStream);
+        assertStream(createStream, "Create.NVCA.>");
+        assertStream(terminateStream, "Terminate.NVCA.>");
     }
 
-    /**
-     * Tests the successful creation of a NATS stream.
-     */
-    @Test
-    void createStream_createsStreamSuccessfully()
-            throws IOException, JetStreamApiException, InterruptedException {
-        when(natsConfigurationProperties.getMessageTtl()).thenReturn(Duration.ofHours(24));
-
-        String testStream = TestUtil.getRandomStringWithPrefix("TestStream", 5);
-        String testSubject = TestUtil.getRandomStringWithPrefix("Test.Subject.", 5);
-
-        StreamInfo streamInfo = natsStreamManager.createStream(testStream, testSubject);
-
+    private static void assertStream(io.nats.client.api.StreamInfo streamInfo, String subject) {
         assertNotNull(streamInfo);
-    }
-
-    /**
-     * Tests the successful deletion of a NATS stream.
-     */
-    @Test
-    void deleteStream_deletesStreamSuccessfully()
-            throws IOException, JetStreamApiException, InterruptedException {
-        String testStream = TestUtil.getRandomStringWithPrefix("TestStream", 5);
-        String testSubject = TestUtil.getRandomStringWithPrefix("Test.Subject.", 5);
-
-        natsStreamManager.createStream(testStream, testSubject);
-        natsStreamManager.deleteStream(testStream);
-
-        StreamInfo deletedStream = natsStreamManager.getStream(testStream);
-
-        assertNull(deletedStream);
-    }
-
-    /**
-     * Tests retrieving stream information for an existing stream.
-     */
-    @Test
-    void getStream_returnsStreamInfoIfExists()
-            throws IOException, InterruptedException, JetStreamApiException {
-        String testStream = TestUtil.getRandomStringWithPrefix("TestStream", 5);
-        String testSubject = TestUtil.getRandomStringWithPrefix("Test.Subject.", 5);
-
-        natsStreamManager.createStream(testStream, testSubject);
-        StreamInfo streamInfo = natsStreamManager.getStream(testStream);
-
-        assertNotNull(streamInfo);
-    }
-
-    /**
-     * Tests retrieving stream information for a non-existent stream.
-     */
-    @Test
-    void getStream_returnsNullIfStreamDoesNotExist()
-            throws IOException, InterruptedException {
-        String testStream = TestUtil.getRandomStringWithPrefix("TestStream", 5);
-
-        StreamInfo streamInfo = natsStreamManager.getStream(testStream);
-
-        assertNull(streamInfo);
-    }
-
-    /**
-     * Tests creating a stream if it does not already exist.
-     */
-    @Test
-    void getOrCreateStream_createsStreamIfNotExists() {
-        String testStream = TestUtil.getRandomStringWithPrefix("TestStream", 5);
-        String testSubject = TestUtil.getRandomStringWithPrefix("Test.Subject.", 5);
-
-        StreamInfo streamInfo = natsStreamManager.getOrCreateStream(testStream, testSubject);
-
-        assertNotNull(streamInfo);
-    }
-
-    /**
-     * Tests returning an existing stream if it already exists.
-     */
-    @Test
-    void getOrCreateStream_returnsExistingStreamIfExists()
-            throws JetStreamApiException, IOException, InterruptedException {
-        String testStream = TestUtil.getRandomStringWithPrefix("TestStream", 5);
-        String testSubject = TestUtil.getRandomStringWithPrefix("Test.Subject.", 5);
-
-        natsStreamManager.createStream(testStream, testSubject);
-        StreamInfo streamInfo = natsStreamManager.getOrCreateStream(testStream, testSubject);
-
-        assertNotNull(streamInfo);
-    }
-
-    /**
-     * Tests the successful creation of a consumer for a specific stream and subject.
-     */
-    @Test
-    void createConsumer_createsConsumerSuccessfully() {
-        String testStream = TestUtil.getRandomStringWithPrefix("TestStream", 5);
-        String testSubject = TestUtil.getRandomStringWithPrefix("Test.Subject.", 5);
-
-        natsStreamManager.getOrCreateStream(testStream, testSubject);
-        ConsumerContext result = natsStreamManager.createConsumer(testStream,
-                                                                  testStream + "Consumer",
-                                                                  testSubject);
-
-        assertNotNull(result);
+        var configuration = streamInfo.getConfiguration();
+        assertEquals(java.util.List.of(subject), configuration.getSubjects());
+        assertEquals(StorageType.Memory, configuration.getStorageType());
+        assertEquals(RetentionPolicy.WorkQueue, configuration.getRetentionPolicy());
+        assertEquals(1_000_000, configuration.getMaxMsgs());
     }
 }

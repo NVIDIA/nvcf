@@ -27,7 +27,7 @@ import org.springframework.stereotype.Service;
 
 import com.google.common.base.Stopwatch;
 import static com.nvidia.icms.configuration.SchedulingConfiguration.SCHEDULED_JOBS_PROFILES;
-import com.nvidia.icms.configuration.bean.NatsConfigurationProperties;
+import com.nvidia.icms.configuration.nats.NatsConfigurationProperties;
 import com.nvidia.icms.outbound.nats.NatsStreamManager;
 import com.nvidia.icms.service.LockProviderService;
 import com.nvidia.icms.service.telemetry.TelemetryEventClient;

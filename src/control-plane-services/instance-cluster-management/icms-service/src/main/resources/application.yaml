@@ -421,8 +421,8 @@ icms:
   nats:
     nats-enabled: false
     nats-url: nats://localhost:4222
+    max-pool-size: 8
     create-nats-streams: true
-    create-nats-consumers: false
     connection-timeout: 10s
     ping-interval: 5s
     reconnect-wait: 1s # Increasing it to avoid slow down
