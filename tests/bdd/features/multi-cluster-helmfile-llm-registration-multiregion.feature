@@ -21,6 +21,7 @@ Feature: Register an LLM worker securely with routers in two local regions
         | global.workerEndpoints.llmRequestRouterAddress                   | https://llm-request-router.nvcf.svc.cluster.local:50071                                |
         | addons.llm.requestRouter.workload.kind                            | Deployment                                                                             |
         | addons.llm.requestRouter.discovery.remoteWatchUrls[0]             | https://region-b-watch.nvcf.svc.cluster.local:50071                                    |
+        | addons.llm.requestRouter.grpcTls.dnsNames[1]                      | region-b-watch.nvcf.svc.cluster.local                                                  |
         | addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress       | https://llm-request-router.nvcf.svc.cluster.local:50071                                |
         | addons.llm.pki.dnsNames[2]                                        | region-b-watch.nvcf.svc.cluster.local                                                  |
         | addons.llm.pki.dnsNames[3]                                        | *.llm-request-router-region-b-headless.nvcf.svc.cluster.local                          |
@@ -63,6 +64,9 @@ Feature: Register an LLM worker securely with routers in two local regions
       Then the command exit code should be 0
       When I run command "kubectl --context k3d-ncp-local-cp wait certificate llm-request-router-grpc-tls -n envoy-gateway-system --for=condition=Ready --timeout=5m"
       Then the command exit code should be 0
+      When I run command "kubectl --context k3d-ncp-local-cp get certificate llm-request-router-grpc-tls -n envoy-gateway-system -o jsonpath={.spec.dnsNames}"
+      Then the command exit code should be 0
+      And the command output should contain "region-b-watch.nvcf.svc.cluster.local"
       When I run command "kubectl --context k3d-ncp-local-cp rollout status deployment/llm-request-router -n nvcf --timeout=10m"
       Then the command exit code should be 0
 

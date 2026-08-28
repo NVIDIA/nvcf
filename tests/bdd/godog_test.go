@@ -1171,10 +1171,12 @@ func TestMultiClusterHelmfileLLMRegistrationMultiregionFeatureFileWiresToSteps(t
 
 	//revive:disable:line-length-limit Exact feature commands must remain byte-for-byte identical.
 	const (
-		regionAWatchCommand = `/bin/bash -c 'set -eu; output=$(grpcurl -max-time 3 -cacert <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf -o jsonpath="{.data.ca\.crt}" | base64 -d) -authority llm-request-router.nvcf.svc.cluster.local -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates 2>&1 || true); pods=$(kubectl --context k3d-ncp-local-cp get pods -n nvcf -l app.kubernetes.io/instance=llm-request-router,app.kubernetes.io/name=llm-request-router -o jsonpath="{range .items[*]}{.metadata.name}{\"\\n\"}{end}"); count=0; while IFS= read -r pod; do [ -z "$pod" ] && continue; printf "%s" "$output" | grep -Fq "$pod"; count=$((count + 1)); done <<<"$pods"; [ "$count" -eq 3 ]; printf "%s" "$output" | grep -Fq "https://region-b-watch.nvcf.svc.cluster.local:50071"; printf "region-a-deployment=%s remote-watch=https\n" "$count"'`
-		regionBWatchCommand = `/bin/bash -c 'set -eu; output=$(grpcurl -max-time 3 -cacert <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf -o jsonpath="{.data.ca\.crt}" | base64 -d) -authority region-b-watch.nvcf.svc.cluster.local -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates 2>&1 || true); identities=$(printf "%s\n" "$output" | grep -Eo "llm-request-router-region-b-[0-9]+" | sort -u || true); expected=$(printf "llm-request-router-region-b-0\nllm-request-router-region-b-1\n"); [ "$identities" = "$expected" ]; count=$(printf "%s\n" "$identities" | grep -c .); [ "$count" -eq 2 ]; ! printf "%s" "$output" | grep -Eq "([0-9]{1,3}-){3}[0-9]{1,3}\."; printf "region-b-statefulset=%s tls=https\n" "$count"'`
-		pylonMetricsCommand = `/bin/sh -c 'set -eu; for attempt in $(seq 1 120); do row=$(kubectl --context k3d-ncp-local-compute-1 get pods -A -o json | jq -r "[.items[] | select(any(.spec.containers[]?; .name == \"llm-worker\")) | [.metadata.namespace,.metadata.name] | @tsv] | first // empty"); if [ -n "$row" ]; then ns=$(printf "%s" "$row" | cut -f1); pod=$(printf "%s" "$row" | cut -f2); metrics=$(kubectl --context k3d-ncp-local-compute-1 get --raw "/api/v1/namespaces/$ns/pods/$pod:9089/proxy/metrics" 2>/dev/null || true); registration=$(printf "%s\n" "$metrics" | grep -c "^pylon_registration_stream_connected.* 1$" || true); reverse=$(printf "%s\n" "$metrics" | grep -c "^pylon_reverse_tunnel_connected.* 1$" || true); if [ "$registration" -eq 5 ] && [ "$reverse" -ge 3 ]; then printf "registration=%s reverse=%s regions=2\n" "$registration" "$reverse"; exit 0; fi; fi; sleep 5; done; exit 1'`
-		invokeCommand       = "/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke" +
+		regionAWatchCommand    = `/bin/bash -c 'set -eu; output=$(grpcurl -max-time 3 -cacert <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf -o jsonpath="{.data.ca\.crt}" | base64 -d) -authority llm-request-router.nvcf.svc.cluster.local -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates 2>&1 || true); pods=$(kubectl --context k3d-ncp-local-cp get pods -n nvcf -l app.kubernetes.io/instance=llm-request-router,app.kubernetes.io/name=llm-request-router -o jsonpath="{range .items[*]}{.metadata.name}{\"\\n\"}{end}"); count=0; while IFS= read -r pod; do [ -z "$pod" ] && continue; printf "%s" "$output" | grep -Fq "$pod"; count=$((count + 1)); done <<<"$pods"; [ "$count" -eq 3 ]; printf "%s" "$output" | grep -Fq "https://region-b-watch.nvcf.svc.cluster.local:50071"; printf "region-a-deployment=%s remote-watch=https\n" "$count"'`
+		regionBWatchCommand    = `/bin/bash -c 'set -eu; output=$(grpcurl -max-time 3 -cacert <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf -o jsonpath="{.data.ca\.crt}" | base64 -d) -authority region-b-watch.nvcf.svc.cluster.local -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates 2>&1 || true); identities=$(printf "%s\n" "$output" | grep -Eo "llm-request-router-region-b-[0-9]+" | sort -u || true); expected=$(printf "llm-request-router-region-b-0\nllm-request-router-region-b-1\n"); [ "$identities" = "$expected" ]; count=$(printf "%s\n" "$identities" | grep -c .); [ "$count" -eq 2 ]; ! printf "%s" "$output" | grep -Eq "([0-9]{1,3}-){3}[0-9]{1,3}\."; printf "region-b-statefulset=%s tls=https\n" "$count"'`
+		pylonMetricsCommand    = `/bin/sh -c 'set -eu; for attempt in $(seq 1 120); do row=$(kubectl --context k3d-ncp-local-compute-1 get pods -A -o json | jq -r "[.items[] | select(any(.spec.containers[]?; .name == \"llm-worker\")) | [.metadata.namespace,.metadata.name] | @tsv] | first // empty"); if [ -n "$row" ]; then ns=$(printf "%s" "$row" | cut -f1); pod=$(printf "%s" "$row" | cut -f2); metrics=$(kubectl --context k3d-ncp-local-compute-1 get --raw "/api/v1/namespaces/$ns/pods/$pod:9089/proxy/metrics" 2>/dev/null || true); registration=$(printf "%s\n" "$metrics" | grep -c "^pylon_registration_stream_connected.* 1$" || true); reverse=$(printf "%s\n" "$metrics" | grep -c "^pylon_reverse_tunnel_connected.* 1$" || true); if [ "$registration" -eq 5 ] && [ "$reverse" -ge 3 ]; then printf "registration=%s reverse=%s regions=2\n" "$registration" "$reverse"; exit 0; fi; fi; sleep 5; done; exit 1'`
+		grpcCertificateCommand = "kubectl --context k3d-ncp-local-cp get certificate llm-request-router-grpc-tls" +
+			" -n envoy-gateway-system -o jsonpath={.spec.dnsNames}"
+		invokeCommand = "/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke" +
 			" --inference-url /v1/chat/completions --model-name openai-compatible-sample" +
 			" --request-body '{\"messages\":[{\"role\":\"user\",\"content\":\"bdd-registration-multiregion\"}]}' --timeout 120"
 	)
@@ -1189,6 +1191,10 @@ func TestMultiClusterHelmfileLLMRegistrationMultiregionFeatureFileWiresToSteps(t
 		regionBWatchCommand: {
 			ExitCode: 0,
 			Stdout:   "region-b-statefulset=2 tls=https\n",
+		},
+		grpcCertificateCommand: {
+			ExitCode: 0,
+			Stdout:   "[llm-request-router.nvcf.svc.cluster.local region-b-watch.nvcf.svc.cluster.local]",
 		},
 		pylonMetricsCommand: {ExitCode: 0, Stdout: "registration=5 reverse=3 regions=2\n"},
 		invokeCommand: {
@@ -1230,7 +1236,12 @@ func TestMultiClusterHelmfileLLMRegistrationMultiregionFeatureFileWiresToSteps(t
 	if status != 0 {
 		t.Fatalf("godog suite status = %d\n%s", status, out.String())
 	}
-	for _, command := range []string{regionAWatchCommand, regionBWatchCommand, pylonMetricsCommand} {
+	for _, command := range []string{
+		grpcCertificateCommand,
+		regionAWatchCommand,
+		regionBWatchCommand,
+		pylonMetricsCommand,
+	} {
 		if !commandRanExactly(suite.Runner.(*fakeRunner).runs, command) {
 			t.Fatalf("exact multi-region observation command was not invoked: %s", command)
 		}
@@ -1256,6 +1267,7 @@ func TestMultiClusterHelmfileLLMRegistrationMultiregionFeatureFileWiresToSteps(t
 		key  string
 		want string
 	}{
+		{key: "addons.llm.requestRouter.grpcTls.dnsNames[1]", want: "region-b-watch.nvcf.svc.cluster.local"},
 		{key: "addons.llm.pki.dnsNames[2]", want: "region-b-watch.nvcf.svc.cluster.local"},
 		{key: "addons.llm.pki.dnsNames[3]", want: "*.llm-request-router-region-b-headless.nvcf.svc.cluster.local"},
 	} {
@@ -1266,14 +1278,6 @@ func TestMultiClusterHelmfileLLMRegistrationMultiregionFeatureFileWiresToSteps(t
 		if !found || got != expectation.want {
 			t.Fatalf("%s = %q, found %t, want %q", expectation.key, got, found, expectation.want)
 		}
-	}
-	if _, found, readErr := dsl.ReadYAMLKey(
-		environmentPath,
-		"addons.llm.requestRouter.grpcTls.dnsNames[1]",
-	); readErr != nil {
-		t.Fatalf("read unused request-router gRPC TLS key: %v", readErr)
-	} else if found {
-		t.Fatal("multi-region environment populated the unused request-router gRPC TLS SAN key")
 	}
 }
 
