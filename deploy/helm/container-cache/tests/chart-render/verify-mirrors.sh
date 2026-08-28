@@ -31,6 +31,16 @@ assert_not_has() {
   fi
 }
 
+echo "Checking minted leaf certificate extensions..."
+# RFC 5280 4.2.1.1. OpenSSL rejects a certificate without authorityKeyIdentifier
+# when X509_V_FLAG_X509_STRICT is set, and Python 3.13 enables that flag by
+# default, so omitting this fails TLS verification for every such client.
+assert_has 'x509_extension.new("authorityKeyIdentifier", "keyid,issuer"'
+assert_has 'x509_extension.new("subjectKeyIdentifier", "hash"'
+# "keyid:always" fails outright on a signing CA with no SKID; "keyid,issuer"
+# falls back to issuer name and serial.
+assert_not_has 'x509_extension.new("authorityKeyIdentifier", "keyid:always"'
+
 echo "Checking Service shape..."
 assert_has 'kind: Service'
 assert_has 'name: nvcf-container-cache'

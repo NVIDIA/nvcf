@@ -58,44 +58,69 @@ Before installing the NVCA Operator, ensure the following prerequisites are met:
 In self-managed mode, the cluster identity comes from the CLI registration
 step, and the operator consumes it:
 
-1. You configure the compute-plane Helmfile environment with registry settings
-   and control-plane service URLs.
-2. From the repository root, you run
+1. You configure the compute-plane Helmfile environment with artifact registry
+   settings and deployment-specific overrides.
+2. You export the control-plane profile. The profile is the canonical handoff
+   for the control-plane identity, reachable endpoints, host overrides, and
+   transport trust.
+3. From the repository root, you run
    `make -C deploy/stacks/nvcf-compute-plane register-cluster` (see
    [Register the cluster](#register-the-cluster)). The target runs
-   `nvcf-cli init`, then `nvcf-cli cluster register`. The CLI discovers the GPU
-   cluster's OIDC issuer and public JWKS, records them with the control plane
-   (ICMS), and writes the `clusterID`, `clusterGroupID`, identity source, and
-   service URLs to a registration values file.
-3. From the repository root, you run
+   `nvcf-cli self-hosted compute-plane register` with the profile. The CLI
+   discovers the GPU cluster's OIDC issuer and public JWKS, records them with
+   the control plane (ICMS), and writes the `clusterID`, `clusterGroupID`,
+   identity source, endpoints, host overrides, and transport trust to a
+   registration values file.
+4. From the repository root, you run
    `make -C deploy/stacks/nvcf-compute-plane install`. Helmfile installs
    `helm-nvca-operator` with the compute-plane environment and registration
-   values for that cluster.
-4. The Helm chart renders a local ConfigMap (`nvcfbackend-self-managed`) holding the cluster
+   values for that cluster, using the same selected kubeconfig context as
+   registration when `COMPUTE_KUBE_CONTEXT` is set.
+5. The Helm chart renders a local ConfigMap (`nvcfbackend-self-managed`) holding the cluster
    identity and the SIS, ReVal, and NATS endpoints (plus any host-header overrides). The
    operator reads that ConfigMap and creates the NVCFBackend resource.
-5. The operator creates the NVCA agent pod. The agent authenticates to the control plane
+6. The operator creates the NVCA agent pod. The agent authenticates to the control plane
    with a projected service account token (PSAT), which the control plane validates against
-   the issuer and JWKS registered in step 1, and begins managing GPU workloads.
-6. Runtime secrets are injected by the OpenBao vault-agent sidecar, which
+   the issuer and JWKS registered in step 3, and begins managing GPU workloads.
+7. Runtime secrets are injected by the OpenBao vault-agent sidecar, which
    authenticates using Kubernetes service account JWT tokens against the local
    OpenBao instance. Kubernetes image pull secrets are configured separately in
    the compute-plane environment and namespaces.
 
+```mermaid
+sequenceDiagram
+  actor Operator
+  participant CP as Control-plane stack
+  participant Profile as Control-plane profile
+  participant CLI as nvcf-cli
+  participant Compute as Compute cluster
+  participant Values as Registration values
+  participant Helmfile
+  Operator->>CLI: profile export
+  CLI->>CP: read selected environment
+  CLI->>Profile: write generated profile
+  Operator->>CLI: init with selected config path
+  Operator->>CLI: compute-plane register
+  CLI->>Profile: read endpoints and trust
+  CLI->>Compute: discover OIDC issuer and JWKS
+  CLI->>CP: register cluster identity
+  CLI->>Values: write generated NVCA values
+  Operator->>Helmfile: make install
+  Helmfile->>Values: consume generated values
+  Helmfile->>Compute: install NVCA operator
+```
+
 ## Configure the compute plane
 
 Create the environment file from the repository root. It provides the chart
-registry, image registry, image pull secret name, and control-plane service URLs
-used by the NVCA operator.
+registry, image registry, image pull secret name, and deployment-specific
+overrides used by the NVCA operator. The generated registration values provide
+the control-plane service URLs and host overrides.
 
 ```bash
 cd path/to/nvcf
 touch deploy/stacks/nvcf-compute-plane/environments/<environment-name>.yaml
 ```
-
-Use service URLs that are reachable from the GPU cluster. For a single
-load-balancer-fronted Gateway with hostname-based routing, the agent should dial
-the load balancer address and send route-matching host headers:
 
 ```yaml title="deploy/stacks/nvcf-compute-plane/environments/<environment-name>.yaml"
 global:
@@ -110,23 +135,17 @@ global:
 
   imagePullSecrets:
     - name: nvcr-pull-secret
-
-  nvcaOperator:
-    selfManaged:
-      icmsServiceURL: "http://<GATEWAY_ADDR>"
-      icmsServiceHostHeaderOverride: "sis.<STACK_DOMAIN>"
-      revalServiceURL: "http://<GATEWAY_ADDR>"
-      revalServiceHostHeaderOverride: "reval.<STACK_DOMAIN>"
-      natsURL: "nats://<GATEWAY_ADDR>:4222"
-      natsHostOverride: "nats.<STACK_DOMAIN>"
 ```
 
-If your GPU cluster can resolve per-service DNS names directly, set the service
-URLs to those names and omit the host-header override fields.
-
-Host-header overrides require `helm-nvca-operator` 1.12.0 or later. With proper
-per-service DNS and TLS (see [gateway-routing](../gateway-routing.md)), the
-service hostnames resolve directly and no host-header overrides are needed.
+The profile exporter derives the service URLs and route-matching host overrides
+from the selected control-plane environment, and registration writes them as
+the default values for the compute-plane install. Non-empty
+`global.nvcaOperator.selfManaged.icmsServiceURL`,
+`icmsServiceHostHeaderOverride`, `revalServiceURL`,
+`revalServiceHostHeaderOverride`, `natsURL`, and `natsHostOverride` fields in
+the selected compute-plane environment take precedence. Verify the effective
+compute-reachable endpoints from those inputs resolve from the GPU cluster. See
+[gateway-routing](../gateway-routing.md) for service DNS and TLS guidance.
 
 ## Register the cluster
 
@@ -144,41 +163,41 @@ installation path enables this with
 
 </Note>
 
-Create a CLI config that can reach the control-plane gateway. The
-`register-cluster` target runs `nvcf-cli init` before `cluster register`, so the
-config must include the API Keys endpoint and host-header overrides:
+Export the profile from the selected control-plane Helmfile environment. The
+default output is
+`deploy/stacks/self-managed/out/control-plane-profile.yaml`:
 
-```yaml title="nvcf-cli-gpu-register.yaml"
-base_http_url: "http://<GATEWAY_ADDR>"
-invoke_url: "http://<GATEWAY_ADDR>"
-api_keys_service_url: "http://<GATEWAY_ADDR>"
-icms_url: "http://<GATEWAY_ADDR>"
+```bash
+nvcf-cli self-hosted \
+  --control-plane-stack deploy/stacks/self-managed \
+  --env <environment-name> \
+  control-plane profile export
 
-api_keys_host: "api-keys.<STACK_DOMAIN>"
-api_host: "api.<STACK_DOMAIN>"
-icms_host: "sis.<STACK_DOMAIN>"
-invoke_host: "invocation.<STACK_DOMAIN>"
-
-api_keys_service_id: "nvidia-cloud-functions-ncp-service-id-aketm"
-api_keys_issuer_service: "nvcf-api"
-api_keys_owner_id: "svc@nvcf-api.local"
-client_id: "<nca-id>"
+nvcf-cli --config <path-to-cli-config> init
 ```
+
+When the LLM add-on is disabled, the generated profile and registration values
+omit its optional router and PKI configuration. Enabling LLM requires the
+control-plane environment to provide the corresponding managed PKI settings.
 
 Run registration against the GPU cluster kubeconfig. This is required for
 multi-cluster installs because the CLI discovers the OIDC issuer and JWKS from
-the target Kubernetes cluster.
+the target Kubernetes cluster. Set `COMPUTE_KUBE_CONTEXT` to select the GPU
+cluster explicitly when the kubeconfig contains multiple contexts.
 
 ```bash
 make -C deploy/stacks/nvcf-compute-plane register-cluster \
   CLUSTER_NAME=<gpu-cluster-name> \
-  NCA_ID=<nca-id> \
   CLUSTER_REGION=<region> \
-  ICMS_URL="http://<GATEWAY_ADDR>" \
-  KUBECONFIG_FILE=<gpu-cluster-kubeconfig> \
-  NVCF_CLI=<path-to-nvcf-cli> \
-  NVCF_CLI_CONFIG=<path-to-nvcf-cli-gpu-register.yaml>
+  CONTROL_PLANE_PROFILE="$(pwd)/deploy/stacks/self-managed/out/control-plane-profile.yaml" \
+  KUBECONFIG_FILE=<absolute-path-to-gpu-cluster-kubeconfig> \
+  COMPUTE_KUBE_CONTEXT=<gpu-cluster-context> \
+  NVCF_CLI=<absolute-path-to-nvcf-cli> \
+  NVCF_CLI_CONFIG=<absolute-path-to-cli-config>
 ```
+
+`NVCF_CLI_CONFIG` is optional when the default CLI config is correct. The Make
+target forwards a configured path to registration but does not run `init`.
 
 The target writes
 `registration/<gpu-cluster-name>-register-values.yaml`. It carries the cluster
@@ -213,7 +232,7 @@ The compute-plane Helmfile passes these values to the chart:
 | --- | --- |
 | Cluster identity | `registration/<gpu-cluster-name>-register-values.yaml` |
 | Operator, agent, image credential helper, and shared storage image repositories | `global.image.*` in `environments/<environment-name>.yaml` |
-| Control-plane service URLs and host-header overrides | `global.nvcaOperator.selfManaged.*` |
+| Control-plane service URLs and host-header overrides | Generated registration values by default; non-empty `global.nvcaOperator.selfManaged.*` endpoint fields in `environments/<environment-name>.yaml` take precedence |
 | Image pull secrets | `global.imagePullSecrets` |
 
 Use `global.nvcaOperator.nodeSelector`, `global.nvcaOperator.tolerations`, and
@@ -372,7 +391,8 @@ make -C deploy/stacks/nvcf-compute-plane install \
   CLUSTER_NAME=<gpu-cluster-name> \
   HELMFILE_ENV=<environment-name> \
   NCA_ID=<nca-id> \
-  KUBECONFIG_FILE=<gpu-cluster-kubeconfig>
+  KUBECONFIG_FILE=<absolute-path-to-gpu-cluster-kubeconfig> \
+  COMPUTE_KUBE_CONTEXT=<gpu-cluster-context>
 ```
 
 During installation, Helmfile will:
@@ -584,18 +604,19 @@ the refreshed values:
 ```bash
 make -C deploy/stacks/nvcf-compute-plane register-cluster \
   CLUSTER_NAME=<gpu-cluster-name> \
-  NCA_ID=<nca-id> \
   CLUSTER_REGION=<region> \
-  ICMS_URL="http://<GATEWAY_ADDR>" \
-  KUBECONFIG_FILE=<gpu-cluster-kubeconfig> \
-  NVCF_CLI=<path-to-nvcf-cli> \
-  NVCF_CLI_CONFIG=<path-to-nvcf-cli-gpu-register.yaml>
+  CONTROL_PLANE_PROFILE="$(pwd)/deploy/stacks/self-managed/out/control-plane-profile.yaml" \
+  KUBECONFIG_FILE=<absolute-path-to-gpu-cluster-kubeconfig> \
+  COMPUTE_KUBE_CONTEXT=<gpu-cluster-context> \
+  NVCF_CLI=<absolute-path-to-nvcf-cli> \
+  NVCF_CLI_CONFIG=<absolute-path-to-cli-config>
 
 make -C deploy/stacks/nvcf-compute-plane install \
   CLUSTER_NAME=<gpu-cluster-name> \
   HELMFILE_ENV=<environment-name> \
   NCA_ID=<nca-id> \
-  KUBECONFIG_FILE=<gpu-cluster-kubeconfig>
+  KUBECONFIG_FILE=<absolute-path-to-gpu-cluster-kubeconfig> \
+  COMPUTE_KUBE_CONTEXT=<gpu-cluster-context>
 ```
 
 The registration target rewrites
@@ -645,7 +666,8 @@ deletion. If you encounter stuck resources, see [Handling Stuck Resources] below
    <Note>
    The cluster identity (`clusterID` and `clusterGroupID`) persists in the control plane
    (ICMS) and in your registration values file. A reinstall reuses it by
-   re-applying that file. Pass `--ignore-existing` to `cluster register` if you re-register.
+   re-applying that file. Re-run the supported `register-cluster` target to
+   refresh the generated values before reinstalling.
 
    </Note>
 

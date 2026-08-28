@@ -6,12 +6,10 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
   register and install the NVCA operator on a separate compute cluster, and
   verify that the compute cluster agent becomes healthy.
 
-  # This feature is values-driven (not profile-driven); see
-  # AGENTS.md "CLI vs Helmfile install paths". It authors the nvcf-cli
-  # config from the gateway address at runtime, then uses the
-  # compute-plane Makefile register-cluster target. That target runs
-  # nvcf-cli init before cluster register and writes the registration
-  # values consumed by Helmfile.
+  # Helmfile installs the control plane from the operator-authored
+  # environment. Registration exports that installed environment as a
+  # control-plane profile, initializes the CLI explicitly, and passes the
+  # profile and CLI config to the compute-plane Make target.
   #
   # Required environment variables (user-supplied):
   #   NVCF_CLI                   built CLI path (harness)
@@ -224,17 +222,10 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
       # resolved backends. These route flags are authored in the EKS env
       # file because worker pods need externally reachable API gRPC
       # endpoints on the compute cluster.
-      When I run command:
-        """
-        kubectl --context ${EKS_CONTEXT} wait grpcroute/nvcf-api-grpc grpcroute/nvct-api-grpc -n envoy-gateway --for=jsonpath='{.status.parents[0].conditions[?(@.type=="Accepted")].status}'=True --timeout=2m
-        """
-      Then the command exit code should be 0
-
-      When I run command:
-        """
-        kubectl --context ${EKS_CONTEXT} wait grpcroute/nvcf-api-grpc grpcroute/nvct-api-grpc -n envoy-gateway --for=jsonpath='{.status.parents[0].conditions[?(@.type=="ResolvedRefs")].status}'=True --timeout=2m
-        """
-      Then the command exit code should be 0
+      Then these Gateway API routes should be accepted and resolved using context "${EKS_CONTEXT}" within "2m":
+        | kind      | name          | namespace     | parent       |
+        | GRPCRoute | nvcf-api-grpc | envoy-gateway | nvcf-gateway |
+        | GRPCRoute | nvct-api-grpc | envoy-gateway | nvcf-gateway |
 
       # Confirm Helmfile passed the worker-facing endpoints into the
       # environment ConfigMaps consumed by the API deployments.
@@ -309,15 +300,28 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
         | invoke_host          | invocation.${EKS_GATEWAY_DOMAIN} |
         | icms_host            | sis.${EKS_GATEWAY_DOMAIN}        |
 
-      # Register the compute cluster with the control plane. The Makefile
-      # runs nvcf-cli init, then cluster register, and writes the returned
-      # Helm values under registration/.
+      # Export the installed control plane with compute-reachable endpoints.
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/out/nvcf-cli-eks-bdd-multi.yaml self-hosted --control-plane-stack deploy/stacks/self-managed --env eks-bdd-multi --control-plane-context ${EKS_CONTEXT} --compute-plane-context ${EKS_COMPUTE_CONTEXT} control-plane profile export --region ${EKS_REGION}
+        """
+      Then the command exit code should be 0
+      And file "deploy/stacks/self-managed/out/control-plane-profile.yaml" should exist
+
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/out/nvcf-cli-eks-bdd-multi.yaml init
+        """
+      Then the command exit code should be 0
+
+      # Register the compute cluster and write the returned Helm values under
+      # registration/.
       When I run command "tests/bdd/scripts/wait-for-dns.sh ${EKS_GATEWAY_ADDR} 180"
       Then the command exit code should be 0
 
       When I run command:
         """
-        make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=${EKS_COMPUTE_CLUSTER_NAME} NCA_ID=nvcf-default CLUSTER_REGION=${EKS_REGION} ICMS_URL=http://${EKS_GATEWAY_ADDR} KUBECONFIG_FILE=${REPO_ROOT}/tests/bdd/out/eks-compute-kubeconfig.yaml NVCF_CLI=${NVCF_CLI} NVCF_CLI_CONFIG=${REPO_ROOT}/tests/bdd/out/nvcf-cli-eks-bdd-multi.yaml
+        make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=${EKS_COMPUTE_CLUSTER_NAME} CLUSTER_REGION=${EKS_REGION} CONTROL_PLANE_PROFILE=${REPO_ROOT}/deploy/stacks/self-managed/out/control-plane-profile.yaml COMPUTE_KUBE_CONTEXT=${EKS_COMPUTE_CONTEXT} KUBECONFIG_FILE=${REPO_ROOT}/tests/bdd/out/eks-compute-kubeconfig.yaml NVCF_CLI=${NVCF_CLI} NVCF_CLI_CONFIG=${REPO_ROOT}/tests/bdd/out/nvcf-cli-eks-bdd-multi.yaml
         """
       Then the command exit code should be 0
       And file "deploy/stacks/nvcf-compute-plane/registration/${EKS_COMPUTE_CLUSTER_NAME}-register-values.yaml" should exist
@@ -374,23 +378,30 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
         kubectl wait nvcfbackend ${EKS_COMPUTE_CLUSTER_NAME} -n nvca-operator --context ${EKS_COMPUTE_CONTEXT} --for=jsonpath={.status.agentStatus}=healthy --timeout=10m
         """
 
-      When I run command:
-        """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/out/nvcf-cli-eks-bdd-multi.yaml function create --name bdd-load-tester-supreme --image nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/load_tester_supreme:0.0.8 --inference-url /echo --inference-port 8000 --health-uri /health --health-port 8000 --health-timeout PT30S
-        """
-      Then the command exit code should be 0
+      And I use NVCF CLI config "${REPO_ROOT}/tests/bdd/out/nvcf-cli-eks-bdd-multi.yaml"
 
-      When I run command:
-        """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/out/nvcf-cli-eks-bdd-multi.yaml function deploy create --gpu H100 --instance-type NCP.GPU.H100_8x --backend ${EKS_COMPUTE_CLUSTER_NAME} --regions ${EKS_REGION} --min-instances 1 --max-instances 1 --timeout 900
-        """
-      Then the command exit code should be 0
+      When I successfully create function "bdd-load-tester-supreme" from image "nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/load_tester_supreme:0.0.8" with CLI options:
+        | option           | value   |
+        | --inference-url  | /echo   |
+        | --inference-port | 8000    |
+        | --health-uri     | /health |
+        | --health-port    | 8000    |
+        | --health-timeout | PT30S   |
 
-      When I run command:
-        """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/out/nvcf-cli-eks-bdd-multi.yaml api-key generate --description bdd-load-tester-supreme --for function --scopes invoke_function,list_functions,queue_details,list_functions_details
-        """
-      Then the command exit code should be 0
+      And I successfully deploy the function selected by NVCF CLI with options:
+        | option          | value                       |
+        | --gpu           | H100                        |
+        | --instance-type | NCP.GPU.H100_8x             |
+        | --backend       | ${EKS_COMPUTE_CLUSTER_NAME} |
+        | --regions       | ${EKS_REGION}               |
+        | --min-instances | 1                           |
+        | --max-instances | 1                           |
+        | --timeout       | 900                         |
+
+      And I successfully generate a function API key with CLI options:
+        | option        | value                                                               |
+        | --description | bdd-load-tester-supreme                                            |
+        | --scopes      | invoke_function,list_functions,queue_details,list_functions_details |
 
       # AWS can briefly return NXDOMAIN for a newly provisioned ELB even after
       # earlier successful lookups. Reconfirm system-resolver stability before
@@ -398,12 +409,11 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
       When I run command "tests/bdd/scripts/wait-for-dns.sh ${EKS_GATEWAY_ADDR} 180"
       Then the command exit code should be 0
 
-      When I run command:
+      When I successfully invoke the function selected by NVCF CLI over HTTP with timeout "120" seconds and poll duration "5" seconds:
         """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/out/nvcf-cli-eks-bdd-multi.yaml function invoke --request-body '{"message":"bdd-echo","repeats":1}' --timeout 120 --poll-duration 5
+        {"message":"bdd-echo","repeats":1}
         """
-      Then the command exit code should be 0
-      And the command output should contain "bdd-echo"
+      Then the command output should contain "bdd-echo"
 
     # Failing until GitHub issue #1098 is resolved and the fix from GitHub
     # issue #1032 is consumed by the self-managed stack.
@@ -416,7 +426,7 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
 
       When I run command:
         """
-        env NVCT_BDD_STATE_PATH=${HOME}/.nvcf-cli.nvcf-cli-eks-bdd-multi.state NVCT_BDD_API_KEYS_URL=http://${EKS_GATEWAY_ADDR}/v1/keys NVCT_BDD_API_KEYS_HOST=api-keys.${EKS_GATEWAY_DOMAIN} NVCT_BDD_TASKS_URL=http://${EKS_GATEWAY_ADDR}/v1/nvct/tasks NVCT_BDD_TASKS_HOST=tasks.${EKS_GATEWAY_DOMAIN} NVCT_BDD_TASK_BACKEND=${EKS_COMPUTE_CLUSTER_NAME} tests/bdd/scripts/run-nvct-task-smoke.sh
+        env NVCT_BDD_STATE_PATH=${HOME}/.nvcf-cli.nvcf-cli-eks-bdd-multi.state NVCT_BDD_API_KEYS_URL=http://${EKS_GATEWAY_ADDR}/v1/keys NVCT_BDD_API_KEYS_HOST=api-keys.${EKS_GATEWAY_DOMAIN} NVCT_BDD_TASKS_URL=http://${EKS_GATEWAY_ADDR}/v1/nvct/tasks NVCT_BDD_TASKS_HOST=tasks.${EKS_GATEWAY_DOMAIN} NVCT_BDD_TASK_BACKEND=${EKS_COMPUTE_CLUSTER_NAME} NVCT_BDD_TASK_INSTANCE_TYPE=NCP.GPU.H100_8x tests/bdd/scripts/run-nvct-task-smoke.sh
         """
       Then the command exit code should be 0
       And the command output should contain "COMPLETED"

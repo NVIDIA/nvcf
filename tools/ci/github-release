@@ -42,6 +42,10 @@ JAVA_COMPONENT_KINDS = (JAVA_FRAMEWORK_KIND, JAVA_SERVICE_KIND)
 # Framework commits quoted in dependency-triggered release notes. A service that
 # is many framework commits behind should still get readable notes.
 MAX_QUOTED_FRAMEWORK_COMMITS = 20
+# Commits resolved to pull requests when commenting a published release. Each one
+# costs an API call, so an unexpectedly wide range is truncated rather than left
+# to fan out. The cap is reported when it is hit.
+MAX_RELEASE_COMMENT_COMMITS = 50
 # Conventional Commit subject prefix, for example "fix(nv-boot)!: subject".
 COMMIT_SUBJECT_PATTERN = re.compile(r"^(?P<type>[a-zA-Z]+)(?:\([^)]*\))?(?P<breaking>!)?:")
 
@@ -619,18 +623,140 @@ def validate_version_file(root, service):
 
 
 def create_release(tag, title, notes, draft, dry_run):
+    """Create the GitHub release. True when this call created it, False otherwise."""
     if dry_run:
         print(f"[github-release] dry-run: would create GitHub release {tag}")
         print(notes)
-        return
+        return False
     view = subprocess.run(["gh", "release", "view", tag], text=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if view.returncode == 0:
         print(f"[github-release] GitHub release {tag} already exists; leaving it unchanged")
-        return
+        return False
     cmd = ["gh", "release", "create", tag, "--verify-tag", "--title", title, "--notes", notes]
     if draft:
         cmd.append("--draft")
     run(cmd)
+    return True
+
+
+def repo_slug():
+    slug = os.environ.get("GITHUB_REPOSITORY", "").strip()
+    if slug:
+        return slug
+    return run(
+        ["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"],
+        capture=True,
+        check=False,
+    ).strip()
+
+
+def release_url(slug, tag):
+    server = os.environ.get("GITHUB_SERVER_URL", "https://github.com").rstrip("/")
+    return f"{server}/{slug}/releases/tag/{tag}"
+
+
+def ancestor_service_tag(root, service):
+    """Closest service tag reachable from HEAD, by ancestry rather than by version sort.
+
+    Release branches are cut with a synthetic root (see linear_release_branch_base),
+    so the highest-sorting tag for a service can be a main-line tag that this branch
+    never contained. Ancestry is what actually bounds the commits a release ships.
+
+    Every supported prefix is matched in a single describe so the closest tag wins.
+    Taking the first prefix to match instead would return a more distant tag whenever
+    a service's newest release used another of its prefixes, and the range would then
+    re-resolve commits an earlier release already covered.
+
+    Called before the new tag is created, so HEAD itself is never the answer.
+    """
+    matches = []
+    for prefix in tag_prefixes(service, root):
+        matches.extend(["--match", f"{prefix}*"])
+    return run(
+        ["git", "describe", "--tags", "--abbrev=0", *matches, "HEAD"],
+        cwd=root,
+        capture=True,
+        check=False,
+    ).strip()
+
+
+def released_commits(root, since_tag):
+    """Commits a release covers, oldest bound exclusive.
+
+    More than one merge can land in a single release: the workflow's concurrency
+    group cancels queued runs, so a superseded push never gets a run of its own and
+    its commits are first tagged by the next run to finish. Resolving only HEAD
+    would drop those pull requests silently.
+    """
+    if not since_tag:
+        # Nothing bounds the range, and walking all of history would be thousands
+        # of API lookups. Only the tagged commit is resolved.
+        return [run(["git", "rev-parse", "--verify", "HEAD^{commit}"], cwd=root, capture=True).strip()]
+    raw = run(["git", "rev-list", f"{since_tag}..HEAD"], cwd=root, capture=True, check=False)
+    commits = [line.strip() for line in raw.splitlines() if line.strip()]
+    if len(commits) > MAX_RELEASE_COMMENT_COMMITS:
+        print(
+            f"[github-release] {len(commits)} commits since {since_tag}; "
+            f"only the newest {MAX_RELEASE_COMMENT_COMMITS} are resolved to pull requests"
+        )
+        return commits[:MAX_RELEASE_COMMENT_COMMITS]
+    return commits
+
+
+def pull_requests_for_commit(slug, sha):
+    raw = run(
+        ["gh", "api", f"repos/{slug}/commits/{sha}/pulls", "--jq", ".[].number"],
+        capture=True,
+        check=False,
+    )
+    return [line.strip() for line in raw.splitlines() if line.strip()]
+
+
+def comment_release_on_pull_requests(root, service, tag, version, since_tag):
+    """Post the "included in version" note on the pull requests a release shipped.
+
+    Services that publish from a VERSION file never run semantic-release, so nothing
+    posted the note that @semantic-release/github posts for the services it manages.
+    Release branches publish exclusively through this path, so without it a backport
+    merge gets no version feedback at all.
+
+    A failure here never fails the job. The tag, the push, and the GitHub release
+    have already succeeded; losing a courtesy comment must not mark a shipped
+    release as broken.
+    """
+    slug = repo_slug()
+    if not slug:
+        print("[github-release] WARNING: could not resolve the repository; skipping release comments")
+        return []
+
+    body = (
+        f"This PR is included in version {version}.\n"
+        "\n"
+        f"The release is available on [GitHub release]({release_url(slug, tag)})."
+    )
+    commented = []
+    for sha in released_commits(root, since_tag):
+        for number in pull_requests_for_commit(slug, sha):
+            if number in commented:
+                continue
+            result = subprocess.run(
+                ["gh", "pr", "comment", number, "--repo", slug, "--body", body],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
+            if result.returncode != 0:
+                print(
+                    f"[github-release] WARNING: {service['id']}: could not comment {tag} on #{number}: "
+                    f"{(result.stdout or '').strip()}"
+                )
+                continue
+            commented.append(number)
+    if commented:
+        print(f"[github-release] {service['id']}: commented {tag} on {', '.join('#' + n for n in commented)}")
+    else:
+        print(f"[github-release] {service['id']}: no pull requests found for {tag}")
+    return commented
 
 
 def publish_tag_for_version(root, service, version, dry_run, draft, reason):
@@ -657,9 +783,16 @@ def publish_tag_for_version(root, service, version, dry_run, draft, reason):
         print(f"[github-release] {service['id']}: would create {tag} at HEAD")
         print(notes)
         return
+    # Resolved before tagging so HEAD's own tag cannot bound the range.
+    since_tag = ancestor_service_tag(root, service)
     run(["git", "tag", tag, "HEAD"], cwd=root)
     run(["git", "push", "origin", f"refs/tags/{tag}"], cwd=root)
-    create_release(tag, tag, notes, draft, dry_run=False)
+    created = create_release(tag, tag, notes, draft, dry_run=False)
+    # Only for a release this run actually created, so a re-run does not comment
+    # twice, and only for a stable version: dev prereleases are internal
+    # checkpoints, not something to announce on a pull request.
+    if created and not draft and re.fullmatch(STABLE_SEMVER_PATTERN, version):
+        comment_release_on_pull_requests(root, service, tag, version, since_tag)
 
 
 def java_ci_components(root):

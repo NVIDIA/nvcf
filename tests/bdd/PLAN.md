@@ -122,6 +122,35 @@ refactor in every consumer; that is a feature.
 | `When I run command with a terminal:` (docstring) | Same as the docstring form, but stdin is attached to a pseudo-terminal so the child sees a TTY on fd 0. For commands that gate interactive-only behavior on a TTY, such as `nvcf-cli self-hosted up` (its auth-gate mints the admin token only when stdin is a terminal). No input is written; stdout and stderr are captured separately as usual. |
 | `When I export command output to environment variable {string}` | Exports the previous command's trimmed stdout under the named env var. Fails the step unless the prior command exited 0 and produced non-empty stdout. Snapshotted by the env Ledger; restored at suite teardown. |
 
+#### Function lifecycle command adapters
+
+These steps hide the repeated executable, config prefix, fixed subcommand, shell
+quoting, and exit-zero assertion. Every meaningful function, deployment, and
+invocation input remains visible. Each action runs exactly one `nvcf-cli`
+command and preserves its result for existing output assertions.
+
+The adapters validate only Gherkin structure. They do not store function
+identity, apply defaults, parse or normalize product values, enforce product
+preconditions, or allowlist CLI options. Supplied arguments reach `nvcf-cli`
+unchanged after `${VAR}` interpolation. The `successfully` wording is the
+deliberate exception that asserts exit code 0. Negative and exit-code-specific
+scenarios use the raw command steps.
+
+CLI option tables have exactly two headers, `option | value`, and at least one
+data row. Each row emits the option and value as separate arguments in its
+original order. Repeated options and empty values are preserved.
+
+| Step | Command |
+|------|---------|
+| `Given I use NVCF CLI config {string}` | Interpolates and stores the supplied config argument without resolving or checking the path. Later lifecycle steps pass it to `--config`. |
+| `When I successfully create function {string} from image {string} with CLI options:` | Runs `function create --name <name> --image <image>` followed by the option rows. |
+| `When I successfully deploy the function selected by NVCF CLI with options:` | Runs `function deploy create` followed by the option rows. Function selection remains owned by CLI state. |
+| `When I successfully generate a function API key with CLI options:` | Runs `api-key generate --for function` followed by the option rows. |
+| `When I successfully invoke the function selected by NVCF CLI over HTTP with timeout {string} seconds and poll duration {string} seconds:` (JSON docstring) | Runs `function invoke` with the exact request body, timeout, and poll duration. |
+| `When I successfully invoke the function selected by NVCF CLI over plaintext gRPC service {string} method {string} with timeout {string} seconds and poll duration {string} seconds:` (JSON docstring) | Runs `function invoke --grpc --grpc-plaintext` with the visible service, method, request, timeout, and poll duration. |
+| `When I successfully invoke model {string} at {string} with timeout {string} seconds:` (JSON docstring) | Runs `function invoke` with the visible model, inference URL, exact request body, and timeout. |
+| `When I successfully undeploy the function selected by NVCF CLI` | Runs `function delete --deployment-only`. Function selection remains owned by CLI state. |
+
 ### Assertions (Then / And)
 
 | Step | Notes |
@@ -141,6 +170,7 @@ refactor in every consumer; that is a feature.
 | `Then Helm release {string} in namespace {string} using context {string} should contain values:` (YAML docstring) | Runs one explicit-context `helm get values -o yaml` for the named release and asserts that its values contain the supplied YAML subset. Extra map keys are allowed; lists remain order- and length-sensitive. Failure messages name the release and first differing path without printing release values. |
 | `Then Kubernetes resource {string} in namespace {string} using context {string} should contain:` (YAML docstring) | The resource is explicit `kind/name`. Runs one `kubectl get -o yaml` against the named context and asserts that the resource YAML contains the supplied YAML subset. Extra map keys are allowed; lists remain order- and length-sensitive. Failure messages name the resource and first differing path without printing resource values. |
 | `Then the rendered manifests in {string} should contain:` (table) | Requires a `text` header and one or more fixed strings. Recursively inspects regular files under the repo-relative directory and fails if any listed string is absent. `${VAR}` expansion applies to the path and table values. |
+| `Then the rendered manifests in {string} should contain Kubernetes resource {string}` | Parses rendered YAML documents and requires an actual top-level resource matching the explicit `kind/name`. Nested references such as `Certificate.spec.issuerRef` do not satisfy the assertion. `${VAR}` expansion applies to the path, kind, and name. |
 | `Then the rendered manifests in {string} under directories matching {string} should contain:` (table) | Positive rendered-manifest assertion scoped to files below a directory whose name matches the supplied shell pattern, such as `*-nats`. The render directory, directory-name pattern, and table values support `${VAR}` expansion. |
 | `Then the rendered manifests in {string} should not contain:` (table) | Requires a `text` header and one or more fixed strings. Recursively inspects regular files under the repo-relative directory and fails if any listed string appears. `${VAR}` expansion applies to the path and table values. |
 | `Then these Helm releases should be deployed using context {string}:` (table) | Requires `name` and `namespace` headers, with an optional `revision` header. Runs one explicit-context, all-namespaces `helm list` and asserts that every listed release has status `deployed`; non-empty revision cells are also matched. |
@@ -148,6 +178,7 @@ refactor in every consumer; that is a feature.
 | `Then these Kubernetes resources should not exist in namespace {string} using context {string}:` (table) | Requires `kind` and `name` headers. Gets each named resource with `--ignore-not-found` and requires empty name output, so absence does not depend on human-readable error text. |
 | `Then deployment {string} in namespace {string} using context {string} should complete rollout within {string}` | Runs `kubectl rollout status` for the named deployment with the explicit namespace, context, and timeout. Failure messages name the deployment without printing command output. |
 | `Then NVCFBackend {string} in namespace {string} using context {string} should report agent status {string} within {string}` | Waits for the named backend's `status.agentStatus` to equal the visible value using the explicit namespace, context, and timeout. Failure messages name the backend without printing resource output. |
+| `Then these Gateway API routes should be accepted and resolved using context {string} within {string}:` (table) | Requires `kind`, `name`, `namespace`, and `parent` headers. Waits for every named route to report both `Accepted=True` and `ResolvedRefs=True` for the named Gateway parent using the explicit context and timeout. The route kind is passed through without an allowlist. Failures name the table row, route, namespace, parent, and unmet condition without printing resource output. |
 
 #### YAML comparison semantics
 
@@ -208,6 +239,15 @@ contract verified in `src/clis/nvcf-cli/cmd/`):
   ```
   ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --compute-plane-stack deploy/stacks/nvcf-compute-plane --env local --plain compute-plane register --control-plane-profile <profile-path> --cluster-name <compute> --kube-context k3d-<compute> --region us-west-1 --output <values-path>
   ```
+- Helmfile control-plane profile handoff (single cluster):
+  ```
+  ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --env <env> control-plane profile export --cluster-name <control>
+  make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=<compute> CONTROL_PLANE_PROFILE=<profile-path> COMPUTE_KUBE_CONTEXT=k3d-<compute> NVCF_CLI=${NVCF_CLI}
+  ```
+  The profile export runs after the selected Helmfile environment is installed
+  so endpoint and PKI trust data describe that deployment. A single-cluster
+  export omits both persistent context flags; the CLI accepts a split-cluster
+  pair or neither, and the bootstrap has already selected the local context.
 - `self-hosted compute-plane install`:
   ```
   ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --compute-plane-stack deploy/stacks/nvcf-compute-plane --env local --plain compute-plane install --values <values-path> --kube-context k3d-<compute> --cluster-name <compute>
@@ -227,6 +267,11 @@ restoration ledger:
 - At suite teardown, the runner restores every registered path to its
   pre-suite state. Files that did not exist before are deleted; files
   that did are rewritten with the original bytes and mode.
+- Live entry points cancel and quiesce the active step before restoring the
+  file and environment ledgers and exiting on SIGINT or SIGTERM. On Unix, the
+  command runner cancels the step's process group so shell, make, and kubectl
+  descendants cannot outlive restoration. This includes generated registry
+  credential files.
 - `Config.LedgerDir` (`out/<run-id>/originals/`) is reserved for an
   on-disk variant if very large fixtures ever push memory limits.
   Today the directory is created but unused.

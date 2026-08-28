@@ -31,7 +31,6 @@ import com.nvidia.icms.service.extensions.api.ReservationProcessor;
 import com.nvidia.icms.service.extensions.api.ReservedBackupInstanceProcessor;
 import com.nvidia.icms.service.extensions.api.InstanceTerminationService;
 import com.nvidia.icms.service.extensions.api.UnhealthyInstanceService;
-import com.nvidia.icms.service.extensions.api.InstanceValidationService;
 import com.nvidia.icms.service.extensions.impl.NoOpCloudHealthEventService;
 import com.nvidia.icms.service.extensions.impl.NoOpClusterAuthorizationService;
 import com.nvidia.icms.service.extensions.impl.NoOpClusterRegistrationHandler;
@@ -47,7 +46,6 @@ import com.nvidia.icms.service.extensions.impl.NoOpReservationProcessor;
 import com.nvidia.icms.service.extensions.impl.NoOpReservedBackupInstanceProcessor;
 import com.nvidia.icms.service.extensions.impl.NoOpInstanceTerminationService;
 import com.nvidia.icms.service.extensions.impl.NoOpUnhealthyInstanceService;
-import com.nvidia.icms.service.extensions.impl.NoOpInstanceValidationService;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.context.annotation.Bean;
@@ -153,11 +151,5 @@ public class DefaultExtensionsAutoConfiguration {
     @ConditionalOnMissingBean
     public UnhealthyInstanceService defaultUnhealthyInstanceService() {
         return new NoOpUnhealthyInstanceService();
-    }
-
-    @Bean
-    @ConditionalOnMissingBean
-    public InstanceValidationService defaultInstanceValidationService() {
-        return new NoOpInstanceValidationService();
     }
 }

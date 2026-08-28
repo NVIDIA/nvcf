@@ -49,6 +49,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
+	netv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -700,6 +701,28 @@ func TestAutoPurgeWorkerDeletion(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NotNil(t, o)
 	}
+}
+
+func TestBackendK8sCacheStartRemovesLegacyIntraNamespaceEgressPolicy(t *testing.T) {
+	ctx, cancel := context.WithCancel(newTestContext())
+	t.Cleanup(cancel)
+
+	legacyNP := &netv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      k8sutil.AllowEgressIntraNamespaceNetworkPolicyName,
+			Namespace: RequestsNamespace,
+		},
+	}
+
+	b := NewBackendk8sCacheBuilder().WithNamespaceLabels(labels.Set{"foo": "bar"})
+	clients := mockKubeClients(legacyNP)
+	bc, _, err := b.WithClients(clients).Start(ctx)
+	require.NoError(t, err)
+
+	_, err = bc.clients.K8s.NetworkingV1().NetworkPolicies(RequestsNamespace).Get(
+		ctx, k8sutil.AllowEgressIntraNamespaceNetworkPolicyName, metav1.GetOptions{},
+	)
+	assert.True(t, apierrors.IsNotFound(err))
 }
 
 func TestCleanupFailedButNoInstances(t *testing.T) {
@@ -4373,6 +4396,116 @@ func Test_newGPUAllocationGetter(t *testing.T) {
 			Allocated: 1,
 		},
 	}, gotGPUUsage)
+}
+
+// TestGetGPUUsageStats_FallbackToNonSuffixSingleType verifies that when infra overhead
+// eliminates the _1x subdivision (only 1.25 CPUs per instance, less than the 2-CPU
+// overhead), getGPUUsageStats still returns correct capacity by using the NodeType
+// field instead of the "_1x" name suffix.
+//
+// With the old code (strings.HasSuffix(it.Name, "_1x")) this test would fail because
+// no _1x instance type is generated and Capacity would be 0.
+func TestGetGPUUsageStats_FallbackToNonSuffixSingleType(t *testing.T) {
+	ctx, cancel := context.WithCancel(newTestContext())
+	t.Cleanup(cancel)
+
+	// Node with 4 GPUs but only 5 CPUs.  With a 2-CPU infra overhead the _1x
+	// subdivision is excluded: 5000m/4 = 1250m < 2000m overhead.  The _2x and
+	// _4x subdivisions pass (2500m and 5000m > 2000m respectively), so
+	// NodeType-based selection finds _2x first and yields Capacity = 2 * 2 = 4.
+	const gpuName = "TestGPU"
+	const instanceLabel = "DGX-CLOUD.GPU." + gpuName
+	node := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "node-gpu",
+			Labels: map[string]string{
+				nvcatypes.InstanceTypeLabel: instanceLabel,
+				"nvidia.com/gpu.present":    "true",
+			},
+		},
+		Status: corev1.NodeStatus{
+			Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}},
+			Allocatable: corev1.ResourceList{
+				corev1.ResourceCPU:              resource.MustParse("5"),
+				corev1.ResourceMemory:           resource.MustParse("32Gi"),
+				corev1.ResourceEphemeralStorage: resource.MustParse("256Gi"),
+				corev1.ResourceName(nodefeatures.GPUResourceKey): resource.MustParse("4"),
+			},
+		},
+	}
+
+	k8sClients := mockKubeClients(node)
+
+	nodeInfFactory := informers.NewSharedInformerFactory(k8sClients.K8s, 0)
+	ni := nodeInfFactory.Core().V1().Nodes()
+
+	srInfFactory := nvcainformers.NewSharedInformerFactoryWithOptions(k8sClients.BART, 0)
+	icmsReqGenInf, err := srInfFactory.ForResource(nvcav2beta1.SchemeGroupVersion.WithResource("icmsrequests"))
+	require.NoError(t, err)
+
+	bc := &BackendK8sCache{
+		clients:    k8sClients,
+		nodeLister: ni.Lister(),
+		regITCache: icms.NewRegistrationInstanceTypeCache(),
+		featureFlagFetcher: &featureflagmock.Fetcher{
+			EnabledFFs: []*featureflag.FeatureFlag{},
+		},
+		infraOverheadGetter: enforce.InfraOverheadGetterFunc(func(context.Context) (corev1.ResourceList, error) {
+			return corev1.ResourceList{
+				corev1.ResourceCPU: resource.MustParse("2"),
+			}, nil
+		}),
+		icmsRequestLister: nvcav2beta1listers.NewICMSRequestLister(icmsReqGenInf.Informer().GetIndexer()),
+	}
+	srHelper, _ := NewK8sComputeBackend(k8sClients, bc)
+	bc.icmsRequestHelper = srHelper
+
+	// Bypass dynamic GPU discovery; return a BackendGPU directly.
+	bc.nfClient = &fakeNodeFeatures{backendGPUs: []nvcatypes.BackendGPU{{
+		Name: nvcatypes.GPUName(gpuName),
+		InstanceTypes: []nvcatypes.InstanceType{{
+			Name:         nvcatypes.InstanceName(instanceLabel),
+			FullName:     instanceLabel,
+			GPUCount:     4,
+			CPU:          resource.MustParse("5"),
+			SystemMemory: resource.MustParse("32Gi"),
+			Storage:      resource.MustParse("256Gi"),
+			NodeCount:    1,
+		}},
+	}}}
+
+	nodeInfFactory.Start(ctx.Done())
+	srInfFactory.Start(ctx.Done())
+	syncCtx, syncCancel := context.WithTimeout(ctx, 5*time.Second)
+	synced := cache.WaitForCacheSync(syncCtx.Done(), ni.Informer().HasSynced, icmsReqGenInf.Informer().HasSynced)
+	syncCancel()
+	if !synced {
+		t.Skip("Cache sync did not complete within 5s")
+	}
+
+	got, err := bc.getGPUUsageStats(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, map[nvcatypes.GPUName]nvcatypes.GPUResource{
+		gpuName: {Capacity: 4},
+	}, got)
+}
+
+// fakeNodeFeatures is a minimal nodefeatures.Client for use in unit tests.
+type fakeNodeFeatures struct {
+	backendGPUs []nvcatypes.BackendGPU
+}
+
+func (f *fakeNodeFeatures) GetAllBackendGPUs(_ context.Context) ([]nvcatypes.BackendGPU, error) {
+	return f.backendGPUs, nil
+}
+
+func (f *fakeNodeFeatures) GetGPUResources(_ context.Context, name nvcatypes.GPUName) (nvcatypes.GPUResource, error) {
+	for _, g := range f.backendGPUs {
+		if g.Name == name {
+			return nvcatypes.GPUResource{Capacity: g.Capacity}, nil
+		}
+	}
+	return nvcatypes.GPUResource{}, fmt.Errorf("gpu %q not found", name)
 }
 
 func TestBackendK8sCache_Start_FNDS(t *testing.T) {

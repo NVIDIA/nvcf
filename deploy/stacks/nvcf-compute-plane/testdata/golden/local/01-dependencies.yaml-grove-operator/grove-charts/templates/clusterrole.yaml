@@ -5,7 +5,7 @@ kind: ClusterRole
 metadata:
   name: grove:system:grove-operator
   labels:
-    chart: "grove-charts-v0.1.0-alpha.11"
+    chart: "grove-charts-v0.1.0-alpha.12"
     release: "grove-operator"
     app.kubernetes.io/component: operator-clusterrole
     app.kubernetes.io/name: grove-operator
@@ -36,6 +36,7 @@ rules:
   - clustertopologybindings
   - clustertopologybindings/status
   - podcliquescalinggroups/status
+  - podgangmaps
   verbs:
   - create
   - get
@@ -171,6 +172,18 @@ rules:
   - get
   - list
   - watch
+- apiGroups:
+  - scheduling.run.ai
+  resources:
+  - podgroups
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+  - patch
+  - update
+  - delete
 # CRD installer init container requires permissions to apply Grove CRDs on startup.
 - apiGroups:
   - apiextensions.k8s.io
@@ -181,6 +194,7 @@ rules:
   - podcliques.grove.io
   - podcliquescalinggroups.grove.io
   - clustertopologybindings.grove.io
+  - podgangmaps.grove.io
   - podgangs.scheduler.grove.io
   verbs:
   - get

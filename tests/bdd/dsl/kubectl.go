@@ -28,6 +28,25 @@ type KubernetesResource struct {
 	Name string
 }
 
+// GatewayAPIRoute identifies one Gateway API route and the Gateway parent
+// whose status conditions must be ready. The kind remains caller-supplied so
+// the helper works with every route kind supported by the installed Gateway
+// API implementation.
+type GatewayAPIRoute struct {
+	Kind      string
+	Name      string
+	Namespace string
+	Parent    string
+}
+
+// GatewayAPIRouteWait describes one command in a route-readiness plan.
+type GatewayAPIRouteWait struct {
+	Row       int
+	Route     GatewayAPIRoute
+	Condition string
+	Command   string
+}
+
 type kubernetesWaitTarget struct {
 	name        string
 	namespace   string
@@ -134,6 +153,62 @@ func NVCFBackendAgentStatusCommand(name, namespace, kubeContext, agentStatus, ti
 	}, " "), nil
 }
 
+// GatewayAPIRouteConditionWaitCommand builds an explicit-context wait for one
+// condition on one Gateway API route.
+func GatewayAPIRouteConditionWaitCommand(route GatewayAPIRoute, kubeContext, condition, timeout string) (string, error) {
+	target, err := resolveKubernetesWaitTarget(route.Kind, route.Name, route.Namespace, kubeContext, timeout)
+	if err != nil {
+		return "", err
+	}
+	route.Kind = strings.TrimSpace(Interpolate(route.Kind))
+	route.Parent = strings.TrimSpace(Interpolate(route.Parent))
+	condition = strings.TrimSpace(condition)
+	if route.Kind == "" {
+		return "", fmt.Errorf("gateway API route kind is empty")
+	}
+	if route.Parent == "" {
+		return "", fmt.Errorf("gateway API route parent is empty")
+	}
+	if condition == "" {
+		return "", fmt.Errorf("gateway API route condition is empty")
+	}
+
+	conditionExpression := fmt.Sprintf(
+		`--for=jsonpath={.status.parents[?(@.parentRef.name==%q)].conditions[?(@.type==%q)].status}=True`,
+		route.Parent,
+		condition,
+	)
+	return BuildCommand(
+		"kubectl", "wait", strings.ToLower(route.Kind)+"/"+target.name,
+		"-n", target.namespace,
+		"--context", target.kubeContext,
+		conditionExpression,
+		"--timeout="+target.timeout,
+	), nil
+}
+
+// GatewayAPIRouteReadinessWaits plans the Accepted and ResolvedRefs waits for
+// every route. Conditions remain grouped so every route is accepted before
+// backend-reference resolution is checked.
+func GatewayAPIRouteReadinessWaits(routes []GatewayAPIRoute, kubeContext, timeout string) ([]GatewayAPIRouteWait, error) {
+	waits := make([]GatewayAPIRouteWait, 0, len(routes)*2)
+	for _, condition := range []string{"Accepted", "ResolvedRefs"} {
+		for index, route := range routes {
+			command, err := GatewayAPIRouteConditionWaitCommand(route, kubeContext, condition, timeout)
+			if err != nil {
+				return nil, fmt.Errorf("route row %d condition %s: %w", index+1, condition, err)
+			}
+			waits = append(waits, GatewayAPIRouteWait{
+				Row:       index + 1,
+				Route:     route,
+				Condition: condition,
+				Command:   command,
+			})
+		}
+	}
+	return waits, nil
+}
+
 func resolveKubernetesWaitTarget(resourceType, name, namespace, kubeContext, timeout string) (kubernetesWaitTarget, error) {
 	target := kubernetesWaitTarget{
 		name:        strings.TrimSpace(Interpolate(name)),
@@ -173,27 +248,4 @@ func KubectlApplyCommand(manifestPath, kubeContext string) (string, error) {
 	}
 	args = append(args, "apply", "-f", quoteCommandArg(manifestPath))
 	return strings.Join(args, " "), nil
-}
-
-func quoteCommandArg(value string) string {
-	if isCommandArgSafe(value) {
-		return value
-	}
-	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
-}
-
-func isCommandArgSafe(value string) bool {
-	if value == "" {
-		return false
-	}
-	for _, char := range value {
-		if char >= 'a' && char <= 'z' ||
-			char >= 'A' && char <= 'Z' ||
-			char >= '0' && char <= '9' ||
-			strings.ContainsRune("_./:@%+=,-", char) {
-			continue
-		}
-		return false
-	}
-	return true
 }

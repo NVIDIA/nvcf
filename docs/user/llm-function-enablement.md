@@ -39,10 +39,15 @@ cert-manager, or one you issue yourself and supply in a pre-created Secret.
 Each compute plane receives the public root CA certificate and uses the
 combined system and private trust bundle in the `llm-worker` sidecar.
 
-The request-router address configured for the compute plane must use a DNS name
-listed in the certificate SANs. For a single-cluster deployment, use
-`llm-request-router.nvcf.svc.cluster.local:50071`. Use an address reachable from
-each compute cluster when the control and compute planes use separate networks.
+The external dial endpoints and the request-router TLS identity are separate.
+For a single-cluster deployment, workers dial
+`llm-request-router.nvcf.svc.cluster.local:50071`. For remote workers, the
+backend router preserves the advertised request-router pod hostname as the QUIC
+Server Name Indication (SNI) while it sends traffic through an external UDP
+endpoint. The certificate must cover that advertised hostname. The default
+wildcard SAN is `*.llm-request-router-headless.nvcf.svc.cluster.local`.
+An external load-balancer hostname does not need to be a certificate SAN just
+because workers use it as a dial endpoint.
 
 ### Managed OpenBao issuer
 
@@ -74,9 +79,9 @@ addons:
       replicaCount: 2
 ```
 
-The stable service name covers a single request-router replica. The wildcard
-SAN covers the pod-specific headless service names advertised when the
-request-router StatefulSet has multiple replicas.
+The stable Service SAN covers the in-cluster Service name. The wildcard SAN
+covers the pod-specific headless names advertised through the backend-router
+path.
 
 To use a custom managed `ClusterIssuer`, set both the issuer identity and the
 management override:
@@ -152,6 +157,70 @@ API then includes the address in LLM worker configuration. Do not configure
 the worker address under `api.env`. When the LLM addon is disabled, the stack
 does not pass a staged endpoint to the API chart.
 
+### Remote compute clusters and regions
+
+One self-managed control plane can serve LLM workers in separate GPU clusters
+or regions when every worker cluster has routable DNS and network paths to both
+backend-router endpoints.
+
+| Path | Worker-facing values | Gateway route and backend | Terminating component |
+| --- | --- | --- | --- |
+| gRPC registration and watches | `global.workerEndpoints.llmRequestRouterAddress` for the initial connection, then `pylonGrpcDialAddress` | `llmGrpc` TCP listener and `TCPRoute` to `llm-request-router-backend-router:50071` | The backend router accepts gRPC, selects a request-router pod from the HTTP/2 authority, and proxies the stream. |
+| Reverse inference tunnel | `pylonReverseTunnelDialAddress` | `llmQuic` UDP listener and `UDPRoute` to `llm-request-router-backend-router:50072` | The backend router terminates the worker-facing QUIC connection, selects a request-router pod from SNI, and forwards the tunnel. |
+
+Configure distinct TCP and UDP endpoints when the infrastructure uses separate
+Gateways or load balancers:
+
+```yaml
+global:
+  workerEndpoints:
+    llmRequestRouterAddress: llm-grpc.example.com:50071
+
+addons:
+  llm:
+    enabled: true
+    requestRouter:
+      backendRouter:
+        pylonGrpcDialAddress: llm-grpc.example.com:50071
+        pylonReverseTunnelDialAddress: llm-quic.example.com:50072
+
+ingress:
+  gatewayApi:
+    routes:
+      llmWorker:
+        enabled: true
+        backend:
+          namespace: nvcf
+    gateways:
+      llmGrpc:
+        name: llm-grpc-gateway
+        namespace: envoy-gateway
+        listenerName: llm-grpc
+      llmQuic:
+        name: llm-quic-gateway
+        namespace: envoy-gateway
+        listenerName: llm-quic
+```
+
+Set both `pylonGrpcDialAddress` and `pylonReverseTunnelDialAddress`, or omit
+both to use the in-cluster backend-router Service. Helmfile rendering rejects a
+partial override. The gRPC worker address normally uses the same TCP endpoint
+as `pylonGrpcDialAddress`.
+
+The dial hostnames select network paths. They do not replace the advertised
+request-router pod hostname used for QUIC SNI. Keep the default wildcard SAN,
+or issue a certificate that covers a customized advertised hostname. Every
+compute cluster must trust the issuing CA as described in
+[Compute-plane trust](#compute-plane-trust). Server certificate and key updates
+follow [Certificate Renewal](#certificate-renewal). A CA or trust-bundle change
+requires a worker rollout.
+
+The stack does not provision cross-region networking, firewall rules, load
+balancers, DNS, or trust distribution. Supply those dependencies and register
+the trust bundle in every compute cluster. A successful Helm render and
+accepted Gateway routes do not prove remote TCP or UDP reachability. Test both
+paths and an LLM invocation from each region before production use.
+
 The request router uses `power-of-two` when no load-balancer configuration is
 set, and accepts any supported `routingMethod` from a function. When a
 load-balancer configuration is set, a function can only select an algorithm
@@ -193,25 +262,30 @@ stack-managed issuance. Rendering fails if any of them is set in this mode, so
 a configuration that expects the stack to issue a certificate cannot be
 mistaken for one that expects you to.
 
-The certificate must carry a SAN covering the router's advertised hostname and
-the address workers connect to. At the default single-replica configuration
-that is `llm-request-router.nvcf.svc.cluster.local`. At higher replica counts
-the router advertises per-pod headless names, so use a leftmost wildcard such
-as `*.llm-request-router-headless.nvcf.svc.cluster.local`. Include any external
-name set in `global.workerEndpoints.llmRequestRouterAddress`. The stack cannot
-read your Secret at render time, so it validates neither the SANs nor the
-expiry. A certificate that does not cover the advertised hostname fails at
-worker connection time, not at install time.
+The certificate must carry a SAN covering the router's advertised hostname.
+The stack enables backend routing and advertises per-pod headless names, so
+include `*.llm-request-router-headless.nvcf.svc.cluster.local` along with the
+stable `llm-request-router.nvcf.svc.cluster.local` name. An external TCP or UDP
+dial hostname does not need to be a SAN unless the advertised identity is also
+customized to use that hostname. The stack cannot read your Secret at render
+time, so it validates neither the SANs nor the expiry. A certificate that does
+not cover the advertised hostname fails at worker connection time, not at
+install time.
 
 You own issuance, renewal, rotation, and recovery in this mode:
 
-- Renewal and rotation: update the Secret, then restart the router with
-  `kubectl rollout restart statefulset/llm-request-router --namespace nvcf`.
-  The router reads the certificate at startup.
+- Renewal and rotation: hot reload requires `helm-nvcf-llm-request-router`
+  1.10.0 or later and Stargate 0.11.1 or later. With those versions, update the
+  Secret and follow the
+  [transport TLS rotation runbook](./runbooks/transport-tls-rotation.md). Older
+  chart releases and Stargate image overrides older than 0.11.1 require a
+  request-router restart after the Secret update.
 - Expiry: track it yourself. Nothing in the stack renews the certificate or
   alerts on an approaching expiry.
-- Recovery: if the Secret is deleted or malformed, the router pods fail to
-  start. Restore the Secret and roll the StatefulSet.
+- Recovery: a running router keeps its last-known-good identity after rejecting
+  a malformed replacement. A new pod cannot start from a missing or malformed
+  Secret. Restore a valid Secret and follow the rotation runbook to verify the
+  active identity.
 
 Compute-plane trust works exactly as described in
 [Compute-plane trust](#compute-plane-trust). Author the `transportTls` block
@@ -276,8 +350,9 @@ controlPlane:
       requestRouterAddress: llm-router.example.com:443
 ```
 
-Use the endpoint that compute-plane workers can resolve and reach. Its
-hostname must match a SAN on the request-router certificate.
+Use the gRPC endpoint that compute-plane workers can resolve and reach. This is
+a dial endpoint. It does not replace the advertised request-router hostname
+that the certificate covers.
 
 Registration renders this field as `agent.llm.requestRouterAddress` in the
 compute-plane values. That is operator configuration, not a runtime fallback
@@ -289,25 +364,12 @@ from the `LLM_REQUEST_ROUTER_ADDRESS` variable in its launch environment, with
 the workload, translation rejects the launch instead of falling back to the
 registered address.
 
-Add that hostname to `addons.llm.pki.dnsNames`. The list accepts any number of
-additional names; the stack only requires that one entry covers the router's
-advertised hostname. For the managed issuer, also extend `allowedDomains` with
-the parent domain, because the OpenBao signing role allows subdomains and
-wildcards but not bare domains. To issue for `llm-router.example.com`, use:
-
-```yaml
-addons:
-  llm:
-    pki:
-      allowedDomains: nvcf.svc.cluster.local,example.com
-      dnsNames:
-        - llm-request-router.nvcf.svc.cluster.local
-        - "*.llm-request-router-headless.nvcf.svc.cluster.local"
-        - llm-router.example.com
-```
-
-`allowedDomains: llm-router.example.com` does not work for that name. The role
-sets `allow_bare_domains=false`, so the entry must be the parent domain.
+Keep the default stable and wildcard entries in `addons.llm.pki.dnsNames`.
+Add another SAN only when the advertised request-router identity changes, not
+when only a load-balancer dial endpoint changes. For the managed issuer, any
+new advertised DNS suffix must also be covered by `allowedDomains`. The
+OpenBao role allows subdomains and wildcards but not bare domains, so configure
+the parent domain rather than the exact leaf name.
 
 The managed export reads the public root CA certificate from
 `services/all/pki/root` in the stack's OpenBao service and calculates the
@@ -434,16 +496,21 @@ kubectl -n nvcf wait --for=condition=Ready \
   --timeout=2m
 ```
 
-Verify the request-router `Certificate`, its issuer reference, and the SANs.
-The commands read only the public certificate:
+Set `REQUEST_ROUTER_TLS_NAME` to the value of
+`addons.llm.pki.secretName`. Its default is `stargate-quic-tls`. In
+`certManager` mode, verify the request-router `Certificate` and its issuer
+reference. The `existingSecret` mode does not render a `Certificate`, so skip
+the first two commands in that mode. The final command applies to both modes
+and reads only the public certificate:
 
 ```bash
+export REQUEST_ROUTER_TLS_NAME="<configured-request-router-tls-name>"
 kubectl -n nvcf wait --for=condition=Ready \
-  certificate/stargate-quic-tls \
+  "certificate/$REQUEST_ROUTER_TLS_NAME" \
   --timeout=2m
-kubectl -n nvcf get certificate stargate-quic-tls \
+kubectl -n nvcf get certificate "$REQUEST_ROUTER_TLS_NAME" \
   -o jsonpath='{.spec.issuerRef.kind}{"/"}{.spec.issuerRef.name}{"\n"}'
-kubectl -n nvcf get secret stargate-quic-tls \
+kubectl -n nvcf get secret "$REQUEST_ROUTER_TLS_NAME" \
   -o jsonpath='{.data.tls\.crt}' \
   | base64 --decode \
   | openssl x509 -noout -subject -issuer -dates -ext subjectAltName
@@ -505,7 +572,9 @@ kubectl -n nvcf-backend get pod <function-pod> \
 The worker args must contain
 `--stargate-address=llm-request-router.nvcf.svc.cluster.local:50071`, or the
 configured routable DNS name, and must not contain `--quic-insecure`. The
-address hostname must match a certificate SAN. The environment must contain:
+external address is the initial gRPC dial endpoint. The reverse tunnel verifies
+the advertised request-router pod hostname instead. The environment must
+contain:
 
 ```text
 STARGATE_TLS_CERT_PATH=/etc/ssl/certs/ca-certificates.crt
@@ -515,26 +584,39 @@ Also verify the control-plane components:
 
 ```bash
 kubectl get deployment -n nvcf llm-api-gateway
+kubectl get deployment -n nvcf llm-request-router-backend-router
 kubectl get statefulset -n nvcf llm-request-router
+kubectl get service -n nvcf llm-request-router-backend-router
 kubectl get pods -n nvcf | grep -E 'llm-api-gateway|llm-request-router'
 kubectl get httproute -A | grep llm
 ```
 
+For remote workers, also verify the LLM `TCPRoute`, `UDPRoute`, and
+`ReferenceGrant` as described in
+[Gateway Routing and DNS](./gateway-routing.md#verify-llm-worker-routes).
+
 ## Certificate Renewal
 
-cert-manager renews the request-router certificate and updates
-`Secret/stargate-quic-tls`. With `mode: existingSecret` there is no renewal
-loop and you update the Secret yourself. Either way, the request router loads
-its certificate when the pod starts. Restart the StatefulSet after renewal so
-every replica uses the updated certificate:
+cert-manager renews the request-router certificate and updates the Secret named
+by `addons.llm.pki.secretName`. The default is `Secret/stargate-quic-tls`.
+With `mode: existingSecret` there is no renewal loop and you update the
+configured Secret yourself.
 
-```bash
-kubectl -n nvcf rollout restart statefulset/llm-request-router
-kubectl -n nvcf rollout status statefulset/llm-request-router --timeout=5m
-```
+Hot reload requires `helm-nvcf-llm-request-router` 1.10.0 or later and Stargate
+0.11.1 or later. The request router polls the mounted server certificate and
+private key every 30 seconds. A valid replacement becomes active for new
+handshakes without restarting the request router. Established connections
+remain open. If a replacement is invalid, the router rejects it and keeps the
+last-known-good identity. Older chart releases and Stargate image overrides
+older than 0.11.1 require a request-router restart after the Secret update.
 
-Run the certificate and worker checks again after the restart. Do not assume
-that the request router hot reloads certificate changes.
+This reload contract covers the server certificate and private key only. A
+trust-bundle change, including a root CA rotation, requires a rolling restart of
+the LLM worker pods. Renewing an intermediate under an already-trusted root does
+not change the trust bundle and does not require a worker-pod restart. Follow
+the [transport TLS rotation runbook](./runbooks/transport-tls-rotation.md) for
+the atomic Secret update, reload checks, trust-bundle rollout order, and
+recovery procedure.
 
 ## Upgrade and Rollback
 
@@ -558,7 +640,9 @@ Use this order for an upgrade from plaintext transport:
 5. Apply the remaining control-plane stack. The managed router hook prepares
    the OpenBao signing path before cert-manager reconciles the request-router
    `Certificate`.
-6. Wait for the issuer and `Certificate/stargate-quic-tls` to become ready.
+6. Wait for the issuer and the `Certificate` named by
+   `addons.llm.pki.secretName` to become ready. The default name is
+   `stargate-quic-tls`.
 7. Export or update the control-plane profile, register each compute plane
    again, and install the refreshed registration values.
 8. Recreate the LLM functions and verify the certificate SAN, trust-bundle
@@ -572,8 +656,9 @@ Use this order for a safe rollback:
    plane again, and recreate the LLM workers with the combined trust bundle.
 3. Set `addons.llm.pki.issuerKind` and `issuerName` to the replacement, set
    `clusterIssuer.enabled: false`, and apply the control-plane stack.
-4. Wait for `Certificate/stargate-quic-tls` to become ready, restart the
-   request-router StatefulSet, and verify the replacement TLS data path.
+4. Wait for the `Certificate` named by `addons.llm.pki.secretName` to become
+   ready, confirm a successful `server_identity` reload, and verify the
+   replacement TLS data path with a new connection.
 5. Remove the old root from the compute-plane profile, register each compute
    plane again, and recreate the workers.
 6. Confirm that no `Certificate` references the old issuer:
@@ -677,11 +762,15 @@ For transport TLS failures, check:
 - Unknown issuer: inspect the `Certificate` Ready condition and verify
   `issuerRef.kind`, `issuerRef.name`, and the issuer namespace. A namespaced
   `Issuer` must be in `nvcf`.
-- SAN mismatch: compare the hostname in `--stargate-address` with the SANs in
-  `Secret/stargate-quic-tls`. Do not replace the hostname with an IP address.
+- SAN mismatch: compare the request router's
+  `--advertised-hostname-template` with the SANs in
+  the Secret named by `addons.llm.pki.secretName`. The default is
+  `Secret/stargate-quic-tls`. The external `--stargate-address` is a dial
+  endpoint and does not replace the advertised QUIC identity.
 - Expired or not-yet-valid certificate: inspect the certificate dates and the
-  cluster clock. Renew the certificate and restart the request-router
-  StatefulSet.
+  cluster clock. Renew the certificate and use the
+  [transport TLS rotation runbook](./runbooks/transport-tls-rotation.md) to
+  verify that the replacement becomes active.
 - Missing trust bundle: verify `ConfigMap/nvcf-transport-trust-bundle`, compare
   its fingerprint with the compute-plane profile, and confirm
   `STARGATE_TLS_CERT_PATH` in the `llm-worker` container.

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Test that podDisruptionBudget values thread correctly from environment files
-# through global.yaml.gotmpl into each chart's rendered output, and that the
-# chart-level fail validation fires when both or neither availability field is set.
+# Test that selected values thread correctly from environment files through
+# global.yaml.gotmpl into each chart's rendered output. This covers Cassandra
+# credential isolation/defaults and PDB wiring, including chart-level PDB
+# validation when both or neither availability field is set.
 set -euo pipefail
 
 stack_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -159,6 +160,54 @@ EOF
 for release in cassandra nats openbao-server ratelimiter ess-api; do
   assert_single_release "$release"
 done
+
+# ---------------------------------------------------------------------------
+# Cassandra credentials - chart defaults
+#
+# The self-managed stack must not override Cassandra chart credentials. Stack
+# values with the same names are intentionally ignored so the chart defaults
+# remain the single source of truth.
+# ---------------------------------------------------------------------------
+write_env <<'EOF'
+global:
+  image:
+    registry: nvcr.io
+    repository: test/nvcf
+cassandra:
+  dbUser:
+    user: stack-test-admin
+    password: stack-test-admin-password
+  serviceRolePassword: stack-test-service-password
+EOF
+
+render_chart_values cassandra "$work_dir/cassandra-credentials-values.yaml" >/dev/null
+if yq -e '.cassandra | has("dbUser") or has("serviceRolePassword")' \
+  "$work_dir/cassandra-credentials-values.yaml" >/dev/null 2>&1; then
+  fail "cassandra: stack credential values should not reach the chart"
+fi
+
+cassandra_manifest="$work_dir/cassandra-default-credentials.yaml"
+helm template cassandra "$helm_dir/cassandra/helm" \
+  --namespace nvcf \
+  --values "$work_dir/cassandra-credentials-values.yaml" >"$cassandra_manifest" ||
+  fail "cassandra: chart did not render with default credentials"
+
+get_migration_env() {
+  local name="$1"
+  yq -r '
+    select(.kind == "Job" and .metadata.name == "cassandra-migrations") |
+    .spec.template.spec.containers[].env[] |
+    select(.name == "'"$name"'") |
+    .value
+  ' "$cassandra_manifest"
+}
+
+test "$(get_migration_env CASSANDRA_USER)" = "cassandra" ||
+  fail "cassandra: migrations should use the chart default user"
+test "$(get_migration_env CASSANDRA_PASSWORD)" = "cassandra" ||
+  fail "cassandra: migrations should use the chart default password"
+test "$(get_migration_env SERVICE_ROLE_PASSWORD)" = "ch@ng3m3" ||
+  fail "cassandra: migrations should use the chart default service-role password"
 
 # ---------------------------------------------------------------------------
 # 1. Cassandra PDB - omitted (default off)

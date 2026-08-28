@@ -45,6 +45,7 @@ func registerAssertionSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^the json output should contain rows:$`, sc.jsonOutputShouldContainRows)
 	ctx.Step(`^Helm release "([^"]*)" in namespace "([^"]*)" using context "([^"]*)" should contain values:$`, sc.helmReleaseShouldContainValues)
 	ctx.Step(`^the rendered manifests in "([^"]*)" should contain:$`, sc.renderedManifestsShouldContain)
+	ctx.Step(`^the rendered manifests in "([^"]*)" should contain Kubernetes resource "([^"/]+)/([^"]+)"$`, sc.renderedManifestsShouldContainKubernetesResource)
 	ctx.Step(`^the rendered manifests in "([^"]*)" under directories matching "([^"]*)" should contain:$`, sc.renderedManifestsUnderMatchingDirectoriesShouldContain)
 	ctx.Step(`^the rendered manifests in "([^"]*)" should not contain:$`, sc.renderedManifestsShouldNotContain)
 	ctx.Step(`^these Helm releases should be deployed using context "([^"]*)":$`, sc.helmReleasesShouldBeDeployed)
@@ -53,6 +54,7 @@ func registerAssertionSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^Kubernetes resource "([^"/]+)/([^"]+)" in namespace "([^"]*)" using context "([^"]*)" should contain:$`, sc.kubernetesResourceShouldContain)
 	ctx.Step(`^deployment "([^"]*)" in namespace "([^"]*)" using context "([^"]*)" should complete rollout within "([^"]*)"$`, sc.deploymentShouldCompleteRollout)
 	ctx.Step(`^NVCFBackend "([^"]*)" in namespace "([^"]*)" using context "([^"]*)" should report agent status "([^"]*)" within "([^"]*)"$`, sc.nvcfBackendShouldReportAgentStatus)
+	ctx.Step(`^these Gateway API routes should be accepted and resolved using context "([^"]*)" within "([^"]*)":$`, sc.gatewayAPIRoutesShouldBeAcceptedAndResolved)
 }
 
 func (sc *ScenarioContext) commandExitCodeShouldBe(expected int) error {
@@ -180,6 +182,13 @@ func (sc *ScenarioContext) renderedManifestsShouldContain(path string, table *go
 		return err
 	}
 	return dsl.FilesContain(sc.resolvePath(dsl.Interpolate(path)), "", needles)
+}
+
+func (sc *ScenarioContext) renderedManifestsShouldContainKubernetesResource(path, kind, name string) error {
+	return dsl.RenderedManifestsContainResource(
+		sc.resolvePath(dsl.Interpolate(path)),
+		dsl.KubernetesResource{Kind: kind, Name: name},
+	)
 }
 
 func (sc *ScenarioContext) renderedManifestsUnderMatchingDirectoriesShouldContain(path, pattern string, table *godog.Table) error {
@@ -361,6 +370,33 @@ func (sc *ScenarioContext) nvcfBackendShouldReportAgentStatus(ctx context.Contex
 	return nil
 }
 
+func (sc *ScenarioContext) gatewayAPIRoutesShouldBeAcceptedAndResolved(ctx context.Context, kubeContext, timeout string, table *godog.Table) error {
+	routes, err := tableToGatewayAPIRoutes(table)
+	if err != nil {
+		return err
+	}
+	waits, err := dsl.GatewayAPIRouteReadinessWaits(routes, kubeContext, timeout)
+	if err != nil {
+		return err
+	}
+
+	for _, wait := range waits {
+		if err := sc.runResolvedSuccessfully(ctx, wait.Command); err != nil {
+			return fmt.Errorf(
+				"row %d: Gateway API route %s/%s in namespace %q for parent %q did not report condition %q: %w",
+				wait.Row,
+				wait.Route.Kind,
+				wait.Route.Name,
+				wait.Route.Namespace,
+				wait.Route.Parent,
+				wait.Condition,
+				err,
+			)
+		}
+	}
+	return nil
+}
+
 func tableToKubernetesResources(table *godog.Table) ([]dsl.KubernetesResource, error) {
 	if table == nil || len(table.Rows) < 2 {
 		return nil, fmt.Errorf("table must have kind and name headers and at least one data row")
@@ -388,6 +424,47 @@ func tableToKubernetesResources(table *godog.Table) ([]dsl.KubernetesResource, e
 		resources = append(resources, resource)
 	}
 	return resources, nil
+}
+
+func tableToGatewayAPIRoutes(table *godog.Table) ([]dsl.GatewayAPIRoute, error) {
+	if table == nil || len(table.Rows) < 2 {
+		return nil, fmt.Errorf("table must have kind, name, namespace, and parent headers and at least one data row")
+	}
+	headers := table.Rows[0].Cells
+	if len(headers) != 4 ||
+		strings.TrimSpace(headers[0].Value) != "kind" ||
+		strings.TrimSpace(headers[1].Value) != "name" ||
+		strings.TrimSpace(headers[2].Value) != "namespace" ||
+		strings.TrimSpace(headers[3].Value) != "parent" {
+		return nil, fmt.Errorf("table headers must be kind, name, namespace, and parent")
+	}
+
+	routes := make([]dsl.GatewayAPIRoute, 0, len(table.Rows)-1)
+	for index, row := range table.Rows[1:] {
+		if len(row.Cells) != len(headers) {
+			return nil, fmt.Errorf("row %d has %d cells, expected %d", index+1, len(row.Cells), len(headers))
+		}
+		route := dsl.GatewayAPIRoute{
+			Kind:      strings.TrimSpace(dsl.Interpolate(row.Cells[0].Value)),
+			Name:      strings.TrimSpace(dsl.Interpolate(row.Cells[1].Value)),
+			Namespace: strings.TrimSpace(dsl.Interpolate(row.Cells[2].Value)),
+			Parent:    strings.TrimSpace(dsl.Interpolate(row.Cells[3].Value)),
+		}
+		if route.Kind == "" {
+			return nil, fmt.Errorf("row %d has an empty kind", index+1)
+		}
+		if route.Name == "" {
+			return nil, fmt.Errorf("row %d has an empty name", index+1)
+		}
+		if route.Namespace == "" {
+			return nil, fmt.Errorf("row %d has an empty namespace", index+1)
+		}
+		if route.Parent == "" {
+			return nil, fmt.Errorf("row %d has an empty parent", index+1)
+		}
+		routes = append(routes, route)
+	}
+	return routes, nil
 }
 
 // tableToJSONRows converts a header-first Godog table into a slice of

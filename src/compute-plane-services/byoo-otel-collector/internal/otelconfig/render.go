@@ -248,6 +248,12 @@ func resolvedWorkloadMetricsDropLabels(configured string, metricSubsetEnabled bo
 
 	seen := map[string]struct{}{}
 	labels := []string{}
+	if metricSubsetEnabled {
+		for _, label := range defaultWorkloadMetricsDropLabels {
+			seen[label] = struct{}{}
+			labels = append(labels, label)
+		}
+	}
 	for _, label := range strings.Split(configured, ",") {
 		label = strings.TrimSpace(label)
 		if label == "" {
@@ -578,7 +584,7 @@ func cloneConfigValue(value interface{}) interface{} {
 	}
 }
 
-func addMetricSubsetPipeline(otelConfig *OpenTelemetryConfig, config MetricSubsetConfig) {
+func addMetricSubsetPipeline(otelConfig *OpenTelemetryConfig, config MetricSubsetConfig, workloadMetricsDropLabelsProcessor string) {
 	addMetricSubsetExporter(otelConfig)
 
 	filterConfig := config.FilterConfig
@@ -604,9 +610,14 @@ func addMetricSubsetPipeline(otelConfig *OpenTelemetryConfig, config MetricSubse
 		"memory_limiter",
 		metricSubsetFilterProcessorID,
 		"resource",
+	}
+	if workloadMetricsDropLabelsProcessor != "" {
+		metricSubsetPipeline.Processors = append(metricSubsetPipeline.Processors, workloadMetricsDropLabelsProcessor)
+	}
+	metricSubsetPipeline.Processors = append(metricSubsetPipeline.Processors,
 		"metrics_transform",
 		metricSubsetBatchProcessorID,
-	}
+	)
 	otelConfig.Service.Pipelines["metrics/metric_subset"] = metricSubsetPipeline
 }
 
@@ -888,14 +899,15 @@ func generateExportersAndService(config TelemetryConfig, otelConfig *OpenTelemet
 		metricPipeline.Receivers = []string{"otlp", "prometheus"}
 		metricPipeline.Exporters = []string{exporterId}
 		metricPipeline.Processors = []string{"memory_limiter", "filter/metrics", "resource"}
-		if processorID := addWorkloadMetricsDropLabelsProcessor(otelConfig, tmplConfig.WorkloadMetrics.DropLabels); processorID != "" {
-			metricPipeline.Processors = append(metricPipeline.Processors, processorID)
+		workloadMetricsDropLabelsProcessor := addWorkloadMetricsDropLabelsProcessor(otelConfig, tmplConfig.WorkloadMetrics.DropLabels)
+		if workloadMetricsDropLabelsProcessor != "" {
+			metricPipeline.Processors = append(metricPipeline.Processors, workloadMetricsDropLabelsProcessor)
 		}
 		metricPipeline.Processors = append(metricPipeline.Processors, "metrics_transform", "batch")
 		otelConfig.Service.Pipelines["metrics"] = metricPipeline
 
 		if tmplConfig.MetricSubset.Enabled {
-			addMetricSubsetPipeline(otelConfig, tmplConfig.MetricSubset)
+			addMetricSubsetPipeline(otelConfig, tmplConfig.MetricSubset, workloadMetricsDropLabelsProcessor)
 		}
 	}
 
