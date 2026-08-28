@@ -20,6 +20,7 @@ use anyhow::{Context, Result};
 use stargate::registration::{
     DEFAULT_REGISTRATION_UPDATE_IDLE_TIMEOUT, DEFAULT_REGISTRATION_UPDATE_MAX_IDLE_TIMEOUT,
 };
+use stargate_protocol::parse_explicit_http_uri;
 use stargate_protocol::{BackendConnectivity, TunnelTransportProtocol};
 use stargate_runtime::wait_for_termination_signal;
 use tracing::{error, info, warn};
@@ -53,6 +54,17 @@ fn parse_nonzero_usize(value: &str) -> std::result::Result<usize, String> {
         .ok_or_else(|| "value must be greater than 0".to_string())
 }
 
+fn parse_remote_watch_url(value: &str) -> std::result::Result<String, String> {
+    parse_explicit_http_uri(value)
+        .map_err(|_| "remote Watch URL must be an explicit http:// or https:// URI".to_string())
+}
+
+fn parse_grpc_pylon_dial_uri(value: &str) -> std::result::Result<String, String> {
+    parse_explicit_http_uri(value).map_err(|_| {
+        "Pylon gRPC dial address must be an explicit http:// or https:// URI".to_string()
+    })
+}
+
 #[derive(clap::Parser, Debug)]
 #[command(name = "stargate")]
 struct Args {
@@ -79,11 +91,19 @@ struct Args {
         long,
         env = "STARGATE_REMOTE_WATCH_URLS",
         value_delimiter = ',',
+        value_parser = parse_remote_watch_url,
         value_name = "URL"
     )]
     remote_stargate_url: Vec<String>,
+    /// Permit explicit plaintext HTTP remote Watch endpoints for development only.
+    #[arg(
+        long,
+        default_value_t = false,
+        env = "STARGATE_ALLOW_INSECURE_REMOTE_WATCH_HTTP"
+    )]
+    allow_insecure_remote_watch_http: bool,
     /// Optional TCP load-balancer dial address for pylons; per-pod addresses remain the advertised gRPC authority/SNI identity.
-    #[arg(long, value_name = "ADDR")]
+    #[arg(long, value_parser = parse_grpc_pylon_dial_uri, value_name = "URI")]
     grpc_pylon_dial_addr: Option<String>,
     /// Backend hostname template supporting `{pod_name}` and `{namespace}`; its rendered host is the pylon gRPC authority and reverse QUIC SNI.
     #[arg(long, value_name = "TEMPLATE")]
@@ -717,7 +737,7 @@ mod tests {
         assert_eq!(defaults.reverse_tunnel_pylon_dial_addr, None);
         assert_eq!(defaults.grpc_pylon_dial_addr, None);
         let args = parse_args(
-            "--grpc-pylon-dial-addr stargate-grpc-lb.stargate.svc.cluster.local:443 \
+            "--grpc-pylon-dial-addr https://stargate-grpc-lb.stargate.svc.cluster.local:443 \
              --reverse-tunnel-listen-addr 0.0.0.0:50072 \
              --reverse-tunnel-pylon-dial-addr stargate-quic-lb.stargate.svc.cluster.local:50072",
         );
@@ -727,8 +747,49 @@ mod tests {
         );
         assert_eq!(
             args.grpc_pylon_dial_addr.as_deref(),
-            Some("stargate-grpc-lb.stargate.svc.cluster.local:443")
+            Some("https://stargate-grpc-lb.stargate.svc.cluster.local:443")
         );
+
+        assert_parse_error(
+            "--grpc-pylon-dial-addr stargate-grpc-lb.stargate.svc.cluster.local:443",
+            "Pylon gRPC dial address must be an explicit http:// or https:// URI",
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_watch_url_cli_requires_an_explicit_permitted_http_uri() {
+        let args = parse_args("--remote-stargate-url https://region-b.example.test:50071");
+        assert_eq!(
+            args.remote_stargate_url,
+            ["https://region-b.example.test:50071"]
+        );
+
+        let plaintext =
+            parse_args("--remote-stargate-url http://127.0.0.1:50071 --disable-dns-discovery");
+        let error = startup::validate_discovery_args(&plaintext)
+            .expect_err("plaintext Watch URI should require a development opt-in");
+        assert_error_contains(
+            &error,
+            "http:// remote Watch URLs require --allow-insecure-remote-watch-http",
+        );
+
+        let development = parse_args(
+            "--allow-insecure-remote-watch-http \
+             --remote-stargate-url http://127.0.0.1:50071",
+        );
+        startup::validate_discovery_args(&development)
+            .expect("development HTTP opt-in should permit plaintext Watch URIs");
+
+        for invalid in [
+            "region-b.example.test:50071",
+            "ftp://region-b.example.test:50071",
+            "https://",
+        ] {
+            assert_parse_error(
+                &format!("--remote-stargate-url {invalid}"),
+                "remote Watch URL must be an explicit http:// or https:// URI",
+            );
+        }
     }
     fn test_resolver(_: Duration) -> Result<hickory_resolver::TokioAsyncResolver> {
         Ok(hickory_resolver::TokioAsyncResolver::tokio(

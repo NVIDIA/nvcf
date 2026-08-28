@@ -1358,6 +1358,7 @@ fn test_registration_config(
         min_update_interval: Duration::from_millis(100),
         reverse_tunnel,
         tls_cert_pem: None,
+        grpc_tls_ca_cert_pem: None,
         quic_insecure: true,
         tunnel_protocol: Default::default(),
         auth_token_provider: None,

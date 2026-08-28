@@ -25,10 +25,10 @@ metadata:
     app.kubernetes.io/created-by: dynamo-operator
     app.kubernetes.io/part-of: dynamo-operator
     nvidia.com/dynamo-operator-namespace: dynamo-system
-    helm.sh/chart: dynamo-operator-1.2.1
+    helm.sh/chart: dynamo-operator-1.4.1
     app.kubernetes.io/name: dynamo-operator
     app.kubernetes.io/instance: dynamo-operator
-    app.kubernetes.io/version: "1.2.1"
+    app.kubernetes.io/version: "1.4.1"
     app.kubernetes.io/managed-by: Helm
 webhooks:
 - admissionReviewVersions:
@@ -37,16 +37,17 @@ webhooks:
     service:
       name: dynamo-operator-webhook-service
       namespace: dynamo-system
-      path: /mutate-nvidia-com-v1alpha1-dynamographdeployment
+      path: /mutate/nvidia.com/v1beta1/dynamographdeployments
   failurePolicy: Fail
   name: mdynamographdeployment.kb.io
   rules:
   - apiGroups:
     - nvidia.com
     apiVersions:
-    - v1alpha1
+    - v1beta1
     operations:
     - CREATE
+    - UPDATE
     resources:
     - dynamographdeployments
   sideEffects: None
@@ -68,6 +69,7 @@ webhooks:
     - v1beta1
     operations:
     - CREATE
+    - UPDATE
     resources:
     - dynamocomponentdeployments
   sideEffects: None
@@ -88,8 +90,31 @@ webhooks:
     - v1beta1
     operations:
     - CREATE
+    - UPDATE
     resources:
     - dynamographdeploymentrequests
+  sideEffects: None
+  timeoutSeconds: 10
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: dynamo-operator-webhook-service
+      namespace: dynamo-system
+      path: /mutate-core-v1-pod-checkpoint-restore
+  failurePolicy: Ignore
+  name: mpodcheckpointrestore.kb.io
+  rules:
+  - apiGroups:
+    - ""
+    apiVersions:
+    - v1
+    # Pod checkpoint restore injects pod spec fields before creation. It is
+    # intentionally CREATE-only because pod UPDATE cannot apply that mutation.
+    operations:
+    - CREATE
+    resources:
+    - pods
   sideEffects: None
   timeoutSeconds: 10
 ---
@@ -103,10 +128,10 @@ metadata:
     app.kubernetes.io/created-by: dynamo-operator
     app.kubernetes.io/part-of: dynamo-operator
     nvidia.com/dynamo-operator-namespace: dynamo-system
-    helm.sh/chart: dynamo-operator-1.2.1
+    helm.sh/chart: dynamo-operator-1.4.1
     app.kubernetes.io/name: dynamo-operator
     app.kubernetes.io/instance: dynamo-operator
-    app.kubernetes.io/version: "1.2.1"
+    app.kubernetes.io/version: "1.4.1"
     app.kubernetes.io/managed-by: Helm
 webhooks:
 - admissionReviewVersions:
@@ -136,14 +161,14 @@ webhooks:
     service:
       name: dynamo-operator-webhook-service
       namespace: dynamo-system
-      path: /validate-nvidia-com-v1alpha1-dynamographdeployment
+      path: /validate/nvidia.com/v1beta1/dynamographdeployments
   failurePolicy: Fail
   name: vdynamographdeployment.kb.io
   rules:
   - apiGroups:
     - nvidia.com
     apiVersions:
-    - v1alpha1
+    - v1beta1
     operations:
     - CREATE
     - UPDATE

@@ -22,8 +22,10 @@ use tokio_util::sync::CancellationToken;
 
 use stargate_proto::pb::stargate_control_plane_client::StargateControlPlaneClient;
 use stargate_proto::pb::{WatchStargatesRequest, WatchStargatesResponse};
+use stargate_protocol::parse_explicit_http_uri;
 
 use stargate_runtime::{OwnedTask, TASK_SHUTDOWN_TIMEOUT};
+use tracing::warn;
 
 use super::grpc_endpoint::{StargateGrpcEndpoint, log_stargate_grpc_connect_attempt};
 use super::topology::{RegistrationRouterTopology, publish_registration_router_topology};
@@ -51,6 +53,7 @@ const INITIAL_WATCH_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(super) async fn run_watch_stargate_discovery(
     seeds: Vec<String>,
+    grpc_tls_ca_cert_pem: Option<Vec<u8>>,
     topology_tx: watch::Sender<RegistrationRouterTopology>,
     stop: CancellationToken,
 ) {
@@ -90,10 +93,12 @@ pub(super) async fn run_watch_stargate_discovery(
                 .expect("watch endpoint generation counter overflowed");
             let task = OwnedTask::spawn_child("watch stargate endpoint", &stop, {
                 let watch_url = watch_url.clone();
+                let grpc_tls_ca_cert_pem = grpc_tls_ca_cert_pem.clone();
                 let endpoint_updates_tx = endpoint_updates_tx.clone();
                 move |endpoint_stop| {
                     watch_stargate_endpoint(
                         watch_url,
+                        grpc_tls_ca_cert_pem,
                         generation,
                         endpoint_updates_tx,
                         endpoint_stop,
@@ -145,6 +150,7 @@ pub(super) async fn stop_watched_endpoint(endpoint: WatchedEndpoint) {
 
 async fn watch_stargate_endpoint(
     watch_url: String,
+    grpc_tls_ca_cert_pem: Option<Vec<u8>>,
     generation: u64,
     endpoint_updates_tx: mpsc::Sender<WatchEndpointUpdate>,
     stop: CancellationToken,
@@ -157,7 +163,7 @@ async fn watch_stargate_endpoint(
         }
 
         log_stargate_grpc_connect_attempt(&target, "watch_stargates", "lazy");
-        let stream = match target.channel_endpoint() {
+        let stream = match target.channel_endpoint(grpc_tls_ca_cert_pem.as_deref()) {
             Ok(endpoint) => {
                 let mut client = StargateControlPlaneClient::new(endpoint.connect_lazy());
                 tokio::select! {
@@ -235,7 +241,7 @@ pub(super) fn apply_watch_endpoint_update(
 }
 
 pub(super) fn watch_endpoint_snapshot_from_response(
-    _watch_url: &str,
+    watch_url: &str,
     response: WatchStargatesResponse,
 ) -> WatchEndpointSnapshot {
     WatchEndpointSnapshot {
@@ -244,7 +250,27 @@ pub(super) fn watch_endpoint_snapshot_from_response(
             .into_iter()
             .filter_map(stargate_info_registration_router)
             .collect(),
-        watch_urls: normalize_string_set(response.watch_stargate_urls),
+        watch_urls: response
+            .watch_stargate_urls
+            .into_iter()
+            .enumerate()
+            .filter_map(
+                |(rejected_watch_url_index, remote_watch_url)| match parse_explicit_http_uri(
+                    &remote_watch_url,
+                ) {
+                    Ok(remote_watch_url) => Some(remote_watch_url),
+                    Err(error) => {
+                        warn!(
+                            source_watch_url = watch_url,
+                            rejected_watch_url_index,
+                            %error,
+                            "ignoring invalid recursive Stargate Watch URI"
+                        );
+                        None
+                    }
+                },
+            )
+            .collect(),
     }
 }
 

@@ -260,6 +260,14 @@ pub(super) fn make_discovery_with_resolver_and_addresses(
 
 pub(super) fn validate_discovery_args(args: &Args) -> Result<()> {
     ensure!(
+        args.allow_insecure_remote_watch_http
+            || !args
+                .remote_stargate_url
+                .iter()
+                .any(|url| url.starts_with("http://")),
+        "http:// remote Watch URLs require --allow-insecure-remote-watch-http"
+    );
+    ensure!(
         !(args.disable_dns_discovery && args.enable_dev_peer_forwarding),
         "--enable-dev-peer-forwarding cannot be combined with --disable-dns-discovery"
     );

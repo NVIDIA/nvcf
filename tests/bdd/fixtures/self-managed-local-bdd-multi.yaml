@@ -36,7 +36,7 @@ global:
     # This DNS name is local to each cluster. On the compute cluster, the
     # ncp-local alias Service forwards it to the control-plane load balancer.
     # NVCF API advertises this value as LLM_REQUEST_ROUTER_ADDRESS.
-    llmRequestRouterAddress: llm-request-router.nvcf.svc.cluster.local:50071
+    llmRequestRouterAddress: https://llm-request-router.nvcf.svc.cluster.local:50071
 
 cassandra:
   replicaCount: 1
@@ -74,10 +74,16 @@ addons:
       # Validate authority/SNI demultiplexing across three concrete Stargates.
       chartPath: ../../../helm/llm-request-router/llm-request-router
       replicaCount: 3
+      grpcTls:
+        enabled: true
+        mode: certManager
+        secretName: llm-request-router-grpc-tls
+        dnsNames:
+          - llm-request-router.nvcf.svc.cluster.local
       backendRouter:
         # These are control-plane-local for Stargate and compute-reachable
         # through the identically named alias Service in the compute cluster.
-        pylonGrpcDialAddress: llm-request-router.nvcf.svc.cluster.local:50071
+        pylonGrpcDialAddress: https://llm-request-router.nvcf.svc.cluster.local:50071
         pylonReverseTunnelDialAddress: llm-request-router.nvcf.svc.cluster.local:50072
       metrics:
         serviceMonitor:

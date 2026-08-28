@@ -308,6 +308,20 @@ addons:
       replicaCount: 3
       # Set only for source-tree validation. Empty uses the released OCI chart.
       chartPath: ""
+      workload:
+        # Deployment matches managed NVCF. Existing installations can pin
+        # StatefulSet and migrate workload kinds in a controlled maintenance
+        # window; Kubernetes cannot mutate one workload kind into the other.
+        kind: Deployment
+
+      discovery:
+        disableDnsDiscovery: false
+        # Maximum interval between unchanged local and remote Watch snapshots.
+        watchHeartbeatMs: 5000
+        # Recursive Watch endpoints require an explicit HTTPS URI. Plaintext
+        # HTTP is available only through the development-only opt-in below.
+        remoteWatchUrls: []
+        allowInsecureRemoteWatchHttp: false
 
       # Authority and SNI aware backend router. A worker holds one registration
       # stream and one reverse QUIC tunnel per router replica, and each must
@@ -331,6 +345,27 @@ addons:
         # addresses when workers run in a separate cluster or region.
         pylonGrpcDialAddress: ""
         pylonReverseTunnelDialAddress: ""
+
+      # TLS for the worker-facing gRPC registration and Watch endpoint on
+      # port 50071. This identity is consumed by the Gateway HTTPS listener;
+      # it is separate from the request-router QUIC identity on port 50072.
+      grpcTls:
+        enabled: false
+        # Required for a deliberately plaintext external development route.
+        # Production and PKI-enabled split-cluster profiles enable TLS.
+        allowInsecureHttp: false
+        # certManager requests a certificate in the Gateway namespace.
+        # existingSecret uses a pre-created Secret and renders no Certificate.
+        mode: certManager
+        secretName: llm-request-router-grpc-tls
+        # Required only in certManager mode. With existingSecret, the operator
+        # owns and verifies the certificate SANs.
+        dnsNames: []
+        issuerRef:
+          # Defaults to the QUIC PKI issuer when omitted.
+          kind: ""
+          name: ""
+          group: ""
 
     # QUIC TLS certificate for the request router (Stargate). Managed PKI is
     # active by default whenever addons.llm.enabled is true. Set enabled=false

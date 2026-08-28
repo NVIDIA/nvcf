@@ -542,9 +542,9 @@ func (bc *BackendK8sCache) setupNVCAAgentInfra(
 			nb.Namespace, nb.Name, err)
 	}
 
-	webhookCert, err := generateWebhookCerts(nb, bc.now())
+	webhookCert, err := bc.ensureWebhookCert(ctx, nb, bc.now())
 	if err != nil {
-		return fmt.Errorf("failed to create webhookCerts, err: %w", err)
+		return fmt.Errorf("failed to ensure webhookCerts, err: %w", err)
 	}
 
 	if err := bc.setupWebhookSecrets(ctx, nb, webhookCert); err != nil {

@@ -43,10 +43,14 @@ type fakeRunner struct {
 	result     harness.Result
 	runResults []harness.Result
 	err        error
+	runHook    func(context.Context, int) (harness.Result, error)
 }
 
-func (f *fakeRunner) Run(_ context.Context, command string) (harness.Result, error) {
+func (f *fakeRunner) Run(ctx context.Context, command string) (harness.Result, error) {
 	f.runs = append(f.runs, recordedRun{command: command})
+	if f.runHook != nil {
+		return f.runHook(ctx, len(f.runs))
+	}
 	if index := len(f.runs) - 1; index < len(f.runResults) {
 		return f.runResults[index], f.err
 	}
