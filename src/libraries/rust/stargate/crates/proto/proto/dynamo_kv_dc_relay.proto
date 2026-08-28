@@ -159,9 +159,8 @@ message PoolKvUsage
 message LoadSnapshot
 {
   RelayMessageMetadata metadata = 1;
-  uint32 window_ms = 2;
-  repeated PoolLoad pools = 3;
-  repeated ModelLoad models = 4;
+  repeated PoolLoad pools = 2;
+  repeated ModelLoad models = 3;
 }
 
 message PoolLoad
@@ -187,12 +186,12 @@ message ModelLoad
   optional uint64 output_generation_requests = 7;
   repeated PoolIdentity serving_pools = 8;
 
-  uint64 requests_started = 10;
-  uint64 requests_completed = 11;
-  uint64 requests_failed = 12;
-  uint64 requests_cancelled = 13;
-  optional uint64 input_tokens = 14;
-  uint64 output_tokens = 15;
+  optional uint64 requests_started_total = 10;
+  optional uint64 requests_completed_total = 11;
+  optional uint64 requests_failed_total = 12;
+  optional uint64 requests_cancelled_total = 13;
+  optional uint64 input_tokens_total = 14;
+  optional uint64 output_tokens_total = 15;
 
   DataStatus status = 20;
   uint32 expected_frontends = 21;

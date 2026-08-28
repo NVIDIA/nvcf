@@ -11,7 +11,7 @@ use stargate_runtime::OwnedTask;
 use tokio_util::sync::CancellationToken;
 
 use super::collector::StatsAggregatorUpdate;
-use super::kv_stats::{kv_snapshot_from_proto, load_snapshot_from_proto};
+use super::kv_stats::{RelayLoadTranslator, kv_snapshot_from_proto};
 use super::metrics::PylonMetrics;
 use crate::PylonRuntimeState;
 
@@ -139,6 +139,8 @@ async fn run_load_stream(
     stop: CancellationToken,
 ) {
     let mut backoff = config.initial_reconnect_backoff;
+    let mut last_identity = None;
+    let mut translator = RelayLoadTranslator::default();
     loop {
         if stop.is_cancelled() {
             return;
@@ -201,6 +203,10 @@ async fn run_load_stream(
                 epoch.load = Some(identity);
                 changed
             };
+            if last_identity.is_some_and(|current| current != identity) {
+                translator = RelayLoadTranslator::default();
+            }
+            last_identity = Some(identity);
             if identity_changed {
                 send_update(
                     &updates,
@@ -209,7 +215,7 @@ async fn run_load_stream(
                 )
                 .await;
             }
-            match load_snapshot_from_proto(snapshot) {
+            match translator.translate(snapshot) {
                 Ok(translation) => {
                     if let Some(runtime_state) = &config.runtime_state {
                         runtime_state.replace_relay_models(translation.relay_models);

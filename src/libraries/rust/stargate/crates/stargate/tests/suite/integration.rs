@@ -627,10 +627,11 @@ impl stats_proto::kv_dc_relay_server::KvDcRelay for EngineStatsGrpc {
         let _ = self.state.connected_tx.send(true);
         let model = self.state.model.clone();
         let stream = async_stream::stream! {
+            let mut sample = 0_u64;
             loop {
+                sample += 1;
                 yield Ok(stats_proto::LoadSnapshot {
                     metadata: Some(relay_metadata()),
-                    window_ms: 1_000,
                     pools: vec![stats_proto::PoolLoad {
                         pool: Some(stats_pool_identity()),
                         role: stats_proto::WorkerRole::Aggregated as i32,
@@ -650,16 +651,16 @@ impl stats_proto::kv_dc_relay_server::KvDcRelay for EngineStatsGrpc {
                         input_processing_requests: Some(1),
                         output_generation_requests: Some(2),
                         serving_pools: vec![stats_pool_identity()],
-                        requests_started: 4,
-                        requests_completed: 1,
-                        requests_failed: 0,
-                        requests_cancelled: 0,
-                        input_tokens: Some(31),
-                        output_tokens: 20,
+                        requests_started_total: Some(sample.saturating_mul(4)),
+                        requests_completed_total: Some(sample),
+                        requests_failed_total: Some(0),
+                        requests_cancelled_total: Some(0),
+                        input_tokens_total: Some(sample.saturating_mul(4)),
+                        output_tokens_total: Some(sample.saturating_mul(2)),
                         status: stats_proto::DataStatus::Complete as i32,
                         expected_frontends: 1,
                         observed_frontends: 1,
-                        source_observed_at_unix_ms: 1,
+                        source_observed_at_unix_ms: sample.saturating_mul(100),
                     }],
                 });
                 tokio::time::sleep(Duration::from_millis(100)).await;

@@ -538,8 +538,7 @@ fn stargate_grpc_endpoint_rejects_custom_ca_for_plaintext_http() {
 
     let error = endpoint
         .channel_endpoint(Some(b"private CA contents must not be logged"))
-        .err()
-        .expect("custom CA with plaintext HTTP should be rejected");
+        .expect_err("custom CA with plaintext HTTP should be rejected");
 
     assert!(
         error

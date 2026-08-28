@@ -31,9 +31,22 @@ fn compile_proto_plan(plan: ProtoCompilePlan) -> Result<(), Box<dyn std::error::
     for &(path, attribute) in plan.field_attributes {
         builder = builder.field_attribute(path, attribute);
     }
+    let protos = plan
+        .protos
+        .iter()
+        .map(std::path::PathBuf::from)
+        .collect::<Vec<_>>();
+    let mut includes = plan
+        .includes
+        .iter()
+        .map(std::path::PathBuf::from)
+        .collect::<Vec<_>>();
+    if let Some(well_known_types) = std::env::var_os("PROTOC_WKT_DIR") {
+        includes.push(well_known_types.into());
+    }
     builder
         .build_server(plan.build_server)
-        .compile_protos(plan.protos, plan.includes)?;
+        .compile_protos(&protos, &includes)?;
     Ok(())
 }
 

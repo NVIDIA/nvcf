@@ -120,7 +120,7 @@ fn snapshot_interval() -> tokio::time::Interval {
 #[derive(Default)]
 struct LoadAccumulator {
     live: HashMap<String, LiveRequest>,
-    windows: BTreeMap<String, WindowCounters>,
+    totals: BTreeMap<String, TrafficCounters>,
 }
 
 struct LiveRequest {
@@ -130,7 +130,7 @@ struct LiveRequest {
 }
 
 #[derive(Default)]
-struct WindowCounters {
+struct TrafficCounters {
     requests_started: u64,
     requests_completed: u64,
     input_tokens: u64,
@@ -139,20 +139,20 @@ struct WindowCounters {
 
 impl LoadAccumulator {
     fn observe(&mut self, event: StatsStreamEvent) {
-        let window = self.windows.entry(event.model.clone()).or_default();
+        let totals = self.totals.entry(event.model.clone()).or_default();
         if let Some(request) = self.live.get_mut(&event.request_id) {
-            window.input_tokens = window
+            totals.input_tokens = totals
                 .input_tokens
                 .saturating_add(event.input_tokens.saturating_sub(request.input_tokens));
-            window.output_tokens = window
+            totals.output_tokens = totals
                 .output_tokens
                 .saturating_add(event.output_tokens.saturating_sub(request.output_tokens));
             request.input_tokens = request.input_tokens.max(event.input_tokens);
             request.output_tokens = request.output_tokens.max(event.output_tokens);
         } else {
-            window.requests_started = window.requests_started.saturating_add(1);
-            window.input_tokens = window.input_tokens.saturating_add(event.input_tokens);
-            window.output_tokens = window.output_tokens.saturating_add(event.output_tokens);
+            totals.requests_started = totals.requests_started.saturating_add(1);
+            totals.input_tokens = totals.input_tokens.saturating_add(event.input_tokens);
+            totals.output_tokens = totals.output_tokens.saturating_add(event.output_tokens);
             self.live.insert(
                 event.request_id.clone(),
                 LiveRequest {
@@ -164,19 +164,18 @@ impl LoadAccumulator {
         }
         if event.finished {
             self.live.remove(&event.request_id);
-            window.requests_completed = window.requests_completed.saturating_add(1);
+            totals.requests_completed = totals.requests_completed.saturating_add(1);
         }
     }
 
-    fn snapshot(&mut self, configured_model: &str) -> proto::LoadSnapshot {
+    fn snapshot(&self, configured_model: &str) -> proto::LoadSnapshot {
         let mut model_ids = BTreeSet::from([configured_model.to_string()]);
         model_ids.extend(self.live.values().map(|request| request.model.clone()));
-        model_ids.extend(self.windows.keys().cloned());
-        let windows = std::mem::take(&mut self.windows);
+        model_ids.extend(self.totals.keys().cloned());
         let models = model_ids
             .into_iter()
             .map(|model| {
-                let window = windows.get(&model);
+                let totals = self.totals.get(&model);
                 let live = self
                     .live
                     .values()
@@ -202,12 +201,16 @@ impl LoadAccumulator {
                     input_processing_requests: Some(input_processing),
                     output_generation_requests: Some(output_generation),
                     serving_pools: vec![pool_identity()],
-                    requests_started: window.map_or(0, |window| window.requests_started),
-                    requests_completed: window.map_or(0, |window| window.requests_completed),
-                    requests_failed: 0,
-                    requests_cancelled: 0,
-                    input_tokens: Some(window.map_or(0, |window| window.input_tokens)),
-                    output_tokens: window.map_or(0, |window| window.output_tokens),
+                    requests_started_total: Some(
+                        totals.map_or(0, |totals| totals.requests_started),
+                    ),
+                    requests_completed_total: Some(
+                        totals.map_or(0, |totals| totals.requests_completed),
+                    ),
+                    requests_failed_total: Some(0),
+                    requests_cancelled_total: Some(0),
+                    input_tokens_total: Some(totals.map_or(0, |totals| totals.input_tokens)),
+                    output_tokens_total: Some(totals.map_or(0, |totals| totals.output_tokens)),
                     status: proto::DataStatus::Complete as i32,
                     expected_frontends: 1,
                     observed_frontends: 1,
@@ -217,7 +220,6 @@ impl LoadAccumulator {
             .collect();
         proto::LoadSnapshot {
             metadata: Some(metadata()),
-            window_ms: 1_000,
             pools: vec![proto::PoolLoad {
                 pool: Some(pool_identity()),
                 role: proto::WorkerRole::Aggregated as i32,
@@ -284,7 +286,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn load_snapshots_replace_window_counters_and_keep_live_gauges() {
+    fn load_snapshots_keep_cumulative_counters_and_live_gauges() {
         let mut accumulator = LoadAccumulator::default();
         accumulator.observe(StatsStreamEvent {
             request_id: "req-1".to_string(),
@@ -295,15 +297,15 @@ mod tests {
         });
 
         let first = accumulator.snapshot("model-a");
-        assert_eq!(first.models[0].requests_started, 1);
-        assert_eq!(first.models[0].input_tokens, Some(10));
-        assert_eq!(first.models[0].output_tokens, 2);
+        assert_eq!(first.models[0].requests_started_total, Some(1));
+        assert_eq!(first.models[0].input_tokens_total, Some(10));
+        assert_eq!(first.models[0].output_tokens_total, Some(2));
         assert_eq!(first.models[0].output_generation_requests, Some(1));
 
         let second = accumulator.snapshot("model-a");
-        assert_eq!(second.models[0].requests_started, 0);
-        assert_eq!(second.models[0].input_tokens, Some(0));
-        assert_eq!(second.models[0].output_tokens, 0);
+        assert_eq!(second.models[0].requests_started_total, Some(1));
+        assert_eq!(second.models[0].input_tokens_total, Some(10));
+        assert_eq!(second.models[0].output_tokens_total, Some(2));
         assert_eq!(second.models[0].output_generation_requests, Some(1));
     }
 }

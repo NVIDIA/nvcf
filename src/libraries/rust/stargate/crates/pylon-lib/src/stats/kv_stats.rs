@@ -43,6 +43,18 @@ pub(super) struct RelayLoadTranslation {
     pub(super) relay_models: BTreeMap<String, bool>,
 }
 
+#[derive(Clone, Copy)]
+struct CounterBaseline {
+    observed_at_unix_ms: u64,
+    input_tokens_total: Option<u64>,
+    output_tokens_total: u64,
+}
+
+#[derive(Default)]
+pub(super) struct RelayLoadTranslator {
+    counters: HashMap<String, CounterBaseline>,
+}
+
 pub(super) fn kv_snapshot_from_proto(
     snapshot: proto::KvUsageSnapshot,
 ) -> anyhow::Result<KvCacheStatsEnvelope> {
@@ -143,136 +155,180 @@ pub(super) fn kv_snapshot_from_proto(
     Ok(KvCacheStatsEnvelope { models })
 }
 
-pub(super) fn load_snapshot_from_proto(
-    snapshot: proto::LoadSnapshot,
-) -> anyhow::Result<RelayLoadTranslation> {
-    anyhow::ensure!(snapshot.window_ms > 0, "load snapshot window is zero");
-    snapshot
-        .metadata
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("load snapshot metadata is missing"))?;
-    let window_seconds = f64::from(snapshot.window_ms) / 1_000.0;
-    let mut pools = HashMap::<PoolKey, LoadPool>::new();
-    for pool in snapshot.pools {
-        let key = pool_key(pool.pool)?;
-        let role = worker_role(pool.role)?;
-        anyhow::ensure!(
-            pools
-                .insert(
-                    key,
-                    LoadPool {
-                        role,
-                        live_workers: pool.live_workers,
-                        max_concurrency: pool.max_concurrency,
-                        complete: data_complete(pool.scheduler_status),
-                    },
-                )
-                .is_none(),
-            "duplicate load pool"
-        );
-    }
-
-    let mut identity_owner = HashMap::<String, String>::new();
-    let mut relay_models = BTreeMap::new();
-    let mut models = Vec::new();
-    for model in snapshot.models {
-        let registration = model
-            .model
+impl RelayLoadTranslator {
+    pub(super) fn translate(
+        &mut self,
+        snapshot: proto::LoadSnapshot,
+    ) -> anyhow::Result<RelayLoadTranslation> {
+        snapshot
+            .metadata
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("load model registration is missing"))?;
-        let identities =
-            registration_identities(std::slice::from_ref(registration), &mut identity_owner)?;
-        let serving_pools = model
-            .serving_pools
-            .into_iter()
-            .map(|pool| pool_key(Some(pool)))
-            .collect::<anyhow::Result<HashSet<_>>>()?;
-        anyhow::ensure!(
-            serving_pools.iter().all(|pool| pools.contains_key(pool)),
-            "load model references an unknown serving pool"
-        );
-        let selected_role = if serving_pools.iter().any(|pool| {
-            pools
-                .get(pool)
-                .is_some_and(|pool| pool.role == proto::WorkerRole::Aggregated)
-        }) {
-            proto::WorkerRole::Aggregated
-        } else {
-            proto::WorkerRole::Decode
-        };
-        let selected = serving_pools
-            .iter()
-            .filter_map(|key| pools.get(key))
-            .filter(|pool| pool.role == selected_role)
-            .collect::<Vec<_>>();
-        let scheduler_live = selected
-            .iter()
-            .any(|pool| pool.complete && pool.live_workers.is_some_and(|workers| workers > 0));
-        let max_engine_concurrency = (!selected.is_empty()
-            && selected
-                .iter()
-                .all(|pool| pool.complete && pool.max_concurrency.is_some()))
-        .then(|| {
-            selected.iter().try_fold(0_u64, |total, pool| {
-                total.checked_add(pool.max_concurrency?)
-            })
-        })
-        .flatten();
-        let required = (
-            model.ready_frontends,
-            model.pending_first_output_requests,
-            model.input_processing_requests,
-            model.output_generation_requests,
-        );
-        let complete = data_complete(model.status)
-            && model.expected_frontends > 0
-            && model.observed_frontends == model.expected_frontends
-            && model.source_observed_at_unix_ms > 0
-            && matches!(required, (Some(_), Some(_), Some(_), Some(_)));
-        let (ready_frontends, queue_size, input_processing_queries, output_generation_queries) =
-            required;
-        let num_running_queries = input_processing_queries
-            .zip(output_generation_queries)
-            .and_then(|(input, output)| input.checked_add(output));
-        let complete = complete && num_running_queries.is_some();
-        let active = complete
-            && !serving_pools.is_empty()
-            && ready_frontends.is_some_and(|ready| ready > 0)
-            && scheduler_live;
-        for identity in &identities {
-            relay_models.insert(identity.clone(), active);
-            models.push(RelayLoadStatsSnapshot {
-                model: identity.clone(),
-                input_tps: if complete {
-                    model
-                        .input_tokens
-                        .map(|tokens| tokens as f64 / window_seconds)
-                } else {
-                    None
-                },
-                output_tps: if complete {
-                    model.output_tokens as f64 / window_seconds
-                } else {
-                    0.0
-                },
-                queue_size: queue_size.unwrap_or_default(),
-                queued_input_size: complete
-                    .then_some(model.pending_first_output_input_tokens)
-                    .flatten(),
-                num_running_queries: num_running_queries.unwrap_or_default(),
-                max_engine_concurrency,
-                total_query_input_size: complete.then_some(model.live_input_tokens).flatten(),
-                input_processing_queries: input_processing_queries.unwrap_or_default(),
-                output_generation_queries: output_generation_queries.unwrap_or_default(),
-                source_observed_at_unix_ms: model.source_observed_at_unix_ms,
-                complete,
-            });
+            .ok_or_else(|| anyhow::anyhow!("load snapshot metadata is missing"))?;
+        let mut pools = HashMap::<PoolKey, LoadPool>::new();
+        for pool in snapshot.pools {
+            let key = pool_key(pool.pool)?;
+            let role = worker_role(pool.role)?;
+            anyhow::ensure!(
+                pools
+                    .insert(
+                        key,
+                        LoadPool {
+                            role,
+                            live_workers: pool.live_workers,
+                            max_concurrency: pool.max_concurrency,
+                            complete: data_complete(pool.scheduler_status),
+                        },
+                    )
+                    .is_none(),
+                "duplicate load pool"
+            );
         }
+
+        let mut identity_owner = HashMap::<String, String>::new();
+        let mut seen_models = HashSet::new();
+        let mut next_counters = HashMap::new();
+        let mut relay_models = BTreeMap::new();
+        let mut models = Vec::new();
+        for model in snapshot.models {
+            let registration = model
+                .model
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("load model registration is missing"))?;
+            let identities =
+                registration_identities(std::slice::from_ref(registration), &mut identity_owner)?;
+            let canonical_model = registration.model.trim();
+            anyhow::ensure!(
+                seen_models.insert(canonical_model.to_string()),
+                "duplicate load model"
+            );
+            let serving_pools = model
+                .serving_pools
+                .into_iter()
+                .map(|pool| pool_key(Some(pool)))
+                .collect::<anyhow::Result<HashSet<_>>>()?;
+            anyhow::ensure!(
+                serving_pools.iter().all(|pool| pools.contains_key(pool)),
+                "load model references an unknown serving pool"
+            );
+            let selected_role = if serving_pools.iter().any(|pool| {
+                pools
+                    .get(pool)
+                    .is_some_and(|pool| pool.role == proto::WorkerRole::Aggregated)
+            }) {
+                proto::WorkerRole::Aggregated
+            } else {
+                proto::WorkerRole::Decode
+            };
+            let selected = serving_pools
+                .iter()
+                .filter_map(|key| pools.get(key))
+                .filter(|pool| pool.role == selected_role)
+                .collect::<Vec<_>>();
+            let scheduler_live = selected
+                .iter()
+                .any(|pool| pool.complete && pool.live_workers.is_some_and(|workers| workers > 0));
+            let max_engine_concurrency = (!selected.is_empty()
+                && selected
+                    .iter()
+                    .all(|pool| pool.complete && pool.max_concurrency.is_some()))
+            .then(|| {
+                selected.iter().try_fold(0_u64, |total, pool| {
+                    total.checked_add(pool.max_concurrency?)
+                })
+            })
+            .flatten();
+            let required = (
+                model.ready_frontends,
+                model.pending_first_output_requests,
+                model.input_processing_requests,
+                model.output_generation_requests,
+            );
+            let complete = data_complete(model.status)
+                && model.expected_frontends > 0
+                && model.observed_frontends == model.expected_frontends
+                && model.source_observed_at_unix_ms > 0
+                && matches!(required, (Some(_), Some(_), Some(_), Some(_)));
+            let (ready_frontends, queue_size, input_processing_queries, output_generation_queries) =
+                required;
+            let num_running_queries = input_processing_queries
+                .zip(output_generation_queries)
+                .and_then(|(input, output)| input.checked_add(output));
+            let load_complete = complete && num_running_queries.is_some();
+            let rates = model
+                .output_tokens_total
+                .filter(|_| load_complete)
+                .map(|output_tokens_total| CounterBaseline {
+                    observed_at_unix_ms: model.source_observed_at_unix_ms,
+                    input_tokens_total: model.input_tokens_total,
+                    output_tokens_total,
+                })
+                .map(|current| {
+                    let rates = self
+                        .counters
+                        .get(canonical_model)
+                        .and_then(|previous| counter_rates(*previous, current));
+                    (current, rates)
+                });
+            if let Some((current, _)) = rates {
+                next_counters.insert(canonical_model.to_string(), current);
+            }
+            let (input_tps, output_tps) = rates
+                .and_then(|(_, rates)| rates)
+                .map_or((None, None), |rates| rates);
+            let stats_complete = load_complete && output_tps.is_some();
+            let active = load_complete
+                && !serving_pools.is_empty()
+                && ready_frontends.is_some_and(|ready| ready > 0)
+                && scheduler_live;
+            for identity in &identities {
+                relay_models.insert(identity.clone(), active);
+                models.push(RelayLoadStatsSnapshot {
+                    model: identity.clone(),
+                    input_tps: stats_complete.then_some(input_tps).flatten(),
+                    output_tps: output_tps.unwrap_or_default(),
+                    queue_size: queue_size.unwrap_or_default(),
+                    queued_input_size: load_complete
+                        .then_some(model.pending_first_output_input_tokens)
+                        .flatten(),
+                    num_running_queries: num_running_queries.unwrap_or_default(),
+                    max_engine_concurrency,
+                    total_query_input_size: load_complete
+                        .then_some(model.live_input_tokens)
+                        .flatten(),
+                    input_processing_queries: input_processing_queries.unwrap_or_default(),
+                    output_generation_queries: output_generation_queries.unwrap_or_default(),
+                    source_observed_at_unix_ms: model.source_observed_at_unix_ms,
+                    complete: stats_complete,
+                });
+            }
+        }
+        self.counters = next_counters;
+        Ok(RelayLoadTranslation {
+            stats: RelayLoadStatsEnvelope { models },
+            relay_models,
+        })
     }
-    Ok(RelayLoadTranslation {
-        stats: RelayLoadStatsEnvelope { models },
-        relay_models,
-    })
+}
+
+fn counter_rates(
+    previous: CounterBaseline,
+    current: CounterBaseline,
+) -> Option<(Option<f64>, Option<f64>)> {
+    let elapsed_ms = current
+        .observed_at_unix_ms
+        .checked_sub(previous.observed_at_unix_ms)
+        .filter(|elapsed| *elapsed > 0)?;
+    let elapsed_seconds = elapsed_ms as f64 / 1_000.0;
+    let input_tps = previous
+        .input_tokens_total
+        .zip(current.input_tokens_total)
+        .and_then(|(previous, current)| current.checked_sub(previous))
+        .map(|tokens| tokens as f64 / elapsed_seconds);
+    let output_tps = current
+        .output_tokens_total
+        .checked_sub(previous.output_tokens_total)
+        .map(|tokens| tokens as f64 / elapsed_seconds);
+    Some((input_tps, output_tps))
 }
 
 fn pool_key(pool: Option<proto::PoolIdentity>) -> anyhow::Result<PoolKey> {
@@ -414,16 +470,16 @@ mod tests {
             input_processing_requests: Some(1),
             output_generation_requests: Some(2),
             serving_pools,
-            requests_started: 4,
-            requests_completed: 3,
-            requests_failed: 0,
-            requests_cancelled: 0,
-            input_tokens: Some(40),
-            output_tokens: 20,
+            requests_started_total: Some(4),
+            requests_completed_total: Some(3),
+            requests_failed_total: Some(0),
+            requests_cancelled_total: Some(0),
+            input_tokens_total: Some(40),
+            output_tokens_total: Some(20),
             status: proto::DataStatus::Complete as i32,
             expected_frontends: 1,
             observed_frontends: 1,
-            source_observed_at_unix_ms: 5,
+            source_observed_at_unix_ms: 5_000,
         }
     }
 
@@ -476,14 +532,27 @@ mod tests {
     #[test]
     fn complete_load_activates_model_and_alias() {
         let identity = pool(1);
+        let mut translator = RelayLoadTranslator::default();
+        let mut baseline = model_load("model-a", vec![identity.clone()]);
+        baseline.input_tokens_total = Some(0);
+        baseline.output_tokens_total = Some(0);
+        baseline.source_observed_at_unix_ms = 4_000;
+        let first = translator
+            .translate(proto::LoadSnapshot {
+                metadata: Some(metadata()),
+                pools: vec![load_pool(identity.clone())],
+                models: vec![baseline],
+            })
+            .unwrap();
+        assert_eq!(first.relay_models.get("model-a"), Some(&true));
+        assert!(first.stats.models.iter().all(|model| !model.complete));
         let snapshot = proto::LoadSnapshot {
             metadata: Some(metadata()),
-            window_ms: 1_000,
             pools: vec![load_pool(identity.clone())],
             models: vec![model_load("model-a", vec![identity])],
         };
 
-        let translated = load_snapshot_from_proto(snapshot).unwrap();
+        let translated = translator.translate(snapshot).unwrap();
         assert_eq!(translated.relay_models.get("model-a"), Some(&true));
         assert_eq!(translated.relay_models.get("model-a-alias"), Some(&true));
         assert_eq!(translated.stats.models.len(), 2);
@@ -497,25 +566,98 @@ mod tests {
             assert_eq!(model.total_query_input_size, Some(31));
             assert_eq!(model.input_processing_queries, 1);
             assert_eq!(model.output_generation_queries, 2);
-            assert_eq!(model.source_observed_at_unix_ms, 5);
+            assert_eq!(model.source_observed_at_unix_ms, 5_000);
             assert!(model.complete);
         }
     }
 
     #[test]
+    fn counter_reset_skips_one_rate_sample_then_recovers() {
+        let identity = pool(1);
+        let mut translator = RelayLoadTranslator::default();
+        translator
+            .translate(proto::LoadSnapshot {
+                metadata: Some(metadata()),
+                pools: vec![load_pool(identity.clone())],
+                models: vec![model_load("model-a", vec![identity.clone()])],
+            })
+            .unwrap();
+
+        let mut reset = model_load("model-a", vec![identity.clone()]);
+        reset.input_tokens_total = Some(4);
+        reset.output_tokens_total = Some(2);
+        reset.source_observed_at_unix_ms = 6_000;
+        let reset = translator
+            .translate(proto::LoadSnapshot {
+                metadata: Some(metadata()),
+                pools: vec![load_pool(identity.clone())],
+                models: vec![reset],
+            })
+            .unwrap();
+        assert_eq!(reset.relay_models.get("model-a"), Some(&true));
+        assert!(reset.stats.models.iter().all(|model| !model.complete));
+
+        let mut recovered = model_load("model-a", vec![identity.clone()]);
+        recovered.input_tokens_total = Some(14);
+        recovered.output_tokens_total = Some(7);
+        recovered.source_observed_at_unix_ms = 7_000;
+        let recovered = translator
+            .translate(proto::LoadSnapshot {
+                metadata: Some(metadata()),
+                pools: vec![load_pool(identity)],
+                models: vec![recovered],
+            })
+            .unwrap();
+        for model in recovered.stats.models {
+            assert!(model.complete);
+            assert_eq!(model.input_tps, Some(10.0));
+            assert_eq!(model.output_tps, 5.0);
+        }
+    }
+
+    #[test]
+    fn duplicate_load_model_rejects_even_an_incomplete_snapshot() {
+        let identity = pool(1);
+        let mut first = model_load("model-a", vec![identity.clone()]);
+        first.status = proto::DataStatus::Unavailable as i32;
+        first.output_tokens_total = None;
+        let mut second = first.clone();
+        second.serving_pools.clear();
+
+        let result = RelayLoadTranslator::default().translate(proto::LoadSnapshot {
+            metadata: Some(metadata()),
+            pools: vec![load_pool(identity)],
+            models: vec![first, second],
+        });
+
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn unknown_exact_input_gauges_do_not_deactivate_the_model() {
         let identity = pool(1);
+        let mut translator = RelayLoadTranslator::default();
+        let mut baseline = model_load("model-a", vec![identity.clone()]);
+        baseline.input_tokens_total = Some(0);
+        baseline.output_tokens_total = Some(0);
+        baseline.source_observed_at_unix_ms = 4_000;
+        translator
+            .translate(proto::LoadSnapshot {
+                metadata: Some(metadata()),
+                pools: vec![load_pool(identity.clone())],
+                models: vec![baseline],
+            })
+            .unwrap();
         let mut model = model_load("model-a", vec![identity.clone()]);
         model.pending_first_output_input_tokens = None;
         model.live_input_tokens = None;
         let snapshot = proto::LoadSnapshot {
             metadata: Some(metadata()),
-            window_ms: 1_000,
             pools: vec![load_pool(identity)],
             models: vec![model],
         };
 
-        let translated = load_snapshot_from_proto(snapshot).unwrap();
+        let translated = translator.translate(snapshot).unwrap();
 
         assert_eq!(translated.relay_models.get("model-a"), Some(&true));
         for stats in translated.stats.models {
@@ -541,11 +683,10 @@ mod tests {
 
         let snapshot = proto::LoadSnapshot {
             metadata: Some(metadata()),
-            window_ms: 1_000,
             pools: vec![load_pool(identity)],
             models: vec![relay_only, model_load("frontend-only", Vec::new())],
         };
-        let translated = load_snapshot_from_proto(snapshot).unwrap();
+        let translated = RelayLoadTranslator::default().translate(snapshot).unwrap();
 
         assert_eq!(translated.relay_models.get("relay-only"), Some(&false));
         assert_eq!(
@@ -582,10 +723,13 @@ mod tests {
 
         let load_snapshot = proto::LoadSnapshot {
             metadata: Some(metadata()),
-            window_ms: 1_000,
             pools: Vec::new(),
             models: vec![model_load("model-a", vec![pool(9)])],
         };
-        assert!(load_snapshot_from_proto(load_snapshot).is_err());
+        assert!(
+            RelayLoadTranslator::default()
+                .translate(load_snapshot)
+                .is_err()
+        );
     }
 }
