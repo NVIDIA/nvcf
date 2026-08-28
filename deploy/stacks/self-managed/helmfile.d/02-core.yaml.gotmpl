@@ -168,7 +168,7 @@ releases:
     {{- $llmRequestRouterChartPath := dig "addons" "llm" "requestRouter" "chartPath" "" .Values }}
     chart: {{ $llmRequestRouterChartPath | default "nvcf/helm-nvcf-llm-request-router" | quote }}
     {{- if not $llmRequestRouterChartPath }}
-    version: 1.11.0
+    version: 1.11.1
     {{- end }}
     namespace: nvcf
     condition: addons.llm.enabled
