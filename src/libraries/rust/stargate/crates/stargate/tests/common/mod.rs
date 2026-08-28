@@ -517,6 +517,7 @@ pub fn base_config(
         grpc_listen_addr: grpc_addr,
         model_discovery_listen_addr: "127.0.0.1:0".parse().unwrap(),
         http_listen_addr: http_addr,
+        readiness_warmup: stargate::runtime::DEFAULT_READINESS_WARMUP,
         metrics_listen_addr: None,
         advertise_addr: grpc_addr,
         stargate_discovery_dns_name: "localhost".to_string(),

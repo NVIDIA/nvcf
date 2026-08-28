@@ -132,6 +132,7 @@ spec:
             - --allow-insecure-remote-watch-http
             {{- end }}
             - --shutdown-drain-timeout-ms={{ .Values.llmRequestRouter.shutdown.drainTimeoutMs }}
+            - --readiness-warmup-ms={{ .Values.llmRequestRouter.readiness.warmupMs }}
             - --quic-connect-timeout-ms={{ .Values.llmRequestRouter.transport.quicConnectTimeoutMs }}
             - --quic-request-timeout-ms={{ .Values.llmRequestRouter.transport.quicRequestTimeoutMs }}
             - --metrics-port={{ .Values.llmRequestRouter.service.metricsPort }}

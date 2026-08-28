@@ -35,6 +35,8 @@ printf '%s\n' \
   '        - "*.llm-request-router-headless.nvcf.svc.cluster.local"' \
   '    requestRouter:' \
   "      chartPath: $router_chart_path" \
+  '      readiness:' \
+  '        warmupMs: 1234' \
   '      grpcTls:' \
   '        enabled: true' \
   '        mode: certManager' \
@@ -182,6 +184,9 @@ assert_file_value "$work_dir/router-values.yaml" \
 assert_file_value "$work_dir/router-values.yaml" \
   '.llmRequestRouter.backendRouter.pylonReverseTunnelDialAddress' \
   'llm-quic.example.com:50072'
+assert_file_value "$work_dir/router-values.yaml" \
+  '.llmRequestRouter.readiness.warmupMs' \
+  '1234'
 assert_file_value "$work_dir/router-values.yaml" \
   '.llmRequestRouter.certificate.dnsNames[0]' \
   'llm-request-router.nvcf.svc.cluster.local'

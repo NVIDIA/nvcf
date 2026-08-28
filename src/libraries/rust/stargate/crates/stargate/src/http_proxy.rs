@@ -30,8 +30,6 @@ use crate::metrics::StargateMetrics;
 use crate::routing_state::StargateState;
 use crate::tunnel::{QuicHttpProxy, QuicTunnelConfig};
 
-const READINESS_WARMUP: Duration = Duration::from_secs(60);
-
 mod attempt;
 mod diagnostics;
 mod request;
@@ -88,19 +86,22 @@ pub struct ProxyTransportConfig {
 #[derive(Clone)]
 pub struct ProxyTrafficState {
     pub shutdown: CancellationToken,
-    ready_at: Instant,
+    started_at: Instant,
+    readiness_warmup: Duration,
 }
 
 impl ProxyTrafficState {
-    pub(crate) fn new(shutdown: CancellationToken) -> Self {
+    pub(crate) fn new(shutdown: CancellationToken, readiness_warmup: Duration) -> Self {
         Self {
             shutdown,
-            ready_at: Instant::now() + READINESS_WARMUP,
+            started_at: Instant::now(),
+            readiness_warmup,
         }
     }
 
     fn is_ready_at(&self, now: Instant) -> bool {
-        !self.shutdown.is_cancelled() && now >= self.ready_at
+        !self.shutdown.is_cancelled()
+            && now.saturating_duration_since(self.started_at) >= self.readiness_warmup
     }
 }
 
@@ -234,9 +235,7 @@ mod test_support {
     use crate::routing_state::StargateState;
     use crate::tunnel::{QuicHttpProxy, QuicTunnelConfig};
 
-    use super::{
-        DebugConfig, ProxyAppState, ProxyRetryConfig, ProxyTrafficState, READINESS_WARMUP, readyz,
-    };
+    use super::{DebugConfig, ProxyAppState, ProxyRetryConfig, ProxyTrafficState, readyz};
 
     pub(super) fn test_proxy_app_state() -> ProxyAppState {
         test_proxy_app_state_with_lb_config(LoadBalancerConfig::default())
@@ -266,10 +265,7 @@ mod test_support {
                 )
                 .expect("quic proxy should initialize"),
             ),
-            traffic: ProxyTrafficState {
-                shutdown: CancellationToken::new(),
-                ready_at: Instant::now(),
-            },
+            traffic: ProxyTrafficState::new(CancellationToken::new(), Duration::ZERO),
             lb_router: Arc::new(
                 LoadBalancerRouter::from_config(&lb_config)
                     .expect("load balancer should initialize"),
@@ -294,13 +290,21 @@ mod test_support {
     #[test]
     fn readiness_waits_for_the_complete_warmup_interval() {
         let started_at = Instant::now();
+        let readiness_warmup = Duration::from_secs(60);
         let traffic = ProxyTrafficState {
             shutdown: CancellationToken::new(),
-            ready_at: started_at + READINESS_WARMUP,
+            started_at,
+            readiness_warmup,
         };
 
-        assert_eq!(READINESS_WARMUP, Duration::from_secs(60));
         assert!(!traffic.is_ready_at(started_at + Duration::from_secs(59)));
-        assert!(traffic.is_ready_at(started_at + READINESS_WARMUP));
+        assert!(traffic.is_ready_at(started_at + readiness_warmup));
+    }
+
+    #[test]
+    fn readiness_accepts_extreme_warmup_without_instant_overflow() {
+        let traffic = ProxyTrafficState::new(CancellationToken::new(), Duration::MAX);
+
+        assert!(!traffic.is_ready_at(Instant::now()));
     }
 }
