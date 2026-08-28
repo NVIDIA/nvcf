@@ -594,7 +594,7 @@ func init() {
 	createCmd.Flags().StringSliceVar(&createFlags.models, "models", []string{}, "Model artifacts (format: name:version:uri)")
 	createCmd.Flags().StringArrayVar(&createFlags.llmModels, "llm-model", []string{}, "LLM model config (format: name=<model>,uris=<uri>|<uri>,routingMethod=<round_robin|power_of_two|wait_and_widen|pulsar_wait_and_widen|groq_multiregion|pulsar|random>,tokenRateLimit=<limit>)")
 	createCmd.Flags().Uint32Var(&createFlags.llmDefaultPriority, "llm-default-priority", 0, "Function-level default request priority (lower is higher; range: 0-4294967295)")
-	createCmd.Flags().StringArrayVar(&createFlags.llmPerAccountPriorities, "llm-per-account-priority", []string{}, "Per-account request priority override (format: <nca-id>:<priority>; requires default priority; lower is higher; range: 0-4294967295; repeatable, max 64)")
+	createCmd.Flags().StringArrayVar(&createFlags.llmPerAccountPriorities, "llm-per-account-priority", []string{}, "Per-account request priority override (format: <nca-id>:<priority>; requires default priority; lower is higher; range: 0-4294967295; repeatable; supports up to 64 distinct NCA ID overrides)")
 	createCmd.Flags().StringSliceVar(&createFlags.resources, "resources", []string{}, "Resource artifacts (format: name:version:uri)")
 	createCmd.Flags().StringVar(&createFlags.rateLimit, "rate-limit", "", "Rate limit pattern (e.g., '100-S', '50-M', '10-H', '5-D')")
 	createCmd.Flags().StringSliceVar(&createFlags.rateLimitExempted, "rate-limit-exempted", []string{}, "NCA IDs exempted from rate limiting")
@@ -637,7 +637,7 @@ func init() {
 	updateCmd.Flags().StringSliceVar(&updateFlags.tags, "tags", []string{}, "Function tags (comma-separated)")
 	updateCmd.Flags().StringArrayVar(&updateFlags.llmModelUpdates, "llm-model-update", []string{}, "LLM model update (format: name=<model>,routingMethod=<round_robin|power_of_two|wait_and_widen|pulsar_wait_and_widen|groq_multiregion|pulsar|random>,tokenRateLimit=<limit>)")
 	updateCmd.Flags().Uint32Var(&updateFlags.llmDefaultPriority, "llm-default-priority", 0, "Function-level default request priority (lower is higher; range: 0-4294967295; replaces existing priority config)")
-	updateCmd.Flags().StringArrayVar(&updateFlags.llmPerAccountPriorities, "llm-per-account-priority", []string{}, "Per-account request priority override (format: <nca-id>:<priority>; requires default priority; lower is higher; range: 0-4294967295; repeatable, max 64)")
+	updateCmd.Flags().StringArrayVar(&updateFlags.llmPerAccountPriorities, "llm-per-account-priority", []string{}, "Per-account request priority override (format: <nca-id>:<priority>; requires default priority; lower is higher; range: 0-4294967295; repeatable; supports up to 64 distinct NCA ID overrides)")
 }
 
 // ============================================================================
@@ -1296,7 +1296,7 @@ func parseContainerEnvironment(values []string) ([]ContainerEnvironmentEntry, er
 
 func parsePerAccountPriorities(values []string) (map[string]uint32, error) {
 	if len(values) > 64 {
-		return nil, fmt.Errorf("at most 64 per-account priority overrides are allowed")
+		return nil, fmt.Errorf("at most 64 distinct NCA ID priority overrides are allowed")
 	}
 
 	overrides := make(map[string]uint32, len(values))
@@ -1335,7 +1335,7 @@ func validateLLMInvocationConfig(config *LLMInvocationConfigInput) error {
 
 	priority := config.Priority
 	if len(priority.PerAccountPriority) > 64 {
-		return fmt.Errorf("at most 64 per-account priority overrides are allowed")
+		return fmt.Errorf("at most 64 distinct NCA ID priority overrides are allowed")
 	}
 	if len(priority.PerAccountPriority) > 0 && priority.DefaultPriority == nil {
 		return fmt.Errorf("defaultPriority is required when perAccountPriority is configured")

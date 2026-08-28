@@ -83,7 +83,7 @@ Extended duration units: `s` (seconds), `m` (minutes), `h` (hours), `d` (days), 
 | `--models NAME:VERSION:URI` | Standard model artifact; repeatable | - |
 | `--llm-model SPEC` | LLM model config; format `name=<model>,uris=<uri>\|<uri>,routingMethod=<method>,tokenRateLimit=<limit>`; repeatable. Token limits use `<value>-<unit>` with `S`, `M`, `H`, `D`, or `W`, for example `1000-S`. Use input JSON for combined token limits because inline specs use commas as field separators. | - |
 | `--llm-default-priority PRIORITY` | Function-level default request priority. Lower values have higher priority. | - |
-| `--llm-per-account-priority NCA-ID:PRIORITY` | Per-account priority override; repeatable, maximum 64. Requires a default priority. | - |
+| `--llm-per-account-priority NCA-ID:PRIORITY` | Per-account priority override; repeatable; supports up to 64 distinct NCA ID overrides. Requires a default priority. | - |
 
 In JSON and inline specs, LLM functions set `functionType: "LLM"` and model routing metadata under `models[].llmConfig`. `llmConfig.uris` declares the OpenAI-compatible upstream paths exposed by the model. Current supported paths are `/v1/chat/completions`, `/v1/responses`, and `/v1/embeddings`. `llmConfig.routingMethod` accepts `round_robin`, `power_of_two`, `groq_multiregion`, `pulsar`, or `random`.
 `llmConfig.tokenRateLimit` accepts one or more comma-separated positive integer token limits in `<value>-<unit>` format. Supported units are `S` (seconds), `M` (minutes), `H` (hours), `D` (days), and `W` (weeks). Use distinct units when combining limits, for example `1000-S,5000-M,100000-H,500000-D,1000000-W` in input JSON.
@@ -99,7 +99,7 @@ LLM invocation requests use `model: "<function-id>/<model-name>"`. The function 
 | `--tags TAG[,TAG]` | Replace function tags | - |
 | `--llm-model-update SPEC` | LLM model update; format `name=<model>,routingMethod=<method>,tokenRateLimit=<limit>`; repeatable. Routing methods match `--llm-model`. Token limit example: `1000-S`. Use input JSON for combined token limits. | - |
 | `--llm-default-priority PRIORITY` | Replace the function-level priority configuration with this default and any supplied per-account overrides. | - |
-| `--llm-per-account-priority NCA-ID:PRIORITY` | Per-account priority override; repeatable, maximum 64. Requires a default priority. | - |
+| `--llm-per-account-priority NCA-ID:PRIORITY` | Per-account priority override; repeatable; supports up to 64 distinct NCA ID overrides. Requires a default priority. | - |
 
 In JSON, `function update` accepts `modelUpdates[]` entries with `modelName` and `llmConfig.routingMethod` and/or `llmConfig.tokenRateLimit`. `uris` are create-time model metadata and are not part of model updates.
 

@@ -728,7 +728,7 @@ All `function create` flags:
 | `--models` | Model artifacts in `name:version:uri` format (repeatable) |
 | `--llm-model` | LLM model config in `name=MODEL,uris=URI\|URI,routingMethod=round_robin\|power_of_two\|groq_multiregion\|pulsar\|random,tokenRateLimit=LIMIT` format (repeatable). Token limits use `<value>-<unit>` with `S`, `M`, `H`, `D`, or `W`, for example `1000-S`. Use JSON input for combined token limits because inline model specs use commas as field separators. |
 | `--llm-default-priority` | Function-level default request priority. Lower values have higher priority, and `0` is highest. |
-| `--llm-per-account-priority` | Per-account override in `<nca-id>:<priority>` format (repeatable, maximum 64). Requires a default priority. |
+| `--llm-per-account-priority` | Per-account override in `<nca-id>:<priority>` format. Repeatable; supports up to 64 distinct NCA ID overrides. Requires a default priority. |
 | `--resources` | Resource artifacts in `name:version:uri` format (repeatable) |
 | `--helm-chart` | Helm chart specification |
 | `--helm-chart-service` | Helm chart service name |
