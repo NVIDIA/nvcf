@@ -354,14 +354,16 @@ addons:
           name: nvcf-openbao-pki
 ```
 
-The gateway-routes chart creates `GRPCRoute/llm-worker-grpc`,
-`UDPRoute/llm-worker-quic`,
-`ReferenceGrant/allow-llm-worker-routes`, a dedicated gRPC `Certificate`, and
-an Envoy `BackendTrafficPolicy` with the gRPC request timeout disabled. Both
-routes target `Service/llm-request-router-backend-router` in the `nvcf`
-namespace on
-ports `50071` and `50072`. The Service remains `ClusterIP` by design. Do not change
-it to `LoadBalancer` or `NodePort`; the Gateway data-plane Service owns external
+The secure configuration above creates `GRPCRoute/llm-worker-grpc`,
+`UDPRoute/llm-worker-quic`, `ReferenceGrant/allow-llm-worker-routes`, and an
+Envoy `BackendTrafficPolicy` with the gRPC request timeout disabled. In
+`grpcTls.mode=certManager`, it also creates the dedicated gRPC `Certificate`;
+`existingSecret` mode uses the operator-owned Secret instead. Plaintext
+development mode renders a `TCPRoute` and neither the policy nor the
+`Certificate`. Both routes target
+`Service/llm-request-router-backend-router` in the `nvcf` namespace on ports
+`50071` and `50072`. The Service remains `ClusterIP` by design. Do not change it
+to `LoadBalancer` or `NodePort`; the Gateway data-plane Service owns external
 exposure.
 
 The `GRPCRoute` deliberately omits `hostnames`, and its dedicated HTTPS
@@ -582,9 +584,12 @@ When you deploy the control plane via helmfile, the `nvcf-gateway-routes` chart 
 - Optional `TCPRoute` for split or multi-cluster gRPC invocation when the
   `grpcWorker` route is enabled
 - Optional `TCPRoute` for NATS when the `nats` route is enabled
-- Optional `GRPCRoute`, `UDPRoute`, gRPC listener `Certificate` in cert-manager
-  mode, and Envoy stream timeout policy for LLM worker traffic when the
-  `llmWorker` route is enabled
+- Optional `UDPRoute` plus a `GRPCRoute` for secure LLM worker traffic or a
+  `TCPRoute` for plaintext development when the `llmWorker` route is enabled
+- Optional Envoy stream timeout policy when secure LLM worker routing has
+  `grpcTls.enabled=true`
+- Optional gRPC listener `Certificate` when secure LLM worker routing uses
+  `grpcTls.mode=certManager`
 - `ReferenceGrants` for cross-namespace routing permissions
 
 These routes attach to the Gateway you prepared in [Gateway quickstart](./gateway-routing.md#gateway-quickstart).
