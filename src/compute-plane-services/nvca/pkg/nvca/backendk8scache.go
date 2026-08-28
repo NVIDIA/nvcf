@@ -498,7 +498,11 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 		return nil, nil, fmt.Errorf("addSharedClusterNodePublisher is required")
 	}
 
-	eventBroadcaster := record.NewBroadcaster()
+	// Per-instance spam/aggregation keys so multi-instance heartbeats on one
+	// ICMSRequest keep ledger annotations (see NewLedgerEventCorrelatorOptions).
+	eventBroadcaster := record.NewBroadcasterWithCorrelatorOptions(
+		NewLedgerEventCorrelatorOptions(b.periodicInstanceStatusUpdateInterval),
+	)
 	// Certain features must be turned on for security in OVC environments.
 	ovcSecEnforcementsEnabled := b.enabledAttrs.Enabled(featureflag.AttrOVCSecurityEnforcements)
 
