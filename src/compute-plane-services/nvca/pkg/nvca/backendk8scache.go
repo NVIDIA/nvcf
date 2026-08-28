@@ -745,6 +745,15 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 			}
 		}
 
+		// One-time migration for clusters that already had the intra-namespace
+		// egress policy in the shared pod-instance namespace before it was scoped
+		// out; ensureNetworkPolicies above does not remove it on its own. Best
+		// effort: failing to remove a leftover policy should not block agent
+		// startup, since it does not affect the agent's ability to operate.
+		if err := k8sutil.RemoveLegacyIntraNamespaceEgressPolicy(ctx, c.podInstanceNamespace, c.clients.K8s); err != nil {
+			log.WithError(err).Warnf("failed to remove legacy NetworkPolicy in namespace %s", c.podInstanceNamespace)
+		}
+
 		// add configMapInformers for Network Policy for k8s backend only
 		if err := addConfigMapInformers(ctx, c); err != nil {
 			return nil, nil, err
