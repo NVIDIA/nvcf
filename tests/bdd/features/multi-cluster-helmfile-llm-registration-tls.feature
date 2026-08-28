@@ -83,11 +83,15 @@ Feature: Register an LLM worker securely with every router in a local split-clus
       And the command output should contain "Verify return code: 0 (ok)"
       And the command output should contain "ALPN protocol: h2"
 
+      # grpcurl reports a client-side dial deadline when plaintext HTTP/2 is
+      # sent to this verified TLS listener. The trusted Watch below proves
+      # that the same endpoint remains healthy.
       When I run command:
         """
-        grpcurl -plaintext -max-time 5 -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates
+        /bin/bash -c 'set -u; output=$(grpcurl -plaintext -max-time 5 -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates 2>&1); rc=$?; if [ "$rc" -eq 0 ]; then printf "%s\n" "plaintext Watch unexpectedly succeeded" >&2; exit 1; fi; printf "%s\n" "$output" | bash tests/bdd/scripts/assert-grpcurl-plaintext-tls-rejection.sh'
         """
-      Then the command exit code should be 1
+      Then the command exit code should be 0
+      And the command output should contain "plaintext-watch-rejected=tls-listener-timeout"
 
       # WatchStargates is a long-lived stream. Normalize grpcurl's deadline
       # exit after it prints the initial snapshot.
