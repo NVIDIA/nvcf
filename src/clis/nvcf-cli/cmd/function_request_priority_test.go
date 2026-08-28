@@ -198,48 +198,6 @@ func TestLoadUpdateConfigAppliesRequestPriorityFlags(t *testing.T) {
 	assertPriorityConfig(t, config.LLMInvocationConfig, 7, map[string]uint32{"nca-1": 3})
 }
 
-func TestLoadUpdateConfigClearsRequestPriority(t *testing.T) {
-	originalFlags := updateFlags
-	t.Cleanup(func() { updateFlags = originalFlags })
-
-	cmd := newPriorityFlagTestCommand()
-	if err := cmd.Flags().Set("clear-llm-priority", "true"); err != nil {
-		t.Fatalf("set clear priority: %v", err)
-	}
-	updateFlags.clearLLMPriority = true
-
-	config, err := loadUpdateConfig(cmd)
-	if err != nil {
-		t.Fatalf("load update config: %v", err)
-	}
-	if config.LLMInvocationConfig == nil {
-		t.Fatal("llmInvocationConfig is nil, want empty config")
-	}
-	if config.LLMInvocationConfig.Priority != nil {
-		t.Fatalf("priority = %#v, want nil", config.LLMInvocationConfig.Priority)
-	}
-}
-
-func TestLoadUpdateConfigRejectsClearWithPriorityFlags(t *testing.T) {
-	originalFlags := updateFlags
-	t.Cleanup(func() { updateFlags = originalFlags })
-
-	cmd := newPriorityFlagTestCommand()
-	if err := cmd.Flags().Set("clear-llm-priority", "true"); err != nil {
-		t.Fatalf("set clear priority: %v", err)
-	}
-	if err := cmd.Flags().Set("llm-default-priority", "7"); err != nil {
-		t.Fatalf("set default priority: %v", err)
-	}
-	updateFlags.clearLLMPriority = true
-	updateFlags.llmDefaultPriority = 7
-
-	_, err := loadUpdateConfig(cmd)
-	if err == nil || !strings.Contains(err.Error(), "cannot be used with") {
-		t.Fatalf("error = %v, want mutually exclusive flags error", err)
-	}
-}
-
 func TestRequestPriorityFlagsPreserveInputFileFieldsWhenOmitted(t *testing.T) {
 	t.Parallel()
 
@@ -409,7 +367,6 @@ func newPriorityFlagTestCommand() *cobra.Command {
 	cmd := &cobra.Command{}
 	cmd.Flags().Uint32("llm-default-priority", 0, "")
 	cmd.Flags().StringArray("llm-per-account-priority", nil, "")
-	cmd.Flags().Bool("clear-llm-priority", false, "")
 	return cmd
 }
 

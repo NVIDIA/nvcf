@@ -1055,15 +1055,9 @@ When `--json` is set:
   --version-id "01234567-89ab-cdef-0123-456789abcdef" \
   --llm-default-priority 7 \
   --llm-per-account-priority "nca-id:3"
-
-# Clear the function-level request priority configuration
-./nvcf-cli function update \
-  --function-id "550e8400-e29b-41d4-a716-446655440000" \
-  --version-id "01234567-89ab-cdef-0123-456789abcdef" \
-  --clear-llm-priority
 ```
 
-When an update includes `llmInvocationConfig`, it replaces the complete function-level priority configuration. Specify every default and per-account value to retain. Omitting the field preserves the current configuration. An empty object clears it:
+When an update includes `llmInvocationConfig`, it replaces the complete function-level priority configuration. Specify every default and per-account value to retain. Omitting the field preserves the current configuration. To clear it, save an update file such as `clear-priority.json` with an empty object:
 
 ```json
 {
@@ -1071,6 +1065,10 @@ When an update includes `llmInvocationConfig`, it replaces the complete function
   "versionId": "01234567-89ab-cdef-0123-456789abcdef",
   "llmInvocationConfig": {}
 }
+```
+
+```bash
+./nvcf-cli function update --input-file clear-priority.json
 ```
 
 ### Delete Function or Deployment

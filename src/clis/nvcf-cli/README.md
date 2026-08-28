@@ -765,12 +765,6 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"  # optional fallback
   --llm-default-priority 7 \
   --llm-per-account-priority "nca-id:3"
 
-# Clear the function-level request priority configuration
-./nvcf-cli function update \
-  --function-id "func-12345678-1234-1234-1234-123456789abc" \
-  --version-id "ver-12345678-1234-1234-1234-123456789abc" \
-  --clear-llm-priority
-
 # Update function deployment specifications
 ./nvcf-cli function deploy update \
   --function-id "func-12345678-1234-1234-1234-123456789abc" \
@@ -807,7 +801,7 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"  # optional fallback
 }
 ```
 
-An update that includes `llmInvocationConfig` replaces the complete function-level priority configuration. Specify every default and per-account value to retain. Omitting the field preserves the current configuration. Use `--clear-llm-priority` or set `"llmInvocationConfig": {}` in the update file to clear it.
+An update that includes `llmInvocationConfig` replaces the complete function-level priority configuration. Specify every default and per-account value to retain. Omitting the field preserves the current configuration. To clear it, use `--input-file` with `"llmInvocationConfig": {}`.
 
 **Update Deployment JSON format (`update-deployment.json`):**
 ```json

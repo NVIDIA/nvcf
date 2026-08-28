@@ -263,8 +263,9 @@ var updateCmd = &cobra.Command{
 This allows you to modify mutable fields of an existing function version
 without affecting the function's code or deployment configuration. LLM model
 updates support routingMethod and tokenRateLimit. Function-level LLM request
-priority can be configured or cleared. A priority update replaces the existing
-function-level priority configuration, so specify every value to retain.
+priority can be configured with command-line flags. To clear it, use an input
+file containing an empty llmInvocationConfig object. A priority update replaces
+the existing function-level priority configuration. Specify every value to retain.
 
 For updating deployments, use: nvcf-cli function deploy update
 
@@ -545,7 +546,6 @@ var updateFlags struct {
 	llmModelUpdates         []string
 	llmDefaultPriority      uint32
 	llmPerAccountPriorities []string
-	clearLLMPriority        bool
 }
 
 // ============================================================================
@@ -638,7 +638,6 @@ func init() {
 	updateCmd.Flags().StringArrayVar(&updateFlags.llmModelUpdates, "llm-model-update", []string{}, "LLM model update (format: name=<model>,routingMethod=<round_robin|power_of_two|wait_and_widen|pulsar_wait_and_widen|groq_multiregion|pulsar|random>,tokenRateLimit=<limit>)")
 	updateCmd.Flags().Uint32Var(&updateFlags.llmDefaultPriority, "llm-default-priority", 0, "Function-level default request priority (lower is higher; range: 0-4294967295; replaces existing priority config)")
 	updateCmd.Flags().StringArrayVar(&updateFlags.llmPerAccountPriorities, "llm-per-account-priority", []string{}, "Per-account request priority override (format: <nca-id>:<priority>; requires default priority; lower is higher; range: 0-4294967295; repeatable, max 64)")
-	updateCmd.Flags().BoolVar(&updateFlags.clearLLMPriority, "clear-llm-priority", false, "Clear the function-level request priority configuration")
 }
 
 // ============================================================================
@@ -1591,12 +1590,7 @@ func loadUpdateConfig(cmd *cobra.Command) (*UpdateConfig, error) {
 	}
 
 	priorityFlagsChanged := cmd.Flags().Changed("llm-default-priority") || cmd.Flags().Changed("llm-per-account-priority")
-	if cmd.Flags().Changed("clear-llm-priority") && updateFlags.clearLLMPriority {
-		if priorityFlagsChanged {
-			return nil, fmt.Errorf("--clear-llm-priority cannot be used with --llm-default-priority or --llm-per-account-priority")
-		}
-		config.LLMInvocationConfig = &LLMInvocationConfigInput{}
-	} else if priorityFlagsChanged {
+	if priorityFlagsChanged {
 		if err := applyRequestPriorityFlagOverrides(
 			cmd.Flags().Changed("llm-default-priority"),
 			updateFlags.llmDefaultPriority,

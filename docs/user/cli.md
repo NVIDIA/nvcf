@@ -910,12 +910,6 @@ Example deployment JSON:
   --llm-default-priority 7 \
   --llm-per-account-priority "nca-id:3"
 
-# Clear the function-level request priority configuration
-./nvcf-cli function update \
-  --function-id <function-id> \
-  --version-id <version-id> \
-  --clear-llm-priority
-
 # Update from JSON file
 ./nvcf-cli function update \
   --function-id <function-id> \
@@ -941,7 +935,7 @@ LLM model updates can also be provided in the input file:
 }
 ```
 
-`llmInvocationConfig` is a full replacement when it is present in an update. Specify every default and per-account value to retain. Omitting the field preserves the current configuration. Use `--clear-llm-priority` or an empty `llmInvocationConfig` object to clear it:
+`llmInvocationConfig` is a full replacement when it is present in an update. Specify every default and per-account value to retain. Omitting the field preserves the current configuration. To clear it, use `--input-file` with an empty `llmInvocationConfig` object:
 
 ```json
 {

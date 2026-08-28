@@ -117,11 +117,10 @@ LLM invocation requests use `model: "<function-id>/<model-name>"`. The function 
 | `--llm-model-update SPEC` | LLM model update; format `name=<model>,routingMethod=<method>,tokenRateLimit=<limit>`; repeatable. Routing methods match `--llm-model`. Token limit example: `1000-S`. Use input JSON for combined token limits. | - |
 | `--llm-default-priority PRIORITY` | Replace the function-level priority configuration with this default and any supplied per-account overrides. | - |
 | `--llm-per-account-priority NCA-ID:PRIORITY` | Per-account priority override; repeatable, maximum 64. Requires a default priority. | - |
-| `--clear-llm-priority` | Clear the function-level request priority configuration. | `false` |
 
 In JSON, `function update` accepts `modelUpdates[]` entries with `modelName` and `llmConfig.routingMethod` and/or `llmConfig.tokenRateLimit`. `uris` are create-time model metadata and are not part of model updates.
 
-When `llmInvocationConfig` is present in an update, it replaces the complete function-level priority configuration. Specify every default and per-account value to retain. Omitting the field preserves the current configuration. Use `--clear-llm-priority` or `"llmInvocationConfig": {}` to clear it.
+When `llmInvocationConfig` is present in an update, it replaces the complete function-level priority configuration. Specify every default and per-account value to retain. Omitting the field preserves the current configuration. Use `--input-file` with `"llmInvocationConfig": {}` to clear it.
 
 ## `function deploy create`-specific
 
