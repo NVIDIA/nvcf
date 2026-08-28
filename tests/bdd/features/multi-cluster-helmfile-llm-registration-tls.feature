@@ -89,8 +89,8 @@ Feature: Register an LLM worker securely with every router in a local split-clus
         """
       Then the command exit code should be 1
 
-      # WatchStargates is a long-lived stream. grpcurl exits on its explicit
-      # deadline after printing the initial snapshot, so exit 1 is expected.
+      # WatchStargates is a long-lived stream. Normalize grpcurl's deadline
+      # exit after it prints the initial snapshot.
       When I run command:
         """
         /bin/bash -c 'grpcurl -max-time 3 -cacert <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf -o jsonpath="{.data.ca\.crt}" | base64 -d) -authority llm-request-router.nvcf.svc.cluster.local -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates; rc=$?; [ "$rc" -ne 0 ]'
