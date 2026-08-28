@@ -19,7 +19,7 @@ package com.nvidia.icms.configuration;
 import static com.nvidia.icms.configuration.YamlEnvironmentTestUtils.loadYamlEnvironment;
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.nvidia.icms.configuration.bean.NatsConfigurationProperties;
+import com.nvidia.icms.configuration.nats.NatsConfigurationProperties;
 import com.nvidia.icms.configuration.byoc.ByocConfigurationProperties;
 import java.io.IOException;
 import java.time.Duration;
@@ -46,7 +46,6 @@ class NcpProfileConfigurationTest {
 
         assertThat(nats.isNatsEnabled()).isTrue();
         assertThat(nats.isCreateNatsStreams()).isTrue();
-        assertThat(nats.isCreateNatsConsumers()).isFalse();
         assertThat(nats.getConnectionTimeout()).isEqualTo(Duration.ofSeconds(10));
         assertThat(nats.getPingInterval()).isEqualTo(Duration.ofSeconds(5));
         assertThat(nats.getReconnectWait()).isEqualTo(Duration.ofMillis(100));

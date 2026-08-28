@@ -120,7 +120,6 @@ icms:
     nats-enabled: true
     nats-url: nats://nats.nats-system.svc.cluster.local:4222
     create-nats-streams: true
-    create-nats-consumers: false
     connection-timeout: 10s
     ping-interval: 5s
     reconnect-wait: 100ms

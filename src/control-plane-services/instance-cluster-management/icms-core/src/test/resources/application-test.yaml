@@ -423,7 +423,6 @@ icms:
     nats-enabled: false
     nats-url: nats://localhost:4222
     create-nats-streams: true
-    create-nats-consumers: false
     connection-timeout: 10s
     ping-interval: 5s
     reconnect-wait: 100ms
@@ -628,7 +627,6 @@ icms:
     # Should be disabled to verify success of backward compatible integration test
     nats-enabled: false
     create-nats-streams: true
-    create-nats-consumers: true
 
   aws:
     region: us-east-1

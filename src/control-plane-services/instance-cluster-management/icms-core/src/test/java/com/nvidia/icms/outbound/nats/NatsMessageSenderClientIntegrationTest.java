@@ -18,18 +18,26 @@ package com.nvidia.icms.outbound.nats;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-import com.nvidia.icms.configuration.bean.NatsConfigurationProperties;
+import com.nvidia.icms.configuration.nats.NatsConfiguration;
+import com.nvidia.icms.configuration.nats.NatsConfiguration.FixedNatsPool;
+import com.nvidia.icms.configuration.nats.NatsConfigurationProperties;
 import com.nvidia.icms.integration.IntegrationTest;
 import com.nvidia.icms.outbound.sqs.model.byoc.ByocSqsMessageModel;
 import com.nvidia.icms.outbound.sqs.model.byoc.ByocTerminatePodMessageModel;
+import io.micrometer.tracing.Tracer;
+import io.nats.client.Connection;
 import java.time.Duration;
-import java.util.List;
+import java.util.Optional;
+import lombok.SneakyThrows;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
+import org.springframework.context.ApplicationContext;
 
 /**
  * Integration tests for the {@link NatsMessageSenderClient}.
@@ -39,6 +47,7 @@ import org.mockito.MockitoAnnotations;
 class NatsMessageSenderClientIntegrationTest extends IntegrationTest {
 
     private NatsMessageSenderClient natsMessageSenderClient;
+    private FixedNatsPool fixedNatsPool;
 
     @Mock
     private NatsConfigurationProperties natsConfigurationProperties;
@@ -47,6 +56,7 @@ class NatsMessageSenderClientIntegrationTest extends IntegrationTest {
      * Sets up the test environment before each test case.
      * Initializes the NATS client and mocks the configuration properties.
      */
+    @SneakyThrows
     @BeforeEach
     void setUp() {
         MockitoAnnotations.openMocks(this);
@@ -57,29 +67,38 @@ class NatsMessageSenderClientIntegrationTest extends IntegrationTest {
         when(natsConfigurationProperties.getPingInterval()).thenReturn(Duration.ofSeconds(10));
         when(natsConfigurationProperties.getReconnectWait()).thenReturn(Duration.ofSeconds(1));
         when(natsConfigurationProperties.getReconnectJitter()).thenReturn(Duration.ZERO);
+        when(natsConfigurationProperties.getNkeySeed()).thenReturn(Optional.empty());
         when(natsConfigurationProperties.getDelayBetweenMessages()).thenReturn(Duration.ZERO);
         when(natsConfigurationProperties.isCreateNatsStreams()).thenReturn(true);
         when(natsConfigurationProperties.isNatsEnabled()).thenReturn(true);
-        when(natsConfigurationProperties.isCreateNatsConsumers()).thenReturn(true);
+        when(natsConfigurationProperties.getMaxPoolSize()).thenReturn(1);
 
         // Initialize NATS client
-        NatsConnectionFactory natsConnectionFactory = new NatsConnectionFactory(
-                natsConfigurationProperties);
+        try {
+            var applicationContext = mock(ApplicationContext.class);
+            when(applicationContext.getBean(Connection.class)).thenAnswer(ignored ->
+                    new NatsConfiguration().natsConnection(
+                            natsConfigurationProperties, mock(Tracer.class)));
+            fixedNatsPool = new FixedNatsPool(applicationContext, natsConfigurationProperties);
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
 
-        //create streams and consumers
-        // After moving init logic out of the constructor and into @PostConstruct,
-        // manually-instantiated NatsStreamManager instances need init() called
-        // explicitly — Spring lifecycle callbacks only fire on container-managed
-        // beans. Without this, isCreateNatsStreams/isCreateNatsConsumers=true is
-        // a no-op and request-reply sends fail with NO_RESPONDERS.
+        // Spring lifecycle callbacks do not run for manually constructed test objects.
         NatsStreamManager natsStreamManager = new NatsStreamManager(
-                natsConnectionFactory,
-                natsConfigurationProperties,
-                List.of(new CoreNatsStreamRegistrar()));
+                new NatsResourceService(fixedNatsPool),
+                natsConfigurationProperties);
         natsStreamManager.init();
 
-        natsMessageSenderClient = new NatsMessageSenderClient(natsConnectionFactory,
+        natsMessageSenderClient = new NatsMessageSenderClient(fixedNatsPool,
                                                               natsConfigurationProperties);
+    }
+
+    @AfterEach
+    void tearDown() throws Exception {
+        if (fixedNatsPool != null) {
+            fixedNatsPool.close();
+        }
     }
 
     /**

@@ -14,7 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.nvidia.icms.configuration.bean;
+package com.nvidia.icms.configuration.nats;
 
 import java.time.Duration;
 import java.util.Optional;
@@ -33,8 +33,8 @@ public class NatsConfigurationProperties {
 
     private boolean natsEnabled;
     private String natsUrl;
+    private int maxPoolSize = 8;
     private boolean createNatsStreams;
-    private boolean createNatsConsumers;
     private Duration connectionTimeout = Duration.ZERO;
     private Duration pingInterval = Duration.ZERO;
     private Duration reconnectWait = Duration.ZERO;

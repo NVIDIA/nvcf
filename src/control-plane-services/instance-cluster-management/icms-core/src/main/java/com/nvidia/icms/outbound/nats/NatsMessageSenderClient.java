@@ -16,12 +16,12 @@
  */
 package com.nvidia.icms.outbound.nats;
 
-import com.nvidia.icms.configuration.bean.NatsConfigurationProperties;
+import com.nvidia.icms.configuration.nats.NatsConfiguration.FixedNatsPool;
+import com.nvidia.icms.configuration.nats.NatsConfigurationProperties;
 import com.nvidia.icms.errors.IcmsInternalServerException;
 import com.nvidia.icms.outbound.sqs.model.byoc.ByocSqsMessageModel;
-import com.nvidia.icms.util.GsonCompatMapper;
 import com.nvidia.icms.outbound.sqs.model.byoc.ByocTerminatePodMessageModel;
-import io.nats.client.Connection;
+import com.nvidia.icms.util.GsonCompatMapper;
 import io.nats.client.JetStream;
 import io.nats.client.impl.NatsMessage;
 import jakarta.annotation.Nullable;
@@ -57,7 +57,7 @@ public class NatsMessageSenderClient {
         NOT_ENABLED // NATS is not enabled
     }
 
-    private final NatsConnectionFactory natsConnectionFactory;
+    private final FixedNatsPool fixedNatsPool;
     private final NatsConfigurationProperties natsConfigurationProperties;
 
     /**
@@ -235,8 +235,7 @@ public class NatsMessageSenderClient {
     SendNatsMessageResult publishMessage(
             @NotNull String messageBody, @NotNull String subject) {
         try {
-            Connection connection = natsConnectionFactory.createConnectionIfNeeded();
-            JetStream js = connection.jetStream();
+            JetStream js = fixedNatsPool.borrowJetStream();
             js.publish(NatsMessage.builder()
                                .subject(subject)
                                .data(messageBody, StandardCharsets.UTF_8)

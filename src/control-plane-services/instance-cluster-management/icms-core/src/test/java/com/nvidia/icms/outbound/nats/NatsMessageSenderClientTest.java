@@ -24,9 +24,9 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.nvidia.icms.configuration.bean.NatsConfigurationProperties;
+import com.nvidia.icms.configuration.nats.NatsConfigurationProperties;
 import com.nvidia.icms.errors.IcmsInternalServerException;
-import io.nats.client.Connection;
+import com.nvidia.icms.configuration.nats.NatsConfiguration.FixedNatsPool;
 import io.nats.client.JetStream;
 import io.nats.client.JetStreamApiException;
 import io.nats.client.impl.NatsMessage;
@@ -50,13 +50,10 @@ class NatsMessageSenderClientTest {
     private static final String SUBJECT = "subject";
 
     @Mock
-    private NatsConnectionFactory natsConnectionFactory;
+    private FixedNatsPool fixedNatsPool;
 
     @Mock
     private NatsConfigurationProperties natsConfigurationProperties;
-
-    @Mock
-    private Connection connection;
 
     @Mock
     private JetStream jetStream;
@@ -70,12 +67,11 @@ class NatsMessageSenderClientTest {
     void setUp()
             throws Exception {
         MockitoAnnotations.openMocks(this);
-        when(natsConnectionFactory.createConnectionIfNeeded()).thenReturn(connection);
-        when(connection.jetStream()).thenReturn(jetStream);
+        when(fixedNatsPool.borrowJetStream()).thenReturn(jetStream);
         when(natsConfigurationProperties.isNatsEnabled()).thenReturn(true);
         when(natsConfigurationProperties.getDelayBetweenMessages()).thenReturn(Duration.ZERO);
 
-        natsMessageSenderClient = new NatsMessageSenderClient(natsConnectionFactory,
+        natsMessageSenderClient = new NatsMessageSenderClient(fixedNatsPool,
                                                               natsConfigurationProperties);
     }
 

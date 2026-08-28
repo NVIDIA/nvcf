@@ -18,7 +18,7 @@ package com.nvidia.icms.service;
 
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
-import com.nvidia.icms.configuration.bean.NatsConfigurationProperties;
+import com.nvidia.icms.configuration.nats.NatsConfigurationProperties;
 import com.nvidia.icms.configuration.bean.IcmsConfigurationProperties;
 import com.nvidia.icms.configuration.byoc.ByocConfigurationProperties;
 import com.nvidia.icms.configuration.nvca.NvcaConfigurationProperties;
