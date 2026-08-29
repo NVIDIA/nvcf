@@ -149,7 +149,7 @@ versions require the plugin to be named through `VLLM_PLUGINS`.
   since the platform and server images share the same disk.
 - `kubectl` with cluster-admin, to install the CRDs.
 - A storage class for the server cache volume. The default access mode is
-  ReadWriteOnce, which limits the server to a single replica.
+  ReadWriteOnce, which confines read-write mounting to a single node.
 - Credentials for the model source, on the server. The server performs the
   upstream download; workers read from the server or from peers.
 - RDMA-capable networking between GPU nodes, if you want the accelerated path.
@@ -210,10 +210,14 @@ Prefer setting this in node bootstrap so replacement nodes inherit it. Restartin
 containerd does not stop running containers, but it briefly interrupts the CRI
 socket, so the node may report `NotReady` for a few seconds.
 
-There is no workload-level alternative. Kubernetes exposes no ulimit field, and
-granting `CAP_IPC_LOCK` does not help a container that runs as a non-root UID,
-because such a process has an empty effective capability set. `vllm-runtime:1.2.1`
-runs as UID 1000, so the capability would be permitted but never active.
+Kubernetes exposes no ulimit field, so this has to be set on the node. Granting
+`CAP_IPC_LOCK` through `securityContext.capabilities.add` is the usual
+workload-level answer, and in principle that capability bypasses
+`RLIMIT_MEMLOCK`, but it did not lift the limit for `vllm-runtime:1.2.1` in our
+testing: the worker still reported the node ceiling and NIXL still failed to
+register memory. Whether it helps depends on the runtime and on cluster policy,
+so if you try it, confirm the result from inside the container with
+`grep 'Max locked memory' /proc/self/limits` rather than assuming it took effect.
 
 The important failure mode is silent. If the backend does not match the fabric,
 ModelExpress can still complete the transfer over a slower path, and the
@@ -563,8 +567,11 @@ than at the end.
 1. Install the CRDs and confirm both are present.
 2. Install the server and confirm it reaches ready. A crash-loop here is almost
    always a missing `MX_METADATA_BACKEND`.
-3. Deploy one worker with ModelExpress enabled and invoke it once. This proves
-   configuration without involving peer transfer.
+3. Deploy one worker with ModelExpress enabled and invoke it once. This exercises
+   the inference path only. A single worker can serve a request after loading
+   natively or after falling back silently, so treat this as a smoke test and use
+   the loader and transport checks under [Verification](#verification) to
+   establish that ModelExpress is actually in use.
 4. Scale to two or more workers and verify the transport, as below.
 
 Enabling ModelExpress does not require redeploying the compute-plane stack. It is
@@ -637,7 +644,8 @@ things separately.
 That the loader ran:
 
 ```bash
-kubectl logs -l nvidia.com/dynamo-component-type=worker --tail=200 \
+kubectl logs -n <worker-namespace> \
+  -l nvidia.com/dynamo-component-type=worker --tail=200 \
   | grep -iE 'modelexpress|mx '
 ```
 
@@ -719,21 +727,32 @@ restored the default for a private mirror, create the secret to match.
 Server volume fills up. `persistence.size` defaults to 10Gi, which holds one
 small model. Size it for every model you serve.
 
-Cannot scale the server past one replica. The default access mode is
-ReadWriteOnce. A second replica requires a ReadWriteMany storage class.
+Cannot spread server replicas across nodes. The default access mode is
+ReadWriteOnce, which permits read-write mounting from one node only. Replicas
+scheduled onto other nodes need a ReadWriteMany storage class or a separate
+volume each.
 
 ## Cleanup
 
-Remove the function first, then the cluster-wide pieces:
+Remove the function first, then the cluster-wide pieces.
+
+The CRDs are cluster-scoped, so deleting them destroys every `ModelMetadata` and
+`ModelCacheEntry` in the cluster, including those belonging to other functions
+and to any other ModelExpress installation. Before running the delete below,
+confirm no other consumer exists:
+
+```bash
+kubectl get modelmetadata,modelcacheentry --all-namespaces
+```
+
+Stop here if that returns objects you do not own, and remove only the release and
+namespace. Otherwise:
 
 ```bash
 helm uninstall modelexpress --namespace modelexpress
 kubectl delete -f https://raw.githubusercontent.com/ai-dynamo/modelexpress/v0.4.0/examples/crds.yaml
 kubectl delete namespace modelexpress
 ```
-
-Deleting the CRDs deletes every `ModelMetadata` and `ModelCacheEntry` in the
-cluster. Do not do it while another function still uses ModelExpress.
 
 The secrets are namespaced, so deleting the namespace removes them. Workers with
 ModelExpress still configured fall back to native loading once the server is
