@@ -495,6 +495,11 @@ func TestInlineImageMappingRefusesRatherThanHalfBumping(t *testing.T) {
 		`image: { tag: "1.0.0" }`,
 		`image: registry.example/app:1.0.0`,
 		"app:\n  image: { repository: \"r\", tag: \"1.0.0\" }",
+		// An image: key that does not start its line. Anchoring the check to the
+		// line start missed both of these, and each one reached
+		// ActionAppVersionOnly and half-bumped the chart.
+		`app: { image: { tag: "1.0.0" } }`,
+		"containers:\n  - image: { tag: \"1.0.0\" }",
 	} {
 		f := newFixture(t, `{"services":[
 		 {"id":"svc","path":"src/svc"},

@@ -42,9 +42,22 @@ var (
 	appVersionRE = regexp.MustCompile(`(?m)^(appVersion:\s*)"?([^"\s#]+)"?(.*)$`)
 	tagLineRE    = regexp.MustCompile(`^(\s+)tag:\s*"?([^"\s#]*)"?`)
 	// An image: key carrying a value on the same line, rather than opening a
-	// block. Covers a flow mapping, image: { tag: "1.0.0" }, and a plain scalar
-	// reference, image: registry/name:tag.
-	inlineImageRE = regexp.MustCompile(`(?m)^\s*image:[ \t]*[^ \t\n#].*$`)
+	// block, wherever it appears on that line.
+	//
+	// Anchoring to the start of the line only caught the simplest form. These
+	// are all valid YAML and all hide the tag from a line scan:
+	//
+	//	image: { tag: "1.0.0" }
+	//	app: { image: { tag: "1.0.0" } }
+	//	  - image: { tag: "1.0.0" }
+	//	image: registry/name:tag
+	//
+	// So the rule is inverted: rather than enumerate the shapes that hide a tag,
+	// anything that is not a plain block image: is refused. The optional prefix
+	// must end at a space, { or , so that a colon inside a value, such as
+	// repository: myimage:1.0.0, is not mistaken for an image key, and excluding
+	// # keeps commented lines out.
+	inlineImageRE = regexp.MustCompile(`(?m)^(?:[^#\n]*[\s{,])?image:[ \t]*[^ \t\n#].*$`)
 	keyLineRE     = regexp.MustCompile(`^(\s*)([A-Za-z0-9_.-]+):`)
 )
 
