@@ -1258,7 +1258,7 @@ func TestMultiClusterHelmfileLLMRegistrationTLSFailClosedFeatureFileWiresToSteps
 	}{
 		{marker: "wrong-root-rejected", diagnostic: "certificate signed by unknown authority"},
 		{marker: "wrong-host-rejected", diagnostic: "not wrong-host.nvcf.svc.cluster.local"},
-		{marker: "missing-trust-rejected", diagnostic: "certificate signed by unknown authority"},
+		{marker: "missing-trust-rejected", diagnostic: "certificate is not trusted"},
 		{marker: "plaintext-rejected", diagnostic: "context deadline exceeded"},
 		{
 			marker: "invalid-authority-rejected",

@@ -75,7 +75,7 @@ Feature: Reject insecure or invalid LLM worker registration
 
       When I run command:
         """
-        /bin/bash -c 'set -u; cert_dir=$(mktemp -d); trap '\''rm -rf "$cert_dir"'\'' EXIT; openssl req -x509 -newkey rsa:2048 -nodes -subj /CN=wrong-root -keyout "$cert_dir/key.pem" -out "$cert_dir/ca.pem" -days 1 >/dev/null 2>&1 || exit; if diagnostic=$(grpcurl -max-time 5 -cacert "$cert_dir/ca.pem" -authority llm-request-router.nvcf.svc.cluster.local -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates 2>&1); then printf "wrong root was trusted\n" >&2; exit 1; fi; case "$diagnostic" in *"certificate signed by unknown authority"*) printf "wrong-root-rejected\n" ;; *) printf "%s\n" "$diagnostic" >&2; exit 1 ;; esac'
+        /bin/bash -c 'set -u; cert_dir=$(mktemp -d); trap '\''rm -rf "$cert_dir"'\'' EXIT; openssl req -x509 -newkey rsa:2048 -nodes -subj /CN=wrong-root -keyout "$cert_dir/key.pem" -out "$cert_dir/ca.pem" -days 1 >/dev/null 2>&1 || exit; if diagnostic=$(grpcurl -max-time 5 -cacert "$cert_dir/ca.pem" -authority llm-request-router.nvcf.svc.cluster.local -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates 2>&1); then printf "wrong root was trusted\n" >&2; exit 1; fi; case "$diagnostic" in *"certificate signed by unknown authority"*|*"certificate is not trusted"*) printf "wrong-root-rejected\n" ;; *) printf "%s\n" "$diagnostic" >&2; exit 1 ;; esac'
         """
       Then the command exit code should be 0
 
@@ -87,7 +87,7 @@ Feature: Reject insecure or invalid LLM worker registration
 
       When I run command:
         """
-        /bin/bash -c 'if diagnostic=$(grpcurl -max-time 5 -authority llm-request-router.nvcf.svc.cluster.local -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates 2>&1); then printf "missing trust was accepted\n" >&2; exit 1; fi; case "$diagnostic" in *"certificate signed by unknown authority"*) printf "missing-trust-rejected\n" ;; *) printf "%s\n" "$diagnostic" >&2; exit 1 ;; esac'
+        /bin/bash -c 'if diagnostic=$(grpcurl -max-time 5 -authority llm-request-router.nvcf.svc.cluster.local -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates 2>&1); then printf "missing trust was accepted\n" >&2; exit 1; fi; case "$diagnostic" in *"certificate signed by unknown authority"*|*"certificate is not trusted"*) printf "missing-trust-rejected\n" ;; *) printf "%s\n" "$diagnostic" >&2; exit 1 ;; esac'
         """
       Then the command exit code should be 0
 
