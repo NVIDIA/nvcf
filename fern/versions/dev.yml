@@ -75,6 +75,8 @@ navigation:
         path: ../../docs/user/cluster-management/gang-scheduling.md
       - page: Topology-Aware Scheduling
         path: ../../docs/user/cluster-management/topology-aware-scheduling.md
+      - page: ModelExpress
+        path: ../../docs/user/cluster-management/modelexpress.md
       - section: Low Latency Streaming
         skip-slug: true
         contents:
