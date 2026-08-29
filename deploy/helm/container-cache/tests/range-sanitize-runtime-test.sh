@@ -95,10 +95,19 @@ probe() { # path, range -> "code size"
     curl -sS -o /dev/null -w '%{http_code} %{size_download}' -H "Range: $2" "http://127.0.0.1:$PORT_PROXY$1"
   fi
 }
-expect() { # path, range, want, why
+expect() { # path, range, want "code size", why
   got="$(probe "$1" "$2")"
   [ "$got" = "$3" ] || fail "$1 with Range '$2': expected [$3], got [$got] -- $4"
   printf '   ok  %-12s %-14s -> %s\n' "$1" "$2" "$got"
+}
+expect_status() { # path, range, want-code, why
+  # Status only. The body of an error response is nginx's default error page,
+  # whose size varies between builds (194 bytes in production, 203 in the
+  # OpenResty test image), so asserting it would break under OPENRESTY_IMAGE.
+  got="$(probe "$1" "$2")"
+  code="${got%% *}"
+  [ "$code" = "$3" ] || fail "$1 with Range '$2': expected status $3, got [$got] -- $4"
+  printf '   ok  %-12s %-14s -> %s (body size not asserted)\n' "$1" "$2" "$code"
 }
 
 echo "1. a malformed range is neutralised, matching the origin's 200"
@@ -127,7 +136,7 @@ forwards /nonempty "bytes=0--1"      "none"            "malformed range must be 
 forwards /empty    "bytes=0--1"      "none"            "malformed range stripped on the zero-length file too"
 
 echo "3. a parseable but unsatisfiable range keeps nginx's conformant 416"
-expect /nonempty "bytes=100-50" "416 203"  "RFC 7233 3.1 says SHOULD 416; do not paper over it"
+expect_status /nonempty "bytes=100-50" "416" "RFC 7233 3.1 says SHOULD 416; do not paper over it"
 expect /empty    "bytes=0-0"    "200 0"    "zero-length with a valid range is not an error"
 
 echo "4. no range is unaffected"
