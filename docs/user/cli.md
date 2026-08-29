@@ -701,6 +701,17 @@ API key, which `api-key generate` mints automatically alongside the function key
   --function-type LLM \
   --llm-model "name=dummy-model,uris=/v1/chat/completions" \
   --llm-default-priority 7 \
+  --llm-per-account-priority "nca-id:3"
+
+# Create an LLM function with request priority for multiple accounts
+./nvcf-cli function create \
+  --name "my-multi-account-priority-llm-function" \
+  --image "nvcr.io/example/openai-compatible:latest" \
+  --inference-url "/" \
+  --inference-port 8000 \
+  --function-type LLM \
+  --llm-model "name=dummy-model,uris=/v1/chat/completions" \
+  --llm-default-priority 7 \
   --llm-per-account-priority "nca-a:3" \
   --llm-per-account-priority "nca-b:5"
 ```
