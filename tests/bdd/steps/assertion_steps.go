@@ -53,6 +53,7 @@ func registerAssertionSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^these Kubernetes resources should not exist in namespace "([^"]*)" using context "([^"]*)":$`, sc.kubernetesResourcesShouldNotExist)
 	ctx.Step(`^Kubernetes resource "([^"/]+)/([^"]+)" in namespace "([^"]*)" using context "([^"]*)" should contain:$`, sc.kubernetesResourceShouldContain)
 	ctx.Step(`^deployment "([^"]*)" in namespace "([^"]*)" using context "([^"]*)" should complete rollout within "([^"]*)"$`, sc.deploymentShouldCompleteRollout)
+	ctx.Step(`^DNS name "([^"]*)" should resolve within "([^"]*)" seconds$`, sc.dnsNameShouldResolve)
 	ctx.Step(`^NVCFBackend "([^"]*)" in namespace "([^"]*)" using context "([^"]*)" should report agent status "([^"]*)" within "([^"]*)"$`, sc.nvcfBackendShouldReportAgentStatus)
 	ctx.Step(`^these Gateway API routes should be accepted and resolved using context "([^"]*)" within "([^"]*)":$`, sc.gatewayAPIRoutesShouldBeAcceptedAndResolved)
 }
@@ -355,6 +356,22 @@ func (sc *ScenarioContext) deploymentShouldCompleteRollout(ctx context.Context, 
 	}
 	if err := sc.runSuccessfully(ctx, command); err != nil {
 		return fmt.Errorf("deployment %q did not complete rollout: %w", dsl.Interpolate(name), err)
+	}
+	return nil
+}
+
+func (sc *ScenarioContext) dnsNameShouldResolve(ctx context.Context, hostname, timeout string) error {
+	command, err := dsl.DNSResolutionCommand(hostname, timeout)
+	if err != nil {
+		return err
+	}
+	if err := sc.runResolvedSuccessfully(ctx, command); err != nil {
+		return fmt.Errorf(
+			"DNS name %q did not resolve within %s seconds: %w",
+			strings.TrimSpace(dsl.Interpolate(hostname)),
+			strings.TrimSpace(dsl.Interpolate(timeout)),
+			err,
+		)
 	}
 	return nil
 }

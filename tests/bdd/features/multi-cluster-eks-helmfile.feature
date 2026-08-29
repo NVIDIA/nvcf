@@ -104,8 +104,7 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
 
     # 5. Wait for the ELB hostname to be resolvable from the host's
     #    DNS resolver before installing.
-    When I run command "tests/bdd/scripts/wait-for-dns.sh ${EKS_GATEWAY_ADDR} 180"
-    Then the command exit code should be 0
+    Then DNS name "${EKS_GATEWAY_ADDR}" should resolve within "180" seconds
 
     # Route hostnames such as api.<domain> must resolve independently. Derive
     # a nip.io wildcard domain from one NLB address so worker pods on the
@@ -113,8 +112,7 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
     When I run command "tests/bdd/scripts/resolve-gateway-domain.sh ${EKS_GATEWAY_ADDR}"
     Then the command exit code should be 0
     When I export command output to environment variable "EKS_GATEWAY_DOMAIN"
-    When I run command "tests/bdd/scripts/wait-for-dns.sh api.${EKS_GATEWAY_DOMAIN} 180"
-    Then the command exit code should be 0
+    Then DNS name "api.${EKS_GATEWAY_DOMAIN}" should resolve within "180" seconds
 
     # 6. Copy base.yaml -> eks-bdd-multi.yaml and patch with the EKS
     #    knobs, including the resolvable Gateway domain.
@@ -316,8 +314,7 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
 
       # Register the compute cluster and write the returned Helm values under
       # registration/.
-      When I run command "tests/bdd/scripts/wait-for-dns.sh ${EKS_GATEWAY_ADDR} 180"
-      Then the command exit code should be 0
+      Then DNS name "${EKS_GATEWAY_ADDR}" should resolve within "180" seconds
 
       When I run command:
         """
@@ -406,8 +403,7 @@ Feature: Install a multi-cluster NVCF stack across two pre-provisioned EKS clust
       # AWS can briefly return NXDOMAIN for a newly provisioned ELB even after
       # earlier successful lookups. Reconfirm system-resolver stability before
       # the CLI performs its function-details lookup and invocation.
-      When I run command "tests/bdd/scripts/wait-for-dns.sh ${EKS_GATEWAY_ADDR} 180"
-      Then the command exit code should be 0
+      Then DNS name "${EKS_GATEWAY_ADDR}" should resolve within "180" seconds
 
       When I successfully invoke the function selected by NVCF CLI over HTTP with timeout "120" seconds and poll duration "5" seconds:
         """
