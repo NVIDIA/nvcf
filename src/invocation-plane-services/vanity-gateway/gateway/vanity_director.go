@@ -167,8 +167,8 @@ type ProblemDetails struct {
 	Detail string `json:"detail"`
 }
 
-func NewVanityDirector(nvcfApiHost string, transport http.RoundTripper) (*VanityDirector, error) {
-	rp := &httputil.ReverseProxy{
+func newGatewayReverseProxy(transport http.RoundTripper) *httputil.ReverseProxy {
+	return &httputil.ReverseProxy{
 		Director: func(request *http.Request) {
 			// already directed, needed to be able to error
 		},
@@ -178,6 +178,10 @@ func NewVanityDirector(nvcfApiHost string, transport http.RoundTripper) (*Vanity
 		ModifyResponse: modifyTooManyRequestsResponse,
 		ErrorHandler:   writeProxyError,
 	}
+}
+
+func NewVanityDirector(nvcfApiHost string, transport http.RoundTripper) (*VanityDirector, error) {
+	rp := newGatewayReverseProxy(transport)
 	nvcfApiUrl, err := url.Parse(nvcfApiHost)
 	if err != nil || nvcfApiUrl.Scheme == "" || nvcfApiUrl.Host == "" {
 		return nil, fmt.Errorf("invalid NVCF API host: %s", nvcfApiHost)

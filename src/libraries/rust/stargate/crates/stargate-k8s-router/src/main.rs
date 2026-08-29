@@ -29,6 +29,7 @@ use stargate_k8s_router::metrics::RouterMetrics;
 use stargate_k8s_router::quic::{QuicRouterConfig, serve_quic_router};
 use stargate_k8s_router::watcher::run_endpoint_slice_watcher;
 use stargate_k8s_router::webtransport::{WebTransportRouterConfig, serve_webtransport_router};
+use stargate_protocol::parse_explicit_http_uri;
 use stargate_runtime::{
     CriticalTaskFailureReceiver, CriticalTaskGroup, wait_for_termination_signal,
 };
@@ -74,6 +75,22 @@ struct Args {
     grpc_pylon_dial_addr: String,
     #[arg(long, default_value_t = 50071, value_name = "PORT")]
     advertised_grpc_port: u16,
+    /// Additional recursive WatchStargates endpoints for remote regions. Repeatable.
+    #[arg(
+        long,
+        env = "STARGATE_REMOTE_WATCH_URLS",
+        value_delimiter = ',',
+        value_parser = parse_remote_watch_url,
+        value_name = "URI"
+    )]
+    remote_stargate_url: Vec<String>,
+    /// Permit explicit plaintext HTTP remote Watch endpoints for development only.
+    #[arg(
+        long,
+        default_value_t = false,
+        env = "STARGATE_ALLOW_INSECURE_REMOTE_WATCH_HTTP"
+    )]
+    allow_insecure_remote_watch_http: bool,
     #[arg(long, default_value = "grpc", value_name = "NAME")]
     grpc_port_name: String,
     #[arg(long, default_value = "quic", value_name = "NAME")]
@@ -109,6 +126,11 @@ struct RouterStartupConfig {
     tunnel: RouterTunnelConfig,
 }
 
+fn parse_remote_watch_url(value: &str) -> std::result::Result<String, String> {
+    parse_explicit_http_uri(value)
+        .map_err(|_| "remote Watch URL must be an explicit http:// or https:// URI".to_string())
+}
+
 /// One wire protocol per UDP listener, preventing Raw QUIC and WebTransport settings from mixing.
 enum RouterTunnelConfig {
     RawQuic(QuicRouterConfig),
@@ -117,10 +139,12 @@ enum RouterTunnelConfig {
 
 impl RouterStartupConfig {
     fn from_args(args: Args) -> Result<Self> {
-        ensure!(
-            !args.grpc_pylon_dial_addr.trim().is_empty(),
-            "--grpc-pylon-dial-addr must not be empty"
-        );
+        let grpc_pylon_dial_addr =
+            parse_explicit_http_uri(&args.grpc_pylon_dial_addr).map_err(|_| {
+                anyhow::anyhow!(
+                    "--grpc-pylon-dial-addr must be an explicit http:// or https:// URI"
+                )
+            })?;
         ensure!(
             args.advertised_grpc_port > 0,
             "--advertised-grpc-port must be greater than 0"
@@ -128,6 +152,14 @@ impl RouterStartupConfig {
         ensure!(
             args.watch_heartbeat_ms > 0,
             "--watch-heartbeat-ms must be greater than 0"
+        );
+        ensure!(
+            args.allow_insecure_remote_watch_http
+                || !args
+                    .remote_stargate_url
+                    .iter()
+                    .any(|url| url.starts_with("http://")),
+            "http:// remote Watch URLs require --allow-insecure-remote-watch-http"
         );
         let relay_endpoint_config = relay_endpoint_config_from_args(&args)?;
         let server_identity_reloader = server_identity_reloader_from_args(&args)?;
@@ -147,7 +179,8 @@ impl RouterStartupConfig {
         let grpc = GrpcRouterConfig {
             advertised_hostname_template: args.advertised_hostname_template.clone(),
             advertised_grpc_port: args.advertised_grpc_port,
-            grpc_pylon_dial_addr: args.grpc_pylon_dial_addr,
+            grpc_pylon_dial_addr,
+            remote_watch_urls: args.remote_stargate_url,
             target_namespace: args.target_namespace.clone(),
             connect_timeout: Duration::from_millis(args.connect_timeout_ms),
             watch_heartbeat_interval: Duration::from_millis(args.watch_heartbeat_ms),
@@ -364,6 +397,7 @@ fn log_startup(config: &RouterStartupConfig) {
         advertised_hostname_template = %config.grpc.advertised_hostname_template,
         advertised_grpc_port = config.grpc.advertised_grpc_port,
         grpc_pylon_dial_addr = %config.grpc.grpc_pylon_dial_addr,
+        remote_watch_url_count = config.grpc.remote_watch_urls.len(),
         grpc_port_name = %config.target_build_config.grpc_port_name,
         quic_port_name = %config.target_build_config.quic_port_name,
         connect_timeout_ms = config.grpc.connect_timeout.as_millis(),
@@ -494,7 +528,17 @@ mod tests {
             .expect("empty Pylon dial address must be rejected");
         assert_eq!(
             empty.to_string(),
-            "--grpc-pylon-dial-addr must not be empty"
+            "--grpc-pylon-dial-addr must be an explicit http:// or https:// URI"
+        );
+
+        let mut scheme_less_args = router_args(&[]);
+        scheme_less_args.grpc_pylon_dial_addr = "stargate-router.example:443".to_string();
+        let scheme_less = RouterStartupConfig::from_args(scheme_less_args)
+            .err()
+            .expect("scheme-less Pylon dial address must be rejected");
+        assert_eq!(
+            scheme_less.to_string(),
+            "--grpc-pylon-dial-addr must be an explicit http:// or https:// URI"
         );
     }
 
@@ -507,6 +551,61 @@ mod tests {
             error.to_string(),
             "--watch-heartbeat-ms must be greater than 0"
         );
+    }
+
+    #[test]
+    fn router_cli_requires_explicit_permitted_remote_watch_uris() {
+        let secure = RouterStartupConfig::from_args(
+            Args::try_parse_from(router_argv(&[
+                "--remote-stargate-url",
+                "https://region-b.example.test:50071",
+            ]))
+            .expect("explicit HTTPS Watch URI should parse"),
+        )
+        .expect("explicit HTTPS Watch URI should be permitted");
+        assert_eq!(
+            secure.grpc.remote_watch_urls,
+            ["https://region-b.example.test:50071"]
+        );
+
+        let plaintext = RouterStartupConfig::from_args(router_args(&[
+            "--remote-stargate-url",
+            "http://127.0.0.1:50071",
+        ]))
+        .err()
+        .expect("plaintext Watch URI should require a development opt-in");
+        assert_eq!(
+            plaintext.to_string(),
+            "http:// remote Watch URLs require --allow-insecure-remote-watch-http"
+        );
+
+        let development = startup_config(&[
+            "--allow-insecure-remote-watch-http",
+            "--remote-stargate-url",
+            "http://127.0.0.1:50071",
+        ]);
+        assert_eq!(
+            development.grpc.remote_watch_urls,
+            ["http://127.0.0.1:50071"]
+        );
+
+        for invalid in [
+            "region-b.example.test:50071",
+            "ftp://region-b.example.test:50071",
+            "https://",
+        ] {
+            let error = match Args::try_parse_from(router_argv(&["--remote-stargate-url", invalid]))
+            {
+                Ok(_) => panic!("non-HTTP(S) remote Watch endpoint should be rejected"),
+                Err(error) => error,
+            };
+            assert!(
+                error
+                    .to_string()
+                    .contains("remote Watch URL must be an explicit http:// or https:// URI"),
+                "unexpected parse error: {error}"
+            );
+        }
     }
 
     #[test]

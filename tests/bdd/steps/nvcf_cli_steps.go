@@ -21,11 +21,14 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/cucumber/godog"
 
 	"nvcf-bdd/dsl"
 )
+
+var modelInvocationRetryInterval = time.Second
 
 func registerNVCFCLISteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^I use NVCF CLI config "([^"]*)"$`, sc.iUseNVCFCLIConfig)
@@ -101,13 +104,57 @@ func (sc *ScenarioContext) iSuccessfullyInvokeModel(
 	timeout string,
 	doc *godog.DocString,
 ) error {
-	return sc.runNVCFCLI(ctx,
+	args := []string{
 		"function", "invoke",
 		"--inference-url", inferenceURL,
 		"--model-name", model,
 		"--request-body", doc.Content,
 		"--timeout", timeout,
-	)
+	}
+	retryFor, retryTimeoutErr := time.ParseDuration(timeout + "s")
+	deadline := time.Now().Add(retryFor)
+	retryCtx := ctx
+	if retryTimeoutErr == nil && retryFor > 0 {
+		var cancel context.CancelFunc
+		retryCtx, cancel = context.WithDeadline(ctx, deadline)
+		defer cancel()
+	}
+
+	for {
+		err := sc.runNVCFCLI(retryCtx, args...)
+		if err == nil {
+			return nil
+		}
+		if retryTimeoutErr != nil || retryFor <= 0 ||
+			!strings.Contains(combinedOutput(sc.LastResult), "no_eligible_candidates") {
+			return err
+		}
+
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return err
+		}
+		waitFor := min(modelInvocationRetryInterval, remaining)
+		timer := time.NewTimer(waitFor)
+		select {
+		case <-retryCtx.Done():
+			timer.Stop()
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return err
+		case <-timer.C:
+		}
+		if time.Until(deadline) <= 0 {
+			return err
+		}
+		if retryCtx.Err() != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return err
+		}
+	}
 }
 
 func (sc *ScenarioContext) iSuccessfullyUndeploySelectedFunction(ctx context.Context) error {

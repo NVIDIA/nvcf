@@ -312,14 +312,20 @@ natsAuthCalloutService:
 {{- $llmRequestRouterGrpcPort := dig "addons" "llm" "requestRouter" "service" "grpcPort" 50071 .Values }}
 {{- $llmRequestRouterDefaultAddress := printf "llm-request-router.nvcf.svc.cluster.local:%v" $llmRequestRouterGrpcPort }}
 {{- $llmRequestRouterWorkerAddress := dig "llmRequestRouterAddress" "" $workerEndpoints | trim | default $llmRequestRouterDefaultAddress }}
+{{- $llmRequestRouterWorkerAuthority := $llmRequestRouterWorkerAddress }}
+{{- if hasPrefix "https://" $llmRequestRouterWorkerAuthority }}
+{{- $llmRequestRouterWorkerAuthority = trimPrefix "https://" $llmRequestRouterWorkerAuthority }}
+{{- else if hasPrefix "http://" $llmRequestRouterWorkerAuthority }}
+{{- $llmRequestRouterWorkerAuthority = trimPrefix "http://" $llmRequestRouterWorkerAuthority }}
+{{- end }}
 {{- $llmEnabled := dig "addons" "llm" "enabled" false .Values }}
 {{- if $llmEnabled }}
-{{- $llmRequestRouterWorkerAddressError := "global.workerEndpoints.llmRequestRouterAddress must use DNS-or-IPv4:port or [IPv6]:port with port 1-65535" }}
+{{- $llmRequestRouterWorkerAddressError := "global.workerEndpoints.llmRequestRouterAddress must use optional http:// or https:// followed by DNS-or-IPv4:port or [IPv6]:port with port 1-65535" }}
 {{- $llmRequestRouterDNSAddressPattern := `^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*:[0-9]{1,5}$` }}
 {{- $llmRequestRouterBracketedIPv6Pattern := `^\[[0-9A-Fa-f:.]+\]:[0-9]{1,5}$` }}
-{{- $llmRequestRouterWorkerAddressValid := regexMatch $llmRequestRouterDNSAddressPattern $llmRequestRouterWorkerAddress }}
-{{- if regexMatch $llmRequestRouterBracketedIPv6Pattern $llmRequestRouterWorkerAddress }}
-{{- $llmRequestRouterIPv6Host := regexFind `^\[[0-9A-Fa-f:.]+\]` $llmRequestRouterWorkerAddress | trimPrefix "[" | trimSuffix "]" }}
+{{- $llmRequestRouterWorkerAddressValid := regexMatch $llmRequestRouterDNSAddressPattern $llmRequestRouterWorkerAuthority }}
+{{- if regexMatch $llmRequestRouterBracketedIPv6Pattern $llmRequestRouterWorkerAuthority }}
+{{- $llmRequestRouterIPv6Host := regexFind `^\[[0-9A-Fa-f:.]+\]` $llmRequestRouterWorkerAuthority | trimPrefix "[" | trimSuffix "]" }}
 {{- $llmRequestRouterIPv6Valid := true }}
 {{- $llmRequestRouterIPv6CompressionCount := len (regexFindAll `::` $llmRequestRouterIPv6Host -1) }}
 {{- if or (contains `:::` $llmRequestRouterIPv6Host) (gt $llmRequestRouterIPv6CompressionCount 1) }}
@@ -363,7 +369,7 @@ natsAuthCalloutService:
 {{- if not $llmRequestRouterWorkerAddressValid }}
 {{- fail $llmRequestRouterWorkerAddressError }}
 {{- end }}
-{{- $llmRequestRouterWorkerPort := regexFind `[0-9]{1,5}$` $llmRequestRouterWorkerAddress | atoi }}
+{{- $llmRequestRouterWorkerPort := regexFind `[0-9]{1,5}$` $llmRequestRouterWorkerAuthority | atoi }}
 {{- if or (lt $llmRequestRouterWorkerPort 1) (gt $llmRequestRouterWorkerPort 65535) }}
 {{- fail $llmRequestRouterWorkerAddressError }}
 {{- end }}
@@ -868,8 +874,29 @@ llmApiGateway:
 {{- $pylonGrpcDialAddress := dig "addons" "llm" "requestRouter" "backendRouter" "pylonGrpcDialAddress" "" .Values | default "" | toString | trim }}
 {{- $pylonReverseTunnelDialAddress := dig "addons" "llm" "requestRouter" "backendRouter" "pylonReverseTunnelDialAddress" "" .Values | default "" | toString | trim }}
 {{- $backendRouterEnabled := dig "addons" "llm" "requestRouter" "backendRouter" "enabled" $llmEnabled .Values }}
+{{- $llmWorkerRouteEnabled := dig "ingress" "gatewayApi" "routes" "llmWorker" "enabled" false .Values }}
+{{- $grpcTlsEnabled := dig "addons" "llm" "requestRouter" "grpcTls" "enabled" false .Values }}
+{{- $grpcTlsAllowInsecureHttp := dig "addons" "llm" "requestRouter" "grpcTls" "allowInsecureHttp" false .Values }}
 {{- if and $llmEnabled $backendRouterEnabled (ne (empty $pylonGrpcDialAddress) (empty $pylonReverseTunnelDialAddress)) }}
 {{- fail "addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress and addons.llm.requestRouter.backendRouter.pylonReverseTunnelDialAddress must either both be set or both be omitted" }}
+{{- end }}
+{{- if and $llmWorkerRouteEnabled $grpcTlsEnabled $grpcTlsAllowInsecureHttp }}
+{{- fail "addons.llm.requestRouter.grpcTls.enabled and addons.llm.requestRouter.grpcTls.allowInsecureHttp cannot both be true" }}
+{{- end }}
+{{- if and $llmWorkerRouteEnabled (not $grpcTlsEnabled) (not $grpcTlsAllowInsecureHttp) }}
+{{- fail "addons.llm.requestRouter.grpcTls.allowInsecureHttp must be true for an explicitly plaintext external LLM worker route" }}
+{{- end }}
+{{- if and $llmWorkerRouteEnabled (empty $pylonGrpcDialAddress) }}
+{{- fail "addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress is required when ingress.gatewayApi.routes.llmWorker.enabled is true" }}
+{{- end }}
+{{- if and $llmWorkerRouteEnabled (ne $llmRequestRouterWorkerAddress $pylonGrpcDialAddress) }}
+{{- fail "global.workerEndpoints.llmRequestRouterAddress and addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress must use the same explicit URI when LLM worker routing is enabled" }}
+{{- end }}
+{{- if and $llmWorkerRouteEnabled $grpcTlsEnabled (not (hasPrefix "https://" $llmRequestRouterWorkerAddress)) }}
+{{- fail "secure LLM worker routing requires an explicit https:// global.workerEndpoints.llmRequestRouterAddress" }}
+{{- end }}
+{{- if and $llmWorkerRouteEnabled $grpcTlsAllowInsecureHttp (not (hasPrefix "http://" $llmRequestRouterWorkerAddress)) }}
+{{- fail "development plaintext LLM worker routing requires an explicit http:// global.workerEndpoints.llmRequestRouterAddress" }}
 {{- end }}
 
 llmRequestRouter:
@@ -878,8 +905,14 @@ llmRequestRouter:
   replicaCount: {{ dig "addons" "llm" "requestRouter" "replicaCount" 3 .Values }}
   workload:
     kind: {{ dig "addons" "llm" "requestRouter" "workload" "kind" "Deployment" .Values | quote }}
+  {{- with dig "addons" "llm" "requestRouter" "discovery" dict .Values }}
+  discovery:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   service:
     grpcPort: {{ $llmRequestRouterGrpcPort }}
+  readiness:
+    warmupMs: {{ dig "addons" "llm" "requestRouter" "readiness" "warmupMs" 60000 .Values }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
     {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
@@ -916,6 +949,19 @@ llmRequestRouter:
     imagePullSecrets:
       {{- toYaml .Values.global.imagePullSecrets | nindent 6 }}
     {{- end }}
+  grpcTls:
+    enabled: {{ $grpcTlsEnabled }}
+    allowInsecureHttp: {{ $grpcTlsAllowInsecureHttp }}
+    mode: {{ dig "addons" "llm" "requestRouter" "grpcTls" "mode" "certManager" .Values | quote }}
+    secretName: {{ dig "addons" "llm" "requestRouter" "grpcTls" "secretName" "llm-request-router-grpc-tls" .Values | quote }}
+    dnsNames:
+      {{- dig "addons" "llm" "requestRouter" "grpcTls" "dnsNames" (list) .Values | toYaml | nindent 6 }}
+    issuerRef:
+      kind: {{ dig "addons" "llm" "requestRouter" "grpcTls" "issuerRef" "kind" "" .Values | default (dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values) | quote }}
+      name: {{ dig "addons" "llm" "requestRouter" "grpcTls" "issuerRef" "name" "" .Values | default (dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values) | quote }}
+      {{- with dig "addons" "llm" "requestRouter" "grpcTls" "issuerRef" "group" "" .Values }}
+      group: {{ . | quote }}
+      {{- end }}
   {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}
@@ -1238,8 +1284,8 @@ nvcfUi:
       - name: llm-request-router
         namespace: nvcf
         endpoints:
-          - llm-request-router-headless.nvcf.svc.cluster.local:8000/healthz
-          - llm-request-router-headless.nvcf.svc.cluster.local:8000/readyz
+          - llm-request-router.nvcf.svc.cluster.local:8000/healthz
+          - llm-request-router.nvcf.svc.cluster.local:8000/readyz
       {{- end }}
       - name: reval
         namespace: nvcf
@@ -1326,7 +1372,6 @@ nvcfUi:
 nvcfGatewayRoutes:
   {{- $natsRouteEnabled := dig "ingress" "gatewayApi" "routes" "nats" "enabled" false .Values }}
   {{- $essRouteEnabled := dig "ingress" "gatewayApi" "routes" "ess" "enabled" false .Values }}
-  {{- $llmWorkerRouteEnabled := dig "ingress" "gatewayApi" "routes" "llmWorker" "enabled" false .Values }}
   domain: "{{ .Values.global.domain }}"
   gateways:
     shared:

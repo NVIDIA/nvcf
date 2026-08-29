@@ -80,6 +80,31 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- dig "workload" "kind" "Deployment" .Values.llmRequestRouter | toString -}}
 {{- end -}}
 
+{{- define "llm-request-router.isExplicitHttpUri" -}}
+{{- $uri := . | toString | trim -}}
+{{- $authorityValid := regexMatch "^https?://([A-Za-z0-9._~-]+|\\[[0-9A-Fa-f:.]+\\])(:[0-9]+)?/?$" $uri -}}
+{{- $portMatch := regexFind ":[0-9]+/?$" $uri -}}
+{{- $portText := $portMatch | trimPrefix ":" | trimSuffix "/" -}}
+{{- $portValid := or
+      (not $portMatch)
+      (and (le (len $portText) 5) (le ($portText | int) 65535)) -}}
+{{- if and $authorityValid $portValid -}}true{{- end -}}
+{{- end -}}
+
+{{- define "llm-request-router.validateRemoteWatchUrls" -}}
+{{- $discovery := .Values.llmRequestRouter.discovery | default dict -}}
+{{- $allowHttp := dig "allowInsecureRemoteWatchHttp" false $discovery -}}
+{{- range $remoteWatchUrl := dig "remoteWatchUrls" (list) $discovery -}}
+{{- $remoteWatchUrl = $remoteWatchUrl | toString | trim -}}
+{{- if ne (include "llm-request-router.isExplicitHttpUri" $remoteWatchUrl) "true" -}}
+{{- fail "llmRequestRouter.discovery.remoteWatchUrls entries must be explicit http:// or https:// URIs" -}}
+{{- end -}}
+{{- if and (hasPrefix "http://" $remoteWatchUrl) (not $allowHttp) -}}
+{{- fail "llmRequestRouter.discovery.remoteWatchUrls requires https://; set allowInsecureRemoteWatchHttp=true only for development plaintext endpoints" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{/*
 An unset backendRouter.enabled follows the workload contract: a multi-replica
 Deployment needs the EndpointSlice router, while StatefulSet and single-replica
@@ -297,9 +322,12 @@ externally reachable address.
 {{- $backendRouter := .Values.llmRequestRouter.backendRouter | default dict -}}
 {{- $configured := dig "pylonGrpcDialAddress" "" $backendRouter | toString | trim -}}
 {{- if $configured -}}
+{{- if ne (include "llm-request-router.isExplicitHttpUri" $configured) "true" -}}
+{{- fail "llmRequestRouter.backendRouter.pylonGrpcDialAddress must be an explicit http:// or https:// URI" -}}
+{{- end -}}
 {{- $configured -}}
 {{- else -}}
-{{- printf "%s.%s.svc.cluster.local:%v" (include "llm-request-router.backendRouterName" .) (include "llm-request-router.namespace" .) (dig "service" "grpcPort" 50071 $backendRouter) -}}
+{{- printf "http://%s.%s.svc.cluster.local:%v" (include "llm-request-router.backendRouterName" .) (include "llm-request-router.namespace" .) (dig "service" "grpcPort" 50071 $backendRouter) -}}
 {{- end -}}
 {{- end -}}
 

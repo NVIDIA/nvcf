@@ -143,6 +143,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # actions/checkout runs on the runner host; this job's steps run inside
+      # the bazel-ci container, which mounts that checkout under a different
+      # UID. Since git 2.35.2 (CVE-2022-24765) git refuses to operate on a
+      # repo it does not own ("detected dubious ownership"), which makes
+      # workspace_status.sh's `git rev-parse --short HEAD` fail silently
+      # (stderr redirected) and fall back to the literal "unknown", landing
+      # in the built binary as `mr-unknown` instead of a real short SHA.
+      - name: Trust the checkout inside the container
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Resolve service name for cache keys
         id: svc
         env:

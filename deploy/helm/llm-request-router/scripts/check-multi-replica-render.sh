@@ -63,6 +63,13 @@ assert_render_fails() {
   grep -Fq "${expected_error}" "${error_file}" || fail "render did not return expected error: ${expected_error}"
 }
 
+service_field() {
+  local manifest="$1"
+  local service_name="$2"
+  local expression="$3"
+  yq -r "select(.kind == \"Service\" and .metadata.name == \"${service_name}\") | ${expression}" "${manifest}" | head -n1
+}
+
 default_manifest="${tmp_dir}/default.yaml"
 render "${default_manifest}"
 
@@ -75,14 +82,19 @@ render "${default_manifest}"
 [ "$(workload_field "${default_manifest}" Deployment '.spec.serviceName // ""')" = "" ] || fail "Deployment must not render StatefulSet serviceName"
 [ "$(workload_field "${default_manifest}" Deployment '.spec.podManagementPolicy // ""')" = "" ] || fail "Deployment must not render StatefulSet podManagementPolicy"
 [ "$(workload_field "${default_manifest}" Deployment '.spec.updateStrategy // ""')" = "" ] || fail "Deployment must not render StatefulSet updateStrategy"
+[ "$(service_field "${default_manifest}" "llm-request-router" '.spec.ports[] | select(.name == "http") | .port')" = "8000" ] || fail "request-facing Service does not expose HTTP port 8000"
+[ "$(service_field "${default_manifest}" "llm-request-router" '.spec.publishNotReadyAddresses')" != "true" ] || fail "request-facing Service must honor pod readiness"
+[ "$(service_field "${default_manifest}" "llm-request-router-headless" '.spec.publishNotReadyAddresses')" = "true" ] || fail "headless discovery Service must publish unready addresses"
+[ -z "$(service_field "${default_manifest}" "llm-request-router-headless" '.spec.ports[] | select(.name == "http") | .port')" ] || fail "headless discovery Service must not expose request-facing HTTP"
 default_backend_kind="$(yq -r 'select(.kind == "Deployment" and .metadata.name == "llm-request-router-backend-router") | .kind' "${default_manifest}" | head -n1)"
 [ "${default_backend_kind}" = "Deployment" ] || fail "default multi-replica Deployment did not infer backend-router enablement"
 
 default_args="$(workload_args "${default_manifest}" Deployment)"
 default_backend_args="$(backend_router_args "${default_manifest}")"
 printf '%s\n' "${default_args}" | grep -qx -- "--advertised-hostname-template={pod_name}.llm-request-router-headless.${namespace}.svc.cluster.local" || fail "default Deployment missing per-pod advertised hostname template"
-printf '%s\n' "${default_args}" | grep -qx -- "--grpc-pylon-dial-addr=llm-request-router-backend-router.${namespace}.svc.cluster.local:50071" || fail "default Deployment missing inferred backend-router gRPC dial address"
+printf '%s\n' "${default_args}" | grep -qx -- "--grpc-pylon-dial-addr=http://llm-request-router-backend-router.${namespace}.svc.cluster.local:50071" || fail "default Deployment missing explicit inferred backend-router gRPC dial URI"
 printf '%s\n' "${default_args}" | grep -qx -- "--watch-heartbeat-ms=5000" || fail "default Deployment missing Watch heartbeat arg"
+printf '%s\n' "${default_args}" | grep -qx -- '--readiness-warmup-ms=60000' || fail "default Deployment missing 60-second readiness warm-up"
 printf '%s\n' "${default_backend_args}" | grep -qx -- "--watch-heartbeat-ms=5000" || fail "backend router missing Watch heartbeat arg"
 
 multi_deployment_manifest="${tmp_dir}/multi-deployment.yaml"
@@ -92,7 +104,7 @@ render "${multi_deployment_manifest}" \
 
 multi_deployment_args="$(workload_args "${multi_deployment_manifest}" Deployment)"
 printf '%s\n' "${multi_deployment_args}" | grep -qx -- "--advertised-hostname-template={pod_name}.llm-request-router-headless.${namespace}.svc.cluster.local" || fail "multi-replica Deployment missing per-pod advertised hostname template"
-printf '%s\n' "${multi_deployment_args}" | grep -qx -- "--grpc-pylon-dial-addr=llm-request-router-backend-router.${namespace}.svc.cluster.local:50071" || fail "multi-replica Deployment missing backend-router gRPC dial address"
+printf '%s\n' "${multi_deployment_args}" | grep -qx -- "--grpc-pylon-dial-addr=http://llm-request-router-backend-router.${namespace}.svc.cluster.local:50071" || fail "multi-replica Deployment missing explicit backend-router gRPC dial URI"
 
 statefulset_manifest="${tmp_dir}/statefulset.yaml"
 render "${statefulset_manifest}" \
@@ -137,5 +149,52 @@ assert_render_fails "llmRequestRouter.discovery.disableDnsDiscovery cannot be tr
 
 assert_render_fails "llmRequestRouter.discovery.watchHeartbeatMs must be greater than 0" \
   --set llmRequestRouter.discovery.watchHeartbeatMs=0
+
+secure_remote_manifest="${tmp_dir}/secure-remote.yaml"
+render "${secure_remote_manifest}" \
+  --set-string 'llmRequestRouter.discovery.remoteWatchUrls[0]=https://region-b.example.test:50071'
+
+secure_remote_args="$(workload_args "${secure_remote_manifest}" Deployment)"
+secure_remote_backend_args="$(backend_router_args "${secure_remote_manifest}")"
+printf '%s\n' "${secure_remote_args}" | grep -qx -- '--remote-stargate-url=https://region-b.example.test:50071' || fail "Stargate missing secure remote Watch URI"
+printf '%s\n' "${secure_remote_backend_args}" | grep -qx -- '--remote-stargate-url=https://region-b.example.test:50071' || fail "backend router missing secure remote Watch URI"
+
+custom_warmup_manifest="${tmp_dir}/custom-warmup.yaml"
+render "${custom_warmup_manifest}" \
+  --set llmRequestRouter.readiness.warmupMs=1234
+
+custom_warmup_args="$(workload_args "${custom_warmup_manifest}" Deployment)"
+printf '%s\n' "${custom_warmup_args}" | grep -qx -- '--readiness-warmup-ms=1234' || fail "custom readiness warm-up did not reach Stargate args"
+
+assert_render_fails "llmRequestRouter.readiness.warmupMs must be a non-negative integer" \
+  --set llmRequestRouter.readiness.warmupMs=-1
+assert_render_fails "llmRequestRouter.readiness.warmupMs must be a non-negative integer" \
+  --set-string llmRequestRouter.readiness.warmupMs=-0.5
+assert_render_fails "llmRequestRouter.readiness.warmupMs must be a non-negative integer" \
+  --set-string llmRequestRouter.readiness.warmupMs=invalid
+
+assert_render_fails "llmRequestRouter.discovery.remoteWatchUrls requires https://; set allowInsecureRemoteWatchHttp=true only for development plaintext endpoints" \
+  --set-string 'llmRequestRouter.discovery.remoteWatchUrls[0]=http://127.0.0.1:50071'
+
+development_remote_manifest="${tmp_dir}/development-remote.yaml"
+render "${development_remote_manifest}" \
+  --set llmRequestRouter.discovery.allowInsecureRemoteWatchHttp=true \
+  --set-string 'llmRequestRouter.discovery.remoteWatchUrls[0]=http://127.0.0.1:50071'
+development_remote_args="$(workload_args "${development_remote_manifest}" Deployment)"
+development_remote_backend_args="$(backend_router_args "${development_remote_manifest}")"
+printf '%s\n' "${development_remote_args}" | grep -qx -- '--remote-stargate-url=http://127.0.0.1:50071' || fail "development HTTP remote Watch URI was not rendered"
+printf '%s\n' "${development_remote_args}" | grep -qx -- '--allow-insecure-remote-watch-http' || fail "Stargate missing development HTTP opt-in"
+printf '%s\n' "${development_remote_backend_args}" | grep -qx -- '--allow-insecure-remote-watch-http' || fail "backend router missing development HTTP opt-in"
+
+for invalid_remote_url in \
+  'region-b.example.test:50071' \
+  'ftp://region-b.example.test:50071' \
+  'https://user@region-b.example.test:50071' \
+  'https://:50071' \
+  'https://region-b.example.test:65536'; do
+  assert_render_fails "llmRequestRouter.discovery.remoteWatchUrls entries must be explicit http:// or https:// URIs" \
+    --set llmRequestRouter.discovery.allowInsecureRemoteWatchHttp=true \
+    --set-string "llmRequestRouter.discovery.remoteWatchUrls[0]=${invalid_remote_url}"
+done
 
 echo "dual workload render checks passed"

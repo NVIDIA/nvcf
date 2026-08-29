@@ -11,6 +11,12 @@ Stargate Kubernetes backend router for worker gRPC registration and reverse
 QUIC tunnels through a shared Gateway or load balancer. The backend router
 selects the correct Stargate pod from gRPC authority and QUIC SNI.
 
+The `llm-request-router` Service carries API Gateway HTTP requests and honors
+pod readiness. The `llm-request-router-headless` Service publishes gRPC and
+QUIC addresses for warming and ready pods, so Pylons can register and establish
+tunnels before a new replica receives request traffic. The backend router and
+direct multi-replica discovery use the headless Service.
+
 A Vault Agent sidecar is configured to fetch a service token from a Vault or
 OpenBao backend. The application reads `nvcfApiToken` from
 `/vault/secrets/secrets.json` and attaches it as a Bearer token to outgoing
@@ -40,6 +46,10 @@ exposes a dashed-IP SRV alias. A multi-replica StatefulSet can instead run
 without the backend router and retain direct headless Service SRV discovery.
 `llmRequestRouter.discovery.watchHeartbeatMs` controls the maximum interval
 between unchanged Watch snapshots from both Stargate and the backend router.
+`llmRequestRouter.discovery.remoteWatchUrls` accepts only explicit `https://`
+Watch URIs. Development plaintext endpoints require an explicit `http://` URI
+and `allowInsecureRemoteWatchHttp=true`; scheme-less and unsupported values are
+rejected instead of defaulting to plaintext.
 
 `llmRequestRouter.kubernetes.advertisedHostnameTemplate` supports the Stargate
 placeholders `{pod_name}` and `{namespace}`. Stargate resolves both placeholders
@@ -111,6 +121,7 @@ Important settings to review before deployment:
 - `llmRequestRouter.replicaCount`, resource requests, and limits for your environment
 - `llmRequestRouter.service.*` for HTTP, gRPC, metrics, and headless service ports
 - `llmRequestRouter.backendRouter.*` for multi-replica worker gRPC and reverse-tunnel routing
+- `llmRequestRouter.readiness.warmupMs` for the startup readiness delay in milliseconds (default: `60000`; `0` disables the timed delay)
 - `llmRequestRouter.metrics.enabled` to expose the metrics port on the Service (default: `false`)
 - `llmRequestRouter.metrics.serviceMonitor.enabled` to create a Prometheus `ServiceMonitor` (requires `metrics.enabled`)
 - `llmRequestRouter.certificate.*` to let cert-manager issue the Stargate QUIC server certificate
@@ -133,7 +144,7 @@ dial addresses to the external endpoints that workers can resolve:
 llmRequestRouter:
   backendRouter:
     enabled: true
-    pylonGrpcDialAddress: llm-router.example.com:443
+    pylonGrpcDialAddress: https://llm-router.example.com:443
     pylonReverseTunnelDialAddress: llm-router.example.com:8080
 ```
 
@@ -143,21 +154,31 @@ chart appVersion. That image must contain
 `/usr/local/bin/stargate-k8s-router`; override `backendRouter.image.*` only to
 validate a different Stargate build.
 
-The backend router watches EndpointSlices and publishes those ready targets
-directly through `WatchStargates`. It uses the same snapshot for gRPC and QUIC
-forwarding, so a removed or replaced Pod cannot remain as a discovery-only
-target. The chart creates a dedicated ServiceAccount by default and binds a
-namespaced Role to it when
+The backend router watches the headless Service's EndpointSlices and publishes
+their non-terminating targets directly through `WatchStargates`, including
+warming pods published by `publishNotReadyAddresses`. It uses the same snapshot
+for gRPC and QUIC forwarding, so a removed or replaced Pod cannot remain as a
+discovery-only target. The chart creates a dedicated ServiceAccount by default
+and binds a namespaced Role to it when
 `llmRequestRouter.rbac.create=true`. When
 `llmRequestRouter.backendRouter.serviceAccount.create=false`, set
 `llmRequestRouter.backendRouter.serviceAccount.name` to an existing account.
 When `rbac.create=false`, grant `get`, `list`, and `watch` on
 `discovery.k8s.io/endpointslices` to that account outside this chart.
 
-Route TCP port `50071` and UDP port `50072` to the
+Route HTTPS gRPC traffic on port `50071` and UDP traffic on port `50072` to the
 `llm-request-router-backend-router` Service. The NVCF gateway-routes chart can
-create the matching `TCPRoute`, `UDPRoute`, and `ReferenceGrant` resources.
-The Gateway implementation must support Gateway API `UDPRoute`.
+terminate TLS on a dedicated HTTPS listener and create the matching
+`GRPCRoute`, `UDPRoute`, `ReferenceGrant`, gRPC `Certificate`, and stream
+timeout policy. The gRPC route forwards h2c to the Service. The Gateway
+implementation must support Gateway API `GRPCRoute` and `UDPRoute`. A legacy
+plaintext `TCPRoute` is available only with an explicit development opt-in.
+
+Use the same explicit `https://host:port` URI for the API worker bootstrap and
+`pylonGrpcDialAddress`. The external hostname is used for TLS SNI and server
+verification. The selected Stargate identity remains the HTTP/2 `:authority`,
+so the secure `GRPCRoute` intentionally has no hostname match. The gRPC
+listener certificate is distinct from the request-router QUIC certificate.
 
 When QUIC verification is enabled, the mounted certificate must cover the
 advertised per-pod hostname produced by
