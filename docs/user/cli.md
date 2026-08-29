@@ -701,7 +701,8 @@ API key, which `api-key generate` mints automatically alongside the function key
   --function-type LLM \
   --llm-model "name=dummy-model,uris=/v1/chat/completions" \
   --llm-default-priority 7 \
-  --llm-per-account-priority "nca-id:3"
+  --llm-per-account-priority "nca-a:3" \
+  --llm-per-account-priority "nca-b:5"
 ```
 
 All `function create` flags:
