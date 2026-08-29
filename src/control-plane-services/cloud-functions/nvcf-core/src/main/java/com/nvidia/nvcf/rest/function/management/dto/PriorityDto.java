@@ -65,6 +65,8 @@ public record PriorityDto(
     static final int MAX_PER_ACCOUNT_ENTRIES = 64;
     private static final String MESG_DEFAULT_REQUIRED_WITH_OVERRIDES =
             "Invalid priority: 'defaultPriority' is required when 'perAccountPriority' has entries";
+    private static final String MESG_PRIORITY_MUST_BE_INTEGER =
+            "priority must be an integer";
 
     @Constraint(validatedBy = ValidPriorityValidator.class)
     @Target(ElementType.TYPE)
@@ -111,7 +113,7 @@ public record PriorityDto(
         @Override
         public Long deserialize(JsonParser parser, DeserializationContext context) {
             if (parser.hasToken(JsonToken.VALUE_NUMBER_FLOAT)) {
-                return context.reportInputMismatch(Long.class, "priority must be an integer");
+                return context.reportInputMismatch(Long.class, MESG_PRIORITY_MUST_BE_INTEGER);
             }
             return _parseLong(parser, context, Long.class);
         }
