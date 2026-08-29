@@ -598,6 +598,14 @@ manifest:
       requirement: optional
       description: Provides SMB persistent volumes for supported deployments.
       upstream_url: https://github.com/kubernetes-csi/csi-driver-smb
+    - name: modelexpress
+      version: supported
+      distribution: https://helm.ngc.nvidia.com/nvidia/ai-dynamo
+      plane: compute
+      kind: chart
+      requirement: optional
+      description: Distributes model weights peer-to-peer between Dynamo workers to reduce scale-out cold starts. Installed separately from the compute-plane stack.
+      upstream_url: https://github.com/ai-dynamo/modelexpress
     - artifact_id: nvca
       plane: compute
       kind: service-image
@@ -655,6 +663,14 @@ manifest:
       requirement: required
       description: Advertises NVIDIA GPU resources to Kubernetes.
       upstream_url: https://github.com/NVIDIA/k8s-device-plugin
+    - name: modelexpress-server
+      version: supported
+      distribution: https://catalog.ngc.nvidia.com/orgs/nvidia/teams/ai-dynamo/containers/modelexpress-server
+      plane: compute
+      kind: service-image
+      requirement: optional
+      description: Serves model weights to Dynamo workers over NIXL RDMA transports.
+      upstream_url: https://github.com/ai-dynamo/modelexpress
     - artifact_id: pylon
       plane: compute
       kind: service-image
