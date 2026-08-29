@@ -31,6 +31,12 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 import java.util.Map;
 import org.springframework.util.CollectionUtils;
+import tools.jackson.core.JsonParser;
+import tools.jackson.core.JsonToken;
+import tools.jackson.databind.DeserializationContext;
+import tools.jackson.databind.annotation.JsonDeserialize;
+import tools.jackson.databind.deser.std.StdScalarDeserializer;
+import tools.jackson.databind.type.LogicalType;
 
 @PriorityDto.ValidPriority
 @Schema(types = {"object"},
@@ -40,6 +46,7 @@ public record PriorityDto(
         @Min(value = 0, message = "defaultPriority must be >= 0")
         @Max(value = MAX_PRIORITY, message = "defaultPriority must be <= " + MAX_PRIORITY)
         @Schema(description = "Default priority.")
+        @JsonDeserialize(using = PriorityValueDeserializer.class)
         Long defaultPriority,
 
         @Nullable
@@ -47,6 +54,7 @@ public record PriorityDto(
                 message = "Maximum number of perAccountPriority entries of " + MAX_PER_ACCOUNT_ENTRIES
                         + " is exceeded.")
         @Schema(description = "Per-account priority overrides, keyed by account ID.")
+        @JsonDeserialize(contentUsing = PriorityValueDeserializer.class)
         Map<String,
                 @Min(value = 0, message = "priority must be >= 0")
                 @Max(value = MAX_PRIORITY, message = "priority must be <= " + MAX_PRIORITY)
@@ -86,6 +94,26 @@ public record PriorityDto(
                 return false;
             }
             return true;
+        }
+    }
+
+    /** Deserializes priority values while rejecting floating-point JSON numbers. */
+    public static class PriorityValueDeserializer extends StdScalarDeserializer<Long> {
+        public PriorityValueDeserializer() {
+            super(Long.class);
+        }
+
+        @Override
+        public LogicalType logicalType() {
+            return LogicalType.Integer;
+        }
+
+        @Override
+        public Long deserialize(JsonParser parser, DeserializationContext context) {
+            if (parser.hasToken(JsonToken.VALUE_NUMBER_FLOAT)) {
+                return context.reportInputMismatch(Long.class, "priority must be an integer");
+            }
+            return _parseLong(parser, context, Long.class);
         }
     }
 }
