@@ -68,10 +68,11 @@ uses it. The custom resources themselves are namespaced.
   sudo systemctl daemon-reload && sudo systemctl restart containerd
   ```
 
-  This cannot be fixed from the chart. Kubernetes has no ulimit field, and
-  granting `CAP_IPC_LOCK` does not help, because the worker image runs as UID
-  1000 and a non-root process has an empty effective capability set. Confirm
-  from inside a worker with
+  Kubernetes has no ulimit field, so the chart cannot set this. Adding
+  `CAP_IPC_LOCK` is the usual workload-level answer and that capability is meant
+  to bypass `RLIMIT_MEMLOCK`, but it did not lift the limit for this image in our
+  testing, and whether it works at all depends on the runtime and cluster policy.
+  Either way, confirm from inside a worker with
   `grep 'Max locked memory' /proc/self/limits`.
 - Enough node disk for the worker image. `vllm-runtime:1.2.1` is ~13 GB
   compressed, larger unpacked, and the frontend pulls it too. On an undersized
@@ -318,7 +319,7 @@ default `UCX` backend and remain unvalidated by NVCF.
 ## Cleanup
 
 ```bash
-nvcf-cli function deploy delete --function-id <id> --version-id <version-id>
+nvcf-cli function deploy remove --function-id <id> --version-id <version-id>
 nvcf-cli function delete --function-id <id> --version-id <version-id>
 ```
 

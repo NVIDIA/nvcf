@@ -113,8 +113,10 @@ vllmDecodeWorker:
         # Raise this for larger models.
         ephemeral-storage: "8Gi"
 
-# Token for gated model downloads on the worker side. Leave empty when the
-# ModelExpress server already holds the weights.
+# Token for gated model downloads on the worker side. A worker that finds no peer
+# source downloads the model itself, which is the normal path for the first
+# worker, so a gated model needs this set even when the server holds the weights.
+# Safe to leave empty only for ungated models such as the default Qwen/Qwen3-0.6B.
 hfToken: ""
 
 annotations: {}
