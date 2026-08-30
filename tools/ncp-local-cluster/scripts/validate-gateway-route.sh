@@ -17,14 +17,33 @@ if ! [[ "$retry_interval_seconds" =~ ^[1-9][0-9]*$ ]]; then
   exit 2
 fi
 
-elapsed=0
-while ((elapsed < timeout_seconds)); do
-  if curl -sSf --connect-timeout 5 --max-time 10 "$url" >/dev/null 2>&1; then
+start_time="$(date +%s)"
+deadline=$((start_time + timeout_seconds))
+
+while :; do
+  now="$(date +%s)"
+  remaining=$((deadline - now))
+  if ((remaining <= 0)); then
+    break
+  fi
+
+  if curl -sSf --connect-timeout 5 --max-time "$remaining" "$url" >/dev/null 2>&1; then
     exit 0
   fi
+
+  now="$(date +%s)"
+  remaining=$((deadline - now))
+  if ((remaining <= 0)); then
+    break
+  fi
+
+  elapsed=$((timeout_seconds - remaining))
   echo "INFO Gateway route not reachable yet, waiting... (${elapsed}/${timeout_seconds} seconds)"
-  sleep "$retry_interval_seconds"
-  elapsed=$((elapsed + retry_interval_seconds))
+  sleep_seconds="$retry_interval_seconds"
+  if ((sleep_seconds > remaining)); then
+    sleep_seconds="$remaining"
+  fi
+  sleep "$sleep_seconds"
 done
 
 echo "ERROR Gateway route did not become reachable within ${timeout_seconds} seconds" >&2
