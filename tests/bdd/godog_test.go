@@ -1362,7 +1362,8 @@ func TestMultiClusterHelmfileLLMRegistrationTLSFeatureFileWiresToSteps(t *testin
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
 
 	const (
-		tlsHandshakeCommand = `/bin/bash -c 'openssl s_client -connect 127.0.0.1:50071 ` +
+		grpcurlPreflightCommand = `/bin/sh -c 'command -v grpcurl >/dev/null'`
+		tlsHandshakeCommand     = `/bin/bash -c 'openssl s_client -connect 127.0.0.1:50071 ` +
 			`-servername llm-request-router.nvcf.svc.cluster.local -alpn h2 -verify_return_error ` +
 			`-CAfile <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf ` +
 			`-o jsonpath="{.data.ca\.crt}" | base64 -d) </dev/null 2>&1'`
@@ -1382,10 +1383,33 @@ func TestMultiClusterHelmfileLLMRegistrationTLSFeatureFileWiresToSteps(t *testin
 		invokeCommand = "/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke" +
 			" --inference-url /v1/chat/completions --model-name openai-compatible-sample" +
 			" --request-body '{\"messages\":[{\"role\":\"user\",\"content\":\"bdd-registration-tls\"}]}' --timeout 120"
+		wrongRootCommand = `/bin/bash -c 'set -u; cert_dir=$(mktemp -d); ` +
+			`trap '\''rm -rf "$cert_dir"'\'' EXIT; openssl req -x509 -newkey rsa:2048 -nodes ` +
+			`-subj /CN=wrong-root -keyout "$cert_dir/key.pem" -out "$cert_dir/ca.pem" -days 1 ` +
+			`>/dev/null 2>&1 || exit; grpcurl -max-time 5 -cacert "$cert_dir/ca.pem" ` +
+			`-authority llm-request-router.nvcf.svc.cluster.local ` +
+			`-import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto ` +
+			`127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates'`
+		wrongHostCommand = `/bin/bash -c 'grpcurl -max-time 5 ` +
+			`-cacert <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf ` +
+			`-o jsonpath="{.data.ca\.crt}" | base64 -d) ` +
+			`-authority wrong-host.nvcf.svc.cluster.local ` +
+			`-import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto ` +
+			`127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates'`
+		missingTrustCommand = `/bin/bash -c 'grpcurl -max-time 5 ` +
+			`-authority llm-request-router.nvcf.svc.cluster.local ` +
+			`-import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto ` +
+			`127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates'`
+		plaintextCommand = `/bin/bash -c 'grpcurl -plaintext -max-time 5 ` +
+			`-import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto ` +
+			`127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates'`
+		invalidAuthorityCommand = "make -C deploy/stacks/self-managed template " +
+			"HELMFILE_ENV=local-bdd-registration-tls-invalid-authority"
 	)
 
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
 		"k3d cluster get ncp-local": {ExitCode: 1},
+		grpcurlPreflightCommand:     {ExitCode: 0},
 		"kubectl --context k3d-ncp-local-cp get configmap/nvcf-api-remote-config -n nvcf -o yaml": {
 			ExitCode: 0,
 			Stdout:   "worker-address: https://llm-request-router.nvcf.svc.cluster.local:50071\n",
@@ -1416,6 +1440,28 @@ func TestMultiClusterHelmfileLLMRegistrationTLSFeatureFileWiresToSteps(t *testin
 			Stdout: "Function invocation completed!\n\nResponse:\n" +
 				`{"object":"chat.completion","choices":[{"message":{"content":"This is a fixed 128-byte response for routing and contract validation."}}]}` +
 				"\n",
+		},
+		wrongRootCommand: {
+			ExitCode: 1,
+			Stderr:   "certificate signed by unknown authority\n",
+		},
+		wrongHostCommand: {
+			ExitCode: 1,
+			Stderr:   "certificate is valid for another name, not wrong-host.nvcf.svc.cluster.local\n",
+		},
+		missingTrustCommand: {
+			ExitCode: 1,
+			Stderr:   "certificate is not trusted\n",
+		},
+		plaintextCommand: {
+			ExitCode: 1,
+			Stderr:   "context deadline exceeded\n",
+		},
+		invalidAuthorityCommand: {
+			ExitCode: 1,
+			Stderr: "global.workerEndpoints.llmRequestRouterAddress must use " +
+				"optional http:// or https:// followed by DNS-or-IPv4:port or [IPv6]:port " +
+				"with port 1-65535\n",
 		},
 	}))
 	seedHelmfileLocalBDDMultiFixture(t, suite.Config.RepoRoot)
@@ -1467,94 +1513,6 @@ func TestMultiClusterHelmfileLLMRegistrationTLSFeatureFileWiresToSteps(t *testin
 	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, plaintextWatchCommand) {
 		t.Fatal("plaintext WatchStargates rejection was not exercised")
 	}
-}
-
-// TestMultiClusterHelmfileLLMRegistrationTLSFailClosedFeatureFileWiresToSteps
-// runs the negative TLS registration matrix against a fake runner.
-func TestMultiClusterHelmfileLLMRegistrationTLSFailClosedFeatureFileWiresToSteps(t *testing.T) {
-	t.Setenv("NGC_API_KEY", "test-key")
-	t.Setenv("SAMPLE_NGC_ORG", "test-org")
-	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
-
-	const tlsHandshakeCommand = `/bin/bash -c 'openssl s_client -connect 127.0.0.1:50071 ` +
-		`-servername llm-request-router.nvcf.svc.cluster.local ` +
-		`-verify_hostname llm-request-router.nvcf.svc.cluster.local -alpn h2 -verify_return_error ` +
-		`-CAfile <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf ` +
-		`-o jsonpath="{.data.ca\.crt}" | base64 -d) </dev/null 2>&1'`
-	const grpcurlPreflightCommand = `/bin/sh -c 'command -v grpcurl >/dev/null'`
-	const wrongRootCommand = `/bin/bash -c 'set -u; cert_dir=$(mktemp -d); ` +
-		`trap '\''rm -rf "$cert_dir"'\'' EXIT; openssl req -x509 -newkey rsa:2048 -nodes ` +
-		`-subj /CN=wrong-root -keyout "$cert_dir/key.pem" -out "$cert_dir/ca.pem" -days 1 ` +
-		`>/dev/null 2>&1 || exit; grpcurl -max-time 5 -cacert "$cert_dir/ca.pem" ` +
-		`-authority llm-request-router.nvcf.svc.cluster.local ` +
-		`-import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto ` +
-		`127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates'`
-	const wrongHostCommand = `/bin/bash -c 'grpcurl -max-time 5 ` +
-		`-cacert <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf ` +
-		`-o jsonpath="{.data.ca\.crt}" | base64 -d) ` +
-		`-authority wrong-host.nvcf.svc.cluster.local ` +
-		`-import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto ` +
-		`127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates'`
-	const missingTrustCommand = `/bin/bash -c 'grpcurl -max-time 5 ` +
-		`-authority llm-request-router.nvcf.svc.cluster.local ` +
-		`-import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto ` +
-		`127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates'`
-	const plaintextCommand = `/bin/bash -c 'grpcurl -plaintext -max-time 5 ` +
-		`-import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto ` +
-		`127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates'`
-	const invalidAuthorityCommand = "make -C deploy/stacks/self-managed template " +
-		"HELMFILE_ENV=local-bdd-registration-tls-invalid-authority"
-	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
-		"k3d cluster get ncp-local": {ExitCode: 1},
-		grpcurlPreflightCommand:     {ExitCode: 0},
-		tlsHandshakeCommand: {
-			ExitCode: 0,
-			Stdout:   "ALPN protocol: h2\nVerify return code: 0 (ok)\n",
-		},
-		wrongRootCommand: {
-			ExitCode: 1,
-			Stderr:   "certificate signed by unknown authority\n",
-		},
-		wrongHostCommand: {
-			ExitCode: 1,
-			Stderr:   "certificate is valid for another name, not wrong-host.nvcf.svc.cluster.local\n",
-		},
-		missingTrustCommand: {
-			ExitCode: 1,
-			Stderr:   "certificate is not trusted\n",
-		},
-		plaintextCommand: {
-			ExitCode: 1,
-			Stderr:   "context deadline exceeded\n",
-		},
-		invalidAuthorityCommand: {
-			ExitCode: 1,
-			Stderr: "global.workerEndpoints.llmRequestRouterAddress must use " +
-				"optional http:// or https:// followed by DNS-or-IPv4:port or [IPv6]:port " +
-				"with port 1-65535\n",
-		},
-	}))
-	seedHelmfileLocalBDDMultiFixture(t, suite.Config.RepoRoot)
-	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
-
-	sc := steps.NewScenarioContext(suite)
-	featurePath := mustResolveFeaturePath(t, "multi-cluster-helmfile-llm-registration-tls-fail-closed.feature")
-	var out strings.Builder
-	status := godog.TestSuite{
-		Name: "multi-cluster-helmfile-llm-registration-tls-fail-closed-wiring",
-		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
-			steps.RegisterAll(ctx, sc)
-		},
-		Options: &godog.Options{
-			Format: "pretty",
-			Paths:  []string{featurePath},
-			Strict: true,
-			Output: &out,
-		},
-	}.Run()
-	if status != 0 {
-		t.Fatalf("godog suite status = %d\n%s", status, out.String())
-	}
 	runs := suite.Runner.(*fakeRunner).runs
 	if !commandRanExactly(runs, grpcurlPreflightCommand) {
 		t.Fatal("grpcurl availability was not checked before the live probes")
@@ -1570,22 +1528,18 @@ func TestMultiClusterHelmfileLLMRegistrationTLSFailClosedFeatureFileWiresToSteps
 			t.Fatalf("%s negative registration command was not invoked", name)
 		}
 	}
-	validEnvironment := filepath.Join(
-		suite.Config.RepoRoot,
-		"deploy", "stacks", "self-managed", "environments",
-		"local-bdd-registration-tls-fail-closed.yaml",
-	)
-	invalidEnvironment := filepath.Join(
-		suite.Config.RepoRoot,
-		"deploy", "stacks", "self-managed", "environments",
-		"local-bdd-registration-tls-invalid-authority.yaml",
-	)
 	for _, assertion := range []struct {
 		path string
 		want string
 	}{
-		{path: validEnvironment, want: "https://llm-request-router.nvcf.svc.cluster.local:50071"},
-		{path: invalidEnvironment, want: "https://llm_request_router.nvcf.svc.cluster.local:50071"},
+		{
+			path: filepath.Join(suite.Config.RepoRoot, "deploy", "stacks", "self-managed", "environments", "local-bdd-registration-tls.yaml"),
+			want: "https://llm-request-router.nvcf.svc.cluster.local:50071",
+		},
+		{
+			path: filepath.Join(suite.Config.RepoRoot, "deploy", "stacks", "self-managed", "environments", "local-bdd-registration-tls-invalid-authority.yaml"),
+			want: "https://llm_request_router.nvcf.svc.cluster.local:50071",
+		},
 	} {
 		got, found, err := dsl.ReadYAMLKey(assertion.path, "global.workerEndpoints.llmRequestRouterAddress")
 		if err != nil {
@@ -2380,15 +2334,6 @@ func TestMultiClusterHelmfileLLMRegistrationTLS(t *testing.T) {
 		t.Skip("live run skipped under -short")
 	}
 	runLiveFeature(t, "multi-cluster-helmfile-llm-registration-tls.feature")
-}
-
-// TestMultiClusterHelmfileLLMRegistrationTLSFailClosed is the live entry
-// point for the negative TLS registration matrix. Skipped under -short.
-func TestMultiClusterHelmfileLLMRegistrationTLSFailClosed(t *testing.T) {
-	if testing.Short() {
-		t.Skip("live run skipped under -short")
-	}
-	runLiveFeature(t, "multi-cluster-helmfile-llm-registration-tls-fail-closed.feature")
 }
 
 // TestSingleClusterEKSHelmfile is the live entry point for the
