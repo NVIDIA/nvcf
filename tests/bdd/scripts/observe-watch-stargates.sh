@@ -26,7 +26,7 @@ if ! [[ "$duration_seconds" =~ ^[1-9][0-9]*$ ]]; then
   echo "duration-seconds must be a positive integer, got: $duration_seconds" >&2
   exit 64
 fi
-for tool in kubectl base64 grpcurl; do
+for tool in kubectl base64 grpcurl jq; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "required tool not found: $tool" >&2
     exit 127
@@ -37,7 +37,9 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 repo_root="$(cd "$script_dir/../../.." && pwd -P)"
 proto_path="$repo_root/src/libraries/rust/stargate/crates/proto/proto"
 ca_file="$(mktemp "${TMPDIR:-/tmp}/nvcf-bdd-watch-ca.XXXXXX")"
-trap 'rm -f "$ca_file"' EXIT
+stdout_file="$(mktemp "${TMPDIR:-/tmp}/nvcf-bdd-watch-stdout.XXXXXX")"
+stderr_file="$(mktemp "${TMPDIR:-/tmp}/nvcf-bdd-watch-stderr.XXXXXX")"
+trap 'rm -f "$ca_file" "$stdout_file" "$stderr_file"' EXIT
 
 kubectl --context "$kube_context" get secret "$ca_secret" -n "$namespace" \
   -o 'jsonpath={.data.ca\.crt}' | base64 -d >"$ca_file"
@@ -47,29 +49,37 @@ if [[ ! -s "$ca_file" ]]; then
 fi
 
 set +e
-output="$(grpcurl \
+started_at="$(date +%s)"
+grpcurl \
   -max-time "$duration_seconds" \
+  -emit-defaults \
   -cacert "$ca_file" \
   -authority "$tls_authority" \
   -import-path "$proto_path" \
   -proto stargate.proto \
   "$endpoint" \
-  stargate.StargateControlPlane/WatchStargates 2>&1)"
+  stargate.StargateControlPlane/WatchStargates >"$stdout_file" 2>"$stderr_file"
 grpcurl_status=$?
+finished_at="$(date +%s)"
 set -e
 
-printf '%s\n' "$output"
+cat "$stdout_file"
+cat "$stderr_file" >&2
 
 if [[ "$grpcurl_status" -eq 0 ]]; then
   echo "WatchStargates ended before the observation deadline" >&2
   exit 1
 fi
-if ! grep -Eq '^[[:space:]]*\{' <<<"$output"; then
+if ! jq -se 'length > 0 and all(.[]; type == "object" and (has("stargates") or has("watchStargateUrls")))' "$stdout_file" >/dev/null; then
   echo "WatchStargates did not return a streamed snapshot" >&2
   exit 1
 fi
-if ! grep -Eiq 'DeadlineExceeded|context deadline exceeded' <<<"$output"; then
+if ! grep -Eiq 'DeadlineExceeded|context deadline exceeded' "$stderr_file"; then
   echo "WatchStargates failed before the expected observation deadline" >&2
   exit 1
 fi
-
+elapsed_seconds=$(( finished_at - started_at ))
+if [[ "$elapsed_seconds" -lt "$duration_seconds" ]]; then
+  echo "WatchStargates ended after ${elapsed_seconds}s before the ${duration_seconds}s observation deadline" >&2
+  exit 1
+fi

@@ -65,14 +65,14 @@ func TestWatchStargatesCommandRejectsMissingOrInvalidInputs(t *testing.T) {
 }
 
 func TestPylonMetricsCommandKeepsExpectationsExplicit(t *testing.T) {
-	got, err := PylonMetricsCommand("llm-worker", "k3d-ncp-local-compute-1", "10m", []PylonMetricExpectation{
+	got, err := PylonMetricsCommand("bdd-registration-tls", "llm-worker", "k3d-ncp-local-compute-1", "10m", []PylonMetricExpectation{
 		{Metric: "pylon_registration_stream_connected", Comparison: "exactly", Count: 5},
 		{Metric: "pylon_reverse_tunnel_connected", Comparison: "at least", Count: 3},
 	})
 	if err != nil {
 		t.Fatalf("build Pylon metrics command: %v", err)
 	}
-	want := "bash tests/bdd/scripts/wait-pylon-metrics.sh llm-worker k3d-ncp-local-compute-1 10m pylon_registration_stream_connected exactly 5 pylon_reverse_tunnel_connected 'at least' 3"
+	want := "bash tests/bdd/scripts/wait-pylon-metrics.sh bdd-registration-tls llm-worker k3d-ncp-local-compute-1 10m pylon_registration_stream_connected exactly 5 pylon_reverse_tunnel_connected 'at least' 3"
 	if got != want {
 		t.Fatalf("command = %q, want %q", got, want)
 	}
@@ -90,7 +90,7 @@ func TestPylonMetricsCommandRejectsInvalidExpectations(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := PylonMetricsCommand("llm-worker", "context", "10m", test.expectations); err == nil {
+			if _, err := PylonMetricsCommand("function", "llm-worker", "context", "10m", test.expectations); err == nil {
 				t.Fatal("expected validation error")
 			}
 		})
@@ -102,11 +102,12 @@ func TestObserveWatchStargatesScriptAcceptsSnapshotThenDeadline(t *testing.T) {
 	writeExecutable(t, filepath.Join(fakeBin, "kubectl"), "#!/bin/sh\nprintf 'dGVzdC1jYQ=='\n")
 	writeExecutable(t, filepath.Join(fakeBin, "grpcurl"), `#!/bin/sh
 printf '{\n  "stargates": []\n}\n'
+sleep 1
 printf 'ERROR:\n  Code: DeadlineExceeded\n  Message: context deadline exceeded\n' >&2
 exit 1
 `)
 
-	output, err := runRegistrationScript(t, fakeBin, "observe-watch-stargates.sh", "127.0.0.1:50071", "router.nvcf.svc", "tls", "nvcf", "context", "3")
+	output, err := runRegistrationScript(t, fakeBin, "observe-watch-stargates.sh", "127.0.0.1:50071", "router.nvcf.svc", "tls", "nvcf", "context", "1")
 	if err != nil {
 		t.Fatalf("observe WatchStargates: %v\n%s", err, output)
 	}
@@ -114,6 +115,24 @@ exit 1
 		if !strings.Contains(output, want) {
 			t.Fatalf("output = %q, want %q", output, want)
 		}
+	}
+}
+
+func TestObserveWatchStargatesScriptRejectsImmediateProductDeadline(t *testing.T) {
+	fakeBin := t.TempDir()
+	writeExecutable(t, filepath.Join(fakeBin, "kubectl"), "#!/bin/sh\nprintf 'dGVzdC1jYQ=='\n")
+	writeExecutable(t, filepath.Join(fakeBin, "grpcurl"), `#!/bin/sh
+printf '{\n  "stargates": []\n}\n'
+printf 'ERROR:\n  Code: DeadlineExceeded\n  Message: product returned deadline exceeded\n' >&2
+exit 1
+`)
+
+	output, err := runRegistrationScript(t, fakeBin, "observe-watch-stargates.sh", "127.0.0.1:50071", "router.nvcf.svc", "tls", "nvcf", "context", "3")
+	if err == nil {
+		t.Fatal("expected immediate product deadline failure")
+	}
+	if !strings.Contains(output, "before the 3s observation deadline") {
+		t.Fatalf("output = %q, want early deadline diagnostic", output)
 	}
 }
 
@@ -131,13 +150,19 @@ func TestObserveWatchStargatesScriptRejectsDeadlineWithoutSnapshot(t *testing.T)
 	}
 }
 
-func TestWaitPylonMetricsScriptCountsConnectedSeries(t *testing.T) {
+func TestWaitPylonMetricsScriptChecksEverySelectedPodAndCountsTimestampedSeries(t *testing.T) {
 	fakeBin := t.TempDir()
 	writeExecutable(t, filepath.Join(fakeBin, "kubectl"), `#!/bin/sh
 case "$*" in
-  *"get pods -A -o json"*) printf '{"items":[]}' ;;
+  *"get pods -A -o json"*)
+    printf '%s\n' '{"items":['
+    printf '%s\n' '{"metadata":{"namespace":"functions","name":"worker-0","annotations":{"function-name":"bdd-registration-tls"}},"status":{"phase":"Running"},"spec":{"containers":[{"name":"llm-worker"}]}},'
+    printf '%s\n' '{"metadata":{"namespace":"functions","name":"worker-1","annotations":{"function-name":"bdd-registration-tls"}},"status":{"phase":"Running"},"spec":{"containers":[{"name":"llm-worker"}]}},'
+    printf '%s\n' '{"metadata":{"namespace":"other","name":"worker-other","annotations":{"function-name":"another-function"}},"status":{"phase":"Running"},"spec":{"containers":[{"name":"llm-worker"}]}}'
+    printf '%s\n' ']}'
+    ;;
   *)
-    printf 'pylon_registration_stream_connected{router="a"} 1\n'
+    printf 'pylon_registration_stream_connected{router="a"} 1 1712345678\n'
     printf 'pylon_registration_stream_connected{router="b"} 1\n'
     printf 'pylon_registration_stream_connected{router="c"} 1\n'
     printf 'pylon_reverse_tunnel_connected{router="a"} 1\n'
@@ -146,12 +171,12 @@ case "$*" in
     ;;
 esac
 `)
-	writeExecutable(t, filepath.Join(fakeBin, "jq"), "#!/bin/sh\nprintf 'functions\\tworker-0\\n'\n")
 
 	output, err := runRegistrationScript(
 		t,
 		fakeBin,
 		"wait-pylon-metrics.sh",
+		"bdd-registration-tls",
 		"llm-worker",
 		"k3d-ncp-local-compute-1",
 		"1s",
@@ -165,10 +190,73 @@ esac
 	if err != nil {
 		t.Fatalf("wait for Pylon metrics: %v\n%s", err, output)
 	}
-	for _, want := range []string{"pylon_registration_stream_connected=3", "pylon_reverse_tunnel_connected=3"} {
+	for _, want := range []string{
+		"functions/worker-0 pylon_registration_stream_connected=3",
+		"functions/worker-0 pylon_reverse_tunnel_connected=3",
+		"functions/worker-1 pylon_registration_stream_connected=3",
+		"functions/worker-1 pylon_reverse_tunnel_connected=3",
+	} {
 		if !strings.Contains(output, want) {
 			t.Fatalf("output = %q, want %q", output, want)
 		}
+	}
+	if strings.Contains(output, "worker-other") {
+		t.Fatalf("output = %q, did not want metrics from another function", output)
+	}
+}
+
+func TestWaitPylonMetricsScriptDoesNotTreatScrapeFailureAsZero(t *testing.T) {
+	fakeBin := t.TempDir()
+	writeExecutable(t, filepath.Join(fakeBin, "kubectl"), `#!/bin/sh
+case "$*" in
+  *"get pods -A -o json"*)
+    printf '%s\n' '{"items":[{"metadata":{"namespace":"functions","name":"worker-0","annotations":{"function-name":"bdd-registration-tls"}},"status":{"phase":"Running"},"spec":{"containers":[{"name":"llm-worker"}]}}]}'
+    ;;
+  *) printf 'metrics endpoint unavailable\n' >&2; exit 1 ;;
+esac
+`)
+
+	output, err := runRegistrationScript(
+		t,
+		fakeBin,
+		"wait-pylon-metrics.sh",
+		"bdd-registration-tls",
+		"llm-worker",
+		"k3d-ncp-local-compute-1",
+		"1s",
+		"pylon_registration_stream_connected",
+		"exactly",
+		"0",
+	)
+	if err == nil {
+		t.Fatal("expected metrics scrape failure")
+	}
+	if !strings.Contains(output, "metrics scrape failed: metrics endpoint unavailable") {
+		t.Fatalf("output = %q, want preserved scrape failure", output)
+	}
+}
+
+func TestWaitPylonMetricsScriptPreservesPodDiscoveryFailure(t *testing.T) {
+	fakeBin := t.TempDir()
+	writeExecutable(t, filepath.Join(fakeBin, "kubectl"), "#!/bin/sh\nprintf 'API server unavailable\\n' >&2\nexit 1\n")
+
+	output, err := runRegistrationScript(
+		t,
+		fakeBin,
+		"wait-pylon-metrics.sh",
+		"bdd-registration-tls",
+		"llm-worker",
+		"k3d-ncp-local-compute-1",
+		"1s",
+		"pylon_registration_stream_connected",
+		"exactly",
+		"0",
+	)
+	if err == nil {
+		t.Fatal("expected pod discovery failure")
+	}
+	if !strings.Contains(output, "pod discovery failed: API server unavailable") {
+		t.Fatalf("output = %q, want preserved discovery failure", output)
 	}
 }
 

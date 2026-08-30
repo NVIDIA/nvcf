@@ -4,18 +4,19 @@
 
 set -euo pipefail
 
-if [[ $# -lt 6 || $(( ( $# - 3 ) % 3 )) -ne 0 ]]; then
-  echo "usage: $0 <container> <kube-context> <timeout> <metric> <comparison> <count> [...]" >&2
+if [[ $# -lt 7 || $(( ( $# - 4 ) % 3 )) -ne 0 ]]; then
+  echo "usage: $0 <function-name> <container> <kube-context> <timeout> <metric> <comparison> <count> [...]" >&2
   exit 64
 fi
 
-container_name="$1"
-kube_context="$2"
-timeout="$3"
-shift 3
+function_name="$1"
+container_name="$2"
+kube_context="$3"
+timeout="$4"
+shift 4
 
-if [[ -z "$container_name" || -z "$kube_context" ]]; then
-  echo "container and kube-context must be non-empty" >&2
+if [[ -z "$function_name" || -z "$container_name" || -z "$kube_context" ]]; then
+  echo "function-name, container, and kube-context must be non-empty" >&2
   exit 64
 fi
 if ! [[ "$timeout" =~ ^([1-9][0-9]*)(s|m|h)$ ]]; then
@@ -66,7 +67,7 @@ connected_series_count() {
   awk -v metric="$metric" '
     {
       series = $1
-      if ((series == metric || index(series, metric "{") == 1) && $NF == "1") {
+      if ((series == metric || index(series, metric "{") == 1) && $2 == "1") {
         count++
       }
     }
@@ -75,41 +76,56 @@ connected_series_count() {
 }
 
 deadline=$(( $(date +%s) + timeout_seconds ))
-last_summary="no running pod containing container $container_name"
+last_summary="no running pod for function $function_name containing container $container_name"
 
 while true; do
-  pod_row="$(kubectl --context "$kube_context" get pods -A -o json | jq -r --arg container "$container_name" '
-    [.items[]
+  if ! pods_json="$(kubectl --context "$kube_context" get pods -A -o json 2>&1)"; then
+    last_summary="pod discovery failed: $pods_json"
+  elif ! pod_rows="$(printf '%s\n' "$pods_json" | jq -r --arg function "$function_name" --arg container "$container_name" '
+    .items[]?
       | select(.metadata.deletionTimestamp == null)
       | select(.status.phase == "Running")
+      | select(.metadata.annotations["function-name"] == $function)
       | select(any(.spec.containers[]?; .name == $container))
       | [.metadata.namespace, .metadata.name]
-      | @tsv]
-    | first // empty
-  ' || true)"
-
-  if [[ -n "$pod_row" ]]; then
-    read -r namespace pod_name <<<"$pod_row"
-    metrics="$(kubectl --context "$kube_context" get --raw "/api/v1/namespaces/$namespace/pods/$pod_name:9089/proxy/metrics" 2>/dev/null || true)"
+      | @tsv
+  ' 2>&1)"; then
+    last_summary="pod discovery response could not be parsed: $pod_rows"
+  elif [[ -z "$pod_rows" ]]; then
+    last_summary="no running pod for function $function_name containing container $container_name"
+  else
     all_match=true
     summaries=()
 
-    for index in "${!metric_names[@]}"; do
-      metric="${metric_names[$index]}"
-      comparison="${comparisons[$index]}"
-      expected_count="${expected_counts[$index]}"
-      observed_count="$(printf '%s\n' "$metrics" | connected_series_count "$metric")"
-      summaries+=("$metric=$observed_count")
+    while IFS=$'\t' read -r namespace pod_name; do
+      if ! metrics="$(kubectl --context "$kube_context" get --raw "/api/v1/namespaces/$namespace/pods/$pod_name:9089/proxy/metrics" 2>&1)"; then
+        summaries+=("$namespace/$pod_name metrics scrape failed: $metrics")
+        all_match=false
+        continue
+      fi
+      if [[ -z "$metrics" ]]; then
+        summaries+=("$namespace/$pod_name metrics scrape returned an empty response")
+        all_match=false
+        continue
+      fi
 
-      case "$comparison" in
-        exactly)
-          [[ "$observed_count" -eq "$expected_count" ]] || all_match=false
-          ;;
-        "at least")
-          [[ "$observed_count" -ge "$expected_count" ]] || all_match=false
-          ;;
-      esac
-    done
+      for index in "${!metric_names[@]}"; do
+        metric="${metric_names[$index]}"
+        comparison="${comparisons[$index]}"
+        expected_count="${expected_counts[$index]}"
+        observed_count="$(printf '%s\n' "$metrics" | connected_series_count "$metric")"
+        summaries+=("$namespace/$pod_name $metric=$observed_count")
+
+        case "$comparison" in
+          exactly)
+            [[ "$observed_count" -eq "$expected_count" ]] || all_match=false
+            ;;
+          "at least")
+            [[ "$observed_count" -ge "$expected_count" ]] || all_match=false
+            ;;
+        esac
+      done
+    done <<<"$pod_rows"
 
     last_summary="${summaries[*]}"
     if [[ "$all_match" == true ]]; then

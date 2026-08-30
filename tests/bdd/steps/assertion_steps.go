@@ -99,7 +99,10 @@ func (sc *ScenarioContext) commandShouldFail() error {
 
 func (sc *ScenarioContext) commandOutputShouldContain(needle string) error {
 	combined := combinedOutput(sc.LastResult)
-	resolved := dsl.Interpolate(needle)
+	resolved, err := resolveOutputNeedle(needle)
+	if err != nil {
+		return err
+	}
 	if !strings.Contains(combined, resolved) {
 		return fmt.Errorf("output does not contain %q", resolved)
 	}
@@ -108,7 +111,10 @@ func (sc *ScenarioContext) commandOutputShouldContain(needle string) error {
 
 func (sc *ScenarioContext) commandOutputShouldNotContain(needle string) error {
 	combined := combinedOutput(sc.LastResult)
-	resolved := dsl.Interpolate(needle)
+	resolved, err := resolveOutputNeedle(needle)
+	if err != nil {
+		return err
+	}
 	if strings.Contains(combined, resolved) {
 		return fmt.Errorf("output contains %q", resolved)
 	}
@@ -120,9 +126,14 @@ func (sc *ScenarioContext) commandOutputShouldContainAll(table *godog.Table) err
 	if err != nil {
 		return err
 	}
-	for _, needle := range needles {
-		if err := sc.commandOutputShouldContain(needle); err != nil {
-			return err
+	combined := combinedOutput(sc.LastResult)
+	for index, needle := range needles {
+		resolved, err := resolveOutputNeedle(needle)
+		if err != nil {
+			return fmt.Errorf("row %d: %w", index+1, err)
+		}
+		if !strings.Contains(combined, resolved) {
+			return fmt.Errorf("output does not contain %q", resolved)
 		}
 	}
 	return nil
@@ -133,13 +144,29 @@ func (sc *ScenarioContext) commandOutputShouldContainOneOf(table *godog.Table) e
 	if err != nil {
 		return err
 	}
+	resolvedNeedles := make([]string, 0, len(needles))
+	for index, needle := range needles {
+		resolved, err := resolveOutputNeedle(needle)
+		if err != nil {
+			return fmt.Errorf("row %d: %w", index+1, err)
+		}
+		resolvedNeedles = append(resolvedNeedles, resolved)
+	}
 	combined := combinedOutput(sc.LastResult)
-	for _, needle := range needles {
-		if strings.Contains(combined, dsl.Interpolate(needle)) {
+	for _, resolved := range resolvedNeedles {
+		if strings.Contains(combined, resolved) {
 			return nil
 		}
 	}
 	return fmt.Errorf("output does not contain any of the %d expected values", len(needles))
+}
+
+func resolveOutputNeedle(needle string) (string, error) {
+	resolved := dsl.Interpolate(needle)
+	if strings.TrimSpace(resolved) == "" {
+		return "", fmt.Errorf("expected output text resolves to an empty value")
+	}
+	return resolved, nil
 }
 
 func (sc *ScenarioContext) yamlFileKeyShouldEqual(path, key, expected string) error {

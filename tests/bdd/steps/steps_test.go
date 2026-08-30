@@ -1463,6 +1463,35 @@ func TestCommandOutputTableAssertionsInterpolateExpectedText(t *testing.T) {
 	}
 }
 
+func TestCommandOutputAssertionsRejectValuesThatInterpolateToEmpty(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	t.Setenv("BDD_EMPTY_EXPECTATION", "")
+	sc.LastResult = harness.Result{Stdout: "any output contains the empty string"}
+
+	if err := sc.commandOutputShouldContain("${BDD_EMPTY_EXPECTATION}"); err == nil {
+		t.Fatal("expected empty single-value expectation to fail")
+	}
+	if err := sc.commandOutputShouldNotContain("${BDD_EMPTY_EXPECTATION}"); err == nil {
+		t.Fatal("expected empty negative expectation to fail validation")
+	}
+
+	containAll := docTable(t, [][]string{
+		{"text"},
+		{"${BDD_EMPTY_EXPECTATION}"},
+	})
+	if err := sc.commandOutputShouldContainAll(containAll); err == nil {
+		t.Fatal("expected contain-all table with an empty resolved value to fail")
+	}
+	containOneOf := docTable(t, [][]string{
+		{"text"},
+		{"any output"},
+		{"${BDD_EMPTY_EXPECTATION}"},
+	})
+	if err := sc.commandOutputShouldContainOneOf(containOneOf); err == nil {
+		t.Fatal("expected contain-one-of table with an empty resolved value to fail")
+	}
+}
+
 func TestISuccessfullyObserveWatchStargatesRunsExplicitCommand(t *testing.T) {
 	sc, fake := newScenarioContext(t)
 	fake.result = harness.Result{ExitCode: 0, Stdout: "{\n  \"stargates\": []\n}\n"}
@@ -1488,7 +1517,7 @@ func TestISuccessfullyObserveWatchStargatesRunsExplicitCommand(t *testing.T) {
 	}
 }
 
-func TestPodShouldReportPylonMetricsRunsVisibleExpectations(t *testing.T) {
+func TestEveryPylonForFunctionShouldReportMetricsRunsVisibleExpectations(t *testing.T) {
 	sc, fake := newScenarioContext(t)
 	fake.result = harness.Result{ExitCode: 0}
 	table := docTable(t, [][]string{
@@ -1497,10 +1526,10 @@ func TestPodShouldReportPylonMetricsRunsVisibleExpectations(t *testing.T) {
 		{"pylon_reverse_tunnel_connected", "at least", "3"},
 	})
 
-	if err := sc.podShouldReportPylonMetrics(context.Background(), "llm-worker", "k3d-ncp-local-compute-1", "10m", table); err != nil {
+	if err := sc.everyPylonForFunctionShouldReportMetrics(context.Background(), "bdd-registration-tls", "llm-worker", "k3d-ncp-local-compute-1", "10m", table); err != nil {
 		t.Fatalf("observe Pylon metrics: %v", err)
 	}
-	want := "bash tests/bdd/scripts/wait-pylon-metrics.sh llm-worker k3d-ncp-local-compute-1 10m pylon_registration_stream_connected exactly 5 pylon_reverse_tunnel_connected 'at least' 3"
+	want := "bash tests/bdd/scripts/wait-pylon-metrics.sh bdd-registration-tls llm-worker k3d-ncp-local-compute-1 10m pylon_registration_stream_connected exactly 5 pylon_reverse_tunnel_connected 'at least' 3"
 	if len(fake.runs) != 1 || fake.runs[0].command != want {
 		t.Fatalf("runs = %#v, want %q", fake.runs, want)
 	}
@@ -1513,7 +1542,7 @@ func TestPylonMetricTableRejectsInvalidStructureBeforeRunning(t *testing.T) {
 		{"pylon_registration_stream_connected", "exactly", "not-a-count"},
 	})
 
-	if err := sc.podShouldReportPylonMetrics(context.Background(), "llm-worker", "context", "10m", table); err == nil {
+	if err := sc.everyPylonForFunctionShouldReportMetrics(context.Background(), "function", "llm-worker", "context", "10m", table); err == nil {
 		t.Fatal("expected invalid count error")
 	}
 	if len(fake.runs) != 0 {

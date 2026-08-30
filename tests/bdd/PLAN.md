@@ -167,10 +167,10 @@ original order. Repeated options and empty values are preserved.
 |------|-------|
 | `Then the command exit code should be {int}` | Last-run exit code. |
 | `Then the command should fail` | Requires a non-zero last-run exit code. It does not accept a runner error that prevented command execution and never records the failed command in the successful-command cache. |
-| `Then the command output should contain {string}` | Substring match on combined stdout + stderr. |
-| `Then the command output should not contain {string}` | Negative substring match. |
-| `Then the command output should contain all:` (table) | Requires a `text` header and one or more strings. Every interpolated string must appear in combined stdout + stderr. |
-| `Then the command output should contain one of:` (table) | Requires a `text` header and one or more strings. At least one interpolated string must appear in combined stdout + stderr. |
+| `Then the command output should contain {string}` | Substring match on combined stdout + stderr. The interpolated value must not be empty or whitespace-only. |
+| `Then the command output should not contain {string}` | Negative substring match. The interpolated value must not be empty or whitespace-only. |
+| `Then the command output should contain all:` (table) | Requires a `text` header and one or more strings. Every interpolated string must be non-empty and appear in combined stdout + stderr. |
+| `Then the command output should contain one of:` (table) | Requires a `text` header and one or more strings. Every interpolated candidate must be non-empty, and at least one must appear in combined stdout + stderr. |
 | `Then file {string} should exist` | |
 | `Then yaml file {string} key {string} should equal {string}` | Reads the YAML file, walks the dotted key path, compares to the value (with `${VAR}` expansion). |
 | `Then yaml file {string} key {string} should not be empty` | Same key resolution; passes if the resolved value is non-empty. Use for non-deterministic outputs (cluster IDs, identity sources) where exact-value assertions are wrong. |
@@ -192,7 +192,7 @@ original order. Repeated options and empty values are preserved.
 | `Then deployment {string} in namespace {string} using context {string} should complete rollout within {string}` | Runs `kubectl rollout status` for the named deployment with the explicit namespace, context, and timeout. Failure messages name the deployment without printing command output. |
 | `Then NVCFBackend {string} in namespace {string} using context {string} should report agent status {string} within {string}` | Waits for the named backend's `status.agentStatus` to equal the visible value using the explicit namespace, context, and timeout. Failure messages name the backend without printing resource output. |
 | `Then these Gateway API routes should be accepted and resolved using context {string} within {string}:` (table) | Requires `kind`, `name`, `namespace`, and `parent` headers. Waits for every named route to report both `Accepted=True` and `ResolvedRefs=True` for the named Gateway parent using the explicit context and timeout. The route kind is passed through without an allowlist. Failures name the table row, route, namespace, parent, and unmet condition without printing resource output. |
-| `Then a pod containing container {string} using context {string} should report Pylon metrics within {string}:` (table) | Requires `metric`, `comparison`, and `count` headers. Polls the Pylon metrics endpoint of a running pod containing the visible container name. Each metric row counts connected series with value `1`; `comparison` is `exactly` or `at least`, and the expected non-negative count remains visible. |
+| `Then every Pylon for function {string} using container {string} and context {string} should report metrics within {string}:` (table) | Requires `metric`, `comparison`, and `count` headers. Polls every running pod selected by the visible `function-name` annotation and container name. Each pod must expose non-empty metrics, and each metric row counts connected series whose sample value is `1`; `comparison` is `exactly` or `at least`, and the expected non-negative count remains visible. Discovery, parsing, and scrape failures remain failures rather than zero metric counts. |
 
 #### YAML comparison semantics
 
@@ -540,9 +540,10 @@ type PylonMetricExpectation struct {
     Count      int
 }
 
-// PylonMetricsCommand builds a bounded Pylon metrics observation for a pod
-// selected by container name in an explicit Kubernetes context.
-func PylonMetricsCommand(containerName, kubeContext, timeout string, expectations []PylonMetricExpectation) (string, error)
+// PylonMetricsCommand builds a Pylon metrics observation for every running
+// Pylon pod selected by function name and container name in an explicit
+// Kubernetes context and polling window.
+func PylonMetricsCommand(functionName, containerName, kubeContext, timeout string, expectations []PylonMetricExpectation) (string, error)
 
 // FilesDoNotContain recursively inspects regular files under root and
 // fails if any interpolated fixed string appears.

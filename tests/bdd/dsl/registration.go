@@ -67,12 +67,17 @@ func WatchStargatesCommand(endpoint, authority, caSecret, namespace, kubeContext
 	), nil
 }
 
-// PylonMetricsCommand builds a bounded Pylon metrics observation for a pod
-// selected by container name in an explicit Kubernetes context.
-func PylonMetricsCommand(containerName, kubeContext, timeout string, expectations []PylonMetricExpectation) (string, error) {
+// PylonMetricsCommand builds a Pylon metrics observation for every running
+// Pylon pod selected by function name and container name in an explicit
+// Kubernetes context and polling window.
+func PylonMetricsCommand(functionName, containerName, kubeContext, timeout string, expectations []PylonMetricExpectation) (string, error) {
+	functionName = strings.TrimSpace(Interpolate(functionName))
 	containerName = strings.TrimSpace(Interpolate(containerName))
 	kubeContext = strings.TrimSpace(Interpolate(kubeContext))
 	timeout = strings.TrimSpace(Interpolate(timeout))
+	if functionName == "" {
+		return "", fmt.Errorf("function name is empty")
+	}
 	if containerName == "" {
 		return "", fmt.Errorf("container name is empty")
 	}
@@ -83,10 +88,10 @@ func PylonMetricsCommand(containerName, kubeContext, timeout string, expectation
 		return "", fmt.Errorf("timeout is empty")
 	}
 	if len(expectations) == 0 {
-		return "", fmt.Errorf("Pylon metric expectations are empty")
+		return "", fmt.Errorf("pylon metric expectations are empty")
 	}
 
-	args := []string{"bash", waitPylonMetricsScript, containerName, kubeContext, timeout}
+	args := []string{"bash", waitPylonMetricsScript, functionName, containerName, kubeContext, timeout}
 	for index, expectation := range expectations {
 		expectation.Metric = strings.TrimSpace(Interpolate(expectation.Metric))
 		expectation.Comparison = strings.TrimSpace(Interpolate(expectation.Comparison))

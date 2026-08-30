@@ -30,7 +30,7 @@ import (
 
 func registerRegistrationSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^I successfully observe WatchStargates at "([^"]*)" with TLS authority "([^"]*)" using CA secret "([^"]*)" in namespace "([^"]*)" and context "([^"]*)" for "([^"]*)" seconds$`, sc.iSuccessfullyObserveWatchStargates)
-	ctx.Step(`^a pod containing container "([^"]*)" using context "([^"]*)" should report Pylon metrics within "([^"]*)":$`, sc.podShouldReportPylonMetrics)
+	ctx.Step(`^every Pylon for function "([^"]*)" using container "([^"]*)" and context "([^"]*)" should report metrics within "([^"]*)":$`, sc.everyPylonForFunctionShouldReportMetrics)
 }
 
 func (sc *ScenarioContext) iSuccessfullyObserveWatchStargates(
@@ -52,8 +52,9 @@ func (sc *ScenarioContext) iSuccessfullyObserveWatchStargates(
 	return nil
 }
 
-func (sc *ScenarioContext) podShouldReportPylonMetrics(
+func (sc *ScenarioContext) everyPylonForFunctionShouldReportMetrics(
 	ctx context.Context,
+	functionName,
 	containerName,
 	kubeContext,
 	timeout string,
@@ -63,12 +64,12 @@ func (sc *ScenarioContext) podShouldReportPylonMetrics(
 	if err != nil {
 		return err
 	}
-	command, err := dsl.PylonMetricsCommand(containerName, kubeContext, timeout, expectations)
+	command, err := dsl.PylonMetricsCommand(functionName, containerName, kubeContext, timeout, expectations)
 	if err != nil {
 		return err
 	}
 	if err := sc.runResolvedSuccessfully(ctx, command); err != nil {
-		return fmt.Errorf("pod containing container %q did not report expected Pylon metrics: %w", dsl.Interpolate(containerName), err)
+		return fmt.Errorf("pylon pods for function %q using container %q did not report expected metrics: %w", dsl.Interpolate(functionName), dsl.Interpolate(containerName), err)
 	}
 	return nil
 }
