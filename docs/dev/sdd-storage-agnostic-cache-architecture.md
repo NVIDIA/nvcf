@@ -227,8 +227,10 @@ The regular writer and workload Pods run in the Pod instance namespace.
 
 ### `rwxReadOnly`
 
-1. Remove request metadata and owner references from the shared PVC, Job, and Pod template. Disable automatic
-   service-account token mounting. Reject any writer environment input, image-pull Secret, or Secret-backed volume.
+1. Remove request-scoped metadata and all owner references from the shared PVC. Strip all preexisting labels,
+   annotations, and owner references from the Job and Pod template, then add only the binding identity and PVC-UID
+   witness. Disable automatic service-account token mounting. Reject any writer environment input, image-pull Secret,
+   or Secret-backed volume.
 2. Create one `rw-pvc-<handle>` with RWX and `writer-job-<handle>`. The Job must not use
    `ttlSecondsAfterFinished`; it must reference and mount that exact PVC writable.
 3. After the API assigns the PVC UID, record that UID in the immutable Job Pod-template annotation. Reject a Job whose
@@ -251,11 +253,12 @@ Retaining the completed Job prevents a replica with a stale pre-publication read
 Job is accepted only when it contains no environment input or Secret reference.
 
 Existing same-name PVCs and Jobs require the exact binding UID and immutable intent. Other same-name objects are not
-adopted. Before creation, NVCA removes request-scoped labels and annotations and all ICMSRequest owner references from
-the shared writer PVC, Job, and Pod template. Existing shared objects that retain request ownership fail closed. This
-prevents deletion of one request from garbage-collecting shared cache objects. Automated two-reference reuse tests use
-credential-free synthetic Jobs. Production reuse requires binding-scoped writer input identity, Secret lifecycle, and
-failure recovery.
+adopted. Before creation, NVCA removes request-scoped labels, annotations, and all owner references from the shared
+writer PVC. It strips all preexisting labels, annotations, and owner references from the Job and Pod template before
+adding the binding label and PVC-UID witness. Existing shared objects that retain request ownership or lack the intended
+binding metadata fail closed. This prevents deletion of one request from garbage-collecting shared cache objects.
+Automated two-reference reuse tests use credential-free synthetic Jobs. Production reuse requires binding-scoped
+writer input identity, Secret lifecycle, and failure recovery.
 
 For `nvmesh`, the binding UID labels the writer PVC, Job and Pod template, retained PV, and reader PVC. For
 `rwxReadOnly`, it labels the writer PVC, Job, and Pod template. NVCA does not label the dynamically provisioned RWX PV;
@@ -411,8 +414,8 @@ cache state first. General drain, zero-reference retirement, and retained-data g
 - immutable regular and Helm writer-object adoption, drift refusal, and create-race validation;
 - one provider-neutral RWX writer PVC and Job with no reader PVC;
 - writer-Job proof of an exact writable mount or volume device for that PVC;
-- removal of per-request metadata and owner references, credential-input refusal, controlled two-request reuse, and
-  unsafe existing-object refusal;
+- removal of PVC request metadata and all preexisting Job and Pod-template metadata, credential-input refusal,
+  controlled two-request reuse, and unsafe existing-object refusal;
 - exact RWX PV claim UID, CSI driver, access mode, volume mode, StorageClass, reclaim policy, and volume-handle
   validation;
 - retained completed-Job publication fencing, exact Job-to-PVC UID witness, missing-fence refusal, terminating-object

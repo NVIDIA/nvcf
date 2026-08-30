@@ -24,8 +24,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-// prepareRWXReadOnlySharedWriterJob removes request metadata and rejects
-// request-scoped inputs that a retained, binding-owned Job cannot safely keep.
+// prepareRWXReadOnlySharedWriterJob strips all existing Job and Pod-template
+// labels, annotations, and owner references, then rejects inputs that a
+// retained, binding-owned Job cannot safely keep. The caller adds the binding
+// identity after this function returns.
 // A future credential indirection must record every Secret in the binding and
 // implement exact create, adoption, rotation, and cleanup before relaxing
 // these restrictions.
