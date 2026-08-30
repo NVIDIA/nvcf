@@ -5,6 +5,7 @@ stack_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 chart_path="../../../helm/llm-request-router/llm-request-router"
 work_dir="$(mktemp -d)"
 values_file="$work_dir/llm-request-router-values.yaml"
+local_manifest="$work_dir/llm-request-router.yaml"
 stateful_values_file="$work_dir/llm-request-router-stateful-values.yaml"
 trap 'rm -rf "$work_dir"' EXIT
 
@@ -52,6 +53,20 @@ test "$backend_repository" = "$main_repository" || {
 main_tag="$(yq -r '.llmRequestRouter.image.tag' "$values_file")"
 test "$main_tag" = "0.14.2" || {
   echo "llm-router-local-chart: expected stack-pinned Stargate 0.14.2, got ${main_tag:-missing}" >&2
+  exit 1
+}
+
+helm template llm-request-router "$stack_dir/../../helm/llm-request-router/llm-request-router" \
+  --namespace nvcf \
+  --values "$values_file" >"$local_manifest"
+
+main_registry="$(yq -r '.llmRequestRouter.image.registry' "$values_file")"
+expected_backend_image="${main_registry:+${main_registry}/}${main_repository}:0.14.2"
+backend_image="$(yq ea -r \
+  'select(.kind == "Deployment" and .metadata.name == "llm-request-router-backend-router" and .metadata.namespace == "nvcf") | .spec.template.spec.containers[] | select(.name == "backend-router") | .image' \
+  "$local_manifest")"
+test "$backend_image" = "$expected_backend_image" || {
+  echo "llm-router-local-chart: expected backend router image $expected_backend_image, got ${backend_image:-missing}" >&2
   exit 1
 }
 
