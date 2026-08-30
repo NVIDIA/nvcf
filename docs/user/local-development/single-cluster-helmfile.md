@@ -98,9 +98,9 @@ done
 
 Across the two files, the substitutions update `global.helm.sources.repository`
 and `global.image.repository`. The control-plane file also updates
-`api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE`. When the LLM addon is enabled,
-the stack defaults the worker address to the cluster-local request-router
-service. Set
+`api.remoteConfig.configData.nvcf.sidecars.llm-router-client-image`. When the
+LLM addon is enabled, the stack defaults the worker address to the cluster-local
+request-router service. Set
 `global.imagePullSecrets[0].name` if your secret name differs from
 `nvcr-pull-secret`. The compute-plane environment provides the NVCA endpoint
 settings consumed by its Helmfile.

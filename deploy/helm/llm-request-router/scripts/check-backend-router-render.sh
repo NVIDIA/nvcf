@@ -303,9 +303,9 @@ if ! grep -Fq -- "serviceAccountName: external-backend-router" "$external_servic
 fi
 assert_backend_router_role_binding_subject "$external_service_account" "external-backend-router"
 
-assert_zero_config_contains "image: registry.example.invalid/nvcf/stargate:0.11.1" \
+assert_zero_config_contains "image: registry.example.invalid/nvcf/stargate:0.14.1" \
   "backend router must inherit the released Stargate image with no router image configuration"
-assert_zero_config_contains 'app.kubernetes.io/version: "0.11.1"' \
+assert_zero_config_contains 'app.kubernetes.io/version: "0.14.1"' \
   "backend router labels must identify the inherited Stargate image version"
 
 helm template llm-request-router "$chart_dir" \

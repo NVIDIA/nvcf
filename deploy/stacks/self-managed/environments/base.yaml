@@ -171,12 +171,20 @@ functionAutoscaler:
     # environment label.
     ignoreEnv: true
 
+# API environment entries are merged over the stack defaults. Remote config is
+# passed to the API chart and overrides its packaged application profile. When
+# the LLM addon is enabled, the stack defaults the Pylon image from
+# global.sidecars (or global.image) at version 0.14.1.
+api:
+  env: {}
+  remoteConfig:
+    configData: {}
+
 # Image overrides for the API account-bootstrap job. alpine-k8s is not
 # republished under the public nvidia/nvcf catalog, so it defaults to its
 # upstream source, docker.io/alpine/k8s:1.36.1. Leave these unset unless you
 # have mirrored the image into your own registry, in which case set registry
 # and repository together:
-# api:
 #   accountBootstrap:
 #     image:
 #       registry: <your-registry>
