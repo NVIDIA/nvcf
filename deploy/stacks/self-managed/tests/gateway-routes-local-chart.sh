@@ -11,6 +11,10 @@ default_result="$(cd "$stack_dir" && HELMFILE_ENV=base helmfile \
   --state-values-set ingress.gatewayApi.controllerNamespace=gateway \
   --state-values-set ingress.gatewayApi.routes.llmWorker.enabled=true \
   --state-values-set ingress.gatewayApi.routes.llmWorker.backend.namespace=nvcf \
+  --state-values-set-string global.workerEndpoints.llmRequestRouterAddress=http://llm-grpc-gw:50071 \
+  --state-values-set-string addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress=http://llm-grpc-gw:50071 \
+  --state-values-set-string addons.llm.requestRouter.backendRouter.pylonReverseTunnelDialAddress=llm-quic-gw:50072 \
+  --state-values-set addons.llm.requestRouter.grpcTls.allowInsecureHttp=true \
   --state-values-set ingress.gatewayApi.gateways.shared.name=shared-gw \
   --state-values-set ingress.gatewayApi.gateways.shared.namespace=gateway \
   --state-values-set ingress.gatewayApi.gateways.grpc.name=grpc-gw \
@@ -44,6 +48,10 @@ trap 'rm -f "$default_values"' EXIT
   --state-values-set ingress.gatewayApi.controllerNamespace=gateway \
   --state-values-set ingress.gatewayApi.routes.llmWorker.enabled=true \
   --state-values-set ingress.gatewayApi.routes.llmWorker.backend.namespace=nvcf \
+  --state-values-set-string global.workerEndpoints.llmRequestRouterAddress=http://llm-grpc-gw:50071 \
+  --state-values-set-string addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress=http://llm-grpc-gw:50071 \
+  --state-values-set-string addons.llm.requestRouter.backendRouter.pylonReverseTunnelDialAddress=llm-quic-gw:50072 \
+  --state-values-set addons.llm.requestRouter.grpcTls.allowInsecureHttp=true \
   --state-values-set ingress.gatewayApi.gateways.shared.name=shared-gw \
   --state-values-set ingress.gatewayApi.gateways.shared.namespace=gateway \
   --state-values-set ingress.gatewayApi.gateways.grpc.name=grpc-gw \
