@@ -65,6 +65,16 @@ drivers:
       regularModelCache: disabled
       helmModelCache: disabled
 `
+	selectionCatalogRWXReadOnly = `apiVersion: storage.nvcf.nvidia.com/v1alpha1
+kind: StorageCapabilityCatalog
+drivers:
+  csi.weka.io:
+    provider: weka
+    accessModes: [ReadWriteMany, ReadOnlyMany]
+    transitions:
+      regularModelCache: rwxReadOnly
+      helmModelCache: disabled
+`
 )
 
 func selectionStorageClass() *storagev1.StorageClass {
@@ -81,6 +91,12 @@ func selectionStorageClass() *storagev1.StorageClass {
 		VolumeBindingMode: &wait,
 		MountOptions:      []string{"nouuid", "noatime"},
 	}
+}
+
+func selectionStorageClassForProvisioner(provisioner string) *storagev1.StorageClass {
+	storageClass := selectionStorageClass()
+	storageClass.Provisioner = provisioner
+	return storageClass
 }
 
 func selectionCatalogConfigMap(raw string) *corev1.ConfigMap {
@@ -152,6 +168,9 @@ func TestPersistModelCacheStorageSelection(t *testing.T) {
 		wantMode          nvcastorage.ModelCacheSelectionMode
 		wantTransition    string
 		wantResolvedState bool
+		wantProvider      string
+		wantProvisioner   string
+		wantEncryption    bool
 	}{
 		{
 			name: "regular durable NVMesh",
@@ -163,6 +182,8 @@ func TestPersistModelCacheStorageSelection(t *testing.T) {
 			wantMode:          nvcastorage.ModelCacheSelectionDurable,
 			wantTransition:    nvcastorage.ModelCacheTransitionNVMesh,
 			wantResolvedState: true,
+			wantProvider:      nvcastorage.ModelCacheProviderNVMesh,
+			wantProvisioner:   nvcastorage.NVMeshStorageClassProvisioner,
 		},
 		{
 			name: "Helm durable NVMesh",
@@ -178,6 +199,27 @@ func TestPersistModelCacheStorageSelection(t *testing.T) {
 			wantMode:          nvcastorage.ModelCacheSelectionDurable,
 			wantTransition:    nvcastorage.ModelCacheTransitionNVMesh,
 			wantResolvedState: true,
+			wantProvider:      nvcastorage.ModelCacheProviderNVMesh,
+			wantProvisioner:   nvcastorage.NVMeshStorageClassProvisioner,
+		},
+		{
+			name: "regular durable provider-neutral RWX",
+			objects: func() []runtime.Object {
+				return []runtime.Object{
+					selectionStorageClassForProvisioner("csi.weka.io"),
+					selectionCatalogConfigMap(selectionCatalogRWXReadOnly),
+				}
+			},
+			flags: []*featureflag.FeatureFlag{
+				featureflag.CachingSupport,
+				featureflag.NVMeshEncryption,
+			},
+			wantWorkflow:      nvcastorage.ModelCacheWorkflowRegular,
+			wantMode:          nvcastorage.ModelCacheSelectionDurable,
+			wantTransition:    nvcastorage.ModelCacheTransitionRWXReadOnly,
+			wantResolvedState: true,
+			wantProvider:      "weka",
+			wantProvisioner:   "csi.weka.io",
 		},
 		{
 			name: "disabled regular cache persists none",
@@ -189,6 +231,8 @@ func TestPersistModelCacheStorageSelection(t *testing.T) {
 			wantMode:          nvcastorage.ModelCacheSelectionNone,
 			wantTransition:    nvcastorage.ModelCacheTransitionDisabled,
 			wantResolvedState: true,
+			wantProvider:      nvcastorage.ModelCacheProviderNVMesh,
+			wantProvisioner:   nvcastorage.NVMeshStorageClassProvisioner,
 		},
 		{
 			name: "disabled Helm cache persists ephemeral",
@@ -204,6 +248,8 @@ func TestPersistModelCacheStorageSelection(t *testing.T) {
 			wantMode:          nvcastorage.ModelCacheSelectionEphemeral,
 			wantTransition:    nvcastorage.ModelCacheTransitionDisabled,
 			wantResolvedState: true,
+			wantProvider:      nvcastorage.ModelCacheProviderNVMesh,
+			wantProvisioner:   nvcastorage.NVMeshStorageClassProvisioner,
 		},
 		{
 			name: "missing StorageClass disables regular cache",
@@ -252,8 +298,9 @@ func TestPersistModelCacheStorageSelection(t *testing.T) {
 			assert.Equal(t, types.UID("nvcf-sc-uid"), selection.StorageClassUID)
 			assert.NotEmpty(t, selection.StorageClassDigest)
 			assert.NotEmpty(t, selection.CatalogDigest)
-			assert.Equal(t, "nvmesh", selection.Provider)
-			assert.Equal(t, nvcastorage.NVMeshStorageClassProvisioner, selection.Provisioner)
+			assert.Equal(t, tt.wantProvider, selection.Provider)
+			assert.Equal(t, tt.wantProvisioner, selection.Provisioner)
+			assert.Equal(t, tt.wantEncryption, selection.EncryptionRequired)
 		})
 	}
 }
@@ -664,6 +711,46 @@ func TestSetupContainerModelCachingFailedOutcome(t *testing.T) {
 				}
 			}
 			assert.Equal(t, 1, createAttempts, "the forced failure must produce ModelCachingFailed")
+		})
+	}
+}
+
+func TestRegularModelCacheRuntimeDecisionHonorsPersistedSelection(t *testing.T) {
+	resolved := resolvedSelectionForSetup(t)
+	durableRaw := persistedSelectionAnnotation(
+		t, nvcastorage.ModelCacheWorkflowRegular, nvcastorage.ModelCacheSelectionDurable, resolved)
+	noneRaw := persistedSelectionAnnotation(
+		t, nvcastorage.ModelCacheWorkflowRegular, nvcastorage.ModelCacheSelectionNone, nil)
+
+	tests := []struct {
+		name          string
+		raw           string
+		legacyEnabled bool
+		wantEnabled   bool
+		wantPersisted bool
+		wantErr       bool
+	}{
+		{name: "legacy gate enabled", legacyEnabled: true, wantEnabled: true},
+		{name: "legacy gate disabled"},
+		{name: "persisted durable survives gate disable", raw: durableRaw, wantEnabled: true, wantPersisted: true},
+		{name: "persisted none survives gate enable", raw: noneRaw, legacyEnabled: true, wantPersisted: true},
+		{name: "malformed selection fails closed", raw: "{", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &nvcav2beta1.ICMSRequest{}
+			if tt.raw != "" {
+				req.Annotations = map[string]string{nvcastorage.ModelCacheStorageSelectionAnnotationKey: tt.raw}
+			}
+			enabled, persisted, err := regularModelCacheRuntimeDecision(req, tt.legacyEnabled)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantEnabled, enabled)
+			assert.Equal(t, tt.wantPersisted, persisted)
 		})
 	}
 }

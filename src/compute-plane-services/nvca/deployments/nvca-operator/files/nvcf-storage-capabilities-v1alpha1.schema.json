@@ -16,7 +16,7 @@
       "properties": {
         "nvmesh-csi.excelero.com": {"$ref": "#/$defs/driver"}
       },
-      "additionalProperties": {"$ref": "#/$defs/disabledDriver"}
+      "additionalProperties": {"$ref": "#/$defs/nonNVMeshDriver"}
     }
   },
   "$defs": {
@@ -24,7 +24,11 @@
       "type": "string",
       "enum": ["ReadWriteOnce", "ReadOnlyMany", "ReadWriteMany"]
     },
-    "transitionStrategy": {
+    "regularTransitionStrategy": {
+      "type": "string",
+      "enum": ["disabled", "nvmesh", "rwxReadOnly"]
+    },
+    "helmTransitionStrategy": {
       "type": "string",
       "enum": ["disabled", "nvmesh"]
     },
@@ -33,8 +37,8 @@
       "additionalProperties": false,
       "required": ["regularModelCache", "helmModelCache"],
       "properties": {
-        "regularModelCache": {"$ref": "#/$defs/transitionStrategy"},
-        "helmModelCache": {"$ref": "#/$defs/transitionStrategy"}
+        "regularModelCache": {"$ref": "#/$defs/regularTransitionStrategy"},
+        "helmModelCache": {"$ref": "#/$defs/helmTransitionStrategy"}
       }
     },
     "driver": {
@@ -79,17 +83,33 @@
               }
             }
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "transitions": {
+                "properties": {"regularModelCache": {"const": "rwxReadOnly"}},
+                "required": ["regularModelCache"]
+              }
+            },
+            "required": ["transitions"]
+          },
+          "then": {
+            "properties": {
+              "accessModes": {"contains": {"const": "ReadWriteMany"}}
+            }
+          }
         }
       ]
     },
-    "disabledDriver": {
+    "nonNVMeshDriver": {
       "allOf": [
         {"$ref": "#/$defs/driver"},
         {
           "properties": {
             "transitions": {
               "properties": {
-                "regularModelCache": {"const": "disabled"},
+                "regularModelCache": {"enum": ["disabled", "rwxReadOnly"]},
                 "helmModelCache": {"const": "disabled"}
               }
             }

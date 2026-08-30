@@ -2596,6 +2596,10 @@ func (c *BackendK8sCache) syncICMSRequest(ctx context.Context, req *nvcav2beta1n
 			if !c.icmsRequestHelper.AllInstancesTerminatedAndReported(ctx, req) {
 				return fmt.Errorf("%w: instances are not terminated and reported for %s", errICMSRequestFinalizerRetained, req.Name)
 			}
+			if err := c.resumeRetiringRegularModelCacheCleanup(ctx, req); err != nil {
+				return fmt.Errorf("finish Retiring model cache cleanup before removing finalizer from %s: %w",
+					req.Name, err)
+			}
 			if err := c.releaseModelCacheBindingReference(ctx, req); err != nil {
 				return fmt.Errorf("release model cache binding before removing finalizer from %s: %w",
 					req.Name, err)

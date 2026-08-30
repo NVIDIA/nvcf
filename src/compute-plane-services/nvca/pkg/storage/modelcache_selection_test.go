@@ -28,21 +28,21 @@ import (
 )
 
 func testResolvedModelCacheStorage(transition string) *ModelCacheStorageSelection {
-	return &ModelCacheStorageSelection{
-		StorageClassName:   DefaultModelCacheStorageClassName,
-		StorageClassUID:    types.UID("storage-class-uid"),
-		StorageClassDigest: "v1:sha256:storage-class-digest",
-		CatalogDigest:      "sha256:catalog-digest",
-		Provider:           "nvmesh",
-		Provisioner:        NVMeshStorageClassProvisioner,
-		Transition:         transition,
-		RequiredAccessModes: func() []corev1.PersistentVolumeAccessMode {
-			if transition == ModelCacheTransitionNVMesh {
-				return []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce, corev1.ReadOnlyMany}
-			}
-			return nil
-		}(),
+	selection := &ModelCacheStorageSelection{
+		StorageClassName:    DefaultModelCacheStorageClassName,
+		StorageClassUID:     types.UID("storage-class-uid"),
+		StorageClassDigest:  "v1:sha256:storage-class-digest",
+		CatalogDigest:       "sha256:catalog-digest",
+		Provider:            "nvmesh",
+		Provisioner:         NVMeshStorageClassProvisioner,
+		Transition:          transition,
+		RequiredAccessModes: requiredAccessModesForTransition(transition),
 	}
+	if transition == ModelCacheTransitionRWXReadOnly {
+		selection.Provider = "sharedFilesystem"
+		selection.Provisioner = "shared.csi.example.com"
+	}
+	return selection
 }
 
 func testPersistedModelCacheStorageSelection(
@@ -89,6 +89,21 @@ func TestNewPersistedModelCacheStorageSelection(t *testing.T) {
 			workflow:   ModelCacheWorkflowRegular,
 			mode:       ModelCacheSelectionDurable,
 			resolved:   testResolvedModelCacheStorage(ModelCacheTransitionNVMesh),
+			wantFields: true,
+		},
+		{
+			name:       "durable regular rwxReadOnly",
+			workflow:   ModelCacheWorkflowRegular,
+			mode:       ModelCacheSelectionDurable,
+			resolved:   testResolvedModelCacheStorage(ModelCacheTransitionRWXReadOnly),
+			wantFields: true,
+		},
+		{
+			name:       "Helm rwxReadOnly is rejected",
+			workflow:   ModelCacheWorkflowHelm,
+			mode:       ModelCacheSelectionDurable,
+			resolved:   testResolvedModelCacheStorage(ModelCacheTransitionRWXReadOnly),
+			wantErr:    "requires regular workflow",
 			wantFields: true,
 		},
 		{
@@ -161,6 +176,37 @@ func TestNewPersistedModelCacheStorageSelection(t *testing.T) {
 			assert.Equal(t, tt.resolved.Transition, selection.Transition)
 		})
 	}
+}
+
+func TestPersistedModelCacheStorageSelectionRWXReadOnlyContract(t *testing.T) {
+	selection := testPersistedModelCacheStorageSelection(
+		ModelCacheSelectionDurable, ModelCacheTransitionRWXReadOnly)
+	require.NoError(t, selection.Validate())
+	assert.False(t, selection.EncryptionRequired)
+	assert.Equal(t,
+		[]corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+		selection.RequiredAccessModes)
+
+	raw, err := selection.Marshal()
+	require.NoError(t, err)
+	parsed, err := ParsePersistedModelCacheStorageSelection(raw)
+	require.NoError(t, err)
+	assert.Equal(t, selection, parsed)
+
+	encrypted := *selection
+	encrypted.EncryptionRequired = true
+	require.ErrorContains(t, encrypted.Validate(), "does not support encryption")
+
+	helm := *selection
+	helm.Workflow = ModelCacheWorkflowHelm
+	require.ErrorContains(t, helm.Validate(), "requires regular workflow")
+
+	extraMode := *selection
+	extraMode.RequiredAccessModes = []corev1.PersistentVolumeAccessMode{
+		corev1.ReadWriteMany,
+		corev1.ReadOnlyMany,
+	}
+	require.ErrorContains(t, extraMode.Validate(), "requires access modes [ReadWriteMany]")
 }
 
 func TestPersistedModelCacheStorageSelectionMarshalParseRoundTrip(t *testing.T) {

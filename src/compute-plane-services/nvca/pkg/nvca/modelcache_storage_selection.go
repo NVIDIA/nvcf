@@ -88,6 +88,9 @@ func (c *BackendK8sCache) persistModelCacheStorageSelection(
 			}
 		case resolved.Transition == nvcastorage.ModelCacheTransitionNVMesh:
 			mode = nvcastorage.ModelCacheSelectionDurable
+		case resolved.Transition == nvcastorage.ModelCacheTransitionRWXReadOnly &&
+			workflow == nvcastorage.ModelCacheWorkflowRegular:
+			mode = nvcastorage.ModelCacheSelectionDurable
 		default:
 			return fmt.Errorf("unsupported model cache transition %q", resolved.Transition)
 		}
@@ -97,7 +100,8 @@ func (c *BackendK8sCache) persistModelCacheStorageSelection(
 	if err != nil {
 		return fmt.Errorf("build model cache storage selection: %w", err)
 	}
-	if selection.Mode == nvcastorage.ModelCacheSelectionDurable {
+	if selection.Mode == nvcastorage.ModelCacheSelectionDurable &&
+		selection.Transition == nvcastorage.ModelCacheTransitionNVMesh {
 		selection.EncryptionRequired = c.featureFlagFetcher.IsFeatureFlagEnabled(featureflag.NVMeshEncryption)
 	}
 	payload, err := selection.Marshal()

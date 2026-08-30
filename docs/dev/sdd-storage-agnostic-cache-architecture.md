@@ -11,13 +11,19 @@ NVCA records the selection on the `ICMSRequest`, creates an immutable `ModelCach
 UID to the binding before it creates cache storage. Runtime code then uses the recorded binding. It does not select a
 different durable provider after a retry, restart, feature-gate change, or catalog change.
 
-Only the catalog-registered durable transition `nvmesh` is executable. Weka, OCI File Storage (FSS), and OCI Lustre
-remain disabled for new annotated requests in both model-cache workflows. Their catalog entries do not enable cache
-traffic.
+NVCA has two registered regular transition branches: `nvmesh` and `rwxReadOnly`. Only `nvmesh` is selected by the
+catalog. The shipped Weka, OCI File Storage (FSS), and OCI Lustre entries remain `disabled` for regular and Helm
+requests, so they do not enable NVCF cache traffic. Helm supports only `nvmesh`.
 
-This change also sets Kubernetes read-only intent on the PVC volume source and every model-cache mount. Automated
-tests prove the generated Kubernetes objects. They do not prove backend write denial, multi-Pod mounts, data identity,
-restart behavior, or performance. Those require functional qualification on the target storage system.
+For `rwxReadOnly`, NVCA populates one RWX PVC and returns that same claim to workload Pods. Workload construction sets
+the PVC volume source and every matching init-container and container mount read-only. The current branch accepts only
+binding-safe writer Jobs with no environment input, image-pull Secret, or Secret-backed volume. Current translated
+writer artifacts do not meet that restriction. This branch therefore supports controlled, credential-free NVCA
+storage-path tests; it is not yet an end-to-end production model-cache path for Weka or OCI FSS.
+
+Automated tests exercise schema and selection validation, controller state transitions, fake-client actions, and
+generated Pod objects. They do not mount a real CSI volume or prove backend write denial, multi-Pod access, data
+identity, an NVCA process restart, provider failure behavior, or performance.
 
 ## Table of contents
 
@@ -38,15 +44,16 @@ restart behavior, or performance. Those require functional qualification on the 
 ## Scope
 
 This design covers regular container model cache and Helm/MiniService model cache. It includes provider selection,
-binding ownership, NVMesh execution, read-only Kubernetes intent, cleanup guards, and the contract for adding another
-CSI provider.
+binding ownership, NVMesh regular and Helm execution, provider-neutral regular `rwxReadOnly` execution, Kubernetes
+read-only intent, cleanup guards, and the contract for enabling another CSI provider. The `rwxReadOnly` execution
+described here is limited to the credential-free writer contract above.
 
 It excludes container cache, function storage, internal storage, database storage, CSI driver installation, and
 performance qualification.
 
 ## Current support
 
-| Provisioner | Catalog access modes | Regular transition | Helm transition |
+| Provisioner | Catalog access modes | Shipped regular transition | Shipped Helm transition |
 |---|---|---|---|
 | `nvmesh-csi.excelero.com` | RWO, ROX | `nvmesh` | `nvmesh` |
 | `csi.weka.io` | RWX, ROX | `disabled` | `disabled` |
@@ -57,6 +64,12 @@ RWO means `ReadWriteOnce`, ROX means `ReadOnlyMany`, and RWX means `ReadWriteMan
 
 Catalog access modes record PVC modes exercised for an exact provider configuration. They do not prove an NVCF
 model-cache transition. In particular, a read-only Pod mount of an RWX claim is not ROX evidence.
+
+`rwxReadOnly` is registered runtime code, not a shipped provider enablement. It is valid only for regular model cache
+and requires `ReadWriteMany`. The schema and catalog validator reject it for Helm. It also rejects request-scoped
+writer inputs until binding-scoped input identity and cleanup are implemented. The shipped Weka and FSS entries remain
+`disabled` until that implementation gap is closed and their exact `nvcf-sc` configurations pass NVCA functional
+qualification.
 
 ## Cluster configuration
 
@@ -113,6 +126,7 @@ catalog once, before it creates the `ICMSRequest`.
 | `nvcf-sc` is absent | `none` | `ephemeral` |
 | Selected workflow transition is `disabled` | `none` | `ephemeral` |
 | Transition is `nvmesh` | `durable` | `durable` |
+| Transition is `rwxReadOnly` | `durable` | Invalid catalog; request creation fails |
 | Catalog is invalid or provisioner is unknown | Request creation fails | Request creation fails |
 | `nvcf-sc` is not `Retain` | Request creation fails | Request creation fails |
 
@@ -125,8 +139,10 @@ ICMS cache request
   -> persisted selection annotation
   -> persisted NVCA request finalizer
   -> Active ModelCacheBinding with exact request UID reference
-  -> binding UID labels on cache resources
-  -> provider transition
+  -> binding UID labels on NVCA-created cache resources
+  -> no request-scoped metadata or ICMSRequest owner references on shared resources
+  -> exact bound-PV identity validation for rwxReadOnly
+  -> recorded provider transition
   -> read-only workload volume and mounts
 ```
 
@@ -138,7 +154,7 @@ Annotation `nvca.nvcf.nvidia.io/model-cache-storage-selection` records:
 - StorageClass name, UID, and configuration digest;
 - catalog payload digest;
 - provider, provisioner, transition, and required access modes;
-- the NVMesh encryption decision;
+- the encryption decision, which may be `true` only for `nvmesh`;
 - binding name and API-assigned UID after the binding is committed.
 
 The annotation is strict JSON. Runtime validation rejects unknown fields, partial durable state, workflow changes, an
@@ -170,8 +186,10 @@ recorded provider data identity.
 
 Regular failure cleanup changes an `Active` binding to `Retiring` only when the exact request is its sole reference.
 `Retiring` blocks new references and normal runtime. That same regular request may resume interrupted cleanup.
-General zero-reference retirement, data garbage collection, binding deletion, `status.realized`, and conditions are not
-implemented. A zero-reference binding stays `Active`, and legacy idle garbage collection skips binding-owned cache data.
+General zero-reference retirement, successful-cache data garbage collection, binding deletion, `status.realized`, and
+conditions are not implemented. A zero-reference binding stays `Active`. Regular periodic cleanup skips binding-owned
+PVCs. Helm idle cleanup skips binding-owned primary PVs and encrypted StorageClasses. No controller retires or deletes
+a successful `rwxReadOnly` binding, populated PVC, retained completed Job, or backing data.
 
 Binding creation order:
 
@@ -191,13 +209,15 @@ closed. The exact sole regular request may resume cleanup against its Retiring b
 reference is replaced only after the old request UID is absent. If request deletion starts while the reference is being
 committed, NVCA removes the newly added reference.
 
-The current binding name hashes only the cache handle because existing NVMesh resource names are handle-scoped. The
-same handle in another workflow or sharing domain collides and fails closed. A future resource-naming migration is
+The current binding name hashes only the cache handle because regular and Helm cache resource names are handle-scoped.
+The same handle in another workflow or sharing domain collides and fails closed. A future resource-naming migration is
 required before those domains can use independent bindings for the same handle.
 
 ## Regular model cache
 
-The regular path runs in the Pod instance namespace.
+The regular writer and workload Pods run in the Pod instance namespace.
+
+### `nvmesh`
 
 1. Create `rw-pvc-<handle>` with RWO and `writer-job-<handle>`.
 2. Wait for population and volume detachment.
@@ -205,18 +225,56 @@ The regular path runs in the Pod instance namespace.
 4. Mount the reader PVC with `PersistentVolumeClaimVolumeSource.readOnly: true`.
 5. Set every matching init-container and container `volumeMount.readOnly: true`.
 
-The regular path has no Kubernetes Lease. Its mutex serializes setup only within one NVCA process. Deterministic names
-detect collisions; they do not elect one writer across the cluster. The binding UID labels the writer PVC, Job, Job Pod
-template, retained PV, and reader PVC. Existing same-name PVCs and Jobs require the exact binding UID and immutable
-intent. Other same-name objects are not adopted.
+### `rwxReadOnly`
+
+1. Remove request metadata and owner references from the shared PVC, Job, and Pod template. Disable automatic
+   service-account token mounting. Reject any writer environment input, image-pull Secret, or Secret-backed volume.
+2. Create one `rw-pvc-<handle>` with RWX and `writer-job-<handle>`. The Job must not use
+   `ttlSecondsAfterFinished`; it must reference and mount that exact PVC writable.
+3. After the API assigns the PVC UID, record that UID in the immutable Job Pod-template annotation. Reject a Job whose
+   recorded UID differs from the current PVC UID.
+4. Wait for the PVC to bind and the writer Job to complete.
+5. Require a non-terminating, Bound PVC and PV. Validate the PV by StorageClass, `Retain`, exact RWX mode, volume mode,
+   persisted CSI provisioner, non-empty CSI volume handle, and claim reference namespace, name, and PVC UID.
+6. Revalidate the Active binding, bound PV, PVC-UID Job witness, and completed Job within each populated-marker update
+   attempt. After the marker update, repeat those checks before returning the claim. Retain the completed Job as the
+   publication fence.
+7. On later reconciles, require both the populated PVC label and the exact completed Job. A missing, terminating, or
+   non-completed fence Job; a non-Active binding; or a storage-identity mismatch fails closed.
+8. Return the same RWX PVC name. Set the workload PVC source and every matching init-container and container mount
+   read-only.
+
+This transition creates no reader PVC, does not modify the PV during publication, does not wait for detach, and performs
+no clone or copy. The claim remains RWX. Read-only publication is Kubernetes Pod mount intent, not a conversion to ROX.
+The API server admits only one object at the deterministic Job name, and replicas adopt only that exact object.
+Retaining the completed Job prevents a replica with a stale pre-publication read from recreating a writer. The retained
+Job is accepted only when it contains no environment input or Secret reference.
+
+Existing same-name PVCs and Jobs require the exact binding UID and immutable intent. Other same-name objects are not
+adopted. Before creation, NVCA removes request-scoped labels and annotations and all ICMSRequest owner references from
+the shared writer PVC, Job, and Pod template. Existing shared objects that retain request ownership fail closed. This
+prevents deletion of one request from garbage-collecting shared cache objects. Automated two-reference reuse tests use
+credential-free synthetic Jobs. Production reuse requires binding-scoped writer input identity, Secret lifecycle, and
+failure recovery.
+
+For `nvmesh`, the binding UID labels the writer PVC, Job and Pod template, retained PV, and reader PVC. For
+`rwxReadOnly`, it labels the writer PVC, Job, and Pod template. NVCA does not label the dynamically provisioned RWX PV;
+ownership is proved through the exact PVC claim reference and persisted storage identity. The regular path has no
+Kubernetes Lease. Its mutex serializes setup only within one NVCA process.
 
 Before any destructive failure cleanup, NVCA atomically changes the binding from `Active` to `Retiring` if the exact
 request is its sole reference. A concurrent reference prevents retirement and cleanup. The same request can resume
-interrupted cleanup while the binding remains `Retiring`. Cleanup validates exact resource names, immutable PVC and Job
-intent, claim ownership, and binding UID before each destructive change. Legacy periodic reader-PVC garbage collection
-skips binding-owned PVCs.
+interrupted cleanup while the binding remains `Retiring`. Cleanup inventories only resources recorded for the selected
+transition, requires the binding UID on the Job and PVC, and validates the exact PV/PVC identity before each PV change.
+Job and PVC deletes use UID and resourceVersion preconditions. For a bound claim, cleanup changes the exact PV from
+`Retain` to `Delete` before deleting the PVC. A retry accepts an already-applied `Delete` policy only during cleanup,
+revalidates every other identity field, and continues. Legacy periodic cleanup skips binding-owned PVCs.
 
 ## Helm model cache
+
+Only `nvmesh` is executable for Helm. The schema, catalog validator, and persisted-selection validator reject
+`rwxReadOnly`. The writer and readers use different namespaces, so they cannot reference one namespaced PVC. A
+provider-neutral, no-copy namespace-local reader mapping and its lifecycle and cleanup logic are not implemented.
 
 The Helm writer runs in `nvca-modelcache-init`.
 
@@ -246,6 +304,7 @@ binding-owned primary PVs and their encrypted StorageClasses.
 ## Encryption
 
 Encryption is part of the durable selection and binding decision. A later feature-gate change does not change it.
+Only the `nvmesh` transition supports encryption. The `rwxReadOnly` transition rejects it.
 
 NVMesh encryption uses existing sharing-domain-scoped resources:
 
@@ -269,10 +328,17 @@ their deterministic names, never Secret contents.
 | Missing writer requires dynamic provisioning after class replacement | Terminal failure before PVC creation |
 | Runtime binding is missing, replaced, `Retiring`, or lacks the exact request reference | Terminal failure; the exact sole regular request may resume cleanup against `Retiring`, and Helm cleanup has the validated tombstone exception |
 | Object has missing or foreign ownership | Never adopt or delete that object; runtime fails terminal and cleanup refuses that target |
-| Missing unencrypted writer before initialization | Recreate only after live `nvcf-sc` matches the binding snapshot |
+| `rwxReadOnly` writer PVC is missing while its Job exists | Terminal failure; do not recreate or publish the claim |
+| `rwxReadOnly` writer contains environment input or a Secret reference | Terminal failure before writer resources are created |
+| `rwxReadOnly` Job records another PVC UID | Terminal failure; do not publish or recreate the writer |
+| `rwxReadOnly` populated label lacks an exact completed Job fence | Terminal failure; do not publish the claim |
+| `rwxReadOnly` PVC, PV, or Job is terminating; or the PVC/PV is not Bound | Terminal failure before publication |
+| `rwxReadOnly` bound PV identity or volume mode does not match | Terminal failure before workload publication |
+| Missing unencrypted writer PVC and Job before initialization | Recreate only after live `nvcf-sc` matches the binding snapshot |
 | An artifact that should already exist in the persisted runtime phase is missing or invalid | Terminal failure |
 | Deterministic selection, binding, or ownership data does not match | Terminal failure before the conflicting object is used or changed |
-| Cleanup target is already absent | Idempotent success |
+| Recorded cleanup Job or PVC is already absent | Idempotent skip; a bound PVC that references a missing PV still fails cleanup |
+| Cleanup retry finds its exact PV already changed to `Delete` | Revalidate every other identity field and continue cleanup |
 | Durable cache execution reports failure | Terminal failure, no uncached fallback |
 | Transient Kubernetes API error | Requeue without changing selection or phase |
 | Forbidden, Unauthorized, Invalid, or Gone API response | Surface the API error without converting deterministic state to a terminal cache failure |
@@ -305,12 +371,21 @@ unlabeled legacy PVC, PV, Job, Secret, or Lease into a new binding.
 
 Current limitations:
 
-- only NVMesh has executable regular and Helm transitions;
-- regular writer serialization is not a cluster-wide Lease;
+- `nvmesh` supports regular and Helm model cache; `rwxReadOnly` supports only regular model cache, and no shipped
+  provider entry enables it;
+- Weka, OCI FSS, and OCI Lustre remain disabled pending live NVCA qualification;
+- current translated writer artifacts contain inputs rejected by the binding-safe `rwxReadOnly` contract, so
+  end-to-end NVCA population is not yet supported;
+- binding-scoped writer input identity, Secret creation/adoption/rotation/cleanup, and removal of raw credentials from
+  the retained fence Job are not implemented;
+- a failed shared writer with multiple binding references has no binding-level failure state or recovery transition;
+- the NVMesh regular writer is not serialized by a cluster-wide Lease;
 - binding names cannot separate the same handle across workflows or sharing domains;
 - realized state and binding conditions are not populated;
 - only regular sole-request failure cleanup marks a binding `Retiring`;
 - no general retirement or provider-data garbage-collection controller exists;
+- successful `rwxReadOnly` PVCs and completed fence Jobs remain until a future binding lifecycle and garbage-collection
+  controller removes them;
 - no provider replacement controller exists;
 - binding-specific metrics are not implemented;
 - backend functional qualification is outside the unit test suite.
@@ -323,7 +398,9 @@ cache state first. General drain, zero-reference retirement, and retained-data g
 ### Automated tests in this change
 
 - strict catalog and annotation parsing;
+- executable JSON Schema acceptance and rejection for regular `rwxReadOnly`, required RWX, and Helm refusal;
 - exact provisioner lookup and workflow transition selection;
+- regular-only `rwxReadOnly` schema and selection, including rejection for Helm and encryption;
 - `Retain`, UID, StorageClass digest, and catalog digest checks;
 - missing class, unknown provider, disabled transition, and feature-gate outcomes;
 - binding API schema, immutable spec, status subresource, and generated clients;
@@ -332,6 +409,21 @@ cache state first. General drain, zero-reference retirement, and retained-data g
 - regular and Helm binding UID propagation, Helm request UID propagation, and stale-generation rejection;
 - sole-reference retirement, concurrent-join refusal, and interrupted regular cleanup retry;
 - immutable regular and Helm writer-object adoption, drift refusal, and create-race validation;
+- one provider-neutral RWX writer PVC and Job with no reader PVC;
+- writer-Job proof of an exact writable mount or volume device for that PVC;
+- removal of per-request metadata and owner references, credential-input refusal, controlled two-request reuse, and
+  unsafe existing-object refusal;
+- exact RWX PV claim UID, CSI driver, access mode, volume mode, StorageClass, reclaim policy, and volume-handle
+  validation;
+- retained completed-Job publication fencing, exact Job-to-PVC UID witness, missing-fence refusal, terminating-object
+  refusal, non-Bound PV refusal, Job-spec drift refusal, and retry behavior;
+- publication-race refusal when the PV, completed Job, or Active binding changes during a marker-update retry;
+- fake-client action traces showing no second PVC, PV mutation, VolumeAttachment access, writer PVC deletion, or
+  completed Job deletion on tested publication paths;
+- same-claim worker injection with both the PVC source and every matching mount read-only;
+- setup-failure cleanup that changes an exact bound `Retain` PV before deleting its claim;
+- failure-cleanup retry after the exact PV is already changed from `Retain` to `Delete`, with other identity drift
+  still refused;
 - transient and non-transient Kubernetes API error classification;
 - Helm tombstone authorization and refusal, including reader-only cleanup after reference release;
 - Helm reader PV/PVC and regular Job/PVC UID and resourceVersion delete preconditions;
@@ -341,8 +433,11 @@ cache state first. General drain, zero-reference retirement, and retained-data g
 - annotation-free compatibility behavior;
 - operator catalog mirroring, RBAC, CRD installation, and uninstall cleanup.
 
-These tests use fake clients, unit tests, and Kubernetes `envtest`. They prove control-plane decisions and generated
-objects only.
+These tests use fake clients, unit tests, and Kubernetes `envtest`. They prove control-plane decisions, state
+transitions, API actions, and generated objects only. Provider names in fixtures exercise selection data; the tests do
+not contact those CSI drivers or storage backends. Repeat reconcile is tested, but an actual NVCA process restart
+remains part of provider qualification. The two-reference and writer-publication fixtures are credential-free; they do
+not prove that current translated production writer artifacts can execute this transition.
 
 ### Required provider qualification
 
@@ -356,7 +451,8 @@ A workflow stays `disabled` until an exact provider configuration passes all of 
 6. Verify `ro` in `/proc/self/mountinfo` inside each reader.
 7. Deny create, append, rename, chmod, truncate, and delete from each reader.
 8. Prove a same-provider baseline mount is writable by the test UID/GID.
-9. Restart writer and readers, restart NVCA, and reschedule readers to another eligible node.
+9. Restart an interrupted writer before publication, restart NVCA and readers, and reschedule readers to another
+   eligible node. Prove no writer starts after publication.
 10. Inject provisioning, mount, writer, cancellation, and cleanup failures.
 11. Retry every lifecycle step and verify no duplicate writer, leaked object, or data loss.
 12. Prove cleanup cannot remove data while another reader uses it.
@@ -372,13 +468,21 @@ eligible node matrix, catalog version, date, and evidence reference. Performance
 3. Record only access modes proven on the exact configuration.
 4. Implement a named regular or Helm transition. Do not infer a transition from access modes.
 5. Add unit, failure, retry, ownership, cleanup, and read-only object tests.
-6. Run the complete functional qualification above.
-7. Enable only the passing workflow in the catalog.
-8. Deploy transition code and the enabling catalog together.
-9. Verify new requests persist the expected provisioner, transition, digests, and binding.
+6. Implement binding-scoped writer input and Secret identity, adoption, rotation, and cleanup when the transition
+   retains or shares a writer Job.
+7. Implement a binding-level failure and recovery path for a shared writer.
+8. Run the complete functional qualification above with translated NVCF writer artifacts.
+9. Enable only the passing workflow in the catalog.
+10. Deploy transition code and the enabling catalog together.
+11. Verify new requests persist the expected provisioner, transition, digests, and binding.
 
-For Weka or OCI, the missing item is not StorageClass templating. It is a tested, provider-specific no-copy mapping
-from one populated data identity to namespace-local read-only readers, plus its cleanup implementation.
+For Weka and OCI FSS regular model cache, the provider-neutral `rwxReadOnly` storage path exists, but the shipped
+entries remain disabled. Enablement requires binding-safe translated writer inputs, shared-writer failure recovery,
+exact provider functional qualification, and a production decision for zero-reference retirement and retained-data
+cleanup.
+
+Helm still requires a tested no-copy mapping from one populated data identity to namespace-local read-only readers,
+together with ownership, retry, and cleanup implementation.
 
 ## Rollout and rollback
 
@@ -386,7 +490,8 @@ Rollout order:
 
 1. Install the `ModelCacheBinding` CRD and RBAC.
 2. Install and mirror the catalog.
-3. Deploy NVCA with persisted selection and binding support.
+3. Deploy NVCA with persisted selection, binding support, the NVMesh transitions, and the regular `rwxReadOnly`
+   transition.
 4. Verify one new NVMesh regular request and one new NVMesh Helm request.
 5. Verify selection annotations, Active bindings, exact UID labels, read-only object intent, and cleanup refusal tests.
 6. Keep every external transition disabled until qualification passes.
@@ -403,5 +508,5 @@ to an NVCA version that does not understand bindings while they are active. Drai
 - [Persisted selection](https://github.com/NVIDIA/nvcf/blob/main/src/compute-plane-services/nvca/pkg/storage/modelcache_selection.go)
 - [Binding API](https://github.com/NVIDIA/nvcf/blob/main/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1/modelcachebinding_types.go)
 - [Binding lifecycle](https://github.com/NVIDIA/nvcf/blob/main/src/compute-plane-services/nvca/pkg/nvca/modelcache_binding.go)
+- [RWX read-only runtime](https://github.com/NVIDIA/nvcf/blob/main/src/compute-plane-services/nvca/pkg/nvca/k8scomputebackend_modelcache_rwx_readonly.go)
 - [Kubernetes persistent-volume access modes](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#access-modes)
-- [Runtime integration issue](https://github.com/NVIDIA/nvcf/issues/1326)

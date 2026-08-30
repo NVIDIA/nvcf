@@ -191,16 +191,27 @@ func (s *PersistedModelCacheStorageSelection) Validate() error {
 
 	switch s.Mode {
 	case ModelCacheSelectionDurable:
-		if s.Transition != ModelCacheTransitionNVMesh {
+		switch s.Transition {
+		case ModelCacheTransitionNVMesh:
+			if s.Provider != ModelCacheProviderNVMesh {
+				return fmt.Errorf("model cache transition %q requires provider %q, got %q",
+					s.Transition, ModelCacheProviderNVMesh, s.Provider)
+			}
+			if s.Provisioner != NVMeshStorageClassProvisioner {
+				return fmt.Errorf("model cache transition %q requires provisioner %q, got %q",
+					s.Transition, NVMeshStorageClassProvisioner, s.Provisioner)
+			}
+		case ModelCacheTransitionRWXReadOnly:
+			if s.Workflow != ModelCacheWorkflowRegular {
+				return fmt.Errorf("model cache transition %q requires regular workflow, got %q",
+					s.Transition, s.Workflow)
+			}
+			if s.EncryptionRequired {
+				return fmt.Errorf("model cache transition %q does not support encryption",
+					s.Transition)
+			}
+		default:
 			return fmt.Errorf("durable model cache selection has unsupported transition %q", s.Transition)
-		}
-		if s.Provider != ModelCacheProviderNVMesh {
-			return fmt.Errorf("model cache transition %q requires provider %q, got %q",
-				s.Transition, ModelCacheProviderNVMesh, s.Provider)
-		}
-		if s.Provisioner != NVMeshStorageClassProvisioner {
-			return fmt.Errorf("model cache transition %q requires provisioner %q, got %q",
-				s.Transition, NVMeshStorageClassProvisioner, s.Provisioner)
 		}
 		if !slices.Equal(s.RequiredAccessModes, requiredAccessModesForTransition(s.Transition)) {
 			return fmt.Errorf("model cache transition %q requires access modes %v, got %v",

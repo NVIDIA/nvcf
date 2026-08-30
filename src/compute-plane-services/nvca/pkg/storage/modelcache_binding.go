@@ -79,10 +79,10 @@ func NewModelCacheBinding(
 		PersistentVolumeClaimNames: []string{rwPVCName},
 		JobNames:                   []string{jobName},
 	}
-	if selection.Workflow == ModelCacheWorkflowRegular {
+	if selection.Workflow == ModelCacheWorkflowRegular && selection.Transition == ModelCacheTransitionNVMesh {
 		resources.PersistentVolumeClaimNames = append(
 			resources.PersistentVolumeClaimNames, "ro-pvc-"+cacheHandle)
-	} else {
+	} else if selection.Workflow == ModelCacheWorkflowHelm {
 		resources.LeaseName = buildInitLeaseName(cacheHandle)
 	}
 	if selection.EncryptionRequired {

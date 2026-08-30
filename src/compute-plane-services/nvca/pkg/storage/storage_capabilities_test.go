@@ -246,6 +246,18 @@ func TestValidateStorageCapabilityCatalog(t *testing.T) {
 			d.AccessModes = accessModes("ReadWriteOnce")
 			c.Drivers[NVMeshStorageClassProvisioner] = d
 		}, want: "requires ReadWriteOnce and ReadOnlyMany"},
+		{name: "rwxReadOnly transition is rejected for Helm", mutate: func(c *storageCapabilityCatalog) {
+			d := c.Drivers[NVMeshStorageClassProvisioner]
+			d.AccessModes = accessModes("ReadWriteOnce", "ReadOnlyMany", "ReadWriteMany")
+			d.Transitions.HelmModelCache = ModelCacheTransitionRWXReadOnly
+			c.Drivers[NVMeshStorageClassProvisioner] = d
+		}, want: "only supported for regularModelCache"},
+		{name: "rwxReadOnly transition lacks ReadWriteMany", mutate: func(c *storageCapabilityCatalog) {
+			d := c.Drivers[NVMeshStorageClassProvisioner]
+			d.Transitions.RegularModelCache = ModelCacheTransitionRWXReadOnly
+			d.Transitions.HelmModelCache = ModelCacheTransitionDisabled
+			c.Drivers[NVMeshStorageClassProvisioner] = d
+		}, want: "requires ReadWriteMany"},
 	}
 
 	for _, tt := range tests {
@@ -255,6 +267,34 @@ func TestValidateStorageCapabilityCatalog(t *testing.T) {
 			require.ErrorContains(t, validateStorageCapabilityCatalog(catalog), tt.want)
 		})
 	}
+}
+
+func TestValidateStorageCapabilityCatalogAllowsRegularRWXReadOnly(t *testing.T) {
+	const provisioner = "shared.csi.example.com"
+	catalog := validStorageCapabilityCatalog()
+	catalog.Drivers[provisioner] = storageDriverSpec{
+		Provider:    "sharedFilesystem",
+		AccessModes: accessModes("ReadWriteMany", "ReadOnlyMany"),
+		Transitions: storageTransitions{
+			RegularModelCache: ModelCacheTransitionRWXReadOnly,
+			HelmModelCache:    ModelCacheTransitionDisabled,
+		},
+	}
+
+	require.NoError(t, validateStorageCapabilityCatalog(catalog))
+	assert.Equal(t,
+		[]corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+		requiredAccessModesForTransition(ModelCacheTransitionRWXReadOnly))
+
+	sc := testModelCacheStorageClass()
+	sc.Provisioner = provisioner
+	selection, err := selectModelCacheStorageFromObjects(
+		sc, catalog, "sha256:catalog", ModelCacheWorkflowRegular)
+	require.NoError(t, err)
+	assert.Equal(t, ModelCacheTransitionRWXReadOnly, selection.Transition)
+	assert.Equal(t,
+		[]corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+		selection.RequiredAccessModes)
 }
 
 func TestValidateStorageCapabilityCatalogAllowsDisabledTransitionsWithEmptyModes(t *testing.T) {
@@ -306,4 +346,18 @@ func TestShippedStorageCapabilityCatalog(t *testing.T) {
 	schemaRaw, err := os.ReadFile(filepath.Join(chartDir, "files", "nvcf-storage-capabilities-v1alpha1.schema.json"))
 	require.NoError(t, err)
 	assert.True(t, json.Valid(schemaRaw), "shipped JSON schema must be valid JSON")
+	var schema map[string]any
+	require.NoError(t, json.Unmarshal(schemaRaw, &schema))
+	definitions, ok := schema["$defs"].(map[string]any)
+	require.True(t, ok)
+	regularStrategy, ok := definitions["regularTransitionStrategy"].(map[string]any)
+	require.True(t, ok)
+	helmStrategy, ok := definitions["helmTransitionStrategy"].(map[string]any)
+	require.True(t, ok)
+	assert.ElementsMatch(t,
+		[]any{ModelCacheTransitionDisabled, ModelCacheTransitionNVMesh, ModelCacheTransitionRWXReadOnly},
+		regularStrategy["enum"])
+	assert.ElementsMatch(t,
+		[]any{ModelCacheTransitionDisabled, ModelCacheTransitionNVMesh},
+		helmStrategy["enum"])
 }

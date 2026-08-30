@@ -87,6 +87,19 @@ const (
 	primaryPVLabelKey   = fqdnPrefix + "/modelcache-primary-pv"
 	primaryPVLabelValue = "true"
 
+	// ModelCachePopulatedLabelKey marks a binding-owned PVC as holding a fully
+	// populated model cache. Both model-cache runtimes use this public package
+	// contract when the retained PVC, rather than a rewritten PV, is the data
+	// identity.
+	ModelCachePopulatedLabelKey = fqdnPrefix + "/modelcache-populated"
+	// ModelCachePopulatedLabelValue is the ready value for ModelCachePopulatedLabelKey.
+	ModelCachePopulatedLabelValue = "true"
+
+	// ModelCacheWriterPVCUIDAnnotationKey records the exact PVC instance populated
+	// by an immutable writer Job. Readers reject a completed Job whose witness
+	// does not match the current claim UID.
+	ModelCacheWriterPVCUIDAnnotationKey = fqdnPrefix + "/modelcache-writer-pvc-uid"
+
 	// cachePopulatedLabelKey marks a per-handle backing PVC as holding a fully
 	// populated cache. It is the durable, restart-safe "cache populated" signal
 	// for the backends that key reuse on a PVC rather than an NVMesh primary PV:
@@ -95,8 +108,8 @@ const (
 	// init, so a cold reconcile (e.g. after an agent restart, when the in-memory
 	// init-status fan-out is empty) never re-runs the writer or hangs on the
 	// lease. It is the PVC analogue of the primaryPVLabelKey marker.
-	cachePopulatedLabelKey   = fqdnPrefix + "/modelcache-populated"
-	cachePopulatedLabelValue = "true"
+	cachePopulatedLabelKey   = ModelCachePopulatedLabelKey
+	cachePopulatedLabelValue = ModelCachePopulatedLabelValue
 
 	// The annotation applied to primary PV's that denotes the last time
 	// a function or task referenced it.

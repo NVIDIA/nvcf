@@ -79,10 +79,40 @@ const (
 	ImagePullIssueAlternateReason = "ImagePullBackOff"
 	InferenceContainerName        = "inference"
 	InitContainerName             = "init"
-	RWPVCSuffix                   = "rw-pvc"
-	ROPVCSuffix                   = "ro-pvc"
+	RWPVCPrefix                   = "rw-pvc-"
+	ROPVCPrefix                   = "ro-pvc-"
 	ModelVolumeName               = "model-data"
 )
+
+func regularModelCachePVCNameHandle(name, prefix string) (string, bool) {
+	handle, found := strings.CutPrefix(name, prefix)
+	return handle, found && handle != ""
+}
+
+func regularModelCacheReaderPVCName(writerPVCName string) (string, error) {
+	handle, ok := regularModelCachePVCNameHandle(writerPVCName, RWPVCPrefix)
+	if !ok {
+		return "", fmt.Errorf("regular model cache writer PVC name %q must start with %q and include a cache handle",
+			writerPVCName, RWPVCPrefix)
+	}
+	return ROPVCPrefix + handle, nil
+}
+
+func classifyRegularModelCachePVCName(name string) (reader bool, err error) {
+	if _, ok := regularModelCachePVCNameHandle(name, RWPVCPrefix); ok {
+		return false, nil
+	}
+	if _, ok := regularModelCachePVCNameHandle(name, ROPVCPrefix); ok {
+		return true, nil
+	}
+	return false, fmt.Errorf("regular model cache PVC name %q must start with %q or %q and include a cache handle",
+		name, RWPVCPrefix, ROPVCPrefix)
+}
+
+func isRegularModelCacheWriterPVCName(name string) bool {
+	_, ok := regularModelCachePVCNameHandle(name, RWPVCPrefix)
+	return ok
+}
 
 type K8sComputeBackend struct {
 	clients        *kubeclients.KubeClients
@@ -705,6 +735,20 @@ func persistedRegularModelCacheSelection(
 	}
 }
 
+func regularModelCacheRuntimeDecision(
+	req *nvcav2beta1.ICMSRequest,
+	legacyEnabled bool,
+) (enabled bool, persisted bool, err error) {
+	selection, err := persistedRegularModelCacheSelection(req)
+	if err != nil {
+		return false, false, err
+	}
+	if selection == nil {
+		return legacyEnabled, false, nil
+	}
+	return selection.Mode == nvcastorage.ModelCacheSelectionDurable, true, nil
+}
+
 func validatePersistedRegularModelCacheArtifacts(
 	selection *nvcastorage.PersistedModelCacheStorageSelection,
 	rwPVC, initJob function.LaunchArtifact,
@@ -745,6 +789,19 @@ func (c K8sComputeBackend) setupContainerModelCaching(ctx context.Context,
 			return nil, "", err
 		}
 		encryptionRequired = selection.EncryptionRequired
+		switch selection.Transition {
+		case nvcastorage.ModelCacheTransitionNVMesh:
+		case nvcastorage.ModelCacheTransitionRWXReadOnly:
+			if encryptionRequired {
+				return nil, "", nvcaerrors.TerminalError(fmt.Errorf(
+					"rwxReadOnly model cache transition cannot require NVMesh encryption"))
+			}
+			rwPVC.Spec.AccessModes = append(
+				[]corev1.PersistentVolumeAccessMode(nil), RWXAccessMode...)
+		default:
+			return nil, "", nvcaerrors.TerminalError(fmt.Errorf(
+				"unsupported regular model cache transition %q", selection.Transition))
+		}
 		expectedStorageClass, err := regularModelCacheExpectedStorageClassName(binding)
 		if err != nil {
 			return nil, "", nvcaerrors.TerminalError(err)

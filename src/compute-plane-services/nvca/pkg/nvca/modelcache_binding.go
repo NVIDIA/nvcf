@@ -43,6 +43,8 @@ var (
 		"ICMS request was replaced while persisting model cache binding")
 	errRegularModelCacheBindingRetiring = errors.New(
 		"regular model cache binding is Retiring")
+	errRegularModelCacheBindingReferenceReleased = errors.New(
+		"regular model cache binding request reference was released")
 )
 
 type modelCacheBindingInput struct {
@@ -486,8 +488,9 @@ func validateActiveModelCacheBindingForRequest(
 	}
 	if !nvcastorage.ModelCacheBindingHasRequestReference(
 		binding, req.Namespace, req.Name, req.UID) {
-		return fmt.Errorf("model cache binding %s/%s has no reference to request %s/%s UID %s",
-			binding.Namespace, binding.Name, req.Namespace, req.Name, req.UID)
+		return fmt.Errorf("%w: model cache binding %s/%s has no reference to request %s/%s UID %s",
+			errRegularModelCacheBindingReferenceReleased, binding.Namespace, binding.Name,
+			req.Namespace, req.Name, req.UID)
 	}
 	return nil
 }
@@ -528,13 +531,21 @@ func (c *BackendK8sCache) beginRegularModelCacheBindingRetirement(
 			binding, input.selection, input.sharingDomain, input.cacheHandle, input.writerNamespace); err != nil {
 			return nvcaerrors.TerminalError(err)
 		}
-		sole, err := validateExactModelCacheBindingRequestReference(binding, req)
-		if err != nil {
-			return nvcaerrors.TerminalError(err)
+		releasedWithNoUsers := len(binding.Status.RequestReferences) == 0
+		sole := false
+		if !releasedWithNoUsers {
+			sole, err = validateExactModelCacheBindingRequestReference(binding, req)
+			if err != nil {
+				return nvcaerrors.TerminalError(err)
+			}
 		}
 
 		switch binding.Status.Phase {
 		case nvcav2beta1.ModelCacheBindingPhaseActive:
+			if releasedWithNoUsers {
+				return nvcaerrors.TerminalError(fmt.Errorf(
+					"Active model cache binding %s/%s has no reference to any request", binding.Namespace, binding.Name))
+			}
 			if !sole {
 				result = binding
 				return nil
@@ -550,7 +561,7 @@ func (c *BackendK8sCache) beginRegularModelCacheBindingRetirement(
 			authorized = true
 			return nil
 		case nvcav2beta1.ModelCacheBindingPhaseRetiring:
-			if !sole {
+			if !sole && !releasedWithNoUsers {
 				return nvcaerrors.TerminalError(fmt.Errorf(
 					"Retiring model cache binding %s/%s has other request references",
 					binding.Namespace, binding.Name))
@@ -575,6 +586,41 @@ func (c *BackendK8sCache) beginRegularModelCacheBindingRetirement(
 	return result, authorized, nil
 }
 
+func (c *BackendK8sCache) resumeRetiringRegularModelCacheCleanup(
+	ctx context.Context,
+	req *nvcav2beta1.ICMSRequest,
+) error {
+	input, err := c.modelCacheBindingInput(req)
+	if err != nil {
+		return fmt.Errorf("resolve model cache binding before deletion cleanup: %w", err)
+	}
+	if input == nil || input.selection.Workflow != nvcastorage.ModelCacheWorkflowRegular ||
+		input.selection.BindingName == "" || input.selection.BindingUID == "" {
+		return nil
+	}
+	binding, err := c.clients.BART.NvcaV2beta1().
+		ModelCacheBindings(nvcastorage.ModelCacheInitNamespace).
+		Get(ctx, input.selection.BindingName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("get model cache binding before deletion cleanup: %w", err)
+	}
+	if err := nvcastorage.ValidateModelCacheBindingIntent(
+		binding, input.selection, input.sharingDomain, input.cacheHandle, input.writerNamespace); err != nil {
+		return nvcaerrors.TerminalError(err)
+	}
+	if binding.Status.Phase != nvcav2beta1.ModelCacheBindingPhaseRetiring {
+		return nil
+	}
+	helper, ok := c.k8sArtifactHelper.(K8sComputeBackend)
+	if !ok {
+		return fmt.Errorf("resume Retiring model cache cleanup: expected K8sComputeBackend, got %T",
+			c.k8sArtifactHelper)
+	}
+	if err := helper.CleanupModelCachingSetupArtifacts(ctx, req); err != nil {
+		return fmt.Errorf("resume Retiring model cache cleanup: %w", err)
+	}
+	return nil
+}
 func validateExactModelCacheBindingRequestReference(
 	binding *nvcav2beta1.ModelCacheBinding,
 	req *nvcav2beta1.ICMSRequest,

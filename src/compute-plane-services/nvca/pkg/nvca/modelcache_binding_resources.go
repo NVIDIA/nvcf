@@ -33,6 +33,7 @@ import (
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
 	nvcaerrors "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/errors"
 	nvcastorage "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
+	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 func (c K8sComputeBackend) prepareRegularModelCacheBindingResources(
@@ -47,12 +48,24 @@ func (c K8sComputeBackend) prepareRegularModelCacheBindingResources(
 	if rwPVC == nil || initJob == nil {
 		return nvcaerrors.TerminalError(fmt.Errorf("regular model cache PVC or init Job is nil"))
 	}
-	roPVCName := strings.ReplaceAll(rwPVC.Name, RWPVCSuffix, ROPVCSuffix)
-	if !slices.Contains(binding.Spec.Resources.PersistentVolumeClaimNames, rwPVC.Name) ||
-		!slices.Contains(binding.Spec.Resources.PersistentVolumeClaimNames, roPVCName) {
+	roPVCName, err := regularModelCacheReaderPVCName(rwPVC.Name)
+	if err != nil {
+		return nvcaerrors.TerminalError(err)
+	}
+	writerModes, _, separateReader, err := regularModelCacheAccessModePlan(binding)
+	if err != nil {
+		return nvcaerrors.TerminalError(err)
+	}
+	if !slices.Contains(binding.Spec.Resources.PersistentVolumeClaimNames, rwPVC.Name) {
 		return nvcaerrors.TerminalError(fmt.Errorf(
-			"regular model cache PVC names %q and %q do not match binding intent %v",
-			rwPVC.Name, roPVCName, binding.Spec.Resources.PersistentVolumeClaimNames))
+			"regular model cache writer PVC name %q does not match binding intent %v",
+			rwPVC.Name, binding.Spec.Resources.PersistentVolumeClaimNames))
+	}
+	if separateReader != slices.Contains(binding.Spec.Resources.PersistentVolumeClaimNames, roPVCName) {
+		return nvcaerrors.TerminalError(fmt.Errorf(
+			"regular model cache reader PVC name %q does not match transition %q intent %v",
+			roPVCName, binding.Spec.Decision.Transition,
+			binding.Spec.Resources.PersistentVolumeClaimNames))
 	}
 	if !slices.Contains(binding.Spec.Resources.JobNames, initJob.Name) {
 		return nvcaerrors.TerminalError(fmt.Errorf(
@@ -69,22 +82,38 @@ func (c K8sComputeBackend) prepareRegularModelCacheBindingResources(
 				kind, namespace, binding.Spec.Resources.WriterNamespace))
 		}
 	}
-
-	for _, obj := range []metav1.Object{rwPVC, initJob, &initJob.Spec.Template.ObjectMeta} {
-		if err := nvcastorage.SetModelCacheBindingUIDLabel(obj, binding.UID); err != nil {
+	if binding.Spec.Decision.Transition == nvcastorage.ModelCacheTransitionRWXReadOnly {
+		if err := prepareRWXReadOnlySharedWriterJob(initJob); err != nil {
 			return nvcaerrors.TerminalError(err)
 		}
 	}
 
-	roPVCIntent := rwPVC.DeepCopy()
-	roPVCIntent.Name = roPVCName
-	roPVCIntent.Spec.AccessModes = ROAccessMode
+	for _, obj := range []metav1.Object{rwPVC, initJob, &initJob.Spec.Template.ObjectMeta} {
+		canonicalizeRegularModelCacheSharedMetadata(obj)
+		if err := nvcastorage.SetModelCacheBindingUIDLabel(obj, binding.UID); err != nil {
+			return nvcaerrors.TerminalError(err)
+		}
+	}
+	if !slices.Equal(rwPVC.Spec.AccessModes, writerModes) {
+		return nvcaerrors.TerminalError(fmt.Errorf(
+			"regular model cache writer PVC access modes are %v, want %v for transition %q",
+			rwPVC.Spec.AccessModes, writerModes, binding.Spec.Decision.Transition))
+	}
+
 	pvcTargets := []struct {
 		wanted *corev1.PersistentVolumeClaim
 		reader bool
 	}{
 		{wanted: rwPVC},
-		{wanted: roPVCIntent, reader: true},
+	}
+	if separateReader {
+		roPVCIntent := rwPVC.DeepCopy()
+		roPVCIntent.Name = roPVCName
+		roPVCIntent.Spec.AccessModes = ROAccessMode
+		pvcTargets = append(pvcTargets, struct {
+			wanted *corev1.PersistentVolumeClaim
+			reader bool
+		}{wanted: roPVCIntent, reader: true})
 	}
 	for _, target := range pvcTargets {
 		if err := validateRegularModelCachePVC(target.wanted, target.wanted, binding, target.reader); err != nil {
@@ -167,6 +196,48 @@ func regularModelCacheExpectedStorageClassName(binding *nvcav2beta1.ModelCacheBi
 	return binding.Spec.StorageClass.Name, nil
 }
 
+func regularModelCacheAccessModePlan(
+	binding *nvcav2beta1.ModelCacheBinding,
+) (
+	writer []corev1.PersistentVolumeAccessMode,
+	reader []corev1.PersistentVolumeAccessMode,
+	separateReader bool,
+	err error,
+) {
+	if binding == nil {
+		return nil, nil, false, fmt.Errorf("regular model cache binding is nil")
+	}
+	switch binding.Spec.Decision.Transition {
+	case nvcastorage.ModelCacheTransitionNVMesh:
+		return []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			append([]corev1.PersistentVolumeAccessMode(nil), ROAccessMode...), true, nil
+	case nvcastorage.ModelCacheTransitionRWXReadOnly:
+		return append([]corev1.PersistentVolumeAccessMode(nil), RWXAccessMode...), nil, false, nil
+	default:
+		return nil, nil, false, fmt.Errorf(
+			"unsupported regular model cache transition %q", binding.Spec.Decision.Transition)
+	}
+}
+
+func regularModelCacheExpectedPVCModes(
+	binding *nvcav2beta1.ModelCacheBinding,
+	reader bool,
+) ([]corev1.PersistentVolumeAccessMode, error) {
+	writerModes, readerModes, separateReader, err := regularModelCacheAccessModePlan(binding)
+	if err != nil {
+		return nil, err
+	}
+	if !reader {
+		return writerModes, nil
+	}
+	if !separateReader {
+		return nil, fmt.Errorf(
+			"regular model cache transition %q has no separate reader PVC",
+			binding.Spec.Decision.Transition)
+	}
+	return readerModes, nil
+}
+
 func regularModelCachePVCVolumeMode(pvc *corev1.PersistentVolumeClaim) corev1.PersistentVolumeMode {
 	if pvc != nil && pvc.Spec.VolumeMode != nil {
 		return *pvc.Spec.VolumeMode
@@ -174,10 +245,112 @@ func regularModelCachePVCVolumeMode(pvc *corev1.PersistentVolumeClaim) corev1.Pe
 	return corev1.PersistentVolumeFilesystem
 }
 
+func regularModelCachePVVolumeMode(pv *corev1.PersistentVolume) corev1.PersistentVolumeMode {
+	if pv != nil && pv.Spec.VolumeMode != nil {
+		return *pv.Spec.VolumeMode
+	}
+	return corev1.PersistentVolumeFilesystem
+}
+
+func regularModelCacheRequestLabelKeys() []string {
+	return []string{
+		nvcatypes.ICMSRequestIDKey,
+		nvcatypes.NCAIDKey,
+		nvcatypes.NCAIDUpperKey,
+		nvcatypes.MessageBatchIDKey,
+		nvcatypes.GPUNameKey,
+		nvcatypes.FunctionIDKey,
+		nvcatypes.FunctionIDUpperKey,
+		nvcatypes.FunctionVersionIDKey,
+		nvcatypes.FunctionVersionIDUpperKey,
+		nvcatypes.TaskIDKey,
+		nvcatypes.TaskIDUpperKey,
+		nvcatypes.ShaderCacheLabelKey,
+	}
+}
+
+func regularModelCacheRequestAnnotationKeys() []string {
+	return []string{
+		nvcatypes.ICMSRequestIDKey,
+		nvcatypes.NCAIDKey,
+		nvcatypes.ClusterGroupKey,
+		nvcatypes.InstanceCountKey,
+	}
+}
+
+func canonicalizeRegularModelCacheSharedMetadata(obj metav1.Object) {
+	if obj == nil {
+		return
+	}
+	obj.SetOwnerReferences(nil)
+	labels := obj.GetLabels()
+	for _, key := range regularModelCacheRequestLabelKeys() {
+		delete(labels, key)
+	}
+	obj.SetLabels(labels)
+	annotations := obj.GetAnnotations()
+	for _, key := range regularModelCacheRequestAnnotationKeys() {
+		delete(annotations, key)
+	}
+	obj.SetAnnotations(annotations)
+}
+
+func validateRegularModelCacheSharedMetadata(obj metav1.Object) error {
+	if obj == nil {
+		return fmt.Errorf("regular model cache object is nil")
+	}
+	if len(obj.GetOwnerReferences()) != 0 {
+		return fmt.Errorf("regular model cache object %s/%s has request owner references",
+			obj.GetNamespace(), obj.GetName())
+	}
+	for _, key := range regularModelCacheRequestLabelKeys() {
+		if _, found := obj.GetLabels()[key]; found {
+			return fmt.Errorf("regular model cache object %s/%s retains request-scoped label %q",
+				obj.GetNamespace(), obj.GetName(), key)
+		}
+	}
+	for _, key := range regularModelCacheRequestAnnotationKeys() {
+		if _, found := obj.GetAnnotations()[key]; found {
+			return fmt.Errorf("regular model cache object %s/%s retains request-scoped annotation %q",
+				obj.GetNamespace(), obj.GetName(), key)
+		}
+	}
+	return nil
+}
+
+func bindRegularModelCacheWriterJobToPVC(
+	job *batchv1.Job,
+	pvc *corev1.PersistentVolumeClaim,
+	binding *nvcav2beta1.ModelCacheBinding,
+) error {
+	if binding == nil || binding.Spec.Decision.Transition !=
+		nvcastorage.ModelCacheTransitionRWXReadOnly {
+		return nil
+	}
+	if job == nil || pvc == nil || pvc.UID == "" {
+		return fmt.Errorf("rwxReadOnly writer Job cannot record an empty PVC UID")
+	}
+	if job.Spec.Template.Annotations == nil {
+		job.Spec.Template.Annotations = map[string]string{}
+	}
+	recorded := job.Spec.Template.Annotations[nvcastorage.ModelCacheWriterPVCUIDAnnotationKey]
+	if recorded != "" && recorded != string(pvc.UID) {
+		return fmt.Errorf("rwxReadOnly writer Job records PVC UID %q, want %q",
+			recorded, pvc.UID)
+	}
+	job.Spec.Template.Annotations[nvcastorage.ModelCacheWriterPVCUIDAnnotationKey] = string(pvc.UID)
+	return nil
+}
 func validateRegularModelCacheObjectMeta(existing, wanted metav1.Object, bindingUID types.UID) error {
 	if existing == nil || wanted == nil {
 		return fmt.Errorf(
 			"regular model cache object intent is incomplete")
+	}
+	if err := validateRegularModelCacheSharedMetadata(existing); err != nil {
+		return err
+	}
+	if err := validateRegularModelCacheSharedMetadata(wanted); err != nil {
+		return fmt.Errorf("regular model cache intended metadata is not binding-scoped: %w", err)
 	}
 	if existing.GetNamespace() != wanted.GetNamespace() || existing.GetName() != wanted.GetName() {
 		return fmt.Errorf(
@@ -225,9 +398,9 @@ func validateRegularModelCachePVC(
 			"regular model cache PVC %s/%s intent StorageClass is not %q",
 			wanted.Namespace, wanted.Name, expectedStorageClass)
 	}
-	expectedModes := []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
-	if reader {
-		expectedModes = ROAccessMode
+	expectedModes, err := regularModelCacheExpectedPVCModes(binding, reader)
+	if err != nil {
+		return err
 	}
 	if !slices.Equal(wanted.Spec.AccessModes, expectedModes) {
 		return fmt.Errorf(
@@ -375,6 +548,12 @@ func validateRegularModelCacheJob(
 	if err := validateRegularModelCacheObjectMeta(existing, wanted, binding.UID); err != nil {
 		return err
 	}
+	if err := validateRegularModelCacheSharedMetadata(&existing.Spec.Template.ObjectMeta); err != nil {
+		return fmt.Errorf("regular model cache writer Job Pod template: %w", err)
+	}
+	if err := validateRegularModelCacheSharedMetadata(&wanted.Spec.Template.ObjectMeta); err != nil {
+		return fmt.Errorf("regular model cache intended writer Job Pod template is not binding-scoped: %w", err)
+	}
 	if err := requireRegularModelCacheBindingUID(&existing.Spec.Template.ObjectMeta, binding.UID); err != nil {
 		return fmt.Errorf("regular model cache writer Job Pod template: %w", err)
 	}
@@ -420,8 +599,10 @@ func validateRegularModelCachePVIdentity(
 	if binding == nil || pv == nil {
 		return fmt.Errorf("regular model cache PV identity is incomplete")
 	}
-	if err := requireRegularModelCacheBindingUID(pv, binding.UID); err != nil {
-		return err
+	if binding.Spec.Decision.Transition == nvcastorage.ModelCacheTransitionNVMesh {
+		if err := requireRegularModelCacheBindingUID(pv, binding.UID); err != nil {
+			return err
+		}
 	}
 	expectedStorageClass, err := regularModelCacheExpectedStorageClassName(binding)
 	if err != nil {
@@ -464,6 +645,11 @@ func validateRegularModelCachePVForPVC(
 	}
 	if err := validateRegularModelCachePVIdentity(binding, pv, expectedModes); err != nil {
 		return err
+	}
+	if regularModelCachePVVolumeMode(pv) != regularModelCachePVCVolumeMode(pvc) {
+		return fmt.Errorf("regular model cache PV %s volume mode %q does not match PVC %s/%s volume mode %q",
+			pv.Name, regularModelCachePVVolumeMode(pv),
+			pvc.Namespace, pvc.Name, regularModelCachePVCVolumeMode(pvc))
 	}
 	expectedStorageClass, err := regularModelCacheExpectedStorageClassName(binding)
 	if err != nil {
@@ -551,23 +737,40 @@ func (c K8sComputeBackend) validateRegularModelCacheCleanupTargets(
 	if binding == nil {
 		return nil, nil
 	}
-	roPVCName := strings.ReplaceAll(rwPVCName, RWPVCSuffix, ROPVCSuffix)
+	_, _, separateReader, err := regularModelCacheAccessModePlan(binding)
+	if err != nil {
+		return nil, err
+	}
+	roPVCName, err := regularModelCacheReaderPVCName(rwPVCName)
+	if err != nil {
+		return nil, err
+	}
 	if !slices.Contains(binding.Spec.Resources.PersistentVolumeClaimNames, rwPVCName) ||
-		!slices.Contains(binding.Spec.Resources.PersistentVolumeClaimNames, roPVCName) ||
 		!slices.Contains(binding.Spec.Resources.JobNames, initJobName) {
 		return nil, fmt.Errorf("refusing regular model cache cleanup outside binding resource intent")
+	}
+	if separateReader != slices.Contains(binding.Spec.Resources.PersistentVolumeClaimNames, roPVCName) {
+		return nil, fmt.Errorf(
+			"refusing regular model cache cleanup with reader inventory outside transition %q intent",
+			binding.Spec.Decision.Transition)
 	}
 	targets := &regularModelCacheCleanupTargets{
 		namespace: binding.Spec.Resources.WriterNamespace,
 		binding:   binding,
 	}
-	for _, target := range []struct {
+	pvcTargets := []struct {
 		name string
 		set  func(*corev1.PersistentVolumeClaim)
 	}{
 		{name: rwPVCName, set: func(pvc *corev1.PersistentVolumeClaim) { targets.rwPVC = pvc }},
-		{name: roPVCName, set: func(pvc *corev1.PersistentVolumeClaim) { targets.roPVC = pvc }},
-	} {
+	}
+	if separateReader {
+		pvcTargets = append(pvcTargets, struct {
+			name string
+			set  func(*corev1.PersistentVolumeClaim)
+		}{name: roPVCName, set: func(pvc *corev1.PersistentVolumeClaim) { targets.roPVC = pvc }})
+	}
+	for _, target := range pvcTargets {
 		pvc, err := c.clients.K8s.CoreV1().PersistentVolumeClaims(binding.Spec.Resources.WriterNamespace).
 			Get(ctx, target.name, metav1.GetOptions{})
 		switch {
@@ -606,16 +809,25 @@ func validateRegularModelCacheCleanupPV(
 	if binding == nil || pvc == nil || pv == nil {
 		return fmt.Errorf("regular model cache cleanup binding, PVC, and PV must be present")
 	}
-	expectedModes := []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce}
-	switch {
-	case strings.Contains(pvc.Name, ROPVCSuffix):
-		expectedModes = ROAccessMode
-	case strings.Contains(pvc.Name, RWPVCSuffix):
-	default:
-		return fmt.Errorf("regular model cache cleanup PVC %s/%s is outside writer/reader intent",
-			pvc.Namespace, pvc.Name)
+	reader, err := classifyRegularModelCachePVCName(pvc.Name)
+	if err != nil {
+		return fmt.Errorf("regular model cache cleanup PVC %s/%s is outside writer/reader intent: %w",
+			pvc.Namespace, pvc.Name, err)
 	}
-	if err := validateRegularModelCachePVForPVC(binding, pvc, pv, expectedModes); err != nil {
+	expectedModes, err := regularModelCacheExpectedPVCModes(binding, reader)
+	if err != nil {
+		return err
+	}
+	// Cleanup changes an exact Retain PV to Delete before deleting its PVC. A
+	// retry must accept that already-applied state while validating every other
+	// part of the PV/PVC identity.
+	pvForValidation := pv
+	if pv.Spec.PersistentVolumeReclaimPolicy == corev1.PersistentVolumeReclaimDelete {
+		pvForValidation = pv.DeepCopy()
+		pvForValidation.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
+	}
+	if err := validateRegularModelCachePVForPVC(
+		binding, pvc, pvForValidation, expectedModes); err != nil {
 		return err
 	}
 	if len(binding.Spec.Resources.PersistentVolumeNames) != 0 &&

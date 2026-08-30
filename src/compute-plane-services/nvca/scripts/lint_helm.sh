@@ -157,6 +157,34 @@ assert_storage_capability_catalog() (
   fi
   echo "PASS: schema rejects an NVMesh transition on another provisioner"
 
+  yq '.drivers."csi.weka.io".transitions.regularModelCache = "rwxReadOnly"' \
+    "${service_chart}/${catalog}" >"${invalid_catalog}"
+  if ! "${schema_python}" -c "${schema_check}" \
+    "${service_chart}/${schema}" "${invalid_catalog}"; then
+    echo "Expected schema to accept regular rwxReadOnly with ReadWriteMany" >&2
+    return 1
+  fi
+  echo "PASS: schema accepts regular rwxReadOnly with ReadWriteMany"
+
+  yq '(.drivers."csi.weka.io".accessModes = ["ReadOnlyMany"]) |
+      (.drivers."csi.weka.io".transitions.regularModelCache = "rwxReadOnly")' \
+    "${service_chart}/${catalog}" >"${invalid_catalog}"
+  if "${schema_python}" -c "${schema_check}" \
+    "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    echo "Expected schema to reject rwxReadOnly without ReadWriteMany" >&2
+    return 1
+  fi
+  echo "PASS: schema rejects rwxReadOnly without ReadWriteMany"
+
+  yq '.drivers."csi.weka.io".transitions.helmModelCache = "rwxReadOnly"' \
+    "${service_chart}/${catalog}" >"${invalid_catalog}"
+  if "${schema_python}" -c "${schema_check}" \
+    "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    echo "Expected schema to reject rwxReadOnly for Helm" >&2
+    return 1
+  fi
+  echo "PASS: schema rejects rwxReadOnly for Helm"
+
   yq '.drivers."csi.weka.io".transitions.containerCache = "disabled"' \
     "${service_chart}/${catalog}" >"${invalid_catalog}"
   if "${schema_python}" -c "${schema_check}" \

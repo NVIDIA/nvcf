@@ -51,6 +51,10 @@ const (
 	ModelCacheTransitionDisabled = "disabled"
 	// ModelCacheTransitionNVMesh selects the implemented NVMesh transition.
 	ModelCacheTransitionNVMesh = "nvmesh"
+	// ModelCacheTransitionRWXReadOnly selects a regular model-cache transition
+	// that populates one ReadWriteMany claim and serves that same claim through
+	// read-only Pod mounts.
+	ModelCacheTransitionRWXReadOnly = "rwxReadOnly"
 	// ModelCacheProviderNVMesh is the only provider allowed to select the
 	// implemented NVMesh transition.
 	ModelCacheProviderNVMesh = "nvmesh"
@@ -277,6 +281,8 @@ func requiredAccessModesForTransition(transition string) []corev1.PersistentVolu
 	switch transition {
 	case ModelCacheTransitionNVMesh:
 		return []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce, corev1.ReadOnlyMany}
+	case ModelCacheTransitionRWXReadOnly:
+		return []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany}
 	default:
 		return nil
 	}
@@ -511,23 +517,35 @@ func validateStorageCapabilityCatalog(catalog *storageCapabilityCatalog) error {
 			"regularModelCache": driver.Transitions.RegularModelCache,
 			"helmModelCache":    driver.Transitions.HelmModelCache,
 		} {
-			if strategy != ModelCacheTransitionDisabled && strategy != ModelCacheTransitionNVMesh {
+			if strategy != ModelCacheTransitionDisabled && strategy != ModelCacheTransitionNVMesh &&
+				strategy != ModelCacheTransitionRWXReadOnly {
 				return fmt.Errorf("driver %q transition %s has invalid strategy %q", provisioner, workflow, strategy)
 			}
-			if strategy != ModelCacheTransitionNVMesh {
+			switch strategy {
+			case ModelCacheTransitionDisabled:
 				continue
-			}
-			if provisioner != NVMeshStorageClassProvisioner {
-				return fmt.Errorf("driver %q transition %s strategy %s is restricted to provisioner %q",
-					provisioner, workflow, strategy, NVMeshStorageClassProvisioner)
-			}
-			if driver.Provider != ModelCacheProviderNVMesh {
-				return fmt.Errorf("driver %q transition %s strategy %s requires provider %q",
-					provisioner, workflow, strategy, ModelCacheProviderNVMesh)
-			}
-			if !accessModes[string(corev1.ReadWriteOnce)] || !accessModes[string(corev1.ReadOnlyMany)] {
-				return fmt.Errorf("driver %q transition %s strategy %s requires ReadWriteOnce and ReadOnlyMany access modes",
-					provisioner, workflow, strategy)
+			case ModelCacheTransitionNVMesh:
+				if provisioner != NVMeshStorageClassProvisioner {
+					return fmt.Errorf("driver %q transition %s strategy %s is restricted to provisioner %q",
+						provisioner, workflow, strategy, NVMeshStorageClassProvisioner)
+				}
+				if driver.Provider != ModelCacheProviderNVMesh {
+					return fmt.Errorf("driver %q transition %s strategy %s requires provider %q",
+						provisioner, workflow, strategy, ModelCacheProviderNVMesh)
+				}
+				if !accessModes[string(corev1.ReadWriteOnce)] || !accessModes[string(corev1.ReadOnlyMany)] {
+					return fmt.Errorf("driver %q transition %s strategy %s requires ReadWriteOnce and ReadOnlyMany access modes",
+						provisioner, workflow, strategy)
+				}
+			case ModelCacheTransitionRWXReadOnly:
+				if workflow != string(ModelCacheWorkflowRegular) {
+					return fmt.Errorf("driver %q transition %s strategy %s is only supported for %s",
+						provisioner, workflow, strategy, ModelCacheWorkflowRegular)
+				}
+				if !accessModes[string(corev1.ReadWriteMany)] {
+					return fmt.Errorf("driver %q transition %s strategy %s requires ReadWriteMany access mode",
+						provisioner, workflow, strategy)
+				}
 			}
 		}
 	}

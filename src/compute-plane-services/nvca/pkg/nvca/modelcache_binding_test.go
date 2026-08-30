@@ -540,6 +540,24 @@ func TestBeginRegularModelCacheBindingRetirementTransitionsSoleReference(t *test
 	require.ErrorIs(t, runtimeErr, errRegularModelCacheBindingRetiring)
 	assert.True(t, nvcaerrors.IsTerminal(runtimeErr))
 }
+func TestBeginRegularModelCacheBindingRetirementResumesAfterReferenceRelease(t *testing.T) {
+	req, binding, backend, bart := boundModelCacheBindingFixture(
+		t,
+		nvcastorage.ModelCacheWorkflowRegular,
+		nvcav2beta1.ModelCacheBindingPhaseRetiring,
+		nil,
+	)
+	bart.ClearActions()
+
+	got, authorized, err := backend.beginRegularModelCacheBindingRetirement(
+		t.Context(), req.DeepCopy())
+	require.NoError(t, err)
+	assert.True(t, authorized)
+	require.NotNil(t, got)
+	assert.Equal(t, binding.UID, got.UID)
+	assert.Equal(t, nvcav2beta1.ModelCacheBindingPhaseRetiring, got.Status.Phase)
+	assert.Zero(t, countModelCacheBindingStatusUpdates(bart.Actions()))
+}
 
 func TestBeginRegularModelCacheBindingRetirementOtherReferenceBlocksWithoutMutation(t *testing.T) {
 	req, _, backend, bart := boundModelCacheBindingFixture(

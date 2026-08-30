@@ -39,6 +39,17 @@ func durableBindingSelection(t *testing.T) *PersistedModelCacheStorageSelection 
 	return selection
 }
 
+func durableRWXReadOnlyBindingSelection(t *testing.T) *PersistedModelCacheStorageSelection {
+	t.Helper()
+	selection, err := NewPersistedModelCacheStorageSelection(
+		ModelCacheWorkflowRegular,
+		ModelCacheSelectionDurable,
+		testResolvedModelCacheStorage(ModelCacheTransitionRWXReadOnly),
+	)
+	require.NoError(t, err)
+	return selection
+}
+
 func TestNewModelCacheBinding(t *testing.T) {
 	selection := durableBindingSelection(t)
 	binding, err := NewModelCacheBinding(selection, "nca-a", "cache-handle", ModelCacheInitNamespace)
@@ -58,6 +69,25 @@ func TestNewModelCacheBinding(t *testing.T) {
 	assert.Equal(t, []string{"rw-pvc-cache-handle"}, binding.Spec.Resources.PersistentVolumeClaimNames)
 	assert.Equal(t, []string{"writer-job-cache-handle"}, binding.Spec.Resources.JobNames)
 	assert.Equal(t, "modelcache-init-cache-handle", binding.Spec.Resources.LeaseName)
+	assert.Empty(t, binding.Spec.Resources.StorageClassNames)
+	assert.Empty(t, binding.Spec.Resources.SecretNames)
+}
+
+func TestNewRWXReadOnlyModelCacheBindingRecordsOneClaim(t *testing.T) {
+	selection := durableRWXReadOnlyBindingSelection(t)
+	binding, err := NewModelCacheBinding(selection, "nca-a", "cache-handle", "pod-instances")
+	require.NoError(t, err)
+
+	assert.Equal(t, ModelCacheTransitionRWXReadOnly, binding.Spec.Decision.Transition)
+	assert.Equal(t,
+		[]corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+		binding.Spec.Decision.RequiredAccessModes)
+	assert.False(t, binding.Spec.Decision.EncryptionRequired)
+	assert.Equal(t,
+		[]string{"rw-pvc-cache-handle"},
+		binding.Spec.Resources.PersistentVolumeClaimNames)
+	assert.Equal(t, []string{"writer-job-cache-handle"}, binding.Spec.Resources.JobNames)
+	assert.Empty(t, binding.Spec.Resources.LeaseName)
 	assert.Empty(t, binding.Spec.Resources.StorageClassNames)
 	assert.Empty(t, binding.Spec.Resources.SecretNames)
 }

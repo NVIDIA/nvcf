@@ -128,6 +128,25 @@ func newRegularCleanupTestFixture(t *testing.T) *regularCleanupTestFixture {
 	}
 }
 
+func newRWXRegularCleanupTestFixture(t *testing.T) *regularCleanupTestFixture {
+	t.Helper()
+	runtimeFixture := newRWXReadOnlyRuntimeFixture(t, "weka", "csi.weka.io")
+	runtimeFixture.backend.bk8s.k8sTimeConfig = (&k8sutil.TimeConfig{}).Complete()
+	rwPVC := runtimeFixture.boundPVC(false)
+	job := runtimeFixture.writerJob()
+	pv := runtimeFixture.boundPV(rwPVC)
+	pv.UID = types.UID("cache-pv-uid")
+	pv.ResourceVersion = "cache-pv-rv"
+	return &regularCleanupTestFixture{
+		backend: runtimeFixture.backend,
+		req:     runtimeFixture.req,
+		binding: runtimeFixture.binding,
+		rwPVC:   rwPVC,
+		job:     job,
+		pv:      pv,
+	}
+}
+
 func (f *regularCleanupTestFixture) useK8sObjects(objects ...runtime.Object) *fakek8sclient.Clientset {
 	k8sClient := fakek8sclient.NewSimpleClientset(objects...)
 	f.backend.clients.K8s = k8sClient
@@ -274,6 +293,82 @@ func TestCleanupModelCachingResourcesResumesExactRetiringBinding(t *testing.T) {
 	assert.True(t, apierrors.IsNotFound(err))
 }
 
+func TestCleanupModelCachingResourcesResumesAfterPVPolicyUpdate(t *testing.T) {
+	tests := []struct {
+		name    string
+		fixture func(*testing.T) *regularCleanupTestFixture
+	}{
+		{name: "NVMesh", fixture: newRegularCleanupTestFixture},
+		{name: "rwxReadOnly", fixture: newRWXRegularCleanupTestFixture},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := tt.fixture(t)
+			k8sClient := fixture.useK8sObjects(fixture.rwPVC, fixture.job, fixture.pv)
+			pvcDeleteAttempts := 0
+			k8sClient.Fake.PrependReactor(
+				"delete", "persistentvolumeclaims",
+				func(k8stesting.Action) (bool, runtime.Object, error) {
+					pvcDeleteAttempts++
+					if pvcDeleteAttempts == 1 {
+						return true, nil, apierrors.NewServiceUnavailable(
+							"transient PVC delete failure")
+					}
+					return false, nil, nil
+				})
+
+			err := fixture.backend.CleanupModelCachingResources(
+				newTestContext(), fixture.req, fixture.rwPVC.DeepCopy(), fixture.job.Name)
+			require.Error(t, err)
+			assert.True(t, apierrors.IsServiceUnavailable(err))
+
+			updatedPV, getErr := k8sClient.CoreV1().PersistentVolumes().
+				Get(t.Context(), fixture.pv.Name, metav1.GetOptions{})
+			require.NoError(t, getErr)
+			assert.Equal(t, corev1.PersistentVolumeReclaimDelete,
+				updatedPV.Spec.PersistentVolumeReclaimPolicy)
+			_, getErr = k8sClient.CoreV1().PersistentVolumeClaims(fixture.rwPVC.Namespace).
+				Get(t.Context(), fixture.rwPVC.Name, metav1.GetOptions{})
+			require.NoError(t, getErr, "the first transient delete must leave the PVC for retry")
+
+			require.NoError(t, fixture.backend.CleanupModelCachingResources(
+				newTestContext(), fixture.req, fixture.rwPVC.DeepCopy(), fixture.job.Name))
+			assert.Equal(t, 2, pvcDeleteAttempts)
+			_, getErr = k8sClient.CoreV1().PersistentVolumeClaims(fixture.rwPVC.Namespace).
+				Get(t.Context(), fixture.rwPVC.Name, metav1.GetOptions{})
+			assert.True(t, apierrors.IsNotFound(getErr))
+		})
+	}
+}
+
+func TestCleanupModelCachingResourcesRejectsIdentityDriftAfterPVPolicyUpdate(t *testing.T) {
+	fixture := newRWXRegularCleanupTestFixture(t)
+	stored, err := fixture.backend.clients.BART.NvcaV2beta1().
+		ModelCacheBindings(fixture.binding.Namespace).
+		Get(t.Context(), fixture.binding.Name, metav1.GetOptions{})
+	require.NoError(t, err)
+	stored.Status.Phase = nvcav2beta1.ModelCacheBindingPhaseRetiring
+	_, err = fixture.backend.clients.BART.NvcaV2beta1().
+		ModelCacheBindings(stored.Namespace).
+		UpdateStatus(t.Context(), stored, metav1.UpdateOptions{})
+	require.NoError(t, err)
+	fixture.pv.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimDelete
+	fixture.pv.Spec.CSI.Driver = "foreign.csi.example.com"
+	k8sClient := fixture.useK8sObjects(fixture.rwPVC, fixture.job, fixture.pv)
+
+	err = fixture.backend.CleanupModelCachingResources(
+		newTestContext(), fixture.req, fixture.rwPVC.DeepCopy(), fixture.job.Name)
+	require.ErrorContains(t, err, "CSI driver")
+	assertNoKubernetesWrites(t, k8sClient.Actions())
+	_, getErr := k8sClient.CoreV1().PersistentVolumeClaims(fixture.rwPVC.Namespace).
+		Get(t.Context(), fixture.rwPVC.Name, metav1.GetOptions{})
+	require.NoError(t, getErr)
+	_, getErr = k8sClient.BatchV1().Jobs(fixture.job.Namespace).
+		Get(t.Context(), fixture.job.Name, metav1.GetOptions{})
+	require.NoError(t, getErr)
+}
+
 func TestSetupModelCachingForRequestResumesRetiringCleanupWithoutServingReaders(t *testing.T) {
 	fixture := newRegularCleanupTestFixture(t)
 	stored, err := fixture.backend.clients.BART.NvcaV2beta1().ModelCacheBindings(fixture.binding.Namespace).
@@ -330,9 +425,13 @@ func TestCleanupModelCachingSetupArtifactsUsesPersistedBindingAcrossGateDrift(t 
 	fixture := newRegularCleanupTestFixture(t)
 	fixture.backend.bk8s.cachingSupportEnabled = false
 	setCleanupArtifacts(t, fixture.req, fixture.rwPVC, fixture.job)
-	k8sClient := fixture.useK8sObjects(fixture.rwPVC, fixture.job)
+	k8sClient := fixture.useK8sObjects(fixture.rwPVC, fixture.job, fixture.pv)
 
 	require.NoError(t, fixture.backend.CleanupModelCachingSetupArtifacts(newTestContext(), fixture.req))
+	updatedPV, err := k8sClient.CoreV1().PersistentVolumes().Get(
+		t.Context(), fixture.pv.Name, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, corev1.PersistentVolumeReclaimDelete, updatedPV.Spec.PersistentVolumeReclaimPolicy)
 	requireDeleteIdentity(t, k8sClient.Actions(), "jobs", fixture.job.Name,
 		fixture.job.UID, fixture.job.ResourceVersion)
 	requireDeleteIdentity(t, k8sClient.Actions(), "persistentvolumeclaims", fixture.rwPVC.Name,
@@ -509,7 +608,7 @@ func boundReaderForRegularCleanupFixture(
 	fixture *regularCleanupTestFixture,
 ) *corev1.PersistentVolumeClaim {
 	reader := fixture.rwPVC.DeepCopy()
-	reader.Name = strings.ReplaceAll(reader.Name, RWPVCSuffix, ROPVCSuffix)
+	reader.Name = ROPVCPrefix + strings.TrimPrefix(reader.Name, RWPVCPrefix)
 	reader.UID = types.UID("ro-pvc-uid")
 	reader.ResourceVersion = "ro-pvc-rv"
 	reader.Spec.AccessModes = ROAccessMode
@@ -559,7 +658,7 @@ func TestSetupModelCachingForRequestPropagatesTransientReads(t *testing.T) {
 	t.Run("reader PVC Get", func(t *testing.T) {
 		fixture := newRegularCleanupTestFixture(t)
 		k8sClient := fixture.useK8sObjects()
-		roPVCName := strings.ReplaceAll(fixture.rwPVC.Name, RWPVCSuffix, ROPVCSuffix)
+		roPVCName := ROPVCPrefix + strings.TrimPrefix(fixture.rwPVC.Name, RWPVCPrefix)
 		k8sClient.Fake.PrependReactor(
 			"get", "persistentvolumeclaims",
 			func(action k8stesting.Action) (bool, runtime.Object, error) {
@@ -680,7 +779,7 @@ func TestSetupModelCachingForRequestPropagatesTransientReads(t *testing.T) {
 	t.Run("Forbidden reader PVC Get remains a reconcile error", func(t *testing.T) {
 		fixture := newRegularCleanupTestFixture(t)
 		k8sClient := fixture.useK8sObjects()
-		roPVCName := strings.ReplaceAll(fixture.rwPVC.Name, RWPVCSuffix, ROPVCSuffix)
+		roPVCName := ROPVCPrefix + strings.TrimPrefix(fixture.rwPVC.Name, RWPVCPrefix)
 		k8sClient.Fake.PrependReactor(
 			"get", "persistentvolumeclaims",
 			func(action k8stesting.Action) (bool, runtime.Object, error) {
@@ -1006,4 +1105,47 @@ func TestSetupModelCachingForRequestAllowsPendingOwnedReader(t *testing.T) {
 			"pending reader validation must wait for Kubernetes to bind the PV")
 	}
 	assertNoKubernetesWrites(t, k8sClient.Actions())
+}
+
+func TestRequestDeletionResumesRetiringCleanupAfterReferenceRelease(t *testing.T) {
+	fixture := newRWXRegularCleanupTestFixture(t)
+	fixture.rwPVC.APIVersion = "v1"
+	fixture.rwPVC.Kind = "PersistentVolumeClaim"
+	fixture.job.APIVersion = "batch/v1"
+	fixture.job.Kind = "Job"
+	setCleanupArtifacts(t, fixture.req, fixture.rwPVC, fixture.job)
+	fixture.backend.bk8s.k8sArtifactHelper = fixture.backend
+	k8sClient := fixture.useK8sObjects(fixture.rwPVC, fixture.job, fixture.pv)
+	pvcDeleteAttempts := 0
+	k8sClient.Fake.PrependReactor(
+		"delete", "persistentvolumeclaims",
+		func(k8stesting.Action) (bool, runtime.Object, error) {
+			pvcDeleteAttempts++
+			if pvcDeleteAttempts == 1 {
+				return true, nil, apierrors.NewServiceUnavailable(
+					"transient PVC delete failure")
+			}
+			return false, nil, nil
+		})
+
+	err := fixture.backend.CleanupModelCachingResources(
+		newTestContext(), fixture.req, fixture.rwPVC.DeepCopy(), fixture.job.Name)
+	require.Error(t, err)
+	assert.True(t, apierrors.IsServiceUnavailable(err))
+	require.NoError(t, fixture.backend.bk8s.releaseModelCacheBindingReference(
+		t.Context(), fixture.req.DeepCopy()))
+
+	stored, getErr := fixture.backend.clients.BART.NvcaV2beta1().
+		ModelCacheBindings(fixture.binding.Namespace).
+		Get(t.Context(), fixture.binding.Name, metav1.GetOptions{})
+	require.NoError(t, getErr)
+	assert.Equal(t, nvcav2beta1.ModelCacheBindingPhaseRetiring, stored.Status.Phase)
+	assert.Empty(t, stored.Status.RequestReferences)
+
+	require.NoError(t, fixture.backend.bk8s.resumeRetiringRegularModelCacheCleanup(
+		newTestContext(), fixture.req.DeepCopy()))
+	assert.Equal(t, 2, pvcDeleteAttempts)
+	_, getErr = k8sClient.CoreV1().PersistentVolumeClaims(fixture.rwPVC.Namespace).
+		Get(t.Context(), fixture.rwPVC.Name, metav1.GetOptions{})
+	assert.True(t, apierrors.IsNotFound(getErr))
 }

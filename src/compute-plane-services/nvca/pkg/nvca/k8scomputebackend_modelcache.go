@@ -53,6 +53,7 @@ import (
 var (
 	skipVolumeDetachCheck = false
 	ROAccessMode          = []v1.PersistentVolumeAccessMode{v1.ReadOnlyMany}
+	RWXAccessMode         = []v1.PersistentVolumeAccessMode{v1.ReadWriteMany}
 )
 
 type PVCState string
@@ -131,51 +132,33 @@ func (c K8sComputeBackend) CleanupModelCachingSetupArtifacts(ctx context.Context
 		log.WithError(err).Error("failed getModelCacheK8sArtifacts, model caching will be disabled")
 		return fmt.Errorf("failed to cleanup in-flight cache job: %w", err)
 	}
-	targets, err := c.validateRegularModelCacheCleanupTargets(ctx, binding, rwPVC.Name, initJob.Name)
-	if err != nil {
-		return fmt.Errorf("validate regular model cache setup cleanup targets: %w", err)
-	}
-	namespace := c.bk8s.podInstanceNamespace
-	jobToDelete := initJob
-	rwPVCToDelete := rwPVC
 	if binding != nil {
-		namespace = targets.namespace
-		jobToDelete = targets.initJob
-		rwPVCToDelete = targets.rwPVC
+		// Binding-scoped cleanup must use the transition-aware path. It proves PV
+		// ownership, changes an exact bound Retain PV to Delete, and then removes
+		// the Job and PVC with identity preconditions. The same request may resume
+		// this cleanup after the binding entered Retiring above.
+		return c.CleanupModelCachingResources(ctx, req, rwPVC, initJob.Name)
 	}
 
-	// cleanup InitJob & its pods, this will clear the rw-pvc also
-	if jobToDelete != nil {
+	// Preserve the annotation-free legacy cleanup behavior.
+	namespace := c.bk8s.podInstanceNamespace
+	if initJob != nil {
 		backgroundDeletion := metav1.DeletePropagationBackground
 		deleteOptions := metav1.DeleteOptions{PropagationPolicy: &backgroundDeletion}
-		if binding != nil {
-			deleteOptions, err = modelCacheDeleteOptions(jobToDelete, &backgroundDeletion)
-			if err != nil {
-				return fmt.Errorf("build binding-owned init Job delete preconditions: %w", err)
-			}
-		}
 		err = c.clients.K8s.BatchV1().Jobs(namespace).
-			Delete(ctx, jobToDelete.Name, deleteOptions)
+			Delete(ctx, initJob.Name, deleteOptions)
 		if err != nil && !errors.IsNotFound(err) {
 			log.WithError(err).Warnf("failed to cleanup initCacheJob %v/%v, needs manual cleanup",
-				namespace, jobToDelete.Name)
+				namespace, initJob.Name)
 			return fmt.Errorf("failed to cleanup in-flight cache job: %w", err)
 		}
 	}
 
-	// now purge the RWPVC
-	if rwPVCToDelete != nil {
-		deleteOptions := metav1.DeleteOptions{}
-		if binding != nil {
-			deleteOptions, err = modelCacheDeleteOptions(rwPVCToDelete, nil)
-			if err != nil {
-				return fmt.Errorf("build binding-owned writer PVC delete preconditions: %w", err)
-			}
-		}
+	if rwPVC != nil {
 		err = c.clients.K8s.CoreV1().PersistentVolumeClaims(namespace).
-			Delete(ctx, rwPVCToDelete.Name, deleteOptions)
+			Delete(ctx, rwPVC.Name, metav1.DeleteOptions{})
 		if err != nil && !errors.IsNotFound(err) {
-			return fmt.Errorf("failed to delete pvc %v: %w", rwPVCToDelete.Name, err)
+			return fmt.Errorf("failed to delete pvc %v: %w", rwPVC.Name, err)
 		}
 	}
 	return nil
@@ -213,6 +196,15 @@ func (c K8sComputeBackend) SetupModelCachingForRequest(ctx context.Context,
 			}
 			return regularModelCacheResultForError(true, err)
 		}
+		if bindingScoped && binding != nil &&
+			binding.Spec.Decision.Transition == nvcastorage.ModelCacheTransitionRWXReadOnly {
+			if encryptionRequired {
+				return regularModelCacheResultForError(true, nvcaerrors.TerminalError(
+					fmt.Errorf("rwxReadOnly model cache transition does not support NVMesh encryption")))
+			}
+			return c.setupRWXReadOnlyModelCachingForRequest(
+				ctx, rwPVC, initJob, req, binding, bindingUID)
+		}
 	}
 	if encryptionRequired {
 		//If encryption is used, then we need to update StorageClass name in PVC.
@@ -236,7 +228,10 @@ func (c K8sComputeBackend) SetupModelCachingForRequest(ctx context.Context,
 		rwPVC.Spec.StorageClassName = &storageClassName
 	}
 
-	roPVCName := strings.ReplaceAll(rwPVC.Name, RWPVCSuffix, ROPVCSuffix)
+	roPVCName, err := regularModelCacheReaderPVCName(rwPVC.Name)
+	if err != nil {
+		return regularModelCacheResultForError(bindingScoped, nvcaerrors.TerminalError(err))
+	}
 	roPVCState, err := c.checkPVCState(ctx, roPVCName, bindingUID, bindingScoped, true, binding)
 	switch roPVCState {
 	case PVCNotFound:
@@ -598,7 +593,10 @@ func (c K8sComputeBackend) CleanupModelCachingResources(ctx context.Context,
 		}
 	}
 
-	roPVCName := strings.ReplaceAll(rwPVC.Name, RWPVCSuffix, ROPVCSuffix)
+	roPVCName, err := regularModelCacheReaderPVCName(rwPVC.Name)
+	if err != nil {
+		return err
+	}
 	namespace := c.bk8s.podInstanceNamespace
 	var targets *regularModelCacheCleanupTargets
 	if binding != nil {
@@ -979,7 +977,10 @@ func (c K8sComputeBackend) waitForVolumeDetach(ctx context.Context, volumeName s
 func (c K8sComputeBackend) SetupPVCForReaders(ctx context.Context,
 	rwPVC *v1.PersistentVolumeClaim, initJobName string, req *nvcav2beta1.ICMSRequest, mf mutateFunc) (ROPVCSetupPhase, error) {
 	log := core.GetLogger(ctx)
-	roPVCName := strings.ReplaceAll(rwPVC.Name, RWPVCSuffix, ROPVCSuffix)
+	roPVCName, err := regularModelCacheReaderPVCName(rwPVC.Name)
+	if err != nil {
+		return ROPVCSetupFailed, err
+	}
 	bindingUID, bindingScoped, err := regularModelCacheBindingUID(req)
 	if err != nil {
 		return ROPVCSetupFailed, fmt.Errorf("resolve regular model cache binding ownership: %w", err)
@@ -1382,21 +1383,6 @@ func (c K8sComputeBackend) SetupInitCacheJobBlockDevice(ctx context.Context,
 		if err := validateRegularModelCachePVC(rwPVCObj, rwPVCObj, binding, false); err != nil {
 			return nvcaerrors.TerminalError(err)
 		}
-		if err := validateRegularModelCacheJob(initJob, initJob, binding); err != nil {
-			return nvcaerrors.TerminalError(err)
-		}
-		existingJob, jobGetErr := c.clients.K8s.BatchV1().Jobs(c.bk8s.podInstanceNamespace).
-			Get(ctx, initJob.Name, metav1.GetOptions{})
-		switch {
-		case errors.IsNotFound(jobGetErr):
-		case jobGetErr != nil:
-			return fmt.Errorf("get existing regular model cache Job %s/%s: %w",
-				c.bk8s.podInstanceNamespace, initJob.Name, jobGetErr)
-		default:
-			if err := validateRegularModelCacheJob(existingJob, initJob, binding); err != nil {
-				return nvcaerrors.TerminalError(err)
-			}
-		}
 	}
 
 	pvcs := c.clients.K8s.CoreV1().PersistentVolumeClaims(c.bk8s.podInstanceNamespace)
@@ -1460,6 +1446,24 @@ func (c K8sComputeBackend) SetupInitCacheJobBlockDevice(ctx context.Context,
 		}
 	}
 
+	if bindingScoped {
+		if err := bindRegularModelCacheWriterJobToPVC(initJob, pvcCur, binding); err != nil {
+			return nvcaerrors.TerminalError(err)
+		}
+		if err := validateRegularModelCacheJob(initJob, initJob, binding); err != nil {
+			return nvcaerrors.TerminalError(err)
+		}
+		if err := c.revalidateRegularModelCacheBindingAfterCreate(
+			ctx, req, rwPVCObj, initJob.Name, "writer PVC creation or adoption"); err != nil {
+			return err
+		}
+	}
+	if bindingScoped && binding != nil &&
+		binding.Spec.Decision.Transition == nvcastorage.ModelCacheTransitionRWXReadOnly {
+		if err := c.validatePersistedStorageClassBeforeRWXWriterJob(ctx, req); err != nil {
+			return err
+		}
+	}
 	log.Debugf("Created PVC %v/%v", c.bk8s.podInstanceNamespace, rwPVCObj.Name)
 	// ICMS request gets purged
 	if pvcCur != nil {
@@ -1479,8 +1483,65 @@ func (c K8sComputeBackend) SetupInitCacheJobBlockDevice(ctx context.Context,
 			return fmt.Errorf("failed to create Job %s/%s from artifact: %w", c.bk8s.podInstanceNamespace, initJob.Name, err)
 		}
 		log.Debugf("Created Job %v/%v", c.bk8s.podInstanceNamespace, initJob.Name)
+		if bindingScoped {
+			if err := c.revalidateRegularModelCacheBindingAfterCreate(
+				ctx, req, rwPVCObj, initJob.Name, "writer Job creation or adoption"); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
+}
+
+func (c K8sComputeBackend) validatePersistedStorageClassBeforeRWXWriterJob(
+	ctx context.Context,
+	req *nvcav2beta1.ICMSRequest,
+) error {
+	selection, err := persistedRegularModelCacheSelection(req)
+	if err != nil {
+		return nvcaerrors.TerminalError(err)
+	}
+	if selection == nil || selection.Mode != nvcastorage.ModelCacheSelectionDurable ||
+		selection.Transition != nvcastorage.ModelCacheTransitionRWXReadOnly {
+		return nvcaerrors.TerminalError(fmt.Errorf(
+			"rwxReadOnly writer Job requires a durable persisted rwxReadOnly selection"))
+	}
+	if selection.EncryptionRequired {
+		return nvcaerrors.TerminalError(fmt.Errorf(
+			"rwxReadOnly writer Job selection cannot require NVMesh encryption"))
+	}
+	if err := nvcastorage.ValidateModelCacheStorageSelectionLiveWithClientset(
+		ctx, c.clients.K8s, selection); err != nil {
+		wrapped := fmt.Errorf("validate persisted StorageClass before rwxReadOnly writer Job creation: %w", err)
+		if stderrors.Is(err, nvcastorage.ErrModelCacheStorageSelectionDrift) || errors.IsNotFound(err) {
+			return nvcaerrors.TerminalError(wrapped)
+		}
+		return wrapped
+	}
+	return nil
+}
+
+func (c K8sComputeBackend) revalidateRegularModelCacheBindingAfterCreate(
+	ctx context.Context,
+	req *nvcav2beta1.ICMSRequest,
+	rwPVC *v1.PersistentVolumeClaim,
+	initJobName string,
+	operation string,
+) error {
+	err := c.bk8s.validateModelCacheBindingForRuntime(ctx, req)
+	if err == nil {
+		return nil
+	}
+	if !stderrors.Is(err, errRegularModelCacheBindingRetiring) &&
+		!stderrors.Is(err, errRegularModelCacheBindingReferenceReleased) {
+		return fmt.Errorf("revalidate model cache binding after %s: %w", operation, err)
+	}
+	if cleanupErr := c.CleanupModelCachingResources(
+		ctx, req, rwPVC, initJobName); cleanupErr != nil {
+		return fmt.Errorf("revalidate model cache binding after %s: %w; compensating cleanup failed: %v",
+			operation, err, cleanupErr)
+	}
+	return fmt.Errorf("revalidate model cache binding after %s: %w", operation, err)
 }
 
 var (
