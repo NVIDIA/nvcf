@@ -17,6 +17,7 @@ Run Makefile-only validation from `tools/ncp-local-cluster`:
 make validate-compute-clusters
 make print-compute-clusters
 make test-multicluster-make
+tests/test-validate-gateway-route.sh
 ```
 
 Cluster lifecycle targets require local tools such as `k3d`, `kubectl`, `helm`, and Docker.

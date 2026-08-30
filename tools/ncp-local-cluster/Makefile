@@ -46,6 +46,8 @@ COMPUTE_CLUSTER_NAME ?= $(COMPUTE_CLUSTER_PREFIX)-1
 COMPUTE_PLANE_CONFIG_FILE ?= k3d-config-compute-plane.yaml
 COMPUTE_CLUSTERS ?=
 GATEWAY_HTTP_PORT ?= $(CONTROL_PLANE_HTTP_PORT)
+GATEWAY_ROUTE_TIMEOUT_SECONDS ?= 60
+GATEWAY_ROUTE_RETRY_INTERVAL_SECONDS ?= 2
 
 # === Go Credential Provider Configuration ===
 GO_PROVIDER_PATH         := ./credential-provider-go
@@ -421,7 +423,9 @@ validate-gateway: deploy-nginx wait-for-nginx wait-for-gateway ## Validate Gatew
 	@echo ">>> Checking HTTPRoute status..."
 	@kubectl get httproute nginx-route -n sample -o jsonpath='{.status}' || echo "HTTPRoute status not available"
 	@echo ">>> Validating Gateway route (nginx.localhost)..."
-	@if curl -sSf http://nginx.localhost:$(GATEWAY_HTTP_PORT)/ >/dev/null 2>&1; then \
+	@if GATEWAY_ROUTE_TIMEOUT_SECONDS=$(GATEWAY_ROUTE_TIMEOUT_SECONDS) \
+		GATEWAY_ROUTE_RETRY_INTERVAL_SECONDS=$(GATEWAY_ROUTE_RETRY_INTERVAL_SECONDS) \
+		bash ./scripts/validate-gateway-route.sh http://nginx.localhost:$(GATEWAY_HTTP_PORT)/; then \
 		echo "OK Gateway route reachable at http://nginx.localhost:$(GATEWAY_HTTP_PORT)"; \
 	else \
 		echo "ERROR Gateway route validation failed"; \
