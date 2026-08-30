@@ -63,6 +63,21 @@ openbao_values="$work_dir/openbao-values.yaml"
 render_chart_values cassandra "$cassandra_values"
 render_chart_values openbao-server "$openbao_values"
 
+# Verify that the Helmfile selects the published OpenBao wrapper pin. The
+# manifest assertion below intentionally uses the local source chart because
+# the unit suite does not have OCI registry credentials.
+openbao_release="$(HELMFILE_ENV="$environment_name" \
+  HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
+  helmfile "${helmfile_common[@]}" \
+    --selector name=openbao-server \
+    list --skip-charts --output json)"
+openbao_chart_name="$(jq -r '.[0].chart // ""' <<<"$openbao_release")"
+openbao_chart_version="$(jq -r '.[0].version // ""' <<<"$openbao_release")"
+test "$openbao_chart_name" = 'nvcf/helm-nvcf-openbao-server' ||
+  fail "expected default OpenBao chart, got ${openbao_chart_name:-missing}"
+test "$openbao_chart_version" = '0.32.1' ||
+  fail "expected default OpenBao version 0.32.1, got ${openbao_chart_version:-missing}"
+
 cassandra_password="$(yq -r '.cassandra.serviceRolePassword // ""' "$cassandra_values")"
 test -n "$cassandra_password" ||
   fail "Cassandra migrations received no application-role password"
