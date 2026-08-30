@@ -149,18 +149,17 @@ Feature: Register an LLM worker securely with routers in two local regions
         | --description | bdd-registration-multiregion                                        |
         | --scopes      | invoke_function,list_functions,queue_details,list_functions_details |
 
-      When I run command:
-        """
-        /bin/sh -c 'set -eu; for attempt in $(seq 1 120); do row=$(kubectl --context k3d-ncp-local-compute-1 get pods -A -o json | jq -r "[.items[] | select(any(.spec.containers[]?; .name == \"llm-worker\")) | [.metadata.namespace,.metadata.name] | @tsv] | first // empty"); if [ -n "$row" ]; then ns=$(printf "%s" "$row" | cut -f1); pod=$(printf "%s" "$row" | cut -f2); metrics=$(kubectl --context k3d-ncp-local-compute-1 get --raw "/api/v1/namespaces/$ns/pods/$pod:9089/proxy/metrics" 2>/dev/null || true); registration=$(printf "%s\n" "$metrics" | grep -c "^pylon_registration_stream_connected.* 1$" || true); reverse=$(printf "%s\n" "$metrics" | grep -c "^pylon_reverse_tunnel_connected.* 1$" || true); if [ "$registration" -eq 5 ] && [ "$reverse" -ge 3 ]; then printf "registration=%s reverse=%s regions=2\n" "$registration" "$reverse"; exit 0; fi; fi; sleep 5; done; exit 1'
-        """
-      Then the command exit code should be 0
-      And the command output should contain "registration=5"
-      And the command output should contain "regions=2"
+      Then a pod containing container "llm-worker" using context "k3d-ncp-local-compute-1" should report Pylon metrics within "10m":
+        | metric                               | comparison | count |
+        | pylon_registration_stream_connected | exactly    | 5     |
+        | pylon_reverse_tunnel_connected       | at least   | 3     |
 
       When I successfully invoke model "openai-compatible-sample" at "/v1/chat/completions" with timeout "120" seconds:
         """
         {"messages":[{"role":"user","content":"bdd-registration-multiregion"}]}
         """
-      Then the command output should contain "chat.completion"
-      And the command output should contain "fixed 128-byte response"
+      Then the command output should contain all:
+        | text                    |
+        | chat.completion         |
+        | fixed 128-byte response |
       And I successfully undeploy the function selected by NVCF CLI
