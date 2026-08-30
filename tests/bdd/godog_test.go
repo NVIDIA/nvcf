@@ -417,13 +417,35 @@ func TestMultiClusterUpFeatureFileWiresToSteps(t *testing.T) {
 // so the I copy / I update yaml chain has a real source file. The
 // fake runner is pre-loaded with canned JSON for the Helm release assertion.
 func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
+	const vanityInvokeScript = `IFS= read -r api_key || [ -n "$api_key" ]; exec curl --silent --show-error --fail-with-body --header "Authorization: Bearer ${api_key}" "$@"`
+	const vanityFunctionIDCommand = `/bin/bash -c 'set -euo pipefail; "$1" --config "$2" status --json |` +
+		` jq -er ".currentFunction | select(.hasFunction == true) | .functionId"'` +
+		` bdd-vanity-function-id /usr/bin/nvcf-cli /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml`
+	const vanityVersionIDCommand = `/bin/bash -c 'set -euo pipefail; "$1" --config "$2" status --json |` +
+		` jq -er ".currentFunction | select(.hasFunction == true) | .versionId"'` +
+		` bdd-vanity-version-id /usr/bin/nvcf-cli /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml`
+	vanityInvokeCommand := dsl.BuildCommand(
+		"/bin/sh", "-c", vanityInvokeScript, "vanity-gateway-request",
+		"--request", "POST",
+		"--header", "Host: vanity.localhost",
+		"--header", "Content-Type: application/json",
+		"--data", `{"message":"bdd-vanity-echo","repeats":1}`,
+		"--retry", "24",
+		"--retry-all-errors",
+		"--retry-delay", "5",
+		"--retry-max-time", "120",
+		"--max-time", "120",
+		"http://127.0.0.1:8080/bdd/echo",
+	)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 	t.Setenv("NGC_API_KEY", "test-key")
 	t.Setenv("SAMPLE_NGC_ORG", "test-org")
 	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
 	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
-		"helm list --all-namespaces --kube-context k3d-ncp-local -o json": {ExitCode: 0, Stdout: helmListAllNamespacesJSON()},
+		"helm list --all-namespaces --kube-context k3d-ncp-local -o json": {ExitCode: 0, Stdout: helmListAllNamespacesWithVanityJSON()},
 		"kubectl --context k3d-ncp-local get configmap/nvcf-api-remote-config -n nvcf -o yaml": {
 			ExitCode: 0,
 			Stdout:   "data:\n  nvcf-api.yaml: |\n    nvcf:\n      sidecars:\n        llm-router-client-image: nvcr.io/test-org/test-team/pylon:test\n",
@@ -431,6 +453,18 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke --request-body '{\"message\":\"bdd-echo\",\"repeats\":1}' --timeout 120 --poll-duration 5": {
 			ExitCode: 0,
 			Stdout:   "Function invocation completed!\n\nResponse:\n{\"rawResponse\":\"bdd-echo\"}\n",
+		},
+		vanityFunctionIDCommand: {
+			ExitCode: 0,
+			Stdout:   "function-1\n",
+		},
+		vanityVersionIDCommand: {
+			ExitCode: 0,
+			Stdout:   "version-1\n",
+		},
+		vanityInvokeCommand: {
+			ExitCode: 0,
+			Stdout:   "Function invocation completed!\n\nResponse:\n{\"rawResponse\":\"bdd-vanity-echo\"}\n",
 		},
 		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke" +
 			" --grpc --grpc-plaintext --grpc-service Echo --grpc-method EchoMessage" +
@@ -459,6 +493,13 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
 	writeProfileHandoffArtifact(t, suite.Config.RepoRoot)
 	writeHelmfileRegisterValues(t, suite.Config.RepoRoot)
+	if err := os.WriteFile(
+		filepath.Join(home, ".nvcf-cli.nvcf-cli-local.state"),
+		[]byte(`{"apiKey":"wiring-function-api-key"}`),
+		0o600,
+	); err != nil {
+		t.Fatalf("write NVCF CLI state: %v", err)
+	}
 
 	sc := steps.NewScenarioContext(suite)
 	featurePath := mustResolveFeaturePath(t, "single-cluster-helmfile.feature")
@@ -483,6 +524,18 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	}
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "function invoke") {
 		t.Fatal("function invoke CLI command was never invoked")
+	}
+	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
+		"curl --silent --show-error --fail-with-body",
+		"Host: vanity.localhost",
+		"http://127.0.0.1:8080/bdd/echo",
+		"bdd-vanity-echo") {
+		t.Fatal("Vanity Gateway exact-host request was never invoked")
+	}
+	if !commandRanThatContainsAll(suite.Runner.(*fakeRunner).runs,
+		"apply HELMFILE_ENV=local-bdd",
+		"HELMFILE_SELECTOR=name=vanity-gateway") {
+		t.Fatal("Vanity Gateway mapping was not applied through the targeted Helmfile release")
 	}
 	if !commandRanThatContains(suite.Runner.(*fakeRunner).runs, "function invoke --grpc --grpc-plaintext") {
 		t.Fatal("gRPC function invoke CLI command was never invoked")
@@ -698,14 +751,6 @@ func TestObservabilityControlFeatureFileWiresToSteps(t *testing.T) {
 	if !commandRanThatContains(runs, "install HELMFILE_ENV=local-bdd-observability-control") {
 		t.Fatal("control-profile Helmfile install command was never invoked")
 	}
-	environmentPath := filepath.Join(suite.Config.RepoRoot, "deploy", "stacks", "self-managed", "environments", "local-bdd-observability-control.yaml")
-	imageTag, found, err := dsl.ReadYAMLKey(environmentPath, "functionAutoscaler.image.tag")
-	if err != nil {
-		t.Fatalf("read control-profile autoscaler image tag: %v", err)
-	}
-	if !found || imageTag != "1.18.10" {
-		t.Fatalf("control-profile autoscaler image tag = %q, found = %t; want 1.18.10", imageTag, found)
-	}
 }
 
 func observabilityControlHelmListJSON() string {
@@ -815,7 +860,6 @@ func TestObservabilityComputeFeatureFileWiresToSteps(t *testing.T) {
 			t.Fatalf("NGC API key leaked into command arguments: %s", run)
 		}
 	}
-
 	for _, stack := range []string{"self-managed", "observability", "nvcf-compute-plane"} {
 		environmentPath := filepath.Join(suite.Config.RepoRoot, "deploy", "stacks", stack, "environments", "local-bdd-observability-compute.yaml")
 		profile, found, err := dsl.ReadYAMLKey(environmentPath, "observability.profile")
@@ -892,6 +936,14 @@ func TestObservabilityAllFeatureFileWiresToSteps(t *testing.T) {
 			ExitCode: 0,
 			Stdout:   observabilityCollectorYAML(),
 		},
+		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke --request-body '{\"message\":\"bdd-autoscaler-echo\",\"repeats\":1}' --timeout 60 --poll-duration 5": {
+			ExitCode: 1,
+			Stderr:   "Error: failed to invoke function: API error 504:\n",
+		},
+		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke --request-body '{\"message\":\"bdd-autoscaler-echo\",\"repeats\":1}' --timeout 600 --poll-duration 5": {
+			ExitCode: 0,
+			Stdout:   "Function invocation completed!\n\nResponse:\n{\"rawResponse\":\"bdd-autoscaler-echo\"}\n",
+		},
 	}))
 	seedHelmfileLocalBDDFixture(t, suite.Config.RepoRoot)
 	seedComputePlaneLocalBDDFixture(t, suite.Config.RepoRoot)
@@ -951,6 +1003,19 @@ func TestObservabilityAllFeatureFileWiresToSteps(t *testing.T) {
 			t.Fatalf("NGC API key leaked into command arguments: %s", run)
 		}
 	}
+	if !commandRanThatContainsAll(runs,
+		"function deploy create",
+		"--min-instances 0",
+		"--max-instances 1") {
+		t.Fatal("autoscaler smoke function was not deployed from zero with a one-instance ceiling")
+	}
+	if !commandRanThatContainsAll(runs,
+		"cluster agent get-function \"$function_id\" \"$version_id\"",
+		"--compute-plane-context \"$3\"",
+		"--json") {
+		t.Fatal("autoscaler smoke did not observe the selected function on the compute plane")
+	}
+	assertFunctionDeploymentsUseInstanceType(t, runs, "NCP.GPU.H100_1x", 1)
 
 	for _, stack := range []string{"self-managed", "observability", "nvcf-compute-plane"} {
 		environmentPath := filepath.Join(suite.Config.RepoRoot, "deploy", "stacks", stack, "environments", "local-bdd-observability-all.yaml")
@@ -968,7 +1033,6 @@ func TestObservabilityAllFeatureFileWiresToSteps(t *testing.T) {
 		key   string
 		want  string
 	}{
-		{stack: "self-managed", key: "functionAutoscaler.image.tag", want: "1.18.10"},
 		{stack: "nvcf-compute-plane", key: "global.nvcaOperator.selfManaged.otelCollector.enabled", want: "true"},
 	}
 	for _, assertion := range assertions {
@@ -990,6 +1054,7 @@ func observabilityAllHelmListJSON() string {
 {"name":"victoria-metrics","namespace":"monitoring","revision":"1","status":"deployed"},
 {"name":"otel-collector","namespace":"monitoring","revision":"1","status":"deployed"},
 {"name":"default-monitors","namespace":"monitoring","revision":"1","status":"deployed"},
+{"name":"function-autoscaler","namespace":"nvcf","revision":"1","status":"deployed"},
 {"name":"nvca-operator","namespace":"nvca-operator","revision":"1","status":"deployed"}
 ]`
 }
@@ -1366,6 +1431,12 @@ func helmListAllNamespacesJSON() string {
 {"name":"llm-request-router","namespace":"nvcf","status":"deployed"},
 {"name":"llm-api-gateway","namespace":"nvcf","status":"deployed"},
 {"name":"nvca-operator","namespace":"nvca-operator","status":"deployed"}
+]`
+}
+
+func helmListAllNamespacesWithVanityJSON() string {
+	return strings.TrimSuffix(helmListAllNamespacesJSON(), "\n]") + `,
+{"name":"vanity-gateway","namespace":"nvcf","status":"deployed"}
 ]`
 }
 

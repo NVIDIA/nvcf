@@ -2,8 +2,8 @@
 Feature: Install a local single-cluster NVCF stack with Helmfile
   As a self-managed NVCF operator,
   I want to use the documented Helmfile workflow against a local k3d cluster,
-  so that I can install a single-cluster control plane with NVCA and the LLM
-  gateway add-on enabled.
+  so that I can install a single-cluster control plane with NVCA, the LLM
+  gateway, and Vanity Gateway add-ons enabled.
 
   Rule: Operator authors the local Helmfile environment file
 
@@ -16,7 +16,7 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       # The fixture is a copy of deploy/stacks/self-managed/environments/local.yaml,
       # which already carries every ncp-local local-mode override (storageClass,
       # replica counts, NVCA self-managed endpoints, addons.llm.*, agentConfig,
-      # ingress.gatewayApi.*). The Background only overlays the operator-specific
+      # ingress.gatewayApi.*, addons.vanityGateway.*). The Background only overlays the operator-specific
       # values that vary per NGC org and pull-secret name.
       And I prepare Helmfile environment "local-bdd" for stack "self-managed" from fixture "tests/bdd/fixtures/self-managed-local-bdd.yaml" with values:
         | global.imagePullSecrets[0].name               | nvcr-pull-secret                                                   |
@@ -36,7 +36,7 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
       Then the command exit code should be 0
       And the command output should not contain "Error:"
 
-  Rule: Helmfile installs the local control plane with LLM gateway add-ons
+  Rule: Helmfile installs the local control plane with gateway add-ons
 
     Background:
       # This rule depends on the earlier environment-authoring
@@ -90,6 +90,11 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
         | ingress                   | envoy-gateway-system |
         | llm-request-router        | nvcf                 |
         | llm-api-gateway           | nvcf                 |
+        | vanity-gateway            | nvcf                 |
+
+      Then these Gateway API routes should be accepted and resolved using context "k3d-ncp-local" within "2m":
+        | kind      | name           | namespace            | parent    |
+        | HTTPRoute | vanity-gateway | envoy-gateway-system | shared-gw |
 
       When I run command "kubectl --context k3d-ncp-local get configmap/nvcf-api-remote-config -n nvcf -o yaml"
       Then the command exit code should be 0
@@ -166,7 +171,7 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
     # earlier control-plane install and NVCA registration scenario in
     # this feature run, and is not a standalone tag target.
     @function-lifecycle
-    Scenario: Operator creates, deploys, and invokes the Load Tester Supreme sample function
+    Scenario: Operator invokes the Load Tester Supreme sample function through default and vanity endpoints
       Given I use NVCF CLI config "${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml"
 
       When I successfully create function "bdd-load-tester-supreme" from image "nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/load_tester_supreme:0.0.8" with CLI options:
@@ -197,6 +202,40 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
         {"message":"bdd-echo","repeats":1}
         """
       Then the command output should contain "bdd-echo"
+
+      # Vanity Gateway mappings are Helm values, so read the function identity
+      # from the operator's CLI and apply only the mapped release.
+      When I run command:
+        """
+        /bin/bash -c 'set -euo pipefail; "$1" --config "$2" status --json | jq -er ".currentFunction | select(.hasFunction == true) | .functionId"' bdd-vanity-function-id ${NVCF_CLI} ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml
+        """
+      Then the command exit code should be 0
+      And I export command output to environment variable "BDD_VANITY_FUNCTION_ID"
+
+      When I run command:
+        """
+        /bin/bash -c 'set -euo pipefail; "$1" --config "$2" status --json | jq -er ".currentFunction | select(.hasFunction == true) | .versionId"' bdd-vanity-version-id ${NVCF_CLI} ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml
+        """
+      Then the command exit code should be 0
+      And I export command output to environment variable "BDD_VANITY_VERSION_ID"
+
+      And I update yaml file "deploy/stacks/self-managed/environments/local-bdd.yaml" with keys:
+        | addons.vanityGateway.mappingConfig.v2config.vanity.bdd.host                            | vanity.localhost          |
+        | addons.vanityGateway.mappingConfig.v2config.vanity.bdd.paths.echo.path                 | /bdd/echo                 |
+        | addons.vanityGateway.mappingConfig.v2config.vanity.bdd.paths.echo.functionID           | ${BDD_VANITY_FUNCTION_ID} |
+        | addons.vanityGateway.mappingConfig.v2config.vanity.bdd.paths.echo.functionVersionID    | ${BDD_VANITY_VERSION_ID}  |
+        | addons.vanityGateway.mappingConfig.v2config.vanity.bdd.paths.echo.outgoingPathOverride | /echo                     |
+
+      When I successfully run command "k3d kubeconfig merge ncp-local --output ${REPO_ROOT}/tests/bdd/out/ncp-local-vanity-kubeconfig.yaml --overwrite --kubeconfig-switch-context=false"
+      And I successfully run command "make -C deploy/stacks/self-managed apply HELMFILE_ENV=local-bdd HELMFILE_SELECTOR=name=vanity-gateway KUBECONFIG_FILE=${REPO_ROOT}/tests/bdd/out/ncp-local-vanity-kubeconfig.yaml"
+      And I successfully run command "kubectl --context k3d-ncp-local rollout restart deployment/vanity-gateway --namespace nvcf"
+      Then deployment "vanity-gateway" in namespace "nvcf" using context "k3d-ncp-local" should complete rollout within "5m"
+
+      When I successfully invoke the function selected by NVCF CLI through Vanity Gateway host "vanity.localhost" path "/bdd/echo" with timeout "120" seconds:
+        """
+        {"message":"bdd-vanity-echo","repeats":1}
+        """
+      Then the command output should contain "bdd-vanity-echo"
 
       # Remove the deployment: the local sizing cannot hold every
       # scenario's deployment at once.

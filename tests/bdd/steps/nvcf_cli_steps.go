@@ -19,16 +19,24 @@ package steps
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/cucumber/godog"
 
 	"nvcf-bdd/dsl"
+	"nvcf-bdd/harness"
 )
 
 var modelInvocationRetryInterval = time.Second
+
+type cliAuthState struct {
+	APIKey string `json:"apiKey"`
+}
 
 func registerNVCFCLISteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^I use NVCF CLI config "([^"]*)"$`, sc.iUseNVCFCLIConfig)
@@ -38,6 +46,7 @@ func registerNVCFCLISteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^I successfully invoke the function selected by NVCF CLI over HTTP with timeout "([^"]*)" seconds and poll duration "([^"]*)" seconds:$`, sc.iSuccessfullyInvokeFunctionHTTP)
 	ctx.Step(`^I successfully invoke the function selected by NVCF CLI over plaintext gRPC service "([^"]*)" method "([^"]*)" with timeout "([^"]*)" seconds and poll duration "([^"]*)" seconds:$`, sc.iSuccessfullyInvokeFunctionGRPC)
 	ctx.Step(`^I successfully invoke model "([^"]*)" at "([^"]*)" with timeout "([^"]*)" seconds:$`, sc.iSuccessfullyInvokeModel)
+	ctx.Step(`^I successfully invoke the function selected by NVCF CLI through Vanity Gateway host "([^"]*)" path "([^"]*)" with timeout "([^"]*)" seconds:$`, sc.iSuccessfullyInvokeFunctionThroughVanityGateway)
 	ctx.Step(`^I successfully undeploy the function selected by NVCF CLI$`, sc.iSuccessfullyUndeploySelectedFunction)
 }
 
@@ -62,7 +71,14 @@ func (sc *ScenarioContext) iSuccessfullyDeploySelectedFunction(ctx context.Conte
 }
 
 func (sc *ScenarioContext) iSuccessfullyGenerateFunctionAPIKey(ctx context.Context, table *godog.Table) error {
-	return sc.runNVCFCLIWithOptions(ctx, []string{"api-key", "generate", "--for", "function"}, table)
+	options, err := nvcfCLIOptions(table)
+	if err != nil {
+		return err
+	}
+	return sc.runNVCFCLISuppressingStdout(
+		ctx,
+		append([]string{"api-key", "generate", "--for", "function"}, options...)...,
+	)
 }
 
 func (sc *ScenarioContext) iSuccessfullyInvokeFunctionHTTP(
@@ -157,6 +173,88 @@ func (sc *ScenarioContext) iSuccessfullyInvokeModel(
 	}
 }
 
+func (sc *ScenarioContext) iSuccessfullyInvokeFunctionThroughVanityGateway(
+	ctx context.Context,
+	host,
+	inferenceURL,
+	timeout string,
+	doc *godog.DocString,
+) error {
+	apiKey, err := currentFunctionAPIKey(sc.NVCFCLIConfig)
+	if err != nil {
+		return err
+	}
+	if strings.ContainsAny(apiKey, "\r\n\x00") {
+		return fmt.Errorf("saved function API key contains an invalid control character")
+	}
+
+	// nvcf-cli prefixes INVOKE_HOST with the selected function ID for normal
+	// function invocations. Vanity Gateway routes use the exact configured host,
+	// so send this smoke request directly through the local Envoy listener. The
+	// shell reads the key from stdin to keep it out of argv and command logs.
+	// Envoy can briefly return an HTTP error while a just-rolled gateway backend
+	// propagates; retries remain bounded by the scenario timeout.
+	script := `IFS= read -r api_key || [ -n "$api_key" ]; exec curl --silent --show-error --fail-with-body --header "Authorization: Bearer ${api_key}" "$@"`
+	command := dsl.BuildCommand(
+		"/bin/sh", "-c", script, "vanity-gateway-request",
+		"--request", "POST",
+		"--header", "Host: "+dsl.Interpolate(host),
+		"--header", "Content-Type: application/json",
+		"--data", dsl.Interpolate(doc.Content),
+		"--retry", "24",
+		"--retry-all-errors",
+		"--retry-delay", "5",
+		"--retry-max-time", dsl.Interpolate(timeout),
+		"--max-time", dsl.Interpolate(timeout),
+		"http://127.0.0.1:8080"+dsl.Interpolate(inferenceURL),
+	)
+	if err := sc.runResolvedAndRecordWith(
+		ctx,
+		command,
+		func(runCtx context.Context, resolved string) (harness.Result, error) {
+			return sc.Suite.Runner.RunWithSensitiveStdin(runCtx, resolved, apiKey)
+		},
+	); err != nil {
+		return err
+	}
+	return sc.commandExitCodeShouldBe(0)
+}
+
+func currentFunctionAPIKey(configName string) (string, error) {
+	statePath, err := nvcfCLIStatePath(configName)
+	if err != nil {
+		return "", err
+	}
+	body, err := os.ReadFile(statePath)
+	if err != nil {
+		return "", fmt.Errorf("read NVCF CLI state: %w", err)
+	}
+	var state cliAuthState
+	if err := json.Unmarshal(body, &state); err != nil {
+		return "", fmt.Errorf("parse NVCF CLI state: %w", err)
+	}
+	state.APIKey = strings.TrimSpace(state.APIKey)
+	if state.APIKey == "" {
+		return "", fmt.Errorf("NVCF CLI state does not contain a function API key")
+	}
+	return state.APIKey, nil
+}
+
+func nvcfCLIStatePath(configName string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home directory: %w", err)
+	}
+	contextName := filepath.Base(strings.TrimSpace(configName))
+	if extension := filepath.Ext(contextName); extension != "" {
+		contextName = strings.TrimSuffix(contextName, extension)
+	}
+	if contextName == "" || contextName == "default" || contextName == ".nvcf-cli" {
+		return filepath.Join(home, ".nvcf-cli.state"), nil
+	}
+	return filepath.Join(home, ".nvcf-cli."+contextName+".state"), nil
+}
+
 func (sc *ScenarioContext) iSuccessfullyUndeploySelectedFunction(ctx context.Context) error {
 	return sc.runNVCFCLI(ctx, "function", "delete", "--deployment-only")
 }
@@ -174,6 +272,18 @@ func (sc *ScenarioContext) runNVCFCLIWithOptions(
 }
 
 func (sc *ScenarioContext) runNVCFCLI(ctx context.Context, args ...string) error {
+	return sc.runResolvedSuccessfully(ctx, dsl.BuildCommand(sc.nvcfCLICommandArgs(args...)...))
+}
+
+func (sc *ScenarioContext) runNVCFCLISuppressingStdout(ctx context.Context, args ...string) error {
+	commandArgs := append(
+		[]string{"/bin/sh", "-c", `exec "$@" >/dev/null`, "nvcf-cli"},
+		sc.nvcfCLICommandArgs(args...)...,
+	)
+	return sc.runResolvedSuccessfully(ctx, dsl.BuildCommand(commandArgs...))
+}
+
+func (sc *ScenarioContext) nvcfCLICommandArgs(args ...string) []string {
 	commandArgs := make([]string, 0, len(args)+3)
 	commandArgs = append(commandArgs,
 		dsl.Interpolate("${NVCF_CLI}"),
@@ -183,7 +293,7 @@ func (sc *ScenarioContext) runNVCFCLI(ctx context.Context, args ...string) error
 	for _, arg := range args {
 		commandArgs = append(commandArgs, dsl.Interpolate(arg))
 	}
-	return sc.runResolvedSuccessfully(ctx, dsl.BuildCommand(commandArgs...))
+	return commandArgs
 }
 
 func nvcfCLIOptions(table *godog.Table) ([]string, error) {

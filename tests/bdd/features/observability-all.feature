@@ -22,7 +22,6 @@ Feature: Install local Helmfile observability for both planes
       | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | observability.profile           | all                                  |
-      | functionAutoscaler.image.tag    | 1.18.10                              |
     # Give the shared observability Helmfile the same named environment.
     And I prepare Helmfile environment "local-bdd-observability-all" for stack "observability" from fixture "tests/bdd/fixtures/self-managed-local-bdd.yaml" with values:
       | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
@@ -119,6 +118,7 @@ Feature: Install local Helmfile observability for both planes
       | victoria-metrics         | monitoring    | 1        |
       | otel-collector           | monitoring    | 1        |
       | default-monitors         | monitoring    | 1        |
+      | function-autoscaler      | nvcf          | 1        |
       | nvca-operator            | nvca-operator | 1        |
 
     Then deployment "nvca-operator" in namespace "nvca-operator" using context "k3d-ncp-local" should complete rollout within "10m"
@@ -148,3 +148,67 @@ Feature: Install local Helmfile observability for both planes
           enabled: true
           imageRepository: nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/nvcf-otel-collector
       """
+
+  # Depends on the installed all-profile stack and registered compute plane
+  # from the preceding scenario. It is not a standalone tag target.
+  @function-autoscaler @function-lifecycle
+  Scenario: Autoscaler starts an idle function to serve its first request
+    Given I use NVCF CLI config "${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml"
+
+    When I successfully create function "bdd-autoscaled-load-tester-supreme" from image "nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/load_tester_supreme:0.0.8" with CLI options:
+      | option           | value   |
+      | --inference-url  | /echo   |
+      | --inference-port | 8000    |
+      | --health-uri     | /health |
+      | --health-port    | 8000    |
+      | --health-timeout | PT30S   |
+
+    And I successfully deploy the function selected by NVCF CLI with options:
+      | option          | value               |
+      | --gpu           | H100                |
+      | --instance-type | NCP.GPU.H100_1x     |
+      | --backend       | ncp-local           |
+      | --regions       | us-west-1           |
+      | --min-instances | 0                   |
+      | --max-instances | 1                   |
+      | --timeout       | 900                 |
+
+    And I successfully generate a function API key with CLI options:
+      | option        | value                                                                       |
+      | --description | bdd-autoscaled-load-tester-supreme                                         |
+      | --scopes      | invoke_function,list_functions,queue_details,list_functions_details         |
+
+    # The invocation plane returns after its short hold-open window while the
+    # autoscaler and compute plane complete a cold start. A successful response
+    # or the expected 504 proves the first request reached the invocation path.
+    When I run command:
+      """
+      ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke --request-body '{"message":"bdd-autoscaler-echo","repeats":1}' --timeout 60 --poll-duration 5
+      """
+    Then the command output should contain one of:
+      | text                 |
+      | bdd-autoscaler-echo  |
+      | API error 504         |
+
+    When I successfully run command:
+      """
+      /bin/bash -c 'set -euo pipefail
+      status="$("$1" --config "$2" status --json)"
+      function_id="$(jq -er ".currentFunction | select(.hasFunction == true) | .functionId" <<<"$status")"
+      version_id="$(jq -er ".currentFunction | select(.hasFunction == true) | .versionId" <<<"$status")"
+      for attempt in {1..120}; do
+        if "$1" --config "$2" cluster agent get-function "$function_id" "$version_id" --compute-plane-context "$3" --json | jq -e ".instanceCount == 1 and ([.instances[] | select((.status | ascii_downcase) == \"running\")] | length == 1)" >/dev/null; then
+          exit 0
+        fi
+        sleep 5
+      done
+      exit 1' bdd-autoscaler ${NVCF_CLI} ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml k3d-ncp-local
+      """
+
+    When I successfully invoke the function selected by NVCF CLI over HTTP with timeout "600" seconds and poll duration "5" seconds:
+      """
+      {"message":"bdd-autoscaler-echo","repeats":1}
+      """
+    Then the command output should contain "bdd-autoscaler-echo"
+
+    And I successfully undeploy the function selected by NVCF CLI
