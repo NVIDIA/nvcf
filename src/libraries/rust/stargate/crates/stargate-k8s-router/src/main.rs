@@ -179,6 +179,12 @@ impl RouterStartupConfig {
             Some(stargate_tls::ServerTlsIdentity::SelfSigned) | None => (None, None),
         };
         let upstream_tls_cert_pem = read_optional_file(args.upstream_tls_cert_path.as_deref())?;
+        if !args.quic_insecure
+            && let Some(cert_pem) = upstream_tls_cert_pem.as_deref()
+        {
+            stargate_tls::build_trusted_quic_client_config_with_alpn(cert_pem, Vec::new())
+                .context("validate upstream TLS trust bundle")?;
+        }
         let grpc = GrpcRouterConfig {
             advertised_hostname_template: args.advertised_hostname_template.clone(),
             advertised_grpc_port: args.advertised_grpc_port,
@@ -609,9 +615,11 @@ mod tests {
         install_default_crypto_provider();
         let (cert_pem, key_pem) =
             stargate_tls::generate_self_signed_cert().expect("test identity should generate");
+        let (upstream_ca_pem, _) =
+            stargate_tls::generate_self_signed_cert().expect("test CA should generate");
         let cert = test_file(&cert_pem);
         let key = test_file(&key_pem);
-        let upstream_ca = test_file(b"upstream-ca-bytes");
+        let upstream_ca = test_file(&upstream_ca_pem);
         let config = startup_config(&[
             "--tls-cert-path",
             test_file_path(&cert),
@@ -631,8 +639,64 @@ mod tests {
         );
         assert_eq!(
             tunnel.upstream_tls_cert_pem.as_deref(),
-            Some(&b"upstream-ca-bytes"[..]),
+            Some(upstream_ca_pem.as_slice()),
             "the explicit CA bundle must configure the upstream Raw QUIC client"
+        );
+    }
+
+    #[test]
+    fn startup_config_rejects_malformed_upstream_trust_bundle() {
+        install_default_crypto_provider();
+        let upstream_ca =
+            test_file(b"-----BEGIN CERTIFICATE-----\nnot base64\n-----END CERTIFICATE-----\n");
+
+        let error = RouterStartupConfig::from_args(router_args(&[
+            "--upstream-tls-cert-path",
+            test_file_path(&upstream_ca),
+        ]))
+        .err()
+        .expect("malformed upstream trust bundle must be rejected at startup");
+
+        let error = format!("{error:#}");
+        assert!(error.contains("validate upstream TLS trust bundle"));
+        assert!(error.contains("failed to parse cert PEM"));
+    }
+
+    #[test]
+    fn startup_config_rejects_empty_upstream_trust_bundle() {
+        install_default_crypto_provider();
+        let upstream_ca = test_file(b"");
+
+        let error = RouterStartupConfig::from_args(router_args(&[
+            "--upstream-tls-cert-path",
+            test_file_path(&upstream_ca),
+        ]))
+        .err()
+        .expect("empty upstream trust bundle must be rejected at startup");
+
+        let error = format!("{error:#}");
+        assert!(error.contains("validate upstream TLS trust bundle"));
+        assert!(error.contains("TLS trust bundle contains no certificates"));
+    }
+
+    #[test]
+    fn startup_config_reports_unreadable_upstream_trust_bundle_path() {
+        let upstream_ca = tempfile::NamedTempFile::new().expect("test file should be creatable");
+        let upstream_ca_path = upstream_ca.path().to_owned();
+        drop(upstream_ca);
+
+        let upstream_ca_path_string = upstream_ca_path
+            .to_str()
+            .expect("test file path should be valid UTF-8");
+        let error = RouterStartupConfig::from_args(router_args(&[
+            "--upstream-tls-cert-path",
+            upstream_ca_path_string,
+        ]))
+        .err()
+        .expect("unreadable upstream trust bundle must be rejected at startup");
+
+        assert!(
+            format!("{error:#}").contains(&format!("failed to read {upstream_ca_path_string}"))
         );
     }
 
