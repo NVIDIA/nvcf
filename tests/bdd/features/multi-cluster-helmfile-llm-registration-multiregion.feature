@@ -149,7 +149,7 @@ Feature: Register an LLM worker securely with routers in two local regions
         | --description | bdd-registration-multiregion                                        |
         | --scopes      | invoke_function,list_functions,queue_details,list_functions_details |
 
-      Then a pod containing container "llm-worker" using context "k3d-ncp-local-compute-1" should report Pylon metrics within "10m":
+      Then every Pylon for function "bdd-registration-multiregion" using container "llm-worker" and context "k3d-ncp-local-compute-1" should report metrics within "10m":
         | metric                               | comparison | count |
         | pylon_registration_stream_connected | exactly    | 5     |
         | pylon_reverse_tunnel_connected       | at least   | 3     |
