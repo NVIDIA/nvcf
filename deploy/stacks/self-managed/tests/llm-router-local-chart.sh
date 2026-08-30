@@ -49,6 +49,12 @@ test "$backend_repository" = "$main_repository" || {
   exit 1
 }
 
+main_tag="$(yq -r '.llmRequestRouter.image.tag' "$values_file")"
+test "$main_tag" = "0.14.2" || {
+  echo "llm-router-local-chart: expected stack-pinned Stargate 0.14.2, got ${main_tag:-missing}" >&2
+  exit 1
+}
+
 default_workload_kind="$(yq -r '.llmRequestRouter.workload.kind' "$values_file")"
 test "$default_workload_kind" = "Deployment" || {
   echo "llm-router-local-chart: expected default workload kind Deployment, got ${default_workload_kind:-missing}" >&2

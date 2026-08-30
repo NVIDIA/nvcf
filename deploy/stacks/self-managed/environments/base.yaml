@@ -316,6 +316,10 @@ addons:
       replicaCount: 3
       # Set only for source-tree validation. Empty uses the released OCI chart.
       chartPath: ""
+      image:
+        # Keep the stack manifest pin explicit instead of relying on the chart
+        # appVersion. This also keeps backend-router on the same Stargate build.
+        tag: "0.14.2"
       readiness:
         warmupMs: 60000
       workload:
