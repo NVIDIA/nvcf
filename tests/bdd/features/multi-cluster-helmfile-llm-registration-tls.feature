@@ -93,17 +93,13 @@ Feature: Register an LLM worker securely with every router in a local split-clus
       Then the command exit code should be 0
       And the command output should contain "plaintext-watch-rejected=tls-listener-timeout"
 
-      # WatchStargates is a long-lived stream. Normalize grpcurl's deadline
-      # exit after it prints the initial snapshot.
-      When I run command:
-        """
-        /bin/bash -c 'grpcurl -max-time 3 -cacert <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf -o jsonpath="{.data.ca\.crt}" | base64 -d) -authority llm-request-router.nvcf.svc.cluster.local -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates; rc=$?; [ "$rc" -ne 0 ]'
-        """
-      Then the command exit code should be 0
-      And the command output should contain "llm-request-router-0"
-      And the command output should contain "llm-request-router-1"
-      And the command output should contain "llm-request-router-2"
-      And the command output should contain "https://llm-request-router.nvcf.svc.cluster.local:50071"
+      When I successfully observe WatchStargates at "127.0.0.1:50071" with TLS authority "llm-request-router.nvcf.svc.cluster.local" using CA secret "stargate-quic-tls" in namespace "nvcf" and context "k3d-ncp-local-cp" for "3" seconds
+      Then the command output should contain all:
+        | text                                                                    |
+        | llm-request-router-0                                                    |
+        | llm-request-router-1                                                    |
+        | llm-request-router-2                                                    |
+        | https://llm-request-router.nvcf.svc.cluster.local:50071                |
 
       When I run command:
         """
@@ -164,20 +160,17 @@ Feature: Register an LLM worker securely with every router in a local split-clus
         | --description | bdd-registration-tls                                                |
         | --scopes      | invoke_function,list_functions,queue_details,list_functions_details |
 
-      # Discover the workload pod by its public sidecar name, then poll the
-      # Pylon metrics endpoint until all three router streams and reverse
-      # tunnels are connected.
-      When I run command:
-        """
-        /bin/sh -c 'set -eu; for attempt in $(seq 1 120); do row=$(kubectl --context k3d-ncp-local-compute-1 get pods -A -o json | jq -r "[.items[] | select(any(.spec.containers[]?; .name == \"llm-worker\")) | [.metadata.namespace,.metadata.name] | @tsv] | first // empty"); if [ -n "$row" ]; then ns=$(printf "%s" "$row" | cut -f1); pod=$(printf "%s" "$row" | cut -f2); metrics=$(kubectl --context k3d-ncp-local-compute-1 get --raw "/api/v1/namespaces/$ns/pods/$pod:9089/proxy/metrics" 2>/dev/null || true); registration=$(printf "%s\n" "$metrics" | grep -c "^pylon_registration_stream_connected.* 1$" || true); tunnels=$(printf "%s\n" "$metrics" | grep -c "^pylon_reverse_tunnel_connected.* 1$" || true); if [ "$registration" -eq 3 ] && [ "$tunnels" -eq 3 ]; then printf "registration=%s reverse=%s\n" "$registration" "$tunnels"; exit 0; fi; fi; sleep 5; done; exit 1'
-        """
-      Then the command exit code should be 0
-      And the command output should contain "registration=3 reverse=3"
+      Then a pod containing container "llm-worker" using context "k3d-ncp-local-compute-1" should report Pylon metrics within "10m":
+        | metric                               | comparison | count |
+        | pylon_registration_stream_connected | exactly    | 3     |
+        | pylon_reverse_tunnel_connected       | exactly    | 3     |
 
       When I successfully invoke model "openai-compatible-sample" at "/v1/chat/completions" with timeout "120" seconds:
         """
         {"messages":[{"role":"user","content":"bdd-registration-tls"}]}
         """
-      Then the command output should contain "chat.completion"
-      And the command output should contain "fixed 128-byte response"
+      Then the command output should contain all:
+        | text                    |
+        | chat.completion         |
+        | fixed 128-byte response |
       And I successfully undeploy the function selected by NVCF CLI

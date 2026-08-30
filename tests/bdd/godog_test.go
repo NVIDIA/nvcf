@@ -1372,28 +1372,13 @@ func TestMultiClusterHelmfileLLMRegistrationTLSFeatureFileWiresToSteps(t *testin
 			`if [ "$rc" -eq 0 ]; then printf "%s\n" "plaintext Watch unexpectedly succeeded" >&2; ` +
 			`exit 1; fi; printf "%s\n" "$output" | ` +
 			`bash tests/bdd/scripts/assert-grpcurl-plaintext-tls-rejection.sh'`
-		tlsWatchCommand = `/bin/bash -c 'grpcurl -max-time 3 ` +
-			`-cacert <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf ` +
-			`-o jsonpath="{.data.ca\.crt}" | base64 -d) ` +
-			`-authority llm-request-router.nvcf.svc.cluster.local ` +
-			`-import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto ` +
-			`127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates; ` +
-			`rc=$?; [ "$rc" -ne 0 ]'`
-		pylonMetricsCommand = `/bin/sh -c 'set -eu; for attempt in $(seq 1 120); do ` +
-			`row=$(kubectl --context k3d-ncp-local-compute-1 get pods -A -o json | ` +
-			`jq -r "[.items[] | select(any(.spec.containers[]?; .name == \"llm-worker\")) | ` +
-			`[.metadata.namespace,.metadata.name] | @tsv] | first // empty"); ` +
-			`if [ -n "$row" ]; then ns=$(printf "%s" "$row" | cut -f1); ` +
-			`pod=$(printf "%s" "$row" | cut -f2); ` +
-			`metrics=$(kubectl --context k3d-ncp-local-compute-1 get --raw ` +
-			`"/api/v1/namespaces/$ns/pods/$pod:9089/proxy/metrics" 2>/dev/null || true); ` +
-			`registration=$(printf "%s\n" "$metrics" | ` +
-			`grep -c "^pylon_registration_stream_connected.* 1$" || true); ` +
-			`tunnels=$(printf "%s\n" "$metrics" | ` +
-			`grep -c "^pylon_reverse_tunnel_connected.* 1$" || true); ` +
-			`if [ "$registration" -eq 3 ] && [ "$tunnels" -eq 3 ]; then ` +
-			`printf "registration=%s reverse=%s\n" "$registration" "$tunnels"; exit 0; fi; ` +
-			`fi; sleep 5; done; exit 1'`
+		tlsWatchCommand = "bash tests/bdd/scripts/observe-watch-stargates.sh" +
+			" 127.0.0.1:50071 llm-request-router.nvcf.svc.cluster.local" +
+			" stargate-quic-tls nvcf k3d-ncp-local-cp 3"
+		pylonMetricsCommand = "bash tests/bdd/scripts/wait-pylon-metrics.sh" +
+			" llm-worker k3d-ncp-local-compute-1 10m" +
+			" pylon_registration_stream_connected exactly 3" +
+			" pylon_reverse_tunnel_connected exactly 3"
 		invokeCommand = "/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke" +
 			" --inference-url /v1/chat/completions --model-name openai-compatible-sample" +
 			" --request-body '{\"messages\":[{\"role\":\"user\",\"content\":\"bdd-registration-tls\"}]}' --timeout 120"
@@ -1421,7 +1406,11 @@ func TestMultiClusterHelmfileLLMRegistrationTLSFeatureFileWiresToSteps(t *testin
 }`,
 			Stderr: "ERROR: DeadlineExceeded",
 		},
-		pylonMetricsCommand: {ExitCode: 0, Stdout: "registration=3 reverse=3\n"},
+		pylonMetricsCommand: {
+			ExitCode: 0,
+			Stdout: "pylon_registration_stream_connected=3\n" +
+				"pylon_reverse_tunnel_connected=3\n",
+		},
 		invokeCommand: {
 			ExitCode: 0,
 			Stdout: "Function invocation completed!\n\nResponse:\n" +
