@@ -12,7 +12,7 @@ work_dir="$(mktemp -d)"
 published_manifest="$work_dir/llm-request-router.yaml"
 published_release="$work_dir/llm-request-router-release.json"
 published_version=1.12.1
-expected_stargate_image="${NVCF_PUBLISHED_CHART_REGISTRY}/${NVCF_PUBLISHED_CHART_REPOSITORY}/stargate:0.14.2"
+expected_stargate_image="${NVCF_PUBLISHED_CHART_REGISTRY}/${NVCF_PUBLISHED_CHART_REPOSITORY}/stargate:0.14.1"
 trap 'rm -rf "$work_dir"' EXIT
 
 fail() {

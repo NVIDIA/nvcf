@@ -50,9 +50,15 @@ test "$backend_repository" = "$main_repository" || {
   exit 1
 }
 
-main_tag="$(yq -r '.llmRequestRouter.image.tag' "$values_file")"
-test "$main_tag" = "0.14.2" || {
-  echo "llm-router-local-chart: expected stack-pinned Stargate 0.14.2, got ${main_tag:-missing}" >&2
+main_tag="$(yq -r '.llmRequestRouter.image.tag // ""' "$values_file")"
+test -z "$main_tag" || {
+  echo "llm-router-local-chart: expected main router tag to inherit the chart default, got $main_tag" >&2
+  exit 1
+}
+
+backend_tag="$(yq -r '.llmRequestRouter.backendRouter.image.tag // ""' "$values_file")"
+test -z "$backend_tag" || {
+  echo "llm-router-local-chart: expected backend router tag to inherit the chart default, got $backend_tag" >&2
   exit 1
 }
 
@@ -61,12 +67,20 @@ helm template llm-request-router "$stack_dir/../../helm/llm-request-router/llm-r
   --values "$values_file" >"$local_manifest"
 
 main_registry="$(yq -r '.llmRequestRouter.image.registry' "$values_file")"
-expected_backend_image="${main_registry:+${main_registry}/}${main_repository}:0.14.2"
+expected_stargate_image="${main_registry:+${main_registry}/}${main_repository}:0.14.2"
+main_image="$(yq ea -r \
+  'select(.kind == "Deployment" and .metadata.name == "llm-request-router" and .metadata.namespace == "nvcf") | .spec.template.spec.containers[0].image' \
+  "$local_manifest")"
+test "$main_image" = "$expected_stargate_image" || {
+  echo "llm-router-local-chart: expected main router image $expected_stargate_image, got ${main_image:-missing}" >&2
+  exit 1
+}
+
 backend_image="$(yq ea -r \
   'select(.kind == "Deployment" and .metadata.name == "llm-request-router-backend-router" and .metadata.namespace == "nvcf") | .spec.template.spec.containers[] | select(.name == "backend-router") | .image' \
   "$local_manifest")"
-test "$backend_image" = "$expected_backend_image" || {
-  echo "llm-router-local-chart: expected backend router image $expected_backend_image, got ${backend_image:-missing}" >&2
+test "$backend_image" = "$expected_stargate_image" || {
+  echo "llm-router-local-chart: expected backend router image $expected_stargate_image, got ${backend_image:-missing}" >&2
   exit 1
 }
 

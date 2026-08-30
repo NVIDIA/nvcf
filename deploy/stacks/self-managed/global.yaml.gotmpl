@@ -999,7 +999,6 @@ llmRequestRouter:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}/stargate
-    tag: {{ dig "addons" "llm" "requestRouter" "image" "tag" "0.14.2" .Values | quote }}
   {{- /*
   Backend routing follows the LLM addon rather than being separately opted into.
   A worker holds one registration stream and one reverse tunnel per replica, and
