@@ -243,6 +243,35 @@ func TestRequeueDeletingStorageRequestWithFinalizer(t *testing.T) {
 	}
 }
 
+func TestRequiresStrictModelCacheCleanupPreservesLegacyEscape(t *testing.T) {
+	legacy := &nvcav1new.StorageRequest{
+		Spec: nvcav1new.StorageRequestSpec{Type: nvcav1new.ModelCacheRequest},
+	}
+	assert.False(t, requiresStrictModelCacheCleanup(legacy))
+
+	_, _, durable, _ := newHelmBindingTestFixture(t)
+	assert.True(t, requiresStrictModelCacheCleanup(durable))
+
+	nonDurable := durable.DeepCopy()
+	selection, err := ParsePersistedModelCacheStorageSelection(
+		nonDurable.Annotations[ModelCacheStorageSelectionAnnotationKey])
+	require.NoError(t, err)
+	selection.Mode = ModelCacheSelectionEphemeral
+	selection.BindingName = ""
+	selection.BindingUID = ""
+	selection.EncryptionRequired = false
+	selection.Transition = ModelCacheTransitionDisabled
+	selection.RequiredAccessModes = nil
+	raw, err := selection.Marshal()
+	require.NoError(t, err)
+	nonDurable.Annotations[ModelCacheStorageSelectionAnnotationKey] = raw
+	assert.False(t, requiresStrictModelCacheCleanup(nonDurable))
+
+	invalid := durable.DeepCopy()
+	invalid.Annotations[ModelCacheStorageSelectionAnnotationKey] = "{"
+	assert.True(t, requiresStrictModelCacheCleanup(invalid))
+}
+
 func TestDoCleanupSharedStorage(t *testing.T) {
 	// Setup shared storage request, and perform a standard cleanup on happy path
 	tests := []struct {

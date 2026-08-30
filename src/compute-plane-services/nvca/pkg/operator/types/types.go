@@ -46,8 +46,9 @@ const (
 	DefaultNVCARequestsNamespace = "nvcf-backend"
 
 	// CRD names
-	StorageRequestCRDName = "storagerequests.nvca.nvcf.nvidia.io"
-	MiniServicesCRDName   = "miniservices.nvca.nvcf.nvidia.io"
+	ModelCacheBindingCRDName = "modelcachebindings.nvca.nvcf.nvidia.io"
+	StorageRequestCRDName    = "storagerequests.nvca.nvcf.nvidia.io"
+	MiniServicesCRDName      = "miniservices.nvca.nvcf.nvidia.io"
 )
 
 const (

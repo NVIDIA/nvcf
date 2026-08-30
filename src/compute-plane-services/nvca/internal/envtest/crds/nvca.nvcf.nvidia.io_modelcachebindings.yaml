@@ -1,0 +1,226 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: modelcachebindings.nvca.nvcf.nvidia.io
+spec:
+  group: nvca.nvcf.nvidia.io
+  names:
+    kind: ModelCacheBinding
+    listKind: ModelCacheBindingList
+    plural: modelcachebindings
+    singular: modelcachebinding
+    shortNames: [mcb]
+  scope: Namespaced
+  versions:
+  - name: v2beta1
+    served: true
+    storage: true
+    subresources:
+      status: {}
+    additionalPrinterColumns:
+    - name: Workflow
+      jsonPath: .spec.identity.workflow
+      type: string
+    - name: Provider
+      jsonPath: .spec.decision.provider
+      type: string
+    - name: Phase
+      jsonPath: .status.phase
+      type: string
+    - name: Age
+      jsonPath: .metadata.creationTimestamp
+      type: date
+    schema:
+      openAPIV3Schema:
+        type: object
+        required: [spec]
+        properties:
+          spec:
+            type: object
+            required: [identity, decision, storageClass, resources]
+            x-kubernetes-validations:
+            - rule: self == oldSelf
+              message: spec is immutable
+            properties:
+              identity:
+                type: object
+                required: [version, workflow, sharingDomainDigest, cacheHandleDigest]
+                properties:
+                  version:
+                    type: string
+                    minLength: 1
+                  workflow:
+                    type: string
+                    enum: [regularModelCache, helmModelCache]
+                  sharingDomainDigest:
+                    type: string
+                    minLength: 1
+                  cacheHandleDigest:
+                    type: string
+                    minLength: 1
+              decision:
+                type: object
+                required:
+                - provider
+                - provisioner
+                - transition
+                - requiredAccessModes
+                - catalogDigest
+                - encryptionRequired
+                properties:
+                  provider:
+                    type: string
+                    minLength: 1
+                  provisioner:
+                    type: string
+                    minLength: 1
+                  transition:
+                    type: string
+                    minLength: 1
+                  requiredAccessModes:
+                    type: array
+                    minItems: 1
+                    x-kubernetes-list-type: set
+                    items:
+                      type: string
+                      enum: [ReadWriteOnce, ReadOnlyMany, ReadWriteMany, ReadWriteOncePod]
+                  catalogDigest:
+                    type: string
+                    pattern: ^sha256:[a-f0-9]{64}$
+                  encryptionRequired:
+                    type: boolean
+              storageClass:
+                type: object
+                required: [name, uid, reclaimPolicy, configurationDigest]
+                properties:
+                  name:
+                    type: string
+                    minLength: 1
+                  uid:
+                    type: string
+                    minLength: 1
+                  reclaimPolicy:
+                    type: string
+                    enum: [Retain]
+                  configurationDigest:
+                    type: string
+                    pattern: ^v1:sha256:[a-f0-9]{64}$
+              resources:
+                type: object
+                required: [writerNamespace]
+                properties:
+                  writerNamespace:
+                    type: string
+                    minLength: 1
+                  persistentVolumeClaimNames:
+                    type: array
+                    x-kubernetes-list-type: set
+                    items:
+                      type: string
+                      minLength: 1
+                  persistentVolumeNames:
+                    type: array
+                    x-kubernetes-list-type: set
+                    items:
+                      type: string
+                      minLength: 1
+                  jobNames:
+                    type: array
+                    x-kubernetes-list-type: set
+                    items:
+                      type: string
+                      minLength: 1
+                  storageClassNames:
+                    type: array
+                    x-kubernetes-list-type: set
+                    items:
+                      type: string
+                      minLength: 1
+                  secretNames:
+                    type: array
+                    x-kubernetes-list-type: set
+                    items:
+                      type: string
+                      minLength: 1
+                  leaseName:
+                    type: string
+                    minLength: 1
+          status:
+            type: object
+            x-kubernetes-validations:
+            - rule: "!has(oldSelf.phase) || oldSelf.phase != 'Retiring' || self.phase == 'Retiring'"
+              message: a Retiring binding cannot become Active
+            - rule: >-
+                !has(oldSelf.realized) || !has(oldSelf.realized.providerDataIdentity) ||
+                (has(self.realized) && has(self.realized.providerDataIdentity) &&
+                self.realized.providerDataIdentity == oldSelf.realized.providerDataIdentity)
+              message: providerDataIdentity is immutable once recorded
+            properties:
+              phase:
+                type: string
+                enum: [Active, Retiring]
+              lastPhaseTransitionTime:
+                type: string
+                format: date-time
+              requestReferences:
+                type: array
+                x-kubernetes-list-type: map
+                x-kubernetes-list-map-keys: [uid]
+                items:
+                  type: object
+                  required: [namespace, name, uid]
+                  properties:
+                    namespace:
+                      type: string
+                      minLength: 1
+                    name:
+                      type: string
+                      minLength: 1
+                    uid:
+                      type: string
+                      minLength: 1
+              realized:
+                type: object
+                properties:
+                  boundPersistentVolumeName:
+                    type: string
+                    minLength: 1
+                  providerDataIdentity:
+                    type: string
+                    minLength: 1
+                  populationState:
+                    type: string
+                    enum: [Pending, Populating, Ready, Failed]
+              conditions:
+                type: array
+                x-kubernetes-list-type: map
+                x-kubernetes-list-map-keys: [type]
+                items:
+                  type: object
+                  required: [lastTransitionTime, message, reason, status, type]
+                  properties:
+                    lastTransitionTime:
+                      type: string
+                      format: date-time
+                    message:
+                      type: string
+                      maxLength: 32768
+                    observedGeneration:
+                      type: integer
+                      format: int64
+                      minimum: 0
+                    reason:
+                      type: string
+                      minLength: 1
+                      maxLength: 1024
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                    status:
+                      type: string
+                      enum: ["True", "False", Unknown]
+                    type:
+                      type: string
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9_.]*[a-z0-9])?\.)*[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$

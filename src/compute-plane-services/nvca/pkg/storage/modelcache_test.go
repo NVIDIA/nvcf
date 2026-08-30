@@ -997,7 +997,7 @@ func TestReconcileSecondaryPVMountOptions(t *testing.T) {
 			}
 			rvBefore := stored.ResourceVersion
 
-			if err := r.reconcileSecondaryPVMountOptions(context.Background(), pv); err != nil {
+			if err := r.reconcileSecondaryPVMountOptions(context.Background(), stored); err != nil {
 				t.Fatalf("reconcileSecondaryPVMountOptions() error = %v", err)
 			}
 
@@ -1016,6 +1016,40 @@ func TestReconcileSecondaryPVMountOptions(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestReconcileSecondaryPVMountOptionsRejectsStaleObject(t *testing.T) {
+	pv := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "secondary-pv-test"},
+		Spec: corev1.PersistentVolumeSpec{
+			MountOptions: []string{"ro", "norecovery", "nouuid"},
+			PersistentVolumeSource: corev1.PersistentVolumeSource{
+				CSI: &corev1.CSIPersistentVolumeSource{
+					Driver:       NVMeshStorageClassProvisioner,
+					VolumeHandle: "handle",
+				},
+			},
+		},
+	}
+	objects := append(newMountOptionDefaultsObjects(
+		NVMeshStorageClassProvisioner, nvmeshMountOptionDefaults), pv)
+	c := fake.NewClientBuilder().WithScheme(mgrScheme).WithObjects(objects...).Build()
+	r := newMountOptionsReconciler(t, c, []string{"noatime"})
+
+	stale := &corev1.PersistentVolume{}
+	require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(pv), stale))
+	live := stale.DeepCopy()
+	live.Labels = map[string]string{"replacement": "true"}
+	require.NoError(t, c.Update(t.Context(), live))
+
+	err := r.reconcileSecondaryPVMountOptions(t.Context(), stale)
+	require.Error(t, err)
+	assert.True(t, apierrors.IsConflict(err), err)
+
+	got := &corev1.PersistentVolume{}
+	require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(pv), got))
+	assert.Equal(t, []string{"ro", "norecovery", "nouuid"}, got.Spec.MountOptions)
+	assert.Equal(t, "true", got.Labels["replacement"])
 }
 
 func Test_updateSecondaryPVVolumeHandle(t *testing.T) {

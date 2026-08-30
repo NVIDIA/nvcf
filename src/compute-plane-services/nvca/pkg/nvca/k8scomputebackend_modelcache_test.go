@@ -34,12 +34,55 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/encryption"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 const (
 	TestPVCName = "ropvc-test-name"
 )
+
+func TestSetupModelCachingForRequestSetsEncryptedStorageClassWhenUnset(t *testing.T) {
+	ctx := newTestContext()
+	clients := mockKubeClients()
+	const testNamespace = "test-encrypted-cache"
+	backend := K8sComputeBackend{
+		clients: clients,
+		bk8s: &BackendK8sCache{
+			podInstanceNamespace:    testNamespace,
+			nvmeshEncryptionEnabled: true,
+		},
+	}
+	rwPVC := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "rw-pvc-encrypted", Namespace: testNamespace},
+	}
+	initJob := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: "writer-encrypted", Namespace: testNamespace},
+	}
+	req := &nvcav2beta1.ICMSRequest{
+		ObjectMeta: metav1.ObjectMeta{Namespace: testNamespace},
+		Spec: nvcav2beta1.ICMSRequestSpec{
+			NCAId: "test-nca",
+			FunctionDetails: function.Details{
+				FunctionVersionID: "test-function-version",
+			},
+		},
+	}
+
+	state, _, setupErr := backend.SetupModelCachingForRequest(
+		ctx, rwPVC, initJob, req, true, func(client.Object) {})
+
+	require.NoError(t, setupErr)
+	require.Equal(t, ModelCachingInProgress, state)
+	require.NotNil(t, rwPVC.Spec.StorageClassName)
+	wantStorageClass := encryption.BuildStorageClassName(encryption.BuildMD5Hash(req.Spec.NCAId))
+	assert.Equal(t, wantStorageClass, *rwPVC.Spec.StorageClassName)
+	createdPVC, err := clients.K8s.CoreV1().PersistentVolumeClaims(testNamespace).Get(
+		ctx, rwPVC.Name, metav1.GetOptions{})
+	require.NoError(t, err)
+	require.NotNil(t, createdPVC.Spec.StorageClassName)
+	assert.Equal(t, wantStorageClass, *createdPVC.Spec.StorageClassName)
+}
 
 func Test_pvcReclaimDeleteCheck(t *testing.T) {
 	ctx, cancel := context.WithCancel(newTestContext())

@@ -25,6 +25,7 @@ openapi_gen() {
 main() {
   openapi_gen nvcf/v1
   openapi_gen nvca/v1alpha1
+  openapi_gen nvca/v2beta1
 }
 
 main "$@"

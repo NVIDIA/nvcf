@@ -23,6 +23,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
@@ -155,6 +157,133 @@ func TestEnsureNVMeshEncryptionStorageClass(t *testing.T) {
 	assert.Equal(t, StorageClassFS, sc.Parameters[StorageClassCSIFS])
 	assert.Equal(t, secretName, sc.Parameters[StorageClassCSISecret])
 	assert.Equal(t, namespace, sc.Parameters[StorageClassCSINS])
+}
+
+func TestEnsureNVMeshEncryptionStorageClassValidatesExisting(t *testing.T) {
+	const (
+		secretName = "test-secret"
+		namespace  = "test-namespace"
+		scName     = "test-sc"
+	)
+
+	tests := []struct {
+		name      string
+		mutate    func(*storagev1.StorageClass)
+		wantField string
+	}{
+		{
+			name: "provisioner",
+			mutate: func(sc *storagev1.StorageClass) {
+				sc.Provisioner = "unexpected.example.com"
+			},
+			wantField: "provisioner",
+		},
+		{
+			name: "reclaim policy",
+			mutate: func(sc *storagev1.StorageClass) {
+				policy := corev1.PersistentVolumeReclaimDelete
+				sc.ReclaimPolicy = &policy
+			},
+			wantField: "reclaimPolicy",
+		},
+		{
+			name: "binding mode",
+			mutate: func(sc *storagev1.StorageClass) {
+				mode := storagev1.VolumeBindingWaitForFirstConsumer
+				sc.VolumeBindingMode = &mode
+			},
+			wantField: "volumeBindingMode",
+		},
+		{
+			name: "volume expansion",
+			mutate: func(sc *storagev1.StorageClass) {
+				allowed := false
+				sc.AllowVolumeExpansion = &allowed
+			},
+			wantField: "allowVolumeExpansion",
+		},
+		{
+			name: "parameters",
+			mutate: func(sc *storagev1.StorageClass) {
+				sc.Parameters["unexpected"] = "value"
+			},
+			wantField: "parameters",
+		},
+		{
+			name: "mount options",
+			mutate: func(sc *storagev1.StorageClass) {
+				sc.MountOptions = []string{"unexpected"}
+			},
+			wantField: "mountOptions",
+		},
+		{
+			name: "allowed topologies",
+			mutate: func(sc *storagev1.StorageClass) {
+				sc.AllowedTopologies = []corev1.TopologySelectorTerm{{}}
+			},
+			wantField: "allowedTopologies",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sc := expectedNVMeshEncryptionStorageClass(secretName, namespace, scName)
+			tt.mutate(sc)
+			clients := &kubeclients.KubeClients{K8s: fake.NewSimpleClientset(sc)}
+
+			err := ensureNVMeshEncryptionStorageClass(
+				context.Background(), clients, secretName, namespace, scName)
+
+			assert.EqualError(t, err,
+				"existing NVMesh encryption StorageClass \"test-sc\" has unexpected "+tt.wantField)
+		})
+	}
+}
+
+func TestSetupEncryptionPreservesExistingSecret(t *testing.T) {
+	const (
+		ncaID     = "test-nca"
+		namespace = "test-namespace"
+	)
+	secretName := BuildMD5Hash(ncaID)
+	scName := BuildStorageClassName(secretName)
+	wantData := map[string][]byte{
+		"dmcryptKey": []byte("existing-key"),
+		"extra":      []byte("preserve-me"),
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: namespace},
+		Data:       wantData,
+	}
+	clients := &kubeclients.KubeClients{K8s: fake.NewSimpleClientset(
+		secret, expectedNVMeshEncryptionStorageClass(secretName, namespace, scName),
+	)}
+
+	gotSCName, err := SetupEncryption(context.Background(), clients, ncaID, namespace)
+
+	assert.NoError(t, err)
+	assert.Equal(t, scName, gotSCName)
+	actual, err := clients.K8s.CoreV1().Secrets(namespace).Get(
+		context.Background(), secretName, metav1.GetOptions{})
+	assert.NoError(t, err)
+	assert.Equal(t, wantData, actual.Data)
+}
+
+func TestEnsureNVMeshEncryptionSecretRejectsMissingKey(t *testing.T) {
+	const (
+		name      = "test-secret"
+		namespace = "test-namespace"
+	)
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Data:       map[string][]byte{"unrelated": []byte("value")},
+	}
+	clients := &kubeclients.KubeClients{K8s: fake.NewSimpleClientset(secret)}
+
+	err := ensureNVMeshEncryptionSecret(context.Background(), clients, name, namespace)
+
+	assert.EqualError(t, err,
+		"existing NVMesh encryption Secret test-namespace/test-secret has no dmcryptKey")
 }
 
 func TestEnsureNVMeshEncryptionSecret(t *testing.T) {

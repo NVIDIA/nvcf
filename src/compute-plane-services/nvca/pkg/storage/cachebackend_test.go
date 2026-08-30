@@ -50,7 +50,7 @@ func cacheBackendClient(t *testing.T, scs ...*storagev1.StorageClass) *fake.Clie
 	return b
 }
 
-func TestSelectHelmCacheBackend(t *testing.T) {
+func TestSelectLegacyHelmCacheBackend(t *testing.T) {
 	cachingOnly := []*featureflag.FeatureFlag{
 		featureflag.CachingSupport,
 		featureflag.HelmModelCaching,
@@ -178,7 +178,7 @@ func TestSelectHelmCacheBackend(t *testing.T) {
 			c := cacheBackendClient(t, tt.storageClasses...).Build()
 			ff := &featureflagmock.Fetcher{EnabledFFs: tt.flags}
 
-			got, err := SelectHelmCacheBackend(t.Context(), c, ff, tt.modelCacheClass)
+			got, err := SelectLegacyHelmCacheBackend(t.Context(), c, ff, tt.modelCacheClass)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 		})
@@ -190,11 +190,39 @@ func TestModelCacheStorageClassNameResolution(t *testing.T) {
 	assert.Equal(t, "custom-block-sc", ModelCacheStorageClassName("custom-block-sc"))
 }
 
-// TestSelectHelmCacheBackend_SambaClassLookupError proves a failed lookup of the
+func TestPersistedHelmCacheBackend(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		raw     string
+		want    HelmCacheBackend
+		wantErr bool
+	}{
+		{name: "empty legacy value", want: HelmCacheBackendNVMesh},
+		{name: "NVMesh", raw: string(HelmCacheBackendNVMesh), want: HelmCacheBackendNVMesh},
+		{name: "shared filesystem", raw: string(HelmCacheBackendSharedFS), want: HelmCacheBackendSharedFS},
+		{name: "Samba", raw: string(HelmCacheBackendSamba), want: HelmCacheBackendSamba},
+		{name: "none is not durable", raw: string(HelmCacheBackendNone), wantErr: true},
+		{name: "ephemeral is not durable", raw: string(HelmCacheBackendEphemeral), wantErr: true},
+		{name: "unknown", raw: "invented", wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := PersistedHelmCacheBackend(tt.raw)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Empty(t, got)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestSelectLegacyHelmCacheBackend_SambaClassLookupError proves a failed lookup of the
 // Samba backing class surfaces as an error rather than silently degrading to the
 // ephemeral cache: a transient API error must be retried, not treated as an
 // absent StorageClass.
-func TestSelectHelmCacheBackend_SambaClassLookupError(t *testing.T) {
+func TestSelectLegacyHelmCacheBackend_SambaClassLookupError(t *testing.T) {
 	sch := runtime.NewScheme()
 	require.NoError(t, storagev1.AddToScheme(sch))
 	c := fake.NewClientBuilder().WithScheme(sch).
@@ -214,7 +242,7 @@ func TestSelectHelmCacheBackend_SambaClassLookupError(t *testing.T) {
 		&featureflag.HelmSharedStorage.FeatureFlag,
 	}}
 
-	_, err := SelectHelmCacheBackend(t.Context(), c, ff, "")
+	_, err := SelectLegacyHelmCacheBackend(t.Context(), c, ff, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), DefaultModelCacheStorageClassName)
 }

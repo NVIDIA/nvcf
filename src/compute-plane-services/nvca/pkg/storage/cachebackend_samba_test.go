@@ -146,7 +146,7 @@ func TestEnsureSambaModelCacheInfra_ReportsDeploymentCreationTime(t *testing.T) 
 
 // TestEnsureSambaModelCacheInfra_BackingPVCStorageClass proves the backing PVC
 // lands on the configured model cache class, so the class
-// SelectHelmCacheBackend checked for existence is the one the volume needs, and
+// SelectLegacyHelmCacheBackend checked for existence is the one the volume needs, and
 // that an empty override resolves to the default rather than leaving the field
 // empty (which would silently pick the cluster's default StorageClass).
 func TestEnsureSambaModelCacheInfra_BackingPVCStorageClass(t *testing.T) {

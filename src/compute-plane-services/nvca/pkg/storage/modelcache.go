@@ -38,6 +38,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	apitypes "k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -124,6 +125,15 @@ func (r *Reconciler) terminalErrorWithMetricErr(reason string, err error) error 
 	return reconcile.TerminalError(err)
 }
 
+// shouldSurfaceModelCacheK8sError reports Kubernetes API failures that are not
+// deterministic cache-spec failures. Transient failures are requeued by the
+// reconcile boundary; authorization and validation failures are returned so
+// controller-runtime can surface them without marking the request terminal.
+func shouldSurfaceModelCacheK8sError(err error) bool {
+	return k8sutil.IsTransientK8sError(err) || apierrors.IsForbidden(err) ||
+		apierrors.IsUnauthorized(err) || apierrors.IsInvalid(err) || apierrors.IsGone(err)
+}
+
 // mapPodIssuesToFailureReason maps pod issues to a failure reason for metrics.
 // Returns the most specific reason based on priority order.
 func mapPodIssuesToFailureReason(podIssues sets.Set[string]) string {
@@ -170,8 +180,21 @@ func (r *Reconciler) doModelCacheRouted(ctx context.Context,
 	st nvcav1new.StorageRequest, stCopy *nvcav1new.StorageRequest,
 	icmsReq *nvcav2beta1.ICMSRequest,
 ) (reconcile.Result, error) {
+	if err := r.validatePersistedHelmCacheSelection(ctx, stCopy, icmsReq); err != nil {
+		// A persisted selection is the immutable request contract. Reject an
+		// invalid or conflicting request without invoking broad legacy cleanup,
+		// which could otherwise delete resources belonging to another cache.
+		if k8sutil.IsTransientK8sError(err) {
+			return reconcile.Result{Requeue: true}, nil
+		}
+		if isTerminal(err) {
+			stCopy.Status.Phase = nvcav1new.StorageFailed
+		}
+		return reconcile.Result{}, err
+	}
+
 	// Select the populate path by the backend stamped on the request by the
-	// miniservice reconciler (SelectHelmCacheBackend). Empty backend defaults to
+	// miniservice reconciler. Empty backend defaults to
 	// NVMesh for backward compatibility.
 	var res reconcile.Result
 	var err error
@@ -225,6 +248,66 @@ func (r *Reconciler) doModelCacheRouted(ctx context.Context,
 	}
 
 	return res, err
+}
+
+func (r *Reconciler) validatePersistedHelmCacheSelection(
+	ctx context.Context,
+	stCopy *nvcav1new.StorageRequest,
+	icmsReq *nvcav2beta1.ICMSRequest,
+) error {
+	raw := stCopy.Annotations[ModelCacheStorageSelectionAnnotationKey]
+	if raw == "" {
+		return nil
+	}
+	if icmsReq == nil {
+		return r.terminalErrorWithMetric(
+			modelcachetypes.ReasonCacheSpecInvalid,
+			"annotated Helm model cache StorageRequest has no ICMSRequest")
+	}
+	icmsRaw := icmsReq.Annotations[ModelCacheStorageSelectionAnnotationKey]
+	if icmsRaw == "" || icmsRaw != raw {
+		return r.terminalErrorWithMetric(
+			modelcachetypes.ReasonCacheSpecInvalid,
+			"StorageRequest model cache selection does not match the live ICMSRequest selection")
+	}
+	selection, err := ParsePersistedModelCacheStorageSelection(raw)
+	if err != nil {
+		return r.terminalErrorWithMetricErr(modelcachetypes.ReasonCacheSpecInvalid,
+			fmt.Errorf("parse persisted model cache storage selection: %w", err))
+	}
+	expectedBackend, err := HelmCacheBackendFromSelection(selection)
+	if err != nil {
+		return r.terminalErrorWithMetricErr(modelcachetypes.ReasonCacheSpecInvalid, err)
+	}
+	backend := ""
+	if stCopy.Spec.ModelCache != nil {
+		backend = stCopy.Spec.ModelCache.Backend
+	}
+	if selection.Mode != ModelCacheSelectionDurable || expectedBackend != HelmCacheBackendNVMesh ||
+		backend != string(expectedBackend) {
+		return r.terminalErrorWithMetric(modelcachetypes.ReasonCacheSpecInvalid,
+			fmt.Sprintf("persisted model cache selection %q conflicts with StorageRequest backend %q",
+				selection.Mode, backend))
+	}
+	encryptionRequired := stCopy.Spec.ModelCache != nil && stCopy.Spec.ModelCache.Encryption != nil &&
+		stCopy.Spec.ModelCache.Encryption.Required
+	if encryptionRequired != selection.EncryptionRequired {
+		return r.terminalErrorWithMetric(modelcachetypes.ReasonCacheSpecInvalid,
+			fmt.Sprintf("persisted model cache encryption requirement %t conflicts with StorageRequest value %t",
+				selection.EncryptionRequired, encryptionRequired))
+	}
+	binding, err := r.validatePersistedHelmModelCacheBinding(ctx, stCopy, icmsReq, selection)
+	if err != nil {
+		wrapped := fmt.Errorf("validate persisted Helm model cache binding: %w", err)
+		if shouldSurfaceModelCacheK8sError(err) {
+			return wrapped
+		}
+		return r.terminalErrorWithMetricErr(modelcachetypes.ReasonCacheSpecInvalid, wrapped)
+	}
+	if err := SetModelCacheBindingUIDLabel(stCopy, binding.UID); err != nil {
+		return r.terminalErrorWithMetricErr(modelcachetypes.ReasonCacheSpecInvalid, err)
+	}
+	return nil
 }
 
 // sharedFSProbeTTLSeconds is how long a cached CSI ROX/RWX probe result for
@@ -619,12 +702,18 @@ var accessModesRO = []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany}
 // after the agent starts is picked up on a later reconcile rather than being
 // written off forever.
 func (r *Reconciler) provisionerDefaultMountOptions(ctx context.Context) ([]string, bool) {
-	log := logf.FromContext(ctx)
-
 	provisioner, ok := r.modelCacheProvisionerName(ctx)
 	if !ok {
 		return nil, false
 	}
+	return r.defaultMountOptionsForProvisioner(ctx, provisioner)
+}
+
+func (r *Reconciler) defaultMountOptionsForProvisioner(
+	ctx context.Context,
+	provisioner string,
+) ([]string, bool) {
+	log := logf.FromContext(ctx)
 
 	cmName := r.cacheMountOptionsConfigMap
 	if cmName == "" {
@@ -773,6 +862,24 @@ func negatesMountOption(required, configured string) bool {
 // a default. Otherwise the configured options are used unchanged.
 func (r *Reconciler) resolveCacheMountOptions(ctx context.Context, pv *corev1.PersistentVolume) []string {
 	defaults, found := r.provisionerDefaultMountOptions(ctx)
+	return r.resolveCacheMountOptionsWithDefaults(ctx, pv, defaults, found)
+}
+
+func (r *Reconciler) resolveCacheMountOptionsForProvisioner(
+	ctx context.Context,
+	pv *corev1.PersistentVolume,
+	provisioner string,
+) []string {
+	defaults, found := r.defaultMountOptionsForProvisioner(ctx, provisioner)
+	return r.resolveCacheMountOptionsWithDefaults(ctx, pv, defaults, found)
+}
+
+func (r *Reconciler) resolveCacheMountOptionsWithDefaults(
+	ctx context.Context,
+	pv *corev1.PersistentVolume,
+	defaults []string,
+	found bool,
+) []string {
 	if !found {
 		return r.csiVolumeMountOptions
 	}
@@ -817,9 +924,22 @@ func mergeMountOptions(lists ...[]string) []string {
 func (r *Reconciler) reconcileSecondaryPVMountOptions(ctx context.Context,
 	secondaryPV *corev1.PersistentVolume,
 ) error {
+	return r.reconcileSecondaryPVMountOptionsForProvisioner(ctx, secondaryPV, "")
+}
+
+func (r *Reconciler) reconcileSecondaryPVMountOptionsForProvisioner(
+	ctx context.Context,
+	secondaryPV *corev1.PersistentVolume,
+	provisioner string,
+) error {
 	log := logf.FromContext(ctx)
 
-	want := r.resolveCacheMountOptions(ctx, secondaryPV)
+	var want []string
+	if provisioner == "" {
+		want = r.resolveCacheMountOptions(ctx, secondaryPV)
+	} else {
+		want = r.resolveCacheMountOptionsForProvisioner(ctx, secondaryPV, provisioner)
+	}
 	if slices.Equal(secondaryPV.Spec.MountOptions, want) {
 		return nil
 	}
@@ -828,7 +948,8 @@ func (r *Reconciler) reconcileSecondaryPVMountOptions(ctx context.Context,
 	secondaryPV.Spec.MountOptions = want
 	if err := nvcaotel.InvokeWithSpan(ctx, modelCacheTracer, "nvca.modelcache.reconcile_mount_options",
 		func(ctx context.Context) error {
-			return r.Client.Patch(ctx, secondaryPV, client.MergeFrom(secondaryPVOld))
+			return r.Client.Patch(ctx, secondaryPV,
+				client.MergeFromWithOptions(secondaryPVOld, client.MergeFromWithOptimisticLock{}))
 		},
 		oteltrace.WithAttributes(otelattr.String("nvcf.modelcache.pv", secondaryPV.Name)),
 	); err != nil {
@@ -868,15 +989,80 @@ func (r *Reconciler) doModelCacheNVMesh(ctx context.Context, //nolint:gocyclo
 	if err != nil {
 		return reconcile.Result{}, r.terminalErrorWithMetricErr(modelcachetypes.ReasonCacheSpecInvalid, fmt.Errorf("find and decode artifacts: %w", err))
 	}
+	// The translated artifacts may carry the workload namespace, but Helm cache
+	// writers are shared and always created in the binding's writer namespace.
+	// Normalize before validating immutable intent or checking existing objects.
+	rwPVC.Namespace = ModelCacheInitNamespace
+	initJob.Namespace = ModelCacheInitNamespace
+	if err := propagateModelCacheBindingUIDLabel(stCopy, rwPVC, initJob, &initJob.Spec.Template.ObjectMeta); err != nil {
+		return reconcile.Result{}, r.terminalErrorWithMetricErr(modelcachetypes.ReasonCacheSpecInvalid, err)
+	}
 
-	r.applyModelCacheStorageClass(ctx, rwPVC)
+	rawSelection := stCopy.Annotations[ModelCacheStorageSelectionAnnotationKey]
+	var selection *PersistedModelCacheStorageSelection
+	var binding *nvcav2beta1.ModelCacheBinding
+	if rawSelection == "" {
+		r.applyModelCacheStorageClass(ctx, rwPVC)
+	} else {
+		selection, err = ParsePersistedModelCacheStorageSelection(rawSelection)
+		if err != nil {
+			return reconcile.Result{}, r.terminalErrorWithMetricErr(
+				modelcachetypes.ReasonCacheSpecInvalid, fmt.Errorf("parse persisted model cache storage selection: %w", err))
+		}
+		if !selection.EncryptionRequired {
+			if rwPVC.Spec.StorageClassName != nil && *rwPVC.Spec.StorageClassName != "" &&
+				*rwPVC.Spec.StorageClassName != selection.StorageClassName {
+				return reconcile.Result{}, r.terminalErrorWithMetric(modelcachetypes.ReasonCacheSpecInvalid,
+					fmt.Sprintf("model cache writer StorageClass %q conflicts with persisted selection %q",
+						*rwPVC.Spec.StorageClassName, selection.StorageClassName))
+			}
+			rwPVC.Spec.StorageClassName = &selection.StorageClassName
+		}
+		binding, err = r.validatePersistedHelmModelCacheBinding(ctx, stCopy, icmsReq, selection)
+		if err != nil {
+			wrapped := fmt.Errorf("validate Helm model cache binding resource intent: %w", err)
+			if k8sutil.IsTransientK8sError(err) {
+				return reconcile.Result{Requeue: true}, nil
+			}
+			if shouldSurfaceModelCacheK8sError(err) {
+				return reconcile.Result{}, wrapped
+			}
+			return reconcile.Result{}, r.terminalErrorWithMetricErr(
+				modelcachetypes.ReasonCacheSpecInvalid, wrapped)
+		}
+	}
 
-	if enc := stCopy.Spec.ModelCache.Encryption; enc != nil {
-		scName, err := r.doEncryptedStorageClassNVMesh(ctx, stCopy, icmsReq.Spec.CreationMsgInfo.NCAID)
+	if stCopy.Spec.ModelCache.Encryption != nil && stCopy.Spec.ModelCache.Encryption.Required {
+		encryptionSharingDomain := icmsReq.Spec.CreationMsgInfo.NCAID
+		if rawSelection != "" {
+			encryptionSharingDomain = icmsReq.Spec.NCAId
+		}
+		scName, err := r.doEncryptedStorageClassNVMesh(ctx, stCopy, encryptionSharingDomain)
 		if err != nil {
 			return reconcile.Result{}, err
 		}
 		rwPVC.Spec.StorageClassName = &scName
+	}
+	if err := prepareModelCacheInitObjects(
+		stCopy, rwPVC, initJob, workerPullSecrets, HelmCacheBackendNVMesh); err != nil {
+		return reconcile.Result{}, r.terminalErrorWithMetricErr(modelcachetypes.ReasonCacheSpecInvalid, err)
+	}
+	if selection != nil {
+		intentLease := newInitLease(stCopy)
+		if err := propagateModelCacheBindingUIDLabel(stCopy, intentLease); err != nil {
+			return reconcile.Result{}, r.terminalErrorWithMetricErr(modelcachetypes.ReasonCacheSpecInvalid, err)
+		}
+		if err := r.prepareHelmModelCacheBindingResources(
+			ctx, binding, rwPVC, initJob, intentLease); err != nil {
+			if k8sutil.IsTransientK8sError(err) {
+				return reconcile.Result{Requeue: true}, nil
+			}
+			if errors.Is(err, errModelCacheBindingOwnership) {
+				return reconcile.Result{}, r.terminalErrorWithMetricErr(
+					modelcachetypes.ReasonCacheSpecInvalid, err)
+			}
+			return reconcile.Result{}, err
+		}
 	}
 
 	// The presence or absence of the primary PV will depend on which stage model caching is in.
@@ -884,7 +1070,22 @@ func (r *Reconciler) doModelCacheNVMesh(ctx context.Context, //nolint:gocyclo
 	switch st.Status.Phase {
 	case nvcav1new.StorageUnknown, nvcav1new.StoragePending, nvcav1new.StorageInitRunning:
 		if apierrors.IsNotFound(ppvErr) {
-			return r.doInitModelCacheNVMesh(ctx, st, stCopy, rwPVC, initJob, workerPullSecrets, HelmCacheBackendNVMesh)
+			writerPVCAlreadyExists, err := r.validateDynamicModelCacheWriterStorageClass(
+				ctx, st, stCopy, rwPVC, selection)
+			if err != nil {
+				if apierrors.IsNotFound(err) || errors.Is(err, ErrModelCacheStorageSelectionDrift) ||
+					errors.Is(err, errModelCacheBindingOwnership) {
+					return reconcile.Result{}, r.terminalErrorWithMetricErr(
+						modelcachetypes.ReasonCacheSpecInvalid, err)
+				}
+				if k8sutil.IsTransientK8sError(err) {
+					return reconcile.Result{Requeue: true}, nil
+				}
+				return reconcile.Result{}, err
+			}
+			return r.doInitModelCacheNVMeshWithExistingWriter(
+				ctx, st, stCopy, rwPVC, initJob, workerPullSecrets,
+				HelmCacheBackendNVMesh, writerPVCAlreadyExists)
 		} else if ppvErr != nil {
 			return reconcile.Result{}, ppvErr
 		}
@@ -904,6 +1105,22 @@ func (r *Reconciler) doModelCacheNVMesh(ctx context.Context, //nolint:gocyclo
 	case nvcav1new.StorageFailed, nvcav1new.StorageRuntimeError:
 		log.V(1).Error(fmt.Errorf("storage request is failed"), "Ignoring failed storage request")
 		return r.doCleanupModelCacheNVMesh(ctx, stCopy)
+	}
+
+	var bindingUID, requestUID apitypes.UID
+	if selection != nil {
+		bindingUID = apitypes.UID(stCopy.Labels[ModelCacheBindingUIDLabelKey])
+		requestUID = apitypes.UID(stCopy.Annotations[ICMSRequestUIDAnnotationKey])
+		if bindingUID == "" || requestUID == "" {
+			return reconcile.Result{}, r.terminalErrorWithMetric(
+				modelcachetypes.ReasonCacheSpecInvalid,
+				"annotated Helm model cache reader has incomplete binding or request ownership")
+		}
+		if err := validateHelmModelCachePrimaryPVForReuse(
+			stCopy, selection, rwPVC, primaryPV, bindingUID); err != nil {
+			return reconcile.Result{}, r.terminalErrorWithMetricErr(
+				modelcachetypes.ReasonCacheSpecInvalid, err)
+		}
 	}
 
 	switch primaryPV.Status.Phase {
@@ -948,9 +1165,9 @@ func (r *Reconciler) doModelCacheNVMesh(ctx context.Context, //nolint:gocyclo
 	// The name must be unique and related to the storage request that owns it.
 	secondaryPVName := "secondary-pv-" + stCopy.Spec.ICMSRequestName
 	roPVCName := "ro-pvc-" + stCopy.Spec.ModelCache.CacheHandle
-
 	// Create the PV first, which will be locked to the PVC by claim ref.
 	secondaryPV := &corev1.PersistentVolume{}
+	secondaryPVAlreadyExists := false
 	if err := r.Client.Get(ctx, client.ObjectKey{Name: secondaryPVName}, secondaryPV); err != nil {
 		if !apierrors.IsNotFound(err) {
 			return reconcile.Result{}, err
@@ -963,8 +1180,22 @@ func (r *Reconciler) doModelCacheNVMesh(ctx context.Context, //nolint:gocyclo
 			Annotations: types.GetAnnotationsForRequest(icmsReq),
 		}
 		maps.Copy(secondaryPV.Labels, getClusterWideResourceLabels(stCopy))
+		if err := propagateModelCacheBindingUIDLabel(stCopy, secondaryPV); err != nil {
+			return reconcile.Result{}, r.terminalErrorWithMetricErr(modelcachetypes.ReasonCacheSpecInvalid, err)
+		}
+		if selection != nil {
+			if err := SetModelCacheRequestUIDLabel(secondaryPV, requestUID); err != nil {
+				return reconcile.Result{}, r.terminalErrorWithMetricErr(
+					modelcachetypes.ReasonCacheSpecInvalid, err)
+			}
+		}
 		secondaryPV.Spec.AccessModes = accessModesRO
-		secondaryPV.Spec.MountOptions = r.resolveCacheMountOptions(ctx, secondaryPV)
+		if selection == nil {
+			secondaryPV.Spec.MountOptions = r.resolveCacheMountOptions(ctx, secondaryPV)
+		} else {
+			secondaryPV.Spec.MountOptions = r.resolveCacheMountOptionsForProvisioner(
+				ctx, secondaryPV, selection.Provisioner)
+		}
 		secondaryPV.Spec.ClaimRef = &corev1.ObjectReference{
 			APIVersion: "v1",
 			Kind:       "PersistentVolumeClaim",
@@ -982,14 +1213,39 @@ func (r *Reconciler) doModelCacheNVMesh(ctx context.Context, //nolint:gocyclo
 			return reconcile.Result{}, err
 		}
 		if err := r.Client.Create(ctx, secondaryPV); err != nil {
-			return reconcile.Result{}, err
+			if !apierrors.IsAlreadyExists(err) {
+				return reconcile.Result{}, err
+			}
+			secondaryPVAlreadyExists = true
+			secondaryPV = &corev1.PersistentVolume{}
+			if err := r.Client.Get(ctx, client.ObjectKey{Name: secondaryPVName}, secondaryPV); err != nil {
+				return reconcile.Result{}, fmt.Errorf("get secondary PV after create race: %w", err)
+			}
+		} else {
+			log.Info("Secondary PV created", "pv", secondaryPV.Name)
 		}
-		log.Info("Secondary PV created", "pv", secondaryPV.Name)
 	} else {
+		secondaryPVAlreadyExists = true
 		log.V(1).Info("Secondary PV already exists, checking status", "pv", secondaryPV.Name)
+	}
+	if selection != nil {
+		if err := validateHelmModelCacheSecondaryPV(
+			stCopy, selection, primaryPV, secondaryPV, roPVCName, bindingUID, requestUID); err != nil {
+			return reconcile.Result{}, r.terminalErrorWithMetricErr(
+				modelcachetypes.ReasonCacheSpecInvalid, err)
+		}
+	}
+	if secondaryPVAlreadyExists {
 		// Mount options are mutable via NGC/NVCFBackend, so an existing PV can be
 		// left behind when the configuration changes.
-		if err := r.reconcileSecondaryPVMountOptions(ctx, secondaryPV); err != nil {
+		var err error
+		if selection == nil {
+			err = r.reconcileSecondaryPVMountOptions(ctx, secondaryPV)
+		} else {
+			err = r.reconcileSecondaryPVMountOptionsForProvisioner(
+				ctx, secondaryPV, selection.Provisioner)
+		}
+		if err != nil {
 			if k8sutil.IsTransientK8sError(err) {
 				log.V(1).Info("Transient error reconciling secondary PV mount options, will retry",
 					"pv", secondaryPV.Name)
@@ -1005,6 +1261,12 @@ func (r *Reconciler) doModelCacheNVMesh(ctx context.Context, //nolint:gocyclo
 		if !apierrors.IsNotFound(err) {
 			return reconcile.Result{}, err
 		}
+		if selection != nil && secondaryPV.Spec.ClaimRef != nil && secondaryPV.Spec.ClaimRef.UID != "" {
+			return reconcile.Result{}, r.terminalErrorWithMetric(
+				modelcachetypes.ReasonCacheSpecInvalid,
+				fmt.Sprintf("secondary PV %q claimRef UID %q identifies a reader PVC generation that no longer exists",
+					secondaryPV.Name, secondaryPV.Spec.ClaimRef.UID))
+		}
 
 		roPVC = rwPVC.DeepCopy()
 		roPVC.ObjectMeta = metav1.ObjectMeta{
@@ -1014,6 +1276,15 @@ func (r *Reconciler) doModelCacheNVMesh(ctx context.Context, //nolint:gocyclo
 			Annotations: types.GetAnnotationsForRequest(icmsReq),
 		}
 		maps.Copy(roPVC.Labels, getClusterWideResourceLabels(stCopy))
+		if err := propagateModelCacheBindingUIDLabel(stCopy, roPVC); err != nil {
+			return reconcile.Result{}, r.terminalErrorWithMetricErr(modelcachetypes.ReasonCacheSpecInvalid, err)
+		}
+		if selection != nil {
+			if err := SetModelCacheRequestUIDLabel(roPVC, requestUID); err != nil {
+				return reconcile.Result{}, r.terminalErrorWithMetricErr(
+					modelcachetypes.ReasonCacheSpecInvalid, err)
+			}
+		}
 		roPVC.Spec.AccessModes = accessModesRO
 		// Set VolumeName to specify this particular PV to bind.
 		roPVC.Spec.VolumeName = secondaryPVName
@@ -1023,13 +1294,27 @@ func (r *Reconciler) doModelCacheNVMesh(ctx context.Context, //nolint:gocyclo
 			return reconcile.Result{}, err
 		}
 		if err := r.Client.Create(ctx, roPVC); err != nil {
-			return reconcile.Result{}, err
+			if !apierrors.IsAlreadyExists(err) {
+				return reconcile.Result{}, err
+			}
+			roPVC = &corev1.PersistentVolumeClaim{}
+			if err := r.Client.Get(ctx,
+				client.ObjectKey{Name: roPVCName, Namespace: stCopy.Namespace}, roPVC); err != nil {
+				return reconcile.Result{}, fmt.Errorf("get reader PVC after create race: %w", err)
+			}
+		} else {
+			log.Info("RO PVC created", "pvc", roPVC.Name)
 		}
-		log.Info("RO PVC created", "pvc", roPVC.Name)
 	} else {
 		log.V(1).Info("RO PVC already exists, checking status", "pvc", roPVC.Name)
 	}
-
+	if selection != nil {
+		if err := validateHelmModelCacheReaderPVC(
+			stCopy, rwPVC, secondaryPV, roPVC, bindingUID, requestUID); err != nil {
+			return reconcile.Result{}, r.terminalErrorWithMetricErr(
+				modelcachetypes.ReasonCacheSpecInvalid, err)
+		}
+	}
 	pvcState := r.getPVCState(roPVC)
 	switch pvcState {
 	case pvcBound:
@@ -1055,6 +1340,45 @@ func (r *Reconciler) doModelCacheNVMesh(ctx context.Context, //nolint:gocyclo
 	return reconcile.Result{}, nil
 }
 
+// validateDynamicModelCacheWriterStorageClass verifies the persisted base
+// StorageClass immediately before an annotated request can create a missing
+// unencrypted writer PVC. An existing binding-owned writer and the encrypted
+// derived-class path already have immutable resource identities, so neither
+// depends on the continued presence of nvcf-sc.
+func (r *Reconciler) validateDynamicModelCacheWriterStorageClass(
+	ctx context.Context,
+	st nvcav1new.StorageRequest,
+	stCopy *nvcav1new.StorageRequest,
+	rwPVC *corev1.PersistentVolumeClaim,
+	selection *PersistedModelCacheStorageSelection,
+) (bool, error) {
+	if st.Status.Phase != nvcav1new.StorageUnknown || selection == nil || selection.EncryptionRequired {
+		return false, nil
+	}
+
+	bindingUID := apitypes.UID(stCopy.Labels[ModelCacheBindingUIDLabelKey])
+	if bindingUID == "" {
+		return false, fmt.Errorf(
+			"%w: annotated model cache writer has no binding UID", errModelCacheBindingOwnership)
+	}
+
+	existing := &corev1.PersistentVolumeClaim{}
+	key := client.ObjectKey{Namespace: ModelCacheInitNamespace, Name: rwPVC.Name}
+	if err := r.Client.Get(ctx, key, existing); err == nil {
+		if err := validateHelmModelCacheWriterPVC(existing, rwPVC, bindingUID); err != nil {
+			return false, err
+		}
+		return true, nil
+	} else if !apierrors.IsNotFound(err) {
+		return false, fmt.Errorf("get model cache writer PVC %s/%s: %w", key.Namespace, key.Name, err)
+	}
+
+	if err := ValidateModelCacheStorageSelectionLive(ctx, r.Client, selection); err != nil {
+		return false, fmt.Errorf("validate selected StorageClass before creating model cache writer PVC: %w", err)
+	}
+	return false, nil
+}
+
 func (r *Reconciler) findAndDecodeCacheArtifacts(
 	icmsReq *nvcav2beta1.ICMSRequest,
 	namespace string,
@@ -1066,7 +1390,7 @@ func (r *Reconciler) findAndDecodeCacheArtifacts(
 ) {
 	objs, err := r.translateWorkload(namespace, icmsReq)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("translate request: %v", err)
+		return nil, nil, nil, fmt.Errorf("translate request: %w", err)
 	}
 	job, pvc, pullSecrets = findModelCacheObjects(objs)
 	if pvc == nil {
@@ -1098,10 +1422,116 @@ func (r *Reconciler) doInitModelCacheNVMesh(ctx context.Context,
 	pullSecrets []*corev1.Secret,
 	backend HelmCacheBackend,
 ) (res reconcile.Result, err error) {
+	return r.doInitModelCacheNVMeshWithExistingWriter(
+		ctx, st, stCopy, rwPVC, initJob, pullSecrets, backend, false)
+}
+
+func prepareModelCacheInitObjects(
+	st *nvcav1new.StorageRequest,
+	rwPVC *corev1.PersistentVolumeClaim,
+	initJob *batchv1.Job,
+	pullSecrets []*corev1.Secret,
+	backend HelmCacheBackend,
+) error {
+	if st == nil || st.Spec.ModelCache == nil || rwPVC == nil || initJob == nil {
+		return fmt.Errorf("model cache init object intent is incomplete")
+	}
+	initJob.Spec.Template.Spec.ImagePullSecrets = make([]corev1.LocalObjectReference, len(pullSecrets))
+	for i, pullSecret := range pullSecrets {
+		if pullSecret == nil {
+			return fmt.Errorf("model cache init pull Secret %d is nil", i)
+		}
+		pullSecret.Name = fmt.Sprintf("%s-%d-pull-worker", initJob.Name, i)
+		if err := propagateModelCacheBindingUIDLabel(st, pullSecret); err != nil {
+			return err
+		}
+		initJob.Spec.Template.Spec.ImagePullSecrets[i].Name = pullSecret.Name
+	}
+	if initJob.Spec.Template.Labels == nil {
+		initJob.Spec.Template.Labels = map[string]string{}
+	}
+	initJob.Spec.Template.Labels[modelCacheHandleLabelKey] = st.Spec.ModelCache.CacheHandle
+	if bindingUID := st.Labels[ModelCacheBindingUIDLabelKey]; bindingUID != "" {
+		initJob.Spec.Template.Labels[ModelCacheBindingUIDLabelKey] = bindingUID
+	}
+	if backend == HelmCacheBackendNVMesh {
+		SetNVMeshClientStatusSchedulingRequirement(&initJob.Spec.Template.Spec)
+	}
+	for _, obj := range append(
+		[]client.Object{rwPVC, initJob}, clientObjectsFromSecrets(pullSecrets)...,
+	) {
+		obj.SetNamespace(ModelCacheInitNamespace)
+		labels := obj.GetLabels()
+		if labels == nil {
+			labels = map[string]string{}
+			obj.SetLabels(labels)
+		}
+		labels[modelCacheHandleLabelKey] = st.Spec.ModelCache.CacheHandle
+	}
+	return nil
+}
+
+func clientObjectsFromSecrets(secrets []*corev1.Secret) []client.Object {
+	objects := make([]client.Object, 0, len(secrets))
+	for _, secret := range secrets {
+		objects = append(objects, secret)
+	}
+	return objects
+}
+
+func (r *Reconciler) doInitModelCacheNVMeshWithExistingWriter(ctx context.Context,
+	st nvcav1new.StorageRequest, stCopy *nvcav1new.StorageRequest,
+	rwPVC *corev1.PersistentVolumeClaim,
+	initJob *batchv1.Job,
+	pullSecrets []*corev1.Secret,
+	backend HelmCacheBackend,
+	writerPVCAlreadyExists bool,
+) (res reconcile.Result, err error) {
 	logf.IntoContext(ctx, logf.FromContext(ctx, "namespace", ModelCacheInitNamespace))
+	if err := propagateModelCacheBindingUIDLabel(stCopy, rwPVC, initJob, &initJob.Spec.Template.ObjectMeta); err != nil {
+		return reconcile.Result{}, r.terminalErrorWithMetricErr(modelcachetypes.ReasonCacheSpecInvalid, err)
+	}
+	if err := prepareModelCacheInitObjects(stCopy, rwPVC, initJob, pullSecrets, backend); err != nil {
+		return reconcile.Result{}, r.terminalErrorWithMetricErr(modelcachetypes.ReasonCacheSpecInvalid, err)
+	}
+	if bindingUID := apitypes.UID(stCopy.Labels[ModelCacheBindingUIDLabelKey]); bindingUID != "" {
+		intentLease := newInitLease(stCopy)
+		if err := propagateModelCacheBindingUIDLabel(stCopy, intentLease); err != nil {
+			return reconcile.Result{}, r.terminalErrorWithMetricErr(modelcachetypes.ReasonCacheSpecInvalid, err)
+		}
+		wantedObjects := []client.Object{rwPVC, initJob, intentLease}
+		wantedObjects = append(wantedObjects, clientObjectsFromSecrets(pullSecrets)...)
+		for _, wanted := range wantedObjects {
+			existing, ok := wanted.DeepCopyObject().(client.Object)
+			if !ok {
+				return reconcile.Result{}, r.terminalErrorWithMetric(
+					modelcachetypes.ReasonCacheSpecInvalid,
+					fmt.Sprintf("model cache object %T is not a controller-runtime object", wanted))
+			}
+			err := r.Client.Get(ctx, client.ObjectKeyFromObject(wanted), existing)
+			switch {
+			case apierrors.IsNotFound(err):
+			case err != nil:
+				if k8sutil.IsTransientK8sError(err) {
+					return reconcile.Result{Requeue: true}, nil
+				}
+				return reconcile.Result{}, err
+			default:
+				if err := validateHelmModelCacheBindingOwnedObjectIntent(
+					existing, wanted, bindingUID); err != nil {
+					return reconcile.Result{}, r.terminalErrorWithMetricErr(
+						modelcachetypes.ReasonCacheSpecInvalid, err)
+				}
+			}
+		}
+	}
 
 	// Use a lease to lock initialization.
-	lres, holdsLease, err := r.handleLease(ctx, newInitLease(stCopy))
+	lease := newInitLease(stCopy)
+	if err := propagateModelCacheBindingUIDLabel(stCopy, lease); err != nil {
+		return reconcile.Result{}, r.terminalErrorWithMetricErr(modelcachetypes.ReasonCacheSpecInvalid, err)
+	}
+	lres, holdsLease, err := r.handleLease(ctx, lease)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
@@ -1128,7 +1558,8 @@ func (r *Reconciler) doInitModelCacheNVMesh(ctx context.Context,
 	r.initStatuses.Lock()
 	defer r.initStatuses.Unlock()
 
-	res, err = r.reconcileInitModelCacheNVMesh(ctx, st, stCopy, rwPVC, initJob, pullSecrets, backend)
+	res, err = r.reconcileInitModelCacheNVMesh(
+		ctx, st, stCopy, rwPVC, initJob, pullSecrets, backend, writerPVCAlreadyExists)
 
 	// The lease holder updates the status for all non-holders (fan-out).
 	if existingStatus, ok := r.initStatuses.get(cacheHandle); !ok ||
@@ -1153,6 +1584,7 @@ func (r *Reconciler) reconcileInitModelCacheNVMesh(ctx context.Context,
 	initJob *batchv1.Job,
 	pullSecrets []*corev1.Secret,
 	backend HelmCacheBackend,
+	writerPVCAlreadyExists bool,
 ) (reconcile.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -1160,43 +1592,29 @@ func (r *Reconciler) reconcileInitModelCacheNVMesh(ctx context.Context,
 	case nvcav1new.StorageUnknown:
 		log.V(1).Info("Creating objects for pending model cache")
 
-		objsToCreate := []client.Object{rwPVC}
-		initJob.Spec.Template.Spec.ImagePullSecrets = make([]corev1.LocalObjectReference, len(pullSecrets))
+		objsToCreate := []client.Object{}
+		if !writerPVCAlreadyExists {
+			objsToCreate = append(objsToCreate, rwPVC)
+		}
 		for i, pullSecret := range pullSecrets {
-			// Rename the secret so it is consistent across all storage requests for the volume handle.
-			pullSecret.Name = fmt.Sprintf("%s-%d-pull-worker", initJob.Name, i)
 			objsToCreate = append(objsToCreate, pullSecret)
 			initJob.Spec.Template.Spec.ImagePullSecrets[i].Name = pullSecret.Name
 		}
-		// Add labels to Job pods for scheduling/observability.
-		if initJob.Spec.Template.Labels == nil {
-			initJob.Spec.Template.Labels = map[string]string{}
-		}
-		initJob.Spec.Template.Labels[modelCacheHandleLabelKey] = stCopy.Spec.ModelCache.CacheHandle
-		// NVMesh client readiness scheduling applies only to the NVMesh backend;
-		// the shared-FS backend (nvcf-miniservice-sc) has no NVMesh node requirement.
-		if backend == HelmCacheBackendNVMesh {
-			SetNVMeshClientStatusSchedulingRequirement(&initJob.Spec.Template.Spec)
-		}
 		objsToCreate = append(objsToCreate, initJob)
 		for _, obj := range objsToCreate {
-			obj.SetNamespace(ModelCacheInitNamespace)
-			labels := obj.GetLabels()
-			if labels == nil {
-				labels = map[string]string{}
-				obj.SetLabels(labels)
-			}
-			// Set the model cache handle label for association and deletion.
-			labels[modelCacheHandleLabelKey] = stCopy.Spec.ModelCache.CacheHandle
-
-			if err := r.Client.Create(ctx, obj); err != nil {
-				if apierrors.IsAlreadyExists(err) {
-					log.V(1).Error(err, "Init cache object already exists, either prior create failed "+
-						"or model cache not cleaned up on previous run")
-					continue
+			alreadyExists, err := r.createOrValidateModelCacheBindingOwnedObject(ctx, obj)
+			if err != nil {
+				log.Error(err, "Failed to create or validate cache init object")
+				if errors.Is(err, errModelCacheBindingOwnership) {
+					return reconcile.Result{}, r.terminalErrorWithMetricErr(
+						modelcachetypes.ReasonCacheSpecInvalid, err)
 				}
-				log.Error(err, "Failed to create cache init object")
 				return reconcile.Result{}, err
+			}
+			if alreadyExists {
+				log.V(1).Info("Init cache object already exists, either prior create failed " +
+					"or model cache was retained from a previous run")
+				continue
 			}
 		}
 		stCopy.Status.Phase = nvcav1new.StoragePending
@@ -1208,12 +1626,19 @@ func (r *Reconciler) reconcileInitModelCacheNVMesh(ctx context.Context,
 	case nvcav1new.StorageInitRunning:
 		log.V(1).Info("Handling initializing model cache objects")
 
+		wantedJob := initJob.DeepCopy()
 		jobKey := client.ObjectKey{Namespace: ModelCacheInitNamespace, Name: initJob.Name}
 		if err := r.Client.Get(ctx, jobKey, initJob); err != nil {
 			if apierrors.IsNotFound(err) {
 				return reconcile.Result{}, r.terminalErrorWithMetricErr(modelcachetypes.ReasonJobNotFound, fmt.Errorf("init job not found: %w", err))
 			}
 			return reconcile.Result{}, err
+		}
+		if bindingUID := apitypes.UID(stCopy.Labels[ModelCacheBindingUIDLabelKey]); bindingUID != "" {
+			if err := validateHelmModelCacheWriterJob(initJob, wantedJob, bindingUID); err != nil {
+				return reconcile.Result{}, r.terminalErrorWithMetricErr(
+					modelcachetypes.ReasonCacheSpecInvalid, err)
+			}
 		}
 		switch r.getInitCacheJobState(ctx, initJob) {
 		case initCacheJobCompleted:
@@ -1228,6 +1653,7 @@ func (r *Reconciler) reconcileInitModelCacheNVMesh(ctx context.Context,
 			return reconcile.Result{}, nil
 		}
 
+		wantedRWPVC := rwPVC.DeepCopy()
 		rwPVCKey := client.ObjectKey{Namespace: ModelCacheInitNamespace, Name: rwPVC.Name}
 		if err := r.Client.Get(ctx, rwPVCKey, rwPVC); err != nil {
 			if apierrors.IsNotFound(err) {
@@ -1235,8 +1661,15 @@ func (r *Reconciler) reconcileInitModelCacheNVMesh(ctx context.Context,
 			}
 			return reconcile.Result{}, err
 		}
+		if bindingUID := apitypes.UID(stCopy.Labels[ModelCacheBindingUIDLabelKey]); bindingUID != "" {
+			if err := validateHelmModelCacheWriterPVC(rwPVC, wantedRWPVC, bindingUID); err != nil {
+				return reconcile.Result{}, r.terminalErrorWithMetricErr(
+					modelcachetypes.ReasonCacheSpecInvalid, err)
+			}
+		}
 		switch r.getPVCState(rwPVC) {
 		case pvcBound:
+			var cleanupErrs []error
 			switch backend {
 			case HelmCacheBackendNVMesh:
 				// NVMesh: retain the bound dynamic PV as the cross-namespace
@@ -1247,7 +1680,7 @@ func (r *Reconciler) reconcileInitModelCacheNVMesh(ctx context.Context,
 					log.Error(err, "Failed to finalize primary PV")
 					return reconcile.Result{}, err
 				}
-				_ = r.cleanupInitModelCache(ctx, stCopy, false)
+				cleanupErrs = r.cleanupInitModelCache(ctx, stCopy, false)
 			case HelmCacheBackendSamba:
 				// Samba: the cache data lives in the per-handle backing PVC
 				// (samba-<handle>), populated via the writer's SMB mount. Stamp
@@ -1258,7 +1691,7 @@ func (r *Reconciler) reconcileInitModelCacheNVMesh(ctx context.Context,
 					log.Error(err, "Failed to mark Samba cache populated")
 					return reconcile.Result{}, err
 				}
-				_ = r.cleanupInitModelCache(ctx, stCopy, false)
+				cleanupErrs = r.cleanupInitModelCache(ctx, stCopy, false)
 			default:
 				// Shared-FS: the cache data lives on the shared backend
 				// (nvcf-miniservice-sc). Keep the writer RW PVC/job as the persistent
@@ -1276,7 +1709,11 @@ func (r *Reconciler) reconcileInitModelCacheNVMesh(ctx context.Context,
 				// without this, one completed Job and one Lease would accumulate
 				// per cache handle with no other cleanup path (idle GC only
 				// reclaims writer PVCs).
-				_ = r.cleanupInitModelCache(ctx, stCopy, true)
+				cleanupErrs = r.cleanupInitModelCache(ctx, stCopy, true)
+			}
+			cleanupResult, cleanupErr := modelCacheSuccessfulInitCleanupResult(cleanupErrs)
+			if cleanupErr != nil || cleanupResult != (reconcile.Result{}) {
+				return cleanupResult, cleanupErr
 			}
 
 			// The single-writer download completed: count one populate for the backend.
@@ -1299,6 +1736,28 @@ func (r *Reconciler) reconcileInitModelCacheNVMesh(ctx context.Context,
 	return reconcile.Result{}, nil
 }
 
+func modelCacheSuccessfulInitCleanupResult(errs []error) (reconcile.Result, error) {
+	if len(errs) == 0 {
+		return reconcile.Result{}, nil
+	}
+	realErrs := make([]error, 0, len(errs))
+	pendingDetach := false
+	for _, err := range errs {
+		if errors.Is(err, errVolumeStillAttached) {
+			pendingDetach = true
+			continue
+		}
+		realErrs = append(realErrs, err)
+	}
+	if len(realErrs) == 0 && pendingDetach {
+		return reconcile.Result{RequeueAfter: volumeDetachRequeueInterval}, nil
+	}
+	if k8sutil.AnyNonTransientK8sError(realErrs) == nil {
+		return reconcile.Result{Requeue: true}, nil
+	}
+	return reconcile.Result{}, errors.Join(realErrs...)
+}
+
 // handleLease will attempt to create lease for a cache handle.
 // If the lease already exists and is held by this storage request, it will renew the lease.
 // Else if it is expired, it will attempt to acquire it, and return true if so.
@@ -1315,6 +1774,11 @@ func (r *Reconciler) handleLease(ctx context.Context,
 	switch err := r.Client.Get(ctx, leaseKey, currLease); {
 	case err == nil:
 		// The lease was already created by another thread, proceed with handler.
+		if bindingUID := apitypes.UID(lease.Labels[ModelCacheBindingUIDLabelKey]); bindingUID != "" {
+			if err := ValidateModelCacheBindingUIDLabel(currLease, bindingUID); err != nil {
+				return reconcile.Result{}, false, reconcile.TerminalError(err)
+			}
+		}
 	case apierrors.IsNotFound(err):
 		// The lease can be acquired.
 		log.Info("Creating lease, starting model cache initialization")
@@ -1322,11 +1786,11 @@ func (r *Reconciler) handleLease(ctx context.Context,
 		lease.Spec.AcquireTime = &metav1.MicroTime{Time: now}
 		if err := r.Client.Create(ctx, lease); err != nil {
 			log.Error(err, "Failed to create lease")
-			return reconcile.Result{}, false, err
+			return modelCacheLeaseAPIErrorResult("create model cache Lease", err)
 		}
 		return reconcile.Result{}, true, nil
 	default:
-		return reconcile.Result{}, false, err
+		return modelCacheLeaseAPIErrorResult("get model cache Lease", err)
 	}
 
 	if currLease.Spec.HolderIdentity == nil {
@@ -1343,18 +1807,32 @@ func (r *Reconciler) handleLease(ctx context.Context,
 		// The least may exist but after a controller restart and/or ICMS request cleanup,
 		// the owner might not exist anymore to proceed with caching.
 		// Instead of waiting for timeout, acquire the lease and continue.
+		holderName, holderUID := parseModelCacheLeaseHolderIdentity(*currLease.Spec.HolderIdentity)
 		icmsReq := &nvcav2beta1.ICMSRequest{}
 		srerr := r.Client.Get(ctx, client.ObjectKey{
 			Namespace: r.ICMSRequestNamespace,
-			Name:      *currLease.Spec.HolderIdentity,
+			Name:      holderName,
 		}, icmsReq)
+		if srerr != nil && !apierrors.IsNotFound(srerr) {
+			wrapped := fmt.Errorf("get model cache Lease holder ICMSRequest %q: %w", holderName, srerr)
+			if k8sutil.IsTransientK8sError(srerr) {
+				log.V(1).Info("Transient Lease holder lookup failed, will retry", "error", wrapped)
+				return reconcile.Result{Requeue: true}, false, nil
+			}
+			return reconcile.Result{}, false, wrapped
+		}
 
 		// Some other thread is initializing the cache.
 		// Check if lease is expired.
 		leaseDur := time.Duration(*currLease.Spec.LeaseDurationSeconds) * time.Second
-		if apierrors.IsNotFound(srerr) ||
-			(currLease.Spec.RenewTime == nil && currLease.Spec.AcquireTime.Add(leaseDur).Before(now)) ||
-			currLease.Spec.RenewTime.Add(leaseDur).Before(now) {
+		leaseExpired := false
+		if currLease.Spec.RenewTime != nil {
+			leaseExpired = currLease.Spec.RenewTime.Add(leaseDur).Before(now)
+		} else {
+			leaseExpired = currLease.Spec.AcquireTime.Add(leaseDur).Before(now)
+		}
+		holderGone := apierrors.IsNotFound(srerr) || (holderUID != "" && icmsReq.UID != holderUID)
+		if holderGone || leaseExpired {
 			log.V(1).Info("Lease has expired or holder is gone, attempting to acquire",
 				"oldHolder", *currLease.Spec.HolderIdentity,
 				"newHolder", *lease.Spec.HolderIdentity,
@@ -1367,7 +1845,7 @@ func (r *Reconciler) handleLease(ctx context.Context,
 			currLease.Spec.RenewTime = &metav1.MicroTime{Time: now}
 			currLease.Spec.AcquireTime = &metav1.MicroTime{Time: now}
 			if err := r.Client.Update(ctx, currLease); err != nil {
-				return reconcile.Result{}, false, err
+				return modelCacheLeaseAPIErrorResult("acquire model cache Lease", err)
 			}
 			// No conflict, this storage request has acquired the lease.
 			log.Info("Acquired lease from old holder",
@@ -1406,13 +1884,23 @@ func (r *Reconciler) handleLease(ctx context.Context,
 			log.V(1).Info("Renewing lease", "holder", *currLease.Spec.HolderIdentity)
 			currLease.Spec.RenewTime = &metav1.MicroTime{Time: now}
 			if err := r.Client.Update(ctx, currLease); err != nil {
-				return reconcile.Result{}, false, err
+				return modelCacheLeaseAPIErrorResult("renew model cache Lease", err)
 			}
 		}
 		res.RequeueAfter = leaseDurHalf
 	}
 
 	return res, holdsLease, nil
+}
+
+func modelCacheLeaseAPIErrorResult(
+	operation string,
+	err error,
+) (reconcile.Result, bool, error) {
+	if k8sutil.IsTransientK8sError(err) || apierrors.IsAlreadyExists(err) {
+		return reconcile.Result{Requeue: true}, false, nil
+	}
+	return reconcile.Result{}, false, fmt.Errorf("%s: %w", operation, err)
 }
 
 func (r *Reconciler) getPrimaryPV(ctx context.Context, st *nvcav1new.StorageRequest) (*corev1.PersistentVolume, error) {
@@ -1422,6 +1910,9 @@ func (r *Reconciler) getPrimaryPV(ctx context.Context, st *nvcav1new.StorageRequ
 	ppvLabels := map[string]string{
 		primaryPVLabelKey:        primaryPVLabelValue,
 		modelCacheHandleLabelKey: st.Spec.ModelCache.CacheHandle,
+	}
+	if bindingUID := st.Labels[ModelCacheBindingUIDLabelKey]; bindingUID != "" {
+		ppvLabels[ModelCacheBindingUIDLabelKey] = bindingUID
 	}
 	pvs := &corev1.PersistentVolumeList{}
 	if err := r.Client.List(ctx, pvs, &client.ListOptions{
@@ -1454,6 +1945,20 @@ func (r *Reconciler) finalizePrimaryPVOnSuccessfulInit(ctx context.Context,
 	if err := r.Client.Get(ctx, client.ObjectKey{Name: primaryPVName}, primaryPV); err != nil {
 		return err
 	}
+	if bindingUID := apitypes.UID(stCopy.Labels[ModelCacheBindingUIDLabelKey]); bindingUID != "" {
+		if err := validateHelmModelCachePrimaryPVClaim(rwPVC, primaryPV, bindingUID); err != nil {
+			return reconcile.TerminalError(err)
+		}
+		selection, err := ParsePersistedModelCacheStorageSelection(
+			stCopy.Annotations[ModelCacheStorageSelectionAnnotationKey])
+		if err != nil {
+			return reconcile.TerminalError(fmt.Errorf(
+				"parse persisted model cache selection before finalizing primary PV: %w", err))
+		}
+		if err := validateHelmModelCachePrimaryPVForFinalize(selection, rwPVC, primaryPV); err != nil {
+			return reconcile.TerminalError(err)
+		}
+	}
 
 	primaryPVOld := primaryPV.DeepCopy()
 	if primaryPV.Labels == nil {
@@ -1464,12 +1969,16 @@ func (r *Reconciler) finalizePrimaryPVOnSuccessfulInit(ctx context.Context,
 	}
 	primaryPV.Labels[primaryPVLabelKey] = primaryPVLabelValue
 	primaryPV.Labels[modelCacheHandleLabelKey] = stCopy.Spec.ModelCache.CacheHandle
+	if err := propagateModelCacheBindingUIDLabel(stCopy, primaryPV); err != nil {
+		return err
+	}
 	timeStr := r.nowFunc().Format(primaryPVLastReferencedTimeFormat)
 	primaryPV.Annotations[primaryPVLastReferencedAnnotationKey] = timeStr
 	// Ensure PV data is retained for reuse by secondary PV's.
 	primaryPV.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
-	if err := r.Client.Patch(ctx, primaryPV, client.MergeFrom(primaryPVOld)); err != nil {
-		return fmt.Errorf("patch primary PV on successful init: %v", err)
+	if err := r.Client.Patch(ctx, primaryPV,
+		client.MergeFromWithOptions(primaryPVOld, client.MergeFromWithOptimisticLock{})); err != nil {
+		return fmt.Errorf("patch primary PV on successful init: %w", err)
 	}
 
 	return nil
@@ -1548,7 +2057,7 @@ func (r *Reconciler) sharedFSCachePopulated(ctx context.Context, rwPVCName strin
 
 func newInitLease(st *nvcav1new.StorageRequest) *coordv1.Lease {
 	// Multiple ICMS requests may be trying to initialize the cache.
-	leaseHolderID := st.Spec.ICMSRequestName
+	leaseHolderID := modelCacheLeaseHolderIdentity(st)
 	// Set to an hour so the model has time to download,
 	// and the reconciler can sufficiently back off the request.
 	var leaseDurSeconds int32 = 3600
@@ -1567,6 +2076,25 @@ func newInitLease(st *nvcav1new.StorageRequest) *coordv1.Lease {
 	lease.Spec.LeaseDurationSeconds = &leaseDurSeconds
 
 	return lease
+}
+
+func modelCacheLeaseHolderIdentity(st *nvcav1new.StorageRequest) string {
+	if st == nil {
+		return ""
+	}
+	requestName := st.Spec.ICMSRequestName
+	if requestUID := st.Annotations[ICMSRequestUIDAnnotationKey]; requestUID != "" {
+		return requestName + "@" + requestUID
+	}
+	return requestName
+}
+
+func parseModelCacheLeaseHolderIdentity(identity string) (string, apitypes.UID) {
+	name, uid, found := strings.Cut(identity, "@")
+	if !found || name == "" || uid == "" {
+		return identity, ""
+	}
+	return name, apitypes.UID(uid)
 }
 
 func buildInitLeaseName(cacheHandle string) string {
@@ -1606,6 +2134,7 @@ func (r *Reconciler) handlePendingModelCache(
 ) (reconcile.Result, error) {
 	log := logf.FromContext(ctx)
 
+	wantedJob := initJob.DeepCopy()
 	jobKey := client.ObjectKey{Namespace: ModelCacheInitNamespace, Name: initJob.Name}
 	if err := r.Client.Get(ctx, jobKey, initJob); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -1620,6 +2149,12 @@ func (r *Reconciler) handlePendingModelCache(
 		}
 		log.Error(err, "Failed to get cache init job for pending request")
 		return reconcile.Result{}, err
+	}
+	if bindingUID := apitypes.UID(stCopy.Labels[ModelCacheBindingUIDLabelKey]); bindingUID != "" {
+		if err := validateHelmModelCacheWriterJob(initJob, wantedJob, bindingUID); err != nil {
+			return reconcile.Result{}, r.terminalErrorWithMetricErr(
+				modelcachetypes.ReasonCacheSpecInvalid, err)
+		}
 	}
 	jobState := r.getInitCacheJobState(ctx, initJob)
 	if jobState == initCacheJobCompleted {

@@ -146,7 +146,7 @@ type SambaModelCacheInfraState struct {
 // intentionally creates NO StorageClass; cache volumes are static SMB PVs bound
 // to the per-handle share (see newSambaModelCachePV).
 //
-// dataStorageClass must be the class SelectHelmCacheBackend verified exists
+// dataStorageClass must be the class SelectLegacyHelmCacheBackend verified exists
 // before choosing this backend; empty resolves to the default.
 func EnsureSambaModelCacheInfra(
 	ctx context.Context,

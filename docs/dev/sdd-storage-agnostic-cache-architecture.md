@@ -1,423 +1,407 @@
-# SDD: Storage-Agnostic Cache Architecture
+# SDD: Storage-Agnostic Model Cache Architecture
 
 ## Summary
 
-This document separates implemented foundation from target runtime behavior.
+New model-cache requests select storage from two cluster objects:
 
-Implemented foundation:
+- `StorageClass/nvcf-sc` identifies the installed CSI provisioner.
+- ConfigMap `nvcf-storage-capabilities` maps that exact provisioner to an NVCA transition.
 
-- The NVCA Operator chart installs a public `v1alpha1` storage catalog and packages its JSON Schema.
-- NVCA has a strict catalog loader and semantic validator. Tests call them; runtime reconciliation does not.
-- Current public NVCA still uses legacy StorageClass-presence checks and feature flags for backend selection.
-- Weka, OCI File Storage (FSS), and OCI Lustre model-cache transitions remain `disabled`.
+NVCA records the selection on the `ICMSRequest`, creates an immutable `ModelCacheBinding`, and adds the exact request
+UID to the binding before it creates cache storage. Runtime code then uses the recorded binding. It does not select a
+different durable provider after a retry, restart, feature-gate change, or catalog change.
 
-Target:
+Only the catalog-registered durable transition `nvmesh` is executable. Weka, OCI File Storage (FSS), and OCI Lustre
+remain disabled for new annotated requests in both model-cache workflows. Their catalog entries do not enable cache
+traffic.
 
-1. Deployment tooling renders exactly one selected provider as `StorageClass/nvcf-sc`.
-2. The public NVCA catalog declares qualified access modes and regular/Helm cache transitions.
-3. NVCA resolves the live class and catalog entry, then persists a shared cache binding before storage side effects.
-4. A provider transition remains disabled until its complete functional contract passes.
-
-Deployment tooling owns CSI-specific StorageClass parameters. NVCA owns model-cache transitions. A provider name,
-provisioner, or access mode alone never enables a workflow.
-
-Editing the catalog ConfigMap does not enable a provider today. Runtime work is tracked in
-[NVIDIA/nvcf#1326](https://github.com/NVIDIA/nvcf/issues/1326); this SDD defines the stable `nvcf-sc` target contract.
+This change also sets Kubernetes read-only intent on the PVC volume source and every model-cache mount. Automated
+tests prove the generated Kubernetes objects. They do not prove backend write denial, multi-Pod mounts, data identity,
+restart behavior, or performance. Those require functional qualification on the target storage system.
 
 ## Table of contents
 
-- [Summary](#summary)
 - [Scope](#scope)
-- [Terms](#terms)
-- [Deployment configuration](#deployment-configuration)
-- [Storage catalog](#storage-catalog)
-- [Target runtime design](#target-runtime-design)
-- [Model-cache contract](#model-cache-contract)
-- [Failure, migration, and rollback](#failure-migration-and-rollback)
-- [Provider qualification](#provider-qualification)
-- [Test plan](#test-plan)
-- [Security and observability](#security-and-observability)
-- [Implementation order](#implementation-order)
+- [Current support](#current-support)
+- [Cluster configuration](#cluster-configuration)
+- [Runtime architecture](#runtime-architecture)
+- [Regular model cache](#regular-model-cache)
+- [Helm model cache](#helm-model-cache)
+- [Encryption](#encryption)
+- [Failure and cleanup rules](#failure-and-cleanup-rules)
+- [Compatibility and limitations](#compatibility-and-limitations)
+- [Test contract](#test-contract)
+- [Provider enablement](#provider-enablement)
+- [Rollout and rollback](#rollout-and-rollback)
 - [Public source references](#public-source-references)
 
 ## Scope
 
-This design covers regular and Helm/MiniService model cache across managed and self-managed deployments, including
-NVMesh, Weka, OCI FSS, OCI Lustre, future CSI providers, functional qualification, migration, and rollback.
+This design covers regular container model cache and Helm/MiniService model cache. It includes provider selection,
+binding ownership, NVMesh execution, read-only Kubernetes intent, cleanup guards, and the contract for adding another
+CSI provider.
 
-It excludes container cache; function, internal, and database storage; `nvcf-function-storage-sc`; CSI driver
-installation/lifecycle; and performance qualification, which follows functional acceptance.
+It excludes container cache, function storage, internal storage, database storage, CSI driver installation, and
+performance qualification.
 
-## Terms
+## Current support
 
-| Term | Meaning |
-|---|---|
-| Provider | Product or integration ID, such as `ociFss` or `weka` |
-| Provisioner | Exact CSI string in `StorageClass.provisioner` |
-| Access mode | Kubernetes PVC mode declared only after qualification for an exact provider configuration |
-| Workflow | `regularModelCache` or `helmModelCache` |
-| Transition | Named NVCA implementation that moves a cache from writer state to reusable reader state |
-| Qualification record | Versioned evidence for the exact tested storage and cluster configuration |
-| Sharing domain | Stable authorization and encryption scope, such as an NCA ID |
-| Cache key | Tuple of workflow, sharing domain, and cache handle |
-| Cache binding | Immutable provider and transition choice shared by all requests for one cache key |
-| Request selection | Per-request mode and optional cache-binding reference persisted before side effects |
-| Data identity | Provider-backed object containing one populated cache handle |
-| Writer | Workload holding the binding Lease while it populates a data identity |
-| Reader view | Provider-specific, namespace-local, read-only access to the same data identity |
+| Provisioner | Catalog access modes | Regular transition | Helm transition |
+|---|---|---|---|
+| `nvmesh-csi.excelero.com` | RWO, ROX | `nvmesh` | `nvmesh` |
+| `csi.weka.io` | RWX, ROX | `disabled` | `disabled` |
+| `fss.csi.oraclecloud.com` | RWX | `disabled` | `disabled` |
+| `lustre.csi.oraclecloud.com` | None recorded | `disabled` | `disabled` |
 
-`ReadOnlyMany` (ROX) is a PVC access mode. Mounting a `ReadWriteMany` (RWX) PVC with `readOnly: true` is not evidence
-that the driver provisions or binds a ROX PVC. Neither condition alone proves backend-enforced write denial or
-cross-namespace data identity.
+RWO means `ReadWriteOnce`, ROX means `ReadOnlyMany`, and RWX means `ReadWriteMany`.
 
-`ReadWriteOnce` (RWO) limits a volume to one node, not one Pod or writer. Kubernetes access modes describe attachment
-and mount intent; NVCA must separately serialize writers and test reader write denial.
+Catalog access modes record PVC modes exercised for an exact provider configuration. They do not prove an NVCF
+model-cache transition. In particular, a read-only Pod mount of an RWX claim is not ROX evidence.
 
-## Deployment configuration
+## Cluster configuration
 
-Managed input selects a provider through `spec.nvcfStorage.provider`, resolves
-`spec.storage.drivers.<provider>.storageClasses.nvcf-sc`, and renders `StorageClass/nvcf-sc`.
+### StorageClass contract
 
-The selected provider supplies its exact provisioner, parameters, mount options, binding mode, expansion setting,
-and topology. Provider values must match the installed CSI driver.
+Deployment tooling owns provider-specific CSI parameters. NVCA requires:
 
-The class name is always `nvcf-sc`, its reclaim policy is always `Retain`, and exactly one installed provider is
-primary even when multiple CSI drivers coexist. Rendering rejects an empty provisioner, invalid class fields, unknown
-provider fields, and provider input for `reclaimPolicy`.
+- the class name is `nvcf-sc`;
+- `provisioner` is non-empty;
+- `reclaimPolicy` is `Retain`;
+- exactly one provider supplies the class.
 
-When no provider is selected, managed output remains compatible with NVMesh. Self-managed deployments may use
-different tooling, but NVCA sees the same live `StorageClass/nvcf-sc` contract.
+The StorageClass digest covers provisioner, sorted parameters, reclaim policy, volume binding mode, mount options, and
+allowed topologies. It excludes metadata and `allowVolumeExpansion`. Expansion remains a deployment setting. NVMesh
+deployment configuration may keep `allowVolumeExpansion: true` without changing NVCA selection.
 
-NVMesh supports volume expansion, so its `nvcf-sc` definition and regression tests must preserve
-`allowVolumeExpansion: true`. Expansion is deployment behavior, not a field in the NVCA catalog.
+### Capability catalog
 
-## Storage catalog
+The operator chart installs `nvcf-storage-capabilities`. The operator mirrors it into each NVCA agent namespace. Data
+key `storage-provider-capabilities.yaml` contains the public catalog.
 
-The chart installs ConfigMap `nvcf-storage-capabilities` in its release namespace. Data key
-`storage-provider-capabilities.yaml` contains a `storage.nvcf.nvidia.com/v1alpha1` `StorageCapabilityCatalog`. Source
-and release charts contain byte-identical catalog and schema files; rendering fails when the catalog file is absent.
-
-### Minimal shape
+Minimal shape:
 
 ```yaml
+apiVersion: storage.nvcf.nvidia.com/v1alpha1
+kind: StorageCapabilityCatalog
 drivers:
   <exact-csi-provisioner>:
     provider: <provider-id>
     accessModes:
-      - <qualified-kubernetes-access-mode>
+      - <qualified-pvc-access-mode>
     transitions:
-      regularModelCache: <implemented-transition-or-disabled>
-      helmModelCache: <implemented-transition-or-disabled>
+      regularModelCache: <registered-transition-or-disabled>
+      helmModelCache: <registered-transition-or-disabled>
 ```
 
-This is a shape illustration, not a valid provider entry. Actual entries must use exact provisioner strings,
-Kubernetes access-mode names, and registered transition names.
+The provisioner is the lookup key. `provider` is an identifier for logs and persisted state. A transition names
+executable NVCA code. `disabled` is the only disabled value.
 
-The exact provisioner is the lookup key. `provider` is a label, `accessModes` cites externally qualified PVC modes, and
-each workflow names an implemented transition or `disabled`.
+The parser rejects unknown fields, unknown access modes, duplicate modes, unknown transitions, and transition/provider
+mismatches. Tests parse the shipped catalog and validate the shipped JSON Schema.
 
-Transition code, not the flat access-mode list, defines state A to state B:
+The catalog is not a general CSI capability matrix. It does not record expansion, snapshots, clones, performance, or
+topology support.
 
-| Transition | Provisioner | Writer to reader contract |
+### Selection outcomes
+
+For a cache request, NVCA evaluates `CachingSupport`, the Helm-only `HelmModelCaching` sub-gate, `nvcf-sc`, and the
+catalog once, before it creates the `ICMSRequest`.
+
+| Condition | Regular model cache | Helm model cache |
 |---|---|---|
-| `disabled` | Any | No durable transition |
-| `nvmesh` | `nvmesh-csi.excelero.com` | RWO writer to ROX reader views |
+| Caching gate is off | `none` | `none` |
+| `nvcf-sc` is absent | `none` | `ephemeral` |
+| Selected workflow transition is `disabled` | `none` | `ephemeral` |
+| Transition is `nvmesh` | `durable` | `durable` |
+| Catalog is invalid or provisioner is unknown | Request creation fails | Request creation fails |
+| `nvcf-sc` is not `Retain` | Request creation fails | Request creation fails |
 
-Adding a transition requires dispatcher code, schema and semantic validation, a declared writer-to-reader mode pair,
-and workflow tests. Access modes only show which required modes were qualified.
+NVCA never falls through to a second durable provider.
 
-`disabled` is the complete workflow-disabled state; a driver may still list qualified access modes. There is no
-separate qualification field. Enabling a transition is a release decision allowed only after implementation and exact
-workflow qualification; the schema cannot prove that evidence exists.
+## Runtime architecture
 
-The catalog intentionally does not contain a general CSI capability matrix. StorageClass rendering and provider
-documentation own expansion, snapshots, clones, topology, and other CSI settings.
+```text
+ICMS cache request
+  -> persisted selection annotation
+  -> persisted NVCA request finalizer
+  -> Active ModelCacheBinding with exact request UID reference
+  -> binding UID labels on cache resources
+  -> provider transition
+  -> read-only workload volume and mounts
+```
 
-Access-mode rules:
+### Persisted request selection
 
-- Record only Kubernetes access modes exercised by functional evidence for the exact provider configuration.
-- Do not infer ROX from a read-only Pod mount of an RWX claim.
-- Do not infer RWX or ROX from CSI driver documentation alone.
-- Do not infer cross-namespace sharing or backend write denial from an access mode.
+Annotation `nvca.nvcf.nvidia.io/model-cache-storage-selection` records:
 
-NVMesh uses transition `nvmesh` for both regular and Helm model cache. Samba is not an NVMesh transition. Weka, OCI
-FSS, and OCI Lustre transitions remain `disabled` until their exact workflow qualification passes.
+- workflow and mode;
+- StorageClass name, UID, and configuration digest;
+- catalog payload digest;
+- provider, provisioner, transition, and required access modes;
+- the NVMesh encryption decision;
+- binding name and API-assigned UID after the binding is committed.
 
-The target catalog does not register a generic `sharedfs` transition. Current NVCA retains a legacy, presence-selected
-`sharedfs` route. Separate dynamic PVCs may expose different data, so class or driver presence cannot qualify it.
+The annotation is strict JSON. Runtime validation rejects unknown fields, partial durable state, workflow changes, an
+incomplete binding reference, and unsupported transitions.
 
-### Validation contract
+Immediately before first binding creation, NVCA revalidates the live StorageClass and exact catalog payload. A changed
+UID, provisioner, `Retain` policy, StorageClass digest, catalog digest, provider, or transition fails before a storage
+side effect. Transient API errors requeue.
 
-CI validates structure and required fields with the packaged JSON Schema; Helm only checks that the file exists. When
-called, the Go loader independently performs strict decoding and semantic validation, including ID, access-mode,
-transition, and provisioner-transition checks. The test plan covers every rejection case.
+After binding creation, the binding is authoritative. NVCA does not reselect from a later catalog revision. If a
+binding-owned unencrypted writer PVC is missing and must be dynamically provisioned again, the live `nvcf-sc` must
+still match the binding's StorageClass snapshot. Existing bound objects and static reader objects do not require that
+live lookup.
 
-Catalog entries are configuration metadata, not credentials. The security requirements below govern their content.
+### ModelCacheBinding
 
-### Current runtime gap
+`ModelCacheBinding` is a namespaced `v2beta1` API object in `nvca-modelcache-init`.
 
-The loader has no runtime call site, and NVCA has no complete provider-neutral cache binding. Current requests persist
-only a coarse backend value. Both gaps must be closed before the catalog can control runtime behavior. Until then, a
-`disabled` catalog entry does not disable a legacy path selected by StorageClass presence.
-
-For Helm caching, current public NVCA first requires `CachingSupport` and `HelmModelCaching`. It then checks the legacy
-`nvcf-sc-30` marker, the `nvcf-miniservice-sc` sharedfs sentinel, and a gated Samba fallback with a usable backing
-class; otherwise it selects the per-Pod ephemeral cache. These are compatibility paths, not target provider selection.
-The presence-only sharedfs branch cannot prove a cross-namespace backend identity. The target reads only `nvcf-sc`,
-finds the exact provisioner entry, and selects its recorded transition.
-
-## Target runtime design
-
-### Selection algorithm
-
-For each request, NVCA must:
-
-1. Evaluate the applicable feature gates and workflow. Persist `none` or `ephemeral` on the request when selected; do
-   not create a durable binding.
-2. For durable caching, derive `(workflow, sharingDomain, cacheHandle)` and read its binding from the model-cache
-   control namespace.
-3. If it is `Active`, use it. If it is `Retiring`, retry or record a supported request fallback; never rebind it.
-4. If no binding exists, read `StorageClass/nvcf-sc`, require `Retain`, and strictly load the catalog.
-5. Find the exact provisioner entry and require a non-disabled transition with its required access modes.
-6. Create the binding by deterministic name and optimistic concurrency. A losing creator reads the winning binding.
-7. Conditionally add the request namespace, name, and UID while the binding is `Active`. Then persist its name, UID,
-   and a request finalizer before any storage side effect.
-8. Re-read the binding, confirm the reference and request finalizer are present, and execute only its transition.
-
-Unknown provisioners, invalid catalogs, non-`Retain` classes, and disabled transitions cannot select durable storage.
-The only generic fallbacks are `none` and, where the workflow supports it, `ephemeral`; NVCA never switches to a
-second durable provider.
-
-### Release qualification
-
-Provisioner matching selects code; it does not prove that a deployment was qualified. Before a transition is enabled,
-dated evidence must identify the CSI provisioner and images, backend version/configuration, `nvcf-sc` digest,
-Kubernetes version, eligible node/OS/architecture matrix, catalog/schema version, and evidence reference.
-
-Some backend fields are not discoverable through Kubernetes or CSI. The release or deployment qualification process,
-not NVCA, owns this record and verifies those fields. NVCA snapshots only live Kubernetes data it can read: the
-StorageClass name, UID, provisioner, configuration digest, and catalog digest. That snapshot detects drift for a cache
-binding; it does not prove the backend product or version.
-
-Setting a transition to a non-disabled value is therefore an operator or release assertion that the qualification
-record applies to the cluster. NVCA validates the catalog and live StorageClass, but cannot verify non-observable
-fields.
-
-### Cache binding and realized state
-
-Recomputing per request could mix providers for one cache key. The binding is one durable Kubernetes object in the
-model-cache control namespace; every namespace-local request for that key references it.
-
-| Group | Required binding data |
+| Area | Recorded data |
 |---|---|
-| Identity | Version, workflow, sharing-domain digest, and cache-handle digest |
-| Decision | Provider, provisioner, transition, required access modes, and catalog payload digest |
-| StorageClass snapshot | Name, UID, `Retain`, and configuration digest |
-| Resource intent | Deterministic names for NVCA-created PVCs, static PVs, Jobs, and Leases |
-| Lifecycle | `Active` or `Retiring`, request namespace/name/UID references, and finalizer |
-| Realized state | Bound PV and provider data identity plus population state as they become known |
+| Identity | Version, workflow, sharing-domain digest, cache-handle digest |
+| Decision | Provider, provisioner, transition, required access modes, catalog digest, encryption decision |
+| StorageClass | Name, UID, `Retain`, configuration digest |
+| Resource intent | Writer namespace, deterministic PVC and Job names, optional Lease, encrypted class and Secret names |
+| Lifecycle | `Active` or `Retiring`, exact request namespace/name/UID references, finalizer |
 
-The target API is a namespaced `ModelCacheBinding` in the model-cache control namespace. Its immutable `spec` contains
-identity, decision, StorageClass snapshot, and shared resource intent. Its `status` contains lifecycle, request
-references, realized state, and conditions; a finalizer protects cleanup. `StorageRequest.status.modelCache` gains an
-immutable request selection containing mode, binding name/UID, and deterministic namespace-local reader intent, plus a
-request finalizer. The UID is the API-assigned `ModelCacheBinding.metadata.uid`; it is not part of binding `spec`. API
-validation rejects binding-spec or request-selection mutation after persistence.
+The API server rejects `spec` mutation. It also rejects a transition from `Retiring` back to `Active` and a change to a
+recorded provider data identity.
 
-The versioned StorageClass digest is SHA-256 over canonical JSON containing provisioner, sorted parameters, reclaim
-policy, binding mode, mount options, and allowed topologies; list order is preserved. It excludes object metadata and
-volume expansion. The catalog digest is SHA-256 over the exact ConfigMap payload. The request records mode `none`,
-`ephemeral`, or `durable` and the binding reference when durable.
+Regular failure cleanup changes an `Active` binding to `Retiring` only when the exact request is its sole reference.
+`Retiring` blocks new references and normal runtime. That same regular request may resume interrupted cleanup.
+General zero-reference retirement, data garbage collection, binding deletion, `status.realized`, and conditions are not
+implemented. A zero-reference binding stays `Active`, and legacy idle garbage collection skips binding-owned cache data.
 
-Binding rules:
+Binding creation order:
 
-- Persist the binding and request reference before the first storage side effect.
-- All requests for one cache key converge through optimistic concurrency.
-- A Lease keyed by the binding serializes at most one active writer.
-- Retries and agent restarts reuse the binding.
-- Creation uses the recorded deterministic name and Get-before-Create. A retry adopts an object only when its binding
-  UID and immutable spec match the intent; a mismatch is terminal.
-- Record provider data identity only after it exists; do not change it afterward.
-- Catalog, feature-gate, and StorageClass updates do not mutate an existing binding.
-- Before any resource exists, input drift fails without side effects.
-- After a resource exists, reconcile only the binding's resources; never switch providers or delete data because of
-  drift.
-- Do not include Secret contents.
+1. Persist the general NVCA finalizer on the `ICMSRequest` and stop that reconcile.
+2. Build the deterministic binding intent.
+3. If no binding exists, revalidate live selection inputs and create it.
+4. Initialize it as `Active` and add the exact request UID reference.
+5. Persist the binding name and UID in the request selection and stop that reconcile.
+6. Re-read the binding, require exact immutable intent, `Active`, finalizer, UID, and request reference.
+7. Start provider side effects.
 
-Cleanup is a state transition, not a list-then-delete check. The reconciler marks the binding `Retiring`, which blocks
-new references, while its finalizer prevents deletion. A stale reference is one whose request is absent, has a different
-UID, or does not point back to the binding. Request deletion first removes reader resources, then removes the binding
-reference, then releases the request finalizer. Provider cleanup starts only at zero references; the binding finalizer
-is released only after owned Kubernetes resources are gone. Deleting retained backend data, if required, is an explicit
-transition operation, not a response to configuration drift.
+Before this request persists a binding reference, NVCA may reuse an exact Active binding and add the request reference,
+or recover an exact newly created binding whose status is completely empty. After the request records the binding name
+and UID, normal runtime retries require the exact UID, finalizer, immutable spec, Active phase, and request reference.
+Partially initialized status, Retiring runtime use, new joins to Retiring bindings, and immutable collisions fail
+closed. The exact sole regular request may resume cleanup against its Retiring binding. A stale same-name request
+reference is replaced only after the old request UID is absent. If request deletion starts while the reference is being
+committed, NVCA removes the newly added reference.
 
-## Model-cache contract
+The current binding name hashes only the cache handle because existing NVMesh resource names are handle-scoped. The
+same handle in another workflow or sharing domain collides and fails closed. A future resource-naming migration is
+required before those domains can use independent bindings for the same handle.
 
-PVCs are namespace-scoped. One PVC cannot be mounted by Pods in different namespaces. A same-namespace multi-Pod
-read-only test is primitive evidence only.
+## Regular model cache
 
-A regular or Helm model-cache transition can be enabled only if it provides:
+The regular path runs in the Pod instance namespace.
 
-- at most one active writer per cache key, serialized by the binding Lease;
-- one provider-backed data identity per cache key;
-- no source-sized clone or extra data copy;
-- namespace-local reader objects that resolve to the same data identity through a documented provider mechanism;
-- no duplicate PVs with one CSI `volumeHandle`;
-- `readOnly: true` on both the PVC volume source and each matching `volumeMount`;
-- a read-only flag on the filesystem mount observed inside each reader container;
-- failed write attempts from every reader Pod;
-- a durable populated marker that survives writer cleanup and NVCA restart;
-- idempotent creation, observation, retry, and deletion;
-- cleanup that cannot delete data while another namespace references it.
+1. Create `rw-pvc-<handle>` with RWO and `writer-job-<handle>`.
+2. Wait for population and volume detachment.
+3. Set the retained PV to ROX and bind `ro-pvc-<handle>` to that PV.
+4. Mount the reader PVC with `PersistentVolumeClaimVolumeSource.readOnly: true`.
+5. Set every matching init-container and container `volumeMount.readOnly: true`.
 
-The current webhook sets `PersistentVolumeClaimVolumeSource.readOnly: true` but sets both model-cache `volumeMount`
-values to `false`. Runtime implementation must set and test both mount values as `true` before external qualification.
+The regular path has no Kubernetes Lease. Its mutex serializes setup only within one NVCA process. Deterministic names
+detect collisions; they do not elect one writer across the cluster. The binding UID labels the writer PVC, Job, Job Pod
+template, retained PV, and reader PVC. Existing same-name PVCs and Jobs require the exact binding UID and immutable
+intent. Other same-name objects are not adopted.
 
-Kubernetes and generic CSI do not provide a cross-namespace PVC-sharing primitive. Each transition owns its
-provider-specific reader-view mapping. A registered transition must document a driver-supported alias or rebind method
-that produces namespace-local PVC/PV pairs with distinct CSI `volumeHandle` values resolving to the same backend data.
-The generic planner must not synthesize those PVs or assume two PVCs from one class expose the same data. A provider
-remains disabled if it cannot meet this contract without a source-sized copy.
+Before any destructive failure cleanup, NVCA atomically changes the binding from `Active` to `Retiring` if the exact
+request is its sole reference. A concurrent reference prevents retirement and cleanup. The same request can resume
+interrupted cleanup while the binding remains `Retiring`. Cleanup validates exact resource names, immutable PVC and Job
+intent, claim ownership, and binding UID before each destructive change. Legacy periodic reader-PVC garbage collection
+skips binding-owned PVCs.
 
-Cross-workflow and cross-domain reuse are not assumed. Either requires its own qualified transition and authorization
-contract.
+## Helm model cache
 
-## Failure, migration, and rollback
+The Helm writer runs in `nvca-modelcache-init`.
 
-After runtime enforcement is wired, durable selection fails closed for a missing or invalid catalog, a missing or
-non-`Retain` `nvcf-sc`, an unknown provisioner or transition, a disabled workflow, or drift before the first side
-effect.
-Stale resources from the presence-selected sharedfs path are not adopted.
+1. A Lease named from the cache handle elects one writer request.
+2. The writer populates `rw-pvc-<handle>` through `writer-job-<handle>`.
+3. NVCA retains the primary PV as the cache data identity.
+4. Each StorageRequest creates its namespace-local ROX PVC and secondary PV for the same NVMesh data identity.
+5. The webhook sets the PVC volume source and every mount that references the model-cache volume read-only.
 
-Failure before a binding or request fallback is persisted creates no storage objects. Failure afterward follows the
-recorded transition's cleanup rules. `none` or `ephemeral` is used only when recorded on the request.
+The binding UID labels the StorageRequest, writer PVC, Job and Pod template, pull Secrets, Lease, primary PV, secondary
+PV, and reader PVC. The secondary PV and reader PVC also carry
+`nvca.nvcf.nvidia.io/model-cache-request-uid`, which rejects a stale same-name reader from an earlier ICMSRequest
+generation. Shared writer objects do not carry a request UID label because multiple requests can share them. The
+StorageRequest records the source UID in annotation `nvca.nvcf.nvidia.io/icms-request-uid`. Existing writer objects and
+Leases with another or missing binding UID fail closed. An existing StorageRequest must match the exact persisted
+selection and source ICMSRequest UID. Same-binding PVC, Job, Lease, and pull Secret adoption also requires immutable
+intent to match before any object is created.
 
-Legacy requests may have no backend or only a coarse backend value. Runtime migration must enforce:
+Annotated cleanup validates the Active binding and exact per-request reader inventory before deletion. While the exact
+binding reference is present, only a Lease holder containing the exact request UID may delete shared writer artifacts.
+Before each shared-writer deletion, cleanup revalidates the Lease UID, resourceVersion, binding UID, and holder. After
+that reference is released, the StorageRequest identity is a tombstone only if the exact ICMSRequest is deleting or
+absent. The tombstone authorizes deletion of that request's reader PV/PVC only; shared writer cleanup is skipped. A live
+unreferenced request, a same-name request with another UID, or a request-read error stops cleanup. Legacy idle GC skips
+binding-owned primary PVs and their encrypted StorageClasses.
 
-- requests with existing resources are not rebound to another provider;
-- requests without storage side effects may establish or reference a binding;
-- ambiguous shared-filesystem resources are not adopted from class presence or labels alone;
-- NVMesh retained-primary-PV, sharedfs writer-PVC, and Samba backing-PVC markers are inspected explicitly;
-- a migrated request remains stable across retry and restart.
+## Encryption
 
-The runtime change must derive the exact legacy conversion from existing resources and cover it with tests.
+Encryption is part of the durable selection and binding decision. A later feature-gate change does not change it.
 
-New unencrypted cache requests must reject the legacy `Agent.ModelCache.StorageClassName` override unless it is empty
-or `nvcf-sc`. NVMesh encryption is the exception: selection still uses `nvcf-sc`, while the `nvmesh` transition records
-and validates its deterministic per-NCA derived StorageClass before creating the encrypted writer PVC. The NCA sharing
-domain is part of the cache key, and the derived class cannot select a provider.
+NVMesh encryption uses existing sharing-domain-scoped resources:
 
-Provider-defining StorageClass fields, including the provisioner and parameters, cannot be changed in place. A
-provider change is a maintenance operation:
+- regular: StorageClass `<domain-hash>-sc` and Secret `<domain-hash>`;
+- Helm: StorageClass `sc-<domain-hash>` and Secret `scsec-<domain-hash>`.
 
-1. Stop new cache PVC creation.
-2. Mark every binding for the current `nvcf-sc` UID `Retiring` so it rejects new references.
-3. Drain requests, reach zero references, complete cleanup, and inventory retained data.
-4. Verify no active binding references the old UID, then delete and recreate `nvcf-sc`.
-5. Verify the new UID, provisioner, configuration digest, provisioning, and mounts.
-6. Run functional qualification for the exact deployed configuration.
-7. Resume new requests only after catalog and runtime support are deployed.
+The derived StorageClass must match the expected NVMesh provisioner, `Retain`, binding mode, expansion setting, and
+parameters. The Secret must contain a non-empty `dmcryptKey`. Existing conflicting objects fail closed, and existing
+key material is preserved.
 
-Rollback repeats the process with the prior definition. `Retain` prevents automatic deletion; it does not migrate data.
+These objects are shared by multiple bindings in one domain, so they do not carry one binding UID. The binding records
+their deterministic names, never Secret contents.
 
-## Provider qualification
+## Failure and cleanup rules
 
-1. Verify CSI controller health and node-plugin readiness on every eligible CPU and GPU node.
-2. Render and verify the exact `nvcf-sc` definition.
-3. Run dynamic provisioning and basic mount tests.
-4. Prove each cataloged access mode for the exact deployed configuration.
-5. Add the catalog entry with both transitions `disabled`.
-6. Implement an explicit transition, including its provider-specific reader-view mapping.
-7. Run the full workflow suite across namespaces and eligible pools.
-8. Record CSI, backend, StorageClass, Kubernetes, node, and dated evidence details.
-9. Set only a passing workflow to its implemented transition.
-10. Deploy catalog and runtime changes together, then verify new bindings.
+| Event | Result for a new persisted request |
+|---|---|
+| Feature gate changes after selection | Recorded mode remains authoritative |
+| StorageClass or catalog drifts before binding creation | Terminal failure, no binding or cache object |
+| Catalog changes after binding creation | Existing binding remains authoritative |
+| Missing writer requires dynamic provisioning after class replacement | Terminal failure before PVC creation |
+| Runtime binding is missing, replaced, `Retiring`, or lacks the exact request reference | Terminal failure; the exact sole regular request may resume cleanup against `Retiring`, and Helm cleanup has the validated tombstone exception |
+| Object has missing or foreign ownership | Never adopt or delete that object; runtime fails terminal and cleanup refuses that target |
+| Missing unencrypted writer before initialization | Recreate only after live `nvcf-sc` matches the binding snapshot |
+| An artifact that should already exist in the persisted runtime phase is missing or invalid | Terminal failure |
+| Deterministic selection, binding, or ownership data does not match | Terminal failure before the conflicting object is used or changed |
+| Cleanup target is already absent | Idempotent success |
+| Durable cache execution reports failure | Terminal failure, no uncached fallback |
+| Transient Kubernetes API error | Requeue without changing selection or phase |
+| Forbidden, Unauthorized, Invalid, or Gone API response | Surface the API error without converting deterministic state to a terminal cache failure |
+| Annotation-free legacy request fails caching | Existing legacy fallback behavior remains |
 
-A disabled entry does not enable cache traffic.
+On request deletion, NVCA waits until instances are terminated, removes the exact request UID reference from the
+binding, and then removes its general request finalizer. Reference removal is idempotent.
 
-## Test plan
+Request references are live references, not tombstones. `ModelCacheBinding` has no tombstone field. Helm
+StorageRequest cleanup may run after reference release and then uses the persisted request identity described above.
+Zero references do not trigger `Retiring`, binding deletion, or cache-data deletion.
 
-### Catalog and deployment
+Annotated Helm cleanup deletes validated snapshots with UID and resourceVersion preconditions. Binding-scoped regular
+Job and PVC deletes use UID and resourceVersion preconditions.
 
-- Missing namespace, ConfigMap, key, payload, and chart file.
-- Malformed YAML, unknown fields, missing or invalid access modes, and missing transitions.
-- Whitespace-only IDs, duplicate modes, unknown transitions, and provider-specific transition misuse.
-- `nvmesh` requires the NVMesh provisioner plus RWO and ROX; external providers remain `disabled`.
-- Source/release catalog, schema, and template parity.
-- Deployment-tooling tests for exact Weka, OCI FSS, OCI Lustre, and generic provider rendering.
-- Fixed `nvcf-sc` name and `Retain` policy.
-- Deployment-tooling tests for exact parameters, mount options, binding mode, expansion, and topology.
-- Deployment tooling preserves NVMesh expansion; the catalog selects `nvmesh` for both workflows.
-- Malformed deployment input fails rendering.
-- `nvcf-function-storage-sc` remains unchanged.
+This change does not delete a zero-reference binding or its retained cache data. Operator uninstall explicitly removes
+binding finalizers before deleting the model-cache control namespace.
 
-### Binding and migration
+Configuration drift never authorizes data deletion.
 
-- Feature gates select the request fallback without creating a durable binding.
-- The NVMesh provisioner entry selects `nvmesh` for both workflows.
-- StorageClass and catalog digests are deterministic, sensitive to included fields, and captured with UIDs.
-- Unknown provisioner, disabled transition, and non-`Retain` class.
-- Concurrent namespaces in one sharing domain converge on one binding; other workflows or domains use different keys.
-- Retry, leader change, and agent restart reuse the binding and Lease.
-- Drift before the first side effect fails without resources; drift afterward never switches providers.
-- A crash after object creation adopts only an exact deterministic intent and binding UID; a mismatch fails closed.
-- `Active` to `Retiring` blocks new references; cleanup waits for zero references and honors the finalizer.
-- Request deletion removes reader resources and the binding reference before releasing its finalizer.
-- Legacy empty-backend, NVMesh PV, sharedfs PVC, and Samba PVC marker migration.
-- Legacy class-override rejection and NVMesh encrypted derived-class validation.
-- Provider replacement retires every binding for the old StorageClass UID before new requests resume.
-- Stale shared-filesystem guard and cleanup.
+## Compatibility and limitations
 
-### Workflow
+Requests with no storage-selection annotation are legacy requests. They keep existing feature-gated regular behavior
+and existing Helm backend state. When no Helm StorageRequest exists, the compatibility selector may still inspect the
+legacy NVMesh marker, shared-filesystem marker, or Samba configuration. New annotated requests do not use those
+presence checks.
 
-- The Lease permits one active writer, including when competing writer Pods share a node.
-- Readers in multiple namespaces mount the same provider data identity.
-- CPU and GPU readers resolve the same provider data identity.
-- Full-file and tree checksum equality.
-- Denied create, append, rename, chmod, truncate, and delete.
-- Both volume source and volume mount are read-only.
-- A same-provider baseline mount is writable by the test UID/GID; the reader reports `ro` in `/proc/self/mountinfo`.
-- Each cataloged PVC access mode is created and mounted explicitly.
-- An RWX claim with a read-only Pod mount is not reported as ROX evidence.
-- Writer and reader restart.
-- Reader recreation and rescheduling to another eligible node.
-- Agent restart at every lifecycle phase.
-- Cancellation and injected provision, mount, writer, and cleanup failures.
-- Idempotent retries with no duplicate writer or leaked resources.
-- Cleanup with active and inactive readers.
-- Upgrade and rollback with existing bindings.
-- No source-sized clone, extra copy, or duplicate CSI handle.
+There is no automatic conversion of legacy cache objects into bindings. In particular, NVCA does not adopt an
+unlabeled legacy PVC, PV, Job, Secret, or Lease into a new binding.
 
-Performance testing is a separate follow-up after this functional suite passes.
+Current limitations:
 
-## Security and observability
+- only NVMesh has executable regular and Helm transitions;
+- regular writer serialization is not a cluster-wide Lease;
+- binding names cannot separate the same handle across workflows or sharing domains;
+- realized state and binding conditions are not populated;
+- only regular sole-request failure cleanup marks a binding `Retiring`;
+- no general retirement or provider-data garbage-collection controller exists;
+- no provider replacement controller exists;
+- binding-specific metrics are not implemented;
+- backend functional qualification is outside the unit test suite.
 
-Security requirements:
+Do not replace `nvcf-sc` while Active bindings may need to provision a writer. Stop new requests and drain the affected
+cache state first. General drain, zero-reference retirement, and retained-data garbage collection remain future work.
 
-- Store no credentials, Secret contents, tokens, or private endpoints; use CSI-supported Secret references.
-- Grant least-privilege read access to the StorageClass and catalog.
-- Set read-only intent at every Kubernetes layer and verify write denial.
-- Reject unknown fields and transitions.
-- Qualification evidence records the exact deployed configuration; published evidence redacts credentials and private
-  deployment values while preserving the configuration digest.
+## Test contract
 
-Observability requirements:
+### Automated tests in this change
 
-- Log and trace binding creation, reuse, fallback, drift, transition, and cleanup.
-- Count binding outcomes with bounded labels and publish persistence, population, reader, and cleanup conditions.
-- Do not use cache handles, PVC names, backend IDs, or binding digests as metric labels.
+- strict catalog and annotation parsing;
+- exact provisioner lookup and workflow transition selection;
+- `Retain`, UID, StorageClass digest, and catalog digest checks;
+- missing class, unknown provider, disabled transition, and feature-gate outcomes;
+- binding API schema, immutable spec, status subresource, and generated clients;
+- binding create, retry adoption, collision, request-reference add/release, and drift handling;
+- finalizer-before-side-effect ordering;
+- regular and Helm binding UID propagation, Helm request UID propagation, and stale-generation rejection;
+- sole-reference retirement, concurrent-join refusal, and interrupted regular cleanup retry;
+- immutable regular and Helm writer-object adoption, drift refusal, and create-race validation;
+- transient and non-transient Kubernetes API error classification;
+- Helm tombstone authorization and refusal, including reader-only cleanup after reference release;
+- Helm reader PV/PVC and regular Job/PVC UID and resourceVersion delete preconditions;
+- binding-owned primary-PV and encrypted-StorageClass idle-GC exclusion with legacy idle GC preserved;
+- encrypted StorageClass and Secret conflict detection;
+- read-only PVC volume sources and every model-cache mount path;
+- annotation-free compatibility behavior;
+- operator catalog mirroring, RBAC, CRD installation, and uninstall cleanup.
 
-## Implementation order
+These tests use fake clients, unit tests, and Kubernetes `envtest`. They prove control-plane decisions and generated
+objects only.
 
-Keep external transitions disabled. Add the binding API and strict-loader call site, migrate legacy state, fix read-only
-mounts, implement provider-specific no-copy transitions, remove presence selection, then qualify each workflow.
+### Required provider qualification
+
+A workflow stays `disabled` until an exact provider configuration passes all of these tests:
+
+1. Provision and mount every cataloged PVC access mode.
+2. Populate one cache and prove every reader resolves the same provider data identity.
+3. Mount from multiple Pods and from every required namespace pattern.
+4. Run readers on eligible CPU and GPU nodes.
+5. Compare full-file and tree checksums.
+6. Verify `ro` in `/proc/self/mountinfo` inside each reader.
+7. Deny create, append, rename, chmod, truncate, and delete from each reader.
+8. Prove a same-provider baseline mount is writable by the test UID/GID.
+9. Restart writer and readers, restart NVCA, and reschedule readers to another eligible node.
+10. Inject provisioning, mount, writer, cancellation, and cleanup failures.
+11. Retry every lifecycle step and verify no duplicate writer, leaked object, or data loss.
+12. Prove cleanup cannot remove data while another reader uses it.
+13. Prove the transition performs no source-sized clone or extra copy.
+
+Record the CSI provisioner and images, backend version and configuration, StorageClass digest, Kubernetes version,
+eligible node matrix, catalog version, date, and evidence reference. Performance testing follows functional acceptance.
+
+## Provider enablement
+
+1. Install the CSI driver and render exact `StorageClass/nvcf-sc` parameters through deployment tooling.
+2. Add or update the public catalog entry with both workflows `disabled`.
+3. Record only access modes proven on the exact configuration.
+4. Implement a named regular or Helm transition. Do not infer a transition from access modes.
+5. Add unit, failure, retry, ownership, cleanup, and read-only object tests.
+6. Run the complete functional qualification above.
+7. Enable only the passing workflow in the catalog.
+8. Deploy transition code and the enabling catalog together.
+9. Verify new requests persist the expected provisioner, transition, digests, and binding.
+
+For Weka or OCI, the missing item is not StorageClass templating. It is a tested, provider-specific no-copy mapping
+from one populated data identity to namespace-local read-only readers, plus its cleanup implementation.
+
+## Rollout and rollback
+
+Rollout order:
+
+1. Install the `ModelCacheBinding` CRD and RBAC.
+2. Install and mirror the catalog.
+3. Deploy NVCA with persisted selection and binding support.
+4. Verify one new NVMesh regular request and one new NVMesh Helm request.
+5. Verify selection annotations, Active bindings, exact UID labels, read-only object intent, and cleanup refusal tests.
+6. Keep every external transition disabled until qualification passes.
+
+Existing annotation-free requests continue through compatibility code. New annotated requests must not be downgraded
+to an NVCA version that does not understand bindings while they are active. Drain those requests before rollback. The
+`Retain` policy preserves backend data, but it does not migrate or make an older controller binding-aware.
 
 ## Public source references
 
 - [Storage catalog](https://github.com/NVIDIA/nvcf/blob/main/src/compute-plane-services/nvca/deployments/nvca-operator/files/nvcf-storage-capabilities-v1alpha1.yaml)
 - [Catalog JSON Schema](https://github.com/NVIDIA/nvcf/blob/main/src/compute-plane-services/nvca/deployments/nvca-operator/files/nvcf-storage-capabilities-v1alpha1.schema.json)
-- [Catalog loader and validator](https://github.com/NVIDIA/nvcf/blob/main/src/compute-plane-services/nvca/pkg/storage/storage_capabilities.go)
-- [Current Helm cache selection](https://github.com/NVIDIA/nvcf/blob/main/src/compute-plane-services/nvca/pkg/storage/cachebackend.go)
-- [Current model-cache webhook](https://github.com/NVIDIA/nvcf/blob/main/src/compute-plane-services/nvca/pkg/webhook/helm_storage_webhook.go)
+- [Catalog selection](https://github.com/NVIDIA/nvcf/blob/main/src/compute-plane-services/nvca/pkg/storage/storage_capabilities.go)
+- [Persisted selection](https://github.com/NVIDIA/nvcf/blob/main/src/compute-plane-services/nvca/pkg/storage/modelcache_selection.go)
+- [Binding API](https://github.com/NVIDIA/nvcf/blob/main/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1/modelcachebinding_types.go)
+- [Binding lifecycle](https://github.com/NVIDIA/nvcf/blob/main/src/compute-plane-services/nvca/pkg/nvca/modelcache_binding.go)
 - [Kubernetes persistent-volume access modes](https://kubernetes.io/docs/concepts/storage/persistent-volumes/#access-modes)
 - [Runtime integration issue](https://github.com/NVIDIA/nvcf/issues/1326)

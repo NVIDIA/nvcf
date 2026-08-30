@@ -79,7 +79,50 @@ func ModelCacheStorageClassName(override string) string {
 	return DefaultModelCacheStorageClassName
 }
 
-// SelectHelmCacheBackend resolves the Helm model-cache storage backend. All
+// HelmCacheBackendFromSelection maps an immutable request selection to the
+// existing Helm execution path.
+func HelmCacheBackendFromSelection(
+	selection *PersistedModelCacheStorageSelection,
+) (HelmCacheBackend, error) {
+	if err := selection.Validate(); err != nil {
+		return "", err
+	}
+	if selection.Workflow != ModelCacheWorkflowHelm {
+		return "", fmt.Errorf("model cache selection workflow %q is not Helm", selection.Workflow)
+	}
+	switch selection.Mode {
+	case ModelCacheSelectionNone:
+		return HelmCacheBackendNone, nil
+	case ModelCacheSelectionEphemeral:
+		return HelmCacheBackendEphemeral, nil
+	case ModelCacheSelectionDurable:
+		switch selection.Transition {
+		case ModelCacheTransitionNVMesh:
+			return HelmCacheBackendNVMesh, nil
+		default:
+			return "", fmt.Errorf("unsupported durable Helm model cache transition %q", selection.Transition)
+		}
+	default:
+		return "", fmt.Errorf("unsupported Helm model cache selection mode %q", selection.Mode)
+	}
+}
+
+// PersistedHelmCacheBackend parses the coarse backend stored on a legacy
+// StorageRequest. Empty means NVMesh for backward compatibility.
+func PersistedHelmCacheBackend(raw string) (HelmCacheBackend, error) {
+	backend := HelmCacheBackend(raw)
+	if backend == "" {
+		return HelmCacheBackendNVMesh, nil
+	}
+	switch backend {
+	case HelmCacheBackendNVMesh, HelmCacheBackendSharedFS, HelmCacheBackendSamba:
+		return backend, nil
+	default:
+		return "", fmt.Errorf("unsupported persisted Helm model cache backend %q", raw)
+	}
+}
+
+// SelectLegacyHelmCacheBackend resolves the legacy Helm model-cache storage backend. All
 // caching is gated on CachingSupport plus the HelmModelCaching sub-gate; the
 // mechanism is then chosen by which storage class the cluster provides,
 // falling back to Samba (when HelmSharedStorage is enabled and the block class
@@ -93,7 +136,7 @@ func ModelCacheStorageClassName(override string) string {
 // modelCacheStorageClass is Agent.ModelCache.StorageClassName, the same config
 // value the storage controller provisions model cache volumes with; empty
 // resolves to the default.
-func SelectHelmCacheBackend(
+func SelectLegacyHelmCacheBackend(
 	ctx context.Context,
 	c client.Client,
 	ff featureflag.Fetcher,

@@ -67,6 +67,8 @@ func (f *sharedInformerFactory) ForResource(resource schema.GroupVersionResource
 		// Group=nvca.nvcf.nvidia.io, Version=v2beta1
 	case v2beta1.SchemeGroupVersion.WithResource("icmsrequests"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Nvca().V2beta1().ICMSRequests().Informer()}, nil
+	case v2beta1.SchemeGroupVersion.WithResource("modelcachebindings"):
+		return &genericInformer{resource: resource.GroupResource(), informer: f.Nvca().V2beta1().ModelCacheBindings().Informer()}, nil
 	case v2beta1.SchemeGroupVersion.WithResource("storagerequests"):
 		return &genericInformer{resource: resource.GroupResource(), informer: f.Nvca().V2beta1().StorageRequests().Informer()}, nil
 

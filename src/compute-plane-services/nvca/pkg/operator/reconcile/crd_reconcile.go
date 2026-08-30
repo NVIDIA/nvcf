@@ -31,6 +31,8 @@ import (
 )
 
 var (
+	//go:embed manifests/nvcf.nvidia.io_modelcachebindings_crd.yaml
+	modelCacheBindingsCRDData []byte
 	//go:embed manifests/nvcf.nvidia.io_storagerequests_crd.yaml
 	storageRequestsCRDData []byte
 	//go:embed manifests/nvcf.nvidia.io_miniservices_crd.yaml
@@ -40,6 +42,7 @@ var (
 )
 
 const (
+	ModelCacheBindingCRDName   = "modelcachebindings.nvca.nvcf.nvidia.io"
 	StorageRequestCRDName      = "storagerequests.nvca.nvcf.nvidia.io"
 	MiniServicesCRDName        = "miniservices.nvca.nvcf.nvidia.io"
 	ICMSRequestCRDName         = "icmsrequests.nvca.nvcf.nvidia.io"
@@ -50,6 +53,10 @@ const (
 func (c *BackendK8sCache) setupCRDs(ctx context.Context) error {
 	log := core.GetLogger(ctx)
 
+	modelCacheBindingCRD, err := decodeCRD(modelCacheBindingsCRDData)
+	if err != nil {
+		return fmt.Errorf("make ModelCacheBinding CRD: %v", err)
+	}
 	storageReqCRD, err := decodeCRD(storageRequestsCRDData)
 	if err != nil {
 		return fmt.Errorf("make StorageRequest CRD: %v", err)
@@ -91,6 +98,7 @@ func (c *BackendK8sCache) setupCRDs(ctx context.Context) error {
 		}
 	}
 	for _, crdObj := range []*apiextv1.CustomResourceDefinition{
+		modelCacheBindingCRD,
 		storageReqCRD,
 		miniserviceCRD,
 		makeICMSRequestCRD(),

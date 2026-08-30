@@ -231,6 +231,11 @@ func TestValidateStorageCapabilityCatalog(t *testing.T) {
 			delete(c.Drivers, NVMeshStorageClassProvisioner)
 			c.Drivers["example.csi.test"] = d
 		}, want: "restricted to provisioner"},
+		{name: "NVMesh transition is provider-specific", mutate: func(c *storageCapabilityCatalog) {
+			d := c.Drivers[NVMeshStorageClassProvisioner]
+			d.Provider = "weka"
+			c.Drivers[NVMeshStorageClassProvisioner] = d
+		}, want: "requires provider"},
 		{name: "NVMesh transition lacks ReadWriteOnce", mutate: func(c *storageCapabilityCatalog) {
 			d := c.Drivers[NVMeshStorageClassProvisioner]
 			d.AccessModes = accessModes("ReadOnlyMany")

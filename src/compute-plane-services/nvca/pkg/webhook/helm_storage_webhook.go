@@ -244,15 +244,29 @@ func getModelCachePVCVolumeAppendFunc(pvcName string) podMutateFunc {
 func getModelCachePVCVolumeMountAppendFunc() podMutateFunc {
 	return func(_ context.Context, ps *corev1.PodSpec) (mod bool) {
 		for _, containers := range [][]corev1.Container{ps.InitContainers, ps.Containers} {
+			mod = forceVolumeMountsReadOnly(containers, cmnnvcastorage.ModelCachePodVolumeName) || mod
 			modModels := addVolumeMount(containers, cmnnvcastorage.ModelCachePodVolumeName,
-				cmnnvcastorage.ModelCachePodModelMountPath, false)
+				cmnnvcastorage.ModelCachePodModelMountPath, true)
 			mod = mod || modModels
 			modResources := addVolumeMount(containers, cmnnvcastorage.ModelCachePodVolumeName,
-				cmnnvcastorage.ModelCachePodResourcesMountPath, false)
+				cmnnvcastorage.ModelCachePodResourcesMountPath, true)
 			mod = mod || modResources
 		}
 		return mod
 	}
+}
+
+func forceVolumeMountsReadOnly(containers []corev1.Container, volumeName string) (mod bool) {
+	for i := range containers {
+		for j := range containers[i].VolumeMounts {
+			mount := &containers[i].VolumeMounts[j]
+			if mount.Name == volumeName && !mount.ReadOnly {
+				mount.ReadOnly = true
+				mod = true
+			}
+		}
+	}
+	return mod
 }
 
 // getEphemeralModelCacheInitAppendFunc injects a model-cache-init init
@@ -438,9 +452,13 @@ func addVolumeFunc(pvcName, volumeName string) podMutateFunc {
 func addVolumeMount(containers []corev1.Container, volumeName, mountPath string, readOnly bool) (mod bool) {
 	for i, c := range containers {
 		foundVolumeMount := false
-		for _, v := range c.VolumeMounts {
-			if v.Name == volumeName && v.MountPath == mountPath && v.ReadOnly == readOnly {
+		for j, v := range c.VolumeMounts {
+			if v.Name == volumeName && v.MountPath == mountPath {
 				foundVolumeMount = true
+				if v.ReadOnly != readOnly {
+					containers[i].VolumeMounts[j].ReadOnly = readOnly
+					mod = true
+				}
 				break
 			}
 		}

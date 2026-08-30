@@ -19,18 +19,27 @@ package storage
 
 import (
 	"context"
+	stderrors "errors"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	batchv1 "k8s.io/api/batch/v1"
+	coordv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	k8stypes "k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	nvcav1new "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
@@ -201,4 +210,337 @@ func TestCleanupModelCaches(t *testing.T) {
 	err = k8sClient.Get(ctx, client.ObjectKeyFromObject(pv), pvCopy)
 	require.NoError(t, err)
 	assert.Equal(t, pvCopy.Name, "test-pv")
+}
+
+func TestAnnotatedPerRequestCleanupRefusesMixedBindingOwnership(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		pvBinding  string
+		pvcBinding string
+		mutate     func(*corev1.PersistentVolume, *corev1.PersistentVolumeClaim)
+	}{
+		{
+			name:       "missing PV binding label",
+			pvcBinding: string(helmBindingTestBindingUID),
+		},
+		{
+			name:       "foreign PVC binding label",
+			pvBinding:  string(helmBindingTestBindingUID),
+			pvcBinding: "other-binding",
+		},
+		{
+			name:       "missing PV request UID label",
+			pvBinding:  string(helmBindingTestBindingUID),
+			pvcBinding: string(helmBindingTestBindingUID),
+			mutate: func(pv *corev1.PersistentVolume, _ *corev1.PersistentVolumeClaim) {
+				delete(pv.Labels, ModelCacheRequestUIDLabelKey)
+			},
+		},
+		{
+			name:       "foreign PVC request UID label",
+			pvBinding:  string(helmBindingTestBindingUID),
+			pvcBinding: string(helmBindingTestBindingUID),
+			mutate: func(_ *corev1.PersistentVolume, pvc *corev1.PersistentVolumeClaim) {
+				pvc.Labels[ModelCacheRequestUIDLabelKey] = "replacement-request-uid"
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, binding, st, _ := newHelmBindingTestFixture(t)
+			pv, pvc := perRequestBindingOwnedVolumes(st, tt.pvBinding, tt.pvcBinding)
+			if tt.mutate != nil {
+				tt.mutate(pv, pvc)
+			}
+			job := bindingOwnedTestJob()
+			lease := bindingOwnedTestLease(helmBindingTestRequestName)
+			c := fake.NewClientBuilder().WithScheme(mgrScheme).
+				WithObjects(binding, pv, pvc, job, lease).Build()
+			r := &Reconciler{Client: c}
+
+			res, err := r.doCleanupModelCacheNVMesh(t.Context(), st)
+			assert.Equal(t, reconcile.Result{}, res)
+			require.ErrorContains(t, err, "ownership mismatch")
+			require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(pv), &corev1.PersistentVolume{}))
+			require.NoError(t, c.Get(
+				t.Context(), client.ObjectKeyFromObject(pvc), &corev1.PersistentVolumeClaim{}))
+			require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(job), &batchv1.Job{}))
+			require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(lease), &coordv1.Lease{}))
+			condition := meta.FindStatusCondition(st.Status.Conditions, ConditionTypeCleanupSuccessful)
+			require.NotNil(t, condition)
+			assert.Equal(t, metav1.ConditionFalse, condition.Status)
+		})
+	}
+}
+
+func TestAnnotatedPerRequestCleanupDeletesExactBindingOwnership(t *testing.T) {
+	_, binding, st, _ := newHelmBindingTestFixture(t)
+	pv, pvc := perRequestBindingOwnedVolumes(
+		st, string(helmBindingTestBindingUID), string(helmBindingTestBindingUID))
+	c := fake.NewClientBuilder().WithScheme(mgrScheme).WithObjects(binding, pv, pvc).Build()
+	r := &Reconciler{Client: c}
+
+	res, err := r.doCleanupModelCacheNVMesh(t.Context(), st)
+	require.NoError(t, err)
+	assert.Equal(t, reconcile.Result{}, res)
+	assert.True(t, errors.IsNotFound(c.Get(
+		t.Context(), client.ObjectKeyFromObject(pv), &corev1.PersistentVolume{})))
+	assert.True(t, errors.IsNotFound(c.Get(
+		t.Context(), client.ObjectKeyFromObject(pvc), &corev1.PersistentVolumeClaim{})))
+	condition := meta.FindStatusCondition(st.Status.Conditions, ConditionTypeCleanupSuccessful)
+	require.NotNil(t, condition)
+	assert.Equal(t, metav1.ConditionTrue, condition.Status)
+}
+
+func TestAnnotatedCleanupTombstoneDeletesReadersButPreservesSharedWriter(t *testing.T) {
+	_, binding, st, _ := newHelmBindingTestFixture(t)
+	binding.Status.RequestReferences = nil
+	pv, pvc := perRequestBindingOwnedVolumes(
+		st, string(helmBindingTestBindingUID), string(helmBindingTestBindingUID))
+	job := bindingOwnedTestJob()
+	lease := bindingOwnedTestLease(helmBindingTestRequestName)
+	c := fake.NewClientBuilder().WithScheme(mgrScheme).
+		WithObjects(binding, pv, pvc, job, lease).Build()
+	r := &Reconciler{Client: c}
+
+	res, err := r.doCleanupModelCacheNVMesh(t.Context(), st)
+	require.NoError(t, err)
+	assert.Equal(t, reconcile.Result{}, res)
+	assert.True(t, errors.IsNotFound(c.Get(
+		t.Context(), client.ObjectKeyFromObject(pv), &corev1.PersistentVolume{})))
+	assert.True(t, errors.IsNotFound(c.Get(
+		t.Context(), client.ObjectKeyFromObject(pvc), &corev1.PersistentVolumeClaim{})))
+	require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(job), &batchv1.Job{}))
+	require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(lease), &coordv1.Lease{}))
+	condition := meta.FindStatusCondition(st.Status.Conditions, ConditionTypeCleanupSuccessful)
+	require.NotNil(t, condition)
+	assert.Equal(t, metav1.ConditionTrue, condition.Status)
+}
+
+func TestAnnotatedReaderCleanupUsesExactDeletePreconditions(t *testing.T) {
+	_, binding, st, _ := newHelmBindingTestFixture(t)
+	pv, pvc := perRequestBindingOwnedVolumes(
+		st, string(helmBindingTestBindingUID), string(helmBindingTestBindingUID))
+	validated := map[string]bool{}
+	c := fake.NewClientBuilder().WithScheme(mgrScheme).WithObjects(binding, pv, pvc).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object,
+				opts ...client.DeleteOption,
+			) error {
+				deleteOptions := &client.DeleteOptions{}
+				for _, opt := range opts {
+					opt.ApplyToDelete(deleteOptions)
+				}
+				require.NotNil(t, deleteOptions.Preconditions, obj.GetName())
+				require.NotNil(t, deleteOptions.Preconditions.UID, obj.GetName())
+				require.NotNil(t, deleteOptions.Preconditions.ResourceVersion, obj.GetName())
+				assert.Equal(t, obj.GetUID(), *deleteOptions.Preconditions.UID)
+				assert.Equal(t, obj.GetResourceVersion(), *deleteOptions.Preconditions.ResourceVersion)
+				validated[obj.GetName()] = true
+				return cl.Delete(ctx, obj, opts...)
+			},
+		}).Build()
+	r := &Reconciler{Client: c}
+
+	_, err := r.doCleanupModelCacheNVMesh(t.Context(), st)
+	require.NoError(t, err)
+	assert.True(t, validated[pv.Name])
+	assert.True(t, validated[pvc.Name])
+}
+
+func TestAnnotatedReaderCleanupRefusesDeletePolicyPVBeforeAnyDelete(t *testing.T) {
+	_, binding, st, _ := newHelmBindingTestFixture(t)
+	pv, pvc := perRequestBindingOwnedVolumes(
+		st, string(helmBindingTestBindingUID), string(helmBindingTestBindingUID))
+	pv.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimDelete
+	deletes := 0
+	c := fake.NewClientBuilder().WithScheme(mgrScheme).WithObjects(binding, pv, pvc).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object,
+				opts ...client.DeleteOption,
+			) error {
+				deletes++
+				return cl.Delete(ctx, obj, opts...)
+			},
+		}).Build()
+	r := &Reconciler{Client: c}
+
+	res, err := r.doCleanupModelCacheNVMesh(t.Context(), st)
+	assert.Equal(t, reconcile.Result{}, res)
+	require.ErrorContains(t, err, "reclaim policy")
+	assert.Equal(t, 0, deletes)
+	require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(pv), &corev1.PersistentVolume{}))
+	require.NoError(t, c.Get(
+		t.Context(), client.ObjectKeyFromObject(pvc), &corev1.PersistentVolumeClaim{}))
+}
+
+func TestAnnotatedReaderCleanupClassifiesListErrorsWithoutDeleting(t *testing.T) {
+	for _, tt := range []struct {
+		name        string
+		readErr     error
+		wantRequeue bool
+		wantError   bool
+	}{
+		{
+			name: "transient API failure",
+			readErr: errors.NewServiceUnavailable(
+				"temporary reader inventory failure"),
+			wantRequeue: true,
+		},
+		{
+			name: "authorization failure",
+			readErr: errors.NewForbidden(
+				corev1.Resource("persistentvolumes"), "", stderrors.New("denied")),
+			wantError: true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, binding, st, _ := newHelmBindingTestFixture(t)
+			deletes := 0
+			c := fake.NewClientBuilder().WithScheme(mgrScheme).WithObjects(binding).
+				WithInterceptorFuncs(interceptor.Funcs{
+					List: func(_ context.Context, _ client.WithWatch, list client.ObjectList,
+						_ ...client.ListOption,
+					) error {
+						if _, ok := list.(*corev1.PersistentVolumeList); ok {
+							return tt.readErr
+						}
+						return nil
+					},
+					Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object,
+						opts ...client.DeleteOption,
+					) error {
+						deletes++
+						return cl.Delete(ctx, obj, opts...)
+					},
+				}).Build()
+			r := &Reconciler{Client: c}
+
+			res, err := r.doCleanupModelCacheNVMesh(t.Context(), st)
+			assert.Equal(t, tt.wantRequeue, res.Requeue)
+			assert.Equal(t, 0, deletes)
+			if tt.wantError {
+				require.Error(t, err)
+				assert.True(t, errors.IsForbidden(err))
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestCleanupIdleModelCachesSkipsBindingOwnedPrimaryPV(t *testing.T) {
+	now := time.Now()
+	timeConfig := (&k8sutil.TimeConfig{}).Complete()
+	oldReference := now.Add(-timeConfig.ModelCacheIdlePeriod - time.Minute).
+		Format(primaryPVLastReferencedTimeFormat)
+	bindingHandle := "binding-cache"
+	bindingPV := idlePrimaryPV("binding-primary", bindingHandle, oldReference)
+	bindingPV.Labels[ModelCacheBindingUIDLabelKey] = string(helmBindingTestBindingUID)
+	legacyPV := idlePrimaryPV("legacy-primary", "legacy-cache", oldReference)
+	encryptedSC := &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{
+		Name: "binding-encrypted-sc",
+		Annotations: map[string]string{
+			encryptedModelCacheStorageClassAnnotation: encryptedModelCacheStorageClassAnnotationValue,
+		},
+	}}
+	bindingPV.Spec.StorageClassName = encryptedSC.Name
+	legacyPV.Spec.StorageClassName = encryptedSC.Name
+
+	c := fake.NewClientBuilder().
+		WithScheme(mgrScheme).
+		WithObjects(bindingPV, legacyPV, encryptedSC).
+		WithIndex(&nvcav1new.StorageRequest{}, objectNameFieldPath, objectNameExtractValues).
+		Build()
+	statuses := newInitStatusCache(c)
+	statuses.put(bindingHandle, nvcav1new.StorageRequestStatus{Phase: nvcav1new.StorageReady})
+	r := &Reconciler{
+		Client:        c,
+		nowFunc:       func() time.Time { return now },
+		k8sTimeConfig: timeConfig,
+		initStatuses:  statuses,
+		metrics:       newTestMetrics(),
+	}
+
+	require.NoError(t, r.cleanupIdleModelCaches(t.Context()))
+	gotBindingPV := &corev1.PersistentVolume{}
+	require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(bindingPV), gotBindingPV))
+	assert.Equal(t, corev1.PersistentVolumeReclaimRetain, gotBindingPV.Spec.PersistentVolumeReclaimPolicy)
+	require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(encryptedSC), &storagev1.StorageClass{}))
+	_, found := statuses.get(bindingHandle)
+	assert.True(t, found, "binding-owned primary PV must preserve its init-status entry")
+	assert.True(t, errors.IsNotFound(c.Get(
+		t.Context(), client.ObjectKeyFromObject(legacyPV), &corev1.PersistentVolume{})),
+		"legacy idle GC must continue reclaiming unlabeled primary PVs")
+}
+
+func perRequestBindingOwnedVolumes(
+	st *nvcav1new.StorageRequest,
+	pvBinding string,
+	pvcBinding string,
+) (*corev1.PersistentVolume, *corev1.PersistentVolumeClaim) {
+	labels := getClusterWideResourceLabels(st)
+	pvLabels := map[string]string{
+		StorageRequestOwnerKey:     labels[StorageRequestOwnerKey],
+		StorageRequestNamespaceKey: labels[StorageRequestNamespaceKey],
+	}
+	if pvBinding != "" {
+		pvLabels[ModelCacheBindingUIDLabelKey] = pvBinding
+	}
+	pvLabels[ModelCacheRequestUIDLabelKey] = string(helmBindingTestRequestUID)
+	pvcLabels := map[string]string{
+		StorageRequestOwnerKey:     labels[StorageRequestOwnerKey],
+		StorageRequestNamespaceKey: labels[StorageRequestNamespaceKey],
+	}
+	if pvcBinding != "" {
+		pvcLabels[ModelCacheBindingUIDLabelKey] = pvcBinding
+	}
+	pvcLabels[ModelCacheRequestUIDLabelKey] = string(helmBindingTestRequestUID)
+	pvName := "secondary-pv-" + st.Spec.ICMSRequestName
+	pvcName := "ro-pvc-" + st.Spec.ModelCache.CacheHandle
+	pvcUID := k8stypes.UID("reader-pvc-uid")
+	return &corev1.PersistentVolume{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: pvName, UID: k8stypes.UID("secondary-pv-uid"), ResourceVersion: "1", Labels: pvLabels,
+			},
+			Spec: corev1.PersistentVolumeSpec{
+				AccessModes:                   []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany},
+				PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+				PersistentVolumeSource: corev1.PersistentVolumeSource{CSI: &corev1.CSIPersistentVolumeSource{
+					Driver: NVMeshStorageClassProvisioner, VolumeHandle: "test-volume-handle",
+				}},
+				ClaimRef: &corev1.ObjectReference{
+					APIVersion: "v1", Kind: "PersistentVolumeClaim", Namespace: st.Namespace,
+					Name: pvcName, UID: pvcUID,
+				},
+			},
+		}, &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: pvcName, Namespace: st.Namespace, UID: pvcUID,
+				ResourceVersion: "1", Labels: pvcLabels,
+			},
+			Spec: corev1.PersistentVolumeClaimSpec{
+				AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany},
+				VolumeName:  pvName,
+			},
+		}
+}
+
+func idlePrimaryPV(name, cacheHandle, lastReference string) *corev1.PersistentVolume {
+	return &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+			Labels: map[string]string{
+				primaryPVLabelKey:        primaryPVLabelValue,
+				modelCacheHandleLabelKey: cacheHandle,
+			},
+			Annotations: map[string]string{
+				primaryPVLastReferencedAnnotationKey: lastReference,
+			},
+		},
+		Spec: corev1.PersistentVolumeSpec{
+			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+			StorageClassName:              DefaultModelCacheStorageClassName,
+		},
+		Status: corev1.PersistentVolumeStatus{Phase: corev1.VolumeAvailable},
+	}
 }

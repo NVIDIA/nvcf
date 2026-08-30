@@ -58,6 +58,7 @@ import (
 	nvcaoperatorerrors "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/internal/errors"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/reconcile/clustermgmt"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
 	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
@@ -575,6 +576,12 @@ func (bc *BackendK8sCache) setupNVCAAgentInfra(
 			nb.Namespace, nb.Name, err)
 	}
 
+	err = bc.mirrorConfigMap(ctx, nb, storage.StorageCapabilityConfigMapName)
+	if err != nil {
+		return fmt.Errorf("failed to setup %v for NVCFBackend %v/%v, err: %w", storage.StorageCapabilityConfigMapName,
+			nb.Namespace, nb.Name, err)
+	}
+
 	err = bc.mirrorConfigMap(ctx, nb, nvcfCustomAnnotationsConfigMapName)
 	if err != nil {
 		return fmt.Errorf("failed to setup %v for NVCFBackend %v/%v, err: %w", nvcfCustomAnnotationsConfigMapName,
@@ -776,8 +783,11 @@ func (bc *BackendK8sCache) setupNVCARBAC(ctx context.Context, nb *nvidiaiov1.NVC
 			},
 			{
 				APIGroups: []string{"nvca.nvcf.nvidia.io"},
-				Resources: []string{"storagerequests", "storagerequests/status"},
-				Verbs:     crudVerbs,
+				Resources: []string{
+					"modelcachebindings", "modelcachebindings/status",
+					"storagerequests", "storagerequests/status",
+				},
+				Verbs: crudVerbs,
 			},
 			{
 				APIGroups: []string{"storage.k8s.io"},
@@ -986,7 +996,11 @@ func (bc *BackendK8sCache) setupNVCARBAC(ctx context.Context, nb *nvidiaiov1.NVC
 func (bc *BackendK8sCache) mirrorConfigMap(ctx context.Context, nb *nvidiaiov1.NVCFBackend, srcName string) error {
 	log := core.GetLogger(ctx)
 
-	srcCM, err := bc.clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Get(ctx, srcName, metav1.GetOptions{})
+	operatorNamespace := bc.operatorNamespace
+	if operatorNamespace == "" {
+		operatorNamespace = NVCAOperatorNamespace
+	}
+	srcCM, err := bc.clients.K8s.CoreV1().ConfigMaps(operatorNamespace).Get(ctx, srcName, metav1.GetOptions{})
 	if err != nil {
 		log.Errorf("failed to get source configmap %v", srcName)
 		return err

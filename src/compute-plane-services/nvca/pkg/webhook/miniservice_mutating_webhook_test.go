@@ -627,6 +627,7 @@ func TestMiniserviceOperatorWebhook_PodSpecCreateThenUpdate_IsIdempotentOrderPre
 		createMutatedRaw := applyPatches(t, createRaw, createResp.Patches)
 		var createdPod corev1.Pod
 		require.NoError(t, json.Unmarshal(createMutatedRaw, &createdPod))
+		assertModelCacheMountsReadOnly(t, createdPod.Spec.Containers)
 		require.Equal(t, []string{
 			cmnnvcastorage.SharedStorageVolumeKNSTokenVolumeName,
 			cmnnvcastorage.SharedStorageSecretsVolumeName,
@@ -668,6 +669,7 @@ func TestMiniserviceOperatorWebhook_PodSpecCreateThenUpdate_IsIdempotentOrderPre
 		updateMutatedRaw := applyPatches(t, updateRaw, updateResp.Patches)
 		var gotUpdatedPod corev1.Pod
 		require.NoError(t, json.Unmarshal(updateMutatedRaw, &gotUpdatedPod))
+		assertModelCacheMountsReadOnly(t, gotUpdatedPod.Spec.Containers)
 
 		assert.Equal(t, createdPod.Spec.Volumes, gotUpdatedPod.Spec.Volumes, "volume order must remain stable on update")
 		assert.Equal(
@@ -710,6 +712,7 @@ func TestMiniserviceOperatorWebhook_PodSpecCreateThenUpdate_IsIdempotentOrderPre
 		createMutatedRaw := applyPatches(t, createRaw, createResp.Patches)
 		var createdPod corev1.Pod
 		require.NoError(t, json.Unmarshal(createMutatedRaw, &createdPod))
+		assertModelCacheMountsReadOnly(t, createdPod.Spec.Containers)
 		require.Equal(t, []string{
 			"kube-api-access-rmxfs",
 			cmnnvcastorage.SharedStorageVolumeKNSTokenVolumeName,
@@ -740,6 +743,7 @@ func TestMiniserviceOperatorWebhook_PodSpecCreateThenUpdate_IsIdempotentOrderPre
 		updateMutatedRaw := applyPatches(t, updateRaw, updateResp.Patches)
 		var gotUpdatedPod corev1.Pod
 		require.NoError(t, json.Unmarshal(updateMutatedRaw, &gotUpdatedPod))
+		assertModelCacheMountsReadOnly(t, gotUpdatedPod.Spec.Containers)
 
 		assert.Equal(t, createdPod.Spec.Volumes, gotUpdatedPod.Spec.Volumes, "volume order must remain stable on update")
 		assert.Equal(

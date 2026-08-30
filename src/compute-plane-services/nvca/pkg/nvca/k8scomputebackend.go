@@ -557,8 +557,20 @@ func (c K8sComputeBackend) applyFunctionCreationMessage(ctx context.Context, req
 			}
 		}
 
+		// A new request's persisted selection is authoritative even if the live
+		// feature gate changes before this reconcile. Requests without the
+		// annotation retain the legacy static-gate behavior.
+		persistedCacheSelection, selectionErr := persistedRegularModelCacheSelection(req)
+		if selectionErr != nil {
+			return nvcaerrors.TerminalError(selectionErr)
+		}
+		if err := validatePersistedRegularModelCacheArtifacts(
+			persistedCacheSelection, bdCreate, initCacheJob); err != nil {
+			return err
+		}
+		cacheRuntimeEnabled := persistedCacheSelection != nil || c.bk8s.cachingSupportEnabled
 		// setup the InitCacheJob & BlockDevice if requested
-		if c.bk8s.cachingSupportEnabled && (initCacheJob.Specification != "" && bdCreate.Specification != "") {
+		if cacheRuntimeEnabled && (initCacheJob.Specification != "" && bdCreate.Specification != "") {
 			cacheMF, cachePVCName, err := c.setupContainerFunctionModelCaching(ctx, req, bdCreate, initCacheJob,
 				func(obj client.Object) {
 					// for caching mf we need to skip OwnerRefs
@@ -571,7 +583,7 @@ func (c K8sComputeBackend) applyFunctionCreationMessage(ctx context.Context, req
 			}
 			roPVCName = cachePVCName
 			cacheMF(pod)
-		} else if !c.bk8s.cachingSupportEnabled {
+		} else if !cacheRuntimeEnabled {
 			log.Debugf("ModelCaching support is disabled, creating instance without caching")
 		} else {
 			log.Debug("InitCacheJob / BDCreate spec was not specified, skipping model caching")
@@ -655,12 +667,56 @@ func (c K8sComputeBackend) setupContainerFunctionModelCaching(ctx context.Contex
 	cachemf mutateFunc,
 ) (func(*corev1.Pod), string, error) {
 	log := core.GetLogger(ctx)
+	selection, selectionErr := persistedRegularModelCacheSelection(req)
+	if selectionErr != nil {
+		return nil, "", nvcaerrors.TerminalError(selectionErr)
+	}
 	rwPVC, initJob, err := getModelCacheK8sArtifacts(ctx, bdCreate, initCacheJob, cachemf)
 	if err != nil {
+		if selection != nil && selection.Mode == nvcastorage.ModelCacheSelectionDurable {
+			return nil, "", nvcaerrors.TerminalError(
+				fmt.Errorf("decode artifacts for persisted durable regular model cache: %w", err))
+		}
 		log.WithError(err).Error("failed getModelCacheK8sArtifacts, model caching will be disabled")
 		return func(*corev1.Pod) {}, "", nil
 	}
 	return c.setupContainerModelCaching(ctx, req, rwPVC, initJob, cachemf)
+}
+
+func persistedRegularModelCacheSelection(
+	req *nvcav2beta1.ICMSRequest,
+) (*nvcastorage.PersistedModelCacheStorageSelection, error) {
+	raw := req.Annotations[nvcastorage.ModelCacheStorageSelectionAnnotationKey]
+	if raw == "" {
+		return nil, nil
+	}
+	selection, err := nvcastorage.ParsePersistedModelCacheStorageSelection(raw)
+	if err != nil {
+		return nil, fmt.Errorf("parse persisted model cache storage selection: %w", err)
+	}
+	if selection.Workflow != nvcastorage.ModelCacheWorkflowRegular {
+		return nil, fmt.Errorf("persisted model cache workflow %q is not regularModelCache", selection.Workflow)
+	}
+	switch selection.Mode {
+	case nvcastorage.ModelCacheSelectionNone, nvcastorage.ModelCacheSelectionDurable:
+		return selection, nil
+	default:
+		return nil, fmt.Errorf("unsupported regular model cache mode %q", selection.Mode)
+	}
+}
+
+func validatePersistedRegularModelCacheArtifacts(
+	selection *nvcastorage.PersistedModelCacheStorageSelection,
+	rwPVC, initJob function.LaunchArtifact,
+) error {
+	if selection == nil || selection.Mode != nvcastorage.ModelCacheSelectionDurable {
+		return nil
+	}
+	if rwPVC.Specification == "" || initJob.Specification == "" {
+		return nvcaerrors.TerminalError(fmt.Errorf(
+			"persisted durable regular model cache requires both PVC and init Job artifacts"))
+	}
+	return nil
 }
 
 func (c K8sComputeBackend) setupContainerModelCaching(ctx context.Context,
@@ -670,8 +726,47 @@ func (c K8sComputeBackend) setupContainerModelCaching(ctx context.Context,
 	cachemf mutateFunc,
 ) (mf func(*corev1.Pod), roPVCName string, err error) {
 	log := core.GetLogger(ctx)
+	selection, selectionErr := persistedRegularModelCacheSelection(req)
+	if selectionErr != nil {
+		return nil, "", nvcaerrors.TerminalError(selectionErr)
+	}
+	persistedDurable := false
+	encryptionRequired := c.bk8s.nvmeshEncryptionEnabled
+	if selection != nil {
+		switch selection.Mode {
+		case nvcastorage.ModelCacheSelectionNone:
+			log.Debug("Persisted model cache selection disables durable caching")
+			return func(*corev1.Pod) {}, "", nil
+		case nvcastorage.ModelCacheSelectionDurable:
+			persistedDurable = true
+		}
+		binding, err := c.bk8s.activeModelCacheBindingForRuntime(ctx, req)
+		if err != nil {
+			return nil, "", err
+		}
+		encryptionRequired = selection.EncryptionRequired
+		expectedStorageClass, err := regularModelCacheExpectedStorageClassName(binding)
+		if err != nil {
+			return nil, "", nvcaerrors.TerminalError(err)
+		}
+		if rwPVC.Spec.StorageClassName != nil && *rwPVC.Spec.StorageClassName != "" &&
+			*rwPVC.Spec.StorageClassName != selection.StorageClassName &&
+			*rwPVC.Spec.StorageClassName != expectedStorageClass {
+			return nil, "", nvcaerrors.TerminalError(fmt.Errorf(
+				"regular model cache StorageClass override %q conflicts with persisted intent %q",
+				*rwPVC.Spec.StorageClassName, expectedStorageClass))
+		}
+		rwPVC.Spec.StorageClassName = &expectedStorageClass
+		if err := c.prepareRegularModelCacheBindingResources(ctx, binding, rwPVC, initJob); err != nil {
+			return nil, "", err
+		}
+	}
 	// setup init cache Job writer and RWMany PVC
-	mc, roPVCName := c.SetupModelCachingForRequest(ctx, rwPVC, initJob, req, cachemf)
+	mc, roPVCName, modelCacheErr := c.SetupModelCachingForRequest(
+		ctx, rwPVC, initJob, req, encryptionRequired, cachemf)
+	if modelCacheErr != nil {
+		return nil, "", modelCacheErr
+	}
 	switch mc {
 	case ModelCachingCompleted:
 		log.Infof("model caching completed, starting worker creation")
@@ -688,6 +783,8 @@ func (c K8sComputeBackend) setupContainerModelCaching(ctx context.Context,
 					}
 				}
 			}
+			setModelCacheVolumeMountsReadOnly(pod.Spec.InitContainers)
+			setModelCacheVolumeMountsReadOnly(pod.Spec.Containers)
 		}
 		return mf, roPVCName, nil
 	case ModelCachingInProgress:
@@ -703,11 +800,25 @@ func (c K8sComputeBackend) setupContainerModelCaching(ctx context.Context,
 		}
 		return nil, "", fmt.Errorf("model caching is still in progress")
 	case ModelCachingFailed:
+		if persistedDurable {
+			return nil, "", nvcaerrors.TerminalError(
+				fmt.Errorf("model caching failed for persisted durable regular cache selection"))
+		}
 		c.bk8s.EmitICMSEvent(req, corev1.EventTypeWarning,
 			string(types.EventCategoryModelCaching), "Caching setup failed, resort to non-cached workers", nil)
 		log.Warnf("model caching failed, NVCA will create non-cached workers")
 	}
 	return func(*corev1.Pod) {}, "", nil
+}
+
+func setModelCacheVolumeMountsReadOnly(containers []corev1.Container) {
+	for containerIndex := range containers {
+		for mountIndex := range containers[containerIndex].VolumeMounts {
+			if containers[containerIndex].VolumeMounts[mountIndex].Name == ModelVolumeName {
+				containers[containerIndex].VolumeMounts[mountIndex].ReadOnly = true
+			}
+		}
+	}
 }
 
 func getPullSecretsFromArtifacts(ctx context.Context,

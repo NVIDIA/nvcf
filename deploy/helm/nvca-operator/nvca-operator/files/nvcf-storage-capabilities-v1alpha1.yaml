@@ -16,7 +16,8 @@
 # This public catalog is owned by NVCA and installed with the NVCA chart.
 # accessModes lists only modes demonstrated for the exact tested provider.
 # A disabled transition means that the end-to-end workflow is not qualified.
-# The catalog is not yet wired into NVCA reconciliation or backend selection.
+# NVCA reads this catalog when it creates a new model-cache storage selection.
+# Only a registered, non-disabled transition can select durable caching.
 apiVersion: storage.nvcf.nvidia.com/v1alpha1
 kind: StorageCapabilityCatalog
 drivers:

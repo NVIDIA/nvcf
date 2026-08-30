@@ -63,9 +63,15 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/reconcile/clustermgmt"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
+	nvcastorage "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
 )
 
-var icmsGVK schema.GroupVersionKind
+var (
+	icmsGVK                  schema.GroupVersionKind
+	testModelCacheBindingGVR = schema.GroupVersionResource{
+		Group: "nvca.nvcf.nvidia.io", Version: "v2beta1", Resource: "modelcachebindings",
+	}
+)
 
 func init() {
 	icmsCRD := makeICMSRequestCRD()
@@ -85,7 +91,12 @@ func init() {
 		&nvidiaiov1.NVCFBackendList{},
 	)
 	newDynamicClient = func(_ *runtime.Scheme, _ *rest.Config) (dynamic.Interface, error) {
-		return fakedynamic.NewSimpleDynamicClient(testScheme), nil
+		return fakedynamic.NewSimpleDynamicClientWithCustomListKinds(
+			testScheme,
+			map[schema.GroupVersionResource]string{
+				testModelCacheBindingGVR: "ModelCacheBindingList",
+			},
+		), nil
 	}
 
 	newDiscoverClient = func(_ kubernetes.Interface, _ *rest.Config) (discovery.DiscoveryInterface, error) {
@@ -473,6 +484,10 @@ func newTestScheme() *runtime.Scheme {
 	s := runtime.NewScheme()
 	s.AddKnownTypeWithName(icmsGVK, &nvcav2beta1.ICMSRequest{})
 	s.AddKnownTypeWithName(icmsGVK.GroupVersion().WithKind(icmsGVK.Kind+"List"), &nvcav2beta1.ICMSRequestList{})
+	s.AddKnownTypeWithName(
+		nvcav2beta1.SchemeGroupVersion.WithKind("ModelCacheBinding"), &nvcav2beta1.ModelCacheBinding{})
+	s.AddKnownTypeWithName(
+		nvcav2beta1.SchemeGroupVersion.WithKind("ModelCacheBindingList"), &nvcav2beta1.ModelCacheBindingList{})
 	return s
 }
 
@@ -503,11 +518,16 @@ func mockKubeClientsForIntegrationTests() *kubeclients.KubeClients {
 		panic(err)
 	}
 	return &kubeclients.KubeClients{
-		Config:              newRESTConfig(),
-		NVCAOP:              fakenvcaopclient.NewSimpleClientset(),
-		K8s:                 k8sClient,
-		APIExtV1:            fakeapiextensionclient.NewSimpleClientset().ApiextensionsV1(),
-		DynamicClient:       fakedynamic.NewSimpleDynamicClient(scheme),
+		Config:   newRESTConfig(),
+		NVCAOP:   fakenvcaopclient.NewSimpleClientset(),
+		K8s:      k8sClient,
+		APIExtV1: fakeapiextensionclient.NewSimpleClientset().ApiextensionsV1(),
+		DynamicClient: fakedynamic.NewSimpleDynamicClientWithCustomListKinds(
+			scheme,
+			map[schema.GroupVersionResource]string{
+				testModelCacheBindingGVR: "ModelCacheBindingList",
+			},
+		),
 		DiscoveryClient:     discClient,
 		DiscoveryRESTMapper: restmapper.NewDiscoveryRESTMapper(grs),
 	}
@@ -517,6 +537,13 @@ func mockKubeClients() *kubeclients.KubeClients {
 	scheme := newTestScheme()
 	k8sClient := fakek8sclient.NewSimpleClientset(
 		newStaticGPUSConfigMap(),
+		&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      nvcastorage.StorageCapabilityConfigMapName,
+				Namespace: NVCAOperatorNamespace,
+			},
+			Data: map[string]string{nvcastorage.StorageCapabilityConfigMapKey: "test-catalog"},
+		},
 		&corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      nvcfCustomAnnotationsConfigMapName,
@@ -549,11 +576,16 @@ func mockKubeClients() *kubeclients.KubeClients {
 		panic(err)
 	}
 	return &kubeclients.KubeClients{
-		Config:              newRESTConfig(),
-		NVCAOP:              fakenvcaopclient.NewSimpleClientset(),
-		K8s:                 k8sClient,
-		APIExtV1:            fakeapiextensionclient.NewSimpleClientset().ApiextensionsV1(),
-		DynamicClient:       fakedynamic.NewSimpleDynamicClient(scheme),
+		Config:   newRESTConfig(),
+		NVCAOP:   fakenvcaopclient.NewSimpleClientset(),
+		K8s:      k8sClient,
+		APIExtV1: fakeapiextensionclient.NewSimpleClientset().ApiextensionsV1(),
+		DynamicClient: fakedynamic.NewSimpleDynamicClientWithCustomListKinds(
+			scheme,
+			map[schema.GroupVersionResource]string{
+				testModelCacheBindingGVR: "ModelCacheBindingList",
+			},
+		),
 		DiscoveryClient:     discClient,
 		DiscoveryRESTMapper: restmapper.NewDiscoveryRESTMapper(grs),
 	}

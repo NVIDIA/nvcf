@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 
 	//nolint:gosec
 	"crypto/md5"
@@ -29,8 +30,10 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -144,11 +147,50 @@ func (r *Reconciler) ensureNVMeshEncryptionStorageClass(
 			NVMeshStorageClassCSINS:     ModelCacheInitNamespace,
 		},
 	}
-	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, sc, noMutF)
-	if op == controllerutil.OperationResultCreated {
+	existing := &storagev1.StorageClass{}
+	if err := r.Client.Get(ctx, client.ObjectKey{Name: scName}, existing); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return "", fmt.Errorf("get NVMesh encryption StorageClass %q: %w", scName, err)
+		}
+		if err := r.Client.Create(ctx, sc); err != nil {
+			return "", fmt.Errorf("create NVMesh encryption StorageClass %q: %w", scName, err)
+		}
 		log.Info("Created NVMesh encryption StorageClass", "storageclass", sc.Name)
+		return scName, nil
 	}
-	return scName, err
+
+	if err := validateNVMeshEncryptionStorageClass(existing, sc); err != nil {
+		return "", err
+	}
+	return scName, nil
+}
+
+func validateNVMeshEncryptionStorageClass(actual, expected *storagev1.StorageClass) error {
+	invalid := func(field string) error {
+		return fmt.Errorf("existing NVMesh encryption StorageClass %q has unexpected %s", actual.Name, field)
+	}
+	if actual.Provisioner != expected.Provisioner {
+		return invalid("provisioner")
+	}
+	if actual.ReclaimPolicy == nil || expected.ReclaimPolicy == nil ||
+		*actual.ReclaimPolicy != *expected.ReclaimPolicy {
+		return invalid("reclaimPolicy")
+	}
+	if actual.VolumeBindingMode == nil || expected.VolumeBindingMode == nil ||
+		*actual.VolumeBindingMode != *expected.VolumeBindingMode {
+		return invalid("volumeBindingMode")
+	}
+	if actual.AllowVolumeExpansion == nil || expected.AllowVolumeExpansion == nil ||
+		*actual.AllowVolumeExpansion != *expected.AllowVolumeExpansion {
+		return invalid("allowVolumeExpansion")
+	}
+	if !maps.Equal(actual.Parameters, expected.Parameters) {
+		return invalid("parameters")
+	}
+	if !isStorageClassEncrypted(actual) {
+		return invalid("encryption annotation")
+	}
+	return nil
 }
 
 func (r *Reconciler) ensureNVMeshEncryptionSecret(
@@ -175,7 +217,14 @@ func (r *Reconciler) ensureNVMeshEncryptionSecret(
 	if op == controllerutil.OperationResultCreated {
 		log.Info("Created NVMesh encryption Secret", "secret_name", secret.Name)
 	}
-	return secretName, err
+	if err != nil {
+		return "", err
+	}
+	if len(secret.Data["dmcryptKey"]) == 0 {
+		return "", fmt.Errorf("existing NVMesh encryption Secret %s/%s has no dmcryptKey",
+			secret.Namespace, secret.Name)
+	}
+	return secretName, nil
 }
 
 // Generate the Random NVMeshKeyBytes byte token
