@@ -555,6 +555,25 @@ api:
     {{- toYaml $apiEnv | nindent 4 }}
 
 invocation:
+  {{- $configuredInvocationEnv := dig "invocation" "env" dict .Values }}
+  {{- if not (kindIs "map" $configuredInvocationEnv) }}
+  {{- fail "invocation.env must be a map" }}
+  {{- end }}
+  {{- $invocationEnv := dict }}
+  {{- if .Values.global.observability.tracing.enabled }}
+  {{- $_ := set $invocationEnv "SERVER__TRACING__ENDPOINT_IP" (printf "%s://%s" .Values.global.observability.tracing.collectorProtocol .Values.global.observability.tracing.collectorEndpoint) }}
+  {{- $_ := set $invocationEnv "SERVER__TRACING__ENDPOINT_PORT" .Values.global.observability.tracing.collectorPort }}
+  {{- else }}
+  {{- $_ := set $invocationEnv "SERVER__ENVFILTER_DIRECTIVE" "otel::tracing=off,otel=off,server=trace,info" }}
+  {{- end }}
+  {{- if .Values.rateLimiter.enabled }}
+  {{- $_ := set $invocationEnv "RATE_LIMIT_ENABLED" "true" }}
+  {{- $_ := set $invocationEnv "RATE_LIMIT_ADDRESS" "http://ratelimiter.nvcf.svc.cluster.local:7777" }}
+  {{- end }}
+  {{- with $invocationWorkerBaseURL }}
+  {{- $_ := set $invocationEnv "WORKER_STREAM_PROPERTIES__SELF_ADDRESS" . }}
+  {{- end }}
+  {{- $invocationEnv = mergeOverwrite $invocationEnv (deepCopy $configuredInvocationEnv) }}
   fullnameOverride: invocation-service
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
@@ -571,20 +590,7 @@ invocation:
   {{- end }}
 
   env:
-    # Observability
-    {{- if .Values.global.observability.tracing.enabled }}
-    SERVER__TRACING__ENDPOINT_IP: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}"
-    SERVER__TRACING__ENDPOINT_PORT: {{ .Values.global.observability.tracing.collectorPort }}
-    {{- else }}
-    SERVER__ENVFILTER_DIRECTIVE: "otel::tracing=off,otel=off,server=trace,info"
-    {{- end }}
-    {{- if .Values.rateLimiter.enabled }}
-    RATE_LIMIT_ENABLED: "true"
-    RATE_LIMIT_ADDRESS: "http://ratelimiter.nvcf.svc.cluster.local:7777"
-    {{- end }}
-    {{- with $invocationWorkerBaseURL }}
-    WORKER_STREAM_PROPERTIES__SELF_ADDRESS: {{ . | quote }}
-    {{- end }}
+    {{- toYaml $invocationEnv | nindent 4 }}
   {{- with dig "invocation" "tracing" "baggageAttributeAllowlist" nil .Values }}
   tracing:
     baggageAttributeAllowlist:

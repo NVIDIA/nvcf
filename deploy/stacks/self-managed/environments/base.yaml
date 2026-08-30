@@ -509,7 +509,8 @@ ess:
 
 invocation:
   env:
-    NATS_PROPERTIES__REGION: local
+    # Keep request subjects aligned with the API and worker consumers.
+    NATS_PROPERTIES__REGION: ncp
   podDisruptionBudget:
     enabled: false
     maxUnavailable: 1
