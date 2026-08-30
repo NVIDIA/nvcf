@@ -199,6 +199,7 @@ openbao:
       {{- end }}
 
 nats:
+  {{- $natsServerTags := dig "nats" "config" "merge" "server_tags" (list "dc:ncp" "aws-region:ncp") .Values }}
   {{- if .Values.global.imagePullSecrets }}
   global:
     image:
@@ -246,13 +247,16 @@ nats:
         {{- end }}
   {{- end }}
 
-  {{- if .Values.global.storageClass }}
   config:
+    merge:
+      server_tags:
+        {{- toYaml $natsServerTags | nindent 8 }}
+    {{- if .Values.global.storageClass }}
     jetstream:
       fileStore:
         pvc:
           storageClassName: {{ .Values.global.storageClass }}
-  {{- end }}
+    {{- end }}
 
   {{- with dig "nats" "podDisruptionBudget" dict .Values }}
   podDisruptionBudget:
