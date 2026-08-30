@@ -1376,7 +1376,7 @@ func TestMultiClusterHelmfileLLMRegistrationTLSFeatureFileWiresToSteps(t *testin
 			" 127.0.0.1:50071 llm-request-router.nvcf.svc.cluster.local" +
 			" stargate-quic-tls nvcf k3d-ncp-local-cp 3"
 		pylonMetricsCommand = "bash tests/bdd/scripts/wait-pylon-metrics.sh" +
-			" llm-worker k3d-ncp-local-compute-1 10m" +
+			" bdd-registration-tls llm-worker k3d-ncp-local-compute-1 10m" +
 			" pylon_registration_stream_connected exactly 3" +
 			" pylon_reverse_tunnel_connected exactly 3"
 		invokeCommand = "/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke" +

@@ -160,7 +160,7 @@ Feature: Register an LLM worker securely with every router in a local split-clus
         | --description | bdd-registration-tls                                                |
         | --scopes      | invoke_function,list_functions,queue_details,list_functions_details |
 
-      Then a pod containing container "llm-worker" using context "k3d-ncp-local-compute-1" should report Pylon metrics within "10m":
+      Then every Pylon for function "bdd-registration-tls" using container "llm-worker" and context "k3d-ncp-local-compute-1" should report metrics within "10m":
         | metric                               | comparison | count |
         | pylon_registration_stream_connected | exactly    | 3     |
         | pylon_reverse_tunnel_connected       | exactly    | 3     |
