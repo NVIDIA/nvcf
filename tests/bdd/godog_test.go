@@ -1219,12 +1219,56 @@ func TestMultiClusterHelmfileLLMRegistrationTLSFailClosedFeatureFileWiresToSteps
 		`-CAfile <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf ` +
 		`-o jsonpath="{.data.ca\.crt}" | base64 -d) </dev/null 2>&1'`
 	const grpcurlPreflightCommand = `/bin/sh -c 'command -v grpcurl >/dev/null'`
+	const wrongRootCommand = `/bin/bash -c 'set -u; cert_dir=$(mktemp -d); ` +
+		`trap '\''rm -rf "$cert_dir"'\'' EXIT; openssl req -x509 -newkey rsa:2048 -nodes ` +
+		`-subj /CN=wrong-root -keyout "$cert_dir/key.pem" -out "$cert_dir/ca.pem" -days 1 ` +
+		`>/dev/null 2>&1 || exit; grpcurl -max-time 5 -cacert "$cert_dir/ca.pem" ` +
+		`-authority llm-request-router.nvcf.svc.cluster.local ` +
+		`-import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto ` +
+		`127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates'`
+	const wrongHostCommand = `/bin/bash -c 'grpcurl -max-time 5 ` +
+		`-cacert <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf ` +
+		`-o jsonpath="{.data.ca\.crt}" | base64 -d) ` +
+		`-authority wrong-host.nvcf.svc.cluster.local ` +
+		`-import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto ` +
+		`127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates'`
+	const missingTrustCommand = `/bin/bash -c 'grpcurl -max-time 5 ` +
+		`-authority llm-request-router.nvcf.svc.cluster.local ` +
+		`-import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto ` +
+		`127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates'`
+	const plaintextCommand = `/bin/bash -c 'grpcurl -plaintext -max-time 5 ` +
+		`-import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto ` +
+		`127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates'`
+	const invalidAuthorityCommand = "make -C deploy/stacks/self-managed template " +
+		"HELMFILE_ENV=local-bdd-registration-tls-invalid-authority"
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
 		"k3d cluster get ncp-local": {ExitCode: 1},
 		grpcurlPreflightCommand:     {ExitCode: 0},
 		tlsHandshakeCommand: {
 			ExitCode: 0,
 			Stdout:   "ALPN protocol: h2\nVerify return code: 0 (ok)\n",
+		},
+		wrongRootCommand: {
+			ExitCode: 1,
+			Stderr:   "certificate signed by unknown authority\n",
+		},
+		wrongHostCommand: {
+			ExitCode: 1,
+			Stderr:   "certificate is valid for another name, not wrong-host.nvcf.svc.cluster.local\n",
+		},
+		missingTrustCommand: {
+			ExitCode: 1,
+			Stderr:   "certificate is not trusted\n",
+		},
+		plaintextCommand: {
+			ExitCode: 1,
+			Stderr:   "context deadline exceeded\n",
+		},
+		invalidAuthorityCommand: {
+			ExitCode: 1,
+			Stderr: "global.workerEndpoints.llmRequestRouterAddress must use " +
+				"optional http:// or https:// followed by DNS-or-IPv4:port or [IPv6]:port " +
+				"with port 1-65535\n",
 		},
 	}))
 	seedHelmfileLocalBDDMultiFixture(t, suite.Config.RepoRoot)
@@ -1252,27 +1296,15 @@ func TestMultiClusterHelmfileLLMRegistrationTLSFailClosedFeatureFileWiresToSteps
 	if !commandRanExactly(runs, grpcurlPreflightCommand) {
 		t.Fatal("grpcurl availability was not checked before the live probes")
 	}
-	for _, assertion := range []struct {
-		marker     string
-		diagnostic string
-	}{
-		{marker: "wrong-root-rejected", diagnostic: "certificate signed by unknown authority"},
-		{marker: "wrong-host-rejected", diagnostic: "not wrong-host.nvcf.svc.cluster.local"},
-		{marker: "missing-trust-rejected", diagnostic: "certificate is not trusted"},
-		{marker: "plaintext-rejected", diagnostic: "context deadline exceeded"},
-		{
-			marker: "invalid-authority-rejected",
-			diagnostic: "global.workerEndpoints.llmRequestRouterAddress must use " +
-				"optional http:// or https:// followed by DNS-or-IPv4:port or [IPv6]:port " +
-				"with port 1-65535",
-		},
+	for name, command := range map[string]string{
+		"wrong root":        wrongRootCommand,
+		"wrong host":        wrongHostCommand,
+		"missing trust":     missingTrustCommand,
+		"plaintext":         plaintextCommand,
+		"invalid authority": invalidAuthorityCommand,
 	} {
-		if !commandRanThatContainsAll(runs, assertion.marker, assertion.diagnostic) {
-			t.Fatalf(
-				"negative registration command containing %q did not require diagnostic %q",
-				assertion.marker,
-				assertion.diagnostic,
-			)
+		if !commandRanExactly(runs, command) {
+			t.Fatalf("%s negative registration command was not invoked", name)
 		}
 	}
 	validEnvironment := filepath.Join(
