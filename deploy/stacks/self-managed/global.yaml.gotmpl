@@ -1494,9 +1494,23 @@ nvcfGatewayRoutes:
         hostnames:
           {{- toYaml . | nindent 10 }}
         {{- end }}
+    # apiKeys, sis, and reval attach to the shared Gateway (backend and hostname
+    # come from the chart defaults); only the enable flag and annotations are
+    # environment-driven. Each flag defaults to true, so leaving it unset renders
+    # the route exactly as before; set it to false to drop the route (for example,
+    # to keep api-keys off the public edge in a split/multi-cluster deployment).
     apiKeys:
+      enabled: {{ dig "ingress" "gatewayApi" "routes" "apiKeys" "enabled" true .Values }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "apiKeys" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+    sis:
+      enabled: {{ dig "ingress" "gatewayApi" "routes" "sis" "enabled" true .Values }}
+      routeAnnotations:
+        {{ dig "ingress" "gatewayApi" "routes" "sis" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+    reval:
+      enabled: {{ dig "ingress" "gatewayApi" "routes" "reval" "enabled" true .Values }}
+      routeAnnotations:
+        {{ dig "ingress" "gatewayApi" "routes" "reval" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
     invocation:
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "invocation" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}

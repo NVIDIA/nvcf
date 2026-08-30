@@ -561,7 +561,18 @@ ingress:
           enabled: false
           # Defaults to tasks-grpc.<global.domain> when enabled. Set to override.
           hostnames: []
+      # apiKeys, sis, and reval are enabled by default in the gateway-routes
+      # chart. Set enabled: false to drop the route -- for example, to keep
+      # api-keys off the public edge in a split/multi-cluster deployment, or to
+      # remove the unused sis/reval routes when they have no external consumer.
       apiKeys:
+        enabled: true
+        routeAnnotations: {}
+      sis:
+        enabled: true
+        routeAnnotations: {}
+      reval:
+        enabled: true
         routeAnnotations: {}
       invocation:
         routeAnnotations: {}
