@@ -314,11 +314,6 @@ addons:
     enabled: false
     requestRouter:
       replicaCount: 3
-      # Pin the Stargate release independently of the request-router chart.
-      # Published chart defaults can lag the image release selected by this
-      # stack; backendRouter.image.tag inherits this value when omitted.
-      image:
-        tag: "0.14.1"
       # Set only for source-tree validation. Empty uses the released OCI chart.
       chartPath: ""
       readiness:
@@ -354,9 +349,6 @@ addons:
       backendRouter:
         # enabled: defaults to addons.llm.enabled
         replicaCount: 2
-        image:
-          # Empty inherits addons.llm.requestRouter.image.tag.
-          tag: ""
         # Addresses workers dial to reach the router. Both default to the
         # backend-router Service in-cluster, which is correct when workers run
         # alongside the control plane. Set both to externally reachable

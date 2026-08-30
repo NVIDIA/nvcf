@@ -116,7 +116,7 @@ Feature: Install a local single-cluster NVCF stack with PKI-secured LLM transpor
       When I run command "kubectl --context k3d-ncp-local get configmap/nvcf-api-remote-config -n nvcf -o yaml"
       Then the command exit code should be 0
       And the command output should contain "worker-address: llm-request-router.nvcf.svc.cluster.local:50071"
-      And the command output should contain "llm-router-client-image: nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/pylon:0.14.1"
+      And the command output should contain "llm-router-client-image: nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/pylon:"
 
       Then these Kubernetes resources should not exist in namespace "envoy-gateway-system" using context "k3d-ncp-local":
         | kind                 | name                         |

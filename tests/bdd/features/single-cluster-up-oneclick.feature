@@ -102,7 +102,7 @@ Feature: Bring up a local single-cluster NVCF stack with the self-hosted up one-
 
       When I run command "kubectl --context k3d-ncp-local get configmap/nvcf-api-remote-config -n nvcf -o yaml"
       Then the command exit code should be 0
-      And the command output should contain "llm-router-client-image: nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/pylon:0.14.1"
+      And the command output should contain "llm-router-client-image: nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/pylon:"
 
       # The compute plane (NVCA operator) is deployed on the same cluster.
       Then these Helm releases should be deployed using context "k3d-ncp-local":

@@ -181,7 +181,7 @@ publications:
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-llm-request-router
-    version: 1.12.0
+    version: 1.12.1
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-nats-auth-callout-service
@@ -805,7 +805,7 @@ artifacts:
   - name: helm-nvcf-llm-request-router
     type: chart
     registry: staging
-    version: 1.12.0
+    version: 1.12.1
   - name: helm-nvcf-nats-auth-callout-service
     type: chart
     registry: staging

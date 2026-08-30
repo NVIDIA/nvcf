@@ -98,7 +98,7 @@ Feature: Install a local multi-cluster NVCF stack with Helmfile
       When I run command "kubectl --context k3d-ncp-local-cp get configmap/nvcf-api-remote-config -n nvcf -o yaml"
       Then the command exit code should be 0
       And the command output should contain "worker-address: https://llm-request-router.nvcf.svc.cluster.local:50071"
-      And the command output should contain "llm-router-client-image: nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/pylon:0.14.1"
+      And the command output should contain "llm-router-client-image: nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/pylon:"
 
       # The dial address chooses the cross-cluster network path. Stargate's
       # per-pod authority remains the gRPC authority and reverse QUIC SNI, so

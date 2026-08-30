@@ -581,6 +581,27 @@ the API environment. Do not set both paths to different values.
 The LLM API Gateway and request router images are resolved from the same stack
 artifact registry settings as the other control-plane services.
 
+The self-managed stack passes API environment and remote configuration through
+separate chart values:
+
+```mermaid
+flowchart LR
+    E[Helmfile environment] --> T[global.yaml.gotmpl]
+    F[Fixed API environment] --> T
+    T -->|mergeOverwrite into api.env| V[NVCF API chart values]
+    E -->|api.remoteConfig.configData| T
+    T -->|merged remote config| V
+    V --> C1[nvcf-api-env ConfigMap]
+    V --> C2[nvcf-api-remote-config ConfigMap]
+    C1 --> A[NVCF API startup]
+    C2 --> A
+    A --> W[LLM worker launch metadata]
+```
+
+Configured `api.env` entries override the fixed stack environment. The remote
+ConfigMap carries the request-router worker address and Pylon image used when
+the API creates a new LLM function version.
+
 ## Apply and Verify
 
 Apply the updated control-plane environment:

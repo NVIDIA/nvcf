@@ -953,8 +953,6 @@ llmApiGateway:
 {{- $pylonGrpcDialAddress := dig "addons" "llm" "requestRouter" "backendRouter" "pylonGrpcDialAddress" "" .Values | default "" | toString | trim }}
 {{- $pylonReverseTunnelDialAddress := dig "addons" "llm" "requestRouter" "backendRouter" "pylonReverseTunnelDialAddress" "" .Values | default "" | toString | trim }}
 {{- $backendRouterEnabled := dig "addons" "llm" "requestRouter" "backendRouter" "enabled" $llmEnabled .Values }}
-{{- $llmRequestRouterImageTag := dig "addons" "llm" "requestRouter" "image" "tag" "0.14.1" .Values | default "0.14.1" | toString }}
-{{- $backendRouterImageTag := dig "addons" "llm" "requestRouter" "backendRouter" "image" "tag" "" .Values | default $llmRequestRouterImageTag | toString }}
 {{- $llmWorkerRouteEnabled := dig "ingress" "gatewayApi" "routes" "llmWorker" "enabled" false .Values }}
 {{- $grpcTlsEnabled := dig "addons" "llm" "requestRouter" "grpcTls" "enabled" false .Values }}
 {{- $grpcTlsAllowInsecureHttp := dig "addons" "llm" "requestRouter" "grpcTls" "allowInsecureHttp" false .Values }}
@@ -1001,7 +999,6 @@ llmRequestRouter:
   image:
     registry: {{ .Values.global.image.registry }}
     repository: {{ .Values.global.image.repository }}/stargate
-    tag: {{ $llmRequestRouterImageTag | quote }}
   {{- /*
   Backend routing follows the LLM addon rather than being separately opted into.
   A worker holds one registration stream and one reverse tunnel per replica, and
@@ -1021,7 +1018,6 @@ llmRequestRouter:
     image:
       registry: {{ .Values.global.image.registry }}
       repository: {{ .Values.global.image.repository }}/stargate
-      tag: {{ $backendRouterImageTag | quote }}
     {{- with $pylonGrpcDialAddress }}
     pylonGrpcDialAddress: {{ . | quote }}
     {{- end }}
