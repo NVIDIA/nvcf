@@ -80,6 +80,7 @@ func RegisterAll(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	registerFileSteps(ctx, sc)
 	registerCommandSteps(ctx, sc)
 	registerNVCFCLISteps(ctx, sc)
+	registerRegistrationSteps(ctx, sc)
 	registerAssertionSteps(ctx, sc)
 	registerInfraSteps(ctx, sc)
 }

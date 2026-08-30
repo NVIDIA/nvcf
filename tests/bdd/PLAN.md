@@ -122,6 +122,16 @@ refactor in every consumer; that is a feature.
 | `When I run command with a terminal:` (docstring) | Same as the docstring form, but stdin is attached to a pseudo-terminal so the child sees a TTY on fd 0. For commands that gate interactive-only behavior on a TTY, such as `nvcf-cli self-hosted up` (its auth-gate mints the admin token only when stdin is a terminal). No input is written; stdout and stderr are captured separately as usual. |
 | `When I export command output to environment variable {string}` | Exports the previous command's trimmed stdout under the named env var. Fails the step unless the prior command exited 0 and produced non-empty stdout. Snapshotted by the env Ledger; restored at suite teardown. |
 
+#### Registration observability command adapters
+
+These steps wrap repeated client, trust-material, polling, and output-format
+mechanics while keeping every operator-selected target and expectation visible.
+They preserve the real command output for subsequent assertions.
+
+| Step | Command |
+|------|---------|
+| `When I successfully observe WatchStargates at {string} with TLS authority {string} using CA secret {string} in namespace {string} and context {string} for {string} seconds` | Reads the named CA certificate from the explicit Kubernetes secret and context, runs the public `WatchStargates` gRPC method against the visible endpoint and TLS authority, and requires a streamed response before accepting the expected client deadline. |
+
 #### Function lifecycle command adapters
 
 These steps hide the repeated executable, config prefix, fixed subcommand, shell
@@ -156,8 +166,11 @@ original order. Repeated options and empty values are preserved.
 | Step | Notes |
 |------|-------|
 | `Then the command exit code should be {int}` | Last-run exit code. |
+| `Then the command should fail` | Requires a non-zero last-run exit code. It does not accept a runner error that prevented command execution and never records the failed command in the successful-command cache. |
 | `Then the command output should contain {string}` | Substring match on combined stdout + stderr. |
 | `Then the command output should not contain {string}` | Negative substring match. |
+| `Then the command output should contain all:` (table) | Requires a `text` header and one or more strings. Every interpolated string must appear in combined stdout + stderr. |
+| `Then the command output should contain one of:` (table) | Requires a `text` header and one or more strings. At least one interpolated string must appear in combined stdout + stderr. |
 | `Then file {string} should exist` | |
 | `Then yaml file {string} key {string} should equal {string}` | Reads the YAML file, walks the dotted key path, compares to the value (with `${VAR}` expansion). |
 | `Then yaml file {string} key {string} should not be empty` | Same key resolution; passes if the resolved value is non-empty. Use for non-deterministic outputs (cluster IDs, identity sources) where exact-value assertions are wrong. |
@@ -179,6 +192,7 @@ original order. Repeated options and empty values are preserved.
 | `Then deployment {string} in namespace {string} using context {string} should complete rollout within {string}` | Runs `kubectl rollout status` for the named deployment with the explicit namespace, context, and timeout. Failure messages name the deployment without printing command output. |
 | `Then NVCFBackend {string} in namespace {string} using context {string} should report agent status {string} within {string}` | Waits for the named backend's `status.agentStatus` to equal the visible value using the explicit namespace, context, and timeout. Failure messages name the backend without printing resource output. |
 | `Then these Gateway API routes should be accepted and resolved using context {string} within {string}:` (table) | Requires `kind`, `name`, `namespace`, and `parent` headers. Waits for every named route to report both `Accepted=True` and `ResolvedRefs=True` for the named Gateway parent using the explicit context and timeout. The route kind is passed through without an allowlist. Failures name the table row, route, namespace, parent, and unmet condition without printing resource output. |
+| `Then a pod containing container {string} using context {string} should report Pylon metrics within {string}:` (table) | Requires `metric`, `comparison`, and `count` headers. Polls the Pylon metrics endpoint of a running pod containing the visible container name. Each metric row counts connected series with value `1`; `comparison` is `exactly` or `at least`, and the expected non-negative count remains visible. |
 
 #### YAML comparison semantics
 
@@ -513,6 +527,22 @@ func SubstituteFile(path, placeholder, replacement string) error
 // row map asserts that an object matching every (key, value) pair
 // exists in the array. Extra objects in the array are fine.
 func JSONContainsRows(raw string, rows []map[string]string) error
+
+// WatchStargatesCommand builds a TLS WatchStargates observation with an
+// explicit endpoint, authority, CA source, Kubernetes context, and duration.
+func WatchStargatesCommand(endpoint, authority, caSecret, namespace, kubeContext, durationSeconds string) (string, error)
+
+// PylonMetricExpectation describes an expected count of connected metric
+// series exposed by one Pylon sidecar.
+type PylonMetricExpectation struct {
+    Metric     string
+    Comparison string
+    Count      int
+}
+
+// PylonMetricsCommand builds a bounded Pylon metrics observation for a pod
+// selected by container name in an explicit Kubernetes context.
+func PylonMetricsCommand(containerName, kubeContext, timeout string, expectations []PylonMetricExpectation) (string, error)
 
 // FilesDoNotContain recursively inspects regular files under root and
 // fails if any interpolated fixed string appears.
