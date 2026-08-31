@@ -53,6 +53,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/clustervalidator"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/transporttls"
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	nvcaoperatorerrors "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/internal/errors"
@@ -1428,16 +1429,20 @@ func (bc *BackendK8sCache) getAgentConfigToMerge(ctx context.Context) (nvcaconfi
 	if err != nil {
 		return nvcaconfig.Config{}, false, err
 	}
-	if !foundOperatorCfg {
-		return mergeCfg, foundMergeCfg, nil
-	}
-	if mergeCfg.Workload.TransportTLS != nil {
-		return nvcaconfig.Config{}, false,
-			fmt.Errorf("agent-config-merge and %s both configure workload.transportTLS", nvcaOperatorConfigMapName)
-	}
+	if foundOperatorCfg {
+		if mergeCfg.Workload.TransportTLS != nil {
+			return nvcaconfig.Config{}, false,
+				nvcaoperatorerrors.FatalError(
+					fmt.Errorf("agent-config-merge and %s both configure workload.transportTLS", nvcaOperatorConfigMapName))
+		}
 
-	mergeCfg.Workload.TransportTLS = operatorCfg.Workload.TransportTLS
-	return mergeCfg, true, nil
+		mergeCfg.Workload.TransportTLS = operatorCfg.Workload.TransportTLS
+	}
+	if err := transporttls.ValidateWorkloadConfig(mergeCfg.Workload); err != nil {
+		return nvcaconfig.Config{}, false,
+			nvcaoperatorerrors.FatalError(fmt.Errorf("invalid combined NVCA agent configuration: %w", err))
+	}
+	return mergeCfg, foundMergeCfg || foundOperatorCfg, nil
 }
 
 func (bc *BackendK8sCache) getRawAgentConfigToMerge(ctx context.Context) (nvcaconfig.Config, bool, error) {

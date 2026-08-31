@@ -75,6 +75,19 @@ func NormalizeConfig(cfg nvcaconfig.TransportTLSConfig) nvcaconfig.TransportTLSC
 	return cfg
 }
 
+// ValidateWorkloadConfig validates transport trust before workload-specific
+// rendering can bypass it.
+func ValidateWorkloadConfig(workload nvcaconfig.WorkloadConfig) error {
+	if workload.TransportTLS == nil {
+		return nil
+	}
+	cfg := NormalizeConfig(*workload.TransportTLS)
+	if workload.StargateQUICInsecure && cfg.TrustMode == TrustModeBundle {
+		return fmt.Errorf("workload.stargateQUICInsecure=true cannot be used with workload.transportTLS.trustMode=bundle; set workload.stargateQUICInsecure=false or use trustMode=system")
+	}
+	return ValidateConfig(cfg)
+}
+
 func ValidateConfig(cfg nvcaconfig.TransportTLSConfig) error {
 	switch cfg.TrustMode {
 	case TrustModeSystem:
