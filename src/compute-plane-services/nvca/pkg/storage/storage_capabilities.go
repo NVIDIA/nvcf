@@ -103,30 +103,53 @@ type storageCapabilityCatalog struct {
 }
 
 type storageDriverSpec struct {
-	Provider           string              `json:"provider"`
-	AccessModes        *[]string           `json:"accessModes"`
-	ReaderMountOptions *[]string           `json:"readerMountOptions"`
-	Capabilities       storageCapabilities `json:"capabilities,omitempty"`
-	Transitions        storageTransitions  `json:"transitions"`
+	Provider           string    `json:"provider"`
+	AccessModes        *[]string `json:"accessModes"`
+	ReaderMountOptions *[]string `json:"readerMountOptions"`
 }
 
-// storageCapabilities records driver behaviors that a transition needs but
-// that no PVC access mode expresses.
-type storageCapabilities struct {
-	// CrossNamespaceVolumeSharing means one populated volume can be exposed
-	// read-only in another namespace by deriving a second PV from the first.
-	// NVCA derives the reader by rewriting the namespace segment of the CSI
-	// volume handle, so only a driver whose handles encode the namespace that
-	// way can do it. Helm model caching is cross-namespace by nature, so
-	// roxReadOnly is only available to the Helm workflow on such a driver.
-	// Every other backend must serve Helm caching from one ReadWriteMany
-	// claim instead.
-	CrossNamespaceVolumeSharing bool `json:"crossNamespaceVolumeSharing,omitempty"`
-}
+// transitionForWorkflow derives how a driver caches, from what it proved.
+//
+// The catalog states qualified PVC access modes. Everything else follows:
+//
+//	ReadWriteMany            -> one shared claim, readers mount it read-only
+//	ReadWriteOnce+ReadOnlyMany -> writer takes the claim, readers get ROX on it
+//
+// Regular caching keeps its readers in the request namespace, so either shape
+// works. Helm caching must reach other namespaces, which a ReadWriteMany claim
+// does natively. The ROX shape does not, except on NVMesh, whose CSI volume
+// handles encode the namespace so NVCA can derive a reader PV for another
+// namespace from the writer's volume. That is the one exception in this
+// mapping, and it is a property of NVMesh, not something a mode expresses.
+//
+// A driver that proved nothing usable returns disabled.
+func transitionForWorkflow(driver storageDriverSpec, workflow ModelCacheWorkflow) string {
+	modes := map[string]bool{}
+	if driver.AccessModes != nil {
+		for _, mode := range *driver.AccessModes {
+			modes[mode] = true
+		}
+	}
+	rwx := modes[string(corev1.ReadWriteMany)]
+	rox := modes[string(corev1.ReadWriteOnce)] && modes[string(corev1.ReadOnlyMany)]
 
-type storageTransitions struct {
-	RegularModelCache string `json:"regularModelCache"`
-	HelmModelCache    string `json:"helmModelCache"`
+	switch workflow {
+	case ModelCacheWorkflowRegular:
+		switch {
+		case rwx:
+			return ModelCacheTransitionRWXReadOnly
+		case rox:
+			return ModelCacheTransitionROXReadOnly
+		}
+	case ModelCacheWorkflowHelm:
+		switch {
+		case rwx:
+			return ModelCacheTransitionRWXReadOnly
+		case rox && driver.Provider == ModelCacheProviderNVMesh:
+			return ModelCacheTransitionROXReadOnly
+		}
+	}
+	return ModelCacheTransitionDisabled
 }
 
 func loadStorageCapabilityCatalog(
@@ -275,15 +298,12 @@ func selectModelCacheStorageFromObjects(
 			DefaultModelCacheStorageClassName, sc.Provisioner)
 	}
 
-	var transition string
 	switch workflow {
-	case ModelCacheWorkflowRegular:
-		transition = driver.Transitions.RegularModelCache
-	case ModelCacheWorkflowHelm:
-		transition = driver.Transitions.HelmModelCache
+	case ModelCacheWorkflowRegular, ModelCacheWorkflowHelm:
 	default:
 		return nil, fmt.Errorf("unknown model cache workflow %q", workflow)
 	}
+	transition := transitionForWorkflow(driver, workflow)
 	var requiredMountOptions []string
 	if transition == ModelCacheTransitionROXReadOnly {
 		requiredMountOptions = append([]string(nil), (*driver.ReaderMountOptions)...)
@@ -504,16 +524,13 @@ func ValidateModelCacheStorageSelectionInputsWithClientset(
 			ErrModelCacheStorageSelectionDrift,
 			selection.Provisioner, selection.Provider, driver.Provider)
 	}
-	var transition string
 	switch selection.Workflow {
-	case ModelCacheWorkflowRegular:
-		transition = driver.Transitions.RegularModelCache
-	case ModelCacheWorkflowHelm:
-		transition = driver.Transitions.HelmModelCache
+	case ModelCacheWorkflowRegular, ModelCacheWorkflowHelm:
 	default:
 		return fmt.Errorf("%w: unknown model cache workflow %q",
 			ErrModelCacheStorageSelectionDrift, selection.Workflow)
 	}
+	transition := transitionForWorkflow(driver, selection.Workflow)
 	if transition != selection.Transition {
 		return fmt.Errorf("%w: selected provisioner %q transition for %s changed from %q to %q",
 			ErrModelCacheStorageSelectionDrift,
@@ -611,58 +628,13 @@ func validateStorageCapabilityCatalog(catalog *storageCapabilityCatalog) error {
 			accessModes[mode] = true
 		}
 
-		for workflow, strategy := range map[string]string{
-			"regularModelCache": driver.Transitions.RegularModelCache,
-			"helmModelCache":    driver.Transitions.HelmModelCache,
-		} {
-			if strategy != ModelCacheTransitionDisabled && strategy != ModelCacheTransitionROXReadOnly &&
-				strategy != ModelCacheTransitionRWXReadOnly {
-				return fmt.Errorf("driver %q transition %s has invalid strategy %q", provisioner, workflow, strategy)
-			}
-			switch strategy {
-			case ModelCacheTransitionDisabled:
-				continue
-			case ModelCacheTransitionROXReadOnly:
-				// roxReadOnly describes a volume shape, not a vendor: one
-				// writer claim plus many read-only reader claims. Any driver
-				// qualified for both modes can run it, and the reader options
-				// a given driver needs are its own catalog data. Pinning this
-				// to one provisioner, or requiring another driver's
-				// filesystem flags, would make the catalog unable to enable a
-				// provider without a code change.
-				if !accessModes[string(corev1.ReadWriteOnce)] || !accessModes[string(corev1.ReadOnlyMany)] {
-					return fmt.Errorf("driver %q transition %s strategy %s requires ReadWriteOnce and ReadOnlyMany access modes",
-						provisioner, workflow, strategy)
-				}
-				// "ro" is required by the transition itself: the reader PV is
-				// mounted read-only whatever the backend.
-				if !readerMountOptions["ro"] {
-					return fmt.Errorf("driver %q transition %s strategy %s requires readerMountOption %q",
-						provisioner, workflow, strategy, "ro")
-				}
-				// Regular caching keeps its reader in the same namespace, so
-				// proven access modes are enough. Helm caching must reach
-				// another namespace, which needs the derived-reader capability.
-				if workflow == string(ModelCacheWorkflowHelm) && !driver.Capabilities.CrossNamespaceVolumeSharing {
-					return fmt.Errorf(
-						"driver %q transition %s strategy %s requires capability crossNamespaceVolumeSharing; "+
-							"a driver without it must serve Helm model caching from a ReadWriteMany claim",
-						provisioner, workflow, strategy)
-				}
-			case ModelCacheTransitionRWXReadOnly:
-				if workflow != string(ModelCacheWorkflowRegular) {
-					return fmt.Errorf("driver %q transition %s strategy %s is only supported for %s",
-						provisioner, workflow, strategy, ModelCacheWorkflowRegular)
-				}
-				if !accessModes[string(corev1.ReadWriteMany)] {
-					return fmt.Errorf("driver %q transition %s strategy %s requires ReadWriteMany access mode",
-						provisioner, workflow, strategy)
-				}
-				if len(*driver.ReaderMountOptions) != 0 {
-					return fmt.Errorf("driver %q transition %s strategy %s does not create a reader PV and requires empty readerMountOptions",
-						provisioner, workflow, strategy)
-				}
-			}
+		// Reader options only matter for the ROX shape, where NVCA creates
+		// the reader PV itself. A shared claim is mounted read-only by the
+		// Pod, so options there would never be applied.
+		if transitionForWorkflow(driver, ModelCacheWorkflowRegular) == ModelCacheTransitionROXReadOnly &&
+			!readerMountOptions["ro"] {
+			return fmt.Errorf("driver %q qualifies for the ROX shape and must list readerMountOption %q",
+				provisioner, "ro")
 		}
 	}
 

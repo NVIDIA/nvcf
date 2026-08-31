@@ -52,22 +52,14 @@ drivers:
     provider: nvmesh
     accessModes: [ReadWriteOnce, ReadOnlyMany]
     readerMountOptions: [ro, norecovery, nouuid]
-    capabilities:
-      crossNamespaceVolumeSharing: true
-    transitions:
-      regularModelCache: roxReadOnly
-      helmModelCache: roxReadOnly
 `
 	selectionCatalogDisabled = `apiVersion: storage.nvcf.nvidia.com/v1alpha1
 kind: StorageCapabilityCatalog
 drivers:
   nvmesh-csi.excelero.com:
     provider: nvmesh
-    accessModes: [ReadWriteOnce, ReadOnlyMany]
+    accessModes: []
     readerMountOptions: []
-    transitions:
-      regularModelCache: disabled
-      helmModelCache: disabled
 `
 	selectionCatalogRWXReadOnly = `apiVersion: storage.nvcf.nvidia.com/v1alpha1
 kind: StorageCapabilityCatalog
@@ -76,9 +68,6 @@ drivers:
     provider: weka
     accessModes: [ReadWriteMany, ReadOnlyMany]
     readerMountOptions: []
-    transitions:
-      regularModelCache: rwxReadOnly
-      helmModelCache: disabled
 `
 )
 

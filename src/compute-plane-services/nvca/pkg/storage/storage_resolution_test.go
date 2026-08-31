@@ -37,16 +37,15 @@ import (
 	controllerfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
+// splitTransitionCatalog qualifies a non-NVMesh driver for the ROX shape, so
+// regular caching resolves and Helm caching does not.
 const splitTransitionCatalog = `apiVersion: storage.nvcf.nvidia.com/v1alpha1
 kind: StorageCapabilityCatalog
 drivers:
-  nvmesh-csi.excelero.com:
-    provider: nvmesh
+  csi.weka.io:
+    provider: weka
     accessModes: [ReadWriteOnce, ReadOnlyMany]
-    readerMountOptions: [ro, norecovery, nouuid]
-    transitions:
-      regularModelCache: roxReadOnly
-      helmModelCache: disabled
+    readerMountOptions: [ro]
 `
 
 func testModelCacheStorageClass() *storagev1.StorageClass {
@@ -88,6 +87,7 @@ func storageResolutionClient(t *testing.T, objects ...client.Object) client.Clie
 
 func TestResolveModelCacheStorageSelectsWorkflowTransition(t *testing.T) {
 	sc := testModelCacheStorageClass()
+	sc.Provisioner = "csi.weka.io"
 	cm := capabilityCatalogConfigMap(splitTransitionCatalog)
 	c := storageResolutionClient(t, sc, cm)
 	sum := sha256.Sum256([]byte(splitTransitionCatalog))
@@ -98,8 +98,8 @@ func TestResolveModelCacheStorageSelectsWorkflowTransition(t *testing.T) {
 		workflow       ModelCacheWorkflow
 		wantTransition string
 	}{
-		{name: "regular NVMesh transition", workflow: ModelCacheWorkflowRegular, wantTransition: ModelCacheTransitionROXReadOnly},
-		{name: "disabled Helm transition", workflow: ModelCacheWorkflowHelm, wantTransition: ModelCacheTransitionDisabled},
+		{name: "regular resolves the ROX shape", workflow: ModelCacheWorkflowRegular, wantTransition: ModelCacheTransitionROXReadOnly},
+		{name: "Helm is disabled without cross-namespace reach", workflow: ModelCacheWorkflowHelm, wantTransition: ModelCacheTransitionDisabled},
 	}
 
 	for _, tt := range tests {
@@ -112,11 +112,12 @@ func TestResolveModelCacheStorageSelectsWorkflowTransition(t *testing.T) {
 			assert.Equal(t, wantCatalogRevision, selection.CatalogRevision,
 				"the exact catalog payload is recorded as audit metadata")
 			assert.Regexp(t, `^sha256:[a-f0-9]{64}$`, selection.ProfileDigest)
-			assert.Equal(t, "nvmesh", selection.Provider)
-			assert.Equal(t, NVMeshStorageClassProvisioner, selection.Provisioner)
+			assert.Equal(t, "weka", selection.Provider)
+			assert.Equal(t, "csi.weka.io", selection.Provisioner)
 			assert.Equal(t, tt.wantTransition, selection.Transition)
 			if tt.wantTransition == ModelCacheTransitionROXReadOnly {
-				assert.Equal(t, []string{"ro", "norecovery", "nouuid"}, selection.RequiredMountOptions)
+				assert.Equal(t, []string{"ro"}, selection.RequiredMountOptions,
+					"the driver's own reader options are carried, not NVMesh's XFS flags")
 			} else {
 				assert.Empty(t, selection.RequiredMountOptions)
 			}
@@ -261,6 +262,7 @@ func TestResolveModelCacheStorageErrors(t *testing.T) {
 
 func TestResolveModelCacheStorageWithClientset(t *testing.T) {
 	sc := testModelCacheStorageClass()
+	sc.Provisioner = "csi.weka.io"
 	cm := capabilityCatalogConfigMap(splitTransitionCatalog)
 	k8sClient := kubernetesfake.NewSimpleClientset(sc, cm)
 
@@ -435,91 +437,6 @@ func TestStorageSnapshotDigests(t *testing.T) {
 		"the catalog digest must cover the exact payload")
 }
 
-// TestCatalogEnablesNonNVMeshROXProvider is the property this feature exists
-// for: enabling a qualified backend must be a catalog edit, not a code change.
-// A second driver that proved ReadWriteOnce and ReadOnlyMany resolves to the
-// same roxReadOnly transition as NVMesh, and carries its own reader mount
-// options rather than NVMesh's XFS flags.
-func TestCatalogEnablesNonNVMeshROXProvider(t *testing.T) {
-	const wekaROXCatalog = `apiVersion: storage.nvcf.nvidia.com/v1alpha1
-kind: StorageCapabilityCatalog
-drivers:
-  csi.weka.io:
-    provider: weka
-    accessModes: [ReadWriteOnce, ReadOnlyMany]
-    readerMountOptions: [ro]
-    transitions:
-      regularModelCache: roxReadOnly
-      helmModelCache: disabled
-`
-	_, err := parseStorageCapabilityCatalog(wekaROXCatalog)
-	require.NoError(t, err, "a non-NVMesh driver must be able to declare roxReadOnly")
-
-	sc := testModelCacheStorageClass()
-	sc.Provisioner = "csi.weka.io"
-	c := storageResolutionClient(t, sc, capabilityCatalogConfigMap(wekaROXCatalog))
-
-	selection, err := ResolveModelCacheStorage(
-		t.Context(), c, testCatalogNamespace, ModelCacheWorkflowRegular)
-	require.NoError(t, err)
-	assert.Equal(t, "weka", selection.Provider)
-	assert.Equal(t, "csi.weka.io", selection.Provisioner)
-	assert.Equal(t, ModelCacheTransitionROXReadOnly, selection.Transition)
-	assert.Equal(t, []string{"ro"}, selection.RequiredMountOptions,
-		"the driver's own reader options are used, not NVMesh's XFS flags")
-	assert.Equal(t,
-		[]corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce, corev1.ReadOnlyMany},
-		selection.RequiredAccessModes)
-
-	// The persisted selection must survive its own validation too, otherwise
-	// the decision could be made but never committed.
-	persisted, err := NewPersistedModelCacheStorageSelection(
-		ModelCacheWorkflowRegular, ModelCacheSelectionDurable, selection)
-	require.NoError(t, err)
-	assert.Equal(t, "weka", persisted.Provider)
-
-	// A driver that never proved ReadOnlyMany still cannot claim the transition.
-	unqualified := strings.Replace(wekaROXCatalog,
-		"accessModes: [ReadWriteOnce, ReadOnlyMany]", "accessModes: [ReadWriteMany]", 1)
-	_, err = parseStorageCapabilityCatalog(unqualified)
-	require.ErrorContains(t, err, "requires ReadWriteOnce and ReadOnlyMany access modes")
-}
-
-// TestHelmROXRequiresCrossNamespaceCapability pins the split the design calls
-// for: regular caching keeps its reader in the same namespace, so proven
-// access modes are enough for any driver. Helm caching must reach another
-// namespace, which NVCA does by deriving a reader PV from the writer's CSI
-// volume handle. Only a driver that declares that capability may run
-// roxReadOnly for Helm; everything else must use a ReadWriteMany claim.
-func TestHelmROXRequiresCrossNamespaceCapability(t *testing.T) {
-	const wekaHelmROX = `apiVersion: storage.nvcf.nvidia.com/v1alpha1
-kind: StorageCapabilityCatalog
-drivers:
-  csi.weka.io:
-    provider: weka
-    accessModes: [ReadWriteOnce, ReadOnlyMany]
-    readerMountOptions: [ro]
-    transitions:
-      regularModelCache: roxReadOnly
-      helmModelCache: roxReadOnly
-`
-	_, err := parseStorageCapabilityCatalog(wekaHelmROX)
-	require.ErrorContains(t, err, "requires capability crossNamespaceVolumeSharing")
-
-	// Regular-only is fine for the same driver: no namespace is crossed.
-	regularOnly := strings.Replace(wekaHelmROX, "helmModelCache: roxReadOnly", "helmModelCache: disabled", 1)
-	_, err = parseStorageCapabilityCatalog(regularOnly)
-	require.NoError(t, err, "a driver without the capability may still cache for regular functions")
-
-	// Declaring the capability makes the Helm transition legal again, and it
-	// is a catalog edit rather than a code change.
-	withCapability := strings.Replace(wekaHelmROX,
-		"    transitions:",
-		"    capabilities:\n      crossNamespaceVolumeSharing: true\n    transitions:", 1)
-	_, err = parseStorageCapabilityCatalog(withCapability)
-	require.NoError(t, err)
-}
-
 // profileDigestFor computes the qualified-profile digest the resolver would
 // produce for one driver and workflow in the given catalog payload.
 func profileDigestFor(
@@ -530,11 +447,7 @@ func profileDigestFor(
 	require.NoError(t, err)
 	driver, ok := catalog.Drivers[provisioner]
 	require.True(t, ok, "provisioner %q is absent from the catalog", provisioner)
-	transition := driver.Transitions.RegularModelCache
-	if workflow == ModelCacheWorkflowHelm {
-		transition = driver.Transitions.HelmModelCache
-	}
-	return digestDriverProfile(provisioner, driver, workflow, transition)
+	return digestDriverProfile(provisioner, driver, workflow, transitionForWorkflow(driver, workflow))
 }
 
 // TestProfileDigestIgnoresUnrelatedCatalogEdits pins the property that makes an
@@ -559,9 +472,6 @@ func TestProfileDigestIgnoresUnrelatedCatalogEdits(t *testing.T) {
     provider: unrelated
     accessModes: []
     readerMountOptions: []
-    transitions:
-      regularModelCache: disabled
-      helmModelCache: disabled
 `
 		assert.Equal(t, base,
 			profileDigestFor(t, edited, NVMeshStorageClassProvisioner, ModelCacheWorkflowRegular))
@@ -729,8 +639,10 @@ func TestValidateModelCacheStorageSelectionInputsWithClientset(t *testing.T) {
 	})
 
 	t.Run("matching digest cannot invent transition", func(t *testing.T) {
+		// Withdrawing ReadOnlyMany changes what the driver qualifies for, so
+		// the derived transition no longer matches the persisted one.
 		disabled := strings.Replace(
-			validCatalog, "regularModelCache: roxReadOnly", "regularModelCache: disabled", 1)
+			validCatalog, "accessModes: [ReadWriteOnce, ReadOnlyMany]", "accessModes: [ReadWriteOnce]", 1)
 		forged := *selection
 		forged.ProfileDigest = profileDigestFor(t, disabled, NVMeshStorageClassProvisioner, ModelCacheWorkflowRegular)
 		k8sClient := kubernetesfake.NewSimpleClientset(
