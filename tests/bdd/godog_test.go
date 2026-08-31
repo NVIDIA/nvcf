@@ -1426,6 +1426,163 @@ func TestMultiClusterHelmfileLLMRegistrationMultiregionFeatureFileWiresToSteps(t
 	}
 }
 
+// TestMultiClusterHelmfileLLMRegistrationTLSFeatureFileWiresToSteps runs the
+// focused secure registration feature against a fake runner. The canned
+// external observations cover the TLS listener, WatchStargates snapshot,
+// Pylon metrics, and authenticated invocation.
+func TestMultiClusterHelmfileLLMRegistrationTLSFeatureFileWiresToSteps(t *testing.T) {
+	t.Setenv("NGC_API_KEY", "test-key")
+	t.Setenv("SAMPLE_NGC_ORG", "test-org")
+	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
+	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
+
+	const (
+		grpcurlPreflightCommand = `/bin/sh -c 'command -v grpcurl >/dev/null'`
+		tlsHandshakeCommand     = `/bin/bash -c 'openssl s_client -connect 127.0.0.1:50071 ` +
+			`-servername llm-request-router.nvcf.svc.cluster.local -alpn h2 -verify_return_error ` +
+			`-CAfile <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf ` +
+			`-o jsonpath="{.data.ca\.crt}" | base64 -d) </dev/null 2>&1'`
+		plaintextWatchCommand = `/bin/bash -c 'set -u; output=$(grpcurl -plaintext -max-time 5 ` +
+			`-import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto ` +
+			`127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates 2>&1); rc=$?; ` +
+			`if [ "$rc" -eq 0 ]; then printf "%s\n" "plaintext Watch unexpectedly succeeded" >&2; ` +
+			`exit 1; fi; printf "%s\n" "$output" | ` +
+			`bash tests/bdd/scripts/assert-grpcurl-plaintext-tls-rejection.sh'`
+		tlsWatchCommand = "bash tests/bdd/scripts/observe-watch-stargates.sh" +
+			" 127.0.0.1:50071 llm-request-router.nvcf.svc.cluster.local" +
+			" stargate-quic-tls nvcf k3d-ncp-local-cp 3"
+		pylonMetricsCommand = "bash tests/bdd/scripts/wait-pylon-metrics.sh" +
+			" bdd-registration-tls llm-worker k3d-ncp-local-compute-1 10m" +
+			" pylon_registration_stream_connected exactly 3" +
+			" pylon_reverse_tunnel_connected exactly 3"
+		invokeCommand = "/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke" +
+			" --inference-url /v1/chat/completions --model-name openai-compatible-sample" +
+			" --request-body '{\"messages\":[{\"role\":\"user\",\"content\":\"bdd-registration-tls\"}]}' --timeout 120"
+		invalidAuthorityCommand = "make -C deploy/stacks/self-managed template " +
+			"HELMFILE_ENV=local-bdd-registration-tls-invalid-authority"
+	)
+
+	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
+		"k3d cluster get ncp-local": {ExitCode: 1},
+		grpcurlPreflightCommand:     {ExitCode: 0},
+		"kubectl --context k3d-ncp-local-cp get configmap/nvcf-api-remote-config -n nvcf -o yaml": {
+			ExitCode: 0,
+			Stdout:   "worker-address: https://llm-request-router.nvcf.svc.cluster.local:50071\n",
+		},
+		tlsHandshakeCommand: {
+			ExitCode: 0,
+			Stdout:   "ALPN protocol: h2\nVerify return code: 0 (ok)\n",
+		},
+		plaintextWatchCommand: {ExitCode: 0, Stdout: "plaintext-watch-rejected=tls-listener-timeout\n"},
+		tlsWatchCommand: {
+			ExitCode: 0,
+			Stdout: `{
+  "stargates": [
+    {"stargateId": "llm-request-router-0", "grpcPylonDialAddr": "https://llm-request-router.nvcf.svc.cluster.local:50071"},
+    {"stargateId": "llm-request-router-1", "grpcPylonDialAddr": "https://llm-request-router.nvcf.svc.cluster.local:50071"},
+    {"stargateId": "llm-request-router-2", "grpcPylonDialAddr": "https://llm-request-router.nvcf.svc.cluster.local:50071"}
+  ]
+}`,
+			Stderr: "ERROR: DeadlineExceeded",
+		},
+		pylonMetricsCommand: {
+			ExitCode: 0,
+			Stdout: "pylon_registration_stream_connected=3\n" +
+				"pylon_reverse_tunnel_connected=3\n",
+		},
+		invokeCommand: {
+			ExitCode: 0,
+			Stdout: "Function invocation completed!\n\nResponse:\n" +
+				`{"object":"chat.completion","choices":[{"message":{"content":"This is a fixed 128-byte response for routing and contract validation."}}]}` +
+				"\n",
+		},
+		invalidAuthorityCommand: {
+			ExitCode: 1,
+			Stderr: "global.workerEndpoints.llmRequestRouterAddress must use " +
+				"optional http:// or https:// followed by DNS-or-IPv4:port or [IPv6]:port " +
+				"with port 1-65535\n",
+		},
+	}))
+	seedHelmfileLocalBDDMultiFixture(t, suite.Config.RepoRoot)
+	seedComputePlaneLocalBDDMultiFixture(t, suite.Config.RepoRoot)
+	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+	writeProfileHandoffArtifact(t, suite.Config.RepoRoot)
+	writeMulticlusterComputeRegisterValues(t, suite.Config.RepoRoot, "nvcf-compute-plane", "ncp-local-compute-1")
+	writeArtifact(
+		t,
+		suite.Config.RepoRoot,
+		"self-managed",
+		"registration-tls-rendered.yaml",
+		"https://llm-request-router.nvcf.svc.cluster.local:50071\n"+
+			"--grpc-pylon-dial-addr=https://llm-request-router.nvcf.svc.cluster.local:50071\n",
+	)
+
+	sc := steps.NewScenarioContext(suite)
+	featurePath := mustResolveFeaturePath(t, "multi-cluster-helmfile-llm-registration-tls.feature")
+	var out strings.Builder
+	status := godog.TestSuite{
+		Name: "multi-cluster-helmfile-llm-registration-tls-wiring",
+		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
+			steps.RegisterAll(ctx, sc)
+		},
+		Options: &godog.Options{
+			Format: "pretty",
+			Paths:  []string{featurePath},
+			Strict: true,
+			Output: &out,
+		},
+	}.Run()
+	if status != 0 {
+		t.Fatalf("godog suite status = %d\n%s", status, out.String())
+	}
+	if !commandRanThatContainsAll(
+		suite.Runner.(*fakeRunner).runs,
+		"function create --name bdd-registration-tls",
+		"--function-type LLM",
+		"--llm-model",
+	) {
+		t.Fatal("secure registration sample was not created as an LLM function")
+	}
+	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, pylonMetricsCommand) {
+		t.Fatal("Pylon registration and reverse-tunnel metrics were not observed")
+	}
+	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, tlsWatchCommand) {
+		t.Fatal("WatchStargates was not observed over the trusted TLS listener")
+	}
+	if !commandRanExactly(suite.Runner.(*fakeRunner).runs, plaintextWatchCommand) {
+		t.Fatal("plaintext WatchStargates rejection was not exercised")
+	}
+	runs := suite.Runner.(*fakeRunner).runs
+	if !commandRanExactly(runs, grpcurlPreflightCommand) {
+		t.Fatal("grpcurl availability was not checked before the live probes")
+	}
+	if !commandRanExactly(runs, invalidAuthorityCommand) {
+		t.Fatal("invalid registration authority was not rejected before installation")
+	}
+	for _, assertion := range []struct {
+		path string
+		want string
+	}{
+		{
+			path: filepath.Join(suite.Config.RepoRoot, "deploy", "stacks", "self-managed", "environments", "local-bdd-registration-tls.yaml"),
+			want: "https://llm-request-router.nvcf.svc.cluster.local:50071",
+		},
+		{
+			path: filepath.Join(suite.Config.RepoRoot, "deploy", "stacks", "self-managed", "environments", "local-bdd-registration-tls-invalid-authority.yaml"),
+			want: "https://llm_request_router.nvcf.svc.cluster.local:50071",
+		},
+	} {
+		got, found, err := dsl.ReadYAMLKey(assertion.path, "global.workerEndpoints.llmRequestRouterAddress")
+		if err != nil {
+			t.Fatalf("read worker endpoint override: %v", err)
+		}
+		if !found || got != assertion.want {
+			t.Fatalf("worker endpoint = %q, found = %t; want %q", got, found, assertion.want)
+		}
+	}
+}
+
 // TestSingleClusterHelmfileUpstreamImagesFeatureFileWiresToSteps runs the
 // focused upstream-image feature against a fake runner. The seeded global
 // template contains the exact documentation blocks so the ledger-backed
@@ -2205,6 +2362,16 @@ func TestMultiClusterHelmfileLLMRegistrationMultiregion(t *testing.T) {
 		t.Skip("live run skipped under -short")
 	}
 	runLiveFeature(t, "multi-cluster-helmfile-llm-registration-multiregion.feature")
+}
+
+// TestMultiClusterHelmfileLLMRegistrationTLS is the live entry point for the
+// focused secure Pylon registration feature on local split-cluster k3d.
+// Skipped under -short.
+func TestMultiClusterHelmfileLLMRegistrationTLS(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live run skipped under -short")
+	}
+	runLiveFeature(t, "multi-cluster-helmfile-llm-registration-tls.feature")
 }
 
 // TestSingleClusterEKSHelmfile is the live entry point for the
