@@ -51,12 +51,16 @@ func ensureGXCacheNamespaceLabels(ctx context.Context, nsPatcher k8sNamespacePat
 // model-cache init namespace so the Kyverno add-unbound-dns policy injects
 // the nvcf-unbound nameserver into writer job pods. Called at NVCA startup so
 // the label is applied immediately on upgrade, before any model cache reconcile
-// runs. JSON patch "add" is idempotent: it inserts the key when absent and
-// updates it when present, so re-running on an already-labelled namespace is safe.
+// runs.
+//
+// A strategic merge patch is used instead of JSON patch "add" because JSON patch
+// requires the parent path (/metadata/labels) to already exist; a namespace
+// with a nil labels map would cause the patch to be rejected. The merge patch
+// creates the labels map when absent and merges into it when present, so it is
+// safe regardless of whether the namespace was freshly created or pre-existing.
 func ensureModelCacheNamespaceLabel(ctx context.Context, nsPatcher k8sNamespacePatcher, namespace string) error {
-	key := strings.ReplaceAll(nvcatypes.WorkloadInstanceTypeLabel, "/", "~1")
-	patchData := []byte(fmt.Sprintf(`[{"op": "add", "path": "/metadata/labels/%s", "value": %q}]`,
-		key, nvcatypes.WorkloadInstanceTypeValueMiniService))
-	_, err := nsPatcher.Patch(ctx, namespace, k8sapitypes.JSONPatchType, patchData, metav1.PatchOptions{})
+	patchData := []byte(fmt.Sprintf(`{"metadata":{"labels":{%q:%q}}}`,
+		nvcatypes.WorkloadInstanceTypeLabel, nvcatypes.WorkloadInstanceTypeValueMiniService))
+	_, err := nsPatcher.Patch(ctx, namespace, k8sapitypes.StrategicMergePatchType, patchData, metav1.PatchOptions{})
 	return err
 }
