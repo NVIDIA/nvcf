@@ -689,3 +689,69 @@ func TestRetireIdleModelCacheBindings(t *testing.T) {
 		}
 	})
 }
+
+// TestModelCacheInitWritersRemaining covers the invariant that keeps a cleanup
+// race recoverable: the ownership Lease is not released while a writer object
+// survives. The normal init path renews the Lease and then creates its
+// objects, so a create can land after cleanup took its snapshot without
+// touching the Lease, which is the only thing the per-delete guard watches.
+// Releasing the Lease then would strand that object, because the next cleanup
+// finds no Lease, refuses to authorize, and the finalizer never clears.
+func TestModelCacheInitWritersRemaining(t *testing.T) {
+	const handle = "raced-handle"
+	labels := map[string]string{modelCacheHandleLabelKey: handle}
+	listOpts := []client.ListOption{
+		client.MatchingLabels(labels),
+		client.InNamespace(ModelCacheInitNamespace),
+	}
+	meta := func(name string) metav1.ObjectMeta {
+		return metav1.ObjectMeta{Name: name, Namespace: ModelCacheInitNamespace, Labels: labels}
+	}
+
+	t.Run("nothing left releases the Lease", func(t *testing.T) {
+		r := retirementReconciler(t, time.Now())
+		got, err := r.modelCacheInitWritersRemaining(t.Context(), listOpts, false)
+		require.NoError(t, err)
+		assert.Zero(t, got)
+	})
+
+	t.Run("a writer Job created after the snapshot holds the Lease", func(t *testing.T) {
+		r := retirementReconciler(t, time.Now(),
+			&batchv1.Job{ObjectMeta: meta("writer-job-" + handle)})
+		got, err := r.modelCacheInitWritersRemaining(t.Context(), listOpts, false)
+		require.NoError(t, err)
+		assert.Equal(t, 1, got)
+	})
+
+	t.Run("a pull Secret counts too", func(t *testing.T) {
+		r := retirementReconciler(t, time.Now(),
+			&corev1.Secret{ObjectMeta: meta("writer-job-" + handle + "-0-pull-worker")})
+		got, err := r.modelCacheInitWritersRemaining(t.Context(), listOpts, false)
+		require.NoError(t, err)
+		assert.Equal(t, 1, got)
+	})
+
+	t.Run("a retained writer PVC is the backing store, not a leftover", func(t *testing.T) {
+		r := retirementReconciler(t, time.Now(),
+			&corev1.PersistentVolumeClaim{ObjectMeta: meta("rw-pvc-" + handle)})
+
+		got, err := r.modelCacheInitWritersRemaining(t.Context(), listOpts, true)
+		require.NoError(t, err)
+		assert.Zero(t, got, "the shared filesystem backend keeps this claim on purpose")
+
+		got, err = r.modelCacheInitWritersRemaining(t.Context(), listOpts, false)
+		require.NoError(t, err)
+		assert.Equal(t, 1, got, "a backend that does not retain it must still be waited for")
+	})
+
+	t.Run("objects already terminating do not stall the release", func(t *testing.T) {
+		terminating := &batchv1.Job{ObjectMeta: meta("writer-job-" + handle)}
+		now := metav1.NewTime(time.Now())
+		terminating.DeletionTimestamp = &now
+		terminating.Finalizers = []string{"test/hold"}
+		r := retirementReconciler(t, time.Now(), terminating)
+		got, err := r.modelCacheInitWritersRemaining(t.Context(), listOpts, false)
+		require.NoError(t, err)
+		assert.Zero(t, got)
+	})
+}

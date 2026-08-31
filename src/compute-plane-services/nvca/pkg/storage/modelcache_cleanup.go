@@ -527,6 +527,28 @@ func (r *Reconciler) cleanupInitModelCache(ctx context.Context, st *nvcav1new.St
 		}
 	}
 
+	// The ownership Lease is the authority for a later cleanup. Releasing it
+	// while a writer object survives would strand that object: the next
+	// cleanup finds no Lease, refuses to authorize, and the finalizer never
+	// clears.
+	//
+	// A writer object can survive this pass. The normal init path renews the
+	// Lease and then creates its objects, so a create can land after this
+	// cleanup took its snapshot without touching the Lease in between, which
+	// is the one thing the per-delete guard watches for. Re-read before
+	// releasing, and keep the Lease if anything is left, so the next reconcile
+	// is still authorized to finish the job.
+	if annotated {
+		if remaining, err := r.modelCacheInitWritersRemaining(
+			ctx, listOpts, retainWriterPVC); err != nil {
+			return append(errs, err)
+		} else if remaining > 0 {
+			return append(errs, fmt.Errorf(
+				"%d model cache init writer object(s) appeared after cleanup started; "+
+					"retaining the ownership Lease so cleanup can be retried", remaining))
+		}
+	}
+
 	lease := &coordv1.Lease{}
 	if annotated {
 		lease = cleanupLeaseGuard.lease.DeepCopy()
@@ -548,6 +570,51 @@ func (r *Reconciler) cleanupInitModelCache(ctx context.Context, st *nvcav1new.St
 	}
 
 	return errs
+}
+
+// modelCacheInitWritersRemaining counts writer objects that still exist for a
+// binding, ignoring ones already terminating. Pods are excluded: they are
+// owned by the writer Job and disappear with its foreground deletion, so
+// counting them would stall the release rather than protect anything.
+func (r *Reconciler) modelCacheInitWritersRemaining(
+	ctx context.Context, listOpts []client.ListOption, retainWriterPVC bool,
+) (int, error) {
+	remaining := 0
+
+	jobs := &batchv1.JobList{}
+	if err := r.Client.List(ctx, jobs, listOpts...); err != nil {
+		return 0, fmt.Errorf("re-list model cache init Jobs before Lease release: %w", err)
+	}
+	for i := range jobs.Items {
+		if jobs.Items[i].DeletionTimestamp == nil {
+			remaining++
+		}
+	}
+
+	secrets := &corev1.SecretList{}
+	if err := r.Client.List(ctx, secrets, listOpts...); err != nil {
+		return 0, fmt.Errorf("re-list model cache init pull Secrets before Lease release: %w", err)
+	}
+	for i := range secrets.Items {
+		if secrets.Items[i].DeletionTimestamp == nil {
+			remaining++
+		}
+	}
+
+	// A retained writer PVC is the durable backing store for the shared
+	// filesystem backend, not a leftover.
+	if !retainWriterPVC {
+		pvcs := &corev1.PersistentVolumeClaimList{}
+		if err := r.Client.List(ctx, pvcs, listOpts...); err != nil {
+			return 0, fmt.Errorf("re-list model cache init PVCs before Lease release: %w", err)
+		}
+		for i := range pvcs.Items {
+			if pvcs.Items[i].DeletionTimestamp == nil {
+				remaining++
+			}
+		}
+	}
+	return remaining, nil
 }
 
 func modelCacheCleanupObjects(
