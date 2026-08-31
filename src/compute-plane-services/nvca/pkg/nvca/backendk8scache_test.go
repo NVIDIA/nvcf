@@ -71,7 +71,6 @@ import (
 	ctrlfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	nvcaauth "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/auth"
-	nvcaenvtest "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/envtest"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/icms"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/kubeclients"
 	nvcametrics "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
@@ -93,6 +92,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 	"k8s.io/client-go/kubernetes"
+	"sigs.k8s.io/controller-runtime/pkg/envtest"
 )
 
 // Helper function to safely update mock transport
@@ -5514,12 +5514,23 @@ func TestEnsureModelCacheNamespaceLabel_IdempotentWhenLabelPresent(t *testing.T)
 // against a real Kubernetes API server to confirm the strategic merge patch succeeds
 // in both the nil-labels case (JSON patch "add" would have failed here because
 // /metadata/labels has no parent) and the pre-existing-labels case.
+//
+// Uses a plain envtest.Environment without NVCA CRDs — only core Kubernetes
+// resources (Namespace) are needed, so loading the NVCA CRD directory is
+// unnecessary and avoids the CRD path resolution issues in Bazel sandboxes.
 func TestEnsureModelCacheNamespaceLabel_Envtest(t *testing.T) {
-	restConfig, _, cleanup, err := nvcaenvtest.SetupEnvtest()
+	binAssetsDir := os.Getenv("KUBEBUILDER_ASSETS")
+	if binAssetsDir == "" {
+		t.Skip("KUBEBUILDER_ASSETS not set")
+	}
+	env := &envtest.Environment{
+		BinaryAssetsDirectory: binAssetsDir,
+	}
+	cfg, err := env.Start()
 	require.NoError(t, err)
-	t.Cleanup(cleanup)
+	t.Cleanup(func() { _ = env.Stop() })
 
-	k8sClient, err := kubernetes.NewForConfig(restConfig)
+	k8sClient, err := kubernetes.NewForConfig(cfg)
 	require.NoError(t, err)
 
 	tests := []struct {
