@@ -19,6 +19,7 @@ package nvca
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -60,6 +61,19 @@ func (f *fakeGPURegistrationQueue) Resume() {
 	f.paused.Store(false)
 }
 
+type observedDoneContext struct {
+	context.Context
+	doneObserved chan struct{}
+	once         sync.Once
+}
+
+func (c *observedDoneContext) Done() <-chan struct{} {
+	c.once.Do(func() {
+		close(c.doneObserved)
+	})
+	return c.Context.Done()
+}
+
 func TestGPURegistrationManagerCancellationWhileWaiting(t *testing.T) {
 	var manager gpuRegistrationManager
 
@@ -75,18 +89,20 @@ func TestGPURegistrationManagerCancellationWhileWaiting(t *testing.T) {
 	}()
 	<-holderEntered
 
-	ctx, cancel := context.WithCancel(context.Background())
-	waiterStarted := make(chan struct{})
+	baseContext, cancel := context.WithCancel(context.Background())
+	ctx := &observedDoneContext{
+		Context:      baseContext,
+		doneObserved: make(chan struct{}),
+	}
 	waiterDone := make(chan error, 1)
 	var waiterRan atomic.Bool
 	go func() {
-		close(waiterStarted)
 		waiterDone <- manager.withRegistrationOperation(ctx, func() error {
 			waiterRan.Store(true)
 			return nil
 		})
 	}()
-	<-waiterStarted
+	<-ctx.doneObserved
 	cancel()
 
 	select {
@@ -99,6 +115,18 @@ func TestGPURegistrationManagerCancellationWhileWaiting(t *testing.T) {
 
 	close(releaseHolder)
 	require.NoError(t, <-holderDone)
+}
+
+func TestGPURegistrationRetryBackoffIsBoundedAndResettable(t *testing.T) {
+	backoff := newGPURegistrationRetryBackoff(5*time.Second, 20*time.Second)
+
+	assert.Equal(t, 5*time.Second, backoff.next())
+	assert.Equal(t, 10*time.Second, backoff.next())
+	assert.Equal(t, 20*time.Second, backoff.next())
+	assert.Equal(t, 20*time.Second, backoff.next())
+
+	backoff.reset()
+	assert.Equal(t, 5*time.Second, backoff.next())
 }
 
 func TestGPURegistrationManagerGPULossMarksUnreadyAndPausesQueue(t *testing.T) {

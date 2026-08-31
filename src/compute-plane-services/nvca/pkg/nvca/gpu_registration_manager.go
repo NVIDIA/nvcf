@@ -29,6 +29,7 @@ import (
 )
 
 const gracefulNoGPURegistrationComponentName = "icmsregistration"
+const maxGracefulNoGPURegistrationRetryInterval = 5 * time.Minute
 
 type gpuRegistrationMonitor interface {
 	HasGPUs() bool
@@ -42,6 +43,8 @@ type gpuRegistrationQueue interface {
 	Resume()
 }
 
+// gpuRegistrationManager owns GPU-registration readiness, retry, queue, and
+// serialization state so all ICMS registration operations share one lifecycle.
 type gpuRegistrationManager struct {
 	operationGate        contextAwareRegistrationGate
 	stateMu              sync.Mutex
@@ -54,11 +57,53 @@ type gpuRegistrationManager struct {
 	register             func(context.Context) error
 }
 
+// contextAwareRegistrationGate serializes registration operations while
+// allowing a queued caller to leave promptly when its context is canceled.
 type contextAwareRegistrationGate struct {
 	once  sync.Once
 	token chan struct{}
 }
 
+// gpuRegistrationRetryBackoff bounds repeated registration attempts while
+// retaining the configured poll interval as the first retry delay.
+type gpuRegistrationRetryBackoff struct {
+	initial time.Duration
+	current time.Duration
+	maximum time.Duration
+}
+
+// newGPURegistrationRetryBackoff preserves intervals larger than the default
+// ceiling so an operator-configured slow retry cadence is never shortened.
+func newGPURegistrationRetryBackoff(initial, maximum time.Duration) gpuRegistrationRetryBackoff {
+	if maximum < initial {
+		maximum = initial
+	}
+	return gpuRegistrationRetryBackoff{
+		initial: initial,
+		current: initial,
+		maximum: maximum,
+	}
+}
+
+// next returns the current delay and advances the following delay to its cap.
+func (b *gpuRegistrationRetryBackoff) next() time.Duration {
+	delay := b.current
+	if b.current < b.maximum {
+		if b.current > b.maximum/2 {
+			b.current = b.maximum
+		} else {
+			b.current *= 2
+		}
+	}
+	return delay
+}
+
+// reset restores the configured first-retry delay after a GPU state change.
+func (b *gpuRegistrationRetryBackoff) reset() {
+	b.current = b.initial
+}
+
+// lock waits for the single registration token or returns when ctx is canceled.
 func (g *contextAwareRegistrationGate) lock(ctx context.Context) error {
 	g.once.Do(func() {
 		g.token = make(chan struct{}, 1)
@@ -81,10 +126,13 @@ func (g *contextAwareRegistrationGate) lock(ctx context.Context) error {
 	}
 }
 
+// unlock releases the registration token after a successful lock.
 func (g *contextAwareRegistrationGate) unlock() {
 	g.token <- struct{}{}
 }
 
+// withRegistrationOperation protects recovery, renewal, and periodic
+// registration from overlapping while honoring cancellation before entry.
 func (m *gpuRegistrationManager) withRegistrationOperation(ctx context.Context, operation func() error) error {
 	if err := m.operationGate.lock(ctx); err != nil {
 		return err
@@ -93,6 +141,8 @@ func (m *gpuRegistrationManager) withRegistrationOperation(ctx context.Context, 
 	return operation()
 }
 
+// configureGracefulNoGPU initializes state before the monitor and registration
+// worker start.
 func (m *gpuRegistrationManager) configureGracefulNoGPU(
 	monitor gpuRegistrationMonitor,
 	initiallyReady bool,
@@ -106,24 +156,29 @@ func (m *gpuRegistrationManager) configureGracefulNoGPU(
 	m.registrationRequests = make(chan struct{}, 1)
 }
 
+// setQueueManager connects queue flow control once startup constructs it.
 func (m *gpuRegistrationManager) setQueueManager(queueManager gpuRegistrationQueue) {
 	m.queueManager = queueManager
 }
 
+// start launches recovery before the monitor can report its first transition.
 func (m *gpuRegistrationManager) start(ctx context.Context) {
 	go m.run(ctx)
 	m.monitor.SetOnGPUStateChange(m.handleGPUStateChange)
 	m.monitor.Start(ctx)
 }
 
+// enabled reports whether graceful no-GPU registration was configured.
 func (m *gpuRegistrationManager) enabled() bool {
 	return m.monitor != nil
 }
 
+// hasGPUs is nil-safe for agents that do not enable GPU monitoring.
 func (m *gpuRegistrationManager) hasGPUs() bool {
 	return m.monitor != nil && m.monitor.HasGPUs()
 }
 
+// getRegistrationStatus contributes recovery readiness to aggregate health.
 func (m *gpuRegistrationManager) getRegistrationStatus(context.Context) (types.AgentHealth, error) {
 	component := types.ComponentHealth{
 		Status:      types.HealthStatusHealthy,
@@ -141,6 +196,8 @@ func (m *gpuRegistrationManager) getRegistrationStatus(context.Context) (types.A
 	}, nil
 }
 
+// handleGPUStateChange immediately marks registration unready and pauses queues;
+// GPU arrival then schedules serialized recovery registration.
 func (m *gpuRegistrationManager) handleGPUStateChange(ctx context.Context, hasGPUs bool) {
 	log := core.GetLogger(ctx)
 	m.generation.Add(1)
@@ -164,17 +221,24 @@ func (m *gpuRegistrationManager) handleGPUStateChange(ctx context.Context, hasGP
 	}
 }
 
+// run consumes coalesced GPU-arrival requests and retries registration with
+// bounded backoff until readiness succeeds, GPUs disappear, or ctx ends.
 func (m *gpuRegistrationManager) run(ctx context.Context) {
 	retryInterval := m.retryInterval
 	if retryInterval <= 0 {
 		retryInterval = DefaultGPUPollInterval
 	}
+	backoff := newGPURegistrationRetryBackoff(
+		retryInterval,
+		maxGracefulNoGPURegistrationRetryInterval,
+	)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-m.registrationRequests:
+			backoff.reset()
 		}
 
 		for !m.ready.Load() && m.hasGPUs() {
@@ -182,13 +246,14 @@ func (m *gpuRegistrationManager) run(ctx context.Context) {
 				break
 			}
 
-			retryTimer := time.NewTimer(retryInterval)
+			retryTimer := time.NewTimer(backoff.next())
 			select {
 			case <-ctx.Done():
 				retryTimer.Stop()
 				return
 			case <-m.registrationRequests:
 				retryTimer.Stop()
+				backoff.reset()
 			case <-retryTimer.C:
 			}
 		}
