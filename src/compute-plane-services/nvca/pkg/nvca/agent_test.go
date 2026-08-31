@@ -45,6 +45,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/client-go/util/workqueue"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	nvcaauth "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/auth"
@@ -2096,4 +2097,41 @@ func TestStartReadinessNotSetOnICMSRegistrationFailure(t *testing.T) {
 		assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode,
 			"readiness endpoint should return 503 when Start() fails before arming readiness")
 	}
+}
+
+// TestEventDispatcherSurvivesClosedChannel covers a shutdown crash. The
+// dispatcher used a single-value receive, so once the event channel closed it
+// received a nil event immediately and forever: it dereferenced that nil and
+// panicked the agent, and spun on the closed channel until it did. The panic
+// was observed after "Self-destruct sequence completed", where the dispatcher
+// outlives the shutdown that closed its channel.
+func TestEventDispatcherSurvivesClosedChannel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	events := make(chan *core.Event)
+	a := &Agent{
+		metrics: nvcametrics.NewDefaultMetrics("cluster", "backend", "backend", "test"),
+		resourceEventWorkerQueues: map[string]workqueue.Interface{
+			"Pod": workqueue.New(),
+		},
+	}
+	defer a.resourceEventWorkerQueues["Pod"].ShutDown()
+	ctx = nvcametrics.WithMetrics(ctx, a.metrics)
+
+	a.startEventProcessDispatchers(ctx, events)
+
+	// A live event still reaches its queue.
+	events <- &core.Event{Kind: "Pod", ObjectMetaKey: "ns/name"}
+	assert.Eventually(t, func() bool {
+		return a.resourceEventWorkerQueues["Pod"].Len() == 1
+	}, 2*time.Second, 10*time.Millisecond, "a dispatched event should be queued")
+
+	// Closing the channel must stop the dispatcher, not panic it. Before the
+	// fix this panicked the test binary rather than failing it.
+	close(events)
+	time.Sleep(100 * time.Millisecond)
+
+	assert.Equal(t, 1, a.resourceEventWorkerQueues["Pod"].Len(),
+		"a closed channel must not enqueue anything further")
 }
