@@ -196,10 +196,15 @@ func TestAgentApis(t *testing.T) {
 type blockingRecordingICMSClient struct {
 	*mockICMSClient
 
-	mu                   sync.Mutex
-	registrationRequests []types.ICMSRegistrationRequest
-	results              []blockingRegistrationResult
-	registrationStarted  chan int
+	mu                    sync.Mutex
+	registrationRequests  []types.ICMSRegistrationRequest
+	results               []blockingRegistrationResult
+	registrationStarted   chan int
+	credentialResponse    *types.ICMSCredentialResponse
+	credentialErr         error
+	credentialStarted     chan struct{}
+	credentialRelease     chan struct{}
+	credentialReleaseOnce sync.Once
 }
 
 type registrationResult struct {
@@ -259,6 +264,47 @@ func (m *blockingRecordingICMSClient) Register(
 	}
 
 	return result.response, result.err
+}
+
+func (m *blockingRecordingICMSClient) GetCreds(ctx context.Context) (*types.ICMSCredentialResponse, error) {
+	m.mu.Lock()
+	credentialStarted := m.credentialStarted
+	credentialRelease := m.credentialRelease
+	credentialResponse := m.credentialResponse
+	credentialErr := m.credentialErr
+	m.mu.Unlock()
+	if credentialStarted == nil {
+		return m.mockICMSClient.GetCreds(ctx)
+	}
+
+	select {
+	case credentialStarted <- struct{}{}:
+	default:
+	}
+	select {
+	case <-credentialRelease:
+		return credentialResponse, credentialErr
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (m *blockingRecordingICMSClient) blockCredentialFetch(
+	response *types.ICMSCredentialResponse,
+	err error,
+) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.credentialResponse = response
+	m.credentialErr = err
+	m.credentialStarted = make(chan struct{}, 1)
+	m.credentialRelease = make(chan struct{})
+}
+
+func (m *blockingRecordingICMSClient) releaseCredentialFetch() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.credentialReleaseOnce.Do(func() { close(m.credentialRelease) })
 }
 
 func (m *blockingRecordingICMSClient) release(attempt int) {
@@ -321,7 +367,7 @@ func newGracefulNoGPUTestAgent(
 		CloudProvider:                  "on-prem",
 		NamespaceLabels:                labels.Set{"foo": "bar"},
 		K8sVersion:                     "1.27.8",
-		CredRenewInterval:              DefaultCredRenewInterval,
+		CredRenewInterval:              365 * 24 * time.Hour,
 		HeartbeatInterval:              DefaultHeartBeatInterval,
 		SyncQueueInterval:              defaultSyncQueueInterval,
 		SyncRequestStatusInterval:      DefaultSyncRequestStatusInterval,
@@ -516,6 +562,125 @@ func TestAgentStartGracefulNoGPURegistrationFailureRetriesBeforeResuming(t *test
 	requireRefreshedReadinessStatus(t, ctx, agent, http.StatusOK)
 	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPLivenessRoutePath, http.StatusOK)
 	require.Len(t, icmsClient.requests(), 2)
+}
+
+func TestAgentStartGracefulNoGPUStaysPausedWhenGPUDisappearsDuringRegistration(t *testing.T) {
+	ctx, cancel := context.WithCancel(core.WithRandomSeed(newTestContext(), 42))
+	t.Cleanup(cancel)
+
+	recoveredCredentials := getTestQueueCreds(true)
+	icmsClient := newBlockingRecordingICMSClient(
+		registrationResult{response: &types.ICMSRegistrationResponse{
+			ClusterID:      "registered-cluster-id",
+			ClusterGroupID: "registered-cluster-group-id",
+			Credentials:    recoveredCredentials,
+		}},
+		registrationResult{response: &types.ICMSRegistrationResponse{
+			ClusterID:      "registered-cluster-id",
+			ClusterGroupID: "registered-cluster-group-id",
+			Credentials:    recoveredCredentials,
+		}},
+	)
+	agent, k8sClients := newGracefulNoGPUTestAgent(t, ctx, icmsClient)
+	require.NoError(t, agent.Start(ctx))
+
+	_, err := k8sClients.K8s.CoreV1().Nodes().Create(ctx, functionNode.DeepCopy(), metav1.CreateOptions{})
+	require.NoError(t, err)
+	requireRegistrationAttempt(t, icmsClient, 0)
+	require.NoError(t, k8sClients.K8s.CoreV1().Nodes().Delete(ctx, functionNode.Name, metav1.DeleteOptions{}))
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.False(ct, agent.gpuMonitor.HasGPUs())
+		assert.True(ct, agent.queueManager.IsPaused())
+	}, 5*time.Second, 10*time.Millisecond)
+
+	icmsClient.release(0)
+	requireNoRegistrationAttempt(t, icmsClient, 100*time.Millisecond)
+	assert.True(t, agent.queueManager.IsPaused())
+	requireRefreshedReadinessStatus(t, ctx, agent, http.StatusServiceUnavailable)
+	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPLivenessRoutePath, http.StatusOK)
+
+	_, err = k8sClients.K8s.CoreV1().Nodes().Create(ctx, functionNode.DeepCopy(), metav1.CreateOptions{})
+	require.NoError(t, err)
+	requireRegistrationAttempt(t, icmsClient, 1)
+	assert.True(t, agent.queueManager.IsPaused())
+	icmsClient.release(1)
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.False(ct, agent.queueManager.IsPaused())
+		assert.Equal(ct, recoveredCredentials.CreationQueues[testGPUNameDefault],
+			agent.queueManager.getCreateQueue(testGPUNameDefault))
+	}, 5*time.Second, 10*time.Millisecond)
+	requireRefreshedReadinessStatus(t, ctx, agent, http.StatusOK)
+	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPLivenessRoutePath, http.StatusOK)
+}
+
+func TestAgentStartGracefulNoGPUSerializesCredentialRenewalBeforeRecovery(t *testing.T) {
+	ctx, cancel := context.WithCancel(core.WithRandomSeed(newTestContext(), 42))
+	t.Cleanup(cancel)
+
+	initialCredentials := getTestQueueCreds(false)
+	staleCredentials := getTestQueueCreds(false)
+	recoveredCredentials := getTestQueueCreds(true)
+	icmsClient := newBlockingRecordingICMSClient(
+		registrationResult{response: &types.ICMSRegistrationResponse{
+			ClusterID:      "registered-cluster-id",
+			ClusterGroupID: "registered-cluster-group-id",
+			Credentials:    initialCredentials,
+		}},
+		registrationResult{response: &types.ICMSRegistrationResponse{
+			ClusterID:      "registered-cluster-id",
+			ClusterGroupID: "registered-cluster-group-id",
+			Credentials:    recoveredCredentials,
+		}},
+	)
+	agent, k8sClients := newGracefulNoGPUTestAgent(t, ctx, icmsClient)
+	_, err := k8sClients.K8s.CoreV1().Nodes().Create(ctx, functionNode.DeepCopy(), metav1.CreateOptions{})
+	require.NoError(t, err)
+	icmsClient.release(0)
+	require.NoError(t, agent.Start(ctx))
+	requireRegistrationAttempt(t, icmsClient, 0)
+	assert.False(t, agent.queueManager.IsPaused())
+
+	require.NoError(t, k8sClients.K8s.CoreV1().Nodes().Delete(ctx, functionNode.Name, metav1.DeleteOptions{}))
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.False(ct, agent.gpuMonitor.HasGPUs())
+		assert.True(ct, agent.queueManager.IsPaused())
+	}, 5*time.Second, 10*time.Millisecond)
+
+	icmsClient.blockCredentialFetch(&types.ICMSCredentialResponse{QueueCredentials: staleCredentials}, nil)
+	credentialDone := make(chan error, 1)
+	go func() {
+		credentialDone <- agent.RenewICMSQueueCreds(ctx)
+	}()
+	select {
+	case <-icmsClient.credentialStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for credential renewal to start")
+	}
+
+	_, err = k8sClients.K8s.CoreV1().Nodes().Create(ctx, functionNode.DeepCopy(), metav1.CreateOptions{})
+	require.NoError(t, err)
+	requireNoRegistrationAttempt(t, icmsClient, 250*time.Millisecond)
+	assert.True(t, agent.queueManager.IsPaused())
+
+	icmsClient.releaseCredentialFetch()
+	select {
+	case credentialErr := <-credentialDone:
+		require.NoError(t, credentialErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for credential renewal to finish")
+	}
+	requireRegistrationAttempt(t, icmsClient, 1)
+	assert.True(t, agent.queueManager.IsPaused())
+	icmsClient.release(1)
+
+	require.EventuallyWithT(t, func(ct *assert.CollectT) {
+		assert.False(ct, agent.queueManager.IsPaused())
+		assert.Equal(ct, recoveredCredentials.CreationQueues[testGPUNameDefault],
+			agent.queueManager.getCreateQueue(testGPUNameDefault))
+		assert.Equal(ct, recoveredCredentials.TerminationQueue, agent.queueManager.getTermQueue())
+	}, 5*time.Second, 10*time.Millisecond)
+	requireRefreshedReadinessStatus(t, ctx, agent, http.StatusOK)
+	requireHTTPStatusEventually(t, agent.NVCASvcAddress, health.HTTPLivenessRoutePath, http.StatusOK)
 }
 
 func TestAgentStartGracefulNoGPUSerializesPeriodicRegistrationBeforeRecovery(t *testing.T) {

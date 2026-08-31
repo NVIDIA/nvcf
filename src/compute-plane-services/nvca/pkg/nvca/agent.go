@@ -392,7 +392,7 @@ type Agent struct {
 	gpuRegistrationReady      atomic.Bool
 	gpuRegistrationGeneration atomic.Uint64
 	gpuRegistrationRequests   chan struct{}
-	// Serializes GPU inventory snapshots through ICMS response and queue credential application.
+	// Serializes ICMS registration and credential refresh through queue credential application.
 	registrationOperationMu sync.Mutex
 
 	startControllerManager func(context.Context, *kubeclients.KubeClients) error
@@ -2260,6 +2260,12 @@ func (a *Agent) RenewICMSQueueCreds(ctx context.Context) error {
 	if a.backendk8scache == nil {
 		log.Debug("Backend K8s cache not initialized yet, skipping credential renewal")
 		return nil
+	}
+
+	a.registrationOperationMu.Lock()
+	defer a.registrationOperationMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	credRes, err := a.icmsClient.GetCreds(ctx)
