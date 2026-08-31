@@ -19,6 +19,7 @@ package nvca
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -74,6 +75,75 @@ func (c *observedDoneContext) Done() <-chan struct{} {
 	return c.Context.Done()
 }
 
+type fakeGPURegistrationRetryTimer struct {
+	ch      chan time.Time
+	stopped chan struct{}
+	once    sync.Once
+}
+
+func newFakeGPURegistrationRetryTimer() *fakeGPURegistrationRetryTimer {
+	return &fakeGPURegistrationRetryTimer{
+		ch:      make(chan time.Time, 1),
+		stopped: make(chan struct{}),
+	}
+}
+
+func (t *fakeGPURegistrationRetryTimer) C() <-chan time.Time {
+	return t.ch
+}
+
+func (t *fakeGPURegistrationRetryTimer) Stop() bool {
+	t.once.Do(func() {
+		close(t.stopped)
+	})
+	return true
+}
+
+func (t *fakeGPURegistrationRetryTimer) fire() {
+	t.ch <- time.Time{}
+}
+
+type gpuRegistrationRetryTimerRequest struct {
+	delay time.Duration
+	timer *fakeGPURegistrationRetryTimer
+}
+
+type fakeGPURegistrationRetryTimerFactory struct {
+	requests chan gpuRegistrationRetryTimerRequest
+}
+
+func newFakeGPURegistrationRetryTimerFactory() *fakeGPURegistrationRetryTimerFactory {
+	return &fakeGPURegistrationRetryTimerFactory{
+		requests: make(chan gpuRegistrationRetryTimerRequest, 16),
+	}
+}
+
+func (f *fakeGPURegistrationRetryTimerFactory) newTimer(delay time.Duration) gpuRegistrationRetryTimer {
+	timer := newFakeGPURegistrationRetryTimer()
+	f.requests <- gpuRegistrationRetryTimerRequest{delay: delay, timer: timer}
+	return timer
+}
+
+func waitForGPURegistrationCall(t *testing.T, calls <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-calls:
+	case <-time.After(time.Second):
+		t.Fatal("registration callback was not invoked")
+	}
+}
+
+func waitForGPURegistrationRetryTimer(t *testing.T, factory *fakeGPURegistrationRetryTimerFactory) gpuRegistrationRetryTimerRequest {
+	t.Helper()
+	select {
+	case request := <-factory.requests:
+		return request
+	case <-time.After(time.Second):
+		t.Fatal("registration retry timer was not requested")
+		return gpuRegistrationRetryTimerRequest{}
+	}
+}
+
 func TestGPURegistrationManagerCancellationWhileWaiting(t *testing.T) {
 	var manager gpuRegistrationManager
 
@@ -127,6 +197,179 @@ func TestGPURegistrationRetryBackoffIsBoundedAndResettable(t *testing.T) {
 
 	backoff.reset()
 	assert.Equal(t, 5*time.Second, backoff.next())
+}
+
+func TestGPURegistrationManagerRunUsesBoundedRetryBackoff(t *testing.T) {
+	monitor := &fakeGPUAvailability{}
+	monitor.hasGPUs.Store(true)
+	registrationCalls := make(chan struct{}, 16)
+	timers := newFakeGPURegistrationRetryTimerFactory()
+	var manager gpuRegistrationManager
+	manager.configureGracefulNoGPU(monitor, false, 5*time.Second, func(context.Context) error {
+		registrationCalls <- struct{}{}
+		return errors.New("registration unavailable")
+	})
+	manager.newRetryTimer = timers.newTimer
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		manager.run(ctx)
+	}()
+	manager.handleGPUStateChange(ctx, true)
+
+	expectedDelays := []time.Duration{
+		5 * time.Second,
+		10 * time.Second,
+		20 * time.Second,
+		40 * time.Second,
+		80 * time.Second,
+		160 * time.Second,
+		5 * time.Minute,
+		5 * time.Minute,
+	}
+	var activeTimer *fakeGPURegistrationRetryTimer
+	for index, expectedDelay := range expectedDelays {
+		waitForGPURegistrationCall(t, registrationCalls)
+		request := waitForGPURegistrationRetryTimer(t, timers)
+		assert.Equal(t, expectedDelay, request.delay)
+		activeTimer = request.timer
+		if index < len(expectedDelays)-1 {
+			request.timer.fire()
+		}
+	}
+
+	cancel()
+	select {
+	case <-activeTimer.stopped:
+	case <-time.After(time.Second):
+		t.Fatal("active retry timer was not stopped after cancellation")
+	}
+	select {
+	case <-runDone:
+	case <-time.After(time.Second):
+		t.Fatal("registration retry loop did not stop after cancellation")
+	}
+}
+
+func TestGPURegistrationManagerRunResetsBackoffOnGPUArrival(t *testing.T) {
+	monitor := &fakeGPUAvailability{}
+	monitor.hasGPUs.Store(true)
+	registrationCalls := make(chan struct{}, 4)
+	timers := newFakeGPURegistrationRetryTimerFactory()
+	var manager gpuRegistrationManager
+	manager.configureGracefulNoGPU(monitor, false, 5*time.Second, func(context.Context) error {
+		registrationCalls <- struct{}{}
+		return errors.New("registration unavailable")
+	})
+	manager.newRetryTimer = timers.newTimer
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		manager.run(ctx)
+	}()
+	manager.handleGPUStateChange(ctx, true)
+
+	waitForGPURegistrationCall(t, registrationCalls)
+	firstTimer := waitForGPURegistrationRetryTimer(t, timers)
+	assert.Equal(t, 5*time.Second, firstTimer.delay)
+	firstTimer.timer.fire()
+
+	waitForGPURegistrationCall(t, registrationCalls)
+	secondTimer := waitForGPURegistrationRetryTimer(t, timers)
+	assert.Equal(t, 10*time.Second, secondTimer.delay)
+	manager.handleGPUStateChange(ctx, true)
+
+	select {
+	case <-secondTimer.timer.stopped:
+	case <-time.After(time.Second):
+		t.Fatal("GPU arrival did not wake and stop the active retry timer")
+	}
+	waitForGPURegistrationCall(t, registrationCalls)
+	resetTimer := waitForGPURegistrationRetryTimer(t, timers)
+	assert.Equal(t, 5*time.Second, resetTimer.delay)
+
+	cancel()
+	select {
+	case <-runDone:
+	case <-time.After(time.Second):
+		t.Fatal("registration retry loop did not stop")
+	}
+}
+
+func TestGPURegistrationManagerRunCancellationStopsBackoffTimer(t *testing.T) {
+	monitor := &fakeGPUAvailability{}
+	monitor.hasGPUs.Store(true)
+	registrationCalls := make(chan struct{}, 1)
+	timers := newFakeGPURegistrationRetryTimerFactory()
+	var manager gpuRegistrationManager
+	manager.configureGracefulNoGPU(monitor, false, time.Second, func(context.Context) error {
+		registrationCalls <- struct{}{}
+		return errors.New("registration unavailable")
+	})
+	manager.newRetryTimer = timers.newTimer
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		manager.run(ctx)
+	}()
+	manager.handleGPUStateChange(ctx, true)
+	waitForGPURegistrationCall(t, registrationCalls)
+	activeTimer := waitForGPURegistrationRetryTimer(t, timers)
+
+	cancel()
+	select {
+	case <-activeTimer.timer.stopped:
+	case <-time.After(time.Second):
+		t.Fatal("active retry timer was not stopped")
+	}
+	select {
+	case <-runDone:
+	case <-time.After(time.Second):
+		t.Fatal("registration retry loop did not exit")
+	}
+}
+
+func TestGPURegistrationManagerRunPreservesConfiguredSlowRetry(t *testing.T) {
+	monitor := &fakeGPUAvailability{}
+	monitor.hasGPUs.Store(true)
+	registrationCalls := make(chan struct{}, 2)
+	timers := newFakeGPURegistrationRetryTimerFactory()
+	var manager gpuRegistrationManager
+	manager.configureGracefulNoGPU(monitor, false, 10*time.Minute, func(context.Context) error {
+		registrationCalls <- struct{}{}
+		return errors.New("registration unavailable")
+	})
+	manager.newRetryTimer = timers.newTimer
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		manager.run(ctx)
+	}()
+	manager.handleGPUStateChange(ctx, true)
+
+	waitForGPURegistrationCall(t, registrationCalls)
+	firstTimer := waitForGPURegistrationRetryTimer(t, timers)
+	assert.Equal(t, 10*time.Minute, firstTimer.delay)
+	firstTimer.timer.fire()
+	waitForGPURegistrationCall(t, registrationCalls)
+	secondTimer := waitForGPURegistrationRetryTimer(t, timers)
+	assert.Equal(t, 10*time.Minute, secondTimer.delay)
+
+	cancel()
+	select {
+	case <-runDone:
+	case <-time.After(time.Second):
+		t.Fatal("registration retry loop did not stop")
+	}
 }
 
 func TestGPURegistrationManagerGPULossMarksUnreadyAndPausesQueue(t *testing.T) {

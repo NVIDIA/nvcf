@@ -55,6 +55,7 @@ type gpuRegistrationManager struct {
 	registrationRequests chan struct{}
 	retryInterval        time.Duration
 	register             func(context.Context) error
+	newRetryTimer        func(time.Duration) gpuRegistrationRetryTimer
 }
 
 // contextAwareRegistrationGate serializes registration operations while
@@ -62,6 +63,25 @@ type gpuRegistrationManager struct {
 type contextAwareRegistrationGate struct {
 	once  sync.Once
 	token chan struct{}
+}
+
+// gpuRegistrationRetryTimer is the minimal timer surface used by the retry
+// loop, allowing deterministic manager-level tests without changing behavior.
+type gpuRegistrationRetryTimer interface {
+	C() <-chan time.Time
+	Stop() bool
+}
+
+type realGPURegistrationRetryTimer struct {
+	timer *time.Timer
+}
+
+func (t *realGPURegistrationRetryTimer) C() <-chan time.Time {
+	return t.timer.C
+}
+
+func (t *realGPURegistrationRetryTimer) Stop() bool {
+	return t.timer.Stop()
 }
 
 // gpuRegistrationRetryBackoff bounds repeated registration attempts while
@@ -232,6 +252,12 @@ func (m *gpuRegistrationManager) run(ctx context.Context) {
 		retryInterval,
 		maxGracefulNoGPURegistrationRetryInterval,
 	)
+	newRetryTimer := m.newRetryTimer
+	if newRetryTimer == nil {
+		newRetryTimer = func(delay time.Duration) gpuRegistrationRetryTimer {
+			return &realGPURegistrationRetryTimer{timer: time.NewTimer(delay)}
+		}
+	}
 
 	for {
 		select {
@@ -246,7 +272,7 @@ func (m *gpuRegistrationManager) run(ctx context.Context) {
 				break
 			}
 
-			retryTimer := time.NewTimer(backoff.next())
+			retryTimer := newRetryTimer(backoff.next())
 			select {
 			case <-ctx.Done():
 				retryTimer.Stop()
@@ -254,7 +280,7 @@ func (m *gpuRegistrationManager) run(ctx context.Context) {
 			case <-m.registrationRequests:
 				retryTimer.Stop()
 				backoff.reset()
-			case <-retryTimer.C:
+			case <-retryTimer.C():
 			}
 		}
 	}
