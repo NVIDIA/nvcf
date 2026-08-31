@@ -3,7 +3,7 @@
 
 {{- $backendRouter := .Values.llmRequestRouter.backendRouter -}}
 {{- $pdb := $backendRouter.podDisruptionBudget | default dict -}}
-{{- if and $backendRouter.enabled $pdb.enabled }}
+{{- if and (eq (include "llm-request-router.backendRouterEnabled" .) "true") $pdb.enabled }}
 {{- $pdbMinAvailable := $pdb.minAvailable | toString -}}
 {{- $pdbMaxUnavailable := $pdb.maxUnavailable | toString -}}
 {{- if and (ne $pdbMinAvailable "") (ne $pdbMaxUnavailable "") }}

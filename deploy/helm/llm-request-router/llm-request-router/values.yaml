@@ -15,9 +15,23 @@
 
 llmRequestRouter:
   enabled: true
-  # Multi-replica requires DNS discovery and stable per-pod hostnames from
-  # the StatefulSet and headless service.
   replicaCount: 3
+
+  workload:
+    # Deployment matches managed NVCF. Existing installations can pin
+    # StatefulSet and migrate workload kinds in a controlled maintenance
+    # window; Kubernetes cannot mutate one workload kind into the other.
+    kind: Deployment
+    deployment:
+      strategy:
+        type: RollingUpdate
+        rollingUpdate:
+          maxSurge: 1
+          maxUnavailable: 0
+    statefulSet:
+      podManagementPolicy: Parallel
+      updateStrategy:
+        type: RollingUpdate
 
   podDisruptionBudget:
     enabled: false
@@ -29,7 +43,7 @@ llmRequestRouter:
   image:
     registry: ""
     repository: ""
-    tag: "0.11.1"
+    tag: "0.14.2"
     pullPolicy: IfNotPresent
 
   imagePullSecrets: []
@@ -72,11 +86,14 @@ llmRequestRouter:
     headlessName: llm-request-router-headless
 
   # Routes backend registration and reverse-tunnel traffic to the Stargate pod
-  # named by gRPC authority or QUIC SNI. Enable this when pylons connect through
-  # a shared Gateway or load balancer and request-router replicaCount is greater
-  # than one.
+  # named by gRPC authority or QUIC SNI. Multi-replica Deployments enable this
+  # automatically. Other workload topologies can enable it when pylons connect
+  # through a shared Gateway or load balancer.
   backendRouter:
-    enabled: false
+    # null enables the backend router automatically for a multi-replica
+    # Deployment and disables it otherwise. Set a boolean to override this;
+    # false is rejected for a multi-replica Deployment.
+    enabled: null
     # The router is the single front door for worker registration and reverse
     # tunnels in its region, so one replica makes it a single point of failure
     # for every worker in that region. The router keeps no state beyond the QUIC
@@ -102,10 +119,10 @@ llmRequestRouter:
       repository: ""
       tag: ""
       pullPolicy: ""
-    # Addresses workers dial to reach the router. Both default to the
-    # backend-router Service inside the cluster, which is correct when workers
-    # run alongside the control plane. Override both with externally reachable
-    # addresses when workers run in a separate cluster or region.
+    # Addresses workers dial to reach the router. The gRPC address is an
+    # explicit HTTP(S) URI; the reverse-tunnel address remains host:port. Both
+    # default to the backend-router Service inside the cluster. Override both
+    # with externally reachable addresses for a separate cluster or region.
     pylonGrpcDialAddress: ""
     pylonReverseTunnelDialAddress: ""
     serviceAccount:
@@ -218,6 +235,13 @@ llmRequestRouter:
 
   discovery:
     disableDnsDiscovery: false
+    # Maximum interval between unchanged WatchStargates snapshots. This is
+    # shared by Stargate and the EndpointSlice backend router.
+    watchHeartbeatMs: 5000
+    # Recursive remote Watch endpoints must include their HTTP transport
+    # scheme. HTTPS is required unless the development-only opt-in is enabled.
+    remoteWatchUrls: []
+    allowInsecureRemoteWatchHttp: false
 
   transport:
     quicConnectTimeoutMs: 2000
@@ -227,6 +251,10 @@ llmRequestRouter:
 
   shutdown:
     drainTimeoutMs: 30000
+
+  readiness:
+    # Set to 0 to disable the startup warm-up.
+    warmupMs: 60000
 
   loadBalancer:
     configPath: ""

@@ -59,6 +59,9 @@ struct Args {
     /// Path to the QUIC server identity in direct mode or trust anchor in reverse mode
     #[arg(long, env = "STARGATE_TLS_CERT_PATH", value_name = "PATH")]
     tls_cert_path: Option<String>,
+    /// Optional PEM CA bundle override used to verify Stargate gRPC HTTPS endpoints
+    #[arg(long, env = "STARGATE_GRPC_TLS_CA_CERT_PATH", value_name = "PATH")]
+    grpc_tls_ca_cert_path: Option<String>,
     /// Path to the QUIC server private key in direct mode
     #[arg(long, env = "STARGATE_TLS_KEY_PATH", value_name = "PATH")]
     tls_key_path: Option<String>,
@@ -312,6 +315,36 @@ mod tests {
         let args = parse_args("");
 
         assert_eq!(args.inference_server_id, "pylon");
+    }
+
+    #[test]
+    fn grpc_and_quic_tls_paths_are_independent_cli_inputs() {
+        let args = parse_argv(&[
+            "--tls-cert-path",
+            "/trust/quic.pem",
+            "--grpc-tls-ca-cert-path",
+            "/trust/grpc.pem",
+        ]);
+
+        assert_eq!(args.tls_cert_path.as_deref(), Some("/trust/quic.pem"));
+        assert_eq!(
+            args.grpc_tls_ca_cert_path.as_deref(),
+            Some("/trust/grpc.pem")
+        );
+    }
+
+    #[test]
+    fn grpc_tls_ca_path_declares_environment_binding() {
+        let command = <Args as clap::CommandFactory>::command();
+        let argument = command
+            .get_arguments()
+            .find(|argument| argument.get_id() == "grpc_tls_ca_cert_path")
+            .expect("gRPC TLS CA argument should exist");
+
+        assert_eq!(
+            argument.get_env(),
+            Some(std::ffi::OsStr::new("STARGATE_GRPC_TLS_CA_CERT_PATH"))
+        );
     }
 
     #[test]

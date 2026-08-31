@@ -43,10 +43,14 @@ type fakeRunner struct {
 	result     harness.Result
 	runResults []harness.Result
 	err        error
+	runHook    func(context.Context, int) (harness.Result, error)
 }
 
-func (f *fakeRunner) Run(_ context.Context, command string) (harness.Result, error) {
+func (f *fakeRunner) Run(ctx context.Context, command string) (harness.Result, error) {
 	f.runs = append(f.runs, recordedRun{command: command})
+	if f.runHook != nil {
+		return f.runHook(ctx, len(f.runs))
+	}
 	if index := len(f.runs) - 1; index < len(f.runResults) {
 		return f.runResults[index], f.err
 	}
@@ -1411,6 +1415,138 @@ func TestCommandOutputContainsAssertion(t *testing.T) {
 	}
 	if err := sc.commandOutputShouldNotContain("deployed"); err == nil {
 		t.Fatal("expected mismatch for not-contain")
+	}
+}
+
+func TestCommandShouldFailAcceptsNonZeroWithoutCaching(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	sc.LastCommand = "grpcurl rejected-call"
+	sc.LastResult = harness.Result{ExitCode: 1, Stderr: "certificate is not trusted"}
+
+	if err := sc.commandShouldFail(); err != nil {
+		t.Fatalf("assert command failure: %v", err)
+	}
+	if sc.Suite.Cache.Has(sc.LastCommand) {
+		t.Fatal("failed command should not enter the successful-command cache")
+	}
+
+	sc.LastResult = harness.Result{ExitCode: 0}
+	if err := sc.commandShouldFail(); err == nil {
+		t.Fatal("expected successful command to fail the negative assertion")
+	}
+}
+
+func TestCommandOutputTableAssertionsInterpolateExpectedText(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	t.Setenv("BDD_EXPECTED_DIAGNOSTIC", "certificate is not trusted")
+	sc.LastResult = harness.Result{
+		Stdout: "request rejected\n",
+		Stderr: "certificate is not trusted\ncontext deadline exceeded\n",
+	}
+
+	all := docTable(t, [][]string{
+		{"text"},
+		{"${BDD_EXPECTED_DIAGNOSTIC}"},
+		{"context deadline exceeded"},
+	})
+	if err := sc.commandOutputShouldContainAll(all); err != nil {
+		t.Fatalf("contain all: %v", err)
+	}
+
+	oneOf := docTable(t, [][]string{
+		{"text"},
+		{"certificate signed by unknown authority"},
+		{"${BDD_EXPECTED_DIAGNOSTIC}"},
+	})
+	if err := sc.commandOutputShouldContainOneOf(oneOf); err != nil {
+		t.Fatalf("contain one of: %v", err)
+	}
+}
+
+func TestCommandOutputAssertionsRejectValuesThatInterpolateToEmpty(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	t.Setenv("BDD_EMPTY_EXPECTATION", "")
+	sc.LastResult = harness.Result{Stdout: "any output contains the empty string"}
+
+	if err := sc.commandOutputShouldContain("${BDD_EMPTY_EXPECTATION}"); err == nil {
+		t.Fatal("expected empty single-value expectation to fail")
+	}
+	if err := sc.commandOutputShouldNotContain("${BDD_EMPTY_EXPECTATION}"); err == nil {
+		t.Fatal("expected empty negative expectation to fail validation")
+	}
+
+	containAll := docTable(t, [][]string{
+		{"text"},
+		{"${BDD_EMPTY_EXPECTATION}"},
+	})
+	if err := sc.commandOutputShouldContainAll(containAll); err == nil {
+		t.Fatal("expected contain-all table with an empty resolved value to fail")
+	}
+	containOneOf := docTable(t, [][]string{
+		{"text"},
+		{"any output"},
+		{"${BDD_EMPTY_EXPECTATION}"},
+	})
+	if err := sc.commandOutputShouldContainOneOf(containOneOf); err == nil {
+		t.Fatal("expected contain-one-of table with an empty resolved value to fail")
+	}
+}
+
+func TestISuccessfullyObserveWatchStargatesRunsExplicitCommand(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0, Stdout: "{\n  \"stargates\": []\n}\n"}
+
+	err := sc.iSuccessfullyObserveWatchStargates(
+		context.Background(),
+		"127.0.0.1:50071",
+		"llm-request-router.nvcf.svc.cluster.local",
+		"stargate-quic-tls",
+		"nvcf",
+		"k3d-ncp-local-cp",
+		"3",
+	)
+	if err != nil {
+		t.Fatalf("observe WatchStargates: %v", err)
+	}
+	want := "bash tests/bdd/scripts/observe-watch-stargates.sh 127.0.0.1:50071 llm-request-router.nvcf.svc.cluster.local stargate-quic-tls nvcf k3d-ncp-local-cp 3"
+	if len(fake.runs) != 1 || fake.runs[0].command != want {
+		t.Fatalf("runs = %#v, want %q", fake.runs, want)
+	}
+	if !strings.Contains(sc.LastResult.Stdout, "stargates") {
+		t.Fatalf("last result = %#v, want preserved WatchStargates output", sc.LastResult)
+	}
+}
+
+func TestEveryPylonForFunctionShouldReportMetricsRunsVisibleExpectations(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0}
+	table := docTable(t, [][]string{
+		{"metric", "comparison", "count"},
+		{"pylon_registration_stream_connected", "exactly", "5"},
+		{"pylon_reverse_tunnel_connected", "at least", "3"},
+	})
+
+	if err := sc.everyPylonForFunctionShouldReportMetrics(context.Background(), "bdd-registration-tls", "llm-worker", "k3d-ncp-local-compute-1", "10m", table); err != nil {
+		t.Fatalf("observe Pylon metrics: %v", err)
+	}
+	want := "bash tests/bdd/scripts/wait-pylon-metrics.sh bdd-registration-tls llm-worker k3d-ncp-local-compute-1 10m pylon_registration_stream_connected exactly 5 pylon_reverse_tunnel_connected 'at least' 3"
+	if len(fake.runs) != 1 || fake.runs[0].command != want {
+		t.Fatalf("runs = %#v, want %q", fake.runs, want)
+	}
+}
+
+func TestPylonMetricTableRejectsInvalidStructureBeforeRunning(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	table := docTable(t, [][]string{
+		{"metric", "comparison", "count"},
+		{"pylon_registration_stream_connected", "exactly", "not-a-count"},
+	})
+
+	if err := sc.everyPylonForFunctionShouldReportMetrics(context.Background(), "function", "llm-worker", "context", "10m", table); err == nil {
+		t.Fatal("expected invalid count error")
+	}
+	if len(fake.runs) != 0 {
+		t.Fatalf("runs = %d, want 0 before table validation", len(fake.runs))
 	}
 }
 

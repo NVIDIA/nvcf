@@ -27,7 +27,7 @@ OCI_REGISTRY_NAMESPACE ?= <your-org>
 CHART_NAME := $(shell yq -r .name $(helm_dir)/Chart.yaml)
 CHART_VERSION := $(shell yq -r .version $(helm_dir)/Chart.yaml)
 
-.PHONY: install uninstall status lint template validate clean package push-oci test check-pki-render check-multi-replica-render check-backend-router-render
+.PHONY: install uninstall status lint template validate clean package push-oci test check-pki-render check-multi-replica-render check-backend-router-render test-k8s-readiness-warmup
 
 install:
 ifndef values
@@ -71,10 +71,13 @@ check-pki-render:
 	sh ./scripts/check-pki-render.sh
 
 check-multi-replica-render:
-	sh ./scripts/check-multi-replica-render.sh
+	bash ./scripts/check-multi-replica-render.sh
 
 check-backend-router-render:
-	sh ./scripts/check-backend-router-render.sh
+	bash ./scripts/check-backend-router-render.sh
+
+test-k8s-readiness-warmup:
+	python3 ./scripts/test-readiness-warmup-k8s.py
 
 clean:
 	rm -rf ./packaged-charts bin

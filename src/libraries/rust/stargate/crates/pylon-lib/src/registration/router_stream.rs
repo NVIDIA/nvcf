@@ -49,6 +49,7 @@ pub(super) async fn run_router_registration_stream(
             _ = stop.cancelled() => return,
             connection = open_registration_stream(
                 &router_endpoint,
+                config.grpc_tls_ca_cert_pem.as_deref(),
                 config.auth_token_provider.as_deref(),
                 config.min_update_interval,
             ) => connection,
@@ -262,14 +263,19 @@ pub(super) fn observe_advertised_statuses(
 
 pub(super) async fn open_registration_stream(
     router_endpoint: &StargateGrpcEndpoint,
+    grpc_tls_ca_cert_pem: Option<&[u8]>,
     auth_token_provider: Option<&AuthTokenProvider>,
     min_update_interval: Duration,
 ) -> anyhow::Result<(
     tonic::Streaming<InferenceServerAck>,
     mpsc::Sender<InferenceServerRegistration>,
 )> {
-    let channel =
-        connect_stargate_grpc_channel(router_endpoint, "register_inference_server").await?;
+    let channel = connect_stargate_grpc_channel(
+        router_endpoint,
+        grpc_tls_ca_cert_pem,
+        "register_inference_server",
+    )
+    .await?;
     let (update_tx, update_rx) = mpsc::channel(32);
     let mut request = tonic::Request::new(ReceiverStream::new(update_rx));
     request.metadata_mut().insert(

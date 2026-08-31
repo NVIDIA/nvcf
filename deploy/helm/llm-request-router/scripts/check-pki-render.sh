@@ -35,6 +35,8 @@ render_certificate_case() {
     --namespace nvcf \
     --values ./llm-request-router/values.yaml \
     --set llmRequestRouter.image.repository=stargate \
+    --set llmRequestRouter.workload.kind=StatefulSet \
+    --set llmRequestRouter.replicaCount=3 \
     --set llmRequestRouter.certificate.enabled=true \
     --set llmRequestRouter.certificate.secretName=stargate-quic-tls \
     --set llmRequestRouter.certificate.issuerRef.name=nvcf-openbao-pki \
@@ -60,12 +62,12 @@ default_cert="$(yq -rN 'select(.kind == "Certificate") | .metadata.name' "${defa
 default_job="$(yq -rN 'select(.kind == "Job" and .metadata.name == "addons-llm-migrations") | .metadata.name' "${defaults_manifest}" | head -n1)"
 [ -z "${default_job}" ] || { echo "FAIL: addons-llm-migrations Job rendered with default values" >&2; exit 1; }
 
-# StatefulSet should still render (chart's primary purpose) but with no
+# The selected request-router workload should still render but with no
 # stargate-tls volume or volumeMount.
-default_workload="$(yq -rN 'select(.kind == "StatefulSet" and .metadata.name == "llm-request-router") | .metadata.name' "${defaults_manifest}" | head -n1)"
-[ "${default_workload}" = "llm-request-router" ] || { echo "FAIL: llm-request-router StatefulSet did not render at defaults" >&2; exit 1; }
+default_workload="$(yq -rN 'select((.kind == "Deployment" or .kind == "StatefulSet") and .metadata.name == "llm-request-router") | .metadata.name' "${defaults_manifest}" | head -n1)"
+[ "${default_workload}" = "llm-request-router" ] || { echo "FAIL: llm-request-router workload did not render at defaults" >&2; exit 1; }
 
-default_workload_args="$(yq -rN 'select(.kind == "StatefulSet" and .metadata.name == "llm-request-router") | .spec.template.spec.containers[0].args[]' "${defaults_manifest}")"
+default_workload_args="$(yq -rN 'select((.kind == "Deployment" or .kind == "StatefulSet") and .metadata.name == "llm-request-router") | .spec.template.spec.containers[0].args[]' "${defaults_manifest}")"
 if printf '%s\n' "${default_workload_args}" | grep -qx -- "--metrics-prefix=llm_request_router_"; then
   echo "FAIL: --metrics-prefix is not supported by the pinned stargate 0.3.0 image" >&2
   exit 1
@@ -75,10 +77,10 @@ if printf '%s\n' "${default_workload_args}" | grep -qx -- "--otel-service-name=l
   exit 1
 fi
 
-default_tls_mount="$(yq -rN 'select(.kind == "StatefulSet" and .metadata.name == "llm-request-router") | .spec.template.spec.containers[0].volumeMounts[]? | select(.name == "stargate-tls") | .name' "${defaults_manifest}" | head -n1)"
+default_tls_mount="$(yq -rN 'select((.kind == "Deployment" or .kind == "StatefulSet") and .metadata.name == "llm-request-router") | .spec.template.spec.containers[0].volumeMounts[]? | select(.name == "stargate-tls") | .name' "${defaults_manifest}" | head -n1)"
 [ -z "${default_tls_mount}" ] || { echo "FAIL: stargate-tls volumeMount rendered with default values" >&2; exit 1; }
 
-default_tls_volume="$(yq -rN 'select(.kind == "StatefulSet" and .metadata.name == "llm-request-router") | .spec.template.spec.volumes[]? | select(.name == "stargate-tls") | .name' "${defaults_manifest}" | head -n1)"
+default_tls_volume="$(yq -rN 'select((.kind == "Deployment" or .kind == "StatefulSet") and .metadata.name == "llm-request-router") | .spec.template.spec.volumes[]? | select(.name == "stargate-tls") | .name' "${defaults_manifest}" | head -n1)"
 [ -z "${default_tls_volume}" ] || { echo "FAIL: stargate-tls volume rendered with default values" >&2; exit 1; }
 
 # Pass 2: PKI, certificate, and TLS are fully enabled. Assert that every
@@ -114,7 +116,7 @@ cert_dns_name="$(yq -rN 'select(.kind == "Certificate" and .metadata.name == "st
 [ "${cert_issuer_name}" = "nvcf-openbao-pki" ]
 [ "${cert_dns_name}" = "*.stargate.localhost" ]
 
-workload_args="$(yq -rN 'select(.kind == "StatefulSet" and .metadata.name == "llm-request-router") | .spec.template.spec.containers[0].args[]' "${manifest}")"
+workload_args="$(yq -rN 'select((.kind == "Deployment" or .kind == "StatefulSet") and .metadata.name == "llm-request-router") | .spec.template.spec.containers[0].args[]' "${manifest}")"
 printf '%s\n' "${workload_args}" | grep -qx -- "--tls-cert-path=/etc/stargate/tls/tls.crt"
 printf '%s\n' "${workload_args}" | grep -qx -- "--tls-key-path=/etc/stargate/tls/tls.key"
 if printf '%s\n' "${workload_args}" | grep -qx -- "--quic-insecure"; then
@@ -122,8 +124,8 @@ if printf '%s\n' "${workload_args}" | grep -qx -- "--quic-insecure"; then
   exit 1
 fi
 
-tls_mount_name="$(yq -rN 'select(.kind == "StatefulSet" and .metadata.name == "llm-request-router") | .spec.template.spec.containers[0].volumeMounts[] | select(.name == "stargate-tls" and .mountPath == "/etc/stargate/tls" and .readOnly == true) | .name' "${manifest}")"
-tls_volume_name="$(yq -rN 'select(.kind == "StatefulSet" and .metadata.name == "llm-request-router") | .spec.template.spec.volumes[] | select(.name == "stargate-tls" and .secret.secretName == "stargate-quic-tls") | .name' "${manifest}")"
+tls_mount_name="$(yq -rN 'select((.kind == "Deployment" or .kind == "StatefulSet") and .metadata.name == "llm-request-router") | .spec.template.spec.containers[0].volumeMounts[] | select(.name == "stargate-tls" and .mountPath == "/etc/stargate/tls" and .readOnly == true) | .name' "${manifest}")"
+tls_volume_name="$(yq -rN 'select((.kind == "Deployment" or .kind == "StatefulSet") and .metadata.name == "llm-request-router") | .spec.template.spec.volumes[] | select(.name == "stargate-tls" and .secret.secretName == "stargate-quic-tls") | .name' "${manifest}")"
 
 [ "${tls_mount_name}" = "stargate-tls" ]
 [ "${tls_volume_name}" = "stargate-tls" ]
@@ -180,7 +182,7 @@ helm template llm-request-router ./llm-request-router \
 single_replica_dns_name="$(yq -rN 'select(.kind == "Certificate" and .metadata.name == "stargate-quic-tls") | .spec.dnsNames[0]' "${single_replica_manifest}")"
 [ "${single_replica_dns_name}" = "llm-request-router.nvcf.svc.cluster.local" ] || fail "single-replica Certificate SAN did not render the advertised hostname"
 
-single_replica_args="$(yq -rN 'select(.kind == "StatefulSet" and .metadata.name == "llm-request-router") | .spec.template.spec.containers[0].args[]' "${single_replica_manifest}")"
+single_replica_args="$(yq -rN 'select((.kind == "Deployment" or .kind == "StatefulSet") and .metadata.name == "llm-request-router") | .spec.template.spec.containers[0].args[]' "${single_replica_manifest}")"
 printf '%s\n' "${single_replica_args}" | grep -qx -- "--advertised-hostname-template=llm-request-router.nvcf.svc.cluster.local" || fail "single-replica render missing the advertised hostname template"
 
 # Certificate validation resolves both supported placeholders. The pod name
@@ -197,6 +199,7 @@ if helm template llm-request-router ./llm-request-router \
   --namespace nvcf \
   --values ./llm-request-router/values.yaml \
   --set llmRequestRouter.image.repository=stargate \
+  --set llmRequestRouter.workload.kind=StatefulSet \
   --set llmRequestRouter.certificate.enabled=true \
   --set llmRequestRouter.certificate.issuerRef.name=nvcf-openbao-pki \
   > /dev/null 2> "${empty_dns_error}"; then
@@ -329,13 +332,13 @@ existing_secret_cert="$(yq -rN 'select(.kind == "Certificate") | .metadata.name'
 existing_secret_job="$(yq -rN 'select(.kind == "Job" and .metadata.name == "addons-llm-migrations") | .metadata.name' "${existing_secret_manifest}" | head -n1)"
 [ -z "${existing_secret_job}" ] || fail "existing-Secret mode rendered the OpenBao provisioning hook"
 
-existing_secret_volume="$(yq -rN 'select(.kind == "StatefulSet" and .metadata.name == "llm-request-router") | .spec.template.spec.volumes[] | select(.name == "stargate-tls" and .secret.secretName == "operator-quic-tls") | .name' "${existing_secret_manifest}")"
+existing_secret_volume="$(yq -rN 'select((.kind == "Deployment" or .kind == "StatefulSet") and .metadata.name == "llm-request-router") | .spec.template.spec.volumes[] | select(.name == "stargate-tls" and .secret.secretName == "operator-quic-tls") | .name' "${existing_secret_manifest}")"
 [ "${existing_secret_volume}" = "stargate-tls" ] || fail "existing-Secret mode did not mount the pre-created Secret"
 
-existing_secret_mount="$(yq -rN 'select(.kind == "StatefulSet" and .metadata.name == "llm-request-router") | .spec.template.spec.containers[0].volumeMounts[] | select(.name == "stargate-tls" and .mountPath == "/etc/stargate/tls" and .readOnly == true) | .name' "${existing_secret_manifest}")"
+existing_secret_mount="$(yq -rN 'select((.kind == "Deployment" or .kind == "StatefulSet") and .metadata.name == "llm-request-router") | .spec.template.spec.containers[0].volumeMounts[] | select(.name == "stargate-tls" and .mountPath == "/etc/stargate/tls" and .readOnly == true) | .name' "${existing_secret_manifest}")"
 [ "${existing_secret_mount}" = "stargate-tls" ] || fail "existing-Secret mode did not mount stargate-tls read-only"
 
-existing_secret_args="$(yq -rN 'select(.kind == "StatefulSet" and .metadata.name == "llm-request-router") | .spec.template.spec.containers[0].args[]' "${existing_secret_manifest}")"
+existing_secret_args="$(yq -rN 'select((.kind == "Deployment" or .kind == "StatefulSet") and .metadata.name == "llm-request-router") | .spec.template.spec.containers[0].args[]' "${existing_secret_manifest}")"
 printf '%s\n' "${existing_secret_args}" | grep -qx -- "--tls-cert-path=/etc/stargate/tls/tls.crt" || fail "existing-Secret mode did not pass the certificate path"
 printf '%s\n' "${existing_secret_args}" | grep -qx -- "--tls-key-path=/etc/stargate/tls/tls.key" || fail "existing-Secret mode did not pass the private key path"
 if printf '%s\n' "${existing_secret_args}" | grep -qx -- "--quic-insecure"; then

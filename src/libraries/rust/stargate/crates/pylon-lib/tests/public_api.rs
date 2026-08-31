@@ -39,6 +39,7 @@ fn crate_root_exports_registration_public_api() {
         min_update_interval: Duration::from_secs(1),
         reverse_tunnel: false,
         tls_cert_pem: None,
+        grpc_tls_ca_cert_pem: None,
         quic_insecure: true,
         tunnel_protocol: TunnelTransportProtocol::RawQuic,
         forwarding: pylon_lib::TunnelForwardingConfig::default(),
