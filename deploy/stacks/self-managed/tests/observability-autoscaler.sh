@@ -89,8 +89,13 @@ helm template function-autoscaler "$repo_dir/deploy/helm/function-autoscaler" \
   >"$work_dir/autoscaler-manifests.yaml"
 
 autoscaler_manifests="$work_dir/autoscaler-manifests.yaml"
-grep -q 'image: nvcr.io/YOUR_ORG/YOUR_TEAM/nvcf-function-autoscaler:1.19.0' "$autoscaler_manifests" ||
-  fail "self-managed stack did not pin the autoscaler image"
+# Read from the chart itself rather than hardcoding the pin, so this check
+# does not need updating every time the autoscaler appVersion is bumped.
+autoscaler_app_version="$(yq -r '.appVersion' "$repo_dir/deploy/helm/function-autoscaler/Chart.yaml")"
+[[ -n "$autoscaler_app_version" && "$autoscaler_app_version" != "null" ]] ||
+  fail "could not read function-autoscaler chart appVersion"
+grep -q "image: nvcr.io/YOUR_ORG/YOUR_TEAM/nvcf-function-autoscaler:${autoscaler_app_version}" "$autoscaler_manifests" ||
+  fail "self-managed stack did not pin the autoscaler image to the chart's appVersion ($autoscaler_app_version)"
 test "$(grep -c '^kind: ConfigMap$' "$autoscaler_manifests")" = "2" ||
   fail "autoscaler chart did not render only its env and Vault template ConfigMaps"
 grep -q 'name: function-autoscaler-env' "$autoscaler_manifests" ||
