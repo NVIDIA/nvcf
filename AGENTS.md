@@ -353,28 +353,17 @@ change, or refactor with full existing coverage).
 
 Prefer the repo-native test runner (`make test`, `go test`, `cargo test`, etc.). Run tests before committing. Check coverage requirements in the subtree `AGENTS.md` or CI config.
 
-### Do not write version-pin assertions
+### Version-pin assertions
 
-Do not add a test whose only assertion is that a rendered manifest, chart
-release, or image reference matches an exact version, image tag, or chart
-version literal, when that literal itself is not the behavior under test. A
-test that greps a rendered manifest for `image: ...:1.19.0` or asserts
-`.version == "0.1.0"` breaks on every unrelated version-pin bump, and a
-maintainer who has to touch it every release stops reading the diff and just
-updates the string.
-
-If the surrounding behavior has real value (override precedence, wiring
-between charts, release-declaration consistency) but the specific literal
-does not, read the expected value out of its single source of truth at test
-time instead of duplicating it in the test: the chart's `Chart.yaml`
-`appVersion`, the `.gotmpl` template's own `default "..."`, or the release's
-`version:` field in the Helmfile state. Assert the rendered output matches
-that value, not a copy pasted into the test. See
-`deploy/stacks/self-managed/tests/observability-autoscaler.sh`,
-`llm-pki-release.sh`, `check-llm-pki-issuer.sh`, and
-`image-override-wiring.sh` for the pattern. If the literal has no value
-beyond "does this string equal that string," delete the assertion instead of
-pinning it.
+Don't assert an exact image tag or chart version unless that literal is the
+behavior under test — it breaks on every unrelated pin bump, and whoever
+fixes it every release stops reading the diff and just updates the string.
+If the surrounding wiring (override precedence, cross-chart consistency) is
+worth testing, read the expected value from its source of truth at test
+time — `Chart.yaml` `appVersion`, the `.gotmpl`'s `default "..."`, or the
+release's `version:` — instead of copying it into the test (see
+`deploy/stacks/self-managed/tests/observability-autoscaler.sh` and
+`llm-pki-release.sh`). Otherwise, delete the assertion.
 
 ### Verification commands
 
