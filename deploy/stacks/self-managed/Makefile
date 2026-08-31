@@ -15,6 +15,7 @@ test:
 	@tests/llm-pki-release.sh
 	@tests/check-llm-pki-issuer.sh
 	@tests/pdb-value-wiring.sh
+	@tests/invocation-env-wiring.sh
 	@tests/invocation-tracing-baggage.sh
 	@tests/image-override-wiring.sh
 	@tests/sidecar-registry-wiring.sh
