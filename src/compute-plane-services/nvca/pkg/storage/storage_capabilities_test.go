@@ -261,6 +261,16 @@ func TestValidateStorageCapabilityCatalog(t *testing.T) {
 			d.ReaderMountOptions = readerMountOptions("ro", "norecovery", "nouuid", "rw")
 			c.Drivers[NVMeshStorageClassProvisioner] = d
 		}, want: `readerMountOptions "ro" and "rw" conflict`},
+		{name: "conflicting recovery reader mount options", mutate: func(c *storageCapabilityCatalog) {
+			d := c.Drivers[NVMeshStorageClassProvisioner]
+			d.ReaderMountOptions = readerMountOptions("ro", "recovery", "norecovery", "nouuid")
+			c.Drivers[NVMeshStorageClassProvisioner] = d
+		}, want: `readerMountOptions "recovery" and "norecovery" conflict`},
+		{name: "conflicting UUID reader mount options", mutate: func(c *storageCapabilityCatalog) {
+			d := c.Drivers[NVMeshStorageClassProvisioner]
+			d.ReaderMountOptions = readerMountOptions("ro", "norecovery", "uuid", "nouuid")
+			c.Drivers[NVMeshStorageClassProvisioner] = d
+		}, want: `readerMountOptions "uuid" and "nouuid" conflict`},
 		{name: "NVMesh transition lacks ro reader mount option", mutate: func(c *storageCapabilityCatalog) {
 			d := c.Drivers[NVMeshStorageClassProvisioner]
 			d.ReaderMountOptions = readerMountOptions("norecovery", "nouuid")

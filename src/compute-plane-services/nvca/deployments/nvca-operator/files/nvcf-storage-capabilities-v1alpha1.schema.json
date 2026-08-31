@@ -14,7 +14,7 @@
       "minProperties": 1,
       "propertyNames": {"type": "string", "minLength": 1, "pattern": "\\S"},
       "properties": {
-        "nvmesh-csi.excelero.com": {"$ref": "#/$defs/driver"}
+        "nvmesh-csi.excelero.com": {"$ref": "#/$defs/nvmeshDriver"}
       },
       "additionalProperties": {"$ref": "#/$defs/nonNVMeshDriver"}
     }
@@ -60,7 +60,33 @@
         "readerMountOptions": {
           "type": "array",
           "uniqueItems": true,
-          "items": {"$ref": "#/$defs/readerMountOption"}
+          "items": {"$ref": "#/$defs/readerMountOption"},
+          "allOf": [
+            {
+              "not": {
+                "allOf": [
+                  {"contains": {"const": "ro"}},
+                  {"contains": {"const": "rw"}}
+                ]
+              }
+            },
+            {
+              "not": {
+                "allOf": [
+                  {"contains": {"const": "recovery"}},
+                  {"contains": {"const": "norecovery"}}
+                ]
+              }
+            },
+            {
+              "not": {
+                "allOf": [
+                  {"contains": {"const": "uuid"}},
+                  {"contains": {"const": "nouuid"}}
+                ]
+              }
+            }
+          ]
         },
         "transitions": {"$ref": "#/$defs/transitions"}
       },
@@ -116,6 +142,16 @@
               "accessModes": {"contains": {"const": "ReadWriteMany"}},
               "readerMountOptions": {"maxItems": 0}
             }
+          }
+        }
+      ]
+    },
+    "nvmeshDriver": {
+      "allOf": [
+        {"$ref": "#/$defs/driver"},
+        {
+          "properties": {
+            "provider": {"const": "nvmesh"}
           }
         }
       ]

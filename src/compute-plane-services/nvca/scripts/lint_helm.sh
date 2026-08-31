@@ -159,6 +159,41 @@ assert_storage_capability_catalog() (
   fi
   echo "PASS: schema rejects readerMountOptions with surrounding whitespace"
 
+  for mutation in \
+    '.drivers."nvmesh-csi.excelero.com".transitions.regularModelCache = "custom"' \
+    '.drivers."nvmesh-csi.excelero.com".transitions.helmModelCache = "custom"'; do
+    yq "${mutation}" "${service_chart}/${catalog}" >"${invalid_catalog}"
+    if "${schema_python}" -c "${schema_check}" \
+      "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+      echo "Expected schema to reject an unregistered transition value" >&2
+      return 1
+    fi
+  done
+  echo "PASS: schema rejects unregistered transition values"
+
+  yq '.drivers."nvmesh-csi.excelero.com".provider = "weka"' \
+    "${service_chart}/${catalog}" >"${invalid_catalog}"
+  if "${schema_python}" -c "${schema_check}" \
+    "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    echo "Expected schema to reject the NVMesh strategy with another provider" >&2
+    return 1
+  fi
+  echo "PASS: schema rejects the NVMesh strategy with another provider"
+
+  for options in \
+    '["ro", "rw", "norecovery", "nouuid"]' \
+    '["ro", "recovery", "norecovery", "nouuid"]' \
+    '["ro", "norecovery", "uuid", "nouuid"]'; do
+    yq ".drivers.\"nvmesh-csi.excelero.com\".readerMountOptions = ${options}" \
+      "${service_chart}/${catalog}" >"${invalid_catalog}"
+    if "${schema_python}" -c "${schema_check}" \
+      "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+      echo "Expected schema to reject conflicting readerMountOptions" >&2
+      return 1
+    fi
+  done
+  echo "PASS: schema rejects conflicting readerMountOptions"
+
   yq '.drivers."nvmesh-csi.excelero.com".accessModes = ["ReadWriteOnce"]' \
     "${service_chart}/${catalog}" >"${invalid_catalog}"
   if "${schema_python}" -c "${schema_check}" \
