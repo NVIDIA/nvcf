@@ -520,10 +520,10 @@ pub fn base_config(
         readiness_warmup: stargate::runtime::DEFAULT_READINESS_WARMUP,
         metrics_listen_addr: None,
         advertise_addr: grpc_addr,
-        stargate_discovery_dns_name: "localhost".to_string(),
+        kubernetes_pod_discovery_dns_name: None,
         remote_watch_stargate_urls: Vec::new(),
         grpc_pylon_dial_addr: None,
-        dns_poll_interval: Duration::from_secs(60),
+        kubernetes_pod_discovery_poll_interval: Duration::from_secs(60),
         watch_heartbeat_interval: Duration::from_secs(60),
         registration_update_idle_timeout:
             stargate::registration::DEFAULT_REGISTRATION_UPDATE_IDLE_TIMEOUT,
@@ -743,7 +743,7 @@ pub fn make_stargate_runtime_with_watch_intervals(
     watch_heartbeat_interval: Duration,
 ) -> (SocketAddr, SocketAddr, StargateRuntime) {
     let mut config = base_ephemeral_config(id);
-    config.dns_poll_interval = discovery_poll_interval;
+    config.kubernetes_pod_discovery_poll_interval = discovery_poll_interval;
     config.watch_heartbeat_interval = watch_heartbeat_interval;
     build_test_runtime(id, config, TestDiscovery::SelfOnly, None).standard()
 }
@@ -823,7 +823,7 @@ pub fn make_stargate_runtime_with_shared_discovery(
     peers: Arc<Mutex<Vec<StargateInfo>>>,
 ) -> (SocketAddr, SocketAddr, StargateRuntime) {
     let mut config = base_ephemeral_config(id);
-    config.dns_poll_interval = Duration::from_secs(1);
+    config.kubernetes_pod_discovery_poll_interval = Duration::from_secs(1);
     build_test_runtime(id, config, TestDiscovery::Shared(peers), None).standard()
 }
 
@@ -835,7 +835,7 @@ pub fn make_stargate_runtime_with_shared_discovery_and_remote_watch_urls(
     remote_watch_stargate_urls: Vec<String>,
 ) -> (SocketAddr, SocketAddr, StargateRuntime) {
     let mut config = base_ephemeral_config(id);
-    config.dns_poll_interval = Duration::from_secs(1);
+    config.kubernetes_pod_discovery_poll_interval = Duration::from_secs(1);
     config.remote_watch_stargate_urls = remote_watch_stargate_urls;
     build_test_runtime(id, config, TestDiscovery::Shared(peers), None).standard()
 }
@@ -848,7 +848,7 @@ pub fn make_stargate_runtime_with_shared_discovery_and_reverse(
     reverse_socket: Option<std::net::UdpSocket>,
 ) -> (SocketAddr, SocketAddr, StargateRuntime) {
     let mut config = base_ephemeral_config(id);
-    config.dns_poll_interval = Duration::from_secs(1);
+    config.kubernetes_pod_discovery_poll_interval = Duration::from_secs(1);
     let reverse_tunnel = reverse_tunnel_config(reverse_addr, reverse_socket);
     build_test_runtime(
         id,

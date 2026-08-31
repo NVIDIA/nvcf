@@ -32,7 +32,6 @@ test "$actual" = "$chart_path" || {
   --environment default \
   --state-values-set addons.llm.enabled=true \
   --state-values-set-string "addons.llm.requestRouter.chartPath=$chart_path" \
-  --state-values-set addons.llm.requestRouter.discovery.disableDnsDiscovery=true \
   --state-values-set addons.llm.requestRouter.discovery.watchHeartbeatMs=7000 \
   --state-values-set-string 'addons.llm.requestRouter.discovery.remoteWatchUrls[0]=https://region-b.example.invalid:50071' \
   --state-values-set addons.llm.requestRouter.discovery.allowInsecureRemoteWatchHttp=true \
@@ -99,12 +98,6 @@ test "$remote_watch_url" = "https://region-b.example.invalid:50071" || {
 allow_insecure_remote_watch_http="$(yq -r '.llmRequestRouter.discovery.allowInsecureRemoteWatchHttp' "$values_file")"
 test "$allow_insecure_remote_watch_http" = "true" || {
   echo "llm-router-local-chart: expected development HTTP opt-in forwarding, got ${allow_insecure_remote_watch_http:-missing}" >&2
-  exit 1
-}
-
-disable_dns_discovery="$(yq -r '.llmRequestRouter.discovery.disableDnsDiscovery' "$values_file")"
-test "$disable_dns_discovery" = "true" || {
-  echo "llm-router-local-chart: expected DNS discovery override forwarding, got ${disable_dns_discovery:-missing}" >&2
   exit 1
 }
 

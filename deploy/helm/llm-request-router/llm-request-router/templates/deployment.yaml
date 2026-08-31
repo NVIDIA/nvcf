@@ -34,9 +34,6 @@ router instance that issued the tunnel target.
 */}}
 {{- $replicaCount := .Values.llmRequestRouter.replicaCount | int }}
 {{- $backendRouterEnabled := eq (include "llm-request-router.backendRouterEnabled" .) "true" }}
-{{- $configuredDisableDnsDiscovery := dig "discovery" "disableDnsDiscovery" false .Values.llmRequestRouter }}
-{{- $directDeployment := and (eq $workloadKind "Deployment") (not $backendRouterEnabled) }}
-{{- $disableDnsDiscovery := or $configuredDisableDnsDiscovery $directDeployment }}
 {{- $watchHeartbeatMs := .Values.llmRequestRouter.discovery.watchHeartbeatMs | int }}
 {{- if le $watchHeartbeatMs 0 }}
 {{- fail "llmRequestRouter.discovery.watchHeartbeatMs must be greater than 0" }}
@@ -48,15 +45,11 @@ router instance that issued the tunnel target.
 {{- if and (eq $workloadKind "Deployment") (gt $replicaCount 1) (not $backendRouterEnabled) }}
 {{- fail "llmRequestRouter.backendRouter.enabled must be true when llmRequestRouter.workload.kind is Deployment and replicaCount is greater than 1" }}
 {{- end }}
-{{- if and $configuredDisableDnsDiscovery (gt $replicaCount 1) (not $backendRouterEnabled) }}
-{{- fail "llmRequestRouter.discovery.disableDnsDiscovery cannot be true when llmRequestRouter.replicaCount is greater than 1; multi-replica routers require DNS discovery" }}
-{{- end }}
 {{- /*
 The identity guard lives here, not in certificate.yaml: existingSecret mode
 renders no Certificate, so a guard in that template would never run.
 */}}
 {{- include "llm-request-router.validateTlsIdentity" . }}
-{{- $advertisedHostnameTemplate := include "llm-request-router.advertisedHostnameTemplate" . }}
 {{- if and $backendRouterEnabled (not .Values.llmRequestRouter.transport.reverseTunnelListenAddr) }}
 {{- fail "llmRequestRouter.backendRouter.enabled requires llmRequestRouter.transport.reverseTunnelListenAddr" }}
 {{- end }}
@@ -94,6 +87,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       annotations:
+        checksum/stargate-config: {{ include (print $.Template.BasePath "/configmap-stargate.yaml") . | sha256sum }}
         {{- include "llm-request-router.podAnnotations" . | nindent 8 }}
     spec:
       serviceAccountName: {{ include "llm-request-router.serviceAccountName" . }}
@@ -109,74 +103,7 @@ spec:
           image: {{ include "llm-request-router.image" . }}
           imagePullPolicy: {{ .Values.llmRequestRouter.image.pullPolicy }}
           args:
-            - --stargate-id=$(POD_NAME)
-            - --listen-addr=0.0.0.0:{{ .Values.llmRequestRouter.service.grpcPort }}
-            - --http-listen-addr=0.0.0.0:{{ .Values.llmRequestRouter.service.httpPort }}
-            - --advertise-addr=$(POD_IP):{{ .Values.llmRequestRouter.service.grpcPort }}
-            - --stargate-discovery-dns-name={{ dig "discovery" "dnsName" (printf "%s.%s.svc.cluster.local" .Values.llmRequestRouter.service.headlessName (include "llm-request-router.namespace" .)) .Values.llmRequestRouter }}
-            - --pod-name=$(POD_NAME)
-            - --pod-namespace=$(POD_NAMESPACE)
-            - --advertised-hostname-template={{ $advertisedHostnameTemplate }}
-            {{- if $disableDnsDiscovery }}
-            - --disable-dns-discovery
-            {{- end }}
-            {{- with dig "discovery" "dnsPollMs" "" .Values.llmRequestRouter }}
-            - --dns-poll-ms={{ . }}
-            {{- end }}
-            {{- with dig "discovery" "dnsResolverTtlMs" "" .Values.llmRequestRouter }}
-            - --dns-resolver-ttl-ms={{ . }}
-            {{- end }}
-            {{- with dig "discovery" "watchHeartbeatMs" "" .Values.llmRequestRouter }}
-            - --watch-heartbeat-ms={{ . }}
-            {{- end }}
-            {{- range .Values.llmRequestRouter.discovery.remoteWatchUrls }}
-            - --remote-stargate-url={{ . }}
-            {{- end }}
-            {{- if .Values.llmRequestRouter.discovery.allowInsecureRemoteWatchHttp }}
-            - --allow-insecure-remote-watch-http
-            {{- end }}
-            - --shutdown-drain-timeout-ms={{ .Values.llmRequestRouter.shutdown.drainTimeoutMs }}
-            - --readiness-warmup-ms={{ $readinessWarmupMs }}
-            - --quic-connect-timeout-ms={{ .Values.llmRequestRouter.transport.quicConnectTimeoutMs }}
-            - --quic-request-timeout-ms={{ .Values.llmRequestRouter.transport.quicRequestTimeoutMs }}
-            - --metrics-port={{ .Values.llmRequestRouter.service.metricsPort }}
-            {{- if .Values.llmRequestRouter.transport.reverseTunnelListenAddr }}
-            - --backend-connectivity=reverse
-            - --reverse-tunnel-listen-addr={{ .Values.llmRequestRouter.transport.reverseTunnelListenAddr }}
-            {{- end }}
-            {{- if $backendRouterEnabled }}
-            - --grpc-pylon-dial-addr={{ include "llm-request-router.backendRouterGrpcDialAddress" . }}
-            - --reverse-tunnel-pylon-dial-addr={{ include "llm-request-router.backendRouterReverseTunnelDialAddress" . }}
-            {{- else if and .Values.llmRequestRouter.transport.reverseTunnelListenAddr (gt $replicaCount 1) }}
-            - --reverse-tunnel-pylon-dial-addr=$(POD_IP):{{ .Values.llmRequestRouter.service.reverseTunnelPort }}
-            {{- end }}
-            {{- if .Values.llmRequestRouter.transport.reverseTunnelConnectTimeoutMs }}
-            - --reverse-tunnel-connect-timeout-ms={{ .Values.llmRequestRouter.transport.reverseTunnelConnectTimeoutMs }}
-            {{- end }}
-            {{- if .Values.llmRequestRouter.loadBalancer.config }}
-            - --lb-config-path=/etc/llm-request-router/lb-config.json
-            {{- else if .Values.llmRequestRouter.loadBalancer.configPath }}
-            - --lb-config-path={{ .Values.llmRequestRouter.loadBalancer.configPath }}
-            {{- end }}
-            {{- if and .Values.llmRequestRouter.observability.tracing.enabled .Values.llmRequestRouter.observability.tracing.endpoint }}
-            - --otel-endpoint={{ .Values.llmRequestRouter.observability.tracing.endpoint }}
-            {{- end }}
-            {{- with .Values.llmRequestRouter.auth.workerAuthEndpoint }}
-            - --worker-auth-endpoint={{ . }}
-            {{- if not (and $.Values.llmRequestRouter.vault $.Values.llmRequestRouter.vault.noVaultAnnotations) }}
-            - --secrets-path=/vault/secrets/secrets.json
-            - --secrets-json-path=nvcfApiToken
-            {{- end }}
-            {{- end }}
-            {{- with .Values.llmRequestRouter.tls.certPath }}
-            - --tls-cert-path={{ . }}
-            {{- end }}
-            {{- with .Values.llmRequestRouter.tls.keyPath }}
-            - --tls-key-path={{ . }}
-            {{- end }}
-            {{- if .Values.llmRequestRouter.tls.quicInsecure }}
-            - --quic-insecure
-            {{- end }}
+            - --config-file=/etc/stargate/stargate.toml
           env:
             - name: POD_NAME
               valueFrom:
@@ -190,6 +117,12 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: status.podIP
+            - name: STARGATE_ADVERTISE_ADDR
+              value: "$(POD_IP):{{ .Values.llmRequestRouter.service.grpcPort }}"
+            {{- if and (not $backendRouterEnabled) .Values.llmRequestRouter.transport.reverseTunnelListenAddr (gt $replicaCount 1) }}
+            - name: STARGATE_REVERSE_PYLON_DIAL_ADDR
+              value: "$(POD_IP):{{ .Values.llmRequestRouter.service.reverseTunnelPort }}"
+            {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.llmRequestRouter.service.httpPort }}
@@ -220,6 +153,9 @@ spec:
           securityContext:
             {{- toYaml .Values.llmRequestRouter.securityContext | nindent 12 }}
           volumeMounts:
+            - name: stargate-config
+              mountPath: /etc/stargate
+              readOnly: true
             - name: vault-config-templates
               mountPath: /vault/config/templates
               readOnly: true
@@ -236,6 +172,9 @@ spec:
               readOnly: true
             {{- end }}
       volumes:
+        - name: stargate-config
+          configMap:
+            name: {{ include "llm-request-router.fullname" . }}-stargate
         - name: vault-token
           projected:
             sources:

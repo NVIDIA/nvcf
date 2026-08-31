@@ -34,7 +34,7 @@ pub(crate) struct DebugConfig {
     pub(crate) http_listen_addr: String,
     pub(crate) metrics_listen_addr: Option<String>,
     pub(crate) advertise_addr: String,
-    pub(crate) stargate_discovery_dns_name: String,
+    pub(crate) kubernetes_pod_discovery_dns_name: Option<String>,
     pub(crate) tunnel_protocol: String,
     pub(crate) backend_connectivity: BackendConnectivity,
     pub(crate) direct_quic_connections: usize,

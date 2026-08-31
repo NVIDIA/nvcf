@@ -166,9 +166,9 @@ assert_zero_config_contains() {
   fi
 }
 
-assert_zero_config_contains "--grpc-pylon-dial-addr=http://llm-request-router-backend-router.nvcf.svc.cluster.local:50071" \
+assert_zero_config_contains 'pylon_grpc_dial_uri = "http://llm-request-router-backend-router.nvcf.svc.cluster.local:50071"' \
   "gRPC dial address must default to the in-cluster backend-router Service"
-assert_zero_config_contains "--reverse-tunnel-pylon-dial-addr=llm-request-router-backend-router.nvcf.svc.cluster.local:50072" \
+assert_zero_config_contains 'pylon_dial_addr = "llm-request-router-backend-router.nvcf.svc.cluster.local:50072"' \
   "reverse-tunnel dial address must default to the in-cluster backend-router Service"
 
 # An explicitly configured address must still win over the default.
@@ -207,9 +207,9 @@ assert_contains "image: registry.example.invalid/nvcf/stargate:next" \
   "backend router must use its explicitly pinned Stargate image"
 assert_contains "app.kubernetes.io/version: \"next\"" \
   "backend router labels must identify the explicitly pinned image version"
-assert_contains "--grpc-pylon-dial-addr=https://llm-router.example.invalid:443" \
+assert_contains 'pylon_grpc_dial_uri = "https://llm-router.example.invalid:443"' \
   "Stargate must advertise the external gRPC endpoint to pylon"
-assert_contains "--reverse-tunnel-pylon-dial-addr=llm-router.example.invalid:8080" \
+assert_contains 'pylon_dial_addr = "llm-router.example.invalid:8080"' \
   "Stargate must advertise the external reverse-tunnel endpoint to pylon"
 assert_contains "--tls-cert-path=/etc/stargate/tls/tls.crt" \
   "backend router must use the Stargate TLS certificate"
@@ -404,7 +404,7 @@ single_replica="$(helm template llm-request-router "$chart_dir" \
   --set llmRequestRouter.backendRouter.image.tag=next \
   --set llmRequestRouter.backendRouter.pylonGrpcDialAddress=https://llm-router.example.invalid:443 \
   --set llmRequestRouter.backendRouter.pylonReverseTunnelDialAddress=llm-router.example.invalid:8080)"
-if ! grep -Fq -- "--advertised-hostname-template={pod_name}.llm-request-router-headless.nvcf.svc.cluster.local" <<<"$single_replica"; then
+if ! grep -Fq -- 'advertised_hostname_template = "{pod_name}.llm-request-router-headless.nvcf.svc.cluster.local"' <<<"$single_replica"; then
   echo "FAIL: backend routing must retain per-pod authority and SNI for one replica" >&2
   exit 1
 fi

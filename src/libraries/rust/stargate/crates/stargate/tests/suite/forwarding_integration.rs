@@ -88,7 +88,7 @@ async fn two_stargates(reverse_tunnel: bool) -> TwoStargates {
         "127.0.0.1:0".parse().unwrap(),
         "127.0.0.1:0".parse().unwrap(),
     );
-    config_a.dns_poll_interval = Duration::from_secs(1);
+    config_a.kubernetes_pod_discovery_poll_interval = Duration::from_secs(1);
     let reverse_tunnel_a =
         reverse_tunnel.then(|| localhost_reverse_tunnel_config("127.0.0.1:0".parse().unwrap()));
     let listeners_a = BoundStargateListeners::bind(&mut config_a).unwrap();
@@ -100,7 +100,7 @@ async fn two_stargates(reverse_tunnel: bool) -> TwoStargates {
         "127.0.0.1:0".parse().unwrap(),
         "127.0.0.1:0".parse().unwrap(),
     );
-    config_b.dns_poll_interval = Duration::from_secs(1);
+    config_b.kubernetes_pod_discovery_poll_interval = Duration::from_secs(1);
     let reverse_tunnel_b =
         reverse_tunnel.then(|| localhost_reverse_tunnel_config("127.0.0.1:0".parse().unwrap()));
     let listeners_b = BoundStargateListeners::bind(&mut config_b).unwrap();

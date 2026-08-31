@@ -31,7 +31,7 @@ use stargate_runtime::CriticalTaskGroup;
 
 pub(super) struct WatchStargatesPublisherConfig {
     pub(super) advertise_addr: SocketAddr,
-    pub(super) discovery_dns_name: String,
+    pub(super) kubernetes_pod_discovery_dns_name: Option<String>,
     pub(super) discovery: Box<dyn Discovery>,
     pub(super) remote_watch_stargate_urls: Vec<String>,
     pub(super) grpc_pylon_dial_addr: Option<String>,
@@ -43,7 +43,7 @@ pub(super) struct WatchStargatesPublisherConfig {
 pub(super) fn spawn_watch_stargates_publisher(
     WatchStargatesPublisherConfig {
         advertise_addr,
-        discovery_dns_name,
+        kubernetes_pod_discovery_dns_name,
         discovery,
         remote_watch_stargate_urls,
         grpc_pylon_dial_addr,
@@ -52,7 +52,8 @@ pub(super) fn spawn_watch_stargates_publisher(
         tasks,
     }: WatchStargatesPublisherConfig,
 ) -> watch::Receiver<WatchStargatesResponse> {
-    let local_watch_endpoint_keys = local_watch_endpoint_keys(advertise_addr, &discovery_dns_name);
+    let local_watch_endpoint_keys =
+        local_watch_endpoint_keys(advertise_addr, kubernetes_pod_discovery_dns_name.as_deref());
     let remote_watch_stargate_urls =
         normalize_remote_watch_urls(remote_watch_stargate_urls, &local_watch_endpoint_keys);
     let (watch_stargates_tx, watch_stargates_rx) =
@@ -177,20 +178,26 @@ fn normalize_remote_watch_urls(
 
 fn local_watch_endpoint_keys(
     advertise_addr: SocketAddr,
-    discovery_dns_name: &str,
+    kubernetes_pod_discovery_dns_name: Option<&str>,
 ) -> BTreeSet<String> {
-    let discovery_dns_name = discovery_dns_name.trim();
-    let cluster_service_dns_name = discovery_dns_name.replace("-headless.", ".");
-    [
-        Some(advertise_addr.to_string()),
-        Some(format!("{discovery_dns_name}:{}", advertise_addr.port())),
-        (cluster_service_dns_name != discovery_dns_name)
-            .then(|| format!("{cluster_service_dns_name}:{}", advertise_addr.port())),
-    ]
-    .into_iter()
-    .flatten()
-    .filter_map(|endpoint| watch_endpoint_key(&endpoint))
-    .collect()
+    let mut endpoints = vec![advertise_addr.to_string()];
+    if let Some(discovery_dns_name) = kubernetes_pod_discovery_dns_name
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        endpoints.push(format!("{discovery_dns_name}:{}", advertise_addr.port()));
+        let cluster_service_dns_name = discovery_dns_name.replace("-headless.", ".");
+        if cluster_service_dns_name != discovery_dns_name {
+            endpoints.push(format!(
+                "{cluster_service_dns_name}:{}",
+                advertise_addr.port()
+            ));
+        }
+    }
+    endpoints
+        .into_iter()
+        .filter_map(|endpoint| watch_endpoint_key(&endpoint))
+        .collect()
 }
 
 fn watch_endpoint_key(endpoint: &str) -> Option<String> {
@@ -313,7 +320,7 @@ mod tests {
     fn remote_watch_urls_are_normalized_and_filter_self_endpoints() {
         let excluded = local_watch_endpoint_keys(
             "10.0.0.1:50071".parse().unwrap(),
-            "stargate-headless.ns.svc.cluster.local",
+            Some("stargate-headless.ns.svc.cluster.local"),
         );
         let urls = normalize_remote_watch_urls(
             vec![

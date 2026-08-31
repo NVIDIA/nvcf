@@ -14,10 +14,18 @@
 // limitations under the License.
 
 use std::collections::BTreeMap;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, ensure};
 use serde::Serialize;
+use stargate::config::{
+    LoadBalancerFileConfig, MetricsConfig, ObservabilityConfig, ProcessLifecycleConfig,
+    PylonRegistrationConfig, PylonTlsConfig, PylonTransportConfig, RequestProxyConfig,
+    ReversePylonTransportConfig, StargateConfig, StargateDiscoveryConfig, StargateIdentityConfig,
+    StargateNetworkConfig,
+};
 
 use crate::config::{AlgorithmConfig, BenchmarkConfig};
 use crate::manifest::{Manifest, write_manifest_json};
@@ -48,6 +56,7 @@ pub struct PreparedAlgorithmRun {
     pub algorithm_name: String,
     pub run_dir: PathBuf,
     pub compose_path: PathBuf,
+    pub stargate_config_path: PathBuf,
     pub lb_config_path: PathBuf,
     pub run_info_path: PathBuf,
     pub stargate_http_endpoint: String,
@@ -91,6 +100,12 @@ pub fn prepare_suite(
             &format!("LB config for {}", algorithm.name),
         )?;
 
+        let stargate_config_path = run_dir.join("stargate.toml");
+        let stargate_config =
+            benchmark_stargate_config(config.tunnel_protocol, Path::new("/config/lb-config.json"));
+        std::fs::write(&stargate_config_path, stargate_config.to_toml_string()?)
+            .with_context(|| format!("failed to write {}", stargate_config_path.display()))?;
+
         let host_port_offset = (index as u16) * 10;
         let stargate_grpc_host_port = STARGATE_GRPC_PORT + host_port_offset;
         let stargate_http_host_port = STARGATE_HTTP_PORT + host_port_offset;
@@ -100,6 +115,7 @@ pub fn prepare_suite(
             config,
             algorithm,
             &lb_config_path,
+            &stargate_config_path,
             stargate_grpc_host_port,
             stargate_http_host_port,
             stargate_metrics_host_port,
@@ -121,6 +137,7 @@ pub fn prepare_suite(
             "stargate_grpc_endpoint": &stargate_grpc_endpoint,
             "stargate_metrics_endpoint": &stargate_metrics_endpoint,
             "compose_path": compose_path,
+            "stargate_config_path": stargate_config_path,
             "lb_config_path": lb_config_path,
             "manifest_path": manifest_path,
         });
@@ -131,6 +148,7 @@ pub fn prepare_suite(
             algorithm_name: algorithm.name.clone(),
             run_dir,
             compose_path,
+            stargate_config_path,
             lb_config_path,
             run_info_path,
             stargate_http_endpoint,
@@ -203,6 +221,7 @@ fn build_compose_spec(
     config: &BenchmarkConfig,
     algorithm: &AlgorithmConfig,
     lb_config_path: &Path,
+    stargate_config_path: &Path,
     stargate_grpc_host_port: u16,
     stargate_http_host_port: u16,
     stargate_metrics_host_port: u16,
@@ -211,34 +230,30 @@ fn build_compose_spec(
     let dockerfile = repo_root.join("Dockerfile");
     let mut services = BTreeMap::new();
     let stargate_lb_config_container_path = "/config/lb-config.json";
+    let stargate_config_container_path = "/config/stargate.toml";
 
     services.insert(
         "stargate".to_string(),
         ComposeService {
             build: compose_build(&repo_root, &dockerfile, "stargate-runtime"),
-            command: Vec::from(command![
-                "--stargate-id" => "benchmark-stargate",
-                "--listen-addr" => format!("0.0.0.0:{STARGATE_GRPC_PORT}"),
-                "--http-listen-addr" => format!("0.0.0.0:{STARGATE_HTTP_PORT}"),
-                "--advertise-addr" => format!("127.0.0.1:{STARGATE_GRPC_PORT}"),
-                "--stargate-discovery-dns-name" => "stargate",
-                "--metrics-port" => STARGATE_METRICS_PORT.to_string(),
-                "--lb-config-path" => stargate_lb_config_container_path,
-                "--backend-connectivity=reverse",
-                "--reverse-tunnel-listen-addr" => "0.0.0.0:50072",
-                "--advertised-hostname-template" => "stargate",
-                "--tunnel-protocol" => config.tunnel_protocol.to_string(),
-            ]),
+            command: Vec::from(command!["--config-file" => stargate_config_container_path]),
             ports: vec![
                 format!("{stargate_grpc_host_port}:{STARGATE_GRPC_PORT}"),
                 format!("{stargate_http_host_port}:{STARGATE_HTTP_PORT}"),
                 format!("{stargate_metrics_host_port}:{STARGATE_METRICS_PORT}"),
             ],
-            volumes: vec![format!(
-                "{}:{}:ro",
-                absolute_bind_path(lb_config_path)?.display(),
-                stargate_lb_config_container_path
-            )],
+            volumes: vec![
+                format!(
+                    "{}:{}:ro",
+                    absolute_bind_path(lb_config_path)?.display(),
+                    stargate_lb_config_container_path
+                ),
+                format!(
+                    "{}:{}:ro",
+                    absolute_bind_path(stargate_config_path)?.display(),
+                    stargate_config_container_path
+                ),
+            ],
             depends_on: BTreeMap::new(),
         },
     );
@@ -317,6 +332,57 @@ fn build_compose_spec(
     Ok(ComposeSpec { services })
 }
 
+fn benchmark_stargate_config(
+    tunnel_protocol: stargate_protocol::TunnelTransportProtocol,
+    lb_config_path: &Path,
+) -> StargateConfig {
+    StargateConfig {
+        schema_version: stargate::config::SCHEMA_VERSION,
+        stargate_identity: StargateIdentityConfig {
+            id: "benchmark-stargate".to_string(),
+            advertised_hostname_template: "stargate".to_string(),
+            kubernetes: None,
+        },
+        stargate_network: StargateNetworkConfig {
+            grpc_listen_addr: SocketAddr::from(([0, 0, 0, 0], STARGATE_GRPC_PORT)),
+            model_discovery_listen_addr: SocketAddr::from(([0, 0, 0, 0], 50073)),
+            http_listen_addr: SocketAddr::from(([0, 0, 0, 0], STARGATE_HTTP_PORT)),
+            advertise_addr: SocketAddr::from(([127, 0, 0, 1], STARGATE_GRPC_PORT)),
+        },
+        process_lifecycle: ProcessLifecycleConfig::default(),
+        pylon_registration: PylonRegistrationConfig::default(),
+        stargate_discovery: StargateDiscoveryConfig::default(),
+        pylon_transport: PylonTransportConfig {
+            tunnel_protocol,
+            reverse: Some(ReversePylonTransportConfig {
+                listen_addr: SocketAddr::from(([0, 0, 0, 0], 50072)),
+                pylon_dial_addr: None,
+                connect_timeout: Duration::from_secs(10),
+                certificate_path: None,
+                private_key_path: None,
+            }),
+            tls: PylonTlsConfig {
+                insecure_skip_verify: true,
+            },
+            ..PylonTransportConfig::default()
+        },
+        request_proxy: RequestProxyConfig {
+            load_balancer: Some(LoadBalancerFileConfig {
+                config_path: lb_config_path.to_path_buf(),
+            }),
+            ..RequestProxyConfig::default()
+        },
+        observability: ObservabilityConfig {
+            metrics: MetricsConfig {
+                listen_addr: SocketAddr::from(([0, 0, 0, 0], STARGATE_METRICS_PORT)),
+                ..MetricsConfig::default()
+            },
+            ..ObservabilityConfig::default()
+        },
+        worker_authentication: None,
+    }
+}
+
 fn absolute_bind_path(path: &Path) -> anyhow::Result<PathBuf> {
     if path.is_absolute() {
         return Ok(path.to_path_buf());
@@ -387,6 +453,7 @@ algorithms:
             config,
             &config.algorithms[0],
             Path::new("/tmp/lb-config.json"),
+            Path::new("/tmp/stargate.toml"),
             STARGATE_GRPC_PORT,
             STARGATE_HTTP_PORT,
             STARGATE_METRICS_PORT,
@@ -413,6 +480,10 @@ algorithms:
         assert_eq!(prepared.algorithm_runs.len(), 2);
         for run in prepared.algorithm_runs {
             assert!(run.compose_path.exists(), "compose file should exist");
+            assert!(
+                run.stargate_config_path.exists(),
+                "Stargate config file should exist"
+            );
             assert!(run.lb_config_path.exists(), "lb config should exist");
             assert!(run.run_info_path.exists(), "run info should exist");
         }
@@ -449,6 +520,7 @@ algorithms:
             &config,
             &config.algorithms[0],
             Path::new(".bench-out/prepare/run-power-of-n/lb-config.json"),
+            Path::new(".bench-out/prepare/run-power-of-n/stargate.toml"),
             STARGATE_GRPC_PORT,
             STARGATE_HTTP_PORT,
             STARGATE_METRICS_PORT,
@@ -470,22 +542,16 @@ algorithms:
     }
 
     #[test]
-    fn compose_clients_use_explicit_reverse_connectivity() {
+    fn compose_stargate_uses_config_file_and_clients_use_reverse_connectivity() {
         let config = config();
         let compose = compose(&config);
         let stargate = service(&compose, "stargate");
         let client = service(&compose, "client-0");
 
-        assert!(
-            stargate
-                .command
-                .iter()
-                .any(|arg| arg == "--backend-connectivity=reverse"),
-            "compose stargate should explicitly own the reverse listener"
-        );
         assert_eq!(
-            command_value(&stargate.command, "--reverse-tunnel-listen-addr"),
-            Some("0.0.0.0:50072")
+            stargate.command,
+            ["--config-file", "/config/stargate.toml"],
+            "compose Stargate should receive only its config file"
         );
         assert!(
             client
@@ -536,12 +602,16 @@ algorithms:
         let mut config = config();
         config.tunnel_protocol = stargate_protocol::TunnelTransportProtocol::WebTransport;
         let compose = compose(&config);
-        for name in ["stargate", "client-0"] {
-            assert_eq!(
-                command_value(&service(&compose, name).command, "--tunnel-protocol"),
-                Some("webtransport")
-            );
-        }
+        assert_eq!(
+            command_value(&service(&compose, "client-0").command, "--tunnel-protocol"),
+            Some("webtransport")
+        );
+        let stargate =
+            benchmark_stargate_config(config.tunnel_protocol, Path::new("/config/lb-config.json"));
+        assert_eq!(
+            stargate.pylon_transport.tunnel_protocol,
+            stargate_protocol::TunnelTransportProtocol::WebTransport
+        );
     }
 
     #[test]

@@ -119,7 +119,7 @@ async fn start_two_stargates_with_quic_tls(
         "127.0.0.1:0".parse().unwrap(),
         "127.0.0.1:0".parse().unwrap(),
     );
-    config_a.dns_poll_interval = Duration::from_secs(1);
+    config_a.kubernetes_pod_discovery_poll_interval = Duration::from_secs(1);
     let reverse_tunnel_a = localhost_reverse_tunnel_config("127.0.0.1:0".parse().unwrap());
     // Exercise both secure and insecure QUIC relay modes from the same topology helper.
     config_a.proxy_transport.quic.tls_cert_pem = tls_cert_pem.clone();
@@ -136,7 +136,7 @@ async fn start_two_stargates_with_quic_tls(
         "127.0.0.1:0".parse().unwrap(),
         "127.0.0.1:0".parse().unwrap(),
     );
-    config_b.dns_poll_interval = Duration::from_secs(1);
+    config_b.kubernetes_pod_discovery_poll_interval = Duration::from_secs(1);
     let reverse_tunnel_b = localhost_reverse_tunnel_config("127.0.0.1:0".parse().unwrap());
     // Exercise both secure and insecure QUIC relay modes from the same topology helper.
     config_b.proxy_transport.quic.tls_cert_pem = tls_cert_pem;
@@ -599,7 +599,7 @@ async fn relayed_tunnel_peer_unreachable() {
         "127.0.0.1:0".parse().unwrap(),
         "127.0.0.1:0".parse().unwrap(),
     );
-    config_a.dns_poll_interval = Duration::from_secs(1);
+    config_a.kubernetes_pod_discovery_poll_interval = Duration::from_secs(1);
     let reverse_tunnel_a = localhost_reverse_tunnel_config("127.0.0.1:0".parse().unwrap());
     let listeners_a = BoundStargateListeners::bind(&mut config_a).unwrap();
     let grpc_a = config_a.grpc_listen_addr;

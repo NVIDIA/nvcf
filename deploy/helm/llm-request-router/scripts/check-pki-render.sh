@@ -117,12 +117,11 @@ cert_dns_name="$(yq -rN 'select(.kind == "Certificate" and .metadata.name == "st
 [ "${cert_dns_name}" = "*.stargate.localhost" ]
 
 workload_args="$(yq -rN 'select((.kind == "Deployment" or .kind == "StatefulSet") and .metadata.name == "llm-request-router") | .spec.template.spec.containers[0].args[]' "${manifest}")"
-printf '%s\n' "${workload_args}" | grep -qx -- "--tls-cert-path=/etc/stargate/tls/tls.crt"
-printf '%s\n' "${workload_args}" | grep -qx -- "--tls-key-path=/etc/stargate/tls/tls.key"
-if printf '%s\n' "${workload_args}" | grep -qx -- "--quic-insecure"; then
-  echo "unexpected --quic-insecure flag rendered" >&2
-  exit 1
-fi
+[ "${workload_args}" = "--config-file=/etc/stargate/stargate.toml" ] || fail "request router must use only --config-file"
+workload_config="$(yq -rN 'select(.kind == "ConfigMap" and .metadata.name == "llm-request-router-stargate") | .data."stargate.toml"' "${manifest}")"
+printf '%s\n' "${workload_config}" | grep -Fqx -- 'certificate_path = "/etc/stargate/tls/tls.crt"'
+printf '%s\n' "${workload_config}" | grep -Fqx -- 'private_key_path = "/etc/stargate/tls/tls.key"'
+printf '%s\n' "${workload_config}" | grep -Fqx -- 'insecure_skip_verify = false'
 
 tls_mount_name="$(yq -rN 'select((.kind == "Deployment" or .kind == "StatefulSet") and .metadata.name == "llm-request-router") | .spec.template.spec.containers[0].volumeMounts[] | select(.name == "stargate-tls" and .mountPath == "/etc/stargate/tls" and .readOnly == true) | .name' "${manifest}")"
 tls_volume_name="$(yq -rN 'select((.kind == "Deployment" or .kind == "StatefulSet") and .metadata.name == "llm-request-router") | .spec.template.spec.volumes[] | select(.name == "stargate-tls" and .secret.secretName == "stargate-quic-tls") | .name' "${manifest}")"
@@ -172,7 +171,6 @@ helm template llm-request-router ./llm-request-router \
   --values ./llm-request-router/values.yaml \
   --set llmRequestRouter.image.repository=stargate \
   --set llmRequestRouter.replicaCount=1 \
-  --set llmRequestRouter.discovery.disableDnsDiscovery=true \
   --set llmRequestRouter.certificate.enabled=true \
   --set llmRequestRouter.certificate.secretName=stargate-quic-tls \
   --set llmRequestRouter.certificate.issuerRef.name=nvcf-openbao-pki \
@@ -182,8 +180,8 @@ helm template llm-request-router ./llm-request-router \
 single_replica_dns_name="$(yq -rN 'select(.kind == "Certificate" and .metadata.name == "stargate-quic-tls") | .spec.dnsNames[0]' "${single_replica_manifest}")"
 [ "${single_replica_dns_name}" = "llm-request-router.nvcf.svc.cluster.local" ] || fail "single-replica Certificate SAN did not render the advertised hostname"
 
-single_replica_args="$(yq -rN 'select((.kind == "Deployment" or .kind == "StatefulSet") and .metadata.name == "llm-request-router") | .spec.template.spec.containers[0].args[]' "${single_replica_manifest}")"
-printf '%s\n' "${single_replica_args}" | grep -qx -- "--advertised-hostname-template=llm-request-router.nvcf.svc.cluster.local" || fail "single-replica render missing the advertised hostname template"
+single_replica_config="$(yq -rN 'select(.kind == "ConfigMap" and .metadata.name == "llm-request-router-stargate") | .data."stargate.toml"' "${single_replica_manifest}")"
+printf '%s\n' "${single_replica_config}" | grep -Fqx -- 'advertised_hostname_template = "llm-request-router.nvcf.svc.cluster.local"' || fail "single-replica config missing the advertised hostname template"
 
 # Certificate validation resolves both supported placeholders. The pod name
 # remains one DNS label, while the namespace is known at chart render time.
@@ -338,12 +336,10 @@ existing_secret_volume="$(yq -rN 'select((.kind == "Deployment" or .kind == "Sta
 existing_secret_mount="$(yq -rN 'select((.kind == "Deployment" or .kind == "StatefulSet") and .metadata.name == "llm-request-router") | .spec.template.spec.containers[0].volumeMounts[] | select(.name == "stargate-tls" and .mountPath == "/etc/stargate/tls" and .readOnly == true) | .name' "${existing_secret_manifest}")"
 [ "${existing_secret_mount}" = "stargate-tls" ] || fail "existing-Secret mode did not mount stargate-tls read-only"
 
-existing_secret_args="$(yq -rN 'select((.kind == "Deployment" or .kind == "StatefulSet") and .metadata.name == "llm-request-router") | .spec.template.spec.containers[0].args[]' "${existing_secret_manifest}")"
-printf '%s\n' "${existing_secret_args}" | grep -qx -- "--tls-cert-path=/etc/stargate/tls/tls.crt" || fail "existing-Secret mode did not pass the certificate path"
-printf '%s\n' "${existing_secret_args}" | grep -qx -- "--tls-key-path=/etc/stargate/tls/tls.key" || fail "existing-Secret mode did not pass the private key path"
-if printf '%s\n' "${existing_secret_args}" | grep -qx -- "--quic-insecure"; then
-  fail "existing-Secret mode enabled insecure request-router transport"
-fi
+existing_secret_config="$(yq -rN 'select(.kind == "ConfigMap" and .metadata.name == "llm-request-router-stargate") | .data."stargate.toml"' "${existing_secret_manifest}")"
+printf '%s\n' "${existing_secret_config}" | grep -Fqx -- 'certificate_path = "/etc/stargate/tls/tls.crt"' || fail "existing-Secret mode did not configure the certificate path"
+printf '%s\n' "${existing_secret_config}" | grep -Fqx -- 'private_key_path = "/etc/stargate/tls/tls.key"' || fail "existing-Secret mode did not configure the private key path"
+printf '%s\n' "${existing_secret_config}" | grep -Fqx -- 'insecure_skip_verify = false' || fail "existing-Secret mode enabled insecure request-router transport"
 
 # Mixed ownership: cert-manager and the operator cannot both own the identity.
 mixed_ownership_error="${tmp_dir}/mixed-ownership.err"
