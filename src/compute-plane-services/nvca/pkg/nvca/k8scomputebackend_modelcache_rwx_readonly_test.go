@@ -107,9 +107,15 @@ func newResolvedWekaRWXReadOnlyRuntimeFixture(t *testing.T) *rwxReadOnlyRuntimeF
 	k8sClient := fakek8sclient.NewSimpleClientset(storageClass, catalog)
 	resolved, err := nvcastorage.ResolveModelCacheStorageWithClientset(
 		t.Context(), k8sClient, selectionCatalogNamespace,
-		nvcastorage.ModelCacheWorkflowRegular)
+		nvcastorage.ModelCacheWorkflowHelm)
 	require.NoError(t, err)
 	require.Equal(t, nvcastorage.ModelCacheTransitionRWXReadOnly, resolved.Transition)
+
+	// These tests exercise the rwxReadOnly executor, which is complete and
+	// stays covered. The regular workflow does not currently resolve to this
+	// transition, because its shared retained writer cannot carry the
+	// credentials real requests bring (see transitionForWorkflow), so the
+	// selection is built for the executor directly rather than derived.
 	return newRWXReadOnlyRuntimeFixtureFromSelection(t, resolved, k8sClient)
 }
 

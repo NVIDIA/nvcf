@@ -323,17 +323,21 @@ func TestTransitionForWorkflow(t *testing.T) {
 		wantHelm    string
 	}{
 		{
-			// A shared claim reaches other namespaces on its own, so RWX
-			// serves both workflows on any vendor.
-			name:        "ReadWriteMany serves both workflows",
+			// A shared claim reaches other namespaces on its own, so it serves
+			// Helm caching on any vendor. Regular caching stays off while its
+			// shared retained writer cannot carry the credentials real
+			// requests bring: see prepareRWXReadOnlySharedWriterJob.
+			name:        "ReadWriteMany serves Helm caching",
 			driver:      driver("weka", "ReadWriteMany"),
-			wantRegular: ModelCacheTransitionRWXReadOnly,
+			wantRegular: ModelCacheTransitionDisabled,
 			wantHelm:    ModelCacheTransitionRWXReadOnly,
 		},
 		{
-			name:        "ReadWriteMany wins when a driver proved both shapes",
+			// The ROX shape still serves regular caching when the driver also
+			// proved ReadWriteOnce, because that writer is per request.
+			name:        "a driver proving both shapes keeps regular caching",
 			driver:      driver("weka", "ReadWriteMany", "ReadWriteOnce", "ReadOnlyMany"),
-			wantRegular: ModelCacheTransitionRWXReadOnly,
+			wantRegular: ModelCacheTransitionROXReadOnly,
 			wantHelm:    ModelCacheTransitionRWXReadOnly,
 		},
 		{
@@ -404,16 +408,23 @@ func TestSelectionFollowsQualifiedModes(t *testing.T) {
 
 	sc := testModelCacheStorageClass()
 	sc.Provisioner = provisioner
-	for _, workflow := range []ModelCacheWorkflow{ModelCacheWorkflowRegular, ModelCacheWorkflowHelm} {
-		selection, err := selectModelCacheStorageFromObjects(sc, catalog, "sha256:catalog", workflow)
-		require.NoError(t, err, workflow)
-		assert.Equal(t, ModelCacheTransitionRWXReadOnly, selection.Transition, workflow)
-		assert.Equal(t,
-			[]corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
-			selection.RequiredAccessModes, workflow)
-		assert.Empty(t, selection.RequiredMountOptions, workflow,
-			"a shared claim is mounted read-only by the Pod, so NVCA sets no reader options")
-	}
+
+	// Helm caching resolves on a shared claim, for a vendor NVCA has no
+	// special knowledge of.
+	helm, err := selectModelCacheStorageFromObjects(sc, catalog, "sha256:catalog", ModelCacheWorkflowHelm)
+	require.NoError(t, err)
+	assert.Equal(t, ModelCacheTransitionRWXReadOnly, helm.Transition)
+	assert.Equal(t,
+		[]corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+		helm.RequiredAccessModes)
+	assert.Empty(t, helm.RequiredMountOptions,
+		"a shared claim is mounted read-only by the Pod, so NVCA sets no reader options")
+
+	// Regular caching does not, while its shared retained writer cannot carry
+	// the credentials real requests bring.
+	regular, err := selectModelCacheStorageFromObjects(sc, catalog, "sha256:catalog", ModelCacheWorkflowRegular)
+	require.NoError(t, err)
+	assert.Equal(t, ModelCacheTransitionDisabled, regular.Transition)
 }
 
 func TestValidateStorageCapabilityCatalogAllowsNothingQualified(t *testing.T) {
@@ -460,9 +471,10 @@ func TestShippedStorageCapabilityCatalog(t *testing.T) {
 		assert.ElementsMatch(t,
 			[]string{"ReadWriteMany", "ReadOnlyMany"}, *driver.AccessModes, provisioner)
 		assert.Equal(t, ModelCacheTransitionRWXReadOnly,
-			transitionForWorkflow(driver, ModelCacheWorkflowRegular), provisioner)
-		assert.Equal(t, ModelCacheTransitionRWXReadOnly,
 			transitionForWorkflow(driver, ModelCacheWorkflowHelm), provisioner)
+		assert.Equal(t, ModelCacheTransitionDisabled,
+			transitionForWorkflow(driver, ModelCacheWorkflowRegular), provisioner,
+			"regular caching waits on the shared writer credential work")
 		require.NotNil(t, driver.ReaderMountOptions, provisioner)
 		assert.Empty(t, *driver.ReaderMountOptions, provisioner)
 	}

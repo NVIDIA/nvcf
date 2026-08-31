@@ -197,7 +197,11 @@ func TestPersistModelCacheStorageSelection(t *testing.T) {
 			wantProvisioner:   nvcastorage.NVMeshStorageClassProvisioner,
 		},
 		{
-			name: "regular durable provider-neutral RWX",
+			// A ReadWriteMany driver does not serve regular caching yet: its
+			// shared retained writer cannot carry the credentials real
+			// requests bring. Helm caching on the same driver is durable, and
+			// is covered by the Helm case below.
+			name: "regular RWX is not durable while the shared writer cannot hold credentials",
 			objects: func() []runtime.Object {
 				return []runtime.Object{
 					selectionStorageClassForProvisioner("csi.weka.io"),
@@ -209,8 +213,10 @@ func TestPersistModelCacheStorageSelection(t *testing.T) {
 				featureflag.NVMeshEncryption,
 			},
 			wantWorkflow:      nvcastorage.ModelCacheWorkflowRegular,
-			wantMode:          nvcastorage.ModelCacheSelectionDurable,
-			wantTransition:    nvcastorage.ModelCacheTransitionRWXReadOnly,
+			wantMode:          nvcastorage.ModelCacheSelectionNone,
+			wantTransition:    nvcastorage.ModelCacheTransitionDisabled,
+			// The resolution still happened and is recorded; only the
+			// transition it produced is disabled.
 			wantResolvedState: true,
 			wantProvider:      "weka",
 			wantProvisioner:   "csi.weka.io",
