@@ -454,6 +454,7 @@ addons:
     config:
       mappingPath: /etc/vanity-gateway/config/config.yaml
       nvcfApiEndpoint: http://invocation.nvcf.svc.cluster.local:8080
+      llmGatewayEndpoint: http://llm-api-gateway.nvcf.svc.cluster.local:8080
       # Empty by default because the Vanity Gateway chart does not create Vault
       # Agent injection. Set this only when another component mounts the secrets
       # file into the pod.
