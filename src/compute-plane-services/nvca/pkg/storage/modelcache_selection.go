@@ -207,10 +207,6 @@ func (s *PersistedModelCacheStorageSelection) Validate() error {
 				}
 			}
 		case ModelCacheTransitionRWXReadOnly:
-			if s.Workflow != ModelCacheWorkflowRegular {
-				return fmt.Errorf("model cache transition %q requires regular workflow, got %q",
-					s.Transition, s.Workflow)
-			}
 			if s.EncryptionRequired {
 				return fmt.Errorf("model cache transition %q does not support encryption",
 					s.Transition)

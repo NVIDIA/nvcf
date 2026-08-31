@@ -45,16 +45,31 @@ drivers:
       - nouuid
   csi.weka.io:
     provider: weka
-    # Fresh RWX and ROX claims were tested, but the cache workflow itself is
-    # not qualified yet. Pending a qualification run on the Weka cluster.
-    accessModes: []
+    # Qualified 2026-08-31 on amahmood3-dgxc-k8s-mst-blc-01, StorageClass
+    # nv-storage-file. A reader in another namespace, on a PV derived from the
+    # writer volume, read the cache and was denied writes with EROFS, for both
+    # ReadWriteMany and ReadOnlyMany claims. Weka volume handles carry no
+    # namespace, so the writer handle is reused unchanged.
+    accessModes:
+      - ReadWriteMany
+      - ReadOnlyMany
+    # The reader claim is mounted read-only by the Pod, so NVCA sets no
+    # options on the derived PV.
     readerMountOptions: []
   fss.csi.oraclecloud.com:
     provider: ociFss
-    # An RWX claim was tested; its readers used read-only Pod mounts, which is
-    # not evidence for a ReadOnlyMany claim. The cache workflow is not
-    # qualified yet. Pending a qualification run on the OCI cluster.
-    accessModes: []
+    # Qualified 2026-08-31 on nvcf-dgxc-k8s-oci-jbt-ct4, StorageClass
+    # fss-nvcf-test, by the same method and with the same result as Weka. FSS
+    # volume handles are filesystem-ocid:mount-target-ip:export-path and carry
+    # no namespace.
+    #
+    # Deployment note: fss.csi.oraclecloud.com declares fsGroupPolicy
+    # ReadWriteOnceWithFSType, so Kubernetes does not apply fsGroup to a
+    # ReadWriteMany volume. A fresh export is owned root:root, so the cache
+    # writer must run as root on FSS.
+    accessModes:
+      - ReadWriteMany
+      - ReadOnlyMany
     readerMountOptions: []
   lustre.csi.oraclecloud.com:
     provider: ociLustre

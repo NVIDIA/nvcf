@@ -448,17 +448,32 @@ func TestShippedStorageCapabilityCatalog(t *testing.T) {
 	assert.Equal(t, ModelCacheTransitionROXReadOnly,
 		transitionForWorkflow(nvmesh, ModelCacheWorkflowHelm))
 
-	// Weka, FSS, and Lustre are recorded but not yet qualified for a cache
-	// workflow. Enabling one is an edit to its accessModes, backed by a
-	// qualification run.
-	for _, provisioner := range []string{"csi.weka.io", "fss.csi.oraclecloud.com", "lustre.csi.oraclecloud.com"} {
+	// Weka and FSS were qualified on 2026-08-31: a reader in another namespace,
+	// on a PV derived from the writer volume, read the cache and was denied
+	// writes. Both serve regular and Helm caching from a shared claim, and
+	// neither needs reader mount options because the Pod mounts the claim
+	// read-only. See docs/dev/storage-provider-qualification.md.
+	for _, provisioner := range []string{"csi.weka.io", "fss.csi.oraclecloud.com"} {
 		driver, ok := catalog.Drivers[provisioner]
 		require.True(t, ok, provisioner)
 		require.NotNil(t, driver.AccessModes, provisioner)
-		assert.Empty(t, *driver.AccessModes, provisioner)
-		assert.Equal(t, ModelCacheTransitionDisabled,
+		assert.ElementsMatch(t,
+			[]string{"ReadWriteMany", "ReadOnlyMany"}, *driver.AccessModes, provisioner)
+		assert.Equal(t, ModelCacheTransitionRWXReadOnly,
 			transitionForWorkflow(driver, ModelCacheWorkflowRegular), provisioner)
-		assert.Equal(t, ModelCacheTransitionDisabled,
+		assert.Equal(t, ModelCacheTransitionRWXReadOnly,
 			transitionForWorkflow(driver, ModelCacheWorkflowHelm), provisioner)
+		require.NotNil(t, driver.ReaderMountOptions, provisioner)
+		assert.Empty(t, *driver.ReaderMountOptions, provisioner)
 	}
+
+	// Lustre has no qualification run, so both workflows stay off.
+	lustre, ok := catalog.Drivers["lustre.csi.oraclecloud.com"]
+	require.True(t, ok)
+	require.NotNil(t, lustre.AccessModes)
+	assert.Empty(t, *lustre.AccessModes)
+	assert.Equal(t, ModelCacheTransitionDisabled,
+		transitionForWorkflow(lustre, ModelCacheWorkflowRegular))
+	assert.Equal(t, ModelCacheTransitionDisabled,
+		transitionForWorkflow(lustre, ModelCacheWorkflowHelm))
 }

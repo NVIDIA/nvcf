@@ -19,10 +19,12 @@ package storage
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -245,4 +247,44 @@ func TestSelectLegacyHelmCacheBackend_SambaClassLookupError(t *testing.T) {
 	_, err := SelectLegacyHelmCacheBackend(t.Context(), c, ff, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), DefaultModelCacheStorageClassName)
+}
+
+// TestHelmCacheBackendFromSelectionRoutesBothShapes checks that a qualified
+// non-NVMesh backend reaches an execution path at all. Before this, durable
+// Helm caching resolved only for the NVMesh shape and every other transition
+// was an error, so a driver could be qualified in the catalog and still fail
+// at run time.
+func TestHelmCacheBackendFromSelectionRoutesBothShapes(t *testing.T) {
+	selection := func(transition string, modes []corev1.PersistentVolumeAccessMode,
+		options []string) *PersistedModelCacheStorageSelection {
+		return &PersistedModelCacheStorageSelection{
+			Version:              ModelCacheStorageSelectionVersion,
+			Workflow:             ModelCacheWorkflowHelm,
+			Mode:                 ModelCacheSelectionDurable,
+			StorageClassName:     DefaultModelCacheStorageClassName,
+			StorageClassUID:      "uid-1",
+			StorageClassDigest:   "v1:sha256:" + strings.Repeat("a", 64),
+			ProfileDigest:        "sha256:" + strings.Repeat("b", 64),
+			Provider:             "weka",
+			Provisioner:          "csi.weka.io",
+			Transition:           transition,
+			RequiredAccessModes:  modes,
+			RequiredMountOptions: options,
+		}
+	}
+
+	rwx := selection(ModelCacheTransitionRWXReadOnly,
+		[]corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany}, nil)
+	backend, err := HelmCacheBackendFromSelection(rwx)
+	require.NoError(t, err, "a ReadWriteMany backend must have a durable Helm path")
+	assert.Equal(t, HelmCacheBackendSharedFS, backend)
+
+	rox := selection(ModelCacheTransitionROXReadOnly,
+		[]corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce, corev1.ReadOnlyMany},
+		[]string{"ro", "norecovery", "nouuid"})
+	rox.Provider = ModelCacheProviderNVMesh
+	rox.Provisioner = NVMeshStorageClassProvisioner
+	backend, err = HelmCacheBackendFromSelection(rox)
+	require.NoError(t, err)
+	assert.Equal(t, HelmCacheBackendNVMesh, backend)
 }

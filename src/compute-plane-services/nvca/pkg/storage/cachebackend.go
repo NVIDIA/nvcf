@@ -96,9 +96,15 @@ func HelmCacheBackendFromSelection(
 	case ModelCacheSelectionEphemeral:
 		return HelmCacheBackendEphemeral, nil
 	case ModelCacheSelectionDurable:
+		// Both durable shapes derive a read-only reader PV in the request
+		// namespace from the volume the writer populated. They differ in the
+		// writer claim and in whether the CSI volume handle has to be rewritten
+		// for the reader, which deriveReaderVolumeHandle decides.
 		switch selection.Transition {
 		case ModelCacheTransitionROXReadOnly:
 			return HelmCacheBackendNVMesh, nil
+		case ModelCacheTransitionRWXReadOnly:
+			return HelmCacheBackendSharedFS, nil
 		default:
 			return "", fmt.Errorf("unsupported durable Helm model cache transition %q", selection.Transition)
 		}

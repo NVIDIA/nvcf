@@ -103,11 +103,12 @@ func TestNewPersistedModelCacheStorageSelection(t *testing.T) {
 			wantFields: true,
 		},
 		{
-			name:       "Helm rwxReadOnly is rejected",
+			// A shared claim reaches other namespaces, so it serves Helm
+			// caching as well as regular caching.
+			name:       "Helm rwxReadOnly is accepted",
 			workflow:   ModelCacheWorkflowHelm,
 			mode:       ModelCacheSelectionDurable,
 			resolved:   testResolvedModelCacheStorage(ModelCacheTransitionRWXReadOnly),
-			wantErr:    "requires regular workflow",
 			wantFields: true,
 		},
 		{
@@ -205,7 +206,8 @@ func TestPersistedModelCacheStorageSelectionRWXReadOnlyContract(t *testing.T) {
 
 	helm := *selection
 	helm.Workflow = ModelCacheWorkflowHelm
-	require.ErrorContains(t, helm.Validate(), "requires regular workflow")
+	require.NoError(t, helm.Validate(),
+		"a shared claim serves Helm caching, which reaches other namespaces")
 
 	extraMode := *selection
 	extraMode.RequiredAccessModes = []corev1.PersistentVolumeAccessMode{

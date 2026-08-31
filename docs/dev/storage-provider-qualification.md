@@ -150,11 +150,20 @@ Note that the SMB CSI driver is registered on the FSS cluster, so a pinned SMB
 class is available there in principle. That is the configuration the path
 actually supports.
 
-So the path is usable only by a `nvcf-miniservice-sc` an operator
-pre-provisioned that way. It is not usable by the drivers its own comment
-lists. On Weka it was measured to serve an empty directory, and it fails
-quietly: the claim binds, the pod starts, the mount succeeds, and the model is
-missing.
+So the path was usable only by a `nvcf-miniservice-sc` an operator
+pre-provisioned that way. It was not usable by the drivers its own comment
+listed. On Weka and FSS it was measured serving an empty directory, and it
+failed quietly: the claim binds, the pod starts, the mount succeeds, and the
+model is missing.
+
+This is fixed. The shared filesystem reader is now a PV derived from the
+volume the writer populated, claimed by name with no StorageClass, so no
+provisioner can substitute an empty volume. That makes it the same shape as
+the NVMesh and Samba readers, and `deriveReaderVolumeHandle` holds the only
+difference between them: NVMesh rewrites the namespace segment of the CSI
+volume handle, and every other qualified driver reuses the handle unchanged.
+The runtime ROX/RWX probe is gone with it, because the catalog states what the
+probe used to discover.
 
 The path arrived in `c79102d9`, "feat(helm-model): select model cache backend
 by storage class". A shared filesystem data-sharing probe was filed as a
