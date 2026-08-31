@@ -208,6 +208,25 @@ func ValidateModelCacheBindingIntent(
 	if !slices.Contains(binding.Finalizers, nvcav2beta1.ModelCacheBindingFinalizer) {
 		return fmt.Errorf("model cache binding %s/%s has no protection finalizer", binding.Namespace, binding.Name)
 	}
+	// Binding names are derived from the cache handle alone, while the identity
+	// they carry also covers the workflow and the sharing domain. The control
+	// plane derives a handle from the artifact, independently of account and
+	// workflow, so two requests that differ in either land on the same name and
+	// the second is refused. Name that case: the generic mismatch below gives an
+	// operator nothing to act on.
+	if binding.Spec.Identity.SharingDomainDigest != expected.Spec.Identity.SharingDomainDigest {
+		return fmt.Errorf(
+			"model cache binding %s/%s belongs to a different sharing domain; "+
+				"cache handle %q is already bound and binding names do not include the sharing domain",
+			binding.Namespace, binding.Name, cacheHandle)
+	}
+	if binding.Spec.Identity.Workflow != expected.Spec.Identity.Workflow {
+		return fmt.Errorf(
+			"model cache binding %s/%s belongs to the %s workflow, not %s; "+
+				"cache handle %q is already bound and binding names do not include the workflow",
+			binding.Namespace, binding.Name,
+			binding.Spec.Identity.Workflow, expected.Spec.Identity.Workflow, cacheHandle)
+	}
 	if !equalBindingIntent(binding.Spec, expected.Spec) {
 		return fmt.Errorf("model cache binding %s/%s immutable spec does not match the request intent",
 			binding.Namespace, binding.Name)

@@ -469,7 +469,7 @@ func TestEnsureModelCacheBindingFailsClosedOnRetiringOrCollision(t *testing.T) {
 		want       string
 	}{
 		{name: "retiring", bindingNCA: "nca-a", phase: nvcav2beta1.ModelCacheBindingPhaseRetiring, want: "Retiring"},
-		{name: "handle collision", bindingNCA: "nca-b", phase: nvcav2beta1.ModelCacheBindingPhaseActive, want: "immutable spec"},
+		{name: "handle collision", bindingNCA: "nca-b", phase: nvcav2beta1.ModelCacheBindingPhaseActive, want: "different sharing domain"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			req, selection := durableModelCacheBindingRequest(t, nvcastorage.ModelCacheWorkflowRegular)

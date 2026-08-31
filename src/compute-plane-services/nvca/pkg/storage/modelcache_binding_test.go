@@ -129,7 +129,8 @@ func TestModelCacheBindingHandleCollisionFailsIntentValidation(t *testing.T) {
 	binding.Status.Phase = nvcav2beta1.ModelCacheBindingPhaseActive
 
 	err = ValidateModelCacheBinding(binding, selection, "nca-b", "same-handle", ModelCacheInitNamespace)
-	require.ErrorContains(t, err, "immutable spec does not match")
+	require.ErrorContains(t, err, "different sharing domain",
+		"a collision must say what collided, not report a generic spec mismatch")
 	assert.Equal(t, ModelCacheBindingName("same-handle"), binding.Name,
 		"the handle-scoped name forces another sharing domain to collide and fail closed")
 }
@@ -224,4 +225,59 @@ func TestNewModelCacheBindingRejectsInvalidInput(t *testing.T) {
 			require.ErrorContains(t, err, tt.want)
 		})
 	}
+}
+
+// TestValidateModelCacheBindingIntentNamesHandleCollisions covers the identity
+// gap directly. Binding names are derived from the cache handle alone, but the
+// identity they carry also covers the workflow and the sharing domain, and the
+// control plane derives a handle from the artifact independently of both. Two
+// requests that differ in either therefore collide on one name. The refusal is
+// correct and fails closed, but it has to say what happened.
+func TestValidateModelCacheBindingIntentNamesHandleCollisions(t *testing.T) {
+	const (
+		handle   = "shared-artifact-handle"
+		writerNS = ModelCacheInitNamespace
+		domainA  = "nca-a"
+		domainB  = "nca-b"
+	)
+	selection := testPersistedModelCacheStorageSelection(
+		ModelCacheSelectionDurable, ModelCacheTransitionROXReadOnly)
+
+	existing, err := NewModelCacheBinding(selection, domainA, handle, writerNS)
+	require.NoError(t, err)
+	existing.UID = "binding-uid"
+	existing.Status.Phase = nvcav2beta1.ModelCacheBindingPhaseActive
+
+	t.Run("the same domain and workflow is accepted", func(t *testing.T) {
+		require.NoError(t, ValidateModelCacheBindingIntent(
+			existing, selection, domainA, handle, writerNS))
+	})
+
+	t.Run("another sharing domain is named, not a generic mismatch", func(t *testing.T) {
+		err := ValidateModelCacheBindingIntent(existing, selection, domainB, handle, writerNS)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "different sharing domain")
+		assert.Contains(t, err.Error(), handle,
+			"the operator needs the handle to find the colliding cache")
+		assert.NotContains(t, err.Error(), "immutable spec does not match")
+	})
+
+	t.Run("another workflow is named", func(t *testing.T) {
+		helmSelection := *selection
+		helmSelection.Workflow = ModelCacheWorkflowHelm
+		err := ValidateModelCacheBindingIntent(existing, &helmSelection, domainA, handle, writerNS)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "workflow")
+		assert.Contains(t, err.Error(), handle)
+	})
+
+	t.Run("both bindings would share one name", func(t *testing.T) {
+		other, err := NewModelCacheBinding(selection, domainB, handle, writerNS)
+		require.NoError(t, err)
+		assert.Equal(t, existing.Name, other.Name,
+			"this is the collision: the name covers the handle but not the domain")
+		assert.NotEqual(t, existing.Spec.Identity.SharingDomainDigest,
+			other.Spec.Identity.SharingDomainDigest,
+			"while the identity they carry does distinguish them")
+	})
 }

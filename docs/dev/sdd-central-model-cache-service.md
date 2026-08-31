@@ -53,11 +53,17 @@ immutable plan before side effects. Selection uses cluster state, feature flags,
 and legacy class-name sentinels:
 
 1. `CachingSupport` or `HelmModelCaching` disabled: no cache (`none`).
-2. Legacy `nvcf-sc-30` sentinel exists: `nvmesh`.
-3. `nvcf-miniservice-sc` StorageClass exists (operator-provided third-party shared
+2. `nvcf-miniservice-sc` StorageClass exists (operator-provided third-party shared
    storage): `sharedfs`.
-4. `HelmSharedStorage` enabled and the configured model-cache backing class exists: `samba`.
-5. Otherwise: `ephemeral`.
+3. `HelmSharedStorage` enabled and the configured model-cache backing class exists: `samba`.
+4. Otherwise: `ephemeral`.
+
+NVMesh is not detected here. It was identified by a marker StorageClass,
+`nvcf-sc-30`, which the deployment templates no longer render. NVMesh is now
+identified like every other backend, by the provisioner on the cluster's model
+cache class. A legacy NVMesh cluster resolves to `sharedfs`, which reaches the
+same volume: readers are derived from the writer's PV, with the namespace
+segment of the CSI volume handle still rewritten for the NVMesh driver.
 
 NVCA never creates `nvcf-miniservice-sc`. That StorageClass is exclusively the
 operator's signal that third-party shared storage is present (branch 3 above).
