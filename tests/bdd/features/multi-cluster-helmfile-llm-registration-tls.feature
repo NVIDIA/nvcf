@@ -21,6 +21,7 @@ Feature: Register an LLM worker securely with a local split-cluster routing plan
       | addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress | https://llm-request-router.nvcf.svc.cluster.local:50071                     |
       | observability.profile                                    | disabled                                                                     |
     And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-bdd-registration-tls-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
+    # Explore a shared BDD preflight so feature files need not repeat this check: https://github.com/NVIDIA/nvcf/issues/1411
     When I run command "/bin/sh -c 'command -v grpcurl >/dev/null'"
     Then the command exit code should be 0
     # Conflict precheck: the single-cluster topology owns the same host
