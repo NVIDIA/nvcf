@@ -60,6 +60,12 @@ const (
 	// NVMeshStorageClassName, when present in the cluster, signals that
 	// NVMesh 3.x (with cross-namespace PV sharing) is installed.
 	NVMeshStorageClassName = "nvcf-sc-30"
+	// HelmCacheSharedStorageClassName is a legacy detection signal only: its
+	// presence tells SelectLegacyHelmCacheBackend that an operator provided
+	// third-party shared storage. Model cache volumes are provisioned on the
+	// cluster's model cache class, not on this one. It disappears with the
+	// legacy selector once every cluster resolves through the catalog.
+	//
 	// HelmCacheSharedStorageClassName is the shared storage class used for
 	// non-NVMesh cross-namespace model caching. It is either pre-provisioned
 	// by the operator or created by NVCA pointing at a Samba server.
