@@ -19,7 +19,7 @@ See the
 [NVIDIA GPU DRA ComputeDomain guide](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/dra-cds.html),
 [KAI topology guide](https://github.com/kai-scheduler/KAI-Scheduler/blob/main/docs/topology/README.md),
 [Grove topology guide](https://github.com/NVIDIA/grove/blob/main/docs/user-guide/topology-aware-scheduling.md),
-and [Dynamo topology guide](https://docs.nvidia.com/dynamo/v1.2.1/kubernetes-deployment/scale/topology-aware-scheduling)
+and [Dynamo topology guide](https://docs.nvidia.com/dynamo/v1.4.1/kubernetes-deployment/scale/topology-aware-scheduling)
 for component-level details.
 
 Helm functions can also use the legacy
@@ -226,7 +226,7 @@ spec:
 In general Dynamo creates Grove resources from a `DynamoGraphDeployment`, which Grove
 and KAI place. Before adding
 topology constraints to a `DynamoGraphDeployment`, see the
-[topology-aware scheduling guide for Dynamo 1.2.1](https://docs.nvidia.com/dynamo/v1.2.1/kubernetes-deployment/scale/topology-aware-scheduling)
+[topology-aware scheduling guide for Dynamo 1.4.1](https://docs.nvidia.com/dynamo/v1.4.1/kubernetes-deployment/scale/topology-aware-scheduling)
 to check the workload fields and topology resources expected by the compute
 plane stack's pinned operator.
 
@@ -250,6 +250,12 @@ When Grove is enabled, confirm that its binding exists:
 kubectl get clustertopologybindings.grove.io \
   nvcf-mnnvl-topology-binding
 ```
+
+Grove v0.1.0-alpha.12 renamed PodGang resources from legacy base/scaled names
+to an epoch-based naming scheme. The Grove operator migrates existing PodGangs
+automatically on startup; running Pods are not disrupted, and no action is
+required. PodGang names in `kubectl describe podgroup` output may look
+different after the upgrade.
 
 If Pods remain `Pending`, verify that one clique has enough free nodes for the
 entire gang. Then inspect the Pod and scheduler events:

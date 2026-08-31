@@ -20,16 +20,36 @@ closed, so an ordinary leaf renewal causes no traffic interruption.
 
 ## Scope
 
-Trust bundles do not reload yet. The workload that carries the trust bundle in
-practice is Pylon, which dials the request router over the reverse tunnel and
-verifies the router server certificate against its configured `--tls-cert-path`.
-Changing that bundle still requires restarting Pylon. Plan CA rotation around a
-rolling restart of the worker pods until trust reload ships.
+Trust bundles do not reload yet. Pylon uses this outbound trust precedence:
 
-Note the asymmetry this creates. `--tls-cert-path` is both the served server
-identity and, in the modes that dial, the outbound trust anchor. The served half
-now reloads and the dialing half does not, so a Stargate that has picked up a
-rotated identity, reported a successful reload and stayed ready is still dialing
+- `--grpc-tls-ca-cert-path` or `STARGATE_GRPC_TLS_CA_CERT_PATH` is the optional
+  gRPC-specific override.
+- Reverse-mode Pylon otherwise reuses `--tls-cert-path` or
+  `STARGATE_TLS_CERT_PATH` for gRPC and QUIC trust.
+- When neither applies, gRPC HTTPS uses enabled system and public roots.
+
+Custom gRPC roots augment the enabled system and public roots. They do not
+replace them. Direct-mode Pylon uses `--tls-cert-path` as its QUIC server
+identity and never treats that identity as a gRPC CA bundle.
+
+Managed bundle mode explicitly points both settings at the same merged system
+and private CA file. This reuses CA roots only. It does not reuse or couple the
+gRPC NLB leaf certificate and the Kubernetes-internal QUIC leaf certificate.
+Pylon reads the selected trust inputs at startup, so changing the shared file
+requires a rolling restart of the worker pods.
+
+The current production gRPC design uses a public ACM certificate on the NLB TLS
+listener. It normally needs no custom gRPC CA bundle. A private-CA NLB listener
+is a supported alternative and requires the private root in Pylon's gRPC trust
+bundle. In both cases, the NLB certificate must cover the external gRPC dial
+hostname. The separate QUIC certificate must cover the advertised
+request-router pod hostname. The public NLB DNS name and the
+Kubernetes-internal pod SANs do not belong on the same leaf certificate.
+
+Stargate has a separate reload asymmetry. Its `--tls-cert-path` can be both a
+served server identity and, in modes that dial, an outbound trust anchor. The
+served half reloads and the dialing half does not. A Stargate that has picked up
+a rotated identity, reported a successful reload, and stayed ready still dials
 direct-registered backends with the trust bytes it read at startup. A renewal
 signed by an already-trusted root is unaffected. A CA change is not: restart the
 pod rather than waiting for it to converge.
@@ -41,8 +61,8 @@ trust from a separate `--upstream-tls-cert-path`.
 
 ## Point Pylon at the root CA, not an intermediate
 
-Configure Pylon's trust bundle with the root CA certificate. Do not pin an
-intermediate.
+Configure each Pylon trust bundle with the applicable root CA certificate. Do
+not pin an intermediate.
 
 An intermediate is renewed far more often than a root. If Pylon trusts an
 intermediate directly, every intermediate renewal means a new trust bundle for
@@ -51,12 +71,12 @@ of every Pylon pod. Those pods hold GPU workloads, so that restart is the
 expensive half of the rotation.
 
 If Pylon trusts the root instead, it keeps validating through renewed
-intermediates and leaves with no trust-bundle change and no restart. The router
-server certificate reloads in place, so the entire renewal path stays
-restart-free. Serve the full chain from the router, leaf first and intermediates
-after, so Pylon can build the path back to the root. Reserve trust-bundle
-changes, and the Pylon restart that comes with them, for an actual root
-rotation.
+intermediates and leaves with no trust-bundle change and no restart. The QUIC
+router server certificate reloads in place. Serve its full chain from the
+router, leaf first and intermediates after, so Pylon can build the path back to
+the root. The NLB listener must likewise serve a chain to a root available to
+the gRPC verifier. Reserve trust-bundle changes, and the Pylon restart that
+comes with them, for an actual root rotation.
 
 The same reasoning applies to the other trust consumers, Stargate dialing direct
 backends and `stargate-k8s-router` dialing upstream endpoints, but Pylon is the
@@ -73,19 +93,30 @@ one where the restart is worth designing around.
 No pod restart is required, and no workload restart is needed for a renewal
 signed by a CA that every peer already trusts.
 
+For the gRPC NLB listener, rotate the ACM or private-CA leaf with the load
+balancer procedure. Pylon verifies the external dial hostname. Its separate
+HTTP/2 `:authority` remains the concrete request-router pod hostname and does
+not affect TLS SNI or hostname verification. A leaf-only rotation under an
+already-trusted root needs no Pylon restart. A root change follows the CA
+procedure below.
+
 ## Rotate a CA
 
 This is only needed for a root rotation. If Pylon trusts the root, renewing an
 intermediate needs no trust-bundle change and no restart. Because trust does not
 reload yet, use this order for a root rotation:
 
-1. Add the new root CA certificate to Pylon's trust bundle, keeping the old
-   root.
-2. Roll the Pylon pods so they pick the new bundle up.
-3. Replace each server certificate and private key with an identity chaining to
-   the new root. This step reloads in place and needs no restart.
+1. Add the new root CA certificate to the applicable Pylon trust bundle,
+   keeping the old root. In managed bundle mode, update the shared merged
+   bundle source.
+2. Roll the Pylon pods so both startup-loaded trust inputs pick up the new
+   bundle.
+3. Replace each affected server certificate and private key with an identity
+   chaining to the new root. Mounted server identities reload in place. Update
+   an NLB listener with its load-balancer certificate procedure.
 4. Verify new connections.
-5. Remove the old root from Pylon's trust bundle and roll the Pylon pods again.
+5. Remove the old root from the applicable Pylon trust bundle and roll the
+   Pylon pods again.
 
 For emergency revocation of a root, restart Pylon rather than waiting for a
 reload. Removing a trust root has no effect on a running process.

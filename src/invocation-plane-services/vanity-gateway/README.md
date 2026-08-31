@@ -45,6 +45,7 @@ Configuration is passed through environment variables.
 | `MAPPING_PATH` | Yes | None | Path to the rendered mapping config file. |
 | `MAPPING_LOAD_TIMEOUT` | No | `15s` | Maximum time to wait at startup for `MAPPING_PATH` to appear. Increase this when a ConfigMap projection or remote-config sidecar materializes the file after the main container starts. Duration strings require a unit, such as `2m` or `90s`. A value without a unit is rejected when configuration is loaded, and a negative value is rejected at startup. |
 | `NVCF_API_ENDPOINT` | No | Service default | Upstream invocation service endpoint. In cluster deployments, this usually points to the in-cluster invocation service. |
+| `LLM_GATEWAY_ENDPOINT` | No | Empty | Upstream LLM Gateway endpoint. Required only when a model sets `functionType: LLM`. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | Empty | OTLP endpoint for tracing. Empty disables OTLP export. |
 | `TRACING_ACCESS_TOKEN` | No | Empty | Access token for OTLP tracing. Also configurable in the secrets file under `$.tracingAccessToken`. |
 | `SECRETS_PATH` | No | `vault/secrets.json` | File used to read `tracingAccessToken` when `TRACING_ACCESS_TOKEN` is not set. |
@@ -250,6 +251,52 @@ response completes.
 
 `customHeaders` only affects outbound proxied requests; it does not add response headers. Header names must be valid HTTP field names and cannot include reserved routing, auth, protocol, proxy, or NVCF-managed names such as `Authorization`, `Host`, `function-id`, `function-version-id`, `Content-Length`, `Connection`, or any `NVCF-*` header.
 
+### LLM Function Models
+
+Set `functionType: LLM` on an OpenAI model entry to serve it from the LLM
+Gateway instead of the invocation service. Supported in `chatCompletions`,
+`responses`, and `embeddings`, the three routes the LLM Gateway serves.
+
+```yaml
+v2config:
+  openai:
+    host: api.example.com
+    chatCompletions:
+      meta_llama-3_3-70b:
+        modelName: meta/llama-3.3-70b
+        functionID: 00000000-0000-0000-0000-000000000001
+        functionType: LLM
+```
+
+Callers send the public `modelName`, exactly as they do for any other model on
+this host. The gateway looks the model up, rewrites the request `model` to
+`functionID/modelName`, and forwards it to `LLM_GATEWAY_ENDPOINT`, which routes
+on that prefix. Callers never see the function ID.
+
+`function-id`, `function-version-id`, and `nvcf-function-id` are stripped from
+these requests. The LLM Gateway resolves the function from the model, so the
+gateway sets none of them, and a caller-supplied value is removed rather than
+forwarded: the mapping is what decides which function a caller reaches.
+`Authorization`, `NVCF-POLL-SECONDS`, and the caller's other headers pass
+through unchanged.
+
+Config validation rejects `functionType: LLM` outside the three supported
+sections, and rejects `usePexec`, `outgoingPathOverride`, and `sessionTimeout`
+on those entries because the LLM Gateway ignores them. An `X-Priority` entry in
+`customHeaders` is rejected too: the LLM Gateway answers `400 Bad Request` for
+any request carrying that header. `eol`, `offlineMessage`, and the remaining
+`customHeaders` behave as they do for other models, and the model still appears
+in `/v1/models`.
+
+Shadow traffic works on these entries. Each shadow target is resolved from the
+same model table as the primary, so it is rewritten and routed by its own
+`functionType`. A shadow of an LLM model reaches the LLM Gateway, and an LLM
+model may shadow a model served by the invocation service, or the reverse.
+
+`LLM_GATEWAY_ENDPOINT` is required whenever a model sets `functionType: LLM`. It
+is the outbound address of the LLM Gateway, so it is a full URL with a scheme
+and must not carry a path.
+
 ## Invoking OpenAI-compatible Endpoints
 
 ### Chat Completions
@@ -375,6 +422,11 @@ curl -v localhost:10081/health
 curl -v -H 'Host: api.example.com' localhost:10081/health
 curl -v localhost:10083/metrics
 ```
+
+`/health` reports one check per configured upstream. The `nvcf api` check probes
+`/health` on `NVCF_API_ENDPOINT`. When a model sets `functionType: LLM`, an
+`llm api gateway` check probes `/healthz` on `LLM_GATEWAY_ENDPOINT`, since the
+LLM Gateway does not serve `/health`.
 
 `nvcf_ai_api_gateway_shadow_requests_dropped_total` counts shadow dispatches
 dropped before replay. The `openai_model_name` label identifies the shadow

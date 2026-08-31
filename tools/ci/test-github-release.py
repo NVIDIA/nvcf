@@ -30,6 +30,24 @@ def git(root, *args):
     subprocess.run(["git", *args], cwd=root, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
 
+class SubprocessShim:
+    """Stands in for the module's `subprocess`, intercepting only `gh` calls.
+
+    Every other attribute, `run` included, falls through to the real module so the
+    git plumbing under test keeps working.
+    """
+
+    def __init__(self, fake_run):
+        self._fake_run = fake_run
+
+    def __getattr__(self, name):
+        return getattr(subprocess, name)
+
+    @property
+    def run(self):
+        return self._fake_run
+
+
 @contextlib.contextmanager
 def chdir(path):
     old_cwd = os.getcwd()
@@ -977,6 +995,245 @@ class GithubReleaseTest(unittest.TestCase):
             )
             with chdir(root), self.assertRaisesRegex(SystemExit, "branch-cut requires release.dev_prerelease"):
                 self.github_release.branch_cut(args)
+
+
+    NVCA_SERVICE = {
+        "id": "nvca",
+        "path": "src/compute-plane-services/nvca",
+        "service_name": "nvca",
+        "legacy_tag_prefix": "nvca-v",
+        "version_file": "VERSION",
+        "dev_prerelease": True,
+    }
+
+    def stub_gh_comments(self, pull_requests, failing=()):
+        """Route `gh pr comment` to a recorder and stub the two API lookups.
+
+        Returns the list that collects (pull request number, comment body).
+        """
+        real_run = subprocess.run
+        posted = []
+
+        def fake_run(args, *rest, **kwargs):
+            if list(args[:3]) == ["gh", "pr", "comment"]:
+                number = args[3]
+                body = args[args.index("--body") + 1]
+                if number in failing:
+                    return subprocess.CompletedProcess(args, 1, stdout="pull request is locked")
+                posted.append((number, body))
+                return subprocess.CompletedProcess(args, 0, stdout="")
+            return real_run(args, *rest, **kwargs)
+
+        self.github_release.subprocess = SubprocessShim(fake_run)
+        self.github_release.repo_slug = lambda: "NVIDIA/nvcf"
+        self.github_release.pull_requests_for_commit = lambda slug, sha: pull_requests.get(sha, [])
+        return posted
+
+    def nvca_repo_with_tag(self, root, version="3.2.0"):
+        """Seed an nvca repo whose HEAD carries the service tag for `version`."""
+        self.init_repo(root)
+        self.write_nvca_version(root, version)
+        self.commit_all(root, "seed nvca")
+        git(root, "tag", f"src/compute-plane-services/nvca/v{version}")
+
+    def commit_backport(self, root, message):
+        (root / "src/compute-plane-services/nvca/README.md").write_text(f"{message}\n")
+        self.commit_all(root, message)
+        return self.github_release.run(["git", "rev-parse", "HEAD"], cwd=root, capture=True).strip()
+
+    def test_ancestor_service_tag_ignores_a_higher_tag_off_the_branch(self):
+        # A release branch must bound its range by what it actually contains. The
+        # highest-sorting tag can be a main-line tag the branch never had.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.nvca_repo_with_tag(root, "3.2.0")
+            self.commit_backport(root, "feat(nvca): main only")
+            git(root, "tag", "src/compute-plane-services/nvca/v3.3.0-dev.0")
+            git(root, "checkout", "-b", "release-src/compute-plane-services/nvca/v3.2", "HEAD~1")
+            self.commit_backport(root, "fix(nvca): backport")
+
+            self.assertEqual(
+                self.github_release.ancestor_service_tag(root, self.NVCA_SERVICE),
+                "src/compute-plane-services/nvca/v3.2.0",
+            )
+            self.assertEqual(
+                self.github_release.latest_service_tag(self.NVCA_SERVICE, root),
+                "src/compute-plane-services/nvca/v3.3.0-dev.0",
+                "the version sort would have bounded the range with an unreachable tag",
+            )
+
+    def test_ancestor_service_tag_prefers_the_closest_of_several_prefixes(self):
+        # Services carry legacy prefixes alongside the current one, and the newest
+        # release can sit on either. Taking the first prefix to match would reach
+        # past a closer tag and re-resolve commits an earlier release covered.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.nvca_repo_with_tag(root, "3.2.0")
+            self.commit_backport(root, "fix(nvca): released under the legacy prefix")
+            git(root, "tag", "nvca-v3.2.1")
+            self.commit_backport(root, "fix(nvca): not yet released")
+
+            self.assertEqual(
+                self.github_release.ancestor_service_tag(root, self.NVCA_SERVICE), "nvca-v3.2.1"
+            )
+            self.assertEqual(
+                self.github_release.tag_prefixes(self.NVCA_SERVICE, root),
+                ["src/compute-plane-services/nvca/v", "nvca-v"],
+                "the current prefix is checked first, so a closer legacy tag must still win",
+            )
+
+    def test_released_commits_covers_every_merge_since_the_previous_tag(self):
+        # The concurrency group cancels queued runs, so one tag can carry several
+        # merges. All of them have to be resolved, not just HEAD.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.nvca_repo_with_tag(root)
+            first = self.commit_backport(root, "fix(nvca): first backport (#1249)")
+            second = self.commit_backport(root, "fix(nvca): second backport (#1250)")
+
+            commits = self.github_release.released_commits(root, "src/compute-plane-services/nvca/v3.2.0")
+            self.assertEqual(commits, [second, first])
+
+    def test_released_commits_without_a_previous_tag_resolves_only_head(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_repo(root)
+            self.write_nvca_version(root, "3.2.0")
+            self.commit_all(root, "seed nvca")
+            head = self.commit_backport(root, "fix(nvca): first ever release")
+
+            self.assertEqual(self.github_release.released_commits(root, ""), [head])
+
+    def test_released_commits_reports_a_truncated_range(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.nvca_repo_with_tag(root)
+            self.github_release.MAX_RELEASE_COMMENT_COMMITS = 2
+            for index in range(4):
+                self.commit_backport(root, f"fix(nvca): backport {index}")
+
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                commits = self.github_release.released_commits(root, "src/compute-plane-services/nvca/v3.2.0")
+
+            self.assertEqual(len(commits), 2)
+            self.assertIn("only the newest 2 are resolved", output.getvalue())
+
+    def test_comment_release_posts_once_per_pull_request(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.nvca_repo_with_tag(root)
+            first = self.commit_backport(root, "fix(nvca): first backport")
+            second = self.commit_backport(root, "fix(nvca): second backport")
+            # The same PR can own more than one commit in the range.
+            posted = self.stub_gh_comments({first: ["1249"], second: ["1250", "1249"]})
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                commented = self.github_release.comment_release_on_pull_requests(
+                    root,
+                    self.NVCA_SERVICE,
+                    "src/compute-plane-services/nvca/v3.2.1",
+                    "3.2.1",
+                    "src/compute-plane-services/nvca/v3.2.0",
+                )
+
+            self.assertEqual(commented, ["1250", "1249"])
+            self.assertEqual([number for number, _body in posted], ["1250", "1249"])
+            body = posted[0][1]
+            self.assertIn("This PR is included in version 3.2.1.", body)
+            self.assertIn(
+                "https://github.com/NVIDIA/nvcf/releases/tag/src/compute-plane-services/nvca/v3.2.1",
+                body,
+            )
+
+    def test_comment_release_survives_a_failed_comment(self):
+        # The tag, the push, and the GitHub release already succeeded. A comment
+        # that cannot be posted must not turn a shipped release into a failure.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.nvca_repo_with_tag(root)
+            first = self.commit_backport(root, "fix(nvca): first backport")
+            posted = self.stub_gh_comments({first: ["1249", "1250"]}, failing=("1249",))
+
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                commented = self.github_release.comment_release_on_pull_requests(
+                    root,
+                    self.NVCA_SERVICE,
+                    "src/compute-plane-services/nvca/v3.2.1",
+                    "3.2.1",
+                    "src/compute-plane-services/nvca/v3.2.0",
+                )
+
+            self.assertEqual(commented, ["1250"])
+            self.assertEqual([number for number, _body in posted], ["1250"])
+            self.assertIn("could not comment", output.getvalue())
+
+    def test_create_release_reports_whether_it_created_the_release(self):
+        existing = {"seen": False}
+
+        def fake_run(args, *rest, **kwargs):
+            if list(args[:3]) == ["gh", "release", "view"]:
+                return subprocess.CompletedProcess(args, 0 if existing["seen"] else 1)
+            raise AssertionError(f"unexpected call: {args}")
+
+        self.github_release.subprocess = SubprocessShim(fake_run)
+        self.github_release.run = lambda *a, **k: ""
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertTrue(self.github_release.create_release("t", "t", "n", draft=False, dry_run=False))
+            existing["seen"] = True
+            self.assertFalse(self.github_release.create_release("t", "t", "n", draft=False, dry_run=False))
+            self.assertFalse(self.github_release.create_release("t", "t", "n", draft=False, dry_run=True))
+
+    def publish_and_capture_comments(self, version):
+        """Publish a tag for `version` from a release branch, recording any comments.
+
+        The repo is shaped like the real thing: a release branch holding the 3.2.x
+        line, with a higher dev tag on the default branch that this branch never
+        contained.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            remote = Path(tmp) / "remote.git"
+            root.mkdir()
+            subprocess.run(
+                ["git", "init", "--bare", "--initial-branch=main", str(remote)],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            self.nvca_repo_with_tag(root)
+            git(root, "remote", "add", "origin", str(remote))
+            git(root, "push", "origin", "HEAD")
+            self.commit_backport(root, "feat(nvca): default branch only")
+            git(root, "tag", "src/compute-plane-services/nvca/v3.3.0-dev.0")
+            git(root, "checkout", "-b", "release-src/compute-plane-services/nvca/v3.2", "HEAD~1")
+            self.commit_backport(root, "fix(nvca): backport")
+
+            comments = []
+            self.github_release.create_release = lambda *a, **k: True
+            self.github_release.comment_release_on_pull_requests = (
+                lambda root, service, tag, version, since_tag: comments.append((tag, version, since_tag))
+            )
+            with chdir(root), contextlib.redirect_stdout(io.StringIO()):
+                self.github_release.publish_tag_for_version(
+                    root, self.NVCA_SERVICE, version, dry_run=False, draft=False, reason="VERSION"
+                )
+            return comments
+
+    def test_publish_tag_comments_on_a_stable_release(self):
+        comments = self.publish_and_capture_comments("3.2.1")
+        self.assertEqual(
+            comments,
+            [("src/compute-plane-services/nvca/v3.2.1", "3.2.1", "src/compute-plane-services/nvca/v3.2.0")],
+            "the range must be bounded by the newest tag on this branch, not the highest tag overall",
+        )
+
+    def test_publish_tag_stays_quiet_for_a_dev_prerelease(self):
+        # Dev prereleases are internal checkpoints on the default branch, not
+        # something to announce on a pull request.
+        self.assertEqual(self.publish_and_capture_comments("3.3.0-dev.4"), [])
 
 
 if __name__ == "__main__":

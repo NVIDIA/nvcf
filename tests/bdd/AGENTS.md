@@ -49,6 +49,9 @@ logic into `dsl/`.
 
 ## Vocabulary rules
 
+- Feature assertions must not hard-code released component versions. Verify
+  artifact identity without the tag, or derive the expected version from the
+  authoritative stack or chart configuration.
 - `${VAR}` interpolation is the only env-var form the DSL recognizes;
   a bare `$word` is left literal. Implementations must not use
   `os.ExpandEnv`. Expansion lives in `dsl.Interpolate`.

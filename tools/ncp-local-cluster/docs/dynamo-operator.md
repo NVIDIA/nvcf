@@ -97,13 +97,14 @@ helm upgrade --install grove \
 # Operator pod running
 kubectl get pods -n grove-operator -l app.kubernetes.io/name=grove-operator
 
-# All five Grove CRDs established
+# All six Grove CRDs established
 kubectl get crd | grep -E "grove\.io|scheduler\.grove\.io"
 # Expected output includes:
-#   clustertopologies.grove.io
+#   clustertopologybindings.grove.io
 #   podcliques.grove.io
 #   podcliquescalinggroups.grove.io
 #   podcliquesets.grove.io
+#   podgangmaps.grove.io
 #   podgangs.scheduler.grove.io
 
 # Webhooks registered

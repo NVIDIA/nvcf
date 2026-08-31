@@ -36,7 +36,7 @@ global:
     # This DNS name is local to each cluster. On the compute cluster, the
     # ncp-local alias Service forwards it to the control-plane load balancer.
     # NVCF API advertises this value as LLM_REQUEST_ROUTER_ADDRESS.
-    llmRequestRouterAddress: llm-request-router.nvcf.svc.cluster.local:50071
+    llmRequestRouterAddress: https://llm-request-router.nvcf.svc.cluster.local:50071
 
 # Local BDD does not install the optional observability stack.
 observability:
@@ -58,10 +58,6 @@ openbao:
     # Single-node local cluster: hard anti-affinity would leave the 2nd replica Pending.
     replicas: 1
 
-api:
-  env:
-    NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE: nvcr.io/REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM/stargate-client:0.2.0
-
 # LLM gateway talks to nvcf-api over plaintext gRPC in local dev
 # (api.nvcf.svc.cluster.local:9090 has no TLS).
 addons:
@@ -78,10 +74,16 @@ addons:
       # Validate authority/SNI demultiplexing across three concrete Stargates.
       chartPath: ../../../helm/llm-request-router/llm-request-router
       replicaCount: 3
+      grpcTls:
+        enabled: true
+        mode: certManager
+        secretName: llm-request-router-grpc-tls
+        dnsNames:
+          - llm-request-router.nvcf.svc.cluster.local
       backendRouter:
         # These are control-plane-local for Stargate and compute-reachable
         # through the identically named alias Service in the compute cluster.
-        pylonGrpcDialAddress: llm-request-router.nvcf.svc.cluster.local:50071
+        pylonGrpcDialAddress: https://llm-request-router.nvcf.svc.cluster.local:50071
         pylonReverseTunnelDialAddress: llm-request-router.nvcf.svc.cluster.local:50072
       metrics:
         serviceMonitor:

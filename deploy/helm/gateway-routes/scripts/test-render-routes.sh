@@ -177,6 +177,7 @@ helm template nvcf-gateway-routes "$repo_root/chart" \
   --set nvcfGatewayRoutes.routes.nats.enabled=true \
   --set nvcfGatewayRoutes.routes.llmWorker.enabled=true \
   --set nvcfGatewayRoutes.routes.llmWorker.backend.namespace=nvcf \
+  --set llmRequestRouter.grpcTls.allowInsecureHttp=true \
   --set nvcfGatewayRoutes.gateways.nats.name=nats-gateway \
   --set nvcfGatewayRoutes.gateways.nats.namespace=gateway \
   --set nvcfGatewayRoutes.gateways.nats.listenerName=nats \
