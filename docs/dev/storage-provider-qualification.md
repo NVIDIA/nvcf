@@ -86,21 +86,40 @@ class gets a new empty volume, not the cache.
 
 ### OCI FSS, fss.csi.oraclecloud.com
 
-Not qualified. Performance was measured in August. The cache workflow was
-not.
+Cluster `nvcf-dgxc-k8s-oci-jbt-ct4`, storage class `fss-nvcf-test`. Measured
+2026-08-31. Same writer payload and the same SHA-256 as the Weka run.
 
-The target cluster is `nvcf-dgxc-k8s-oci-jbp-ct4`, reached through the
-production Teleport proxy `nv-prd-dgxc.teleport.sh`, not the staging proxy
-that serves the Weka cluster. Log in to that proxy before `tsh kube login`.
+| Reader | Export | Sees cache | Mount | Writes |
+|---|---|---|---|---|
+| static PV, RWX claim, other namespace | writer export | yes, hash matches | nfs ro,relatime | blocked, EROFS |
+| static PV, ROX claim, other namespace | writer export | yes, hash matches | nfs ro,relatime | blocked, EROFS |
+| fresh dynamic PVC, same class | new export | no, only `.snapshot` | nfs ro,relatime | blocked, EROFS |
 
-The OCI dev clusters are not a substitute. `nvcf-dgxc-k8s-oci-iad-dev1` and
-`nvcf-dgxc-k8s-oci-ord-dev1` register the FSS CSI driver but neither has an
-FSS storage class.
+FSS qualifies for `[ReadWriteMany, ReadOnlyMany]`, by the same mechanism as
+Weka: a static PV in the reader namespace reusing the writer's volume handle
+unchanged. FSS handles look like
+`<filesystem-ocid>:<mount-target-ip>:<export-path>` and carry no namespace.
+
+Three cluster facts constrain how NVCA runs there.
+
+The FSS CSI driver declares `fsGroupPolicy: ReadWriteOnceWithFSType`, so
+Kubernetes does not apply `fsGroup` ownership to a ReadWriteMany volume. A
+fresh export is owned `root:root` mode 0755 and a non-root writer gets EACCES.
+The cache writer must run as root on FSS, or the export must be prepared
+first. Weka does not have this constraint because `csi.weka.io` declares
+`fsGroupPolicy: File`.
+
+All three FSS classes on that cluster use reclaim policy Delete. The model
+cache class must be Retain, so an FSS deployment needs a class created for it.
+
+CRI-O on that cluster runs with short-name resolution enforcing, so image
+references must be fully qualified. `python:3.12-slim` fails with
+`ImageInspectError`; `docker.io/library/python:3.12-slim` works.
 
 ### OCI Lustre, lustre.csi.oraclecloud.com
 
-Not qualified. The driver is registered on the same OCI dev clusters. No PVC
-access mode has been qualified in a cache workflow.
+Not qualified. The driver is registered on the same cluster. No PVC access
+mode has been qualified in a cache workflow.
 
 ## The shared filesystem assumption
 
@@ -118,10 +137,15 @@ explicitly.
 The assumption holds only for a class where every dynamically provisioned
 claim lands on the same directory. That is not what a CSI driver normally
 does. EFS creates an access point per claim, CephFS a subvolume, Weka a new
-filesystem, and OCI FSS a new file system or export. It holds for a class
+filesystem, and OCI FSS a new export. Weka and FSS were both measured doing
+exactly that. It holds for a class
 pinned to one export with no per-volume subdirectory, which is how the NFS and
 SMB CSI drivers behave when `subDir` or `source` is fixed. That configuration
 has to be built deliberately.
+
+Note that the SMB CSI driver is registered on the FSS cluster, so a pinned SMB
+class is available there in principle. That is the configuration the path
+actually supports.
 
 So the path is usable only by a `nvcf-miniservice-sc` an operator
 pre-provisioned that way. It is not usable by the drivers its own comment
