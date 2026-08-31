@@ -19,6 +19,7 @@ test:
 	@tests/image-override-wiring.sh
 	@tests/sidecar-registry-wiring.sh
 	@tests/api-env-wiring.sh
+	@tests/nats-placement-tags.sh
 
 test-published-charts:
 	@: "$${NVCF_PUBLISHED_CHART_REGISTRY:?NVCF_PUBLISHED_CHART_REGISTRY is required}"
