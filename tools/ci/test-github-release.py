@@ -499,6 +499,109 @@ class GithubReleaseTest(unittest.TestCase):
                 self.github_release.synthesize_initial_version_anchor(root, service)
             self.assertIn("deploy/helm/encrypted-secret-store/v0.0.0", self._tags(root))
 
+    def _make_prerelease_service_repo(self, root):
+        """A service whose only tags are prereleases, like nvca before the migration."""
+        self.init_repo(root)
+        (root / "README.md").write_text("root\n")
+        self.commit_all(root, "chore: init")
+        service_dir = root / "src/compute-plane-services/nvca"
+        service_dir.mkdir(parents=True, exist_ok=True)
+        (service_dir / "README.md").write_text("nvca\n")
+        self.commit_all(root, "feat(nvca): import service")
+
+    NVCA_FLOOR_SERVICE = {
+        "id": "nvca",
+        "path": "src/compute-plane-services/nvca",
+        "service_name": "nvca",
+        "initial_version": "3.3.0",
+    }
+
+    def test_floor_applies_when_only_prerelease_tags_exist(self):
+        # The migration case: hundreds of -dev.N tags used to suppress the floor
+        # entirely, so semantic-release saw no baseline and restarted the line.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._make_prerelease_service_repo(root)
+            git(root, "tag", "src/compute-plane-services/nvca/v3.3.0-dev.1")
+            (root / "src/compute-plane-services/nvca" / "README.md").write_text("more\n")
+            self.commit_all(root, "fix(nvca): later change")
+            git(root, "tag", "src/compute-plane-services/nvca/v3.3.0-dev.2")
+
+            with chdir(root), contextlib.redirect_stdout(io.StringIO()):
+                self.github_release.synthesize_initial_version_anchor(root, self.NVCA_FLOOR_SERVICE)
+
+            self.assertIn("src/compute-plane-services/nvca/v3.3.0", self._tags(root))
+
+    def test_floor_applies_when_the_stable_line_is_not_reachable(self):
+        # nvca's 3.2 line lives on a maintenance branch cut with a synthetic root,
+        # so it is not an ancestor of the default branch and is not a baseline.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._make_prerelease_service_repo(root)
+            main_branch = self.github_release.run(
+                ["git", "branch", "--show-current"], cwd=root, capture=True
+            ).strip()
+
+            git(root, "switch", "-c", "release-nvca-3.2")
+            (root / "src/compute-plane-services/nvca" / "README.md").write_text("on the train\n")
+            self.commit_all(root, "fix(nvca): patch on the release train")
+            git(root, "tag", "src/compute-plane-services/nvca/v3.2.17")
+            git(root, "switch", main_branch)
+
+            with chdir(root), contextlib.redirect_stdout(io.StringIO()):
+                self.github_release.synthesize_initial_version_anchor(root, self.NVCA_FLOOR_SERVICE)
+
+            self.assertEqual(self.github_release.release_baseline_version(root, self.NVCA_FLOOR_SERVICE), "")
+            self.assertIn("src/compute-plane-services/nvca/v3.3.0", self._tags(root))
+
+    def test_floor_is_ignored_once_a_reachable_stable_tag_catches_up(self):
+        # The floor is a floor, not an override: a real release at or above it wins.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._make_prerelease_service_repo(root)
+            git(root, "tag", "src/compute-plane-services/nvca/v3.4.0")
+
+            with chdir(root), contextlib.redirect_stdout(io.StringIO()):
+                self.github_release.synthesize_initial_version_anchor(root, self.NVCA_FLOOR_SERVICE)
+
+            self.assertEqual(
+                self.github_release.release_baseline_version(root, self.NVCA_FLOOR_SERVICE), "3.4.0"
+            )
+            self.assertNotIn("src/compute-plane-services/nvca/v3.3.0", self._tags(root))
+
+    def test_floor_anchor_lands_on_the_newest_tag_not_the_start_of_history(self):
+        # Anchoring at the start of the subtree would hand semantic-release every
+        # commit the service ever had, so one historical `feat!` could force a major.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._make_prerelease_service_repo(root)
+            git(root, "tag", "src/compute-plane-services/nvca/v3.3.0-dev.1")
+            newest = self.github_release.run(
+                ["git", "rev-parse", "HEAD"], cwd=root, capture=True
+            ).strip()
+            (root / "src/compute-plane-services/nvca" / "README.md").write_text("after\n")
+            self.commit_all(root, "fix(nvca): after the last dev tag")
+
+            with chdir(root), contextlib.redirect_stdout(io.StringIO()):
+                self.github_release.synthesize_initial_version_anchor(root, self.NVCA_FLOOR_SERVICE)
+
+            anchored = self.github_release.tag_sha(root, "src/compute-plane-services/nvca/v3.3.0")
+            self.assertEqual(anchored, newest)
+
+    def test_the_migrated_services_all_resolve_a_floor_above_their_baseline(self):
+        # Guards the cutover itself: if any of the four stopped needing its floor,
+        # its first automatic release would silently restart or regress the line.
+        metadata = json.loads(SCRIPT_PATH.with_name("github-release-subprojects.json").read_text())
+        by_id = {s["id"]: s for s in metadata["services"]}
+        for service_id, floor in (
+            ("nvca", "3.3.0"),
+            ("nvcf-compute-plane-stack", "0.2.0"),
+            ("nvcf-self-managed-stack", "0.8.0"),
+            ("nvcf-observability-stack", "0.0.0"),
+        ):
+            with self.subTest(service=service_id):
+                self.assertEqual(self.github_release.initial_floor_version(by_id[service_id]), floor)
+
     def test_initial_version_anchor_honors_metadata(self):
         service = {
             "id": "ess-helm",

@@ -258,42 +258,60 @@ NVCA, `nvcf-compute-plane-stack`, `nvcf-self-managed-stack`, and
 `VERSION` file, and a stable version only appeared on a release branch.
 They now use semantic-release like every other service.
 
-`initial_version` alone could not carry those version lines across.
-The floor is only synthesized when a service has no tags at all, and
-each of the four had hundreds of `-dev.N` tags. Their stable tags were
-also unreachable from `main`: the NVCA 3.2 line lives on
-`release-src/compute-plane-services/nvca/v3.2`, and two of the stacks
-had no stable tag at all. Left alone, semantic-release would have
-restarted each line at `0.1.0`.
+Each declares an `initial_version` floor equal to the version its
+`VERSION` file last held:
 
-Each line was carried across with one `anchor` per service, at the
-version its `VERSION` file last held:
-
-| Service | Anchored version |
+| Service | Floor |
 | --- | --- |
 | `nvca` | `3.3.0` |
 | `nvcf-compute-plane-stack` | `0.2.0` |
 | `nvcf-self-managed-stack` | `0.8.0` |
 | `nvcf-observability-stack` | `0.0.0` |
 
-Anchor each one on the newest commit that touched its own subtree, not
-on the commit its newest `-dev.N` tag points at. All four services
-received a dev tag on every default-branch push, so their newest dev
-tags share one commit, and `refs/notes/semantic-release` holds one note
-per commit. Anchoring them all on that shared commit would fail on the
-second service.
+The floor is a local computation baseline. Nothing is pushed for it, so
+no tag and no GitHub Release exist at the floor version and nothing
+downstream reacts to it. The first published release is the next bump
+above the floor: `3.3.1` for an NVCA `fix`, `3.4.0` for a `feat`.
 
-```bash
-sha="$(git log -n1 --format=%H origin/main -- src/compute-plane-services/nvca)"
-./tools/ci/github-release anchor --service nvca --version 3.3.0 --ref "${sha}" --dry-run
-./tools/ci/github-release anchor --service nvca --version 3.3.0 --ref "${sha}" --push
-```
+For the two stacks the floor names a version that was never released,
+so their first stable release skips it: the line reads
+`0.2.0-dev.518` then `0.2.1`. That gap is deliberate. Setting the floor
+one minor lower would let a `feat` land on `0.2.0`, but a `fix` would
+then land on `0.1.1`, behind the dev series those stacks already
+published.
 
-`anchor` writes a tag and a note; it does not create a GitHub Release.
-The internal release dispatcher reacts to Releases, so an anchor starts
-no image pipeline. The first real release for each service is the next
-bump above its anchor, for example `3.3.1` for an NVCA `fix` or `3.4.0`
-for a `feat`.
+### Why the floor has to outrank the computed baseline
+
+`initial_version` applies whenever the version semantic-release would
+otherwise compute from is below it. The narrower rule it replaced only
+synthesized a floor for a service with no tags at all, which silently
+skipped every service migrating off the dev-prerelease model:
+
+- Each of the four carries hundreds of `-dev.N` tags, and any tag at
+  all used to suppress the floor.
+- semantic-release ignores prereleases when it resolves the last
+  release, so those tags are not a baseline either.
+- The stable line they had already shipped is not reachable from
+  `main`. `branch-cut` created a release branch from a synthetic root
+  commit (`chore(release): snapshot default branch for linear history`)
+  rather than branching from `main`, so the whole NVCA 3.2 line is a
+  parallel history. Only `src/compute-plane-services/nvca/v3.1.0`, cut
+  before that mechanism existed, is an ancestor of `main`.
+
+Left alone, NVCA would have computed `3.2.0` from `3.1.0` and failed on
+a tag that already exists at a different commit, and the two stacks
+with no stable tag would have restarted at `0.1.0`.
+
+`release_baseline_version` answers the same question semantic-release
+asks: the highest stable version whose tag is an ancestor of `HEAD`. It
+honors `reset_release_history`, so a service that deliberately restarted
+its line does not pick a baseline out of the tags it left behind.
+
+The synthesized anchor lands on the commit of the service's newest tag,
+prereleases included, rather than at the start of the subtree's history.
+Anchoring at the start would hand semantic-release every commit the
+service ever had, where a single historical breaking change could force
+a major.
 
 ## Cutover anchors
 
@@ -350,8 +368,11 @@ Add the service to the release metadata in
 - `path`: repo-relative subtree path, which also drives the tag format
   `<path>/v<X.Y.Z>`
 - `service_name`: release or package name
-- `initial_version`: optional SemVer floor to start the line from. Omit
-  it to start from a `0.0.0` floor, where the next version depends on the
+- `initial_version`: optional SemVer floor for the line. It applies
+  whenever the baseline semantic-release would otherwise compute is
+  below it, which includes a service that has only prerelease tags or
+  whose stable line is not reachable from the default branch. Omit it to
+  start from a `0.0.0` floor, where the next version depends on the
   commit type: a `feat` yields `0.1.0`, a `fix` yields `0.0.1`, and
   release-neutral commits produce no release. An empty string is
   rejected; either omit the field or give a valid SemVer.
@@ -388,8 +409,9 @@ Pick the case that matches your situation.
 Use this for a brand-new line with no tags when you want it to start
 above `0.0.0`. Set `initial_version` to the desired floor in the
 registration; omit it, or use `0.0.0`, to start at the default.
-`initial_version` only takes effect while the service has no tags; once
-any tag exists it is ignored (see Case 3).
+`initial_version` stops taking effect once a stable tag reachable from
+the default branch reaches it; a higher real release always wins (see
+Case 3).
 
 Then just commit the registration. On the next `main` push,
 `./tools/ci/github-release auto` synthesizes the floor locally and cuts
@@ -430,11 +452,12 @@ The next release then bumps from the anchored version.
 
 #### Case 3: service or chart already has tags, pin a new version
 
-Use this when the line already has release tags and you want to move the
-floor to a specific version, for example to match a new upstream product
-version. `initial_version` is ignored once tags exist, and `anchor`
-refuses to run when the target commit already carries a
-`refs/notes/semantic-release` note. Pin the version by pushing a plain
+Use this when the line already has a reachable stable tag at or above
+the floor and you want to move it to a specific version, for example to
+match a new upstream product version. Raising `initial_version` also
+works and needs no tag push, but a pushed tag is the right tool when the
+version must exist on the remote. Note that `anchor` refuses to run when
+the target commit already carries a `refs/notes/semantic-release` note. Pin the version by pushing a plain
 floor tag. semantic-release and `latest_service_tag` derive the baseline
 from tag names, so the highest tag wins while the existing note keeps the
 commit marked as released:
