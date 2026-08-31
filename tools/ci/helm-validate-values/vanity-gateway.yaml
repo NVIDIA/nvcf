@@ -5,9 +5,7 @@ vanityGateway:
     repository: foo/bar/baz
   serviceMonitor:
     enabled: true
-  # Exercise an LLM-routed model so schema regressions surface in CI. Setting
-  # functionType also triggers the conditional requirement on
-  # config.llmGatewayEndpoint, which the chart default satisfies.
+  # An LLM-routed model, so schema regressions surface on every lint.
   mappingConfig:
     v2config:
       openai:
