@@ -184,7 +184,7 @@ The following tables list the complete artifact inventory.
 | `cert-manager-webhook` | `v1.20.2` | Required | Validates and converts cert-manager API resources. | `nvcr.io/nvidia/nvcf/cert-manager-webhook:v1.20.2` | [Upstream](https://github.com/cert-manager/cert-manager) |
 | `ess-api` | `v0.57.26` | Required | Provides encrypted application secrets to NVCF workloads. | `nvcr.io/nvidia/nvcf/ess-api:v0.57.26` |  |
 | `llm-api-gateway` | `0.8.3` | Optional | Exposes OpenAI-compatible APIs for LLM functions. | `nvcr.io/0833294136851237/selfhosted-ga/llm-api-gateway:0.8.3-ea` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/invocation-plane-services/llm-api-gateway) |
-| `llm-request-router` | `0.14.1` | Optional | Routes LLM requests to eligible worker instances. | `nvcr.io/nvidia/nvcf/stargate:0.14.1` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/libraries/rust/stargate) |
+| `llm-request-router` | `0.14.2` | Optional | Routes LLM requests to eligible worker instances. | `nvcr.io/nvidia/nvcf/stargate:0.14.2` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/libraries/rust/stargate) |
 | `nats-box` | `0.19.7-nonroot` | Required | Provides NATS administration and diagnostic utilities. | `nvcr.io/nvidia/nvcf/nats-box:0.19.7-nonroot` | [Upstream](https://github.com/nats-io/nats-box) |
 | `nats-server` | `2.11.17-alpine3.22` | Required | Provides messaging for function deployment and invocation. | `nvcr.io/nvidia/nvcf/nats-server:2.11.17-alpine3.22` | [Upstream](https://github.com/nats-io/nats-server) |
 | `nats-server-config-reloader` | `0.23.0` | Required | Reloads NATS server configuration when mounted settings change. | `docker.io/natsio/nats-server-config-reloader:0.23.0` | [Upstream](https://github.com/nats-io/k8s) |

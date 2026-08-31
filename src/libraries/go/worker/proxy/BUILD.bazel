@@ -60,6 +60,7 @@ go_test(
     name = "proxy_test",
     srcs = [
         "h3_addrlist_test.go",
+        "h3_rotate_test.go",
         "proxy_e2e_test.go",
         "proxy_extra_test.go",
         "proxy_test.go",

@@ -90,6 +90,14 @@
       "legacy_tag_prefix": "nvcf-invocation-service-v"
     },
     {
+      "id": "http-invocation-helm",
+      "path": "deploy/helm/http-invocation",
+      "service_name": "helm-nvcf-invocation-service",
+      "deploys": [
+        "http-invocation"
+      ]
+    },
+    {
       "id": "stargate",
       "path": "src/libraries/rust/stargate",
       "service_name": "stargate",

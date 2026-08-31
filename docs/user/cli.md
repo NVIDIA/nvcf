@@ -691,6 +691,29 @@ API key, which `api-key generate` mints automatically alongside the function key
   --inference-port 8000 \
   --function-type LLM \
   --llm-model "name=dummy-model,uris=/v1/chat/completions|/v1/responses|/v1/embeddings,routingMethod=round_robin,tokenRateLimit=1000-S"
+
+# Create an LLM function with request priority
+./nvcf-cli function create \
+  --name "my-priority-llm-function" \
+  --image "nvcr.io/example/openai-compatible:latest" \
+  --inference-url "/" \
+  --inference-port 8000 \
+  --function-type LLM \
+  --llm-model "name=dummy-model,uris=/v1/chat/completions" \
+  --llm-default-priority 7 \
+  --llm-per-account-priority "nca-id:3"
+
+# Create an LLM function with request priority for multiple accounts
+./nvcf-cli function create \
+  --name "my-multi-account-priority-llm-function" \
+  --image "nvcr.io/example/openai-compatible:latest" \
+  --inference-url "/" \
+  --inference-port 8000 \
+  --function-type LLM \
+  --llm-model "name=dummy-model,uris=/v1/chat/completions" \
+  --llm-default-priority 7 \
+  --llm-per-account-priority "nca-a:3" \
+  --llm-per-account-priority "nca-b:5"
 ```
 
 All `function create` flags:
@@ -716,6 +739,8 @@ All `function create` flags:
 | `--tags` | Comma-separated tags |
 | `--models` | Model artifacts in `name:version:uri` format (repeatable) |
 | `--llm-model` | LLM model config in `name=MODEL,uris=URI\|URI,routingMethod=round_robin\|power_of_two\|groq_multiregion\|pulsar\|random,tokenRateLimit=LIMIT` format (repeatable). Token limits use `<value>-<unit>` with `S`, `M`, `H`, `D`, or `W`, for example `1000-S`. Use JSON input for combined token limits because inline model specs use commas as field separators. |
+| `--llm-default-priority` | Function-level default request priority. Lower values have higher priority, and `0` is highest. |
+| `--llm-per-account-priority` | Per-account override in `<nca-id>:<priority>` format. Repeatable; supports up to 64 distinct NCA ID overrides. Requires a default priority. |
 | `--resources` | Resource artifacts in `name:version:uri` format (repeatable) |
 | `--helm-chart` | Helm chart specification |
 | `--helm-chart-service` | Helm chart service name |
@@ -888,6 +913,13 @@ Example deployment JSON:
   --function-id <function-id> \
   --version-id <version-id> \
   --llm-model-update "name=dummy-model,routingMethod=round_robin,tokenRateLimit=1000-S"
+
+# Replace the function-level request priority configuration
+./nvcf-cli function update \
+  --function-id <function-id> \
+  --version-id <version-id> \
+  --llm-default-priority 7 \
+  --llm-per-account-priority "nca-id:3"
 
 # Update from JSON file
 ./nvcf-cli function update \

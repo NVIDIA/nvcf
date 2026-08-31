@@ -73,6 +73,9 @@ assert_contains "$default_render" "- nats-nkeys"
 assert_contains "$default_render" "- nats-auth-callout-nkeys"
 # The post-install hook from the previous design must be gone.
 assert_not_contains "$default_render" "nats-auth-callout-secrets-json-hook"
+assert_contains "$default_render" '"server_tags": ['
+assert_contains "$default_render" '"dc:ncp",'
+assert_contains "$default_render" '"aws-region:ncp"'
 
 no_create_render="$tmpdir/no-create.yaml"
 render --set nats.authCallout.createNkeySecret=false > "$no_create_render"
