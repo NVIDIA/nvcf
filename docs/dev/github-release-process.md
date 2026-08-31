@@ -108,6 +108,24 @@ src/compute-plane-services/nvca/v<X.Y.Z>-dev.N
 On a matching release branch, the workflow creates the next stable
 patch tag for that train.
 
+Every stable release the workflow creates from a version file comments
+the version it shipped on the pull requests that release covers, which
+is the note `@semantic-release/github` posts for the services it
+manages:
+
+```text
+This PR is included in version 3.2.14.
+```
+
+Dev prerelease tags stay silent, and a re-run over a release that
+already exists does not comment again. The commented range starts at
+the closest release tag reachable from the branch rather than the
+highest-sorting tag, because a release branch is cut with a synthetic
+root and never contained most default-branch tags. It covers every
+commit since that tag rather than only the tagged commit, because the
+workflow's concurrency group cancels queued runs and a superseded push
+is first tagged by the next run to finish.
+
 The self-managed stack is not in this auto-tag set until it has a
 monorepo version source. Its release config currently keeps default
 branch release tagging disabled.

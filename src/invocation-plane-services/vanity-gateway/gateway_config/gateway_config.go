@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -77,6 +78,11 @@ type ModelFunctionDetails struct {
 	ShadowPercentage               *int                  `json:"shadowPercentage,omitempty"` // 1-100 when set; omitted defaults to 100
 	ShadowSamplingMethod           ShadowSamplingMethod  `json:"shadowSamplingMethod,omitempty"`
 	ShadowCancelOnClientDisconnect bool                  `json:"shadowCancelOnClientDisconnect,omitempty"` // cancel shadow when primary completes; default false
+	FunctionType                   FunctionType          `json:"functionType,omitempty"`
+}
+
+func (m ModelFunctionDetails) TargetsLLMGateway() bool {
+	return m.FunctionType == FunctionTypeLLM
 }
 
 func (m *ModelFunctionDetails) UnmarshalJSON(data []byte) error {
@@ -130,6 +136,18 @@ type VanityEntry struct {
 	Host  string                         `json:"host"`
 	Paths map[string]PathFunctionDetails `json:"paths"`
 }
+
+// FunctionType selects which upstream serves a model. The empty value keeps the
+// historical behavior of invoking the function through the NVCF invocation API.
+type FunctionType string
+
+const (
+	FunctionTypeDefault FunctionType = ""
+	FunctionTypeLLM     FunctionType = "LLM"
+)
+
+// llmGatewaySections are the OpenAI-compatible sections the LLM Gateway serves.
+var llmGatewaySections = []string{"chatCompletions", "responses", "embeddings"}
 
 type V2Config struct {
 	OpenAI struct {
@@ -269,6 +287,9 @@ func validateOpenAISection(sectionName string, entries map[string]ModelFunctionD
 		if err := validateCustomHeaders(location, entry.CustomHeaders); err != nil {
 			return err
 		}
+		if err := validateFunctionType(location, sectionName, entry); err != nil {
+			return err
+		}
 	}
 
 	if isMultipartOpenAISection(sectionName) {
@@ -348,6 +369,12 @@ var reservedCustomHeaderNames = map[string]struct{}{
 	"x-forwarded-proto":   {},
 }
 
+// The LLM Gateway rejects any request carrying X-Priority, on header presence
+// rather than value, so a configured value would fail every request.
+var llmGatewayReservedCustomHeaderNames = map[string]struct{}{
+	"x-priority": {},
+}
+
 func validateCustomHeaders(location string, headers CustomHeaders) error {
 	seenNames := make(map[string]string, len(headers))
 	for name := range headers {
@@ -423,6 +450,56 @@ func (c *GatewayConfig) validateVanityConfig() error {
 	}
 
 	return nil
+}
+
+// validateLLMGatewayModel checks a model routed to the LLM Gateway. The gateway
+// rewrites the request model to functionID/modelName and forwards it, so the
+// invocation-only fields are meaningless here.
+func validateLLMGatewayModel(location string, sectionName string, entry ModelFunctionDetails) error {
+	if !slices.Contains(llmGatewaySections, sectionName) {
+		return fmt.Errorf("%s: functionType %q is only supported in %s", location, FunctionTypeLLM, strings.Join(llmGatewaySections, ", "))
+	}
+	if entry.FunctionID == "" {
+		return fmt.Errorf("%s: functionID is required for functionType %q", location, FunctionTypeLLM)
+	}
+	if entry.UsePexec {
+		return fmt.Errorf("%s: usePexec is unsupported for functionType %q", location, FunctionTypeLLM)
+	}
+	if entry.OutgoingPathOverride != "" {
+		return fmt.Errorf("%s: outgoingPathOverride is unsupported for functionType %q", location, FunctionTypeLLM)
+	}
+	if entry.SessionTimeout != 0 {
+		return fmt.Errorf("%s: sessionTimeout is unsupported for functionType %q", location, FunctionTypeLLM)
+	}
+	for name := range entry.CustomHeaders {
+		if _, ok := llmGatewayReservedCustomHeaderNames[strings.ToLower(name)]; ok {
+			return fmt.Errorf("%s: customHeaders cannot set %q for functionType %q; the LLM Gateway rejects requests carrying it", location, name, FunctionTypeLLM)
+		}
+	}
+	return nil
+}
+
+func validateFunctionType(location string, sectionName string, entry ModelFunctionDetails) error {
+	switch entry.FunctionType {
+	case FunctionTypeDefault:
+		return nil
+	case FunctionTypeLLM:
+		return validateLLMGatewayModel(location, sectionName, entry)
+	default:
+		return fmt.Errorf("%s: functionType must be %q when set", location, FunctionTypeLLM)
+	}
+}
+
+// HasLLMGatewayRoute reports whether any model is routed to the LLM Gateway.
+func (c *GatewayConfig) HasLLMGatewayRoute() bool {
+	for _, entries := range c.openAISections() {
+		for _, entry := range entries {
+			if entry.TargetsLLMGateway() {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func SetupConfigWithConfigPath(path string) (rc.ReloadableConfig[GatewayConfig], error) {

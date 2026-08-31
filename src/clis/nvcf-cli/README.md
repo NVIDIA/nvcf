@@ -619,6 +619,17 @@ export NVCF_TOKEN="nvapi-your-function-creation-token"
   --inference-port 8000 \
   --function-type "LLM" \
   --llm-model "name=dummy-model,uris=/v1/chat/completions|/v1/responses|/v1/embeddings,routingMethod=round_robin,tokenRateLimit=1000-S"
+
+# Create an LLM function with request priority
+./nvcf-cli function create \
+  --name "my-priority-llm-function" \
+  --image "nvcr.io/example/openai-compatible:latest" \
+  --inference-url "/" \
+  --inference-port 8000 \
+  --function-type "LLM" \
+  --llm-model "name=dummy-model,uris=/v1/chat/completions" \
+  --llm-default-priority 7 \
+  --llm-per-account-priority "nca-id:3"
 ```
 
 **Required flags:**
@@ -745,6 +756,13 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"  # optional fallback
   --function-id "func-12345678-1234-1234-1234-123456789abc" \
   --version-id "ver-12345678-1234-1234-1234-123456789abc" \
   --llm-model-update "name=dummy-model,routingMethod=round_robin,tokenRateLimit=1000-S"
+
+# Replace the function-level request priority configuration
+./nvcf-cli function update \
+  --function-id "func-12345678-1234-1234-1234-123456789abc" \
+  --version-id "ver-12345678-1234-1234-1234-123456789abc" \
+  --llm-default-priority 7 \
+  --llm-per-account-priority "nca-id:3"
 
 # Update function deployment specifications
 ./nvcf-cli function deploy update \
@@ -1686,6 +1704,13 @@ into three user-facing phases:
 
 Use `--phase` to filter to one of `ACTIVE`, `DEPLOYING`, `DRAINING`, or `FAILED`.
 
+A termination request never carries its own function ID or version ID; NVCA
+relays it verbatim from the upstream message. `list-functions` and
+`get-function` recover it by correlating the termination request's instance
+IDs against every other same-namespace `ICMSRequest`'s instances. `list-functions`
+omits a `DRAINING` record when identity cannot be recovered this way, rather
+than showing one with empty IDs.
+
 ### Authentication
 
 `status`, `list-functions`, and `get-function` read from the cluster's
@@ -1756,14 +1781,19 @@ the desired state.
 
 ### How kill works
 
-`kill-function` and `kill-all` delete the matching `ICMSRequest` CRs; the NVCA
-reconciler detects the deletion and evicts the workloads. Deleting a CR only
-accepts the deletion; the object stays `Terminating` behind its finalizer
-until NVCA finishes evicting the workload and removes it. The command polls
-for the CR to actually disappear before reporting success: a request removed
-within `--timeout` (default 60s) is reported `deleted`, and one still present
-when the timeout elapses is reported `terminating` instead, with a non-zero
-exit code. `--force` additionally strips finalizers so a request stuck
+`kill-function` and `kill-all` terminate the matching `ICMSRequest`'s
+instances directly (deleting the Pod for a container function, or the
+`MiniService` object for a Helm function), mark them terminated on the CR,
+then delete the CR. Deleting the CR alone never evicts the workload: NVCA's
+reconciler only clears the CR's finalizer once its own `status.instances`
+shows every instance gone and reported terminated, and nothing else in NVCA
+ever produces that for a CLI-initiated kill. Performing the eviction and
+status update directly satisfies that precondition, so NVCA's own reconcile
+clears the finalizer on its next pass. The command polls for the CR to
+actually disappear before reporting success: a request removed within
+`--timeout` (default 60s) is reported `deleted`, and one still present when
+the timeout elapses is reported `terminating` instead, with a non-zero exit
+code. `--force` additionally strips finalizers so a request stuck
 `Terminating` is removed even when NVCA is not running to process its
 finalizer.
 
@@ -1786,8 +1816,10 @@ and `--json` for automation.
 
 These commands need write access to the target cluster: list/update on the
 `NVCFBackend` CR for drain (plus read access to the `agent-config` ConfigMap
-and the `nvca` Deployment, to wait for the NVCA operator's rollout), and
-list/delete (and update, with `--force`) on `ICMSRequest` CRs for kill.
+and the `nvca` Deployment, to wait for the NVCA operator's rollout), and for
+kill, list/delete (and update, with `--force`) on `ICMSRequest` CRs, update on
+the `ICMSRequest` status subresource, delete on Pods in the requests
+namespace, and delete on `MiniService` CRs (cluster-scoped).
 
 ### Examples
 

@@ -51,7 +51,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
-tonic = { workspace = true }
+tonic = { workspace = true, features = ["tls-aws-lc", "tls-native-roots", "tls-webpki-roots"] }
 tracing = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 stargate-auth = { workspace = true }
@@ -67,7 +67,10 @@ uuid = { workspace = true }
 [dev-dependencies]
 criterion = "0.5"
 opentelemetry_sdk = { workspace = true }
+rcgen = { workspace = true }
+tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
+tower = { workspace = true }
 
 [[bench]]
 name = "engine_stats_stream"

@@ -191,6 +191,30 @@ func TestRender_Helm4CompatApplyUsesLegacyTrackMode(t *testing.T) {
 	assert.Contains(t, out, "helm-legacy")
 }
 
+func TestRender_ApplySkipsDiffOnInstall(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "helmfile")
+	require.NoError(t, os.WriteFile(fake,
+		[]byte("#!/bin/sh\nprintf '%s\\n' \"$@\"\n"), 0o755))
+
+	stack := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(stack, "helmfile.d"), 0o755))
+
+	var stdout, stderr bytes.Buffer
+	err := Render(RenderOptions{
+		StackPath:   stack,
+		Env:         "local",
+		HelmfileBin: fake,
+		Apply:       true,
+		Stdout:      &stdout,
+		Stderr:      &stderr,
+	})
+	require.NoError(t, err)
+	args := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	require.GreaterOrEqual(t, len(args), 2)
+	assert.Equal(t, []string{"apply", "--skip-diff-on-install"}, args[len(args)-2:])
+}
+
 func TestRender_Helm4CompatSingleFileOmitsSequentialFlag(t *testing.T) {
 	dir := t.TempDir()
 	fake := filepath.Join(dir, "helmfile")

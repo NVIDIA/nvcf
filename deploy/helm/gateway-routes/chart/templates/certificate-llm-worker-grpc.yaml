@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+{{- $grpcTls := .Values.llmRequestRouter.grpcTls | default dict -}}
+{{- if and .Values.nvcfGatewayRoutes.enabled (dig "enabled" false $grpcTls) }}
+{{- include "nvcf-gateway.validateLLMWorkerGrpcTls" . }}
+{{- if eq (dig "mode" "certManager" $grpcTls) "certManager" }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ dig "secretName" "" $grpcTls | quote }}
+  namespace: {{ .Values.nvcfGatewayRoutes.gateways.llmGrpc.namespace }}
+  labels:
+    {{- include "nvcf-gateway.labels" . | nindent 4 }}
+    app.kubernetes.io/component: llm-worker-grpc-certificate
+spec:
+  secretName: {{ dig "secretName" "" $grpcTls | quote }}
+  dnsNames:
+    {{- dig "dnsNames" (list) $grpcTls | toYaml | nindent 4 }}
+  issuerRef:
+    kind: {{ dig "issuerRef" "kind" "ClusterIssuer" $grpcTls | quote }}
+    name: {{ dig "issuerRef" "name" "" $grpcTls | quote }}
+    {{- with dig "issuerRef" "group" "" $grpcTls }}
+    group: {{ . | quote }}
+    {{- end }}
+  usages:
+    - server auth
+{{- end }}
+{{- end }}

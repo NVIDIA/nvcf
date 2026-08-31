@@ -16,7 +16,8 @@
 use std::fmt;
 
 use anyhow::Context;
-use tonic::transport::{Channel, Endpoint};
+use stargate_protocol::parse_explicit_http_uri;
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
 
 use super::normalize_addr;
 
@@ -39,7 +40,7 @@ impl StargateGrpcEndpoint {
         let dial_addr = if dial_addr.is_empty() {
             authority_addr.clone()
         } else {
-            dial_addr
+            parse_explicit_http_uri(&dial_addr).ok()?
         };
         Some(Self {
             authority_addr,
@@ -65,19 +66,59 @@ impl StargateGrpcEndpoint {
         self.dial_endpoint() != self.authority_endpoint()
     }
 
-    pub(super) fn channel_endpoint(&self) -> anyhow::Result<Endpoint> {
+    pub(super) fn channel_endpoint(
+        &self,
+        grpc_tls_ca_cert_pem: Option<&[u8]>,
+    ) -> anyhow::Result<Endpoint> {
         let dial_endpoint = self.dial_endpoint();
         let authority_endpoint = self.authority_endpoint();
-        let mut endpoint = Channel::from_shared(dial_endpoint.clone())
+        let dial_uri: http::Uri = dial_endpoint
+            .parse()
             .context("invalid stargate gRPC dial endpoint")?;
-        if dial_endpoint != authority_endpoint {
-            let origin: http::Uri = authority_endpoint
-                .parse()
-                .context("invalid stargate gRPC authority endpoint")?;
+        let origin = (dial_endpoint != authority_endpoint)
+            .then(|| grpc_origin_uri(&dial_uri, &authority_endpoint))
+            .transpose()?;
+        let mut endpoint = match (dial_uri.scheme_str(), grpc_tls_ca_cert_pem) {
+            (Some("https"), Some(ca_cert_pem)) => Endpoint::from(dial_uri)
+                .tls_config(
+                    ClientTlsConfig::new()
+                        .with_enabled_roots()
+                        .ca_certificate(Certificate::from_pem(ca_cert_pem)),
+                )
+                .context("configure custom CA for stargate gRPC endpoint")?,
+            (Some("http"), Some(_)) => {
+                anyhow::bail!("custom CA for stargate gRPC requires an HTTPS dial endpoint")
+            }
+            _ => Endpoint::new(dial_uri).context("configure stargate gRPC endpoint")?,
+        };
+        if let Some(origin) = origin {
             endpoint = endpoint.origin(origin);
         }
         Ok(endpoint)
     }
+}
+
+pub(super) fn grpc_origin_uri(
+    dial_uri: &http::Uri,
+    authority_endpoint: &str,
+) -> anyhow::Result<http::Uri> {
+    let authority_uri: http::Uri = authority_endpoint
+        .parse()
+        .context("invalid stargate gRPC authority endpoint")?;
+    let scheme = dial_uri
+        .scheme()
+        .cloned()
+        .unwrap_or(http::uri::Scheme::HTTP);
+    let authority = authority_uri
+        .authority()
+        .cloned()
+        .context("stargate gRPC authority endpoint is missing an authority")?;
+    http::Uri::builder()
+        .scheme(scheme)
+        .authority(authority)
+        .path_and_query("/")
+        .build()
+        .context("build stargate gRPC request origin")
 }
 
 impl fmt::Display for StargateGrpcEndpoint {
@@ -121,10 +162,14 @@ pub(super) fn stargate_grpc_debug_target(
 
 pub(super) async fn connect_stargate_grpc_channel(
     router_endpoint: &StargateGrpcEndpoint,
+    grpc_tls_ca_cert_pem: Option<&[u8]>,
     operation: &'static str,
 ) -> anyhow::Result<Channel> {
     log_stargate_grpc_connect_attempt(router_endpoint, operation, "eager");
-    let channel = router_endpoint.channel_endpoint()?.connect().await?;
+    let channel = router_endpoint
+        .channel_endpoint(grpc_tls_ca_cert_pem)?
+        .connect()
+        .await?;
     log_stargate_grpc_channel_connected(router_endpoint, operation);
     Ok(channel)
 }

@@ -22,7 +22,6 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
         | global.imagePullSecrets[0].name               | nvcr-pull-secret                                                   |
         | global.helm.sources.repository                | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                               |
         | global.image.repository                       | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                               |
-        | api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE | nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/stargate-client:0.2.0 |
         | observability.profile                         | disabled                                                           |
       And I prepare Helmfile environment "local-bdd" for stack "nvcf-compute-plane" from fixture "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" with values:
         | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
@@ -92,6 +91,10 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
         | llm-request-router        | nvcf                 |
         | llm-api-gateway           | nvcf                 |
 
+      When I run command "kubectl --context k3d-ncp-local get configmap/nvcf-api-remote-config -n nvcf -o yaml"
+      Then the command exit code should be 0
+      And the command output should contain "llm-router-client-image: nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/pylon:"
+
   Rule: Helmfile installs NVCA on the same local cluster after registration via the stack Makefile
 
     Background:
@@ -108,23 +111,35 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
     Scenario: Operator registers the local cluster and installs the NVCA operator
       When I run command:
         """
-        make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=ncp-local NVCF_CLI=${NVCF_CLI} NVCF_CLI_CONFIG=${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml self-hosted --control-plane-stack deploy/stacks/self-managed --env local-bdd control-plane profile export --cluster-name ncp-local
+        """
+      Then the command exit code should be 0
+      And file "deploy/stacks/self-managed/out/control-plane-profile.yaml" should exist
+
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml init
+        """
+      Then the command exit code should be 0
+
+      When I run command:
+        """
+        make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=ncp-local CONTROL_PLANE_PROFILE=${REPO_ROOT}/deploy/stacks/self-managed/out/control-plane-profile.yaml COMPUTE_KUBE_CONTEXT=k3d-ncp-local NVCF_CLI=${NVCF_CLI} NVCF_CLI_CONFIG=${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml
         """
       Then the command exit code should be 0
       And file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-register-values.yaml" should exist
-      # The single-cluster Makefile passes CLUSTER_NAME separately to
-      # helmfile, so the register-values file does not carry clusterName
-      # at the top level. Assert the deterministic block that is
-      # present plus the non-empty fields.
+      # The target cluster matches controlPlane.clusterName in the exported
+      # profile, so registration selects the in-cluster service endpoints.
       And yaml file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-register-values.yaml" should contain:
         """
+        clusterName: ncp-local
         ncaID: nvcf-default
         region: us-west-1
         selfManaged:
           identitySource: psat
-          icmsServiceURL: http://sis.localhost:8080
-          revalServiceURL: http://reval.localhost:8080
-          natsURL: nats://nats.localhost:4222
+          icmsServiceURL: http://api.sis.svc.cluster.local:8080
+          revalServiceURL: http://reval.nvcf.svc.cluster.local:8080
+          natsURL: nats://nats.nats-system.svc.cluster.local:4222
         """
       And yaml file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-register-values.yaml" should have non-empty keys:
         | key            |

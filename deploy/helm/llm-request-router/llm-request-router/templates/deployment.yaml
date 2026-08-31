@@ -13,22 +13,42 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+{{- $workloadKind := include "llm-request-router.workloadKind" . -}}
+{{- if not (has $workloadKind (list "Deployment" "StatefulSet")) -}}
+{{- fail (printf "llmRequestRouter.workload.kind must be Deployment or StatefulSet, got %q" $workloadKind) -}}
+{{- end }}
+{{- include "llm-request-router.validateRemoteWatchUrls" . }}
 apiVersion: apps/v1
-kind: StatefulSet
+kind: {{ $workloadKind }}
 metadata:
   name: {{ include "llm-request-router.fullname" . }}
   namespace: {{ include "llm-request-router.namespace" . }}
   labels:
     {{- include "llm-request-router.labels" . | nindent 4 }}
 {{- /*
-Single-replica deployments can advertise the stable service DNS because it maps
-to one router pod. Multi-replica deployments need per-pod advertised hostnames
-so reverse-tunnel clients connect back to the router instance that issued the
-tunnel target.
+Single-replica Deployments use only their local identity because Kubernetes
+may publish both pod-name and dashed-IP SRV records for Deployment endpoints.
+StatefulSets retain stable DNS identities. Multi-replica Deployments need the
+EndpointSlice backend router so reverse-tunnel clients connect back to the
+router instance that issued the tunnel target.
 */}}
 {{- $replicaCount := .Values.llmRequestRouter.replicaCount | int }}
-{{- $disableDnsDiscovery := dig "discovery" "disableDnsDiscovery" false .Values.llmRequestRouter }}
-{{- if and $disableDnsDiscovery (gt $replicaCount 1) }}
+{{- $backendRouterEnabled := eq (include "llm-request-router.backendRouterEnabled" .) "true" }}
+{{- $configuredDisableDnsDiscovery := dig "discovery" "disableDnsDiscovery" false .Values.llmRequestRouter }}
+{{- $directDeployment := and (eq $workloadKind "Deployment") (not $backendRouterEnabled) }}
+{{- $disableDnsDiscovery := or $configuredDisableDnsDiscovery $directDeployment }}
+{{- $watchHeartbeatMs := .Values.llmRequestRouter.discovery.watchHeartbeatMs | int }}
+{{- if le $watchHeartbeatMs 0 }}
+{{- fail "llmRequestRouter.discovery.watchHeartbeatMs must be greater than 0" }}
+{{- end }}
+{{- $readinessWarmupMs := .Values.llmRequestRouter.readiness.warmupMs | toString }}
+{{- if not (regexMatch "^[0-9]+$" $readinessWarmupMs) }}
+{{- fail "llmRequestRouter.readiness.warmupMs must be a non-negative integer" }}
+{{- end }}
+{{- if and (eq $workloadKind "Deployment") (gt $replicaCount 1) (not $backendRouterEnabled) }}
+{{- fail "llmRequestRouter.backendRouter.enabled must be true when llmRequestRouter.workload.kind is Deployment and replicaCount is greater than 1" }}
+{{- end }}
+{{- if and $configuredDisableDnsDiscovery (gt $replicaCount 1) (not $backendRouterEnabled) }}
 {{- fail "llmRequestRouter.discovery.disableDnsDiscovery cannot be true when llmRequestRouter.replicaCount is greater than 1; multi-replica routers require DNS discovery" }}
 {{- end }}
 {{- /*
@@ -37,7 +57,6 @@ renders no Certificate, so a guard in that template would never run.
 */}}
 {{- include "llm-request-router.validateTlsIdentity" . }}
 {{- $advertisedHostnameTemplate := include "llm-request-router.advertisedHostnameTemplate" . }}
-{{- $backendRouterEnabled := dig "backendRouter" "enabled" false .Values.llmRequestRouter }}
 {{- if and $backendRouterEnabled (not .Values.llmRequestRouter.transport.reverseTunnelListenAddr) }}
 {{- fail "llmRequestRouter.backendRouter.enabled requires llmRequestRouter.transport.reverseTunnelListenAddr" }}
 {{- end }}
@@ -54,9 +73,16 @@ renders no Certificate, so a guard in that template would never run.
 {{- end }}
 {{- end }}
 spec:
+  {{- if eq $workloadKind "Deployment" }}
+  strategy:
+    {{- toYaml .Values.llmRequestRouter.workload.deployment.strategy | nindent 4 }}
+  {{- else }}
   serviceName: {{ .Values.llmRequestRouter.service.headlessName }}
+  podManagementPolicy: {{ .Values.llmRequestRouter.workload.statefulSet.podManagementPolicy }}
+  updateStrategy:
+    {{- toYaml .Values.llmRequestRouter.workload.statefulSet.updateStrategy | nindent 4 }}
+  {{- end }}
   replicas: {{ $replicaCount }}
-  podManagementPolicy: Parallel
   selector:
     matchLabels:
       {{- include "llm-request-router.selectorLabels" . | nindent 6 }}
@@ -103,7 +129,14 @@ spec:
             {{- with dig "discovery" "watchHeartbeatMs" "" .Values.llmRequestRouter }}
             - --watch-heartbeat-ms={{ . }}
             {{- end }}
+            {{- range .Values.llmRequestRouter.discovery.remoteWatchUrls }}
+            - --remote-stargate-url={{ . }}
+            {{- end }}
+            {{- if .Values.llmRequestRouter.discovery.allowInsecureRemoteWatchHttp }}
+            - --allow-insecure-remote-watch-http
+            {{- end }}
             - --shutdown-drain-timeout-ms={{ .Values.llmRequestRouter.shutdown.drainTimeoutMs }}
+            - --readiness-warmup-ms={{ $readinessWarmupMs }}
             - --quic-connect-timeout-ms={{ .Values.llmRequestRouter.transport.quicConnectTimeoutMs }}
             - --quic-request-timeout-ms={{ .Values.llmRequestRouter.transport.quicRequestTimeoutMs }}
             - --metrics-port={{ .Values.llmRequestRouter.service.metricsPort }}

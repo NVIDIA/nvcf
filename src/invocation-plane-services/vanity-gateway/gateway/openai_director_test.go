@@ -906,7 +906,7 @@ func TestNewOpenAIDirectorV2DeduplicatesModels(t *testing.T) {
 			cfg.OpenAI.Embeddings = tc.embeddings
 			cfg.OpenAI.Responses = tc.responses
 
-			director, err := NewOpenAIDirectorV2(cfg, privateModelMatcher, nil, nil)
+			director, err := NewOpenAIDirectorV2(cfg, privateModelMatcher, nil, nil, nil)
 			require.NoError(t, err)
 
 			var modelIDs []string

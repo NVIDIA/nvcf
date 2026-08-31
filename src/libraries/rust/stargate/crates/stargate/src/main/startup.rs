@@ -178,6 +178,7 @@ pub(super) fn runtime_config_from_args(
         grpc_listen_addr: args.listen_addr.parse()?,
         model_discovery_listen_addr: args.model_discovery_listen_addr.parse()?,
         http_listen_addr: args.http_listen_addr.parse()?,
+        readiness_warmup: millis(args.readiness_warmup_ms),
         metrics_listen_addr: Some(SocketAddr::from(([0, 0, 0, 0], args.metrics_port))),
         advertise_addr: args.advertise_addr,
         stargate_discovery_dns_name: args.stargate_discovery_dns_name.clone(),
@@ -259,6 +260,14 @@ pub(super) fn make_discovery_with_resolver_and_addresses(
 }
 
 pub(super) fn validate_discovery_args(args: &Args) -> Result<()> {
+    ensure!(
+        args.allow_insecure_remote_watch_http
+            || !args
+                .remote_stargate_url
+                .iter()
+                .any(|url| url.starts_with("http://")),
+        "http:// remote Watch URLs require --allow-insecure-remote-watch-http"
+    );
     ensure!(
         !(args.disable_dns_discovery && args.enable_dev_peer_forwarding),
         "--enable-dev-peer-forwarding cannot be combined with --disable-dns-discovery"

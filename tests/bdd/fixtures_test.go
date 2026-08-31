@@ -189,6 +189,42 @@ func TestComputePlaneLocalBDDFixturesDisableResourceSizingFeatureGates(t *testin
 	}
 }
 
+func TestComputePlaneLocalBDDFixturesRequireSecureQUIC(t *testing.T) {
+	for _, fixturePath := range []string{
+		"fixtures/nvcf-compute-plane-local-bdd.yaml",
+		"fixtures/nvcf-compute-plane-local-bdd-multi.yaml",
+	} {
+		t.Run(filepath.Base(fixturePath), func(t *testing.T) {
+			fixtureBytes, err := os.ReadFile(fixturePath)
+			if err != nil {
+				t.Fatalf("read compute-plane fixture %s: %v", fixturePath, err)
+			}
+			var fixture struct {
+				AgentConfig struct {
+					MergeConfig string `yaml:"mergeConfig"`
+				} `yaml:"agentConfig"`
+			}
+			if err := yaml.Unmarshal(fixtureBytes, &fixture); err != nil {
+				t.Fatalf("parse compute-plane fixture %s: %v", fixturePath, err)
+			}
+			var mergeConfig struct {
+				Workload struct {
+					StargateQUICInsecure *bool `yaml:"stargateQUICInsecure"`
+				} `yaml:"workload"`
+			}
+			if err := yaml.Unmarshal([]byte(fixture.AgentConfig.MergeConfig), &mergeConfig); err != nil {
+				t.Fatalf("parse agent merge config in %s: %v", fixturePath, err)
+			}
+			if mergeConfig.Workload.StargateQUICInsecure == nil {
+				t.Fatalf("%s does not set workload.stargateQUICInsecure", fixturePath)
+			}
+			if *mergeConfig.Workload.StargateQUICInsecure {
+				t.Fatalf("%s enables insecure QUIC with profile-provided bundle trust", fixturePath)
+			}
+		})
+	}
+}
+
 func TestSelfManagedLocalBDDMultiFixtureWiresComputeReachableWorkerEndpoints(t *testing.T) {
 	fixtureBytes, err := os.ReadFile("fixtures/self-managed-local-bdd-multi.yaml")
 	if err != nil {
@@ -197,10 +233,11 @@ func TestSelfManagedLocalBDDMultiFixtureWiresComputeReachableWorkerEndpoints(t *
 	fixture := string(fixtureBytes)
 	for _, want := range []string{
 		"workerConnectBaseURL: http://grpc.nvcf.svc.cluster.local:10086",
-		"llmRequestRouterAddress: llm-request-router.nvcf.svc.cluster.local:50071",
+		"llmRequestRouterAddress: https://llm-request-router.nvcf.svc.cluster.local:50071",
 		"chartPath: ../../../helm/gateway-routes/chart",
 		"chartPath: ../../../helm/llm-request-router/llm-request-router",
-		"pylonGrpcDialAddress: llm-request-router.nvcf.svc.cluster.local:50071",
+		"pylonGrpcDialAddress: https://llm-request-router.nvcf.svc.cluster.local:50071",
+		"secretName: llm-request-router-grpc-tls",
 		"pylonReverseTunnelDialAddress: llm-request-router.nvcf.svc.cluster.local:50072",
 		"*.llm-request-router-headless.nvcf.svc.cluster.local",
 		"grpcWorker:",

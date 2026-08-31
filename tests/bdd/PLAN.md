@@ -122,6 +122,16 @@ refactor in every consumer; that is a feature.
 | `When I run command with a terminal:` (docstring) | Same as the docstring form, but stdin is attached to a pseudo-terminal so the child sees a TTY on fd 0. For commands that gate interactive-only behavior on a TTY, such as `nvcf-cli self-hosted up` (its auth-gate mints the admin token only when stdin is a terminal). No input is written; stdout and stderr are captured separately as usual. |
 | `When I export command output to environment variable {string}` | Exports the previous command's trimmed stdout under the named env var. Fails the step unless the prior command exited 0 and produced non-empty stdout. Snapshotted by the env Ledger; restored at suite teardown. |
 
+#### Registration observability command adapters
+
+These steps wrap repeated client, trust-material, polling, and output-format
+mechanics while keeping every operator-selected target and expectation visible.
+They preserve the real command output for subsequent assertions.
+
+| Step | Command |
+|------|---------|
+| `When I successfully observe WatchStargates at {string} with TLS authority {string} using CA secret {string} in namespace {string} and context {string} for {string} seconds` | Reads the named CA certificate from the explicit Kubernetes secret and context, runs the public `WatchStargates` gRPC method against the visible endpoint and TLS authority with W3C trace context propagated through a generated `traceparent` header, and requires a streamed response before accepting the expected client deadline. |
+
 #### Function lifecycle command adapters
 
 These steps hide the repeated executable, config prefix, fixed subcommand, shell
@@ -156,8 +166,13 @@ original order. Repeated options and empty values are preserved.
 | Step | Notes |
 |------|-------|
 | `Then the command exit code should be {int}` | Last-run exit code. |
-| `Then the command output should contain {string}` | Substring match on combined stdout + stderr. |
-| `Then the command output should not contain {string}` | Negative substring match. |
+| `Then the command should fail` | Requires a non-zero last-run exit code. It does not accept a runner error that prevented command execution and never records the failed command in the successful-command cache. |
+| `Then the command output should contain {string}` | Substring match on combined stdout + stderr. The interpolated value must not be empty or whitespace-only. |
+| `Then the command output should not contain {string}` | Negative substring match. The interpolated value must not be empty or whitespace-only. |
+| `Then the command output should not match {string}` | Negative Go regular-expression match on combined stdout + stderr. The interpolated pattern must be non-empty and compile. Use it for shapes a fixed string cannot express, such as a dashed pod-IP hostname alias. |
+| `Then the command output should have exactly {string} distinct matches of {string}` | Counts unique substrings matched by the interpolated Go regular expression in combined stdout + stderr. Repeated occurrences of the same substring count once. |
+| `Then the command output should contain all:` (table) | Requires a `text` header and one or more strings. Every interpolated string must be non-empty and appear in combined stdout + stderr. |
+| `Then the command output should contain one of:` (table) | Requires a `text` header and one or more strings. Every interpolated candidate must be non-empty, and at least one must appear in combined stdout + stderr. |
 | `Then file {string} should exist` | |
 | `Then yaml file {string} key {string} should equal {string}` | Reads the YAML file, walks the dotted key path, compares to the value (with `${VAR}` expansion). |
 | `Then yaml file {string} key {string} should not be empty` | Same key resolution; passes if the resolved value is non-empty. Use for non-deterministic outputs (cluster IDs, identity sources) where exact-value assertions are wrong. |
@@ -170,6 +185,7 @@ original order. Repeated options and empty values are preserved.
 | `Then Helm release {string} in namespace {string} using context {string} should contain values:` (YAML docstring) | Runs one explicit-context `helm get values -o yaml` for the named release and asserts that its values contain the supplied YAML subset. Extra map keys are allowed; lists remain order- and length-sensitive. Failure messages name the release and first differing path without printing release values. |
 | `Then Kubernetes resource {string} in namespace {string} using context {string} should contain:` (YAML docstring) | The resource is explicit `kind/name`. Runs one `kubectl get -o yaml` against the named context and asserts that the resource YAML contains the supplied YAML subset. Extra map keys are allowed; lists remain order- and length-sensitive. Failure messages name the resource and first differing path without printing resource values. |
 | `Then the rendered manifests in {string} should contain:` (table) | Requires a `text` header and one or more fixed strings. Recursively inspects regular files under the repo-relative directory and fails if any listed string is absent. `${VAR}` expansion applies to the path and table values. |
+| `Then the rendered manifests in {string} should contain Kubernetes resource {string}` | Parses rendered YAML documents and requires an actual top-level resource matching the explicit `kind/name`. Nested references such as `Certificate.spec.issuerRef` do not satisfy the assertion. `${VAR}` expansion applies to the path, kind, and name. |
 | `Then the rendered manifests in {string} under directories matching {string} should contain:` (table) | Positive rendered-manifest assertion scoped to files below a directory whose name matches the supplied shell pattern, such as `*-nats`. The render directory, directory-name pattern, and table values support `${VAR}` expansion. |
 | `Then the rendered manifests in {string} should not contain:` (table) | Requires a `text` header and one or more fixed strings. Recursively inspects regular files under the repo-relative directory and fails if any listed string appears. `${VAR}` expansion applies to the path and table values. |
 | `Then these Helm releases should be deployed using context {string}:` (table) | Requires `name` and `namespace` headers, with an optional `revision` header. Runs one explicit-context, all-namespaces `helm list` and asserts that every listed release has status `deployed`; non-empty revision cells are also matched. |
@@ -178,6 +194,7 @@ original order. Repeated options and empty values are preserved.
 | `Then deployment {string} in namespace {string} using context {string} should complete rollout within {string}` | Runs `kubectl rollout status` for the named deployment with the explicit namespace, context, and timeout. Failure messages name the deployment without printing command output. |
 | `Then NVCFBackend {string} in namespace {string} using context {string} should report agent status {string} within {string}` | Waits for the named backend's `status.agentStatus` to equal the visible value using the explicit namespace, context, and timeout. Failure messages name the backend without printing resource output. |
 | `Then these Gateway API routes should be accepted and resolved using context {string} within {string}:` (table) | Requires `kind`, `name`, `namespace`, and `parent` headers. Waits for every named route to report both `Accepted=True` and `ResolvedRefs=True` for the named Gateway parent using the explicit context and timeout. The route kind is passed through without an allowlist. Failures name the table row, route, namespace, parent, and unmet condition without printing resource output. |
+| `Then every Pylon for function {string} using container {string} and context {string} should report metrics within {string}:` (table) | Requires `metric`, `comparison`, and `count` headers. Polls every running pod selected by the visible `function-name` annotation and container name. Each pod must expose non-empty metrics, and each metric row counts connected series whose sample value is `1`; `comparison` is `exactly` or `at least`, and the expected non-negative count remains visible. Discovery, parsing, and scrape failures remain failures rather than zero metric counts. |
 
 #### YAML comparison semantics
 
@@ -238,6 +255,15 @@ contract verified in `src/clis/nvcf-cli/cmd/`):
   ```
   ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --compute-plane-stack deploy/stacks/nvcf-compute-plane --env local --plain compute-plane register --control-plane-profile <profile-path> --cluster-name <compute> --kube-context k3d-<compute> --region us-west-1 --output <values-path>
   ```
+- Helmfile control-plane profile handoff (single cluster):
+  ```
+  ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --env <env> control-plane profile export --cluster-name <control>
+  make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=<compute> CONTROL_PLANE_PROFILE=<profile-path> COMPUTE_KUBE_CONTEXT=k3d-<compute> NVCF_CLI=${NVCF_CLI}
+  ```
+  The profile export runs after the selected Helmfile environment is installed
+  so endpoint and PKI trust data describe that deployment. A single-cluster
+  export omits both persistent context flags; the CLI accepts a split-cluster
+  pair or neither, and the bootstrap has already selected the local context.
 - `self-hosted compute-plane install`:
   ```
   ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --compute-plane-stack deploy/stacks/nvcf-compute-plane --env local --plain compute-plane install --values <values-path> --kube-context k3d-<compute> --cluster-name <compute>
@@ -257,6 +283,11 @@ restoration ledger:
 - At suite teardown, the runner restores every registered path to its
   pre-suite state. Files that did not exist before are deleted; files
   that did are rewritten with the original bytes and mode.
+- Live entry points cancel and quiesce the active step before restoring the
+  file and environment ledgers and exiting on SIGINT or SIGTERM. On Unix, the
+  command runner cancels the step's process group so shell, make, and kubectl
+  descendants cannot outlive restoration. This includes generated registry
+  credential files.
 - `Config.LedgerDir` (`out/<run-id>/originals/`) is reserved for an
   on-disk variant if very large fixtures ever push memory limits.
   Today the directory is created but unused.
@@ -498,6 +529,23 @@ func SubstituteFile(path, placeholder, replacement string) error
 // row map asserts that an object matching every (key, value) pair
 // exists in the array. Extra objects in the array are fine.
 func JSONContainsRows(raw string, rows []map[string]string) error
+
+// WatchStargatesCommand builds a TLS WatchStargates observation with an
+// explicit endpoint, authority, CA source, Kubernetes context, and duration.
+func WatchStargatesCommand(endpoint, authority, caSecret, namespace, kubeContext, durationSeconds string) (string, error)
+
+// PylonMetricExpectation describes an expected count of connected metric
+// series exposed by one Pylon sidecar.
+type PylonMetricExpectation struct {
+    Metric     string
+    Comparison string
+    Count      int
+}
+
+// PylonMetricsCommand builds a Pylon metrics observation for every running
+// Pylon pod selected by function name and container name in an explicit
+// Kubernetes context and polling window.
+func PylonMetricsCommand(functionName, containerName, kubeContext, timeout string, expectations []PylonMetricExpectation) (string, error)
 
 // FilesDoNotContain recursively inspects regular files under root and
 // fails if any interpolated fixed string appears.
