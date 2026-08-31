@@ -15,8 +15,13 @@
 
 # This public catalog is owned by NVCA and installed with the NVCA chart.
 # accessModes lists only modes demonstrated for the exact tested provider.
+# readerMountOptions lists options for read-only reader PVs that NVCA creates
+# or rewrites. rwxReadOnly mounts the shared claim read-only and uses none.
+# A transition value is a closed enum, not free text. A strategy name means
+# enabled; disabled means the workflow is unsupported.
 # A disabled transition means that the end-to-end workflow is not qualified.
-# The catalog is not yet wired into NVCA reconciliation or backend selection.
+# The strict loader validates this catalog. Runtime reconciliation does not
+# consume it until the storage-selection change is released.
 apiVersion: storage.nvcf.nvidia.com/v1alpha1
 kind: StorageCapabilityCatalog
 drivers:
@@ -25,9 +30,13 @@ drivers:
     accessModes:
       - ReadWriteOnce
       - ReadOnlyMany
+    readerMountOptions:
+      - ro
+      - norecovery
+      - nouuid
     transitions:
-      regularModelCache: nvmesh
-      helmModelCache: nvmesh
+      regularModelCache: roxReadOnly
+      helmModelCache: roxReadOnly
   csi.weka.io:
     provider: weka
     # Fresh RWX and ROX claims were tested. Cross-namespace cache lifecycle is
@@ -35,6 +44,7 @@ drivers:
     accessModes:
       - ReadWriteMany
       - ReadOnlyMany
+    readerMountOptions: []
     transitions:
       regularModelCache: disabled
       helmModelCache: disabled
@@ -44,6 +54,7 @@ drivers:
     # is not evidence that a ReadOnlyMany claim is supported.
     accessModes:
       - ReadWriteMany
+    readerMountOptions: []
     transitions:
       regularModelCache: disabled
       helmModelCache: disabled
@@ -51,6 +62,7 @@ drivers:
     provider: ociLustre
     # No PVC access mode has been qualified in an NVCF cache workflow.
     accessModes: []
+    readerMountOptions: []
     transitions:
       regularModelCache: disabled
       helmModelCache: disabled

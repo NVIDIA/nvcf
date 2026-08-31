@@ -14,9 +14,9 @@
       "minProperties": 1,
       "propertyNames": {"type": "string", "minLength": 1, "pattern": "\\S"},
       "properties": {
-        "nvmesh-csi.excelero.com": {"$ref": "#/$defs/driver"}
+        "nvmesh-csi.excelero.com": {"$ref": "#/$defs/nvmeshDriver"}
       },
-      "additionalProperties": {"$ref": "#/$defs/disabledDriver"}
+      "additionalProperties": {"$ref": "#/$defs/nonNVMeshDriver"}
     }
   },
   "$defs": {
@@ -24,29 +24,69 @@
       "type": "string",
       "enum": ["ReadWriteOnce", "ReadOnlyMany", "ReadWriteMany"]
     },
-    "transitionStrategy": {
+    "readerMountOption": {
       "type": "string",
-      "enum": ["disabled", "nvmesh"]
+      "minLength": 1,
+      "pattern": "^\\S(?:.*\\S)?$"
+    },
+    "regularTransitionStrategy": {
+      "type": "string",
+      "enum": ["disabled", "roxReadOnly", "rwxReadOnly"]
+    },
+    "helmTransitionStrategy": {
+      "type": "string",
+      "enum": ["disabled", "roxReadOnly"]
     },
     "transitions": {
       "type": "object",
       "additionalProperties": false,
       "required": ["regularModelCache", "helmModelCache"],
       "properties": {
-        "regularModelCache": {"$ref": "#/$defs/transitionStrategy"},
-        "helmModelCache": {"$ref": "#/$defs/transitionStrategy"}
+        "regularModelCache": {"$ref": "#/$defs/regularTransitionStrategy"},
+        "helmModelCache": {"$ref": "#/$defs/helmTransitionStrategy"}
       }
     },
     "driver": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["provider", "accessModes", "transitions"],
+      "required": ["provider", "accessModes", "readerMountOptions", "transitions"],
       "properties": {
         "provider": {"type": "string", "minLength": 1, "pattern": "\\S"},
         "accessModes": {
           "type": "array",
           "uniqueItems": true,
           "items": {"$ref": "#/$defs/accessMode"}
+        },
+        "readerMountOptions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/readerMountOption"},
+          "allOf": [
+            {
+              "not": {
+                "allOf": [
+                  {"contains": {"const": "ro"}},
+                  {"contains": {"const": "rw"}}
+                ]
+              }
+            },
+            {
+              "not": {
+                "allOf": [
+                  {"contains": {"const": "recovery"}},
+                  {"contains": {"const": "norecovery"}}
+                ]
+              }
+            },
+            {
+              "not": {
+                "allOf": [
+                  {"contains": {"const": "uuid"}},
+                  {"contains": {"const": "nouuid"}}
+                ]
+              }
+            }
+          ]
         },
         "transitions": {"$ref": "#/$defs/transitions"}
       },
@@ -57,11 +97,11 @@
               "transitions": {
                 "anyOf": [
                   {
-                    "properties": {"regularModelCache": {"const": "nvmesh"}},
+                    "properties": {"regularModelCache": {"const": "roxReadOnly"}},
                     "required": ["regularModelCache"]
                   },
                   {
-                    "properties": {"helmModelCache": {"const": "nvmesh"}},
+                    "properties": {"helmModelCache": {"const": "roxReadOnly"}},
                     "required": ["helmModelCache"]
                   }
                 ]
@@ -76,20 +116,54 @@
                   {"contains": {"const": "ReadWriteOnce"}},
                   {"contains": {"const": "ReadOnlyMany"}}
                 ]
+              },
+              "readerMountOptions": {
+                "allOf": [
+                  {"contains": {"const": "ro"}},
+                  {"contains": {"const": "norecovery"}},
+                  {"contains": {"const": "nouuid"}}
+                ]
               }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "transitions": {
+                "properties": {"regularModelCache": {"const": "rwxReadOnly"}},
+                "required": ["regularModelCache"]
+              }
+            },
+            "required": ["transitions"]
+          },
+          "then": {
+            "properties": {
+              "accessModes": {"contains": {"const": "ReadWriteMany"}},
+              "readerMountOptions": {"maxItems": 0}
             }
           }
         }
       ]
     },
-    "disabledDriver": {
+    "nvmeshDriver": {
+      "allOf": [
+        {"$ref": "#/$defs/driver"},
+        {
+          "properties": {
+            "provider": {"const": "nvmesh"}
+          }
+        }
+      ]
+    },
+    "nonNVMeshDriver": {
       "allOf": [
         {"$ref": "#/$defs/driver"},
         {
           "properties": {
             "transitions": {
               "properties": {
-                "regularModelCache": {"const": "disabled"},
+                "regularModelCache": {"enum": ["disabled", "rwxReadOnly"]},
                 "helmModelCache": {"const": "disabled"}
               }
             }
