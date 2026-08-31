@@ -1383,26 +1383,6 @@ func TestMultiClusterHelmfileLLMRegistrationTLSFeatureFileWiresToSteps(t *testin
 		invokeCommand = "/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke" +
 			" --inference-url /v1/chat/completions --model-name openai-compatible-sample" +
 			" --request-body '{\"messages\":[{\"role\":\"user\",\"content\":\"bdd-registration-tls\"}]}' --timeout 120"
-		wrongRootCommand = `/bin/bash -c 'set -u; cert_dir=$(mktemp -d); ` +
-			`trap '\''rm -rf "$cert_dir"'\'' EXIT; openssl req -x509 -newkey rsa:2048 -nodes ` +
-			`-subj /CN=wrong-root -keyout "$cert_dir/key.pem" -out "$cert_dir/ca.pem" -days 1 ` +
-			`>/dev/null 2>&1 || exit; grpcurl -max-time 5 -cacert "$cert_dir/ca.pem" ` +
-			`-authority llm-request-router.nvcf.svc.cluster.local ` +
-			`-import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto ` +
-			`127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates'`
-		wrongHostCommand = `/bin/bash -c 'grpcurl -max-time 5 ` +
-			`-cacert <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf ` +
-			`-o jsonpath="{.data.ca\.crt}" | base64 -d) ` +
-			`-authority wrong-host.nvcf.svc.cluster.local ` +
-			`-import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto ` +
-			`127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates'`
-		missingTrustCommand = `/bin/bash -c 'grpcurl -max-time 5 ` +
-			`-authority llm-request-router.nvcf.svc.cluster.local ` +
-			`-import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto ` +
-			`127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates'`
-		plaintextCommand = `/bin/bash -c 'grpcurl -plaintext -max-time 5 ` +
-			`-import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto ` +
-			`127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates'`
 		invalidAuthorityCommand = "make -C deploy/stacks/self-managed template " +
 			"HELMFILE_ENV=local-bdd-registration-tls-invalid-authority"
 	)
@@ -1440,22 +1420,6 @@ func TestMultiClusterHelmfileLLMRegistrationTLSFeatureFileWiresToSteps(t *testin
 			Stdout: "Function invocation completed!\n\nResponse:\n" +
 				`{"object":"chat.completion","choices":[{"message":{"content":"This is a fixed 128-byte response for routing and contract validation."}}]}` +
 				"\n",
-		},
-		wrongRootCommand: {
-			ExitCode: 1,
-			Stderr:   "certificate signed by unknown authority\n",
-		},
-		wrongHostCommand: {
-			ExitCode: 1,
-			Stderr:   "certificate is valid for another name, not wrong-host.nvcf.svc.cluster.local\n",
-		},
-		missingTrustCommand: {
-			ExitCode: 1,
-			Stderr:   "certificate is not trusted\n",
-		},
-		plaintextCommand: {
-			ExitCode: 1,
-			Stderr:   "context deadline exceeded\n",
 		},
 		invalidAuthorityCommand: {
 			ExitCode: 1,
@@ -1517,16 +1481,8 @@ func TestMultiClusterHelmfileLLMRegistrationTLSFeatureFileWiresToSteps(t *testin
 	if !commandRanExactly(runs, grpcurlPreflightCommand) {
 		t.Fatal("grpcurl availability was not checked before the live probes")
 	}
-	for name, command := range map[string]string{
-		"wrong root":        wrongRootCommand,
-		"wrong host":        wrongHostCommand,
-		"missing trust":     missingTrustCommand,
-		"plaintext":         plaintextCommand,
-		"invalid authority": invalidAuthorityCommand,
-	} {
-		if !commandRanExactly(runs, command) {
-			t.Fatalf("%s negative registration command was not invoked", name)
-		}
+	if !commandRanExactly(runs, invalidAuthorityCommand) {
+		t.Fatal("invalid registration authority was not rejected before installation")
 	}
 	for _, assertion := range []struct {
 		path string

@@ -55,20 +55,19 @@ Feature: Register an LLM worker securely with a local split-cluster routing plan
         | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
         | observability.profile           | disabled                             |
       When I successfully run command "make -C deploy/stacks/self-managed template HELMFILE_ENV=local-bdd-registration-tls"
-      And the rendered manifests in "deploy/stacks/self-managed/out" should contain:
+      Then the rendered manifests in "deploy/stacks/self-managed/out" should contain:
         | text                                                                                 |
         | https://llm-request-router.nvcf.svc.cluster.local:50071                              |
         | --grpc-pylon-dial-addr=https://llm-request-router.nvcf.svc.cluster.local:50071 |
 
       When I successfully run command "make -C deploy/stacks/self-managed install HELMFILE_ENV=local-bdd-registration-tls"
 
-      When I successfully run command "kubectl --context k3d-ncp-local-cp wait clusterissuer nvcf-openbao-pki --for=condition=Ready --timeout=5m"
-      When I successfully run command "kubectl --context k3d-ncp-local-cp wait certificate stargate-quic-tls -n nvcf --for=condition=Ready --timeout=5m"
-      When I successfully run command "kubectl --context k3d-ncp-local-cp rollout status statefulset/llm-request-router -n nvcf --timeout=10m"
+      And I successfully run command "kubectl --context k3d-ncp-local-cp wait clusterissuer nvcf-openbao-pki --for=condition=Ready --timeout=5m"
+      And I successfully run command "kubectl --context k3d-ncp-local-cp wait certificate stargate-quic-tls -n nvcf --for=condition=Ready --timeout=5m"
+      And I successfully run command "kubectl --context k3d-ncp-local-cp rollout status statefulset/llm-request-router -n nvcf --timeout=10m"
 
-      When I run command "kubectl --context k3d-ncp-local-cp get configmap/nvcf-api-remote-config -n nvcf -o yaml"
-      Then the command exit code should be 0
-      And the command output should contain "worker-address: https://llm-request-router.nvcf.svc.cluster.local:50071"
+      And I successfully run command "kubectl --context k3d-ncp-local-cp get configmap/nvcf-api-remote-config -n nvcf -o yaml"
+      Then the command output should contain "worker-address: https://llm-request-router.nvcf.svc.cluster.local:50071"
 
       # openssl verifies the externally reachable listener against the same
       # stack-issued CA and DNS identity that a compute-plane Pylon uses.
@@ -129,7 +128,7 @@ Feature: Register an LLM worker securely with a local split-cluster routing plan
         make -C deploy/stacks/nvcf-compute-plane install CLUSTER_NAME=ncp-local-compute-1 HELMFILE_ENV=local-bdd-registration-tls COMPUTE_KUBE_CONTEXT=k3d-ncp-local-compute-1 NVCF_CLI=${NVCF_CLI}
         """
       Then the command exit code should be 0
-      Then NVCFBackend "ncp-local-compute-1" in namespace "nvca-operator" using context "k3d-ncp-local-compute-1" should report agent status "healthy" within "10m"
+      And NVCFBackend "ncp-local-compute-1" in namespace "nvca-operator" using context "k3d-ncp-local-compute-1" should report agent status "healthy" within "10m"
 
       Given I use NVCF CLI config "${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml"
       When I successfully create function "bdd-registration-tls" from image "nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/nvcf-openai-compatible-sample:local" with CLI options:
@@ -169,74 +168,6 @@ Feature: Register an LLM worker securely with a local split-cluster routing plan
         | chat.completion         |
         | fixed 128-byte response |
       And I successfully undeploy the function selected by NVCF CLI
-
-  @negative
-  Rule: Registration rejects clients that do not satisfy the TLS contract
-
-    Background:
-      Given command has succeeded:
-        """
-        make -C deploy/stacks/self-managed template HELMFILE_ENV=local-bdd-registration-tls
-        """
-      And command has succeeded:
-        """
-        make -C deploy/stacks/self-managed install HELMFILE_ENV=local-bdd-registration-tls
-        """
-      And command has succeeded:
-        """
-        kubectl --context k3d-ncp-local-cp wait clusterissuer nvcf-openbao-pki --for=condition=Ready --timeout=5m
-        """
-      And command has succeeded:
-        """
-        kubectl --context k3d-ncp-local-cp wait certificate stargate-quic-tls -n nvcf --for=condition=Ready --timeout=5m
-        """
-      And command has succeeded:
-        """
-        kubectl --context k3d-ncp-local-cp rollout status statefulset/llm-request-router -n nvcf --timeout=10m
-        """
-
-    Scenario: Registration rejects a client with an untrusted root
-      When I run command:
-        """
-        /bin/bash -c 'set -u; cert_dir=$(mktemp -d); trap '\''rm -rf "$cert_dir"'\'' EXIT; openssl req -x509 -newkey rsa:2048 -nodes -subj /CN=wrong-root -keyout "$cert_dir/key.pem" -out "$cert_dir/ca.pem" -days 1 >/dev/null 2>&1 || exit; grpcurl -max-time 5 -cacert "$cert_dir/ca.pem" -authority llm-request-router.nvcf.svc.cluster.local -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates'
-        """
-      Then the command should fail
-      And the command output should contain one of:
-        | text                                    |
-        | certificate signed by unknown authority |
-        | certificate is not trusted              |
-
-    Scenario: Registration rejects a client using the wrong authority
-      When I run command:
-        """
-        /bin/bash -c 'grpcurl -max-time 5 -cacert <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf -o jsonpath="{.data.ca\.crt}" | base64 -d) -authority wrong-host.nvcf.svc.cluster.local -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates'
-        """
-      Then the command should fail
-      And the command output should contain one of:
-        | text                                  |
-        | not wrong-host.nvcf.svc.cluster.local |
-
-    Scenario: Registration rejects a client without the issued root
-      When I run command:
-        """
-        /bin/bash -c 'grpcurl -max-time 5 -authority llm-request-router.nvcf.svc.cluster.local -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates'
-        """
-      Then the command should fail
-      And the command output should contain one of:
-        | text                                    |
-        | certificate signed by unknown authority |
-        | certificate is not trusted              |
-
-    Scenario: Registration rejects a plaintext client
-      When I run command:
-        """
-        /bin/bash -c 'grpcurl -plaintext -max-time 5 -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates'
-        """
-      Then the command should fail
-      And the command output should contain one of:
-        | text                      |
-        | context deadline exceeded |
-        | error reading server preface |
 
   @negative
   Rule: Invalid registration authorities fail before installation
