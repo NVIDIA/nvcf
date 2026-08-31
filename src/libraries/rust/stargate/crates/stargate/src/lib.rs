@@ -14,6 +14,7 @@
 // limitations under the License.
 
 pub mod auth;
+pub mod config;
 pub(crate) mod control_plane;
 pub mod discovery;
 pub(crate) mod http_proxy;

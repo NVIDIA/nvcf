@@ -73,14 +73,58 @@ pub(super) fn render_manifest(render: RenderManifestConfig<'_>) -> RenderedManif
         stargate.push_str(line);
         stargate.push('\n');
     }
+    stargate.push_str("  stargate.toml: |\n");
+    let stargate_config = format!(
+        r#"schema_version = 1
+
+[stargate_identity]
+id = {{ env = "POD_NAME" }}
+advertised_hostname_template = "{{pod_name}}-external.{stargate_ns}.svc.cluster.local"
+
+[stargate_identity.kubernetes]
+pod_name = {{ env = "POD_NAME" }}
+namespace = {{ env = "POD_NAMESPACE" }}
+
+[stargate_network]
+grpc_listen_addr = "0.0.0.0:50071"
+model_discovery_listen_addr = "0.0.0.0:50073"
+http_listen_addr = "0.0.0.0:8000"
+advertise_addr = {{ env = "STARGATE_ADVERTISE_ADDR" }}
+
+[stargate_discovery.kubernetes_pods]
+headless_service_dns_name = "stargate-headless.{stargate_ns}.svc.cluster.local"
+poll_interval_ms = 1000
+resolver_ttl_ms = 1000
+
+[pylon_transport]
+tunnel_protocol = "{tunnel_protocol}"
+
+[pylon_transport.reverse]
+listen_addr = "0.0.0.0:50072"
+
+[pylon_transport.tls]
+insecure_skip_verify = true
+
+[request_proxy.load_balancer]
+config_path = "/config/lb-config.json"
+
+[observability.metrics]
+listen_addr = "0.0.0.0:9090"
+"#,
+        tunnel_protocol = config.tunnel_protocol,
+    );
+    for line in stargate_config.lines() {
+        stargate.push_str("    ");
+        stargate.push_str(line);
+        stargate.push('\n');
+    }
 
     stargate.push_str(&format!(
-        "---\napiVersion: v1\nkind: Service\nmetadata:\n  name: stargate\n  namespace: {stargate_ns}\nspec:\n  selector:\n    app: stargate\n  ports:\n    - name: grpc\n      port: 50071\n      targetPort: grpc\n    - name: reverse\n      port: 50072\n      targetPort: reverse\n      protocol: UDP\n---\napiVersion: v1\nkind: Service\nmetadata:\n  name: stargate-http\n  namespace: {stargate_ns}\nspec:\n  type: NodePort\n  selector:\n    app: stargate\n  ports:\n    - name: http\n      port: 8000\n      targetPort: http\n      nodePort: {http_node_port}\n    - name: metrics\n      port: 9090\n      targetPort: metrics\n      nodePort: {metrics_node_port}\n---\napiVersion: v1\nkind: Service\nmetadata:\n  name: stargate-headless\n  namespace: {stargate_ns}\nspec:\n  clusterIP: None\n  selector:\n    app: stargate\n  ports:\n    - name: http\n      port: 8000\n      targetPort: http\n    - name: metrics\n      port: 9090\n      targetPort: metrics\n    - name: grpc\n      port: 50071\n      targetPort: grpc\n    - name: reverse\n      port: 50072\n      targetPort: reverse\n      protocol: UDP\n---\napiVersion: apps/v1\nkind: StatefulSet\nmetadata:\n  name: stargate\n  namespace: {stargate_ns}\nspec:\n  serviceName: stargate-headless\n  replicas: {stargate_count}\n  selector:\n    matchLabels:\n      app: stargate\n  template:\n    metadata:\n      labels:\n        app: stargate\n    spec:\n      containers:\n        - name: stargate\n          image: {stargate_image}\n          imagePullPolicy: IfNotPresent\n          args:\n            - --stargate-id=$(POD_NAME)\n            - --listen-addr=0.0.0.0:50071\n            - --model-discovery-listen-addr=0.0.0.0:50073\n            - --http-listen-addr=0.0.0.0:8000\n            - --advertise-addr=$(POD_IP):50071\n            - --stargate-discovery-dns-name=stargate-headless.{stargate_ns}.svc.cluster.local\n            - --advertised-hostname-template={{pod_name}}-external.{stargate_ns}.svc.cluster.local\n            - --pod-name=$(POD_NAME)\n            - --pod-namespace=$(POD_NAMESPACE)\n            - --metrics-port=9090\n            - --lb-config-path=/config/lb-config.json\n            - --backend-connectivity=reverse\n            - --reverse-tunnel-listen-addr=0.0.0.0:50072\n            - --quic-insecure\n            - --tunnel-protocol={tunnel_protocol}\n          env:\n            - name: POD_NAME\n              valueFrom:\n                fieldRef:\n                  fieldPath: metadata.name\n            - name: POD_NAMESPACE\n              valueFrom:\n                fieldRef:\n                  fieldPath: metadata.namespace\n            - name: POD_IP\n              valueFrom:\n                fieldRef:\n                  fieldPath: status.podIP\n          ports:\n            - name: grpc\n              containerPort: 50071\n            - name: model-discovery\n              containerPort: 50073\n            - name: reverse\n              containerPort: 50072\n              protocol: UDP\n            - name: http\n              containerPort: 8000\n            - name: metrics\n              containerPort: 9090\n          readinessProbe:\n            httpGet:\n              path: /readyz\n              port: http\n            initialDelaySeconds: 2\n            periodSeconds: 2\n          livenessProbe:\n            httpGet:\n              path: /healthz\n              port: http\n            initialDelaySeconds: 5\n            periodSeconds: 5\n          volumeMounts:\n            - name: lb-config\n              mountPath: /config\n      volumes:\n        - name: lb-config\n          configMap:\n            name: stargate-lb-config\n---\n",
+        "---\napiVersion: v1\nkind: Service\nmetadata:\n  name: stargate\n  namespace: {stargate_ns}\nspec:\n  selector:\n    app: stargate\n  ports:\n    - name: grpc\n      port: 50071\n      targetPort: grpc\n    - name: reverse\n      port: 50072\n      targetPort: reverse\n      protocol: UDP\n---\napiVersion: v1\nkind: Service\nmetadata:\n  name: stargate-http\n  namespace: {stargate_ns}\nspec:\n  type: NodePort\n  selector:\n    app: stargate\n  ports:\n    - name: http\n      port: 8000\n      targetPort: http\n      nodePort: {http_node_port}\n    - name: metrics\n      port: 9090\n      targetPort: metrics\n      nodePort: {metrics_node_port}\n---\napiVersion: v1\nkind: Service\nmetadata:\n  name: stargate-headless\n  namespace: {stargate_ns}\nspec:\n  clusterIP: None\n  selector:\n    app: stargate\n  ports:\n    - name: http\n      port: 8000\n      targetPort: http\n    - name: metrics\n      port: 9090\n      targetPort: metrics\n    - name: grpc\n      port: 50071\n      targetPort: grpc\n    - name: reverse\n      port: 50072\n      targetPort: reverse\n      protocol: UDP\n---\napiVersion: apps/v1\nkind: StatefulSet\nmetadata:\n  name: stargate\n  namespace: {stargate_ns}\nspec:\n  serviceName: stargate-headless\n  replicas: {stargate_count}\n  selector:\n    matchLabels:\n      app: stargate\n  template:\n    metadata:\n      labels:\n        app: stargate\n    spec:\n      containers:\n        - name: stargate\n          image: {stargate_image}\n          imagePullPolicy: IfNotPresent\n          args:\n            - --config-file=/config/stargate.toml\n          env:\n            - name: POD_NAME\n              valueFrom:\n                fieldRef:\n                  fieldPath: metadata.name\n            - name: POD_NAMESPACE\n              valueFrom:\n                fieldRef:\n                  fieldPath: metadata.namespace\n            - name: POD_IP\n              valueFrom:\n                fieldRef:\n                  fieldPath: status.podIP\n            - name: STARGATE_ADVERTISE_ADDR\n              value: \"$(POD_IP):50071\"\n          ports:\n            - name: grpc\n              containerPort: 50071\n            - name: model-discovery\n              containerPort: 50073\n            - name: reverse\n              containerPort: 50072\n              protocol: UDP\n            - name: http\n              containerPort: 8000\n            - name: metrics\n              containerPort: 9090\n          readinessProbe:\n            httpGet:\n              path: /readyz\n              port: http\n            initialDelaySeconds: 2\n            periodSeconds: 2\n          livenessProbe:\n            httpGet:\n              path: /healthz\n              port: http\n            initialDelaySeconds: 5\n            periodSeconds: 5\n          volumeMounts:\n            - name: lb-config\n              mountPath: /config\n      volumes:\n        - name: lb-config\n          configMap:\n            name: stargate-lb-config\n---\n",
         http_node_port = render.http_node_port,
         metrics_node_port = render.metrics_node_port,
         stargate_count = config.stargates.count,
         stargate_image = image_refs.stargate,
-        tunnel_protocol = config.tunnel_protocol,
     ));
     stargate.push_str(&render_otel_collector(
         stargate_ns,

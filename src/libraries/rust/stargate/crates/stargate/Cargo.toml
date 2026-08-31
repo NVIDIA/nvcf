@@ -37,6 +37,8 @@ stargate-tls = { workspace = true }
 scc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_with = { workspace = true }
+toml = { workspace = true }
 anyhow = { workspace = true }
 axum = { workspace = true }
 bytes = { workspace = true }

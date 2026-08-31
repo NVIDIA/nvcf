@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 
 use hickory_resolver::TokioAsyncResolver;
 use stargate_forwarding::render_hostname;
@@ -38,7 +38,7 @@ impl Discovery for Box<dyn Discovery> {
     }
 }
 
-pub struct HeadlessDnsDiscoveryConfig {
+pub struct KubernetesPodDiscoveryConfig {
     pub self_pod_name: String,
     pub pod_namespace: String,
     pub advertised_hostname_template: String,
@@ -47,12 +47,12 @@ pub struct HeadlessDnsDiscoveryConfig {
     pub grpc_port: u16,
 }
 
-pub struct HeadlessDnsDiscovery {
-    config: HeadlessDnsDiscoveryConfig,
+pub struct KubernetesPodDiscovery {
+    config: KubernetesPodDiscoveryConfig,
 }
 
-impl HeadlessDnsDiscovery {
-    pub fn new(config: HeadlessDnsDiscoveryConfig) -> Self {
+impl KubernetesPodDiscovery {
+    pub fn new(config: KubernetesPodDiscoveryConfig) -> Self {
         Self { config }
     }
 
@@ -98,7 +98,7 @@ impl HeadlessDnsDiscovery {
 }
 
 #[async_trait::async_trait]
-impl Discovery for HeadlessDnsDiscovery {
+impl Discovery for KubernetesPodDiscovery {
     fn initial_stargates(&self) -> Vec<StargateInfo> {
         vec![self.stargate_info_for_endpoint(&self.config.self_pod_name, self.config.grpc_port)]
     }
@@ -187,99 +187,6 @@ impl Discovery for SelfOnlyDiscovery {
     }
 }
 
-pub struct DnsDiscovery {
-    self_addr: SocketAddr,
-    self_stargate_id: String,
-    discovery_dns_name: String,
-    resolver: TokioAsyncResolver,
-    http_port: u16,
-}
-
-impl DnsDiscovery {
-    pub fn new(
-        self_addr: SocketAddr,
-        self_stargate_id: String,
-        discovery_dns_name: String,
-        resolver: TokioAsyncResolver,
-        http_port: u16,
-    ) -> Self {
-        Self {
-            self_addr,
-            self_stargate_id,
-            discovery_dns_name,
-            resolver,
-            http_port,
-        }
-    }
-
-    fn stargate_info_for_ip(&self, ip: IpAddr) -> Option<StargateInfo> {
-        let addr = SocketAddr::new(ip, self.self_addr.port());
-        let is_self = addr == self.self_addr;
-        if !is_self && (ip.is_loopback() || ip.is_unspecified()) {
-            return None;
-        }
-
-        let addr = addr.to_string();
-        Some(StargateInfo {
-            stargate_id: if is_self {
-                self.self_stargate_id.clone()
-            } else {
-                addr.clone()
-            },
-            advertise_addr: addr,
-            http_advertise_addr: if is_self {
-                SocketAddr::new(ip, self.http_port).to_string()
-            } else {
-                String::new()
-            },
-            grpc_pylon_dial_addr: String::new(),
-        })
-    }
-
-    fn self_stargate_info(&self) -> StargateInfo {
-        StargateInfo {
-            stargate_id: self.self_stargate_id.clone(),
-            advertise_addr: self.self_addr.to_string(),
-            http_advertise_addr: SocketAddr::new(self.self_addr.ip(), self.http_port).to_string(),
-            grpc_pylon_dial_addr: String::new(),
-        }
-    }
-
-    fn stargates_from_ips<I>(&self, ips: I) -> Vec<StargateInfo>
-    where
-        I: IntoIterator<Item = IpAddr>,
-    {
-        let stargates = ips
-            .into_iter()
-            .filter_map(|ip| self.stargate_info_for_ip(ip))
-            .collect();
-        finalize_stargates(stargates, self.self_stargate_info(), |stargate| {
-            &stargate.advertise_addr
-        })
-    }
-}
-
-#[async_trait::async_trait]
-impl Discovery for DnsDiscovery {
-    fn initial_stargates(&self) -> Vec<StargateInfo> {
-        vec![self.self_stargate_info()]
-    }
-
-    async fn discover_stargates(&self) -> Vec<StargateInfo> {
-        match self.resolver.lookup_ip(&self.discovery_dns_name).await {
-            Ok(lookup) => self.stargates_from_ips(lookup.iter()),
-            Err(err) => {
-                warn!(
-                    dns_name = %self.discovery_dns_name,
-                    error = %err,
-                    "dns lookup failed"
-                );
-                self.initial_stargates()
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,10 +201,10 @@ mod tests {
         }
     }
 
-    fn make_headless_discovery() -> HeadlessDnsDiscovery {
+    fn make_kubernetes_pod_discovery() -> KubernetesPodDiscovery {
         let resolver =
             TokioAsyncResolver::tokio(ResolverConfig::default(), ResolverOpts::default());
-        HeadlessDnsDiscovery::new(HeadlessDnsDiscoveryConfig {
+        KubernetesPodDiscovery::new(KubernetesPodDiscoveryConfig {
             self_pod_name: "stargate-0".to_string(),
             pod_namespace: "prod".to_string(),
             advertised_hostname_template: "{pod_name}.stargate.external".to_string(),
@@ -308,8 +215,8 @@ mod tests {
     }
 
     #[test]
-    fn headless_dns_discovery_renders_self_from_pod_hostname() {
-        let discovery = make_headless_discovery();
+    fn kubernetes_pod_discovery_renders_self_from_pod_hostname() {
+        let discovery = make_kubernetes_pod_discovery();
 
         assert_eq!(
             discovery.initial_stargates(),
@@ -322,8 +229,8 @@ mod tests {
     }
 
     #[test]
-    fn headless_dns_discovery_renders_peer_from_srv_target_hostname() {
-        let discovery = make_headless_discovery();
+    fn kubernetes_pod_discovery_renders_peer_from_srv_target_hostname() {
+        let discovery = make_kubernetes_pod_discovery();
 
         assert_eq!(
             discovery.stargate_info_for_endpoint("stargate-1", 50071),
@@ -350,8 +257,8 @@ mod tests {
     }
 
     #[test]
-    fn headless_dns_discovery_finalizes_srv_records_with_self_fallback_and_sorting() {
-        let discovery = make_headless_discovery();
+    fn kubernetes_pod_discovery_finalizes_srv_records_with_self_fallback_and_sorting() {
+        let discovery = make_kubernetes_pod_discovery();
 
         let stargates = discovery.stargates_from_srv_records(vec![
             (
@@ -379,8 +286,8 @@ mod tests {
     }
 
     #[test]
-    fn headless_dns_discovery_falls_back_to_self_when_no_srv_records_survive() {
-        let discovery = make_headless_discovery();
+    fn kubernetes_pod_discovery_falls_back_to_self_when_no_srv_records_survive() {
+        let discovery = make_kubernetes_pod_discovery();
 
         let stargates = discovery.stargates_from_srv_records(vec![(
             "stargate-9.other.prod.svc.cluster.local.".to_string(),
@@ -388,34 +295,6 @@ mod tests {
         )]);
 
         assert_eq!(stargates, discovery.initial_stargates());
-    }
-
-    #[test]
-    fn dns_discovery_finalizes_ips_with_self_fallback_alias_filter_and_sorting() {
-        let resolver =
-            TokioAsyncResolver::tokio(ResolverConfig::default(), ResolverOpts::default());
-        let discovery = DnsDiscovery::new(
-            "10.0.0.2:50071".parse().unwrap(),
-            "local-stargate".to_string(),
-            "stargate-headless".to_string(),
-            resolver,
-            8000,
-        );
-
-        let stargates = discovery.stargates_from_ips(vec![
-            "10.0.0.3".parse().unwrap(),
-            "127.0.0.1".parse().unwrap(),
-            "10.0.0.1".parse().unwrap(),
-        ]);
-
-        assert_eq!(
-            stargates,
-            vec![
-                stargate("10.0.0.1:50071", "10.0.0.1:50071", ""),
-                stargate("10.0.0.3:50071", "10.0.0.3:50071", ""),
-                stargate("local-stargate", "10.0.0.2:50071", "10.0.0.2:8000"),
-            ]
-        );
     }
 
     #[tokio::test]
@@ -433,45 +312,5 @@ mod tests {
 
         assert_eq!(discovery.initial_stargates(), expected);
         assert_eq!(discovery.discover_stargates().await, expected);
-    }
-
-    #[test]
-    fn dns_discovery_skips_loopback_aliases_that_are_not_self() {
-        let resolver =
-            TokioAsyncResolver::tokio(ResolverConfig::default(), ResolverOpts::default());
-        let discovery = DnsDiscovery::new(
-            "127.0.0.1:50071".parse().unwrap(),
-            "local-stargate".to_string(),
-            "localhost".to_string(),
-            resolver,
-            8000,
-        );
-
-        assert_eq!(
-            discovery.stargate_info_for_ip("127.0.0.1".parse().unwrap()),
-            Some(stargate(
-                "local-stargate",
-                "127.0.0.1:50071",
-                "127.0.0.1:8000"
-            ))
-        );
-        assert_eq!(discovery.stargate_info_for_ip("::1".parse().unwrap()), None);
-
-        let scoped_self = "[fe80::1%3]:50071".parse().unwrap();
-        let scoped = DnsDiscovery::new(
-            scoped_self,
-            "scoped-stargate".to_string(),
-            "headless".to_string(),
-            TokioAsyncResolver::tokio(ResolverConfig::default(), ResolverOpts::default()),
-            8000,
-        );
-        assert_eq!(
-            scoped.initial_stargates(),
-            vec![stargate(
-                "scoped-stargate",
-                &scoped_self.to_string(),
-                "[fe80::1]:8000"
-            )]
-        );
     }
 }
