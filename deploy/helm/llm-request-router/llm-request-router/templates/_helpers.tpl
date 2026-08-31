@@ -76,6 +76,55 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- default .Release.Namespace .Values.llmRequestRouter.namespace -}}
 {{- end -}}
 
+{{- define "llm-request-router.workloadKind" -}}
+{{- dig "workload" "kind" "Deployment" .Values.llmRequestRouter | toString -}}
+{{- end -}}
+
+{{- define "llm-request-router.isExplicitHttpUri" -}}
+{{- $uri := . | toString | trim -}}
+{{- $authorityValid := regexMatch "^https?://([A-Za-z0-9._~-]+|\\[[0-9A-Fa-f:.]+\\])(:[0-9]+)?/?$" $uri -}}
+{{- $portMatch := regexFind ":[0-9]+/?$" $uri -}}
+{{- $portText := $portMatch | trimPrefix ":" | trimSuffix "/" -}}
+{{- $portValid := or
+      (not $portMatch)
+      (and (le (len $portText) 5) (le ($portText | int) 65535)) -}}
+{{- if and $authorityValid $portValid -}}true{{- end -}}
+{{- end -}}
+
+{{- define "llm-request-router.validateRemoteWatchUrls" -}}
+{{- $discovery := .Values.llmRequestRouter.discovery | default dict -}}
+{{- $allowHttp := dig "allowInsecureRemoteWatchHttp" false $discovery -}}
+{{- range $remoteWatchUrl := dig "remoteWatchUrls" (list) $discovery -}}
+{{- $remoteWatchUrl = $remoteWatchUrl | toString | trim -}}
+{{- if ne (include "llm-request-router.isExplicitHttpUri" $remoteWatchUrl) "true" -}}
+{{- fail "llmRequestRouter.discovery.remoteWatchUrls entries must be explicit http:// or https:// URIs" -}}
+{{- end -}}
+{{- if and (hasPrefix "http://" $remoteWatchUrl) (not $allowHttp) -}}
+{{- fail "llmRequestRouter.discovery.remoteWatchUrls requires https://; set allowInsecureRemoteWatchHttp=true only for development plaintext endpoints" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+An unset backendRouter.enabled follows the workload contract: a multi-replica
+Deployment needs the EndpointSlice router, while StatefulSet and single-replica
+direct modes retain their previous behavior. An explicit boolean always wins;
+deployment.yaml rejects the unsafe explicit-false combination.
+*/}}
+{{- define "llm-request-router.backendRouterEnabled" -}}
+{{- $backendRouter := .Values.llmRequestRouter.backendRouter | default dict -}}
+{{- $configured := get $backendRouter "enabled" -}}
+{{- if kindIs "bool" $configured -}}
+{{- $configured -}}
+{{- else if and
+      (eq (include "llm-request-router.workloadKind" .) "Deployment")
+      (gt (.Values.llmRequestRouter.replicaCount | int) 1) -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end -}}
+
 {{- define "llm-request-router.isValidDnsName" -}}
 {{- $name := .name | toString | lower -}}
 {{- $labels := splitList "." $name -}}
@@ -103,7 +152,7 @@ rendering must agree on that list, so both read it from here.
 {{- define "llm-request-router.effectiveCertificateDnsNames" -}}
 {{- $certificate := .Values.llmRequestRouter.certificate | default dict -}}
 {{- $dnsNames := dig "dnsNames" (list) $certificate -}}
-{{- if dig "backendRouter" "enabled" false .Values.llmRequestRouter -}}
+{{- if eq (include "llm-request-router.backendRouterEnabled" .) "true" -}}
 {{- $wildcard := replace "{pod_name}" "*" (include "llm-request-router.advertisedHostnameTemplate" .) -}}
 {{- if not (has $wildcard $dnsNames) -}}
 {{- $dnsNames = append $dnsNames $wildcard -}}
@@ -250,7 +299,7 @@ Coverage, matching the role flags:
 
 {{- define "llm-request-router.advertisedHostnameTemplate" -}}
 {{- $configured := .Values.llmRequestRouter.kubernetes.advertisedHostnameTemplate -}}
-{{- $backendRouterEnabled := dig "backendRouter" "enabled" false .Values.llmRequestRouter -}}
+{{- $backendRouterEnabled := eq (include "llm-request-router.backendRouterEnabled" .) "true" -}}
 {{- if and $backendRouterEnabled $configured (ne (len (splitList "{pod_name}" $configured)) 2) -}}
 {{- fail "llmRequestRouter.kubernetes.advertisedHostnameTemplate must contain exactly one {pod_name} when backendRouter.enabled is true" -}}
 {{- end -}}
@@ -273,9 +322,12 @@ externally reachable address.
 {{- $backendRouter := .Values.llmRequestRouter.backendRouter | default dict -}}
 {{- $configured := dig "pylonGrpcDialAddress" "" $backendRouter | toString | trim -}}
 {{- if $configured -}}
+{{- if ne (include "llm-request-router.isExplicitHttpUri" $configured) "true" -}}
+{{- fail "llmRequestRouter.backendRouter.pylonGrpcDialAddress must be an explicit http:// or https:// URI" -}}
+{{- end -}}
 {{- $configured -}}
 {{- else -}}
-{{- printf "%s.%s.svc.cluster.local:%v" (include "llm-request-router.backendRouterName" .) (include "llm-request-router.namespace" .) (dig "service" "grpcPort" 50071 $backendRouter) -}}
+{{- printf "http://%s.%s.svc.cluster.local:%v" (include "llm-request-router.backendRouterName" .) (include "llm-request-router.namespace" .) (dig "service" "grpcPort" 50071 $backendRouter) -}}
 {{- end -}}
 {{- end -}}
 

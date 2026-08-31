@@ -148,6 +148,11 @@ func buildControlPlaneProfile(req controlPlaneProfileWriteRequest) controlplanep
 	sisHost := firstNonEmpty(os.Getenv("NVCF_ICMS_HOST"), viper.GetString("icms_host"), "sis."+domain)
 	revalHost := firstNonEmpty(os.Getenv("NVCF_REVAL_HOST"), viper.GetString("reval_host"), "reval."+domain)
 	natsHost := firstNonEmpty(os.Getenv("NVCF_NATS_HOST"), viper.GetString("nats_host"), "nats."+domain)
+	if strings.EqualFold(req.Env, "local") {
+		computeEndpoints.ICMSServiceURL = rewriteURLHost(computeEndpoints.ICMSServiceURL, sisHost)
+		computeEndpoints.ReValServiceURL = rewriteURLHost(computeEndpoints.ReValServiceURL, revalHost)
+		computeEndpoints.NATSURL = rewriteURLHost(computeEndpoints.NATSURL, natsHost)
+	}
 
 	return controlplaneprofile.ControlPlaneProfile{
 		APIVersion: controlplaneprofile.APIVersion,
@@ -163,9 +168,9 @@ func buildControlPlaneProfile(req controlPlaneProfileWriteRequest) controlplanep
 					NATSURL:  "nats://nats.nats-system.svc.cluster.local:4222",
 				},
 				ComputeReachable: controlplaneprofile.EndpointScope{
-					ICMSURL:  rewriteURLHost(computeEndpoints.ICMSServiceURL, sisHost),
-					ReValURL: rewriteURLHost(computeEndpoints.ReValServiceURL, revalHost),
-					NATSURL:  rewriteURLHost(computeEndpoints.NATSURL, natsHost),
+					ICMSURL:  computeEndpoints.ICMSServiceURL,
+					ReValURL: computeEndpoints.ReValServiceURL,
+					NATSURL:  computeEndpoints.NATSURL,
 				},
 			},
 			Gateway: controlplaneprofile.Gateway{
@@ -247,10 +252,8 @@ func resolveProfileICMSURL(flagValue, env, stackDomain string) string {
 // query) of rawURL with newHost. Returns rawURL unchanged when it cannot be
 // parsed, has no host, or when newHost is empty.
 //
-// This lets buildControlPlaneProfile project bare-ELB URLs back through the
-// canonical sis./reval./nats. service prefix that the gateway HTTPRoutes
-// match. For local k3d (rawURL already has sis./reval./nats. prefixes equal
-// to newHost) this is effectively a no-op.
+// Local split-cluster resolution can produce cross-cluster service names that
+// must be normalized to the local gateway routing hosts before export.
 func rewriteURLHost(rawURL, newHost string) string {
 	if rawURL == "" || newHost == "" {
 		return rawURL

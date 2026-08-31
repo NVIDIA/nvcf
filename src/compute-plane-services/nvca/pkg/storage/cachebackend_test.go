@@ -51,9 +51,13 @@ func cacheBackendClient(t *testing.T, scs ...*storagev1.StorageClass) *fake.Clie
 }
 
 func TestSelectHelmCacheBackend(t *testing.T) {
-	cachingOnly := []*featureflag.FeatureFlag{featureflag.CachingSupport}
+	cachingOnly := []*featureflag.FeatureFlag{
+		featureflag.CachingSupport,
+		featureflag.HelmModelCaching,
+	}
 	cachingAndSamba := []*featureflag.FeatureFlag{
 		featureflag.CachingSupport,
+		featureflag.HelmModelCaching,
 		&featureflag.HelmSharedStorage.FeatureFlag,
 	}
 
@@ -69,6 +73,20 @@ func TestSelectHelmCacheBackend(t *testing.T) {
 			name:  "caching disabled -> none",
 			flags: nil,
 			// nvcf-sc-30 present but caching off: still none.
+			storageClasses: []*storagev1.StorageClass{storageClass(NVMeshStorageClassName)},
+			want:           HelmCacheBackendNone,
+		},
+		{
+			name:  "HelmModelCaching off -> none",
+			flags: []*featureflag.FeatureFlag{featureflag.CachingSupport},
+			// CachingSupport on and nvcf-sc-30 present, but the Helm sub-gate
+			// is off: no backend is selected.
+			storageClasses: []*storagev1.StorageClass{storageClass(NVMeshStorageClassName)},
+			want:           HelmCacheBackendNone,
+		},
+		{
+			name:           "CachingSupport off, HelmModelCaching on -> none",
+			flags:          []*featureflag.FeatureFlag{featureflag.HelmModelCaching},
 			storageClasses: []*storagev1.StorageClass{storageClass(NVMeshStorageClassName)},
 			want:           HelmCacheBackendNone,
 		},
@@ -192,6 +210,7 @@ func TestSelectHelmCacheBackend_SambaClassLookupError(t *testing.T) {
 		}).Build()
 	ff := &featureflagmock.Fetcher{EnabledFFs: []*featureflag.FeatureFlag{
 		featureflag.CachingSupport,
+		featureflag.HelmModelCaching,
 		&featureflag.HelmSharedStorage.FeatureFlag,
 	}}
 

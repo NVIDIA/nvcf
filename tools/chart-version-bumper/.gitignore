@@ -1,0 +1,2 @@
+# go build ./... drops the binary here; it must never be committed.
+/chart-version-bumper

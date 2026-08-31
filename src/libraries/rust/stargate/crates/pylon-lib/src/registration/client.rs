@@ -32,8 +32,14 @@ async fn run_registration_session(config: RegistrationSessionConfig, stop: Cance
     let (router_topology_tx, router_topology_rx) =
         watch::channel(RegistrationRouterTopology::default());
     let watch_seeds = config.watch_seeds.clone();
+    let grpc_tls_ca_cert_pem = config.grpc_tls_ca_cert_pem.clone();
     let watch_task = OwnedTask::spawn_child("watch stargate discovery", &stop, move |watch_stop| {
-        run_watch_stargate_discovery(watch_seeds, router_topology_tx, watch_stop)
+        run_watch_stargate_discovery(
+            watch_seeds,
+            grpc_tls_ca_cert_pem,
+            router_topology_tx,
+            watch_stop,
+        )
     });
 
     let registration_task =

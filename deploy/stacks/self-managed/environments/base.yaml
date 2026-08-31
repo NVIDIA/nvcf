@@ -171,12 +171,20 @@ functionAutoscaler:
     # environment label.
     ignoreEnv: true
 
+# API environment entries are merged over the stack defaults. Remote config is
+# passed to the API chart and overrides its packaged application profile. When
+# the LLM addon is enabled, the stack defaults the Pylon image from
+# global.sidecars (or global.image) at version 0.14.1.
+api:
+  env: {}
+  remoteConfig:
+    configData: {}
+
 # Image overrides for the API account-bootstrap job. alpine-k8s is not
 # republished under the public nvidia/nvcf catalog, so it defaults to its
 # upstream source, docker.io/alpine/k8s:1.36.1. Leave these unset unless you
 # have mirrored the image into your own registry, in which case set registry
 # and repository together:
-# api:
 #   accountBootstrap:
 #     image:
 #       registry: <your-registry>
@@ -193,6 +201,13 @@ accounts:
 # These static global values are processed in the values template
 nats:
   enabled: true
+  # The control plane places request-queue streams by its logical NCP region.
+  # Keep both tags so NATS can host shared and region-scoped streams.
+  config:
+    merge:
+      server_tags:
+        - "dc:ncp"
+        - "aws-region:ncp"
   # Image overrides for the NATS config reloader. The reloader is not
   # republished under the public nvidia/nvcf catalog, so it defaults to its
   # upstream source, docker.io/natsio/nats-server-config-reloader:0.23.0.
@@ -308,6 +323,22 @@ addons:
       replicaCount: 3
       # Set only for source-tree validation. Empty uses the released OCI chart.
       chartPath: ""
+      readiness:
+        warmupMs: 60000
+      workload:
+        # Deployment matches managed NVCF. Existing installations can pin
+        # StatefulSet and migrate workload kinds in a controlled maintenance
+        # window; Kubernetes cannot mutate one workload kind into the other.
+        kind: Deployment
+
+      discovery:
+        disableDnsDiscovery: false
+        # Maximum interval between unchanged local and remote Watch snapshots.
+        watchHeartbeatMs: 5000
+        # Recursive Watch endpoints require an explicit HTTPS URI. Plaintext
+        # HTTP is available only through the development-only opt-in below.
+        remoteWatchUrls: []
+        allowInsecureRemoteWatchHttp: false
 
       # Authority and SNI aware backend router. A worker holds one registration
       # stream and one reverse QUIC tunnel per router replica, and each must
@@ -331,6 +362,27 @@ addons:
         # addresses when workers run in a separate cluster or region.
         pylonGrpcDialAddress: ""
         pylonReverseTunnelDialAddress: ""
+
+      # TLS for the worker-facing gRPC registration and Watch endpoint on
+      # port 50071. This identity is consumed by the Gateway HTTPS listener;
+      # it is separate from the request-router QUIC identity on port 50072.
+      grpcTls:
+        enabled: false
+        # Required for a deliberately plaintext external development route.
+        # Production and PKI-enabled split-cluster profiles enable TLS.
+        allowInsecureHttp: false
+        # certManager requests a certificate in the Gateway namespace.
+        # existingSecret uses a pre-created Secret and renders no Certificate.
+        mode: certManager
+        secretName: llm-request-router-grpc-tls
+        # Required only in certManager mode. With existingSecret, the operator
+        # owns and verifies the certificate SANs.
+        dnsNames: []
+        issuerRef:
+          # Defaults to the QUIC PKI issuer when omitted.
+          kind: ""
+          name: ""
+          group: ""
 
     # QUIC TLS certificate for the request router (Stargate). Managed PKI is
     # active by default whenever addons.llm.enabled is true. Set enabled=false
@@ -465,7 +517,8 @@ ess:
 
 invocation:
   env:
-    NATS_PROPERTIES__REGION: local
+    # Keep request subjects aligned with the API and worker consumers.
+    NATS_PROPERTIES__REGION: ncp
   podDisruptionBudget:
     enabled: false
     maxUnavailable: 1

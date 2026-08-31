@@ -923,12 +923,14 @@ func installFakeComputePlaneHelmfile(t *testing.T) string {
 	t.Helper()
 	fakeBin := filepath.Join(t.TempDir(), "helmfile")
 	body := `#!/bin/sh
-last=
+verb=
 for arg in "$@"; do
   printf 'arg=%s\n' "$arg"
-  last="$arg"
+  case "$arg" in
+    apply|template) verb="$arg" ;;
+  esac
 done
-printf 'verb=%s\n' "$last"
+printf 'verb=%s\n' "$verb"
 printf 'env:CLUSTER_NAME=%s\n' "$CLUSTER_NAME"
 printf 'env:NCA_ID=%s\n' "$NCA_ID"
 printf 'env:OUTPUT_DIR=%s\n' "$OUTPUT_DIR"

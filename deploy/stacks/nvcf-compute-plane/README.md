@@ -20,18 +20,22 @@ nvcf-cli self-hosted \
   --control-plane-stack ../self-managed \
   control-plane profile export
 
-# 2. Register the cluster with the generated profile.
+# 2. Initialize the CLI config used for registration.
+nvcf-cli --config <path-to-config> init
+
+# 3. Register the cluster with the generated profile.
 make register-cluster \
   CLUSTER_NAME=gpu-east \
-  CLUSTER_REGION=us-west-1
+  CLUSTER_REGION=us-west-1 \
+  NVCF_CLI_CONFIG=<path-to-config>
 
-# 3. Deploy the compute plane.
+# 4. Deploy the compute plane.
 make install \
   CLUSTER_NAME=gpu-east \
   HELMFILE_ENV=<env>
 ```
 
-Repeat steps 1-2 for each GPU cluster (see [this example](#multi-cluster-example)).
+Repeat steps 1 and 3 for each GPU cluster (see [this example](#multi-cluster-example)).
 The `CLUSTER_NAME` variable scopes all state to
 that cluster so multiple clusters can be managed from a single checkout.
 `register-cluster` writes `registration/<cluster>-register-values.yaml`.
@@ -43,7 +47,8 @@ By default, `register-cluster` reads
 `CONTROL_PLANE_PROFILE=/path/to/control-plane-profile.yaml` when the control
 and compute stacks are not sibling directories. The profile is the canonical
 handoff for account identity, service endpoints, Host overrides, and transport
-trust. The Makefile does not require a separate `nvcf-cli-local.yaml`.
+trust. Set `NVCF_CLI_CONFIG` when registration must use a non-default CLI
+config. The Makefile forwards the path to `nvcf-cli` but does not run `init`.
 
 `HELMFILE_ENV` maps to `environments/<env>.yaml`. Create that environment file
 with the artifact registry and any deployment-specific overrides before

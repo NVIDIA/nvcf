@@ -4,12 +4,18 @@ This repository contains the Helm chart for deploying the NVCF LLM Request Route
 
 ## Overview
 
-The chart packages the LLM Request Router StatefulSet with HTTP and gRPC
-services, a metrics endpoint, and a headless service for multi-instance DNS
-discovery. It can also deploy the Stargate Kubernetes backend router for
-worker gRPC registration and reverse QUIC tunnels through a shared Gateway or
-load balancer. The backend router selects the correct Stargate pod from gRPC
-authority and QUIC SNI.
+The chart packages the LLM Request Router as either a Deployment or a
+StatefulSet, with Deployment as the default. It includes HTTP and gRPC
+services, a metrics endpoint, and a headless service. It can also deploy the
+Stargate Kubernetes backend router for worker gRPC registration and reverse
+QUIC tunnels through a shared Gateway or load balancer. The backend router
+selects the correct Stargate pod from gRPC authority and QUIC SNI.
+
+The `llm-request-router` Service carries API Gateway HTTP requests and honors
+pod readiness. The `llm-request-router-headless` Service publishes gRPC and
+QUIC addresses for warming and ready pods, so Pylons can register and establish
+tunnels before a new replica receives request traffic. The backend router and
+direct multi-replica discovery use the headless Service.
 
 A Vault Agent sidecar is configured to fetch a service token from a Vault or
 OpenBao backend. The application reads `nvcfApiToken` from
@@ -28,11 +34,41 @@ llmRequestRouter:
     tag: <appVersion>
 ```
 
-Single-replica deployments may use self-only discovery with `llmRequestRouter.discovery.disableDnsDiscovery=true`. Multi-replica deployments require DNS discovery and stable per-pod identity, so the chart fails rendering if DNS discovery is disabled while `llmRequestRouter.replicaCount > 1`. For multi-replica deployments, the default advertised hostname template is `{pod_name}.<headless-service>.<namespace>.svc.cluster.local`; the StatefulSet and headless service provide the stable pod DNS names required for router replicas to discover each other and share backend registrations.
+Single-replica Deployments automatically use self-only discovery so their
+headless Service cannot introduce dashed-IP SRV aliases. A multi-replica
+Deployment requires the backend router. The default `null` value for
+`llmRequestRouter.backendRouter.enabled` enables it automatically in that
+topology; explicitly setting `false` is rejected. The backend router builds
+Watch responses and forwarding routes from the same
+EndpointSlice snapshot. Each ready endpoint is keyed by its Pod
+`targetRef.name`, so one pod produces one canonical identity even when DNS also
+exposes a dashed-IP SRV alias. A multi-replica StatefulSet can instead run
+without the backend router and retain direct headless Service SRV discovery.
+`llmRequestRouter.discovery.watchHeartbeatMs` controls the maximum interval
+between unchanged Watch snapshots from both Stargate and the backend router.
+`llmRequestRouter.discovery.remoteWatchUrls` accepts only explicit `https://`
+Watch URIs. Development plaintext endpoints require an explicit `http://` URI
+and `allowInsecureRemoteWatchHttp=true`; scheme-less and unsupported values are
+rejected instead of defaulting to plaintext.
 
-`llmRequestRouter.kubernetes.advertisedHostnameTemplate` supports the Stargate placeholders `{pod_name}` and `{namespace}`. Stargate resolves both placeholders at runtime. For certificate validation, the chart substitutes the deployment namespace and a representative StatefulSet pod name. `{pod_name}` must stay within the leftmost DNS label when certificate coverage relies on a wildcard. When `llmRequestRouter.certificate.enabled=true`, `certificate.dnsNames` must cover the advertised hostname with either a case-insensitive exact name or a valid leftmost `*.` wildcard. A wildcard covers exactly one label and requires at least two suffix labels. For example, `*.nvcf.example.internal` covers `{pod_name}.nvcf.example.internal`, but `*.example.internal` does not cover `{pod_name}.nvcf.example.internal`.
+`llmRequestRouter.kubernetes.advertisedHostnameTemplate` supports the Stargate
+placeholders `{pod_name}` and `{namespace}`. Stargate resolves both placeholders
+at runtime. For certificate validation, the chart substitutes the deployment
+namespace and a representative pod name. `{pod_name}` must stay within the
+leftmost DNS label when certificate coverage relies on a wildcard. When
+`llmRequestRouter.certificate.enabled=true`, `certificate.dnsNames` must cover
+the advertised hostname with either a case-insensitive exact name or a valid
+leftmost `*.` wildcard. A wildcard covers exactly one label and requires at
+least two suffix labels. For example, `*.nvcf.example.internal` covers
+`{pod_name}.nvcf.example.internal`, but `*.example.internal` does not cover
+`{pod_name}.nvcf.example.internal`.
 
-Upgrading from a chart version that rendered a Deployment can briefly run both the old Deployment and new StatefulSet during `helm upgrade` while Helm replaces the workload kind.
+Existing installations that currently run the StatefulSet must set
+`llmRequestRouter.workload.kind=StatefulSet` before upgrading to this chart.
+Changing `workload.kind` is a controlled migration, not an in-place Kubernetes
+mutation. Plan a maintenance window, remove or rename the old workload, and
+verify that only the selected kind owns the request-router Pods before scaling
+it. A plain Helm upgrade across workload kinds can briefly run both workloads.
 
 ## Prerequisites
 
@@ -80,9 +116,12 @@ Important settings to review before deployment:
 
 - `llmRequestRouter.image.*` for the router container image
 - `llmRequestRouter.imagePullSecrets` for private registry access
+- `llmRequestRouter.workload.kind` to select `Deployment` (default) or `StatefulSet`
+- `llmRequestRouter.workload.deployment.strategy` and `llmRequestRouter.workload.statefulSet.*` for workload-specific rollout settings
 - `llmRequestRouter.replicaCount`, resource requests, and limits for your environment
 - `llmRequestRouter.service.*` for HTTP, gRPC, metrics, and headless service ports
 - `llmRequestRouter.backendRouter.*` for multi-replica worker gRPC and reverse-tunnel routing
+- `llmRequestRouter.readiness.warmupMs` for the startup readiness delay in milliseconds (default: `60000`; `0` disables the timed delay)
 - `llmRequestRouter.metrics.enabled` to expose the metrics port on the Service (default: `false`)
 - `llmRequestRouter.metrics.serviceMonitor.enabled` to create a Prometheus `ServiceMonitor` (requires `metrics.enabled`)
 - `llmRequestRouter.certificate.*` to let cert-manager issue the Stargate QUIC server certificate
@@ -96,15 +135,16 @@ The default values include development-oriented placeholders. Override them befo
 
 ## Backend Worker Routing
 
-Enable `llmRequestRouter.backendRouter.enabled` when workers reach a
-multi-replica request router through a shared endpoint. Set both pylon dial
-addresses to the external endpoints that workers can resolve:
+The backend router is enabled automatically for a multi-replica Deployment.
+Set `llmRequestRouter.backendRouter.enabled=true` explicitly when workers reach
+another supported workload topology through a shared endpoint. Set both pylon
+dial addresses to the external endpoints that workers can resolve:
 
 ```yaml
 llmRequestRouter:
   backendRouter:
     enabled: true
-    pylonGrpcDialAddress: llm-router.example.com:443
+    pylonGrpcDialAddress: https://llm-router.example.com:443
     pylonReverseTunnelDialAddress: llm-router.example.com:8080
 ```
 
@@ -114,18 +154,31 @@ chart appVersion. That image must contain
 `/usr/local/bin/stargate-k8s-router`; override `backendRouter.image.*` only to
 validate a different Stargate build.
 
-The backend router watches EndpointSlices. The chart creates a dedicated
-ServiceAccount by default and binds a namespaced Role to it when
+The backend router watches the headless Service's EndpointSlices and publishes
+their non-terminating targets directly through `WatchStargates`, including
+warming pods published by `publishNotReadyAddresses`. It uses the same snapshot
+for gRPC and QUIC forwarding, so a removed or replaced Pod cannot remain as a
+discovery-only target. The chart creates a dedicated ServiceAccount by default
+and binds a namespaced Role to it when
 `llmRequestRouter.rbac.create=true`. When
 `llmRequestRouter.backendRouter.serviceAccount.create=false`, set
 `llmRequestRouter.backendRouter.serviceAccount.name` to an existing account.
 When `rbac.create=false`, grant `get`, `list`, and `watch` on
 `discovery.k8s.io/endpointslices` to that account outside this chart.
 
-Route TCP port `50071` and UDP port `50072` to the
+Route HTTPS gRPC traffic on port `50071` and UDP traffic on port `50072` to the
 `llm-request-router-backend-router` Service. The NVCF gateway-routes chart can
-create the matching `TCPRoute`, `UDPRoute`, and `ReferenceGrant` resources.
-The Gateway implementation must support Gateway API `UDPRoute`.
+terminate TLS on a dedicated HTTPS listener and create the matching
+`GRPCRoute`, `UDPRoute`, `ReferenceGrant`, gRPC `Certificate`, and stream
+timeout policy. The gRPC route forwards h2c to the Service. The Gateway
+implementation must support Gateway API `GRPCRoute` and `UDPRoute`. A legacy
+plaintext `TCPRoute` is available only with an explicit development opt-in.
+
+Use the same explicit `https://host:port` URI for the API worker bootstrap and
+`pylonGrpcDialAddress`. The external hostname is used for TLS SNI and server
+verification. The selected Stargate identity remains the HTTP/2 `:authority`,
+so the secure `GRPCRoute` intentionally has no hostname match. The gRPC
+listener certificate is distinct from the request-router QUIC certificate.
 
 When QUIC verification is enabled, the mounted certificate must cover the
 advertised per-pod hostname produced by

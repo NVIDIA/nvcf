@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-{{- if .Values.llmRequestRouter.backendRouter.enabled }}
+{{- if eq (include "llm-request-router.backendRouterEnabled" .) "true" }}
 {{- include "llm-request-router.validateBackendRouterTls" . }}
 {{- include "llm-request-router.validateBackendRouterServiceAccount" . }}
 {{- $advertisedHostnameTemplate := include "llm-request-router.advertisedHostnameTemplate" . }}
@@ -27,6 +27,7 @@ spec:
       port: {{ .Values.llmRequestRouter.backendRouter.service.grpcPort }}
       targetPort: grpc
       protocol: TCP
+      appProtocol: kubernetes.io/h2c
     - name: quic
       port: {{ .Values.llmRequestRouter.backendRouter.service.reverseTunnelPort }}
       targetPort: quic
@@ -79,8 +80,17 @@ spec:
             - --reverse-tunnel-listen-addr=0.0.0.0:{{ .Values.llmRequestRouter.backendRouter.service.reverseTunnelPort }}
             - --health-listen-addr=0.0.0.0:{{ .Values.llmRequestRouter.backendRouter.service.healthPort }}
             - --target-namespace={{ include "llm-request-router.namespace" . }}
-            - --target-service-name={{ include "llm-request-router.fullname" . }}
+            - --target-service-name={{ .Values.llmRequestRouter.service.headlessName }}
             - --advertised-hostname-template={{ $advertisedHostnameTemplate }}
+            - --advertised-grpc-port={{ .Values.llmRequestRouter.service.grpcPort }}
+            - --grpc-pylon-dial-addr={{ include "llm-request-router.backendRouterGrpcDialAddress" . }}
+            - --watch-heartbeat-ms={{ .Values.llmRequestRouter.discovery.watchHeartbeatMs }}
+            {{- range .Values.llmRequestRouter.discovery.remoteWatchUrls }}
+            - --remote-stargate-url={{ . }}
+            {{- end }}
+            {{- if .Values.llmRequestRouter.discovery.allowInsecureRemoteWatchHttp }}
+            - --allow-insecure-remote-watch-http
+            {{- end }}
             - --grpc-port-name=grpc
             - --quic-port-name=quic
             - --tunnel-protocol=raw-quic

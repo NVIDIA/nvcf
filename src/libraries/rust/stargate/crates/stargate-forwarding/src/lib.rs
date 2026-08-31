@@ -137,7 +137,7 @@ impl ForwardingResolver for HeadlessDnsResolver {
             None => PeerResolution::NotPeer,
             Some(pod_name) if pod_name == self.self_pod_name => PeerResolution::Local,
             Some(pod_name) => PeerResolution::Peer(PeerTarget {
-                // Headless Service DNS is backed by ready EndpointSlices. Keep the
+                // Headless Service DNS provides stable per-pod addresses. Keep the
                 // original advertised hostname as the QUIC server name so verified
                 // relays still validate the client-facing certificate identity.
                 dial_addr: format!("{pod_name}.{}:{port}", self.headless_dns_suffix),

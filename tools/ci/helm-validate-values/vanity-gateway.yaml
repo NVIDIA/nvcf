@@ -5,15 +5,16 @@ vanityGateway:
     repository: foo/bar/baz
   serviceMonitor:
     enabled: true
-  # Exercise the llmGateway mapping section so schema regressions surface in CI.
-  # Declaring a host also triggers the conditional requirement on
-  # config.llmGatewayEndpoint, which the chart default satisfies.
+  # An LLM-routed model, so schema regressions surface on every lint.
   mappingConfig:
     v2config:
-      openai: {}
+      openai:
+        host: api.example.com
+        chatCompletions:
+          meta_llama-3_3-70b:
+            modelName: meta/llama-3.3-70b
+            functionID: 00000000-0000-0000-0000-000000000001
+            functionType: LLM
+            customHeaders:
+              X-Provider-Feature: enabled
       vanity: {}
-      llmGateway:
-        example_llm:
-          host: llm.api.example.com
-          customHeaders:
-            X-Provider-Feature: enabled

@@ -48,7 +48,6 @@ vanityGateway:
   config:
     mappingPath: /etc/vanity-gateway/config/config.yaml
     nvcfApiEndpoint: http://invocation.nvcf.svc.cluster.local:8080
-    # Used only by hosts declared under mappingConfig.v2config.llmGateway.
     llmGatewayEndpoint: http://llm-api-gateway.nvcf.svc.cluster.local:8080
     otelExporterOtlpEndpoint: ""
     secretsPath: ""

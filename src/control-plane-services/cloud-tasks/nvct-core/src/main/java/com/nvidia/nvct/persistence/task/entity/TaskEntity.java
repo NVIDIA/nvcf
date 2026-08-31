@@ -46,7 +46,6 @@ public class TaskEntity {
     public static final String COLUMN_NAME = "name";
     public static final String COLUMN_STATUS = "status";
     public static final String COLUMN_HEALTH = "health";
-    public static final String COLUMN_HEALTH_INFO = "health_info";
     public static final String COLUMN_PERCENT_COMPLETE = "percent_complete";
     public static final String COLUMN_LAST_HEARTBEAT_AT = "last_heartbeat_at";
     public static final String COLUMN_LAST_UPDATED_AT = "last_updated_at";
@@ -151,10 +150,6 @@ public class TaskEntity {
     @Nullable
     @Column(COLUMN_HEALTH)
     private String health;
-
-    @Nullable
-    @Column(COLUMN_HEALTH_INFO)
-    private HealthUdt legacyHealthInfo;
 
     @Nullable
     @Column(COLUMN_PERCENT_COMPLETE)

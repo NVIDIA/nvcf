@@ -111,7 +111,8 @@
               "$ref": "#/definitions/nonEmptyString"
             },
             "llmGatewayEndpoint": {
-              "type": "string"
+              "type": "string",
+              "pattern": "^$|^https?://[^/]+/?$"
             },
             "otelExporterOtlpEndpoint": {
               "type": "string"
@@ -143,9 +144,6 @@
                 },
                 "vanity": {
                   "$ref": "#/definitions/vanityRoutes"
-                },
-                "llmGateway": {
-                  "$ref": "#/definitions/llmGatewayRoutes"
                 }
               },
               "additionalProperties": true
@@ -200,13 +198,82 @@
                 "properties": {
                   "v2config": {
                     "properties": {
-                      "llmGateway": {
-                        "type": "object",
-                        "minProperties": 1
+                      "openai": {
+                        "anyOf": [
+                          {
+                            "properties": {
+                              "chatCompletions": {
+                                "not": {
+                                  "additionalProperties": {
+                                    "not": {
+                                      "properties": {
+                                        "functionType": {
+                                          "const": "LLM"
+                                        }
+                                      },
+                                      "required": [
+                                        "functionType"
+                                      ]
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            "required": [
+                              "chatCompletions"
+                            ]
+                          },
+                          {
+                            "properties": {
+                              "responses": {
+                                "not": {
+                                  "additionalProperties": {
+                                    "not": {
+                                      "properties": {
+                                        "functionType": {
+                                          "const": "LLM"
+                                        }
+                                      },
+                                      "required": [
+                                        "functionType"
+                                      ]
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            "required": [
+                              "responses"
+                            ]
+                          },
+                          {
+                            "properties": {
+                              "embeddings": {
+                                "not": {
+                                  "additionalProperties": {
+                                    "not": {
+                                      "properties": {
+                                        "functionType": {
+                                          "const": "LLM"
+                                        }
+                                      },
+                                      "required": [
+                                        "functionType"
+                                      ]
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            "required": [
+                              "embeddings"
+                            ]
+                          }
+                        ]
                       }
                     },
                     "required": [
-                      "llmGateway"
+                      "openai"
                     ]
                   }
                 },
@@ -252,25 +319,25 @@
           "$ref": "#/definitions/nonEmptyString"
         },
         "chatCompletions": {
-          "$ref": "#/definitions/openAIEndpointRoutes"
+          "$ref": "#/definitions/openAILLMEndpointRoutes"
         },
         "completions": {
-          "$ref": "#/definitions/openAIEndpointRoutes"
+          "$ref": "#/definitions/openAINonLLMEndpointRoutes"
         },
         "embeddings": {
-          "$ref": "#/definitions/openAIEndpointRoutes"
+          "$ref": "#/definitions/openAILLMEndpointRoutes"
         },
         "responses": {
-          "$ref": "#/definitions/openAIEndpointRoutes"
+          "$ref": "#/definitions/openAILLMEndpointRoutes"
         },
         "imageGenerations": {
-          "$ref": "#/definitions/openAIEndpointRoutes"
+          "$ref": "#/definitions/openAINonLLMEndpointRoutes"
         },
         "imageEdits": {
-          "$ref": "#/definitions/openAIEndpointRoutes"
+          "$ref": "#/definitions/openAINonLLMEndpointRoutes"
         },
         "imageVariations": {
-          "$ref": "#/definitions/openAIEndpointRoutes"
+          "$ref": "#/definitions/openAINonLLMEndpointRoutes"
         }
       },
       "additionalProperties": {
@@ -326,6 +393,11 @@
         },
         "shadowCancelOnClientDisconnect": {
           "type": "boolean"
+        },
+        "functionType": {
+          "enum": [
+            "LLM"
+          ]
         }
       },
       "required": [
@@ -390,35 +462,90 @@
       ],
       "additionalProperties": true
     },
-    "llmGatewayRoutes": {
+    "openAILLMModelRoute": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/openAIModelRoute"
+        },
+        {
+          "if": {
+            "properties": {
+              "functionType": {
+                "const": "LLM"
+              }
+            },
+            "required": [
+              "functionType"
+            ]
+          },
+          "then": {
+            "properties": {
+              "usePexec": {
+                "enum": [
+                  false
+                ]
+              },
+              "outgoingPathOverride": {
+                "enum": [
+                  ""
+                ]
+              },
+              "sessionTimeout": {
+                "enum": [
+                  0
+                ]
+              },
+              "customHeaders": {
+                "not": {
+                  "anyOf": [
+                    {
+                      "required": [
+                        "X-Priority"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "x-priority"
+                      ]
+                    },
+                    {
+                      "required": [
+                        "X-priority"
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "openAILLMEndpointRoutes": {
       "type": "object",
       "additionalProperties": {
-        "$ref": "#/definitions/llmGatewayRoute"
+        "$ref": "#/definitions/openAILLMModelRoute"
       }
     },
-    "llmGatewayRoute": {
-      "type": "object",
-      "properties": {
-        "host": {
-          "$ref": "#/definitions/nonEmptyString"
+    "openAINonLLMModelRoute": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/openAIModelRoute"
         },
-        "customHeaders": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
+        {
+          "not": {
+            "required": [
+              "functionType"
+            ]
           }
-        },
-        "eol": {
-          "type": "string"
-        },
-        "offlineMessage": {
-          "type": "string"
         }
-      },
-      "required": [
-        "host"
-      ],
-      "additionalProperties": true
+      ]
+    },
+    "openAINonLLMEndpointRoutes": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/openAINonLLMModelRoute"
+      }
     }
   },
   "additionalProperties": true

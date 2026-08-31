@@ -199,6 +199,7 @@ openbao:
       {{- end }}
 
 nats:
+  {{- $natsServerTags := dig "nats" "config" "merge" "server_tags" (list "dc:ncp" "aws-region:ncp") .Values }}
   {{- if .Values.global.imagePullSecrets }}
   global:
     image:
@@ -246,13 +247,16 @@ nats:
         {{- end }}
   {{- end }}
 
-  {{- if .Values.global.storageClass }}
   config:
+    merge:
+      server_tags:
+        {{- toYaml $natsServerTags | nindent 8 }}
+    {{- if .Values.global.storageClass }}
     jetstream:
       fileStore:
         pvc:
           storageClassName: {{ .Values.global.storageClass }}
-  {{- end }}
+    {{- end }}
 
   {{- with dig "nats" "podDisruptionBudget" dict .Values }}
   podDisruptionBudget:
@@ -312,14 +316,20 @@ natsAuthCalloutService:
 {{- $llmRequestRouterGrpcPort := dig "addons" "llm" "requestRouter" "service" "grpcPort" 50071 .Values }}
 {{- $llmRequestRouterDefaultAddress := printf "llm-request-router.nvcf.svc.cluster.local:%v" $llmRequestRouterGrpcPort }}
 {{- $llmRequestRouterWorkerAddress := dig "llmRequestRouterAddress" "" $workerEndpoints | trim | default $llmRequestRouterDefaultAddress }}
+{{- $llmRequestRouterWorkerAuthority := $llmRequestRouterWorkerAddress }}
+{{- if hasPrefix "https://" $llmRequestRouterWorkerAuthority }}
+{{- $llmRequestRouterWorkerAuthority = trimPrefix "https://" $llmRequestRouterWorkerAuthority }}
+{{- else if hasPrefix "http://" $llmRequestRouterWorkerAuthority }}
+{{- $llmRequestRouterWorkerAuthority = trimPrefix "http://" $llmRequestRouterWorkerAuthority }}
+{{- end }}
 {{- $llmEnabled := dig "addons" "llm" "enabled" false .Values }}
 {{- if $llmEnabled }}
-{{- $llmRequestRouterWorkerAddressError := "global.workerEndpoints.llmRequestRouterAddress must use DNS-or-IPv4:port or [IPv6]:port with port 1-65535" }}
+{{- $llmRequestRouterWorkerAddressError := "global.workerEndpoints.llmRequestRouterAddress must use optional http:// or https:// followed by DNS-or-IPv4:port or [IPv6]:port with port 1-65535" }}
 {{- $llmRequestRouterDNSAddressPattern := `^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*:[0-9]{1,5}$` }}
 {{- $llmRequestRouterBracketedIPv6Pattern := `^\[[0-9A-Fa-f:.]+\]:[0-9]{1,5}$` }}
-{{- $llmRequestRouterWorkerAddressValid := regexMatch $llmRequestRouterDNSAddressPattern $llmRequestRouterWorkerAddress }}
-{{- if regexMatch $llmRequestRouterBracketedIPv6Pattern $llmRequestRouterWorkerAddress }}
-{{- $llmRequestRouterIPv6Host := regexFind `^\[[0-9A-Fa-f:.]+\]` $llmRequestRouterWorkerAddress | trimPrefix "[" | trimSuffix "]" }}
+{{- $llmRequestRouterWorkerAddressValid := regexMatch $llmRequestRouterDNSAddressPattern $llmRequestRouterWorkerAuthority }}
+{{- if regexMatch $llmRequestRouterBracketedIPv6Pattern $llmRequestRouterWorkerAuthority }}
+{{- $llmRequestRouterIPv6Host := regexFind `^\[[0-9A-Fa-f:.]+\]` $llmRequestRouterWorkerAuthority | trimPrefix "[" | trimSuffix "]" }}
 {{- $llmRequestRouterIPv6Valid := true }}
 {{- $llmRequestRouterIPv6CompressionCount := len (regexFindAll `::` $llmRequestRouterIPv6Host -1) }}
 {{- if or (contains `:::` $llmRequestRouterIPv6Host) (gt $llmRequestRouterIPv6CompressionCount 1) }}
@@ -363,13 +373,88 @@ natsAuthCalloutService:
 {{- if not $llmRequestRouterWorkerAddressValid }}
 {{- fail $llmRequestRouterWorkerAddressError }}
 {{- end }}
-{{- $llmRequestRouterWorkerPort := regexFind `[0-9]{1,5}$` $llmRequestRouterWorkerAddress | atoi }}
+{{- $llmRequestRouterWorkerPort := regexFind `[0-9]{1,5}$` $llmRequestRouterWorkerAuthority | atoi }}
 {{- if or (lt $llmRequestRouterWorkerPort 1) (gt $llmRequestRouterWorkerPort 65535) }}
 {{- fail $llmRequestRouterWorkerAddressError }}
 {{- end }}
 {{- end }}
 {{- $nvcfApiGrpcRouteHostnames := dig "ingress" "gatewayApi" "routes" "nvcfApi" "grpc" "hostnames" (list) .Values | default (list (printf "api-grpc.%s" .Values.global.domain)) }}
 {{- $nvctApiGrpcRouteHostnames := dig "ingress" "gatewayApi" "routes" "nvctApi" "grpc" "hostnames" (list) .Values | default (list (printf "tasks-grpc.%s" .Values.global.domain)) }}
+{{- $configuredApiEnv := dig "api" "env" dict .Values }}
+{{- if not (kindIs "map" $configuredApiEnv) }}
+{{- fail "api.env must be a map" }}
+{{- end }}
+{{- $renderedApiEnv := deepCopy $configuredApiEnv }}
+{{- $legacyPylonEnvKey := "NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE" }}
+{{- $legacyPylonImageConfigured := hasKey $renderedApiEnv $legacyPylonEnvKey }}
+{{- $legacyPylonImage := "" }}
+{{- if $legacyPylonImageConfigured }}
+{{- $legacyPylonImage = index $renderedApiEnv $legacyPylonEnvKey }}
+{{- if not (kindIs "string" $legacyPylonImage) }}
+{{- fail "api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE must be a string" }}
+{{- end }}
+{{- if eq (trim $legacyPylonImage) "" }}
+{{- fail "api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE must be a non-empty string" }}
+{{- end }}
+{{- $legacyPylonImage = trim $legacyPylonImage }}
+{{- $_ := unset $renderedApiEnv $legacyPylonEnvKey }}
+{{- end }}
+{{- $configuredApiRemoteConfigData := dig "api" "remoteConfig" "configData" dict .Values }}
+{{- if not (kindIs "map" $configuredApiRemoteConfigData) }}
+{{- fail "api.remoteConfig.configData must be a map" }}
+{{- end }}
+{{- $apiRemoteConfigData := deepCopy $configuredApiRemoteConfigData }}
+{{- $configuredNvcfRemoteConfig := dict }}
+{{- if hasKey $apiRemoteConfigData "nvcf" }}
+{{- $configuredNvcfRemoteConfig = index $apiRemoteConfigData "nvcf" }}
+{{- if not (kindIs "map" $configuredNvcfRemoteConfig) }}
+{{- fail "api.remoteConfig.configData.nvcf must be a map" }}
+{{- end }}
+{{- end }}
+{{- $configuredSidecarsRemoteConfig := dict }}
+{{- if hasKey $configuredNvcfRemoteConfig "sidecars" }}
+{{- $configuredSidecarsRemoteConfig = index $configuredNvcfRemoteConfig "sidecars" }}
+{{- if not (kindIs "map" $configuredSidecarsRemoteConfig) }}
+{{- fail "api.remoteConfig.configData.nvcf.sidecars must be a map" }}
+{{- end }}
+{{- end }}
+{{- $pylonRemoteConfigKey := "llm-router-client-image" }}
+{{- $configuredPylonImagePresent := hasKey $configuredSidecarsRemoteConfig $pylonRemoteConfigKey }}
+{{- $configuredPylonImage := "" }}
+{{- if $configuredPylonImagePresent }}
+{{- $configuredPylonImage = index $configuredSidecarsRemoteConfig $pylonRemoteConfigKey }}
+{{- if not (kindIs "string" $configuredPylonImage) }}
+{{- fail "api.remoteConfig.configData.nvcf.sidecars.llm-router-client-image must be a string" }}
+{{- end }}
+{{- if eq (trim $configuredPylonImage) "" }}
+{{- fail "api.remoteConfig.configData.nvcf.sidecars.llm-router-client-image must be a non-empty string" }}
+{{- end }}
+{{- $configuredPylonImage = trim $configuredPylonImage }}
+{{- $_ := set $configuredSidecarsRemoteConfig $pylonRemoteConfigKey $configuredPylonImage }}
+{{- end }}
+{{- if and $legacyPylonImageConfigured $configuredPylonImagePresent (ne $legacyPylonImage $configuredPylonImage) }}
+{{- fail "api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE is deprecated and conflicts with api.remoteConfig.configData.nvcf.sidecars.llm-router-client-image" }}
+{{- end }}
+{{- $effectivePylonImage := "" }}
+{{- if $configuredPylonImagePresent }}
+{{- $effectivePylonImage = $configuredPylonImage }}
+{{- else if $legacyPylonImageConfigured }}
+{{- $effectivePylonImage = $legacyPylonImage }}
+{{- else if $llmEnabled }}
+{{- $effectivePylonImage = printf "%s/%s/pylon:0.14.1" $sidecarsHost $sidecarsRepo }}
+{{- end }}
+{{- $stackApiRemoteConfigData := dict }}
+{{- $stackNvcfRemoteConfig := dict }}
+{{- if or $llmEnabled $legacyPylonImageConfigured }}
+{{- $_ := set $stackNvcfRemoteConfig "sidecars" (dict $pylonRemoteConfigKey $effectivePylonImage) }}
+{{- end }}
+{{- if $llmEnabled }}
+{{- $_ := set $stackNvcfRemoteConfig "llm-request-router" (dict "worker-address" $llmRequestRouterWorkerAddress) }}
+{{- end }}
+{{- if $stackNvcfRemoteConfig }}
+{{- $_ := set $stackApiRemoteConfigData "nvcf" $stackNvcfRemoteConfig }}
+{{- end }}
+{{- $apiRemoteConfigData = mergeOverwrite $apiRemoteConfigData $stackApiRemoteConfigData }}
 api:
   fullnameOverride: nvcf-api
   {{- if .Values.global.imagePullSecrets }}
@@ -390,12 +475,10 @@ api:
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
   {{- end }}
-  {{- if $llmEnabled }}
+  {{- if $apiRemoteConfigData }}
   remoteConfig:
     configData:
-      nvcf:
-        llm-request-router:
-          worker-address: {{ $llmRequestRouterWorkerAddress | quote }}
+      {{- toYaml $apiRemoteConfigData | nindent 6 }}
   {{- end }}
   # alpine-k8s is not republished under the public nvidia/nvcf catalog, so it
   # defaults to its upstream Docker Hub source and a public-catalog install
@@ -436,40 +519,65 @@ api:
       {{- end }}
       maxRegistryCreds: {{ $maxRegistryCreds }}
 
+  {{- /* Build the fixed API environment first, then merge configured api.env
+         last so operators can override a default without emitting duplicate
+         YAML keys. toYaml provides deterministic key ordering and treats
+         configured values as data rather than evaluating them as templates. */}}
+  {{- $apiEnv := dict
+        "NVCF_NATS_REGION_PLACEMENT_TAG" "dc"
+        "NVCF_SIDECARS_HOSTNAME" $sidecarsHost
+        "NVCF_SIDECARS_REPOSITORY" $sidecarsRepo
+        "MANAGEMENT_TRACING_ENABLED" (printf "%v" .Values.global.observability.tracing.enabled) -}}
+  {{- with $nvcfWorkerServiceURL }}
+  {{- $_ := set $apiEnv "NVCF_FQDN" . }}
+  {{- end }}
+  {{- with $nvcfWorkerGrpcServiceURL }}
+  {{- $_ := set $apiEnv "NVCF_GLOBAL_FQDN_GRPC" . }}
+  {{- end }}
+  {{- with $nvcfNatsWorkerServiceURL }}
+  {{- $_ := set $apiEnv "NVCF_NATS_WORKER_URL" . }}
+  {{- end }}
+  {{- with $essWorkerBaseURL }}
+  {{- /* Keep the legacy worker alias until all API builds consume nvcf.ess.base-url directly. */}}
+  {{- $_ := set $apiEnv "NVCF_ESS_WORKER_BASE_URL" . }}
+  {{- $_ := set $apiEnv "NVCF_ESS_BASE_URL" . }}
+  {{- end }}
+  {{- with dig "api" "icmsBaseUrl" nil .Values }}
+  {{- $_ := set $apiEnv "NVCF_ICMS_BASE_URL" . }}
+  {{- end }}
+  {{- with dig "api" "jwt" "issuerUri" nil .Values }}
+  {{- $_ := set $apiEnv "SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI" . }}
+  {{- end }}
+  {{- with dig "api" "jwt" "jwkSetUri" nil .Values }}
+  {{- $_ := set $apiEnv "SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI" . }}
+  {{- end }}
+  {{- if .Values.global.observability.tracing.enabled }}
+  {{- $_ := set $apiEnv "MANAGEMENT_OTLP_TRACING_ENDPOINT" (printf "%s://%s:%v/v1/traces" .Values.global.observability.tracing.collectorProtocol .Values.global.observability.tracing.collectorEndpoint .Values.global.observability.tracing.collectorPort) }}
+  {{- end }}
+  {{- $apiEnv = mergeOverwrite $apiEnv $renderedApiEnv }}
   env:
-    NVCF_NATS_REGION_PLACEMENT_TAG: "dc"
-    NVCF_SIDECARS_HOSTNAME: {{ $sidecarsHost }}
-    NVCF_SIDECARS_REPOSITORY: {{ $sidecarsRepo }}
-    {{- with $nvcfWorkerServiceURL }}
-    NVCF_FQDN: {{ . | quote }}
-    {{- end }}
-    {{- with $nvcfWorkerGrpcServiceURL }}
-    NVCF_GLOBAL_FQDN_GRPC: {{ . | quote }}
-    {{- end }}
-    {{- with $nvcfNatsWorkerServiceURL }}
-    NVCF_NATS_WORKER_URL: {{ . | quote }}
-    {{- end }}
-    {{- with $essWorkerBaseURL }}
-    # Keep the legacy worker alias until all API builds consume nvcf.ess.base-url directly.
-    NVCF_ESS_WORKER_BASE_URL: {{ . | quote }}
-    NVCF_ESS_BASE_URL: {{ . | quote }}
-    {{- end }}
-    {{- with dig "api" "icmsBaseUrl" nil .Values }}
-    NVCF_ICMS_BASE_URL: {{ . | quote }}
-    {{- end }}
-    {{- with dig "api" "jwt" "issuerUri" nil .Values }}
-    SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: {{ . | quote }}
-    {{- end }}
-    {{- with dig "api" "jwt" "jwkSetUri" nil .Values }}
-    SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: {{ . | quote }}
-    {{- end }}
-    # Observability
-    MANAGEMENT_TRACING_ENABLED: {{ .Values.global.observability.tracing.enabled | quote }}
-    {{- if .Values.global.observability.tracing.enabled }}
-    MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
-    {{- end }}
+    {{- toYaml $apiEnv | nindent 4 }}
 
 invocation:
+  {{- $configuredInvocationEnv := dig "invocation" "env" dict .Values }}
+  {{- if not (kindIs "map" $configuredInvocationEnv) }}
+  {{- fail "invocation.env must be a map" }}
+  {{- end }}
+  {{- $invocationEnv := dict }}
+  {{- if .Values.global.observability.tracing.enabled }}
+  {{- $_ := set $invocationEnv "SERVER__TRACING__ENDPOINT_IP" (printf "%s://%s" .Values.global.observability.tracing.collectorProtocol .Values.global.observability.tracing.collectorEndpoint) }}
+  {{- $_ := set $invocationEnv "SERVER__TRACING__ENDPOINT_PORT" .Values.global.observability.tracing.collectorPort }}
+  {{- else }}
+  {{- $_ := set $invocationEnv "SERVER__ENVFILTER_DIRECTIVE" "otel::tracing=off,otel=off,server=trace,info" }}
+  {{- end }}
+  {{- if .Values.rateLimiter.enabled }}
+  {{- $_ := set $invocationEnv "RATE_LIMIT_ENABLED" "true" }}
+  {{- $_ := set $invocationEnv "RATE_LIMIT_ADDRESS" "http://ratelimiter.nvcf.svc.cluster.local:7777" }}
+  {{- end }}
+  {{- with $invocationWorkerBaseURL }}
+  {{- $_ := set $invocationEnv "WORKER_STREAM_PROPERTIES__SELF_ADDRESS" . }}
+  {{- end }}
+  {{- $invocationEnv = mergeOverwrite $invocationEnv (deepCopy $configuredInvocationEnv) }}
   fullnameOverride: invocation-service
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
@@ -485,21 +593,14 @@ invocation:
   {{- . | nindent 2 }}
   {{- end }}
 
+  metrics:
+    enabled: {{ or (eq (dig "observability" "profile" "disabled" .Values) "control") (eq (dig "observability" "profile" "disabled" .Values) "all") }}
+    # The observability stack owns the shared ServiceMonitor resources.
+    serviceMonitor:
+      enabled: false
+
   env:
-    # Observability
-    {{- if .Values.global.observability.tracing.enabled }}
-    SERVER__TRACING__ENDPOINT_IP: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}"
-    SERVER__TRACING__ENDPOINT_PORT: {{ .Values.global.observability.tracing.collectorPort }}
-    {{- else }}
-    SERVER__ENVFILTER_DIRECTIVE: "otel::tracing=off,otel=off,server=trace,info"
-    {{- end }}
-    {{- if .Values.rateLimiter.enabled }}
-    RATE_LIMIT_ENABLED: "true"
-    RATE_LIMIT_ADDRESS: "http://ratelimiter.nvcf.svc.cluster.local:7777"
-    {{- end }}
-    {{- with $invocationWorkerBaseURL }}
-    WORKER_STREAM_PROPERTIES__SELF_ADDRESS: {{ . | quote }}
-    {{- end }}
+    {{- toYaml $invocationEnv | nindent 4 }}
   {{- with dig "invocation" "tracing" "baggageAttributeAllowlist" nil .Values }}
   tracing:
     baggageAttributeAllowlist:
@@ -868,16 +969,45 @@ llmApiGateway:
 {{- $pylonGrpcDialAddress := dig "addons" "llm" "requestRouter" "backendRouter" "pylonGrpcDialAddress" "" .Values | default "" | toString | trim }}
 {{- $pylonReverseTunnelDialAddress := dig "addons" "llm" "requestRouter" "backendRouter" "pylonReverseTunnelDialAddress" "" .Values | default "" | toString | trim }}
 {{- $backendRouterEnabled := dig "addons" "llm" "requestRouter" "backendRouter" "enabled" $llmEnabled .Values }}
+{{- $llmWorkerRouteEnabled := dig "ingress" "gatewayApi" "routes" "llmWorker" "enabled" false .Values }}
+{{- $grpcTlsEnabled := dig "addons" "llm" "requestRouter" "grpcTls" "enabled" false .Values }}
+{{- $grpcTlsAllowInsecureHttp := dig "addons" "llm" "requestRouter" "grpcTls" "allowInsecureHttp" false .Values }}
 {{- if and $llmEnabled $backendRouterEnabled (ne (empty $pylonGrpcDialAddress) (empty $pylonReverseTunnelDialAddress)) }}
 {{- fail "addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress and addons.llm.requestRouter.backendRouter.pylonReverseTunnelDialAddress must either both be set or both be omitted" }}
+{{- end }}
+{{- if and $llmWorkerRouteEnabled $grpcTlsEnabled $grpcTlsAllowInsecureHttp }}
+{{- fail "addons.llm.requestRouter.grpcTls.enabled and addons.llm.requestRouter.grpcTls.allowInsecureHttp cannot both be true" }}
+{{- end }}
+{{- if and $llmWorkerRouteEnabled (not $grpcTlsEnabled) (not $grpcTlsAllowInsecureHttp) }}
+{{- fail "addons.llm.requestRouter.grpcTls.allowInsecureHttp must be true for an explicitly plaintext external LLM worker route" }}
+{{- end }}
+{{- if and $llmWorkerRouteEnabled (empty $pylonGrpcDialAddress) }}
+{{- fail "addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress is required when ingress.gatewayApi.routes.llmWorker.enabled is true" }}
+{{- end }}
+{{- if and $llmWorkerRouteEnabled (ne $llmRequestRouterWorkerAddress $pylonGrpcDialAddress) }}
+{{- fail "global.workerEndpoints.llmRequestRouterAddress and addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress must use the same explicit URI when LLM worker routing is enabled" }}
+{{- end }}
+{{- if and $llmWorkerRouteEnabled $grpcTlsEnabled (not (hasPrefix "https://" $llmRequestRouterWorkerAddress)) }}
+{{- fail "secure LLM worker routing requires an explicit https:// global.workerEndpoints.llmRequestRouterAddress" }}
+{{- end }}
+{{- if and $llmWorkerRouteEnabled $grpcTlsAllowInsecureHttp (not (hasPrefix "http://" $llmRequestRouterWorkerAddress)) }}
+{{- fail "development plaintext LLM worker routing requires an explicit http:// global.workerEndpoints.llmRequestRouterAddress" }}
 {{- end }}
 
 llmRequestRouter:
   enabled: {{ dig "addons" "llm" "enabled" false .Values }}
   fullnameOverride: llm-request-router
   replicaCount: {{ dig "addons" "llm" "requestRouter" "replicaCount" 3 .Values }}
+  workload:
+    kind: {{ dig "addons" "llm" "requestRouter" "workload" "kind" "Deployment" .Values | quote }}
+  {{- with dig "addons" "llm" "requestRouter" "discovery" dict .Values }}
+  discovery:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   service:
     grpcPort: {{ $llmRequestRouterGrpcPort }}
+  readiness:
+    warmupMs: {{ dig "addons" "llm" "requestRouter" "readiness" "warmupMs" 60000 .Values }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
     {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
@@ -914,6 +1044,19 @@ llmRequestRouter:
     imagePullSecrets:
       {{- toYaml .Values.global.imagePullSecrets | nindent 6 }}
     {{- end }}
+  grpcTls:
+    enabled: {{ $grpcTlsEnabled }}
+    allowInsecureHttp: {{ $grpcTlsAllowInsecureHttp }}
+    mode: {{ dig "addons" "llm" "requestRouter" "grpcTls" "mode" "certManager" .Values | quote }}
+    secretName: {{ dig "addons" "llm" "requestRouter" "grpcTls" "secretName" "llm-request-router-grpc-tls" .Values | quote }}
+    dnsNames:
+      {{- dig "addons" "llm" "requestRouter" "grpcTls" "dnsNames" (list) .Values | toYaml | nindent 6 }}
+    issuerRef:
+      kind: {{ dig "addons" "llm" "requestRouter" "grpcTls" "issuerRef" "kind" "" .Values | default (dig "addons" "llm" "pki" "issuerKind" "ClusterIssuer" .Values) | quote }}
+      name: {{ dig "addons" "llm" "requestRouter" "grpcTls" "issuerRef" "name" "" .Values | default (dig "addons" "llm" "pki" "issuerName" "nvcf-openbao-pki" .Values) | quote }}
+      {{- with dig "addons" "llm" "requestRouter" "grpcTls" "issuerRef" "group" "" .Values }}
+      group: {{ . | quote }}
+      {{- end }}
   {{- with include "nvcf.nodeSelector" (dict "type" "controlplane" "selectors" .Values.global.nodeSelectors) }}
   {{- . | nindent 2 }}
   {{- end }}
@@ -1237,8 +1380,8 @@ nvcfUi:
       - name: llm-request-router
         namespace: nvcf
         endpoints:
-          - llm-request-router-headless.nvcf.svc.cluster.local:8000/healthz
-          - llm-request-router-headless.nvcf.svc.cluster.local:8000/readyz
+          - llm-request-router.nvcf.svc.cluster.local:8000/healthz
+          - llm-request-router.nvcf.svc.cluster.local:8000/readyz
       {{- end }}
       - name: reval
         namespace: nvcf
@@ -1325,7 +1468,6 @@ nvcfUi:
 nvcfGatewayRoutes:
   {{- $natsRouteEnabled := dig "ingress" "gatewayApi" "routes" "nats" "enabled" false .Values }}
   {{- $essRouteEnabled := dig "ingress" "gatewayApi" "routes" "ess" "enabled" false .Values }}
-  {{- $llmWorkerRouteEnabled := dig "ingress" "gatewayApi" "routes" "llmWorker" "enabled" false .Values }}
   domain: "{{ .Values.global.domain }}"
   gateways:
     shared:
@@ -1400,6 +1542,10 @@ nvcfGatewayRoutes:
       enabled: {{ dig "addons" "nvcfUi" "enabled" false .Values }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "nvcfUi" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+    eventLedger:
+      enabled: {{ dig "addons" "eventLedger" "enabled" false .Values }}
+      routeAnnotations:
+        {{ dig "ingress" "gatewayApi" "routes" "eventLedger" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
     grpc:
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "grpc" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
