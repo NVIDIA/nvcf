@@ -744,6 +744,34 @@ func TestResolveCacheMountOptions_ConfigMapEditTakesEffect(t *testing.T) {
 	}
 }
 
+func TestResolveCacheMountOptionsWithRequiredIgnoresLegacyConfigMap(t *testing.T) {
+	ctx := context.Background()
+	c := fake.NewClientBuilder().
+		WithScheme(mgrScheme).
+		WithObjects(newMountOptionDefaultsObjects(NVMeshStorageClassProvisioner, map[string]string{
+			NVMeshStorageClassProvisioner: "rw,recovery,uuid",
+		})...).
+		Build()
+	r := newMountOptionsReconciler(t, c, []string{"rw", "noatime"})
+	pv := &corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "secondary-pv-test"}}
+	required := []string{"ro", "norecovery", "nouuid"}
+	want := []string{"ro", "norecovery", "nouuid", "noatime"}
+
+	if got := r.resolveCacheMountOptionsWithRequired(ctx, pv, required); !slices.Equal(got, want) {
+		t.Fatalf("resolved mount options = %v, want %v", got, want)
+	}
+
+	cm := &corev1.ConfigMap{}
+	key := client.ObjectKey{Name: DefaultCacheMountOptionsConfigMapName, Namespace: ModelCacheInitNamespace}
+	require.NoError(t, c.Get(ctx, key, cm))
+	cm.Data[NVMeshStorageClassProvisioner] = "ro,norecovery,nouuid,dirsync"
+	require.NoError(t, c.Update(ctx, cm))
+
+	if got := r.resolveCacheMountOptionsWithRequired(ctx, pv, required); !slices.Equal(got, want) {
+		t.Errorf("resolved options changed after legacy ConfigMap edit: got %v, want %v", got, want)
+	}
+}
+
 // TestModelCacheStorageClassResolvedOnce covers the storage class NewReconciler
 // resolves for the life of the reconciler: the option override first (tests),
 // then the agent config value, then the default. The config value is the single
@@ -1050,6 +1078,34 @@ func TestReconcileSecondaryPVMountOptionsRejectsStaleObject(t *testing.T) {
 	require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(pv), got))
 	assert.Equal(t, []string{"ro", "norecovery", "nouuid"}, got.Spec.MountOptions)
 	assert.Equal(t, "true", got.Labels["replacement"])
+}
+
+func TestReconcileSecondaryPVMountOptionsWithRequired(t *testing.T) {
+	pv := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "secondary-pv-test"},
+		Spec: corev1.PersistentVolumeSpec{
+			PersistentVolumeSource: corev1.PersistentVolumeSource{
+				CSI: &corev1.CSIPersistentVolumeSource{
+					Driver:       NVMeshStorageClassProvisioner,
+					VolumeHandle: "handle",
+				},
+			},
+		},
+	}
+	objects := append(newMountOptionDefaultsObjects(
+		NVMeshStorageClassProvisioner,
+		map[string]string{NVMeshStorageClassProvisioner: "rw,recovery,uuid"}), pv)
+	c := fake.NewClientBuilder().WithScheme(mgrScheme).WithObjects(objects...).Build()
+	r := newMountOptionsReconciler(t, c, []string{"rw", "noatime"})
+
+	stored := &corev1.PersistentVolume{}
+	require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(pv), stored))
+	require.NoError(t, r.reconcileSecondaryPVMountOptionsWithRequired(
+		t.Context(), stored, []string{"ro", "norecovery", "nouuid"}))
+
+	got := &corev1.PersistentVolume{}
+	require.NoError(t, c.Get(t.Context(), client.ObjectKeyFromObject(pv), got))
+	assert.Equal(t, []string{"ro", "norecovery", "nouuid", "noatime"}, got.Spec.MountOptions)
 }
 
 func Test_updateSecondaryPVVolumeHandle(t *testing.T) {

@@ -622,6 +622,7 @@ func boundReaderPVForRegularCleanupFixture(
 ) *corev1.PersistentVolume {
 	pv := fixture.pv.DeepCopy()
 	pv.Spec.AccessModes = ROAccessMode
+	pv.Spec.MountOptions = append([]string(nil), fixture.binding.Spec.Decision.RequiredMountOptions...)
 	pv.Spec.ClaimRef = &corev1.ObjectReference{
 		Namespace: reader.Namespace,
 		Name:      reader.Name,
@@ -631,6 +632,74 @@ func boundReaderPVForRegularCleanupFixture(
 }
 
 func noOpRegularModelCacheMutation(client.Object) {}
+
+func TestRegularModelCacheReaderMountOptions(t *testing.T) {
+	fixture := newRegularCleanupTestFixture(t)
+	configured := []string{"rw", "noatime", "nouuid", "recovery"}
+
+	got, err := regularModelCacheReaderMountOptions(fixture.binding, configured)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ro", "norecovery", "nouuid", "noatime"}, got)
+	assert.Equal(t, []string{"rw", "noatime", "nouuid", "recovery"}, configured)
+	assert.Equal(t, []string{"ro", "norecovery", "nouuid"},
+		fixture.binding.Spec.Decision.RequiredMountOptions)
+
+	wrongTransition := fixture.binding.DeepCopy()
+	wrongTransition.Spec.Decision.Transition = nvcastorage.ModelCacheTransitionRWXReadOnly
+	_, err = regularModelCacheReaderMountOptions(wrongTransition, configured)
+	require.ErrorContains(t, err, "does not create a read-only reader PV")
+}
+
+func TestSetupPVCForReadersUsesPersistedReaderMountOptions(t *testing.T) {
+	fixture := newRegularCleanupTestFixture(t)
+	fixture.req.Spec.FunctionDetails.FunctionVersionID = "function-version"
+	fixture.pv.Labels[fnVersionIDLabelString] = "function-version"
+	fixture.backend.bk8s.csiVolumeMountOptions = []string{"rw", "noatime", "nouuid", "recovery"}
+	k8sClient := fixture.useK8sObjects(fixture.rwPVC, fixture.job, fixture.pv)
+
+	previousSkip := skipVolumeDetachCheck
+	skipVolumeDetachCheck = true
+	t.Cleanup(func() { skipVolumeDetachCheck = previousSkip })
+
+	phase, err := fixture.backend.SetupPVCForReaders(
+		newTestContext(), fixture.rwPVC.DeepCopy(), fixture.job.Name,
+		fixture.req, noOpRegularModelCacheMutation)
+	require.NoError(t, err)
+	assert.Equal(t, ROPVCSetupCompleted, phase)
+
+	got, err := k8sClient.CoreV1().PersistentVolumes().
+		Get(t.Context(), fixture.pv.Name, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ro", "norecovery", "nouuid", "noatime"}, got.Spec.MountOptions)
+}
+
+func TestSetupPVCForReadersRepairsMountOptionsWithoutChangingReaderIdentity(t *testing.T) {
+	fixture := newRegularCleanupTestFixture(t)
+	fixture.req.Spec.FunctionDetails.FunctionVersionID = "function-version"
+	reader := boundReaderForRegularCleanupFixture(fixture)
+	readerPV := boundReaderPVForRegularCleanupFixture(fixture, reader)
+	readerPV.Labels[fnVersionIDLabelString] = "function-version"
+	readerPV.Spec.MountOptions = []string{"rw", "recovery", "uuid"}
+	fixture.backend.bk8s.csiVolumeMountOptions = []string{"noatime"}
+	k8sClient := fixture.useK8sObjects(reader, readerPV)
+
+	previousSkip := skipVolumeDetachCheck
+	skipVolumeDetachCheck = true
+	t.Cleanup(func() { skipVolumeDetachCheck = previousSkip })
+
+	phase, err := fixture.backend.SetupPVCForReaders(
+		newTestContext(), fixture.rwPVC.DeepCopy(), fixture.job.Name,
+		fixture.req, noOpRegularModelCacheMutation)
+	require.NoError(t, err)
+	assert.Equal(t, ROPVCSetupCompleted, phase)
+
+	got, err := k8sClient.CoreV1().PersistentVolumes().
+		Get(t.Context(), readerPV.Name, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, reader.UID, got.Spec.ClaimRef.UID)
+	assert.Equal(t, reader.Name, got.Spec.ClaimRef.Name)
+	assert.Equal(t, []string{"ro", "norecovery", "nouuid", "noatime"}, got.Spec.MountOptions)
+}
 
 func TestSetupInitCacheJobBlockDevicePreservesTransientStorageClassError(t *testing.T) {
 	fixture := newRegularCleanupTestFixture(t)
@@ -1066,6 +1135,20 @@ func TestSetupModelCachingForRequestRejectsUnownedBoundReaderPV(t *testing.T) {
 				pv.Spec.ClaimRef.UID = types.UID("stale-reader-uid")
 			},
 			wantErr: "claimRef",
+		},
+		{
+			name: "missing required reader mount option",
+			mutate: func(pv *corev1.PersistentVolume) {
+				pv.Spec.MountOptions = []string{"ro", "norecovery"}
+			},
+			wantErr: "missing required mount option",
+		},
+		{
+			name: "conflicting reader mount option",
+			mutate: func(pv *corev1.PersistentVolume) {
+				pv.Spec.MountOptions = append(pv.Spec.MountOptions, "rw")
+			},
+			wantErr: "conflicts with required option",
 		},
 	}
 

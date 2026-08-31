@@ -38,6 +38,9 @@ func testResolvedModelCacheStorage(transition string) *ModelCacheStorageSelectio
 		Transition:          transition,
 		RequiredAccessModes: requiredAccessModesForTransition(transition),
 	}
+	if transition == ModelCacheTransitionROXReadOnly {
+		selection.RequiredMountOptions = []string{"ro", "norecovery", "nouuid"}
+	}
 	if transition == ModelCacheTransitionRWXReadOnly {
 		selection.Provider = "sharedFilesystem"
 		selection.Provisioner = "shared.csi.example.com"
@@ -51,17 +54,18 @@ func testPersistedModelCacheStorageSelection(
 ) *PersistedModelCacheStorageSelection {
 	resolved := testResolvedModelCacheStorage(transition)
 	return &PersistedModelCacheStorageSelection{
-		Version:             modelCacheStorageSelectionVersion,
-		Workflow:            ModelCacheWorkflowRegular,
-		Mode:                mode,
-		StorageClassName:    resolved.StorageClassName,
-		StorageClassUID:     resolved.StorageClassUID,
-		StorageClassDigest:  resolved.StorageClassDigest,
-		CatalogDigest:       resolved.CatalogDigest,
-		Provider:            resolved.Provider,
-		Provisioner:         resolved.Provisioner,
-		Transition:          resolved.Transition,
-		RequiredAccessModes: append([]corev1.PersistentVolumeAccessMode(nil), resolved.RequiredAccessModes...),
+		Version:              modelCacheStorageSelectionVersion,
+		Workflow:             ModelCacheWorkflowRegular,
+		Mode:                 mode,
+		StorageClassName:     resolved.StorageClassName,
+		StorageClassUID:      resolved.StorageClassUID,
+		StorageClassDigest:   resolved.StorageClassDigest,
+		CatalogDigest:        resolved.CatalogDigest,
+		Provider:             resolved.Provider,
+		Provisioner:          resolved.Provisioner,
+		Transition:           resolved.Transition,
+		RequiredAccessModes:  append([]corev1.PersistentVolumeAccessMode(nil), resolved.RequiredAccessModes...),
+		RequiredMountOptions: append([]string(nil), resolved.RequiredMountOptions...),
 	}
 }
 
@@ -88,7 +92,7 @@ func TestNewPersistedModelCacheStorageSelection(t *testing.T) {
 			name:       "durable NVMesh",
 			workflow:   ModelCacheWorkflowRegular,
 			mode:       ModelCacheSelectionDurable,
-			resolved:   testResolvedModelCacheStorage(ModelCacheTransitionNVMesh),
+			resolved:   testResolvedModelCacheStorage(ModelCacheTransitionROXReadOnly),
 			wantFields: true,
 		},
 		{
@@ -138,7 +142,7 @@ func TestNewPersistedModelCacheStorageSelection(t *testing.T) {
 			name:       "non-durable selection with NVMesh transition",
 			workflow:   ModelCacheWorkflowRegular,
 			mode:       ModelCacheSelectionNone,
-			resolved:   testResolvedModelCacheStorage(ModelCacheTransitionNVMesh),
+			resolved:   testResolvedModelCacheStorage(ModelCacheTransitionROXReadOnly),
 			wantErr:    "non-durable model cache selection has transition",
 			wantFields: true,
 		},
@@ -174,6 +178,7 @@ func TestNewPersistedModelCacheStorageSelection(t *testing.T) {
 			assert.Equal(t, tt.resolved.Provider, selection.Provider)
 			assert.Equal(t, tt.resolved.Provisioner, selection.Provisioner)
 			assert.Equal(t, tt.resolved.Transition, selection.Transition)
+			assert.Equal(t, tt.resolved.RequiredMountOptions, selection.RequiredMountOptions)
 		})
 	}
 }
@@ -186,6 +191,7 @@ func TestPersistedModelCacheStorageSelectionRWXReadOnlyContract(t *testing.T) {
 	assert.Equal(t,
 		[]corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
 		selection.RequiredAccessModes)
+	assert.Empty(t, selection.RequiredMountOptions)
 
 	raw, err := selection.Marshal()
 	require.NoError(t, err)
@@ -207,10 +213,14 @@ func TestPersistedModelCacheStorageSelectionRWXReadOnlyContract(t *testing.T) {
 		corev1.ReadOnlyMany,
 	}
 	require.ErrorContains(t, extraMode.Validate(), "requires access modes [ReadWriteMany]")
+
+	withReaderOptions := *selection
+	withReaderOptions.RequiredMountOptions = []string{"ro"}
+	require.ErrorContains(t, withReaderOptions.Validate(), "does not create a reader PV")
 }
 
 func TestPersistedModelCacheStorageSelectionMarshalParseRoundTrip(t *testing.T) {
-	want := testPersistedModelCacheStorageSelection(ModelCacheSelectionDurable, ModelCacheTransitionNVMesh)
+	want := testPersistedModelCacheStorageSelection(ModelCacheSelectionDurable, ModelCacheTransitionROXReadOnly)
 	want.Workflow = ModelCacheWorkflowHelm
 
 	raw, err := want.Marshal()
@@ -228,7 +238,7 @@ func TestPersistedModelCacheStorageSelectionMarshalParseRoundTrip(t *testing.T) 
 
 func TestPersistedModelCacheStorageSelectionRejectsProviderTransitionMismatch(t *testing.T) {
 	selection := testPersistedModelCacheStorageSelection(
-		ModelCacheSelectionDurable, ModelCacheTransitionNVMesh)
+		ModelCacheSelectionDurable, ModelCacheTransitionROXReadOnly)
 	selection.Provider = "weka"
 
 	err := selection.Validate()
@@ -267,7 +277,7 @@ func TestParsePersistedModelCacheStorageSelectionStrict(t *testing.T) {
 
 func TestPersistedModelCacheStorageSelectionValidate(t *testing.T) {
 	validDurable := func() *PersistedModelCacheStorageSelection {
-		return testPersistedModelCacheStorageSelection(ModelCacheSelectionDurable, ModelCacheTransitionNVMesh)
+		return testPersistedModelCacheStorageSelection(ModelCacheSelectionDurable, ModelCacheTransitionROXReadOnly)
 	}
 	validDisabled := func() *PersistedModelCacheStorageSelection {
 		return testPersistedModelCacheStorageSelection(ModelCacheSelectionNone, ModelCacheTransitionDisabled)
@@ -370,9 +380,34 @@ func TestPersistedModelCacheStorageSelectionValidate(t *testing.T) {
 			s.Transition = "shared-filesystem"
 			return s
 		}, want: "unsupported transition"},
+		{name: "NVMesh missing required reader mount option", selection: func() *PersistedModelCacheStorageSelection {
+			s := validDurable()
+			s.RequiredMountOptions = []string{"ro", "norecovery"}
+			return s
+		}, want: `requires mount option "nouuid"`},
+		{name: "duplicate required reader mount option", selection: func() *PersistedModelCacheStorageSelection {
+			s := validDurable()
+			s.RequiredMountOptions = append(s.RequiredMountOptions, "ro")
+			return s
+		}, want: `duplicate required mount option "ro"`},
+		{name: "conflicting required reader mount options", selection: func() *PersistedModelCacheStorageSelection {
+			s := validDurable()
+			s.RequiredMountOptions = append(s.RequiredMountOptions, "rw")
+			return s
+		}, want: "required mount options \"ro\" and \"rw\" conflict"},
+		{name: "blank required reader mount option", selection: func() *PersistedModelCacheStorageSelection {
+			s := validDurable()
+			s.RequiredMountOptions = append(s.RequiredMountOptions, " ")
+			return s
+		}, want: "invalid required mount option"},
+		{name: "non-durable with required mount options", selection: func() *PersistedModelCacheStorageSelection {
+			s := validDisabled()
+			s.RequiredMountOptions = []string{"ro"}
+			return s
+		}, want: "non-durable model cache selection has required mount options"},
 		{name: "none with durable transition", selection: func() *PersistedModelCacheStorageSelection {
 			s := validDisabled()
-			s.Transition = ModelCacheTransitionNVMesh
+			s.Transition = ModelCacheTransitionROXReadOnly
 			return s
 		}, want: "non-durable model cache selection has transition"},
 		{name: "ephemeral with unknown transition", selection: func() *PersistedModelCacheStorageSelection {

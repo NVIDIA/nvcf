@@ -84,14 +84,15 @@ func newHelmReprovisionFixture(t *testing.T, encrypted bool) *helmReprovisionFix
 		ModelCacheWorkflowHelm,
 		ModelCacheSelectionDurable,
 		&ModelCacheStorageSelection{
-			StorageClassName:    sc.Name,
-			StorageClassUID:     sc.UID,
-			StorageClassDigest:  digestStorageClass(sc),
-			CatalogDigest:       "sha256:" + strings.Repeat("a", 64),
-			Provider:            "nvmesh",
-			Provisioner:         sc.Provisioner,
-			Transition:          ModelCacheTransitionNVMesh,
-			RequiredAccessModes: requiredAccessModesForTransition(ModelCacheTransitionNVMesh),
+			StorageClassName:     sc.Name,
+			StorageClassUID:      sc.UID,
+			StorageClassDigest:   digestStorageClass(sc),
+			CatalogDigest:        "sha256:" + strings.Repeat("a", 64),
+			Provider:             "nvmesh",
+			Provisioner:          sc.Provisioner,
+			Transition:           ModelCacheTransitionROXReadOnly,
+			RequiredAccessModes:  requiredAccessModesForTransition(ModelCacheTransitionROXReadOnly),
+			RequiredMountOptions: []string{"ro", "norecovery", "nouuid"},
 		},
 	)
 	require.NoError(t, err)

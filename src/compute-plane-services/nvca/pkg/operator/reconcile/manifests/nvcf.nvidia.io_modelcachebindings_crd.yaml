@@ -87,6 +87,12 @@ spec:
                     items:
                       type: string
                       enum: [ReadWriteOnce, ReadOnlyMany, ReadWriteMany, ReadWriteOncePod]
+                  requiredMountOptions:
+                    type: array
+                    x-kubernetes-list-type: atomic
+                    items:
+                      type: string
+                      minLength: 1
                   catalogDigest:
                     type: string
                     pattern: ^sha256:[a-f0-9]{64}$

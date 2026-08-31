@@ -11,9 +11,9 @@ NVCA records the selection on the `ICMSRequest`, creates an immutable `ModelCach
 UID to the binding before it creates cache storage. Runtime code then uses the recorded binding. It does not select a
 different durable provider after a retry, restart, feature-gate change, or catalog change.
 
-NVCA has two registered regular transition branches: `nvmesh` and `rwxReadOnly`. Only `nvmesh` is selected by the
+NVCA has two registered regular transition branches: `roxReadOnly` and `rwxReadOnly`. Only `roxReadOnly` is selected by the
 catalog. The shipped Weka, OCI File Storage (FSS), and OCI Lustre entries remain `disabled` for regular and Helm
-requests, so they do not enable NVCF cache traffic. Helm supports only `nvmesh`.
+requests, so they do not enable NVCF cache traffic. Helm supports only `roxReadOnly`.
 
 For `rwxReadOnly`, NVCA populates one RWX PVC and returns that same claim to workload Pods. Workload construction sets
 the PVC volume source and every matching init-container and container mount read-only. The current branch accepts only
@@ -53,12 +53,12 @@ performance qualification.
 
 ## Current support
 
-| Provisioner | Catalog access modes | Shipped regular transition | Shipped Helm transition |
-|---|---|---|---|
-| `nvmesh-csi.excelero.com` | RWO, ROX | `nvmesh` | `nvmesh` |
-| `csi.weka.io` | RWX, ROX | `disabled` | `disabled` |
-| `fss.csi.oraclecloud.com` | RWX | `disabled` | `disabled` |
-| `lustre.csi.oraclecloud.com` | None recorded | `disabled` | `disabled` |
+| Provisioner | Catalog access modes | Required reader-PV mount options | Shipped regular transition | Shipped Helm transition |
+|---|---|---|---|---|
+| `nvmesh-csi.excelero.com` | RWO, ROX | `ro`, `norecovery`, `nouuid` | `roxReadOnly` | `roxReadOnly` |
+| `csi.weka.io` | RWX, ROX | None | `disabled` | `disabled` |
+| `fss.csi.oraclecloud.com` | RWX | None | `disabled` | `disabled` |
+| `lustre.csi.oraclecloud.com` | None recorded | None | `disabled` | `disabled` |
 
 RWO means `ReadWriteOnce`, ROX means `ReadOnlyMany`, and RWX means `ReadWriteMany`.
 
@@ -101,19 +101,55 @@ drivers:
     provider: <provider-id>
     accessModes:
       - <qualified-pvc-access-mode>
+    readerMountOptions:
+      - <required-reader-pv-mount-option>
     transitions:
-      regularModelCache: <registered-transition-or-disabled>
-      helmModelCache: <registered-transition-or-disabled>
+      regularModelCache: <registered-runtime-strategy-or-disabled>
+      helmModelCache: <registered-runtime-strategy-or-disabled>
 ```
 
-The provisioner is the lookup key. `provider` is an identifier for logs and persisted state. A transition names
-executable NVCA code. `disabled` is the only disabled value.
+The provisioner is the lookup key. `provider` is an identifier for logs and persisted state. Transition values are a
+closed enum, not free text. A strategy name means enabled; `disabled` means unsupported.
 
-The parser rejects unknown fields, unknown access modes, duplicate modes, unknown transitions, and transition/provider
-mismatches. Tests parse the shipped catalog and validate the shipped JSON Schema.
+| Workflow field | Allowed values |
+|---|---|
+| `regularModelCache` | `disabled`, `roxReadOnly`, `rwxReadOnly` |
+| `helmModelCache` | `disabled`, `roxReadOnly` |
+
+| Strategy | Runtime behavior | Current restriction |
+|---|---|---|
+| `disabled` | Do not use durable storage for this workflow | None |
+| `roxReadOnly` | Populate an RWO writer, then publish ROX reader storage with read-only Pod mounts | Exact NVMesh provisioner only |
+| `rwxReadOnly` | Populate one RWX claim, then publish that same claim with read-only Pod mounts | Regular workflow only; no shipped provider is enabled yet |
+
+`readerMountOptions` is a required array. An empty array means only that the catalog records no reader-PV option
+requirement; it is not provider qualification or enablement evidence.
+
+Reader mount options apply only when a transition makes NVCA create or rewrite a read-only reader PV. They are not
+`StorageClass.mountOptions`, arbitrary Pod `volumeMounts`, or the Pod-level read-only flag. The `rwxReadOnly`
+transition returns the dynamically provisioned RWX claim and therefore uses no reader-PV mount options.
+The catalog, request annotation, and binding are public Kubernetes data; mount options must never contain credentials
+or other secrets.
+
+The parser rejects unknown fields, unknown access modes, duplicate modes or options, blank options, conflicting
+required options, unknown transitions, and transition/provider mismatches. An NVMesh transition requires `ro`,
+`norecovery`, and `nouuid`. Tests parse the shipped catalog and validate the shipped JSON Schema.
 
 The catalog is not a general CSI capability matrix. It does not record expansion, snapshots, clones, performance, or
 topology support.
+
+### What operators set
+
+Use the exact installed CSI provisioner. Do not infer or enable a strategy from access modes alone.
+
+| Provider state | `regularModelCache` | `helmModelCache` |
+|---|---|---|
+| Shipped NVMesh configuration | `roxReadOnly` | `roxReadOnly` |
+| New or unqualified provider | `disabled` | `disabled` |
+| Qualified Weka, OCI FSS, VAST, or Lustre RWX regular workflow | `rwxReadOnly` | `disabled` |
+
+The last row is a target configuration, not current enablement. Set it only after the exact CSI and StorageClass
+configuration passes the provider-qualification contract in this document and the listed NVCA limitations are closed.
 
 ### Selection outcomes
 
@@ -125,7 +161,7 @@ catalog once, before it creates the `ICMSRequest`.
 | Caching gate is off | `none` | `none` |
 | `nvcf-sc` is absent | `none` | `ephemeral` |
 | Selected workflow transition is `disabled` | `none` | `ephemeral` |
-| Transition is `nvmesh` | `durable` | `durable` |
+| Transition is `roxReadOnly` | `durable` | `durable` |
 | Transition is `rwxReadOnly` | `durable` | Invalid catalog; request creation fails |
 | Catalog is invalid or provisioner is unknown | Request creation fails | Request creation fails |
 | `nvcf-sc` is not `Retain` | Request creation fails | Request creation fails |
@@ -153,8 +189,8 @@ Annotation `nvca.nvcf.nvidia.io/model-cache-storage-selection` records:
 - workflow and mode;
 - StorageClass name, UID, and configuration digest;
 - catalog payload digest;
-- provider, provisioner, transition, and required access modes;
-- the encryption decision, which may be `true` only for `nvmesh`;
+- provider, provisioner, transition, required access modes, and required reader-PV mount options;
+- the encryption decision, which may be `true` only for `roxReadOnly`;
 - binding name and API-assigned UID after the binding is committed.
 
 The annotation is strict JSON. Runtime validation rejects unknown fields, partial durable state, workflow changes, an
@@ -176,7 +212,7 @@ live lookup.
 | Area | Recorded data |
 |---|---|
 | Identity | Version, workflow, sharing-domain digest, cache-handle digest |
-| Decision | Provider, provisioner, transition, required access modes, catalog digest, encryption decision |
+| Decision | Provider, provisioner, transition, required access modes, required reader-PV mount options, catalog digest, encryption decision |
 | StorageClass | Name, UID, `Retain`, configuration digest |
 | Resource intent | Writer namespace, deterministic PVC and Job names, optional Lease, encrypted class and Secret names |
 | Lifecycle | `Active` or `Retiring`, exact request namespace/name/UID references, finalizer |
@@ -217,13 +253,14 @@ required before those domains can use independent bindings for the same handle.
 
 The regular writer and workload Pods run in the Pod instance namespace.
 
-### `nvmesh`
+### `roxReadOnly`
 
 1. Create `rw-pvc-<handle>` with RWO and `writer-job-<handle>`.
 2. Wait for population and volume detachment.
 3. Set the retained PV to ROX and bind `ro-pvc-<handle>` to that PV.
-4. Mount the reader PVC with `PersistentVolumeClaimVolumeSource.readOnly: true`.
-5. Set every matching init-container and container `volumeMount.readOnly: true`.
+4. Apply the binding's required reader-PV mount options before publishing the reader PVC.
+5. Mount the reader PVC with `PersistentVolumeClaimVolumeSource.readOnly: true`.
+6. Set every matching init-container and container `volumeMount.readOnly: true`.
 
 ### `rwxReadOnly`
 
@@ -260,7 +297,7 @@ binding metadata fail closed. This prevents deletion of one request from garbage
 Automated two-reference reuse tests use credential-free synthetic Jobs. Production reuse requires binding-scoped
 writer input identity, Secret lifecycle, and failure recovery.
 
-For `nvmesh`, the binding UID labels the writer PVC, Job and Pod template, retained PV, and reader PVC. For
+For `roxReadOnly`, the binding UID labels the writer PVC, Job and Pod template, retained PV, and reader PVC. For
 `rwxReadOnly`, it labels the writer PVC, Job, and Pod template. NVCA does not label the dynamically provisioned RWX PV;
 ownership is proved through the exact PVC claim reference and persisted storage identity. The regular path has no
 Kubernetes Lease. Its mutex serializes setup only within one NVCA process.
@@ -275,7 +312,7 @@ revalidates every other identity field, and continues. Legacy periodic cleanup s
 
 ## Helm model cache
 
-Only `nvmesh` is executable for Helm. The schema, catalog validator, and persisted-selection validator reject
+Only `roxReadOnly` is executable for Helm. The schema, catalog validator, and persisted-selection validator reject
 `rwxReadOnly`. The writer and readers use different namespaces, so they cannot reference one namespaced PVC. A
 provider-neutral, no-copy namespace-local reader mapping and its lifecycle and cleanup logic are not implemented.
 
@@ -284,7 +321,8 @@ The Helm writer runs in `nvca-modelcache-init`.
 1. A Lease named from the cache handle elects one writer request.
 2. The writer populates `rw-pvc-<handle>` through `writer-job-<handle>`.
 3. NVCA retains the primary PV as the cache data identity.
-4. Each StorageRequest creates its namespace-local ROX PVC and secondary PV for the same NVMesh data identity.
+4. Each StorageRequest creates its namespace-local ROX PVC and secondary PV for the same NVMesh data identity, using
+   the binding's required reader-PV mount options.
 5. The webhook sets the PVC volume source and every mount that references the model-cache volume read-only.
 
 The binding UID labels the StorageRequest, writer PVC, Job and Pod template, pull Secrets, Lease, primary PV, secondary
@@ -307,7 +345,7 @@ binding-owned primary PVs and their encrypted StorageClasses.
 ## Encryption
 
 Encryption is part of the durable selection and binding decision. A later feature-gate change does not change it.
-Only the `nvmesh` transition supports encryption. The `rwxReadOnly` transition rejects it.
+Only the `roxReadOnly` transition supports encryption. The `rwxReadOnly` transition rejects it.
 
 NVMesh encryption uses existing sharing-domain-scoped resources:
 
@@ -328,6 +366,7 @@ their deterministic names, never Secret contents.
 | Feature gate changes after selection | Recorded mode remains authoritative |
 | StorageClass or catalog drifts before binding creation | Terminal failure, no binding or cache object |
 | Catalog changes after binding creation | Existing binding remains authoritative |
+| Legacy mount-option ConfigMap changes after binding creation | Persisted provider-required options remain authoritative |
 | Missing writer requires dynamic provisioning after class replacement | Terminal failure before PVC creation |
 | Runtime binding is missing, replaced, `Retiring`, or lacks the exact request reference | Terminal failure; the exact sole regular request may resume cleanup against `Retiring`, and Helm cleanup has the validated tombstone exception |
 | Object has missing or foreign ownership | Never adopt or delete that object; runtime fails terminal and cleanup refuses that target |
@@ -374,7 +413,7 @@ unlabeled legacy PVC, PV, Job, Secret, or Lease into a new binding.
 
 Current limitations:
 
-- `nvmesh` supports regular and Helm model cache; `rwxReadOnly` supports only regular model cache, and no shipped
+- `roxReadOnly` supports regular and Helm model cache; `rwxReadOnly` supports only regular model cache, and no shipped
   provider entry enables it;
 - Weka, OCI FSS, and OCI Lustre remain disabled pending live NVCA qualification;
 - current translated writer artifacts contain inputs rejected by the binding-safe `rwxReadOnly` contract, so
@@ -401,6 +440,8 @@ cache state first. General drain, zero-reference retirement, and retained-data g
 ### Automated tests in this change
 
 - strict catalog and annotation parsing;
+- provider-required reader-PV mount-option validation, persistence, defensive copying, and legacy ConfigMap isolation;
+- NVMesh regular and Helm reader-PV option application, conflict filtering, retry repair, and RWX no-mutation behavior;
 - executable JSON Schema acceptance and rejection for regular `rwxReadOnly`, required RWX, and Helm refusal;
 - exact provisioner lookup and workflow transition selection;
 - regular-only `rwxReadOnly` schema and selection, including rejection for Helm and encryption;
@@ -468,7 +509,7 @@ eligible node matrix, catalog version, date, and evidence reference. Performance
 
 1. Install the CSI driver and render exact `StorageClass/nvcf-sc` parameters through deployment tooling.
 2. Add or update the public catalog entry with both workflows `disabled`.
-3. Record only access modes proven on the exact configuration.
+3. Record only access modes and reader-PV mount options proven on the exact configuration.
 4. Implement a named regular or Helm transition. Do not infer a transition from access modes.
 5. Add unit, failure, retry, ownership, cleanup, and read-only object tests.
 6. Implement binding-scoped writer input and Secret identity, adoption, rotation, and cleanup when the transition
@@ -502,6 +543,11 @@ Rollout order:
 Existing annotation-free requests continue through compatibility code. New annotated requests must not be downgraded
 to an NVCA version that does not understand bindings while they are active. Drain those requests before rollback. The
 `Retain` policy preserves backend data, but it does not migrate or make an older controller binding-aware.
+
+The legacy `nvca-cache-mount-options` ConfigMap remains a compatibility input only for annotation-free requests. New
+bound requests read provider-required options from their persisted selection and binding. The separate operator
+`cacheMountOptions` setting remains an additive cluster override; an option that negates a provider requirement is
+ignored.
 
 ## Public source references
 

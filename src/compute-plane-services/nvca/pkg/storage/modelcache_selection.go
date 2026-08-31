@@ -51,20 +51,21 @@ const (
 // PersistedModelCacheStorageSelection is intentionally small. It is an
 // immutable request snapshot, not a general CSI capability matrix.
 type PersistedModelCacheStorageSelection struct {
-	Version             string                              `json:"version"`
-	Workflow            ModelCacheWorkflow                  `json:"workflow"`
-	Mode                ModelCacheSelectionMode             `json:"mode"`
-	StorageClassName    string                              `json:"storageClassName,omitempty"`
-	StorageClassUID     types.UID                           `json:"storageClassUID,omitempty"`
-	StorageClassDigest  string                              `json:"storageClassDigest,omitempty"`
-	CatalogDigest       string                              `json:"catalogDigest,omitempty"`
-	Provider            string                              `json:"provider,omitempty"`
-	Provisioner         string                              `json:"provisioner,omitempty"`
-	Transition          string                              `json:"transition,omitempty"`
-	RequiredAccessModes []corev1.PersistentVolumeAccessMode `json:"requiredAccessModes,omitempty"`
-	EncryptionRequired  bool                                `json:"encryptionRequired,omitempty"`
-	BindingName         string                              `json:"bindingName,omitempty"`
-	BindingUID          types.UID                           `json:"bindingUID,omitempty"`
+	Version              string                              `json:"version"`
+	Workflow             ModelCacheWorkflow                  `json:"workflow"`
+	Mode                 ModelCacheSelectionMode             `json:"mode"`
+	StorageClassName     string                              `json:"storageClassName,omitempty"`
+	StorageClassUID      types.UID                           `json:"storageClassUID,omitempty"`
+	StorageClassDigest   string                              `json:"storageClassDigest,omitempty"`
+	CatalogDigest        string                              `json:"catalogDigest,omitempty"`
+	Provider             string                              `json:"provider,omitempty"`
+	Provisioner          string                              `json:"provisioner,omitempty"`
+	Transition           string                              `json:"transition,omitempty"`
+	RequiredAccessModes  []corev1.PersistentVolumeAccessMode `json:"requiredAccessModes,omitempty"`
+	RequiredMountOptions []string                            `json:"requiredMountOptions,omitempty"`
+	EncryptionRequired   bool                                `json:"encryptionRequired,omitempty"`
+	BindingName          string                              `json:"bindingName,omitempty"`
+	BindingUID           types.UID                           `json:"bindingUID,omitempty"`
 }
 
 // NewPersistedModelCacheStorageSelection creates and validates a request
@@ -90,6 +91,7 @@ func NewPersistedModelCacheStorageSelection(
 		selection.Transition = resolved.Transition
 		selection.RequiredAccessModes = append(
 			[]corev1.PersistentVolumeAccessMode(nil), resolved.RequiredAccessModes...)
+		selection.RequiredMountOptions = append([]string(nil), resolved.RequiredMountOptions...)
 	}
 	if err := selection.Validate(); err != nil {
 		return nil, err
@@ -173,7 +175,7 @@ func (s *PersistedModelCacheStorageSelection) Validate() error {
 
 	hasResolvedFields := s.StorageClassName != "" || s.StorageClassUID != "" || s.StorageClassDigest != "" ||
 		s.CatalogDigest != "" || s.Provider != "" || s.Provisioner != "" || s.Transition != "" ||
-		len(s.RequiredAccessModes) != 0
+		len(s.RequiredAccessModes) != 0 || len(s.RequiredMountOptions) != 0
 	if !hasResolvedFields {
 		if s.Mode == ModelCacheSelectionDurable {
 			return fmt.Errorf("durable model cache selection has no resolved storage")
@@ -192,7 +194,7 @@ func (s *PersistedModelCacheStorageSelection) Validate() error {
 	switch s.Mode {
 	case ModelCacheSelectionDurable:
 		switch s.Transition {
-		case ModelCacheTransitionNVMesh:
+		case ModelCacheTransitionROXReadOnly:
 			if s.Provider != ModelCacheProviderNVMesh {
 				return fmt.Errorf("model cache transition %q requires provider %q, got %q",
 					s.Transition, ModelCacheProviderNVMesh, s.Provider)
@@ -201,6 +203,12 @@ func (s *PersistedModelCacheStorageSelection) Validate() error {
 				return fmt.Errorf("model cache transition %q requires provisioner %q, got %q",
 					s.Transition, NVMeshStorageClassProvisioner, s.Provisioner)
 			}
+			for _, required := range []string{"ro", "norecovery", "nouuid"} {
+				if !slices.Contains(s.RequiredMountOptions, required) {
+					return fmt.Errorf("model cache transition %q requires mount option %q",
+						s.Transition, required)
+				}
+			}
 		case ModelCacheTransitionRWXReadOnly:
 			if s.Workflow != ModelCacheWorkflowRegular {
 				return fmt.Errorf("model cache transition %q requires regular workflow, got %q",
@@ -208,6 +216,10 @@ func (s *PersistedModelCacheStorageSelection) Validate() error {
 			}
 			if s.EncryptionRequired {
 				return fmt.Errorf("model cache transition %q does not support encryption",
+					s.Transition)
+			}
+			if len(s.RequiredMountOptions) != 0 {
+				return fmt.Errorf("model cache transition %q does not create a reader PV and cannot require mount options",
 					s.Transition)
 			}
 		default:
@@ -224,6 +236,25 @@ func (s *PersistedModelCacheStorageSelection) Validate() error {
 		if len(s.RequiredAccessModes) != 0 {
 			return fmt.Errorf("non-durable model cache selection has required access modes")
 		}
+		if len(s.RequiredMountOptions) != 0 {
+			return fmt.Errorf("non-durable model cache selection has required mount options")
+		}
+	}
+	seenMountOptions := make(map[string]struct{}, len(s.RequiredMountOptions))
+	for i, option := range s.RequiredMountOptions {
+		if strings.TrimSpace(option) == "" || strings.TrimSpace(option) != option {
+			return fmt.Errorf("model cache selection has invalid required mount option %q", option)
+		}
+		if _, found := seenMountOptions[option]; found {
+			return fmt.Errorf("model cache selection has duplicate required mount option %q", option)
+		}
+		for _, previous := range s.RequiredMountOptions[:i] {
+			if negatesMountOption(previous, option) {
+				return fmt.Errorf("model cache selection required mount options %q and %q conflict",
+					previous, option)
+			}
+		}
+		seenMountOptions[option] = struct{}{}
 	}
 	return nil
 }

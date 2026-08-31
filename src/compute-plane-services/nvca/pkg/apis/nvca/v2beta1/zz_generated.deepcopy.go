@@ -365,6 +365,11 @@ func (in *ModelCacheBindingDecision) DeepCopyInto(out *ModelCacheBindingDecision
 		*out = make([]v1.PersistentVolumeAccessMode, len(*in))
 		copy(*out, *in)
 	}
+	if in.RequiredMountOptions != nil {
+		in, out := &in.RequiredMountOptions, &out.RequiredMountOptions
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	return
 }
 

@@ -49,14 +49,15 @@ const (
 
 	// ModelCacheTransitionDisabled prevents durable storage for a workflow.
 	ModelCacheTransitionDisabled = "disabled"
-	// ModelCacheTransitionNVMesh selects the implemented NVMesh transition.
-	ModelCacheTransitionNVMesh = "nvmesh"
+	// ModelCacheTransitionROXReadOnly populates a writer claim and publishes a
+	// separate ReadOnlyMany reader claim with read-only Pod mounts.
+	ModelCacheTransitionROXReadOnly = "roxReadOnly"
 	// ModelCacheTransitionRWXReadOnly selects a regular model-cache transition
 	// that populates one ReadWriteMany claim and serves that same claim through
 	// read-only Pod mounts.
 	ModelCacheTransitionRWXReadOnly = "rwxReadOnly"
-	// ModelCacheProviderNVMesh is the only provider allowed to select the
-	// implemented NVMesh transition.
+	// ModelCacheProviderNVMesh is the only provider currently allowed to select
+	// the ROX read-only transition.
 	ModelCacheProviderNVMesh = "nvmesh"
 )
 
@@ -82,14 +83,15 @@ const (
 // live nvcf-sc object and the public capability catalog. It deliberately does
 // not infer behavior from a provider name or access mode.
 type ModelCacheStorageSelection struct {
-	StorageClassName    string
-	StorageClassUID     types.UID
-	StorageClassDigest  string
-	CatalogDigest       string
-	Provider            string
-	Provisioner         string
-	Transition          string
-	RequiredAccessModes []corev1.PersistentVolumeAccessMode
+	StorageClassName     string
+	StorageClassUID      types.UID
+	StorageClassDigest   string
+	CatalogDigest        string
+	Provider             string
+	Provisioner          string
+	Transition           string
+	RequiredAccessModes  []corev1.PersistentVolumeAccessMode
+	RequiredMountOptions []string
 }
 
 type storageCapabilityCatalog struct {
@@ -99,9 +101,10 @@ type storageCapabilityCatalog struct {
 }
 
 type storageDriverSpec struct {
-	Provider    string             `json:"provider"`
-	AccessModes *[]string          `json:"accessModes"`
-	Transitions storageTransitions `json:"transitions"`
+	Provider           string             `json:"provider"`
+	AccessModes        *[]string          `json:"accessModes"`
+	ReaderMountOptions *[]string          `json:"readerMountOptions"`
+	Transitions        storageTransitions `json:"transitions"`
 }
 
 type storageTransitions struct {
@@ -264,22 +267,27 @@ func selectModelCacheStorageFromObjects(
 	default:
 		return nil, fmt.Errorf("unknown model cache workflow %q", workflow)
 	}
+	var requiredMountOptions []string
+	if transition == ModelCacheTransitionROXReadOnly {
+		requiredMountOptions = append([]string(nil), (*driver.ReaderMountOptions)...)
+	}
 
 	return &ModelCacheStorageSelection{
-		StorageClassName:    sc.Name,
-		StorageClassUID:     sc.UID,
-		StorageClassDigest:  digestStorageClass(sc),
-		CatalogDigest:       catalogDigest,
-		Provider:            driver.Provider,
-		Provisioner:         sc.Provisioner,
-		Transition:          transition,
-		RequiredAccessModes: requiredAccessModesForTransition(transition),
+		StorageClassName:     sc.Name,
+		StorageClassUID:      sc.UID,
+		StorageClassDigest:   digestStorageClass(sc),
+		CatalogDigest:        catalogDigest,
+		Provider:             driver.Provider,
+		Provisioner:          sc.Provisioner,
+		Transition:           transition,
+		RequiredAccessModes:  requiredAccessModesForTransition(transition),
+		RequiredMountOptions: requiredMountOptions,
 	}, nil
 }
 
 func requiredAccessModesForTransition(transition string) []corev1.PersistentVolumeAccessMode {
 	switch transition {
-	case ModelCacheTransitionNVMesh:
+	case ModelCacheTransitionROXReadOnly:
 		return []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce, corev1.ReadOnlyMany}
 	case ModelCacheTransitionRWXReadOnly:
 		return []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany}
@@ -500,6 +508,28 @@ func validateStorageCapabilityCatalog(catalog *storageCapabilityCatalog) error {
 		if driver.AccessModes == nil {
 			return fmt.Errorf("driver %q has no accessModes", provisioner)
 		}
+		if driver.ReaderMountOptions == nil {
+			return fmt.Errorf("driver %q has no readerMountOptions", provisioner)
+		}
+		readerMountOptions := make(map[string]bool, len(*driver.ReaderMountOptions))
+		for i, option := range *driver.ReaderMountOptions {
+			if strings.TrimSpace(option) == "" {
+				return fmt.Errorf("driver %q has blank readerMountOption", provisioner)
+			}
+			if strings.TrimSpace(option) != option {
+				return fmt.Errorf("driver %q has readerMountOption %q with surrounding whitespace", provisioner, option)
+			}
+			if readerMountOptions[option] {
+				return fmt.Errorf("driver %q has duplicate readerMountOption %q", provisioner, option)
+			}
+			for _, previous := range (*driver.ReaderMountOptions)[:i] {
+				if negatesMountOption(previous, option) {
+					return fmt.Errorf("driver %q readerMountOptions %q and %q conflict",
+						provisioner, previous, option)
+				}
+			}
+			readerMountOptions[option] = true
+		}
 		accessModes := make(map[string]bool, len(*driver.AccessModes))
 		for _, mode := range *driver.AccessModes {
 			switch mode {
@@ -517,14 +547,14 @@ func validateStorageCapabilityCatalog(catalog *storageCapabilityCatalog) error {
 			"regularModelCache": driver.Transitions.RegularModelCache,
 			"helmModelCache":    driver.Transitions.HelmModelCache,
 		} {
-			if strategy != ModelCacheTransitionDisabled && strategy != ModelCacheTransitionNVMesh &&
+			if strategy != ModelCacheTransitionDisabled && strategy != ModelCacheTransitionROXReadOnly &&
 				strategy != ModelCacheTransitionRWXReadOnly {
 				return fmt.Errorf("driver %q transition %s has invalid strategy %q", provisioner, workflow, strategy)
 			}
 			switch strategy {
 			case ModelCacheTransitionDisabled:
 				continue
-			case ModelCacheTransitionNVMesh:
+			case ModelCacheTransitionROXReadOnly:
 				if provisioner != NVMeshStorageClassProvisioner {
 					return fmt.Errorf("driver %q transition %s strategy %s is restricted to provisioner %q",
 						provisioner, workflow, strategy, NVMeshStorageClassProvisioner)
@@ -537,6 +567,12 @@ func validateStorageCapabilityCatalog(catalog *storageCapabilityCatalog) error {
 					return fmt.Errorf("driver %q transition %s strategy %s requires ReadWriteOnce and ReadOnlyMany access modes",
 						provisioner, workflow, strategy)
 				}
+				for _, requiredOption := range []string{"ro", "norecovery", "nouuid"} {
+					if !readerMountOptions[requiredOption] {
+						return fmt.Errorf("driver %q transition %s strategy %s requires readerMountOption %q",
+							provisioner, workflow, strategy, requiredOption)
+					}
+				}
 			case ModelCacheTransitionRWXReadOnly:
 				if workflow != string(ModelCacheWorkflowRegular) {
 					return fmt.Errorf("driver %q transition %s strategy %s is only supported for %s",
@@ -544,6 +580,10 @@ func validateStorageCapabilityCatalog(catalog *storageCapabilityCatalog) error {
 				}
 				if !accessModes[string(corev1.ReadWriteMany)] {
 					return fmt.Errorf("driver %q transition %s strategy %s requires ReadWriteMany access mode",
+						provisioner, workflow, strategy)
+				}
+				if len(*driver.ReaderMountOptions) != 0 {
+					return fmt.Errorf("driver %q transition %s strategy %s does not create a reader PV and requires empty readerMountOptions",
 						provisioner, workflow, strategy)
 				}
 			}

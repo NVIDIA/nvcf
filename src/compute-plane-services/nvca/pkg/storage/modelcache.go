@@ -878,13 +878,15 @@ func (r *Reconciler) resolveCacheMountOptions(ctx context.Context, pv *corev1.Pe
 	return r.resolveCacheMountOptionsWithDefaults(ctx, pv, defaults, found)
 }
 
-func (r *Reconciler) resolveCacheMountOptionsForProvisioner(
+// resolveCacheMountOptionsWithRequired merges the provider requirements
+// persisted on a storage selection with the operator's additive options. It
+// deliberately does not reread the legacy per-provisioner ConfigMap.
+func (r *Reconciler) resolveCacheMountOptionsWithRequired(
 	ctx context.Context,
 	pv *corev1.PersistentVolume,
-	provisioner string,
+	required []string,
 ) []string {
-	defaults, found := r.defaultMountOptionsForProvisioner(ctx, provisioner)
-	return r.resolveCacheMountOptionsWithDefaults(ctx, pv, defaults, found)
+	return r.resolveCacheMountOptionsWithDefaults(ctx, pv, required, true)
 }
 
 func (r *Reconciler) resolveCacheMountOptionsWithDefaults(
@@ -937,22 +939,25 @@ func mergeMountOptions(lists ...[]string) []string {
 func (r *Reconciler) reconcileSecondaryPVMountOptions(ctx context.Context,
 	secondaryPV *corev1.PersistentVolume,
 ) error {
-	return r.reconcileSecondaryPVMountOptionsForProvisioner(ctx, secondaryPV, "")
+	want := r.resolveCacheMountOptions(ctx, secondaryPV)
+	return r.reconcileSecondaryPVMountOptionsTo(ctx, secondaryPV, want)
 }
 
-func (r *Reconciler) reconcileSecondaryPVMountOptionsForProvisioner(
+func (r *Reconciler) reconcileSecondaryPVMountOptionsWithRequired(
 	ctx context.Context,
 	secondaryPV *corev1.PersistentVolume,
-	provisioner string,
+	required []string,
+) error {
+	want := r.resolveCacheMountOptionsWithRequired(ctx, secondaryPV, required)
+	return r.reconcileSecondaryPVMountOptionsTo(ctx, secondaryPV, want)
+}
+
+func (r *Reconciler) reconcileSecondaryPVMountOptionsTo(
+	ctx context.Context,
+	secondaryPV *corev1.PersistentVolume,
+	want []string,
 ) error {
 	log := logf.FromContext(ctx)
-
-	var want []string
-	if provisioner == "" {
-		want = r.resolveCacheMountOptions(ctx, secondaryPV)
-	} else {
-		want = r.resolveCacheMountOptionsForProvisioner(ctx, secondaryPV, provisioner)
-	}
 	if slices.Equal(secondaryPV.Spec.MountOptions, want) {
 		return nil
 	}
@@ -1206,8 +1211,8 @@ func (r *Reconciler) doModelCacheNVMesh(ctx context.Context, //nolint:gocyclo
 		if selection == nil {
 			secondaryPV.Spec.MountOptions = r.resolveCacheMountOptions(ctx, secondaryPV)
 		} else {
-			secondaryPV.Spec.MountOptions = r.resolveCacheMountOptionsForProvisioner(
-				ctx, secondaryPV, selection.Provisioner)
+			secondaryPV.Spec.MountOptions = r.resolveCacheMountOptionsWithRequired(
+				ctx, secondaryPV, selection.RequiredMountOptions)
 		}
 		secondaryPV.Spec.ClaimRef = &corev1.ObjectReference{
 			APIVersion: "v1",
@@ -1255,8 +1260,8 @@ func (r *Reconciler) doModelCacheNVMesh(ctx context.Context, //nolint:gocyclo
 		if selection == nil {
 			err = r.reconcileSecondaryPVMountOptions(ctx, secondaryPV)
 		} else {
-			err = r.reconcileSecondaryPVMountOptionsForProvisioner(
-				ctx, secondaryPV, selection.Provisioner)
+			err = r.reconcileSecondaryPVMountOptionsWithRequired(
+				ctx, secondaryPV, selection.RequiredMountOptions)
 		}
 		if err != nil {
 			if k8sutil.IsTransientK8sError(err) {

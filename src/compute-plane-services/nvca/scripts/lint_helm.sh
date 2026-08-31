@@ -138,6 +138,27 @@ assert_storage_capability_catalog() (
   done
   echo "PASS: schema rejects missing and null accessModes"
 
+  for mutation in \
+    'del(.drivers."csi.weka.io".readerMountOptions)' \
+    '.drivers."csi.weka.io".readerMountOptions = null'; do
+    yq "${mutation}" "${service_chart}/${catalog}" >"${invalid_catalog}"
+    if "${schema_python}" -c "${schema_check}" \
+      "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+      echo "Expected schema to reject missing or null readerMountOptions" >&2
+      return 1
+    fi
+  done
+  echo "PASS: schema rejects missing and null readerMountOptions"
+
+  yq '.drivers."nvmesh-csi.excelero.com".readerMountOptions = ["ro", " norecovery", "nouuid"]' \
+    "${service_chart}/${catalog}" >"${invalid_catalog}"
+  if "${schema_python}" -c "${schema_check}" \
+    "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    echo "Expected schema to reject readerMountOptions with surrounding whitespace" >&2
+    return 1
+  fi
+  echo "PASS: schema rejects readerMountOptions with surrounding whitespace"
+
   yq '.drivers."nvmesh-csi.excelero.com".accessModes = ["ReadWriteOnce"]' \
     "${service_chart}/${catalog}" >"${invalid_catalog}"
   if "${schema_python}" -c "${schema_check}" \
@@ -147,8 +168,17 @@ assert_storage_capability_catalog() (
   fi
   echo "PASS: schema rejects an NVMesh transition without ReadOnlyMany"
 
+  yq '.drivers."nvmesh-csi.excelero.com".readerMountOptions = ["ro", "norecovery"]' \
+    "${service_chart}/${catalog}" >"${invalid_catalog}"
+  if "${schema_python}" -c "${schema_check}" \
+    "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    echo "Expected schema to reject an NVMesh transition without nouuid" >&2
+    return 1
+  fi
+  echo "PASS: schema rejects an NVMesh transition without nouuid"
+
   yq '(.drivers."csi.weka.io".accessModes = ["ReadWriteOnce", "ReadOnlyMany"]) |
-      (.drivers."csi.weka.io".transitions.regularModelCache = "nvmesh")' \
+      (.drivers."csi.weka.io".transitions.regularModelCache = "roxReadOnly")' \
     "${service_chart}/${catalog}" >"${invalid_catalog}"
   if "${schema_python}" -c "${schema_check}" \
     "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
@@ -165,6 +195,16 @@ assert_storage_capability_catalog() (
     return 1
   fi
   echo "PASS: schema accepts regular rwxReadOnly with ReadWriteMany"
+
+  yq '(.drivers."csi.weka.io".transitions.regularModelCache = "rwxReadOnly") |
+      (.drivers."csi.weka.io".readerMountOptions = ["ro"])' \
+    "${service_chart}/${catalog}" >"${invalid_catalog}"
+  if "${schema_python}" -c "${schema_check}" \
+    "${service_chart}/${schema}" "${invalid_catalog}" 2>/dev/null; then
+    echo "Expected schema to reject reader-PV mount options for rwxReadOnly" >&2
+    return 1
+  fi
+  echo "PASS: schema rejects reader-PV mount options for rwxReadOnly"
 
   yq '(.drivers."csi.weka.io".accessModes = ["ReadOnlyMany"]) |
       (.drivers."csi.weka.io".transitions.regularModelCache = "rwxReadOnly")' \

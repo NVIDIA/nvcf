@@ -54,13 +54,18 @@ drivers:
   nvmesh-csi.excelero.com:
     provider: nvmesh
     accessModes: [ReadWriteOnce, ReadOnlyMany]
+    readerMountOptions: [ro, norecovery, nouuid]
     transitions:
-      regularModelCache: nvmesh
-      helmModelCache: nvmesh
+      regularModelCache: roxReadOnly
+      helmModelCache: roxReadOnly
 `
 
 func accessModes(modes ...string) *[]string {
 	return &modes
+}
+
+func readerMountOptions(options ...string) *[]string {
+	return &options
 }
 
 func validStorageCapabilityCatalog() *storageCapabilityCatalog {
@@ -69,11 +74,12 @@ func validStorageCapabilityCatalog() *storageCapabilityCatalog {
 		Kind:       storageCapabilityCatalogKind,
 		Drivers: map[string]storageDriverSpec{
 			NVMeshStorageClassProvisioner: {
-				Provider:    "nvmesh",
-				AccessModes: accessModes("ReadWriteOnce", "ReadOnlyMany"),
+				Provider:           "nvmesh",
+				AccessModes:        accessModes("ReadWriteOnce", "ReadOnlyMany"),
+				ReaderMountOptions: readerMountOptions("ro", "norecovery", "nouuid"),
 				Transitions: storageTransitions{
-					RegularModelCache: "nvmesh",
-					HelmModelCache:    "nvmesh",
+					RegularModelCache: ModelCacheTransitionROXReadOnly,
+					HelmModelCache:    ModelCacheTransitionROXReadOnly,
 				},
 			},
 		},
@@ -86,10 +92,12 @@ func TestLoadStorageCapabilityCatalogStrict(t *testing.T) {
 	catalog, err := loadStorageCapabilityCatalog(t.Context(), c, testCatalogNamespace)
 	require.NoError(t, err)
 	nvmesh := catalog.Drivers[NVMeshStorageClassProvisioner]
-	assert.Equal(t, "nvmesh", nvmesh.Transitions.RegularModelCache)
-	assert.Equal(t, "nvmesh", nvmesh.Transitions.HelmModelCache)
+	assert.Equal(t, ModelCacheTransitionROXReadOnly, nvmesh.Transitions.RegularModelCache)
+	assert.Equal(t, ModelCacheTransitionROXReadOnly, nvmesh.Transitions.HelmModelCache)
 	require.NotNil(t, nvmesh.AccessModes)
 	assert.ElementsMatch(t, []string{"ReadWriteOnce", "ReadOnlyMany"}, *nvmesh.AccessModes)
+	require.NotNil(t, nvmesh.ReaderMountOptions)
+	assert.Equal(t, []string{"ro", "norecovery", "nouuid"}, *nvmesh.ReaderMountOptions)
 }
 
 func TestLoadStorageCapabilityCatalogErrors(t *testing.T) {
@@ -103,6 +111,10 @@ func TestLoadStorageCapabilityCatalogErrors(t *testing.T) {
 		validCatalog, "    accessModes: [ReadWriteOnce, ReadOnlyMany]\n", "", 1)
 	nullAccessModes := strings.Replace(
 		validCatalog, "    accessModes: [ReadWriteOnce, ReadOnlyMany]", "    accessModes: null", 1)
+	missingReaderMountOptions := strings.Replace(
+		validCatalog, "    readerMountOptions: [ro, norecovery, nouuid]\n", "", 1)
+	nullReaderMountOptions := strings.Replace(
+		validCatalog, "    readerMountOptions: [ro, norecovery, nouuid]", "    readerMountOptions: null", 1)
 
 	tests := []struct {
 		name      string
@@ -138,6 +150,14 @@ func TestLoadStorageCapabilityCatalogErrors(t *testing.T) {
 			name: "null accessModes", namespace: testCatalogNamespace,
 			configMap: capabilityCatalogConfigMap(nullAccessModes), want: "has no accessModes",
 		},
+		{
+			name: "missing readerMountOptions", namespace: testCatalogNamespace,
+			configMap: capabilityCatalogConfigMap(missingReaderMountOptions), want: "has no readerMountOptions",
+		},
+		{
+			name: "null readerMountOptions", namespace: testCatalogNamespace,
+			configMap: capabilityCatalogConfigMap(nullReaderMountOptions), want: "has no readerMountOptions",
+		},
 	}
 
 	for _, tt := range tests {
@@ -162,8 +182,8 @@ func TestLoadStorageCapabilityCatalogRejectsUnknownFields(t *testing.T) {
 		},
 		{
 			name: "container cache transition",
-			raw: strings.Replace(validCatalog, "      helmModelCache: nvmesh",
-				"      helmModelCache: nvmesh\n      containerCache: disabled", 1),
+			raw: strings.Replace(validCatalog, "      helmModelCache: roxReadOnly",
+				"      helmModelCache: roxReadOnly\n      containerCache: disabled", 1),
 			want: "unknown field \"containerCache\"",
 		},
 	}
@@ -216,6 +236,46 @@ func TestValidateStorageCapabilityCatalog(t *testing.T) {
 			d.AccessModes = accessModes(append(*d.AccessModes, "ReadWriteOnce")...)
 			c.Drivers[NVMeshStorageClassProvisioner] = d
 		}, want: "duplicate accessMode"},
+		{name: "missing reader mount options", mutate: func(c *storageCapabilityCatalog) {
+			d := c.Drivers[NVMeshStorageClassProvisioner]
+			d.ReaderMountOptions = nil
+			c.Drivers[NVMeshStorageClassProvisioner] = d
+		}, want: "has no readerMountOptions"},
+		{name: "blank reader mount option", mutate: func(c *storageCapabilityCatalog) {
+			d := c.Drivers[NVMeshStorageClassProvisioner]
+			d.ReaderMountOptions = readerMountOptions(append(*d.ReaderMountOptions, " \t")...)
+			c.Drivers[NVMeshStorageClassProvisioner] = d
+		}, want: "blank readerMountOption"},
+		{name: "reader mount option with surrounding whitespace", mutate: func(c *storageCapabilityCatalog) {
+			d := c.Drivers[NVMeshStorageClassProvisioner]
+			d.ReaderMountOptions = readerMountOptions("ro", " norecovery", "nouuid")
+			c.Drivers[NVMeshStorageClassProvisioner] = d
+		}, want: "surrounding whitespace"},
+		{name: "duplicate reader mount option", mutate: func(c *storageCapabilityCatalog) {
+			d := c.Drivers[NVMeshStorageClassProvisioner]
+			d.ReaderMountOptions = readerMountOptions(append(*d.ReaderMountOptions, "ro")...)
+			c.Drivers[NVMeshStorageClassProvisioner] = d
+		}, want: "duplicate readerMountOption"},
+		{name: "conflicting reader mount options", mutate: func(c *storageCapabilityCatalog) {
+			d := c.Drivers[NVMeshStorageClassProvisioner]
+			d.ReaderMountOptions = readerMountOptions("ro", "norecovery", "nouuid", "rw")
+			c.Drivers[NVMeshStorageClassProvisioner] = d
+		}, want: `readerMountOptions "ro" and "rw" conflict`},
+		{name: "NVMesh transition lacks ro reader mount option", mutate: func(c *storageCapabilityCatalog) {
+			d := c.Drivers[NVMeshStorageClassProvisioner]
+			d.ReaderMountOptions = readerMountOptions("norecovery", "nouuid")
+			c.Drivers[NVMeshStorageClassProvisioner] = d
+		}, want: `requires readerMountOption "ro"`},
+		{name: "NVMesh transition lacks norecovery reader mount option", mutate: func(c *storageCapabilityCatalog) {
+			d := c.Drivers[NVMeshStorageClassProvisioner]
+			d.ReaderMountOptions = readerMountOptions("ro", "nouuid")
+			c.Drivers[NVMeshStorageClassProvisioner] = d
+		}, want: `requires readerMountOption "norecovery"`},
+		{name: "NVMesh transition lacks nouuid reader mount option", mutate: func(c *storageCapabilityCatalog) {
+			d := c.Drivers[NVMeshStorageClassProvisioner]
+			d.ReaderMountOptions = readerMountOptions("ro", "norecovery")
+			c.Drivers[NVMeshStorageClassProvisioner] = d
+		}, want: `requires readerMountOption "nouuid"`},
 		{name: "bad regular transition", mutate: func(c *storageCapabilityCatalog) {
 			d := c.Drivers[NVMeshStorageClassProvisioner]
 			d.Transitions.RegularModelCache = "shared-pvc-readonly-fanout"
@@ -273,8 +333,9 @@ func TestValidateStorageCapabilityCatalogAllowsRegularRWXReadOnly(t *testing.T) 
 	const provisioner = "shared.csi.example.com"
 	catalog := validStorageCapabilityCatalog()
 	catalog.Drivers[provisioner] = storageDriverSpec{
-		Provider:    "sharedFilesystem",
-		AccessModes: accessModes("ReadWriteMany", "ReadOnlyMany"),
+		Provider:           "sharedFilesystem",
+		AccessModes:        accessModes("ReadWriteMany", "ReadOnlyMany"),
+		ReaderMountOptions: readerMountOptions(),
 		Transitions: storageTransitions{
 			RegularModelCache: ModelCacheTransitionRWXReadOnly,
 			HelmModelCache:    ModelCacheTransitionDisabled,
@@ -295,12 +356,20 @@ func TestValidateStorageCapabilityCatalogAllowsRegularRWXReadOnly(t *testing.T) 
 	assert.Equal(t,
 		[]corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
 		selection.RequiredAccessModes)
+	assert.Empty(t, selection.RequiredMountOptions)
+
+	driver := catalog.Drivers[provisioner]
+	driver.ReaderMountOptions = readerMountOptions("ro")
+	catalog.Drivers[provisioner] = driver
+	require.ErrorContains(t, validateStorageCapabilityCatalog(catalog),
+		"does not create a reader PV and requires empty readerMountOptions")
 }
 
 func TestValidateStorageCapabilityCatalogAllowsDisabledTransitionsWithEmptyModes(t *testing.T) {
 	catalog := validStorageCapabilityCatalog()
 	driver := catalog.Drivers[NVMeshStorageClassProvisioner]
 	driver.AccessModes = accessModes()
+	driver.ReaderMountOptions = readerMountOptions()
 	driver.Transitions = storageTransitions{
 		RegularModelCache: "disabled",
 		HelmModelCache:    "disabled",
@@ -322,16 +391,20 @@ func TestShippedStorageCapabilityCatalog(t *testing.T) {
 	require.NoError(t, err)
 
 	nvmesh := catalog.Drivers[NVMeshStorageClassProvisioner]
-	assert.Equal(t, "nvmesh", nvmesh.Transitions.RegularModelCache)
-	assert.Equal(t, "nvmesh", nvmesh.Transitions.HelmModelCache)
+	assert.Equal(t, ModelCacheTransitionROXReadOnly, nvmesh.Transitions.RegularModelCache)
+	assert.Equal(t, ModelCacheTransitionROXReadOnly, nvmesh.Transitions.HelmModelCache)
 	require.NotNil(t, nvmesh.AccessModes)
 	assert.ElementsMatch(t, []string{"ReadWriteOnce", "ReadOnlyMany"}, *nvmesh.AccessModes)
+	require.NotNil(t, nvmesh.ReaderMountOptions)
+	assert.Equal(t, []string{"ro", "norecovery", "nouuid"}, *nvmesh.ReaderMountOptions)
 
 	for _, provisioner := range []string{"csi.weka.io", "fss.csi.oraclecloud.com", "lustre.csi.oraclecloud.com"} {
 		driver, ok := catalog.Drivers[provisioner]
 		require.True(t, ok, provisioner)
 		assert.Equal(t, "disabled", driver.Transitions.RegularModelCache)
 		assert.Equal(t, "disabled", driver.Transitions.HelmModelCache)
+		require.NotNil(t, driver.ReaderMountOptions)
+		assert.Empty(t, *driver.ReaderMountOptions)
 	}
 	weka := catalog.Drivers["csi.weka.io"]
 	require.NotNil(t, weka.AccessModes)
@@ -355,9 +428,9 @@ func TestShippedStorageCapabilityCatalog(t *testing.T) {
 	helmStrategy, ok := definitions["helmTransitionStrategy"].(map[string]any)
 	require.True(t, ok)
 	assert.ElementsMatch(t,
-		[]any{ModelCacheTransitionDisabled, ModelCacheTransitionNVMesh, ModelCacheTransitionRWXReadOnly},
+		[]any{ModelCacheTransitionDisabled, ModelCacheTransitionROXReadOnly, ModelCacheTransitionRWXReadOnly},
 		regularStrategy["enum"])
 	assert.ElementsMatch(t,
-		[]any{ModelCacheTransitionDisabled, ModelCacheTransitionNVMesh},
+		[]any{ModelCacheTransitionDisabled, ModelCacheTransitionROXReadOnly},
 		helmStrategy["enum"])
 }

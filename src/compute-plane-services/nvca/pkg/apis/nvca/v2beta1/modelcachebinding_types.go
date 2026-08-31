@@ -100,8 +100,10 @@ type ModelCacheBindingDecision struct {
 	Transition  string `json:"transition"`
 	// +listType=set
 	RequiredAccessModes []corev1.PersistentVolumeAccessMode `json:"requiredAccessModes"`
-	CatalogDigest       string                              `json:"catalogDigest"`
-	EncryptionRequired  bool                                `json:"encryptionRequired"`
+	// +listType=atomic
+	RequiredMountOptions []string `json:"requiredMountOptions,omitempty"`
+	CatalogDigest        string   `json:"catalogDigest"`
+	EncryptionRequired   bool     `json:"encryptionRequired"`
 }
 
 // ModelCacheStorageClassSnapshot identifies the exact retained StorageClass selected by the binding.

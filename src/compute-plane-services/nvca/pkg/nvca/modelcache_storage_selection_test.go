@@ -51,9 +51,10 @@ drivers:
   nvmesh-csi.excelero.com:
     provider: nvmesh
     accessModes: [ReadWriteOnce, ReadOnlyMany]
+    readerMountOptions: [ro, norecovery, nouuid]
     transitions:
-      regularModelCache: nvmesh
-      helmModelCache: nvmesh
+      regularModelCache: roxReadOnly
+      helmModelCache: roxReadOnly
 `
 	selectionCatalogDisabled = `apiVersion: storage.nvcf.nvidia.com/v1alpha1
 kind: StorageCapabilityCatalog
@@ -61,6 +62,7 @@ drivers:
   nvmesh-csi.excelero.com:
     provider: nvmesh
     accessModes: [ReadWriteOnce, ReadOnlyMany]
+    readerMountOptions: []
     transitions:
       regularModelCache: disabled
       helmModelCache: disabled
@@ -71,6 +73,7 @@ drivers:
   csi.weka.io:
     provider: weka
     accessModes: [ReadWriteMany, ReadOnlyMany]
+    readerMountOptions: []
     transitions:
       regularModelCache: rwxReadOnly
       helmModelCache: disabled
@@ -180,7 +183,7 @@ func TestPersistModelCacheStorageSelection(t *testing.T) {
 			flags:             []*featureflag.FeatureFlag{featureflag.CachingSupport},
 			wantWorkflow:      nvcastorage.ModelCacheWorkflowRegular,
 			wantMode:          nvcastorage.ModelCacheSelectionDurable,
-			wantTransition:    nvcastorage.ModelCacheTransitionNVMesh,
+			wantTransition:    nvcastorage.ModelCacheTransitionROXReadOnly,
 			wantResolvedState: true,
 			wantProvider:      nvcastorage.ModelCacheProviderNVMesh,
 			wantProvisioner:   nvcastorage.NVMeshStorageClassProvisioner,
@@ -197,7 +200,7 @@ func TestPersistModelCacheStorageSelection(t *testing.T) {
 			},
 			wantWorkflow:      nvcastorage.ModelCacheWorkflowHelm,
 			wantMode:          nvcastorage.ModelCacheSelectionDurable,
-			wantTransition:    nvcastorage.ModelCacheTransitionNVMesh,
+			wantTransition:    nvcastorage.ModelCacheTransitionROXReadOnly,
 			wantResolvedState: true,
 			wantProvider:      nvcastorage.ModelCacheProviderNVMesh,
 			wantProvisioner:   nvcastorage.NVMeshStorageClassProvisioner,

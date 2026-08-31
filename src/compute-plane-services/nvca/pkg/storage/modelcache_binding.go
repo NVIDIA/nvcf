@@ -79,7 +79,7 @@ func NewModelCacheBinding(
 		PersistentVolumeClaimNames: []string{rwPVCName},
 		JobNames:                   []string{jobName},
 	}
-	if selection.Workflow == ModelCacheWorkflowRegular && selection.Transition == ModelCacheTransitionNVMesh {
+	if selection.Workflow == ModelCacheWorkflowRegular && selection.Transition == ModelCacheTransitionROXReadOnly {
 		resources.PersistentVolumeClaimNames = append(
 			resources.PersistentVolumeClaimNames, "ro-pvc-"+cacheHandle)
 	} else if selection.Workflow == ModelCacheWorkflowHelm {
@@ -117,12 +117,13 @@ func NewModelCacheBinding(
 				CacheHandleDigest:   digestBindingValue(cacheHandle),
 			},
 			Decision: nvcav2beta1.ModelCacheBindingDecision{
-				Provider:            selection.Provider,
-				Provisioner:         selection.Provisioner,
-				Transition:          selection.Transition,
-				RequiredAccessModes: append([]corev1.PersistentVolumeAccessMode(nil), selection.RequiredAccessModes...),
-				CatalogDigest:       selection.CatalogDigest,
-				EncryptionRequired:  selection.EncryptionRequired,
+				Provider:             selection.Provider,
+				Provisioner:          selection.Provisioner,
+				Transition:           selection.Transition,
+				RequiredAccessModes:  append([]corev1.PersistentVolumeAccessMode(nil), selection.RequiredAccessModes...),
+				RequiredMountOptions: append([]string(nil), selection.RequiredMountOptions...),
+				CatalogDigest:        selection.CatalogDigest,
+				EncryptionRequired:   selection.EncryptionRequired,
 			},
 			StorageClass: nvcav2beta1.ModelCacheStorageClassSnapshot{
 				Name:                selection.StorageClassName,

@@ -312,11 +312,12 @@ func requestWithModelCacheSelection(
 			CatalogDigest:      "catalog-digest",
 			Provider:           "nvmesh",
 			Provisioner:        nvcastorage.NVMeshStorageClassProvisioner,
-			Transition:         nvcastorage.ModelCacheTransitionNVMesh,
+			Transition:         nvcastorage.ModelCacheTransitionROXReadOnly,
 			RequiredAccessModes: []corev1.PersistentVolumeAccessMode{
 				corev1.ReadWriteOnce,
 				corev1.ReadOnlyMany,
 			},
+			RequiredMountOptions: []string{"ro", "norecovery", "nouuid"},
 		}
 	}
 	selection, err := nvcastorage.NewPersistedModelCacheStorageSelection(workflow, mode, resolved)

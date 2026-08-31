@@ -24,13 +24,18 @@
       "type": "string",
       "enum": ["ReadWriteOnce", "ReadOnlyMany", "ReadWriteMany"]
     },
+    "readerMountOption": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^\\S(?:.*\\S)?$"
+    },
     "regularTransitionStrategy": {
       "type": "string",
-      "enum": ["disabled", "nvmesh", "rwxReadOnly"]
+      "enum": ["disabled", "roxReadOnly", "rwxReadOnly"]
     },
     "helmTransitionStrategy": {
       "type": "string",
-      "enum": ["disabled", "nvmesh"]
+      "enum": ["disabled", "roxReadOnly"]
     },
     "transitions": {
       "type": "object",
@@ -44,13 +49,18 @@
     "driver": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["provider", "accessModes", "transitions"],
+      "required": ["provider", "accessModes", "readerMountOptions", "transitions"],
       "properties": {
         "provider": {"type": "string", "minLength": 1, "pattern": "\\S"},
         "accessModes": {
           "type": "array",
           "uniqueItems": true,
           "items": {"$ref": "#/$defs/accessMode"}
+        },
+        "readerMountOptions": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/readerMountOption"}
         },
         "transitions": {"$ref": "#/$defs/transitions"}
       },
@@ -61,11 +71,11 @@
               "transitions": {
                 "anyOf": [
                   {
-                    "properties": {"regularModelCache": {"const": "nvmesh"}},
+                    "properties": {"regularModelCache": {"const": "roxReadOnly"}},
                     "required": ["regularModelCache"]
                   },
                   {
-                    "properties": {"helmModelCache": {"const": "nvmesh"}},
+                    "properties": {"helmModelCache": {"const": "roxReadOnly"}},
                     "required": ["helmModelCache"]
                   }
                 ]
@@ -79,6 +89,13 @@
                 "allOf": [
                   {"contains": {"const": "ReadWriteOnce"}},
                   {"contains": {"const": "ReadOnlyMany"}}
+                ]
+              },
+              "readerMountOptions": {
+                "allOf": [
+                  {"contains": {"const": "ro"}},
+                  {"contains": {"const": "norecovery"}},
+                  {"contains": {"const": "nouuid"}}
                 ]
               }
             }
@@ -96,7 +113,8 @@
           },
           "then": {
             "properties": {
-              "accessModes": {"contains": {"const": "ReadWriteMany"}}
+              "accessModes": {"contains": {"const": "ReadWriteMany"}},
+              "readerMountOptions": {"maxItems": 0}
             }
           }
         }

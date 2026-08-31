@@ -671,6 +671,25 @@ func schema_pkg_apis_nvca_v2beta1_ModelCacheBindingDecision(ref common.Reference
 							},
 						},
 					},
+					"requiredMountOptions": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
 					"catalogDigest": {
 						SchemaProps: spec.SchemaProps{
 							Default: "",

@@ -208,7 +208,7 @@ func regularModelCacheAccessModePlan(
 		return nil, nil, false, fmt.Errorf("regular model cache binding is nil")
 	}
 	switch binding.Spec.Decision.Transition {
-	case nvcastorage.ModelCacheTransitionNVMesh:
+	case nvcastorage.ModelCacheTransitionROXReadOnly:
 		return []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
 			append([]corev1.PersistentVolumeAccessMode(nil), ROAccessMode...), true, nil
 	case nvcastorage.ModelCacheTransitionRWXReadOnly:
@@ -599,7 +599,7 @@ func validateRegularModelCachePVIdentity(
 	if binding == nil || pv == nil {
 		return fmt.Errorf("regular model cache PV identity is incomplete")
 	}
-	if binding.Spec.Decision.Transition == nvcastorage.ModelCacheTransitionNVMesh {
+	if binding.Spec.Decision.Transition == nvcastorage.ModelCacheTransitionROXReadOnly {
 		if err := requireRegularModelCacheBindingUID(pv, binding.UID); err != nil {
 			return err
 		}
@@ -630,6 +630,32 @@ func validateRegularModelCachePVIdentity(
 	}
 	if pv.Spec.CSI.VolumeHandle == "" {
 		return fmt.Errorf("regular model cache PV %s has an empty CSI volume handle", pv.Name)
+	}
+	return nil
+}
+
+func validateRegularModelCacheReaderPVMountOptions(
+	binding *nvcav2beta1.ModelCacheBinding,
+	pv *corev1.PersistentVolume,
+) error {
+	if binding == nil || pv == nil {
+		return fmt.Errorf("regular model cache reader mount-option identity is incomplete")
+	}
+	if binding.Spec.Decision.Transition != nvcastorage.ModelCacheTransitionROXReadOnly {
+		return nil
+	}
+	for _, required := range binding.Spec.Decision.RequiredMountOptions {
+		if !slices.Contains(pv.Spec.MountOptions, required) {
+			return fmt.Errorf("regular model cache reader PV %s is missing required mount option %q",
+				pv.Name, required)
+		}
+		for _, actual := range pv.Spec.MountOptions {
+			if regularModelCacheMountOptionsConflict(required, actual) {
+				return fmt.Errorf(
+					"regular model cache reader PV %s mount option %q conflicts with required option %q",
+					pv.Name, actual, required)
+			}
+		}
 	}
 	return nil
 }
@@ -829,6 +855,11 @@ func validateRegularModelCacheCleanupPV(
 	if err := validateRegularModelCachePVForPVC(
 		binding, pvc, pvForValidation, expectedModes); err != nil {
 		return err
+	}
+	if reader {
+		if err := validateRegularModelCacheReaderPVMountOptions(binding, pvForValidation); err != nil {
+			return err
+		}
 	}
 	if len(binding.Spec.Resources.PersistentVolumeNames) != 0 &&
 		!slices.Contains(binding.Spec.Resources.PersistentVolumeNames, pv.Name) {

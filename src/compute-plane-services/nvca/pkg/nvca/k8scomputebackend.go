@@ -790,7 +790,7 @@ func (c K8sComputeBackend) setupContainerModelCaching(ctx context.Context,
 		}
 		encryptionRequired = selection.EncryptionRequired
 		switch selection.Transition {
-		case nvcastorage.ModelCacheTransitionNVMesh:
+		case nvcastorage.ModelCacheTransitionROXReadOnly:
 		case nvcastorage.ModelCacheTransitionRWXReadOnly:
 			if encryptionRequired {
 				return nil, "", nvcaerrors.TerminalError(fmt.Errorf(

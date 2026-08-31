@@ -33,7 +33,7 @@ func durableBindingSelection(t *testing.T) *PersistedModelCacheStorageSelection 
 	selection, err := NewPersistedModelCacheStorageSelection(
 		ModelCacheWorkflowHelm,
 		ModelCacheSelectionDurable,
-		testResolvedModelCacheStorage(ModelCacheTransitionNVMesh),
+		testResolvedModelCacheStorage(ModelCacheTransitionROXReadOnly),
 	)
 	require.NoError(t, err)
 	return selection
@@ -65,6 +65,8 @@ func TestNewModelCacheBinding(t *testing.T) {
 	assert.Equal(t,
 		[]corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce, corev1.ReadOnlyMany},
 		binding.Spec.Decision.RequiredAccessModes)
+	assert.Equal(t, []string{"ro", "norecovery", "nouuid"},
+		binding.Spec.Decision.RequiredMountOptions)
 	assert.Equal(t, corev1.PersistentVolumeReclaimRetain, binding.Spec.StorageClass.ReclaimPolicy)
 	assert.Equal(t, []string{"rw-pvc-cache-handle"}, binding.Spec.Resources.PersistentVolumeClaimNames)
 	assert.Equal(t, []string{"writer-job-cache-handle"}, binding.Spec.Resources.JobNames)
@@ -82,6 +84,7 @@ func TestNewRWXReadOnlyModelCacheBindingRecordsOneClaim(t *testing.T) {
 	assert.Equal(t,
 		[]corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
 		binding.Spec.Decision.RequiredAccessModes)
+	assert.Empty(t, binding.Spec.Decision.RequiredMountOptions)
 	assert.False(t, binding.Spec.Decision.EncryptionRequired)
 	assert.Equal(t,
 		[]string{"rw-pvc-cache-handle"},
@@ -173,6 +176,15 @@ func TestValidateModelCacheBinding(t *testing.T) {
 	t.Run("spec drift", func(t *testing.T) {
 		changed := binding.DeepCopy()
 		changed.Spec.Decision.Provider = "other"
+		err := ValidateModelCacheBinding(
+			changed, selection, "nca-a", "cache-handle", ModelCacheInitNamespace)
+		require.ErrorContains(t, err, "immutable spec does not match")
+	})
+
+	t.Run("required mount option drift", func(t *testing.T) {
+		changed := binding.DeepCopy()
+		changed.Spec.Decision.RequiredMountOptions = append(
+			changed.Spec.Decision.RequiredMountOptions, "noatime")
 		err := ValidateModelCacheBinding(
 			changed, selection, "nca-a", "cache-handle", ModelCacheInitNamespace)
 		require.ErrorContains(t, err, "immutable spec does not match")

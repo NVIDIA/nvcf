@@ -97,7 +97,7 @@ func HelmCacheBackendFromSelection(
 		return HelmCacheBackendEphemeral, nil
 	case ModelCacheSelectionDurable:
 		switch selection.Transition {
-		case ModelCacheTransitionNVMesh:
+		case ModelCacheTransitionROXReadOnly:
 			return HelmCacheBackendNVMesh, nil
 		default:
 			return "", fmt.Errorf("unsupported durable Helm model cache transition %q", selection.Transition)

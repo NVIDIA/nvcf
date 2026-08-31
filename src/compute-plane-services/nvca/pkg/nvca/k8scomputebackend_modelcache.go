@@ -22,6 +22,7 @@ import (
 	stderrors "errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -822,6 +823,9 @@ func (c K8sComputeBackend) checkPVCState(
 			if err := validateRegularModelCachePVForPVC(binding, roPVCObj, pvObj, ROAccessMode); err != nil {
 				return PVCFoundBindFailed, err
 			}
+			if err := validateRegularModelCacheReaderPVMountOptions(binding, pvObj); err != nil {
+				return PVCFoundBindFailed, err
+			}
 		}
 	} else if !bindingScoped && reflect.DeepEqual(roPVCObj.Spec.AccessModes, ROAccessMode) {
 		pvObj, pvGetErr := c.clients.K8s.CoreV1().PersistentVolumes().
@@ -959,6 +963,48 @@ func (c K8sComputeBackend) waitForVolumeDetach(ctx context.Context, volumeName s
 	}
 }
 
+// regularModelCacheReaderMountOptions makes provider requirements authoritative
+// for a binding-scoped NVMesh reader PV. Cluster options remain additive, but
+// an option that negates a provider requirement is ignored.
+func regularModelCacheReaderMountOptions(
+	binding *nvcav2beta1.ModelCacheBinding,
+	configured []string,
+) ([]string, error) {
+	if binding == nil {
+		return append([]string(nil), configured...), nil
+	}
+	if binding.Spec.Decision.Transition != nvcastorage.ModelCacheTransitionROXReadOnly {
+		return nil, fmt.Errorf("transition %q does not create a read-only reader PV",
+			binding.Spec.Decision.Transition)
+	}
+
+	required := binding.Spec.Decision.RequiredMountOptions
+	effective := append([]string(nil), required...)
+	for _, option := range configured {
+		conflicts := slices.ContainsFunc(required, func(requiredOption string) bool {
+			return regularModelCacheMountOptionsConflict(requiredOption, option)
+		})
+		if conflicts || slices.Contains(effective, option) {
+			continue
+		}
+		effective = append(effective, option)
+	}
+	return effective, nil
+}
+
+func regularModelCacheMountOptionsConflict(left, right string) bool {
+	switch {
+	case left == "ro" && right == "rw", left == "rw" && right == "ro":
+		return true
+	case strings.HasPrefix(left, "no") && left[2:] == right:
+		return true
+	case strings.HasPrefix(right, "no") && right[2:] == left:
+		return true
+	default:
+		return false
+	}
+}
+
 // This function will setup the PVC as follows
 /*
 1. Get the PV Name from the LaunchArtifact.CacheHanle-rw-pvc in bdArt.Specification
@@ -968,7 +1014,7 @@ func (c K8sComputeBackend) waitForVolumeDetach(ctx context.Context, volumeName s
    2. Remove the /spec/claimRef/resourceVersion
    3. Remove the /spec/claimRef/uid
    4. Change the /spec/accessModes -> ReadOnlyMany
-   5. Set the /spec/mountOptions ->  ["ro","norecovery","nouuid"]
+   5. Set the /spec/mountOptions from the persisted provider requirements
 4. Update the PV Object
 5. Once Updated, create a new PVC from bdArt.Specification updating the following
    1. Name -> $LaunchSpecification.CacheHandle-ro-pvc
@@ -986,6 +1032,7 @@ func (c K8sComputeBackend) SetupPVCForReaders(ctx context.Context,
 		return ROPVCSetupFailed, fmt.Errorf("resolve regular model cache binding ownership: %w", err)
 	}
 	var transitionTargets *regularModelCacheCleanupTargets
+	readerMountOptions := append([]string(nil), c.bk8s.csiVolumeMountOptions...)
 	if bindingScoped {
 		transitionTargets, _, err = c.regularModelCacheTransitionTargets(
 			ctx, req, rwPVC.Name, initJobName)
@@ -995,6 +1042,11 @@ func (c K8sComputeBackend) SetupPVCForReaders(ctx context.Context,
 				phase = ROPVCSetupQueryFailed
 			}
 			return phase, fmt.Errorf("validate regular model cache transition targets: %w", err)
+		}
+		readerMountOptions, err = regularModelCacheReaderMountOptions(
+			transitionTargets.binding, c.bk8s.csiVolumeMountOptions)
+		if err != nil {
+			return ROPVCSetupFailed, err
 		}
 	}
 	var pvName string
@@ -1193,15 +1245,18 @@ func (c K8sComputeBackend) SetupPVCForReaders(ctx context.Context,
 		}
 	}
 
-	// if the ClaimRef was already Updated to the ROPVCName, skip update
-	if pvObj.Spec.ClaimRef.Name != roPVCName {
+	// A retry may find the reader identity already published but its mount
+	// options drifted. Repair only persisted, binding-scoped requirements;
+	// preserve the annotation-free legacy retry behavior.
+	if pvObj.Spec.ClaimRef.Name != roPVCName ||
+		(bindingScoped && !slices.Equal(pvObj.Spec.MountOptions, readerMountOptions)) {
 		retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 			// Retrieve the latest version of PV before attempting update
 			// RetryOnConflict uses exponential backoff to avoid exhausting the apiserver
 			pvObj, err := c.clients.K8s.CoreV1().PersistentVolumes().Get(ctx, pvObj.Name, metav1.GetOptions{})
 			if err != nil {
 				return fmt.Errorf(
-					"failed to get PV %v to update with PersistentVolumeReclaimPolicy:Delete: %w",
+					"failed to get PV %v to prepare for read-only binding: %w",
 					pvName, err)
 			}
 			if bindingScoped {
@@ -1210,19 +1265,18 @@ func (c K8sComputeBackend) SetupPVCForReaders(ctx context.Context,
 					return err
 				}
 			}
-			var newPVCRef v1.ObjectReference
-			// prepare PV for ReadOnly Mode
-			// Copy the current claimRef
-			pvObj.Spec.ClaimRef.DeepCopyInto(&newPVCRef)
-
-			newPVCRef.UID = ""
-			newPVCRef.ResourceVersion = ""
-			newPVCRef.Name = roPVCName
-
-			// set the new PVCRef
-			pvObj.Spec.ClaimRef = &newPVCRef
-			pvObj.Spec.AccessModes = ROAccessMode
-			pvObj.Spec.MountOptions = c.bk8s.csiVolumeMountOptions
+			if pvObj.Spec.ClaimRef.Name != roPVCName {
+				var newPVCRef v1.ObjectReference
+				// Prepare the PV for ReadOnlyMany and let the reader PVC bind
+				// with its API-assigned UID.
+				pvObj.Spec.ClaimRef.DeepCopyInto(&newPVCRef)
+				newPVCRef.UID = ""
+				newPVCRef.ResourceVersion = ""
+				newPVCRef.Name = roPVCName
+				pvObj.Spec.ClaimRef = &newPVCRef
+				pvObj.Spec.AccessModes = ROAccessMode
+			}
+			pvObj.Spec.MountOptions = append([]string(nil), readerMountOptions...)
 
 			_, updateErr := c.clients.K8s.CoreV1().PersistentVolumes().Update(ctx, pvObj, metav1.UpdateOptions{})
 			return updateErr

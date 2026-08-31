@@ -48,7 +48,8 @@ func TestModelCacheBindingDeepCopy(t *testing.T) {
 	original := &ModelCacheBinding{
 		Spec: ModelCacheBindingSpec{
 			Decision: ModelCacheBindingDecision{
-				RequiredAccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+				RequiredAccessModes:  []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+				RequiredMountOptions: []string{"ro", "norecovery", "nouuid"},
 			},
 			Resources: ModelCacheBindingResourceIntent{
 				PersistentVolumeClaimNames: []string{"writer-pvc"},
@@ -72,6 +73,7 @@ func TestModelCacheBindingDeepCopy(t *testing.T) {
 
 	copy := original.DeepCopy()
 	copy.Spec.Decision.RequiredAccessModes[0] = corev1.ReadOnlyMany
+	copy.Spec.Decision.RequiredMountOptions[0] = "rw"
 	copy.Spec.Resources.PersistentVolumeClaimNames[0] = "changed-pvc"
 	copy.Spec.Resources.PersistentVolumeNames[0] = "changed-pv"
 	copy.Spec.Resources.JobNames[0] = "changed-job"
@@ -82,6 +84,7 @@ func TestModelCacheBindingDeepCopy(t *testing.T) {
 	copy.Status.Conditions[0].Message = "changed"
 
 	assert.Equal(t, corev1.ReadWriteOnce, original.Spec.Decision.RequiredAccessModes[0])
+	assert.Equal(t, "ro", original.Spec.Decision.RequiredMountOptions[0])
 	assert.Equal(t, "writer-pvc", original.Spec.Resources.PersistentVolumeClaimNames[0])
 	assert.Equal(t, "reader-pv", original.Spec.Resources.PersistentVolumeNames[0])
 	assert.Equal(t, "writer-job", original.Spec.Resources.JobNames[0])

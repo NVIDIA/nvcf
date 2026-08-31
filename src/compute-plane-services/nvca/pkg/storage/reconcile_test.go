@@ -262,6 +262,7 @@ func TestRequiresStrictModelCacheCleanupPreservesLegacyEscape(t *testing.T) {
 	selection.EncryptionRequired = false
 	selection.Transition = ModelCacheTransitionDisabled
 	selection.RequiredAccessModes = nil
+	selection.RequiredMountOptions = nil
 	raw, err := selection.Marshal()
 	require.NoError(t, err)
 	nonDurable.Annotations[ModelCacheStorageSelectionAnnotationKey] = raw

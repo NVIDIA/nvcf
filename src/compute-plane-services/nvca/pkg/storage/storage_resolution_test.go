@@ -43,8 +43,9 @@ drivers:
   nvmesh-csi.excelero.com:
     provider: nvmesh
     accessModes: [ReadWriteOnce, ReadOnlyMany]
+    readerMountOptions: [ro, norecovery, nouuid]
     transitions:
-      regularModelCache: nvmesh
+      regularModelCache: roxReadOnly
       helmModelCache: disabled
 `
 
@@ -97,7 +98,7 @@ func TestResolveModelCacheStorageSelectsWorkflowTransition(t *testing.T) {
 		workflow       ModelCacheWorkflow
 		wantTransition string
 	}{
-		{name: "regular NVMesh transition", workflow: ModelCacheWorkflowRegular, wantTransition: ModelCacheTransitionNVMesh},
+		{name: "regular NVMesh transition", workflow: ModelCacheWorkflowRegular, wantTransition: ModelCacheTransitionROXReadOnly},
 		{name: "disabled Helm transition", workflow: ModelCacheWorkflowHelm, wantTransition: ModelCacheTransitionDisabled},
 	}
 
@@ -112,6 +113,11 @@ func TestResolveModelCacheStorageSelectsWorkflowTransition(t *testing.T) {
 			assert.Equal(t, "nvmesh", selection.Provider)
 			assert.Equal(t, NVMeshStorageClassProvisioner, selection.Provisioner)
 			assert.Equal(t, tt.wantTransition, selection.Transition)
+			if tt.wantTransition == ModelCacheTransitionROXReadOnly {
+				assert.Equal(t, []string{"ro", "norecovery", "nouuid"}, selection.RequiredMountOptions)
+			} else {
+				assert.Empty(t, selection.RequiredMountOptions)
+			}
 		})
 	}
 }
@@ -260,7 +266,7 @@ func TestResolveModelCacheStorageWithClientset(t *testing.T) {
 		workflow       ModelCacheWorkflow
 		wantTransition string
 	}{
-		{workflow: ModelCacheWorkflowRegular, wantTransition: ModelCacheTransitionNVMesh},
+		{workflow: ModelCacheWorkflowRegular, wantTransition: ModelCacheTransitionROXReadOnly},
 		{workflow: ModelCacheWorkflowHelm, wantTransition: ModelCacheTransitionDisabled},
 	} {
 		selection, err := ResolveModelCacheStorageWithClientset(
@@ -439,11 +445,12 @@ func durableSelectionForStorageClass(t *testing.T, sc *storagev1.StorageClass) *
 			CatalogDigest:      digestCatalogPayload(validCatalog),
 			Provider:           "nvmesh",
 			Provisioner:        sc.Provisioner,
-			Transition:         ModelCacheTransitionNVMesh,
+			Transition:         ModelCacheTransitionROXReadOnly,
 			RequiredAccessModes: []corev1.PersistentVolumeAccessMode{
 				corev1.ReadWriteOnce,
 				corev1.ReadOnlyMany,
 			},
+			RequiredMountOptions: []string{"ro", "norecovery", "nouuid"},
 		},
 	)
 	require.NoError(t, err)
@@ -555,7 +562,7 @@ func TestValidateModelCacheStorageSelectionInputsWithClientset(t *testing.T) {
 
 	t.Run("matching digest cannot invent transition", func(t *testing.T) {
 		disabled := strings.Replace(
-			validCatalog, "regularModelCache: nvmesh", "regularModelCache: disabled", 1)
+			validCatalog, "regularModelCache: roxReadOnly", "regularModelCache: disabled", 1)
 		forged := *selection
 		forged.CatalogDigest = digestCatalogPayload(disabled)
 		k8sClient := kubernetesfake.NewSimpleClientset(
