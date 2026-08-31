@@ -123,6 +123,15 @@ func (t *h3ConnectionCache) noteDialResult(dialed *quic.Transport, dialErr error
 	t.transportMu.Lock()
 	defer t.transportMu.Unlock()
 
+	// A dial that began before a rotation says nothing about the socket in use
+	// now, so it must not touch the counter at all. Counting a stale failure
+	// would let it rotate a replacement that has not failed on its own, and a
+	// stale success would clear failures the current socket really did have.
+	// This check therefore has to come before both the reset and the
+	// increment, not after them.
+	if t.quicTransport == nil || t.quicTransport != dialed {
+		return
+	}
 	if dialErr == nil {
 		t.dialFailures = 0
 		return
@@ -131,33 +140,50 @@ func (t *h3ConnectionCache) noteDialResult(dialed *quic.Transport, dialErr error
 	if t.dialFailures < dialFailuresBeforeRotate {
 		return
 	}
-	// Another dial may have rotated already while this one was in flight.
-	// Rotating again would discard a socket that has not been shown to be
-	// bad and would reset the evidence we just gathered.
-	if t.quicTransport == nil || t.quicTransport != dialed {
+	t.rotateLocked()
+}
+
+// rotateLocked replaces the shared socket with a freshly bound one.
+//
+// The replacement is bound while the old socket is still open, deliberately.
+// Closing first releases the port and the kernel is free to hand the same one
+// back, which would leave the worker on the identical 5-tuple and defeat the
+// rotation without any outward sign that it had failed.
+func (t *h3ConnectionCache) rotateLocked() {
+	old := t.quicTransport
+	udpConn, err := net.ListenUDP("udp", nil)
+	if err != nil {
+		// Keep the existing socket rather than leaving the worker with none.
+		// The next failure retries the rotation.
+		zap.L().Warn("failed to bind a replacement quic socket", zap.Error(err))
 		return
 	}
 	zap.L().Warn("rotating quic transport after consecutive dial failures",
 		zap.Int("consecutive_failures", t.dialFailures),
-		zap.String("local_addr", t.quicTransport.Conn.LocalAddr().String()))
-	t.closeTransportLocked()
+		zap.String("old_local_addr", old.Conn.LocalAddr().String()),
+		zap.String("new_local_addr", udpConn.LocalAddr().String()))
+	t.quicTransport = &quic.Transport{Conn: udpConn}
 	t.dialFailures = 0
+	closeTransport(old)
 }
 
-// closeTransportLocked releases the shared socket. The next dial recreates it
-// via transportLocked, which yields a fresh ephemeral port. Errors are logged
-// rather than returned: the socket is being discarded either way, and failing
-// to close it must not stop a new one being created.
-func (t *h3ConnectionCache) closeTransportLocked() {
-	if t.quicTransport == nil {
+// closeTransport releases a transport and its socket. Errors are logged rather
+// than returned: the socket is being discarded either way, and failing to close
+// it must not stop the replacement being used.
+func closeTransport(tr *quic.Transport) {
+	if tr == nil {
 		return
 	}
-	if err := t.quicTransport.Close(); err != nil {
+	if err := tr.Close(); err != nil {
 		zap.L().Warn("closing quic transport", zap.Error(err))
 	}
-	if err := t.quicTransport.Conn.Close(); err != nil {
+	if err := tr.Conn.Close(); err != nil {
 		zap.L().Warn("closing quic transport socket", zap.Error(err))
 	}
+}
+
+func (t *h3ConnectionCache) closeTransportLocked() {
+	closeTransport(t.quicTransport)
 	t.quicTransport = nil
 }
 

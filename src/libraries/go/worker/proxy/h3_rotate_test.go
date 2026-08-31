@@ -69,16 +69,84 @@ func TestRotatesOnlyAfterThresholdAndChangesSourcePort(t *testing.T) {
 	}
 
 	c.noteDialResult(before, dialErr)
-	if c.quicTransport != nil {
-		t.Fatal("expected the transport to be released at the threshold")
-	}
-
 	after, err := c.transport()
 	if err != nil {
 		t.Fatalf("transport after rotation: %v", err)
 	}
+	if after == before {
+		t.Fatal("expected the transport to be replaced at the threshold")
+	}
+	// The replacement is bound before the old socket is closed precisely so
+	// the kernel cannot hand back the port that was just freed. If it did, the
+	// worker would stay on the same 5-tuple and the rotation would be a no-op.
 	if after.Conn.LocalAddr().String() == portBefore {
 		t.Fatal("expected a new source port after rotation; the NLB hashes on it")
+	}
+	if c.dialFailures != 0 {
+		t.Fatalf("dialFailures = %d after rotation, want 0", c.dialFailures)
+	}
+}
+
+// A dial that began before a rotation must not move the counter. Otherwise
+// stale failures accumulate against the replacement and one genuine failure of
+// its own is enough to discard a socket that was never shown to be bad.
+func TestStaleFailuresDoNotCountAgainstReplacement(t *testing.T) {
+	c := newTestCache()
+	defer c.Close()
+
+	stale, err := c.transport()
+	if err != nil {
+		t.Fatalf("transport: %v", err)
+	}
+	dialErr := errors.New("timeout: no recent network activity")
+	for range dialFailuresBeforeRotate {
+		c.noteDialResult(stale, dialErr)
+	}
+	replacement := c.quicTransport
+	if replacement == stale {
+		t.Fatal("expected a rotation")
+	}
+
+	// Several more results from the old socket arrive late.
+	for range dialFailuresBeforeRotate * 2 {
+		c.noteDialResult(stale, dialErr)
+	}
+	if c.dialFailures != 0 {
+		t.Fatalf("stale failures moved the counter to %d, want 0", c.dialFailures)
+	}
+
+	// One genuine failure of the replacement's own must not be enough.
+	c.noteDialResult(replacement, dialErr)
+	if c.quicTransport != replacement {
+		t.Fatal("replacement rotated after a single failure of its own")
+	}
+}
+
+// A stale success must not clear failures the current socket really had.
+func TestStaleSuccessDoesNotResetReplacement(t *testing.T) {
+	c := newTestCache()
+	defer c.Close()
+
+	stale, err := c.transport()
+	if err != nil {
+		t.Fatalf("transport: %v", err)
+	}
+	dialErr := errors.New("timeout: no recent network activity")
+	for range dialFailuresBeforeRotate {
+		c.noteDialResult(stale, dialErr)
+	}
+	replacement := c.quicTransport
+
+	for i := 1; i < dialFailuresBeforeRotate; i++ {
+		c.noteDialResult(replacement, dialErr)
+	}
+	c.noteDialResult(stale, nil) // late success from the discarded socket
+	if c.dialFailures != dialFailuresBeforeRotate-1 {
+		t.Fatalf("a stale success reset the counter to %d", c.dialFailures)
+	}
+	c.noteDialResult(replacement, dialErr)
+	if c.quicTransport == replacement {
+		t.Fatal("expected rotation once the replacement reached the threshold")
 	}
 }
 
@@ -101,32 +169,6 @@ func TestSuccessResetsFailureCount(t *testing.T) {
 	}
 	if c.quicTransport != tr {
 		t.Fatal("rotated despite every failure run being broken by a success")
-	}
-}
-
-// A dial that was in flight across a rotation must not discard the replacement
-// socket, which would throw away a transport never shown to be bad.
-func TestStaleDialDoesNotRotateReplacement(t *testing.T) {
-	c := newTestCache()
-	defer c.Close()
-
-	stale, err := c.transport()
-	if err != nil {
-		t.Fatalf("transport: %v", err)
-	}
-	dialErr := errors.New("timeout: no recent network activity")
-	for range dialFailuresBeforeRotate {
-		c.noteDialResult(stale, dialErr)
-	}
-	replacement, err := c.transport()
-	if err != nil {
-		t.Fatalf("transport: %v", err)
-	}
-	for range dialFailuresBeforeRotate {
-		c.noteDialResult(stale, dialErr)
-	}
-	if c.quicTransport != replacement {
-		t.Fatal("a stale dial rotated the replacement transport")
 	}
 }
 
