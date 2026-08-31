@@ -86,15 +86,16 @@ class gets a new empty volume, not the cache.
 
 ### OCI FSS, fss.csi.oraclecloud.com
 
-Not qualified. Performance was measured on `nvcf-dgxc-k8s-oci-jbt-ct4` in
-August, and the cache workflow was not.
+Not qualified. Performance was measured in August. The cache workflow was
+not.
 
-That cluster no longer exists. `nvcf-dgxc-k8s-oci-iad-dev1` and
-`nvcf-dgxc-k8s-oci-ord-dev1` both register the FSS CSI driver but neither has
-an FSS storage class, so a run needs a class created with a valid
-`mountTargetOcid`, `compartmentOcid` and `availabilityDomain`, and the OCI
-side file system and mount target behind them. The OCIDs from the August work
-belong to a different region and do not apply.
+The target cluster is `nvcf-dgxc-k8s-oci-jbp-ct4`, reached through the
+production Teleport proxy `nv-prd-dgxc.teleport.sh`, not the staging proxy
+that serves the Weka cluster. Log in to that proxy before `tsh kube login`.
+
+The OCI dev clusters are not a substitute. `nvcf-dgxc-k8s-oci-iad-dev1` and
+`nvcf-dgxc-k8s-oci-ord-dev1` register the FSS CSI driver but neither has an
+FSS storage class.
 
 ### OCI Lustre, lustre.csi.oraclecloud.com
 
