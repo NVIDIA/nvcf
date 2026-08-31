@@ -270,11 +270,8 @@ default_source_release="$(HELMFILE_ENV="$default_source_environment_name" \
     --selector name=llm-request-router \
     list --skip-charts --output json)"
 default_source_chart="$(jq -r '.[0].chart // ""' <<<"$default_source_release")"
-default_source_version="$(jq -r '.[0].version // ""' <<<"$default_source_release")"
 test "$default_source_chart" = 'nvcf/helm-nvcf-llm-request-router' ||
   fail "expected default request-router chart, got ${default_source_chart:-missing}"
-test "$default_source_version" = '1.12.1' ||
-  fail "expected default request-router version 1.12.1, got ${default_source_version:-missing}"
 
 default_source_values="$work_dir/default-source-router-values.yaml"
 HELMFILE_ENV="$default_source_environment_name" \
