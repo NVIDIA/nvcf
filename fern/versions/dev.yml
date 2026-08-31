@@ -266,6 +266,8 @@ navigation:
         path: ../../docs/dev/architecture.md
       - page: Storage-Agnostic Cache Architecture
         path: ../../docs/dev/sdd-storage-agnostic-cache-architecture.md
+      - page: Storage Provider Qualification
+        path: ../../docs/dev/storage-provider-qualification.md
       - section: Local Development
         skip-slug: true
         contents:
