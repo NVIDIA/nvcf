@@ -22,8 +22,7 @@ Feature: Register an LLM worker securely with a local split-cluster routing plan
       | observability.profile                                    | disabled                                                                     |
     And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-bdd-registration-tls-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
     # Explore a shared BDD preflight so feature files need not repeat this check: https://github.com/NVIDIA/nvcf/issues/1411
-    When I run command "/bin/sh -c 'command -v grpcurl >/dev/null'"
-    Then the command exit code should be 0
+    When I successfully run command "/bin/sh -c 'command -v grpcurl >/dev/null'"
     # Conflict precheck: the single-cluster topology owns the same host
     # ports. Run make -C tools/ncp-local-cluster destroy CLUSTER_NAME=ncp-local
     # before retrying. k3d v5 exits 1 when the cluster is absent.
@@ -73,24 +72,22 @@ Feature: Register an LLM worker securely with a local split-cluster routing plan
       # openssl verifies the externally reachable listener against the same
       # stack-issued CA and DNS identity that a compute-plane Pylon uses.
       # Explore a readable shared BDD DSL for this TLS listener probe: https://github.com/NVIDIA/nvcf/issues/1412
-      When I run command:
+      When I successfully run command:
         """
         /bin/bash -c 'openssl s_client -connect 127.0.0.1:50071 -servername llm-request-router.nvcf.svc.cluster.local -alpn h2 -verify_return_error -CAfile <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf -o jsonpath="{.data.ca\.crt}" | base64 -d) </dev/null 2>&1'
         """
-      Then the command exit code should be 0
-      And the command output should contain "Verify return code: 0 (ok)"
+      Then the command output should contain "Verify return code: 0 (ok)"
       And the command output should contain "ALPN protocol: h2"
 
       # grpcurl reports a client-side dial deadline when plaintext HTTP/2 is
       # sent to this verified TLS listener. The trusted Watch below proves
       # that the same endpoint remains healthy.
       # Explore a readable shared BDD DSL for this plaintext rejection probe: https://github.com/NVIDIA/nvcf/issues/1412
-      When I run command:
+      When I successfully run command:
         """
         /bin/bash -c 'set -u; output=$(grpcurl -plaintext -max-time 5 -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates 2>&1); rc=$?; if [ "$rc" -eq 0 ]; then printf "%s\n" "plaintext Watch unexpectedly succeeded" >&2; exit 1; fi; printf "%s\n" "$output" | bash tests/bdd/scripts/assert-grpcurl-plaintext-tls-rejection.sh'
         """
-      Then the command exit code should be 0
-      And the command output should contain "plaintext-watch-rejected=tls-listener-timeout"
+      Then the command output should contain "plaintext-watch-rejected=tls-listener-timeout"
 
       When I successfully observe WatchStargates at "127.0.0.1:50071" with TLS authority "llm-request-router.nvcf.svc.cluster.local" using CA secret "stargate-quic-tls" in namespace "nvcf" and context "k3d-ncp-local-cp" for "3" seconds
       Then the command output should contain all:
@@ -100,37 +97,33 @@ Feature: Register an LLM worker securely with a local split-cluster routing plan
         | llm-request-router-2                                                    |
         | https://llm-request-router.nvcf.svc.cluster.local:50071                |
 
-      When I run command:
+      When I successfully run command:
         """
         ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml self-hosted --control-plane-stack deploy/stacks/self-managed --env local-bdd-registration-tls --control-plane-context k3d-ncp-local-cp --compute-plane-context k3d-ncp-local-compute-1 control-plane profile export --cluster-name ncp-local-cp
         """
-      Then the command exit code should be 0
-      And file "deploy/stacks/self-managed/out/control-plane-profile.yaml" should exist
+      Then file "deploy/stacks/self-managed/out/control-plane-profile.yaml" should exist
       And yaml file "deploy/stacks/self-managed/out/control-plane-profile.yaml" should have non-empty keys:
         | key                                 |
         | managementTls.caBundlePem           |
         | transportTls.trustBundleFingerprint |
         | transportTls.trustBundlePem         |
 
-      And command has succeeded:
+      When command has succeeded:
         """
         /bin/sh -c '${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml init >/dev/null'
         """
-      When I run command "kubectl config use-context k3d-ncp-local-compute-1"
-      Then the command exit code should be 0
-      When I run command:
+      And I successfully run command "kubectl config use-context k3d-ncp-local-compute-1"
+      And I successfully run command:
         """
         make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=ncp-local-compute-1 CONTROL_PLANE_PROFILE=${REPO_ROOT}/deploy/stacks/self-managed/out/control-plane-profile.yaml COMPUTE_KUBE_CONTEXT=k3d-ncp-local-compute-1 NVCF_CLI=${NVCF_CLI} NVCF_CLI_CONFIG=${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml
         """
-      Then the command exit code should be 0
-      And file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-compute-1-register-values.yaml" should exist
+      Then file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-compute-1-register-values.yaml" should exist
       And the "nvcr-pull-secret" image pull secret exists in namespaces:
         | nvca-operator |
-      When I run command:
+      When I successfully run command:
         """
         make -C deploy/stacks/nvcf-compute-plane install CLUSTER_NAME=ncp-local-compute-1 HELMFILE_ENV=local-bdd-registration-tls COMPUTE_KUBE_CONTEXT=k3d-ncp-local-compute-1 NVCF_CLI=${NVCF_CLI}
         """
-      Then the command exit code should be 0
       And NVCFBackend "ncp-local-compute-1" in namespace "nvca-operator" using context "k3d-ncp-local-compute-1" should report agent status "healthy" within "10m"
 
       Given I use NVCF CLI config "${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml"
