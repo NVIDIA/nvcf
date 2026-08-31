@@ -47,8 +47,10 @@ import (
 
 var (
 	// contextFieldPattern validates context field values (alphanumeric and dashes only)
-	contextFieldPattern   = regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
-	namespaceFieldPattern = regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
+	contextFieldPattern = regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
+	// instanceIDFieldPattern additionally permits dot-separated instance ID segments.
+	instanceIDFieldPattern = regexp.MustCompile(`^[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*$`)
+	namespaceFieldPattern  = regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
 
 	ErrMissingEventName = errors.New("missing required field: event_name")
 	ErrMissingNamespace = errors.New("missing required field: namespace")
@@ -363,12 +365,20 @@ func deduplicateEvents(events []*EventV3) []*EventV3 {
 
 // eventContextToCanonical converts a ContextV3 struct to a canonical string representation
 // Format: key1=value1,key2=value2 (alphabetical order: cluster_id, deployment_id, gpu_specification_id, instance_id)
-// Validates that values contain only alphanumeric characters and dashes. Empty fields are omitted.
+// Validates that values contain only alphanumeric characters and dashes. Instance IDs may also
+// contain dots between non-empty segments. Empty fields are omitted.
 func eventContextToCanonical(eventContext ContextV3) (string, error) {
 	// Helper to validate field values
 	validate := func(name, value string) error {
-		if value != "" && !contextFieldPattern.MatchString(value) {
-			return fmt.Errorf("invalid %s '%s': must contain only alphanumeric characters and dashes", name, value)
+		pattern := contextFieldPattern
+		allowedCharacters := "alphanumeric characters and dashes"
+		if name == "instance_id" {
+			pattern = instanceIDFieldPattern
+			allowedCharacters = "alphanumeric characters, dashes, and dots between segments"
+		}
+
+		if value != "" && !pattern.MatchString(value) {
+			return fmt.Errorf("invalid %s '%s': must contain only %s", name, value, allowedCharacters)
 		}
 
 		if len(value) > MaxContextLength {
@@ -542,6 +552,116 @@ func extractCloudEvent(ce *cloudevents.Event) (*EventV3, error) {
 	return event, nil
 }
 
+// processCloudEvents validates a CloudEvents request and persists accepted events in bulk.
+// Response counts continue to describe the input events, while duplicate storage keys are
+// reduced to their latest timestamp before persistence.
+func (s *Server) processCloudEvents(traceCtx context.Context, cloudEvents []*cloudevents.Event) EventProcessingResult {
+	logger := logging.GetLogger(traceCtx)
+	result := EventProcessingResult{ProcessedEvents: make([]ProcessedEventSummary, 0, len(cloudEvents))}
+
+	acceptedEvents := make([]*EventV3, 0, len(cloudEvents))
+	for _, cloudEvent := range cloudEvents {
+		if cloudEvent == nil {
+			err := errors.New("CloudEvent must not be null")
+			logger.WarnContext(traceCtx, "Skipping null CloudEvent", zap.Error(err))
+			result.FailureCount++
+			result.LastError = err
+			continue
+		}
+
+		event, err := extractCloudEvent(cloudEvent)
+		if err != nil {
+			logger.WarnContext(traceCtx, "Skipping event", zap.Error(err))
+			result.FailureCount++
+			result.LastError = err
+			continue
+		}
+
+		if !middleware.IsTenantAuthorized(traceCtx, event.Namespace) {
+			err := errors.New("tenant is not authorized")
+			logger.WarnContext(traceCtx, "Skipping unauthorized tenant event")
+			result.FailureCount++
+			result.LastError = err
+			continue
+		}
+
+		acceptedEvents = append(acceptedEvents, event)
+	}
+
+	storageEvents := deduplicateEvents(acceptedEvents)
+	records := make([]data_access.EventV3UpsertRecord, len(storageEvents))
+	for i, event := range storageEvents {
+		records[i] = data_access.EventV3UpsertRecord{
+			Namespace: event.Namespace,
+			Context:   event.Context,
+			EventName: event.EventName,
+			Source:    event.Source,
+			Details:   event.DetailsJSON,
+			Timestamp: event.Timestamp,
+		}
+	}
+
+	if len(records) > 0 {
+		if err := s.conns.DbHandlerV2.BulkUpsertEventsV3(traceCtx, records); err != nil {
+			logger.ErrorContext(traceCtx, "Failed to bulk upsert CloudEvents", zap.Error(err))
+			result.FailureCount += len(acceptedEvents)
+			result.LastError = err
+			return result
+		}
+
+		statsRecords := make([]data_access.EventV3UpsertRecord, 0, len(records))
+		for _, record := range records {
+			if s.isStatsEnabled(record.EventName) {
+				statsRecords = append(statsRecords, record)
+			}
+		}
+		if len(statsRecords) > 0 {
+			if err := s.conns.DbHandlerV2.BulkUpsertStatsV3(traceCtx, statsRecords); err != nil {
+				logger.ErrorContext(traceCtx, "Failed to bulk upsert CloudEvent stats", zap.Error(err))
+				result.LastError = err
+				for _, event := range acceptedEvents {
+					if s.isStatsEnabled(event.EventName) {
+						result.FailureCount++
+						continue
+					}
+					s.completeCloudEvent(traceCtx, event, &result)
+				}
+				return result
+			}
+		}
+	}
+
+	for _, event := range acceptedEvents {
+		s.completeCloudEvent(traceCtx, event, &result)
+	}
+
+	return result
+}
+
+// completeCloudEvent preserves filtered-view writes, which do not have a bulk interface yet,
+// without putting event and primary-stats persistence back on the per-event LWT path.
+func (s *Server) completeCloudEvent(traceCtx context.Context, event *EventV3, result *EventProcessingResult) {
+	if s.isFilteredStatsEnabled(event.EventName) {
+		if err := s.conns.DbHandlerV2.UpsertFilteredStatsV3(traceCtx, event.Namespace, event.Context, event.EventName, event.Timestamp); err != nil {
+			logging.GetLogger(traceCtx).ErrorContext(traceCtx, "Failed to store event in filtered stats view", zap.Error(err))
+			result.FailureCount++
+			result.LastError = err
+			return
+		}
+	}
+	result.addProcessedEvent(event)
+}
+
+func (result *EventProcessingResult) addProcessedEvent(event *EventV3) {
+	result.SuccessCount++
+	result.ProcessedEvents = append(result.ProcessedEvents, ProcessedEventSummary{
+		Namespace: event.Namespace,
+		Context:   event.Context,
+		Name:      event.EventName,
+		Timestamp: event.Timestamp.Format(time.RFC3339),
+	})
+}
+
 // storeK8sEvent persists an event to both events_v3 and optionally stats_v3
 func (s *Server) storeK8sEvent(traceCtx context.Context, event *EventV3) error {
 	logger := logging.GetLogger(traceCtx)
@@ -708,39 +828,7 @@ func (s *Server) PostCloudEventV3(w http.ResponseWriter, r *http.Request) {
 
 	logger.InfoContext(traceCtx, "Parsed CloudEvents", zap.Int("count", len(events)))
 
-	result := EventProcessingResult{ProcessedEvents: make([]ProcessedEventSummary, 0, len(events))}
-	for _, event := range events {
-		eventV3, err := extractCloudEvent(event)
-		if err != nil {
-			logger.WarnContext(traceCtx, "Skipping event", zap.Error(err))
-			result.FailureCount++
-			result.LastError = err
-			continue
-		}
-
-		if !middleware.IsTenantAuthorized(traceCtx, eventV3.Namespace) {
-			err := errors.New("tenant is not authorized")
-			logger.WarnContext(traceCtx, "Skipping unauthorized tenant event")
-			result.FailureCount++
-			result.LastError = err
-			continue
-		}
-
-		if err := s.storeK8sEvent(traceCtx, eventV3); err != nil {
-			logger.ErrorContext(traceCtx, "Failed to store event", zap.Error(err))
-			result.FailureCount++
-			result.LastError = err
-			continue
-		}
-
-		result.SuccessCount++
-		result.ProcessedEvents = append(result.ProcessedEvents, ProcessedEventSummary{
-			Namespace: eventV3.Namespace,
-			Context:   eventV3.Context,
-			Name:      eventV3.EventName,
-			Timestamp: eventV3.Timestamp.Format(time.RFC3339),
-		})
-	}
+	result := s.processCloudEvents(traceCtx, events)
 
 	// Send response using the common response handler
 	s.sendEventResponse(w, traceCtx, result)
