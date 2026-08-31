@@ -37,6 +37,9 @@ func (r *Reconciler) prepareTransportTLSForWorkloads(
 	ms *nvcav1alpha1.MiniService,
 	objs []client.Object,
 ) error {
+	if err := transporttls.ValidateWorkloadConfig(r.cfg.Workload); err != nil {
+		return reconcile.TerminalError(err)
+	}
 	if r.cfg.Workload.TransportTLS == nil {
 		return nil
 	}
@@ -55,10 +58,6 @@ func (r *Reconciler) prepareTransportTLSForWorkloads(
 	}
 	if len(podSpecs) == 0 {
 		return nil
-	}
-
-	if err := transporttls.ValidateConfig(cfg); err != nil {
-		return reconcile.TerminalError(err)
 	}
 	if err := r.ensureTransportTLSConfigMap(ctx, ms, cfg); err != nil {
 		return err
