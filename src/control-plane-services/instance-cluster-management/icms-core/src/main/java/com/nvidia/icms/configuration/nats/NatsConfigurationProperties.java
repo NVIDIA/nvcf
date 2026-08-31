@@ -31,7 +31,7 @@ import org.springframework.context.annotation.Configuration;
 @Slf4j
 public class NatsConfigurationProperties {
 
-    private boolean natsEnabled;
+    private boolean enabled;
     private String natsUrl;
     private int maxPoolSize = 8;
     private boolean createNatsStreams;

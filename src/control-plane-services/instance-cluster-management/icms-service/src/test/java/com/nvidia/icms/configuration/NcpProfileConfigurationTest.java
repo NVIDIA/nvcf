@@ -44,7 +44,7 @@ class NcpProfileConfigurationTest {
                 .bind("icms.byoc", ByocConfigurationProperties.class)
                 .orElseThrow(IllegalStateException::new);
 
-        assertThat(nats.isNatsEnabled()).isTrue();
+        assertThat(nats.isEnabled()).isTrue();
         assertThat(nats.isCreateNatsStreams()).isTrue();
         assertThat(nats.getConnectionTimeout()).isEqualTo(Duration.ofSeconds(10));
         assertThat(nats.getPingInterval()).isEqualTo(Duration.ofSeconds(5));

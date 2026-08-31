@@ -12,7 +12,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 @Configuration(proxyBeanMethods = false)
-@ConditionalOnProperty(prefix = "icms.nats", name = "nats-enabled", havingValue = "true")
+@ConditionalOnProperty(prefix = "icms.nats", name = "enabled", havingValue = "true")
 public class NatsHealthConfiguration extends
         CompositeHealthContributorConfiguration<NatsHealthConfiguration.NatsHealthIndicator, FixedNatsPool> {
 

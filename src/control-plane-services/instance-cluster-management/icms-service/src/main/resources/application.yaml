@@ -419,7 +419,7 @@ icms:
   spot-post-reserved-exhaustion-for-function-enabled: false # Feature flag to enable spot usage after reservation is exhausted for functions
 
   nats:
-    nats-enabled: false
+    enabled: false
     nats-url: nats://localhost:4222
     max-pool-size: 8
     create-nats-streams: true

@@ -70,7 +70,7 @@ class NatsMessageSenderClientIntegrationTest extends IntegrationTest {
         when(natsConfigurationProperties.getNkeySeed()).thenReturn(Optional.empty());
         when(natsConfigurationProperties.getDelayBetweenMessages()).thenReturn(Duration.ZERO);
         when(natsConfigurationProperties.isCreateNatsStreams()).thenReturn(true);
-        when(natsConfigurationProperties.isNatsEnabled()).thenReturn(true);
+        when(natsConfigurationProperties.isEnabled()).thenReturn(true);
         when(natsConfigurationProperties.getMaxPoolSize()).thenReturn(1);
 
         // Initialize NATS client

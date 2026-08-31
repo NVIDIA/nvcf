@@ -420,7 +420,7 @@ icms:
     DUMMY_GPU_5: dgpu5
 
   nats:
-    nats-enabled: false
+    enabled: false
     nats-url: nats://localhost:4222
     create-nats-streams: true
     connection-timeout: 10s
@@ -625,7 +625,7 @@ icms:
 
   nats:
     # Should be disabled to verify success of backward compatible integration test
-    nats-enabled: false
+    enabled: false
     create-nats-streams: true
 
   aws:
