@@ -561,7 +561,7 @@ func TestHelmSuccessfulInitRetriesCleanupFailureWithoutPhaseAdvance(t *testing.T
 
 	res, err := r.reconcileInitModelCacheNVMesh(
 		t.Context(), *request, out, writer.DeepCopy(), job.DeepCopy(),
-		[]*corev1.Secret{secret.DeepCopy()}, HelmCacheBackendNVMesh, true)
+		[]*corev1.Secret{secret.DeepCopy()}, HelmCacheBackendNVMesh, true, nil)
 	require.NoError(t, err)
 	assert.True(t, res.Requeue)
 	assert.Equal(t, nvcav1new.StorageInitRunning, out.Status.Phase)

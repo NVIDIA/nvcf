@@ -755,3 +755,67 @@ func TestModelCacheInitWritersRemaining(t *testing.T) {
 		assert.Zero(t, got)
 	})
 }
+
+// TestRequireUnchangedModelCacheInitLease closes the create side of the
+// cleanup race. Holding the Lease at the top of a reconcile is not authority
+// to create: cleanup takes the same Lease with a compare-and-swap and then
+// deletes the writer objects, so anything created after its snapshot lands
+// behind it. The create path proves the Lease is still the object it was
+// admitted on, immediately before creating.
+func TestRequireUnchangedModelCacheInitLease(t *testing.T) {
+	newLease := func() *coordv1.Lease {
+		return &coordv1.Lease{ObjectMeta: metav1.ObjectMeta{
+			Name: "init-lease", Namespace: ModelCacheInitNamespace,
+			// The fake client does not assign one; a real API server always does.
+			UID: "init-lease-uid",
+		}}
+	}
+
+	t.Run("an unchanged Lease admits the create", func(t *testing.T) {
+		lease := newLease()
+		r := retirementReconciler(t, time.Now(), lease)
+		observed := &coordv1.Lease{}
+		require.NoError(t, r.Client.Get(t.Context(), client.ObjectKeyFromObject(lease), observed))
+
+		require.NoError(t, r.requireUnchangedModelCacheInitLease(t.Context(), observed))
+	})
+
+	t.Run("a Lease modified by cleanup refuses the create", func(t *testing.T) {
+		lease := newLease()
+		r := retirementReconciler(t, time.Now(), lease)
+		observed := &coordv1.Lease{}
+		require.NoError(t, r.Client.Get(t.Context(), client.ObjectKeyFromObject(lease), observed))
+
+		// What cleanup's compare-and-swap does: bump the Lease.
+		cleanupTouched := observed.DeepCopy()
+		now := metav1.NowMicro()
+		cleanupTouched.Spec.RenewTime = &now
+		require.NoError(t, r.Client.Update(t.Context(), cleanupTouched))
+
+		err := r.requireUnchangedModelCacheInitLease(t.Context(), observed)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, errModelCacheInitLeaseChanged)
+		assert.Contains(t, err.Error(), "modified after this reconcile was admitted")
+	})
+
+	t.Run("a released Lease refuses the create", func(t *testing.T) {
+		lease := newLease()
+		r := retirementReconciler(t, time.Now(), lease)
+		observed := &coordv1.Lease{}
+		require.NoError(t, r.Client.Get(t.Context(), client.ObjectKeyFromObject(lease), observed))
+		require.NoError(t, r.Client.Delete(t.Context(), lease))
+
+		err := r.requireUnchangedModelCacheInitLease(t.Context(), observed)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, errModelCacheInitLeaseChanged)
+		assert.Contains(t, err.Error(), "was released")
+	})
+
+	t.Run("no observed identity is refused rather than assumed", func(t *testing.T) {
+		r := retirementReconciler(t, time.Now())
+		err := r.requireUnchangedModelCacheInitLease(t.Context(), nil)
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, errModelCacheInitLeaseChanged,
+			"a missing identity is a programming error, not a lost race")
+	})
+}

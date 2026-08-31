@@ -1509,7 +1509,7 @@ func (r *Reconciler) doInitModelCacheNVMeshWithExistingWriter(ctx context.Contex
 	if err := propagateModelCacheBindingUIDLabel(stCopy, lease); err != nil {
 		return reconcile.Result{}, r.terminalErrorWithMetricErr(modelcachetypes.ReasonCacheSpecInvalid, err)
 	}
-	lres, holdsLease, err := r.handleLease(ctx, lease)
+	lres, holdsLease, observedLease, err := r.handleLease(ctx, lease)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
@@ -1537,7 +1537,7 @@ func (r *Reconciler) doInitModelCacheNVMeshWithExistingWriter(ctx context.Contex
 	defer r.initStatuses.Unlock()
 
 	res, err = r.reconcileInitModelCacheNVMesh(
-		ctx, st, stCopy, rwPVC, initJob, pullSecrets, backend, writerPVCAlreadyExists)
+		ctx, st, stCopy, rwPVC, initJob, pullSecrets, backend, writerPVCAlreadyExists, observedLease)
 
 	// The lease holder updates the status for all non-holders (fan-out).
 	if existingStatus, ok := r.initStatuses.get(cacheHandle); !ok ||
@@ -1563,12 +1563,27 @@ func (r *Reconciler) reconcileInitModelCacheNVMesh(ctx context.Context,
 	pullSecrets []*corev1.Secret,
 	backend HelmCacheBackend,
 	writerPVCAlreadyExists bool,
+	observedLease *coordv1.Lease,
 ) (reconcile.Result, error) {
 	log := logf.FromContext(ctx)
 
 	switch st.Status.Phase {
 	case nvcav1new.StorageUnknown:
 		log.V(1).Info("Creating objects for pending model cache")
+
+		// Holding the Lease at the top of this reconcile is not enough to
+		// create with. Cleanup takes the same Lease with a compare-and-swap and
+		// then deletes the writer objects, so anything created after that lands
+		// behind its snapshot and is stranded once cleanup releases the Lease.
+		// Prove the Lease is still the object we were admitted on, immediately
+		// before creating anything.
+		if err := r.requireUnchangedModelCacheInitLease(ctx, observedLease); err != nil {
+			if errors.Is(err, errModelCacheInitLeaseChanged) {
+				log.V(1).Info("Model cache init Lease changed before create, yielding", "error", err)
+				return reconcile.Result{Requeue: true}, nil
+			}
+			return reconcile.Result{}, err
+		}
 
 		objsToCreate := []client.Object{}
 		if !writerPVCAlreadyExists {
@@ -1743,7 +1758,7 @@ func modelCacheSuccessfulInitCleanupResult(errs []error) (reconcile.Result, erro
 // otherwise other object updates will trigger storage request requeues.
 func (r *Reconciler) handleLease(ctx context.Context,
 	lease *coordv1.Lease,
-) (res reconcile.Result, holdsLease bool, err error) {
+) (res reconcile.Result, holdsLease bool, observed *coordv1.Lease, err error) {
 	log := logf.FromContext(ctx).WithValues("lease", lease.Name)
 
 	now := r.nowFunc()
@@ -1754,7 +1769,7 @@ func (r *Reconciler) handleLease(ctx context.Context,
 		// The lease was already created by another thread, proceed with handler.
 		if bindingUID := apitypes.UID(lease.Labels[ModelCacheBindingUIDLabelKey]); bindingUID != "" {
 			if err := ValidateModelCacheBindingUIDLabel(currLease, bindingUID); err != nil {
-				return reconcile.Result{}, false, reconcile.TerminalError(err)
+				return reconcile.Result{}, false, nil, reconcile.TerminalError(err)
 			}
 		}
 	case apierrors.IsNotFound(err):
@@ -1766,7 +1781,7 @@ func (r *Reconciler) handleLease(ctx context.Context,
 			log.Error(err, "Failed to create lease")
 			return modelCacheLeaseAPIErrorResult("create model cache Lease", err)
 		}
-		return reconcile.Result{}, true, nil
+		return reconcile.Result{}, true, lease.DeepCopy(), nil
 	default:
 		return modelCacheLeaseAPIErrorResult("get model cache Lease", err)
 	}
@@ -1795,9 +1810,9 @@ func (r *Reconciler) handleLease(ctx context.Context,
 			wrapped := fmt.Errorf("get model cache Lease holder ICMSRequest %q: %w", holderName, srerr)
 			if k8sutil.IsTransientK8sError(srerr) {
 				log.V(1).Info("Transient Lease holder lookup failed, will retry", "error", wrapped)
-				return reconcile.Result{Requeue: true}, false, nil
+				return reconcile.Result{Requeue: true}, false, nil, nil
 			}
-			return reconcile.Result{}, false, wrapped
+			return reconcile.Result{}, false, nil, wrapped
 		}
 
 		// Some other thread is initializing the cache.
@@ -1868,17 +1883,52 @@ func (r *Reconciler) handleLease(ctx context.Context,
 		res.RequeueAfter = leaseDurHalf
 	}
 
-	return res, holdsLease, nil
+	return res, holdsLease, currLease.DeepCopy(), nil
+}
+
+// errModelCacheInitLeaseChanged reports that the init Lease is no longer the
+// object this reconcile was admitted on, so it must not create writer objects.
+var errModelCacheInitLeaseChanged = errors.New("model cache init Lease changed")
+
+// requireUnchangedModelCacheInitLease re-reads the init Lease and proves it is
+// still exactly the one handleLease observed. Cleanup mutates the Lease before
+// it deletes writer objects, so a changed or missing Lease means a cleanup is
+// in flight and this reconcile must yield rather than create into it.
+func (r *Reconciler) requireUnchangedModelCacheInitLease(
+	ctx context.Context, observed *coordv1.Lease,
+) error {
+	// resourceVersion is the check that matters: cleanup's compare-and-swap
+	// changes it, and a delete plus recreate produces a fresh, higher one. UID
+	// strengthens that when it is available, which it always is against a real
+	// API server.
+	if observed == nil || observed.ResourceVersion == "" {
+		return fmt.Errorf("refusing model cache init create without an observed Lease identity")
+	}
+	current := &coordv1.Lease{}
+	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(observed), current); err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("%w: %s/%s was released",
+				errModelCacheInitLeaseChanged, observed.Namespace, observed.Name)
+		}
+		return fmt.Errorf("re-read model cache init Lease %s/%s: %w",
+			observed.Namespace, observed.Name, err)
+	}
+	if (observed.UID != "" && current.UID != observed.UID) ||
+		current.ResourceVersion != observed.ResourceVersion {
+		return fmt.Errorf("%w: %s/%s was modified after this reconcile was admitted",
+			errModelCacheInitLeaseChanged, observed.Namespace, observed.Name)
+	}
+	return nil
 }
 
 func modelCacheLeaseAPIErrorResult(
 	operation string,
 	err error,
-) (reconcile.Result, bool, error) {
+) (reconcile.Result, bool, *coordv1.Lease, error) {
 	if k8sutil.IsTransientK8sError(err) || apierrors.IsAlreadyExists(err) {
-		return reconcile.Result{Requeue: true}, false, nil
+		return reconcile.Result{Requeue: true}, false, nil, nil
 	}
-	return reconcile.Result{}, false, fmt.Errorf("%s: %w", operation, err)
+	return reconcile.Result{}, false, nil, fmt.Errorf("%s: %w", operation, err)
 }
 
 func (r *Reconciler) getPrimaryPV(ctx context.Context, st *nvcav1new.StorageRequest) (*corev1.PersistentVolume, error) {

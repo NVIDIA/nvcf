@@ -991,7 +991,7 @@ func TestHandleLeaseUsesAcquireTimeWhenRenewTimeIsNil(t *testing.T) {
 	wanted := newInitLease(st)
 	require.NoError(t, propagateModelCacheBindingUIDLabel(st, wanted))
 
-	res, holds, err := r.handleLease(t.Context(), wanted)
+	res, holds, _, err := r.handleLease(t.Context(), wanted)
 	require.NoError(t, err)
 	assert.False(t, holds)
 	assert.Greater(t, res.RequeueAfter, 58*time.Minute)
@@ -1040,7 +1040,7 @@ func TestHandleLeaseClassifiesHolderLookupErrors(t *testing.T) {
 			wanted := newInitLease(st)
 			require.NoError(t, propagateModelCacheBindingUIDLabel(st, wanted))
 
-			res, holds, err := r.handleLease(t.Context(), wanted)
+			res, holds, _, err := r.handleLease(t.Context(), wanted)
 			assert.False(t, holds)
 			assert.Equal(t, tt.wantRequeue, res.Requeue)
 			if tt.wantError {
@@ -1105,7 +1105,7 @@ func TestHandleLeaseClassifiesLeaseAPIErrors(t *testing.T) {
 			wanted := newInitLease(st)
 			require.NoError(t, propagateModelCacheBindingUIDLabel(st, wanted))
 
-			res, holds, err := r.handleLease(t.Context(), wanted)
+			res, holds, _, err := r.handleLease(t.Context(), wanted)
 			assert.False(t, holds)
 			assert.Equal(t, tt.wantRequeue, res.Requeue)
 			if tt.wantError {
