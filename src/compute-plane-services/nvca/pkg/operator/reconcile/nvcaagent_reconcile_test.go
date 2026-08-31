@@ -273,6 +273,7 @@ func TestSetupNVCADeployment(t *testing.T) {
 					Values: []string{
 						"LogPosting",
 						"CachingSupport",
+						"GracefulNoGPU",
 						"PeriodicInstanceStatusUpdate",
 						"SharedCluster",
 					},
@@ -322,6 +323,7 @@ func TestSetupNVCADeployment(t *testing.T) {
 			LogLevel: "info",
 			FeatureFlags: []string{
 				"CachingSupport",
+				"GracefulNoGPU",
 				"LogPosting",
 				"PeriodicInstanceStatusUpdate",
 				"SharedCluster",
@@ -538,6 +540,7 @@ func TestSetupNVCADeployment(t *testing.T) {
 	assert.Equal(t, expectedAnnotations, gotSvc.Annotations)
 	assert.Equal(t, expectedAnnotations, gotDep.Annotations)
 	assert.Empty(t, gotDep.Spec.Template.Annotations)
+	assert.Equal(t, appsv1.RecreateDeploymentStrategyType, gotDep.Spec.Strategy.Type)
 
 	// Try rollout with the same spec.
 	err = bc.setupNVCADeployment(ctx, inNVCFBackend)
@@ -631,6 +634,7 @@ func TestSetupNVCADeployment_OverrideEnvironmentVars(t *testing.T) {
 		gotDep, getErr = depIface.Get(ctx, nvcaoptypes.NVCAModuleName, metav1.GetOptions{})
 		require.NoError(ct, getErr)
 	}, 10*time.Second, 100*time.Millisecond)
+	assert.Empty(t, gotDep.Spec.Strategy.Type, "default rollout strategy must remain unchanged")
 
 	var nvcaContainer *corev1.Container
 	for i := range gotDep.Spec.Template.Spec.Containers {

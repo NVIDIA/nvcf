@@ -2182,6 +2182,14 @@ func (bc *BackendK8sCache) setupNVCADeployment(ctx context.Context, original *nv
 			},
 		},
 	}
+	// GracefulNoGPU deliberately keeps the agent NotReady while the cluster has
+	// no GPUs. A rolling update would therefore surge a second singleton agent
+	// and retain the old replica indefinitely. Recreate keeps configuration
+	// rollouts single-active while preserving the default rollout behavior for
+	// clusters that do not opt in.
+	if slices.Contains(strings.Split(bc.getNVCAFeatureFlags(nb), ","), featureflag.GracefulNoGPU.Key) {
+		deployment.Spec.Strategy = appsv1.DeploymentStrategy{Type: appsv1.RecreateDeploymentStrategyType}
+	}
 
 	if nb.Spec.VaultConfig.Enabled {
 		deployment.Spec.Template.Annotations = mergeMaps(deployment.Spec.Template.Annotations, getVaultAnnotations(nb))
