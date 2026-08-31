@@ -20,6 +20,7 @@ use anyhow::{Context, Result};
 use stargate::registration::{
     DEFAULT_REGISTRATION_UPDATE_IDLE_TIMEOUT, DEFAULT_REGISTRATION_UPDATE_MAX_IDLE_TIMEOUT,
 };
+use stargate::runtime::DEFAULT_READINESS_WARMUP;
 use stargate_protocol::parse_explicit_http_uri;
 use stargate_protocol::{BackendConnectivity, TunnelTransportProtocol};
 use stargate_runtime::wait_for_termination_signal;
@@ -83,7 +84,7 @@ struct Args {
     /// Self gRPC address published by non-Kubernetes discovery and used as the port source for Kubernetes advertised hostnames.
     #[arg(long, value_name = "ADDR")]
     advertise_addr: SocketAddr,
-    /// DNS name used for Stargate peer discovery. In Kubernetes this should be the headless Service so EndpointSlice readiness controls peer visibility and development-only relay targets.
+    /// DNS name used for Stargate peer discovery. In Kubernetes this should be the headless Service so warming and ready peers remain discoverable.
     #[arg(long, value_name = "DNS_NAME")]
     stargate_discovery_dns_name: String,
     /// Additional recursive WatchStargates seeds for remote regions. Pylons register only to concrete `stargates` entries returned by watch snapshots. Repeatable.
@@ -148,6 +149,14 @@ struct Args {
     /// Grace period for shutdown tasks after Stargate starts draining.
     #[arg(long, default_value_t = 30000, value_name = "MS")]
     shutdown_drain_timeout_ms: u64,
+    /// Minimum process age before `/readyz` accepts request traffic; 0 disables the warm-up.
+    #[arg(
+        long,
+        default_value_t = DEFAULT_READINESS_WARMUP.as_millis() as u64,
+        env = "STARGATE_READINESS_WARMUP_MS",
+        value_name = "MS"
+    )]
+    readiness_warmup_ms: u64,
     /// Timeout for establishing outbound direct QUIC connections and development-only peer relays.
     #[arg(long, default_value_t = 2000, value_name = "MS")]
     quic_connect_timeout_ms: u64,
@@ -500,6 +509,7 @@ mod tests {
         let args = parse_args("");
         let config = runtime_config_from_args(&args, proxy_transport(&args))
             .expect("runtime config should parse");
+        assert_eq!(config.readiness_warmup, DEFAULT_READINESS_WARMUP);
         assert!(config.forwarding.is_none());
         assert_eq!(
             config
@@ -602,6 +612,18 @@ mod tests {
     #[test]
     fn dns_poll_ms_zero_is_rejected() {
         assert_parse_error("--dns-poll-ms 0", "greater than 0");
+    }
+
+    #[test]
+    fn readiness_warmup_override_reaches_runtime_config() {
+        let args = parse_args("--readiness-warmup-ms 1234");
+        let config = runtime_config_from_args(&args, proxy_transport(&args))
+            .expect("runtime config should parse");
+
+        assert_eq!(config.readiness_warmup, Duration::from_millis(1234));
+
+        let disabled = parse_args("--readiness-warmup-ms 0");
+        assert_eq!(disabled.readiness_warmup_ms, 0);
     }
 
     #[test]

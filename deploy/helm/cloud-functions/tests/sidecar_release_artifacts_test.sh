@@ -53,7 +53,7 @@ expected_annotations=(
   "release-artifact-niclls-container-image: \"${hostname}/${repository}/nvcf_worker_niclls:2.109.4\""
   "release-artifact-ess-agent-container-image: \"${hostname}/${repository}/ess-agent:1.4.0\""
   "release-artifact-llm-credential-manager-image: \"${hostname}/${repository}/nvcf-worker-llm-credentials-oss:1.1.1\""
-  "release-artifact-llm-router-client-image: \"${hostname}/${repository}/pylon:0.10.0\""
+  "release-artifact-llm-router-client-image: \"${hostname}/${repository}/pylon:0.14.1\""
 )
 
 for annotation in "${expected_annotations[@]}"; do

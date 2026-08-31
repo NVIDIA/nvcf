@@ -171,12 +171,20 @@ functionAutoscaler:
     # environment label.
     ignoreEnv: true
 
+# API environment entries are merged over the stack defaults. Remote config is
+# passed to the API chart and overrides its packaged application profile. When
+# the LLM addon is enabled, the stack defaults the Pylon image from
+# global.sidecars (or global.image) at version 0.14.1.
+api:
+  env: {}
+  remoteConfig:
+    configData: {}
+
 # Image overrides for the API account-bootstrap job. alpine-k8s is not
 # republished under the public nvidia/nvcf catalog, so it defaults to its
 # upstream source, docker.io/alpine/k8s:1.36.1. Leave these unset unless you
 # have mirrored the image into your own registry, in which case set registry
 # and repository together:
-# api:
 #   accountBootstrap:
 #     image:
 #       registry: <your-registry>
@@ -193,6 +201,13 @@ accounts:
 # These static global values are processed in the values template
 nats:
   enabled: true
+  # The control plane places request-queue streams by its logical NCP region.
+  # Keep both tags so NATS can host shared and region-scoped streams.
+  config:
+    merge:
+      server_tags:
+        - "dc:ncp"
+        - "aws-region:ncp"
   # Image overrides for the NATS config reloader. The reloader is not
   # republished under the public nvidia/nvcf catalog, so it defaults to its
   # upstream source, docker.io/natsio/nats-server-config-reloader:0.23.0.
@@ -308,6 +323,8 @@ addons:
       replicaCount: 3
       # Set only for source-tree validation. Empty uses the released OCI chart.
       chartPath: ""
+      readiness:
+        warmupMs: 60000
       workload:
         # Deployment matches managed NVCF. Existing installations can pin
         # StatefulSet and migrate workload kinds in a controlled maintenance
@@ -499,7 +516,8 @@ ess:
 
 invocation:
   env:
-    NATS_PROPERTIES__REGION: local
+    # Keep request subjects aligned with the API and worker consumers.
+    NATS_PROPERTIES__REGION: ncp
   podDisruptionBudget:
     enabled: false
     maxUnavailable: 1

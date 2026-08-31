@@ -45,6 +45,8 @@ use server_tasks::{
     spawn_model_discovery_grpc_server,
 };
 
+pub const DEFAULT_READINESS_WARMUP: Duration = Duration::from_secs(60);
+
 pub struct StargateRuntimeConfig {
     /// Stable process/pod identity used in logs, metrics, and routing snapshots.
     pub stargate_id: String,
@@ -54,11 +56,13 @@ pub struct StargateRuntimeConfig {
     pub model_discovery_listen_addr: SocketAddr,
     /// Local HTTP socket for OpenAI-compatible proxy traffic and health probes.
     pub http_listen_addr: SocketAddr,
+    /// Minimum runtime age before the HTTP readiness endpoint accepts traffic.
+    pub readiness_warmup: Duration,
     /// Optional local TCP socket for Prometheus metrics.
     pub metrics_listen_addr: Option<SocketAddr>,
     /// Discovery address before hostname rendering; outside Kubernetes this is usually `WatchStargates.stargates[*].advertise_addr`.
     pub advertise_addr: SocketAddr,
-    /// Peer-discovery DNS name; in Kubernetes this must be the headless Service controlling ready endpoint visibility.
+    /// Peer-discovery DNS name; in Kubernetes this must be the headless Service publishing warming and ready peers.
     pub stargate_discovery_dns_name: String,
     /// Remote-region recursive watch seeds; pylons register to returned Stargates, not these URLs.
     pub remote_watch_stargate_urls: Vec<String>,
@@ -344,9 +348,7 @@ impl StargateRuntime {
 
         let proxy_router = make_router(ProxyAppState {
             state: service.state(),
-            traffic: ProxyTrafficState {
-                shutdown: tasks.shutdown_signal(),
-            },
+            traffic: ProxyTrafficState::new(tasks.shutdown_signal(), self.config.readiness_warmup),
             quic_proxy,
             lb_router,
             metrics: metrics.clone(),
@@ -501,6 +503,7 @@ mod tests {
             grpc_listen_addr: "127.0.0.1:0".parse().unwrap(),
             model_discovery_listen_addr: "127.0.0.1:0".parse().unwrap(),
             http_listen_addr: "127.0.0.1:0".parse().unwrap(),
+            readiness_warmup: DEFAULT_READINESS_WARMUP,
             metrics_listen_addr: None,
             advertise_addr: "127.0.0.1:0".parse().unwrap(),
             stargate_discovery_dns_name: "localhost".to_string(),

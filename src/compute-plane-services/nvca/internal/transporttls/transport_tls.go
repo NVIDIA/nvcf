@@ -168,11 +168,26 @@ func InjectIntoPodSpec(podSpec *corev1.PodSpec, cfg nvcaconfig.TransportTLSConfi
 		ReadOnly:  true,
 	})
 	installedBundleFile := cfg.InstalledBundleMountPath + "/" + InstalledBundleFile
-	k8sutil.AddEnvsToContainer(llmWorker,
-		corev1.EnvVar{Name: CertPathEnv, Value: installedBundleFile},
-		corev1.EnvVar{Name: GrpcTLSCACertPathEnv, Value: installedBundleFile},
-	)
+	envs := []corev1.EnvVar{{Name: CertPathEnv, Value: installedBundleFile}}
+	if llmWorkerUsesHTTPSRegistration(llmWorker) {
+		envs = append(envs, corev1.EnvVar{Name: GrpcTLSCACertPathEnv, Value: installedBundleFile})
+	}
+	k8sutil.AddEnvsToContainer(llmWorker, envs...)
 	return nil
+}
+
+func llmWorkerUsesHTTPSRegistration(container *corev1.Container) bool {
+	for _, arg := range container.Args {
+		if address, found := strings.CutPrefix(strings.TrimSpace(arg), "--stargate-address="); found {
+			return strings.HasPrefix(strings.TrimSpace(address), "https://")
+		}
+	}
+	for _, env := range container.Env {
+		if env.Name == "LLM_REQUEST_ROUTER_ADDRESS" || env.Name == "STARGATE_ADDRESS" {
+			return strings.HasPrefix(strings.TrimSpace(env.Value), "https://")
+		}
+	}
+	return false
 }
 
 func validateInstalledBundleMountConflict(container *corev1.Container, mountPath string) error {

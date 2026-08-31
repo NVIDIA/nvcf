@@ -567,12 +567,40 @@ sidecar image passed to generated LLM workers:
 
 ```yaml
 api:
-  env:
-    NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE: <registry>/<repository>/pylon:0.2.1
+  remoteConfig:
+    configData:
+      nvcf:
+        sidecars:
+          llm-router-client-image: <registry>/<repository>/pylon:0.14.1
 ```
+
+`api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE` is deprecated. The stack
+translates it into remote config for one compatibility window and omits it from
+the API environment. Do not set both paths to different values.
 
 The LLM API Gateway and request router images are resolved from the same stack
 artifact registry settings as the other control-plane services.
+
+The self-managed stack passes API environment and remote configuration through
+separate chart values:
+
+```mermaid
+flowchart LR
+    E[Helmfile environment] --> T[global.yaml.gotmpl]
+    F[Fixed API environment] --> T
+    T -->|mergeOverwrite into api.env| V[NVCF API chart values]
+    E -->|api.remoteConfig.configData| T
+    T -->|merged remote config| V
+    V --> C1[nvcf-api-env ConfigMap]
+    V --> C2[nvcf-api-remote-config ConfigMap]
+    C1 --> A[NVCF API startup]
+    C2 --> A
+    A --> W[LLM worker launch metadata]
+```
+
+Configured `api.env` entries override the fixed stack environment. The remote
+ConfigMap carries the request-router worker address and Pylon image used when
+the API creates a new LLM function version.
 
 ## Apply and Verify
 
@@ -649,8 +677,10 @@ nvcf-cli self-hosted \
   --cluster-name <compute-plane-cluster-name>
 ```
 
-Existing LLM function pods keep their current sidecar arguments. Recreate or
-redeploy those functions after refreshing the compute plane.
+Existing LLM function versions retain the worker-sidecar image metadata
+captured when the version is created. Replacing pods or redeploying the same
+version does not apply a new Pylon image. After updating the control plane,
+create and deploy a new function version.
 
 After deploying an LLM function, verify the workload trust bundle. Compare
 only `.data.fingerprint` with `transportTls.trustBundleFingerprint` in the

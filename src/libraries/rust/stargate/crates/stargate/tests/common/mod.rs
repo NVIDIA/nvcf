@@ -517,6 +517,7 @@ pub fn base_config(
         grpc_listen_addr: grpc_addr,
         model_discovery_listen_addr: "127.0.0.1:0".parse().unwrap(),
         http_listen_addr: http_addr,
+        readiness_warmup: stargate::runtime::DEFAULT_READINESS_WARMUP,
         metrics_listen_addr: None,
         advertise_addr: grpc_addr,
         stargate_discovery_dns_name: "localhost".to_string(),
@@ -701,7 +702,16 @@ fn reverse_tunnel_config(
 }
 
 pub fn make_stargate_runtime(id: &str) -> (SocketAddr, SocketAddr, StargateRuntime) {
-    make_stargate_runtime_with_lb(id, None)
+    make_stargate_runtime_with_readiness_warmup(id, stargate::runtime::DEFAULT_READINESS_WARMUP)
+}
+
+pub fn make_stargate_runtime_with_readiness_warmup(
+    id: &str,
+    readiness_warmup: Duration,
+) -> (SocketAddr, SocketAddr, StargateRuntime) {
+    let mut config = base_ephemeral_config(id);
+    config.readiness_warmup = readiness_warmup;
+    build_test_runtime(id, config, TestDiscovery::SelfOnly, None).standard()
 }
 
 pub fn make_stargate_runtime_for_tunnel_case(

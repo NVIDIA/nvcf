@@ -725,6 +725,19 @@ class GithubReleaseTest(unittest.TestCase):
             "deploy/helm/cloud-tasks/v1.4.4",
         )
 
+    def test_http_invocation_chart_uses_its_published_lineage(self):
+        root = SCRIPT_PATH.parents[2]
+        metadata = json.loads(SCRIPT_PATH.with_name("github-release-subprojects.json").read_text())
+        service = next(s for s in metadata["services"] if s["id"] == "http-invocation-helm")
+
+        self.assertEqual(service["path"], "deploy/helm/http-invocation")
+        self.assertEqual(service["service_name"], "helm-nvcf-invocation-service")
+        self.assertEqual(service["deploys"], ["http-invocation"])
+        self.assertEqual(
+            self.github_release.tag_for_version(service, "1.5.6", root),
+            "deploy/helm/http-invocation/v1.5.6",
+        )
+
     def test_only_the_default_branch_releases(self):
         nvca = {
             "id": "nvca",

@@ -131,8 +131,7 @@ func TestPrepareTransportTLSForWorkloadsInjectsPodLLMWorker(t *testing.T) {
 	expectedBundlePath := "/nvcf/transport-tls/ca-certificates.crt"
 	assert.Equal(t, expectedBundlePath,
 		findWorkloadEnvValue(llmWorker, transporttls.CertPathEnv))
-	assert.Equal(t, expectedBundlePath,
-		findWorkloadEnvValue(llmWorker, transporttls.GrpcTLSCACertPathEnv))
+	assert.Empty(t, findWorkloadEnvValue(llmWorker, transporttls.GrpcTLSCACertPathEnv))
 	mount := findWorkloadVolumeMount(llmWorker, "nvcf-trust-merged-certs")
 	require.NotNil(t, mount)
 	assert.Equal(t, "/nvcf/transport-tls", mount.MountPath)

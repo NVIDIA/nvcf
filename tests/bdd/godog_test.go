@@ -168,6 +168,13 @@ controlPlane:
     reval: reval.localhost
     nats: nats.localhost
     invocation: invocation.localhost
+managementTls:
+  trustMode: bundle
+  caBundlePem: test-ca-bundle
+transportTls:
+  trustMode: bundle
+  trustBundleFingerprint: sha256:test-fingerprint
+  trustBundlePem: test-ca-bundle
 `
 	writeArtifact(t, repoRoot, "self-managed", "control-plane-profile.yaml", body)
 }
@@ -334,6 +341,10 @@ func TestSingleClusterUpOneClickFeatureFileWiresToSteps(t *testing.T) {
 	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
 		"helm list --all-namespaces --kube-context k3d-ncp-local -o json": {ExitCode: 0, Stdout: helmListAllNamespacesJSON()},
+		"kubectl --context k3d-ncp-local get configmap/nvcf-api-remote-config -n nvcf -o yaml": {
+			ExitCode: 0,
+			Stdout:   "data:\n  nvcf-api.yaml: |\n    nvcf:\n      sidecars:\n        llm-router-client-image: nvcr.io/test-org/test-team/pylon:test\n",
+		},
 		// Conflict precheck: feature asserts the multi-cluster
 		// control-plane is absent.
 		"k3d cluster get ncp-local-cp": {ExitCode: 1},
@@ -420,6 +431,10 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
 		"helm list --all-namespaces --kube-context k3d-ncp-local -o json": {ExitCode: 0, Stdout: helmListAllNamespacesJSON()},
+		"kubectl --context k3d-ncp-local get configmap/nvcf-api-remote-config -n nvcf -o yaml": {
+			ExitCode: 0,
+			Stdout:   "data:\n  nvcf-api.yaml: |\n    nvcf:\n      sidecars:\n        llm-router-client-image: nvcr.io/test-org/test-team/pylon:test\n",
+		},
 		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke --request-body '{\"message\":\"bdd-echo\",\"repeats\":1}' --timeout 120 --poll-duration 5": {
 			ExitCode: 0,
 			Stdout:   "Function invocation completed!\n\nResponse:\n{\"rawResponse\":\"bdd-echo\"}\n",
@@ -530,7 +545,9 @@ func TestSingleClusterHelmfileLLMPKIFeatureFileWiresToSteps(t *testing.T) {
 		"helm list --all-namespaces --kube-context k3d-ncp-local -o json": {ExitCode: 0, Stdout: helmListAllNamespacesJSON()},
 		"kubectl --context k3d-ncp-local get configmap/nvcf-api-remote-config -n nvcf -o yaml": {
 			ExitCode: 0,
-			Stdout:   "data:\n  application-custom.yaml: |\n    nvcf:\n      llm-request-router:\n        worker-address: llm-request-router.nvcf.svc.cluster.local:50071\n",
+			Stdout: "data:\n  nvcf-api.yaml: |\n    nvcf:\n" +
+				"      llm-request-router:\n        worker-address: llm-request-router.nvcf.svc.cluster.local:50071\n" +
+				"      sidecars:\n        llm-router-client-image: nvcr.io/test-org/test-team/pylon:test\n",
 		},
 		"helm get values nvca-operator --namespace nvca-operator --kube-context k3d-ncp-local -o yaml": {
 			ExitCode: 0,
@@ -1002,7 +1019,9 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		"helm list --all-namespaces --kube-context k3d-ncp-local-compute-1 -o json": {ExitCode: 0, Stdout: helmListNVCAJSON()},
 		"kubectl --context k3d-ncp-local-cp get configmap/nvcf-api-remote-config -n nvcf -o yaml": {
 			ExitCode: 0,
-			Stdout:   "data:\n  application-custom.yaml: |\n    nvcf:\n      llm-request-router:\n        worker-address: https://llm-request-router.nvcf.svc.cluster.local:50071\n",
+			Stdout: "data:\n  nvcf-api.yaml: |\n    nvcf:\n" +
+				"      llm-request-router:\n        worker-address: https://llm-request-router.nvcf.svc.cluster.local:50071\n" +
+				"      sidecars:\n        llm-router-client-image: nvcr.io/test-org/test-team/pylon:test\n",
 		},
 		"kubectl get certificate/stargate-quic-tls --namespace nvcf --context k3d-ncp-local-cp -o yaml": {
 			ExitCode: 0,
@@ -1192,6 +1211,143 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		t.Fatal("NVCT task API smoke script was not invoked with the local instance type")
 	}
 	assertFunctionDeploymentsUseInstanceType(t, suite.Runner.(*fakeRunner).runs, "NCP.GPU.H100_1x", 3)
+}
+
+// TestMultiClusterHelmfileLLMRegistrationMultiregionFeatureFileWiresToSteps
+// runs the secure recursive-discovery feature against a fake runner. The
+// observations cover distinct Deployment and StatefulSet router identities,
+// the HTTPS remote Watch URI, and Pylon's combined registration topology.
+func TestMultiClusterHelmfileLLMRegistrationMultiregionFeatureFileWiresToSteps(t *testing.T) {
+	t.Setenv("NGC_API_KEY", "test-key")
+	t.Setenv("SAMPLE_NGC_ORG", "test-org")
+	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
+	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
+
+	const (
+		watchStargatesScript = "bash tests/bdd/scripts/observe-watch-stargates.sh"
+		regionAWatchCommand  = watchStargatesScript +
+			" 127.0.0.1:50071 llm-request-router.nvcf.svc.cluster.local stargate-quic-tls nvcf k3d-ncp-local-cp 3"
+		regionBWatchCommand = watchStargatesScript +
+			" 127.0.0.1:50071 region-b-watch.nvcf.svc.cluster.local stargate-quic-tls nvcf k3d-ncp-local-cp 3"
+		pylonMetricsCommand = "bash tests/bdd/scripts/wait-pylon-metrics.sh" +
+			" bdd-registration-multiregion llm-worker k3d-ncp-local-compute-1 10m" +
+			" pylon_registration_stream_connected exactly 5" +
+			" pylon_reverse_tunnel_connected 'at least' 3"
+		grpcCertificateCommand = "kubectl --context k3d-ncp-local-cp get certificate llm-request-router-grpc-tls" +
+			" -n envoy-gateway-system -o jsonpath={.spec.dnsNames}"
+		invokeCommand = "/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke" +
+			" --inference-url /v1/chat/completions --model-name openai-compatible-sample" +
+			" --request-body '{\"messages\":[{\"role\":\"user\",\"content\":\"bdd-registration-multiregion\"}]}' --timeout 120"
+	)
+
+	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
+		"k3d cluster get ncp-local": {ExitCode: 1},
+		regionAWatchCommand: {
+			ExitCode: 0,
+			Stdout: `{"stargates":[` +
+				`{"identity":"llm-request-router-6c9f4b7d8f-abcde"},` +
+				`{"identity":"llm-request-router-6c9f4b7d8f-fghij"},` +
+				`{"identity":"llm-request-router-6c9f4b7d8f-klmno"}],` +
+				`"watchStargateUrls":["https://region-b-watch.nvcf.svc.cluster.local:50071"]}` + "\n",
+		},
+		regionBWatchCommand: {
+			ExitCode: 0,
+			Stdout: `{"stargates":[` +
+				`{"identity":"llm-request-router-region-b-0.llm-request-router-region-b-headless.nvcf.svc.cluster.local"},` +
+				`{"identity":"llm-request-router-region-b-1.llm-request-router-region-b-headless.nvcf.svc.cluster.local"}]}` + "\n",
+		},
+		grpcCertificateCommand: {
+			ExitCode: 0,
+			Stdout:   "[llm-request-router.nvcf.svc.cluster.local region-b-watch.nvcf.svc.cluster.local]",
+		},
+		pylonMetricsCommand: {
+			ExitCode: 0,
+			Stdout: "pylon_registration_stream_connected=5\n" +
+				"pylon_reverse_tunnel_connected=3\n",
+		},
+		invokeCommand: {
+			ExitCode: 0,
+			Stdout: "Function invocation completed!\n\nResponse:\n" +
+				`{"object":"chat.completion","choices":[{"message":{"content":"This is a fixed 128-byte response for routing and contract validation."}}]}` +
+				"\n",
+		},
+	}))
+	seedHelmfileLocalBDDMultiFixture(t, suite.Config.RepoRoot)
+	seedComputePlaneLocalBDDMultiFixture(t, suite.Config.RepoRoot)
+	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
+	writeMulticlusterProfileHandoffArtifact(t, suite.Config.RepoRoot)
+	writeMulticlusterComputeRegisterValues(t, suite.Config.RepoRoot, "nvcf-compute-plane", "ncp-local-compute-1")
+	writeArtifact(
+		t,
+		suite.Config.RepoRoot,
+		"self-managed",
+		"registration-multiregion-rendered.yaml",
+		"kind: Deployment\n"+
+			"--remote-stargate-url=https://region-b-watch.nvcf.svc.cluster.local:50071\n",
+	)
+
+	sc := steps.NewScenarioContext(suite)
+	featurePath := mustResolveFeaturePath(t, "multi-cluster-helmfile-llm-registration-multiregion.feature")
+	var out strings.Builder
+	status := godog.TestSuite{
+		Name: "multi-cluster-helmfile-llm-registration-multiregion-wiring",
+		ScenarioInitializer: func(ctx *godog.ScenarioContext) {
+			steps.RegisterAll(ctx, sc)
+		},
+		Options: &godog.Options{
+			Format: "pretty",
+			Paths:  []string{featurePath},
+			Strict: true,
+			Output: &out,
+		},
+	}.Run()
+	if status != 0 {
+		t.Fatalf("godog suite status = %d\n%s", status, out.String())
+	}
+	for _, command := range []string{
+		grpcCertificateCommand,
+		regionAWatchCommand,
+		regionBWatchCommand,
+		pylonMetricsCommand,
+	} {
+		if !commandRanExactly(suite.Runner.(*fakeRunner).runs, command) {
+			t.Fatalf("exact multi-region observation command was not invoked: %s", command)
+		}
+	}
+	if !commandRanThatContainsAll(
+		suite.Runner.(*fakeRunner).runs,
+		"function create --name bdd-registration-multiregion",
+		"--function-type LLM",
+		"--llm-model",
+	) {
+		t.Fatal("multi-region sample was not created as an LLM function")
+	}
+
+	environmentPath, err := dsl.HelmfileEnvironmentPath(
+		suite.Config.RepoRoot,
+		"self-managed",
+		"local-bdd-registration-multiregion",
+	)
+	if err != nil {
+		t.Fatalf("resolve multi-region environment: %v", err)
+	}
+	for _, expectation := range []struct {
+		key  string
+		want string
+	}{
+		{key: "addons.llm.requestRouter.grpcTls.dnsNames[1]", want: "region-b-watch.nvcf.svc.cluster.local"},
+		{key: "addons.llm.pki.dnsNames[2]", want: "region-b-watch.nvcf.svc.cluster.local"},
+		{key: "addons.llm.pki.dnsNames[3]", want: "*.llm-request-router-region-b-headless.nvcf.svc.cluster.local"},
+	} {
+		got, found, readErr := dsl.ReadYAMLKey(environmentPath, expectation.key)
+		if readErr != nil {
+			t.Fatalf("read %s: %v", expectation.key, readErr)
+		}
+		if !found || got != expectation.want {
+			t.Fatalf("%s = %q, found %t, want %q", expectation.key, got, found, expectation.want)
+		}
+	}
 }
 
 // TestSingleClusterHelmfileUpstreamImagesFeatureFileWiresToSteps runs the
@@ -1957,6 +2113,16 @@ func TestMultiClusterHelmfile(t *testing.T) {
 		t.Skip("live run skipped under -short")
 	}
 	runLiveFeature(t, "multi-cluster-helmfile.feature")
+}
+
+// TestMultiClusterHelmfileLLMRegistrationMultiregion is the live entry point
+// for secure recursive registration across two local logical regions.
+// Skipped under -short.
+func TestMultiClusterHelmfileLLMRegistrationMultiregion(t *testing.T) {
+	if testing.Short() {
+		t.Skip("live run skipped under -short")
+	}
+	runLiveFeature(t, "multi-cluster-helmfile-llm-registration-multiregion.feature")
 }
 
 // TestSingleClusterEKSHelmfile is the live entry point for the
