@@ -13,27 +13,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-apiVersion: v1
-kind: Service
+{{- if and .Values.invocation.metrics.enabled .Values.invocation.metrics.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
 metadata:
-  name: invocation
+  name: {{ include "nvcf-invocation-service.fullname" . }}-metrics
   namespace: {{ include "nvcf-invocation-service.namespace" . }}
   labels:
     {{- include "nvcf-invocation-service.labels" . | nindent 4 }}
 spec:
-  type: {{ .Values.invocation.service.type }}
-  ports:
-    {{- range .Values.invocation.service.ports }}
-    - port: {{ .port }}
-      targetPort: {{ .targetPort }}
-      protocol: {{ .protocol }}
-      name: {{ .name }}
-    {{- end }}
-    {{- if .Values.invocation.metrics.enabled }}
-    - name: metrics
-      port: {{ .Values.invocation.metrics.port }}
-      targetPort: metrics
-      protocol: TCP
-    {{- end }}
+  endpoints:
+    - interval: {{ .Values.invocation.metrics.serviceMonitor.interval | quote }}
+      path: {{ .Values.invocation.metrics.serviceMonitor.path | quote }}
+      port: metrics
+  namespaceSelector:
+    matchNames:
+      - {{ include "nvcf-invocation-service.namespace" . }}
   selector:
-    {{- include "nvcf-invocation-service.selectorLabels" . | nindent 4 }}
+    matchLabels:
+      {{- include "nvcf-invocation-service.selectorLabels" . | nindent 6 }}
+{{- end }}
