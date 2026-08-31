@@ -196,7 +196,7 @@ go_test(
         "validator_summary_reconciler_test.go",
         "workloadwatcher_test.go",
     ],
-    data = glob(["testdata/**"]),
+    data = glob(["testdata/**"]) + ["//src/compute-plane-services/nvca/internal/envtest:crds"],
     embed = [":nvca"],
     embedsrcs = [
         "testdata/creationmsg_L40_good.json",
