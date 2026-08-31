@@ -18,6 +18,7 @@
 package com.nvidia.boot.core.info;
 
 import lombok.RequiredArgsConstructor;
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.core.env.Environment;
 
 @RequiredArgsConstructor
@@ -29,9 +30,14 @@ public class InfoResponseService {
 
     public InfoResponse getInfo() {
         return new InfoResponse(
-                environment.getProperty("spring.application.name", UNKNOWN),
-                environment.getProperty("spring.application.version", UNKNOWN),
-                environment.getProperty("app.git.commit.full", UNKNOWN));
+                resolve("spring.application.name"),
+                resolve("spring.application.version"),
+                resolve("app.git.commit.full"));
+    }
+
+    private String resolve(String key) {
+        String value = environment.getProperty(key);
+        return StringUtils.isBlank(value) ? UNKNOWN : value;
     }
 
     public record InfoResponse(String service, String version, String commit) {

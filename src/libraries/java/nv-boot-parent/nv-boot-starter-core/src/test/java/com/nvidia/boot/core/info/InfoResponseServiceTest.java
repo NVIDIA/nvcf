@@ -44,4 +44,16 @@ class InfoResponseServiceTest {
 
         assertThat(service.getInfo()).isEqualTo(new InfoResponse("unknown", "unknown", "unknown"));
     }
+
+    @Test
+    void fallsBackToUnknownWhenPropertiesBlank() {
+        var environment = new MockEnvironment()
+                .withProperty("spring.application.name", " ")
+                .withProperty("spring.application.version", "")
+                .withProperty("app.git.commit.full", "");
+
+        var service = new InfoResponseService(environment);
+
+        assertThat(service.getInfo()).isEqualTo(new InfoResponse("unknown", "unknown", "unknown"));
+    }
 }
