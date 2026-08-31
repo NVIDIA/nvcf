@@ -21,9 +21,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -102,13 +104,13 @@ func TestRootCAPEMFromOpenBaoResponsePreservesCertificateErrors(t *testing.T) {
 }
 
 func TestReadPKICertificatePEMRetriesMalformedResponse(t *testing.T) {
-	responses := []string{
-		"Internal Server Error",
-		`{"data":{"certificate":"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"}}`,
+	responses := []pkiCertificateHTTPResponse{
+		{StatusCode: http.StatusOK, ContentType: "text/plain", Body: "not-json"},
+		{StatusCode: http.StatusOK, ContentType: "application/json", Body: `{"data":{"certificate":"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"}}`},
 	}
 	attempt := 0
 
-	got, err := readPKICertificatePEM(nil, len(responses), 0, func(context.Context) (string, error) {
+	got, err := readPKICertificatePEM(nil, len(responses), 0, func(context.Context) (pkiCertificateHTTPResponse, error) {
 		response := responses[attempt]
 		attempt++
 		return response, nil
@@ -120,13 +122,13 @@ func TestReadPKICertificatePEMRetriesMalformedResponse(t *testing.T) {
 }
 
 func TestReadPKICertificatePEMRetriesEmptyResponse(t *testing.T) {
-	responses := []string{
-		"",
-		`{"data":{"certificate":"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"}}`,
+	responses := []pkiCertificateHTTPResponse{
+		{StatusCode: http.StatusOK},
+		{StatusCode: http.StatusOK, ContentType: "application/json", Body: `{"data":{"certificate":"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"}}`},
 	}
 	attempt := 0
 
-	got, err := readPKICertificatePEM(context.Background(), len(responses), 0, func(context.Context) (string, error) {
+	got, err := readPKICertificatePEM(context.Background(), len(responses), 0, func(context.Context) (pkiCertificateHTTPResponse, error) {
 		response := responses[attempt]
 		attempt++
 		return response, nil
@@ -140,13 +142,141 @@ func TestReadPKICertificatePEMRetriesEmptyResponse(t *testing.T) {
 func TestReadPKICertificatePEMDoesNotRetryOpenBaoError(t *testing.T) {
 	attempt := 0
 
-	_, err := readPKICertificatePEM(context.Background(), 3, 0, func(context.Context) (string, error) {
+	_, err := readPKICertificatePEM(context.Background(), 3, 0, func(context.Context) (pkiCertificateHTTPResponse, error) {
 		attempt++
-		return `{"errors":["permission denied"]}`, nil
+		return pkiCertificateHTTPResponse{
+			StatusCode:  http.StatusOK,
+			ContentType: "application/json",
+			Body:        `{"errors":["permission denied"]}`,
+		}, nil
 	})
 
 	require.Error(t, err)
 	assert.Equal(t, 1, attempt)
+}
+
+func TestReadPKICertificatePEMRetriesServerError(t *testing.T) {
+	responses := []pkiCertificateHTTPResponse{
+		{StatusCode: http.StatusServiceUnavailable, ContentType: "text/plain", Body: "Internal Server Error"},
+		{StatusCode: http.StatusOK, ContentType: "application/json", Body: `{"data":{"certificate":"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"}}`},
+	}
+	attempt := 0
+
+	got, err := readPKICertificatePEM(context.Background(), len(responses), 0, func(context.Context) (pkiCertificateHTTPResponse, error) {
+		response := responses[attempt]
+		attempt++
+		return response, nil
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, openBaoTestCertPEM, got)
+	assert.Equal(t, len(responses), attempt)
+}
+
+func TestReadPKICertificatePEMReportsServerErrorAfterRetries(t *testing.T) {
+	attempt := 0
+
+	_, err := readPKICertificatePEM(context.Background(), 3, 0, func(context.Context) (pkiCertificateHTTPResponse, error) {
+		attempt++
+		return pkiCertificateHTTPResponse{
+			StatusCode:  http.StatusServiceUnavailable,
+			ContentType: "text/plain; charset=utf-8",
+			Body:        "Internal Server Error",
+		}, nil
+	})
+
+	require.Error(t, err)
+	assert.Equal(t, 3, attempt)
+	assert.ErrorContains(t, err, "HTTP 503")
+	assert.ErrorContains(t, err, `content type "text/plain; charset=utf-8"`)
+	assert.ErrorContains(t, err, "Internal Server Error")
+	assert.NotContains(t, err.Error(), "invalid character")
+}
+
+func TestReadPKICertificatePEMDoesNotRetryClientError(t *testing.T) {
+	attempt := 0
+
+	_, err := readPKICertificatePEM(context.Background(), 3, 0, func(context.Context) (pkiCertificateHTTPResponse, error) {
+		attempt++
+		return pkiCertificateHTTPResponse{
+			StatusCode:  http.StatusForbidden,
+			ContentType: "application/json",
+			Body:        `{"errors":["permission denied"]}`,
+		}, nil
+	})
+
+	require.Error(t, err)
+	assert.Equal(t, 1, attempt)
+	assert.ErrorContains(t, err, "HTTP 403")
+	assert.ErrorContains(t, err, "permission denied")
+}
+
+func TestReadPKICertificatePEMReportsUnexpectedSuccessStatus(t *testing.T) {
+	attempt := 0
+
+	_, err := readPKICertificatePEM(context.Background(), 3, 0, func(context.Context) (pkiCertificateHTTPResponse, error) {
+		attempt++
+		return pkiCertificateHTTPResponse{StatusCode: http.StatusNoContent}, nil
+	})
+
+	require.Error(t, err)
+	assert.Equal(t, 1, attempt)
+	assert.ErrorContains(t, err, "HTTP 204")
+}
+
+func TestReadPKICertificatePEMPreservesMissingPKIError(t *testing.T) {
+	attempt := 0
+
+	_, err := readPKICertificatePEM(context.Background(), 3, 0, func(context.Context) (pkiCertificateHTTPResponse, error) {
+		attempt++
+		return pkiCertificateHTTPResponse{
+			StatusCode:  http.StatusNotFound,
+			ContentType: "application/json",
+			Body:        `{"errors":["no handler for route services/all/pki/root/cert/ca"]}`,
+		}, nil
+	})
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrPKICertificateNotFound)
+	assert.Equal(t, 1, attempt)
+}
+
+func TestPKICertificateHTTPResponseFromKubectlOutput(t *testing.T) {
+	c := NewClient(&Config{}, nil)
+	output := "Internal Server Error\nupstream unavailable\n" +
+		curlHTTPStatusMarker + "503\n" +
+		curlHTTPContentTypeMarker + "text/plain\n" +
+		`pod "openbao-pki-root-ca" deleted` + "\n"
+
+	response, err := pkiCertificateHTTPResponseFromOutput(c.filterKubectlOutput(output))
+
+	require.NoError(t, err)
+	assert.Equal(t, http.StatusServiceUnavailable, response.StatusCode)
+	assert.Equal(t, "text/plain", response.ContentType)
+	assert.Equal(t, "Internal Server Error\nupstream unavailable", response.Body)
+}
+
+func TestPKICertificateHTTPErrorBoundsResponseBody(t *testing.T) {
+	err := pkiCertificateHTTPError(pkiCertificateHTTPResponse{
+		StatusCode: http.StatusBadGateway,
+		Body:       strings.Repeat("x", maxOpenBaoHTTPErrorBody+100),
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), strings.Repeat("x", maxOpenBaoHTTPErrorBody))
+	assert.NotContains(t, err.Error(), strings.Repeat("x", maxOpenBaoHTTPErrorBody+1))
+	assert.True(t, strings.HasSuffix(err.Error(), "..."))
+}
+
+func TestPKICertificateHTTPErrorOmitsCertificateBody(t *testing.T) {
+	err := pkiCertificateHTTPError(pkiCertificateHTTPResponse{
+		StatusCode: http.StatusBadGateway,
+		Body:       openBaoTestCertPEM,
+	})
+
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "<certificate response omitted>")
+	assert.NotContains(t, err.Error(), "BEGIN CERTIFICATE")
 }
 
 func TestKubectlOutputMetadataDoesNotExposeCertificate(t *testing.T) {
@@ -178,6 +308,8 @@ case " $* " in
   *" X-Vault-Token: "*) exit 92 ;;
 esac
 printf '%s\n' '{"data":{"certificate":"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"}}'
+printf '%s\n' '__NVCF_HTTP_STATUS__:200'
+printf '%s\n' '__NVCF_HTTP_CONTENT_TYPE__:application/json'
 `
 	require.NoError(t, os.WriteFile(kubectlPath, []byte(kubectlScript), 0o755))
 	t.Setenv("PATH", testDir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -201,4 +333,5 @@ printf '%s\n' '{"data":{"certificate":"-----BEGIN CERTIFICATE-----\nMIIB\n-----E
 	assert.NotContains(t, commands, " get secret ")
 	assert.NotContains(t, commands, "X-Vault-Token")
 	assert.Contains(t, commands, "/v1/services/all/pki/root/cert/ca")
+	assert.Contains(t, commands, "--write-out")
 }
