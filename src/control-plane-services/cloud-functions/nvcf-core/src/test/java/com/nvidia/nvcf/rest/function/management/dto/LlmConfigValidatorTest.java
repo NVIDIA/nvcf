@@ -4,12 +4,14 @@
  */
 package com.nvidia.nvcf.rest.function.management.dto;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.nvidia.boot.exceptions.BadRequestException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -18,33 +20,94 @@ class LlmConfigValidatorTest {
     private static final String MODEL = "meta/llama-3.1-8b-instruct";
 
     @ParameterizedTest
-    @ValueSource(strings = {
-        "power-of-two", "wait-and-widen", "round-robin", "random", "pulsar",
-        "pulsar-wait-and-widen", "groq-multiregion", "pulsar-multiregion",
-        // Router normalizes case and '_' to '-', so these are accepted too.
-        "Power-Of-Two", "power_of_two", "wait_and_widen", "pulsar_wait_and_widen",
-        "groq_multiregion", "pulsar_multiregion", "  pulsar  "
-    })
-    void validRoutingMethodsAccepted(String routingMethod) {
-        assertThatCode(() -> LlmConfigValidator.validateRoutingMethod(MODEL, routingMethod))
-                .doesNotThrowAnyException();
+    @CsvSource(textBlock = """
+            # method-only values, canonical spellings kept
+            pulsar                                  | pulsar
+            random                                  | random
+            round-robin                             | round-robin
+            wait-and-widen                          | wait-and-widen
+            pulsar-wait-and-widen                   | pulsar-wait-and-widen
+            power-of-n                              | power-of-n
+            # spelling variants normalize to the router's canonical names
+            round_robin                             | round-robin
+            Power-Of-Two                            | power-of-n
+            power_of_two                            | power-of-n
+            powerOf2                                | power-of-n
+            groq-multiregion                        | wait-and-widen
+            groq_multiregion                        | wait-and-widen
+            pulsar-multiregion                      | pulsar-wait-and-widen
+            '  pulsar  '                            | pulsar
+            # expressions with parameters; space after ';' is dropped
+            pulsar;seed=stable-a                    | pulsar;seed=stable-a
+            'pulsar; seed=stable-a'                 | pulsar;seed=stable-a
+            power_of_two;sample_count=4             | power-of-n;sample_count=4
+            pulsar;seed=stable-a;n=2                | pulsar;seed=stable-a;n=2
+            pulsar;consider_kv_free_tokens=true     | pulsar;consider_kv_free_tokens=true
+            wait-and-widen;next_bucket_unlock_factor=0.25 | wait-and-widen;next_bucket_unlock_factor=0.25
+            pulsar;seed="stable a"                  | pulsar;seed="stable a"
+            pulsar;n=-7                             | pulsar;n=-7
+            # format-only: unknown methods and parameters persist by design
+            fastest                                 | fastest
+            pulsar;widen=2                          | pulsar;widen=2
+            fastest;seed=x                          | fastest;seed=x
+            """, delimiter = '|')
+    void wellFormedRoutingMethodsNormalized(String routingMethod, String expected) {
+        assertThat(LlmConfigValidator.validateAndNormalizeRoutingMethod(MODEL, routingMethod))
+                .isEqualTo(expected);
     }
 
     @ParameterizedTest
     @NullAndEmptySource
     @ValueSource(strings = {"   "})
-    void blankRoutingMethodAccepted(String routingMethod) {
-        assertThatCode(() -> LlmConfigValidator.validateRoutingMethod(MODEL, routingMethod))
-                .doesNotThrowAnyException();
+    void blankRoutingMethodReturnedUnchanged(String routingMethod) {
+        assertThatCode(() -> {
+            var result = LlmConfigValidator.validateAndNormalizeRoutingMethod(
+                    MODEL, routingMethod);
+            assertThat(result).isEqualTo(routingMethod);
+        }).doesNotThrowAnyException();
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"weighted", "sticky", "not-a-method", "round robin", "power-of-3"})
-    void invalidRoutingMethodsRejected(String routingMethod) {
-        assertThatThrownBy(() -> LlmConfigValidator.validateRoutingMethod(MODEL, routingMethod))
+    @ValueSource(strings = {
+        "round robin",                  // whitespace inside the algorithm token
+        "9lives",                       // token must start with a letter
+        "pulsar ;seed=x",               // space before ';'
+        "pulsar;seed = x",              // space around '='
+        "pulsar;;n=2",                  // empty parameter
+        "pulsar;n=2;",                  // trailing ';'
+        "pulsar;n=2;n=3",               // duplicate key
+        "pulsar;Seed=x",                // uppercase key
+        "pulsar;flag",                  // valueless parameter
+        "pulsar;n=",                    // empty value
+        "pulsar;b=?1",                  // SFV boolean syntax
+        "pulsar;f=0.1234",              // more than 3 fractional digits
+        "pulsar;s=\"unterminated",      // unterminated quoted string
+        "pul,sar",                      // comma in token
+        "pulsar;s=\"a,b\"",             // comma inside a quoted string
+        "pulsar;s=a b",                 // whitespace inside a bare value
+    })
+    void malformedRoutingMethodsRejected(String routingMethod) {
+        assertThatThrownBy(
+                () -> LlmConfigValidator.validateAndNormalizeRoutingMethod(MODEL, routingMethod))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("routingMethod")
                 .hasMessageContaining(MODEL);
+    }
+
+    @Test
+    void oversizedRoutingMethodRejected() {
+        var oversized = "pulsar;seed=" + "a".repeat(1024);
+        assertThatThrownBy(
+                () -> LlmConfigValidator.validateAndNormalizeRoutingMethod(MODEL, oversized))
+                .isInstanceOf(BadRequestException.class)
+                .hasMessageContaining("1024");
+    }
+
+    @Test
+    void quotedStringMayContainSemicolon() {
+        assertThat(LlmConfigValidator.validateAndNormalizeRoutingMethod(
+                MODEL, "pulsar;seed=\"a;b\""))
+                .isEqualTo("pulsar;seed=\"a;b\"");
     }
 
     @ParameterizedTest
