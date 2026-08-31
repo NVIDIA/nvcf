@@ -155,6 +155,9 @@ jobs:
       - name: Run release helper tests
         run: python3 tools/ci/test-github-release.py
 
+      - name: Test stack pin branch refresh
+        run: bash tools/ci/test-prepare-stack-pin-branch
+
       - name: Check Go toolchain declarations agree
         run: tools/ci/check-go-version
 
