@@ -239,23 +239,31 @@ func TestEnsureModelCacheBindingRejectsPreCreateStorageClassDrift(t *testing.T) 
 	assert.Empty(t, bindings.Items)
 }
 
-func TestEnsureModelCacheBindingRejectsPreCreateCatalogDrift(t *testing.T) {
+// TestEnsureModelCacheBindingToleratesUnrelatedCatalogEdit covers the rollout
+// property the catalog exists for: qualifying a new provider edits the catalog
+// payload, and that must not terminally fail requests whose own qualified
+// profile is unchanged.
+func TestEnsureModelCacheBindingToleratesUnrelatedCatalogEdit(t *testing.T) {
 	req, _ := durableModelCacheBindingRequest(t, nvcastorage.ModelCacheWorkflowRegular)
 	backend, bart, _ := bindingTestBackend(req)
+	assignCreatedBindingUID(bart, types.UID("binding-uid"))
 	backend.clients.K8s = fakek8sclient.NewSimpleClientset(
 		selectionStorageClass(),
 		selectionCatalogConfigMap(selectionCatalogNVMesh+"\n"),
 	)
 
 	changed, err := backend.ensureModelCacheBinding(t.Context(), req.DeepCopy())
-	assert.False(t, changed)
-	require.ErrorContains(t, err, "catalog digest changed")
-	assert.True(t, nvcaerrors.IsTerminal(err))
+	require.NoError(t, err)
+	assert.True(t, changed)
 
 	bindings, listErr := bart.NvcaV2beta1().ModelCacheBindings(nvcastorage.ModelCacheInitNamespace).
 		List(t.Context(), metav1.ListOptions{})
 	require.NoError(t, listErr)
-	assert.Empty(t, bindings.Items)
+	require.Len(t, bindings.Items, 1, "the request commits a binding despite the catalog edit")
+	decision := bindings.Items[0].Spec.Decision
+	assert.Regexp(t, `^sha256:[a-f0-9]{64}$`, decision.ProfileDigest)
+	assert.Regexp(t, `^sha256:[a-f0-9]{64}$`, decision.CatalogRevision,
+		"the edited payload is still recorded for audit")
 }
 
 func TestEnsureModelCacheBindingConvergesAcrossRequestNamespaces(t *testing.T) {

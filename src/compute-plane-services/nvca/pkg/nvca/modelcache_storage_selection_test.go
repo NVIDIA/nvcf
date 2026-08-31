@@ -292,7 +292,7 @@ func TestPersistModelCacheStorageSelection(t *testing.T) {
 				assert.Empty(t, selection.StorageClassName)
 				assert.Empty(t, selection.StorageClassUID)
 				assert.Empty(t, selection.StorageClassDigest)
-				assert.Empty(t, selection.CatalogDigest)
+				assert.Empty(t, selection.ProfileDigest)
 				assert.Empty(t, selection.Provider)
 				assert.Empty(t, selection.Provisioner)
 				return
@@ -300,7 +300,7 @@ func TestPersistModelCacheStorageSelection(t *testing.T) {
 			assert.Equal(t, nvcastorage.DefaultModelCacheStorageClassName, selection.StorageClassName)
 			assert.Equal(t, types.UID("nvcf-sc-uid"), selection.StorageClassUID)
 			assert.NotEmpty(t, selection.StorageClassDigest)
-			assert.NotEmpty(t, selection.CatalogDigest)
+			assert.NotEmpty(t, selection.ProfileDigest)
 			assert.Equal(t, tt.wantProvider, selection.Provider)
 			assert.Equal(t, tt.wantProvisioner, selection.Provisioner)
 			assert.Equal(t, tt.wantEncryption, selection.EncryptionRequired)

@@ -309,7 +309,7 @@ func requestWithModelCacheSelection(
 			StorageClassName:   nvcastorage.DefaultModelCacheStorageClassName,
 			StorageClassUID:    types.UID("storage-class-uid"),
 			StorageClassDigest: "storage-class-digest",
-			CatalogDigest:      "catalog-digest",
+			ProfileDigest:      "catalog-digest",
 			Provider:           "nvmesh",
 			Provisioner:        nvcastorage.NVMeshStorageClassProvisioner,
 			Transition:         nvcastorage.ModelCacheTransitionROXReadOnly,

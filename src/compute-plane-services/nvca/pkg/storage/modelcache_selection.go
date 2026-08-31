@@ -57,7 +57,8 @@ type PersistedModelCacheStorageSelection struct {
 	StorageClassName     string                              `json:"storageClassName,omitempty"`
 	StorageClassUID      types.UID                           `json:"storageClassUID,omitempty"`
 	StorageClassDigest   string                              `json:"storageClassDigest,omitempty"`
-	CatalogDigest        string                              `json:"catalogDigest,omitempty"`
+	ProfileDigest        string                              `json:"profileDigest,omitempty"`
+	CatalogRevision      string                              `json:"catalogRevision,omitempty"`
 	Provider             string                              `json:"provider,omitempty"`
 	Provisioner          string                              `json:"provisioner,omitempty"`
 	Transition           string                              `json:"transition,omitempty"`
@@ -85,7 +86,8 @@ func NewPersistedModelCacheStorageSelection(
 		selection.StorageClassName = resolved.StorageClassName
 		selection.StorageClassUID = resolved.StorageClassUID
 		selection.StorageClassDigest = resolved.StorageClassDigest
-		selection.CatalogDigest = resolved.CatalogDigest
+		selection.ProfileDigest = resolved.ProfileDigest
+		selection.CatalogRevision = resolved.CatalogRevision
 		selection.Provider = resolved.Provider
 		selection.Provisioner = resolved.Provisioner
 		selection.Transition = resolved.Transition
@@ -174,7 +176,7 @@ func (s *PersistedModelCacheStorageSelection) Validate() error {
 	}
 
 	hasResolvedFields := s.StorageClassName != "" || s.StorageClassUID != "" || s.StorageClassDigest != "" ||
-		s.CatalogDigest != "" || s.Provider != "" || s.Provisioner != "" || s.Transition != "" ||
+		s.ProfileDigest != "" || s.Provider != "" || s.Provisioner != "" || s.Transition != "" ||
 		len(s.RequiredAccessModes) != 0 || len(s.RequiredMountOptions) != 0
 	if !hasResolvedFields {
 		if s.Mode == ModelCacheSelectionDurable {
@@ -186,7 +188,7 @@ func (s *PersistedModelCacheStorageSelection) Validate() error {
 		return fmt.Errorf("model cache selection StorageClass must be %q", DefaultModelCacheStorageClassName)
 	}
 	if s.StorageClassUID == "" || strings.TrimSpace(s.StorageClassDigest) == "" ||
-		strings.TrimSpace(s.CatalogDigest) == "" || strings.TrimSpace(s.Provider) == "" ||
+		strings.TrimSpace(s.ProfileDigest) == "" || strings.TrimSpace(s.Provider) == "" ||
 		strings.TrimSpace(s.Provisioner) == "" || strings.TrimSpace(s.Transition) == "" {
 		return fmt.Errorf("model cache selection has incomplete resolved storage")
 	}

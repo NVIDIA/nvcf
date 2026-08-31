@@ -86,7 +86,8 @@ type ModelCacheStorageSelection struct {
 	StorageClassName     string
 	StorageClassUID      types.UID
 	StorageClassDigest   string
-	CatalogDigest        string
+	ProfileDigest        string
+	CatalogRevision      string
 	Provider             string
 	Provisioner          string
 	Transition           string
@@ -276,7 +277,8 @@ func selectModelCacheStorageFromObjects(
 		StorageClassName:     sc.Name,
 		StorageClassUID:      sc.UID,
 		StorageClassDigest:   digestStorageClass(sc),
-		CatalogDigest:        catalogDigest,
+		ProfileDigest:        digestDriverProfile(sc.Provisioner, driver, workflow, transition),
+		CatalogRevision:      catalogDigest,
 		Provider:             driver.Provider,
 		Provisioner:          sc.Provisioner,
 		Transition:           transition,
@@ -343,6 +345,51 @@ func digestStorageClass(sc *storagev1.StorageClass) string {
 	}
 	sum := sha256.Sum256(raw)
 	return fmt.Sprintf("v1:sha256:%x", sum)
+}
+
+// canonicalDriverProfile is the stable, marshalled form of the one catalog
+// entry a decision depends on. Field order is fixed by the struct, so the
+// digest is independent of how the catalog YAML happens to be written.
+type canonicalDriverProfile struct {
+	Provisioner        string   `json:"provisioner"`
+	Provider           string   `json:"provider"`
+	Workflow           string   `json:"workflow"`
+	Transition         string   `json:"transition"`
+	AccessModes        []string `json:"accessModes"`
+	ReaderMountOptions []string `json:"readerMountOptions,omitempty"`
+}
+
+// digestDriverProfile hashes the qualified profile behind a decision. Two
+// catalogs that describe this driver and workflow identically produce the same
+// digest even if they differ elsewhere, which is what lets an existing binding
+// be reused across an unrelated catalog edit.
+func digestDriverProfile(
+	provisioner string,
+	driver storageDriverSpec,
+	workflow ModelCacheWorkflow,
+	transition string,
+) string {
+	profile := canonicalDriverProfile{
+		Provisioner: provisioner,
+		Provider:    driver.Provider,
+		Workflow:    string(workflow),
+		Transition:  transition,
+	}
+	if driver.AccessModes != nil {
+		profile.AccessModes = append([]string(nil), (*driver.AccessModes)...)
+		sort.Strings(profile.AccessModes)
+	}
+	if driver.ReaderMountOptions != nil {
+		// Order is behavior for mount options, so it is preserved.
+		profile.ReaderMountOptions = append([]string(nil), (*driver.ReaderMountOptions)...)
+	}
+	encoded, err := json.Marshal(profile)
+	if err != nil {
+		// canonicalDriverProfile contains only strings and string slices.
+		panic(fmt.Sprintf("marshal canonical driver profile: %v", err))
+	}
+	sum := sha256.Sum256(encoded)
+	return fmt.Sprintf("sha256:%x", sum)
 }
 
 func digestCatalogPayload(raw string) string {
@@ -426,10 +473,6 @@ func ValidateModelCacheStorageSelectionInputsWithClientset(
 			ErrModelCacheStorageSelectionDrift,
 			catalogNamespace, StorageCapabilityConfigMapName, StorageCapabilityConfigMapKey)
 	}
-	if digest := digestCatalogPayload(raw); digest != selection.CatalogDigest {
-		return fmt.Errorf("%w: storage capability catalog digest changed from %q to %q",
-			ErrModelCacheStorageSelectionDrift, selection.CatalogDigest, digest)
-	}
 	catalog, err := parseStorageCapabilityCatalog(raw)
 	if err != nil {
 		return fmt.Errorf("%w: selected storage capability catalog is invalid: %v",
@@ -459,6 +502,15 @@ func ValidateModelCacheStorageSelectionInputsWithClientset(
 		return fmt.Errorf("%w: selected provisioner %q transition for %s changed from %q to %q",
 			ErrModelCacheStorageSelectionDrift,
 			selection.Provisioner, selection.Workflow, selection.Transition, transition)
+	}
+	// Compare the qualified profile rather than the whole catalog payload, so
+	// an unrelated catalog edit does not invalidate this selection while a
+	// change to the driver's own qualified capabilities still does.
+	if digest := digestDriverProfile(
+		selection.Provisioner, driver, selection.Workflow, transition,
+	); digest != selection.ProfileDigest {
+		return fmt.Errorf("%w: selected provisioner %q qualified profile digest changed from %q to %q",
+			ErrModelCacheStorageSelectionDrift, selection.Provisioner, selection.ProfileDigest, digest)
 	}
 	return nil
 }

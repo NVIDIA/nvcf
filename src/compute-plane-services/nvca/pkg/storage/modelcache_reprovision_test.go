@@ -87,7 +87,7 @@ func newHelmReprovisionFixture(t *testing.T, encrypted bool) *helmReprovisionFix
 			StorageClassName:     sc.Name,
 			StorageClassUID:      sc.UID,
 			StorageClassDigest:   digestStorageClass(sc),
-			CatalogDigest:        "sha256:" + strings.Repeat("a", 64),
+			ProfileDigest:        "sha256:" + strings.Repeat("a", 64),
 			Provider:             "nvmesh",
 			Provisioner:          sc.Provisioner,
 			Transition:           ModelCacheTransitionROXReadOnly,

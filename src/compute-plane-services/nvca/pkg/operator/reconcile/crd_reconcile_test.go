@@ -87,7 +87,11 @@ func TestModelCacheBindingCRDContract(t *testing.T) {
 	assert.Equal(t, "self == oldSelf", specSchema.XValidations[0].Rule)
 
 	decisionSchema := specSchema.Properties["decision"]
-	assert.Equal(t, "^sha256:[a-f0-9]{64}$", decisionSchema.Properties["catalogDigest"].Pattern)
+	assert.Equal(t, "^sha256:[a-f0-9]{64}$", decisionSchema.Properties["profileDigest"].Pattern)
+	assert.Equal(t, "^sha256:[a-f0-9]{64}$", decisionSchema.Properties["catalogRevision"].Pattern)
+	assert.Contains(t, decisionSchema.Required, "profileDigest")
+	assert.NotContains(t, decisionSchema.Required, "catalogRevision",
+		"the catalog revision is audit metadata, not part of the binding identity")
 	assert.Contains(t, decisionSchema.Required, "encryptionRequired")
 	requiredAccessModesSchema := decisionSchema.Properties["requiredAccessModes"]
 	require.NotNil(t, requiredAccessModesSchema.XListType)
@@ -151,7 +155,7 @@ func TestModelCacheBindingCRDEnforcement(t *testing.T) {
 				Provisioner:         "nvmesh-csi",
 				Transition:          "regular-rox",
 				RequiredAccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany},
-				CatalogDigest:       catalogDigest,
+				ProfileDigest:       catalogDigest,
 				EncryptionRequired:  false,
 			},
 			StorageClass: nvcav2beta1.ModelCacheStorageClassSnapshot{
@@ -202,7 +206,7 @@ func TestModelCacheBindingCRDEnforcement(t *testing.T) {
 
 	bareCatalogDigest := binding.DeepCopy()
 	bareCatalogDigest.Name = "bare-catalog-digest"
-	bareCatalogDigest.Spec.Decision.CatalogDigest = strings.Repeat("0", 64)
+	bareCatalogDigest.Spec.Decision.ProfileDigest = strings.Repeat("0", 64)
 	_, err = bindings.Create(ctx, bareCatalogDigest, metav1.CreateOptions{})
 	require.True(t, k8serrors.IsInvalid(err), "bare catalog digest returned %v", err)
 

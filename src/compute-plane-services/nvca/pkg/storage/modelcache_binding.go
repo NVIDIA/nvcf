@@ -122,7 +122,8 @@ func NewModelCacheBinding(
 				Transition:           selection.Transition,
 				RequiredAccessModes:  append([]corev1.PersistentVolumeAccessMode(nil), selection.RequiredAccessModes...),
 				RequiredMountOptions: append([]string(nil), selection.RequiredMountOptions...),
-				CatalogDigest:        selection.CatalogDigest,
+				ProfileDigest:        selection.ProfileDigest,
+				CatalogRevision:      selection.CatalogRevision,
 				EncryptionRequired:   selection.EncryptionRequired,
 			},
 			StorageClass: nvcav2beta1.ModelCacheStorageClassSnapshot{
@@ -135,6 +136,17 @@ func NewModelCacheBinding(
 		},
 	}
 	return binding, nil
+}
+
+// equalBindingIntent compares two binding specs for the fields that define the
+// binding's identity and decision. Decision.CatalogRevision is audit metadata
+// recording which catalog payload produced the decision, so it is excluded:
+// an unrelated catalog edit changes the revision without changing the
+// qualified profile, and must not invalidate an existing binding.
+func equalBindingIntent(actual, expected nvcav2beta1.ModelCacheBindingSpec) bool {
+	actual.Decision.CatalogRevision = ""
+	expected.Decision.CatalogRevision = ""
+	return reflect.DeepEqual(actual, expected)
 }
 
 // ModelCacheBindingName returns the deterministic, non-sensitive name used by
@@ -196,7 +208,7 @@ func ValidateModelCacheBindingIntent(
 	if !slices.Contains(binding.Finalizers, nvcav2beta1.ModelCacheBindingFinalizer) {
 		return fmt.Errorf("model cache binding %s/%s has no protection finalizer", binding.Namespace, binding.Name)
 	}
-	if !reflect.DeepEqual(binding.Spec, expected.Spec) {
+	if !equalBindingIntent(binding.Spec, expected.Spec) {
 		return fmt.Errorf("model cache binding %s/%s immutable spec does not match the request intent",
 			binding.Namespace, binding.Name)
 	}

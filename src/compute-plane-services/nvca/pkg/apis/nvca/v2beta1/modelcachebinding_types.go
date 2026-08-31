@@ -102,8 +102,17 @@ type ModelCacheBindingDecision struct {
 	RequiredAccessModes []corev1.PersistentVolumeAccessMode `json:"requiredAccessModes"`
 	// +listType=atomic
 	RequiredMountOptions []string `json:"requiredMountOptions,omitempty"`
-	CatalogDigest        string   `json:"catalogDigest"`
-	EncryptionRequired   bool     `json:"encryptionRequired"`
+	// ProfileDigest covers only the qualified driver profile this decision
+	// selected: provisioner, provider, workflow transition, qualified access
+	// modes, and reader mount options. It deliberately excludes unrelated
+	// catalog entries, comments, key ordering, and whitespace so that editing
+	// the catalog cannot invalidate bindings it does not describe.
+	ProfileDigest string `json:"profileDigest"`
+	// CatalogRevision records which catalog payload produced this decision.
+	// It is audit metadata only and is never compared when matching a binding
+	// to a request intent.
+	CatalogRevision    string `json:"catalogRevision,omitempty"`
+	EncryptionRequired bool   `json:"encryptionRequired"`
 }
 
 // ModelCacheStorageClassSnapshot identifies the exact retained StorageClass selected by the binding.

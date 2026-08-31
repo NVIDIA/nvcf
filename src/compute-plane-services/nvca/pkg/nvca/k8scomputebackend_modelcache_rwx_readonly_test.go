@@ -90,7 +90,7 @@ func newRWXReadOnlyRuntimeFixture(
 		StorageClassName:    nvcastorage.DefaultModelCacheStorageClassName,
 		StorageClassUID:     types.UID("storage-class-uid"),
 		StorageClassDigest:  "v1:sha256:storage-class-digest",
-		CatalogDigest:       "sha256:catalog-digest",
+		ProfileDigest:       "sha256:catalog-digest",
 		Provider:            provider,
 		Provisioner:         provisioner,
 		Transition:          nvcastorage.ModelCacheTransitionRWXReadOnly,

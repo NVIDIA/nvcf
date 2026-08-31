@@ -68,7 +68,7 @@ spec:
                 - provisioner
                 - transition
                 - requiredAccessModes
-                - catalogDigest
+                - profileDigest
                 - encryptionRequired
                 properties:
                   provider:
@@ -93,7 +93,10 @@ spec:
                     items:
                       type: string
                       minLength: 1
-                  catalogDigest:
+                  profileDigest:
+                    type: string
+                    pattern: ^sha256:[a-f0-9]{64}$
+                  catalogRevision:
                     type: string
                     pattern: ^sha256:[a-f0-9]{64}$
                   encryptionRequired:

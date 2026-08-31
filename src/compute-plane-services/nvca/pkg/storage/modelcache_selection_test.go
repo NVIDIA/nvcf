@@ -32,7 +32,7 @@ func testResolvedModelCacheStorage(transition string) *ModelCacheStorageSelectio
 		StorageClassName:    DefaultModelCacheStorageClassName,
 		StorageClassUID:     types.UID("storage-class-uid"),
 		StorageClassDigest:  "v1:sha256:storage-class-digest",
-		CatalogDigest:       "sha256:catalog-digest",
+		ProfileDigest:       "sha256:catalog-digest",
 		Provider:            "nvmesh",
 		Provisioner:         NVMeshStorageClassProvisioner,
 		Transition:          transition,
@@ -60,7 +60,7 @@ func testPersistedModelCacheStorageSelection(
 		StorageClassName:     resolved.StorageClassName,
 		StorageClassUID:      resolved.StorageClassUID,
 		StorageClassDigest:   resolved.StorageClassDigest,
-		CatalogDigest:        resolved.CatalogDigest,
+		ProfileDigest:        resolved.ProfileDigest,
 		Provider:             resolved.Provider,
 		Provisioner:          resolved.Provisioner,
 		Transition:           resolved.Transition,
@@ -165,7 +165,7 @@ func TestNewPersistedModelCacheStorageSelection(t *testing.T) {
 				assert.Empty(t, selection.StorageClassName)
 				assert.Empty(t, selection.StorageClassUID)
 				assert.Empty(t, selection.StorageClassDigest)
-				assert.Empty(t, selection.CatalogDigest)
+				assert.Empty(t, selection.ProfileDigest)
 				assert.Empty(t, selection.Provider)
 				assert.Empty(t, selection.Provisioner)
 				assert.Empty(t, selection.Transition)
@@ -174,7 +174,7 @@ func TestNewPersistedModelCacheStorageSelection(t *testing.T) {
 			assert.Equal(t, tt.resolved.StorageClassName, selection.StorageClassName)
 			assert.Equal(t, tt.resolved.StorageClassUID, selection.StorageClassUID)
 			assert.Equal(t, tt.resolved.StorageClassDigest, selection.StorageClassDigest)
-			assert.Equal(t, tt.resolved.CatalogDigest, selection.CatalogDigest)
+			assert.Equal(t, tt.resolved.ProfileDigest, selection.ProfileDigest)
 			assert.Equal(t, tt.resolved.Provider, selection.Provider)
 			assert.Equal(t, tt.resolved.Provisioner, selection.Provisioner)
 			assert.Equal(t, tt.resolved.Transition, selection.Transition)
@@ -342,7 +342,7 @@ func TestPersistedModelCacheStorageSelectionValidate(t *testing.T) {
 		}, want: "incomplete resolved storage"},
 		{name: "missing catalog digest", selection: func() *PersistedModelCacheStorageSelection {
 			s := validDurable()
-			s.CatalogDigest = ""
+			s.ProfileDigest = ""
 			return s
 		}, want: "incomplete resolved storage"},
 		{name: "missing provider", selection: func() *PersistedModelCacheStorageSelection {

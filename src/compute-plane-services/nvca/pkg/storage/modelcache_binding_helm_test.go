@@ -175,7 +175,7 @@ func TestValidatePersistedHelmCacheSelectionRequiresMatchingICMSSelection(t *tes
 			name: "different valid ICMS selection",
 			mutate: func(t *testing.T, selection *PersistedModelCacheStorageSelection, request *nvcav2beta1.ICMSRequest) {
 				t.Helper()
-				selection.CatalogDigest = "sha256:different"
+				selection.ProfileDigest = "sha256:different"
 				raw, err := selection.Marshal()
 				require.NoError(t, err)
 				request.Annotations[ModelCacheStorageSelectionAnnotationKey] = raw

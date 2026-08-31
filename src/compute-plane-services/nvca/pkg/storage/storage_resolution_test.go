@@ -91,7 +91,7 @@ func TestResolveModelCacheStorageSelectsWorkflowTransition(t *testing.T) {
 	cm := capabilityCatalogConfigMap(splitTransitionCatalog)
 	c := storageResolutionClient(t, sc, cm)
 	sum := sha256.Sum256([]byte(splitTransitionCatalog))
-	wantCatalogDigest := fmt.Sprintf("sha256:%x", sum)
+	wantCatalogRevision := fmt.Sprintf("sha256:%x", sum)
 
 	tests := []struct {
 		name           string
@@ -109,7 +109,9 @@ func TestResolveModelCacheStorageSelectsWorkflowTransition(t *testing.T) {
 			assert.Equal(t, DefaultModelCacheStorageClassName, selection.StorageClassName)
 			assert.Equal(t, sc.UID, selection.StorageClassUID)
 			assert.Equal(t, digestStorageClass(sc), selection.StorageClassDigest)
-			assert.Equal(t, wantCatalogDigest, selection.CatalogDigest)
+			assert.Equal(t, wantCatalogRevision, selection.CatalogRevision,
+				"the exact catalog payload is recorded as audit metadata")
+			assert.Regexp(t, `^sha256:[a-f0-9]{64}$`, selection.ProfileDigest)
 			assert.Equal(t, "nvmesh", selection.Provider)
 			assert.Equal(t, NVMeshStorageClassProvisioner, selection.Provisioner)
 			assert.Equal(t, tt.wantTransition, selection.Transition)
@@ -274,7 +276,7 @@ func TestResolveModelCacheStorageWithClientset(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, sc.UID, selection.StorageClassUID)
 		assert.Equal(t, digestStorageClass(sc), selection.StorageClassDigest)
-		assert.Equal(t, digestCatalogPayload(splitTransitionCatalog), selection.CatalogDigest)
+		assert.Equal(t, digestCatalogPayload(splitTransitionCatalog), selection.CatalogRevision)
 		assert.Equal(t, tt.wantTransition, selection.Transition)
 	}
 }
@@ -433,6 +435,70 @@ func TestStorageSnapshotDigests(t *testing.T) {
 		"the catalog digest must cover the exact payload")
 }
 
+// profileDigestFor computes the qualified-profile digest the resolver would
+// produce for one driver and workflow in the given catalog payload.
+func profileDigestFor(
+	t *testing.T, rawCatalog, provisioner string, workflow ModelCacheWorkflow,
+) string {
+	t.Helper()
+	catalog, err := parseStorageCapabilityCatalog(rawCatalog)
+	require.NoError(t, err)
+	driver, ok := catalog.Drivers[provisioner]
+	require.True(t, ok, "provisioner %q is absent from the catalog", provisioner)
+	transition := driver.Transitions.RegularModelCache
+	if workflow == ModelCacheWorkflowHelm {
+		transition = driver.Transitions.HelmModelCache
+	}
+	return digestDriverProfile(provisioner, driver, workflow, transition)
+}
+
+// TestProfileDigestIgnoresUnrelatedCatalogEdits pins the property that makes an
+// existing binding reusable: the compared digest covers only the driver and
+// workflow a decision selected. Before this, the whole raw payload was hashed
+// into the immutable binding spec, so adding a comment or an unrelated
+// disabled provider invalidated every warm cache in the cluster.
+func TestProfileDigestIgnoresUnrelatedCatalogEdits(t *testing.T) {
+	base := profileDigestFor(t, validCatalog, NVMeshStorageClassProvisioner, ModelCacheWorkflowRegular)
+
+	t.Run("trailing whitespace does not change the profile", func(t *testing.T) {
+		edited := validCatalog + "\n"
+		assert.NotEqual(t, digestCatalogPayload(validCatalog), digestCatalogPayload(edited),
+			"the audit revision must still track the exact payload")
+		assert.Equal(t, base,
+			profileDigestFor(t, edited, NVMeshStorageClassProvisioner, ModelCacheWorkflowRegular))
+	})
+
+	t.Run("adding an unrelated disabled driver does not change the profile", func(t *testing.T) {
+		edited := validCatalog + `
+  csi.unrelated.example.com:
+    provider: unrelated
+    accessModes: []
+    readerMountOptions: []
+    transitions:
+      regularModelCache: disabled
+      helmModelCache: disabled
+`
+		assert.Equal(t, base,
+			profileDigestFor(t, edited, NVMeshStorageClassProvisioner, ModelCacheWorkflowRegular))
+	})
+
+	t.Run("the selected driver's own capabilities still change the profile", func(t *testing.T) {
+		catalog, err := parseStorageCapabilityCatalog(validCatalog)
+		require.NoError(t, err)
+		driver := catalog.Drivers[NVMeshStorageClassProvisioner]
+		narrowed := []string{string(corev1.ReadWriteOnce)}
+		driver.AccessModes = &narrowed
+		assert.NotEqual(t, base, digestDriverProfile(
+			NVMeshStorageClassProvisioner, driver,
+			ModelCacheWorkflowRegular, ModelCacheTransitionROXReadOnly))
+	})
+
+	t.Run("workflow is part of the profile", func(t *testing.T) {
+		assert.NotEqual(t, base,
+			profileDigestFor(t, validCatalog, NVMeshStorageClassProvisioner, ModelCacheWorkflowHelm))
+	})
+}
+
 func durableSelectionForStorageClass(t *testing.T, sc *storagev1.StorageClass) *PersistedModelCacheStorageSelection {
 	t.Helper()
 	selection, err := NewPersistedModelCacheStorageSelection(
@@ -442,7 +508,7 @@ func durableSelectionForStorageClass(t *testing.T, sc *storagev1.StorageClass) *
 			StorageClassName:   sc.Name,
 			StorageClassUID:    sc.UID,
 			StorageClassDigest: digestStorageClass(sc),
-			CatalogDigest:      digestCatalogPayload(validCatalog),
+			ProfileDigest:      profileDigestFor(t, validCatalog, NVMeshStorageClassProvisioner, ModelCacheWorkflowRegular),
 			Provider:           "nvmesh",
 			Provisioner:        sc.Provisioner,
 			Transition:         ModelCacheTransitionROXReadOnly,
@@ -551,12 +617,29 @@ func TestValidateModelCacheStorageSelectionInputsWithClientset(t *testing.T) {
 			t.Context(), k8sClient, testCatalogNamespace, selection))
 	})
 
-	t.Run("catalog payload drift", func(t *testing.T) {
+	t.Run("catalog payload drift alone is not drift", func(t *testing.T) {
+		// The selected driver's qualified profile is unchanged, so an edit
+		// elsewhere in the payload must not invalidate this selection.
 		k8sClient := kubernetesfake.NewSimpleClientset(
 			base.DeepCopy(), capabilityCatalogConfigMap(validCatalog+"\n"))
+		require.NoError(t, ValidateModelCacheStorageSelectionInputsWithClientset(
+			t.Context(), k8sClient, testCatalogNamespace, selection))
+	})
+
+	t.Run("selected driver profile drift is drift", func(t *testing.T) {
+		// Reordering the reader mount options keeps the catalog valid and
+		// leaves provider and transition untouched, but it changes how the
+		// reader is mounted, so the decision must be rejected. Only the
+		// profile digest catches this.
+		reordered := strings.Replace(validCatalog,
+			"readerMountOptions: [ro, norecovery, nouuid]",
+			"readerMountOptions: [ro, nouuid, norecovery]", 1)
+		require.NotEqual(t, validCatalog, reordered)
+		k8sClient := kubernetesfake.NewSimpleClientset(
+			base.DeepCopy(), capabilityCatalogConfigMap(reordered))
 		err := ValidateModelCacheStorageSelectionInputsWithClientset(
 			t.Context(), k8sClient, testCatalogNamespace, selection)
-		require.ErrorContains(t, err, "catalog digest changed")
+		require.ErrorContains(t, err, "qualified profile digest changed")
 		assert.ErrorIs(t, err, ErrModelCacheStorageSelectionDrift)
 	})
 
@@ -564,7 +647,7 @@ func TestValidateModelCacheStorageSelectionInputsWithClientset(t *testing.T) {
 		disabled := strings.Replace(
 			validCatalog, "regularModelCache: roxReadOnly", "regularModelCache: disabled", 1)
 		forged := *selection
-		forged.CatalogDigest = digestCatalogPayload(disabled)
+		forged.ProfileDigest = profileDigestFor(t, disabled, NVMeshStorageClassProvisioner, ModelCacheWorkflowRegular)
 		k8sClient := kubernetesfake.NewSimpleClientset(
 			base.DeepCopy(), capabilityCatalogConfigMap(disabled))
 		err := ValidateModelCacheStorageSelectionInputsWithClientset(
