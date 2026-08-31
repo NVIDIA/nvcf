@@ -41,7 +41,7 @@ backend is an edit to `accessModes`, backed by a qualification run.
 
 Access modes advertised by a driver are not evidence. A claim that binds is
 not evidence either. A run must show all of the following, on the exact
-provisioner and storage class the cluster will use.
+provisioner and StorageClass the cluster will use.
 
 1. A writer can populate a claim, and the data is durable after the writer
    exits.
@@ -62,7 +62,7 @@ empty directory is worse than one that fails to bind, because nothing alerts.
 
 ### Weka, csi.weka.io
 
-Cluster `amahmood3-dgxc-k8s-mst-blc-01`, storage class `nv-storage-file`
+Cluster `amahmood3-dgxc-k8s-mst-blc-01`, StorageClass `nv-storage-file`
 (Retain, Immediate). Measured 2026-08-31. Writer wrote 16 MiB and published a
 manifest; readers verified the SHA-256.
 
@@ -86,7 +86,7 @@ class gets a new empty volume, not the cache.
 
 ### OCI FSS, fss.csi.oraclecloud.com
 
-Cluster `nvcf-dgxc-k8s-oci-jbt-ct4`, storage class `fss-nvcf-test`. Measured
+Cluster `nvcf-dgxc-k8s-oci-jbt-ct4`, StorageClass `fss-nvcf-test`. Measured
 2026-08-31. Same writer payload and the same SHA-256 as the Weka run.
 
 | Reader | Export | Sees cache | Mount | Writes |
@@ -109,8 +109,11 @@ The cache writer must run as root on FSS, or the export must be prepared
 first. Weka does not have this constraint because `csi.weka.io` declares
 `fsGroupPolicy: File`.
 
-All three FSS classes on that cluster use reclaim policy Delete. The model
-cache class must be Retain, so an FSS deployment needs a class created for it.
+The cluster has three FSS StorageClasses, `fss-nvcf-test`,
+`fss-nvcf-nconnect` and `fss-nosharecache`. They share one mount target and
+differ only in mount options, and all three use `reclaimPolicy: Delete`. The
+model cache StorageClass must be `Retain`, so an FSS deployment needs a
+StorageClass created for it rather than reusing one of these.
 
 CRI-O on that cluster runs with short-name resolution enforcing, so image
 references must be fully qualified. `python:3.12-slim` fails with
@@ -123,9 +126,9 @@ mode has been qualified in a cache workflow.
 
 ## The shared filesystem assumption
 
-`doModelCacheSharedFS` creates its reader as a PVC that names only a storage
-class, with no PV and no `volumeName`, and relies on the class to make every
-claim resolve to the same data. Its comment states the assumption directly:
+`doModelCacheSharedFS` creates its reader as a PVC that names only a
+StorageClass, with no PV and no `volumeName`, and relies on that class to make
+every claim resolve to the same data. Its comment states the assumption directly:
 cross-namespace sharing is a property of the shared class.
 
 The other two backends do the opposite. NVMesh creates a static secondary PV
