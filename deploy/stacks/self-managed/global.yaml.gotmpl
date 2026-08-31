@@ -1496,19 +1496,31 @@ nvcfGatewayRoutes:
         {{- end }}
     # apiKeys, sis, and reval attach to the shared Gateway (backend and hostname
     # come from the chart defaults); only the enable flag and annotations are
-    # environment-driven. Each flag defaults to true, so leaving it unset renders
-    # the route exactly as before; set it to false to drop the route (for example,
-    # to keep api-keys off the public edge in a split/multi-cluster deployment).
+    # environment-driven. The gateway-routes chart owns the default (enabled: true
+    # for all three), so the stack forwards enabled only when an environment file
+    # sets it -- leaving it unset renders the route exactly as before, and a future
+    # chart release that changes a default is not silently overridden. Set it to
+    # false to drop the route (for example, to keep api-keys off the public edge in
+    # a split/multi-cluster deployment).
     apiKeys:
-      enabled: {{ dig "ingress" "gatewayApi" "routes" "apiKeys" "enabled" true .Values }}
+      {{- $apiKeysRoute := dig "ingress" "gatewayApi" "routes" "apiKeys" dict .Values }}
+      {{- if hasKey $apiKeysRoute "enabled" }}
+      enabled: {{ $apiKeysRoute.enabled }}
+      {{- end }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "apiKeys" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
     sis:
-      enabled: {{ dig "ingress" "gatewayApi" "routes" "sis" "enabled" true .Values }}
+      {{- $sisRoute := dig "ingress" "gatewayApi" "routes" "sis" dict .Values }}
+      {{- if hasKey $sisRoute "enabled" }}
+      enabled: {{ $sisRoute.enabled }}
+      {{- end }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "sis" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
     reval:
-      enabled: {{ dig "ingress" "gatewayApi" "routes" "reval" "enabled" true .Values }}
+      {{- $revalRoute := dig "ingress" "gatewayApi" "routes" "reval" dict .Values }}
+      {{- if hasKey $revalRoute "enabled" }}
+      enabled: {{ $revalRoute.enabled }}
+      {{- end }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "reval" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
     invocation:

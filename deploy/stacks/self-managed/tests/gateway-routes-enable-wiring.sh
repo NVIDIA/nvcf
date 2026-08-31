@@ -4,9 +4,9 @@
 # chart values. These three routes attach to the shared (public) Gateway, so an
 # operator must be able to disable them from an environment file -- for example,
 # to keep api-keys off the public edge in a split/multi-cluster deployment --
-# without patching global.yaml.gotmpl. Each flag defaults to the chart default
-# (true), so an unset flag leaves the route enabled and existing installs are
-# unchanged.
+# without patching global.yaml.gotmpl. The gateway-routes chart owns the default
+# (enabled: true); the stack forwards enabled only when an environment file sets
+# it, so an unset flag passes no override and the chart default stands.
 set -euo pipefail
 
 stack_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -82,13 +82,22 @@ assert_route_enabled() {
     fail "route ${route}: expected enabled=${expected} in $(basename "$file")"
 }
 
+# Assert the stack passes no enabled override for <route> -- the key is absent
+# from the rendered release values, so the gateway-routes chart default stands.
+assert_route_unset() {
+  local route="$1" file="$2"
+  yq -e ".nvcfGatewayRoutes.routes.${route}.enabled == null" "$file" >/dev/null 2>&1 ||
+    fail "route ${route}: expected no enabled override in $(basename "$file")"
+}
+
 write_env() {
   cat >"$environment_file"
 }
 
 # ---------------------------------------------------------------------------
-# 1. Default: flags unset -> the stack passes enabled: true for all three,
-#    matching the chart default (existing installs are unchanged).
+# 1. Default: flags unset -> the stack passes NO enabled override for any of the
+#    three, so the gateway-routes chart default (true) stands and existing
+#    installs are unchanged.
 # ---------------------------------------------------------------------------
 write_env <<'EOF'
 global:
@@ -99,9 +108,9 @@ EOF
 
 default_values="$work_dir/ingress-default-values.yaml"
 render_ingress_values "$default_values"
-assert_route_enabled apiKeys true "$default_values"
-assert_route_enabled sis true "$default_values"
-assert_route_enabled reval true "$default_values"
+assert_route_unset apiKeys "$default_values"
+assert_route_unset sis "$default_values"
+assert_route_unset reval "$default_values"
 
 # ---------------------------------------------------------------------------
 # 2. Override: an environment file disabling the three routes reaches the chart
