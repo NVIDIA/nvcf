@@ -422,11 +422,17 @@ def release_baseline_version(root, service):
 
 
 def newest_service_tag_sha(root, service):
-    """Commit of the service's newest tag by version, prereleases included."""
+    """Commit of the service's newest reachable tag by version, prereleases included.
+
+    Reachability is not optional here. A service's highest-versioned tag can sit on
+    a maintenance branch that is not an ancestor of HEAD, and anchoring the floor
+    there puts it outside the history semantic-release walks: the floor is ignored
+    and the line restarts, which is the exact failure this anchor exists to prevent.
+    """
     candidates = []
     for tag in current_service_tags(root, service):
         version = version_from_tag(service, tag, root)
-        if version and re.fullmatch(SEMVER_PATTERN, version):
+        if version and re.fullmatch(SEMVER_PATTERN, version) and tag_is_reachable(root, tag):
             candidates.append((semverish_sort_key(version), tag))
     if not candidates:
         return ""

@@ -548,11 +548,21 @@ class GithubReleaseTest(unittest.TestCase):
             git(root, "tag", "src/compute-plane-services/nvca/v3.2.17")
             git(root, "switch", main_branch)
 
+            # Checked before synthesis: afterwards the floor tag itself is a
+            # reachable stable tag and would be reported as the baseline.
+            self.assertEqual(self.github_release.release_baseline_version(root, self.NVCA_FLOOR_SERVICE), "")
+
             with chdir(root), contextlib.redirect_stdout(io.StringIO()):
                 self.github_release.synthesize_initial_version_anchor(root, self.NVCA_FLOOR_SERVICE)
 
-            self.assertEqual(self.github_release.release_baseline_version(root, self.NVCA_FLOOR_SERVICE), "")
             self.assertIn("src/compute-plane-services/nvca/v3.3.0", self._tags(root))
+            # The floor must land in HEAD's history. Anchoring it on the
+            # maintenance-branch tag would put it outside the history
+            # semantic-release walks, so the floor would be ignored entirely.
+            self.assertTrue(
+                self.github_release.tag_is_reachable(root, "src/compute-plane-services/nvca/v3.3.0"),
+                "the synthesized floor anchor must be reachable from HEAD",
+            )
 
     def test_floor_is_ignored_once_a_reachable_stable_tag_catches_up(self):
         # The floor is a floor, not an override: a real release at or above it wins.

@@ -273,12 +273,13 @@ no tag and no GitHub Release exist at the floor version and nothing
 downstream reacts to it. The first published release is the next bump
 above the floor: `3.3.1` for an NVCA `fix`, `3.4.0` for a `feat`.
 
-For the two stacks the floor names a version that was never released,
-so their first stable release skips it: the line reads
-`0.2.0-dev.518` then `0.2.1`. That gap is deliberate. Setting the floor
-one minor lower would let a `feat` land on `0.2.0`, but a `fix` would
-then land on `0.1.1`, behind the dev series those stacks already
-published.
+For the stacks the floor names a version that was never released, so
+their first stable release skips it. `nvcf-compute-plane-stack` reads
+`0.2.0-dev.518` then `0.2.1`; `nvcf-self-managed-stack` reads
+`0.8.0-dev.314` then `0.8.1`; `nvcf-observability-stack` reads
+`0.0.0-dev.496` then `0.0.1`. Those gaps are deliberate. Setting a floor
+one minor lower would let a `feat` land on the skipped version, but a
+`fix` would land below the dev series those stacks already published.
 
 ### Why the floor has to outrank the computed baseline
 
