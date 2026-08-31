@@ -35,6 +35,8 @@ func registerAssertionSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^the command should fail$`, sc.commandShouldFail)
 	ctx.Step(`^the command output should contain "([^"]*)"$`, sc.commandOutputShouldContain)
 	ctx.Step(`^the command output should not contain "([^"]*)"$`, sc.commandOutputShouldNotContain)
+	ctx.Step(`^the command output should not match "([^"]*)"$`, sc.commandOutputShouldNotMatch)
+	ctx.Step(`^the command output should have exactly "(\d+)" distinct matches of "([^"]*)"$`, sc.commandOutputShouldHaveDistinctMatches)
 	ctx.Step(`^the command output should contain all:$`, sc.commandOutputShouldContainAll)
 	ctx.Step(`^the command output should contain one of:$`, sc.commandOutputShouldContainOneOf)
 	ctx.Step(`^file "([^"]*)" should exist$`, sc.fileShouldExist)
@@ -117,6 +119,37 @@ func (sc *ScenarioContext) commandOutputShouldNotContain(needle string) error {
 	}
 	if strings.Contains(combined, resolved) {
 		return fmt.Errorf("output contains %q", resolved)
+	}
+	return nil
+}
+
+// commandOutputShouldNotMatch fails when the interpolated regular
+// expression matches the combined stdout and stderr of the last command.
+// Use it for shapes a fixed string cannot express, such as a dashed
+// pod-IP hostname alias.
+func (sc *ScenarioContext) commandOutputShouldNotMatch(pattern string) error {
+	matched, err := dsl.OutputMatches(combinedOutput(sc.LastResult), pattern)
+	if err != nil {
+		return err
+	}
+	if matched {
+		return fmt.Errorf("output matches %q (see %s for stdout/stderr)", dsl.Interpolate(pattern), sc.Suite.Config.CommandLogDir)
+	}
+	return nil
+}
+
+// commandOutputShouldHaveDistinctMatches asserts how many unique
+// substrings the interpolated regular expression matches in the combined
+// stdout and stderr of the last command. Repeated occurrences of the same
+// substring count once.
+func (sc *ScenarioContext) commandOutputShouldHaveDistinctMatches(expected int, pattern string) error {
+	got, err := dsl.DistinctOutputMatches(combinedOutput(sc.LastResult), pattern)
+	if err != nil {
+		return err
+	}
+	if got != expected {
+		return fmt.Errorf("distinct matches of %q = %d, want %d (see %s for stdout/stderr)",
+			dsl.Interpolate(pattern), got, expected, sc.Suite.Config.CommandLogDir)
 	}
 	return nil
 }

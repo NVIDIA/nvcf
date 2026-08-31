@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -115,6 +116,34 @@ exit 1
 		if !strings.Contains(output, want) {
 			t.Fatalf("output = %q, want %q", output, want)
 		}
+	}
+}
+
+func TestObserveWatchStargatesScriptSendsW3CTraceContext(t *testing.T) {
+	fakeBin := t.TempDir()
+	writeExecutable(t, filepath.Join(fakeBin, "kubectl"), "#!/bin/sh\nprintf 'dGVzdC1jYQ=='\n")
+	writeExecutable(t, filepath.Join(fakeBin, "grpcurl"), `#!/bin/sh
+printf '{\n  "stargates": []\n}\n'
+for arg in "$@"; do
+  case "$arg" in
+    traceparent:*) printf 'observed %s\n' "$arg" >&2 ;;
+  esac
+done
+sleep 1
+printf 'ERROR:\n  Code: DeadlineExceeded\n  Message: context deadline exceeded\n' >&2
+exit 1
+`)
+
+	output, err := runRegistrationScript(t, fakeBin, "observe-watch-stargates.sh", "127.0.0.1:50071", "router.nvcf.svc", "tls", "nvcf", "context", "1")
+	if err != nil {
+		t.Fatalf("observe WatchStargates: %v\n%s", err, output)
+	}
+	traceparent := regexp.MustCompile(`observed traceparent: (\S+)`).FindStringSubmatch(output)
+	if traceparent == nil {
+		t.Fatalf("output = %q, want an observed traceparent header", output)
+	}
+	if !regexp.MustCompile(`^00-[0-9a-f]{32}-[0-9a-f]{16}-01$`).MatchString(traceparent[1]) {
+		t.Fatalf("traceparent = %q, want a valid W3C trace context value", traceparent[1])
 	}
 }
 
