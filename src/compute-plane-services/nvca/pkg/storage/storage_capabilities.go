@@ -56,8 +56,9 @@ const (
 	// that populates one ReadWriteMany claim and serves that same claim through
 	// read-only Pod mounts.
 	ModelCacheTransitionRWXReadOnly = "rwxReadOnly"
-	// ModelCacheProviderNVMesh is the only provider currently allowed to select
-	// the ROX read-only transition.
+	// ModelCacheProviderNVMesh is the provider id the catalog uses for NVMesh.
+	// It identifies a driver family for tests and diagnostics; it does not
+	// gate which transitions a driver may run.
 	ModelCacheProviderNVMesh = "nvmesh"
 )
 
@@ -607,23 +608,22 @@ func validateStorageCapabilityCatalog(catalog *storageCapabilityCatalog) error {
 			case ModelCacheTransitionDisabled:
 				continue
 			case ModelCacheTransitionROXReadOnly:
-				if provisioner != NVMeshStorageClassProvisioner {
-					return fmt.Errorf("driver %q transition %s strategy %s is restricted to provisioner %q",
-						provisioner, workflow, strategy, NVMeshStorageClassProvisioner)
-				}
-				if driver.Provider != ModelCacheProviderNVMesh {
-					return fmt.Errorf("driver %q transition %s strategy %s requires provider %q",
-						provisioner, workflow, strategy, ModelCacheProviderNVMesh)
-				}
+				// roxReadOnly describes a volume shape, not a vendor: one
+				// writer claim plus many read-only reader claims. Any driver
+				// qualified for both modes can run it, and the reader options
+				// a given driver needs are its own catalog data. Pinning this
+				// to one provisioner, or requiring another driver's
+				// filesystem flags, would make the catalog unable to enable a
+				// provider without a code change.
 				if !accessModes[string(corev1.ReadWriteOnce)] || !accessModes[string(corev1.ReadOnlyMany)] {
 					return fmt.Errorf("driver %q transition %s strategy %s requires ReadWriteOnce and ReadOnlyMany access modes",
 						provisioner, workflow, strategy)
 				}
-				for _, requiredOption := range []string{"ro", "norecovery", "nouuid"} {
-					if !readerMountOptions[requiredOption] {
-						return fmt.Errorf("driver %q transition %s strategy %s requires readerMountOption %q",
-							provisioner, workflow, strategy, requiredOption)
-					}
+				// "ro" is required by the transition itself: the reader PV is
+				// mounted read-only whatever the backend.
+				if !readerMountOptions["ro"] {
+					return fmt.Errorf("driver %q transition %s strategy %s requires readerMountOption %q",
+						provisioner, workflow, strategy, "ro")
 				}
 			case ModelCacheTransitionRWXReadOnly:
 				if workflow != string(ModelCacheWorkflowRegular) {

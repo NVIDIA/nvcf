@@ -435,6 +435,56 @@ func TestStorageSnapshotDigests(t *testing.T) {
 		"the catalog digest must cover the exact payload")
 }
 
+// TestCatalogEnablesNonNVMeshROXProvider is the property this feature exists
+// for: enabling a qualified backend must be a catalog edit, not a code change.
+// A second driver that proved ReadWriteOnce and ReadOnlyMany resolves to the
+// same roxReadOnly transition as NVMesh, and carries its own reader mount
+// options rather than NVMesh's XFS flags.
+func TestCatalogEnablesNonNVMeshROXProvider(t *testing.T) {
+	const wekaROXCatalog = `apiVersion: storage.nvcf.nvidia.com/v1alpha1
+kind: StorageCapabilityCatalog
+drivers:
+  csi.weka.io:
+    provider: weka
+    accessModes: [ReadWriteOnce, ReadOnlyMany]
+    readerMountOptions: [ro]
+    transitions:
+      regularModelCache: roxReadOnly
+      helmModelCache: roxReadOnly
+`
+	_, err := parseStorageCapabilityCatalog(wekaROXCatalog)
+	require.NoError(t, err, "a non-NVMesh driver must be able to declare roxReadOnly")
+
+	sc := testModelCacheStorageClass()
+	sc.Provisioner = "csi.weka.io"
+	c := storageResolutionClient(t, sc, capabilityCatalogConfigMap(wekaROXCatalog))
+
+	selection, err := ResolveModelCacheStorage(
+		t.Context(), c, testCatalogNamespace, ModelCacheWorkflowRegular)
+	require.NoError(t, err)
+	assert.Equal(t, "weka", selection.Provider)
+	assert.Equal(t, "csi.weka.io", selection.Provisioner)
+	assert.Equal(t, ModelCacheTransitionROXReadOnly, selection.Transition)
+	assert.Equal(t, []string{"ro"}, selection.RequiredMountOptions,
+		"the driver's own reader options are used, not NVMesh's XFS flags")
+	assert.Equal(t,
+		[]corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce, corev1.ReadOnlyMany},
+		selection.RequiredAccessModes)
+
+	// The persisted selection must survive its own validation too, otherwise
+	// the decision could be made but never committed.
+	persisted, err := NewPersistedModelCacheStorageSelection(
+		ModelCacheWorkflowRegular, ModelCacheSelectionDurable, selection)
+	require.NoError(t, err)
+	assert.Equal(t, "weka", persisted.Provider)
+
+	// A driver that never proved ReadOnlyMany still cannot claim the transition.
+	unqualified := strings.Replace(wekaROXCatalog,
+		"accessModes: [ReadWriteOnce, ReadOnlyMany]", "accessModes: [ReadWriteMany]", 1)
+	_, err = parseStorageCapabilityCatalog(unqualified)
+	require.ErrorContains(t, err, "requires ReadWriteOnce and ReadOnlyMany access modes")
+}
+
 // profileDigestFor computes the qualified-profile digest the resolver would
 // produce for one driver and workflow in the given catalog payload.
 func profileDigestFor(

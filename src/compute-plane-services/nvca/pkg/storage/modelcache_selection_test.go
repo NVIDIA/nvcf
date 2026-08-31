@@ -236,14 +236,17 @@ func TestPersistedModelCacheStorageSelectionMarshalParseRoundTrip(t *testing.T) 
 	assert.Equal(t, raw, remarshaled, "the persisted annotation must have stable field ordering")
 }
 
-func TestPersistedModelCacheStorageSelectionRejectsProviderTransitionMismatch(t *testing.T) {
+// TestPersistedModelCacheStorageSelectionAcceptsAnyQualifiedProvider pins the
+// vendor-agnostic contract: a durable roxReadOnly selection is validated on the
+// shape it needs, not on which vendor produced it. The catalog is what decides
+// whether a driver may claim the transition.
+func TestPersistedModelCacheStorageSelectionAcceptsAnyQualifiedProvider(t *testing.T) {
 	selection := testPersistedModelCacheStorageSelection(
 		ModelCacheSelectionDurable, ModelCacheTransitionROXReadOnly)
 	selection.Provider = "weka"
+	selection.Provisioner = "csi.weka.io"
 
-	err := selection.Validate()
-	require.ErrorContains(t, err, "requires provider")
-	assert.Empty(t, selection.BindingName)
+	require.NoError(t, selection.Validate())
 }
 
 func TestParsePersistedModelCacheStorageSelectionStrict(t *testing.T) {
@@ -360,11 +363,11 @@ func TestPersistedModelCacheStorageSelectionValidate(t *testing.T) {
 			s.Provisioner = ""
 			return s
 		}, want: "incomplete resolved storage"},
-		{name: "NVMesh transition with another provisioner", selection: func() *PersistedModelCacheStorageSelection {
+		{name: "roxReadOnly reader mount must be read-only", selection: func() *PersistedModelCacheStorageSelection {
 			s := validDurable()
-			s.Provisioner = "another.csi.example.com"
+			s.RequiredMountOptions = []string{"norecovery", "nouuid"}
 			return s
-		}, want: "requires provisioner"},
+		}, want: `requires mount option "ro"`},
 		{name: "missing transition", selection: func() *PersistedModelCacheStorageSelection {
 			s := validDurable()
 			s.Transition = ""
@@ -380,11 +383,7 @@ func TestPersistedModelCacheStorageSelectionValidate(t *testing.T) {
 			s.Transition = "shared-filesystem"
 			return s
 		}, want: "unsupported transition"},
-		{name: "NVMesh missing required reader mount option", selection: func() *PersistedModelCacheStorageSelection {
-			s := validDurable()
-			s.RequiredMountOptions = []string{"ro", "norecovery"}
-			return s
-		}, want: `requires mount option "nouuid"`},
+
 		{name: "duplicate required reader mount option", selection: func() *PersistedModelCacheStorageSelection {
 			s := validDurable()
 			s.RequiredMountOptions = append(s.RequiredMountOptions, "ro")

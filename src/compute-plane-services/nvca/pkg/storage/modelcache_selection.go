@@ -197,15 +197,10 @@ func (s *PersistedModelCacheStorageSelection) Validate() error {
 	case ModelCacheSelectionDurable:
 		switch s.Transition {
 		case ModelCacheTransitionROXReadOnly:
-			if s.Provider != ModelCacheProviderNVMesh {
-				return fmt.Errorf("model cache transition %q requires provider %q, got %q",
-					s.Transition, ModelCacheProviderNVMesh, s.Provider)
-			}
-			if s.Provisioner != NVMeshStorageClassProvisioner {
-				return fmt.Errorf("model cache transition %q requires provisioner %q, got %q",
-					s.Transition, NVMeshStorageClassProvisioner, s.Provisioner)
-			}
-			for _, required := range []string{"ro", "norecovery", "nouuid"} {
+			// The provider and provisioner are recorded, not constrained: the
+			// catalog decides which drivers may run this transition. See the
+			// roxReadOnly case in validateStorageCapabilityCatalog.
+			for _, required := range []string{"ro"} {
 				if !slices.Contains(s.RequiredMountOptions, required) {
 					return fmt.Errorf("model cache transition %q requires mount option %q",
 						s.Transition, required)

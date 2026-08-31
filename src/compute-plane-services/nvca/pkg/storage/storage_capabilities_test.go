@@ -276,16 +276,11 @@ func TestValidateStorageCapabilityCatalog(t *testing.T) {
 			d.ReaderMountOptions = readerMountOptions("norecovery", "nouuid")
 			c.Drivers[NVMeshStorageClassProvisioner] = d
 		}, want: `requires readerMountOption "ro"`},
-		{name: "NVMesh transition lacks norecovery reader mount option", mutate: func(c *storageCapabilityCatalog) {
+		{name: "roxReadOnly requires a read-only reader mount", mutate: func(c *storageCapabilityCatalog) {
 			d := c.Drivers[NVMeshStorageClassProvisioner]
-			d.ReaderMountOptions = readerMountOptions("ro", "nouuid")
+			d.ReaderMountOptions = readerMountOptions("norecovery", "nouuid")
 			c.Drivers[NVMeshStorageClassProvisioner] = d
-		}, want: `requires readerMountOption "norecovery"`},
-		{name: "NVMesh transition lacks nouuid reader mount option", mutate: func(c *storageCapabilityCatalog) {
-			d := c.Drivers[NVMeshStorageClassProvisioner]
-			d.ReaderMountOptions = readerMountOptions("ro", "norecovery")
-			c.Drivers[NVMeshStorageClassProvisioner] = d
-		}, want: `requires readerMountOption "nouuid"`},
+		}, want: `requires readerMountOption "ro"`},
 		{name: "bad regular transition", mutate: func(c *storageCapabilityCatalog) {
 			d := c.Drivers[NVMeshStorageClassProvisioner]
 			d.Transitions.RegularModelCache = "shared-pvc-readonly-fanout"
@@ -296,16 +291,18 @@ func TestValidateStorageCapabilityCatalog(t *testing.T) {
 			d.Transitions.HelmModelCache = "samba"
 			c.Drivers[NVMeshStorageClassProvisioner] = d
 		}, want: "invalid strategy"},
-		{name: "NVMesh transition is provisioner-specific", mutate: func(c *storageCapabilityCatalog) {
+		// roxReadOnly is gated on proven access modes, not on the vendor, so
+		// moving the same qualified entry to another driver stays valid.
+		{name: "roxReadOnly is not provisioner-specific", mutate: func(c *storageCapabilityCatalog) {
 			d := c.Drivers[NVMeshStorageClassProvisioner]
 			delete(c.Drivers, NVMeshStorageClassProvisioner)
 			c.Drivers["example.csi.test"] = d
-		}, want: "restricted to provisioner"},
-		{name: "NVMesh transition is provider-specific", mutate: func(c *storageCapabilityCatalog) {
+		}},
+		{name: "roxReadOnly is not provider-specific", mutate: func(c *storageCapabilityCatalog) {
 			d := c.Drivers[NVMeshStorageClassProvisioner]
 			d.Provider = "weka"
 			c.Drivers[NVMeshStorageClassProvisioner] = d
-		}, want: "requires provider"},
+		}},
 		{name: "NVMesh transition lacks ReadWriteOnce", mutate: func(c *storageCapabilityCatalog) {
 			d := c.Drivers[NVMeshStorageClassProvisioner]
 			d.AccessModes = accessModes("ReadOnlyMany")
@@ -334,7 +331,14 @@ func TestValidateStorageCapabilityCatalog(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			catalog := validStorageCapabilityCatalog()
 			tt.mutate(catalog)
-			require.ErrorContains(t, validateStorageCapabilityCatalog(catalog), tt.want)
+			err := validateStorageCapabilityCatalog(catalog)
+			// An empty want means the mutation must stay valid: the catalog,
+			// not the code, decides which drivers may run a transition.
+			if tt.want == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tt.want)
 		})
 	}
 }
