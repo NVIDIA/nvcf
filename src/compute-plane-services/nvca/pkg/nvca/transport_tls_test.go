@@ -99,8 +99,7 @@ func TestCreatePodArtifactInstancesTransportTLSBundleInjectsOnlyLLMWorker(t *tes
 	expectedBundlePath := "/nvcf/transport-tls/ca-certificates.crt"
 	assert.Equal(t, expectedBundlePath,
 		findTransportTLSEnvValue(llmWorker, transporttls.CertPathEnv))
-	assert.Equal(t, expectedBundlePath,
-		findTransportTLSEnvValue(llmWorker, transporttls.GrpcTLSCACertPathEnv))
+	assert.Empty(t, findTransportTLSEnvValue(llmWorker, transporttls.GrpcTLSCACertPathEnv))
 	mount := findTransportTLSVolumeMount(llmWorker, "nvcf-trust-merged-certs")
 	require.NotNil(t, mount)
 	assert.Equal(t, "/nvcf/transport-tls", mount.MountPath)
