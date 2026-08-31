@@ -20,6 +20,7 @@ package proxy
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"math"
 	"net"
 	"os"
@@ -63,20 +64,25 @@ func createH3RoundTripper() *h3ConnectionCache {
 	if utils.LevelFromEnv().Level() == zap.DebugLevel {
 		h3.QUICConfig.Tracer = qlog.DefaultConnectionTracer
 	}
-	return &h3ConnectionCache{wrappedTransport: h3, clients: make(map[string]*roundTripperWithCount)}
+	return &h3ConnectionCache{
+		wrappedTransport: h3,
+		clients:          make(map[string]*roundTripperWithCount),
+		dialFailures:     make(map[string]int),
+	}
 }
 
 // mostly copied from http3.Transport because we need to hijack the http3 client stream
 // and when doing that we can't use the built in http3.Transport.RoundTrip function which caches
 // connections.
-// dialFailuresBeforeRotate is how many consecutive failed dials, across any
-// hosts, are treated as evidence that the shared UDP socket itself is dead
-// rather than that one proxy host is unreachable. Measured on stage: healthy
-// operation produces zero dial failures over long windows, while a blackholed
-// socket produces hundreds within a single 60s window, so anything in between
-// separates the two cleanly.
+// dialFailuresBeforeRotate is how many consecutive network timeout failures
+// to one resolved destination are treated as evidence that its UDP flow is
+// blackholed. Measured on stage: healthy operation produces zero dial failures
+// over long windows, while a blackholed flow produces hundreds within a single
+// 60s window, so anything in between separates the two cleanly.
 const dialFailuresBeforeRotate = 3
 
+// h3ConnectionCache reuses HTTP/3 clients by hostname and manages the shared
+// QUIC transport used to dial them.
 type h3ConnectionCache struct {
 	wrappedTransport *http3.Transport
 	mutex            sync.Mutex
@@ -88,17 +94,18 @@ type h3ConnectionCache struct {
 	// written with no synchronisation at all.
 	transportMu   sync.Mutex
 	quicTransport *quic.Transport
-	dialFailures  int
+	dialFailures  map[string]int
 }
 
 // transport returns the shared QUIC transport, creating it on first use.
 //
 // Every connection dialled from one quic.Transport leaves from its single UDP
-// socket, so the whole worker shares one source port. An AWS NLB hashes UDP
-// flows on the 5-tuple, which means that port decides which proxy pod every
-// dial reaches. If the flow is pinned to a pod that has gone away, retrying
-// cannot help: the retry leaves from the same port and lands on the same dead
-// entry. Rotating the socket is the only thing the worker can do to change it.
+// socket, so the whole worker shares one source port. For a fixed destination,
+// an AWS NLB hashes UDP flows on the 5-tuple, which means that port decides
+// which proxy pod every dial reaches. If the flow is pinned to a pod that has
+// gone away, retrying cannot help: the retry leaves from the same port and
+// lands on the same dead entry. Rotating the socket is the only thing the
+// worker can do to change it.
 func (t *h3ConnectionCache) transport() (*quic.Transport, error) {
 	t.transportMu.Lock()
 	defer t.transportMu.Unlock()
@@ -117,9 +124,10 @@ func (t *h3ConnectionCache) transportLocked() (*quic.Transport, error) {
 }
 
 // noteDialResult records the outcome of a dial and rotates the shared socket
-// once consecutive failures cross the threshold. A success resets the count,
-// so an established worker never rotates on isolated failures.
-func (t *h3ConnectionCache) noteDialResult(dialed *quic.Transport, dialErr error) {
+// once consecutive network timeouts to one destination cross the threshold.
+// A success resets only that destination, so unrelated flows cannot suppress
+// or trigger rotation.
+func (t *h3ConnectionCache) noteDialResult(ctx context.Context, dialed *quic.Transport, destination string, dialErr error) {
 	t.transportMu.Lock()
 	defer t.transportMu.Unlock()
 
@@ -133,14 +141,29 @@ func (t *h3ConnectionCache) noteDialResult(dialed *quic.Transport, dialErr error
 		return
 	}
 	if dialErr == nil {
-		t.dialFailures = 0
+		delete(t.dialFailures, destination)
 		return
 	}
-	t.dialFailures++
-	if t.dialFailures < dialFailuresBeforeRotate {
+	if !isTransportDialFailure(ctx, dialErr) {
 		return
 	}
-	t.rotateLocked()
+	if t.dialFailures == nil {
+		t.dialFailures = make(map[string]int)
+	}
+	t.dialFailures[destination]++
+	failures := t.dialFailures[destination]
+	if failures < dialFailuresBeforeRotate {
+		return
+	}
+	t.rotateLocked(destination, failures)
+}
+
+func isTransportDialFailure(ctx context.Context, dialErr error) bool {
+	if dialErr == nil || context.Cause(ctx) != nil {
+		return false
+	}
+	var networkErr net.Error
+	return errors.As(dialErr, &networkErr) && networkErr.Timeout()
 }
 
 // rotateLocked replaces the shared socket with a freshly bound one.
@@ -149,21 +172,25 @@ func (t *h3ConnectionCache) noteDialResult(dialed *quic.Transport, dialErr error
 // Closing first releases the port and the kernel is free to hand the same one
 // back, which would leave the worker on the identical 5-tuple and defeat the
 // rotation without any outward sign that it had failed.
-func (t *h3ConnectionCache) rotateLocked() {
+func (t *h3ConnectionCache) rotateLocked(destination string, failures int) {
 	old := t.quicTransport
 	udpConn, err := net.ListenUDP("udp", nil)
 	if err != nil {
 		// Keep the existing socket rather than leaving the worker with none.
 		// The next failure retries the rotation.
-		zap.L().Warn("failed to bind a replacement quic socket", zap.Error(err))
+		zap.L().Warn("failed to bind a replacement quic socket",
+			zap.Error(err),
+			zap.String("destination", destination),
+			zap.Int("consecutive_failures", failures))
 		return
 	}
 	zap.L().Warn("rotating quic transport after consecutive dial failures",
-		zap.Int("consecutive_failures", t.dialFailures),
+		zap.String("destination", destination),
+		zap.Int("consecutive_failures", failures),
 		zap.String("old_local_addr", old.Conn.LocalAddr().String()),
 		zap.String("new_local_addr", udpConn.LocalAddr().String()))
 	t.quicTransport = &quic.Transport{Conn: udpConn}
-	t.dialFailures = 0
+	clear(t.dialFailures)
 	closeTransport(old)
 }
 
@@ -185,6 +212,7 @@ func closeTransport(tr *quic.Transport) {
 func (t *h3ConnectionCache) closeTransportLocked() {
 	closeTransport(t.quicTransport)
 	t.quicTransport = nil
+	clear(t.dialFailures)
 }
 
 func (t *h3ConnectionCache) getDialedClient(ctx context.Context, hostname string) (rtc *roundTripperWithCount, isReused bool, err error) {
@@ -291,7 +319,7 @@ func (t *h3ConnectionCache) dial(ctx context.Context, hostname string) (*quic.Co
 				return nil, err
 			}
 			conn, err := quicTransport.DialEarly(ctx, udpAddr, tlsCfg, cfg)
-			t.noteDialResult(quicTransport, err)
+			t.noteDialResult(ctx, quicTransport, udpAddr.String(), err)
 			return conn, err
 		}
 	}

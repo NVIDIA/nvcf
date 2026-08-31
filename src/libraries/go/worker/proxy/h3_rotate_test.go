@@ -18,13 +18,25 @@ limitations under the License.
 package proxy
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"testing"
 )
 
+const testDestination = "192.0.2.1:443"
+
+type dialTimeoutError struct{}
+
+func (dialTimeoutError) Error() string   { return "timeout: no recent network activity" }
+func (dialTimeoutError) Timeout() bool   { return true }
+func (dialTimeoutError) Temporary() bool { return false }
+
 func newTestCache() *h3ConnectionCache {
-	return &h3ConnectionCache{clients: make(map[string]*roundTripperWithCount)}
+	return &h3ConnectionCache{
+		clients:      make(map[string]*roundTripperWithCount),
+		dialFailures: make(map[string]int),
+	}
 }
 
 // One transport is one socket: every dial shares a single source port. This is
@@ -60,15 +72,15 @@ func TestRotatesOnlyAfterThresholdAndChangesSourcePort(t *testing.T) {
 	}
 	portBefore := before.Conn.LocalAddr().String()
 
-	dialErr := errors.New("timeout: no recent network activity")
+	dialErr := dialTimeoutError{}
 	for i := 1; i < dialFailuresBeforeRotate; i++ {
-		c.noteDialResult(before, dialErr)
+		c.noteDialResult(context.Background(), before, testDestination, dialErr)
 		if c.quicTransport != before {
 			t.Fatalf("rotated after %d failures, want %d", i, dialFailuresBeforeRotate)
 		}
 	}
 
-	c.noteDialResult(before, dialErr)
+	c.noteDialResult(context.Background(), before, testDestination, dialErr)
 	after, err := c.transport()
 	if err != nil {
 		t.Fatalf("transport after rotation: %v", err)
@@ -82,8 +94,64 @@ func TestRotatesOnlyAfterThresholdAndChangesSourcePort(t *testing.T) {
 	if after.Conn.LocalAddr().String() == portBefore {
 		t.Fatal("expected a new source port after rotation; the NLB hashes on it")
 	}
-	if c.dialFailures != 0 {
-		t.Fatalf("dialFailures = %d after rotation, want 0", c.dialFailures)
+	if len(c.dialFailures) != 0 {
+		t.Fatalf("dialFailures = %v after rotation, want empty", c.dialFailures)
+	}
+}
+
+func TestDialFailuresAreScopedToDestination(t *testing.T) {
+	c := newTestCache()
+	defer c.Close()
+
+	tr, err := c.transport()
+	if err != nil {
+		t.Fatalf("transport: %v", err)
+	}
+	dialErr := dialTimeoutError{}
+	destinationA := "192.0.2.1:443"
+	destinationB := "192.0.2.2:443"
+
+	for range dialFailuresBeforeRotate - 1 {
+		c.noteDialResult(context.Background(), tr, destinationA, dialErr)
+	}
+	c.noteDialResult(context.Background(), tr, destinationB, dialErr)
+	if c.quicTransport != tr {
+		t.Fatal("failures to different destinations triggered rotation")
+	}
+
+	c.noteDialResult(context.Background(), tr, destinationB, nil)
+	if got := c.dialFailures[destinationA]; got != dialFailuresBeforeRotate-1 {
+		t.Fatalf("success on destination B reset destination A to %d", got)
+	}
+
+	c.noteDialResult(context.Background(), tr, destinationA, dialErr)
+	if c.quicTransport == tr {
+		t.Fatal("destination A did not rotate after reaching its threshold")
+	}
+}
+
+func TestOnlyUncancelledNetworkTimeoutsCountAsDialFailures(t *testing.T) {
+	c := newTestCache()
+	defer c.Close()
+
+	tr, err := c.transport()
+	if err != nil {
+		t.Fatalf("transport: %v", err)
+	}
+
+	for range dialFailuresBeforeRotate {
+		c.noteDialResult(context.Background(), tr, testDestination, errors.New("tls: failed to verify certificate"))
+	}
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	for range dialFailuresBeforeRotate {
+		c.noteDialResult(canceledCtx, tr, testDestination, dialTimeoutError{})
+	}
+	if c.quicTransport != tr {
+		t.Fatal("non-transport dial errors triggered rotation")
+	}
+	if len(c.dialFailures) != 0 {
+		t.Fatalf("non-transport dial errors changed failure state: %v", c.dialFailures)
 	}
 }
 
@@ -98,9 +166,9 @@ func TestStaleFailuresDoNotCountAgainstReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("transport: %v", err)
 	}
-	dialErr := errors.New("timeout: no recent network activity")
+	dialErr := dialTimeoutError{}
 	for range dialFailuresBeforeRotate {
-		c.noteDialResult(stale, dialErr)
+		c.noteDialResult(context.Background(), stale, testDestination, dialErr)
 	}
 	replacement := c.quicTransport
 	if replacement == stale {
@@ -109,14 +177,14 @@ func TestStaleFailuresDoNotCountAgainstReplacement(t *testing.T) {
 
 	// Several more results from the old socket arrive late.
 	for range dialFailuresBeforeRotate * 2 {
-		c.noteDialResult(stale, dialErr)
+		c.noteDialResult(context.Background(), stale, testDestination, dialErr)
 	}
-	if c.dialFailures != 0 {
-		t.Fatalf("stale failures moved the counter to %d, want 0", c.dialFailures)
+	if len(c.dialFailures) != 0 {
+		t.Fatalf("stale failures changed failure state to %v, want empty", c.dialFailures)
 	}
 
 	// One genuine failure of the replacement's own must not be enough.
-	c.noteDialResult(replacement, dialErr)
+	c.noteDialResult(context.Background(), replacement, testDestination, dialErr)
 	if c.quicTransport != replacement {
 		t.Fatal("replacement rotated after a single failure of its own")
 	}
@@ -131,20 +199,20 @@ func TestStaleSuccessDoesNotResetReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("transport: %v", err)
 	}
-	dialErr := errors.New("timeout: no recent network activity")
+	dialErr := dialTimeoutError{}
 	for range dialFailuresBeforeRotate {
-		c.noteDialResult(stale, dialErr)
+		c.noteDialResult(context.Background(), stale, testDestination, dialErr)
 	}
 	replacement := c.quicTransport
 
 	for i := 1; i < dialFailuresBeforeRotate; i++ {
-		c.noteDialResult(replacement, dialErr)
+		c.noteDialResult(context.Background(), replacement, testDestination, dialErr)
 	}
-	c.noteDialResult(stale, nil) // late success from the discarded socket
-	if c.dialFailures != dialFailuresBeforeRotate-1 {
-		t.Fatalf("a stale success reset the counter to %d", c.dialFailures)
+	c.noteDialResult(context.Background(), stale, testDestination, nil) // late success from the discarded socket
+	if got := c.dialFailures[testDestination]; got != dialFailuresBeforeRotate-1 {
+		t.Fatalf("a stale success reset the counter to %d", got)
 	}
-	c.noteDialResult(replacement, dialErr)
+	c.noteDialResult(context.Background(), replacement, testDestination, dialErr)
 	if c.quicTransport == replacement {
 		t.Fatal("expected rotation once the replacement reached the threshold")
 	}
@@ -160,12 +228,12 @@ func TestSuccessResetsFailureCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("transport: %v", err)
 	}
-	dialErr := errors.New("timeout: no recent network activity")
+	dialErr := dialTimeoutError{}
 	for range 50 {
 		for i := 1; i < dialFailuresBeforeRotate; i++ {
-			c.noteDialResult(tr, dialErr)
+			c.noteDialResult(context.Background(), tr, testDestination, dialErr)
 		}
-		c.noteDialResult(tr, nil)
+		c.noteDialResult(context.Background(), tr, testDestination, nil)
 	}
 	if c.quicTransport != tr {
 		t.Fatal("rotated despite every failure run being broken by a success")
@@ -178,7 +246,7 @@ func TestConcurrentTransportAccessIsRaceFree(t *testing.T) {
 	c := newTestCache()
 	defer c.Close()
 
-	dialErr := errors.New("timeout: no recent network activity")
+	dialErr := dialTimeoutError{}
 	var wg sync.WaitGroup
 	for range 16 {
 		wg.Add(1)
@@ -189,8 +257,8 @@ func TestConcurrentTransportAccessIsRaceFree(t *testing.T) {
 				if err != nil {
 					continue
 				}
-				c.noteDialResult(tr, dialErr)
-				c.noteDialResult(tr, nil)
+				c.noteDialResult(context.Background(), tr, testDestination, dialErr)
+				c.noteDialResult(context.Background(), tr, testDestination, nil)
 			}
 		}()
 	}
