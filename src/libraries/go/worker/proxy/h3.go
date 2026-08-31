@@ -184,7 +184,7 @@ func (t *h3ConnectionCache) rotateLocked(destination string, failures int) {
 			zap.Int("consecutive_failures", failures))
 		return
 	}
-	zap.L().Warn("rotating quic transport after consecutive dial failures",
+	zap.L().Info("rotating quic transport after consecutive dial failures",
 		zap.String("destination", destination),
 		zap.Int("consecutive_failures", failures),
 		zap.String("old_local_addr", old.Conn.LocalAddr().String()),
