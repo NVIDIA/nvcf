@@ -72,6 +72,7 @@ Feature: Register an LLM worker securely with a local split-cluster routing plan
 
       # openssl verifies the externally reachable listener against the same
       # stack-issued CA and DNS identity that a compute-plane Pylon uses.
+      # Explore a readable shared BDD DSL for this TLS listener probe: https://github.com/NVIDIA/nvcf/issues/1412
       When I run command:
         """
         /bin/bash -c 'openssl s_client -connect 127.0.0.1:50071 -servername llm-request-router.nvcf.svc.cluster.local -alpn h2 -verify_return_error -CAfile <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf -o jsonpath="{.data.ca\.crt}" | base64 -d) </dev/null 2>&1'
@@ -83,6 +84,7 @@ Feature: Register an LLM worker securely with a local split-cluster routing plan
       # grpcurl reports a client-side dial deadline when plaintext HTTP/2 is
       # sent to this verified TLS listener. The trusted Watch below proves
       # that the same endpoint remains healthy.
+      # Explore a readable shared BDD DSL for this plaintext rejection probe: https://github.com/NVIDIA/nvcf/issues/1412
       When I run command:
         """
         /bin/bash -c 'set -u; output=$(grpcurl -plaintext -max-time 5 -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates 2>&1); rc=$?; if [ "$rc" -eq 0 ]; then printf "%s\n" "plaintext Watch unexpectedly succeeded" >&2; exit 1; fi; printf "%s\n" "$output" | bash tests/bdd/scripts/assert-grpcurl-plaintext-tls-rejection.sh'
