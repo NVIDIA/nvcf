@@ -453,9 +453,9 @@ func TestAgentStartGracefulNoGPURecoversWhenGPUAppears(t *testing.T) {
 	require.NoError(t, agent.Start(ctx))
 	requireHTTPStatus(t, agent.NVCASvcAddress, health.HTTPReadinessRoutePath, http.StatusServiceUnavailable)
 	requireHTTPStatus(t, agent.NVCASvcAddress, health.HTTPLivenessRoutePath, http.StatusOK)
-	require.NotNil(t, agent.gpuMonitor)
+	require.NotNil(t, agent.gpuRegistration.monitor)
 	require.NotNil(t, agent.queueManager)
-	assert.False(t, agent.gpuMonitor.HasGPUs())
+	assert.False(t, agent.gpuRegistration.hasGPUs())
 	assert.True(t, agent.queueManager.IsPaused())
 	assert.Empty(t, icmsClient.requests())
 	assert.Empty(t, agent.queueManager.getCreateQueue(testGPUNameDefault).QueueURL)
@@ -494,7 +494,7 @@ func TestAgentStartGracefulNoGPURecoversWhenGPUAppears(t *testing.T) {
 	icmsClient.release(0)
 
 	require.EventuallyWithT(t, func(ct *assert.CollectT) {
-		assert.True(ct, agent.gpuMonitor.HasGPUs())
+		assert.True(ct, agent.gpuRegistration.hasGPUs())
 		assert.False(ct, agent.queueManager.IsPaused())
 		assert.Equal(ct, recoveredCredentials.CreationQueues[testGPUNameDefault],
 			agent.queueManager.getCreateQueue(testGPUNameDefault))
@@ -505,7 +505,7 @@ func TestAgentStartGracefulNoGPURecoversWhenGPUAppears(t *testing.T) {
 
 	require.NoError(t, k8sClients.K8s.CoreV1().Nodes().Delete(ctx, functionNode.Name, metav1.DeleteOptions{}))
 	require.EventuallyWithT(t, func(ct *assert.CollectT) {
-		assert.False(ct, agent.gpuMonitor.HasGPUs())
+		assert.False(ct, agent.gpuRegistration.hasGPUs())
 		assert.True(ct, agent.queueManager.IsPaused())
 	}, 5*time.Second, 10*time.Millisecond)
 	requireRefreshedReadinessStatus(t, ctx, agent, http.StatusServiceUnavailable)
@@ -589,7 +589,7 @@ func TestAgentStartGracefulNoGPUStaysPausedWhenGPUDisappearsDuringRegistration(t
 	requireRegistrationAttempt(t, icmsClient, 0)
 	require.NoError(t, k8sClients.K8s.CoreV1().Nodes().Delete(ctx, functionNode.Name, metav1.DeleteOptions{}))
 	require.EventuallyWithT(t, func(ct *assert.CollectT) {
-		assert.False(ct, agent.gpuMonitor.HasGPUs())
+		assert.False(ct, agent.gpuRegistration.hasGPUs())
 		assert.True(ct, agent.queueManager.IsPaused())
 	}, 5*time.Second, 10*time.Millisecond)
 
@@ -642,7 +642,7 @@ func TestAgentStartGracefulNoGPUSerializesCredentialRenewalBeforeRecovery(t *tes
 
 	require.NoError(t, k8sClients.K8s.CoreV1().Nodes().Delete(ctx, functionNode.Name, metav1.DeleteOptions{}))
 	require.EventuallyWithT(t, func(ct *assert.CollectT) {
-		assert.False(ct, agent.gpuMonitor.HasGPUs())
+		assert.False(ct, agent.gpuRegistration.hasGPUs())
 		assert.True(ct, agent.queueManager.IsPaused())
 	}, 5*time.Second, 10*time.Millisecond)
 
@@ -733,7 +733,7 @@ func TestAgentStartGracefulNoGPUSerializesPeriodicRegistrationBeforeRecovery(t *
 
 	require.NoError(t, k8sClients.K8s.CoreV1().Nodes().Delete(ctx, functionNode.Name, metav1.DeleteOptions{}))
 	require.EventuallyWithT(t, func(ct *assert.CollectT) {
-		assert.False(ct, agent.gpuMonitor.HasGPUs())
+		assert.False(ct, agent.gpuRegistration.hasGPUs())
 		assert.True(ct, agent.queueManager.IsPaused())
 	}, 5*time.Second, 10*time.Millisecond)
 
@@ -744,12 +744,12 @@ func TestAgentStartGracefulNoGPUSerializesPeriodicRegistrationBeforeRecovery(t *
 	recoveryNode.Labels["nvidia.com/gpu.memory"] = "32768"
 	recoveryNode.Labels["nvidia.com/gpu.product"] = "V100-SXM2-32GB"
 	recoveryNode.Labels["nvca.nvcf.nvidia.io/gpu.product"] = string(recoveredGPU)
-	lossGeneration := agent.gpuRegistrationGeneration.Load()
+	lossGeneration := agent.gpuRegistration.generation.Load()
 	_, err = k8sClients.K8s.CoreV1().Nodes().Create(ctx, recoveryNode, metav1.CreateOptions{})
 	require.NoError(t, err)
 	require.EventuallyWithT(t, func(ct *assert.CollectT) {
-		assert.True(ct, agent.gpuMonitor.HasGPUs())
-		assert.Greater(ct, agent.gpuRegistrationGeneration.Load(), lossGeneration)
+		assert.True(ct, agent.gpuRegistration.hasGPUs())
+		assert.Greater(ct, agent.gpuRegistration.generation.Load(), lossGeneration)
 	}, 5*time.Second, 10*time.Millisecond)
 	requireNoRegistrationAttempt(t, icmsClient, 250*time.Millisecond)
 	assert.True(t, agent.queueManager.IsPaused())
