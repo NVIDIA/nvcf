@@ -70,26 +70,30 @@ Feature: Register an LLM worker securely with routers in two local regions
       When I run command "kubectl --context k3d-ncp-local-cp rollout status deployment/llm-request-router -n nvcf --timeout=10m"
       Then the command exit code should be 0
 
+      # This script still hides the Region B release values, routes, alias
+      # endpoints, and rollout waits. Replacing it with visible DSL steps is
+      # tracked in https://github.com/NVIDIA/nvcf/issues/1391.
       When I run command "tests/bdd/scripts/install-llm-region-b.sh"
       Then the command exit code should be 0
 
       # The initial region advertises an explicit HTTPS recursive seed while
-      # retaining every concrete Deployment pod identity.
-      When I run command:
-        """
-        /bin/bash -c 'set -eu; output=$(grpcurl -max-time 3 -cacert <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf -o jsonpath="{.data.ca\.crt}" | base64 -d) -authority llm-request-router.nvcf.svc.cluster.local -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates 2>&1 || true); pods=$(kubectl --context k3d-ncp-local-cp get pods -n nvcf -l app.kubernetes.io/instance=llm-request-router,app.kubernetes.io/name=llm-request-router -o jsonpath="{range .items[*]}{.metadata.name}{\"\\n\"}{end}"); count=0; while IFS= read -r pod; do [ -z "$pod" ] && continue; printf "%s" "$output" | grep -Fq "$pod"; count=$((count + 1)); done <<<"$pods"; [ "$count" -eq 3 ]; printf "%s" "$output" | grep -Fq "https://region-b-watch.nvcf.svc.cluster.local:50071"; printf "region-a-deployment=%s remote-watch=https\n" "$count"'
-        """
-      Then the command exit code should be 0
-      And the command output should contain "region-a-deployment=3 remote-watch=https"
+      # retaining every concrete Deployment pod identity. Three distinct
+      # <replicaset-hash>-<pod-suffix> identities prove per-pod discovery
+      # rather than a single ClusterIP or headless alias.
+      When I successfully observe WatchStargates at "127.0.0.1:50071" with TLS authority "llm-request-router.nvcf.svc.cluster.local" using CA secret "stargate-quic-tls" in namespace "nvcf" and context "k3d-ncp-local-cp" for "3" seconds
+      Then the command output should contain "https://region-b-watch.nvcf.svc.cluster.local:50071"
+      And the command output should have exactly "3" distinct matches of "llm-request-router-[a-z0-9]{5,10}-[a-z0-9]{5}"
+      And the command output should not match "([0-9]{1,3}-){3}[0-9]{1,3}\."
 
       # The remote HTTPS authority resolves to two stable StatefulSet router
       # identities and never relies on a dashed-IP SRV alias.
-      When I run command:
-        """
-        /bin/bash -c 'set -eu; output=$(grpcurl -max-time 3 -cacert <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf -o jsonpath="{.data.ca\.crt}" | base64 -d) -authority region-b-watch.nvcf.svc.cluster.local -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates 2>&1 || true); identities=$(printf "%s\n" "$output" | grep -Eo "llm-request-router-region-b-[0-9]+" | sort -u || true); expected=$(printf "llm-request-router-region-b-0\nllm-request-router-region-b-1\n"); [ "$identities" = "$expected" ]; count=$(printf "%s\n" "$identities" | grep -c .); [ "$count" -eq 2 ]; ! printf "%s" "$output" | grep -Eq "([0-9]{1,3}-){3}[0-9]{1,3}\."; printf "region-b-statefulset=%s tls=https\n" "$count"'
-        """
-      Then the command exit code should be 0
-      And the command output should contain "region-b-statefulset=2 tls=https"
+      When I successfully observe WatchStargates at "127.0.0.1:50071" with TLS authority "region-b-watch.nvcf.svc.cluster.local" using CA secret "stargate-quic-tls" in namespace "nvcf" and context "k3d-ncp-local-cp" for "3" seconds
+      Then the command output should contain all:
+        | text                          |
+        | llm-request-router-region-b-0 |
+        | llm-request-router-region-b-1 |
+      And the command output should have exactly "2" distinct matches of "llm-request-router-region-b-[0-9]+"
+      And the command output should not match "([0-9]{1,3}-){3}[0-9]{1,3}\."
 
       When I run command:
         """
@@ -121,7 +125,7 @@ Feature: Register an LLM worker securely with routers in two local regions
         make -C deploy/stacks/nvcf-compute-plane install CLUSTER_NAME=ncp-local-compute-1 HELMFILE_ENV=local-bdd-registration-multiregion COMPUTE_KUBE_CONTEXT=k3d-ncp-local-compute-1 NVCF_CLI=${NVCF_CLI}
         """
       Then the command exit code should be 0
-      Then NVCFBackend "ncp-local-compute-1" in namespace "nvca-operator" using context "k3d-ncp-local-compute-1" should report agent status "healthy" within "10m"
+      And NVCFBackend "ncp-local-compute-1" in namespace "nvca-operator" using context "k3d-ncp-local-compute-1" should report agent status "healthy" within "10m"
 
     @llm-registration-multiregion-runtime
     Scenario: Pylon recursively registers with both regions and serves an authenticated request

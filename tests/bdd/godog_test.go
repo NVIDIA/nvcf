@@ -168,6 +168,13 @@ controlPlane:
     reval: reval.localhost
     nats: nats.localhost
     invocation: invocation.localhost
+managementTls:
+  trustMode: bundle
+  caBundlePem: test-ca-bundle
+transportTls:
+  trustMode: bundle
+  trustBundleFingerprint: sha256:test-fingerprint
+  trustBundlePem: test-ca-bundle
 `
 	writeArtifact(t, repoRoot, "self-managed", "control-plane-profile.yaml", body)
 }
@@ -1217,10 +1224,12 @@ func TestMultiClusterHelmfileLLMRegistrationMultiregionFeatureFileWiresToSteps(t
 	t.Setenv("NVCF_CLI", "/usr/bin/nvcf-cli")
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
 
-	//revive:disable:line-length-limit Exact feature commands must remain byte-for-byte identical.
 	const (
-		regionAWatchCommand = `/bin/bash -c 'set -eu; output=$(grpcurl -max-time 3 -cacert <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf -o jsonpath="{.data.ca\.crt}" | base64 -d) -authority llm-request-router.nvcf.svc.cluster.local -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates 2>&1 || true); pods=$(kubectl --context k3d-ncp-local-cp get pods -n nvcf -l app.kubernetes.io/instance=llm-request-router,app.kubernetes.io/name=llm-request-router -o jsonpath="{range .items[*]}{.metadata.name}{\"\\n\"}{end}"); count=0; while IFS= read -r pod; do [ -z "$pod" ] && continue; printf "%s" "$output" | grep -Fq "$pod"; count=$((count + 1)); done <<<"$pods"; [ "$count" -eq 3 ]; printf "%s" "$output" | grep -Fq "https://region-b-watch.nvcf.svc.cluster.local:50071"; printf "region-a-deployment=%s remote-watch=https\n" "$count"'`
-		regionBWatchCommand = `/bin/bash -c 'set -eu; output=$(grpcurl -max-time 3 -cacert <(kubectl --context k3d-ncp-local-cp get secret stargate-quic-tls -n nvcf -o jsonpath="{.data.ca\.crt}" | base64 -d) -authority region-b-watch.nvcf.svc.cluster.local -import-path src/libraries/rust/stargate/crates/proto/proto -proto stargate.proto 127.0.0.1:50071 stargate.StargateControlPlane/WatchStargates 2>&1 || true); identities=$(printf "%s\n" "$output" | grep -Eo "llm-request-router-region-b-[0-9]+" | sort -u || true); expected=$(printf "llm-request-router-region-b-0\nllm-request-router-region-b-1\n"); [ "$identities" = "$expected" ]; count=$(printf "%s\n" "$identities" | grep -c .); [ "$count" -eq 2 ]; ! printf "%s" "$output" | grep -Eq "([0-9]{1,3}-){3}[0-9]{1,3}\."; printf "region-b-statefulset=%s tls=https\n" "$count"'`
+		watchStargatesScript = "bash tests/bdd/scripts/observe-watch-stargates.sh"
+		regionAWatchCommand  = watchStargatesScript +
+			" 127.0.0.1:50071 llm-request-router.nvcf.svc.cluster.local stargate-quic-tls nvcf k3d-ncp-local-cp 3"
+		regionBWatchCommand = watchStargatesScript +
+			" 127.0.0.1:50071 region-b-watch.nvcf.svc.cluster.local stargate-quic-tls nvcf k3d-ncp-local-cp 3"
 		pylonMetricsCommand = "bash tests/bdd/scripts/wait-pylon-metrics.sh" +
 			" bdd-registration-multiregion llm-worker k3d-ncp-local-compute-1 10m" +
 			" pylon_registration_stream_connected exactly 5" +
@@ -1231,17 +1240,22 @@ func TestMultiClusterHelmfileLLMRegistrationMultiregionFeatureFileWiresToSteps(t
 			" --inference-url /v1/chat/completions --model-name openai-compatible-sample" +
 			" --request-body '{\"messages\":[{\"role\":\"user\",\"content\":\"bdd-registration-multiregion\"}]}' --timeout 120"
 	)
-	//revive:enable:line-length-limit
 
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
 		"k3d cluster get ncp-local": {ExitCode: 1},
 		regionAWatchCommand: {
 			ExitCode: 0,
-			Stdout:   "region-a-deployment=3 remote-watch=https\n",
+			Stdout: `{"stargates":[` +
+				`{"identity":"llm-request-router-6c9f4b7d8f-abcde"},` +
+				`{"identity":"llm-request-router-6c9f4b7d8f-fghij"},` +
+				`{"identity":"llm-request-router-6c9f4b7d8f-klmno"}],` +
+				`"watchStargateUrls":["https://region-b-watch.nvcf.svc.cluster.local:50071"]}` + "\n",
 		},
 		regionBWatchCommand: {
 			ExitCode: 0,
-			Stdout:   "region-b-statefulset=2 tls=https\n",
+			Stdout: `{"stargates":[` +
+				`{"identity":"llm-request-router-region-b-0.llm-request-router-region-b-headless.nvcf.svc.cluster.local"},` +
+				`{"identity":"llm-request-router-region-b-1.llm-request-router-region-b-headless.nvcf.svc.cluster.local"}]}` + "\n",
 		},
 		grpcCertificateCommand: {
 			ExitCode: 0,
@@ -1262,7 +1276,7 @@ func TestMultiClusterHelmfileLLMRegistrationMultiregionFeatureFileWiresToSteps(t
 	seedHelmfileLocalBDDMultiFixture(t, suite.Config.RepoRoot)
 	seedComputePlaneLocalBDDMultiFixture(t, suite.Config.RepoRoot)
 	seedStackSecretsTemplate(t, suite.Config.RepoRoot)
-	writeProfileHandoffArtifact(t, suite.Config.RepoRoot)
+	writeMulticlusterProfileHandoffArtifact(t, suite.Config.RepoRoot)
 	writeMulticlusterComputeRegisterValues(t, suite.Config.RepoRoot, "nvcf-compute-plane", "ncp-local-compute-1")
 	writeArtifact(
 		t,

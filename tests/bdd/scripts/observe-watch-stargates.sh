@@ -33,6 +33,28 @@ for tool in kubectl base64 grpcurl jq; do
   fi
 done
 
+# Propagate W3C trace context on the outbound gRPC call so the observation
+# joins the same trace as the product spans it exercises. Each invocation
+# generates its own trace and span identifiers.
+random_hex() {
+  local want=$(( $1 * 2 ))
+  local hex=""
+  while [[ ${#hex} -lt $want ]]; do
+    hex+="$(printf '%04x' $(( RANDOM % 65536 )))"
+  done
+  printf '%s' "${hex:0:$want}"
+}
+trace_id="$(random_hex 16)"
+span_id="$(random_hex 8)"
+if [[ "$trace_id" =~ ^0+$ ]]; then
+  trace_id="${trace_id:0:31}1"
+fi
+if [[ "$span_id" =~ ^0+$ ]]; then
+  span_id="${span_id:0:15}1"
+fi
+traceparent="00-${trace_id}-${span_id}-01"
+echo "WatchStargates traceparent: $traceparent" >&2
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 repo_root="$(cd "$script_dir/../../.." && pwd -P)"
 proto_path="$repo_root/src/libraries/rust/stargate/crates/proto/proto"
@@ -55,6 +77,7 @@ grpcurl \
   -emit-defaults \
   -cacert "$ca_file" \
   -authority "$tls_authority" \
+  -H "traceparent: $traceparent" \
   -import-path "$proto_path" \
   -proto stargate.proto \
   "$endpoint" \
