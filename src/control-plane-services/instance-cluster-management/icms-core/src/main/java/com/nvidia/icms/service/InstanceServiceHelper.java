@@ -267,7 +267,7 @@ public class InstanceServiceHelper {
     }
 
     public boolean isNatsEnabled() {
-        return natsConfigurationProperties.isNatsEnabled();
+        return natsConfigurationProperties.isEnabled();
     }
 
     /**
@@ -450,7 +450,7 @@ public class InstanceServiceHelper {
             @Nullable List<ByocSqsMessageModel> messages,
             @NotNull String messageBodyPrefix,
             @NotNull String clusterId) {
-        if (natsConfigurationProperties.isNatsEnabled()) {
+        if (natsConfigurationProperties.isEnabled()) {
             natsMessageSenderClient.sendTaskMessages(messages, clusterId);
         } else {
             sendMessageToSqsQueue(queueUrl, messages, messageBodyPrefix);
@@ -463,7 +463,7 @@ public class InstanceServiceHelper {
             @Nullable List<ByocSqsMessageModel> messages,
             @NotNull String messageBodyPrefix,
             @NotNull String clusterId) {
-        if (natsConfigurationProperties.isNatsEnabled()) {
+        if (natsConfigurationProperties.isEnabled()) {
             natsMessageSenderClient.sendFunctionMessages(messages, clusterId);
         } else {
             sendMessageToSqsQueue(queueUrl, messages, messageBodyPrefix);
@@ -477,7 +477,7 @@ public class InstanceServiceHelper {
             @Nullable List<ByocTerminatePodMessageModel> messages,
             @NotNull String messageBodyPrefix,
             @NotNull String clusterId) {
-        if (natsConfigurationProperties.isNatsEnabled()) {
+        if (natsConfigurationProperties.isEnabled()) {
             natsMessageSenderClient.sendTerminateInstanceMessages(messages, clusterId);
         } else {
             sendMessageToSqsQueue(queueUrl, messages, messageBodyPrefix);

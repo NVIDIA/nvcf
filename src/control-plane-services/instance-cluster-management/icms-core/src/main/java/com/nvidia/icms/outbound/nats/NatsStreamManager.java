@@ -46,7 +46,7 @@ public class NatsStreamManager {
 
     @PostConstruct
     public void init() {
-        if (!natsConfigurationProperties.isNatsEnabled()
+        if (!natsConfigurationProperties.isEnabled()
                 || !natsConfigurationProperties.isCreateNatsStreams()) {
             return;
         }

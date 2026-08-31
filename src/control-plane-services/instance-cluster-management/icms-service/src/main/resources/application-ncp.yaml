@@ -117,7 +117,7 @@ icms:
   instance-listing-api-enabled: true
 
   nats:
-    nats-enabled: true
+    enabled: true
     nats-url: nats://nats.nats-system.svc.cluster.local:4222
     create-nats-streams: true
     connection-timeout: 10s

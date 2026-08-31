@@ -177,7 +177,7 @@ class NatsConfigurationTest {
 
     private static NatsConfigurationProperties enabledProperties(int poolSize) {
         var properties = mock(NatsConfigurationProperties.class);
-        when(properties.isNatsEnabled()).thenReturn(true);
+        when(properties.isEnabled()).thenReturn(true);
         when(properties.getMaxPoolSize()).thenReturn(poolSize);
         return properties;
     }

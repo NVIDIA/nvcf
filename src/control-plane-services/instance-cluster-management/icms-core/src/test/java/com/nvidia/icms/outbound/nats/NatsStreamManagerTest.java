@@ -68,7 +68,7 @@ class NatsStreamManagerTest {
 
     @Test
     void init_doesNothingWhenNatsIsDisabled() throws Exception {
-        when(natsConfigurationProperties.isNatsEnabled()).thenReturn(false);
+        when(natsConfigurationProperties.isEnabled()).thenReturn(false);
 
         natsStreamManager.init();
 
@@ -77,7 +77,7 @@ class NatsStreamManagerTest {
 
     @Test
     void init_doesNothingWhenStreamCreationIsDisabled() throws Exception {
-        when(natsConfigurationProperties.isNatsEnabled()).thenReturn(true);
+        when(natsConfigurationProperties.isEnabled()).thenReturn(true);
         when(natsConfigurationProperties.isCreateNatsStreams()).thenReturn(false);
 
         natsStreamManager.init();
@@ -87,7 +87,7 @@ class NatsStreamManagerTest {
 
     @Test
     void init_createsBothStreams() throws Exception {
-        when(natsConfigurationProperties.isNatsEnabled()).thenReturn(true);
+        when(natsConfigurationProperties.isEnabled()).thenReturn(true);
         when(natsConfigurationProperties.isCreateNatsStreams()).thenReturn(true);
         when(natsConfigurationProperties.getMessageTtl()).thenReturn(Duration.ofHours(24));
 

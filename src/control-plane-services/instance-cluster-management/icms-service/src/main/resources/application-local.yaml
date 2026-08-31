@@ -57,7 +57,7 @@ icms:
     service-url: https://uis.stg.ngc.nvidia.com
 
   nats:
-    nats-enabled: false
+    enabled: false
     nats-url: nats://localhost:4222
     global-stream-validation-task-enabled: true
 

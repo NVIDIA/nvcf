@@ -68,7 +68,6 @@ public final class NatsConfiguration {
     @Scope(SCOPE_PROTOTYPE)
     public Connection natsConnection(
             NatsConfigurationProperties natsProperties,
-            // only required if the auth callout is enabled to establish ordering
             Tracer tracer)
             throws IOException, InterruptedException {
 
@@ -85,11 +84,8 @@ public final class NatsConfiguration {
      */
     Options createDefaultOptions(NatsConfigurationProperties natsConfigurationProperties) {
         Options.Builder builder = new Options.Builder()
-                // Set the NATS server URL
                 .server(natsConfigurationProperties.getNatsUrl())
-                // Set connection timeout
                 .connectionTimeout(natsConfigurationProperties.getConnectionTimeout())
-                // Set ping interval
                 .pingInterval(natsConfigurationProperties.getPingInterval())
                 .useDispatcherWithExecutor()
                 .reconnectWait(natsConfigurationProperties.getReconnectWait())
@@ -198,7 +194,7 @@ public final class NatsConfiguration {
 
         public FixedNatsPool(ApplicationContext applicationContext,
                              NatsConfigurationProperties natsProperties) {
-            int poolSize = natsProperties.isNatsEnabled()
+            int poolSize = natsProperties.isEnabled()
                     ? Math.min(Runtime.getRuntime().availableProcessors(),
                                natsProperties.getMaxPoolSize())
                     : 0;

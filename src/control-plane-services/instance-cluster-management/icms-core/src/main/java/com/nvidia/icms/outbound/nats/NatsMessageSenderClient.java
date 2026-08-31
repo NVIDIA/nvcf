@@ -371,7 +371,7 @@ public class NatsMessageSenderClient {
     }
 
     private boolean checkIfNatsEnabled() {
-        if (natsConfigurationProperties.isNatsEnabled()) {
+        if (natsConfigurationProperties.isEnabled()) {
             return true;
         }
         else {

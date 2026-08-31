@@ -84,7 +84,7 @@ icms:
 
   nats:
     # Should be disabled to verify success of backward compatible integration test
-    nats-enabled: false
+    enabled: false
     create-nats-streams: true
 
   aws:

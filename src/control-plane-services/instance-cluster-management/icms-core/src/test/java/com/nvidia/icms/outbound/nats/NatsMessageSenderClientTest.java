@@ -68,7 +68,7 @@ class NatsMessageSenderClientTest {
             throws Exception {
         MockitoAnnotations.openMocks(this);
         when(fixedNatsPool.borrowJetStream()).thenReturn(jetStream);
-        when(natsConfigurationProperties.isNatsEnabled()).thenReturn(true);
+        when(natsConfigurationProperties.isEnabled()).thenReturn(true);
         when(natsConfigurationProperties.getDelayBetweenMessages()).thenReturn(Duration.ZERO);
 
         natsMessageSenderClient = new NatsMessageSenderClient(fixedNatsPool,
