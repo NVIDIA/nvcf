@@ -156,6 +156,33 @@ func TestCreatePodArtifactInstancesTransportTLSBundleRejectsMismatchedFingerprin
 	assert.True(t, apierrors.IsNotFound(getErr))
 }
 
+func TestCreatePodArtifactInstancesTransportTLSBundleRejectsInvalidConfigWithoutLLMWorker(t *testing.T) {
+	ctx := newTestContext()
+	clients := makeMockKubeClients()
+	kb := newTransportTLSTestBackend(clients, nvcaconfig.TransportTLSConfig{
+		TrustMode:                nvcaconfig.TrustModeBundle,
+		TrustBundleConfigMapName: "nvcf-transport-trust-bundle",
+		TrustBundleKey:           "nvcf-ca-bundle.pem",
+		TrustBundleFingerprint:   "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+		TrustBundlePEM:           testTransportRootCertPEM,
+	})
+	pod := newTransportTLSTestPod()
+	for i := range pod.Spec.Containers {
+		if pod.Spec.Containers[i].Name == function.LLMWorkerContainerName {
+			pod.Spec.Containers[i].Name = "non-llm-worker"
+		}
+	}
+
+	_, err := kb.CreatePodArtifactInstances(ctx, pod, newTransportTLSTestRequest(), transportTLSTestMutator)
+
+	require.Error(t, err)
+	assert.True(t, nvcaerrors.IsTerminal(err), "invalid static transport TLS config should fail before pod inspection")
+	assert.Contains(t, err.Error(), "trustBundleFingerprint does not match transportTls.trustBundlePem")
+	pods, listErr := clients.K8s.CoreV1().Pods(RequestsNamespace).List(ctx, metav1.ListOptions{})
+	require.NoError(t, listErr)
+	assert.Empty(t, pods.Items)
+}
+
 func TestCreatePodArtifactInstancesTransportTLSBundleRejectsInvalidConfigMapMetadata(t *testing.T) {
 	tests := []struct {
 		name      string
