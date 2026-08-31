@@ -74,44 +74,38 @@ func TestSelectLegacyHelmCacheBackend(t *testing.T) {
 		{
 			name:  "caching disabled -> none",
 			flags: nil,
-			// nvcf-sc-30 present but caching off: still none.
-			storageClasses: []*storagev1.StorageClass{storageClass(NVMeshStorageClassName)},
+			// The shared class is present but caching is off: still none.
+			storageClasses: []*storagev1.StorageClass{storageClass(HelmCacheSharedStorageClassName)},
 			want:           HelmCacheBackendNone,
 		},
 		{
 			name:  "HelmModelCaching off -> none",
 			flags: []*featureflag.FeatureFlag{featureflag.CachingSupport},
-			// CachingSupport on and nvcf-sc-30 present, but the Helm sub-gate
-			// is off: no backend is selected.
-			storageClasses: []*storagev1.StorageClass{storageClass(NVMeshStorageClassName)},
+			// CachingSupport on, but the Helm sub-gate is off.
+			storageClasses: []*storagev1.StorageClass{storageClass(HelmCacheSharedStorageClassName)},
 			want:           HelmCacheBackendNone,
 		},
 		{
 			name:           "CachingSupport off, HelmModelCaching on -> none",
 			flags:          []*featureflag.FeatureFlag{featureflag.HelmModelCaching},
-			storageClasses: []*storagev1.StorageClass{storageClass(NVMeshStorageClassName)},
+			storageClasses: []*storagev1.StorageClass{storageClass(HelmCacheSharedStorageClassName)},
 			want:           HelmCacheBackendNone,
 		},
 		{
-			name:           "nvcf-sc-30 present -> nvmesh",
-			flags:          cachingOnly,
-			storageClasses: []*storagev1.StorageClass{storageClass(NVMeshStorageClassName)},
-			want:           HelmCacheBackendNVMesh,
-		},
-		{
+			// The nvcf-sc-30 marker class is no longer rendered by the
+			// deployment templates and is no longer consulted. A cluster that
+			// still has one resolves on its shared class like any other.
 			name:           "nvcf-miniservice-sc present -> sharedfs",
 			flags:          cachingOnly,
 			storageClasses: []*storagev1.StorageClass{storageClass(HelmCacheSharedStorageClassName)},
 			want:           HelmCacheBackendSharedFS,
 		},
 		{
-			name:  "both classes present -> nvmesh wins",
-			flags: cachingOnly,
-			storageClasses: []*storagev1.StorageClass{
-				storageClass(NVMeshStorageClassName),
-				storageClass(HelmCacheSharedStorageClassName),
-			},
-			want: HelmCacheBackendNVMesh,
+			name:            "a leftover nvcf-sc-30 does not change the outcome",
+			flags:           cachingOnly,
+			storageClasses:  []*storagev1.StorageClass{storageClass("nvcf-sc-30")},
+			modelCacheClass: "unused-block-class",
+			want:            HelmCacheBackendEphemeral,
 		},
 		{
 			name:           "no shared class, HelmSharedStorage on, model cache class present -> samba",
@@ -158,13 +152,15 @@ func TestSelectLegacyHelmCacheBackend(t *testing.T) {
 			want: HelmCacheBackendSharedFS,
 		},
 		{
-			name:  "nvcf-sc-30 takes precedence over samba",
+			// A leftover marker class no longer wins: Samba is still selected
+			// because the shared class is absent and the block class is there.
+			name:  "a leftover nvcf-sc-30 does not pre-empt samba",
 			flags: cachingAndSamba,
 			storageClasses: []*storagev1.StorageClass{
-				storageClass(NVMeshStorageClassName),
+				storageClass("nvcf-sc-30"),
 				storageClass(DefaultModelCacheStorageClassName),
 			},
-			want: HelmCacheBackendNVMesh,
+			want: HelmCacheBackendSamba,
 		},
 		{
 			// Caching off short-circuits before any class lookup.

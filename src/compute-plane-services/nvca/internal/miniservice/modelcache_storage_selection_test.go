@@ -196,11 +196,14 @@ func TestSelectHelmCacheBackend(t *testing.T) {
 	})
 
 	t.Run("request without selection uses legacy fallback", func(t *testing.T) {
-		nvmeshClass := &storagev1.StorageClass{
-			ObjectMeta:  metav1.ObjectMeta{Name: nvcastorage.NVMeshStorageClassName},
+		// The legacy selector no longer looks for the nvcf-sc-30 marker class.
+		// A cluster without a persisted selection resolves on its shared class,
+		// whatever provisioner backs it.
+		sharedClass := &storagev1.StorageClass{
+			ObjectMeta:  metav1.ObjectMeta{Name: nvcastorage.HelmCacheSharedStorageClassName},
 			Provisioner: "nvmesh-csi-driver",
 		}
-		r := newModelCacheSelectionReconciler(t, nvmeshClass)
+		r := newModelCacheSelectionReconciler(t, sharedClass)
 		r.FeatureFlagFetcher = &featureflagmock.Fetcher{EnabledFFs: []*featureflag.FeatureFlag{
 			featureflag.CachingSupport,
 			featureflag.HelmModelCaching,
@@ -210,7 +213,7 @@ func TestSelectHelmCacheBackend(t *testing.T) {
 			t.Context(), &nvcav2beta1.ICMSRequest{}, instanceNamespace)
 
 		require.NoError(t, err)
-		assert.Equal(t, nvcastorage.HelmCacheBackendNVMesh, got)
+		assert.Equal(t, nvcastorage.HelmCacheBackendSharedFS, got)
 	})
 
 	t.Run("StorageRequest get error is returned", func(t *testing.T) {

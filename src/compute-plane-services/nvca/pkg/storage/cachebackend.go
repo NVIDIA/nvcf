@@ -57,9 +57,6 @@ const (
 )
 
 const (
-	// NVMeshStorageClassName, when present in the cluster, signals that
-	// NVMesh 3.x (with cross-namespace PV sharing) is installed.
-	NVMeshStorageClassName = "nvcf-sc-30"
 	// HelmCacheSharedStorageClassName is a legacy detection signal only: its
 	// presence tells SelectLegacyHelmCacheBackend that an operator provided
 	// third-party shared storage. Model cache volumes are provisioned on the
@@ -134,16 +131,23 @@ func PersistedHelmCacheBackend(raw string) (HelmCacheBackend, error) {
 	}
 }
 
-// SelectLegacyHelmCacheBackend resolves the legacy Helm model-cache storage backend. All
-// caching is gated on CachingSupport plus the HelmModelCaching sub-gate; the
-// mechanism is then chosen by which storage class the cluster provides,
-// falling back to Samba (when HelmSharedStorage is enabled and the block class
-// Samba needs exists) and finally to a per-pod ephemeral cache:
+// SelectLegacyHelmCacheBackend resolves the Helm model-cache backend for a
+// request that has no persisted selection, on a cluster that has not moved to
+// the capability catalog. Caching is gated on CachingSupport plus the
+// HelmModelCaching sub-gate; the mechanism is then chosen by which storage
+// class the cluster provides:
 //
-//  1. nvcf-sc-30 present    -> NVMesh 3.x installed      -> NVMesh
-//  2. nvcf-miniservice-sc present  -> operator shared storage   -> SharedFS
-//  3. HelmSharedStorage on, model cache class present -> NVCA deploys Samba -> Samba
-//  4. otherwise             -> per-pod emptyDir fallback  -> Ephemeral
+//  1. nvcf-miniservice-sc present -> operator shared storage -> SharedFS
+//  2. HelmSharedStorage on, model cache class present -> NVCA deploys Samba
+//  3. otherwise -> per-pod emptyDir fallback -> Ephemeral
+//
+// NVMesh is no longer detected here. It was identified by the presence of a
+// marker class, nvcf-sc-30, which the deployment templates no longer render;
+// NVMesh is now identified like every other backend, by the provisioner on the
+// cluster's model cache class. A legacy NVMesh cluster therefore resolves to
+// SharedFS, which reaches the same volume: the reader is derived from the
+// writer's PV and deriveReaderVolumeHandle still rewrites the namespace
+// segment for the NVMesh driver.
 //
 // modelCacheStorageClass is Agent.ModelCache.StorageClassName, the same config
 // value the storage controller provisions model cache volumes with; empty
@@ -157,14 +161,6 @@ func SelectLegacyHelmCacheBackend(
 	if !ff.IsFeatureFlagEnabled(featureflag.CachingSupport) ||
 		!ff.IsFeatureFlagEnabled(featureflag.HelmModelCaching) {
 		return HelmCacheBackendNone, nil
-	}
-
-	nvmeshPresent, err := storageClassExists(ctx, c, NVMeshStorageClassName)
-	if err != nil {
-		return "", err
-	}
-	if nvmeshPresent {
-		return HelmCacheBackendNVMesh, nil
 	}
 
 	sharedPresent, err := storageClassExists(ctx, c, HelmCacheSharedStorageClassName)

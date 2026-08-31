@@ -42,6 +42,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -1508,12 +1509,22 @@ func TestReconcile_ModelCacheSharedFS(t *testing.T) {
 		},
 	}
 	require.NoError(t, c.Create(ctx, writerPV))
-	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(rwPVC), rwPVC))
-	rwPVC.Spec.VolumeName = writerPV.Name
-	require.NoError(t, c.Update(ctx, rwPVC))
-	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(rwPVC), rwPVC))
-	rwPVC.Status.Phase = corev1.ClaimBound
-	require.NoError(t, c.Status().Update(ctx, rwPVC))
+	// The controller also writes this claim, so re-read before each update
+	// rather than racing it with a stale resourceVersion.
+	require.NoError(t, retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		if err := c.Get(ctx, client.ObjectKeyFromObject(rwPVC), rwPVC); err != nil {
+			return err
+		}
+		rwPVC.Spec.VolumeName = writerPV.Name
+		return c.Update(ctx, rwPVC)
+	}))
+	require.NoError(t, retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		if err := c.Get(ctx, client.ObjectKeyFromObject(rwPVC), rwPVC); err != nil {
+			return err
+		}
+		rwPVC.Status.Phase = corev1.ClaimBound
+		return c.Status().Update(ctx, rwPVC)
+	}))
 
 	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(initJob), initJob))
 	completeJob(ctx, t, c, initJob)
