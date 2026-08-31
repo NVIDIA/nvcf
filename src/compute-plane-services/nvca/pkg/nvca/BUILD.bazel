@@ -309,6 +309,7 @@ go_test(
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/dynamic",
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/dynamic/fake",
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/informers",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes",
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/fake",
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/listers/core/v1:core",
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/rest",
@@ -318,6 +319,7 @@ go_test(
         "//src/compute-plane-services/nvca/vendor/k8s.io/utils/ptr",
         "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/client",
         "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/client/fake",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/envtest",
         "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/yaml",
     ],
 )
