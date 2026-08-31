@@ -93,4 +93,78 @@ assert_render_fails "${WORK_DIR}/bad-value.yaml" \
   "value must be 'LLM'" \
   "an unrecognized functionType is rejected"
 
+# The gateway rejects each of these at startup. The schema must reject them at
+# render time instead, so a bad values file never reaches a running container.
+
+write_route() {
+  local endpoint="$1" section="$2" extra="$3" out="$4"
+  cat > "${out}" <<EOF
+vanityGateway:
+  image:
+    registry: example.com
+    repository: foo/bar
+  config:
+    llmGatewayEndpoint: "${endpoint}"
+  mappingConfig:
+    v2config:
+      openai:
+        host: api.example.com
+        ${section}:
+          a_model:
+            modelName: acme/a-model
+            functionID: 00000000-0000-0000-0000-000000000001
+${extra}
+EOF
+}
+
+ENDPOINT="http://llm-api-gateway.nvcf.svc.cluster.local:8080"
+
+# functionType is only meaningful on the three routes the LLM Gateway serves.
+for section in completions imageGenerations imageEdits imageVariations; do
+  write_route "${ENDPOINT}" "${section}" "            functionType: LLM" "${WORK_DIR}/s.yaml"
+  assert_render_fails "${WORK_DIR}/s.yaml" "openai/${section}/a_model" \
+    "functionType: LLM is rejected in ${section}"
+done
+
+# Invocation-only fields do not apply to a model the LLM Gateway serves.
+write_route "${ENDPOINT}" chatCompletions "            functionType: LLM
+            usePexec: true" "${WORK_DIR}/f.yaml"
+assert_render_fails "${WORK_DIR}/f.yaml" "a_model/usePexec" "usePexec is rejected on an LLM model"
+
+write_route "${ENDPOINT}" chatCompletions "            functionType: LLM
+            outgoingPathOverride: /echo" "${WORK_DIR}/f.yaml"
+assert_render_fails "${WORK_DIR}/f.yaml" "a_model/outgoingPathOverride" "outgoingPathOverride is rejected on an LLM model"
+
+write_route "${ENDPOINT}" chatCompletions "            functionType: LLM
+            sessionTimeout: 900" "${WORK_DIR}/f.yaml"
+assert_render_fails "${WORK_DIR}/f.yaml" "a_model/sessionTimeout" "sessionTimeout is rejected on an LLM model"
+
+# The LLM Gateway answers 400 for any request carrying X-Priority.
+write_route "${ENDPOINT}" chatCompletions "            functionType: LLM
+            customHeaders:
+              X-Priority: \"5\"" "${WORK_DIR}/f.yaml"
+assert_render_fails "${WORK_DIR}/f.yaml" "a_model/customHeaders" "an X-Priority custom header is rejected on an LLM model"
+
+# Zero values are what an absent key produces, so the gateway accepts them.
+write_route "${ENDPOINT}" chatCompletions "            functionType: LLM
+            usePexec: false
+            sessionTimeout: 0
+            outgoingPathOverride: \"\"" "${WORK_DIR}/z.yaml"
+assert_render_succeeds "${WORK_DIR}/z.yaml" "zero-valued invocation fields render on an LLM model"
+
+# Shadow traffic is supported on LLM models.
+write_route "${ENDPOINT}" chatCompletions "            functionType: LLM
+            shadowModelNames:
+              - acme/a-model-next
+            shadowPercentage: 50" "${WORK_DIR}/sh.yaml"
+assert_render_succeeds "${WORK_DIR}/sh.yaml" "shadow traffic renders on an LLM model"
+
+# The endpoint is an origin. The proxy preserves the caller path and the
+# transport only speaks http and https.
+for bad in "ftp://llm-gateway:8080" "http://llm-gateway:8080/v1"; do
+  write_route "${bad}" chatCompletions "            functionType: LLM" "${WORK_DIR}/e.yaml"
+  assert_render_fails "${WORK_DIR}/e.yaml" "does not match pattern" \
+    "endpoint ${bad} is rejected"
+done
+
 echo "All LLM Gateway routing render checks passed."
