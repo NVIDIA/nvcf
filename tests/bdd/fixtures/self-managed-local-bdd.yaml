@@ -31,6 +31,10 @@ global:
     essServiceURL: http://ess-api.ess.svc.cluster.local:8080
     invocationServiceURL: http://invocation.nvcf.svc.cluster.local:8080
 
+# Local BDD does not install the optional observability stack.
+observability:
+  profile: disabled
+
 cassandra:
   replicaCount: 1
   resourcesPreset: "large"
