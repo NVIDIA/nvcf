@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Replace these static-render placeholders with published development images,
+# then set deploymentReady to true. The apply wrapper rejects this file while
+# it is false.
+deploymentReady: false
+images:
+  stargate:
+    repository: example.invalid/stargate
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  auth:
+    repository: example.invalid/stargate-dev-auth
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  mockDynamo:
+    repository: example.invalid/mock-dynamo
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  pylon:
+    repository: example.invalid/pylon
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000

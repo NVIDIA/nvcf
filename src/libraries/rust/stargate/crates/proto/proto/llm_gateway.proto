@@ -18,7 +18,28 @@ syntax = "proto3";
 package llm_gateway;
 
 service LlmGateway {
+    rpc AuthLlmInvocation (AuthLlmInvokeRequest) returns (AuthLlmInvokeResponse);
     rpc AuthLlmWorker (AuthLlmWorkerRequest) returns (AuthLlmWorkerResponse);
+}
+
+message AuthLlmInvokeRequest {
+    string clientAuthorizationToken = 1;
+    string routingKey = 2;
+}
+
+message AuthLlmInvokeResponse {
+    string routingKey = 1;
+    string clientAuthSubject = 2;
+    map<string, string> authContext = 3;
+    map<string, ModelSpec> modelSpecs = 4;
+    optional uint32 priority = 5;
+
+    message ModelSpec {
+        repeated string uris = 1;
+        optional string tokenRateLimit = 2;
+        optional string tokenizer = 3;
+        optional string routingMethod = 4;
+    }
 }
 
 message AuthLlmWorkerRequest {

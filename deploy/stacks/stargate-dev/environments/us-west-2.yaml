@@ -1,0 +1,80 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Fill the regional network and TLS values, create the named kube contexts,
+# then set deploymentReady to true. Credentials belong only in the protected
+# file created by scripts/deploy.py init.
+deploymentReady: false
+namespace: stargate-dev
+region: us-west-2
+awsAccountIdEnv: STARGATE_DEV_AWS_ACCOUNT_ID
+kubernetesVersion: "1.34"
+modelName: stargate-dev-model
+
+clusters:
+  stargate:
+    name: stargate-usw2
+    kubeContext: stargate-usw2
+    nodeInstanceType: c7i.xlarge
+    nodeCount: 3
+  mockdcs:
+    - name: mockdc-usw2-a
+      kubeContext: mockdc-usw2-a
+      nodeInstanceType: t3.medium
+      nodeCount: 2
+      quicCaSecretName: stargate-router-ca
+      mockDynamo:
+        backend0:
+          numTokens: 10
+          tokenDelayMs: 100
+          decodeJitterMs: 0
+          ttftMs: 50
+          ttftJitterMs: 0
+          prefillTokensPerSecond: 0
+          maxConcurrentRequests: 0
+          healthDelayMs: 0
+          kvCacheCapacityTokens: 0
+        backend1:
+          numTokens: 10
+          tokenDelayMs: 100
+          decodeJitterMs: 0
+          ttftMs: 50
+          ttftJitterMs: 0
+          prefillTokensPerSecond: 0
+          maxConcurrentRequests: 0
+          healthDelayMs: 0
+          kvCacheCapacityTokens: 0
+    - name: mockdc-usw2-b
+      kubeContext: mockdc-usw2-b
+      nodeInstanceType: t3.medium
+      nodeCount: 2
+      quicCaSecretName: stargate-router-ca
+      mockDynamo:
+        backend0:
+          numTokens: 10
+          tokenDelayMs: 100
+          decodeJitterMs: 0
+          ttftMs: 50
+          ttftJitterMs: 0
+          prefillTokensPerSecond: 0
+          maxConcurrentRequests: 0
+          healthDelayMs: 0
+          kvCacheCapacityTokens: 0
+        backend1:
+          numTokens: 10
+          tokenDelayMs: 100
+          decodeJitterMs: 0
+          ttftMs: 50
+          ttftJitterMs: 0
+          prefillTokensPerSecond: 0
+          maxConcurrentRequests: 0
+          healthDelayMs: 0
+          kvCacheCapacityTokens: 0
+
+router:
+  hostname: router.usw2.stargate-dev.example.invalid
+  acmCertificateArn: arn:aws:acm:us-west-2:000000000000:certificate/00000000-0000-0000-0000-000000000000
+  tlsSecretName: stargate-router-tls
+  externalDnsEnabled: false
+  loadBalancerSourceRanges:
+    - 192.0.2.0/24

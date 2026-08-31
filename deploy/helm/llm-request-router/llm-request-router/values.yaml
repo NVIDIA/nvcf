@@ -44,6 +44,9 @@ llmRequestRouter:
     registry: ""
     repository: ""
     tag: "0.15.1"
+    # When set, the chart renders repository@digest and ignores tag for the
+    # Pod image. Keep tag populated for Kubernetes labels.
+    digest: ""
     pullPolicy: IfNotPresent
 
   imagePullSecrets: []
@@ -118,6 +121,7 @@ llmRequestRouter:
       registry: ""
       repository: ""
       tag: ""
+      digest: ""
       pullPolicy: ""
     # Addresses workers dial to reach the router. The gRPC address is an
     # explicit HTTP(S) URI; the reverse-tunnel address remains host:port. Both
@@ -130,6 +134,11 @@ llmRequestRouter:
       annotations: {}
       name: ""
     service:
+      type: ClusterIP
+      annotations: {}
+      loadBalancerClass: ""
+      loadBalancerSourceRanges: []
+      externalTrafficPolicy: ""
       grpcPort: 50071
       reverseTunnelPort: 50072
       healthPort: 8080
@@ -266,9 +275,18 @@ llmRequestRouter:
 
   auth:
     workerAuthEndpoint: "http://api.nvcf.svc.cluster.local:9090"
+    # Mount a pre-created Secret instead of using Vault injection. This is
+    # useful for static development credentials. Set vault.noVaultAnnotations
+    # to true when this source is configured.
+    existingSecret:
+      name: ""
+      key: "service-token.json"
+      mountPath: "/var/run/secrets/stargate-auth"
+      jsonPath: "nvcfApiToken"
 
   vault:
     audience: ""
+    noVaultAnnotations: false
 
   tls:
     # Source of the QUIC server identity.

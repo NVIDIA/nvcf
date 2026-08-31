@@ -34,6 +34,16 @@ router instance that issued the tunnel target.
 */}}
 {{- $replicaCount := .Values.llmRequestRouter.replicaCount | int }}
 {{- $backendRouterEnabled := eq (include "llm-request-router.backendRouterEnabled" .) "true" }}
+{{- $authSecret := .Values.llmRequestRouter.auth.existingSecret | default dict }}
+{{- $authSecretName := dig "name" "" $authSecret | toString | trim }}
+{{- if $authSecretName }}
+{{- $_ := required "llmRequestRouter.auth.existingSecret.key is required when name is set" (dig "key" "" $authSecret) }}
+{{- $_ := required "llmRequestRouter.auth.existingSecret.mountPath is required when name is set" (dig "mountPath" "" $authSecret) }}
+{{- $_ := required "llmRequestRouter.auth.existingSecret.jsonPath is required when name is set" (dig "jsonPath" "" $authSecret) }}
+{{- if not (dig "vault" "noVaultAnnotations" false .Values.llmRequestRouter) }}
+{{- fail "llmRequestRouter.vault.noVaultAnnotations must be true when auth.existingSecret.name is set" }}
+{{- end }}
+{{- end }}
 {{- $configuredDisableDnsDiscovery := dig "discovery" "disableDnsDiscovery" false .Values.llmRequestRouter }}
 {{- $directDeployment := and (eq $workloadKind "Deployment") (not $backendRouterEnabled) }}
 {{- $disableDnsDiscovery := or $configuredDisableDnsDiscovery $directDeployment }}
@@ -167,7 +177,10 @@ spec:
             {{- end }}
             {{- with .Values.llmRequestRouter.auth.workerAuthEndpoint }}
             - --worker-auth-endpoint={{ . }}
-            {{- if not (and $.Values.llmRequestRouter.vault $.Values.llmRequestRouter.vault.noVaultAnnotations) }}
+            {{- if $authSecretName }}
+            - --secrets-path={{ printf "%s/%s" (dig "mountPath" "" $authSecret | trimSuffix "/") (dig "key" "" $authSecret) }}
+            - --secrets-json-path={{ dig "jsonPath" "" $authSecret }}
+            {{- else if not (and $.Values.llmRequestRouter.vault $.Values.llmRequestRouter.vault.noVaultAnnotations) }}
             - --secrets-path=/vault/secrets/secrets.json
             - --secrets-json-path=nvcfApiToken
             {{- end }}
@@ -224,9 +237,15 @@ spec:
           securityContext:
             {{- toYaml .Values.llmRequestRouter.securityContext | nindent 12 }}
           volumeMounts:
+            {{- if $authSecretName }}
+            - name: worker-auth
+              mountPath: {{ dig "mountPath" "" $authSecret | quote }}
+              readOnly: true
+            {{- else }}
             - name: vault-config-templates
               mountPath: /vault/config/templates
               readOnly: true
+            {{- end }}
             {{- if .Values.llmRequestRouter.loadBalancer.config }}
             - name: lb-config
               mountPath: /etc/llm-request-router
@@ -240,6 +259,14 @@ spec:
               readOnly: true
             {{- end }}
       volumes:
+        {{- if $authSecretName }}
+        - name: worker-auth
+          secret:
+            secretName: {{ $authSecretName | quote }}
+            items:
+              - key: {{ dig "key" "" $authSecret | quote }}
+                path: {{ dig "key" "" $authSecret | quote }}
+        {{- else }}
         - name: vault-token
           projected:
             sources:
@@ -253,6 +280,7 @@ spec:
             items:
               - key: secrets.json.tmpl
                 path: secrets.json.tmpl
+        {{- end }}
         {{- if .Values.llmRequestRouter.loadBalancer.config }}
         - name: lb-config
           configMap:

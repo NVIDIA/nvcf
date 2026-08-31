@@ -1,0 +1,181 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+environments:
+  us-west-2:
+    values:
+      - environments/us-west-2.yaml
+      - values/versions.yaml
+
+---
+
+{{- $credentialsPath := requiredEnv "STARGATE_DEV_CREDENTIALS_FILE" -}}
+{{- $credentials := readFile $credentialsPath | fromJson -}}
+{{- if ne ($credentials.region | toString) .Environment.Name -}}
+{{- fail "credential bundle region does not match the Helmfile environment" -}}
+{{- end -}}
+
+helmDefaults:
+  atomic: true
+  cleanupOnFail: true
+  createNamespace: true
+  wait: true
+  timeout: 600
+
+releases:
+  - name: stargate-dev-auth
+    namespace: {{ .Values.namespace }}
+    kubeContext: {{ .Values.clusters.stargate.kubeContext }}
+    chart: ./charts/stargate-dev-auth
+    labels:
+      phase: stargate
+      component: auth
+    values:
+      - image:
+          repository: {{ .Values.images.auth.repository }}
+          digest: {{ .Values.images.auth.digest }}
+        credentials:
+          serviceToken: {{ $credentials.serviceToken | quote }}
+          clientToken: {{ $credentials.clientToken | quote }}
+          workers:
+            {{- range $mockdc := .Values.clusters.mockdcs }}
+            - token: {{ required (printf "credential bundle is missing worker token for %s" $mockdc.name) (sprigGet $credentials.workers $mockdc.name) | quote }}
+              routingKey: {{ $mockdc.name }}
+            {{- end }}
+
+  - name: llm-request-router
+    namespace: {{ .Values.namespace }}
+    kubeContext: {{ .Values.clusters.stargate.kubeContext }}
+    chart: ../../helm/llm-request-router/llm-request-router
+    needs:
+      - {{ .Values.namespace }}/stargate-dev-auth
+    labels:
+      phase: stargate
+      component: router
+    values:
+      - llmRequestRouter:
+          replicaCount: 3
+          image:
+            repository: {{ .Values.images.stargate.repository }}
+            digest: {{ .Values.images.stargate.digest }}
+          podAnnotations:
+            prometheus.io/scrape: "true"
+            prometheus.io/path: /metrics
+            prometheus.io/port: "9090"
+          podDisruptionBudget:
+            enabled: true
+            minAvailable: 2
+            maxUnavailable: ""
+          affinity:
+            podAntiAffinity:
+              preferredDuringSchedulingIgnoredDuringExecution:
+                - weight: 100
+                  podAffinityTerm:
+                    topologyKey: kubernetes.io/hostname
+                    labelSelector:
+                      matchLabels:
+                        app.kubernetes.io/name: llm-request-router
+                        app.kubernetes.io/instance: llm-request-router
+                - weight: 90
+                  podAffinityTerm:
+                    topologyKey: topology.kubernetes.io/zone
+                    labelSelector:
+                      matchLabels:
+                        app.kubernetes.io/name: llm-request-router
+                        app.kubernetes.io/instance: llm-request-router
+          kubernetes:
+            advertisedHostnameTemplate: "{pod_name}.{{ .Values.router.hostname }}"
+          backendRouter:
+            enabled: true
+            replicaCount: 3
+            pylonGrpcDialAddress: https://{{ .Values.router.hostname }}:50071
+            pylonReverseTunnelDialAddress: {{ .Values.router.hostname }}:50072
+            podAnnotations:
+              prometheus.io/scrape: "true"
+              prometheus.io/path: /metrics
+              prometheus.io/port: "8080"
+            podDisruptionBudget:
+              enabled: true
+              minAvailable: 2
+              maxUnavailable: ""
+            affinity:
+              podAntiAffinity:
+                preferredDuringSchedulingIgnoredDuringExecution:
+                  - weight: 100
+                    podAffinityTerm:
+                      topologyKey: kubernetes.io/hostname
+                      labelSelector:
+                        matchLabels:
+                          app.kubernetes.io/name: llm-request-router-backend-router
+                          app.kubernetes.io/instance: llm-request-router
+                  - weight: 90
+                    podAffinityTerm:
+                      topologyKey: topology.kubernetes.io/zone
+                      labelSelector:
+                        matchLabels:
+                          app.kubernetes.io/name: llm-request-router-backend-router
+                          app.kubernetes.io/instance: llm-request-router
+            service:
+              type: LoadBalancer
+              loadBalancerClass: service.k8s.aws/nlb
+              loadBalancerSourceRanges:
+                {{- toYaml .Values.router.loadBalancerSourceRanges | nindent 16 }}
+              annotations:
+                service.beta.kubernetes.io/aws-load-balancer-scheme: internal
+                service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
+                service.beta.kubernetes.io/aws-load-balancer-ssl-cert: {{ .Values.router.acmCertificateArn | quote }}
+                service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "50071"
+                service.beta.kubernetes.io/aws-load-balancer-backend-protocol: tcp
+                service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: TCP
+                service.beta.kubernetes.io/aws-load-balancer-healthcheck-port: "8080"
+                service.beta.kubernetes.io/aws-load-balancer-attributes: load_balancing.cross_zone.enabled=true
+                {{- if .Values.router.externalDnsEnabled }}
+                external-dns.alpha.kubernetes.io/hostname: {{ .Values.router.hostname | quote }}
+                {{- end }}
+          auth:
+            workerAuthEndpoint: http://stargate-dev-auth.{{ .Values.namespace }}.svc.cluster.local:50051
+            existingSecret:
+              name: stargate-dev-auth
+              key: service-token.json
+              mountPath: /var/run/secrets/stargate-auth
+              jsonPath: nvcfApiToken
+          vault:
+            noVaultAnnotations: true
+          tls:
+            mode: existingSecret
+            secretName: {{ .Values.router.tlsSecretName }}
+            mountPath: /var/run/stargate/tls
+            certPath: /var/run/stargate/tls/tls.crt
+            keyPath: /var/run/stargate/tls/tls.key
+            quicInsecure: false
+          metrics:
+            enabled: true
+            serviceMonitor:
+              enabled: false
+
+{{- range $mockdc := .Values.clusters.mockdcs }}
+  - name: {{ $mockdc.name }}
+    namespace: {{ $.Values.namespace }}
+    kubeContext: {{ $mockdc.kubeContext }}
+    chart: ./charts/stargate-dev-mockdc
+    labels:
+      phase: mockdc
+      component: mockdc
+      cluster: {{ $mockdc.name }}
+    values:
+      - clusterId: {{ $mockdc.name }}
+        modelName: {{ $.Values.modelName }}
+        workerToken: {{ required (printf "credential bundle is missing worker token for %s" $mockdc.name) (sprigGet $credentials.workers $mockdc.name) | quote }}
+        stargate:
+          address: https://{{ $.Values.router.hostname }}:50071
+          quicCaSecretName: {{ $mockdc.quicCaSecretName }}
+        images:
+          mockDynamo:
+            repository: {{ $.Values.images.mockDynamo.repository }}
+            digest: {{ $.Values.images.mockDynamo.digest }}
+          pylon:
+            repository: {{ $.Values.images.pylon.repository }}
+            digest: {{ $.Values.images.pylon.digest }}
+        mockDynamo:
+          {{- toYaml $mockdc.mockDynamo | nindent 10 }}
+{{- end }}
