@@ -55,6 +55,8 @@ drivers:
     provider: nvmesh
     accessModes: [ReadWriteOnce, ReadOnlyMany]
     readerMountOptions: [ro, norecovery, nouuid]
+    capabilities:
+      crossNamespaceVolumeSharing: true
     transitions:
       regularModelCache: roxReadOnly
       helmModelCache: roxReadOnly
@@ -77,6 +79,7 @@ func validStorageCapabilityCatalog() *storageCapabilityCatalog {
 				Provider:           "nvmesh",
 				AccessModes:        accessModes("ReadWriteOnce", "ReadOnlyMany"),
 				ReaderMountOptions: readerMountOptions("ro", "norecovery", "nouuid"),
+				Capabilities:       storageCapabilities{CrossNamespaceVolumeSharing: true},
 				Transitions: storageTransitions{
 					RegularModelCache: ModelCacheTransitionROXReadOnly,
 					HelmModelCache:    ModelCacheTransitionROXReadOnly,

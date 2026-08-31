@@ -450,7 +450,7 @@ drivers:
     readerMountOptions: [ro]
     transitions:
       regularModelCache: roxReadOnly
-      helmModelCache: roxReadOnly
+      helmModelCache: disabled
 `
 	_, err := parseStorageCapabilityCatalog(wekaROXCatalog)
 	require.NoError(t, err, "a non-NVMesh driver must be able to declare roxReadOnly")
@@ -483,6 +483,41 @@ drivers:
 		"accessModes: [ReadWriteOnce, ReadOnlyMany]", "accessModes: [ReadWriteMany]", 1)
 	_, err = parseStorageCapabilityCatalog(unqualified)
 	require.ErrorContains(t, err, "requires ReadWriteOnce and ReadOnlyMany access modes")
+}
+
+// TestHelmROXRequiresCrossNamespaceCapability pins the split the design calls
+// for: regular caching keeps its reader in the same namespace, so proven
+// access modes are enough for any driver. Helm caching must reach another
+// namespace, which NVCA does by deriving a reader PV from the writer's CSI
+// volume handle. Only a driver that declares that capability may run
+// roxReadOnly for Helm; everything else must use a ReadWriteMany claim.
+func TestHelmROXRequiresCrossNamespaceCapability(t *testing.T) {
+	const wekaHelmROX = `apiVersion: storage.nvcf.nvidia.com/v1alpha1
+kind: StorageCapabilityCatalog
+drivers:
+  csi.weka.io:
+    provider: weka
+    accessModes: [ReadWriteOnce, ReadOnlyMany]
+    readerMountOptions: [ro]
+    transitions:
+      regularModelCache: roxReadOnly
+      helmModelCache: roxReadOnly
+`
+	_, err := parseStorageCapabilityCatalog(wekaHelmROX)
+	require.ErrorContains(t, err, "requires capability crossNamespaceVolumeSharing")
+
+	// Regular-only is fine for the same driver: no namespace is crossed.
+	regularOnly := strings.Replace(wekaHelmROX, "helmModelCache: roxReadOnly", "helmModelCache: disabled", 1)
+	_, err = parseStorageCapabilityCatalog(regularOnly)
+	require.NoError(t, err, "a driver without the capability may still cache for regular functions")
+
+	// Declaring the capability makes the Helm transition legal again, and it
+	// is a catalog edit rather than a code change.
+	withCapability := strings.Replace(wekaHelmROX,
+		"    transitions:",
+		"    capabilities:\n      crossNamespaceVolumeSharing: true\n    transitions:", 1)
+	_, err = parseStorageCapabilityCatalog(withCapability)
+	require.NoError(t, err)
 }
 
 // profileDigestFor computes the qualified-profile digest the resolver would

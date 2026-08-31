@@ -37,6 +37,13 @@
       "type": "string",
       "enum": ["disabled", "roxReadOnly"]
     },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "crossNamespaceVolumeSharing": {"type": "boolean"}
+      }
+    },
     "transitions": {
       "type": "object",
       "additionalProperties": false,
@@ -88,6 +95,7 @@
             }
           ]
         },
+        "capabilities": {"$ref": "#/$defs/capabilities"},
         "transitions": {"$ref": "#/$defs/transitions"}
       },
       "allOf": [

@@ -103,10 +103,25 @@ type storageCapabilityCatalog struct {
 }
 
 type storageDriverSpec struct {
-	Provider           string             `json:"provider"`
-	AccessModes        *[]string          `json:"accessModes"`
-	ReaderMountOptions *[]string          `json:"readerMountOptions"`
-	Transitions        storageTransitions `json:"transitions"`
+	Provider           string              `json:"provider"`
+	AccessModes        *[]string           `json:"accessModes"`
+	ReaderMountOptions *[]string           `json:"readerMountOptions"`
+	Capabilities       storageCapabilities `json:"capabilities,omitempty"`
+	Transitions        storageTransitions  `json:"transitions"`
+}
+
+// storageCapabilities records driver behaviors that a transition needs but
+// that no PVC access mode expresses.
+type storageCapabilities struct {
+	// CrossNamespaceVolumeSharing means one populated volume can be exposed
+	// read-only in another namespace by deriving a second PV from the first.
+	// NVCA derives the reader by rewriting the namespace segment of the CSI
+	// volume handle, so only a driver whose handles encode the namespace that
+	// way can do it. Helm model caching is cross-namespace by nature, so
+	// roxReadOnly is only available to the Helm workflow on such a driver.
+	// Every other backend must serve Helm caching from one ReadWriteMany
+	// claim instead.
+	CrossNamespaceVolumeSharing bool `json:"crossNamespaceVolumeSharing,omitempty"`
 }
 
 type storageTransitions struct {
@@ -624,6 +639,15 @@ func validateStorageCapabilityCatalog(catalog *storageCapabilityCatalog) error {
 				if !readerMountOptions["ro"] {
 					return fmt.Errorf("driver %q transition %s strategy %s requires readerMountOption %q",
 						provisioner, workflow, strategy, "ro")
+				}
+				// Regular caching keeps its reader in the same namespace, so
+				// proven access modes are enough. Helm caching must reach
+				// another namespace, which needs the derived-reader capability.
+				if workflow == string(ModelCacheWorkflowHelm) && !driver.Capabilities.CrossNamespaceVolumeSharing {
+					return fmt.Errorf(
+						"driver %q transition %s strategy %s requires capability crossNamespaceVolumeSharing; "+
+							"a driver without it must serve Helm model caching from a ReadWriteMany claim",
+						provisioner, workflow, strategy)
 				}
 			case ModelCacheTransitionRWXReadOnly:
 				if workflow != string(ModelCacheWorkflowRegular) {

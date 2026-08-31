@@ -52,6 +52,8 @@ drivers:
     provider: nvmesh
     accessModes: [ReadWriteOnce, ReadOnlyMany]
     readerMountOptions: [ro, norecovery, nouuid]
+    capabilities:
+      crossNamespaceVolumeSharing: true
     transitions:
       regularModelCache: roxReadOnly
       helmModelCache: roxReadOnly

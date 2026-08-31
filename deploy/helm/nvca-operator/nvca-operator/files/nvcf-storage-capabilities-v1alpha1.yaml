@@ -34,6 +34,11 @@ drivers:
       - ro
       - norecovery
       - nouuid
+    capabilities:
+      # NVMesh volume handles encode the namespace, so NVCA can derive a
+      # read-only reader PV for another namespace from the writer's volume.
+      # This is what makes roxReadOnly legal for the Helm workflow here.
+      crossNamespaceVolumeSharing: true
     transitions:
       regularModelCache: roxReadOnly
       helmModelCache: roxReadOnly
