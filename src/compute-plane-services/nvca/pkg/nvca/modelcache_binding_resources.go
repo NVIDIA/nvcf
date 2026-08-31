@@ -82,12 +82,6 @@ func (c K8sComputeBackend) prepareRegularModelCacheBindingResources(
 				kind, namespace, binding.Spec.Resources.WriterNamespace))
 		}
 	}
-	if binding.Spec.Decision.Transition == nvcastorage.ModelCacheTransitionRWXReadOnly {
-		if err := prepareRWXReadOnlySharedWriterJob(initJob); err != nil {
-			return nvcaerrors.TerminalError(err)
-		}
-	}
-
 	for _, obj := range []metav1.Object{rwPVC, initJob, &initJob.Spec.Template.ObjectMeta} {
 		canonicalizeRegularModelCacheSharedMetadata(obj)
 		if err := nvcastorage.SetModelCacheBindingUIDLabel(obj, binding.UID); err != nil {

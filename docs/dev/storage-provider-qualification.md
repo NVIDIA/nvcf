@@ -75,20 +75,16 @@ manifest; readers verified the SHA-256.
 Weka qualifies for `[ReadWriteMany, ReadOnlyMany]`. Cross-namespace sharing
 works and read-only is enforced.
 
-This enables Helm model caching. Function model caching stays off on a
-ReadWriteMany driver for a reason that is not about the storage: the regular
-workflow populates its cache with a Job that is retained and shared across
-requests, so `prepareRWXReadOnlySharedWriterJob` rejects a writer carrying
-image pull secrets, environment input, or Secret-backed volumes. A shared
-retained Job would outlive the request whose credentials it captured.
+This enables both workflows. The writers differ only in where they run:
+Helm caching crosses namespaces and derives a reader PV per namespace, while
+function caching stays in `nvcf-backend` and mounts the one shared claim
+read-only.
 
-Real requests carry both. A cache-bearing `INIT_CACHE_JOB_SPEC` launch
-artifact read from a live cluster had one image pull secret and 44 container
-environment variables, among them `CONTAINER_REGISTRIES_CREDENTIALS` and
-`FUNCTION_SECRETS_PRESENT`. Enabling the transition there would fail those
-requests terminally, so the derivation returns disabled until binding-scoped
-credential identity exists. The Helm writer is per handle and owns its own
-pull Secrets, so it is unaffected.
+A cache-bearing `INIT_CACHE_JOB_SPEC` launch artifact read from a live cluster
+carries one image pull secret and 44 container environment variables, among
+them `CONTAINER_REGISTRIES_CREDENTIALS`. The writer is prepared the same way
+on both paths, which keeps those inputs, and idle binding retirement bounds
+how long a retained writer holds them.
 
 The mechanism is a static PV in the reader namespace that reuses the writer's
 volume handle unchanged. Weka handles look like

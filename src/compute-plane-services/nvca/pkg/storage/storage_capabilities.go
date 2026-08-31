@@ -136,30 +136,10 @@ func transitionForWorkflow(driver storageDriverSpec, workflow ModelCacheWorkflow
 	switch workflow {
 	case ModelCacheWorkflowRegular:
 		switch {
-		case rox:
-			// The ROX writer claim belongs to one request, so it carries that
-			// request's credentials and is unaffected by the restriction below.
-			return ModelCacheTransitionROXReadOnly
 		case rwx:
-			// Not yet. The regular workflow populates a ReadWriteMany cache
-			// with a Job that is retained and shared across requests, so
-			// prepareRWXReadOnlySharedWriterJob rejects a writer carrying
-			// imagePullSecrets, environment input or Secret-backed volumes: a
-			// shared retained Job would outlive the request whose credentials
-			// it captured.
-			//
-			// Real requests carry both. A cache-bearing INIT_CACHE_JOB_SPEC
-			// artifact read from a live cluster had one imagePullSecret and 44
-			// container environment variables, among them
-			// CONTAINER_REGISTRIES_CREDENTIALS and FUNCTION_SECRETS_PRESENT.
-			// Returning rwxReadOnly here would fail those requests terminally.
-			//
-			// Lifting this needs binding-scoped credential identity, with
-			// create, adoption, rotation and cleanup. The Helm workflow is
-			// unaffected: its writer is per handle and owns its own pull
-			// Secrets, which is why Helm caching on a ReadWriteMany backend is
-			// enabled below.
-			return ModelCacheTransitionDisabled
+			return ModelCacheTransitionRWXReadOnly
+		case rox:
+			return ModelCacheTransitionROXReadOnly
 		}
 	case ModelCacheWorkflowHelm:
 		switch {
