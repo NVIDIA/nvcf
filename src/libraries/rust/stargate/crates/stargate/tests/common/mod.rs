@@ -40,6 +40,7 @@ use stargate::discovery::Discovery;
 use stargate::proxy::{ProxyTransportConfig, QuicTunnelConfig};
 use stargate::runtime::{
     BoundStargateListeners, ReverseTunnelConfig, StargateRuntime, StargateRuntimeConfig,
+    WarmupConfig,
 };
 use stargate_forwarding::{ForwardingResolver, PeerResolution, PeerTarget};
 use stargate_proto::pb::{InferenceServerStatus, StargateInfo};
@@ -517,7 +518,6 @@ pub fn base_config(
         grpc_listen_addr: grpc_addr,
         model_discovery_listen_addr: "127.0.0.1:0".parse().unwrap(),
         http_listen_addr: http_addr,
-        readiness_warmup: stargate::runtime::DEFAULT_READINESS_WARMUP,
         metrics_listen_addr: None,
         advertise_addr: grpc_addr,
         stargate_discovery_dns_name: "localhost".to_string(),
@@ -547,6 +547,7 @@ pub fn base_config(
         metrics_prefix: stargate::metrics::DEFAULT_PREFIX.to_string(),
         forwarding: None,
         authenticator: Arc::new(stargate::auth::OpenAuthenticator),
+        warmup: WarmupConfig::default(),
     }
 }
 
@@ -702,15 +703,14 @@ fn reverse_tunnel_config(
 }
 
 pub fn make_stargate_runtime(id: &str) -> (SocketAddr, SocketAddr, StargateRuntime) {
-    make_stargate_runtime_with_readiness_warmup(id, stargate::runtime::DEFAULT_READINESS_WARMUP)
-}
-
-pub fn make_stargate_runtime_with_readiness_warmup(
-    id: &str,
-    readiness_warmup: Duration,
-) -> (SocketAddr, SocketAddr, StargateRuntime) {
+    // Use a long warmup duration so tests that rely on 503 during warmup
+    // (e.g. readyz_returns_503_during_warmup) behave correctly without
+    // needing a specific WarmupConfig at the call site.
     let mut config = base_ephemeral_config(id);
-    config.readiness_warmup = readiness_warmup;
+    config.warmup = WarmupConfig {
+        warmup_duration: Duration::from_secs(60),
+        ..WarmupConfig::default()
+    };
     build_test_runtime(id, config, TestDiscovery::SelfOnly, None).standard()
 }
 
