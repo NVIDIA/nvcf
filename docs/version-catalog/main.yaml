@@ -128,7 +128,7 @@ publications:
     published_version: 0.8.3-ea
     registry: selfhosted-ga
   - name: llm-request-router
-    version: 0.14.1
+    version: 0.14.2
     registry: public-images
   - name: nats-server-config-reloader
     version: 0.23.0
@@ -971,7 +971,7 @@ supplemental_artifacts:
     type: image
     registry: staging
     repository_name: stargate
-    version: 0.14.1
+    version: 0.14.2
   - name: nvcf-ai-api-gateway-service
     type: image
     registry: staging

@@ -574,6 +574,12 @@ invocation:
   {{- . | nindent 2 }}
   {{- end }}
 
+  metrics:
+    enabled: {{ or (eq (dig "observability" "profile" "disabled" .Values) "control") (eq (dig "observability" "profile" "disabled" .Values) "all") }}
+    # The observability stack owns the shared ServiceMonitor resources.
+    serviceMonitor:
+      enabled: false
+
   env:
     # Observability
     {{- if .Values.global.observability.tracing.enabled }}
