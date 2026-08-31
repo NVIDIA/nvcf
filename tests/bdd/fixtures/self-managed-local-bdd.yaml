@@ -88,6 +88,9 @@ addons:
               "random": "random"
             }
           }
+  vanityGateway:
+    enabled: true
+    replicaCount: 1
 
 # Gateway API Ingress (POC)
 # Application Developer role: Only HTTPRoutes
