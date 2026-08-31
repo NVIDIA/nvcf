@@ -32,8 +32,11 @@ import (
 // values from the feature file.
 func registerAssertionSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^the command exit code should be (\d+)$`, sc.commandExitCodeShouldBe)
+	ctx.Step(`^the command should fail$`, sc.commandShouldFail)
 	ctx.Step(`^the command output should contain "([^"]*)"$`, sc.commandOutputShouldContain)
 	ctx.Step(`^the command output should not contain "([^"]*)"$`, sc.commandOutputShouldNotContain)
+	ctx.Step(`^the command output should contain all:$`, sc.commandOutputShouldContainAll)
+	ctx.Step(`^the command output should contain one of:$`, sc.commandOutputShouldContainOneOf)
 	ctx.Step(`^file "([^"]*)" should exist$`, sc.fileShouldExist)
 	ctx.Step(`^yaml file "([^"]*)" key "([^"]*)" should equal "([^"]*)"$`, sc.yamlFileKeyShouldEqual)
 	ctx.Step(`^yaml file "([^"]*)" key "([^"]*)" should not be empty$`, sc.yamlFileKeyShouldNotBeEmpty)
@@ -87,9 +90,19 @@ func (sc *ScenarioContext) commandExitCodeShouldBe(expected int) error {
 	return nil
 }
 
+func (sc *ScenarioContext) commandShouldFail() error {
+	if sc.LastResult.ExitCode == 0 {
+		return fmt.Errorf("exit code = 0, want non-zero (see %s for stdout/stderr)", sc.Suite.Config.CommandLogDir)
+	}
+	return nil
+}
+
 func (sc *ScenarioContext) commandOutputShouldContain(needle string) error {
 	combined := combinedOutput(sc.LastResult)
-	resolved := dsl.Interpolate(needle)
+	resolved, err := resolveOutputNeedle(needle)
+	if err != nil {
+		return err
+	}
 	if !strings.Contains(combined, resolved) {
 		return fmt.Errorf("output does not contain %q", resolved)
 	}
@@ -98,11 +111,62 @@ func (sc *ScenarioContext) commandOutputShouldContain(needle string) error {
 
 func (sc *ScenarioContext) commandOutputShouldNotContain(needle string) error {
 	combined := combinedOutput(sc.LastResult)
-	resolved := dsl.Interpolate(needle)
+	resolved, err := resolveOutputNeedle(needle)
+	if err != nil {
+		return err
+	}
 	if strings.Contains(combined, resolved) {
 		return fmt.Errorf("output contains %q", resolved)
 	}
 	return nil
+}
+
+func (sc *ScenarioContext) commandOutputShouldContainAll(table *godog.Table) error {
+	needles, err := tableToSingleColumn(table, "text")
+	if err != nil {
+		return err
+	}
+	combined := combinedOutput(sc.LastResult)
+	for index, needle := range needles {
+		resolved, err := resolveOutputNeedle(needle)
+		if err != nil {
+			return fmt.Errorf("row %d: %w", index+1, err)
+		}
+		if !strings.Contains(combined, resolved) {
+			return fmt.Errorf("output does not contain %q", resolved)
+		}
+	}
+	return nil
+}
+
+func (sc *ScenarioContext) commandOutputShouldContainOneOf(table *godog.Table) error {
+	needles, err := tableToSingleColumn(table, "text")
+	if err != nil {
+		return err
+	}
+	resolvedNeedles := make([]string, 0, len(needles))
+	for index, needle := range needles {
+		resolved, err := resolveOutputNeedle(needle)
+		if err != nil {
+			return fmt.Errorf("row %d: %w", index+1, err)
+		}
+		resolvedNeedles = append(resolvedNeedles, resolved)
+	}
+	combined := combinedOutput(sc.LastResult)
+	for _, resolved := range resolvedNeedles {
+		if strings.Contains(combined, resolved) {
+			return nil
+		}
+	}
+	return fmt.Errorf("output does not contain any of the %d expected values", len(needles))
+}
+
+func resolveOutputNeedle(needle string) (string, error) {
+	resolved := dsl.Interpolate(needle)
+	if strings.TrimSpace(resolved) == "" {
+		return "", fmt.Errorf("expected output text resolves to an empty value")
+	}
+	return resolved, nil
 }
 
 func (sc *ScenarioContext) yamlFileKeyShouldEqual(path, key, expected string) error {

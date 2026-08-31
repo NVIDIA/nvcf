@@ -334,6 +334,10 @@ func TestSingleClusterUpOneClickFeatureFileWiresToSteps(t *testing.T) {
 	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
 		"helm list --all-namespaces --kube-context k3d-ncp-local -o json": {ExitCode: 0, Stdout: helmListAllNamespacesJSON()},
+		"kubectl --context k3d-ncp-local get configmap/nvcf-api-remote-config -n nvcf -o yaml": {
+			ExitCode: 0,
+			Stdout:   "data:\n  nvcf-api.yaml: |\n    nvcf:\n      sidecars:\n        llm-router-client-image: nvcr.io/test-org/test-team/pylon:test\n",
+		},
 		// Conflict precheck: feature asserts the multi-cluster
 		// control-plane is absent.
 		"k3d cluster get ncp-local-cp": {ExitCode: 1},
@@ -420,6 +424,10 @@ func TestSingleClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
 		"helm list --all-namespaces --kube-context k3d-ncp-local -o json": {ExitCode: 0, Stdout: helmListAllNamespacesJSON()},
+		"kubectl --context k3d-ncp-local get configmap/nvcf-api-remote-config -n nvcf -o yaml": {
+			ExitCode: 0,
+			Stdout:   "data:\n  nvcf-api.yaml: |\n    nvcf:\n      sidecars:\n        llm-router-client-image: nvcr.io/test-org/test-team/pylon:test\n",
+		},
 		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke --request-body '{\"message\":\"bdd-echo\",\"repeats\":1}' --timeout 120 --poll-duration 5": {
 			ExitCode: 0,
 			Stdout:   "Function invocation completed!\n\nResponse:\n{\"rawResponse\":\"bdd-echo\"}\n",
@@ -528,6 +536,12 @@ func TestSingleClusterHelmfileLLMPKIFeatureFileWiresToSteps(t *testing.T) {
 	t.Setenv("REPO_ROOT", "/repo-root-placeholder")
 	suite := newWiringSuite(t, newFakeRunner(map[string]harness.Result{
 		"helm list --all-namespaces --kube-context k3d-ncp-local -o json": {ExitCode: 0, Stdout: helmListAllNamespacesJSON()},
+		"kubectl --context k3d-ncp-local get configmap/nvcf-api-remote-config -n nvcf -o yaml": {
+			ExitCode: 0,
+			Stdout: "data:\n  nvcf-api.yaml: |\n    nvcf:\n" +
+				"      llm-request-router:\n        worker-address: llm-request-router.nvcf.svc.cluster.local:50071\n" +
+				"      sidecars:\n        llm-router-client-image: nvcr.io/test-org/test-team/pylon:test\n",
+		},
 		"helm get values nvca-operator --namespace nvca-operator --kube-context k3d-ncp-local -o yaml": {
 			ExitCode: 0,
 			Stdout:   "agentConfig:\n  mergeConfig: |\n    workload:\n      stargateQUICInsecure: false\n      transportTLS:\n        trustMode: bundle\n        trustBundleFingerprint: sha256:test\n",
@@ -998,11 +1012,40 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		"helm list --all-namespaces --kube-context k3d-ncp-local-compute-1 -o json": {ExitCode: 0, Stdout: helmListNVCAJSON()},
 		"kubectl --context k3d-ncp-local-cp get configmap/nvcf-api-remote-config -n nvcf -o yaml": {
 			ExitCode: 0,
-			Stdout:   "data:\n  application-custom.yaml: |\n    nvcf:\n      llm-request-router:\n        worker-address: llm-request-router.nvcf.svc.cluster.local:50071\n",
+			Stdout: "data:\n  nvcf-api.yaml: |\n    nvcf:\n" +
+				"      llm-request-router:\n        worker-address: https://llm-request-router.nvcf.svc.cluster.local:50071\n" +
+				"      sidecars:\n        llm-router-client-image: nvcr.io/test-org/test-team/pylon:test\n",
 		},
 		"kubectl get certificate/stargate-quic-tls --namespace nvcf --context k3d-ncp-local-cp -o yaml": {
 			ExitCode: 0,
 			Stdout:   "spec:\n  secretName: stargate-quic-tls\n  dnsNames:\n    - llm-request-router.nvcf.svc.cluster.local\n    - '*.llm-request-router-headless.nvcf.svc.cluster.local'\n",
+		},
+		"kubectl get certificate/llm-request-router-grpc-tls --namespace envoy-gateway-system --context k3d-ncp-local-cp -o yaml": {
+			ExitCode: 0,
+			Stdout:   "spec:\n  secretName: llm-request-router-grpc-tls\n  dnsNames:\n    - llm-request-router.nvcf.svc.cluster.local\n  issuerRef:\n    kind: ClusterIssuer\n    name: nvcf-openbao-pki\n",
+		},
+		"kubectl get gateway/grpc-gw --namespace envoy-gateway-system --context k3d-ncp-local-cp -o yaml": {
+			ExitCode: 0,
+			Stdout: "spec:\n  gatewayClassName: eg\n  listeners:\n" +
+				"    - name: tcp\n      protocol: TCP\n      port: 10081\n      allowedRoutes:\n        namespaces:\n          from: All\n" +
+				"    - name: worker-tcp\n      protocol: TCP\n      port: 10086\n      allowedRoutes:\n        namespaces:\n          from: All\n" +
+				"    - name: llm-grpc\n" +
+				"      protocol: HTTPS\n" +
+				"      port: 50071\n" +
+				"      tls:\n" +
+				"        mode: Terminate\n" +
+				"        certificateRefs:\n" +
+				"          - group: \"\"\n" +
+				"            kind: Secret\n" +
+				"            name: llm-request-router-grpc-tls\n" +
+				"      allowedRoutes:\n" +
+				"        namespaces:\n" +
+				"          from: All\n" +
+				"    - name: llm-quic\n      protocol: UDP\n      port: 50072\n      allowedRoutes:\n        namespaces:\n          from: All\n",
+		},
+		"kubectl get backendtrafficpolicy/llm-worker-grpc-streams --namespace envoy-gateway-system --context k3d-ncp-local-cp -o yaml": {
+			ExitCode: 0,
+			Stdout:   "spec:\n  targetRefs:\n    - group: gateway.networking.k8s.io\n      kind: GRPCRoute\n      name: llm-worker-grpc\n  timeout:\n    http:\n      requestTimeout: 0s\n      maxStreamDuration: 0s\n",
 		},
 		"/usr/bin/nvcf-cli --config /repo-root-placeholder/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke --request-body '{\"message\":\"bdd-echo\",\"repeats\":1}' --timeout 120 --poll-duration 5": {
 			ExitCode: 0,
@@ -1043,7 +1086,8 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		"workerConnectBaseURL: http://grpc.nvcf.svc.cluster.local:10086",
 		"chartPath: ../../../helm/gateway-routes/chart",
 		"chartPath: ../../../helm/llm-request-router/llm-request-router",
-		"llmRequestRouterAddress: llm-request-router.nvcf.svc.cluster.local:50071",
+		"llmRequestRouterAddress: https://llm-request-router.nvcf.svc.cluster.local:50071",
+		"secretName: llm-request-router-grpc-tls",
 		"grpcWorker:",
 		"llmWorker:",
 		"enabled: true",
@@ -1076,10 +1120,14 @@ func TestMultiClusterHelmfileFeatureFileWiresToSteps(t *testing.T) {
 		key  string
 		want string
 	}{
-		{key: "global.workerEndpoints.llmRequestRouterAddress", want: "llm-request-router.nvcf.svc.cluster.local:50071"},
+		{key: "global.workerEndpoints.llmRequestRouterAddress", want: "https://llm-request-router.nvcf.svc.cluster.local:50071"},
 		{key: "addons.llm.requestRouter.chartPath", want: "../../../helm/llm-request-router/llm-request-router"},
-		{key: "addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress", want: "llm-request-router.nvcf.svc.cluster.local:50071"},
+		{key: "addons.llm.requestRouter.backendRouter.pylonGrpcDialAddress", want: "https://llm-request-router.nvcf.svc.cluster.local:50071"},
 		{key: "addons.llm.requestRouter.backendRouter.pylonReverseTunnelDialAddress", want: "llm-request-router.nvcf.svc.cluster.local:50072"},
+		{key: "addons.llm.requestRouter.grpcTls.enabled", want: "true"},
+		{key: "addons.llm.requestRouter.grpcTls.mode", want: "certManager"},
+		{key: "addons.llm.requestRouter.grpcTls.secretName", want: "llm-request-router-grpc-tls"},
+		{key: "addons.llm.requestRouter.grpcTls.dnsNames[0]", want: "llm-request-router.nvcf.svc.cluster.local"},
 		{key: "addons.llm.pki.allowedDomains", want: "cluster.local"},
 		{key: "addons.llm.pki.dnsNames[0]", want: "llm-request-router.nvcf.svc.cluster.local"},
 		{key: "addons.llm.pki.dnsNames[1]", want: "*.llm-request-router-headless.nvcf.svc.cluster.local"},
@@ -1447,7 +1495,7 @@ func seedHelmfileLocalBDDMultiFixture(t *testing.T, repoRoot string) {
   workerEndpoints:
     essServiceURL: http://ess-api.ess.svc.cluster.local:8080
     invocationServiceURL: http://invocation.nvcf.svc.cluster.local:8080
-    llmRequestRouterAddress: llm-request-router.nvcf.svc.cluster.local:50071
+    llmRequestRouterAddress: https://llm-request-router.nvcf.svc.cluster.local:50071
   nvcaOperator:
     selfManaged:
       icmsServiceURL: http://api.sis.svc.cluster.local:8080
@@ -1458,8 +1506,14 @@ addons:
     enabled: true
     requestRouter:
       chartPath: ../../../helm/llm-request-router/llm-request-router
+      grpcTls:
+        enabled: true
+        mode: certManager
+        secretName: llm-request-router-grpc-tls
+        dnsNames:
+          - llm-request-router.nvcf.svc.cluster.local
       backendRouter:
-        pylonGrpcDialAddress: llm-request-router.nvcf.svc.cluster.local:50071
+        pylonGrpcDialAddress: https://llm-request-router.nvcf.svc.cluster.local:50071
         pylonReverseTunnelDialAddress: llm-request-router.nvcf.svc.cluster.local:50072
     pki:
       enabled: true

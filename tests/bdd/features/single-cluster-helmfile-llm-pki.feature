@@ -27,14 +27,15 @@ Feature: Install a local single-cluster NVCF stack with PKI-secured LLM transpor
       # signing role, and the provisioning hook needs the
       # nvcf-openbao-migrations tag (no default propagates from env).
       And I update yaml file "deploy/stacks/self-managed/environments/local-bdd-pki.yaml" with keys:
-        | global.imagePullSecrets[0].name | nvcr-pull-secret                          |
-        | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}      |
-        | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}      |
-        | addons.llm.pki.enabled          | true                                      |
-        | addons.llm.pki.dnsNames[0]      | llm-request-router.nvcf.svc.cluster.local |
-        | addons.llm.pki.allowedDomains   | nvcf.svc.cluster.local                    |
-        | addons.llm.pki.image.tag        | 0.16.2                                    |
-        | observability.profile           | disabled                                  |
+        | global.imagePullSecrets[0].name               | nvcr-pull-secret                                                         |
+        | global.helm.sources.repository                | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                     |
+        | global.image.repository                       | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                                     |
+        | addons.llm.requestRouter.chartPath             | ../../../helm/llm-request-router/llm-request-router                      |
+        | addons.llm.pki.enabled                         | true                                                                      |
+        | addons.llm.pki.dnsNames[0]                     | llm-request-router.nvcf.svc.cluster.local                                |
+        | addons.llm.pki.allowedDomains                  | nvcf.svc.cluster.local                                                    |
+        | addons.llm.pki.image.tag                       | 0.16.2                                                                    |
+        | observability.profile                          | disabled                                                                  |
       And I copy the file "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" to "deploy/stacks/nvcf-compute-plane/environments/local-bdd-pki.yaml"
       And I update yaml file "deploy/stacks/nvcf-compute-plane/environments/local-bdd-pki.yaml" with keys:
         | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
@@ -75,6 +76,14 @@ Feature: Install a local single-cluster NVCF stack with PKI-secured LLM transpor
         | name: NVCF_SERVICE_PKI_ALLOWED_DOMAINS              |
         | value: "nvcf.svc.cluster.local"                   |
         | nvcf-openbao-migrations:0.16.2                     |
+      # A colocated worker uses the in-cluster h2c Service directly. The
+      # dedicated HTTPS identity and route belong only to an explicitly
+      # enabled remote-worker ingress.
+      And the rendered manifests in "deploy/stacks/self-managed/out" should not contain:
+        | text                                |
+        | name: llm-worker-grpc               |
+        | name: llm-request-router-grpc-tls   |
+        | name: llm-worker-grpc-streams       |
 
     @llm-pki-install
     Scenario: Operator installs the control plane with the PKI addon enabled
@@ -103,6 +112,17 @@ Feature: Install a local single-cluster NVCF stack with PKI-secured LLM transpor
         | ingress                   | envoy-gateway-system |
         | llm-request-router        | nvcf                 |
         | llm-api-gateway           | nvcf                 |
+
+      When I run command "kubectl --context k3d-ncp-local get configmap/nvcf-api-remote-config -n nvcf -o yaml"
+      Then the command exit code should be 0
+      And the command output should contain "worker-address: llm-request-router.nvcf.svc.cluster.local:50071"
+      And the command output should contain "llm-router-client-image: nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/pylon:"
+
+      Then these Kubernetes resources should not exist in namespace "envoy-gateway-system" using context "k3d-ncp-local":
+        | kind                 | name                         |
+        | GRPCRoute            | llm-worker-grpc              |
+        | Certificate          | llm-request-router-grpc-tls  |
+        | BackendTrafficPolicy | llm-worker-grpc-streams      |
 
       # The issuer and the stargate leaf are functional gates for the
       # secure tunnel: the router cannot serve TLS before cert-manager

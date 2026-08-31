@@ -14,17 +14,29 @@
 // limitations under the License.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::pin::Pin;
+use std::process::Command;
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::Stream;
+use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, KeyPair};
+use stargate_proto::pb::stargate_control_plane_server::{
+    StargateControlPlane, StargateControlPlaneServer,
+};
 use stargate_proto::pb::{
     InferenceServerAck, InferenceServerModelRegistration, InferenceServerRegistration,
-    InferenceServerStatus, ModelStats, StargateInfo, WatchStargatesResponse,
+    InferenceServerStatus, ModelStats, StargateInfo, WatchStargatesRequest, WatchStargatesResponse,
 };
 use stargate_protocol::TunnelTransportProtocol;
 use stargate_runtime::OwnedTask;
+use tokio::net::TcpListener;
 use tokio::sync::{mpsc, watch};
+use tokio_stream::StreamExt;
 use tokio_util::sync::CancellationToken;
+use tonic::transport::{Identity, Server, ServerTlsConfig};
+use tonic::{Request, Response, Status};
+use tower::util::MapRequestLayer;
 
 use crate::quic_http_tunnel::{TunnelError, TunnelForwardingConfig};
 use crate::request_quality_monitor::RequestQualityMonitorConfig;
@@ -42,9 +54,194 @@ use super::urls::infer_upstream_http_base_url;
 use super::*;
 
 const TEST_WAIT: Duration = Duration::from_secs(1);
+const TEST_ROUTER_AUTHORITY: &str = "router-0.router-headless.example.invalid:50071";
+const DEFAULT_ROOT_TEST_DIAL_URL_ENV: &str = "PYLON_DEFAULT_ROOT_TEST_DIAL_URL";
+const CUSTOM_ROOT_TEST_CA_PATH_ENV: &str = "PYLON_CUSTOM_ROOT_TEST_CA_PATH";
+
+type TestWatchStream =
+    Pin<Box<dyn Stream<Item = Result<WatchStargatesResponse, Status>> + Send + 'static>>;
+type TestRegistrationStream =
+    Pin<Box<dyn Stream<Item = Result<InferenceServerAck, Status>> + Send + 'static>>;
+
+struct TestCertificateAuthority {
+    cert: rcgen::Certificate,
+    key: KeyPair,
+}
+
+impl TestCertificateAuthority {
+    fn new(common_name: &str) -> Self {
+        let mut params = CertificateParams::default();
+        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        params
+            .distinguished_name
+            .push(DnType::CommonName, common_name);
+        let key = KeyPair::generate().expect("test CA key should generate");
+        let cert = params
+            .self_signed(&key)
+            .expect("test CA certificate should generate");
+        Self { cert, key }
+    }
+
+    fn pem(&self) -> Vec<u8> {
+        self.cert.pem().into_bytes()
+    }
+
+    fn issue_server_identity(&self, dns_name: &str) -> Identity {
+        let params = CertificateParams::new(vec![dns_name.to_string()])
+            .expect("test server certificate params should build");
+        let key = KeyPair::generate().expect("test server key should generate");
+        let cert = params
+            .signed_by(&key, &self.cert, &self.key)
+            .expect("test server certificate should generate");
+        Identity::from_pem(cert.pem(), key.serialize_pem())
+    }
+}
+
+#[derive(Clone)]
+struct TestTlsControlPlaneService {
+    dial_url: String,
+    watch_authorities: mpsc::UnboundedSender<String>,
+    registration_authorities: mpsc::UnboundedSender<String>,
+    registrations: mpsc::UnboundedSender<InferenceServerRegistration>,
+}
+
+#[tonic::async_trait]
+impl StargateControlPlane for TestTlsControlPlaneService {
+    type WatchStargatesStream = TestWatchStream;
+    type RegisterInferenceServerStream = TestRegistrationStream;
+
+    async fn watch_stargates(
+        &self,
+        request: Request<WatchStargatesRequest>,
+    ) -> Result<Response<Self::WatchStargatesStream>, Status> {
+        let _ = self.watch_authorities.send(
+            request
+                .extensions()
+                .get::<http::uri::Authority>()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+        );
+        let response = WatchStargatesResponse {
+            stargates: vec![stargate_info(
+                "stargate-0",
+                TEST_ROUTER_AUTHORITY,
+                &self.dial_url,
+            )],
+            watch_stargate_urls: Vec::new(),
+        };
+        Ok(Response::new(Box::pin(
+            tokio_stream::once(Ok(response)).chain(tokio_stream::pending()),
+        )))
+    }
+
+    async fn register_inference_server(
+        &self,
+        request: Request<tonic::Streaming<InferenceServerRegistration>>,
+    ) -> Result<Response<Self::RegisterInferenceServerStream>, Status> {
+        let _ = self.registration_authorities.send(
+            request
+                .extensions()
+                .get::<http::uri::Authority>()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+        );
+        let mut stream = request.into_inner();
+        let registrations = self.registrations.clone();
+        tokio::spawn(async move {
+            if let Ok(Some(registration)) = stream.message().await {
+                let _ = registrations.send(registration);
+            }
+        });
+        Ok(Response::new(Box::pin(
+            tokio_stream::once(Ok(InferenceServerAck::default())).chain(tokio_stream::pending()),
+        )))
+    }
+}
+
+struct TestTlsControlPlane {
+    dial_url: String,
+    watch_authorities: mpsc::UnboundedReceiver<String>,
+    registration_authorities: mpsc::UnboundedReceiver<String>,
+    registrations: mpsc::UnboundedReceiver<InferenceServerRegistration>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl TestTlsControlPlane {
+    async fn spawn(ca: &TestCertificateAuthority, dns_name: &str) -> Self {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test TLS server should bind");
+        let addr = listener
+            .local_addr()
+            .expect("test TLS server address should resolve");
+        let dial_url = format!("https://localhost:{}", addr.port());
+        let (watch_authorities, watch_authorities_rx) = mpsc::unbounded_channel();
+        let (registration_authorities, registration_authorities_rx) = mpsc::unbounded_channel();
+        let (registrations, registrations_rx) = mpsc::unbounded_channel();
+        let service = TestTlsControlPlaneService {
+            dial_url: dial_url.clone(),
+            watch_authorities,
+            registration_authorities,
+            registrations,
+        };
+        let identity = ca.issue_server_identity(dns_name);
+        let incoming = async_stream::stream! {
+            loop {
+                yield listener.accept().await.map(|(stream, _)| stream);
+            }
+        };
+        let task = tokio::spawn(async move {
+            Server::builder()
+                .tls_config(ServerTlsConfig::new().identity(identity))
+                .expect("test TLS server config should build")
+                .layer(MapRequestLayer::new(|mut request: http::Request<_>| {
+                    if let Some(authority) = request.uri().authority().cloned() {
+                        request.extensions_mut().insert(authority);
+                    }
+                    request
+                }))
+                .add_service(StargateControlPlaneServer::new(service))
+                .serve_with_incoming(incoming)
+                .await
+                .expect("test TLS server should serve");
+        });
+        Self {
+            dial_url,
+            watch_authorities: watch_authorities_rx,
+            registration_authorities: registration_authorities_rx,
+            registrations: registrations_rx,
+            task,
+        }
+    }
+
+    async fn first_registration(&mut self) -> InferenceServerRegistration {
+        tokio::time::timeout(TEST_WAIT, self.registrations.recv())
+            .await
+            .expect("worker registration should not time out")
+            .expect("worker registration channel should remain open")
+    }
+
+    async fn shutdown(self) {
+        self.task.abort();
+        let _ = self.task.await;
+    }
+}
+
+async fn tls_connect_error(server: &TestTlsControlPlane, ca_cert_pem: Option<&[u8]>) -> String {
+    let endpoint =
+        StargateGrpcEndpoint::new(server.dial_url.clone(), "").expect("test endpoint should build");
+    let error = endpoint
+        .channel_endpoint(ca_cert_pem)
+        .expect("test channel endpoint should configure")
+        .connect()
+        .await
+        .expect_err("TLS connection should fail");
+    format!("{error:?}").to_lowercase()
+}
 
 fn grpc_endpoint(authority_addr: &str) -> StargateGrpcEndpoint {
-    StargateGrpcEndpoint::new(authority_addr.to_string(), authority_addr.to_string())
+    StargateGrpcEndpoint::new(authority_addr.to_string(), "")
         .expect("test endpoint authority should be non-empty")
 }
 
@@ -92,6 +289,7 @@ fn test_registration_config() -> InferenceServerRegistrationConfig {
         min_update_interval: Duration::from_secs(2),
         reverse_tunnel: false,
         tls_cert_pem: None,
+        grpc_tls_ca_cert_pem: None,
         quic_insecure: true,
         tunnel_protocol: TunnelTransportProtocol::RawQuic,
         auth_token_provider: None,
@@ -285,6 +483,21 @@ fn registration_session_config_accepts_empty_runtime_membership() {
 }
 
 #[test]
+fn registration_session_keeps_grpc_and_quic_trust_independent() {
+    let mut config = test_registration_config();
+    config.tls_cert_pem = Some(b"quic trust".to_vec());
+    config.grpc_tls_ca_cert_pem = Some(b"grpc trust".to_vec());
+
+    let session = RegistrationSessionConfig::try_from(config).expect("session should build");
+
+    assert_eq!(session.tls_cert_pem.as_deref(), Some(&b"quic trust"[..]));
+    assert_eq!(
+        session.grpc_tls_ca_cert_pem.as_deref(),
+        Some(&b"grpc trust"[..])
+    );
+}
+
+#[test]
 fn reverse_tunnel_config_uses_registration_upstream_and_preserves_forwarding() {
     let metrics = PylonMetrics::new().expect("metrics should initialize");
     let mut config = test_registration_config();
@@ -309,11 +522,237 @@ fn reverse_tunnel_config_uses_registration_upstream_and_preserves_forwarding() {
 
 #[test]
 fn stargate_grpc_endpoint_rejects_empty_authority_and_formats_dial_overrides() {
-    assert!(StargateGrpcEndpoint::new(" ", "stargate-grpc-lb:443").is_none());
+    assert!(StargateGrpcEndpoint::new(" ", "https://stargate-grpc-lb:443").is_none());
+    assert!(StargateGrpcEndpoint::new("router-a:50071", "stargate-grpc-lb:443").is_none());
     assert_eq!(
-        grpc_endpoint_with_dial("router-a:50071", "stargate-grpc-lb:443").to_string(),
-        "router-a:50071 via stargate-grpc-lb:443"
+        grpc_endpoint_with_dial("router-a:50071", "https://stargate-grpc-lb:443").to_string(),
+        "router-a:50071 via https://stargate-grpc-lb:443"
     );
+}
+
+#[test]
+fn stargate_grpc_endpoint_rejects_custom_ca_for_plaintext_http() {
+    let endpoint = grpc_endpoint_with_dial("router-a:50071", "http://stargate-grpc-lb:50071");
+
+    let error = endpoint
+        .channel_endpoint(Some(b"private CA contents must not be logged"))
+        .err()
+        .expect("custom CA with plaintext HTTP should be rejected");
+
+    assert!(
+        error
+            .to_string()
+            .contains("custom CA for stargate gRPC requires an HTTPS dial endpoint"),
+        "unexpected error: {error:#}"
+    );
+}
+
+#[test]
+fn stargate_grpc_origin_keeps_dial_scheme_when_authority_scheme_differs() {
+    for (dial, authority, expected) in [
+        (
+            "https://public.example:443",
+            "http://router.internal:50071",
+            "https://router.internal:50071/",
+        ),
+        (
+            "http://public.example:80",
+            "https://router.internal:50071",
+            "http://router.internal:50071/",
+        ),
+    ] {
+        let dial_uri = dial.parse().expect("dial URI should parse");
+        let origin = grpc_origin_uri(&dial_uri, authority).expect("origin should build");
+
+        assert_eq!(origin.to_string(), expected);
+        assert_eq!(origin.scheme_str(), dial_uri.scheme_str());
+        assert_eq!(
+            origin.authority().unwrap().as_str(),
+            "router.internal:50071"
+        );
+    }
+}
+
+#[tokio::test]
+async fn custom_grpc_ca_completes_watch_and_registration_with_separate_authority() {
+    let ca = TestCertificateAuthority::new("registration-test-ca");
+    let mut server = TestTlsControlPlane::spawn(&ca, "localhost").await;
+    let mut config = test_registration_config();
+    config.seeds = vec![server.dial_url.clone()];
+    config.grpc_tls_ca_cert_pem = Some(ca.pem());
+    config.min_update_interval = Duration::from_millis(10);
+    let mut client = InferenceServerRegistrationClient::default();
+
+    client.start(config).expect("registration should start");
+    let registration = server.first_registration().await;
+    let watch_authority = tokio::time::timeout(TEST_WAIT, server.watch_authorities.recv())
+        .await
+        .expect("watch authority should not time out")
+        .expect("watch authority channel should remain open");
+    let registration_authority =
+        tokio::time::timeout(TEST_WAIT, server.registration_authorities.recv())
+            .await
+            .expect("registration authority should not time out")
+            .expect("registration authority channel should remain open");
+
+    assert_eq!(registration.inference_server_id, "inst-a");
+    assert_eq!(
+        watch_authority,
+        server
+            .dial_url
+            .strip_prefix("https://")
+            .expect("test dial URL should use HTTPS")
+    );
+    assert_eq!(registration_authority, TEST_ROUTER_AUTHORITY);
+
+    client.shutdown().await;
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn https_without_custom_ca_uses_configured_native_roots() {
+    if let Ok(dial_url) = std::env::var(DEFAULT_ROOT_TEST_DIAL_URL_ENV) {
+        let endpoint = StargateGrpcEndpoint::new(dial_url, "")
+            .expect("default-root test endpoint should build");
+        endpoint
+            .channel_endpoint(None)
+            .expect("default-root test endpoint should configure")
+            .connect()
+            .await
+            .expect("native root should verify the test server");
+        return;
+    }
+
+    let ca = TestCertificateAuthority::new("default-roots-test-ca");
+    let server = TestTlsControlPlane::spawn(&ca, "localhost").await;
+    let ca_file = tempfile::NamedTempFile::new().expect("CA file should be created");
+    std::fs::write(ca_file.path(), ca.pem()).expect("CA file should be written");
+    let test_binary = std::env::current_exe().expect("test binary path should resolve");
+    let dial_url = server.dial_url.clone();
+    let ca_path = ca_file.path().to_path_buf();
+
+    let output = tokio::task::spawn_blocking(move || {
+        Command::new(test_binary)
+            .args([
+                "--exact",
+                "registration::tests::https_without_custom_ca_uses_configured_native_roots",
+                "--nocapture",
+            ])
+            .env(DEFAULT_ROOT_TEST_DIAL_URL_ENV, dial_url)
+            .env("SSL_CERT_FILE", ca_path)
+            .env_remove("SSL_CERT_DIR")
+            .output()
+            .expect("default-root child test should run")
+    })
+    .await
+    .expect("default-root child test should join");
+
+    assert!(
+        output.status.success(),
+        "default-root child test failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "default-root child test did not run exactly one test:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn custom_grpc_ca_augments_configured_native_roots() {
+    if let (Ok(dial_url), Ok(custom_ca_path)) = (
+        std::env::var(DEFAULT_ROOT_TEST_DIAL_URL_ENV),
+        std::env::var(CUSTOM_ROOT_TEST_CA_PATH_ENV),
+    ) {
+        let custom_ca = std::fs::read(custom_ca_path).expect("custom CA file should be readable");
+        let endpoint = StargateGrpcEndpoint::new(dial_url, "")
+            .expect("default-root test endpoint should build");
+        endpoint
+            .channel_endpoint(Some(&custom_ca))
+            .expect("augmented-root test endpoint should configure")
+            .connect()
+            .await
+            .expect("native root should remain enabled beside the custom CA");
+        return;
+    }
+
+    let server_ca = TestCertificateAuthority::new("default-roots-test-ca");
+    let custom_ca = TestCertificateAuthority::new("custom-roots-test-ca");
+    let server = TestTlsControlPlane::spawn(&server_ca, "localhost").await;
+    let server_ca_file = tempfile::NamedTempFile::new().expect("CA file should be created");
+    std::fs::write(server_ca_file.path(), server_ca.pem()).expect("CA file should be written");
+    let custom_ca_file = tempfile::NamedTempFile::new().expect("CA file should be created");
+    std::fs::write(custom_ca_file.path(), custom_ca.pem()).expect("CA file should be written");
+    let test_binary = std::env::current_exe().expect("test binary path should resolve");
+    let dial_url = server.dial_url.clone();
+    let server_ca_path = server_ca_file.path().to_path_buf();
+    let custom_ca_path = custom_ca_file.path().to_path_buf();
+
+    let output = tokio::task::spawn_blocking(move || {
+        Command::new(test_binary)
+            .args([
+                "--exact",
+                "registration::tests::custom_grpc_ca_augments_configured_native_roots",
+                "--nocapture",
+            ])
+            .env(DEFAULT_ROOT_TEST_DIAL_URL_ENV, dial_url)
+            .env(CUSTOM_ROOT_TEST_CA_PATH_ENV, custom_ca_path)
+            .env("SSL_CERT_FILE", server_ca_path)
+            .env_remove("SSL_CERT_DIR")
+            .output()
+            .expect("augmented-root child test should run")
+    })
+    .await
+    .expect("augmented-root child test should join");
+
+    assert!(
+        output.status.success(),
+        "augmented-root child test failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "augmented-root child test did not run exactly one test:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn grpc_endpoint_rejects_ca_signed_by_untrusted_issuer() {
+    let server_ca = TestCertificateAuthority::new("server-ca");
+    let wrong_ca = TestCertificateAuthority::new("wrong-ca");
+    let server = TestTlsControlPlane::spawn(&server_ca, "localhost").await;
+    let wrong_ca_pem = wrong_ca.pem();
+
+    let error = tls_connect_error(&server, Some(&wrong_ca_pem)).await;
+
+    assert!(
+        error.contains("unknownissuer") || error.contains("unknown issuer"),
+        "unexpected TLS failure: {error}"
+    );
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn grpc_endpoint_rejects_leaf_without_external_dial_hostname() {
+    let ca = TestCertificateAuthority::new("hostname-test-ca");
+    let server = TestTlsControlPlane::spawn(&ca, "not-localhost.invalid").await;
+    let ca_pem = ca.pem();
+
+    let error = tls_connect_error(&server, Some(&ca_pem)).await;
+
+    assert!(
+        error.contains("notvalidforname") || error.contains("not valid for name"),
+        "unexpected TLS failure: {error}"
+    );
+    server.shutdown().await;
 }
 
 #[test]
@@ -324,9 +763,9 @@ fn watch_response_separates_registration_routers_from_recursive_seeds() {
             stargates: vec![stargate_info(
                 "stargate-0",
                 "stargate-0.region-a:50071",
-                "lb.region-a:443",
+                "https://lb.region-a:443",
             )],
-            watch_stargate_urls: vec!["stargate.region-b:50071".to_string()],
+            watch_stargate_urls: vec!["https://stargate.region-b:50071".to_string()],
         },
     );
 
@@ -334,12 +773,37 @@ fn watch_response_separates_registration_routers_from_recursive_seeds() {
         snapshot.registration_routers,
         BTreeMap::from([(
             "stargate-0".to_string(),
-            grpc_endpoint_with_dial("stargate-0.region-a:50071", "lb.region-a:443")
+            grpc_endpoint_with_dial("stargate-0.region-a:50071", "https://lb.region-a:443")
         )])
     );
     assert_eq!(
         snapshot.watch_urls,
-        BTreeSet::from(["stargate.region-b:50071".to_string()])
+        BTreeSet::from(["https://stargate.region-b:50071".to_string()])
+    );
+}
+
+#[test]
+fn watch_response_rejects_non_uri_recursive_seeds() {
+    let snapshot = watch_endpoint_snapshot_from_response(
+        "seed-a",
+        WatchStargatesResponse {
+            stargates: vec![],
+            watch_stargate_urls: vec![
+                "https://stargate.region-b:50071".to_string(),
+                " http://127.0.0.1:50071 ".to_string(),
+                "stargate.region-c:50071".to_string(),
+                "ftp://stargate.region-d:50071".to_string(),
+                "https://".to_string(),
+            ],
+        },
+    );
+
+    assert_eq!(
+        snapshot.watch_urls,
+        BTreeSet::from([
+            "http://127.0.0.1:50071".to_string(),
+            "https://stargate.region-b:50071".to_string(),
+        ])
     );
 }
 

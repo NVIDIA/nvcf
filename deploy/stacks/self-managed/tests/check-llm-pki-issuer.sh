@@ -328,7 +328,7 @@ expect_existing_secret_router() {
   fi
 
   local mounted_secret
-  mounted_secret="$(yq -rN 'select(.kind == "StatefulSet") | .spec.template.spec.volumes[] | select(.name == "stargate-tls") | .secret.secretName' "$manifests_file" | head -1)"
+  mounted_secret="$(yq -rN 'select((.kind == "Deployment" or .kind == "StatefulSet") and .metadata.name == "llm-request-router") | .spec.template.spec.volumes[] | select(.name == "stargate-tls") | .secret.secretName' "$manifests_file" | head -1)"
   test "$mounted_secret" = "$secret_name" ||
     fail "$case_name mounted secret $mounted_secret, expected $secret_name"
 

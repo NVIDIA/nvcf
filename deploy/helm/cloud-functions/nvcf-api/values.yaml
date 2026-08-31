@@ -245,7 +245,7 @@ api:
           ess-agent-container: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/ess-agent:1.4.0
           otel-collector-container: dummy
           llm-credential-manager-image: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/nvcf-worker-llm-credentials-oss:1.1.1
-          llm-router-client-image: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/pylon:0.10.0
+          llm-router-client-image: ${nvcf.sidecars.hostname}/${nvcf.sidecars.repository}/pylon:0.14.1
         notary:
           turn:
             enabled: true
