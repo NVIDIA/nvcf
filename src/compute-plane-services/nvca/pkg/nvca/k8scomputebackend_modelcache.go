@@ -229,11 +229,15 @@ func (c K8sComputeBackend) SetupModelCachingForRequest(ctx context.Context,
 		rwPVC.Spec.StorageClassName = &storageClassName
 	}
 
-	roPVCName, err := regularModelCacheReaderPVCName(rwPVC.Name)
+	// The claim whose lifecycle drives setup depends on the shape: the ROX
+	// shape waits on a reader claim derived from the writer volume, every other
+	// shape waits on the writer claim it publishes read-only.
+	roPVCName, separateReader, err := regularModelCacheTargetClaim(binding, rwPVC.Name)
 	if err != nil {
 		return regularModelCacheResultForError(bindingScoped, nvcaerrors.TerminalError(err))
 	}
-	roPVCState, err := c.checkPVCState(ctx, roPVCName, bindingUID, bindingScoped, true, binding)
+	roPVCState, err := c.checkPVCState(
+		ctx, roPVCName, bindingUID, bindingScoped, separateReader, binding)
 	switch roPVCState {
 	case PVCNotFound:
 		jS, jobStateErr := c.CheckInitCacheJobState(ctx, rwPVC.Name, initJob, bindingUID, bindingScoped)
@@ -270,7 +274,7 @@ func (c K8sComputeBackend) SetupModelCachingForRequest(ctx context.Context,
 			}
 			if pvObjList != nil && len(pvObjList.Items) == 1 {
 				// let it reconcile again
-				roPVCState, setupErr := c.SetupPVCForReaders(ctx, rwPVC, initJob.Name, req, mf)
+				roPVCState, setupErr := c.publishRegularModelCache(ctx, rwPVC, initJob, req, binding, separateReader, mf)
 				if setupErr == nil {
 					return ModelCachingInProgress, "", nil
 				}
@@ -319,7 +323,7 @@ func (c K8sComputeBackend) SetupModelCachingForRequest(ctx context.Context,
 			}
 			return ModelCachingFailed, "", nil
 		case InitCacheJobCompleted:
-			roPVCState, setupErr := c.SetupPVCForReaders(ctx, rwPVC, initJob.Name, req, mf)
+			roPVCState, setupErr := c.publishRegularModelCache(ctx, rwPVC, initJob, req, binding, separateReader, mf)
 			if setupErr == nil {
 				return ModelCachingInProgress, "", nil
 			}
@@ -1020,6 +1024,35 @@ func regularModelCacheMountOptionsConflict(left, right string) bool {
    1. Name -> $LaunchSpecification.CacheHandle-ro-pvc
    2. /spec/accessModes -> ReadOnlyMany
 */
+// publishRegularModelCache makes a populated cache available to readers and
+// reports the claim they will mount.
+//
+// The shapes differ only here. The ROX shape gives readers a claim of their
+// own, derived from the writer volume, and waits for it to bind. Every other
+// shape publishes the writer claim itself; the shared pod mutator mounts
+// whatever claim is returned read-only, which is what keeps a ReadWriteMany
+// cache read-only for the functions consuming it.
+func (c K8sComputeBackend) publishRegularModelCache(
+	ctx context.Context,
+	rwPVC *v1.PersistentVolumeClaim,
+	initJob *batchv1.Job,
+	req *nvcav2beta1.ICMSRequest,
+	binding *nvcav2beta1.ModelCacheBinding,
+	separateReader bool,
+	mf mutateFunc,
+) (ROPVCSetupPhase, error) {
+	if separateReader {
+		return c.SetupPVCForReaders(ctx, rwPVC, initJob.Name, req, mf)
+	}
+	if err := c.markRWXReadOnlyModelCachePopulated(ctx, req, rwPVC, initJob, binding); err != nil {
+		return ROPVCSetupFailed, err
+	}
+	if _, err := c.validateRWXReadOnlyPublication(ctx, req, rwPVC, initJob, binding); err != nil {
+		return ROPVCSetupFailed, err
+	}
+	return ROPVCSetupCompleted, nil
+}
+
 func (c K8sComputeBackend) SetupPVCForReaders(ctx context.Context,
 	rwPVC *v1.PersistentVolumeClaim, initJobName string, req *nvcav2beta1.ICMSRequest, mf mutateFunc) (ROPVCSetupPhase, error) {
 	log := core.GetLogger(ctx)
