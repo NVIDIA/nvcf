@@ -1010,8 +1010,19 @@ func TestObservabilityAllFeatureFileWiresToSteps(t *testing.T) {
 		t.Fatal("autoscaler smoke function was not deployed from zero with a one-instance ceiling")
 	}
 	if !commandRanThatContainsAll(runs,
+		"cluster agent list-functions",
+		"--compute-plane-context \"$3\"",
+		"--kubeconfig \"$4\"",
+		"ncp-local-observability-all-kubeconfig.yaml",
+		"all(.instanceCount == 0)") {
+		t.Fatal("autoscaler smoke did not prove the selected function started at zero instances")
+	}
+	if !commandRanThatContainsAll(runs,
 		"cluster agent get-function \"$function_id\" \"$version_id\"",
 		"--compute-plane-context \"$3\"",
+		"--kubeconfig \"$4\"",
+		"ncp-local-observability-all-kubeconfig.yaml",
+		".instanceCount == 1",
 		"--json") {
 		t.Fatal("autoscaler smoke did not observe the selected function on the compute plane")
 	}

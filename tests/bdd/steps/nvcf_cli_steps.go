@@ -192,6 +192,8 @@ func (sc *ScenarioContext) iSuccessfullyInvokeFunctionThroughVanityGateway(
 	// function invocations. Vanity Gateway routes use the exact configured host,
 	// so send this smoke request directly through the local Envoy listener. The
 	// shell reads the key from stdin to keep it out of argv and command logs.
+	// TODO(https://github.com/NVIDIA/nvcf/issues/1399): replace this curl path
+	// with first-class nvcf-cli Vanity Gateway invocation support.
 	// Envoy can briefly return an HTTP error while a just-rolled gateway backend
 	// propagates; retries remain bounded by the scenario timeout.
 	script := `IFS= read -r api_key || [ -n "$api_key" ]; exec curl --silent --show-error --fail-with-body --header "Authorization: Bearer ${api_key}" "$@"`

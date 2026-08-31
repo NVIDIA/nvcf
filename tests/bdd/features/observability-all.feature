@@ -61,41 +61,36 @@ Feature: Install local Helmfile observability for both planes
       | monitoring       |
 
   Scenario: All profile installs one shared stack with both monitor families
-    When I run command:
+    When I successfully run command:
       """
       make -C deploy/stacks/self-managed install HELMFILE_ENV=local-bdd-observability-all KUBECONFIG_FILE=${REPO_ROOT}/tests/bdd/out/ncp-local-observability-all-kubeconfig.yaml
       """
-    Then the command exit code should be 0
 
-    When I run command:
+    When I successfully run command:
       """
       env KUBECONFIG=${REPO_ROOT}/tests/bdd/out/ncp-local-observability-all-kubeconfig.yaml ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml self-hosted --control-plane-stack deploy/stacks/self-managed --env local-bdd-observability-all control-plane profile export --cluster-name ncp-local
       """
-    Then the command exit code should be 0
-    And file "deploy/stacks/self-managed/out/control-plane-profile.yaml" should exist
+    Then file "deploy/stacks/self-managed/out/control-plane-profile.yaml" should exist
 
-    When I run command:
+    When I successfully run command:
       """
       ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml init
       """
-    Then the command exit code should be 0
 
-    When I run command:
+    When I successfully run command:
       """
       make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=ncp-local CONTROL_PLANE_PROFILE=${REPO_ROOT}/deploy/stacks/self-managed/out/control-plane-profile.yaml COMPUTE_KUBE_CONTEXT=k3d-ncp-local KUBECONFIG_FILE=${REPO_ROOT}/tests/bdd/out/ncp-local-observability-all-kubeconfig.yaml NVCF_CLI=${NVCF_CLI} NVCF_CLI_CONFIG=${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml
       """
-    Then the command exit code should be 0
-    And file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-register-values.yaml" should exist
+    Then file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-register-values.yaml" should exist
     And yaml file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-register-values.yaml" should have non-empty keys:
       | key            |
       | clusterID      |
       | clusterGroupID |
 
-    When I run command:
+    When I successfully run command:
       """
       make -C deploy/stacks/nvcf-compute-plane install CLUSTER_NAME=ncp-local HELMFILE_ENV=local-bdd-observability-all KUBECONFIG_FILE=${REPO_ROOT}/tests/bdd/out/ncp-local-observability-all-kubeconfig.yaml NVCF_CLI=${NVCF_CLI} NVCF_CLI_CONFIG=${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml
       """
-    Then the command exit code should be 0
 
     # Self-hosted NVCA intentionally creates an empty NGC service-key secret.
     # Supply the existing local credential so the NVCA collector can start,
@@ -149,8 +144,9 @@ Feature: Install local Helmfile observability for both planes
           imageRepository: nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/nvcf-otel-collector
       """
 
-  # Depends on the installed all-profile stack and registered compute plane
-  # from the preceding scenario. It is not a standalone tag target.
+  # The autoscaler is enabled by both control and all profiles. This functional
+  # smoke stays in all because it requires the registered compute plane from
+  # the preceding scenario. It is not a standalone tag target.
   @function-autoscaler @function-lifecycle
   Scenario: Autoscaler starts an idle function to serve its first request
     Given I use NVCF CLI config "${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml"
@@ -178,6 +174,21 @@ Feature: Install local Helmfile observability for both planes
       | --description | bdd-autoscaled-load-tester-supreme                                         |
       | --scopes      | invoke_function,list_functions,queue_details,list_functions_details         |
 
+    # Prove the function is idle before the first request creates demand. The
+    # compute-plane CLI lists only scheduled functions, so no matching entry
+    # also represents zero instances.
+    # TODO(https://github.com/NVIDIA/nvcf/issues/1419): replace this shell
+    # command with a selected-function instance-count DSL assertion.
+    When I successfully run command:
+      """
+      /bin/bash -c 'set -euo pipefail
+      status="$("$1" --config "$2" status --json)"
+      function_id="$(jq -er ".currentFunction | select(.hasFunction == true) | .functionId" <<<"$status")"
+      version_id="$(jq -er ".currentFunction | select(.hasFunction == true) | .versionId" <<<"$status")"
+      functions="$("$1" --config "$2" cluster agent list-functions --compute-plane-context "$3" --kubeconfig "$4" --json)"
+      jq -e --arg function_id "$function_id" --arg version_id "$version_id" "[.[] | select(.functionId == \$function_id and .functionVersionId == \$version_id)] | all(.instanceCount == 0)" <<<"$functions" >/dev/null' bdd-autoscaler-zero ${NVCF_CLI} ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml k3d-ncp-local ${REPO_ROOT}/tests/bdd/out/ncp-local-observability-all-kubeconfig.yaml
+      """
+
     # The invocation plane returns after its short hold-open window while the
     # autoscaler and compute plane complete a cold start. A successful response
     # or the expected 504 proves the first request reached the invocation path.
@@ -190,6 +201,8 @@ Feature: Install local Helmfile observability for both planes
       | bdd-autoscaler-echo  |
       | API error 504         |
 
+    # TODO(https://github.com/NVIDIA/nvcf/issues/1419): replace this polling
+    # loop with a selected-function instance-readiness DSL assertion.
     When I successfully run command:
       """
       /bin/bash -c 'set -euo pipefail
@@ -197,15 +210,15 @@ Feature: Install local Helmfile observability for both planes
       function_id="$(jq -er ".currentFunction | select(.hasFunction == true) | .functionId" <<<"$status")"
       version_id="$(jq -er ".currentFunction | select(.hasFunction == true) | .versionId" <<<"$status")"
       for attempt in {1..120}; do
-        if "$1" --config "$2" cluster agent get-function "$function_id" "$version_id" --compute-plane-context "$3" --json | jq -e ".instanceCount == 1 and ([.instances[] | select((.status | ascii_downcase) == \"running\")] | length == 1)" >/dev/null; then
+        if "$1" --config "$2" cluster agent get-function "$function_id" "$version_id" --compute-plane-context "$3" --kubeconfig "$4" --json | jq -e ".instanceCount == 1 and ([.instances[] | select((.status | ascii_downcase) == \"running\")] | length == 1)" >/dev/null; then
           exit 0
         fi
         sleep 5
       done
-      exit 1' bdd-autoscaler ${NVCF_CLI} ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml k3d-ncp-local
+      exit 1' bdd-autoscaler ${NVCF_CLI} ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml k3d-ncp-local ${REPO_ROOT}/tests/bdd/out/ncp-local-observability-all-kubeconfig.yaml
       """
 
-    When I successfully invoke the function selected by NVCF CLI over HTTP with timeout "600" seconds and poll duration "5" seconds:
+    And I successfully invoke the function selected by NVCF CLI over HTTP with timeout "600" seconds and poll duration "5" seconds:
       """
       {"message":"bdd-autoscaler-echo","repeats":1}
       """
