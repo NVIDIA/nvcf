@@ -41,6 +41,7 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	nvcav1new "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
+	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
 )
 
 // errVolumeStillAttached signals that a cache init writer volume has not yet
@@ -725,6 +726,176 @@ func (r *Reconciler) cleanupIdleModelCaches(ctx context.Context) error { //nolin
 		log.Error(err, "Failed to reclaim idle shared-FS model caches")
 	}
 
+	// Bindings own the resources the passes above reclaim, and hold a
+	// finalizer that keeps them alive. Retire the idle ones last, so a binding
+	// is only released once its backing store has been reclaimed.
+	if err := r.retireIdleModelCacheBindings(ctx, stList); err != nil {
+		log.Error(err, "Failed to retire idle model cache bindings")
+	}
+
+	return nil
+}
+
+// retireIdleModelCacheBindings drives the binding lifecycle to completion.
+//
+// A binding is created Active with a protection finalizer, and releasing the
+// last request only empties its reference list. Without this pass nothing ever
+// sets Retiring and nothing ever removes the finalizer, so every binding, and
+// the resources its finalizer protects, accumulates for the life of the
+// cluster and cannot be deleted without editing finalizers by hand.
+//
+// Retirement is two phased and idle gated, so a warm cache survives a function
+// scaling to zero:
+//
+//  1. Active, unreferenced, and idle past ModelCacheIdlePeriod -> Retiring,
+//     which stops new references being accepted.
+//  2. Retiring -> delete the resources the binding declares it owns, then drop
+//     the finalizer so the object can go.
+//
+// A binding that regains a reference before step 2 is left alone.
+func (r *Reconciler) retireIdleModelCacheBindings(
+	ctx context.Context, stList *nvcav1new.StorageRequestList,
+) error {
+	log := logf.FromContext(ctx)
+
+	activeHandles := sets.New[string]()
+	for _, st := range stList.Items {
+		if st.DeletionTimestamp != nil || st.Spec.ModelCache == nil {
+			continue
+		}
+		if h := st.Spec.ModelCache.CacheHandle; h != "" {
+			activeHandles.Insert(h)
+		}
+	}
+
+	bindings := &nvcav2beta1.ModelCacheBindingList{}
+	if err := r.Client.List(ctx, bindings, client.InNamespace(ModelCacheInitNamespace)); err != nil {
+		return err
+	}
+
+	now := r.nowFunc()
+	var errs []error
+	for i := range bindings.Items {
+		binding := &bindings.Items[i]
+		// Still referenced, or a live request still names its handle: in use.
+		if len(binding.Status.RequestReferences) != 0 {
+			continue
+		}
+		if h := binding.Labels[modelCacheHandleLabelKey]; h != "" && activeHandles.Has(h) {
+			continue
+		}
+
+		switch binding.Status.Phase {
+		case nvcav2beta1.ModelCacheBindingPhaseActive:
+			if !r.modelCacheBindingIdle(binding, now) {
+				continue
+			}
+			retiring := binding.DeepCopy()
+			retiring.Status.Phase = nvcav2beta1.ModelCacheBindingPhaseRetiring
+			transition := metav1.NewTime(now)
+			retiring.Status.LastPhaseTransitionTime = &transition
+			if err := r.Client.Status().Update(ctx, retiring); err != nil {
+				if !apierrors.IsConflict(err) && !apierrors.IsNotFound(err) {
+					errs = append(errs, err)
+				}
+				continue
+			}
+			log.Info("Model cache binding retiring", "binding", binding.Name)
+		case nvcav2beta1.ModelCacheBindingPhaseRetiring:
+			if err := r.releaseModelCacheBindingResources(ctx, binding); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			if err := r.dropModelCacheBindingFinalizer(ctx, binding); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			if err := r.Client.Delete(ctx, binding); err != nil && !apierrors.IsNotFound(err) {
+				errs = append(errs, err)
+				continue
+			}
+			log.Info("Model cache binding retired", "binding", binding.Name)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// modelCacheBindingIdle reports whether an unreferenced binding has been idle
+// long enough to retire. A binding that never recorded a transition is treated
+// as idle from its creation.
+func (r *Reconciler) modelCacheBindingIdle(
+	binding *nvcav2beta1.ModelCacheBinding, now time.Time,
+) bool {
+	since := binding.CreationTimestamp.Time
+	if binding.Status.LastPhaseTransitionTime != nil {
+		since = binding.Status.LastPhaseTransitionTime.Time
+	}
+	if since.IsZero() {
+		return false
+	}
+	return !since.Add(r.k8sTimeConfig.ModelCacheIdlePeriod).After(now)
+}
+
+// releaseModelCacheBindingResources deletes exactly what the binding recorded
+// itself as owning. Nothing is inferred: an object the binding does not name is
+// never touched, so a retirement cannot reach another cache's resources.
+func (r *Reconciler) releaseModelCacheBindingResources(
+	ctx context.Context, binding *nvcav2beta1.ModelCacheBinding,
+) error {
+	resources := binding.Spec.Resources
+	ns := resources.WriterNamespace
+	var errs []error
+
+	del := func(obj client.Object) {
+		if err := r.Client.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
+			errs = append(errs, fmt.Errorf("release binding %s resource %T %s: %w",
+				binding.Name, obj, obj.GetName(), err))
+		}
+	}
+
+	for _, name := range resources.JobNames {
+		policy := metav1.DeletePropagationBackground
+		job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}}
+		if err := r.Client.Delete(ctx, job, &client.DeleteOptions{PropagationPolicy: &policy}); err != nil &&
+			!apierrors.IsNotFound(err) {
+			errs = append(errs, fmt.Errorf("release binding %s Job %s: %w", binding.Name, name, err))
+		}
+	}
+	for _, name := range resources.PersistentVolumeClaimNames {
+		del(&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}})
+	}
+	for _, name := range resources.SecretNames {
+		del(&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}})
+	}
+	if resources.LeaseName != "" {
+		del(&coordv1.Lease{ObjectMeta: metav1.ObjectMeta{Name: resources.LeaseName, Namespace: ns}})
+	}
+	// Cluster scoped, and deleted after the claims above so a reader PV is
+	// released rather than left bound to a claim that is going away.
+	for _, name := range resources.PersistentVolumeNames {
+		del(&corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: name}})
+	}
+	for _, name := range resources.StorageClassNames {
+		del(&storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: name}})
+	}
+	return errors.Join(errs...)
+}
+
+// dropModelCacheBindingFinalizer removes the protection finalizer once the
+// resources it guards are gone.
+func (r *Reconciler) dropModelCacheBindingFinalizer(
+	ctx context.Context, binding *nvcav2beta1.ModelCacheBinding,
+) error {
+	if !slices.Contains(binding.Finalizers, nvcav2beta1.ModelCacheBindingFinalizer) {
+		return nil
+	}
+	updated := binding.DeepCopy()
+	updated.Finalizers = slices.DeleteFunc(updated.Finalizers, func(f string) bool {
+		return f == nvcav2beta1.ModelCacheBindingFinalizer
+	})
+	if err := r.Client.Update(ctx, updated); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("drop binding %s finalizer: %w", binding.Name, err)
+	}
 	return nil
 }
 

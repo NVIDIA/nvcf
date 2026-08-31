@@ -41,6 +41,10 @@ import (
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	nvcav1new "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
+	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+
+	featureflagmock "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag/mock"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
@@ -543,4 +547,145 @@ func idlePrimaryPV(name, cacheHandle, lastReference string) *corev1.PersistentVo
 		},
 		Status: corev1.PersistentVolumeStatus{Phase: corev1.VolumeAvailable},
 	}
+}
+
+// bindingForRetirement builds an Active binding that owns one of each resource
+// kind, so a retirement test proves the finalizer is only dropped after every
+// declared object is gone.
+func bindingForRetirement(name, handle string, created time.Time) *nvcav2beta1.ModelCacheBinding {
+	return &nvcav2beta1.ModelCacheBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              name,
+			Namespace:         ModelCacheInitNamespace,
+			CreationTimestamp: metav1.NewTime(created),
+			Finalizers:        []string{nvcav2beta1.ModelCacheBindingFinalizer},
+			Labels:            map[string]string{modelCacheHandleLabelKey: handle},
+		},
+		Spec: nvcav2beta1.ModelCacheBindingSpec{
+			Resources: nvcav2beta1.ModelCacheBindingResourceIntent{
+				WriterNamespace:            ModelCacheInitNamespace,
+				PersistentVolumeClaimNames: []string{"rw-pvc-" + handle},
+				PersistentVolumeNames:      []string{"secondary-pv-" + handle},
+				JobNames:                   []string{"writer-job-" + handle},
+				LeaseName:                  "lease-" + handle,
+			},
+		},
+		Status: nvcav2beta1.ModelCacheBindingStatus{Phase: nvcav2beta1.ModelCacheBindingPhaseActive},
+	}
+}
+
+func retirementReconciler(t *testing.T, now time.Time, objs ...client.Object) *Reconciler {
+	t.Helper()
+	builder := fake.NewClientBuilder().WithScheme(mgrScheme).
+		WithRESTMapper(newTestRESTMapper(mgrScheme)).
+		WithStatusSubresource(&nvcav2beta1.ModelCacheBinding{})
+	for _, o := range objs {
+		builder = builder.WithObjects(o)
+	}
+	return &Reconciler{
+		Client:        builder.Build(),
+		metrics:       newTestMetrics(),
+		fff:           &featureflagmock.Fetcher{},
+		nowFunc:       func() time.Time { return now },
+		k8sTimeConfig: (&k8sutil.TimeConfig{}).Complete(),
+	}
+}
+
+// TestRetireIdleModelCacheBindings covers the lifecycle that did not exist:
+// bindings were created Active with a finalizer nothing removed, so they and
+// the resources the finalizer protects accumulated for the life of the cluster.
+func TestRetireIdleModelCacheBindings(t *testing.T) {
+	now := time.Date(2026, 8, 31, 12, 0, 0, 0, time.UTC)
+	idle := (&k8sutil.TimeConfig{}).Complete().ModelCacheIdlePeriod
+	empty := &nvcav1new.StorageRequestList{}
+
+	t.Run("an idle unreferenced binding starts retiring", func(t *testing.T) {
+		b := bindingForRetirement("b-1", "h1", now.Add(-idle-time.Minute))
+		r := retirementReconciler(t, now, b)
+		require.NoError(t, r.retireIdleModelCacheBindings(t.Context(), empty))
+
+		got := &nvcav2beta1.ModelCacheBinding{}
+		require.NoError(t, r.Client.Get(t.Context(), client.ObjectKeyFromObject(b), got))
+		assert.Equal(t, nvcav2beta1.ModelCacheBindingPhaseRetiring, got.Status.Phase)
+		require.NotNil(t, got.Status.LastPhaseTransitionTime)
+		assert.Contains(t, got.Finalizers, nvcav2beta1.ModelCacheBindingFinalizer,
+			"the finalizer holds until the resources are released")
+	})
+
+	t.Run("a young binding is left alone", func(t *testing.T) {
+		b := bindingForRetirement("b-2", "h2", now.Add(-time.Minute))
+		r := retirementReconciler(t, now, b)
+		require.NoError(t, r.retireIdleModelCacheBindings(t.Context(), empty))
+
+		got := &nvcav2beta1.ModelCacheBinding{}
+		require.NoError(t, r.Client.Get(t.Context(), client.ObjectKeyFromObject(b), got))
+		assert.Equal(t, nvcav2beta1.ModelCacheBindingPhaseActive, got.Status.Phase,
+			"a warm cache must survive a function scaling to zero")
+	})
+
+	t.Run("a referenced binding is never retired", func(t *testing.T) {
+		b := bindingForRetirement("b-3", "h3", now.Add(-idle-time.Hour))
+		b.Status.RequestReferences = []nvcav2beta1.ModelCacheBindingRequestReference{
+			{Namespace: "tenant", Name: "req", UID: "uid-1"},
+		}
+		r := retirementReconciler(t, now, b)
+		require.NoError(t, r.retireIdleModelCacheBindings(t.Context(), empty))
+
+		got := &nvcav2beta1.ModelCacheBinding{}
+		require.NoError(t, r.Client.Get(t.Context(), client.ObjectKeyFromObject(b), got))
+		assert.Equal(t, nvcav2beta1.ModelCacheBindingPhaseActive, got.Status.Phase)
+	})
+
+	t.Run("a live request on the handle holds the binding", func(t *testing.T) {
+		b := bindingForRetirement("b-4", "h4", now.Add(-idle-time.Hour))
+		r := retirementReconciler(t, now, b)
+		live := &nvcav1new.StorageRequestList{Items: []nvcav1new.StorageRequest{{
+			ObjectMeta: metav1.ObjectMeta{Name: "st", Namespace: "tenant"},
+			Spec:       nvcav1new.StorageRequestSpec{ModelCache: &nvcav1new.ModelCacheSpec{CacheHandle: "h4"}},
+		}}}
+		require.NoError(t, r.retireIdleModelCacheBindings(t.Context(), live))
+
+		got := &nvcav2beta1.ModelCacheBinding{}
+		require.NoError(t, r.Client.Get(t.Context(), client.ObjectKeyFromObject(b), got))
+		assert.Equal(t, nvcav2beta1.ModelCacheBindingPhaseActive, got.Status.Phase,
+			"a request still naming the handle keeps the cache")
+	})
+
+	t.Run("retiring releases the declared resources and the finalizer", func(t *testing.T) {
+		b := bindingForRetirement("b-5", "h5", now.Add(-idle-time.Hour))
+		b.Status.Phase = nvcav2beta1.ModelCacheBindingPhaseRetiring
+		owned := []client.Object{
+			&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{
+				Name: "rw-pvc-h5", Namespace: ModelCacheInitNamespace}},
+			&corev1.PersistentVolume{ObjectMeta: metav1.ObjectMeta{Name: "secondary-pv-h5"}},
+			&batchv1.Job{ObjectMeta: metav1.ObjectMeta{
+				Name: "writer-job-h5", Namespace: ModelCacheInitNamespace}},
+			&coordv1.Lease{ObjectMeta: metav1.ObjectMeta{
+				Name: "lease-h5", Namespace: ModelCacheInitNamespace}},
+		}
+		// An object of the same kind that the binding does not name: retirement
+		// must not reach another cache's resources.
+		bystander := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{
+			Name: "rw-pvc-other", Namespace: ModelCacheInitNamespace}}
+
+		r := retirementReconciler(t, now, append(append([]client.Object{b}, owned...), bystander)...)
+		require.NoError(t, r.retireIdleModelCacheBindings(t.Context(), empty))
+
+		for _, o := range owned {
+			err := r.Client.Get(t.Context(), client.ObjectKeyFromObject(o), o.DeepCopyObject().(client.Object))
+			assert.True(t, apierrors.IsNotFound(err), "%T %s should be released", o, o.GetName())
+		}
+		require.NoError(t, r.Client.Get(t.Context(),
+			client.ObjectKeyFromObject(bystander), &corev1.PersistentVolumeClaim{}),
+			"an object the binding does not name must survive")
+
+		got := &nvcav2beta1.ModelCacheBinding{}
+		err := r.Client.Get(t.Context(), client.ObjectKeyFromObject(b), got)
+		if err == nil {
+			assert.NotContains(t, got.Finalizers, nvcav2beta1.ModelCacheBindingFinalizer,
+				"the finalizer must be dropped so the object can be deleted")
+		} else {
+			assert.True(t, apierrors.IsNotFound(err))
+		}
+	})
 }
