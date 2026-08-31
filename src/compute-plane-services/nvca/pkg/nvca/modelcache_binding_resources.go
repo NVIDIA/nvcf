@@ -36,6 +36,36 @@ import (
 	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
+// regularModelCacheTargetClaim names the claim whose lifecycle drives regular
+// model caching, and reports whether a reader claim is created separately.
+//
+// The two shapes run the same machine over different claims. The ROX shape
+// gives readers their own claim, derived from the writer volume, so that claim
+// is what setup waits on. Every other shape publishes the writer claim itself
+// and readers mount it read-only, so there is no second claim to look for.
+//
+// Callers must not derive a reader claim name before this: the name is
+// meaningless for a shape that has no reader claim, and deriving it can fail
+// for a request that would never have used it.
+func regularModelCacheTargetClaim(
+	binding *nvcav2beta1.ModelCacheBinding, writerPVCName string,
+) (name string, separateReader bool, err error) {
+	if binding == nil {
+		// No binding means the legacy annotation-free path, which is ROX only.
+		readerName, nameErr := regularModelCacheReaderPVCName(writerPVCName)
+		return readerName, true, nameErr
+	}
+	_, _, separateReader, err = regularModelCacheAccessModePlan(binding)
+	if err != nil {
+		return "", false, err
+	}
+	if !separateReader {
+		return writerPVCName, false, nil
+	}
+	readerName, err := regularModelCacheReaderPVCName(writerPVCName)
+	return readerName, true, err
+}
+
 func (c K8sComputeBackend) prepareRegularModelCacheBindingResources(
 	ctx context.Context,
 	binding *nvcav2beta1.ModelCacheBinding,
