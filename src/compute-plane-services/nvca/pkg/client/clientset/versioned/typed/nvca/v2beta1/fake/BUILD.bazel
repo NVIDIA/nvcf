@@ -8,6 +8,7 @@ go_library(
     srcs = [
         "doc.go",
         "fake_icmsrequest.go",
+        "fake_modelcachebinding.go",
         "fake_nvca_client.go",
         "fake_storagerequest.go",
     ],

@@ -60,5 +60,6 @@ go_test(
         "//src/compute-plane-services/nvca/vendor/k8s.io/apimachinery/pkg/runtime/schema",
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/dynamic/fake",
         "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/kubernetes/fake",
+        "//src/compute-plane-services/nvca/vendor/k8s.io/client-go/testing",
     ],
 )
