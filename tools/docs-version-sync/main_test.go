@@ -229,6 +229,73 @@ func TestCatalogRefreshPreservesVersionQualifiedPublications(t *testing.T) {
 	}
 }
 
+func TestCatalogRefreshWithoutBaseRendersStagingArtifactsAsPending(t *testing.T) {
+	catalog := BuildCatalogFromArtifactsWithBase("0.9.1", []Artifact{
+		{Name: "helm-nvca-operator", Type: ArtifactTypeChart, Registry: "staging", Version: "1.21.3"},
+		{Name: "nvca", Type: ArtifactTypeImage, Registry: "staging", Version: "3.2.19"},
+	}, nil)
+	catalog.Manifest.Entries = []ManifestEntry{
+		{ArtifactID: defaultStackResourceName, Plane: ManifestPlaneShared, Kind: ManifestKindResource, Description: "Control-plane stack."},
+		{ArtifactID: "nvcf-cli", Plane: ManifestPlaneShared, Kind: ManifestKindResource, Description: "CLI."},
+		{ArtifactID: "helm-nvca-operator", Plane: ManifestPlaneCompute, Kind: ManifestKindChart, Requirement: ManifestRequired, Description: "NVCA chart."},
+		{ArtifactID: "nvca", Plane: ManifestPlaneCompute, Kind: ManifestKindServiceImage, Requirement: ManifestRequired, Description: "NVCA agent."},
+	}
+
+	got, err := Render("manifest-artifact-registry-paths", catalog)
+	if err != nil {
+		t.Fatalf("Render failed: %v", err)
+	}
+	for _, name := range []string{defaultStackResourceName, "nvcf-cli", "helm-nvca-operator", "nvca"} {
+		row := manifestRow(t, got, name)
+		if !strings.Contains(row, "`Publication pending`") {
+			t.Errorf("%s row does not mark the unverified staging artifact pending: %s", name, row)
+		}
+	}
+	if strings.Contains(got, catalog.Registries[defaultStackRegistry].Namespace) {
+		t.Fatalf("rendered manifest exposes staging namespace:\n%s", got)
+	}
+}
+
+func TestCatalogRefreshMarksChangedStagingVersionsPendingAndKeepsPublishedVersionsPublic(t *testing.T) {
+	base := testCatalog()
+	base.Registries["public-images"] = Registry{Host: "nvcr.io", Namespace: "nvidia/nvcf"}
+	base.Artifacts = append(base.Artifacts,
+		Artifact{Name: "nvca", Type: ArtifactTypeImage, Registry: "staging", Version: "3.2.18"},
+		Artifact{Name: "verified-service", Type: ArtifactTypeImage, Registry: "staging", Version: "2.0.0"},
+	)
+	base.Publications = []Publication{
+		{Name: "nvca", Version: "3.2.18", Registry: "public-images"},
+		{Name: "verified-service", Version: "2.0.0", Registry: "public-images"},
+	}
+	base.Manifest.Entries = append(base.Manifest.Entries,
+		ManifestEntry{ArtifactID: "nvca", Plane: ManifestPlaneCompute, Kind: ManifestKindServiceImage, Requirement: ManifestRequired, Description: "NVCA agent."},
+		ManifestEntry{ArtifactID: "verified-service", Plane: ManifestPlaneControl, Kind: ManifestKindServiceImage, Requirement: ManifestRequired, Description: "Published service."},
+	)
+
+	catalog := BuildCatalogFromArtifactsWithBase("0.6.0", []Artifact{
+		{Name: "nvca", Type: ArtifactTypeImage, Registry: "staging", Version: "3.2.19"},
+		{Name: "verified-service", Type: ArtifactTypeImage, Registry: "staging", Version: "2.0.0"},
+	}, base)
+	got, err := Render("manifest-artifact-registry-paths", catalog)
+	if err != nil {
+		t.Fatalf("Render failed: %v", err)
+	}
+
+	for _, name := range []string{defaultStackResourceName, computeStackResourceName, "nvcf-cli", "nvca"} {
+		row := manifestRow(t, got, name)
+		if !strings.Contains(row, "`Publication pending`") {
+			t.Errorf("%s row does not mark the unverified staging artifact pending: %s", name, row)
+		}
+	}
+	publicRow := manifestRow(t, got, "verified-service")
+	if !strings.Contains(publicRow, "`nvcr.io/nvidia/nvcf/verified-service:2.0.0`") {
+		t.Errorf("matching verified publication did not retain its public distribution: %s", publicRow)
+	}
+	if strings.Contains(got, catalog.Registries[defaultStackRegistry].Namespace) {
+		t.Fatalf("rendered manifest exposes staging namespace:\n%s", got)
+	}
+}
+
 func TestArtifactPathUsesPublishedVersionAlias(t *testing.T) {
 	catalog := testCatalog()
 	catalog.Registries["ea-images"] = Registry{Host: "nvcr.io", Namespace: "example/selfhosted-ga"}
@@ -381,6 +448,69 @@ func TestRenderImageMirroringSnippets(t *testing.T) {
 	}
 	if !strings.Contains(cli, `0833294136851237/nvcf-ncp-staging/nvcf-cli:${VERSION}`) {
 		t.Fatalf("cli snippet missing cli resource path:\n%s", cli)
+	}
+}
+
+func TestRenderImageMirroringCLIContentMatchesPublicationState(t *testing.T) {
+	pending := testCatalog()
+	pending.PublicationPending = []string{"nvcf-cli"}
+	pendingOutput, err := Render("image-mirroring-cli-snippet", pending)
+	if err != nil {
+		t.Fatalf("render pending CLI content: %v", err)
+	}
+	if strings.Contains(pendingOutput, "The extracted directory contains") {
+		t.Fatalf("pending CLI content implies extraction already occurred:\n%s", pendingOutput)
+	}
+	if !strings.Contains(pendingOutput, "Package contents and extraction instructions will be available after publication or mirroring") {
+		t.Fatalf("pending CLI content lacks actionable status guidance:\n%s", pendingOutput)
+	}
+
+	published := testCatalog()
+	publishedOutput, err := Render("image-mirroring-cli-snippet", published)
+	if err != nil {
+		t.Fatalf("render published CLI content: %v", err)
+	}
+	if !strings.Contains(publishedOutput, "The extracted directory contains") || !strings.Contains(publishedOutput, "`.nvcf-cli.yaml.template`") {
+		t.Fatalf("published CLI content omits extracted package details:\n%s", publishedOutput)
+	}
+}
+
+func TestRenderComputeStackDownloadsMatchPublicationState(t *testing.T) {
+	pending := testCatalog()
+	pending.PublicationPending = []string{computeStackResourceName}
+	for _, renderer := range []string{"image-mirroring-resource-examples", "image-mirroring-compute-stack-snippet"} {
+		t.Run(renderer+"-pending", func(t *testing.T) {
+			got, err := Render(renderer, pending)
+			if err != nil {
+				t.Fatalf("Render failed: %v", err)
+			}
+			if strings.Contains(got, "nvcf-compute-plane-stack:${") {
+				t.Fatalf("pending compute stack renders a download command:\n%s", got)
+			}
+			if !strings.Contains(got, "Publication pending: nvcf-compute-plane-stack 0.5.0 is not yet available for download") {
+				t.Fatalf("pending compute stack lacks publication status:\n%s", got)
+			}
+		})
+	}
+
+	published := testCatalog()
+	published.Registries["public-resources"] = Registry{Host: "nvcr.io", Namespace: "nvidia/nvcf"}
+	for i := range published.SupplementalArtifacts {
+		if published.SupplementalArtifacts[i].Name == computeStackResourceName {
+			published.SupplementalArtifacts[i].Registry = "public-resources"
+		}
+	}
+	published.Publications = []Publication{{Name: computeStackResourceName, Version: "0.5.0", Registry: "public-resources"}}
+	for _, renderer := range []string{"image-mirroring-resource-examples", "image-mirroring-compute-stack-snippet"} {
+		t.Run(renderer+"-published", func(t *testing.T) {
+			got, err := Render(renderer, published)
+			if err != nil {
+				t.Fatalf("Render failed: %v", err)
+			}
+			if !strings.Contains(got, "ngc registry resource download-version") || !strings.Contains(got, "nvidia/nvcf/nvcf-compute-plane-stack") {
+				t.Fatalf("published compute stack omits its public download command:\n%s", got)
+			}
+		})
 	}
 }
 
@@ -755,6 +885,91 @@ func TestUpdateCatalogSyncsComputePlaneStackPackage(t *testing.T) {
 	}
 }
 
+func TestUpdateCatalogMarksAdvancedComputeStackPendingWithoutExactPublication(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v4/projects/182049/packages/generic/ncp-deploy/0.9.0/artifacts-0.9.0.txt":
+			fmt.Fprint(w, ``)
+		case "/api/v4/projects/268903/packages":
+			fmt.Fprint(w, `[{"name":"nvcf-compute-plane-stack","version":"1.0.7"}]`)
+		default:
+			http.Error(w, fmt.Sprintf("unexpected path %s", r.URL.Path), http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv("DOC_VERSION_SYNC_GITLAB_BASE_URL", server.URL)
+	t.Setenv("DOC_VERSION_SYNC_GITLAB_TOKEN", "env-token")
+
+	base := testCatalog()
+	base.Registries["public-resources"] = Registry{Host: "nvcr.io", Namespace: "nvidia/nvcf"}
+	for i := range base.SupplementalArtifacts {
+		if base.SupplementalArtifacts[i].Name == computeStackResourceName {
+			base.SupplementalArtifacts[i].Registry = "public-resources"
+			base.SupplementalArtifacts[i].Version = "1.0.6"
+		}
+	}
+	base.Publications = []Publication{{Name: computeStackResourceName, Version: "1.0.6", Registry: "public-resources"}}
+
+	catalog, err := updateCatalogFromGitLab("0.9.0", base)
+	if err != nil {
+		t.Fatalf("updateCatalogFromGitLab failed: %v", err)
+	}
+	compute, ok := catalog.findArtifact(computeStackResourceName)
+	if !ok || compute.Version != "1.0.7" {
+		t.Fatalf("compute stack = %#v, want version 1.0.7", compute)
+	}
+	got, err := Render("manifest-artifact-registry-paths", catalog)
+	if err != nil {
+		t.Fatalf("render manifest: %v", err)
+	}
+	if row := manifestRow(t, got, computeStackResourceName); !strings.Contains(row, "`Publication pending`") {
+		t.Fatalf("advanced compute stack is not marked pending: %s", row)
+	}
+}
+
+func TestUpdateCatalogKeepsAdvancedComputeStackPublicWithExactPublication(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v4/projects/182049/packages/generic/ncp-deploy/0.9.0/artifacts-0.9.0.txt":
+			fmt.Fprint(w, ``)
+		case "/api/v4/projects/268903/packages":
+			fmt.Fprint(w, `[{"name":"nvcf-compute-plane-stack","version":"1.0.7"}]`)
+		default:
+			http.Error(w, fmt.Sprintf("unexpected path %s", r.URL.Path), http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv("DOC_VERSION_SYNC_GITLAB_BASE_URL", server.URL)
+	t.Setenv("DOC_VERSION_SYNC_GITLAB_TOKEN", "env-token")
+
+	base := testCatalog()
+	base.Registries["public-resources"] = Registry{Host: "nvcr.io", Namespace: "nvidia/nvcf"}
+	for i := range base.SupplementalArtifacts {
+		if base.SupplementalArtifacts[i].Name == computeStackResourceName {
+			base.SupplementalArtifacts[i].Registry = "public-resources"
+			base.SupplementalArtifacts[i].Version = "1.0.6"
+		}
+	}
+	base.Publications = []Publication{
+		{Name: computeStackResourceName, Version: "1.0.6", Registry: "public-resources"},
+		{Name: computeStackResourceName, Version: "1.0.7", Registry: "public-resources"},
+	}
+
+	catalog, err := updateCatalogFromGitLab("0.9.0", base)
+	if err != nil {
+		t.Fatalf("updateCatalogFromGitLab failed: %v", err)
+	}
+	got, err := Render("manifest-artifact-registry-paths", catalog)
+	if err != nil {
+		t.Fatalf("render manifest: %v", err)
+	}
+	if row := manifestRow(t, got, computeStackResourceName); !strings.Contains(row, "`nvcr.io/nvidia/nvcf/nvcf-compute-plane-stack:1.0.7`") {
+		t.Fatalf("exactly published compute stack does not use its public distribution: %s", row)
+	}
+}
+
 func TestUpdateCatalogDiscoversLatestStackPackage(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -913,6 +1128,18 @@ func writeFile(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
+}
+
+func manifestRow(t *testing.T, manifest, artifactName string) string {
+	t.Helper()
+	prefix := "| `" + artifactName + "` |"
+	for _, line := range strings.Split(manifest, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return line
+		}
+	}
+	t.Fatalf("manifest is missing row for %s:\n%s", artifactName, manifest)
+	return ""
 }
 
 func sectionBetween(t *testing.T, content, startMarker, endMarker string) string {
