@@ -1832,6 +1832,13 @@ func (r *Reconciler) newSharedFSReaderPV(
 			fmt.Errorf("derive reader PV volume handle: %w", err))
 	}
 	roPV.Spec.CSI.VolumeHandle = handle
+	// A derived reader is a read-only model cache PV like any other, so it
+	// takes the provisioner's required reader options rather than inheriting
+	// whatever the writer was provisioned with. This matters for NVMesh, whose
+	// reader attaches the same XFS filesystem as the writer and needs nouuid
+	// and norecovery or the mount fails outright. deriveReaderVolumeHandle
+	// above already handles the NVMesh driver reaching this path.
+	roPV.Spec.MountOptions = r.resolveCacheMountOptions(ctx, roPV)
 	roPV.Status = corev1.PersistentVolumeStatus{}
 	if err := r.setControlledObjectMeta(ctx, stCopy, roPV); err != nil {
 		return nil, err

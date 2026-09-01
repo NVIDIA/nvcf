@@ -2027,3 +2027,50 @@ func TestDeriveReaderVolumeHandle(t *testing.T) {
 		})
 	}
 }
+
+// TestNewSharedFSReaderPVResolvesMountOptions pins that a derived reader takes
+// the provisioner's required reader options instead of inheriting the writer's.
+//
+// This matters once NVMesh reaches this path. NVMesh is detected today by the
+// nvcf-sc-30 marker class; when that goes away it is identified by provisioner
+// like every other backend and resolves to the shared filesystem flow. Its
+// reader attaches the same XFS filesystem as the writer, so without nouuid and
+// norecovery the mount fails outright, and inheriting the writer's read-write
+// options is exactly the wrong answer.
+func TestNewSharedFSReaderPVResolvesMountOptions(t *testing.T) {
+	c := fake.NewClientBuilder().
+		WithScheme(mgrScheme).
+		WithRESTMapper(newTestRESTMapper(mgrScheme)).
+		WithObjects(newMountOptionDefaultsObjects(NVMeshStorageClassProvisioner, nvmeshMountOptionDefaults)...).
+		Build()
+	r := newMountOptionsReconciler(t, c, nil)
+
+	writerPV := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "writer-pv"},
+		Spec: corev1.PersistentVolumeSpec{
+			// What the writer was provisioned with, which the reader must not keep.
+			MountOptions: []string{"rw"},
+			Capacity:     corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")},
+			PersistentVolumeSource: corev1.PersistentVolumeSource{
+				CSI: &corev1.CSIPersistentVolumeSource{
+					Driver:       NVMeshStorageClassProvisioner,
+					VolumeHandle: "single-zone-cluster:csi-5326ce57-8cae-456c:ef7bc990-47e7-11f0-91b6-c952fffeea08:writer-ns",
+				},
+			},
+		},
+	}
+	st := &nvcav1new.StorageRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "sr", Namespace: "reader-ns"},
+		Spec:       nvcav1new.StorageRequestSpec{ICMSRequestName: "req"},
+	}
+	icmsReq := &nvcav2beta1.ICMSRequest{ObjectMeta: metav1.ObjectMeta{Name: "req", Namespace: "reader-ns"}}
+
+	roPV, err := r.newSharedFSReaderPV(context.Background(), st, icmsReq, writerPV, "ro-pvc")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"ro", "norecovery", "nouuid"}, roPV.Spec.MountOptions,
+		"a derived reader must take the provisioner's reader options, not the writer's")
+	assert.NotContains(t, roPV.Spec.MountOptions, "rw",
+		"the writer's read-write option must not survive onto a read-only reader")
+	assert.True(t, strings.HasSuffix(roPV.Spec.CSI.VolumeHandle, ":reader-ns"),
+		"the NVMesh handle must be rewritten for the reader namespace")
+}
