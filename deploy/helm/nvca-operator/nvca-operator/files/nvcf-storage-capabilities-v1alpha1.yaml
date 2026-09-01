@@ -19,16 +19,13 @@
 # from these modes.
 #
 #   ReadWriteMany              one shared claim; readers mount it read-only
-#   ReadWriteOnce+ReadOnlyMany writer takes the claim; readers get ROX on it
+#   ReadWriteOnce+ReadOnlyMany writer takes the claim; readers get their own
 #
-# Function model caching keeps its readers in the request namespace, so either
-# shape works. Helm model caching must reach other namespaces, which a
-# ReadWriteMany claim does natively and the ROX shape does not, except on
-# NVMesh, whose volume handles encode the namespace.
-#
-# An empty accessModes list means nothing is qualified yet, so both workflows
-# are off for that driver. A provisioner absent from this file is unsupported.
-# Enabling a backend is an edit here, backed by a qualification run.
+# An access mode a driver merely accepts is not a qualification. A claim that
+# binds is not either. An empty accessModes list means nothing is qualified
+# yet, so caching stays off for that driver, and a provisioner absent from this
+# file is unsupported. Enabling a backend is an edit here, backed by a
+# qualification run.
 apiVersion: storage.nvcf.nvidia.com/v1alpha1
 kind: StorageCapabilityCatalog
 drivers:
@@ -45,31 +42,16 @@ drivers:
       - nouuid
   csi.weka.io:
     provider: weka
-    # Qualified 2026-08-31 on amahmood3-dgxc-k8s-mst-blc-01, StorageClass
-    # nv-storage-file. A reader in another namespace, on a PV derived from the
-    # writer volume, read the cache and was denied writes with EROFS, for both
-    # ReadWriteMany and ReadOnlyMany claims. Weka volume handles carry no
-    # namespace, so the writer handle is reused unchanged.
-    accessModes:
-      - ReadWriteMany
-      - ReadOnlyMany
-    # The reader claim is mounted read-only by the Pod, so NVCA sets no
-    # options on the derived PV.
+    # Fresh ReadWriteMany and ReadOnlyMany claims were tested, but a cache
+    # workflow was not, so nothing is qualified yet.
+    accessModes: []
     readerMountOptions: []
   fss.csi.oraclecloud.com:
     provider: ociFss
-    # Qualified 2026-08-31 on nvcf-dgxc-k8s-oci-jbt-ct4, StorageClass
-    # fss-nvcf-test, by the same method and with the same result as Weka. FSS
-    # volume handles are filesystem-ocid:mount-target-ip:export-path and carry
-    # no namespace.
-    #
-    # Deployment note: fss.csi.oraclecloud.com declares fsGroupPolicy
-    # ReadWriteOnceWithFSType, so Kubernetes does not apply fsGroup to a
-    # ReadWriteMany volume. A fresh export is owned root:root, so the cache
-    # writer must run as root on FSS.
-    accessModes:
-      - ReadWriteMany
-      - ReadOnlyMany
+    # A ReadWriteMany claim was tested; its readers used read-only Pod mounts,
+    # which is not evidence for a ReadOnlyMany claim. No cache workflow was
+    # qualified.
+    accessModes: []
     readerMountOptions: []
   lustre.csi.oraclecloud.com:
     provider: ociLustre

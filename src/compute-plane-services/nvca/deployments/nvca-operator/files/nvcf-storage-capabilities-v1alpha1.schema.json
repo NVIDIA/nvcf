@@ -3,65 +3,197 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://nvcf.nvidia.com/schemas/storage-capability-catalog-v1alpha1.json",
   "title": "NVCF storage capability catalog",
-  "description": "Qualified PVC access modes per exact CSI provisioner. NVCA derives the cache flow for each workflow from these modes; nothing about the flow is declared here.",
+  "description": "PVC access modes qualified per exact CSI provisioner. NVCA derives the cache flow from these modes; nothing about the flow is declared here.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["apiVersion", "kind", "drivers"],
+  "required": [
+    "apiVersion",
+    "kind",
+    "drivers"
+  ],
   "properties": {
-    "apiVersion": {"const": "storage.nvcf.nvidia.com/v1alpha1"},
-    "kind": {"const": "StorageCapabilityCatalog"},
+    "apiVersion": {
+      "const": "storage.nvcf.nvidia.com/v1alpha1"
+    },
+    "kind": {
+      "const": "StorageCapabilityCatalog"
+    },
     "drivers": {
       "type": "object",
       "minProperties": 1,
-      "propertyNames": {"type": "string", "minLength": 1, "pattern": "\\S"},
-      "additionalProperties": {"$ref": "#/$defs/driver"}
+      "propertyNames": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "\\S"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/driver"
+      }
     }
   },
   "$defs": {
     "accessMode": {
       "type": "string",
-      "enum": ["ReadWriteOnce", "ReadOnlyMany", "ReadWriteMany"]
+      "enum": [
+        "ReadWriteOnce",
+        "ReadOnlyMany",
+        "ReadWriteMany"
+      ]
     },
     "driver": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["provider", "accessModes", "readerMountOptions"],
+      "required": [
+        "provider",
+        "accessModes",
+        "readerMountOptions"
+      ],
       "properties": {
-        "provider": {"type": "string", "minLength": 1, "pattern": "\\S"},
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
         "accessModes": {
-          "description": "Access modes qualified end to end in an NVCF cache workflow. Empty means the driver is not enabled.",
+          "description": "Modes qualified end to end in an NVCF cache workflow, not modes the driver accepts. Empty means the driver is not enabled.",
           "type": "array",
           "uniqueItems": true,
-          "items": {"$ref": "#/$defs/accessMode"}
+          "items": {
+            "$ref": "#/$defs/accessMode"
+          }
         },
         "readerMountOptions": {
-          "description": "Mount options for reader PVs that NVCA creates. Only used by the ReadWriteOnce+ReadOnlyMany shape, which must include \"ro\".",
+          "description": "Mount options for reader PVs NVCA creates. Only the ReadWriteOnce plus ReadOnlyMany shape creates them, and it must include \"ro\".",
           "type": "array",
           "uniqueItems": true,
-          "items": {"type": "string", "minLength": 1, "pattern": "\\S"}
+          "items": {
+            "$ref": "#/$defs/readerMountOption"
+          },
+          "allOf": [
+            {
+              "not": {
+                "allOf": [
+                  {
+                    "contains": {
+                      "const": "ro"
+                    }
+                  },
+                  {
+                    "contains": {
+                      "const": "rw"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "not": {
+                "allOf": [
+                  {
+                    "contains": {
+                      "const": "recovery"
+                    }
+                  },
+                  {
+                    "contains": {
+                      "const": "norecovery"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "not": {
+                "allOf": [
+                  {
+                    "contains": {
+                      "const": "uuid"
+                    }
+                  },
+                  {
+                    "contains": {
+                      "const": "nouuid"
+                    }
+                  }
+                ]
+              }
+            }
+          ]
         }
       },
       "allOf": [
         {
-          "$comment": "A driver qualified for the ROX shape creates reader PVs, so it must mount them read-only.",
+          "$comment": "A driver qualified for the ReadOnlyMany reader shape creates reader PVs, so it must mount them read-only.",
           "if": {
             "properties": {
               "accessModes": {
                 "allOf": [
-                  {"contains": {"const": "ReadWriteOnce"}},
-                  {"contains": {"const": "ReadOnlyMany"}}
+                  {
+                    "contains": {
+                      "const": "ReadWriteOnce"
+                    }
+                  },
+                  {
+                    "contains": {
+                      "const": "ReadOnlyMany"
+                    }
+                  }
                 ]
               }
             },
-            "required": ["accessModes"]
+            "required": [
+              "accessModes"
+            ]
           },
           "then": {
             "properties": {
-              "readerMountOptions": {"contains": {"const": "ro"}}
+              "readerMountOptions": {
+                "contains": {
+                  "const": "ro"
+                }
+              }
+            }
+          }
+        },
+        {
+          "$comment": "ReadOnlyMany describes readers. Without a writer mode alongside it there is nothing to populate the cache.",
+          "if": {
+            "properties": {
+              "accessModes": {
+                "contains": {
+                  "const": "ReadOnlyMany"
+                }
+              }
+            },
+            "required": [
+              "accessModes"
+            ]
+          },
+          "then": {
+            "properties": {
+              "accessModes": {
+                "anyOf": [
+                  {
+                    "contains": {
+                      "const": "ReadWriteOnce"
+                    }
+                  },
+                  {
+                    "contains": {
+                      "const": "ReadWriteMany"
+                    }
+                  }
+                ]
+              }
             }
           }
         }
       ]
+    },
+    "readerMountOption": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^\\S(?:.*\\S)?$"
     }
   }
 }

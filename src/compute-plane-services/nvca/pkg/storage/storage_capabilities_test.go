@@ -18,6 +18,7 @@ limitations under the License.
 package storage
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,7 +71,7 @@ func validStorageCapabilityCatalog() *storageCapabilityCatalog {
 		Kind:       storageCapabilityCatalogKind,
 		Drivers: map[string]storageDriverSpec{
 			NVMeshStorageClassProvisioner: {
-				Provider:           "nvmesh",
+				Provider:           ModelCacheProviderNVMesh,
 				AccessModes:        accessModes("ReadWriteOnce", "ReadOnlyMany"),
 				ReaderMountOptions: readerMountOptions("ro", "norecovery", "nouuid"),
 			},
@@ -84,8 +85,6 @@ func TestLoadStorageCapabilityCatalogStrict(t *testing.T) {
 	catalog, err := loadStorageCapabilityCatalog(t.Context(), c, testCatalogNamespace)
 	require.NoError(t, err)
 	nvmesh := catalog.Drivers[NVMeshStorageClassProvisioner]
-	assert.Equal(t, ModelCacheTransitionROXReadOnly,
-		transitionForWorkflow(nvmesh, ModelCacheWorkflowRegular))
 	require.NotNil(t, nvmesh.AccessModes)
 	assert.ElementsMatch(t, []string{"ReadWriteOnce", "ReadOnlyMany"}, *nvmesh.AccessModes)
 	require.NotNil(t, nvmesh.ReaderMountOptions)
@@ -173,8 +172,6 @@ func TestLoadStorageCapabilityCatalogRejectsUnknownFields(t *testing.T) {
 			want: "unknown field \"surprise\"",
 		},
 		{
-			// A declared transition is exactly what the catalog no longer
-			// accepts: the flow is derived, never stated.
 			name: "declared transition",
 			raw: strings.Replace(validCatalog, "    provider: nvmesh",
 				"    provider: nvmesh\n    transitions:\n      helmModelCache: roxReadOnly", 1),
@@ -265,26 +262,51 @@ func TestValidateStorageCapabilityCatalog(t *testing.T) {
 			d.ReaderMountOptions = readerMountOptions("ro", "norecovery", "uuid", "nouuid")
 			c.Drivers[NVMeshStorageClassProvisioner] = d
 		}, want: `readerMountOptions "uuid" and "nouuid" conflict`},
-		{name: "NVMesh transition lacks ro reader mount option", mutate: func(c *storageCapabilityCatalog) {
+		{name: "ReadOnlyMany reader shape lacks ro reader mount option", mutate: func(c *storageCapabilityCatalog) {
 			d := c.Drivers[NVMeshStorageClassProvisioner]
 			d.ReaderMountOptions = readerMountOptions("norecovery", "nouuid")
 			c.Drivers[NVMeshStorageClassProvisioner] = d
 		}, want: `must list readerMountOption "ro"`},
-		{name: "roxReadOnly requires a read-only reader mount", mutate: func(c *storageCapabilityCatalog) {
+		{name: "ReadOnlyMany without ReadWriteOnce has no writer", mutate: func(c *storageCapabilityCatalog) {
 			d := c.Drivers[NVMeshStorageClassProvisioner]
-			d.ReaderMountOptions = readerMountOptions("norecovery", "nouuid")
+			d.AccessModes = accessModes("ReadOnlyMany")
 			c.Drivers[NVMeshStorageClassProvisioner] = d
-		}, want: `must list readerMountOption "ro"`},
-		// roxReadOnly is gated on proven access modes, not on the vendor, so
-		// moving the same qualified entry to another driver stays valid.
-		{name: "roxReadOnly is not provisioner-specific", mutate: func(c *storageCapabilityCatalog) {
+		}, want: "ReadOnlyMany with no writer mode"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			catalog := validStorageCapabilityCatalog()
+			tt.mutate(catalog)
+			require.ErrorContains(t, validateStorageCapabilityCatalog(catalog), tt.want)
+		})
+	}
+}
+
+// TestValidateStorageCapabilityCatalogAccepts covers shapes that are valid
+// because the catalog records qualified access modes only. NVCA derives the
+// flow, so nothing here is restricted to a known provisioner or provider, and
+// filesystem specific reader options are per driver data rather than a rule.
+func TestValidateStorageCapabilityCatalogAccepts(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*storageCapabilityCatalog)
+	}{
+		{name: "reader shape needs only ro", mutate: func(c *storageCapabilityCatalog) {
 			d := c.Drivers[NVMeshStorageClassProvisioner]
+			d.ReaderMountOptions = readerMountOptions("ro")
+			c.Drivers[NVMeshStorageClassProvisioner] = d
+		}},
+		{name: "any provisioner may qualify for the reader shape", mutate: func(c *storageCapabilityCatalog) {
+			d := c.Drivers[NVMeshStorageClassProvisioner]
+			d.Provider = "example"
 			delete(c.Drivers, NVMeshStorageClassProvisioner)
 			c.Drivers["example.csi.test"] = d
 		}},
-		{name: "roxReadOnly is not provider-specific", mutate: func(c *storageCapabilityCatalog) {
+		{name: "ReadWriteOnce alone qualifies for nothing", mutate: func(c *storageCapabilityCatalog) {
 			d := c.Drivers[NVMeshStorageClassProvisioner]
-			d.Provider = "weka"
+			d.AccessModes = accessModes("ReadWriteOnce")
+			d.ReaderMountOptions = readerMountOptions()
 			c.Drivers[NVMeshStorageClassProvisioner] = d
 		}},
 	}
@@ -293,16 +315,96 @@ func TestValidateStorageCapabilityCatalog(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			catalog := validStorageCapabilityCatalog()
 			tt.mutate(catalog)
-			err := validateStorageCapabilityCatalog(catalog)
-			// An empty want means the mutation must stay valid: the catalog,
-			// not the code, decides which drivers may run a transition.
-			if tt.want == "" {
-				require.NoError(t, err)
-				return
-			}
-			require.ErrorContains(t, err, tt.want)
+			require.NoError(t, validateStorageCapabilityCatalog(catalog))
 		})
 	}
+}
+
+// TestValidateStorageCapabilityCatalogAcceptsSharedClaimDriver covers a driver
+// NVCA has no special knowledge of. A shared claim creates no reader PV, so it
+// needs no reader mount options, and listing some is not an error either: the
+// options simply go unused.
+func TestValidateStorageCapabilityCatalogAcceptsSharedClaimDriver(t *testing.T) {
+	const provisioner = "shared.csi.example.com"
+	catalog := validStorageCapabilityCatalog()
+	catalog.Drivers[provisioner] = storageDriverSpec{
+		Provider:           "someVendor",
+		AccessModes:        accessModes("ReadWriteMany", "ReadOnlyMany"),
+		ReaderMountOptions: readerMountOptions(),
+	}
+	require.NoError(t, validateStorageCapabilityCatalog(catalog))
+}
+
+// TestValidateStorageCapabilityCatalogRequiresReadOnlyReaderMount pins the one
+// rule the reader shape still carries: a driver qualified for ReadWriteOnce
+// plus ReadOnlyMany gets reader PVs that NVCA creates, so it has to say how to
+// mount them read-only.
+func TestValidateStorageCapabilityCatalogRequiresReadOnlyReaderMount(t *testing.T) {
+	catalog := validStorageCapabilityCatalog()
+	driver := catalog.Drivers[NVMeshStorageClassProvisioner]
+	driver.ReaderMountOptions = readerMountOptions("norecovery", "nouuid")
+	catalog.Drivers[NVMeshStorageClassProvisioner] = driver
+
+	require.ErrorContains(t, validateStorageCapabilityCatalog(catalog),
+		`must list readerMountOption "ro"`)
+}
+
+// TestValidateStorageCapabilityCatalogAllowsNothingQualified covers how an
+// unqualified driver is recorded: present in the catalog with no access modes,
+// rather than absent or rejected.
+func TestValidateStorageCapabilityCatalogAllowsNothingQualified(t *testing.T) {
+	catalog := validStorageCapabilityCatalog()
+	driver := catalog.Drivers[NVMeshStorageClassProvisioner]
+	driver.AccessModes = accessModes()
+	driver.ReaderMountOptions = readerMountOptions()
+	catalog.Drivers[NVMeshStorageClassProvisioner] = driver
+
+	require.NoError(t, validateStorageCapabilityCatalog(catalog))
+}
+
+func TestShippedStorageCapabilityCatalog(t *testing.T) {
+	chartDir := filepath.Join("src", "compute-plane-services", "nvca", "deployments", "nvca-operator")
+	if _, err := os.Stat(chartDir); os.IsNotExist(err) {
+		chartDir = filepath.Join("..", "..", "deployments", "nvca-operator")
+	}
+	raw, err := os.ReadFile(filepath.Join(chartDir, "files", "nvcf-storage-capabilities-v1alpha1.yaml"))
+	require.NoError(t, err)
+	c := capabilityClient(t, capabilityCatalogConfigMap(string(raw))).Build()
+	catalog, err := loadStorageCapabilityCatalog(t.Context(), c, testCatalogNamespace)
+	require.NoError(t, err)
+
+	nvmesh := catalog.Drivers[NVMeshStorageClassProvisioner]
+	require.NotNil(t, nvmesh.AccessModes)
+	assert.ElementsMatch(t, []string{"ReadWriteOnce", "ReadOnlyMany"}, *nvmesh.AccessModes)
+	require.NotNil(t, nvmesh.ReaderMountOptions)
+	assert.Equal(t, []string{"ro", "norecovery", "nouuid"}, *nvmesh.ReaderMountOptions)
+
+	// Weka, FSS and Lustre are recorded but not qualified for a cache workflow,
+	// so they carry no access modes and caching stays off for them. Enabling
+	// one is an edit to its accessModes, backed by a qualification run.
+	for _, provisioner := range []string{"csi.weka.io", "fss.csi.oraclecloud.com", "lustre.csi.oraclecloud.com"} {
+		driver, ok := catalog.Drivers[provisioner]
+		require.True(t, ok, provisioner)
+		require.NotNil(t, driver.AccessModes, provisioner)
+		assert.Empty(t, *driver.AccessModes, provisioner)
+		require.NotNil(t, driver.ReaderMountOptions, provisioner)
+		assert.Empty(t, *driver.ReaderMountOptions, provisioner)
+	}
+
+	schemaRaw, err := os.ReadFile(filepath.Join(chartDir, "files", "nvcf-storage-capabilities-v1alpha1.schema.json"))
+	require.NoError(t, err)
+	assert.True(t, json.Valid(schemaRaw), "shipped JSON schema must be valid JSON")
+	var schema map[string]any
+	require.NoError(t, json.Unmarshal(schemaRaw, &schema))
+	definitions, ok := schema["$defs"].(map[string]any)
+	require.True(t, ok)
+	accessMode, ok := definitions["accessMode"].(map[string]any)
+	require.True(t, ok)
+	assert.ElementsMatch(t,
+		[]any{"ReadWriteOnce", "ReadOnlyMany", "ReadWriteMany"}, accessMode["enum"],
+		"the schema constrains qualified access modes, and declares no cache flow")
+	assert.NotContains(t, definitions, "transitions",
+		"the flow is derived from access modes, never declared")
 }
 
 // TestTransitionForWorkflow is the whole decision the catalog drives: proven
@@ -416,66 +518,4 @@ func TestSelectionFollowsQualifiedModes(t *testing.T) {
 		assert.Empty(t, selection.RequiredMountOptions, workflow,
 			"a shared claim is mounted read-only by the Pod, so NVCA sets no reader options")
 	}
-}
-
-func TestValidateStorageCapabilityCatalogAllowsNothingQualified(t *testing.T) {
-	catalog := validStorageCapabilityCatalog()
-	driver := catalog.Drivers[NVMeshStorageClassProvisioner]
-	driver.AccessModes = accessModes()
-	driver.ReaderMountOptions = readerMountOptions()
-	catalog.Drivers[NVMeshStorageClassProvisioner] = driver
-
-	require.NoError(t, validateStorageCapabilityCatalog(catalog),
-		"an unqualified driver is recorded with no access modes, not rejected")
-}
-
-func TestShippedStorageCapabilityCatalog(t *testing.T) {
-	chartDir := filepath.Join("src", "compute-plane-services", "nvca", "deployments", "nvca-operator")
-	if _, err := os.Stat(chartDir); os.IsNotExist(err) {
-		chartDir = filepath.Join("..", "..", "deployments", "nvca-operator")
-	}
-	raw, err := os.ReadFile(filepath.Join(chartDir, "files", "nvcf-storage-capabilities-v1alpha1.yaml"))
-	require.NoError(t, err)
-	c := capabilityClient(t, capabilityCatalogConfigMap(string(raw))).Build()
-	catalog, err := loadStorageCapabilityCatalog(t.Context(), c, testCatalogNamespace)
-	require.NoError(t, err)
-
-	nvmesh := catalog.Drivers[NVMeshStorageClassProvisioner]
-	require.NotNil(t, nvmesh.AccessModes)
-	assert.ElementsMatch(t, []string{"ReadWriteOnce", "ReadOnlyMany"}, *nvmesh.AccessModes)
-	require.NotNil(t, nvmesh.ReaderMountOptions)
-	assert.Equal(t, []string{"ro", "norecovery", "nouuid"}, *nvmesh.ReaderMountOptions)
-	assert.Equal(t, ModelCacheTransitionROXReadOnly,
-		transitionForWorkflow(nvmesh, ModelCacheWorkflowRegular))
-	assert.Equal(t, ModelCacheTransitionROXReadOnly,
-		transitionForWorkflow(nvmesh, ModelCacheWorkflowHelm))
-
-	// Weka and FSS were qualified on 2026-08-31: a reader in another namespace,
-	// on a PV derived from the writer volume, read the cache and was denied
-	// writes. Both serve regular and Helm caching from a shared claim, and
-	// neither needs reader mount options because the Pod mounts the claim
-	// read-only. See docs/dev/storage-provider-qualification.md.
-	for _, provisioner := range []string{"csi.weka.io", "fss.csi.oraclecloud.com"} {
-		driver, ok := catalog.Drivers[provisioner]
-		require.True(t, ok, provisioner)
-		require.NotNil(t, driver.AccessModes, provisioner)
-		assert.ElementsMatch(t,
-			[]string{"ReadWriteMany", "ReadOnlyMany"}, *driver.AccessModes, provisioner)
-		assert.Equal(t, ModelCacheTransitionRWXReadOnly,
-			transitionForWorkflow(driver, ModelCacheWorkflowRegular), provisioner)
-		assert.Equal(t, ModelCacheTransitionRWXReadOnly,
-			transitionForWorkflow(driver, ModelCacheWorkflowHelm), provisioner)
-		require.NotNil(t, driver.ReaderMountOptions, provisioner)
-		assert.Empty(t, *driver.ReaderMountOptions, provisioner)
-	}
-
-	// Lustre has no qualification run, so both workflows stay off.
-	lustre, ok := catalog.Drivers["lustre.csi.oraclecloud.com"]
-	require.True(t, ok)
-	require.NotNil(t, lustre.AccessModes)
-	assert.Empty(t, *lustre.AccessModes)
-	assert.Equal(t, ModelCacheTransitionDisabled,
-		transitionForWorkflow(lustre, ModelCacheWorkflowRegular))
-	assert.Equal(t, ModelCacheTransitionDisabled,
-		transitionForWorkflow(lustre, ModelCacheWorkflowHelm))
 }

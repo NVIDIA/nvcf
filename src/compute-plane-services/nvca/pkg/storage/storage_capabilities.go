@@ -47,7 +47,7 @@ const (
 	// serialized storage capability catalog.
 	StorageCapabilityConfigMapKey = "storage-provider-capabilities.yaml"
 
-	// ModelCacheTransitionDisabled prevents durable storage for a workflow.
+	// ModelCacheTransitionDisabled means no durable cache for a workflow.
 	ModelCacheTransitionDisabled = "disabled"
 	// ModelCacheTransitionROXReadOnly populates a writer claim and publishes a
 	// separate ReadOnlyMany reader claim with read-only Pod mounts.
@@ -57,8 +57,7 @@ const (
 	// read-only Pod mounts.
 	ModelCacheTransitionRWXReadOnly = "rwxReadOnly"
 	// ModelCacheProviderNVMesh is the provider id the catalog uses for NVMesh.
-	// It identifies a driver family for tests and diagnostics; it does not
-	// gate which transitions a driver may run.
+	// It names a driver family; it does not gate what a driver may run.
 	ModelCacheProviderNVMesh = "nvmesh"
 )
 
@@ -102,9 +101,22 @@ type storageCapabilityCatalog struct {
 	Drivers    map[string]storageDriverSpec `json:"drivers"`
 }
 
+// storageDriverSpec records what a qualification run established for one exact
+// CSI provisioner, and nothing more. How NVCA caches on that driver is derived
+// from the access modes, not declared here: a ReadWriteMany claim is shared and
+// mounted read-only, a ReadWriteOnce plus ReadOnlyMany pair gives readers their
+// own claim, and neither means no durable cache.
 type storageDriverSpec struct {
-	Provider           string    `json:"provider"`
-	AccessModes        *[]string `json:"accessModes"`
+	Provider string `json:"provider"`
+	// AccessModes are the modes qualified end to end in a cache workflow, not
+	// the modes the driver will accept. An empty list means nothing is
+	// qualified yet and caching stays off for that driver. A pointer so that an
+	// absent field is rejected rather than read as empty.
+	AccessModes *[]string `json:"accessModes"`
+	// ReaderMountOptions apply to reader PVs NVCA creates, which only the
+	// ReadWriteOnce plus ReadOnlyMany shape does. Vendor specific options
+	// belong here rather than in code: norecovery and nouuid are NVMesh XFS
+	// requirements and apply to no other driver.
 	ReaderMountOptions *[]string `json:"readerMountOptions"`
 }
 
@@ -628,12 +640,23 @@ func validateStorageCapabilityCatalog(catalog *storageCapabilityCatalog) error {
 			accessModes[mode] = true
 		}
 
-		// Reader options only matter for the ROX shape, where NVCA creates
-		// the reader PV itself. A shared claim is mounted read-only by the
-		// Pod, so options there would never be applied.
-		if transitionForWorkflow(driver, ModelCacheWorkflowRegular) == ModelCacheTransitionROXReadOnly &&
+		// ReadOnlyMany describes readers. Without a writer mode alongside it
+		// there is nothing to populate the cache.
+		if accessModes[string(corev1.ReadOnlyMany)] &&
+			!accessModes[string(corev1.ReadWriteOnce)] && !accessModes[string(corev1.ReadWriteMany)] {
+			return fmt.Errorf(
+				"driver %q qualifies ReadOnlyMany with no writer mode, "+
+					"it needs ReadWriteOnce or ReadWriteMany",
+				provisioner)
+		}
+		// A driver qualified for the ReadWriteOnce plus ReadOnlyMany shape gets
+		// reader PVs that NVCA creates, so it must say how to mount them
+		// read-only. The shared claim shape creates no reader PV, so it needs
+		// no options.
+		if accessModes[string(corev1.ReadWriteOnce)] && accessModes[string(corev1.ReadOnlyMany)] &&
 			!readerMountOptions["ro"] {
-			return fmt.Errorf("driver %q qualifies for the ROX shape and must list readerMountOption %q",
+			return fmt.Errorf(
+				"driver %q qualifies for the ReadOnlyMany reader shape and must list readerMountOption %q",
 				provisioner, "ro")
 		}
 	}
