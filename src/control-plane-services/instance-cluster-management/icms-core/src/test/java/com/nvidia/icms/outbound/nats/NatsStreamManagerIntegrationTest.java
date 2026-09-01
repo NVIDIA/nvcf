@@ -21,10 +21,10 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-import com.nvidia.icms.configuration.nats.NatsConfigurationProperties;
-import com.nvidia.icms.integration.IntegrationTest;
 import com.nvidia.icms.configuration.nats.NatsConfiguration.FixedNatsPool;
 import com.nvidia.icms.configuration.nats.NatsConfiguration;
+import com.nvidia.icms.configuration.nats.NatsConfigurationProperties;
+import com.nvidia.icms.integration.IntegrationTest;
 import io.micrometer.tracing.Tracer;
 import io.nats.client.Connection;
 import io.nats.client.api.RetentionPolicy;
@@ -71,7 +71,7 @@ class NatsStreamManagerIntegrationTest extends IntegrationTest {
             throw new IllegalStateException(e);
         }
         natsStreamManager = new NatsStreamManager(
-                new NatsResourceService(fixedNatsPool.borrowConnection()),
+                fixedNatsPool.borrowConnection(),
                 natsConfigurationProperties);
     }
 

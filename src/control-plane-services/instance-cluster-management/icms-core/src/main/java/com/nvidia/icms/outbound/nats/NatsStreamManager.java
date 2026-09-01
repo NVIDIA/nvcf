@@ -17,20 +17,23 @@
 package com.nvidia.icms.outbound.nats;
 
 import com.nvidia.icms.configuration.nats.NatsConfigurationProperties;
+import io.micrometer.core.annotation.Timed;
+import io.nats.client.Connection;
+import io.nats.client.JetStreamApiException;
+import io.nats.client.JetStreamManagement;
 import io.nats.client.api.RetentionPolicy;
 import io.nats.client.api.StorageType;
 import io.nats.client.api.StreamConfiguration;
 import jakarta.annotation.PostConstruct;
+import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 @Component
-@RequiredArgsConstructor
 @Slf4j
-public class NatsStreamManager {
+public class NatsStreamManager implements AutoCloseable {
 
     public static final String CREATE_NVCA_STREAM_NAME = "CreateNvcaFunctionTaskStream";
     public static final String TERMINATE_NVCA_STREAM_NAME = "TerminateNvcaStream";
@@ -41,8 +44,17 @@ public class NatsStreamManager {
     private static final int MAX_INIT_ATTEMPTS = 60;
     private static final Duration INIT_RETRY_DELAY = Duration.ofSeconds(5);
 
-    private final NatsResourceService natsResourceService;
+    private final JetStreamManagement jetStreamManagement;
+    private final Connection connection;
     private final NatsConfigurationProperties natsConfigurationProperties;
+
+    public NatsStreamManager(
+            Connection connection,
+            NatsConfigurationProperties natsConfigurationProperties) throws IOException {
+        this.connection = connection;
+        jetStreamManagement = connection.jetStreamManagement();
+        this.natsConfigurationProperties = natsConfigurationProperties;
+    }
 
     @PostConstruct
     public void init() {
@@ -76,10 +88,55 @@ public class NatsStreamManager {
                 lastError);
     }
 
+    @Timed(value = "icms.nats.create.stream")
+    public void createStream(StreamConfiguration streamConfig)
+            throws IOException, JetStreamApiException {
+        try {
+            var streamInfo = jetStreamManagement.getStreamInfo(streamConfig.getName());
+            validateStreamConfiguration(streamConfig, streamInfo.getConfiguration());
+            return;
+        } catch (JetStreamApiException e) {
+            // non-404 related error gets passed back up
+            if (e.getErrorCode() != 404) {
+                throw e;
+            }
+            // if stream doesn't exist, keep going and try to create
+        }
+        try {
+            // if the stream was created by another server during this gap
+            // but the config is the same, this call will succeed
+            jetStreamManagement.addStream(streamConfig);
+        } catch (JetStreamApiException e) {
+            if (e.getApiErrorCode() == 10058) {
+                var streamInfo = jetStreamManagement.getStreamInfo(streamConfig.getName());
+                validateStreamConfiguration(streamConfig, streamInfo.getConfiguration());
+                return;
+            }
+            throw e;
+        }
+    }
+
+    private static void validateStreamConfiguration(
+            StreamConfiguration expected, StreamConfiguration actual) {
+        if (!expected.getSubjects().equals(actual.getSubjects())
+                || expected.getStorageType() != actual.getStorageType()
+                || expected.getRetentionPolicy() != actual.getRetentionPolicy()
+                || expected.getMaxMsgs() != actual.getMaxMsgs()
+                || !expected.getMaxAge().equals(actual.getMaxAge())) {
+            throw new IllegalStateException(
+                    "NATS stream " + expected.getName() + " has an incompatible configuration");
+        }
+    }
+
+    @Override
+    public void close() throws Exception {
+        connection.close();
+    }
+
     public void validateNatsStreams() {
         for (var streamConfiguration : streamConfigurations()) {
             try {
-                natsResourceService.createStream(streamConfiguration);
+                createStream(streamConfiguration);
             } catch (Exception e) {
                 log.error("Error creating stream {}: {}", streamConfiguration.getName(),
                           e.getMessage(), e);
@@ -89,7 +146,7 @@ public class NatsStreamManager {
 
     private void validateNatsStreamsStrict() throws Exception {
         for (var streamConfiguration : streamConfigurations()) {
-            natsResourceService.createStream(streamConfiguration);
+            createStream(streamConfiguration);
         }
     }
 

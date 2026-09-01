@@ -17,15 +17,23 @@
 package com.nvidia.icms.outbound.nats;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.nvidia.icms.configuration.nats.NatsConfigurationProperties;
+import io.nats.client.Connection;
+import io.nats.client.JetStreamApiException;
+import io.nats.client.JetStreamManagement;
 import io.nats.client.api.RetentionPolicy;
 import io.nats.client.api.StorageType;
 import io.nats.client.api.StreamConfiguration;
+import io.nats.client.api.StreamInfo;
+import io.nats.client.support.Status;
 import java.time.Duration;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -38,26 +46,30 @@ import org.mockito.junit.jupiter.MockitoExtension;
 class NatsStreamManagerTest {
 
     @Mock
-    private NatsResourceService natsResourceService;
+    private Connection connection;
+    @Mock
+    private JetStreamManagement management;
     @Mock
     private NatsConfigurationProperties natsConfigurationProperties;
 
     private NatsStreamManager natsStreamManager;
 
     @BeforeEach
-    void setUp() {
-        natsStreamManager = new NatsStreamManager(
-                natsResourceService, natsConfigurationProperties);
+    void setUp() throws Exception {
+        when(connection.jetStreamManagement()).thenReturn(management);
+        natsStreamManager = new NatsStreamManager(connection, natsConfigurationProperties);
     }
 
     @Test
     void validateNatsStreams_createsNvcaStreamsWithExistingConfiguration() throws Exception {
         when(natsConfigurationProperties.getMessageTtl()).thenReturn(Duration.ofHours(24));
+        when(management.getStreamInfo(any()))
+                .thenThrow(apiException(Status.NOT_FOUND_CODE));
 
         natsStreamManager.validateNatsStreams();
 
         var captor = ArgumentCaptor.forClass(StreamConfiguration.class);
-        verify(natsResourceService, org.mockito.Mockito.times(2)).createStream(captor.capture());
+        verify(management, times(2)).addStream(captor.capture());
         var streams = captor.getAllValues();
 
         assertStream(streams.get(0), NatsStreamManager.CREATE_NVCA_STREAM_NAME,
@@ -72,7 +84,7 @@ class NatsStreamManagerTest {
 
         natsStreamManager.init();
 
-        verify(natsResourceService, never()).createStream(any());
+        verifyNoInteractions(management);
     }
 
     @Test
@@ -82,7 +94,7 @@ class NatsStreamManagerTest {
 
         natsStreamManager.init();
 
-        verify(natsResourceService, never()).createStream(any());
+        verifyNoInteractions(management);
     }
 
     @Test
@@ -90,10 +102,62 @@ class NatsStreamManagerTest {
         when(natsConfigurationProperties.isEnabled()).thenReturn(true);
         when(natsConfigurationProperties.isCreateNatsStreams()).thenReturn(true);
         when(natsConfigurationProperties.getMessageTtl()).thenReturn(Duration.ofHours(24));
+        when(management.getStreamInfo(any()))
+                .thenThrow(apiException(Status.NOT_FOUND_CODE));
 
         natsStreamManager.init();
 
-        verify(natsResourceService, org.mockito.Mockito.times(2)).createStream(any());
+        verify(management, times(2)).addStream(any());
+    }
+
+    @Test
+    void createStream_doesNotModifyExistingStream() throws Exception {
+        var configuration = streamConfiguration();
+        var streamInfo = org.mockito.Mockito.mock(StreamInfo.class);
+        when(streamInfo.getConfiguration()).thenReturn(configuration);
+        when(management.getStreamInfo(configuration.getName())).thenReturn(streamInfo);
+
+        natsStreamManager.createStream(configuration);
+
+        verify(management, never()).addStream(configuration);
+    }
+
+    @Test
+    void createStream_rejectsIncompatibleExistingStream() throws Exception {
+        var configuration = streamConfiguration();
+        var existing = StreamConfiguration.builder()
+                .name(configuration.getName())
+                .subjects("other.>")
+                .build();
+        var streamInfo = org.mockito.Mockito.mock(StreamInfo.class);
+        when(streamInfo.getConfiguration()).thenReturn(existing);
+        when(management.getStreamInfo(configuration.getName())).thenReturn(streamInfo);
+
+        assertThrows(IllegalStateException.class,
+                     () -> natsStreamManager.createStream(configuration));
+        verify(management, never()).addStream(configuration);
+    }
+
+    @Test
+    void createStream_addsMissingStream() throws Exception {
+        var configuration = streamConfiguration();
+        when(management.getStreamInfo(configuration.getName()))
+                .thenThrow(apiException(Status.NOT_FOUND_CODE));
+
+        natsStreamManager.createStream(configuration);
+
+        verify(management).addStream(configuration);
+    }
+
+    @Test
+    void createStream_propagatesLookupFailure() throws Exception {
+        var configuration = streamConfiguration();
+        when(management.getStreamInfo(configuration.getName()))
+                .thenThrow(apiException(500));
+
+        assertThrows(JetStreamApiException.class,
+                     () -> natsStreamManager.createStream(configuration));
+        verify(management, never()).addStream(configuration);
     }
 
     private static void assertStream(
@@ -104,5 +168,15 @@ class NatsStreamManagerTest {
         assertEquals(RetentionPolicy.WorkQueue, stream.getRetentionPolicy());
         assertEquals(1_000_000, stream.getMaxMsgs());
         assertEquals(Duration.ofHours(24), stream.getMaxAge());
+    }
+
+    private static StreamConfiguration streamConfiguration() {
+        return StreamConfiguration.builder().name("stream").subjects("subject.>").build();
+    }
+
+    private static JetStreamApiException apiException(int statusCode) {
+        var status = new Status(statusCode, "test error");
+        var error = io.nats.client.api.Error.convert(status);
+        return new JetStreamApiException(error);
     }
 }

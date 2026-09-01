@@ -71,12 +71,12 @@ public final class NatsConfiguration {
     }
 
     Options createDefaultOptions(NatsConfigurationProperties natsConfigurationProperties) {
+        var flushDuration = natsConfigurationProperties.getForceReconnectFlush().isPositive() ?
+                natsConfigurationProperties.getForceReconnectFlush() : Duration.ofSeconds(5);
         var builder = Options.builder()
                 .server(natsConfigurationProperties.getNatsUrl())
                 .connectionTimeout(natsConfigurationProperties.getConnectionTimeout())
-                .pingInterval(Duration.ofSeconds(5))
                 .useDispatcherWithExecutor()
-                .reconnectWait(Duration.ofMillis(100))
                 .errorListener(new LoggingNatsErrorListener())
                 .connectionListener(
                         (conn, type) -> {
@@ -93,7 +93,7 @@ public final class NatsConfiguration {
                                         log.info("client id {} force reconnecting to nats",
                                                  conn.getServerInfo().getClientId());
                                         conn.forceReconnect(ForceReconnectOptions.builder()
-                                                                    .flush(Duration.ofSeconds(5))
+                                                                    .flush(flushDuration)
                                                                     .build());
                                         log.info("client id {} reconnected to nats",
                                                  conn.getServerInfo().getClientId());
@@ -116,6 +116,30 @@ public final class NatsConfiguration {
                                                      natsConfigurationProperties.getNkeySeed()
                                                              .get().toCharArray());
             builder = builder.authHandler(authHandler);
+        }
+
+        if (natsConfigurationProperties.getReconnectJitter().isPositive()) {
+            Duration reconnectJitter = natsConfigurationProperties.getReconnectJitter();
+            builder.reconnectJitter(reconnectJitter).reconnectJitterTls(reconnectJitter);
+        }
+
+        // Configure reconnection behavior based on the allowReconnect flag
+        if (!natsConfigurationProperties.isReconnectAllowed()) {
+            builder = builder.noReconnect(); // Disable reconnections
+        } else {
+            builder = builder.maxReconnects(-1); // Allow unlimited reconnections
+        }
+
+        if (natsConfigurationProperties.getPingInterval().isPositive()) {
+            builder.pingInterval(natsConfigurationProperties.getPingInterval());
+        } else {
+            builder.pingInterval(Duration.ofSeconds(5));
+        }
+
+        if (natsConfigurationProperties.getReconnectWait().isPositive()) {
+            builder.reconnectWait(natsConfigurationProperties.getReconnectWait());
+        } else {
+            builder.reconnectWait(Duration.ofMillis(100));
         }
 
         return builder.build();
@@ -162,7 +186,8 @@ public final class NatsConfiguration {
         public FixedNatsPool(ApplicationContext applicationContext,
                              NatsConfigurationProperties natsProperties) throws IOException {
             int processors = Runtime.getRuntime().availableProcessors();
-            int poolSize = Math.min(processors, natsProperties.getMaxPoolSize());
+            int poolSize = natsProperties.isEnabled() ?
+                    Math.min(processors, natsProperties.getMaxPoolSize()) : 0;
             this.connections = new Connection[poolSize];
             this.jetStreams = new JetStream[connections.length];
             this.jetStreamManagements = new JetStreamManagement[connections.length];
@@ -178,9 +203,7 @@ public final class NatsConfiguration {
         @Override
         public void close() throws Exception {
             for (Connection connection : connections) {
-                if (connection != null) {
-                    connection.close();
-                }
+                connection.close();
             }
         }
 
