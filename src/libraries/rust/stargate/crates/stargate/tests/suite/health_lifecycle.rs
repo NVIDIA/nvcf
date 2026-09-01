@@ -13,12 +13,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::net::SocketAddr;
 use std::time::Duration;
 
-use crate::common::{
-    init_crypto, make_stargate_runtime, make_stargate_runtime_with_readiness_warmup,
-    start_and_register_backend, wait_for_routing,
-};
+use stargate::runtime::{BoundStargateListeners, StargateRuntime, StargateRuntimeConfig, WarmupConfig};
+
+use crate::common::{SelfDiscovery, base_config, init_crypto, make_stargate_runtime};
+
+fn make_stargate_runtime_with_warmup(
+    id: &str,
+    warmup: WarmupConfig,
+) -> (SocketAddr, SocketAddr, StargateRuntime) {
+    let ephemeral: SocketAddr = "127.0.0.1:0".parse().unwrap();
+    let mut config: StargateRuntimeConfig = base_config(id, ephemeral, ephemeral);
+    config.warmup = warmup;
+    let listeners =
+        BoundStargateListeners::bind(&mut config).expect("test listeners should bind");
+    let grpc_addr = config.grpc_listen_addr;
+    let http_addr = config.http_listen_addr;
+    let discovery = Box::new(SelfDiscovery::new(id, grpc_addr, http_addr));
+    (
+        grpc_addr,
+        http_addr,
+        StargateRuntime::new(config, discovery, listeners, None),
+    )
+}
 
 #[tokio::test]
 async fn healthz_returns_200() {
@@ -43,8 +62,13 @@ async fn healthz_returns_200() {
 async fn readyz_returns_200_when_warmup_is_disabled() {
     init_crypto();
 
+    let warmup = WarmupConfig {
+        warmup_duration: Duration::ZERO,
+        sample_interval: Duration::from_millis(50),
+        stabilization_window: 5,
+    };
     let (_grpc_addr, http_addr, runtime) =
-        make_stargate_runtime_with_readiness_warmup("test-sg-readyz-no-warmup", Duration::ZERO);
+        make_stargate_runtime_with_warmup("test-sg-readyz-no-warmup", warmup);
     let handle = runtime.start().await.expect("stargate failed to start");
 
     let response = reqwest::Client::new()
@@ -77,30 +101,69 @@ async fn readyz_returns_503_during_warmup() {
     handle.wait_for_shutdown(Duration::from_secs(5)).await;
 }
 
+/// Readiness warmup keeps `/readyz` unavailable until the fixed window elapses.
 #[tokio::test]
-async fn pylon_registration_succeeds_during_readiness_warmup() {
+async fn readyz_returns_503_during_warmup_window() {
     init_crypto();
 
-    let (grpc_addr, http_addr, runtime) = make_stargate_runtime("test-sg-warmup-registration");
+    let warmup = WarmupConfig {
+        warmup_duration: Duration::from_millis(300),
+        sample_interval: Duration::from_millis(50),
+        stabilization_window: 100, // very high: stabilization cannot fire, only timeout
+    };
+    let (_grpc_addr, http_addr, runtime) =
+        make_stargate_runtime_with_warmup("test-sg-readyz-warmup-503", warmup);
     let handle = runtime.start().await.expect("stargate failed to start");
 
-    let mut backend = start_and_register_backend(
-        &[grpc_addr.to_string()],
-        "warmup-backend",
-        "warmup-model",
-        false,
-    )
-    .await;
-    wait_for_routing(http_addr, "warmup-model", Duration::from_secs(5)).await;
+    let http_client = reqwest::Client::new();
 
-    let response = reqwest::Client::new()
+    // During the warmup window the replica should be not-ready.
+    let resp = http_client
         .get(format!("http://{http_addr}/readyz"))
         .send()
         .await
-        .expect("readyz request failed");
-    assert_eq!(response.status(), 503);
+        .expect("readyz request during warmup failed");
+    assert_eq!(
+        resp.status(),
+        503,
+        "readyz should return 503 during warmup window"
+    );
 
-    backend.stop();
+    handle.begin_shutdown();
+    handle.wait_for_shutdown(Duration::from_secs(5)).await;
+}
+
+/// Readiness warmup fixed window promotes the replica to ready once it elapses,
+/// even when no backends register during that window.
+#[tokio::test]
+async fn readyz_promotes_to_ready_after_warmup_window_elapses() {
+    init_crypto();
+
+    let warmup = WarmupConfig {
+        warmup_duration: Duration::from_millis(200),
+        sample_interval: Duration::from_millis(50),
+        stabilization_window: 100, // very high: stabilization cannot fire, only timeout
+    };
+    let (_grpc_addr, http_addr, runtime) =
+        make_stargate_runtime_with_warmup("test-sg-readyz-warmup-promote", warmup);
+    let handle = runtime.start().await.expect("stargate failed to start");
+
+    let http_client = reqwest::Client::new();
+
+    // Wait for the warmup window to elapse with margin.
+    tokio::time::sleep(Duration::from_millis(400)).await;
+
+    let resp = http_client
+        .get(format!("http://{http_addr}/readyz"))
+        .send()
+        .await
+        .expect("readyz request after warmup failed");
+    assert_eq!(
+        resp.status(),
+        200,
+        "readyz should return 200 after warmup window elapses"
+    );
+
     handle.begin_shutdown();
     handle.wait_for_shutdown(Duration::from_secs(5)).await;
 }
