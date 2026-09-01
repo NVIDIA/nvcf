@@ -15,6 +15,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 #[cfg(test)]
@@ -89,8 +90,14 @@ impl ModelGeneration {
 pub struct PylonRuntimeState {
     advertised: Arc<Mutex<AdvertisedRuntimeState>>,
     live_requests: LiveRequestState,
+    forwarding_options: Arc<RequestForwardingOptions>,
     metrics: Option<Arc<PylonMetrics>>,
     observation_tx: Option<flume::Sender<RequestObservationEvent>>,
+}
+
+#[derive(Debug, Default)]
+struct RequestForwardingOptions {
+    force_chat_completions_include_usage: AtomicBool,
 }
 
 #[derive(Clone, Debug)]
@@ -190,9 +197,22 @@ impl PylonRuntimeState {
                 models,
             })),
             live_requests: LiveRequestState::default(),
+            forwarding_options: Arc::default(),
             metrics: None,
             observation_tx: None,
         }
+    }
+
+    pub(crate) fn set_force_chat_completions_include_usage(&self, enabled: bool) {
+        self.forwarding_options
+            .force_chat_completions_include_usage
+            .store(enabled, Ordering::Relaxed);
+    }
+
+    pub(crate) fn force_chat_completions_include_usage(&self) -> bool {
+        self.forwarding_options
+            .force_chat_completions_include_usage
+            .load(Ordering::Relaxed)
     }
 
     pub fn observed(

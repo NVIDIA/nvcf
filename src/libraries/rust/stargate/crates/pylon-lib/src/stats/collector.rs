@@ -2602,6 +2602,56 @@ mod tests {
     }
 
     #[test]
+    fn request_interval_rate_remains_authoritative_after_exact_removal() {
+        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        let submitted_at = std::time::Instant::now();
+        let interval = crate::runtime_state::RequestInputInterval {
+            submitted_at,
+            first_generated_output_at: submitted_at + seconds(2),
+        };
+        let estimated = RequestObservation {
+            input_tokens: 100,
+            ..observation(
+                RequestObservationEndpoint::ChatCompletions,
+                "req-authoritative-input",
+                RequestObservationState::OutputGeneration,
+            )
+        };
+        apply_fallback_observation_with_interval(&mut aggregator, &estimated, interval, false);
+        assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 50.0);
+
+        apply_fallback_observation_with_interval(
+            &mut aggregator,
+            &RequestObservation {
+                input_tokens: 0,
+                state: RequestObservationState::Complete,
+                ..estimated
+            },
+            interval,
+            true,
+        );
+        assert_eq!(
+            aggregator.per_model["model-a"]
+                .metrics
+                .request_input_intervals
+                .len(),
+            0
+        );
+
+        let embedding = completed_embeddings_observation(1_000, 4, seconds(1), seconds(1));
+        for request_index in 0..5 {
+            single_fallback_stats(
+                &mut aggregator,
+                &identified(
+                    embedding.clone(),
+                    format!("req-authoritative-embedding-{request_index}"),
+                ),
+            );
+        }
+        assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 50.0);
+    }
+
+    #[test]
     fn fallback_output_history_records_one_successful_terminal_sample() {
         let mut aggregator = test_aggregator(StatsCollectorConfig::default());
         let submitted_at = std::time::Instant::now();

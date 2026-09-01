@@ -102,7 +102,6 @@ pub struct TunnelForwardingConfig {
     pub max_sse_buffer_bytes: usize,
     pub first_output_timeout: Duration,
     pub output_chunk_timeout: Duration,
-    pub force_chat_completions_include_usage: bool,
     pub runtime_state: PylonRuntimeState,
     pub request_quality_monitor: RequestQualityMonitorConfig,
     pub retry: PylonRetryConfig,
@@ -126,7 +125,6 @@ impl Default for TunnelForwardingConfig {
             max_sse_buffer_bytes: DEFAULT_MAX_SSE_BUFFER_BYTES,
             first_output_timeout: DEFAULT_FIRST_OUTPUT_TIMEOUT,
             output_chunk_timeout: DEFAULT_OUTPUT_CHUNK_TIMEOUT,
-            force_chat_completions_include_usage: false,
             runtime_state: PylonRuntimeState::default(),
             request_quality_monitor: RequestQualityMonitorConfig::default(),
             retry: PylonRetryConfig::default(),
@@ -138,6 +136,17 @@ impl Default for TunnelForwardingConfig {
             #[cfg(test)]
             webtransport_stream_header_wait_tx: None,
         }
+    }
+}
+
+impl TunnelForwardingConfig {
+    pub fn set_force_chat_completions_include_usage(&mut self, enabled: bool) {
+        self.runtime_state
+            .set_force_chat_completions_include_usage(enabled);
+    }
+
+    pub fn force_chat_completions_include_usage(&self) -> bool {
+        self.runtime_state.force_chat_completions_include_usage()
     }
 }
 
@@ -169,6 +178,8 @@ impl TunnelServerApp {
         upstream_http_base_url: String,
         forwarding: TunnelForwardingConfig,
     ) -> Self {
+        let force_chat_completions_include_usage =
+            forwarding.force_chat_completions_include_usage();
         Self {
             http_client: Client::new(),
             inference_server_id,
@@ -177,7 +188,7 @@ impl TunnelServerApp {
             max_sse_buffer_bytes: forwarding.max_sse_buffer_bytes,
             first_output_timeout: forwarding.first_output_timeout,
             output_chunk_timeout: forwarding.output_chunk_timeout,
-            force_chat_completions_include_usage: forwarding.force_chat_completions_include_usage,
+            force_chat_completions_include_usage,
             runtime_state: forwarding.runtime_state,
             request_quality_monitor: forwarding.request_quality_monitor,
             retry: forwarding.retry,
@@ -999,12 +1010,10 @@ fn force_chat_completions_include_usage(
     let stream_options = stream_options
         .as_object_mut()
         .ok_or("stream_options must be a JSON object")?;
-    if stream_options
-        .get("include_usage")
-        .and_then(serde_json::Value::as_bool)
-        == Some(true)
-    {
-        return Ok((body_bytes, false));
+    match stream_options.get("include_usage") {
+        Some(serde_json::Value::Bool(true)) => return Ok((body_bytes, false)),
+        Some(serde_json::Value::Bool(false)) | None => {}
+        Some(_) => return Err("stream_options.include_usage must be a boolean"),
     }
     stream_options.insert("include_usage".to_string(), serde_json::Value::Bool(true));
     Ok((
@@ -1382,10 +1391,18 @@ mod tests {
     }
 
     #[test]
-    fn forced_chat_usage_rejects_non_object_stream_options() {
+    fn forced_chat_usage_rejects_invalid_stream_options() {
         assert_eq!(
             force_chat_usage(br#"{"stream":true,"stream_options":false}"#),
             Err("stream_options must be a JSON object")
+        );
+        assert_eq!(
+            force_chat_usage(br#"{"stream":true,"stream_options":{"include_usage":"yes"}}"#),
+            Err("stream_options.include_usage must be a boolean")
+        );
+        assert_eq!(
+            force_chat_usage(br#"{"stream":true,"stream_options":{"include_usage":1}}"#),
+            Err("stream_options.include_usage must be a boolean")
         );
     }
 
@@ -1495,20 +1512,25 @@ mod tests {
     async fn forced_chat_usage_invalid_stream_options_returns_bad_request() {
         let (mut app, _observations) = observed_app("http://127.0.0.1:0");
         app.force_chat_completions_include_usage = true;
-        let mut transport = TestTransport {
-            request_body: br#"{"messages":[],"stream":true,"stream_options":false}"#.to_vec(),
-            ..TestTransport::default()
-        };
+        for request_body in [
+            br#"{"messages":[],"stream":true,"stream_options":false}"#.as_slice(),
+            br#"{"messages":[],"stream":true,"stream_options":{"include_usage":"yes"}}"#.as_slice(),
+        ] {
+            let mut transport = TestTransport {
+                request_body: request_body.to_vec(),
+                ..TestTransport::default()
+            };
 
-        forward_tunnel_request(
-            &app,
-            observed_request("/v1/chat/completions"),
-            &mut transport,
-        )
-        .await
-        .expect("invalid stream options should return a problem response");
+            forward_tunnel_request(
+                &app,
+                observed_request("/v1/chat/completions"),
+                &mut transport,
+            )
+            .await
+            .expect("invalid stream options should return a problem response");
 
-        assert_eq!(transport.response_heads, [StatusCode::BAD_REQUEST]);
+            assert_eq!(transport.response_heads, [StatusCode::BAD_REQUEST]);
+        }
     }
 
     #[derive(Clone)]

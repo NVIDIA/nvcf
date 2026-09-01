@@ -94,12 +94,17 @@ struct RetainedInputInterval {
 pub(super) struct RequestInputIntervalWindow {
     intervals: VecDeque<RetainedInputInterval>,
     evicted_through: Option<Instant>,
+    has_observed_rate: bool,
 }
 
 impl RequestInputIntervalWindow {
     #[cfg(test)]
     pub(super) fn len(&self) -> usize {
         self.intervals.len()
+    }
+
+    pub(super) fn has_observed_rate(&self) -> bool {
+        self.has_observed_rate
     }
 
     pub(super) fn observe(
@@ -121,7 +126,7 @@ impl RequestInputIntervalWindow {
         if input_tokens_explicit && input_tokens < min_input_tokens {
             if let Some(index) = existing {
                 self.intervals.remove(index);
-                return self.rate(config.duration_floor);
+                return self.record_current_rate(config.duration_floor);
             }
             return None;
         }
@@ -135,7 +140,7 @@ impl RequestInputIntervalWindow {
                 .get_mut(index)
                 .expect("located input interval should remain retained");
             if entry.input_tokens_explicit && !input_tokens_explicit {
-                return self.rate(config.duration_floor);
+                return self.record_current_rate(config.duration_floor);
             }
             entry.interval = interval;
             entry.input_tokens = input_tokens;
@@ -176,7 +181,13 @@ impl RequestInputIntervalWindow {
                 );
             }
         }
-        self.rate(config.duration_floor)
+        self.record_current_rate(config.duration_floor)
+    }
+
+    fn record_current_rate(&mut self, duration_floor: Duration) -> Option<f64> {
+        let rate = self.rate(duration_floor);
+        self.has_observed_rate |= rate.is_some();
+        rate
     }
 
     fn rate(&self, duration_floor: Duration) -> Option<f64> {

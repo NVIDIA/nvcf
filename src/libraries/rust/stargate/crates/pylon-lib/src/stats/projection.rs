@@ -213,6 +213,7 @@ impl StatsAggregator {
         let embedding_input_changed = observation.endpoint
             == RequestObservationEndpoint::Embeddings
             && observation.state == RequestObservationState::Complete
+            && !model_state.request_input_intervals.has_observed_rate()
             && apply_input_throughput_sample(
                 config,
                 model_state,

@@ -590,9 +590,8 @@ fn tunnel_forwarding_config_from_plan(
     runtime_state: PylonRuntimeState,
     metrics: Arc<PylonMetrics>,
 ) -> TunnelForwardingConfig {
-    TunnelForwardingConfig {
+    let mut forwarding = TunnelForwardingConfig {
         runtime_state,
-        force_chat_completions_include_usage: plan.force_chat_completions_include_usage,
         request_quality_monitor: plan.request_quality_monitor.clone(),
         metrics: Some(metrics),
         retry: plan.pylon_retry.clone(),
@@ -601,7 +600,9 @@ fn tunnel_forwarding_config_from_plan(
         priority_ceiling: plan.priority_ceiling,
         upstream_health_paths: plan.health_paths.clone(),
         ..Default::default()
-    }
+    };
+    forwarding.set_force_chat_completions_include_usage(plan.force_chat_completions_include_usage);
+    forwarding
 }
 
 pub(crate) fn stats_collector_config_from_args(
@@ -1043,10 +1044,10 @@ mod tests {
     #[test]
     fn exact_chat_usage_is_disabled_by_default_and_propagates_when_enabled() {
         let (_, default_plan) = startup(&[]);
-        assert!(!test_forwarding(&default_plan).force_chat_completions_include_usage);
+        assert!(!test_forwarding(&default_plan).force_chat_completions_include_usage());
 
         let (_, enabled_plan) = startup(&["--force-chat-completions-include-usage"]);
-        assert!(test_forwarding(&enabled_plan).force_chat_completions_include_usage);
+        assert!(test_forwarding(&enabled_plan).force_chat_completions_include_usage());
     }
 
     fn test_observation() -> RequestObservation {

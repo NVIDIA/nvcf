@@ -337,8 +337,8 @@ fn direct_and_reverse_configs_share_forwarding_defaults() {
         direct.forwarding.output_chunk_timeout,
         reverse.forwarding.output_chunk_timeout
     );
-    assert!(!direct.forwarding.force_chat_completions_include_usage);
-    assert!(!reverse.forwarding.force_chat_completions_include_usage);
+    assert!(!direct.forwarding.force_chat_completions_include_usage());
+    assert!(!reverse.forwarding.force_chat_completions_include_usage());
     assert!(direct.forwarding.metrics.is_none());
     assert!(reverse.forwarding.metrics.is_none());
 }
@@ -359,7 +359,9 @@ fn reverse_tunnel_app_from_config_preserves_forwarding_settings() {
     config.forwarding.runtime_state = runtime_state.clone();
     config.forwarding.retry.local_connect_failures_retryable = true;
     config.forwarding.queue_mismatch_retry.enabled = false;
-    config.forwarding.force_chat_completions_include_usage = true;
+    config
+        .forwarding
+        .set_force_chat_completions_include_usage(true);
     config.forwarding.metrics = Some(metrics.clone());
 
     let app = TunnelServerApp::from_reverse_config(config);
