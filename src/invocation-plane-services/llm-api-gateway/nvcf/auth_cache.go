@@ -26,42 +26,32 @@ import (
 )
 
 const (
-	// authCacheTTL bounds how long a positive auth response is reused. Token
-	// revocation, function unpublish, and model spec changes take up to this
-	// long to be observed. Expiry is measured from write, never from access:
-	// a continuously hit entry must not outlive the revocation bound.
+	// authCacheTTL bounds how long a positive auth response is reused;
+	// expiry is measured from write, so hits never extend it.
 	authCacheTTL = 60 * time.Second
-	// authCacheMaxEntries bounds memory (~1KB per entry), not hit rate. The
-	// bound is required: the key space is request-derived, so an unbounded
-	// cache would grow with every distinct valid token/function pair.
+	// authCacheMaxEntries bounds memory (~1KB per entry).
 	authCacheMaxEntries = 1024
 )
 
-// authCacheKey must include every AuthLlmInvokeRequest field. If the RPC
-// gains an input, it must join this key or a cached response could be served
-// for a request the upstream would answer differently.
+// authCacheKey must include every AuthLlmInvokeRequest field, or a cached
+// response could be served for a request the upstream would answer
+// differently.
 type authCacheKey struct {
 	// tokenHash keeps raw bearer tokens out of process memory dumps.
 	tokenHash  [sha256.Size]byte
 	routingKey string
 }
 
-// cachedClient caches positive AuthorizeInvocation responses. Errors and
-// denials are never cached: otter's loader propagates them to all waiters
-// and stores nothing, so the next request retries upstream. There is no
-// explicit invalidation; entries expire on the write TTL only, matching the
-// invocation auth cache in http-invocation.
-//
-// Concurrent misses for the same key collapse into one upstream call. The
-// loader runs under the context of the caller that triggered it, so that
-// caller's cancellation fails all waiters; they retry on their next request.
+// cachedClient caches positive AuthorizeInvocation responses; errors and
+// denials are never cached. Concurrent misses for the same key collapse into
+// one upstream call running under the triggering caller's context, so that
+// caller's cancellation fails all waiters.
 type cachedClient struct {
 	inner Client
 	cache *otter.Cache[authCacheKey, *InvocationAuthResponse]
 }
 
-// NewCachedClient wraps inner with the auth response cache. inner must be
-// non-nil.
+// NewCachedClient wraps non-nil inner with the auth response cache.
 func NewCachedClient(inner Client) Client {
 	return newCachedClient(inner, authCacheTTL, authCacheMaxEntries)
 }
@@ -99,8 +89,7 @@ func (c *cachedClient) AuthorizeInvocation(
 	if err != nil {
 		return nil, err
 	}
-	// Clone for every caller: the cached response is shared and must never
-	// be handed out directly.
+	// The cached response is shared; never hand it out directly.
 	return resp.clone(), nil
 }
 
