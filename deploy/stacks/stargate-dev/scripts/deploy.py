@@ -181,11 +181,6 @@ def validate_deployment_inputs(config: dict) -> None:
         raise DeploymentError(
             "router.acmCertificateArn does not match the configured region and account"
         )
-    documentation_networks = [
-        ipaddress.ip_network("192.0.2.0/24"),
-        ipaddress.ip_network("198.51.100.0/24"),
-        ipaddress.ip_network("203.0.113.0/24"),
-    ]
     for source_range in router["loadBalancerSourceRanges"]:
         try:
             network = ipaddress.ip_network(source_range)
@@ -193,15 +188,9 @@ def validate_deployment_inputs(config: dict) -> None:
             raise DeploymentError(
                 f"invalid router source range: {source_range}"
             ) from error
-        if network.is_unspecified or network.is_loopback or network.is_multicast:
-            raise DeploymentError(f"invalid router source range: {source_range}")
-        if any(
-            network.version == documentation.version
-            and network.subnet_of(documentation)
-            for documentation in documentation_networks
-        ):
+        if network.version != 4 or network.prefixlen != 32 or not network.is_global:
             raise DeploymentError(
-                "router source ranges still use the documentation network"
+                "router source ranges must be public IPv4 /32 MockDC egress addresses"
             )
 
 

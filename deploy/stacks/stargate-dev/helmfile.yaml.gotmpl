@@ -121,7 +121,7 @@ releases:
               loadBalancerSourceRanges:
                 {{- toYaml .Values.router.loadBalancerSourceRanges | nindent 16 }}
               annotations:
-                service.beta.kubernetes.io/aws-load-balancer-scheme: internal
+                service.beta.kubernetes.io/aws-load-balancer-scheme: internet-facing
                 service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
                 service.beta.kubernetes.io/aws-load-balancer-ssl-cert: {{ .Values.router.acmCertificateArn | quote }}
                 service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "50071"

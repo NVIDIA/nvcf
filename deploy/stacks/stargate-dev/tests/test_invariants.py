@@ -253,7 +253,7 @@ class RenderedStackTests(unittest.TestCase):
             service["metadata"]["annotations"][
                 "service.beta.kubernetes.io/aws-load-balancer-scheme"
             ],
-            "internal",
+            "internet-facing",
         )
         self.assertEqual(
             service["metadata"]["annotations"][

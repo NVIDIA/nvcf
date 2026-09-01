@@ -76,5 +76,6 @@ router:
   acmCertificateArn: arn:aws:acm:us-west-2:000000000000:certificate/00000000-0000-0000-0000-000000000000
   tlsSecretName: stargate-router-tls
   externalDnsEnabled: false
+  # Add every public NAT Gateway egress IP used by the two MockDC clusters.
   loadBalancerSourceRanges:
-    - 192.0.2.0/24
+    - 192.0.2.1/32

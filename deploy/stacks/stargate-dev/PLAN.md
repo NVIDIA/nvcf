@@ -184,7 +184,7 @@ Add chart values where they are currently missing:
 
 The worker-auth caller Secret key contains the JSON file expected by Stargate, including `nvcfApiToken`. The chart mounts that file and passes its path to Stargate. It does not use Vault annotations or require an OpenBao injector.
 
-The backend-router Service becomes an internal AWS NLB exposing:
+The backend-router Service becomes an internet-facing AWS NLB exposing:
 
 - TLS 50071 for Pylon registration, terminated by the NLB and forwarded as gRPC over plaintext TCP to the router
 - UDP 50072 for reverse tunnels
@@ -358,15 +358,15 @@ Requirements:
 
 The cluster handoff must provide:
 
-- Private connectivity from each MockDC VPC to its regional Stargate VPC
+- Stable public NAT Gateway egress IPs for every MockDC subnet
 - AWS Load Balancer Controller
-- Route53 private hosted-zone ownership
+- Route53 public hosted-zone ownership
 - Security-group rules for TCP 50071 and UDP 50072
 - An ACM certificate ARN for the gateway HTTPS listener and Pylon registration listener
 - A regional Stargate TLS Secret and Pylon trust bundle, or cert-manager support that creates the Secret
 - Outbound HTTPS access to the Grafana OTLP endpoint
 
-Use internal NLBs for the gateway and backend router. The gateway NLB exposes only HTTPS 443. The backend-router NLB exposes TLS 50071 and UDP 50072. Both use restricted source ranges or security groups. A public endpoint is out of scope until it receives an explicit security review.
+Keep the gateway NLB internal. Make the backend-router NLB internet-facing so MockDC clusters do not require cross-VPC routing. It exposes TLS 50071 and UDP 50072 only, and accepts traffic only from the configured public MockDC NAT Gateway addresses.
 
 Use the existing-secret TLS mode. Pylon trusts the regional root CA. Do not make insecure QUIC the checked-in default.
 
@@ -464,7 +464,7 @@ Keep `tests/test_invariants.py` limited to contracts that those tools cannot pro
 - The two MockDC cluster names used as cluster IDs and four derived inference-server IDs are distinct.
 - Credential values appear only in Secret manifests, and chart-owned Secret names match every consumer reference.
 - Vault injection is disabled, the gateway uses the ready-only Stargate Service, and its dev auth transport is private and explicitly insecure.
-- Only the gateway and backend-router Services are LoadBalancers, with only their required ports and internal annotations.
+- Only the gateway and backend-router Services are LoadBalancers. Each exposes only its required ports; the gateway is internal and the backend router is internet-facing with restricted source ranges.
 - Every expected metrics Pod annotation and port matches the collector's discovery configuration.
 - Every deployed image is selected from the digest-pinned entries in `values/versions.yaml`.
 
