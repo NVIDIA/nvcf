@@ -639,6 +639,92 @@ func TestExtractK8sEvent(t *testing.T) {
 	assert.Equal(t, "extra_value", attrs["extra_field"])
 }
 
+// TestEventContextToCanonical_Ordering verifies the canonical string uses the
+// fixed field order and omits empty fields.
+func TestEventContextToCanonical_Ordering(t *testing.T) {
+	tests := []struct {
+		name   string
+		ctx    ContextV3
+		expect string
+	}{
+		{
+			name:   "pod shape omits empty resource_id",
+			ctx:    ContextV3{ClusterID: "clus-1", DeploymentID: "dep-1", InstanceID: "inst-1"},
+			expect: "cluster_id=clus-1,deployment_id=dep-1,instance_id=inst-1",
+		},
+		{
+			name:   "resource_id participates and sorts last",
+			ctx:    ContextV3{ClusterID: "clus-1", ResourceID: "icms-1"},
+			expect: "cluster_id=clus-1,resource_id=icms-1",
+		},
+		{
+			name:   "resource_id alone",
+			ctx:    ContextV3{ResourceID: "icms-1"},
+			expect: "resource_id=icms-1",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := eventContextToCanonical(tc.ctx)
+			require.NoError(t, err)
+			assert.Equal(t, tc.expect, got)
+		})
+	}
+}
+
+// TestExtractK8sEvent_ResourceID verifies that resource_id participates in the
+// canonical context so resources without other unique fields stay distinct.
+func TestExtractK8sEvent_ResourceID(t *testing.T) {
+	lr := createOTLPLogRecord("instance.creation", "tenant-123", "nvca", "", map[string]string{
+		"cluster_id":  "clus-1",
+		"resource_id": "icms-abc",
+	})
+
+	event, err := extractK8sEvent(lr)
+	require.NoError(t, err)
+
+	// resource_id participates in the context (sorted last), keeping the row unique.
+	assert.Equal(t, "cluster_id=clus-1,resource_id=icms-abc", event.Context)
+}
+
+// TestExtractK8sEvent_DistinctResourceIDsDoNotCollide verifies two resources with
+// the same non-resource context but different resource_id produce distinct contexts.
+func TestExtractK8sEvent_DistinctResourceIDsDoNotCollide(t *testing.T) {
+	makeCtx := func(resourceID string) string {
+		lr := createOTLPLogRecord("instance.creation", "tenant-123", "nvca", "", map[string]string{
+			"cluster_id":  "clus-1",
+			"resource_id": resourceID,
+		})
+		event, err := extractK8sEvent(lr)
+		require.NoError(t, err)
+		return event.Context
+	}
+
+	assert.NotEqual(t, makeCtx("icms-1"), makeCtx("icms-2"))
+}
+
+// TestExtractK8sEvent_PodKeepsUnmappedAttrsInDetails verifies that a Pod event
+// carrying an unmapped attribute (e.g. icms_request_id) keeps it in details and
+// excludes it from the context.
+func TestExtractK8sEvent_PodKeepsUnmappedAttrsInDetails(t *testing.T) {
+	lr := createOTLPLogRecord("pod.ready", "tenant-123", "kubernetes", "pod-1", map[string]string{
+		"cluster_id":      "clus-1",
+		"icms_request_id": "icms-xyz",
+	})
+
+	event, err := extractK8sEvent(lr)
+	require.NoError(t, err)
+
+	// Pod context stays the original shape and excludes the unmapped attribute.
+	assert.Equal(t, "cluster_id=clus-1,instance_id=pod-1", event.Context)
+	assert.NotContains(t, event.Context, "icms_request_id")
+
+	var details map[string]any
+	require.NoError(t, json.Unmarshal(event.DetailsJSON, &details))
+	attrs := details["attributes"].(map[string]any)
+	assert.Equal(t, "icms-xyz", attrs["icms_request_id"])
+}
+
 // Test extractCloudEvent validates source is required
 func TestExtractCloudEvent_SourceRequired(t *testing.T) {
 	ce := cloudevents.NewEvent()
@@ -676,6 +762,22 @@ func TestExtractCloudEvent_IdRequired(t *testing.T) {
 	_, err := extractCloudEvent(&ce)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing required field: id")
+}
+
+// TestExtractCloudEvent_ResourceID verifies the resourceId extension maps into
+// the canonical context, mirroring OTLP ingestion so rows stay queryable.
+func TestExtractCloudEvent_ResourceID(t *testing.T) {
+	ce := cloudevents.NewEvent()
+	ce.SetID("test-id")
+	ce.SetType("test.event")
+	ce.SetSource("/test")
+	ce.SetExtension("namespace", "tenant-1")
+	ce.SetExtension("clusterId", "clus-1")
+	ce.SetExtension("resourceId", "icms-1")
+
+	event, err := extractCloudEvent(&ce)
+	require.NoError(t, err)
+	assert.Equal(t, "cluster_id=clus-1,resource_id=icms-1", event.Context)
 }
 
 // ======================

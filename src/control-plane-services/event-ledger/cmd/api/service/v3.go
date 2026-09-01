@@ -131,6 +131,15 @@ type EventsV3Response struct {
 	Events    []EventV3Item `json:"events"`
 }
 
+// Context field names used in the canonical context string and as query params.
+const (
+	contextFieldClusterID          = "cluster_id"
+	contextFieldDeploymentID       = "deployment_id"
+	contextFieldGPUSpecificationID = "gpu_specification_id"
+	contextFieldInstanceID         = "instance_id"
+	contextFieldResourceID         = "resource_id"
+)
+
 // ContextV3 represents the context components that identify the scope of an event
 // This is the internal representation, not tied to any wire format
 type ContextV3 struct {
@@ -138,6 +147,12 @@ type ContextV3 struct {
 	DeploymentID       string
 	GPUSpecificationID string
 	ClusterID          string
+	// ResourceID is a generic, optional context field. It lets a producer supply
+	// a unique identifier for events that have no other distinguishing context
+	// field (e.g. an ICMSRequest, keyed by its request id), so distinct resources
+	// do not collapse onto the same dedup key. It is empty for Pod events, which
+	// are already uniquely identified by instance_id.
+	ResourceID string
 }
 
 // cloudEventWireFormat represents the CloudEvents extensions wire format
@@ -149,6 +164,7 @@ type cloudEventWireFormat struct {
 	DeploymentID       string         `mapstructure:"deploymentId"`
 	GPUSpecificationID string         `mapstructure:"gpuSpecificationId"`
 	ClusterID          string         `mapstructure:"clusterId"`
+	ResourceID         string         `mapstructure:"resourceId"`
 	UnmappedExtensions map[string]any `mapstructure:",remain"`
 }
 
@@ -162,6 +178,7 @@ type otlpAttributesWireFormat struct {
 	DeploymentID       string         `mapstructure:"deployment_id"`
 	GPUSpecificationID string         `mapstructure:"gpu_specification_id"`
 	ClusterID          string         `mapstructure:"cluster_id"`
+	ResourceID         string         `mapstructure:"resource_id"`
 	UnmappedAttributes map[string]any `mapstructure:",remain"`
 }
 
@@ -364,15 +381,18 @@ func deduplicateEvents(events []*EventV3) []*EventV3 {
 }
 
 // eventContextToCanonical converts a ContextV3 struct to a canonical string representation
-// Format: key1=value1,key2=value2 (alphabetical order: cluster_id, deployment_id, gpu_specification_id, instance_id)
-// Validates that values contain only alphanumeric characters and dashes. Instance IDs may also
-// contain dots between non-empty segments. Empty fields are omitted.
+// Format: key1=value1,key2=value2 in a fixed field order:
+// cluster_id, deployment_id, gpu_specification_id, instance_id, resource_id.
+// Validates that values contain only alphanumeric characters and dashes; instance IDs
+// may also contain dots between non-empty segments. Empty fields are omitted, so events
+// that do not set resource_id (e.g. Pods) produce the same context string as before it
+// was introduced.
 func eventContextToCanonical(eventContext ContextV3) (string, error) {
 	// Helper to validate field values
 	validate := func(name, value string) error {
 		pattern := contextFieldPattern
 		allowedCharacters := "alphanumeric characters and dashes"
-		if name == "instance_id" {
+		if name == contextFieldInstanceID {
 			pattern = instanceIDFieldPattern
 			allowedCharacters = "alphanumeric characters, dashes, and dots between segments"
 		}
@@ -388,33 +408,27 @@ func eventContextToCanonical(eventContext ContextV3) (string, error) {
 		return nil
 	}
 
-	// Validate all fields
-	if err := validate("cluster_id", eventContext.ClusterID); err != nil {
-		return "", err
-	}
-	if err := validate("deployment_id", eventContext.DeploymentID); err != nil {
-		return "", err
-	}
-	if err := validate("gpu_specification_id", eventContext.GPUSpecificationID); err != nil {
-		return "", err
-	}
-	if err := validate("instance_id", eventContext.InstanceID); err != nil {
-		return "", err
+	// Ordered fields: order defines the canonical string layout and must stay
+	// stable, since the context string is the storage/dedup key.
+	fields := []struct {
+		name  string
+		value string
+	}{
+		{contextFieldClusterID, eventContext.ClusterID},
+		{contextFieldDeploymentID, eventContext.DeploymentID},
+		{contextFieldGPUSpecificationID, eventContext.GPUSpecificationID},
+		{contextFieldInstanceID, eventContext.InstanceID},
+		{contextFieldResourceID, eventContext.ResourceID},
 	}
 
-	// Build canonical string in alphabetical order (with underscores)
-	parts := make([]string, 0, 4)
-	if eventContext.ClusterID != "" {
-		parts = append(parts, "cluster_id="+eventContext.ClusterID)
-	}
-	if eventContext.DeploymentID != "" {
-		parts = append(parts, "deployment_id="+eventContext.DeploymentID)
-	}
-	if eventContext.GPUSpecificationID != "" {
-		parts = append(parts, "gpu_specification_id="+eventContext.GPUSpecificationID)
-	}
-	if eventContext.InstanceID != "" {
-		parts = append(parts, "instance_id="+eventContext.InstanceID)
+	parts := make([]string, 0, len(fields))
+	for _, f := range fields {
+		if err := validate(f.name, f.value); err != nil {
+			return "", err
+		}
+		if f.value != "" {
+			parts = append(parts, f.name+"="+f.value)
+		}
 	}
 
 	return strings.Join(parts, ","), nil
@@ -426,6 +440,8 @@ func eventContextToCanonical(eventContext ContextV3) (string, error) {
 //   - namespace (string): Tenant identifier
 //   - source (string): Event source identifier
 //   - Context fields (optional): instance_id, deployment_id, gpu_specification_id, cluster_id
+//   - resource_id (optional): generic unique identifier for events that have no
+//     other distinguishing context field (e.g. an ICMSRequest keyed by its request id).
 func extractK8sEvent(lr *logsv1.LogRecord) (*EventV3, error) {
 	// Step 1: Convert OTLP protobuf attributes to map
 	attrs := make(map[string]any)
@@ -445,6 +461,7 @@ func extractK8sEvent(lr *logsv1.LogRecord) (*EventV3, error) {
 		DeploymentID:       wireFormat.DeploymentID,
 		GPUSpecificationID: wireFormat.GPUSpecificationID,
 		ClusterID:          wireFormat.ClusterID,
+		ResourceID:         wireFormat.ResourceID,
 	}
 
 	canonicalContext, err := eventContextToCanonical(contextV3)
@@ -521,6 +538,7 @@ func extractCloudEvent(ce *cloudevents.Event) (*EventV3, error) {
 		DeploymentID:       wireFormat.DeploymentID,
 		GPUSpecificationID: wireFormat.GPUSpecificationID,
 		ClusterID:          wireFormat.ClusterID,
+		ResourceID:         wireFormat.ResourceID,
 	}
 
 	canonicalContext, err := eventContextToCanonical(contextV3)
@@ -969,13 +987,16 @@ func (s *Server) GetEventsV3(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Extract context components from query parameters
+	// Extract context components from query parameters. resource_id lets callers
+	// look up rows keyed by a generic resource identifier (e.g. an ICMSRequest);
+	// omitting it yields the same Pod-shaped lookup as before.
 	queryParams := r.URL.Query()
 	contextV3 := ContextV3{
-		InstanceID:         queryParams.Get("instance_id"),
-		DeploymentID:       queryParams.Get("deployment_id"),
-		GPUSpecificationID: queryParams.Get("gpu_specification_id"),
-		ClusterID:          queryParams.Get("cluster_id"),
+		InstanceID:         queryParams.Get(contextFieldInstanceID),
+		DeploymentID:       queryParams.Get(contextFieldDeploymentID),
+		GPUSpecificationID: queryParams.Get(contextFieldGPUSpecificationID),
+		ClusterID:          queryParams.Get(contextFieldClusterID),
+		ResourceID:         queryParams.Get(contextFieldResourceID),
 	}
 
 	// Convert ContextV3 to canonical string
