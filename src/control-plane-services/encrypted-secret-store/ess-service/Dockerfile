@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # Pull base image (public nvcr.io image)
-FROM nvcr.io/nvidia/distroless/java:25-jdk-v4.0.8
+FROM nvcr.io/nvidia/distroless/java:25-jdk-v4.1.2
 
 # Add the service jar
 ARG APP_JAR=target/app.jar
