@@ -31,6 +31,7 @@ export default function () {
   for (const endpoint of ENDPOINTS) {
     const response = http.get(baseUrl() + endpoint, {
       timeout: requestTimeoutMs,
+      redirects: 0,
       tags: { endpoint: endpoint, region: region },
     })
     classify(response, endpoint)

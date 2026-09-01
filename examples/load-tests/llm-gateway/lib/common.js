@@ -57,6 +57,10 @@ export const requestTimeoutMs = Number(__ENV.LLM_REQUEST_TIMEOUT_MS || 300000)
 export function params(endpoint, extraHeaders) {
   return {
     timeout: requestTimeoutMs,
+    // Never follow a redirect. Go preserves Authorization across a same-host
+    // redirect, including an https to http downgrade, and a 3xx from this
+    // gateway is a finding rather than something to chase transparently.
+    redirects: 0,
     headers: Object.assign(
       {
         'Authorization': `Bearer ${__ENV.TOKEN}`,
