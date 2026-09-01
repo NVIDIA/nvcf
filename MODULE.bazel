@@ -444,7 +444,7 @@ oci.pull(
 # rather than an internal-only path.
 oci.pull(
     name = "distroless_go",
-    digest = "sha256:938bd28ce4ddb800118a951774203e7563c2067a72b20ae6b85d2c7da165a178",
+    digest = "sha256:731531712c92ee24001a4a6e0a0897c4fa542432d7186c5d73b0110ba6d0da16",
     image = "nvcr.io/nvidia/distroless/go",
     platforms = [
         "linux/amd64",
@@ -458,7 +458,7 @@ oci.pull(
 # platform string literally when it names the generated child repository.
 oci.pull(
     name = "distroless_cc",
-    digest = "sha256:92a46f84206c3e4610043eaef50946451019e3c479b71d280015919ba311babb",
+    digest = "sha256:d2b9ccba4833f76861a3edae3d5df18a6c29050970a8a4500a0fa6b31f880da8",
     image = "nvcr.io/nvidia/distroless/cc",
     platforms = [
         "linux/amd64",
