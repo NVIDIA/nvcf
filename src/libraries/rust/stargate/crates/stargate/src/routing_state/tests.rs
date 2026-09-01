@@ -2240,6 +2240,7 @@ async fn three_proxy_local_backends_merge_sparse_priority_maps() {
     let running_a = scenario.start_in("inst-a", "cluster-three", 1111);
     let running_b = scenario.start_in("inst-b", "cluster-three", 2222);
     let running_c = scenario.start_in("inst-c", "cluster-three", 3333);
+    let competing = scenario.start_in("inst-competing", "cluster-competing", 4444);
     let stats = [
         ModelStats {
             last_mean_input_tps: 100.0,
@@ -2296,6 +2297,53 @@ async fn three_proxy_local_backends_merge_sparse_priority_maps() {
         output_generation_queries: 2,
         queue_time_estimate_ms_by_priority: HashMap::from([(1, 25), (2, 125), (3, 175)]),
     );
+
+    scenario
+        .publish(
+            &competing,
+            "model-three",
+            Active,
+            proxy_local_stats(priority_stats(100.0, [(3, 180)])),
+            Some(5),
+        )
+        .await;
+    let target = scenario.target("model-three");
+    let snapshot = scenario
+        .state
+        .routing_target_snapshot(&target)
+        .await
+        .expect("registered backends should publish a routable target");
+    let router = LoadBalancerRouter::from_config(&LoadBalancerConfig {
+        default: LoadBalancerAlgorithm::PowerOfN,
+        request_algorithms: HashMap::new(),
+        models: HashMap::from([(
+            "model-three".to_string(),
+            LoadBalancerModelConfig::Detailed(Box::new(LoadBalancerAlgorithmConfig {
+                settings: LoadBalancerAlgorithmSettings::PowerOfN(PowerOfNAlgorithmConfig {
+                    sample_count: 2,
+                    comparator: ClusterComparator::QueueTime,
+                }),
+                ..LoadBalancerAlgorithmConfig::default()
+            })),
+        )]),
+    })
+    .expect("power-of-n router should initialize");
+    let request = LoadBalancerRequest {
+        routing_target: &target,
+        cache_affinity_key: None,
+        input_tokens: None,
+        priority: 3,
+        received_at: Instant::now(),
+        request_slo: None,
+        excluded_cluster_ids: None,
+    };
+    let choice = router
+        .choose_candidate(snapshot.load_balancers(), &request, snapshot.clusters())
+        .expect("one cluster should be selected");
+    assert_eq!(
+        snapshot.clusters()[choice.candidate_index].cluster_id,
+        "cluster-three"
+    );
 }
 
 #[tokio::test]
@@ -2325,7 +2373,7 @@ async fn proxy_local_aggregation_saturates_gauges_and_rejects_invalid_rate_sums(
         output_generation_queries: 1,
         ..ModelStats::default()
     });
-    let (scenario, _running_a, _running_b) = published_shared_cluster(stats_a, stats_b, 5).await;
+    let (scenario, running_a, running_b) = published_shared_cluster(stats_a, stats_b, 5).await;
 
     let stats = scenario.only_cluster("shared-model").await.stats;
     assert_stats!(stats,
@@ -2338,6 +2386,41 @@ async fn proxy_local_aggregation_saturates_gauges_and_rejects_invalid_rate_sums(
         total_query_input_size: u64::MAX,
         input_processing_queries: u64::MAX,
         output_generation_queries: u64::MAX,
+    );
+
+    scenario
+        .publish(
+            &running_a,
+            "shared-model",
+            Active,
+            proxy_local_stats(ModelStats {
+                last_mean_input_tps: 125.0,
+                output_tps: 7.5,
+                max_output_tps: 50.0,
+                ..ModelStats::default()
+            }),
+            Some(5),
+        )
+        .await;
+    scenario
+        .publish(
+            &running_b,
+            "shared-model",
+            Active,
+            proxy_local_stats(ModelStats {
+                last_mean_input_tps: f64::NAN,
+                output_tps: f64::INFINITY,
+                max_output_tps: -1.0,
+                ..ModelStats::default()
+            }),
+            Some(5),
+        )
+        .await;
+    let stats = scenario.only_cluster("shared-model").await.stats;
+    assert_stats!(stats,
+        last_mean_input_tps: 125.0,
+        output_tps: 7.5,
+        max_output_tps: 50.0,
     );
 }
 

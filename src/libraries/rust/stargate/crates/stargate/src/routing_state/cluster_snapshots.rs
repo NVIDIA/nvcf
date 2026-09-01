@@ -262,9 +262,6 @@ impl ClusterRoutingGeneration {
             .all(|backend| has_proxy_local_request_load(&backend.stats));
         let backend_count = active_backend_count as u128;
         let mut backend_stats = ModelStats::default();
-        let mut valid_input_tps_components = 0_usize;
-        let mut valid_output_tps_components = 0_usize;
-        let mut valid_max_output_tps_components = 0_usize;
         let mut rtt_mean_nanos = 0_u128;
         let mut rtt_remainder_nanos = 0_u128;
 
@@ -272,17 +269,14 @@ impl ClusterRoutingGeneration {
             if proxy_local_request_load {
                 if valid_last_mean_input_tps(backend.stats.last_mean_input_tps) {
                     backend_stats.last_mean_input_tps += backend.stats.last_mean_input_tps;
-                    valid_input_tps_components += 1;
                 }
                 if valid_output_tps(backend.stats.output_tps) {
                     backend_stats.output_tps += backend.stats.output_tps;
-                    valid_output_tps_components += 1;
                 }
                 if valid_output_tps(backend.stats.max_output_tps) {
                     backend_stats.max_output_tps = backend_stats
                         .max_output_tps
                         .max(backend.stats.max_output_tps);
-                    valid_max_output_tps_components += 1;
                 }
                 backend_stats.queue_size = backend_stats
                     .queue_size
@@ -334,14 +328,11 @@ impl ClusterRoutingGeneration {
         }
 
         if proxy_local_request_load {
-            if valid_input_tps_components == 0 || !backend_stats.last_mean_input_tps.is_finite() {
+            if !backend_stats.last_mean_input_tps.is_finite() {
                 backend_stats.last_mean_input_tps = 0.0;
             }
-            if valid_output_tps_components == 0 || !backend_stats.output_tps.is_finite() {
+            if !backend_stats.output_tps.is_finite() {
                 backend_stats.output_tps = 0.0;
-            }
-            if valid_max_output_tps_components == 0 {
-                backend_stats.max_output_tps = 0.0;
             }
             backend_stats.queue_time_estimate_ms_by_priority =
                 proxy_local_priority_map(&self.backends);
