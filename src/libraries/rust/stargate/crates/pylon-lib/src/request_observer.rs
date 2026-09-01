@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use reqwest::header::HeaderMap;
 
 use crate::generated_request_id::{GeneratedRequestKind, generated_request_kind};
-use crate::runtime_state::{ModelGeneration, PylonRuntimeState};
+use crate::runtime_state::{ModelGeneration, PylonRuntimeState, RequestInputInterval};
 
 mod embeddings;
 mod headers;
@@ -351,11 +351,12 @@ impl RequestObserver {
     }
     fn emit(&mut self) {
         let backend = self.state.backend();
-        let input_processing_duration = backend.and_then(|backend| {
+        let input_interval = backend.and_then(|backend| {
             backend
                 .first_generated_output_at
-                .map(|first_generated_output_at| {
-                    first_generated_output_at.saturating_duration_since(backend.submitted_at)
+                .map(|first_generated_output_at| RequestInputInterval {
+                    submitted_at: backend.submitted_at,
+                    first_generated_output_at,
                 })
         });
         let observation = RequestObservation {
@@ -392,7 +393,7 @@ impl RequestObserver {
         self.runtime_state.observe_request_for_generation(
             observation,
             self.generation.clone(),
-            input_processing_duration,
+            input_interval,
         );
     }
 }
@@ -848,7 +849,7 @@ mod tests {
     }
 
     #[test]
-    fn input_processing_duration_is_repeated_on_cumulative_output_and_terminal_events() {
+    fn input_interval_is_repeated_on_cumulative_output_and_terminal_events() {
         let (runtime_state, rx) = observed_runtime(8);
         let mut observer = test_observer("req-input-interval", runtime_state);
         rx.try_recv().unwrap();
@@ -874,12 +875,20 @@ mod tests {
         observer.observe_generated_output(first_generated_output_at, true);
         let output = rx.try_recv().unwrap();
         assert_eq!(
+            output.input_interval(),
+            Some(RequestInputInterval {
+                submitted_at,
+                first_generated_output_at,
+            })
+        );
+        assert_eq!(
             output.input_processing_duration(),
             Some(Duration::from_millis(10))
         );
 
         observer.observe_output_tokens(2);
         let tokens = rx.try_recv().unwrap();
+        assert_eq!(tokens.input_interval(), output.input_interval());
         assert_eq!(
             tokens.input_processing_duration(),
             Some(Duration::from_millis(10))
@@ -887,6 +896,7 @@ mod tests {
 
         observer.complete();
         let terminal = rx.try_recv().unwrap();
+        assert_eq!(terminal.input_interval(), output.input_interval());
         assert_eq!(
             terminal.input_processing_duration(),
             Some(Duration::from_millis(10))

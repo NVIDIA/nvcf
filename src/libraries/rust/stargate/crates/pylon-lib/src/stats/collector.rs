@@ -754,7 +754,11 @@ mod tests {
         let mut event = aggregator
             .runtime_state
             .transition_request_observation(observation.clone());
-        event.input_processing_duration = Some(duration);
+        let submitted_at = std::time::Instant::now();
+        event.input_interval = Some(crate::runtime_state::RequestInputInterval {
+            submitted_at,
+            first_generated_output_at: submitted_at + duration,
+        });
         aggregator.apply_fallback_observation(&event)
     }
 

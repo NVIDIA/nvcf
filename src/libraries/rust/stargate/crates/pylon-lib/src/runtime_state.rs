@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use stargate_proto::pb::{InferenceServerModelRegistration, InferenceServerStatus, ModelStats};
@@ -95,7 +95,20 @@ pub struct RequestObservationEvent {
     pub(crate) observation: RequestObservation,
     pub(crate) generation: Option<ModelGeneration>,
     pub(crate) changed_generations: Vec<ModelGeneration>,
-    pub(crate) input_processing_duration: Option<Duration>,
+    pub(crate) input_interval: Option<RequestInputInterval>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RequestInputInterval {
+    pub(crate) submitted_at: Instant,
+    pub(crate) first_generated_output_at: Instant,
+}
+
+impl RequestInputInterval {
+    pub(crate) fn duration(self) -> Duration {
+        self.first_generated_output_at
+            .saturating_duration_since(self.submitted_at)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -416,12 +429,12 @@ impl PylonRuntimeState {
         &self,
         observation: RequestObservation,
         generation: Option<ModelGeneration>,
-        input_processing_duration: Option<Duration>,
+        input_interval: Option<RequestInputInterval>,
     ) {
         let event = self.transition_request_observation_for_generation(
             observation,
             generation,
-            input_processing_duration,
+            input_interval,
         );
         if let Some(tx) = &self.observation_tx
             && let Err(error) = tx.try_send(event)
@@ -468,7 +481,7 @@ impl PylonRuntimeState {
         &self,
         observation: RequestObservation,
         generation: Option<ModelGeneration>,
-        input_processing_duration: Option<Duration>,
+        input_interval: Option<RequestInputInterval>,
     ) -> RequestObservationEvent {
         // Held across the queue transition below: retire_generation() purges
         // live-request state under this lock, so releasing it after the
@@ -491,7 +504,7 @@ impl PylonRuntimeState {
                     observation,
                     generation,
                     changed_generations: Vec::new(),
-                    input_processing_duration,
+                    input_interval,
                 };
             }
         }
@@ -508,7 +521,7 @@ impl PylonRuntimeState {
             observation,
             generation,
             changed_generations: transition.changed_generations,
-            input_processing_duration,
+            input_interval,
         }
     }
 
@@ -589,7 +602,11 @@ impl RequestObservationEvent {
     }
 
     pub(crate) fn input_processing_duration(&self) -> Option<Duration> {
-        self.input_processing_duration
+        self.input_interval().map(RequestInputInterval::duration)
+    }
+
+    pub(crate) fn input_interval(&self) -> Option<RequestInputInterval> {
+        self.input_interval
     }
 }
 
