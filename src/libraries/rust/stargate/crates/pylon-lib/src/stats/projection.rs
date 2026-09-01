@@ -18,10 +18,10 @@ use crate::request_observer::{RequestObservationEndpoint, RequestObservationStat
 use crate::{CurrentModelStats, RequestObservation, RequestObservationEvent};
 
 use super::aggregator::{
-    CompletedFallbackOutput, EmbeddingThroughputSample, InputThroughputSample,
-    KvCacheStatsSnapshot, ModelMetricsState, ModelStatsSnapshotInputs, RequestIntervalKey,
-    StatsAggregator, aggregate_model_state, apply_input_throughput_sample, current_unix_millis,
-    output_decode_duration, push_sample, tps_for_units,
+    EmbeddingThroughputSample, InputThroughputSample, KvCacheStatsSnapshot, ModelMetricsState,
+    ModelStatsSnapshotInputs, RequestIntervalKey, StatsAggregator, aggregate_model_state,
+    apply_input_throughput_sample, current_unix_millis, output_decode_duration, push_sample,
+    tps_for_units,
 };
 use super::collector::StatsCollectorConfig;
 
@@ -155,23 +155,12 @@ impl StatsAggregator {
                 RequestObservationEndpoint::ChatCompletions
                 | RequestObservationEndpoint::Responses => {
                     if let Some(interval) = event.input_interval() {
-                        let completed = CompletedFallbackOutput {
-                            key: RequestIntervalKey::new(
-                                &observation.request_id,
-                                interval.submitted_at,
-                            ),
-                            raw_bootstrap_units: event.raw_output_units(),
-                            output_tokens: observation.output_tokens,
-                            output_tokens_explicit: observation.output_tokens_explicit,
-                        };
-                        if !model_state
-                            .completed_fallback_outputs
-                            .iter()
-                            .any(|retained| retained.key == completed.key)
-                            && (completed.output_tokens_explicit
-                                || completed.raw_bootstrap_units > 0)
+                        let key =
+                            RequestIntervalKey::new(&observation.request_id, interval.submitted_at);
+                        if !model_state.completed_fallback_output_keys.contains(&key)
+                            && (observation.output_tokens_explicit || event.raw_output_units() > 0)
                             && let Some(output_tps) =
-                                observed_output_tps(config, event, completed.output_tokens)
+                                observed_output_tps(config, event, observation.output_tokens)
                         {
                             record_sample(
                                 &mut model_state.chat_output_tps_samples,
@@ -179,11 +168,11 @@ impl StatsAggregator {
                                 &mut model_state.max_chat_output_tps,
                                 output_tps,
                             );
-                            model_state.completed_fallback_outputs.push_back(completed);
-                            while model_state.completed_fallback_outputs.len()
+                            model_state.completed_fallback_output_keys.push_back(key);
+                            while model_state.completed_fallback_output_keys.len()
                                 > config.smoothing_window_size
                             {
-                                model_state.completed_fallback_outputs.pop_front();
+                                model_state.completed_fallback_output_keys.pop_front();
                             }
                             completed_sample_recorded = true;
                         }

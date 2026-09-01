@@ -2161,7 +2161,7 @@ mod tests {
         assert!(
             aggregator.per_model["model-a"]
                 .metrics
-                .completed_fallback_outputs
+                .completed_fallback_output_keys
                 .is_empty(),
             "failed requests must not add completed output history"
         );
@@ -2697,9 +2697,7 @@ mod tests {
         apply_fallback_observation_with_interval(&mut aggregator, &complete, interval, false);
         let model = &aggregator.per_model["model-a"].metrics;
         assert_eq!(model.chat_output_tps_samples.len(), 1);
-        assert_eq!(model.completed_fallback_outputs.len(), 1);
-        assert_eq!(model.completed_fallback_outputs[0].output_tokens, 10);
-        assert!(model.completed_fallback_outputs[0].output_tokens_explicit);
+        assert_eq!(model.completed_fallback_output_keys.len(), 1);
         assert_eq!(aggregator.snapshot("model-a").output_tps, 5.0);
     }
 
@@ -2735,9 +2733,7 @@ mod tests {
 
         let model = &aggregator.per_model["model-a"].metrics;
         assert_eq!(model.chat_output_tps_samples.len(), 1);
-        assert_eq!(model.completed_fallback_outputs.len(), 1);
-        assert_eq!(model.completed_fallback_outputs[0].output_tokens, 8);
-        assert!(model.completed_fallback_outputs[0].output_tokens_explicit);
+        assert_eq!(model.completed_fallback_output_keys.len(), 1);
         assert_eq!(aggregator.snapshot("model-a").output_tps, 4.0);
     }
 
@@ -2750,25 +2746,28 @@ mod tests {
 
         let model = &aggregator.per_model["model-a"].metrics;
         assert_eq!(model.chat_output_tps_samples.len(), 1);
-        assert_eq!(model.completed_fallback_outputs.len(), 1);
-        assert_eq!(model.completed_fallback_outputs[0].output_tokens, 6);
+        assert_eq!(model.completed_fallback_output_keys.len(), 1);
         assert_eq!(aggregator.snapshot("model-a").output_tps, 3.0);
     }
 
     #[test]
-    fn estimated_terminal_history_retains_raw_bootstrap_units() {
+    fn estimated_terminal_output_records_one_sample_and_dedup_key() {
         let mut aggregator = test_aggregator(StatsCollectorConfig::default());
         single_fallback_stats(
             &mut aggregator,
             &completed_observation(20, 1, 8, seconds(1), seconds(3)),
         );
 
-        let completed = &aggregator.per_model["model-a"]
-            .metrics
-            .completed_fallback_outputs[0];
-        assert_eq!(completed.raw_bootstrap_units, 8);
-        assert_eq!(completed.output_tokens, 8);
-        assert!(!completed.output_tokens_explicit);
+        let model = &aggregator.per_model["model-a"].metrics;
+        assert_eq!(model.completed_fallback_output_keys.len(), 1);
+        assert_eq!(
+            model
+                .chat_output_tps_samples
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![4.0]
+        );
     }
 
     fallback_snapshot_test!(

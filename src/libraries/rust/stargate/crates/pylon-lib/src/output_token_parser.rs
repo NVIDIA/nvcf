@@ -62,7 +62,6 @@ pub(crate) struct OutputTokenParser {
     all_characters: OutputCharacters,
     estimated_tail_characters: OutputCharacters,
     exact_baseline: Option<u64>,
-    displayed_tokens: u64,
 }
 
 impl OutputTokenParser {
@@ -74,15 +73,18 @@ impl OutputTokenParser {
         &mut self,
         characters: OutputCharacters,
     ) -> EstimatedOutputUpdate {
+        let previous_displayed_tokens = self
+            .exact_baseline
+            .unwrap_or_default()
+            .saturating_add(self.estimated_tail_characters.bootstrap_units());
         self.all_characters = self.all_characters.saturating_add(characters);
         self.estimated_tail_characters = self.estimated_tail_characters.saturating_add(characters);
         let displayed_tokens = self
             .exact_baseline
             .unwrap_or_default()
             .saturating_add(self.estimated_tail_characters.bootstrap_units());
-        let delta = (displayed_tokens != self.displayed_tokens)
-            .then(|| displayed_tokens.saturating_sub(self.displayed_tokens));
-        self.displayed_tokens = displayed_tokens;
+        let delta = (displayed_tokens != previous_displayed_tokens)
+            .then(|| displayed_tokens.saturating_sub(previous_displayed_tokens));
         EstimatedOutputUpdate {
             displayed_tokens,
             delta,
@@ -102,7 +104,6 @@ impl OutputTokenParser {
         let delta = completion_tokens.saturating_sub(self.exact_baseline.unwrap_or_default());
         self.exact_baseline = Some(completion_tokens);
         self.estimated_tail_characters = OutputCharacters::default();
-        self.displayed_tokens = completion_tokens;
         ExactOutputUpdate::Applied { delta }
     }
 }

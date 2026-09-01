@@ -43,7 +43,7 @@ pub(super) struct ModelMetricsState {
     pub(super) kv_cache: KvCacheStatsSnapshot,
     pub(super) input_tps_distribution: TpsDistribution,
     pub(super) request_input_intervals: RequestInputIntervalWindow,
-    pub(super) completed_fallback_outputs: VecDeque<CompletedFallbackOutput>,
+    pub(super) completed_fallback_output_keys: VecDeque<RequestIntervalKey>,
     aggregate_state_counted: bool,
     pub(super) counter_output_tps_authoritative: bool,
     pub(super) chunk_usage_stats_observed: bool,
@@ -63,14 +63,6 @@ pub(super) struct GenerationMetricsState {
 pub(super) struct RequestIntervalKey {
     request_id: String,
     submitted_at: Instant,
-}
-
-#[derive(Debug)]
-pub(super) struct CompletedFallbackOutput {
-    pub(super) key: RequestIntervalKey,
-    pub(super) raw_bootstrap_units: u64,
-    pub(super) output_tokens: u64,
-    pub(super) output_tokens_explicit: bool,
 }
 
 impl RequestIntervalKey {
