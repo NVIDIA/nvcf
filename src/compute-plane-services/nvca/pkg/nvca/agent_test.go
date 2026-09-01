@@ -2709,6 +2709,12 @@ func TestEventDispatcherSurvivesClosedChannel(t *testing.T) {
 
 	a.startEventProcessDispatchers(ctx, events)
 
+	// A nil event on an open channel must be skipped rather than dereferenced.
+	// The channel is unbuffered, so the send below only completes once the
+	// dispatcher has received this one: if it panicked or returned here, the
+	// next send would block and this test would fail rather than pass silently.
+	events <- nil
+
 	// A live event still reaches its queue.
 	events <- &core.Event{Kind: "Pod", ObjectMetaKey: "ns/name"}
 	assert.Eventually(t, func() bool {
@@ -2716,10 +2722,12 @@ func TestEventDispatcherSurvivesClosedChannel(t *testing.T) {
 	}, 2*time.Second, 10*time.Millisecond, "a dispatched event should be queued")
 
 	// Closing the channel must stop the dispatcher, not panic it. Before the
-	// fix this panicked the test binary rather than failing it.
+	// fix this panicked the test binary rather than failing it. A dispatcher
+	// spinning on the closed channel would enqueue continuously, so assert the
+	// queue never grows instead of sampling it once after a sleep.
 	close(events)
-	time.Sleep(100 * time.Millisecond)
-
-	assert.Equal(t, 1, a.resourceEventWorkerQueues["Pod"].Len(),
+	assert.Never(t, func() bool {
+		return a.resourceEventWorkerQueues["Pod"].Len() != 1
+	}, 250*time.Millisecond, 10*time.Millisecond,
 		"a closed channel must not enqueue anything further")
 }
