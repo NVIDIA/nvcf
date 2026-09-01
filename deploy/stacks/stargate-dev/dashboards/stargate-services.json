@@ -718,7 +718,8 @@
           "refId": "A"
         }
       ],
-      "title": "Active backends",
+      "description": "Each series is a MockDC routing key. Its value is the number of active backends registered for the selected model.",
+      "title": "Active backend count per MockDC",
       "type": "timeseries"
     },
     {
