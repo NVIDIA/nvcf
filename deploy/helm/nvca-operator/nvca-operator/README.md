@@ -5,7 +5,7 @@ used in Kubernetes Clusters to run NVCF Workloads.
 
 ## Storage capability catalog
 
-The chart installs the versioned `nvcf-storage-capabilities` ConfigMap in the Helm release namespace. The public catalog and JSON Schema contain only the PVC access modes demonstrated for each CSI provisioner and the transition strategy for regular and Helm model cache. A `disabled` transition means that workflow is not qualified. Container cache is outside NVCA and is not part of this catalog.
+The chart installs the versioned `nvcf-storage-capabilities` ConfigMap in the Helm release namespace. For each exact CSI provisioner the catalog records only the PVC access modes qualified end to end in an NVCF cache workflow, plus the mount options for reader volumes NVCA creates. Nothing about the flow is declared: NVCA derives it from those modes. An empty `accessModes` list means nothing is qualified yet, so caching stays off for that driver. Container cache is outside NVCA and is not part of this catalog.
 
 This release does not wire the catalog into backend selection. Runtime use requires a durable cache plan and safe legacy-request migration so retries and agent restarts cannot change backends. Managed deployments will inspect the exact `nvcf-sc` StorageClass when that follow-up is implemented. Editing this ConfigMap does not enable a storage backend today.
 
