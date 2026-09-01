@@ -1832,6 +1832,13 @@ func (r *Reconciler) newSharedFSReaderPV(
 			fmt.Errorf("derive reader PV volume handle: %w", err))
 	}
 	roPV.Spec.CSI.VolumeHandle = handle
+	// Access modes are only used for binding; the kubelet does not enforce
+	// them. Without this the reader inherits the writer's read-write CSI
+	// source, and the only thing left standing between a consumer and the
+	// shared cache is mount options, which are empty for a provisioner that
+	// declares none. A reader could then mount the cache read-write and
+	// corrupt it for every other namespace reading the same volume.
+	roPV.Spec.CSI.ReadOnly = true
 	// A derived reader is a read-only model cache PV like any other, so it
 	// takes the provisioner's required reader options rather than inheriting
 	// whatever the writer was provisioned with. This matters for NVMesh, whose

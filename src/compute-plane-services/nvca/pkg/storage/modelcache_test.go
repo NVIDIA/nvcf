@@ -2028,6 +2028,50 @@ func TestDeriveReaderVolumeHandle(t *testing.T) {
 	}
 }
 
+// TestNewSharedFSReaderPVIsReadOnlyWithoutMountOptions covers the shared
+// filesystem case that motivates the read-only CSI source. A provisioner with
+// no declared reader options gets an empty mount option list, so mount options
+// cannot be what keeps the reader read-only, and access modes are only used
+// for binding. Without a read-only CSI source nothing stops a consumer
+// mounting the shared cache read-write.
+func TestNewSharedFSReaderPVIsReadOnlyWithoutMountOptions(t *testing.T) {
+	const wekaProvisioner = "csi.weka.io"
+	c := fake.NewClientBuilder().
+		WithScheme(mgrScheme).
+		WithRESTMapper(newTestRESTMapper(mgrScheme)).
+		WithObjects(newMountOptionDefaultsObjects(wekaProvisioner, nvmeshMountOptionDefaults)...).
+		Build()
+	r := newMountOptionsReconciler(t, c, nil)
+
+	writerPV := &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "writer-pv"},
+		Spec: corev1.PersistentVolumeSpec{
+			Capacity: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")},
+			PersistentVolumeSource: corev1.PersistentVolumeSource{
+				CSI: &corev1.CSIPersistentVolumeSource{
+					Driver:       wekaProvisioner,
+					VolumeHandle: "weka/v2/csivol-pvc-8e38c07d",
+					ReadOnly:     false,
+				},
+			},
+		},
+	}
+	st := &nvcav1new.StorageRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "sr", Namespace: "reader-ns"},
+		Spec:       nvcav1new.StorageRequestSpec{ICMSRequestName: "req"},
+	}
+	icmsReq := &nvcav2beta1.ICMSRequest{ObjectMeta: metav1.ObjectMeta{Name: "req", Namespace: "reader-ns"}}
+
+	roPV, err := r.newSharedFSReaderPV(context.Background(), st, icmsReq, writerPV, "ro-pvc")
+	require.NoError(t, err)
+	assert.Empty(t, roPV.Spec.MountOptions,
+		"this provisioner declares no reader options, so mount options cannot enforce read-only")
+	assert.True(t, roPV.Spec.CSI.ReadOnly,
+		"with no mount options the CSI source is the only thing keeping the reader read-only")
+	assert.Equal(t, "weka/v2/csivol-pvc-8e38c07d", roPV.Spec.CSI.VolumeHandle,
+		"a non-NVMesh handle addresses one volume and is reused unchanged")
+}
+
 // TestNewSharedFSReaderPVResolvesMountOptions pins that a derived reader takes
 // the provisioner's required reader options instead of inheriting the writer's.
 //
@@ -2073,4 +2117,6 @@ func TestNewSharedFSReaderPVResolvesMountOptions(t *testing.T) {
 		"the writer's read-write option must not survive onto a read-only reader")
 	assert.True(t, strings.HasSuffix(roPV.Spec.CSI.VolumeHandle, ":reader-ns"),
 		"the NVMesh handle must be rewritten for the reader namespace")
+	assert.True(t, roPV.Spec.CSI.ReadOnly,
+		"the CSI source must be read-only: access modes are not enforced by the kubelet")
 }
