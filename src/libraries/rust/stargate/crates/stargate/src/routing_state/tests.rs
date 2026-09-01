@@ -2463,6 +2463,53 @@ async fn proxy_local_priority_weights_stay_within_source_bounds() {
 }
 
 #[tokio::test]
+async fn proxy_local_priority_weights_resolve_integer_ceiling_boundaries() {
+    let scenario = RegistrationScenario::new(Some("rk-ceiling"));
+    let running_a = scenario.start_in("inst-a", "cluster-ceiling", 1111);
+    let running_b = scenario.start_in("inst-b", "cluster-ceiling", 2222);
+    let above_exact_integer = (1_u64 << 53) + 1;
+    let cases = [
+        ([(1.0, 6), (5.0, 0)], 1),
+        ([((1_u64 << 53) as f64, 1), (1.0, 2)], 2),
+        (
+            [(1.0, above_exact_integer), (1.0, above_exact_integer + 1)],
+            above_exact_integer + 1,
+        ),
+        ([(1.0, 0), (f64::MAX / 2.0, u64::MAX - 1)], u64::MAX - 1),
+    ];
+
+    for (local_stats, expected_wait_ms) in cases {
+        for (running, (input_tps, wait_ms)) in
+            [(&running_a, local_stats[0]), (&running_b, local_stats[1])]
+        {
+            scenario
+                .publish(
+                    running,
+                    "model-ceiling",
+                    Active,
+                    proxy_local_stats(ModelStats {
+                        last_mean_input_tps: input_tps,
+                        queue_size: 1,
+                        queued_input_size: 1,
+                        queue_time_estimate_ms_by_priority: HashMap::from([(0, wait_ms)]),
+                        ..ModelStats::default()
+                    }),
+                    Some(5),
+                )
+                .await;
+        }
+        assert_eq!(
+            scenario
+                .only_cluster("model-ceiling")
+                .await
+                .stats
+                .queue_time_estimate_ms_by_priority,
+            HashMap::from([(0, expected_wait_ms)])
+        );
+    }
+}
+
+#[tokio::test]
 async fn mixed_proxy_local_capability_uses_legacy_source_behavior() {
     let (scenario, _running_a, _running_b) = published_shared_cluster(
         proxy_local_stats(shared_backend_a_stats()),
