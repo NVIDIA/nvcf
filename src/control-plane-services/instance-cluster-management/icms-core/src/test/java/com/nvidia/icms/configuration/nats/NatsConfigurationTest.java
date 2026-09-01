@@ -21,7 +21,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -32,41 +31,32 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.nats.client.Connection;
 import io.nats.client.JetStream;
 import io.nats.client.JetStreamManagement;
+import io.nats.client.Options;
 import io.nats.client.Statistics;
 import java.time.Duration;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.context.ApplicationContext;
 
 class NatsConfigurationTest {
 
     private static final Duration CONNECTION_TIMEOUT = Duration.ofSeconds(5);
-    private static final Duration PING_INTERVAL = Duration.ofSeconds(10);
-    private static final Duration RECONNECT_WAIT = Duration.ofSeconds(1);
+    private static final Duration PING_INTERVAL = Duration.ofSeconds(5);
+    private static final Duration RECONNECT_WAIT = Duration.ofMillis(100);
 
-    @ParameterizedTest
-    @CsvSource({
-            "true, -1",
-            "false, 0"
-    })
-    void createDefaultOptions_configuresReconnectBehavior(
-            boolean reconnectAllowed, int expectedMaxReconnect) {
+    @Test
+    void createDefaultOptions_matchesCloudFunctionsReconnectBehavior() {
         var properties = mock(NatsConfigurationProperties.class);
         when(properties.getNatsUrl()).thenReturn("nats://localhost:4222");
         when(properties.getConnectionTimeout()).thenReturn(CONNECTION_TIMEOUT);
-        when(properties.getPingInterval()).thenReturn(PING_INTERVAL);
-        when(properties.getReconnectWait()).thenReturn(RECONNECT_WAIT);
-        when(properties.getReconnectJitter()).thenReturn(Duration.ZERO);
-        when(properties.isReconnectAllowed()).thenReturn(reconnectAllowed);
         when(properties.getNkeySeed()).thenReturn(Optional.empty());
 
         var options = new NatsConfiguration().createDefaultOptions(properties);
 
         assertEquals(CONNECTION_TIMEOUT, options.getConnectionTimeout());
         assertEquals(PING_INTERVAL, options.getPingInterval());
-        assertEquals(expectedMaxReconnect, options.getMaxReconnect());
+        assertEquals(RECONNECT_WAIT, options.getReconnectWait());
+        assertEquals(Options.DEFAULT_MAX_RECONNECT, options.getMaxReconnect());
     }
 
     @Test
@@ -93,17 +83,20 @@ class NatsConfigurationTest {
     }
 
     @Test
-    void fixedNatsPool_doesNotConnectUntilBorrowed() throws Exception {
+    void fixedNatsPool_connectsWhenConstructed() throws Exception {
         var applicationContext = mock(ApplicationContext.class);
+        var resources = connection();
+        when(applicationContext.getBean(Connection.class)).thenReturn(resources.connection());
 
         try (var pool = new FixedNatsPool(applicationContext, enabledProperties(1))) {
         }
 
-        verify(applicationContext, never()).getBean(Connection.class);
+        verify(applicationContext).getBean(Connection.class);
+        verify(resources.connection()).RTT();
     }
 
     @Test
-    void fixedNatsPool_healthCheckInitializesConnection() throws Exception {
+    void fixedNatsPool_healthCheckUsesInitializedConnection() throws Exception {
         var applicationContext = mock(ApplicationContext.class);
         var resources = connection();
         when(applicationContext.getBean(Connection.class)).thenReturn(resources.connection());
@@ -116,22 +109,20 @@ class NatsConfigurationTest {
     }
 
     @Test
-    void fixedNatsPool_replacesClosedConnection() throws Exception {
+    void fixedNatsPool_returnsClosedConnectionWithoutReplacingIt() throws Exception {
         var properties = enabledProperties(1);
         var applicationContext = mock(ApplicationContext.class);
         var closed = connection();
-        var replacement = connection();
         when(closed.connection().getStatus()).thenReturn(Connection.Status.CLOSED);
-        when(applicationContext.getBean(Connection.class)).thenReturn(closed.connection(),
-                                                                       replacement.connection());
+        when(applicationContext.getBean(Connection.class)).thenReturn(closed.connection());
 
         try (var pool = new FixedNatsPool(applicationContext, properties)) {
             assertSame(closed.connection(), pool.borrowConnection());
-            assertSame(replacement.connection(), pool.borrowConnection());
+            assertSame(closed.connection(), pool.borrowConnection());
         }
 
-        verify(applicationContext, times(2)).getBean(Connection.class);
-        verify(replacement.connection()).close();
+        verify(applicationContext).getBean(Connection.class);
+        verify(closed.connection()).close();
     }
 
     @Test
@@ -165,7 +156,6 @@ class NatsConfigurationTest {
         when(applicationContext.getBean(Connection.class)).thenReturn(resources.connection());
 
         try (var pool = new FixedNatsPool(applicationContext, properties)) {
-            pool.borrowConnection();
             var registry = new SimpleMeterRegistry();
             new NatsMetricsConfiguration(pool, registry).afterPropertiesSet();
 

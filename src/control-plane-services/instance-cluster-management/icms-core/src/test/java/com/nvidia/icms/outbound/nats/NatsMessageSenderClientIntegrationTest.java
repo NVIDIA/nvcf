@@ -86,7 +86,7 @@ class NatsMessageSenderClientIntegrationTest extends IntegrationTest {
 
         // Spring lifecycle callbacks do not run for manually constructed test objects.
         NatsStreamManager natsStreamManager = new NatsStreamManager(
-                new NatsResourceService(fixedNatsPool),
+                new NatsResourceService(fixedNatsPool.borrowConnection()),
                 natsConfigurationProperties);
         natsStreamManager.init();
 
