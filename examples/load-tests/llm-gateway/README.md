@@ -9,7 +9,9 @@ directly. Everything here goes through the OpenAI-compatible gateway surface.
 
 ## Scripts
 
-One script per gateway endpoint, so a failure points at a single handler.
+Scripts are grouped by endpoint and workflow, so a failure points at a single handler.
+Chat completions has separate streaming and non-streaming scripts, and one script covers
+the three health endpoints.
 
 | Script | Endpoint | Notes |
 |--------|----------|-------|
@@ -20,7 +22,7 @@ One script per gateway endpoint, so a failure points at a single handler.
 | `gateway_health_test.js` | `GET /healthz`, `/readyz`, `/info` | Gateway process health. Never reaches the router or a worker. |
 
 These are the only routes the gateway registers. Handlers for audio transcription,
-translation, and speech to speech exist in the source but are not wired into a route, so
+translation, and speech-to-speech exist in the source but are not wired into a route, so
 they are not covered here.
 
 ## Test configs
@@ -40,7 +42,7 @@ Start with the smoke config. Confirm wiring and a clean baseline before ramping.
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `TOKEN` | Yes | Bearer token with permission to invoke the function. |
-| `LLM_GATEWAY_URL` | Yes | Base URL of the gateway to test. No trailing slash needed. |
+| `LLM_GATEWAY_URL` | Yes | Base URL of the gateway to test. Must use https, because the bearer token is sent on every request. No trailing slash needed. |
 | `LLM_FUNCTION_ID` | Yes | Function ID. The gateway requires it as a model prefix. |
 | `LLM_MODEL_NAME` | Yes | Model name as declared on the function. |
 | `LLM_REGION` | No | Free-form label applied to every metric. Defaults to `default`. |
@@ -120,12 +122,14 @@ serve. A 404 usually means the routing target was not found. Which of these a de
 produces changes over time, so the counter deliberately records the code instead of
 special-casing a particular failure.
 
-```
+```bash
 k6 run ... --summary-export summary.json   # http_errors carries the status tag
 ```
 
-Thresholds gate on the overall failure rate and the 95th percentile latency. Individual
-status codes do not abort a run, so hitting the rate limiter does not end a test early.
+Thresholds gate on the check pass rate, the overall failure rate, and the 95th percentile
+latency. The check threshold catches responses that succeed at the HTTP layer but are still
+wrong, such as a 200 carrying a malformed body. Individual status codes do not abort a run,
+so hitting the rate limiter does not end a test early.
 
 ## Before reading any numbers
 

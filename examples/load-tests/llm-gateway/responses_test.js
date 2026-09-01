@@ -52,7 +52,10 @@ export default function () {
         return false
       }
       try {
-        return r.json('output') !== undefined || r.json('output_text') !== undefined
+        const output = r.json('output')
+        const outputText = r.json('output_text')
+        return (output !== undefined && output !== null) ||
+          (outputText !== undefined && outputText !== null)
       } catch (err) {
         return false
       }

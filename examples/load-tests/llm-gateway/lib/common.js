@@ -26,7 +26,13 @@ export function baseUrl() {
   if (!__ENV.LLM_GATEWAY_URL) {
     throw new Error('LLM_GATEWAY_URL is required, for example https://gateway.example.com')
   }
-  return __ENV.LLM_GATEWAY_URL.replace(/\/$/, '')
+  const url = __ENV.LLM_GATEWAY_URL.replace(/\/$/, '')
+  // params() attaches TOKEN as a bearer header, so plaintext would put a
+  // credential on the wire.
+  if (!url.startsWith('https://')) {
+    throw new Error(`LLM_GATEWAY_URL must use https, got "${url}"`)
+  }
+  return url
 }
 
 // Needed when addressing an ingress directly, because it serves a certificate
@@ -76,6 +82,9 @@ export function classify(response, endpoint) {
 }
 
 export const thresholds = {
+  // Catches responses that are not failures at the HTTP layer but are still
+  // wrong, for example a 200 carrying a malformed body.
+  'checks': ['rate>0.99'],
   'http_req_failed': ['rate<0.01'],
   'http_req_duration{expected_response:true}': ['p(95)<5000'],
 }
