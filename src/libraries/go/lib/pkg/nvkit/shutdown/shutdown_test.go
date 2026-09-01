@@ -152,3 +152,43 @@ func TestSignalsReturnsACopy(t *testing.T) {
 		t.Errorf("Signals()[0] = %v after caller mutation, want %v", second[0], syscall.SIGINT)
 	}
 }
+
+func TestIsFatal(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			// The guard that makes IsFatal worth having: !IsSignalError(nil)
+			// is true, so a call site spelling this out by hand panics on a
+			// clean exit if it forgets the nil check.
+			name: "nil is a clean exit",
+			err:  nil,
+			want: false,
+		},
+		{
+			name: "typed shutdown signal",
+			err:  NewSignalError(syscall.SIGTERM),
+			want: false,
+		},
+		{
+			name: "untyped shutdown wording",
+			err:  errors.New("received signal terminated"),
+			want: false,
+		},
+		{
+			name: "genuine failure",
+			err:  errors.New("listen tcp :8080: bind: address already in use"),
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsFatal(tt.err); got != tt.want {
+				t.Errorf("IsFatal(%v) = %t, want %t", tt.err, got, tt.want)
+			}
+		})
+	}
+}

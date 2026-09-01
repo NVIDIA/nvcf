@@ -112,3 +112,14 @@ func IsSignalError(err error) bool {
 	}
 	return false
 }
+
+// IsFatal reports whether a terminal error from a server or root command is a
+// genuine failure, rather than nil or the expected response to a shutdown
+// signal. It is what a caller deciding whether to panic should ask.
+//
+// The nil case is the reason this exists rather than being spelled out at each
+// call site: IsSignalError(nil) is false, so the obvious hand-written form
+// treats a clean exit as fatal unless the caller remembers the nil check.
+func IsFatal(err error) bool {
+	return err != nil && !IsSignalError(err)
+}
