@@ -66,8 +66,12 @@ public final class NatsConfiguration {
             NatsConfigurationProperties natsProperties,
             Tracer tracer)
             throws IOException, InterruptedException {
-        var options = createDefaultOptions(natsProperties);
-        return connect(options, tracer);
+        if (natsProperties.isEnabled()) {
+            var options = createDefaultOptions(natsProperties);
+            return connect(options, tracer);
+        }
+
+        return null;
     }
 
     Options createDefaultOptions(NatsConfigurationProperties natsConfigurationProperties) {

@@ -22,6 +22,7 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import org.springframework.context.annotation.Profile;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -41,6 +42,7 @@ import lombok.extern.slf4j.Slf4j;
 @Service
 @AllArgsConstructor
 @Profile(SCHEDULED_JOBS_PROFILES)
+@ConditionalOnProperty(prefix = "icms.nats", name = "enabled", havingValue = "true")
 public class GlobalNatsStreamValidationTaskController {
     public static final String GLOBAL_NATS_STREAM_VALIDATION_JOB_NAME = "globalNatsStreamValidation";
 

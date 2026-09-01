@@ -60,6 +60,8 @@ class NatsConfigurationIntegrationTest extends IntegrationTest {
         when(natsConfigurationProperties.getPingInterval()).thenReturn(PING_INTERVAL);
         when(natsConfigurationProperties.getReconnectWait()).thenReturn(RECONNECT_WAIT);
         when(natsConfigurationProperties.getReconnectJitter()).thenReturn(Duration.ZERO);
+        when(natsConfigurationProperties.getForceReconnectFlush()).thenReturn(Duration.ZERO);
+        when(natsConfigurationProperties.isEnabled()).thenReturn(true);
         when(natsConfigurationProperties.isReconnectAllowed()).thenReturn(reconnectAllowed);
         when(natsConfigurationProperties.getNkeySeed()).thenReturn(Optional.empty());
     }

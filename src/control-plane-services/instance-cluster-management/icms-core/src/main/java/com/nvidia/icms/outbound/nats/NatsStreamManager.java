@@ -29,10 +29,12 @@ import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
-@Component
 @Slf4j
+@Component
+@ConditionalOnProperty(prefix = "icms.nats", name = "enabled", havingValue = "true")
 public class NatsStreamManager implements AutoCloseable {
 
     public static final String CREATE_NVCA_STREAM_NAME = "CreateNvcaFunctionTaskStream";
@@ -51,9 +53,9 @@ public class NatsStreamManager implements AutoCloseable {
     public NatsStreamManager(
             Connection connection,
             NatsConfigurationProperties natsConfigurationProperties) throws IOException {
+        this.natsConfigurationProperties = natsConfigurationProperties;
         this.connection = connection;
         jetStreamManagement = connection.jetStreamManagement();
-        this.natsConfigurationProperties = natsConfigurationProperties;
     }
 
     @PostConstruct
