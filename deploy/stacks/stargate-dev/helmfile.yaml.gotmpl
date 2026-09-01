@@ -126,6 +126,7 @@ releases:
                 service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: ip
                 service.beta.kubernetes.io/aws-load-balancer-ssl-cert: {{ .Values.router.acmCertificateArn | quote }}
                 service.beta.kubernetes.io/aws-load-balancer-ssl-ports: "50071"
+                service.beta.kubernetes.io/aws-load-balancer-alpn-policy: HTTP2Only
                 service.beta.kubernetes.io/aws-load-balancer-backend-protocol: tcp
                 service.beta.kubernetes.io/aws-load-balancer-healthcheck-protocol: TCP
                 service.beta.kubernetes.io/aws-load-balancer-healthcheck-port: "8080"
@@ -148,6 +149,7 @@ releases:
             mountPath: /var/run/stargate/tls
             certPath: /var/run/stargate/tls/tls.crt
             keyPath: /var/run/stargate/tls/tls.key
+            upstreamCaPath: /var/run/stargate/tls/ca.crt
             quicInsecure: false
           metrics:
             enabled: true

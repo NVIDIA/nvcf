@@ -131,6 +131,9 @@ spec:
             {{- with .Values.llmRequestRouter.tls.keyPath }}
             - --tls-key-path={{ . }}
             {{- end }}
+            {{- with .Values.llmRequestRouter.tls.upstreamCaPath }}
+            - --upstream-tls-cert-path={{ . }}
+            {{- end }}
             {{- if .Values.llmRequestRouter.tls.quicInsecure }}
             - --quic-insecure
             {{- end }}
@@ -174,6 +177,10 @@ spec:
                 path: {{ base .Values.llmRequestRouter.tls.certPath | quote }}
               - key: tls.key
                 path: {{ base .Values.llmRequestRouter.tls.keyPath | quote }}
+              {{- with .Values.llmRequestRouter.tls.upstreamCaPath }}
+              - key: ca.crt
+                path: {{ base . | quote }}
+              {{- end }}
       {{- end }}
       {{- with .Values.llmRequestRouter.backendRouter.nodeSelector }}
       nodeSelector:

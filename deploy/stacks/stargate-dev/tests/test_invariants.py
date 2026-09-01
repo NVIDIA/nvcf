@@ -156,6 +156,26 @@ class RenderedStackTests(unittest.TestCase):
         self.assertEqual(replicas["llm-request-router"], 3)
         self.assertEqual(replicas["llm-request-router-backend-router"], 3)
 
+        backend_router = next(
+            resource
+            for _, resource in deployments
+            if resource["metadata"]["name"] == "llm-request-router-backend-router"
+        )
+        backend_router_pod = backend_router["spec"]["template"]["spec"]
+        self.assertIn(
+            "--upstream-tls-cert-path=/var/run/stargate/tls/ca.crt",
+            backend_router_pod["containers"][0]["args"],
+        )
+        tls_volume = next(
+            volume
+            for volume in backend_router_pod["volumes"]
+            if volume["name"] == "stargate-tls"
+        )
+        self.assertIn(
+            {"key": "ca.crt", "path": "ca.crt"},
+            tls_volume["secret"]["items"],
+        )
+
         inference_server_ids = set()
         cluster_ids = set()
         for path, deployment in deployments:
@@ -266,6 +286,12 @@ class RenderedStackTests(unittest.TestCase):
                 "service.beta.kubernetes.io/aws-load-balancer-backend-protocol"
             ],
             "tcp",
+        )
+        self.assertEqual(
+            service["metadata"]["annotations"][
+                "service.beta.kubernetes.io/aws-load-balancer-alpn-policy"
+            ],
+            "HTTP2Only",
         )
 
 

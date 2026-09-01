@@ -313,6 +313,9 @@ llmRequestRouter:
     mountPath: ""
     certPath: ""
     keyPath: ""
+    # Optional CA bundle used by backend-router to verify Stargate QUIC targets.
+    # The same Secret must provide this file under the ca.crt key.
+    upstreamCaPath: ""
     quicInsecure: true
 
   metrics:
