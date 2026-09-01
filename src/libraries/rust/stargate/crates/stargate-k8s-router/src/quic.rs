@@ -41,6 +41,9 @@ pub struct QuicRouterConfig {
     pub relay_keep_alive_interval: Option<Duration>,
     pub tls_cert_pem: Option<Vec<u8>>,
     pub tls_key_pem: Option<Vec<u8>>,
+    /// Dedicated upstream trust bundle. The serving certificate remains a
+    /// compatibility fallback when this is absent.
+    pub upstream_tls_cert_pem: Option<Vec<u8>>,
     pub server_identity_reloader: Option<stargate_tls::ServerIdentityReloader>,
     pub tls_reload_interval: Duration,
     pub quic_insecure: bool,
@@ -62,14 +65,20 @@ struct QuicRouterRuntime {
     tls_reload_interval: Duration,
 }
 
+fn upstream_trust_pem(config: &QuicRouterConfig) -> Option<&[u8]> {
+    config
+        .upstream_tls_cert_pem
+        .as_deref()
+        .or(config.tls_cert_pem.as_deref())
+}
+
 impl QuicRouterRuntime {
     fn bind(config: QuicRouterConfig, connection_tasks: TaskTracker) -> Result<Self> {
         let relay_config = RelayEndpointConfig {
             max_idle_timeout: config.relay_max_idle_timeout,
             keep_alive_interval: config.relay_keep_alive_interval,
         };
-        let client_config =
-            build_client_config(config.tls_cert_pem.as_deref(), config.quic_insecure)?;
+        let client_config = build_client_config(upstream_trust_pem(&config), config.quic_insecure)?;
         let server_config = match &config.server_identity_reloader {
             // Serve the identity the reloader validated and owns. Reading the
             // mounted files a second time here could pick up a different
@@ -345,10 +354,31 @@ mod tests {
             relay_keep_alive_interval: Some(Duration::from_secs(5)),
             tls_cert_pem: None,
             tls_key_pem: None,
+            upstream_tls_cert_pem: None,
             server_identity_reloader: None,
             tls_reload_interval: stargate_tls::DEFAULT_TLS_RELOAD_INTERVAL,
             quic_insecure: true,
         }
+    }
+
+    #[test]
+    fn explicit_upstream_trust_precedes_serving_certificate() {
+        let mut config = test_config();
+        config.tls_cert_pem = Some(b"serving certificate".to_vec());
+        config.upstream_tls_cert_pem = Some(b"upstream CA".to_vec());
+
+        assert_eq!(upstream_trust_pem(&config), Some(b"upstream CA".as_slice()));
+    }
+
+    #[test]
+    fn serving_certificate_remains_upstream_trust_fallback() {
+        let mut config = test_config();
+        config.tls_cert_pem = Some(b"serving certificate".to_vec());
+
+        assert_eq!(
+            upstream_trust_pem(&config),
+            Some(b"serving certificate".as_slice())
+        );
     }
 
     fn snapshot_with_quic_target(pod_name: &str, quic_addr: SocketAddr) -> TargetSnapshot {

@@ -70,6 +70,10 @@ write_autoscaler_values() {
 write_autoscaler_values "$work_dir/autoscaler-values.yaml"
 
 autoscaler_values="$work_dir/autoscaler-values.yaml"
+autoscaler_tag="$(yq -r '.functionautoscaler.image.tag // ""' "$autoscaler_values")"
+if [[ -n "$autoscaler_tag" ]]; then
+  fail "stack duplicated the function autoscaler chart-owned image tag"
+fi
 for expected in \
   'CASSANDRA__CONTACT_POINTS: cassandra.cassandra-system.svc.cluster.local' \
   'CASSANDRA__IS_DEVELOPMENT: "false"' \
@@ -90,7 +94,7 @@ helm template function-autoscaler "$repo_dir/deploy/helm/function-autoscaler" \
 
 autoscaler_manifests="$work_dir/autoscaler-manifests.yaml"
 grep -q 'image: nvcr.io/YOUR_ORG/YOUR_TEAM/nvcf-function-autoscaler:1.19.0' "$autoscaler_manifests" ||
-  fail "self-managed stack did not pin the autoscaler image"
+  fail "self-managed stack did not render the chart-owned autoscaler image"
 test "$(grep -c '^kind: ConfigMap$' "$autoscaler_manifests")" = "2" ||
   fail "autoscaler chart did not render only its env and Vault template ConfigMaps"
 grep -q 'name: function-autoscaler-env' "$autoscaler_manifests" ||

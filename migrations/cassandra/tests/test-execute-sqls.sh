@@ -90,4 +90,15 @@ if ! grep -q '^until cqlsh ' "${script}"; then
   fail "execute_sqls.sh must retain the Cassandra authentication readiness check"
 fi
 
+nvct_schema="${keyspaces}/nvct_api/03_init_tables.up.sql"
+if ! grep -F -q 'health                         TEXT' "${nvct_schema}"; then
+  fail "NVCT fresh schema is missing tasks_v2.health"
+fi
+
+nvct_health_migration="${keyspaces}/nvct_api/04_add_health.up.sql"
+if ! grep -F -q 'ALTER TABLE nvct_api.tasks_v2 ADD IF NOT EXISTS health TEXT;' \
+  "${nvct_health_migration}"; then
+  fail "NVCT upgrade migration does not add tasks_v2.health idempotently"
+fi
+
 exit "${status}"
