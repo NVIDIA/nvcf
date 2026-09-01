@@ -5,6 +5,7 @@ package record
 
 import (
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"encoding/json"
 	"errors"
@@ -22,6 +23,7 @@ var ErrLegacyAuditRecord = errors.New("record: Dynamo v1.3.x AuditRecord found, 
 type Stats struct {
 	Records     int
 	Unparseable int
+	Oversized   int
 	ByEventType map[EventType]int
 	Unknown     int
 	Bytes       int64
@@ -30,13 +32,13 @@ type Stats struct {
 // Reader streams records out of a gzipped JSON-lines segment.
 //
 // It never holds more than one record in memory, so segment size does not
-// bound memory. A record that fails to parse is reported through Err and
-// skipped; it does not end the scan, because one malformed line must not
-// discard the other records in a segment.
+// bound memory. A record that fails to parse, including one that exceeds the
+// size bound, is counted and skipped; it does not end the scan, because one
+// bad line must not discard the other records in a segment.
 type Reader struct {
 	file    *os.File
 	gz      *gzip.Reader
-	scan    *bufio.Scanner
+	buf     *bufio.Reader
 	current *Record
 	err     error
 	line    int
@@ -62,21 +64,76 @@ func Open(path string) (*Reader, error) {
 	// stream rather than a single member.
 	gz.Multistream(true)
 
-	scan := bufio.NewScanner(gz)
-	scan.Buffer(make([]byte, 0, 64<<10), maxLineBytes)
 	return &Reader{
 		file:  file,
 		gz:    gz,
-		scan:  scan,
+		buf:   bufio.NewReaderSize(gz, 64<<10),
 		stats: Stats{ByEventType: map[EventType]int{}},
 	}, nil
 }
 
+// readLine returns the next line with its terminator stripped.
+//
+// A line longer than maxLineBytes is drained to its newline and reported as
+// oversized, so the reader resumes at the following record instead of stopping
+// at the first one it cannot hold. bufio.Scanner cannot do this: it fails
+// permanently once a token exceeds its buffer.
+func (r *Reader) readLine() (line []byte, oversized bool, err error) {
+	var acc []byte
+	for {
+		chunk, chunkErr := r.buf.ReadSlice('\n')
+		if errors.Is(chunkErr, bufio.ErrBufferFull) {
+			if len(acc)+len(chunk) > maxLineBytes {
+				oversized = true
+				acc = nil
+				// Keep draining until the newline so the next read starts on a
+				// record boundary.
+				continue
+			}
+			acc = append(acc, chunk...)
+			continue
+		}
+		if chunkErr != nil {
+			if len(acc) == 0 && len(chunk) == 0 {
+				return nil, oversized, chunkErr
+			}
+			if !oversized {
+				acc = append(acc, chunk...)
+			}
+			return trimEOL(acc), oversized, nil
+		}
+		if oversized {
+			return nil, true, nil
+		}
+		if len(acc)+len(chunk) > maxLineBytes {
+			return nil, true, nil
+		}
+		acc = append(acc, chunk...)
+		return trimEOL(acc), false, nil
+	}
+}
+
+func trimEOL(line []byte) []byte {
+	line = bytes.TrimSuffix(line, []byte("\n"))
+	return bytes.TrimSuffix(line, []byte("\r"))
+}
+
 // Next advances to the next record, reporting whether one was read.
 func (r *Reader) Next() bool {
-	for r.scan.Scan() {
+	for {
+		line, oversized, err := r.readLine()
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				r.err = fmt.Errorf("read segment: %w", err)
+			}
+			return false
+		}
 		r.line++
-		line := r.scan.Bytes()
+		if oversized {
+			r.stats.Unparseable++
+			r.stats.Oversized++
+			continue
+		}
 		if len(line) == 0 {
 			continue
 		}
@@ -100,10 +157,6 @@ func (r *Reader) Next() bool {
 		r.current = rec
 		return true
 	}
-	if err := r.scan.Err(); err != nil && !errors.Is(err, io.EOF) {
-		r.err = fmt.Errorf("scan segment: %w", err)
-	}
-	return false
 }
 
 // Record returns the record read by the last successful Next.

@@ -33,7 +33,7 @@ type Service struct {
 func New(cfg config.Config) (*Service, error) {
 	client, err := backend.New(cfg)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("build backend for request trace uploader: %w", err)
 	}
 	return NewWithBackend(cfg, client), nil
 }
@@ -72,7 +72,7 @@ func (s *Service) Initialize() error {
 	if err := secret.Close(); err != nil {
 		return fmt.Errorf("close uploader secret file: %w", err)
 	}
-	if err := s.Refresh(); err != nil {
+	if err := s.Refresh(context.Background()); err != nil {
 		return fmt.Errorf("refresh local segment state: %w", err)
 	}
 	s.health.SetReady(true)
@@ -84,13 +84,16 @@ func (s *Service) Initialize() error {
 // Sources are never deleted here. Deletion waits on durable lifecycle state and
 // confirmed terminal success, which is a later increment. A segment that fails
 // is logged and left in place, so the next scan retries it.
-func (s *Service) Refresh() error {
+func (s *Service) Refresh(ctx context.Context) error {
 	segments, err := segment.Discover(s.config.SourceDir, s.config.SegmentPrefix)
 	if err != nil {
 		return fmt.Errorf("discover request trace segments: %w", err)
 	}
 	for _, item := range segments {
-		if err := s.submit(item); err != nil {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("stop scanning request trace segments: %w", err)
+		}
+		if err := s.submit(ctx, item); err != nil {
 			slog.Error("submit request trace segment",
 				"segment", item.Index,
 				"bytes", item.Size,
@@ -100,17 +103,17 @@ func (s *Service) Refresh() error {
 	return nil
 }
 
-func (s *Service) submit(item segment.Segment) error {
-	id, err := s.backend.Submit(context.Background(), backend.SubmitRequest{
+func (s *Service) submit(ctx context.Context, item segment.Segment) error {
+	id, err := s.backend.Submit(ctx, backend.SubmitRequest{
 		Segment: item,
 		Path:    item.Path,
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("submit segment to backend: %w", err)
 	}
-	status, err := s.backend.Status(context.Background(), id)
+	status, err := s.backend.Status(ctx, id)
 	if err != nil {
-		return fmt.Errorf("read status: %w", err)
+		return fmt.Errorf("read backend status: %w", err)
 	}
 	slog.Info("submitted request trace segment",
 		"segment", item.Index,
@@ -146,7 +149,7 @@ func (s *Service) Run(ctx context.Context) error {
 		case err := <-errs:
 			return fmt.Errorf("serve uploader HTTP endpoints: %w", err)
 		case <-ticker.C:
-			if err := s.Refresh(); err != nil {
+			if err := s.Refresh(ctx); err != nil {
 				return fmt.Errorf("refresh request trace segments: %w", err)
 			}
 		}

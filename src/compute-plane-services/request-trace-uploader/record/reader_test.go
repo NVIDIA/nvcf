@@ -189,3 +189,49 @@ func TestConcatenatedGzipMembersAreRead(t *testing.T) {
 		t.Fatalf("records = %d, want 2 across concatenated members", len(records))
 	}
 }
+
+func TestOversizedLineDoesNotStopTheScan(t *testing.T) {
+	huge := `{"schema":"dynamo.request.trace.v1","event_type":"request_payload","event_time_unix_ms":1,"payload":{"request_id":"huge","payload_complete":true,"pad":"` +
+		strings.Repeat("x", maxLineBytes+1024) + `"}}`
+
+	path := writeSegment(t,
+		`{"schema":"dynamo.request.trace.v1","event_type":"request_end","event_time_unix_ms":1,"request":{"request_id":"before"}}`,
+		huge,
+		`{"schema":"dynamo.request.trace.v1","event_type":"request_end","event_time_unix_ms":2,"request":{"request_id":"after"}}`,
+	)
+
+	records, stats, err := readAll(t, path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("records = %d, want the records either side of the oversized line", len(records))
+	}
+	first, _ := records[0].RequestID()
+	second, _ := records[1].RequestID()
+	if first != "before" || second != "after" {
+		t.Errorf("ids = %q %q, want before after", first, second)
+	}
+	if stats.Oversized != 1 || stats.Unparseable != 1 {
+		t.Errorf("oversized = %d unparseable = %d, want 1 and 1", stats.Oversized, stats.Unparseable)
+	}
+}
+
+func TestSegmentWithNoTrailingNewlineIsRead(t *testing.T) {
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	gz.Write([]byte(`{"schema":"dynamo.request.trace.v1","event_type":"request_end","event_time_unix_ms":1,"request":{"request_id":"last"}}`))
+	gz.Close()
+	path := filepath.Join(t.TempDir(), "request-trace.000000.jsonl.gz")
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	records, _, err := readAll(t, path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want the final unterminated record", len(records))
+	}
+}

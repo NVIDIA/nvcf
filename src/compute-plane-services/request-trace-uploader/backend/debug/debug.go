@@ -50,6 +50,11 @@ func (c *Client) Submit(ctx context.Context, request backend.SubmitRequest) (str
 	incomplete := 0
 
 	for reader.Next() {
+		// A segment can hold many records, so a scan must not outlive a
+		// shutdown. Checking per record bounds the delay to one record.
+		if err := ctx.Err(); err != nil {
+			return "", fmt.Errorf("debug backend: stop reading segment: %w", err)
+		}
 		rec := reader.Record()
 		if _, ok := rec.RequestID(); ok {
 			withRequestID++
