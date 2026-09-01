@@ -159,8 +159,7 @@ impl StatsAggregator {
                             RequestIntervalKey::new(&observation.request_id, interval.submitted_at);
                         if !model_state.completed_fallback_output_keys.contains(&key)
                             && (observation.output_tokens_explicit || event.raw_output_units() > 0)
-                            && let Some(output_tps) =
-                                observed_output_tps(config, event, observation.output_tokens)
+                            && let Some(output_tps) = observed_output_tps(config, event)
                         {
                             record_sample(
                                 &mut model_state.chat_output_tps_samples,
@@ -227,7 +226,7 @@ impl StatsAggregator {
         let active_chat_output_tps = self
             .config
             .openai_fallback_stats_enabled
-            .then(|| observed_output_tps(&self.config, event, observation.output_tokens))
+            .then(|| observed_output_tps(&self.config, event))
             .flatten();
         let mut changed_models = event
             .changed_generations
@@ -276,9 +275,9 @@ fn push_changed_model(models: &mut Vec<String>, model_id: String) {
 pub(super) fn observed_output_tps(
     config: &StatsCollectorConfig,
     event: &RequestObservationEvent,
-    output_tokens: u64,
 ) -> Option<f64> {
     let observation = &event.observation;
+    let output_tokens = observation.output_tokens;
     if observation.endpoint == RequestObservationEndpoint::Embeddings
         || output_tokens < config.min_output_tokens
     {

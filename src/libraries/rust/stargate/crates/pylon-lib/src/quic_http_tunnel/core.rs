@@ -155,7 +155,6 @@ pub(super) struct TunnelServerApp {
     pub(super) max_sse_buffer_bytes: usize,
     pub(super) first_output_timeout: Duration,
     pub(super) output_chunk_timeout: Duration,
-    pub(super) force_chat_completions_include_usage: bool,
     pub(super) runtime_state: PylonRuntimeState,
     pub(super) request_quality_monitor: RequestQualityMonitorConfig,
     pub(super) retry: PylonRetryConfig,
@@ -174,9 +173,6 @@ impl TunnelServerApp {
         upstream_http_base_url: String,
         forwarding: TunnelForwardingConfig,
     ) -> Self {
-        let force_chat_completions_include_usage = forwarding
-            .runtime_state
-            .force_chat_completions_include_usage();
         Self {
             http_client: Client::new(),
             inference_server_id,
@@ -185,7 +181,6 @@ impl TunnelServerApp {
             max_sse_buffer_bytes: forwarding.max_sse_buffer_bytes,
             first_output_timeout: forwarding.first_output_timeout,
             output_chunk_timeout: forwarding.output_chunk_timeout,
-            force_chat_completions_include_usage,
             runtime_state: forwarding.runtime_state,
             request_quality_monitor: forwarding.request_quality_monitor,
             retry: forwarding.retry,
@@ -748,7 +743,7 @@ pub(super) async fn forward_tunnel_request(
         }
         let (prepared_body, body_mutated) = match force_chat_completions_include_usage(
             observation_endpoint,
-            app.force_chat_completions_include_usage,
+            app.runtime_state.force_chat_completions_include_usage(),
             body_bytes,
         ) {
             Ok(body_bytes) => body_bytes,
@@ -1472,8 +1467,9 @@ mod tests {
             }),
         ))
         .await;
-        let (mut app, _observations) = observed_app(upstream.as_str());
-        app.force_chat_completions_include_usage = true;
+        let (app, _observations) = observed_app(upstream.as_str());
+        app.runtime_state
+            .set_force_chat_completions_include_usage(true);
         let original_body = br#"{"messages":[],"stream":true}"#;
         let mut request = observed_request("/v1/chat/completions");
         request.headers.insert(
@@ -1509,8 +1505,9 @@ mod tests {
 
     #[tokio::test]
     async fn forced_chat_usage_invalid_stream_options_returns_bad_request() {
-        let (mut app, _observations) = observed_app("http://127.0.0.1:0");
-        app.force_chat_completions_include_usage = true;
+        let (app, _observations) = observed_app("http://127.0.0.1:0");
+        app.runtime_state
+            .set_force_chat_completions_include_usage(true);
         for request_body in [
             br#"{"messages":[],"stream":true,"stream_options":false}"#.as_slice(),
             br#"{"messages":[],"stream":true,"stream_options":{"include_usage":"yes"}}"#.as_slice(),

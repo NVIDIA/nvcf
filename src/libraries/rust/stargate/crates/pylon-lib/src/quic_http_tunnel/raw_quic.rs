@@ -167,7 +167,6 @@ mod tests {
             max_sse_buffer_bytes: 1024,
             first_output_timeout: Duration::from_secs(1),
             output_chunk_timeout: Duration::from_secs(1),
-            force_chat_completions_include_usage: false,
             runtime_state: PylonRuntimeState::default(),
             request_quality_monitor: RequestQualityMonitorConfig::default(),
             retry: PylonRetryConfig::default(),
