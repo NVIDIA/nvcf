@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -31,7 +31,9 @@ use super::snapshots::{
     RoutedClusterSnapshot, RoutedClusterState, RoutedInferenceServerSnapshot,
 };
 
-fn set_cluster_scoped_stats(stats: &mut ModelStats, src: &ModelStats) {
+const PROXY_LOCAL_REQUEST_LOAD_CAPABILITY: &str = "request.load.proxy_local";
+
+fn set_legacy_source_stats(stats: &mut ModelStats, src: &ModelStats) {
     stats.max_output_tps = src.max_output_tps;
     stats.kv_cache_capacity_tokens = src.kv_cache_capacity_tokens;
     stats.kv_cache_used_tokens = src.kv_cache_used_tokens;
@@ -40,6 +42,94 @@ fn set_cluster_scoped_stats(stats: &mut ModelStats, src: &ModelStats) {
     stats.max_engine_concurrency = src.max_engine_concurrency;
     stats.total_query_input_size = src.total_query_input_size;
     stats.queue_time_estimate_ms_by_priority = src.queue_time_estimate_ms_by_priority.clone();
+}
+
+fn set_shared_engine_stats(stats: &mut ModelStats, src: &ModelStats) {
+    stats.kv_cache_capacity_tokens = src.kv_cache_capacity_tokens;
+    stats.kv_cache_used_tokens = src.kv_cache_used_tokens;
+    stats.kv_cache_free_tokens = src.kv_cache_free_tokens;
+    stats.max_engine_concurrency = src.max_engine_concurrency;
+}
+
+fn has_proxy_local_request_load(stats: &ModelStats) -> bool {
+    stats
+        .stats_capabilities
+        .iter()
+        .any(|capability| capability == PROXY_LOCAL_REQUEST_LOAD_CAPABILITY)
+}
+
+fn valid_output_tps(output_tps: f64) -> bool {
+    output_tps >= 0.0 && output_tps.is_finite()
+}
+
+fn has_queued_work(stats: &ModelStats) -> bool {
+    stats.queue_size > 0 || stats.queued_input_size > 0
+}
+
+fn checked_ceil_u64(value: f64) -> Option<u64> {
+    let rounded = value.ceil();
+    // `u64::MAX as f64` rounds to 2^64, which is already outside u64.
+    (rounded.is_finite() && rounded >= 0.0 && rounded < u64::MAX as f64).then_some(rounded as u64)
+}
+
+fn proxy_local_priority_map(backends: &[Arc<RoutedInferenceServerSnapshot>]) -> HashMap<u32, u64> {
+    if backends.len() == 1 {
+        return backends[0].stats.queue_time_estimate_ms_by_priority.clone();
+    }
+
+    if backends.iter().any(|backend| {
+        has_queued_work(&backend.stats)
+            && (!valid_last_mean_input_tps(backend.stats.last_mean_input_tps)
+                || backend.stats.queue_time_estimate_ms_by_priority.is_empty())
+    }) {
+        return HashMap::new();
+    }
+
+    let priorities: BTreeSet<u32> = backends
+        .iter()
+        .flat_map(|backend| {
+            backend
+                .stats
+                .queue_time_estimate_ms_by_priority
+                .keys()
+                .copied()
+        })
+        .collect();
+    let input_tps_sum: f64 = backends
+        .iter()
+        .map(|backend| backend.stats.last_mean_input_tps)
+        .filter(|input_tps| valid_last_mean_input_tps(*input_tps))
+        .sum();
+    if priorities.is_empty() || !valid_last_mean_input_tps(input_tps_sum) {
+        return HashMap::new();
+    }
+
+    let mut aggregate = HashMap::with_capacity(priorities.len());
+    for priority in priorities {
+        let weighted_wait_sum = backends
+            .iter()
+            .filter_map(|backend| {
+                let input_tps = backend.stats.last_mean_input_tps;
+                valid_last_mean_input_tps(input_tps).then(|| {
+                    let wait_ms = if has_queued_work(&backend.stats) {
+                        crate::queue_estimate::priority_map_estimate_ms_for_priority(
+                            &backend.stats,
+                            priority,
+                        )
+                        .unwrap_or_default()
+                    } else {
+                        0
+                    };
+                    input_tps * wait_ms as f64
+                })
+            })
+            .sum::<f64>();
+        let Some(weighted_wait_ms) = checked_ceil_u64(weighted_wait_sum / input_tps_sum) else {
+            return HashMap::new();
+        };
+        aggregate.insert(priority, weighted_wait_ms);
+    }
+    aggregate
 }
 
 fn append_unique_strings(target: &mut Vec<String>, values: &[String]) {
@@ -96,25 +186,67 @@ impl ClusterRoutingGeneration {
             .is_ok_and(|index| Arc::ptr_eq(&self.backends[index].registration, registration))
     }
 
-    fn backend_aggregate(&self) -> Option<(ModelStats, Duration, usize)> {
+    fn backend_aggregate(&self) -> Option<(ModelStats, Duration, usize, bool)> {
         let active_backend_count = self.backends.len();
         if active_backend_count == 0 {
             return None;
         }
+        let proxy_local_request_load = self
+            .backends
+            .iter()
+            .all(|backend| has_proxy_local_request_load(&backend.stats));
         let backend_count = active_backend_count as u128;
         let mut backend_stats = ModelStats::default();
+        let mut valid_input_tps_components = 0_usize;
+        let mut valid_output_tps_components = 0_usize;
+        let mut valid_max_output_tps_components = 0_usize;
         let mut rtt_mean_nanos = 0_u128;
         let mut rtt_remainder_nanos = 0_u128;
 
         for backend in &self.backends {
-            backend_stats.output_tps += backend.stats.output_tps;
-            if valid_last_mean_input_tps(backend.stats.last_mean_input_tps) {
-                backend_stats.last_mean_input_tps += backend.stats.last_mean_input_tps;
+            if proxy_local_request_load {
+                if valid_last_mean_input_tps(backend.stats.last_mean_input_tps) {
+                    backend_stats.last_mean_input_tps += backend.stats.last_mean_input_tps;
+                    valid_input_tps_components += 1;
+                }
+                if valid_output_tps(backend.stats.output_tps) {
+                    backend_stats.output_tps += backend.stats.output_tps;
+                    valid_output_tps_components += 1;
+                }
+                if valid_output_tps(backend.stats.max_output_tps) {
+                    backend_stats.max_output_tps = backend_stats
+                        .max_output_tps
+                        .max(backend.stats.max_output_tps);
+                    valid_max_output_tps_components += 1;
+                }
+                backend_stats.queue_size = backend_stats
+                    .queue_size
+                    .saturating_add(backend.stats.queue_size);
+                backend_stats.queued_input_size = backend_stats
+                    .queued_input_size
+                    .saturating_add(backend.stats.queued_input_size);
+                backend_stats.num_running_queries = backend_stats
+                    .num_running_queries
+                    .saturating_add(backend.stats.num_running_queries);
+                backend_stats.total_query_input_size = backend_stats
+                    .total_query_input_size
+                    .saturating_add(backend.stats.total_query_input_size);
+                backend_stats.input_processing_queries = backend_stats
+                    .input_processing_queries
+                    .saturating_add(backend.stats.input_processing_queries);
+                backend_stats.output_generation_queries = backend_stats
+                    .output_generation_queries
+                    .saturating_add(backend.stats.output_generation_queries);
+            } else {
+                backend_stats.output_tps += backend.stats.output_tps;
+                if valid_last_mean_input_tps(backend.stats.last_mean_input_tps) {
+                    backend_stats.last_mean_input_tps += backend.stats.last_mean_input_tps;
+                }
+                backend_stats.queue_size += backend.stats.queue_size;
+                backend_stats.queued_input_size += backend.stats.queued_input_size;
+                backend_stats.input_processing_queries += backend.stats.input_processing_queries;
+                backend_stats.output_generation_queries += backend.stats.output_generation_queries;
             }
-            backend_stats.queue_size += backend.stats.queue_size;
-            backend_stats.queued_input_size += backend.stats.queued_input_size;
-            backend_stats.input_processing_queries += backend.stats.input_processing_queries;
-            backend_stats.output_generation_queries += backend.stats.output_generation_queries;
             backend_stats.stats_observed_at_unix_ms = backend_stats
                 .stats_observed_at_unix_ms
                 .max(backend.stats.stats_observed_at_unix_ms);
@@ -136,6 +268,20 @@ impl ClusterRoutingGeneration {
             rtt_remainder_nanos %= backend_count;
         }
 
+        if proxy_local_request_load {
+            if valid_input_tps_components == 0 || !backend_stats.last_mean_input_tps.is_finite() {
+                backend_stats.last_mean_input_tps = 0.0;
+            }
+            if valid_output_tps_components == 0 || !backend_stats.output_tps.is_finite() {
+                backend_stats.output_tps = 0.0;
+            }
+            if valid_max_output_tps_components == 0 {
+                backend_stats.max_output_tps = 0.0;
+            }
+            backend_stats.queue_time_estimate_ms_by_priority =
+                proxy_local_priority_map(&self.backends);
+        }
+
         // The loop maintains backend_count * mean + remainder = processed sum,
         // so the final mean is floor(total / backend_count). It cannot exceed
         // the largest input or Duration::MAX, and both casts are lossless.
@@ -144,11 +290,18 @@ impl ClusterRoutingGeneration {
             (rtt_mean_nanos % 1_000_000_000) as u32,
         );
 
-        Some((backend_stats, rtt, active_backend_count))
+        Some((
+            backend_stats,
+            rtt,
+            active_backend_count,
+            proxy_local_request_load,
+        ))
     }
 
     fn refresh_snapshot(&mut self, updated_backend_id: Option<&str>) {
-        let Some((backend_stats, rtt, active_backend_count)) = self.backend_aggregate() else {
+        let Some((backend_stats, rtt, active_backend_count, proxy_local_request_load)) =
+            self.backend_aggregate()
+        else {
             self.snapshot_state = None;
             return;
         };
@@ -186,7 +339,11 @@ impl ClusterRoutingGeneration {
                 .retain(|pending| pending.inference_server_id != updated_backend_id);
         }
         let mut stats = backend_stats;
-        set_cluster_scoped_stats(&mut stats, &source_backend.stats);
+        if proxy_local_request_load {
+            set_shared_engine_stats(&mut stats, &source_backend.stats);
+        } else {
+            set_legacy_source_stats(&mut stats, &source_backend.stats);
+        }
         let base_snapshot = RoutedClusterSnapshot {
             cluster_id: source_backend.cluster_id.clone(),
             stats,
@@ -333,6 +490,9 @@ impl RoutedClusterState {
 
     #[cfg(test)]
     pub(super) fn backend_aggregate(&self) -> Option<(ModelStats, Duration, usize)> {
-        self.generation.lock().backend_aggregate()
+        self.generation
+            .lock()
+            .backend_aggregate()
+            .map(|(stats, rtt, count, _)| (stats, rtt, count))
     }
 }
