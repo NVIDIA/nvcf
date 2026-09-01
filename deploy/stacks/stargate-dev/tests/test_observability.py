@@ -113,6 +113,51 @@ class ObservabilityProvisioningTests(unittest.TestCase):
 
 
 class DashboardTests(unittest.TestCase):
+    def test_stargate_dashboard_uses_sectioned_layout_with_live_metrics(
+        self,
+    ) -> None:
+        path = STACK_DIR / "dashboards" / "stargate-services.json"
+        dashboard = json.loads(path.read_text(encoding="utf-8"))
+        panels = dashboard["panels"]
+
+        self.assertEqual([panel["type"] for panel in panels[:2]], ["bargauge"] * 2)
+        self.assertEqual(
+            [panel["title"] for panel in panels if panel["type"] == "row"],
+            ["Traffic", "Latency", "Health Check"],
+        )
+        request_share = next(
+            panel
+            for panel in panels
+            if panel["title"] == "% Requests sent to each backend"
+        )
+        self.assertEqual(
+            request_share["fieldConfig"]["defaults"]["custom"]["stacking"][
+                "mode"
+            ],
+            "percent",
+        )
+
+        queries = "\n".join(
+            target["expr"]
+            for panel in panels
+            for target in panel.get("targets", [])
+        )
+        for metric in (
+            "stargate_requests_total",
+            "pylon_request_input_tokens_total",
+            "pylon_request_output_tokens_total",
+            "stargate_routing_duration_seconds_bucket",
+            "stargate_proxy_duration_seconds_bucket",
+            "pylon_request_time_to_first_token_seconds_bucket",
+            "pylon_reverse_tunnel_connected",
+        ):
+            self.assertIn(metric, queries)
+
+        self.assertEqual(
+            [variable["name"] for variable in dashboard["templating"]["list"]],
+            ["region", "model", "routing_key"],
+        )
+
     def test_backend_balance_uses_existing_backend_request_and_token_counters(
         self,
     ) -> None:
