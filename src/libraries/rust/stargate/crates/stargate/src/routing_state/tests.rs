@@ -2402,6 +2402,67 @@ async fn proxy_local_priority_weights_preserve_numeric_boundaries() {
 }
 
 #[tokio::test]
+async fn proxy_local_priority_weights_stay_within_source_bounds() {
+    let scenario = RegistrationScenario::new(Some("rk-convex"));
+    let backends = [
+        (scenario.start_in("inst-a", "cluster-convex", 1111), 6000.0),
+        (scenario.start_in("inst-b", "cluster-convex", 2222), 23000.0),
+        (scenario.start_in("inst-c", "cluster-convex", 3333), 1000.0),
+    ];
+    for (running, input_tps) in &backends {
+        scenario
+            .publish(
+                running,
+                "model-convex",
+                Active,
+                proxy_local_stats(ModelStats {
+                    last_mean_input_tps: *input_tps,
+                    queue_size: 1,
+                    queued_input_size: 1,
+                    queue_time_estimate_ms_by_priority: HashMap::from([(0, 1)]),
+                    ..ModelStats::default()
+                }),
+                Some(5),
+            )
+            .await;
+    }
+    assert_eq!(
+        scenario
+            .only_cluster("model-convex")
+            .await
+            .stats
+            .queue_time_estimate_ms_by_priority,
+        HashMap::from([(0, 1)])
+    );
+
+    for (running, input_tps) in &backends {
+        scenario
+            .publish(
+                running,
+                "model-convex",
+                Active,
+                proxy_local_stats(ModelStats {
+                    last_mean_input_tps: *input_tps,
+                    queue_size: 1,
+                    queued_input_size: 1,
+                    queue_time_estimate_ms_by_priority: HashMap::from([(0, u64::MAX)]),
+                    ..ModelStats::default()
+                }),
+                Some(5),
+            )
+            .await;
+    }
+    assert_eq!(
+        scenario
+            .only_cluster("model-convex")
+            .await
+            .stats
+            .queue_time_estimate_ms_by_priority,
+        HashMap::from([(0, u64::MAX)])
+    );
+}
+
+#[tokio::test]
 async fn mixed_proxy_local_capability_uses_legacy_source_behavior() {
     let (scenario, _running_a, _running_b) = published_shared_cluster(
         proxy_local_stats(shared_backend_a_stats()),

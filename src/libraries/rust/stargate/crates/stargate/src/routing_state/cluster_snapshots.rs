@@ -66,6 +66,15 @@ fn has_queued_work(stats: &ModelStats) -> bool {
     stats.queue_size > 0 || stats.queued_input_size > 0
 }
 
+fn proxy_local_wait_ms(stats: &ModelStats, priority: u32) -> u64 {
+    if has_queued_work(stats) {
+        crate::queue_estimate::priority_map_estimate_ms_for_priority(stats, priority)
+            .unwrap_or_default()
+    } else {
+        0
+    }
+}
+
 fn checked_ceil_u64(value: f64) -> Option<u64> {
     let rounded = value.ceil();
     // `u64::MAX as f64` rounds to 2^64, so the cast must saturate that boundary.
@@ -103,28 +112,47 @@ fn proxy_local_priority_map(backends: &[Arc<RoutedInferenceServerSnapshot>]) -> 
     if priorities.is_empty() || !valid_last_mean_input_tps(input_tps_sum) {
         return HashMap::new();
     }
+    let input_tps_scale = backends
+        .iter()
+        .map(|backend| backend.stats.last_mean_input_tps)
+        .filter(|input_tps| valid_last_mean_input_tps(*input_tps))
+        .fold(0.0_f64, f64::max);
+    let scaled_input_tps_sum: f64 = backends
+        .iter()
+        .map(|backend| backend.stats.last_mean_input_tps)
+        .filter(|input_tps| valid_last_mean_input_tps(*input_tps))
+        .map(|input_tps| input_tps / input_tps_scale)
+        .sum();
 
     let mut aggregate = HashMap::with_capacity(priorities.len());
     for priority in priorities {
-        let weighted_wait_sum = backends
+        let (min_wait_ms, max_wait_ms) = backends
+            .iter()
+            .filter(|backend| valid_last_mean_input_tps(backend.stats.last_mean_input_tps))
+            .map(|backend| proxy_local_wait_ms(&backend.stats, priority))
+            .fold((u64::MAX, 0), |(min_wait_ms, max_wait_ms), wait_ms| {
+                (min_wait_ms.min(wait_ms), max_wait_ms.max(wait_ms))
+            });
+        if min_wait_ms == max_wait_ms {
+            aggregate.insert(priority, min_wait_ms);
+            continue;
+        }
+
+        // Scaling the rates before multiplication keeps every term bounded by
+        // u64::MAX while preserving the weighted mean.
+        let weighted_delta_sum: f64 = backends
             .iter()
             .filter_map(|backend| {
                 let input_tps = backend.stats.last_mean_input_tps;
                 valid_last_mean_input_tps(input_tps).then(|| {
-                    let wait_ms = if has_queued_work(&backend.stats) {
-                        crate::queue_estimate::priority_map_estimate_ms_for_priority(
-                            &backend.stats,
-                            priority,
-                        )
-                        .unwrap_or_default()
-                    } else {
-                        0
-                    };
-                    (input_tps / input_tps_sum) * wait_ms as f64
+                    let wait_ms = proxy_local_wait_ms(&backend.stats, priority);
+                    (input_tps / input_tps_scale) * wait_ms.saturating_sub(min_wait_ms) as f64
                 })
             })
-            .sum::<f64>();
-        let Some(weighted_wait_ms) = checked_ceil_u64(weighted_wait_sum) else {
+            .sum();
+        let bounded_wait_ms = (min_wait_ms as f64 + weighted_delta_sum / scaled_input_tps_sum)
+            .clamp(min_wait_ms as f64, max_wait_ms as f64);
+        let Some(weighted_wait_ms) = checked_ceil_u64(bounded_wait_ms) else {
             return HashMap::new();
         };
         aggregate.insert(priority, weighted_wait_ms);
