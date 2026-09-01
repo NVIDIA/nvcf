@@ -31,7 +31,6 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import io.nats.client.Connection;
 import io.nats.client.JetStream;
 import io.nats.client.JetStreamManagement;
-import io.nats.client.Options;
 import io.nats.client.Statistics;
 import java.time.Duration;
 import java.util.Optional;
@@ -50,13 +49,14 @@ class NatsConfigurationTest {
         when(properties.getNatsUrl()).thenReturn("nats://localhost:4222");
         when(properties.getConnectionTimeout()).thenReturn(CONNECTION_TIMEOUT);
         when(properties.getNkeySeed()).thenReturn(Optional.empty());
+        when(properties.isReconnectAllowed()).thenReturn(true);
 
         var options = new NatsConfiguration().createDefaultOptions(properties);
 
         assertEquals(CONNECTION_TIMEOUT, options.getConnectionTimeout());
         assertEquals(PING_INTERVAL, options.getPingInterval());
         assertEquals(RECONNECT_WAIT, options.getReconnectWait());
-        assertEquals(Options.DEFAULT_MAX_RECONNECT, options.getMaxReconnect());
+        assertEquals(-1, options.getMaxReconnect());
     }
 
     @Test
