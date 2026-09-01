@@ -282,7 +282,7 @@ icms_host: sis.config.example.test
 	assert.Equal(t, "api-keys.config.example.test", profile.Hosts.APIKeys)
 	assert.Equal(t, "invocation.config.example.test", profile.Hosts.Invocation)
 	assert.Equal(t, "sis.config.example.test", profile.Hosts.SIS)
-	assert.Equal(t, "https://sis.config.example.test/custom/path", profile.Endpoints.ComputeReachable.ICMSURL)
+	assert.Equal(t, "https://sis-dial.config.example.test/custom/path", profile.Endpoints.ComputeReachable.ICMSURL)
 }
 
 func TestParseControlPlaneProfileRequireModeAcceptsAny(t *testing.T) {
@@ -375,21 +375,17 @@ func TestBuildControlPlaneProfile_LocalK3DKeepsServicePrefixedHosts(t *testing.T
 	assert.Equal(t, "nats://nats.localhost:4222", got.ControlPlane.Endpoints.ComputeReachable.NATSURL)
 }
 
-func TestBuildControlPlaneProfile_BareELBProjectsServicePrefixes(t *testing.T) {
-	// Simulate GATEWAY_ADDR-routed EKS where icms_url is a bare ELB hostname:
-	// the emitted hosts and computeReachable URLs must carry the canonical
-	// sis./reval./nats. service prefixes that the gateway HTTPRoutes match.
+func TestBuildControlPlaneProfile_GatewayOnlyDNSKeepsDialURLsSeparateFromRoutingHosts(t *testing.T) {
+	// The gateway is the only resolvable name. Service names are routing values
+	// sent through Host headers or TLS SNI and must not replace dial URL hosts.
 	resetViperForProfileTest(t)
-	t.Setenv("API_HOST", "")
+	t.Setenv("API_HOST", "api.routes.customer.example.test")
 	t.Setenv("API_KEYS_HOST", "")
 	t.Setenv("INVOKE_HOST", "")
 	t.Setenv("NVCF_ICMS_HOST", "")
 	t.Setenv("NVCF_REVAL_HOST", "")
 	t.Setenv("NVCF_NATS_HOST", "")
-	// In the bare-ELB topology the operator's base_http_url points at the same
-	// gateway ELB. Force resolveProfileGatewayHTTPURL to use it so the test
-	// does not pick up an unrelated default like https://api.nvcf.nvidia.com.
-	t.Setenv("NVCF_BASE_HTTP_URL", "http://abc123.elb.us-east-1.amazonaws.com")
+	t.Setenv("NVCF_BASE_HTTP_URL", "https://gateway.customer.example.test")
 	t.Setenv("NVCF_BASE_GRPC_URL", "")
 
 	prevEnv := selfHostedEnv
@@ -397,22 +393,24 @@ func TestBuildControlPlaneProfile_BareELBProjectsServicePrefixes(t *testing.T) {
 	selfHostedEnv = "qa"
 
 	got := buildControlPlaneProfile(controlPlaneProfileWriteRequest{
-		ClusterName: "nvcf-cp-qa",
+		ClusterName: "control-plane",
 		NCAID:       "nvcf-default",
-		Region:      "us-east-1",
+		Region:      "us-west-1",
 		Env:         "qa",
-		ICMSURL:     "http://abc123.elb.us-east-1.amazonaws.com",
+		ICMSURL:     "https://gateway.customer.example.test",
+		NATSURL:     "tls://gateway.customer.example.test:4222",
+		StackDomain: "routes.customer.example.test",
 	})
 
-	assert.Equal(t, "abc123.elb.us-east-1.amazonaws.com", got.ControlPlane.Hosts.API)
-	assert.Equal(t, "api-keys.abc123.elb.us-east-1.amazonaws.com", got.ControlPlane.Hosts.APIKeys)
-	assert.Equal(t, "sis.abc123.elb.us-east-1.amazonaws.com", got.ControlPlane.Hosts.SIS)
-	assert.Equal(t, "reval.abc123.elb.us-east-1.amazonaws.com", got.ControlPlane.Hosts.ReVal)
-	assert.Equal(t, "nats.abc123.elb.us-east-1.amazonaws.com", got.ControlPlane.Hosts.NATS)
-	assert.Equal(t, "invocation.abc123.elb.us-east-1.amazonaws.com", got.ControlPlane.Hosts.Invocation)
-	assert.Equal(t, "http://sis.abc123.elb.us-east-1.amazonaws.com", got.ControlPlane.Endpoints.ComputeReachable.ICMSURL)
-	assert.Equal(t, "http://reval.abc123.elb.us-east-1.amazonaws.com", got.ControlPlane.Endpoints.ComputeReachable.ReValURL)
-	assert.Equal(t, "nats://nats.abc123.elb.us-east-1.amazonaws.com:4222", got.ControlPlane.Endpoints.ComputeReachable.NATSURL)
+	assert.Equal(t, "api.routes.customer.example.test", got.ControlPlane.Hosts.API)
+	assert.Equal(t, "api-keys.routes.customer.example.test", got.ControlPlane.Hosts.APIKeys)
+	assert.Equal(t, "sis.routes.customer.example.test", got.ControlPlane.Hosts.SIS)
+	assert.Equal(t, "reval.routes.customer.example.test", got.ControlPlane.Hosts.ReVal)
+	assert.Equal(t, "nats.routes.customer.example.test", got.ControlPlane.Hosts.NATS)
+	assert.Equal(t, "invocation.routes.customer.example.test", got.ControlPlane.Hosts.Invocation)
+	assert.Equal(t, "https://gateway.customer.example.test", got.ControlPlane.Endpoints.ComputeReachable.ICMSURL)
+	assert.Equal(t, "https://gateway.customer.example.test", got.ControlPlane.Endpoints.ComputeReachable.ReValURL)
+	assert.Equal(t, "tls://gateway.customer.example.test:4222", got.ControlPlane.Endpoints.ComputeReachable.NATSURL)
 }
 
 func TestWriteControlPlaneProfileSourcesOpenBaoRootCA(t *testing.T) {

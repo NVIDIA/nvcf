@@ -44,6 +44,9 @@ func (r *Reconciler) prepareTransportTLSForWorkloads(
 		return nil
 	}
 	cfg := transporttls.NormalizeConfig(*r.cfg.Workload.TransportTLS)
+	if err := transporttls.ValidateConfig(cfg); err != nil {
+		return reconcile.TerminalError(err)
+	}
 	if cfg.TrustMode != transporttls.TrustModeBundle {
 		return nil
 	}
@@ -60,9 +63,6 @@ func (r *Reconciler) prepareTransportTLSForWorkloads(
 		return nil
 	}
 
-	if err := transporttls.ValidateConfig(cfg); err != nil {
-		return reconcile.TerminalError(err)
-	}
 	if err := r.ensureTransportTLSConfigMap(ctx, ms, cfg); err != nil {
 		return err
 	}

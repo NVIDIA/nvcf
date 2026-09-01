@@ -355,13 +355,13 @@ Prefer the repo-native test runner (`make test`, `go test`, `cargo test`, etc.).
 
 ### Version-pin assertions
 
-Don't assert an exact image tag or chart version unless that literal is the
-behavior under test — it breaks on every unrelated pin bump, and whoever
-fixes it every release stops reading the diff and just updates the string.
+Do not assert an exact image tag or chart version unless that literal is the
+behavior under test. Exact literals break on every unrelated pin bump, and
+repeated updates make the test diff easy to overlook.
 If the surrounding wiring (override precedence, cross-chart consistency) is
 worth testing, read the expected value from its source of truth at test
-time — `Chart.yaml` `appVersion`, the `.gotmpl`'s `default "..."`, or the
-release's `version:` — instead of copying it into the test (see
+time. Use `Chart.yaml` `appVersion`, the `.gotmpl`'s `default "..."`, or the
+release's `version:` instead of copying it into the test (see
 `deploy/stacks/self-managed/tests/observability-autoscaler.sh` and
 `llm-pki-release.sh`). Otherwise, delete the assertion.
 

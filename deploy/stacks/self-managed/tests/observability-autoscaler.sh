@@ -70,6 +70,10 @@ write_autoscaler_values() {
 write_autoscaler_values "$work_dir/autoscaler-values.yaml"
 
 autoscaler_values="$work_dir/autoscaler-values.yaml"
+autoscaler_tag="$(yq -r '.functionautoscaler.image.tag // ""' "$autoscaler_values")"
+if [[ -n "$autoscaler_tag" ]]; then
+  fail "stack duplicated the function autoscaler chart-owned image tag"
+fi
 for expected in \
   'CASSANDRA__CONTACT_POINTS: cassandra.cassandra-system.svc.cluster.local' \
   'CASSANDRA__IS_DEVELOPMENT: "false"' \
