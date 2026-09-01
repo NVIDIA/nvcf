@@ -1524,21 +1524,21 @@ nvcfGatewayRoutes:
       enabled: {{ $apiKeysRoute.enabled }}
       {{- end }}
       routeAnnotations:
-        {{ dig "ingress" "gatewayApi" "routes" "apiKeys" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+        {{ dig "routeAnnotations" dict $apiKeysRoute | toYaml | nindent 8 | trim }}
     sis:
       {{- $sisRoute := dig "ingress" "gatewayApi" "routes" "sis" dict .Values }}
       {{- if hasKey $sisRoute "enabled" }}
       enabled: {{ $sisRoute.enabled }}
       {{- end }}
       routeAnnotations:
-        {{ dig "ingress" "gatewayApi" "routes" "sis" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+        {{ dig "routeAnnotations" dict $sisRoute | toYaml | nindent 8 | trim }}
     reval:
       {{- $revalRoute := dig "ingress" "gatewayApi" "routes" "reval" dict .Values }}
       {{- if hasKey $revalRoute "enabled" }}
       enabled: {{ $revalRoute.enabled }}
       {{- end }}
       routeAnnotations:
-        {{ dig "ingress" "gatewayApi" "routes" "reval" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+        {{ dig "routeAnnotations" dict $revalRoute | toYaml | nindent 8 | trim }}
     invocation:
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "invocation" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
