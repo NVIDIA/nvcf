@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::DEFAULT_MAX_SSE_BUFFER_BYTES;
 use crate::generated_request_id::{GeneratedRequestKind, next_generated_request_id};
@@ -220,29 +220,46 @@ pub(super) async fn send_completion_request(
             runtime_state.clone(),
         )
     });
-    let request = http_client
-        .post(upstream_endpoint(
-            upstream_http_base_url,
-            "/v1/chat/completions",
-        ))
-        .header(HEADER_REQUEST_ID, &request_id)
-        .header(HEADER_MODEL, model_id)
-        .header(HEADER_INPUT_TOKENS, input_tokens.to_string())
-        .json(request);
-    let response = match timeout {
-        Some(timeout) => request.timeout(timeout),
-        None => request,
+    let result = async {
+        let request = http_client
+            .post(upstream_endpoint(
+                upstream_http_base_url,
+                "/v1/chat/completions",
+            ))
+            .header(HEADER_REQUEST_ID, &request_id)
+            .header(HEADER_MODEL, model_id)
+            .header(HEADER_INPUT_TOKENS, input_tokens.to_string())
+            .json(request);
+        let request = match timeout {
+            Some(timeout) => request.timeout(timeout),
+            None => request,
+        }
+        .build()?;
+        if let Some(observer) = observer.as_mut() {
+            observer.on_backend_submission(Instant::now());
+        }
+        let response = http_client.execute(request).await?;
+
+        let status = response.status();
+        observe_response_headers(&mut observer, &response, status);
+        let response = ensure_success(response).await?;
+        let body = response.bytes().await?;
+        serde_json::from_slice::<ChatCompletionResponse>(&body)
+            .map_err(|error| BringupError::InvalidResponse(error.to_string()))
     }
-    .send()
-    .await?;
-    let status = response.status();
-    observe_response_headers(&mut observer, &response, status);
-    let response = ensure_success(response).await?;
-    let body = response.bytes().await?;
-    let completion = serde_json::from_slice::<ChatCompletionResponse>(&body)
-        .map_err(|error| BringupError::InvalidResponse(error.to_string()))?;
-    finish_observation(&mut observer, &completion);
-    Ok(completion)
+    .await;
+    match result {
+        Ok(completion) => {
+            finish_observation(&mut observer, &completion);
+            Ok(completion)
+        }
+        Err(error) => {
+            if let Some(observer) = observer.as_mut() {
+                observer.fail();
+            }
+            Err(error)
+        }
+    }
 }
 
 fn observe_response_headers(
@@ -263,9 +280,9 @@ fn finish_observation(
         let generation = observer
             .generation_mut()
             .expect("chat completion observer should expose generation progress");
-        generation.observe_output_message();
+        generation.observe_generated_output(Instant::now(), completion.usage.completion_tokens > 0);
         generation.observe_output_tokens_total(u64::from(completion.usage.completion_tokens));
-        observer.finish();
+        observer.complete();
     }
 }
 

@@ -578,6 +578,14 @@ mod tests {
 
     const MODEL_STATS_TEST_TIMEOUT: Duration = milliseconds(500);
 
+    #[test]
+    fn default_observation_channel_capacity_remains_bounded() {
+        assert_eq!(
+            StatsCollectorConfig::default().observation_channel_capacity,
+            1024
+        );
+    }
+
     struct RunningCollector {
         runtime_state: PylonRuntimeState,
         stats_update_tx: Option<flume::Sender<StatsAggregatorUpdate>>,
@@ -735,6 +743,18 @@ mod tests {
         let event = aggregator
             .runtime_state
             .transition_request_observation(observation.clone());
+        aggregator.apply_fallback_observation(&event)
+    }
+
+    fn apply_fallback_observation_with_input_processing_duration(
+        aggregator: &mut StatsAggregator,
+        observation: &RequestObservation,
+        duration: Duration,
+    ) -> Vec<super::super::aggregator::ModelStatsUpdate> {
+        let mut event = aggregator
+            .runtime_state
+            .transition_request_observation(observation.clone());
+        event.input_processing_duration = Some(duration);
         aggregator.apply_fallback_observation(&event)
     }
 
@@ -1117,6 +1137,23 @@ mod tests {
                 assert_stats!(stats; $($field: $expected),+);
             }
         };
+    }
+
+    #[test]
+    fn fallback_input_tps_uses_backend_submission_interval() {
+        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        for index in 0..5 {
+            apply_fallback_observation_with_input_processing_duration(
+                &mut aggregator,
+                &identified(
+                    completed_observation(100, 1, 10, seconds(10), seconds(12)),
+                    format!("req-input-interval-{index}"),
+                ),
+                seconds(2),
+            );
+        }
+
+        assert_eq!(aggregator.snapshot("model-a").last_mean_input_tps, 50.0);
     }
 
     #[test]

@@ -136,8 +136,9 @@ impl StatsAggregator {
         let input_sample = (observation.state == RequestObservationState::Complete)
             .then(|| match observation.endpoint {
                 RequestObservationEndpoint::ChatCompletions
-                | RequestObservationEndpoint::Responses => observation
-                    .time_to_first_output
+                | RequestObservationEndpoint::Responses => event
+                    .input_processing_duration()
+                    .or(observation.time_to_first_output)
                     .map(|duration| (duration, false)),
                 RequestObservationEndpoint::Embeddings => Some((
                     observation

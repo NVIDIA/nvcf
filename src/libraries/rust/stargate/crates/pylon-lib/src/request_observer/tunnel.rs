@@ -14,6 +14,7 @@
 // limitations under the License.
 
 use reqwest::header::HeaderMap;
+use std::time::Instant;
 
 use crate::runtime_state::{ModelGeneration, PylonRuntimeState};
 
@@ -51,6 +52,10 @@ impl TunnelRequestObserver {
         }
     }
 
+    pub(crate) fn on_backend_submission(&mut self, submitted_at: Instant) {
+        self.observer.on_backend_submission(submitted_at);
+    }
+
     pub(crate) fn on_upstream_response_headers(
         &mut self,
         response_headers: &HeaderMap,
@@ -60,23 +65,15 @@ impl TunnelRequestObserver {
             .on_upstream_response_headers(response_headers, status);
     }
 
-    pub(crate) fn finish(&mut self) {
-        self.observer.finish();
+    pub(crate) fn complete(&mut self) {
+        self.observer.complete();
     }
 
     pub(crate) fn fail(&mut self) {
         self.observer.fail();
     }
 
-    fn is_terminal(&self) -> bool {
-        self.observer.is_terminal()
-    }
-}
-
-impl Drop for TunnelRequestObserver {
-    fn drop(&mut self) {
-        if !self.is_terminal() {
-            self.fail();
-        }
+    pub(crate) fn cancel(&mut self) {
+        self.observer.cancel();
     }
 }

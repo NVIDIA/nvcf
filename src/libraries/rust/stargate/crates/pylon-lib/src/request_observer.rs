@@ -50,10 +50,10 @@ pub enum RequestObservationEndpoint {
 #[derive(Debug)]
 enum RequestLifecycleState {
     UpstreamConnecting,
-    Responding(ResponsePhaseData),
+    BackendSubmitted(BackendPhaseData),
     Terminal {
         outcome: RequestTerminalOutcome,
-        response: Option<ResponsePhaseData>,
+        backend: Option<BackendPhaseData>,
     },
 }
 
@@ -78,18 +78,18 @@ impl RequestLifecycleState {
     fn observation_state(&self) -> RequestObservationState {
         match self {
             Self::UpstreamConnecting => RequestObservationState::UpstreamConnecting,
-            Self::Responding(response) if response.first_output_at.is_none() => {
+            Self::BackendSubmitted(backend) if backend.first_generated_output_at.is_none() => {
                 RequestObservationState::InputProcessing
             }
-            Self::Responding(_) => RequestObservationState::OutputGeneration,
+            Self::BackendSubmitted(_) => RequestObservationState::OutputGeneration,
             Self::Terminal { outcome, .. } => outcome.observation_state(),
         }
     }
 
-    fn response(&self) -> Option<&ResponsePhaseData> {
+    fn backend(&self) -> Option<&BackendPhaseData> {
         match self {
-            Self::Responding(response) => Some(response),
-            Self::Terminal { response, .. } => response.as_ref(),
+            Self::BackendSubmitted(backend) => Some(backend),
+            Self::Terminal { backend, .. } => backend.as_ref(),
             Self::UpstreamConnecting => None,
         }
     }
@@ -129,10 +129,11 @@ impl RequestObservation {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct ResponsePhaseData {
-    upstream_status: u16,
-    response_headers_at: Instant,
-    first_output_at: Option<Instant>,
+struct BackendPhaseData {
+    submitted_at: Instant,
+    upstream_status: Option<u16>,
+    response_headers_at: Option<Instant>,
+    first_generated_output_at: Option<Instant>,
     first_token_at: Option<Instant>,
     output_messages: u64,
     output_tokens: u64,
@@ -148,6 +149,7 @@ pub(crate) struct RequestObserver {
     model_id: String,
     priority: u32,
     input_tokens: u64,
+    input_tokens_explicit: bool,
     generation: Option<ModelGeneration>,
     embedding_items: Option<u64>,
     state: RequestLifecycleState,
@@ -178,6 +180,7 @@ impl RequestObserver {
             model_id,
             priority,
             input_tokens,
+            input_tokens_explicit: false,
             generation,
             embedding_items: None,
             state: RequestLifecycleState::UpstreamConnecting,
@@ -195,26 +198,15 @@ impl RequestObserver {
         }
     }
 
-    pub(crate) fn on_upstream_response_headers(
-        &mut self,
-        _response_headers: &HeaderMap,
-        status: u16,
-    ) {
-        match self.state {
-            RequestLifecycleState::UpstreamConnecting => {}
-            RequestLifecycleState::Responding(_) | RequestLifecycleState::Terminal { .. } => {
-                panic!(
-                    "invalid response-header transition for request_id={} from state={:?}",
-                    self.request_id,
-                    self.state.observation_state()
-                )
-            }
+    pub(crate) fn on_backend_submission(&mut self, submitted_at: Instant) {
+        if !matches!(self.state, RequestLifecycleState::UpstreamConnecting) {
+            return;
         }
-
-        self.state = RequestLifecycleState::Responding(ResponsePhaseData {
-            upstream_status: status,
-            response_headers_at: Instant::now(),
-            first_output_at: None,
+        self.state = RequestLifecycleState::BackendSubmitted(BackendPhaseData {
+            submitted_at,
+            upstream_status: None,
+            response_headers_at: None,
+            first_generated_output_at: None,
             first_token_at: None,
             output_messages: 0,
             output_tokens: 0,
@@ -224,11 +216,36 @@ impl RequestObserver {
         self.emit();
     }
 
-    pub(crate) fn observe_output_message(&mut self) {
-        let response =
-            Self::responding_mut(&mut self.state, &self.request_id, "output observation");
-        response.output_messages += 1;
-        response.first_output_at.get_or_insert_with(Instant::now);
+    pub(crate) fn on_upstream_response_headers(
+        &mut self,
+        _response_headers: &HeaderMap,
+        status: u16,
+    ) {
+        let backend = Self::backend_mut(&mut self.state, &self.request_id, "response-header");
+        if backend.response_headers_at.is_some() {
+            return;
+        }
+        backend.upstream_status = Some(status);
+        backend.response_headers_at = Some(Instant::now());
+        self.emit();
+    }
+
+    pub(crate) fn observe_generated_output(&mut self, observed_at: Instant, token_bearing: bool) {
+        let backend = Self::backend_mut(&mut self.state, &self.request_id, "output observation");
+        backend.output_messages = backend.output_messages.saturating_add(1);
+        backend.first_generated_output_at.get_or_insert(observed_at);
+        if token_bearing {
+            backend.first_token_at.get_or_insert(observed_at);
+        }
+        self.emit();
+    }
+
+    pub(crate) fn observe_input_tokens_total(&mut self, input_tokens: u64) {
+        if self.input_tokens_explicit && input_tokens == self.input_tokens {
+            return;
+        }
+        self.input_tokens = input_tokens;
+        self.input_tokens_explicit = true;
         self.emit();
     }
 
@@ -237,18 +254,15 @@ impl RequestObserver {
             return;
         }
 
-        let response = Self::responding_mut(
+        let backend = Self::backend_mut(
             &mut self.state,
             &self.request_id,
             "output token observation",
         );
-        if response.output_tokens_explicit {
+        if backend.output_tokens_explicit {
             return;
         }
-        response.output_tokens += output_tokens;
-        let now = Instant::now();
-        response.first_output_at.get_or_insert(now);
-        response.first_token_at.get_or_insert(now);
+        backend.output_tokens = backend.output_tokens.saturating_add(output_tokens);
         self.emit();
     }
 
@@ -266,92 +280,55 @@ impl RequestObserver {
         from_chunk_usage: bool,
         emit_live_update: bool,
     ) {
-        let response = Self::responding_mut(
+        let backend = Self::backend_mut(
             &mut self.state,
             &self.request_id,
             "output token observation",
         );
-        if response.output_tokens_explicit && output_tokens < response.output_tokens {
+        if backend.output_tokens_explicit && output_tokens < backend.output_tokens {
             tracing::warn!(
                 request_id = self.request_id,
-                prior_output_tokens = response.output_tokens,
+                prior_output_tokens = backend.output_tokens,
                 output_tokens_generated_so_far = output_tokens,
                 "ignoring regressing explicit output token counter"
             );
             return;
         }
-        let chunk_usage_observed = response.output_tokens_from_chunk_usage || from_chunk_usage;
-        if response.output_tokens_explicit
-            && output_tokens == response.output_tokens
-            && response.output_tokens_from_chunk_usage == chunk_usage_observed
+        let chunk_usage_observed = backend.output_tokens_from_chunk_usage || from_chunk_usage;
+        if backend.output_tokens_explicit
+            && output_tokens == backend.output_tokens
+            && backend.output_tokens_from_chunk_usage == chunk_usage_observed
         {
             return;
         }
-        let should_emit = output_tokens > 0 || output_tokens != response.output_tokens;
-        response.output_tokens = output_tokens;
-        response.output_tokens_explicit = true;
-        response.output_tokens_from_chunk_usage = chunk_usage_observed;
-        if output_tokens > 0 {
-            let now = Instant::now();
-            response.first_output_at.get_or_insert(now);
-            response.first_token_at.get_or_insert(now);
-        }
+        let should_emit = output_tokens > 0 || output_tokens != backend.output_tokens;
+        backend.output_tokens = output_tokens;
+        backend.output_tokens_explicit = true;
+        backend.output_tokens_from_chunk_usage = chunk_usage_observed;
         if emit_live_update && should_emit {
             self.emit();
         }
     }
 
-    pub(crate) fn finish(&mut self) {
-        let (outcome, response) = match &self.state {
-            RequestLifecycleState::Responding(response) => {
-                let success = (200..300).contains(&response.upstream_status);
-                let outcome = if response.first_output_at.is_some() {
-                    if success {
-                        RequestTerminalOutcome::Complete
-                    } else {
-                        RequestTerminalOutcome::Failed
-                    }
-                } else if self.endpoint == RequestObservationEndpoint::Embeddings && success {
-                    RequestTerminalOutcome::Complete
-                } else if success && response.output_messages == 0 {
-                    panic!(
-                        "invalid finish transition for request_id={} from state=InputProcessing without observed output",
-                        self.request_id
-                    )
-                } else {
-                    RequestTerminalOutcome::Failed
-                };
-                (outcome, Some(*response))
-            }
-            RequestLifecycleState::Terminal { outcome, .. } => panic!(
-                "invalid finish transition for request_id={} from state={outcome:?}",
-                self.request_id,
-            ),
-            RequestLifecycleState::UpstreamConnecting => (RequestTerminalOutcome::Failed, None),
-        };
-        self.state = RequestLifecycleState::Terminal { outcome, response };
-
-        self.emit();
+    pub(crate) fn complete(&mut self) {
+        self.terminate(RequestTerminalOutcome::Complete);
     }
 
     pub(crate) fn fail(&mut self) {
-        self.terminate(RequestTerminalOutcome::Failed, "fail");
+        self.terminate(RequestTerminalOutcome::Failed);
     }
 
-    fn cancel(&mut self) {
-        self.terminate(RequestTerminalOutcome::Cancelled, "cancel");
+    pub(crate) fn cancel(&mut self) {
+        self.terminate(RequestTerminalOutcome::Cancelled);
     }
 
-    fn terminate(&mut self, outcome: RequestTerminalOutcome, action: &'static str) {
-        let response = match &self.state {
-            RequestLifecycleState::Responding(response) => Some(*response),
+    fn terminate(&mut self, outcome: RequestTerminalOutcome) {
+        let backend = match &self.state {
+            RequestLifecycleState::BackendSubmitted(backend) => Some(*backend),
             RequestLifecycleState::UpstreamConnecting => None,
-            RequestLifecycleState::Terminal { outcome: prior, .. } => panic!(
-                "invalid {action} transition for request_id={} from state={prior:?}",
-                self.request_id,
-            ),
+            RequestLifecycleState::Terminal { .. } => return,
         };
-        self.state = RequestLifecycleState::Terminal { outcome, response };
+        self.state = RequestLifecycleState::Terminal { outcome, backend };
         self.emit();
     }
 
@@ -359,21 +336,28 @@ impl RequestObserver {
         matches!(self.state, RequestLifecycleState::Terminal { .. })
     }
 
-    fn responding_mut<'a>(
+    fn backend_mut<'a>(
         state: &'a mut RequestLifecycleState,
         request_id: &str,
         action: &'static str,
-    ) -> &'a mut ResponsePhaseData {
+    ) -> &'a mut BackendPhaseData {
         let observation_state = state.observation_state();
         match state {
-            RequestLifecycleState::Responding(response) => response,
+            RequestLifecycleState::BackendSubmitted(backend) => backend,
             _ => panic!(
                 "invalid {action} transition for request_id={request_id} from state={observation_state:?}"
             ),
         }
     }
     fn emit(&mut self) {
-        let response = self.state.response();
+        let backend = self.state.backend();
+        let input_processing_duration = backend.and_then(|backend| {
+            backend
+                .first_generated_output_at
+                .map(|first_generated_output_at| {
+                    first_generated_output_at.saturating_duration_since(backend.submitted_at)
+                })
+        });
         let observation = RequestObservation {
             endpoint: self.endpoint,
             request_id: self.request_id.clone(),
@@ -384,32 +368,32 @@ impl RequestObserver {
             embedding_items: self.embedding_items.unwrap_or_default(),
             embedding_items_observed: self.endpoint == RequestObservationEndpoint::Embeddings
                 && self.embedding_items.is_some(),
-            upstream_status: response.map(|response| response.upstream_status),
-            output_messages: response.map_or(0, |response| response.output_messages),
-            output_tokens: response.map_or(0, |response| response.output_tokens),
-            output_tokens_explicit: response
-                .is_some_and(|response| response.output_tokens_explicit),
-            output_tokens_from_chunk_usage: response
-                .is_some_and(|response| response.output_tokens_from_chunk_usage),
+            upstream_status: backend.and_then(|backend| backend.upstream_status),
+            output_messages: backend.map_or(0, |backend| backend.output_messages),
+            output_tokens: backend.map_or(0, |backend| backend.output_tokens),
+            output_tokens_explicit: backend.is_some_and(|backend| backend.output_tokens_explicit),
+            output_tokens_from_chunk_usage: backend
+                .is_some_and(|backend| backend.output_tokens_from_chunk_usage),
             state: self.state.observation_state(),
             // Observation timestamps can be coarser than event sequencing; never underflow
             // durations when two instants collapse to the same clock tick.
-            time_to_response_headers: response.map(|response| {
-                response
-                    .response_headers_at
-                    .saturating_duration_since(self.started_at)
-            }),
-            time_to_first_output: response
-                .and_then(|response| response.first_output_at)
+            time_to_response_headers: backend
+                .and_then(|backend| backend.response_headers_at)
                 .map(|instant| instant.saturating_duration_since(self.started_at)),
-            time_to_first_token: response
-                .and_then(|response| response.first_token_at)
+            time_to_first_output: backend
+                .and_then(|backend| backend.first_generated_output_at)
+                .map(|instant| instant.saturating_duration_since(self.started_at)),
+            time_to_first_token: backend
+                .and_then(|backend| backend.first_token_at)
                 .map(|instant| instant.saturating_duration_since(self.started_at)),
             total_duration: self.started_at.elapsed(),
         };
         log_observation(&observation);
-        self.runtime_state
-            .observe_request_for_generation(observation, self.generation.clone());
+        self.runtime_state.observe_request_for_generation(
+            observation,
+            self.generation.clone(),
+            input_processing_duration,
+        );
     }
 }
 
@@ -513,6 +497,18 @@ mod tests {
                 runtime_state,
             ))
         }
+
+        fn submit_now(&mut self) {
+            self.on_backend_submission(Instant::now());
+        }
+
+        fn observe_output_message(&mut self) {
+            self.observe_generated_output(Instant::now(), true);
+        }
+
+        fn finish(&mut self) {
+            self.complete();
+        }
     }
 
     fn observed_runtime(
@@ -579,16 +575,18 @@ mod tests {
         let (runtime_state, rx) = observed_runtime(8);
         let mut observer = test_observer(request_id, runtime_state);
         recv_observation(&rx, "initial observation should be emitted").await;
+        observer.submit_now();
+        recv_observation(&rx, "backend-submission observation should be emitted").await;
         observer.on_upstream_response_headers(&HeaderMap::new(), 200);
         let headers = recv_observation(&rx, "response-header observation should be emitted").await;
         (observer, rx, headers)
     }
 
-    fn response(observer: &RequestObserver) -> &ResponsePhaseData {
+    fn response(observer: &RequestObserver) -> &BackendPhaseData {
         match &observer.state {
-            RequestLifecycleState::Responding(response)
+            RequestLifecycleState::BackendSubmitted(response)
             | RequestLifecycleState::Terminal {
-                response: Some(response),
+                backend: Some(response),
                 ..
             } => response,
             state => panic!("state has no response: {state:?}"),
@@ -684,7 +682,7 @@ mod tests {
     }
 
     #[test]
-    fn tunnel_observer_drop_fails_each_observed_endpoint() {
+    fn tunnel_observer_drop_cancels_each_observed_endpoint() {
         for endpoint in [
             RequestObservationEndpoint::ChatCompletions,
             RequestObservationEndpoint::Responses,
@@ -712,7 +710,7 @@ mod tests {
                 RequestObservationState::UpstreamConnecting
             );
             assert_eq!(observations[1].endpoint, endpoint);
-            assert_eq!(observations[1].state, RequestObservationState::Failed);
+            assert_eq!(observations[1].state, RequestObservationState::Cancelled);
         }
     }
 
@@ -730,11 +728,12 @@ mod tests {
                 None,
                 runtime_state,
             );
+            observer.on_backend_submission(Instant::now());
             observer.on_upstream_response_headers(&HeaderMap::new(), 200);
             if let Some(generation) = observer.generation_mut() {
                 generation.observe_output_message();
             }
-            observer.finish();
+            observer.complete();
             let observations_before_drop = rx.len();
 
             // Dropping a terminal observer proves the wrapper does not emit again.
@@ -774,35 +773,39 @@ mod tests {
     }
 
     #[test]
-    fn embeddings_observer_rejects_terminal_fail_transition() {
+    fn embeddings_observer_ignores_repeated_terminal_transition() {
         let (runtime_state, rx) = observed_runtime(8);
         let mut observer = RequestObserver::accepted(embeddings_required_headers(), runtime_state);
         observer.update_embedding_items(Some(1));
+        observer.submit_now();
         observer.on_upstream_response_headers(&HeaderMap::new(), 200);
         observer.finish();
         while rx.try_recv().is_ok() {}
 
-        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| observer.fail()));
+        observer.fail();
 
-        assert!(panic.is_err());
         assert!(observer.is_terminal());
         drop(observer);
-        assert!(rx.is_empty(), "invalid transition must not emit on drop");
+        assert!(rx.is_empty(), "repeated terminalization must not emit");
     }
 
     #[test]
-    #[should_panic(expected = "invalid finish transition")]
-    fn embeddings_observer_rejects_terminal_finish_transition() {
+    fn embeddings_observer_ignores_repeated_completion() {
         let mut observer =
             RequestObserver::accepted(embeddings_required_headers(), PylonRuntimeState::default());
         observer.update_embedding_items(Some(1));
         observer.fail();
         observer.finish();
+        assert_eq!(
+            observer.state.observation_state(),
+            RequestObservationState::Failed
+        );
     }
 
     #[tokio::test]
     async fn counts_sse_events_across_chunk_boundaries() {
         let mut observer = test_observer("req-1", PylonRuntimeState::default());
+        observer.submit_now();
         observer.on_upstream_response_headers(&HeaderMap::new(), 200);
         observer.observe_output_message();
         observer.observe_output_message();
@@ -826,6 +829,12 @@ mod tests {
         assert_eq!(initial.state, RequestObservationState::UpstreamConnecting);
         assert!(!initial.is_terminal());
 
+        observer.submit_now();
+        let submitted =
+            recv_observation(&rx, "backend-submission observation should be emitted").await;
+        assert_eq!(submitted.state, RequestObservationState::InputProcessing);
+        assert_eq!(submitted.upstream_status, None);
+
         observer.on_upstream_response_headers(&HeaderMap::new(), 200);
         let first = recv_observation(&rx, "response-header observation should be emitted").await;
         assert_eq!(first.state, RequestObservationState::InputProcessing);
@@ -836,6 +845,52 @@ mod tests {
         assert_eq!(second.state, RequestObservationState::OutputGeneration);
         assert_eq!(second.output_messages, 1);
         assert!(!second.is_terminal());
+    }
+
+    #[test]
+    fn input_processing_duration_is_repeated_on_cumulative_output_and_terminal_events() {
+        let (runtime_state, rx) = observed_runtime(8);
+        let mut observer = test_observer("req-input-interval", runtime_state);
+        rx.try_recv().unwrap();
+
+        let submitted_at = Instant::now();
+        observer.on_backend_submission(submitted_at);
+        let submitted = rx.try_recv().unwrap();
+        assert_eq!(
+            submitted.observation().state,
+            RequestObservationState::InputProcessing
+        );
+        assert_eq!(submitted.input_processing_duration(), None);
+
+        observer.on_upstream_response_headers(&HeaderMap::new(), 200);
+        let headers = rx.try_recv().unwrap();
+        assert_eq!(
+            headers.observation().state,
+            RequestObservationState::InputProcessing
+        );
+        assert_eq!(headers.input_processing_duration(), None);
+
+        let first_generated_output_at = submitted_at + Duration::from_millis(10);
+        observer.observe_generated_output(first_generated_output_at, true);
+        let output = rx.try_recv().unwrap();
+        assert_eq!(
+            output.input_processing_duration(),
+            Some(Duration::from_millis(10))
+        );
+
+        observer.observe_output_tokens(2);
+        let tokens = rx.try_recv().unwrap();
+        assert_eq!(
+            tokens.input_processing_duration(),
+            Some(Duration::from_millis(10))
+        );
+
+        observer.complete();
+        let terminal = rx.try_recv().unwrap();
+        assert_eq!(
+            terminal.input_processing_duration(),
+            Some(Duration::from_millis(10))
+        );
     }
 
     #[tokio::test]
@@ -870,6 +925,7 @@ mod tests {
     #[tokio::test]
     async fn accumulates_output_tokens() {
         let mut observer = test_observer("req-1", PylonRuntimeState::default());
+        observer.submit_now();
         observer.on_upstream_response_headers(&HeaderMap::new(), 200);
         observer.observe_output_message();
         observer.observe_output_tokens(3);
@@ -883,18 +939,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn first_positive_output_tokens_start_real_ttft() {
+    async fn output_tokens_alone_do_not_start_real_ttft() {
         let (mut observer, rx, _) = responding_observer("req-token").await;
 
         observer.observe_output_tokens(3);
         let token_observation = recv_observation(&rx, "token observation should be emitted").await;
         assert_eq!(
             token_observation.state,
-            RequestObservationState::OutputGeneration
+            RequestObservationState::InputProcessing
         );
         assert_eq!(token_observation.output_tokens, 3);
-        assert!(token_observation.time_to_first_output.is_some());
-        assert!(token_observation.time_to_first_token.is_some());
+        assert_eq!(token_observation.time_to_first_output, None);
+        assert_eq!(token_observation.time_to_first_token, None);
+    }
+
+    #[tokio::test]
+    async fn modal_output_starts_first_output_without_claiming_a_first_token() {
+        let (mut observer, rx, _) = responding_observer("req-modal-output").await;
+
+        observer.observe_generated_output(Instant::now(), false);
+        let output = recv_observation(&rx, "modal output observation should be emitted").await;
+
+        assert_eq!(output.state, RequestObservationState::OutputGeneration);
+        assert!(output.time_to_first_output.is_some());
+        assert_eq!(output.time_to_first_token, None);
+    }
+
+    #[tokio::test]
+    async fn exact_input_usage_updates_tokens_without_starting_output() {
+        let (mut observer, rx, _) = responding_observer("req-input-usage").await;
+
+        observer.observe_input_tokens_total(7);
+        let usage = recv_observation(&rx, "input usage observation should be emitted").await;
+        assert_eq!(usage.state, RequestObservationState::InputProcessing);
+        assert_eq!(usage.input_tokens, 7);
+        assert_eq!(usage.time_to_first_output, None);
+        assert_eq!(usage.time_to_first_token, None);
     }
 
     #[tokio::test]
@@ -909,11 +989,11 @@ mod tests {
             recv_observation(&rx, "fallback token observation should be emitted").await;
         assert_eq!(
             estimated_observation.state,
-            RequestObservationState::OutputGeneration
+            RequestObservationState::InputProcessing
         );
         assert_eq!(estimated_observation.output_tokens, 3);
         assert!(!estimated_observation.output_tokens_explicit);
-        assert!(estimated_observation.time_to_first_token.is_some());
+        assert_eq!(estimated_observation.time_to_first_token, None);
     }
 
     #[tokio::test]
@@ -1012,12 +1092,12 @@ mod tests {
 
         observer.observe_output_tokens_generated_so_far(4);
         let explicit = recv_observation(&rx, "positive chunk usage should be emitted").await;
-        assert_eq!(explicit.state, RequestObservationState::OutputGeneration);
+        assert_eq!(explicit.state, RequestObservationState::InputProcessing);
         assert_eq!(explicit.output_tokens, 4);
         assert!(explicit.output_tokens_explicit);
         assert!(explicit.output_tokens_from_chunk_usage);
-        assert!(explicit.time_to_first_output.is_some());
-        assert!(explicit.time_to_first_token.is_some());
+        assert_eq!(explicit.time_to_first_output, None);
+        assert_eq!(explicit.time_to_first_token, None);
 
         observer.observe_output_tokens_generated_so_far(4);
         assert!(
@@ -1037,10 +1117,11 @@ mod tests {
         let mut observer = make_test_observer();
         let started_at = Instant::now() - Duration::from_secs(1);
         observer.started_at = started_at;
-        observer.state = RequestLifecycleState::Responding(ResponsePhaseData {
-            upstream_status: 200,
-            response_headers_at: started_at + Duration::from_millis(10),
-            first_output_at: None,
+        observer.state = RequestLifecycleState::BackendSubmitted(BackendPhaseData {
+            submitted_at: started_at,
+            upstream_status: Some(200),
+            response_headers_at: Some(started_at + Duration::from_millis(10)),
+            first_generated_output_at: None,
             first_token_at: None,
             output_messages: 0,
             output_tokens: 5,
@@ -1058,8 +1139,7 @@ mod tests {
             observer.state.observation_state(),
             RequestObservationState::InputProcessing
         );
-        assert_eq!(response.first_output_at, None);
-        assert_eq!(response.first_token_at, None);
+        assert_eq!(response.first_generated_output_at, None);
     }
 
     #[test]
@@ -1068,52 +1148,50 @@ mod tests {
         let started_at = Instant::now() - Duration::from_secs(10);
         let first_output_at = started_at + Duration::from_secs(2);
         observer.started_at = started_at;
-        observer.state = RequestLifecycleState::Responding(ResponsePhaseData {
-            upstream_status: 200,
-            response_headers_at: started_at + Duration::from_millis(50),
-            first_output_at: Some(first_output_at),
-            first_token_at: None,
+        observer.state = RequestLifecycleState::BackendSubmitted(BackendPhaseData {
+            submitted_at: started_at + Duration::from_millis(25),
+            upstream_status: Some(200),
+            response_headers_at: Some(started_at + Duration::from_millis(50)),
+            first_generated_output_at: Some(first_output_at),
+            first_token_at: Some(first_output_at),
             output_messages: 2,
             output_tokens: 0,
             output_tokens_explicit: false,
             output_tokens_from_chunk_usage: false,
         });
 
-        let before_token_observation = Instant::now();
         observer.observe_output_tokens(7);
 
         let response = response(&observer);
-        assert_eq!(response.first_output_at, Some(first_output_at));
-        let observed_first_token_at = response.first_token_at.unwrap();
-        assert!(observed_first_token_at >= before_token_observation);
-        assert!(observed_first_token_at > first_output_at);
+        assert_eq!(response.first_generated_output_at, Some(first_output_at));
     }
 
     #[test]
-    fn finish_without_output_panics() {
+    fn explicit_success_can_complete_without_output() {
         let mut observer = test_observer("req-2", PylonRuntimeState::default());
+        observer.submit_now();
         observer.on_upstream_response_headers(&HeaderMap::new(), 200);
-        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| observer.finish()));
-        assert!(panic.is_err());
+        observer.finish();
         assert_eq!(
             observer.state.observation_state(),
-            RequestObservationState::InputProcessing
+            RequestObservationState::Complete
         );
-
-        let headers_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            observer.on_upstream_response_headers(&HeaderMap::new(), 200);
-        }));
-        assert!(headers_panic.is_err());
+        let response = response(&observer);
+        assert_eq!(response.first_generated_output_at, None);
     }
 
     #[test]
-    #[should_panic(expected = "invalid fail transition")]
-    fn fail_after_complete_panics() {
+    fn terminalization_is_idempotent() {
         let mut observer = make_test_observer();
+        observer.submit_now();
         observer.on_upstream_response_headers(&HeaderMap::new(), 200);
         observer.observe_output_message();
         observer.finish();
         observer.fail();
+        assert_eq!(
+            observer.state.observation_state(),
+            RequestObservationState::Complete
+        );
     }
 
     #[test]
@@ -1148,6 +1226,7 @@ mod tests {
 
         assert_terminal_response_header_panic(
             |observer| {
+                observer.submit_now();
                 observer.on_upstream_response_headers(&HeaderMap::new(), 200);
                 observer.observe_output_message();
                 observer.finish();
@@ -1161,8 +1240,9 @@ mod tests {
     #[tokio::test]
     async fn failed_response_stays_failed() {
         let mut observer = test_observer("req-3", PylonRuntimeState::default());
+        observer.submit_now();
         observer.on_upstream_response_headers(&HeaderMap::new(), 503);
-        observer.finish();
+        observer.fail();
 
         let response = response(&observer);
         assert_eq!(response.output_messages, 0);
