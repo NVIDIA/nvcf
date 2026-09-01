@@ -79,6 +79,31 @@ func TestControlPlaneProfileValidateCommandFailsWithFieldErrors(t *testing.T) {
 	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.natsURL")
 }
 
+func TestControlPlaneProfileValidateCommandRejectsMissingSharedGatewayHosts(t *testing.T) {
+	doc := strings.ReplaceAll(validControlPlaneProfileYAML(), "https://sis.nvcf-cp.internal", "https://gateway.nvcf-cp.internal")
+	doc = strings.ReplaceAll(doc, "https://reval.nvcf-cp.internal", "https://gateway.nvcf-cp.internal")
+	doc = strings.Replace(doc, "    httpURL: https://api.nvcf-cp.internal", "    httpURL: https://gateway.nvcf-cp.internal", 1)
+	doc = removeLine(doc, "    sis: sis.nvcf-cp.internal")
+	doc = removeLine(doc, "    reval: reval.nvcf-cp.internal")
+	path := writeControlPlaneProfileFixture(t, doc)
+	resetControlPlaneProfileValidateCommand(t)
+
+	rootCmd.SetOut(&bytes.Buffer{})
+	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"self-hosted", "control-plane", "profile", "validate",
+		"--file", path,
+		"--require", "compute-reachable",
+	})
+
+	err := rootCmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.icmsURL")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.sis")
+	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.revalURL")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.reval")
+}
+
 func TestControlPlaneProfileValidateCommandHelpShowsAnyRequireMode(t *testing.T) {
 	resetControlPlaneProfileValidateCommand(t)
 

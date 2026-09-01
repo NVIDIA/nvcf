@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -43,6 +44,36 @@ func TestCheckRequiresHostHeaderForGatewayAddress(t *testing.T) {
 	assert.Contains(t, err.Error(), "controlPlane.hosts.reval")
 }
 
+func TestCheckRequiresHostHeadersForSharedGatewayHostname(t *testing.T) {
+	err := Check(context.Background(), CheckRequest{
+		TargetClusterName: "gpu-a",
+		GatewayHTTPURL:    "https://gateway.example.test",
+		ICMSURL:           "https://gateway.example.test",
+		ReValURL:          "https://gateway.example.test",
+		NATSURL:           "tls://nats.example.test:4222",
+		ProbeHTTP:         false,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "controlPlane.hosts.sis")
+	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.icmsURL")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.reval")
+	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.revalURL")
+}
+
+func TestCheckAllowsDirectServiceHostnamesWithoutHostOverrides(t *testing.T) {
+	err := Check(context.Background(), CheckRequest{
+		TargetClusterName: "gpu-a",
+		GatewayHTTPURL:    "https://gateway.example.test",
+		ICMSURL:           "https://sis.example.test",
+		ReValURL:          "https://reval.example.test",
+		NATSURL:           "tls://nats.example.test:4222",
+		ProbeHTTP:         false,
+	})
+
+	require.NoError(t, err)
+}
+
 func TestCheckErrorIncludesClusterNameWithoutProblems(t *testing.T) {
 	err := (&CheckError{TargetClusterName: "gpu-a"}).Error()
 
@@ -52,9 +83,18 @@ func TestCheckErrorIncludesClusterNameWithoutProblems(t *testing.T) {
 
 func TestCheckProbesICMSAndReValWithHostHeaders(t *testing.T) {
 	var gotHosts []string
+	var gotPaths []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotHosts = append(gotHosts, r.Host)
-		w.WriteHeader(http.StatusUnauthorized)
+		gotPaths = append(gotPaths, r.URL.Path)
+		switch r.URL.Path {
+		case "/health":
+			w.WriteHeader(http.StatusOK)
+		case "/info":
+			w.WriteHeader(http.StatusUnauthorized)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
 	}))
 	t.Cleanup(server.Close)
 
@@ -71,6 +111,81 @@ func TestCheckProbesICMSAndReValWithHostHeaders(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []string{"sis.example.test", "reval.example.test"}, gotHosts)
+	assert.ElementsMatch(t, []string{"/health", "/info"}, gotPaths)
+}
+
+func TestCheckReportsNotFoundWithEndpointAndCorrectiveAction(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(server.Close)
+
+	err := Check(context.Background(), CheckRequest{
+		TargetClusterName: "gpu-a",
+		ICMSURL:           server.URL,
+		ReValURL:          server.URL,
+		NATSURL:           "tls://nats.example.test:4222",
+		SISHost:           "sis.example.test",
+		ReValHost:         "reval.example.test",
+		HTTPClient:        server.Client(),
+		ProbeHTTP:         true,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.icmsURL")
+	assert.Contains(t, err.Error(), "/health")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.sis")
+	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.revalURL")
+	assert.Contains(t, err.Error(), "/info")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.reval")
+	assert.Contains(t, err.Error(), "status 404")
+}
+
+func TestCheckRejectsRedirectStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusFound)
+	}))
+	t.Cleanup(server.Close)
+
+	err := Check(context.Background(), CheckRequest{
+		TargetClusterName: "gpu-a",
+		ICMSURL:           server.URL,
+		ReValURL:          server.URL,
+		NATSURL:           "tls://nats.example.test:4222",
+		SISHost:           "sis.example.test",
+		ReValHost:         "reval.example.test",
+		HTTPClient:        server.Client(),
+		ProbeHTTP:         true,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "status 302")
+}
+
+func TestCheckDoesNotFollowRedirectToUnrelatedSuccess(t *testing.T) {
+	var loginRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/login" {
+			loginRequests.Add(1)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.Redirect(w, r, "/login", http.StatusFound)
+	}))
+	t.Cleanup(server.Close)
+
+	err := Check(context.Background(), CheckRequest{
+		TargetClusterName: "gpu-a",
+		ICMSURL:           server.URL,
+		ReValURL:          server.URL,
+		NATSURL:           "tls://nats.example.test:4222",
+		SISHost:           "sis.example.test",
+		ReValHost:         "reval.example.test",
+		HTTPClient:        server.Client(),
+		ProbeHTTP:         true,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "status 302")
+	assert.Zero(t, loginRequests.Load(), "reachability probes must not follow redirects away from the service route")
 }
 
 func TestCheckReportsHTTPProbeFailure(t *testing.T) {
