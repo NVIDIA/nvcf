@@ -2469,13 +2469,24 @@ async fn proxy_local_priority_weights_resolve_integer_ceiling_boundaries() {
     let running_b = scenario.start_in("inst-b", "cluster-ceiling", 2222);
     let above_exact_integer = (1_u64 << 53) + 1;
     let cases = [
-        ([(1.0, 6), (5.0, 0)], 1),
-        ([((1_u64 << 53) as f64, 1), (1.0, 2)], 2),
+        ([(1.0, 6), (5.0, 0)], Some(1)),
+        ([((1_u64 << 53) as f64, 1), (1.0, 2)], Some(2)),
         (
             [(1.0, above_exact_integer), (1.0, above_exact_integer + 1)],
-            above_exact_integer + 1,
+            Some(above_exact_integer + 1),
         ),
-        ([(1.0, 0), (f64::MAX / 2.0, u64::MAX - 1)], u64::MAX - 1),
+        ([(1.0, 0), (1.0, u64::MAX)], Some(1_u64 << 63)),
+        (
+            [(1.0, 0), (1.0, (1_u64 << 63) + 1023)],
+            Some((1_u64 << 62) + 512),
+        ),
+        (
+            [(f64::from_bits(4.0_f64.to_bits() + 1), 27), (1.0, 22)],
+            Some(27),
+        ),
+        ([(0.1, 0), (1.1, 12)], Some(12)),
+        ([(1.0, 0), (f64::MAX / 2.0, u64::MAX - 1)], None),
+        ([(f64::MAX, 0), (f64::MIN_POSITIVE, 2)], None),
     ];
 
     for (local_stats, expected_wait_ms) in cases {
@@ -2498,13 +2509,16 @@ async fn proxy_local_priority_weights_resolve_integer_ceiling_boundaries() {
                 )
                 .await;
         }
+        let expected_map = expected_wait_ms
+            .map(|wait_ms| HashMap::from([(0, wait_ms)]))
+            .unwrap_or_default();
         assert_eq!(
             scenario
                 .only_cluster("model-ceiling")
                 .await
                 .stats
                 .queue_time_estimate_ms_by_priority,
-            HashMap::from([(0, expected_wait_ms)])
+            expected_map
         );
     }
 }

@@ -75,25 +75,25 @@ fn proxy_local_wait_ms(stats: &ModelStats, priority: u32) -> u64 {
     }
 }
 
-fn checked_ceil_u64(value: f64) -> Option<u64> {
-    let rounded = value.ceil();
-    // `u64::MAX as f64` rounds to 2^64, so the cast must saturate that boundary.
-    (rounded.is_finite() && rounded >= 0.0 && rounded <= u64::MAX as f64).then_some(rounded as u64)
+fn positive_f64_binary(value: f64) -> (u64, i16) {
+    debug_assert!(valid_last_mean_input_tps(value));
+    let bits = value.to_bits();
+    let exponent_bits = ((bits >> 52) & 0x7ff) as i16;
+    let fraction = bits & ((1_u64 << 52) - 1);
+    if exponent_bits == 0 {
+        (fraction, -1074)
+    } else {
+        ((1_u64 << 52) | fraction, exponent_bits - 1075)
+    }
 }
 
-fn compensated_sum(values: impl IntoIterator<Item = f64>) -> f64 {
-    let mut sum = 0.0_f64;
-    let mut correction = 0.0_f64;
-    for value in values {
-        let next = sum + value;
-        correction += if sum >= value {
-            (sum - next) + value
-        } else {
-            (value - next) + sum
-        };
-        sum = next;
+fn checked_ceil_ratio_u64(numerator: u128, denominator: u128) -> Option<u64> {
+    if denominator == 0 {
+        return None;
     }
-    sum + correction
+    let quotient = numerator / denominator;
+    let ceiled = quotient.checked_add(u128::from(!numerator.is_multiple_of(denominator)))?;
+    u64::try_from(ceiled).ok()
 }
 
 fn proxy_local_priority_map(backends: &[Arc<RoutedInferenceServerSnapshot>]) -> HashMap<u32, u64> {
@@ -127,23 +127,28 @@ fn proxy_local_priority_map(backends: &[Arc<RoutedInferenceServerSnapshot>]) -> 
     if priorities.is_empty() || !valid_last_mean_input_tps(input_tps_sum) {
         return HashMap::new();
     }
-    let max_input_tps = backends
+    let rate_components: Vec<(usize, u64, i16)> = backends
         .iter()
-        .map(|backend| backend.stats.last_mean_input_tps)
-        .filter(|input_tps| valid_last_mean_input_tps(*input_tps))
-        .fold(0.0_f64, f64::max);
-    let valid_input_tps_count = backends
+        .enumerate()
+        .filter_map(|(index, backend)| {
+            let input_tps = backend.stats.last_mean_input_tps;
+            valid_last_mean_input_tps(input_tps).then(|| {
+                let (significand, exponent) = positive_f64_binary(input_tps);
+                (index, significand, exponent)
+            })
+        })
+        .collect();
+    let min_rate_exponent = rate_components
         .iter()
-        .map(|backend| backend.stats.last_mean_input_tps)
-        .filter(|input_tps| valid_last_mean_input_tps(*input_tps))
-        .count();
+        .map(|(_, _, exponent)| *exponent)
+        .min()
+        .expect("a positive finite aggregate input rate has at least one component");
 
     let mut aggregate = HashMap::with_capacity(priorities.len());
     for priority in priorities {
-        let (min_wait_ms, max_wait_ms) = backends
+        let (min_wait_ms, max_wait_ms) = rate_components
             .iter()
-            .filter(|backend| valid_last_mean_input_tps(backend.stats.last_mean_input_tps))
-            .map(|backend| proxy_local_wait_ms(&backend.stats, priority))
+            .map(|(index, _, _)| proxy_local_wait_ms(&backends[*index].stats, priority))
             .fold((u64::MAX, 0), |(min_wait_ms, max_wait_ms), wait_ms| {
                 (min_wait_ms.min(wait_ms), max_wait_ms.max(wait_ms))
             });
@@ -152,76 +157,41 @@ fn proxy_local_priority_map(backends: &[Arc<RoutedInferenceServerSnapshot>]) -> 
             continue;
         }
 
-        let max_delta_ms = max_wait_ms - min_wait_ms;
-        let max_unscaled_term = max_input_tps * max_delta_ms as f64;
-        let unscaled_sum_is_finite = max_unscaled_term.is_finite()
-            && max_unscaled_term <= f64::MAX / valid_input_tps_count as f64;
-        // A common power-of-two divisor is exact for normal values. The
-        // conservative exponent also bounds a worst-case usize-length sum.
-        let rate_scale = if unscaled_sum_is_finite {
-            1.0
-        } else {
-            2.0_f64.powi((u64::BITS + usize::BITS + 1) as i32)
-        };
-        let scaled_input_tps_sum = compensated_sum(
-            backends
-                .iter()
-                .map(|backend| backend.stats.last_mean_input_tps)
-                .filter(|input_tps| valid_last_mean_input_tps(*input_tps))
-                .map(|input_tps| input_tps / rate_scale),
-        );
-        let weighted_delta_sum = compensated_sum(backends.iter().filter_map(|backend| {
-            let input_tps = backend.stats.last_mean_input_tps;
-            valid_last_mean_input_tps(input_tps).then(|| {
-                let wait_ms = proxy_local_wait_ms(&backend.stats, priority);
-                (input_tps / rate_scale) * wait_ms.saturating_sub(min_wait_ms) as f64
-            })
-        }));
-        if !valid_last_mean_input_tps(scaled_input_tps_sum)
-            || !weighted_delta_sum.is_finite()
-            || weighted_delta_sum < 0.0
-        {
-            return HashMap::new();
-        }
-        let weighted_delta_ms = weighted_delta_sum / scaled_input_tps_sum;
-        let Some(approximate_ceil_ms) =
-            checked_ceil_u64(weighted_delta_ms.clamp(0.0, max_delta_ms as f64))
-        else {
-            return HashMap::new();
-        };
+        // Positive finite f64 values are exact binary rationals. Align their
+        // significands in u128 so ceiling cannot cross an integer due to
+        // floating-point rounding. If the exact fast path does not fit, use
+        // the existing scalar fallback rather than publish an unsafe map.
+        let mut denominator = 0_u128;
+        let mut weighted_delta = 0_u128;
+        for (index, significand, exponent) in &rate_components {
+            let shift = u32::try_from(*exponent - min_rate_exponent)
+                .expect("the minimum rate exponent cannot exceed a component exponent");
+            let Some(scaled_significand) = u128::from(*significand).checked_shl(shift) else {
+                return HashMap::new();
+            };
+            let Some(next_denominator) = denominator.checked_add(scaled_significand) else {
+                return HashMap::new();
+            };
+            denominator = next_denominator;
 
-        // Division can round an exact integer quotient one ULP upward or a
-        // positive fraction downward. Resolve the adjacent integer boundary
-        // by comparing the weighted residual on each side of it.
-        let lower_delta_ms = approximate_ceil_ms.saturating_sub(1).min(max_delta_ms);
-        let positive_residual = compensated_sum(backends.iter().filter_map(|backend| {
-            let input_tps = backend.stats.last_mean_input_tps;
-            if !valid_last_mean_input_tps(input_tps) {
-                return None;
-            }
-            let delta_ms = proxy_local_wait_ms(&backend.stats, priority) - min_wait_ms;
-            (delta_ms > lower_delta_ms)
-                .then(|| (input_tps / rate_scale) * (delta_ms - lower_delta_ms) as f64)
-        }));
-        let negative_residual = compensated_sum(backends.iter().filter_map(|backend| {
-            let input_tps = backend.stats.last_mean_input_tps;
-            if !valid_last_mean_input_tps(input_tps) {
-                return None;
-            }
-            let delta_ms = proxy_local_wait_ms(&backend.stats, priority) - min_wait_ms;
-            (delta_ms < lower_delta_ms)
-                .then(|| (input_tps / rate_scale) * (lower_delta_ms - delta_ms) as f64)
-        }));
-        if !positive_residual.is_finite() || !negative_residual.is_finite() {
+            let wait_ms = proxy_local_wait_ms(&backends[*index].stats, priority);
+            let delta_ms = wait_ms - min_wait_ms;
+            let Some(weighted_component) = scaled_significand.checked_mul(u128::from(delta_ms))
+            else {
+                return HashMap::new();
+            };
+            let Some(next_weighted_delta) = weighted_delta.checked_add(weighted_component) else {
+                return HashMap::new();
+            };
+            weighted_delta = next_weighted_delta;
+        }
+        let Some(ceiled_delta_ms) = checked_ceil_ratio_u64(weighted_delta, denominator) else {
+            return HashMap::new();
+        };
+        if ceiled_delta_ms > max_wait_ms - min_wait_ms {
             return HashMap::new();
         }
-        let ceiled_delta_ms = if positive_residual > negative_residual {
-            lower_delta_ms.saturating_add(1)
-        } else {
-            lower_delta_ms
-        }
-        .min(max_delta_ms);
-        let weighted_wait_ms = min_wait_ms.saturating_add(ceiled_delta_ms).min(max_wait_ms);
+        let weighted_wait_ms = min_wait_ms + ceiled_delta_ms;
         aggregate.insert(priority, weighted_wait_ms);
     }
     aggregate
