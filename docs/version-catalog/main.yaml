@@ -233,7 +233,7 @@ publications:
     registry: public-helm
     chart_format: http
   - name: nvcf-gateway-routes
-    version: 1.17.0
+    version: 1.15.0
     registry: public-helm
     chart_format: http
   - name: nvcf-container-cache
@@ -256,6 +256,18 @@ version_overrides:
   - name: llm-api-gateway
     version: 0.8.3
     source: supplemental artifact missing from artifacts-0.6.0.txt
+  - name: nvcf-cli
+    version: 1.16.2
+    source: independent source release; not pinned by stack
+publication_pending:
+  - nvcf-self-managed-stack
+  - nvcf-cli
+  - helm-nvcf-llm-request-router
+  - nvcf-gateway-routes
+  - pylon
+  - helm-nvca-operator
+  - nvca-operator
+  - nvca
 manifest:
   entries:
     - artifact_id: helm-nvcf-api-keys
@@ -705,11 +717,18 @@ manifest:
       github_url: https://github.com/NVIDIA/nvcf/tree/main/src/clis/nvcf-cli
 stack:
   name: nvcf-self-managed-stack
-  version: 0.6.0
+  version: 0.9.1
   registry: public-resources
   gitlab_project_id: 182049
   package_name: ncp-deploy
-  artifacts_file: artifacts-0.6.0.txt
+  artifacts_file: artifacts-0.9.1.txt
+  source_commit: 9cf1103b0e9fe90bde6a8147c95d3d423e96c781
+  pin_sources:
+    - deploy/stacks/nvcf-compute-plane/environments/base.yaml
+    - deploy/stacks/nvcf-compute-plane/helmfile.d/02-nvca.yaml.gotmpl
+    - deploy/stacks/self-managed/global.yaml.gotmpl
+    - deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl
+  pin_source_digest: sha256:952fba4fb3906887fe1661f6d8508b9470c2a5fe0746dba12a5a62d8384230dc
 denylist:
   - name: strap
     reason: Legacy name replaced by nvcf-service-oss
@@ -822,7 +841,7 @@ artifacts:
   - name: helm-nvcf-llm-request-router
     type: chart
     registry: staging
-    version: 1.12.1
+    version: 1.12.2
   - name: helm-nvcf-nats-auth-callout-service
     type: chart
     registry: staging
@@ -950,7 +969,7 @@ artifacts:
   - name: pylon
     type: image
     registry: staging
-    version: 0.14.1
+    version: 0.14.3
   - name: reval-server
     type: image
     registry: staging
@@ -963,19 +982,19 @@ supplemental_artifacts:
   - name: nvcf-cli
     type: resource
     registry: public-resources
-    version: 1.10.3
+    version: 1.16.2
   - name: helm-nvca-operator
     type: chart
     registry: staging
-    version: 1.12.7
+    version: 1.21.3
   - name: nvca-operator
     type: image
     registry: staging
-    version: 3.0.3
+    version: 3.2.19
   - name: nvca
     type: image
     registry: staging
-    version: 3.0.3
+    version: 3.2.19
   - name: nvcf-compute-plane-stack
     type: resource
     registry: public-resources

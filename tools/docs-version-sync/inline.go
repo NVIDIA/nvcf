@@ -113,7 +113,7 @@ func replaceYAMLStringValue(content, key, value string) (string, int) {
 }
 
 func replaceNVCAOperatorChartPull(content, pullReference, version string) (string, int) {
-	re := regexp.MustCompile(`(?:oci://[^\s]+/|[a-z0-9-]+/)(?:helm-nvca-operator|nvca-operator) --version [^\s]+`)
+	re := regexp.MustCompile(`(?:(?:oci://[^\s]+/|[a-z0-9-]+/)(?:helm-nvca-operator|nvca-operator)|"\$\{HELM_NVCA_OPERATOR_REFERENCE:\?[^}]+\}") --version [^\s]+`)
 	count := len(re.FindAllStringIndex(content, -1))
 	replacement := pullReference + " --version " + version
 	return re.ReplaceAllString(content, replacement), count
