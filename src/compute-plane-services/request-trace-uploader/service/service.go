@@ -12,6 +12,9 @@ import (
 	"os"
 	"time"
 
+	"log/slog"
+
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/backend"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/config"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/health"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/segment"
@@ -20,16 +23,30 @@ import (
 // Service owns local readiness checks and the sidecar HTTP server. It
 // intentionally does not submit or delete request-trace segments.
 type Service struct {
-	config config.Config
-	health *health.Handler
+	config  config.Config
+	health  *health.Handler
+	backend backend.Client
 }
 
-// New creates a request-trace uploader service.
+// New creates a request-trace uploader service using the configured backend.
+// That backend must be linked into the build; see backend.Register.
 func New(cfg config.Config) (*Service, error) {
+	client, err := backend.New(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return NewWithBackend(cfg, client), nil
+}
+
+// NewWithBackend creates a service around an already-built backend. It exists
+// so a caller that constructs its own backend, including a test, does not have
+// to go through the registry.
+func NewWithBackend(cfg config.Config, client backend.Client) *Service {
 	return &Service{
-		config: cfg,
-		health: health.New(),
-	}, nil
+		config:  cfg,
+		health:  health.New(),
+		backend: client,
+	}
 }
 
 // Handler returns the service HTTP handler.
@@ -62,12 +79,43 @@ func (s *Service) Initialize() error {
 	return nil
 }
 
-// Refresh verifies that local request-trace segment discovery succeeds without
-// changing source files.
+// Refresh submits every closed segment to the backend.
+//
+// Sources are never deleted here. Deletion waits on durable lifecycle state and
+// confirmed terminal success, which is a later increment. A segment that fails
+// is logged and left in place, so the next scan retries it.
 func (s *Service) Refresh() error {
-	if _, err := segment.Discover(s.config.SourceDir, s.config.SegmentPrefix); err != nil {
+	segments, err := segment.Discover(s.config.SourceDir, s.config.SegmentPrefix)
+	if err != nil {
 		return fmt.Errorf("discover request trace segments: %w", err)
 	}
+	for _, item := range segments {
+		if err := s.submit(item); err != nil {
+			slog.Error("submit request trace segment",
+				"segment", item.Index,
+				"bytes", item.Size,
+				"error", err)
+		}
+	}
+	return nil
+}
+
+func (s *Service) submit(item segment.Segment) error {
+	id, err := s.backend.Submit(context.Background(), backend.SubmitRequest{
+		Segment: item,
+		Path:    item.Path,
+	})
+	if err != nil {
+		return err
+	}
+	status, err := s.backend.Status(context.Background(), id)
+	if err != nil {
+		return fmt.Errorf("read status: %w", err)
+	}
+	slog.Info("submitted request trace segment",
+		"segment", item.Index,
+		"bytes", item.Size,
+		"status", status)
 	return nil
 }
 

@@ -6,6 +6,7 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/service",
     visibility = ["//visibility:public"],
     deps = [
+        "//src/compute-plane-services/request-trace-uploader/backend",
         "//src/compute-plane-services/request-trace-uploader/config",
         "//src/compute-plane-services/request-trace-uploader/internal/health",
         "//src/compute-plane-services/request-trace-uploader/segment",
@@ -16,7 +17,10 @@ go_test(
     name = "service_test",
     srcs = ["service_test.go"],
     embed = [":service"],
-    deps = ["//src/compute-plane-services/request-trace-uploader/config"],
+    deps = [
+        "//src/compute-plane-services/request-trace-uploader/backend",
+        "//src/compute-plane-services/request-trace-uploader/config",
+    ],
 )
 
 alias(

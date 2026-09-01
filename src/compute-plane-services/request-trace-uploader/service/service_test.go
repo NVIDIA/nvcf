@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/backend"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/config"
 )
 
@@ -36,10 +37,7 @@ func TestInitializeReadinessAndDiscovery(t *testing.T) {
 		HealthAddr:    ":8011",
 		ScanInterval:  config.DefaultScanInterval,
 	}
-	svc, err := New(cfg)
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
+	svc := NewWithBackend(cfg, stubBackend{})
 	if err := svc.Initialize(); err != nil {
 		t.Fatalf("Initialize() error = %v", err)
 	}
@@ -63,10 +61,7 @@ func TestInitializeReadinessAndDiscovery(t *testing.T) {
 }
 
 func TestHTTPServerTimeouts(t *testing.T) {
-	svc, err := New(config.Config{HealthAddr: ":8011"})
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
+	svc := NewWithBackend(config.Config{HealthAddr: ":8011"}, stubBackend{})
 	server := svc.httpServer()
 	if server.ReadHeaderTimeout != 5*time.Second {
 		t.Errorf("ReadHeaderTimeout = %v, want %v", server.ReadHeaderTimeout, 5*time.Second)
@@ -84,17 +79,26 @@ func TestHTTPServerTimeouts(t *testing.T) {
 
 func TestInitializeRejectsUnreadableSecret(t *testing.T) {
 	root := t.TempDir()
-	svc, err := New(config.Config{
+	svc := NewWithBackend(config.Config{
 		SourceDir:     root,
 		SegmentPrefix: "request-trace",
 		SecretsFile:   filepath.Join(root, "missing.json"),
 		StateDir:      filepath.Join(root, "state"),
 		QuarantineDir: filepath.Join(root, "quarantine"),
-	})
-	if err != nil {
-		t.Fatalf("New() error = %v", err)
-	}
+	}, stubBackend{})
 	if err := svc.Initialize(); err == nil {
 		t.Fatal("Initialize() error = nil, want error")
 	}
+}
+
+// stubBackend stands in for a real destination. The service tests cover
+// startup, readiness, and discovery, none of which submit anything.
+type stubBackend struct{}
+
+func (stubBackend) Submit(context.Context, backend.SubmitRequest) (string, error) {
+	return "stub", nil
+}
+
+func (stubBackend) Status(context.Context, string) (backend.Status, error) {
+	return backend.StatusSuccess, nil
 }
