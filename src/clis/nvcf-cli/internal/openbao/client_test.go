@@ -110,7 +110,7 @@ func TestReadPKICertificatePEMRetriesMalformedResponse(t *testing.T) {
 	}
 	attempt := 0
 
-	got, err := readPKICertificatePEM(nil, len(responses), 0, func(context.Context) (pkiCertificateHTTPResponse, error) {
+	got, err := readPKICertificatePEM(context.Background(), len(responses), 0, func(context.Context) (pkiCertificateHTTPResponse, error) {
 		response := responses[attempt]
 		attempt++
 		return response, nil
