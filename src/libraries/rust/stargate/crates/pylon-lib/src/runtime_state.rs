@@ -15,7 +15,10 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
+
+#[cfg(test)]
+use std::time::Duration;
 
 use parking_lot::Mutex;
 use stargate_proto::pb::{InferenceServerModelRegistration, InferenceServerStatus, ModelStats};
@@ -95,15 +98,9 @@ pub struct RequestObservationEvent {
     pub(crate) observation: RequestObservation,
     pub(crate) generation: Option<ModelGeneration>,
     pub(crate) changed_generations: Vec<ModelGeneration>,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "consumed by the stacked throughput projection")
-    )]
     pub(crate) input_interval: Option<RequestInputInterval>,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "consumed by the stacked throughput projection")
-    )]
+    pub(crate) input_tokens_explicit: bool,
+    pub(crate) raw_output_units: u64,
     pub(crate) upstream_duration: Option<Duration>,
 }
 
@@ -111,6 +108,14 @@ pub struct RequestObservationEvent {
 pub(crate) struct RequestInputInterval {
     pub(crate) submitted_at: Instant,
     pub(crate) first_generated_output_at: Instant,
+}
+
+impl RequestInputInterval {
+    #[cfg(test)]
+    pub(crate) fn duration(self) -> Duration {
+        self.first_generated_output_at
+            .saturating_duration_since(self.submitted_at)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -424,7 +429,16 @@ impl PylonRuntimeState {
 
     pub fn observe_request(&self, observation: RequestObservation) {
         let generation = self.current_generation(&observation.model_id);
-        self.observe_request_for_generation(observation, generation, None, None);
+        let request_input_tokens = observation.input_tokens;
+        self.observe_request_for_generation(
+            observation,
+            generation,
+            None,
+            request_input_tokens,
+            false,
+            0,
+            None,
+        );
     }
 
     pub(crate) fn observe_request_for_generation(
@@ -432,12 +446,18 @@ impl PylonRuntimeState {
         observation: RequestObservation,
         generation: Option<ModelGeneration>,
         input_interval: Option<RequestInputInterval>,
+        request_input_tokens: u64,
+        input_tokens_explicit: bool,
+        raw_output_units: u64,
         upstream_duration: Option<Duration>,
     ) {
         let event = self.transition_request_observation_for_generation(
             observation,
             generation,
             input_interval,
+            request_input_tokens,
+            input_tokens_explicit,
+            raw_output_units,
             upstream_duration,
         );
         if let Some(tx) = &self.observation_tx
@@ -478,10 +498,14 @@ impl PylonRuntimeState {
         let generation = self
             .current_generation(&observation.model_id)
             .expect("test model generation should already exist");
+        let request_input_tokens = observation.input_tokens;
         self.transition_request_observation_for_generation(
             observation,
             Some(generation),
             None,
+            request_input_tokens,
+            false,
+            0,
             None,
         )
     }
@@ -491,6 +515,9 @@ impl PylonRuntimeState {
         observation: RequestObservation,
         generation: Option<ModelGeneration>,
         input_interval: Option<RequestInputInterval>,
+        request_input_tokens: u64,
+        input_tokens_explicit: bool,
+        raw_output_units: u64,
         upstream_duration: Option<Duration>,
     ) -> RequestObservationEvent {
         // Held across the queue transition below: retire_generation() purges
@@ -515,12 +542,16 @@ impl PylonRuntimeState {
                     generation,
                     changed_generations: Vec::new(),
                     input_interval,
+                    input_tokens_explicit,
+                    raw_output_units,
                     upstream_duration,
                 };
             }
         }
+        let mut live_observation = observation.clone();
+        live_observation.input_tokens = request_input_tokens;
         let transition = self.live_requests.transition_generation_observation_with(
-            &observation,
+            &live_observation,
             generation.as_ref(),
             |transition| {
                 if let Some(metrics) = &self.metrics {
@@ -533,6 +564,8 @@ impl PylonRuntimeState {
             generation,
             changed_generations: transition.changed_generations,
             input_interval,
+            input_tokens_explicit,
+            raw_output_units,
             upstream_duration,
         }
     }
@@ -613,12 +646,26 @@ impl RequestObservationEvent {
         self.observation
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "consumed by the stacked throughput projection")
-    )]
+    #[cfg(test)]
+    pub(crate) fn input_processing_duration(&self) -> Option<Duration> {
+        self.input_interval().map(RequestInputInterval::duration)
+    }
+
     pub(crate) fn input_interval(&self) -> Option<RequestInputInterval> {
         self.input_interval
+    }
+
+    pub(crate) fn input_tokens_explicit(&self) -> bool {
+        self.input_tokens_explicit
+    }
+
+    pub(crate) fn raw_output_units(&self) -> u64 {
+        self.raw_output_units
+    }
+
+    pub(crate) fn output_duration(&self) -> Duration {
+        self.upstream_duration
+            .unwrap_or(self.observation.total_duration)
     }
 }
 
@@ -878,6 +925,9 @@ mod tests {
             first_observation.clone(),
             Some(first.clone()),
             None,
+            first_observation.input_tokens,
+            false,
+            0,
             None,
         );
         assert_eq!(runtime_state.snapshot_live_model("model-a").queue_size, 1);
@@ -890,6 +940,9 @@ mod tests {
             first_observation,
             Some(first),
             None,
+            0,
+            false,
+            0,
             None,
         );
 
@@ -916,7 +969,15 @@ mod tests {
 
         let mut stale = observation("req-first", "model-a", Some("rk-a"));
         stale.state = RequestObservationState::Failed;
-        runtime_state.transition_request_observation_for_generation(stale, Some(first), None, None);
+        runtime_state.transition_request_observation_for_generation(
+            stale,
+            Some(first),
+            None,
+            0,
+            false,
+            0,
+            None,
+        );
 
         let body = metrics.gather_text().expect("metrics should encode");
         assert!(

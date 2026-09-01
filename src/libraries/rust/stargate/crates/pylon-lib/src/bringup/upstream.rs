@@ -278,7 +278,11 @@ fn finish_observation(
         let generation = observer
             .generation_mut()
             .expect("chat completion observer should expose generation progress");
-        generation.observe_generated_output(Instant::now(), completion.usage.completion_tokens > 0);
+        generation.observe_generated_output(
+            Instant::now(),
+            completion.usage.completion_tokens > 0,
+            0,
+        );
         generation.observe_output_tokens_total(u64::from(completion.usage.completion_tokens));
         observer.complete();
     }

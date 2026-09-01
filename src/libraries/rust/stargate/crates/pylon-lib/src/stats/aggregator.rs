@@ -14,14 +14,14 @@
 // limitations under the License.
 
 use std::collections::{HashMap, VecDeque};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
 use stargate_protocol::common::valid_last_mean_input_tps;
 use tokio::time::Instant as TokioInstant;
 
 use crate::generated_request_id::{GeneratedRequestKind, generated_request_kind};
-use crate::runtime_state::ModelGeneration;
+use crate::runtime_state::{ModelGeneration, RequestInputInterval};
 use crate::{CurrentModelStats, PylonRuntimeState};
 
 use super::collector::{
@@ -42,6 +42,8 @@ pub(super) struct ModelMetricsState {
     pub(super) max_embedding_item_tps: f64,
     pub(super) kv_cache: KvCacheStatsSnapshot,
     pub(super) input_tps_distribution: TpsDistribution,
+    pub(super) request_input_intervals: RequestInputIntervalWindow,
+    pub(super) completed_fallback_outputs: VecDeque<CompletedFallbackOutput>,
     aggregate_state_counted: bool,
     pub(super) counter_output_tps_authoritative: bool,
     pub(super) chunk_usage_stats_observed: bool,
@@ -55,7 +57,161 @@ pub(super) struct ModelMetricsState {
 pub(super) struct GenerationMetricsState {
     pub(super) generation: ModelGeneration,
     pub(super) metrics: ModelMetricsState,
-    pub(super) pinned_input_tps: Option<f64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct RequestIntervalKey {
+    request_id: String,
+    submitted_at: Instant,
+}
+
+#[derive(Debug)]
+pub(super) struct CompletedFallbackOutput {
+    pub(super) key: RequestIntervalKey,
+    pub(super) raw_bootstrap_units: u64,
+    pub(super) output_tokens: u64,
+    pub(super) output_tokens_explicit: bool,
+}
+
+impl RequestIntervalKey {
+    pub(super) fn new(request_id: &str, submitted_at: Instant) -> Self {
+        Self {
+            request_id: request_id.to_string(),
+            submitted_at,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct RetainedInputInterval {
+    key: RequestIntervalKey,
+    interval: RequestInputInterval,
+    input_tokens: u64,
+    input_tokens_explicit: bool,
+}
+
+#[derive(Debug, Default)]
+pub(super) struct RequestInputIntervalWindow {
+    intervals: VecDeque<RetainedInputInterval>,
+    evicted_through: Option<Instant>,
+}
+
+impl RequestInputIntervalWindow {
+    #[cfg(test)]
+    pub(super) fn len(&self) -> usize {
+        self.intervals.len()
+    }
+
+    pub(super) fn observe(
+        &mut self,
+        request_id: &str,
+        interval: RequestInputInterval,
+        input_tokens: u64,
+        input_tokens_explicit: bool,
+        config: &StatsCollectorConfig,
+    ) -> Option<f64> {
+        if config.smoothing_window_size == 0
+            || interval.first_generated_output_at <= interval.submitted_at
+        {
+            return None;
+        }
+        let key = RequestIntervalKey::new(request_id, interval.submitted_at);
+        let existing = self.intervals.iter().position(|entry| entry.key == key);
+        let min_input_tokens = config.min_input_tokens.max(1);
+        if input_tokens_explicit && input_tokens < min_input_tokens {
+            if let Some(index) = existing {
+                self.intervals.remove(index);
+                return self.rate(config.duration_floor);
+            }
+            return None;
+        }
+        if input_tokens < min_input_tokens {
+            return None;
+        }
+
+        if let Some(index) = existing {
+            let entry = self
+                .intervals
+                .get_mut(index)
+                .expect("located input interval should remain retained");
+            if entry.input_tokens_explicit && !input_tokens_explicit {
+                return self.rate(config.duration_floor);
+            }
+            entry.interval = interval;
+            entry.input_tokens = input_tokens;
+            entry.input_tokens_explicit |= input_tokens_explicit;
+        } else {
+            if self
+                .evicted_through
+                .is_some_and(|evicted| interval.first_generated_output_at <= evicted)
+            {
+                return None;
+            }
+            let insertion_index = self
+                .intervals
+                .iter()
+                .position(|entry| {
+                    entry.interval.first_generated_output_at > interval.first_generated_output_at
+                })
+                .unwrap_or(self.intervals.len());
+            self.intervals.insert(
+                insertion_index,
+                RetainedInputInterval {
+                    key,
+                    interval,
+                    input_tokens,
+                    input_tokens_explicit,
+                },
+            );
+            while self.intervals.len() > config.smoothing_window_size {
+                let evicted = self
+                    .intervals
+                    .pop_front()
+                    .expect("oversized input interval window should not be empty");
+                self.evicted_through = Some(
+                    self.evicted_through
+                        .map_or(evicted.interval.first_generated_output_at, |prior| {
+                            prior.max(evicted.interval.first_generated_output_at)
+                        }),
+                );
+            }
+        }
+        self.rate(config.duration_floor)
+    }
+
+    fn rate(&self, duration_floor: Duration) -> Option<f64> {
+        let input_tokens = self.intervals.iter().fold(0_u64, |total, entry| {
+            total.saturating_add(entry.input_tokens)
+        });
+        if input_tokens == 0 {
+            return None;
+        }
+        let mut intervals = self
+            .intervals
+            .iter()
+            .map(|entry| entry.interval)
+            .collect::<Vec<_>>();
+        intervals.sort_unstable_by_key(|interval| interval.submitted_at);
+        let mut intervals = intervals.into_iter();
+        let first = intervals.next()?;
+        let mut start = first.submitted_at;
+        let mut end = first.first_generated_output_at;
+        let mut union_duration = Duration::ZERO;
+        for interval in intervals {
+            if interval.submitted_at <= end {
+                end = end.max(interval.first_generated_output_at);
+            } else {
+                union_duration =
+                    union_duration.saturating_add(end.saturating_duration_since(start));
+                start = interval.submitted_at;
+                end = interval.first_generated_output_at;
+            }
+        }
+        union_duration = union_duration.saturating_add(end.saturating_duration_since(start));
+        let duration = union_duration.max(duration_floor);
+        let input_tps = input_tokens as f64 / duration.as_secs_f64();
+        (valid_last_mean_input_tps(input_tps) && input_tps.is_finite()).then_some(input_tps)
+    }
 }
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 pub(super) struct KvCacheStatsSnapshot {
@@ -210,7 +366,7 @@ pub(super) struct StatsAggregator {
     pub(super) per_model: HashMap<String, GenerationMetricsState>,
     request_counters: HashMap<String, RequestCounterLifecycle>,
     live_request_count: usize,
-    aggregate_model_state_count: usize,
+    pub(super) aggregate_model_state_count: usize,
     unix_ms_anchor: u64,
     instant_anchor: TokioInstant,
 }
@@ -237,22 +393,17 @@ impl StatsAggregator {
         if self.per_model.contains_key(generation.model_id()) {
             return None;
         }
-        let (metrics, pinned_input_tps) = match initialization {
-            super::collector::ModelStatsInitialization::Empty => {
-                (ModelMetricsState::default(), None)
-            }
-            super::collector::ModelStatsInitialization::ConfiguredInputTps { input_tps, pin } => {
+        let metrics = match initialization {
+            super::collector::ModelStatsInitialization::Empty => ModelMetricsState::default(),
+            super::collector::ModelStatsInitialization::ConfiguredInputTps { input_tps } => {
                 let input_tps_distribution = TpsDistribution::bootstrap(input_tps)
                     .expect("configured input TPS must be positive and finite");
-                (
-                    ModelMetricsState {
-                        last_mean_input_tps: input_tps,
-                        input_tps_distribution,
-                        aggregate_state_counted: true,
-                        ..ModelMetricsState::default()
-                    },
-                    pin.then_some(input_tps),
-                )
+                ModelMetricsState {
+                    last_mean_input_tps: input_tps,
+                    input_tps_distribution,
+                    aggregate_state_counted: true,
+                    ..ModelMetricsState::default()
+                }
             }
         };
         self.aggregate_model_state_count += usize::from(metrics.aggregate_state_counted);
@@ -261,7 +412,6 @@ impl StatsAggregator {
             GenerationMetricsState {
                 generation: generation.clone(),
                 metrics,
-                pinned_input_tps,
             },
         );
         let stats = self.snapshot(generation.model_id());
@@ -350,12 +500,6 @@ impl StatsAggregator {
     }
     pub(super) fn model_state_count(&self) -> usize {
         self.aggregate_model_state_count
-    }
-    pub(super) fn has_request_counter(&self, request_id: &str) -> bool {
-        matches!(
-            self.request_counters.get(request_id),
-            Some(RequestCounterLifecycle::Live(_))
-        )
     }
     pub(super) fn remember_request_owner(
         &mut self,
@@ -649,7 +793,6 @@ impl StatsAggregator {
                 dirty |= apply_input_throughput_sample(
                     config,
                     model_state,
-                    generation_state.pinned_input_tps,
                     InputThroughputSample {
                         units,
                         duration,
@@ -784,7 +927,7 @@ impl StatsAggregator {
     }
 }
 
-fn aggregate_model_state<'a>(
+pub(super) fn aggregate_model_state<'a>(
     per_model: &'a mut HashMap<String, GenerationMetricsState>,
     aggregate_model_state_count: &mut usize,
     model_id: &str,
@@ -805,7 +948,6 @@ fn adjust_live_count(count: &mut usize, delta: isize) {
 pub(super) fn apply_input_throughput_sample(
     config: &StatsCollectorConfig,
     model_state: &mut ModelMetricsState,
-    pinned_input_tps: Option<f64>,
     sample: InputThroughputSample,
 ) -> bool {
     if sample.units < config.min_input_tokens {
@@ -826,11 +968,10 @@ pub(super) fn apply_input_throughput_sample(
     {
         return false;
     }
-    let last_mean_input_tps = pinned_input_tps.unwrap_or(mean_input_tps);
-    if model_state.last_mean_input_tps == last_mean_input_tps {
+    if model_state.last_mean_input_tps == mean_input_tps {
         return false;
     }
-    model_state.last_mean_input_tps = last_mean_input_tps;
+    model_state.last_mean_input_tps = mean_input_tps;
     true
 }
 
@@ -906,18 +1047,31 @@ impl ModelMetricsState {
 
     pub(super) fn stats_labels(&self) -> (Vec<String>, Vec<String>) {
         // Labels are sticky capabilities observed over the model state's lifetime.
-        [
-            self.chunk_usage_stats_observed
-                .then_some(("request.output.chunk_usage", "chunk_usage")),
-            self.engine_stream_stats_observed
-                .then_some(("model.throughput.engine_stream", ENGINE_STATS_SOURCE)),
-            self.kv_cache_stats_observed
-                .then_some(("machine.kv_cache.http", "kv_cache_stats")),
-        ]
-        .into_iter()
-        .flatten()
-        .map(|(capability, source)| (capability.to_owned(), source.to_owned()))
-        .unzip()
+        let mut capabilities = vec!["request.load.proxy_local".to_string()];
+        let mut sources = Vec::new();
+        for (observed, capability, source) in [
+            (
+                self.chunk_usage_stats_observed,
+                "request.output.chunk_usage",
+                "chunk_usage",
+            ),
+            (
+                self.engine_stream_stats_observed,
+                "model.throughput.engine_stream",
+                ENGINE_STATS_SOURCE,
+            ),
+            (
+                self.kv_cache_stats_observed,
+                "machine.kv_cache.http",
+                "kv_cache_stats",
+            ),
+        ] {
+            if observed {
+                capabilities.push(capability.to_string());
+                sources.push(source.to_string());
+            }
+        }
+        (capabilities, sources)
     }
 }
 

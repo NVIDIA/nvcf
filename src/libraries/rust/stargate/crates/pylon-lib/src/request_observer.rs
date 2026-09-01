@@ -139,6 +139,8 @@ struct BackendPhaseData {
     first_token_at: Option<Instant>,
     output_messages: u64,
     output_tokens: u64,
+    raw_output_units: u64,
+    last_exact_output_tokens: Option<u64>,
     output_tokens_explicit: bool,
     output_tokens_from_chunk_usage: bool,
 }
@@ -150,6 +152,7 @@ pub(crate) struct RequestObserver {
     routing_key: Option<String>,
     model_id: String,
     priority: u32,
+    request_input_tokens: u64,
     input_tokens: u64,
     input_tokens_explicit: bool,
     generation: Option<ModelGeneration>,
@@ -181,6 +184,7 @@ impl RequestObserver {
             routing_key,
             model_id,
             priority,
+            request_input_tokens: input_tokens,
             input_tokens,
             input_tokens_explicit: false,
             generation,
@@ -213,6 +217,8 @@ impl RequestObserver {
             first_token_at: None,
             output_messages: 0,
             output_tokens: 0,
+            raw_output_units: 0,
+            last_exact_output_tokens: None,
             output_tokens_explicit: false,
             output_tokens_from_chunk_usage: false,
         });
@@ -229,10 +235,16 @@ impl RequestObserver {
         self.emit();
     }
 
-    pub(crate) fn observe_generated_output(&mut self, observed_at: Instant, token_bearing: bool) {
+    pub(crate) fn observe_generated_output(
+        &mut self,
+        observed_at: Instant,
+        token_bearing: bool,
+        raw_output_units: u64,
+    ) {
         let backend = Self::backend_mut(&mut self.state, &self.request_id, "output observation");
         backend.output_messages = backend.output_messages.saturating_add(1);
         backend.first_generated_output_at.get_or_insert(observed_at);
+        backend.raw_output_units = raw_output_units;
         if token_bearing {
             backend.first_token_at.get_or_insert(observed_at);
         }
@@ -272,20 +284,17 @@ impl RequestObserver {
         self.emit();
     }
 
-    pub(crate) fn observe_output_tokens(&mut self, output_tokens: u64) {
-        if output_tokens == 0 {
-            return;
-        }
-
+    pub(crate) fn observe_estimated_output_tokens_total(&mut self, output_tokens: u64) {
         let backend = Self::backend_mut(
             &mut self.state,
             &self.request_id,
             "output token observation",
         );
-        if backend.output_tokens_explicit {
+        if backend.output_tokens == output_tokens && !backend.output_tokens_explicit {
             return;
         }
-        backend.output_tokens = backend.output_tokens.saturating_add(output_tokens);
+        backend.output_tokens = output_tokens;
+        backend.output_tokens_explicit = false;
         self.emit();
     }
 
@@ -308,10 +317,13 @@ impl RequestObserver {
             &self.request_id,
             "output token observation",
         );
-        if backend.output_tokens_explicit && output_tokens < backend.output_tokens {
+        if backend
+            .last_exact_output_tokens
+            .is_some_and(|prior| output_tokens < prior)
+        {
             tracing::warn!(
                 request_id = self.request_id,
-                prior_output_tokens = backend.output_tokens,
+                prior_output_tokens = backend.last_exact_output_tokens,
                 output_tokens_generated_so_far = output_tokens,
                 "ignoring regressing explicit output token counter"
             );
@@ -326,6 +338,7 @@ impl RequestObserver {
         }
         let should_emit = output_tokens > 0 || output_tokens != backend.output_tokens;
         backend.output_tokens = output_tokens;
+        backend.last_exact_output_tokens = Some(output_tokens);
         backend.output_tokens_explicit = true;
         backend.output_tokens_from_chunk_usage = chunk_usage_observed;
         if emit_live_update && should_emit {
@@ -417,6 +430,9 @@ impl RequestObserver {
             observation,
             self.generation.clone(),
             input_interval,
+            self.request_input_tokens,
+            self.input_tokens_explicit,
+            backend.map_or(0, |backend| backend.raw_output_units),
             backend
                 .and_then(|backend| backend.last_upstream_event_at)
                 .map(|instant| instant.saturating_duration_since(self.started_at)),
@@ -530,7 +546,7 @@ mod tests {
         }
 
         fn observe_output_message(&mut self) {
-            self.observe_generated_output(Instant::now(), true);
+            self.observe_generated_output(Instant::now(), true, 0);
         }
 
         fn finish(&mut self) {
@@ -898,7 +914,7 @@ mod tests {
         assert_eq!(headers.input_interval(), None);
 
         let first_generated_output_at = submitted_at + Duration::from_millis(10);
-        observer.observe_generated_output(first_generated_output_at, true);
+        observer.observe_generated_output(first_generated_output_at, true, 1);
         let output = rx.try_recv().unwrap();
         assert_eq!(
             output.input_interval(),
@@ -907,7 +923,12 @@ mod tests {
                 first_generated_output_at,
             })
         );
-        observer.observe_output_tokens(2);
+        assert_eq!(
+            output.input_processing_duration(),
+            Some(Duration::from_millis(10))
+        );
+
+        observer.observe_estimated_output_tokens_total(2);
         let tokens = rx.try_recv().unwrap();
         assert_eq!(tokens.input_interval(), output.input_interval());
 
@@ -986,14 +1007,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn accumulates_output_tokens() {
+    async fn tracks_cumulative_estimated_output_tokens() {
         let mut observer = test_observer("req-1", PylonRuntimeState::default());
         observer.submit_now();
         observer.on_upstream_response_headers(200);
         observer.observe_output_message();
-        observer.observe_output_tokens(3);
+        observer.observe_estimated_output_tokens_total(3);
         observer.observe_output_message();
-        observer.observe_output_tokens(2);
+        observer.observe_estimated_output_tokens_total(5);
         observer.finish();
 
         let response = response(&observer);
@@ -1005,7 +1026,7 @@ mod tests {
     async fn output_tokens_alone_do_not_start_real_ttft() {
         let (mut observer, rx, _) = responding_observer("req-token").await;
 
-        observer.observe_output_tokens(3);
+        observer.observe_estimated_output_tokens_total(3);
         let token_observation = recv_observation(&rx, "token observation should be emitted").await;
         assert_eq!(
             token_observation.state,
@@ -1020,7 +1041,7 @@ mod tests {
     async fn modal_output_starts_first_output_without_claiming_a_first_token() {
         let (mut observer, rx, _) = responding_observer("req-modal-output").await;
 
-        observer.observe_generated_output(Instant::now(), false);
+        observer.observe_generated_output(Instant::now(), false, 0);
         let output = recv_observation(&rx, "modal output observation should be emitted").await;
 
         assert_eq!(output.state, RequestObservationState::OutputGeneration);
@@ -1030,14 +1051,49 @@ mod tests {
 
     #[tokio::test]
     async fn exact_input_usage_updates_tokens_without_starting_output() {
-        let (mut observer, rx, _) = responding_observer("req-input-usage").await;
+        let (runtime_state, rx) = PylonRuntimeState::observed(
+            InferenceServerStatus::Unknown,
+            &["model-a".to_string()],
+            8,
+            None,
+        );
+        let runtime_snapshot = runtime_state.clone();
+        let generation = runtime_state.current_generation("model-a");
+        let mut observer = RequestObserver::from_required(
+            RequestObservationEndpoint::ChatCompletions,
+            validate_required_tunnel_headers(&request_headers("req-input-usage", 42))
+                .expect("test headers should validate"),
+            generation,
+            runtime_state,
+        );
+        let initial = rx
+            .recv_async()
+            .await
+            .expect("initial observation should be emitted");
+        assert!(!initial.input_tokens_explicit());
+        observer.submit_now();
+        recv_observation(&rx, "backend-submission observation should be emitted").await;
+        observer.on_upstream_response_headers(&HeaderMap::new(), 200);
+        recv_observation(&rx, "response-header observation should be emitted").await;
 
         observer.observe_input_tokens_total(7);
-        let usage = recv_observation(&rx, "input usage observation should be emitted").await;
+        let usage = rx
+            .recv_async()
+            .await
+            .expect("input usage observation should be emitted");
+        assert!(usage.input_tokens_explicit());
+        let usage = usage.into_observation();
         assert_eq!(usage.state, RequestObservationState::InputProcessing);
         assert_eq!(usage.input_tokens, 7);
         assert_eq!(usage.time_to_first_output, None);
         assert_eq!(usage.time_to_first_token, None);
+        assert_eq!(
+            runtime_snapshot
+                .snapshot_live_model("model-a")
+                .total_query_input_size,
+            42,
+            "exact response usage must not replace request-side live queue work"
+        );
     }
 
     #[tokio::test]
@@ -1064,7 +1120,7 @@ mod tests {
         assert_eq!(header_observation.output_tokens, 0);
         assert!(!header_observation.output_tokens_explicit);
 
-        observer.observe_output_tokens(3);
+        observer.observe_estimated_output_tokens_total(3);
         let estimated_observation =
             recv_observation(&rx, "fallback token observation should be emitted").await;
         assert_eq!(
@@ -1080,7 +1136,7 @@ mod tests {
     async fn explicit_output_counter_corrects_prior_estimated_tokens() {
         let (mut observer, rx, _) = responding_observer("req-explicit-output").await;
 
-        observer.observe_output_tokens(5);
+        observer.observe_estimated_output_tokens_total(5);
         let estimated =
             recv_observation(&rx, "estimated token observation should be emitted").await;
         assert_eq!(estimated.output_tokens, 5);
@@ -1098,11 +1154,16 @@ mod tests {
             "repeated explicit counters with no value change should not emit"
         );
 
-        observer.observe_output_tokens(10);
-        assert!(
-            rx.is_empty(),
-            "fallback deltas should not emit after explicit counters"
-        );
+        observer.observe_estimated_output_tokens_total(10);
+        let estimated_tail =
+            recv_observation(&rx, "estimated tail observation should be emitted").await;
+        assert_eq!(estimated_tail.output_tokens, 10);
+        assert!(!estimated_tail.output_tokens_explicit);
+
+        observer.observe_output_tokens_generated_so_far(4);
+        let corrected = recv_observation(&rx, "later exact usage should reconcile the tail").await;
+        assert_eq!(corrected.output_tokens, 4);
+        assert!(corrected.output_tokens_explicit);
     }
 
     #[tokio::test]
@@ -1164,11 +1225,11 @@ mod tests {
             "zero-token chunk usage before output should not emit a duplicate live update"
         );
 
-        observer.observe_output_tokens(3);
-        assert!(
-            rx.is_empty(),
-            "fallback token estimates should not emit after chunk usage becomes explicit"
-        );
+        observer.observe_estimated_output_tokens_total(3);
+        let estimated_tail =
+            recv_observation(&rx, "estimated tail should continue after sparse usage").await;
+        assert_eq!(estimated_tail.output_tokens, 3);
+        assert!(!estimated_tail.output_tokens_explicit);
 
         observer.observe_output_tokens_generated_so_far(4);
         let explicit = recv_observation(&rx, "positive chunk usage should be emitted").await;
@@ -1206,6 +1267,8 @@ mod tests {
             first_token_at: None,
             output_messages: 0,
             output_tokens: 5,
+            raw_output_units: 0,
+            last_exact_output_tokens: Some(5),
             output_tokens_explicit: true,
             output_tokens_from_chunk_usage: true,
         });
@@ -1238,11 +1301,13 @@ mod tests {
             first_token_at: Some(first_output_at),
             output_messages: 2,
             output_tokens: 0,
+            raw_output_units: 0,
+            last_exact_output_tokens: None,
             output_tokens_explicit: false,
             output_tokens_from_chunk_usage: false,
         });
 
-        observer.observe_output_tokens(7);
+        observer.observe_estimated_output_tokens_total(7);
 
         let response = response(&observer);
         assert_eq!(response.first_generated_output_at, Some(first_output_at));

@@ -725,7 +725,6 @@ fn rendered_pylons_include_per_algorithm_queue_admission_args() {
             "- --disable-bringup",
             "- --active-canary-interval-ms=0",
             "- --initial-input-tps=100",
-            "- --benchmark-pin-input-tps",
             "- --pylon-queue-mismatch-tolerance-factor=1",
             "- --pylon-queue-mismatch-retry-after-ms=5",
         ],
