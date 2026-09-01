@@ -1460,6 +1460,12 @@ func TestReconcile_ModelCacheSharedFS(t *testing.T) {
 	if assert.NotNil(t, roPVC.Spec.StorageClassName) {
 		assert.Empty(t, *roPVC.Spec.StorageClassName,
 			"a StorageClass here would provision a new empty volume")
+		// Kubernetes refuses to bind a pre-bound pair whose classes disagree,
+		// and nothing in this suite runs the binding controller, so the pair
+		// has to be checked against each other here rather than one side at a
+		// time. The reader PV deep-copies the writer, which carries a class.
+		assert.Equal(t, *roPVC.Spec.StorageClassName, roPV.Spec.StorageClassName,
+			"the pre-bound reader PV and claim must agree on storage class or the claim never binds")
 	}
 	assert.Equal(t, []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany}, roPVC.Spec.AccessModes)
 

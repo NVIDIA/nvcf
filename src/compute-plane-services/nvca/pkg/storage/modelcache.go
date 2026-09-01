@@ -1810,6 +1810,12 @@ func (r *Reconciler) newSharedFSReaderPV(
 	}
 	maps.Copy(roPV.Labels, getClusterWideResourceLabels(stCopy))
 	roPV.Spec.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadOnlyMany}
+	// The reader PV is created statically and pre-bound by claimRef, so no
+	// provisioner is involved and it must carry no class. The claim asks for
+	// no class too; Kubernetes refuses to bind a pre-bound pair whose classes
+	// disagree, so inheriting the writer's class here would leave every reader
+	// claim Pending.
+	roPV.Spec.StorageClassName = ""
 	// Retain so removing one namespace's reader never destroys the cache the
 	// writer populated and other namespaces are still reading.
 	roPV.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
