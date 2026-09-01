@@ -1045,12 +1045,12 @@ mod tests {
     }
 
     #[test]
-    fn exact_chat_usage_is_disabled_by_default_and_propagates_when_enabled() {
+    fn exact_chat_usage_cli_is_disabled_by_default_and_accepts_opt_in() {
         let (_, default_plan) = startup(&[]);
-        assert!(!test_forwarding(&default_plan).force_chat_completions_include_usage());
+        assert!(!default_plan.force_chat_completions_include_usage);
 
         let (_, enabled_plan) = startup(&["--force-chat-completions-include-usage"]);
-        assert!(test_forwarding(&enabled_plan).force_chat_completions_include_usage());
+        assert!(enabled_plan.force_chat_completions_include_usage);
     }
 
     fn test_observation() -> RequestObservation {

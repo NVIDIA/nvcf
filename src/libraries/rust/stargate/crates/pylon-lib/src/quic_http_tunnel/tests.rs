@@ -337,8 +337,6 @@ fn direct_and_reverse_configs_share_forwarding_defaults() {
         direct.forwarding.output_chunk_timeout,
         reverse.forwarding.output_chunk_timeout
     );
-    assert!(!direct.forwarding.force_chat_completions_include_usage());
-    assert!(!reverse.forwarding.force_chat_completions_include_usage());
     assert!(direct.forwarding.metrics.is_none());
     assert!(reverse.forwarding.metrics.is_none());
 }

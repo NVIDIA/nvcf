@@ -168,8 +168,10 @@ impl StatsAggregator {
                             .completed_fallback_outputs
                             .iter()
                             .any(|retained| retained.key == completed.key)
+                            && (completed.output_tokens_explicit
+                                || completed.raw_bootstrap_units > 0)
                             && let Some(output_tps) =
-                                completed_output_tps(config, event, &completed)
+                                observed_output_tps(config, event, completed.output_tokens)
                         {
                             record_sample(
                                 &mut model_state.chat_output_tps_samples,
@@ -236,7 +238,7 @@ impl StatsAggregator {
         let active_chat_output_tps = self
             .config
             .openai_fallback_stats_enabled
-            .then(|| observed_output_tps(&self.config, observation))
+            .then(|| observed_output_tps(&self.config, event, observation.output_tokens))
             .flatten();
         let mut changed_models = event
             .changed_generations
@@ -284,38 +286,17 @@ fn push_changed_model(models: &mut Vec<String>, model_id: String) {
 
 pub(super) fn observed_output_tps(
     config: &StatsCollectorConfig,
-    observation: &RequestObservation,
-) -> Option<f64> {
-    if observation.endpoint == RequestObservationEndpoint::Embeddings
-        || observation.output_tokens < config.min_output_tokens
-    {
-        return None;
-    }
-    tps_for_units(
-        observation.output_tokens,
-        output_decode_duration(
-            observation.total_duration,
-            observation.time_to_first_output,
-            observation.time_to_first_token,
-            config.duration_floor,
-        )?,
-        config.duration_floor,
-    )
-}
-
-fn completed_output_tps(
-    config: &StatsCollectorConfig,
     event: &RequestObservationEvent,
-    completed: &CompletedFallbackOutput,
+    output_tokens: u64,
 ) -> Option<f64> {
     let observation = &event.observation;
-    if completed.output_tokens != observation.output_tokens
-        || (!completed.output_tokens_explicit && completed.raw_bootstrap_units == 0)
+    if observation.endpoint == RequestObservationEndpoint::Embeddings
+        || output_tokens < config.min_output_tokens
     {
         return None;
     }
     tps_for_units(
-        completed.output_tokens,
+        output_tokens,
         output_decode_duration(
             event.output_duration(),
             observation.time_to_first_output,
@@ -324,5 +305,4 @@ fn completed_output_tps(
         )?,
         config.duration_floor,
     )
-    .filter(|_| completed.output_tokens >= config.min_output_tokens)
 }

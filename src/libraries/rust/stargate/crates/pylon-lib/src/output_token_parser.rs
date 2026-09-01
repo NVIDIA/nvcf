@@ -53,8 +53,8 @@ pub(crate) struct EstimatedOutputUpdate {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ExactOutputUpdate {
-    Applied { tokens: u64, delta: u64 },
-    Regressed { prior: u64, observed: u64 },
+    Applied { delta: u64 },
+    Regressed,
 }
 
 #[derive(Debug, Default)]
@@ -97,19 +97,13 @@ impl OutputTokenParser {
         if let Some(prior) = self.exact_baseline
             && completion_tokens < prior
         {
-            return ExactOutputUpdate::Regressed {
-                prior,
-                observed: completion_tokens,
-            };
+            return ExactOutputUpdate::Regressed;
         }
         let delta = completion_tokens.saturating_sub(self.exact_baseline.unwrap_or_default());
         self.exact_baseline = Some(completion_tokens);
         self.estimated_tail_characters = OutputCharacters::default();
         self.displayed_tokens = completion_tokens;
-        ExactOutputUpdate::Applied {
-            tokens: completion_tokens,
-            delta,
-        }
+        ExactOutputUpdate::Applied { delta }
     }
 }
 
@@ -178,10 +172,7 @@ mod tests {
         );
         assert_eq!(
             parser.observe_exact_output_tokens(5),
-            ExactOutputUpdate::Applied {
-                tokens: 5,
-                delta: 5,
-            }
+            ExactOutputUpdate::Applied { delta: 5 }
         );
         assert_eq!(
             parser.observe_generated_characters(text("x")),
@@ -193,10 +184,7 @@ mod tests {
         );
         assert_eq!(
             parser.observe_exact_output_tokens(6),
-            ExactOutputUpdate::Applied {
-                tokens: 6,
-                delta: 1,
-            }
+            ExactOutputUpdate::Applied { delta: 1 }
         );
     }
 
@@ -207,10 +195,7 @@ mod tests {
 
         assert_eq!(
             parser.observe_exact_output_tokens(2),
-            ExactOutputUpdate::Applied {
-                tokens: 2,
-                delta: 2,
-            }
+            ExactOutputUpdate::Applied { delta: 2 }
         );
     }
 
@@ -225,10 +210,7 @@ mod tests {
         );
         assert_eq!(
             parser.observe_exact_output_tokens(5),
-            ExactOutputUpdate::Applied {
-                tokens: 5,
-                delta: 5,
-            }
+            ExactOutputUpdate::Applied { delta: 5 }
         );
         assert_eq!(
             parser
@@ -238,10 +220,7 @@ mod tests {
         );
         assert_eq!(
             parser.observe_exact_output_tokens(6),
-            ExactOutputUpdate::Applied {
-                tokens: 6,
-                delta: 1,
-            }
+            ExactOutputUpdate::Applied { delta: 1 }
         );
     }
 
@@ -253,17 +232,11 @@ mod tests {
 
         assert_eq!(
             parser.observe_exact_output_tokens(4),
-            ExactOutputUpdate::Regressed {
-                prior: 5,
-                observed: 4,
-            }
+            ExactOutputUpdate::Regressed
         );
         assert_eq!(
             parser.observe_exact_output_tokens(7),
-            ExactOutputUpdate::Applied {
-                tokens: 7,
-                delta: 2,
-            }
+            ExactOutputUpdate::Applied { delta: 2 }
         );
     }
 

@@ -144,10 +144,6 @@ impl TunnelForwardingConfig {
         self.runtime_state
             .set_force_chat_completions_include_usage(enabled);
     }
-
-    pub fn force_chat_completions_include_usage(&self) -> bool {
-        self.runtime_state.force_chat_completions_include_usage()
-    }
 }
 
 #[derive(Clone)]
@@ -178,8 +174,9 @@ impl TunnelServerApp {
         upstream_http_base_url: String,
         forwarding: TunnelForwardingConfig,
     ) -> Self {
-        let force_chat_completions_include_usage =
-            forwarding.force_chat_completions_include_usage();
+        let force_chat_completions_include_usage = forwarding
+            .runtime_state
+            .force_chat_completions_include_usage();
         Self {
             http_client: Client::new(),
             inference_server_id,
@@ -479,13 +476,15 @@ impl TunnelRequestLifecycle {
             }
             if let Some(output_tokens) = exact_usage.output_tokens {
                 match parser.observe_exact_output_tokens(output_tokens) {
-                    ExactOutputUpdate::Applied { tokens, delta } => {
-                        obs.observe_output_tokens_generated_so_far(tokens);
-                        quality_progress =
-                            Some(RequestOutputTokenProgress::Cumulative { tokens, delta });
+                    ExactOutputUpdate::Applied { delta } => {
+                        obs.observe_output_tokens_generated_so_far(output_tokens);
+                        quality_progress = Some(RequestOutputTokenProgress::Cumulative {
+                            tokens: output_tokens,
+                            delta,
+                        });
                     }
-                    ExactOutputUpdate::Regressed { observed, .. } => {
-                        obs.observe_output_tokens_generated_so_far(observed);
+                    ExactOutputUpdate::Regressed => {
+                        obs.observe_output_tokens_generated_so_far(output_tokens);
                     }
                 }
             }
