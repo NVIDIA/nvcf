@@ -17,15 +17,14 @@
 package com.nvidia.nvcf.rest.misc.dto;
 
 import io.swagger.v3.oas.annotations.media.Schema;
-import jakarta.validation.constraints.NotEmpty;
-import java.util.List;
+import jakarta.validation.constraints.NotNull;
 import java.util.UUID;
 import lombok.Builder;
 
 @Builder
-@Schema(description = "Response body containing the ICMS request IDs")
+@Schema(description = "Response body containing the ICMS request ID")
 public record RolloverWorkersResponse (
-        @Schema(description = "The ICMS request IDs")
-        @NotEmpty
+        @Schema(description = "The ICMS request ID")
+        @NotNull
         UUID icmsRequestId) {
 }
