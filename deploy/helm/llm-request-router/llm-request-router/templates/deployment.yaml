@@ -145,11 +145,12 @@ spec:
             {{- with dig "readiness" "warmupMs" "" .Values.llmRequestRouter }}
             - --readiness-warmup-ms={{ . }}
             {{- end }}
-            {{- if hasKey (dig "readiness" dict .Values.llmRequestRouter) "stabilizationSampleIntervalMs" }}
-            - --readiness-stabilization-sample-interval-ms={{ dig "readiness" "stabilizationSampleIntervalMs" 0 .Values.llmRequestRouter }}
+            {{- $readiness := dig "readiness" dict .Values.llmRequestRouter }}
+            {{- if and (hasKey $readiness "stabilizationSampleIntervalMs") (ne (get $readiness "stabilizationSampleIntervalMs") nil) }}
+            - --readiness-stabilization-sample-interval-ms={{ get $readiness "stabilizationSampleIntervalMs" }}
             {{- end }}
-            {{- if hasKey (dig "readiness" dict .Values.llmRequestRouter) "stabilizationWindow" }}
-            - --readiness-stabilization-window={{ dig "readiness" "stabilizationWindow" 0 .Values.llmRequestRouter }}
+            {{- if and (hasKey $readiness "stabilizationWindow") (ne (get $readiness "stabilizationWindow") nil) }}
+            - --readiness-stabilization-window={{ get $readiness "stabilizationWindow" }}
             {{- end }}
             - --quic-connect-timeout-ms={{ .Values.llmRequestRouter.transport.quicConnectTimeoutMs }}
             - --quic-request-timeout-ms={{ .Values.llmRequestRouter.transport.quicRequestTimeoutMs }}

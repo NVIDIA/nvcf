@@ -87,12 +87,13 @@ Use each MockDC Kubernetes cluster name as its logical MockDC cluster ID. This k
 - Each MockDC Pod contains one MockDynamo container and one Pylon sidecar.
 - Pylons in one MockDC have unique inference-server IDs and the same cluster ID.
 - Both MockDCs serve the same regional test model so Stargate sees two logical clusters and four backends.
+- All four Pylons use one regional routing key and worker token so Stargate, not the client, selects between MockDC clusters.
 - The two MockDC cluster IDs in a region are their distinct Kubernetes cluster names.
 - All four regional Pylon inference-server IDs are unique and derived as `{cluster_id}-backend-{0,1}`.
 - Every image is pinned to an immutable digest.
 - The auth fixture is deployed only by this dev stack and is never included in a production Stargate image or chart.
 - Auth credentials are cryptographically random, generated once for a regional deployment, and unchanged for the lifetime of that deployment.
-- The auth fixture reads an immutable Secret once at startup and has no mutation or reload API.
+- The auth fixture reads its credential Secret once at startup and has no mutation or reload API.
 - No credential value is committed in chart defaults, environment files, or Helmfile state, or passed through a command-line argument.
 - Every Helm release names its kube context explicitly.
 - A region deploys and verifies its Stargate plane before either MockDC is deployed.
@@ -166,7 +167,7 @@ Configure:
 - Backend-router Prometheus scrape annotations for `/metrics` on port 8080
 - Reverse backend connectivity
 - Regional advertised hostname template
-- Regional load-balancer configuration
+- Regional load-balancer configuration with `groq-multiregion`, the compatibility name for `WaitAndWiden`
 - TLS from an existing Secret
 - `vault.noVaultAnnotations: true`
 - Worker-auth caller credentials from an existing Secret
@@ -239,7 +240,7 @@ Use one replica. Do not add a PDB; high availability for this dev fixture is not
 
 Extend the existing worker-only fixture into a clearly named `stargate-dev-auth` binary instead of deploying the full NVCF API. Build a dedicated `stargate-dev-auth-runtime` image target. Do not copy the binary into the production Stargate runtime image or publish it through the production release path.
 
-Keep the chart under `deploy/stacks/stargate-dev/charts`. It creates only the dev auth Deployment, ClusterIP Service, NetworkPolicy, ServiceAccount, and immutable Secret. Only Stargate and LLM API Gateway Pods may reach its gRPC port. Do not create a reusable production chart or expose the Service through an NLB or ingress.
+Keep the chart under `deploy/stacks/stargate-dev/charts`. It creates only the dev auth Deployment, ClusterIP Service, NetworkPolicy, ServiceAccount, and `stargate-dev-auth-credentials` Secret. Only Stargate and LLM API Gateway Pods may reach its gRPC port. Do not create a reusable production chart or expose the Service through an NLB or ingress.
 
 The fixture reads one JSON document from the mounted Secret at startup:
 
@@ -267,11 +268,11 @@ Both RPCs require the configured service token in gRPC bearer metadata. `AuthLlm
 
 The absence of model specifications intentionally permits any mock model and disables per-model token limits. Do not add configuration for fields without a concrete dev scenario.
 
-Generate the service, client, and worker tokens from 32 random bytes during the first regional deployment. The deployment wrapper writes the generated credential bundle only to an operator-selected, permission-restricted file and sets `STARGATE_DEV_CREDENTIALS_FILE` while invoking Helmfile. Helmfile reads that file directly and passes each release only the fields it needs. It never prints credential values or places them in an argument. Helm creates immutable Secrets in the Stargate and MockDC clusters containing only the credentials needed by each workload. The credentials also exist in Helm release metadata, so access to Helm release Secrets must be restricted with Kubernetes RBAC.
+Generate the service, client, and one shared regional worker token from 32 random bytes during the first regional deployment. The deployment wrapper writes the generated credential bundle only to an operator-selected, permission-restricted file and sets `STARGATE_DEV_CREDENTIALS_FILE` while invoking Helmfile. Helmfile reads that file directly and passes each release only the fields it needs. It never prints credential values or places them in an argument. Helm creates credential Secrets in the Stargate and MockDC clusters containing only the credentials needed by each workload. The credentials also exist in Helm release metadata, so access to Helm release Secrets must be restricted with Kubernetes RBAC.
 
-The dev auth chart owns the Stargate-cluster Secret. It stores the fixture configuration and the service-token JSON consumed by Stargate and the LLM API Gateway. Each MockDC chart owns an immutable Secret containing only the worker token needed by its Pylon Pods. The existing charts consume these chart-owned Secrets through their existing-Secret interfaces; they do not own or duplicate the credentials.
+The dev auth chart owns `stargate-dev-auth-credentials`. It stores the fixture configuration and the service-token JSON consumed by Stargate and the LLM API Gateway. Each MockDC chart owns a `*-worker-credentials` Secret containing the same regional worker token needed by its Pylon Pods. The existing charts consume these chart-owned Secrets through their existing-Secret interfaces; they do not own or duplicate the credentials.
 
-The fixture reads its Secret once and does not watch for changes. Repeated applies must reuse the same credential bundle. The deployment wrapper refuses to replace an existing credential Secret with different data. Rotation requires an explicit new Secret name and workload rollout and is outside the initial deployment workflow.
+The fixture reads its Secret once and does not watch for changes. Repeated applies must reuse the same credential bundle. The deployment wrapper refuses to continue when an existing credential Secret contains different data. Rotation requires a workload rollout and is outside the initial deployment workflow.
 
 ### `stargate-dev-mockdc`
 
@@ -289,7 +290,7 @@ The chart configures:
 - Shared test model
 - Regional Stargate router address
 - Reverse connectivity
-- Chart-owned immutable worker-token Secret populated from the regional deployment credential bundle
+- Chart-owned worker-token Secret populated from the regional deployment credential bundle
 - MockDynamo timing and capacity settings
 - Pylon metrics on port 9089
 - Readiness, liveness, resource, and security settings
@@ -409,8 +410,8 @@ The stable UID and overwrite operation make rerunning the script the recovery pa
 
 Use Helmfile directly for lint, template, diff, and status. Keep `scripts/deploy.py` limited to the two operations that need additional safety logic:
 
-- `init` generates one immutable regional credential bundle and refuses to overwrite a file.
-- `apply` verifies the AWS account, cluster ARNs, kube contexts, and credential Secret immutability before invoking Helmfile for one phase. Before `phase=mockdc`, it also verifies the Stargate endpoint.
+- `init` generates one fixed regional credential bundle and refuses to overwrite a file.
+- `apply` verifies the AWS account, cluster ARNs, kube contexts, and existing credential Secret values before invoking Helmfile for one phase. Before `phase=mockdc`, it also verifies the Stargate endpoint.
 
 Helmfile reads the credential bundle path from `STARGATE_DEV_CREDENTIALS_FILE`. Direct diff commands must use `--suppress-secrets`. Direct template commands write to a permission-restricted output directory rather than stdout; static CI rendering uses disposable credentials, not a deployed regional bundle.
 
@@ -437,7 +438,7 @@ Safety behavior:
 - Never use the current kube context implicitly.
 - Verify the configured cluster name, AWS account, AWS region, EKS cluster ARN, Kubernetes version, node shape, and CS-Admin access before an apply.
 - Generate credentials only when explicitly initializing a new regional deployment, store the bundle with mode `0600`, and reuse it on every later apply.
-- Refuse to overwrite a credential bundle or immutable in-cluster Secret during an ordinary apply.
+- Refuse to overwrite a credential bundle or apply credentials that differ from an existing in-cluster Secret.
 - Run static validation before applying.
 - Use Helm atomic upgrades with readiness waiting.
 - Deploy one region at a time and stop on the first failure.

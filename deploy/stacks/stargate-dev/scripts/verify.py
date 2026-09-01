@@ -98,8 +98,8 @@ def verify_router_metrics(config: dict) -> None:
     if len(pod_list) != 3:
         raise VerificationError(f"found {len(pod_list)} Stargate Pods; expected 3")
     expected = {
-        (mockdc["name"], config["modelName"]): 2.0
-        for mockdc in config["clusters"]["mockdcs"]
+        (config["routingKey"], config["modelName"]): 2.0
+        * len(config["clusters"]["mockdcs"])
     }
     for pod in pod_list:
         name = pod["metadata"]["name"]

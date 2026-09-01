@@ -81,15 +81,12 @@ def require_tools(*names: str) -> None:
         raise DeploymentError(f"required command not found: {', '.join(missing)}")
 
 
-def credential_values(config: dict, credentials: dict) -> list[str]:
-    values = [credentials.get("serviceToken"), credentials.get("clientToken")]
-    workers = credentials.get("workers")
-    if not isinstance(workers, dict):
-        raise DeploymentError("credential bundle workers must be an object")
-    expected_workers = {mockdc["name"] for mockdc in config["clusters"]["mockdcs"]}
-    if set(workers) != expected_workers:
-        raise DeploymentError("credential bundle worker names do not match the region")
-    values.extend(workers[name] for name in sorted(workers))
+def credential_values(credentials: dict) -> list[str]:
+    values = [
+        credentials.get("serviceToken"),
+        credentials.get("clientToken"),
+        credentials.get("workerToken"),
+    ]
     if any(not isinstance(value, str) or len(value) < 32 for value in values):
         raise DeploymentError("credential bundle contains an invalid token")
     if len(set(values)) != len(values):
@@ -112,12 +109,12 @@ def load_credentials(path: Path, config: dict) -> dict:
         raise DeploymentError("credential bundle must contain a JSON object")
     if credentials.get("region") != config["region"]:
         raise DeploymentError("credential bundle region does not match")
-    credential_values(config, credentials)
+    credential_values(credentials)
     return credentials
 
 
 def init_credentials(region: str, path: Path) -> None:
-    config = load_region(region)
+    load_region(region)
     path = path.expanduser().resolve()
     if not path.parent.is_dir():
         raise DeploymentError(
@@ -127,10 +124,7 @@ def init_credentials(region: str, path: Path) -> None:
         "region": region,
         "serviceToken": secrets.token_urlsafe(32),
         "clientToken": secrets.token_urlsafe(32),
-        "workers": {
-            mockdc["name"]: secrets.token_urlsafe(32)
-            for mockdc in config["clusters"]["mockdcs"]
-        },
+        "workerToken": secrets.token_urlsafe(32),
     }
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
@@ -368,28 +362,23 @@ def require_secret(context: str, namespace: str, name: str, keys: set[str]) -> N
         decoded_secret_data(secret, key)
 
 
-def verify_chart_secret_immutability(
-    config: dict, credentials: dict, phase: str
-) -> None:
+def verify_chart_secret_values(config: dict, credentials: dict, phase: str) -> None:
     namespace = config["namespace"]
     stargate_context = config["clusters"]["stargate"]["kubeContext"]
     if phase == "stargate":
-        auth = get_secret(stargate_context, namespace, "stargate-dev-auth")
+        auth = get_secret(
+            stargate_context, namespace, "stargate-dev-auth-credentials"
+        )
         if auth is not None:
-            if auth.get("immutable") is not True:
-                raise DeploymentError(
-                    "existing stargate-dev-auth Secret is not immutable"
-                )
             actual_config = json.loads(decoded_secret_data(auth, "config.json"))
             expected_config = {
                 "serviceToken": credentials["serviceToken"],
                 "clientToken": credentials["clientToken"],
                 "workers": [
                     {
-                        "token": credentials["workers"][mockdc["name"]],
-                        "routingKey": mockdc["name"],
+                        "token": credentials["workerToken"],
+                        "routingKey": config["routingKey"],
                     }
-                    for mockdc in config["clusters"]["mockdcs"]
                 ],
             }
             actual_service = json.loads(decoded_secret_data(auth, "service-token.json"))
@@ -397,7 +386,8 @@ def verify_chart_secret_immutability(
                 "nvcfApiToken": credentials["serviceToken"]
             }:
                 raise DeploymentError(
-                    "existing stargate-dev-auth Secret does not match the credential bundle"
+                    "existing stargate-dev-auth-credentials Secret does not match "
+                    "the credential bundle"
                 )
         return
 
@@ -405,15 +395,13 @@ def verify_chart_secret_immutability(
         return
 
     for mockdc in config["clusters"]["mockdcs"]:
-        name = f"{mockdc['name']}-stargate-dev-mockdc-worker"
+        name = f"{mockdc['name']}-stargate-dev-mockdc-worker-credentials"
         worker = get_secret(mockdc["kubeContext"], namespace, name)
         if worker is None:
             continue
-        if worker.get("immutable") is not True:
-            raise DeploymentError(f"existing {name} Secret is not immutable")
         if (
             decoded_secret_data(worker, "token").decode()
-            != credentials["workers"][mockdc["name"]]
+            != credentials["workerToken"]
         ):
             raise DeploymentError(
                 f"existing {name} Secret does not match the credential bundle"
@@ -558,7 +546,7 @@ def apply(
     for cluster in clusters:
         verify_cluster(cluster, config, account, contexts)
     if credentials is not None:
-        verify_chart_secret_immutability(config, credentials, phase)
+        verify_chart_secret_values(config, credentials, phase)
     verify_prerequisite_resources(config, phase)
     if phase == "mockdc":
         verify_stargate_endpoint(config)

@@ -18,13 +18,12 @@ class MetricParsingTests(unittest.TestCase):
     def test_active_backend_metrics_are_keyed_by_routing_key_and_model(self) -> None:
         metrics = """
 # HELP stargate_active_inference_servers Active inference servers
-stargate_active_inference_servers{model="dev-model",routing_key="mockdc-a"} 2
-stargate_active_inference_servers{model="dev-model",routing_key="mockdc-b"} 2
+stargate_active_inference_servers{model="dev-model",routing_key="stargate-dev"} 4
 """
 
         self.assertEqual(
             VERIFY.parse_active_backends(metrics),
-            {("mockdc-a", "dev-model"): 2.0, ("mockdc-b", "dev-model"): 2.0},
+            {("stargate-dev", "dev-model"): 4.0},
         )
 
 

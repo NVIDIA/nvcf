@@ -41,10 +41,17 @@ class DeploymentInitTests(unittest.TestCase):
 
             credentials = json.loads(first)
             self.assertEqual(credentials["region"], "us-west-2")
+            self.assertGreaterEqual(len(credentials["workerToken"]), 32)
             self.assertEqual(
-                set(credentials["workers"]), {"mockdc-usw2-a", "mockdc-usw2-b"}
+                len(
+                    {
+                        credentials["serviceToken"],
+                        credentials["clientToken"],
+                        credentials["workerToken"],
+                    }
+                ),
+                3,
             )
-            self.assertEqual(len(set(credentials["workers"].values())), 2)
 
             repeated = subprocess.run(
                 command, cwd=STACK_DIR, capture_output=True, text=True
@@ -65,10 +72,7 @@ class RenderedStackTests(unittest.TestCase):
             "region": "us-west-2",
             "serviceToken": "service-test-token-that-is-long-enough",
             "clientToken": "client-test-token-that-is-long-enough-00",
-            "workers": {
-                "mockdc-usw2-a": "worker-a-test-token-that-is-long-enough",
-                "mockdc-usw2-b": "worker-b-test-token-that-is-long-enough",
-            },
+            "workerToken": "shared-worker-test-token-that-is-long-enough",
         }
         credential_path = root / "credentials.json"
         credential_path.write_text(json.dumps(cls.credentials), encoding="utf-8")
@@ -159,6 +163,56 @@ class RenderedStackTests(unittest.TestCase):
         self.assertEqual(replicas["stargate-dev-auth"], 1)
         self.assertEqual(replicas["llm-request-router"], 3)
         self.assertEqual(replicas["llm-request-router-backend-router"], 3)
+
+        auth_secret = next(
+            resource
+            for _, resource in self.resources("Secret")
+            if resource["metadata"]["name"] == "stargate-dev-auth-credentials"
+        )
+        auth_config = json.loads(auth_secret["stringData"]["config.json"])
+        self.assertEqual(
+            auth_config["workers"],
+            [
+                {
+                    "token": self.credentials["workerToken"],
+                    "routingKey": "stargate-dev",
+                }
+            ],
+        )
+
+        mockdc_worker_secrets = [
+            resource
+            for _, resource in self.resources("Secret")
+            if resource["metadata"]["name"].endswith("-mockdc-worker-credentials")
+        ]
+        self.assertEqual(len(mockdc_worker_secrets), 2)
+        self.assertEqual(
+            {secret["stringData"]["token"] for secret in mockdc_worker_secrets},
+            {self.credentials["workerToken"]},
+        )
+
+        router = next(
+            resource
+            for _, resource in deployments
+            if resource["metadata"]["name"] == "llm-request-router"
+        )
+        router_args = router["spec"]["template"]["spec"]["containers"][0]["args"]
+        self.assertIn(
+            "--lb-config-path=/etc/llm-request-router/lb-config.json",
+            router_args,
+        )
+        self.assertFalse(
+            any(arg.startswith("--readiness-stabilization-") for arg in router_args)
+        )
+        load_balancer_config = next(
+            resource
+            for _, resource in self.resources("ConfigMap")
+            if resource["metadata"]["name"] == "llm-request-router-lb"
+        )
+        self.assertEqual(
+            json.loads(load_balancer_config["data"]["lb-config.json"]),
+            {"default": "groq-multiregion"},
+        )
 
         backend_router = next(
             resource
@@ -261,7 +315,7 @@ class RenderedStackTests(unittest.TestCase):
             for token in [
                 self.credentials["serviceToken"],
                 self.credentials["clientToken"],
-                *self.credentials["workers"].values(),
+                self.credentials["workerToken"],
             ]:
                 if token in text:
                     self.assertIn(path, secret_files)
@@ -273,7 +327,7 @@ class RenderedStackTests(unittest.TestCase):
         )
         volumes = router_deployment["spec"]["template"]["spec"]["volumes"]
         self.assertIn(
-            "stargate-dev-auth",
+            "stargate-dev-auth-credentials",
             [volume.get("secret", {}).get("secretName") for volume in volumes],
         )
         self.assertFalse(

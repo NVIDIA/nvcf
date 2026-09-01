@@ -18,7 +18,7 @@ environments:
 {{- if and $credentialsPath (ne ($credentials.region | toString) .Environment.Name) -}}
 {{- fail "credential bundle region does not match the Helmfile environment" -}}
 {{- end -}}
-{{- $workerCredentials := sprigGet $credentials "workers" | default dict -}}
+{{- $workerToken := sprigGet $credentials "workerToken" | default "" -}}
 
 helmDefaults:
   atomic: true
@@ -49,10 +49,8 @@ releases:
           serviceToken: {{ sprigGet $credentials "serviceToken" | default "" | quote }}
           clientToken: {{ sprigGet $credentials "clientToken" | default "" | quote }}
           workers:
-            {{- range $mockdc := .Values.clusters.mockdcs }}
-            - token: {{ sprigGet $workerCredentials $mockdc.name | default "" | quote }}
-              routingKey: {{ $mockdc.name }}
-            {{- end }}
+            - token: {{ $workerToken | quote }}
+              routingKey: {{ required "routingKey is required" $.Values.routingKey | quote }}
 
   - name: llm-request-router
     namespace: {{ .Values.namespace }}
@@ -69,6 +67,12 @@ releases:
           image:
             repository: {{ .Values.images.stargate.repository }}
             digest: {{ .Values.images.stargate.digest }}
+          loadBalancer:
+            config: |
+              {"default":"groq-multiregion"}
+          readiness:
+            stabilizationSampleIntervalMs: null
+            stabilizationWindow: null
           podAnnotations:
             prometheus.io/scrape: "true"
             prometheus.io/path: /metrics
@@ -147,7 +151,7 @@ releases:
           auth:
             workerAuthEndpoint: http://stargate-dev-auth.{{ .Values.namespace }}.svc.cluster.local:50051
             existingSecret:
-              name: stargate-dev-auth
+              name: stargate-dev-auth-credentials
               key: service-token.json
               mountPath: /var/run/secrets/stargate-auth
               jsonPath: nvcfApiToken
@@ -178,7 +182,7 @@ releases:
     values:
       - clusterId: {{ $mockdc.name }}
         modelName: {{ $.Values.modelName }}
-        workerToken: {{ sprigGet $workerCredentials $mockdc.name | default "" | quote }}
+        workerToken: {{ $workerToken | quote }}
         stargate:
           address: https://{{ $.Values.router.hostname }}:50071
           quicCaSecretName: {{ $mockdc.quicCaSecretName }}

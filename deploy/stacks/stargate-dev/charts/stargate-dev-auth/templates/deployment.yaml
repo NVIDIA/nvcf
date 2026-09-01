@@ -77,4 +77,4 @@ spec:
       volumes:
         - name: config
           secret:
-            secretName: {{ include "stargate-dev-auth.fullname" . }}
+            secretName: {{ include "stargate-dev-auth.fullname" . }}-credentials
