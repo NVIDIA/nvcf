@@ -9,6 +9,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/kaptinlin/jsonrepair v0.2.6
 	github.com/labstack/echo/v4 v4.14.0
+	github.com/maypok86/otter/v2 v2.3.0
 	github.com/nats-io/nats.go v1.49.0
 	github.com/olric-data/olric v0.7.3
 	github.com/prometheus/client_golang v1.23.2
