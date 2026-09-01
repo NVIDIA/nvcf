@@ -71,7 +71,7 @@ class NatsStreamManagerIntegrationTest extends IntegrationTest {
             throw new IllegalStateException(e);
         }
         natsStreamManager = new NatsStreamManager(
-                new NatsResourceService(fixedNatsPool),
+                new NatsResourceService(fixedNatsPool.borrowConnection()),
                 natsConfigurationProperties);
     }
 

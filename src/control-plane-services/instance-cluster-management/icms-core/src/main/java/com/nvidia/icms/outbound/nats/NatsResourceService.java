@@ -16,27 +16,30 @@
  */
 package com.nvidia.icms.outbound.nats;
 
-import com.nvidia.icms.configuration.nats.NatsConfiguration.FixedNatsPool;
 import io.micrometer.core.annotation.Timed;
+import io.nats.client.Connection;
 import io.nats.client.JetStreamApiException;
 import io.nats.client.JetStreamManagement;
 import io.nats.client.api.StreamConfiguration;
 import java.io.IOException;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
-public class NatsResourceService {
+public class NatsResourceService implements AutoCloseable {
 
-    private final FixedNatsPool fixedNatsPool;
+    private final JetStreamManagement jetStreamManagement;
+    private final Connection connection;
+
+    public NatsResourceService(Connection connection) throws IOException {
+        this.connection = connection;
+        jetStreamManagement = connection.jetStreamManagement();
+    }
 
     @Timed(value = "icms.nats.create.stream")
     public void createStream(StreamConfiguration streamConfig)
-            throws IOException, JetStreamApiException, InterruptedException {
-        JetStreamManagement jetStreamManagement = fixedNatsPool.borrowJetStreamManagement();
+            throws IOException, JetStreamApiException {
         try {
             var streamInfo = jetStreamManagement.getStreamInfo(streamConfig.getName());
             validateStreamConfiguration(streamConfig, streamInfo.getConfiguration());
@@ -72,5 +75,10 @@ public class NatsResourceService {
             throw new IllegalStateException(
                     "NATS stream " + expected.getName() + " has an incompatible configuration");
         }
+    }
+
+    @Override
+    public void close() throws Exception {
+        connection.close();
     }
 }

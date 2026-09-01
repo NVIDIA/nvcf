@@ -22,7 +22,6 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.tracing.Tracer;
 import io.nats.client.Connection;
 import io.nats.client.Connection.Status;
-import io.nats.client.ConnectionListener;
 import io.nats.client.ConnectionListener.Events;
 import io.nats.client.ErrorListener;
 import io.nats.client.ForceReconnectOptions;
@@ -34,12 +33,9 @@ import io.nats.client.Statistics;
 import io.nats.client.impl.TracedNatsConnection;
 import java.io.IOException;
 import java.time.Duration;
-import java.util.AbstractCollection;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.Iterator;
 import java.util.List;
-import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.ToDoubleFunction;
@@ -70,39 +66,51 @@ public final class NatsConfiguration {
             NatsConfigurationProperties natsProperties,
             Tracer tracer)
             throws IOException, InterruptedException {
-
-
         var options = createDefaultOptions(natsProperties);
         return connect(options, tracer);
     }
 
-    /**
-     * Creates default connection options for the NATS client.
-     * Allows customization of reconnection behavior and other connection parameters.
-     *
-     * @return Options object containing the connection configuration.
-     */
     Options createDefaultOptions(NatsConfigurationProperties natsConfigurationProperties) {
-        Options.Builder builder = new Options.Builder()
+        var builder = Options.builder()
                 .server(natsConfigurationProperties.getNatsUrl())
                 .connectionTimeout(natsConfigurationProperties.getConnectionTimeout())
-                .pingInterval(natsConfigurationProperties.getPingInterval())
+                .pingInterval(Duration.ofSeconds(5))
                 .useDispatcherWithExecutor()
-                .reconnectWait(natsConfigurationProperties.getReconnectWait())
+                .reconnectWait(Duration.ofMillis(100))
                 .errorListener(new LoggingNatsErrorListener())
-                .connectionListener(getNatsConnectionListener());
+                .connectionListener(
+                        (conn, type) -> {
+                            log.info("nats connection event {} {}", type,
+                                     conn.getServerInfo());
+                            if (type == Events.LAME_DUCK) {
+                                CompletableFuture.runAsync(() -> {
+                                    try {
+                                        // jitter
+                                        Thread.sleep(RandomUtils.secure().randomInt(0, 5000));
+                                        // this may cause issues, but hopefully the active force
+                                        // reconnection is a smaller error window than waiting to get
+                                        // booted and detecting it normally.
+                                        log.info("client id {} force reconnecting to nats",
+                                                 conn.getServerInfo().getClientId());
+                                        conn.forceReconnect(ForceReconnectOptions.builder()
+                                                                    .flush(Duration.ofSeconds(5))
+                                                                    .build());
+                                        log.info("client id {} reconnected to nats",
+                                                 conn.getServerInfo().getClientId());
+                                    } catch (InterruptedException e) {
+                                        Thread.currentThread().interrupt();
+                                        log.warn("client id {} reconnect interrupted",
+                                                 conn.getServerInfo().getClientId(), e);
+                                        throw new RuntimeException(e);
+                                    } catch (Exception e) {
+                                        log.warn("client id {} failed to reconnect to nats",
+                                                 conn.getServerInfo().getClientId(), e);
+                                        throw new RuntimeException(e);
+                                    }
+                                });
+                            }
+                        });
 
-        if (natsConfigurationProperties.getReconnectJitter().isPositive()) {
-            Duration reconnectJitter = natsConfigurationProperties.getReconnectJitter();
-            builder.reconnectJitter(reconnectJitter).reconnectJitterTls(reconnectJitter);
-        }
-
-        // Configure reconnection behavior based on the allowReconnect flag
-        if (!natsConfigurationProperties.isReconnectAllowed()) {
-            builder = builder.noReconnect(); // Disable reconnections
-        } else {
-            builder = builder.maxReconnects(-1); // Allow unlimited reconnections
-        }
         if (natsConfigurationProperties.getNkeySeed().isPresent()) {
             var authHandler = Nats.staticCredentials(null,
                                                      natsConfigurationProperties.getNkeySeed()
@@ -114,50 +122,10 @@ public final class NatsConfiguration {
     }
 
     /**
-     * Provides a connection listener to handle NATS connection events.
-     * Specifically handles "LAME_DUCK" events by forcing a reconnection with a jittered delay.
-     *
-     * @return ConnectionListener instance to handle connection events.
-     */
-    private ConnectionListener getNatsConnectionListener() {
-        return (conn, type) -> {
-            log.info("nats connection event {} {}", type,
-                     conn.getServerInfo());
-            if (type == Events.LAME_DUCK) {
-                CompletableFuture.runAsync(() -> {
-                    try {
-                        // jitter
-                        Thread.sleep(RandomUtils.secure().randomInt(0, 5000));
-                        // this may cause issues, but hopefully the active force
-                        // reconnection is a smaller error window than waiting to get
-                        // booted and detecting it normally.
-                        log.info("client id {} force reconnecting to nats",
-                                 conn.getServerInfo().getClientId());
-                        conn.forceReconnect(ForceReconnectOptions.builder()
-                                                    .flush(Duration.ofSeconds(5))
-                                                    .build());
-                        log.info("client id {} reconnected to nats",
-                                 conn.getServerInfo().getClientId());
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        log.warn("client id {} reconnect interrupted",
-                                 conn.getServerInfo().getClientId(), e);
-                        throw new RuntimeException(e);
-                    } catch (Exception e) {
-                        log.warn("client id {} failed to reconnect to nats",
-                                 conn.getServerInfo().getClientId(), e);
-                        throw new RuntimeException(e);
-                    }
-                });
-            }
-        };
-    }
-
-    /**
      * Custom error listener for logging NATS errors and exceptions.
      */
     @Slf4j
-    static class LoggingNatsErrorListener implements ErrorListener {
+    private static class LoggingNatsErrorListener implements ErrorListener {
 
         /**
          * Logs errors that occur during the NATS connection lifecycle.
@@ -167,7 +135,7 @@ public final class NatsConfiguration {
          */
         @Override
         public void errorOccurred(Connection conn, String error) {
-            log.error("NATS error occurred {} {}", conn.getServerInfo(), error);
+            log.error("nats error occurred {} {}", conn.getServerInfo(), error);
         }
 
         /**
@@ -178,7 +146,7 @@ public final class NatsConfiguration {
          */
         @Override
         public void exceptionOccurred(Connection conn, Exception exp) {
-            log.error("For NATS or server: {} error {} : ", conn.getServerInfo(), exp.getMessage(), exp);
+            log.error("nats exception occurred {}", conn.getServerInfo(), exp);
         }
     }
 
@@ -189,19 +157,22 @@ public final class NatsConfiguration {
         private final Connection[] connections;
         private final JetStream[] jetStreams;
         private final JetStreamManagement[] jetStreamManagements;
-        private final ApplicationContext applicationContext;
         private final AtomicInteger index = new AtomicInteger();
 
         public FixedNatsPool(ApplicationContext applicationContext,
-                             NatsConfigurationProperties natsProperties) {
-            int poolSize = natsProperties.isEnabled()
-                    ? Math.min(Runtime.getRuntime().availableProcessors(),
-                               natsProperties.getMaxPoolSize())
-                    : 0;
-            this.applicationContext = applicationContext;
+                             NatsConfigurationProperties natsProperties) throws IOException {
+            int processors = Runtime.getRuntime().availableProcessors();
+            int poolSize = Math.min(processors, natsProperties.getMaxPoolSize());
             this.connections = new Connection[poolSize];
-            this.jetStreams = new JetStream[poolSize];
-            this.jetStreamManagements = new JetStreamManagement[poolSize];
+            this.jetStreams = new JetStream[connections.length];
+            this.jetStreamManagements = new JetStreamManagement[connections.length];
+            for (int i = 0; i < connections.length; i++) {
+                connections[i] = applicationContext.getBean(Connection.class);
+                jetStreams[i] = connections[i].jetStream();
+                jetStreamManagements[i] = connections[i].jetStreamManagement();
+                // force connection use
+                connections[i].RTT();
+            }
         }
 
         @Override
@@ -220,93 +191,26 @@ public final class NatsConfiguration {
             return Math.floorMod(index.getAndIncrement(), connections.length);
         }
 
-        public Connection borrowConnection() throws IOException, InterruptedException {
-            return connection(nextIndex());
+        public Connection borrowConnection() {
+            return connections[nextIndex()];
         }
 
-        public JetStream borrowJetStream() throws IOException, InterruptedException {
-            int slot = nextIndex();
-            connection(slot);
-            return jetStreams[slot];
+        public JetStream borrowJetStream() {
+            return jetStreams[nextIndex()];
         }
 
-        public JetStreamManagement borrowJetStreamManagement()
-                throws IOException, InterruptedException {
-            int slot = nextIndex();
-            connection(slot);
-            return jetStreamManagements[slot];
-        }
-
-        private synchronized Connection connection(int slot)
-                throws IOException, InterruptedException {
-            Connection connection = connections[slot];
-            if (connection == null || connection.getStatus() == Status.CLOSED) {
-                connection = applicationContext.getBean(Connection.class);
-                try {
-                    connection.RTT();
-                    JetStream jetStream = connection.jetStream();
-                    JetStreamManagement jetStreamManagement =
-                            connection.jetStreamManagement();
-                    connections[slot] = connection;
-                    jetStreams[slot] = jetStream;
-                    jetStreamManagements[slot] = jetStreamManagement;
-                } catch (IOException | RuntimeException e) {
-                    try {
-                        connection.close();
-                    } catch (InterruptedException closeError) {
-                        Thread.currentThread().interrupt();
-                        e.addSuppressed(closeError);
-                    }
-                    throw e;
-                }
-            }
-            return connection;
+        public JetStreamManagement borrowJetStreamManagement() {
+            return jetStreamManagements[nextIndex()];
         }
 
         public boolean healthy() {
-            if (connections.length == 0) {
-                return false;
-            }
-            if (Arrays.stream(connections).allMatch(Objects::isNull)) {
-                try {
-                    connection(0);
-                } catch (IOException | InterruptedException | RuntimeException e) {
-                    if (e instanceof InterruptedException) {
-                        Thread.currentThread().interrupt();
-                    }
-                    log.warn("Unable to initialize NATS connection during health check", e);
-                    return false;
-                }
-            }
-            boolean initialized = false;
             for (Connection connection : connections) {
-                if (connection == null) {
-                    continue;
-                }
-                initialized = true;
                 if (connection.getStatus() != Status.CONNECTED) {
-                    log.warn("Unhealthy NATS connection {}", connection.getServerInfo());
+                    log.warn("unhealthy nats connection {}", connection.getServerInfo());
                     return false;
                 }
             }
-            return initialized;
-        }
-
-        Collection<Statistics> statistics() {
-            return new AbstractCollection<>() {
-                @Override
-                public Iterator<Statistics> iterator() {
-                    return Arrays.stream(connections)
-                            .filter(Objects::nonNull)
-                            .map(Connection::getStatistics)
-                            .iterator();
-                }
-
-                @Override
-                public int size() {
-                    return (int) Arrays.stream(connections).filter(Objects::nonNull).count();
-                }
-            };
+            return true;
         }
     }
 
@@ -318,7 +222,9 @@ public final class NatsConfiguration {
 
         NatsMetricsConfiguration(FixedNatsPool fixedNatsPool, MeterRegistry meterRegistry) {
             this.meterRegistry = meterRegistry;
-            this.statistics = fixedNatsPool.statistics();
+            this.statistics = Arrays.stream(fixedNatsPool.connections)
+                    .map(Connection::getStatistics)
+                    .toList();
         }
 
         @Override

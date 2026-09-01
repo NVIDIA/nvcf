@@ -21,7 +21,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.nvidia.icms.configuration.nats.NatsConfiguration.FixedNatsPool;
+import io.nats.client.Connection;
 import io.nats.client.JetStreamApiException;
 import io.nats.client.JetStreamManagement;
 import io.nats.client.api.StreamConfiguration;
@@ -40,14 +40,14 @@ class NatsResourceServiceTest {
     private JetStreamManagement management;
 
     @Mock
-    private FixedNatsPool fixedNatsPool;
+    private Connection connection;
 
     private NatsResourceService natsResourceService;
 
     @BeforeEach
     void setUp() throws Exception {
-        when(fixedNatsPool.borrowJetStreamManagement()).thenReturn(management);
-        natsResourceService = new NatsResourceService(fixedNatsPool);
+        when(connection.jetStreamManagement()).thenReturn(management);
+        natsResourceService = new NatsResourceService(connection);
     }
 
     @Test
