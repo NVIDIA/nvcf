@@ -7,7 +7,7 @@ not publish or delete source segments until a supported upload adapter lands.
 
 - `cmd/`: process entrypoint and OCI image target
 - `internal/config/`: current sidecar contract and bounded policy parsing
-- `internal/segment/`: closed trace/audit segment discovery
+- `internal/segment/`: closed segment discovery
 - `internal/health/`: liveness and readiness handlers
 - `internal/upload/`: future upload-client boundary
 - `internal/service/`: startup, recovery scan, and HTTP server
@@ -23,8 +23,9 @@ Run `bazel run //:gazelle` after changing Go imports or Bazel metadata.
 
 ## Rules
 
-- Preserve the existing `trace` and `audit` capture-type names.
-- Treat the highest indexed segment for each prefix as active.
+- Target Dynamo v1.4.0. It writes one segment family, so classify records by
+  `event_type` and never by filename or prefix.
+- Treat the highest indexed segment as active.
 - Do not add a release entry until an approved upload adapter exists.
 - Do not add a Prometheus scrape endpoint. The later observability increment
   exports logs, traces, and metrics through BYOO OTLP endpoints.

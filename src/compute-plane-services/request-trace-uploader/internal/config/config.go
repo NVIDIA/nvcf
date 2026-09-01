@@ -15,17 +15,16 @@ import (
 )
 
 const (
-	EnvTraceDir             = "TRACE_DIR"
-	EnvTraceFilePrefix      = "TRACE_FILE_PREFIX"
-	EnvAuditFilePrefix      = "AUDIT_FILE_PREFIX"
-	EnvDroppedNCAIDs        = "REQUEST_TRACE_UPLOADER_DROP_NCA_IDS"
+	EnvSourceDir            = "REQUEST_TRACE_UPLOADER_SOURCE_DIR"
+	EnvSegmentPrefix        = "REQUEST_TRACE_UPLOADER_SEGMENT_PREFIX"
+	EnvBackend              = "REQUEST_TRACE_UPLOADER_BACKEND"
 	EnvSecretsFile          = "REQUEST_TRACE_UPLOADER_SECRETS_FILE"
 	EnvStateDir             = "REQUEST_TRACE_UPLOADER_STATE_DIR"
 	EnvQuarantineDir        = "REQUEST_TRACE_UPLOADER_QUARANTINE_DIR"
 	EnvHealthAddr           = "HEALTH_ADDR"
-	EnvUploadInterval       = "UPLOAD_INTERVAL_SECONDS"
-	EnvStatusInterval       = "STATUS_INTERVAL_SECONDS"
-	EnvStatusTimeout        = "STATUS_TIMEOUT_SECONDS"
+	EnvScanInterval         = "REQUEST_TRACE_UPLOADER_SCAN_INTERVAL_SECONDS"
+	EnvKratosStatusInterval = "REQUEST_TRACE_UPLOADER_KRATOS_STATUS_INTERVAL_SECONDS"
+	EnvKratosStatusTimeout  = "REQUEST_TRACE_UPLOADER_KRATOS_STATUS_TIMEOUT_SECONDS"
 	EnvAttemptTimeout       = "REQUEST_TRACE_UPLOADER_ATTEMPT_TIMEOUT"
 	EnvOperationTimeout     = "REQUEST_TRACE_UPLOADER_OPERATION_TIMEOUT"
 	EnvMaxRetries           = "REQUEST_TRACE_UPLOADER_MAX_RETRIES"
@@ -34,9 +33,10 @@ const (
 	EnvRetryMultiplier      = "REQUEST_TRACE_UPLOADER_RETRY_MULTIPLIER"
 	DefaultSecretsFile      = "/var/secrets/secrets.json"
 	DefaultHealthAddr       = ":8011"
-	DefaultUploadInterval   = 30 * time.Second
+	DefaultSegmentPrefix    = "request-trace"
+	DefaultScanInterval     = 30 * time.Second
 	DefaultStatusInterval   = 5 * time.Second
-	DefaultStatusTimeout    = 15 * time.Minute
+	DefaultStatusTimeout    = 30 * time.Minute
 	DefaultAttemptTimeout   = 30 * time.Second
 	DefaultOperationTimeout = 90 * time.Second
 	DefaultMaxRetries       = 2
@@ -45,26 +45,42 @@ const (
 	DefaultRetryMultiplier  = 2.0
 )
 
+// Backend selects the export destination. Core behavior derives from the
+// backend's declared capabilities rather than from this value.
+type Backend string
+
+const (
+	BackendObjectStore Backend = "objectstore"
+	BackendKratos      Backend = "kratos"
+)
+
 // LookupFunc obtains one environment setting.
 type LookupFunc func(string) (string, bool)
 
 // Config is the request-trace uploader runtime configuration.
+//
+// Dynamo v1.4.0 writes every record type to one rolling segment family, so the
+// uploader scans a single prefix. Record classification comes from event_type
+// on each record, which the parsing increment adds.
 type Config struct {
-	TraceDir        string
-	TraceFilePrefix string
-	AuditFilePrefix string
-	// DroppedNCAIDs identifies NCA IDs whose audit request payloads,
-	// response payloads, and non-NCA headers must not be exported. The current
-	// scaffold only validates this value. The transform stage applies it.
-	DroppedNCAIDs  []string
-	SecretsFile    string
-	StateDir       string
-	QuarantineDir  string
-	HealthAddr     string
-	UploadInterval time.Duration
+	SourceDir     string
+	SegmentPrefix string
+	Backend       Backend
+	SecretsFile   string
+	StateDir      string
+	QuarantineDir string
+	HealthAddr    string
+	ScanInterval  time.Duration
+	RetryPolicy   RetryPolicy
+	Kratos        KratosPolicy
+}
+
+// KratosPolicy bounds the asynchronous job polling that only the Kratos Bulk
+// Upload backend performs. Object-store submission is synchronous and has no
+// status poll.
+type KratosPolicy struct {
 	StatusInterval time.Duration
 	StatusTimeout  time.Duration
-	RetryPolicy    RetryPolicy
 }
 
 // RetryPolicy bounds each remote operation. The initial scaffold validates but
@@ -90,32 +106,25 @@ func Load(lookup LookupFunc) (Config, []string, error) {
 		return Config{}, nil, fmt.Errorf("environment lookup is required")
 	}
 
-	traceDir, err := requiredAbsolute(lookup, EnvTraceDir)
+	sourceDir, err := requiredAbsolute(lookup, EnvSourceDir)
 	if err != nil {
 		return Config{}, nil, err
 	}
-	tracePrefix, err := requiredName(lookup, EnvTraceFilePrefix)
+	segmentPrefix, err := optionalName(lookup, EnvSegmentPrefix, DefaultSegmentPrefix)
 	if err != nil {
 		return Config{}, nil, err
 	}
-	auditPrefix, err := requiredName(lookup, EnvAuditFilePrefix)
-	if err != nil {
-		return Config{}, nil, err
-	}
-	if tracePrefix == auditPrefix {
-		return Config{}, nil, fmt.Errorf("%s and %s must differ", EnvTraceFilePrefix, EnvAuditFilePrefix)
-	}
-	droppedNCAIDs, err := ncaIDList(lookup, EnvDroppedNCAIDs)
+	backend, err := backendValue(lookup, EnvBackend)
 	if err != nil {
 		return Config{}, nil, err
 	}
 
 	warnings := make([]string, 0)
-	stateDir, err := optionalAbsolute(lookup, EnvStateDir, filepath.Join(traceDir, "request-trace-uploader-state"))
+	stateDir, err := optionalAbsolute(lookup, EnvStateDir, filepath.Join(sourceDir, "request-trace-uploader-state"))
 	if err != nil {
 		return Config{}, nil, err
 	}
-	quarantineDir, err := optionalAbsolute(lookup, EnvQuarantineDir, filepath.Join(traceDir, "request-trace-uploader-quarantine"))
+	quarantineDir, err := optionalAbsolute(lookup, EnvQuarantineDir, filepath.Join(sourceDir, "request-trace-uploader-quarantine"))
 	if err != nil {
 		return Config{}, nil, err
 	}
@@ -125,12 +134,12 @@ func Load(lookup LookupFunc) (Config, []string, error) {
 		return Config{}, nil, fmt.Errorf("%s must not be empty", EnvHealthAddr)
 	}
 
-	uploadInterval := durationSeconds(lookup, EnvUploadInterval, DefaultUploadInterval, time.Second, 24*time.Hour, &warnings)
-	statusInterval := durationSeconds(lookup, EnvStatusInterval, DefaultStatusInterval, time.Second, time.Hour, &warnings)
-	statusTimeout := durationSeconds(lookup, EnvStatusTimeout, DefaultStatusTimeout, time.Second, 24*time.Hour, &warnings)
+	scanInterval := durationSeconds(lookup, EnvScanInterval, DefaultScanInterval, time.Second, 24*time.Hour, &warnings)
+	statusInterval := durationSeconds(lookup, EnvKratosStatusInterval, DefaultStatusInterval, time.Second, time.Hour, &warnings)
+	statusTimeout := durationSeconds(lookup, EnvKratosStatusTimeout, DefaultStatusTimeout, time.Second, 24*time.Hour, &warnings)
 	if statusTimeout < statusInterval {
 		statusTimeout = statusInterval
-		warnings = append(warnings, EnvStatusTimeout)
+		warnings = append(warnings, EnvKratosStatusTimeout)
 	}
 	attemptTimeout := duration(lookup, EnvAttemptTimeout, DefaultAttemptTimeout, time.Second, 90*time.Second, &warnings)
 	operationTimeout := duration(lookup, EnvOperationTimeout, DefaultOperationTimeout, time.Second, 5*time.Minute, &warnings)
@@ -148,17 +157,18 @@ func Load(lookup LookupFunc) (Config, []string, error) {
 	multiplier := floatValue(lookup, EnvRetryMultiplier, DefaultRetryMultiplier, 1.1, 10.0, &warnings)
 
 	return Config{
-		TraceDir:        traceDir,
-		TraceFilePrefix: tracePrefix,
-		AuditFilePrefix: auditPrefix,
-		DroppedNCAIDs:   droppedNCAIDs,
-		SecretsFile:     strings.TrimSpace(secretsFile),
-		StateDir:        stateDir,
-		QuarantineDir:   quarantineDir,
-		HealthAddr:      strings.TrimSpace(healthAddr),
-		UploadInterval:  uploadInterval,
-		StatusInterval:  statusInterval,
-		StatusTimeout:   statusTimeout,
+		SourceDir:     sourceDir,
+		SegmentPrefix: segmentPrefix,
+		Backend:       backend,
+		SecretsFile:   strings.TrimSpace(secretsFile),
+		StateDir:      stateDir,
+		QuarantineDir: quarantineDir,
+		HealthAddr:    strings.TrimSpace(healthAddr),
+		ScanInterval:  scanInterval,
+		Kratos: KratosPolicy{
+			StatusInterval: statusInterval,
+			StatusTimeout:  statusTimeout,
+		},
 		RetryPolicy: RetryPolicy{
 			AttemptTimeout:   attemptTimeout,
 			OperationTimeout: operationTimeout,
@@ -194,11 +204,11 @@ func validateAbsolute(name, value string) (string, error) {
 	return filepath.Clean(value), nil
 }
 
-func requiredName(lookup LookupFunc, name string) (string, error) {
+func optionalName(lookup LookupFunc, name, fallback string) (string, error) {
 	value, ok := lookup(name)
 	value = strings.TrimSpace(value)
 	if !ok || value == "" {
-		return "", fmt.Errorf("%s is required", name)
+		value = fallback
 	}
 	if strings.ContainsAny(value, `/\\`) {
 		return "", fmt.Errorf("%s must not contain a path separator", name)
@@ -206,53 +216,18 @@ func requiredName(lookup LookupFunc, name string) (string, error) {
 	return value, nil
 }
 
-func ncaIDList(lookup LookupFunc, name string) ([]string, error) {
+func backendValue(lookup LookupFunc, name string) (Backend, error) {
 	value, ok := lookup(name)
-	if !ok || strings.TrimSpace(value) == "" {
-		return nil, nil
-	}
-
-	ids := make([]string, 0)
-	seen := make(map[string]struct{})
-	for _, item := range strings.Split(value, ",") {
-		item = strings.TrimSpace(item)
-		if item == "" {
-			continue
-		}
-		id := NormalizeNCAID(item)
-		if id == "" {
-			return nil, fmt.Errorf("%s contains an invalid NCA ID", name)
-		}
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		ids = append(ids, id)
-	}
-	return ids, nil
-}
-
-// NormalizeNCAID returns the canonical form used by the payload drop list.
-func NormalizeNCAID(value string) string {
 	value = strings.TrimSpace(value)
-	if strings.HasPrefix(value, "nca-") && strings.HasSuffix(value, "-nca") {
-		value = strings.TrimSuffix(strings.TrimPrefix(value, "nca-"), "-nca")
+	if !ok || value == "" {
+		return "", fmt.Errorf("%s is required", name)
 	}
-	return strings.TrimSpace(value)
-}
-
-// DropsNCAID reports whether the configured payload drop list contains value.
-func (cfg Config) DropsNCAID(value string) bool {
-	value = NormalizeNCAID(value)
-	if value == "" {
-		return false
+	switch Backend(value) {
+	case BackendObjectStore, BackendKratos:
+		return Backend(value), nil
+	default:
+		return "", fmt.Errorf("%s must be %q or %q", name, BackendObjectStore, BackendKratos)
 	}
-	for _, id := range cfg.DroppedNCAIDs {
-		if id == value {
-			return true
-		}
-	}
-	return false
 }
 
 func valueOrDefault(lookup LookupFunc, name, fallback string) string {

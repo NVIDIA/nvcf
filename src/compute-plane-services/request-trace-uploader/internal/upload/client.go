@@ -10,7 +10,8 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/segment"
 )
 
-// Client submits one prepared trace segment and reads its terminal status.
+// Client submits one prepared segment and reads its terminal status. Submit
+// and Status are separate so a slow confirmation cannot block other segments.
 // The initial scaffold intentionally does not provide an implementation.
 type Client interface {
 	Submit(context.Context, SubmitRequest) (string, error)

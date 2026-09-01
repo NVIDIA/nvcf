@@ -28,14 +28,13 @@ func TestInitializeReadinessAndDiscovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := config.Config{
-		TraceDir:        root,
-		TraceFilePrefix: "request-trace",
-		AuditFilePrefix: "request-audit",
-		SecretsFile:     secretsFile,
-		StateDir:        filepath.Join(root, "state"),
-		QuarantineDir:   filepath.Join(root, "quarantine"),
-		HealthAddr:      ":8011",
-		UploadInterval:  config.DefaultUploadInterval,
+		SourceDir:     root,
+		SegmentPrefix: "request-trace",
+		SecretsFile:   secretsFile,
+		StateDir:      filepath.Join(root, "state"),
+		QuarantineDir: filepath.Join(root, "quarantine"),
+		HealthAddr:    ":8011",
+		ScanInterval:  config.DefaultScanInterval,
 	}
 	svc, err := New(cfg)
 	if err != nil {
@@ -86,12 +85,11 @@ func TestHTTPServerTimeouts(t *testing.T) {
 func TestInitializeRejectsUnreadableSecret(t *testing.T) {
 	root := t.TempDir()
 	svc, err := New(config.Config{
-		TraceDir:        root,
-		TraceFilePrefix: "request-trace",
-		AuditFilePrefix: "request-audit",
-		SecretsFile:     filepath.Join(root, "missing.json"),
-		StateDir:        filepath.Join(root, "state"),
-		QuarantineDir:   filepath.Join(root, "quarantine"),
+		SourceDir:     root,
+		SegmentPrefix: "request-trace",
+		SecretsFile:   filepath.Join(root, "missing.json"),
+		StateDir:      filepath.Join(root, "state"),
+		QuarantineDir: filepath.Join(root, "quarantine"),
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)

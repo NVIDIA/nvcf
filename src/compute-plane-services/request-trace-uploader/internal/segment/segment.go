@@ -14,36 +14,26 @@ import (
 	"time"
 )
 
-// CaptureType identifies the current Dynamo deployment's two trace streams.
-type CaptureType string
-
-const (
-	CaptureTypeTrace CaptureType = "trace"
-	CaptureTypeAudit CaptureType = "audit"
-)
-
 // Segment is one closed, compressed Dynamo request-trace segment.
+//
+// Dynamo v1.4.0 writes every record type to one segment family, so a segment
+// carries no capture type. Records are classified by their event_type field,
+// which the parsing increment reads.
 type Segment struct {
-	CaptureType CaptureType
-	Path        string
-	Index       int
-	Size        int64
-	ModTime     time.Time
+	Path    string
+	Index   int
+	Size    int64
+	ModTime time.Time
 }
 
 // Discover returns segments that are safe for a future uploader to process.
-// Dynamo appends gzip members to the highest indexed segment for each prefix,
-// so the scanner always leaves that segment untouched.
-func Discover(directory, tracePrefix, auditPrefix string) ([]Segment, error) {
-	trace, err := discoverPrefix(directory, tracePrefix, CaptureTypeTrace)
+// Dynamo appends gzip members to the highest indexed segment, so the scanner
+// always leaves that segment untouched.
+func Discover(directory, prefix string) ([]Segment, error) {
+	segments, err := discoverPrefix(directory, prefix)
 	if err != nil {
 		return nil, err
 	}
-	audit, err := discoverPrefix(directory, auditPrefix, CaptureTypeAudit)
-	if err != nil {
-		return nil, err
-	}
-	segments := append(trace, audit...)
 	sort.Slice(segments, func(i, j int) bool {
 		if segments[i].ModTime.Equal(segments[j].ModTime) {
 			return segments[i].Path < segments[j].Path
@@ -53,7 +43,7 @@ func Discover(directory, tracePrefix, auditPrefix string) ([]Segment, error) {
 	return segments, nil
 }
 
-func discoverPrefix(directory, prefix string, captureType CaptureType) ([]Segment, error) {
+func discoverPrefix(directory, prefix string) ([]Segment, error) {
 	entries, err := os.ReadDir(directory)
 	if err != nil {
 		return nil, fmt.Errorf("read request trace directory: %w", err)
@@ -77,11 +67,10 @@ func discoverPrefix(directory, prefix string, captureType CaptureType) ([]Segmen
 			return nil, fmt.Errorf("stat request trace segment %q: %w", entry.Name(), err)
 		}
 		segments = append(segments, Segment{
-			CaptureType: captureType,
-			Path:        filepath.Join(directory, entry.Name()),
-			Index:       index,
-			Size:        info.Size(),
-			ModTime:     info.ModTime(),
+			Path:    filepath.Join(directory, entry.Name()),
+			Index:   index,
+			Size:    info.Size(),
+			ModTime: info.ModTime(),
 		})
 	}
 	sort.Slice(segments, func(i, j int) bool { return segments[i].Index < segments[j].Index })

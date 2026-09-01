@@ -65,7 +65,7 @@ func (s *Service) Initialize() error {
 // Refresh verifies that local request-trace segment discovery succeeds without
 // changing source files.
 func (s *Service) Refresh() error {
-	if _, err := segment.Discover(s.config.TraceDir, s.config.TraceFilePrefix, s.config.AuditFilePrefix); err != nil {
+	if _, err := segment.Discover(s.config.SourceDir, s.config.SegmentPrefix); err != nil {
 		return fmt.Errorf("discover request trace segments: %w", err)
 	}
 	return nil
@@ -84,7 +84,7 @@ func (s *Service) Run(ctx context.Context) error {
 		}
 	}()
 
-	ticker := time.NewTicker(s.config.UploadInterval)
+	ticker := time.NewTicker(s.config.ScanInterval)
 	defer ticker.Stop()
 	for {
 		select {
