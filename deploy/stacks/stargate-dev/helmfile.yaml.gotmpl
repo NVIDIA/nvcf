@@ -6,6 +6,7 @@ environments:
     values:
       - environments/us-west-2.yaml
       - values/versions.yaml
+      - {{ requiredEnv "STARGATE_DEV_VALUES_FILE" }}
 
 ---
 

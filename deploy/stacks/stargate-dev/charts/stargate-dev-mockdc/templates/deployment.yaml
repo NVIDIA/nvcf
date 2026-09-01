@@ -113,6 +113,7 @@ spec:
             - --backend-connectivity=reverse
             - --tunnel-protocol=raw-quic
             - --tls-cert-path=/var/run/stargate/tls/{{ $.Values.stargate.quicCaSecretKey }}
+            - --grpc-tls-ca-cert-path=/var/run/stargate/tls/{{ $.Values.stargate.quicCaSecretKey }}
             - --auth-token-file=/var/run/stargate/auth/token
             - --kv-cache-stats-path=/kv-cache/stats
             {{- if $.Values.pylon.doCalibration }}

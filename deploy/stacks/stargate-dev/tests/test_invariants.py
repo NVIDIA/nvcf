@@ -75,8 +75,11 @@ class RenderedStackTests(unittest.TestCase):
         credential_path.chmod(0o600)
         cls.output_dir = root / "rendered"
         cls.output_dir.mkdir(mode=0o700)
+        values_path = root / "values.yaml"
+        values_path.write_text("{}\n", encoding="utf-8")
         environment = os.environ.copy()
         environment["STARGATE_DEV_CREDENTIALS_FILE"] = str(credential_path)
+        environment["STARGATE_DEV_VALUES_FILE"] = str(values_path)
 
         subprocess.run(
             [
@@ -185,6 +188,9 @@ class RenderedStackTests(unittest.TestCase):
             )
             self.assertFalse(
                 any(value.startswith("--initial-input-tps") for value in arguments)
+            )
+            self.assertIn(
+                "--grpc-tls-ca-cert-path=/var/run/stargate/tls/ca.crt", arguments
             )
             self.assertNotIn("--do-calibration", arguments)
             self.assertIn("mockdc-usw2", str(path))

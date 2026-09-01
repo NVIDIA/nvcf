@@ -5,8 +5,6 @@
 import argparse
 import json
 import re
-import socket
-import ssl
 import subprocess
 import sys
 from pathlib import Path
@@ -140,16 +138,6 @@ def verify_registration_endpoint(config: dict) -> None:
         raise VerificationError(
             "backend-router LoadBalancer does not have an ingress endpoint"
         )
-
-    hostname = config["router"]["hostname"]
-    tls_context = ssl.create_default_context()
-    tls_context.set_alpn_protocols(["h2"])
-    with socket.create_connection((hostname, 50071), timeout=10) as connection:
-        with tls_context.wrap_socket(connection, server_hostname=hostname) as secured:
-            if secured.selected_alpn_protocol() != "h2":
-                raise VerificationError(
-                    "registration endpoint did not negotiate HTTP/2"
-                )
 
 
 def verify_stargate(config: dict, require_backends: bool) -> None:

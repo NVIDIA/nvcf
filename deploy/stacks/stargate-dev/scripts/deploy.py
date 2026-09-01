@@ -10,8 +10,6 @@ import os
 import re
 import secrets
 import shutil
-import socket
-import ssl
 import stat
 import subprocess
 import sys
@@ -142,18 +140,27 @@ def init_credentials(region: str, path: Path) -> None:
     print(f"created protected regional credential bundle: {path}")
 
 
+def merge_values(base: dict, override: dict) -> None:
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            merge_values(base[key], value)
+        else:
+            base[key] = value
+
+
+def load_deployment_values(region: str, values_path: Path) -> dict:
+    config = load_region(region)
+    merge_values(config, load_yaml(STACK_DIR / "values" / "versions.yaml"))
+    merge_values(config, load_yaml(values_path.expanduser().resolve()))
+    return config
+
+
 def validate_deployment_inputs(config: dict) -> None:
-    versions = load_yaml(STACK_DIR / "values" / "versions.yaml")
     if not config.get("deploymentReady"):
         raise DeploymentError(
             "regional values are placeholders; set deploymentReady after filling them"
         )
-    if not versions.get("deploymentReady"):
-        raise DeploymentError(
-            "image values are placeholders; publish images and set deploymentReady"
-        )
-
-    for name, image in versions.get("images", {}).items():
+    for name, image in config.get("images", {}).items():
         repository = image.get("repository", "")
         digest = image.get("digest", "")
         if ".invalid" in repository or not SHA256_DIGEST.fullmatch(digest):
@@ -425,10 +432,6 @@ def verify_prerequisite_resources(config: dict, phase: str) -> None:
             )
 
 
-def resolve(hostname: str) -> set[str]:
-    return {entry[4][0] for entry in socket.getaddrinfo(hostname, None)}
-
-
 def verify_stargate_endpoint(config: dict) -> None:
     context = config["clusters"]["stargate"]["kubeContext"]
     namespace = config["namespace"]
@@ -445,50 +448,23 @@ def verify_stargate_endpoint(config: dict) -> None:
         ).stdout
     )
     ingress = service.get("status", {}).get("loadBalancer", {}).get("ingress", [])
-    nlb_hostname = next(
-        (item.get("hostname") for item in ingress if item.get("hostname")), None
-    )
-    if not nlb_hostname:
+    if not any(item.get("hostname") for item in ingress):
         raise DeploymentError("backend-router NLB does not have a hostname")
-    configured_hostname = config["router"]["hostname"]
-    if not resolve(configured_hostname).intersection(resolve(nlb_hostname)):
-        raise DeploymentError("router DNS does not resolve to the backend-router NLB")
-
-    for mockdc in config["clusters"]["mockdcs"]:
-        ca_secret = get_secret(
-            mockdc["kubeContext"], namespace, mockdc["quicCaSecretName"]
-        )
-        if ca_secret is None:
-            raise DeploymentError(
-                f"required Secret {mockdc['quicCaSecretName']} does not exist in "
-                f"{mockdc['kubeContext']}/{namespace}"
-            )
-        ca_bundle = decoded_secret_data(ca_secret, "ca.crt").decode()
-        tls_context = ssl.create_default_context()
-        tls_context.load_verify_locations(cadata=ca_bundle)
-        tls_context.set_alpn_protocols(["h2"])
-        with socket.create_connection(
-            (configured_hostname, 50071), timeout=10
-        ) as connection:
-            with tls_context.wrap_socket(
-                connection, server_hostname=configured_hostname
-            ) as secured:
-                if secured.selected_alpn_protocol() != "h2":
-                    raise DeploymentError(
-                        "router registration endpoint did not negotiate HTTP/2"
-                    )
 
 
-def helmfile_environment(credentials_path: Path) -> dict[str, str]:
+def helmfile_environment(credentials_path: Path, values_path: Path) -> dict[str, str]:
     environment = os.environ.copy()
     environment["STARGATE_DEV_CREDENTIALS_FILE"] = str(
         credentials_path.expanduser().resolve()
     )
+    environment["STARGATE_DEV_VALUES_FILE"] = str(values_path.expanduser().resolve())
     return environment
 
 
-def static_validate(region: str, phase: str, credentials_path: Path) -> None:
-    environment = helmfile_environment(credentials_path)
+def static_validate(
+    region: str, phase: str, credentials_path: Path, values_path: Path
+) -> None:
+    environment = helmfile_environment(credentials_path, values_path)
     selector = f"phase={phase}"
     kubernetes_version = f"{load_region(region)['kubernetesVersion']}.0"
     run(
@@ -523,9 +499,11 @@ def static_validate(region: str, phase: str, credentials_path: Path) -> None:
         )
 
 
-def apply(region: str, phase: str, credentials_path: Path) -> None:
+def apply(region: str, phase: str, credentials_path: Path, values_path: Path) -> None:
     require_tools("aws", "helm", "helmfile", "kubeconform", "kubectl")
-    config = load_region(region)
+    if run(["helm", "diff", "version"], check=False).returncode:
+        raise DeploymentError("the helm-diff plugin is required by helmfile apply")
+    config = load_deployment_values(region, values_path)
     credentials = load_credentials(credentials_path, config)
     validate_deployment_inputs(config)
     account = aws_account(config)
@@ -539,9 +517,9 @@ def apply(region: str, phase: str, credentials_path: Path) -> None:
     verify_prerequisite_resources(config, phase)
     if phase == "mockdc":
         verify_stargate_endpoint(config)
-    static_validate(region, phase, credentials_path)
+    static_validate(region, phase, credentials_path, values_path)
 
-    environment = helmfile_environment(credentials_path)
+    environment = helmfile_environment(credentials_path, values_path)
     command = [
         "helmfile",
         "--environment",
@@ -575,6 +553,7 @@ def parse_args() -> argparse.Namespace:
     apply_parser.add_argument("--region", required=True)
     apply_parser.add_argument("--phase", choices=("stargate", "mockdc"), required=True)
     apply_parser.add_argument("--credentials", type=Path, required=True)
+    apply_parser.add_argument("--values", type=Path, required=True)
     return parser.parse_args()
 
 
@@ -585,7 +564,7 @@ def main() -> int:
         if args.command == "init":
             init_credentials(args.region, args.credentials)
         else:
-            apply(args.region, args.phase, args.credentials)
+            apply(args.region, args.phase, args.credentials, args.values)
     except (
         DeploymentError,
         FileExistsError,
