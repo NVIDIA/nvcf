@@ -45,7 +45,11 @@ func New(cfg config.Config) (Client, error) {
 	if !ok {
 		return nil, fmt.Errorf("backend %q is not compiled into this build (available: %v)", cfg.Backend, Registered())
 	}
-	return factory(cfg)
+	client, err := factory(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("create backend %q: %w", cfg.Backend, err)
+	}
+	return client, nil
 }
 
 // Registered lists the backends linked into this build, sorted for stable
