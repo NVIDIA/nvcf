@@ -249,7 +249,9 @@ pub(super) fn log_stargate_grpc_certificate_failure(
     error: &(dyn Error + 'static),
     previous: Option<StargateGrpcCertificateFailure>,
 ) -> Option<StargateGrpcCertificateFailure> {
-    let failure = classify_stargate_grpc_certificate_failure(error)?;
+    let Some(failure) = classify_stargate_grpc_certificate_failure(error) else {
+        return previous;
+    };
     if previous == Some(failure) {
         return previous;
     }

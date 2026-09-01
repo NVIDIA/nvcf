@@ -617,8 +617,7 @@ fn stargate_grpc_endpoint_rejects_custom_ca_for_plaintext_http() {
 
     let error = endpoint
         .channel_endpoint(Some(b"private CA contents must not be logged"))
-        .err()
-        .expect("custom CA with plaintext HTTP should be rejected");
+        .expect_err("custom CA with plaintext HTTP should be rejected");
 
     assert!(
         error
@@ -748,6 +747,37 @@ fn grpc_certificate_failure_log_emits_when_failure_kind_changes() {
     assert_eq!(
         failure_kinds,
         ["tls_unknown_issuer", "tls_hostname_mismatch"]
+    );
+}
+
+#[test]
+fn grpc_certificate_failure_log_stays_suppressed_across_unclassified_errors() {
+    let target = grpc_endpoint("router.example.test:50071");
+    let subscriber = RecordingTracingSubscriber::default();
+    let dispatch = tracing::Dispatch::new(subscriber.clone());
+    let _default_guard = tracing::dispatcher::set_default(&dispatch);
+    let certificate_error = typed_tls_io_error(rustls::CertificateError::UnknownIssuer);
+    let transport_error = std::io::Error::other("ordinary transport failure");
+
+    let mut last_failure =
+        log_stargate_grpc_certificate_failure(&target, "watch_stargates", &certificate_error, None);
+    last_failure = log_stargate_grpc_certificate_failure(
+        &target,
+        "watch_stargates",
+        &transport_error,
+        last_failure,
+    );
+    let _ = log_stargate_grpc_certificate_failure(
+        &target,
+        "watch_stargates",
+        &certificate_error,
+        last_failure,
+    );
+
+    assert_eq!(
+        subscriber.event_count("Stargate gRPC connection failed"),
+        1,
+        "an unclassified retry error must not start a new certificate-failure episode"
     );
 }
 
