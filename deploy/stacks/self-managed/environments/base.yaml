@@ -208,6 +208,14 @@ nats:
       server_tags:
         - "dc:ncp"
         - "aws-region:ncp"
+      # Split-plane server TLS: workers reach NATS over an L4-passthrough LB, so
+      # TLS terminates at the server; allow_non_tls keeps in-cluster plaintext
+      # clients on :4222. Both default off.
+      # allow_non_tls: true
+    # nats:
+    #   tls:
+    #     enabled: true
+    #     secretName: nats-server-tls   # cert-manager-issued
   # Image overrides for the NATS config reloader. The reloader is not
   # republished under the public nvidia/nvcf catalog, so it defaults to its
   # upstream source, docker.io/natsio/nats-server-config-reloader:0.23.0.
