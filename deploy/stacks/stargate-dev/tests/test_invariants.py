@@ -143,6 +143,7 @@ class RenderedStackTests(unittest.TestCase):
                 "llm-request-router": "stargate-usw2",
                 "mockdc-usw2-a": "mockdc-usw2-a",
                 "mockdc-usw2-b": "mockdc-usw2-b",
+                "stargate-dev-grafana": "stargate-usw2",
                 "metrics-stargate-usw2": "stargate-usw2",
                 "metrics-mockdc-usw2-a": "mockdc-usw2-a",
                 "metrics-mockdc-usw2-b": "mockdc-usw2-b",
@@ -249,7 +250,10 @@ class RenderedStackTests(unittest.TestCase):
                     pod["metadata"]["annotations"]["prometheus.io/scrape"],
                     "true",
                 )
-            for container in pod["spec"]["containers"]:
+            containers = pod["spec"]["containers"] + pod["spec"].get(
+                "initContainers", []
+            )
+            for container in containers:
                 self.assertRegex(container["image"], DIGEST_IMAGE)
 
         secret_files = {path for path, resource in self.resources("Secret")}
@@ -359,6 +363,64 @@ class RenderedStackTests(unittest.TestCase):
         ]
         self.assertFalse(alloy_services)
 
+        grafana = next(
+            resource
+            for _, resource in self.resources("Deployment")
+            if resource["metadata"]["name"] == "stargate-dev-grafana"
+        )
+        self.assertEqual(
+            grafana["metadata"]["namespace"], "stargate-dev-observability"
+        )
+        self.assertEqual(grafana["spec"]["replicas"], 1)
+        grafana_container = grafana["spec"]["template"]["spec"]["containers"][0]
+        self.assertEqual(
+            grafana_container["image"],
+            "docker.io/grafana/grafana:13.2.0-distroless@sha256:"
+            "08e6ab6d67a5e21e6540724d3673a572840a43b1ba02d03922d0a21a7dbb38f9",
+        )
+        grafana_service_account = next(
+            resource
+            for _, resource in self.resources("ServiceAccount")
+            if resource["metadata"]["name"] == "stargate-dev-grafana"
+        )
+        self.assertEqual(
+            grafana_service_account["metadata"]["annotations"][
+                "eks.amazonaws.com/role-arn"
+            ],
+            "arn:aws:iam::000000000000:role/stargate-dev-grafana",
+        )
+        grafana_service = next(
+            resource
+            for _, resource in self.resources("Service")
+            if resource["metadata"]["name"] == "stargate-dev-grafana"
+        )
+        self.assertEqual(grafana_service["spec"]["type"], "ClusterIP")
+
+        grafana_config = next(
+            resource
+            for _, resource in self.resources("ConfigMap")
+            if "datasources.yaml" in resource.get("data", {})
+        )
+        datasource = yaml.safe_load(grafana_config["data"]["datasources.yaml"])[
+            "datasources"
+        ][0]
+        self.assertEqual(datasource["uid"], "stargate-dev-amp")
+        self.assertEqual(
+            datasource["type"], "grafana-amazonprometheus-datasource"
+        )
+        self.assertEqual(datasource["jsonData"]["sigV4AuthType"], "default")
+
+        dashboard_names = {
+            key
+            for _, resource in self.resources("ConfigMap")
+            for key in resource.get("binaryData", {})
+            if key.endswith(".json")
+        }
+        self.assertEqual(
+            dashboard_names,
+            {"stargate-services.json", "stargate-backend-balance.json"},
+        )
+
         configs = [
             resource["data"]["config.alloy"]
             for _, resource in self.resources("ConfigMap")
@@ -366,7 +428,10 @@ class RenderedStackTests(unittest.TestCase):
         ]
         self.assertEqual(len(configs), 3)
         for config in configs:
-            self.assertIn('names = ["stargate-dev"]', config)
+            self.assertIn(
+                'names = ["stargate-dev", "stargate-dev-observability"]',
+                config,
+            )
             self.assertIn('action        = "keepequal"', config)
             self.assertIn('target_label  = "backend"', config)
             self.assertIn('cluster_role = "', config)

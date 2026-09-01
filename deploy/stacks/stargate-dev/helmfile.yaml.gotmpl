@@ -10,11 +10,15 @@ environments:
 
 ---
 
-{{- $credentialsPath := requiredEnv "STARGATE_DEV_CREDENTIALS_FILE" -}}
-{{- $credentials := readFile $credentialsPath | fromJson -}}
-{{- if ne ($credentials.region | toString) .Environment.Name -}}
+{{- $credentials := dict -}}
+{{- $credentialsPath := env "STARGATE_DEV_CREDENTIALS_FILE" -}}
+{{- if $credentialsPath -}}
+{{- $credentials = readFile $credentialsPath | fromJson -}}
+{{- end -}}
+{{- if and $credentialsPath (ne ($credentials.region | toString) .Environment.Name) -}}
 {{- fail "credential bundle region does not match the Helmfile environment" -}}
 {{- end -}}
+{{- $workerCredentials := sprigGet $credentials "workers" | default dict -}}
 
 helmDefaults:
   atomic: true
@@ -26,6 +30,8 @@ helmDefaults:
 repositories:
   - name: grafana
     url: https://grafana.github.io/helm-charts
+  - name: grafana-community
+    url: https://grafana-community.github.io/helm-charts
 
 releases:
   - name: stargate-dev-auth
@@ -40,11 +46,11 @@ releases:
           repository: {{ .Values.images.auth.repository }}
           digest: {{ .Values.images.auth.digest }}
         credentials:
-          serviceToken: {{ $credentials.serviceToken | quote }}
-          clientToken: {{ $credentials.clientToken | quote }}
+          serviceToken: {{ sprigGet $credentials "serviceToken" | default "" | quote }}
+          clientToken: {{ sprigGet $credentials "clientToken" | default "" | quote }}
           workers:
             {{- range $mockdc := .Values.clusters.mockdcs }}
-            - token: {{ required (printf "credential bundle is missing worker token for %s" $mockdc.name) (sprigGet $credentials.workers $mockdc.name) | quote }}
+            - token: {{ sprigGet $workerCredentials $mockdc.name | default "" | quote }}
               routingKey: {{ $mockdc.name }}
             {{- end }}
 
@@ -172,7 +178,7 @@ releases:
     values:
       - clusterId: {{ $mockdc.name }}
         modelName: {{ $.Values.modelName }}
-        workerToken: {{ required (printf "credential bundle is missing worker token for %s" $mockdc.name) (sprigGet $credentials.workers $mockdc.name) | quote }}
+        workerToken: {{ sprigGet $workerCredentials $mockdc.name | default "" | quote }}
         stargate:
           address: https://{{ $.Values.router.hostname }}:50071
           quicCaSecretName: {{ $mockdc.quicCaSecretName }}
@@ -190,6 +196,112 @@ releases:
 {{- $observability := required "observability is required" .Values.observability }}
 {{- $amp := required "observability.amp is required" $observability.amp }}
 {{- $alloy := required "observability.alloy is required" $observability.alloy }}
+{{- $grafana := required "observability.grafana is required" $observability.grafana }}
+  - name: stargate-dev-grafana
+    namespace: {{ $observability.namespace }}
+    kubeContext: {{ .Values.clusters.stargate.kubeContext }}
+    chart: grafana-community/grafana
+    version: {{ $grafana.chartVersion | quote }}
+    labels:
+      phase: observability
+      component: grafana
+    values:
+      - fullnameOverride: stargate-dev-grafana
+        replicas: 1
+        image:
+          registry: docker.io
+          repository: {{ $grafana.image.repository }}
+          tag: {{ $grafana.image.tag | quote }}
+          sha: {{ $grafana.image.digest | trimPrefix "sha256:" | quote }}
+        testFramework:
+          enabled: false
+        rbac:
+          create: false
+        serviceAccount:
+          create: true
+          name: stargate-dev-grafana
+          automountServiceAccountToken: true
+          annotations:
+            eks.amazonaws.com/role-arn: {{ required "observability.grafana.readerRoleArn is required" $grafana.readerRoleArn | quote }}
+        service:
+          type: ClusterIP
+        persistence:
+          enabled: false
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        podAnnotations:
+          prometheus.io/scrape: "true"
+          prometheus.io/path: /metrics
+          prometheus.io/port: "3000"
+        env:
+          AWS_DEFAULT_REGION: {{ .Values.region | quote }}
+          AWS_REGION: {{ .Values.region | quote }}
+          AWS_SDK_LOAD_CONFIG: "true"
+        grafana.ini:
+          analytics:
+            check_for_updates: false
+            check_for_plugin_updates: false
+            reporting_enabled: false
+          auth.anonymous:
+            enabled: false
+          aws:
+            allowed_auth_providers: default
+            forward_settings_to_plugins: grafana-amazonprometheus-datasource
+          plugins:
+            plugin_admin_enabled: false
+            preinstall_auto_update: false
+          users:
+            allow_sign_up: false
+        plugins:
+          - {{ printf "grafana-amazonprometheus-datasource@%s" $grafana.pluginVersion | quote }}
+        datasources:
+          datasources.yaml:
+            apiVersion: 1
+            datasources:
+              - name: Stargate dev AMP
+                uid: stargate-dev-amp
+                type: grafana-amazonprometheus-datasource
+                access: proxy
+                url: {{ printf "https://aps-workspaces.%s.amazonaws.com/workspaces/%s" .Values.region (required "observability.amp.workspaceId is required" $amp.workspaceId) | quote }}
+                isDefault: true
+                editable: false
+                jsonData:
+                  httpMethod: POST
+                  manageAlerts: false
+                  sigV4Auth: true
+                  sigV4AuthType: default
+                  sigV4Region: {{ .Values.region }}
+                  sigv4Service: aps
+        dashboardProviders:
+          dashboardproviders.yaml:
+            apiVersion: 1
+            providers:
+              - name: default
+                orgId: 1
+                folder: ""
+                folderUid: ""
+                type: file
+                disableDeletion: true
+                allowUiUpdates: false
+                options:
+                  path: /var/lib/grafana/dashboards/default
+        dashboardsConfigMaps:
+          default: stargate-dev-grafana-dashboards
+        extraObjects:
+          - apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: stargate-dev-grafana-dashboards
+              namespace: {{ $observability.namespace }}
+            binaryData:
+              stargate-services.json: {{ readFile "dashboards/stargate-services.json" | b64enc | quote }}
+              stargate-backend-balance.json: {{ readFile "dashboards/stargate-backend-balance.json" | b64enc | quote }}
+
 {{- $metricsClusters := list (dict
       "name" .Values.clusters.stargate.name
       "kubeContext" .Values.clusters.stargate.kubeContext
@@ -234,6 +346,7 @@ releases:
           create: true
           namespaces:
             - {{ $.Values.namespace }}
+            - {{ $observability.namespace }}
           rules:
             - apiGroups: [""]
               resources: ["pods"]
@@ -276,7 +389,7 @@ releases:
               discovery.kubernetes "stargate_pods" {
                 role = "pod"
                 namespaces {
-                  names = [{{ $.Values.namespace | quote }}]
+                  names = [{{ $.Values.namespace | quote }}, {{ $observability.namespace | quote }}]
                 }
               }
 

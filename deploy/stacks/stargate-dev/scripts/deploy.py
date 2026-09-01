@@ -24,7 +24,6 @@ SHA256_DIGEST = re.compile(r"^sha256:[a-f0-9]{64}$")
 AMP_WORKSPACE_ID = re.compile(
     r"^ws-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 )
-GRAFANA_WORKSPACE_ID = re.compile(r"^g-[0-9a-f]{10}$")
 
 
 class DeploymentError(RuntimeError):
@@ -164,47 +163,48 @@ def validate_deployment_inputs(config: dict, phase: str) -> None:
         raise DeploymentError(
             "regional values are placeholders; set deploymentReady after filling them"
         )
-    for name, image in config.get("images", {}).items():
-        repository = image.get("repository", "")
-        digest = image.get("digest", "")
-        if ".invalid" in repository or not SHA256_DIGEST.fullmatch(digest):
-            raise DeploymentError(
-                f"image {name} is not configured with a deployable digest reference"
-            )
-        if set(digest.removeprefix("sha256:")) == {"0"}:
-            raise DeploymentError(f"image {name} still uses the static-render digest")
-
-    router = config.get("router", {})
-    if not router.get("hostname") or router["hostname"].endswith(".invalid"):
-        raise DeploymentError("router.hostname is still a static-render placeholder")
-    if not router.get("tlsSecretName"):
-        raise DeploymentError("router.tlsSecretName is required")
-    if not router.get("loadBalancerSourceRanges"):
-        raise DeploymentError("router.loadBalancerSourceRanges must be restricted")
-    account = os.environ.get(config["awsAccountIdEnv"], "")
-    expected_certificate_prefix = (
-        f"arn:aws:acm:{config['region']}:{account}:certificate/"
-    )
-    certificate_arn = router.get("acmCertificateArn", "")
-    if not certificate_arn.startswith(
-        expected_certificate_prefix
-    ) or not certificate_arn.removeprefix(expected_certificate_prefix):
-        raise DeploymentError(
-            "router.acmCertificateArn does not match the configured region and account"
-        )
-    for source_range in router["loadBalancerSourceRanges"]:
-        try:
-            network = ipaddress.ip_network(source_range)
-        except ValueError as error:
-            raise DeploymentError(
-                f"invalid router source range: {source_range}"
-            ) from error
-        if network.version != 4 or network.prefixlen != 32 or not network.is_global:
-            raise DeploymentError(
-                "router source ranges must be public IPv4 /32 MockDC egress addresses"
-            )
-
     if phase != "observability":
+        for name, image in config.get("images", {}).items():
+            repository = image.get("repository", "")
+            digest = image.get("digest", "")
+            if ".invalid" in repository or not SHA256_DIGEST.fullmatch(digest):
+                raise DeploymentError(
+                    f"image {name} is not configured with a deployable digest reference"
+                )
+            if set(digest.removeprefix("sha256:")) == {"0"}:
+                raise DeploymentError(
+                    f"image {name} still uses the static-render digest"
+                )
+
+        router = config.get("router", {})
+        if not router.get("hostname") or router["hostname"].endswith(".invalid"):
+            raise DeploymentError("router.hostname is still a static-render placeholder")
+        if not router.get("tlsSecretName"):
+            raise DeploymentError("router.tlsSecretName is required")
+        if not router.get("loadBalancerSourceRanges"):
+            raise DeploymentError("router.loadBalancerSourceRanges must be restricted")
+        account = os.environ.get(config["awsAccountIdEnv"], "")
+        expected_certificate_prefix = (
+            f"arn:aws:acm:{config['region']}:{account}:certificate/"
+        )
+        certificate_arn = router.get("acmCertificateArn", "")
+        if not certificate_arn.startswith(
+            expected_certificate_prefix
+        ) or not certificate_arn.removeprefix(expected_certificate_prefix):
+            raise DeploymentError(
+                "router.acmCertificateArn does not match the configured region and account"
+            )
+        for source_range in router["loadBalancerSourceRanges"]:
+            try:
+                network = ipaddress.ip_network(source_range)
+            except ValueError as error:
+                raise DeploymentError(
+                    f"invalid router source range: {source_range}"
+                ) from error
+            if network.version != 4 or network.prefixlen != 32 or not network.is_global:
+                raise DeploymentError(
+                    "router source ranges must be public IPv4 /32 MockDC egress addresses"
+                )
         return
 
     observability = config.get("observability", {})
@@ -222,18 +222,10 @@ def validate_deployment_inputs(config: dict, phase: str) -> None:
         f"arn:aws:iam::{account}:role/stargate-dev-amp-writer"
     ):
         raise DeploymentError("observability.amp.writerRoleArn is invalid")
-    grafana_workspace_id = grafana.get("workspaceId", "")
-    if not GRAFANA_WORKSPACE_ID.fullmatch(grafana_workspace_id) or set(
-        grafana_workspace_id.removeprefix("g-")
-    ) == {"0"}:
-        raise DeploymentError("observability.grafana.workspaceId is invalid")
-    endpoint = grafana.get("endpoint", "")
-    if not re.fullmatch(
-        rf"{re.escape(grafana['workspaceId'])}\.grafana-workspace\."
-        rf"{re.escape(config['region'])}\.amazonaws\.com",
-        endpoint,
+    if grafana.get("readerRoleArn") != (
+        f"arn:aws:iam::{account}:role/stargate-dev-grafana"
     ):
-        raise DeploymentError("observability.grafana.endpoint is invalid")
+        raise DeploymentError("observability.grafana.readerRoleArn is invalid")
 
 
 def aws_account(config: dict) -> str:
@@ -490,17 +482,22 @@ def verify_stargate_endpoint(config: dict) -> None:
         raise DeploymentError("backend-router NLB does not have a hostname")
 
 
-def helmfile_environment(credentials_path: Path, values_path: Path) -> dict[str, str]:
+def helmfile_environment(
+    credentials_path: Path | None, values_path: Path
+) -> dict[str, str]:
     environment = os.environ.copy()
-    environment["STARGATE_DEV_CREDENTIALS_FILE"] = str(
-        credentials_path.expanduser().resolve()
-    )
+    if credentials_path is None:
+        environment.pop("STARGATE_DEV_CREDENTIALS_FILE", None)
+    else:
+        environment["STARGATE_DEV_CREDENTIALS_FILE"] = str(
+            credentials_path.expanduser().resolve()
+        )
     environment["STARGATE_DEV_VALUES_FILE"] = str(values_path.expanduser().resolve())
     return environment
 
 
 def static_validate(
-    region: str, phase: str, credentials_path: Path, values_path: Path
+    region: str, phase: str, credentials_path: Path | None, values_path: Path
 ) -> None:
     environment = helmfile_environment(credentials_path, values_path)
     selector = f"phase={phase}"
@@ -537,12 +534,21 @@ def static_validate(
         )
 
 
-def apply(region: str, phase: str, credentials_path: Path, values_path: Path) -> None:
+def apply(
+    region: str,
+    phase: str,
+    credentials_path: Path | None,
+    values_path: Path,
+) -> None:
     require_tools("aws", "helm", "helmfile", "kubeconform", "kubectl")
     if run(["helm", "diff", "version"], check=False).returncode:
         raise DeploymentError("the helm-diff plugin is required by helmfile apply")
     config = load_deployment_values(region, values_path)
-    credentials = load_credentials(credentials_path, config)
+    credentials = None
+    if phase != "observability":
+        if credentials_path is None:
+            raise DeploymentError(f"--credentials is required for the {phase} phase")
+        credentials = load_credentials(credentials_path, config)
     validate_deployment_inputs(config, phase)
     account = aws_account(config)
     contexts = configured_contexts()
@@ -551,7 +557,8 @@ def apply(region: str, phase: str, credentials_path: Path, values_path: Path) ->
         clusters.extend(config["clusters"]["mockdcs"])
     for cluster in clusters:
         verify_cluster(cluster, config, account, contexts)
-    verify_chart_secret_immutability(config, credentials, phase)
+    if credentials is not None:
+        verify_chart_secret_immutability(config, credentials, phase)
     verify_prerequisite_resources(config, phase)
     if phase == "mockdc":
         verify_stargate_endpoint(config)
@@ -592,7 +599,7 @@ def parse_args() -> argparse.Namespace:
     apply_parser.add_argument(
         "--phase", choices=("stargate", "mockdc", "observability"), required=True
     )
-    apply_parser.add_argument("--credentials", type=Path, required=True)
+    apply_parser.add_argument("--credentials", type=Path)
     apply_parser.add_argument("--values", type=Path, required=True)
     return parser.parse_args()
 

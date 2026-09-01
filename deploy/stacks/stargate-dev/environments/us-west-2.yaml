@@ -86,5 +86,4 @@ observability:
     workspaceId: ws-00000000-0000-0000-0000-000000000000
     writerRoleArn: arn:aws:iam::000000000000:role/stargate-dev-amp-writer
   grafana:
-    workspaceId: g-0000000000
-    endpoint: g-0000000000.grafana-workspace.us-west-2.amazonaws.com
+    readerRoleArn: arn:aws:iam::000000000000:role/stargate-dev-grafana
