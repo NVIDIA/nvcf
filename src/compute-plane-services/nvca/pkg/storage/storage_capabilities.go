@@ -38,7 +38,7 @@ const (
 	// serialized storage capability catalog.
 	StorageCapabilityConfigMapKey = "storage-provider-capabilities.yaml"
 
-	// ModelCacheTransitionDisabled prevents durable storage for a workflow.
+	// ModelCacheTransitionDisabled means no durable cache for a workflow.
 	ModelCacheTransitionDisabled = "disabled"
 	// ModelCacheTransitionROXReadOnly populates a writer claim and publishes a
 	// separate ReadOnlyMany reader claim with read-only Pod mounts.
@@ -46,8 +46,8 @@ const (
 	// ModelCacheTransitionRWXReadOnly populates one ReadWriteMany claim and
 	// serves that same claim through read-only Pod mounts.
 	ModelCacheTransitionRWXReadOnly = "rwxReadOnly"
-	// ModelCacheProviderNVMesh is the only provider currently allowed to select
-	// the ROX read-only transition.
+	// ModelCacheProviderNVMesh is the provider id the catalog uses for NVMesh.
+	// It names a driver family; it does not gate what a driver may run.
 	ModelCacheProviderNVMesh = "nvmesh"
 )
 
@@ -57,16 +57,23 @@ type storageCapabilityCatalog struct {
 	Drivers    map[string]storageDriverSpec `json:"drivers"`
 }
 
+// storageDriverSpec records what a qualification run established for one exact
+// CSI provisioner, and nothing more. How NVCA caches on that driver is derived
+// from the access modes, not declared here: a ReadWriteMany claim is shared and
+// mounted read-only, a ReadWriteOnce plus ReadOnlyMany pair gives readers their
+// own claim, and neither means no durable cache.
 type storageDriverSpec struct {
-	Provider           string             `json:"provider"`
-	AccessModes        *[]string          `json:"accessModes"`
-	ReaderMountOptions *[]string          `json:"readerMountOptions"`
-	Transitions        storageTransitions `json:"transitions"`
-}
-
-type storageTransitions struct {
-	RegularModelCache string `json:"regularModelCache"`
-	HelmModelCache    string `json:"helmModelCache"`
+	Provider string `json:"provider"`
+	// AccessModes are the modes qualified end to end in a cache workflow, not
+	// the modes the driver will accept. An empty list means nothing is
+	// qualified yet and caching stays off for that driver. A pointer so that an
+	// absent field is rejected rather than read as empty.
+	AccessModes *[]string `json:"accessModes"`
+	// ReaderMountOptions apply to reader PVs NVCA creates, which only the
+	// ReadWriteOnce plus ReadOnlyMany shape does. Vendor specific options
+	// belong here rather than in code: norecovery and nouuid are NVMesh XFS
+	// requirements and apply to no other driver.
+	ReaderMountOptions *[]string `json:"readerMountOptions"`
 }
 
 func loadStorageCapabilityCatalog(
@@ -153,59 +160,24 @@ func validateStorageCapabilityCatalog(catalog *storageCapabilityCatalog) error {
 			accessModes[mode] = true
 		}
 
-		// A slice, not a map: Go randomises map iteration, so a driver with
-		// both transitions invalid would report whichever one it happened to
-		// reach first. An operator fixing a catalog needs the same error twice.
-		for _, wf := range []struct {
-			workflow string
-			strategy string
-		}{
-			{"regularModelCache", driver.Transitions.RegularModelCache},
-			{"helmModelCache", driver.Transitions.HelmModelCache},
-		} {
-			workflow, strategy := wf.workflow, wf.strategy
-			if strategy != ModelCacheTransitionDisabled && strategy != ModelCacheTransitionROXReadOnly &&
-				strategy != ModelCacheTransitionRWXReadOnly {
-				return fmt.Errorf("driver %q transition %s has invalid strategy %q", provisioner, workflow, strategy)
-			}
-			switch strategy {
-			case ModelCacheTransitionDisabled:
-				continue
-			case ModelCacheTransitionROXReadOnly:
-				if provisioner != NVMeshStorageClassProvisioner {
-					return fmt.Errorf("driver %q transition %s strategy %s is restricted to provisioner %q",
-						provisioner, workflow, strategy, NVMeshStorageClassProvisioner)
-				}
-				if driver.Provider != ModelCacheProviderNVMesh {
-					return fmt.Errorf("driver %q transition %s strategy %s requires provider %q",
-						provisioner, workflow, strategy, ModelCacheProviderNVMesh)
-				}
-				if !accessModes[string(corev1.ReadWriteOnce)] || !accessModes[string(corev1.ReadOnlyMany)] {
-					return fmt.Errorf("driver %q transition %s strategy %s requires ReadWriteOnce and ReadOnlyMany access modes",
-						provisioner, workflow, strategy)
-				}
-				for _, requiredOption := range []string{"ro", "norecovery", "nouuid"} {
-					if !readerMountOptions[requiredOption] {
-						return fmt.Errorf("driver %q transition %s strategy %s requires readerMountOption %q",
-							provisioner, workflow, strategy, requiredOption)
-					}
-				}
-			case ModelCacheTransitionRWXReadOnly:
-				if workflow != "regularModelCache" {
-					return fmt.Errorf("driver %q transition %s strategy %s is only supported for regularModelCache",
-						provisioner, workflow, strategy)
-				}
-				if !accessModes[string(corev1.ReadWriteMany)] {
-					return fmt.Errorf("driver %q transition %s strategy %s requires ReadWriteMany access mode",
-						provisioner, workflow, strategy)
-				}
-				if len(*driver.ReaderMountOptions) != 0 {
-					return fmt.Errorf(
-						"driver %q transition %s strategy %s does not create a reader PV "+
-							"and requires empty readerMountOptions",
-						provisioner, workflow, strategy)
-				}
-			}
+		// A driver qualified for the ReadWriteOnce plus ReadOnlyMany shape gets
+		// reader PVs that NVCA creates, so it must say how to mount them
+		// read-only. The shared claim shape creates no reader PV, so it needs
+		// no options.
+		// ReadOnlyMany describes readers. Without a writer mode alongside it
+		// there is nothing to populate the cache.
+		if accessModes[string(corev1.ReadOnlyMany)] &&
+			!accessModes[string(corev1.ReadWriteOnce)] && !accessModes[string(corev1.ReadWriteMany)] {
+			return fmt.Errorf(
+				"driver %q qualifies ReadOnlyMany with no writer mode, "+
+					"it needs ReadWriteOnce or ReadWriteMany",
+				provisioner)
+		}
+		if accessModes[string(corev1.ReadWriteOnce)] && accessModes[string(corev1.ReadOnlyMany)] &&
+			!readerMountOptions["ro"] {
+			return fmt.Errorf(
+				"driver %q qualifies for the ReadOnlyMany reader shape and must list readerMountOption %q",
+				provisioner, "ro")
 		}
 	}
 

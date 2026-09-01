@@ -13,15 +13,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# This public catalog is owned by NVCA and installed with the NVCA chart.
-# accessModes lists only modes demonstrated for the exact tested provider.
-# readerMountOptions lists options for read-only reader PVs that NVCA creates
-# or rewrites. rwxReadOnly mounts the shared claim read-only and uses none.
-# A transition value is a closed enum, not free text. A strategy name means
-# enabled; disabled means the workflow is unsupported.
-# A disabled transition means that the end-to-end workflow is not qualified.
-# The strict loader validates this catalog. Runtime reconciliation does not
-# consume it until the storage-selection change is released.
+# NVCA owns this catalog and installs it with the NVCA chart. It records, for
+# each exact CSI provisioner, the PVC access modes qualified end to end in an
+# NVCF cache workflow. Nothing else is declared: NVCA derives how caching runs
+# from these modes.
+#
+#   ReadWriteMany              one shared claim; readers mount it read-only
+#   ReadWriteOnce+ReadOnlyMany writer takes the claim; readers get their own
+#
+# An access mode a driver merely accepts is not a qualification. A claim that
+# binds is not either. An empty accessModes list means nothing is qualified
+# yet, so caching stays off for that driver, and a provisioner absent from this
+# file is unsupported. Enabling a backend is an edit here, backed by a
+# qualification run.
 apiVersion: storage.nvcf.nvidia.com/v1alpha1
 kind: StorageCapabilityCatalog
 drivers:
@@ -30,39 +34,27 @@ drivers:
     accessModes:
       - ReadWriteOnce
       - ReadOnlyMany
+    # The reader PV is XFS on the same filesystem as the writer, so it needs
+    # nouuid and norecovery or the mount fails outright.
     readerMountOptions:
       - ro
       - norecovery
       - nouuid
-    transitions:
-      regularModelCache: roxReadOnly
-      helmModelCache: roxReadOnly
   csi.weka.io:
     provider: weka
-    # Fresh RWX and ROX claims were tested. Cross-namespace cache lifecycle is
-    # not yet qualified, so both transitions remain disabled.
-    accessModes:
-      - ReadWriteMany
-      - ReadOnlyMany
+    # Fresh ReadWriteMany and ReadOnlyMany claims were tested, but a cache
+    # workflow was not, so nothing is qualified yet.
+    accessModes: []
     readerMountOptions: []
-    transitions:
-      regularModelCache: disabled
-      helmModelCache: disabled
   fss.csi.oraclecloud.com:
     provider: ociFss
-    # Only an RWX claim was tested. Its readers used read-only Pod mounts; that
-    # is not evidence that a ReadOnlyMany claim is supported.
-    accessModes:
-      - ReadWriteMany
+    # A ReadWriteMany claim was tested; its readers used read-only Pod mounts,
+    # which is not evidence for a ReadOnlyMany claim. No cache workflow was
+    # qualified.
+    accessModes: []
     readerMountOptions: []
-    transitions:
-      regularModelCache: disabled
-      helmModelCache: disabled
   lustre.csi.oraclecloud.com:
     provider: ociLustre
     # No PVC access mode has been qualified in an NVCF cache workflow.
     accessModes: []
     readerMountOptions: []
-    transitions:
-      regularModelCache: disabled
-      helmModelCache: disabled

@@ -55,9 +55,6 @@ drivers:
     provider: nvmesh
     accessModes: [ReadWriteOnce, ReadOnlyMany]
     readerMountOptions: [ro, norecovery, nouuid]
-    transitions:
-      regularModelCache: roxReadOnly
-      helmModelCache: roxReadOnly
 `
 
 func accessModes(modes ...string) *[]string {
@@ -77,10 +74,6 @@ func validStorageCapabilityCatalog() *storageCapabilityCatalog {
 				Provider:           ModelCacheProviderNVMesh,
 				AccessModes:        accessModes("ReadWriteOnce", "ReadOnlyMany"),
 				ReaderMountOptions: readerMountOptions("ro", "norecovery", "nouuid"),
-				Transitions: storageTransitions{
-					RegularModelCache: ModelCacheTransitionROXReadOnly,
-					HelmModelCache:    ModelCacheTransitionROXReadOnly,
-				},
 			},
 		},
 	}
@@ -92,8 +85,6 @@ func TestLoadStorageCapabilityCatalogStrict(t *testing.T) {
 	catalog, err := loadStorageCapabilityCatalog(t.Context(), c, testCatalogNamespace)
 	require.NoError(t, err)
 	nvmesh := catalog.Drivers[NVMeshStorageClassProvisioner]
-	assert.Equal(t, ModelCacheTransitionROXReadOnly, nvmesh.Transitions.RegularModelCache)
-	assert.Equal(t, ModelCacheTransitionROXReadOnly, nvmesh.Transitions.HelmModelCache)
 	require.NotNil(t, nvmesh.AccessModes)
 	assert.ElementsMatch(t, []string{"ReadWriteOnce", "ReadOnlyMany"}, *nvmesh.AccessModes)
 	require.NotNil(t, nvmesh.ReaderMountOptions)
@@ -181,10 +172,10 @@ func TestLoadStorageCapabilityCatalogRejectsUnknownFields(t *testing.T) {
 			want: "unknown field \"surprise\"",
 		},
 		{
-			name: "container cache transition",
-			raw: strings.Replace(validCatalog, "      helmModelCache: roxReadOnly",
-				"      helmModelCache: roxReadOnly\n      containerCache: disabled", 1),
-			want: "unknown field \"containerCache\"",
+			name: "declared transition",
+			raw: strings.Replace(validCatalog, "    provider: nvmesh",
+				"    provider: nvmesh\n    transitions:\n      helmModelCache: roxReadOnly", 1),
+			want: "unknown field \"transitions\"",
 		},
 	}
 
@@ -271,63 +262,16 @@ func TestValidateStorageCapabilityCatalog(t *testing.T) {
 			d.ReaderMountOptions = readerMountOptions("ro", "norecovery", "uuid", "nouuid")
 			c.Drivers[NVMeshStorageClassProvisioner] = d
 		}, want: `readerMountOptions "uuid" and "nouuid" conflict`},
-		{name: "ROX transition lacks ro reader mount option", mutate: func(c *storageCapabilityCatalog) {
+		{name: "ReadOnlyMany reader shape lacks ro reader mount option", mutate: func(c *storageCapabilityCatalog) {
 			d := c.Drivers[NVMeshStorageClassProvisioner]
 			d.ReaderMountOptions = readerMountOptions("norecovery", "nouuid")
 			c.Drivers[NVMeshStorageClassProvisioner] = d
-		}, want: `requires readerMountOption "ro"`},
-		{name: "ROX transition lacks norecovery reader mount option", mutate: func(c *storageCapabilityCatalog) {
-			d := c.Drivers[NVMeshStorageClassProvisioner]
-			d.ReaderMountOptions = readerMountOptions("ro", "nouuid")
-			c.Drivers[NVMeshStorageClassProvisioner] = d
-		}, want: `requires readerMountOption "norecovery"`},
-		{name: "ROX transition lacks nouuid reader mount option", mutate: func(c *storageCapabilityCatalog) {
-			d := c.Drivers[NVMeshStorageClassProvisioner]
-			d.ReaderMountOptions = readerMountOptions("ro", "norecovery")
-			c.Drivers[NVMeshStorageClassProvisioner] = d
-		}, want: `requires readerMountOption "nouuid"`},
-		{name: "bad regular transition", mutate: func(c *storageCapabilityCatalog) {
-			d := c.Drivers[NVMeshStorageClassProvisioner]
-			d.Transitions.RegularModelCache = "shared-pvc-readonly-fanout"
-			c.Drivers[NVMeshStorageClassProvisioner] = d
-		}, want: "invalid strategy"},
-		{name: "bad helm transition", mutate: func(c *storageCapabilityCatalog) {
-			d := c.Drivers[NVMeshStorageClassProvisioner]
-			d.Transitions.HelmModelCache = "samba"
-			c.Drivers[NVMeshStorageClassProvisioner] = d
-		}, want: "invalid strategy"},
-		{name: "ROX transition is provisioner-specific", mutate: func(c *storageCapabilityCatalog) {
-			d := c.Drivers[NVMeshStorageClassProvisioner]
-			delete(c.Drivers, NVMeshStorageClassProvisioner)
-			c.Drivers["example.csi.test"] = d
-		}, want: "restricted to provisioner"},
-		{name: "ROX transition is provider-specific", mutate: func(c *storageCapabilityCatalog) {
-			d := c.Drivers[NVMeshStorageClassProvisioner]
-			d.Provider = "weka"
-			c.Drivers[NVMeshStorageClassProvisioner] = d
-		}, want: "requires provider"},
-		{name: "ROX transition lacks ReadWriteOnce", mutate: func(c *storageCapabilityCatalog) {
+		}, want: `must list readerMountOption "ro"`},
+		{name: "ReadOnlyMany without ReadWriteOnce has no writer", mutate: func(c *storageCapabilityCatalog) {
 			d := c.Drivers[NVMeshStorageClassProvisioner]
 			d.AccessModes = accessModes("ReadOnlyMany")
 			c.Drivers[NVMeshStorageClassProvisioner] = d
-		}, want: "requires ReadWriteOnce and ReadOnlyMany"},
-		{name: "ROX transition lacks ReadOnlyMany", mutate: func(c *storageCapabilityCatalog) {
-			d := c.Drivers[NVMeshStorageClassProvisioner]
-			d.AccessModes = accessModes("ReadWriteOnce")
-			c.Drivers[NVMeshStorageClassProvisioner] = d
-		}, want: "requires ReadWriteOnce and ReadOnlyMany"},
-		{name: "RWX transition is rejected for Helm", mutate: func(c *storageCapabilityCatalog) {
-			d := c.Drivers[NVMeshStorageClassProvisioner]
-			d.AccessModes = accessModes("ReadWriteOnce", "ReadOnlyMany", "ReadWriteMany")
-			d.Transitions.HelmModelCache = ModelCacheTransitionRWXReadOnly
-			c.Drivers[NVMeshStorageClassProvisioner] = d
-		}, want: "only supported for regularModelCache"},
-		{name: "RWX transition lacks ReadWriteMany", mutate: func(c *storageCapabilityCatalog) {
-			d := c.Drivers[NVMeshStorageClassProvisioner]
-			d.Transitions.RegularModelCache = ModelCacheTransitionRWXReadOnly
-			d.Transitions.HelmModelCache = ModelCacheTransitionDisabled
-			c.Drivers[NVMeshStorageClassProvisioner] = d
-		}, want: "requires ReadWriteMany"},
+		}, want: "ReadOnlyMany with no writer mode"},
 	}
 
 	for _, tt := range tests {
@@ -339,37 +283,80 @@ func TestValidateStorageCapabilityCatalog(t *testing.T) {
 	}
 }
 
-func TestValidateStorageCapabilityCatalogAllowsRegularRWXReadOnly(t *testing.T) {
+// TestValidateStorageCapabilityCatalogAccepts covers shapes that are valid
+// because the catalog records qualified access modes only. NVCA derives the
+// flow, so nothing here is restricted to a known provisioner or provider, and
+// filesystem specific reader options are per driver data rather than a rule.
+func TestValidateStorageCapabilityCatalogAccepts(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*storageCapabilityCatalog)
+	}{
+		{name: "reader shape needs only ro", mutate: func(c *storageCapabilityCatalog) {
+			d := c.Drivers[NVMeshStorageClassProvisioner]
+			d.ReaderMountOptions = readerMountOptions("ro")
+			c.Drivers[NVMeshStorageClassProvisioner] = d
+		}},
+		{name: "any provisioner may qualify for the reader shape", mutate: func(c *storageCapabilityCatalog) {
+			d := c.Drivers[NVMeshStorageClassProvisioner]
+			d.Provider = "example"
+			delete(c.Drivers, NVMeshStorageClassProvisioner)
+			c.Drivers["example.csi.test"] = d
+		}},
+		{name: "ReadWriteOnce alone qualifies for nothing", mutate: func(c *storageCapabilityCatalog) {
+			d := c.Drivers[NVMeshStorageClassProvisioner]
+			d.AccessModes = accessModes("ReadWriteOnce")
+			d.ReaderMountOptions = readerMountOptions()
+			c.Drivers[NVMeshStorageClassProvisioner] = d
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			catalog := validStorageCapabilityCatalog()
+			tt.mutate(catalog)
+			require.NoError(t, validateStorageCapabilityCatalog(catalog))
+		})
+	}
+}
+
+// TestValidateStorageCapabilityCatalogAcceptsSharedClaimDriver covers a driver
+// NVCA has no special knowledge of. A shared claim creates no reader PV, so it
+// needs no reader mount options, and listing some is not an error either: the
+// options simply go unused.
+func TestValidateStorageCapabilityCatalogAcceptsSharedClaimDriver(t *testing.T) {
 	const provisioner = "shared.csi.example.com"
 	catalog := validStorageCapabilityCatalog()
 	catalog.Drivers[provisioner] = storageDriverSpec{
-		Provider:           "sharedFilesystem",
+		Provider:           "someVendor",
 		AccessModes:        accessModes("ReadWriteMany", "ReadOnlyMany"),
 		ReaderMountOptions: readerMountOptions(),
-		Transitions: storageTransitions{
-			RegularModelCache: ModelCacheTransitionRWXReadOnly,
-			HelmModelCache:    ModelCacheTransitionDisabled,
-		},
 	}
-
 	require.NoError(t, validateStorageCapabilityCatalog(catalog))
-
-	driver := catalog.Drivers[provisioner]
-	driver.ReaderMountOptions = readerMountOptions("ro")
-	catalog.Drivers[provisioner] = driver
-	require.ErrorContains(t, validateStorageCapabilityCatalog(catalog),
-		"does not create a reader PV and requires empty readerMountOptions")
 }
 
-func TestValidateStorageCapabilityCatalogAllowsDisabledTransitionsWithEmptyModes(t *testing.T) {
+// TestValidateStorageCapabilityCatalogRequiresReadOnlyReaderMount pins the one
+// rule the reader shape still carries: a driver qualified for ReadWriteOnce
+// plus ReadOnlyMany gets reader PVs that NVCA creates, so it has to say how to
+// mount them read-only.
+func TestValidateStorageCapabilityCatalogRequiresReadOnlyReaderMount(t *testing.T) {
+	catalog := validStorageCapabilityCatalog()
+	driver := catalog.Drivers[NVMeshStorageClassProvisioner]
+	driver.ReaderMountOptions = readerMountOptions("norecovery", "nouuid")
+	catalog.Drivers[NVMeshStorageClassProvisioner] = driver
+
+	require.ErrorContains(t, validateStorageCapabilityCatalog(catalog),
+		`must list readerMountOption "ro"`)
+}
+
+// TestValidateStorageCapabilityCatalogAllowsNothingQualified covers how an
+// unqualified driver is recorded: present in the catalog with no access modes,
+// rather than absent or rejected.
+func TestValidateStorageCapabilityCatalogAllowsNothingQualified(t *testing.T) {
 	catalog := validStorageCapabilityCatalog()
 	driver := catalog.Drivers[NVMeshStorageClassProvisioner]
 	driver.AccessModes = accessModes()
 	driver.ReaderMountOptions = readerMountOptions()
-	driver.Transitions = storageTransitions{
-		RegularModelCache: ModelCacheTransitionDisabled,
-		HelmModelCache:    ModelCacheTransitionDisabled,
-	}
 	catalog.Drivers[NVMeshStorageClassProvisioner] = driver
 
 	require.NoError(t, validateStorageCapabilityCatalog(catalog))
@@ -387,30 +374,22 @@ func TestShippedStorageCapabilityCatalog(t *testing.T) {
 	require.NoError(t, err)
 
 	nvmesh := catalog.Drivers[NVMeshStorageClassProvisioner]
-	assert.Equal(t, ModelCacheTransitionROXReadOnly, nvmesh.Transitions.RegularModelCache)
-	assert.Equal(t, ModelCacheTransitionROXReadOnly, nvmesh.Transitions.HelmModelCache)
 	require.NotNil(t, nvmesh.AccessModes)
 	assert.ElementsMatch(t, []string{"ReadWriteOnce", "ReadOnlyMany"}, *nvmesh.AccessModes)
 	require.NotNil(t, nvmesh.ReaderMountOptions)
 	assert.Equal(t, []string{"ro", "norecovery", "nouuid"}, *nvmesh.ReaderMountOptions)
 
+	// Weka, FSS and Lustre are recorded but not qualified for a cache workflow,
+	// so they carry no access modes and caching stays off for them. Enabling
+	// one is an edit to its accessModes, backed by a qualification run.
 	for _, provisioner := range []string{"csi.weka.io", "fss.csi.oraclecloud.com", "lustre.csi.oraclecloud.com"} {
 		driver, ok := catalog.Drivers[provisioner]
 		require.True(t, ok, provisioner)
-		assert.Equal(t, "disabled", driver.Transitions.RegularModelCache)
-		assert.Equal(t, "disabled", driver.Transitions.HelmModelCache)
-		require.NotNil(t, driver.ReaderMountOptions)
-		assert.Empty(t, *driver.ReaderMountOptions)
+		require.NotNil(t, driver.AccessModes, provisioner)
+		assert.Empty(t, *driver.AccessModes, provisioner)
+		require.NotNil(t, driver.ReaderMountOptions, provisioner)
+		assert.Empty(t, *driver.ReaderMountOptions, provisioner)
 	}
-	weka := catalog.Drivers["csi.weka.io"]
-	require.NotNil(t, weka.AccessModes)
-	assert.ElementsMatch(t, []string{"ReadWriteMany", "ReadOnlyMany"}, *weka.AccessModes)
-	fss := catalog.Drivers["fss.csi.oraclecloud.com"]
-	require.NotNil(t, fss.AccessModes)
-	assert.Equal(t, []string{"ReadWriteMany"}, *fss.AccessModes)
-	lustre := catalog.Drivers["lustre.csi.oraclecloud.com"]
-	require.NotNil(t, lustre.AccessModes)
-	assert.Empty(t, *lustre.AccessModes)
 
 	schemaRaw, err := os.ReadFile(filepath.Join(chartDir, "files", "nvcf-storage-capabilities-v1alpha1.schema.json"))
 	require.NoError(t, err)
@@ -419,42 +398,11 @@ func TestShippedStorageCapabilityCatalog(t *testing.T) {
 	require.NoError(t, json.Unmarshal(schemaRaw, &schema))
 	definitions, ok := schema["$defs"].(map[string]any)
 	require.True(t, ok)
-	regularStrategy, ok := definitions["regularTransitionStrategy"].(map[string]any)
-	require.True(t, ok)
-	helmStrategy, ok := definitions["helmTransitionStrategy"].(map[string]any)
+	accessMode, ok := definitions["accessMode"].(map[string]any)
 	require.True(t, ok)
 	assert.ElementsMatch(t,
-		[]any{ModelCacheTransitionDisabled, ModelCacheTransitionROXReadOnly, ModelCacheTransitionRWXReadOnly},
-		regularStrategy["enum"])
-	assert.ElementsMatch(t,
-		[]any{ModelCacheTransitionDisabled, ModelCacheTransitionROXReadOnly},
-		helmStrategy["enum"])
-}
-
-// TestValidateStorageCapabilityCatalogErrorsAreDeterministic pins the error an
-// operator sees. The workflows were iterated as a map, and Go randomises map
-// iteration, so a driver with both transitions invalid reported whichever one
-// it happened to reach first. Fixing a catalog against an error that changes
-// between runs is guesswork.
-func TestValidateStorageCapabilityCatalogErrorsAreDeterministic(t *testing.T) {
-	catalog := func() *storageCapabilityCatalog {
-		c := validStorageCapabilityCatalog()
-		d := c.Drivers[NVMeshStorageClassProvisioner]
-		d.Transitions.RegularModelCache = "notAStrategy"
-		d.Transitions.HelmModelCache = "alsoNotAStrategy"
-		c.Drivers[NVMeshStorageClassProvisioner] = d
-		return c
-	}
-
-	first := validateStorageCapabilityCatalog(catalog())
-	require.Error(t, first)
-	assert.Contains(t, first.Error(), "regularModelCache",
-		"the first workflow in declaration order is the one reported")
-
-	for i := 0; i < 20; i++ {
-		got := validateStorageCapabilityCatalog(catalog())
-		require.Error(t, got)
-		assert.Equal(t, first.Error(), got.Error(),
-			"the same invalid catalog must produce the same error every time")
-	}
+		[]any{"ReadWriteOnce", "ReadOnlyMany", "ReadWriteMany"}, accessMode["enum"],
+		"the schema constrains qualified access modes, and declares no cache flow")
+	assert.NotContains(t, definitions, "transitions",
+		"the flow is derived from access modes, never declared")
 }
