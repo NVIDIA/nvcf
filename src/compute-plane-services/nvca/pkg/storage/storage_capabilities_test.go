@@ -430,3 +430,31 @@ func TestShippedStorageCapabilityCatalog(t *testing.T) {
 		[]any{ModelCacheTransitionDisabled, ModelCacheTransitionROXReadOnly},
 		helmStrategy["enum"])
 }
+
+// TestValidateStorageCapabilityCatalogErrorsAreDeterministic pins the error an
+// operator sees. The workflows were iterated as a map, and Go randomises map
+// iteration, so a driver with both transitions invalid reported whichever one
+// it happened to reach first. Fixing a catalog against an error that changes
+// between runs is guesswork.
+func TestValidateStorageCapabilityCatalogErrorsAreDeterministic(t *testing.T) {
+	catalog := func() *storageCapabilityCatalog {
+		c := validStorageCapabilityCatalog()
+		d := c.Drivers[NVMeshStorageClassProvisioner]
+		d.Transitions.RegularModelCache = "notAStrategy"
+		d.Transitions.HelmModelCache = "alsoNotAStrategy"
+		c.Drivers[NVMeshStorageClassProvisioner] = d
+		return c
+	}
+
+	first := validateStorageCapabilityCatalog(catalog())
+	require.Error(t, first)
+	assert.Contains(t, first.Error(), "regularModelCache",
+		"the first workflow in declaration order is the one reported")
+
+	for i := 0; i < 20; i++ {
+		got := validateStorageCapabilityCatalog(catalog())
+		require.Error(t, got)
+		assert.Equal(t, first.Error(), got.Error(),
+			"the same invalid catalog must produce the same error every time")
+	}
+}

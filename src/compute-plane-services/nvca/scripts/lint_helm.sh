@@ -51,10 +51,10 @@ assert_eq() {
   local message=${3}
 
   if [[ "${got}" != "${want}" ]]; then
-    printf '✗ %s: got %q, want %q\n' "${message}" "${got}" "${want}" >&2
+    printf 'FAIL %s: got %q, want %q\n' "${message}" "${got}" "${want}" >&2
     return 1
   fi
-  printf '✓ %s\n' "${message}"
+  printf 'ok %s\n' "${message}"
 }
 
 assert_pre_delete_cleanup_rbac() {
@@ -392,7 +392,7 @@ assert_service_oauth_nil_safe() {
     exit 1
   fi
   rm -f "${render_output}"
-  echo "✓ ${label} cluster-dto renders nil-safely without agent.serviceOAuth defaults"
+  echo "ok ${label} cluster-dto renders nil-safely without agent.serviceOAuth defaults"
 }
 
 assert_service_oauth_nil_safe "helm-managed" \
@@ -498,7 +498,7 @@ assert_transport_trust_config() {
     exit 1
   fi
   rm -f "${render_output}"
-  echo "✓ ${label} workload transport trust ConfigMap renders"
+  echo "ok ${label} workload transport trust ConfigMap renders"
 }
 
 assert_transport_trust_config "default" "" "" "" --set "ngcConfig.serviceKey=fakekey"
@@ -543,22 +543,22 @@ helm template test-release "${repo_root}/deployments/nvca-operator" \
   --values "${repo_root}/test/test-network-policies.yaml" \
   --set "ngcConfig.serviceKey=fakekey" \
   --show-only templates/custom-network-policies-configmap.yaml \
-  | grep -q "nvcf-custom-network-policies" && echo "✓ Network policies ConfigMap created" || echo "✗ Network policies ConfigMap missing"
+  | grep -q "nvcf-custom-network-policies" && echo "ok Network policies ConfigMap created" || echo "FAIL Network policies ConfigMap missing"
 
 helm template test-release "${repo_root}/deployments/nvca-operator" \
   --values "${repo_root}/test/test-custom-annotations.yaml" \
   --set "ngcConfig.serviceKey=fakekey" \
   --show-only templates/custom-annotations-configmap.yaml \
-  | grep -q "nvca-namespace-pod-annotations" && echo "✓ Custom annotations ConfigMap created" || echo "✗ Custom annotations ConfigMap missing"
+  | grep -q "nvca-namespace-pod-annotations" && echo "ok Custom annotations ConfigMap created" || echo "FAIL Custom annotations ConfigMap missing"
 
 # Test ConfigMaps are created even without custom values (always created behavior)
 echo "Testing ConfigMaps are always created..."
 helm template test-release "${repo_root}/deployments/nvca-operator" \
   --set "ngcConfig.serviceKey=fakekey" \
   --show-only templates/custom-annotations-configmap.yaml \
-  | grep -q "nvca-namespace-pod-annotations" && echo "✓ Annotations ConfigMap always created" || echo "✗ Annotations ConfigMap not created"
+  | grep -q "nvca-namespace-pod-annotations" && echo "ok Annotations ConfigMap always created" || echo "FAIL Annotations ConfigMap not created"
 
 helm template test-release "${repo_root}/deployments/nvca-operator" \
   --set "ngcConfig.serviceKey=fakekey" \
   --show-only templates/custom-network-policies-configmap.yaml \
-  | grep -q "nvcf-custom-network-policies" && echo "✓ Network policies ConfigMap always created" || echo "✗ Network policies ConfigMap not created"
+  | grep -q "nvcf-custom-network-policies" && echo "ok Network policies ConfigMap always created" || echo "FAIL Network policies ConfigMap not created"

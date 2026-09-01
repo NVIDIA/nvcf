@@ -153,10 +153,17 @@ func validateStorageCapabilityCatalog(catalog *storageCapabilityCatalog) error {
 			accessModes[mode] = true
 		}
 
-		for workflow, strategy := range map[string]string{
-			"regularModelCache": driver.Transitions.RegularModelCache,
-			"helmModelCache":    driver.Transitions.HelmModelCache,
+		// A slice, not a map: Go randomises map iteration, so a driver with
+		// both transitions invalid would report whichever one it happened to
+		// reach first. An operator fixing a catalog needs the same error twice.
+		for _, wf := range []struct {
+			workflow string
+			strategy string
+		}{
+			{"regularModelCache", driver.Transitions.RegularModelCache},
+			{"helmModelCache", driver.Transitions.HelmModelCache},
 		} {
+			workflow, strategy := wf.workflow, wf.strategy
 			if strategy != ModelCacheTransitionDisabled && strategy != ModelCacheTransitionROXReadOnly &&
 				strategy != ModelCacheTransitionRWXReadOnly {
 				return fmt.Errorf("driver %q transition %s has invalid strategy %q", provisioner, workflow, strategy)
@@ -193,7 +200,9 @@ func validateStorageCapabilityCatalog(catalog *storageCapabilityCatalog) error {
 						provisioner, workflow, strategy)
 				}
 				if len(*driver.ReaderMountOptions) != 0 {
-					return fmt.Errorf("driver %q transition %s strategy %s does not create a reader PV and requires empty readerMountOptions",
+					return fmt.Errorf(
+						"driver %q transition %s strategy %s does not create a reader PV "+
+							"and requires empty readerMountOptions",
 						provisioner, workflow, strategy)
 				}
 			}
