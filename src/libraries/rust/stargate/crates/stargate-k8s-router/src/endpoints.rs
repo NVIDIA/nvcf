@@ -176,9 +176,8 @@ fn target_from_endpoint(endpoint: &Endpoint, grpc_port: u16, quic_port: u16) -> 
 
 fn endpoint_is_ready(conditions: Option<&EndpointConditions>) -> bool {
     let ready = conditions.and_then(|c| c.ready).unwrap_or(true);
-    let serving = conditions.and_then(|c| c.serving).unwrap_or(true);
     let terminating = conditions.and_then(|c| c.terminating).unwrap_or(false);
-    ready && serving && !terminating
+    ready && !terminating
 }
 
 fn endpoint_pod_name(endpoint: &Endpoint) -> Option<&str> {
@@ -424,20 +423,38 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_excludes_unready_serving_false_and_terminating_endpoints() {
+    fn snapshot_includes_published_warming_endpoint() {
+        let slice = slice(
+            "slice-a",
+            vec![endpoint(
+                "warming",
+                "10.0.0.10",
+                conditions(Some(true), Some(false), Some(false)),
+            )],
+        );
+
+        let snapshot = snapshot_from_slices([&slice], &config());
+
+        assert_eq!(
+            snapshot.target_for_pod("warming"),
+            Some(target("warming", "10.0.0.10"))
+        );
+    }
+
+    #[test]
+    fn snapshot_excludes_unready_and_terminating_endpoints() {
         let slice = slice(
             "slice-a",
             vec![
-                endpoint("unready", "10.0.0.10", conditions(Some(false), None, None)),
                 endpoint(
-                    "not-serving",
-                    "10.0.0.11",
-                    conditions(None, Some(false), None),
+                    "unready",
+                    "10.0.0.10",
+                    conditions(Some(false), Some(false), Some(false)),
                 ),
                 endpoint(
                     "terminating",
-                    "10.0.0.12",
-                    conditions(None, None, Some(true)),
+                    "10.0.0.11",
+                    conditions(Some(true), Some(true), Some(true)),
                 ),
             ],
         );

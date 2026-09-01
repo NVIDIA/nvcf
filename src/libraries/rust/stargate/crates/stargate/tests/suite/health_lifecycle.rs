@@ -15,7 +15,10 @@
 
 use std::time::Duration;
 
-use crate::common::{init_crypto, make_stargate_runtime};
+use crate::common::{
+    init_crypto, make_stargate_runtime, make_stargate_runtime_with_readiness_warmup,
+    start_and_register_backend, wait_for_routing,
+};
 
 #[tokio::test]
 async fn healthz_returns_200() {
@@ -37,7 +40,26 @@ async fn healthz_returns_200() {
 }
 
 #[tokio::test]
-async fn readyz_returns_200() {
+async fn readyz_returns_200_when_warmup_is_disabled() {
+    init_crypto();
+
+    let (_grpc_addr, http_addr, runtime) =
+        make_stargate_runtime_with_readiness_warmup("test-sg-readyz-no-warmup", Duration::ZERO);
+    let handle = runtime.start().await.expect("stargate failed to start");
+
+    let response = reqwest::Client::new()
+        .get(format!("http://{http_addr}/readyz"))
+        .send()
+        .await
+        .expect("readyz request failed");
+    assert_eq!(response.status(), 200);
+
+    handle.begin_shutdown();
+    handle.wait_for_shutdown(Duration::from_secs(5)).await;
+}
+
+#[tokio::test]
+async fn readyz_returns_503_during_warmup() {
     init_crypto();
 
     let (_grpc_addr, http_addr, runtime) = make_stargate_runtime("test-sg-readyz");
@@ -49,8 +71,36 @@ async fn readyz_returns_200() {
         .send()
         .await
         .expect("readyz request failed");
-    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.status(), 503);
 
+    handle.begin_shutdown();
+    handle.wait_for_shutdown(Duration::from_secs(5)).await;
+}
+
+#[tokio::test]
+async fn pylon_registration_succeeds_during_readiness_warmup() {
+    init_crypto();
+
+    let (grpc_addr, http_addr, runtime) = make_stargate_runtime("test-sg-warmup-registration");
+    let handle = runtime.start().await.expect("stargate failed to start");
+
+    let mut backend = start_and_register_backend(
+        &[grpc_addr.to_string()],
+        "warmup-backend",
+        "warmup-model",
+        false,
+    )
+    .await;
+    wait_for_routing(http_addr, "warmup-model", Duration::from_secs(5)).await;
+
+    let response = reqwest::Client::new()
+        .get(format!("http://{http_addr}/readyz"))
+        .send()
+        .await
+        .expect("readyz request failed");
+    assert_eq!(response.status(), 503);
+
+    backend.stop();
     handle.begin_shutdown();
     handle.wait_for_shutdown(Duration::from_secs(5)).await;
 }

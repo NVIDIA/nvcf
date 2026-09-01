@@ -280,6 +280,17 @@ nvcfGatewayRoutes:
         port: 8080
       routeAnnotations: {}
 
+    eventLedger:
+      enabled: true
+      name: event-ledger
+      hostnames:
+        - "events.{{ .Values.nvcfGatewayRoutes.domain }}"
+      backend:
+        name: event-ledger
+        namespace: nvcf
+        port: 8080
+      routeAnnotations: {}
+
   # PodMonitors for Envoy Gateway proxy pods.
   podMonitors:
     enabled: false

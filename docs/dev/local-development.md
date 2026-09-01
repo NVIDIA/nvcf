@@ -108,8 +108,9 @@ the rationale.
 - [k3d](https://k3d.io/#installation) v5.x or later
 - `kubectl`
 - `helm` >= 3.12
-- `helmfile` >= 1.1.0, < 1.2.0 (Helmfile flows only)
-- `helm-diff` plugin (Helmfile flows only):
+- [Go](https://go.dev/doc/install) >= 1.24.0 (required to build `nvcf-cli`)
+- `helmfile` >= 1.1.0, < 1.2.0
+- `helm-diff` plugin:
   `helm plugin install https://github.com/databus23/helm-diff`
 - An NGC API key with access to the NVCF chart and image registry.
 - `nvcf-cli` built from this repo:

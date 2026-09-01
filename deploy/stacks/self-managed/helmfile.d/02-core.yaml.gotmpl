@@ -65,13 +65,13 @@ releases:
       - ess/ess-api
 
   - name: nvct-api
-    version: 1.4.3
+    version: 1.5.2
     namespace: nvcf
     inherit:
       - template: service
 
   - name: invocation-service
-    version: 1.5.6
+    version: 1.6.0
     namespace: nvcf
     inherit:
       - template: service
@@ -168,7 +168,7 @@ releases:
     {{- $llmRequestRouterChartPath := dig "addons" "llm" "requestRouter" "chartPath" "" .Values }}
     chart: {{ $llmRequestRouterChartPath | default "nvcf/helm-nvcf-llm-request-router" | quote }}
     {{- if not $llmRequestRouterChartPath }}
-    version: 1.10.0
+    version: 1.12.2
     {{- end }}
     namespace: nvcf
     condition: addons.llm.enabled
@@ -181,7 +181,7 @@ releases:
 
   - name: llm-api-gateway
     chart: nvcf/helm-nvcf-llm-api-gateway
-    version: 1.4.1
+    version: 1.4.2
     namespace: nvcf
     condition: addons.llm.enabled
     values:
@@ -192,7 +192,7 @@ releases:
       release-group: services
 
   - name: vanity-gateway
-    version: 0.3.0
+    version: 0.4.0
     namespace: nvcf
     condition: addons.vanityGateway.enabled
     inherit:
@@ -217,7 +217,7 @@ releases:
     {{- $gatewayRoutesChartPath := dig "ingress" "gatewayApi" "chartPath" "" .Values }}
     chart: {{ $gatewayRoutesChartPath | default "nvcf/nvcf-gateway-routes" | quote }}
     {{- if not $gatewayRoutesChartPath }}
-    version: 1.16.0
+    version: 1.17.0
     {{- end }}
     needs:
       - nvcf/notary-service

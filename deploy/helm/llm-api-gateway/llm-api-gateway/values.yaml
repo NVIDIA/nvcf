@@ -63,7 +63,7 @@ llmApiGateway:
 
   config:
     region: global
-    requestRouterUrl: "http://llm-request-router-headless.nvcf.svc.cluster.local:8000"
+    requestRouterUrl: "http://llm-request-router.nvcf.svc.cluster.local:8000"
     requestRouterConnectTimeout: 2s
     requestRouterRequestTimeout: 0s
     nvcfGrpcAddr: "api.nvcf.svc.cluster.local:9090"

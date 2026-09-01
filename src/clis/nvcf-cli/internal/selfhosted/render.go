@@ -26,7 +26,8 @@ import (
 )
 
 // RenderOptions controls a single invocation of 'helmfile template' or
-// 'helmfile apply'. Stdout/Stderr writers are caller-supplied so the install
+// 'helmfile apply --skip-diff-on-install'. Stdout/Stderr writers are
+// caller-supplied so the install
 // command can split YAML output (stdout) from helmfile progress (stderr) per
 // spec §6.1.
 type RenderOptions struct {
@@ -48,8 +49,8 @@ type RenderOptions struct {
 	// Selector (optional) is the -l flag value for narrowing to a single
 	// release group (e.g. "component=control-plane").
 	Selector string
-	// Apply runs 'helmfile apply' when true; otherwise runs 'helmfile template'.
-	// Apply=true is reserved for the up orchestrator (M5).
+	// Apply runs 'helmfile apply --skip-diff-on-install' when true; otherwise
+	// runs 'helmfile template'.
 	Apply bool
 	// ExtraEnv holds additional environment variables in "KEY=VALUE" form that
 	// are appended to the helmfile subprocess environment after HELMFILE_ENV.
@@ -69,7 +70,7 @@ type RenderOptions struct {
 	Ctx    context.Context
 }
 
-// Render invokes 'helmfile {template,apply}' against the resolved stack tree,
+// Render invokes helmfile template or apply against the resolved stack tree,
 // plumbing HELMFILE_ENV through the subprocess environment. Stdout and Stderr
 // are written to the caller-supplied writers. A non-zero exit code from
 // helmfile is returned as a wrapped error containing the exit status.
@@ -94,6 +95,9 @@ func Render(opts RenderOptions) error {
 		args = append(args, "--kube-context="+opts.KubeContext)
 	}
 	args = append(args, verb)
+	if opts.Apply {
+		args = append(args, "--skip-diff-on-install")
+	}
 
 	ctx := opts.Ctx
 	if ctx == nil {
