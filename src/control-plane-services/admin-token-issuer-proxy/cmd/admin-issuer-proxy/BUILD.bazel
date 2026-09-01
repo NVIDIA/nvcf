@@ -1,0 +1,59 @@
+# SPDX-FileCopyrightText: Copyright (c) NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load("//rules/oci:defs.bzl", "go_oci_image")
+
+go_library(
+    name = "admin-issuer-proxy_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/control-plane-services/admin-token-issuer-proxy/cmd/admin-issuer-proxy",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//src/control-plane-services/admin-token-issuer-proxy/internal/config",
+        "//src/control-plane-services/admin-token-issuer-proxy/internal/handlers",
+        "//src/control-plane-services/admin-token-issuer-proxy/internal/platform/vault",
+        "//src/control-plane-services/admin-token-issuer-proxy/internal/servicecache",
+    ],
+)
+
+go_binary(
+    name = "admin-issuer-proxy",
+    embed = [":admin-issuer-proxy_lib"],
+    visibility = ["//visibility:public"],
+    x_defs = {
+        "main.Version": "{STABLE_VERSION}",
+        "main.BuildTime": "{BUILD_DATE}",
+        "main.GitCommit": "{STABLE_GIT_COMMIT_FULL}",
+    },
+)
+
+go_test(
+    name = "admin-issuer-proxy_test",
+    srcs = ["main_test.go"],
+    embed = [":admin-issuer-proxy_lib"],
+    deps = [
+        "//src/control-plane-services/admin-token-issuer-proxy/internal/config",
+        "//src/control-plane-services/admin-token-issuer-proxy/internal/models",
+    ],
+)
+
+# Downstream release automation builds this image index from the mirrored
+# path-format release tag and promotes it by digest.
+go_oci_image(
+    name = "image",
+    base = "@distroless_go",
+    binary = ":admin-issuer-proxy",
+    binary_path = "/usr/bin/admin-issuer-proxy",
+    tags = ["admin-token-issuer-proxy"],
+    visibility = ["//visibility:public"],
+)
+
+# Guard the PID 1 executable bit in the generated OCI layer.
+sh_test(
+    name = "image_entrypoint_mode_test",
+    srcs = ["image_entrypoint_mode_test.sh"],
+    args = ["$(location :image.tar)"],
+    data = [":image.tar"],
+)

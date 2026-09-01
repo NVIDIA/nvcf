@@ -177,6 +177,22 @@ go_deps.gazelle_override(
     path = "github.com/NVIDIA/nvcf/src/libraries/go/worker",
 )
 
+# vault/api and its vault/sdk dependency also load @rules_go without a
+# repository mapping in their fetched bzlmod contexts. Regenerate both through
+# this root extension so the apparent rules_go name resolves during analysis.
+# Keep the SDK's checked-in generated Go protobufs: regenerating identity.proto
+# changes acronym casing (GetMFARequestID to GetMfaRequestId) and breaks the
+# paired Vault API source selected by the ESS workspace replacement.
+go_deps.gazelle_override(
+    build_file_generation = "clean",
+    path = "github.com/hashicorp/vault/api",
+)
+go_deps.gazelle_override(
+    build_file_generation = "clean",
+    directives = ["gazelle:proto disable_global"],
+    path = "github.com/hashicorp/vault/sdk",
+)
+
 # nvcf-go ships generated BUILD files whose proto rules reference a
 # protoc-gen-openapiv2/options package that the module does not contain, so
 # analysis fails with "BUILD file not found in directory

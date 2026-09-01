@@ -533,6 +533,7 @@ manifest:
       kind: service-image
       requirement: optional
       description: Proxies admin token requests for the reference architecture.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/src/control-plane-services/admin-token-issuer-proxy
     - artifact_id: llm-api-gateway
       plane: control
       kind: service-image
