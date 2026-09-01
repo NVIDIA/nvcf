@@ -46,6 +46,7 @@ use (
 	./src/invocation-plane-services/llm-api-gateway
 	./src/invocation-plane-services/ratelimiter
 	./src/invocation-plane-services/vanity-gateway
+	./src/control-plane-services/admin-token-issuer-proxy
 	./src/control-plane-services/nats-auth-callout
 	./src/compute-plane-services/ess-agent
 	./src/compute-plane-services/ess-agent/api

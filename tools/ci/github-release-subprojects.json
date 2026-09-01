@@ -142,6 +142,11 @@
       "legacy_tag_prefix": "nvcf-nats-auth-callout-service-v"
     },
     {
+      "id": "admin-token-issuer-proxy-app",
+      "path": "src/control-plane-services/admin-token-issuer-proxy",
+      "service_name": "admin-token-issuer-proxy"
+    },
+    {
       "id": "nvcf-unbound",
       "path": "src/compute-plane-services/nvcf-unbound",
       "service_name": "nvcf-unbound",
