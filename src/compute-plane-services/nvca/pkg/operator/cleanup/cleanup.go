@@ -125,6 +125,12 @@ func CleanupBackendResources( //nolint:revive // exported name is intentional
 
 	// Strip binding finalizers before deleting the control namespace. The agent
 	// may already be stopped during uninstall, so no reconciler remains to do it.
+	//
+	// Failing here stops the uninstall before the NVCFBackend finalizer is
+	// removed, and that is deliberate. Continuing would delete the backend while
+	// bindings still hold finalizers, leaving the namespace Terminating forever
+	// with no reconciler left to release it. Stopping keeps the operator around
+	// so the uninstall can be retried once the cause is fixed.
 	if err := deleteModelCacheBindings(ctx, dynamicClient, DefaultModelCacheInitNamespace); err != nil {
 		return fmt.Errorf("failed to delete model-cache bindings in namespace %s: %w",
 			DefaultModelCacheInitNamespace, err)

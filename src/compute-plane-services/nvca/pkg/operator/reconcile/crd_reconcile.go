@@ -42,6 +42,8 @@ var (
 )
 
 const (
+	// ModelCacheBindingCRDName is the ModelCacheBinding CustomResourceDefinition
+	// the operator installs and reconciles.
 	ModelCacheBindingCRDName   = "modelcachebindings.nvca.nvcf.nvidia.io"
 	StorageRequestCRDName      = "storagerequests.nvca.nvcf.nvidia.io"
 	MiniServicesCRDName        = "miniservices.nvca.nvcf.nvidia.io"
@@ -55,19 +57,19 @@ func (c *BackendK8sCache) setupCRDs(ctx context.Context) error {
 
 	modelCacheBindingCRD, err := decodeCRD(modelCacheBindingsCRDData)
 	if err != nil {
-		return fmt.Errorf("make ModelCacheBinding CRD: %v", err)
+		return fmt.Errorf("make ModelCacheBinding CRD: %w", err)
 	}
 	storageReqCRD, err := decodeCRD(storageRequestsCRDData)
 	if err != nil {
-		return fmt.Errorf("make StorageRequest CRD: %v", err)
+		return fmt.Errorf("make StorageRequest CRD: %w", err)
 	}
 	miniserviceCRD, err := decodeCRD(miniserviceCRDData)
 	if err != nil {
-		return fmt.Errorf("make MiniService CRD: %v", err)
+		return fmt.Errorf("make MiniService CRD: %w", err)
 	}
 	nvsnapFunctionStateCRD, err := decodeCRD(nvsnapFunctionStateCRDData)
 	if err != nil {
-		return fmt.Errorf("make NvSnapFunctionState CRD: %v", err)
+		return fmt.Errorf("make NvSnapFunctionState CRD: %w", err)
 	}
 
 	// Get the NVCFBackend CRD to use as owner reference.
@@ -94,7 +96,7 @@ func (c *BackendK8sCache) setupCRDs(ctx context.Context) error {
 	if err == nil && msCRD.Spec.Scope == apiextv1.NamespaceScoped {
 		err = c.clients.APIExtV1.CustomResourceDefinitions().Delete(ctx, miniserviceCRD.Name, metav1.DeleteOptions{})
 		if err != nil {
-			return fmt.Errorf("failed to migrate miniservice CRD: %v", err)
+			return fmt.Errorf("failed to migrate miniservice CRD: %w", err)
 		}
 	}
 	for _, crdObj := range []*apiextv1.CustomResourceDefinition{
