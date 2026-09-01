@@ -506,6 +506,13 @@ rateLimiter:
 # Set enabled: true for any service running more than one replica.
 
 apikeys:
+  # Operator-set api-keys service env, deep-merged over the chart defaults
+  # (AWS_REGION / SPRING_PROFILES_ACTIVE). Set NVCF_NCA_ID to the NCA the
+  # api-keys service authorizes keys against. Leave unset to keep the chart
+  # defaults only. Non-secret configuration only -- secrets belong in
+  # secrets/<env>-secrets.yaml.
+  # env:
+  #   NVCF_NCA_ID: "nca-xxxxxxxx"
   podDisruptionBudget:
     enabled: false
     maxUnavailable: 1

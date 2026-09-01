@@ -20,6 +20,7 @@ test:
 	@tests/image-override-wiring.sh
 	@tests/sidecar-registry-wiring.sh
 	@tests/api-env-wiring.sh
+	@tests/apikeys-env-wiring.sh
 	@tests/nats-placement-tags.sh
 
 test-published-charts:

@@ -286,6 +286,10 @@ apikeys:
   startupProbe:
     {{- toYaml . | nindent 4 }}
   {{- end }}
+  {{- with dig "apikeys" "env" dict .Values }}
+  env:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 
 natsAuthCalloutService:
   {{- if .Values.global.imagePullSecrets }}
