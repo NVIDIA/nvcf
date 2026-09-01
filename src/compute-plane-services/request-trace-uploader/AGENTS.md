@@ -6,11 +6,11 @@ not publish or delete source segments until a supported upload adapter lands.
 ## Layout
 
 - `cmd/`: process entrypoint and OCI image target
-- `internal/config/`: current sidecar contract and bounded policy parsing
-- `internal/segment/`: closed segment discovery
+- `config/`: sidecar contract and bounded policy parsing
+- `segment/`: closed segment discovery
+- `backend/`: export destination contract and the backend registry
+- `service/`: startup, recovery scan, and HTTP server
 - `internal/health/`: liveness and readiness handlers
-- `internal/upload/`: future upload-client boundary
-- `internal/service/`: startup, recovery scan, and HTTP server
 
 ## Build and test
 
@@ -30,3 +30,8 @@ Run `bazel run //:gazelle` after changing Go imports or Bazel metadata.
 - Do not add a Prometheus scrape endpoint. The later observability increment
   exports logs, traces, and metrics through BYOO OTLP endpoints.
 - Do not log request payloads, credentials, paths, or remote upload IDs.
+- `config`, `segment`, `backend`, and `service` are consumed by other modules
+  that link their own backends. Treat their exported surface as a contract and
+  keep implementation detail under `internal/`.
+- Backends register themselves from an init function. This binary links none,
+  so a build reports an unlinked backend rather than failing to compile.

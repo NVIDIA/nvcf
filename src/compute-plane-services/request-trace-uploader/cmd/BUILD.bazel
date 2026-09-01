@@ -7,8 +7,8 @@ go_library(
     importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/cmd",
     visibility = ["//visibility:private"],
     deps = [
-        "//src/compute-plane-services/request-trace-uploader/internal/config",
-        "//src/compute-plane-services/request-trace-uploader/internal/service",
+        "//src/compute-plane-services/request-trace-uploader/config",
+        "//src/compute-plane-services/request-trace-uploader/service",
     ],
 )
 
