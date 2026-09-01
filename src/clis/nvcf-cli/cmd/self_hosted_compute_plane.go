@@ -257,6 +257,7 @@ func runSelfHostedComputePlaneRegister(c *cobra.Command, _ []string) error {
 	registrationICMSURL := computePlaneRegisterICMSURL(validation.Profile, selected)
 	if err := computePlaneRegisterReachabilityCheck(c.Context(), reachability.CheckRequest{
 		TargetClusterName: computePlaneRegisterClusterName,
+		GatewayHTTPURL:    validation.Profile.ControlPlane.Gateway.HTTPURL,
 		ICMSURL:           registrationICMSURL,
 		ReValURL:          selected.Endpoints.ReValURL,
 		NATSURL:           selected.Endpoints.NATSURL,
