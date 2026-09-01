@@ -68,8 +68,8 @@ fn has_queued_work(stats: &ModelStats) -> bool {
 
 fn checked_ceil_u64(value: f64) -> Option<u64> {
     let rounded = value.ceil();
-    // `u64::MAX as f64` rounds to 2^64, which is already outside u64.
-    (rounded.is_finite() && rounded >= 0.0 && rounded < u64::MAX as f64).then_some(rounded as u64)
+    // `u64::MAX as f64` rounds to 2^64, so the cast must saturate that boundary.
+    (rounded.is_finite() && rounded >= 0.0 && rounded <= u64::MAX as f64).then_some(rounded as u64)
 }
 
 fn proxy_local_priority_map(backends: &[Arc<RoutedInferenceServerSnapshot>]) -> HashMap<u32, u64> {
@@ -120,11 +120,11 @@ fn proxy_local_priority_map(backends: &[Arc<RoutedInferenceServerSnapshot>]) -> 
                     } else {
                         0
                     };
-                    input_tps * wait_ms as f64
+                    (input_tps / input_tps_sum) * wait_ms as f64
                 })
             })
             .sum::<f64>();
-        let Some(weighted_wait_ms) = checked_ceil_u64(weighted_wait_sum / input_tps_sum) else {
+        let Some(weighted_wait_ms) = checked_ceil_u64(weighted_wait_sum) else {
             return HashMap::new();
         };
         aggregate.insert(priority, weighted_wait_ms);

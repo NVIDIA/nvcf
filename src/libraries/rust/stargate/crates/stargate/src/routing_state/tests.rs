@@ -2342,6 +2342,66 @@ async fn proxy_local_aggregation_saturates_gauges_and_rejects_invalid_rate_sums(
 }
 
 #[tokio::test]
+async fn proxy_local_priority_weights_preserve_numeric_boundaries() {
+    let scenario = RegistrationScenario::new(Some("rk-numeric"));
+    let running_a = scenario.start_in("inst-a", "cluster-numeric", 1111);
+    let running_b = scenario.start_in("inst-b", "cluster-numeric", 2222);
+    scenario
+        .publish(
+            &running_a,
+            "model-numeric",
+            Active,
+            proxy_local_stats(ModelStats {
+                last_mean_input_tps: f64::MAX,
+                queue_size: 1,
+                queued_input_size: 1,
+                queue_time_estimate_ms_by_priority: HashMap::from([(0, 2)]),
+                ..ModelStats::default()
+            }),
+            Some(5),
+        )
+        .await;
+    scenario
+        .publish(
+            &running_b,
+            "model-numeric",
+            Active,
+            proxy_local_stats(ModelStats::default()),
+            Some(5),
+        )
+        .await;
+    assert_eq!(
+        scenario
+            .only_cluster("model-numeric")
+            .await
+            .stats
+            .queue_time_estimate_ms_by_priority,
+        HashMap::from([(0, 2)])
+    );
+
+    let saturated = proxy_local_stats(ModelStats {
+        last_mean_input_tps: 1.0,
+        queue_size: 1,
+        queued_input_size: 1,
+        queue_time_estimate_ms_by_priority: HashMap::from([(0, u64::MAX)]),
+        ..ModelStats::default()
+    });
+    for running in [&running_a, &running_b] {
+        scenario
+            .publish(running, "model-numeric", Active, saturated.clone(), Some(5))
+            .await;
+    }
+    assert_eq!(
+        scenario
+            .only_cluster("model-numeric")
+            .await
+            .stats
+            .queue_time_estimate_ms_by_priority,
+        HashMap::from([(0, u64::MAX)])
+    );
+}
+
+#[tokio::test]
 async fn mixed_proxy_local_capability_uses_legacy_source_behavior() {
     let (scenario, _running_a, _running_b) = published_shared_cluster(
         proxy_local_stats(shared_backend_a_stats()),
