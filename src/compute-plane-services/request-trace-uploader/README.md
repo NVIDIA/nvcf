@@ -21,10 +21,16 @@ and verifies local segment discovery. It intentionally does not export logs,
 traces, or metrics, parse or transform records, submit uploads, poll remote
 status, delete source files, or publish a release image.
 
-The `internal/upload` package defines the future upload-client boundary.
+The `backend` package defines the export destination contract and a registry.
 Submit and status are separate operations so a slow confirmation cannot block
-other segments. The real adapters and durable journal are separate follow-up
-work.
+other segments. Backends register themselves from an init function, so a build
+links only the backends it imports.
+
+This binary links no backend, so it reports the configured backend as not
+compiled in. That is what the `-oss` image ships. A distribution that needs a
+backend imports it in its own `main` and reuses the `config`, `segment`,
+`backend`, and `service` packages from this module. The real adapters and
+durable journal are separate follow-up work.
 
 ## Configuration
 

@@ -2,6 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // request-trace-uploader validates and discovers Dynamo request-trace segments.
+//
+// Backends register themselves from an init function, so a build links only
+// the backends it imports. This binary links none, which is what the -oss
+// image ships. A distribution that needs a backend imports it in its own main
+// and reuses the packages here.
 package main
 
 import (
@@ -12,8 +17,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/config"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/service"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/backend"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/config"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/service"
 )
 
 func main() {
@@ -25,6 +31,8 @@ func main() {
 	for _, warning := range warnings {
 		slog.Warn("request trace uploader configuration fallback", "setting", warning)
 	}
+
+	slog.Info("request trace uploader starting", "backend", cfg.Backend, "compiled_backends", backend.Registered())
 
 	svc, err := service.New(cfg)
 	if err != nil {

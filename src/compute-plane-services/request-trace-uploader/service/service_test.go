@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/config"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/config"
 )
 
 func TestInitializeReadinessAndDiscovery(t *testing.T) {

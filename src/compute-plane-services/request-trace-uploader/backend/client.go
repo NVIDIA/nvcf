@@ -1,13 +1,14 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-// Package upload defines the future request-trace upload boundary.
-package upload
+// Package backend defines the export destination contract and the registry
+// that maps a configured backend name to a compiled-in implementation.
+package backend
 
 import (
 	"context"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/segment"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/segment"
 )
 
 // Client submits one prepared segment and reads its terminal status. Submit

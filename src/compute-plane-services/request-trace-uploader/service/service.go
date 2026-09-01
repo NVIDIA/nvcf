@@ -12,9 +12,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/config"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/config"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/health"
-	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/internal/segment"
+	"github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/segment"
 )
 
 // Service owns local readiness checks and the sidecar HTTP server. It
