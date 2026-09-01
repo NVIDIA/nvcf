@@ -787,7 +787,17 @@ func (a *Agent) startEventProcessDispatchers(ctx context.Context, events <-chan 
 		for {
 			select {
 			// Pull from the ticker queue and push to the event-specific queue.
-			case ev := <-events:
+			case ev, open := <-events:
+				// A closed channel yields a nil event immediately and forever.
+				// Without this the dispatcher dereferences that nil, panicking
+				// the agent, and spins on the closed channel until it does.
+				if !open {
+					log.Info("Event channel closed, stopping event dispatcher")
+					return
+				}
+				if ev == nil {
+					continue
+				}
 				if queue, ok := a.resourceEventWorkerQueues[ev.Kind]; ok {
 					if ev.ObjectMetaKey != "" {
 						queue.Add(ev.ObjectMetaKey)

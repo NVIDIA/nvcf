@@ -1588,6 +1588,8 @@ func Test_setupNVCARBAC(t *testing.T) {
 			{
 				APIGroups: []string{"nvca.nvcf.nvidia.io"},
 				Resources: []string{
+					"modelcachebindings",
+					"modelcachebindings/status",
 					"storagerequests",
 					"storagerequests/status",
 				},
@@ -2008,6 +2010,8 @@ func Test_setupNVCARBAC_ValidationPolicy(t *testing.T) {
 			{
 				APIGroups: []string{"nvca.nvcf.nvidia.io"},
 				Resources: []string{
+					"modelcachebindings",
+					"modelcachebindings/status",
 					"storagerequests",
 					"storagerequests/status",
 				},
@@ -2242,6 +2246,8 @@ func Test_NVLinkOptimized(t *testing.T) {
 			{
 				APIGroups: []string{"nvca.nvcf.nvidia.io"},
 				Resources: []string{
+					"modelcachebindings",
+					"modelcachebindings/status",
 					"storagerequests",
 					"storagerequests/status",
 				},

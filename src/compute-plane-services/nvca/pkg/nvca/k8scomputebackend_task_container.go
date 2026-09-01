@@ -157,7 +157,7 @@ func (c K8sComputeBackend) applyContainerTaskCreationMessage(ctx context.Context
 		obj.SetOwnerReferences(ownerRefsForReq)
 		switch typedObj := obj.(type) {
 		case *corev1.PersistentVolumeClaim:
-			if strings.HasPrefix(typedObj.Name, "rw-pvc-") {
+			if isRegularModelCacheWriterPVCName(typedObj.Name) {
 				bdCreateCachePVC = typedObj
 			}
 		case *batchv1.Job:
@@ -180,11 +180,19 @@ func (c K8sComputeBackend) applyContainerTaskCreationMessage(ctx context.Context
 	// which likely mean the cache is still being initialized.
 	cacheMF := func(*corev1.Pod) {}
 	var cachePVCName string
-	if c.bk8s.cachingSupportEnabled && (initCacheJob != nil && bdCreateCachePVC != nil) {
+	modelCachingEnabled, persistedSelection, selectionErr := regularModelCacheRuntimeDecision(
+		req, c.bk8s.cachingSupportEnabled)
+	if selectionErr != nil {
+		return nvcaerrors.TerminalError(selectionErr)
+	}
+	if modelCachingEnabled && (initCacheJob != nil && bdCreateCachePVC != nil) {
 		if cacheMF, cachePVCName, err = c.setupContainerModelCaching(ctx, req, bdCreateCachePVC, initCacheJob, mf); err != nil {
 			return err
 		}
-	} else if !c.bk8s.cachingSupportEnabled {
+	} else if modelCachingEnabled && persistedSelection {
+		return nvcaerrors.TerminalError(fmt.Errorf(
+			"persisted durable regular model cache requires both PVC and init Job artifacts"))
+	} else if !modelCachingEnabled {
 		log.Debugf("ModelCaching support is disabled, creating task instance without caching")
 	} else {
 		log.Debug("InitCacheJob / BDCreate spec was not specified, skipping task model caching")

@@ -19,10 +19,12 @@ package storage
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -50,7 +52,7 @@ func cacheBackendClient(t *testing.T, scs ...*storagev1.StorageClass) *fake.Clie
 	return b
 }
 
-func TestSelectHelmCacheBackend(t *testing.T) {
+func TestSelectLegacyHelmCacheBackend(t *testing.T) {
 	cachingOnly := []*featureflag.FeatureFlag{
 		featureflag.CachingSupport,
 		featureflag.HelmModelCaching,
@@ -72,44 +74,38 @@ func TestSelectHelmCacheBackend(t *testing.T) {
 		{
 			name:  "caching disabled -> none",
 			flags: nil,
-			// nvcf-sc-30 present but caching off: still none.
-			storageClasses: []*storagev1.StorageClass{storageClass(NVMeshStorageClassName)},
+			// The shared class is present but caching is off: still none.
+			storageClasses: []*storagev1.StorageClass{storageClass(HelmCacheSharedStorageClassName)},
 			want:           HelmCacheBackendNone,
 		},
 		{
 			name:  "HelmModelCaching off -> none",
 			flags: []*featureflag.FeatureFlag{featureflag.CachingSupport},
-			// CachingSupport on and nvcf-sc-30 present, but the Helm sub-gate
-			// is off: no backend is selected.
-			storageClasses: []*storagev1.StorageClass{storageClass(NVMeshStorageClassName)},
+			// CachingSupport on, but the Helm sub-gate is off.
+			storageClasses: []*storagev1.StorageClass{storageClass(HelmCacheSharedStorageClassName)},
 			want:           HelmCacheBackendNone,
 		},
 		{
 			name:           "CachingSupport off, HelmModelCaching on -> none",
 			flags:          []*featureflag.FeatureFlag{featureflag.HelmModelCaching},
-			storageClasses: []*storagev1.StorageClass{storageClass(NVMeshStorageClassName)},
+			storageClasses: []*storagev1.StorageClass{storageClass(HelmCacheSharedStorageClassName)},
 			want:           HelmCacheBackendNone,
 		},
 		{
-			name:           "nvcf-sc-30 present -> nvmesh",
-			flags:          cachingOnly,
-			storageClasses: []*storagev1.StorageClass{storageClass(NVMeshStorageClassName)},
-			want:           HelmCacheBackendNVMesh,
-		},
-		{
+			// The nvcf-sc-30 marker class is no longer rendered by the
+			// deployment templates and is no longer consulted. A cluster that
+			// still has one resolves on its shared class like any other.
 			name:           "nvcf-miniservice-sc present -> sharedfs",
 			flags:          cachingOnly,
 			storageClasses: []*storagev1.StorageClass{storageClass(HelmCacheSharedStorageClassName)},
 			want:           HelmCacheBackendSharedFS,
 		},
 		{
-			name:  "both classes present -> nvmesh wins",
-			flags: cachingOnly,
-			storageClasses: []*storagev1.StorageClass{
-				storageClass(NVMeshStorageClassName),
-				storageClass(HelmCacheSharedStorageClassName),
-			},
-			want: HelmCacheBackendNVMesh,
+			name:            "a leftover nvcf-sc-30 does not change the outcome",
+			flags:           cachingOnly,
+			storageClasses:  []*storagev1.StorageClass{storageClass("nvcf-sc-30")},
+			modelCacheClass: "unused-block-class",
+			want:            HelmCacheBackendEphemeral,
 		},
 		{
 			name:           "no shared class, HelmSharedStorage on, model cache class present -> samba",
@@ -156,13 +152,15 @@ func TestSelectHelmCacheBackend(t *testing.T) {
 			want: HelmCacheBackendSharedFS,
 		},
 		{
-			name:  "nvcf-sc-30 takes precedence over samba",
+			// A leftover marker class no longer wins: Samba is still selected
+			// because the shared class is absent and the block class is there.
+			name:  "a leftover nvcf-sc-30 does not pre-empt samba",
 			flags: cachingAndSamba,
 			storageClasses: []*storagev1.StorageClass{
-				storageClass(NVMeshStorageClassName),
+				storageClass("nvcf-sc-30"),
 				storageClass(DefaultModelCacheStorageClassName),
 			},
-			want: HelmCacheBackendNVMesh,
+			want: HelmCacheBackendSamba,
 		},
 		{
 			// Caching off short-circuits before any class lookup.
@@ -178,7 +176,7 @@ func TestSelectHelmCacheBackend(t *testing.T) {
 			c := cacheBackendClient(t, tt.storageClasses...).Build()
 			ff := &featureflagmock.Fetcher{EnabledFFs: tt.flags}
 
-			got, err := SelectHelmCacheBackend(t.Context(), c, ff, tt.modelCacheClass)
+			got, err := SelectLegacyHelmCacheBackend(t.Context(), c, ff, tt.modelCacheClass)
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, got)
 		})
@@ -190,11 +188,39 @@ func TestModelCacheStorageClassNameResolution(t *testing.T) {
 	assert.Equal(t, "custom-block-sc", ModelCacheStorageClassName("custom-block-sc"))
 }
 
-// TestSelectHelmCacheBackend_SambaClassLookupError proves a failed lookup of the
+func TestPersistedHelmCacheBackend(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		raw     string
+		want    HelmCacheBackend
+		wantErr bool
+	}{
+		{name: "empty legacy value", want: HelmCacheBackendNVMesh},
+		{name: "NVMesh", raw: string(HelmCacheBackendNVMesh), want: HelmCacheBackendNVMesh},
+		{name: "shared filesystem", raw: string(HelmCacheBackendSharedFS), want: HelmCacheBackendSharedFS},
+		{name: "Samba", raw: string(HelmCacheBackendSamba), want: HelmCacheBackendSamba},
+		{name: "none is not durable", raw: string(HelmCacheBackendNone), wantErr: true},
+		{name: "ephemeral is not durable", raw: string(HelmCacheBackendEphemeral), wantErr: true},
+		{name: "unknown", raw: "invented", wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := PersistedHelmCacheBackend(tt.raw)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Empty(t, got)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestSelectLegacyHelmCacheBackend_SambaClassLookupError proves a failed lookup of the
 // Samba backing class surfaces as an error rather than silently degrading to the
 // ephemeral cache: a transient API error must be retried, not treated as an
 // absent StorageClass.
-func TestSelectHelmCacheBackend_SambaClassLookupError(t *testing.T) {
+func TestSelectLegacyHelmCacheBackend_SambaClassLookupError(t *testing.T) {
 	sch := runtime.NewScheme()
 	require.NoError(t, storagev1.AddToScheme(sch))
 	c := fake.NewClientBuilder().WithScheme(sch).
@@ -214,7 +240,47 @@ func TestSelectHelmCacheBackend_SambaClassLookupError(t *testing.T) {
 		&featureflag.HelmSharedStorage.FeatureFlag,
 	}}
 
-	_, err := SelectHelmCacheBackend(t.Context(), c, ff, "")
+	_, err := SelectLegacyHelmCacheBackend(t.Context(), c, ff, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), DefaultModelCacheStorageClassName)
+}
+
+// TestHelmCacheBackendFromSelectionRoutesBothShapes checks that a qualified
+// non-NVMesh backend reaches an execution path at all. Before this, durable
+// Helm caching resolved only for the NVMesh shape and every other transition
+// was an error, so a driver could be qualified in the catalog and still fail
+// at run time.
+func TestHelmCacheBackendFromSelectionRoutesBothShapes(t *testing.T) {
+	selection := func(transition string, modes []corev1.PersistentVolumeAccessMode,
+		options []string) *PersistedModelCacheStorageSelection {
+		return &PersistedModelCacheStorageSelection{
+			Version:              ModelCacheStorageSelectionVersion,
+			Workflow:             ModelCacheWorkflowHelm,
+			Mode:                 ModelCacheSelectionDurable,
+			StorageClassName:     DefaultModelCacheStorageClassName,
+			StorageClassUID:      "uid-1",
+			StorageClassDigest:   "v1:sha256:" + strings.Repeat("a", 64),
+			ProfileDigest:        "sha256:" + strings.Repeat("b", 64),
+			Provider:             "weka",
+			Provisioner:          "csi.weka.io",
+			Transition:           transition,
+			RequiredAccessModes:  modes,
+			RequiredMountOptions: options,
+		}
+	}
+
+	rwx := selection(ModelCacheTransitionRWXReadOnly,
+		[]corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany}, nil)
+	backend, err := HelmCacheBackendFromSelection(rwx)
+	require.NoError(t, err, "a ReadWriteMany backend must have a durable Helm path")
+	assert.Equal(t, HelmCacheBackendSharedFS, backend)
+
+	rox := selection(ModelCacheTransitionROXReadOnly,
+		[]corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce, corev1.ReadOnlyMany},
+		[]string{"ro", "norecovery", "nouuid"})
+	rox.Provider = ModelCacheProviderNVMesh
+	rox.Provisioner = NVMeshStorageClassProvisioner
+	backend, err = HelmCacheBackendFromSelection(rox)
+	require.NoError(t, err)
+	assert.Equal(t, HelmCacheBackendNVMesh, backend)
 }

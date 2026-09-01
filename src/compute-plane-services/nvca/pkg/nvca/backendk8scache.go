@@ -2261,6 +2261,9 @@ func (c *BackendK8sCache) CreateICMSCreationMessageRequest(ctx context.Context,
 			TaskID:         mt.Details.TaskID,
 		})
 	}
+	if err := c.persistModelCacheStorageSelection(ctx, &o); err != nil {
+		return nil, err
+	}
 	obj, err := c.clients.BART.NvcaV2beta1().ICMSRequests(c.requestsNamespace).Create(ctx, &o, metav1.CreateOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to persist the ICMS request on the backend, err: %v", err)
@@ -2582,6 +2585,9 @@ func (c *BackendK8sCache) syncICMSRequest(ctx context.Context, req *nvcav2beta1n
 			if retryErr != nil && !k8serrors.IsNotFound(retryErr) {
 				return fmt.Errorf("failed to add finalizer to ICMS request %s, err: %w", req.Name, retryErr)
 			}
+			// Persist protection in its own reconcile. No workload or storage
+			// side effect may race ahead of the request finalizer.
+			return nil
 		}
 	} else {
 		// The object is being deleted
@@ -2589,6 +2595,14 @@ func (c *BackendK8sCache) syncICMSRequest(ctx context.Context, req *nvcav2beta1n
 			// our finalizer is present, so lets handle our external dependency
 			if !c.icmsRequestHelper.AllInstancesTerminatedAndReported(ctx, req) {
 				return fmt.Errorf("%w: instances are not terminated and reported for %s", errICMSRequestFinalizerRetained, req.Name)
+			}
+			if err := c.resumeRetiringRegularModelCacheCleanup(ctx, req); err != nil {
+				return fmt.Errorf("finish Retiring model cache cleanup before removing finalizer from %s: %w",
+					req.Name, err)
+			}
+			if err := c.releaseModelCacheBindingReference(ctx, req); err != nil {
+				return fmt.Errorf("release model cache binding before removing finalizer from %s: %w",
+					req.Name, err)
 			}
 
 			retryErr := retry.RetryOnConflict(retry.DefaultRetry, func() error {
@@ -2645,6 +2659,13 @@ func (c *BackendK8sCache) syncICMSRequest(ctx context.Context, req *nvcav2beta1n
 				// stuck InProgress
 				err = c.CleanupCreationRequestResources(ctx, req)
 			} else {
+				bindingUpdated, bindingErr := c.ensureModelCacheBinding(ctx, req)
+				if bindingErr != nil {
+					return bindingErr
+				}
+				if bindingUpdated {
+					return nil
+				}
 				err = c.icmsRequestHelper.ApplyCreationMessage(ctx, req)
 			}
 		case common.TerminationAction:

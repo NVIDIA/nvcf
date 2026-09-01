@@ -53,11 +53,17 @@ immutable plan before side effects. Selection uses cluster state, feature flags,
 and legacy class-name sentinels:
 
 1. `CachingSupport` or `HelmModelCaching` disabled: no cache (`none`).
-2. Legacy `nvcf-sc-30` sentinel exists: `nvmesh`.
-3. `nvcf-miniservice-sc` StorageClass exists (operator-provided third-party shared
+2. `nvcf-miniservice-sc` StorageClass exists (operator-provided third-party shared
    storage): `sharedfs`.
-4. `HelmSharedStorage` enabled and the configured model-cache backing class exists: `samba`.
-5. Otherwise: `ephemeral`.
+3. `HelmSharedStorage` enabled and the configured model-cache backing class exists: `samba`.
+4. Otherwise: `ephemeral`.
+
+NVMesh is not detected here. It was identified by a marker StorageClass,
+`nvcf-sc-30`, which the deployment templates no longer render. NVMesh is now
+identified like every other backend, by the provisioner on the cluster's model
+cache class. A legacy NVMesh cluster resolves to `sharedfs`, which reaches the
+same volume: readers are derived from the writer's PV, with the namespace
+segment of the CSI volume handle still rewritten for the NVMesh driver.
 
 NVCA never creates `nvcf-miniservice-sc`. That StorageClass is exclusively the
 operator's signal that third-party shared storage is present (branch 3 above).
@@ -110,9 +116,17 @@ the init lease or any in-memory fan-out, both of which are lost on restart.
   namespace) plus a read-only PVC.
 - samba: a static SMB CSI PV pointing at the per-handle Samba share, read-only,
   plus a read-only PVC.
-- sharedfs: a separately provisioned read-only PVC on the shared class. Current
-  code assumes it resolves to the writer's data, which is not guaranteed by a
-  StorageClass or provisioner alone.
+- sharedfs: a read-only PV derived from the writer's volume, plus a read-only
+  PVC bound to it by name. Each namespace still gets its own PVC; what it binds
+  to is the writer's volume rather than a newly provisioned one.
+
+  This previously provisioned the reader PVC from the shared class and assumed
+  it would resolve to the writer's data. It does not: a dynamic provisioner
+  answers each claim with a new volume, so the reader mounted an empty
+  directory while binding cleanly. Measured on Weka and OCI FSS, see
+  storage-provider-qualification.md. All three shared backends now attach
+  readers the same way, and only the volume handle differs: NVMesh rewrites the
+  namespace segment, Weka and FSS reuse the writer's handle unchanged.
 
 ## Legacy Samba fallback
 

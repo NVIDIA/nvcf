@@ -32,6 +32,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/internal/kubeclients"
 	nvcaopotel "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/otel"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
+	nvcastorage "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
@@ -898,7 +899,89 @@ func TestConfigMapChangesForceNVCAReconcile(t *testing.T) {
 	assert.True(t, configMapUpdateForcesNVCAReconcile(nvcaOperatorConfigMapName))
 	assert.True(t, configMapUpdateForcesNVCAReconcile(nvcfBackendChartDefaultsConfigMapName))
 	assert.True(t, configMapUpdateForcesNVCAReconcile(agentConfigMergeConfigMapName))
+	assert.True(t, configMapUpdateForcesNVCAReconcile(nvcastorage.StorageCapabilityConfigMapName))
 	assert.False(t, configMapUpdateForcesNVCAReconcile("unrelated-configmap"))
+}
+
+func TestStorageCapabilityConfigMapEventsForceNVCAReconcile(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		handle    func(context.Context, *BackendK8sCache) error
+		wantForce bool
+	}{
+		{
+			name: "add after informer sync",
+			handle: func(ctx context.Context, bc *BackendK8sCache) error {
+				bc.syncedFuncs = []cache.InformerSynced{func() bool { return true }}
+				bc.configMapHandlerRegistration = testResourceEventHandlerRegistration{synced: true}
+				return bc.handleConfigMapAdd(ctx, &corev1.ConfigMap{
+					ObjectMeta: metav1.ObjectMeta{Name: nvcastorage.StorageCapabilityConfigMapName},
+				})
+			},
+			wantForce: true,
+		},
+		{
+			name: "changed update",
+			handle: func(ctx context.Context, bc *BackendK8sCache) error {
+				return bc.handleConfigMapUpdate(ctx,
+					&corev1.ConfigMap{
+						ObjectMeta: metav1.ObjectMeta{Name: nvcastorage.StorageCapabilityConfigMapName},
+						Data:       map[string]string{nvcastorage.StorageCapabilityConfigMapKey: "before"},
+					},
+					&corev1.ConfigMap{
+						ObjectMeta: metav1.ObjectMeta{Name: nvcastorage.StorageCapabilityConfigMapName},
+						Data:       map[string]string{nvcastorage.StorageCapabilityConfigMapKey: "after"},
+					},
+				)
+			},
+			wantForce: true,
+		},
+		{
+			name: "delete",
+			handle: func(ctx context.Context, bc *BackendK8sCache) error {
+				return bc.handleConfigMapDelete(ctx, cache.DeletedFinalStateUnknown{
+					Obj: &corev1.ConfigMap{
+						ObjectMeta: metav1.ObjectMeta{Name: nvcastorage.StorageCapabilityConfigMapName},
+					},
+				})
+			},
+			wantForce: true,
+		},
+		{
+			name: "unchanged update",
+			handle: func(ctx context.Context, bc *BackendK8sCache) error {
+				unchanged := map[string]string{nvcastorage.StorageCapabilityConfigMapKey: "same"}
+				return bc.handleConfigMapUpdate(ctx,
+					&corev1.ConfigMap{
+						ObjectMeta: metav1.ObjectMeta{Name: nvcastorage.StorageCapabilityConfigMapName},
+						Data:       unchanged,
+					},
+					&corev1.ConfigMap{
+						ObjectMeta: metav1.ObjectMeta{Name: nvcastorage.StorageCapabilityConfigMapName},
+						Data:       map[string]string{nvcastorage.StorageCapabilityConfigMapKey: "same"},
+					},
+				)
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := newTestContext()
+			bc, backend := newConfigMapEventTestCache(t, ctx)
+
+			err := tt.handle(ctx, bc)
+			if tt.wantForce {
+				require.ErrorContains(t, err, "version cannot be empty")
+			} else {
+				require.NoError(t, err)
+			}
+
+			stored, getErr := bc.clients.NVCAOP.NvcfV1().NVCFBackends(NVCAOperatorNamespace).
+				Get(ctx, backend.Name, metav1.GetOptions{})
+			require.NoError(t, getErr)
+			assert.Equal(t, tt.wantForce,
+				containsString(stored.Finalizers, cleanup.NVCAOperatorFinalizer))
+		})
+	}
 }
 
 func newConfigMapEventTestCache(t *testing.T, ctx context.Context) (*BackendK8sCache, *nvidiaiov1.NVCFBackend) {

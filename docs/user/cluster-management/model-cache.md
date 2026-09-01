@@ -63,17 +63,20 @@ NVCA uses the first matching backend in this order:
 
 | Priority | Cluster condition | Backend | Reuse behavior |
 | --- | --- | --- | --- |
-| 1 | `nvcf-sc-30` exists | NVMesh | Durable reuse across namespaces |
-| 2 | `nvcf-miniservice-sc` exists and supports `ReadOnlyMany` or `ReadWriteMany` | Operator-provided shared filesystem | Durable reuse across namespaces |
-| 3 | `HelmSharedStorage` is enabled | NVCA-managed Samba | Durable reuse across namespaces |
-| 4 | No shared backend is available | `emptyDir` | Pod-local caching only |
+| 1 | `nvcf-miniservice-sc` exists | Operator-provided shared filesystem | Durable reuse across namespaces |
+| 2 | `HelmSharedStorage` is enabled | NVCA-managed Samba | Durable reuse across namespaces |
+| 3 | No shared backend is available | `emptyDir` | Pod-local caching only |
 
 NVCA does not create `nvcf-miniservice-sc`. If you provide this StorageClass,
-it must support `ReadOnlyMany` or `ReadWriteMany`, and separate claims must
-expose the same underlying cached data. NVCA prefers `ReadOnlyMany` for reader
-claims and uses `ReadWriteMany` as a fallback. A provisioner that creates an
-isolated directory, access point, or subvolume for every claim does not provide
-cross-namespace reuse through this backend.
+it must support `ReadOnlyMany` or `ReadWriteMany`. It does not have to expose
+the same data to every claim: NVCA derives each namespace's reader from the
+volume the writer populated, so a provisioner that creates an isolated
+directory, access point, or subvolume per claim still gives cross-namespace
+reuse.
+
+NVMesh no longer has an entry of its own. It was selected by a marker
+StorageClass, `nvcf-sc-30`, which is no longer rendered. NVMesh clusters
+resolve through the shared filesystem row and keep cross-namespace readers.
 
 The Samba backend creates a separate Samba server and `nvcf-sc` backing volume
 for each cache handle. Readers mount the same SMB share with read-only

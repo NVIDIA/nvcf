@@ -406,3 +406,116 @@ func TestShippedStorageCapabilityCatalog(t *testing.T) {
 	assert.NotContains(t, definitions, "transitions",
 		"the flow is derived from access modes, never declared")
 }
+
+// TestTransitionForWorkflow is the whole decision the catalog drives: proven
+// access modes in, cache flow out, per workflow.
+func TestTransitionForWorkflow(t *testing.T) {
+	driver := func(provider string, modes ...string) storageDriverSpec {
+		return storageDriverSpec{
+			Provider:           provider,
+			AccessModes:        accessModes(modes...),
+			ReaderMountOptions: readerMountOptions(),
+		}
+	}
+
+	tests := []struct {
+		name        string
+		driver      storageDriverSpec
+		wantRegular string
+		wantHelm    string
+	}{
+		{
+			// A shared claim reaches other namespaces on its own, so RWX
+			// serves both workflows on any vendor.
+			name:        "ReadWriteMany serves both workflows",
+			driver:      driver("weka", "ReadWriteMany"),
+			wantRegular: ModelCacheTransitionRWXReadOnly,
+			wantHelm:    ModelCacheTransitionRWXReadOnly,
+		},
+		{
+			// Regular caching prefers the shared claim when a driver proved
+			// both shapes: one volume, readers mounting it read-only.
+			name:        "ReadWriteMany wins when a driver proved both shapes",
+			driver:      driver("weka", "ReadWriteMany", "ReadWriteOnce", "ReadOnlyMany"),
+			wantRegular: ModelCacheTransitionRWXReadOnly,
+			wantHelm:    ModelCacheTransitionRWXReadOnly,
+		},
+		{
+			// The ROX shape keeps its reader in the request namespace, so it
+			// serves regular caching for anyone, and Helm caching for nobody.
+			name:        "ReadWriteOnce plus ReadOnlyMany serves regular only",
+			driver:      driver("weka", "ReadWriteOnce", "ReadOnlyMany"),
+			wantRegular: ModelCacheTransitionROXReadOnly,
+			wantHelm:    ModelCacheTransitionDisabled,
+		},
+		{
+			// NVMesh volume handles encode the namespace, so NVCA can derive
+			// a reader PV for another namespace. This is the one exception.
+			name:        "NVMesh reaches other namespaces with the ROX shape",
+			driver:      driver(ModelCacheProviderNVMesh, "ReadWriteOnce", "ReadOnlyMany"),
+			wantRegular: ModelCacheTransitionROXReadOnly,
+			wantHelm:    ModelCacheTransitionROXReadOnly,
+		},
+		{
+			name:        "a single mode qualifies nothing",
+			driver:      driver("ociFss", "ReadWriteOnce"),
+			wantRegular: ModelCacheTransitionDisabled,
+			wantHelm:    ModelCacheTransitionDisabled,
+		},
+		{
+			name:        "ReadOnlyMany alone qualifies nothing",
+			driver:      driver("weka", "ReadOnlyMany"),
+			wantRegular: ModelCacheTransitionDisabled,
+			wantHelm:    ModelCacheTransitionDisabled,
+		},
+		{
+			// Nothing qualified yet is how an unqualified driver is recorded.
+			name:        "no qualified mode disables both workflows",
+			driver:      driver("ociLustre"),
+			wantRegular: ModelCacheTransitionDisabled,
+			wantHelm:    ModelCacheTransitionDisabled,
+		},
+		{
+			// NVMesh gets no exemption from qualification.
+			name:        "NVMesh with nothing qualified is still disabled",
+			driver:      driver(ModelCacheProviderNVMesh),
+			wantRegular: ModelCacheTransitionDisabled,
+			wantHelm:    ModelCacheTransitionDisabled,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.wantRegular,
+				transitionForWorkflow(tt.driver, ModelCacheWorkflowRegular), "regular")
+			assert.Equal(t, tt.wantHelm,
+				transitionForWorkflow(tt.driver, ModelCacheWorkflowHelm), "helm")
+		})
+	}
+}
+
+// TestSelectionFollowsQualifiedModes checks the derivation reaches a real
+// selection, including for a driver NVCA has no special knowledge of.
+func TestSelectionFollowsQualifiedModes(t *testing.T) {
+	const provisioner = "shared.csi.example.com"
+	catalog := validStorageCapabilityCatalog()
+	catalog.Drivers[provisioner] = storageDriverSpec{
+		Provider:           "someVendor",
+		AccessModes:        accessModes("ReadWriteMany", "ReadOnlyMany"),
+		ReaderMountOptions: readerMountOptions(),
+	}
+	require.NoError(t, validateStorageCapabilityCatalog(catalog))
+
+	sc := testModelCacheStorageClass()
+	sc.Provisioner = provisioner
+	for _, workflow := range []ModelCacheWorkflow{ModelCacheWorkflowRegular, ModelCacheWorkflowHelm} {
+		selection, err := selectModelCacheStorageFromObjects(sc, catalog, "sha256:catalog", workflow)
+		require.NoError(t, err, workflow)
+		assert.Equal(t, ModelCacheTransitionRWXReadOnly, selection.Transition, workflow)
+		assert.Equal(t,
+			[]corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+			selection.RequiredAccessModes, workflow)
+		assert.Empty(t, selection.RequiredMountOptions, workflow,
+			"a shared claim is mounted read-only by the Pod, so NVCA sets no reader options")
+	}
+}

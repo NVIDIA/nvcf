@@ -4426,9 +4426,9 @@ func TestGetGPUUsageStats_FallbackToNonSuffixSingleType(t *testing.T) {
 		Status: corev1.NodeStatus{
 			Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}},
 			Allocatable: corev1.ResourceList{
-				corev1.ResourceCPU:              resource.MustParse("5"),
-				corev1.ResourceMemory:           resource.MustParse("32Gi"),
-				corev1.ResourceEphemeralStorage: resource.MustParse("256Gi"),
+				corev1.ResourceCPU:                               resource.MustParse("5"),
+				corev1.ResourceMemory:                            resource.MustParse("32Gi"),
+				corev1.ResourceEphemeralStorage:                  resource.MustParse("256Gi"),
 				corev1.ResourceName(nodefeatures.GPUResourceKey): resource.MustParse("4"),
 			},
 		},
@@ -5073,6 +5073,14 @@ func TestSyncICMSRequestNormalizesLegacyCreationActions(t *testing.T) {
 			}
 
 			require.NoError(t, bc.syncICMSRequest(ctx, req.DeepCopy()))
+			assert.Zero(t, helper.creationCalls,
+				"the finalizer must be persisted before creation is attempted")
+			persisted, err := bc.clients.BART.NvcaV2beta1().ICMSRequests(req.Namespace).
+				Get(ctx, req.Name, metav1.GetOptions{})
+			require.NoError(t, err)
+			assert.Contains(t, persisted.Finalizers, NVCAFinalizer)
+
+			require.NoError(t, bc.syncICMSRequest(ctx, persisted.DeepCopy()))
 			assert.Equal(t, 1, helper.creationCalls)
 			assert.Equal(t, action, helper.lastAction)
 		})

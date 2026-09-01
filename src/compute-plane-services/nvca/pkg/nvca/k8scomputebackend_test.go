@@ -2422,3 +2422,24 @@ func TestFunctionTranslateInjectsLegacyStargateAddressFromLLMRequestRouterEnv(t 
 	assert.Equal(t, testRouterAddress, initEnvMap["LLM_REQUEST_ROUTER_ADDRESS"])
 	assert.Equal(t, testRouterAddress, initEnvMap["STARGATE_ADDRESS"])
 }
+
+func TestRegularModelCachePVCNamesUseExactLeadingPrefix(t *testing.T) {
+	name, err := regularModelCacheReaderPVCName("rw-pvc-cache-rw-pvc-segment")
+	require.NoError(t, err)
+	assert.Equal(t, "ro-pvc-cache-rw-pvc-segment", name)
+
+	reader, err := classifyRegularModelCachePVCName("ro-pvc-cache-rw-pvc-segment")
+	require.NoError(t, err)
+	assert.True(t, reader)
+
+	reader, err = classifyRegularModelCachePVCName("rw-pvc-cache-ro-pvc-segment")
+	require.NoError(t, err)
+	assert.False(t, reader)
+
+	for _, invalid := range []string{"cache-rw-pvc-handle", "rw-pvc-", "ro-pvc-"} {
+		_, err := regularModelCacheReaderPVCName(invalid)
+		require.Error(t, err)
+		_, err = classifyRegularModelCachePVCName(invalid)
+		require.Error(t, err)
+	}
+}
