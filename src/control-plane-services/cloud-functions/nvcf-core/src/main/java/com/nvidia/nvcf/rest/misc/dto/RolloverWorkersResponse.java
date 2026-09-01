@@ -23,9 +23,9 @@ import java.util.UUID;
 import lombok.Builder;
 
 @Builder
-@Schema(description = "Response body containing the list of request IDs")
+@Schema(description = "Response body containing the ICMS request IDs")
 public record RolloverWorkersResponse (
-        @Schema(description = "List of request IDs")
+        @Schema(description = "The ICMS request IDs")
         @NotEmpty
-        List<UUID> icmsRequestIds) {
+        UUID icmsRequestId) {
 }
