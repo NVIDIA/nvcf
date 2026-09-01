@@ -142,7 +142,6 @@ go_test(
         "sanitize_test.go",
         "setup_auth_client_secrets_extended_test.go",
         "setup_auth_client_secrets_test.go",
-        "storage_capabilities_configmap_test.go",
         "transport_tls_config_test.go",
         "vault_config_data_test.go",
         "version_detection_test.go",
