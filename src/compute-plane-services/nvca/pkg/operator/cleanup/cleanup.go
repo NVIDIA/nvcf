@@ -22,6 +22,7 @@ package cleanup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -120,6 +121,13 @@ func CleanupBackendResources( //nolint:revive // exported name is intentional
 	err = k8sClient.CoreV1().Namespaces().Delete(ctx, requestsNS, metav1.DeleteOptions{})
 	if err != nil && !k8serrors.IsNotFound(err) {
 		return fmt.Errorf("failed to cleanup namespace %v, err: %v", requestsNS, err)
+	}
+
+	// Strip binding finalizers before deleting the control namespace. The agent
+	// may already be stopped during uninstall, so no reconciler remains to do it.
+	if err := deleteModelCacheBindings(ctx, dynamicClient, DefaultModelCacheInitNamespace); err != nil {
+		return fmt.Errorf("failed to delete model-cache bindings in namespace %s: %w",
+			DefaultModelCacheInitNamespace, err)
 	}
 
 	// Cleanup the shared model-cache initialization namespace created by NVCA.
@@ -633,6 +641,63 @@ func deleteICMSRequests(ctx context.Context, dynamicClient dynamic.Interface, na
 	}
 
 	return nil
+}
+
+// deleteModelCacheBindings removes finalizers from every binding and deletes it during uninstall.
+func deleteModelCacheBindings(ctx context.Context, dynamicClient dynamic.Interface, namespace string) error {
+	log := core.GetLogger(ctx)
+	var errs []error
+	bindingGVR := schema.GroupVersionResource{
+		Group:    "nvca.nvcf.nvidia.io",
+		Version:  "v2beta1",
+		Resource: "modelcachebindings",
+	}
+
+	list, err := dynamicClient.Resource(bindingGVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to list model-cache bindings: %w", err)
+	}
+
+	for _, item := range list.Items {
+		name := item.GetName()
+		err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+			latest, err := dynamicClient.Resource(bindingGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+			if err != nil {
+				if k8serrors.IsNotFound(err) {
+					return nil
+				}
+				return err
+			}
+			if len(latest.GetFinalizers()) == 0 {
+				return nil
+			}
+
+			latest.SetGroupVersionKind(schema.GroupVersionKind{
+				Group: bindingGVR.Group, Version: bindingGVR.Version, Kind: "ModelCacheBinding",
+			})
+			latest.SetFinalizers(nil)
+			_, err = dynamicClient.Resource(bindingGVR).Namespace(namespace).Update(ctx, latest, metav1.UpdateOptions{})
+			return err
+		})
+		if err != nil {
+			log.WithError(err).Warnf("failed to remove finalizers from model-cache binding %s/%s", namespace, name)
+			errs = append(errs, fmt.Errorf(
+				"remove finalizers from model-cache binding %s/%s: %w", namespace, name, err))
+			continue
+		}
+
+		err = dynamicClient.Resource(bindingGVR).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+		if err != nil && !k8serrors.IsNotFound(err) {
+			log.WithError(err).Warnf("failed to delete model-cache binding %s/%s", namespace, name)
+			errs = append(errs, fmt.Errorf(
+				"delete model-cache binding %s/%s: %w", namespace, name, err))
+		}
+	}
+
+	return errors.Join(errs...)
 }
 
 // workloadNamespaceLabelSelector selects namespaces created by NVCA for workload instances.
