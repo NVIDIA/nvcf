@@ -213,7 +213,7 @@ impl RequestInputIntervalWindow {
         union_duration = union_duration.saturating_add(end.saturating_duration_since(start));
         let duration = union_duration.max(duration_floor);
         let input_tps = input_tokens as f64 / duration.as_secs_f64();
-        (valid_last_mean_input_tps(input_tps) && input_tps.is_finite()).then_some(input_tps)
+        valid_last_mean_input_tps(input_tps).then_some(input_tps)
     }
 }
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
