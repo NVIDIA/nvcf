@@ -47,7 +47,12 @@ pub enum ModelSource {
 #[derive(Clone, Debug)]
 pub enum ModelInitialization {
     Calibration(CalibrationConfig),
-    ConfiguredInputTps { input_tps: f64 },
+    ConfiguredInputTps {
+        input_tps: f64,
+        /// Retained for source compatibility. Configured TPS is always a
+        /// startup bootstrap and is replaced by observed request statistics.
+        pin: bool,
+    },
     Uncalibrated,
 }
 
@@ -131,6 +136,16 @@ pub async fn start_model_lifecycle(
     stats_collector: &StatsCollectorHandle,
     metrics: Option<Arc<PylonMetrics>>,
 ) -> Result<ModelLifecycleHandle, ModelLifecycleError> {
+    if let ModelInitialization::ConfiguredInputTps {
+        input_tps,
+        pin: true,
+    } = &config.initialization
+    {
+        tracing::warn!(
+            input_tps,
+            "configured input TPS pinning is no longer supported; using it as a startup bootstrap"
+        );
+    }
     let http_client = reqwest::Client::new();
     Url::parse(&config.upstream_http_base_url).map_err(ModelDiscoveryError::from)?;
     wait_for_upstream_health(&http_client, &config).await?;
@@ -348,7 +363,7 @@ impl ModelLifecycleSupervisor {
                 ModelInitialization::Calibration(_) | ModelInitialization::Uncalibrated => {
                     ModelStatsInitialization::Empty
                 }
-                ModelInitialization::ConfiguredInputTps { input_tps } => {
+                ModelInitialization::ConfiguredInputTps { input_tps, .. } => {
                     ModelStatsInitialization::ConfiguredInputTps {
                         input_tps: *input_tps,
                     }
@@ -1013,7 +1028,10 @@ mod tests {
                 poll_interval: Duration::from_millis(10),
                 request_timeout: Duration::from_secs(1),
             }),
-            initialization: ModelInitialization::ConfiguredInputTps { input_tps: 123.0 },
+            initialization: ModelInitialization::ConfiguredInputTps {
+                input_tps: 123.0,
+                pin: false,
+            },
             bringup: BringupConfig {
                 enabled: false,
                 ..BringupConfig::default()
@@ -1131,7 +1149,10 @@ mod tests {
                     "model-a".to_string(),
                     "model-b".to_string(),
                 ])),
-                initialization: ModelInitialization::ConfiguredInputTps { input_tps: 123.0 },
+                initialization: ModelInitialization::ConfiguredInputTps {
+                    input_tps: 123.0,
+                    pin: false,
+                },
                 bringup: BringupConfig {
                     enabled: false,
                     ..BringupConfig::default()
@@ -1194,7 +1215,10 @@ mod tests {
             ModelLifecycleConfig {
                 upstream_http_base_url: upstream.to_string(),
                 source: ModelSource::Static(BTreeSet::from(["model-a".to_string()])),
-                initialization: ModelInitialization::ConfiguredInputTps { input_tps: 123.0 },
+                initialization: ModelInitialization::ConfiguredInputTps {
+                    input_tps: 123.0,
+                    pin: false,
+                },
                 bringup: BringupConfig {
                     active_canary_interval: Duration::ZERO,
                     ..BringupConfig::default()
@@ -1232,7 +1256,10 @@ mod tests {
             ModelLifecycleConfig {
                 upstream_http_base_url: "http://127.0.0.1:1".to_string(),
                 source: ModelSource::Static(BTreeSet::from(["model-a".to_string()])),
-                initialization: ModelInitialization::ConfiguredInputTps { input_tps: 123.0 },
+                initialization: ModelInitialization::ConfiguredInputTps {
+                    input_tps: 123.0,
+                    pin: false,
+                },
                 bringup: BringupConfig {
                     active_canary_interval: Duration::ZERO,
                     ..BringupConfig::default()
@@ -1304,7 +1331,10 @@ mod tests {
             config: ModelLifecycleConfig {
                 upstream_http_base_url: "http://127.0.0.1:1".to_string(),
                 source: ModelSource::Static(BTreeSet::new()),
-                initialization: ModelInitialization::ConfiguredInputTps { input_tps: 123.0 },
+                initialization: ModelInitialization::ConfiguredInputTps {
+                    input_tps: 123.0,
+                    pin: false,
+                },
                 bringup: BringupConfig {
                     enabled: false,
                     ..BringupConfig::default()
@@ -1496,7 +1526,10 @@ mod tests {
             ModelLifecycleConfig {
                 upstream_http_base_url: upstream.base_url.clone(),
                 source: ModelSource::Static(BTreeSet::from(["model-a".to_string()])),
-                initialization: ModelInitialization::ConfiguredInputTps { input_tps: 123.0 },
+                initialization: ModelInitialization::ConfiguredInputTps {
+                    input_tps: 123.0,
+                    pin: false,
+                },
                 bringup: BringupConfig {
                     enabled: false,
                     ..BringupConfig::default()

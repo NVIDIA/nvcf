@@ -18,9 +18,9 @@ use std::time::Duration;
 
 use pylon_lib::{
     ClientError, CurrentModelStats, DEFAULT_MAX_SSE_BUFFER_BYTES,
-    InferenceServerRegistrationClient, InferenceServerRegistrationConfig, QuicHttpTunnelConfig,
-    RequestCounterUpdate, RequestCounterUpdateInput, ReverseQuicTunnelConfig, StatsUpdateSource,
-    TunnelTransportProtocol,
+    InferenceServerRegistrationClient, InferenceServerRegistrationConfig, ModelInitialization,
+    QuicHttpTunnelConfig, RequestCounterUpdate, RequestCounterUpdateInput, ReverseQuicTunnelConfig,
+    StatsUpdateSource, TunnelTransportProtocol,
 };
 
 #[test]
@@ -61,6 +61,22 @@ fn crate_root_exports_registration_public_api() {
         finished: true,
         observed_at: tokio::time::Instant::now(),
     });
+}
+
+#[test]
+fn configured_input_tps_retains_legacy_pin_field() {
+    let initialization = ModelInitialization::ConfiguredInputTps {
+        input_tps: 100.0,
+        pin: true,
+    };
+
+    match initialization {
+        ModelInitialization::ConfiguredInputTps { input_tps, pin } => {
+            assert_eq!(input_tps, 100.0);
+            assert!(pin);
+        }
+        _ => panic!("configured input TPS variant should round-trip"),
+    }
 }
 
 #[test]
