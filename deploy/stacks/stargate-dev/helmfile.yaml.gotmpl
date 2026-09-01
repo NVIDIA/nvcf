@@ -23,6 +23,10 @@ helmDefaults:
   wait: true
   timeout: 600
 
+repositories:
+  - name: grafana
+    url: https://grafana.github.io/helm-charts
+
 releases:
   - name: stargate-dev-auth
     namespace: {{ .Values.namespace }}
@@ -181,4 +185,174 @@ releases:
             digest: {{ $.Values.images.pylon.digest }}
         mockDynamo:
           {{- toYaml $mockdc.mockDynamo | nindent 10 }}
+{{- end }}
+
+{{- $observability := required "observability is required" .Values.observability }}
+{{- $amp := required "observability.amp is required" $observability.amp }}
+{{- $alloy := required "observability.alloy is required" $observability.alloy }}
+{{- $metricsClusters := list (dict
+      "name" .Values.clusters.stargate.name
+      "kubeContext" .Values.clusters.stargate.kubeContext
+      "role" "stargate") }}
+{{- range $mockdc := .Values.clusters.mockdcs }}
+{{- $metricsClusters = append $metricsClusters (dict
+      "name" $mockdc.name
+      "kubeContext" $mockdc.kubeContext
+      "role" "mockdc") }}
+{{- end }}
+{{- range $cluster := $metricsClusters }}
+  - name: metrics-{{ $cluster.name }}
+    namespace: {{ $observability.namespace }}
+    kubeContext: {{ $cluster.kubeContext }}
+    chart: grafana/alloy
+    version: {{ $alloy.chartVersion | quote }}
+    labels:
+      phase: observability
+      component: metrics-collector
+      cluster: {{ $cluster.name }}
+    values:
+      - fullnameOverride: stargate-dev-alloy
+        crds:
+          create: false
+        global:
+          podSecurityContext:
+            runAsNonRoot: true
+            runAsUser: 473
+            runAsGroup: 473
+            fsGroup: 473
+            seccompProfile:
+              type: RuntimeDefault
+        image:
+          repository: {{ $alloy.image.repository }}
+          digest: {{ $alloy.image.digest }}
+        serviceAccount:
+          create: true
+          name: stargate-dev-alloy
+          annotations:
+            eks.amazonaws.com/role-arn: {{ required "observability.amp.writerRoleArn is required" $amp.writerRoleArn | quote }}
+        rbac:
+          create: true
+          namespaces:
+            - {{ $.Values.namespace }}
+          rules:
+            - apiGroups: [""]
+              resources: ["pods"]
+              verbs: ["get", "list", "watch"]
+          clusterRules: []
+        configReloader:
+          enabled: false
+        service:
+          enabled: false
+        controller:
+          type: deployment
+          replicas: 1
+          volumes:
+            extra:
+              - name: storage
+                emptyDir: {}
+        alloy:
+          enableReporting: false
+          storagePath: /var/lib/alloy
+          mounts:
+            extra:
+              - name: storage
+                mountPath: /var/lib/alloy
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsUser: 473
+            runAsGroup: 473
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          configMap:
+            content: |
+              discovery.kubernetes "stargate_pods" {
+                role = "pod"
+                namespaces {
+                  names = [{{ $.Values.namespace | quote }}]
+                }
+              }
+
+              discovery.relabel "stargate_pods" {
+                targets = discovery.kubernetes.stargate_pods.targets
+
+                rule {
+                  source_labels = ["__meta_kubernetes_pod_annotation_prometheus_io_scrape"]
+                  regex         = "true"
+                  action        = "keep"
+                }
+
+                rule {
+                  source_labels = ["__meta_kubernetes_pod_phase"]
+                  regex         = "Running"
+                  action        = "keep"
+                }
+
+                rule {
+                  source_labels = ["__meta_kubernetes_pod_container_port_number"]
+                  target_label  = "__meta_kubernetes_pod_annotation_prometheus_io_port"
+                  action        = "keepequal"
+                }
+
+                rule {
+                  source_labels = ["__meta_kubernetes_pod_annotation_prometheus_io_path"]
+                  regex         = "(.+)"
+                  target_label  = "__metrics_path__"
+                }
+
+                rule {
+                  source_labels = ["__meta_kubernetes_namespace"]
+                  target_label  = "namespace"
+                }
+
+                rule {
+                  source_labels = ["__meta_kubernetes_pod_name"]
+                  target_label  = "pod"
+                }
+
+                rule {
+                  source_labels = ["__meta_kubernetes_pod_name"]
+                  target_label  = "instance"
+                }
+
+                rule {
+                  source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+                  target_label  = "job"
+                }
+
+                rule {
+                  source_labels = ["__meta_kubernetes_pod_label_stargate_nvidia_com_backend_id"]
+                  regex         = "(.+)"
+                  target_label  = "backend"
+                }
+              }
+
+              prometheus.scrape "stargate_pods" {
+                targets         = discovery.relabel.stargate_pods.output
+                scrape_interval = "30s"
+                scrape_timeout  = "10s"
+                forward_to      = [prometheus.remote_write.amp.receiver]
+              }
+
+              prometheus.remote_write "amp" {
+                external_labels = {
+                  region       = {{ $.Values.region | quote }},
+                  cluster      = {{ $cluster.name | quote }},
+                  cluster_role = {{ $cluster.role | quote }},
+                }
+
+                endpoint {
+                  url = {{ printf "https://aps-workspaces.%s.amazonaws.com/workspaces/%s/api/v1/remote_write" $.Values.region (required "observability.amp.workspaceId is required" $amp.workspaceId) | quote }}
+                  sigv4 {
+                    region = {{ $.Values.region | quote }}
+                  }
+                }
+              }
 {{- end }}

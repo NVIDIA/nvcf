@@ -79,3 +79,12 @@ router:
   # Add every public NAT Gateway egress IP used by the two MockDC clusters.
   loadBalancerSourceRanges:
     - 192.0.2.1/32
+
+observability:
+  namespace: stargate-dev-observability
+  amp:
+    workspaceId: ws-00000000-0000-0000-0000-000000000000
+    writerRoleArn: arn:aws:iam::000000000000:role/stargate-dev-amp-writer
+  grafana:
+    workspaceId: g-0000000000
+    endpoint: g-0000000000.grafana-workspace.us-west-2.amazonaws.com

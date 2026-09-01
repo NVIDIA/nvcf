@@ -21,6 +21,10 @@ import yaml
 
 STACK_DIR = Path(__file__).resolve().parents[1]
 SHA256_DIGEST = re.compile(r"^sha256:[a-f0-9]{64}$")
+AMP_WORKSPACE_ID = re.compile(
+    r"^ws-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
+GRAFANA_WORKSPACE_ID = re.compile(r"^g-[0-9a-f]{10}$")
 
 
 class DeploymentError(RuntimeError):
@@ -155,7 +159,7 @@ def load_deployment_values(region: str, values_path: Path) -> dict:
     return config
 
 
-def validate_deployment_inputs(config: dict) -> None:
+def validate_deployment_inputs(config: dict, phase: str) -> None:
     if not config.get("deploymentReady"):
         raise DeploymentError(
             "regional values are placeholders; set deploymentReady after filling them"
@@ -199,6 +203,37 @@ def validate_deployment_inputs(config: dict) -> None:
             raise DeploymentError(
                 "router source ranges must be public IPv4 /32 MockDC egress addresses"
             )
+
+    if phase != "observability":
+        return
+
+    observability = config.get("observability", {})
+    amp = observability.get("amp", {})
+    grafana = observability.get("grafana", {})
+    if not observability.get("namespace"):
+        raise DeploymentError("observability.namespace is required")
+    amp_workspace_id = amp.get("workspaceId", "")
+    if not AMP_WORKSPACE_ID.fullmatch(amp_workspace_id) or set(
+        amp_workspace_id.removeprefix("ws-").replace("-", "")
+    ) == {"0"}:
+        raise DeploymentError("observability.amp.workspaceId is invalid")
+    account = os.environ.get(config["awsAccountIdEnv"], "")
+    if amp.get("writerRoleArn") != (
+        f"arn:aws:iam::{account}:role/stargate-dev-amp-writer"
+    ):
+        raise DeploymentError("observability.amp.writerRoleArn is invalid")
+    grafana_workspace_id = grafana.get("workspaceId", "")
+    if not GRAFANA_WORKSPACE_ID.fullmatch(grafana_workspace_id) or set(
+        grafana_workspace_id.removeprefix("g-")
+    ) == {"0"}:
+        raise DeploymentError("observability.grafana.workspaceId is invalid")
+    endpoint = grafana.get("endpoint", "")
+    if not re.fullmatch(
+        rf"{re.escape(grafana['workspaceId'])}\.grafana-workspace\."
+        rf"{re.escape(config['region'])}\.amazonaws\.com",
+        endpoint,
+    ):
+        raise DeploymentError("observability.grafana.endpoint is invalid")
 
 
 def aws_account(config: dict) -> str:
@@ -374,6 +409,9 @@ def verify_chart_secret_immutability(
                 )
         return
 
+    if phase != "mockdc":
+        return
+
     for mockdc in config["clusters"]["mockdcs"]:
         name = f"{mockdc['name']}-stargate-dev-mockdc-worker"
         worker = get_secret(mockdc["kubeContext"], namespace, name)
@@ -422,7 +460,7 @@ def verify_prerequisite_resources(config: dict, phase: str) -> None:
             config["router"]["tlsSecretName"],
             {"tls.crt", "tls.key"},
         )
-    else:
+    elif phase == "mockdc":
         for mockdc in config["clusters"]["mockdcs"]:
             require_secret(
                 mockdc["kubeContext"],
@@ -505,11 +543,11 @@ def apply(region: str, phase: str, credentials_path: Path, values_path: Path) ->
         raise DeploymentError("the helm-diff plugin is required by helmfile apply")
     config = load_deployment_values(region, values_path)
     credentials = load_credentials(credentials_path, config)
-    validate_deployment_inputs(config)
+    validate_deployment_inputs(config, phase)
     account = aws_account(config)
     contexts = configured_contexts()
     clusters = [config["clusters"]["stargate"]]
-    if phase == "mockdc":
+    if phase in ("mockdc", "observability"):
         clusters.extend(config["clusters"]["mockdcs"])
     for cluster in clusters:
         verify_cluster(cluster, config, account, contexts)
@@ -551,7 +589,9 @@ def parse_args() -> argparse.Namespace:
         "apply", help="validate and apply one deployment phase"
     )
     apply_parser.add_argument("--region", required=True)
-    apply_parser.add_argument("--phase", choices=("stargate", "mockdc"), required=True)
+    apply_parser.add_argument(
+        "--phase", choices=("stargate", "mockdc", "observability"), required=True
+    )
     apply_parser.add_argument("--credentials", type=Path, required=True)
     apply_parser.add_argument("--values", type=Path, required=True)
     return parser.parse_args()

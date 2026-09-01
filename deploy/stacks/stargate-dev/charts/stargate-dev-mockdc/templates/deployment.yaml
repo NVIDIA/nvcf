@@ -32,6 +32,7 @@ spec:
       labels:
         {{- include "stargate-dev-mockdc.selectorLabels" $ | nindent 8 }}
         app.kubernetes.io/component: mock-backend
+        stargate.nvidia.com/backend-id: {{ printf "%s-backend-%d" $clusterId $index | quote }}
         stargate.nvidia.com/backend-index: {{ $index | quote }}
       annotations:
         prometheus.io/scrape: "true"

@@ -201,13 +201,46 @@ def verify_mockdc(config: dict, mockdc: dict) -> None:
         )
 
 
+def verify_observability(config: dict) -> None:
+    namespace = config["observability"]["namespace"]
+    clusters = [config["clusters"]["stargate"], *config["clusters"]["mockdcs"]]
+    for cluster in clusters:
+        context = cluster["kubeContext"]
+        require_deployment(context, namespace, "stargate-dev-alloy", 1)
+        service_account = json.loads(
+            kubectl(
+                context,
+                "-n",
+                namespace,
+                "get",
+                "serviceaccount",
+                "stargate-dev-alloy",
+                "-o",
+                "json",
+            )
+        )
+        role_arn = (
+            service_account["metadata"]
+            .get("annotations", {})
+            .get("eks.amazonaws.com/role-arn", "")
+        )
+        if not re.fullmatch(
+            r"arn:aws:iam::[0-9]{12}:role/stargate-dev-amp-writer", role_arn
+        ):
+            raise VerificationError(
+                f"Alloy in {cluster['name']} does not have the AMP writer role"
+            )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Verify one deployed Stargate dev region"
     )
     parser.add_argument("--region", required=True)
     parser.add_argument(
-        "--phase", choices=("stargate", "mockdc", "regional"), required=True
+        "--phase",
+        choices=("stargate", "mockdc", "observability", "regional"),
+        required=True,
     )
     return parser.parse_args()
 
@@ -221,6 +254,8 @@ def main() -> int:
         if args.phase in ("mockdc", "regional"):
             for mockdc in config["clusters"]["mockdcs"]:
                 verify_mockdc(config, mockdc)
+        if args.phase in ("observability", "regional"):
+            verify_observability(config)
         print(f"verified {args.phase} phase for {args.region}")
     except (
         VerificationError,
