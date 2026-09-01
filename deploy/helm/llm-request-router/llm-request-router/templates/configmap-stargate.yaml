@@ -1,0 +1,126 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+{{- $workloadKind := include "llm-request-router.workloadKind" . -}}
+{{- $backendRouterEnabled := eq (include "llm-request-router.backendRouterEnabled" .) "true" -}}
+{{- $directDeployment := and (eq $workloadKind "Deployment") (not $backendRouterEnabled) -}}
+{{- $replicaCount := .Values.llmRequestRouter.replicaCount | int -}}
+{{- $namespace := include "llm-request-router.namespace" . -}}
+{{- $discoveryDnsName := dig "discovery" "dnsName" (printf "%s.%s.svc.cluster.local" .Values.llmRequestRouter.service.headlessName $namespace) .Values.llmRequestRouter -}}
+{{- $advertisedHostnameTemplate := include "llm-request-router.advertisedHostnameTemplate" . -}}
+{{- $useVaultSecrets := not (and .Values.llmRequestRouter.vault .Values.llmRequestRouter.vault.noVaultAnnotations) -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "llm-request-router.fullname" . }}-stargate
+  namespace: {{ $namespace }}
+  labels:
+    {{- include "llm-request-router.labels" . | nindent 4 }}
+data:
+  stargate.toml: |
+    schema_version = 1
+
+    [stargate_identity]
+    id = { env = "POD_NAME" }
+    advertised_hostname_template = {{ $advertisedHostnameTemplate | quote }}
+
+    [stargate_identity.kubernetes]
+    pod_name = { env = "POD_NAME" }
+    namespace = { env = "POD_NAMESPACE" }
+
+    [stargate_network]
+    grpc_listen_addr = {{ printf "0.0.0.0:%v" .Values.llmRequestRouter.service.grpcPort | quote }}
+    model_discovery_listen_addr = "0.0.0.0:50073"
+    http_listen_addr = {{ printf "0.0.0.0:%v" .Values.llmRequestRouter.service.httpPort | quote }}
+    advertise_addr = { env = "STARGATE_ADVERTISE_ADDR" }
+
+    [process_lifecycle]
+    readiness_warmup_ms = {{ .Values.llmRequestRouter.readiness.warmupMs }}
+    shutdown_drain_timeout_ms = {{ .Values.llmRequestRouter.shutdown.drainTimeoutMs }}
+
+    [stargate_discovery]
+    remote_watch_urls = {{ .Values.llmRequestRouter.discovery.remoteWatchUrls | toJson }}
+    allow_insecure_remote_watch_http = {{ .Values.llmRequestRouter.discovery.allowInsecureRemoteWatchHttp }}
+    watch_heartbeat_ms = {{ .Values.llmRequestRouter.discovery.watchHeartbeatMs }}
+{{ if not $directDeployment }}
+    [stargate_discovery.kubernetes_pods]
+    headless_service_dns_name = {{ $discoveryDnsName | quote }}
+    poll_interval_ms = {{ dig "discovery" "dnsPollMs" 1000 .Values.llmRequestRouter }}
+    resolver_ttl_ms = {{ dig "discovery" "dnsResolverTtlMs" 1000 .Values.llmRequestRouter }}
+{{ end }}
+    [pylon_transport]
+    tunnel_protocol = "raw-quic"
+    quic_connect_timeout_ms = {{ .Values.llmRequestRouter.transport.quicConnectTimeoutMs }}
+    quic_request_timeout_ms = {{ .Values.llmRequestRouter.transport.quicRequestTimeoutMs }}
+{{ if $backendRouterEnabled }}
+    pylon_grpc_dial_uri = {{ include "llm-request-router.backendRouterGrpcDialAddress" . | quote }}
+{{ end }}
+{{ if .Values.llmRequestRouter.transport.reverseTunnelListenAddr }}
+    [pylon_transport.reverse]
+    listen_addr = {{ .Values.llmRequestRouter.transport.reverseTunnelListenAddr | quote }}
+    connect_timeout_ms = {{ .Values.llmRequestRouter.transport.reverseTunnelConnectTimeoutMs }}
+{{ if $backendRouterEnabled }}
+    pylon_dial_addr = {{ include "llm-request-router.backendRouterReverseTunnelDialAddress" . | quote }}
+{{ else if gt $replicaCount 1 }}
+    pylon_dial_addr = { env = "STARGATE_REVERSE_PYLON_DIAL_ADDR" }
+{{ end }}
+{{ with .Values.llmRequestRouter.tls.certPath }}
+    certificate_path = {{ . | quote }}
+{{ end }}
+{{ with .Values.llmRequestRouter.tls.keyPath }}
+    private_key_path = {{ . | quote }}
+{{ end }}
+{{ else }}
+    [pylon_transport.direct]
+    connections = 1
+{{ with .Values.llmRequestRouter.tls.certPath }}
+    trust_bundle_path = {{ . | quote }}
+{{ end }}
+{{ end }}
+    [pylon_transport.tls]
+    insecure_skip_verify = {{ .Values.llmRequestRouter.tls.quicInsecure }}
+
+{{ if or .Values.llmRequestRouter.loadBalancer.config .Values.llmRequestRouter.loadBalancer.configPath }}
+    [request_proxy.load_balancer]
+{{ if .Values.llmRequestRouter.loadBalancer.config }}
+    config_path = "/etc/llm-request-router/lb-config.json"
+{{ else }}
+    config_path = {{ .Values.llmRequestRouter.loadBalancer.configPath | quote }}
+{{ end }}
+{{ end }}
+    [observability.metrics]
+    listen_addr = {{ printf "0.0.0.0:%v" .Values.llmRequestRouter.service.metricsPort | quote }}
+    prefix = "stargate_"
+
+{{ if and .Values.llmRequestRouter.observability.tracing.enabled .Values.llmRequestRouter.observability.tracing.endpoint }}
+    [observability.tracing]
+    endpoint = {{ .Values.llmRequestRouter.observability.tracing.endpoint | quote }}
+{{ if and .Values.llmRequestRouter.auth.workerAuthEndpoint $useVaultSecrets }}
+
+    [observability.tracing.access_token]
+    secrets_path = "/vault/secrets/secrets.json"
+    json_path = ["tracingAccessToken"]
+{{ end }}
+{{ end }}
+{{ with .Values.llmRequestRouter.auth.workerAuthEndpoint }}
+    [worker_authentication]
+    endpoint = {{ . | quote }}
+{{ if $useVaultSecrets }}
+
+    [worker_authentication.bearer_token]
+    secrets_path = "/vault/secrets/secrets.json"
+    json_path = ["nvcfApiToken"]
+{{ end }}
+{{ end }}

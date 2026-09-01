@@ -43,6 +43,18 @@ workload_args() {
   yq -r "select(.kind == \"${kind}\" and .metadata.name == \"llm-request-router\") | .spec.template.spec.containers[0].args[]" "${manifest}"
 }
 
+stargate_config() {
+  local manifest="$1"
+  yq -r 'select(.kind == "ConfigMap" and .metadata.name == "llm-request-router-stargate") | .data."stargate.toml"' "${manifest}"
+}
+
+workload_env_value() {
+  local manifest="$1"
+  local kind="$2"
+  local name="$3"
+  yq -r "select(.kind == \"${kind}\" and .metadata.name == \"llm-request-router\") | .spec.template.spec.containers[0].env[] | select(.name == \"${name}\") | .value" "${manifest}" | head -n1
+}
+
 backend_router_args() {
   local manifest="$1"
   yq -r 'select(.kind == "Deployment" and .metadata.name == "llm-request-router-backend-router") | .spec.template.spec.containers[0].args[]' "${manifest}"
@@ -90,11 +102,14 @@ default_backend_kind="$(yq -r 'select(.kind == "Deployment" and .metadata.name =
 [ "${default_backend_kind}" = "Deployment" ] || fail "default multi-replica Deployment did not infer backend-router enablement"
 
 default_args="$(workload_args "${default_manifest}" Deployment)"
+default_config="$(stargate_config "${default_manifest}")"
 default_backend_args="$(backend_router_args "${default_manifest}")"
-printf '%s\n' "${default_args}" | grep -qx -- "--advertised-hostname-template={pod_name}.llm-request-router-headless.${namespace}.svc.cluster.local" || fail "default Deployment missing per-pod advertised hostname template"
-printf '%s\n' "${default_args}" | grep -qx -- "--grpc-pylon-dial-addr=http://llm-request-router-backend-router.${namespace}.svc.cluster.local:50071" || fail "default Deployment missing explicit inferred backend-router gRPC dial URI"
-printf '%s\n' "${default_args}" | grep -qx -- "--watch-heartbeat-ms=5000" || fail "default Deployment missing Watch heartbeat arg"
-printf '%s\n' "${default_args}" | grep -qx -- '--readiness-warmup-ms=60000' || fail "default Deployment missing 60-second readiness warm-up"
+[ "${default_args}" = "--config-file=/etc/stargate/stargate.toml" ] || fail "default Deployment must use only --config-file"
+printf '%s\n' "${default_config}" | grep -Fqx -- "advertised_hostname_template = \"{pod_name}.llm-request-router-headless.${namespace}.svc.cluster.local\"" || fail "default config missing per-pod advertised hostname template"
+printf '%s\n' "${default_config}" | grep -Fqx -- "pylon_grpc_dial_uri = \"http://llm-request-router-backend-router.${namespace}.svc.cluster.local:50071\"" || fail "default config missing explicit inferred backend-router gRPC dial URI"
+printf '%s\n' "${default_config}" | grep -Fqx -- 'watch_heartbeat_ms = 5000' || fail "default config missing Watch heartbeat"
+printf '%s\n' "${default_config}" | grep -Fqx -- 'readiness_warmup_ms = 60000' || fail "default config missing 60-second readiness warm-up"
+printf '%s\n' "${default_config}" | grep -Fqx -- '[stargate_discovery.kubernetes_pods]' || fail "default multi-replica config missing Kubernetes pod discovery section"
 printf '%s\n' "${default_backend_args}" | grep -qx -- "--watch-heartbeat-ms=5000" || fail "backend router missing Watch heartbeat arg"
 
 multi_deployment_manifest="${tmp_dir}/multi-deployment.yaml"
@@ -103,8 +118,10 @@ render "${multi_deployment_manifest}" \
   --set llmRequestRouter.backendRouter.enabled=true
 
 multi_deployment_args="$(workload_args "${multi_deployment_manifest}" Deployment)"
-printf '%s\n' "${multi_deployment_args}" | grep -qx -- "--advertised-hostname-template={pod_name}.llm-request-router-headless.${namespace}.svc.cluster.local" || fail "multi-replica Deployment missing per-pod advertised hostname template"
-printf '%s\n' "${multi_deployment_args}" | grep -qx -- "--grpc-pylon-dial-addr=http://llm-request-router-backend-router.${namespace}.svc.cluster.local:50071" || fail "multi-replica Deployment missing explicit backend-router gRPC dial URI"
+multi_deployment_config="$(stargate_config "${multi_deployment_manifest}")"
+[ "${multi_deployment_args}" = "--config-file=/etc/stargate/stargate.toml" ] || fail "multi-replica Deployment must use only --config-file"
+printf '%s\n' "${multi_deployment_config}" | grep -Fqx -- "advertised_hostname_template = \"{pod_name}.llm-request-router-headless.${namespace}.svc.cluster.local\"" || fail "multi-replica config missing per-pod advertised hostname template"
+printf '%s\n' "${multi_deployment_config}" | grep -Fqx -- "pylon_grpc_dial_uri = \"http://llm-request-router-backend-router.${namespace}.svc.cluster.local:50071\"" || fail "multi-replica config missing explicit backend-router gRPC dial URI"
 
 statefulset_manifest="${tmp_dir}/statefulset.yaml"
 render "${statefulset_manifest}" \
@@ -121,8 +138,12 @@ statefulset_backend_kind="$(yq -r 'select(.kind == "Deployment" and .metadata.na
 [ -z "${statefulset_backend_kind}" ] || fail "pinned StatefulSet unexpectedly inferred backend-router enablement"
 
 statefulset_args="$(workload_args "${statefulset_manifest}" StatefulSet)"
-printf '%s\n' "${statefulset_args}" | grep -qx -- "--stargate-discovery-dns-name=llm-request-router-headless.${namespace}.svc.cluster.local" || fail "StatefulSet direct mode missing headless discovery DNS arg"
-printf '%s\n' "${statefulset_args}" | grep -qx -- '--reverse-tunnel-pylon-dial-addr=$(POD_IP):50072' || fail "StatefulSet direct mode missing per-pod reverse tunnel address"
+statefulset_config="$(stargate_config "${statefulset_manifest}")"
+[ "${statefulset_args}" = "--config-file=/etc/stargate/stargate.toml" ] || fail "StatefulSet must use only --config-file"
+printf '%s\n' "${statefulset_config}" | grep -Fqx -- '[stargate_discovery.kubernetes_pods]' || fail "StatefulSet config missing Kubernetes pod discovery section"
+printf '%s\n' "${statefulset_config}" | grep -Fqx -- "headless_service_dns_name = \"llm-request-router-headless.${namespace}.svc.cluster.local\"" || fail "StatefulSet config missing headless discovery DNS name"
+printf '%s\n' "${statefulset_config}" | grep -Fqx -- 'pylon_dial_addr = { env = "STARGATE_REVERSE_PYLON_DIAL_ADDR" }' || fail "StatefulSet config missing per-pod reverse tunnel environment reference"
+[ "$(workload_env_value "${statefulset_manifest}" StatefulSet STARGATE_REVERSE_PYLON_DIAL_ADDR)" = '$(POD_IP):50072' ] || fail "StatefulSet missing derived reverse tunnel environment value"
 
 assert_render_fails "llmRequestRouter.workload.kind must be Deployment or StatefulSet, got \"DaemonSet\"" \
   --set llmRequestRouter.workload.kind=DaemonSet
@@ -139,13 +160,11 @@ render "${single_deployment_manifest}" \
   --set llmRequestRouter.backendRouter.enabled=false
 
 single_deployment_args="$(workload_args "${single_deployment_manifest}" Deployment)"
-printf '%s\n' "${single_deployment_args}" | grep -qx -- "--disable-dns-discovery" || fail "single-replica direct Deployment missing --disable-dns-discovery"
-
-assert_render_fails "llmRequestRouter.discovery.disableDnsDiscovery cannot be true when llmRequestRouter.replicaCount is greater than 1; multi-replica routers require DNS discovery" \
-  --set llmRequestRouter.workload.kind=StatefulSet \
-  --set llmRequestRouter.replicaCount=3 \
-  --set llmRequestRouter.backendRouter.enabled=false \
-  --set llmRequestRouter.discovery.disableDnsDiscovery=true
+single_deployment_config="$(stargate_config "${single_deployment_manifest}")"
+[ "${single_deployment_args}" = "--config-file=/etc/stargate/stargate.toml" ] || fail "single-replica Deployment must use only --config-file"
+if printf '%s\n' "${single_deployment_config}" | grep -Fq -- '[stargate_discovery.kubernetes_pods]'; then
+  fail "single-replica direct Deployment must select self-only discovery by omitting the Kubernetes pod section"
+fi
 
 assert_render_fails "llmRequestRouter.discovery.watchHeartbeatMs must be greater than 0" \
   --set llmRequestRouter.discovery.watchHeartbeatMs=0
@@ -154,17 +173,17 @@ secure_remote_manifest="${tmp_dir}/secure-remote.yaml"
 render "${secure_remote_manifest}" \
   --set-string 'llmRequestRouter.discovery.remoteWatchUrls[0]=https://region-b.example.test:50071'
 
-secure_remote_args="$(workload_args "${secure_remote_manifest}" Deployment)"
+secure_remote_config="$(stargate_config "${secure_remote_manifest}")"
 secure_remote_backend_args="$(backend_router_args "${secure_remote_manifest}")"
-printf '%s\n' "${secure_remote_args}" | grep -qx -- '--remote-stargate-url=https://region-b.example.test:50071' || fail "Stargate missing secure remote Watch URI"
+printf '%s\n' "${secure_remote_config}" | grep -Fqx -- 'remote_watch_urls = ["https://region-b.example.test:50071"]' || fail "Stargate config missing secure remote Watch URI"
 printf '%s\n' "${secure_remote_backend_args}" | grep -qx -- '--remote-stargate-url=https://region-b.example.test:50071' || fail "backend router missing secure remote Watch URI"
 
 custom_warmup_manifest="${tmp_dir}/custom-warmup.yaml"
 render "${custom_warmup_manifest}" \
   --set llmRequestRouter.readiness.warmupMs=1234
 
-custom_warmup_args="$(workload_args "${custom_warmup_manifest}" Deployment)"
-printf '%s\n' "${custom_warmup_args}" | grep -qx -- '--readiness-warmup-ms=1234' || fail "custom readiness warm-up did not reach Stargate args"
+custom_warmup_config="$(stargate_config "${custom_warmup_manifest}")"
+printf '%s\n' "${custom_warmup_config}" | grep -Fqx -- 'readiness_warmup_ms = 1234' || fail "custom readiness warm-up did not reach Stargate config"
 
 assert_render_fails "llmRequestRouter.readiness.warmupMs must be a non-negative integer" \
   --set llmRequestRouter.readiness.warmupMs=-1
@@ -180,10 +199,10 @@ development_remote_manifest="${tmp_dir}/development-remote.yaml"
 render "${development_remote_manifest}" \
   --set llmRequestRouter.discovery.allowInsecureRemoteWatchHttp=true \
   --set-string 'llmRequestRouter.discovery.remoteWatchUrls[0]=http://127.0.0.1:50071'
-development_remote_args="$(workload_args "${development_remote_manifest}" Deployment)"
+development_remote_config="$(stargate_config "${development_remote_manifest}")"
 development_remote_backend_args="$(backend_router_args "${development_remote_manifest}")"
-printf '%s\n' "${development_remote_args}" | grep -qx -- '--remote-stargate-url=http://127.0.0.1:50071' || fail "development HTTP remote Watch URI was not rendered"
-printf '%s\n' "${development_remote_args}" | grep -qx -- '--allow-insecure-remote-watch-http' || fail "Stargate missing development HTTP opt-in"
+printf '%s\n' "${development_remote_config}" | grep -Fqx -- 'remote_watch_urls = ["http://127.0.0.1:50071"]' || fail "development HTTP remote Watch URI was not rendered"
+printf '%s\n' "${development_remote_config}" | grep -Fqx -- 'allow_insecure_remote_watch_http = true' || fail "Stargate config missing development HTTP opt-in"
 printf '%s\n' "${development_remote_backend_args}" | grep -qx -- '--allow-insecure-remote-watch-http' || fail "backend router missing development HTTP opt-in"
 
 for invalid_remote_url in \

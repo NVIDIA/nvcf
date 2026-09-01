@@ -241,7 +241,7 @@ async fn start_two_stargates_with_registration_idle_timeout(
         let any_addr = "127.0.0.1:0".parse().unwrap();
         let mut config = base_config(name, any_addr, any_addr);
         config.model_discovery_listen_addr = any_addr;
-        config.dns_poll_interval = Duration::from_secs(1);
+        config.kubernetes_pod_discovery_poll_interval = Duration::from_secs(1);
         config.registration_update_idle_timeout = registration_update_idle_timeout;
         let listeners = BoundStargateListeners::bind(&mut config).unwrap();
         (config, listeners)

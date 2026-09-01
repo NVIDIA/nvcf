@@ -251,11 +251,11 @@ expect_external_router() {
     ! grep -Fq "name: $issuer_name" "$certificate_file"; then
     fail "$case_name did not render Certificate issuer name $issuer_name"
   fi
-  grep -Fq -- '--tls-cert-path=/etc/stargate/tls/tls.crt' "$manifests_file" ||
+  grep -Fq -- 'certificate_path = "/etc/stargate/tls/tls.crt"' "$manifests_file" ||
     fail "$case_name did not enable the request-router TLS certificate"
-  grep -Fq -- '--tls-key-path=/etc/stargate/tls/tls.key' "$manifests_file" ||
+  grep -Fq -- 'private_key_path = "/etc/stargate/tls/tls.key"' "$manifests_file" ||
     fail "$case_name did not enable the request-router TLS key"
-  if grep -Fq -- '--quic-insecure' "$manifests_file"; then
+  if grep -Fq -- 'insecure_skip_verify = true' "$manifests_file"; then
     fail "$case_name enabled insecure request-router transport"
   fi
   if grep -Fq 'name: addons-llm-migrations' "$manifests_file"; then
@@ -332,11 +332,11 @@ expect_existing_secret_router() {
   test "$mounted_secret" = "$secret_name" ||
     fail "$case_name mounted secret $mounted_secret, expected $secret_name"
 
-  grep -Fq -- '--tls-cert-path=/etc/stargate/tls/tls.crt' "$manifests_file" ||
+  grep -Fq -- 'certificate_path = "/etc/stargate/tls/tls.crt"' "$manifests_file" ||
     fail "$case_name did not pass the request-router certificate path"
-  grep -Fq -- '--tls-key-path=/etc/stargate/tls/tls.key' "$manifests_file" ||
+  grep -Fq -- 'private_key_path = "/etc/stargate/tls/tls.key"' "$manifests_file" ||
     fail "$case_name did not pass the request-router private key path"
-  if grep -Fq -- '--quic-insecure' "$manifests_file"; then
+  if grep -Fq -- 'insecure_skip_verify = true' "$manifests_file"; then
     fail "$case_name enabled insecure request-router transport"
   fi
 }
@@ -371,9 +371,9 @@ expect_managed_router() {
     fail "$case_name did not render ClusterIssuer name $issuer_name"
   grep -Fq 'name: addons-llm-migrations' "$manifests_file" ||
     fail "$case_name did not render the managed OpenBao provisioning hook"
-  grep -Fq -- '--tls-cert-path=/etc/stargate/tls/tls.crt' "$manifests_file" ||
+  grep -Fq -- 'certificate_path = "/etc/stargate/tls/tls.crt"' "$manifests_file" ||
     fail "$case_name did not enable the request-router TLS certificate"
-  if grep -Fq -- '--quic-insecure' "$manifests_file"; then
+  if grep -Fq -- 'insecure_skip_verify = true' "$manifests_file"; then
     fail "$case_name enabled insecure request-router transport"
   fi
 }
@@ -420,7 +420,7 @@ test "$secure_defaults_dns_names" = "$(printf '%s\n%s' \
   fail "secure defaults did not render the stable and per-pod request-router DNS names"
 grep -Fq 'name: addons-llm-migrations' "$secure_defaults_manifests" ||
   fail "secure defaults did not render the managed OpenBao provisioning hook"
-if grep -Fq -- '--quic-insecure' "$secure_defaults_manifests"; then
+if grep -Fq -- 'insecure_skip_verify = true' "$secure_defaults_manifests"; then
   fail "secure defaults enabled insecure request-router transport"
 fi
 

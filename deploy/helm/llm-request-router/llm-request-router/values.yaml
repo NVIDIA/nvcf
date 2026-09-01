@@ -234,7 +234,6 @@ llmRequestRouter:
         memory: 256Mi
 
   discovery:
-    disableDnsDiscovery: false
     # Maximum interval between unchanged WatchStargates snapshots. This is
     # shared by Stargate and the EndpointSlice backend router.
     watchHeartbeatMs: 5000

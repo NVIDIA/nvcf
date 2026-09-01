@@ -61,7 +61,7 @@ use self::watch_stargates::{
 pub struct StargateService {
     stargate_id: String,
     advertise_addr: SocketAddr,
-    discovery_dns_name: String,
+    kubernetes_pod_discovery_dns_name: Option<String>,
     watch_stargates_rx: watch::Receiver<WatchStargatesResponse>,
     state: Arc<StargateState>,
     registration_connection_config: RegistrationConnectionConfig,
@@ -75,7 +75,7 @@ pub struct StargateService {
 pub(crate) struct StargateServiceConfig {
     pub(crate) stargate_id: String,
     pub(crate) advertise_addr: SocketAddr,
-    pub(crate) discovery_dns_name: String,
+    pub(crate) kubernetes_pod_discovery_dns_name: Option<String>,
     pub(crate) discovery: Box<dyn Discovery>,
     pub(crate) remote_watch_stargate_urls: Vec<String>,
     pub(crate) grpc_pylon_dial_addr: Option<String>,
@@ -108,7 +108,7 @@ impl StargateService {
         let tasks = config.tasks.clone();
         let watch_stargates_rx = spawn_watch_stargates_publisher(WatchStargatesPublisherConfig {
             advertise_addr: config.advertise_addr,
-            discovery_dns_name: config.discovery_dns_name.clone(),
+            kubernetes_pod_discovery_dns_name: config.kubernetes_pod_discovery_dns_name.clone(),
             discovery: config.discovery,
             remote_watch_stargate_urls: config.remote_watch_stargate_urls,
             grpc_pylon_dial_addr: config.grpc_pylon_dial_addr,
@@ -120,7 +120,7 @@ impl StargateService {
         Self {
             stargate_id: config.stargate_id,
             advertise_addr: config.advertise_addr,
-            discovery_dns_name: config.discovery_dns_name,
+            kubernetes_pod_discovery_dns_name: config.kubernetes_pod_discovery_dns_name,
             watch_stargates_rx,
             state: config.state,
             registration_connection_config: config.registration_connection_config,
@@ -204,7 +204,7 @@ impl StargateControlPlane for StargateService {
         info!(
             stargate_id = %self.stargate_id,
             advertise_addr = %self.advertise_addr,
-            dns_name = %self.discovery_dns_name,
+            kubernetes_pod_discovery_dns_name = ?self.kubernetes_pod_discovery_dns_name,
             "watch stargates stream opened"
         );
 

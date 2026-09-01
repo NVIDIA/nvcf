@@ -332,7 +332,6 @@ addons:
         kind: Deployment
 
       discovery:
-        disableDnsDiscovery: false
         # Maximum interval between unchanged local and remote Watch snapshots.
         watchHeartbeatMs: 5000
         # Recursive Watch endpoints require an explicit HTTPS URI. Plaintext
