@@ -273,6 +273,7 @@ func TestSetupNVCADeployment(t *testing.T) {
 					Values: []string{
 						"LogPosting",
 						"CachingSupport",
+						"GracefulNoGPU",
 						"PeriodicInstanceStatusUpdate",
 						"SharedCluster",
 					},
@@ -322,6 +323,7 @@ func TestSetupNVCADeployment(t *testing.T) {
 			LogLevel: "info",
 			FeatureFlags: []string{
 				"CachingSupport",
+				"GracefulNoGPU",
 				"LogPosting",
 				"PeriodicInstanceStatusUpdate",
 				"SharedCluster",
@@ -538,6 +540,7 @@ func TestSetupNVCADeployment(t *testing.T) {
 	assert.Equal(t, expectedAnnotations, gotSvc.Annotations)
 	assert.Equal(t, expectedAnnotations, gotDep.Annotations)
 	assert.Empty(t, gotDep.Spec.Template.Annotations)
+	assert.Equal(t, appsv1.RecreateDeploymentStrategyType, gotDep.Spec.Strategy.Type)
 
 	// Try rollout with the same spec.
 	err = bc.setupNVCADeployment(ctx, inNVCFBackend)
@@ -631,6 +634,7 @@ func TestSetupNVCADeployment_OverrideEnvironmentVars(t *testing.T) {
 		gotDep, getErr = depIface.Get(ctx, nvcaoptypes.NVCAModuleName, metav1.GetOptions{})
 		require.NoError(ct, getErr)
 	}, 10*time.Second, 100*time.Millisecond)
+	assert.Empty(t, gotDep.Spec.Strategy.Type, "default rollout strategy must remain unchanged")
 
 	var nvcaContainer *corev1.Container
 	for i := range gotDep.Spec.Template.Spec.Containers {
@@ -5177,8 +5181,8 @@ func TestSetupAgentConfigConfigMapMergesTransportTLSFromAgentConfigMergeConfigMa
 				TrustMode:                nvcaconfig.TrustModeBundle,
 				TrustBundleConfigMapName: "nvcf-transport-trust-bundle",
 				TrustBundleKey:           "nvcf-ca-bundle.pem",
-				TrustBundleFingerprint:   "sha256:9a7814909424061a68756ee5c26aa1a1491b8d20a7b813fb24fa7e73b2fa1c93",
-				TrustBundlePEM:           "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n",
+				TrustBundleFingerprint:   "sha256:95b3dc7dfd3212a6f02c644527f0a65890a9a9c80acf7551be6aa89b1f98fe86",
+				TrustBundlePEM:           transportTrustTestPEM,
 			},
 		},
 	}
@@ -5219,10 +5223,9 @@ func TestSetupAgentConfigConfigMapMergesTransportTLSFromAgentConfigMergeConfigMa
 	assert.Equal(t, nvcaconfig.TrustModeBundle, gotCfg.Workload.TransportTLS.TrustMode)
 	assert.Equal(t, "nvcf-transport-trust-bundle", gotCfg.Workload.TransportTLS.TrustBundleConfigMapName)
 	assert.Equal(t, "nvcf-ca-bundle.pem", gotCfg.Workload.TransportTLS.TrustBundleKey)
-	assert.Equal(t, "sha256:9a7814909424061a68756ee5c26aa1a1491b8d20a7b813fb24fa7e73b2fa1c93",
+	assert.Equal(t, "sha256:95b3dc7dfd3212a6f02c644527f0a65890a9a9c80acf7551be6aa89b1f98fe86",
 		gotCfg.Workload.TransportTLS.TrustBundleFingerprint)
-	assert.Equal(t, "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n",
-		gotCfg.Workload.TransportTLS.TrustBundlePEM)
+	assert.Equal(t, transportTrustTestPEM, gotCfg.Workload.TransportTLS.TrustBundlePEM)
 }
 
 func TestGetChartDefaultAgentConfig(t *testing.T) {

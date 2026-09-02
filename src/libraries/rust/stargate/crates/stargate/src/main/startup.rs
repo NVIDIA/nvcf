@@ -25,6 +25,7 @@ use stargate::discovery::{
 use stargate::proxy::{ProxyRetryConfig, ProxyTransportConfig, QuicTunnelConfig};
 use stargate::runtime::{
     BoundStargateListeners, ReverseTunnelConfig, StargateRuntime, StargateRuntimeConfig,
+    WarmupConfig,
 };
 use stargate_forwarding::{ForwardingResolver, HeadlessDnsResolver, render_hostname};
 use stargate_protocol::BackendConnectivity;
@@ -192,6 +193,11 @@ pub(super) fn runtime_config_from_args(
         metrics_prefix: args.metrics_prefix.clone(),
         forwarding: None,
         authenticator: Arc::new(OpenAuthenticator),
+        warmup: WarmupConfig {
+            warmup_duration: millis(args.readiness_warmup_ms),
+            sample_interval: millis(args.readiness_stabilization_sample_interval_ms),
+            stabilization_window: args.readiness_stabilization_window,
+        },
     })
 }
 

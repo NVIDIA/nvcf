@@ -1,0 +1,38 @@
+{
+  "id": "0b659ea1-1769-4f50-90d5-0222a2ae7482",
+  "value": "example-api-key",
+  "status": "ACTIVE",
+  "owner_type": "USER",
+  "owner_id": "user@example.com",
+  "issuer_service_id": "example-service-id",
+  "audience_service_ids": [
+    "example-service-id"
+  ],
+  "description": "debug key",
+  "created_at": "2025-11-12T23:34:21.967Z",
+  "expires_at": "2025-12-12T00:00:00Z",
+  "authorizations": {
+    "policies": [
+      {
+        "aud": "example-service-id",
+        "auds": [
+          "example-service-id"
+        ],
+        "product": "nv-cloud-functions",
+        "resources": [
+          {
+            "id": "*",
+            "type": "account-functions"
+          },
+          {
+            "id": "*",
+            "type": "authorized-functions"
+          }
+        ],
+        "scopes": [
+          "invoke_function"
+        ]
+      }
+    ]
+  }
+}

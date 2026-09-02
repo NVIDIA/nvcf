@@ -37,7 +37,7 @@ eventLedger:
     # Image name is chart-owned and appended to registry/repository.
     name: "nvcf-event-ledger"
     pullPolicy: IfNotPresent
-    tag: "0.1.1"
+    tag: "0.13.3"
     digest: ""
 
   imagePullSecrets: []

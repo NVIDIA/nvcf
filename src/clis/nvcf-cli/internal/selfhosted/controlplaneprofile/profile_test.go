@@ -76,6 +76,30 @@ func TestValidateNoDNSGatewayAddressRequiresHostHeader(t *testing.T) {
 	assert.Contains(t, err.Error(), "Host header")
 }
 
+func TestValidateSharedGatewayHostnameRequiresServiceHostHeaders(t *testing.T) {
+	doc := strings.ReplaceAll(validControlPlaneProfileYAML(), "https://sis.nvcf-cp.internal", "https://gateway.nvcf-cp.internal")
+	doc = strings.ReplaceAll(doc, "https://reval.nvcf-cp.internal", "https://gateway.nvcf-cp.internal")
+	doc = strings.Replace(doc, "    httpURL: https://api.nvcf-cp.internal", "    httpURL: https://gateway.nvcf-cp.internal", 1)
+	doc = strings.Replace(doc, "    sis: sis.nvcf-cp.internal\n", "", 1)
+	doc = strings.Replace(doc, "    reval: reval.nvcf-cp.internal\n", "", 1)
+
+	_, err := ParseAndValidate([]byte(doc), ValidateOptions{Require: RequireComputeReachable})
+	require.Error(t, err)
+
+	assert.Contains(t, err.Error(), "controlPlane.hosts.sis")
+	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.icmsURL")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.reval")
+	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.revalURL")
+}
+
+func TestValidateDirectServiceHostnamesDoNotRequireHostOverrides(t *testing.T) {
+	doc := strings.Replace(validControlPlaneProfileYAML(), "    sis: sis.nvcf-cp.internal\n", "", 1)
+	doc = strings.Replace(doc, "    reval: reval.nvcf-cp.internal\n", "", 1)
+
+	_, err := ParseAndValidate([]byte(doc), ValidateOptions{Require: RequireComputeReachable})
+	require.NoError(t, err)
+}
+
 func TestValidateEndpointScopeReportsUnusableWhenPresentURLInvalid(t *testing.T) {
 	v := validator{}
 

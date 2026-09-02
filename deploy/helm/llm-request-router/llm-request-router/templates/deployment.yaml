@@ -132,6 +132,15 @@ spec:
             - --allow-insecure-remote-watch-http
             {{- end }}
             - --shutdown-drain-timeout-ms={{ .Values.llmRequestRouter.shutdown.drainTimeoutMs }}
+            {{- with dig "readiness" "warmupMs" "" .Values.llmRequestRouter }}
+            - --readiness-warmup-ms={{ . }}
+            {{- end }}
+            {{- if hasKey (dig "readiness" dict .Values.llmRequestRouter) "stabilizationSampleIntervalMs" }}
+            - --readiness-stabilization-sample-interval-ms={{ dig "readiness" "stabilizationSampleIntervalMs" 0 .Values.llmRequestRouter }}
+            {{- end }}
+            {{- if hasKey (dig "readiness" dict .Values.llmRequestRouter) "stabilizationWindow" }}
+            - --readiness-stabilization-window={{ dig "readiness" "stabilizationWindow" 0 .Values.llmRequestRouter }}
+            {{- end }}
             - --quic-connect-timeout-ms={{ .Values.llmRequestRouter.transport.quicConnectTimeoutMs }}
             - --quic-request-timeout-ms={{ .Values.llmRequestRouter.transport.quicRequestTimeoutMs }}
             - --metrics-port={{ .Values.llmRequestRouter.service.metricsPort }}

@@ -54,6 +54,15 @@ fn parse_nonzero_usize(value: &str) -> std::result::Result<usize, String> {
         .ok_or_else(|| "value must be greater than 0".to_string())
 }
 
+fn parse_nonzero_u32(value: &str) -> std::result::Result<u32, String> {
+    let count = value
+        .parse::<u32>()
+        .map_err(|err| format!("invalid count: {err}"))?;
+    (count > 0)
+        .then_some(count)
+        .ok_or_else(|| "value must be greater than 0".to_string())
+}
+
 fn parse_remote_watch_url(value: &str) -> std::result::Result<String, String> {
     parse_explicit_http_uri(value)
         .map_err(|_| "remote Watch URL must be an explicit http:// or https:// URI".to_string())
@@ -83,7 +92,7 @@ struct Args {
     /// Self gRPC address published by non-Kubernetes discovery and used as the port source for Kubernetes advertised hostnames.
     #[arg(long, value_name = "ADDR")]
     advertise_addr: SocketAddr,
-    /// DNS name used for Stargate peer discovery. In Kubernetes this should be the headless Service so EndpointSlice readiness controls peer visibility and development-only relay targets.
+    /// DNS name used for Stargate peer discovery. In Kubernetes this should be the headless Service so warming and ready peers remain discoverable.
     #[arg(long, value_name = "DNS_NAME")]
     stargate_discovery_dns_name: String,
     /// Additional recursive WatchStargates seeds for remote regions. Pylons register only to concrete `stargates` entries returned by watch snapshots. Repeatable.
@@ -255,6 +264,38 @@ struct Args {
     /// OAuth2 host for minting worker-auth tokens at `<host>/token` with the secrets-file id/secret instead of a static bearer token.
     #[arg(long, env = "OAUTH2_PROVIDER_HOST", value_name = "URL")]
     oauth2_provider_host: Option<String>,
+    /// Startup warmup window: `/readyz` returns `503` for this many milliseconds after startup.
+    /// Zero disables the warmup and the replica is ready immediately.
+    /// During the warmup the stabilization sampler may promote the replica to ready earlier
+    /// once backends are detected; the fixed window is the upper bound.
+    #[arg(
+        long,
+        default_value_t = 0,
+        env = "STARGATE_READINESS_WARMUP_MS",
+        value_name = "MS"
+    )]
+    readiness_warmup_ms: u64,
+    /// How often the warmup stabilization sampler reads the total active backend count.
+    /// Only used when `--readiness-warmup-ms` is nonzero.
+    #[arg(
+        long,
+        default_value_t = 1000,
+        value_parser = parse_nonzero_millis,
+        env = "STARGATE_READINESS_STABILIZATION_SAMPLE_INTERVAL_MS",
+        value_name = "MS"
+    )]
+    readiness_stabilization_sample_interval_ms: u64,
+    /// Number of consecutive stable non-zero backend samples required to promote the replica
+    /// to ready before the fixed warmup window elapses.
+    /// Only used when `--readiness-warmup-ms` is nonzero.
+    #[arg(
+        long,
+        default_value_t = 5,
+        value_parser = parse_nonzero_u32,
+        env = "STARGATE_READINESS_STABILIZATION_WINDOW",
+        value_name = "N"
+    )]
+    readiness_stabilization_window: u32,
 }
 
 #[tokio::main]
@@ -500,6 +541,7 @@ mod tests {
         let args = parse_args("");
         let config = runtime_config_from_args(&args, proxy_transport(&args))
             .expect("runtime config should parse");
+        assert_eq!(config.warmup.warmup_duration, Duration::ZERO);
         assert!(config.forwarding.is_none());
         assert_eq!(
             config
@@ -602,6 +644,18 @@ mod tests {
     #[test]
     fn dns_poll_ms_zero_is_rejected() {
         assert_parse_error("--dns-poll-ms 0", "greater than 0");
+    }
+
+    #[test]
+    fn readiness_warmup_override_reaches_runtime_config() {
+        let args = parse_args("--readiness-warmup-ms 1234");
+        let config = runtime_config_from_args(&args, proxy_transport(&args))
+            .expect("runtime config should parse");
+
+        assert_eq!(config.warmup.warmup_duration, Duration::from_millis(1234));
+
+        let disabled = parse_args("--readiness-warmup-ms 0");
+        assert_eq!(disabled.readiness_warmup_ms, 0);
     }
 
     #[test]
@@ -1101,5 +1155,55 @@ mod tests {
             .await
             .expect_err("unreadable secrets file must fail");
         assert!(error.to_string().contains("failed to read"), "{error:#}");
+    }
+
+    #[test]
+    fn readiness_warmup_defaults_and_overrides_parse() {
+        let defaults = parse_args("");
+        assert_eq!(defaults.readiness_warmup_ms, 0, "warmup defaults to disabled");
+        assert_eq!(defaults.readiness_stabilization_sample_interval_ms, 1000);
+        assert_eq!(defaults.readiness_stabilization_window, 5);
+
+        let overridden = parse_args(
+            "--readiness-warmup-ms 60000 \
+             --readiness-stabilization-sample-interval-ms 500 \
+             --readiness-stabilization-window 3",
+        );
+        assert_eq!(overridden.readiness_warmup_ms, 60000);
+        assert_eq!(overridden.readiness_stabilization_sample_interval_ms, 500);
+        assert_eq!(overridden.readiness_stabilization_window, 3);
+    }
+
+    #[test]
+    fn readiness_stabilization_sample_interval_zero_is_rejected() {
+        assert_parse_error(
+            "--readiness-stabilization-sample-interval-ms 0",
+            "greater than 0",
+        );
+    }
+
+    #[test]
+    fn readiness_stabilization_window_zero_is_rejected() {
+        assert_parse_error("--readiness-stabilization-window 0", "greater than 0");
+    }
+
+    #[test]
+    fn runtime_startup_wires_warmup_config_from_args() {
+        let args = parse_args(
+            "--readiness-warmup-ms 12345 \
+             --readiness-stabilization-sample-interval-ms 250 \
+             --readiness-stabilization-window 7",
+        );
+        let config = runtime_config_from_args(&args, proxy_transport(&args))
+            .expect("runtime config should parse");
+        assert_eq!(
+            config.warmup.warmup_duration,
+            std::time::Duration::from_millis(12345)
+        );
+        assert_eq!(
+            config.warmup.sample_interval,
+            std::time::Duration::from_millis(250)
+        );
+        assert_eq!(config.warmup.stabilization_window, 7);
     }
 }

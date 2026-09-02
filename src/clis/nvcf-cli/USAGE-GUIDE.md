@@ -753,6 +753,17 @@ curl -X POST https://api.nvcf.nvidia.com/v2/nvcf/accounts/nvcf-default/registry-
   --inference-url / \
   --function-type LLM \
   --llm-model "name=dummy-model,uris=/v1/chat/completions|/v1/responses|/v1/embeddings,routingMethod=round_robin,tokenRateLimit=1000-S"
+
+# Create an LLM function with request priority
+./nvcf-cli function create \
+  --name my-priority-llm-function \
+  --image nvcr.io/example/openai-compatible:latest \
+  --inference-port 8000 \
+  --inference-url / \
+  --function-type LLM \
+  --llm-model "name=dummy-model,uris=/v1/chat/completions" \
+  --llm-default-priority 7 \
+  --llm-per-account-priority "nca-id:3"
 ```
 
 **Secrets Format:**
@@ -1036,6 +1047,13 @@ When `--json` is set:
   --function-id "550e8400-e29b-41d4-a716-446655440000" \
   --version-id "01234567-89ab-cdef-0123-456789abcdef" \
   --llm-model-update "name=dummy-model,routingMethod=round_robin,tokenRateLimit=1000-S"
+
+# Replace the function-level request priority configuration
+./nvcf-cli function update \
+  --function-id "550e8400-e29b-41d4-a716-446655440000" \
+  --version-id "01234567-89ab-cdef-0123-456789abcdef" \
+  --llm-default-priority 7 \
+  --llm-per-account-priority "nca-id:3"
 ```
 
 ### Delete Function or Deployment
@@ -1373,4 +1391,3 @@ nvcf-cli task delete    # DELETE - permanent
 ```
 
 `task delete` clears the saved task from state when it matches.
-

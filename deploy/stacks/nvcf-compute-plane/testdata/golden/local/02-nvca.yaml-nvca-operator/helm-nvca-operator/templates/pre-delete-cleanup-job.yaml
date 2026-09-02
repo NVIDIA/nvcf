@@ -52,7 +52,7 @@ spec:
         fsGroup: 1010
       containers:
       - name: cleanup
-        image: nvcr.io/0651155215864979/ncp-dev/nvca-operator:3.2.12
+        image: nvcr.io/0651155215864979/ncp-dev/nvca-operator:3.2.19
         imagePullPolicy: IfNotPresent
         securityContext:
           runAsUser: 1000

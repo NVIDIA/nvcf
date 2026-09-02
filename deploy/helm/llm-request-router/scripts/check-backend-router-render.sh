@@ -193,8 +193,8 @@ assert_contains "command:" \
   "backend router must override the Stargate image entrypoint"
 assert_contains "/usr/local/bin/stargate-k8s-router" \
   "Stargate image must include the Kubernetes router binary"
-assert_contains "--target-service-name=llm-request-router" \
-  "backend router must watch the readiness-respecting request-router Service"
+assert_contains "--target-service-name=llm-request-router-headless" \
+  "backend router must watch the headless Service so warming pods accept pylon connections"
 assert_contains "--advertised-hostname-template={pod_name}.llm-request-router-headless.nvcf.svc.cluster.local" \
   "backend router authority and SNI template must match Stargate"
 assert_contains "--advertised-grpc-port=50071" \
@@ -303,9 +303,9 @@ if ! grep -Fq -- "serviceAccountName: external-backend-router" "$external_servic
 fi
 assert_backend_router_role_binding_subject "$external_service_account" "external-backend-router"
 
-assert_zero_config_contains "image: registry.example.invalid/nvcf/stargate:0.11.1" \
+assert_zero_config_contains "image: registry.example.invalid/nvcf/stargate:0.14.2" \
   "backend router must inherit the released Stargate image with no router image configuration"
-assert_zero_config_contains 'app.kubernetes.io/version: "0.11.1"' \
+assert_zero_config_contains 'app.kubernetes.io/version: "0.14.2"' \
   "backend router labels must identify the inherited Stargate image version"
 
 helm template llm-request-router "$chart_dir" \

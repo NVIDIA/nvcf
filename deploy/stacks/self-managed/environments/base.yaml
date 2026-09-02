@@ -171,12 +171,20 @@ functionAutoscaler:
     # environment label.
     ignoreEnv: true
 
+# API environment entries are merged over the stack defaults. Remote config is
+# passed to the API chart and overrides its packaged application profile. When
+# the LLM addon is enabled, the stack defaults the Pylon image from
+# global.sidecars (or global.image) at version 0.14.1.
+api:
+  env: {}
+  remoteConfig:
+    configData: {}
+
 # Image overrides for the API account-bootstrap job. alpine-k8s is not
 # republished under the public nvidia/nvcf catalog, so it defaults to its
 # upstream source, docker.io/alpine/k8s:1.36.1. Leave these unset unless you
 # have mirrored the image into your own registry, in which case set registry
 # and repository together:
-# api:
 #   accountBootstrap:
 #     image:
 #       registry: <your-registry>
@@ -193,6 +201,13 @@ accounts:
 # These static global values are processed in the values template
 nats:
   enabled: true
+  # The control plane places request-queue streams by its logical NCP region.
+  # Keep both tags so NATS can host shared and region-scoped streams.
+  config:
+    merge:
+      server_tags:
+        - "dc:ncp"
+        - "aws-region:ncp"
   # Image overrides for the NATS config reloader. The reloader is not
   # republished under the public nvidia/nvcf catalog, so it defaults to its
   # upstream source, docker.io/natsio/nats-server-config-reloader:0.23.0.
@@ -308,6 +323,8 @@ addons:
       replicaCount: 3
       # Set only for source-tree validation. Empty uses the released OCI chart.
       chartPath: ""
+      readiness:
+        warmupMs: 60000
       workload:
         # Deployment matches managed NVCF. Existing installations can pin
         # StatefulSet and migrate workload kinds in a controlled maintenance
@@ -437,6 +454,7 @@ addons:
     config:
       mappingPath: /etc/vanity-gateway/config/config.yaml
       nvcfApiEndpoint: http://invocation.nvcf.svc.cluster.local:8080
+      llmGatewayEndpoint: http://llm-api-gateway.nvcf.svc.cluster.local:8080
       # Empty by default because the Vanity Gateway chart does not create Vault
       # Agent injection. Set this only when another component mounts the secrets
       # file into the pod.
@@ -488,6 +506,13 @@ rateLimiter:
 # Set enabled: true for any service running more than one replica.
 
 apikeys:
+  # Operator-set api-keys service env, deep-merged over the chart defaults
+  # (AWS_REGION / SPRING_PROFILES_ACTIVE). Set NVCF_NCA_ID to the NCA the
+  # api-keys service authorizes keys against. Leave unset to keep the chart
+  # defaults only. Non-secret configuration only -- secrets belong in
+  # secrets/<env>-secrets.yaml.
+  # env:
+  #   NVCF_NCA_ID: "nca-xxxxxxxx"
   podDisruptionBudget:
     enabled: false
     maxUnavailable: 1
@@ -499,7 +524,8 @@ ess:
 
 invocation:
   env:
-    NATS_PROPERTIES__REGION: local
+    # Keep request subjects aligned with the API and worker consumers.
+    NATS_PROPERTIES__REGION: ncp
   podDisruptionBudget:
     enabled: false
     maxUnavailable: 1
@@ -551,7 +577,20 @@ ingress:
           enabled: false
           # Defaults to tasks-grpc.<global.domain> when enabled. Set to override.
           hostnames: []
+      # apiKeys, sis, and reval are enabled by default in the gateway-routes
+      # chart, which owns that default. Leave enabled unset to keep the chart
+      # default; uncomment enabled: false to drop the route -- for example, to
+      # keep api-keys off the public edge in a split/multi-cluster deployment, or
+      # to remove the unused sis/reval routes when they have no external consumer.
+      # The stack forwards enabled only when it is set here.
       apiKeys:
+        # enabled: false
+        routeAnnotations: {}
+      sis:
+        # enabled: false
+        routeAnnotations: {}
+      reval:
+        # enabled: false
         routeAnnotations: {}
       invocation:
         routeAnnotations: {}

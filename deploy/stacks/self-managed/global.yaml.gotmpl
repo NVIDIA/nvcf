@@ -199,6 +199,7 @@ openbao:
       {{- end }}
 
 nats:
+  {{- $natsServerTags := dig "nats" "config" "merge" "server_tags" (list "dc:ncp" "aws-region:ncp") .Values }}
   {{- if .Values.global.imagePullSecrets }}
   global:
     image:
@@ -246,13 +247,16 @@ nats:
         {{- end }}
   {{- end }}
 
-  {{- if .Values.global.storageClass }}
   config:
+    merge:
+      server_tags:
+        {{- toYaml $natsServerTags | nindent 8 }}
+    {{- if .Values.global.storageClass }}
     jetstream:
       fileStore:
         pvc:
           storageClassName: {{ .Values.global.storageClass }}
-  {{- end }}
+    {{- end }}
 
   {{- with dig "nats" "podDisruptionBudget" dict .Values }}
   podDisruptionBudget:
@@ -280,6 +284,10 @@ apikeys:
   {{- end }}
   {{- with dig "apikeys" "startupProbe" dict .Values }}
   startupProbe:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with dig "apikeys" "env" dict .Values }}
+  env:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 
@@ -376,6 +384,81 @@ natsAuthCalloutService:
 {{- end }}
 {{- $nvcfApiGrpcRouteHostnames := dig "ingress" "gatewayApi" "routes" "nvcfApi" "grpc" "hostnames" (list) .Values | default (list (printf "api-grpc.%s" .Values.global.domain)) }}
 {{- $nvctApiGrpcRouteHostnames := dig "ingress" "gatewayApi" "routes" "nvctApi" "grpc" "hostnames" (list) .Values | default (list (printf "tasks-grpc.%s" .Values.global.domain)) }}
+{{- $configuredApiEnv := dig "api" "env" dict .Values }}
+{{- if not (kindIs "map" $configuredApiEnv) }}
+{{- fail "api.env must be a map" }}
+{{- end }}
+{{- $renderedApiEnv := deepCopy $configuredApiEnv }}
+{{- $legacyPylonEnvKey := "NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE" }}
+{{- $legacyPylonImageConfigured := hasKey $renderedApiEnv $legacyPylonEnvKey }}
+{{- $legacyPylonImage := "" }}
+{{- if $legacyPylonImageConfigured }}
+{{- $legacyPylonImage = index $renderedApiEnv $legacyPylonEnvKey }}
+{{- if not (kindIs "string" $legacyPylonImage) }}
+{{- fail "api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE must be a string" }}
+{{- end }}
+{{- if eq (trim $legacyPylonImage) "" }}
+{{- fail "api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE must be a non-empty string" }}
+{{- end }}
+{{- $legacyPylonImage = trim $legacyPylonImage }}
+{{- $_ := unset $renderedApiEnv $legacyPylonEnvKey }}
+{{- end }}
+{{- $configuredApiRemoteConfigData := dig "api" "remoteConfig" "configData" dict .Values }}
+{{- if not (kindIs "map" $configuredApiRemoteConfigData) }}
+{{- fail "api.remoteConfig.configData must be a map" }}
+{{- end }}
+{{- $apiRemoteConfigData := deepCopy $configuredApiRemoteConfigData }}
+{{- $configuredNvcfRemoteConfig := dict }}
+{{- if hasKey $apiRemoteConfigData "nvcf" }}
+{{- $configuredNvcfRemoteConfig = index $apiRemoteConfigData "nvcf" }}
+{{- if not (kindIs "map" $configuredNvcfRemoteConfig) }}
+{{- fail "api.remoteConfig.configData.nvcf must be a map" }}
+{{- end }}
+{{- end }}
+{{- $configuredSidecarsRemoteConfig := dict }}
+{{- if hasKey $configuredNvcfRemoteConfig "sidecars" }}
+{{- $configuredSidecarsRemoteConfig = index $configuredNvcfRemoteConfig "sidecars" }}
+{{- if not (kindIs "map" $configuredSidecarsRemoteConfig) }}
+{{- fail "api.remoteConfig.configData.nvcf.sidecars must be a map" }}
+{{- end }}
+{{- end }}
+{{- $pylonRemoteConfigKey := "llm-router-client-image" }}
+{{- $configuredPylonImagePresent := hasKey $configuredSidecarsRemoteConfig $pylonRemoteConfigKey }}
+{{- $configuredPylonImage := "" }}
+{{- if $configuredPylonImagePresent }}
+{{- $configuredPylonImage = index $configuredSidecarsRemoteConfig $pylonRemoteConfigKey }}
+{{- if not (kindIs "string" $configuredPylonImage) }}
+{{- fail "api.remoteConfig.configData.nvcf.sidecars.llm-router-client-image must be a string" }}
+{{- end }}
+{{- if eq (trim $configuredPylonImage) "" }}
+{{- fail "api.remoteConfig.configData.nvcf.sidecars.llm-router-client-image must be a non-empty string" }}
+{{- end }}
+{{- $configuredPylonImage = trim $configuredPylonImage }}
+{{- $_ := set $configuredSidecarsRemoteConfig $pylonRemoteConfigKey $configuredPylonImage }}
+{{- end }}
+{{- if and $legacyPylonImageConfigured $configuredPylonImagePresent (ne $legacyPylonImage $configuredPylonImage) }}
+{{- fail "api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE is deprecated and conflicts with api.remoteConfig.configData.nvcf.sidecars.llm-router-client-image" }}
+{{- end }}
+{{- $effectivePylonImage := "" }}
+{{- if $configuredPylonImagePresent }}
+{{- $effectivePylonImage = $configuredPylonImage }}
+{{- else if $legacyPylonImageConfigured }}
+{{- $effectivePylonImage = $legacyPylonImage }}
+{{- else if $llmEnabled }}
+{{- $effectivePylonImage = printf "%s/%s/pylon:0.14.3" $sidecarsHost $sidecarsRepo }}
+{{- end }}
+{{- $stackApiRemoteConfigData := dict }}
+{{- $stackNvcfRemoteConfig := dict }}
+{{- if or $llmEnabled $legacyPylonImageConfigured }}
+{{- $_ := set $stackNvcfRemoteConfig "sidecars" (dict $pylonRemoteConfigKey $effectivePylonImage) }}
+{{- end }}
+{{- if $llmEnabled }}
+{{- $_ := set $stackNvcfRemoteConfig "llm-request-router" (dict "worker-address" $llmRequestRouterWorkerAddress) }}
+{{- end }}
+{{- if $stackNvcfRemoteConfig }}
+{{- $_ := set $stackApiRemoteConfigData "nvcf" $stackNvcfRemoteConfig }}
+{{- end }}
+{{- $apiRemoteConfigData = mergeOverwrite $apiRemoteConfigData $stackApiRemoteConfigData }}
 api:
   fullnameOverride: nvcf-api
   {{- if .Values.global.imagePullSecrets }}
@@ -396,12 +479,10 @@ api:
   {{- with include "nvcf.tolerations" (dict "type" "controlplane" "tolerations" .Values.global.tolerations) }}
   {{- . | nindent 2 }}
   {{- end }}
-  {{- if $llmEnabled }}
+  {{- if $apiRemoteConfigData }}
   remoteConfig:
     configData:
-      nvcf:
-        llm-request-router:
-          worker-address: {{ $llmRequestRouterWorkerAddress | quote }}
+      {{- toYaml $apiRemoteConfigData | nindent 6 }}
   {{- end }}
   # alpine-k8s is not republished under the public nvidia/nvcf catalog, so it
   # defaults to its upstream Docker Hub source and a public-catalog install
@@ -442,40 +523,65 @@ api:
       {{- end }}
       maxRegistryCreds: {{ $maxRegistryCreds }}
 
+  {{- /* Build the fixed API environment first, then merge configured api.env
+         last so operators can override a default without emitting duplicate
+         YAML keys. toYaml provides deterministic key ordering and treats
+         configured values as data rather than evaluating them as templates. */}}
+  {{- $apiEnv := dict
+        "NVCF_NATS_REGION_PLACEMENT_TAG" "dc"
+        "NVCF_SIDECARS_HOSTNAME" $sidecarsHost
+        "NVCF_SIDECARS_REPOSITORY" $sidecarsRepo
+        "MANAGEMENT_TRACING_ENABLED" (printf "%v" .Values.global.observability.tracing.enabled) -}}
+  {{- with $nvcfWorkerServiceURL }}
+  {{- $_ := set $apiEnv "NVCF_FQDN" . }}
+  {{- end }}
+  {{- with $nvcfWorkerGrpcServiceURL }}
+  {{- $_ := set $apiEnv "NVCF_GLOBAL_FQDN_GRPC" . }}
+  {{- end }}
+  {{- with $nvcfNatsWorkerServiceURL }}
+  {{- $_ := set $apiEnv "NVCF_NATS_WORKER_URL" . }}
+  {{- end }}
+  {{- with $essWorkerBaseURL }}
+  {{- /* Keep the legacy worker alias until all API builds consume nvcf.ess.base-url directly. */}}
+  {{- $_ := set $apiEnv "NVCF_ESS_WORKER_BASE_URL" . }}
+  {{- $_ := set $apiEnv "NVCF_ESS_BASE_URL" . }}
+  {{- end }}
+  {{- with dig "api" "icmsBaseUrl" nil .Values }}
+  {{- $_ := set $apiEnv "NVCF_ICMS_BASE_URL" . }}
+  {{- end }}
+  {{- with dig "api" "jwt" "issuerUri" nil .Values }}
+  {{- $_ := set $apiEnv "SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI" . }}
+  {{- end }}
+  {{- with dig "api" "jwt" "jwkSetUri" nil .Values }}
+  {{- $_ := set $apiEnv "SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI" . }}
+  {{- end }}
+  {{- if .Values.global.observability.tracing.enabled }}
+  {{- $_ := set $apiEnv "MANAGEMENT_OTLP_TRACING_ENDPOINT" (printf "%s://%s:%v/v1/traces" .Values.global.observability.tracing.collectorProtocol .Values.global.observability.tracing.collectorEndpoint .Values.global.observability.tracing.collectorPort) }}
+  {{- end }}
+  {{- $apiEnv = mergeOverwrite $apiEnv $renderedApiEnv }}
   env:
-    NVCF_NATS_REGION_PLACEMENT_TAG: "dc"
-    NVCF_SIDECARS_HOSTNAME: {{ $sidecarsHost }}
-    NVCF_SIDECARS_REPOSITORY: {{ $sidecarsRepo }}
-    {{- with $nvcfWorkerServiceURL }}
-    NVCF_FQDN: {{ . | quote }}
-    {{- end }}
-    {{- with $nvcfWorkerGrpcServiceURL }}
-    NVCF_GLOBAL_FQDN_GRPC: {{ . | quote }}
-    {{- end }}
-    {{- with $nvcfNatsWorkerServiceURL }}
-    NVCF_NATS_WORKER_URL: {{ . | quote }}
-    {{- end }}
-    {{- with $essWorkerBaseURL }}
-    # Keep the legacy worker alias until all API builds consume nvcf.ess.base-url directly.
-    NVCF_ESS_WORKER_BASE_URL: {{ . | quote }}
-    NVCF_ESS_BASE_URL: {{ . | quote }}
-    {{- end }}
-    {{- with dig "api" "icmsBaseUrl" nil .Values }}
-    NVCF_ICMS_BASE_URL: {{ . | quote }}
-    {{- end }}
-    {{- with dig "api" "jwt" "issuerUri" nil .Values }}
-    SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: {{ . | quote }}
-    {{- end }}
-    {{- with dig "api" "jwt" "jwkSetUri" nil .Values }}
-    SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: {{ . | quote }}
-    {{- end }}
-    # Observability
-    MANAGEMENT_TRACING_ENABLED: {{ .Values.global.observability.tracing.enabled | quote }}
-    {{- if .Values.global.observability.tracing.enabled }}
-    MANAGEMENT_OTLP_TRACING_ENDPOINT: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}/v1/traces"
-    {{- end }}
+    {{- toYaml $apiEnv | nindent 4 }}
 
 invocation:
+  {{- $configuredInvocationEnv := dig "invocation" "env" dict .Values }}
+  {{- if not (kindIs "map" $configuredInvocationEnv) }}
+  {{- fail "invocation.env must be a map" }}
+  {{- end }}
+  {{- $invocationEnv := dict }}
+  {{- if .Values.global.observability.tracing.enabled }}
+  {{- $_ := set $invocationEnv "SERVER__TRACING__ENDPOINT_IP" (printf "%s://%s" .Values.global.observability.tracing.collectorProtocol .Values.global.observability.tracing.collectorEndpoint) }}
+  {{- $_ := set $invocationEnv "SERVER__TRACING__ENDPOINT_PORT" .Values.global.observability.tracing.collectorPort }}
+  {{- else }}
+  {{- $_ := set $invocationEnv "SERVER__ENVFILTER_DIRECTIVE" "otel::tracing=off,otel=off,server=trace,info" }}
+  {{- end }}
+  {{- if .Values.rateLimiter.enabled }}
+  {{- $_ := set $invocationEnv "RATE_LIMIT_ENABLED" "true" }}
+  {{- $_ := set $invocationEnv "RATE_LIMIT_ADDRESS" "http://ratelimiter.nvcf.svc.cluster.local:7777" }}
+  {{- end }}
+  {{- with $invocationWorkerBaseURL }}
+  {{- $_ := set $invocationEnv "WORKER_STREAM_PROPERTIES__SELF_ADDRESS" . }}
+  {{- end }}
+  {{- $invocationEnv = mergeOverwrite $invocationEnv (deepCopy $configuredInvocationEnv) }}
   fullnameOverride: invocation-service
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
@@ -491,21 +597,14 @@ invocation:
   {{- . | nindent 2 }}
   {{- end }}
 
+  metrics:
+    enabled: {{ or (eq (dig "observability" "profile" "disabled" .Values) "control") (eq (dig "observability" "profile" "disabled" .Values) "all") }}
+    # The observability stack owns the shared ServiceMonitor resources.
+    serviceMonitor:
+      enabled: false
+
   env:
-    # Observability
-    {{- if .Values.global.observability.tracing.enabled }}
-    SERVER__TRACING__ENDPOINT_IP: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}"
-    SERVER__TRACING__ENDPOINT_PORT: {{ .Values.global.observability.tracing.collectorPort }}
-    {{- else }}
-    SERVER__ENVFILTER_DIRECTIVE: "otel::tracing=off,otel=off,server=trace,info"
-    {{- end }}
-    {{- if .Values.rateLimiter.enabled }}
-    RATE_LIMIT_ENABLED: "true"
-    RATE_LIMIT_ADDRESS: "http://ratelimiter.nvcf.svc.cluster.local:7777"
-    {{- end }}
-    {{- with $invocationWorkerBaseURL }}
-    WORKER_STREAM_PROPERTIES__SELF_ADDRESS: {{ . | quote }}
-    {{- end }}
+    {{- toYaml $invocationEnv | nindent 4 }}
   {{- with dig "invocation" "tracing" "baggageAttributeAllowlist" nil .Values }}
   tracing:
     baggageAttributeAllowlist:
@@ -911,6 +1010,8 @@ llmRequestRouter:
   {{- end }}
   service:
     grpcPort: {{ $llmRequestRouterGrpcPort }}
+  readiness:
+    warmupMs: {{ dig "addons" "llm" "requestRouter" "readiness" "warmupMs" 60000 .Values }}
   {{- if .Values.global.imagePullSecrets }}
   imagePullSecrets:
     {{- toYaml .Values.global.imagePullSecrets | nindent 4 }}
@@ -1142,6 +1243,7 @@ vanityGateway:
   config:
     mappingPath: {{ dig "addons" "vanityGateway" "config" "mappingPath" "/etc/vanity-gateway/config/config.yaml" .Values | quote }}
     nvcfApiEndpoint: {{ dig "addons" "vanityGateway" "config" "nvcfApiEndpoint" "http://invocation.nvcf.svc.cluster.local:8080" .Values | quote }}
+    llmGatewayEndpoint: {{ dig "addons" "vanityGateway" "config" "llmGatewayEndpoint" "http://llm-api-gateway.nvcf.svc.cluster.local:8080" .Values | quote }}
     {{- if .Values.global.observability.tracing.enabled }}
     otelExporterOtlpEndpoint: "{{ .Values.global.observability.tracing.collectorProtocol }}://{{ .Values.global.observability.tracing.collectorEndpoint }}:{{ .Values.global.observability.tracing.collectorPort }}"
     {{- else }}
@@ -1282,8 +1384,8 @@ nvcfUi:
       - name: llm-request-router
         namespace: nvcf
         endpoints:
-          - llm-request-router-headless.nvcf.svc.cluster.local:8000/healthz
-          - llm-request-router-headless.nvcf.svc.cluster.local:8000/readyz
+          - llm-request-router.nvcf.svc.cluster.local:8000/healthz
+          - llm-request-router.nvcf.svc.cluster.local:8000/readyz
       {{- end }}
       - name: reval
         namespace: nvcf
@@ -1413,9 +1515,35 @@ nvcfGatewayRoutes:
         hostnames:
           {{- toYaml . | nindent 10 }}
         {{- end }}
+    # apiKeys, sis, and reval attach to the shared Gateway (backend and hostname
+    # come from the chart defaults); only the enable flag and annotations are
+    # environment-driven. The gateway-routes chart owns the default (enabled: true
+    # for all three), so the stack forwards enabled only when an environment file
+    # sets it -- leaving it unset renders the route exactly as before, and a future
+    # chart release that changes a default is not silently overridden. Set it to
+    # false to drop the route (for example, to keep api-keys off the public edge in
+    # a split/multi-cluster deployment).
     apiKeys:
+      {{- $apiKeysRoute := dig "ingress" "gatewayApi" "routes" "apiKeys" dict .Values }}
+      {{- if hasKey $apiKeysRoute "enabled" }}
+      enabled: {{ $apiKeysRoute.enabled }}
+      {{- end }}
       routeAnnotations:
-        {{ dig "ingress" "gatewayApi" "routes" "apiKeys" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+        {{ dig "routeAnnotations" dict $apiKeysRoute | toYaml | nindent 8 | trim }}
+    sis:
+      {{- $sisRoute := dig "ingress" "gatewayApi" "routes" "sis" dict .Values }}
+      {{- if hasKey $sisRoute "enabled" }}
+      enabled: {{ $sisRoute.enabled }}
+      {{- end }}
+      routeAnnotations:
+        {{ dig "routeAnnotations" dict $sisRoute | toYaml | nindent 8 | trim }}
+    reval:
+      {{- $revalRoute := dig "ingress" "gatewayApi" "routes" "reval" dict .Values }}
+      {{- if hasKey $revalRoute "enabled" }}
+      enabled: {{ $revalRoute.enabled }}
+      {{- end }}
+      routeAnnotations:
+        {{ dig "routeAnnotations" dict $revalRoute | toYaml | nindent 8 | trim }}
     invocation:
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "invocation" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
@@ -1444,6 +1572,10 @@ nvcfGatewayRoutes:
       enabled: {{ dig "addons" "nvcfUi" "enabled" false .Values }}
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "nvcfUi" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
+    eventLedger:
+      enabled: {{ dig "addons" "eventLedger" "enabled" false .Values }}
+      routeAnnotations:
+        {{ dig "ingress" "gatewayApi" "routes" "eventLedger" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}
     grpc:
       routeAnnotations:
         {{ dig "ingress" "gatewayApi" "routes" "grpc" "routeAnnotations" dict .Values | toYaml | nindent 8 | trim }}

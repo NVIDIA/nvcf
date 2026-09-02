@@ -222,7 +222,7 @@ running Helmfile.
 
 | Chart | `helm-nvca-operator` |
 | --- | --- |
-| Version | `1.12.7` |
+| Version | `1.21.3` |
 | Namespace | `nvca-operator` |
 | Depends on | All control-plane services and gateway must be running |
 

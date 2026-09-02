@@ -619,6 +619,17 @@ export NVCF_TOKEN="nvapi-your-function-creation-token"
   --inference-port 8000 \
   --function-type "LLM" \
   --llm-model "name=dummy-model,uris=/v1/chat/completions|/v1/responses|/v1/embeddings,routingMethod=round_robin,tokenRateLimit=1000-S"
+
+# Create an LLM function with request priority
+./nvcf-cli function create \
+  --name "my-priority-llm-function" \
+  --image "nvcr.io/example/openai-compatible:latest" \
+  --inference-url "/" \
+  --inference-port 8000 \
+  --function-type "LLM" \
+  --llm-model "name=dummy-model,uris=/v1/chat/completions" \
+  --llm-default-priority 7 \
+  --llm-per-account-priority "nca-id:3"
 ```
 
 **Required flags:**
@@ -745,6 +756,13 @@ export NVCF_API_KEY="nvapi-your-general-operations-token"  # optional fallback
   --function-id "func-12345678-1234-1234-1234-123456789abc" \
   --version-id "ver-12345678-1234-1234-1234-123456789abc" \
   --llm-model-update "name=dummy-model,routingMethod=round_robin,tokenRateLimit=1000-S"
+
+# Replace the function-level request priority configuration
+./nvcf-cli function update \
+  --function-id "func-12345678-1234-1234-1234-123456789abc" \
+  --version-id "ver-12345678-1234-1234-1234-123456789abc" \
+  --llm-default-priority 7 \
+  --llm-per-account-priority "nca-id:3"
 
 # Update function deployment specifications
 ./nvcf-cli function deploy update \

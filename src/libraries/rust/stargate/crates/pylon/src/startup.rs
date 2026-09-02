@@ -549,10 +549,16 @@ fn registration_config_from_plan(
 }
 
 fn load_grpc_tls_ca_cert(args: &Args) -> Result<Option<Vec<u8>>> {
+    // Reverse QUIC always uses tls_cert_path as its trust anchor. Reuse that
+    // bundle for gRPC only when the registration seed explicitly uses HTTPS;
+    // treating it as a gRPC CA for an HTTP seed prevents Pylon from connecting.
+    let reuse_reverse_quic_trust =
+        matches!(args.backend_connectivity, BackendConnectivity::Reverse)
+            && args.stargate_address.trim().starts_with("https://");
     args.grpc_tls_ca_cert_path
         .as_ref()
         .or_else(|| {
-            matches!(args.backend_connectivity, BackendConnectivity::Reverse)
+            reuse_reverse_quic_trust
                 .then_some(args.tls_cert_path.as_ref())
                 .flatten()
         })
@@ -1435,7 +1441,7 @@ mod tests {
     }
 
     #[test]
-    fn reverse_mode_reuses_quic_trust_when_grpc_override_is_unset() {
+    fn reverse_mode_reuses_quic_trust_for_https_when_grpc_override_is_unset() {
         let root = tempfile::tempdir().expect("test directory should create");
         let path = root.path().join("shared-ca.pem");
         let mut params = rcgen::CertificateParams::default();
@@ -1451,6 +1457,8 @@ mod tests {
         let (args, _) = startup(&[
             "--backend-connectivity",
             "reverse",
+            "--stargate-address",
+            "https://stargate.example.test:50071",
             "--tls-cert-path",
             &path,
         ]);
@@ -1460,6 +1468,28 @@ mod tests {
                 .expect("reverse-mode shared CA should load")
                 .as_deref(),
             Some(pem.as_slice())
+        );
+    }
+
+    #[test]
+    fn reverse_mode_does_not_reuse_quic_trust_for_plaintext_grpc() {
+        let root = tempfile::tempdir().expect("test directory should create");
+        let path = root.path().join("quic-ca.pem");
+        std::fs::write(&path, b"not a gRPC CA bundle").expect("QUIC trust should write");
+        let path = path.to_string_lossy().into_owned();
+        let (args, _) = startup(&[
+            "--backend-connectivity",
+            "reverse",
+            "--stargate-address",
+            "http://stargate.example.test:50071",
+            "--tls-cert-path",
+            &path,
+        ]);
+
+        assert!(
+            load_grpc_tls_ca_cert(&args)
+                .expect("plaintext gRPC should not load the QUIC trust bundle")
+                .is_none()
         );
     }
 

@@ -515,7 +515,7 @@ and we accept its outcome silently.
 - `tools/ci/generated-release-jobs.yml`: generated output the
   umbrella `.gitlab-ci.yml` includes; do not hand-edit.
 - `BAZEL.md` at the repo root: Bazel-build-related conventions.
-- `deploy/stacks/self-managed/.gitlab-ci.yml`: the self-managed
-  stack's release flow (helmfile-based bundle, not individual chart
-  push). Different shape from service releases; same semantic-release
-  driver.
+- `deploy/stacks/self-managed/`: the self-managed stack publishes a
+  helmfile-based bundle rather than an individual chart, so its
+  packaging differs from a service release. Its version comes from the
+  same semantic-release driver as every other subproject.
