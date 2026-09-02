@@ -173,8 +173,12 @@ func TestConcatenatedGzipMembersAreRead(t *testing.T) {
 		`{"schema":"dynamo.request.trace.v1","event_type":"request_end","event_time_unix_ms":2,"request":{"request_id":"b"}}`,
 	} {
 		gz := gzip.NewWriter(&buf)
-		gz.Write([]byte(line + "\n"))
-		gz.Close()
+		if _, err := gz.Write([]byte(line + "\n")); err != nil {
+			t.Fatalf("write gzip member: %v", err)
+		}
+		if err := gz.Close(); err != nil {
+			t.Fatalf("close gzip member: %v", err)
+		}
 	}
 	path := filepath.Join(t.TempDir(), "request-trace.000000.jsonl.gz")
 	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
@@ -220,8 +224,12 @@ func TestOversizedLineDoesNotStopTheScan(t *testing.T) {
 func TestSegmentWithNoTrailingNewlineIsRead(t *testing.T) {
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
-	gz.Write([]byte(`{"schema":"dynamo.request.trace.v1","event_type":"request_end","event_time_unix_ms":1,"request":{"request_id":"last"}}`))
-	gz.Close()
+	if _, err := gz.Write([]byte(`{"schema":"dynamo.request.trace.v1","event_type":"request_end","event_time_unix_ms":1,"request":{"request_id":"last"}}`)); err != nil {
+		t.Fatalf("write gzip member: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("close gzip member: %v", err)
+	}
 	path := filepath.Join(t.TempDir(), "request-trace.000000.jsonl.gz")
 	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
 		t.Fatal(err)

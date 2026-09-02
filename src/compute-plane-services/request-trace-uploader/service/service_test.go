@@ -41,7 +41,7 @@ func TestInitializeReadinessAndDiscovery(t *testing.T) {
 		ScanInterval:  config.DefaultScanInterval,
 	}
 	svc := NewWithBackend(cfg, &stubBackend{})
-	if err := svc.Initialize(); err != nil {
+	if err := svc.Initialize(context.Background()); err != nil {
 		t.Fatalf("Initialize() error = %v", err)
 	}
 	for path, want := range map[string]int{
@@ -89,7 +89,7 @@ func TestInitializeRejectsUnreadableSecret(t *testing.T) {
 		StateDir:      filepath.Join(root, "state"),
 		QuarantineDir: filepath.Join(root, "quarantine"),
 	}, &stubBackend{})
-	if err := svc.Initialize(); err == nil {
+	if err := svc.Initialize(context.Background()); err == nil {
 		t.Fatal("Initialize() error = nil, want error")
 	}
 }
@@ -177,6 +177,41 @@ func TestRefreshStopsOnCancellation(t *testing.T) {
 	err := svc.Refresh(ctx)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Refresh() error = %v, want context.Canceled", err)
+	}
+	if len(stub.submitted) != 0 {
+		t.Errorf("submitted = %v, want nothing after cancellation", stub.submitted)
+	}
+}
+
+func TestInitializeStopsOnCancellation(t *testing.T) {
+	root := t.TempDir()
+	secretsFile := filepath.Join(root, "secrets.json")
+	if err := os.WriteFile(secretsFile, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{
+		"request-trace.000000.jsonl.gz",
+		"request-trace.000001.jsonl.gz",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("fixture"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	stub := &stubBackend{}
+	svc := NewWithBackend(config.Config{
+		SourceDir:     root,
+		SegmentPrefix: "request-trace",
+		SecretsFile:   secretsFile,
+		StateDir:      filepath.Join(root, "state"),
+		QuarantineDir: filepath.Join(root, "quarantine"),
+	}, stub)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if err := svc.Initialize(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Initialize() error = %v, want context.Canceled", err)
 	}
 	if len(stub.submitted) != 0 {
 		t.Errorf("submitted = %v, want nothing after cancellation", stub.submitted)

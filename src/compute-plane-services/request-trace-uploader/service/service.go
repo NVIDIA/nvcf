@@ -59,7 +59,10 @@ func (s *Service) Handler() http.Handler {
 
 // Initialize performs local, non-destructive startup checks. Remote
 // reachability and backlog state do not affect readiness.
-func (s *Service) Initialize() error {
+//
+// It takes a context so a shutdown during startup stops the first scan rather
+// than waiting for it.
+func (s *Service) Initialize(ctx context.Context) error {
 	for _, directory := range []string{s.config.StateDir, s.config.QuarantineDir} {
 		if err := os.MkdirAll(directory, 0o750); err != nil {
 			return fmt.Errorf("create uploader directory: %w", err)
@@ -72,7 +75,7 @@ func (s *Service) Initialize() error {
 	if err := secret.Close(); err != nil {
 		return fmt.Errorf("close uploader secret file: %w", err)
 	}
-	if err := s.Refresh(context.Background()); err != nil {
+	if err := s.Refresh(ctx); err != nil {
 		return fmt.Errorf("refresh local segment state: %w", err)
 	}
 	s.health.SetReady(true)
@@ -124,7 +127,7 @@ func (s *Service) submit(ctx context.Context, item segment.Segment) error {
 
 // Run starts the HTTP server and periodically refreshes local discovery.
 func (s *Service) Run(ctx context.Context) error {
-	if err := s.Initialize(); err != nil {
+	if err := s.Initialize(ctx); err != nil {
 		return fmt.Errorf("initialize request-trace uploader: %w", err)
 	}
 	server := s.httpServer()

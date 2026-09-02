@@ -49,11 +49,16 @@ func (c *Client) Submit(ctx context.Context, request backend.SubmitRequest) (str
 	withHeaders := 0
 	incomplete := 0
 
-	for reader.Next() {
-		// A segment can hold many records, so a scan must not outlive a
-		// shutdown. Checking per record bounds the delay to one record.
+	// A segment can hold many records, so a scan must not outlive a shutdown.
+	// The check runs before each advance and once more after the loop, so a
+	// cancellation that lands while the final read reaches the end of the
+	// segment is still reported rather than returning success.
+	for {
 		if err := ctx.Err(); err != nil {
 			return "", fmt.Errorf("debug backend: stop reading segment: %w", err)
+		}
+		if !reader.Next() {
+			break
 		}
 		rec := reader.Record()
 		if _, ok := rec.RequestID(); ok {
@@ -71,6 +76,9 @@ func (c *Client) Submit(ctx context.Context, request backend.SubmitRequest) (str
 	}
 	if err := reader.Err(); err != nil {
 		return "", fmt.Errorf("debug backend: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return "", fmt.Errorf("debug backend: stop reading segment: %w", err)
 	}
 
 	stats := reader.Stats()

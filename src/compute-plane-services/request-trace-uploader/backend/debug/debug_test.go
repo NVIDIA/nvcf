@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -98,5 +99,40 @@ func TestSubmitFailsOnAMissingSegment(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("Submit() error = nil, want an open failure")
+	}
+}
+
+func TestSubmitStopsOnCancellation(t *testing.T) {
+	path := writeSegment(t,
+		`{"schema":"dynamo.request.trace.v1","event_type":"request_end","event_time_unix_ms":1,"request":{"request_id":"a"}}`,
+		`{"schema":"dynamo.request.trace.v1","event_type":"request_end","event_time_unix_ms":2,"request":{"request_id":"b"}}`,
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	client := &Client{}
+	_, err := client.Submit(ctx, backend.SubmitRequest{
+		Segment: segment.Segment{Index: 0, Path: path},
+		Path:    path,
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Submit() error = %v, want context.Canceled", err)
+	}
+}
+
+func TestSubmitOnAnEmptySegmentSucceeds(t *testing.T) {
+	path := writeSegment(t)
+
+	client := &Client{}
+	id, err := client.Submit(context.Background(), backend.SubmitRequest{
+		Segment: segment.Segment{Index: 3, Path: path},
+		Path:    path,
+	})
+	if err != nil {
+		t.Fatalf("Submit() error = %v, want an empty segment to be accepted", err)
+	}
+	if id == "" {
+		t.Fatal("Submit() returned an empty id")
 	}
 }
