@@ -197,19 +197,7 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
 
       # Vanity Gateway mappings are Helm values, so read the function identity
       # from the operator's CLI and apply only the mapped release.
-      # TODO(https://github.com/NVIDIA/nvcf/issues/1419): replace these shell
-      # commands with selected-function identity DSL steps.
-      When I successfully run command:
-        """
-        /bin/bash -c 'set -euo pipefail; "$1" --config "$2" status --json | jq -er ".currentFunction | select(.hasFunction == true) | .functionId"' bdd-vanity-function-id ${NVCF_CLI} ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml
-        """
-      And I export command output to environment variable "BDD_VANITY_FUNCTION_ID"
-
-      When I successfully run command:
-        """
-        /bin/bash -c 'set -euo pipefail; "$1" --config "$2" status --json | jq -er ".currentFunction | select(.hasFunction == true) | .versionId"' bdd-vanity-version-id ${NVCF_CLI} ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml
-        """
-      And I export command output to environment variable "BDD_VANITY_VERSION_ID"
+      When I export the function selected by NVCF CLI to environment variables "BDD_VANITY_FUNCTION_ID" and "BDD_VANITY_VERSION_ID"
 
       And I update yaml file "deploy/stacks/self-managed/environments/local-bdd.yaml" with keys:
         | addons.vanityGateway.mappingConfig.v2config.vanity.bdd.host                            | vanity.localhost          |
