@@ -11,7 +11,7 @@
 # the image. Nothing is vendored and nothing is injected, so `docker build .`
 # here produces the same image as the release pipeline.
 ARG BAO_VERSION=2.6.2
-ARG GO_VERSION=1.25
+ARG GO_VERSION=1.27.0
 
 FROM golang:${GO_VERSION}-alpine AS plugin-build
 ARG TARGETARCH
@@ -31,8 +31,12 @@ FROM openbao/openbao:${BAO_VERSION}@sha256:11fd73a2102cda9c55d5d881a8c3210303146
 # OpenBao 2.6.2 runs as the non-root openbao user by default. Escalate only
 # while installing the image's runtime packages, then restore that identity.
 USER root
+# Upgrade packages inherited from the upstream image before installing the
+# runtime tools. This ensures security fixes from the pinned Alpine branch are
+# applied even when the upstream image predates them.
 # hadolint ignore=DL3018
-RUN apk add --no-cache curl jq bash && \
+RUN apk upgrade --no-cache && \
+    apk add --no-cache curl jq bash && \
     mkdir -p /openbao/plugins
 
 COPY --from=plugin-build --chmod=0555 /out/vault-plugin-secrets-jwt /openbao/plugins/vault-plugin-secrets-jwt
