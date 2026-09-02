@@ -111,9 +111,9 @@ Why an object and not annotations:
 - Enforcement. Immutability and phase rules are rejected by the API server. A
   bad annotation write is accepted silently.
 
-Lifecycle: a binding with zero references past the idle period moves to
-`Retiring`, the resources it names are deleted, and the finalizer is dropped.
-Nothing it does not name is touched. Uninstall strips binding finalizers before
+Lifecycle, in the runtime design: a binding with zero references past the idle
+period moves to `Retiring`, the resources it names are deleted, and the
+finalizer is dropped. Nothing it does not name is touched. Uninstall strips binding finalizers before
 deleting the control namespace, and stops if it cannot, so the uninstall can be
 retried instead of leaving the namespace Terminating.
 
@@ -122,9 +122,11 @@ retried instead of leaving the namespace Terminating.
 Every reader is a static PV pre-bound to a claim by name. The PV is a copy of
 the writer's PV with: `storageClassName` cleared (a pre-bound pair whose classes
 differ never binds), `csi.readOnly: true` (access modes are not enforced at
-mount time), and `mountOptions` from the catalog entry. Only the volume handle
-differs by driver: NVMesh rewrites the namespace segment; every other driver
-reuses the writer's handle unchanged.
+mount time), and `mountOptions` resolved per provisioner from the
+`nvca-cache-mount-options` ConfigMap. The catalog's `readerMountOptions` is the
+intended source for those options and is validated, but no reader code reads it
+yet. Only the volume handle differs by driver: NVMesh rewrites the namespace
+segment; every other driver reuses the writer's handle unchanged.
 
 A reader claim that names only a StorageClass gets a new empty volume from a
 dynamic provisioner. It binds, the pod starts, and the model is missing. That
@@ -148,8 +150,9 @@ was the previous shared-filesystem reader.
 
 Public `main` selects by StorageClass presence: `nvcf-sc-30` present selects
 NVMesh; `nvcf-miniservice-sc` present selects the shared-filesystem path;
-`HelmSharedStorage` selects a Samba re-export of an `nvcf-sc` volume; otherwise
-a per-pod `emptyDir` with an init download. The catalog is installed but not
+`HelmSharedStorage` enabled with the model cache class present selects a Samba
+re-export of an `nvcf-sc` volume; otherwise a per-pod `emptyDir` with an init
+download. The catalog is installed but not
 read by reconciliation. No controller creates a binding. Garbage collection is
 an idle sweep keyed on a last-referenced annotation. The mutating webhook
 injects the reader PVC into workload pods as `model-data`.
