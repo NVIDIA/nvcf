@@ -666,6 +666,7 @@ func NewDefaultMetrics(ncaID, clusterName, clusterGroup, version string, opts ..
 		"persistent_volume",
 		"persistent_volume_claim",
 		"pod",
+		"recreation_budget_configmap",
 		"storage_class",
 		"storage_request",
 	}
@@ -673,6 +674,7 @@ func NewDefaultMetrics(ncaID, clusterName, clusterGroup, version string, opts ..
 		"NamespaceCleaner",
 		"PersistentVolumeCleaner",
 		"PodCleaner",
+		"RecreationBudgetCleaner",
 		"StorageClassCleaner",
 	}
 	gcStatuses := []string{"success", "failure"}

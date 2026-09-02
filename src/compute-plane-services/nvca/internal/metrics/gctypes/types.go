@@ -25,6 +25,7 @@ const (
 	ResourceTypeStorageClass     = "storage_class"
 	ResourceTypePersistentVolume = "persistent_volume"
 	ResourceTypePod              = "pod"
+	ResourceTypeRecreationBudget = "recreation_budget_configmap"
 )
 
 // Status values for GC metrics labeling

@@ -72,6 +72,19 @@ func TestNewGCController(t *testing.T) {
 	assert.Equal(t, 30*time.Minute, controller.interval)
 }
 
+func TestNewGCController_WithExtraCleaner(t *testing.T) {
+	clients := &kubeclients.KubeClients{
+		K8s:  fake.NewSimpleClientset(),
+		BART: bartfake.NewSimpleClientset(),
+	}
+	extra := &mockJob{name: "ExtraCleaner"}
+
+	controller := NewRunnable(clients, nil, 30*time.Minute, types.DefaultICMSRequestNamespace, extra)
+
+	assert.Equal(t, 5, len(controller.cleaners))
+	assert.Equal(t, "ExtraCleaner", controller.cleaners[len(controller.cleaners)-1].Name())
+}
+
 func TestGCController_runCleaners(t *testing.T) {
 	clients := &kubeclients.KubeClients{
 		K8s:  fake.NewSimpleClientset(),

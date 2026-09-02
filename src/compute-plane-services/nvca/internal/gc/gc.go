@@ -63,7 +63,10 @@ type Runnable struct {
 
 // NewRunnable creates a new garbage collection controller with the specified interval
 // requestsNamespace is the namespace where ICMSRequests are created (defaults to types.DefaultICMSRequestNamespace if empty)
-func NewRunnable(clients *kubeclients.KubeClients, m *metrics.Metrics, interval time.Duration, requestsNamespace string) *Runnable {
+// extraCleaners are appended to the built-in cleaner list, for cleaners whose
+// construction would otherwise require this package to import the caller's
+// package (an import cycle).
+func NewRunnable(clients *kubeclients.KubeClients, m *metrics.Metrics, interval time.Duration, requestsNamespace string, extraCleaners ...Cleaner) *Runnable {
 	icmsGetter := &nvcaICMSRequestGetter{client: clients.BART, icmsRequestNamespace: requestsNamespace}
 
 	// Default to types.DefaultICMSRequestNamespace if not specified
@@ -71,13 +74,16 @@ func NewRunnable(clients *kubeclients.KubeClients, m *metrics.Metrics, interval 
 		requestsNamespace = types.DefaultICMSRequestNamespace
 	}
 
+	cleaners := []Cleaner{
+		storageclass.NewCleaner(clients.K8s, icmsGetter, m),
+		persistentvolume.NewCleaner(clients.K8s, icmsGetter, m),
+		cleanupns.NewCleaner(clients.K8s, clients.BART, icmsGetter, m),
+		pod.NewCleaner(clients.K8s, icmsGetter, m, requestsNamespace),
+	}
+	cleaners = append(cleaners, extraCleaners...)
+
 	return &Runnable{
-		cleaners: []Cleaner{
-			storageclass.NewCleaner(clients.K8s, icmsGetter, m),
-			persistentvolume.NewCleaner(clients.K8s, icmsGetter, m),
-			cleanupns.NewCleaner(clients.K8s, clients.BART, icmsGetter, m),
-			pod.NewCleaner(clients.K8s, icmsGetter, m, requestsNamespace),
-		},
+		cleaners: cleaners,
 		interval: interval,
 	}
 }
