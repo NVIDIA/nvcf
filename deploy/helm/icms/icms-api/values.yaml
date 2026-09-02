@@ -200,4 +200,4 @@ sis:
     AWS_REGION: "ncp"
 
     # NATS Configuration
-    NATS_RECONNECT_ALLOWED: "true"
+    NATS_UNLIMITED_RECONNECTS: "true"

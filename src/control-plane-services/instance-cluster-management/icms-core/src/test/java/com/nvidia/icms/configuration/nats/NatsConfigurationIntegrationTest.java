@@ -54,7 +54,7 @@ class NatsConfigurationIntegrationTest extends IntegrationTest {
     /**
      * Helper method to set up mock NATS configuration properties.
      */
-    private void setupMockNatsConfiguration(boolean reconnectAllowed) {
+    private void setupMockNatsConfiguration(boolean unlimitedReconnects) {
         when(natsConfigurationProperties.getNatsUrl()).thenReturn(NATS_URL);
         when(natsConfigurationProperties.getConnectionTimeout()).thenReturn(CONNECTION_TIMEOUT);
         when(natsConfigurationProperties.getPingInterval()).thenReturn(PING_INTERVAL);
@@ -62,7 +62,7 @@ class NatsConfigurationIntegrationTest extends IntegrationTest {
         when(natsConfigurationProperties.getReconnectJitter()).thenReturn(Duration.ZERO);
         when(natsConfigurationProperties.getForceReconnectFlush()).thenReturn(Duration.ZERO);
         when(natsConfigurationProperties.isEnabled()).thenReturn(true);
-        when(natsConfigurationProperties.isReconnectAllowed()).thenReturn(reconnectAllowed);
+        when(natsConfigurationProperties.isUnlimitedReconnects()).thenReturn(unlimitedReconnects);
         when(natsConfigurationProperties.getNkeySeed()).thenReturn(Optional.empty());
     }
 
