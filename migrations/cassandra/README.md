@@ -10,45 +10,25 @@ This repository ships:
 - The migration entrypoint (`execute_sqls.sh`)
 - Cassandra DDL migrations under `keyspaces/<service>/*.up.sql`, one keyspace per service
 
-## Driver binaries
+## Migration driver
 
-The container ENTRYPOINT runs the [`golang-migrate`](https://github.com/golang-migrate/migrate) CLI. A pre-built binary for each target architecture is required at build time, placed at:
+The container builds [`golang-migrate`](https://github.com/golang-migrate/migrate) v4.19.1 from its checksum-verified release source. The build enables only the Cassandra database driver. This keeps unrelated database and cloud-provider clients out of the runtime binary.
 
-- `files/migrate-amd64` (for `--platform linux/amd64`)
-- `files/migrate-arm64` (for `--platform linux/arm64`)
-
-Download the release matching your platform (v4.18.2 or compatible) from https://github.com/golang-migrate/migrate/releases, extract the `migrate` binary, rename it to `migrate-amd64` or `migrate-arm64`, place it in `files/`, and ensure it is executable. For example:
-
-```bash
-# amd64
-curl -L https://github.com/golang-migrate/migrate/releases/download/v4.18.2/migrate.linux-amd64.tar.gz \
-  | tar xz -C files/
-mv files/migrate files/migrate-amd64
-chmod +x files/migrate-amd64
-
-# arm64 (run on / for an arm64 build)
-curl -L https://github.com/golang-migrate/migrate/releases/download/v4.18.2/migrate.linux-arm64.tar.gz \
-  | tar xz -C files/
-mv files/migrate files/migrate-arm64
-chmod +x files/migrate-arm64
-```
-
-`execute_sqls.sh` uses the standard `golang-migrate` cassandra driver query parameters: `x-multi-statement`, `x-migrations-table`, `username`, and `password`.
+`execute_sqls.sh` uses the standard `golang-migrate` Cassandra driver query parameters: `x-multi-statement`, `x-migrations-table`, `username`, and `password`.
 
 ## Prerequisites
 
 - A reachable Cassandra cluster (the container connects via `cqlsh` and the migrate driver)
 - Docker or another OCI-compatible builder
-- The driver binaries listed above, placed in `files/`
+- Network access to download the pinned build inputs
 
 ## Building the container
 
-The `Dockerfile` defaults to the official `cassandra:5.0.8` base image. Override the FROM via your own build pipeline if you need a different base.
+The `Dockerfile` uses the official `cassandra:5.0.9` base image and builds both supported architectures from the same pinned sources.
 
 ```bash
 docker build \
   --build-arg TARGETARCH=amd64 \
-  --build-arg KUBECTL_VERSION=1.31.0 \
   -t <your-registry>/<your-org>/nvcf-cassandra-migrations:<version> .
 ```
 
@@ -157,7 +137,3 @@ For a brand-new keyspace, the conventional sequence is:
 Subsequent files (`04_*` and later) are incremental migrations applied as the schema evolves. Most are DDL; `ess_api/04_*` is a data seed.
 
 The `03_init_tables.up.sql` follows a clean-slate model: it is updated in place when the canonical schema changes rather than accumulating `ALTER TABLE` history. Existing clusters apply only the deltas that postdate their last applied migration.
-
-## Notes
-
-- The `golang-migrate` driver binary at `files/migrate-${TARGETARCH}` must be supplied locally before building. See "Driver binaries" above for the download steps.
