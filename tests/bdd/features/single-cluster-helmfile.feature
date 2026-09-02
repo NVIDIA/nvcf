@@ -2,8 +2,8 @@
 Feature: Install a local single-cluster NVCF stack with Helmfile
   As a self-managed NVCF operator,
   I want to use the documented Helmfile workflow against a local k3d cluster,
-  so that I can install a single-cluster control plane with NVCA and the LLM
-  gateway add-on enabled.
+  so that I can install a single-cluster control plane with NVCA, the LLM
+  gateway, and Vanity Gateway add-ons enabled.
 
   Rule: Operator authors the local Helmfile environment file
 
@@ -13,35 +13,29 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
         | NGC_API_KEY     |
         | SAMPLE_NGC_ORG  |
         | SAMPLE_NGC_TEAM |
-      And I copy the file "tests/bdd/fixtures/self-managed-local-bdd.yaml" to "deploy/stacks/self-managed/environments/local-bdd.yaml"
       # The fixture is a copy of deploy/stacks/self-managed/environments/local.yaml,
       # which already carries every ncp-local local-mode override (storageClass,
       # replica counts, NVCA self-managed endpoints, addons.llm.*, agentConfig,
-      # ingress.gatewayApi.*). The Background only overlays the operator-specific
+      # ingress.gatewayApi.*, addons.vanityGateway.*). The Background only overlays the operator-specific
       # values that vary per NGC org and pull-secret name.
-      And I update yaml file "deploy/stacks/self-managed/environments/local-bdd.yaml" with keys:
+      And I prepare Helmfile environment "local-bdd" for stack "self-managed" from fixture "tests/bdd/fixtures/self-managed-local-bdd.yaml" with values:
         | global.imagePullSecrets[0].name               | nvcr-pull-secret                                                   |
         | global.helm.sources.repository                | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                               |
         | global.image.repository                       | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}                               |
-        | api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE | nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/stargate-client:0.2.0 |
         | observability.profile                         | disabled                                                           |
-      And I copy the file "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" to "deploy/stacks/nvcf-compute-plane/environments/local-bdd.yaml"
-      And I update yaml file "deploy/stacks/nvcf-compute-plane/environments/local-bdd.yaml" with keys:
+      And I prepare Helmfile environment "local-bdd" for stack "nvcf-compute-plane" from fixture "tests/bdd/fixtures/nvcf-compute-plane-local-bdd.yaml" with values:
         | global.imagePullSecrets[0].name | nvcr-pull-secret                     |
         | global.helm.sources.repository  | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
         | global.image.repository         | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
         | observability.profile           | disabled                             |
-      And I copy the file "deploy/stacks/self-managed/secrets/secrets.yaml.template" to "deploy/stacks/self-managed/secrets/local-bdd-secrets.yaml"
-      # Only ${VAR} is interpolated; bare $oauthtoken stays literal.
-      And I substitute "REPLACE_WITH_BASE64_DOCKER_CREDENTIAL" in file "deploy/stacks/self-managed/secrets/local-bdd-secrets.yaml" with base64 of "$oauthtoken:${NGC_API_KEY}"
+      And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/local-bdd-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
 
     Scenario: Operator validates the authored Helmfile environment renders
-      When I run command "make -C deploy/stacks/self-managed template HELMFILE_ENV=local-bdd"
+      When I successfully run command "make -C deploy/stacks/self-managed template HELMFILE_ENV=local-bdd"
 
-      Then the command exit code should be 0
-      And the command output should not contain "Error:"
+      Then the command output should not contain "Error:"
 
-  Rule: Helmfile installs the local control plane with LLM gateway add-ons
+  Rule: Helmfile installs the local control plane with gateway add-ons
 
     Background:
       # This rule depends on the earlier environment-authoring
@@ -71,9 +65,7 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
 
     @llm-gateway
     Scenario: Operator installs the control plane through the local Helmfile environment
-      When I run command "make -C deploy/stacks/self-managed install HELMFILE_ENV=local-bdd"
-
-      Then the command exit code should be 0
+      When I successfully run command "make -C deploy/stacks/self-managed install HELMFILE_ENV=local-bdd"
 
       Then these Helm releases should be deployed using context "k3d-ncp-local":
         | name                      | namespace            |
@@ -95,6 +87,14 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
         | ingress                   | envoy-gateway-system |
         | llm-request-router        | nvcf                 |
         | llm-api-gateway           | nvcf                 |
+        | vanity-gateway            | nvcf                 |
+
+      Then these Gateway API routes should be accepted and resolved using context "k3d-ncp-local" within "2m":
+        | kind      | name           | namespace            | parent    |
+        | HTTPRoute | vanity-gateway | envoy-gateway-system | shared-gw |
+
+      When I successfully run command "kubectl --context k3d-ncp-local get configmap/nvcf-api-remote-config -n nvcf -o yaml"
+      Then the command output should contain "llm-router-client-image: nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/pylon:"
 
   Rule: Helmfile installs NVCA on the same local cluster after registration via the stack Makefile
 
@@ -110,46 +110,52 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
 
     @nvca-registration
     Scenario: Operator registers the local cluster and installs the NVCA operator
-      When I run command:
+      When I successfully run command:
         """
-        make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=ncp-local NVCF_CLI=${NVCF_CLI} NVCF_CLI_CONFIG=${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml self-hosted --control-plane-stack deploy/stacks/self-managed --env local-bdd control-plane profile export --cluster-name ncp-local
         """
-      Then the command exit code should be 0
-      And file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-register-values.yaml" should exist
-      # The single-cluster Makefile passes CLUSTER_NAME separately to
-      # helmfile, so the register-values file does not carry clusterName
-      # at the top level. Assert the deterministic block that is
-      # present plus the non-empty fields.
+      Then file "deploy/stacks/self-managed/out/control-plane-profile.yaml" should exist
+
+      When I successfully run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml init
+        """
+
+      When I successfully run command:
+        """
+        make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=ncp-local CONTROL_PLANE_PROFILE=${REPO_ROOT}/deploy/stacks/self-managed/out/control-plane-profile.yaml COMPUTE_KUBE_CONTEXT=k3d-ncp-local NVCF_CLI=${NVCF_CLI} NVCF_CLI_CONFIG=${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml
+        """
+      Then file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-register-values.yaml" should exist
+      # The target cluster matches controlPlane.clusterName in the exported
+      # profile, so registration selects the in-cluster service endpoints.
       And yaml file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-register-values.yaml" should contain:
         """
+        clusterName: ncp-local
         ncaID: nvcf-default
         region: us-west-1
         selfManaged:
           identitySource: psat
-          icmsServiceURL: http://sis.localhost:8080
-          revalServiceURL: http://reval.localhost:8080
-          natsURL: nats://nats.localhost:4222
+          icmsServiceURL: http://api.sis.svc.cluster.local:8080
+          revalServiceURL: http://reval.nvcf.svc.cluster.local:8080
+          natsURL: nats://nats.nats-system.svc.cluster.local:4222
         """
       And yaml file "deploy/stacks/nvcf-compute-plane/registration/ncp-local-register-values.yaml" should have non-empty keys:
         | key            |
         | clusterID      |
         | clusterGroupID |
 
-      When I run command:
+      When I successfully run command:
         """
         make -C deploy/stacks/nvcf-compute-plane install CLUSTER_NAME=ncp-local HELMFILE_ENV=local-bdd NVCF_CLI=${NVCF_CLI} NVCF_CLI_CONFIG=${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml
         """
-      Then the command exit code should be 0
 
       Then these Helm releases should be deployed using context "k3d-ncp-local":
         | name          | namespace     |
         | nvca-operator | nvca-operator |
 
-      When I run command "kubectl rollout status deployment/nvca-operator -n nvca-operator --timeout=10m"
-      Then the command exit code should be 0
+      Then deployment "nvca-operator" in namespace "nvca-operator" using context "k3d-ncp-local" should complete rollout within "10m"
 
-      When I run command "kubectl wait nvcfbackend ncp-local -n nvca-operator --for=jsonpath={.status.agentStatus}=healthy --timeout=10m"
-      Then the command exit code should be 0
+      Then NVCFBackend "ncp-local" in namespace "nvca-operator" using context "k3d-ncp-local" should report agent status "healthy" within "10m"
 
   Rule: Helmfile-installed local NVCF can run a sample function
 
@@ -157,73 +163,112 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
     # earlier control-plane install and NVCA registration scenario in
     # this feature run, and is not a standalone tag target.
     @function-lifecycle
-    Scenario: Operator creates, deploys, and invokes the Load Tester Supreme sample function
-      When I run command:
-        """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function create --name bdd-load-tester-supreme --image nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/load_tester_supreme:0.0.8 --inference-url /echo --inference-port 8000 --health-uri /health --health-port 8000 --health-timeout PT30S
-        """
-      Then the command exit code should be 0
+    Scenario: Operator invokes the Load Tester Supreme sample function through default and vanity endpoints
+      Given I use NVCF CLI config "${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml"
 
-      When I run command:
-        """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function deploy create --gpu H100 --instance-type NCP.GPU.H100_8x --backend ncp-local --regions us-west-1 --min-instances 1 --max-instances 1 --timeout 900
-        """
-      Then the command exit code should be 0
+      When I successfully create function "bdd-load-tester-supreme" from image "nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/load_tester_supreme:0.0.8" with CLI options:
+        | option           | value   |
+        | --inference-url  | /echo   |
+        | --inference-port | 8000    |
+        | --health-uri     | /health |
+        | --health-port    | 8000    |
+        | --health-timeout | PT30S   |
 
-      When I run command:
-        """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml api-key generate --description bdd-load-tester-supreme --for function --scopes invoke_function,list_functions,queue_details,list_functions_details
-        """
-      Then the command exit code should be 0
+      And I successfully deploy the function selected by NVCF CLI with options:
+        | option          | value               |
+        | --gpu           | H100                |
+        | --instance-type | NCP.GPU.H100_1x     |
+        | --backend       | ncp-local           |
+        | --regions       | us-west-1           |
+        | --min-instances | 1                   |
+        | --max-instances | 1                   |
+        | --timeout       | 900                 |
 
-      When I run command:
+      And I successfully generate a function API key with CLI options:
+        | option        | value                                                                       |
+        | --description | bdd-load-tester-supreme                                                    |
+        | --scopes      | invoke_function,list_functions,queue_details,list_functions_details         |
+
+      When I successfully invoke the function selected by NVCF CLI over HTTP with timeout "120" seconds and poll duration "5" seconds:
         """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke --request-body '{"message":"bdd-echo","repeats":1}' --timeout 120 --poll-duration 5
+        {"message":"bdd-echo","repeats":1}
         """
-      Then the command exit code should be 0
-      And the command output should contain "bdd-echo"
+      Then the command output should contain "bdd-echo"
+
+      # Vanity Gateway mappings are Helm values, so read the function identity
+      # from the operator's CLI and apply only the mapped release.
+      # TODO(https://github.com/NVIDIA/nvcf/issues/1419): replace these shell
+      # commands with selected-function identity DSL steps.
+      When I successfully run command:
+        """
+        /bin/bash -c 'set -euo pipefail; "$1" --config "$2" status --json | jq -er ".currentFunction | select(.hasFunction == true) | .functionId"' bdd-vanity-function-id ${NVCF_CLI} ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml
+        """
+      And I export command output to environment variable "BDD_VANITY_FUNCTION_ID"
+
+      When I successfully run command:
+        """
+        /bin/bash -c 'set -euo pipefail; "$1" --config "$2" status --json | jq -er ".currentFunction | select(.hasFunction == true) | .versionId"' bdd-vanity-version-id ${NVCF_CLI} ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml
+        """
+      And I export command output to environment variable "BDD_VANITY_VERSION_ID"
+
+      And I update yaml file "deploy/stacks/self-managed/environments/local-bdd.yaml" with keys:
+        | addons.vanityGateway.mappingConfig.v2config.vanity.bdd.host                            | vanity.localhost          |
+        | addons.vanityGateway.mappingConfig.v2config.vanity.bdd.paths.echo.path                 | /bdd/echo                 |
+        | addons.vanityGateway.mappingConfig.v2config.vanity.bdd.paths.echo.functionID           | ${BDD_VANITY_FUNCTION_ID} |
+        | addons.vanityGateway.mappingConfig.v2config.vanity.bdd.paths.echo.functionVersionID    | ${BDD_VANITY_VERSION_ID}  |
+        | addons.vanityGateway.mappingConfig.v2config.vanity.bdd.paths.echo.outgoingPathOverride | /echo                     |
+
+      When I successfully run command "k3d kubeconfig merge ncp-local --output ${REPO_ROOT}/tests/bdd/out/ncp-local-vanity-kubeconfig.yaml --overwrite --kubeconfig-switch-context=false"
+      And I successfully run command "make -C deploy/stacks/self-managed apply HELMFILE_ENV=local-bdd HELMFILE_SELECTOR=name=vanity-gateway KUBECONFIG_FILE=${REPO_ROOT}/tests/bdd/out/ncp-local-vanity-kubeconfig.yaml"
+      And I successfully run command "kubectl --context k3d-ncp-local rollout restart deployment/vanity-gateway --namespace nvcf"
+      Then deployment "vanity-gateway" in namespace "nvcf" using context "k3d-ncp-local" should complete rollout within "5m"
+
+      When I successfully invoke the function selected by NVCF CLI through Vanity Gateway host "vanity.localhost" path "/bdd/echo" with timeout "120" seconds:
+        """
+        {"message":"bdd-vanity-echo","repeats":1}
+        """
+      Then the command output should contain "bdd-vanity-echo"
 
       # Remove the deployment: the local sizing cannot hold every
       # scenario's deployment at once.
-      When I run command:
-        """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function delete --deployment-only
-        """
-      Then the command exit code should be 0
+      And I successfully undeploy the function selected by NVCF CLI
 
     @function-lifecycle @grpc
     Scenario: Operator creates, deploys, and invokes the gRPC Load Tester Supreme sample function
-      When I run command:
-        """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function create --name bdd-grpc-load-tester-supreme --image nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/load_tester_supreme:0.0.8 --inference-url /grpc --inference-port 8001 --health-protocol GRPC --health-uri / --health-port 8001 --health-timeout PT30S
-        """
-      Then the command exit code should be 0
+      Given I use NVCF CLI config "${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml"
 
-      When I run command:
-        """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function deploy create --gpu H100 --instance-type NCP.GPU.H100_8x --backend ncp-local --regions us-west-1 --min-instances 1 --max-instances 1 --timeout 900
-        """
-      Then the command exit code should be 0
+      When I successfully create function "bdd-grpc-load-tester-supreme" from image "nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/load_tester_supreme:0.0.8" with CLI options:
+        | option            | value   |
+        | --inference-url   | /grpc   |
+        | --inference-port  | 8001    |
+        | --health-protocol | GRPC    |
+        | --health-uri      | /       |
+        | --health-port     | 8001    |
+        | --health-timeout  | PT30S   |
 
-      When I run command:
-        """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml api-key generate --description bdd-grpc-load-tester-supreme --for function --scopes invoke_function,list_functions,queue_details,list_functions_details
-        """
-      Then the command exit code should be 0
+      And I successfully deploy the function selected by NVCF CLI with options:
+        | option          | value               |
+        | --gpu           | H100                |
+        | --instance-type | NCP.GPU.H100_1x     |
+        | --backend       | ncp-local           |
+        | --regions       | us-west-1           |
+        | --min-instances | 1                   |
+        | --max-instances | 1                   |
+        | --timeout       | 900                 |
 
-      When I run command:
+      And I successfully generate a function API key with CLI options:
+        | option        | value                                                                       |
+        | --description | bdd-grpc-load-tester-supreme                                               |
+        | --scopes      | invoke_function,list_functions,queue_details,list_functions_details         |
+
+      When I successfully invoke the function selected by NVCF CLI over plaintext gRPC service "Echo" method "EchoMessage" with timeout "120" seconds and poll duration "5" seconds:
         """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke --grpc --grpc-plaintext --grpc-service Echo --grpc-method EchoMessage --request-body '{"message":"bdd-grpc-echo"}' --timeout 120 --poll-duration 5
+        {"message":"bdd-grpc-echo"}
         """
-      Then the command exit code should be 0
-      And the command output should contain "bdd-grpc-echo"
+      Then the command output should contain "bdd-grpc-echo"
 
       # Free the GPU node for the LLM scenario.
-      When I run command:
-        """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function delete --deployment-only
-        """
-      Then the command exit code should be 0
+      And I successfully undeploy the function selected by NVCF CLI
 
     # Proves the serve path the @llm-gateway scenario only installs:
     # LLM-type functions route through llm-api-gateway and
@@ -233,46 +278,49 @@ Feature: Install a local single-cluster NVCF stack with Helmfile
     # registration scenarios; not a standalone tag target.
     @llm-function-type
     Scenario: Operator creates, deploys, and invokes an LLM-type OpenAI-compatible sample function
-      When I run command:
-        """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function create --name bdd-openai-compatible-sample --image nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/nvcf-openai-compatible-sample:local --function-type LLM --inference-url /v1/chat/completions --inference-port 8000 --health-uri /health --health-port 8000 --health-timeout PT30S --llm-model 'name=openai-compatible-sample,uris=/v1/chat/completions|/v1/embeddings,routingMethod=round_robin'
-        """
-      Then the command exit code should be 0
+      Given I use NVCF CLI config "${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml"
 
-      When I run command:
-        """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function deploy create --gpu H100 --instance-type NCP.GPU.H100_8x --backend ncp-local --regions us-west-1 --min-instances 1 --max-instances 1 --timeout 900
-        """
-      Then the command exit code should be 0
+      When I successfully create function "bdd-openai-compatible-sample" from image "nvcr.io/${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}/nvcf-openai-compatible-sample:local" with CLI options:
+        | option           | value                                                                                               |
+        | --function-type  | LLM                                                                                                 |
+        | --inference-url  | /v1/chat/completions                                                                                |
+        | --inference-port | 8000                                                                                                |
+        | --health-uri     | /health                                                                                             |
+        | --health-port    | 8000                                                                                                |
+        | --health-timeout | PT30S                                                                                               |
+        | --llm-model      | name=openai-compatible-sample,uris=/v1/chat/completions\|/v1/embeddings,routingMethod=round_robin |
 
-      When I run command:
-        """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml api-key generate --description bdd-openai-compatible-sample --for function --scopes invoke_function,list_functions,queue_details,list_functions_details
-        """
-      Then the command exit code should be 0
+      And I successfully deploy the function selected by NVCF CLI with options:
+        | option          | value               |
+        | --gpu           | H100                |
+        | --instance-type | NCP.GPU.H100_1x     |
+        | --backend       | ncp-local           |
+        | --regions       | us-west-1           |
+        | --min-instances | 1                   |
+        | --max-instances | 1                   |
+        | --timeout       | 900                 |
+
+      And I successfully generate a function API key with CLI options:
+        | option        | value                                                                       |
+        | --description | bdd-openai-compatible-sample                                                 |
+        | --scopes      | invoke_function,list_functions,queue_details,list_functions_details         |
 
       # The gateway answers synchronously (no queue polling). The
       # sample always returns its fixed load-testing message.
-      When I run command:
+      When I successfully invoke model "openai-compatible-sample" at "/v1/chat/completions" with timeout "120" seconds:
         """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function invoke --inference-url /v1/chat/completions --model-name openai-compatible-sample --request-body '{"messages":[{"role":"user","content":"bdd-llm-echo"}]}' --timeout 120
+        {"messages":[{"role":"user","content":"bdd-llm-echo"}]}
         """
-      Then the command exit code should be 0
-      And the command output should contain "chat.completion"
+      Then the command output should contain "chat.completion"
       And the command output should contain "fixed 128-byte response"
 
       # curl reports only the status code so the assertion cannot
       # match response-body noise.
-      When I run command:
+      When I successfully run command:
         """
         curl -s -o /dev/null -w "%{http_code}" -X POST http://llm.localhost:8080/v1/chat/completions -H "Content-Type: application/json" -d '{"model":"unauthenticated/check","messages":[]}'
         """
-      Then the command exit code should be 0
-      And the command output should contain "401"
+      Then the command output should contain "401"
 
       # Leave the GPU capacity free, same as the echo scenarios.
-      When I run command:
-        """
-        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/fixtures/nvcf-cli-local.yaml function delete --deployment-only
-        """
-      Then the command exit code should be 0
+      And I successfully undeploy the function selected by NVCF CLI

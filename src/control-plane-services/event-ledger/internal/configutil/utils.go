@@ -19,29 +19,44 @@ package configutil
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"fmt"
 	"reflect"
 )
 
-func GetTLSConfigFromBase64(certBase64 string, keyBase64 string, insecureSkipVerify bool) (*tls.Config, error) {
-	certPem, err := base64.StdEncoding.DecodeString(certBase64)
+func GetTLSConfigFromBase64(certBase64 string, keyBase64 string, caCertBase64 string, insecureSkipVerify bool) (*tls.Config, error) {
+	certPEM, err := base64.StdEncoding.DecodeString(certBase64)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode cert base64: %v", err)
+		return nil, fmt.Errorf("failed to decode cert base64: %w", err)
 	}
 
-	keyPem, err := base64.StdEncoding.DecodeString(keyBase64)
+	keyPEM, err := base64.StdEncoding.DecodeString(keyBase64)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode key base64: %v", err)
+		return nil, fmt.Errorf("failed to decode key base64: %w", err)
 	}
 
-	cert, err := tls.X509KeyPair(certPem, keyPem)
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create key pair: %v", err)
+		return nil, fmt.Errorf("failed to create key pair: %w", err)
+	}
+
+	var rootCAs *x509.CertPool
+	if caCertBase64 != "" {
+		caCertPEM, err := base64.StdEncoding.DecodeString(caCertBase64)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode CA cert base64: %w", err)
+		}
+
+		rootCAs = x509.NewCertPool()
+		if !rootCAs.AppendCertsFromPEM(caCertPEM) {
+			return nil, fmt.Errorf("failed to parse CA certificate")
+		}
 	}
 
 	return &tls.Config{
 		Certificates:       []tls.Certificate{cert},
+		RootCAs:            rootCAs,
 		InsecureSkipVerify: insecureSkipVerify,
 	}, nil
 }

@@ -7,23 +7,13 @@ on:
   push:
     branches:
       - main
-      - 'release-**/v*'
     tags:
       - '*-v*'
       - '**/v*'
   workflow_dispatch:
     inputs:
-      operation:
-        description: Release operation to run.
-        required: false
-        default: branch-cut
-        type: choice
-        options:
-          - branch-cut
-          - self-managed-branch-cut
-          - auto
       service:
-        description: Optional service id or service_name for operation=auto. Branch-cut operations select a fixed service.
+        description: Optional service id or service_name to scope the run to. Defaults to every registered service.
         required: false
         type: string
 
@@ -47,10 +37,10 @@ env:
 
 jobs:
   # NVIDIA self-hosted runners. Eligible without a conditional because this
-  # workflow has no pull_request trigger: it fires on pushes to main and to
-  # release branches, on tags, and on manual dispatch, all of which run trusted
-  # reviewed code. The bazel matrix needs an event-conditional runs-on for
-  # exactly that reason; this does not.
+  # workflow has no pull_request trigger: it fires on pushes to main, on tags,
+  # and on manual dispatch, all of which run trusted reviewed code. The bazel
+  # matrix needs an event-conditional runs-on for exactly that reason; this
+  # does not.
   #
   # cpu4 rather than cpu16: these jobs shell out to the GitHub API to cut tags
   # and create releases. They are latency-bound, not CPU-bound, and were sitting
@@ -58,11 +48,14 @@ jobs:
   # work.
   service-release:
     name: service release automation
-    if: github.ref_type != 'tag' && (github.event_name != 'workflow_dispatch' || inputs.operation == 'auto')
+    if: github.ref_type != 'tag'
     runs-on: linux-amd64-cpu4
     permissions:
       contents: write
       packages: read
+      # Releases comment the version they shipped on the pull requests that went
+      # into them. Needed for the github.token fallback; a PAT carries its own.
+      pull-requests: write
     steps:
       # ref is the branch, not the pushed SHA. Two reasons, both about the gap
       # between when a push happens and when this job actually runs:
@@ -92,77 +85,17 @@ jobs:
 
       - name: Run service release automation
         env:
-          NVCF_GITHUB_RELEASE_SERVICE: ${{ github.event_name == 'workflow_dispatch' && inputs.service || '' }}
+          NVCF_GITHUB_RELEASE_SERVICE: ${{ inputs.service || '' }}
         run: |
           set -euo pipefail
           if [ "${NVCF_GITHUB_AUTO_TAGGING_ENABLED}" = "true" ] && \
              [ "${NVCF_GITHUB_RELEASE_DRY_RUN}" = "false" ] && \
              [ "${NV_GITHUB_TOKEN_CONFIGURED}" != "true" ]; then
             echo "ERROR: set secret NV_GITHUB_TOKEN before enabling GitHub auto-tag publish mode." >&2
-            echo "The default GITHUB_TOKEN cannot trigger the release-branch/tag workflows that publish release artifacts." >&2
+            echo "The default GITHUB_TOKEN cannot trigger the tag workflow that publishes release notes." >&2
             exit 1
           fi
           ./tools/ci/github-release auto
-
-  release-branch-cut:
-    name: NVCA release branch cut
-    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'branch-cut'
-    runs-on: linux-amd64-cpu4
-    permissions:
-      contents: write
-      pull-requests: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ github.event.repository.default_branch }}
-          token: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
-
-      - name: Cut release branch
-        env:
-          NVCF_GITHUB_RELEASE_SERVICE: nvca
-          NV_GITHUB_TOKEN_CONFIGURED: ${{ secrets.NV_GITHUB_TOKEN != '' }}
-          GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: |
-          set -euo pipefail
-          if [ "${NV_GITHUB_TOKEN_CONFIGURED}" != "true" ]; then
-            echo "ERROR: set secret NV_GITHUB_TOKEN before cutting a GitHub release branch." >&2
-            echo "The default GITHUB_TOKEN cannot trigger CI for the generated VERSION bump PR." >&2
-            exit 1
-          fi
-          if [ -z "${NVCF_GITHUB_RELEASE_SERVICE}" ]; then
-            echo "ERROR: service is required when operation=branch-cut." >&2
-            exit 1
-          fi
-          ./tools/ci/github-release branch-cut --service "${NVCF_GITHUB_RELEASE_SERVICE}"
-
-  self-managed-release-branch-cut:
-    name: self-managed stack release branch cut
-    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'self-managed-branch-cut'
-    runs-on: linux-amd64-cpu4
-    permissions:
-      contents: write
-      pull-requests: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ github.event.repository.default_branch }}
-          token: ${{ secrets.NV_GITHUB_TOKEN || github.token }}
-
-      - name: Cut release branch
-        env:
-          NVCF_GITHUB_RELEASE_SERVICE: nvcf-self-managed-stack
-          NV_GITHUB_TOKEN_CONFIGURED: ${{ secrets.NV_GITHUB_TOKEN != '' }}
-          GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-        run: |
-          set -euo pipefail
-          if [ "${NV_GITHUB_TOKEN_CONFIGURED}" != "true" ]; then
-            echo "ERROR: set secret NV_GITHUB_TOKEN before cutting a GitHub release branch." >&2
-            echo "The default GITHUB_TOKEN cannot trigger CI for the generated VERSION bump PR." >&2
-            exit 1
-          fi
-          ./tools/ci/github-release branch-cut --service "${NVCF_GITHUB_RELEASE_SERVICE}"
 
   tag-release-notes:
     name: tag release notes

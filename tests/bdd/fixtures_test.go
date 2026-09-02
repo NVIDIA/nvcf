@@ -189,7 +189,43 @@ func TestComputePlaneLocalBDDFixturesDisableResourceSizingFeatureGates(t *testin
 	}
 }
 
-func TestSelfManagedLocalBDDMultiFixtureWiresGRPCWorkerCallback(t *testing.T) {
+func TestComputePlaneLocalBDDFixturesRequireSecureQUIC(t *testing.T) {
+	for _, fixturePath := range []string{
+		"fixtures/nvcf-compute-plane-local-bdd.yaml",
+		"fixtures/nvcf-compute-plane-local-bdd-multi.yaml",
+	} {
+		t.Run(filepath.Base(fixturePath), func(t *testing.T) {
+			fixtureBytes, err := os.ReadFile(fixturePath)
+			if err != nil {
+				t.Fatalf("read compute-plane fixture %s: %v", fixturePath, err)
+			}
+			var fixture struct {
+				AgentConfig struct {
+					MergeConfig string `yaml:"mergeConfig"`
+				} `yaml:"agentConfig"`
+			}
+			if err := yaml.Unmarshal(fixtureBytes, &fixture); err != nil {
+				t.Fatalf("parse compute-plane fixture %s: %v", fixturePath, err)
+			}
+			var mergeConfig struct {
+				Workload struct {
+					StargateQUICInsecure *bool `yaml:"stargateQUICInsecure"`
+				} `yaml:"workload"`
+			}
+			if err := yaml.Unmarshal([]byte(fixture.AgentConfig.MergeConfig), &mergeConfig); err != nil {
+				t.Fatalf("parse agent merge config in %s: %v", fixturePath, err)
+			}
+			if mergeConfig.Workload.StargateQUICInsecure == nil {
+				t.Fatalf("%s does not set workload.stargateQUICInsecure", fixturePath)
+			}
+			if *mergeConfig.Workload.StargateQUICInsecure {
+				t.Fatalf("%s enables insecure QUIC with profile-provided bundle trust", fixturePath)
+			}
+		})
+	}
+}
+
+func TestSelfManagedLocalBDDMultiFixtureWiresComputeReachableWorkerEndpoints(t *testing.T) {
 	fixtureBytes, err := os.ReadFile("fixtures/self-managed-local-bdd-multi.yaml")
 	if err != nil {
 		t.Fatalf("read multi-cluster stack fixture: %v", err)
@@ -197,15 +233,49 @@ func TestSelfManagedLocalBDDMultiFixtureWiresGRPCWorkerCallback(t *testing.T) {
 	fixture := string(fixtureBytes)
 	for _, want := range []string{
 		"workerConnectBaseURL: http://grpc.nvcf.svc.cluster.local:10086",
-		"chart: ../../../helm/gateway-routes/chart",
-		`version: ""`,
+		"llmRequestRouterAddress: https://llm-request-router.nvcf.svc.cluster.local:50071",
+		"chartPath: ../../../helm/gateway-routes/chart",
+		"chartPath: ../../../helm/llm-request-router/llm-request-router",
+		"pylonGrpcDialAddress: https://llm-request-router.nvcf.svc.cluster.local:50071",
+		"secretName: llm-request-router-grpc-tls",
+		"pylonReverseTunnelDialAddress: llm-request-router.nvcf.svc.cluster.local:50072",
+		"*.llm-request-router-headless.nvcf.svc.cluster.local",
 		"grpcWorker:",
+		"llmWorker:",
 		"enabled: true",
 		"listenerName: worker-tcp",
+		"listenerName: llm-grpc",
+		"listenerName: llm-quic",
 	} {
 		if !strings.Contains(fixture, want) {
 			t.Fatalf("multi-cluster stack fixture missing %q", want)
 		}
+	}
+}
+
+func TestSelfManagedLocalBDDMultiFixtureUsesPlaintextNVCFGRPC(t *testing.T) {
+	const fixturePath = "fixtures/self-managed-local-bdd-multi.yaml"
+
+	fixtureBytes, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatalf("read multi-cluster stack fixture: %v", err)
+	}
+	var fixture struct {
+		Addons struct {
+			LLM struct {
+				Gateway struct {
+					Auth struct {
+						GRPCInsecure bool `yaml:"grpcInsecure"`
+					} `yaml:"auth"`
+				} `yaml:"gateway"`
+			} `yaml:"llm"`
+		} `yaml:"addons"`
+	}
+	if err := yaml.Unmarshal(fixtureBytes, &fixture); err != nil {
+		t.Fatalf("parse multi-cluster stack fixture: %v", err)
+	}
+	if !fixture.Addons.LLM.Gateway.Auth.GRPCInsecure {
+		t.Fatal("multi-cluster stack fixture must use plaintext NVCF API gRPC")
 	}
 }
 
@@ -237,6 +307,7 @@ func TestNVCTTaskSmokeUsesTaskSimpleSample(t *testing.T) {
 		"Key-Issuer-Service",
 		"NVCT_BDD_STATE_PATH",
 		"NVCT_BDD_TASKS_HOST",
+		"NVCT_BDD_TASK_INSTANCE_TYPE must be set",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("NVCT task smoke script does not reference %q", want)
@@ -250,6 +321,9 @@ func TestNVCTTaskSmokeUsesTaskSimpleSample(t *testing.T) {
 	}
 	if strings.Contains(script, "docker.io/library/busybox") {
 		t.Fatal("NVCT task smoke script still uses the synthetic busybox sample")
+	}
+	if strings.Contains(script, "NVCT_BDD_TASK_INSTANCE_TYPE:-") {
+		t.Fatal("NVCT task smoke script has a topology-dependent instance type default")
 	}
 }
 

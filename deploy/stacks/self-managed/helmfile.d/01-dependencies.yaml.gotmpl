@@ -108,7 +108,7 @@ releases:
 
   # --- NVCF NCP Dependencies ---
   - name: nats
-    version: 0.7.1
+    version: 0.8.1
     condition: nats.enabled # From defaults.yaml or env overrides
     namespace: nats-system
     <<: *dependency # Inherits base values from the dependency template
@@ -120,10 +120,16 @@ releases:
     <<: *dependency
 
   - name: openbao-server # this name MUST not change
-    version: 0.30.25
+    version: 0.32.1
     condition: openbao.enabled # From defaults.yaml or env overrides
     namespace: vault-system
     <<: *dependency # Inherits base values from the dependency template
+    # Secret values own migrations.env. Apply the generated LLM addition last
+    # so it preserves that list while adding the addon migration switch.
+    values:
+      - ../global.yaml.gotmpl
+      - ../secrets/{{ requiredEnv "HELMFILE_ENV" }}-secrets.yaml
+      - ../openbao-migrations-llm-env.yaml.gotmpl
     needs:
       - nats-system/nats
 
@@ -156,7 +162,7 @@ releases:
 {{- end }}
 
   - name: cassandra
-    version: 0.20.1
+    version: 0.20.2
     condition: cassandra.enabled # From defaults.yaml or env overrides
     namespace: cassandra-system
     <<: *dependency # Inherits base values from the dependency template

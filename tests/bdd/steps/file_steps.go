@@ -18,7 +18,6 @@ limitations under the License.
 package steps
 
 import (
-	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
@@ -35,11 +34,40 @@ import (
 func registerFileSteps(ctx *godog.ScenarioContext, sc *ScenarioContext) {
 	ctx.Step(`^I copy the file "([^"]*)" to "([^"]*)"$`, sc.iCopyFile)
 	ctx.Step(`^I update yaml file "([^"]*)" with keys:$`, sc.iUpdateYAMLFile)
-	ctx.Step(`^I substitute "([^"]*)" in file "([^"]*)" with base64 of "([^"]*)"$`, sc.iSubstituteBase64)
+	ctx.Step(`^I prepare Helmfile environment "([^"]*)" for stack "([^"]*)" from fixture "([^"]*)" with values:$`, sc.iPrepareHelmfileEnvironment)
+	ctx.Step(`^I prepare self-managed secrets file "([^"]*)" from template "([^"]*)" using the current NGC registry credential$`, sc.iPrepareSelfManagedSecretsFile)
 	ctx.Step(`^I substitute a block in file "([^"]*)":$`, sc.iSubstituteBlock)
 	ctx.Step(`^environment variable "([^"]*)" is set$`, sc.environmentVariableIsSet)
 	ctx.Step(`^these environment variables are set:$`, sc.environmentVariablesAreSet)
 	ctx.Step(`^file "([^"]*)" exists$`, sc.fileShouldExist)
+}
+
+// iPrepareHelmfileEnvironment delegates named environment preparation so the
+// registered Godog handler remains declarative.
+func (sc *ScenarioContext) iPrepareHelmfileEnvironment(environment, stack, fixture string, table *godog.Table) error {
+	return sc.prepareHelmfileEnvironment(environment, stack, fixture, table)
+}
+
+// prepareHelmfileEnvironment validates and derives the destination from the
+// suite repository root, then snapshots, copies, and updates it.
+func (sc *ScenarioContext) prepareHelmfileEnvironment(environment, stack, fixture string, table *godog.Table) error {
+	resolvedEnvironment := dsl.Interpolate(environment)
+	resolvedStack := dsl.Interpolate(stack)
+	dest, err := dsl.HelmfileEnvironmentPath(sc.Suite.Config.RepoRoot, resolvedStack, resolvedEnvironment)
+	if err != nil {
+		return err
+	}
+	keys, err := tableToKeyValuePairs(table)
+	if err != nil {
+		return err
+	}
+	if err := sc.Suite.Ledger.Snapshot(dest); err != nil {
+		return err
+	}
+	if err := copyFile(sc.resolvePath(dsl.Interpolate(fixture)), dest); err != nil {
+		return err
+	}
+	return dsl.UpdateYAMLKeys(dest, keys)
 }
 
 // iCopyFile copies src to dest, recording dest with the Ledger before
@@ -67,22 +95,47 @@ func (sc *ScenarioContext) iUpdateYAMLFile(path string, table *godog.Table) erro
 	return dsl.UpdateYAMLKeys(resolved, keys)
 }
 
-// iSubstituteBase64 expands ${VAR} inside source, base64-encodes the
-// result, and replaces every occurrence of placeholder in path. The
-// handler never returns the substituted value to its caller so the
-// secret material does not leak into logs. Go's base64.StdEncoding
-// emits the encoded string on a single line with no line wrapping --
-// equivalent to `base64 -w0` -- so the resulting value can be sed-
-// substituted into the secrets template without the sed-substitution
-// breaking on embedded newlines.
-func (sc *ScenarioContext) iSubstituteBase64(placeholder, path, source string) error {
-	resolvedPath := sc.resolvePath(dsl.Interpolate(path))
-	if err := sc.Suite.Ledger.Snapshot(resolvedPath); err != nil {
+// iPrepareSelfManagedSecretsFile delegates the secrets-file operation so the
+// registered Godog handler remains declarative.
+func (sc *ScenarioContext) iPrepareSelfManagedSecretsFile(dest, template string) error {
+	return sc.prepareSelfManagedSecretsFile(dest, template)
+}
+
+// prepareSelfManagedSecretsFile resolves paths, snapshots the destination,
+// renders the current credential, and replaces the destination with mode 0600.
+func (sc *ScenarioContext) prepareSelfManagedSecretsFile(dest, template string) error {
+	resolvedDest := sc.resolvePath(dsl.Interpolate(dest))
+	resolvedTemplate := sc.resolvePath(dsl.Interpolate(template))
+	if err := sc.Suite.Ledger.Snapshot(resolvedDest); err != nil {
 		return err
 	}
-	resolvedSource := dsl.Interpolate(source)
-	encoded := base64.StdEncoding.EncodeToString([]byte(resolvedSource))
-	return dsl.SubstituteFile(resolvedPath, placeholder, encoded)
+	body, err := os.ReadFile(resolvedTemplate)
+	if err != nil {
+		return fmt.Errorf("read secrets template %s: %w", resolvedTemplate, err)
+	}
+	rendered, err := dsl.RenderSelfManagedSecrets(body, os.Getenv("NGC_API_KEY"))
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(resolvedDest), 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", filepath.Dir(resolvedDest), err)
+	}
+	out, err := os.OpenFile(resolvedDest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return fmt.Errorf("create self-managed secrets %s: %w", resolvedDest, err)
+	}
+	if err := out.Chmod(0o600); err != nil {
+		_ = out.Close()
+		return fmt.Errorf("secure self-managed secrets %s: %w", resolvedDest, err)
+	}
+	if _, err := out.Write(rendered); err != nil {
+		_ = out.Close()
+		return fmt.Errorf("write self-managed secrets %s: %w", resolvedDest, err)
+	}
+	if err := out.Close(); err != nil {
+		return fmt.Errorf("close self-managed secrets %s: %w", resolvedDest, err)
+	}
+	return nil
 }
 
 // iSubstituteBlock snapshots path before delegating the exact multi-line

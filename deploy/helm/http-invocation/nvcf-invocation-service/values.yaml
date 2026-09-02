@@ -37,7 +37,7 @@ invocation:
     registry: "" # must be supplied
     repository: "" # must be supplied
     pullPolicy: IfNotPresent
-    tag: "0.8.8"
+    tag: "0.12.0"
 
   podAnnotations: {}
   podLabels: {}
@@ -60,10 +60,18 @@ invocation:
         port: 8080
         targetPort: 8080
         protocol: TCP
-      - name: metrics
-        port: 41337
-        targetPort: 41337
-        protocol: TCP
+
+  # Metrics collection remains active inside the invocation process. This
+  # setting controls whether the Prometheus listener is bound to the pod
+  # network and exposed through the Service.
+  metrics:
+    enabled: false
+    bindAddress: 0.0.0.0
+    port: 41337
+    serviceMonitor:
+      enabled: false
+      interval: 30s
+      path: /metrics
 
   resources:
     limits:
@@ -116,9 +124,6 @@ invocation:
   ports:
     - name: http
       containerPort: 8080
-      protocol: TCP
-    - name: metrics
-      containerPort: 41337
       protocol: TCP
 
   env:

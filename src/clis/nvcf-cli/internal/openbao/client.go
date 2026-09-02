@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"net/http"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 
@@ -60,6 +61,12 @@ type Config struct {
 // instead of a hard failure.
 var ErrPKICertificateNotFound = errors.New("openbao: pki certificate not found")
 
+const (
+	curlHTTPStatusMarker      = "__NVCF_HTTP_STATUS__:"
+	curlHTTPContentTypeMarker = "__NVCF_HTTP_CONTENT_TYPE__:"
+	maxOpenBaoHTTPErrorBody   = 512
+)
+
 // JWTAuthRequest represents the JWT authentication request to OpenBao
 type JWTAuthRequest struct {
 	Role string `json:"role"`
@@ -85,6 +92,14 @@ type pkiCertificateResponse struct {
 		Certificate string `json:"certificate"`
 	} `json:"data"`
 	Errors []string `json:"errors"`
+}
+
+// pkiCertificateHTTPResponse captures the metadata needed to classify and
+// report an OpenBao PKI certificate response.
+type pkiCertificateHTTPResponse struct {
+	StatusCode  int
+	ContentType string
+	Body        string
 }
 
 // NewClient creates a new OpenBao client
@@ -396,24 +411,129 @@ func (c *Client) generateUserJWTTokenWithSubject(ctx context.Context, vaultToken
 // mount, for example services/all/pki/root/cert/ca. The returned value is PEM
 // text suitable for a public trust bundle.
 func (c *Client) ReadPKICertificatePEM(ctx context.Context, pkiPath string) (string, error) {
-	rootToken, err := c.getOpenBaoRootToken()
-	if err != nil {
-		return "", fmt.Errorf("retrieving OpenBao root token: %w", err)
-	}
 	readURL := strings.TrimRight(c.config.OpenBaoURL, "/") + "/v1/" + strings.Trim(pkiPath, "/") + "/cert/ca"
-	curlArgs := []string{
-		"curl", "-sS", readURL,
-		"-H", "X-Vault-Token: " + rootToken,
+	writeOut := "\n" + curlHTTPStatusMarker + "%{http_code}\n" +
+		curlHTTPContentTypeMarker + "%{content_type}\n"
+	curlArgs := []string{"curl", "-sS", "--write-out", writeOut, readURL}
+	return readPKICertificatePEM(ctx, 3, 2*time.Second, func(ctx context.Context) (pkiCertificateHTTPResponse, error) {
+		output, err := c.executeKubectlRun(ctx, "openbao-pki-root-ca", curlArgs)
+		if err != nil {
+			return pkiCertificateHTTPResponse{}, err
+		}
+		return pkiCertificateHTTPResponseFromOutput(output)
+	})
+}
+
+func readPKICertificatePEM(
+	ctx context.Context,
+	attempts int,
+	retryDelay time.Duration,
+	read func(context.Context) (pkiCertificateHTTPResponse, error),
+) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	output, err := c.executeKubectlRun(ctx, "openbao-pki-root-ca", curlArgs)
-	if err != nil {
-		return "", fmt.Errorf("reading OpenBao PKI certificate: %w", err)
+	for attempt := 1; attempt <= attempts; attempt++ {
+		response, err := read(ctx)
+		if err != nil {
+			return "", fmt.Errorf("reading OpenBao PKI certificate: %w", err)
+		}
+		pem, err := rootCAPEMFromOpenBaoResponse(response.Body)
+		if response.StatusCode != http.StatusOK {
+			if errors.Is(err, ErrPKICertificateNotFound) &&
+				!retryablePKICertificateHTTPStatus(response.StatusCode) {
+				return "", err
+			}
+			httpErr := pkiCertificateHTTPError(response)
+			if !retryablePKICertificateHTTPStatus(response.StatusCode) || attempt == attempts {
+				return "", httpErr
+			}
+			if err := waitForPKICertificateRetry(ctx, retryDelay); err != nil {
+				return "", err
+			}
+			continue
+		}
+		if err == nil {
+			return pem, nil
+		}
+		var syntaxErr *json.SyntaxError
+		retryable := strings.TrimSpace(response.Body) == "" || errors.As(err, &syntaxErr)
+		if !retryable || attempt == attempts {
+			return "", err
+		}
+		if err := waitForPKICertificateRetry(ctx, retryDelay); err != nil {
+			return "", err
+		}
 	}
-	pem, err := rootCAPEMFromOpenBaoResponse(output)
-	if err != nil {
-		return "", err
+	return "", fmt.Errorf("read OpenBao PKI certificate without an attempt")
+}
+
+func pkiCertificateHTTPResponseFromOutput(output string) (pkiCertificateHTTPResponse, error) {
+	var response pkiCertificateHTTPResponse
+	var bodyLines []string
+	statusFound := false
+
+	for _, line := range strings.Split(output, "\n") {
+		switch {
+		case strings.HasPrefix(line, curlHTTPStatusMarker):
+			statusText := strings.TrimSpace(strings.TrimPrefix(line, curlHTTPStatusMarker))
+			statusCode, err := strconv.Atoi(statusText)
+			if err != nil {
+				return pkiCertificateHTTPResponse{}, fmt.Errorf("parse OpenBao PKI HTTP status %q: %w", statusText, err)
+			}
+			response.StatusCode = statusCode
+			statusFound = true
+		case strings.HasPrefix(line, curlHTTPContentTypeMarker):
+			response.ContentType = strings.TrimSpace(strings.TrimPrefix(line, curlHTTPContentTypeMarker))
+		default:
+			bodyLines = append(bodyLines, line)
+		}
 	}
-	return pem, nil
+	if !statusFound {
+		return pkiCertificateHTTPResponse{}, fmt.Errorf("OpenBao PKI response missing HTTP status")
+	}
+	response.Body = strings.TrimSpace(strings.Join(bodyLines, "\n"))
+	return response, nil
+}
+
+func pkiCertificateHTTPError(response pkiCertificateHTTPResponse) error {
+	message := fmt.Sprintf("OpenBao PKI certificate request failed with HTTP %d", response.StatusCode)
+	if response.ContentType != "" {
+		message += fmt.Sprintf(" (content type %q)", response.ContentType)
+	}
+	if body := boundedOpenBaoHTTPErrorBody(response.Body); body != "" {
+		message += ": " + body
+	}
+	return errors.New(message)
+}
+
+func retryablePKICertificateHTTPStatus(statusCode int) bool {
+	return statusCode == 0 ||
+		statusCode == http.StatusRequestTimeout ||
+		statusCode == http.StatusTooManyRequests ||
+		statusCode >= http.StatusInternalServerError
+}
+
+func boundedOpenBaoHTTPErrorBody(body string) string {
+	if strings.Contains(body, "-----BEGIN CERTIFICATE-----") {
+		return "<certificate response omitted>"
+	}
+	summary := strings.Join(strings.Fields(body), " ")
+	if len(summary) <= maxOpenBaoHTTPErrorBody {
+		return summary
+	}
+	return summary[:maxOpenBaoHTTPErrorBody] + "..."
+}
+
+func waitForPKICertificateRetry(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("waiting to retry OpenBao PKI certificate read: %w", ctx.Err())
+	case <-timer.C:
+		return nil
+	}
 }
 
 func rootCAPEMFromOpenBaoResponse(output string) (string, error) {
@@ -489,24 +609,27 @@ func (c *Client) executeKubectlRun(ctx context.Context, name string, args []stri
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		if c.config.Debug {
-			logging.Debug("kubectl run failed with error: %s", err)
-			logging.Debug("kubectl raw output:\n%s", string(output))
+			logging.Debug("kubectl raw output received (%s)", kubectlOutputMetadata(string(output)))
 		}
-		return "", fmt.Errorf("kubectl run failed: %s\nOutput: %s", err, string(output))
+		return "", fmt.Errorf("kubectl run failed: %w\nOutput: %s", err, string(output))
 	}
 
 	if c.config.Debug {
-		logging.Debug("kubectl raw output (length: %d bytes):\n%s", len(output), string(output))
+		logging.Debug("kubectl raw output received (%s)", kubectlOutputMetadata(string(output)))
 	}
 
 	// Filter out kubectl deletion messages and return only the actual command output
 	cleanOutput := c.filterKubectlOutput(string(output))
 
 	if c.config.Debug {
-		logging.Debug("kubectl filtered output (length: %d bytes):\n%s", len(cleanOutput), cleanOutput)
+		logging.Debug("kubectl filtered output produced (%s)", kubectlOutputMetadata(cleanOutput))
 	}
 
 	return strings.TrimSpace(cleanOutput), nil
+}
+
+func kubectlOutputMetadata(output string) string {
+	return fmt.Sprintf("%d bytes", len(output))
 }
 
 // filterKubectlOutput filters out kubectl messages and returns only the actual command output
@@ -515,6 +638,8 @@ func (c *Client) filterKubectlOutput(output string) string {
 	lines := strings.Split(output, "\n")
 	var jsonLines []string
 	var pemLines []string
+	var plainLines []string
+	var httpMetadataLines []string
 	foundJSON := false
 	foundPEM := false
 
@@ -523,6 +648,11 @@ func (c *Client) filterKubectlOutput(output string) string {
 
 		// Skip empty lines
 		if line == "" {
+			continue
+		}
+
+		if isCurlHTTPMetadataLine(line) {
+			httpMetadataLines = append(httpMetadataLines, line)
 			continue
 		}
 
@@ -542,6 +672,7 @@ func (c *Client) filterKubectlOutput(output string) string {
 		if strings.Contains(line, "All commands and output from this session will be recorded") ||
 			strings.Contains(line, "If you don't see a command prompt") ||
 			strings.HasPrefix(line, "Warning:") ||
+			strings.HasPrefix(line, "warning:") ||
 			strings.HasPrefix(line, "Error from server:") {
 			continue
 		}
@@ -564,23 +695,42 @@ func (c *Client) filterKubectlOutput(output string) string {
 
 		if foundJSON {
 			jsonLines = append(jsonLines, line)
+		} else if !foundPEM {
+			plainLines = append(plainLines, line)
 		}
 	}
 
+	var filteredOutput string
 	if len(pemLines) > 0 {
-		return strings.Join(pemLines, "\n")
-	}
-
-	// If no JSON found, try to return the last non-empty line
-	if len(jsonLines) == 0 {
+		filteredOutput = strings.Join(pemLines, "\n")
+	} else if len(jsonLines) > 0 {
+		filteredOutput = strings.Join(jsonLines, "\n")
+	} else if len(httpMetadataLines) > 0 && len(plainLines) > 0 {
+		filteredOutput = strings.Join(plainLines, "\n")
+	} else {
+		// If no structured response was found, return the last non-empty line.
 		for i := len(lines) - 1; i >= 0; i-- {
 			line := strings.TrimSpace(lines[i])
-			if line != "" && !strings.Contains(line, "pod \"") && !strings.Contains(line, "deleted") {
-				return line
+			if line != "" &&
+				!isCurlHTTPMetadataLine(line) &&
+				!strings.Contains(line, "pod \"") &&
+				!strings.Contains(line, "deleted") {
+				filteredOutput = line
+				break
 			}
 		}
-		return ""
 	}
 
-	return strings.Join(jsonLines, "\n")
+	if len(httpMetadataLines) == 0 {
+		return filteredOutput
+	}
+	if filteredOutput == "" {
+		return strings.Join(httpMetadataLines, "\n")
+	}
+	return filteredOutput + "\n" + strings.Join(httpMetadataLines, "\n")
+}
+
+func isCurlHTTPMetadataLine(line string) bool {
+	return strings.HasPrefix(line, curlHTTPStatusMarker) ||
+		strings.HasPrefix(line, curlHTTPContentTypeMarker)
 }

@@ -40,6 +40,7 @@ use stargate::discovery::Discovery;
 use stargate::proxy::{ProxyTransportConfig, QuicTunnelConfig};
 use stargate::runtime::{
     BoundStargateListeners, ReverseTunnelConfig, StargateRuntime, StargateRuntimeConfig,
+    WarmupConfig,
 };
 use stargate_forwarding::{ForwardingResolver, PeerResolution, PeerTarget};
 use stargate_proto::pb::{InferenceServerStatus, StargateInfo};
@@ -546,6 +547,7 @@ pub fn base_config(
         metrics_prefix: stargate::metrics::DEFAULT_PREFIX.to_string(),
         forwarding: None,
         authenticator: Arc::new(stargate::auth::OpenAuthenticator),
+        warmup: WarmupConfig::default(),
     }
 }
 
@@ -701,7 +703,15 @@ fn reverse_tunnel_config(
 }
 
 pub fn make_stargate_runtime(id: &str) -> (SocketAddr, SocketAddr, StargateRuntime) {
-    make_stargate_runtime_with_lb(id, None)
+    // Use a long warmup duration so tests that rely on 503 during warmup
+    // (e.g. readyz_returns_503_during_warmup) behave correctly without
+    // needing a specific WarmupConfig at the call site.
+    let mut config = base_ephemeral_config(id);
+    config.warmup = WarmupConfig {
+        warmup_duration: Duration::from_secs(60),
+        ..WarmupConfig::default()
+    };
+    build_test_runtime(id, config, TestDiscovery::SelfOnly, None).standard()
 }
 
 pub fn make_stargate_runtime_for_tunnel_case(
@@ -1358,6 +1368,7 @@ fn test_registration_config(
         min_update_interval: Duration::from_millis(100),
         reverse_tunnel,
         tls_cert_pem: None,
+        grpc_tls_ca_cert_pem: None,
         quic_insecure: true,
         tunnel_protocol: Default::default(),
         auth_token_provider: None,

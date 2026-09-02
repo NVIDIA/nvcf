@@ -53,6 +53,21 @@ remote cache for this build:
 bazel build --remote_cache= //src/clis/nvcf-cli:nvcf-cli
 ```
 
+Repository builds do not embed the stack OCI defaults supplied to packaged CLI
+releases. Pass the matching stack paths when you run self-hosted commands from
+a source checkout:
+
+```bash
+nvcf-cli self-hosted \
+  --control-plane-stack deploy/stacks/self-managed \
+  --compute-plane-stack deploy/stacks/nvcf-compute-plane \
+  <subcommand>
+```
+
+Use both stacks from the same checkout. A command only needs the stack it
+operates on, but keeping both flags in a multi-plane workflow makes the source
+selection explicit.
+
 ### Download from NGC
 
 The CLI is available as a resource from NGC. See
@@ -458,15 +473,32 @@ Use these commands to install and inspect self-hosted NVCF deployments. For the 
 | `self-hosted up --cluster-name <cluster-name> --nca-id <nca-id> --region <region>` | Run the local k3d fresh-install flow. |
 | `self-hosted status` | Show a deployment health summary. |
 | `self-hosted install --control-plane` | Run the control-plane installation primitive. |
-| `self-hosted install --compute-plane --cluster-name <cluster-name>` | Run the compute-plane installation primitive for a registered GPU cluster. |
+| `self-hosted install --compute-plane --cluster-name <cluster-name>` | Register a GPU cluster and install its compute-plane manifests in one command. |
+| `self-hosted compute-plane register` | Register a GPU cluster from a control-plane profile and write compute-plane values. |
+| `self-hosted compute-plane install --values <path>` | Install compute-plane manifests from values written by `compute-plane register`. |
 | `self-hosted uninstall --compute-plane --cluster-name <cluster-name>` | Remove compute-plane components for the GPU cluster. |
 | `self-hosted uninstall --control-plane` | Remove control-plane components. |
 
-Bundle source overrides:
+Choose one compute-plane workflow:
+
+1. Run `self-hosted compute-plane register`, then run
+   `self-hosted compute-plane install` with the generated values file. This is
+   the profile-and-values workflow.
+2. Run `self-hosted install --compute-plane` to register the cluster and apply
+   the compute-plane manifests in one command.
+
+Do not run `cluster register` before `self-hosted install --compute-plane`. The
+combined install command performs registration itself.
+
+Bundle sources:
 
 - `--control-plane-stack` selects the control-plane stack bundle.
 - `--compute-plane-stack` selects the compute-plane stack bundle.
 - Both flags accept local paths, git URLs, and `oci://` references.
+- The control-plane and compute-plane sources must come from the same checkout
+  or release. Do not combine stack revisions.
+- Packaged binaries can include immutable OCI defaults injected by the release
+  build. Repository builds require explicit stack flags.
 
 `self-hosted up` supports only a single local k3d cluster. It requires
 `--env local`, a current `k3d-*` kube context, and no split-context flags. For
@@ -546,6 +578,18 @@ overrides (`selfManaged.icmsServiceHostHeaderOverride`,
 `selfManaged.revalServiceHostHeaderOverride`, `selfManaged.natsHostOverride`) to these
 values. See [self-managed-clusters](./cluster-management/self-managed.md) for how the
 register values feed the operator install and when host-header overrides are required.
+
+List the self-hosted cluster registrations stored in ICMS with the admin token:
+
+```bash
+./nvcf-cli cluster list-registered \
+  --icms-url "http://<GATEWAY_ADDR>"
+```
+
+The NCA ID defaults to `nvcf-default`; use `--nca-id <nca-id>` to override it.
+Use `--json` for machine-readable output. `cluster list-registered` is distinct
+from `cluster list`, which lists NVCF cluster groups and requires API credentials
+with the corresponding NVCF API scope.
 
 ### General Commands
 
@@ -647,6 +691,29 @@ API key, which `api-key generate` mints automatically alongside the function key
   --inference-port 8000 \
   --function-type LLM \
   --llm-model "name=dummy-model,uris=/v1/chat/completions|/v1/responses|/v1/embeddings,routingMethod=round_robin,tokenRateLimit=1000-S"
+
+# Create an LLM function with request priority
+./nvcf-cli function create \
+  --name "my-priority-llm-function" \
+  --image "nvcr.io/example/openai-compatible:latest" \
+  --inference-url "/" \
+  --inference-port 8000 \
+  --function-type LLM \
+  --llm-model "name=dummy-model,uris=/v1/chat/completions" \
+  --llm-default-priority 7 \
+  --llm-per-account-priority "nca-id:3"
+
+# Create an LLM function with request priority for multiple accounts
+./nvcf-cli function create \
+  --name "my-multi-account-priority-llm-function" \
+  --image "nvcr.io/example/openai-compatible:latest" \
+  --inference-url "/" \
+  --inference-port 8000 \
+  --function-type LLM \
+  --llm-model "name=dummy-model,uris=/v1/chat/completions" \
+  --llm-default-priority 7 \
+  --llm-per-account-priority "nca-a:3" \
+  --llm-per-account-priority "nca-b:5"
 ```
 
 All `function create` flags:
@@ -672,6 +739,8 @@ All `function create` flags:
 | `--tags` | Comma-separated tags |
 | `--models` | Model artifacts in `name:version:uri` format (repeatable) |
 | `--llm-model` | LLM model config in `name=MODEL,uris=URI\|URI,routingMethod=round_robin\|power_of_two\|groq_multiregion\|pulsar\|random,tokenRateLimit=LIMIT` format (repeatable). Token limits use `<value>-<unit>` with `S`, `M`, `H`, `D`, or `W`, for example `1000-S`. Use JSON input for combined token limits because inline model specs use commas as field separators. |
+| `--llm-default-priority` | Function-level default request priority. Lower values have higher priority, and `0` is highest. |
+| `--llm-per-account-priority` | Per-account override in `<nca-id>:<priority>` format. Repeatable; supports up to 64 distinct NCA ID overrides. Requires a default priority. |
 | `--resources` | Resource artifacts in `name:version:uri` format (repeatable) |
 | `--helm-chart` | Helm chart specification |
 | `--helm-chart-service` | Helm chart service name |
@@ -844,6 +913,13 @@ Example deployment JSON:
   --function-id <function-id> \
   --version-id <version-id> \
   --llm-model-update "name=dummy-model,routingMethod=round_robin,tokenRateLimit=1000-S"
+
+# Replace the function-level request priority configuration
+./nvcf-cli function update \
+  --function-id <function-id> \
+  --version-id <version-id> \
+  --llm-default-priority 7 \
+  --llm-per-account-priority "nca-id:3"
 
 # Update from JSON file
 ./nvcf-cli function update \
@@ -1072,7 +1148,7 @@ Registry credential changes take up to about 5 minutes to take effect for task c
 | `function list`, `function list-ids`, `function list-versions`, `function get` | `NVCF_TOKEN` or `NVCF_API_KEY` | `list_functions` or `list_functions_details` | `NVCF_API_KEY` |
 | `function queue status`, `function queue position`, `function queue details` | `NVCF_TOKEN` or `NVCF_API_KEY` | `queue_details` | `NVCF_API_KEY` |
 | `registry-credential` commands | `NVCF_TOKEN` or `NVCF_API_KEY` | `manage_registry_credentials` | `NVCF_TOKEN` |
-| Self-hosted cluster register, list, rotate, delete | `NVCF_TOKEN` | `cluster-management` | `NVCF_TOKEN` |
+| Self-hosted cluster register, list-registered, rotate, delete | `NVCF_TOKEN` | `cluster-management` | `NVCF_TOKEN` |
 | `task create` | `NVCF_NVCT_API_KEY` | `launch_task` | `NVCF_NVCT_API_KEY` |
 | `task list` | `NVCF_NVCT_API_KEY` | `list_tasks` | `NVCF_NVCT_API_KEY` |
 | `task get` | `NVCF_NVCT_API_KEY` | `task_details` | `NVCF_NVCT_API_KEY` |

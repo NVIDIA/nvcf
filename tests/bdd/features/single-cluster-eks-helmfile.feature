@@ -6,13 +6,10 @@ Feature: Install a single-cluster NVCF stack on a pre-provisioned EKS cluster wi
   register and install the NVCA operator on the same cluster, without
   going through the CLI install path.
 
-  # The register-cluster Makefile target provided in the
-  # nvcf-self-managed-stack runs `nvcf-cli init` internally before
-  # the cluster register call, so this feature does not need a
-  # separate init step.
-  #
-  # This feature is values-driven (not profile-driven); see
-  # AGENTS.md "CLI vs Helmfile install paths".
+  # Helmfile installs the control plane from the operator-authored
+  # environment. Registration then exports that installed environment as a
+  # control-plane profile and passes it to the compute-plane Make target.
+  # The feature runs `nvcf-cli init` explicitly before registration.
   #
   # Required environment variables (user-supplied):
   #   REPO_ROOT                      absolute path to this repository
@@ -63,16 +60,11 @@ Feature: Install a single-cluster NVCF stack on a pre-provisioned EKS cluster wi
       | EKS_CLUSTER_NAME |
       | EKS_REGION       |
     # Helmfile pulls OCI charts through helm, so host-side helm
-    # registry auth must be present before any helmfile sync.
-    # Keep $NGC_API_KEY unbraced so the BDD runner does not expand
-    # the secret into command logs; bash expands it at execution time.
-    And command has succeeded:
-      """
-      bash -c 'set -eo pipefail; printf %s "$NGC_API_KEY" | helm registry login nvcr.io --username "\$oauthtoken" --password-stdin'
-      """
+    # Registry authentication must be present before any helmfile sync. The
+    # current API key is passed through sensitive stdin.
+    And Helm is authenticated to OCI registry "nvcr.io" using the current NGC API key
     # Create NGC dockerconfig registry credentials
-    And I copy the file "deploy/stacks/self-managed/secrets/secrets.yaml.template" to "deploy/stacks/self-managed/secrets/eks-bdd-secrets.yaml"
-    And I substitute "REPLACE_WITH_BASE64_DOCKER_CREDENTIAL" in file "deploy/stacks/self-managed/secrets/eks-bdd-secrets.yaml" with base64 of "$oauthtoken:${NGC_API_KEY}"
+    And I prepare self-managed secrets file "deploy/stacks/self-managed/secrets/eks-bdd-secrets.yaml" from template "deploy/stacks/self-managed/secrets/secrets.yaml.template" using the current NGC registry credential
     And I run command "kubectl --context ${EKS_CONTEXT} get nodes -o name"
     And the command exit code should be 0
 
@@ -126,8 +118,7 @@ Feature: Install a single-cluster NVCF stack on a pre-provisioned EKS cluster wi
     #    hostnames as the HTTP Host header so the gateway HTTPRoutes match.
     #    This replaces the former @nvca-registration URL-rewrite + hostAliases
     #    workaround.
-    When I copy the file "deploy/stacks/self-managed/environments/base.yaml" to "deploy/stacks/self-managed/environments/eks-bdd.yaml"
-    And I update yaml file "deploy/stacks/self-managed/environments/eks-bdd.yaml" with keys:
+    When I prepare Helmfile environment "eks-bdd" for stack "self-managed" from fixture "deploy/stacks/self-managed/environments/base.yaml" with values:
       | global.helm.sources.repository                   | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository                          | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.imagePullSecrets[0].name                  | nvcr-pull-secret                     |
@@ -149,8 +140,7 @@ Feature: Install a single-cluster NVCF stack on a pre-provisioned EKS cluster wi
 
     # The compute-plane Helmfile is a separate bundle, so give it an
     # environment file with the same registry and control-plane endpoints.
-    When I copy the file "deploy/stacks/nvcf-compute-plane/environments/base.yaml" to "deploy/stacks/nvcf-compute-plane/environments/eks-bdd.yaml"
-    And I update yaml file "deploy/stacks/nvcf-compute-plane/environments/eks-bdd.yaml" with keys:
+    When I prepare Helmfile environment "eks-bdd" for stack "nvcf-compute-plane" from fixture "deploy/stacks/nvcf-compute-plane/environments/base.yaml" with values:
       | global.helm.sources.repository                                 | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.image.repository                                        | ${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM} |
       | global.imagePullSecrets[0].name                                | nvcr-pull-secret                     |
@@ -209,8 +199,12 @@ Feature: Install a single-cluster NVCF stack on a pre-provisioned EKS cluster wi
       # HTTPRoute. A mismatch here means a future chart change has
       # decoupled global.domain from the hostnames downstream services
       # rely on for SNI/Host routing.
-      When I run command "kubectl --context ${EKS_CONTEXT} get httproute nvcf-api -n envoy-gateway -o jsonpath={.spec.hostnames[0]}"
-      Then the command output should contain "api.${EKS_GATEWAY_ADDR}"
+      Then Kubernetes resource "HTTPRoute/nvcf-api" in namespace "envoy-gateway" using context "${EKS_CONTEXT}" should contain:
+        """
+        spec:
+          hostnames:
+            - api.${EKS_GATEWAY_ADDR}
+        """
 
     @nvca-registration
     Scenario: User registers the EKS cluster and installs the NVCA operator there
@@ -235,12 +229,24 @@ Feature: Install a single-cluster NVCF stack on a pre-provisioned EKS cluster wi
         | invoke_host          | invocation.${EKS_GATEWAY_ADDR} |
         | icms_host            | sis.${EKS_GATEWAY_ADDR}        |
 
-      # The Make target initializes the CLI, registers the EKS cluster
-      # with explicit nonlocal values, and writes the Helm handoff under
-      # registration/ for the compute-plane install.
       When I run command:
         """
-        make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=${EKS_CLUSTER_NAME} NCA_ID=nvcf-default CLUSTER_REGION=${EKS_REGION} ICMS_URL=http://${EKS_GATEWAY_ADDR} NVCF_CLI=${NVCF_CLI} NVCF_CLI_CONFIG=${REPO_ROOT}/tests/bdd/out/nvcf-cli-eks-bdd.yaml
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/out/nvcf-cli-eks-bdd.yaml self-hosted --control-plane-stack deploy/stacks/self-managed --env eks-bdd control-plane profile export --cluster-name ${EKS_CLUSTER_NAME} --region ${EKS_REGION}
+        """
+      Then the command exit code should be 0
+      And file "deploy/stacks/self-managed/out/control-plane-profile.yaml" should exist
+
+      When I run command:
+        """
+        ${NVCF_CLI} --config ${REPO_ROOT}/tests/bdd/out/nvcf-cli-eks-bdd.yaml init
+        """
+      Then the command exit code should be 0
+
+      # Register the EKS cluster from the exported profile and write the Helm
+      # handoff under registration/ for the compute-plane install.
+      When I run command:
+        """
+        make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=${EKS_CLUSTER_NAME} CLUSTER_REGION=${EKS_REGION} CONTROL_PLANE_PROFILE=${REPO_ROOT}/deploy/stacks/self-managed/out/control-plane-profile.yaml COMPUTE_KUBE_CONTEXT=${EKS_CONTEXT} NVCF_CLI=${NVCF_CLI} NVCF_CLI_CONFIG=${REPO_ROOT}/tests/bdd/out/nvcf-cli-eks-bdd.yaml
         """
       Then the command exit code should be 0
       And file "deploy/stacks/nvcf-compute-plane/registration/${EKS_CLUSTER_NAME}-register-values.yaml" should exist
@@ -273,13 +279,11 @@ Feature: Install a single-cluster NVCF stack on a pre-provisioned EKS cluster wi
         | name          | namespace     |
         | nvca-operator | nvca-operator |
 
-      When I run command "kubectl rollout status deployment/nvca-operator -n nvca-operator --context ${EKS_CONTEXT} --timeout=10m"
-      Then the command exit code should be 0
+      Then deployment "nvca-operator" in namespace "nvca-operator" using context "${EKS_CONTEXT}" should complete rollout within "10m"
 
       # With chart-native Host headers the agent dials the bare-ELB URLs
       # (which DNS-resolve) and sends the gateway-matching Host header, so
       # the former dig + hostAliases patch + nvca rollout restart is no
       # longer needed. The operator brings the agent up directly; wait for
       # the NVCFBackend to report the agent healthy.
-      When I run command "kubectl wait nvcfbackend ${EKS_CLUSTER_NAME} -n nvca-operator --context ${EKS_CONTEXT} --for=jsonpath={.status.agentStatus}=healthy --timeout=10m"
-      Then the command exit code should be 0
+      Then NVCFBackend "${EKS_CLUSTER_NAME}" in namespace "nvca-operator" using context "${EKS_CONTEXT}" should report agent status "healthy" within "10m"

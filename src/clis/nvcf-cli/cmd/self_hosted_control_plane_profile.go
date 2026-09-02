@@ -21,10 +21,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 
 	"nvcf-cli/internal/client"
 	"nvcf-cli/internal/openbao"
@@ -46,11 +50,19 @@ type controlPlaneProfileWriteRequest struct {
 	ComputePlaneContext string
 	ICMSURL             string
 	NATSURL             string
+	StackDomain         string
 	SourceRootCA        bool
 	RootCAPEM           string
 }
 
 func writeControlPlaneProfile(req controlPlaneProfileWriteRequest) (string, error) {
+	if req.StackDomain == "" {
+		domain, err := loadControlPlaneStackDomain(req.StackPath, req.Env)
+		if err != nil {
+			return "", err
+		}
+		req.StackDomain = domain
+	}
 	doc := buildControlPlaneProfile(req)
 	rootCAPEM := strings.TrimSpace(req.RootCAPEM)
 	if rootCAPEM == "" && req.SourceRootCA {
@@ -125,20 +137,22 @@ func applyControlPlaneRootCATrust(doc *controlplaneprofile.ControlPlaneProfile, 
 }
 
 func buildControlPlaneProfile(req controlPlaneProfileWriteRequest) controlplaneprofile.ControlPlaneProfile {
-	icmsURL := req.ICMSURL
-	if icmsURL == "" && req.Env == "local" {
-		icmsURL = "http://sis.localhost:8080"
-	}
+	icmsURL := resolveProfileICMSURL(req.ICMSURL, req.Env, req.StackDomain)
 	computeEndpoints := resolveRegisterEndpointValues(req.Env, req.ControlPlaneContext, req.ComputePlaneContext, icmsURL, req.NATSURL)
 	gatewayHTTP := resolveProfileGatewayHTTPURL(req.Env, icmsURL)
-	gatewayGRPC := resolveProfileGatewayGRPCURL(req.Env)
-	apiHost := firstNonEmpty(os.Getenv("API_HOST"), hostnameFromURL(gatewayHTTP))
+	gatewayGRPC := resolveProfileGatewayGRPCURL(req.Env, req.StackDomain)
+	apiHost := firstNonEmpty(os.Getenv("API_HOST"), viper.GetString("api_host"), hostnameFromURL(gatewayHTTP))
 	domain := domainFromHost(apiHost)
-	apiKeysHost := firstNonEmpty(os.Getenv("API_KEYS_HOST"), "api-keys."+domain)
-	invocationHost := firstNonEmpty(os.Getenv("INVOKE_HOST"), "invocation."+domain)
-	sisHost := firstNonEmpty(os.Getenv("NVCF_ICMS_HOST"), "sis."+domain)
-	revalHost := firstNonEmpty(os.Getenv("NVCF_REVAL_HOST"), "reval."+domain)
-	natsHost := firstNonEmpty(os.Getenv("NVCF_NATS_HOST"), "nats."+domain)
+	apiKeysHost := firstNonEmpty(os.Getenv("API_KEYS_HOST"), viper.GetString("api_keys_host"), "api-keys."+domain)
+	invocationHost := firstNonEmpty(os.Getenv("INVOKE_HOST"), viper.GetString("invoke_host"), "invocation."+domain)
+	sisHost := firstNonEmpty(os.Getenv("NVCF_ICMS_HOST"), viper.GetString("icms_host"), "sis."+domain)
+	revalHost := firstNonEmpty(os.Getenv("NVCF_REVAL_HOST"), viper.GetString("reval_host"), "reval."+domain)
+	natsHost := firstNonEmpty(os.Getenv("NVCF_NATS_HOST"), viper.GetString("nats_host"), "nats."+domain)
+	if strings.EqualFold(req.Env, "local") {
+		computeEndpoints.ICMSServiceURL = rewriteURLHost(computeEndpoints.ICMSServiceURL, sisHost)
+		computeEndpoints.ReValServiceURL = rewriteURLHost(computeEndpoints.ReValServiceURL, revalHost)
+		computeEndpoints.NATSURL = rewriteURLHost(computeEndpoints.NATSURL, natsHost)
+	}
 
 	return controlplaneprofile.ControlPlaneProfile{
 		APIVersion: controlplaneprofile.APIVersion,
@@ -154,9 +168,9 @@ func buildControlPlaneProfile(req controlPlaneProfileWriteRequest) controlplanep
 					NATSURL:  "nats://nats.nats-system.svc.cluster.local:4222",
 				},
 				ComputeReachable: controlplaneprofile.EndpointScope{
-					ICMSURL:  rewriteURLHost(computeEndpoints.ICMSServiceURL, sisHost),
-					ReValURL: rewriteURLHost(computeEndpoints.ReValServiceURL, revalHost),
-					NATSURL:  rewriteURLHost(computeEndpoints.NATSURL, natsHost),
+					ICMSURL:  computeEndpoints.ICMSServiceURL,
+					ReValURL: computeEndpoints.ReValServiceURL,
+					NATSURL:  computeEndpoints.NATSURL,
 				},
 			},
 			Gateway: controlplaneprofile.Gateway{
@@ -175,14 +189,71 @@ func buildControlPlaneProfile(req controlPlaneProfileWriteRequest) controlplanep
 	}
 }
 
+func loadControlPlaneStackDomain(stackPath, env string) (string, error) {
+	if stackPath == "" {
+		return "", nil
+	}
+	domain := ""
+	for _, name := range []string{"base.yaml", env + ".yaml"} {
+		path := filepath.Join(stackPath, "environments", name)
+		body, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("reading control-plane stack values %q: %w", path, err)
+		}
+		var values struct {
+			Global struct {
+				Domain string `yaml:"domain"`
+			} `yaml:"global"`
+		}
+		if err := yaml.Unmarshal(body, &values); err != nil {
+			return "", fmt.Errorf("parsing control-plane stack values %q: %w", path, err)
+		}
+		if value := strings.TrimSpace(values.Global.Domain); value != "" {
+			domain = value
+		}
+	}
+	return domain, nil
+}
+
+func resolveProfileICMSURL(flagValue, env, stackDomain string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	if value := os.Getenv("NVCF_ICMS_URL"); value != "" {
+		return value
+	}
+	if value := os.Getenv("NVCF_SIS_URL"); value != "" {
+		return value
+	}
+	if cfg, err := client.LoadConfigWithoutAuth(); err == nil {
+		if cfg.ICMSURL != "" {
+			return cfg.ICMSURL
+		}
+		if viper.IsSet("base_http_url") && cfg.BaseHTTPURL != "" {
+			if derived, ok := deriveICMSFromAPI(cfg.BaseHTTPURL); ok {
+				return derived
+			}
+			return cfg.BaseHTTPURL
+		}
+	}
+	if stackDomain != "" {
+		return profileHTTPServiceURL(env, "sis", stackDomain)
+	}
+	if strings.EqualFold(env, "local") {
+		return "http://sis.localhost:8080"
+	}
+	return resolveICMSURL("")
+}
+
 // rewriteURLHost replaces the hostname (preserving scheme, port, path, and
 // query) of rawURL with newHost. Returns rawURL unchanged when it cannot be
 // parsed, has no host, or when newHost is empty.
 //
-// This lets buildControlPlaneProfile project bare-ELB URLs back through the
-// canonical sis./reval./nats. service prefix that the gateway HTTPRoutes
-// match. For local k3d (rawURL already has sis./reval./nats. prefixes equal
-// to newHost) this is effectively a no-op.
+// Local split-cluster resolution can produce cross-cluster service names that
+// must be normalized to the local gateway routing hosts before export.
 func rewriteURLHost(rawURL, newHost string) string {
 	if rawURL == "" || newHost == "" {
 		return rawURL
@@ -203,7 +274,7 @@ func resolveProfileGatewayHTTPURL(env, icmsURL string) string {
 	if v := os.Getenv("NVCF_BASE_HTTP_URL"); v != "" {
 		return v
 	}
-	if cfg, err := client.LoadConfigWithoutAuth(); err == nil && cfg.BaseHTTPURL != "" && !(env == "local" && cfg.BaseHTTPURL == "https://api.nvcf.nvidia.com") {
+	if cfg, err := client.LoadConfigWithoutAuth(); err == nil && viper.IsSet("base_http_url") && cfg.BaseHTTPURL != "" {
 		return cfg.BaseHTTPURL
 	}
 	if icmsURL != "" {
@@ -212,17 +283,39 @@ func resolveProfileGatewayHTTPURL(env, icmsURL string) string {
 	return "http://api.localhost:8080"
 }
 
-func resolveProfileGatewayGRPCURL(env string) string {
+func resolveProfileGatewayGRPCURL(env, stackDomain string) string {
 	if v := os.Getenv("NVCF_BASE_GRPC_URL"); v != "" {
 		return v
 	}
 	if v := os.Getenv("NVCF_GRPC_URL"); v != "" {
 		return v
 	}
-	if cfg, err := client.LoadConfigWithoutAuth(); err == nil && cfg.BaseGRPCURL != "" && !(env == "local" && cfg.BaseGRPCURL == "grpc.nvcf.nvidia.com:443") {
+	if cfg, err := client.LoadConfigWithoutAuth(); err == nil && (viper.IsSet("grpc_url") || viper.IsSet("base_grpc_url")) && cfg.BaseGRPCURL != "" {
 		return cfg.BaseGRPCURL
 	}
+	if stackDomain != "" {
+		port := "443"
+		if strings.EqualFold(env, "local") {
+			port = "10081"
+		}
+		return net.JoinHostPort("grpc."+stackDomain, port)
+	}
+	if !strings.EqualFold(env, "local") {
+		if cfg, err := client.LoadConfigWithoutAuth(); err == nil && cfg.BaseGRPCURL != "" {
+			return cfg.BaseGRPCURL
+		}
+	}
 	return "grpc.localhost:10081"
+}
+
+func profileHTTPServiceURL(env, service, domain string) string {
+	scheme := "https"
+	host := service + "." + domain
+	if strings.EqualFold(env, "local") {
+		scheme = "http"
+		host = net.JoinHostPort(host, "8080")
+	}
+	return (&url.URL{Scheme: scheme, Host: host}).String()
 }
 
 func hostnameFromURL(rawURL string) string {

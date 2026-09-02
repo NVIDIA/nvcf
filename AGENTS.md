@@ -353,6 +353,31 @@ change, or refactor with full existing coverage).
 
 Prefer the repo-native test runner (`make test`, `go test`, `cargo test`, etc.). Run tests before committing. Check coverage requirements in the subtree `AGENTS.md` or CI config.
 
+### Version-pin assertions
+
+Do not assert an exact image tag or chart version unless that literal is the
+behavior under test. Exact literals break on every unrelated pin bump, and
+repeated updates make the test diff easy to overlook.
+If the surrounding wiring (override precedence, cross-chart consistency) is
+worth testing, read the expected value from its source of truth at test
+time. Use `Chart.yaml` `appVersion`, the `.gotmpl`'s `default "..."`, or the
+release's `version:` instead of copying it into the test (see
+`deploy/stacks/self-managed/tests/observability-autoscaler.sh` and
+`llm-pki-release.sh`). Otherwise, delete the assertion.
+
+### Verification commands
+
+Run these from the repo root before opening a PR. They are the general
+default; see `BAZEL.md` for the full command and flag reference, and use the
+nearest nested `AGENTS.md` for subtree-scoped commands.
+
+```bash
+bazel test //src/clis/nvcf-cli/... --test_output=streamed    # scoped: the package(s) you changed, streamed output
+bazel test //...                                              # full suite: broad or cross-cutting changes
+git diff --check HEAD                                         # docs-only: whitespace errors, conflict markers
+fern check                                                     # docs-only: validate Fern nav, links, and config
+```
+
 ### Java Bazel test target contract
 
 The `manual` tag placement in `rules/java/defs.bzl` is intentional.

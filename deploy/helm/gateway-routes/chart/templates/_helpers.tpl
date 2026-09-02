@@ -53,6 +53,40 @@ app.kubernetes.io/name: {{ include "nvcf-gateway.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
+{{- define "nvcf-gateway.llmWorkerBackendNamespace" -}}
+{{- required "nvcfGatewayRoutes.routes.llmWorker.backend.namespace is required when llmWorker.enabled is true" .Values.nvcfGatewayRoutes.routes.llmWorker.backend.namespace -}}
+{{- end }}
+
+{{/* Validate worker-facing gRPC TLS identity ownership and plaintext policy. */}}
+{{- define "nvcf-gateway.validateLLMWorkerGrpcTls" -}}
+{{- $routeEnabled := .Values.nvcfGatewayRoutes.routes.llmWorker.enabled -}}
+{{- $grpcTls := .Values.llmRequestRouter.grpcTls | default dict -}}
+{{- $tlsEnabled := dig "enabled" false $grpcTls -}}
+{{- $allowInsecure := dig "allowInsecureHttp" false $grpcTls -}}
+{{- $mode := dig "mode" "certManager" $grpcTls | toString -}}
+{{- if and $tlsEnabled $allowInsecure -}}
+{{- fail "llmRequestRouter.grpcTls.enabled and llmRequestRouter.grpcTls.allowInsecureHttp cannot both be true" -}}
+{{- end -}}
+{{- if and $routeEnabled (not $tlsEnabled) (not $allowInsecure) -}}
+{{- fail "llmRequestRouter.grpcTls.allowInsecureHttp must be true when LLM worker routing is plaintext" -}}
+{{- end -}}
+{{- if $tlsEnabled -}}
+{{- if not $routeEnabled -}}
+{{- fail "nvcfGatewayRoutes.routes.llmWorker.enabled must be true when llmRequestRouter.grpcTls.enabled is true" -}}
+{{- end -}}
+{{- if not (has $mode (list "certManager" "existingSecret")) -}}
+{{- fail (printf "llmRequestRouter.grpcTls.mode must be certManager or existingSecret, got %q" $mode) -}}
+{{- end -}}
+{{- required "llmRequestRouter.grpcTls.secretName is required when grpcTls.enabled is true" (dig "secretName" "" $grpcTls) -}}
+{{- if eq $mode "certManager" -}}
+{{- if empty (dig "dnsNames" (list) $grpcTls) -}}
+{{- fail "llmRequestRouter.grpcTls.dnsNames is required when grpcTls.mode is certManager" -}}
+{{- end -}}
+{{- required "llmRequestRouter.grpcTls.issuerRef.name is required when grpcTls.mode is certManager" (dig "issuerRef" "name" "" $grpcTls) -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
 {{/*
 Validate that enabled HTTPRoutes do not compete for the same hostname and
 root PathPrefix match on the shared Gateway. All HTTPRoute templates in this

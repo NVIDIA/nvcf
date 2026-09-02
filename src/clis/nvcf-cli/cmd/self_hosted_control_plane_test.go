@@ -32,6 +32,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/viper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -76,6 +77,58 @@ func TestControlPlaneProfileValidateCommandFailsWithFieldErrors(t *testing.T) {
 	err := rootCmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.natsURL")
+}
+
+func TestControlPlaneProfileValidateCommandRejectsMissingSharedGatewayHosts(t *testing.T) {
+	doc := strings.ReplaceAll(validControlPlaneProfileYAML(), "https://sis.nvcf-cp.internal", "https://gateway.nvcf-cp.internal")
+	doc = strings.ReplaceAll(doc, "https://reval.nvcf-cp.internal", "https://gateway.nvcf-cp.internal")
+	doc = strings.Replace(doc, "    httpURL: https://api.nvcf-cp.internal", "    httpURL: https://gateway.nvcf-cp.internal", 1)
+	doc = strings.Replace(doc, "      natsURL: tls://nats.nvcf-cp.internal:4222", "      natsURL: tls://gateway.nvcf-cp.internal:4222", 1)
+	doc = removeLine(doc, "    api: api.nvcf-cp.internal")
+	doc = removeLine(doc, "    sis: sis.nvcf-cp.internal")
+	doc = removeLine(doc, "    reval: reval.nvcf-cp.internal")
+	doc = removeLine(doc, "    nats: nats.nvcf-cp.internal")
+	path := writeControlPlaneProfileFixture(t, doc)
+	resetControlPlaneProfileValidateCommand(t)
+
+	rootCmd.SetOut(&bytes.Buffer{})
+	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"self-hosted", "control-plane", "profile", "validate",
+		"--file", path,
+		"--require", "compute-reachable",
+	})
+
+	err := rootCmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "controlPlane.gateway.httpURL")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.api")
+	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.icmsURL")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.sis")
+	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.revalURL")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.reval")
+	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.natsURL")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.nats")
+}
+
+func TestControlPlaneProfileValidateCommandAcceptsSharedGatewayAPIAndNATSHosts(t *testing.T) {
+	doc := strings.Replace(validControlPlaneProfileYAML(), "    httpURL: https://api.nvcf-cp.internal", "    httpURL: https://gateway.nvcf-cp.internal", 1)
+	doc = strings.Replace(doc, "      natsURL: tls://nats.nvcf-cp.internal:4222", "      natsURL: tls://gateway.nvcf-cp.internal:4222", 1)
+	path := writeControlPlaneProfileFixture(t, doc)
+	resetControlPlaneProfileValidateCommand(t)
+
+	var stdout bytes.Buffer
+	rootCmd.SetOut(&stdout)
+	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"self-hosted", "control-plane", "profile", "validate",
+		"--file", path,
+		"--require", "compute-reachable",
+	})
+
+	err := rootCmd.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, stdout.String(), "control-plane profile is valid")
 }
 
 func TestControlPlaneProfileValidateCommandHelpShowsAnyRequireMode(t *testing.T) {
@@ -143,6 +196,145 @@ func TestControlPlaneProfileExportCommandRecreatesProfileFromOpenBao(t *testing.
 	assert.Equal(t, controlplaneprofile.TrustModeBundle, result.Profile.TransportTLS.TrustMode)
 	assert.Equal(t, strings.TrimSpace(rootCA), strings.TrimSpace(result.Profile.TransportTLS.TrustBundlePEM))
 	assert.Equal(t, wantFingerprint, result.Profile.TransportTLS.TrustBundleFingerprint)
+	assert.Equal(t, "http://sis.localhost:8080", result.Profile.ControlPlane.Endpoints.ComputeReachable.ICMSURL)
+	assert.Equal(t, "http://reval.localhost:8080", result.Profile.ControlPlane.Endpoints.ComputeReachable.ReValURL)
+	assert.Equal(t, "nats://nats.localhost:4222", result.Profile.ControlPlane.Endpoints.ComputeReachable.NATSURL)
+}
+
+func TestControlPlaneProfileExportCommandUsesSelectedEnvironmentDomain(t *testing.T) {
+	stackDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "helmfile.d"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "environments"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stackDir, "environments", "base.yaml"), []byte("global:\n  domain: base.example.test\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(stackDir, "environments", "alpha.yaml"), []byte("global:\n  domain: alpha.example.test\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(stackDir, "environments", "beta.yaml"), []byte("global:\n  domain: beta.example.test\n"), 0o600))
+
+	for _, tc := range []struct {
+		env    string
+		domain string
+	}{
+		{env: "alpha", domain: "alpha.example.test"},
+		{env: "beta", domain: "beta.example.test"},
+	} {
+		t.Run(tc.env, func(t *testing.T) {
+			resetControlPlaneProfileValidateCommand(t)
+			resetViperForProfileTest(t)
+			for _, name := range []string{
+				"API_HOST",
+				"API_KEYS_HOST",
+				"INVOKE_HOST",
+				"NVCF_ICMS_HOST",
+				"NVCF_REVAL_HOST",
+				"NVCF_NATS_HOST",
+				"NVCF_BASE_HTTP_URL",
+				"NVCF_BASE_GRPC_URL",
+				"NVCF_GRPC_URL",
+				"NVCF_NATS_URL",
+			} {
+				t.Setenv(name, "")
+			}
+
+			prevFetch := fetchControlPlaneRootCAPEM
+			fetchControlPlaneRootCAPEM = func(context.Context, string) (string, error) {
+				return "", nil
+			}
+			t.Cleanup(func() { fetchControlPlaneRootCAPEM = prevFetch })
+
+			rootCmd.SetOut(&bytes.Buffer{})
+			rootCmd.SetErr(&bytes.Buffer{})
+			rootCmd.SetArgs([]string{
+				"self-hosted",
+				"--control-plane-stack", stackDir,
+				"--env", tc.env,
+				"control-plane", "profile", "export",
+				"--cluster-name", "control-plane",
+			})
+
+			require.NoError(t, rootCmd.Execute())
+			body, err := os.ReadFile(filepath.Join(stackDir, "out", controlPlaneProfileFileName))
+			require.NoError(t, err)
+			result, err := controlplaneprofile.ParseAndValidate(body, controlplaneprofile.ValidateOptions{Require: controlplaneprofile.RequireBoth})
+			require.NoError(t, err)
+
+			profile := result.Profile.ControlPlane
+			assert.Equal(t, "https://api."+tc.domain, profile.Gateway.HTTPURL)
+			assert.Equal(t, "grpc."+tc.domain+":443", profile.Gateway.GRPCURL)
+			assert.Equal(t, "api."+tc.domain, profile.Hosts.API)
+			assert.Equal(t, "api-keys."+tc.domain, profile.Hosts.APIKeys)
+			assert.Equal(t, "invocation."+tc.domain, profile.Hosts.Invocation)
+			assert.Equal(t, "sis."+tc.domain, profile.Hosts.SIS)
+			assert.Equal(t, "reval."+tc.domain, profile.Hosts.ReVal)
+			assert.Equal(t, "nats."+tc.domain, profile.Hosts.NATS)
+			assert.Equal(t, "https://sis."+tc.domain, profile.Endpoints.ComputeReachable.ICMSURL)
+			assert.Equal(t, "https://reval."+tc.domain, profile.Endpoints.ComputeReachable.ReValURL)
+			assert.Equal(t, "nats://nats."+tc.domain+":4222", profile.Endpoints.ComputeReachable.NATSURL)
+		})
+	}
+}
+
+func TestControlPlaneProfileExportCommandPrefersNamedConfigOverStackDomain(t *testing.T) {
+	resetControlPlaneProfileValidateCommand(t)
+	configureSelfHostedTestConfig(t, `
+base_http_url: https://gateway.config.example.test
+base_grpc_url: grpc.config.example.test:7443
+icms_url: https://sis-dial.config.example.test/custom/path
+api_host: api.config.example.test
+api_keys_host: api-keys.config.example.test
+invoke_host: invocation.config.example.test
+icms_host: sis.config.example.test
+`)
+	for _, name := range []string{
+		"API_HOST",
+		"API_KEYS_HOST",
+		"INVOKE_HOST",
+		"NVCF_ICMS_HOST",
+		"NVCF_REVAL_HOST",
+		"NVCF_NATS_HOST",
+		"NVCF_BASE_HTTP_URL",
+		"NVCF_BASE_GRPC_URL",
+		"NVCF_GRPC_URL",
+		"NVCF_NATS_URL",
+	} {
+		t.Setenv(name, "")
+	}
+
+	stackDir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "helmfile.d"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(stackDir, "environments"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(stackDir, "environments", "base.yaml"), []byte("global:\n  domain: base.example.test\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(stackDir, "environments", "qa.yaml"), []byte("global:\n  domain: stack.example.test\n"), 0o600))
+
+	prevFetch := fetchControlPlaneRootCAPEM
+	fetchControlPlaneRootCAPEM = func(context.Context, string) (string, error) {
+		return "", nil
+	}
+	t.Cleanup(func() { fetchControlPlaneRootCAPEM = prevFetch })
+
+	rootCmd.SetOut(&bytes.Buffer{})
+	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"--config", viper.ConfigFileUsed(),
+		"self-hosted",
+		"--control-plane-stack", stackDir,
+		"--env", "qa",
+		"control-plane", "profile", "export",
+		"--cluster-name", "control-plane",
+	})
+
+	require.NoError(t, rootCmd.Execute())
+	body, err := os.ReadFile(filepath.Join(stackDir, "out", controlPlaneProfileFileName))
+	require.NoError(t, err)
+	result, err := controlplaneprofile.ParseAndValidate(body, controlplaneprofile.ValidateOptions{Require: controlplaneprofile.RequireBoth})
+	require.NoError(t, err)
+
+	profile := result.Profile.ControlPlane
+	assert.Equal(t, "https://gateway.config.example.test", profile.Gateway.HTTPURL)
+	assert.Equal(t, "grpc.config.example.test:7443", profile.Gateway.GRPCURL)
+	assert.Equal(t, "api.config.example.test", profile.Hosts.API)
+	assert.Equal(t, "api-keys.config.example.test", profile.Hosts.APIKeys)
+	assert.Equal(t, "invocation.config.example.test", profile.Hosts.Invocation)
+	assert.Equal(t, "sis.config.example.test", profile.Hosts.SIS)
+	assert.Equal(t, "https://sis-dial.config.example.test/custom/path", profile.Endpoints.ComputeReachable.ICMSURL)
 }
 
 func TestParseControlPlaneProfileRequireModeAcceptsAny(t *testing.T) {
@@ -235,21 +427,17 @@ func TestBuildControlPlaneProfile_LocalK3DKeepsServicePrefixedHosts(t *testing.T
 	assert.Equal(t, "nats://nats.localhost:4222", got.ControlPlane.Endpoints.ComputeReachable.NATSURL)
 }
 
-func TestBuildControlPlaneProfile_BareELBProjectsServicePrefixes(t *testing.T) {
-	// Simulate GATEWAY_ADDR-routed EKS where icms_url is a bare ELB hostname:
-	// the emitted hosts and computeReachable URLs must carry the canonical
-	// sis./reval./nats. service prefixes that the gateway HTTPRoutes match.
+func TestBuildControlPlaneProfile_GatewayOnlyDNSKeepsDialURLsSeparateFromRoutingHosts(t *testing.T) {
+	// The gateway is the only resolvable name. Service names are routing values
+	// sent through Host headers or TLS SNI and must not replace dial URL hosts.
 	resetViperForProfileTest(t)
-	t.Setenv("API_HOST", "")
+	t.Setenv("API_HOST", "api.routes.customer.example.test")
 	t.Setenv("API_KEYS_HOST", "")
 	t.Setenv("INVOKE_HOST", "")
 	t.Setenv("NVCF_ICMS_HOST", "")
 	t.Setenv("NVCF_REVAL_HOST", "")
 	t.Setenv("NVCF_NATS_HOST", "")
-	// In the bare-ELB topology the operator's base_http_url points at the same
-	// gateway ELB. Force resolveProfileGatewayHTTPURL to use it so the test
-	// does not pick up an unrelated default like https://api.nvcf.nvidia.com.
-	t.Setenv("NVCF_BASE_HTTP_URL", "http://abc123.elb.us-east-1.amazonaws.com")
+	t.Setenv("NVCF_BASE_HTTP_URL", "https://gateway.customer.example.test")
 	t.Setenv("NVCF_BASE_GRPC_URL", "")
 
 	prevEnv := selfHostedEnv
@@ -257,22 +445,24 @@ func TestBuildControlPlaneProfile_BareELBProjectsServicePrefixes(t *testing.T) {
 	selfHostedEnv = "qa"
 
 	got := buildControlPlaneProfile(controlPlaneProfileWriteRequest{
-		ClusterName: "nvcf-cp-qa",
+		ClusterName: "control-plane",
 		NCAID:       "nvcf-default",
-		Region:      "us-east-1",
+		Region:      "us-west-1",
 		Env:         "qa",
-		ICMSURL:     "http://abc123.elb.us-east-1.amazonaws.com",
+		ICMSURL:     "https://gateway.customer.example.test",
+		NATSURL:     "tls://gateway.customer.example.test:4222",
+		StackDomain: "routes.customer.example.test",
 	})
 
-	assert.Equal(t, "abc123.elb.us-east-1.amazonaws.com", got.ControlPlane.Hosts.API)
-	assert.Equal(t, "api-keys.abc123.elb.us-east-1.amazonaws.com", got.ControlPlane.Hosts.APIKeys)
-	assert.Equal(t, "sis.abc123.elb.us-east-1.amazonaws.com", got.ControlPlane.Hosts.SIS)
-	assert.Equal(t, "reval.abc123.elb.us-east-1.amazonaws.com", got.ControlPlane.Hosts.ReVal)
-	assert.Equal(t, "nats.abc123.elb.us-east-1.amazonaws.com", got.ControlPlane.Hosts.NATS)
-	assert.Equal(t, "invocation.abc123.elb.us-east-1.amazonaws.com", got.ControlPlane.Hosts.Invocation)
-	assert.Equal(t, "http://sis.abc123.elb.us-east-1.amazonaws.com", got.ControlPlane.Endpoints.ComputeReachable.ICMSURL)
-	assert.Equal(t, "http://reval.abc123.elb.us-east-1.amazonaws.com", got.ControlPlane.Endpoints.ComputeReachable.ReValURL)
-	assert.Equal(t, "nats://nats.abc123.elb.us-east-1.amazonaws.com:4222", got.ControlPlane.Endpoints.ComputeReachable.NATSURL)
+	assert.Equal(t, "api.routes.customer.example.test", got.ControlPlane.Hosts.API)
+	assert.Equal(t, "api-keys.routes.customer.example.test", got.ControlPlane.Hosts.APIKeys)
+	assert.Equal(t, "sis.routes.customer.example.test", got.ControlPlane.Hosts.SIS)
+	assert.Equal(t, "reval.routes.customer.example.test", got.ControlPlane.Hosts.ReVal)
+	assert.Equal(t, "nats.routes.customer.example.test", got.ControlPlane.Hosts.NATS)
+	assert.Equal(t, "invocation.routes.customer.example.test", got.ControlPlane.Hosts.Invocation)
+	assert.Equal(t, "https://gateway.customer.example.test", got.ControlPlane.Endpoints.ComputeReachable.ICMSURL)
+	assert.Equal(t, "https://gateway.customer.example.test", got.ControlPlane.Endpoints.ComputeReachable.ReValURL)
+	assert.Equal(t, "tls://gateway.customer.example.test:4222", got.ControlPlane.Endpoints.ComputeReachable.NATSURL)
 }
 
 func TestWriteControlPlaneProfileSourcesOpenBaoRootCA(t *testing.T) {

@@ -332,6 +332,7 @@ fn engine_stats_exit_is_expected(mode: Option<EngineStatsStreamMode>, result: &T
 }
 
 async fn start_pylon_runtime(args: &Args, plan: &PylonStartupPlan) -> Result<RunningPylon> {
+    let grpc_tls_ca_cert_pem = load_grpc_tls_ca_cert(args)?;
     let metrics = PylonMetrics::new()?;
     metrics.observe_target_info(
         env!("CARGO_PKG_VERSION"),
@@ -437,6 +438,7 @@ async fn start_pylon_runtime(args: &Args, plan: &PylonStartupPlan) -> Result<Run
         forwarding,
         registration_inference_server_url.clone(),
         tls_cert_pem,
+        grpc_tls_ca_cert_pem,
     );
     let mut registration_client = InferenceServerRegistrationClient::default();
     registration_client.start(registration_config)?;
@@ -528,6 +530,7 @@ fn registration_config_from_plan(
     forwarding: TunnelForwardingConfig,
     inference_server_url: String,
     tls_cert_pem: Option<Vec<u8>>,
+    grpc_tls_ca_cert_pem: Option<Vec<u8>>,
 ) -> InferenceServerRegistrationConfig {
     InferenceServerRegistrationConfig {
         seeds: vec![args.stargate_address.clone()],
@@ -537,11 +540,47 @@ fn registration_config_from_plan(
         min_update_interval: Duration::from_millis(args.min_update_interval_ms),
         reverse_tunnel: plan.backend_tunnel.is_reverse(),
         tls_cert_pem,
+        grpc_tls_ca_cert_pem,
         quic_insecure: args.quic_insecure,
         tunnel_protocol: args.tunnel_protocol,
         forwarding,
         auth_token_provider: plan.auth_token_provider.clone(),
     }
+}
+
+fn load_grpc_tls_ca_cert(args: &Args) -> Result<Option<Vec<u8>>> {
+    // Reverse QUIC always uses tls_cert_path as its trust anchor. Reuse that
+    // bundle for gRPC only when the registration seed explicitly uses HTTPS;
+    // treating it as a gRPC CA for an HTTP seed prevents Pylon from connecting.
+    let reuse_reverse_quic_trust =
+        matches!(args.backend_connectivity, BackendConnectivity::Reverse)
+            && args.stargate_address.trim().starts_with("https://");
+    args.grpc_tls_ca_cert_path
+        .as_ref()
+        .or_else(|| {
+            reuse_reverse_quic_trust
+                .then_some(args.tls_cert_path.as_ref())
+                .flatten()
+        })
+        .map(|path| {
+            let pem = std::fs::read(path)
+                .with_context(|| format!("load gRPC TLS CA certificate from {path}"))?;
+            let certificates = rustls_pemfile::certs(&mut pem.as_slice())
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .with_context(|| format!("parse gRPC TLS CA certificate from {path}"))?;
+            let mut root_store = rustls::RootCertStore::empty();
+            let (valid, invalid) = root_store.add_parsable_certificates(certificates);
+            ensure!(
+                valid > 0,
+                "gRPC TLS CA certificate file {path} contains no valid certificates"
+            );
+            ensure!(
+                invalid == 0,
+                "gRPC TLS CA certificate file {path} contains {invalid} invalid certificate(s)"
+            );
+            Ok(pem)
+        })
+        .transpose()
 }
 
 fn tunnel_forwarding_config_from_plan(
@@ -1295,6 +1334,7 @@ mod tests {
             forwarding,
             "quic://127.0.0.1:4567".to_string(),
             None,
+            None,
         );
 
         assert_eq!(config.seeds, ["http://stargate:50071"]);
@@ -1347,6 +1387,7 @@ mod tests {
             forwarding,
             "http://127.0.0.1:8090".to_string(),
             Some(b"trusted reverse cert".to_vec()),
+            Some(b"trusted grpc CA".to_vec()),
         );
 
         assert_eq!(config.seeds, ["http://stargate:50071"]);
@@ -1359,6 +1400,10 @@ mod tests {
             config.tls_cert_pem.as_deref(),
             Some(&b"trusted reverse cert"[..])
         );
+        assert_eq!(
+            config.grpc_tls_ca_cert_pem.as_deref(),
+            Some(&b"trusted grpc CA"[..])
+        );
         assert!(config.quic_insecure);
         assert_eq!(config.tunnel_protocol, TunnelTransportProtocol::Http3);
         assert!(Arc::ptr_eq(
@@ -1369,6 +1414,203 @@ mod tests {
             config.auth_token_provider.as_deref(),
             Some(AuthTokenProvider::Static(token)) if token == "token-from-cli"
         ));
+    }
+
+    #[test]
+    fn grpc_tls_ca_bundle_loads_once_from_the_configured_path() {
+        let root = tempfile::tempdir().expect("test directory should create");
+        let path = root.path().join("grpc-ca.pem");
+        let mut params = rcgen::CertificateParams::default();
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let key = rcgen::KeyPair::generate().expect("test CA key should generate");
+        let pem = params
+            .self_signed(&key)
+            .expect("test CA certificate should generate")
+            .pem()
+            .into_bytes();
+        std::fs::write(&path, &pem).expect("test CA should write");
+        let path = path.to_string_lossy().into_owned();
+        let (args, _) = startup(&["--grpc-tls-ca-cert-path", &path]);
+
+        assert_eq!(
+            load_grpc_tls_ca_cert(&args)
+                .expect("configured gRPC CA should load")
+                .as_deref(),
+            Some(pem.as_slice())
+        );
+    }
+
+    #[test]
+    fn reverse_mode_reuses_quic_trust_for_https_when_grpc_override_is_unset() {
+        let root = tempfile::tempdir().expect("test directory should create");
+        let path = root.path().join("shared-ca.pem");
+        let mut params = rcgen::CertificateParams::default();
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let key = rcgen::KeyPair::generate().expect("test CA key should generate");
+        let pem = params
+            .self_signed(&key)
+            .expect("test CA certificate should generate")
+            .pem()
+            .into_bytes();
+        std::fs::write(&path, &pem).expect("test CA should write");
+        let path = path.to_string_lossy().into_owned();
+        let (args, _) = startup(&[
+            "--backend-connectivity",
+            "reverse",
+            "--stargate-address",
+            "https://stargate.example.test:50071",
+            "--tls-cert-path",
+            &path,
+        ]);
+
+        assert_eq!(
+            load_grpc_tls_ca_cert(&args)
+                .expect("reverse-mode shared CA should load")
+                .as_deref(),
+            Some(pem.as_slice())
+        );
+    }
+
+    #[test]
+    fn reverse_mode_does_not_reuse_quic_trust_for_plaintext_grpc() {
+        let root = tempfile::tempdir().expect("test directory should create");
+        let path = root.path().join("quic-ca.pem");
+        std::fs::write(&path, b"not a gRPC CA bundle").expect("QUIC trust should write");
+        let path = path.to_string_lossy().into_owned();
+        let (args, _) = startup(&[
+            "--backend-connectivity",
+            "reverse",
+            "--stargate-address",
+            "http://stargate.example.test:50071",
+            "--tls-cert-path",
+            &path,
+        ]);
+
+        assert!(
+            load_grpc_tls_ca_cert(&args)
+                .expect("plaintext gRPC should not load the QUIC trust bundle")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn grpc_ca_override_takes_precedence_over_reverse_quic_trust() {
+        let root = tempfile::tempdir().expect("test directory should create");
+        let shared_path = root.path().join("shared-ca.pem");
+        let override_path = root.path().join("grpc-ca.pem");
+        let ca_pem = |common_name: &str| {
+            let mut params = rcgen::CertificateParams::default();
+            params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+            params
+                .distinguished_name
+                .push(rcgen::DnType::CommonName, common_name);
+            let key = rcgen::KeyPair::generate().expect("test CA key should generate");
+            params
+                .self_signed(&key)
+                .expect("test CA certificate should generate")
+                .pem()
+                .into_bytes()
+        };
+        let shared_pem = ca_pem("shared-ca");
+        let override_pem = ca_pem("grpc-ca");
+        std::fs::write(&shared_path, shared_pem).expect("shared CA should write");
+        std::fs::write(&override_path, &override_pem).expect("gRPC CA should write");
+        let shared_path = shared_path.to_string_lossy().into_owned();
+        let override_path = override_path.to_string_lossy().into_owned();
+        let (args, _) = startup(&[
+            "--backend-connectivity",
+            "reverse",
+            "--tls-cert-path",
+            &shared_path,
+            "--grpc-tls-ca-cert-path",
+            &override_path,
+        ]);
+
+        assert_eq!(
+            load_grpc_tls_ca_cert(&args)
+                .expect("gRPC CA override should load")
+                .as_deref(),
+            Some(override_pem.as_slice())
+        );
+    }
+
+    #[test]
+    fn direct_mode_server_identity_is_not_loaded_as_grpc_trust() {
+        let root = tempfile::tempdir().expect("test directory should create");
+        let cert_path = root.path().join("server.pem");
+        std::fs::write(&cert_path, b"not a CA bundle").expect("server identity should write");
+        let cert_path = cert_path.to_string_lossy().into_owned();
+        let (args, _) = startup(&["--tls-cert-path", &cert_path]);
+
+        assert!(
+            load_grpc_tls_ca_cert(&args)
+                .expect("direct-mode server identity should be ignored for gRPC trust")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn grpc_tls_ca_load_error_rejects_empty_and_malformed_bundles() {
+        for (name, pem) in [
+            ("empty", &b""[..]),
+            (
+                "malformed",
+                &b"-----BEGIN CERTIFICATE-----\ndGVzdA==\n-----END CERTIFICATE-----\n"[..],
+            ),
+        ] {
+            let root = tempfile::tempdir().expect("test directory should create");
+            let path = root.path().join(format!("{name}-grpc-ca.pem"));
+            std::fs::write(&path, pem).expect("test CA should write");
+            let path = path.to_string_lossy().into_owned();
+            let (args, _) = startup(&["--grpc-tls-ca-cert-path", &path]);
+
+            let error = load_grpc_tls_ca_cert(&args).expect_err("invalid gRPC CA should fail");
+            let message = format!("{error:#}");
+
+            assert!(message.contains("contains no valid certificates"));
+            assert!(message.contains(&path));
+        }
+    }
+
+    #[test]
+    fn grpc_tls_ca_load_error_rejects_partially_malformed_bundle() {
+        let root = tempfile::tempdir().expect("test directory should create");
+        let path = root.path().join("partially-malformed-grpc-ca.pem");
+        let mut params = rcgen::CertificateParams::default();
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let key = rcgen::KeyPair::generate().expect("test CA key should generate");
+        let mut pem = params
+            .self_signed(&key)
+            .expect("test CA certificate should generate")
+            .pem()
+            .into_bytes();
+        pem.extend_from_slice(
+            b"-----BEGIN CERTIFICATE-----\ndGVzdA==\n-----END CERTIFICATE-----\n",
+        );
+        std::fs::write(&path, pem).expect("test CA should write");
+        let path = path.to_string_lossy().into_owned();
+        let (args, _) = startup(&["--grpc-tls-ca-cert-path", &path]);
+
+        let error = load_grpc_tls_ca_cert(&args)
+            .expect_err("a bundle with an ignored certificate should fail");
+        assert!(
+            error.to_string().contains("invalid certificate"),
+            "unexpected error: {error:#}"
+        );
+    }
+
+    #[test]
+    fn grpc_tls_ca_load_error_identifies_the_configured_path() {
+        let root = tempfile::tempdir().expect("test directory should create");
+        let path = root.path().join("missing-grpc-ca.pem");
+        let path = path.to_string_lossy().into_owned();
+        let (args, _) = startup(&["--grpc-tls-ca-cert-path", &path]);
+
+        let error = load_grpc_tls_ca_cert(&args).expect_err("missing gRPC CA should fail");
+        let message = format!("{error:#}");
+
+        assert!(message.contains("load gRPC TLS CA certificate"));
+        assert!(message.contains(&path));
     }
 
     #[test]

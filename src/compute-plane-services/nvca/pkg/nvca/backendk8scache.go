@@ -734,6 +734,13 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 		if err != nil && !k8serrors.IsAlreadyExists(err) {
 			return nil, nil, fmt.Errorf("failed to create model cache init namespace: %w", err)
 		}
+		// Patch WorkloadInstanceTypeLabel onto the namespace so the Kyverno
+		// add-unbound-dns policy injects nvcf-unbound nameservers into writer
+		// job pods. Done here (not only in Create) so pre-existing namespaces
+		// on upgraded clusters receive the label immediately at startup.
+		if err := ensureModelCacheNamespaceLabel(ctx, c.clients.K8s.CoreV1().Namespaces(), mcInitNamespace.Name); err != nil {
+			return nil, nil, fmt.Errorf("failed to patch model cache init namespace labels: %w", err)
+		}
 
 		// Network policies must exist in all workload namespaces;
 		// the Helm handler methods will do this for each new namespace.
@@ -743,6 +750,15 @@ func (b *BackendK8sCacheBuilder) Start(ctx context.Context) (*BackendK8sCache, <
 				return nil, nil, fmt.Errorf("create NetworkPolicies in namespace %s: %v",
 					namespace, err)
 			}
+		}
+
+		// One-time migration for clusters that already had the intra-namespace
+		// egress policy in the shared pod-instance namespace before it was scoped
+		// out; ensureNetworkPolicies above does not remove it on its own. Best
+		// effort: failing to remove a leftover policy should not block agent
+		// startup, since it does not affect the agent's ability to operate.
+		if err := k8sutil.RemoveLegacyIntraNamespaceEgressPolicy(ctx, c.podInstanceNamespace, c.clients.K8s); err != nil {
+			log.WithError(err).Warnf("failed to remove legacy NetworkPolicy in namespace %s", c.podInstanceNamespace)
 		}
 
 		// add configMapInformers for Network Policy for k8s backend only
@@ -1530,6 +1546,9 @@ func (c *BackendK8sCache) GetNodeInformer() cache.SharedIndexInformer {
 
 func (c *BackendK8sCache) GetComponentStatus(ctx context.Context) (hs types.AgentHealth, err error) {
 	hs.GPUUsage, err = c.getGPUUsageStats(ctx)
+	if hs.GPUUsage == nil {
+		hs.GPUUsage = map[nvcatypes.GPUName]nvcatypes.GPUResource{}
+	}
 	hs.Status = types.HealthStatusHealthy
 	ch := types.ComponentHealth{
 		Status:      types.HealthStatusHealthy,
@@ -1725,13 +1744,14 @@ func (c *BackendK8sCache) getGPUUsageStats(ctx context.Context) (map[nvcatypes.G
 			continue
 		}
 		for _, it := range regGPU.InstanceTypes {
-			if strings.HasSuffix(it.Name, "_1x") {
-				res := gpuUtil[nvcatypes.GPUName(regGPU.Name)]
-				res.Capacity += it.MaxInstances * it.GPUCount
-				res.Allocated += allocatedGPUs[it.Value]
-				gpuUtil[nvcatypes.GPUName(regGPU.Name)] = res
-				break
+			if it.NodeType != nvcatypes.RegistrationInstanceTypeNodeTypeSingle {
+				continue
 			}
+			res := gpuUtil[nvcatypes.GPUName(regGPU.Name)]
+			res.Capacity += it.MaxInstances * it.GPUCount
+			res.Allocated += allocatedGPUs[it.Value]
+			gpuUtil[nvcatypes.GPUName(regGPU.Name)] = res
+			break
 		}
 	}
 	return gpuUtil, nil

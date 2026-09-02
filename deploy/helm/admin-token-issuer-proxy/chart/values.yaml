@@ -39,7 +39,7 @@ adminIssuerProxy:
     pullPolicy: IfNotPresent
 
     # Image tag to use. Defaults to the appVersion from Chart.yaml if not specified.
-    tag: "1.0.2"
+    tag: "1.1.0"
 
   # List of image pull secrets for accessing private container registries.
   # Example:
@@ -182,10 +182,10 @@ adminIssuerProxy:
     periodSeconds: 30
 
   # Readiness probe configuration. Kubernetes uses this to determine if the pod should receive traffic.
-  # The probe checks the /healthz endpoint to verify the service is ready to handle requests.
+  # The probe checks /readyz so metadata initialization remains distinct from liveness.
   readinessProbe:
     httpGet:
-      path: /healthz
+      path: /readyz
       port: 8080
     # Wait time before the first probe is executed after container start
     initialDelaySeconds: 5

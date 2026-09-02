@@ -1,0 +1,28 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("//rules/oci:defs.bzl", "go_oci_image")
+
+go_library(
+    name = "cmd_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/NVIDIA/nvcf/src/compute-plane-services/request-trace-uploader/cmd",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//src/compute-plane-services/request-trace-uploader/backend",
+        "//src/compute-plane-services/request-trace-uploader/config",
+        "//src/compute-plane-services/request-trace-uploader/service",
+    ],
+)
+
+go_binary(
+    name = "request-trace-uploader",
+    embed = [":cmd_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_oci_image(
+    name = "image",
+    base = "@distroless_go",
+    binary = ":request-trace-uploader",
+    tags = ["nvcf-request-trace-uploader"],
+    visibility = ["//visibility:public"],
+)

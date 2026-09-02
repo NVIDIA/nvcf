@@ -19,6 +19,7 @@ package steps
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"io"
 	"os"
@@ -33,17 +34,38 @@ import (
 )
 
 type recordedRun struct {
-	command string
+	command        string
+	sensitiveStdin string
 }
 
 type fakeRunner struct {
-	runs   []recordedRun
-	result harness.Result
-	err    error
+	runs       []recordedRun
+	result     harness.Result
+	runResults []harness.Result
+	err        error
+	runHook    func(context.Context, int) (harness.Result, error)
 }
 
-func (f *fakeRunner) Run(_ context.Context, command string) (harness.Result, error) {
+func (f *fakeRunner) Run(ctx context.Context, command string) (harness.Result, error) {
 	f.runs = append(f.runs, recordedRun{command: command})
+	if f.runHook != nil {
+		return f.runHook(ctx, len(f.runs))
+	}
+	if index := len(f.runs) - 1; index < len(f.runResults) {
+		return f.runResults[index], f.err
+	}
+	return f.result, f.err
+}
+
+func (f *fakeRunner) RunWithSensitiveStdin(
+	_ context.Context,
+	command,
+	sensitiveStdin string,
+) (harness.Result, error) {
+	f.runs = append(f.runs, recordedRun{command: command, sensitiveStdin: sensitiveStdin})
+	if index := len(f.runs) - 1; index < len(f.runResults) {
+		return f.runResults[index], f.err
+	}
 	return f.result, f.err
 }
 
@@ -90,6 +112,239 @@ func TestICopyFileSnapshotsAndCopies(t *testing.T) {
 	}
 	if _, err := os.Stat(destAbs); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("dest should be deleted: %v", err)
+	}
+}
+
+func TestIPrepareHelmfileEnvironmentCopiesUpdatesAndRestoresAbsentDestination(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	t.Setenv("BDD_TMP_ENV_FIXTURE", "fixtures/base.yaml")
+	t.Setenv("SAMPLE_NGC_ORG", "test-org")
+	t.Setenv("SAMPLE_NGC_TEAM", "test-team")
+	fixtureAbs := filepath.Join(sc.Suite.Config.RepoRoot, "fixtures", "base.yaml")
+	if err := os.MkdirAll(filepath.Dir(fixtureAbs), 0o755); err != nil {
+		t.Fatalf("mkdir fixture: %v", err)
+	}
+	if err := os.WriteFile(fixtureAbs, []byte("global:\n  storageClass: local-path\n"), 0o644); err != nil {
+		t.Fatalf("seed fixture: %v", err)
+	}
+	table := docTable(t, [][]string{
+		{"global.imagePullSecrets[0].name", "nvcr-pull-secret"},
+		{"global.image.repository", "${SAMPLE_NGC_ORG}/${SAMPLE_NGC_TEAM}"},
+	})
+
+	if err := sc.iPrepareHelmfileEnvironment("local-bdd", "self-managed", "${BDD_TMP_ENV_FIXTURE}", table); err != nil {
+		t.Fatalf("prepare environment: %v", err)
+	}
+	dest := filepath.Join(sc.Suite.Config.RepoRoot, "deploy", "stacks", "self-managed", "environments", "local-bdd.yaml")
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read destination: %v", err)
+	}
+	for _, want := range []string{"storageClass: local-path", "name: nvcr-pull-secret", "repository: test-org/test-team"} {
+		if !strings.Contains(string(got), want) {
+			t.Fatalf("destination missing %q:\n%s", want, got)
+		}
+	}
+
+	if err := sc.Suite.Ledger.RestoreAll(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if _, err := os.Stat(dest); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("generated destination should be removed: %v", err)
+	}
+}
+
+func TestIPrepareHelmfileEnvironmentRestoresExistingDestination(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	fixture := "fixtures/base.yaml"
+	fixtureAbs := filepath.Join(sc.Suite.Config.RepoRoot, fixture)
+	if err := os.MkdirAll(filepath.Dir(fixtureAbs), 0o755); err != nil {
+		t.Fatalf("mkdir fixture: %v", err)
+	}
+	if err := os.WriteFile(fixtureAbs, []byte("global: {}\n"), 0o644); err != nil {
+		t.Fatalf("seed fixture: %v", err)
+	}
+	dest := filepath.Join(sc.Suite.Config.RepoRoot, "deploy", "stacks", "observability", "environments", "existing.yaml")
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		t.Fatalf("mkdir destination: %v", err)
+	}
+	original := []byte("operatorAuthored: true\n")
+	if err := os.WriteFile(dest, original, 0o640); err != nil {
+		t.Fatalf("seed destination: %v", err)
+	}
+	table := docTable(t, [][]string{{"observability.mode", "install"}})
+
+	if err := sc.iPrepareHelmfileEnvironment("existing", "observability", fixture, table); err != nil {
+		t.Fatalf("prepare environment: %v", err)
+	}
+	if err := sc.Suite.Ledger.RestoreAll(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read restored destination: %v", err)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("restored body = %q, want %q", got, original)
+	}
+	info, err := os.Stat(dest)
+	if err != nil {
+		t.Fatalf("stat restored destination: %v", err)
+	}
+	if info.Mode().Perm() != 0o640 {
+		t.Fatalf("restored mode = %o, want 640", info.Mode().Perm())
+	}
+}
+
+func TestIPrepareHelmfileEnvironmentRejectsInvalidNamesBeforeWriting(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	table := docTable(t, [][]string{{"global.image.registry", "nvcr.io"}})
+	for _, tc := range []struct {
+		name        string
+		environment string
+		stack       string
+	}{
+		{name: "unsupported stack", environment: "local", stack: "unknown"},
+		{name: "unsafe environment", environment: "../local", stack: "self-managed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := sc.iPrepareHelmfileEnvironment(tc.environment, tc.stack, "missing.yaml", table); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+	if _, err := os.Stat(filepath.Join(sc.Suite.Config.RepoRoot, "deploy")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("validation failure should not create deploy tree: %v", err)
+	}
+}
+
+func TestIPrepareSelfManagedSecretsFileRendersInterpolatedPaths(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NGC_API_KEY", "test-api-key")
+	t.Setenv("BDD_TMP_SECRETS_NAME", "local-bdd-secrets.yaml")
+	t.Setenv("BDD_TMP_TEMPLATE_NAME", "secrets.yaml.template")
+	templateRel := "templates/${BDD_TMP_TEMPLATE_NAME}"
+	templateAbs := filepath.Join(sc.Suite.Config.RepoRoot, "templates", "secrets.yaml.template")
+	if err := os.MkdirAll(filepath.Dir(templateAbs), 0o755); err != nil {
+		t.Fatalf("mkdir template: %v", err)
+	}
+	if err := os.WriteFile(templateAbs, []byte("registryCredential: REPLACE_WITH_BASE64_DOCKER_CREDENTIAL\n"), 0o644); err != nil {
+		t.Fatalf("seed template: %v", err)
+	}
+
+	destRel := "secrets/${BDD_TMP_SECRETS_NAME}"
+	if err := sc.iPrepareSelfManagedSecretsFile(destRel, templateRel); err != nil {
+		t.Fatalf("prepare secrets: %v", err)
+	}
+	destAbs := filepath.Join(sc.Suite.Config.RepoRoot, "secrets", "local-bdd-secrets.yaml")
+	got, err := os.ReadFile(destAbs)
+	if err != nil {
+		t.Fatalf("read destination: %v", err)
+	}
+	wantCredential := base64.StdEncoding.EncodeToString([]byte("$oauthtoken:test-api-key"))
+	if string(got) != "registryCredential: "+wantCredential+"\n" {
+		t.Fatalf("destination body does not contain the expected encoded credential")
+	}
+	info, err := os.Stat(destAbs)
+	if err != nil {
+		t.Fatalf("stat destination: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("destination mode = %o, want 600", info.Mode().Perm())
+	}
+	if len(fake.runs) != 0 {
+		t.Fatalf("secret preparation wrote %d command log entries, want 0", len(fake.runs))
+	}
+}
+
+func TestIPrepareSelfManagedSecretsFileRestoresExistingDestination(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	t.Setenv("NGC_API_KEY", "test-api-key")
+	templateRel := "secrets.yaml.template"
+	templateAbs := filepath.Join(sc.Suite.Config.RepoRoot, templateRel)
+	if err := os.WriteFile(templateAbs, []byte("registryCredential: REPLACE_WITH_BASE64_DOCKER_CREDENTIAL\n"), 0o600); err != nil {
+		t.Fatalf("seed template: %v", err)
+	}
+	destRel := "local-secrets.yaml"
+	destAbs := filepath.Join(sc.Suite.Config.RepoRoot, destRel)
+	original := []byte("operator-authored: original\n")
+	if err := os.WriteFile(destAbs, original, 0o640); err != nil {
+		t.Fatalf("seed destination: %v", err)
+	}
+
+	if err := sc.iPrepareSelfManagedSecretsFile(destRel, templateRel); err != nil {
+		t.Fatalf("prepare secrets: %v", err)
+	}
+	renderedInfo, err := os.Stat(destAbs)
+	if err != nil {
+		t.Fatalf("stat rendered destination: %v", err)
+	}
+	if renderedInfo.Mode().Perm() != 0o600 {
+		t.Fatalf("rendered destination mode = %o, want 600", renderedInfo.Mode().Perm())
+	}
+	if err := sc.Suite.Ledger.RestoreAll(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	got, err := os.ReadFile(destAbs)
+	if err != nil {
+		t.Fatalf("read restored destination: %v", err)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("restored body = %q, want original", got)
+	}
+	info, err := os.Stat(destAbs)
+	if err != nil {
+		t.Fatalf("stat restored destination: %v", err)
+	}
+	if info.Mode().Perm() != 0o640 {
+		t.Fatalf("restored mode = %o, want 640", info.Mode().Perm())
+	}
+}
+
+func TestIPrepareSelfManagedSecretsFileRestoresAbsentDestination(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	t.Setenv("NGC_API_KEY", "test-api-key")
+	templateRel := "secrets.yaml.template"
+	templateAbs := filepath.Join(sc.Suite.Config.RepoRoot, templateRel)
+	if err := os.WriteFile(templateAbs, []byte("registryCredential: REPLACE_WITH_BASE64_DOCKER_CREDENTIAL\n"), 0o600); err != nil {
+		t.Fatalf("seed template: %v", err)
+	}
+	destRel := "generated/local-secrets.yaml"
+	destAbs := filepath.Join(sc.Suite.Config.RepoRoot, destRel)
+
+	if err := sc.iPrepareSelfManagedSecretsFile(destRel, templateRel); err != nil {
+		t.Fatalf("prepare secrets: %v", err)
+	}
+	if err := sc.Suite.Ledger.RestoreAll(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if _, err := os.Stat(destAbs); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("generated destination should be removed: %v", err)
+	}
+}
+
+func TestIPrepareSelfManagedSecretsFileFailureHidesCredentialMaterial(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	apiKey := "sensitive-test-api-key"
+	t.Setenv("NGC_API_KEY", apiKey)
+	templateRel := "secrets.yaml.template"
+	templateAbs := filepath.Join(sc.Suite.Config.RepoRoot, templateRel)
+	if err := os.WriteFile(templateAbs, []byte("registryCredential: missing\n"), 0o600); err != nil {
+		t.Fatalf("seed template: %v", err)
+	}
+
+	err := sc.iPrepareSelfManagedSecretsFile("local-secrets.yaml", templateRel)
+	if err == nil {
+		t.Fatal("expected missing-placeholder error")
+	}
+	encoded := base64.StdEncoding.EncodeToString([]byte("$oauthtoken:" + apiKey))
+	for _, secret := range []string{apiKey, encoded} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("error leaked credential material: %v", err)
+		}
+	}
+	if len(fake.runs) != 0 {
+		t.Fatalf("failed secret preparation wrote %d command log entries, want 0", len(fake.runs))
 	}
 }
 
@@ -546,6 +801,70 @@ func TestSingleClusterBootstrapCachesAcrossCalls(t *testing.T) {
 	}
 }
 
+func TestHelmRegistryAuthenticationUsesSensitiveStdinAndCaches(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NGC_API_KEY", "super-secret-token")
+	t.Setenv("BDD_TMP_REGISTRY", "nvcr.io")
+
+	for i := 0; i < 2; i++ {
+		if err := sc.helmIsAuthenticatedToOCIRegistry(context.Background(), "${BDD_TMP_REGISTRY}"); err != nil {
+			t.Fatalf("authenticate call %d: %v", i+1, err)
+		}
+	}
+	if len(fake.runs) != 1 {
+		t.Fatalf("runs = %d, want 1", len(fake.runs))
+	}
+	wantCommand := "helm registry login nvcr.io --username '$oauthtoken' --password-stdin"
+	if fake.runs[0].command != wantCommand {
+		t.Fatalf("command = %q, want %q", fake.runs[0].command, wantCommand)
+	}
+	if fake.runs[0].sensitiveStdin != "super-secret-token" {
+		t.Fatal("NGC API key was not supplied through sensitive stdin")
+	}
+	if strings.Contains(fake.runs[0].command, "super-secret-token") {
+		t.Fatalf("NGC API key leaked into command: %q", fake.runs[0].command)
+	}
+	if sc.LastResult.ExitCode != 0 {
+		t.Fatalf("cached result exit code = %d, want 0", sc.LastResult.ExitCode)
+	}
+}
+
+func TestHelmRegistryAuthenticationRedactsFailure(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	const apiKey = "super-secret-token"
+	t.Setenv("NGC_API_KEY", apiKey)
+	fake.result = harness.Result{ExitCode: 1, Stderr: "unauthorized: " + apiKey}
+	fake.err = errors.New("login failed for " + apiKey)
+
+	err := sc.helmIsAuthenticatedToOCIRegistry(context.Background(), "nvcr.io")
+	if err == nil {
+		t.Fatal("expected authentication failure")
+	}
+	for label, value := range map[string]string{
+		"returned error": err.Error(),
+		"LastErr":        sc.LastErr.Error(),
+		"stderr":         sc.LastResult.Stderr,
+	} {
+		if strings.Contains(value, apiKey) {
+			t.Fatalf("%s leaked NGC API key: %q", label, value)
+		}
+	}
+	if !strings.Contains(err.Error(), "exit code 1") || !strings.Contains(err.Error(), "unauthorized") {
+		t.Fatalf("error lacks useful diagnostics: %v", err)
+	}
+}
+
+func TestHelmRegistryAuthenticationRequiresAPIKey(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("NGC_API_KEY", "")
+	if err := sc.helmIsAuthenticatedToOCIRegistry(context.Background(), "nvcr.io"); err == nil {
+		t.Fatal("expected error when NGC_API_KEY is unset")
+	}
+	if len(fake.runs) != 0 {
+		t.Fatalf("runs = %d, want 0", len(fake.runs))
+	}
+}
+
 func TestKubernetesResourcesShouldExistRunsExplicitGets(t *testing.T) {
 	sc, fake := newScenarioContext(t)
 	fake.result = harness.Result{ExitCode: 0}
@@ -642,6 +961,193 @@ func TestKubernetesResourcesValidateAllRowsBeforeRunning(t *testing.T) {
 	}
 }
 
+func TestKubernetesResourceShouldContainRunsExplicitYAMLGet(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0, Stdout: `spec:
+  targetAllocator:
+    enabled: true
+`}
+	doc := &godog.DocString{Content: `spec:
+  targetAllocator:
+    enabled: true
+`}
+
+	if err := sc.kubernetesResourceShouldContain(
+		context.Background(),
+		"OpenTelemetryCollector",
+		"nvcf-observability",
+		"monitoring",
+		"k3d-ncp-local",
+		doc,
+	); err != nil {
+		t.Fatalf("assert Kubernetes resource YAML: %v", err)
+	}
+	want := "kubectl get opentelemetrycollector/nvcf-observability --namespace monitoring --context k3d-ncp-local -o yaml"
+	if len(fake.runs) != 1 || fake.runs[0].command != want {
+		t.Fatalf("runs = %#v, want %q", fake.runs, want)
+	}
+}
+
+func TestDeploymentShouldCompleteRolloutRunsExplicitWait(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0}
+
+	if err := sc.deploymentShouldCompleteRollout(context.Background(), "nvca-operator", "nvca-operator", "k3d-ncp-local", "10m"); err != nil {
+		t.Fatalf("wait for deployment rollout: %v", err)
+	}
+	want := "kubectl rollout status deployment/nvca-operator -n nvca-operator --context k3d-ncp-local --timeout=10m"
+	if len(fake.runs) != 1 || fake.runs[0].command != want {
+		t.Fatalf("runs = %#v, want %q", fake.runs, want)
+	}
+}
+
+func TestKubernetesResourceShouldContainFailureDoesNotExposeResourceValues(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0, Stdout: `data:
+  token: actual-secret-value
+`}
+	doc := &godog.DocString{Content: `data:
+  token: expected-secret-value
+`}
+
+	err := sc.kubernetesResourceShouldContain(
+		context.Background(),
+		"Secret",
+		"credentials",
+		"nvcf",
+		"k3d-ncp-local",
+		doc,
+	)
+	if err == nil {
+		t.Fatal("expected mismatch")
+	}
+	for _, sensitive := range []string{"actual-secret-value", "expected-secret-value"} {
+		if strings.Contains(err.Error(), sensitive) {
+			t.Fatalf("error %q exposes %q", err, sensitive)
+		}
+	}
+}
+
+func TestNVCFBackendShouldReportAgentStatusRunsExplicitWait(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0}
+
+	if err := sc.nvcfBackendShouldReportAgentStatus(context.Background(), "ncp-local", "nvca-operator", "k3d-ncp-local", "healthy", "10m"); err != nil {
+		t.Fatalf("wait for NVCFBackend status: %v", err)
+	}
+	want := "kubectl wait nvcfbackend ncp-local -n nvca-operator --context k3d-ncp-local --for=jsonpath={.status.agentStatus}=healthy --timeout=10m"
+	if len(fake.runs) != 1 || fake.runs[0].command != want {
+		t.Fatalf("runs = %#v, want %q", fake.runs, want)
+	}
+}
+
+func TestGatewayAPIRoutesShouldBeAcceptedAndResolvedRunsExplicitWaits(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0}
+	t.Setenv("BDD_ROUTE_NAMESPACE", "nvcf")
+	table := docTable(t, [][]string{
+		{"kind", "name", "namespace", "parent"},
+		{"HTTPRoute", "nvcf-api-control-plane", "${BDD_ROUTE_NAMESPACE}", "shared-gw"},
+		{"GRPCRoute", "nvcf-api-control-plane-grpc", "nvcf", "api-grpc-gw"},
+	})
+
+	if err := sc.gatewayAPIRoutesShouldBeAcceptedAndResolved(context.Background(), "k3d-ncp-local-cp", "2m", table); err != nil {
+		t.Fatalf("wait for Gateway API routes: %v", err)
+	}
+	want := []string{
+		`kubectl wait httproute/nvcf-api-control-plane -n nvcf --context k3d-ncp-local-cp '--for=jsonpath={.status.parents[?(@.parentRef.name=="shared-gw")].conditions[?(@.type=="Accepted")].status}=True' --timeout=2m`,
+		`kubectl wait grpcroute/nvcf-api-control-plane-grpc -n nvcf --context k3d-ncp-local-cp '--for=jsonpath={.status.parents[?(@.parentRef.name=="api-grpc-gw")].conditions[?(@.type=="Accepted")].status}=True' --timeout=2m`,
+		`kubectl wait httproute/nvcf-api-control-plane -n nvcf --context k3d-ncp-local-cp '--for=jsonpath={.status.parents[?(@.parentRef.name=="shared-gw")].conditions[?(@.type=="ResolvedRefs")].status}=True' --timeout=2m`,
+		`kubectl wait grpcroute/nvcf-api-control-plane-grpc -n nvcf --context k3d-ncp-local-cp '--for=jsonpath={.status.parents[?(@.parentRef.name=="api-grpc-gw")].conditions[?(@.type=="ResolvedRefs")].status}=True' --timeout=2m`,
+	}
+	if len(fake.runs) != len(want) {
+		t.Fatalf("runs = %d, want %d", len(fake.runs), len(want))
+	}
+	for index, run := range fake.runs {
+		if run.command != want[index] {
+			t.Fatalf("command %d = %q, want %q", index+1, run.command, want[index])
+		}
+	}
+}
+
+func TestGatewayAPIRoutesShouldBeAcceptedAndResolvedNamesFailingRowAndCondition(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	secretOutput := "route-resource-secret-value"
+	fake.runResults = []harness.Result{
+		{ExitCode: 0},
+		{ExitCode: 0},
+		{ExitCode: 0},
+		{ExitCode: 1, Stdout: secretOutput, Stderr: secretOutput},
+	}
+	table := docTable(t, [][]string{
+		{"kind", "name", "namespace", "parent"},
+		{"HTTPRoute", "nvcf-api-control-plane", "nvcf", "shared-gw"},
+		{"GRPCRoute", "nvcf-api-control-plane-grpc", "nvcf", "api-grpc-gw"},
+	})
+
+	err := sc.gatewayAPIRoutesShouldBeAcceptedAndResolved(context.Background(), "k3d-ncp-local-cp", "2m", table)
+	if err == nil {
+		t.Fatal("expected route readiness failure")
+	}
+	for _, want := range []string{"row 2", "GRPCRoute/nvcf-api-control-plane-grpc", `namespace "nvcf"`, `parent "api-grpc-gw"`, `condition "ResolvedRefs"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error = %q, want %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), secretOutput) {
+		t.Fatalf("error leaked command output: %v", err)
+	}
+}
+
+func TestGatewayAPIRouteTableRejectsEmptyFieldsBeforeRunning(t *testing.T) {
+	for _, row := range [][]string{{"", "route", "nvcf", "gateway"}, {"HTTPRoute", "", "nvcf", "gateway"}, {"HTTPRoute", "route", "", "gateway"}, {"HTTPRoute", "route", "nvcf", ""}} {
+		sc, fake := newScenarioContext(t)
+		table := docTable(t, [][]string{{"kind", "name", "namespace", "parent"}, {"HTTPRoute", "valid", "nvcf", "gateway"}, row})
+		if err := sc.gatewayAPIRoutesShouldBeAcceptedAndResolved(context.Background(), "k3d-ncp-local-cp", "2m", table); err == nil {
+			t.Fatalf("expected validation error for row %#v", row)
+		}
+		if len(fake.runs) != 0 {
+			t.Fatalf("runs = %d, want 0 before all rows validate", len(fake.runs))
+		}
+	}
+}
+
+func TestKubernetesReadinessFailuresNameTargetWithoutCommandOutput(t *testing.T) {
+	secretOutput := "registry-token-value"
+	for _, test := range []struct {
+		name string
+		run  func(*ScenarioContext) error
+		want string
+	}{
+		{
+			name: "deployment",
+			run: func(sc *ScenarioContext) error {
+				return sc.deploymentShouldCompleteRollout(context.Background(), "nvca-operator", "nvca-operator", "k3d-ncp-local", "10m")
+			},
+			want: "deployment \"nvca-operator\" did not complete rollout",
+		},
+		{
+			name: "backend",
+			run: func(sc *ScenarioContext) error {
+				return sc.nvcfBackendShouldReportAgentStatus(context.Background(), "ncp-local", "nvca-operator", "k3d-ncp-local", "healthy", "10m")
+			},
+			want: "NVCFBackend \"ncp-local\" did not report agent status \"healthy\"",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sc, fake := newScenarioContext(t)
+			fake.result = harness.Result{ExitCode: 1, Stdout: secretOutput, Stderr: secretOutput}
+			err := test.run(sc)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want target context", err)
+			}
+			if strings.Contains(err.Error(), secretOutput) {
+				t.Fatalf("error leaked command output: %v", err)
+			}
+		})
+	}
+}
+
 func TestHelmReleasesShouldBeDeployedRunsSingleExplicitList(t *testing.T) {
 	sc, fake := newScenarioContext(t)
 	fake.result = harness.Result{ExitCode: 0, Stdout: `[{"name":"nats","namespace":"nats-system","revision":"1","status":"deployed"}]`}
@@ -659,6 +1165,65 @@ func TestHelmReleasesShouldBeDeployedRunsSingleExplicitList(t *testing.T) {
 	want := "helm list --all-namespaces --kube-context k3d-ncp-local -o json"
 	if fake.runs[0].command != want {
 		t.Fatalf("command = %q, want %q", fake.runs[0].command, want)
+	}
+}
+
+func TestHelmReleaseShouldContainValuesRunsExplicitYAMLGet(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	t.Setenv("BDD_TMP_RELEASE", "nvca-operator")
+	fake.result = harness.Result{ExitCode: 0, Stdout: `selfManaged:
+  otelCollector:
+    enabled: true
+    imageTag: 0.157.9
+`}
+	doc := &godog.DocString{Content: `selfManaged:
+  otelCollector:
+    enabled: true
+`}
+
+	if err := sc.helmReleaseShouldContainValues(
+		context.Background(),
+		"${BDD_TMP_RELEASE}",
+		"nvca-operator",
+		"k3d-ncp-local",
+		doc,
+	); err != nil {
+		t.Fatalf("assert Helm release values: %v", err)
+	}
+	want := "helm get values nvca-operator --namespace nvca-operator --kube-context k3d-ncp-local -o yaml"
+	if len(fake.runs) != 1 || fake.runs[0].command != want {
+		t.Fatalf("runs = %#v, want %q", fake.runs, want)
+	}
+}
+
+func TestHelmReleaseShouldContainValuesFailureDoesNotExposeValues(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0, Stdout: `selfManaged:
+  registryCredential: actual-secret-value
+`}
+	doc := &godog.DocString{Content: `selfManaged:
+  registryCredential: expected-secret-value
+`}
+
+	err := sc.helmReleaseShouldContainValues(
+		context.Background(),
+		"nvca-operator",
+		"nvca-operator",
+		"k3d-ncp-local",
+		doc,
+	)
+	if err == nil {
+		t.Fatal("expected mismatch")
+	}
+	for _, want := range []string{`helm release "nvca-operator"`, "selfManaged.registryCredential"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not contain %q", err, want)
+		}
+	}
+	for _, sensitive := range []string{"actual-secret-value", "expected-secret-value"} {
+		if strings.Contains(err.Error(), sensitive) {
+			t.Fatalf("error %q exposes %q", err, sensitive)
+		}
 	}
 }
 
@@ -713,23 +1278,6 @@ func TestRegisterAllRunsAFeatureFile(t *testing.T) {
 	}
 	if status := suite.Run(); status != 0 {
 		t.Fatalf("suite status = %d", status)
-	}
-}
-
-func TestISubstituteBase64DoesNotReturnSecretMaterial(t *testing.T) {
-	sc, _ := newScenarioContext(t)
-	rel := "secrets.yaml"
-	abs := filepath.Join(sc.Suite.Config.RepoRoot, rel)
-	if err := os.WriteFile(abs, []byte("token: REPLACE_ME\n"), 0o600); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-	t.Setenv("BDD_TMP_API_KEY", "real-secret-token")
-	if err := sc.iSubstituteBase64("REPLACE_ME", rel, "${BDD_TMP_API_KEY}"); err != nil {
-		t.Fatalf("substitute: %v", err)
-	}
-	got, _ := os.ReadFile(abs)
-	if strings.Contains(string(got), "real-secret-token") {
-		t.Fatalf("raw secret leaked into file body:\n%s", got)
 	}
 }
 
@@ -867,6 +1415,171 @@ func TestCommandOutputContainsAssertion(t *testing.T) {
 	}
 	if err := sc.commandOutputShouldNotContain("deployed"); err == nil {
 		t.Fatal("expected mismatch for not-contain")
+	}
+}
+
+func TestCommandShouldFailAcceptsNonZeroWithoutCaching(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	sc.LastCommand = "grpcurl rejected-call"
+	sc.LastResult = harness.Result{ExitCode: 1, Stderr: "certificate is not trusted"}
+
+	if err := sc.commandShouldFail(); err != nil {
+		t.Fatalf("assert command failure: %v", err)
+	}
+	if sc.Suite.Cache.Has(sc.LastCommand) {
+		t.Fatal("failed command should not enter the successful-command cache")
+	}
+
+	sc.LastResult = harness.Result{ExitCode: 0}
+	if err := sc.commandShouldFail(); err == nil {
+		t.Fatal("expected successful command to fail the negative assertion")
+	}
+}
+
+func TestCommandOutputTableAssertionsInterpolateExpectedText(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	t.Setenv("BDD_EXPECTED_DIAGNOSTIC", "certificate is not trusted")
+	sc.LastResult = harness.Result{
+		Stdout: "request rejected\n",
+		Stderr: "certificate is not trusted\ncontext deadline exceeded\n",
+	}
+
+	all := docTable(t, [][]string{
+		{"text"},
+		{"${BDD_EXPECTED_DIAGNOSTIC}"},
+		{"context deadline exceeded"},
+	})
+	if err := sc.commandOutputShouldContainAll(all); err != nil {
+		t.Fatalf("contain all: %v", err)
+	}
+
+	oneOf := docTable(t, [][]string{
+		{"text"},
+		{"certificate signed by unknown authority"},
+		{"${BDD_EXPECTED_DIAGNOSTIC}"},
+	})
+	if err := sc.commandOutputShouldContainOneOf(oneOf); err != nil {
+		t.Fatalf("contain one of: %v", err)
+	}
+}
+
+func TestCommandOutputAssertionsRejectValuesThatInterpolateToEmpty(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	t.Setenv("BDD_EMPTY_EXPECTATION", "")
+	sc.LastResult = harness.Result{Stdout: "any output contains the empty string"}
+
+	if err := sc.commandOutputShouldContain("${BDD_EMPTY_EXPECTATION}"); err == nil {
+		t.Fatal("expected empty single-value expectation to fail")
+	}
+	if err := sc.commandOutputShouldNotContain("${BDD_EMPTY_EXPECTATION}"); err == nil {
+		t.Fatal("expected empty negative expectation to fail validation")
+	}
+
+	containAll := docTable(t, [][]string{
+		{"text"},
+		{"${BDD_EMPTY_EXPECTATION}"},
+	})
+	if err := sc.commandOutputShouldContainAll(containAll); err == nil {
+		t.Fatal("expected contain-all table with an empty resolved value to fail")
+	}
+	containOneOf := docTable(t, [][]string{
+		{"text"},
+		{"any output"},
+		{"${BDD_EMPTY_EXPECTATION}"},
+	})
+	if err := sc.commandOutputShouldContainOneOf(containOneOf); err == nil {
+		t.Fatal("expected contain-one-of table with an empty resolved value to fail")
+	}
+}
+
+func TestCommandOutputShouldNotMatchRejectsDashedPodIPAlias(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	const pattern = `([0-9]{1,3}-){3}[0-9]{1,3}\.`
+
+	sc.LastResult = harness.Result{Stdout: "llm-request-router-region-b-0.nvcf.svc.cluster.local"}
+	if err := sc.commandOutputShouldNotMatch(pattern); err != nil {
+		t.Fatalf("stable identity should pass: %v", err)
+	}
+
+	sc.LastResult = harness.Result{Stdout: "10-42-0-7.llm-request-router-region-b-headless.nvcf.svc.cluster.local"}
+	if err := sc.commandOutputShouldNotMatch(pattern); err == nil {
+		t.Fatal("expected dashed pod-IP alias failure")
+	}
+}
+
+func TestCommandOutputShouldHaveDistinctMatchesCountsUniqueIdentities(t *testing.T) {
+	sc, _ := newScenarioContext(t)
+	sc.LastResult = harness.Result{
+		Stdout: "llm-request-router-region-b-0 llm-request-router-region-b-1 llm-request-router-region-b-0",
+	}
+
+	if err := sc.commandOutputShouldHaveDistinctMatches(2, "llm-request-router-region-b-[0-9]+"); err != nil {
+		t.Fatalf("two distinct identities should pass: %v", err)
+	}
+	err := sc.commandOutputShouldHaveDistinctMatches(3, "llm-request-router-region-b-[0-9]+")
+	if err == nil {
+		t.Fatal("expected distinct match count failure")
+	}
+	if !strings.Contains(err.Error(), "want 3") {
+		t.Fatalf("error = %q, want expected-count detail", err)
+	}
+}
+
+func TestISuccessfullyObserveWatchStargatesRunsExplicitCommand(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0, Stdout: "{\n  \"stargates\": []\n}\n"}
+
+	err := sc.iSuccessfullyObserveWatchStargates(
+		context.Background(),
+		"127.0.0.1:50071",
+		"llm-request-router.nvcf.svc.cluster.local",
+		"stargate-quic-tls",
+		"nvcf",
+		"k3d-ncp-local-cp",
+		"3",
+	)
+	if err != nil {
+		t.Fatalf("observe WatchStargates: %v", err)
+	}
+	want := "bash tests/bdd/scripts/observe-watch-stargates.sh 127.0.0.1:50071 llm-request-router.nvcf.svc.cluster.local stargate-quic-tls nvcf k3d-ncp-local-cp 3"
+	if len(fake.runs) != 1 || fake.runs[0].command != want {
+		t.Fatalf("runs = %#v, want %q", fake.runs, want)
+	}
+	if !strings.Contains(sc.LastResult.Stdout, "stargates") {
+		t.Fatalf("last result = %#v, want preserved WatchStargates output", sc.LastResult)
+	}
+}
+
+func TestEveryPylonForFunctionShouldReportMetricsRunsVisibleExpectations(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	fake.result = harness.Result{ExitCode: 0}
+	table := docTable(t, [][]string{
+		{"metric", "comparison", "count"},
+		{"pylon_registration_stream_connected", "exactly", "5"},
+		{"pylon_reverse_tunnel_connected", "at least", "3"},
+	})
+
+	if err := sc.everyPylonForFunctionShouldReportMetrics(context.Background(), "bdd-registration-tls", "llm-worker", "k3d-ncp-local-compute-1", "10m", table); err != nil {
+		t.Fatalf("observe Pylon metrics: %v", err)
+	}
+	want := "bash tests/bdd/scripts/wait-pylon-metrics.sh bdd-registration-tls llm-worker k3d-ncp-local-compute-1 10m pylon_registration_stream_connected exactly 5 pylon_reverse_tunnel_connected 'at least' 3"
+	if len(fake.runs) != 1 || fake.runs[0].command != want {
+		t.Fatalf("runs = %#v, want %q", fake.runs, want)
+	}
+}
+
+func TestPylonMetricTableRejectsInvalidStructureBeforeRunning(t *testing.T) {
+	sc, fake := newScenarioContext(t)
+	table := docTable(t, [][]string{
+		{"metric", "comparison", "count"},
+		{"pylon_registration_stream_connected", "exactly", "not-a-count"},
+	})
+
+	if err := sc.everyPylonForFunctionShouldReportMetrics(context.Background(), "function", "llm-worker", "context", "10m", table); err == nil {
+		t.Fatal("expected invalid count error")
+	}
+	if len(fake.runs) != 0 {
+		t.Fatalf("runs = %d, want 0 before table validation", len(fake.runs))
 	}
 }
 

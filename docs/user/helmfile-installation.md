@@ -33,14 +33,15 @@ ls
 
 ## Namespace Requirements
 
-Each control-plane Helm chart must be installed into a specific namespace. These
-namespace assignments are fixed and must not be changed because
-service-to-service cluster DNS addressing and Vault (OpenBao) authentication
-claims depend on this layout.
+Each control-plane Helm chart must be installed into a specific namespace. The
+control-plane namespace assignments are fixed because service-to-service DNS
+addressing and Vault (OpenBao) authentication claims depend on them. The
+observability stack uses `monitoring` by default, but its namespace is
+configurable.
 
 | Namespace | Services |
 | --- | --- |
-| `nvcf` | api, invocation-service, grpc-proxy, notary-service, reval, state-metrics |
+| `nvcf` | api, invocation-service, grpc-proxy, notary-service, reval, state-metrics, function-autoscaler |
 | `api-keys` | api-keys, admin-issuer-proxy |
 | `ess` | ess-api |
 | `sis` | sis |
@@ -48,12 +49,14 @@ claims depend on this layout.
 | `cassandra-system` | cassandra |
 | `nats-system` | nats |
 | `cert-manager` | cert-manager |
+| `monitoring` (default) | OpenTelemetry Operator, collector, default monitors, VictoriaMetrics |
 | `envoy-gateway-system` | ingress (nvcf-gateway-routes) |
 
 <Warning>
 Installing a chart into the wrong namespace will cause authentication failures such as
 `error validating claims: claim "/kubernetes.io/namespace" does not match any associated bound claim values`.
-If you see this error, verify that every release is deployed in the namespace shown above.
+If you see this error, verify that each control-plane release uses the required
+namespace and each observability release uses its configured namespace.
 
 </Warning>
 
@@ -170,6 +173,11 @@ workers in a compute cluster to reach grpc-proxy in the control-plane cluster,
 complete [gRPC Invocation Enablement](./grpc-invocation-enablement.md) before
 you deploy or sync the control plane.
 
+Remote LLM workers use separate gRPC and reverse QUIC paths. Complete
+[LLM worker listeners](./gateway-routing.md#llm-worker-listeners) and
+[Remote compute clusters and regions](./llm-function-enablement.md#remote-compute-clusters-and-regions)
+before applying the control plane.
+
 <Warning>
 The Gateway address is embedded throughout your deployment. The `domain` value
 in your environment file, the Gateway API HTTPRoutes/TCPRoutes, and service
@@ -280,6 +288,18 @@ global:
       # collectorPort: <your-collector-port>
       # collectorProtocol: <your-collector-protocol>
 
+# Install control-plane monitors, the bundled metrics backend, and the
+# Function Autoscaler.
+observability:
+  profile: control
+
+victoriaMetrics:
+  server:
+    persistentVolume:
+      enabled: true
+      size: 16Gi
+      storageClass: "gp3" # Customize to your storage class.
+
 fakeGpuOperator:
   enabled: false # If deploying locally with no GPUs, true
   ubuntu:
@@ -334,10 +354,22 @@ ingress:
 When `addons.llm` is enabled, the stack defaults
 `global.workerEndpoints.llmRequestRouterAddress` to
 `llm-request-router.nvcf.svc.cluster.local:50071`. Colocated workers require no
-additional configuration. For a split deployment, override this value with a
-request-router host and port that worker pods can reach. See
-[LLM Function Enablement](./llm-function-enablement.md) for the complete addon
-configuration.
+additional configuration. For a split deployment, this address alone is not
+enough. Configure the paired backend-router gRPC and reverse QUIC dial
+addresses, Gateway routes, DNS, and trust described in
+[Remote compute clusters and regions](./llm-function-enablement.md#remote-compute-clusters-and-regions).
+
+#### `observability` Configuration
+
+The self-managed control-plane stack defaults to
+`observability.profile: control`. This installs the shared metrics components,
+VictoriaMetrics, State Metrics, and the Function Autoscaler. Set the
+VictoriaMetrics storage class for the target cluster.
+
+To use a customer-managed backend or change component ownership, see
+[Observability Configuration](./observability.md). For autoscaler health and
+backend checks, see
+[Function Autoscaler Operations](./autoscaling/operations.md).
 
 #### `domain` and `ingress` Configuration
 
@@ -1285,8 +1317,10 @@ Helmfile target the GPU cluster instead of the control-plane cluster.
 For a complete Amazon EKS example, see the
 [CSP End-to-End Example](./csp-end-to-end-example-installation.md).
 
-The compute-plane Makefile runs `nvcf-cli init` before `cluster register`. Point
-`NVCF_CLI_CONFIG` at a CLI config that can reach the control-plane gateway.
+Export the installed control-plane environment before registration. For a
+split-cluster deployment, pass both contexts so the profile contains
+compute-reachable endpoints and reads trust from the control-plane cluster.
+Omit both context flags for a single-cluster deployment.
 
 ```yaml title="nvcf-cli-gpu-register.yaml"
 base_http_url: "http://<GATEWAY_ADDR>"
@@ -1305,18 +1339,31 @@ api_keys_owner_id: "svc@nvcf-api.local"
 client_id: "<nca-id>"
 ```
 
+```bash
+nvcf-cli --config <path-to-nvcf-cli-gpu-register.yaml> self-hosted \
+  --control-plane-stack deploy/stacks/self-managed \
+  --env <environment-name> \
+  --control-plane-context <control-plane-context> \
+  --compute-plane-context <gpu-cluster-context> \
+  control-plane profile export \
+  --cluster-name <control-plane-cluster-name> \
+  --region <region>
+
+nvcf-cli --config <path-to-nvcf-cli-gpu-register.yaml> init
+```
+
 Run the compute-plane target from the repository root. The target writes
 `deploy/stacks/nvcf-compute-plane/registration/<gpu-cluster-name>-register-values.yaml`.
 
 ```bash
 make -C deploy/stacks/nvcf-compute-plane register-cluster \
   CLUSTER_NAME=<gpu-cluster-name> \
-  NCA_ID=<nca-id> \
   CLUSTER_REGION=<region> \
-  ICMS_URL="http://<GATEWAY_ADDR>" \
-  KUBECONFIG_FILE=<gpu-cluster-kubeconfig> \
-  NVCF_CLI=<path-to-nvcf-cli> \
-  NVCF_CLI_CONFIG=<path-to-nvcf-cli-gpu-register.yaml>
+  CONTROL_PLANE_PROFILE="$(pwd)/deploy/stacks/self-managed/out/control-plane-profile.yaml" \
+  KUBECONFIG_FILE=<absolute-path-to-gpu-cluster-kubeconfig> \
+  COMPUTE_KUBE_CONTEXT=<gpu-cluster-context> \
+  NVCF_CLI=<absolute-path-to-nvcf-cli> \
+  NVCF_CLI_CONFIG=<absolute-path-to-nvcf-cli-gpu-register.yaml>
 ```
 
 Install the NVCA operator on that GPU cluster. The `install` target copies the
@@ -1328,7 +1375,7 @@ make -C deploy/stacks/nvcf-compute-plane install \
   CLUSTER_NAME=<gpu-cluster-name> \
   HELMFILE_ENV=<environment-name> \
   NCA_ID=<nca-id> \
-  KUBECONFIG_FILE=<gpu-cluster-kubeconfig>
+  KUBECONFIG_FILE=<absolute-path-to-gpu-cluster-kubeconfig>
 ```
 
 Verify the operator and backend on the GPU cluster:

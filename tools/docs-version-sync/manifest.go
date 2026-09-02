@@ -87,7 +87,7 @@ func resolveManifestEntries(catalog *Catalog) ([]resolvedManifestEntry, error) {
 			if !ok {
 				return nil, fmt.Errorf("manifest metadata references unknown artifact %s", metadata.ArtifactID)
 			}
-			path, err := catalog.artifactPath(artifact)
+			path, err := catalog.artifactDistribution(artifact)
 			if err != nil {
 				return nil, err
 			}

@@ -21,6 +21,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -336,6 +338,9 @@ func TestComputePlaneRegisterDryRunRunsReachabilityCheck(t *testing.T) {
 	resetComputePlaneFlags(t)
 
 	profileFile := writeTestControlPlaneProfile(t, "cp-cluster")
+	updateTestControlPlaneProfile(t, profileFile, func(profile *controlplaneprofile.ControlPlaneProfile) {
+		profile.ControlPlane.Endpoints.ComputeReachable.NATSURL = "tls://api.example.test:4222"
+	})
 
 	prevFetcher := fetchClusterIdentity
 	t.Cleanup(func() { fetchClusterIdentity = prevFetcher })
@@ -361,11 +366,13 @@ func TestComputePlaneRegisterDryRunRunsReachabilityCheck(t *testing.T) {
 
 	require.NoError(t, rootCmd.Execute())
 	assert.Equal(t, "gpu-a", got.TargetClusterName)
+	assert.Equal(t, "https://api.example.test", got.GatewayHTTPURL)
 	assert.Equal(t, "https://sis.example.test", got.ICMSURL)
 	assert.Equal(t, "https://reval.example.test", got.ReValURL)
-	assert.Equal(t, "tls://nats.example.test:4222", got.NATSURL)
+	assert.Equal(t, "tls://api.example.test:4222", got.NATSURL)
 	assert.Equal(t, "sis.example.test", got.SISHost)
 	assert.Equal(t, "reval.example.test", got.ReValHost)
+	assert.Equal(t, "nats.example.test", got.NATSHost)
 	assert.False(t, got.ProbeHTTP)
 }
 
@@ -430,6 +437,141 @@ func TestComputePlaneRegisterDryRunStopsOnReachabilityFailure(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, assert.AnError)
 	assert.Equal(t, 0, fetchCalls, "identity discovery must not run after reachability failure")
+}
+
+func TestComputePlaneRegisterDryRunRejectsMissingSharedGatewayHostsBeforeIdentity(t *testing.T) {
+	resetComputePlaneFlags(t)
+
+	profileFile := writeTestControlPlaneProfile(t, "cp-cluster")
+	updateTestControlPlaneProfile(t, profileFile, func(profile *controlplaneprofile.ControlPlaneProfile) {
+		profile.ControlPlane.Endpoints.ComputeReachable.ICMSURL = profile.ControlPlane.Gateway.HTTPURL
+		profile.ControlPlane.Endpoints.ComputeReachable.ReValURL = profile.ControlPlane.Gateway.HTTPURL
+		profile.ControlPlane.Endpoints.ComputeReachable.NATSURL = "tls://api.example.test:4222"
+		profile.ControlPlane.Hosts.API = ""
+		profile.ControlPlane.Hosts.SIS = ""
+		profile.ControlPlane.Hosts.ReVal = ""
+		profile.ControlPlane.Hosts.NATS = ""
+	})
+
+	fetchCalls := 0
+	prevFetcher := fetchClusterIdentity
+	t.Cleanup(func() { fetchClusterIdentity = prevFetcher })
+	fetchClusterIdentity = func(context.Context, string) (string, string, string, error) {
+		fetchCalls++
+		return "", "", "", nil
+	}
+
+	rootCmd.SetOut(&bytes.Buffer{})
+	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"self-hosted", "compute-plane", "register",
+		"--dry-run",
+		"--control-plane-profile", profileFile,
+		"--cluster-name", "gpu-a",
+	})
+
+	err := rootCmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "controlPlane.gateway.httpURL")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.api")
+	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.icmsURL")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.sis")
+	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.revalURL")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.reval")
+	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.natsURL")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.nats")
+	assert.Equal(t, 0, fetchCalls, "identity discovery must not run after profile validation failure")
+}
+
+func TestComputePlaneRegisterDryRunRejectsNotFoundBeforeIdentity(t *testing.T) {
+	resetComputePlaneFlags(t)
+	selfHostedEnv = "prd"
+	computePlaneRegisterReachabilityCheck = reachability.Check
+
+	server := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(server.Close)
+	selfHostedICMSURL = server.URL
+
+	profileFile := writeTestControlPlaneProfile(t, "cp-cluster")
+	updateTestControlPlaneProfile(t, profileFile, func(profile *controlplaneprofile.ControlPlaneProfile) {
+		profile.ControlPlane.Gateway.HTTPURL = server.URL
+		profile.ControlPlane.Endpoints.ComputeReachable.ICMSURL = server.URL
+		profile.ControlPlane.Endpoints.ComputeReachable.ReValURL = server.URL
+	})
+
+	fetchCalls := 0
+	prevFetcher := fetchClusterIdentity
+	t.Cleanup(func() { fetchClusterIdentity = prevFetcher })
+	fetchClusterIdentity = func(context.Context, string) (string, string, string, error) {
+		fetchCalls++
+		return "", "", "", nil
+	}
+
+	rootCmd.SetOut(&bytes.Buffer{})
+	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"self-hosted", "compute-plane", "register",
+		"--dry-run",
+		"--control-plane-profile", profileFile,
+		"--cluster-name", "gpu-a",
+	})
+
+	err := rootCmd.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.icmsURL")
+	assert.Contains(t, err.Error(), "/health")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.sis")
+	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.revalURL")
+	assert.Contains(t, err.Error(), "/info")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.reval")
+	assert.Contains(t, err.Error(), "status 404")
+	assert.Equal(t, 0, fetchCalls, "identity discovery must not run after HTTP reachability failure")
+}
+
+func TestComputePlaneRegisterDryRunAcceptsValidServiceRoutes(t *testing.T) {
+	resetComputePlaneFlags(t)
+	selfHostedEnv = "prd"
+	computePlaneRegisterReachabilityCheck = reachability.Check
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health":
+			w.WriteHeader(http.StatusOK)
+		case "/info":
+			w.WriteHeader(http.StatusUnauthorized)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(server.Close)
+	selfHostedICMSURL = server.URL
+
+	profileFile := writeTestControlPlaneProfile(t, "cp-cluster")
+	updateTestControlPlaneProfile(t, profileFile, func(profile *controlplaneprofile.ControlPlaneProfile) {
+		profile.ControlPlane.Gateway.HTTPURL = server.URL
+		profile.ControlPlane.Endpoints.ComputeReachable.ICMSURL = server.URL
+		profile.ControlPlane.Endpoints.ComputeReachable.ReValURL = server.URL
+	})
+
+	prevFetcher := fetchClusterIdentity
+	t.Cleanup(func() { fetchClusterIdentity = prevFetcher })
+	fetchClusterIdentity = func(context.Context, string) (string, string, string, error) {
+		return "https://k8s.example/issuer", `{"keys":[]}`, "psat", nil
+	}
+
+	var stdout bytes.Buffer
+	rootCmd.SetOut(&stdout)
+	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"self-hosted", "compute-plane", "register",
+		"--dry-run",
+		"--control-plane-profile", profileFile,
+		"--cluster-name", "gpu-a",
+	})
+
+	require.NoError(t, rootCmd.Execute())
+	assert.Contains(t, stdout.String(), "dryRun: true")
+	assert.Contains(t, stdout.String(), "sisMutation: skipped")
 }
 
 func TestComputePlaneRegisterCallsSISAfterValidation(t *testing.T) {
@@ -923,12 +1065,14 @@ func installFakeComputePlaneHelmfile(t *testing.T) string {
 	t.Helper()
 	fakeBin := filepath.Join(t.TempDir(), "helmfile")
 	body := `#!/bin/sh
-last=
+verb=
 for arg in "$@"; do
   printf 'arg=%s\n' "$arg"
-  last="$arg"
+  case "$arg" in
+    apply|template) verb="$arg" ;;
+  esac
 done
-printf 'verb=%s\n' "$last"
+printf 'verb=%s\n' "$verb"
 printf 'env:CLUSTER_NAME=%s\n' "$CLUSTER_NAME"
 printf 'env:NCA_ID=%s\n' "$NCA_ID"
 printf 'env:OUTPUT_DIR=%s\n' "$OUTPUT_DIR"
@@ -975,6 +1119,16 @@ func writeTestControlPlaneProfile(t *testing.T, controlPlaneCluster string) stri
 		},
 	}))
 	return path
+}
+
+func updateTestControlPlaneProfile(t *testing.T, path string, update func(*controlplaneprofile.ControlPlaneProfile)) {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var profile controlplaneprofile.ControlPlaneProfile
+	require.NoError(t, yaml.Unmarshal(body, &profile))
+	update(&profile)
+	require.NoError(t, controlplaneprofile.WriteFile(path, profile))
 }
 
 func writeComputePlaneStack(t *testing.T) string {

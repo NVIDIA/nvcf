@@ -10,7 +10,7 @@ domain-specific validation logic.
 
 The vocabulary is restricted to four categories:
 
-1. File operations: copy, edit YAML, substitute strings.
+1. File operations: copy, edit YAML, substitute blocks, prepare secrets.
 2. Environment preconditions: env vars set, files exist, infrastructure
    reachable.
 3. Command execution: exec a shell command and capture exit code, stdout,
@@ -41,9 +41,10 @@ regex restricted to `\$\{[A-Z0-9_]+\}`.
 ### Infrastructure bootstrap (Given)
 
 These are the only Givens that hide a CLI invocation, and each one wraps
-exactly one Make target or one composite of `kubectl` calls. They contain
-no business logic. Spelling them out in raw `make` calls would balloon
-the feature file without adding coverage.
+exactly one Make target, one Helm authentication command, or one composite of
+`kubectl` calls. They contain no business logic. Spelling out their stable
+command and secret-handling mechanics would balloon the feature file without
+adding coverage.
 
 The bootstrap Givens are idempotent and cached per suite. The first
 scenario that names the Given runs the underlying Make target; later
@@ -55,7 +56,8 @@ implementation detail, not a license to omit the precondition.
 |------|-------|
 | `Given a single-cluster ncp-local cluster is running` | `make -C tools/ncp-local-cluster build-and-deploy-cluster`. Runs once per suite. |
 | `Given multi-cluster ncp-local compute clusters are running:` (table, see below) | Wraps `make -C tools/ncp-local-cluster build-and-deploy-multicluster COMPUTE_CLUSTER_COUNT=N`. Runs once per suite. |
-| `Given the {string} image pull secret exists in namespaces:` (table) | `kubectl create namespace <ns>` + `kubectl create secret docker-registry` for each row. Hidden because the docker-registry secret syntax leaks the API key to argv. |
+| `Given Helm is authenticated to OCI registry {string} using the current NGC API key` | Runs `helm registry login` once per explicit, interpolated registry. The current `NGC_API_KEY` is supplied through sensitive stdin and is redacted from captured output, command logs, and failures. |
+| `Given the {string} image pull secret exists in namespaces:` (table) | Applies one namespace manifest and one docker-registry secret manifest for each row. Hidden because direct docker-registry secret commands leak the API key to argv. |
 
 Compute-cluster table contract for the multi-cluster bootstrap Given:
 
@@ -105,7 +107,8 @@ refactor in every consumer; that is a feature.
 |------|-------|
 | `And I copy the file {string} to {string}` | Both paths are repo-relative. |
 | `And I update yaml file {string} with keys:` (two-column table of dotted-path and value) | Path supports dotted notation and `[n]` indices (e.g. `global.imagePullSecrets[0].name`). Missing intermediate maps and missing list indices are upserted: writing `global.imagePullSecrets[0].name` against a file that has neither `global.imagePullSecrets` nor any list entry creates both. Existing scalars at intermediate positions cause the step to fail rather than silently overwrite a non-map. Value cells expand `${VAR}` from `os.Environ`. |
-| `And I substitute {string} in file {string} with base64 of {string}` | Used for credential rendering; the third arg expands `${VAR}` then base64-encodes. The handler never logs the substituted value. |
+| `And I prepare Helmfile environment {string} for stack {string} from fixture {string} with values:` (two-column table of dotted-path and value) | Validates the stack and environment names, derives `deploy/stacks/<stack>/environments/<environment>.yaml` from the absolute repository root, copies the explicit fixture, and applies the visible values table with the same YAML update and `${VAR}` interpolation behavior. Supported stacks are `self-managed`, `observability`, and `nvcf-compute-plane`. The destination is ledger-backed. |
+| `And I prepare self-managed secrets file {string} from template {string} using the current NGC registry credential` | The destination and template are explicit repo-relative paths with `${VAR}` interpolation. Replaces the template's registry credential placeholder with base64 of the current `$oauthtoken:<NGC_API_KEY>` credential and writes the destination with mode `0600`. The destination is ledger-backed, and secret material never enters Gherkin, command logs, or failure messages. |
 | `And I substitute a block in file {string}:` (docstring) | The docstring contains an old block and replacement block separated by exactly one `---` line. `${VAR}` interpolation applies before an exact, ledger-backed replacement. Missing or malformed old blocks fail. |
 
 ### Command execution (When)
@@ -119,13 +122,58 @@ refactor in every consumer; that is a feature.
 | `When I run command with a terminal:` (docstring) | Same as the docstring form, but stdin is attached to a pseudo-terminal so the child sees a TTY on fd 0. For commands that gate interactive-only behavior on a TTY, such as `nvcf-cli self-hosted up` (its auth-gate mints the admin token only when stdin is a terminal). No input is written; stdout and stderr are captured separately as usual. |
 | `When I export command output to environment variable {string}` | Exports the previous command's trimmed stdout under the named env var. Fails the step unless the prior command exited 0 and produced non-empty stdout. Snapshotted by the env Ledger; restored at suite teardown. |
 
+#### Registration observability command adapters
+
+These steps wrap repeated client, trust-material, polling, and output-format
+mechanics while keeping every operator-selected target and expectation visible.
+They preserve the real command output for subsequent assertions.
+
+| Step | Command |
+|------|---------|
+| `When I successfully observe WatchStargates at {string} with TLS authority {string} using CA secret {string} in namespace {string} and context {string} for {string} seconds` | Reads the named CA certificate from the explicit Kubernetes secret and context, runs the public `WatchStargates` gRPC method against the visible endpoint and TLS authority with W3C trace context propagated through a generated `traceparent` header, and requires a streamed response before accepting the expected client deadline. |
+
+#### Function lifecycle command adapters
+
+These steps hide the repeated executable, config prefix, fixed subcommand, shell
+quoting, and exit-zero assertion. Every meaningful function, deployment, and
+invocation input remains visible. Each action runs exactly one `nvcf-cli`
+command and preserves its result for existing output assertions.
+
+The adapters validate only Gherkin structure. They do not store function
+identity, apply defaults, parse or normalize product values, enforce product
+preconditions, or allowlist CLI options. Supplied arguments reach `nvcf-cli`
+unchanged after `${VAR}` interpolation. The `successfully` wording is the
+deliberate exception that asserts exit code 0. Negative and exit-code-specific
+scenarios use the raw command steps.
+
+CLI option tables have exactly two headers, `option | value`, and at least one
+data row. Each row emits the option and value as separate arguments in its
+original order. Repeated options and empty values are preserved.
+
+| Step | Command |
+|------|---------|
+| `Given I use NVCF CLI config {string}` | Interpolates and stores the supplied config argument without resolving or checking the path. Later lifecycle steps pass it to `--config`. |
+| `When I successfully create function {string} from image {string} with CLI options:` | Runs `function create --name <name> --image <image>` followed by the option rows. |
+| `When I successfully deploy the function selected by NVCF CLI with options:` | Runs `function deploy create` followed by the option rows. Function selection remains owned by CLI state. |
+| `When I successfully generate a function API key with CLI options:` | Runs `api-key generate --for function` followed by the option rows and suppresses secret-bearing stdout. |
+| `When I successfully invoke the function selected by NVCF CLI over HTTP with timeout {string} seconds and poll duration {string} seconds:` (JSON docstring) | Runs `function invoke` with the exact request body, timeout, and poll duration. |
+| `When I successfully invoke the function selected by NVCF CLI over plaintext gRPC service {string} method {string} with timeout {string} seconds and poll duration {string} seconds:` (JSON docstring) | Runs `function invoke --grpc --grpc-plaintext` with the visible service, method, request, timeout, and poll duration. |
+| `When I successfully invoke model {string} at {string} with timeout {string} seconds:` (JSON docstring) | Runs `function invoke` with the visible model, inference URL, exact request body, and timeout. |
+| `When I successfully invoke the function selected by NVCF CLI through Vanity Gateway host {string} path {string} with timeout {string} seconds:` (JSON docstring) | Sends an exact-host HTTP request through the local Envoy listener with the saved function API key passed over sensitive stdin, never argv or command logs. |
+| `When I successfully undeploy the function selected by NVCF CLI` | Runs `function delete --deployment-only`. Function selection remains owned by CLI state. |
+
 ### Assertions (Then / And)
 
 | Step | Notes |
 |------|-------|
 | `Then the command exit code should be {int}` | Last-run exit code. |
-| `Then the command output should contain {string}` | Substring match on combined stdout + stderr. |
-| `Then the command output should not contain {string}` | Negative substring match. |
+| `Then the command should fail` | Requires a non-zero last-run exit code. It does not accept a runner error that prevented command execution and never records the failed command in the successful-command cache. |
+| `Then the command output should contain {string}` | Substring match on combined stdout + stderr. The interpolated value must not be empty or whitespace-only. |
+| `Then the command output should not contain {string}` | Negative substring match. The interpolated value must not be empty or whitespace-only. |
+| `Then the command output should not match {string}` | Negative Go regular-expression match on combined stdout + stderr. The interpolated pattern must be non-empty and compile. Use it for shapes a fixed string cannot express, such as a dashed pod-IP hostname alias. |
+| `Then the command output should have exactly {string} distinct matches of {string}` | Counts unique substrings matched by the interpolated Go regular expression in combined stdout + stderr. Repeated occurrences of the same substring count once. |
+| `Then the command output should contain all:` (table) | Requires a `text` header and one or more strings. Every interpolated string must be non-empty and appear in combined stdout + stderr. |
+| `Then the command output should contain one of:` (table) | Requires a `text` header and one or more strings. Every interpolated candidate must be non-empty, and at least one must appear in combined stdout + stderr. |
 | `Then file {string} should exist` | |
 | `Then yaml file {string} key {string} should equal {string}` | Reads the YAML file, walks the dotted key path, compares to the value (with `${VAR}` expansion). |
 | `Then yaml file {string} key {string} should not be empty` | Same key resolution; passes if the resolved value is non-empty. Use for non-deterministic outputs (cluster IDs, identity sources) where exact-value assertions are wrong. |
@@ -135,12 +183,19 @@ refactor in every consumer; that is a feature.
 | `Then yaml file {string} should contain:` (docstring) | Subset variant: every key in expected must exist in actual with the same value; extra keys in actual are allowed. Use this when the file has dynamic or future-additive fields. `${VAR}` expansion applies. |
 | `Then yaml file {string} key {string} should contain:` (docstring) | Subset semantics scoped to the subtree at the dotted key path. |
 | `Then the json output should contain rows:` (table) | Parses the last command's stdout as JSON (expected: array of objects). For each table row, asserts an object matching every column value exists in the array. Extra objects are allowed; ordering is not asserted. |
+| `Then Helm release {string} in namespace {string} using context {string} should contain values:` (YAML docstring) | Runs one explicit-context `helm get values -o yaml` for the named release and asserts that its values contain the supplied YAML subset. Extra map keys are allowed; lists remain order- and length-sensitive. Failure messages name the release and first differing path without printing release values. |
+| `Then Kubernetes resource {string} in namespace {string} using context {string} should contain:` (YAML docstring) | The resource is explicit `kind/name`. Runs one `kubectl get -o yaml` against the named context and asserts that the resource YAML contains the supplied YAML subset. Extra map keys are allowed; lists remain order- and length-sensitive. Failure messages name the resource and first differing path without printing resource values. |
 | `Then the rendered manifests in {string} should contain:` (table) | Requires a `text` header and one or more fixed strings. Recursively inspects regular files under the repo-relative directory and fails if any listed string is absent. `${VAR}` expansion applies to the path and table values. |
+| `Then the rendered manifests in {string} should contain Kubernetes resource {string}` | Parses rendered YAML documents and requires an actual top-level resource matching the explicit `kind/name`. Nested references such as `Certificate.spec.issuerRef` do not satisfy the assertion. `${VAR}` expansion applies to the path, kind, and name. |
 | `Then the rendered manifests in {string} under directories matching {string} should contain:` (table) | Positive rendered-manifest assertion scoped to files below a directory whose name matches the supplied shell pattern, such as `*-nats`. The render directory, directory-name pattern, and table values support `${VAR}` expansion. |
 | `Then the rendered manifests in {string} should not contain:` (table) | Requires a `text` header and one or more fixed strings. Recursively inspects regular files under the repo-relative directory and fails if any listed string appears. `${VAR}` expansion applies to the path and table values. |
 | `Then these Helm releases should be deployed using context {string}:` (table) | Requires `name` and `namespace` headers, with an optional `revision` header. Runs one explicit-context, all-namespaces `helm list` and asserts that every listed release has status `deployed`; non-empty revision cells are also matched. |
 | `Then these Kubernetes resources should exist in namespace {string} using context {string}:` (table) | Requires `kind` and `name` headers. Gets each named resource with the explicit namespace and context, and reports the row whose resource is missing. |
 | `Then these Kubernetes resources should not exist in namespace {string} using context {string}:` (table) | Requires `kind` and `name` headers. Gets each named resource with `--ignore-not-found` and requires empty name output, so absence does not depend on human-readable error text. |
+| `Then deployment {string} in namespace {string} using context {string} should complete rollout within {string}` | Runs `kubectl rollout status` for the named deployment with the explicit namespace, context, and timeout. Failure messages name the deployment without printing command output. |
+| `Then NVCFBackend {string} in namespace {string} using context {string} should report agent status {string} within {string}` | Waits for the named backend's `status.agentStatus` to equal the visible value using the explicit namespace, context, and timeout. Failure messages name the backend without printing resource output. |
+| `Then these Gateway API routes should be accepted and resolved using context {string} within {string}:` (table) | Requires `kind`, `name`, `namespace`, and `parent` headers. Waits for every named route to report both `Accepted=True` and `ResolvedRefs=True` for the named Gateway parent using the explicit context and timeout. The route kind is passed through without an allowlist. Failures name the table row, route, namespace, parent, and unmet condition without printing resource output. |
+| `Then every Pylon for function {string} using container {string} and context {string} should report metrics within {string}:` (table) | Requires `metric`, `comparison`, and `count` headers. Polls every running pod selected by the visible `function-name` annotation and container name. Each pod must expose non-empty metrics, and each metric row counts connected series whose sample value is `1`; `comparison` is `exactly` or `at least`, and the expected non-negative count remains visible. Discovery, parsing, and scrape failures remain failures rather than zero metric counts. |
 
 #### YAML comparison semantics
 
@@ -201,6 +256,15 @@ contract verified in `src/clis/nvcf-cli/cmd/`):
   ```
   ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --compute-plane-stack deploy/stacks/nvcf-compute-plane --env local --plain compute-plane register --control-plane-profile <profile-path> --cluster-name <compute> --kube-context k3d-<compute> --region us-west-1 --output <values-path>
   ```
+- Helmfile control-plane profile handoff (single cluster):
+  ```
+  ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --env <env> control-plane profile export --cluster-name <control>
+  make -C deploy/stacks/nvcf-compute-plane register-cluster CLUSTER_NAME=<compute> CONTROL_PLANE_PROFILE=<profile-path> COMPUTE_KUBE_CONTEXT=k3d-<compute> NVCF_CLI=${NVCF_CLI}
+  ```
+  The profile export runs after the selected Helmfile environment is installed
+  so endpoint and PKI trust data describe that deployment. A single-cluster
+  export omits both persistent context flags; the CLI accepts a split-cluster
+  pair or neither, and the bootstrap has already selected the local context.
 - `self-hosted compute-plane install`:
   ```
   ${NVCF_CLI} --config <cfg> self-hosted --control-plane-stack deploy/stacks/self-managed --compute-plane-stack deploy/stacks/nvcf-compute-plane --env local --plain compute-plane install --values <values-path> --kube-context k3d-<compute> --cluster-name <compute>
@@ -210,7 +274,8 @@ contract verified in `src/clis/nvcf-cli/cmd/`):
 
 Every step that writes into a path under the repo working tree
 (`I copy the file ... to ...`, `I update yaml file ...`,
-`I substitute ... in file ...`) registers that path with the runner's
+`I prepare self-managed secrets file ...`, `I substitute a block ...`)
+registers that path with the runner's
 restoration ledger:
 
 - Before the first write, the runner snapshots the file (exists/not,
@@ -219,6 +284,11 @@ restoration ledger:
 - At suite teardown, the runner restores every registered path to its
   pre-suite state. Files that did not exist before are deleted; files
   that did are rewritten with the original bytes and mode.
+- Live entry points cancel and quiesce the active step before restoring the
+  file and environment ledgers and exiting on SIGINT or SIGTERM. On Unix, the
+  command runner cancels the step's process group so shell, make, and kubectl
+  descendants cannot outlive restoration. This includes generated registry
+  credential files.
 - `Config.LedgerDir` (`out/<run-id>/originals/`) is reserved for an
   on-disk variant if very large fixtures ever push memory limits.
   Today the directory is created but unused.
@@ -241,11 +311,12 @@ only these steps. Add a shared step when a repeated action or observable keeps
 its meaningful inputs visible and hides only command or output-format
 mechanics. Otherwise use `When I run command` plus an output assertion.
 
-The infrastructure-bootstrap Givens (cluster up, image pull secret) and
-the single `Given command has succeeded:` carry-over are the only places
-where the strict DSL bends to share state across scenarios. Each one's
-hidden work is one CLI invocation, visible by either the wrapped Make
-target or the docstring command text.
+The infrastructure-bootstrap Givens (cluster up, Helm registry
+authentication, image pull secret) and the single
+`Given command has succeeded:` carry-over are the only places where the strict
+DSL bends to share state across scenarios. Each one's hidden work is one CLI
+invocation, visible through the named operator action, explicit target, wrapped
+Make target, or docstring command text.
 
 ## What this displaces from tests/bdd
 
@@ -260,8 +331,8 @@ Going away in `tests/bdd`:
   `InstallNvcaOperator`). Replaced by `When I run command "make ..."`.
 - The Helm release readback methods (`HelmReleaseDeployed`,
   `NVCAOperatorReady`, `NVCAAgentReady`). Release deployment checks use the
-  table-driven Helm assertion; readiness remains explicit through
-  `kubectl rollout status` / `kubectl wait` in Gherkin.
+  table-driven Helm assertion. NVCA readiness uses explicit-context deployment
+  rollout and NVCFBackend agent-status assertion steps.
 - The `harness.CLIHarness` interface and its five domain methods
   (`SelfHostedUp`, `SelfHostedInstallControlPlane`,
   `SelfHostedComputePlaneRegister`, `SelfHostedComputePlaneInstall`,
@@ -445,15 +516,37 @@ const (
 // names the first path that differed.
 func MatchYAMLSubtree(filePath, keyPath, expectedYAML string, mode MatchMode) error
 
+// RenderSelfManagedSecrets replaces the secrets-template registry credential
+// placeholder with base64 of `$oauthtoken:<NGC_API_KEY>`. It fails without
+// returning raw or encoded credential material when the key or placeholder is
+// missing.
+func RenderSelfManagedSecrets(template []byte, apiKey string) ([]byte, error)
+
 // SubstituteFile replaces every occurrence of placeholder with
-// replacement in the named file. Used for credential rendering.
-// Never logs placeholder or replacement.
+// replacement in the named file. Never logs placeholder or replacement.
 func SubstituteFile(path, placeholder, replacement string) error
 
 // JSONContainsRows parses raw as a JSON array of objects, and for each
 // row map asserts that an object matching every (key, value) pair
 // exists in the array. Extra objects in the array are fine.
 func JSONContainsRows(raw string, rows []map[string]string) error
+
+// WatchStargatesCommand builds a TLS WatchStargates observation with an
+// explicit endpoint, authority, CA source, Kubernetes context, and duration.
+func WatchStargatesCommand(endpoint, authority, caSecret, namespace, kubeContext, durationSeconds string) (string, error)
+
+// PylonMetricExpectation describes an expected count of connected metric
+// series exposed by one Pylon sidecar.
+type PylonMetricExpectation struct {
+    Metric     string
+    Comparison string
+    Count      int
+}
+
+// PylonMetricsCommand builds a Pylon metrics observation for every running
+// Pylon pod selected by function name and container name in an explicit
+// Kubernetes context and polling window.
+func PylonMetricsCommand(functionName, containerName, kubeContext, timeout string, expectations []PylonMetricExpectation) (string, error)
 
 // FilesDoNotContain recursively inspects regular files under root and
 // fails if any interpolated fixed string appears.

@@ -41,11 +41,13 @@ use (
 	./src/compute-plane-services/worker-init
 	./src/compute-plane-services/worker-llm-credentials
 	./src/compute-plane-services/worker-task
+	./src/compute-plane-services/request-trace-uploader
 	./src/compute-plane-services/worker-utils
 	./src/invocation-plane-services/grpc-proxy
 	./src/invocation-plane-services/llm-api-gateway
 	./src/invocation-plane-services/ratelimiter
 	./src/invocation-plane-services/vanity-gateway
+	./src/control-plane-services/admin-token-issuer-proxy
 	./src/control-plane-services/nats-auth-callout
 	./src/compute-plane-services/ess-agent
 	./src/compute-plane-services/ess-agent/api

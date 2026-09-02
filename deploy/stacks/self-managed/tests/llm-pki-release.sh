@@ -34,6 +34,60 @@ render_debug() {
     list --skip-charts --output json 2>&1
 }
 
+# The managed issuer hook needs the same OpenBao migrations image as the
+# control-plane chart. An environment should not have to duplicate its tag.
+render_pki_image_case() {
+  local case_name="$1"
+  shift
+
+  HELMFILE_ENV=base HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" helmfile \
+    --file "$stack_dir/helmfile.d" \
+    --environment default \
+    --output-file-template "$work_dir/$case_name-{{ .Release.Name }}.yaml" \
+    --state-values-set ingress.gatewayApi.controllerNamespace=envoy-gateway-system \
+    --state-values-set ingress.gatewayApi.gateways.shared.name=shared-gw \
+    --state-values-set ingress.gatewayApi.gateways.shared.namespace=envoy-gateway-system \
+    --state-values-set ingress.gatewayApi.gateways.grpc.name=grpc-gw \
+    --state-values-set ingress.gatewayApi.gateways.grpc.namespace=envoy-gateway-system \
+    --state-values-set addons.llm.enabled=true \
+    --state-values-set addons.llm.pki.enabled=true \
+    --state-values-set-string addons.llm.pki.allowedDomains=cluster.local \
+    --state-values-set-string 'addons.llm.pki.dnsNames[0]=llm-request-router.nvcf.svc.cluster.local' \
+    --state-values-set-string 'addons.llm.pki.dnsNames[1]=*.llm-request-router-headless.nvcf.svc.cluster.local' \
+    "$@" \
+    write-values --selector name=llm-request-router 2>&1
+}
+
+assert_pki_image_case() {
+  local case_name="$1"
+  local expected_tag="$2"
+  local values_file="$work_dir/$case_name-llm-request-router.yaml"
+  local manifests_file="$work_dir/$case_name-manifests.yaml"
+  local router_chart="$stack_dir/../../helm/llm-request-router/llm-request-router"
+  local expected_image="nvcr.io/YOUR_ORG/YOUR_TEAM/nvcf-openbao-migrations:$expected_tag"
+  local actual_tag actual_image
+
+  actual_tag="$(yq -r '.llmRequestRouter.pki.image.tag' "$values_file")"
+  test "$actual_tag" = "$expected_tag" ||
+    fail "$case_name resolved PKI image tag $actual_tag, expected $expected_tag"
+
+  helm template llm-request-router "$router_chart" \
+    --namespace nvcf \
+    --values "$values_file" \
+    >"$manifests_file"
+
+  actual_image="$(
+    yq ea -r '
+      select(.kind == "Job" and .metadata.name == "addons-llm-migrations") |
+      .spec.template.spec.containers[] |
+      select(.name == "addons-llm-migrations") |
+      .image
+    ' "$manifests_file"
+  )"
+  test "$actual_image" = "$expected_image" ||
+    fail "$case_name rendered migrations image $actual_image, expected $expected_image"
+}
+
 # The rendered state is the only place that carries both the release
 # declarations and their needs edges. `list` reports enablement but drops
 # needs, and `build` cannot run offline because it pulls every chart. Debug
@@ -71,6 +125,34 @@ state_table() {
   ' "$1" |
     awk -F '|' '{ key = ($1 == "" ? $2 : $1 "/" $2); print key "\t" $3 }'
 }
+
+if ! render_pki_image_case default-image-tag \
+  --state-values-set-string openbao.migrations.image.tag= \
+  >"$work_dir/default-image-tag.log"; then
+  cat "$work_dir/default-image-tag.log" >&2
+  fail "managed LLM PKI must render when both PKI image tags are omitted"
+fi
+# Read the compatible-stack-default tag from global.yaml.gotmpl itself rather
+# than hardcoding it, so this check does not need updating every time the
+# floor is bumped.
+default_pki_tag="$(
+  (grep '\$pkiImageTag :=' "$stack_dir/global.yaml.gotmpl" || true) |
+    sed 's/.*default "\([^"]*\)".*/\1/'
+)"
+test -n "$default_pki_tag" ||
+  fail "could not read the default LLM PKI image tag from global.yaml.gotmpl"
+assert_pki_image_case default-image-tag "$default_pki_tag"
+
+render_pki_image_case legacy-image-tag \
+  --state-values-set-string openbao.migrations.image.tag=legacy-tag \
+  >"$work_dir/legacy-image-tag.log"
+assert_pki_image_case legacy-image-tag legacy-tag
+
+render_pki_image_case explicit-image-tag \
+  --state-values-set-string openbao.migrations.image.tag=legacy-tag \
+  --state-values-set-string addons.llm.pki.image.tag=explicit-tag \
+  >"$work_dir/explicit-image-tag.log"
+assert_pki_image_case explicit-image-tag explicit-tag
 
 if ! render_debug >"$work_dir/debug.log"; then
   cat "$work_dir/debug.log" >&2

@@ -43,9 +43,18 @@ is set, Stargate uses its built-in `power-of-two` default and accepts a
 routing-method override when it is in the allowlist of built-in algorithms.
 
 Stargate reads and validates the file only during process startup. The
-StatefulSet does not include a load-balancer ConfigMap checksum in its pod
-template. After a ConfigMap-only update, restart the StatefulSet so every
-replica loads the same configuration.
+request-router workload does not include a load-balancer ConfigMap checksum in
+its pod template. New installations default to a Deployment; existing
+installations can pin a StatefulSet. After a ConfigMap-only update, restart the
+selected workload so every replica loads the same configuration.
+
+Existing StatefulSet installations must set
+`addons.llm.requestRouter.workload.kind=StatefulSet` before upgrading. Changing
+the workload kind is a controlled migration, not an in-place Kubernetes kind
+mutation. A plain Helm upgrade across workload kinds can temporarily run both
+the Deployment and StatefulSet; use the chart migration procedure to remove or
+rename the old workload and verify that only the selected kind owns the router
+Pods before scaling it.
 
 ## Distinguish router algorithms from nvcf-cli routing methods
 
@@ -149,9 +158,9 @@ helm template llm-request-router \
   --values <request-router-values.yaml>
 ```
 
-Confirm that the rendered StatefulSet has the expected
-`--lb-config-path` argument and that inline JSON creates one ConfigMap with the
-`lb-config.json` key.
+Confirm that the rendered request-router workload (a Deployment by default) has
+the expected `--lb-config-path` argument and that inline JSON creates one
+ConfigMap with the `lb-config.json` key.
 
 If the LLM route accepts untrusted traffic, inspect the rendered or live
 HTTPRoute and confirm that the trusted-header filter is present:
@@ -172,17 +181,23 @@ For an inline configuration, inspect the live file and start argument:
 ```bash
 kubectl get configmap -n nvcf llm-request-router-lb \
   -o jsonpath='{.data.lb-config\.json}'
-kubectl get statefulset -n nvcf llm-request-router \
+kubectl get deployment -n nvcf llm-request-router \
   -o jsonpath='{.spec.template.spec.containers[0].args}'
 ```
+
+Replace `deployment` with `statefulset` in these commands when
+`addons.llm.requestRouter.workload.kind` is pinned to `StatefulSet`.
 
 Restart after a ConfigMap-only change, then wait for all replicas:
 
 ```bash
-kubectl rollout restart statefulset/llm-request-router -n nvcf
-kubectl rollout status statefulset/llm-request-router -n nvcf
+kubectl rollout restart deployment/llm-request-router -n nvcf
+kubectl rollout status deployment/llm-request-router -n nvcf
 kubectl get pods -n nvcf -l app.kubernetes.io/name=llm-request-router
 ```
+
+Use `statefulset/llm-request-router` instead when the StatefulSet workload is
+explicitly selected.
 
 Confirm every listed pod was recreated after the ConfigMap update. For each
 pod, check for the `load balancer config loaded` startup log and compare its
@@ -230,15 +245,18 @@ metric names, labels, and scrape configuration.
 | HTTP `400` before backend selection | Compare the function `routingMethod` with the configured algorithm and `request_algorithms`. Check required and numeric gateway headers. |
 | HTTP `400` for affinity-aware routing | Confirm the gateway generated a nonblank affinity key when `require_cache_affinity_key` is enabled. |
 | HTTP `503` with no eligible candidates | Confirm pylons are registered and publish the capacity, queue, and optional KV-cache statistics required by the algorithm. |
-| New ConfigMap value has no effect | Confirm the pod creation time. Restart the StatefulSet because Stargate does not reload the file. |
+| New ConfigMap value has no effect | Confirm the pod creation time. Restart the selected Deployment or StatefulSet because Stargate does not reload the file. |
 | Unexpected fallback or retries | Compare routing selection, proxy attempt, retry, and retry-exhaustion metrics. Check pylon retry reasons. |
 | Affinity differs between replicas | Compare the ConfigMap, pod creation times, startup summaries, seed values, and registered candidate set. |
 
 Use these logs together:
 
 ```bash
-kubectl logs -n nvcf statefulset/llm-request-router \
+kubectl logs -n nvcf deployment/llm-request-router \
   --all-pods=true --tail=100
 kubectl logs -n nvcf deploy/llm-api-gateway --tail=100
 kubectl logs -n nvcf-backend <function-pod> -c llm-worker --tail=100
 ```
+
+Use `statefulset/llm-request-router` for the first command when the StatefulSet
+workload is explicitly selected.

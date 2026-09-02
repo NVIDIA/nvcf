@@ -402,7 +402,7 @@ func (w *NVCFWorker) Run(withHttpServer bool) error {
 		go func() {
 			// health server + framework config
 			err := w.server.Run()
-			if err != nil && w.shutdownCtx.Err() == nil {
+			if w.isFatalServerError(err) {
 				err = types.NewInternalError(err)
 				utils.ExitReason(err)
 				zap.S().Panic(err)

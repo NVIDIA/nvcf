@@ -19,12 +19,10 @@ use chrono::{DateTime, Utc};
 use scylla::DeserializeRow;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, DeserializeRow)]
+#[derive(Debug, Clone)]
 pub struct ActiveFunctionDetails {
     pub function_id: Uuid,
     pub function_version_id: Uuid,
-    /// Optional for backwards compatibility with existing Cassandra rows that predate this column.
-    #[scylla(rename = "account_id")]
     pub nca_id: Option<String>,
     pub last_updated_at: Option<DateTime<Utc>>,
     pub num_workers: Option<i32>,
@@ -39,16 +37,6 @@ impl ActiveFunctionDetails {
             last_updated_at: Some(Utc::now()),
             num_workers: None,
         }
-    }
-
-    /// Returns nca_id or empty string if not set (for backwards compatibility)
-    pub fn nca_id_or_empty(&self) -> &str {
-        self.nca_id.as_deref().unwrap_or("")
-    }
-
-    /// Alias for nca_id_or_empty for backwards compatibility
-    pub fn nca_id_or_nil(&self) -> String {
-        self.nca_id.clone().unwrap_or_default()
     }
 }
 

@@ -207,7 +207,9 @@ main() {
         update_yaml_key ".agent.functionEnvOverrides.BYOO_OTEL_COLLECTOR_CONTAINER = \"${byoo_otel_collector_image}\"" "${TARGET_DIR}/values.yaml"
         update_yaml_key ".agent.taskEnvOverrides.BYOO_OTEL_COLLECTOR_CONTAINER = \"${byoo_otel_collector_image}\"" "${TARGET_DIR}/values.yaml"
     fi
-    update_yaml_key ".image.tag = \"${NVCA_OPERATOR_VERSION:?"NVCA_OPERATOR_VERSION is not set"}\"" "${TARGET_DIR}/values.yaml"
+    # Keep the source chart's empty tag so the templates fall back to the
+    # published chart version. A literal default is retained by Helm
+    # --reuse-values upgrades and pins the operator to an older image.
     update_yaml_key ".selfManaged.nvcaVersion = \"${NVCA_VERSION:?"NVCA_VERSION is not set"}\"" "${TARGET_DIR}/values.yaml"
     update_yaml_key ".selfManaged.icmsServiceURL = \"http://icms.example.invalid:8080\"" "${TARGET_DIR}/values.yaml"
     update_yaml_key ".selfManaged.revalServiceURL = \"http://reval.example.invalid:8080\"" "${TARGET_DIR}/values.yaml"

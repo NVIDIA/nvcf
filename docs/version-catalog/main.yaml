@@ -115,7 +115,7 @@ publications:
     version: 1.5.9-hotfix.1
     registry: public-images
   - name: pylon
-    version: 0.3.1
+    version: 0.14.1
     registry: public-images
   - name: spot
     version: 1.563.1-hotfix.1
@@ -128,7 +128,7 @@ publications:
     published_version: 0.8.3-ea
     registry: selfhosted-ga
   - name: llm-request-router
-    version: 0.3.2
+    version: 0.14.2
     registry: public-images
   - name: nats-server-config-reloader
     version: 0.23.0
@@ -137,10 +137,9 @@ publications:
     version: 2.5.4-nv-1.3.0
     published_version: 2.5.4-nv-1.3.0-ea
     registry: selfhosted-ga
-  - name: bitnami-cassandra
-    version: 5.0.6-nv-1
-    published_version: 5.0.6-nv-1-ea
-    registry: selfhosted-ga
+  - name: cassandra
+    version: 5.0.8-nv-2.0.1
+    registry: public-images
   - name: nvcf-cassandra-migrations
     version: 0.8.1
     published_version: 0.8.1-ea
@@ -182,7 +181,7 @@ publications:
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-llm-request-router
-    version: 1.6.6
+    version: 1.12.1
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-nats-auth-callout-service
@@ -202,7 +201,7 @@ publications:
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-openbao-server
-    version: 0.30.23
+    version: 0.32.1
     registry: public-helm
     chart_format: http
   - name: helm-nvcf-pki
@@ -257,6 +256,18 @@ version_overrides:
   - name: llm-api-gateway
     version: 0.8.3
     source: supplemental artifact missing from artifacts-0.6.0.txt
+  - name: nvcf-cli
+    version: 1.16.2
+    source: independent source release; not pinned by stack
+publication_pending:
+  - nvcf-self-managed-stack
+  - nvcf-cli
+  - helm-nvcf-llm-request-router
+  - nvcf-gateway-routes
+  - pylon
+  - helm-nvca-operator
+  - nvca-operator
+  - nvca
 manifest:
   entries:
     - artifact_id: helm-nvcf-api-keys
@@ -534,6 +545,7 @@ manifest:
       kind: service-image
       requirement: optional
       description: Proxies admin token requests for the reference architecture.
+      github_url: https://github.com/NVIDIA/nvcf/tree/main/src/control-plane-services/admin-token-issuer-proxy
     - artifact_id: llm-api-gateway
       plane: control
       kind: service-image
@@ -551,12 +563,12 @@ manifest:
       kind: service-image
       requirement: optional
       description: Exports NVCF resource state as Prometheus metrics.
-    - artifact_id: bitnami-cassandra
+    - artifact_id: cassandra
       plane: control
-      kind: ea-cve
+      kind: service-image
       requirement: required
-      description: Stores NVCF account, function, cluster, and service state during Early Access.
-      upstream_url: https://github.com/bitnami/containers/tree/main/bitnami/cassandra
+      description: Stores NVCF account, function, cluster, and service state.
+      upstream_url: https://github.com/apache/cassandra
     - artifact_id: nvcf-cassandra-migrations
       plane: control
       kind: ea-cve
@@ -599,6 +611,14 @@ manifest:
       requirement: optional
       description: Provides SMB persistent volumes for supported deployments.
       upstream_url: https://github.com/kubernetes-csi/csi-driver-smb
+    - name: modelexpress
+      version: supported
+      distribution: https://helm.ngc.nvidia.com/nvidia/ai-dynamo
+      plane: compute
+      kind: chart
+      requirement: optional
+      description: Distributes model weights peer-to-peer between Dynamo workers to reduce scale-out cold starts. Installed separately from the compute-plane stack.
+      upstream_url: https://github.com/ai-dynamo/modelexpress
     - artifact_id: nvca
       plane: compute
       kind: service-image
@@ -656,6 +676,14 @@ manifest:
       requirement: required
       description: Advertises NVIDIA GPU resources to Kubernetes.
       upstream_url: https://github.com/NVIDIA/k8s-device-plugin
+    - name: modelexpress-server
+      version: supported
+      distribution: https://catalog.ngc.nvidia.com/orgs/nvidia/teams/ai-dynamo/containers/modelexpress-server
+      plane: compute
+      kind: service-image
+      requirement: optional
+      description: Serves model weights to Dynamo workers over NIXL RDMA transports.
+      upstream_url: https://github.com/ai-dynamo/modelexpress
     - artifact_id: pylon
       plane: compute
       kind: service-image
@@ -689,11 +717,18 @@ manifest:
       github_url: https://github.com/NVIDIA/nvcf/tree/main/src/clis/nvcf-cli
 stack:
   name: nvcf-self-managed-stack
-  version: 0.6.0
+  version: 0.9.1
   registry: public-resources
   gitlab_project_id: 182049
   package_name: ncp-deploy
-  artifacts_file: artifacts-0.6.0.txt
+  artifacts_file: artifacts-0.9.1.txt
+  source_commit: 9cf1103b0e9fe90bde6a8147c95d3d423e96c781
+  pin_sources:
+    - deploy/stacks/nvcf-compute-plane/environments/base.yaml
+    - deploy/stacks/nvcf-compute-plane/helmfile.d/02-nvca.yaml.gotmpl
+    - deploy/stacks/self-managed/global.yaml.gotmpl
+    - deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl
+  pin_source_digest: sha256:ce09f463f36314045441c14320dce63693d924e6ba240afdcb4a276c670bda66
 denylist:
   - name: strap
     reason: Legacy name replaced by nvcf-service-oss
@@ -739,10 +774,10 @@ artifacts:
     registry: staging
     repository_name: k8s
     version: 1.36.1
-  - name: bitnami-cassandra
+  - name: cassandra
     type: image
     registry: staging
-    version: 5.0.6-nv-1
+    version: 5.0.8-nv-2.0.1
   - name: cert-manager-cainjector
     type: image
     registry: staging
@@ -806,7 +841,7 @@ artifacts:
   - name: helm-nvcf-llm-request-router
     type: chart
     registry: staging
-    version: 1.6.6
+    version: 1.12.2
   - name: helm-nvcf-nats-auth-callout-service
     type: chart
     registry: staging
@@ -826,7 +861,7 @@ artifacts:
   - name: helm-nvcf-openbao-server
     type: chart
     registry: staging
-    version: 0.30.23
+    version: 0.32.1
   - name: helm-nvcf-pki
     type: chart
     registry: staging
@@ -882,7 +917,7 @@ artifacts:
   - name: nvcf-gateway-routes
     type: chart
     registry: staging
-    version: 1.15.0
+    version: 1.17.0
   - name: nvcf-grpc-proxy
     type: image
     registry: staging
@@ -934,7 +969,7 @@ artifacts:
   - name: pylon
     type: image
     registry: staging
-    version: 0.3.1
+    version: 0.15.1
   - name: reval-server
     type: image
     registry: staging
@@ -947,19 +982,19 @@ supplemental_artifacts:
   - name: nvcf-cli
     type: resource
     registry: public-resources
-    version: 1.10.3
+    version: 1.16.2
   - name: helm-nvca-operator
     type: chart
     registry: staging
-    version: 1.12.7
+    version: 1.21.3
   - name: nvca-operator
     type: image
     registry: staging
-    version: 3.0.3
+    version: 3.2.19
   - name: nvca
     type: image
     registry: staging
-    version: 3.0.3
+    version: 3.2.19
   - name: nvcf-compute-plane-stack
     type: resource
     registry: public-resources
@@ -972,7 +1007,7 @@ supplemental_artifacts:
     type: image
     registry: staging
     repository_name: stargate
-    version: 0.3.2
+    version: 0.14.2
   - name: nvcf-ai-api-gateway-service
     type: image
     registry: staging

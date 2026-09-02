@@ -44,6 +44,7 @@ chart_map=(
     "ess                      encrypted-secret-store/ess-api"
     "gateway-routes-vanity    gateway-routes/chart"
     "grpc-proxy               grpc-proxy/grpc-proxy"
+    "http-invocation          http-invocation/nvcf-invocation-service"
     "llm-api-gateway          llm-api-gateway/llm-api-gateway"
     "llm-request-router       llm-request-router/llm-request-router"
     "notary                   notary/nvcf-notary-service"
