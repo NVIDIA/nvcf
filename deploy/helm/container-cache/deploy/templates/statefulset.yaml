@@ -69,7 +69,13 @@ spec:
           command: [ "/bin/bash" ]
           args:
             - -c
-            - "chown -R 1000:1000 /proxy_cache && chown -R 1000:1000 /container_cache"
+            # chmod the mount roots directly: some CSI provisioners hand back
+            # a zero-permission root directory even after chown, which blocks
+            # nginx (uid 1000) from creating zone subdirectories. The
+            # recursive chown/chmod below skips .snapshot: some network
+            # filesystems reserve that directory at the mount root, and
+            # chown -R into it hangs/fails, crash-looping this init container.
+            - "chmod 755 /proxy_cache /container_cache && chown 1000:1000 /proxy_cache /container_cache && find /proxy_cache /container_cache -mindepth 1 -maxdepth 1 ! -name .snapshot -exec chown -R 1000:1000 {} + -exec chmod -R u+rwX {} +"
           resources: {}
           volumeMounts:
             - name: proxy-cache
