@@ -350,13 +350,6 @@ fn shared_backend_b_stats() -> ModelStats {
     }
 }
 
-fn proxy_local_stats(mut stats: ModelStats) -> ModelStats {
-    stats
-        .stats_capabilities
-        .push("request.load.proxy_local".to_string());
-    stats
-}
-
 async fn published_shared_cluster(
     stats_a: ModelStats,
     stats_b: ModelStats,
@@ -995,9 +988,7 @@ async fn shared_cluster_reservation_updates_cluster_snapshot_even_when_other_bac
     scenario.publish_connected(&running_b, &update_b).await;
 
     let cluster = scenario.only_cluster("model-reserved").await;
-    // Reservation delta uses summed backend input capacity:
-    // existing 5ms + ceil(37 tokens / 200 input TPS * 1000) = 190ms.
-    assert_queue_stats(&cluster.stats, 8, 1, 107, 37, 4, 190);
+    assert_queue_stats(&cluster.stats, 11, 1, 137, 37, 4, 185);
 }
 
 #[tokio::test]
@@ -1432,7 +1423,7 @@ fn cluster_snapshot_rtt_mean_handles_three_near_max_durations() {
 fn cluster_generation_derives_cluster_source_from_stored_backends() {
     let observed_at = Instant::now();
     let mut backend_a = backend!("cluster-derived-source", "backend-a", 1.0, 100.0, 10);
-    backend_a.stats.max_output_tps = 10.0;
+    backend_a.stats.max_engine_concurrency = 10;
     backend_a.snapshot_updated_at = observed_at;
     let cluster_state = Arc::new(RoutedClusterState::new(
         backend_a.registration.cluster_generation.clone(),
@@ -1442,13 +1433,13 @@ fn cluster_generation_derives_cluster_source_from_stored_backends() {
         backend_a.registration.cluster_generation.clone() =>
         "cluster-derived-source", "backend-c", 3.0, 100.0, 30
     );
-    backend_c.stats.max_output_tps = 30.0;
+    backend_c.stats.max_engine_concurrency = 30;
     backend_c.snapshot_updated_at = observed_at + Duration::from_millis(1);
     let mut backend_b = backend!(
         backend_a.registration.cluster_generation.clone() =>
         "cluster-derived-source", "backend-b", 2.0, 100.0, 20
     );
-    backend_b.stats.max_output_tps = 20.0;
+    backend_b.stats.max_engine_concurrency = 20;
     backend_b.snapshot_updated_at = observed_at + Duration::from_millis(2);
     let backend_b_registration = backend_b.registration.clone();
 
@@ -1462,15 +1453,15 @@ fn cluster_generation_derives_cluster_source_from_stored_backends() {
     let snapshot = cluster_state
         .routing_snapshot()
         .expect("latest backend should publish the cluster-scoped source");
-    assert_eq!(snapshot.stats.max_output_tps, 20.0);
+    assert_eq!(snapshot.stats.max_engine_concurrency, 20);
     assert_eq!(snapshot.stats.queue_size, 1);
 
-    backend_b.stats.max_output_tps = 25.0;
+    backend_b.stats.max_engine_concurrency = 25;
     cluster_state.upsert_backend(Arc::new(backend_b));
     let snapshot = cluster_state
         .routing_snapshot()
         .expect("source heartbeat should retain another backend's reservation");
-    assert_eq!(snapshot.stats.max_output_tps, 25.0);
+    assert_eq!(snapshot.stats.max_engine_concurrency, 25);
     assert_eq!(snapshot.stats.queue_size, 1);
 
     cluster_state.remove_backend(&backend_b_registration);
@@ -1478,7 +1469,7 @@ fn cluster_generation_derives_cluster_source_from_stored_backends() {
         .routing_snapshot()
         .expect("source removal should derive a surviving source");
     assert_eq!(snapshot.active_backend_count, 2);
-    assert_eq!(snapshot.stats.max_output_tps, 30.0);
+    assert_eq!(snapshot.stats.max_engine_concurrency, 30);
     assert_eq!(snapshot.stats.queue_size, 1);
 }
 
@@ -2175,49 +2166,21 @@ async fn shared_cluster_registration_exposes_one_aggregated_cluster_candidate() 
         kv_cache_capacity_tokens: 2000,
         kv_cache_used_tokens: 500,
         kv_cache_free_tokens: 1500,
-        num_running_queries: 7,
+        num_running_queries: 18,
         max_engine_concurrency: 77,
-        total_query_input_size: 777,
-        queue_time_estimate_ms_by_priority: HashMap::from([(1, 222), (2, 333)]),
+        total_query_input_size: 1888,
+        queue_time_estimate_ms_by_priority: HashMap::from([(1, 172), (2, 233)]),
     );
     assert_eq!(cluster.rtt, Duration::from_micros(7_500));
 }
 
 #[tokio::test]
-async fn proxy_local_shared_cluster_aggregates_request_load_and_weighted_priorities() {
-    let (scenario, _running_a, _running_b) = published_shared_cluster(
-        proxy_local_stats(shared_backend_a_stats()),
-        proxy_local_stats(shared_backend_b_stats()),
-        10,
-    )
-    .await;
-
-    let cluster = scenario.only_cluster("shared-model").await;
-    assert_stats!(cluster.stats,
-        last_mean_input_tps: 220.0,
-        output_tps: 7.0,
-        max_output_tps: 60.0,
-        queue_size: 3,
-        queued_input_size: 300,
-        num_running_queries: 18,
-        total_query_input_size: 1888,
-        input_processing_queries: 4,
-        output_generation_queries: 6,
-        kv_cache_capacity_tokens: 2000,
-        kv_cache_used_tokens: 500,
-        kv_cache_free_tokens: 1500,
-        max_engine_concurrency: 77,
-        queue_time_estimate_ms_by_priority: HashMap::from([(1, 172), (2, 233)]),
-    );
-}
-
-#[tokio::test]
-async fn proxy_local_aggregation_is_independent_of_heartbeat_order() {
+async fn shared_cluster_aggregation_is_independent_of_heartbeat_order() {
     let scenario = RegistrationScenario::new(Some("rk-order"));
     let running_a = scenario.start_in("inst-a", "cluster-order", 1111);
     let running_b = scenario.start_in("inst-b", "cluster-order", 2222);
-    let mut stats_a = proxy_local_stats(shared_backend_a_stats());
-    let stats_b = proxy_local_stats(shared_backend_b_stats());
+    let mut stats_a = shared_backend_a_stats();
+    let stats_b = shared_backend_b_stats();
     stats_a.kv_cache_capacity_tokens = stats_b.kv_cache_capacity_tokens;
     stats_a.kv_cache_used_tokens = stats_b.kv_cache_used_tokens;
     stats_a.kv_cache_free_tokens = stats_b.kv_cache_free_tokens;
@@ -2235,7 +2198,7 @@ async fn proxy_local_aggregation_is_independent_of_heartbeat_order() {
 }
 
 #[tokio::test]
-async fn three_proxy_local_backends_merge_sparse_priority_maps() {
+async fn three_shared_backends_merge_sparse_priority_maps() {
     let scenario = RegistrationScenario::new(Some("rk-three"));
     let running_a = scenario.start_in("inst-a", "cluster-three", 1111);
     let running_b = scenario.start_in("inst-b", "cluster-three", 2222);
@@ -2272,8 +2235,7 @@ async fn three_proxy_local_backends_merge_sparse_priority_maps() {
             queue_time_estimate_ms_by_priority: HashMap::from([(3, 900)]),
             ..ModelStats::default()
         },
-    ]
-    .map(proxy_local_stats);
+    ];
 
     for (running, stats) in [
         (&running_a, stats[0].clone()),
@@ -2303,7 +2265,7 @@ async fn three_proxy_local_backends_merge_sparse_priority_maps() {
             &competing,
             "model-three",
             Active,
-            proxy_local_stats(priority_stats(100.0, [(3, 180)])),
+            priority_stats(100.0, [(3, 180)]),
             Some(5),
         )
         .await;
@@ -2347,8 +2309,8 @@ async fn three_proxy_local_backends_merge_sparse_priority_maps() {
 }
 
 #[tokio::test]
-async fn proxy_local_aggregation_saturates_gauges_and_ignores_invalid_rates() {
-    let mut stats_a = ModelStats {
+async fn shared_cluster_aggregation_saturates_gauges_and_ignores_invalid_rates() {
+    let stats_a = ModelStats {
         last_mean_input_tps: 100.0,
         output_tps: 10.0,
         max_output_tps: 50.0,
@@ -2360,8 +2322,7 @@ async fn proxy_local_aggregation_saturates_gauges_and_ignores_invalid_rates() {
         output_generation_queries: u64::MAX,
         ..ModelStats::default()
     };
-    stats_a = proxy_local_stats(stats_a);
-    let stats_b = proxy_local_stats(ModelStats {
+    let stats_b = ModelStats {
         last_mean_input_tps: 200.0,
         output_tps: 20.0,
         max_output_tps: 60.0,
@@ -2372,7 +2333,7 @@ async fn proxy_local_aggregation_saturates_gauges_and_ignores_invalid_rates() {
         input_processing_queries: 1,
         output_generation_queries: 1,
         ..ModelStats::default()
-    });
+    };
     let (scenario, running_a, running_b) = published_shared_cluster(stats_a, stats_b, 5).await;
 
     let stats = scenario.only_cluster("shared-model").await.stats;
@@ -2393,12 +2354,12 @@ async fn proxy_local_aggregation_saturates_gauges_and_ignores_invalid_rates() {
             &running_a,
             "shared-model",
             Active,
-            proxy_local_stats(ModelStats {
+            ModelStats {
                 last_mean_input_tps: 125.0,
                 output_tps: 7.5,
                 max_output_tps: 50.0,
                 ..ModelStats::default()
-            }),
+            },
             Some(5),
         )
         .await;
@@ -2407,12 +2368,12 @@ async fn proxy_local_aggregation_saturates_gauges_and_ignores_invalid_rates() {
             &running_b,
             "shared-model",
             Active,
-            proxy_local_stats(ModelStats {
+            ModelStats {
                 last_mean_input_tps: f64::NAN,
                 output_tps: f64::INFINITY,
                 max_output_tps: -1.0,
                 ..ModelStats::default()
-            }),
+            },
             Some(5),
         )
         .await;
@@ -2425,7 +2386,7 @@ async fn proxy_local_aggregation_saturates_gauges_and_ignores_invalid_rates() {
 }
 
 #[tokio::test]
-async fn proxy_local_priority_weights_stay_within_source_bounds() {
+async fn shared_cluster_priority_weights_stay_within_source_bounds() {
     let scenario = RegistrationScenario::new(Some("rk-convex"));
     let backends = [
         (scenario.start_in("inst-a", "cluster-convex", 1111), 6.0, 5),
@@ -2442,13 +2403,13 @@ async fn proxy_local_priority_weights_stay_within_source_bounds() {
                 running,
                 "model-convex",
                 Active,
-                proxy_local_stats(ModelStats {
+                ModelStats {
                     last_mean_input_tps: *input_tps,
                     queue_size: 1,
                     queued_input_size: 1,
                     queue_time_estimate_ms_by_priority: HashMap::from([(0, *wait_ms)]),
                     ..ModelStats::default()
-                }),
+                },
                 Some(5),
             )
             .await;
@@ -2464,59 +2425,17 @@ async fn proxy_local_priority_weights_stay_within_source_bounds() {
 }
 
 #[tokio::test]
-async fn mixed_proxy_local_capability_uses_legacy_source_behavior() {
-    let (scenario, running_a, _running_b) = published_shared_cluster(
-        proxy_local_stats(shared_backend_a_stats()),
-        shared_backend_b_stats(),
-        10,
-    )
-    .await;
-
-    let stats = scenario.only_cluster("shared-model").await.stats;
-    assert_stats!(stats,
-        last_mean_input_tps: 220.0,
-        output_tps: 7.0,
-        queue_size: 3,
-        queued_input_size: 300,
-        input_processing_queries: 4,
-        output_generation_queries: 6,
-        max_output_tps: 60.0,
-        num_running_queries: 7,
-        total_query_input_size: 777,
-        queue_time_estimate_ms_by_priority: HashMap::from([(1, 222), (2, 333)]),
-    );
-
-    scenario
-        .publish(
-            &running_a,
-            "shared-model",
-            Active,
-            proxy_local_stats(shared_backend_a_stats()),
-            Some(10),
-        )
-        .await;
-    let stats = scenario.only_cluster("shared-model").await.stats;
-    assert_stats!(stats,
-        max_output_tps: 60.0,
-        num_running_queries: 7,
-        max_engine_concurrency: 77,
-        total_query_input_size: 777,
-        queue_time_estimate_ms_by_priority: HashMap::from([(1, 222), (2, 333)]),
-    );
-}
-
-#[tokio::test]
-async fn proxy_local_missing_priority_inputs_select_scalar_fallback() {
+async fn shared_cluster_missing_priority_inputs_select_scalar_fallback() {
     let scenario = RegistrationScenario::new(Some("rk-fallback"));
     let running_a = scenario.start_in("inst-a", "cluster-fallback", 1111);
     let running_b = scenario.start_in("inst-b", "cluster-fallback", 2222);
-    let missing_map = proxy_local_stats(ModelStats {
+    let missing_map = ModelStats {
         last_mean_input_tps: 100.0,
         queue_size: 1,
         queued_input_size: 100,
         ..ModelStats::default()
-    });
-    let valid = proxy_local_stats(priority_stats(200.0, [(0, 10)]));
+    };
+    let valid = priority_stats(200.0, [(0, 10)]);
 
     scenario
         .publish(&running_a, "model-fallback", Active, missing_map, Some(5))
@@ -2531,12 +2450,12 @@ async fn proxy_local_missing_priority_inputs_select_scalar_fallback() {
         Some(334)
     );
 
-    let invalid_rate = proxy_local_stats(ModelStats {
+    let invalid_rate = ModelStats {
         queue_size: 1,
         queued_input_size: 100,
         queue_time_estimate_ms_by_priority: HashMap::from([(0, 20)]),
         ..ModelStats::default()
-    });
+    };
     scenario
         .publish(&running_a, "model-fallback", Active, invalid_rate, Some(5))
         .await;
@@ -2549,13 +2468,9 @@ async fn proxy_local_missing_priority_inputs_select_scalar_fallback() {
 }
 
 #[tokio::test]
-async fn proxy_local_backend_removal_recomputes_local_aggregation() {
-    let (scenario, running_a, running_b) = published_shared_cluster(
-        proxy_local_stats(shared_backend_a_stats()),
-        proxy_local_stats(shared_backend_b_stats()),
-        10,
-    )
-    .await;
+async fn shared_cluster_backend_removal_recomputes_request_load() {
+    let (scenario, running_a, running_b) =
+        published_shared_cluster(shared_backend_a_stats(), shared_backend_b_stats(), 10).await;
     assert_eq!(
         scenario
             .only_cluster("shared-model")
@@ -2584,51 +2499,19 @@ async fn proxy_local_backend_removal_recomputes_local_aggregation() {
 }
 
 #[tokio::test]
-async fn proxy_local_reservation_is_applied_once_after_backend_aggregation() {
-    let scenario = RegistrationScenario::new(Some("rk-proxy-reserved"));
-    let running_a = scenario.start_in("inst-a", "cluster-proxy-reserved", 1111);
-    let running_b = scenario.start_in("inst-b", "cluster-proxy-reserved", 2222);
-    let stats_a = proxy_local_stats(ModelStats {
-        last_mean_input_tps: 100.0,
-        num_running_queries: 3,
-        total_query_input_size: 30,
-        queue_time_estimate_ms_by_priority: HashMap::from([(4, 10)]),
-        ..ModelStats::default()
-    });
-    let stats_b = proxy_local_stats(ModelStats {
-        last_mean_input_tps: 100.0,
-        num_running_queries: 7,
-        total_query_input_size: 70,
-        queue_time_estimate_ms_by_priority: HashMap::from([(4, 5)]),
-        ..ModelStats::default()
-    });
-    let update_a = scenario.update(&running_a, "model-proxy-reserved", Active, stats_a);
-    let update_b = scenario.update(&running_b, "model-proxy-reserved", Active, stats_b);
-    scenario.publish_connected(&running_a, &update_a).await;
-    scenario.publish_connected(&running_b, &update_b).await;
-
-    let selected = scenario.selected_cluster("model-proxy-reserved").await;
-    let _reservation = selected.reserve_backend(&running_a.generation(), 37, 4);
-    scenario.publish_connected(&running_b, &update_b).await;
-
-    let stats = scenario.only_cluster("model-proxy-reserved").await.stats;
-    assert_queue_stats(&stats, 11, 1, 137, 37, 4, 185);
-}
-
-#[tokio::test]
-async fn routing_uses_load_from_every_proxy_local_backend() {
+async fn routing_uses_load_from_every_shared_cluster_backend() {
     let scenario = RegistrationScenario::new(Some("rk-routing-load"));
     let shared_a = scenario.start_in("shared-a", "cluster-shared", 1111);
     let shared_b = scenario.start_in("shared-b", "cluster-shared", 2222);
     let light = scenario.start_in("light", "cluster-light", 3333);
     for (running, wait_ms) in [(&shared_a, 900), (&shared_b, 100), (&light, 300)] {
-        let stats = proxy_local_stats(ModelStats {
+        let stats = ModelStats {
             last_mean_input_tps: 100.0,
             queue_size: 1,
             queued_input_size: 100,
             queue_time_estimate_ms_by_priority: HashMap::from([(0, wait_ms)]),
             ..ModelStats::default()
-        });
+        };
         scenario
             .publish(running, "model-routing-load", Active, stats, Some(5))
             .await;
