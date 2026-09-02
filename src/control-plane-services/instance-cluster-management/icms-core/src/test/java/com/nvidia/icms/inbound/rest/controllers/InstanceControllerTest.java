@@ -739,6 +739,61 @@ class InstanceControllerTest extends IntegrationTest {
     }
 
     @Test
+    void terminateInstanceCountPerGpuSpec_routesToBoundedTermination()
+            throws Exception {
+        String ncaId = RandomFactory.getRandomStringWithPrefix("ncaid", 5);
+        UUID workloadId = UUID.randomUUID();
+        UUID gpuSpecId = UUID.randomUUID();
+        var response = new TerminateInstancesResponse();
+
+        doReturn(response).when(instanceService).terminateInstances(
+                eq(ncaId), eq(workloadId), eq(gpuSpecId), eq(2), Mockito.any());
+
+        String url = "/v1/si/accounts/" + ncaId + "/workloads/" + workloadId
+                + "/gpuSpecs/" + gpuSpecId + "/instances";
+        mockMvc.perform(MockMvcRequestBuilders.delete(url)
+                        .headers(generateAuthorizationHeader())
+                        .param("InstanceCount", "2"))
+                .andExpect(status().isOk());
+
+        verify(instanceService).terminateInstances(
+                eq(ncaId), eq(workloadId), eq(gpuSpecId), eq(2), Mockito.any());
+    }
+
+    @Test
+    void terminateInstanceCountPerWorkload_routesToBoundedTermination()
+            throws Exception {
+        String ncaId = RandomFactory.getRandomStringWithPrefix("ncaid", 5);
+        UUID workloadId = UUID.randomUUID();
+        var response = new TerminateInstancesResponse();
+
+        doReturn(response).when(instanceService).terminateInstances(
+                eq(ncaId), eq(workloadId), eq(null), eq(2), Mockito.any());
+
+        String url = "/v1/si/accounts/" + ncaId + "/workloads/" + workloadId
+                + "/instances";
+        mockMvc.perform(MockMvcRequestBuilders.delete(url)
+                        .headers(generateAuthorizationHeader())
+                        .param("InstanceCount", "2"))
+                .andExpect(status().isOk());
+
+        verify(instanceService).terminateInstances(
+                eq(ncaId), eq(workloadId), eq(null), eq(2), Mockito.any());
+    }
+
+    @Test
+    void terminateInstanceCountPerGpuSpec_withNonPositiveCount_returnsBadRequest()
+            throws Exception {
+        String url = "/v1/si/accounts/nca/workloads/" + UUID.randomUUID()
+                + "/gpuSpecs/" + UUID.randomUUID() + "/instances";
+
+        mockMvc.perform(MockMvcRequestBuilders.delete(url)
+                        .headers(generateAuthorizationHeader())
+                        .param("InstanceCount", "0"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
     void terminateInstances_withInstanceIdsNotProvided_returnsError()
             throws Exception {
         HttpHeaders httpHeaders = generateAuthorizationHeader();
