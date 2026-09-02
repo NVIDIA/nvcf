@@ -127,11 +127,8 @@ public final class NatsConfiguration {
             builder.reconnectJitter(reconnectJitter).reconnectJitterTls(reconnectJitter);
         }
 
-        // Configure reconnection behavior based on the allowReconnect flag
-        if (!natsConfigurationProperties.isReconnectAllowed()) {
-            builder = builder.noReconnect(); // Disable reconnections
-        } else {
-            builder = builder.maxReconnects(-1); // Allow unlimited reconnections
+        if (natsConfigurationProperties.isUnlimitedReconnects()) {
+            builder = builder.maxReconnects(-1);
         }
 
         if (natsConfigurationProperties.getPingInterval().isPositive()) {

@@ -44,12 +44,12 @@ class NatsConfigurationTest {
     private static final Duration RECONNECT_WAIT = Duration.ofMillis(100);
 
     @Test
-    void createDefaultOptions_matchesCloudFunctionsReconnectBehavior() {
+    void createDefaultOptions_usesUnlimitedReconnectsWhenEnabled() {
         var properties = mock(NatsConfigurationProperties.class);
         when(properties.getNatsUrl()).thenReturn("nats://localhost:4222");
         when(properties.getConnectionTimeout()).thenReturn(CONNECTION_TIMEOUT);
         when(properties.getNkeySeed()).thenReturn(Optional.empty());
-        when(properties.isReconnectAllowed()).thenReturn(true);
+        when(properties.isUnlimitedReconnects()).thenReturn(true);
 
         var options = new NatsConfiguration().createDefaultOptions(properties);
 
@@ -57,6 +57,18 @@ class NatsConfigurationTest {
         assertEquals(PING_INTERVAL, options.getPingInterval());
         assertEquals(RECONNECT_WAIT, options.getReconnectWait());
         assertEquals(-1, options.getMaxReconnect());
+    }
+
+    @Test
+    void createDefaultOptions_usesDefaultReconnectLimitWhenUnlimitedReconnectsDisabled() {
+        var properties = mock(NatsConfigurationProperties.class);
+        when(properties.getNatsUrl()).thenReturn("nats://localhost:4222");
+        when(properties.getConnectionTimeout()).thenReturn(CONNECTION_TIMEOUT);
+        when(properties.getNkeySeed()).thenReturn(Optional.empty());
+
+        var options = new NatsConfiguration().createDefaultOptions(properties);
+
+        assertEquals(60, options.getMaxReconnect());
     }
 
     @Test

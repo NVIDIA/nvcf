@@ -39,7 +39,7 @@ public class NatsConfigurationProperties {
     private Duration pingInterval = Duration.ZERO;
     private Duration reconnectWait = Duration.ZERO;
     private Duration reconnectJitter = Duration.ZERO;
-    private boolean reconnectAllowed;
+    private boolean unlimitedReconnects;
     private Duration forceReconnectFlush = Duration.ZERO;
     private Duration delayBetweenMessages = Duration.ZERO;
     private Duration messageTtl = Duration.ZERO;

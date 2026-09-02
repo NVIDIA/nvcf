@@ -427,7 +427,7 @@ icms:
     ping-interval: 5s
     reconnect-wait: 1s # Increasing it to avoid slow down
     reconnect-jitter: 1s
-    reconnect-allowed: true
+    unlimited-reconnects: true
     force-reconnect-flush: 5s
     delay-between-messages: 100ms
     message-ttl: 96h

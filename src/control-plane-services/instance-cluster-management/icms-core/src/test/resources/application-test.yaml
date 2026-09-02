@@ -426,7 +426,7 @@ icms:
     connection-timeout: 10s
     ping-interval: 5s
     reconnect-wait: 100ms
-    reconnect-allowed: false
+    unlimited-reconnects: false
     force-reconnect-flush: 5s
     delay-between-messages: 100ms
     message-ttl: 96h

@@ -50,7 +50,7 @@ class NcpProfileConfigurationTest {
         assertThat(nats.getPingInterval()).isEqualTo(Duration.ofSeconds(5));
         assertThat(nats.getReconnectWait()).isEqualTo(Duration.ofMillis(100));
         assertThat(nats.getReconnectJitter()).isEqualTo(Duration.ofSeconds(1));
-        assertThat(nats.isReconnectAllowed()).isFalse();
+        assertThat(nats.isUnlimitedReconnects()).isFalse();
         assertThat(nats.getForceReconnectFlush()).isEqualTo(Duration.ofSeconds(5));
         assertThat(nats.getDelayBetweenMessages()).isEqualTo(Duration.ofMillis(100));
         assertThat(nats.getMessageTtl()).isEqualTo(Duration.ofHours(96));
