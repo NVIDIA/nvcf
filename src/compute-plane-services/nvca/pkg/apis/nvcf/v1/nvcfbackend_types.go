@@ -74,6 +74,9 @@ type AccountConfig struct {
 
 // +k8s:openapi-gen=true
 type ClusterConfig struct {
+	// ControlPlaneID is the stable identity used to isolate multiple NVCF
+	// control planes sharing one Kubernetes cluster. Empty preserves legacy names.
+	ControlPlaneID string `json:"controlPlaneId,omitempty"`
 	// required
 	ClusterID        string             `json:"clusterID,omitempty"`
 	ClusterName      string             `json:"clusterName"`

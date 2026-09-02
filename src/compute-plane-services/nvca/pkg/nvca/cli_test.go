@@ -60,6 +60,15 @@ func TestSetDefaultsPreservesConfiguredDefaultStargateAddress(t *testing.T) {
 	assert.Equal(t, "llm-router.example.test:50071", cfg.Workload.DefaultStargateAddress)
 }
 
+func TestReadAgentHostOverridesReadsControlPlaneID(t *testing.T) {
+	path := t.TempDir() + "/config.yaml"
+	require.NoError(t, os.WriteFile(path, []byte("agent:\n  controlPlaneID: plane-a\n"), 0o600))
+
+	overrides, err := readAgentHostOverrides(path)
+	require.NoError(t, err)
+	assert.Equal(t, "plane-a", overrides.ControlPlaneID)
+}
+
 func TestNewCommand(t *testing.T) {
 	newAgentFunc := func(a cliAgent) func(ctx context.Context, opts *AgentOptions) (cliAgent, error) {
 		return func(ctx context.Context, opts *AgentOptions) (cliAgent, error) {

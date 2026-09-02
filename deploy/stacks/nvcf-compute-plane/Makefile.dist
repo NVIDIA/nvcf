@@ -21,6 +21,48 @@ CLUSTER_NAME  ?=
 # Determine the absolute path of the directory containing this Makefile.
 MAKEFILE_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
+# Optional identity for one of multiple isolated NVCF control planes in the
+# same Kubernetes cluster. A command-line variable is recursively expanded by
+# GNU Make when it is exported, so capture its literal bytes before removing it
+# from Make's automatic command-line export set. GNU Make 4+ provides the file
+# function. The 3.x compatibility branch rejects dollar-bearing command-line
+# input before overriding the automatically exported variable.
+ENVIRONMENT_VALUES_FILE := $(MAKEFILE_DIR)/environments/$(HELMFILE_ENV).yaml
+CONTROL_PLANE_ID_HELPER := $(MAKEFILE_DIR)/scripts/resolve-control-plane-id.sh
+MAKE_MAJOR_VERSION := $(firstword $(subst ., ,$(MAKE_VERSION)))
+ifeq ($(filter 0 1 2 3,$(MAKE_MAJOR_VERSION)),)
+unexport CONTROL_PLANE_ID
+CONTROL_PLANE_ID_RAW_FILE := $(shell mktemp -t nvcf-control-plane-id.XXXXXX)
+$(file >$(CONTROL_PLANE_ID_RAW_FILE),$(value CONTROL_PLANE_ID))
+override undefine CONTROL_PLANE_ID
+CONTROL_PLANE_ID_RESOLUTION := $(shell "$(CONTROL_PLANE_ID_HELPER)" file \
+	"$(CONTROL_PLANE_ID_RAW_FILE)" "$(MAKEFILE_DIR)/environments/base.yaml" \
+	"$(ENVIRONMENT_VALUES_FILE)")
+$(shell rm -f "$(CONTROL_PLANE_ID_RAW_FILE)")
+else
+LEGACY_RAW_CONTROL_PLANE_ID := $(strip $(value CONTROL_PLANE_ID))
+override CONTROL_PLANE_ID :=
+ifneq ($(findstring $$,$(LEGACY_RAW_CONTROL_PLANE_ID)),)
+CONTROL_PLANE_ID_RESOLUTION := error format
+LEGACY_EFFECTIVE_CONTROL_PLANE_ID :=
+else ifneq ($(LEGACY_RAW_CONTROL_PLANE_ID),)
+CONTROL_PLANE_ID_RESOLUTION := ok
+LEGACY_EFFECTIVE_CONTROL_PLANE_ID := $(LEGACY_RAW_CONTROL_PLANE_ID)
+else
+CONTROL_PLANE_ID_RESOLUTION := $(shell "$(CONTROL_PLANE_ID_HELPER)" environment "" \
+	"$(MAKEFILE_DIR)/environments/base.yaml" "$(ENVIRONMENT_VALUES_FILE)")
+LEGACY_EFFECTIVE_CONTROL_PLANE_ID := $(word 2,$(CONTROL_PLANE_ID_RESOLUTION))
+endif
+endif
+CONTROL_PLANE_ID_RESOLUTION_STATUS := $(word 1,$(CONTROL_PLANE_ID_RESOLUTION))
+CONTROL_PLANE_ID_RESOLUTION_ERROR := $(word 2,$(CONTROL_PLANE_ID_RESOLUTION))
+ifeq ($(filter 0 1 2 3,$(MAKE_MAJOR_VERSION)),)
+override CONTROL_PLANE_ID := $(if $(filter ok,$(CONTROL_PLANE_ID_RESOLUTION_STATUS)),$(word 2,$(CONTROL_PLANE_ID_RESOLUTION)),)
+else
+override CONTROL_PLANE_ID := $(if $(filter ok,$(CONTROL_PLANE_ID_RESOLUTION_STATUS)),$(LEGACY_EFFECTIVE_CONTROL_PLANE_ID),)
+endif
+export CONTROL_PLANE_ID
+
 # Directory where templated manifests and the Helmfile registration handoff
 # will be stored.
 OUTPUT_DIR    ?= $(MAKEFILE_DIR)/out
@@ -35,8 +77,11 @@ REQUIRED_HELMFILE_MAJOR := 1
 REQUIRED_HELMFILE_MINOR := 1
 REQUIRED_HELM_MAJOR := 3
 
-# Namespaces owned by the compute-plane stack (used by destroy target)
-NAMESPACES := nvca-operator grove-system dynamo-system kai-scheduler
+# Namespaces owned by the selected lifecycle. Legacy mode keeps the historical
+# all-in-one cleanup; named mode only removes its operator namespace. The
+# operator cleanup job owns its derived agent, request, and model-cache namespaces.
+LEGACY_NAMESPACES := nvca-operator grove-system dynamo-system kai-scheduler
+EFFECTIVE_SELECTOR := $(if $(HELMFILE_SELECTOR),$(HELMFILE_SELECTOR),$(if $(CONTROL_PLANE_ID),release-group=workers,))
 
 # Kubeconfig file targeting a specific cluster. Used by helmfile, kubectl,
 # and nvcf-cli. Required in multi-cluster workflows to avoid registering
@@ -49,7 +94,8 @@ KUBECTL_CONTEXT_FLAG = $(if $(COMPUTE_KUBE_CONTEXT),--context "$(COMPUTE_KUBE_CO
 
 # PATH and HELM_PLUGINS override for development mode (when using local binaries)
 ifdef DEV_MODE
-PATH_OVERRIDE = PATH="$(MAKEFILE_DIR)/bin:$$PATH" HELM_PLUGINS="$(MAKEFILE_DIR)/bin/helm-plugins"
+DEV_BIN_DIR ?= $(MAKEFILE_DIR)/bin
+PATH_OVERRIDE = PATH="$(DEV_BIN_DIR):$$PATH" HELM_PLUGINS="$(DEV_BIN_DIR)/helm-plugins"
 else
 PATH_OVERRIDE =
 endif
@@ -59,10 +105,16 @@ INSTALL_PRE_HOOKS ?=
 APPLY_PRE_HOOKS ?=
 
 # --- Targets ---
-.PHONY: check-versions check-cluster-name template install sync apply destroy clean register-cluster help
+.PHONY: check-versions check-yq check-cluster-name check-control-plane-id prepare-control-plane-namespace template install sync apply destroy install-shared-prerequisites destroy-shared-prerequisites clean register-cluster help
 .DEFAULT_GOAL := help
 
 # --- Prerequisite Checks ---
+check-yq:
+	@command -v yq >/dev/null 2>&1 && yq --version 2>/dev/null | grep -Eq 'version v4\.' || { \
+		echo "Error: 'yq' v4 is required to resolve global.controlPlane.id" >&2; \
+		exit 1; \
+	}
+
 check-versions:
 ifdef DEV_MODE
 	@echo ">>> Development mode: Using pinned binaries (skipping system version checks)"
@@ -147,6 +199,51 @@ ifndef CLUSTER_NAME
 	$(error CLUSTER_NAME is required: make $@ CLUSTER_NAME=<name>)
 endif
 
+check-control-plane-id:
+	@if [ "$(CONTROL_PLANE_ID_RESOLUTION_STATUS)" != "ok" ]; then \
+		case "$(CONTROL_PLANE_ID_RESOLUTION_ERROR)" in \
+			yq) echo "Error: 'yq' v4 is required to resolve global.controlPlane.id" >&2 ;; \
+			configuration) echo "Error: unable to resolve global.controlPlane.id from the environment values" >&2 ;; \
+			reserved) echo "Error: CONTROL_PLANE_ID 'default' is reserved" >&2 ;; \
+			length) echo "Error: CONTROL_PLANE_ID must be at most 20 characters" >&2 ;; \
+			*) echo "Error: CONTROL_PLANE_ID must be a lowercase RFC 1123 DNS label" >&2 ;; \
+		esac; \
+		exit 1; \
+	elif [ -n "$${CONTROL_PLANE_ID:-}" ]; then \
+		control_plane_id="$${CONTROL_PLANE_ID}"; \
+		if [ "$${control_plane_id}" = "default" ]; then \
+			echo "Error: CONTROL_PLANE_ID 'default' is reserved" >&2; \
+			exit 1; \
+		fi; \
+		if ! printf '%s' "$${control_plane_id}" | grep -Eq '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$$'; then \
+			echo "Error: CONTROL_PLANE_ID must be a lowercase RFC 1123 DNS label" >&2; \
+			exit 1; \
+		fi; \
+		if [ "$${#control_plane_id}" -gt 20 ]; then \
+			echo "Error: CONTROL_PLANE_ID must be at most 20 characters" >&2; \
+			exit 1; \
+		fi; \
+	fi
+
+# Helm's --create-namespace path does not apply chart labels to the Namespace.
+# Establish the ownership marker before Helm writes any named release resources,
+# and refuse to adopt an existing namespace owned by another control plane.
+prepare-control-plane-namespace: check-control-plane-id
+	@if [ -n "$${CONTROL_PLANE_ID:-}" ]; then \
+		ns="$${CONTROL_PLANE_ID}-nvca-operator"; \
+		if kubectl $(KUBECONFIG_FLAG) $(KUBECTL_CONTEXT_FLAG) get namespace "$$ns" >/dev/null 2>&1; then \
+			actual_control_plane_id=$$(kubectl $(KUBECONFIG_FLAG) $(KUBECTL_CONTEXT_FLAG) get namespace "$$ns" -o jsonpath='{.metadata.labels.nvcf\.nvidia\.com/control-plane-id}'); \
+			if [ "$$actual_control_plane_id" != "$${CONTROL_PLANE_ID}" ]; then \
+				echo "Error: refusing to install into namespace $$ns: expected nvcf.nvidia.com/control-plane-id=$${CONTROL_PLANE_ID}, got '$$actual_control_plane_id'" >&2; \
+				exit 1; \
+			fi; \
+		else \
+			kubectl $(KUBECONFIG_FLAG) $(KUBECTL_CONTEXT_FLAG) create namespace "$$ns"; \
+			kubectl $(KUBECONFIG_FLAG) $(KUBECTL_CONTEXT_FLAG) label namespace "$$ns" \
+				nvcf.nvidia.com/control-plane-id="$${CONTROL_PLANE_ID}" --overwrite; \
+		fi; \
+	fi
+
 # --- Core Targets ---
 
 # Optional override for helmfile's --output-dir-template. Empty by default, so
@@ -156,7 +253,7 @@ endif
 # otherwise make the fixtures differ per checkout location.
 OUTPUT_DIR_TEMPLATE ?=
 
-template: clean check-versions check-cluster-name
+template: clean check-versions check-yq check-cluster-name check-control-plane-id
 	@if [ ! -f "$(REGISTRATION_VALUES_DIR)/$(CLUSTER_NAME)-register-values.yaml" ]; then \
 		echo "ERROR: Registration values not found at $(REGISTRATION_VALUES_DIR)/$(CLUSTER_NAME)-register-values.yaml"; \
 		echo "       Run 'make register-cluster CLUSTER_NAME=$(CLUSTER_NAME)' first."; \
@@ -177,13 +274,13 @@ template: clean check-versions check-cluster-name
 	CLUSTER_NAME="$(CLUSTER_NAME)" \
 	NCA_ID="${NCA_ID}" \
 	OUTPUT_DIR="$(abspath $(OUTPUT_DIR))" \
-	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(HELMFILE_KUBE_CONTEXT_FLAG) template \
+	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(HELMFILE_KUBE_CONTEXT_FLAG) $(if $(EFFECTIVE_SELECTOR),--selector $(EFFECTIVE_SELECTOR)) template \
 		--output-dir "$(OUTPUT_DIR)" \
 		$(if $(OUTPUT_DIR_TEMPLATE),--output-dir-template '$(OUTPUT_DIR_TEMPLATE)')
 
 	@echo ">>> Templating complete. Manifests generated in $(OUTPUT_DIR)"
 
-install: check-versions check-cluster-name $(INSTALL_PRE_HOOKS)
+install: check-versions check-yq check-cluster-name prepare-control-plane-namespace $(INSTALL_PRE_HOOKS)
 	@if [ ! -f "$(REGISTRATION_VALUES_DIR)/$(CLUSTER_NAME)-register-values.yaml" ]; then \
 		echo "ERROR: Registration values not found at $(REGISTRATION_VALUES_DIR)/$(CLUSTER_NAME)-register-values.yaml"; \
 		echo "       Run 'make register-cluster CLUSTER_NAME=$(CLUSTER_NAME)' first."; \
@@ -193,7 +290,7 @@ install: check-versions check-cluster-name $(INSTALL_PRE_HOOKS)
 	@echo "    Environment: $(HELMFILE_ENV)"
 	$(if $(KUBECONFIG_FILE),@echo "    Kubeconfig:  $(KUBECONFIG_FILE)")
 	$(if $(COMPUTE_KUBE_CONTEXT),@echo "    Kube context: $(COMPUTE_KUBE_CONTEXT)")
-	$(if $(HELMFILE_SELECTOR),@echo "    Selector:    $(HELMFILE_SELECTOR)")
+	$(if $(EFFECTIVE_SELECTOR),@echo "    Selector:    $(EFFECTIVE_SELECTOR)")
 
 	mkdir -p "$(OUTPUT_DIR)"
 	cp $(REGISTRATION_VALUES_DIR)/$(CLUSTER_NAME)-register-values.yaml $(OUTPUT_DIR)/
@@ -202,13 +299,13 @@ install: check-versions check-cluster-name $(INSTALL_PRE_HOOKS)
 	CLUSTER_NAME="$(CLUSTER_NAME)" \
 	NCA_ID="${NCA_ID}" \
 	OUTPUT_DIR="$(abspath $(OUTPUT_DIR))" \
-	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(HELMFILE_KUBE_CONTEXT_FLAG) $(if $(HELMFILE_SELECTOR),--selector $(HELMFILE_SELECTOR)) sync
+	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(HELMFILE_KUBE_CONTEXT_FLAG) $(if $(EFFECTIVE_SELECTOR),--selector $(EFFECTIVE_SELECTOR)) sync
 
 	@echo ">>> Compute-plane install complete."
 
 sync: install
 
-apply: check-versions check-cluster-name $(APPLY_PRE_HOOKS)
+apply: check-versions check-yq check-cluster-name prepare-control-plane-namespace $(APPLY_PRE_HOOKS)
 	@if [ ! -f "$(REGISTRATION_VALUES_DIR)/$(CLUSTER_NAME)-register-values.yaml" ]; then \
 		echo "ERROR: Registration values not found at $(REGISTRATION_VALUES_DIR)/$(CLUSTER_NAME)-register-values.yaml"; \
 		echo "       Run 'make register-cluster CLUSTER_NAME=$(CLUSTER_NAME)' first."; \
@@ -218,7 +315,7 @@ apply: check-versions check-cluster-name $(APPLY_PRE_HOOKS)
 	@echo "    Environment: $(HELMFILE_ENV)"
 	$(if $(KUBECONFIG_FILE),@echo "    Kubeconfig:  $(KUBECONFIG_FILE)")
 	$(if $(COMPUTE_KUBE_CONTEXT),@echo "    Kube context: $(COMPUTE_KUBE_CONTEXT)")
-	$(if $(HELMFILE_SELECTOR),@echo "    Selector:    $(HELMFILE_SELECTOR)")
+	$(if $(EFFECTIVE_SELECTOR),@echo "    Selector:    $(EFFECTIVE_SELECTOR)")
 
 	mkdir -p "$(OUTPUT_DIR)"
 	cp $(REGISTRATION_VALUES_DIR)/$(CLUSTER_NAME)-register-values.yaml $(OUTPUT_DIR)/
@@ -227,36 +324,86 @@ apply: check-versions check-cluster-name $(APPLY_PRE_HOOKS)
 	CLUSTER_NAME="$(CLUSTER_NAME)" \
 	NCA_ID="${NCA_ID}" \
 	OUTPUT_DIR="$(abspath $(OUTPUT_DIR))" \
-	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(HELMFILE_KUBE_CONTEXT_FLAG) $(if $(HELMFILE_SELECTOR),--selector $(HELMFILE_SELECTOR)) apply
+	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(HELMFILE_KUBE_CONTEXT_FLAG) $(if $(EFFECTIVE_SELECTOR),--selector $(EFFECTIVE_SELECTOR)) apply
 
 	@echo ">>> Helmfile apply complete."
 
-destroy: check-versions check-cluster-name
+destroy: check-versions check-yq check-cluster-name check-control-plane-id
+	@if [ -n "$${CONTROL_PLANE_ID:-}" ]; then \
+		ns="$${CONTROL_PLANE_ID}-nvca-operator"; \
+		if ! kubectl $(KUBECONFIG_FLAG) $(KUBECTL_CONTEXT_FLAG) get namespace "$$ns" >/dev/null 2>&1; then \
+			echo "Error: refusing to delete namespace $$ns before Helm teardown: namespace does not exist" >&2; \
+			exit 1; \
+		fi; \
+		actual_control_plane_id=$$(kubectl $(KUBECONFIG_FLAG) $(KUBECTL_CONTEXT_FLAG) get namespace "$$ns" -o jsonpath='{.metadata.labels.nvcf\.nvidia\.com/control-plane-id}'); \
+		if [ "$$actual_control_plane_id" != "$${CONTROL_PLANE_ID}" ]; then \
+			echo "Error: refusing to delete namespace $$ns before Helm teardown: expected nvcf.nvidia.com/control-plane-id=$${CONTROL_PLANE_ID}, got '$$actual_control_plane_id'" >&2; \
+			exit 1; \
+		fi; \
+	fi
 	@echo ">>> Destroying compute-plane releases for cluster '$(CLUSTER_NAME)'..."
 	@echo "    Environment: $(HELMFILE_ENV)"
 	$(if $(KUBECONFIG_FILE),@echo "    Kubeconfig:  $(KUBECONFIG_FILE)")
 	$(if $(COMPUTE_KUBE_CONTEXT),@echo "    Kube context: $(COMPUTE_KUBE_CONTEXT)")
-	$(if $(HELMFILE_SELECTOR),@echo "    Selector:    $(HELMFILE_SELECTOR)")
+	$(if $(EFFECTIVE_SELECTOR),@echo "    Selector:    $(EFFECTIVE_SELECTOR)")
 
 	HELMFILE_ENV="$(HELMFILE_ENV)" \
 	CLUSTER_NAME="$(CLUSTER_NAME)" \
 	NCA_ID="${NCA_ID}" \
 	OUTPUT_DIR="$(abspath $(OUTPUT_DIR))" \
-	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(HELMFILE_KUBE_CONTEXT_FLAG) $(if $(HELMFILE_SELECTOR),--selector $(HELMFILE_SELECTOR)) destroy
+	$(PATH_OVERRIDE) helmfile --environment default $(KUBECONFIG_FLAG) $(HELMFILE_KUBE_CONTEXT_FLAG) $(if $(EFFECTIVE_SELECTOR),--selector $(EFFECTIVE_SELECTOR)) destroy
 
 	@echo ">>> Helmfile destroy complete."
 
-ifndef HELMFILE_SELECTOR
-	@echo ">>> Deleting namespaces... $(NAMESPACES)"
-	@for ns in $(NAMESPACES); do \
+ifeq ($(HELMFILE_SELECTOR),)
+	@if [ -n "$${CONTROL_PLANE_ID:-}" ]; then \
+		ns="$${CONTROL_PLANE_ID}-nvca-operator"; \
+		echo ">>> Deleting namespace... $$ns"; \
 		if kubectl $(KUBECONFIG_FLAG) $(KUBECTL_CONTEXT_FLAG) get namespace "$$ns" >/dev/null 2>&1; then \
+			actual_control_plane_id=$$(kubectl $(KUBECONFIG_FLAG) $(KUBECTL_CONTEXT_FLAG) get namespace "$$ns" -o jsonpath='{.metadata.labels.nvcf\.nvidia\.com/control-plane-id}'); \
+			if [ "$$actual_control_plane_id" != "$${CONTROL_PLANE_ID}" ]; then \
+				echo "Error: refusing to delete namespace $$ns: expected nvcf.nvidia.com/control-plane-id=$${CONTROL_PLANE_ID}, got '$$actual_control_plane_id'" >&2; \
+				exit 1; \
+			fi; \
 			kubectl $(KUBECONFIG_FLAG) $(KUBECTL_CONTEXT_FLAG) delete namespace "$$ns" --wait=true; \
 		fi; \
-	done
+	else \
+		echo ">>> Deleting namespaces... $(LEGACY_NAMESPACES)"; \
+		for ns in $(LEGACY_NAMESPACES); do \
+			if kubectl $(KUBECONFIG_FLAG) $(KUBECTL_CONTEXT_FLAG) get namespace "$$ns" >/dev/null 2>&1; then \
+				kubectl $(KUBECONFIG_FLAG) $(KUBECTL_CONTEXT_FLAG) delete namespace "$$ns" --wait=true; \
+			fi; \
+		done; \
+	fi
 	@echo ">>> Namespace cleanup complete."
 else
 	@echo ">>> Skipping namespace cleanup (selector was used)"
 endif
+
+install-shared-prerequisites: check-versions $(INSTALL_PRE_HOOKS)
+	@echo ">>> Installing shared compute-plane prerequisites..."
+	HELMFILE_ENV="$(HELMFILE_ENV)" \
+	$(PATH_OVERRIDE) helmfile --file "$(MAKEFILE_DIR)/helmfile.d/01-dependencies.yaml.gotmpl" --environment default $(KUBECONFIG_FLAG) $(HELMFILE_KUBE_CONTEXT_FLAG) sync
+
+destroy-shared-prerequisites: check-versions
+	@if ! active_named_namespaces=$$(kubectl $(KUBECONFIG_FLAG) $(KUBECTL_CONTEXT_FLAG) get namespaces \
+		-l nvcf.nvidia.com/control-plane-id -o name); then \
+		echo "Error: refusing to destroy shared prerequisites: unable to verify active named compute-plane namespaces" >&2; \
+		exit 1; \
+	fi; \
+	if [ -n "$$active_named_namespaces" ]; then \
+		echo "Error: refusing to destroy shared prerequisites while named compute-plane namespaces remain:" >&2; \
+		printf '%s\n' "$$active_named_namespaces" >&2; \
+		exit 1; \
+	fi
+	@echo ">>> Destroying shared compute-plane prerequisites..."
+	HELMFILE_ENV="$(HELMFILE_ENV)" \
+	$(PATH_OVERRIDE) helmfile --file "$(MAKEFILE_DIR)/helmfile.d/01-dependencies.yaml.gotmpl" --environment default $(KUBECONFIG_FLAG) $(HELMFILE_KUBE_CONTEXT_FLAG) destroy
+	@for ns in nvca-shared-system nvca-operator grove-system dynamo-system kai-scheduler; do \
+		if kubectl $(KUBECONFIG_FLAG) $(KUBECTL_CONTEXT_FLAG) get namespace "$$ns" >/dev/null 2>&1; then \
+			kubectl $(KUBECONFIG_FLAG) $(KUBECTL_CONTEXT_FLAG) delete namespace "$$ns" --wait=true; \
+		fi; \
+	done
 
 clean:
 	@echo ">>> Cleaning output directory: $(OUTPUT_DIR)"
@@ -336,10 +483,13 @@ help:
 	@echo "  install            Initial deployment to cluster (helmfile sync)"
 	@echo "  apply              Update existing deployment (helmfile apply)"
 	@echo "  destroy            Remove all releases and clean up namespaces"
+	@echo "  install-shared-prerequisites  Install cluster-wide prerequisite releases"
+	@echo "  destroy-shared-prerequisites  Remove cluster-wide prerequisite releases"
 	@echo "  clean              Remove generated output directory"
 	@echo ""
 	@echo "Configuration:"
 	@echo "  HELMFILE_ENV       Environment name (default: $(HELMFILE_ENV))"
+	@echo "  CONTROL_PLANE_ID   Optional identity override; defaults to global.controlPlane.id"
 	@echo "  HELMFILE_SELECTOR  Optional release selector (e.g., name=nvca-operator)"
 	@echo "  KUBECONFIG_FILE    Path to kubeconfig file (pass to all targets in"
 	@echo "                     multi-cluster setups so registration reads JWKS"

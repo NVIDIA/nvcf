@@ -213,7 +213,7 @@ var (
 )
 
 func getSystemNamespace(nb *nvidiaiov1.NVCFBackend) string {
-	systemNamespace := DefaultNVCASystemNamespace
+	systemNamespace := nvcatypes.ControlPlaneResourceName(nb.Spec.ClusterConfig.ControlPlaneID, DefaultNVCASystemNamespace)
 	if nb.Spec.ClusterConfig.SystemNamespace != "" {
 		systemNamespace = nb.Spec.ClusterConfig.SystemNamespace
 	}
@@ -222,7 +222,7 @@ func getSystemNamespace(nb *nvidiaiov1.NVCFBackend) string {
 }
 
 func getRequestsNamespace(nb *nvidiaiov1.NVCFBackend) string {
-	requestsNamespace := DefaultNVCARequestsNamespace
+	requestsNamespace := nvcatypes.ControlPlaneResourceName(nb.Spec.ClusterConfig.ControlPlaneID, DefaultNVCARequestsNamespace)
 	if nb.Spec.ClusterConfig.RequestsNamespace != "" {
 		requestsNamespace = nb.Spec.ClusterConfig.RequestsNamespace
 	}
@@ -248,6 +248,7 @@ func (bc *BackendK8sCache) setupRequestsNamespace(ctx context.Context, nb *nvidi
 		ManagedbyLabelKey:                   nvcaoptypes.NVCAModuleName,
 		nvcatypes.WorkloadInstanceTypeLabel: WorkloadInstanceTypeValuePodSpec,
 	}
+	labels = nvcatypes.AddControlPlaneLabel(labels, nb.Spec.ClusterConfig.ControlPlaneID)
 
 	reqNSObj := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
@@ -296,7 +297,7 @@ func (bc *BackendK8sCache) setupSystemNamespace(ctx context.Context, nb *nvidiai
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        systemNamespace,
 			Annotations: getNBAnnotations(nb),
-			Labels:      getAppLabels(),
+			Labels:      getAppLabels(nb.Spec.ClusterConfig.ControlPlaneID),
 		},
 	}
 
@@ -310,7 +311,7 @@ func (bc *BackendK8sCache) setupSystemNamespace(ctx context.Context, nb *nvidiai
 			Name:        systemNamespace,
 			Namespace:   systemNamespace,
 			Annotations: getNBAnnotations(nb),
-			Labels:      getAppLabels(),
+			Labels:      getAppLabels(nb.Spec.ClusterConfig.ControlPlaneID),
 		},
 		Spec: corev1.ResourceQuotaSpec{
 			ScopeSelector: &corev1.ScopeSelector{
@@ -683,7 +684,7 @@ func (bc *BackendK8sCache) setupNGCServiceAPIKeySecret(ctx context.Context, nb *
 			Name:        NGCServiceAPIKeySecretName,
 			Namespace:   getSystemNamespace(nb),
 			Annotations: getNBAnnotations(nb),
-			Labels:      getAppLabels(),
+			Labels:      getAppLabels(nb.Spec.ClusterConfig.ControlPlaneID),
 		},
 		Data: map[string][]byte{
 			NGCServiceAPIKeySecretDataKey: []byte(ngcServiceAPIStr),
@@ -711,7 +712,7 @@ func (bc *BackendK8sCache) setupOTELConfigSecret(ctx context.Context, nb *nvidia
 			Name:        OTELConfigSecretName,
 			Namespace:   getSystemNamespace(nb),
 			Annotations: getNBAnnotations(nb),
-			Labels:      getAppLabels(),
+			Labels:      getAppLabels(nb.Spec.ClusterConfig.ControlPlaneID),
 		},
 		Data: map[string][]byte{
 			OTELExporterSecretKey:               []byte(exporter),
@@ -732,7 +733,7 @@ func (bc *BackendK8sCache) setupNVCARBAC(ctx context.Context, nb *nvidiaiov1.NVC
 			Name:        nvcaoptypes.NVCAModuleName,
 			Namespace:   getSystemNamespace(nb),
 			Annotations: getNBAnnotations(nb),
-			Labels:      getAppLabels(),
+			Labels:      getAppLabels(nb.Spec.ClusterConfig.ControlPlaneID),
 		},
 		AutomountServiceAccountToken: boolPtr(false),
 		ImagePullSecrets:             getImagePullSecretReferences(ctx, nb, bc.generateImagePullSecret, bc.additionalImagePullSecrets),
@@ -748,11 +749,17 @@ func (bc *BackendK8sCache) setupNVCARBAC(ctx context.Context, nb *nvidiaiov1.NVC
 	crudVerbs := []string{"get", "list", "watch", "create", "update", "delete", "patch"}
 	crudWithCollectionVerbs := []string{"get", "list", "watch", "create", "update", "delete", "deletecollection", "patch"}
 
+	// A named control plane gets uniquely named RBAC and all controllers enforce
+	// its namespace/label identity. The agent still needs cluster-level bootstrap
+	// permissions to create and remove dynamic workload namespaces and their
+	// RoleBindings. Kubernetes RBAC cannot constrain those verbs by namespace
+	// prefix or label, so this is operational control-plane isolation, not an
+	// adversarial multi-tenant authorization boundary.
 	cr := &rbacv1.ClusterRole{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        nvcaoptypes.NVCAModuleName,
+			Name:        controlPlaneClusterResourceName(nb, nvcaoptypes.NVCAModuleName),
 			Annotations: getNBAnnotations(nb),
-			Labels:      getAppLabels(),
+			Labels:      getAppLabels(nb.Spec.ClusterConfig.ControlPlaneID),
 		},
 		Rules: []rbacv1.PolicyRule{
 			{
@@ -799,7 +806,7 @@ func (bc *BackendK8sCache) setupNVCARBAC(ctx context.Context, nb *nvidiaiov1.NVC
 			{
 				APIGroups:     []string{"admissionregistration.k8s.io"},
 				Resources:     []string{"mutatingwebhookconfigurations", "validatingwebhookconfigurations"},
-				ResourceNames: []string{nvcaoptypes.NVCAModuleName},
+				ResourceNames: []string{controlPlaneClusterResourceName(nb, nvcaoptypes.NVCAModuleName)},
 				Verbs:         []string{"get", "list", "watch"},
 			},
 			// NvSnap integration (PR-3 + PR-5): NVCA agent reads and
@@ -958,9 +965,9 @@ func (bc *BackendK8sCache) setupNVCARBAC(ctx context.Context, nb *nvidiaiov1.NVC
 
 	crb := &rbacv1.ClusterRoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        nvcaoptypes.NVCAModuleName,
+			Name:        controlPlaneClusterResourceName(nb, nvcaoptypes.NVCAModuleName),
 			Annotations: getNBAnnotations(nb),
-			Labels:      getAppLabels(),
+			Labels:      getAppLabels(nb.Spec.ClusterConfig.ControlPlaneID),
 		},
 		Subjects: []rbacv1.Subject{
 			{
@@ -971,7 +978,7 @@ func (bc *BackendK8sCache) setupNVCARBAC(ctx context.Context, nb *nvidiaiov1.NVC
 		},
 		RoleRef: rbacv1.RoleRef{
 			Kind:     "ClusterRole",
-			Name:     nvcaoptypes.NVCAModuleName,
+			Name:     controlPlaneClusterResourceName(nb, nvcaoptypes.NVCAModuleName),
 			APIGroup: "rbac.authorization.k8s.io",
 		},
 	}
@@ -987,7 +994,8 @@ func (bc *BackendK8sCache) setupNVCARBAC(ctx context.Context, nb *nvidiaiov1.NVC
 func (bc *BackendK8sCache) mirrorConfigMap(ctx context.Context, nb *nvidiaiov1.NVCFBackend, srcName string) error {
 	log := core.GetLogger(ctx)
 
-	srcCM, err := bc.clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Get(ctx, srcName, metav1.GetOptions{})
+	srcCM, err := bc.clients.K8s.CoreV1().ConfigMaps(bc.operatorConfigMapNamespace()).Get(
+		ctx, srcName, metav1.GetOptions{})
 	if err != nil {
 		log.Errorf("failed to get source configmap %v", srcName)
 		return err
@@ -1003,13 +1011,23 @@ func (bc *BackendK8sCache) mirrorConfigMap(ctx context.Context, nb *nvidiaiov1.N
 	return bc.createOrUpdateConfigMap(ctx, &cmTemplate)
 }
 
+func (bc *BackendK8sCache) operatorConfigMapNamespace() string {
+	if bc.operatorNamespace != "" {
+		return bc.operatorNamespace
+	}
+	// Preserve the legacy namespace for callers that construct the cache
+	// directly without going through BackendK8sCacheBuilder.
+	return NVCAOperatorNamespace
+}
+
 // setupGPUProfilingConfigMap mirrors the chart-created nvca-gpu-profiling-config ConfigMap
 // into the agent's system namespace, where NVCA reads it live. Unlike mirrorConfigMap it is
 // optional: an absent source is skipped (profiling stays off) rather than failing reconcile.
 func (bc *BackendK8sCache) setupGPUProfilingConfigMap(ctx context.Context, nb *nvidiaiov1.NVCFBackend) error {
 	log := core.GetLogger(ctx)
 
-	srcCM, err := bc.clients.K8s.CoreV1().ConfigMaps(NVCAOperatorNamespace).Get(ctx, nvcfGPUProfilingConfigMapName, metav1.GetOptions{})
+	srcCM, err := bc.clients.K8s.CoreV1().ConfigMaps(bc.operatorConfigMapNamespace()).Get(
+		ctx, nvcfGPUProfilingConfigMapName, metav1.GetOptions{})
 	if err != nil {
 		if k8serr.IsNotFound(err) {
 			log.Debugf("%v configmap not found, skipping GPU profiling config mirror", nvcfGPUProfilingConfigMapName)
@@ -1052,7 +1070,7 @@ func (bc *BackendK8sCache) setupNetworkPoliciesConfigMap(ctx context.Context, nb
 			Name:        NetworkPoliciesConfigmapName,
 			Namespace:   getSystemNamespace(nb),
 			Annotations: getNBAnnotations(nb),
-			Labels:      getAppLabels(),
+			Labels:      getAppLabels(nb.Spec.ClusterConfig.ControlPlaneID),
 		},
 		Data: mergedNetPolData,
 	}
@@ -1178,7 +1196,7 @@ func (bc *BackendK8sCache) setupVaultConfigmap(ctx context.Context, nb *nvidiaio
 			Name:        NVCAVaultConfigmapName,
 			Namespace:   getSystemNamespace(nb),
 			Annotations: getNBAnnotations(nb),
-			Labels:      getAppLabels(),
+			Labels:      getAppLabels(nb.Spec.ClusterConfig.ControlPlaneID),
 		},
 		Data: getVaultConfigData(nb),
 	}
@@ -1220,7 +1238,7 @@ func (bc *BackendK8sCache) setupStaticGPUConfigMap(ctx context.Context, nb *nvid
 			Name:        NVCAConfigmapName,
 			Namespace:   getSystemNamespace(nb),
 			Annotations: getNBAnnotations(nb),
-			Labels:      getAppLabels(),
+			Labels:      getAppLabels(nb.Spec.ClusterConfig.ControlPlaneID),
 		},
 		Data: cmData,
 	}
@@ -1248,7 +1266,7 @@ func (bc *BackendK8sCache) setupOAuthClientSecrets(ctx context.Context, nb *nvid
 				Name:        clientKeySecretName,
 				Namespace:   getSystemNamespace(nb),
 				Annotations: getNBAnnotations(nb),
-				Labels:      getAppLabels(),
+				Labels:      getAppLabels(nb.Spec.ClusterConfig.ControlPlaneID),
 			},
 			Data: map[string][]byte{
 				OAuthClientKeySecretDataKey: []byte(oauthConfig.ClientSecretKey),
@@ -1266,7 +1284,7 @@ func (bc *BackendK8sCache) setupOAuthClientSecrets(ctx context.Context, nb *nvid
 				Name:        clientIDSecretName,
 				Namespace:   getSystemNamespace(nb),
 				Annotations: getNBAnnotations(nb),
-				Labels:      getAppLabels(),
+				Labels:      getAppLabels(nb.Spec.ClusterConfig.ControlPlaneID),
 			},
 			Data: map[string][]byte{
 				OAuthClientIDSecretDataKey: []byte(oauthConfig.ClientID),
@@ -1321,7 +1339,7 @@ func (bc *BackendK8sCache) newAgentConfigConfigMap(
 			Name:        agentConfigConfigMapName,
 			Namespace:   getSystemNamespace(nb),
 			Annotations: getNBAnnotations(nb),
-			Labels:      getAppLabels(),
+			Labels:      getAppLabels(nb.Spec.ClusterConfig.ControlPlaneID),
 		},
 		Data: map[string]string{
 			agentConfigFile: string(cb),
@@ -1333,6 +1351,7 @@ type agentHostOverrides struct {
 	ICMSHostHeaderOverride             string
 	HelmReValServiceHostHeaderOverride string
 	NATSHostOverride                   *string
+	ControlPlaneID                     string
 }
 
 func agentHostOverrideConfig(nb *nvidiaiov1.NVCFBackend, envType nvidiaiov1.EnvType) agentHostOverrides {
@@ -1345,6 +1364,7 @@ func agentHostOverrideConfig(nb *nvidiaiov1.NVCFBackend, envType nvidiaiov1.EnvT
 		ICMSHostHeaderOverride:             nb.Spec.ICMSConfig.ICMSServiceHostHeaderOverride,
 		HelmReValServiceHostHeaderOverride: reValHost,
 		NATSHostOverride:                   nb.Spec.AgentConfig.NATSHostOverride,
+		ControlPlaneID:                     nb.Spec.ClusterConfig.ControlPlaneID,
 	}
 }
 
@@ -1364,7 +1384,8 @@ func encodeAgentConfig(cfg nvcaconfig.Config, mergeCfg nvcaconfig.Config, natsUR
 func applyAgentHostOverrides(data []byte, hostOverrides agentHostOverrides) ([]byte, error) {
 	if hostOverrides.ICMSHostHeaderOverride == "" &&
 		hostOverrides.HelmReValServiceHostHeaderOverride == "" &&
-		(hostOverrides.NATSHostOverride == nil || *hostOverrides.NATSHostOverride == "") {
+		(hostOverrides.NATSHostOverride == nil || *hostOverrides.NATSHostOverride == "") &&
+		hostOverrides.ControlPlaneID == "" {
 		return data, nil
 	}
 
@@ -1395,6 +1416,7 @@ func applyAgentHostOverrides(data []byte, hostOverrides agentHostOverrides) ([]b
 	if hostOverrides.NATSHostOverride != nil {
 		setYAMLString(agent, "NATSHostOverride", *hostOverrides.NATSHostOverride)
 	}
+	setYAMLString(agent, "controlPlaneID", hostOverrides.ControlPlaneID)
 
 	return yamlv3.Marshal(&doc)
 }
@@ -1533,7 +1555,7 @@ func (bc *BackendK8sCache) setupImagePullSecrets(ctx context.Context, nb *nvidia
 			Name:        NVCAImagePullSecretName,
 			Namespace:   getSystemNamespace(nb),
 			Annotations: getNBAnnotations(nb),
-			Labels:      getAppLabels(),
+			Labels:      getAppLabels(nb.Spec.ClusterConfig.ControlPlaneID),
 		},
 		Type: corev1.SecretTypeDockerConfigJson,
 		Data: map[string][]byte{
@@ -1643,10 +1665,10 @@ func (bc *BackendK8sCache) setupNVCAService(ctx context.Context, nb *nvidiaiov1.
 			Name:        nvcaoptypes.NVCAModuleName,
 			Namespace:   getSystemNamespace(nb),
 			Annotations: getNBAnnotations(nb),
-			Labels:      getAppLabels(),
+			Labels:      getAppLabels(nb.Spec.ClusterConfig.ControlPlaneID),
 		},
 		Spec: corev1.ServiceSpec{
-			Selector: getAppLabels(),
+			Selector: getAppLabels(nb.Spec.ClusterConfig.ControlPlaneID),
 			Ports: []corev1.ServicePort{
 				{
 					Name:       nvcaoptypes.NVCAModuleName,
@@ -2153,16 +2175,16 @@ func (bc *BackendK8sCache) setupNVCADeployment(ctx context.Context, original *nv
 			Name:        deployName,
 			Namespace:   getSystemNamespace(nb),
 			Annotations: getNBAnnotations(nb),
-			Labels:      getAppLabels(),
+			Labels:      getAppLabels(nb.Spec.ClusterConfig.ControlPlaneID),
 		},
 		Spec: appsv1.DeploymentSpec{
 			Replicas: &replicas,
 			Selector: &metav1.LabelSelector{
-				MatchLabels: getAppLabels(),
+				MatchLabels: getAppLabels(nb.Spec.ClusterConfig.ControlPlaneID),
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels: getAppLabels(),
+					Labels: getAppLabels(nb.Spec.ClusterConfig.ControlPlaneID),
 				},
 				Spec: corev1.PodSpec{
 					AutomountServiceAccountToken: boolPtr(true),
@@ -2392,7 +2414,7 @@ func (bc *BackendK8sCache) newAgentConfig(ctx context.Context, nb *nvidiaiov1.NV
 			AdminAddr:                               fmt.Sprintf("127.0.0.1:%d", nvcaAdminPortHTTP),
 			SystemNamespace:                         systemNamespace,
 			RequestsNamespace:                       requestsNamespace,
-			NamespaceLabels:                         getAppLabels(),
+			NamespaceLabels:                         getAppLabels(nb.Spec.ClusterConfig.ControlPlaneID),
 			ComputeBackend:                          backendType,
 			HelmRepositoryPrefix:                    bc.helmRepositoryPrefix,
 			HelmReValStageOAuthTokenURL:             effectiveConfig.HelmReValStageOAuthTokenURL,
@@ -2568,8 +2590,9 @@ func (bc *BackendK8sCache) setupNVCAMutatingWebhookConfiguration(ctx context.Con
 ) error {
 	whc := &admissionregistrationv1.MutatingWebhookConfiguration{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        nvcaoptypes.NVCAModuleName,
+			Name:        controlPlaneClusterResourceName(nb, nvcaoptypes.NVCAModuleName),
 			Annotations: getNBAnnotations(nb),
+			Labels:      getAppLabels(nb.Spec.ClusterConfig.ControlPlaneID),
 		},
 	}
 
@@ -2583,6 +2606,9 @@ func (bc *BackendK8sCache) setupNVCAMutatingWebhookConfiguration(ctx context.Con
 		makeHelmStorageMutatingWebhook(nb, webhookCert),
 		bc.makeHelmPersistentStorageWebhook(nb, webhookCert),
 		makeNVCAMutatingWebhook(nb, webhookCert))
+	for i := range whc.Webhooks {
+		scopeMutatingWebhook(&whc.Webhooks[i], nb.Spec.ClusterConfig.ControlPlaneID)
+	}
 
 	return bc.createOrUpdateMutatingWebhookConfiguration(ctx, whc)
 }
@@ -2709,7 +2735,7 @@ func (bc *BackendK8sCache) setupOTelCollectorConfigMap(ctx context.Context, nb *
 			Name:        NVCAOTelCollectorConfigMapName,
 			Namespace:   getSystemNamespace(nb),
 			Annotations: getNBAnnotations(nb),
-			Labels:      getAppLabels(),
+			Labels:      getAppLabels(nb.Spec.ClusterConfig.ControlPlaneID),
 		},
 		Data: configData,
 	}

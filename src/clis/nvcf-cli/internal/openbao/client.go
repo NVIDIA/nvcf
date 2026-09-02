@@ -102,6 +102,21 @@ type pkiCertificateHTTPResponse struct {
 	Body        string
 }
 
+type pkiCertificateRequestError struct {
+	response pkiCertificateHTTPResponse
+}
+
+func (e *pkiCertificateRequestError) Error() string {
+	message := fmt.Sprintf("OpenBao PKI certificate request failed with HTTP %d", e.response.StatusCode)
+	if e.response.ContentType != "" {
+		message += fmt.Sprintf(" (content type %q)", e.response.ContentType)
+	}
+	if body := boundedOpenBaoHTTPErrorBody(e.response.Body); body != "" {
+		message += ": " + body
+	}
+	return message
+}
+
 // NewClient creates a new OpenBao client
 func NewClient(config *Config, k8sClient *k8s.Client) *Client {
 	return &Client{
@@ -412,11 +427,38 @@ func (c *Client) generateUserJWTTokenWithSubject(ctx context.Context, vaultToken
 // text suitable for a public trust bundle.
 func (c *Client) ReadPKICertificatePEM(ctx context.Context, pkiPath string) (string, error) {
 	readURL := strings.TrimRight(c.config.OpenBaoURL, "/") + "/v1/" + strings.Trim(pkiPath, "/") + "/cert/ca"
+	pem, err := c.readPKICertificatePEMWithToken(ctx, readURL, "")
+	var requestErr *pkiCertificateRequestError
+	if err == nil || !errors.As(err, &requestErr) || requestErr.response.StatusCode != http.StatusForbidden {
+		return pem, err
+	}
+
+	// OpenBao returns 403 for an unauthenticated request when the optional PKI
+	// mount is absent, hiding the 404 that distinguishes "not enabled" from an
+	// authorization problem. Retry only that response with the configured root
+	// token so profile export can classify the missing optional mount correctly.
+	rootToken, tokenErr := c.getOpenBaoRootToken()
+	if tokenErr != nil {
+		return "", fmt.Errorf("%w; authenticated retry unavailable: %v", err, tokenErr)
+	}
+	pem, err = c.readPKICertificatePEMWithToken(ctx, readURL, rootToken)
+	if errors.As(err, &requestErr) && requestErr.response.StatusCode == http.StatusNotFound {
+		return "", fmt.Errorf("%w: authenticated OpenBao response returned HTTP 404", ErrPKICertificateNotFound)
+	}
+	return pem, err
+}
+
+func (c *Client) readPKICertificatePEMWithToken(ctx context.Context, readURL, token string) (string, error) {
 	writeOut := "\n" + curlHTTPStatusMarker + "%{http_code}\n" +
 		curlHTTPContentTypeMarker + "%{content_type}\n"
 	curlArgs := []string{"curl", "-sS", "--write-out", writeOut, readURL}
+	stdin := ""
+	if token != "" {
+		curlArgs = append(curlArgs, "-H", "@-")
+		stdin = "X-Vault-Token: " + token + "\n"
+	}
 	return readPKICertificatePEM(ctx, 3, 2*time.Second, func(ctx context.Context) (pkiCertificateHTTPResponse, error) {
-		output, err := c.executeKubectlRun(ctx, "openbao-pki-root-ca", curlArgs)
+		output, err := c.executeKubectlRunWithInput(ctx, "openbao-pki-root-ca", curlArgs, stdin)
 		if err != nil {
 			return pkiCertificateHTTPResponse{}, err
 		}
@@ -497,14 +539,7 @@ func pkiCertificateHTTPResponseFromOutput(output string) (pkiCertificateHTTPResp
 }
 
 func pkiCertificateHTTPError(response pkiCertificateHTTPResponse) error {
-	message := fmt.Sprintf("OpenBao PKI certificate request failed with HTTP %d", response.StatusCode)
-	if response.ContentType != "" {
-		message += fmt.Sprintf(" (content type %q)", response.ContentType)
-	}
-	if body := boundedOpenBaoHTTPErrorBody(response.Body); body != "" {
-		message += ": " + body
-	}
-	return errors.New(message)
+	return &pkiCertificateRequestError{response: response}
 }
 
 func retryablePKICertificateHTTPStatus(statusCode int) bool {
@@ -577,6 +612,10 @@ func (c *Client) kubectlBaseArgs() []string {
 
 // executeKubectlRun executes a kubectl run command with the utility image
 func (c *Client) executeKubectlRun(ctx context.Context, name string, args []string) (string, error) {
+	return c.executeKubectlRunWithInput(ctx, name, args, "")
+}
+
+func (c *Client) executeKubectlRunWithInput(ctx context.Context, name string, args []string, stdin string) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -606,6 +645,9 @@ func (c *Client) executeKubectlRun(ctx context.Context, name string, args []stri
 
 	// Execute the command
 	cmd := exec.CommandContext(ctx, cmdArgs[0], cmdArgs[1:]...)
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		if c.config.Debug {

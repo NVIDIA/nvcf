@@ -63,10 +63,11 @@ The container reads the following environment variables:
 | `CASSANDRA_PASSWORD` | Cassandra superuser password |
 | `SERVICE_ROLE_PASSWORD` | Substituted into the per-keyspace login role passwords (`02_init_roles.up.sql`) |
 | `REPLICA_COUNT` | Replication factor for service keyspaces (defaults to `3`) |
+| `CONTROL_PLANE_ID` | Optional DNS-1123 control-plane ID. When set, derives isolated ESS, OpenBao, and Notary authorization URLs; empty preserves the legacy namespaces. |
 
 For each keyspace under `keyspaces/`, the container:
 
-1. Pre-processes any `*.sql` and `*.cql` files via `envsubst` so that `${SERVICE_ROLE_PASSWORD}` and `${REPLICA_COUNT}` are substituted (other environment variables are intentionally not substituted).
+1. Validates `CONTROL_PLANE_ID`, derives the authorization URLs without accepting raw CQL string inputs, and pre-processes `*.sql` and `*.cql` via an explicit `envsubst` allowlist.
 2. Runs `migrate up` with the `cassandra://` driver, using the keyspace name as the migrations table name.
 
 A failure in any keyspace's migration set stops the run.
@@ -138,6 +139,8 @@ spec:
             - name: SERVICE_ROLE_PASSWORD
               valueFrom:
                 secretKeyRef: { name: cassandra-credentials, key: service-role-password }
+            - name: CONTROL_PLANE_ID
+              value: "plane-a"
 ```
 
 ## Authoring migrations

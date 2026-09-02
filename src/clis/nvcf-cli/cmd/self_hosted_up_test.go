@@ -70,7 +70,7 @@ func resetUpFlags(t *testing.T) {
 	selfHostedUpCurrentKubeContext = func() (string, error) {
 		return "k3d-ncp-local", nil
 	}
-	fetchControlPlaneRootCAPEM = func(context.Context, string) (string, error) {
+	fetchControlPlaneRootCAPEM = func(context.Context, string, string) (string, error) {
 		return "", nil
 	}
 	t.Cleanup(func() {

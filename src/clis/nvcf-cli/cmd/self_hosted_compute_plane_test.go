@@ -850,6 +850,43 @@ releases:
 		assert.Equal(t, "2.0.0", version)
 	})
 
+	t.Run("reads chart default from dynamically named nvca release", func(t *testing.T) {
+		stackDir := t.TempDir()
+		helmfileDir := filepath.Join(stackDir, "helmfile.d")
+		require.NoError(t, os.MkdirAll(helmfileDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(helmfileDir, "02-nvca.yaml.gotmpl"), []byte(`
+{{- $operatorReleaseName := "nvca-operator" }}
+releases:
+  - name: {{ $operatorReleaseName }}
+    chart: {{ $nvcaOperatorChartPath | default "nvcf/helm-nvca-operator" | quote }}
+    version: 1.21.3
+`), 0o644))
+
+		chart, version, err := computePlaneChartFromStack(stackDir)
+		require.NoError(t, err)
+		assert.Equal(t, "nvcf/helm-nvca-operator", chart)
+		assert.Equal(t, "1.21.3", version)
+	})
+
+	t.Run("does not mistake a similarly named dynamic chart for the default", func(t *testing.T) {
+		stackDir := t.TempDir()
+		helmfileDir := filepath.Join(stackDir, "helmfile.d")
+		require.NoError(t, os.MkdirAll(helmfileDir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(helmfileDir, "02-nvca.yaml.gotmpl"), []byte(`
+{{- $operatorReleaseName := "nvca-operator" }}
+releases:
+  - name: {{ $operatorReleaseName }}
+    chart: {{ $nvcaOperatorChartPath | default "example/nvcf/helm-nvca-operator-backup" | quote }}
+    version: 1.21.3
+`), 0o644))
+
+		chart, version, err := computePlaneChartFromStack(stackDir)
+		require.Error(t, err)
+		assert.Empty(t, chart)
+		assert.Empty(t, version)
+		assert.Contains(t, err.Error(), "compute-plane chart reference not found in stack")
+	})
+
 	t.Run("errors when helmfile directory is missing", func(t *testing.T) {
 		stackDir := t.TempDir()
 

@@ -19,7 +19,7 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: {{ .Values.nvcfGatewayRoutes.routes.nvcfUi.name }}
-  namespace: {{ .Values.nvcfGatewayRoutes.gateways.shared.namespace }}
+  namespace: {{ include "nvcf-gateway.routeNamespace" . }}
   labels:
     {{- include "nvcf-gateway.labels" . | nindent 4 }}
     app.kubernetes.io/component: nvcf-ui-route

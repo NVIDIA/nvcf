@@ -120,6 +120,9 @@ func GetLabelsForRequest(req *nvcav2beta1.ICMSRequest, fff featureflag.Fetcher) 
 		MessageBatchIDKey: req.Spec.MessageBatchID,
 		GPUNameKey:        gpuName,
 	}
+	if controlPlaneID := req.Labels[ControlPlaneIDLabel]; controlPlaneID != "" {
+		labelsForReq[ControlPlaneIDLabel] = controlPlaneID
+	}
 	switch req.Spec.Action {
 	case common.FunctionCreationAction:
 		functionID := req.Spec.FunctionDetails.FunctionID

@@ -927,6 +927,8 @@ func (c K8sComputeBackend) initializeImageCredentialHelper(
 
 	tprUpdaterInitJob := imagecredential.NewInitJob(icmsReq.Name+"-cred-init", c.bk8s.imageCredentialHelperImage,
 		targetNamespace, secretSel.String())
+	tprUpdaterInitJob.Labels = nvcatypes.AddControlPlaneLabel(tprUpdaterInitJob.Labels, c.bk8s.controlPlaneID)
+	tprUpdaterInitJob.Spec.Template.Labels = nvcatypes.AddControlPlaneLabel(tprUpdaterInitJob.Spec.Template.Labels, c.bk8s.controlPlaneID)
 
 	// Use NVCA's service account to run the job for API access and image pull secrets.
 	tprUpdaterInitJob.Namespace = jobNamespace

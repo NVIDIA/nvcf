@@ -10,9 +10,12 @@ test_dir="$(cd "${test_dir}" && pwd -P)"
 
 mkdir -p \
   "${test_dir}/compute-plane" \
+  "${test_dir}/compute-plane/environments" \
   "${test_dir}/self-managed/out" \
   "${test_dir}/bin"
 cp "${stack_dir}/Makefile.dist" "${test_dir}/compute-plane/Makefile"
+cp -R "${stack_dir}/scripts" "${test_dir}/compute-plane/"
+cp "${stack_dir}/environments/base.yaml" "${test_dir}/compute-plane/environments/"
 
 profile="${test_dir}/self-managed/out/control-plane-profile.yaml"
 printf 'generated-control-plane-profile\n' > "${profile}"

@@ -53,6 +53,14 @@ app.kubernetes.io/name: {{ include "nvcf-gateway.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
+{{/*
+Namespace containing per-control-plane Route and route-policy resources.
+Defaulting to the shared Gateway namespace preserves the legacy layout.
+*/}}
+{{- define "nvcf-gateway.routeNamespace" -}}
+{{- .Values.nvcfGatewayRoutes.routeNamespace | default .Values.nvcfGatewayRoutes.gateways.shared.namespace -}}
+{{- end }}
+
 {{- define "nvcf-gateway.llmWorkerBackendNamespace" -}}
 {{- required "nvcfGatewayRoutes.routes.llmWorker.backend.namespace is required when llmWorker.enabled is true" .Values.nvcfGatewayRoutes.routes.llmWorker.backend.namespace -}}
 {{- end }}

@@ -19,6 +19,7 @@ package storage
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	nvcaconfig "github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/types/nvca/config"
@@ -46,6 +47,7 @@ import (
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
 	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned"
+	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 var (
@@ -71,6 +73,7 @@ func init() {
 }
 
 type ControllerOptions struct {
+	ControlPlaneID        string
 	ICMSRequestNamespace  string
 	CSIVolumeMountOptions []string
 	Metrics               *metrics.Metrics
@@ -94,6 +97,7 @@ func BuildController(
 	reconcilerOpts := []ReconcilerOption{
 		WithNowFunc(opts.nowFunc),
 		WithICMSRequestNamespace(opts.ICMSRequestNamespace),
+		WithControlPlaneID(opts.ControlPlaneID),
 		WithCSIVolumeMountOptions(opts.CSIVolumeMountOptions),
 		WithMetrics(opts.Metrics),
 	}
@@ -113,8 +117,8 @@ func BuildController(
 		return buildControllerModelCache(r, mgr, opts)
 	}
 
-	clusterwideEventHandler := handler.EnqueueRequestsFromMapFunc(getClusterWideEventHandlerMapFunc(storageReqType))
-	storageReqPredicate := predicate.NewPredicateFuncs(filterOnStorageRequestType(storageReqType))
+	clusterwideEventHandler := handler.EnqueueRequestsFromMapFunc(getClusterWideEventHandlerMapFunc(storageReqType, opts.ControlPlaneID))
+	storageReqPredicate := predicate.NewPredicateFuncs(filterStorageRequest(storageReqType, opts.ICMSRequestNamespace, opts.ControlPlaneID))
 	b := builder.
 		ControllerManagedBy(mgr).
 		Named(string(storageReqType)).
@@ -140,6 +144,38 @@ func BuildController(
 		Watches(&corev1.PersistentVolume{}, clusterwideEventHandler).
 		Watches(&storagev1.StorageClass{}, clusterwideEventHandler).
 		Complete(r)
+}
+
+// ControllerTypes returns the safe controller set for one agent. Model cache
+// is intentionally disabled in named mode because its legacy singleton init
+// namespace and cluster-scoped persistent volumes are not yet identity-safe.
+func ControllerTypes(cachingEnabled bool, controlPlaneID string) []nvcav1new.StorageRequestType {
+	sts := []nvcav1new.StorageRequestType{
+		nvcav1new.SharedStorageRequest,
+		nvcav1new.InternalPersistentStorageRequest,
+	}
+	if cachingEnabled && controlPlaneID == "" {
+		sts = append(sts, nvcav1new.ModelCacheRequest)
+	}
+	return sts
+}
+
+func filterStorageRequest(storageReqType nvcav1new.StorageRequestType, requestsNamespace, controlPlaneID string) func(client.Object) bool {
+	typeFilter := filterOnStorageRequestType(storageReqType)
+	return func(object client.Object) bool {
+		if !typeFilter(object) || !nvcatypes.IsOwnedByControlPlane(object, controlPlaneID) {
+			return false
+		}
+		if controlPlaneID == "" {
+			return true
+		}
+		switch object.(type) {
+		case *nvcav1new.StorageRequest, *nvcav2beta1.StorageRequest:
+			return strings.HasPrefix(object.GetNamespace(), controlPlaneID+"-")
+		default:
+			return true
+		}
+	}
 }
 
 func filterOnStorageRequestType(storageReqType nvcav1new.StorageRequestType) func(object client.Object) bool {
@@ -180,8 +216,15 @@ func getStorageRequestOwnerReference(storageReqType nvcav1new.StorageRequestType
 	return metav1.OwnerReference{}, false
 }
 
-func getClusterWideEventHandlerMapFunc(storageReqType nvcav1new.StorageRequestType) handler.MapFunc {
+func getClusterWideEventHandlerMapFunc(storageReqType nvcav1new.StorageRequestType, controlPlaneIDs ...string) handler.MapFunc {
 	return func(_ context.Context, o client.Object) []reconcile.Request {
+		controlPlaneID := ""
+		if len(controlPlaneIDs) != 0 {
+			controlPlaneID = controlPlaneIDs[0]
+		}
+		if !nvcatypes.IsOwnedByControlPlane(o, controlPlaneID) {
+			return nil
+		}
 		labels := o.GetLabels()
 		if len(labels) == 0 {
 			return nil

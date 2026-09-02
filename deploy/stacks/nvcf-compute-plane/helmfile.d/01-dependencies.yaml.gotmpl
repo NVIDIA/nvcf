@@ -20,6 +20,25 @@ environments:
 
 ---
 
+{{- $configuredControlPlaneID := dig "global" "controlPlane" "id" "" .Values -}}
+{{- $environmentControlPlaneID := env "CONTROL_PLANE_ID" -}}
+{{- if and $configuredControlPlaneID $environmentControlPlaneID (ne $configuredControlPlaneID $environmentControlPlaneID) -}}
+{{- fail (printf "CONTROL_PLANE_ID %q does not match global.controlPlane.id %q" $environmentControlPlaneID $configuredControlPlaneID) -}}
+{{- end -}}
+{{- $controlPlaneID := $environmentControlPlaneID | default $configuredControlPlaneID -}}
+{{- if not (kindIs "string" $controlPlaneID) -}}
+{{- fail "global.controlPlane.id must be a string" -}}
+{{- end -}}
+{{- if eq $controlPlaneID "default" -}}
+{{- fail "global.controlPlane.id \"default\" is reserved" -}}
+{{- end -}}
+{{- if and $controlPlaneID (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $controlPlaneID)) -}}
+{{- fail (printf "global.controlPlane.id must be a lowercase RFC 1123 DNS label, got %q" $controlPlaneID) -}}
+{{- end -}}
+{{- if gt (len $controlPlaneID) 20 -}}
+{{- fail "global.controlPlane.id must be at most 20 characters" -}}
+{{- end -}}
+
 repositories:
   - name: kai-scheduler
     url: ghcr.io/kai-scheduler/kai-scheduler
@@ -40,6 +59,17 @@ helmDefaults:
     - "--dry-run=server"
 
 releases:
+
+  # Named control planes share the NVCFBackend API definition. Keeping the CRD
+  # in an explicit release lets either plane be removed or upgraded without
+  # transferring ownership from one worker release to the other.
+  - name: nvca-shared-crds
+    installed: {{ ne $controlPlaneID "" }}
+    chart: ../charts/nvca-shared-crds
+    namespace: nvca-shared-system
+    labels:
+      release-group: shared-prerequisites
+    wait: true
 
   - name: kai-scheduler
     # Required by grove-operator and dynamo-operator. Release name and namespace
@@ -228,7 +258,7 @@ releases:
               limit: -1
               overQuotaWeight: 1
     labels:
-      release-group: workers
+      release-group: shared-prerequisites
     wait: true
     waitForJobs: true
 
@@ -265,7 +295,7 @@ releases:
         groveOperator:
           enabled: false
     labels:
-      release-group: workers
+      release-group: shared-prerequisites
     wait: true
     waitForJobs: true
 
@@ -348,7 +378,7 @@ releases:
         crdInstaller:
           enabled: true
     labels:
-      release-group: workers
+      release-group: shared-prerequisites
     wait: true
     waitForJobs: true
 
@@ -377,7 +407,7 @@ releases:
         groveOperator:
           enabled: true
     labels:
-      release-group: workers
+      release-group: shared-prerequisites
     wait: true
     waitForJobs: true
 
@@ -478,6 +508,6 @@ releases:
         metricsService:
           enabled: true
     labels:
-      release-group: workers
+      release-group: shared-prerequisites
     wait: true
     waitForJobs: true

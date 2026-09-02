@@ -28,14 +28,14 @@ fi
 
 log_section "Setting up nvcf-ui service"
 
-SERVICE_ACCOUNT_NAMESPACE="nvcf-ui"
-SERVICE_ACCOUNT_NAME="nvcf-ui"
+SERVICE_ACCOUNT_NAMESPACE="${NVCF_UI_NAMESPACE:-nvcf-ui}"
+SERVICE_ACCOUNT_NAME="${NVCF_UI_SERVICE_ACCOUNT_NAME:-nvcf-ui}"
 
 #-------------------------------------------
 # Add Access to Spot Instance Service API via JWT Secret Role
 #-------------------------------------------
 
-sis_namespace="sis"
+sis_namespace="${SIS_NAMESPACE:-sis}"
 sis_service="api"
 sis_account="sis-api"
 sis_secret_base="services/${sis_account}"
@@ -57,7 +57,7 @@ VAULT_JWT_AUTH_ROLE_POLICIES="${policy_name}"
 # Add Access to NVCF API via JWT Secret Role
 #-------------------------------------------
 
-NVCF_API_SERVICE_ACCOUNT_NAMESPACE="nvcf"
+NVCF_API_SERVICE_ACCOUNT_NAMESPACE="${NVCF_NAMESPACE:-nvcf}"
 NVCF_API_SERVICE_NAME="api"
 NVCF_API_SERVICE_ACCOUNT_NAME="nvcf-api"
 NVCF_API_SECRET_BASE_PATH="services/${NVCF_API_SERVICE_ACCOUNT_NAME}"
@@ -79,23 +79,17 @@ VAULT_JWT_AUTH_ROLE_POLICIES="${VAULT_JWT_AUTH_ROLE_POLICIES},${policy_name}"
 #-------------------------------------------
 # Add Access to NVCT API via JWT Secret Role
 #
-# The NVCT JWT secrets mount only exists to let the UI mint NVCT tokens, so the
-# addon owns it. Enable it here (idempotent) instead of in core migration
-# 20_setup_nvct.sh, keeping the NVCT signing path out of non-UI installs.
+# Core migration 20 owns and configures the NVCT JWT mount because nvct-api's
+# resource server always publishes that JWKS endpoint. This addon owns only the
+# optional UI signing role and its policy.
 #-------------------------------------------
 
-NVCT_API_SERVICE_ACCOUNT_NAMESPACE="nvcf"
+NVCT_API_SERVICE_ACCOUNT_NAMESPACE="${NVCF_NAMESPACE:-nvcf}"
 NVCT_API_SERVICE_NAME="nvct-api"
 NVCT_API_SERVICE_ACCOUNT_NAME="nvct-api"
 NVCT_API_SECRET_BASE_PATH="services/${NVCT_API_SERVICE_ACCOUNT_NAME}"
 NVCT_API_SECRET_POLICY_PATH="services-${NVCT_API_SERVICE_ACCOUNT_NAME}"
 SCOPES="admin:cancel_task,admin:delete_task,admin:launch_task,admin:list_tasks,admin:task_details,admin:update_secrets,admin:list_events,admin:list_results"
-
-# Create the NVCT JWT secret engine (mounted only when the UI addon runs)
-enable_secrets_mount "${NVCT_API_SECRET_BASE_PATH}/jwt" "vault-plugin-secrets-jwt"
-
-jwt_secret_mount_config=$(generate_jwt_secret_mount_config)
-config_jwt_secret_mount_config "${NVCT_API_SECRET_BASE_PATH}/jwt" "${jwt_secret_mount_config}"
 
 # Issuer: http://nvct-api.nvcf.svc.cluster.local
 jwt_secret_role=$(generate_jwt_secret_role "${NVCT_API_SERVICE_ACCOUNT_NAMESPACE}" "${NVCT_API_SERVICE_NAME}" "${SERVICE_ACCOUNT_NAME}" "${SCOPES}")

@@ -6,7 +6,9 @@ test_dir="$(mktemp -d)"
 trap 'rm -rf "${test_dir}"' EXIT
 
 cp "${stack_dir}/Makefile.dist" "${test_dir}/Makefile"
-mkdir -p "${test_dir}/registration"
+cp -R "${stack_dir}/scripts" "${test_dir}/"
+mkdir -p "${test_dir}/environments" "${test_dir}/registration"
+cp "${stack_dir}/environments/base.yaml" "${test_dir}/environments/"
 printf 'clusterID: generated-id\n' > "${test_dir}/registration/gpu-a-register-values.yaml"
 
 for target in template install apply destroy; do

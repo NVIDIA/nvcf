@@ -13,9 +13,10 @@ Creates, for the `nvcf-ui` ServiceAccount in the `nvcf-ui` namespace:
   (`services/sis-api/jwt`)
 - JWT secret sign role and read/write policy on the NVCF API mount
   (`services/nvcf-api/jwt`)
-- The NVCT JWT secret engine (`services/nvct-api/jwt`) plus a sign role and
-  read/write policy. This mount exists only to let the UI mint NVCT tokens, so
-  the addon owns it rather than core migration `20_setup_nvct.sh`.
+- A sign role and read/write policy on the core-owned NVCT JWT secret engine
+  (`services/nvct-api/jwt`). Core migration `20_setup_nvct.sh` owns the mount so
+  nvct-api can always serve its configured JWKS endpoint; the addon adds only
+  the optional UI credential-minting path.
 - JWT auth role `nvcf-ui` bound to the `nvcf-ui` namespace and service account,
   attached to the three sign policies above
 

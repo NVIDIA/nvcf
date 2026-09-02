@@ -24,9 +24,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -36,6 +38,7 @@ import (
 
 	nvidiaiov1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvcf/v1"
 	fakenvcaop "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/client/clientset/versioned/fake"
+	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 func TestBackendNamespaces(t *testing.T) {
@@ -103,6 +106,130 @@ func TestBackendNamespaces(t *testing.T) {
 			systemNS, requestsNS := BackendNamespaces(tt.nb)
 			assert.Equal(t, tt.expectedSystemNS, systemNS)
 			assert.Equal(t, tt.expectedRequestNS, requestsNS)
+		})
+	}
+}
+
+func TestCleanupBackendResourcesPreservesOtherControlPlane(t *testing.T) {
+	ctx := context.Background()
+	icmsGVR := schema.GroupVersionResource{Group: "nvca.nvcf.nvidia.io", Version: "v2beta1", Resource: "icmsrequests"}
+	dynamicClient := fakedynamic.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
+		icmsGVR: "ICMSRequestList",
+	})
+	label := func(id string) map[string]string { return map[string]string{nvcatypes.ControlPlaneIDLabel: id} }
+	backend := &nvidiaiov1.NVCFBackend{Spec: nvidiaiov1.NVCFBackendSpec{NVCFBackendSpecT: nvidiaiov1.NVCFBackendSpecT{
+		ClusterConfig: nvidiaiov1.ClusterConfig{ControlPlaneID: "plane-a"},
+	}}}
+	k8sClient := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "plane-a-nvca-system", Labels: label("plane-a")}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "plane-a-nvcf-backend", Labels: label("plane-a")}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "plane-a-sr-one", Labels: map[string]string{
+			workloadNamespaceLabelSelector: "miniservice", nvcatypes.ControlPlaneIDLabel: "plane-a",
+		}}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "plane-b-nvca-system", Labels: label("plane-b")}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "plane-b-nvcf-backend", Labels: label("plane-b")}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "plane-b-sr-one", Labels: map[string]string{
+			workloadNamespaceLabelSelector: "miniservice", nvcatypes.ControlPlaneIDLabel: "plane-b",
+		}}},
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "plane-a-nvca", Labels: label("plane-a")}},
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "plane-b-nvca", Labels: label("plane-b")}},
+		&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "plane-a-nvca", Labels: label("plane-a")}},
+		&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "plane-b-nvca", Labels: label("plane-b")}},
+		&admissionregistrationv1.MutatingWebhookConfiguration{ObjectMeta: metav1.ObjectMeta{Name: "plane-a-nvca", Labels: label("plane-a")}},
+		&admissionregistrationv1.MutatingWebhookConfiguration{ObjectMeta: metav1.ObjectMeta{Name: "plane-b-nvca", Labels: label("plane-b")}},
+		&admissionregistrationv1.ValidatingWebhookConfiguration{ObjectMeta: metav1.ObjectMeta{Name: "plane-a-nvca", Labels: label("plane-a")}},
+		&admissionregistrationv1.ValidatingWebhookConfiguration{ObjectMeta: metav1.ObjectMeta{Name: "plane-b-nvca", Labels: label("plane-b")}},
+	)
+
+	require.NoError(t, CleanupBackendResources(ctx, k8sClient, dynamicClient, backend))
+	for _, namespace := range []string{"plane-a-nvca-system", "plane-a-nvcf-backend", "plane-a-sr-one"} {
+		_, err := k8sClient.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
+		require.True(t, k8serrors.IsNotFound(err), "plane A namespace %s must be deleted", namespace)
+	}
+	_, err := k8sClient.RbacV1().ClusterRoles().Get(ctx, "plane-a-nvca", metav1.GetOptions{})
+	require.True(t, k8serrors.IsNotFound(err), "plane A cluster role must be deleted")
+	_, err = k8sClient.RbacV1().ClusterRoleBindings().Get(ctx, "plane-a-nvca", metav1.GetOptions{})
+	require.True(t, k8serrors.IsNotFound(err), "plane A cluster role binding must be deleted")
+	_, err = k8sClient.AdmissionregistrationV1().MutatingWebhookConfigurations().Get(ctx, "plane-a-nvca", metav1.GetOptions{})
+	require.True(t, k8serrors.IsNotFound(err), "plane A mutating webhook must be deleted")
+	_, err = k8sClient.AdmissionregistrationV1().ValidatingWebhookConfigurations().Get(ctx, "plane-a-nvca", metav1.GetOptions{})
+	require.True(t, k8serrors.IsNotFound(err), "plane A validating webhook must be deleted")
+
+	for _, namespace := range []string{"plane-b-nvca-system", "plane-b-nvcf-backend", "plane-b-sr-one"} {
+		_, err := k8sClient.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
+		require.NoError(t, err, "plane B namespace %s must survive", namespace)
+	}
+	_, err = k8sClient.RbacV1().ClusterRoles().Get(ctx, "plane-b-nvca", metav1.GetOptions{})
+	require.NoError(t, err, "plane B cluster role must survive")
+	_, err = k8sClient.RbacV1().ClusterRoleBindings().Get(ctx, "plane-b-nvca", metav1.GetOptions{})
+	require.NoError(t, err, "plane B cluster role binding must survive")
+	_, err = k8sClient.AdmissionregistrationV1().MutatingWebhookConfigurations().Get(ctx, "plane-b-nvca", metav1.GetOptions{})
+	require.NoError(t, err, "plane B mutating webhook must survive")
+	_, err = k8sClient.AdmissionregistrationV1().ValidatingWebhookConfigurations().Get(ctx, "plane-b-nvca", metav1.GetOptions{})
+	require.NoError(t, err, "plane B validating webhook must survive")
+}
+
+func TestCleanupBackendResourcesRefusesForeignClusterResourceWithDesiredName(t *testing.T) {
+	ctx := context.Background()
+	label := func(id string) map[string]string { return map[string]string{nvcatypes.ControlPlaneIDLabel: id} }
+	tests := []struct {
+		name     string
+		resource runtime.Object
+		get      func(k8sClient *fake.Clientset) error
+	}{
+		{
+			name:     "cluster role",
+			resource: &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "plane-a-nvca", Labels: label("plane-b")}},
+			get: func(k8sClient *fake.Clientset) error {
+				_, err := k8sClient.RbacV1().ClusterRoles().Get(ctx, "plane-a-nvca", metav1.GetOptions{})
+				return err
+			},
+		},
+		{
+			name:     "cluster role binding",
+			resource: &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "plane-a-nvca", Labels: label("plane-b")}},
+			get: func(k8sClient *fake.Clientset) error {
+				_, err := k8sClient.RbacV1().ClusterRoleBindings().Get(ctx, "plane-a-nvca", metav1.GetOptions{})
+				return err
+			},
+		},
+		{
+			name:     "mutating webhook",
+			resource: &admissionregistrationv1.MutatingWebhookConfiguration{ObjectMeta: metav1.ObjectMeta{Name: "plane-a-nvca", Labels: label("plane-b")}},
+			get: func(k8sClient *fake.Clientset) error {
+				_, err := k8sClient.AdmissionregistrationV1().MutatingWebhookConfigurations().Get(ctx, "plane-a-nvca", metav1.GetOptions{})
+				return err
+			},
+		},
+		{
+			name:     "validating webhook",
+			resource: &admissionregistrationv1.ValidatingWebhookConfiguration{ObjectMeta: metav1.ObjectMeta{Name: "plane-a-nvca"}},
+			get: func(k8sClient *fake.Clientset) error {
+				_, err := k8sClient.AdmissionregistrationV1().ValidatingWebhookConfigurations().Get(ctx, "plane-a-nvca", metav1.GetOptions{})
+				return err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			backend := &nvidiaiov1.NVCFBackend{Spec: nvidiaiov1.NVCFBackendSpec{NVCFBackendSpecT: nvidiaiov1.NVCFBackendSpecT{
+				ClusterConfig: nvidiaiov1.ClusterConfig{ControlPlaneID: "plane-a"},
+			}}}
+			k8sClient := fake.NewSimpleClientset(
+				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "plane-a-nvca-system", Labels: label("plane-a")}},
+				&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "plane-a-nvcf-backend", Labels: label("plane-a")}},
+				tt.resource,
+			)
+			dynamicClient := fakedynamic.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
+				{Group: "nvca.nvcf.nvidia.io", Version: "v2beta1", Resource: "icmsrequests"}: "ICMSRequestList",
+			})
+
+			err := CleanupBackendResources(ctx, k8sClient, dynamicClient, backend)
+			require.ErrorContains(t, err, "owned by another control plane")
+			require.NoError(t, tt.get(k8sClient), "foreign cluster-scoped resource must survive")
+			_, err = k8sClient.CoreV1().Namespaces().Get(ctx, "plane-a-nvca-system", metav1.GetOptions{})
+			require.NoError(t, err, "ownership preflight must run before deleting plane A resources")
 		})
 	}
 }

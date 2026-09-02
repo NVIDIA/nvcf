@@ -14,10 +14,10 @@ spec:
   from:
     - group: gateway.networking.k8s.io
       kind: {{ if .Values.llmRequestRouter.grpcTls.enabled }}GRPCRoute{{ else }}TCPRoute{{ end }}
-      namespace: {{ .Values.nvcfGatewayRoutes.gateways.llmGrpc.namespace }}
+      namespace: {{ include "nvcf-gateway.routeNamespace" . }}
     - group: gateway.networking.k8s.io
       kind: UDPRoute
-      namespace: {{ .Values.nvcfGatewayRoutes.gateways.llmQuic.namespace }}
+      namespace: {{ include "nvcf-gateway.routeNamespace" . }}
   to:
     - group: ""
       kind: Service

@@ -219,6 +219,11 @@ llmRequestRouter:
     # `openbao-server.<pki.namespace>.svc.cluster.local`.
     baoService: ""
     baoPort: "8200"
+    # Opaque projected-token audience. This intentionally remains independent
+    # of the plane-specific OpenBao network address.
+    jwtAudience: http://openbao-server.vault-system.svc.cluster.local:8200
+    # Namespace bound into the SIS JWT role provisioned by the PKI addon.
+    sisServiceAccountNamespace: sis
     # Service account that has read access to the openbao root-token
     # secret (created by the k8s-openbao chart).
     serviceAccountName: openbao-server-initialize-cluster

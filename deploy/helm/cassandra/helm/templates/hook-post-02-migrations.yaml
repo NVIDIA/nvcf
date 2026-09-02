@@ -55,6 +55,8 @@ spec:
               value: {{ .Values.cassandra.serviceRolePassword | quote }}
             - name: REPLICA_COUNT
               value: {{ .Values.cassandra.replicaCount | quote }}
+            - name: CONTROL_PLANE_ID
+              value: {{ .Values.cassandra.migrations.controlPlaneID | quote }}
           resources:
             {{- toYaml .Values.cassandra.hooks.migrations.resources | nindent 12 }}
 {{- end }}

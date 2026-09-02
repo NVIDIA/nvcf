@@ -18,7 +18,7 @@
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
-  name: envoy-gateway-proxy-grpc
+  name: {{ .Values.nvcfGatewayRoutes.podMonitors.grpcName }}
   namespace: {{ .Values.nvcfGatewayRoutes.gateways.grpc.namespace }}
   labels:
     {{- include "nvcf-gateway.labels" . | nindent 4 }}

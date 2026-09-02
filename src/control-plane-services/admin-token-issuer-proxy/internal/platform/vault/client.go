@@ -56,7 +56,19 @@ func NewVaultClient(addr string) (VaultSigner, error) {
 
 // SetToken sets the Vault token for authentication
 func (v *VaultClient) SetToken(token string) {
-	v.client.SetToken(token)
+	// The monorepo Bazel graph resolves vault/api to the ESS Agent fork. That
+	// fork sends the implicit client token as X-ESS-Token outside ESS local
+	// development. Keep the token out of the client's implicit credential slot
+	// and replace the standard Vault header explicitly so Go-module and
+	// Bazel/OCI builds send exactly one credential header. Replacing instead of
+	// appending also prevents stale credentials from surviving token rotation.
+	v.client.ClearToken()
+	headers := v.client.Headers()
+	if headers == nil {
+		headers = make(map[string][]string)
+	}
+	headers.Set("X-Vault-Token", token)
+	v.client.SetHeaders(headers)
 }
 
 // SignToken calls the Vault sign endpoint to mint a JWT

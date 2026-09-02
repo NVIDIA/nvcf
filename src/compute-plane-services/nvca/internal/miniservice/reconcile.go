@@ -164,6 +164,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 		}
 		return reconcile.Result{}, err
 	}
+	if !nvcatypes.IsOwnedByControlPlane(ms, r.ControlPlaneID) {
+		log.V(1).Info("MiniService belongs to another control plane; ignoring", "controlPlaneID", r.ControlPlaneID)
+		return reconcile.Result{}, nil
+	}
 
 	if ms.Spec.Namespace == "" {
 		return reconcile.Result{}, reconcile.TerminalError(
@@ -1108,6 +1112,9 @@ func (r *Reconciler) ensureInstanceNamespace(
 
 	existingNamespace := &corev1.Namespace{}
 	if err := r.Client.Get(ctx, client.ObjectKeyFromObject(namespace), existingNamespace); err == nil {
+		if !nvcatypes.IsOwnedByControlPlane(existingNamespace, r.ControlPlaneID) {
+			return fmt.Errorf("namespace %s is not owned by control plane %q", namespaceName, r.ControlPlaneID)
+		}
 		if existingNamespace.Status.Phase == corev1.NamespaceTerminating {
 			log.V(1).Info("Namespace is terminating, will requeue and wait for deletion to complete", "namespace", namespaceName)
 			return nil
@@ -1116,6 +1123,7 @@ func (r *Reconciler) ensureInstanceNamespace(
 		if !mapContainsAll(namespace.Labels, existingNamespace.Labels) ||
 			!mapContainsAll(namespace.Annotations, existingNamespace.Annotations) {
 			log.Info("Updating namespace with missing metadata")
+			namespace.ResourceVersion = existingNamespace.ResourceVersion
 			if err := r.Client.Update(ctx, namespace); err != nil {
 				return err
 			}

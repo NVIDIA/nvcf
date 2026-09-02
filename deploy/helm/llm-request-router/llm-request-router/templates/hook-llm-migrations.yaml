@@ -64,6 +64,12 @@ spec:
               value: {{ ($pki.baoService | default (printf "openbao-server.%s.svc.cluster.local" $pki.namespace)) | quote }}
             - name: BAO_PORT
               value: {{ $pki.baoPort | quote }}
+            - name: OPENBAO_SERVER_INTERNAL_URL
+              value: {{ printf "http://%s:%s" ($pki.baoService | default (printf "openbao-server.%s.svc.cluster.local" $pki.namespace)) ($pki.baoPort | toString) | quote }}
+            - name: OPENBAO_JWT_AUDIENCE
+              value: {{ required "llmRequestRouter.pki.jwtAudience is required when llmRequestRouter.pki.enabled is true" $pki.jwtAudience | quote }}
+            - name: SIS_SERVICE_ACCOUNT_NAMESPACE
+              value: {{ required "llmRequestRouter.pki.sisServiceAccountNamespace is required when llmRequestRouter.pki.enabled is true" $pki.sisServiceAccountNamespace | quote }}
           volumeMounts:
             - name: root-token
               mountPath: /secrets/root_token

@@ -43,7 +43,7 @@ func dummyFetcher(yaml string, err error) func(context.Context) (*corev1.ConfigM
 }
 
 func TestConfigMapClient_GetCluster_Success(t *testing.T) {
-	sampleYAML := "clusterId: cid\nclusterName: name"
+	sampleYAML := "controlPlaneID: plane-a\nclusterId: cid\nclusterName: name"
 
 	called := false
 	extra := func(ctx context.Context, _ nvidiaiov1.EnvType, _ *clusterDTO, dest *Cluster) error {
@@ -58,6 +58,7 @@ func TestConfigMapClient_GetCluster_Success(t *testing.T) {
 	require.NotNil(t, cluster)
 	assert.True(t, called, "extra mapper should be called")
 	assert.Equal(t, "patched", cluster.NVCFBackend.Name)
+	assert.Equal(t, "plane-a", cluster.NVCFBackend.Spec.ClusterConfig.ControlPlaneID)
 }
 
 func TestConfigMapClient_GetCluster_FetchError(t *testing.T) {

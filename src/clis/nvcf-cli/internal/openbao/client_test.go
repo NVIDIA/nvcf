@@ -335,3 +335,147 @@ printf '%s\n' '__NVCF_HTTP_CONTENT_TYPE__:application/json'
 	assert.Contains(t, commands, "/v1/services/all/pki/root/cert/ca")
 	assert.Contains(t, commands, "--write-out")
 }
+
+func TestReadPKICertificatePEMRetriesForbiddenPublicEndpointWithRootToken(t *testing.T) {
+	testDir := t.TempDir()
+	commandLog := filepath.Join(testDir, "kubectl.log")
+	kubectlPath := filepath.Join(testDir, "kubectl")
+	kubectlScript := `#!/bin/sh
+printf '%s\n' "$*" >> "$KUBECTL_COMMAND_LOG"
+case " $* " in
+  *" get secret "*) printf '%s\n' 'c3VwZXItc2VjcmV0LXRva2Vu' ;;
+  *" -H @- "*)
+    header=$(cat)
+    [ "$header" = "X-Vault-Token: super-secret-token" ] || exit 93
+    printf '%s\n' '{"data":{"certificate":"-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"}}'
+    printf '%s\n' '__NVCF_HTTP_STATUS__:200'
+    printf '%s\n' '__NVCF_HTTP_CONTENT_TYPE__:application/json'
+    ;;
+  *)
+    printf '%s\n' '{"errors":["permission denied"]}'
+    printf '%s\n' '__NVCF_HTTP_STATUS__:403'
+    printf '%s\n' '__NVCF_HTTP_CONTENT_TYPE__:application/json'
+    ;;
+esac
+`
+	require.NoError(t, os.WriteFile(kubectlPath, []byte(kubectlScript), 0o755))
+	t.Setenv("PATH", testDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("KUBECTL_COMMAND_LOG", commandLog)
+
+	client := NewClient(&Config{
+		OpenBaoURL:        "http://openbao-openbao.nvcf.svc.cluster.local:8200",
+		OpenBaoNamespace:  "openbao",
+		OpenBaoSecretName: "openbao-root-token",
+		ClusterNamespace:  "nvcf",
+		UtilityImage:      "curlimages/curl:latest",
+	}, nil)
+
+	got, err := client.ReadPKICertificatePEM(context.Background(), "services/all/pki/root")
+	require.NoError(t, err)
+	assert.Equal(t, openBaoTestCertPEM, got)
+
+	logBody, err := os.ReadFile(commandLog)
+	require.NoError(t, err)
+	commands := string(logBody)
+	assert.Contains(t, commands, "get secret openbao-root-token ")
+	assert.Contains(t, commands, "-H @-")
+	assert.NotContains(t, commands, "super-secret-token")
+	assert.Less(t, strings.Index(commands, "/cert/ca"), strings.Index(commands, "get secret openbao-root-token"))
+	assert.Less(t, strings.Index(commands, "get secret openbao-root-token"), strings.LastIndex(commands, "/cert/ca"))
+}
+
+func TestReadPKICertificatePEMUsesAuthenticatedNotFoundAfterPublicForbidden(t *testing.T) {
+	testDir := t.TempDir()
+	kubectlPath := filepath.Join(testDir, "kubectl")
+	kubectlScript := `#!/bin/sh
+case " $* " in
+  *" get secret "*) printf '%s\n' 'c3VwZXItc2VjcmV0LXRva2Vu' ;;
+  *" -H @- "*)
+    header=$(cat)
+    [ "$header" = "X-Vault-Token: super-secret-token" ] || exit 93
+    printf '%s\n' '{"errors":["route unavailable"]}'
+    printf '%s\n' '__NVCF_HTTP_STATUS__:404'
+    printf '%s\n' '__NVCF_HTTP_CONTENT_TYPE__:application/json'
+    ;;
+  *)
+    printf '%s\n' '{"errors":["permission denied"]}'
+    printf '%s\n' '__NVCF_HTTP_STATUS__:403'
+    printf '%s\n' '__NVCF_HTTP_CONTENT_TYPE__:application/json'
+    ;;
+esac
+`
+	require.NoError(t, os.WriteFile(kubectlPath, []byte(kubectlScript), 0o755))
+	t.Setenv("PATH", testDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	client := NewClient(&Config{
+		OpenBaoURL:        "http://openbao-openbao.nvcf.svc.cluster.local:8200",
+		OpenBaoNamespace:  "openbao",
+		OpenBaoSecretName: "openbao-root-token",
+		ClusterNamespace:  "nvcf",
+		UtilityImage:      "curlimages/curl:latest",
+	}, nil)
+
+	_, err := client.ReadPKICertificatePEM(context.Background(), "services/all/pki/root")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrPKICertificateNotFound)
+}
+
+func TestReadPKICertificatePEMPreservesForbiddenWhenRootSecretUnavailable(t *testing.T) {
+	testDir := t.TempDir()
+	kubectlPath := filepath.Join(testDir, "kubectl")
+	kubectlScript := `#!/bin/sh
+case " $* " in
+  *" get secret "*) exit 91 ;;
+  *)
+    printf '%s\n' '{"errors":["permission denied"]}'
+    printf '%s\n' '__NVCF_HTTP_STATUS__:403'
+    printf '%s\n' '__NVCF_HTTP_CONTENT_TYPE__:application/json'
+    ;;
+esac
+`
+	require.NoError(t, os.WriteFile(kubectlPath, []byte(kubectlScript), 0o755))
+	t.Setenv("PATH", testDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	client := NewClient(&Config{
+		OpenBaoURL:        "http://openbao-openbao.nvcf.svc.cluster.local:8200",
+		OpenBaoNamespace:  "openbao",
+		OpenBaoSecretName: "openbao-root-token",
+		ClusterNamespace:  "nvcf",
+		UtilityImage:      "curlimages/curl:latest",
+	}, nil)
+
+	_, err := client.ReadPKICertificatePEM(context.Background(), "services/all/pki/root")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "HTTP 403")
+	assert.ErrorContains(t, err, "authenticated retry unavailable")
+	assert.NotContains(t, err.Error(), "super-secret-token")
+}
+
+func TestReadPKICertificatePEMReturnsAuthenticatedForbidden(t *testing.T) {
+	testDir := t.TempDir()
+	kubectlPath := filepath.Join(testDir, "kubectl")
+	kubectlScript := `#!/bin/sh
+case " $* " in
+  *" get secret "*) printf '%s\n' 'c3VwZXItc2VjcmV0LXRva2Vu' ;;
+  *" -H @- "*) cat >/dev/null ;;
+esac
+printf '%s\n' '{"errors":["permission denied"]}'
+printf '%s\n' '__NVCF_HTTP_STATUS__:403'
+printf '%s\n' '__NVCF_HTTP_CONTENT_TYPE__:application/json'
+`
+	require.NoError(t, os.WriteFile(kubectlPath, []byte(kubectlScript), 0o755))
+	t.Setenv("PATH", testDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	client := NewClient(&Config{
+		OpenBaoURL:        "http://openbao-openbao.nvcf.svc.cluster.local:8200",
+		OpenBaoNamespace:  "openbao",
+		OpenBaoSecretName: "openbao-root-token",
+		ClusterNamespace:  "nvcf",
+		UtilityImage:      "curlimages/curl:latest",
+	}, nil)
+
+	_, err := client.ReadPKICertificatePEM(context.Background(), "services/all/pki/root")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "HTTP 403")
+	assert.NotContains(t, err.Error(), "super-secret-token")
+}

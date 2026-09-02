@@ -15,6 +15,27 @@
 # limitations under the License.
 
 REPLICA_COUNT=${REPLICA_COUNT:-3}
+CONTROL_PLANE_ID=${CONTROL_PLANE_ID:-}
+if [ -n "$CONTROL_PLANE_ID" ]; then
+  case "$CONTROL_PLANE_ID" in
+    *[!a-z0-9-]*|-*|*-)
+      echo "ERROR: CONTROL_PLANE_ID must be a DNS-1123 label, got: $CONTROL_PLANE_ID" >&2
+      exit 1
+      ;;
+  esac
+  if [ "${#CONTROL_PLANE_ID}" -gt 20 ] || [ "$CONTROL_PLANE_ID" = "default" ]; then
+    echo "ERROR: CONTROL_PLANE_ID must be at most 20 characters and must not be 'default', got: $CONTROL_PLANE_ID" >&2
+    exit 1
+  fi
+  NOTARY_BASE_URL="http://notary.${CONTROL_PLANE_ID}-nvcf.svc.cluster.local:8080"
+  ESS_JWKS_URL="http://${CONTROL_PLANE_ID}-openbao-server.${CONTROL_PLANE_ID}-vault-system.svc.cluster.local:8200/v1/services/ess-api/jwt/jwks"
+  ESS_ISSUER_URL="http://ess-api.${CONTROL_PLANE_ID}-ess.svc.cluster.local"
+else
+  NOTARY_BASE_URL="http://notary.nvcf.svc.cluster.local:8080"
+  ESS_JWKS_URL="http://openbao-server.vault-system.svc.cluster.local:8200/v1/services/ess-api/jwt/jwks"
+  ESS_ISSUER_URL="http://ess-api.ess.svc.cluster.local"
+fi
+export NOTARY_BASE_URL ESS_JWKS_URL ESS_ISSUER_URL
 case "$REPLICA_COUNT" in
   ''|*[!0-9]*|0*)
     echo "ERROR: REPLICA_COUNT must be an integer from 1 to 2147483647, got: $REPLICA_COUNT" >&2
@@ -48,7 +69,7 @@ echo "Cassandra cqlsh superuser is available"
 # SECURITY: Only explicitly listed variables are substituted to prevent
 # unintended substitution of other environment variables
 # shellcheck disable=SC2016
-ENVSUBST_VARS='$SERVICE_ROLE_PASSWORD $REPLICA_COUNT'
+ENVSUBST_VARS='$SERVICE_ROLE_PASSWORD $REPLICA_COUNT $NOTARY_BASE_URL $ESS_JWKS_URL $ESS_ISSUER_URL'
 
 TEMP_KEYSPACES="/tmp/keyspaces"
 echo "Pre-processing SQL files with environment variable substitution..."

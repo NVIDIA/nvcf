@@ -128,6 +128,7 @@ go_test(
         "backendk8scache_builder_test.go",
         "backendk8scache_test.go",
         "cli_test.go",
+        "control_plane_isolation_test.go",
         "crd_reconcile_test.go",
         "gpu_profiling_configmap_test.go",
         "miniservice_restrictions_test.go",

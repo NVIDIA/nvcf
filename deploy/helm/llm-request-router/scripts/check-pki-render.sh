@@ -104,6 +104,11 @@ helm template llm-request-router ./llm-request-router \
   --set llmRequestRouter.pki.image.registry=nvcr.io \
   --set 'llmRequestRouter.pki.image.repository=<your-org>/nvcf-openbao-migrations' \
   --set llmRequestRouter.pki.image.tag=0.12.1 \
+  --set llmRequestRouter.pki.namespace=plane-a-vault-system \
+  --set llmRequestRouter.pki.baoService=plane-a-openbao-server.plane-a-vault-system.svc.cluster.local \
+  --set llmRequestRouter.pki.serviceAccountName=plane-a-openbao-server-initialize-cluster \
+  --set llmRequestRouter.pki.rootTokenSecretName=plane-a-openbao-server-root-token \
+  --set llmRequestRouter.pki.sisServiceAccountNamespace=plane-a-sis \
   > "${manifest}"
 
 cert_secret="$(yq -rN 'select(.kind == "Certificate" and .metadata.name == "stargate-quic-tls") | .spec.secretName' "${manifest}")"
@@ -137,6 +142,13 @@ hook_image="$(yq -rN 'select(.kind == "Job" and .metadata.name == "addons-llm-mi
 hook_addons_llm="$(yq -rN 'select(.kind == "Job" and .metadata.name == "addons-llm-migrations") | .spec.template.spec.containers[0].env[] | select(.name == "ADDONS_LLM_ENABLED") | .value' "${manifest}")"
 hook_core_off="$(yq -rN 'select(.kind == "Job" and .metadata.name == "addons-llm-migrations") | .spec.template.spec.containers[0].env[] | select(.name == "CORE_MIGRATIONS_ENABLED") | .value' "${manifest}")"
 hook_allowed_domains="$(yq -rN 'select(.kind == "Job" and .metadata.name == "addons-llm-migrations") | .spec.template.spec.containers[0].env[] | select(.name == "NVCF_SERVICE_PKI_ALLOWED_DOMAINS") | .value' "${manifest}")"
+hook_namespace="$(yq -rN 'select(.kind == "Job" and .metadata.name == "addons-llm-migrations") | .metadata.namespace' "${manifest}")"
+hook_service_account="$(yq -rN 'select(.kind == "Job" and .metadata.name == "addons-llm-migrations") | .spec.template.spec.serviceAccountName' "${manifest}")"
+hook_bao_service="$(yq -rN 'select(.kind == "Job" and .metadata.name == "addons-llm-migrations") | .spec.template.spec.containers[0].env[] | select(.name == "BAO_SERVICE") | .value' "${manifest}")"
+hook_internal_url="$(yq -rN 'select(.kind == "Job" and .metadata.name == "addons-llm-migrations") | .spec.template.spec.containers[0].env[] | select(.name == "OPENBAO_SERVER_INTERNAL_URL") | .value' "${manifest}")"
+hook_jwt_audience="$(yq -rN 'select(.kind == "Job" and .metadata.name == "addons-llm-migrations") | .spec.template.spec.containers[0].env[] | select(.name == "OPENBAO_JWT_AUDIENCE") | .value' "${manifest}")"
+hook_sis_namespace="$(yq -rN 'select(.kind == "Job" and .metadata.name == "addons-llm-migrations") | .spec.template.spec.containers[0].env[] | select(.name == "SIS_SERVICE_ACCOUNT_NAMESPACE") | .value' "${manifest}")"
+hook_root_token_secret="$(yq -rN 'select(.kind == "Job" and .metadata.name == "addons-llm-migrations") | .spec.template.spec.volumes[] | select(.name == "root-token") | .secret.secretName' "${manifest}")"
 
 [ "${hook_job_name}" = "addons-llm-migrations" ]
 [ "${hook_helm_hook}" = "pre-install,pre-upgrade" ]
@@ -144,6 +156,13 @@ hook_allowed_domains="$(yq -rN 'select(.kind == "Job" and .metadata.name == "add
 [ "${hook_addons_llm}" = "true" ]
 [ "${hook_core_off}" = "false" ]
 [ "${hook_allowed_domains}" = "stargate.localhost,cluster.local" ]
+[ "${hook_namespace}" = "plane-a-vault-system" ]
+[ "${hook_service_account}" = "plane-a-openbao-server-initialize-cluster" ]
+[ "${hook_bao_service}" = "plane-a-openbao-server.plane-a-vault-system.svc.cluster.local" ]
+[ "${hook_internal_url}" = "http://plane-a-openbao-server.plane-a-vault-system.svc.cluster.local:8200" ]
+[ "${hook_jwt_audience}" = "http://openbao-server.vault-system.svc.cluster.local:8200" ]
+[ "${hook_sis_namespace}" = "plane-a-sis" ]
+[ "${hook_root_token_secret}" = "plane-a-openbao-server-root-token" ]
 
 # Exact and wildcard SANs cover a static advertised hostname.
 exact_manifest="${tmp_dir}/exact.yaml"

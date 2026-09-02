@@ -29,6 +29,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -47,6 +48,8 @@ import (
 	mscontroller "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/miniservice"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/util/k8sutil"
 	nvcav1new "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1"
+	nvcav1alpha1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v1alpha1"
+	nvcav2beta1 "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/apis/nvca/v2beta1"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/featureflag"
 	nvcaerrors "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/nvca/errors"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/storage"
@@ -62,6 +65,12 @@ func init() {
 	utilruntime.Must(mscontroller.SchemeBuilder.AddToScheme(mgrScheme))
 }
 
+// storageControllerTypes preserves the legacy helper contract used by tests.
+// Named deployments call storage.ControllerTypes directly with their ID.
+func storageControllerTypes(cachingEnabled bool) []nvcav1new.StorageRequestType {
+	return storage.ControllerTypes(cachingEnabled, "")
+}
+
 // startControllerManagerForAgent creates and starts a controller-runtime manager
 // for auxiliary CRD controllers.
 // storageControllerTypes returns the StorageRequest controller types to
@@ -70,17 +79,6 @@ func init() {
 // selected cache backends (NVMesh / shared-FS / Samba). Callers pass the stable
 // agent-level caching flag (a.CachingSupportEnabled), not a live feature-flag
 // lookup, so the set is deterministic for the lifetime of the agent.
-func storageControllerTypes(cachingEnabled bool) []nvcav1new.StorageRequestType {
-	sts := []nvcav1new.StorageRequestType{
-		nvcav1new.SharedStorageRequest,
-		nvcav1new.InternalPersistentStorageRequest,
-	}
-	if cachingEnabled {
-		sts = append(sts, nvcav1new.ModelCacheRequest)
-	}
-	return sts
-}
-
 func startControllerManagerForAgent(
 	ctx context.Context,
 	a *Agent,
@@ -89,25 +87,33 @@ func startControllerManagerForAgent(
 	metrics *nvcametrics.Metrics,
 ) error {
 	log := core.GetLogger(ctx)
+	byObject := map[client.Object]cache.ByObject{
+		&corev1.Event{}: {
+			// Exclude Kyverno events from the cache entirely.
+			Field: fields.AndSelectors(
+				fields.OneTermNotEqualSelector("reportingComponent", "kyverno-admission"),
+				fields.OneTermNotEqualSelector("reportingComponent", "kyverno-scan"),
+				fields.OneTermNotEqualSelector("reportingComponent", "kyverno-generate"),
+			),
+		},
+	}
+	if a.ControlPlaneID != "" {
+		selector := labels.SelectorFromSet(labels.Set{types.ControlPlaneIDLabel: a.ControlPlaneID})
+		requestNamespaces := map[string]cache.Config{a.RequestsNamespace: {}}
+		byObject[&nvcav2beta1.ICMSRequest{}] = cache.ByObject{Namespaces: requestNamespaces, Label: selector}
+		byObject[&nvcav1new.StorageRequest{}] = cache.ByObject{Label: selector}
+		byObject[&nvcav2beta1.StorageRequest{}] = cache.ByObject{Label: selector}
+		byObject[&nvcav1alpha1.MiniService{}] = cache.ByObject{Label: selector}
+	}
+	// Node, GPU, DRA, and KAI scheduler objects intentionally remain shared,
+	// cluster-wide inputs. They describe common cluster capacity rather than
+	// resources owned by one NVCF control plane.
 
 	mgr, err := ctrl.NewManager(clients.Config, manager.Options{
 		Scheme:        mgrScheme,
 		WebhookServer: fakeWebhookServer{},
 		Cache: cache.Options{
-			ByObject: map[client.Object]cache.ByObject{
-				&corev1.Event{}: {
-					// Exclude Kyverno events from the cache entirely.
-					// These PolicyViolation events are not actionable by users and can
-					// be very numerous, contributing to memory pressure. This filter
-					// is applied server-side so events never come over the wire.
-					// See DGXCINC-3086.
-					Field: fields.AndSelectors(
-						fields.OneTermNotEqualSelector("reportingComponent", "kyverno-admission"),
-						fields.OneTermNotEqualSelector("reportingComponent", "kyverno-scan"),
-						fields.OneTermNotEqualSelector("reportingComponent", "kyverno-generate"),
-					),
-				},
-			},
+			ByObject: byObject,
 		},
 	})
 	if err != nil {
@@ -119,7 +125,11 @@ func startControllerManagerForAgent(
 	// backs every storage-class-selected cache backend (NVMesh / shared-FS /
 	// Samba), so it is registered whenever caching is enabled.
 	cachingEnabled := a.CachingSupportEnabled
-	sts := storageControllerTypes(cachingEnabled)
+	sts := storage.ControllerTypes(cachingEnabled, a.ControlPlaneID)
+	if cachingEnabled && a.ControlPlaneID != "" {
+		log.WithField("control_plane_id", a.ControlPlaneID).
+			Warn("Model-cache controller disabled: named multi-control-plane mode does not support legacy cluster-scoped model-cache resources")
+	}
 	log.WithField("controllers", sts).
 		WithField("caching_support_enabled", cachingEnabled).
 		WithField("caching_support_flag", a.FeatureFlagFetcher.IsFeatureFlagEnabled(featureflag.CachingSupport)).
@@ -130,6 +140,7 @@ func startControllerManagerForAgent(
 			a.ClusterRegion,
 			a.K8sTimeConfig,
 			storage.ControllerOptions{
+				ControlPlaneID:        a.ControlPlaneID,
 				ICMSRequestNamespace:  a.RequestsNamespace,
 				CSIVolumeMountOptions: a.CSIVolumeMountOptions,
 				Metrics:               metrics,
@@ -144,7 +155,7 @@ func startControllerManagerForAgent(
 	// Seed the model cache mount option defaults once, after the manager cache
 	// has started. A failure is logged rather than fatal: without the ConfigMap
 	// the reconciler falls back to the configured mount options.
-	if cachingEnabled {
+	if cachingEnabled && a.ControlPlaneID == "" {
 		if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
 			if err := storage.EnsureCacheMountOptionsConfigMap(ctx, mgr.GetClient(), ""); err != nil {
 				log.WithError(err).Error("Failed to seed the cache mount option defaults")
@@ -187,6 +198,7 @@ func startControllerManagerForAgent(
 		a.backendk8scache.regITCache,
 		a.ClusterAttributes,
 		mscontroller.ControllerOptions{
+			ControlPlaneID:             a.ControlPlaneID,
 			SystemNamespace:            a.SystemNamespace,
 			ICMSRequestNamespace:       a.RequestsNamespace,
 			K8sVersion:                 a.K8sVersion,
@@ -224,12 +236,17 @@ func startControllerManagerForAgent(
 	}
 
 	// Add GC cleaners to the manager
-	gcRunnable := gc.NewRunnable(clients, metrics, gc.DefaultInterval, a.RequestsNamespace)
-	if err := mgr.Add(gcRunnable); err != nil {
-		log.WithError(err).Error("Failed to add GC controller to controller manager")
-		return fmt.Errorf("add GC controller to controller manager: %v", err)
+	if a.ControlPlaneID == "" {
+		gcRunnable := gc.NewRunnable(clients, metrics, gc.DefaultInterval, a.RequestsNamespace)
+		if err := mgr.Add(gcRunnable); err != nil {
+			log.WithError(err).Error("Failed to add GC controller to controller manager")
+			return fmt.Errorf("add GC controller to controller manager: %v", err)
+		}
+		log.Info("Added GC controller to controller manager")
+	} else {
+		log.WithField("control_plane_id", a.ControlPlaneID).
+			Warn("Legacy cluster-wide garbage collectors disabled in named mode; owner reconciliation remains active")
 	}
-	log.Info("Added GC controller to controller manager")
 
 	// Don't need a select statement since the context will cancel
 	// the blocking manager start call

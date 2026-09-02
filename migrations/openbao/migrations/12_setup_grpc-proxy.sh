@@ -26,7 +26,7 @@ else
   source "${curr_dir}/utils/functions.sh"
 fi
 
-SERVICE_ACCOUNT_NAMESPACE="nvcf"
+SERVICE_ACCOUNT_NAMESPACE="${NVCF_NAMESPACE:-nvcf}"
 SERVICE_ACCOUNT_NAME="grpc-proxy-proxy"
 
 #-------------------------------------------
@@ -40,7 +40,7 @@ VAULT_JWT_AUTH_ROLE_POLICIES="services-all-kv-ro"
 # Add Access to NVCF API via JWT Secret Role
 #-------------------------------------------
 
-NVCF_API_SERVICE_ACCOUNT_NAMESPACE="nvcf"
+NVCF_API_SERVICE_ACCOUNT_NAMESPACE="${NVCF_NAMESPACE:-nvcf}"
 NVCF_API_SERVICE_ACCOUNT_NAME="nvcf-api"
 NVCF_API_SERVICE_NAME="api"
 NVCF_API_SECRET_BASE_PATH="services/${NVCF_API_SERVICE_ACCOUNT_NAME}"
@@ -69,7 +69,7 @@ VAULT_JWT_AUTH_ROLE_POLICIES="${VAULT_JWT_AUTH_ROLE_POLICIES},${policy_name}"
 # Add Access to Ratelimiter API via JWT Secret Role
 #-------------------------------------------
 
-RATELIMITER_API_SERVICE_ACCOUNT_NAMESPACE="nvcf"
+RATELIMITER_API_SERVICE_ACCOUNT_NAMESPACE="${NVCF_NAMESPACE:-nvcf}"
 RATELIMITER_API_SERVICE_ACCOUNT_NAME="ratelimiter-api"
 RATELIMITER_API_SERVICE_NAME="ratelimiter"
 RATELIMITER_API_SECRET_BASE_PATH="services/${RATELIMITER_API_SERVICE_ACCOUNT_NAME}"

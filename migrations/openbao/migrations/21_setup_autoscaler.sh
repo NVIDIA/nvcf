@@ -27,7 +27,7 @@ else
 fi
 
 
-SERVICE_ACCOUNT_NAMESPACE="nvcf"
+SERVICE_ACCOUNT_NAMESPACE="${NVCF_NAMESPACE:-nvcf}"
 SERVICE_ACCOUNT_NAME="nvcf-autoscaler-service"
 
 #-------------------------------------------
@@ -64,7 +64,7 @@ VAULT_JWT_AUTH_ROLE_POLICIES="${VAULT_JWT_AUTH_ROLE_POLICIES},${VAULT_POLICY_BAS
 # is deprecated and should not be requested by the function autoscaler.
 #-------------------------------------------
 
-NVCF_API_SERVICE_ACCOUNT_NAMESPACE="nvcf"
+NVCF_API_SERVICE_ACCOUNT_NAMESPACE="${NVCF_NAMESPACE:-nvcf}"
 NVCF_API_SERVICE_ACCOUNT_NAME="nvcf-api"
 NVCF_API_SERVICE_NAME="api"
 NVCF_API_SECRET_BASE_PATH="services/${NVCF_API_SERVICE_ACCOUNT_NAME}"

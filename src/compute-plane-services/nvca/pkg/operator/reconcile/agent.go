@@ -51,6 +51,7 @@ import (
 	nvcaoptel "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/otel"
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/reconcile/clustermgmt"
 	nvcaoptypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/operator/types"
+	nvcatypes "github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/pkg/types"
 )
 
 var (
@@ -89,6 +90,7 @@ type AgentOptions struct {
 	K8sVersionOverride string
 	PriorityClassName  string
 	ClusterName        string
+	ControlPlaneID     string
 	ClusterSource      nvcaoptypes.ClusterSource
 	NodeSelectorKey    string
 	NodeSelectorValue  string
@@ -217,6 +219,7 @@ func (o *AgentOptions) sanitizedString() string {
 	sanitized.SystemNamespace = o.SystemNamespace
 	sanitized.K8sVersionOverride = o.K8sVersionOverride
 	sanitized.ClusterName = o.ClusterName
+	sanitized.ControlPlaneID = o.ControlPlaneID
 	sanitized.ClusterSource = o.ClusterSource
 	sanitized.PriorityClassName = o.PriorityClassName
 	sanitized.NodeSelectorKey = o.NodeSelectorKey
@@ -412,6 +415,12 @@ func (a *Agent) getTickerEvents(ctx context.Context) <-chan *core.Event {
 
 func (a *Agent) Start(ctx context.Context) error {
 	log := core.GetLogger(ctx)
+	if err := nvcatypes.ValidateControlPlaneID(a.ControlPlaneID); err != nil {
+		return fmt.Errorf("invalid control plane ID: %w", err)
+	}
+	if a.ControlPlaneID != "" && a.SystemNamespace == "" {
+		a.SystemNamespace = nvcatypes.ControlPlaneResourceName(a.ControlPlaneID, "nvca-operator")
+	}
 	// agentStarted is used to ensure the agent handlers don't fire too early
 	agentStarted := &atomic.Bool{}
 	agentStarted.Store(false)
@@ -471,6 +480,7 @@ func (a *Agent) Start(ctx context.Context) error {
 	backendk8scache, _, err = NewBackendK8sCacheBuilder().
 		WithClients(backendK8sClients).
 		WithSystemNamespace(a.SystemNamespace).
+		WithControlPlaneID(a.ControlPlaneID).
 		WithK8sVersionOverride(a.K8sVersionOverride).
 		WithNGCServiceKeyFetcher(a.TokenFetcher).
 		WithNVCAImageRepo(a.NVCAImageRepo).

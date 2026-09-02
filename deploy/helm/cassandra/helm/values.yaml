@@ -191,6 +191,9 @@ cassandra:
           memory: 256Mi
 
   migrations:
+    # Stable identity used by the migration image to derive plane-scoped ESS
+    # authorization endpoints. Empty preserves legacy single-plane URLs.
+    controlPlaneID: ""
     image:
       # registry: must be supplied in additional values
       # repository: must be supplied in additional values

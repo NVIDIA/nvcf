@@ -5,11 +5,20 @@ in-house StatefulSet chart. Read `../docs/upgrade-from-bitnami.md` first for the
 full context, the three migration options, and the open questions still under
 review.
 
-## migrate-from-bitnami.sh
+## Normal upgrade
 
-Automates Option A (in-place adopt) from the migration doc: it recreates the
-StatefulSet and adopts the existing data PVC, with safety checks. It is dry-run
-by default and refuses managed/cloud contexts.
+Current charts preserve the immutable StatefulSet/PVC-template identity from
+published 0.15.5. Use a normal Helm upgrade with
+`cassandra.persistence.subPath: data` and the documented config-compat values.
+Verify the StatefulSet, PVC, and PV UIDs and application data before and after.
+
+## Legacy migrate-from-bitnami.sh fallback
+
+This provisional script predates the immutable-identity fix. It recreates the
+StatefulSet and adopts the existing data PVC, with safety checks. It is not the
+normal upgrade path; retain it only as a recovery tool for an early source
+chart that omitted the 0.15.5 PVC-template identity. It is dry-run by default
+and refuses managed/cloud contexts.
 
 Status: provisional. It does not resolve the open items from the migration doc
 (the full cassandra.yaml config-compat set, and whether in-place adopt or

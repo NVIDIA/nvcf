@@ -65,6 +65,7 @@ import (
 	fakek8sclient "k8s.io/client-go/kubernetes/fake"
 	listersv1 "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/rest"
+	k8stesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
@@ -3750,6 +3751,246 @@ func TestSecretInformerSetup(t *testing.T) {
 	assert.Equal(t, sourceSecret.Type, mirroredSecret.Type)
 	assert.Equal(t, sourceSecret.Data, mirroredSecret.Data)
 	assert.Equal(t, sourceNS.Name, mirroredSecret.Labels[SecretMirroredFromLabelKey])
+}
+
+func TestReconcileExistingMirroredSecretsColdStart(t *testing.T) {
+	ctx, cancel := context.WithTimeout(newTestContext(), 5*time.Second)
+	t.Cleanup(cancel)
+
+	const (
+		controlPlaneID   = "plane-a"
+		sourceNamespace  = "plane-a-nvca-operator"
+		targetNamespace  = "plane-a-workload"
+		foreignNamespace = "plane-b-workload"
+		secretName       = "preexisting-mirror-secret"
+	)
+
+	sourceNS := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: sourceNamespace}}
+	targetNS := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name: targetNamespace,
+		Labels: map[string]string{
+			nvcatypes.WorkloadInstanceTypeLabel: "miniservice",
+			nvcatypes.ControlPlaneIDLabel:       controlPlaneID,
+		},
+	}}
+	foreignNS := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name: foreignNamespace,
+		Labels: map[string]string{
+			nvcatypes.WorkloadInstanceTypeLabel: "miniservice",
+			nvcatypes.ControlPlaneIDLabel:       "plane-b",
+		},
+	}}
+	sourceSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: sourceNamespace,
+			Labels:    map[string]string{"mirror": "true"},
+		},
+		Data: map[string][]byte{"marker": []byte("plane-a")},
+	}
+
+	client := fakek8sclient.NewSimpleClientset(sourceNS, targetNS, foreignNS, sourceSecret)
+	namespaceIndexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	for _, namespace := range []*corev1.Namespace{sourceNS, targetNS, foreignNS} {
+		require.NoError(t, namespaceIndexer.Add(namespace))
+	}
+	secretIndexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{
+		cache.NamespaceIndex: cache.MetaNamespaceIndexFunc,
+	})
+	require.NoError(t, secretIndexer.Add(sourceSecret))
+
+	backendCache := &BackendK8sCache{
+		clients:                     &kubeclients.KubeClients{K8s: client},
+		controlPlaneID:              controlPlaneID,
+		secretMirrorSourceNamespace: sourceNamespace,
+		secretMirrorLabelSelector:   "mirror=true",
+		instanceNamespaceLister:     listersv1.NewNamespaceLister(namespaceIndexer),
+		secretNamespaceLister:       listersv1.NewSecretLister(secretIndexer).Secrets(sourceNamespace),
+	}
+
+	// No source Secret event occurs after startup. Startup reconciliation must
+	// mirror the already-cached object without waiting for the 30-minute resync.
+	require.NoError(t, backendCache.reconcileExistingMirroredSecrets(ctx))
+	require.NoError(t, backendCache.reconcileExistingMirroredSecrets(ctx), "startup replay must be idempotent")
+
+	mirrored, err := client.CoreV1().Secrets(targetNamespace).Get(ctx, secretName, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, sourceSecret.Data, mirrored.Data)
+	assert.Equal(t, sourceNamespace, mirrored.Labels[SecretMirroredFromLabelKey])
+	assert.Equal(t, controlPlaneID, mirrored.Labels[nvcatypes.ControlPlaneIDLabel])
+
+	_, err = client.CoreV1().Secrets(foreignNamespace).Get(ctx, secretName, metav1.GetOptions{})
+	assert.True(t, apierrors.IsNotFound(err), "startup reconciliation must not mirror into another control plane")
+}
+
+func TestReconcileExistingMirroredSecretsDisabled(t *testing.T) {
+	backendCache := &BackendK8sCache{}
+	require.NoError(t, backendCache.reconcileExistingMirroredSecrets(newTestContext()))
+}
+
+func TestReconcileExistingMirroredSecretsRequiresSyncedListers(t *testing.T) {
+	backendCache := &BackendK8sCache{secretMirrorLabelSelector: "mirror=true"}
+	err := backendCache.reconcileExistingMirroredSecrets(newTestContext())
+	require.ErrorContains(t, err, "secret mirror lister is not initialized")
+
+	secretIndexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{
+		cache.NamespaceIndex: cache.MetaNamespaceIndexFunc,
+	})
+	backendCache.secretNamespaceLister = listersv1.NewSecretLister(secretIndexer).Secrets("source")
+	err = backendCache.reconcileExistingMirroredSecrets(newTestContext())
+	require.ErrorContains(t, err, "instance namespace lister is not initialized")
+}
+
+func TestMirrorSecretReturnsTargetErrors(t *testing.T) {
+	ctx := newTestContext()
+	const (
+		controlPlaneID  = "plane-a"
+		sourceNamespace = "plane-a-nvca-operator"
+		targetNamespace = "plane-a-workload"
+		secretName      = "mirror-error-probe"
+	)
+	targetNS := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name: targetNamespace,
+		Labels: map[string]string{
+			nvcatypes.WorkloadInstanceTypeLabel: "miniservice",
+			nvcatypes.ControlPlaneIDLabel:       controlPlaneID,
+		},
+	}}
+	sourceSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: sourceNamespace,
+			Labels:    map[string]string{"mirror": "true"},
+		},
+		Data: map[string][]byte{"marker": []byte("source")},
+	}
+
+	newBackendCache := func(t *testing.T, client *fakek8sclient.Clientset) *BackendK8sCache {
+		t.Helper()
+		namespaceIndexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+		require.NoError(t, namespaceIndexer.Add(targetNS))
+		return &BackendK8sCache{
+			clients:                     &kubeclients.KubeClients{K8s: client},
+			controlPlaneID:              controlPlaneID,
+			secretMirrorSourceNamespace: sourceNamespace,
+			secretMirrorLabelSelector:   "mirror=true",
+			instanceNamespaceLister:     listersv1.NewNamespaceLister(namespaceIndexer),
+		}
+	}
+
+	t.Run("create failure", func(t *testing.T) {
+		client := fakek8sclient.NewSimpleClientset(targetNS)
+		client.PrependReactor("create", "secrets", func(action k8stesting.Action) (bool, runtime.Object, error) {
+			if action.GetNamespace() == targetNamespace {
+				return true, nil, errors.New("injected create failure")
+			}
+			return false, nil, nil
+		})
+
+		err := newBackendCache(t, client).mirrorSecret(ctx, sourceSecret)
+		require.ErrorContains(t, err, "injected create failure")
+	})
+
+	t.Run("get failure", func(t *testing.T) {
+		existing := sourceSecret.DeepCopy()
+		existing.Namespace = targetNamespace
+		existing.Labels = nvcatypes.AddControlPlaneLabel(existing.Labels, controlPlaneID)
+		client := fakek8sclient.NewSimpleClientset(targetNS, existing)
+		client.PrependReactor("get", "secrets", func(action k8stesting.Action) (bool, runtime.Object, error) {
+			if action.GetNamespace() == targetNamespace {
+				return true, nil, errors.New("injected get failure")
+			}
+			return false, nil, nil
+		})
+
+		err := newBackendCache(t, client).mirrorSecret(ctx, sourceSecret)
+		require.ErrorContains(t, err, "injected get failure")
+	})
+
+	t.Run("update failure", func(t *testing.T) {
+		existing := sourceSecret.DeepCopy()
+		existing.Namespace = targetNamespace
+		existing.Labels = nvcatypes.AddControlPlaneLabel(existing.Labels, controlPlaneID)
+		client := fakek8sclient.NewSimpleClientset(targetNS, existing)
+		client.PrependReactor("update", "secrets", func(action k8stesting.Action) (bool, runtime.Object, error) {
+			if action.GetNamespace() == targetNamespace {
+				return true, nil, errors.New("injected update failure")
+			}
+			return false, nil, nil
+		})
+
+		err := newBackendCache(t, client).mirrorSecret(ctx, sourceSecret)
+		require.ErrorContains(t, err, "injected update failure")
+	})
+
+	t.Run("ownership collision", func(t *testing.T) {
+		existing := sourceSecret.DeepCopy()
+		existing.Namespace = targetNamespace
+		existing.Labels = nvcatypes.AddControlPlaneLabel(existing.Labels, "plane-b")
+		existing.Data = map[string][]byte{"marker": []byte("foreign")}
+		client := fakek8sclient.NewSimpleClientset(targetNS, existing)
+
+		err := newBackendCache(t, client).mirrorSecret(ctx, sourceSecret)
+		require.ErrorContains(t, err, "owned by another control plane")
+		unchanged, getErr := client.CoreV1().Secrets(targetNamespace).Get(ctx, secretName, metav1.GetOptions{})
+		require.NoError(t, getErr)
+		assert.Equal(t, []byte("foreign"), unchanged.Data["marker"])
+	})
+}
+
+func TestMirrorSecretRetriesUpdateConflict(t *testing.T) {
+	ctx := newTestContext()
+	const (
+		controlPlaneID  = "plane-a"
+		sourceNamespace = "plane-a-nvca-operator"
+		targetNamespace = "plane-a-workload"
+		secretName      = "mirror-conflict-probe"
+	)
+	targetNS := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name: targetNamespace,
+		Labels: map[string]string{
+			nvcatypes.WorkloadInstanceTypeLabel: "miniservice",
+			nvcatypes.ControlPlaneIDLabel:       controlPlaneID,
+		},
+	}}
+	sourceSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: sourceNamespace,
+			Labels:    map[string]string{"mirror": "true"},
+		},
+		Data: map[string][]byte{"marker": []byte("source")},
+	}
+	existing := sourceSecret.DeepCopy()
+	existing.Namespace = targetNamespace
+	existing.Labels = nvcatypes.AddControlPlaneLabel(existing.Labels, controlPlaneID)
+	existing.Data = map[string][]byte{"marker": []byte("stale")}
+
+	client := fakek8sclient.NewSimpleClientset(targetNS, existing)
+	var updateCalls atomic.Int32
+	client.PrependReactor("update", "secrets", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if action.GetNamespace() == targetNamespace && updateCalls.Add(1) == 1 {
+			return true, nil, apierrors.NewConflict(corev1.Resource("secrets"), secretName, errors.New("injected conflict"))
+		}
+		return false, nil, nil
+	})
+
+	namespaceIndexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	require.NoError(t, namespaceIndexer.Add(targetNS))
+	backendCache := &BackendK8sCache{
+		clients:                     &kubeclients.KubeClients{K8s: client},
+		controlPlaneID:              controlPlaneID,
+		secretMirrorSourceNamespace: sourceNamespace,
+		secretMirrorLabelSelector:   "mirror=true",
+		instanceNamespaceLister:     listersv1.NewNamespaceLister(namespaceIndexer),
+	}
+
+	require.NoError(t, backendCache.mirrorSecret(ctx, sourceSecret))
+	assert.Equal(t, int32(2), updateCalls.Load())
+	updated, err := client.CoreV1().Secrets(targetNamespace).Get(ctx, secretName, metav1.GetOptions{})
+	require.NoError(t, err)
+	assert.Equal(t, []byte("source"), updated.Data["marker"])
+	assert.Equal(t, controlPlaneID, updated.Labels[nvcatypes.ControlPlaneIDLabel])
 }
 
 func TestStartSecretMirroringInformer(t *testing.T) {

@@ -22,6 +22,12 @@ metadata:
 {{- if eq .Values.ngcConfig.clusterSource "self-managed" }}
 data:
   cluster-dto.yaml: |
+    {{- $controlPlaneID := include "nvcaop.controlPlaneID" . }}
+    {{- if $controlPlaneID }}
+    controlPlaneID: {{ $controlPlaneID | quote }}
+    systemNamespace: {{ include "nvcaop.systemNamespace" . | quote }}
+    requestsNamespace: {{ include "nvcaop.requestsNamespace" . | quote }}
+    {{- end }}
     clusterId: {{ .Values.clusterID | quote }}
     clusterGroupId: {{ .Values.clusterGroupID | quote }}
     clusterName: {{ .Values.clusterName | default "nvcf-default" | quote }}

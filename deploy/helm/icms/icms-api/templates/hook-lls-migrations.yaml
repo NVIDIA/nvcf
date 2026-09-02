@@ -53,6 +53,10 @@ spec:
               value: {{ (.Values.sis.lls.hmacRotation.baoService | default (printf "openbao-server.%s.svc.cluster.local" .Values.sis.lls.namespace)) | quote }}
             - name: BAO_PORT
               value: {{ .Values.sis.lls.hmacRotation.baoPort | quote }}
+            - name: TURN_SERVICE_ACCOUNT_NAME
+              value: {{ required "sis.lls.turn.serviceAccountName is required when sis.lls.enabled is true" .Values.sis.lls.turn.serviceAccountName | quote }}
+            - name: TURN_SERVICE_ACCOUNT_NAMESPACE
+              value: {{ required "sis.lls.turn.serviceAccountNamespace is required when sis.lls.enabled is true" .Values.sis.lls.turn.serviceAccountNamespace | quote }}
           volumeMounts:
             - name: root-token
               mountPath: /secrets/root_token

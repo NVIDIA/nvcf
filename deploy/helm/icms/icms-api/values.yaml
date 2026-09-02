@@ -29,6 +29,10 @@ sis:
     enabled: false
     # Namespace for LLS resources (migrations hook, rotation CronJob)
     namespace: "vault-system"
+    # External TURN workload identity bound into this plane's OpenBao role.
+    turn:
+      serviceAccountName: turn
+      serviceAccountNamespace: gdn-streaming
     podAnnotations: {}
     migrations:
       resources:

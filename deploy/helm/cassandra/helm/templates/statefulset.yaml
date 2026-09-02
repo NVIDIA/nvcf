@@ -32,6 +32,12 @@ spec:
         # Roll pods when the auth config changes so the initContainer re-patches.
         checksum/cassandra-conf: {{ include (print $.Template.BasePath "/configmap-cassandra-conf.yaml") . | sha256sum }}
     spec:
+      # The published Bitnami-backed chart used a release-owned ServiceAccount
+      # named cassandra. The in-house chart does not need Kubernetes API
+      # permissions and removes that object. Set the replacement explicitly so
+      # an upgrade does not retain the deleted ServiceAccount through the
+      # three-way patch and leave the replacement pod forbidden at admission.
+      serviceAccountName: default
       {{- include "cassandra.imagePullSecrets" . | nindent 6 }}
       securityContext:
         fsGroup: {{ .Values.cassandra.podSecurityContext.fsGroup }}
@@ -204,8 +210,15 @@ spec:
             name: cassandra-init-cql
             defaultMode: 0500
   volumeClaimTemplates:
-    - metadata:
+    # Preserve the object shape emitted by the Bitnami subchart used through
+    # helm-nvcf-cassandra 0.15.5. These fields are persisted inside the
+    # StatefulSet's immutable volumeClaimTemplates, so removing them makes a
+    # normal Helm upgrade fail before the pod can roll to the in-house chart.
+    - apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
         name: data
+        labels: {{- include "cassandra.selectorLabels" . | nindent 10 }}
       spec:
         accessModes: ["ReadWriteOnce"]
         resources:

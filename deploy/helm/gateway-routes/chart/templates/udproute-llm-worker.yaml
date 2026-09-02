@@ -7,7 +7,7 @@ apiVersion: gateway.networking.k8s.io/v1alpha2
 kind: UDPRoute
 metadata:
   name: {{ .Values.nvcfGatewayRoutes.routes.llmWorker.name }}-quic
-  namespace: {{ .Values.nvcfGatewayRoutes.gateways.llmQuic.namespace }}
+  namespace: {{ include "nvcf-gateway.routeNamespace" . }}
   labels:
     {{- include "nvcf-gateway.labels" . | nindent 4 }}
     app.kubernetes.io/component: llm-worker-quic-route

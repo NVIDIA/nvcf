@@ -129,6 +129,11 @@ spec:
           value: /var/run/secrets/ngc-service-key/{{ default "ngcServiceKey" .Values.ngcConfig.serviceKeySecretKeyName }}
         - name: NVCA_CLUSTER_SOURCE
           value: {{ .Values.ngcConfig.clusterSource | default "ngc-managed" }}
+        {{- $controlPlaneID := include "nvcaop.controlPlaneID" . }}
+        {{- if $controlPlaneID }}
+        - name: NVCF_CONTROL_PLANE_ID
+          value: {{ $controlPlaneID | quote }}
+        {{- end }}
         {{- if and .Values.vaultConfig .Values.vaultConfig.oAuthClientMountPathTemplate }}
         - name: VAULT_OAUTH_CLIENT_MOUNT_PATH_TEMPLATE
           value: {{ .Values.vaultConfig.oAuthClientMountPathTemplate | quote }}
@@ -216,6 +221,10 @@ spec:
           - "{{ .Values.nvcaHelmRepositoryPrefix}}"
           - --cluster-id
           - "{{ .Values.clusterID }}"
+          {{- if $controlPlaneID }}
+          - --control-plane-id
+          - {{ $controlPlaneID | quote }}
+          {{- end }}
           {{- if .Values.enableGXCache }}
           - --enable-gxcache
           {{- end}}
@@ -232,11 +241,14 @@ spec:
           - --nvca-worker-degradation-period
           - {{ .Values.agent.workerDegradationPeriod | quote }}
           {{- end }}
-          {{- if and ((.Values.agent).secretMirrorLabelSelector) ((.Values.agent).secretMirrorNamespace) }}
+          {{- $secretMirrorNamespace := include "nvcaop.secretMirrorNamespace" . }}
+          {{- if $secretMirrorNamespace }}
           - --nvca-secret-mirror-source-namespace
-          - "{{ .Values.agent.secretMirrorNamespace }}"
+          - {{ $secretMirrorNamespace | quote }}
+          {{- end }}
+          {{- if ((.Values.agent).secretMirrorLabelSelector) }}
           - --nvca-secret-mirror-label-selector
-          - "{{ .Values.agent.secretMirrorLabelSelector }}"
+          - {{ .Values.agent.secretMirrorLabelSelector | quote }}
           {{- end }}
           {{- $agent := .Values.agent | default dict }}
           {{- $byooOtelCollectorImage := include "nvcaop.byooOtelCollectorImage" . }}
@@ -315,7 +327,7 @@ spec:
           - /usr/bin/nvca-mirror
           - run
           - --target-namespace
-          - "nvca-system"
+          - {{ include "nvcaop.systemNamespace" . | quote }}
           - --log-level
           - "{{ .Values.logLevel }}"
         env:

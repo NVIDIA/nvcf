@@ -24,7 +24,7 @@ else
   source "${curr_dir}/utils/functions.sh"
 fi
 
-SERVICE_ACCOUNT_NAMESPACE="api-keys"
+SERVICE_ACCOUNT_NAMESPACE="${API_KEYS_NAMESPACE:-api-keys}"
 SERVICE_ACCOUNT_NAME="admin-issuer-proxy"
 SERVICE_NAME="admin-issuer-proxy"
 
@@ -49,7 +49,7 @@ VAULT_JWT_AUTH_ROLE_POLICIES=""
 # Issuer will be: http://api.nvcf.svc.cluster.local (same as NVCF API)
 # Client will be: admin-issuer-proxy (the proxy's identity)
 
-NVCF_API_NAMESPACE="nvcf"
+NVCF_API_NAMESPACE="${NVCF_NAMESPACE:-nvcf}"
 NVCF_API_SERVICE_NAME="api"
 
 # Full admin-level scopes for NVCF operations

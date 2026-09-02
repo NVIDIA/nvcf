@@ -45,3 +45,6 @@ jobs:
 
       - name: Run kv write retry test
         run: migrations/openbao/tests/kv-write-retry-test.sh
+
+      - name: Run control-plane namespace isolation test
+        run: migrations/openbao/tests/namespace-isolation-test.sh

@@ -19,9 +19,10 @@ trap 'rm -f "$rendered" "$disabled" "$plaintext" "$existing_secret" "$invalid_ba
 
 helm template nvcf-gateway-routes "$chart_dir" \
   --namespace gateway \
+  --set nvcfGatewayRoutes.routeNamespace=plane-a-ingress \
   --set nvcfGatewayRoutes.routes.llmWorker.enabled=true \
   --set nvcfGatewayRoutes.gateways.llmGrpc.name=llm-grpc-gateway \
-  --set nvcfGatewayRoutes.gateways.llmGrpc.namespace=gateway \
+  --set nvcfGatewayRoutes.gateways.llmGrpc.namespace=plane-a-gateway \
   --set nvcfGatewayRoutes.gateways.llmQuic.name=llm-quic-gateway \
   --set nvcfGatewayRoutes.gateways.llmQuic.namespace=gateway \
   --set nvcfGatewayRoutes.routes.llmWorker.backend.namespace=router-system \
@@ -74,6 +75,17 @@ assert_contains "sectionName: llm-grpc" \
   "GRPCRoute must attach to the configured LLM gRPC listener"
 assert_contains "sectionName: llm-quic" \
   "UDPRoute must attach to the configured LLM QUIC listener"
+
+certificate_namespace="$(awk '
+  $0 == "kind: Certificate" { in_certificate = 1; in_metadata = 0; next }
+  in_certificate && /^---$/ { in_certificate = 0; in_metadata = 0 }
+  in_certificate && $0 == "metadata:" { in_metadata = 1; next }
+  in_certificate && in_metadata && $1 == "namespace:" { print $2; exit }
+' "$rendered")"
+if [[ "$certificate_namespace" != "plane-a-gateway" ]]; then
+  echo "FAIL: the gRPC Certificate Secret must be created in the Gateway namespace" >&2
+  exit 1
+fi
 
 reference_grant_service_name="$(awk '
   $0 == "kind: ReferenceGrant" { in_grant = 1; target_grant = 0; in_to = 0 }

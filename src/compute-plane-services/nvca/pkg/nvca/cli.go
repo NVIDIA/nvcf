@@ -69,6 +69,7 @@ type agentHostOverrides struct {
 	ICMSHostHeaderOverride             string `yaml:"icmsHostHeaderOverride"`
 	HelmReValServiceHostHeaderOverride string `yaml:"helmReValServiceHostHeaderOverride"`
 	NATSHostOverride                   string `yaml:"NATSHostOverride"`
+	ControlPlaneID                     string `yaml:"controlPlaneID"`
 }
 
 func readAgentHostOverrides(configFile string) (agentHostOverrides, error) {
@@ -169,6 +170,7 @@ func newCobraCommand(
 				ClusterGroupID:                          cfg.Cluster.GroupID,
 				ClusterGroupName:                        cfg.Cluster.GroupName,
 				ClusterAttributes:                       featureflag.GetEnabledAttributes(),
+				ControlPlaneID:                          hostOverrides.ControlPlaneID,
 				CloudProvider:                           cfg.Cluster.CloudProvider,
 				ICMSURL:                                 cfg.Agent.ICMSURL,
 				ICMSHostHeaderOverride:                  hostOverrides.ICMSHostHeaderOverride,

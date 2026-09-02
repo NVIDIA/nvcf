@@ -43,6 +43,9 @@ api:
   accountBootstrap:
     # Set false to skip the account-bootstrap hook (runs on post-install and post-upgrade; e.g. when accounts are provisioned via the API).
     enabled: true
+    # In-cluster OpenBao endpoint used by the bootstrap script. The projected
+    # token audience remains the shared trust-domain value used by all roles.
+    openbaoServiceAddress: openbao-server.vault-system.svc.cluster.local:8200
     image:
       registry: ""
       repository: ""

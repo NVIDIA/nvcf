@@ -145,6 +145,19 @@ assert_object_count "$enabled_render" 1
 assert_clusterissuer_count "$enabled_render" 1
 assert_clusterissuer_manifest "$enabled_render" "$issuer_name"
 
+# Named control planes need an explicit ownership marker because Helm retains
+# this cluster-scoped resource on uninstall. The empty/default chart value must
+# continue to render the exact legacy manifest asserted above.
+named_render="${tmpdir}/named.yaml"
+render_enabled \
+  --set-string clusterIssuer.name=alpha-nvcf-openbao-pki \
+  --set-string clusterIssuer.controlPlaneID=alpha \
+  >"$named_render"
+assert_object_count "$named_render" 1
+assert_clusterissuer_count "$named_render" 1
+assert_contains "$named_render" 'nvcf.nvidia.com/control-plane-id: "alpha"'
+assert_contains "$named_render" '"helm.sh/resource-policy": keep'
+
 custom_name_render="${tmpdir}/custom-name.yaml"
 render_enabled --set-string clusterIssuer.name=custom-openbao-issuer >"$custom_name_render"
 assert_object_count "$custom_name_render" 1

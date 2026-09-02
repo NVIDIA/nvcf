@@ -3,6 +3,14 @@
 
 global:
 
+  # Stable identity for one control plane in a shared Kubernetes cluster.
+  # Empty preserves legacy single-plane names and namespaces. Named planes
+  # use <id>-<logical-namespace> and require shared infrastructure to be
+  # managed outside the plane lifecycle.
+  controlPlane:
+    id: ""
+    sharedInfrastructure: bundled
+
   # Domain for external access (used by Gateway API HTTPRoutes)
   domain: "localhost"
 
@@ -424,9 +432,11 @@ addons:
       # Optional overrides; defaults are usually correct.
       # issuerKind: ClusterIssuer
       # issuerName: nvcf-openbao-pki
-      # Stack management defaults to true only for the default
-      # ClusterIssuer/nvcf-openbao-pki configuration. Set this explicitly to
-      # manage a custom ClusterIssuer. Leave it false for an external issuer.
+      # Stack management defaults to true for the default issuer. Legacy mode
+      # can manage a custom ClusterIssuer when this is explicitly true. A
+      # named control plane can manage only its canonical
+      # <control-plane-id>-nvcf-openbao-pki issuer. Leave this false for an
+      # external issuer.
       # clusterIssuer:
       #   enabled: true
       # namespace: vault-system
@@ -453,8 +463,10 @@ addons:
       pullPolicy: IfNotPresent
     config:
       mappingPath: /etc/vanity-gateway/config/config.yaml
-      nvcfApiEndpoint: http://invocation.nvcf.svc.cluster.local:8080
-      llmGatewayEndpoint: http://llm-api-gateway.nvcf.svc.cluster.local:8080
+      # Empty derives the endpoint from global.controlPlane.id.
+      nvcfApiEndpoint: ""
+      # Empty derives the endpoint from global.controlPlane.id.
+      llmGatewayEndpoint: ""
       # Empty by default because the Vanity Gateway chart does not create Vault
       # Agent injection. Set this only when another component mounts the secrets
       # file into the pod.

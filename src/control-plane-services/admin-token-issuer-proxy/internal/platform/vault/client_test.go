@@ -97,8 +97,14 @@ func TestVaultClientHelpers(t *testing.T) {
 		}
 	})
 
-	t.Run("SignToken wraps Vault errors with the resolved path", func(t *testing.T) {
+	t.Run("SignToken sends only the latest token in the standard Vault header", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if got, want := r.Header.Values("X-Vault-Token"), []string{"latest-token"}; !equalStrings(got, want) {
+				t.Errorf("X-Vault-Token headers = %q, want %q", got, want)
+			}
+			if got := r.Header.Values("X-ESS-Token"); len(got) != 0 {
+				t.Errorf("X-ESS-Token headers = %q, want none", got)
+			}
 			http.Error(w, "signing failed", http.StatusInternalServerError)
 		}))
 		defer server.Close()
@@ -107,7 +113,8 @@ func TestVaultClientHelpers(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewVaultClient() returned an unexpected error: %v", err)
 		}
-		client.SetToken("test-token")
+		client.SetToken("old-token")
+		client.SetToken("latest-token")
 
 		_, err = client.SignToken(t.Context(), "services/example/jwt/sign", "admin-issuer-proxy")
 		if err == nil {
@@ -162,4 +169,16 @@ func TestVaultClientHelpers(t *testing.T) {
 			t.Fatal("Vault write did not stop after context cancellation")
 		}
 	})
+}
+
+func equalStrings(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }

@@ -47,7 +47,7 @@ func TestCache_Fetch(t *testing.T) {
 		Services: []models.ServiceInfo{
 			{
 				ServiceID:          "test-service-id",
-				ServiceName:        "test-service",
+				ServiceName:        "nvcf-api",
 				AudienceServiceIDs: []string{"test-service-id"},
 			},
 		},
@@ -99,11 +99,22 @@ func TestCache_Fetch(t *testing.T) {
 			serverHandler: func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
 				_ = json.NewEncoder(w).Encode(models.ServicesResponse{Services: []models.ServiceInfo{{
-					ServiceName: "test-service",
+					ServiceName: "nvcf-api",
 				}}})
 			},
 			expectError:   true,
 			errorContains: "service metadata is missing service_id",
+		},
+		{
+			name: "response missing nvcf api service",
+			serverHandler: func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(models.ServicesResponse{Services: []models.ServiceInfo{{
+					ServiceName: "test-service",
+				}}})
+			},
+			expectError:   true,
+			errorContains: "nvcf-api",
 		},
 	}
 
@@ -140,6 +151,31 @@ func TestCache_Fetch(t *testing.T) {
 	}
 }
 
+func TestCacheFetchSelectsNVCFAPIRegardlessOfResponseOrder(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(models.ServicesResponse{Services: []models.ServiceInfo{
+			{ServiceName: "nvct-api", ServiceID: "tasks-service-id"},
+			{ServiceName: "nvcf-api", ServiceID: "functions-service-id"},
+			{ServiceName: "event-ledger", ServiceID: "ledger-service-id"},
+		}})
+	}))
+	defer server.Close()
+
+	cache := New(server.URL)
+	if err := cache.Fetch(); err != nil {
+		t.Fatalf("Fetch() returned an unexpected error: %v", err)
+	}
+	if cache.Get() == nil {
+		t.Fatal("Fetch() did not cache service metadata")
+	}
+	if got := cache.Get().ServiceName; got != "nvcf-api" {
+		t.Fatalf("cached service name = %q, want nvcf-api", got)
+	}
+	if got := cache.Get().ServiceID; got != "functions-service-id" {
+		t.Fatalf("cached service ID = %q, want functions-service-id", got)
+	}
+}
+
 func TestCacheFetchWithRetryToleratesColdStart(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -150,7 +186,7 @@ func TestCacheFetchWithRetryToleratesColdStart(t *testing.T) {
 
 		_ = json.NewEncoder(w).Encode(models.ServicesResponse{Services: []models.ServiceInfo{{
 			ServiceID:   "test-service-id",
-			ServiceName: "test-service",
+			ServiceName: "nvcf-api",
 		}}})
 	}))
 	defer server.Close()
@@ -184,7 +220,7 @@ func TestCacheFetchWithRetryToleratesConnectionRefused(t *testing.T) {
 			Header:     make(http.Header),
 			Body: io.NopCloser(newJSONReader(t, models.ServicesResponse{Services: []models.ServiceInfo{{
 				ServiceID:   "test-service-id",
-				ServiceName: "test-service",
+				ServiceName: "nvcf-api",
 			}}})),
 		}, nil
 	})
@@ -218,7 +254,7 @@ func TestCacheFetchWithRetryToleratesDNSNotFound(t *testing.T) {
 			Header:     make(http.Header),
 			Body: io.NopCloser(newJSONReader(t, models.ServicesResponse{Services: []models.ServiceInfo{{
 				ServiceID:   "test-service-id",
-				ServiceName: "test-service",
+				ServiceName: "nvcf-api",
 			}}})),
 		}, nil
 	})

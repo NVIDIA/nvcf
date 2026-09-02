@@ -28,8 +28,8 @@ else
   source "${migrations_dir}/utils/encryption_setup.sh"
 fi
 
-SERVICE_ACCOUNT_NAMESPACE="gdn-streaming"
-SERVICE_ACCOUNT_NAME="turn"
+SERVICE_ACCOUNT_NAMESPACE="${TURN_SERVICE_ACCOUNT_NAMESPACE:-gdn-streaming}"
+SERVICE_ACCOUNT_NAME="${TURN_SERVICE_ACCOUNT_NAME:-turn}"
 
 #-------------------------------------------
 # Set defaults for secret paths and policies

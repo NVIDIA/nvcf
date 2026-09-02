@@ -253,6 +253,7 @@ func withRootNVCFBackendMapper() clusterMapper {
 		}
 
 		dest.NVCFBackend.Spec.ClusterConfig = nvidiaiov1.ClusterConfig{
+			ControlPlaneID:         src.controlPlaneID(),
 			ClusterID:              src.ID,
 			ClusterName:            src.Name,
 			Description:            src.Description,

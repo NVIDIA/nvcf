@@ -9,6 +9,8 @@ apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
   name: {{ dig "secretName" "" $grpcTls | quote }}
+  # Gateway listener Secrets are namespace-local to the Gateway. Routes may
+  # live in a separate namespace, but the generated TLS Secret may not.
   namespace: {{ .Values.nvcfGatewayRoutes.gateways.llmGrpc.namespace }}
   labels:
     {{- include "nvcf-gateway.labels" . | nindent 4 }}

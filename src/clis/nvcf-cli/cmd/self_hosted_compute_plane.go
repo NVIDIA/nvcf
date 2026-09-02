@@ -665,10 +665,21 @@ func isHelmfileTemplate(name string) bool {
 }
 
 func parseComputePlaneChart(body string) (string, string) {
+	const defaultNVCAChart = "nvcf/helm-nvca-operator"
 	var chart, version string
 	inNVCARelease := false
 	for _, line := range strings.Split(body, "\n") {
 		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "chart:") && containsQuotedChartDefault(line, defaultNVCAChart) {
+			// Named control planes use a templated release name and a source-chart
+			// override with this registry chart as the default. Preserve the
+			// registry reference for the CLI handoff summary without requiring a
+			// full Helm template evaluation.
+			inNVCARelease = true
+			chart = defaultNVCAChart
+			version = ""
+			continue
+		}
 		switch {
 		case strings.HasPrefix(line, "- name:"):
 			inNVCARelease = strings.TrimSpace(strings.TrimPrefix(line, "- name:")) == "nvca-operator"
@@ -686,6 +697,10 @@ func parseComputePlaneChart(body string) (string, string) {
 		}
 	}
 	return chart, version
+}
+
+func containsQuotedChartDefault(line, chart string) bool {
+	return strings.Contains(line, `"`+chart+`"`) || strings.Contains(line, `'`+chart+`'`)
 }
 
 func shellCommand(args ...string) string {

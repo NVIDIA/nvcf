@@ -51,6 +51,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/NVIDIA/nvcf/src/compute-plane-services/nvca/internal/metrics"
@@ -104,6 +105,7 @@ func getKartaAddToScheme() func(*runtime.Scheme) error {
 }
 
 type ControllerOptions struct {
+	ControlPlaneID          string
 	SystemNamespace         string
 	ICMSRequestNamespace    string
 	K8sVersion              string
@@ -259,10 +261,13 @@ func BuildController(ctx context.Context,
 		return fmt.Errorf("failed to set status event indices on manager: %w", err)
 	}
 
+	controlPlanePredicate := predicate.NewPredicateFuncs(controlPlaneObjectPredicate(r.ControlPlaneID))
+	miniserviceLabelEventHandler := newMiniServiceLabelEventHandler(r.ControlPlaneID)
 	b := builder.
 		ControllerManagedBy(mgr).
 		Named("miniservice_controller").
-		For(&nvcav1alpha1.MiniService{}).
+		For(&nvcav1alpha1.MiniService{}, builder.WithPredicates(controlPlanePredicate)).
+		WithEventFilter(controlPlanePredicate).
 		// Labels will be set on these objects and their children
 		// in order to capture events by un-owned objects by the same type.
 		Watches(&nvcav1.StorageRequest{}, miniserviceLabelEventHandler).
@@ -300,7 +305,16 @@ func getMiniServiceNameFromLabel(obj client.Object) string {
 	return labels[miniserviceNameLabel]
 }
 
-var miniserviceLabelEventHandler = handler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj client.Object) []reconcile.Request {
+func controlPlaneObjectPredicate(controlPlaneID string) func(client.Object) bool {
+	return func(obj client.Object) bool {
+		return types.IsOwnedByControlPlane(obj, controlPlaneID)
+	}
+}
+
+func miniServiceRequestsForObject(obj client.Object, controlPlaneID string) []reconcile.Request {
+	if !types.IsOwnedByControlPlane(obj, controlPlaneID) {
+		return nil
+	}
 	msName := getMiniServiceNameFromLabel(obj)
 	if msName == "" {
 		return nil
@@ -308,7 +322,13 @@ var miniserviceLabelEventHandler = handler.EnqueueRequestsFromMapFunc(func(_ con
 	req := reconcile.Request{}
 	req.Name = msName
 	return []reconcile.Request{req}
-})
+}
+
+func newMiniServiceLabelEventHandler(controlPlaneID string) handler.EventHandler {
+	return handler.EnqueueRequestsFromMapFunc(func(_ context.Context, obj client.Object) []reconcile.Request {
+		return miniServiceRequestsForObject(obj, controlPlaneID)
+	})
+}
 
 const (
 	eventInvObjPrefix = "involvedObject."

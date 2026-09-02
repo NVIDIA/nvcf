@@ -21,7 +21,8 @@ default_render="$(mktemp)"
 enabled_render="$(mktemp)"
 annotated_render="$(mktemp)"
 disabled_render="$(mktemp)"
-trap 'rm -f "$default_render" "$enabled_render" "$annotated_render" "$disabled_render"' EXIT
+isolated_render="$(mktemp)"
+trap 'rm -f "$default_render" "$enabled_render" "$annotated_render" "$disabled_render" "$isolated_render"' EXIT
 
 if ! command -v yq >/dev/null 2>&1; then
   echo "yq is required for render tests" >&2
@@ -168,6 +169,36 @@ assert_resource_count "$default_render" ReferenceGrant allow-httproute-to-sis si
 assert_resource_field "$default_render" ReferenceGrant allow-httproute-to-sis sis '.spec.from[0].kind' HTTPRoute
 assert_resource_field "$default_render" ReferenceGrant allow-httproute-to-sis sis '.spec.from[0].namespace' gateway
 assert_resource_field "$default_render" ReferenceGrant allow-httproute-to-sis sis '.spec.to[0].kind' Service
+
+# ReferenceGrants must be installed alongside their configured backends. This
+# is required when multiple control planes use distinct namespaces in one
+# cluster; hard-coded default namespaces silently grant the wrong plane.
+helm template plane-a-gateway-routes "$repo_root/chart" \
+  --set nvcfGatewayRoutes.routeNamespace=plane-a-ingress \
+  --api-versions monitoring.coreos.com/v1/PodMonitor \
+  --set nvcfGatewayRoutes.routes.nvcfApi.backend.namespace=plane-a-nvcf \
+  --set nvcfGatewayRoutes.routes.nvcfApi.grpc.backend.namespace=plane-a-nvcf \
+  --set nvcfGatewayRoutes.routes.apiKeys.backend.namespace=plane-a-api-keys \
+  --set nvcfGatewayRoutes.podMonitors.enabled=true \
+  --set nvcfGatewayRoutes.podMonitors.sharedName=plane-a-envoy-gateway-proxy-shared \
+  --set nvcfGatewayRoutes.podMonitors.grpcName=plane-a-envoy-gateway-proxy-grpc \
+  > "$isolated_render"
+
+assert_resource_count "$isolated_render" ReferenceGrant allow-routes-to-nvcf plane-a-nvcf 1
+assert_resource_count "$isolated_render" ReferenceGrant allow-routes-to-nvcf nvcf 0
+assert_resource_count "$isolated_render" ReferenceGrant allow-httproute-to-api-keys plane-a-api-keys 1
+assert_resource_count "$isolated_render" ReferenceGrant allow-httproute-to-api-keys api-keys 0
+assert_resource_count "$isolated_render" PodMonitor plane-a-envoy-gateway-proxy-shared gateway 1
+assert_resource_count "$isolated_render" PodMonitor plane-a-envoy-gateway-proxy-grpc gateway 1
+assert_resource_count "$isolated_render" PodMonitor envoy-gateway-proxy-shared gateway 0
+assert_resource_count "$isolated_render" PodMonitor envoy-gateway-proxy-grpc gateway 0
+assert_resource_count "$isolated_render" HTTPRoute nvcf-api plane-a-ingress 1
+assert_resource_count "$isolated_render" HTTPRoute nvcf-api gateway 0
+assert_resource_field "$isolated_render" HTTPRoute nvcf-api plane-a-ingress '.spec.parentRefs[0].namespace' gateway
+assert_resource_field "$isolated_render" ReferenceGrant allow-routes-to-nvcf plane-a-nvcf '.spec.from[0].namespace' plane-a-ingress
+assert_resource_field "$isolated_render" ReferenceGrant allow-routes-to-nvcf plane-a-nvcf '.spec.from[1].namespace' plane-a-ingress
+assert_resource_field "$isolated_render" ReferenceGrant allow-routes-to-nvcf plane-a-nvcf '.spec.from[2].namespace' plane-a-ingress
+assert_resource_field "$isolated_render" ReferenceGrant allow-httproute-to-api-keys plane-a-api-keys '.spec.from[0].namespace' plane-a-ingress
 
 # Routes disabled by default stay absent unless explicitly enabled.
 assert_resource_count "$default_render" HTTPRoute llm-invocation gateway 0

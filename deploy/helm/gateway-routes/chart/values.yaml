@@ -20,6 +20,10 @@ nvcfGatewayRoutes:
   # Enable/disable ingress deployment
   enabled: true
 
+  # Namespace for Route and route-policy objects. Empty preserves the legacy
+  # behavior of placing them in the shared Gateway namespace.
+  routeNamespace: ""
+
   # Domain for hostname routing
   domain: "localhost"
 
@@ -294,6 +298,8 @@ nvcfGatewayRoutes:
   # PodMonitors for Envoy Gateway proxy pods.
   podMonitors:
     enabled: false
+    sharedName: envoy-gateway-proxy-shared
+    grpcName: envoy-gateway-proxy-grpc
 
 # Worker-facing gRPC TLS is configured with the request router because the
 # certificate and advertised dial URI form one transport contract. The

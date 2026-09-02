@@ -6,12 +6,19 @@ environments:
 
 ---
 
+{{- $controlPlaneID := dig "global" "controlPlane" "id" "" .Values | toString }}
+{{- $sharedInfrastructure := dig "global" "controlPlane" "sharedInfrastructure" "bundled" .Values | toString }}
+{{- if and $controlPlaneID (ne $sharedInfrastructure "external") }}
+{{- fail "global.controlPlane.sharedInfrastructure must be external for a named control plane" }}
+{{- end }}
 {{- $observability := dig "observability" (dict) .Values }}
 {{- $profile := dig "profile" "disabled" $observability }}
 {{- if not (has $profile (list "disabled" "control" "compute" "all")) }}
 {{- fail (printf "observability.profile must be disabled, control, compute, or all, got %q" $profile) }}
 {{- end }}
-{{- if ne $profile "disabled" }}
+{{- /* Named planes consume shared observability as an external prerequisite.
+     Excluding it from this Helmfile keeps plane destroy from uninstalling it. */}}
+{{- if and (ne $profile "disabled") (ne $sharedInfrastructure "external") }}
 helmfiles:
   - path: ../../observability/helmfile.d/01-observability.yaml.gotmpl
     selectorsInherited: true

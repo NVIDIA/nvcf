@@ -3,6 +3,12 @@
 
 global:
 
+  # Optional identity for attaching this compute plane to one of multiple
+  # isolated NVCF control planes in the same Kubernetes cluster. Empty keeps
+  # the legacy release and namespace names.
+  controlPlane:
+    id: ""
+
   # =============================================================================
   # Helm Chart Sources Configuration
   # =============================================================================
@@ -31,6 +37,8 @@ global:
   # NVCA Operator Configuration
   # =============================================================================
   nvcaOperator:
+    # Optional local chart override for development and pre-release validation.
+    chartPath: ""
     imageTag: "3.2.19"
     selfManaged:
       nvcaVersion: "3.2.19"

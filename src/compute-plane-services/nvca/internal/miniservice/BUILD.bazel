@@ -109,6 +109,7 @@ go_library(
         "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/handler",
         "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/log",
         "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/manager",
+        "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/predicate",
         "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/controller-runtime/pkg/reconcile",
         "//src/compute-plane-services/nvca/vendor/sigs.k8s.io/yaml",
     ],
@@ -124,6 +125,7 @@ go_test(
     name = "miniservice_test",
     srcs = [
         "controller_test.go",
+        "control_plane_isolation_test.go",
         "gvkcache_test.go",
         "metadata_configmap_test.go",
         "mutate_test.go",
