@@ -166,9 +166,14 @@ fn proxy_local_priority_map(backends: &[Arc<RoutedInferenceServerSnapshot>]) -> 
         for (index, significand, exponent) in &rate_components {
             let shift = u32::try_from(*exponent - min_rate_exponent)
                 .expect("the minimum rate exponent cannot exceed a component exponent");
-            let Some(scaled_significand) = u128::from(*significand).checked_shl(shift) else {
+            let Some(max_significand) = u128::MAX.checked_shr(shift) else {
                 return HashMap::new();
             };
+            let significand = u128::from(*significand);
+            if significand > max_significand {
+                return HashMap::new();
+            }
+            let scaled_significand = significand << shift;
             let Some(next_denominator) = denominator.checked_add(scaled_significand) else {
                 return HashMap::new();
             };
@@ -364,17 +369,25 @@ impl ClusterRoutingGeneration {
         if self.snapshot_state.is_none() && updated_backend_id.is_none() {
             return;
         }
+        let source_is_eligible = |index: usize| {
+            proxy_local_request_load || !has_proxy_local_request_load(&self.backends[index].stats)
+        };
         let source_backend_index = updated_backend_id
             .and_then(|backend_id| backend_index(&self.backends, backend_id).ok())
+            .filter(|index| source_is_eligible(*index))
             .or_else(|| {
-                self.snapshot_state.as_ref().and_then(|state| {
-                    backend_index(&self.backends, &state.cluster_stats_source_backend_id).ok()
-                })
+                self.snapshot_state
+                    .as_ref()
+                    .and_then(|state| {
+                        backend_index(&self.backends, &state.cluster_stats_source_backend_id).ok()
+                    })
+                    .filter(|index| source_is_eligible(*index))
             })
             .or_else(|| {
                 self.backends
                     .iter()
                     .enumerate()
+                    .filter(|(index, _)| source_is_eligible(*index))
                     .max_by_key(|(_, backend)| backend.snapshot_updated_at)
                     .map(|(index, _)| index)
             })

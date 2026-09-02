@@ -2568,6 +2568,7 @@ async fn proxy_local_priority_weights_resolve_integer_ceiling_boundaries() {
             Some(27),
         ),
         ([(0.1, 0), (1.1, 12)], Some(12)),
+        ([(1.0, 0), (2.0_f64.powi(76), 100)], None),
         ([(1.0, 0), (f64::MAX / 2.0, u64::MAX - 1)], None),
         ([(f64::MAX, 0), (f64::MIN_POSITIVE, 2)], None),
     ];
@@ -2608,7 +2609,7 @@ async fn proxy_local_priority_weights_resolve_integer_ceiling_boundaries() {
 
 #[tokio::test]
 async fn mixed_proxy_local_capability_uses_legacy_source_behavior() {
-    let (scenario, _running_a, _running_b) = published_shared_cluster(
+    let (scenario, running_a, _running_b) = published_shared_cluster(
         proxy_local_stats(shared_backend_a_stats()),
         shared_backend_b_stats(),
         10,
@@ -2625,6 +2626,24 @@ async fn mixed_proxy_local_capability_uses_legacy_source_behavior() {
         output_generation_queries: 6,
         max_output_tps: 60.0,
         num_running_queries: 7,
+        total_query_input_size: 777,
+        queue_time_estimate_ms_by_priority: HashMap::from([(1, 222), (2, 333)]),
+    );
+
+    scenario
+        .publish(
+            &running_a,
+            "shared-model",
+            Active,
+            proxy_local_stats(shared_backend_a_stats()),
+            Some(10),
+        )
+        .await;
+    let stats = scenario.only_cluster("shared-model").await.stats;
+    assert_stats!(stats,
+        max_output_tps: 60.0,
+        num_running_queries: 7,
+        max_engine_concurrency: 77,
         total_query_input_size: 777,
         queue_time_estimate_ms_by_priority: HashMap::from([(1, 222), (2, 333)]),
     );
