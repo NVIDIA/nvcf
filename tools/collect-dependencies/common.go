@@ -215,13 +215,21 @@ func sniffLicenseText(text string) string {
 		return "BSD-2-Clause"
 	}
 	if strings.Contains(cl, "bsd 3-clause") || strings.Contains(cl, "redistribution and use in source and binary forms") {
-		if strings.Contains(cl, "neither the name") || strings.Contains(cl, "3-clause") {
+		if strings.Contains(cl, "neither the name") ||
+			strings.Contains(cl, "neither name") ||
+			strings.Contains(cl, "neither my name") ||
+			strings.Contains(cl, "none of the names") ||
+			strings.Contains(cl, "may not be used to endorse or promote") ||
+			strings.Contains(cl, "3-clause") {
 			return "BSD-3-Clause"
 		}
 		if strings.Contains(cl, "2-clause") || strings.Contains(cl, "two clause") {
 			return "BSD-2-Clause"
 		}
-		return "BSD-3-Clause"
+		// The third BSD clause is the non-endorsement condition above. When
+		// the canonical redistribution text has no such condition, it is the
+		// two-clause form even if the file omits an explicit SPDX/name line.
+		return "BSD-2-Clause"
 	}
 	if strings.Contains(cl, "mozilla public license") || strings.Contains(cl, "mpl 2.0") {
 		return "MPL-2.0"

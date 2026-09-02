@@ -253,6 +253,52 @@ assert_resource_field "$gateway_manifest" BackendTrafficPolicy llm-worker-grpc-s
 assert_resource_field "$gateway_manifest" BackendTrafficPolicy llm-worker-grpc-streams "$gateway_namespace" \
   '.spec.timeout.http.requestTimeout' '0s'
 
+# The source-tree chart override above keeps the manifest-focused assertions
+# offline. Exercise the normal release path separately so a pin update cannot
+# silently bypass the values contract used by the published chart.
+default_source_environment_name="${environment_name}-default-source"
+default_source_environment_file="$test_stack_dir/environments/$default_source_environment_name.yaml"
+cp "$environment_file" "$default_source_environment_file"
+printf '{}\n' >"$test_stack_dir/secrets/$default_source_environment_name-secrets.yaml"
+yq -i 'del(.addons.llm.requestRouter.chartPath)' "$default_source_environment_file"
+
+default_source_release="$(HELMFILE_ENV="$default_source_environment_name" \
+  HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
+  helmfile \
+    --file "$test_stack_dir/helmfile.d/02-core.yaml.gotmpl" \
+    --environment default \
+    --selector name=llm-request-router \
+    list --skip-charts --output json)"
+default_source_chart="$(jq -r '.[0].chart // ""' <<<"$default_source_release")"
+test "$default_source_chart" = 'nvcf/helm-nvcf-llm-request-router' ||
+  fail "expected default request-router chart, got ${default_source_chart:-missing}"
+
+default_source_values="$work_dir/default-source-router-values.yaml"
+HELMFILE_ENV="$default_source_environment_name" \
+  HELMFILE_CACHE_HOME="$work_dir/helmfile-cache" \
+  helmfile \
+    --file "$test_stack_dir/helmfile.d/02-core.yaml.gotmpl" \
+    --environment default \
+    --selector name=llm-request-router \
+    write-values \
+    --output-file-template "$default_source_values"
+
+assert_file_value "$default_source_values" \
+  '.llmRequestRouter.backendRouter.pylonGrpcDialAddress' \
+  'https://llm-grpc.example.com:50071'
+assert_file_value "$default_source_values" \
+  '.llmRequestRouter.backendRouter.pylonReverseTunnelDialAddress' \
+  'llm-quic.example.com:50072'
+assert_file_value "$default_source_values" \
+  '.llmRequestRouter.certificate.dnsNames[0]' \
+  'llm-request-router.nvcf.svc.cluster.local'
+assert_file_value "$default_source_values" \
+  '.llmRequestRouter.certificate.dnsNames[1]' \
+  '*.llm-request-router-headless.nvcf.svc.cluster.local'
+assert_file_value "$default_source_values" \
+  '.llmRequestRouter.tls.quicInsecure' \
+  'false'
+
 assert_partial_backend_override_rejected() {
   local missing_key="$1"
   local case_name="$2"

@@ -48,10 +48,10 @@ func RenderedManifestsContainResource(root string, resource KubernetesResource) 
 		return fmt.Errorf("rendered manifests directory is empty")
 	}
 	if resource.Kind == "" {
-		return fmt.Errorf("Kubernetes resource kind is empty")
+		return fmt.Errorf("kubernetes resource kind is empty")
 	}
 	if resource.Name == "" {
-		return fmt.Errorf("Kubernetes resource name is empty")
+		return fmt.Errorf("kubernetes resource name is empty")
 	}
 	info, err := os.Stat(root)
 	if err != nil {

@@ -27,7 +27,9 @@ use stargate_protocol::parse_explicit_http_uri;
 use stargate_runtime::{OwnedTask, TASK_SHUTDOWN_TIMEOUT};
 use tracing::warn;
 
-use super::grpc_endpoint::{StargateGrpcEndpoint, log_stargate_grpc_connect_attempt};
+use super::grpc_endpoint::{
+    StargateGrpcEndpoint, log_stargate_grpc_certificate_failure, log_stargate_grpc_connect_attempt,
+};
 use super::topology::{RegistrationRouterTopology, publish_registration_router_topology};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -157,6 +159,7 @@ async fn watch_stargate_endpoint(
 ) {
     let target = StargateGrpcEndpoint::new(watch_url.clone(), "")
         .expect("normalized watch URL should be non-empty");
+    let mut last_certificate_failure = None;
     loop {
         if stop.is_cancelled() {
             return;
@@ -168,22 +171,55 @@ async fn watch_stargate_endpoint(
                 let mut client = StargateControlPlaneClient::new(endpoint.connect_lazy());
                 tokio::select! {
                     response = client.watch_stargates(WatchStargatesRequest {}) => {
-                        response.ok().map(|response| response.into_inner())
+                        match response {
+                            Ok(response) => {
+                                last_certificate_failure = None;
+                                Some(response.into_inner())
+                            }
+                            Err(error) => {
+                                last_certificate_failure = log_stargate_grpc_certificate_failure(
+                                    &target,
+                                    "watch_stargates",
+                                    &error,
+                                    last_certificate_failure,
+                                );
+                                None
+                            }
+                        }
                     }
                     _ = stop.cancelled() => return,
                 }
             }
-            Err(_) => None,
+            Err(error) => {
+                last_certificate_failure = log_stargate_grpc_certificate_failure(
+                    &target,
+                    "watch_stargates",
+                    error.as_ref(),
+                    last_certificate_failure,
+                );
+                None
+            }
         };
         if let Some(mut stream) = stream {
             loop {
                 let Some(message) = stop.run_until_cancelled(stream.message()).await else {
                     return;
                 };
-                let snapshot = message
-                    .ok()
-                    .flatten()
-                    .map(|response| watch_endpoint_snapshot_from_response(&watch_url, response));
+                let snapshot = match message {
+                    Ok(response) => response.map(|response| {
+                        last_certificate_failure = None;
+                        watch_endpoint_snapshot_from_response(&watch_url, response)
+                    }),
+                    Err(error) => {
+                        last_certificate_failure = log_stargate_grpc_certificate_failure(
+                            &target,
+                            "watch_stargates_stream",
+                            &error,
+                            last_certificate_failure,
+                        );
+                        None
+                    }
+                };
                 let disconnected = snapshot.is_none();
                 if !send_watch_endpoint_update(
                     &endpoint_updates_tx,

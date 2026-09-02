@@ -206,6 +206,12 @@ impl StargateState {
         self.routing.list_active_models_for_debug().await
     }
 
+    /// Returns the total number of active backends across all routing targets.
+    /// Called by the startup warmup stabilization sampler once per sample interval.
+    pub async fn total_active_backend_count(&self) -> usize {
+        self.routing.total_active_backend_count().await
+    }
+
     /// Looks up a registered reverse-tunnel server during QUIC handshake validation, returning its auth-derived routing key for comparison with handshake auth; returns `None` for missing or direct registrations.
     pub(crate) fn reverse_tunnel_registration(
         &self,

@@ -198,6 +198,7 @@ func TestInjectIntoPodSpecOnlyMutatesLLMWorker(t *testing.T) {
 			{
 				Name:      function.LLMWorkerContainerName,
 				Image:     "nvcr.io/nvcf/llm-worker:test",
+				Args:      []string{"--stargate-address=https://stargate.example.test:50071"},
 				Resources: llmWorkerResources,
 			},
 			{Name: "inference", Image: "nvcr.io/customer/inference:test"},
@@ -234,6 +235,112 @@ func TestInjectIntoPodSpecOnlyMutatesLLMWorker(t *testing.T) {
 		assert.Empty(t, findTestEnvValue(container, CertPathEnv), name)
 		assert.Empty(t, findTestEnvValue(container, GrpcTLSCACertPathEnv), name)
 		assert.Nil(t, findTestVolumeMount(container, MergedCertsVolumeName), name)
+	}
+}
+
+func TestInjectIntoPodSpecOmitsGrpcCAForPlaintextRouter(t *testing.T) {
+	podSpec := &corev1.PodSpec{
+		InitContainers: []corev1.Container{testWorkerInitContainer()},
+		Containers: []corev1.Container{{
+			Name:  function.LLMWorkerContainerName,
+			Image: "nvcr.io/nvcf/llm-worker:test",
+			Args:  []string{"--stargate-address=http://stargate.example.test:50071"},
+		}},
+	}
+
+	err := InjectIntoPodSpec(podSpec, NormalizeConfig(nvcaconfig.TransportTLSConfig{
+		TrustMode:              nvcaconfig.TrustModeBundle,
+		TrustBundleFingerprint: testRootFingerprint,
+		TrustBundlePEM:         testRootCertPEM,
+	}))
+	require.NoError(t, err)
+
+	llmWorker := findTestContainer(podSpec, function.LLMWorkerContainerName)
+	require.NotNil(t, llmWorker)
+	assert.Equal(t, SystemCertFile, findTestEnvValue(llmWorker, CertPathEnv))
+	assert.Empty(t, findTestEnvValue(llmWorker, GrpcTLSCACertPathEnv))
+}
+
+func TestInjectIntoPodSpecPreservesExplicitGrpcCAForPlaintextRouter(t *testing.T) {
+	podSpec := &corev1.PodSpec{
+		InitContainers: []corev1.Container{testWorkerInitContainer()},
+		Containers: []corev1.Container{{
+			Name:  function.LLMWorkerContainerName,
+			Image: "nvcr.io/nvcf/llm-worker:test",
+			Args:  []string{"--stargate-address=http://stargate.example.test:50071"},
+			Env: []corev1.EnvVar{{
+				Name:  GrpcTLSCACertPathEnv,
+				Value: "/custom/grpc-ca.pem",
+			}},
+		}},
+	}
+
+	err := InjectIntoPodSpec(podSpec, NormalizeConfig(nvcaconfig.TransportTLSConfig{
+		TrustMode:              nvcaconfig.TrustModeBundle,
+		TrustBundleFingerprint: testRootFingerprint,
+		TrustBundlePEM:         testRootCertPEM,
+	}))
+	require.NoError(t, err)
+
+	llmWorker := findTestContainer(podSpec, function.LLMWorkerContainerName)
+	require.NotNil(t, llmWorker)
+	assert.Equal(t, "/custom/grpc-ca.pem", findTestEnvValue(llmWorker, GrpcTLSCACertPathEnv))
+}
+
+func TestLLMWorkerUsesHTTPSRegistration(t *testing.T) {
+	tests := []struct {
+		name      string
+		container corev1.Container
+		want      bool
+	}{
+		{
+			name:      "https argument",
+			container: corev1.Container{Args: []string{"--stargate-address=https://router.example.test:50071"}},
+			want:      true,
+		},
+		{
+			name:      "http argument",
+			container: corev1.Container{Args: []string{"--stargate-address=http://router.example.test:50071"}},
+		},
+		{
+			name: "https current environment",
+			container: corev1.Container{Env: []corev1.EnvVar{{
+				Name:  "LLM_REQUEST_ROUTER_ADDRESS",
+				Value: " https://router.example.test:50071 ",
+			}}},
+			want: true,
+		},
+		{
+			name: "https legacy environment",
+			container: corev1.Container{Env: []corev1.EnvVar{{
+				Name:  "STARGATE_ADDRESS",
+				Value: "https://router.example.test:50071",
+			}}},
+			want: true,
+		},
+		{
+			name: "scheme-less environment",
+			container: corev1.Container{Env: []corev1.EnvVar{{
+				Name:  "LLM_REQUEST_ROUTER_ADDRESS",
+				Value: "router.example.test:50071",
+			}}},
+		},
+		{
+			name: "argument takes precedence over environment",
+			container: corev1.Container{
+				Args: []string{"--stargate-address=http://router.example.test:50071"},
+				Env: []corev1.EnvVar{{
+					Name:  "LLM_REQUEST_ROUTER_ADDRESS",
+					Value: "https://router.example.test:50071",
+				}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, llmWorkerUsesHTTPSRegistration(&tt.container))
+		})
 	}
 }
 
@@ -331,7 +438,7 @@ func TestInjectIntoPodSpecUsesConfiguredInstalledBundleMountPath(t *testing.T) {
 	require.NotNil(t, mount)
 	assert.Equal(t, "/nvcf/transport-tls", mount.MountPath)
 	assert.Equal(t, "/nvcf/transport-tls/ca-certificates.crt", findTestEnvValue(llmWorker, CertPathEnv))
-	assert.Equal(t, "/nvcf/transport-tls/ca-certificates.crt", findTestEnvValue(llmWorker, GrpcTLSCACertPathEnv))
+	assert.Empty(t, findTestEnvValue(llmWorker, GrpcTLSCACertPathEnv))
 
 	installContainer := findTestInitContainer(podSpec, InstallContainerName)
 	require.NotNil(t, installContainer)
@@ -435,7 +542,7 @@ func TestInjectIntoPodSpecCoexistsWithAdmissionCertificateMounts(t *testing.T) {
 	assert.Equal(t, "/webhook/certs", findTestVolumeMount(llmWorker, "webhook-certs").MountPath)
 	assert.Equal(t, "/nvcf/transport-tls", findTestVolumeMount(llmWorker, MergedCertsVolumeName).MountPath)
 	assert.Equal(t, "/nvcf/transport-tls/ca-certificates.crt", findTestEnvValue(llmWorker, CertPathEnv))
-	assert.Equal(t, "/nvcf/transport-tls/ca-certificates.crt", findTestEnvValue(llmWorker, GrpcTLSCACertPathEnv))
+	assert.Empty(t, findTestEnvValue(llmWorker, GrpcTLSCACertPathEnv))
 	assert.NotNil(t, findTestVolume(&pod.Spec, TrustBundleVolumeName))
 	assert.NotNil(t, findTestVolume(&pod.Spec, MergedCertsVolumeName))
 	assert.NotNil(t, findTestInitContainer(&pod.Spec, InstallContainerName))

@@ -431,12 +431,22 @@ managed_defaults=(
 )
 render_list managed-defaults "${managed_defaults[@]}"
 expect_enabled managed-defaults true
-jq -e '
+# Read the pinned chart version from its release declaration rather than
+# hardcoding it, so this check does not need updating every time the pin
+# is bumped.
+nvcf_pki_chart_version="$(
+  awk '/^  - name: nvcf-pki$/ { found = 1 }
+       found && /^    version:/ { sub(/^    version: */, ""); print; exit }' \
+    "$stack_dir/helmfile.d/01-dependencies.yaml.gotmpl"
+)"
+test -n "$nvcf_pki_chart_version" ||
+  fail "could not read the pinned nvcf-pki chart version from 01-dependencies.yaml.gotmpl"
+jq -e --arg version "$nvcf_pki_chart_version" '
   any(.[];
     .name == "nvcf-pki" and
     .namespace == "cert-manager" and
     .chart == "nvcf/helm-nvcf-pki" and
-    .version == "0.1.0" and
+    .version == $version and
     .enabled == true and
     .installed == true
   )

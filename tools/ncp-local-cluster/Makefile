@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.PHONY: help clean build test test-coverage-html test-manual start stop destroy destroy-all-ncp-local status ensure-cluster ensure-context ensure-docker-config validate-compute-clusters print-compute-clusters start-control-plane deploy-control-plane-addons deploy-control-plane-endpoints build-and-deploy-control-plane-cluster destroy-control-plane start-compute-plane deploy-compute-plane-addons configure-compute-control-plane-dns deploy-compute-control-plane-endpoints build-and-deploy-compute-plane-cluster destroy-compute-plane build-and-deploy-multicluster destroy-multicluster test-destroy-all-ncp-local test-multicluster-make setup-gateway-api setup-metallb check-gateway-api deploy-sample deploy-nginx wait-for-nginx wait-for-gateway validate-gateway cleanup-nginx wait-for-deployment validate-deployment cleanup-sample build-and-deploy-cluster build-csi-smb deploy-csi-smb wait-for-csi-smb build-fake-gpu-operator deploy-fake-gpu-operator wait-for-fake-gpu-operator deploy-prometheus-crds uninstall-prometheus-crds deploy-kube-state-metrics wait-for-kube-state-metrics uninstall-kube-state-metrics build-credential-provider-multiarch
+.PHONY: help clean build test test-coverage-html test-manual start stop destroy destroy-all-ncp-local status ensure-cluster ensure-context ensure-docker-config validate-compute-clusters print-compute-clusters start-control-plane deploy-control-plane-addons deploy-control-plane-endpoints build-and-deploy-control-plane-cluster destroy-control-plane start-compute-plane deploy-compute-plane-addons configure-compute-control-plane-dns deploy-compute-control-plane-endpoints build-and-deploy-compute-plane-cluster destroy-compute-plane build-and-deploy-multicluster destroy-multicluster test-cluster-lifecycle-make test-destroy-all-ncp-local test-multicluster-make test-validate-gateway-route setup-gateway-api setup-metallb check-gateway-api deploy-sample deploy-nginx wait-for-nginx wait-for-gateway validate-gateway cleanup-nginx wait-for-deployment validate-deployment cleanup-sample build-and-deploy-cluster build-csi-smb deploy-csi-smb wait-for-csi-smb build-fake-gpu-operator deploy-fake-gpu-operator wait-for-fake-gpu-operator deploy-prometheus-crds uninstall-prometheus-crds deploy-kube-state-metrics wait-for-kube-state-metrics uninstall-kube-state-metrics build-credential-provider-multiarch
 
 # === Cluster Configuration ===
 CLUSTER_NAME := ncp-local
@@ -46,6 +46,8 @@ COMPUTE_CLUSTER_NAME ?= $(COMPUTE_CLUSTER_PREFIX)-1
 COMPUTE_PLANE_CONFIG_FILE ?= k3d-config-compute-plane.yaml
 COMPUTE_CLUSTERS ?=
 GATEWAY_HTTP_PORT ?= $(CONTROL_PLANE_HTTP_PORT)
+GATEWAY_ROUTE_TIMEOUT_SECONDS ?= 60
+GATEWAY_ROUTE_RETRY_INTERVAL_SECONDS ?= 2
 
 # === Go Credential Provider Configuration ===
 GO_PROVIDER_PATH         := ./credential-provider-go
@@ -96,7 +98,7 @@ ensure-cluster: ## Create cluster if it doesn't exist, otherwise skip
 	$(call require,kubectl,See https://kubernetes.io/docs/tasks/tools/)
 	@if ! k3d cluster get $(CLUSTER_NAME) >/dev/null 2>&1; then \
 		echo "Creating k3d cluster $(CLUSTER_NAME) using config $(K3D_CONFIG_FILE)..."; \
-		K3D_CLUSTER_NAME="$(CLUSTER_NAME)" \
+		if ! K3D_CLUSTER_NAME="$(CLUSTER_NAME)" \
 			CONTROL_PLANE_HTTP_PORT="$(CONTROL_PLANE_HTTP_PORT)" \
 			CONTROL_PLANE_HTTPS_PORT="$(CONTROL_PLANE_HTTPS_PORT)" \
 			CONTROL_PLANE_GRPC_PORT="$(CONTROL_PLANE_GRPC_PORT)" \
@@ -105,7 +107,10 @@ ensure-cluster: ## Create cluster if it doesn't exist, otherwise skip
 			CONTROL_PLANE_LLM_GRPC_PORT="$(CONTROL_PLANE_LLM_GRPC_PORT)" \
 			CONTROL_PLANE_LLM_QUIC_PORT="$(CONTROL_PLANE_LLM_QUIC_PORT)" \
 			CONTROL_PLANE_NATS_PORT="$(CONTROL_PLANE_NATS_PORT)" \
-			k3d cluster create $(CLUSTER_NAME) --config $(K3D_CONFIG_FILE); \
+			k3d cluster create $(CLUSTER_NAME) --config $(K3D_CONFIG_FILE); then \
+			echo "ERROR Failed to create k3d cluster $(CLUSTER_NAME)." >&2; \
+			exit 1; \
+		fi; \
 		echo "OK Cluster $(CLUSTER_NAME) created."; \
 	else \
 		echo "OK Cluster $(CLUSTER_NAME) already exists. Skipping creation."; \
@@ -133,7 +138,10 @@ start: ensure-docker-config
 	@echo "========== START CLUSTER =========="
 	@$(MAKE) ensure-cluster
 	@echo "Ensuring cluster $(CLUSTER_NAME) is ready..."
-	@k3d cluster start $(CLUSTER_NAME) 2>/dev/null || echo "Cluster already running."
+	@if ! k3d cluster start $(CLUSTER_NAME); then \
+		echo "ERROR Failed to start k3d cluster $(CLUSTER_NAME)." >&2; \
+		exit 1; \
+	fi
 	@echo "OK Cluster $(CLUSTER_NAME) is running."
 	@$(MAKE) ensure-context
 
@@ -295,11 +303,17 @@ destroy-multicluster: validate-compute-clusters ## Destroy the default control-p
 		$(MAKE) CLUSTER_NAME="$$cluster" destroy || true; \
 	done
 
+test-cluster-lifecycle-make: ## Run dry Makefile tests for cluster lifecycle behavior
+	@tests/test-cluster-lifecycle-make.sh
+
 test-multicluster-make: ## Run dry Makefile tests for multi-cluster name derivation
 	@tests/test-multicluster-make.sh
 
 test-destroy-all-ncp-local: ## Run dry Makefile tests for host-wide local-cluster cleanup
 	@tests/test-destroy-all-ncp-local.sh
+
+test-validate-gateway-route: ## Run Gateway route retry tests
+	@tests/test-validate-gateway-route.sh
 
 # --- Load Balancer & Gateway API Setup ---
 setup-gateway-api:
@@ -421,7 +435,9 @@ validate-gateway: deploy-nginx wait-for-nginx wait-for-gateway ## Validate Gatew
 	@echo ">>> Checking HTTPRoute status..."
 	@kubectl get httproute nginx-route -n sample -o jsonpath='{.status}' || echo "HTTPRoute status not available"
 	@echo ">>> Validating Gateway route (nginx.localhost)..."
-	@if curl -sSf http://nginx.localhost:$(GATEWAY_HTTP_PORT)/ >/dev/null 2>&1; then \
+	@if GATEWAY_ROUTE_TIMEOUT_SECONDS=$(GATEWAY_ROUTE_TIMEOUT_SECONDS) \
+		GATEWAY_ROUTE_RETRY_INTERVAL_SECONDS=$(GATEWAY_ROUTE_RETRY_INTERVAL_SECONDS) \
+		bash ./scripts/validate-gateway-route.sh http://nginx.localhost:$(GATEWAY_HTTP_PORT)/; then \
 		echo "OK Gateway route reachable at http://nginx.localhost:$(GATEWAY_HTTP_PORT)"; \
 	else \
 		echo "ERROR Gateway route validation failed"; \

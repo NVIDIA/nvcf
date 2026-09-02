@@ -25,6 +25,7 @@ Install the following tools:
 - [k3d](https://k3d.io/#installation) v5.x or later
 - `kubectl`
 - `helm` >= 3.12
+- [Go](https://go.dev/doc/install) >= 1.24.0 (required to build `nvcf-cli`)
 - `helmfile` >= 1.1.0, < 1.2.0
 - `helm-diff` plugin: `helm plugin install https://github.com/databus23/helm-diff`
 - An NGC API key from [ngc.nvidia.com](https://ngc.nvidia.com) with
@@ -98,9 +99,9 @@ done
 
 Across the two files, the substitutions update `global.helm.sources.repository`
 and `global.image.repository`. The control-plane file also updates
-`api.env.NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE`. When the LLM addon is enabled,
-the stack defaults the worker address to the cluster-local request-router
-service. Set
+`api.remoteConfig.configData.nvcf.sidecars.llm-router-client-image`. When the
+LLM addon is enabled, the stack defaults the worker address to the cluster-local
+request-router service. Set
 `global.imagePullSecrets[0].name` if your secret name differs from
 `nvcr-pull-secret`. The compute-plane environment provides the NVCA endpoint
 settings consumed by its Helmfile.

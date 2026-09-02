@@ -38,6 +38,10 @@ global:
     # NVCF API advertises this value as LLM_REQUEST_ROUTER_ADDRESS.
     llmRequestRouterAddress: https://llm-request-router.nvcf.svc.cluster.local:50071
 
+# Local BDD does not install the optional observability stack.
+observability:
+  profile: disabled
+
 cassandra:
   replicaCount: 1
   resourcesPreset: "large"
@@ -53,10 +57,6 @@ openbao:
   injector:
     # Single-node local cluster: hard anti-affinity would leave the 2nd replica Pending.
     replicas: 1
-
-api:
-  env:
-    NVCF_SIDECARS_LLM_ROUTER_CLIENT_IMAGE: nvcr.io/REPLACE_WITH_SAMPLE_NGC_ORG/REPLACE_WITH_SAMPLE_NGC_TEAM/stargate-client:0.2.0
 
 # LLM gateway talks to nvcf-api over plaintext gRPC in local dev
 # (api.nvcf.svc.cluster.local:9090 has no TLS).

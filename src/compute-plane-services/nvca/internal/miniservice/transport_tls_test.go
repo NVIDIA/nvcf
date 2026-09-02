@@ -131,8 +131,7 @@ func TestPrepareTransportTLSForWorkloadsInjectsPodLLMWorker(t *testing.T) {
 	expectedBundlePath := "/nvcf/transport-tls/ca-certificates.crt"
 	assert.Equal(t, expectedBundlePath,
 		findWorkloadEnvValue(llmWorker, transporttls.CertPathEnv))
-	assert.Equal(t, expectedBundlePath,
-		findWorkloadEnvValue(llmWorker, transporttls.GrpcTLSCACertPathEnv))
+	assert.Empty(t, findWorkloadEnvValue(llmWorker, transporttls.GrpcTLSCACertPathEnv))
 	mount := findWorkloadVolumeMount(llmWorker, "nvcf-trust-merged-certs")
 	require.NotNil(t, mount)
 	assert.Equal(t, "/nvcf/transport-tls", mount.MountPath)
@@ -353,6 +352,139 @@ func TestPrepareTransportTLSForWorkloadsReturnsTerminalErrorForInvalidConfig(t *
 
 			require.Error(t, err)
 			assert.True(t, errors.Is(err, reconcile.TerminalError(nil)), "invalid static transport TLS config should fail terminally")
+		})
+	}
+}
+
+func TestPrepareTransportTLSForWorkloadsRejectsInvalidConfigWithoutPodSpecs(t *testing.T) {
+	tests := []struct {
+		name           string
+		mutateWorkload func(*nvcaconfig.WorkloadConfig)
+		wantErr        string
+	}{
+		{
+			name: "missing bundle",
+			mutateWorkload: func(cfg *nvcaconfig.WorkloadConfig) {
+				cfg.TransportTLS.TrustBundlePEM = ""
+			},
+			wantErr: "trustBundlePem is required",
+		},
+		{
+			name: "malformed PEM",
+			mutateWorkload: func(cfg *nvcaconfig.WorkloadConfig) {
+				cfg.TransportTLS.TrustBundlePEM = "not a PEM bundle"
+			},
+			wantErr: "trustBundlePem is invalid",
+		},
+		{
+			name: "private key PEM",
+			mutateWorkload: func(cfg *nvcaconfig.WorkloadConfig) {
+				cfg.TransportTLS.TrustBundlePEM = "-----BEGIN PRIVATE KEY-----\nAQID\n-----END PRIVATE KEY-----"
+			},
+			wantErr: "PEM block type \"PRIVATE KEY\" is not supported",
+		},
+		{
+			name: "reserved fingerprint key",
+			mutateWorkload: func(cfg *nvcaconfig.WorkloadConfig) {
+				cfg.TransportTLS.TrustBundleKey = transporttls.TrustBundleFingerprintKey
+			},
+			wantErr: "must not use reserved key",
+		},
+		{
+			name: "malformed fingerprint",
+			mutateWorkload: func(cfg *nvcaconfig.WorkloadConfig) {
+				cfg.TransportTLS.TrustBundleFingerprint = "sha256:not-a-digest"
+			},
+			wantErr: "must match sha256:<64 lowercase hex characters>",
+		},
+		{
+			name: "mismatched fingerprint",
+			mutateWorkload: func(cfg *nvcaconfig.WorkloadConfig) {
+				cfg.TransportTLS.TrustBundleFingerprint =
+					"sha256:0000000000000000000000000000000000000000000000000000000000000000"
+			},
+			wantErr: "does not match transportTls.trustBundlePem",
+		},
+		{
+			name: "bundle with insecure QUIC",
+			mutateWorkload: func(cfg *nvcaconfig.WorkloadConfig) {
+				cfg.StargateQUICInsecure = true
+			},
+			wantErr: "workload.stargateQUICInsecure=true cannot be used with workload.transportTLS.trustMode=bundle",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := newTestContext()
+			ms := &nvcav1alpha1.MiniService{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "llm-miniservice",
+					Namespace: "worker-ns",
+					UID:       k8stypes.UID("llm-miniservice-uid"),
+				},
+				Spec: nvcav1alpha1.MiniServiceSpec{Namespace: "worker-ns"},
+			}
+			crClient, _ := newFakeClient(mgrScheme, ms)
+			workloadCfg := nvcaconfig.WorkloadConfig{
+				TransportTLS: &nvcaconfig.TransportTLSConfig{
+					TrustMode:                nvcaconfig.TrustModeBundle,
+					TrustBundleConfigMapName: "nvcf-transport-trust-bundle",
+					TrustBundleKey:           "nvcf-ca-bundle.pem",
+					TrustBundleFingerprint:   testTransportTLSRootFingerprint,
+					TrustBundlePEM:           testTransportTLSRootCertPEM,
+					InstalledBundleMountPath: "/nvcf/transport-tls",
+				},
+			}
+			tt.mutateWorkload(&workloadCfg)
+			r := &Reconciler{Client: crClient, cfg: nvcaconfig.Config{Workload: workloadCfg}}
+
+			err := r.prepareTransportTLSForWorkloads(ctx, ms, nil)
+
+			require.Error(t, err)
+			assert.True(t, errors.Is(err, reconcile.TerminalError(nil)),
+				"invalid static transport TLS config should fail terminally without rendered pod specs")
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestPrepareTransportTLSForWorkloadsAllowsValidConfigWithoutPodSpecs(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  *nvcaconfig.TransportTLSConfig
+	}{
+		{name: "transport TLS unset"},
+		{
+			name: "system trust",
+			cfg:  &nvcaconfig.TransportTLSConfig{TrustMode: nvcaconfig.TrustModeSystem},
+		},
+		{
+			name: "secure bundle",
+			cfg: &nvcaconfig.TransportTLSConfig{
+				TrustMode:              nvcaconfig.TrustModeBundle,
+				TrustBundleFingerprint: testTransportTLSRootFingerprint,
+				TrustBundlePEM:         testTransportTLSRootCertPEM,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := newTestContext()
+			ms := &nvcav1alpha1.MiniService{
+				ObjectMeta: metav1.ObjectMeta{Name: "no-pod-miniservice"},
+				Spec:       nvcav1alpha1.MiniServiceSpec{Namespace: "worker-ns"},
+			}
+			crClient, _ := newFakeClient(mgrScheme, ms)
+			r := &Reconciler{
+				Client: crClient,
+				cfg:    nvcaconfig.Config{Workload: nvcaconfig.WorkloadConfig{TransportTLS: tt.cfg}},
+			}
+
+			err := r.prepareTransportTLSForWorkloads(ctx, ms, nil)
+
+			require.NoError(t, err)
 		})
 	}
 }

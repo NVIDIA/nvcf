@@ -353,6 +353,18 @@ change, or refactor with full existing coverage).
 
 Prefer the repo-native test runner (`make test`, `go test`, `cargo test`, etc.). Run tests before committing. Check coverage requirements in the subtree `AGENTS.md` or CI config.
 
+### Version-pin assertions
+
+Do not assert an exact image tag or chart version unless that literal is the
+behavior under test. Exact literals break on every unrelated pin bump, and
+repeated updates make the test diff easy to overlook.
+If the surrounding wiring (override precedence, cross-chart consistency) is
+worth testing, read the expected value from its source of truth at test
+time. Use `Chart.yaml` `appVersion`, the `.gotmpl`'s `default "..."`, or the
+release's `version:` instead of copying it into the test (see
+`deploy/stacks/self-managed/tests/observability-autoscaler.sh` and
+`llm-pki-release.sh`). Otherwise, delete the assertion.
+
 ### Verification commands
 
 Run these from the repo root before opening a PR. They are the general
