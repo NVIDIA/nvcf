@@ -35,15 +35,12 @@ type blockingRateLimitServer struct {
 	release chan struct{}
 }
 
-func (s *blockingRateLimitServer) RateLimit(ctx context.Context, _ *pb.RateLimitRequest) (*pb.RateLimitResponse, error) {
+func (s *blockingRateLimitServer) RateLimit(_ context.Context, _ *pb.RateLimitRequest) (*pb.RateLimitResponse, error) {
 	select {
 	case s.entered <- struct{}{}:
 	default:
 	}
-	select {
-	case <-s.release:
-	case <-ctx.Done():
-	}
+	<-s.release // ignores ctx cancellation, so only a forced stop unblocks shutdown
 	return &pb.RateLimitResponse{}, nil
 }
 

@@ -59,11 +59,13 @@ func stopGrpcServer(server *grpc.Server, drainTimeout time.Duration) {
 
 	select {
 	case <-drained:
+		zap.L().Info("grpc server drained", zap.String("operation", "grpc_drain"))
 	case <-time.After(drainTimeout):
-		zap.L().Warn("grpc drain timed out, forcing shutdown to preserve the olric leave",
-			zap.Duration("timeout", drainTimeout))
+		// Not waiting on drained: a handler that ignores context cancellation
+		// keeps GracefulStop blocked even after Stop.
 		server.Stop()
-		<-drained
+		zap.L().Warn("grpc drain timed out, forced shutdown to preserve the olric leave",
+			zap.String("operation", "grpc_drain"), zap.Duration("timeout", drainTimeout))
 	}
 }
 
