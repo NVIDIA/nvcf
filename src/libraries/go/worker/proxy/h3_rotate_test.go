@@ -20,6 +20,7 @@ package proxy
 import (
 	"context"
 	"errors"
+	"net"
 	"sync"
 	"testing"
 )
@@ -263,4 +264,42 @@ func TestConcurrentTransportAccessIsRaceFree(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// The skip paths must be observable. A silent return that reads as "nothing
+// wrong" is what made the original defect so hard to find, and the same shape
+// would make a failed rotation test uninterpretable.
+func TestSkipPathsAreCounted(t *testing.T) {
+	c := newTestCache()
+	defer c.Close()
+
+	tr, err := c.transport()
+	if err != nil {
+		t.Fatalf("transport: %v", err)
+	}
+
+	before := skippedNotTimeout.Load()
+	// A non-timeout error must not count toward rotation, and must be recorded.
+	c.noteDialResult(context.Background(), tr, "dest-a", errors.New("connection refused"))
+	if got := skippedNotTimeout.Load(); got != before+1 {
+		t.Fatalf("skippedNotTimeout = %d, want %d", got, before+1)
+	}
+	if c.dialFailures["dest-a"] != 0 {
+		t.Fatal("a non-timeout error incremented the rotation counter")
+	}
+
+	// A cancelled context must be attributed separately, not lumped in.
+	beforeCtx := skippedCtxCancelled.Load()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	c.noteDialResult(ctx, tr, "dest-b", &net.DNSError{IsTimeout: true})
+	if got := skippedCtxCancelled.Load(); got != beforeCtx+1 {
+		t.Fatalf("skippedCtxCancelled = %d, want %d", got, beforeCtx+1)
+	}
+
+	// A genuine network timeout still counts.
+	c.noteDialResult(context.Background(), tr, "dest-c", &net.DNSError{IsTimeout: true})
+	if c.dialFailures["dest-c"] != 1 {
+		t.Fatalf("dialFailures[dest-c] = %d, want 1", c.dialFailures["dest-c"])
+	}
 }
