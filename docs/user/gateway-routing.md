@@ -53,11 +53,15 @@ done
 
 ### Install Envoy Gateway
 
-Install Envoy Gateway as the Gateway API controller:
+Install Envoy Gateway as the Gateway API controller. The secure LLM worker
+route requires an Envoy Gateway CRD that exposes
+`BackendTrafficPolicy.spec.timeout.http.requestTimeout`. The pinned v1.5.4
+chart provides this field so the route can disable the default 15-second
+request timeout.
 
 ```bash
 helm upgrade --install eg oci://docker.io/envoyproxy/gateway-helm \
-  --version v1.1.3 \
+  --version v1.5.4 \
   -n envoy-gateway-system
 ```
 
