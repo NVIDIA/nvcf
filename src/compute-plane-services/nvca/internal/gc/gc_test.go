@@ -65,10 +65,10 @@ func TestNewGCController(t *testing.T) {
 		BART: bartfake.NewSimpleClientset(),
 	}
 
-	controller := NewRunnable(clients, nil, 30*time.Minute, types.DefaultICMSRequestNamespace)
+	controller := NewRunnable(clients, nil, 30*time.Minute, types.DefaultICMSRequestNamespace, "nvca-system")
 
 	assert.NotNil(t, controller)
-	assert.Equal(t, 4, len(controller.cleaners))
+	assert.Equal(t, 5, len(controller.cleaners))
 	assert.Equal(t, 30*time.Minute, controller.interval)
 }
 
@@ -78,14 +78,14 @@ func TestGCController_runCleaners(t *testing.T) {
 		BART: bartfake.NewSimpleClientset(),
 	}
 
-	controller := NewRunnable(clients, nil, 30*time.Minute, types.DefaultICMSRequestNamespace)
+	controller := NewRunnable(clients, nil, 30*time.Minute, types.DefaultICMSRequestNamespace, "nvca-system")
 
 	// This should not panic and should run all cleaners
 	ctx := context.Background()
 	controller.runCleaners(ctx)
 
 	// Test that all expected cleaners are present
-	expectedNames := []string{"StorageClassCleaner", "PersistentVolumeCleaner", "NamespaceCleaner", "PodCleaner"}
+	expectedNames := []string{"StorageClassCleaner", "PersistentVolumeCleaner", "NamespaceCleaner", "PodCleaner", "RecreationBudgetCleaner"}
 	assert.Equal(t, len(expectedNames), len(controller.cleaners))
 
 	for i, cleaner := range controller.cleaners {

@@ -160,6 +160,40 @@ func Test_parseErrorEventMessage(t *testing.T) {
 			expIsError: false,
 		},
 		{
+			name: "transient FailedCreate - webhook connection reset (hijacked/reset, not a timeout)",
+			event: corev1.Event{
+				Type:   corev1.EventTypeWarning,
+				Reason: "FailedCreate",
+				Message: `create Pod nvcf-test-func-0 in StatefulSet nvcf-test-func failed error: ` +
+					`Internal error occurred: failed calling webhook "mutate-pod-nodeaffinity.nvca.nvcf.nvidia.io": ` +
+					`failed to call webhook: an error on the server ("") has prevented the request from succeeding`,
+			},
+			expInclude: true,
+			expIsError: false,
+		},
+		{
+			name: "transient BindingError - webhook EOF",
+			event: corev1.Event{
+				Type:   corev1.EventTypeWarning,
+				Reason: "BindingError",
+				Message: `Post "https://nvca.nvca-system.svc:8443/validate": ` +
+					`failed calling webhook "validate-helm-charts.nvca.nvcf.nvidia.io": ` +
+					`Post "https://nvca.nvca-system.svc:8443/validate": EOF`,
+			},
+			expInclude: true,
+			expIsError: false,
+		},
+		{
+			name: "non-transient BindingError should still be an error",
+			event: corev1.Event{
+				Type:    corev1.EventTypeWarning,
+				Reason:  "BindingError",
+				Message: `Operation cannot be fulfilled on pods "foo-0": the object has been modified`,
+			},
+			expInclude: true,
+			expIsError: true,
+		},
+		{
 			name: "policy violation warning should be excluded",
 			event: corev1.Event{
 				Type:    corev1.EventTypeWarning,
@@ -181,7 +215,7 @@ func Test_parseErrorEventMessage(t *testing.T) {
 func Test_ObjectStatuses_backoffBehavior(t *testing.T) {
 	now := time.Now()
 	testCfg := testTimeConfig()
-	backoffTimeout := testCfg.FailingObjectsBackoffTimeout // 5s for tests (90s in prod)
+	backoffTimeout := testCfg.FailingObjectsBackoffTimeout // 5s for tests (5m in prod)
 
 	tests := []struct {
 		name                  string

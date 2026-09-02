@@ -12,6 +12,7 @@ go_library(
         "//src/compute-plane-services/nvca/internal/gc/namespace",
         "//src/compute-plane-services/nvca/internal/gc/persistentvolume",
         "//src/compute-plane-services/nvca/internal/gc/pod",
+        "//src/compute-plane-services/nvca/internal/gc/recreationbudget",
         "//src/compute-plane-services/nvca/internal/gc/storageclass",
         "//src/compute-plane-services/nvca/internal/kubeclients",
         "//src/compute-plane-services/nvca/internal/metrics",
