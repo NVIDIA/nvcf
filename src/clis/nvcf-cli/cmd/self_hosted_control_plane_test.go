@@ -83,8 +83,11 @@ func TestControlPlaneProfileValidateCommandRejectsMissingSharedGatewayHosts(t *t
 	doc := strings.ReplaceAll(validControlPlaneProfileYAML(), "https://sis.nvcf-cp.internal", "https://gateway.nvcf-cp.internal")
 	doc = strings.ReplaceAll(doc, "https://reval.nvcf-cp.internal", "https://gateway.nvcf-cp.internal")
 	doc = strings.Replace(doc, "    httpURL: https://api.nvcf-cp.internal", "    httpURL: https://gateway.nvcf-cp.internal", 1)
+	doc = strings.Replace(doc, "      natsURL: tls://nats.nvcf-cp.internal:4222", "      natsURL: tls://gateway.nvcf-cp.internal:4222", 1)
+	doc = removeLine(doc, "    api: api.nvcf-cp.internal")
 	doc = removeLine(doc, "    sis: sis.nvcf-cp.internal")
 	doc = removeLine(doc, "    reval: reval.nvcf-cp.internal")
+	doc = removeLine(doc, "    nats: nats.nvcf-cp.internal")
 	path := writeControlPlaneProfileFixture(t, doc)
 	resetControlPlaneProfileValidateCommand(t)
 
@@ -98,10 +101,34 @@ func TestControlPlaneProfileValidateCommandRejectsMissingSharedGatewayHosts(t *t
 
 	err := rootCmd.Execute()
 	require.Error(t, err)
+	assert.Contains(t, err.Error(), "controlPlane.gateway.httpURL")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.api")
 	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.icmsURL")
 	assert.Contains(t, err.Error(), "controlPlane.hosts.sis")
 	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.revalURL")
 	assert.Contains(t, err.Error(), "controlPlane.hosts.reval")
+	assert.Contains(t, err.Error(), "controlPlane.endpoints.computeReachable.natsURL")
+	assert.Contains(t, err.Error(), "controlPlane.hosts.nats")
+}
+
+func TestControlPlaneProfileValidateCommandAcceptsSharedGatewayAPIAndNATSHosts(t *testing.T) {
+	doc := strings.Replace(validControlPlaneProfileYAML(), "    httpURL: https://api.nvcf-cp.internal", "    httpURL: https://gateway.nvcf-cp.internal", 1)
+	doc = strings.Replace(doc, "      natsURL: tls://nats.nvcf-cp.internal:4222", "      natsURL: tls://gateway.nvcf-cp.internal:4222", 1)
+	path := writeControlPlaneProfileFixture(t, doc)
+	resetControlPlaneProfileValidateCommand(t)
+
+	var stdout bytes.Buffer
+	rootCmd.SetOut(&stdout)
+	rootCmd.SetErr(&bytes.Buffer{})
+	rootCmd.SetArgs([]string{
+		"self-hosted", "control-plane", "profile", "validate",
+		"--file", path,
+		"--require", "compute-reachable",
+	})
+
+	err := rootCmd.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, stdout.String(), "control-plane profile is valid")
 }
 
 func TestControlPlaneProfileValidateCommandHelpShowsAnyRequireMode(t *testing.T) {
