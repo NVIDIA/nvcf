@@ -211,7 +211,10 @@ class RenderedStackTests(unittest.TestCase):
         )
         self.assertEqual(
             json.loads(load_balancer_config["data"]["lb-config.json"]),
-            {"default": "groq-multiregion"},
+            {
+                "default": "groq-multiregion",
+                "request_algorithms": {"power-of-n": "power-of-n"},
+            },
         )
 
         backend_router = next(

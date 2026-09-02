@@ -69,7 +69,7 @@ releases:
             digest: {{ .Values.images.stargate.digest }}
           loadBalancer:
             config: |
-              {"default":"groq-multiregion"}
+              {"default":"groq-multiregion","request_algorithms":{"power-of-n":"power-of-n"}}
           readiness:
             stabilizationSampleIntervalMs: null
             stabilizationWindow: null
