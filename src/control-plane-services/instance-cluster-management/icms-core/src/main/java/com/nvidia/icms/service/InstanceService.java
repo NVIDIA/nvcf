@@ -112,6 +112,16 @@ public class InstanceService {
         return terminateInstanceService.terminateInstances(ncaId, deploymentId, gpuSpecificationId, instanceId, auditProps);
     }
 
+    public TerminateInstancesResponse terminateInstances(
+            @NotNull String ncaId,
+            @NotNull UUID deploymentId,
+            @Nullable UUID gpuSpecificationId,
+            int instanceCount,
+            @NotNull Map<String, Object> auditProps) {
+        return terminateInstanceService.terminateInstances(
+                ncaId, deploymentId, gpuSpecificationId, instanceCount, auditProps);
+    }
+
     public TerminateInstancesResponse terminateInstanceRequests(
             String customer,
             Set<String> requestIds,
