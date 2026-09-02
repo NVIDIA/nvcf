@@ -4,7 +4,8 @@
 
 Implemented in NVCA. This document describes the model cache design as built in
 `pkg/storage` (the model cache StorageRequest controller), `pkg/webhook`
-(workload volume injection), and `internal/metrics` (observability).
+(workload volume injection), and `internal/metrics` (observability). The
+provider-neutral target design is in `sdd-storage-agnostic-cache-architecture.md`.
 
 ## Goal
 
@@ -32,6 +33,10 @@ and the mutating webhook that mounts the cache into workload pods.
 - Durable marker: a cluster-scoped object whose existence means "this handle is
   populated", used so any namespace and any agent restart can detect a populated
   cache without depending on in-memory state.
+- Cache binding: a `ModelCacheBinding` object in the control namespace that
+  records the storage decision for one cache, the resources it owns, and the
+  requests referencing it. The operator installs the CRD; nothing creates a
+  binding yet.
 
 ## Backend selection
 
@@ -150,7 +155,61 @@ model into it. Workload containers see the cache at the same mount paths as the
 shared path, so the workload is backend-agnostic. There is no cross-namespace
 sharing in this mode.
 
+## Cache binding
+
+`ModelCacheBinding` (`nvca.nvcf.nvidia.io/v2beta1`) is namespaced and lives in
+`nvca-modelcache-init`. One binding records one shared cache:
+
+| Field group | Records |
+|---|---|
+| `spec.identity` | Version, workflow, sharing-domain digest, cache-handle digest |
+| `spec.decision` | Provider, provisioner, derived flow, required access modes, catalog profile digest, encryption |
+| `spec.storageClass` | Name, UID, reclaim policy (`Retain` only), configuration digest |
+| `spec.resources` | Writer namespace and the names of the PVCs, PVs, Jobs, StorageClasses, Secrets, and Lease it owns |
+| `status.requestReferences` | Namespace, name, and UID of each request using the cache |
+| `status.phase` | `Active` or `Retiring` |
+
+The API server enforces the rules. `spec` is immutable. `Retiring` cannot return
+to `Active`. A recorded provider data identity cannot change. Resource name
+lists are `listType: set` and request references are `listType: map` keyed by
+UID. The finalizer `nvca.nvcf.nvidia.io/model-cache-binding-finalizer` protects
+owned resources until they are released.
+
+### Why an API object and not annotations
+
+Annotations hold this state today: garbage collection keys on a last-referenced
+annotation, and a request's storage selection is itself an annotation. The
+binding exists for four reasons.
+
+- Lifetime. The decision must outlive every request. A request annotation goes
+  with its request and a PVC annotation with its PVC. The binding lives as long
+  as the cache, and its finalizer holds while resources release.
+- Identity per referrer. A timestamp cannot tell an idle cache from one held by
+  a request that died without cleanup. Namespace, name, and UID per referrer
+  make a stale reference detectable, and zero references the idle condition.
+- Enforcement. Immutability and the phase rules are rejected by the API server.
+  An annotation is a string; a bad write is accepted silently.
+- One object to read. Cold start, drift checks, and cleanup read one binding
+  instead of correlating labels across PVCs, PVs, Jobs, and Leases in many
+  namespaces.
+
+Annotations could approximate all four by convention. The binding makes them
+properties of the API.
+
+### Installation and uninstall
+
+The operator installs the CRD alongside StorageRequest and MiniService, and
+grants `modelcachebindings` to the agent and pre-delete cleanup roles. Uninstall
+strips binding finalizers before deleting the control namespace, because the
+agent may already be stopped and no reconciler remains to do it. A failure there
+stops the uninstall before the NVCFBackend finalizer is removed, so it can be
+retried. Continuing would leave the namespace Terminating with nothing left to
+release it.
+
 ## Garbage collection
+
+Current behavior:
+
 
 A periodic sweep (`cleanupIdleModelCaches`) reclaims caches that no active
 StorageRequest references and that have been idle past
@@ -164,6 +223,13 @@ StorageRequest references and that have been idle past
 Per-StorageRequest deletion (`doCleanupModelCacheNVMesh`) removes that request's
 own reader objects but never the shared per-handle backing store, which is kept
 for reuse and reclaimed only by the idle sweep.
+
+With cache bindings, idle is zero request references rather than a timestamp. A
+binding with no references and no live request naming its handle moves from
+`Active` to `Retiring`, the resources it names are deleted, and its finalizer is
+dropped. Nothing is inferred: a resource the binding does not name is never
+touched. A binding that regains a reference before release is left alone. This
+controller is not wired on `main` yet.
 
 ## Non-blocking volume detach
 
@@ -219,3 +285,6 @@ child span around per-handle Samba provisioning.
 - Reuse and safe-to-attach are decided from durable cluster state, never from
   in-memory fan-out.
 - Webhook volume injection is order-stable across CREATE and UPDATE.
+- A binding's `spec` never changes after creation, and a `Retiring` binding never
+  becomes `Active` again.
+- Binding cleanup deletes only resources the binding names.
