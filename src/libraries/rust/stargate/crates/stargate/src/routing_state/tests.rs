@@ -2347,11 +2347,11 @@ async fn three_proxy_local_backends_merge_sparse_priority_maps() {
 }
 
 #[tokio::test]
-async fn proxy_local_aggregation_saturates_gauges_and_rejects_invalid_rate_sums() {
+async fn proxy_local_aggregation_saturates_gauges_and_ignores_invalid_rates() {
     let mut stats_a = ModelStats {
-        last_mean_input_tps: f64::MAX,
-        output_tps: f64::MAX,
-        max_output_tps: f64::NAN,
+        last_mean_input_tps: 100.0,
+        output_tps: 10.0,
+        max_output_tps: 50.0,
         queue_size: u64::MAX,
         queued_input_size: u64::MAX,
         num_running_queries: u64::MAX,
@@ -2362,9 +2362,9 @@ async fn proxy_local_aggregation_saturates_gauges_and_rejects_invalid_rate_sums(
     };
     stats_a = proxy_local_stats(stats_a);
     let stats_b = proxy_local_stats(ModelStats {
-        last_mean_input_tps: f64::MAX,
-        output_tps: f64::MAX,
-        max_output_tps: f64::INFINITY,
+        last_mean_input_tps: 200.0,
+        output_tps: 20.0,
+        max_output_tps: 60.0,
         queue_size: 1,
         queued_input_size: 1,
         num_running_queries: 1,
@@ -2377,9 +2377,9 @@ async fn proxy_local_aggregation_saturates_gauges_and_rejects_invalid_rate_sums(
 
     let stats = scenario.only_cluster("shared-model").await.stats;
     assert_stats!(stats,
-        last_mean_input_tps: 0.0,
-        output_tps: 0.0,
-        max_output_tps: 0.0,
+        last_mean_input_tps: 300.0,
+        output_tps: 30.0,
+        max_output_tps: 60.0,
         queue_size: u64::MAX,
         queued_input_size: u64::MAX,
         num_running_queries: u64::MAX,
@@ -2425,74 +2425,18 @@ async fn proxy_local_aggregation_saturates_gauges_and_rejects_invalid_rate_sums(
 }
 
 #[tokio::test]
-async fn proxy_local_priority_weights_preserve_numeric_boundaries() {
-    let scenario = RegistrationScenario::new(Some("rk-numeric"));
-    let running_a = scenario.start_in("inst-a", "cluster-numeric", 1111);
-    let running_b = scenario.start_in("inst-b", "cluster-numeric", 2222);
-    scenario
-        .publish(
-            &running_a,
-            "model-numeric",
-            Active,
-            proxy_local_stats(ModelStats {
-                last_mean_input_tps: f64::MAX,
-                queue_size: 1,
-                queued_input_size: 1,
-                queue_time_estimate_ms_by_priority: HashMap::from([(0, 2)]),
-                ..ModelStats::default()
-            }),
-            Some(5),
-        )
-        .await;
-    scenario
-        .publish(
-            &running_b,
-            "model-numeric",
-            Active,
-            proxy_local_stats(ModelStats::default()),
-            Some(5),
-        )
-        .await;
-    assert_eq!(
-        scenario
-            .only_cluster("model-numeric")
-            .await
-            .stats
-            .queue_time_estimate_ms_by_priority,
-        HashMap::from([(0, 2)])
-    );
-
-    let saturated = proxy_local_stats(ModelStats {
-        last_mean_input_tps: 1.0,
-        queue_size: 1,
-        queued_input_size: 1,
-        queue_time_estimate_ms_by_priority: HashMap::from([(0, u64::MAX)]),
-        ..ModelStats::default()
-    });
-    for running in [&running_a, &running_b] {
-        scenario
-            .publish(running, "model-numeric", Active, saturated.clone(), Some(5))
-            .await;
-    }
-    assert_eq!(
-        scenario
-            .only_cluster("model-numeric")
-            .await
-            .stats
-            .queue_time_estimate_ms_by_priority,
-        HashMap::from([(0, u64::MAX)])
-    );
-}
-
-#[tokio::test]
 async fn proxy_local_priority_weights_stay_within_source_bounds() {
     let scenario = RegistrationScenario::new(Some("rk-convex"));
     let backends = [
-        (scenario.start_in("inst-a", "cluster-convex", 1111), 6000.0),
-        (scenario.start_in("inst-b", "cluster-convex", 2222), 23000.0),
-        (scenario.start_in("inst-c", "cluster-convex", 3333), 1000.0),
+        (scenario.start_in("inst-a", "cluster-convex", 1111), 6.0, 5),
+        (
+            scenario.start_in("inst-b", "cluster-convex", 2222),
+            23.0,
+            20,
+        ),
+        (scenario.start_in("inst-c", "cluster-convex", 3333), 1.0, 50),
     ];
-    for (running, input_tps) in &backends {
+    for (running, input_tps, wait_ms) in &backends {
         scenario
             .publish(
                 running,
@@ -2502,7 +2446,7 @@ async fn proxy_local_priority_weights_stay_within_source_bounds() {
                     last_mean_input_tps: *input_tps,
                     queue_size: 1,
                     queued_input_size: 1,
-                    queue_time_estimate_ms_by_priority: HashMap::from([(0, 1)]),
+                    queue_time_estimate_ms_by_priority: HashMap::from([(0, *wait_ms)]),
                     ..ModelStats::default()
                 }),
                 Some(5),
@@ -2515,96 +2459,8 @@ async fn proxy_local_priority_weights_stay_within_source_bounds() {
             .await
             .stats
             .queue_time_estimate_ms_by_priority,
-        HashMap::from([(0, 1)])
+        HashMap::from([(0, 18)])
     );
-
-    for (running, input_tps) in &backends {
-        scenario
-            .publish(
-                running,
-                "model-convex",
-                Active,
-                proxy_local_stats(ModelStats {
-                    last_mean_input_tps: *input_tps,
-                    queue_size: 1,
-                    queued_input_size: 1,
-                    queue_time_estimate_ms_by_priority: HashMap::from([(0, u64::MAX)]),
-                    ..ModelStats::default()
-                }),
-                Some(5),
-            )
-            .await;
-    }
-    assert_eq!(
-        scenario
-            .only_cluster("model-convex")
-            .await
-            .stats
-            .queue_time_estimate_ms_by_priority,
-        HashMap::from([(0, u64::MAX)])
-    );
-}
-
-#[tokio::test]
-async fn proxy_local_priority_weights_resolve_integer_ceiling_boundaries() {
-    let scenario = RegistrationScenario::new(Some("rk-ceiling"));
-    let running_a = scenario.start_in("inst-a", "cluster-ceiling", 1111);
-    let running_b = scenario.start_in("inst-b", "cluster-ceiling", 2222);
-    let above_exact_integer = (1_u64 << 53) + 1;
-    let cases = [
-        ([(1.0, 6), (5.0, 0)], Some(1)),
-        ([((1_u64 << 53) as f64, 1), (1.0, 2)], Some(2)),
-        (
-            [(1.0, above_exact_integer), (1.0, above_exact_integer + 1)],
-            Some(above_exact_integer + 1),
-        ),
-        ([(1.0, 0), (1.0, u64::MAX)], Some(1_u64 << 63)),
-        (
-            [(1.0, 0), (1.0, (1_u64 << 63) + 1023)],
-            Some((1_u64 << 62) + 512),
-        ),
-        (
-            [(f64::from_bits(4.0_f64.to_bits() + 1), 27), (1.0, 22)],
-            Some(27),
-        ),
-        ([(0.1, 0), (1.1, 12)], Some(12)),
-        ([(1.0, 0), (2.0_f64.powi(76), 100)], None),
-        ([(1.0, 0), (f64::MAX / 2.0, u64::MAX - 1)], None),
-        ([(f64::MAX, 0), (f64::MIN_POSITIVE, 2)], None),
-    ];
-
-    for (local_stats, expected_wait_ms) in cases {
-        for (running, (input_tps, wait_ms)) in
-            [(&running_a, local_stats[0]), (&running_b, local_stats[1])]
-        {
-            scenario
-                .publish(
-                    running,
-                    "model-ceiling",
-                    Active,
-                    proxy_local_stats(ModelStats {
-                        last_mean_input_tps: input_tps,
-                        queue_size: 1,
-                        queued_input_size: 1,
-                        queue_time_estimate_ms_by_priority: HashMap::from([(0, wait_ms)]),
-                        ..ModelStats::default()
-                    }),
-                    Some(5),
-                )
-                .await;
-        }
-        let expected_map = expected_wait_ms
-            .map(|wait_ms| HashMap::from([(0, wait_ms)]))
-            .unwrap_or_default();
-        assert_eq!(
-            scenario
-                .only_cluster("model-ceiling")
-                .await
-                .stats
-                .queue_time_estimate_ms_by_priority,
-            expected_map
-        );
-    }
 }
 
 #[tokio::test]

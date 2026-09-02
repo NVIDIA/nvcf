@@ -75,27 +75,6 @@ fn proxy_local_wait_ms(stats: &ModelStats, priority: u32) -> u64 {
     }
 }
 
-fn positive_f64_binary(value: f64) -> (u64, i16) {
-    debug_assert!(valid_last_mean_input_tps(value));
-    let bits = value.to_bits();
-    let exponent_bits = ((bits >> 52) & 0x7ff) as i16;
-    let fraction = bits & ((1_u64 << 52) - 1);
-    if exponent_bits == 0 {
-        (fraction, -1074)
-    } else {
-        ((1_u64 << 52) | fraction, exponent_bits - 1075)
-    }
-}
-
-fn checked_ceil_ratio_u64(numerator: u128, denominator: u128) -> Option<u64> {
-    if denominator == 0 {
-        return None;
-    }
-    let quotient = numerator / denominator;
-    let ceiled = quotient.checked_add(u128::from(!numerator.is_multiple_of(denominator)))?;
-    u64::try_from(ceiled).ok()
-}
-
 fn proxy_local_priority_map(backends: &[Arc<RoutedInferenceServerSnapshot>]) -> HashMap<u32, u64> {
     if backends.len() == 1 {
         return backends[0].stats.queue_time_estimate_ms_by_priority.clone();
@@ -127,76 +106,29 @@ fn proxy_local_priority_map(backends: &[Arc<RoutedInferenceServerSnapshot>]) -> 
     if priorities.is_empty() || !valid_last_mean_input_tps(input_tps_sum) {
         return HashMap::new();
     }
-    let rate_components: Vec<(usize, u64, i16)> = backends
-        .iter()
-        .enumerate()
-        .filter_map(|(index, backend)| {
-            let input_tps = backend.stats.last_mean_input_tps;
-            valid_last_mean_input_tps(input_tps).then(|| {
-                let (significand, exponent) = positive_f64_binary(input_tps);
-                (index, significand, exponent)
-            })
-        })
-        .collect();
-    let min_rate_exponent = rate_components
-        .iter()
-        .map(|(_, _, exponent)| *exponent)
-        .min()
-        .expect("a positive finite aggregate input rate has at least one component");
 
     let mut aggregate = HashMap::with_capacity(priorities.len());
     for priority in priorities {
-        let (min_wait_ms, max_wait_ms) = rate_components
+        let mut min_wait_ms = u64::MAX;
+        let mut max_wait_ms = 0;
+        let weighted_wait_sum: f64 = backends
             .iter()
-            .map(|(index, _, _)| proxy_local_wait_ms(&backends[*index].stats, priority))
-            .fold((u64::MAX, 0), |(min_wait_ms, max_wait_ms), wait_ms| {
-                (min_wait_ms.min(wait_ms), max_wait_ms.max(wait_ms))
-            });
-        if min_wait_ms == max_wait_ms {
-            aggregate.insert(priority, min_wait_ms);
-            continue;
-        }
-
-        // Positive finite f64 values are exact binary rationals. Align their
-        // significands in u128 so ceiling cannot cross an integer due to
-        // floating-point rounding. If the exact fast path does not fit, use
-        // the existing scalar fallback rather than publish an unsafe map.
-        let mut denominator = 0_u128;
-        let mut weighted_delta = 0_u128;
-        for (index, significand, exponent) in &rate_components {
-            let shift = u32::try_from(*exponent - min_rate_exponent)
-                .expect("the minimum rate exponent cannot exceed a component exponent");
-            let Some(max_significand) = u128::MAX.checked_shr(shift) else {
-                return HashMap::new();
-            };
-            let significand = u128::from(*significand);
-            if significand > max_significand {
-                return HashMap::new();
-            }
-            let scaled_significand = significand << shift;
-            let Some(next_denominator) = denominator.checked_add(scaled_significand) else {
-                return HashMap::new();
-            };
-            denominator = next_denominator;
-
-            let wait_ms = proxy_local_wait_ms(&backends[*index].stats, priority);
-            let delta_ms = wait_ms - min_wait_ms;
-            let Some(weighted_component) = scaled_significand.checked_mul(u128::from(delta_ms))
-            else {
-                return HashMap::new();
-            };
-            let Some(next_weighted_delta) = weighted_delta.checked_add(weighted_component) else {
-                return HashMap::new();
-            };
-            weighted_delta = next_weighted_delta;
-        }
-        let Some(ceiled_delta_ms) = checked_ceil_ratio_u64(weighted_delta, denominator) else {
-            return HashMap::new();
-        };
-        if ceiled_delta_ms > max_wait_ms - min_wait_ms {
+            .filter_map(|backend| {
+                let input_tps = backend.stats.last_mean_input_tps;
+                if !valid_last_mean_input_tps(input_tps) {
+                    return None;
+                }
+                let wait_ms = proxy_local_wait_ms(&backend.stats, priority);
+                min_wait_ms = min_wait_ms.min(wait_ms);
+                max_wait_ms = max_wait_ms.max(wait_ms);
+                Some(input_tps * wait_ms as f64)
+            })
+            .sum();
+        if !weighted_wait_sum.is_finite() {
             return HashMap::new();
         }
-        let weighted_wait_ms = min_wait_ms + ceiled_delta_ms;
+        let weighted_wait_ms =
+            ((weighted_wait_sum / input_tps_sum).ceil() as u64).clamp(min_wait_ms, max_wait_ms);
         aggregate.insert(priority, weighted_wait_ms);
     }
     aggregate
