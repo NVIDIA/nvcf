@@ -15,11 +15,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
-
-#[cfg(test)]
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use stargate_proto::pb::{InferenceServerModelRegistration, InferenceServerStatus, ModelStats};
@@ -90,7 +86,6 @@ impl ModelGeneration {
 pub struct PylonRuntimeState {
     advertised: Arc<Mutex<AdvertisedRuntimeState>>,
     live_requests: LiveRequestState,
-    force_chat_completions_include_usage: Arc<AtomicBool>,
     metrics: Option<Arc<PylonMetrics>>,
     observation_tx: Option<flume::Sender<RequestObservationEvent>>,
 }
@@ -110,6 +105,15 @@ pub struct RequestObservationEvent {
 pub(crate) struct RequestInputInterval {
     pub(crate) submitted_at: Instant,
     pub(crate) first_generated_output_at: Instant,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct RequestObservationMetadata {
+    pub(crate) input_interval: Option<RequestInputInterval>,
+    pub(crate) request_input_tokens: u64,
+    pub(crate) input_tokens_explicit: bool,
+    pub(crate) raw_output_units: u64,
+    pub(crate) upstream_duration: Option<Duration>,
 }
 
 impl RequestInputInterval {
@@ -192,20 +196,9 @@ impl PylonRuntimeState {
                 models,
             })),
             live_requests: LiveRequestState::default(),
-            force_chat_completions_include_usage: Arc::default(),
             metrics: None,
             observation_tx: None,
         }
-    }
-
-    pub(crate) fn set_force_chat_completions_include_usage(&self, enabled: bool) {
-        self.force_chat_completions_include_usage
-            .store(enabled, Ordering::Relaxed);
-    }
-
-    pub(crate) fn force_chat_completions_include_usage(&self) -> bool {
-        self.force_chat_completions_include_usage
-            .load(Ordering::Relaxed)
     }
 
     pub fn observed(
@@ -446,11 +439,10 @@ impl PylonRuntimeState {
         self.observe_request_for_generation(
             observation,
             generation,
-            None,
-            request_input_tokens,
-            false,
-            0,
-            None,
+            RequestObservationMetadata {
+                request_input_tokens,
+                ..Default::default()
+            },
         );
     }
 
@@ -458,21 +450,10 @@ impl PylonRuntimeState {
         &self,
         observation: RequestObservation,
         generation: Option<ModelGeneration>,
-        input_interval: Option<RequestInputInterval>,
-        request_input_tokens: u64,
-        input_tokens_explicit: bool,
-        raw_output_units: u64,
-        upstream_duration: Option<Duration>,
+        metadata: RequestObservationMetadata,
     ) {
-        let event = self.transition_request_observation_for_generation(
-            observation,
-            generation,
-            input_interval,
-            request_input_tokens,
-            input_tokens_explicit,
-            raw_output_units,
-            upstream_duration,
-        );
+        let event =
+            self.transition_request_observation_for_generation(observation, generation, metadata);
         if let Some(tx) = &self.observation_tx
             && let Err(error) = tx.try_send(event)
         {
@@ -515,11 +496,10 @@ impl PylonRuntimeState {
         self.transition_request_observation_for_generation(
             observation,
             Some(generation),
-            None,
-            request_input_tokens,
-            false,
-            0,
-            None,
+            RequestObservationMetadata {
+                request_input_tokens,
+                ..Default::default()
+            },
         )
     }
 
@@ -527,12 +507,15 @@ impl PylonRuntimeState {
         &self,
         observation: RequestObservation,
         generation: Option<ModelGeneration>,
-        input_interval: Option<RequestInputInterval>,
-        request_input_tokens: u64,
-        input_tokens_explicit: bool,
-        raw_output_units: u64,
-        upstream_duration: Option<Duration>,
+        metadata: RequestObservationMetadata,
     ) -> RequestObservationEvent {
+        let RequestObservationMetadata {
+            input_interval,
+            request_input_tokens,
+            input_tokens_explicit,
+            raw_output_units,
+            upstream_duration,
+        } = metadata;
         // Held across the queue transition below: retire_generation() purges
         // live-request state under this lock, so releasing it after the
         // currency check would let a retired generation reinsert queue state.
@@ -699,7 +682,9 @@ mod tests {
 
     use stargate_proto::pb::InferenceServerStatus;
 
-    use super::{ModelGeneration, PylonRuntimeState, RequestGenerationAdmission};
+    use super::{
+        ModelGeneration, PylonRuntimeState, RequestGenerationAdmission, RequestObservationMetadata,
+    };
     use crate::PylonMetrics;
     use crate::request_observer::{
         RequestObservation, RequestObservationEndpoint, RequestObservationState,
@@ -937,11 +922,10 @@ mod tests {
         runtime_state.transition_request_observation_for_generation(
             first_observation.clone(),
             Some(first.clone()),
-            None,
-            first_observation.input_tokens,
-            false,
-            0,
-            None,
+            RequestObservationMetadata {
+                request_input_tokens: first_observation.input_tokens,
+                ..Default::default()
+            },
         );
         assert_eq!(runtime_state.snapshot_live_model("model-a").queue_size, 1);
 
@@ -952,11 +936,7 @@ mod tests {
         runtime_state.transition_request_observation_for_generation(
             first_observation,
             Some(first),
-            None,
-            0,
-            false,
-            0,
-            None,
+            RequestObservationMetadata::default(),
         );
 
         assert_eq!(
@@ -985,11 +965,7 @@ mod tests {
         runtime_state.transition_request_observation_for_generation(
             stale,
             Some(first),
-            None,
-            0,
-            false,
-            0,
-            None,
+            RequestObservationMetadata::default(),
         );
 
         let body = metrics.gather_text().expect("metrics should encode");

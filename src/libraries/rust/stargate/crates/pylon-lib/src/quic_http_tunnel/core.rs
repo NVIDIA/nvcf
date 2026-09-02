@@ -100,6 +100,7 @@ pub struct TunnelForwardingConfig {
     pub max_request_body_bytes: usize,
     /// Maximum bytes in one upstream SSE event; completed events are forwarded and released independently of the request-body limit.
     pub max_sse_buffer_bytes: usize,
+    pub force_chat_completions_include_usage: bool,
     pub first_output_timeout: Duration,
     pub output_chunk_timeout: Duration,
     pub runtime_state: PylonRuntimeState,
@@ -123,6 +124,7 @@ impl Default for TunnelForwardingConfig {
         Self {
             max_request_body_bytes: DEFAULT_MAX_BODY_BYTES,
             max_sse_buffer_bytes: DEFAULT_MAX_SSE_BUFFER_BYTES,
+            force_chat_completions_include_usage: false,
             first_output_timeout: DEFAULT_FIRST_OUTPUT_TIMEOUT,
             output_chunk_timeout: DEFAULT_OUTPUT_CHUNK_TIMEOUT,
             runtime_state: PylonRuntimeState::default(),
@@ -141,8 +143,7 @@ impl Default for TunnelForwardingConfig {
 
 impl TunnelForwardingConfig {
     pub fn set_force_chat_completions_include_usage(&mut self, enabled: bool) {
-        self.runtime_state
-            .set_force_chat_completions_include_usage(enabled);
+        self.force_chat_completions_include_usage = enabled;
     }
 }
 
@@ -153,6 +154,7 @@ pub(super) struct TunnelServerApp {
     pub(super) upstream_http_base_url: String,
     pub(super) max_request_body_bytes: usize,
     pub(super) max_sse_buffer_bytes: usize,
+    pub(super) force_chat_completions_include_usage: bool,
     pub(super) first_output_timeout: Duration,
     pub(super) output_chunk_timeout: Duration,
     pub(super) runtime_state: PylonRuntimeState,
@@ -179,6 +181,7 @@ impl TunnelServerApp {
             upstream_http_base_url,
             max_request_body_bytes: forwarding.max_request_body_bytes,
             max_sse_buffer_bytes: forwarding.max_sse_buffer_bytes,
+            force_chat_completions_include_usage: forwarding.force_chat_completions_include_usage,
             first_output_timeout: forwarding.first_output_timeout,
             output_chunk_timeout: forwarding.output_chunk_timeout,
             runtime_state: forwarding.runtime_state,
@@ -741,11 +744,26 @@ pub(super) async fn forward_tunnel_request(
             lifecycle.fail();
             return send_problem_response(transport, StatusCode::BAD_REQUEST, error).await;
         }
-        let (prepared_body, body_mutated) = match force_chat_completions_include_usage(
-            observation_endpoint,
-            app.runtime_state.force_chat_completions_include_usage(),
-            body_bytes,
-        ) {
+        let rewrite_result = if app.force_chat_completions_include_usage
+            && observation_endpoint == Some(RequestObservationEndpoint::ChatCompletions)
+        {
+            match tokio::task::spawn_blocking(move || {
+                force_chat_completions_include_usage(observation_endpoint, true, body_bytes)
+            })
+            .await
+            {
+                Ok(result) => result,
+                Err(error) => {
+                    lifecycle.fail();
+                    return Err(anyhow!(
+                        "chat completions request rewrite task failed: {error}"
+                    ));
+                }
+            }
+        } else {
+            Ok((body_bytes, false))
+        };
+        let (prepared_body, body_mutated) = match rewrite_result {
             Ok(body_bytes) => body_bytes,
             Err(error) => {
                 lifecycle.fail();
@@ -1467,9 +1485,8 @@ mod tests {
             }),
         ))
         .await;
-        let (app, _observations) = observed_app(upstream.as_str());
-        app.runtime_state
-            .set_force_chat_completions_include_usage(true);
+        let (mut app, _observations) = observed_app(upstream.as_str());
+        app.force_chat_completions_include_usage = true;
         let original_body = br#"{"messages":[],"stream":true}"#;
         let mut request = observed_request("/v1/chat/completions");
         request.headers.insert(
@@ -1505,9 +1522,8 @@ mod tests {
 
     #[tokio::test]
     async fn forced_chat_usage_invalid_stream_options_returns_bad_request() {
-        let (app, _observations) = observed_app("http://127.0.0.1:0");
-        app.runtime_state
-            .set_force_chat_completions_include_usage(true);
+        let (mut app, _observations) = observed_app("http://127.0.0.1:0");
+        app.force_chat_completions_include_usage = true;
         for request_body in [
             br#"{"messages":[],"stream":true,"stream_options":false}"#.as_slice(),
             br#"{"messages":[],"stream":true,"stream_options":{"include_usage":"yes"}}"#.as_slice(),

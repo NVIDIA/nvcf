@@ -15,7 +15,7 @@
 
 use crate::generated_request_id::{GeneratedRequestKind, generated_request_kind};
 use crate::request_observer::{RequestObservationEndpoint, RequestObservationState};
-use crate::{CurrentModelStats, RequestObservation, RequestObservationEvent};
+use crate::{CurrentModelStats, RequestObservationEvent};
 
 use super::aggregator::{
     EmbeddingThroughputSample, InputThroughputSample, KvCacheStatsSnapshot, ModelMetricsState,

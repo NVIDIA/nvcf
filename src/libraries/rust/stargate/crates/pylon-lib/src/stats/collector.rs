@@ -798,10 +798,12 @@ mod tests {
         runtime_state.observe_request_for_generation(
             observation,
             generation,
-            input_interval,
-            request_input_tokens,
-            false,
-            raw_output_units,
+            crate::runtime_state::RequestObservationMetadata {
+                input_interval,
+                request_input_tokens,
+                raw_output_units,
+                ..Default::default()
+            },
         );
     }
 
@@ -2776,6 +2778,21 @@ mod tests {
         completed_observation(120, 6, 30, seconds(3), seconds(9));
         last_mean_input_tps: 40.0, output_tps: 5.0, max_output_tps: 5.0
     );
+
+    #[test]
+    fn fallback_output_tps_excludes_downstream_delivery_delay() {
+        let mut aggregator = test_aggregator(StatsCollectorConfig::default());
+        let observation = completed_observation(120, 6, 100, seconds(1), seconds(11));
+        let event = aggregator
+            .runtime_state
+            .transition_request_observation(observation);
+        let mut event = event_with_test_metadata(event);
+        event.upstream_duration = Some(seconds(2));
+
+        let stats = published_stats(aggregator.apply_fallback_observation(&event));
+
+        assert_stats!(stats; output_tps: 100.0, max_output_tps: 100.0);
+    }
 
     fallback_snapshot_test!(
         ignores_observations_below_duration_floor,

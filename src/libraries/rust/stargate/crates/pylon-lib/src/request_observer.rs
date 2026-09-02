@@ -19,7 +19,9 @@ use std::time::{Duration, Instant};
 use reqwest::header::HeaderMap;
 
 use crate::generated_request_id::{GeneratedRequestKind, generated_request_kind};
-use crate::runtime_state::{ModelGeneration, PylonRuntimeState, RequestInputInterval};
+use crate::runtime_state::{
+    ModelGeneration, PylonRuntimeState, RequestInputInterval, RequestObservationMetadata,
+};
 
 mod embeddings;
 mod headers;
@@ -429,13 +431,15 @@ impl RequestObserver {
         self.runtime_state.observe_request_for_generation(
             observation,
             self.generation.clone(),
-            input_interval,
-            self.request_input_tokens,
-            self.input_tokens_explicit,
-            backend.map_or(0, |backend| backend.raw_output_units),
-            backend
-                .and_then(|backend| backend.last_upstream_event_at)
-                .map(|instant| instant.saturating_duration_since(self.started_at)),
+            RequestObservationMetadata {
+                input_interval,
+                request_input_tokens: self.request_input_tokens,
+                input_tokens_explicit: self.input_tokens_explicit,
+                raw_output_units: backend.map_or(0, |backend| backend.raw_output_units),
+                upstream_duration: backend
+                    .and_then(|backend| backend.last_upstream_event_at)
+                    .map(|instant| instant.saturating_duration_since(self.started_at)),
+            },
         );
     }
 }
@@ -963,12 +967,11 @@ mod tests {
 
         let first_output_at = accepted_at + Duration::from_secs(1);
         observer.observe_upstream_event(first_output_at);
-        observer.observe_generated_output(first_output_at, true);
+        observer.observe_generated_output(first_output_at, true, 1);
         let output = rx.try_recv().unwrap();
         assert_eq!(output.upstream_duration, Some(Duration::from_secs(1)));
 
-        observer.observe_output_tokens(100);
-        rx.try_recv().unwrap();
+        observer.observe_output_tokens_total(100);
         observer.observe_upstream_event(accepted_at + Duration::from_secs(2));
         observer.complete();
         let terminal = rx.try_recv().unwrap();
