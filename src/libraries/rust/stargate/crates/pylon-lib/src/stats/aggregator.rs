@@ -1050,7 +1050,7 @@ impl ModelMetricsState {
 
     pub(super) fn stats_labels(&self) -> (Vec<String>, Vec<String>) {
         // Labels are sticky capabilities observed over the model state's lifetime.
-        let mut capabilities = vec!["request.load.proxy_local".to_string()];
+        let mut capabilities = Vec::new();
         let mut sources = Vec::new();
         for (observed, capability, source) in [
             (

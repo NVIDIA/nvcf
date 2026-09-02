@@ -585,17 +585,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn zero_load_stats_publish_proxy_local_capability() {
-        let aggregator = test_aggregator(StatsCollectorConfig::default());
-
-        assert_eq!(
-            aggregator.snapshot("model-a").stats_capabilities,
-            ["request.load.proxy_local"]
-        );
-        assert!(aggregator.snapshot("model-a").stats_sources.is_empty());
-    }
-
     struct RunningCollector {
         runtime_state: PylonRuntimeState,
         stats_update_tx: Option<flume::Sender<StatsAggregatorUpdate>>,
@@ -1185,7 +1174,7 @@ mod tests {
     }
 
     fn assert_unlabeled(stats: &CurrentModelStats) {
-        assert_eq!(stats.stats_capabilities, ["request.load.proxy_local"]);
+        assert!(stats.stats_capabilities.is_empty());
         assert!(stats.stats_sources.is_empty());
     }
 
@@ -1607,7 +1596,7 @@ mod tests {
         let mut aggregator = test_aggregator(StatsCollectorConfig::default());
         aggregator.apply_kv_cache_stats(kv_cache_stats("model-a"));
         let stats = aggregator.stream_stats("req-stream-kv", (0, 10), true, Duration::ZERO);
-        assert_stats!(stats; kv_cache_capacity_tokens: 1_000, kv_cache_used_tokens: 400, kv_cache_free_tokens: 600, stats_capabilities: ["request.load.proxy_local", "model.throughput.engine_stream", "machine.kv_cache.http"], stats_sources: ["engine_stats_stream", "kv_cache_stats"]);
+        assert_stats!(stats; kv_cache_capacity_tokens: 1_000, kv_cache_used_tokens: 400, kv_cache_free_tokens: 600, stats_capabilities: ["model.throughput.engine_stream", "machine.kv_cache.http"], stats_sources: ["engine_stats_stream", "kv_cache_stats"]);
     }
 
     #[test]
@@ -3003,7 +2992,7 @@ mod tests {
             output_tokens_from_chunk_usage: true,
             ..completed_observation(12, 1, 7, milliseconds(100), milliseconds(500))
         };
-        stats_capabilities: ["request.load.proxy_local", "request.output.chunk_usage"], stats_sources: ["chunk_usage"]
+        stats_capabilities: ["request.output.chunk_usage"], stats_sources: ["chunk_usage"]
     );
 
     #[test]
@@ -3282,10 +3271,7 @@ mod tests {
                 .flush_and_snapshot(&replacement)
                 .await
                 .expect("replacement snapshot request should complete"),
-            Some(CurrentModelStats {
-                stats_capabilities: vec!["request.load.proxy_local".to_string()],
-                ..CurrentModelStats::default()
-            })
+            Some(CurrentModelStats::default())
         );
         collector.shutdown().await;
     }
