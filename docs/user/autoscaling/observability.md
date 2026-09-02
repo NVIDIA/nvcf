@@ -3,8 +3,9 @@
 The Function Autoscaler emits structured logs, Prometheus metrics, and
 OpenTelemetry spans. The chart exposes its Prometheus exporter through the
 `function-autoscaler` service on the `metrics` port, which defaults to `41338`.
-The shared stack's default monitors do not include this service. Add a monitor
-or scrape target for it to collect these metrics.
+The shared stack's default monitors scrape that service on the `metrics` port
+for the `control` and `all` observability profiles. The `compute` and
+`disabled` profiles do not.
 
 These service metrics describe the autoscaler itself. They are separate from
 the function metrics that the autoscaler reads from VictoriaMetrics or an

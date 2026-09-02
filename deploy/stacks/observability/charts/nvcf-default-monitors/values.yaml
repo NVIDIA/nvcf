@@ -41,6 +41,12 @@ controlPlane:
       enabled: true
       selector:
         app.kubernetes.io/instance: llm-api-gateway
+    # ServiceMonitor only: the autoscaler chart owns the metrics port/labels.
+    - name: function-autoscaler
+      enabled: true
+      selector:
+        app.kubernetes.io/instance: function-autoscaler
+        app.kubernetes.io/name: helm-nvcf-function-autoscaler
     - name: invocation-service
       enabled: true
       selector:
