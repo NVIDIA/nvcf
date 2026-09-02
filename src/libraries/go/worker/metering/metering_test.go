@@ -53,6 +53,7 @@ func TestLog(t *testing.T) {
 		FunctionVersionId: "fvid-abc-123",
 		ICMSEnvironment:   "LocalEnvironment",
 		ZoneName:          "LocalZone",
+		ClusterId:         "cluster-abc-123",
 		NspectId:          "TEST-NSPECT-ID",
 		GpuCount:          2,
 		GpuType:           "L40S",
@@ -78,59 +79,11 @@ func TestLog(t *testing.T) {
 	}
 
 	// XXX: here be dragons... RFC3339 and UUID regexes
-	// ClusterId is empty: cluster_id must be absent (omitempty); region must be present.
-	want := regexp.MustCompile(`{"level":"info","msg":"metering event","env":"LocalEnvironment","data":{"timestamp":"([0-9]+)-(0[1-9]|1[012])-(0[1-9]|[12][0-9]|3[01])[Tt]([01][0-9]|2[0-3]):([0-5][0-9]):([0-5][0-9]|60)(\.[0-9]+)?(([Zz])|([\+|\-]([01][0-9]|2[0-3]):[0-5][0-9]))","transaction_id":"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}","nca_id":"invoker-nca-id","nspect_id":"TEST-NSPECT-ID","event_type":"NVCF_Invocation","properties":{"request_id":"reqid-abc-123","sub":"sub-abc-123","instance_type":"","backend":"LocalBackend","function_id":"fid-abc-123","function_version_id":"fvid-abc-123","size":100,"duration":10,"response_type":"FULFILLED","gpus":2,"gpu_type":"L40S","owner_nca_id":"nca-abc-123","region":"LocalZone","user_function_tags":\["Tag-1","Tag-2","Tag-3"],"billing_headers":{"x-billing-id":"billing-id-abc-123"}}}}`)
+	want := regexp.MustCompile(`{"level":"info","msg":"metering event","env":"LocalEnvironment","data":{"timestamp":"([0-9]+)-(0[1-9]|1[012])-(0[1-9]|[12][0-9]|3[01])[Tt]([01][0-9]|2[0-3]):([0-5][0-9]):([0-5][0-9]|60)(\.[0-9]+)?(([Zz])|([\+|\-]([01][0-9]|2[0-3]):[0-5][0-9]))","transaction_id":"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}","nca_id":"invoker-nca-id","nspect_id":"TEST-NSPECT-ID","event_type":"NVCF_Invocation","properties":{"request_id":"reqid-abc-123","sub":"sub-abc-123","instance_type":"","backend":"LocalBackend","function_id":"fid-abc-123","function_version_id":"fvid-abc-123","size":100,"duration":10,"response_type":"FULFILLED","gpus":2,"gpu_type":"L40S","owner_nca_id":"nca-abc-123","cluster_id":"cluster-abc-123","region":"LocalZone","user_function_tags":\["Tag-1","Tag-2","Tag-3"],"billing_headers":{"x-billing-id":"billing-id-abc-123"}}}}`)
 	if !want.MatchString(log.Entry.Message) {
 		t.Fatalf("log message = %s, want = %s", log.Entry.Message, want)
 	}
 	if log.Context[0].Key != "metering" || log.Context[0].Type != zapcore.BoolType || log.Context[0].Integer != 1 {
 		t.Fatalf("missing metering field")
 	}
-}
-
-func TestLogClusterIdAndRegion(t *testing.T) {
-	config := Config{
-		Backend:           "LocalBackend",
-		NcaId:             "nca-abc-123",
-		FunctionId:        "fid-abc-123",
-		FunctionVersionId: "fvid-abc-123",
-		ICMSEnvironment:   "LocalEnvironment",
-		ZoneName:          "LocalZone",
-		ClusterId:         "cluster-abc-123",
-	}
-
-	t.Run("cluster_id and region are serialized when set", func(t *testing.T) {
-		event := New(&config, "reqid-abc-123", "sub-abc-123", "invoker-nca-id", nil)
-		logger, observedLogs := configureLogCapture()
-		zap.ReplaceGlobals(logger)
-		event.Log()
-
-		if observedLogs.Len() != 1 {
-			t.Fatalf("observed logs = %d, want 1", observedLogs.Len())
-		}
-		msg := observedLogs.All()[0].Entry.Message
-		if !regexp.MustCompile(`"cluster_id":"cluster-abc-123"`).MatchString(msg) {
-			t.Fatalf("cluster_id missing from log: %s", msg)
-		}
-		if !regexp.MustCompile(`"region":"LocalZone"`).MatchString(msg) {
-			t.Fatalf("region missing from log: %s", msg)
-		}
-	})
-
-	t.Run("cluster_id is omitted when empty", func(t *testing.T) {
-		cfgNoCluster := config
-		cfgNoCluster.ClusterId = ""
-		event := New(&cfgNoCluster, "reqid-abc-123", "sub-abc-123", "invoker-nca-id", nil)
-		logger, observedLogs := configureLogCapture()
-		zap.ReplaceGlobals(logger)
-		event.Log()
-
-		if observedLogs.Len() != 1 {
-			t.Fatalf("observed logs = %d, want 1", observedLogs.Len())
-		}
-		msg := observedLogs.All()[0].Entry.Message
-		if regexp.MustCompile(`"cluster_id"`).MatchString(msg) {
-			t.Fatalf("cluster_id should be absent when empty, got: %s", msg)
-		}
-	})
 }
