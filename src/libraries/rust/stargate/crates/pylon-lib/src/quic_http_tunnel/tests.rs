@@ -2520,6 +2520,57 @@ data: {"type":"response.completed","response":{"output":[{"type":"message"}],"us
 }
 
 #[tokio::test]
+async fn quic_tunnel_marks_malformed_chat_delta_shapes_calibration_ineligible() {
+    for (case, body) in [
+        (
+            "delta",
+            r#"data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"Visible answer"},"finish_reason":null}]}
+
+data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":"invalid","finish_reason":"stop"}]}
+
+data: {"object":"chat.completion.chunk","choices":[],"usage":{"completion_tokens":5}}
+
+data: [DONE]
+
+"#,
+        ),
+        (
+            "function-call",
+            r#"data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"Visible answer"},"finish_reason":null}]}
+
+data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"function_call":"invalid"},"finish_reason":"stop"}]}
+
+data: {"object":"chat.completion.chunk","choices":[],"usage":{"completion_tokens":5}}
+
+data: [DONE]
+
+"#,
+        ),
+        (
+            "tool-calls",
+            r#"data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"Visible answer"},"finish_reason":null}]}
+
+data: {"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":{}},"finish_reason":"stop"}]}
+
+data: {"object":"chat.completion.chunk","choices":[],"usage":{"completion_tokens":5}}
+
+data: [DONE]
+
+"#,
+        ),
+    ] {
+        let app = raw_sse_app("/v1/chat/completions", body);
+        let request_id = format!("req-malformed-chat-delta-{case}");
+        let event = observe_calibration_stream(app, "/v1/chat/completions", &request_id).await;
+        let facts = event.output_calibration();
+        assert_eq!(event.observation().output_tokens, 5, "case: {case}");
+        assert_eq!(facts.exact_output_tokens_baseline, Some(5), "case: {case}");
+        assert!(facts.calibration_ineligible, "case: {case}");
+        assert!(facts.raw_output_units > 0, "case: {case}");
+    }
+}
+
+#[tokio::test]
 async fn quic_tunnel_marks_unsafe_chat_finish_reasons_calibration_ineligible() {
     for (case, body) in [
         (
