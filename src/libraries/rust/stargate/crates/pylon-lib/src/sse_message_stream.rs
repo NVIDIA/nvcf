@@ -497,7 +497,6 @@ enum GeneratedValueKind {
 
 #[derive(Debug, Clone, Copy)]
 struct ChatOutputSpec {
-    _json_path: &'static str,
     relative_path: &'static [&'static str],
     kind: GeneratedValueKind,
 }
@@ -505,50 +504,37 @@ struct ChatOutputSpec {
 // Chat Completions | chat.completion.chunk | JSON path below | string
 const CHAT_DELTA_TEXT_FIELDS: &[ChatOutputSpec] = &[
     ChatOutputSpec {
-        _json_path: "choices[].delta.content",
         relative_path: &["content"],
         kind: GeneratedValueKind::Text,
     },
     ChatOutputSpec {
-        _json_path: "choices[].delta.refusal",
         relative_path: &["refusal"],
         kind: GeneratedValueKind::Text,
     },
     ChatOutputSpec {
-        _json_path: "choices[].delta.reasoning",
         relative_path: &["reasoning"],
         kind: GeneratedValueKind::ReasoningText,
     },
     ChatOutputSpec {
-        _json_path: "choices[].delta.reasoning_content",
         relative_path: &["reasoning_content"],
         kind: GeneratedValueKind::ReasoningText,
     },
     ChatOutputSpec {
-        _json_path: "choices[].delta.function_call.name",
         relative_path: &["function_call", "name"],
         kind: GeneratedValueKind::CalibrationIneligibleText,
     },
     ChatOutputSpec {
-        _json_path: "choices[].delta.function_call.arguments",
         relative_path: &["function_call", "arguments"],
         kind: GeneratedValueKind::CalibrationIneligibleText,
     },
     ChatOutputSpec {
-        _json_path: "choices[].delta.audio.transcript",
         relative_path: &["audio", "transcript"],
         kind: GeneratedValueKind::Text,
     },
 ];
 
 // Chat Completions | chat.completion.chunk | JSON path below | string
-const CHAT_TOOL_TEXT_FIELDS: &[(&str, &str)] = &[
-    ("choices[].delta.tool_calls[].function.name", "name"),
-    (
-        "choices[].delta.tool_calls[].function.arguments",
-        "arguments",
-    ),
-];
+const CHAT_TOOL_TEXT_FIELDS: &[&str] = &["name", "arguments"];
 
 #[derive(Debug, Clone, Copy)]
 struct ResponsesOutputSpec {
@@ -654,7 +640,7 @@ fn generated_output(value: &Value, event_type: Option<&str>) -> (Option<Generate
             }
             if let Some(tool_calls) = delta["tool_calls"].as_array() {
                 for tool_call in tool_calls {
-                    for (_, field) in CHAT_TOOL_TEXT_FIELDS {
+                    for &field in CHAT_TOOL_TEXT_FIELDS {
                         add_generated_text(
                             &mut output,
                             &mut saw_generated_output,
@@ -904,12 +890,13 @@ mod tests {
     #[test]
     fn classifies_every_chat_generated_string_path() {
         for spec in CHAT_DELTA_TEXT_FIELDS {
+            let json_path = format!("choices[].delta.{}", spec.relative_path.join("."));
             let delta = match spec.relative_path {
                 [field] => serde_json::json!({(*field): "x"}),
                 [container, field] => {
                     serde_json::json!({(*container): {(*field): "x"}})
                 }
-                _ => panic!("unsupported test path {}", spec._json_path),
+                _ => panic!("unsupported test path {json_path}"),
             };
             let data = serde_json::json!({
                 "object": "chat.completion.chunk",
@@ -919,17 +906,12 @@ mod tests {
             let output = parsed
                 .facts
                 .generated_output
-                .unwrap_or_else(|| panic!("{} should count as generated output", spec._json_path));
-            assert!(
-                output.token_bearing,
-                "{} should be token-bearing",
-                spec._json_path
-            );
+                .unwrap_or_else(|| panic!("{json_path} should count as generated output"));
+            assert!(output.token_bearing, "{json_path} should be token-bearing");
             assert_eq!(
                 output.characters,
                 OutputCharacters::from_text("x"),
-                "unexpected character count for {}",
-                spec._json_path
+                "unexpected character count for {json_path}"
             );
             assert_eq!(
                 output.reasoning_text,
@@ -941,10 +923,11 @@ mod tests {
             );
         }
 
-        for (json_path, field) in CHAT_TOOL_TEXT_FIELDS {
+        for &field in CHAT_TOOL_TEXT_FIELDS {
+            let json_path = format!("choices[].delta.tool_calls[].function.{field}");
             let data = serde_json::json!({
                 "object": "chat.completion.chunk",
-                "choices": [{"index": 0, "delta": {"tool_calls": [{"function": {(*field): "x"}}]}}],
+                "choices": [{"index": 0, "delta": {"tool_calls": [{"function": {(field): "x"}}]}}],
             });
             let parsed = parse_data(&data.to_string());
             let output = parsed
