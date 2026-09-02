@@ -28,6 +28,7 @@ import (
 	"os/signal"
 	"reflect"
 	"syscall"
+	"time"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/v2/interceptors/logging"
 	olricConfig "github.com/olric-data/olric/config"
@@ -35,6 +36,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"go.uber.org/zap"
+	"google.golang.org/grpc"
 
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/config"
 	"github.com/NVIDIA/nvcf/src/libraries/go/lib/pkg/nvkit/logs"
@@ -43,6 +45,27 @@ import (
 
 	"ratelimiter"
 )
+
+// Bounded so the deferred Olric leave in RateLimiter.Close still runs before the
+// termination grace period expires.
+const grpcDrainTimeout = 10 * time.Second
+
+func stopGrpcServer(server *grpc.Server, drainTimeout time.Duration) {
+	drained := make(chan struct{})
+	go func() {
+		server.GracefulStop()
+		close(drained)
+	}()
+
+	select {
+	case <-drained:
+	case <-time.After(drainTimeout):
+		zap.L().Warn("grpc drain timed out, forcing shutdown to preserve the olric leave",
+			zap.Duration("timeout", drainTimeout))
+		server.Stop()
+		<-drained
+	}
+}
 
 func main() {
 	setupLogger()
@@ -244,7 +267,7 @@ func NewRootCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer baseServer.GracefulStop()
+			defer stopGrpcServer(baseServer, grpcDrainTimeout)
 			grpcErrChan := make(chan error, 1)
 			go func() {
 				if err := baseServer.Serve(grpcListener); err != nil {
