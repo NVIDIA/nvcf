@@ -737,19 +737,6 @@ pub(super) async fn forward_tunnel_request(
             }
         }
     };
-    let chat_usage_rewrite_permit = if app.force_chat_completions_include_usage
-        && observation_endpoint == Some(RequestObservationEndpoint::ChatCompletions)
-    {
-        Some(
-            app.chat_usage_rewrite_permits
-                .clone()
-                .acquire_owned()
-                .await
-                .expect("chat usage rewrite semaphore should remain open"),
-        )
-    } else {
-        None
-    };
     let mut body_bytes = transport
         .read_request_body(&request_headers, app.max_request_body_bytes)
         .await?;
@@ -761,7 +748,15 @@ pub(super) async fn forward_tunnel_request(
             lifecycle.fail();
             return send_problem_response(transport, StatusCode::BAD_REQUEST, error).await;
         }
-        let rewrite_result = if let Some(chat_usage_rewrite_permit) = chat_usage_rewrite_permit {
+        let rewrite_result = if app.force_chat_completions_include_usage
+            && observation_endpoint == Some(RequestObservationEndpoint::ChatCompletions)
+        {
+            let chat_usage_rewrite_permit = app
+                .chat_usage_rewrite_permits
+                .clone()
+                .acquire_owned()
+                .await
+                .expect("chat usage rewrite semaphore should remain open");
             let rewrite_task = AbortOnDropHandle::new(tokio::task::spawn_blocking(move || {
                 let _chat_usage_rewrite_permit = chat_usage_rewrite_permit;
                 force_chat_completions_include_usage(body_bytes)
@@ -1418,6 +1413,47 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn blocked_request_body_does_not_consume_chat_usage_rewrite_capacity() {
+        let (mut app, _observations) = observed_app("http://127.0.0.1:0");
+        app.force_chat_completions_include_usage = true;
+        let capacity = app.chat_usage_rewrite_permits.available_permits();
+        let gate = TestGate {
+            entered: Arc::new(tokio::sync::Notify::new()),
+            release: Arc::new(tokio::sync::Notify::new()),
+        };
+        let read_entered = gate.entered.clone();
+        let request_app = app.clone();
+        let request_task = tokio::spawn(async move {
+            let mut transport = TestTransport {
+                request_body: br#"{"messages":[],"stream":true}"#.to_vec(),
+                request_body_gate: Some(gate),
+                ..TestTransport::default()
+            };
+            forward_tunnel_request(
+                &request_app,
+                observed_request("/v1/chat/completions"),
+                &mut transport,
+            )
+            .await
+        });
+
+        read_entered.notified().await;
+        assert_eq!(
+            app.chat_usage_rewrite_permits.available_permits(),
+            capacity,
+            "request-body I/O must not occupy bounded rewrite workers"
+        );
+
+        request_task.abort();
+        assert!(
+            request_task
+                .await
+                .expect_err("blocked request task should be cancelled")
+                .is_cancelled()
+        );
+    }
+
     #[test]
     fn forced_chat_usage_inserts_stream_options_and_preserves_siblings() {
         let (body, mutated) = force_chat_usage(
@@ -1551,7 +1587,7 @@ mod tests {
     }
 
     #[derive(Clone)]
-    struct ResponseHeadGate {
+    struct TestGate {
         entered: Arc<tokio::sync::Notify>,
         release: Arc<tokio::sync::Notify>,
     }
@@ -1561,7 +1597,8 @@ mod tests {
         request_body: Vec<u8>,
         response_heads: Vec<StatusCode>,
         response_events: Vec<bytes::Bytes>,
-        response_head_gate: Option<ResponseHeadGate>,
+        request_body_gate: Option<TestGate>,
+        response_head_gate: Option<TestGate>,
         fail_finish: bool,
     }
 
@@ -1578,6 +1615,10 @@ mod tests {
             _request_headers: &HeaderMap,
             _max_request_body_bytes: usize,
         ) -> Result<Vec<u8>> {
+            if let Some(gate) = &self.request_body_gate {
+                gate.entered.notify_one();
+                gate.release.notified().await;
+            }
             Ok(self.request_body.clone())
         }
 
@@ -1829,7 +1870,7 @@ mod tests {
         app.first_output_timeout = Duration::from_secs(1);
         let entered = Arc::new(tokio::sync::Notify::new());
         let release = Arc::new(tokio::sync::Notify::new());
-        let gate = ResponseHeadGate {
+        let gate = TestGate {
             entered: Arc::clone(&entered),
             release: Arc::clone(&release),
         };
