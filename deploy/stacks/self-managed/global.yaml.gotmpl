@@ -445,7 +445,7 @@ natsAuthCalloutService:
 {{- else if $legacyPylonImageConfigured }}
 {{- $effectivePylonImage = $legacyPylonImage }}
 {{- else if $llmEnabled }}
-{{- $effectivePylonImage = printf "%s/%s/pylon:0.14.3" $sidecarsHost $sidecarsRepo }}
+{{- $effectivePylonImage = printf "%s/%s/pylon:0.15.1" $sidecarsHost $sidecarsRepo }}
 {{- end }}
 {{- $stackApiRemoteConfigData := dict }}
 {{- $stackNvcfRemoteConfig := dict }}

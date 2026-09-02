@@ -728,7 +728,7 @@ stack:
     - deploy/stacks/nvcf-compute-plane/helmfile.d/02-nvca.yaml.gotmpl
     - deploy/stacks/self-managed/global.yaml.gotmpl
     - deploy/stacks/self-managed/helmfile.d/02-core.yaml.gotmpl
-  pin_source_digest: sha256:952fba4fb3906887fe1661f6d8508b9470c2a5fe0746dba12a5a62d8384230dc
+  pin_source_digest: sha256:ce09f463f36314045441c14320dce63693d924e6ba240afdcb4a276c670bda66
 denylist:
   - name: strap
     reason: Legacy name replaced by nvcf-service-oss
@@ -969,7 +969,7 @@ artifacts:
   - name: pylon
     type: image
     registry: staging
-    version: 0.14.3
+    version: 0.15.1
   - name: reval-server
     type: image
     registry: staging

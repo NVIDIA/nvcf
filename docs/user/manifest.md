@@ -230,7 +230,7 @@ The following tables list the complete artifact inventory.
 | `nvcf_worker_init` | `1.0.1` | Required | Prepares function resources before the user container starts. | `nvcr.io/nvidia/nvcf/nvcf_worker_init:1.0.1` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/worker-init) |
 | `nvcf_worker_llm_credentials` | `1.0.1` | Optional | Maintains a current NVCF worker token for LLM function workloads. | `nvcr.io/nvidia/nvcf/nvcf_worker_llm_credentials:1.0.1` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/worker-llm-credentials) |
 | `nvcf_worker_utils` | `1.0.1` | Required | Proxies NATS traffic between function containers and the control plane. | `nvcr.io/nvidia/nvcf/nvcf_worker_utils:1.0.1` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/compute-plane-services/worker-utils) |
-| `pylon` | `0.14.3` | Optional | Connects LLM worker pods to the LLM request router. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/libraries/rust/stargate) |
+| `pylon` | `0.15.1` | Optional | Connects LLM worker pods to the LLM request router. | `Publication pending` | [GitHub](https://github.com/NVIDIA/nvcf/tree/main/src/libraries/rust/stargate) |
 
 ### EA-only CVE-impacted artifacts
 
