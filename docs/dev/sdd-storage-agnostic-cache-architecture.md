@@ -2,29 +2,36 @@
 
 ## Summary
 
-This document separates implemented foundation from target runtime behavior.
+NVCA picks a model-cache backend by looking for a StorageClass by name, and the NVMesh path has its provisioner,
+reader access mode, mount options, and namespace rewriting compiled in. Adding a backend means changing Go. Whether a
+backend can hold an NVCF model cache is a qualification result, and should be data.
 
-Implemented foundation:
+Four pieces make NVCA storage agnostic:
 
-- The NVCA Operator chart installs a public `v1alpha1` storage catalog and packages its JSON Schema.
-- The catalog uses closed transition enums and records required reader-PV mount options.
-- NVCA has a strict catalog loader and semantic validator. Tests call them; runtime reconciliation does not.
-- Current public NVCA still uses legacy StorageClass-presence checks and feature flags for backend selection.
-- Weka, OCI File Storage (FSS), and OCI Lustre model-cache transitions remain `disabled`.
+1. StorageClass contract. Deployment tooling renders one provider as `StorageClass/nvcf-sc` with reclaim policy
+   `Retain`. NVCA reads the provisioner from that class.
+2. Capability catalog. A ConfigMap in the NVCA chart records, per exact CSI provisioner, the PVC access modes
+   qualified in a cache workflow and the mount options for reader PVs NVCA creates. NVCA derives the flow from the
+   modes; the catalog declares no flow.
+3. Cache binding. A `ModelCacheBinding` records the decision for one shared cache, the resources it owns, and the
+   requests referencing it. Every namespace converges on it. A later catalog edit never changes a live cache.
+4. Derived readers. A reader PV is derived from the writer's bound volume, not provisioned from the class, so it
+   reaches the data the writer populated.
 
-Target:
+Implemented:
 
-1. Deployment tooling renders exactly one selected provider as `StorageClass/nvcf-sc`.
-2. The public NVCA catalog declares qualified access modes, reader-PV mount options, and regular/Helm cache
-   transitions.
-3. NVCA resolves the live class and catalog entry, then persists a shared cache binding before storage side effects.
-4. A provider transition remains disabled until its complete functional contract passes.
+- The chart installs the public `v1alpha1` catalog and its JSON Schema.
+- The Go loader and validator enforce the same two rules as the schema. Tests call them; reconciliation does not yet.
+- Public NVCA still selects by StorageClass presence and feature flags.
+- Weka, OCI File Storage (FSS), and OCI Lustre list no qualified access modes, so caching stays off for them.
 
-Deployment tooling owns CSI-specific StorageClass parameters. NVCA owns model-cache transitions. A provider name,
-provisioner, or access mode alone never enables a workflow.
+Target: NVCA resolves the `nvcf-sc` provisioner, derives the flow from its catalog entry, and persists a binding
+before any storage side effect. A provider is enabled by recording its qualified access modes after its functional
+contract passes.
 
-Editing the catalog ConfigMap does not enable a provider today. Runtime work is tracked in
-[NVIDIA/nvcf#1326](https://github.com/NVIDIA/nvcf/issues/1326); this SDD defines the stable `nvcf-sc` target contract.
+Deployment tooling owns CSI-specific StorageClass parameters. NVCA owns derivation and runtime. A provider name,
+provisioner, or access mode alone never enables a workflow. Editing the catalog does not enable a provider today.
+Runtime work is tracked in [NVIDIA/nvcf#1326](https://github.com/NVIDIA/nvcf/issues/1326).
 
 ## Table of contents
 
@@ -58,7 +65,7 @@ installation/lifecycle; and performance qualification, which follows functional 
 | Provisioner | Exact CSI string in `StorageClass.provisioner` |
 | Access mode | Kubernetes PVC mode declared only after qualification for an exact provider configuration |
 | Workflow | `regularModelCache` or `helmModelCache` |
-| Transition | Named NVCA implementation that moves a cache from writer state to reusable reader state |
+| Transition | NVCA-internal name for the flow derived from qualified access modes; recorded on a binding, never declared in the catalog |
 | Qualification record | Versioned evidence for the exact tested storage and cluster configuration |
 | Sharing domain | Stable authorization and encryption scope, such as an NCA ID |
 | Cache key | Tuple of workflow, sharing domain, and cache handle |
@@ -109,42 +116,42 @@ drivers:
       - <qualified-kubernetes-access-mode>
     readerMountOptions:
       - <required-reader-pv-mount-option>
-    transitions:
-      regularModelCache: <registered-runtime-strategy-or-disabled>
-      helmModelCache: <registered-runtime-strategy-or-disabled>
 ```
 
-This is a shape illustration, not a valid provider entry. Actual entries must use exact provisioner strings,
-Kubernetes access-mode names, and registered transition names.
+This is a shape illustration, not a valid provider entry. Actual entries must use exact provisioner strings and
+Kubernetes access-mode names.
 
-The exact provisioner is the lookup key. `provider` is a label, and `accessModes` cites externally qualified PVC
-modes. Transition values are a closed enum, not free text. A strategy name means enabled; `disabled` means
-unsupported.
+The exact provisioner is the lookup key. `provider` is a label for diagnostics; it gates nothing. `accessModes`
+lists only the PVC modes qualified end to end in a cache workflow for that provisioner. NVCA derives the flow:
 
-| Workflow field | Allowed values |
-|---|---|
-| `regularModelCache` | `disabled`, `roxReadOnly`, `rwxReadOnly` |
-| `helmModelCache` | `disabled`, `roxReadOnly` |
-
-Transition code, not the flat access-mode list, defines state A to state B:
-
-| Transition | Writer to reader contract | Catalog restriction |
+| Qualified access modes | Derived flow | Reader |
 |---|---|---|
-| `disabled` | No durable transition | Any provider |
-| `roxReadOnly` | Populate an RWO writer, then publish ROX reader storage | Exact NVMesh provisioner and provider |
-| `rwxReadOnly` | Populate one RWX claim, then serve it through read-only Pod mounts | Regular model cache only |
+| `ReadWriteMany` | One shared claim; readers mount it read-only | The writer's claim, read-only |
+| `ReadWriteOnce` and `ReadOnlyMany` | Writer takes the claim; readers get their own PV | A read-only PV derived from the writer's volume |
+| Empty | Nothing qualified; caching stays off for this driver | None |
 
-Adding a transition requires dispatcher code, schema and semantic validation, a declared writer-to-reader mode pair,
-and workflow tests. Access modes only show which required modes were qualified.
+NVCA names these flows `rwxReadOnly` and `roxReadOnly` internally. They are derived values recorded on a cache
+binding, never written in the catalog.
 
-`disabled` is the complete workflow-disabled state; a driver may still list qualified access modes. There is no
-separate qualification field. Enabling a transition is a release decision allowed only after implementation and exact
-workflow qualification; the schema cannot prove that evidence exists.
+Two rules survive, enforced identically by the JSON Schema and the Go validator:
 
-`readerMountOptions` is a required array for options NVCA must apply when it creates or rewrites a reader PV. It is
-not `StorageClass.mountOptions`, a Pod `volumeMount`, or the Pod-level read-only flag. `roxReadOnly` requires
-`ro`, `norecovery`, and `nouuid`. `rwxReadOnly` uses the dynamically provisioned RWX claim and therefore
-requires an empty array. An empty array is not provider qualification evidence.
+- A driver qualified for `ReadWriteOnce` plus `ReadOnlyMany` must list `ro` in `readerMountOptions`, because NVCA
+  creates those reader PVs and must mount them read-only.
+- `ReadOnlyMany` without `ReadWriteOnce` or `ReadWriteMany` is rejected, because nothing would populate the cache.
+
+Everything else about a driver is data, not a rule. `norecovery` and `nouuid` are NVMesh XFS requirements recorded on
+the NVMesh entry; no other driver has to list them. Helm caching must reach other namespaces. A `ReadWriteMany` claim
+does that natively. The `ReadOnlyMany` shape does not, except on NVMesh, whose CSI volume handle encodes the consuming
+namespace so NVCA can derive a reader PV for another namespace. That exception is a property of the NVMesh driver
+applied in code, not a catalog field.
+
+Adding a new flow shape requires reconciler code, schema and validator rules, and workflow tests. Recording an access
+mode requires qualification evidence for the exact provider configuration.
+
+`readerMountOptions` is a required array for options NVCA applies when it creates a reader PV. It is not
+`StorageClass.mountOptions`, a Pod `volumeMount`, or the Pod-level read-only flag. Only the `ReadWriteOnce` plus
+`ReadOnlyMany` shape creates reader PVs, and it must include `ro`. The shared-claim shape creates no reader PV, so it
+needs no options; listing some is not an error, they go unused. An empty array is not provider qualification evidence.
 
 The catalog intentionally does not contain a general CSI capability matrix. StorageClass rendering and provider
 documentation own expansion, snapshots, clones, topology, and other CSI settings.
@@ -156,28 +163,28 @@ Access-mode rules:
 - Do not infer RWX or ROX from CSI driver documentation alone.
 - Do not infer cross-namespace sharing or backend write denial from an access mode.
 
-NVMesh uses transition `roxReadOnly` for both regular and Helm model cache. Samba is not an NVMesh transition. Weka, OCI
-FSS, and OCI Lustre transitions remain `disabled` until their exact workflow qualification passes.
+NVMesh is qualified for `ReadWriteOnce` and `ReadOnlyMany` with reader mount options `ro`, `norecovery`, and
+`nouuid`. Samba is not an NVMesh flow. Weka, OCI FSS, and OCI Lustre list no qualified access modes until their exact
+workflow qualification passes.
 
 ### What operators set
 
-Use the exact installed CSI provisioner. Do not infer or enable a strategy from access modes alone.
+Use the exact installed CSI provisioner. Record an access mode only after the workflow that uses it passed.
 
-| Provider state | `regularModelCache` | `helmModelCache` |
+| Provider state | `accessModes` | `readerMountOptions` |
 |---|---|---|
-| Shipped NVMesh configuration | `roxReadOnly` | `roxReadOnly` |
-| New or unqualified provider | `disabled` | `disabled` |
-| Qualified shared-RWX regular workflow | `rwxReadOnly` | `disabled` |
+| Shipped NVMesh configuration | `ReadWriteOnce`, `ReadOnlyMany` | `ro`, `norecovery`, `nouuid` |
+| New or unqualified provider | empty | empty |
+| Qualified shared-claim provider | `ReadWriteMany` | empty |
 
 The last row is a target configuration, not current enablement. Set it only after the exact CSI and StorageClass
-configuration passes the provider-qualification contract and its NVCA runtime transition is released.
+configuration passes the provider-qualification contract and the runtime that derives the flow is released.
 
-The target catalog does not register a generic `sharedfs` transition. Current NVCA retains a legacy, presence-selected
-`sharedfs` route. Separate dynamic PVCs may expose different data, so class or driver presence cannot qualify it.
+The catalog has no generic `sharedfs` entry. Current NVCA retains a legacy, presence-selected `sharedfs` route. Separate dynamic PVCs may expose different data, so class or driver presence cannot qualify it.
 
 ### Validation contract
 
-CI validates structure, required fields, closed transition values, and workflow constraints with the packaged JSON
+CI validates structure, required fields, access-mode names, and the two reader rules above with the packaged JSON
 Schema; Helm only checks that the file exists. When called, the Go loader independently performs strict decoding and
 semantic validation. It also rejects duplicate, blank, whitespace-padded, or conflicting reader mount options. The
 test plan covers both validation layers.
@@ -188,13 +195,13 @@ Catalog entries are configuration metadata, not credentials. The security requir
 
 The loader has no runtime call site, and NVCA has no complete provider-neutral cache binding. Current requests persist
 only a coarse backend value. Both gaps must be closed before the catalog can control runtime behavior. Until then, a
-`disabled` catalog entry does not disable a legacy path selected by StorageClass presence.
+catalog entry with no access modes does not disable a legacy path selected by StorageClass presence.
 
 For Helm caching, current public NVCA first requires `CachingSupport` and `HelmModelCaching`. It then checks the legacy
 `nvcf-sc-30` marker, the `nvcf-miniservice-sc` sharedfs sentinel, and a gated Samba fallback with a usable backing
 class; otherwise it selects the per-Pod ephemeral cache. These are compatibility paths, not target provider selection.
 The presence-only sharedfs branch cannot prove a cross-namespace backend identity. The target reads only `nvcf-sc`,
-finds the exact provisioner entry, and selects its recorded transition.
+finds the exact provisioner entry, and derives the flow from its qualified access modes.
 
 ## Target runtime design
 
@@ -208,20 +215,20 @@ For each request, NVCA must:
    control namespace.
 3. If it is `Active`, use it. If it is `Retiring`, retry or record a supported request fallback; never rebind it.
 4. If no binding exists, read `StorageClass/nvcf-sc`, require `Retain`, and strictly load the catalog.
-5. Find the exact provisioner entry and require a non-disabled transition with its required access modes and reader
-   mount options.
+5. Find the exact provisioner entry and derive the flow from its qualified access modes. No derivable shape means no
+   durable cache.
 6. Create the binding by deterministic name and optimistic concurrency. A losing creator reads the winning binding.
 7. Conditionally add the request namespace, name, and UID while the binding is `Active`. Then persist its name, UID,
    and a request finalizer before any storage side effect.
 8. Re-read the binding, confirm the reference and request finalizer are present, and execute only its transition.
 
-Unknown provisioners, invalid catalogs, non-`Retain` classes, and disabled transitions cannot select durable storage.
+Unknown provisioners, invalid catalogs, non-`Retain` classes, and entries with no derivable flow cannot select durable storage.
 The only generic fallbacks are `none` and, where the workflow supports it, `ephemeral`; NVCA never switches to a
 second durable provider.
 
 ### Release qualification
 
-Provisioner matching selects code; it does not prove that a deployment was qualified. Before a transition is enabled,
+Provisioner matching selects code; it does not prove that a deployment was qualified. Before an access mode is recorded,
 dated evidence must identify the CSI provisioner and images, backend version/configuration, `nvcf-sc` digest,
 Kubernetes version, eligible node/OS/architecture matrix, catalog/schema version, and evidence reference.
 
@@ -230,7 +237,7 @@ not NVCA, owns this record and verifies those fields. NVCA snapshots only live K
 StorageClass name, UID, provisioner, configuration digest, and catalog digest. That snapshot detects drift for a cache
 binding; it does not prove the backend product or version.
 
-Setting a transition to a non-disabled value is therefore an operator or release assertion that the qualification
+Recording a qualified access mode is therefore an operator or release assertion that the qualification
 record applies to the cluster. NVCA validates the catalog and live StorageClass, but cannot verify non-observable
 fields.
 
@@ -275,6 +282,24 @@ Binding rules:
   drift.
 - Do not include Secret contents.
 
+### Why an API object and not annotations
+
+Annotations could hold this state. Current garbage collection keys on a last-referenced annotation, and the
+per-request selection is itself an annotation. The binding exists for four reasons.
+
+- Lifetime. The decision must outlive every request. A request-scoped annotation is deleted with its request, and a
+  writer-PVC annotation is deleted with the PVC. The binding's lifetime is the cache's, and its finalizer holds while
+  resources release.
+- Identity per referrer. A timestamp cannot tell an idle cache from one referenced by a request that died without
+  cleanup. Recording namespace, name, and UID per referrer makes a stale reference detectable and prunable, and makes
+  zero references the idle condition rather than a heuristic.
+- Enforcement. The API server rejects `spec` mutation, a `Retiring` to `Active` transition, and a changed data
+  identity. An annotation is a string; a bad write is accepted silently.
+- One object to read. Cold start, drift checks, and cleanup read one binding rather than correlating labels across
+  PVCs, PVs, Jobs, and Leases in many namespaces.
+
+Annotations could approximate all four by convention. The binding makes them properties of the API.
+
 Cleanup is a state transition, not a list-then-delete check. The reconciler marks the binding `Retiring`, which blocks
 new references, while its finalizer prevents deletion. A stale reference is one whose request is absent, has a different
 UID, or does not point back to the binding. Request deletion first removes reader resources, then removes the binding
@@ -305,7 +330,7 @@ The current webhook sets `PersistentVolumeClaimVolumeSource.readOnly: true` but 
 values to `false`. Runtime implementation must set and test both mount values as `true` before external qualification.
 
 Kubernetes and generic CSI do not provide a cross-namespace PVC-sharing primitive. Each transition owns its
-provider-specific reader-view mapping. A registered transition must document a driver-supported alias or rebind method
+provider-specific reader-view mapping. Each flow must document a driver-supported alias or rebind method
 that produces namespace-local PVC/PV pairs with distinct CSI `volumeHandle` values resolving to the same backend data.
 The generic planner must not synthesize those PVs or assume two PVCs from one class expose the same data. A provider
 remains disabled if it cannot meet this contract without a source-sized copy.
@@ -316,7 +341,7 @@ contract.
 ## Failure, migration, and rollback
 
 After runtime enforcement is wired, durable selection fails closed for a missing or invalid catalog, a missing or
-non-`Retain` `nvcf-sc`, an unknown provisioner or transition, a disabled workflow, or drift before the first side
+non-`Retain` `nvcf-sc`, an unknown provisioner, an entry with no derivable flow, or drift before the first side
 effect.
 Stale resources from the presence-selected sharedfs path are not adopted.
 
@@ -357,38 +382,38 @@ Rollback repeats the process with the prior definition. `Retain` prevents automa
 2. Render and verify the exact `nvcf-sc` definition.
 3. Run dynamic provisioning and basic mount tests.
 4. Prove each cataloged access mode for the exact deployed configuration.
-5. Add the catalog entry with both transitions `disabled`.
-6. Implement an explicit transition, including its provider-specific reader-view mapping.
+5. Add the catalog entry with an empty `accessModes` list.
+6. Implement any provider-specific reader mapping the derived flow needs.
 7. Run the full workflow suite across namespaces and eligible pools.
 8. Record CSI, backend, StorageClass, Kubernetes, node, and dated evidence details.
-9. Set only a passing workflow to its implemented transition.
+9. Record only the access modes the passing workflow exercised.
 10. Deploy catalog and runtime changes together, then verify new bindings.
 
-A disabled entry does not enable cache traffic.
+An entry with no access modes does not enable cache traffic.
 
 ## Test plan
 
 ### Catalog and deployment
 
 - Missing namespace, ConfigMap, key, payload, and chart file.
-- Malformed YAML, unknown fields, missing or invalid access modes, missing reader mount options, and missing transitions.
-- Whitespace-only IDs, duplicate modes or options, conflicting options, unknown transitions, and transition misuse.
-- `roxReadOnly` requires the NVMesh provisioner and provider, RWO, ROX, `ro`, `norecovery`, and `nouuid`.
-- `rwxReadOnly` requires RWX, an empty reader-mount-option array, and the regular workflow.
+- Malformed YAML, unknown fields, missing or invalid access modes, missing reader mount options, and a declared transition.
+- Whitespace-only IDs, duplicate modes or options, conflicting options, and `ReadOnlyMany` with no writer mode.
+- The `ReadWriteOnce` plus `ReadOnlyMany` shape requires `ro`; `norecovery` and `nouuid` are NVMesh data, not a rule.
+- The `ReadWriteMany` shape accepts an empty reader-mount-option array and unused options alike.
 - Source/release catalog, schema, and template parity.
 - Deployment-tooling tests for exact Weka, OCI FSS, OCI Lustre, and generic provider rendering.
 - Fixed `nvcf-sc` name and `Retain` policy.
 - Deployment-tooling tests for exact parameters, mount options, binding mode, expansion, and topology.
-- Deployment tooling preserves NVMesh expansion; the catalog selects `roxReadOnly` for both workflows.
+- Deployment tooling preserves NVMesh expansion; the NVMesh entry derives the `ReadOnlyMany` reader shape for both workflows.
 - Malformed deployment input fails rendering.
 - `nvcf-function-storage-sc` remains unchanged.
 
 ### Binding and migration
 
 - Feature gates select the request fallback without creating a durable binding.
-- The NVMesh provisioner entry selects `roxReadOnly` for both workflows.
+- The NVMesh provisioner entry derives `roxReadOnly` for both workflows.
 - StorageClass and catalog digests are deterministic, sensitive to included fields, and captured with UIDs.
-- Unknown provisioner, disabled transition, and non-`Retain` class.
+- Unknown provisioner, empty access modes, and non-`Retain` class.
 - Concurrent namespaces in one sharing domain converge on one binding; other workflows or domains use different keys.
 - Retry, leader change, and agent restart reuse the binding and Lease.
 - Drift before the first side effect fails without resources; drift afterward never switches providers.
@@ -441,7 +466,7 @@ Observability requirements:
 
 ## Implementation order
 
-Keep external transitions disabled. Add the binding API and strict-loader call site, migrate legacy state, fix read-only
+Keep external providers unqualified. Add the binding API and strict-loader call site, migrate legacy state, fix read-only
 mounts, implement provider-specific no-copy transitions, remove presence selection, then qualify each workflow.
 
 ## Public source references
